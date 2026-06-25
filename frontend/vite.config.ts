@@ -13,6 +13,9 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+    // Allow access via the Tailscale MagicDNS host (tailscale serve → this dev server),
+    // so the phone can reach it over trusted HTTPS on the tailnet.
+    allowedHosts: ['.ts.net'],
   },
   plugins: [
     svelte(),
