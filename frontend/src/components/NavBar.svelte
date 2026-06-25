@@ -1,4 +1,7 @@
 <script lang="ts">
+  import RateChips from './RateChips.svelte';
+  import type { StatusFields } from '../lib/statusline';
+
   interface Props {
     title?: string;
     showBack?: boolean;
@@ -6,8 +9,10 @@
     onMenu?: () => void;
     // Quando presente, o titulo vira um chip tappavel com chevron (troca de sessao).
     onTitleTap?: () => void;
+    status?: StatusFields | null;
+    onExpandUsage?: () => void;
   }
-  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap }: Props = $props();
+  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage }: Props = $props();
 </script>
 
 <nav class="navbar">
@@ -33,7 +38,9 @@
       <span class="navbar-title">{title}</span>
     {/if}
 
-    {#if onMenu}
+    {#if status && onExpandUsage}
+      <RateChips {status} onExpand={onExpandUsage} />
+    {:else if onMenu}
       <button class="nav-btn menu-btn" onclick={onMenu} aria-label="Menu">
         <svg width="20" height="5" viewBox="0 0 20 5" fill="currentColor" aria-hidden="true">
           <circle cx="2.5" cy="2.5" r="2.5"/>
