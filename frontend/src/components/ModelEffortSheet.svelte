@@ -1,74 +1,88 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+  import type { ModelEffortBody } from '../lib/api';
 
-  // Sheet pra trocar modelo e esforco de raciocinio. As selecoes viram slash commands
-  // de argumento completo (/model <arg>, /effort <level>) enviados pela sessao viva.
+  // Sheet pra trocar modelo e esforco de raciocinio. NADA e enviado ao mexer: a selecao e
+  // local. So o botao "Aplicar nesta sessao" (ou "Salvar como padrao") chama o backend, que
+  // dirige o picker interativo do /model -- aplicando SO na sessao (sem virar o default).
   interface Props {
     open: boolean;
     currentModel?: string | null;
     currentEffort?: string | null;
-    onSelectModel: (id: string) => void;
-    onSelectEffort: (level: string) => void;
+    onApply: (body: ModelEffortBody) => Promise<void> | void;
     onClose: () => void;
   }
-  let {
-    open,
-    currentModel = null,
-    currentEffort = null,
-    onSelectModel,
-    onSelectEffort,
-    onClose,
-  }: Props = $props();
+  let { open, currentModel = null, currentEffort = null, onApply, onClose }: Props = $props();
 
-  // arg = forma lowercase passada pro /model. meta = descricao curta (sem em-dash).
+  // arg = forma lowercase aceita pelo backend (MODEL_ORDER). meta = descricao curta (sem em-dash).
   const MODELS: { arg: string; label: string; meta: string }[] = [
-    { arg: 'default', label: 'Default', meta: 'escolha do projeto' },
+    { arg: 'default', label: 'Default', meta: 'recomendado' },
     { arg: 'opus',    label: 'Opus',    meta: 'mais capaz' },
     { arg: 'sonnet',  label: 'Sonnet',  meta: 'equilibrado' },
     { arg: 'haiku',   label: 'Haiku',   meta: 'mais rápido' },
   ];
 
   // Niveis reais do /effort do Claude Code, ordenados Faster -> Smarter (6 paradas).
-  // 'ultracode' e o topo (= 'xhigh + workflows'). /effort <level> aplica direto.
+  // 'ultracode' e o topo. O picker do Opus expoe os 6; modelos menores expoem um subconjunto
+  // (o backend acomoda) e o Haiku nao usa esforco.
   const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'];
-  const EFFORT_DEFAULT = 1; // medium: parada neutra quando o nivel atual e desconhecido
+  const EFFORT_DEFAULT = 3; // xhigh: parada neutra quando o nivel atual e desconhecido
 
-  // Match por substring case-insensitive: o read-back ('Opus4.8') contem o arg ('opus').
-  function isModelActive(arg: string): boolean {
-    const cur = currentModel?.toLowerCase();
-    return !!cur && cur.includes(arg);
+  // Casa o modelo atual (read-back 'Opus4.8') com o arg ('opus') por substring.
+  function modelArgFromCurrent(cur: string | null | undefined): string {
+    const c = cur?.toLowerCase() ?? '';
+    return MODELS.find((m) => m.arg !== 'default' && c.includes(m.arg))?.arg ?? 'default';
   }
 
   // Mapeia o esforco atual pra parada do slider. Exato primeiro; senao prefixo (cobre
-  // abreviacoes do statusline: 'med' -> medium, 'ultra' -> ultracode). -1 = desconhecido.
+  // abreviacoes do statusline: 'med' -> medium, 'ultra' -> ultracode).
   function effortIndex(cur: string | null | undefined): number {
-    if (!cur) return -1;
+    if (!cur) return EFFORT_DEFAULT;
     const c = cur.trim().toLowerCase();
     const exact = EFFORTS.indexOf(c);
     if (exact >= 0) return exact;
-    return EFFORTS.findIndex((l) => l.startsWith(c));
+    const pref = EFFORTS.findIndex((l) => l.startsWith(c));
+    return pref >= 0 ? pref : EFFORT_DEFAULT;
   }
 
-  // Parada local do slider: responde ao toque na hora e re-sincroniza com o read-back
-  // sempre que ele muda e e reconhecivel (ex: /effort rodado direto no terminal).
+  // Selecao LOCAL: re-sincroniza com o estado atual toda vez que a folha abre.
+  let selectedModel = $state('default');
   let effortIdx = $state(EFFORT_DEFAULT);
+  let applying = $state(false);
+  let errorMsg = $state<string | null>(null);
+
   $effect(() => {
-    const i = effortIndex(currentEffort);
-    if (i >= 0) effortIdx = i;
+    if (open) {
+      selectedModel = modelArgFromCurrent(currentModel);
+      effortIdx = effortIndex(currentEffort);
+      applying = false;
+      errorMsg = null;
+    }
   });
 
   const effortLevel = $derived(EFFORTS[effortIdx]);
   const effortFill = $derived((effortIdx / (EFFORTS.length - 1)) * 100);
-
-  function onEffortSlide(e: Event) {
-    const t = e.currentTarget as HTMLInputElement;
-    effortIdx = Number(t.value);
-    onSelectEffort(EFFORTS[effortIdx]);
-  }
+  const isHaiku = $derived(selectedModel === 'haiku'); // Haiku nao usa esforco de raciocinio
 
   function pickModel(arg: string) {
-    onSelectModel(arg);
-    onClose();
+    selectedModel = arg; // so atualiza a selecao local; nada e enviado
+  }
+
+  function onEffortSlide(e: Event) {
+    effortIdx = Number((e.currentTarget as HTMLInputElement).value); // local only
+  }
+
+  async function apply(scope: 'session' | 'default') {
+    if (applying) return;
+    applying = true;
+    errorMsg = null;
+    try {
+      await onApply({ model: selectedModel, effort: EFFORTS[effortIdx], scope });
+      onClose();
+    } catch {
+      errorMsg = 'Não foi possível aplicar. Tente de novo.';
+      applying = false;
+    }
   }
 </script>
 
@@ -80,14 +94,15 @@
       <li>
         <button
           class="model-row"
-          class:active={isModelActive(m.arg)}
+          class:active={selectedModel === m.arg}
+          aria-pressed={selectedModel === m.arg}
           onclick={() => pickModel(m.arg)}
         >
           <span class="model-text">
             <span class="model-name">{m.label}</span>
             <span class="model-meta">{m.meta}</span>
           </span>
-          {#if isModelActive(m.arg)}
+          {#if selectedModel === m.arg}
             <svg
               class="check"
               width="18"
@@ -110,7 +125,7 @@
 
   <div class="effort-head">
     <h3 class="section-label">Esforço de raciocínio</h3>
-    <span class="effort-current">{effortLevel}</span>
+    <span class="effort-current">{isHaiku ? 'n/d' : effortLevel}</span>
   </div>
   <input
     class="range"
@@ -121,12 +136,29 @@
     value={effortIdx}
     style="--fill: {effortFill}%"
     oninput={onEffortSlide}
+    disabled={isHaiku}
     aria-label="Esforço de raciocínio"
     aria-valuetext={effortLevel}
   />
   <div class="ends" aria-hidden="true">
     <span>Mais rápido</span>
     <span>Mais inteligente</span>
+  </div>
+  {#if isHaiku}
+    <p class="effort-note">O Haiku não usa esforço de raciocínio.</p>
+  {/if}
+
+  {#if errorMsg}
+    <p class="apply-error" role="alert">{errorMsg}</p>
+  {/if}
+
+  <div class="actions">
+    <button class="btn btn--primary" onclick={() => apply('session')} disabled={applying}>
+      {applying ? 'Aplicando…' : 'Aplicar nesta sessão'}
+    </button>
+    <button class="btn btn--ghost" onclick={() => apply('default')} disabled={applying}>
+      Salvar como padrão
+    </button>
   </div>
 </BottomSheet>
 
@@ -235,6 +267,11 @@
     outline: none;
   }
 
+  .range:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
   .range::-webkit-slider-runnable-track {
     height: 4px;
     border-radius: var(--radius-full);
@@ -294,5 +331,58 @@
   .ends span {
     font-size: var(--text-xs);
     color: var(--text-muted);
+  }
+
+  .effort-note {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    margin-top: var(--space-2);
+  }
+
+  /* ── Acoes: aplicar so na sessao (primario) ou salvar como padrao (secundario) ── */
+  .apply-error {
+    font-size: var(--text-sm);
+    color: var(--error);
+    margin-top: var(--space-3);
+  }
+
+  .actions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-top: var(--space-5);
+  }
+
+  .btn {
+    width: 100%;
+    min-height: 48px;
+    border-radius: var(--radius-md);
+    font-size: var(--text-base);
+    font-weight: 600;
+    transition: background 180ms var(--ease-out), opacity 180ms var(--ease-out);
+  }
+
+  .btn:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+
+  .btn--primary {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .btn--primary:active:not(:disabled) {
+    background: var(--accent-press);
+  }
+
+  .btn--ghost {
+    background: transparent;
+    border: 1px solid var(--border-default);
+    color: var(--text-secondary);
+  }
+
+  .btn--ghost:active:not(:disabled) {
+    background: var(--bg-hover);
   }
 </style>

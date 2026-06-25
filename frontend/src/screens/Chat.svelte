@@ -141,7 +141,8 @@
     }
   }
 
-  // Slash commands do proprio Claude Code (ex: /model sonnet, /effort high) -> sessao viva.
+  // Slash commands gerais do Claude Code (ex: /clear, /compact) -> sessao viva. Modelo e
+  // esforco NAO passam por aqui: vao pelo ModelEffortSheet -> endpoint /model-effort.
   async function handleCommand(cmd: string) {
     try {
       await sendInput(sessionName, cmd);

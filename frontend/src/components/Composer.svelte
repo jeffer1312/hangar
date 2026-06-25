@@ -14,7 +14,7 @@
   import ModelEffortSheet from './ModelEffortSheet.svelte';
   import SlashSuggest from './SlashSuggest.svelte';
   import CommandSheet from './CommandSheet.svelte';
-  import { getCommands } from '../lib/api';
+  import { getCommands, setModelEffort, type ModelEffortBody } from '../lib/api';
   import type { State } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
 
@@ -116,10 +116,10 @@
   );
   const showStatusRow = $derived(stateLabel.length > 0 || hasMetrics);
 
-  // ── Pill de modelo + esforco: abre o ModelEffortSheet e envia slash commands ──
-  // Display otimista: a escolha local aparece na hora; o status (read-back real do
-  // statusline) reconcilia o modelo quando confirma. Esforco e write-only (sem
-  // read-back confiavel) -> a escolha local persiste.
+  // ── Pill de modelo + esforco: abre o ModelEffortSheet (aplica via endpoint dedicado) ──
+  // Display otimista: a escolha aparece na hora; o status (read-back real do statusline)
+  // reconcilia o modelo quando confirma. Esforco e write-only (sem read-back confiavel)
+  // -> a escolha local persiste.
   let sheetOpen = $state(false);
   let chosenModel = $state<string | null>(null);   // rotulo otimista: 'Opus' | 'Sonnet' | ...
   let chosenEffort = $state<string | null>(null);   // low | medium | high | xhigh | max | ultracode
@@ -139,15 +139,20 @@
     }
   });
 
-  function handleSelectModel(arg: string) {
-    // exibe o rotulo capitalizado na hora; arg lowercase vai pro comando
-    chosenModel = arg.charAt(0).toUpperCase() + arg.slice(1);
-    onCommand('/model ' + arg);
-  }
-
-  function handleSelectEffort(level: string) {
-    chosenEffort = level;
-    onCommand('/effort ' + level);
+  // Aplica modelo+esforco via o endpoint dedicado, que dirige o picker interativo do /model
+  // (scope 'session' = so esta sessao, sem virar o default). Devolve a Promise pro sheet
+  // aguardar/tratar erro. O display otimista so muda APOS sucesso (uma aplicacao que falha
+  // nao deixa o pill mostrando uma escolha que nao pegou). 'default' resolve pra um modelo
+  // concreto -> deixa o statusline ditar o rotulo; os demais aparecem capitalizados.
+  function handleApply(body: ModelEffortBody): Promise<void> {
+    return setModelEffort(sessionName, body).then(() => {
+      if (body.model) {
+        chosenModel = body.model === 'default'
+          ? null
+          : body.model.charAt(0).toUpperCase() + body.model.slice(1);
+      }
+      if (body.effort) chosenEffort = body.effort;
+    });
   }
 
   // ── Slash commands: preencher x enviar ──────────────────────────────────────
@@ -288,8 +293,7 @@
     open={sheetOpen}
     currentModel={pillModel}
     currentEffort={pillEffort}
-    onSelectModel={handleSelectModel}
-    onSelectEffort={handleSelectEffort}
+    onApply={handleApply}
     onClose={() => (sheetOpen = false)}
   />
 

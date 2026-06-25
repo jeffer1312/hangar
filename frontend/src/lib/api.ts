@@ -108,6 +108,25 @@ export async function interrupt(name: string): Promise<void> {
   });
 }
 
+export interface ModelEffortBody {
+  model?: string; // 'default' | 'opus' | 'sonnet' | 'haiku'
+  effort?: string; // low | medium | high | xhigh | max | ultracode
+  scope: 'session' | 'default';
+}
+
+/**
+ * Applies a model/effort switch by driving Claude Code's interactive `/model` picker.
+ * scope 'session' presses `s` (current session only); 'default' presses Enter (saved default).
+ * Unlike the old full-arg `/model <arg>` command, scope 'session' does NOT change the user's
+ * default for new sessions.
+ */
+export async function setModelEffort(name: string, body: ModelEffortBody): Promise<void> {
+  await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/model-effort`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
 /**
  * Opens an SSE stream for the given session.
  * In production (same-origin), the auth cookie is sent automatically.
