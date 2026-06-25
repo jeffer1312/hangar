@@ -1,64 +1,65 @@
 ---
 branch: main
-saved_at: 2026-06-25T15:20:00-03:00
-saved_commit: 0208afd2ccd8bae18b7974a47269b25e8b2ccc8a
+saved_at: 2026-06-25T16:00:00-03:00
+saved_commit: c6bc675a83f4838724e0b0ea178a4d4b2fca6065
 plan: 2026-06-25-claude-pocket-backend.md
 status: in_progress
 ---
 
 ## TL;DR
-claude-pocket: drive a live Claude Code tmux session from the phone, LAN-only. Backend was done+pushed earlier. THIS session: validated the FULL phone→claude loop on a real tmux/claude session via a browser, fixed everything it surfaced (6 bugs), and added a polish batch (statusline-on-web, bottom status bar, chat dedupe, command-meta filtering, width cap). All verified live in the browser; 53 tests pass; COMMITTED to main (not pushed). Next = Plan 3 (deploy/onboarding): auto-detect LAN IP, QR pairing, Caddy/TLS.
+claude-pocket: drive a live Claude Code tmux session from the phone, LAN/VPN-only. Backend+frontend core was already done. THIS session: validated the full phone→claude loop in a real browser, fixed 6 bugs, then did Plan 3 (deploy/onboarding) — QR pairing + Tailscale HTTPS + in-app QR scanner — all verified, plus a firewall setup script. The phone can now scan a QR and land in the app over a trusted HTTPS cert from anywhere on the tailnet. Committed + pushed. Remaining: installable-PWA offline (serve the build, not vite dev) + a UI polish pass.
 
 ## Task atual
-Plan 3 — deploy & onboarding. Make it reachable from the phone with minimal friction: (1) CP_LAN_BIND_IP=auto auto-detect, (2) QR pairing on startup (URL+token, scan=in), (3) Caddy + TLS in front. Decisions already recorded in docs/onboarding-and-network.md. Caddy needs installing on this machine (was MISSING).
+Plan 3 essentially done. Open: (1) serve the built PWA (dist) instead of vite dev so the service worker registers (real installable/offline PWA) — see polish-backlog; (2) the mobile UI polish pass (docs/polish-backlog.md). Then iterate.
 
 ## Concluído nesta sessão
-- Proved end-to-end in a real browser (agent-browser) on a real claude tmux session: login/auth, history, live SSE, state working/idle correct, send-from-composer→claude replies, interrupt, command-meta filtered, statusline shown, live append.
-- Fixed 6 bugs (all surfaced by the live e2e): #1 projects_dir hardcoded ~/.claude → CLAUDE_CONFIG_DIR-aware; #2 SSE Python-repr → model_dump_json (valid JSON); #3 cookie auth_token→cp_token; #4 classify false-"working" from frozen markers → temporal animation detection; #6 sent msg needed refresh → dedupe-by-id + reconnect (live now); #7 Claude Code command-meta (/clear, caveats) leaking as bubbles → filtered in parse_line.
-- Feature: raw terminal statusline surfaced to the web (StateEvent.status_line), shown verbatim in a bottom status bar with the state pill (badge moved below). Each user sees their own statusline.
-- Dev wiring: vite /api proxy (same-origin) + cp_token cookie. lan_bind default → 127.0.0.1.
-- Frontend: bottom "dock" (StatusBar + Composer), content width capped ~600px, iOS-keyboard visualViewport handling moved to the dock.
-- 46 → 53 tests. Committed all of it to main.
-- Recorded Plan-3 decisions in docs/onboarding-and-network.md.
+- Live e2e in a real browser (agent-browser) on a real claude tmux session: login, history, live SSE, working/idle state, send-from-composer→reply, interrupt, statusline, command-meta filtered.
+- 6 bugs fixed (committed c6bc675): projects_dir→CLAUDE_CONFIG_DIR, SSE→model_dump_json, cookie auth_token→cp_token, classify temporal live-vs-frozen spinner, dedupe-by-id live append, command-meta filter. + raw statusline surfaced to a bottom status bar; loopback bind default; vite /api proxy.
+- Plan 3 (this batch, being committed now): CP_LAN_BIND_IP=auto + detect_lan_ip; QR pairing (backend prints a QR of the PWA URL+token at startup; frontend auto-logs-in from ?token= and strips it); Tailscale HTTPS via `tailscale serve`; in-app QR scanner (qr-scanner) on the Login screen; scripts/lan-setup.sh (firewall) + scripts/show-qr.sh.
+- Verified e2e: QR → auto-login over Tailscale HTTPS (trusted cert, secure context). 57 backend tests, frontend build clean.
 
 ## Decisões
-- Dev auth = vite proxy same-origin + cp_token cookie (rejected CORS + ?token= query: leak + surface). Python loopback; prod = Caddy front.
-- Onboarding (Plan 3) = QR pairing (QR carries LAN-IP+token, scan=logged-in, token never typed) + CP_LAN_BIND_IP=auto (UDP-connect autodetect). Keep bearer token (no user/pass login). Default bind loopback. (docs/onboarding-and-network.md)
-- #4: a static pane can't tell a live spinner from a frozen "<glyph> <word> for <N>s" marker → classify flags any bottom-most spinner as working; StateMonitor downgrades a non-animating one to idle (STALE_LIMIT=3; first sight waits for a change).
-- statusline shown RAW/verbatim (not parsed) — "igual no terminal", portable across each user's custom statusline config.
-- Chat dedupe by id (SSE replays full history every connect + loadHistory seeds → would double).
+- Onboarding = QR pairing (QR encodes PWA URL + token). CP_PUBLIC_URL overrides the QR base (set to the Tailscale https URL).
+- TLS = Tailscale (`tailscale serve` → vite:5173). Chosen over Caddy/self-signed: trusted cert on the iPhone with zero manual trust, works anywhere on the tailnet. (User enabled HTTPS in the tailnet admin console — one-time.)
+- iOS reality: installed standalone PWA has SEPARATE storage from Safari, and iOS won't deep-link an https URL into an installed PWA. So the installed app must be paired ONCE from inside it → that's why the in-app QR scanner exists.
+- Dev auth = vite proxy same-origin + cp_token cookie. Creds are per-ORIGIN — use ONE canonical URL (the ts.net one), not the LAN IP, to avoid "saved under another URL" confusion.
 
 ## Limitações conhecidas
-- iOS keyboard: visualViewport lift moved from Composer to the bottom dock — works on desktop, NOT verifiable here. Validate on the real iPhone.
-- Width = a centered content column (~600px), NOT a literal phone frame on desktop. Refine if wanted.
-- #5 (minor): GET /api/sessions always state="idle" (registry.list never computes it; real state only via SSE). Computing in the list reintroduces the #4 static ambiguity.
-- Plan 3 NOT done: no auto-detect, no QR, no Caddy/TLS. Caddy not installed on this machine.
+- Installable/offline PWA: the service worker does NOT register under vite dev (verified SW count=0). Add-to-Home-Screen still works (manifest + apple meta tags present), but offline needs serving the built dist (e.g. tailscale serve a static server, or Caddy). Not done.
+- UI needs a real mobile polish pass; also: separate the statusline from the state pill; surface context usage better; model switching. See docs/polish-backlog.md.
+- iOS PWA install = Safari only (Apple). Chrome on iOS can't install standalone.
+- #5 (minor): GET /api/sessions always state="idle" (real state only via SSE).
+- Run recipe is manual (env + tailscale serve + vite --host + firewall). No single start script yet.
 
 ## Erros / armadilhas
-- This machine: CLAUDE_CONFIG_DIR=/home/.../.claude-work → transcripts in ~/.claude-work/projects, not ~/.claude.
-- Start claude as the DIRECT tmux pane command (`tmux new-session -d -s cc -c <dir> 'claude'`), NOT via an interactive shell (p10k wizard eats keystrokes). Fresh cwd → trust + external-imports prompts; send Enter to accept.
-- Foreground `sleep` is blocked by the harness; don't use it in Bash one-liners.
-- /events and /history 404 until the session's transcript exists (claude writes the jsonl lazily on first message).
+- CLAUDE_CONFIG_DIR=/home/.../.claude-work on this machine → transcripts under ~/.claude-work/projects.
+- Start claude as the DIRECT tmux pane command (not via interactive shell — p10k wizard eats keys). Fresh cwd → trust + external-imports prompts; Enter to accept.
+- Foreground `sleep` is blocked by the harness.
+- backend stdout is block-buffered when redirected to a file → the startup QR only shows with flush=True (done) or in a real tty.
+- Tailscale: HTTPS must be enabled in the admin console (DNS → HTTPS) — one-time, no CLI. `tailscale serve`/`cert` need root or `tailscale set --operator=$USER`.
 
 ## Arquivos criticos
-- backend/app/state.py (R) — temporal classify/StateMonitor (#4) + status_line() extractor.
-- backend/app/transcript.py (R) — command-meta filter (#7).
-- backend/app/config.py (R) — CLAUDE_CONFIG_DIR projects_dir (#1) + loopback bind default.
-- backend/app/sse.py (R) — model_dump_json (#2). backend/app/models.py (R) — StateEvent.status_line.
-- frontend/src/screens/Chat.svelte (R) — dedupe (#6) + bottom dock + keyboard. frontend/src/components/StatusBar.svelte (N) — statusline bar.
-- frontend/src/lib/auth.ts (R) cp_token cookie (#3); frontend/vite.config.ts (R) /api proxy.
-- docs/onboarding-and-network.md (N) — Plan 3 decisions (READ FIRST for Plan 3).
+- backend/app/config.py (R) — detect_lan_ip, resolve_bind_ip, pairing_url, front_port, public_url, CLAUDE_CONFIG_DIR dir, loopback bind.
+- backend/app/main.py (R) — print_pairing (QR) + resolve_bind_ip on startup.
+- backend/app/state.py (R) — temporal spinner detection + status_line(). backend/app/transcript.py (R) — command-meta filter.
+- frontend/src/screens/Login.svelte (R) — ?token= auto-login + "Escanear QR". frontend/src/components/QrScanner.svelte (N) — camera QR scan (qr-scanner).
+- frontend/src/screens/Chat.svelte (R) — dedupe + bottom dock. frontend/src/components/StatusBar.svelte (N).
+- scripts/lan-setup.sh (N) firewall; scripts/show-qr.sh (N) print QR on demand.
+- docs/onboarding-and-network.md (N), docs/polish-backlog.md (N).
 
 ## Próximo passo
 ```
-# Plan 3 (deploy/onboarding). Read docs/onboarding-and-network.md first.
-# 1. Auto-detect LAN IP — CP_LAN_BIND_IP=auto resolves the primary LAN IP (UDP-connect to
-#    8.8.8.8, no traffic). Edit backend/app/config.py + main.py; TDD in backend/tests.
-# 2. QR pairing on startup — add a qrcode dep (uv add qrcode), build http://<lan-ip>:<port>
-#    + token, print an ASCII QR in main.py startup. Phone scans -> URL+token auto-filled.
-#    (Frontend: accept token via URL/query on the Login screen for the QR deep-link.)
-# 3. Caddy + TLS — install caddy (system, needs user), write a Caddyfile that serves the
-#    built PWA + reverse-proxies /api to 127.0.0.1:8765 with a LAN cert for the iPhone.
-# Bring the stack back up to test: see README "Run it (dev)"; tmux cc + backend :8765 + vite :5173.
+# Bring the stack up (one terminal each), then scan the QR on the phone:
+cd backend && CP_AUTH_TOKEN=<tok> CP_PUBLIC_URL=https://<you>.ts.net uv run python -m app.main  # prints QR
+cd frontend && npm run dev -- --host          # vite on LAN (allowedHosts .ts.net)
+sudo tailscale serve --bg 5173                # HTTPS on the tailnet
+sudo ./scripts/lan-setup.sh 5173              # open the firewall (one-time)
+# Phone (Tailscale online): scan the QR (or ./scripts/show-qr.sh) -> auto-login.
+
+# Remaining work:
+# 1. Serve the BUILT pwa (npm run build -> dist) so the service worker registers
+#    (installable/offline). E.g. tailscale serve a static server of dist + /api proxy.
+# 2. Mobile UI polish pass (docs/polish-backlog.md): separate statusline vs state pill,
+#    context usage, model switch, general layout.
 # resume: /handoff resume  (after git pull)
 ```

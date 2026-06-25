@@ -1,5 +1,9 @@
+import io
+
 import uvicorn
-from app.config import settings
+import qrcode
+
+from app.config import settings, resolve_bind_ip, pairing_url
 
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
@@ -17,9 +21,23 @@ def startup_guard(settings) -> None:
               "Set CP_AUTH_TOKEN before exposing this on your LAN.")
 
 
+def print_pairing(settings) -> None:
+    """Print a scannable QR (PWA URL + token) so a phone pairs without typing anything."""
+    url = pairing_url(settings)
+    qr = qrcode.QRCode(border=1)
+    qr.add_data(url)
+    qr.make(fit=True)
+    buf = io.StringIO()
+    qr.print_ascii(out=buf, invert=True)
+    print(buf.getvalue(), flush=True)
+    print(f"  Scan to pair, or open: {url}\n", flush=True)
+
+
 def main():
+    bind = resolve_bind_ip(settings)
     startup_guard(settings)
-    uvicorn.run("app.api:app", host=settings.lan_bind_ip, port=settings.port)
+    print_pairing(settings)
+    uvicorn.run("app.api:app", host=bind, port=settings.port)
 
 
 if __name__ == "__main__":

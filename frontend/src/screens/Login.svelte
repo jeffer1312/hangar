@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { setCredentials } from '../lib/auth';
   import { getSessions } from '../lib/api';
+  import QrScanner from '../components/QrScanner.svelte';
 
   interface Props {
     onLogin: () => void;
@@ -11,9 +13,29 @@
   let token = $state('');
   let loading = $state(false);
   let error = $state('');
+  let scanning = $state(false);
 
-  async function handleSubmit(e: SubmitEvent) {
-    e.preventDefault();
+  // The QR encodes the pairing URL (…/?token=…). Pull the token (and optional ?api=)
+  // out of it — or accept a bare token — then connect. Needed because an installed iOS
+  // PWA has its own storage, so it must be paired once from inside the app.
+  function handleScan(text: string) {
+    let tok = text.trim();
+    try {
+      const u = new URL(text);
+      const t = u.searchParams.get('token');
+      if (t) tok = t;
+      const api = u.searchParams.get('api');
+      if (api) baseUrl = api;
+    } catch {
+      /* not a URL — treat as a raw token */
+    }
+    scanning = false;
+    if (!tok) return;
+    token = tok;
+    void connect();
+  }
+
+  async function connect() {
     loading = true;
     error = '';
 
@@ -39,6 +61,24 @@
       loading = false;
     }
   }
+
+  async function handleSubmit(e: SubmitEvent) {
+    e.preventDefault();
+    await connect();
+  }
+
+  // QR pairing: the QR opens this app with ?token=… (and optional ?api=…). Pick it up,
+  // strip it from the URL (don't leave the secret in history), and connect automatically.
+  onMount(() => {
+    const params = new URLSearchParams(window.location.search);
+    const t = params.get('token');
+    if (!t) return;
+    token = t;
+    const api = params.get('api');
+    if (api) baseUrl = api;
+    window.history.replaceState({}, '', window.location.pathname + window.location.hash);
+    void connect();
+  });
 </script>
 
 <div class="login-screen">
@@ -87,9 +127,17 @@
       >
         {loading ? 'Conectando…' : 'Conectar'}
       </button>
+
+      <button type="button" class="scan-btn" onclick={() => (scanning = true)}>
+        Escanear QR
+      </button>
     </form>
   </div>
 </div>
+
+{#if scanning}
+  <QrScanner onScan={handleScan} onClose={() => (scanning = false)} />
+{/if}
 
 <style>
   .login-screen {
@@ -191,5 +239,21 @@
   .connect-btn:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+
+  .scan-btn {
+    height: 48px;
+    background: transparent;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    font-size: var(--text-base);
+    font-weight: 500;
+    width: 100%;
+    transition: background 180ms ease-out;
+  }
+
+  .scan-btn:active {
+    background: var(--bg-hover);
   }
 </style>
