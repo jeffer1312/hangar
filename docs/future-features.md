@@ -27,6 +27,37 @@ running **Agent(...)** subagents and **Workflow** runs (mirrors what the termina
 - **Audio** — deferred (the user will tackle later): voice input/output.
 - General **attachments** (files) — same upload-to-cwd + reference pattern as images.
 
+## 3. Surface interactive prompts (AskUserQuestion / menus) in the app
+The app already renders Claude Code's native selection menus: `state.py classify()` detects
+`❯ N.` cursor + numbered options (`_CURSOR_RE`/`_OPTION_RE`) → `awaiting_input` → the app's
+`OptionButtons`. So the capability EXISTS.
+- Gap: the assistant's `AskUserQuestion` tool widget didn't show on the phone. Most likely it
+  was just the **401** (app got no events). Possibly the classifier doesn't match its exact
+  render (multi-select? different markers? the question/preview layout?).
+- Plan: once auth is fixed, trigger an `AskUserQuestion` in a session the app is viewing and
+  check if `OptionButtons` appear. If not, capture the pane and extend `classify()`/the option
+  parser to recognize the widget (and carry multi-select + per-option descriptions).
+- Why it matters: the user drives sessions from the phone; interactive prompts must be
+  answerable there (see memory `claude-pocket-app-interaction`).
+
+## 4. Pending fixes (batch — this session)
+- **Cost chip → top row of the composer** (a thin row above the textarea), so the model pill
+  gets more room in the control-left. Composer-only change.
+- **401 self-heal:** today an invalid/rotated token leaves the app wedged — `isAuthenticated()`
+  only checks that a token EXISTS, not that it's valid, so the app keeps 401ing and shows
+  `undefined` session. On a 401 from the API, clear creds (`clearCredentials`) and bounce to
+  Login so the user can re-pair (in-app QR scanner). Critical for REMOTE use (user can't clear
+  site data from the phone easily). Lives in `lib/api.ts` (fetch wrapper) + the router.
+- **Keyboard / top-bar bug (iOS):** when the keyboard opens, the NavBar (top bar) disappears
+  and an accessory bar with a check shows above the keyboard. NEEDS a screenshot to pin down
+  (user is remote → blocked until image-upload exists or user is at the PC). Likely the
+  document-lock/`100dvh`/visualViewport-transform pushing the NavBar out of the visual viewport,
+  plus iOS's native input-accessory bar.
+
+> **Priority note:** image **upload** (item 2) is now higher priority — the user collaborates
+> from the phone (away from the PC) and currently has NO way to send screenshots for debugging
+> (e.g. the keyboard bug above). It unblocks the whole remote feedback loop.
+
 ## Notes
 - These build on the existing infra: SSE stream, transcript parser, send-keys input, the
   HTTPS/secure-context (Tailscale), and the redesigned composer (a natural home for an
