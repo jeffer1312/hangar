@@ -48,6 +48,6 @@ def test_real_fixtures():
     fx = Path(__file__).parent / "fixtures"
     assert classify((fx / "pane_idle.txt").read_text())[0] == "idle"
     s, lbl, *_ = classify((fx / "pane_thinking.txt").read_text())
-    assert s == "working" and lbl
+    assert s == "working" and lbl == "Elucidating…"
     s2, _, q2, opts2 = classify((fx / "pane_awaiting_input.txt").read_text())
     assert s2 == "awaiting_input" and opts2 and "proceed?" in (q2 or "")
