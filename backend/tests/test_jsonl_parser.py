@@ -60,8 +60,12 @@ def test_blank_or_bad_line_returns_none():
     assert parse_line("{not json") is None
 
 
-def test_real_fixture_lines_parse_without_error():
+def test_real_fixture_lines_parse():
     from pathlib import Path
     p = Path(__file__).parent / "fixtures" / "jsonl_samples.jsonl"
+    events = []
     for line in p.read_text().splitlines():
-        parse_line(line)  # must not raise
+        ev = parse_line(line)  # must not raise
+        if ev is not None:
+            events.append(ev)
+    assert any(ev.kind == "assistant_msg" for ev in events)
