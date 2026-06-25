@@ -225,7 +225,6 @@
       {events}
       {stateEvent}
       {pending}
-      costUsd={status?.costUsd}
       onSelectOption={handleSelect}
       onCancel={handleInterrupt}
     />
