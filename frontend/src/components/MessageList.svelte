@@ -5,16 +5,18 @@
   import AssistantBubble from './AssistantBubble.svelte';
   import ToolCard from './ToolCard.svelte';
   import OptionButtons from './OptionButtons.svelte';
+  import ActivityBadge from './ActivityBadge.svelte';
 
   interface Props {
     events: ChatEvent[];
     stateEvent: StateEvent | null;
     pending: { id: string; text: string }[];
+    costUsd?: number | null;
     onSelectOption: (i: number) => void;
     onCancel: () => void;
   }
 
-  let { events, stateEvent, pending, onSelectOption, onCancel }: Props = $props();
+  let { events, stateEvent, pending, costUsd = null, onSelectOption, onCancel }: Props = $props();
 
   let listEl: HTMLElement | undefined = $state();
   // O usuario "gruda" no fim por padrao; ao rolar pra cima, paramos de arrastar.
@@ -74,6 +76,10 @@
         <ToolCard event={ev} result={toolResults.get(ev.tool_use_id ?? '') ?? null} />
       {/if}
     {/each}
+
+    {#if stateEvent?.state === 'working'}
+      <ActivityBadge label={stateEvent.label} {costUsd} onCancel={onCancel} />
+    {/if}
 
     {#if stateEvent?.state === 'awaiting_input' && stateEvent.question}
       <OptionButtons
