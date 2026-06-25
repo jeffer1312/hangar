@@ -156,6 +156,7 @@
       </div>
     {:else if currentState !== 'awaiting_input'}
       <Composer
+        {sessionName}
         sessionState={currentState}
         status={status}
         label={stateEvent?.label}

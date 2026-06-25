@@ -33,3 +33,13 @@ class StateEvent(BaseModel):
     question: Optional[str] = None       # awaiting_input: the question line
     options: Optional[list[str]] = None  # awaiting_input: selectable option labels
     status_line: Optional[str] = None    # raw bottom chrome from the pane, shown as-is on the web
+
+
+class CommandInfo(BaseModel):
+    # Contrato JSON consumido pelo frontend: argumentHint em camelCase de proposito.
+    name: str
+    display: str                                   # forma exibida, ex: "/clear"
+    description: Optional[str] = None
+    argumentHint: Optional[str] = None             # dica de argumento, ex: "<ambiente>"
+    source: Literal["builtin", "skill", "plugin"] = "builtin"
+    destructive: bool = False                      # exige confirmacao na UI

@@ -1,5 +1,5 @@
 import { getBaseUrl, getToken } from './auth';
-import type { SessionInfo, ChatEvent } from './types';
+import type { SessionInfo, ChatEvent, CommandInfo } from './types';
 
 function authHeaders(): HeadersInit {
   const token = getToken();
@@ -44,6 +44,10 @@ export async function deleteSession(name: string): Promise<void> {
 
 export function getHistory(name: string): Promise<ChatEvent[]> {
   return apiFetch<ChatEvent[]>(`/api/sessions/${encodeURIComponent(name)}/history`);
+}
+
+export function getCommands(name: string): Promise<CommandInfo[]> {
+  return apiFetch<CommandInfo[]>(`/api/sessions/${encodeURIComponent(name)}/commands`);
 }
 
 export async function sendInput(name: string, text: string): Promise<void> {

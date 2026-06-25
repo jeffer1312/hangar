@@ -1,14 +1,25 @@
+<script module lang="ts">
+  import type { CommandInfo } from '../lib/types';
+  // Cache de comandos por sessao: sobrevive a remontagens do Composer (ex: voltar de
+  // awaiting_input) pra buscar a lista so uma vez por sessao.
+  const commandCache = new Map<string, CommandInfo[]>();
+</script>
+
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
   import IconSend from './icons/IconSend.svelte';
   import IconInterrupt from './icons/IconInterrupt.svelte';
   import ContextRing from './ContextRing.svelte';
   import LiveMetrics from './LiveMetrics.svelte';
   import ModelEffortSheet from './ModelEffortSheet.svelte';
+  import SlashSuggest from './SlashSuggest.svelte';
+  import CommandSheet from './CommandSheet.svelte';
+  import { getCommands } from '../lib/api';
   import type { State } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
 
   interface Props {
+    sessionName: string;
     sessionState: State;
     status: StatusFields | null;
     label?: string | null;
@@ -16,7 +27,29 @@
     onInterrupt: () => void;
     onCommand: (cmd: string) => void;
   }
-  let { sessionState, status, label = null, onSend, onInterrupt, onCommand }: Props = $props();
+  let { sessionName, sessionState, status, label = null, onSend, onInterrupt, onCommand }: Props = $props();
+
+  // ── Slash commands: busca uma vez por sessao (com cache) ────────────────────
+  // Comeca vazio; o $effect popula na hora a partir do cache (sincrono) ou da rede.
+  let commands = $state<CommandInfo[]>([]);
+  let commandSheetOpen = $state(false);
+
+  $effect(() => {
+    const sn = sessionName;
+    const cached = commandCache.get(sn);
+    if (cached) {
+      commands = cached;
+      return;
+    }
+    getCommands(sn)
+      .then((c) => {
+        commandCache.set(sn, c);
+        commands = c;
+      })
+      .catch(() => {
+        // endpoint indisponivel -> segue com lista vazia, sem quebrar a UI
+      });
+  });
 
   let inputText = $state('');
   let textareaEl: HTMLTextAreaElement | undefined = $state();
@@ -89,7 +122,7 @@
   // read-back confiavel) -> a escolha local persiste.
   let sheetOpen = $state(false);
   let chosenModel = $state<string | null>(null);   // rotulo otimista: 'Opus' | 'Sonnet' | ...
-  let chosenEffort = $state<string | null>(null);   // 'low' | 'medium' | 'high' | 'max'
+  let chosenEffort = $state<string | null>(null);   // low | medium | high | xhigh | max | ultracode
 
   const pillModel = $derived(chosenModel ?? status?.model ?? null);
   const pillEffort = $derived(chosenEffort ?? status?.effort ?? null);
@@ -115,6 +148,37 @@
   function handleSelectEffort(level: string) {
     chosenEffort = level;
     onCommand('/effort ' + level);
+  }
+
+  // ── Slash commands: preencher x enviar ──────────────────────────────────────
+  // Preenche "/nome " no textarea e devolve o foco (pro usuario digitar o argumento).
+  async function fillCommand(name: string) {
+    inputText = '/' + name + ' ';
+    await tick();
+    autoGrow();
+    textareaEl?.focus();
+  }
+
+  // Envia o comando e limpa o textarea (zero-arg ou apos confirmacao).
+  function runCommand(cmd: string) {
+    inputText = '';
+    if (textareaEl) textareaEl.style.height = 'auto';
+    onCommand(cmd);
+  }
+
+  // Toque numa sugestao do strip inline. model/effort abrem o sheet; comando com argumento
+  // (ou destrutivo) preenche pra revisao antes de enviar; o resto envia direto.
+  function handleSuggestPick(cmd: CommandInfo) {
+    if (cmd.name === 'model' || cmd.name === 'effort') {
+      inputText = '';
+      sheetOpen = true;
+      return;
+    }
+    if (cmd.argumentHint || cmd.destructive) {
+      fillCommand(cmd.name);
+      return;
+    }
+    runCommand('/' + cmd.name);
   }
 
   // ── Textarea: auto-grow ate 120px ──────────────────────────────────────────
@@ -167,6 +231,8 @@
       </div>
     {/if}
 
+    <SlashSuggest {commands} query={inputText} onPick={handleSuggestPick} />
+
     <textarea
       bind:this={textareaEl}
       bind:value={inputText}
@@ -188,6 +254,13 @@
           aria-label="Modelo e esforço de raciocínio"
         >
           {pillText}
+        </button>
+        <button
+          class="slash-btn"
+          onclick={() => (commandSheetOpen = true)}
+          aria-label="Comandos"
+        >
+          <span class="slash-glyph" aria-hidden="true">/</span>
         </button>
       </div>
 
@@ -218,6 +291,15 @@
     onSelectModel={handleSelectModel}
     onSelectEffort={handleSelectEffort}
     onClose={() => (sheetOpen = false)}
+  />
+
+  <CommandSheet
+    open={commandSheetOpen}
+    {commands}
+    onCommand={runCommand}
+    onFill={fillCommand}
+    onOpenModelEffort={() => (sheetOpen = true)}
+    onClose={() => (commandSheetOpen = false)}
   />
 </footer>
 
@@ -351,6 +433,27 @@
     text-overflow: ellipsis;
     max-width: 160px;
     font-variant-numeric: tabular-nums;
+  }
+
+  /* Botao [ / ]: abre o CommandSheet. Alvo de 44px, visual leve (so feedback no :active). */
+  .slash-btn {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-secondary);
+  }
+
+  .slash-btn:active {
+    background: var(--bg-hover);
+  }
+
+  .slash-glyph {
+    font-family: var(--font-mono);
+    font-size: var(--text-lg);
+    font-weight: 600;
+    line-height: 1;
   }
 
   .control-right {
