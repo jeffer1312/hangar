@@ -1,4 +1,4 @@
-import { getBaseUrl, getToken } from './auth';
+import { getBaseUrl, getToken, clearCredentials } from './auth';
 import type {
   SessionInfo,
   ChatEvent,
@@ -25,6 +25,15 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
   });
+  // Self-heal de token inválido/rotacionado: isAuthenticated() só checa se EXISTE token, nao
+  // se vale. Sem isto, um token velho deixa o app travado em 401 (sessao "undefined"). Num 401
+  // COM token salvo, limpamos a credencial e recarregamos -> cai no Login pra re-parear (QR).
+  // O guard `getToken()` evita loop quando ja estamos deslogados (Login nao chama a API).
+  if (res.status === 401 && getToken()) {
+    clearCredentials();
+    if (typeof window !== 'undefined') window.location.reload();
+    throw new Error('401: sessão expirada — faça login novamente');
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
     throw new Error(`${res.status}: ${text}`);
