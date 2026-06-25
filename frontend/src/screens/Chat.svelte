@@ -30,6 +30,7 @@
   let error = $state('');
   let es: EventSource | null = null;
   let dockEl: HTMLElement | undefined = $state();
+  let pending = $state<{ id: string; text: string }[]>([]);
 
   // ── Switcher de sessoes (NavBar -> sheet) + criar nova sem voltar ──────────
   let switcherOpen = $state(false);
@@ -201,6 +202,7 @@
     <MessageList
       {events}
       {stateEvent}
+      {pending}
       onSelectOption={handleSelect}
       onCancel={handleInterrupt}
     />

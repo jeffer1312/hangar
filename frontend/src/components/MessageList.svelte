@@ -9,13 +9,22 @@
   interface Props {
     events: ChatEvent[];
     stateEvent: StateEvent | null;
+    pending: { id: string; text: string }[];
     onSelectOption: (i: number) => void;
     onCancel: () => void;
   }
 
-  let { events, stateEvent, onSelectOption, onCancel }: Props = $props();
+  let { events, stateEvent, pending, onSelectOption, onCancel }: Props = $props();
 
   let listEl: HTMLElement | undefined = $state();
+  // O usuario "gruda" no fim por padrao; ao rolar pra cima, paramos de arrastar.
+  let atBottom = $state(true);
+
+  function onScroll() {
+    if (!listEl) return;
+    const gap = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
+    atBottom = gap < 64; // threshold ~64px do fim
+  }
 
   // Build a map of tool_use_id -> tool_result
   const toolResults = $derived(
@@ -33,11 +42,12 @@
   // Only render tool_use events (not tool_result — they're merged into tool cards)
   const visibleEvents = $derived(events.filter(ev => ev.kind !== 'tool_result'));
 
-  // Auto-scroll to bottom when events change
+  // Auto-scroll APENAS quando ja estamos no fim. NAO depende de stateEvent (o tick do
+  // cronometro/status atualiza stateEvent toda hora e arrastaria o scroll-up do usuario).
   $effect(() => {
-    // Reference events to trigger on change
     void events.length;
-    void stateEvent;
+    void pending.length;
+    if (!atBottom) return;
     tick().then(scrollToBottom);
   });
 
@@ -51,6 +61,7 @@
 <section
   class="message-list"
   bind:this={listEl}
+  onscroll={onScroll}
   aria-label="Mensagens"
 >
   <div class="messages-inner">
