@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import NavBar from '../components/NavBar.svelte';
-  import StatusBar from '../components/StatusBar.svelte';
   import MessageList from '../components/MessageList.svelte';
   import Composer from '../components/Composer.svelte';
   import { getHistory, sendInput, selectOption, interrupt, openEventStream } from '../lib/api';
+  import { parseStatusLine } from '../lib/statusline';
   import type { ChatEvent, StateEvent, State } from '../lib/types';
 
   interface Props {
@@ -21,6 +21,8 @@
   let dockEl: HTMLElement | undefined = $state();
 
   const currentState = $derived<State>(stateEvent?.state ?? 'idle');
+  // Statusline crua -> campos tipados (modelo, contexto, custo, tempo de sessao).
+  const status = $derived(parseStatusLine(stateEvent?.status_line ?? null));
 
   async function loadHistory() {
     try {
@@ -138,12 +140,6 @@
   {/if}
 
   <div class="bottom-dock" bind:this={dockEl}>
-    <StatusBar
-      state={currentState}
-      label={stateEvent?.label}
-      statusLine={stateEvent?.status_line}
-    />
-
     {#if currentState === 'dead'}
       <div class="dead-footer">
         <p class="dead-text">Esta sessão foi encerrada.</p>
@@ -152,6 +148,8 @@
     {:else if currentState !== 'awaiting_input'}
       <Composer
         sessionState={currentState}
+        status={status}
+        label={stateEvent?.label}
         onSend={handleSend}
         onInterrupt={handleInterrupt}
       />

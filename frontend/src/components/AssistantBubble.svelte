@@ -33,7 +33,7 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    animation: bubble-in 180ms ease-out both;
+    animation: bubble-in 220ms var(--ease-out) both;
     margin-bottom: var(--space-3);
   }
 

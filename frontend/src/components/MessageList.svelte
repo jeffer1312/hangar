@@ -82,8 +82,8 @@
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: contain;
     scroll-behavior: auto;
-    /* Make room for the fixed bottom dock (statusline bar + composer) + safe area */
-    padding-bottom: 160px;
+    /* Make room for the fixed bottom dock (state pill + statusline + composer) + safe area */
+    padding-bottom: 190px;
   }
 
   .messages-inner {
