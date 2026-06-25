@@ -1,6 +1,10 @@
+import asyncio
 import json
-from app.transcript import parse_line
+
+import pytest
+
 from app.models import ChatEvent
+from app.transcript import parse_line, TranscriptTailer
 
 
 def _line(obj) -> str:
@@ -69,10 +73,6 @@ def test_real_fixture_lines_parse():
         if ev is not None:
             events.append(ev)
     assert any(ev.kind == "assistant_msg" for ev in events)
-
-
-import asyncio, json, pytest
-from app.transcript import TranscriptTailer
 
 
 @pytest.mark.asyncio

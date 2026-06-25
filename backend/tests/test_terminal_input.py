@@ -1,4 +1,7 @@
 from unittest.mock import patch, call
+
+import pytest
+
 from app import terminal_input
 from app.terminal_input import TerminalInput
 
@@ -13,7 +16,6 @@ def test_send_prompt_literal_then_enter():
 
 
 def test_send_prompt_rejects_control_chars():
-    import pytest
     with pytest.raises(ValueError):
         TerminalInput().send_prompt("cc", "bad\x00null")
 

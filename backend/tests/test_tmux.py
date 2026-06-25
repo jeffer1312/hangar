@@ -1,5 +1,4 @@
 from unittest.mock import MagicMock, patch
-import subprocess
 from app import tmux
 
 

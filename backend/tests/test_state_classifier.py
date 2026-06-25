@@ -1,8 +1,10 @@
 from pathlib import Path
 from unittest.mock import patch
-from app.state import classify
+
+import pytest
+
 from app import state as state_mod
-from app.state import StateMonitor
+from app.state import classify, StateMonitor
 
 
 def test_working_with_spinner_label():
@@ -54,9 +56,6 @@ def test_real_fixtures():
     assert s == "working" and lbl == "Elucidating…"
     s2, _, q2, opts2 = classify((fx / "pane_awaiting_input.txt").read_text())
     assert s2 == "awaiting_input" and opts2 and "proceed?" in (q2 or "")
-
-
-import pytest
 
 
 @pytest.mark.asyncio
