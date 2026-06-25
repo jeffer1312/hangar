@@ -81,6 +81,12 @@
       <ActivityBadge label={stateEvent.label} {costUsd} onCancel={onCancel} />
     {/if}
 
+    {#each pending as p (p.id)}
+      <div class="pending-bubble">
+        <UserBubble text={p.text} ts={undefined} />
+      </div>
+    {/each}
+
     {#if stateEvent?.state === 'awaiting_input' && stateEvent.question}
       <OptionButtons
         question={stateEvent.question}
@@ -110,5 +116,10 @@
     max-width: 600px;
     width: 100%;
     margin: 0 auto;
+  }
+
+  /* Bubble enfileirado: ainda nao processado pelo Claude — atenuado ate solidificar. */
+  .pending-bubble {
+    opacity: 0.5;
   }
 </style>
