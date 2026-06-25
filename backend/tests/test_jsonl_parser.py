@@ -55,6 +55,26 @@ def test_user_tool_result_is_not_a_bubble():
     assert ev.is_error is False
 
 
+def test_command_meta_entries_are_skipped():
+    # Claude Code logs slash-commands / local command I/O as synthetic "user" entries —
+    # tooling meta, must not leak into the chat as bubbles.
+    assert parse_line(_line({
+        "type": "user", "uuid": "c1",
+        "message": {"role": "user",
+                    "content": "<command-name>/clear</command-name><command-message>clear</command-message>"},
+    })) is None
+    assert parse_line(_line({
+        "type": "user", "uuid": "c2",
+        "message": {"role": "user", "content": "<local-command-caveat>Caveat: ...</local-command-caveat>"},
+    })) is None
+    # a normal message that merely mentions such a tag mid-text is still a real message
+    ev = parse_line(_line({
+        "type": "user", "uuid": "c3",
+        "message": {"role": "user", "content": "what does the <command-name> tag do?"},
+    }))
+    assert ev is not None and ev.kind == "user_msg"
+
+
 def test_attachment_returns_none():
     assert parse_line(_line({"type": "attachment", "uuid": "x"})) is None
 

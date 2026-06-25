@@ -75,3 +75,57 @@ async def test_monitor_emits_only_on_change():
             if len(seen) == 3:
                 break
     assert seen == [("idle", None), ("working", "Elucidating…"), ("idle", None)]
+
+
+@pytest.mark.asyncio
+async def test_monitor_frozen_completed_marker_reads_idle():
+    """Regression (bug #4): a completed-turn marker ("✻ Worked for 13s") lingers in the
+    pane while Claude is idle. It is shaped exactly like a spinner but never changes, so
+    the monitor must NOT report it as working — otherwise the composer stays disabled."""
+    frozen = "● the answer\n✻ Worked for 13s\n────\n❯ \n────\n  ⏵⏵ bypass permissions on\n"
+    with patch.object(state_mod.tmux, "has_session", return_value=True), \
+         patch.object(state_mod.tmux, "capture_pane", return_value=frozen):
+        mon = StateMonitor("cc", poll=0.001)
+        seen = []
+        async for ev in mon.stream():
+            seen.append((ev.state, ev.label))
+            break
+    assert seen == [("idle", None)]
+
+
+@pytest.mark.asyncio
+async def test_monitor_animating_spinner_reads_working():
+    """A live spinner animates (glyph cycles) while its label holds — that change is the
+    proof of life that distinguishes it from a frozen marker."""
+    panes = iter([
+        "❯ \n",                       # idle baseline
+        "✽ Pondering…\n❯ \n",         # spinner appears
+        "✶ Pondering…\n❯ \n",         # glyph cycled -> alive (same label)
+        "❯ \n",                       # idle again
+    ])
+    with patch.object(state_mod.tmux, "has_session", return_value=True), \
+         patch.object(state_mod.tmux, "capture_pane", side_effect=lambda *a, **k: next(panes)):
+        mon = StateMonitor("cc", poll=0.001)
+        seen = []
+        async for ev in mon.stream():
+            seen.append((ev.state, ev.label))
+            if ev.state == "working":
+                break
+    assert seen[0] == ("idle", None)
+    assert seen[-1] == ("working", "Pondering…")
+
+
+def test_status_line_is_the_chrome_below_the_input_box():
+    pane = (
+        "● the answer\n"
+        "✻ Worked for 1s\n"
+        "──────────────────────────────\n"
+        "❯ \n"
+        "──────────────────────────────\n"
+        "  📂 proj │ 💬 43k/606 40k/1M │ 💵 $0.47 │ 🕐 14:00\n"
+        "  ⏵⏵ bypass permissions on · ← for agents\n"
+    )
+    sl = state_mod.status_line(pane)
+    assert "💬 43k/606" in sl and "💵 $0.47" in sl
+    assert "the answer" not in sl   # conversation excluded
+    assert "✻ Worked" not in sl     # spinner / completed marker excluded

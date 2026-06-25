@@ -12,7 +12,6 @@
 
   let inputText = $state('');
   let textareaEl: HTMLTextAreaElement | undefined = $state();
-  let composerEl: HTMLElement | undefined = $state();
 
   const isWorking = $derived(sessionState === 'working');
   const canSend = $derived(inputText.trim().length > 0 && !isWorking);
@@ -45,22 +44,6 @@
     onSend(msg);
   }
 
-  // iOS: lift composer above keyboard using visualViewport
-  $effect(() => {
-    if (!composerEl) return;
-    const vv = window.visualViewport;
-    if (!vv) return;
-
-    function onVVResize() {
-      if (!composerEl || !vv) return;
-      const kb = window.innerHeight - vv.height;
-      composerEl.style.transform = `translateY(-${Math.max(0, kb)}px)`;
-    }
-
-    vv.addEventListener('resize', onVVResize);
-    return () => vv.removeEventListener('resize', onVVResize);
-  });
-
   // Auto-focus when idle
   $effect(() => {
     if (sessionState === 'idle' && textareaEl) {
@@ -69,7 +52,7 @@
   });
 </script>
 
-<footer class="composer" bind:this={composerEl}>
+<footer class="composer">
   <div class="composer-inner">
     <div class="input-row">
       <textarea
@@ -106,15 +89,7 @@
 
 <style>
   .composer {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
     background: var(--bg-base);
-    border-top: 1px solid var(--border-subtle);
-    padding-bottom: env(safe-area-inset-bottom);
-    z-index: 30;
-    will-change: transform;
   }
 
   .composer-inner {
@@ -122,6 +97,9 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
+    max-width: 600px;
+    width: 100%;
+    margin: 0 auto;
   }
 
   .input-row {

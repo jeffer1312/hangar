@@ -1,61 +1,64 @@
 ---
 branch: main
-plan: superpowers/plans/2026-06-25-claude-pocket-backend.md
+saved_at: 2026-06-25T15:20:00-03:00
+saved_commit: 0208afd2ccd8bae18b7974a47269b25e8b2ccc8a
+plan: 2026-06-25-claude-pocket-backend.md
 status: in_progress
-saved_commit: 9c2237096a473841f65e84eb64f4b2fe8cc848e0
 ---
 
 ## TL;DR
-claude-pocket: drive a live Claude Code tmux session from the phone, LAN-only. BACKEND 100% done (11 TDD tasks, 46 tests, 0 warnings, final-reviewed) and PUSHED public to github.com/jeffer1312/claude-pocket (branch main). Frontend = working FIRST CUT (Svelte+Vite PWA, builds clean) but NOT yet polished with the front-end skills. Next (other machine): design-polish w/ skills + network/TLS deploy + real end-to-end test on iPhone.
+claude-pocket: drive a live Claude Code tmux session from the phone, LAN-only. Backend was done+pushed earlier. THIS session: validated the FULL phone→claude loop on a real tmux/claude session via a browser, fixed everything it surfaced (6 bugs), and added a polish batch (statusline-on-web, bottom status bar, chat dedupe, command-meta filtering, width cap). All verified live in the browser; 53 tests pass; COMMITTED to main (not pushed). Next = Plan 3 (deploy/onboarding): auto-detect LAN IP, QR pairing, Caddy/TLS.
 
 ## Task atual
-Backend SDD complete + published. Next phase = frontend design-polish pass USING the front-end skills (impeccable / frontend-design / taste-skill / ui-ux-pro-max) on a RUNNING app, then the network/deploy plan (Caddy+TLS+firewall+iPhone cert), then a live end-to-end test from the phone.
+Plan 3 — deploy & onboarding. Make it reachable from the phone with minimal friction: (1) CP_LAN_BIND_IP=auto auto-detect, (2) QR pairing on startup (URL+token, scan=in), (3) Caddy + TLS in front. Decisions already recorded in docs/onboarding-and-network.md. Caddy needs installing on this machine (was MISSING).
 
 ## Concluído nesta sessão
-- Design: spec + plan written (docs/superpowers/{specs,plans}/2026-06-25-claude-pocket-*.md). Plan was EXECUTED.
-- Spike (Task 1) validated 3 risky assumptions on a REAL claude/tmux session: send-keys submits; spinner = glyph+gerund (NOT "esc to interrupt"); interactive-question SELECT = (n-1)xDown+Enter. Fixtures in backend/tests/fixtures/.
-- Backend: 11 tasks via TDD subagent-per-task, each independently reviewed + fixed. 46 tests, 0 warnings. Final whole-branch review caught+fixed 2 blockers (SSE pump-error swallow; default-token footgun).
-- Frontend: first-cut Svelte+Vite PWA built in PARALLEL via a workflow (design->build->verify; builds clean, type-clean). Its RESULT is committed at frontend/.
-- Published: scrubbed PII, unified git author, fixed httpx2 dep, gh repo create --public --push.
-- Per-commit detail: git log --oneline 87d705e..9c22370 (27 commits).
+- Proved end-to-end in a real browser (agent-browser) on a real claude tmux session: login/auth, history, live SSE, state working/idle correct, send-from-composer→claude replies, interrupt, command-meta filtered, statusline shown, live append.
+- Fixed 6 bugs (all surfaced by the live e2e): #1 projects_dir hardcoded ~/.claude → CLAUDE_CONFIG_DIR-aware; #2 SSE Python-repr → model_dump_json (valid JSON); #3 cookie auth_token→cp_token; #4 classify false-"working" from frozen markers → temporal animation detection; #6 sent msg needed refresh → dedupe-by-id + reconnect (live now); #7 Claude Code command-meta (/clear, caveats) leaking as bubbles → filtered in parse_line.
+- Feature: raw terminal statusline surfaced to the web (StateEvent.status_line), shown verbatim in a bottom status bar with the state pill (badge moved below). Each user sees their own statusline.
+- Dev wiring: vite /api proxy (same-origin) + cp_token cookie. lan_bind default → 127.0.0.1.
+- Frontend: bottom "dock" (StatusBar + Composer), content width capped ~600px, iOS-keyboard visualViewport handling moved to the dock.
+- 46 → 53 tests. Committed all of it to main.
+- Recorded Plan-3 decisions in docs/onboarding-and-network.md.
 
 ## Decisões
-- Architecture: chat CONTENT from the Claude JSONL transcript; live STATE from a narrow tmux capture-pane; INPUT via tmux send-keys. No terminal scraping.
-- States = working(label)/idle/awaiting_input/dead. DROPPED permission-approval (user runs bypass, never approves) but KEPT interactive-question handling (ExitPlanMode/AskUserQuestion -> awaiting_input + option buttons -> POST /select).
-- Frontend built via WORKFLOW with embedded design direction, NOT the front-end skills (workflow agents cannot invoke skills). It is a solid base to POLISH with skills, not to redo.
-- httpx2: build agent hallucinated it as a runtime dep; investigated as a possible typosquat but it is LEGIT (real Pydantic pkg; the new starlette TestClient backend). Moved to dev-dep, dropped old httpx.
-- Git author rewritten on all commits -> Jefferson Felizardo <jeffer1312@gmail.com> (local repo config only; global work identity untouched). Branch renamed master->main.
+- Dev auth = vite proxy same-origin + cp_token cookie (rejected CORS + ?token= query: leak + surface). Python loopback; prod = Caddy front.
+- Onboarding (Plan 3) = QR pairing (QR carries LAN-IP+token, scan=logged-in, token never typed) + CP_LAN_BIND_IP=auto (UDP-connect autodetect). Keep bearer token (no user/pass login). Default bind loopback. (docs/onboarding-and-network.md)
+- #4: a static pane can't tell a live spinner from a frozen "<glyph> <word> for <N>s" marker → classify flags any bottom-most spinner as working; StateMonitor downgrades a non-animating one to idle (STALE_LIMIT=3; first sight waits for a change).
+- statusline shown RAW/verbatim (not parsed) — "igual no terminal", portable across each user's custom statusline config.
+- Chat dedupe by id (SSE replays full history every connect + loadHistory seeds → would double).
 
 ## Limitações conhecidas
-- Frontend NOT yet polished with design skills (first cut only). Brief: docs/frontend-design-brief.md.
-- Network/deploy (Plan 3) NOT done: no Caddy/TLS/firewall/iPhone cert. main.py startup_guard refuses a non-loopback bind while the token is the default 'change-me'.
-- End-to-end NEVER run live (backend serving + frontend + real phone). Backend Task 11 Step 8 live smoke was intentionally skipped.
-- TranscriptTailer startup race (initial read <-> awatch arming us gap) self-heals on next write; accepted for v1.
-- Non-blocking Minors (final review): auth uses == not compare_digest; terminal_input ValueError -> HTTP 500 not 400; select() has no upper bound. All auth-gated / single-user LAN.
-- SDD ledger/briefs/reports live in .superpowers/sdd/ which is GITIGNORED -> they do NOT travel via git. This handoff + git log are the record.
+- iOS keyboard: visualViewport lift moved from Composer to the bottom dock — works on desktop, NOT verifiable here. Validate on the real iPhone.
+- Width = a centered content column (~600px), NOT a literal phone frame on desktop. Refine if wanted.
+- #5 (minor): GET /api/sessions always state="idle" (registry.list never computes it; real state only via SSE). Computing in the list reintroduces the #4 static ambiguity.
+- Plan 3 NOT done: no auto-detect, no QR, no Caddy/TLS. Caddy not installed on this machine.
 
 ## Erros / armadilhas
-- (resolved) httpx2 supply-chain scare; verified legit before re-adding as dev-dep.
-- (resolved) PII: backend/tests/fixtures/pane_idle.txt had the user email captured from the live Claude screen -> scrubbed to dev@example.com before the public push.
+- This machine: CLAUDE_CONFIG_DIR=/home/.../.claude-work → transcripts in ~/.claude-work/projects, not ~/.claude.
+- Start claude as the DIRECT tmux pane command (`tmux new-session -d -s cc -c <dir> 'claude'`), NOT via an interactive shell (p10k wizard eats keystrokes). Fresh cwd → trust + external-imports prompts; send Enter to accept.
+- Foreground `sleep` is blocked by the harness; don't use it in Bash one-liners.
+- /events and /history 404 until the session's transcript exists (claude writes the jsonl lazily on first message).
 
 ## Arquivos criticos
-- docs/superpowers/specs/2026-06-25-claude-pocket-design.md (N) - spec; read the "Revisao pos-spike" note at top.
-- docs/superpowers/plans/2026-06-25-claude-pocket-backend.md (N) - the executed backend plan (read this to continue).
-- backend/docs/spike-results.md (N) - REAL spike findings (spinner/widget markers, selection mechanic).
-- docs/frontend-design-brief.md (N) - frontend design brief (basis for the polish pass).
-- backend/app/sse.py backend/app/api.py backend/app/state.py backend/app/transcript.py backend/app/registry.py backend/app/terminal_input.py (N) - core backend.
-- frontend/src/ (N) - Svelte app (screens/, lib/, components/) to be polished.
+- backend/app/state.py (R) — temporal classify/StateMonitor (#4) + status_line() extractor.
+- backend/app/transcript.py (R) — command-meta filter (#7).
+- backend/app/config.py (R) — CLAUDE_CONFIG_DIR projects_dir (#1) + loopback bind default.
+- backend/app/sse.py (R) — model_dump_json (#2). backend/app/models.py (R) — StateEvent.status_line.
+- frontend/src/screens/Chat.svelte (R) — dedupe (#6) + bottom dock + keyboard. frontend/src/components/StatusBar.svelte (N) — statusline bar.
+- frontend/src/lib/auth.ts (R) cp_token cookie (#3); frontend/vite.config.ts (R) /api proxy.
+- docs/onboarding-and-network.md (N) — Plan 3 decisions (READ FIRST for Plan 3).
 
 ## Próximo passo
 ```
-# On the OTHER machine:
-git clone https://github.com/jeffer1312/claude-pocket && cd claude-pocket
-cd backend && uv run pytest -q                 # expect 46 passed, 0 warnings
-# To run it (needs tmux + claude): start claude in tmux first ->  tmux new -s cc  (run `claude` inside)
-CP_AUTH_TOKEN=$(openssl rand -hex 24) CP_LAN_BIND_IP=127.0.0.1 uv run python -m app.main
-# frontend (new shell):
-cd ../frontend && npm install && npm run dev
-# THEN the design-polish pass: invoke the front-end skills (impeccable / frontend-design /
-#   taste-skill / ui-ux-pro-max) on frontend/src WITH the app running in the browser.
-# Resume this context:  /handoff resume   (after git pull)
+# Plan 3 (deploy/onboarding). Read docs/onboarding-and-network.md first.
+# 1. Auto-detect LAN IP — CP_LAN_BIND_IP=auto resolves the primary LAN IP (UDP-connect to
+#    8.8.8.8, no traffic). Edit backend/app/config.py + main.py; TDD in backend/tests.
+# 2. QR pairing on startup — add a qrcode dep (uv add qrcode), build http://<lan-ip>:<port>
+#    + token, print an ASCII QR in main.py startup. Phone scans -> URL+token auto-filled.
+#    (Frontend: accept token via URL/query on the Login screen for the QR deep-link.)
+# 3. Caddy + TLS — install caddy (system, needs user), write a Caddyfile that serves the
+#    built PWA + reverse-proxies /api to 127.0.0.1:8765 with a LAN cert for the iPhone.
+# Bring the stack back up to test: see README "Run it (dev)"; tmux cc + backend :8765 + vite :5173.
+# resume: /handoff resume  (after git pull)
 ```

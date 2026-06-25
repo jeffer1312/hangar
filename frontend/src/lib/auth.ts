@@ -12,14 +12,16 @@ export function getToken(): string | null {
 export function setCredentials(baseUrl: string, token: string): void {
   localStorage.setItem(BASE_URL_KEY, baseUrl);
   localStorage.setItem(TOKEN_KEY, token);
-  // Set cookie for SSE same-origin auth
-  document.cookie = `auth_token=${token}; path=/; SameSite=Lax`;
+  // Cookie for SSE same-origin auth: EventSource can't send an Authorization header,
+  // so the backend reads `cp_token` from the cookie. Name MUST match the backend
+  // (app/auth.py reads request.cookies.get("cp_token")).
+  document.cookie = `cp_token=${token}; path=/; SameSite=Lax`;
 }
 
 export function clearCredentials(): void {
   localStorage.removeItem(BASE_URL_KEY);
   localStorage.removeItem(TOKEN_KEY);
-  document.cookie = 'auth_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+  document.cookie = 'cp_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
 }
 
 export function isAuthenticated(): boolean {

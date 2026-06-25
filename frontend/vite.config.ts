@@ -3,6 +3,17 @@ import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  server: {
+    // Dev: proxy /api to the backend so the browser talks same-origin — no CORS, and
+    // the cp_token cookie reaches the EventSource (SSE). Mirrors the prod reverse-proxy.
+    // Leave the Login "URL do servidor" empty in dev so requests stay relative.
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8765',
+        changeOrigin: true,
+      },
+    },
+  },
   plugins: [
     svelte(),
     VitePWA({

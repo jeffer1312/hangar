@@ -30,13 +30,8 @@
 
 <style>
   .pill-wrap {
-    display: flex;
-    justify-content: center;
-    padding: var(--space-2) var(--space-4);
-    position: sticky;
-    top: 0;
-    z-index: 10;
-    background: var(--bg-base);
+    display: inline-flex;
+    flex-shrink: 0;
     pointer-events: none;
   }
 

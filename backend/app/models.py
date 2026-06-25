@@ -32,3 +32,4 @@ class StateEvent(BaseModel):
     label: Optional[str] = None         # working: live status text, e.g. "Elucidating…"
     question: Optional[str] = None       # awaiting_input: the question line
     options: Optional[list[str]] = None  # awaiting_input: selectable option labels
+    status_line: Optional[str] = None    # raw bottom chrome from the pane, shown as-is on the web

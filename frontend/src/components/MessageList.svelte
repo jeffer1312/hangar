@@ -82,13 +82,16 @@
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: contain;
     scroll-behavior: auto;
-    /* Make room for fixed composer (approx 80px + safe area) */
-    padding-bottom: 100px;
+    /* Make room for the fixed bottom dock (statusline bar + composer) + safe area */
+    padding-bottom: 160px;
   }
 
   .messages-inner {
     padding: var(--space-4) var(--space-4) var(--space-2);
     display: flex;
     flex-direction: column;
+    max-width: 600px;
+    width: 100%;
+    margin: 0 auto;
   }
 </style>
