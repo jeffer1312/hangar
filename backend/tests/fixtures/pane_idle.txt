@@ -1,0 +1,50 @@
+
+╭─── Claude Code v2.1.191 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                                                                           │
+│                    Welcome back!                   │ Run /init to create a CLAUDE.md file with instructions for Claude                                                  │
+│                                                    │ ────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│                       ▐▛███▜▌                      │ What's new                                                                                                         │
+│                      ▝▜█████▛▘                     │ Added `/rewind` support for resuming a conversation from before `/clear` was run                                   │
+│                        ▘▘ ▝▝                       │ Fixed scroll position jumping to the bottom while reading earlier output during a streaming response               │
+│   Opus 4.8 (1M context) with hi… · Claude Max ·    │ Fixed background agents resurrecting after being stopped — stopping an agent from the tasks panel is now permanent │
+│   user@acme.com's Organization         │ /release-notes for more                                                                                            │
+│              ~/Projetos/claude-pocket              │                                                                                                                    │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Opus 4.8 (1M context) ~high 📁 claude-pocket master ⊙6m ↑0↓0 │  🧠4.9G
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
