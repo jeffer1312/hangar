@@ -6,11 +6,9 @@
 </script>
 
 <script lang="ts">
-  import { onDestroy, tick } from 'svelte';
+  import { tick } from 'svelte';
   import IconSend from './icons/IconSend.svelte';
-  import IconInterrupt from './icons/IconInterrupt.svelte';
   import ContextRing from './ContextRing.svelte';
-  import LiveMetrics from './LiveMetrics.svelte';
   import ModelEffortSheet from './ModelEffortSheet.svelte';
   import SlashSuggest from './SlashSuggest.svelte';
   import CommandSheet from './CommandSheet.svelte';
@@ -22,12 +20,10 @@
     sessionName: string;
     sessionState: State;
     status: StatusFields | null;
-    label?: string | null;
     onSend: (text: string) => void;
-    onInterrupt: () => void;
     onCommand: (cmd: string) => void;
   }
-  let { sessionName, sessionState, status, label = null, onSend, onInterrupt, onCommand }: Props = $props();
+  let { sessionName, sessionState, status, onSend, onCommand }: Props = $props();
 
   // ── Slash commands: busca uma vez por sessao (com cache) ────────────────────
   // Comeca vazio; o $effect popula na hora a partir do cache (sincrono) ou da rede.
@@ -54,67 +50,7 @@
   let inputText = $state('');
   let textareaEl: HTMLTextAreaElement | undefined = $state();
 
-  const isWorking = $derived(sessionState === 'working');
-  const canSend = $derived(inputText.trim().length > 0 && !isWorking);
-
-  // ── Status row: rotulo por estado (espelha a ideia do StatusPill) ──────────
-  const stateLabels: Record<State, string> = {
-    working: '',
-    idle: 'Pronto',
-    awaiting_input: 'Aguardando resposta',
-    dead: 'Sessão encerrada',
-  };
-  const stateLabel = $derived(
-    sessionState === 'working' ? (label ?? 'Trabalhando…') : stateLabels[sessionState]
-  );
-
-  // ── Cronometro local: conta a partir do instante em que entra em "working" ──
-  // Aproximacao client-side (reseta no reconnect do SSE) — e o ancora de liveness,
-  // nao um tempo autoritativo. Fora de "working" cai pro sessionTime da statusline.
-  let elapsedLabel = $state<string | null>(null);
-  let timer: ReturnType<typeof setInterval> | null = null;
-  let startedAt = 0;
-
-  function fmtElapsed(ms: number): string {
-    const total = Math.max(0, Math.floor(ms / 1000));
-    const mm = Math.floor(total / 60);
-    const ss = total % 60;
-    return String(mm).padStart(2, '0') + ':' + String(ss).padStart(2, '0');
-  }
-
-  function stopTimer() {
-    if (timer) {
-      clearInterval(timer);
-      timer = null;
-    }
-  }
-
-  $effect(() => {
-    if (sessionState !== 'working') {
-      stopTimer();
-      elapsedLabel = null;
-      return;
-    }
-    startedAt = Date.now();
-    elapsedLabel = fmtElapsed(0);
-    timer = setInterval(() => {
-      elapsedLabel = fmtElapsed(Date.now() - startedAt);
-    }, 1000);
-    return () => stopTimer();
-  });
-
-  onDestroy(() => stopTimer());
-
-  const timeLabel = $derived(
-    sessionState === 'working' ? elapsedLabel : (status?.sessionTime ?? null)
-  );
-
-  // Linha de status colapsa por completo quando nao ha rotulo nem metricas.
-  const hasMetrics = $derived(
-    (typeof timeLabel === 'string' && timeLabel.length > 0) ||
-    (typeof status?.costUsd === 'number' && isFinite(status.costUsd))
-  );
-  const showStatusRow = $derived(stateLabel.length > 0 || hasMetrics);
+  const canSend = $derived(inputText.trim().length > 0);
 
   // ── Pill de modelo + esforco: abre o ModelEffortSheet (aplica via endpoint dedicado) ──
   // Display otimista: a escolha aparece na hora; o status (read-back real do statusline)
@@ -224,18 +160,6 @@
 
 <footer class="composer">
   <div class="composer-card">
-    {#if showStatusRow}
-      <div class="status-row">
-        <div class="status-left">
-          <span class="dot dot--{sessionState}" aria-hidden="true"></span>
-          {#if stateLabel}
-            <span class="state-label" role="status" aria-live="polite">{stateLabel}</span>
-          {/if}
-        </div>
-        <LiveMetrics {timeLabel} costUsd={status?.costUsd} />
-      </div>
-    {/if}
-
     <SlashSuggest {commands} query={inputText} onPick={handleSuggestPick} />
 
     <textarea
@@ -244,7 +168,6 @@
       class="composer-textarea"
       placeholder="Mensagem para Claude…"
       rows={1}
-      disabled={isWorking}
       oninput={handleInput}
       onkeydown={handleKeydown}
       aria-label="Mensagem"
@@ -270,21 +193,15 @@
       </div>
 
       <div class="control-right">
-        {#if isWorking}
-          <button class="stop-btn" onclick={onInterrupt} aria-label="Interromper Claude">
-            <IconInterrupt size={16} />
-          </button>
-        {:else}
-          <button
-            class="send-btn"
-            class:send-btn--disabled={!canSend}
-            onclick={submit}
-            disabled={!canSend}
-            aria-label="Enviar mensagem"
-          >
-            <IconSend size={18} />
-          </button>
-        {/if}
+        <button
+          class="send-btn"
+          class:send-btn--disabled={!canSend}
+          onclick={submit}
+          disabled={!canSend}
+          aria-label="Enviar mensagem"
+        >
+          <IconSend size={18} />
+        </button>
       </div>
     </div>
   </div>
@@ -326,56 +243,6 @@
     padding: var(--space-3);
   }
 
-  /* ── Status row ─────────────────────────────────────────────────────────── */
-  .status-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-3);
-    min-height: 24px;
-  }
-
-  .status-left {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    min-width: 0;
-  }
-
-  .state-label {
-    font-size: var(--text-sm);
-    font-weight: 500;
-    color: var(--text-secondary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .dot {
-    width: 7px;
-    height: 7px;
-    border-radius: var(--radius-full);
-    flex-shrink: 0;
-  }
-
-  .dot--working {
-    background: var(--pill-working-fg);
-    animation: pulse-scale 1.4s ease-in-out infinite;
-  }
-
-  .dot--idle {
-    background: var(--success);
-  }
-
-  .dot--awaiting_input {
-    background: var(--warning);
-    animation: pulse-scale 1s ease-in-out infinite;
-  }
-
-  .dot--dead {
-    background: var(--error);
-  }
-
   /* ── Textarea (transparente dentro do card) ─────────────────────────────── */
   .composer-textarea {
     width: 100%;
@@ -396,10 +263,6 @@
 
   .composer-textarea::placeholder {
     color: var(--text-muted);
-  }
-
-  .composer-textarea:disabled {
-    opacity: 0.4;
   }
 
   /* ── Control row ────────────────────────────────────────────────────────── */
@@ -482,21 +345,5 @@
     background: var(--bg-hover);
     color: var(--text-muted);
     cursor: default;
-  }
-
-  /* Stop: substitui o antigo botao "Interromper" de largura total. */
-  .stop-btn {
-    width: 44px;
-    height: 44px;
-    flex-shrink: 0;
-    background: transparent;
-    border: 1px solid var(--error);
-    border-radius: var(--radius-md);
-    color: var(--error);
-    transition: background 180ms var(--ease-out);
-  }
-
-  .stop-btn:active {
-    background: rgba(255, 69, 58, 0.08);
   }
 </style>
