@@ -119,18 +119,35 @@
     es?.close();
   });
 
-  // Lift the bottom dock (statusline + composer) above the iOS on-screen keyboard.
+  // Lift the bottom dock (composer) above the on-screen keyboard, cross-platform.
+  // iOS: window.innerHeight nao encolhe; o teclado vive na diferenca p/ visualViewport,
+  // e o Safari ainda ROLA a viewport (offsetTop > 0) ao focar perto do fundo — por isso
+  // o inset desconta offsetTop e escutamos 'scroll' alem de 'resize'. Android/Chrome com
+  // interactive-widget=resizes-content encolhe o layout -> inset ~0 -> no-op (sem duplo).
   $effect(() => {
     if (!dockEl) return;
     const vv = window.visualViewport;
     if (!vv) return;
-    function onResize() {
+    function update() {
       if (!dockEl || !vv) return;
-      const kb = window.innerHeight - vv.height;
-      dockEl.style.transform = `translateY(-${Math.max(0, kb)}px)`;
+      const inset = window.innerHeight - vv.height - vv.offsetTop;
+      dockEl.style.transform = `translateY(-${Math.max(0, inset)}px)`;
     }
-    vv.addEventListener('resize', onResize);
-    return () => vv.removeEventListener('resize', onResize);
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    // Foco na textarea pode preceder o resize do teclado: forca um update no proximo frame.
+    function onFocusIn() {
+      requestAnimationFrame(update);
+      // segundo tick: iOS as vezes so estabiliza apos a animacao do teclado
+      setTimeout(update, 300);
+    }
+    dockEl.addEventListener('focusin', onFocusIn);
+    update();
+    return () => {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+      dockEl?.removeEventListener('focusin', onFocusIn);
+    };
   });
 
   async function handleSend(text: string) {
