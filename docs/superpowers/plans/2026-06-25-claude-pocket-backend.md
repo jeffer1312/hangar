@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the Python backend that exposes live Claude Code `tmux` sessions to a phone over HTTP: a chat feed parsed from the session JSONL, a live-state SSE stream, and input/approve/interrupt endpoints that drive the real terminal.
+**Goal:** Build the Python backend that exposes live Claude Code `tmux` sessions to a phone over HTTP: a chat feed parsed from the session JSONL, a live-state SSE stream, and input/select/interrupt endpoints that drive the real terminal.
 
 **Architecture:** FastAPI app over four isolated components — `SessionRegistry` (tmux discovery/lifecycle), `TranscriptTailer` (JSONL → chat events), `StateMonitor` (`capture-pane` → live state), `TerminalInput` (`send-keys`). Content comes from the structured JSONL; live state comes from a narrow screen read; input goes to the live session. An SSE endpoint merges transcript + state per session. This plan stops at a curl-drivable API; the Svelte frontend and the Caddy/TLS/firewall deploy are separate plans.
 
@@ -15,7 +15,8 @@
 - All HTTP routes require a Bearer token (`AUTH_TOKEN`); SSE auth via httpOnly cookie (same-origin). Single user.
 - Claude transcripts live at `~/.claude/projects/<sanitized-cwd>/<session-uuid>.jsonl`, one JSON event per line, appended in real time.
 - `tmux send-keys`: always send literal text (`-l --`) and the `Enter` key as **two separate** invocations. Sanitize input.
-- Content (chat bubbles/tool cards) is derived ONLY from JSONL. `capture-pane` is used ONLY for live-state (spinner / approval box). A `capture-pane` parse miss must never block the chat.
+- Content (chat bubbles/tool cards) is derived ONLY from JSONL. `capture-pane` is used ONLY for live-state: `working` (label = Claude's live spinner text, e.g. "Elucidating…") / `idle` / `dead`. A `capture-pane` parse miss must never block the chat.
+- NO permission-approval feature — the user runs bypass permissions and never approves tool calls (validated in Task 1 spike). BUT Claude's **interactive questions** (`ExitPlanMode`, `AskUserQuestion`, numbered selects) DO occur in bypass and ARE handled: state `awaiting_input` with parsed `options`; the user picks one and the backend selects it via `select(n)` = `(n-1)×Down` + `Enter` (validated in spike), or cancels with `Esc`. Free-text questions are plain assistant text → chat bubble, answered via the input composer.
 - TDD: write the failing test first, watch it fail, implement minimally, watch it pass, commit. Conventional Commit messages.
 
 ## File Structure
@@ -30,7 +31,7 @@ backend/
     tmux.py               # subprocess wrappers: list/new/kill/send_keys/capture_pane/has_session
     transcript.py         # parse_line / parse_transcript + TranscriptTailer
     state.py              # classify() + StateMonitor
-    terminal_input.py     # TerminalInput (send_prompt/approve/interrupt)
+    terminal_input.py     # TerminalInput (send_prompt/select/interrupt)
     registry.py           # SessionRegistry (list/create/kill/resolve_jsonl)
     auth.py               # token + cookie auth dependency
     sse.py                # per-session merged event generator
@@ -53,9 +54,11 @@ backend/
 
 ---
 
-### Task 1: Spike — validate the tmux bridge + capture real fixtures
+### Task 1: Spike — validate the tmux bridge + capture real fixtures  ✅ COMPLETE (commit dfdc765)
 
-This task validates the two risky assumptions before any code is built on them, and captures the real `capture-pane` text the state classifier needs. It is exploratory (not TDD); its deliverable is a written result + fixture files.
+> **DONE.** Real findings are in `backend/docs/spike-results.md`: assumption A validated (`send-keys` submits); the spinner is `glyph + gerund + …` (NOT "esc to interrupt"); the user runs bypass → permission-approval was dropped; interactive-question selection validated (`(n-1)×Down` + `Enter`). The Step expectations below that mention `esc to interrupt` / "approval" are PRE-spike and are superseded by `spike-results.md`. Fixtures captured: `pane_idle.txt`, `pane_thinking.txt`, `pane_awaiting_input.txt`, `jsonl_samples.jsonl`.
+
+This task validated the risky assumptions before any code was built on them, and captured the real `capture-pane` text the state classifier needs. It was exploratory (not TDD); its deliverable is a written result + fixture files.
 
 **Files:**
 - Create: `backend/docs/spike-results.md`
@@ -170,7 +173,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel
 
 ChatKind = Literal["user_msg", "assistant_msg", "tool_use", "tool_result"]
-State = Literal["idle", "thinking", "executing", "awaiting_approval", "dead"]
+State = Literal["working", "idle", "awaiting_input", "dead"]
 
 
 class SessionInfo(BaseModel):
@@ -197,8 +200,9 @@ class ChatEvent(BaseModel):
 class StateEvent(BaseModel):
     session: str
     state: State
-    tool: Optional[str] = None
-    options: Optional[list[str]] = None
+    label: Optional[str] = None         # working: live status text, e.g. "Elucidating…"
+    question: Optional[str] = None       # awaiting_input: the question line
+    options: Optional[list[str]] = None  # awaiting_input: selectable option labels
 ```
 
 - [ ] **Step 4: Write the smoke test**
@@ -217,7 +221,8 @@ def test_settings_defaults():
 def test_models_construct():
     assert SessionInfo(name="cc").state == "idle"
     assert ChatEvent(kind="user_msg", id="1", text="hi").text == "hi"
-    assert StateEvent(session="cc", state="thinking").state == "thinking"
+    assert StateEvent(session="cc", state="working", label="Elucidating…").label == "Elucidating…"
+    assert StateEvent(session="cc", state="awaiting_input", options=["Yes", "No"]).options == ["Yes", "No"]
 ```
 
 - [ ] **Step 5: Run tests**
@@ -656,51 +661,73 @@ git commit -m "feat: add async TranscriptTailer"
 
 ### Task 6: State classifier (pure)
 
-Classifies a `capture-pane` snapshot + the last chat event into a live state. Markers come from the Task 1 spike; defaults below match Claude Code's known TUI.
+Classifies a `capture-pane` snapshot into a live state. Markers are the REAL ones captured in the Task 1 spike: spinner = a spinner glyph + gerund + `…` (e.g. `✽ Elucidating…`); interactive widget = a `❯ N.` cursor line + a `?` question line.
 
 **Files:**
 - Create: `backend/app/state.py` (the `classify` function this task)
 - Test: `backend/tests/test_state_classifier.py`
 
 **Interfaces:**
-- Consumes: `ChatEvent` (Task 2).
-- Produces: `classify(pane_text: str, last_event: Optional[ChatEvent]) -> tuple[State, Optional[str], Optional[list[str]]]` returning `(state, tool, options)`.
-- Module constants (override after spike): `APPROVAL_MARKERS: list[str]`, `SPINNER_MARKERS: list[str]`.
+- Produces: `classify(pane_text: str) -> tuple[str, Optional[str], Optional[str], Optional[list[str]]]` returning `(state, label, question, options)`. `working` → `label` (live spinner text); `awaiting_input` → `question` + `options`; otherwise `idle`. `dead` is decided by the caller (Task 7).
+- Module constant: `SPINNER_GLYPHS: str` — real spinner glyph set from the spike.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```python
 # backend/tests/test_state_classifier.py
+from pathlib import Path
 from app.state import classify
-from app.models import ChatEvent
 
 
-def test_approval_box_detected():
-    pane = "Bash command\n  echo hello\n\nDo you want to proceed?\n❯ 1. Yes\n  2. No\n"
-    state, tool, options = classify(pane, None)
-    assert state == "awaiting_approval"
-    assert options == ["Yes", "No"]
+def test_working_with_spinner_label():
+    state, label, q, opts = classify("● PONG\n\n✽ Elucidating…\n\n❯ \n  ← for agents\n")
+    assert state == "working"
+    assert label == "Elucidating…"
 
 
-def test_executing_when_spinner_and_pending_tool():
-    pane = "✻ Running… (esc to interrupt)\n"
-    last = ChatEvent(kind="tool_use", id="a1", tool_name="Bash", tool_use_id="t1")
-    state, tool, _ = classify(pane, last)
-    assert state == "executing"
-    assert tool == "Bash"
+def test_working_elapsed_form():
+    state, label, q, opts = classify("✻ Crunched for 8s\n❯ \n")
+    assert state == "working" and label == "Crunched for 8s"
 
 
-def test_thinking_when_spinner_and_no_pending_tool():
-    pane = "✻ Thinking… (esc to interrupt)\n"
-    last = ChatEvent(kind="user_msg", id="u1", text="hi")
-    state, _, _ = classify(pane, last)
-    assert state == "thinking"
-
-
-def test_idle_when_no_spinner():
-    pane = "│ > \n╰────────────╯\n"
-    state, _, _ = classify(pane, None)
+def test_assistant_bullet_is_not_spinner():
+    # ● is the message bullet, not a spinner glyph
+    state, label, q, opts = classify("● PONG\n❯ \n")
     assert state == "idle"
+
+
+def test_awaiting_input_parses_question_and_options():
+    pane = (
+        "   Claude has written up a plan. Would you like to proceed?\n"
+        "\n"
+        "   ❯ 1. Yes, and bypass permissions\n"
+        "     2. Yes, manually approve edits\n"
+        "     3. No, keep planning\n"
+    )
+    state, label, question, options = classify(pane)
+    assert state == "awaiting_input"
+    assert question == "Claude has written up a plan. Would you like to proceed?"
+    assert options == ["Yes, and bypass permissions", "Yes, manually approve edits", "No, keep planning"]
+
+
+def test_numbered_list_without_cursor_stays_idle():
+    # a plain numbered list (no ❯ cursor on an option) is NOT a widget
+    state, *_ = classify("Steps:\n  1. do this\n  2. do that\n❯ \n")
+    assert state == "idle"
+
+
+def test_idle_when_no_spinner_or_widget():
+    state, label, q, opts = classify("❯ \n  ← for agents\n")
+    assert state == "idle"
+
+
+def test_real_fixtures():
+    fx = Path(__file__).parent / "fixtures"
+    assert classify((fx / "pane_idle.txt").read_text())[0] == "idle"
+    s, lbl, *_ = classify((fx / "pane_thinking.txt").read_text())
+    assert s == "working" and lbl
+    s2, _, q2, opts2 = classify((fx / "pane_awaiting_input.txt").read_text())
+    assert s2 == "awaiting_input" and opts2 and "proceed?" in (q2 or "")
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -713,40 +740,49 @@ Expected: FAIL (`ModuleNotFoundError: app.state`).
 ```python
 import re
 from typing import Optional
-from app.models import ChatEvent, State
 
-APPROVAL_MARKERS = ["Do you want to proceed?", "Do you want to make this edit"]
-SPINNER_MARKERS = ["esc to interrupt", "(esc to interrupt)"]
-_OPTION_RE = re.compile(r"^\s*[❯>]?\s*\d+\.\s+(.*\S)\s*$")
+SPINNER_GLYPHS = "✻✽✶✺✢·∗✳✦✧"
+_OPTION_RE = re.compile(r"^\s*[❯ ]?\s*\d+\.\s+(.*\S)\s*$")
+_CURSOR_RE = re.compile(r"^\s*❯\s*\d+\.\s", re.M)
 
 
-def _parse_options(pane_text: str) -> list[str]:
-    opts = []
+def _question(pane_text: str) -> Optional[str]:
+    found = None
     for line in pane_text.splitlines():
-        m = _OPTION_RE.match(line)
-        if m:
-            opts.append(m.group(1).strip())
-    return opts
+        s = line.strip()
+        if s.endswith("?"):
+            found = s
+    return found
 
 
-def classify(pane_text: str, last_event: Optional[ChatEvent]):
-    if any(mark in pane_text for mark in APPROVAL_MARKERS):
-        return ("awaiting_approval", None, _parse_options(pane_text) or None)
-    if any(mark in pane_text for mark in SPINNER_MARKERS):
-        if last_event is not None and last_event.kind == "tool_use":
-            return ("executing", last_event.tool_name, None)
-        return ("thinking", None, None)
-    return ("idle", None, None)
+def classify(pane_text: str):
+    """Return (state, label, question, options).
+
+    'working' -> label is the live spinner text; 'awaiting_input' -> question +
+    options; otherwise 'idle'. 'dead' is decided by the caller (StateMonitor).
+    """
+    for line in pane_text.splitlines():
+        s = line.strip()
+        if len(s) >= 2 and s[0] in SPINNER_GLYPHS and s[1] == " ":
+            return ("working", s[1:].strip(), None, None)
+
+    if _CURSOR_RE.search(pane_text):
+        options = [m.group(1).strip()
+                   for m in (_OPTION_RE.match(ln) for ln in pane_text.splitlines()) if m]
+        if options:
+            return ("awaiting_input", None, _question(pane_text), options)
+
+    return ("idle", None, None, None)
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_state_classifier.py -v`
-Expected: 4 passed.
+Expected: all 7 passed.
 
-- [ ] **Step 5: Reconcile markers with the spike**
+- [ ] **Step 5: Confirm against real fixtures**
 
-Open `backend/docs/spike-results.md`. If the real spinner/approval substrings differ from the defaults above, update `SPINNER_MARKERS` / `APPROVAL_MARKERS` and add a fixture-based test reading `tests/fixtures/pane_approval.txt` and `pane_thinking.txt`. Re-run `uv run pytest tests/test_state_classifier.py -v` until green.
+The markers are already the real ones from the spike (`backend/docs/spike-results.md`). `test_real_fixtures` reads `pane_idle.txt`, `pane_thinking.txt`, and `pane_awaiting_input.txt` and must pass. If it fails, fix `SPINNER_GLYPHS` / the regexes to match the fixtures — do NOT edit the fixtures.
 
 - [ ] **Step 6: Commit**
 
@@ -765,8 +801,8 @@ git commit -m "feat: classify live session state from capture-pane"
 - Test: `backend/tests/test_state_classifier.py` (append async test)
 
 **Interfaces:**
-- Consumes: `classify` (Task 6), `tmux.capture_pane` (Task 3), `StateEvent` (Task 2).
-- Produces: `StateMonitor(name, get_last_event: Callable[[], Optional[ChatEvent]], poll: float)` with `async stream() -> AsyncIterator[StateEvent]` that yields ONLY on state change.
+- Consumes: `classify` (Task 6), `tmux.capture_pane`/`tmux.has_session` (Task 3), `StateEvent` (Task 2).
+- Produces: `StateMonitor(name: str, poll: float = 0.75)` with `async stream() -> AsyncIterator[StateEvent]` that yields ONLY when the `(state, label, question, options)` tuple changes, and yields `dead` once when the session is gone.
 
 - [ ] **Step 1: Write the failing async test**
 
@@ -781,19 +817,20 @@ from app.state import StateMonitor
 @pytest.mark.asyncio
 async def test_monitor_emits_only_on_change():
     panes = iter([
-        "│ > \n",                              # idle
-        "✻ Thinking… (esc to interrupt)\n",    # thinking
-        "✻ Thinking… (esc to interrupt)\n",    # still thinking (no emit)
-        "│ > \n",                              # idle again
+        "❯ \n",                  # idle
+        "✽ Elucidating…\n",      # working
+        "✽ Elucidating…\n",      # still working, same label (no emit)
+        "❯ \n",                  # idle again
     ])
-    with patch.object(state_mod.tmux, "capture_pane", side_effect=lambda *a, **k: next(panes)):
-        mon = StateMonitor("cc", get_last_event=lambda: None, poll=0.01)
+    with patch.object(state_mod.tmux, "has_session", return_value=True), \
+         patch.object(state_mod.tmux, "capture_pane", side_effect=lambda *a, **k: next(panes)):
+        mon = StateMonitor("cc", poll=0.001)
         seen = []
         async for ev in mon.stream():
-            seen.append(ev.state)
+            seen.append((ev.state, ev.label))
             if len(seen) == 3:
                 break
-    assert seen == ["idle", "thinking", "idle"]
+    assert seen == [("idle", None), ("working", "Elucidating…"), ("idle", None)]
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -805,33 +842,32 @@ Expected: FAIL (`ImportError: cannot import name 'StateMonitor'`).
 
 ```python
 import asyncio
-from typing import AsyncIterator, Callable
+from typing import AsyncIterator
 from app import tmux
 from app.models import StateEvent
 
 
 class StateMonitor:
-    def __init__(self, name: str, get_last_event: Callable[[], Optional[ChatEvent]], poll: float = 0.75):
+    def __init__(self, name: str, poll: float = 0.75):
         self.name = name
-        self.get_last_event = get_last_event
         self.poll = poll
 
     async def stream(self) -> AsyncIterator[StateEvent]:
-        last_key = None
+        last_key = object()
         while True:
             if not tmux.has_session(self.name):
                 yield StateEvent(session=self.name, state="dead")
                 return
-            pane = tmux.capture_pane(self.name)
-            st, tool, options = classify(pane, self.get_last_event())
-            key = (st, tool, tuple(options or ()))
+            state, label, question, options = classify(tmux.capture_pane(self.name))
+            key = (state, label, question, tuple(options or ()))
             if key != last_key:
                 last_key = key
-                yield StateEvent(session=self.name, state=st, tool=tool, options=options)
+                yield StateEvent(session=self.name, state=state, label=label,
+                                 question=question, options=options)
             await asyncio.sleep(self.poll)
 ```
 
-Note: the test patches `tmux.capture_pane` but not `has_session`; add `with patch.object(state_mod.tmux, "has_session", return_value=True):` around the monitor in the test, OR default the test double. Update the test to also patch `has_session` returning True.
+Note: `classify` lives in the same module (Task 6), so `StateMonitor.stream` calls it directly. The test patches both `tmux.has_session` (True) and `tmux.capture_pane`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -856,7 +892,7 @@ git commit -m "feat: add StateMonitor poll loop"
 
 **Interfaces:**
 - Consumes: `tmux.send_keys` (Task 3).
-- Produces: `TerminalInput` with `send_prompt(name, text)`, `approve(name, choice)`, `interrupt(name)`. `choice` is `"yes"`/`"no"` mapped to option number from the spike.
+- Produces: `TerminalInput` with `send_prompt(name, text)`, `select(name, option)` (1-based; navigates `(option-1)×Down` then `Enter` — validated in the spike), `interrupt(name)` (sends `Escape`; also cancels an interactive widget).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -882,10 +918,16 @@ def test_send_prompt_rejects_control_chars():
         TerminalInput().send_prompt("cc", "bad\x00null")
 
 
-def test_approve_yes_sends_1_then_enter():
+def test_select_option_three_navigates_then_enter():
     with patch.object(terminal_input, "send_keys") as sk:
-        TerminalInput().approve("cc", "yes")
-    assert sk.call_args_list == [call("cc", "1", literal=True), call("cc", "Enter")]
+        TerminalInput().select("cc", 3)
+    assert sk.call_args_list == [call("cc", "Down"), call("cc", "Down"), call("cc", "Enter")]
+
+
+def test_select_option_one_just_enter():
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cc", 1)
+    assert sk.call_args_list == [call("cc", "Enter")]
 
 
 def test_interrupt_sends_escape():
@@ -904,21 +946,19 @@ Expected: FAIL (`ModuleNotFoundError: app.terminal_input`).
 ```python
 from app.tmux import send_keys
 
-_CHOICE_TO_OPTION = {"yes": "1", "no": "2"}
-
 
 class TerminalInput:
     def send_prompt(self, name: str, text: str) -> None:
-        if any(ord(c) < 32 and c not in "\t" for c in text):
+        if any(ord(c) < 32 and c != "\t" for c in text):
             raise ValueError("control characters not allowed in prompt")
         send_keys(name, text, literal=True)
         send_keys(name, "Enter")
 
-    def approve(self, name: str, choice: str) -> None:
-        option = _CHOICE_TO_OPTION.get(choice)
-        if option is None:
-            raise ValueError(f"unknown choice: {choice}")
-        send_keys(name, option, literal=True)
+    def select(self, name: str, option: int) -> None:
+        if option < 1:
+            raise ValueError("option must be >= 1")
+        for _ in range(option - 1):
+            send_keys(name, "Down")
         send_keys(name, "Enter")
 
     def interrupt(self, name: str) -> None:
@@ -928,7 +968,7 @@ class TerminalInput:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_terminal_input.py -v`
-Expected: 4 passed.
+Expected: all 5 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1143,7 +1183,7 @@ git commit -m "feat: add bearer/cookie auth dependency"
   - `GET /api/sessions/{name}/history` → `list[ChatEvent]`
   - `GET /api/sessions/{name}/events` → SSE (`message`/`state`)
   - `POST /api/sessions/{name}/input` `{text}` → `{ok: true}`
-  - `POST /api/sessions/{name}/approve` `{choice}` → `{ok: true}`
+  - `POST /api/sessions/{name}/select` `{option}` → `{ok: true}`
   - `POST /api/sessions/{name}/interrupt` → `{ok: true}`
 
 - [ ] **Step 1: Write the failing route tests**
@@ -1179,11 +1219,11 @@ def test_input_route_calls_terminal(api_client):
     sp.assert_called_once_with("cc", "oi")
 
 
-def test_approve_route(api_client):
-    with patch("app.api.terminal.approve") as ap:
-        r = api_client.post("/api/sessions/cc/approve", json={"choice": "yes"}, headers=_h())
+def test_select_route(api_client):
+    with patch("app.api.terminal.select") as sel:
+        r = api_client.post("/api/sessions/cc/select", json={"option": 2}, headers=_h())
     assert r.status_code == 200
-    ap.assert_called_once_with("cc", "yes")
+    sel.assert_called_once_with("cc", 2)
 
 
 def test_routes_require_auth(api_client):
@@ -1205,17 +1245,11 @@ from app.state import StateMonitor
 
 async def merged_events(name: str, jsonl: str):
     tailer = TranscriptTailer(jsonl)
-    last_event = {"ev": None}
-
-    def get_last():
-        return last_event["ev"]
-
-    monitor = StateMonitor(name, get_last_event=get_last)
+    monitor = StateMonitor(name)
     queue: asyncio.Queue = asyncio.Queue()
 
     async def pump_messages():
         async for ev in tailer.follow():
-            last_event["ev"] = ev
             await queue.put(("message", ev.model_dump()))
 
     async def pump_state():
@@ -1257,8 +1291,8 @@ class InputBody(BaseModel):
     text: str
 
 
-class ApproveBody(BaseModel):
-    choice: str
+class SelectBody(BaseModel):
+    option: int
 
 
 @app.get("/api/sessions", dependencies=[Depends(require_auth)])
@@ -1300,9 +1334,9 @@ def input_prompt(name: str, body: InputBody):
     return {"ok": True}
 
 
-@app.post("/api/sessions/{name}/approve", dependencies=[Depends(require_auth)])
-def approve(name: str, body: ApproveBody):
-    terminal.approve(name, body.choice)
+@app.post("/api/sessions/{name}/select", dependencies=[Depends(require_auth)])
+def select(name: str, body: SelectBody):
+    terminal.select(name, body.option)
     return {"ok": True}
 
 
@@ -1373,7 +1407,7 @@ git commit -m "feat: expose sessions via REST + SSE API"
 
 **Placeholder scan:** No TBD/TODO; every code step has complete code; spike (Task 1) is explicitly exploratory with concrete commands. Task 6/7 note a reconcile-with-spike step but ship working defaults.
 
-**Type consistency:** `ChatEvent`/`StateEvent`/`SessionInfo` fields are used identically across Tasks 4–11. `classify` returns `(state, tool, options)` consumed the same way in Task 7. `TerminalInput.send_prompt/approve/interrupt` signatures match Task 11 calls. `SessionRegistry.list/create/kill/resolve_jsonl` match Task 11 usage. Known fix-up: Task 7 Step 3 flags that the Task 7 test must also patch `tmux.has_session` → handle when implementing.
+**Type consistency:** `ChatEvent`/`StateEvent`/`SessionInfo` fields are used identically across Tasks 4–11. `classify` returns `(state, label, question, options)` consumed the same way in Task 7. `TerminalInput.send_prompt/select/interrupt` signatures match Task 11 calls. `SessionRegistry.list/create/kill/resolve_jsonl` match Task 11 usage. State set is `working/idle/awaiting_input/dead` everywhere.
 
 ## Notes for the deploy plan (Plan 3)
 - `EventSource` can't send headers → frontend relies on the `cp_token` httpOnly cookie (same-origin via Caddy). Add a `POST /api/login` that sets the cookie before the frontend ships.

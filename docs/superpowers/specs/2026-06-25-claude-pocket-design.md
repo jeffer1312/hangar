@@ -5,7 +5,19 @@
 
 - **Data**: 2026-06-25
 - **Autor**: jefferson
-- **Status**: design (aguardando aprovação)
+- **Status**: aprovado; revisado pós-spike (2026-06-25)
+
+---
+
+## Revisão pós-spike (2026-06-25) — AUTORITATIVO
+
+O spike (Task 1) e o feedback do usuário mudaram o design. Onde as seções abaixo divergirem, **vale esta nota** (e o plano `plans/2026-06-25-claude-pocket-backend.md`):
+
+- **Sem feature de aprovação de permissão.** Usuário roda em bypass e não quer aprovar. Não existe `awaiting_approval`, nem botões "Sim/Não", nem rota `/approve`.
+- **Estados:** `working` (`label` = texto vivo do spinner, ex. "Elucidating…") · `idle` · `awaiting_input` · `dead`.
+- **Spinner real:** glyph + gerúndio + `…` (ex. `✽ Elucidating…`), detectado por glyph — NÃO por "esc to interrupt".
+- **Perguntas interativas** (`ExitPlanMode`, `AskUserQuestion`, selects numerados) ocorrem mesmo no bypass → estado `awaiting_input` com `options` parseadas; app mostra botões de opção; selecionar = `(n-1)×Down`+`Enter` (validado no spike); cancelar = `Esc`. Rota `POST /select {option}`.
+- Pergunta de texto livre = bolha de assistant normal, respondida no composer.
 
 ---
 
