@@ -166,6 +166,14 @@
 
 <footer class="composer">
   <div class="composer-card">
+    {#if typeof status?.costUsd === 'number'}
+      <div class="composer-top">
+        <button class="cost-chip" onclick={onExpandUsage} aria-label="Custo e uso">
+          ${status.costUsd.toFixed(2)}
+        </button>
+      </div>
+    {/if}
+
     <SlashSuggest {commands} query={inputText} onPick={handleSuggestPick} />
 
     <textarea
@@ -189,11 +197,6 @@
         >
           {pillText}
         </button>
-        {#if typeof status?.costUsd === 'number'}
-          <button class="cost-chip" onclick={onExpandUsage} aria-label="Custo e uso">
-            ${status.costUsd.toFixed(2)}
-          </button>
-        {/if}
         <button
           class="slash-btn"
           onclick={() => (commandSheetOpen = true)}
@@ -369,6 +372,12 @@
 
   .stop-btn:active {
     background: rgba(255, 69, 58, 0.08);
+  }
+
+  /* Linha fina no topo do card: custo alinhado a direita, fora do control-row (libera o pill). */
+  .composer-top {
+    display: flex;
+    justify-content: flex-end;
   }
 
   .cost-chip {
