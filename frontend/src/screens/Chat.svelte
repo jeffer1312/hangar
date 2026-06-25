@@ -151,13 +151,35 @@
     };
   });
 
+  let pendingSeq = 0;
+
   async function handleSend(text: string) {
+    // Enviou enquanto o Claude trabalha -> entra na fila (Claude Code enfileira no tmux).
+    // Eco imediato como bubble pendente; solidifica quando o transcript trouxer a msg real.
+    let pendingId: string | null = null;
+    if (currentState === 'working') {
+      pendingId = `pending-${pendingSeq++}`;
+      pending = [...pending, { id: pendingId, text }];
+    }
     try {
       await sendInput(sessionName, text);
     } catch (err) {
       console.error('sendInput error:', err);
+      // Falhou o envio -> remove o pending que adicionamos (nao ficou enfileirado).
+      if (pendingId) pending = pending.filter((p) => p.id !== pendingId);
     }
   }
+
+  // Dedup: quando o transcript (SSE) traz o user_msg real, solta o pending de mesmo texto.
+  // Idempotente -> nao entra em loop (apos filtrar, o length estabiliza e nao reatribui).
+  $effect(() => {
+    if (pending.length === 0) return;
+    const committed = new Set(
+      events.filter((e) => e.kind === 'user_msg' && e.text).map((e) => e.text)
+    );
+    const next = pending.filter((p) => !committed.has(p.text));
+    if (next.length !== pending.length) pending = next;
+  });
 
   // Slash commands gerais do Claude Code (ex: /clear, /compact) -> sessao viva. Modelo e
   // esforco NAO passam por aqui: vao pelo ModelEffortSheet -> endpoint /model-effort.
