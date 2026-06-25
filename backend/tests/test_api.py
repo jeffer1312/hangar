@@ -14,7 +14,8 @@ def client():
     def ping():
         return {"ok": True}
 
-    return TestClient(app)
+    with TestClient(app) as c:
+        yield c
 
 
 def test_rejects_without_token(client):
@@ -27,5 +28,17 @@ def test_accepts_bearer(client):
 
 
 def test_accepts_cookie(client):
-    r = client.get("/ping", cookies={"cp_token": "secret"})
+    client.cookies.set("cp_token", "secret")
+    r = client.get("/ping")
     assert r.status_code == 200
+
+
+def test_rejects_wrong_bearer(client):
+    r = client.get("/ping", headers={"Authorization": "Bearer wrong"})
+    assert r.status_code == 401
+
+
+def test_rejects_wrong_cookie(client):
+    client.cookies.set("cp_token", "wrong")
+    r = client.get("/ping")
+    assert r.status_code == 401
