@@ -220,9 +220,7 @@
         {sessionName}
         sessionState={currentState}
         status={status}
-        label={stateEvent?.label}
         onSend={handleSend}
-        onInterrupt={handleInterrupt}
         onCommand={handleCommand}
       />
     {/if}
