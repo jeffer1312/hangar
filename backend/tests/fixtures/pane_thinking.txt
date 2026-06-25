@@ -1,0 +1,10 @@
+❯ diga apenas a palavra PONG, nada mais
+
+
+✽ Elucidating…
+
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  Opus 4.8 (1M context) ~high 📁 claude-pocket master ⊙6m ↑0↓0 │  🧠4.9G
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
