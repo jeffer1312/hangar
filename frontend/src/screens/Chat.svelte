@@ -101,6 +101,15 @@
     }
   }
 
+  // Slash commands do proprio Claude Code (ex: /model sonnet, /effort high) -> sessao viva.
+  async function handleCommand(cmd: string) {
+    try {
+      await sendInput(sessionName, cmd);
+    } catch (err) {
+      console.error('sendInput (command) error:', err);
+    }
+  }
+
   async function handleSelect(option: number) {
     try {
       await selectOption(sessionName, option);
@@ -152,6 +161,7 @@
         label={stateEvent?.label}
         onSend={handleSend}
         onInterrupt={handleInterrupt}
+        onCommand={handleCommand}
       />
     {/if}
   </div>

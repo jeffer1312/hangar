@@ -4,6 +4,7 @@
   import IconInterrupt from './icons/IconInterrupt.svelte';
   import ContextRing from './ContextRing.svelte';
   import LiveMetrics from './LiveMetrics.svelte';
+  import ModelEffortSheet from './ModelEffortSheet.svelte';
   import type { State } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
 
@@ -13,8 +14,9 @@
     label?: string | null;
     onSend: (text: string) => void;
     onInterrupt: () => void;
+    onCommand: (cmd: string) => void;
   }
-  let { sessionState, status, label = null, onSend, onInterrupt }: Props = $props();
+  let { sessionState, status, label = null, onSend, onInterrupt, onCommand }: Props = $props();
 
   let inputText = $state('');
   let textareaEl: HTMLTextAreaElement | undefined = $state();
@@ -81,10 +83,39 @@
   );
   const showStatusRow = $derived(stateLabel.length > 0 || hasMetrics);
 
-  // ── Pill display de modelo + esforco (sem sheet ainda; so leitura) ─────────
-  const modelLabel = $derived(
-    status?.model ? status.model + (status.effort ? ' · ' + status.effort : '') : ''
+  // ── Pill de modelo + esforco: abre o ModelEffortSheet e envia slash commands ──
+  // Display otimista: a escolha local aparece na hora; o status (read-back real do
+  // statusline) reconcilia o modelo quando confirma. Esforco e write-only (sem
+  // read-back confiavel) -> a escolha local persiste.
+  let sheetOpen = $state(false);
+  let chosenModel = $state<string | null>(null);   // rotulo otimista: 'Opus' | 'Sonnet' | ...
+  let chosenEffort = $state<string | null>(null);   // 'low' | 'medium' | 'high' | 'max'
+
+  const pillModel = $derived(chosenModel ?? status?.model ?? null);
+  const pillEffort = $derived(chosenEffort ?? status?.effort ?? null);
+  const pillText = $derived(
+    pillModel ? pillModel + (pillEffort ? ' · ' + pillEffort : '') : 'Modelo'
   );
+
+  // Reconciliacao do modelo: quando o statusline confirma a escolha (substring match),
+  // solta a escolha otimista pra que mudancas feitas direto no terminal reaparecam.
+  $effect(() => {
+    const m = status?.model?.toLowerCase();
+    if (chosenModel && m && m.includes(chosenModel.toLowerCase())) {
+      chosenModel = null;
+    }
+  });
+
+  function handleSelectModel(arg: string) {
+    // exibe o rotulo capitalizado na hora; arg lowercase vai pro comando
+    chosenModel = arg.charAt(0).toUpperCase() + arg.slice(1);
+    onCommand('/model ' + arg);
+  }
+
+  function handleSelectEffort(level: string) {
+    chosenEffort = level;
+    onCommand('/effort ' + level);
+  }
 
   // ── Textarea: auto-grow ate 120px ──────────────────────────────────────────
   function autoGrow() {
@@ -151,9 +182,13 @@
     <div class="control-row">
       <div class="control-left">
         <ContextRing pct={status?.ctxPct ?? null} />
-        {#if modelLabel}
-          <span class="model-pill">{modelLabel}</span>
-        {/if}
+        <button
+          class="model-pill"
+          onclick={() => (sheetOpen = true)}
+          aria-label="Modelo e esforço de raciocínio"
+        >
+          {pillText}
+        </button>
       </div>
 
       <div class="control-right">
@@ -175,6 +210,15 @@
       </div>
     </div>
   </div>
+
+  <ModelEffortSheet
+    open={sheetOpen}
+    currentModel={pillModel}
+    currentEffort={pillEffort}
+    onSelectModel={handleSelectModel}
+    onSelectEffort={handleSelectEffort}
+    onClose={() => (sheetOpen = false)}
+  />
 </footer>
 
 <style>
@@ -288,11 +332,14 @@
     min-width: 0;
   }
 
-  /* Chip de modelo/esforco: so display (ainda sem sheet). */
+  /* Chip de modelo/esforco: botao que abre o ModelEffortSheet (mantem o visual do chip).
+     min-height:0 sobrescreve o alvo global de 44px pra preservar o pill compacto de 28px
+     (o tap fica confortavel dentro da control-row de 44px). :active scale vem do global. */
   .model-pill {
     display: inline-flex;
     align-items: center;
     height: 28px;
+    min-height: 0;
     padding: 0 var(--space-3);
     background: var(--accent-dim);
     border-radius: var(--radius-md);
@@ -303,6 +350,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 160px;
+    font-variant-numeric: tabular-nums;
   }
 
   .control-right {

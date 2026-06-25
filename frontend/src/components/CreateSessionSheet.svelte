@@ -1,4 +1,6 @@
 <script lang="ts">
+  import BottomSheet from './BottomSheet.svelte';
+
   interface Props {
     open: boolean;
     onClose: () => void;
@@ -27,106 +29,58 @@
       loading = false;
     }
   }
-
-  function handleBackdrop(e: MouseEvent) {
-    if (e.target === e.currentTarget) onClose();
-  }
 </script>
 
-{#if open}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div
-    class="backdrop"
-    role="dialog"
-    tabindex="-1"
-    aria-modal="true"
-    aria-label="Nova sessão"
-    onclick={handleBackdrop}
-  >
-    <div class="sheet">
-      <div class="drag-handle" aria-hidden="true"></div>
-      <h2 class="sheet-title">Nova sessão</h2>
+<BottomSheet {open} {onClose} ariaLabel="Nova sessão">
+  <h2 class="sheet-title">Nova sessão</h2>
 
-      <form onsubmit={handleSubmit} class="sheet-form">
-        <div class="field">
-          <label class="field-label" for="session-name">Nome</label>
-          <input
-            id="session-name"
-            type="text"
-            class="field-input"
-            bind:value={name}
-            placeholder="meu-projeto"
-            autocomplete="off"
-            autocorrect="off"
-            autocapitalize="off"
-            spellcheck={false}
-            required
-          />
-        </div>
-
-        <div class="field">
-          <label class="field-label" for="session-cwd">Diretório</label>
-          <input
-            id="session-cwd"
-            type="text"
-            class="field-input"
-            bind:value={cwd}
-            placeholder="~/projetos/foo (opcional)"
-            autocomplete="off"
-            autocorrect="off"
-            autocapitalize="off"
-            spellcheck={false}
-          />
-        </div>
-
-        {#if error}
-          <p class="error-msg" role="alert">{error}</p>
-        {/if}
-
-        <button
-          type="submit"
-          class="create-btn"
-          disabled={loading || !name.trim()}
-        >
-          {loading ? 'Criando…' : 'Criar sessão'}
-        </button>
-      </form>
+  <form onsubmit={handleSubmit} class="sheet-form">
+    <div class="field">
+      <label class="field-label" for="session-name">Nome</label>
+      <input
+        id="session-name"
+        type="text"
+        class="field-input"
+        bind:value={name}
+        placeholder="meu-projeto"
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck={false}
+        required
+      />
     </div>
-  </div>
-{/if}
+
+    <div class="field">
+      <label class="field-label" for="session-cwd">Diretório</label>
+      <input
+        id="session-cwd"
+        type="text"
+        class="field-input"
+        bind:value={cwd}
+        placeholder="~/projetos/foo (opcional)"
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck={false}
+      />
+    </div>
+
+    {#if error}
+      <p class="error-msg" role="alert">{error}</p>
+    {/if}
+
+    <button
+      type="submit"
+      class="create-btn"
+      disabled={loading || !name.trim()}
+    >
+      {loading ? 'Criando…' : 'Criar sessão'}
+    </button>
+  </form>
+</BottomSheet>
 
 <style>
-  .backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.6);
-    z-index: 100;
-    display: flex;
-    align-items: flex-end;
-  }
-
-  .sheet {
-    width: 100%;
-    background: var(--bg-elevated);
-    border-radius: 20px 20px 0 0;
-    padding: var(--space-4) var(--space-5);
-    padding-bottom: calc(env(safe-area-inset-bottom) + var(--space-5));
-    animation: slide-up 220ms ease-out both;
-  }
-
-  @keyframes slide-up {
-    from { transform: translateY(100%); opacity: 0; }
-    to   { transform: translateY(0);    opacity: 1; }
-  }
-
-  .drag-handle {
-    width: 36px;
-    height: 4px;
-    background: var(--border-strong);
-    border-radius: var(--radius-full);
-    margin: 0 auto var(--space-4);
-  }
-
   .sheet-title {
     font-size: var(--text-xl);
     font-weight: 600;
