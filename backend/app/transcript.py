@@ -40,7 +40,7 @@ def parse_line(line: str) -> Optional[ChatEvent]:
                 return ChatEvent(
                     kind="tool_result", id=uid, parent_id=parent,
                     tool_use_id=tr.get("tool_use_id"),
-                    result=res if res is None else str(res),
+                    result=str(res) if res is not None else None,
                     is_error=bool(tr.get("is_error", False)),
                 )
             txt = _first(content, "text")
