@@ -14,6 +14,12 @@ def _default_projects_dir() -> Path:
     return Path(base) / "projects"
 
 
+# Allowlist padrao do scanner de pastas: estas raizes sao o PERIMETRO DE SEGURANCA da
+# varredura. Editavel via CP_SCAN_ROOTS (lista separada por virgula, ~ expandido). Edicao
+# das raizes dentro do app fica pra depois: por ora o env e a superficie editavel.
+_DEFAULT_SCAN_ROOTS = "~/pessoal,~/sistemas"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="CP_", env_file=".env")
 
@@ -23,12 +29,34 @@ class Settings(BaseSettings):
     port: int = 8765
     auth_token: str = "change-me"
     projects_dir: Path = _default_projects_dir()
+    # CP_SCAN_ROOTS: raizes que o fs-scanner pode listar (string crua; resolvida por
+    # resolve_scan_roots). Mantida como str pra aceitar o formato "a,b" direto do env.
+    scan_roots: str = _DEFAULT_SCAN_ROOTS
     poll_interval: float = 0.75
     front_port: int = 5173   # where the PWA is served (vite dev / Caddy) — used for QR pairing
     public_url: str = ""     # CP_PUBLIC_URL: overrides the auto-built pairing base URL
 
 
 settings = Settings()
+
+
+def resolve_scan_roots(s: "Settings") -> list[Path]:
+    """Allowlist resolvida do scanner: cada entrada de CP_SCAN_ROOTS vira expanduser +
+    realpath. Entradas inexistentes ou que nao sao diretorio sao descartadas (um typo
+    nunca alarga o perimetro), e duplicatas (apos realpath) sao colapsadas. ESTA lista
+    e a fronteira de seguranca: o fs-scan so lista dentro dela."""
+    out: list[Path] = []
+    seen: set[Path] = set()
+    for entry in s.scan_roots.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        p = Path(os.path.realpath(os.path.expanduser(entry)))
+        if p in seen or not p.is_dir():
+            continue
+        seen.add(p)
+        out.append(p)
+    return out
 
 
 def detect_lan_ip() -> str:

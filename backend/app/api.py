@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from app.auth import require_auth
 from app.commands import list_commands
+from app.fs import FsError, list_roots, scan_dir
 from app.registry import SessionRegistry
 from app.terminal_input import TerminalInput
 from app.sse import merged_events
@@ -74,6 +75,21 @@ def select(name: str, body: SelectBody):
 def interrupt(name: str):
     terminal.interrupt(name)
     return {"ok": True}
+
+
+@app.get("/api/fs/roots", dependencies=[Depends(require_auth)])
+def fs_roots():
+    return list_roots()
+
+
+@app.get("/api/fs/scan", dependencies=[Depends(require_auth)])
+def fs_scan(root: str, path: str | None = None):
+    # A seguranca (allowlist + rejeicao de escape) vive em scan_dir; aqui so traduzimos
+    # a FsError pro status HTTP correspondente.
+    try:
+        return scan_dir(root, path)
+    except FsError as e:
+        raise HTTPException(e.status, e.detail)
 
 
 @app.get("/api/sessions/{name}/commands", dependencies=[Depends(require_auth)])

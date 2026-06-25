@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { SessionInfo, State } from '../lib/types';
+  import { basename, relativeTime } from '../lib/format';
 
   interface Props {
     session: SessionInfo;
@@ -22,15 +23,8 @@
     dead: 'var(--error)',
   };
 
-  function formatActivity(ts: number | null | undefined): string {
-    if (!ts) return '';
-    const now = Date.now() / 1000;
-    const diff = now - ts;
-    if (diff < 60) return 'agora';
-    if (diff < 3600) return `${Math.floor(diff / 60)} min atrás`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)} h atrás`;
-    return new Date(ts * 1000).toLocaleDateString('pt-BR');
-  }
+  // Titulo = basename do projeto; cai pro nome da sessao quando nao ha cwd.
+  const title = $derived(session.cwd ? basename(session.cwd) : session.name);
 
   // Swipe to delete state
   let pressing = $state(false);
@@ -50,19 +44,20 @@
   <div class="card-left">
     <span
       class="state-dot"
+      class:state-dot--pulse={session.state === 'working'}
       style="background: {stateColors[session.state]};"
       aria-hidden="true"
     >
       {#if session.state === 'dead'}✕{/if}
     </span>
     <div class="card-info">
-      <span class="session-name">{session.name}</span>
+      <span class="session-name">{title}</span>
       {#if session.cwd}
         <span class="session-cwd">{session.cwd}</span>
       {/if}
       {#if session.last_activity}
         <span class="session-activity">
-          última atividade: {formatActivity(session.last_activity)}
+          última atividade: {relativeTime(session.last_activity)}
         </span>
       {/if}
     </div>
@@ -129,6 +124,11 @@
     font-size: 8px;
     color: #fff;
     font-weight: 700;
+  }
+
+  /* Pulsa so quando trabalhando; estatico nos demais estados. */
+  .state-dot--pulse {
+    animation: pulse-scale 1.4s ease-in-out infinite;
   }
 
   .card-info {

@@ -5,7 +5,7 @@
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
   import { getSessions, createSession, deleteSession } from '../lib/api';
   import { clearCredentials } from '../lib/auth';
-  import type { SessionInfo } from '../lib/types';
+  import type { SessionInfo, State } from '../lib/types';
 
   interface Props {
     onNavigateToChat: (name: string) => void;
@@ -18,6 +18,32 @@
   let error = $state('');
   let showCreateSheet = $state(false);
   let showMenu = $state(false);
+  let filterText = $state('');
+
+  // Urgencia pra desempate: aguardando_input puxa pro topo; dead pro fim.
+  const urgency: Record<State, number> = {
+    awaiting_input: 0,
+    working: 1,
+    idle: 2,
+    dead: 3,
+  };
+
+  // Ordena por atividade (desc) e desempata por urgencia; depois aplica o filtro.
+  const visibleSessions = $derived.by(() => {
+    const sorted = [...sessions].sort((a, b) => {
+      const byAct = (b.last_activity ?? 0) - (a.last_activity ?? 0);
+      if (byAct !== 0) return byAct;
+      return urgency[a.state] - urgency[b.state];
+    });
+    const q = filterText.trim().toLowerCase();
+    if (!q) return sorted;
+    return sorted.filter(
+      (s) => s.name.toLowerCase().includes(q) || (s.cwd ?? '').toLowerCase().includes(q),
+    );
+  });
+
+  // Filtro so aparece quando a lista fica longa.
+  const showFilter = $derived(sessions.length > 6);
 
   async function loadSessions() {
     loading = true;
@@ -97,13 +123,30 @@
         <p class="empty-sub">Toque em + para criar</p>
       </div>
     {:else}
-      {#each sessions as session (session.name)}
-        <SessionCard
-          {session}
-          onClick={() => onNavigateToChat(session.name)}
-          onDelete={() => handleDelete(session.name)}
+      {#if showFilter}
+        <input
+          type="text"
+          class="filter-input"
+          bind:value={filterText}
+          placeholder="Filtrar sessões"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck={false}
+          aria-label="Filtrar sessões"
         />
-      {/each}
+      {/if}
+      {#if visibleSessions.length === 0}
+        <p class="filter-empty">Nenhuma sessão corresponde ao filtro.</p>
+      {:else}
+        {#each visibleSessions as session (session.name)}
+          <SessionCard
+            {session}
+            onClick={() => onNavigateToChat(session.name)}
+            onDelete={() => handleDelete(session.name)}
+          />
+        {/each}
+      {/if}
     {/if}
   </div>
 
@@ -123,6 +166,7 @@
     open={showCreateSheet}
     onClose={() => (showCreateSheet = false)}
     onCreate={handleCreate}
+    onOpenSession={onNavigateToChat}
   />
 </div>
 
@@ -142,6 +186,37 @@
     overscroll-behavior-y: contain;
     padding: var(--space-4);
     padding-bottom: calc(env(safe-area-inset-bottom) + 80px);
+  }
+
+  .filter-input {
+    width: 100%;
+    height: 44px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 16px; /* evita zoom no iOS */
+    padding: 0 var(--space-3);
+    outline: none;
+    margin-bottom: var(--space-3);
+    transition: border-color 180ms var(--ease-out);
+  }
+
+  .filter-input::placeholder {
+    color: var(--text-muted);
+  }
+
+  .filter-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-dim);
+  }
+
+  .filter-empty {
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+    text-align: center;
+    padding: var(--space-6) var(--space-3);
   }
 
   .empty-state {

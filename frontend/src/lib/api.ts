@@ -1,5 +1,12 @@
 import { getBaseUrl, getToken } from './auth';
-import type { SessionInfo, ChatEvent, CommandInfo } from './types';
+import type {
+  SessionInfo,
+  ChatEvent,
+  CommandInfo,
+  FsRoot,
+  FsScanResult,
+  FsScanError,
+} from './types';
 
 function authHeaders(): HeadersInit {
   const token = getToken();
@@ -48,6 +55,36 @@ export function getHistory(name: string): Promise<ChatEvent[]> {
 
 export function getCommands(name: string): Promise<CommandInfo[]> {
   return apiFetch<CommandInfo[]>(`/api/sessions/${encodeURIComponent(name)}/commands`);
+}
+
+// Raízes liberadas do scanner (chips no topo do FolderScanner).
+export function getRoots(): Promise<FsRoot[]> {
+  return apiFetch<FsRoot[]>('/api/fs/roots');
+}
+
+/**
+ * Lista os subdiretórios imediatos de `path` (default = `root`) dentro da raiz.
+ * Rejeições de fronteira do backend (403 raiz não liberada, 400 caminho inválido,
+ * 404 ausente) viram um FsScanResult com `error` tipado: a UI tem UM caminho de
+ * renderização (lê `result.error`), em vez de misturar throws com campos. Apenas 401
+ * borbulha (problema de auth, não de varredura).
+ */
+export async function scanDir(root: string, path?: string): Promise<FsScanResult> {
+  const qs = new URLSearchParams({ root });
+  if (path) qs.set('path', path);
+  try {
+    return await apiFetch<FsScanResult>(`/api/fs/scan?${qs.toString()}`);
+  } catch (e) {
+    if (!(e instanceof Error)) throw e;
+    const status = parseInt(e.message, 10);
+    if (status === 401) throw e;
+    const map: Record<number, FsScanError> = {
+      400: 'invalid_path',
+      403: 'root_not_allowed',
+      404: 'not_found',
+    };
+    return { entries: [], error: map[status] ?? 'unknown' };
+  }
 }
 
 export async function sendInput(name: string, text: string): Promise<void> {

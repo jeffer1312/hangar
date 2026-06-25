@@ -67,10 +67,14 @@
       {onLogout}
     />
   {:else if route.name === 'chat'}
-    <Chat
-      sessionName={route.sessionName}
-      onBack={navigateToSessions}
-    />
+    <!-- Remonta ao trocar de sessao (switcher): re-roda loadHistory + reconecta o SSE. -->
+    {#key route.sessionName}
+      <Chat
+        sessionName={route.sessionName}
+        onBack={navigateToSessions}
+        onNavigateToChat={navigateToChat}
+      />
+    {/key}
   {/if}
 </div>
 
