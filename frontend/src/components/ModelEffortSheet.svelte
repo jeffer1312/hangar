@@ -28,7 +28,10 @@
     { arg: 'haiku',   label: 'Haiku',   meta: 'mais rápido' },
   ];
 
-  const EFFORTS = ['low', 'medium', 'high', 'max'];
+  // Niveis reais do /effort do Claude Code, ordenados Faster -> Smarter (6 paradas).
+  // 'ultracode' e o topo (= 'xhigh + workflows'). /effort <level> aplica direto.
+  const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'];
+  const EFFORT_DEFAULT = 1; // medium: parada neutra quando o nivel atual e desconhecido
 
   // Match por substring case-insensitive: o read-back ('Opus4.8') contem o arg ('opus').
   function isModelActive(arg: string): boolean {
@@ -36,11 +39,31 @@
     return !!cur && cur.includes(arg);
   }
 
-  // Esforco aceita match nos dois sentidos ('med' do statusline x 'medium' do segmento).
-  function isEffortActive(level: string): boolean {
-    const cur = currentEffort?.toLowerCase();
-    if (!cur) return false;
-    return level.includes(cur) || cur.includes(level);
+  // Mapeia o esforco atual pra parada do slider. Exato primeiro; senao prefixo (cobre
+  // abreviacoes do statusline: 'med' -> medium, 'ultra' -> ultracode). -1 = desconhecido.
+  function effortIndex(cur: string | null | undefined): number {
+    if (!cur) return -1;
+    const c = cur.trim().toLowerCase();
+    const exact = EFFORTS.indexOf(c);
+    if (exact >= 0) return exact;
+    return EFFORTS.findIndex((l) => l.startsWith(c));
+  }
+
+  // Parada local do slider: responde ao toque na hora e re-sincroniza com o read-back
+  // sempre que ele muda e e reconhecivel (ex: /effort rodado direto no terminal).
+  let effortIdx = $state(EFFORT_DEFAULT);
+  $effect(() => {
+    const i = effortIndex(currentEffort);
+    if (i >= 0) effortIdx = i;
+  });
+
+  const effortLevel = $derived(EFFORTS[effortIdx]);
+  const effortFill = $derived((effortIdx / (EFFORTS.length - 1)) * 100);
+
+  function onEffortSlide(e: Event) {
+    const t = e.currentTarget as HTMLInputElement;
+    effortIdx = Number(t.value);
+    onSelectEffort(EFFORTS[effortIdx]);
   }
 
   function pickModel(arg: string) {
@@ -85,19 +108,25 @@
     {/each}
   </ul>
 
-  <h3 class="section-label">Esforço de raciocínio</h3>
-  <div class="effort" role="radiogroup" aria-label="Esforço de raciocínio">
-    {#each EFFORTS as level (level)}
-      <button
-        class="effort-seg"
-        class:active={isEffortActive(level)}
-        role="radio"
-        aria-checked={isEffortActive(level)}
-        onclick={() => onSelectEffort(level)}
-      >
-        {level}
-      </button>
-    {/each}
+  <div class="effort-head">
+    <h3 class="section-label">Esforço de raciocínio</h3>
+    <span class="effort-current">{effortLevel}</span>
+  </div>
+  <input
+    class="range"
+    type="range"
+    min="0"
+    max={EFFORTS.length - 1}
+    step="1"
+    value={effortIdx}
+    style="--fill: {effortFill}%"
+    oninput={onEffortSlide}
+    aria-label="Esforço de raciocínio"
+    aria-valuetext={effortLevel}
+  />
+  <div class="ends" aria-hidden="true">
+    <span>Mais rápido</span>
+    <span>Mais inteligente</span>
   </div>
 </BottomSheet>
 
@@ -166,38 +195,104 @@
     flex-shrink: 0;
   }
 
-  /* ── Esforco: controle segmentado ──────────────────────────────────────── */
+  /* ── Esforco: slider Faster -> Smarter, 6 paradas (espelha o /effort do Claude) ── */
   .section-label {
     font-size: var(--text-sm);
     font-weight: 500;
     color: var(--text-secondary);
-    margin-bottom: var(--space-2);
   }
 
-  .effort {
+  .effort-head {
     display: flex;
-    gap: var(--space-1);
-    background: var(--bg-surface);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    padding: var(--space-1);
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
   }
 
-  .effort-seg {
-    flex: 1;
-    min-width: 0;
-    min-height: 44px;
-    border-radius: var(--radius-sm);
+  .effort-current {
+    font-family: var(--font-mono);
     font-size: var(--text-sm);
-    font-weight: 500;
-    color: var(--text-secondary);
-    background: transparent;
+    font-weight: 600;
+    color: var(--accent);
     font-variant-numeric: tabular-nums;
-    transition: background 160ms var(--ease-out), color 160ms var(--ease-out);
   }
 
-  .effort-seg.active {
-    background: var(--accent-dim);
-    color: var(--accent);
+  /* Slider nativo estilizado: alvo de toque de 44px, trilho de 4px, polegar accent.
+     --fill (inline) pinta a parte preenchida; o step=1 garante o snap nas 6 paradas. */
+  .range {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 44px;
+    min-height: 44px;
+    background: transparent;
+    cursor: pointer;
+    display: block;
+  }
+
+  .range:focus {
+    outline: none;
+  }
+
+  .range::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: var(--radius-full);
+    background: linear-gradient(
+      to right,
+      var(--accent) var(--fill, 0%),
+      var(--border-default) var(--fill, 0%)
+    );
+  }
+
+  .range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 22px;
+    height: 22px;
+    margin-top: -9px; /* centraliza no trilho de 4px */
+    border-radius: var(--radius-full);
+    background: var(--accent);
+    border: 2px solid var(--bg-elevated);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  }
+
+  .range::-moz-range-track {
+    height: 4px;
+    border-radius: var(--radius-full);
+    background: var(--border-default);
+  }
+
+  .range::-moz-range-progress {
+    height: 4px;
+    border-radius: var(--radius-full);
+    background: var(--accent);
+  }
+
+  .range::-moz-range-thumb {
+    width: 22px;
+    height: 22px;
+    border: 2px solid var(--bg-elevated);
+    border-radius: var(--radius-full);
+    background: var(--accent);
+  }
+
+  .range:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 4px var(--accent-dim);
+  }
+
+  .range:focus-visible::-moz-range-thumb {
+    box-shadow: 0 0 0 4px var(--accent-dim);
+  }
+
+  .ends {
+    display: flex;
+    justify-content: space-between;
+    margin-top: var(--space-1);
+  }
+
+  .ends span {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
   }
 </style>

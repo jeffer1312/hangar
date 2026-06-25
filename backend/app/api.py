@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from app.auth import require_auth
+from app.commands import list_commands
 from app.registry import SessionRegistry
 from app.terminal_input import TerminalInput
 from app.sse import merged_events
@@ -73,3 +74,11 @@ def select(name: str, body: SelectBody):
 def interrupt(name: str):
     terminal.interrupt(name)
     return {"ok": True}
+
+
+@app.get("/api/sessions/{name}/commands", dependencies=[Depends(require_auth)])
+def commands(name: str):
+    # cwd vem do registry/tmux; se a sessao nao for achada, ainda devolvemos os built-ins
+    # + skills globais (lista util mesmo sem cwd casado).
+    cwd = next((s.cwd for s in registry.list() if s.name == name), None)
+    return list_commands(cwd)

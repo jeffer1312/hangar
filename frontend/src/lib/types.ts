@@ -29,3 +29,12 @@ export interface StateEvent {
   options?: string[] | null;
   status_line?: string | null; // raw bottom chrome from the pane, shown as-is
 }
+
+export interface CommandInfo {
+  name: string;
+  display: string;                 // forma exibida, ex: "/clear"
+  description?: string | null;
+  argumentHint?: string | null;    // dica de argumento, ex: "<ambiente>"
+  source: 'builtin' | 'skill' | 'plugin';
+  destructive?: boolean;           // exige confirmação antes de enviar
+}
