@@ -5,6 +5,7 @@
   import Composer from '../components/Composer.svelte';
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
+  import UsageSheet from '../components/UsageSheet.svelte';
   import {
     getHistory,
     sendInput,
@@ -35,6 +36,7 @@
   // ── Switcher de sessoes (NavBar -> sheet) + criar nova sem voltar ──────────
   let switcherOpen = $state(false);
   let createOpen = $state(false);
+  let usageOpen = $state(false);
   let allSessions = $state<SessionInfo[]>([]);
 
   async function openSwitcher() {
@@ -209,7 +211,7 @@
 </script>
 
 <div class="chat-screen">
-  <NavBar title={sessionName} showBack={true} onBack={onBack} onTitleTap={openSwitcher} />
+  <NavBar title={sessionName} showBack={true} onBack={onBack} onTitleTap={openSwitcher} {status} onExpandUsage={() => (usageOpen = true)} />
 
   {#if loading}
     <div class="chat-loading">
@@ -243,6 +245,8 @@
         status={status}
         onSend={handleSend}
         onCommand={handleCommand}
+        onInterrupt={handleInterrupt}
+        onExpandUsage={() => (usageOpen = true)}
       />
     {/if}
   </div>
@@ -262,6 +266,8 @@
     onCreate={handleCreate}
     onOpenSession={onNavigateToChat}
   />
+
+  <UsageSheet open={usageOpen} {status} onClose={() => (usageOpen = false)} />
 </div>
 
 <style>

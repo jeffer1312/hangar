@@ -8,10 +8,12 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import IconSend from './icons/IconSend.svelte';
+  import IconInterrupt from './icons/IconInterrupt.svelte';
   import ContextRing from './ContextRing.svelte';
   import ModelEffortSheet from './ModelEffortSheet.svelte';
   import SlashSuggest from './SlashSuggest.svelte';
   import CommandSheet from './CommandSheet.svelte';
+  import ConfirmSheet from './ConfirmSheet.svelte';
   import { getCommands, setModelEffort, type ModelEffortBody } from '../lib/api';
   import type { State } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
@@ -22,13 +24,16 @@
     status: StatusFields | null;
     onSend: (text: string) => void;
     onCommand: (cmd: string) => void;
+    onInterrupt: () => void;
+    onExpandUsage: () => void;
   }
-  let { sessionName, sessionState, status, onSend, onCommand }: Props = $props();
+  let { sessionName, sessionState, status, onSend, onCommand, onInterrupt, onExpandUsage }: Props = $props();
 
   // ── Slash commands: busca uma vez por sessao (com cache) ────────────────────
   // Comeca vazio; o $effect popula na hora a partir do cache (sincrono) ou da rede.
   let commands = $state<CommandInfo[]>([]);
   let commandSheetOpen = $state(false);
+  let confirmStopOpen = $state(false);
 
   $effect(() => {
     const sn = sessionName;
@@ -51,6 +56,7 @@
   let textareaEl: HTMLTextAreaElement | undefined = $state();
 
   const canSend = $derived(inputText.trim().length > 0);
+  const isWorking = $derived(sessionState === 'working');
 
   // ── Pill de modelo + esforco: abre o ModelEffortSheet (aplica via endpoint dedicado) ──
   // Display otimista: a escolha aparece na hora; o status (read-back real do statusline)
@@ -183,6 +189,11 @@
         >
           {pillText}
         </button>
+        {#if typeof status?.costUsd === 'number'}
+          <button class="cost-chip" onclick={onExpandUsage} aria-label="Custo e uso">
+            ${status.costUsd.toFixed(2)}
+          </button>
+        {/if}
         <button
           class="slash-btn"
           onclick={() => (commandSheetOpen = true)}
@@ -193,6 +204,11 @@
       </div>
 
       <div class="control-right">
+        {#if isWorking}
+          <button class="stop-btn" onclick={() => (confirmStopOpen = true)} aria-label="Interromper Claude">
+            <IconInterrupt size={16} />
+          </button>
+        {/if}
         <button
           class="send-btn"
           class:send-btn--disabled={!canSend}
@@ -221,6 +237,16 @@
     onFill={fillCommand}
     onOpenModelEffort={() => (sheetOpen = true)}
     onClose={() => (commandSheetOpen = false)}
+  />
+
+  <ConfirmSheet
+    open={confirmStopOpen}
+    title="Interromper o Claude?"
+    message="Isso envia ESC e para a resposta atual."
+    confirmLabel="Interromper"
+    danger={true}
+    onConfirm={onInterrupt}
+    onClose={() => (confirmStopOpen = false)}
   />
 </footer>
 
@@ -324,6 +350,40 @@
   }
 
   .control-right {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-shrink: 0;
+  }
+
+  .stop-btn {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    background: transparent;
+    border: 1px solid var(--error);
+    border-radius: var(--radius-md);
+    color: var(--error);
+    transition: background 180ms var(--ease-out);
+  }
+
+  .stop-btn:active {
+    background: rgba(255, 69, 58, 0.08);
+  }
+
+  .cost-chip {
+    display: inline-flex;
+    align-items: center;
+    height: 28px;
+    min-height: 0;
+    padding: 0 var(--space-2);
+    background: var(--bg-hover);
+    border-radius: var(--radius-md);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
+    white-space: nowrap;
     flex-shrink: 0;
   }
 
