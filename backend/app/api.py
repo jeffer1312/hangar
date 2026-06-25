@@ -4,6 +4,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.auth import require_auth
 from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
+from app.model_picker import PickerError
 from app.registry import SessionRegistry
 from app.terminal_input import TerminalInput
 from app.sse import merged_events
@@ -24,6 +25,14 @@ class InputBody(BaseModel):
 
 class SelectBody(BaseModel):
     option: int
+
+
+class ModelEffortBody(BaseModel):
+    # ambos opcionais: so esforco (sem modelo) ainda dirige o picker do /model, deixando o
+    # modelo na linha atual. scope: 'session' (aperta `s`) ou 'default' (aperta Enter).
+    model: str | None = None
+    effort: str | None = None
+    scope: str = "session"
 
 
 @app.get("/api/sessions", dependencies=[Depends(require_auth)])
@@ -75,6 +84,18 @@ def select(name: str, body: SelectBody):
 def interrupt(name: str):
     terminal.interrupt(name)
     return {"ok": True}
+
+
+@app.post("/api/sessions/{name}/model-effort", dependencies=[Depends(require_auth)])
+def model_effort(name: str, body: ModelEffortBody):
+    # Dirige o picker interativo do /model pra aplicar modelo/esforco SO na sessao (scope
+    # 'session') ou como default ('default'). PickerError -> 409/422; entrada invalida -> 422.
+    try:
+        return terminal.set_model_effort(name, body.model, body.effort, body.scope)
+    except PickerError as e:
+        raise HTTPException(e.status, e.detail)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
 
 
 @app.get("/api/fs/roots", dependencies=[Depends(require_auth)])

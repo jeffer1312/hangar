@@ -1,0 +1,19 @@
+
+❯ /model
+  ⎿  Kept model as Opus 4.8
+
+❯ /model
+  ⎿  Set model to Sonnet 4.6 and saved as your default for new sessions
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Select model
+   Switch between Claude models. Your pick becomes the default for new sessions. For
+   other/previous model names, specify with --model.
+
+     1. Default (recommended)  Opus 4.8 with 1M context · Best for everyday, complex tasks
+   ❯ 2. Opus ✔                 Opus 4.8 with 1M context · Best for everyday, complex tasks
+     3. Sonnet                 Sonnet 4.6 · Efficient for routine tasks
+   ↓ 4. Haiku                  Haiku 4.5 · Fastest for quick answers
+
+   ◉ xHigh effort ←/→ to adjust
+
+   Enter to set as default · s to use this session only · Esc to cancel
