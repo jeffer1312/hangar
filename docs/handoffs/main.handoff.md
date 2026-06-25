@@ -1,65 +1,64 @@
 ---
 branch: main
-saved_at: 2026-06-25T16:00:00-03:00
-saved_commit: c6bc675a83f4838724e0b0ea178a4d4b2fca6065
+saved_at: 2026-06-25T18:15:00-03:00
+saved_commit: c7be3aface8729ed460fb31c938e27e2956790e0
 plan: 2026-06-25-claude-pocket-backend.md
 status: in_progress
 ---
 
 ## TL;DR
-claude-pocket: drive a live Claude Code tmux session from the phone, LAN/VPN-only. Backend+frontend core was already done. THIS session: validated the full phone→claude loop in a real browser, fixed 6 bugs, then did Plan 3 (deploy/onboarding) — QR pairing + Tailscale HTTPS + in-app QR scanner — all verified, plus a firewall setup script. The phone can now scan a QR and land in the app over a trusted HTTPS cert from anywhere on the tailnet. Committed + pushed. Remaining: installable-PWA offline (serve the build, not vite dev) + a UI polish pass.
+claude-pocket: drive a live Claude Code tmux session from the phone (LAN/Tailscale). Backend+frontend core were done before. THIS (huge) session shipped TWO big things, all committed: (1) **Plan 3** deploy/onboarding — QR pairing + Tailscale HTTPS + firewall + project scanner; (2) a **mobile UI redesign** (deep research workflow → proposal → Phases 1/2a/2b/3 + a model/effort session-only fix). Stopped before: redesign **Slice 1B** (robust metrics) + **Phase 4** (top bar + motion polish), and NEW backlog the user just asked for: **see running agents/workflows** + **image/file attachments** (audio later). Commits are local — PUSH PENDING. Dev stack is running.
 
 ## Task atual
-Plan 3 essentially done. Open: (1) serve the built PWA (dist) instead of vite dev so the service worker registers (real installable/offline PWA) — see polish-backlog; (2) the mobile UI polish pass (docs/polish-backlog.md). Then iterate.
+UI redesign in progress. Remaining, in order: Slice 1B (metrics from transcript usage) → Phase 4 (5h/7d top-bar chips + UsageSheet + full motion grammar) → then the new backlog (running-agents view; attachments). Also: browser-verify Phase 3 (scanner/sessions) and the model/effort "Aplicar nesta sessão" flow (built + unit-tested + endpoint live after restart, but NOT yet browser/phone-verified).
 
 ## Concluído nesta sessão
-- Live e2e in a real browser (agent-browser) on a real claude tmux session: login, history, live SSE, working/idle state, send-from-composer→reply, interrupt, statusline, command-meta filtered.
-- 6 bugs fixed (committed c6bc675): projects_dir→CLAUDE_CONFIG_DIR, SSE→model_dump_json, cookie auth_token→cp_token, classify temporal live-vs-frozen spinner, dedupe-by-id live append, command-meta filter. + raw statusline surfaced to a bottom status bar; loopback bind default; vite /api proxy.
-- Plan 3 (this batch, being committed now): CP_LAN_BIND_IP=auto + detect_lan_ip; QR pairing (backend prints a QR of the PWA URL+token at startup; frontend auto-logs-in from ?token= and strips it); Tailscale HTTPS via `tailscale serve`; in-app QR scanner (qr-scanner) on the Login screen; scripts/lan-setup.sh (firewall) + scripts/show-qr.sh.
-- Verified e2e: QR → auto-login over Tailscale HTTPS (trusted cert, secure context). 57 backend tests, frontend build clean.
+- **Plan 3** (commit 75fcc92, PUSHED): CP_LAN_BIND_IP=auto+detect_lan_ip; QR pairing (backend prints QR of PWA URL+token; frontend ?token= auto-login; in-app QR scanner via qr-scanner); Tailscale HTTPS (`tailscale serve` → vite, trusted cert); scripts/lan-setup.sh (ufw) + show-qr.sh.
+- **Redesign** (commits 0dcb0ff..HEAD, NOT pushed):
+  - Phase 1 (0dcb0ff): killed the broken `<pre>` statusline; one composer-card = status row (state + live mm:ss + cost) + textarea + control row (Codex-style ContextRing + model·effort pill + send↔stop morph). lib/statusline.ts parser. StatusBar retired. + emil polish (strong --ease-out, global button :active, bubble easing).
+  - Phase 2a (9317a7c): model·effort pill → BottomSheet ModelEffortSheet.
+  - Phase 2b (1f61f0d): slash commands (backend GET /api/sessions/{name}/commands = builtins + cwd/skills scan; frontend SlashSuggest strip + CommandSheet); effort control.
+  - Phase 3 (a82bdb5): backend GET /api/fs/roots + /api/fs/scan (allowlist CP_SCAN_ROOTS=~/pessoal,~/sistemas, realpath containment, escape rejection); FolderScanner in CreateSessionSheet (drill-in, open-vs-new dedupe); SessionCard/List reshape; NavBar in-chat switcher.
+  - model/effort fix (HEAD): session-only switching (see Decisions). 101 backend tests, builds clean.
+- Research artifact: docs/ui-redesign-proposal.md (proposal + critique). Requirements: docs/ui-redesign-requirements.md. New backlog: docs/future-features.md.
 
-## Decisões
-- Onboarding = QR pairing (QR encodes PWA URL + token). CP_PUBLIC_URL overrides the QR base (set to the Tailscale https URL).
-- TLS = Tailscale (`tailscale serve` → vite:5173). Chosen over Caddy/self-signed: trusted cert on the iPhone with zero manual trust, works anywhere on the tailnet. (User enabled HTTPS in the tailnet admin console — one-time.)
-- iOS reality: installed standalone PWA has SEPARATE storage from Safari, and iOS won't deep-link an https URL into an installed PWA. So the installed app must be paired ONCE from inside it → that's why the in-app QR scanner exists.
-- Dev auth = vite proxy same-origin + cp_token cookie. Creds are per-ORIGIN — use ONE canonical URL (the ts.net one), not the LAN IP, to avoid "saved under another URL" confusion.
+## Decisões (não-óbvias — críticas)
+- **Model/effort session-only (KEY):** full-arg `/model <x>` and `/effort <y>` SAVE AS THE USER'S DEFAULT (wrong). The ONLY session-only path is Claude Code's interactive `/model` picker (a UNIFIED model+effort picker) + pressing **`s`** (`Enter`=default, `Esc`=cancel). Backend `model_picker.py` + `terminal_input.set_model_effort` + `POST /api/sessions/{name}/model-effort {model?,effort?,scope}` drive it NON-blind (open picker, read pane, Up/Down to the model row — number keys confirm-as-default so AVOID them — Right to step effort which is a model-dependent set, then `s`). The sheet applies only on the "Aplicar nesta sessão" button (no command on slider move).
+- **Metrics = HYBRID** (user choice): statusline parse (client-side, works for THIS user's rich statusline) is what Phase 1 ships; the robust/portable path (Slice 1B, NOT done) = the transcript `message.usage` (VERIFIED present: input_tokens, output_tokens, cache_read/creation + model) → real ctx tokens/turn/model. cost/5h/7d only exist in the user's custom statusline.
+- TLS = Tailscale serve (trusted cert, no manual install). awaiting_input = OptionButtons default (free-text into a TUI menu is risky). Subagents CANNOT invoke skills → the design skills (ui-ux-pro-max/impeccable/design-taste/emil) were applied in the MAIN LOOP / embedded in the research workflow prompts.
 
 ## Limitações conhecidas
-- Installable/offline PWA: the service worker does NOT register under vite dev (verified SW count=0). Add-to-Home-Screen still works (manifest + apple meta tags present), but offline needs serving the built dist (e.g. tailscale serve a static server, or Caddy). Not done.
-- UI needs a real mobile polish pass; also: separate the statusline from the state pill; surface context usage better; model switching. See docs/polish-backlog.md.
-- iOS PWA install = Safari only (Apple). Chrome on iOS can't install standalone.
-- #5 (minor): GET /api/sessions always state="idle" (real state only via SSE).
-- Run recipe is manual (env + tailscale serve + vite --host + firewall). No single start script yet.
+- Phase 3 (scanner/sessions) + the model/effort "Aplicar" flow are built + tested but NOT browser/phone-verified yet.
+- Slice 1B not done → on a default Claude Code install the metrics row would be sparse (this user's statusline is rich so it's fine for them now).
+- `/api/sessions` list still returns state=idle always (real state only via SSE) — so Phase-3 session pulse/sort are mostly inert until that's populated.
+- Driving the `/model` picker is inherently fragile (TUI layout/keys); guarded with Esc-on-failure.
+- agent-browser daemon was flaky (timeouts/blank) — retries usually recover.
 
 ## Erros / armadilhas
-- CLAUDE_CONFIG_DIR=/home/.../.claude-work on this machine → transcripts under ~/.claude-work/projects.
-- Start claude as the DIRECT tmux pane command (not via interactive shell — p10k wizard eats keys). Fresh cwd → trust + external-imports prompts; Enter to accept.
-- Foreground `sleep` is blocked by the harness.
-- backend stdout is block-buffered when redirected to a file → the startup QR only shows with flush=True (done) or in a real tty.
-- Tailscale: HTTPS must be enabled in the admin console (DNS → HTTPS) — one-time, no CLI. `tailscale serve`/`cert` need root or `tailscale set --operator=$USER`.
+- This machine: CLAUDE_CONFIG_DIR=/home/.../.claude-work → transcripts under ~/.claude-work/projects.
+- Start claude as the DIRECT tmux pane command (`tmux new-session -d -s cc -c <dir> 'claude'`) — an interactive shell triggers the p10k wizard. Fresh cwd → trust + external-imports prompts (Enter to accept).
+- Foreground `sleep` is blocked by the harness. Backend stdout is block-buffered when redirected (QR shows with flush / in a real tty).
+- Tailscale HTTPS must be enabled in the admin console (one-time, done). `tailscale serve`/`cert` need root or `tailscale set --operator=$USER`.
 
 ## Arquivos criticos
-- backend/app/config.py (R) — detect_lan_ip, resolve_bind_ip, pairing_url, front_port, public_url, CLAUDE_CONFIG_DIR dir, loopback bind.
-- backend/app/main.py (R) — print_pairing (QR) + resolve_bind_ip on startup.
-- backend/app/state.py (R) — temporal spinner detection + status_line(). backend/app/transcript.py (R) — command-meta filter.
-- frontend/src/screens/Login.svelte (R) — ?token= auto-login + "Escanear QR". frontend/src/components/QrScanner.svelte (N) — camera QR scan (qr-scanner).
-- frontend/src/screens/Chat.svelte (R) — dedupe + bottom dock. frontend/src/components/StatusBar.svelte (N).
-- scripts/lan-setup.sh (N) firewall; scripts/show-qr.sh (N) print QR on demand.
-- docs/onboarding-and-network.md (N), docs/polish-backlog.md (N).
+- Redesign docs: docs/ui-redesign-proposal.md (R the proposal+critique FIRST to continue), docs/ui-redesign-requirements.md, docs/future-features.md (N — the new backlog), docs/onboarding-and-network.md.
+- Frontend (N/R): src/components/{Composer,ContextRing,LiveMetrics,ModelEffortSheet,BottomSheet,CommandSheet,SlashSuggest,FolderScanner,SessionSwitcherSheet,SessionCard}.svelte, src/lib/{statusline.ts,format.ts,api.ts}, src/screens/{Chat,SessionList}.svelte, src/app.css (easing/button:active).
+- Backend (N/R): app/{statusline parse in state.py, model_picker.py(N), fs.py(N), commands.py(N), terminal_input.py, api.py, config.py, models.py}; tests/{test_model_picker,test_commands,test_fs_scan,test_config,...}.
 
 ## Próximo passo
 ```
-# Bring the stack up (one terminal each), then scan the QR on the phone:
-cd backend && CP_AUTH_TOKEN=<tok> CP_PUBLIC_URL=https://<you>.ts.net uv run python -m app.main  # prints QR
-cd frontend && npm run dev -- --host          # vite on LAN (allowedHosts .ts.net)
-sudo tailscale serve --bg 5173                # HTTPS on the tailnet
-sudo ./scripts/lan-setup.sh 5173              # open the firewall (one-time)
-# Phone (Tailscale online): scan the QR (or ./scripts/show-qr.sh) -> auto-login.
+# Bring the stack up (token is per-launch; pick one), then resume:
+cd backend && CP_AUTH_TOKEN=<tok> CP_PUBLIC_URL=https://jefferson-felizardo.tailcac351.ts.net uv run python -m app.main  # prints QR; :8765
+cd frontend && npm run dev -- --host          # :5173, allowedHosts .ts.net
+sudo tailscale serve --bg 5173                # HTTPS on the tailnet (cert already provisioned)
+# (firewall ufw 5173 already open, persists). Phone: scan QR / open https://<you>.ts.net/?token=<tok>
 
-# Remaining work:
-# 1. Serve the BUILT pwa (npm run build -> dist) so the service worker registers
-#    (installable/offline). E.g. tailscale serve a static server of dist + /api proxy.
-# 2. Mobile UI polish pass (docs/polish-backlog.md): separate statusline vs state pill,
-#    context usage, model switch, general layout.
+# Work order:
+# 0. PUSH the redesign commits (0dcb0ff..HEAD) — only Plan 3 (75fcc92) is on the remote.
+# 1. Browser/phone-verify Phase 3 (scanner+sessions) and the model/effort "Aplicar nesta sessao".
+# 2. Slice 1B: source ctx/tokens/model from transcript message.usage (extend transcript.py
+#    parse_line to carry usage+model on assistant ChatEvents; LiveMetrics/Ring read it). VERIFIED the JSONL has usage.
+# 3. Phase 4: NavBar 5h/7d chips + UsageSheet (resets, raw fallback) + full motion grammar (reduced-motion).
+# 4. New backlog (docs/future-features.md): running agents/workflows panel; image/file attachments (audio later).
 # resume: /handoff resume  (after git pull)
 ```
