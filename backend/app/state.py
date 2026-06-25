@@ -1,5 +1,9 @@
+import asyncio
 import re
-from typing import Optional
+from typing import AsyncIterator, Optional
+
+from app import tmux
+from app.models import StateEvent
 
 SPINNER_GLYPHS = "✻✽✶✺✢·∗✳✦✧"
 _OPTION_RE = re.compile(r"^\s*❯?\s*\d+\.\s+(.*\S)\s*$")
@@ -35,3 +39,23 @@ def classify(pane_text: str) -> tuple[str, Optional[str], Optional[str], Optiona
             return ("awaiting_input", None, _question(pane_text), options)
 
     return ("idle", None, None, None)
+
+
+class StateMonitor:
+    def __init__(self, name: str, poll: float = 0.75):
+        self.name = name
+        self.poll = poll
+
+    async def stream(self) -> AsyncIterator[StateEvent]:
+        last_key = object()
+        while True:
+            if not tmux.has_session(self.name):
+                yield StateEvent(session=self.name, state="dead")
+                return
+            state, label, question, options = classify(tmux.capture_pane(self.name))
+            key = (state, label, question, tuple(options or ()))
+            if key != last_key:
+                last_key = key
+                yield StateEvent(session=self.name, state=state, label=label,
+                                 question=question, options=options)
+            await asyncio.sleep(self.poll)
