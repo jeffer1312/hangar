@@ -8,18 +8,22 @@ async def merged_events(name: str, jsonl: str):
     monitor = StateMonitor(name)
     queue: asyncio.Queue = asyncio.Queue()
 
-    async def pump_messages():
-        async for ev in tailer.follow():
-            await queue.put(("message", ev.model_dump()))
+    async def pump(kind, agen):
+        try:
+            async for item in agen:
+                await queue.put((kind, item.model_dump()))
+        except Exception as exc:  # surface, never swallow
+            await queue.put(("__error__", exc))
 
-    async def pump_state():
-        async for st in monitor.stream():
-            await queue.put(("state", st.model_dump()))
-
-    tasks = [asyncio.create_task(pump_messages()), asyncio.create_task(pump_state())]
+    tasks = [
+        asyncio.create_task(pump("message", tailer.follow())),
+        asyncio.create_task(pump("state", monitor.stream())),
+    ]
     try:
         while True:
             event, data = await queue.get()
+            if event == "__error__":
+                raise data
             yield {"event": event, "data": data}
     finally:
         for t in tasks:
