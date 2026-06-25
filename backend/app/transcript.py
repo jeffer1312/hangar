@@ -1,6 +1,8 @@
+import asyncio
 import json
 from pathlib import Path
-from typing import Optional
+from typing import AsyncIterator, Optional
+from watchfiles import awatch
 from app.models import ChatEvent
 
 
@@ -69,3 +71,33 @@ def parse_transcript(path: str | Path) -> list[ChatEvent]:
         if ev is not None:
             events.append(ev)
     return events
+
+
+class TranscriptTailer:
+    def __init__(self, path: str | Path):
+        self.path = Path(path)
+
+    def history(self) -> list[ChatEvent]:
+        return parse_transcript(self.path)
+
+    async def follow(self) -> AsyncIterator[ChatEvent]:
+        pos = 0
+        # emit existing content first
+        if self.path.exists():
+            with self.path.open(encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    ev = parse_line(line)
+                    if ev is not None:
+                        yield ev
+                pos = fh.tell()
+        # then watch for appends
+        async for _ in awatch(self.path.parent):
+            if not self.path.exists():
+                continue
+            with self.path.open(encoding="utf-8", errors="replace") as fh:
+                fh.seek(pos)
+                for line in fh:
+                    ev = parse_line(line)
+                    if ev is not None:
+                        yield ev
+                pos = fh.tell()

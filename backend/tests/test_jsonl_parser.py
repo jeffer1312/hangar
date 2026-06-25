@@ -69,3 +69,32 @@ def test_real_fixture_lines_parse():
         if ev is not None:
             events.append(ev)
     assert any(ev.kind == "assistant_msg" for ev in events)
+
+
+import asyncio, json, pytest
+from app.transcript import TranscriptTailer
+
+
+@pytest.mark.asyncio
+async def test_tailer_yields_existing_then_new(tmp_path):
+    f = tmp_path / "s.jsonl"
+    f.write_text(json.dumps({"type": "user", "uuid": "u1",
+                             "message": {"role": "user", "content": "hi"}}) + "\n")
+    tailer = TranscriptTailer(f)
+    got = []
+
+    async def consume():
+        async for ev in tailer.follow():
+            got.append(ev)
+            if len(got) == 2:
+                return
+
+    async def append():
+        await asyncio.sleep(0.2)
+        with f.open("a") as fh:
+            fh.write(json.dumps({"type": "assistant", "uuid": "a1", "parentUuid": "u1",
+                                 "message": {"role": "assistant",
+                                             "content": [{"type": "text", "text": "yo"}]}}) + "\n")
+
+    await asyncio.wait_for(asyncio.gather(consume(), append()), timeout=5)
+    assert [e.id for e in got] == ["u1", "a1"]
