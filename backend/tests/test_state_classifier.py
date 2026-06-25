@@ -1,5 +1,8 @@
 from pathlib import Path
+from unittest.mock import patch
 from app.state import classify
+from app import state as state_mod
+from app.state import StateMonitor
 
 
 def test_working_with_spinner_label():
@@ -51,3 +54,25 @@ def test_real_fixtures():
     assert s == "working" and lbl == "Elucidating…"
     s2, _, q2, opts2 = classify((fx / "pane_awaiting_input.txt").read_text())
     assert s2 == "awaiting_input" and opts2 and "proceed?" in (q2 or "")
+
+
+import pytest
+
+
+@pytest.mark.asyncio
+async def test_monitor_emits_only_on_change():
+    panes = iter([
+        "❯ \n",                  # idle
+        "✽ Elucidating…\n",      # working
+        "✽ Elucidating…\n",      # still working, same label (no emit)
+        "❯ \n",                  # idle again
+    ])
+    with patch.object(state_mod.tmux, "has_session", return_value=True), \
+         patch.object(state_mod.tmux, "capture_pane", side_effect=lambda *a, **k: next(panes)):
+        mon = StateMonitor("cc", poll=0.001)
+        seen = []
+        async for ev in mon.stream():
+            seen.append((ev.state, ev.label))
+            if len(seen) == 3:
+                break
+    assert seen == [("idle", None), ("working", "Elucidating…"), ("idle", None)]
