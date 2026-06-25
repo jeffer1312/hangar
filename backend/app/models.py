@@ -43,3 +43,24 @@ class CommandInfo(BaseModel):
     argumentHint: Optional[str] = None             # dica de argumento, ex: "<ambiente>"
     source: Literal["builtin", "skill", "plugin"] = "builtin"
     destructive: bool = False                      # exige confirmacao na UI
+
+
+class FsRoot(BaseModel):
+    # Raiz liberada do scanner, virando um chip no app. name = basename do caminho.
+    name: str
+    path: str
+
+
+class FsEntry(BaseModel):
+    # Subdiretorio imediato listado pelo scanner.
+    name: str
+    path: str
+    is_git: bool = False           # tem .git -> badge "git"
+    has_claude_md: bool = False    # tem CLAUDE.md -> badge "CLAUDE.md"
+    mtime: Optional[float] = None  # epoch s; o app formata o tempo relativo
+
+
+class FsScanResult(BaseModel):
+    # entries vazio + error preenchido = pasta valida porem ilegivel (ex: sem permissao).
+    entries: list[FsEntry] = []
+    error: Optional[str] = None

@@ -3,15 +3,26 @@
   import NavBar from '../components/NavBar.svelte';
   import MessageList from '../components/MessageList.svelte';
   import Composer from '../components/Composer.svelte';
-  import { getHistory, sendInput, selectOption, interrupt, openEventStream } from '../lib/api';
+  import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
+  import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
+  import {
+    getHistory,
+    sendInput,
+    selectOption,
+    interrupt,
+    openEventStream,
+    getSessions,
+    createSession,
+  } from '../lib/api';
   import { parseStatusLine } from '../lib/statusline';
-  import type { ChatEvent, StateEvent, State } from '../lib/types';
+  import type { ChatEvent, StateEvent, State, SessionInfo } from '../lib/types';
 
   interface Props {
     sessionName: string;
     onBack: () => void;
+    onNavigateToChat: (name: string) => void;
   }
-  let { sessionName, onBack }: Props = $props();
+  let { sessionName, onBack, onNavigateToChat }: Props = $props();
 
   let events = $state<ChatEvent[]>([]);
   let stateEvent = $state<StateEvent | null>(null);
@@ -19,6 +30,35 @@
   let error = $state('');
   let es: EventSource | null = null;
   let dockEl: HTMLElement | undefined = $state();
+
+  // ── Switcher de sessoes (NavBar -> sheet) + criar nova sem voltar ──────────
+  let switcherOpen = $state(false);
+  let createOpen = $state(false);
+  let allSessions = $state<SessionInfo[]>([]);
+
+  async function openSwitcher() {
+    switcherOpen = true;
+    try {
+      allSessions = await getSessions();
+    } catch {
+      // sem lista -> o sheet ainda oferece "Nova sessão"
+    }
+  }
+
+  function pickSession(name: string) {
+    switcherOpen = false;
+    if (name !== sessionName) onNavigateToChat(name);
+  }
+
+  function startNew() {
+    switcherOpen = false;
+    createOpen = true;
+  }
+
+  async function handleCreate(name: string, cwd?: string) {
+    await createSession(name, cwd);
+    onNavigateToChat(name);
+  }
 
   const currentState = $derived<State>(stateEvent?.state ?? 'idle');
   // Statusline crua -> campos tipados (modelo, contexto, custo, tempo de sessao).
@@ -128,7 +168,7 @@
 </script>
 
 <div class="chat-screen">
-  <NavBar title={sessionName} showBack={true} onBack={onBack} />
+  <NavBar title={sessionName} showBack={true} onBack={onBack} onTitleTap={openSwitcher} />
 
   {#if loading}
     <div class="chat-loading">
@@ -166,6 +206,22 @@
       />
     {/if}
   </div>
+
+  <SessionSwitcherSheet
+    open={switcherOpen}
+    sessions={allSessions}
+    currentName={sessionName}
+    onPick={pickSession}
+    onNew={startNew}
+    onClose={() => (switcherOpen = false)}
+  />
+
+  <CreateSessionSheet
+    open={createOpen}
+    onClose={() => (createOpen = false)}
+    onCreate={handleCreate}
+    onOpenSession={onNavigateToChat}
+  />
 </div>
 
 <style>

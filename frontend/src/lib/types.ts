@@ -38,3 +38,31 @@ export interface CommandInfo {
   source: 'builtin' | 'skill' | 'plugin';
   destructive?: boolean;           // exige confirmação antes de enviar
 }
+
+// ── Scanner de pastas ───────────────────────────────────────────────────────
+export interface FsRoot {
+  name: string;   // basename da raiz (vira o rótulo do chip)
+  path: string;   // caminho absoluto da raiz liberada
+}
+
+export interface FsEntry {
+  name: string;
+  path: string;
+  is_git: boolean;
+  has_claude_md: boolean;
+  mtime?: number | null;
+}
+
+// Estado de falha da varredura, mapeado pra uma mensagem visível na UI.
+export type FsScanError =
+  | 'permission_denied'
+  | 'unreadable'
+  | 'root_not_allowed'
+  | 'invalid_path'
+  | 'not_found'
+  | 'unknown';
+
+export interface FsScanResult {
+  entries: FsEntry[];
+  error?: FsScanError | null;
+}
