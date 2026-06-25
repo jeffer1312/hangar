@@ -2,20 +2,22 @@ import re
 from typing import Optional
 
 SPINNER_GLYPHS = "✻✽✶✺✢·∗✳✦✧"
-_OPTION_RE = re.compile(r"^\s*[❯ ]?\s*\d+\.\s+(.*\S)\s*$")
+_OPTION_RE = re.compile(r"^\s*❯?\s*\d+\.\s+(.*\S)\s*$")
 _CURSOR_RE = re.compile(r"^\s*❯\s*\d+\.\s", re.M)
 
 
 def _question(pane_text: str) -> Optional[str]:
     found = None
     for line in pane_text.splitlines():
+        if _OPTION_RE.match(line):
+            break
         s = line.strip()
         if s.endswith("?"):
             found = s
     return found
 
 
-def classify(pane_text: str):
+def classify(pane_text: str) -> tuple[str, Optional[str], Optional[str], Optional[list[str]]]:
     """Return (state, label, question, options).
 
     'working' -> label is the live spinner text; 'awaiting_input' -> question +
