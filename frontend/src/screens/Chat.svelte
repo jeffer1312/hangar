@@ -238,7 +238,10 @@
         <p class="dead-text">Esta sessão foi encerrada.</p>
         <button class="back-btn" onclick={onBack}>← Voltar</button>
       </div>
-    {:else if currentState !== 'awaiting_input'}
+    {:else}
+      <!-- Composer SEMPRE visivel (exceto sessao morta). Antes ele sumia em awaiting_input e,
+           se as opcoes nao fossem parseadas, o usuario ficava sem input E sem botoes = preso.
+           Os OptionButtons continuam aparecendo na lista; o composer fica como saida garantida. -->
       <Composer
         {sessionName}
         sessionState={currentState}
