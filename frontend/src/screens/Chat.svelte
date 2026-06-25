@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import NavBar from '../components/NavBar.svelte';
-  import StatusPill from '../components/StatusPill.svelte';
+  import StatusBar from '../components/StatusBar.svelte';
   import MessageList from '../components/MessageList.svelte';
   import Composer from '../components/Composer.svelte';
   import { getHistory, sendInput, selectOption, interrupt, openEventStream } from '../lib/api';
@@ -18,6 +18,7 @@
   let loading = $state(true);
   let error = $state('');
   let es: EventSource | null = null;
+  let dockEl: HTMLElement | undefined = $state();
 
   const currentState = $derived<State>(stateEvent?.state ?? 'idle');
 
@@ -39,7 +40,17 @@
     es.addEventListener('message', (e: MessageEvent) => {
       try {
         const ev = JSON.parse(e.data) as ChatEvent;
-        events = [...events, ev];
+        // Dedupe by id: the SSE replays the whole transcript on every (re)connect and
+        // loadHistory() also seeds events — without this, messages double up and the
+        // keyed {#each} chokes on duplicate ids.
+        const i = events.findIndex((x) => x.id === ev.id);
+        if (i >= 0) {
+          const next = events.slice();
+          next[i] = ev;
+          events = next;
+        } else {
+          events = [...events, ev];
+        }
       } catch {}
     });
 
@@ -64,6 +75,20 @@
 
   onDestroy(() => {
     es?.close();
+  });
+
+  // Lift the bottom dock (statusline + composer) above the iOS on-screen keyboard.
+  $effect(() => {
+    if (!dockEl) return;
+    const vv = window.visualViewport;
+    if (!vv) return;
+    function onResize() {
+      if (!dockEl || !vv) return;
+      const kb = window.innerHeight - vv.height;
+      dockEl.style.transform = `translateY(-${Math.max(0, kb)}px)`;
+    }
+    vv.addEventListener('resize', onResize);
+    return () => vv.removeEventListener('resize', onResize);
   });
 
   async function handleSend(text: string) {
@@ -94,8 +119,6 @@
 <div class="chat-screen">
   <NavBar title={sessionName} showBack={true} onBack={onBack} />
 
-  <StatusPill state={currentState} label={stateEvent?.label} />
-
   {#if loading}
     <div class="chat-loading">
       <div class="spinner-lg" aria-label="Carregando…">⟳</div>
@@ -114,18 +137,26 @@
     />
   {/if}
 
-  {#if currentState === 'dead'}
-    <div class="dead-footer">
-      <p class="dead-text">Esta sessão foi encerrada.</p>
-      <button class="back-btn" onclick={onBack}>← Voltar</button>
-    </div>
-  {:else if currentState !== 'awaiting_input'}
-    <Composer
-      sessionState={currentState}
-      onSend={handleSend}
-      onInterrupt={handleInterrupt}
+  <div class="bottom-dock" bind:this={dockEl}>
+    <StatusBar
+      state={currentState}
+      label={stateEvent?.label}
+      statusLine={stateEvent?.status_line}
     />
-  {/if}
+
+    {#if currentState === 'dead'}
+      <div class="dead-footer">
+        <p class="dead-text">Esta sessão foi encerrada.</p>
+        <button class="back-btn" onclick={onBack}>← Voltar</button>
+      </div>
+    {:else if currentState !== 'awaiting_input'}
+      <Composer
+        sessionState={currentState}
+        onSend={handleSend}
+        onInterrupt={handleInterrupt}
+      />
+    {/if}
+  </div>
 </div>
 
 <style>
@@ -168,6 +199,18 @@
     font-size: var(--text-sm);
   }
 
+  /* Fixed bottom dock: statusline bar + composer (or dead footer) */
+  .bottom-dock {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 30;
+    background: var(--bg-base);
+    padding-bottom: env(safe-area-inset-bottom);
+    will-change: transform;
+  }
+
   /* Dead state footer */
   .dead-footer {
     display: flex;
@@ -175,8 +218,6 @@
     align-items: center;
     gap: var(--space-3);
     padding: var(--space-5) var(--space-6);
-    padding-bottom: calc(env(safe-area-inset-bottom) + var(--space-5));
-    border-top: 1px solid var(--border-subtle);
     background: var(--bg-base);
   }
 

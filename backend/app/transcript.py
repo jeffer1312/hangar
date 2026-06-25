@@ -12,6 +12,19 @@ def _first(content: list, type_name: str) -> Optional[dict]:
     return None
 
 
+# Claude Code logs slash-commands and local command I/O as synthetic "user" entries
+# wrapped in these tags. They are tooling meta, not conversation — keep them out of the chat.
+_COMMAND_META_PREFIXES = (
+    "<command-name>", "<command-message>", "<command-args>",
+    "<local-command-caveat>", "<local-command-stdout>", "<local-command-stderr>",
+    "<bash-input>", "<bash-stdout>", "<bash-stderr>",
+)
+
+
+def _is_command_meta(text: str) -> bool:
+    return text.lstrip().startswith(_COMMAND_META_PREFIXES)
+
+
 def parse_line(line: str) -> Optional[ChatEvent]:
     line = line.strip()
     if not line:
@@ -31,6 +44,8 @@ def parse_line(line: str) -> Optional[ChatEvent]:
 
     if etype == "user":
         if isinstance(content, str):
+            if _is_command_meta(content):
+                return None
             return ChatEvent(kind="user_msg", id=uid, parent_id=parent, text=content)
         if isinstance(content, list):
             tr = _first(content, "tool_result")
@@ -46,7 +61,10 @@ def parse_line(line: str) -> Optional[ChatEvent]:
                 )
             txt = _first(content, "text")
             if txt is not None:
-                return ChatEvent(kind="user_msg", id=uid, parent_id=parent, text=txt.get("text", ""))
+                t = txt.get("text", "")
+                if _is_command_meta(t):
+                    return None
+                return ChatEvent(kind="user_msg", id=uid, parent_id=parent, text=t)
         return None
 
     if etype == "assistant" and isinstance(content, list):

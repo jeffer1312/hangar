@@ -11,7 +11,10 @@ async def merged_events(name: str, jsonl: str):
     async def pump(kind, agen):
         try:
             async for item in agen:
-                await queue.put((kind, item.model_dump()))
+                # model_dump_json (not model_dump): the SSE `data:` field must be a
+                # JSON string for the browser's JSON.parse(e.data). A raw dict gets
+                # str()'d by sse-starlette into Python repr (None/single quotes) = invalid JSON.
+                await queue.put((kind, item.model_dump_json()))
         except Exception as exc:  # surface, never swallow
             await queue.put(("__error__", exc))
 

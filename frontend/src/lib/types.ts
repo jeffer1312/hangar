@@ -27,4 +27,5 @@ export interface StateEvent {
   label?: string | null;
   question?: string | null;
   options?: string[] | null;
+  status_line?: string | null; // raw bottom chrome from the pane, shown as-is
 }
