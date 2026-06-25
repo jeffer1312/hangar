@@ -79,9 +79,10 @@ html {
 }
 
 body {
-  height: 100%;
+  height: 100dvh;          /* dvh: acompanha a viewport dinâmica */
   width: 100%;
   overflow: hidden;
+  overscroll-behavior: none; /* sem rubber-band que rola a página no iOS */
   font-family: var(--font-ui);
   font-size: var(--text-base);
   line-height: 1.55;
@@ -92,9 +93,10 @@ body {
 }
 
 #app {
-  height: 100%;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 /* ── Easing (stronger than the CSS built-ins) ───────────────────────── */
