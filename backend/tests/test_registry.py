@@ -1,3 +1,5 @@
+import os
+import time
 from unittest.mock import patch
 from app import registry
 from app.registry import SessionRegistry, sanitize_cwd
@@ -11,10 +13,13 @@ def test_sanitize_cwd_matches_claude_scheme():
 def test_resolve_jsonl_picks_newest(tmp_path):
     proj = tmp_path / "-home-u-p"
     proj.mkdir()
-    old = proj / "old.jsonl"; old.write_text("{}")
-    new = proj / "new.jsonl"; new.write_text("{}")
-    import os, time
-    os.utime(old, (time.time() - 100, time.time() - 100))
+    old = proj / "old.jsonl"
+    old.write_text("{}")
+    new = proj / "new.jsonl"
+    new.write_text("{}")
+    now = time.time()
+    os.utime(old, (now - 100, now - 100))
+    os.utime(new, (now, now))
     reg = SessionRegistry(projects_dir=tmp_path)
     assert reg.resolve_jsonl("/home/u/p").endswith("new.jsonl")
 
@@ -26,3 +31,10 @@ def test_list_maps_sessions_to_jsonl(tmp_path):
          patch.object(reg, "resolve_jsonl", return_value="/x/s.jsonl"):
         out = reg.list()
     assert out[0].name == "cc" and out[0].jsonl == "/x/s.jsonl"
+
+
+def test_resolve_jsonl_returns_none_when_dir_empty(tmp_path):
+    proj = tmp_path / "-home-u-p"
+    proj.mkdir()
+    reg = SessionRegistry(projects_dir=tmp_path)
+    assert reg.resolve_jsonl("/home/u/p") is None
