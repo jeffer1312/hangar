@@ -36,6 +36,7 @@ export interface StateEvent {
   question?: string | null;
   options?: string[] | null;
   status_line?: string | null; // raw bottom chrome from the pane, shown as-is
+  overlay?: boolean;            // overlay so-TUI aberto (/status, /config, /help, picker) -> espelho do pane
 }
 
 export interface CommandInfo {

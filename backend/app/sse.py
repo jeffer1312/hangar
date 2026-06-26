@@ -4,10 +4,14 @@ from app.state import StateMonitor
 from app.pqueue import PromptQueue, _transcript_start_ts
 from app.preview import PreviewBroker, _norm
 from app.models import PreviewEvent
+from app.registry import SessionRegistry
+
+# Stateless (so projects_dir) — usado pelo watcher pra detectar troca de jsonl (ex: /clear abre um
+# transcript novo, mas a conexao SSE foi bindada no antigo).
+_registry = SessionRegistry()
 
 
 async def merged_events(name: str, jsonl: str):
-    tailer = TranscriptTailer(jsonl)
     monitor = StateMonitor(name)
     pqueue = PromptQueue(name)
     broker = PreviewBroker.get(name)
@@ -56,19 +60,40 @@ async def merged_events(name: str, jsonl: str):
             preview_slot["pending"] = True
             queue.put_nowait(("preview", None))
 
-    async def tail_pump():
+    async def tail_pump(path: str):
         # Transcript do .jsonl (msgs canonicas). Alem de emitir, RASTREIA a ultima msg de assistente
         # em `committed` -> fonte de verdade pra suprimir preview duplicado. E quando um bloco commita
         # que e exatamente o que o preview mostra, LIMPA o preview na hora (sem esperar o broker mudar).
+        # Recebe o path (em vez de fechar sobre um tailer fixo) pra poder ser recriado no rebind do /clear.
         try:
-            async for ev in tailer.follow():
+            async for ev in TranscriptTailer(path).follow():
                 if ev.kind == "assistant_msg" and ev.text:
                     committed["text"] = _norm(ev.text)
                     if _already_committed(preview_slot["text"]):
                         _enqueue_preview("")
                 await queue.put(("message", ev.model_dump_json()))
+        except asyncio.CancelledError:
+            raise  # rebind do watcher cancela este task de proposito -> nao reportar como erro
         except Exception as exc:  # surface, never swallow
             await queue.put(("__error__", exc))
+
+    async def jsonl_watcher():
+        # Detecta /clear (e qualquer troca de transcript): o claude abre um .jsonl NOVO, mas o tailer foi
+        # bindado no antigo -> nada novo chegaria ate o EventSource reconectar (o usuario tinha que sair e
+        # voltar). Aqui, vigia o jsonl ATIVO desta sessao e, quando diverge do bindado, sinaliza reset.
+        # IMPORTANTE: usa a MESMA resolucao do endpoint /events (registry.list -> resolve()): cmdline
+        # --session-id, depois fd aberto, depois btime, depois newest-by-mtime. Espelhar o endpoint
+        # garante que o watcher dispare exatamente quando um reconnect mudaria de transcript.
+        current = jsonl
+        while True:
+            await asyncio.sleep(2)
+            try:
+                live = next((s.jsonl for s in _registry.list() if s.name == name), None)
+            except Exception:
+                live = None
+            if live and live != current:
+                current = live
+                queue.put_nowait(("__reset__", live))
 
     async def preview_pump():
         # Assina o broker COMPARTILHADO da sessao (1 loop de capture pra N conexoes). Coalesce (slot +
@@ -80,20 +105,33 @@ async def merged_events(name: str, jsonl: str):
         except Exception as exc:  # surface, never swallow
             await queue.put(("__error__", exc))
 
+    tail_task = asyncio.create_task(tail_pump(jsonl))
     tasks = [
-        asyncio.create_task(tail_pump()),
+        tail_task,
         # Fila duravel: user_msg sinteticos (id "queued-") pras msgs enfileiradas. O front faz o
         # dedup cruzado (queued- vs real) por texto.
         asyncio.create_task(pump("message", pqueue.follow(min_ts=start_ts))),
         asyncio.create_task(pump("state", monitor.stream())),
         asyncio.create_task(ping_loop()),
         asyncio.create_task(preview_pump()),
+        asyncio.create_task(jsonl_watcher()),
     ]
     try:
         while True:
             event, data = await queue.get()
             if event == "__error__":
                 raise data
+            if event == "__reset__":
+                # Troca de transcript (ex: /clear). Re-binda o tailer no jsonl novo, zera o estado de
+                # suppress/preview, e manda 'reset' pro front recarregar o history do zero.
+                tasks.remove(tail_task)
+                tail_task.cancel()
+                committed["text"] = ""
+                _enqueue_preview("")
+                tail_task = asyncio.create_task(tail_pump(data))
+                tasks.append(tail_task)
+                yield {"event": "reset", "data": "{}"}
+                continue
             if event == "preview":
                 # Le o ULTIMO texto do slot na hora do envio (frames antigos ja foram sobrescritos).
                 # SEM id: pra reconexao do EventSource nao replayar preview velho via Last-Event-ID.

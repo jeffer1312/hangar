@@ -16,8 +16,12 @@
     // Tem trabalho VIVO (workflow/agent rodando) -> o botao de atividade "respira" pra sinalizar
     // que nao travou, mesmo quando o badge nao conta (workflow em background nao entra no badge).
     activityRunning?: boolean;
+    // Espelho do pane (overlays so-TUI): abre o terminal espelhado. terminalAlert pulsa o botao
+    // quando ha um overlay aberto que SO da pra interagir pela TUI.
+    onOpenTerminal?: () => void;
+    terminalAlert?: boolean;
   }
-  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, onOpenActivity, activityBadge = 0, activityRunning = false }: Props = $props();
+  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false }: Props = $props();
 </script>
 
 <nav class="navbar">
@@ -44,6 +48,15 @@
     {/if}
 
     <div class="nav-right">
+      {#if onOpenTerminal}
+        <button class="nav-btn terminal-btn" class:alert={terminalAlert} onclick={onOpenTerminal} aria-label="Terminal (espelho da TUI)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="2.5" y="4" width="19" height="16" rx="2"/>
+            <path d="M6.5 9l3 3-3 3"/>
+            <line x1="12.5" y1="15" x2="17" y2="15"/>
+          </svg>
+        </button>
+      {/if}
       {#if onOpenActivity}
         <button class="nav-btn activity-btn" class:running={activityRunning} onclick={onOpenActivity} aria-label="Atividade">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -166,6 +179,16 @@
     align-items: center;
     gap: var(--space-1);
     flex-shrink: 0;
+  }
+
+  .terminal-btn {
+    color: var(--text-secondary);
+  }
+  /* Overlay so-TUI aberto: pulsa em accent pra sinalizar que precisa interagir pela TUI. */
+  .terminal-btn.alert { color: var(--accent); }
+  .terminal-btn.alert svg { animation: breathe 1.4s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) {
+    .terminal-btn.alert svg { animation: none; }
   }
 
   .activity-btn {

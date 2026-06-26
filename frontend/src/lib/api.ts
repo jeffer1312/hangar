@@ -212,6 +212,24 @@ export async function interrupt(name: string): Promise<void> {
   });
 }
 
+// Espelho do pane (overlays so-TUI): le o pane cru e manda teclas de navegacao (allowlist no backend).
+export type NavKey =
+  | 'Up' | 'Down' | 'Left' | 'Right'
+  | 'Enter' | 'Escape' | 'Tab' | 'BTab'
+  | 'PageUp' | 'PageDown' | 'Space';
+
+export async function getPane(name: string): Promise<string> {
+  const res = await apiFetch<{ text: string }>(`/api/sessions/${encodeURIComponent(name)}/pane`);
+  return res.text;
+}
+
+export async function sendKey(name: string, key: NavKey): Promise<void> {
+  await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/keys`, {
+    method: 'POST',
+    body: JSON.stringify({ key }),
+  });
+}
+
 export interface ModelEffortBody {
   model?: string; // 'default' | 'opus' | 'sonnet' | 'haiku'
   effort?: string; // low | medium | high | xhigh | max | ultracode

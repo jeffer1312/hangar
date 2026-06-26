@@ -179,10 +179,18 @@ class StateMonitor:
                     state, label = "working", held_label
 
             status = status_line(pane)
-            key = (state, label, question, tuple(options or ()), status)
+            # Overlay so-TUI aberto: rodape de navegacao presente NO FUNDO do pane. So as ultimas linhas
+            # (nao o pane inteiro): o overlay sempre renderiza o rodape no rodape; procurar no pane todo
+            # dava FALSO-POSITIVO quando a MESMA frase ("Esc to cancel") aparecia na CONVERSA/scrollback
+            # (ex: uma msg citando o rodape abria o espelho por cima do chat). Inclui pickers (/model) e
+            # paineis sem opcoes numeradas (/status, /config, /help). O front decide: com `options` (menu
+            # nativo) usa botoes; sem opcoes mas overlay=True abre o espelho pra navegar via teclas.
+            overlay = bool(_FOOTER_RE.search("\n".join(pane.splitlines()[-8:])))
+            key = (state, label, question, tuple(options or ()), status, overlay)
             if key != last_key:
                 last_key = key
                 held_state, held_label = state, label
                 yield StateEvent(session=self.name, state=state, label=label,
-                                 question=question, options=options, status_line=status)
+                                 question=question, options=options, status_line=status,
+                                 overlay=overlay)
             await asyncio.sleep(self.poll)
