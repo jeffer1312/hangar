@@ -84,6 +84,13 @@ def _cmdline(pid: int) -> str:
 
 
 class SessionRegistry:
+    # Cache name -> ultimo jsonl resolvido por sinal CONFIAVEL (cmdline --session-id / fd). De classe
+    # (compartilhado entre instancias: api.registry e sse._registry). Estabiliza a resolucao quando o
+    # processo que carrega o --session-id SOME transitoriamente (a sessao dirigida por job/harness
+    # spawna claude por turno) -> sem isto a resolucao oscilava pro mtime e o watcher do SSE limpava o
+    # chat. Atualizado quando um sinal confiavel reaparece (ex: /clear -> session-id novo).
+    _jsonl_cache: dict[str, str] = {}
+
     def __init__(self, projects_dir: Path | None = None):
         self.projects_dir = Path(projects_dir or settings.projects_dir)
 
@@ -119,14 +126,25 @@ class SessionRegistry:
                     continue
                 sid = _session_id_from_cmdline(cmd)
                 if sid:
-                    return str(self.projects_dir / sanitize_cwd(cwd) / f"{sid}.jsonl")
+                    j = str(self.projects_dir / sanitize_cwd(cwd) / f"{sid}.jsonl")
+                    self._jsonl_cache[name] = j
+                    return j
             # 2. fd aberto (confiavel quando presente; raro, o claude nao segura em idle).
             for p in pids:
                 j = _open_jsonl(p, self.projects_dir)
                 if j:
+                    self._jsonl_cache[name] = j
                     return j
-        # 3. fallback: mais recente por mtime (ambiguo com varias sessoes bare no mesmo cwd).
+        # 3. cache: ultimo sinal confiavel. Estabiliza quando o processo com --session-id some
+        #    transitoriamente (senao a resolucao oscilava pro mtime e o watcher limpava o chat).
+        cached = self._jsonl_cache.get(name)
+        if cached:
+            return cached
+        # 4. fallback: mais recente por mtime (ambiguo com varias sessoes bare no mesmo cwd).
         return self.resolve_jsonl(cwd)
+
+    def _forget(self, name: str) -> None:
+        self._jsonl_cache.pop(name, None)
 
     def list(self) -> list[SessionInfo]:
         out = []
@@ -142,3 +160,4 @@ class SessionRegistry:
 
     def kill(self, name: str) -> None:
         tmux.kill_session(name)
+        self._forget(name)  # cache invalido: nome pode ser reusado por outra sessao depois

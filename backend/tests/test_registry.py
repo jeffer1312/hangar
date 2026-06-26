@@ -1,5 +1,6 @@
 import os
 import time
+import pytest
 from unittest.mock import patch
 from app import registry
 from app.registry import (
@@ -9,6 +10,14 @@ from app.registry import (
 )
 
 _UUID = "12345678-1234-1234-1234-123456789abc"
+
+
+@pytest.fixture(autouse=True)
+def _clear_jsonl_cache():
+    # O cache e de CLASSE (compartilhado) -> zera entre testes pra nao vazar resolucao de um pro outro.
+    SessionRegistry._jsonl_cache.clear()
+    yield
+    SessionRegistry._jsonl_cache.clear()
 
 
 def test_sanitize_cwd_matches_claude_scheme():
@@ -95,6 +104,27 @@ def test_resolve_picks_main_session_over_subagent(tmp_path):
          patch.object(registry, "_open_jsonl", return_value=None):
         j = reg.resolve("cc", "/home/u/p")
     assert j.endswith(f"{main}.jsonl")
+
+
+def test_resolve_caches_across_transient_absence(tmp_path):
+    # A sessao dirigida por job spawna claude por turno -> o processo com --session-id SOME entre
+    # turnos. Sem cache, a resolucao oscilava pro mtime (jsonl errado) e o watcher limpava o chat.
+    proj = tmp_path / "-home-u-p"
+    proj.mkdir()
+    (proj / "stale.jsonl").write_text("{}")  # mtime fallback que NAO deve aparecer apos cachear
+    reg = SessionRegistry(projects_dir=tmp_path)
+    # 1o resolve: processo com sid PRESENTE -> cacheia.
+    with patch.object(registry.tmux, "pane_pid", return_value=1), \
+         patch.object(registry, "_descendant_pids", return_value=[1]), \
+         patch.object(registry, "_cmdline", return_value=f"claude --session-id {_UUID}"):
+        j1 = reg.resolve("cc", "/home/u/p")
+    # 2o resolve: processo SUMIU (cmdline bare, sem fd) -> deve devolver o CACHE, nao o mtime.
+    with patch.object(registry.tmux, "pane_pid", return_value=1), \
+         patch.object(registry, "_descendant_pids", return_value=[1]), \
+         patch.object(registry, "_cmdline", return_value="claude"), \
+         patch.object(registry, "_open_jsonl", return_value=None):
+        j2 = reg.resolve("cc", "/home/u/p")
+    assert j1 == j2 and j1.endswith(f"{_UUID}.jsonl")
 
 
 def test_resolve_jsonl_picks_newest(tmp_path):

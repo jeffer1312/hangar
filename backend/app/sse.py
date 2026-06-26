@@ -85,14 +85,26 @@ async def merged_events(name: str, jsonl: str):
         # --session-id, depois fd aberto, depois btime, depois newest-by-mtime. Espelhar o endpoint
         # garante que o watcher dispare exatamente quando um reconnect mudaria de transcript.
         current = jsonl
+        pending = None       # candidato a nova resolucao, aguardando confirmar persistencia
+        pending_n = 0
         while True:
             await asyncio.sleep(2)
             try:
                 live = next((s.jsonl for s in _registry.list() if s.name == name), None)
             except Exception:
                 live = None
-            if live and live != current:
+            if not live or live == current:
+                pending = None
+                pending_n = 0
+                continue
+            # Mudou: exige PERSISTIR por >=2 polls antes de resetar. Filtra flips transitorios (a
+            # resolucao oscila quando o processo com --session-id some por 1 ciclo) que limpavam o chat.
+            pending_n = pending_n + 1 if live == pending else 1
+            pending = live
+            if pending_n >= 2:
                 current = live
+                pending = None
+                pending_n = 0
                 queue.put_nowait(("__reset__", live))
 
     async def preview_pump():
