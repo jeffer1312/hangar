@@ -20,14 +20,17 @@ running **Agent(...)** subagents and **Workflow** runs (mirrors what the termina
   whether to show tool-use stream inline in the chat as collapsible cards.
 
 ## 2. Attachments — send + view images (audio later)
+- **Send images** — ✅ DONE (2026-06-25): `POST /api/sessions/{name}/upload` (raw bytes) saves to
+  `<cwd>/.claude-pocket-uploads/`; the composer has a 📎 picker + paste-into-textarea; on send it
+  uploads and sends `"<caption>\n📎 imagem: <path>"` and the assistant reads the path. Lazy
+  (upload-on-send, no orphan if cancelled).
+- **CLEANUP / retention (deferred — needed):** uploaded images pile up in
+  `.claude-pocket-uploads/` forever. Add a retention sweep — on backend startup (and/or periodic),
+  delete files older than N days (e.g. 7d) or keep the last N. Simple, no extra endpoint. (User
+  explicitly flagged this; deferred but must happen.)
 - **View images** that appear in the chat: the transcript can carry image content blocks
   (user-attached or tool results); render them as inline image bubbles (currently only text).
-- **Send images** from the phone to claude: pick/take a photo → deliver it to the live
-  session. Mechanism is the open question — claude reads files by path, so the backend likely
-  needs to save the upload to the session cwd (or a temp dir) and inject a reference
-  (`send-keys` a path / an `@file`), OR use claude's image-paste path if drivable. Needs a
-  backend upload endpoint (auth, size limit, allowed dir) + a frontend picker (camera /
-  library, getUserMedia — secure context via Tailscale already in place).
+  Also: persist/serve the uploaded images so they survive reload (v1 only shows the path marker).
 - **Audio** — deferred (the user will tackle later): voice input/output.
 - General **attachments** (files) — same upload-to-cwd + reference pattern as images.
 
