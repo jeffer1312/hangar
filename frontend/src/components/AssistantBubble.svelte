@@ -18,62 +18,39 @@
   }
 </script>
 
-<div class="bubble-wrap">
-  <div class="bubble">
-    <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-    {@html html}
-  </div>
+<div class="assistant-msg">
+  <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+  <div class="prose">{@html html}</div>
   {#if ts}
     <span class="ts">{formatTime(ts)}</span>
   {/if}
 </div>
 
 <style>
-  .bubble-wrap {
+  /* Mensagem do assistente SEM bubble: texto full-width (estilo Claude iOS), mais legivel. */
+  .assistant-msg {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
     animation: bubble-in 220ms var(--ease-out) both;
-    margin-bottom: var(--space-3);
+    margin-bottom: var(--space-4);
   }
 
-  .bubble {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
+  .prose {
     color: var(--text-primary);
-    max-width: 88%;
-    padding: var(--space-3) var(--space-4);
-    border-radius: 4px 18px 18px 18px;
+    max-width: 100%;
     word-break: break-word;
     font-size: var(--text-base);
-    line-height: 1.55;
+    line-height: 1.6;
   }
 
-  .bubble :global(p) {
-    margin: 0;
-  }
+  .prose :global(p) { margin: 0; }
+  .prose :global(p + p) { margin-top: var(--space-3); }
+  .prose :global(br) { display: block; content: ''; margin-top: var(--space-2); }
+  .prose :global(strong) { font-weight: 600; color: var(--text-primary); }
+  .prose :global(em) { font-style: italic; color: var(--text-secondary); }
 
-  .bubble :global(p + p) {
-    margin-top: var(--space-2);
-  }
-
-  .bubble :global(br) {
-    display: block;
-    content: '';
-    margin-top: var(--space-2);
-  }
-
-  .bubble :global(strong) {
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-
-  .bubble :global(em) {
-    font-style: italic;
-    color: var(--text-secondary);
-  }
-
-  .bubble :global(code) {
+  .prose :global(code) {
     font-family: var(--font-mono);
     font-size: 0.875em;
     background: var(--bg-elevated);
@@ -82,7 +59,7 @@
     color: var(--text-primary);
   }
 
-  .bubble :global(pre) {
+  .prose :global(pre) {
     background: var(--bg-elevated);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
@@ -92,7 +69,7 @@
     -webkit-overflow-scrolling: touch;
   }
 
-  .bubble :global(pre code) {
+  .prose :global(pre code) {
     font-family: var(--font-mono);
     font-size: var(--text-sm);
     line-height: 1.3;
@@ -105,6 +82,5 @@
     font-size: var(--text-xs);
     color: var(--text-muted);
     margin-top: var(--space-1);
-    padding-left: var(--space-1);
   }
 </style>
