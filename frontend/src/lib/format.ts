@@ -15,6 +15,37 @@ export function basename(path: string): string {
   return parts.length ? parts[parts.length - 1] : path;
 }
 
+// Anexos de arquivo por CAMINHO citado na conversa (sua ou minha msg). v1 = só "preview-worthy"
+// (mídia + html + pdf); texto/código fora de proposito pra nao virar ruido (caminho de codigo
+// aparece toda hora na prosa). O backend so serve o que esta no transcript (consentido).
+export type FileKind = 'image' | 'video' | 'audio' | 'html' | 'pdf';
+const EXT_KIND: Record<string, FileKind> = {
+  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', svg: 'image', avif: 'image', bmp: 'image',
+  mp4: 'video', mov: 'video', webm: 'video', mkv: 'video', m4v: 'video', avi: 'video',
+  mp3: 'audio', wav: 'audio', m4a: 'audio', ogg: 'audio', flac: 'audio', aac: 'audio',
+  html: 'html', htm: 'html',
+  pdf: 'pdf',
+};
+const _EXTS = Object.keys(EXT_KIND).join('|');
+// Caminho absoluto (/ ou ~/) — lazy ate a 1a extensao conhecida, seguida de fim/espaco/delimitador
+// (pega path COM espaco tipo "/a/WhatsApp Video….mp4"). Global + case-insensitive.
+const _PATH_RE = new RegExp(`(~?/[^\\n]*?\\.(${_EXTS}))(?=$|[\\s)\\]"'\`,])`, 'gi');
+
+export interface FileRef { path: string; name: string; kind: FileKind; }
+
+export function parseFilePaths(text: string): FileRef[] {
+  const out: FileRef[] = [];
+  const seen = new Set<string>();
+  for (const m of text.matchAll(_PATH_RE)) {
+    const path = m[1];
+    if (seen.has(path)) continue;
+    seen.add(path);
+    const kind = EXT_KIND[m[2].toLowerCase()];
+    out.push({ path, name: path.split('/').filter(Boolean).pop() || path, kind });
+  }
+  return out;
+}
+
 // Detecta o(s) marcador(es) de imagem nas mensagens do usuario:
 // "<legenda> — 📎 imagem: <path1> 📎 imagem: <path2> ..." (1+ imagens, ou sem legenda).
 // Devolve { caption, filenames } ou null. Cada filename e o basename do path (sem espaco,

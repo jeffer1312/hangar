@@ -19,6 +19,13 @@ export function transcriptImageUrl(name: string, id: string, idx: number): strin
   return `${getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/transcript-image/${encodeURIComponent(id)}/${idx}?token=${encodeURIComponent(t)}`;
 }
 
+// URL pra servir um arquivo CITADO na conversa (video/html/pdf/img por caminho). `?token` p/ <img>/
+// <video>/<iframe> (sem header). O backend so serve se o path estiver no transcript da sessao.
+export function fileUrl(name: string, path: string): string {
+  const t = getToken() ?? '';
+  return `${getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}&token=${encodeURIComponent(t)}`;
+}
+
 function authHeaders(): HeadersInit {
   const token = getToken();
   if (!token) return {};

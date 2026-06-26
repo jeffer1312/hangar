@@ -7,7 +7,8 @@
   import OptionButtons from './OptionButtons.svelte';
   import Spinner from './Spinner.svelte';
   import ImageBubble from './ImageBubble.svelte';
-  import { parseImageMessage } from '../lib/format';
+  import FileAttachment from './FileAttachment.svelte';
+  import { parseImageMessage, parseFilePaths } from '../lib/format';
   import { getBaseUrl } from '../lib/auth';
   import { transcriptImageUrl } from '../lib/api';
 
@@ -118,9 +119,10 @@
           <ImageBubble caption={img.caption} srcs={img.filenames.map((f) => `${getBaseUrl()}/api/sessions/${encodeURIComponent(sessionName)}/uploads/${encodeURIComponent(f)}`)} />
         {:else}
           <UserBubble text={ev.text} ts={ev.ts} />
+          {#if ev.text}{@const fr = parseFilePaths(ev.text)}{#if fr.length}<FileAttachment {sessionName} refs={fr} />{/if}{/if}
         {/if}
       {:else if ev.kind === 'assistant_msg' && ev.text}
-        <AssistantBubble text={ev.text} ts={ev.ts} />
+        <AssistantBubble text={ev.text} ts={ev.ts} {sessionName} />
       {:else if ev.kind === 'tool_use'}
         <ToolCard event={ev} result={toolResults.get(ev.tool_use_id ?? '') ?? null} />
       {/if}
