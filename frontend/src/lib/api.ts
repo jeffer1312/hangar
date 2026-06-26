@@ -8,6 +8,7 @@ import type {
   FsScanError,
   WorkflowSummary,
   WorkflowDetail,
+  WorkflowAgentDetail,
 } from './types';
 
 function authHeaders(): HeadersInit {
@@ -75,6 +76,10 @@ export function getWorkflows(name: string): Promise<WorkflowSummary[]> {
 
 export function getWorkflow(name: string, runId: string): Promise<WorkflowDetail> {
   return apiFetch<WorkflowDetail>(`/api/sessions/${encodeURIComponent(name)}/workflows/${encodeURIComponent(runId)}`);
+}
+
+export function getWorkflowAgent(name: string, runId: string, agentId: string): Promise<WorkflowAgentDetail> {
+  return apiFetch<WorkflowAgentDetail>(`/api/sessions/${encodeURIComponent(name)}/workflows/${encodeURIComponent(runId)}/agents/${encodeURIComponent(agentId)}`);
 }
 
 // Raízes liberadas do scanner (chips no topo do FolderScanner).

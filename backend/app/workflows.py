@@ -81,6 +81,7 @@ def _live_agents(rundir: Path) -> list[dict]:
     agents = []
     for aid in started:
         agents.append({
+            "agentId": aid,
             "label": aid[:8],
             "phaseTitle": None,
             "state": "done" if aid in resulted else "progress",
@@ -162,6 +163,7 @@ def get_workflow(jsonl: str, run_id: str) -> dict | None:
             if row.get("type") != "workflow_agent":
                 continue
             agents.append({
+                "agentId": row.get("agentId"),
                 "label": row.get("label"),
                 "phaseTitle": row.get("phaseTitle"),
                 "state": row.get("state"),
@@ -198,3 +200,82 @@ def get_workflow(jsonl: str, run_id: str) -> dict | None:
             "agents": agents,
         }
     return None
+
+
+def get_agent(jsonl: str, run_id: str, agent_id: str) -> dict | None:
+    """Detalhe de um agente do workflow: stats (do completion json) + prompt (1ª msg do transcript)
+    + resultado COMPLETO (evento `result` do journal.jsonl) + contagem de ferramentas usadas."""
+    sd = _session_dir(jsonl)
+    rundir = sd / "subagents" / "workflows" / run_id
+
+    # Stats/previews do completion json (workflowProgress), se já concluído.
+    meta: dict = {}
+    cf = sd / "workflows" / f"{run_id}.json"
+    if cf.is_file():
+        try:
+            o = json.loads(cf.read_text(encoding="utf-8", errors="replace"))
+            for row in (o.get("workflowProgress") or []):
+                if row.get("type") == "workflow_agent" and row.get("agentId") == agent_id:
+                    meta = row
+                    break
+        except (OSError, json.JSONDecodeError, ValueError):
+            pass
+
+    # Resultado COMPLETO (estruturado) do journal.jsonl (evento result do agente).
+    result = None
+    jf = rundir / "journal.jsonl"
+    if jf.is_file():
+        try:
+            for line in jf.read_text(encoding="utf-8", errors="replace").splitlines():
+                try:
+                    ev = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if ev.get("type") == "result" and ev.get("agentId") == agent_id:
+                    r = ev.get("result")
+                    result = r if isinstance(r, str) else json.dumps(r, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
+
+    # Prompt (1ª msg user) + contagem de tools do transcript do agente.
+    prompt = None
+    tools: dict[str, int] = {}
+    af = rundir / f"agent-{agent_id}.jsonl"
+    has_transcript = af.is_file()
+    if has_transcript:
+        try:
+            for line in af.read_text(encoding="utf-8", errors="replace").splitlines():
+                try:
+                    r = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                c = (r.get("message") or {}).get("content")
+                if r.get("type") == "user" and prompt is None:
+                    if isinstance(c, str):
+                        prompt = c
+                    elif isinstance(c, list):
+                        prompt = " ".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
+                if r.get("type") == "assistant" and isinstance(c, list):
+                    for b in c:
+                        if isinstance(b, dict) and b.get("type") == "tool_use":
+                            n = b.get("name") or "?"
+                            tools[n] = tools.get(n, 0) + 1
+        except OSError:
+            pass
+
+    if not has_transcript and not meta:
+        return None
+
+    return {
+        "agentId": agent_id,
+        "label": meta.get("label") or agent_id[:8],
+        "phaseTitle": meta.get("phaseTitle"),
+        "state": meta.get("state"),
+        "model": meta.get("model"),
+        "tokens": meta.get("tokens") or 0,
+        "durationMs": meta.get("durationMs") or 0,
+        "toolCalls": meta.get("toolCalls") or sum(tools.values()),
+        "prompt": prompt or meta.get("promptPreview"),
+        "result": result or meta.get("resultPreview"),
+        "tools": [{"name": n, "count": c} for n, c in tools.items()],
+    }

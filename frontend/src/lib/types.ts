@@ -53,6 +53,7 @@ export interface WorkflowSummary {
 }
 
 export interface WorkflowAgent {
+  agentId: string | null;
   label: string | null;
   phaseTitle: string | null;
   state: string | null; // done | error | progress
@@ -63,6 +64,20 @@ export interface WorkflowAgent {
   lastToolName: string | null;
   lastToolSummary: string | null;
   resultPreview: string | null;
+}
+
+export interface WorkflowAgentDetail {
+  agentId: string;
+  label: string;
+  phaseTitle: string | null;
+  state: string | null;
+  model: string | null;
+  tokens: number;
+  durationMs: number;
+  toolCalls: number;
+  prompt: string | null;
+  result: string | null;
+  tools: { name: string; count: number }[];
 }
 
 export interface WorkflowDetail {
