@@ -41,6 +41,8 @@ def _descendant_pids(root: int) -> list[int]:
 
 def _open_jsonl(pid: int, projects_dir: Path) -> Optional[str]:
     # 1o fd aberto apontando pra um *.jsonl dentro do projects_dir (= o transcript ativo do claude).
+    # NOTA: o claude NAO segura esse fd em idle (abre/escreve/fecha) -> quase sempre None. Mantido so
+    # como sinal extra confiavel QUANDO presente; a resolucao real vem do --session-id do cmdline.
     fddir = f"/proc/{pid}/fd"
     try:
         fds = os.listdir(fddir)
@@ -57,37 +59,79 @@ def _open_jsonl(pid: int, projects_dir: Path) -> Optional[str]:
     return None
 
 
+# session-id (uuid) na linha de comando do claude: `--session-id <uuid>` / `--session-id=<uuid>` /
+# `--resume <uuid>`. Este e o sinal AUTORITATIVO e ESTAVEL (vive no /proc/PID/cmdline pela vida do
+# processo, inclusive em idle) -> o jsonl da sessao e <uuid>.jsonl. So casa uuid de verdade pra nao
+# pescar argumento de outra flag.
+_SID_RE = re.compile(
+    r"--(?:session-id|resume)[ =]"
+    r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+)
+
+
+def _session_id_from_cmdline(cmdline: str) -> Optional[str]:
+    m = _SID_RE.search(cmdline)
+    return m.group(1) if m else None
+
+
+def _cmdline(pid: int) -> str:
+    # cmdline crua do processo (args separados por NUL -> espaco).
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            return fh.read().replace(b"\x00", b" ").decode(errors="replace")
+    except OSError:
+        return ""
+
+
 class SessionRegistry:
     def __init__(self, projects_dir: Path | None = None):
         self.projects_dir = Path(projects_dir or settings.projects_dir)
 
     def resolve_jsonl(self, cwd: str) -> Optional[str]:
-        # FALLBACK por cwd: jsonl mais recente do dir do projeto. So usado quando o /proc falha (sem
-        # claude rodando, sem permissao). NAO confiavel com varias sessoes no mesmo cwd -> por isso o
-        # resolve_via_proc vem primeiro.
+        # FALLBACK por cwd: jsonl mais recente do dir do projeto. So usado quando nao ha --session-id
+        # nem fd aberto. NAO confiavel com varias sessoes no mesmo cwd (colide) -> por isso o
+        # cmdline --session-id (em resolve()) vem primeiro.
         proj = self.projects_dir / sanitize_cwd(cwd)
         if not proj.is_dir():
             return None
         files = sorted(proj.glob("*.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True)
         return str(files[0]) if files else None
 
-    def resolve_via_proc(self, name: str) -> Optional[str]:
-        # AUTORITATIVO: o .jsonl que o processo claude DESTA sessao tem aberto. Resolve o bug de sessao
-        # nova trazer dados de outro transcript (newest-by-mtime pegava o jsonl errado quando varias
-        # sessoes compartilham o cwd). Serve app-criada E manual.
+    def resolve(self, name: str, cwd: str) -> Optional[str]:
+        # Mapeia uma sessao tmux -> o jsonl CERTO. So sinais CONFIAVEIS: o --session-id do cmdline e o fd
+        # aberto. Sem eles (manual `claude` puro), cai no newest-by-mtime, que PODE colidir com varias
+        # sessoes no mesmo cwd -> mostra a conversa ATIVA pras duas (ambiguo, mas conteudo real). NAO
+        # usar heuristica de btime: jsonls de sessoes transitorias caem na mesma janela de tempo e a
+        # atribuicao sai ERRADA (apontava pra transcript vazio/de outra sessao). Determinismo so com
+        # --session-id -> usar o "+" do app, ou `claude --session-id <uuid>` no manual.
         pid = tmux.pane_pid(name)
-        if pid is None:
-            return None
-        for p in _descendant_pids(pid):
-            j = _open_jsonl(p, self.projects_dir)
-            if j:
-                return j
-        return None
+        if pid is not None:
+            pids = _descendant_pids(pid)
+            # 1. cmdline --session-id (DETERMINISTICO; app-created sempre, manual com flag). Vale mesmo
+            #    sem o arquivo existir ainda (sessao recem-criada) -> o tailer segue quando aparecer.
+            #    PULA os processos auxiliares da arvore do claude, que carregam um --session-id PROPRIO
+            #    (transitorio) != o do REPL principal -> sem isto resolvia pro jsonl errado/inexistente:
+            #      - `claude daemon` + bg-pty-host/spare (sockets em /tmp/cc-daemon-*): contem "daemon"/"--bg-"
+            #      - SUB-AGENTES (`--agent`): cada Task/subagent roda seu proprio session-id.
+            for p in pids:
+                cmd = _cmdline(p)
+                if "daemon" in cmd or "--bg-" in cmd or "--agent" in cmd:
+                    continue
+                sid = _session_id_from_cmdline(cmd)
+                if sid:
+                    return str(self.projects_dir / sanitize_cwd(cwd) / f"{sid}.jsonl")
+            # 2. fd aberto (confiavel quando presente; raro, o claude nao segura em idle).
+            for p in pids:
+                j = _open_jsonl(p, self.projects_dir)
+                if j:
+                    return j
+        # 3. fallback: mais recente por mtime (ambiguo com varias sessoes bare no mesmo cwd).
+        return self.resolve_jsonl(cwd)
 
     def list(self) -> list[SessionInfo]:
         out = []
         for s in tmux.list_sessions():
-            jsonl = self.resolve_via_proc(s["name"]) or self.resolve_jsonl(s["cwd"])
+            jsonl = self.resolve(s["name"], s["cwd"])
             out.append(SessionInfo(name=s["name"], cwd=s["cwd"], jsonl=jsonl))
         return out
 
