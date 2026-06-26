@@ -163,7 +163,9 @@
   .pending-bubble {
     display: flex;
     flex-direction: column;
-    align-items: flex-end;
+    /* align-items default (stretch): o UserBubble (.bubble-wrap) ocupa a largura e alinha o balao
+       a direita sozinho; a ImageBubble usa align-self:flex-end. flex-end aqui encolheria o
+       bubble-wrap pro min-content -> palavra curta ("sim") quebrava letra a letra. */
     opacity: 0.5;
   }
   /* Solidificado: o Claude ja consumiu a fila -> vira bubble normal (sem atenuar). */
@@ -176,7 +178,8 @@
   .queued-row {
     display: flex;
     flex-direction: column;
-    align-items: flex-end;
+    /* stretch (default): bubble de texto ocupa a largura e alinha sozinho; imagem usa align-self.
+       flex-end encolhia o bubble pro min-content -> "sim" quebrava letra a letra. */
     transition: opacity 240ms var(--ease-out);
   }
   .queued-row.dim {
