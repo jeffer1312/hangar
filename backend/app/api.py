@@ -94,6 +94,18 @@ def workflow_detail(name: str, run_id: str):
     return wf
 
 
+@app.get("/api/sessions/{name}/workflows/{run_id}/agents/{agent_id}", dependencies=[Depends(require_auth)])
+def workflow_agent_detail(name: str, run_id: str, agent_id: str):
+    jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
+    if not jsonl:
+        raise HTTPException(404, "session or transcript not found")
+    from app.workflows import get_agent
+    a = get_agent(jsonl, run_id, agent_id)
+    if a is None:
+        raise HTTPException(404, "agent not found")
+    return a
+
+
 @app.get("/api/sessions/{name}/events", dependencies=[Depends(require_auth)])
 async def events(name: str):
     jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
