@@ -225,6 +225,7 @@
       {events}
       {stateEvent}
       {pending}
+      {sessionName}
       onSelectOption={handleSelect}
       onCancel={handleInterrupt}
     />
