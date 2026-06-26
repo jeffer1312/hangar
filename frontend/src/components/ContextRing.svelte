@@ -1,11 +1,10 @@
 <script lang="ts">
-  // Codex-style context-usage ring for the composer footer. Glanceable; exact tokens come
-  // later via a tap popover. Color shifts only at danger thresholds (functional, not decoration).
+  // Ring de uso de contexto: a % vai DENTRO do circulo (centralizada). Cor muda so nos limiares.
   interface Props {
     pct?: number | null;
     size?: number;
   }
-  let { pct = null, size = 22 }: Props = $props();
+  let { pct = null, size = 26 }: Props = $props();
 
   const R = 9;
   const C = 2 * Math.PI * R;
@@ -36,19 +35,19 @@
         transform="rotate(-90 12 12)"
       />
     {/if}
+    <text x="12" y="12.5" class="ring-text" text-anchor="middle" dominant-baseline="middle">
+      {known ? Math.round(value) : '—'}
+    </text>
   </svg>
-  <span class="label">{known ? Math.round(value) + '%' : '—'}</span>
 </div>
 
 <style>
   .ring {
     display: inline-flex;
     align-items: center;
-    gap: var(--space-1);
-  }
-  svg {
     flex-shrink: 0;
   }
+  svg { flex-shrink: 0; }
   .track {
     fill: none;
     stroke: var(--border-default);
@@ -58,18 +57,18 @@
     fill: none;
     stroke-width: 3;
     stroke-linecap: round;
-    /* the one deliberately slow, storytelling motion: context filling */
     transition: stroke-dashoffset 600ms var(--ease-out), stroke 300ms ease;
   }
-  .label {
+  /* % dentro do anel: numero (sem '%' pra caber); o anel ja diz que e percentual. */
+  .ring-text {
     font-family: var(--font-mono);
-    font-size: var(--text-xs);
-    font-variant-numeric: tabular-nums;
-    color: var(--text-secondary);
+    font-size: 9px;
+    font-weight: 600;
+    fill: var(--text-secondary);
   }
   .tone-ok .arc { stroke: var(--accent); }
   .tone-warn .arc { stroke: var(--warning); }
   .tone-error .arc { stroke: var(--error); }
-  .tone-warn .label { color: var(--warning); }
-  .tone-error .label { color: var(--error); }
+  .tone-warn .ring-text { fill: var(--warning); }
+  .tone-error .ring-text { fill: var(--error); }
 </style>
