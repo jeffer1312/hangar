@@ -38,6 +38,8 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
+    min-width: 0;        /* cadeia flex encolhe -> filhos (chip de arquivo) truncam, nao estouram */
+    max-width: 100%;
     animation: bubble-in 220ms var(--ease-out) both;
     margin-bottom: var(--space-4);
   }
