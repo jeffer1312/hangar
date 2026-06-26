@@ -154,13 +154,34 @@
   }
 
   // ── Anexo: escolher / remover ──────────────────────────────────────────────
-  function onPickFile(e: Event) {
-    const f = (e.target as HTMLInputElement).files?.[0];
-    if (!f) return;
+  // Define o anexo (do picker ou do paste): troca o preview e zera o erro.
+  function setAttachment(f: File) {
     if (attachmentUrl) URL.revokeObjectURL(attachmentUrl);
     attachment = f;
     attachmentUrl = URL.createObjectURL(f);
     attachError = '';
+  }
+
+  function onPickFile(e: Event) {
+    const f = (e.target as HTMLInputElement).files?.[0];
+    if (f) setAttachment(f);
+  }
+
+  // Colar imagem na textarea (desktop garante; iOS Safari e instavel). Pega o 1o item de
+  // imagem do clipboard e joga no mesmo fluxo do anexo.
+  function onPaste(e: ClipboardEvent) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const it of items) {
+      if (it.kind === 'file' && it.type.startsWith('image/')) {
+        const f = it.getAsFile();
+        if (f) {
+          e.preventDefault();
+          setAttachment(f);
+        }
+        return;
+      }
+    }
   }
 
   function removeAttachment() {
@@ -244,6 +265,7 @@
       rows={1}
       oninput={handleInput}
       onkeydown={handleKeydown}
+      onpaste={onPaste}
       aria-label="Mensagem"
     ></textarea>
 
