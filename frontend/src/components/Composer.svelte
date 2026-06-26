@@ -22,7 +22,7 @@
     sessionName: string;
     sessionState: State;
     status: StatusFields | null;
-    onSend: (text: string) => void;
+    onSend: (text: string) => Promise<void> | void;
     onCommand: (cmd: string) => void;
     onInterrupt: () => void;
     onExpandUsage: () => void;
@@ -61,8 +61,10 @@
   let fileInput: HTMLInputElement | undefined = $state();
   let uploading = $state(false);
   let attachError = $state('');
+  let sending = $state(false);
+  let sendError = $state('');
 
-  const canSend = $derived((inputText.trim().length > 0 || attachment !== null) && !uploading);
+  const canSend = $derived((inputText.trim().length > 0 || attachment !== null) && !uploading && !sending);
   const isWorking = $derived(sessionState === 'working');
 
   // ── Pill de modelo + esforco: abre o ModelEffortSheet (aplica via endpoint dedicado) ──
@@ -143,6 +145,7 @@
   }
 
   function handleInput() {
+    sendError = '';
     autoGrow();
   }
 
@@ -195,6 +198,7 @@
   async function submit() {
     if (!canSend) return;
     const caption = inputText.trim();
+    sendError = '';
     if (attachment) {
       uploading = true;
       attachError = '';
@@ -203,21 +207,29 @@
         // Uma linha so: o backend rejeita '\n' (control char) no send-keys -> evita o 500 que
         // comia a msg com legenda. O path nao tem espaco (nome gerado), entao da pra ler o trecho.
         const msg = (caption ? caption + ' — ' : '') + '📎 imagem: ' + path;
+        await onSend(msg);                 // espera o /input; so limpa se foi
         inputText = '';
         if (textareaEl) textareaEl.style.height = 'auto';
         removeAttachment();
-        onSend(msg);
       } catch (err) {
-        attachError = err instanceof Error ? err.message : 'Falha no upload';
+        // upload OU envio falhou -> mantem a foto e o texto, mostra o erro.
+        attachError = err instanceof Error ? err.message : 'Falha no envio';
       } finally {
         uploading = false;
       }
       return;
     }
-    const msg = caption;
-    inputText = '';
-    if (textareaEl) textareaEl.style.height = 'auto';
-    onSend(msg);
+    // texto puro: espera o envio; so limpa no sucesso, mostra erro na falha.
+    sending = true;
+    try {
+      await onSend(caption);
+      inputText = '';
+      if (textareaEl) textareaEl.style.height = 'auto';
+    } catch (err) {
+      sendError = err instanceof Error ? err.message : 'Falha no envio';
+    } finally {
+      sending = false;
+    }
   }
 
   // Auto-focus quando ocioso
@@ -270,6 +282,10 @@
       onpaste={onPaste}
       aria-label="Mensagem"
     ></textarea>
+
+    {#if sendError}
+      <div class="send-error" role="alert">{sendError}</div>
+    {/if}
 
     <div class="control-row">
       <div class="control-left">
@@ -545,4 +561,10 @@
   }
   .attach-btn:active { background: var(--bg-hover); }
   .attach-glyph { font-size: var(--text-lg); line-height: 1; }
+
+  .send-error {
+    font-size: var(--text-xs);
+    color: var(--error);
+    padding: 0 var(--space-1);
+  }
 </style>
