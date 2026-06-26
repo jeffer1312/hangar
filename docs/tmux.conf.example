@@ -1,0 +1,37 @@
+# Reference ~/.tmux.conf for running Claude Code (and claude-pocket) in tmux.
+# See tmux-truecolor-setup.md for why these matter.
+
+# --- ESSENTIAL for correct Claude Code colors -------------------------------
+# TERM must NOT start with "tmux"/"screen", or Claude paints a teal fallback bg.
+set -g default-terminal "xterm-256color"
+set -ga terminal-overrides ",xterm-kitty:Tc,xterm-256color:Tc"
+set -ga terminal-features ",xterm-kitty:RGB,xterm-256color:RGB"
+# tmux doesn't propagate COLORTERM by default; without it Claude starts at 256-color.
+set-environment -g COLORTERM truecolor
+# NOTE: also export COLORTERM=truecolor and CLAUDE_CODE_TMUX_TRUECOLOR=1 in your SHELL
+# rc (bash/zsh/fish) — the shell env is what actually fixes the in-tmux downgrade.
+
+# --- Terminal transparency (optional; lets a transparent terminal show through) ---
+set -g window-style 'bg=default'
+set -g window-active-style 'bg=default'
+
+# --- Personal preferences (optional; tweak to taste) ------------------------
+set -g status off          # hide the tmux status bar
+set -g mouse on            # wheel scrolls scrollback instead of cycling input
+
+# --- Session persistence across reboot (optional; needs TPM) ----------------
+# Lets claude-pocket sessions survive a reboot/OOM. Remove if you don't use TPM.
+# Easiest path: run ../scripts/tmux-persist-setup.sh — it clones these plugins AND
+# installs the systemd timer that actually drives the auto-save.
+set -g @plugin 'tmux-plugins/tpm'
+set -g @plugin 'tmux-plugins/tmux-resurrect'
+set -g @plugin 'tmux-plugins/tmux-continuum'
+set -g @resurrect-capture-pane-contents 'on'
+set -g @continuum-restore 'on'
+# save-interval '0' = continuum's own periodic save is OFF. With `status off` above,
+# continuum can't auto-save anyway (it hooks the status line). The systemd timer from
+# tmux-persist-setup.sh does the saving instead. If you keep the status bar ON, drop
+# the timer and set this to '15' for native continuum auto-save.
+set -g @continuum-save-interval '0'
+# Init TPM (keep at the very end)
+run '~/.tmux/plugins/tpm/tpm'
