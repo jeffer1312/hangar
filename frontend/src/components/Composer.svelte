@@ -366,8 +366,8 @@
 
 <style>
   .composer {
-    background: transparent;
-    padding: var(--space-2) var(--space-3) 0;
+    background: var(--bg-base);
+    padding: var(--space-2) var(--space-3) var(--space-3);
   }
 
   /* Card unico que reune status, textarea e controles. */
@@ -377,13 +377,15 @@
     gap: var(--space-2);
     max-width: 600px;
     margin: 0 auto;
-    background: rgba(24, 24, 27, 0.55);
+    /* Card de vidro fosco. Dock segue flex (sem overlap) pra nao desestabilizar o teclado;
+       o blur pega o fundo atras do dock — fica glassy sem o overlap que quebrava o layout. */
+    background: rgba(24, 24, 27, 0.6);
     backdrop-filter: blur(22px) saturate(180%);
     -webkit-backdrop-filter: blur(22px) saturate(180%);
     border: 1px solid rgba(255, 255, 255, 0.08);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
     border-radius: var(--radius-md);
-    padding: var(--space-3) var(--space-3) calc(var(--space-3) + env(safe-area-inset-bottom));
+    padding: var(--space-3);
   }
 
   /* ── Textarea (transparente dentro do card) ─────────────────────────────── */
