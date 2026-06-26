@@ -84,7 +84,9 @@
 {/if}
 
 <style>
-  .atts { display: flex; flex-wrap: wrap; gap: var(--space-1); margin-top: var(--space-2); }
+  /* max-width/min-width: a cadeia flex precisa poder encolher (min-width:auto default trava no
+     conteudo) -> sem isto o nome longo do chip estoura a largura e gera scroll horizontal no mobile. */
+  .atts { display: flex; flex-wrap: wrap; gap: var(--space-1); margin-top: var(--space-2); max-width: 100%; min-width: 0; }
 
   /* Miniatura pequena (igual ImageBubble): 96x96, tap abre em tela cheia. */
   .thumb-btn {
@@ -100,7 +102,7 @@
   .att-audio { width: 100%; max-width: 320px; }
 
   .att-chip {
-    display: inline-flex; align-items: center; gap: var(--space-2); max-width: 100%; height: 38px;
+    display: inline-flex; align-items: center; gap: var(--space-2); max-width: 100%; min-width: 0; height: 38px;
     padding: 0 var(--space-3); background: var(--bg-elevated); border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md); color: var(--text-primary); font-size: var(--text-sm);
   }

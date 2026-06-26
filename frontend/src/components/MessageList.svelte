@@ -165,6 +165,10 @@
   .message-list {
     flex: 1;
     overflow-y: scroll;
+    /* GUARDA: no mobile NUNCA pode rolar na horizontal (todo o conteudo desloca). Qualquer elemento
+       largo (chip de arquivo, token longo) fica clipado aqui; code-block tem seu proprio overflow-x
+       interno (continua rolavel dentro da box). */
+    overflow-x: hidden;
     overscroll-behavior-y: contain;
     scroll-behavior: auto;
     /* Anti-glitch de repaint do iOS (bloco PRETO no momentum scroll): fundo solido (area
@@ -185,6 +189,7 @@
     flex-direction: column;
     max-width: 600px;
     width: 100%;
+    min-width: 0;       /* permite os filhos encolherem em vez de empurrar a largura */
     margin: 0 auto;
   }
 
