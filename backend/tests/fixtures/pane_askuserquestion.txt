@@ -1,0 +1,44 @@
+
+● Você já tá testando sem saber: você fala comigo pelo app dirigindo esta sessão (teus textos chegam via POST no pane). Então o teste é direto — eu disparo uma AskUserQuestion agora, nesta sessão que você
+  já está vendo:
+
+  - Se aparecer como botões no app → a feature já funciona (era só o 401). Toca a opção.
+  - Se NÃO aparecer (fica só o composer normal) → o classificador não pegou o formato dela. Aí você aperta o Stop (manda ESC, cancela o picker) ou me manda qualquer texto dizendo "não apareceu" — e eu
+  ajusto o parser (state.py) pra reconhecer.
+
+  Disparando o teste:
+
+● User answered Claude's questions:
+  ⎿  · TESTE — você está vendo isto como BOTÕES no app (não no terminal)? → nao vejo nd nem o input parecendo q ta tentando renderiza algo mas nao vejo nd
+
+● Importante: a AskUserQuestion não vira botões no app, mas o teu texto chegou (via free-text). Então: input passa, mas o classificador não extrai as opções dela. "Tentando renderizar e nada" = ele detecta
+  algo mas não acha o formato ❯ N..
+
+  Pra consertar o parser, preciso ver como ela renderiza no pane. Vou capturar em background enquanto disparo mais uma — você só digita qualquer coisa pra dispensar (não precisa acertar nada), que eu pego
+  o screenshot do pane e ajusto o state.py.
+
+  Ran 1 shell command
+
+● Captura rodando. Disparando o teste pra capturar o render — digita qualquer coisa pra dispensar:
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Captura
+
+Captura de formato — digita qualquer coisa pra dispensar (estou fotografando o pane).
+
+❯ 1. Opção Alpha
+     Opção de teste A — só pra render ter 2 itens.
+  2. Opção Bravo
+     Opção de teste B — ignora, digita qualquer coisa pra fechar.
+  3. Type something.
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+  6 tasks (5 done, 1 open)
+  ◻ P4.6: Verificação no aparelho
+  ✔ P4.1: RateChips.svelte (5h/7d)
+  ✔ P4.2: UsageSheet.svelte
+  ✔ P4.3: ConfirmSheet.svelte
+  ✔ P4.4: Spinner (renomeia ActivityBadge)
+   … +1 completed

@@ -30,5 +30,7 @@ def test_pairing_url_uses_public_url_when_set():
 
 def test_pairing_url_builds_from_bind_ip_and_front_port():
     # The QR points at the PWA front (front_port), not the API port.
-    s = Settings(lan_bind_ip="192.168.1.50", front_port=5173, auth_token="tok")
+    # public_url="" explicito: hermetico contra um backend/.env local que defina CP_PUBLIC_URL
+    # (senao o fallback por bind-ip nao seria exercitado).
+    s = Settings(lan_bind_ip="192.168.1.50", front_port=5173, auth_token="tok", public_url="")
     assert pairing_url(s) == "http://192.168.1.50:5173/?token=tok"

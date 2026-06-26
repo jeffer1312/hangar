@@ -12,6 +12,10 @@ running **Agent(...)** subagents and **Workflow** runs (mirrors what the termina
   `.../subagents/workflows/<runId>/` (journal.jsonl, agent-*.jsonl). Parse those for a live
   "Agents" panel (name, phase, state, tokens, elapsed). 
 - UI: a panel/sheet listing active agents/workflows with live status; tap to see detail.
+- **TodoWrite task list** (same panel): Claude Code renders a "N tasks (M done)" block with
+  ✔/◻ rows; surface it in the app too. Cleanest source = the **TodoWrite tool_use entries in
+  the transcript** (structured: subject + status), not the pane. Render a tasks panel with
+  progress. Batched here with agents/workflows (same "ambient activity" surface).
 - Open question: how much is reliably parseable from the transcript vs the workflow files;
   whether to show tool-use stream inline in the chat as collapsible cards.
 

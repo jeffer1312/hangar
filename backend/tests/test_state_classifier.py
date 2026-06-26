@@ -58,6 +58,36 @@ def test_real_fixtures():
     assert s2 == "awaiting_input" and opts2 and "proceed?" in (q2 or "")
 
 
+def test_askuserquestion_real_fixture():
+    """A AskUserQuestion (widget do assistente) capturada de verdade do pane: o classificador
+    tem que extrair a pergunta e as opcoes reais, escopadas ao box do picker."""
+    fx = Path(__file__).parent / "fixtures" / "pane_askuserquestion.txt"
+    state, _, question, options = classify(fx.read_text())
+    assert state == "awaiting_input"
+    assert "Captura de formato" in (question or "")
+    assert "Opção Alpha" in options
+    assert "Opção Bravo" in options
+
+
+def test_picker_options_exclude_scrollback_numbered_lines():
+    """Bug real: o classificador coletava TODA linha numerada do pane. Uma lista numerada no
+    scrollback (acima de um bullet) NAO pode vazar pras opcoes do picker."""
+    pane = (
+        "● Earlier I listed steps:\n"
+        "  1. first scrollback item\n"
+        "  2. second scrollback item\n"
+        "\n"
+        "● Now pick one:\n"
+        "   ❯ 1. Real Alpha\n"
+        "     2. Real Bravo\n"
+        "Enter to select · ↑/↓ to navigate · Esc to cancel\n"
+    )
+    state, _, _, options = classify(pane)
+    assert state == "awaiting_input"
+    assert options == ["Real Alpha", "Real Bravo"]
+    assert all("scrollback" not in o for o in options)
+
+
 @pytest.mark.asyncio
 async def test_monitor_emits_only_on_change():
     panes = iter([
