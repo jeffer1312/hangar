@@ -79,8 +79,13 @@ html {
 }
 
 body {
-  height: 100dvh;          /* dvh: acompanha a viewport dinâmica */
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   width: 100%;
+  height: 100dvh;          /* dvh: acompanha a viewport dinâmica */
   overflow: hidden;
   overscroll-behavior: none; /* sem rubber-band que rola a página no iOS */
   font-family: var(--font-ui);

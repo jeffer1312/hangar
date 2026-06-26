@@ -134,7 +134,6 @@
     function fit() {
       if (!screenEl || !vv) return;
       screenEl.style.height = vv.height + 'px';
-      screenEl.style.transform = `translateY(${vv.offsetTop}px)`;
     }
     function onFocusIn() {
       requestAnimationFrame(fit);
@@ -279,7 +278,6 @@
     flex-direction: column;
     height: 100dvh;          /* fallback; o JS sobrescreve com visualViewport.height */
     overflow: hidden;
-    transform-origin: top;
     position: relative;
   }
 
@@ -323,7 +321,6 @@
     left: 0;
     right: 0;
     z-index: 20;
-    padding-bottom: env(safe-area-inset-bottom);
   }
 
   /* Dead state footer */
