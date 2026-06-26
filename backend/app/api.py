@@ -1,5 +1,6 @@
+import re
 from fastapi import FastAPI, Depends, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
@@ -64,6 +65,36 @@ def kill_session(name: str):
     return {"ok": True}
 
 
+class RenameBody(BaseModel):
+    new: str
+
+
+@app.post("/api/sessions/{name}/rename", dependencies=[Depends(require_auth)])
+def rename_session(name: str, body: RenameBody):
+    from app import tmux
+    # tmux nao aceita espaco/./: no nome -> sanitiza. O transcript NAO depende do nome (resolve por
+    # /proc), entao renomear nao quebra o historico. Migra so o sidecar da fila (keyed por nome).
+    new = re.sub(r"[^A-Za-z0-9_-]", "-", body.new.strip()).strip("-")
+    if not new:
+        raise HTTPException(400, "nome invalido")
+    if not tmux.has_session(name):
+        raise HTTPException(404, "sessao nao encontrada")
+    if new == name:
+        return {"ok": True, "name": name}
+    if tmux.has_session(new):
+        raise HTTPException(409, "ja existe uma sessao com esse nome")
+    if not tmux.rename_session(name, new):
+        raise HTTPException(500, "falha ao renomear")
+    from app.pqueue import PromptQueue
+    try:
+        oq, nq = PromptQueue(name).path, PromptQueue(new).path
+        if oq.exists():
+            oq.replace(nq)
+    except OSError:
+        pass
+    return {"ok": True, "name": new}
+
+
 @app.get("/api/sessions/{name}/history", dependencies=[Depends(require_auth)])
 def history(name: str):
     jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
@@ -122,12 +153,22 @@ def input_prompt(name: str, body: InputBody):
         # send_prompt rejeita control chars (ex: '\n'). Sem isto virava 500 -> a msg sumia sem
         # feedback. Agora vira 400 limpo (o frontend mostra). (Multi-linha de verdade: backlog.)
         raise HTTPException(400, str(e))
-    # Registra na fila duravel (sidecar) APOS o envio dar certo: aparece como user_msg em ordem e
-    # persiste no reload; o merge dedup-a contra o transcript quando o Claude Code grava o prompt.
-    # Slash-commands (/clear etc) NAO entram — sao meta, nao viram bubble. Falha ao gravar a fila
-    # nao quebra o envio (a msg ja foi pro tmux).
-    if not body.text.lstrip().startswith("/"):
-        from app.pqueue import PromptQueue
+    from app.pqueue import PromptQueue
+    stripped = body.text.lstrip()
+    if stripped.startswith("/"):
+        # Slash-commands NAO entram na fila — sao meta, nao viram bubble. Excecao /clear: ele reinicia
+        # a sessao do Claude Code (novo session-id/transcript), mas a fila e keyed pelo NOME da sessao
+        # e sobreviveria -> entradas velhas nunca casariam com o transcript novo e virariam fantasma.
+        # Zera a fila junto do /clear pra ela seguir o ciclo da sessao.
+        if stripped[1:].split(maxsplit=1)[:1] == ["clear"]:
+            try:
+                PromptQueue(name).clear()
+            except OSError:
+                pass
+    else:
+        # Registra na fila duravel (sidecar) APOS o envio dar certo: aparece como user_msg em ordem e
+        # persiste no reload; o merge dedup-a contra o transcript quando o Claude Code grava o prompt.
+        # Falha ao gravar a fila nao quebra o envio (a msg ja foi pro tmux).
         try:
             PromptQueue(name).append(body.text)
         except OSError:
@@ -176,6 +217,21 @@ def serve_upload(name: str, filename: str):
     except UploadError as e:
         raise HTTPException(e.status, e.detail)
     return FileResponse(path)
+
+
+@app.get("/api/sessions/{name}/transcript-image/{uuid}/{idx}", dependencies=[Depends(require_auth)])
+def transcript_image(name: str, uuid: str, idx: int):
+    # Serve uma imagem colada no TERMINAL (base64 no .jsonl) sob demanda. Decodifica por uuid+idx.
+    jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
+    if not jsonl:
+        raise HTTPException(404, "session or transcript not found")
+    from app.transcript import get_transcript_image
+    got = get_transcript_image(jsonl, uuid, idx)
+    if got is None:
+        raise HTTPException(404, "image not found")
+    raw, media = got
+    # immutable: o conteudo de um uuid+idx nunca muda -> cache agressivo no cliente.
+    return Response(content=raw, media_type=media, headers={"Cache-Control": "max-age=31536000, immutable"})
 
 
 @app.post("/api/sessions/{name}/model-effort", dependencies=[Depends(require_auth)])

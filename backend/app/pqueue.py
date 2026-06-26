@@ -50,6 +50,22 @@ def _ts_of_line(line: str) -> float:
         return 0.0
 
 
+def _transcript_start_ts(jsonl: str) -> float:
+    # ts (epoch) da 1a linha COM timestamp do transcript = inicio da sessao atual. Toda entrada da
+    # fila mais antiga que isto pertence a uma sessao anterior (ex: pre-/clear, que cria transcript
+    # novo com novo session-id) e nao deve reaparecer como bubble. Le so ate achar o 1o ts (early
+    # return) pra nao varrer transcript gigante. 0.0 se nao houver ts -> sem poda (fallback seguro).
+    try:
+        with open(jsonl, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                ts = _ts_of_line(line)
+                if ts > 0:
+                    return ts
+    except OSError:
+        pass
+    return 0.0
+
+
 class PromptQueue:
     """Fila duravel de prompts por sessao (sidecar JSONL). Registra cada envio pra que msgs
     enfileiradas (mandadas com o Claude trabalhando) — que o Claude Code NEM sempre grava no
@@ -73,6 +89,13 @@ class PromptQueue:
         tmp.replace(self.path)
         return entry
 
+    def clear(self) -> None:
+        # Remove o sidecar inteiro. Usado quando /clear reinicia a sessao do Claude Code: as entradas
+        # pertencem ao transcript ANTIGO e nao devem reaparecer como bubble no transcript novo (a fila
+        # e keyed pelo NOME da sessao, que sobrevive ao /clear -> sem isto, viram fantasma).
+        self.path.unlink(missing_ok=True)
+        self.path.with_suffix(".jsonl.tmp").unlink(missing_ok=True)
+
     def load(self) -> list[dict]:
         if not self.path.exists():
             return []
@@ -87,10 +110,11 @@ class PromptQueue:
                 continue
         return out
 
-    async def follow(self) -> AsyncIterator[ChatEvent]:
+    async def follow(self, min_ts: float = 0.0) -> AsyncIterator[ChatEvent]:
         # Emite as entradas existentes e depois vigia novos appends, como user_msg sintetico.
         # Usa um set de ids ja vistos (o append reescreve o arquivo inteiro -> rastrear posicao
-        # quebraria; reload + dedup por id e simples e correto).
+        # quebraria; reload + dedup por id e simples e correto). min_ts: descarta entradas anteriores
+        # ao inicio da sessao atual (ex: pre-/clear) — espelha a poda do merged_history no live SSE.
         seen: set[str] = set()
 
         def emit_new() -> list[ChatEvent]:
@@ -100,6 +124,8 @@ class PromptQueue:
                 if not eid or eid in seen:
                     continue
                 seen.add(eid)
+                if min_ts and float(entry.get("ts") or 0.0) < min_ts:
+                    continue
                 evs.append(_entry_event(entry))
             return evs
 
@@ -118,11 +144,19 @@ def merged_history(name: str, jsonl: str) -> list[ChatEvent]:
     items: list[tuple[float, int, ChatEvent]] = []
     committed_lines: set[str] = set()
     prev_ts = 0.0
-    for i, line in enumerate(Path(jsonl).read_text(encoding="utf-8", errors="replace").splitlines()):
+    start_ts = 0.0  # 1o ts real do transcript = inicio da sessao atual (pra podar fila pre-/clear)
+    try:
+        raw = Path(jsonl).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        raw = ""  # sessao nova: jsonl ainda nao existe -> historico vazio (limpo), nao 500
+    for i, line in enumerate(raw.splitlines()):
         ev = parse_line(line)
         if ev is None:
             continue
-        ts = _ts_of_line(line) or prev_ts
+        line_ts = _ts_of_line(line)
+        if line_ts > 0 and start_ts == 0.0:
+            start_ts = line_ts
+        ts = line_ts or prev_ts
         prev_ts = ts
         items.append((ts, i, ev))
         if ev.kind == "user_msg" and ev.text:
@@ -137,6 +171,10 @@ def merged_history(name: str, jsonl: str) -> list[ChatEvent]:
         if not text or text in committed_lines:
             continue
         ts = float(entry.get("ts") or prev_ts)
+        # Poda: entrada anterior ao inicio da sessao atual e de uma sessao antiga (ex: pre-/clear, que
+        # cria transcript novo). Sem isto, nunca casaria com o transcript novo e viraria fantasma.
+        if start_ts and ts < start_ts:
+            continue
         items.append((ts, 10**9, _entry_event(entry)))
 
     items.sort(key=lambda x: (x[0], x[1]))

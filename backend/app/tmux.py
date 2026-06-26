@@ -41,6 +41,10 @@ def kill_session(name: str) -> None:
     _run(["tmux", "kill-session", "-t", name])
 
 
+def rename_session(old: str, new: str) -> bool:
+    return _run(["tmux", "rename-session", "-t", old, new]).returncode == 0
+
+
 def send_keys(name: str, keys: str, literal: bool = False) -> None:
     args = ["tmux", "send-keys", "-t", name]
     if literal:
@@ -50,6 +54,27 @@ def send_keys(name: str, keys: str, literal: bool = False) -> None:
     _run(args)
 
 
+def paste_text(name: str, text: str) -> None:
+    # Envia texto MULTI-LINHA pro pane via bracketed paste: set-buffer + paste-buffer -p. O `-p` faz a
+    # TUI (Ink) receber as quebras como newlines DENTRO do input (não submete cada linha). Buffer
+    # nomeado (não suja os paste-buffers do usuário) e `-d` apaga depois. Quem submete e o Enter (caller).
+    buf = "cp-prompt"
+    _run(["tmux", "set-buffer", "-b", buf, "--", text])
+    _run(["tmux", "paste-buffer", "-t", name, "-b", buf, "-p", "-d"])
+
+
 def capture_pane(name: str, lines: int = 200) -> str:
     cp = _run(["tmux", "capture-pane", "-p", "-t", name, "-S", f"-{lines}"])
     return cp.stdout
+
+
+def pane_pid(name: str) -> int | None:
+    # PID do processo raiz do pane (shell ou o proprio claude). Ponto de partida pra achar qual
+    # transcript .jsonl o claude da sessao tem aberto (resolucao autoritativa, nao newest-by-mtime).
+    cp = _run(["tmux", "list-panes", "-t", name, "-F", "#{pane_pid}"])
+    if cp.returncode != 0:
+        return None
+    for line in cp.stdout.splitlines():
+        if line.strip().isdigit():
+            return int(line.strip())
+    return None
