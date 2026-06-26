@@ -251,13 +251,16 @@
     tabindex="-1"
   />
   <div class="composer-card">
-    {#if typeof status?.costUsd === 'number'}
-      <div class="composer-top">
+    <div class="composer-top">
+      <button class="slash-btn" onclick={() => (commandSheetOpen = true)} aria-label="Comandos">
+        <span class="slash-glyph" aria-hidden="true">/</span>
+      </button>
+      {#if typeof status?.costUsd === 'number'}
         <button class="cost-chip" onclick={onExpandUsage} aria-label="Custo e uso">
           ${status.costUsd.toFixed(2)}
         </button>
-      </div>
-    {/if}
+      {/if}
+    </div>
 
     {#if attachment}
       <div class="attach-chip">
@@ -289,23 +292,16 @@
 
     <div class="control-row">
       <div class="control-left">
-        <ContextRing pct={status?.ctxPct ?? null} />
         <button
           class="model-pill"
           onclick={() => (sheetOpen = true)}
-          aria-label="Modelo e esforço de raciocínio"
+          aria-label="Modelo, esforço e contexto"
         >
-          {pillText}
+          <span class="pill-text">{pillText}</span>
+          <ContextRing pct={status?.ctxPct ?? null} />
         </button>
         <button class="attach-btn" onclick={() => fileInput?.click()} aria-label="Anexar imagem">
           <span class="attach-glyph" aria-hidden="true">📎</span>
-        </button>
-        <button
-          class="slash-btn"
-          onclick={() => (commandSheetOpen = true)}
-          aria-label="Comandos"
-        >
-          <span class="slash-glyph" aria-hidden="true">/</span>
         </button>
       </div>
 
@@ -419,19 +415,24 @@
   .model-pill {
     display: inline-flex;
     align-items: center;
-    height: 28px;
+    gap: var(--space-2);
+    height: 30px;
     min-height: 0;
-    padding: 0 var(--space-3);
+    padding: 0 var(--space-2) 0 var(--space-3);
     background: var(--accent-dim);
     border-radius: var(--radius-md);
     font-size: var(--text-xs);
     font-weight: 500;
     color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+  }
+
+  .pill-text {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 160px;
-    font-variant-numeric: tabular-nums;
+    max-width: 130px;
   }
 
   /* Botao [ / ]: abre o CommandSheet. Alvo de 44px, visual leve (so feedback no :active). */
@@ -477,10 +478,11 @@
     background: rgba(255, 69, 58, 0.08);
   }
 
-  /* Linha fina no topo do card: custo alinhado a direita, fora do control-row (libera o pill). */
+  /* Linha fina no topo do card: slash a esquerda, custo a direita (fora do control-row). */
   .composer-top {
     display: flex;
-    justify-content: flex-end;
+    align-items: center;
+    justify-content: space-between;
   }
 
   .cost-chip {
