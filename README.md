@@ -6,6 +6,8 @@ You leave `claude` running in a `tmux` session on your machine. claude-pocket ex
 
 > **Status:** Backend is complete and tested (41 passing tests). The Svelte PWA frontend is a working first cut. Network deployment (TLS + reverse proxy + firewall) is on the roadmap. Personal-use, single-user tool.
 
+> **Using it?** Step-by-step guide — pairing, Tailscale, install as PWA, every feature: **[docs/USAGE.md](docs/USAGE.md)**.
+
 ## Why
 
 The official remote options route through a vendor cloud. claude-pocket stays entirely on your own network: the phone talks to a small server on your machine, which talks to your already-running `claude`. Nothing leaves your LAN.
