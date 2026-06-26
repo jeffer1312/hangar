@@ -44,3 +44,18 @@ def save_upload(cwd: str, content: bytes, content_type: str | None) -> str:
         raise UploadError(400, "caminho invalido")
     Path(real_dest).write_bytes(content)
     return real_dest
+
+
+def resolve_upload(cwd: str, filename: str) -> str:
+    """Resolve <cwd>/.claude-pocket-uploads/<filename> com seguranca, pra servir o arquivo.
+    Rejeita filename com separador/.. (400) e arquivo inexistente (404)."""
+    if "/" in filename or "\\" in filename or ".." in filename or not filename:
+        raise UploadError(400, "filename invalido")
+    base = Path(os.path.realpath(cwd)) / UPLOAD_SUBDIR
+    real_base = os.path.realpath(base)
+    real = os.path.realpath(base / filename)
+    if real != os.path.join(real_base, filename):
+        raise UploadError(400, "caminho invalido")
+    if not os.path.isfile(real):
+        raise UploadError(404, "arquivo nao encontrado")
+    return real
