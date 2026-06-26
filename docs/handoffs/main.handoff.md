@@ -1,108 +1,73 @@
 ---
 branch: main
-saved_at: 2026-06-26T06:55:28-03:00
-saved_commit: 6d52cce6397984a4df89f8419696beed08500f1d
+saved_at: 2026-06-26T12:42:20-03:00
+saved_commit: 7bca67493bba233f2d658c1d37ba99b92b099a1f
 status: in_progress
 ---
 
 
 ## TL;DR
-claude-pocket (dirigir Claude Code do celular, dogfooding). Sessão grande de polish + features, tudo
-buildando (svelte-check 0 erros, vite build OK). Entregue: glass iOS, scroll dinâmico anti-glitch,
-multi-imagem, merge stop/send, ImageBubble (miniatura+lightbox portal), **fila durável no backend**
-(sidecar + 3ª fonte no SSE, dedup vs transcript, ordem por ts), filtro de inject de skill, **fila visual
-(atenua=na fila / acende=aceita)**, **multi-servidor/multi-PC (M)** e **K#3** (anti-preto). Backend
-REINICIADO 2x (fila + CORS ativos; CORS preflight OPTIONS=200 ACAO=*). Falta VERIFICAR no aparelho:
-K (preto no scroll, 3ª tentativa = desliga glass no scroll) e M cross-origin (server do trabalho).
+claude-pocket (dirigir Claude Code do celular + AGORA desktop). Sessão enorme de dogfooding. Tudo
+pushado (HEAD 7bca674), buildando (svelte-check 0 erros), backend reiniciado (pid 1458939, :8765).
+Entregue: polish mobile completo, **multi-PC cross-origin funcionando**, **painel de atividade +
+drill-in workflow→agente**, **shell desktop** (sidebar + chat largo, mobile intocado), **fix truecolor
+do tmux**. O pull deles (multi-server aggregated) foi integrado via stash/pop limpo.
 
 ## Task atual
-Polish + features via dogfooding. Código todo buildando. Aguardando confirmação no aparelho de: (1) K
-(bloco preto no scroll) resolvido; (2) fila durável (persiste + atenua/acende). Próxima feature pedida:
-multi-PC no app (casa + trabalho, mesma token, URLs tailscale diferentes).
+Acabou de sair o shell desktop (≥820px). Multi-PC OK. tmux truecolor aplicado + backend restartado.
+Próximo: validar o desktop no PC + (opcional) unificar a sidebar desktop com a visão agregada deles.
 
 ## Concluído nesta sessão
-(diff: 8 arquivos M + pqueue.py N; ~353 inserções. Não commitado ainda no momento deste save.)
-- Glass iOS no Composer (blur 30 + vibrancy + specular hairline + radius 18).
-- Scroll: padding da lista = altura REAL do dock (ResizeObserver), keyboard-safe (não dispara na anim).
-- Multi-imagem: composer N anexos, protocolo 1-linha "📎 imagem: p1 📎 imagem: p2", parser N, galeria.
-- Merge stop/send: 1 slot (working+vazio=stop; digitou/colou=send).
-- ImageBubble: miniatura no topo, legenda embaixo, clique=lightbox (portal pro <body>, escapa transform).
-- Pending/queued à direita (flex-end) — não cola na esquerda (cara de assistente).
-- Fila: reconcile por linha → solidify → **FILA DURÁVEL backend** (pqueue.py). Visual: atenua na fila,
-  acende no idle (= aceita). Persiste no reload.
-- Filtro inject skill (transcript.py dropa "Base directory for this skill:").
-- Bug K (preto scroll iOS): transform só com offsetTop>0; removeu -webkit-overflow-scrolling; bg sólido;
-  translateZ no scroller.
-- Backend reiniciado (pid novo, :8765) — fila durável no ar.
-- Fila VISUAL: msg da fila (`queued-`) atenua enquanto working, acende sólida no idle (= aceita).
-- **M — multi-servidor/multi-PC**: auth.ts vira lista de servers (id/label/baseUrl ABSOLUTO/token) +
-  ativo; migra o single-server; addServer/selectServer/removeServer/dropActiveServer. Login+SessionList
-  usam a API nova (baseUrl = origin absoluto). Switcher no menu da SessionList (lista + ✓ ativo + QR add
-  + remover). 401 dropa só o server ativo. Backend ganhou **CORS** (allow *, token-gated) pro app de uma
-  origem falar com backend de outra (API Bearer + SSE ?token). Trocar de server = window.location.reload.
-- **K#3** (preto no scroll, 3ª tentativa): transform-só-offsetTop>0 + bg sólido + translateZ + Composer
-  desliga `backdrop-filter` no scroll (onScrollActivity+timer). NÃO bastou.
-- **Painel de atividade** (frontend-only): lib/activity.ts folda TaskCreate/TaskUpdate (este build NÃO usa
-  TodoWrite!) + agentes (Agent bloqueante sem result=rodando); ActivitySheet (tarefas c/ progresso +
-  agentes) + botão no NavBar c/ badge. Filtro `<task-notification>` no transcript.py (meta vazando bubble).
-- **Workflow drill-in** (estilo /workflows do terminal): backend/app/workflows.py lê arquivos do run no
-  disco (wf_<runId>.json concluídos = workflowProgress[]; journal.jsonl vivos); endpoints GET /workflows e
-  /workflows/{runId}; ActivitySheet vira LISTA tappável → detalhe (fases + agentes c/ state/tokens/tempo/
-  preview). Verificado pela API (demo-ping 1ag, investigate-agents-panel 4ag).
-- **K#4** (preto AINDA persistia após K#3): removido o `translateZ(0)` do scroller (criava CAMADA que
-  renderiza PRETA sem backing -> por isso preto puro ignorando o bg) + GUARD no fit() (só escreve
-  height/transform quando MUDA — o vv 'scroll' thrashava no momentum). NÃO verificado no aparelho.
-- Backend reiniciado 4x no total (fila durável, CORS, filtro task-notification, endpoints de workflow).
+(git fcbafe1..7bca674 — muitos commits; ver `git log`)
+- Polish mobile: glass iOS, scroll dinâmico anti-glitch, multi-imagem, merge stop/send, lightbox(portal),
+  fila durável (atenua→acende), K 1→4 (preto no scroll iOS).
+- Filtros de meta no transcript: skill-inject + `<task-notification>` (vazavam como bubble).
+- Painel de atividade (lib/activity.ts: fold de TaskCreate/TaskUpdate + agents) + ActivitySheet; drill-in
+  de workflow (backend workflows.py lê os arquivos do run no disco) → fases+agentes → agente
+  (prompt + resultado completo + tools). 3 níveis.
+- Multi-PC: auth.ts multi-server + switcher; CORS no backend; vite `cors:false` + plugin apiCorsPreflight
+  (preflight OPTIONS); auth.py lê `?token` (SSE cross-origin); destravou o "não vejo minha msg".
+- Desktop (≥820px): App.svelte → DesktopShell (Sidebar + Chat largo); media queries 600→920 ADITIVAS.
+- tmux truecolor: ~/.tmux.conf (default-terminal xterm-256color, truecolor, status off, mouse), ~/.zshrc
+  + fish (n4dots) exports, backend tmux.py `new-session -e` (COLORTERM + CLAUDE_CODE_TMUX_TRUECOLOR).
+- Integração do pull deles (multi-server aggregated session list / picker-scope / hide system-reminder)
+  via `stash -u` → pull ff → pop (limpo) + fix do prop `servers` no CreateSessionSheet.
 
 ## Decisões
-- Fila NÃO injeta no transcript do Claude Code (ele é dono: race/corrupção, double-write). Sidecar próprio
-  + merge na LEITURA.
-- Msg enfileirada (sent while working) NEM sempre vira entrada no transcript do Claude Code — só idle-sends
-  viram prompt gravado (descoberto comparando o transcript vivo b9b88f0b). Por isso a fila própria é o
-  registro real; sintético dedup-a contra o transcript quando o Claude grava.
-- Queue grava só texto não-"/" (comandos são meta, não viram bubble).
-- ts (campo ISO `timestamp` do transcript) usado SÓ pra ordenar no merge de history; NÃO exibido
-  (ChatEvent.ts fica None — senão bubble enfileirada mostraria hora e as do transcript não).
-- RESTART backend: 2 armadilhas. (1) `pkill -f app.main` CASA O PRÓPRIO SHELL (o texto do script contém
-  "app.main") → mata a si mesmo. (2) `SIGTERM` TRAVA: o SSE do celular segura a conexão e o uvicorn não
-  encerra → a porta fica presa e o relaunch morre (Address already in use). SOLUÇÃO: pegar o pid pela porta
-  (`ss ... grep :8765 ... pid=`), `kill -9` (libera o listen socket na hora), relaunch detached (setsid) +
-  `curl --retry --retry-connrefused` pra esperar subir (sem `sleep` de shell).
-- M cross-origin: cada server guarda baseUrl ABSOLUTO (origin) — '' (same-origin) era ambíguo entre PCs.
-  CORS no backend é o que permite o app de uma origem falar com backend de outra. Mesmo túnel NÃO dá (cada
-  PC tem hostname tailscale próprio); token pode ser a mesma (CP_AUTH_TOKEN igual).
+- Multi-PC cross-origin: app de UMA origem fala com backend de OUTRA. Cadeia: preflight (vite cors:false
+  + apiCorsPreflight) → GET/POST (Bearer + CORS backend) → SSE (`?token`, backend lê). Mesmo túnel NÃO dá
+  (hostname tailscale por PC); token pode ser igual (CP_AUTH_TOKEN). `set-environment -g` do tmux NÃO
+  propaga pro pane → backend usa `new-session -e`.
+- Desktop aditivo: media queries (min-width:820px) + DesktopShell; <820px = mobile byte-idêntico.
+- Sidebar desktop usa getSessions() (server ativo) + switcher; a visão AGREGADA deles é a do mobile —
+  convivem; dá pra unificar depois (api getAllSessions/AggSession).
+- RESTART backend exige **cwd=backend** (`python -m app.main` precisa achar `app`). Relaunch correto:
+  `( cd backend && CLAUDE_CONFIG_DIR=~/.claude-work setsid .venv/bin/python3 -m app.main >log 2>&1 & )`.
 
 ## Limitações conhecidas
-- Bug K não verificado no aparelho (2 tentativas). Se persistir: desligar overlap/backdrop-filter do glass
-  durante o scroll (ou só no momentum).
-- Fila durável: dedup por texto pode over-dedup se o user mandar texto idêntico 2x. Aceitável.
-- Backend SEM --reload: toda mudança no backend exige restart manual.
-- App é single-server (1 baseUrl+token). Pareou outro PC = sobrescreve. Pedido M (multi-PC) ainda não feito.
-- AskUserQuestion não surge no app (usar texto numerado). send_prompt rejeita \n (multi-linha real: backlog).
-- Uploads acumulam (sem retention). Paste de imagem instável no iOS.
+- K (bloco preto no scroll iOS): 4 tentativas (removeu translateZ + guard no fit). Usuário parou de
+  reportar após K#4 mas NÃO confirmou OK. Se voltar: tirar o overlap do glass.
+- Desktop não 100% validado no PC (collapse da sidebar, largura, criar/trocar sessão). tmux fix só em
+  sessão NOVA (existentes mantêm cor/TERM antigos).
+- Dotfiles fora do repo claude-pocket: ~/.tmux.conf + ~/.zshrc (home), fish (n4dots, não-commitado lá).
+- AskUserQuestion não surge no app (usar texto numerado). Uploads sem retention. send_prompt rejeita \n.
 
 ## Próximo passo
 ```
-# 1. (FEITO neste turno) handoff save + commit + push.
-# 2. VERIFICAR no aparelho: **K#4** (scroll SEM bloco preto? = removeu translateZ + guard no fit). Se
-#    AINDA tiver preto após 4 tentativas: lever drástico = tirar o overlap do glass (dock flex, lista
-#    acima) OU remover o transform JS do teclado. Tb conferir: painel de atividade (ícone NavBar →
-#    tarefas + Workflows tappáveis → drill-in fases/agentes), fila (atenua→acende), multi-imagem, lightbox.
-# 3. M cross-origin no TRABALHO: lá, `git pull` + `CP_AUTH_TOKEN` IGUAL ao de casa em backend/.env +
-#    subir backend + `tailscale serve`. No app (carregado de casa): menu > "+ Adicionar servidor" > QR do
-#    trabalho. Deve listar os 2 e trocar (✓). Se a chamada cross-origin falhar, conferir CORS (já ativo).
-# 4. Se K#3 persistir: último recurso = remover o overlap do glass (dock flex, lista acima dele).
-# Stack: backend :8765 (uv/.venv, CLAUDE_CONFIG_DIR=~/.claude-work, token em backend/.env), vite :5173
-#   --host, tailscale serve (https://jefferson-felizardo.tailcac351.ts.net/?token=...).
-#   Restart backend: kill <pid> (NUNCA pkill -f app.main) + ( cd backend && CLAUDE_CONFIG_DIR=~/.claude-work
-#   setsid .venv/bin/python3 -m app.main > log 2>&1 & ) + curl --retry pra confirmar :8765.
-# resume: /handoff resume (após git pull)
+# 1. (FEITO) commit/push: desktop f0b7557 + tmux 7bca674. Backend restartado (pid 1458939).
+# 2. Validar no PC: shell desktop (sidebar, collapse ☰, chat 920px), criar/trocar/apagar sessão, switcher.
+# 3. tmux: criar sessão NOVA do app e ver as cores do claude certas (sem teal/pink) ao atachar no terminal.
+# 4. Opcional: unificar a sidebar desktop com a visão AGREGADA multi-server (getAllSessions/AggSession).
+# 5. Backlog: retention de uploads; AskUserQuestion no app; multi-linha (send_prompt rejeita \n).
+# Stack: backend :8765 (cd backend && CLAUDE_CONFIG_DIR=~/.claude-work .venv/bin/python3 -m app.main),
+#   vite :5173 --host (cors:false + apiCorsPreflight), tailscale serve → vite. Token em backend/.env.
+#   Multi-PC: cada PC roda backend+vite+serve; mesma token; app guarda N servers e troca cross-origin.
+# resume: /handoff resume (após git pull do projeto E do repo de skills)
 ```
 
 ## Arquivos criticos
-- Backend fila (N): backend/app/pqueue.py — PromptQueue (sidecar) + merged_history (ordem por ts + dedup linha).
-- Backend (R): backend/app/{api.py (history→merged_history; input grava fila; CORS), sse.py (3ª fonte), transcript.py (filtro skill)}.
-- Frontend multi-PC (R): lib/auth.ts (REESCRITO: lista de servers + ativo + migração), lib/api.ts (401→dropActiveServer), screens/Login.svelte (addServer + baseUrl origin), screens/SessionList.svelte (switcher de servers no menu + QR add).
-- Atividade/workflows (N): lib/activity.ts (fold de tasks/agents), components/ActivitySheet.svelte (painel + drill-in), backend/app/workflows.py (parser dos arquivos de run). (R): components/NavBar.svelte (botão+badge), screens/Chat.svelte (deriva activity), backend/app/api.py (endpoints /workflows).
-- Frontend fila/scroll/glitch (R): screens/Chat.svelte (dockH ResizeObserver, reconcile por linha, solidify, dedup cruzado no SSE, transform só offsetTop>0, bg sólido), components/MessageList.svelte (padding dinâmico, queued-row atenua/acende, pending flex-end, bg+translateZ anti-preto).
-- Frontend visual (R): components/Composer.svelte (glass iOS, multi-anexo, merge stop/send), components/ImageBubble.svelte (miniatura+lightbox portal), lib/format.ts (parse N imagens).
+- Backend (N): app/workflows.py (parser dos runs de workflow). (R): app/{api.py (endpoints /workflows + CORS), auth.py (?token), tmux.py (-e truecolor), transcript.py (filtros meta), pqueue.py (fila durável)}.
+- Frontend desktop (N): components/{Sidebar,DesktopShell}.svelte. (R): App.svelte (branch isDesktop), MessageList/Composer (media query 920).
+- Frontend atividade (N): lib/activity.ts, components/ActivitySheet.svelte (drill-in 3 níveis).
+- Frontend multi-PC (R): lib/auth.ts (multi-server), lib/api.ts (getAllSessions + getWorkflow*), vite.config.ts (cors:false + apiCorsPreflight).
+- Config tmux (fora do repo): ~/.tmux.conf; doc no repo: docs/tmux-truecolor-setup.md.
