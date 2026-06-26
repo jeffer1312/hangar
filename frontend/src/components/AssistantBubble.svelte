@@ -1,13 +1,18 @@
 <script lang="ts">
   import { renderMarkdown } from '../lib/markdown';
+  import { parseFilePaths } from '../lib/format';
+  import FileAttachment from './FileAttachment.svelte';
 
   interface Props {
     text: string;
     ts?: number | null;
+    sessionName?: string;
   }
-  let { text, ts }: Props = $props();
+  let { text, ts, sessionName = '' }: Props = $props();
 
   const html = $derived(renderMarkdown(text));
+  // Anexos por caminho citado na minha msg (img/video/html/pdf que eu "mandar").
+  const fileRefs = $derived(sessionName ? parseFilePaths(text) : []);
 
   function formatTime(ts: number | null | undefined): string {
     if (!ts) return '';
@@ -21,6 +26,7 @@
 <div class="assistant-msg">
   <!-- eslint-disable-next-line svelte/no-at-html-tags -->
   <div class="prose">{@html html}</div>
+  {#if fileRefs.length}<FileAttachment {sessionName} refs={fileRefs} />{/if}
   {#if ts}
     <span class="ts">{formatTime(ts)}</span>
   {/if}

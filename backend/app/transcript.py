@@ -128,6 +128,22 @@ def parse_transcript(path: str | Path) -> list[ChatEvent]:
     return events
 
 
+def path_in_transcript(jsonl: str | Path, needle: str) -> bool:
+    """True se `needle` (um caminho de arquivo) aparece em ALGUMA linha do transcript. Trava de
+    seguranca do endpoint de arquivo: so servimos arquivos CITADOS na conversa (consentidos) — nao
+    leitura arbitraria de disco. Streaming com early-exit (nao carrega o jsonl inteiro)."""
+    if not needle:
+        return False
+    try:
+        with open(jsonl, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if needle in line:
+                    return True
+    except OSError:
+        pass
+    return False
+
+
 def get_transcript_image(jsonl: str | Path, uuid: str, idx: int) -> Optional[tuple[bytes, str]]:
     """Bytes + media_type da idx-ésima imagem base64 da msg de uuid no transcript, ou None.
 

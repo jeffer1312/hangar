@@ -1,3 +1,5 @@
+import mimetypes
+import os
 import re
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
@@ -232,6 +234,25 @@ def transcript_image(name: str, uuid: str, idx: int):
     raw, media = got
     # immutable: o conteudo de um uuid+idx nunca muda -> cache agressivo no cliente.
     return Response(content=raw, media_type=media, headers={"Cache-Control": "max-age=31536000, immutable"})
+
+
+@app.get("/api/sessions/{name}/file", dependencies=[Depends(require_auth)])
+def serve_file(name: str, path: str):
+    # Serve QUALQUER arquivo referenciado na conversa (video/html/codigo/pdf/...). TRAVA de seguranca:
+    # so serve se o `path` aparece no transcript desta sessao (citado por voce ou pelo Claude =
+    # consentido) E existe E e arquivo regular -> bloqueia leitura arbitraria de disco / path-traversal.
+    # FileResponse trata Range -> <video> faz seek/streaming.
+    jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
+    if not jsonl:
+        raise HTTPException(404, "session or transcript not found")
+    from app.transcript import path_in_transcript
+    real = os.path.realpath(os.path.expanduser(path))
+    if not path_in_transcript(jsonl, path):
+        raise HTTPException(403, "file not referenced in this conversation")
+    if not os.path.isfile(real):
+        raise HTTPException(404, "file not found")
+    media = mimetypes.guess_type(real)[0] or "application/octet-stream"
+    return FileResponse(real, media_type=media)
 
 
 @app.post("/api/sessions/{name}/model-effort", dependencies=[Depends(require_auth)])
