@@ -1,26 +1,39 @@
-/* ── Custom Properties ───────────────────────────────────────────────── */
+/* ── Color tokens: tema ──────────────────────────────────────────────────
+   Paleta "Índigo Quente": accent índigo + neutros levemente amornados (calidez
+   Claude, sem laranja). Dark = padrão (:root); light = [data-theme="light"]. O
+   data-theme é setado por JS (lib/theme.ts) resolvendo a escolha do usuario OU o
+   prefers-color-scheme -> sem duplicar valores em media query. */
 :root {
-  /* Backgrounds */
-  --bg-base:      #0d0d0f;
-  --bg-surface:   #141416;
-  --bg-elevated:  #1c1c1f;
-  --bg-hover:     #252528;
+  color-scheme: dark;
+
+  /* Backgrounds (neutros amornados) */
+  --bg-base:      #100e11;
+  --bg-surface:   #1a171a;
+  --bg-elevated:  #221d22;
+  --bg-hover:     #2a242a;
 
   /* Borders */
-  --border-subtle:  rgba(255,255,255,0.06);
-  --border-default: rgba(255,255,255,0.12);
-  --border-strong:  rgba(255,255,255,0.22);
+  --border-subtle:  rgba(255,248,244,0.07);
+  --border-default: rgba(255,248,244,0.12);
+  --border-strong:  rgba(255,248,244,0.22);
 
   /* Text */
-  --text-primary:   #f0f0f2;
-  --text-secondary: #9696a0;
-  --text-muted:     #5a5a66;
-  --text-inverse:   #0d0d0f;
+  --text-primary:   #eee8e9;
+  --text-secondary: #a0989b;
+  --text-muted:     #665d60;
+  --text-inverse:   #100e11;
 
-  /* Accent */
-  --accent:         #7c6af7;
-  --accent-dim:     rgba(124,106,247,0.18);
-  --accent-press:   #6857e0;
+  /* Accent (índigo) */
+  --accent:         #7c87e8;
+  --accent-dim:     rgba(124,135,232,0.18);
+  --accent-press:   #6e79d6;
+
+  /* Glass (composer / navbar / sidebar) — translucido + blur por cima do conteudo */
+  --glass-bg:        rgba(28,23,26,0.62);
+  --glass-bg-solid:  rgba(26,22,25,0.94);   /* fallback durante o scroll (sem blur) */
+  --glass-border:    rgba(255,250,247,0.12);
+  --glass-highlight: rgba(255,250,247,0.13);
+  --glass-shadow:    rgba(0,0,0,0.42);       /* halo do card flutuante (forte no dark) */
 
   /* Semantic */
   --success:  #34c759;
@@ -28,15 +41,61 @@
   --warning:  #ff9f0a;
 
   /* Status pill */
-  --pill-working-bg:  rgba(124,106,247,0.15);
-  --pill-working-fg:  #a99cf9;
+  --pill-working-bg:  rgba(124,135,232,0.16);
+  --pill-working-fg:  #aab2f3;
   --pill-idle-bg:     rgba(52,199,89,0.12);
   --pill-idle-fg:     #34c759;
   --pill-dead-bg:     rgba(255,69,58,0.12);
   --pill-dead-fg:     #ff453a;
   --pill-input-bg:    rgba(255,159,10,0.12);
   --pill-input-fg:    #ff9f0a;
+}
 
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* Backgrounds (paper amornado) */
+  --bg-base:      #f8f6f2;
+  --bg-surface:   #fffdfa;
+  --bg-elevated:  #f0ebe3;
+  --bg-hover:     #e9e3da;
+
+  /* Borders */
+  --border-subtle:  rgba(50,40,35,0.08);
+  --border-default: rgba(50,40,35,0.14);
+  --border-strong:  rgba(50,40,35,0.24);
+
+  /* Text */
+  --text-primary:   #221d1b;
+  --text-secondary: #5f564f;
+  --text-muted:     #9c9085;
+  --text-inverse:   #fffdfa;
+
+  /* Accent (índigo um pouco mais fundo p/ contraste no claro) */
+  --accent:         #5b6ad0;
+  --accent-dim:     rgba(91,106,208,0.12);
+  --accent-press:   #4d5bc0;
+
+  /* Glass claro: translucido sobre paper (mais sutil que no dark) */
+  --glass-bg:        rgba(255,253,250,0.62);
+  --glass-bg-solid:  rgba(255,253,250,0.96);
+  --glass-border:    rgba(50,40,35,0.12);
+  --glass-highlight: rgba(255,255,255,0.85);
+  --glass-shadow:    rgba(60,50,45,0.13);    /* sombra leve no claro (a 0.42 do dark vira faixa preta) */
+
+  /* Status pill (mesma semantica) */
+  --pill-working-bg:  rgba(91,106,208,0.14);
+  --pill-working-fg:  #4d5bc0;
+  --pill-idle-bg:     rgba(40,160,70,0.14);
+  --pill-idle-fg:     #1f8a3b;
+  --pill-dead-bg:     rgba(220,50,40,0.12);
+  --pill-dead-fg:     #c4291f;
+  --pill-input-bg:    rgba(200,130,10,0.14);
+  --pill-input-fg:    #9a6b06;
+}
+
+/* ── Custom Properties (estruturais, comuns aos temas) ───────────────────── */
+:root {
   /* Typography */
   --font-ui:   -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
   --font-mono: "SF Mono", ui-monospace, "Cascadia Code", "Fira Code", monospace;
@@ -79,7 +138,8 @@ html {
 }
 
 body {
-  height: 100dvh;          /* dvh: acompanha a viewport dinâmica */
+  height: 100vh;           /* tela CHEIA edge-to-edge (dvh reportava curto no PWA iOS -> band no rodape).
+                              Teclado: o JS (.chat-screen) usa visualViewport.height. */
   width: 100%;
   overflow: hidden;
   overscroll-behavior: none; /* sem rubber-band que rola a página no iOS */
@@ -93,10 +153,14 @@ body {
 }
 
 #app {
-  height: 100dvh;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* O bg vive AQUI e enche a tela toda (edge-to-edge, sob status bar e home indicator) -> nunca uma
+     "área morta" não-pintada nas bordas. O safe-area é tratado como PADDING nos componentes (navbar,
+     composer), que respeitam a zona sem virar div/spacer solto. */
+  background: var(--bg-base);
 }
 
 /* ── Easing (stronger than the CSS built-ins) ───────────────────────── */

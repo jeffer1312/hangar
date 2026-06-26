@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+  import ThemeToggle from './ThemeToggle.svelte';
   import { basename, relativeTime } from '../lib/format';
   import type { SessionInfo, State } from '../lib/types';
 
@@ -105,6 +106,11 @@
       <span class="row-name row-name--new">Nova sessão</span>
     </button>
   </div>
+
+  <div class="theme-row">
+    <span class="theme-label">Tema</span>
+    <ThemeToggle />
+  </div>
 </BottomSheet>
 
 <style>
@@ -113,6 +119,19 @@
     font-weight: 600;
     color: var(--text-primary);
     margin-bottom: var(--space-4);
+  }
+
+  .theme-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: var(--space-4);
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--border-subtle);
+  }
+  .theme-label {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
   }
 
   .search {

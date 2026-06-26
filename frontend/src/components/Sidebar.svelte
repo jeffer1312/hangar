@@ -213,8 +213,11 @@
     height: 100%;
     display: flex;
     flex-direction: column;
-    background: var(--bg-surface);
-    border-right: 1px solid var(--border-subtle);
+    /* Glass (desktop -> sem o risco do bloco preto do iOS): translucido + blur. */
+    background: var(--glass-bg);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border-right: 1px solid var(--glass-border);
     padding: var(--space-3);
     gap: var(--space-2);
     transition: width 160ms var(--ease-out);
