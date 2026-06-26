@@ -22,6 +22,9 @@ _COMMAND_META_PREFIXES = (
     # entrada "user" sintetica que comeca com esta linha. E meta de tooling, nao conversa —
     # mesmo tratamento dos comandos acima (nao renderiza bubble).
     "Base directory for this skill:",
+    # Notificacao de Workflow concluido: o harness injeta um <task-notification>...</task-notification>
+    # como entrada "user" sintetica. Tooling meta, nao conversa — fora do chat.
+    "<task-notification>",
 )
 
 

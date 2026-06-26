@@ -6,6 +6,7 @@
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
   import UsageSheet from '../components/UsageSheet.svelte';
+  import ActivitySheet from '../components/ActivitySheet.svelte';
   import {
     getHistory,
     sendInput,
@@ -16,6 +17,7 @@
     createSession,
   } from '../lib/api';
   import { parseStatusLine } from '../lib/statusline';
+  import { deriveActivity } from '../lib/activity';
   import type { ChatEvent, StateEvent, State, SessionInfo } from '../lib/types';
 
   interface Props {
@@ -50,6 +52,7 @@
   let switcherOpen = $state(false);
   let createOpen = $state(false);
   let usageOpen = $state(false);
+  let activityOpen = $state(false);
   let allSessions = $state<SessionInfo[]>([]);
 
   async function openSwitcher() {
@@ -79,6 +82,10 @@
   const currentState = $derived<State>(stateEvent?.state ?? 'idle');
   // Statusline crua -> campos tipados (modelo, contexto, custo, tempo de sessao).
   const status = $derived(parseStatusLine(stateEvent?.status_line ?? null));
+  // Painel de atividade: tarefas (TaskCreate/Update) + agentes rodando, derivado dos eventos.
+  const activity = $derived(deriveActivity(events));
+  const activityBadge = $derived(activity.inProgress + activity.runningAgents);
+  const hasActivity = $derived(activity.tasks.length > 0 || activity.agents.length > 0);
 
   async function loadHistory() {
     try {
@@ -283,7 +290,7 @@
 </script>
 
 <div class="chat-screen" bind:this={screenEl}>
-  <NavBar title={sessionName} showBack={true} onBack={onBack} onTitleTap={openSwitcher} {status} onExpandUsage={() => (usageOpen = true)} />
+  <NavBar title={sessionName} showBack={true} onBack={onBack} onTitleTap={openSwitcher} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} />
 
   {#if loading}
     <div class="chat-loading">
@@ -347,6 +354,8 @@
   />
 
   <UsageSheet open={usageOpen} {status} onClose={() => (usageOpen = false)} />
+
+  <ActivitySheet open={activityOpen} {activity} onClose={() => (activityOpen = false)} />
 </div>
 
 <style>
