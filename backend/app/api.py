@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from app.auth import require_auth
@@ -8,6 +8,7 @@ from app.model_picker import PickerError
 from app.registry import SessionRegistry
 from app.terminal_input import TerminalInput
 from app.sse import merged_events
+from app.uploads import save_upload, UploadError
 
 app = FastAPI(title="claude-pocket")
 registry = SessionRegistry()
@@ -84,6 +85,25 @@ def select(name: str, body: SelectBody):
 def interrupt(name: str):
     terminal.interrupt(name)
     return {"ok": True}
+
+
+@app.post("/api/sessions/{name}/upload", dependencies=[Depends(require_auth)])
+async def upload(name: str, request: Request):
+    # Resolve o cwd da sessao (registry.list() ja traz cwd via tmux #{pane_current_path}).
+    info = next((s for s in registry.list() if s.name == name), None)
+    if info is None:
+        raise HTTPException(404, "sessao nao encontrada")
+    if not info.cwd:
+        raise HTTPException(409, "cwd da sessao indisponivel")
+    clen = request.headers.get("content-length")
+    if clen and clen.isdigit() and int(clen) > 10 * 1024 * 1024:
+        raise HTTPException(413, "imagem maior que 10 MiB")
+    data = await request.body()
+    try:
+        path = save_upload(info.cwd, data, request.headers.get("content-type"))
+    except UploadError as e:
+        raise HTTPException(e.status, e.detail)
+    return {"path": path}
 
 
 @app.post("/api/sessions/{name}/model-effort", dependencies=[Depends(require_auth)])
