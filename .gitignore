@@ -13,3 +13,5 @@ docs/superpowers/**/*.html
 
 # SDD progress ledger (scratch)
 .superpowers/
+
+.claude-pocket-uploads/
