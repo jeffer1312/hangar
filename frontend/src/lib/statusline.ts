@@ -19,6 +19,9 @@ export interface StatusFields {
   weeklyPct?: number;
   weeklyReset?: string;
   sessionTime?: string;  // ⏱ "2h37m"
+  repo?: string;         // 📁 nome da pasta do projeto (git)
+  branch?: string;       // branch atual (sem o '*' de dirty)
+  dirty?: boolean;       // havia '*' (working tree suja)
   raw: string;
 }
 
@@ -90,6 +93,15 @@ export function parseStatusLine(raw: string | null | undefined): StatusFields | 
 
   const sess = raw.match(/⏱\s*([0-9hms:]+)/u);
   if (sess) out.sessionTime = sess[1].trim();
+
+  // 📁 frontend [main*]  — pasta do projeto + branch git (o '*' final = working tree suja)
+  const repo = raw.match(/📁\s*([^[\]│]+?)\s*\[([^\]]+)\]/u);
+  if (repo) {
+    if (repo[1]) out.repo = repo[1].trim();
+    const br = repo[2].trim();
+    out.dirty = br.endsWith('*');
+    out.branch = br.replace(/\*+$/, '').trim();
+  }
 
   return out;
 }
