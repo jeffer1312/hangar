@@ -1,7 +1,7 @@
 ---
 branch: main
 saved_at: 2026-06-26T06:55:28-03:00
-saved_commit: 77ab21080b4dcc1817a503b1b93ef35ec4f4fa35
+saved_commit: 6d52cce6397984a4df89f8419696beed08500f1d
 status: in_progress
 ---
 
@@ -40,9 +40,19 @@ multi-PC no app (casa + trabalho, mesma token, URLs tailscale diferentes).
   usam a API nova (baseUrl = origin absoluto). Switcher no menu da SessionList (lista + ✓ ativo + QR add
   + remover). 401 dropa só o server ativo. Backend ganhou **CORS** (allow *, token-gated) pro app de uma
   origem falar com backend de outra (API Bearer + SSE ?token). Trocar de server = window.location.reload.
-- **K#3** (preto no scroll, 3ª tentativa): além de transform-só-offsetTop>0 + bg sólido + translateZ, o
-  Composer desliga o `backdrop-filter` do glass DURANTE o scroll (Chat detecta via onScrollActivity +
-  timer 160ms) — o backdrop re-amostrando conteúdo em movimento era o suspeito nº1.
+- **K#3** (preto no scroll, 3ª tentativa): transform-só-offsetTop>0 + bg sólido + translateZ + Composer
+  desliga `backdrop-filter` no scroll (onScrollActivity+timer). NÃO bastou.
+- **Painel de atividade** (frontend-only): lib/activity.ts folda TaskCreate/TaskUpdate (este build NÃO usa
+  TodoWrite!) + agentes (Agent bloqueante sem result=rodando); ActivitySheet (tarefas c/ progresso +
+  agentes) + botão no NavBar c/ badge. Filtro `<task-notification>` no transcript.py (meta vazando bubble).
+- **Workflow drill-in** (estilo /workflows do terminal): backend/app/workflows.py lê arquivos do run no
+  disco (wf_<runId>.json concluídos = workflowProgress[]; journal.jsonl vivos); endpoints GET /workflows e
+  /workflows/{runId}; ActivitySheet vira LISTA tappável → detalhe (fases + agentes c/ state/tokens/tempo/
+  preview). Verificado pela API (demo-ping 1ag, investigate-agents-panel 4ag).
+- **K#4** (preto AINDA persistia após K#3): removido o `translateZ(0)` do scroller (criava CAMADA que
+  renderiza PRETA sem backing -> por isso preto puro ignorando o bg) + GUARD no fit() (só escreve
+  height/transform quando MUDA — o vv 'scroll' thrashava no momentum). NÃO verificado no aparelho.
+- Backend reiniciado 4x no total (fila durável, CORS, filtro task-notification, endpoints de workflow).
 
 ## Decisões
 - Fila NÃO injeta no transcript do Claude Code (ele é dono: race/corrupção, double-write). Sidecar próprio
@@ -74,8 +84,10 @@ multi-PC no app (casa + trabalho, mesma token, URLs tailscale diferentes).
 ## Próximo passo
 ```
 # 1. (FEITO neste turno) handoff save + commit + push.
-# 2. VERIFICAR no aparelho: K#3 (scroll sem preto? glass desliga no scroll), fila (atenua→acende +
-#    persiste no reload), multi-imagem, lightbox.
+# 2. VERIFICAR no aparelho: **K#4** (scroll SEM bloco preto? = removeu translateZ + guard no fit). Se
+#    AINDA tiver preto após 4 tentativas: lever drástico = tirar o overlap do glass (dock flex, lista
+#    acima) OU remover o transform JS do teclado. Tb conferir: painel de atividade (ícone NavBar →
+#    tarefas + Workflows tappáveis → drill-in fases/agentes), fila (atenua→acende), multi-imagem, lightbox.
 # 3. M cross-origin no TRABALHO: lá, `git pull` + `CP_AUTH_TOKEN` IGUAL ao de casa em backend/.env +
 #    subir backend + `tailscale serve`. No app (carregado de casa): menu > "+ Adicionar servidor" > QR do
 #    trabalho. Deve listar os 2 e trocar (✓). Se a chamada cross-origin falhar, conferir CORS (já ativo).
@@ -91,5 +103,6 @@ multi-PC no app (casa + trabalho, mesma token, URLs tailscale diferentes).
 - Backend fila (N): backend/app/pqueue.py — PromptQueue (sidecar) + merged_history (ordem por ts + dedup linha).
 - Backend (R): backend/app/{api.py (history→merged_history; input grava fila; CORS), sse.py (3ª fonte), transcript.py (filtro skill)}.
 - Frontend multi-PC (R): lib/auth.ts (REESCRITO: lista de servers + ativo + migração), lib/api.ts (401→dropActiveServer), screens/Login.svelte (addServer + baseUrl origin), screens/SessionList.svelte (switcher de servers no menu + QR add).
+- Atividade/workflows (N): lib/activity.ts (fold de tasks/agents), components/ActivitySheet.svelte (painel + drill-in), backend/app/workflows.py (parser dos arquivos de run). (R): components/NavBar.svelte (botão+badge), screens/Chat.svelte (deriva activity), backend/app/api.py (endpoints /workflows).
 - Frontend fila/scroll/glitch (R): screens/Chat.svelte (dockH ResizeObserver, reconcile por linha, solidify, dedup cruzado no SSE, transform só offsetTop>0, bg sólido), components/MessageList.svelte (padding dinâmico, queued-row atenua/acende, pending flex-end, bg+translateZ anti-preto).
 - Frontend visual (R): components/Composer.svelte (glass iOS, multi-anexo, merge stop/send), components/ImageBubble.svelte (miniatura+lightbox portal), lib/format.ts (parse N imagens).

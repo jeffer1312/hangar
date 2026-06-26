@@ -172,12 +172,15 @@
       if (!screenEl || !vv) return;
       // Ignora valores transientes (a animacao do teclado reporta alturas minusculas por 1 frame).
       if (vv.height < 120) return;
-      screenEl.style.height = vv.height + 'px';
-      // So aplica translateY quando o iOS rolou o layout (teclado aberto, offsetTop>0). Com o
-      // teclado fechado (offsetTop=0) vira 'none': translateY(0) ainda cria contexto de composicao
-      // e dispara o glitch de repaint do iOS (bloco PRETO sobre as msgs durante o scroll). Mantem
-      // o transform quando precisa (teclado) — nao quebra o layout que ja funcionava.
-      screenEl.style.transform = vv.offsetTop ? `translateY(${vv.offsetTop}px)` : 'none';
+      const h = vv.height + 'px';
+      // So aplica translateY quando o iOS rolou o layout (teclado aberto, offsetTop>0); fechado
+      // (offsetTop=0) vira 'none' (translateY(0) ainda cria contexto de composicao e glitcha).
+      const tf = vv.offsetTop ? `translateY(${vv.offsetTop}px)` : 'none';
+      // GUARD: so escreve no style quando MUDA. O vv 'scroll' dispara MUITO durante o momentum da
+      // lista; reescrever height/transform a cada evento forcava reflow/recomposite -> bloco PRETO
+      // no topo. Sem escrita redundante, o scroll normal nao mexe no layout (so o teclado mexe).
+      if (screenEl.style.height !== h) screenEl.style.height = h;
+      if (screenEl.style.transform !== tf) screenEl.style.transform = tf;
     }
     function onFocusIn() {
       requestAnimationFrame(fit);

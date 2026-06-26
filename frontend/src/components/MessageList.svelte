@@ -136,12 +136,11 @@
     overflow-y: scroll;
     overscroll-behavior-y: contain;
     scroll-behavior: auto;
-    /* Anti-glitch de repaint do iOS (bloco PRETO sobre as msgs no momentum scroll, agravado pelo
-       backdrop-filter do glass por cima): fundo solido (area nao-pintada vira bg, nao preto) +
-       camada propria (translateZ) pra estabilizar a pintura. Removido -webkit-overflow-scrolling
-       :touch (legado, fonte conhecida do tile preto no iOS novo). */
+    /* Anti-glitch de repaint do iOS (bloco PRETO no momentum scroll): fundo solido (area
+       nao-pintada vira o bg, nao preto). Removido -webkit-overflow-scrolling:touch (legado) E o
+       translateZ — o translateZ criava uma CAMADA que renderizava PRETA quando o iOS nao repintava
+       a tempo (por isso o preto era puro, ignorando o bg). O guard no fit() (Chat) tira o thrash. */
     background: var(--bg-base);
-    transform: translateZ(0);
     /* O dock (composer glass) flutua sobre a lista (overlap). Padding = altura REAL do dock
        (--dock-h, medido via ResizeObserver no Chat) + respiro, pra ultima msg sempre limpar o
        glass mesmo com anexo/multilinha. ResizeObserver nao dispara na animacao do teclado
