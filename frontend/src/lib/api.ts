@@ -1,4 +1,4 @@
-import { getBaseUrl, getToken, clearCredentials } from './auth';
+import { getBaseUrl, getToken, dropActiveServer } from './auth';
 import type {
   SessionInfo,
   ChatEvent,
@@ -30,7 +30,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   // COM token salvo, limpamos a credencial e recarregamos -> cai no Login pra re-parear (QR).
   // O guard `getToken()` evita loop quando ja estamos deslogados (Login nao chama a API).
   if (res.status === 401 && getToken()) {
-    clearCredentials();
+    dropActiveServer();
     if (typeof window !== 'undefined') window.location.reload();
     throw new Error('401: sessão expirada — faça login novamente');
   }
@@ -118,7 +118,7 @@ export async function uploadImage(name: string, file: File): Promise<{ path: str
     body: file,
   });
   if (res.status === 401 && getToken()) {
-    clearCredentials();
+    dropActiveServer();
     if (typeof window !== 'undefined') window.location.reload();
     throw new Error('401: sessão expirada — faça login novamente');
   }

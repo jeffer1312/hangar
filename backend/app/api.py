@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from app.auth import require_auth
@@ -12,6 +13,16 @@ from app.sse import merged_events
 from app.uploads import save_upload, resolve_upload, UploadError
 
 app = FastAPI(title="claude-pocket")
+# CORS liberado (token-gated): deixa o app servido por UMA origem (ex: tunnel de casa) falar com o
+# backend de OUTRA maquina (ex: trabalho) cross-origin — API via header Bearer, SSE via ?token. Sem
+# cookies cross-site (allow_credentials=False), entao "*" e seguro: continua exigindo o token.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=False,
+)
 registry = SessionRegistry()
 terminal = TerminalInput()
 
