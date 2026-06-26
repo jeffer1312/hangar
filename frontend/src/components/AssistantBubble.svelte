@@ -107,15 +107,23 @@
     margin: var(--space-2) 0; color: var(--text-secondary);
   }
 
-  /* Tabela GFM: rola horizontal no mobile, hairlines discretas. */
-  .prose :global(table) {
-    border-collapse: collapse; margin: var(--space-2) 0; font-size: var(--text-sm);
-    display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%;
+  /* Tabela GFM: o WRAPPER rola na horizontal (box propria; a pagina nao mexe). hairlines discretas. */
+  .prose :global(.md-table) {
+    display: block; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    max-width: 100%; margin: var(--space-2) 0;
+  }
+  .prose :global(.md-table table) {
+    /* largura NATURAL (nao espreme): rola no wrapper se passar da tela. */
+    border-collapse: collapse; width: max-content; max-width: none; font-size: var(--text-sm);
   }
   .prose :global(th), .prose :global(td) {
-    border: 1px solid var(--border-subtle); padding: 6px 10px; text-align: left;
+    border: 1px solid var(--border-subtle); padding: 6px 10px; text-align: left; vertical-align: top;
+    /* piso = nao colapsa pra quebra letra-a-letra; teto = nao vira uma mega-coluna (quebra por palavra). */
+    min-width: 4.5em; max-width: 15em; overflow-wrap: break-word;
   }
-  .prose :global(th) { background: var(--bg-elevated); font-weight: 600; color: var(--text-primary); }
+  .prose :global(th) {
+    background: var(--bg-elevated); font-weight: 600; color: var(--text-primary); white-space: nowrap;
+  }
 
   .ts {
     font-size: var(--text-xs);

@@ -69,7 +69,9 @@ export function renderMarkdown(input: string): string {
       }
       const th = head.map((c) => `<th>${renderInline(escapeHtml(c))}</th>`).join('');
       const rows = body.map((r) => `<tr>${r.map((c) => `<td>${renderInline(escapeHtml(c))}</td>`).join('')}</tr>`).join('');
-      out.push(`<table><thead><tr>${th}</tr></thead><tbody>${rows}</tbody></table>`);
+      // Wrapper rolavel: a tabela mantem a largura natural e rola DENTRO da propria box (a pagina
+      // continua sem scroll horizontal). Sem isto a tabela espremia e o texto quebrava letra a letra.
+      out.push(`<div class="md-table"><table><thead><tr>${th}</tr></thead><tbody>${rows}</tbody></table></div>`);
       continue;
     }
 
