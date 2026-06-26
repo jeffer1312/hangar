@@ -14,7 +14,7 @@
   import SlashSuggest from './SlashSuggest.svelte';
   import CommandSheet from './CommandSheet.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
-  import { getCommands, setModelEffort, type ModelEffortBody } from '../lib/api';
+  import { getCommands, setModelEffort, uploadImage, type ModelEffortBody } from '../lib/api';
   import type { State } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
 
@@ -55,7 +55,14 @@
   let inputText = $state('');
   let textareaEl: HTMLTextAreaElement | undefined = $state();
 
-  const canSend = $derived(inputText.trim().length > 0);
+  // ── Anexo de imagem: arquivo escolhido + preview local + estado de upload ───
+  let attachment = $state<File | null>(null);
+  let attachmentUrl = $state<string | null>(null);
+  let fileInput: HTMLInputElement | undefined = $state();
+  let uploading = $state(false);
+  let attachError = $state('');
+
+  const canSend = $derived((inputText.trim().length > 0 || attachment !== null) && !uploading);
   const isWorking = $derived(sessionState === 'working');
 
   // ── Pill de modelo + esforco: abre o ModelEffortSheet (aplica via endpoint dedicado) ──
@@ -146,13 +153,47 @@
     }
   }
 
-  function submit() {
+  // ── Anexo: escolher / remover ──────────────────────────────────────────────
+  function onPickFile(e: Event) {
+    const f = (e.target as HTMLInputElement).files?.[0];
+    if (!f) return;
+    if (attachmentUrl) URL.revokeObjectURL(attachmentUrl);
+    attachment = f;
+    attachmentUrl = URL.createObjectURL(f);
+    attachError = '';
+  }
+
+  function removeAttachment() {
+    if (attachmentUrl) URL.revokeObjectURL(attachmentUrl);
+    attachment = null;
+    attachmentUrl = null;
+    attachError = '';
+    if (fileInput) fileInput.value = '';
+  }
+
+  async function submit() {
     if (!canSend) return;
-    const msg = inputText.trim();
-    inputText = '';
-    if (textareaEl) {
-      textareaEl.style.height = 'auto';
+    const caption = inputText.trim();
+    if (attachment) {
+      uploading = true;
+      attachError = '';
+      try {
+        const { path } = await uploadImage(sessionName, attachment);
+        const msg = (caption ? caption + '\n' : '') + '📎 imagem: ' + path;
+        inputText = '';
+        if (textareaEl) textareaEl.style.height = 'auto';
+        removeAttachment();
+        onSend(msg);
+      } catch (err) {
+        attachError = err instanceof Error ? err.message : 'Falha no upload';
+      } finally {
+        uploading = false;
+      }
+      return;
     }
+    const msg = caption;
+    inputText = '';
+    if (textareaEl) textareaEl.style.height = 'auto';
     onSend(msg);
   }
 
@@ -165,12 +206,31 @@
 </script>
 
 <footer class="composer">
+  <input
+    type="file"
+    accept="image/*"
+    bind:this={fileInput}
+    onchange={onPickFile}
+    class="file-input"
+    aria-hidden="true"
+    tabindex="-1"
+  />
   <div class="composer-card">
     {#if typeof status?.costUsd === 'number'}
       <div class="composer-top">
         <button class="cost-chip" onclick={onExpandUsage} aria-label="Custo e uso">
           ${status.costUsd.toFixed(2)}
         </button>
+      </div>
+    {/if}
+
+    {#if attachment}
+      <div class="attach-chip">
+        {#if attachmentUrl}<img class="attach-thumb" src={attachmentUrl} alt="anexo" />{/if}
+        <span class="attach-name">{attachment.name}</span>
+        {#if uploading}<span class="attach-status">enviando…</span>{/if}
+        {#if attachError}<span class="attach-error">{attachError}</span>{/if}
+        <button class="attach-remove" onclick={removeAttachment} aria-label="Remover anexo">×</button>
       </div>
     {/if}
 
@@ -196,6 +256,9 @@
           aria-label="Modelo e esforço de raciocínio"
         >
           {pillText}
+        </button>
+        <button class="attach-btn" onclick={() => fileInput?.click()} aria-label="Anexar imagem">
+          <span class="attach-glyph" aria-hidden="true">📎</span>
         </button>
         <button
           class="slash-btn"
@@ -415,4 +478,47 @@
     color: var(--text-muted);
     cursor: default;
   }
+
+  /* ── Anexo de imagem ────────────────────────────────────────────────────── */
+  .file-input { display: none; }
+
+  .attach-chip {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    background: var(--bg-hover);
+    border-radius: var(--radius-md);
+  }
+  .attach-thumb {
+    width: 36px;
+    height: 36px;
+    border-radius: var(--radius-sm);
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+  .attach-name {
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+  }
+  .attach-status { font-size: var(--text-xs); color: var(--text-muted); }
+  .attach-error { font-size: var(--text-xs); color: var(--error); }
+  .attach-remove {
+    width: 28px; height: 28px; min-height: 0; flex-shrink: 0;
+    color: var(--text-secondary); font-size: var(--text-lg); line-height: 1;
+  }
+
+  .attach-btn {
+    width: 44px; height: 44px; flex-shrink: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-secondary);
+  }
+  .attach-btn:active { background: var(--bg-hover); }
+  .attach-glyph { font-size: var(--text-lg); line-height: 1; }
 </style>
