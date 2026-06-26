@@ -252,9 +252,21 @@
   />
   <div class="composer-card">
     <div class="composer-top">
-      <button class="slash-btn" onclick={() => (commandSheetOpen = true)} aria-label="Comandos">
-        <span class="slash-glyph" aria-hidden="true">/</span>
-      </button>
+      <div class="top-left">
+        <button class="slash-btn" onclick={() => (commandSheetOpen = true)} aria-label="Comandos">
+          <span class="slash-glyph" aria-hidden="true">/</span>
+        </button>
+        {#if status?.repo}
+          <span class="repo-chip" title="Pasta e branch">
+            <span class="repo-glyph" aria-hidden="true">📁</span>
+            <span class="repo-name">{status.repo}</span>
+            {#if status.branch}
+              <span class="repo-sep" aria-hidden="true">·</span>
+              <span class="repo-branch">{status.branch}{#if status.dirty}<span class="repo-dirty" aria-label="alterações não commitadas">*</span>{/if}</span>
+            {/if}
+          </span>
+        {/if}
+      </div>
       {#if typeof status?.costUsd === 'number'}
         <button class="cost-chip" onclick={onExpandUsage} aria-label="Custo e uso">
           ${status.costUsd.toFixed(2)}
@@ -484,6 +496,40 @@
     align-items: center;
     justify-content: space-between;
   }
+
+  .top-left {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  .repo-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .repo-glyph { font-size: 11px; flex-shrink: 0; }
+  .repo-name {
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 120px;
+  }
+  .repo-sep { color: var(--text-muted); }
+  .repo-branch {
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 110px;
+  }
+  .repo-dirty { color: var(--warning); margin-left: 1px; }
 
   .cost-chip {
     display: inline-flex;
