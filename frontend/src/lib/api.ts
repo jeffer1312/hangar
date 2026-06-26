@@ -103,6 +103,32 @@ export async function sendInput(name: string, text: string): Promise<void> {
   });
 }
 
+/**
+ * Envia os bytes crus de uma imagem pra sessao (sem multipart). O backend salva e devolve o
+ * path; o app depois manda a legenda + path pelo /input. 401 -> self-heal (igual apiFetch).
+ */
+export async function uploadImage(name: string, file: File): Promise<{ path: string }> {
+  const base = getBaseUrl();
+  const res = await fetch(`${base}/api/sessions/${encodeURIComponent(name)}/upload`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(),
+      'Content-Type': file.type || 'application/octet-stream',
+    },
+    body: file,
+  });
+  if (res.status === 401 && getToken()) {
+    clearCredentials();
+    if (typeof window !== 'undefined') window.location.reload();
+    throw new Error('401: sessão expirada — faça login novamente');
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`${res.status}: ${text}`);
+  }
+  return res.json() as Promise<{ path: string }>;
+}
+
 export async function selectOption(name: string, option: number): Promise<void> {
   await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/select`, {
     method: 'POST',
