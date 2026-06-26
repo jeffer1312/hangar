@@ -132,6 +132,8 @@
     if (!vv || !screenEl) return;
     function fit() {
       if (!screenEl || !vv) return;
+      // Ignora valores transientes (a animacao do teclado reporta alturas minusculas por 1 frame).
+      if (vv.height < 120) return;
       screenEl.style.height = vv.height + 'px';
       screenEl.style.transform = `translateY(${vv.offsetTop}px)`;
     }
@@ -279,6 +281,7 @@
     height: 100dvh;          /* fallback; o JS sobrescreve com visualViewport.height */
     overflow: hidden;
     transform-origin: top;
+    position: relative;
   }
 
   .chat-loading,
@@ -315,9 +318,11 @@
 
   /* Bottom dock: statusline bar + composer (or dead footer). Flex child normal. */
   .bottom-dock {
-    flex-shrink: 0;
-    background: var(--bg-base);
-    padding-bottom: env(safe-area-inset-bottom);
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 20;
   }
 
   /* Dead state footer */

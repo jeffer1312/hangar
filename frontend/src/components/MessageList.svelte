@@ -113,8 +113,10 @@
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: contain;
     scroll-behavior: auto;
-    /* O dock agora e um flex sibling real (nao fixed) -> sem padding gigante. */
-    padding-bottom: var(--space-3);
+    /* O dock flutua sobre a lista (overlap p/ o glass borrar as mensagens) -> padding fixo
+       que limpa o composer flutuante. Valor fixo (sem medicao dinamica) evita reflow a cada
+       frame da animacao do teclado. */
+    padding-bottom: calc(150px + env(safe-area-inset-bottom));
   }
 
   .messages-inner {
