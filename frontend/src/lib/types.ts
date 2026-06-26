@@ -26,6 +26,7 @@ export interface ChatEvent {
   result?: string | null;
   is_error?: boolean | null;
   ts?: number | null;
+  image_count?: number | null;   // imagens coladas no terminal -> busca lazy em /transcript-image
 }
 
 export interface StateEvent {

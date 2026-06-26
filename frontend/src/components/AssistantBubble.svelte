@@ -78,6 +78,37 @@
     border-radius: 0;
   }
 
+  .prose :global(h1), .prose :global(h2), .prose :global(h3),
+  .prose :global(h4), .prose :global(h5), .prose :global(h6) {
+    font-weight: 600; color: var(--text-primary); line-height: 1.3;
+    margin: var(--space-3) 0 var(--space-2);
+  }
+  .prose :global(h1) { font-size: 1.4em; }
+  .prose :global(h2) { font-size: 1.25em; }
+  .prose :global(h3) { font-size: 1.1em; }
+  .prose :global(h4), .prose :global(h5), .prose :global(h6) { font-size: 1em; }
+
+  .prose :global(ul) { list-style: disc; margin: var(--space-2) 0; padding-left: 1.4em; }
+  .prose :global(ol) { list-style: decimal; margin: var(--space-2) 0; padding-left: 1.5em; }
+  .prose :global(li) { line-height: 1.5; margin: 2px 0; }
+
+  .prose :global(a) { color: var(--accent); text-decoration: underline; }
+
+  .prose :global(blockquote) {
+    border-left: 3px solid var(--border-default); padding-left: var(--space-3);
+    margin: var(--space-2) 0; color: var(--text-secondary);
+  }
+
+  /* Tabela GFM: rola horizontal no mobile, hairlines discretas. */
+  .prose :global(table) {
+    border-collapse: collapse; margin: var(--space-2) 0; font-size: var(--text-sm);
+    display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%;
+  }
+  .prose :global(th), .prose :global(td) {
+    border: 1px solid var(--border-subtle); padding: 6px 10px; text-align: left;
+  }
+  .prose :global(th) { background: var(--bg-elevated); font-weight: 600; color: var(--text-primary); }
+
   .ts {
     font-size: var(--text-xs);
     color: var(--text-muted);

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getSessions, createSession, deleteSession } from '../lib/api';
+  import { getSessions, createSession, deleteSession, renameSession } from '../lib/api';
   import { listServers, getActiveId, selectServer, removeServer, addServer, clearCredentials } from '../lib/auth';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import QrScanner from './QrScanner.svelte';
@@ -51,6 +51,44 @@
       await deleteSession(name);
       sessions = sessions.filter((s) => s.name !== name);
     } catch { /* ignora */ }
+  }
+
+  // ── Renomear sessão do tmux: TOQUE LONGO no nome -> edita inline ──────────────
+  let editing = $state<string | null>(null);   // nome da sessão em edição
+  let editValue = $state('');
+  let pressTimer: ReturnType<typeof setTimeout> | undefined;
+  let longPressed = false;
+
+  function pressStart(name: string) {
+    longPressed = false;
+    clearTimeout(pressTimer);
+    pressTimer = setTimeout(() => { longPressed = true; editing = name; editValue = name; }, 500);
+  }
+  function pressEnd() {
+    clearTimeout(pressTimer);
+  }
+  function onMainClick(name: string) {
+    if (longPressed) { longPressed = false; return; }   // foi toque longo (renomear) -> não abre
+    onSelect(name);
+  }
+  async function saveEdit(old: string) {
+    const nv = editValue.trim();
+    editing = null;
+    if (!nv || nv === old) return;
+    try {
+      const r = await renameSession(old, nv);
+      sessions = sessions.map((s) => (s.name === old ? { ...s, name: r.name } : s));
+      if (old === currentSession) onSelect(r.name);
+    } catch { /* reload corrige */ }
+    load();
+  }
+  function onEditKey(e: KeyboardEvent, old: string) {
+    if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
+    else if (e.key === 'Escape') { editValue = old; editing = null; }   // cancela (blur vira no-op)
+  }
+  function autofocus(node: HTMLInputElement) {
+    node.focus();
+    node.select();
   }
 
   function pickServer(id: string) {
@@ -107,12 +145,33 @@
   <nav class="sess-list" aria-label="Sessões">
     {#each sorted as s (s.name)}
       <div class="sess-row" class:active={s.name === currentSession}>
-        <button class="sess-main" onclick={() => onSelect(s.name)} title={s.name}>
-          <span class="dot dot--{s.state}" aria-hidden="true"></span>
-          {#if !collapsed}<span class="sess-name">{s.name}</span>{/if}
-        </button>
-        {#if !collapsed}
-          <button class="sess-del" onclick={(e) => handleDelete(s.name, e)} aria-label={`Apagar ${s.name}`}>×</button>
+        {#if editing === s.name}
+          <!-- Toque longo no nome -> edita inline. Enter/blur salva, Esc cancela. -->
+          <input
+            class="sess-edit"
+            bind:value={editValue}
+            use:autofocus
+            onkeydown={(e) => onEditKey(e, s.name)}
+            onblur={() => saveEdit(s.name)}
+            aria-label="Renomear sessão"
+          />
+        {:else}
+          <button
+            class="sess-main"
+            title={collapsed ? s.name : 'Toque longo pra renomear'}
+            onpointerdown={() => pressStart(s.name)}
+            onpointerup={pressEnd}
+            onpointerleave={pressEnd}
+            onpointercancel={pressEnd}
+            oncontextmenu={(e) => e.preventDefault()}
+            onclick={() => onMainClick(s.name)}
+          >
+            <span class="dot dot--{s.state}" aria-hidden="true"></span>
+            {#if !collapsed}<span class="sess-name">{s.name}</span>{/if}
+          </button>
+          {#if !collapsed}
+            <button class="sess-del" onclick={(e) => handleDelete(s.name, e)} aria-label={`Apagar ${s.name}`}>×</button>
+          {/if}
         {/if}
       </div>
     {/each}
@@ -182,7 +241,9 @@
 
   .sess-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin-top: var(--space-2); }
   .sess-row { display: flex; align-items: center; border-radius: var(--radius-md); }
-  .sess-row:hover { background: var(--bg-hover); }
+  /* hover SÓ em dispositivo com mouse. No touch (tablet), o :hover fazia o 1º toque virar "hover" e
+     o 2º o clique -> precisava de 2 toques pra abrir a sessão. hover:hover isola isso. */
+  @media (hover: hover) { .sess-row:hover { background: var(--bg-hover); } }
   .sess-row.active { background: var(--bg-elevated); }
   .sess-main {
     flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-2); height: 38px;
@@ -193,18 +254,28 @@
   .sidebar.collapsed .sess-main { justify-content: center; padding: 0; }
   .sess-row.active .sess-main { color: var(--text-primary); }
   .sess-name { flex: 1; min-width: 0; font-size: var(--text-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sess-edit {
+    flex: 1; min-width: 0; height: 38px; padding: 0 var(--space-2);
+    background: var(--bg-base); border: 1px solid var(--accent); border-radius: var(--radius-md);
+    color: var(--text-primary); font-size: var(--text-sm); outline: none;
+  }
   .sess-del {
     width: 22px; height: 22px; min-height: 0; flex-shrink: 0; border-radius: var(--radius-sm);
     color: var(--text-muted); font-size: var(--text-base); line-height: 1; opacity: 0; margin-right: 2px;
   }
-  .sess-row:hover .sess-del { opacity: 1; }
+  @media (hover: hover) { .sess-row:hover .sess-del { opacity: 1; } }
+  @media (hover: none) { .sess-del { opacity: 0.55; } }   /* touch: × sempre visível, sem o trap do :hover */
   .sess-del:hover { color: var(--error); background: var(--bg-base); }
 
   .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--text-muted); }
-  .dot--working { background: var(--accent); }
-  .dot--awaiting_input { background: var(--warning); }
+  /* working/awaiting "pensando": pulsa pra dar o badge de atividade na sidebar (igual ao botão de
+     atividade do topo). prefers-reduced-motion -> só a cor. */
+  .dot--working { background: var(--accent); animation: dot-pulse 1.4s ease-in-out infinite; }
+  .dot--awaiting_input { background: var(--warning); animation: dot-pulse 1.4s ease-in-out infinite; }
   .dot--idle { background: var(--success, #3fb950); }
   .dot--dead { background: var(--error); }
+  @keyframes dot-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.7); } }
+  @media (prefers-reduced-motion: reduce) { .dot--working, .dot--awaiting_input { animation: none; } }
 
   .side-foot { display: flex; flex-direction: column; gap: var(--space-1); border-top: 1px solid var(--border-subtle); padding-top: var(--space-2); }
   .server-btn {

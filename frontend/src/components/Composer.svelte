@@ -401,18 +401,16 @@
     gap: var(--space-2);
     max-width: 600px;
     margin: 0 auto;
-    /* Card de vidro fosco. Dock segue flex (sem overlap) pra nao desestabilizar o teclado;
-       o blur pega o fundo atras do dock — fica glassy sem o overlap que quebrava o layout. */
-    /* Material estilo iOS: blur forte + vibrancy (saturate+brightness), leve gradiente de cima
-       (lit-from-top), hairline branco no topo (specular) e sombra ambiente em camadas. Mantem
-       o padding/altura -> nao afeta o scroll. */
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 38%),
-      rgba(28, 28, 32, 0.55);
-    backdrop-filter: blur(30px) saturate(180%) brightness(1.05);
-    -webkit-backdrop-filter: blur(30px) saturate(180%) brightness(1.05);
+    /* Card de vidro fosco. O blur NÃO fica mais aqui: ficava no MESMO elemento que tem conteúdo +
+       borda + filhos, forçando o WebKit a promover a subárvore e quebrar o fast-path do scroll ->
+       bloco PRETO no topo durante o streaming (WebKit #89475). Agora o filtro vive só no ::before
+       (leaf isolado). Host = stacking context próprio (position+isolation), transparente, só
+       borda/sombra. Padrão de produção (Ionic .footer-background). Os sheets do Composer são IRMÃOS
+       do card (fora dele) -> isolation/position aqui NÃO os clipa. */
+    position: relative;
+    isolation: isolate;
     border: 1px solid rgba(255, 255, 255, 0.10);
-    box-shadow:
+    box-shadow:               /* glow 0 12px 40px FICA no host (sem overflow:hidden) -> halo preservado */
       inset 0 1px 0 rgba(255, 255, 255, 0.14),
       inset 0 -1px 0 rgba(0, 0, 0, 0.22),
       0 1px 2px rgba(0, 0, 0, 0.18),
@@ -421,9 +419,25 @@
     padding: var(--space-3) var(--space-3) calc(var(--space-3) + env(safe-area-inset-bottom));
   }
 
-  /* Durante o scroll: desliga o backdrop-filter (fonte do bloco preto no iOS) e usa um fundo quase
-     opaco no lugar. O glass volta ao parar. transition no backdrop não anima, mas o swap é discreto. */
-  .composer-card.scrolling {
+  /* ÚNICA camada com backdrop-filter: leaf bare (sem conteúdo, sem descendente posicionado), bounded
+     à caixa do dock -> não promove/corrompe a camada da tela. Mesmo gradiente+blur de antes. */
+  .composer-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;                /* atrás do conteúdo, dentro do stacking context do card */
+    border-radius: inherit;
+    pointer-events: none;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 38%),
+      rgba(28, 28, 32, 0.55);
+    backdrop-filter: blur(30px) saturate(180%) brightness(1.05);
+    -webkit-backdrop-filter: blur(30px) saturate(180%) brightness(1.05);
+  }
+
+  /* Rede de segurança durante o scroll: desliga o backdrop-filter e usa fundo quase opaco. MIGRADA
+     pro ::before (senão sumia silenciosamente com o filtro tendo mudado de elemento). */
+  .composer-card.scrolling::before {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
     background: rgba(28, 28, 32, 0.94);

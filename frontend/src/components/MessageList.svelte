@@ -9,6 +9,7 @@
   import ImageBubble from './ImageBubble.svelte';
   import { parseImageMessage } from '../lib/format';
   import { getBaseUrl } from '../lib/auth';
+  import { transcriptImageUrl } from '../lib/api';
 
   interface Props {
     events: ChatEvent[];
@@ -16,16 +17,25 @@
     pending: { id: string; text: string; solid?: boolean }[];
     sessionName: string;
     dockH: number;
+    preview?: string;
     onSelectOption: (i: number) => void;
     onCancel: () => void;
     onScrollActivity?: () => void;
   }
 
-  let { events, stateEvent, pending, sessionName, dockH, onSelectOption, onCancel, onScrollActivity }: Props = $props();
+  let { events, stateEvent, pending, sessionName, dockH, preview = '', onSelectOption, onCancel, onScrollActivity }: Props = $props();
 
   let listEl: HTMLElement | undefined = $state();
+  let previewEl: HTMLElement | undefined = $state();
   // O usuario "gruda" no fim por padrao; ao rolar pra cima, paramos de arrastar.
   let atBottom = $state(true);
+
+  // Mantem o box do preview rolado no fundo: a cauda desliza DENTRO da caixa (altura fixa) em vez de
+  // empurrar/pular o layout do chat. Roda a cada update do preview.
+  $effect(() => {
+    void preview;
+    if (previewEl) previewEl.scrollTop = previewEl.scrollHeight;
+  });
 
   function onScroll() {
     if (!listEl) return;
@@ -59,14 +69,23 @@
     void events.length;
     void pending.length;
     void dockH; // composer cresceu (anexo/multilinha) -> re-scrolla pra ultima msg limpar o glass
+    void preview; // preview cresce token a token -> acompanha o fundo enquanto o usuario esta colado
     if (!atBottom) return;
     tick().then(scrollToBottom);
   });
 
+  let rafScroll = 0;
   function scrollToBottom() {
-    if (listEl) {
-      listEl.scrollTop = listEl.scrollHeight;
-    }
+    // Coalesce as escritas num rAF: o preview muda a cada ~150ms (e ate token a token), e uma
+    // escrita scrollTop=scrollHeight por chunk = tempestade de layout/repaint sincrono = trepidacao
+    // (e pressao de repaint que vira bloco preto no iOS). Um rAF + pular quando ja esta no alvo corta isso.
+    if (!listEl) return;
+    cancelAnimationFrame(rafScroll);
+    rafScroll = requestAnimationFrame(() => {
+      if (!listEl) return;
+      const target = listEl.scrollHeight - listEl.clientHeight;
+      if (Math.abs(listEl.scrollTop - target) > 2) listEl.scrollTop = target;
+    });
   }
 </script>
 
@@ -79,9 +98,12 @@
 >
   <div class="messages-inner">
     {#each visibleEvents as ev (ev.id)}
-      {#if ev.kind === 'user_msg' && ev.text}
-        {@const img = parseImageMessage(ev.text)}
-        {#if ev.id.startsWith('queued-')}
+      {#if ev.kind === 'user_msg' && (ev.text || ev.image_count)}
+        {@const img = ev.text ? parseImageMessage(ev.text) : null}
+        {#if ev.image_count}
+          <!-- Imagem(ns) colada(s) no TERMINAL: thumbnail buscado lazy do .jsonl (base64). -->
+          <ImageBubble caption={ev.text ?? ''} srcs={Array.from({ length: ev.image_count }, (_, i) => transcriptImageUrl(sessionName, ev.id, i))} />
+        {:else if ev.id.startsWith('queued-')}
           <!-- Msg da fila durável: atenuada enquanto o Claude trabalha (= na fila, ainda nao
                processada); acende solida quando ele fica idle (= aceita). Da o sinal de "quando
                foi aceita" que o usuario pediu. -->
@@ -103,6 +125,13 @@
         <ToolCard event={ev} result={toolResults.get(ev.tool_use_id ?? '') ?? null} />
       {/if}
     {/each}
+
+    {#if preview}
+      <!-- Preview ao vivo do bloco em voo: texto PLANO (markdown bonito so no final canonico, pra
+           nao piscar ** / code-fence meio-aberto). Sob fullscreen e a CAUDA deslizante do pane ->
+           box CONTIDO (altura fixa, rola DENTRO de si) pra a cauda deslizar suave sem PULAR o layout. -->
+      <div class="preview-bubble" bind:this={previewEl}>{preview}</div>
+    {/if}
 
     {#if stateEvent?.state === 'working'}
       <Spinner label={stateEvent.label} />
@@ -190,4 +219,26 @@
   .queued-row.dim {
     opacity: 0.5;
   }
+
+  /* Preview ao vivo (cauda em voo): lado do assistente, texto plano levemente atenuado pra ler como
+     "ainda escrevendo". Some quando o assistant_msg canonico chega (reconcile no Chat). */
+  .preview-bubble {
+    align-self: stretch;
+    width: 100%;
+    max-width: 100%;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: var(--text-sm);
+    line-height: 1.55;
+    color: var(--text-secondary);
+    opacity: 0.9;
+    /* Contido: a cauda desliza DENTRO (altura fixa + auto-scroll no fundo) -> NAO pula o layout. */
+    max-height: 9.5em;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    /* marcador "ao vivo": hairline accent a esquerda, distingue da msg final committada */
+    border-left: 2px solid var(--accent);
+    padding: 2px 0 2px var(--space-3);
+  }
+  .preview-bubble::-webkit-scrollbar { width: 0; height: 0; }
 </style>
