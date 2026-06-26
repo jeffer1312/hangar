@@ -29,15 +29,57 @@ def status_line(pane_text: str) -> Optional[str]:
     return "\n".join(chrome) if chrome else None
 
 
-def _question(pane_text: str) -> Optional[str]:
+def _question(lines: list[str]) -> Optional[str]:
+    """The prompt text just above the first option in the menu region: the last meaningful
+    line (skip rules, the ☐/☑ header chip, and blanks). Recebe ja a REGIAO do menu (nao o
+    pane inteiro) pra nao pescar uma pergunta perdida no scrollback."""
     found = None
-    for line in pane_text.splitlines():
+    for line in lines:
         if _OPTION_RE.match(line):
             break
         s = line.strip()
-        if s.endswith("?"):
-            found = s
+        if not s or _RULE_RE.match(line) or s[:1] in "☐☑":
+            continue
+        found = s
     return found
+
+
+# Rodape de navegacao da AskUserQuestion (e de pickers similares). Ancora o limite INFERIOR
+# do bloco. O menu nativo de permissao NAO tem esse rodape -> o limite cai num boundary.
+_FOOTER_RE = re.compile(r"to navigate|Esc to cancel|Enter to select")
+# Glifos que marcam a BORDA do box do picker: bullet de assistente, junta de tool-result e
+# spinners. Scrollback (incl. listas numeradas perdidas) vive alem dessas linhas.
+_BOUNDARY_GLYPHS = "●⎿" + SPINNER_GLYPHS
+
+
+def _is_boundary(line: str) -> bool:
+    s = line.lstrip()
+    return bool(s) and s[0] in _BOUNDARY_GLYPHS
+
+
+def _menu_block(lines: list[str]) -> Optional[tuple[int, int]]:
+    """Bounds [top, bot) do menu de selecao contiguo que contem o cursor ❯, ou None.
+
+    Escopar a este bloco e o que mantem linhas numeradas do SCROLLBACK FORA das opcoes: subindo
+    paramos no primeiro boundary (bullet/spinner); descendo paramos no rodape de navegacao ou
+    no proximo boundary. Sem cursor ❯ N. nao ha menu (uma lista numerada solta nao e widget)."""
+    cursor = None
+    for i, ln in enumerate(lines):
+        if _CURSOR_RE.match(ln):
+            cursor = i  # cursor mais ao fundo = o picker vivo
+    if cursor is None:
+        return None
+    top = 0
+    for i in range(cursor - 1, -1, -1):
+        if _is_boundary(lines[i]):
+            top = i + 1
+            break
+    bot = len(lines)
+    for i in range(cursor + 1, len(lines)):
+        if _FOOTER_RE.search(lines[i]) or _is_boundary(lines[i]):
+            bot = i
+            break
+    return (top, bot)
 
 
 def _live_spinner(pane_text: str) -> Optional[str]:
@@ -65,11 +107,15 @@ def classify(pane_text: str) -> tuple[str, Optional[str], Optional[str], Optiona
     marker (both render as "<glyph> <word> for <N>s"). classify reports 'working' for any
     spinner candidate; StateMonitor downgrades a non-animating one to 'idle'.
     """
-    if _CURSOR_RE.search(pane_text):
+    lines = pane_text.splitlines()
+    block = _menu_block(lines)
+    if block is not None:
+        top, bot = block
+        region = lines[top:bot]
         options = [m.group(1).strip()
-                   for m in (_OPTION_RE.match(ln) for ln in pane_text.splitlines()) if m]
+                   for m in (_OPTION_RE.match(ln) for ln in region) if m]
         if options:
-            return ("awaiting_input", None, _question(pane_text), options)
+            return ("awaiting_input", None, _question(region), options)
 
     spinner = _live_spinner(pane_text)
     if spinner is not None:
