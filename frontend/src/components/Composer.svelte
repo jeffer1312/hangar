@@ -366,7 +366,7 @@
 
 <style>
   .composer {
-    background: var(--bg-base);
+    background: transparent;
     padding: var(--space-2) var(--space-3) var(--space-3);
   }
 
@@ -377,8 +377,11 @@
     gap: var(--space-2);
     max-width: 600px;
     margin: 0 auto;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-default);
+    background: rgba(24, 24, 27, 0.55);
+    backdrop-filter: blur(22px) saturate(180%);
+    -webkit-backdrop-filter: blur(22px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
     border-radius: var(--radius-md);
     padding: var(--space-3);
   }
