@@ -4,9 +4,9 @@
   import SessionCard from '../components/SessionCard.svelte';
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
   import QrScanner from '../components/QrScanner.svelte';
-  import { getSessions, createSession, deleteSession } from '../lib/api';
-  import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer } from '../lib/auth';
-  import type { SessionInfo, State } from '../lib/types';
+  import { getAllSessions, getSessions, createSession, deleteSession } from '../lib/api';
+  import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, serverColor } from '../lib/auth';
+  import type { AggSession, State } from '../lib/types';
 
   interface Props {
     onNavigateToChat: (name: string) => void;
@@ -14,17 +14,27 @@
   }
   let { onNavigateToChat, onLogout }: Props = $props();
 
-  let sessions = $state<SessionInfo[]>([]);
+  // Visão agregada: sessões de TODOS os servidores numa lista só, cada uma marcada com a origem.
+  let sessions = $state<AggSession[]>([]);
+  let serverErrors = $state<{ label: string; error: string }[]>([]);
   let loading = $state(true);
   let error = $state('');
   let showCreateSheet = $state(false);
   let showMenu = $state(false);
   let filterText = $state('');
 
-  // Multi-servidor: lista + ativo (recarregados ao abrir o menu). Trocar de server recarrega o app.
+  // Lista de servidores (gerenciada no menu: adicionar/remover). Sem "ativo" fixo — a lista é
+  // agregada; o servidor-alvo de uma sessão é o dela, escolhido ao abrir/criar.
   let servers = $state(listServers());
-  let activeId = $state(getActiveId());
   let scanning = $state(false);
+  const multiServer = $derived(servers.length > 1);
+
+  // Adicionar servidor manual (no PC: digitar URL+token em vez de escanear QR).
+  let showAddServer = $state(false);
+  let addUrl = $state('');
+  let addToken = $state('');
+  let addError = $state('');
+  let addBusy = $state(false);
 
   // Urgencia pra desempate: aguardando_input puxa pro topo; dead pro fim.
   const urgency: Record<State, number> = {
@@ -44,18 +54,46 @@
     const q = filterText.trim().toLowerCase();
     if (!q) return sorted;
     return sorted.filter(
-      (s) => s.name.toLowerCase().includes(q) || (s.cwd ?? '').toLowerCase().includes(q),
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        (s.cwd ?? '').toLowerCase().includes(q) ||
+        s.serverLabel.toLowerCase().includes(q),
     );
   });
 
   // Filtro so aparece quando a lista fica longa.
   const showFilter = $derived(sessions.length > 6);
 
-  async function loadSessions() {
-    loading = true;
+  // Agrega sessões de todos os servidores, marcando cada uma com a origem (id/label/cor). Servidor
+  // offline vira aviso em serverErrors, não derruba a lista. silent=true nos polls (sem spinner).
+  async function loadSessions(silent = false) {
+    const list = listServers();
+    servers = list;
+    if (list.length === 0) { sessions = []; serverErrors = []; loading = false; return; }
+    if (!silent) loading = true;
     error = '';
     try {
-      sessions = await getSessions();
+      const results = await getAllSessions(list);
+      const agg: AggSession[] = [];
+      const errs: { label: string; error: string }[] = [];
+      // Dedupe: vários servidores podem apontar pro MESMO backend (URLs diferentes). A identidade
+      // real da sessão é (jsonl, name) — o jsonl tem um uuid único por sessão, então sessões
+      // distintas nunca colidem; só a mesma sessão vista por 2 URLs colapsa (fica a 1ª).
+      const seen = new Set<string>();
+      for (const r of results) {
+        if (r.sessions) {
+          for (const s of r.sessions) {
+            const key = `${s.jsonl ?? s.cwd ?? ''}::${s.name}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            agg.push({ ...s, serverId: r.server.id, serverLabel: r.server.label, serverColor: serverColor(r.server.id) });
+          }
+        } else {
+          errs.push({ label: r.server.label, error: r.error ?? 'offline' });
+        }
+      }
+      sessions = agg;
+      serverErrors = errs;
     } catch (err) {
       error = err instanceof Error ? err.message : 'Erro ao carregar sessões';
     } finally {
@@ -65,19 +103,29 @@
 
   onMount(() => {
     loadSessions();
-    // Poll for updates every 5 seconds
-    const interval = setInterval(loadSessions, 5000);
+    // Poll for updates every 5 seconds (silent: sem spinner)
+    const interval = setInterval(() => loadSessions(true), 5000);
     return () => clearInterval(interval);
   });
 
+  // O sheet de criar já posicionou o servidor-alvo como ativo (selectServer), então createSession
+  // cai no servidor certo. Depois reagrega a lista pra a sessão nova aparecer com a marca correta.
   async function handleCreate(name: string, cwd?: string) {
-    const session = await createSession(name, cwd);
-    sessions = [session, ...sessions];
+    await createSession(name, cwd);
+    await loadSessions(true);
   }
 
-  async function handleDelete(name: string) {
-    await deleteSession(name);
-    sessions = sessions.filter(s => s.name !== name);
+  // Abrir/apagar precisam mirar o servidor DA sessão: selectServer(serverId) antes, pois api.ts lê
+  // o ativo a cada chamada (sem reload). Assim chat/SSE/delete vão pro backend certo.
+  function openSession(s: AggSession) {
+    selectServer(s.serverId);
+    onNavigateToChat(s.name);
+  }
+
+  async function handleDelete(s: AggSession) {
+    selectServer(s.serverId);
+    await deleteSession(s.name);
+    sessions = sessions.filter((x) => !(x.serverId === s.serverId && x.name === s.name));
   }
 
   function handleLogout() {
@@ -88,24 +136,45 @@
   // Abre o menu recarregando a lista de servidores (pode ter mudado desde a última abertura).
   function openMenu() {
     servers = listServers();
-    activeId = getActiveId();
     showMenu = !showMenu;
   }
 
-  function pickServer(id: string) {
-    if (id === getActiveId()) { showMenu = false; return; }
-    selectServer(id);
-    // Server ativo mudou -> recarrega pra re-buscar sessões/SSE do novo backend.
-    window.location.reload();
-  }
-
+  // Remove um servidor da lista. Sem "ativo" pra restaurar — só reagrega (ou desloga se zerou).
   function dropServer(id: string) {
-    const wasActive = id === getActiveId();
     removeServer(id);
     servers = listServers();
-    activeId = getActiveId();
     if (servers.length === 0) { handleLogout(); return; }
-    if (wasActive) window.location.reload();
+    loadSessions(true);
+  }
+
+  // Abre o sheet de adicionar servidor manual (URL + token), limpando o estado anterior.
+  function openAddServer() {
+    addUrl = '';
+    addToken = '';
+    addError = '';
+    showMenu = false;
+    showAddServer = true;
+  }
+
+  // Adiciona um servidor digitado à mão. Valida com getSessions (api.ts lê o ativo) e faz rollback
+  // em falha — igual ao Login — pra um servidor ruim não sujar a lista nem trocar o server bom.
+  async function submitAddServer(e: SubmitEvent) {
+    e.preventDefault();
+    addBusy = true;
+    addError = '';
+    const prevActive = getActiveId();
+    const { id, existed } = addServer(addUrl.trim(), addToken.trim());
+    try {
+      await getSessions();
+      showAddServer = false;
+      window.location.reload();
+    } catch (err) {
+      if (!existed) removeServer(id);
+      if (prevActive) selectServer(prevActive);
+      addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
+    } finally {
+      addBusy = false;
+    }
   }
 
   // Adiciona um servidor pelo QR (parecido com o Login): pega token + origem absoluta e ativa.
@@ -146,21 +215,14 @@
         <div class="menu-section-label">Servidores</div>
         {#each servers as s (s.id)}
           <div class="menu-server">
-            <button
-              class="menu-item server-pick"
-              role="menuitemradio"
-              aria-checked={s.id === activeId}
-              onclick={() => pickServer(s.id)}
-            >
-              <span class="server-dot" class:on={s.id === activeId} aria-hidden="true"></span>
+            <div class="server-row">
+              <span class="server-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
               <span class="server-label">{s.label}</span>
-            </button>
-            {#if servers.length > 1}
-              <button class="server-remove" aria-label={`Remover ${s.label}`} onclick={() => dropServer(s.id)}>×</button>
-            {/if}
+            </div>
+            <button class="server-remove" aria-label={`Remover ${s.label}`} onclick={() => dropServer(s.id)}>×</button>
           </div>
         {/each}
-        <button class="menu-item" role="menuitem" onclick={() => { scanning = true; showMenu = false; }}>
+        <button class="menu-item" role="menuitem" onclick={openAddServer}>
           + Adicionar servidor
         </button>
         <div class="menu-divider"></div>
@@ -175,6 +237,13 @@
   {/if}
 
   <div class="list-content">
+    {#if serverErrors.length > 0}
+      <div class="server-warn" role="status">
+        {#each serverErrors as e (e.label)}
+          <span class="server-warn-item">⚠ {e.label} offline</span>
+        {/each}
+      </div>
+    {/if}
     {#if loading && sessions.length === 0}
       <div class="empty-state">
         <div class="spinner-large" aria-label="Carregando…">⟳</div>
@@ -183,7 +252,7 @@
     {:else if error}
       <div class="empty-state">
         <p class="error-text">{error}</p>
-        <button class="retry-btn" onclick={loadSessions}>Tentar novamente</button>
+        <button class="retry-btn" onclick={() => loadSessions()}>Tentar novamente</button>
       </div>
     {:else if sessions.length === 0}
       <div class="empty-state">
@@ -207,11 +276,12 @@
       {#if visibleSessions.length === 0}
         <p class="filter-empty">Nenhuma sessão corresponde ao filtro.</p>
       {:else}
-        {#each visibleSessions as session (session.name)}
+        {#each visibleSessions as session (session.serverId + ':' + session.name)}
           <SessionCard
             {session}
-            onClick={() => onNavigateToChat(session.name)}
-            onDelete={() => handleDelete(session.name)}
+            serverBadge={multiServer ? { label: session.serverLabel, color: session.serverColor } : null}
+            onClick={() => openSession(session)}
+            onDelete={() => handleDelete(session)}
           />
         {/each}
       {/if}
@@ -232,10 +302,64 @@
 
   <CreateSessionSheet
     open={showCreateSheet}
+    {servers}
     onClose={() => (showCreateSheet = false)}
     onCreate={handleCreate}
     onOpenSession={onNavigateToChat}
   />
+
+  {#if showAddServer}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div
+      class="sheet-backdrop"
+      role="button"
+      tabindex="-1"
+      aria-label="Fechar"
+      onclick={() => (showAddServer = false)}
+    >
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="add-sheet" role="dialog" tabindex="-1" aria-label="Adicionar servidor" onclick={(e) => e.stopPropagation()}>
+        <h2 class="add-title">Adicionar servidor</h2>
+        <form onsubmit={submitAddServer} class="add-form">
+          <div class="field">
+            <label class="field-label" for="add-url">URL do servidor</label>
+            <input
+              id="add-url"
+              type="url"
+              class="field-input"
+              bind:value={addUrl}
+              placeholder="https://meu-pc.ts.net"
+              autocomplete="url"
+              autocorrect="off"
+              autocapitalize="off"
+              spellcheck={false}
+              inputmode="url"
+            />
+          </div>
+          <div class="field">
+            <label class="field-label" for="add-token">Token</label>
+            <input
+              id="add-token"
+              type="password"
+              class="field-input"
+              bind:value={addToken}
+              placeholder="••••••••••••••••"
+              autocomplete="current-password"
+            />
+          </div>
+          {#if addError}
+            <p class="error-msg" role="alert">{addError}</p>
+          {/if}
+          <button type="submit" class="add-primary" disabled={addBusy || !addUrl.trim() || !addToken.trim()}>
+            {addBusy ? 'Conectando…' : 'Adicionar'}
+          </button>
+          <button type="button" class="add-secondary" onclick={() => { showAddServer = false; scanning = true; }}>
+            Escanear QR
+          </button>
+        </form>
+      </div>
+    </div>
+  {/if}
 
   {#if scanning}
     <QrScanner onScan={handleScanServer} onClose={() => (scanning = false)} />
@@ -258,6 +382,21 @@
     overscroll-behavior-y: contain;
     padding: var(--space-4);
     padding-bottom: calc(env(safe-area-inset-bottom) + 80px);
+  }
+
+  .server-warn {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+  }
+  .server-warn-item {
+    font-size: var(--text-xs);
+    color: var(--warning);
+    background: rgba(224, 162, 59, 0.1);
+    border: 1px solid rgba(224, 162, 59, 0.25);
+    border-radius: var(--radius-full);
+    padding: 3px 10px;
   }
 
   .filter-input {
@@ -381,28 +520,24 @@
     align-items: center;
     border-bottom: 1px solid var(--border-subtle);
   }
-  .server-pick {
+  .server-row {
     flex: 1;
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    height: 44px;
-    padding: 0 var(--space-4);
-    text-align: left;
+    min-height: 44px;
+    padding: var(--space-2) var(--space-4);
     font-size: var(--text-sm);
     color: var(--text-primary);
-    justify-content: flex-start;
-    border-radius: 0;
-    border-bottom: none;
+    min-width: 0;
   }
-  .server-pick:active { background: var(--bg-hover); }
   .server-dot {
     width: 8px; height: 8px; border-radius: 50%;
     background: var(--border-default); flex-shrink: 0;
   }
-  .server-dot.on { background: var(--accent); }
   .server-label {
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px;
+    flex: 1; min-width: 0;
+    overflow-wrap: anywhere; word-break: break-word;
   }
   .server-remove {
     width: 40px; height: 44px; flex-shrink: 0;
@@ -410,6 +545,85 @@
   }
   .server-remove:active { color: var(--error); }
   .menu-divider { height: 1px; background: var(--border-subtle); }
+
+  /* Sheet de adicionar servidor manual */
+  .sheet-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-6);
+  }
+  .add-sheet {
+    width: 100%;
+    max-width: 400px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    padding: var(--space-5);
+  }
+  .add-title {
+    font-size: var(--text-base);
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: var(--space-4);
+  }
+  .add-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  .field { display: flex; flex-direction: column; gap: var(--space-2); }
+  .field-label { font-size: var(--text-sm); color: var(--text-secondary); font-weight: 500; }
+  .field-input {
+    height: 48px;
+    background: var(--bg-base);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 16px;
+    padding: 0 var(--space-4);
+    outline: none;
+    transition: border-color 180ms ease-out;
+  }
+  .field-input::placeholder { color: var(--text-muted); }
+  .field-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+  .error-msg {
+    font-size: var(--text-sm);
+    color: var(--error);
+    background: rgba(255, 69, 58, 0.08);
+    border: 1px solid rgba(255, 69, 58, 0.2);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3);
+  }
+  .add-primary {
+    height: 52px;
+    background: var(--accent);
+    border-radius: var(--radius-md);
+    color: #fff;
+    font-size: var(--text-base);
+    font-weight: 600;
+    width: 100%;
+    transition: background 180ms ease-out;
+  }
+  .add-primary:active:not(:disabled) { background: var(--accent-press); }
+  .add-primary:disabled { opacity: 0.5; cursor: default; }
+  .add-secondary {
+    height: 48px;
+    background: transparent;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    font-size: var(--text-base);
+    font-weight: 500;
+    width: 100%;
+    transition: background 180ms ease-out;
+  }
+  .add-secondary:active { background: var(--bg-hover); }
 
   .menu-item {
     width: 100%;

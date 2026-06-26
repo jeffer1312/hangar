@@ -17,6 +17,7 @@
     createSession,
   } from '../lib/api';
   import { parseStatusLine } from '../lib/statusline';
+  import { listServers } from '../lib/auth';
   import { deriveActivity } from '../lib/activity';
   import type { ChatEvent, StateEvent, State, SessionInfo } from '../lib/types';
 
@@ -351,6 +352,7 @@
 
   <CreateSessionSheet
     open={createOpen}
+    servers={listServers()}
     onClose={() => (createOpen = false)}
     onCreate={handleCreate}
     onOpenSession={onNavigateToChat}

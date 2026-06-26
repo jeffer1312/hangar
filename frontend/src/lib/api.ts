@@ -1,4 +1,5 @@
 import { getBaseUrl, getToken, dropActiveServer } from './auth';
+import type { Server } from './auth';
 import type {
   SessionInfo,
   ChatEvent,
@@ -46,6 +47,36 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function getSessions(): Promise<SessionInfo[]> {
   return apiFetch<SessionInfo[]>('/api/sessions');
+}
+
+// Lista sessões de UM servidor específico (baseUrl+token explícitos), sem mexer no ativo. Usado
+// pela visão agregada: cada servidor é consultado direto, então um ativo "global" não importa aqui.
+async function fetchSessionsForServer(s: Server): Promise<SessionInfo[]> {
+  const res = await fetch(`${s.baseUrl}/api/sessions`, {
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json() as Promise<SessionInfo[]>;
+}
+
+// Resultado por-servidor: sessões OU erro (servidor offline/token ruim). Nunca rejeita —
+// uma falha num servidor não pode esconder os outros nem o 401 não força logout aqui.
+export interface ServerSessions {
+  server: Server;
+  sessions: SessionInfo[] | null;
+  error: string | null;
+}
+
+export async function getAllSessions(servers: Server[]): Promise<ServerSessions[]> {
+  return Promise.all(
+    servers.map(async (server): Promise<ServerSessions> => {
+      try {
+        return { server, sessions: await fetchSessionsForServer(server), error: null };
+      } catch (e) {
+        return { server, sessions: null, error: e instanceof Error ? e.message : 'erro' };
+      }
+    }),
+  );
 }
 
 export function createSession(name: string, cwd?: string): Promise<SessionInfo> {

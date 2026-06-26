@@ -38,6 +38,14 @@ function makeId(): string {
   return 'srv-' + Math.random().toString(36).slice(2, 10);
 }
 
+// Cor estável por servidor (mesmo id -> mesma cor), pros badges/dots distinguirem origem.
+const SERVER_COLORS = ['#7c6af7', '#3ba55d', '#e0a23b', '#e0563b', '#3b9fe0', '#c43be0'];
+export function serverColor(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return SERVER_COLORS[h % SERVER_COLORS.length];
+}
+
 function labelFor(baseUrl: string): string {
   try {
     const h = new URL(baseUrl).hostname;
