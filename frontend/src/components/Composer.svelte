@@ -409,14 +409,18 @@
        do card (fora dele) -> isolation/position aqui NÃO os clipa. */
     position: relative;
     isolation: isolate;
-    border: 1px solid rgba(255, 255, 255, 0.10);
+    border: 1px solid var(--glass-border);
     box-shadow:               /* glow 0 12px 40px FICA no host (sem overflow:hidden) -> halo preservado */
-      inset 0 1px 0 rgba(255, 255, 255, 0.14),
+      inset 0 1px 0 var(--glass-highlight),
       inset 0 -1px 0 rgba(0, 0, 0, 0.22),
       0 1px 2px rgba(0, 0, 0, 0.18),
-      0 12px 40px rgba(0, 0, 0, 0.42);
+      0 12px 40px var(--glass-shadow);
     border-radius: var(--radius-lg);
-    padding: var(--space-3) var(--space-3) calc(var(--space-3) + env(safe-area-inset-bottom));
+    /* O card COBRE ate o fundo (a lista some atras dele -> nada de mensagem vazando embaixo). O
+       safe-area e padding INTERNO no rodape: o conteudo (controles) fica acima do home indicator e o
+       glass do card preenche a zona ate a borda da tela. max() (nao soma) -> so a folga do indicator,
+       sem banda dupla. Adapta por device via env. */
+    padding: var(--space-3) var(--space-3) max(var(--space-3), env(safe-area-inset-bottom));
   }
 
   /* ÚNICA camada com backdrop-filter: leaf bare (sem conteúdo, sem descendente posicionado), bounded
@@ -429,10 +433,10 @@
     border-radius: inherit;
     pointer-events: none;
     background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 38%),
-      rgba(28, 28, 32, 0.55);
-    backdrop-filter: blur(30px) saturate(180%) brightness(1.05);
-    -webkit-backdrop-filter: blur(30px) saturate(180%) brightness(1.05);
+      linear-gradient(180deg, var(--glass-highlight), transparent 40%),
+      var(--glass-bg);
+    backdrop-filter: blur(30px) saturate(180%);
+    -webkit-backdrop-filter: blur(30px) saturate(180%);
   }
 
   /* Rede de segurança durante o scroll: desliga o backdrop-filter e usa fundo quase opaco. MIGRADA
@@ -440,7 +444,7 @@
   .composer-card.scrolling::before {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
-    background: rgba(28, 28, 32, 0.94);
+    background: var(--glass-bg-solid);
   }
 
   /* Desktop: composer mais largo (aditivo; mobile fica nos 600px). */

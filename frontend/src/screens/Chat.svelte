@@ -248,8 +248,7 @@
   // Layout teclado-safe: a .chat-screen acompanha a ALTURA da viewport visivel. Quando o
   // teclado abre, vv.height encolhe -> o container encolhe pra area acima do teclado, com a
   // NavBar colada no topo e o composer no rodape (ambos flex-shrink:0) e a MessageList (flex:1)
-  // como UNICO scroller. Sem position:fixed + translateY (que deixava o iOS rolar a pagina e
-  // sumir com a NavBar). offsetTop compensa o scroll residual do iOS.
+  // como UNICO scroller. offsetTop compensa o pan do iOS (senao o composer some pro topo).
   $effect(() => {
     const vv = window.visualViewport;
     if (!vv || !screenEl) return;
@@ -258,30 +257,27 @@
       // Ignora valores transientes (a animacao do teclado reporta alturas minusculas por 1 frame).
       if (vv.height < 120) return;
       const h = vv.height + 'px';
-      // offsetTop = quanto o iOS PANEIA a visual viewport ao abrir o teclado (body travado em app.css
-      // -> e pan VISUAL, nao scroll de documento; scrollTo nao resolveria). Compensamos via `top` em
-      // position:relative (mesmo resultado do translateY, SEM transform): (a) nao promove o scroller a
-      // layer com tiled-backing -> SEM retangulo preto (WebKit 220892/226532); (b) nao cria
-      // containing-block que prenda os sheets position:fixed (SessionSwitcher/Usage/Activity da
-      // .chat-screen E ModelEffort/Command/Confirm do .bottom-dock). NAO voltar a usar transform aqui.
+      // offsetTop = quanto o iOS PANEIA a visual viewport ao abrir o teclado (body travado -> e pan
+      // VISUAL). Compensamos via `top` em position:relative (sem transform: nao promove layer com
+      // tiled-backing -> SEM retangulo preto; nao cria containing-block que prenda os sheets fixed).
       const top = (vv.offsetTop || 0) + 'px';
       if (screenEl.style.height !== h) screenEl.style.height = h;
       if (screenEl.style.top !== top) screenEl.style.top = top;
-      if (screenEl.style.transform) screenEl.style.transform = ''; // limpa qualquer residuo de transform
+      if (screenEl.style.transform) screenEl.style.transform = '';
     }
     function onFocusIn() {
       requestAnimationFrame(fit);
       setTimeout(fit, 300); // iOS as vezes so estabiliza apos a animacao do teclado
     }
-    // iOS 26: offsetTop/height as vezes NAO zeram ao fechar o teclado (~24px residual, WebKit #297779).
-    // No blur sem outro campo focado, forca estado limpo (senao sobra um vao no rodape).
+    // iOS 26: offsetTop/height as vezes NAO zeram ao fechar o teclado. No blur sem outro campo focado,
+    // forca estado limpo (senao sobra um vao no rodape).
     function onFocusOut() {
       setTimeout(() => {
         if (!screenEl) return;
         const a = document.activeElement;
-        if (a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT')) return; // trocou de campo
+        if (a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT')) return;
         screenEl.style.top = '0px';
-        screenEl.style.height = '';   // volta pro height:100dvh do CSS
+        screenEl.style.height = '';   // volta pro height do CSS (100vh)
         screenEl.style.transform = '';
       }, 50);
     }
@@ -371,7 +367,10 @@
   // mostrou — não depende de QUANDO o texto cai no .jsonl. Quando o bloco vira bubble, o preview dele
   // não é mais necessário e some; reaparece sozinho quando o PRÓXIMO bloco começa a streamar (o broker
   // reemite). Mata a duplicata (preview + bubble do mesmo bloco) na raiz, sem comparar texto.
-  const _norm = (s: string) => s.replace(/`/g, '').replace(/\s+/g, ' ').trim();
+  // Tira crase E marcadores de markdown (* _ ~ # >): o preview vem do pane JÁ RENDERIZADO (sem
+  // markdown), o .jsonl tem o markdown cru -> sem tirar, "**Confirma**" != "Confirma" e o preview
+  // duplicado de uma msg com formatação NÃO casava com a commitada (ficava como bolha fantasma).
+  const _norm = (s: string) => s.replace(/[`*_~#>]/g, '').replace(/\s+/g, ' ').trim();
   let _asstCount = 0;
   $effect(() => {
     // CRÍTICO: ler previewText AQUI no topo, SEMPRE -> em Svelte 5 a dep só é rastreada se LIDA na
@@ -380,16 +379,25 @@
     // effect re-roda a cada update do preview e limpa.
     const pv = previewText;
     let c = 0;
-    let last = '';
-    for (const e of events) if (e.kind === 'assistant_msg' && e.text) { c++; last = e.text; }
+    for (const e of events) if (e.kind === 'assistant_msg' && e.text) c++;
     const committed = c > _asstCount;
     _asstCount = c;
     if (!pv) return;
     // (a) bloco novo commitou OU (b) saiu de working -> dropa.
     if (committed || currentState !== 'working') { previewText = ''; return; }
-    // (c) residual coberto pela ÚLTIMA msg commitada (re-emit pós-commit, janela antes do idle).
+    // (c) residual coberto por QUALQUER das últimas msgs commitadas (não só a última): entre turnos o
+    // pane ainda mostra o bloco anterior como "● tail" e o broker reemite -> dropa se já é bolha.
     const p = _norm(pv);
-    if (p.length >= 16 && last && _norm(last).includes(p)) previewText = '';
+    if (p.length >= 16) {
+      let seen = 0;
+      for (let i = events.length - 1; i >= 0 && seen < 6; i--) {
+        const e = events[i];
+        if (e.kind === 'assistant_msg' && e.text) {
+          seen++;
+          if (_norm(e.text).includes(p)) { previewText = ''; return; }
+        }
+      }
+    }
   });
 
   // Slash commands gerais do Claude Code (ex: /clear, /compact) -> sessao viva. Modelo e
@@ -420,7 +428,7 @@
 </script>
 
 <div class="chat-screen" bind:this={screenEl}>
-  <NavBar title={sessionName} showBack={true} onBack={onBack} onTitleTap={openSwitcher} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} />
+  <NavBar title={sessionName} showBack={true} onBack={onBack} onTitleTap={openSwitcher} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} {scrolling} />
 
   {#if loading}
     <div class="chat-loading">
@@ -505,11 +513,11 @@
   .chat-screen {
     display: flex;
     flex-direction: column;
-    height: 100dvh;          /* fallback; o JS sobrescreve com visualViewport.height */
+    height: 100vh;          /* fallback; o JS (fit) sobrescreve com visualViewport.height no teclado */
     overflow: hidden;
     position: relative;
-    top: 0;                      /* baseline; o JS seta top = vv.offsetTop com o teclado aberto (pin do dock) */
-    background: var(--bg-base);  /* backing solido (INVARIANTE): layer nunca renderiza preto no glitch do iOS */
+    top: 0;
+    background: var(--bg-base);  /* backing solido: a layer nunca renderiza preto no glitch do iOS */
     /* Higiene de stacking; reforço de baixo risco. isolation NAO cria containing block pros sheets
        position:fixed (filhos da .chat-screen) — ao contrário de transform/contain/will-change/filter,
        que clipariam os sheets. NÃO reintroduzir transform aqui (top relativo = sem layer, sem preto). */

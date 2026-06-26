@@ -20,11 +20,14 @@
     // quando ha um overlay aberto que SO da pra interagir pela TUI.
     onOpenTerminal?: () => void;
     terminalAlert?: boolean;
+    // Durante o scroll da lista: desliga o backdrop-filter do glass (o re-amostrar no momentum dispara
+    // o bloco preto do iOS) e usa fundo quase opaco. Mesmo guard do composer.
+    scrolling?: boolean;
   }
-  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false }: Props = $props();
+  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, scrolling = false }: Props = $props();
 </script>
 
-<nav class="navbar">
+<nav class="navbar" class:scrolling={scrolling}>
   <div class="navbar-inner">
     {#if showBack}
       <button class="nav-btn back-btn" onclick={onBack} aria-label="Voltar">
@@ -88,15 +91,13 @@
 
 <style>
   .navbar {
-    background: var(--bg-base);   /* OPACO (#0d0d0f) — sem alpha, ou a camada promovida pode piscar */
+    background: var(--bg-base);   /* OPACO: camada GPU pintada que derrota o bloco preto do iOS. Glass
+                                     aqui quebrava no shift do teclado -> mantido SOLIDO (glass fica so
+                                     no composer + sidebar). Ver WebKit #89475. */
     border-bottom: 1px solid var(--border-subtle);
     padding-top: env(safe-area-inset-top);
     flex-shrink: 0;
     z-index: 20;
-    /* Camada GPU própria OPACA: o preto do bug do iOS aparece EM CIMA, sobre a navbar; numa camada
-       separada e pintada, o backing largado do scroller não consegue sobrepor a navbar de preto.
-       Seguro: a navbar não tem descendente position:fixed (os sheets ficam fora dela). Ver WebKit
-       #89475 + Apple Dev Forums 705172. */
     transform: translateZ(0);
     -webkit-backface-visibility: hidden;
     backface-visibility: hidden;

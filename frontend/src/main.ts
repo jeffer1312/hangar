@@ -1,6 +1,10 @@
 import { mount } from 'svelte';
 import './app.css';
 import App from './App.svelte';
+import { applyTheme } from './lib/theme';
+
+// Resolve o tema (escolha do usuario ou prefers-color-scheme) ANTES de montar -> sem flash do default.
+applyTheme();
 
 const app = mount(App, {
   target: document.getElementById('app')!,

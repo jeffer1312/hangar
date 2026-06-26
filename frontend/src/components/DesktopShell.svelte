@@ -37,7 +37,6 @@
   .desktop-shell {
     display: flex;
     height: 100vh;
-    height: 100dvh;
     width: 100%;
     overflow: hidden;
   }
