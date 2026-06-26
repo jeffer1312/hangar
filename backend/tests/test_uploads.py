@@ -45,3 +45,25 @@ def test_save_upload_server_generated_name_not_client(tmp_path):
     b = save_upload(str(tmp_path), PNG, "image/jpeg")
     assert a != b
     assert Path(a).suffix == ".png" and Path(b).suffix == ".jpg"
+
+
+from app.uploads import resolve_upload  # noqa: E402
+
+
+def test_resolve_upload_returns_path_for_existing_file(tmp_path):
+    saved = save_upload(str(tmp_path), PNG, "image/png")
+    fname = Path(saved).name
+    assert resolve_upload(str(tmp_path), fname) == saved
+
+
+def test_resolve_upload_rejects_traversal(tmp_path):
+    for bad in ["../secret.png", "a/b.png", "..", "x\\y.png"]:
+        with pytest.raises(UploadError) as e:
+            resolve_upload(str(tmp_path), bad)
+        assert e.value.status == 400
+
+
+def test_resolve_upload_missing_file_is_404(tmp_path):
+    with pytest.raises(UploadError) as e:
+        resolve_upload(str(tmp_path), "1234-abcdef.png")
+    assert e.value.status == 404
