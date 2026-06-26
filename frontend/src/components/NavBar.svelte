@@ -11,8 +11,10 @@
     onTitleTap?: () => void;
     status?: StatusFields | null;
     onExpandUsage?: () => void;
+    onOpenActivity?: () => void;
+    activityBadge?: number;
   }
-  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage }: Props = $props();
+  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, onOpenActivity, activityBadge = 0 }: Props = $props();
 </script>
 
 <nav class="navbar">
@@ -38,19 +40,33 @@
       <span class="navbar-title">{title}</span>
     {/if}
 
-    {#if status && onExpandUsage}
-      <RateChips {status} onExpand={onExpandUsage} />
-    {:else if onMenu}
-      <button class="nav-btn menu-btn" onclick={onMenu} aria-label="Menu">
-        <svg width="20" height="5" viewBox="0 0 20 5" fill="currentColor" aria-hidden="true">
-          <circle cx="2.5" cy="2.5" r="2.5"/>
-          <circle cx="10" cy="2.5" r="2.5"/>
-          <circle cx="17.5" cy="2.5" r="2.5"/>
-        </svg>
-      </button>
-    {:else}
-      <div class="nav-spacer"></div>
-    {/if}
+    <div class="nav-right">
+      {#if onOpenActivity}
+        <button class="nav-btn activity-btn" onclick={onOpenActivity} aria-label="Atividade">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="3 5 4.5 6.5 7 4"/>
+            <polyline points="3 11.5 4.5 13 7 10.5"/>
+            <line x1="10" y1="5.5" x2="20" y2="5.5"/>
+            <line x1="10" y1="12" x2="20" y2="12"/>
+            <line x1="10" y1="18.5" x2="20" y2="18.5"/>
+          </svg>
+          {#if activityBadge > 0}<span class="activity-badge">{activityBadge}</span>{/if}
+        </button>
+      {/if}
+      {#if status && onExpandUsage}
+        <RateChips {status} onExpand={onExpandUsage} />
+      {:else if onMenu}
+        <button class="nav-btn menu-btn" onclick={onMenu} aria-label="Menu">
+          <svg width="20" height="5" viewBox="0 0 20 5" fill="currentColor" aria-hidden="true">
+            <circle cx="2.5" cy="2.5" r="2.5"/>
+            <circle cx="10" cy="2.5" r="2.5"/>
+            <circle cx="17.5" cy="2.5" r="2.5"/>
+          </svg>
+        </button>
+      {:else}
+        <div class="nav-spacer"></div>
+      {/if}
+    </div>
   </div>
 </nav>
 
@@ -132,5 +148,34 @@
 
   .nav-spacer {
     min-width: 44px;
+  }
+
+  /* Grupo à direita: botão de atividade + chips de uso. */
+  .nav-right {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-shrink: 0;
+  }
+
+  .activity-btn {
+    position: relative;
+    color: var(--text-secondary);
+  }
+
+  .activity-badge {
+    position: absolute;
+    top: 4px;
+    right: 2px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: var(--radius-full);
+    background: var(--accent);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 16px;
+    text-align: center;
   }
 </style>
