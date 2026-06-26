@@ -14,7 +14,13 @@
     const path = hash.replace(/^#/, '');
     const chatMatch = path.match(/^\/chat\/(.+)$/);
     if (chatMatch) {
-      return { name: 'chat', sessionName: decodeURIComponent(chatMatch[1]) };
+      const sessionName = decodeURIComponent(chatMatch[1]);
+      // Auto-cura: um hash #/chat/undefined (ou vazio) preso na URL fazia o Chat montar com
+      // sessionName "undefined" -> SSE em /sessions/undefined/events (404 em loop eterno).
+      // Trata como invalido e cai na lista, em vez de prender o usuario numa sessao fantasma.
+      if (sessionName && sessionName !== 'undefined') {
+        return { name: 'chat', sessionName };
+      }
     }
     return { name: 'sessions' };
   }
@@ -40,6 +46,11 @@
   }
 
   function navigateToChat(name: string) {
+    // Nunca cria um hash de chat com nome invalido (evita gerar #/chat/undefined na origem).
+    if (!name || name === 'undefined') {
+      navigateTo('#/');
+      return;
+    }
     navigateTo('#/chat/' + encodeURIComponent(name));
   }
 
