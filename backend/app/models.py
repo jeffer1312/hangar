@@ -36,6 +36,10 @@ class StateEvent(BaseModel):
     question: Optional[str] = None       # awaiting_input: the question line
     options: Optional[list[str]] = None  # awaiting_input: selectable option labels
     status_line: Optional[str] = None    # raw bottom chrome from the pane, shown as-is on the web
+    # True quando um OVERLAY interativo so-TUI esta aberto (ex: /status, /config, /help, picker do
+    # /model): tem rodape de navegacao ("Esc to cancel") mas NAO gera linha no .jsonl. O front abre o
+    # espelho do pane (TerminalMirror) pra navegar via teclas, ja que so existe no terminal.
+    overlay: bool = False
 
 
 class PreviewEvent(BaseModel):

@@ -8,6 +8,7 @@ from app.tmux import send_keys
 _SETTLE = 0.3  # apos uma tecla de navegacao
 _OPEN_SETTLE = 0.7  # apos abrir o picker / confirmar (precisa redesenhar/commitar o resultado)
 _NAV_GAP = 0.12  # entre toques Up/Down em rajada
+_SLASH_SETTLE = 0.3  # apos digitar "/cmd": deixa o menu de autocomplete renderizar antes do Enter
 
 
 class TerminalInput:
@@ -19,9 +20,38 @@ class TerminalInput:
         if "\n" in text:
             tmux.paste_text(name, text)
             time.sleep(0.05)  # deixa a TUI acomodar o paste antes do Enter submeter
+            send_keys(name, "Enter")
+        elif text.lstrip().startswith("/"):
+            # Slash command: ao digitar "/..." o Claude Code abre um menu de autocomplete. Sem dar tempo
+            # do menu renderizar, o Enter corre com o redraw e e ENGOLIDO pelo menu (o comando fica
+            # digitado mas NAO executa -> "o slash nao chega no terminal"). Espera o menu acomodar, Enter
+            # pra executar; um 2o Enter cobre o caso do 1o so ter selecionado a sugestao (o comando ja
+            # rodou e o prompt esta vazio -> o 2o Enter e no-op inofensivo).
+            send_keys(name, text, literal=True)
+            time.sleep(_SLASH_SETTLE)
+            send_keys(name, "Enter")
+            time.sleep(_SLASH_SETTLE)
+            send_keys(name, "Enter")
         else:
             send_keys(name, text, literal=True)
-        send_keys(name, "Enter")
+            send_keys(name, "Enter")
+
+    # Teclas de navegacao liberadas pro espelho do pane (TerminalMirror dirige overlays so-TUI:
+    # /status, /config, /help, pickers). Allowlist (nao texto livre) pra so passar navegacao -> nada
+    # de control chars arbitrarios na TUI. Valor = nome de tecla do tmux send-keys (PPage/NPage =
+    # PageUp/PageDown; BTab = Shift-Tab).
+    _NAV_KEYS = {
+        "Up": "Up", "Down": "Down", "Left": "Left", "Right": "Right",
+        "Enter": "Enter", "Escape": "Escape", "Tab": "Tab", "BTab": "BTab",
+        "PageUp": "PPage", "PageDown": "NPage", "Space": "Space",
+    }
+
+    def send_key(self, name: str, key: str) -> None:
+        # Manda UMA tecla de navegacao (allowlist) pro pane. Usado pelo espelho do pane.
+        tmux_key = self._NAV_KEYS.get(key)
+        if tmux_key is None:
+            raise ValueError(f"key not allowed: {key!r}")
+        send_keys(name, tmux_key)
 
     def select(self, name: str, option: int) -> None:
         if option < 1:

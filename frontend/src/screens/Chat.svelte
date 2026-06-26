@@ -7,6 +7,7 @@
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
   import UsageSheet from '../components/UsageSheet.svelte';
   import ActivitySheet from '../components/ActivitySheet.svelte';
+  import TerminalMirror from '../components/TerminalMirror.svelte';
   import {
     getHistory,
     sendInput,
@@ -87,6 +88,17 @@
   }
 
   const currentState = $derived<State>(stateEvent?.state ?? 'idle');
+  // Espelho do pane (overlays so-TUI: /status, /config, /help, pickers). MANUAL: o usuario abre pelo
+  // botao da NavBar ou pela pilula de aviso — NUNCA toma a tela sozinho (auto-takeover assustava +
+  // prendia). tuiOverlay = ha um overlay aberto que SO da pra interagir pela TUI (sem opcoes nativas;
+  // awaiting_input vira OptionButtons na lista). Serve so pra DESTACAR (pulsar o botao + mostrar a
+  // pilula), nao pra abrir.
+  const tuiOverlay = $derived(!!stateEvent?.overlay && currentState !== 'awaiting_input');
+  let mirrorOpen = $state(false);
+  function openMirror() { mirrorOpen = true; }
+  // "Voltar ao chat" = SO esconde o espelho. NAO manda Escape -> a TUI fica como esta (nao fecha o
+  // painel que o usuario queria ler). Sair do overlay de proposito = tecla Esc na barra do espelho.
+  function closeMirror() { mirrorOpen = false; }
   // Statusline crua -> campos tipados (modelo, contexto, custo, tempo de sessao).
   const status = $derived(parseStatusLine(stateEvent?.status_line ?? null));
   // Painel de atividade: tarefas (TaskCreate/Update) + agentes rodando, derivado dos eventos.
@@ -192,6 +204,16 @@
       try {
         previewText = (JSON.parse(e.data) as { text?: string }).text ?? '';
       } catch {}
+    });
+
+    // Reset de sessao (ex: /clear): o backend trocou de transcript. O dedup-por-id NAO limparia as
+    // bolhas antigas (ids diferentes) -> zera tudo e recarrega o history do jsonl novo (vem limpo).
+    es.addEventListener('reset', () => {
+      armWatchdog();
+      events = [];
+      previewText = '';
+      stateEvent = null;
+      loadHistory();
     });
 
     es.onerror = () => {
@@ -398,7 +420,7 @@
 </script>
 
 <div class="chat-screen" bind:this={screenEl}>
-  <NavBar title={sessionName} showBack={true} onBack={onBack} onTitleTap={openSwitcher} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} />
+  <NavBar title={sessionName} showBack={true} onBack={onBack} onTitleTap={openSwitcher} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} />
 
   {#if loading}
     <div class="chat-loading">
@@ -421,6 +443,15 @@
       onCancel={handleInterrupt}
       onScrollActivity={handleScrollActivity}
     />
+  {/if}
+
+  {#if tuiOverlay && !mirrorOpen}
+    <!-- Aviso DESTACADO: ha um painel que SO da pra interagir pela TUI. Pulsa pra chamar atencao;
+         tocar abre o espelho. Nao toma a tela (so um banner acima do dock). -->
+    <button class="tui-pill" style:bottom={`${dockH + 10}px`} onclick={openMirror} aria-label="Abrir terminal para interagir">
+      <span class="tui-pill-dot"></span>
+      <span class="tui-pill-text">Interação só pela TUI — toque pra abrir</span>
+    </button>
   {/if}
 
   <div class="bottom-dock" bind:this={dockEl}>
@@ -466,6 +497,8 @@
   <UsageSheet open={usageOpen} {status} onClose={() => (usageOpen = false)} />
 
   <ActivitySheet open={activityOpen} {activity} {sessionName} onClose={() => (activityOpen = false)} />
+
+  <TerminalMirror open={mirrorOpen} {sessionName} onClose={closeMirror} />
 </div>
 
 <style>
@@ -522,6 +555,42 @@
     left: 0;
     right: 0;
     z-index: 20;
+  }
+
+  /* Aviso flutuante "interação só pela TUI": acima do dock (bottom = altura do dock + gap, via JS).
+     Pulsa pra chamar atenção; centralizado. z acima do dock. */
+  .tui-pill {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 21;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    max-width: calc(100% - var(--space-6));
+    padding: var(--space-2) var(--space-4);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-full, 999px);
+    background: var(--bg-elevated, var(--bg-base));
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    animation: tui-pulse 1.6s ease-in-out infinite;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .tui-pill:active { background: var(--bg-hover); }
+  .tui-pill-dot {
+    width: 8px; height: 8px; flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .tui-pill-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  @keyframes tui-pulse {
+    0%, 100% { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35), 0 0 0 0 var(--accent); }
+    50%      { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35), 0 0 0 4px transparent; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tui-pill { animation: none; }
   }
 
   /* Dead state footer */

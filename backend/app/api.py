@@ -43,6 +43,10 @@ class SelectBody(BaseModel):
     option: int
 
 
+class KeyBody(BaseModel):
+    key: str  # nome da tecla de navegacao (allowlist em TerminalInput._NAV_KEYS)
+
+
 class ModelEffortBody(BaseModel):
     # ambos opcionais: so esforco (sem modelo) ainda dirige o picker do /model, deixando o
     # modelo na linha atual. scope: 'session' (aperta `s`) ou 'default' (aperta Enter).
@@ -187,6 +191,26 @@ def select(name: str, body: SelectBody):
 @app.post("/api/sessions/{name}/interrupt", dependencies=[Depends(require_auth)])
 def interrupt(name: str):
     terminal.interrupt(name)
+    return {"ok": True}
+
+
+@app.get("/api/sessions/{name}/pane", dependencies=[Depends(require_auth)])
+def pane(name: str):
+    # Pane CRU (texto ja composto pelo tmux: sem ANSI/cursor-move). O espelho do pane (TerminalMirror)
+    # le isto pra mostrar overlays so-TUI (/status, /config, /help, pickers) que nao caem no .jsonl.
+    from app import tmux
+    if not tmux.has_session(name):
+        raise HTTPException(404, "sessao nao encontrada")
+    return {"text": tmux.capture_pane(name)}
+
+
+@app.post("/api/sessions/{name}/keys", dependencies=[Depends(require_auth)])
+def keys(name: str, body: KeyBody):
+    # Uma tecla de navegacao (allowlist) pro pane — dirige overlays so-TUI a partir do espelho.
+    try:
+        terminal.send_key(name, body.key)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return {"ok": True}
 
 
