@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { setCredentials } from '../lib/auth';
+  import { addServer, removeServer, selectServer, getActiveId, getBaseUrl } from '../lib/auth';
   import { getSessions } from '../lib/api';
   import QrScanner from '../components/QrScanner.svelte';
 
@@ -9,7 +9,7 @@
   }
   let { onLogin }: Props = $props();
 
-  let baseUrl = $state(localStorage.getItem('cp_base_url') ?? '');
+  let baseUrl = $state(getBaseUrl());
   let token = $state('');
   let loading = $state(false);
   let error = $state('');
@@ -24,8 +24,8 @@
       const u = new URL(text);
       const t = u.searchParams.get('token');
       if (t) tok = t;
-      const api = u.searchParams.get('api');
-      if (api) baseUrl = api;
+      // baseUrl ABSOLUTO: ?api= se houver, senão a origem da própria URL do QR.
+      baseUrl = u.searchParams.get('api') ?? u.origin;
     } catch {
       /* not a URL — treat as a raw token */
     }
@@ -39,21 +39,17 @@
     loading = true;
     error = '';
 
-    // Temporarily set credentials so api.ts picks them up
-    const prevBase = localStorage.getItem('cp_base_url');
-    const prevToken = localStorage.getItem('cp_token');
-    setCredentials(baseUrl.trim(), token.trim());
+    // Adiciona+ativa o servidor (api.ts já lê o ativo). Em falha, rollback: se era novo remove e
+    // restaura o ativo anterior — pra um login ruim não sujar a lista nem trocar o server bom.
+    const prevActive = getActiveId();
+    const { id, existed } = addServer(baseUrl.trim(), token.trim());
 
     try {
       await getSessions();
       onLogin();
     } catch (err) {
-      // Restore previous credentials on failure
-      if (prevBase !== null) localStorage.setItem('cp_base_url', prevBase);
-      else localStorage.removeItem('cp_base_url');
-      if (prevToken !== null) localStorage.setItem('cp_token', prevToken);
-      else localStorage.removeItem('cp_token');
-
+      if (!existed) removeServer(id);
+      if (prevActive) selectServer(prevActive);
       error = err instanceof Error
         ? `Falha na conexão: ${err.message}`
         : 'Erro desconhecido';
@@ -74,8 +70,8 @@
     const t = params.get('token');
     if (!t) return;
     token = t;
-    const api = params.get('api');
-    if (api) baseUrl = api;
+    // baseUrl ABSOLUTO = ?api= ou a origem onde o app foi aberto (ex: https://casa.ts.net).
+    baseUrl = params.get('api') ?? window.location.origin;
     window.history.replaceState({}, '', window.location.pathname + window.location.hash);
     void connect();
   });

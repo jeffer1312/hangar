@@ -26,8 +26,9 @@
     onCommand: (cmd: string) => void;
     onInterrupt: () => void;
     onExpandUsage: () => void;
+    scrolling?: boolean;
   }
-  let { sessionName, sessionState, status, onSend, onCommand, onInterrupt, onExpandUsage }: Props = $props();
+  let { sessionName, sessionState, status, onSend, onCommand, onInterrupt, onExpandUsage, scrolling }: Props = $props();
 
   // ── Slash commands: busca uma vez por sessao (com cache) ────────────────────
   // Comeca vazio; o $effect popula na hora a partir do cache (sincrono) ou da rede.
@@ -267,7 +268,7 @@
     aria-hidden="true"
     tabindex="-1"
   />
-  <div class="composer-card">
+  <div class="composer-card" class:scrolling={scrolling}>
     <div class="composer-top">
       <div class="top-left">
         <button class="slash-btn" onclick={() => (commandSheetOpen = true)} aria-label="Comandos">
@@ -418,6 +419,14 @@
       0 12px 40px rgba(0, 0, 0, 0.42);
     border-radius: var(--radius-lg);
     padding: var(--space-3) var(--space-3) calc(var(--space-3) + env(safe-area-inset-bottom));
+  }
+
+  /* Durante o scroll: desliga o backdrop-filter (fonte do bloco preto no iOS) e usa um fundo quase
+     opaco no lugar. O glass volta ao parar. transition no backdrop não anima, mas o swap é discreto. */
+  .composer-card.scrolling {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: rgba(28, 28, 32, 0.94);
   }
 
   /* ── Textarea (transparente dentro do card) ─────────────────────────────── */

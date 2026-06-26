@@ -3,8 +3,9 @@
   import NavBar from '../components/NavBar.svelte';
   import SessionCard from '../components/SessionCard.svelte';
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
+  import QrScanner from '../components/QrScanner.svelte';
   import { getSessions, createSession, deleteSession } from '../lib/api';
-  import { clearCredentials } from '../lib/auth';
+  import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer } from '../lib/auth';
   import type { SessionInfo, State } from '../lib/types';
 
   interface Props {
@@ -19,6 +20,11 @@
   let showCreateSheet = $state(false);
   let showMenu = $state(false);
   let filterText = $state('');
+
+  // Multi-servidor: lista + ativo (recarregados ao abrir o menu). Trocar de server recarrega o app.
+  let servers = $state(listServers());
+  let activeId = $state(getActiveId());
+  let scanning = $state(false);
 
   // Urgencia pra desempate: aguardando_input puxa pro topo; dead pro fim.
   const urgency: Record<State, number> = {
@@ -78,12 +84,53 @@
     clearCredentials();
     onLogout();
   }
+
+  // Abre o menu recarregando a lista de servidores (pode ter mudado desde a última abertura).
+  function openMenu() {
+    servers = listServers();
+    activeId = getActiveId();
+    showMenu = !showMenu;
+  }
+
+  function pickServer(id: string) {
+    if (id === getActiveId()) { showMenu = false; return; }
+    selectServer(id);
+    // Server ativo mudou -> recarrega pra re-buscar sessões/SSE do novo backend.
+    window.location.reload();
+  }
+
+  function dropServer(id: string) {
+    const wasActive = id === getActiveId();
+    removeServer(id);
+    servers = listServers();
+    activeId = getActiveId();
+    if (servers.length === 0) { handleLogout(); return; }
+    if (wasActive) window.location.reload();
+  }
+
+  // Adiciona um servidor pelo QR (parecido com o Login): pega token + origem absoluta e ativa.
+  function handleScanServer(text: string) {
+    let tok = text.trim();
+    let base = '';
+    try {
+      const u = new URL(text);
+      const t = u.searchParams.get('token');
+      if (t) tok = t;
+      base = u.searchParams.get('api') ?? u.origin;
+    } catch {
+      base = ''; // token cru sem URL -> sem origem confiável; ignora
+    }
+    scanning = false;
+    if (!tok || !base) return;
+    addServer(base, tok);
+    window.location.reload();
+  }
 </script>
 
 <div class="session-list-screen">
   <NavBar
     title="claude pocket"
-    onMenu={() => (showMenu = !showMenu)}
+    onMenu={openMenu}
   />
 
   {#if showMenu}
@@ -96,11 +143,32 @@
       onclick={() => (showMenu = false)}
     >
       <div class="menu-popup" role="menu">
-        <button class="menu-item menu-item--danger" role="menuitem" onclick={handleLogout}>
-          Sair
+        <div class="menu-section-label">Servidores</div>
+        {#each servers as s (s.id)}
+          <div class="menu-server">
+            <button
+              class="menu-item server-pick"
+              role="menuitemradio"
+              aria-checked={s.id === activeId}
+              onclick={() => pickServer(s.id)}
+            >
+              <span class="server-dot" class:on={s.id === activeId} aria-hidden="true"></span>
+              <span class="server-label">{s.label}</span>
+            </button>
+            {#if servers.length > 1}
+              <button class="server-remove" aria-label={`Remover ${s.label}`} onclick={() => dropServer(s.id)}>×</button>
+            {/if}
+          </div>
+        {/each}
+        <button class="menu-item" role="menuitem" onclick={() => { scanning = true; showMenu = false; }}>
+          + Adicionar servidor
         </button>
+        <div class="menu-divider"></div>
         <button class="menu-item" role="menuitem" onclick={() => { loadSessions(); showMenu = false; }}>
           Atualizar
+        </button>
+        <button class="menu-item menu-item--danger" role="menuitem" onclick={handleLogout}>
+          Sair
         </button>
       </div>
     </div>
@@ -168,6 +236,10 @@
     onCreate={handleCreate}
     onOpenSession={onNavigateToChat}
   />
+
+  {#if scanning}
+    <QrScanner onScan={handleScanServer} onClose={() => (scanning = false)} />
+  {/if}
 </div>
 
 <style>
@@ -294,9 +366,50 @@
     border: 1px solid var(--border-default);
     border-radius: var(--radius-md);
     overflow: hidden;
-    min-width: 160px;
+    min-width: 200px;
     box-shadow: 0 8px 32px rgba(0,0,0,0.4);
   }
+
+  /* Seção de servidores (multi-PC) no menu */
+  .menu-section-label {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    padding: var(--space-3) var(--space-4) var(--space-1);
+  }
+  .menu-server {
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .server-pick {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: 44px;
+    padding: 0 var(--space-4);
+    text-align: left;
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+    justify-content: flex-start;
+    border-radius: 0;
+    border-bottom: none;
+  }
+  .server-pick:active { background: var(--bg-hover); }
+  .server-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--border-default); flex-shrink: 0;
+  }
+  .server-dot.on { background: var(--accent); }
+  .server-label {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px;
+  }
+  .server-remove {
+    width: 40px; height: 44px; flex-shrink: 0;
+    color: var(--text-muted); font-size: var(--text-lg); line-height: 1;
+  }
+  .server-remove:active { color: var(--error); }
+  .menu-divider { height: 1px; background: var(--border-subtle); }
 
   .menu-item {
     width: 100%;
