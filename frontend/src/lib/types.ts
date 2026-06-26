@@ -39,6 +39,43 @@ export interface CommandInfo {
   destructive?: boolean;           // exige confirmação antes de enviar
 }
 
+// ── Workflows (painel estilo /workflows do terminal) ────────────────────────
+export interface WorkflowSummary {
+  runId: string;
+  name: string;
+  status: string; // completed | killed | running
+  agentCount: number;
+  phaseCount: number;
+  totalTokens: number;
+  durationMs: number;
+  startTime: number;
+  running: boolean;
+}
+
+export interface WorkflowAgent {
+  label: string | null;
+  phaseTitle: string | null;
+  state: string | null; // done | error | progress
+  model: string | null;
+  tokens: number;
+  durationMs: number;
+  toolCalls: number;
+  lastToolName: string | null;
+  lastToolSummary: string | null;
+  resultPreview: string | null;
+}
+
+export interface WorkflowDetail {
+  runId: string;
+  name: string;
+  status: string;
+  totalTokens: number;
+  durationMs: number;
+  summary: string | null;
+  phases: { title: string | null; detail: string | null }[];
+  agents: WorkflowAgent[];
+}
+
 // ── Scanner de pastas ───────────────────────────────────────────────────────
 export interface FsRoot {
   name: string;   // basename da raiz (vira o rótulo do chip)
