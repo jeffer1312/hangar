@@ -15,10 +15,11 @@ _USER_PROMPT_RE = re.compile(r"^\s*❯")
 
 
 def _norm(s: str) -> str:
-    # Normaliza pra casar o texto do PANE (verbatim: hard-wrap do terminal, SEM markdown) com o do
-    # .jsonl (limpo, COM `crase`/markdown): tira crase e colapsa espaço. Usado pra detectar quando o
-    # preview JÁ caiu no transcript (já commitado) -> não reenviar, não duplicar.
-    return re.sub(r"\s+", " ", s.replace("`", "")).strip()
+    # Normaliza pra casar o texto do PANE (JÁ RENDERIZADO: hard-wrap do terminal, SEM markdown) com o
+    # do .jsonl (markdown CRU): tira marcadores de markdown (crase * _ ~ # >) e colapsa espaço. Sem
+    # tirar os marcadores, uma msg com formatação ("**Confirma**" vs "Confirma") não casava e o preview
+    # já-commitado vazava como bolha duplicada. Usado pra suprimir preview já no transcript.
+    return re.sub(r"\s+", " ", re.sub(r"[`*_~#>]", "", s)).strip()
 # Bloco ● que e TOOL-CALL/STATUS, nao prosa: "● Bash(...)", "● Reading 4 files…", "● Running 1 shell
 # command…", "● Ran 1 shell command". Pular esses mantem o preview na ULTIMA PROSA -> a lista nao fica
 # "pulando" entre texto e indicador de ferramenta (o tool aparece como ToolCard quando cai no .jsonl).
