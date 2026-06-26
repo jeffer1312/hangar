@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from app.auth import require_auth
@@ -8,7 +9,7 @@ from app.model_picker import PickerError
 from app.registry import SessionRegistry
 from app.terminal_input import TerminalInput
 from app.sse import merged_events
-from app.uploads import save_upload, UploadError
+from app.uploads import save_upload, resolve_upload, UploadError
 
 app = FastAPI(title="claude-pocket")
 registry = SessionRegistry()
@@ -109,6 +110,18 @@ async def upload(name: str, request: Request):
     except UploadError as e:
         raise HTTPException(e.status, e.detail)
     return {"path": path}
+
+
+@app.get("/api/sessions/{name}/uploads/{filename}", dependencies=[Depends(require_auth)])
+def serve_upload(name: str, filename: str):
+    info = next((s for s in registry.list() if s.name == name), None)
+    if info is None or not info.cwd:
+        raise HTTPException(404, "sessao nao encontrada")
+    try:
+        path = resolve_upload(info.cwd, filename)
+    except UploadError as e:
+        raise HTTPException(e.status, e.detail)
+    return FileResponse(path)
 
 
 @app.post("/api/sessions/{name}/model-effort", dependencies=[Depends(require_auth)])
