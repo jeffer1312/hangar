@@ -30,7 +30,7 @@
   let loading = $state(true);
   let error = $state('');
   let es: EventSource | null = null;
-  let dockEl: HTMLElement | undefined = $state();
+  let screenEl: HTMLElement | undefined = $state();
   let pending = $state<{ id: string; text: string }[]>([]);
 
   // ── Switcher de sessoes (NavBar -> sheet) + criar nova sem voltar ──────────
@@ -122,34 +122,31 @@
     es?.close();
   });
 
-  // Lift the bottom dock (composer) above the on-screen keyboard, cross-platform.
-  // iOS: window.innerHeight nao encolhe; o teclado vive na diferenca p/ visualViewport,
-  // e o Safari ainda ROLA a viewport (offsetTop > 0) ao focar perto do fundo — por isso
-  // o inset desconta offsetTop e escutamos 'scroll' alem de 'resize'. Android/Chrome com
-  // interactive-widget=resizes-content encolhe o layout -> inset ~0 -> no-op (sem duplo).
+  // Layout teclado-safe: a .chat-screen acompanha a ALTURA da viewport visivel. Quando o
+  // teclado abre, vv.height encolhe -> o container encolhe pra area acima do teclado, com a
+  // NavBar colada no topo e o composer no rodape (ambos flex-shrink:0) e a MessageList (flex:1)
+  // como UNICO scroller. Sem position:fixed + translateY (que deixava o iOS rolar a pagina e
+  // sumir com a NavBar). offsetTop compensa o scroll residual do iOS.
   $effect(() => {
-    if (!dockEl) return;
     const vv = window.visualViewport;
-    if (!vv) return;
-    function update() {
-      if (!dockEl || !vv) return;
-      const inset = window.innerHeight - vv.height - vv.offsetTop;
-      dockEl.style.transform = `translateY(-${Math.max(0, inset)}px)`;
+    if (!vv || !screenEl) return;
+    function fit() {
+      if (!screenEl || !vv) return;
+      screenEl.style.height = vv.height + 'px';
+      screenEl.style.transform = `translateY(${vv.offsetTop}px)`;
     }
-    vv.addEventListener('resize', update);
-    vv.addEventListener('scroll', update);
-    // Foco na textarea pode preceder o resize do teclado: forca um update no proximo frame.
     function onFocusIn() {
-      requestAnimationFrame(update);
-      // segundo tick: iOS as vezes so estabiliza apos a animacao do teclado
-      setTimeout(update, 300);
+      requestAnimationFrame(fit);
+      setTimeout(fit, 300); // iOS as vezes so estabiliza apos a animacao do teclado
     }
-    dockEl.addEventListener('focusin', onFocusIn);
-    update();
+    fit();
+    vv.addEventListener('resize', fit);
+    vv.addEventListener('scroll', fit);
+    screenEl.addEventListener('focusin', onFocusIn);
     return () => {
-      vv.removeEventListener('resize', update);
-      vv.removeEventListener('scroll', update);
-      dockEl?.removeEventListener('focusin', onFocusIn);
+      vv.removeEventListener('resize', fit);
+      vv.removeEventListener('scroll', fit);
+      screenEl?.removeEventListener('focusin', onFocusIn);
     };
   });
 
@@ -211,7 +208,7 @@
   }
 </script>
 
-<div class="chat-screen">
+<div class="chat-screen" bind:this={screenEl}>
   <NavBar title={sessionName} showBack={true} onBack={onBack} onTitleTap={openSwitcher} {status} onExpandUsage={() => (usageOpen = true)} />
 
   {#if loading}
@@ -233,7 +230,7 @@
     />
   {/if}
 
-  <div class="bottom-dock" bind:this={dockEl}>
+  <div class="bottom-dock">
     {#if currentState === 'dead'}
       <div class="dead-footer">
         <p class="dead-text">Esta sessão foi encerrada.</p>
@@ -278,8 +275,9 @@
   .chat-screen {
     display: flex;
     flex-direction: column;
-    height: 100%;
+    height: 100dvh;          /* fallback; o JS sobrescreve com visualViewport.height */
     overflow: hidden;
+    transform-origin: top;
   }
 
   .chat-loading,
@@ -314,16 +312,11 @@
     font-size: var(--text-sm);
   }
 
-  /* Fixed bottom dock: statusline bar + composer (or dead footer) */
+  /* Bottom dock: statusline bar + composer (or dead footer). Flex child normal. */
   .bottom-dock {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    z-index: 30;
+    flex-shrink: 0;
     background: var(--bg-base);
     padding-bottom: env(safe-area-inset-bottom);
-    will-change: transform;
   }
 
   /* Dead state footer */

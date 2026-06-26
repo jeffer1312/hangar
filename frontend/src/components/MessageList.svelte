@@ -104,8 +104,8 @@
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: contain;
     scroll-behavior: auto;
-    /* Make room for the fixed bottom dock (state pill + statusline + composer) + safe area */
-    padding-bottom: 190px;
+    /* O dock agora e um flex sibling real (nao fixed) -> sem padding gigante. */
+    padding-bottom: var(--space-3);
   }
 
   .messages-inner {
