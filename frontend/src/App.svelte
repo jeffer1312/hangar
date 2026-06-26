@@ -3,6 +3,7 @@
   import Login from './screens/Login.svelte';
   import SessionList from './screens/SessionList.svelte';
   import Chat from './screens/Chat.svelte';
+  import DesktopShell from './components/DesktopShell.svelte';
 
   // ── Hash-based Router ────────────────────────────────────────────────
   type Route =
@@ -27,6 +28,17 @@
 
   let currentHash = $state(window.location.hash || '#/');
   let authenticated = $state(isAuthenticated());
+
+  // Desktop: >=820px renderiza o shell de duas colunas (sidebar + chat largo). Mobile (<820px)
+  // mantem o fluxo de telas atual, INTOCADO (mesmos componentes, mesmas regras).
+  let isDesktop = $state(false);
+  $effect(() => {
+    const mq = window.matchMedia('(min-width: 820px)');
+    isDesktop = mq.matches;
+    const on = () => (isDesktop = mq.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  });
 
   const route: Route = $derived(
     !authenticated ? { name: 'login' } : parseHash(currentHash)
@@ -72,6 +84,12 @@
 <div class="app-root">
   {#if route.name === 'login'}
     <Login {onLogin} />
+  {:else if isDesktop}
+    <DesktopShell
+      currentSession={route.name === 'chat' ? route.sessionName : null}
+      onNavigateToChat={navigateToChat}
+      {onLogout}
+    />
   {:else if route.name === 'sessions'}
     <SessionList
       onNavigateToChat={navigateToChat}

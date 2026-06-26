@@ -429,6 +429,11 @@
     background: rgba(28, 28, 32, 0.94);
   }
 
+  /* Desktop: composer mais largo (aditivo; mobile fica nos 600px). */
+  @media (min-width: 820px) {
+    .composer-card { max-width: 920px; }
+  }
+
   /* ── Textarea (transparente dentro do card) ─────────────────────────────── */
   .composer-textarea {
     width: 100%;

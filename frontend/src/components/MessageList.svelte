@@ -157,6 +157,11 @@
     margin: 0 auto;
   }
 
+  /* Desktop: usa mais largura (aditivo; mobile fica nos 600px). */
+  @media (min-width: 820px) {
+    .messages-inner { max-width: 920px; }
+  }
+
   /* Bubble enfileirado: ainda nao processado pelo Claude — atenuado ate solidificar. Precisa ser
      flex-column align-end pra que UserBubble/ImageBubble (que dependem de flex-end no pai) fiquem
      a DIREITA como msg do usuario — senao o wrapper block cola tudo na esquerda (cara de assistente). */
