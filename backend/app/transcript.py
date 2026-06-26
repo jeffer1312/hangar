@@ -18,6 +18,10 @@ _COMMAND_META_PREFIXES = (
     "<command-name>", "<command-message>", "<command-args>",
     "<local-command-caveat>", "<local-command-stdout>", "<local-command-stderr>",
     "<bash-input>", "<bash-stdout>", "<bash-stderr>",
+    # Invocacao de skill (/handoff, etc): o Claude Code injeta o corpo do SKILL.md como
+    # entrada "user" sintetica que comeca com esta linha. E meta de tooling, nao conversa —
+    # mesmo tratamento dos comandos acima (nao renderiza bubble).
+    "Base directory for this skill:",
 )
 
 
