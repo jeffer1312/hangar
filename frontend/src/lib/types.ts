@@ -8,6 +8,13 @@ export interface SessionInfo {
   last_activity?: number | null;
 }
 
+// Sessão marcada com o servidor de origem (visão agregada multi-servidor).
+export interface AggSession extends SessionInfo {
+  serverId: string;
+  serverLabel: string;
+  serverColor: string;
+}
+
 export interface ChatEvent {
   kind: 'user_msg' | 'assistant_msg' | 'tool_use' | 'tool_result';
   id: string;

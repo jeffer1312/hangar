@@ -3,15 +3,26 @@
   import FolderScanner from './FolderScanner.svelte';
   import { getSessions } from '../lib/api';
   import { basename } from '../lib/format';
+  import { selectServer, getActiveId, serverColor } from '../lib/auth';
+  import type { Server } from '../lib/auth';
   import type { SessionInfo } from '../lib/types';
 
   interface Props {
     open: boolean;
+    servers: Server[];
     onClose: () => void;
     onCreate: (name: string, cwd?: string) => Promise<void>;
     onOpenSession: (name: string) => void;
   }
-  let { open, onClose, onCreate, onOpenSession }: Props = $props();
+  let { open, servers, onClose, onCreate, onOpenSession }: Props = $props();
+
+  // Servidor-alvo da nova sessão. Como o scanner/dedupe/criação leem o servidor ATIVO, escolher
+  // aqui = selectServer(id): todas as chamadas seguintes do sheet caem nesse backend.
+  let targetServer = $state(getActiveId() ?? '');
+  function pickTarget(id: string) {
+    targetServer = id;
+    selectServer(id);
+  }
 
   // Fluxo em dois passos: 1) escolher a pasta (scanner) -> 2) abrir a sessao ativa
   // daquele cwd, ou criar uma nova com o nome derivado do basename.
@@ -26,7 +37,8 @@
   let manualOpen = $state(false);
   let manualPath = $state('');
 
-  // Zera tudo a cada abertura.
+  // Zera tudo a cada abertura. Fixa o servidor-alvo (ativo atual ou o 1º) e o seleciona, pra o
+  // scanner do passo 1 já varrer o backend certo.
   $effect(() => {
     if (open) {
       picked = null;
@@ -37,6 +49,9 @@
       loading = false;
       manualOpen = false;
       manualPath = '';
+      const cur = getActiveId();
+      const target = servers.find((s) => s.id === cur) ? cur! : servers[0]?.id ?? '';
+      if (target) pickTarget(target);
     }
   });
 
@@ -92,6 +107,26 @@
 
 <BottomSheet {open} {onClose} ariaLabel="Nova sessão">
   <h2 class="sheet-title">Nova sessão</h2>
+
+  {#if servers.length > 1}
+    <div class="server-select">
+      <span class="server-select-label">Servidor</span>
+      <div class="server-chips">
+        {#each servers as s (s.id)}
+          <button
+            type="button"
+            class="server-chip"
+            class:on={targetServer === s.id}
+            style="--chip: {serverColor(s.id)};"
+            onclick={() => pickTarget(s.id)}
+          >
+            <span class="chip-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
+            {s.label}
+          </button>
+        {/each}
+      </div>
+    </div>
+  {/if}
 
   {#if !picked}
     <!-- Passo 1: escolher a pasta -->
@@ -170,6 +205,44 @@
     font-weight: 600;
     color: var(--text-primary);
     margin-bottom: var(--space-4);
+  }
+
+  /* Seletor de servidor-alvo (só multi-servidor) */
+  .server-select {
+    margin-bottom: var(--space-4);
+  }
+  .server-select-label {
+    display: block;
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    font-weight: 500;
+    margin-bottom: var(--space-2);
+  }
+  .server-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .server-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: 34px;
+    padding: 0 var(--space-3);
+    border-radius: var(--radius-full);
+    border: 1px solid var(--border-default);
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+    font-weight: 500;
+    transition: border-color 160ms ease-out, color 160ms ease-out;
+  }
+  .server-chip.on {
+    border-color: var(--chip);
+    color: var(--text-primary);
+  }
+  .chip-dot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
   }
 
   /* ── Escape hatch: digitar caminho ─────────────────────────────────────── */

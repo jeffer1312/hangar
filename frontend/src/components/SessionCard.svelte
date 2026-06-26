@@ -1,13 +1,14 @@
 <script lang="ts">
   import type { SessionInfo, State } from '../lib/types';
-  import { basename, relativeTime } from '../lib/format';
+  import { relativeTime } from '../lib/format';
 
   interface Props {
     session: SessionInfo;
+    serverBadge?: { label: string; color: string } | null;
     onClick: () => void;
     onDelete: () => void;
   }
-  let { session, onClick, onDelete }: Props = $props();
+  let { session, serverBadge = null, onClick, onDelete }: Props = $props();
 
   const stateLabels: Record<State, string> = {
     working: 'em execução',
@@ -23,8 +24,9 @@
     dead: 'var(--error)',
   };
 
-  // Titulo = basename do projeto; cai pro nome da sessao quando nao ha cwd.
-  const title = $derived(session.cwd ? basename(session.cwd) : session.name);
+  // Titulo = NOME da sessao (tmux), pra distinguir sessoes na mesma pasta. O caminho (cwd) fica na
+  // linha de baixo como contexto.
+  const title = $derived(session.name);
 
   // Swipe to delete state
   let pressing = $state(false);
@@ -51,7 +53,15 @@
       {#if session.state === 'dead'}✕{/if}
     </span>
     <div class="card-info">
-      <span class="session-name">{title}</span>
+      <span class="name-row">
+        <span class="session-name">{title}</span>
+        {#if serverBadge}
+          <span
+            class="server-badge"
+            style="color: {serverBadge.color}; border-color: {serverBadge.color};"
+          >{serverBadge.label}</span>
+        {/if}
+      </span>
       {#if session.cwd}
         <span class="session-cwd">{session.cwd}</span>
       {/if}
@@ -138,10 +148,32 @@
     min-width: 0;
   }
 
+  .name-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
   .session-name {
     font-size: var(--text-lg);
     font-weight: 500;
     color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .server-badge {
+    flex-shrink: 0;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    padding: 1px 7px;
+    border-radius: var(--radius-full);
+    border: 1px solid;
+    background: transparent;
+    max-width: 120px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
