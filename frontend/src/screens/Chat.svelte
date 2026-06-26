@@ -31,6 +31,7 @@
   let error = $state('');
   let es: EventSource | null = null;
   let screenEl: HTMLElement | undefined = $state();
+  let dockH = $state(0);
   let pending = $state<{ id: string; text: string }[]>([]);
 
   // ── Switcher de sessoes (NavBar -> sheet) + criar nova sem voltar ──────────
@@ -208,7 +209,7 @@
   }
 </script>
 
-<div class="chat-screen" bind:this={screenEl}>
+<div class="chat-screen" bind:this={screenEl} style="--dock-h:{dockH}px">
   <NavBar title={sessionName} showBack={true} onBack={onBack} onTitleTap={openSwitcher} {status} onExpandUsage={() => (usageOpen = true)} />
 
   {#if loading}
@@ -231,7 +232,7 @@
     />
   {/if}
 
-  <div class="bottom-dock">
+  <div class="bottom-dock" bind:clientHeight={dockH}>
     {#if currentState === 'dead'}
       <div class="dead-footer">
         <p class="dead-text">Esta sessão foi encerrada.</p>
@@ -279,6 +280,7 @@
     height: 100dvh;          /* fallback; o JS sobrescreve com visualViewport.height */
     overflow: hidden;
     transform-origin: top;
+    position: relative;
   }
 
   .chat-loading,
@@ -313,10 +315,14 @@
     font-size: var(--text-sm);
   }
 
-  /* Bottom dock: statusline bar + composer (or dead footer). Flex child normal. */
+  /* Bottom dock: flutua fora do fluxo flex (absolute no rodape da .chat-screen vv-sized)
+     pra lista rolar por baixo do vidro. Transparente — o card do Composer e o vidro. */
   .bottom-dock {
-    flex-shrink: 0;
-    background: var(--bg-base);
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 20;
     padding-bottom: env(safe-area-inset-bottom);
   }
 

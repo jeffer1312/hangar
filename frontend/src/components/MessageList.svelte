@@ -113,8 +113,9 @@
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: contain;
     scroll-behavior: auto;
-    /* O dock agora e um flex sibling real (nao fixed) -> sem padding gigante. */
-    padding-bottom: var(--space-3);
+    /* O dock flutua (absolute) por cima -> reserva a altura medida dele + folga
+       pro conteudo nao ficar escondido sob o vidro. */
+    padding-bottom: calc(var(--dock-h, 96px) + var(--space-3));
   }
 
   .messages-inner {
