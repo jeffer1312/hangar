@@ -367,7 +367,7 @@
 <style>
   .composer {
     background: transparent;
-    padding: var(--space-2) var(--space-3) var(--space-3);
+    padding: var(--space-2) var(--space-3) 0;
   }
 
   /* Card unico que reune status, textarea e controles. */
@@ -383,7 +383,7 @@
     border: 1px solid rgba(255, 255, 255, 0.08);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
     border-radius: var(--radius-md);
-    padding: var(--space-3);
+    padding: var(--space-3) var(--space-3) calc(var(--space-3) + env(safe-area-inset-bottom));
   }
 
   /* ── Textarea (transparente dentro do card) ─────────────────────────────── */
