@@ -355,7 +355,7 @@
 
   <UsageSheet open={usageOpen} {status} onClose={() => (usageOpen = false)} />
 
-  <ActivitySheet open={activityOpen} {activity} onClose={() => (activityOpen = false)} />
+  <ActivitySheet open={activityOpen} {activity} {sessionName} onClose={() => (activityOpen = false)} />
 </div>
 
 <style>

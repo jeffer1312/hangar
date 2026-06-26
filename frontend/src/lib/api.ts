@@ -6,6 +6,8 @@ import type {
   FsRoot,
   FsScanResult,
   FsScanError,
+  WorkflowSummary,
+  WorkflowDetail,
 } from './types';
 
 function authHeaders(): HeadersInit {
@@ -64,6 +66,15 @@ export function getHistory(name: string): Promise<ChatEvent[]> {
 
 export function getCommands(name: string): Promise<CommandInfo[]> {
   return apiFetch<CommandInfo[]>(`/api/sessions/${encodeURIComponent(name)}/commands`);
+}
+
+// Workflows: lista de runs + detalhe (fases + agentes) — lidos dos arquivos do run no disco.
+export function getWorkflows(name: string): Promise<WorkflowSummary[]> {
+  return apiFetch<WorkflowSummary[]>(`/api/sessions/${encodeURIComponent(name)}/workflows`);
+}
+
+export function getWorkflow(name: string, runId: string): Promise<WorkflowDetail> {
+  return apiFetch<WorkflowDetail>(`/api/sessions/${encodeURIComponent(name)}/workflows/${encodeURIComponent(runId)}`);
 }
 
 // Raízes liberadas do scanner (chips no topo do FolderScanner).

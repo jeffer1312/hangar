@@ -73,6 +73,27 @@ def history(name: str):
     return merged_history(name, jsonl)
 
 
+@app.get("/api/sessions/{name}/workflows", dependencies=[Depends(require_auth)])
+def workflows_list(name: str):
+    jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
+    if not jsonl:
+        raise HTTPException(404, "session or transcript not found")
+    from app.workflows import list_workflows
+    return list_workflows(jsonl)
+
+
+@app.get("/api/sessions/{name}/workflows/{run_id}", dependencies=[Depends(require_auth)])
+def workflow_detail(name: str, run_id: str):
+    jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
+    if not jsonl:
+        raise HTTPException(404, "session or transcript not found")
+    from app.workflows import get_workflow
+    wf = get_workflow(jsonl, run_id)
+    if wf is None:
+        raise HTTPException(404, "workflow run not found")
+    return wf
+
+
 @app.get("/api/sessions/{name}/events", dependencies=[Depends(require_auth)])
 async def events(name: str):
     jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
