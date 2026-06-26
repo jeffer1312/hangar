@@ -12,6 +12,13 @@ import type {
   WorkflowAgentDetail,
 } from './types';
 
+// URL da idx-ésima imagem (colada no terminal) de uma msg do transcript. `?token` porque <img> não
+// manda header Authorization e cross-origin (multi-PC) não leva cookie — o backend aceita ?token.
+export function transcriptImageUrl(name: string, id: string, idx: number): string {
+  const t = getToken() ?? '';
+  return `${getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/transcript-image/${encodeURIComponent(id)}/${idx}?token=${encodeURIComponent(t)}`;
+}
+
 function authHeaders(): HeadersInit {
   const token = getToken();
   if (!token) return {};
@@ -89,6 +96,14 @@ export function createSession(name: string, cwd?: string): Promise<SessionInfo> 
 export async function deleteSession(name: string): Promise<void> {
   await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}`, {
     method: 'DELETE',
+  });
+}
+
+// Renomeia a sessao do tmux. Devolve o nome final (sanitizado pelo backend).
+export async function renameSession(name: string, newName: string): Promise<{ ok: boolean; name: string }> {
+  return apiFetch<{ ok: boolean; name: string }>(`/api/sessions/${encodeURIComponent(name)}/rename`, {
+    method: 'POST',
+    body: JSON.stringify({ new: newName }),
   });
 }
 

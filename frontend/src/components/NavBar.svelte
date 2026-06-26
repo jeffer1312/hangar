@@ -13,8 +13,11 @@
     onExpandUsage?: () => void;
     onOpenActivity?: () => void;
     activityBadge?: number;
+    // Tem trabalho VIVO (workflow/agent rodando) -> o botao de atividade "respira" pra sinalizar
+    // que nao travou, mesmo quando o badge nao conta (workflow em background nao entra no badge).
+    activityRunning?: boolean;
   }
-  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, onOpenActivity, activityBadge = 0 }: Props = $props();
+  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, onOpenActivity, activityBadge = 0, activityRunning = false }: Props = $props();
 </script>
 
 <nav class="navbar">
@@ -42,7 +45,7 @@
 
     <div class="nav-right">
       {#if onOpenActivity}
-        <button class="nav-btn activity-btn" onclick={onOpenActivity} aria-label="Atividade">
+        <button class="nav-btn activity-btn" class:running={activityRunning} onclick={onOpenActivity} aria-label="Atividade">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <polyline points="3 5 4.5 6.5 7 4"/>
             <polyline points="3 11.5 4.5 13 7 10.5"/>
@@ -72,11 +75,18 @@
 
 <style>
   .navbar {
-    background: var(--bg-base);
+    background: var(--bg-base);   /* OPACO (#0d0d0f) — sem alpha, ou a camada promovida pode piscar */
     border-bottom: 1px solid var(--border-subtle);
     padding-top: env(safe-area-inset-top);
     flex-shrink: 0;
     z-index: 20;
+    /* Camada GPU própria OPACA: o preto do bug do iOS aparece EM CIMA, sobre a navbar; numa camada
+       separada e pintada, o backing largado do scroller não consegue sobrepor a navbar de preto.
+       Seguro: a navbar não tem descendente position:fixed (os sheets ficam fora dela). Ver WebKit
+       #89475 + Apple Dev Forums 705172. */
+    transform: translateZ(0);
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
   }
 
   .navbar-inner {
@@ -161,6 +171,18 @@
   .activity-btn {
     position: relative;
     color: var(--text-secondary);
+  }
+
+  /* Workflow/agent vivo: icone tinge de accent e "respira" (liveness). transform no svg nao causa
+     reflow. prefers-reduced-motion -> so a cor, sem animar. */
+  .activity-btn.running { color: var(--accent); }
+  .activity-btn.running svg { animation: breathe 1.5s ease-in-out infinite; }
+  @keyframes breathe {
+    0%, 100% { opacity: 0.55; transform: scale(0.92); }
+    50%      { opacity: 1;    transform: scale(1.05); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .activity-btn.running svg { animation: none; }
   }
 
   .activity-badge {

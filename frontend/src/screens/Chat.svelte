@@ -15,6 +15,7 @@
     openEventStream,
     getSessions,
     createSession,
+    getWorkflows,
   } from '../lib/api';
   import { parseStatusLine } from '../lib/statusline';
   import { listServers } from '../lib/auth';
@@ -33,8 +34,13 @@
   let loading = $state(true);
   let error = $state('');
   let es: EventSource | null = null;
+  let watchdog: ReturnType<typeof setTimeout> | undefined;     // liveness: reconecta se a conexao morrer calada
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let screenEl: HTMLElement | undefined = $state();
   let pending = $state<{ id: string; text: string; solid?: boolean }[]>([]);
+  // Preview AO VIVO do bloco de assistente em voo (lido do pane via SSE 'preview'). Texto-completo,
+  // full-replace; some quando o assistant_msg canonico (do .jsonl) cobre o texto, ou ao sair de working.
+  let previewText = $state('');
   let dockEl: HTMLElement | undefined = $state();
   // Altura real do dock (composer) -> vira padding da lista pra ultima msg sempre limpar o glass.
   let dockH = $state(150);
@@ -88,6 +94,26 @@
   const activityBadge = $derived(activity.inProgress + activity.runningAgents);
   const hasActivity = $derived(activity.tasks.length > 0 || activity.agents.length > 0);
 
+  // Workflow roda em BACKGROUND -> nao da pra inferir "rodando" so pelos eventos (activity.ts marca
+  // workflow running:false). Pergunta ao backend (le os arquivos do run) enquanto houver workflow no
+  // painel; alimenta o "respira" do botao de atividade no topo (sinal de que nao travou).
+  let workflowRunning = $state(false);
+  const hasWorkflow = $derived(activity.agents.some((a) => a.kind === 'workflow'));
+  const activityRunning = $derived(workflowRunning || activity.runningAgents > 0);
+  $effect(() => {
+    if (!hasWorkflow) { workflowRunning = false; return; }
+    let alive = true;
+    async function poll() {
+      try {
+        const ws = await getWorkflows(sessionName);
+        if (alive) workflowRunning = ws.some((w) => w.running);
+      } catch { /* offline / sem run -> ignora */ }
+    }
+    poll();
+    const id = setInterval(poll, 4000);
+    return () => { alive = false; clearInterval(id); };
+  });
+
   async function loadHistory() {
     try {
       events = await getHistory(sessionName);
@@ -98,12 +124,23 @@
     }
   }
 
+  // Watchdog de liveness: o backend manda um evento 'ping' a cada 10s. 25s sem NADA (msg/state/ping)
+  // = conexao morta sem aviso (half-open: mobile trocou de rede / app no background / backend caiu).
+  // O EventSource.onerror NAO dispara em half-open -> sem isto o front congela no ultimo estado.
+  function armWatchdog() {
+    clearTimeout(watchdog);
+    watchdog = setTimeout(() => connectSSE(), 25000);
+  }
+
   function connectSSE() {
+    clearTimeout(reconnectTimer);
     if (es) { es.close(); es = null; }
 
     es = openEventStream(sessionName);
+    armWatchdog();
 
     es.addEventListener('message', (e: MessageEvent) => {
+      armWatchdog();
       try {
         const ev = JSON.parse(e.data) as ChatEvent;
         // Dedup cruzado fila<->transcript: a fila duravel emite user_msg sintetico (id "queued-").
@@ -139,26 +176,51 @@
     });
 
     es.addEventListener('state', (e: MessageEvent) => {
+      armWatchdog();
       try {
         stateEvent = JSON.parse(e.data) as StateEvent;
       } catch {}
     });
 
+    // Heartbeat do backend: so prova de vida (reseta o watchdog numa conexao ociosa, sem msgs).
+    es.addEventListener('ping', () => armWatchdog());
+
+    // Preview ao vivo (best-effort) do bloco de assistente em voo. Full-replace; tambem e prova de
+    // vida (mas NAO a unica — entre turnos nao ha preview, por isso o ping ancora o watchdog).
+    es.addEventListener('preview', (e: MessageEvent) => {
+      armWatchdog();
+      try {
+        previewText = (JSON.parse(e.data) as { text?: string }).text ?? '';
+      } catch {}
+    });
+
     es.onerror = () => {
-      // Reconnect after 3s if not dead
+      // Erro REAL (TCP RST): reconecta em 3s. Half-open nao cai aqui -> coberto pelo watchdog.
       if (currentState !== 'dead') {
-        setTimeout(connectSSE, 3000);
+        clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(connectSSE, 3000);
       }
     };
+  }
+
+  // App voltou pro foreground (mobile suspende a conexao no background): reconecta na hora pra
+  // re-sincronizar (o SSE reenvia transcript + estado atual). Pega o caso de background sem esperar
+  // os 25s do watchdog.
+  function onVisible() {
+    if (document.visibilityState === 'visible') connectSSE();
   }
 
   onMount(async () => {
     await loadHistory();
     connectSSE();
+    document.addEventListener('visibilitychange', onVisible);
   });
 
   onDestroy(() => {
     es?.close();
+    clearTimeout(watchdog);
+    clearTimeout(reconnectTimer);
+    document.removeEventListener('visibilitychange', onVisible);
   });
 
   // Layout teclado-safe: a .chat-screen acompanha a ALTURA da viewport visivel. Quando o
@@ -174,27 +236,43 @@
       // Ignora valores transientes (a animacao do teclado reporta alturas minusculas por 1 frame).
       if (vv.height < 120) return;
       const h = vv.height + 'px';
-      // So aplica translateY quando o iOS rolou o layout (teclado aberto, offsetTop>0); fechado
-      // (offsetTop=0) vira 'none' (translateY(0) ainda cria contexto de composicao e glitcha).
-      const tf = vv.offsetTop ? `translateY(${vv.offsetTop}px)` : 'none';
-      // GUARD: so escreve no style quando MUDA. O vv 'scroll' dispara MUITO durante o momentum da
-      // lista; reescrever height/transform a cada evento forcava reflow/recomposite -> bloco PRETO
-      // no topo. Sem escrita redundante, o scroll normal nao mexe no layout (so o teclado mexe).
+      // offsetTop = quanto o iOS PANEIA a visual viewport ao abrir o teclado (body travado em app.css
+      // -> e pan VISUAL, nao scroll de documento; scrollTo nao resolveria). Compensamos via `top` em
+      // position:relative (mesmo resultado do translateY, SEM transform): (a) nao promove o scroller a
+      // layer com tiled-backing -> SEM retangulo preto (WebKit 220892/226532); (b) nao cria
+      // containing-block que prenda os sheets position:fixed (SessionSwitcher/Usage/Activity da
+      // .chat-screen E ModelEffort/Command/Confirm do .bottom-dock). NAO voltar a usar transform aqui.
+      const top = (vv.offsetTop || 0) + 'px';
       if (screenEl.style.height !== h) screenEl.style.height = h;
-      if (screenEl.style.transform !== tf) screenEl.style.transform = tf;
+      if (screenEl.style.top !== top) screenEl.style.top = top;
+      if (screenEl.style.transform) screenEl.style.transform = ''; // limpa qualquer residuo de transform
     }
     function onFocusIn() {
       requestAnimationFrame(fit);
       setTimeout(fit, 300); // iOS as vezes so estabiliza apos a animacao do teclado
     }
+    // iOS 26: offsetTop/height as vezes NAO zeram ao fechar o teclado (~24px residual, WebKit #297779).
+    // No blur sem outro campo focado, forca estado limpo (senao sobra um vao no rodape).
+    function onFocusOut() {
+      setTimeout(() => {
+        if (!screenEl) return;
+        const a = document.activeElement;
+        if (a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT')) return; // trocou de campo
+        screenEl.style.top = '0px';
+        screenEl.style.height = '';   // volta pro height:100dvh do CSS
+        screenEl.style.transform = '';
+      }, 50);
+    }
     fit();
     vv.addEventListener('resize', fit);
     vv.addEventListener('scroll', fit);
     screenEl.addEventListener('focusin', onFocusIn);
+    screenEl.addEventListener('focusout', onFocusOut);
     return () => {
       vv.removeEventListener('resize', fit);
       vv.removeEventListener('scroll', fit);
       screenEl?.removeEventListener('focusin', onFocusIn);
+      screenEl?.removeEventListener('focusout', onFocusOut);
     };
   });
 
@@ -266,6 +344,32 @@
     prevState = s;
   });
 
+  // Dropa o preview quando: (a) um NOVO bloco de assistente COMMITA (vira bubble real), ou (b) sai de
+  // working (turn acabou / só-tool / interrompido). (a) é o sinal timing-safe: o FRONT sabe o que já
+  // mostrou — não depende de QUANDO o texto cai no .jsonl. Quando o bloco vira bubble, o preview dele
+  // não é mais necessário e some; reaparece sozinho quando o PRÓXIMO bloco começa a streamar (o broker
+  // reemite). Mata a duplicata (preview + bubble do mesmo bloco) na raiz, sem comparar texto.
+  const _norm = (s: string) => s.replace(/`/g, '').replace(/\s+/g, ' ').trim();
+  let _asstCount = 0;
+  $effect(() => {
+    // CRÍTICO: ler previewText AQUI no topo, SEMPRE -> em Svelte 5 a dep só é rastreada se LIDA na
+    // execução. Se a gente retornasse antes de ler (caminho idle), o effect não re-rodaria quando o
+    // broker REEMITISSE o preview no idle -> o tail ficava (a duplicata que não saía). Lendo aqui, o
+    // effect re-roda a cada update do preview e limpa.
+    const pv = previewText;
+    let c = 0;
+    let last = '';
+    for (const e of events) if (e.kind === 'assistant_msg' && e.text) { c++; last = e.text; }
+    const committed = c > _asstCount;
+    _asstCount = c;
+    if (!pv) return;
+    // (a) bloco novo commitou OU (b) saiu de working -> dropa.
+    if (committed || currentState !== 'working') { previewText = ''; return; }
+    // (c) residual coberto pela ÚLTIMA msg commitada (re-emit pós-commit, janela antes do idle).
+    const p = _norm(pv);
+    if (p.length >= 16 && last && _norm(last).includes(p)) previewText = '';
+  });
+
   // Slash commands gerais do Claude Code (ex: /clear, /compact) -> sessao viva. Modelo e
   // esforco NAO passam por aqui: vao pelo ModelEffortSheet -> endpoint /model-effort.
   async function handleCommand(cmd: string) {
@@ -294,7 +398,7 @@
 </script>
 
 <div class="chat-screen" bind:this={screenEl}>
-  <NavBar title={sessionName} showBack={true} onBack={onBack} onTitleTap={openSwitcher} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} />
+  <NavBar title={sessionName} showBack={true} onBack={onBack} onTitleTap={openSwitcher} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} />
 
   {#if loading}
     <div class="chat-loading">
@@ -312,6 +416,7 @@
       {pending}
       {sessionName}
       {dockH}
+      preview={previewText}
       onSelectOption={handleSelect}
       onCancel={handleInterrupt}
       onScrollActivity={handleScrollActivity}
@@ -369,9 +474,13 @@
     flex-direction: column;
     height: 100dvh;          /* fallback; o JS sobrescreve com visualViewport.height */
     overflow: hidden;
-    transform-origin: top;
     position: relative;
-    background: var(--bg-base);  /* backing solido: layer nunca renderiza preto no glitch do iOS */
+    top: 0;                      /* baseline; o JS seta top = vv.offsetTop com o teclado aberto (pin do dock) */
+    background: var(--bg-base);  /* backing solido (INVARIANTE): layer nunca renderiza preto no glitch do iOS */
+    /* Higiene de stacking; reforço de baixo risco. isolation NAO cria containing block pros sheets
+       position:fixed (filhos da .chat-screen) — ao contrário de transform/contain/will-change/filter,
+       que clipariam os sheets. NÃO reintroduzir transform aqui (top relativo = sem layer, sem preto). */
+    isolation: isolate;
   }
 
   .chat-loading,

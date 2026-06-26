@@ -109,7 +109,11 @@
           <span class="section-label">Workflows</span>
           {#each workflows as w (w.runId)}
             <button class="row-btn" onclick={() => openWorkflow(w.runId)}>
-              <span class="wf-glyph" class:run={w.running} aria-hidden="true">{w.running ? '⟳' : '⚙'}</span>
+              {#if w.running}
+                <span class="ring-spin" aria-hidden="true"></span>
+              {:else}
+                <span class="wf-glyph" aria-hidden="true">⚙</span>
+              {/if}
               <span class="row-name">{w.name}</span>
               <span class="row-meta">{w.agentCount} ag · {fmtTokens(w.totalTokens)}</span>
               <span class="row-chevron" aria-hidden="true">›</span>
@@ -123,7 +127,7 @@
           <span class="section-label">Rodando agora</span>
           {#each runningAgents as a (a.id)}
             <div class="agent-row">
-              <span class="agent-spin" aria-hidden="true">⟳</span>
+              <span class="ring-spin" aria-hidden="true"></span>
               <span class="agent-desc">{a.description}</span>
             </div>
           {/each}
@@ -170,7 +174,11 @@
           {#each detail.agents as a, i (i)}
             <button class="wf-agent" onclick={() => openAgent(a.agentId)} disabled={!a.agentId}>
               <div class="wf-agent-top">
-                <span class="wf-agent-state wf-agent-state--{a.state}" aria-hidden="true">{stateGlyph(a.state)}</span>
+                {#if a.state === 'progress'}
+                  <span class="ring-spin" aria-hidden="true"></span>
+                {:else}
+                  <span class="wf-agent-state wf-agent-state--{a.state}" aria-hidden="true">{stateGlyph(a.state)}</span>
+                {/if}
                 <span class="wf-agent-label">{a.label ?? 'agente'}</span>
                 {#if a.phaseTitle}<span class="wf-agent-phase">{a.phaseTitle}</span>{/if}
                 <span class="wf-agent-nums">{fmtTokens(a.tokens)}{a.durationMs ? ` · ${fmtDur(a.durationMs)}` : ''}</span>
@@ -195,7 +203,11 @@
       {:else}
         <div class="wf-detail-head">
           <h2 class="activity-title">
-            <span class="wf-agent-state wf-agent-state--{agentDetail.state}" aria-hidden="true">{stateGlyph(agentDetail.state)}</span>
+            {#if agentDetail.state === 'progress'}
+              <span class="ring-spin" aria-hidden="true"></span>
+            {:else}
+              <span class="wf-agent-state wf-agent-state--{agentDetail.state}" aria-hidden="true">{stateGlyph(agentDetail.state)}</span>
+            {/if}
             {agentDetail.label}
           </h2>
         </div>
@@ -241,13 +253,26 @@
   .row-btn { display: flex; align-items: center; gap: var(--space-2); width: 100%; min-height: 40px; padding: var(--space-1) 0; text-align: left; border-radius: 0; justify-content: flex-start; }
   .row-btn:active { background: var(--bg-hover); }
   .wf-glyph { color: var(--text-muted); flex-shrink: 0; width: 1.2em; text-align: center; }
-  .wf-glyph.run { color: var(--accent); animation: spin 0.9s linear infinite; }
+
+  /* Spinner = ANEL (nao glyph de texto): um char girando orbita fora do eixo e parece quadrado;
+     um anel simetrico gira perfeito no centro. Usado em todo "rodando" do painel. */
+  .ring-spin {
+    box-sizing: border-box;
+    display: inline-block;
+    flex-shrink: 0;
+    width: 0.95em;
+    height: 0.95em;
+    border: 2px solid var(--accent);
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    vertical-align: -0.12em;
+  }
   .row-name { font-size: var(--text-sm); color: var(--text-primary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row-meta { font-size: var(--text-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; flex-shrink: 0; }
   .row-chevron { color: var(--text-muted); flex-shrink: 0; }
 
   .agent-row { display: flex; align-items: center; gap: var(--space-2); }
-  .agent-spin { color: var(--accent); animation: spin 0.9s linear infinite; flex-shrink: 0; width: 1.1em; text-align: center; }
   .agent-desc { font-size: var(--text-sm); color: var(--text-primary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .task-row { display: flex; align-items: baseline; gap: var(--space-2); }
@@ -280,7 +305,6 @@
   .wf-agent-state { flex-shrink: 0; width: 1.1em; text-align: center; }
   .wf-agent-state--done { color: var(--success, #3fb950); }
   .wf-agent-state--error { color: var(--error); }
-  .wf-agent-state--progress { color: var(--accent); animation: spin 0.9s linear infinite; }
   .wf-agent-label { font-size: var(--text-sm); color: var(--text-primary); font-weight: 500; }
   .wf-agent-phase { font-size: var(--text-xs); color: var(--text-muted); }
   .wf-agent-nums { font-size: var(--text-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; margin-left: auto; flex-shrink: 0; }
