@@ -25,7 +25,16 @@ def has_session(name: str) -> bool:
 
 
 def new_session(name: str, cwd: str, command: str) -> None:
-    _run(["tmux", "new-session", "-d", "-s", name, "-c", cwd, "-x", "200", "-y", "50", command])
+    # -e: cores corretas do Claude Code DENTRO do tmux (o claude e spawnado direto, sem shell que
+    # leia o rc). COLORTERM=24-bit + CLAUDE_CODE_TMUX_TRUECOLOR curto-circuita o downgrade pra 256
+    # (gate pink). O TERM nao-tmux (gate teal) vem do default-terminal no ~/.tmux.conf.
+    # Ver docs/tmux-truecolor-setup.md.
+    _run([
+        "tmux", "new-session", "-d", "-s", name, "-c", cwd, "-x", "200", "-y", "50",
+        "-e", "COLORTERM=truecolor",
+        "-e", "CLAUDE_CODE_TMUX_TRUECOLOR=1",
+        command,
+    ])
 
 
 def kill_session(name: str) -> None:
