@@ -6,16 +6,20 @@
   import ToolCard from './ToolCard.svelte';
   import OptionButtons from './OptionButtons.svelte';
   import Spinner from './Spinner.svelte';
+  import ImageBubble from './ImageBubble.svelte';
+  import { parseImageMessage } from '../lib/format';
+  import { getBaseUrl } from '../lib/auth';
 
   interface Props {
     events: ChatEvent[];
     stateEvent: StateEvent | null;
     pending: { id: string; text: string }[];
+    sessionName: string;
     onSelectOption: (i: number) => void;
     onCancel: () => void;
   }
 
-  let { events, stateEvent, pending, onSelectOption, onCancel }: Props = $props();
+  let { events, stateEvent, pending, sessionName, onSelectOption, onCancel }: Props = $props();
 
   let listEl: HTMLElement | undefined = $state();
   // O usuario "gruda" no fim por padrao; ao rolar pra cima, paramos de arrastar.
@@ -68,7 +72,12 @@
   <div class="messages-inner">
     {#each visibleEvents as ev (ev.id)}
       {#if ev.kind === 'user_msg' && ev.text}
-        <UserBubble text={ev.text} ts={ev.ts} />
+        {@const img = parseImageMessage(ev.text)}
+        {#if img}
+          <ImageBubble caption={img.caption} src={`${getBaseUrl()}/api/sessions/${encodeURIComponent(sessionName)}/uploads/${encodeURIComponent(img.filename)}`} />
+        {:else}
+          <UserBubble text={ev.text} ts={ev.ts} />
+        {/if}
       {:else if ev.kind === 'assistant_msg' && ev.text}
         <AssistantBubble text={ev.text} ts={ev.ts} />
       {:else if ev.kind === 'tool_use'}
