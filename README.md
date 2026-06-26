@@ -41,6 +41,14 @@ Requirements: `tmux`, `claude` (Claude Code), Python 3.14 + [`uv`](https://docs.
 tmux new -s cc          # then run `claude` inside it
 ```
 
+> Theme colors look wrong inside tmux (teal / pink / washed-out)? That's a known Claude
+> Code + tmux truecolor issue — see [docs/tmux-truecolor-setup.md](docs/tmux-truecolor-setup.md)
+> for the one-line fix.
+>
+> Want the session to survive a reboot / OOM kill? Run `./scripts/tmux-persist-setup.sh`
+> (auto-save + restore via resurrect/continuum) — see
+> [docs/tmux-persistence-setup.md](docs/tmux-persistence-setup.md).
+
 **2. Backend:**
 ```bash
 cd backend
