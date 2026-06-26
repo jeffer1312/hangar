@@ -71,7 +71,12 @@ async def events(name: str):
 
 @app.post("/api/sessions/{name}/input", dependencies=[Depends(require_auth)])
 def input_prompt(name: str, body: InputBody):
-    terminal.send_prompt(name, body.text)
+    try:
+        terminal.send_prompt(name, body.text)
+    except ValueError as e:
+        # send_prompt rejeita control chars (ex: '\n'). Sem isto virava 500 -> a msg sumia sem
+        # feedback. Agora vira 400 limpo (o frontend mostra). (Multi-linha de verdade: backlog.)
+        raise HTTPException(400, str(e))
     return {"ok": True}
 
 
