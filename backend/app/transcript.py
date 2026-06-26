@@ -1,9 +1,16 @@
+import base64
 import json
 import re
 from pathlib import Path
 from typing import AsyncIterator, Optional
 from watchfiles import awatch
 from app.models import ChatEvent
+
+# Imagem colada no TERMINAL (TUI do Claude). O Claude grava 2 coisas: a msg do user com um bloco
+# `image` (base64) + um marcador "[Image #N]" no texto; E uma entrada user SINTETICA cujo texto é só
+# "[Image: source: <path>]" (referência). A 1ª vira bubble com thumbnail (image_count); a 2ª é meta.
+_IMAGE_SOURCE_RE = re.compile(r"^\[Image: source: [^\]]*\]$")   # entrada sintetica inteira = meta
+_IMAGE_MARKER_RE = re.compile(r"\[Image #\d+\]\s*")             # ruido na legenda -> remover
 
 
 def _first(content: list, type_name: str) -> Optional[dict]:
@@ -67,7 +74,7 @@ def parse_line(line: str) -> Optional[ChatEvent]:
             if _is_command_meta(content):
                 return None
             cleaned = _strip_meta_blocks(content)
-            if not cleaned:
+            if not cleaned or _IMAGE_SOURCE_RE.match(cleaned):
                 return None
             return ChatEvent(kind="user_msg", id=uid, parent_id=parent, text=cleaned)
         if isinstance(content, list):
@@ -82,15 +89,20 @@ def parse_line(line: str) -> Optional[ChatEvent]:
                     result=str(res) if res is not None else None,
                     is_error=bool(tr.get("is_error", False)),
                 )
+            # Imagens coladas no terminal: contar os blocos `image` -> o front busca cada uma lazy.
+            img_count = sum(1 for it in content if isinstance(it, dict) and it.get("type") == "image")
             txt = _first(content, "text")
-            if txt is not None:
-                t = txt.get("text", "")
-                if _is_command_meta(t):
-                    return None
-                cleaned = _strip_meta_blocks(t)
-                if not cleaned:
-                    return None
-                return ChatEvent(kind="user_msg", id=uid, parent_id=parent, text=cleaned)
+            t = txt.get("text", "") if txt is not None else ""
+            if _is_command_meta(t):
+                return None
+            cleaned = _strip_meta_blocks(t)
+            if _IMAGE_SOURCE_RE.match(cleaned):
+                return None
+            cleaned = _IMAGE_MARKER_RE.sub("", cleaned).strip()   # tira "[Image #N]" da legenda
+            if not cleaned and not img_count:
+                return None
+            return ChatEvent(kind="user_msg", id=uid, parent_id=parent, text=cleaned,
+                             image_count=img_count or None)
         return None
 
     if etype == "assistant" and isinstance(content, list):
@@ -114,6 +126,41 @@ def parse_transcript(path: str | Path) -> list[ChatEvent]:
         if ev is not None:
             events.append(ev)
     return events
+
+
+def get_transcript_image(jsonl: str | Path, uuid: str, idx: int) -> Optional[tuple[bytes, str]]:
+    """Bytes + media_type da idx-ésima imagem base64 da msg de uuid no transcript, ou None.
+
+    Fonte das imagens coladas no terminal (a image-cache do Claude não persiste). Serve sob demanda
+    pra não inchar o payload do histórico/SSE com base64."""
+    try:
+        lines = Path(jsonl).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if obj.get("uuid") != uuid:
+            continue
+        content = (obj.get("message") or {}).get("content")
+        if not isinstance(content, list):
+            return None
+        imgs = [it for it in content if isinstance(it, dict) and it.get("type") == "image"]
+        if idx < 0 or idx >= len(imgs):
+            return None
+        src = imgs[idx].get("source") or {}
+        data = src.get("data")
+        if not isinstance(data, str):
+            return None
+        try:
+            raw = base64.b64decode(data)
+        except (ValueError, base64.binascii.Error):
+            return None
+        media = src.get("media_type") if isinstance(src.get("media_type"), str) else "image/png"
+        return raw, media
+    return None
 
 
 class TranscriptTailer:

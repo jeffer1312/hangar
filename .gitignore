@@ -15,3 +15,11 @@ docs/superpowers/**/*.html
 .superpowers/
 
 .claude-pocket-uploads/
+
+# Video analysis scratch (video-analyzer skill)
+*.mp4
+*.analysis/
+*.frames/
+# local backend log
+server.log
+backend/server.log

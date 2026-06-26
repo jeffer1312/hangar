@@ -131,9 +131,13 @@ def classify(pane_text: str) -> tuple[str, Optional[str], Optional[str], Optiona
 
 
 class StateMonitor:
-    # Consecutive unchanged polls before a spinner candidate is treated as a frozen
-    # completed-turn marker (idle) rather than a live, animating spinner (working).
+    # Polls com o MESMO spinner antes de tratá-lo como marcador de turn CONCLUÍDO congelado (idle)
+    # em vez de spinner vivo animando (working).
     STALE_LIMIT = 3
+    # Polls CONSECUTIVOS sem spinner antes de confirmar idle. O capture-pane às vezes pega o TUI
+    # mid-redraw (sem a linha do spinner por 1 frame); sem este debounce o estado piscava working
+    # <-> idle e a UI (spinner/botão stop/scroll) ficava "pulando" o tempo todo durante o streaming.
+    IDLE_DEBOUNCE = 4
 
     def __init__(self, name: str, poll: float = 0.75):
         self.name = name
@@ -141,39 +145,44 @@ class StateMonitor:
 
     async def stream(self) -> AsyncIterator[StateEvent]:
         last_key = object()
-        uninit = object()
-        prev_spinner = uninit
-        stale = 0
+        prev_spinner = None
+        frozen = 0          # polls com o mesmo spinner (congelado = turn acabou)
+        no_spinner = 0      # polls consecutivos sem spinner (filtra redraw transiente)
+        held_state = "idle"
+        held_label = None
         while True:
             if not tmux.has_session(self.name):
                 yield StateEvent(session=self.name, state="dead")
                 return
             pane = tmux.capture_pane(self.name)
             state, label, question, options = classify(pane)
+            spinner = _live_spinner(pane)
 
-            if state == "working":
-                # The live spinner animates (glyph cycles, elapsed time ticks); a leftover
-                # completed-turn marker is byte-identical poll after poll. Only treat it as
-                # working once we've actually seen it change — proof of life. On the very
-                # first sight we can't tell fresh from stale, so we wait for a change.
-                spinner = _live_spinner(pane)
-                if prev_spinner is uninit:
-                    stale = self.STALE_LIMIT
-                elif spinner != prev_spinner:
-                    stale = 0
-                else:
-                    stale += 1
-                prev_spinner = spinner
-                if stale >= self.STALE_LIMIT:
-                    state, label = "idle", None
-            else:
+            if state == "awaiting_input":
+                # Menu real (AskUserQuestion/permissão) -> estado autoritativo, sem debounce.
                 prev_spinner = None
-                stale = 0
+                frozen = 0
+                no_spinner = 0
+            elif spinner is not None:
+                no_spinner = 0
+                frozen = frozen + 1 if spinner == prev_spinner else 0
+                prev_spinner = spinner
+                # Spinner CONGELADO (byte-idêntico) por STALE_LIMIT polls = marcador de turn concluído.
+                state, label = ("idle", None) if frozen >= self.STALE_LIMIT else ("working", label)
+            else:
+                # Sem spinner NESTE frame: pode ser redraw transiente. Só vira idle após IDLE_DEBOUNCE
+                # polls seguidos sem spinner; antes disso, SEGURA o último working (debounce anti-flicker).
+                no_spinner += 1
+                prev_spinner = None
+                frozen = 0
+                if held_state == "working" and no_spinner < self.IDLE_DEBOUNCE:
+                    state, label = "working", held_label
 
             status = status_line(pane)
             key = (state, label, question, tuple(options or ()), status)
             if key != last_key:
                 last_key = key
+                held_state, held_label = state, label
                 yield StateEvent(session=self.name, state=state, label=label,
                                  question=question, options=options, status_line=status)
             await asyncio.sleep(self.poll)

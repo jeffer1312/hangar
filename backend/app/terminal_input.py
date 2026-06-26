@@ -12,9 +12,15 @@ _NAV_GAP = 0.12  # entre toques Up/Down em rajada
 
 class TerminalInput:
     def send_prompt(self, name: str, text: str) -> None:
-        if any(ord(c) < 32 and c != "\t" for c in text):
+        # Permite \n (multi-linha) e \t; rejeita os OUTROS controles (ESC etc. poderiam disparar acoes
+        # na TUI). Multi-linha vai por bracketed paste (insere as quebras sem submeter); depois Enter.
+        if any(ord(c) < 32 and c not in "\t\n" for c in text):
             raise ValueError("control characters not allowed in prompt")
-        send_keys(name, text, literal=True)
+        if "\n" in text:
+            tmux.paste_text(name, text)
+            time.sleep(0.05)  # deixa a TUI acomodar o paste antes do Enter submeter
+        else:
+            send_keys(name, text, literal=True)
         send_keys(name, "Enter")
 
     def select(self, name: str, option: int) -> None:

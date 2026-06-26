@@ -24,6 +24,9 @@ class ChatEvent(BaseModel):
     result: Optional[str] = None
     is_error: Optional[bool] = None
     ts: Optional[float] = None
+    # Nº de imagens base64 anexadas a uma msg do user via TERMINAL (paste na TUI do Claude). O front
+    # busca cada uma sob demanda em /transcript-image/{id}/{idx} (lazy; base64 não vai no payload).
+    image_count: Optional[int] = None
 
 
 class StateEvent(BaseModel):
@@ -33,6 +36,13 @@ class StateEvent(BaseModel):
     question: Optional[str] = None       # awaiting_input: the question line
     options: Optional[list[str]] = None  # awaiting_input: selectable option labels
     status_line: Optional[str] = None    # raw bottom chrome from the pane, shown as-is on the web
+
+
+class PreviewEvent(BaseModel):
+    # Preview AO VIVO (best-effort) do bloco de assistente em andamento, lido do pane via capture.
+    # Texto-completo (full-replace), substituído pela mensagem canônica do .jsonl quando o bloco fecha.
+    session: str
+    text: str
 
 
 class CommandInfo(BaseModel):
