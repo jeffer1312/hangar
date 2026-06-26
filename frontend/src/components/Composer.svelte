@@ -200,7 +200,9 @@
       attachError = '';
       try {
         const { path } = await uploadImage(sessionName, attachment);
-        const msg = (caption ? caption + '\n' : '') + '📎 imagem: ' + path;
+        // Uma linha so: o backend rejeita '\n' (control char) no send-keys -> evita o 500 que
+        // comia a msg com legenda. O path nao tem espaco (nome gerado), entao da pra ler o trecho.
+        const msg = (caption ? caption + ' — ' : '') + '📎 imagem: ' + path;
         inputText = '';
         if (textareaEl) textareaEl.style.height = 'auto';
         removeAttachment();
