@@ -69,9 +69,15 @@ def _menu_block(lines: list[str]) -> Optional[tuple[int, int]]:
             cursor = i  # cursor mais ao fundo = o picker vivo
     if cursor is None:
         return None
+    # Subindo do cursor, o topo do picker e o CHIP header (☐/☑ da AskUserQuestion) ou um boundary
+    # (bullet/spinner do menu nativo, que nao tem chip). Parar no chip mantem FORA do bloco uma
+    # LISTA NUMERADA EM PROSA da mensagem do assistente — ela vive acima do chip e, sem essa
+    # ancora, "1. ... 2. ..." da prosa entrariam como opcoes falsas. A pergunta fica entre o chip
+    # e as opcoes (com linha em branco no meio), entao continua dentro da regiao.
     top = 0
     for i in range(cursor - 1, -1, -1):
-        if _is_boundary(lines[i]):
+        s = lines[i].lstrip()
+        if _is_boundary(lines[i]) or (bool(s) and s[0] in "☐☑"):
             top = i + 1
             break
     bot = len(lines)

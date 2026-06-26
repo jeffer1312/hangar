@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 from typing import AsyncIterator, Optional
 from watchfiles import awatch
@@ -25,11 +26,23 @@ _COMMAND_META_PREFIXES = (
     # Notificacao de Workflow concluido: o harness injeta um <task-notification>...</task-notification>
     # como entrada "user" sintetica. Tooling meta, nao conversa — fora do chat.
     "<task-notification>",
+    # Lembrete do harness ("The user named this session…", contexto de skill, etc): injetado como
+    # entrada "user" sintetica. Quando vem sozinho (sem texto real), e meta — fora do chat. Quando
+    # vem ANEXADO a uma msg real, _strip_meta_blocks remove so o bloco e mantem o texto do usuario.
+    "<system-reminder>",
 )
+
+# Blocos de meta do harness embutidos no texto de uma msg de usuario. Removidos antes de exibir;
+# se sobrar so o bloco, a msg inteira e meta e nao vira bubble.
+_META_BLOCK_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
 
 
 def _is_command_meta(text: str) -> bool:
     return text.lstrip().startswith(_COMMAND_META_PREFIXES)
+
+
+def _strip_meta_blocks(text: str) -> str:
+    return _META_BLOCK_RE.sub("", text).strip()
 
 
 def parse_line(line: str) -> Optional[ChatEvent]:
@@ -53,7 +66,10 @@ def parse_line(line: str) -> Optional[ChatEvent]:
         if isinstance(content, str):
             if _is_command_meta(content):
                 return None
-            return ChatEvent(kind="user_msg", id=uid, parent_id=parent, text=content)
+            cleaned = _strip_meta_blocks(content)
+            if not cleaned:
+                return None
+            return ChatEvent(kind="user_msg", id=uid, parent_id=parent, text=cleaned)
         if isinstance(content, list):
             tr = _first(content, "tool_result")
             if tr is not None:
@@ -71,7 +87,10 @@ def parse_line(line: str) -> Optional[ChatEvent]:
                 t = txt.get("text", "")
                 if _is_command_meta(t):
                     return None
-                return ChatEvent(kind="user_msg", id=uid, parent_id=parent, text=t)
+                cleaned = _strip_meta_blocks(t)
+                if not cleaned:
+                    return None
+                return ChatEvent(kind="user_msg", id=uid, parent_id=parent, text=cleaned)
         return None
 
     if etype == "assistant" and isinstance(content, list):

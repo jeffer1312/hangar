@@ -75,6 +75,26 @@ def test_command_meta_entries_are_skipped():
     assert ev is not None and ev.kind == "user_msg"
 
 
+def test_system_reminder_only_message_is_skipped():
+    # O harness injeta lembretes ("The user named this session…") como entrada "user" sintetica.
+    # Quando a msg e SO o bloco <system-reminder>, e meta — nao pode virar bubble.
+    assert parse_line(_line({
+        "type": "user", "uuid": "r1",
+        "message": {"role": "user",
+                    "content": '<system-reminder>\nThe user named this session "corrigindo tmux".\n</system-reminder>'},
+    })) is None
+
+
+def test_system_reminder_stripped_from_real_message():
+    # Lembrete ANEXADO a uma msg real: remove so o bloco, mantem o texto do usuario.
+    ev = parse_line(_line({
+        "type": "user", "uuid": "r2",
+        "message": {"role": "user",
+                    "content": "roda o teste\n<system-reminder>tooling meta aqui</system-reminder>"},
+    }))
+    assert ev is not None and ev.kind == "user_msg" and ev.text == "roda o teste"
+
+
 def test_attachment_returns_none():
     assert parse_line(_line({"type": "attachment", "uuid": "x"})) is None
 

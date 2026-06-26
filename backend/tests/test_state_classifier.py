@@ -88,6 +88,30 @@ def test_picker_options_exclude_scrollback_numbered_lines():
     assert all("scrollback" not in o for o in options)
 
 
+def test_chip_header_excludes_prose_numbered_list_above():
+    """Bug real (web mostrava 10 opcoes): uma AskUserQuestion logo abaixo de uma LISTA NUMERADA
+    EM PROSA, sem bullet ● entre elas. O chip ☐ do widget e o topo do bloco; os '1. ... 2. ...'
+    da prosa ficam acima do chip e NAO podem virar opcoes falsas."""
+    pane = (
+        "● Caminho único e limpo:\n"
+        "  1. Aqui digita /exit\n"
+        "  2. No shell: tmux kill-server\n"
+        "  3. Abre tmux limpo\n"
+        "  4. Retoma esta conversa\n"
+        "\n"
+        "☐ Status bar\n"
+        "Status bar do tmux: religar pra ver sessão/janelas?\n"
+        "\n"
+        "❯ 1. Religar minimal\n"
+        "  2. Deixar off\n"
+        "Enter to select · ↑/↓ to navigate · Esc to cancel\n"
+    )
+    state, _, question, options = classify(pane)
+    assert state == "awaiting_input"
+    assert options == ["Religar minimal", "Deixar off"]
+    assert "religar" in (question or "").lower()
+
+
 @pytest.mark.asyncio
 async def test_monitor_emits_only_on_change():
     panes = iter([
