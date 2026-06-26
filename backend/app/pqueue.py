@@ -1,0 +1,143 @@
+import json
+import re
+import time
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import AsyncIterator
+
+from watchfiles import awatch
+
+from app.config import settings
+from app.models import ChatEvent
+from app.transcript import parse_line
+
+# Limite de entradas mantidas no sidecar (poda no append pra nao crescer sem fim).
+_MAX_ENTRIES = 1000
+
+
+def _queue_dir() -> Path:
+    # Sidecar FORA do transcript do Claude Code (nunca toca no arquivo dele). Fica ao lado de
+    # projects/, no diretorio de config (~/.claude-work por padrao).
+    d = Path(settings.projects_dir).parent / ".claude-pocket-queue"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _sanitize(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]", "-", name)
+
+
+def _entry_event(entry: dict) -> ChatEvent:
+    # user_msg sintetico com id prefixado ("queued-") pro front distinguir de evento real do
+    # transcript. ts fica None de proposito: o ts so serve pra ORDENAR no historico, nao pra
+    # exibir (senao bubble enfileirada mostraria hora e as do transcript nao -> inconsistente).
+    return ChatEvent(kind="user_msg", id="queued-" + str(entry.get("id")), text=entry.get("text"))
+
+
+def _ts_of_line(line: str) -> float:
+    # Epoch (s) do campo `timestamp` (ISO 8601 com Z) de uma linha do transcript; 0.0 se ausente.
+    try:
+        obj = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return 0.0
+    t = obj.get("timestamp")
+    if not isinstance(t, str):
+        return 0.0
+    try:
+        return datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+class PromptQueue:
+    """Fila duravel de prompts por sessao (sidecar JSONL). Registra cada envio pra que msgs
+    enfileiradas (mandadas com o Claude trabalhando) — que o Claude Code NEM sempre grava no
+    proprio transcript — aparecam no fluxo, em ordem, e sobrevivam a reload. O merge dedup-a
+    contra o transcript: quando o Claude Code grava o prompt real, a entrada da fila some."""
+
+    def __init__(self, name: str):
+        self.path = _queue_dir() / f"{_sanitize(name)}.jsonl"
+
+    def append(self, text: str) -> dict:
+        entry = {"id": uuid.uuid4().hex, "text": text, "ts": time.time()}
+        rows = self.load()
+        rows.append(entry)
+        if len(rows) > _MAX_ENTRIES:
+            rows = rows[-_MAX_ENTRIES:]
+        # Escrita atomica (tmp + replace) pra um reader nunca pegar arquivo pela metade.
+        tmp = self.path.with_suffix(".jsonl.tmp")
+        tmp.write_text(
+            "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8"
+        )
+        tmp.replace(self.path)
+        return entry
+
+    def load(self) -> list[dict]:
+        if not self.path.exists():
+            return []
+        out = []
+        for line in self.path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except (json.JSONDecodeError, ValueError):
+                continue
+        return out
+
+    async def follow(self) -> AsyncIterator[ChatEvent]:
+        # Emite as entradas existentes e depois vigia novos appends, como user_msg sintetico.
+        # Usa um set de ids ja vistos (o append reescreve o arquivo inteiro -> rastrear posicao
+        # quebraria; reload + dedup por id e simples e correto).
+        seen: set[str] = set()
+
+        def emit_new() -> list[ChatEvent]:
+            evs = []
+            for entry in self.load():
+                eid = str(entry.get("id"))
+                if not eid or eid in seen:
+                    continue
+                seen.add(eid)
+                evs.append(_entry_event(entry))
+            return evs
+
+        for ev in emit_new():
+            yield ev
+        async for _ in awatch(self.path.parent):
+            for ev in emit_new():
+                yield ev
+
+
+def merged_history(name: str, jsonl: str) -> list[ChatEvent]:
+    """Historico = eventos do transcript + entradas da fila ainda NAO absorvidas pelo transcript,
+    ordenado por timestamp. Dedup: descarta entrada da fila cujo texto ja apareca (por linha) num
+    user_msg do transcript (o Claude Code consumiu o prompt -> a versao real vence). Entradas sem
+    timestamp herdam o ts anterior (carry-forward) pra manter a ordem do arquivo."""
+    items: list[tuple[float, int, ChatEvent]] = []
+    committed_lines: set[str] = set()
+    prev_ts = 0.0
+    for i, line in enumerate(Path(jsonl).read_text(encoding="utf-8", errors="replace").splitlines()):
+        ev = parse_line(line)
+        if ev is None:
+            continue
+        ts = _ts_of_line(line) or prev_ts
+        prev_ts = ts
+        items.append((ts, i, ev))
+        if ev.kind == "user_msg" and ev.text:
+            t = ev.text.strip()
+            committed_lines.add(t)
+            for ln in t.split("\n"):
+                committed_lines.add(ln.strip())
+
+    # Entradas da fila entram com tiebreaker alto -> caem DEPOIS de eventos do transcript de mesmo ts.
+    for entry in PromptQueue(name).load():
+        text = (entry.get("text") or "").strip()
+        if not text or text in committed_lines:
+            continue
+        ts = float(entry.get("ts") or prev_ts)
+        items.append((ts, 10**9, _entry_event(entry)))
+
+    items.sort(key=lambda x: (x[0], x[1]))
+    return [ev for _, _, ev in items]

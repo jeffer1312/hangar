@@ -13,13 +13,14 @@
   interface Props {
     events: ChatEvent[];
     stateEvent: StateEvent | null;
-    pending: { id: string; text: string }[];
+    pending: { id: string; text: string; solid?: boolean }[];
     sessionName: string;
+    dockH: number;
     onSelectOption: (i: number) => void;
     onCancel: () => void;
   }
 
-  let { events, stateEvent, pending, sessionName, onSelectOption, onCancel }: Props = $props();
+  let { events, stateEvent, pending, sessionName, dockH, onSelectOption, onCancel }: Props = $props();
 
   let listEl: HTMLElement | undefined = $state();
   // O usuario "gruda" no fim por padrao; ao rolar pra cima, paramos de arrastar.
@@ -47,11 +48,15 @@
   // Only render tool_use events (not tool_result — they're merged into tool cards)
   const visibleEvents = $derived(events.filter(ev => ev.kind !== 'tool_result'));
 
+  // Claude trabalhando? -> msgs da fila durável (id "queued-") ficam atenuadas (= na fila).
+  const working = $derived(stateEvent?.state === 'working');
+
   // Auto-scroll APENAS quando ja estamos no fim. NAO depende de stateEvent (o tick do
   // cronometro/status atualiza stateEvent toda hora e arrastaria o scroll-up do usuario).
   $effect(() => {
     void events.length;
     void pending.length;
+    void dockH; // composer cresceu (anexo/multilinha) -> re-scrolla pra ultima msg limpar o glass
     if (!atBottom) return;
     tick().then(scrollToBottom);
   });
@@ -65,6 +70,7 @@
 
 <section
   class="message-list"
+  style="--dock-h: {dockH}px"
   bind:this={listEl}
   onscroll={onScroll}
   aria-label="Mensagens"
@@ -73,8 +79,19 @@
     {#each visibleEvents as ev (ev.id)}
       {#if ev.kind === 'user_msg' && ev.text}
         {@const img = parseImageMessage(ev.text)}
-        {#if img}
-          <ImageBubble caption={img.caption} src={`${getBaseUrl()}/api/sessions/${encodeURIComponent(sessionName)}/uploads/${encodeURIComponent(img.filename)}`} />
+        {#if ev.id.startsWith('queued-')}
+          <!-- Msg da fila durável: atenuada enquanto o Claude trabalha (= na fila, ainda nao
+               processada); acende solida quando ele fica idle (= aceita). Da o sinal de "quando
+               foi aceita" que o usuario pediu. -->
+          <div class="queued-row" class:dim={working}>
+            {#if img}
+              <ImageBubble caption={img.caption} srcs={img.filenames.map((f) => `${getBaseUrl()}/api/sessions/${encodeURIComponent(sessionName)}/uploads/${encodeURIComponent(f)}`)} />
+            {:else}
+              <UserBubble text={ev.text} ts={ev.ts} />
+            {/if}
+          </div>
+        {:else if img}
+          <ImageBubble caption={img.caption} srcs={img.filenames.map((f) => `${getBaseUrl()}/api/sessions/${encodeURIComponent(sessionName)}/uploads/${encodeURIComponent(f)}`)} />
         {:else}
           <UserBubble text={ev.text} ts={ev.ts} />
         {/if}
@@ -90,8 +107,13 @@
     {/if}
 
     {#each pending as p (p.id)}
-      <div class="pending-bubble">
-        <UserBubble text={p.text} ts={undefined} />
+      {@const pimg = parseImageMessage(p.text)}
+      <div class="pending-bubble" class:solid={p.solid}>
+        {#if pimg}
+          <ImageBubble caption={pimg.caption} srcs={pimg.filenames.map((f) => `${getBaseUrl()}/api/sessions/${encodeURIComponent(sessionName)}/uploads/${encodeURIComponent(f)}`)} />
+        {:else}
+          <UserBubble text={p.text} ts={undefined} />
+        {/if}
       </div>
     {/each}
 
@@ -110,13 +132,19 @@
   .message-list {
     flex: 1;
     overflow-y: scroll;
-    -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: contain;
     scroll-behavior: auto;
-    /* O dock flutua sobre a lista (overlap p/ o glass borrar as mensagens) -> padding fixo
-       que limpa o composer flutuante. Valor fixo (sem medicao dinamica) evita reflow a cada
-       frame da animacao do teclado. */
-    padding-bottom: calc(150px + env(safe-area-inset-bottom));
+    /* Anti-glitch de repaint do iOS (bloco PRETO sobre as msgs no momentum scroll, agravado pelo
+       backdrop-filter do glass por cima): fundo solido (area nao-pintada vira bg, nao preto) +
+       camada propria (translateZ) pra estabilizar a pintura. Removido -webkit-overflow-scrolling
+       :touch (legado, fonte conhecida do tile preto no iOS novo). */
+    background: var(--bg-base);
+    transform: translateZ(0);
+    /* O dock (composer glass) flutua sobre a lista (overlap). Padding = altura REAL do dock
+       (--dock-h, medido via ResizeObserver no Chat) + respiro, pra ultima msg sempre limpar o
+       glass mesmo com anexo/multilinha. ResizeObserver nao dispara na animacao do teclado
+       (composer mantem altura), entao nao volta o reflow que glitchava a NavBar. */
+    padding-bottom: calc(var(--dock-h, 150px) + var(--space-3));
   }
 
   .messages-inner {
@@ -128,8 +156,29 @@
     margin: 0 auto;
   }
 
-  /* Bubble enfileirado: ainda nao processado pelo Claude — atenuado ate solidificar. */
+  /* Bubble enfileirado: ainda nao processado pelo Claude — atenuado ate solidificar. Precisa ser
+     flex-column align-end pra que UserBubble/ImageBubble (que dependem de flex-end no pai) fiquem
+     a DIREITA como msg do usuario — senao o wrapper block cola tudo na esquerda (cara de assistente). */
   .pending-bubble {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    opacity: 0.5;
+  }
+  /* Solidificado: o Claude ja consumiu a fila -> vira bubble normal (sem atenuar). */
+  .pending-bubble.solid {
+    opacity: 1;
+  }
+
+  /* Msg da fila durável (evento sintetico "queued-"): alinha a direita (como user) e atenua
+     enquanto na fila. Acende sozinha quando o Claude fica idle (transition). */
+  .queued-row {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    transition: opacity 240ms var(--ease-out);
+  }
+  .queued-row.dim {
     opacity: 0.5;
   }
 </style>

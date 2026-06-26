@@ -58,8 +58,8 @@ def history(name: str):
     jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
     if not jsonl:
         raise HTTPException(404, "session or transcript not found")
-    from app.transcript import parse_transcript
-    return parse_transcript(jsonl)
+    from app.pqueue import merged_history
+    return merged_history(name, jsonl)
 
 
 @app.get("/api/sessions/{name}/events", dependencies=[Depends(require_auth)])
@@ -78,6 +78,16 @@ def input_prompt(name: str, body: InputBody):
         # send_prompt rejeita control chars (ex: '\n'). Sem isto virava 500 -> a msg sumia sem
         # feedback. Agora vira 400 limpo (o frontend mostra). (Multi-linha de verdade: backlog.)
         raise HTTPException(400, str(e))
+    # Registra na fila duravel (sidecar) APOS o envio dar certo: aparece como user_msg em ordem e
+    # persiste no reload; o merge dedup-a contra o transcript quando o Claude Code grava o prompt.
+    # Slash-commands (/clear etc) NAO entram — sao meta, nao viram bubble. Falha ao gravar a fila
+    # nao quebra o envio (a msg ja foi pro tmux).
+    if not body.text.lstrip().startswith("/"):
+        from app.pqueue import PromptQueue
+        try:
+            PromptQueue(name).append(body.text)
+        except OSError:
+            pass
     return {"ok": True}
 
 

@@ -31,7 +31,10 @@
   let error = $state('');
   let es: EventSource | null = null;
   let screenEl: HTMLElement | undefined = $state();
-  let pending = $state<{ id: string; text: string }[]>([]);
+  let pending = $state<{ id: string; text: string; solid?: boolean }[]>([]);
+  let dockEl: HTMLElement | undefined = $state();
+  // Altura real do dock (composer) -> vira padding da lista pra ultima msg sempre limpar o glass.
+  let dockH = $state(150);
 
   // ── Switcher de sessoes (NavBar -> sheet) + criar nova sem voltar ──────────
   let switcherOpen = $state(false);
@@ -85,6 +88,24 @@
     es.addEventListener('message', (e: MessageEvent) => {
       try {
         const ev = JSON.parse(e.data) as ChatEvent;
+        // Dedup cruzado fila<->transcript: a fila duravel emite user_msg sintetico (id "queued-").
+        // Quando o Claude Code grava o prompt real, chega o user_msg real -> tira o sintetico de
+        // mesmo texto (por linha, pq ele pode fundir varias). E nao adiciona sintetico se o real
+        // ja existe. (covers: a "cobre" b se forem iguais ou b for uma linha de a.)
+        if (ev.kind === 'user_msg' && ev.text) {
+          const covers = (a: string, b: string) => {
+            const at = a.trim(), bt = b.trim();
+            return at === bt || at.split('\n').some((ln) => ln.trim() === bt);
+          };
+          if (ev.id.startsWith('queued-')) {
+            if (events.some((x) => x.kind === 'user_msg' && !x.id.startsWith('queued-') && x.text && covers(x.text, ev.text!))) {
+              return; // real ja cobre este texto -> ignora o sintetico
+            }
+          } else {
+            const filtered = events.filter((x) => !(x.kind === 'user_msg' && x.id.startsWith('queued-') && x.text && covers(ev.text!, x.text)));
+            if (filtered.length !== events.length) events = filtered;
+          }
+        }
         // Dedupe by id: the SSE replays the whole transcript on every (re)connect and
         // loadHistory() also seeds events — without this, messages double up and the
         // keyed {#each} chokes on duplicate ids.
@@ -135,7 +156,11 @@
       // Ignora valores transientes (a animacao do teclado reporta alturas minusculas por 1 frame).
       if (vv.height < 120) return;
       screenEl.style.height = vv.height + 'px';
-      screenEl.style.transform = `translateY(${vv.offsetTop}px)`;
+      // So aplica translateY quando o iOS rolou o layout (teclado aberto, offsetTop>0). Com o
+      // teclado fechado (offsetTop=0) vira 'none': translateY(0) ainda cria contexto de composicao
+      // e dispara o glitch de repaint do iOS (bloco PRETO sobre as msgs durante o scroll). Mantem
+      // o transform quando precisa (teclado) — nao quebra o layout que ja funcionava.
+      screenEl.style.transform = vv.offsetTop ? `translateY(${vv.offsetTop}px)` : 'none';
     }
     function onFocusIn() {
       requestAnimationFrame(fit);
@@ -150,6 +175,24 @@
       vv.removeEventListener('scroll', fit);
       screenEl?.removeEventListener('focusin', onFocusIn);
     };
+  });
+
+  // Mede a altura do dock (composer) e expoe via prop pra lista. ResizeObserver dispara SO quando
+  // o composer muda de tamanho (anexo, multilinha, botao stop) — NAO na animacao do teclado
+  // (composer mantem a altura) — entao nao reintroduz o glitch da NavBar.
+  $effect(() => {
+    if (!dockEl) return;
+    let raf = 0;
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        if (!dockEl) return;
+        const h = Math.round(dockEl.getBoundingClientRect().height);
+        if (Math.abs(h - dockH) > 2) dockH = h;
+      });
+    });
+    ro.observe(dockEl);
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
   });
 
   let pendingSeq = 0;
@@ -172,15 +215,34 @@
     }
   }
 
-  // Dedup: quando o transcript (SSE) traz o user_msg real, solta o pending de mesmo texto.
-  // Idempotente -> nao entra em loop (apos filtrar, o length estabiliza e nao reatribui).
+  // Dedup: solta o pending quando o transcript (SSE) traz a msg real. Casa por texto NORMALIZADO
+  // e tambem por LINHA — o Claude Code funde varias msgs enfileiradas numa so (separadas por \n),
+  // entao "msg1\nmsg2" casa tanto "msg1" quanto "msg2". Idempotente (length estabiliza).
   $effect(() => {
     if (pending.length === 0) return;
-    const committed = new Set(
-      events.filter((e) => e.kind === 'user_msg' && e.text).map((e) => e.text)
-    );
-    const next = pending.filter((p) => !committed.has(p.text));
+    const committed = new Set<string>();
+    for (const e of events) {
+      if (e.kind !== 'user_msg' || !e.text) continue;
+      const t = e.text.trim();
+      committed.add(t);
+      for (const line of t.split('\n')) committed.add(line.trim());
+    }
+    const next = pending.filter((p) => !committed.has(p.text.trim()));
     if (next.length !== pending.length) pending = next;
+  });
+
+  // Solidificar a fila: msgs enviadas enquanto o Claude trabalha NEM sempre viram entrada no
+  // transcript dele (so as enviadas com ele ocioso viram um prompt gravado). Entao nao da pra
+  // apagar o eco (sumiria — era o bug). Quando ele volta a idle (consumiu a fila), SOLIDIFICA o
+  // pending no lugar: vira bubble normal (sem opacidade), parte do fluxo. O reconcile acima ainda
+  // remove os que casarem com o transcript (evita duplicar quando o Claude Code de fato grava).
+  let prevState: State = 'idle';
+  $effect(() => {
+    const s = currentState;
+    if (prevState !== 'idle' && s === 'idle' && pending.some((p) => !p.solid)) {
+      pending = pending.map((p) => ({ ...p, solid: true }));
+    }
+    prevState = s;
   });
 
   // Slash commands gerais do Claude Code (ex: /clear, /compact) -> sessao viva. Modelo e
@@ -228,12 +290,13 @@
       {stateEvent}
       {pending}
       {sessionName}
+      {dockH}
       onSelectOption={handleSelect}
       onCancel={handleInterrupt}
     />
   {/if}
 
-  <div class="bottom-dock">
+  <div class="bottom-dock" bind:this={dockEl}>
     {#if currentState === 'dead'}
       <div class="dead-footer">
         <p class="dead-text">Esta sessão foi encerrada.</p>
@@ -282,6 +345,7 @@
     overflow: hidden;
     transform-origin: top;
     position: relative;
+    background: var(--bg-base);  /* backing solido: layer nunca renderiza preto no glitch do iOS */
   }
 
   .chat-loading,

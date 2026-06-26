@@ -1,11 +1,13 @@
 import asyncio
 from app.transcript import TranscriptTailer
 from app.state import StateMonitor
+from app.pqueue import PromptQueue
 
 
 async def merged_events(name: str, jsonl: str):
     tailer = TranscriptTailer(jsonl)
     monitor = StateMonitor(name)
+    pqueue = PromptQueue(name)
     queue: asyncio.Queue = asyncio.Queue()
 
     async def pump(kind, agen):
@@ -20,6 +22,9 @@ async def merged_events(name: str, jsonl: str):
 
     tasks = [
         asyncio.create_task(pump("message", tailer.follow())),
+        # Fila duravel: user_msg sinteticos (id "queued-") pras msgs enfileiradas. O front faz o
+        # dedup cruzado (queued- vs real) por texto.
+        asyncio.create_task(pump("message", pqueue.follow())),
         asyncio.create_task(pump("state", monitor.stream())),
     ]
     try:

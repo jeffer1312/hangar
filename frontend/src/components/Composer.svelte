@@ -55,16 +55,17 @@
   let inputText = $state('');
   let textareaEl: HTMLTextAreaElement | undefined = $state();
 
-  // ── Anexo de imagem: arquivo escolhido + preview local + estado de upload ───
-  let attachment = $state<File | null>(null);
-  let attachmentUrl = $state<string | null>(null);
+  // ── Anexos de imagem: lista de arquivos + preview local + estado de upload ──
+  let attachments = $state<{ file: File; url: string }[]>([]);
   let fileInput: HTMLInputElement | undefined = $state();
   let uploading = $state(false);
   let attachError = $state('');
   let sending = $state(false);
   let sendError = $state('');
 
-  const canSend = $derived((inputText.trim().length > 0 || attachment !== null) && !uploading && !sending);
+  // hasInput: tem texto OU anexo. Usado tb pro botao stop/send (ver control-right).
+  const hasInput = $derived(inputText.trim().length > 0 || attachments.length > 0);
+  const canSend = $derived(hasInput && !uploading && !sending);
   const isWorking = $derived(sessionState === 'working');
 
   // ── Pill de modelo + esforco: abre o ModelEffortSheet (aplica via endpoint dedicado) ──
@@ -156,42 +157,52 @@
     }
   }
 
-  // ── Anexo: escolher / remover ──────────────────────────────────────────────
-  // Define o anexo (do picker ou do paste): troca o preview e zera o erro.
-  function setAttachment(f: File) {
-    if (attachmentUrl) URL.revokeObjectURL(attachmentUrl);
-    attachment = f;
-    attachmentUrl = URL.createObjectURL(f);
+  // ── Anexos: escolher / remover (multiplas imagens) ─────────────────────────
+  // Adiciona arquivos de imagem a lista (do picker ou do paste), cada um com preview local.
+  function addFiles(files: Iterable<File>) {
+    for (const f of files) {
+      if (!f.type.startsWith('image/')) continue;
+      attachments = [...attachments, { file: f, url: URL.createObjectURL(f) }];
+    }
     attachError = '';
   }
 
   function onPickFile(e: Event) {
-    const f = (e.target as HTMLInputElement).files?.[0];
-    if (f) setAttachment(f);
+    const files = (e.target as HTMLInputElement).files;
+    if (files && files.length) addFiles(files);
   }
 
-  // Colar imagem na textarea (desktop garante; iOS Safari e instavel). Pega o 1o item de
-  // imagem do clipboard e joga no mesmo fluxo do anexo.
+  // Colar imagem(ns) (desktop garante; iOS Safari e instavel). Pega todos os itens de imagem
+  // do clipboard e joga no mesmo fluxo do anexo.
   function onPaste(e: ClipboardEvent) {
     const items = e.clipboardData?.items;
     if (!items) return;
+    const imgs: File[] = [];
     for (const it of items) {
       if (it.kind === 'file' && it.type.startsWith('image/')) {
         const f = it.getAsFile();
-        if (f) {
-          e.preventDefault();
-          setAttachment(f);
-        }
-        return;
+        if (f) imgs.push(f);
       }
+    }
+    if (imgs.length) {
+      e.preventDefault();
+      addFiles(imgs);
     }
   }
 
-  function removeAttachment() {
-    if (attachmentUrl) URL.revokeObjectURL(attachmentUrl);
-    attachment = null;
-    attachmentUrl = null;
+  // Remove um anexo pelo indice (libera o objectURL).
+  function removeAttachment(idx: number) {
+    const a = attachments[idx];
+    if (a) URL.revokeObjectURL(a.url);
+    attachments = attachments.filter((_, i) => i !== idx);
     attachError = '';
+    if (fileInput) fileInput.value = '';
+  }
+
+  // Limpa todos os anexos (apos envio com sucesso).
+  function clearAttachments() {
+    for (const a of attachments) URL.revokeObjectURL(a.url);
+    attachments = [];
     if (fileInput) fileInput.value = '';
   }
 
@@ -199,20 +210,25 @@
     if (!canSend) return;
     const caption = inputText.trim();
     sendError = '';
-    if (attachment) {
+    if (attachments.length) {
       uploading = true;
       attachError = '';
       try {
-        const { path } = await uploadImage(sessionName, attachment);
-        // Uma linha so: o backend rejeita '\n' (control char) no send-keys -> evita o 500 que
-        // comia a msg com legenda. O path nao tem espaco (nome gerado), entao da pra ler o trecho.
-        const msg = (caption ? caption + ' — ' : '') + '📎 imagem: ' + path;
+        // Sobe todas as imagens e junta os paths numa UNICA linha (o backend rejeita '\n' no
+        // send-keys). Cada path nao tem espaco (nome gerado) -> separa por " 📎 imagem: ".
+        const paths: string[] = [];
+        for (const a of attachments) {
+          const { path } = await uploadImage(sessionName, a.file);
+          paths.push(path);
+        }
+        const imgPart = paths.map((p) => '📎 imagem: ' + p).join(' ');
+        const msg = (caption ? caption + ' — ' : '') + imgPart;
         await onSend(msg);                 // espera o /input; so limpa se foi
         inputText = '';
         if (textareaEl) textareaEl.style.height = 'auto';
-        removeAttachment();
+        clearAttachments();
       } catch (err) {
-        // upload OU envio falhou -> mantem a foto e o texto, mostra o erro.
+        // upload OU envio falhou -> mantem as fotos e o texto, mostra o erro.
         attachError = err instanceof Error ? err.message : 'Falha no envio';
       } finally {
         uploading = false;
@@ -244,6 +260,7 @@
   <input
     type="file"
     accept="image/*"
+    multiple
     bind:this={fileInput}
     onchange={onPickFile}
     class="file-input"
@@ -274,13 +291,16 @@
       {/if}
     </div>
 
-    {#if attachment}
-      <div class="attach-chip">
-        {#if attachmentUrl}<img class="attach-thumb" src={attachmentUrl} alt="anexo" />{/if}
-        <span class="attach-name">{attachment.name}</span>
+    {#if attachments.length}
+      <div class="attach-row">
+        {#each attachments as a, idx (a.url)}
+          <div class="attach-chip">
+            <img class="attach-thumb" src={a.url} alt="anexo" />
+            <button class="attach-remove" onclick={() => removeAttachment(idx)} aria-label="Remover anexo">×</button>
+          </div>
+        {/each}
         {#if uploading}<span class="attach-status">enviando…</span>{/if}
         {#if attachError}<span class="attach-error">{attachError}</span>{/if}
-        <button class="attach-remove" onclick={removeAttachment} aria-label="Remover anexo">×</button>
       </div>
     {/if}
 
@@ -318,20 +338,23 @@
       </div>
 
       <div class="control-right">
-        {#if isWorking}
+        {#if isWorking && !hasInput}
+          <!-- Pensando + input vazio -> o slot vira STOP. Ao digitar/colar algo, volta a ser SEND
+               (enfileira a msg). Um slot so -> ganha espaco. -->
           <button class="stop-btn" onclick={() => (confirmStopOpen = true)} aria-label="Interromper Claude">
             <IconInterrupt size={16} />
           </button>
+        {:else}
+          <button
+            class="send-btn"
+            class:send-btn--disabled={!canSend}
+            onclick={submit}
+            disabled={!canSend}
+            aria-label="Enviar mensagem"
+          >
+            <IconSend size={18} />
+          </button>
         {/if}
-        <button
-          class="send-btn"
-          class:send-btn--disabled={!canSend}
-          onclick={submit}
-          disabled={!canSend}
-          aria-label="Enviar mensagem"
-        >
-          <IconSend size={18} />
-        </button>
       </div>
     </div>
   </div>
@@ -379,12 +402,21 @@
     margin: 0 auto;
     /* Card de vidro fosco. Dock segue flex (sem overlap) pra nao desestabilizar o teclado;
        o blur pega o fundo atras do dock — fica glassy sem o overlap que quebrava o layout. */
-    background: rgba(24, 24, 27, 0.6);
-    backdrop-filter: blur(22px) saturate(180%);
-    -webkit-backdrop-filter: blur(22px) saturate(180%);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-    border-radius: var(--radius-md);
+    /* Material estilo iOS: blur forte + vibrancy (saturate+brightness), leve gradiente de cima
+       (lit-from-top), hairline branco no topo (specular) e sombra ambiente em camadas. Mantem
+       o padding/altura -> nao afeta o scroll. */
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 38%),
+      rgba(28, 28, 32, 0.55);
+    backdrop-filter: blur(30px) saturate(180%) brightness(1.05);
+    -webkit-backdrop-filter: blur(30px) saturate(180%) brightness(1.05);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.14),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.22),
+      0 1px 2px rgba(0, 0, 0, 0.18),
+      0 12px 40px rgba(0, 0, 0, 0.42);
+    border-radius: var(--radius-lg);
     padding: var(--space-3) var(--space-3) calc(var(--space-3) + env(safe-area-inset-bottom));
   }
 
@@ -575,35 +607,41 @@
   /* ── Anexo de imagem ────────────────────────────────────────────────────── */
   .file-input { display: none; }
 
-  .attach-chip {
+  .attach-row {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
-    padding: var(--space-2);
-    background: var(--bg-hover);
-    border-radius: var(--radius-md);
   }
-  .attach-thumb {
-    width: 36px;
-    height: 36px;
-    border-radius: var(--radius-sm);
-    object-fit: cover;
+  .attach-chip {
+    position: relative;
     flex-shrink: 0;
   }
-  .attach-name {
-    font-size: var(--text-xs);
-    color: var(--text-secondary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    flex: 1;
-    min-width: 0;
+  .attach-thumb {
+    width: 48px;
+    height: 48px;
+    border-radius: var(--radius-sm);
+    object-fit: cover;
+    display: block;
   }
   .attach-status { font-size: var(--text-xs); color: var(--text-muted); }
   .attach-error { font-size: var(--text-xs); color: var(--error); }
   .attach-remove {
-    width: 28px; height: 28px; min-height: 0; flex-shrink: 0;
-    color: var(--text-secondary); font-size: var(--text-lg); line-height: 1;
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    width: 20px;
+    height: 20px;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-full);
+    background: var(--bg-base);
+    border: 1px solid var(--border-default);
+    color: var(--text-secondary);
+    font-size: 14px;
+    line-height: 1;
   }
 
   .attach-btn {
