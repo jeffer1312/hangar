@@ -56,14 +56,36 @@ npm run dev -- --host      # serve em http://<ip>:5173
 2. Escaneie o **QR** do terminal (ou abra `http://<ip-da-lan>:5173`).
 3. URL + token preenchem sozinhos → conectado.
 
-### Opção B — Tailscale (de qualquer lugar)
-Instale Tailscale no PC **e** no celular (mesmo tailnet). Exponha o PWA pelo tailnet com HTTPS:
+### Opção B — Tailscale (de qualquer lugar, com HTTPS)
+
+VPN de volta pra sua rede — funciona em qualquer lugar (4G/outra Wi-Fi), sem expor nada à internet.
+
+**1. Criar a conta:** vá em **https://tailscale.com** → *Get started* (ou **https://login.tailscale.com**)
+e entre com Google/GitHub/Microsoft/e-mail. Cria seu **tailnet** (sua rede privada).
+
+**2. Instalar nos dispositivos** (PC + celular, MESMA conta):
+- PC (Linux): `curl -fsSL https://tailscale.com/install.sh | sh` → `sudo tailscale up`
+- Celular: app **Tailscale** (App Store / Play Store) → login.
+- Confira: `tailscale status` (os dois aparecem no tailnet).
+
+**3. Habilitar HTTPS no tailnet** (necessário pro `tailscale serve` com HTTPS) — no
+**admin console** (https://login.tailscale.com/admin), página **DNS**:
+- Ative **MagicDNS**.
+- Ative **HTTPS Certificates** (logo abaixo). Aceite que os nomes das máquinas + o nome
+  DNS do tailnet vão pra um *ledger público* (Let's Encrypt). Cada máquina ganha um nome
+  `<maquina>.<tailnet>.ts.net`.
+
+**4. Expor o PWA** (rode no PC, na pasta do projeto):
 ```bash
-tailscale serve --bg 5173          # publica o vite em https://<host>.ts.net
-tailscale serve status             # confere a URL
+tailscale serve --bg 5173      # publica o vite (5173) em https://<maquina>.<tailnet>.ts.net
+tailscale serve status         # mostra a URL exata
 ```
-No celular (com Tailscale ligado) abra `https://<host>.ts.net`. HTTPS do tailnet permite
-instalar como PWA e o app falar com o backend.
+**5. No celular** (com Tailscale ligado) abra `https://<maquina>.<tailnet>.ts.net` → cadeado
+válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à Tela de Início** (PWA).
+
+> Fonte: [Tailscale — Set up HTTPS](https://tailscale.com/docs/how-to/set-up-https-certificates)
+> · [tailscale serve](https://tailscale.com/docs/reference/tailscale-cli/serve). NÃO use
+> `tailscale funnel` (isso expõe à internet pública — fora do modelo LAN/VPN-only).
 
 > O app fala com o backend **cross-origin** quando preciso (multi-PC): ele aceita o token via
 > header **e** via `?token=` (porque `EventSource`/`<img>` não mandam header). CORS já liberado
