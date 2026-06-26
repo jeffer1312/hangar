@@ -169,6 +169,7 @@
       console.error('sendInput error:', err);
       // Falhou o envio -> remove o pending que adicionamos (nao ficou enfileirado).
       if (pendingId) pending = pending.filter((p) => p.id !== pendingId);
+      throw err; // propaga pro Composer mostrar o erro e NAO limpar o input
     }
   }
 
