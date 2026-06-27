@@ -410,9 +410,9 @@
     position: relative;
     isolation: isolate;
     border: 1px solid var(--glass-border);
-    box-shadow:               /* glow 0 12px 40px FICA no host (sem overflow:hidden) -> halo preservado */
-      inset 0 1px 0 var(--glass-highlight),
-      inset 0 -1px 0 rgba(0, 0, 0, 0.22),
+    box-shadow:               /* specular rim (brilho de borda) = cara de glass iOS; glow no host */
+      inset 0 1px 1px var(--glass-specular),
+      inset 0 -1px 1px rgba(255, 255, 255, 0.05),
       0 1px 2px rgba(0, 0, 0, 0.18),
       0 12px 40px var(--glass-shadow);
     border-radius: var(--radius-lg);
@@ -432,11 +432,13 @@
     z-index: -1;                /* atrás do conteúdo, dentro do stacking context do card */
     border-radius: inherit;
     pointer-events: none;
-    background:
-      linear-gradient(180deg, var(--glass-highlight), transparent 40%),
-      var(--glass-bg);
-    backdrop-filter: blur(30px) saturate(180%);
-    -webkit-backdrop-filter: blur(30px) saturate(180%);
+    background: var(--glass-bg);
+    backdrop-filter: blur(40px) saturate(180%);
+    -webkit-backdrop-filter: blur(40px) saturate(180%);
+  }
+  /* Chromium (data-liquid): refracao SVG real (liquid glass) + menos blur pra ela aparecer. */
+  :global(html[data-liquid]) .composer-card::before {
+    backdrop-filter: url(#liquid-glass) blur(16px) saturate(180%);
   }
 
   /* Rede de segurança durante o scroll: desliga o backdrop-filter e usa fundo quase opaco. MIGRADA

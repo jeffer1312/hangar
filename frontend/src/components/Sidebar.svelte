@@ -213,15 +213,24 @@
     height: 100%;
     display: flex;
     flex-direction: column;
-    /* Glass (desktop -> sem o risco do bloco preto do iOS): translucido + blur. */
+    /* Glass iOS (desktop -> sem o risco do bloco preto do iOS): translucido + sheen no topo + brilho
+       de borda. Sem o sheen ficava chapado (so o composer/navbar tinham, via ::before). */
     background: var(--glass-bg);
-    backdrop-filter: blur(24px) saturate(180%);
-    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    backdrop-filter: blur(40px) saturate(180%);
+    -webkit-backdrop-filter: blur(40px) saturate(180%);
     border-right: 1px solid var(--glass-border);
+    box-shadow:
+      inset 0 1px 1px var(--glass-specular),   /* rim no topo */
+      inset -1px 0 0 var(--glass-highlight);    /* luz na borda direita */
     padding: var(--space-3);
     gap: var(--space-2);
     transition: width 160ms var(--ease-out);
     overflow: hidden;
+  }
+  /* Chromium (data-liquid): refracao SVG real (liquid). No desktop a sidebar fica AO LADO do chat
+     (nada atras pra refratar) -> efeito sutil; mais visivel quando ha conteudo atras. */
+  :global(html[data-liquid]) .sidebar {
+    backdrop-filter: url(#liquid-glass) blur(20px) saturate(180%);
   }
   .sidebar.collapsed { width: 56px; padding: var(--space-3) var(--space-2); }
 

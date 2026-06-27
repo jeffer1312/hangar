@@ -91,16 +91,38 @@
 
 <style>
   .navbar {
-    background: var(--bg-base);   /* OPACO: camada GPU pintada que derrota o bloco preto do iOS. Glass
-                                     aqui quebrava no shift do teclado -> mantido SOLIDO (glass fica so
-                                     no composer + sidebar). Ver WebKit #89475. */
-    border-bottom: 1px solid var(--border-subtle);
+    /* Glass: blur num ::before LEAF (bare, sem descendente posicionado), igual ao composer -> nao
+       promove/corrompe a camada do scroller. Host transparente + stacking context proprio. O fallback
+       SOLIDO no .scrolling (abaixo) e a defesa contra o bloco preto do iOS no momentum (o gatilho real).
+       Ver WebKit #89475. */
+    position: relative;
+    isolation: isolate;
+    background: transparent;
+    border-bottom: 1px solid var(--glass-border);
+    box-shadow: inset 0 1px 1px var(--glass-specular);  /* rim no topo */
     padding-top: env(safe-area-inset-top);
     flex-shrink: 0;
     z-index: 20;
-    transform: translateZ(0);
-    -webkit-backface-visibility: hidden;
-    backface-visibility: hidden;
+  }
+  .navbar::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background: var(--glass-bg);
+    backdrop-filter: blur(40px) saturate(180%);
+    -webkit-backdrop-filter: blur(40px) saturate(180%);
+  }
+  /* Chromium (data-liquid): refracao SVG real. */
+  :global(html[data-liquid]) .navbar::before {
+    backdrop-filter: url(#liquid-glass) blur(16px) saturate(180%);
+  }
+  /* Durante o scroll: sem blur + fundo quase opaco (evita o bloco preto do momentum no iOS). */
+  .navbar.scrolling::before {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: var(--glass-bg-solid);
   }
 
   .navbar-inner {
