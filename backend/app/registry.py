@@ -173,6 +173,14 @@ class SessionRegistry:
         self._jsonl_cache[name] = jsonl
         return SessionInfo(name=name, cwd=cwd, jsonl=jsonl)
 
+    def rename(self, old: str, new: str) -> None:
+        # Cache e keyed por NOME -> ao renomear, move a entrada pro nome novo e esquece o velho. Senao
+        # o nome velho apontaria pro jsonl pra sempre (reuso futuro = transcript errado) e o nome novo
+        # cairia no fallback newest-by-mtime ate um sinal confiavel reaparecer.
+        j = self._jsonl_cache.pop(old, None)
+        if j is not None:
+            self._jsonl_cache[new] = j
+
     def kill(self, name: str) -> None:
         tmux.kill_session(name)
         self._forget(name)  # cache invalido: nome pode ser reusado por outra sessao depois

@@ -1,10 +1,12 @@
+import asyncio
 import mimetypes
 import os
 import re
+from typing import Literal
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 from app.auth import require_auth
 from app.commands import list_commands
@@ -13,10 +15,66 @@ from app.model_picker import PickerError
 from app.registry import SessionRegistry
 from app.terminal_input import TerminalInput
 from app.sse import merged_events
-from app.uploads import save_upload, resolve_upload, UploadError
+from app.uploads import save_upload, resolve_upload, UploadError, MAX_BYTES
 from app.git_ops import list_branches, switch_branch, git_action, GitError
 
+
+class _BodyTooLarge(Exception):
+    """Sinaliza corpo da request acima do limite (estoura no receive, antes de bufferizar tudo)."""
+
+
+class _BodySizeLimitMiddleware:
+    # Limite GLOBAL de corpo, em ASGI: conta os bytes do stream e aborta com 413 ao passar de max_bytes.
+    # Cobre o que o check de Content-Length do /upload NAO pega (chunked, sem header) e roda ANTES do
+    # require_auth -> impede o buffer ilimitado pre-auth. ponytail: teto global unico (= MAX_BYTES do
+    # upload); se um dia precisar cap menor por rota, da pra escopar por scope["path"].
+    def __init__(self, app, max_bytes: int):
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers") or [])
+        clen = headers.get(b"content-length")
+        if clen is not None and clen.isdigit() and int(clen) > self.max_bytes:
+            await self._reject(send)
+            return
+        total = 0
+        started = False
+
+        async def limited_receive():
+            nonlocal total
+            message = await receive()
+            if message["type"] == "http.request":
+                total += len(message.get("body", b""))
+                if total > self.max_bytes:
+                    raise _BodyTooLarge()
+            return message
+
+        async def tracked_send(message):
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, tracked_send)
+        except _BodyTooLarge:
+            if not started:  # so responde se o handler ainda nao comecou a responder
+                await self._reject(send)
+
+    async def _reject(self, send):
+        await send({"type": "http.response.start", "status": 413,
+                    "headers": [(b"content-type", b"text/plain; charset=utf-8")]})
+        await send({"type": "http.response.body", "body": b"request body too large"})
+
+
 app = FastAPI(title="claude-pocket")
+# Body-size ANTES do CORS no codigo -> CORS fica por FORA (envolve ate o 413, adicionando headers CORS
+# na rejeicao). Ver _BodySizeLimitMiddleware.
+app.add_middleware(_BodySizeLimitMiddleware, max_bytes=MAX_BYTES)
 # CORS liberado (token-gated): deixa o app servido por UMA origem (ex: tunnel de casa) falar com o
 # backend de OUTRA maquina (ex: trabalho) cross-origin — API via header Bearer, SSE via ?token. Sem
 # cookies cross-site (allow_credentials=False), entao "*" e seguro: continua exigindo o token.
@@ -32,8 +90,8 @@ terminal = TerminalInput()
 
 
 class CreateBody(BaseModel):
-    name: str
-    cwd: str
+    name: str = Field(min_length=1)
+    cwd: str = Field(min_length=1)
 
 
 class InputBody(BaseModel):
@@ -41,7 +99,7 @@ class InputBody(BaseModel):
 
 
 class SelectBody(BaseModel):
-    option: int
+    option: int = Field(ge=1, le=50)  # picker 1-based; teto evita loop de fork tmux (DoS)
 
 
 class KeyBody(BaseModel):
@@ -53,7 +111,7 @@ class ModelEffortBody(BaseModel):
     # modelo na linha atual. scope: 'session' (aperta `s`) ou 'default' (aperta Enter).
     model: str | None = None
     effort: str | None = None
-    scope: str = "session"
+    scope: Literal["session", "default"] = "session"
 
 
 @app.get("/api/sessions", dependencies=[Depends(require_auth)])
@@ -95,6 +153,7 @@ def rename_session(name: str, body: RenameBody):
         raise HTTPException(409, "ja existe uma sessao com esse nome")
     if not tmux.rename_session(name, new):
         raise HTTPException(500, "falha ao renomear")
+    registry.rename(name, new)  # migra o cache name->jsonl (senao serve transcript errado pos-rename)
     from app.pqueue import PromptQueue
     try:
         oq, nq = PromptQueue(name).path, PromptQueue(new).path
@@ -149,7 +208,9 @@ def workflow_agent_detail(name: str, run_id: str, agent_id: str):
 
 @app.get("/api/sessions/{name}/events", dependencies=[Depends(require_auth)])
 async def events(name: str):
-    jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
+    # handler async -> registry.list() (subprocess tmux) vai pro threadpool pra nao bloquear o loop.
+    sessions = await asyncio.to_thread(registry.list)
+    jsonl = next((s.jsonl for s in sessions if s.name == name), None)
     if not jsonl:
         raise HTTPException(404, "session or transcript not found")
     return EventSourceResponse(merged_events(name, jsonl))
@@ -221,7 +282,9 @@ def keys(name: str, body: KeyBody):
 @app.post("/api/sessions/{name}/upload", dependencies=[Depends(require_auth)])
 async def upload(name: str, request: Request):
     # Resolve o cwd da sessao (registry.list() ja traz cwd via tmux #{pane_current_path}).
-    info = next((s for s in registry.list() if s.name == name), None)
+    # handler async -> registry.list() (subprocess tmux) no threadpool pra nao bloquear o loop.
+    sessions = await asyncio.to_thread(registry.list)
+    info = next((s for s in sessions if s.name == name), None)
     if info is None:
         raise HTTPException(404, "sessao nao encontrada")
     if not info.cwd:
@@ -234,7 +297,8 @@ async def upload(name: str, request: Request):
     # (o nome final e gerado pelo servidor). Qualquer tipo de arquivo.
     filename = request.headers.get("x-filename") or request.query_params.get("name")
     try:
-        path = save_upload(info.cwd, data, filename)
+        # write_bytes (ate 100 MiB) no threadpool pra nao bloquear o loop durante o disco.
+        path = await asyncio.to_thread(save_upload, info.cwd, data, filename)
     except UploadError as e:
         raise HTTPException(e.status, e.detail)
     return {"path": path}
@@ -257,7 +321,7 @@ class CheckoutBody(BaseModel):
 
 
 class GitActionBody(BaseModel):
-    action: str  # 'status' | 'pull' (allowlist no git_ops)
+    action: Literal["status", "pull"]  # allowlist declarativa no schema (alem do git_ops)
 
 
 def _session_cwd(name: str) -> str:

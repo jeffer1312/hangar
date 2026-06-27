@@ -90,7 +90,7 @@ async def merged_events(name: str, jsonl: str):
         while True:
             await asyncio.sleep(2)
             try:
-                live = next((s.jsonl for s in _registry.list() if s.name == name), None)
+                live = next((s.jsonl for s in await asyncio.to_thread(_registry.list) if s.name == name), None)
             except Exception:
                 live = None
             if not live or live == current:

@@ -4,7 +4,12 @@ RUN = subprocess.run
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess:
-    return RUN(args, capture_output=True, text=True)
+    # timeout: tmux travado nao pode prender o event loop / worker do threadpool pra sempre. Estouro ->
+    # trata como falha (returncode=1), igual ao tmux recusar; os callers ja checam returncode != 0.
+    try:
+        return RUN(args, capture_output=True, text=True, timeout=5)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="tmux timeout")
 
 
 def _pane_target(name: str) -> str:
