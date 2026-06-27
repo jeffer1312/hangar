@@ -14,6 +14,21 @@ process.stdin.on('end', () => {
   clearTimeout(stdinTimeout);
   try {
     const data = JSON.parse(input);
+
+    // Expoe o custo REAL da sessao (Claude Code passa cost.total_cost_usd aqui) num arquivo temp que
+    // o cost-tracker do ecc le como fonte autoritativa -> ele mostra ~$30 real em vez da estimativa
+    // por soma de tokens (que infla em sessao longa). Contrato: {ts:<unix s>, cost_usd} valido <=300s.
+    try {
+      const sid = data.session_id;
+      const costUsd = data.cost?.total_cost_usd;
+      if (sid && typeof costUsd === 'number') {
+        fs.writeFileSync(
+          path.join(os.tmpdir(), `harness-cost-${sid}.json`),
+          JSON.stringify({ ts: Math.floor(Date.now() / 1000), cost_usd: costUsd })
+        );
+      }
+    } catch {}
+
     // Modelo compacto: "Opus 4.8 (1M context)" -> "Opus4.8·1M"
     const model = (data.model?.display_name || 'Claude')
       .replace(/\s*\(1M context\)/i, '·1M')
@@ -158,8 +173,7 @@ process.stdin.on('end', () => {
 
     // Segmentos lógicos (trim remove o espaço inicial que cada um trazia)
     const segs = [
-      '\x1b[97m📂 ' + claudeDirShort + '\x1b[0m',
-      '\x1b[1;35m🤖 ' + model + effortSuffix + '\x1b[0m' + account,
+      '\x1b[1;35m🤖 ' + model + effortSuffix + '\x1b[0m',
       '\x1b[97m📁 ' + dir + '\x1b[0m' + gitBranch,
       kctx, tokens, cost, rateLimit, sevenDay, clock
     ].map(s => s.trim()).filter(Boolean);
