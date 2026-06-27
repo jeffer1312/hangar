@@ -28,6 +28,14 @@
   // linha de baixo como contexto.
   const title = $derived(session.name);
 
+  // O que identifica a sessao e a ULTIMA pasta do cwd (nome do projeto). Ellipsis padrao corta o
+  // fim e some justo com ela; entao split em prefixo (truncavel) + basename (nunca encolhe).
+  const cwdParts = $derived.by(() => {
+    const p = (session.cwd ?? '').replace(/\/+$/, '');
+    const i = p.lastIndexOf('/');
+    return i < 0 ? { prefix: '', base: p } : { prefix: p.slice(0, i + 1), base: p.slice(i + 1) };
+  });
+
   // Sessao sem vinculo confiavel (claude manual sem --session-id): NAO da pra abrir o chat com
   // seguranca (mostraria/trocaria a conversa errada). Marca "sem id" e bloqueia o clique.
   const untracked = $derived(session.tracked === false);
@@ -72,7 +80,9 @@
         {/if}
       </span>
       {#if session.cwd}
-        <span class="session-cwd">{session.cwd}</span>
+        <span class="session-cwd" title={session.cwd}>
+          <span class="cwd-prefix">{cwdParts.prefix}</span><span class="cwd-base">{cwdParts.base}</span>
+        </span>
       {/if}
       {#if untracked}
         <span class="untracked-hint">reabra com <code>claude --session-id …</code> (ou pelo wrapper) pra rastrear</span>
@@ -224,12 +234,25 @@
   }
 
   .session-cwd {
+    display: flex;
+    min-width: 0;
     font-size: var(--text-sm);
-    color: var(--text-secondary);
+    font-family: var(--font-mono);
+  }
+  /* Prefixo encolhe e ganha o ellipsis; o basename (nome do projeto) fica sempre inteiro. */
+  .cwd-prefix {
+    flex: 0 1 auto;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-family: var(--font-mono);
+    color: var(--text-muted);
+  }
+  .cwd-base {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-weight: 500;
   }
 
   .session-activity {

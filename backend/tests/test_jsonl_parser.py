@@ -75,6 +75,26 @@ def test_command_meta_entries_are_skipped():
     assert ev is not None and ev.kind == "user_msg"
 
 
+def test_image_meta_entries_are_skipped():
+    # Entradas user SINTETICAS cujo texto inteiro e "[Image...]" sao meta do harness (referencia de
+    # imagem colada ou anotacao de leitura do modelo), nunca conversa real -> fora do chat.
+    for text in (
+        "[Image: source: /home/u/pic.png]",
+        "[Image: original 1179x2556, displayed at 923x2000. Multiply coordinates by 1.28 to map to original image.]",
+        "[Image]",
+    ):
+        assert parse_line(_line({
+            "type": "user", "uuid": "i1",
+            "message": {"role": "user", "content": text},
+        })) is None
+    # Mas uma msg real que MENCIONA a sintaxe nao pode ser engolida.
+    ev = parse_line(_line({
+        "type": "user", "uuid": "i2",
+        "message": {"role": "user", "content": "o que e [Image: foo] no log?"},
+    }))
+    assert ev is not None and ev.kind == "user_msg"
+
+
 def test_system_reminder_only_message_is_skipped():
     # O harness injeta lembretes ("The user named this session…") como entrada "user" sintetica.
     # Quando a msg e SO o bloco <system-reminder>, e meta — nao pode virar bubble.

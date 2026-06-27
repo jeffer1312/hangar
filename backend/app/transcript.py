@@ -9,7 +9,10 @@ from app.models import ChatEvent
 # Imagem colada no TERMINAL (TUI do Claude). O Claude grava 2 coisas: a msg do user com um bloco
 # `image` (base64) + um marcador "[Image #N]" no texto; E uma entrada user SINTETICA cujo texto é só
 # "[Image: source: <path>]" (referência). A 1ª vira bubble com thumbnail (image_count); a 2ª é meta.
-_IMAGE_SOURCE_RE = re.compile(r"^\[Image: source: [^\]]*\]$")   # entrada sintetica inteira = meta
+# Quando o MODELO le uma imagem (tool Read), o harness injeta outra entrada user sintetica cujo texto
+# e so "[Image: original WxH, displayed at ...]" (ou "[Image]" sem resize) — tambem meta, nao conversa.
+# Pega qualquer entrada cujo texto INTEIRO seja "[Image]" ou "[Image: ...]": usuario nunca digita isso.
+_IMAGE_SOURCE_RE = re.compile(r"^\[Image(?:\]|: [^\]]*\])$")   # entrada sintetica inteira = meta
 _IMAGE_MARKER_RE = re.compile(r"\[Image #\d+\]\s*")             # ruido na legenda -> remover
 
 
