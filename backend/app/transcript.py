@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import re
@@ -189,24 +190,28 @@ class TranscriptTailer:
     def history(self) -> list[ChatEvent]:
         return parse_transcript(self.path)
 
+    def _read_from(self, pos: int) -> tuple[list[ChatEvent], int]:
+        # Le do offset `pos` ate o fim -> (eventos parseados, novo offset). Sincrono de proposito:
+        # chamado via asyncio.to_thread no follow() pra nao bloquear o event loop com I/O de arquivo
+        # (o backfill inicial le o transcript inteiro, que cresce pra dezenas de MB em sessao longa).
+        if not self.path.exists():
+            return [], pos
+        evs = []
+        with self.path.open(encoding="utf-8", errors="replace") as fh:
+            fh.seek(pos)
+            for line in fh:
+                ev = parse_line(line)
+                if ev is not None:
+                    evs.append(ev)
+            return evs, fh.tell()
+
     async def follow(self) -> AsyncIterator[ChatEvent]:
         pos = 0
-        # emit existing content first
-        if self.path.exists():
-            with self.path.open(encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    ev = parse_line(line)
-                    if ev is not None:
-                        yield ev
-                pos = fh.tell()
-        # then watch for appends
+        # backfill inicial + cada append: a leitura de arquivo roda no threadpool (nao bloqueia o loop).
+        evs, pos = await asyncio.to_thread(self._read_from, pos)
+        for ev in evs:
+            yield ev
         async for _ in awatch(self.path.parent):
-            if not self.path.exists():
-                continue
-            with self.path.open(encoding="utf-8", errors="replace") as fh:
-                fh.seek(pos)
-                for line in fh:
-                    ev = parse_line(line)
-                    if ev is not None:
-                        yield ev
-                pos = fh.tell()
+            evs, pos = await asyncio.to_thread(self._read_from, pos)
+            for ev in evs:
+                yield ev

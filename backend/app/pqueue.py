@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 import time
@@ -129,10 +130,12 @@ class PromptQueue:
                 evs.append(_entry_event(entry))
             return evs
 
-        for ev in emit_new():
+        # emit_new() faz read_text do sidecar -> roda no threadpool pra nao bloquear o loop. As chamadas
+        # sao sequenciais (uma await por vez), entao o set `seen` que ela muta nao corre risco de corrida.
+        for ev in await asyncio.to_thread(emit_new):
             yield ev
         async for _ in awatch(self.path.parent):
-            for ev in emit_new():
+            for ev in await asyncio.to_thread(emit_new):
                 yield ev
 
 

@@ -151,10 +151,10 @@ class StateMonitor:
         held_state = "idle"
         held_label = None
         while True:
-            if not tmux.has_session(self.name):
+            if not await asyncio.to_thread(tmux.has_session, self.name):
                 yield StateEvent(session=self.name, state="dead")
                 return
-            pane = tmux.capture_pane(self.name)
+            pane = await asyncio.to_thread(tmux.capture_pane, self.name)
             state, label, question, options = classify(pane)
             spinner = _live_spinner(pane)
 
