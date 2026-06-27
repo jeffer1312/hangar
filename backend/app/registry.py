@@ -105,12 +105,15 @@ class SessionRegistry:
         return str(files[0]) if files else None
 
     def resolve(self, name: str, cwd: str) -> Optional[str]:
-        # Mapeia uma sessao tmux -> o jsonl CERTO. So sinais CONFIAVEIS: o --session-id do cmdline e o fd
-        # aberto. Sem eles (manual `claude` puro), cai no newest-by-mtime, que PODE colidir com varias
-        # sessoes no mesmo cwd -> mostra a conversa ATIVA pras duas (ambiguo, mas conteudo real). NAO
-        # usar heuristica de btime: jsonls de sessoes transitorias caem na mesma janela de tempo e a
-        # atribuicao sai ERRADA (apontava pra transcript vazio/de outra sessao). Determinismo so com
-        # --session-id -> usar o "+" do app, ou `claude --session-id <uuid>` no manual.
+        return self.resolve_tracked(name, cwd)[0]
+
+    def resolve_tracked(self, name: str, cwd: str) -> tuple[Optional[str], bool]:
+        # Mapeia uma sessao tmux -> o jsonl CERTO + se o vinculo e CONFIAVEL (tracked).
+        # tracked=True so com sinal DETERMINISTICO: --session-id do cmdline, fd aberto, ou cache
+        # (semeado por um desses / pelo create()). tracked=False = chute newest-by-mtime, que COLIDE
+        # com varias sessoes bare no mesmo cwd -> a UI marca "sem id" e desliga o chat (evita mostrar
+        # /trocar transcript errado). Determinismo so com --session-id: o "+" do app, ou o wrapper
+        # `claude --session-id <uuid>` no terminal.
         pid = tmux.pane_pid(name)
         if pid is not None:
             pids = _descendant_pids(pid)
@@ -128,20 +131,20 @@ class SessionRegistry:
                 if sid:
                     j = str(self.projects_dir / sanitize_cwd(cwd) / f"{sid}.jsonl")
                     self._jsonl_cache[name] = j
-                    return j
+                    return j, True
             # 2. fd aberto (confiavel quando presente; raro, o claude nao segura em idle).
             for p in pids:
                 j = _open_jsonl(p, self.projects_dir)
                 if j:
                     self._jsonl_cache[name] = j
-                    return j
+                    return j, True
         # 3. cache: ultimo sinal confiavel. Estabiliza quando o processo com --session-id some
         #    transitoriamente (senao a resolucao oscilava pro mtime e o watcher limpava o chat).
         cached = self._jsonl_cache.get(name)
         if cached:
-            return cached
-        # 4. fallback: mais recente por mtime (ambiguo com varias sessoes bare no mesmo cwd).
-        return self.resolve_jsonl(cwd)
+            return cached, True
+        # 4. fallback: mais recente por mtime (ambiguo com varias sessoes bare no mesmo cwd) -> NAO tracked.
+        return self.resolve_jsonl(cwd), False
 
     def _forget(self, name: str) -> None:
         self._jsonl_cache.pop(name, None)
@@ -149,14 +152,26 @@ class SessionRegistry:
     def list(self) -> list[SessionInfo]:
         out = []
         for s in tmux.list_sessions():
-            jsonl = self.resolve(s["name"], s["cwd"])
-            out.append(SessionInfo(name=s["name"], cwd=s["cwd"], jsonl=jsonl))
+            jsonl, tracked = self.resolve_tracked(s["name"], s["cwd"])
+            out.append(SessionInfo(name=s["name"], cwd=s["cwd"], jsonl=jsonl, tracked=tracked))
         return out
 
     def create(self, name: str, cwd: str) -> SessionInfo:
+        # Nome tmux nao aceita "."/":"/espaco -> sanitiza igual ao rename. Varias sessoes na MESMA
+        # pasta sao permitidas: cada uma tem nome unico + --session-id proprio -> jsonl proprio.
+        name = re.sub(r"[^A-Za-z0-9_-]", "-", name.strip()).strip("-")
+        if not name:
+            raise ValueError("nome invalido")
+        if tmux.has_session(name):
+            raise ValueError("ja existe uma sessao com esse nome")
         sid = str(uuid.uuid4())
-        tmux.new_session(name, cwd, f"claude --session-id {sid}")
-        return SessionInfo(name=name, cwd=cwd, jsonl=str(self.projects_dir / sanitize_cwd(cwd) / f"{sid}.jsonl"))
+        jsonl = str(self.projects_dir / sanitize_cwd(cwd) / f"{sid}.jsonl")
+        if not tmux.new_session(name, cwd, f"claude --session-id {sid}"):
+            raise ValueError("falha ao criar sessao no tmux")
+        # Fixa o jsonl FRESCO no cache na hora: resolve() devolve este uuid mesmo antes do claude
+        # escrever o arquivo, evitando o fallback newest-by-mtime pescar um jsonl ja existente da pasta.
+        self._jsonl_cache[name] = jsonl
+        return SessionInfo(name=name, cwd=cwd, jsonl=jsonl)
 
     def kill(self, name: str) -> None:
         tmux.kill_session(name)

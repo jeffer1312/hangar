@@ -155,3 +155,57 @@ def test_resolve_jsonl_returns_none_when_dir_empty(tmp_path):
     proj.mkdir()
     reg = SessionRegistry(projects_dir=tmp_path)
     assert reg.resolve_jsonl("/home/u/p") is None
+
+
+def test_create_pins_fresh_jsonl_not_existing_mtime(tmp_path):
+    # Pasta JA tem um jsonl antigo. A sessao nova nao pode resolver pra ele (newest-by-mtime) ->
+    # create() fixa o jsonl proprio (uuid novo) no cache na hora.
+    proj = tmp_path / "-home-u-p"
+    proj.mkdir()
+    (proj / "old.jsonl").write_text("{}\n")
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "has_session", return_value=False), \
+         patch.object(registry.tmux, "new_session", return_value=True) as ns:
+        info = reg.create("cc", "/home/u/p")
+    assert info.jsonl.endswith(".jsonl") and not info.jsonl.endswith("old.jsonl")
+    assert SessionRegistry._jsonl_cache["cc"] == info.jsonl
+    # o comando passado ao tmux carrega o --session-id do uuid novo
+    assert "--session-id" in ns.call_args[0][2]
+
+
+def test_create_rejects_duplicate_name(tmp_path):
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "has_session", return_value=True):
+        with pytest.raises(ValueError):
+            reg.create("cc", "/home/u/p")
+
+
+def test_create_raises_when_tmux_fails(tmp_path):
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "has_session", return_value=False), \
+         patch.object(registry.tmux, "new_session", return_value=False):
+        with pytest.raises(ValueError):
+            reg.create("cc", "/home/u/p")
+
+
+def test_resolve_tracked_true_with_session_id(tmp_path):
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "pane_pid", return_value=111), \
+         patch.object(registry, "_descendant_pids", return_value=[111]), \
+         patch.object(registry, "_cmdline", return_value=f"claude --session-id {_UUID}"):
+        jsonl, tracked = reg.resolve_tracked("cc", "/home/u/p")
+    assert tracked is True and jsonl.endswith(f"{_UUID}.jsonl")
+
+
+def test_resolve_tracked_false_on_mtime_fallback(tmp_path):
+    # bare claude (sem --session-id, sem fd, sem cache) -> cai no mtime -> NAO tracked.
+    proj = tmp_path / "-home-u-p"
+    proj.mkdir()
+    (proj / "x.jsonl").write_text("{}\n")
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "pane_pid", return_value=111), \
+         patch.object(registry, "_descendant_pids", return_value=[111]), \
+         patch.object(registry, "_cmdline", return_value="claude"), \
+         patch.object(registry, "_open_jsonl", return_value=None):
+        jsonl, tracked = reg.resolve_tracked("cc", "/home/u/p")
+    assert tracked is False and jsonl.endswith("x.jsonl")

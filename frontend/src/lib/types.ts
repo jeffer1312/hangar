@@ -6,6 +6,9 @@ export interface SessionInfo {
   jsonl?: string | null;
   state: State;
   last_activity?: number | null;
+  // Vínculo nome<->transcript confiável? false = claude manual sem --session-id (chute mtime) ->
+  // marca "sem id" e bloqueia o chat (evita mostrar/trocar a conversa errada).
+  tracked?: boolean;
 }
 
 // Sessão marcada com o servidor de origem (visão agregada multi-servidor).

@@ -118,6 +118,7 @@
   // Abrir/apagar precisam mirar o servidor DA sessão: selectServer(serverId) antes, pois api.ts lê
   // o ativo a cada chamada (sem reload). Assim chat/SSE/delete vão pro backend certo.
   function openSession(s: AggSession) {
+    if (s.tracked === false) return; // sem id confiavel: chat bloqueado (evita transcript errado)
     selectServer(s.serverId);
     onNavigateToChat(s.name);
   }

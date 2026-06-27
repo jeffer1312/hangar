@@ -62,7 +62,10 @@ def list_sessions():
 
 @app.post("/api/sessions", dependencies=[Depends(require_auth)])
 def create_session(body: CreateBody):
-    return registry.create(body.name, body.cwd)
+    try:
+        return registry.create(body.name, body.cwd)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
 
 
 @app.delete("/api/sessions/{name}", dependencies=[Depends(require_auth)])

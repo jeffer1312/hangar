@@ -28,6 +28,10 @@
   // linha de baixo como contexto.
   const title = $derived(session.name);
 
+  // Sessao sem vinculo confiavel (claude manual sem --session-id): NAO da pra abrir o chat com
+  // seguranca (mostraria/trocaria a conversa errada). Marca "sem id" e bloqueia o clique.
+  const untracked = $derived(session.tracked === false);
+
   // Swipe to delete state
   let pressing = $state(false);
 </script>
@@ -35,10 +39,12 @@
 <div
   class="session-card"
   class:pressing
+  class:untracked
   role="button"
   tabindex="0"
-  onclick={onClick}
-  onkeydown={(e) => e.key === 'Enter' && onClick()}
+  aria-disabled={untracked}
+  onclick={() => !untracked && onClick()}
+  onkeydown={(e) => e.key === 'Enter' && !untracked && onClick()}
   onpointerdown={() => (pressing = true)}
   onpointerup={() => (pressing = false)}
   onpointerleave={() => (pressing = false)}
@@ -55,6 +61,9 @@
     <div class="card-info">
       <span class="name-row">
         <span class="session-name">{title}</span>
+        {#if untracked}
+          <span class="untracked-badge" title="claude aberto sem --session-id: nao da pra rastrear o transcript com seguranca">⚠ sem id</span>
+        {/if}
         {#if serverBadge}
           <span
             class="server-badge"
@@ -64,6 +73,9 @@
       </span>
       {#if session.cwd}
         <span class="session-cwd">{session.cwd}</span>
+      {/if}
+      {#if untracked}
+        <span class="untracked-hint">reabra com <code>claude --session-id …</code> (ou pelo wrapper) pra rastrear</span>
       {/if}
       {#if session.last_activity}
         <span class="session-activity">
@@ -112,6 +124,38 @@
   .session-card.pressing {
     transform: scale(0.97);
     background: var(--bg-elevated);
+  }
+
+  /* Sem id confiavel: visualmente apagada e nao-clicavel (chat off). Delete continua valendo. */
+  .session-card.untracked {
+    cursor: not-allowed;
+    opacity: 0.62;
+    border-style: dashed;
+  }
+  .session-card.untracked.pressing {
+    transform: none;
+  }
+
+  .untracked-badge {
+    flex-shrink: 0;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    padding: 1px 7px;
+    border-radius: var(--radius-full);
+    color: var(--warning);
+    border: 1px solid var(--warning);
+    white-space: nowrap;
+  }
+
+  .untracked-hint {
+    font-size: var(--text-xs);
+    color: var(--warning);
+    opacity: 0.85;
+  }
+  .untracked-hint code {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
   }
 
   .card-left {

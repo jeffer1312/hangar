@@ -11,6 +11,9 @@ class SessionInfo(BaseModel):
     jsonl: Optional[str] = None
     state: State = "idle"
     last_activity: Optional[float] = None
+    # Vinculo nome<->transcript e confiavel? True = resolvido por --session-id/fd/cache (determinismo).
+    # False = chute newest-by-mtime (claude manual sem --session-id) -> UI marca "sem id" e desliga chat.
+    tracked: bool = True
 
 
 class ChatEvent(BaseModel):
