@@ -72,13 +72,16 @@
         {#if untracked}
           <span class="untracked-badge" title="claude aberto sem --session-id: nao da pra rastrear o transcript com seguranca">⚠ sem id</span>
         {/if}
-        {#if serverBadge}
+      </span>
+      {#if serverBadge}
+        <!-- Origem (qual servidor/PC) em linha PROPRIA: na linha do nome ficava espremida e cortada. -->
+        <span class="server-line">
           <span
             class="server-badge"
             style="color: {serverBadge.color}; border-color: {serverBadge.color};"
           >{serverBadge.label}</span>
-        {/if}
-      </span>
+        </span>
+      {/if}
       {#if session.cwd}
         <span class="session-cwd" title={session.cwd}>
           <span class="cwd-prefix">{cwdParts.prefix}</span><span class="cwd-base">{cwdParts.base}</span>
@@ -218,16 +221,21 @@
     white-space: nowrap;
   }
 
+  /* Linha propria pra origem: chip alinhado a esquerda, nao estica. */
+  .server-line {
+    display: flex;
+    margin: 1px 0 2px;
+    min-width: 0;
+  }
   .server-badge {
-    flex-shrink: 0;
+    max-width: 100%;
     font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.02em;
-    padding: 1px 7px;
+    padding: 1px 8px;
     border-radius: var(--radius-full);
     border: 1px solid;
     background: transparent;
-    max-width: 120px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
