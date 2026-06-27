@@ -144,32 +144,33 @@ def get_transcript_image(jsonl: str | Path, uuid: str, idx: int) -> Optional[tup
     Fonte das imagens coladas no terminal (a image-cache do Claude não persiste). Serve sob demanda
     pra não inchar o payload do histórico/SSE com base64."""
     try:
-        lines = Path(jsonl).read_text(encoding="utf-8", errors="replace").splitlines()
+        fh = Path(jsonl).open(encoding="utf-8", errors="replace")
     except OSError:
         return None
-    for line in lines:
-        try:
-            obj = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if obj.get("uuid") != uuid:
-            continue
-        content = (obj.get("message") or {}).get("content")
-        if not isinstance(content, list):
-            return None
-        imgs = [it for it in content if isinstance(it, dict) and it.get("type") == "image"]
-        if idx < 0 or idx >= len(imgs):
-            return None
-        src = imgs[idx].get("source") or {}
-        data = src.get("data")
-        if not isinstance(data, str):
-            return None
-        try:
-            raw = base64.b64decode(data)
-        except (ValueError, base64.binascii.Error):
-            return None
-        media = src.get("media_type") if isinstance(src.get("media_type"), str) else "image/png"
-        return raw, media
+    with fh:  # streaming linha-a-linha: nao carrega o transcript inteiro (dezenas de MB) em RAM
+        for line in fh:
+            try:
+                obj = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if obj.get("uuid") != uuid:
+                continue
+            content = (obj.get("message") or {}).get("content")
+            if not isinstance(content, list):
+                return None
+            imgs = [it for it in content if isinstance(it, dict) and it.get("type") == "image"]
+            if idx < 0 or idx >= len(imgs):
+                return None
+            src = imgs[idx].get("source") or {}
+            data = src.get("data")
+            if not isinstance(data, str):
+                return None
+            try:
+                raw = base64.b64decode(data)
+            except (ValueError, base64.binascii.Error):
+                return None
+            media = src.get("media_type") if isinstance(src.get("media_type"), str) else "image/png"
+            return raw, media
     return None
 
 
@@ -186,7 +187,16 @@ class TranscriptTailer:
         evs = []
         with self.path.open(encoding="utf-8", errors="replace") as fh:
             fh.seek(pos)
-            for line in fh:
+            while True:
+                start = fh.tell()
+                line = fh.readline()
+                if not line:
+                    break
+                if not line.endswith("\n"):
+                    # awatch disparou no meio de um append -> linha incompleta. Rebobina pro inicio
+                    # dela e nao avanca pos: a versao COMPLETA e relida no proximo evento do watcher.
+                    fh.seek(start)
+                    break
                 ev = parse_line(line)
                 if ev is not None:
                     evs.append(ev)

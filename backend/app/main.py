@@ -37,7 +37,10 @@ def main():
     bind = resolve_bind_ip(settings)
     startup_guard(settings)
     print_pairing(settings)
-    uvicorn.run("app.api:app", host=bind, port=settings.port, reload=settings.reload)
+    # workers=1 explicito: o cache de classe SessionRegistry._jsonl_cache e compartilhado SO dentro de
+    # um processo. Multi-worker daria cache frio por worker -> transcript errado em requests roteados
+    # pra outro worker. Multi-worker exigiria mover o cache pra um backend compartilhado.
+    uvicorn.run("app.api:app", host=bind, port=settings.port, reload=settings.reload, workers=1)
 
 
 if __name__ == "__main__":

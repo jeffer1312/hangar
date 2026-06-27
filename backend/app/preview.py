@@ -126,9 +126,12 @@ class PreviewBroker:
                     text = self.text
                 yield text
         finally:
-            async with self._cond:
-                self._subs -= 1
-                if self._subs <= 0 and self._task is not None:
-                    self._task.cancel()
-                    self._task = None
-                    self._brokers.pop(self.name, None)
+            # Limpeza SINCRONA (sem await): `async with self._cond` podia ser interrompido por
+            # CancelledError no acquire do lock -> _subs nao decrementava e o _loop vazava (polling
+            # tmux pra sempre sem subscriber). Sem await entre as linhas = atomico no event loop
+            # single-thread, sem corrida com o subscribe() (que incrementa).
+            self._subs -= 1
+            if self._subs <= 0 and self._task is not None:
+                task, self._task = self._task, None
+                self._brokers.pop(self.name, None)
+                task.cancel()

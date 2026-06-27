@@ -6,13 +6,14 @@ from typing import Literal
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette.sse import EventSourceResponse
 from app.auth import require_auth
 from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
 from app.model_picker import PickerError
 from app.registry import SessionRegistry
+from app.models import SessionInfo, ChatEvent
 from app.terminal_input import TerminalInput
 from app.sse import merged_events
 from app.uploads import save_upload, resolve_upload, UploadError, MAX_BYTES
@@ -89,24 +90,29 @@ registry = SessionRegistry()
 terminal = TerminalInput()
 
 
-class CreateBody(BaseModel):
+class _StrictBody(BaseModel):
+    # rejeita campos desconhecidos no corpo (contrato estrito; pega typo de campo do cliente -> 422).
+    model_config = ConfigDict(extra="forbid")
+
+
+class CreateBody(_StrictBody):
     name: str = Field(min_length=1)
     cwd: str = Field(min_length=1)
 
 
-class InputBody(BaseModel):
+class InputBody(_StrictBody):
     text: str
 
 
-class SelectBody(BaseModel):
+class SelectBody(_StrictBody):
     option: int = Field(ge=1, le=50)  # picker 1-based; teto evita loop de fork tmux (DoS)
 
 
-class KeyBody(BaseModel):
+class KeyBody(_StrictBody):
     key: str  # nome da tecla de navegacao (allowlist em TerminalInput._NAV_KEYS)
 
 
-class ModelEffortBody(BaseModel):
+class ModelEffortBody(_StrictBody):
     # ambos opcionais: so esforco (sem modelo) ainda dirige o picker do /model, deixando o
     # modelo na linha atual. scope: 'session' (aperta `s`) ou 'default' (aperta Enter).
     model: str | None = None
@@ -114,12 +120,12 @@ class ModelEffortBody(BaseModel):
     scope: Literal["session", "default"] = "session"
 
 
-@app.get("/api/sessions", dependencies=[Depends(require_auth)])
+@app.get("/api/sessions", dependencies=[Depends(require_auth)], response_model=list[SessionInfo])
 def list_sessions():
     return registry.list()
 
 
-@app.post("/api/sessions", dependencies=[Depends(require_auth)])
+@app.post("/api/sessions", dependencies=[Depends(require_auth)], response_model=SessionInfo)
 def create_session(body: CreateBody):
     try:
         return registry.create(body.name, body.cwd)
@@ -133,7 +139,7 @@ def kill_session(name: str):
     return {"ok": True}
 
 
-class RenameBody(BaseModel):
+class RenameBody(_StrictBody):
     new: str
 
 
@@ -164,7 +170,7 @@ def rename_session(name: str, body: RenameBody):
     return {"ok": True, "name": new}
 
 
-@app.get("/api/sessions/{name}/history", dependencies=[Depends(require_auth)])
+@app.get("/api/sessions/{name}/history", dependencies=[Depends(require_auth)], response_model=list[ChatEvent])
 def history(name: str):
     jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
     if not jsonl:
@@ -316,11 +322,11 @@ def serve_upload(name: str, filename: str):
     return FileResponse(path)
 
 
-class CheckoutBody(BaseModel):
+class CheckoutBody(_StrictBody):
     branch: str
 
 
-class GitActionBody(BaseModel):
+class GitActionBody(_StrictBody):
     action: Literal["status", "pull"]  # allowlist declarativa no schema (alem do git_ops)
 
 

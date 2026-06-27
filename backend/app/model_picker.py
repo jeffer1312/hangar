@@ -94,7 +94,8 @@ def parse_model_rows(pane: str) -> list[dict]:
         if not m:
             continue
         marker, num, label = m.group(1), int(m.group(2)), m.group(3).strip()
-        keyword = label.split()[0].lower() if label.split() else ""
+        parts = label.split()
+        keyword = parts[0].lower() if parts else ""
         rows.append(
             {
                 "number": num,
