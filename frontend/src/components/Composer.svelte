@@ -26,9 +26,8 @@
     onCommand: (cmd: string) => void;
     onInterrupt: () => void;
     onExpandUsage: () => void;
-    scrolling?: boolean;
   }
-  let { sessionName, sessionState, status, onSend, onCommand, onInterrupt, onExpandUsage, scrolling }: Props = $props();
+  let { sessionName, sessionState, status, onSend, onCommand, onInterrupt, onExpandUsage }: Props = $props();
 
   // ── Slash commands: busca uma vez por sessao (com cache) ────────────────────
   // Comeca vazio; o $effect popula na hora a partir do cache (sincrono) ou da rede.
@@ -268,7 +267,7 @@
     aria-hidden="true"
     tabindex="-1"
   />
-  <div class="composer-card" class:scrolling={scrolling}>
+  <div class="composer-card">
     <div class="composer-top">
       <div class="top-left">
         <button class="slash-btn" onclick={() => (commandSheetOpen = true)} aria-label="Comandos">
@@ -391,7 +390,9 @@
 <style>
   .composer {
     background: transparent;
-    padding: var(--space-2) var(--space-3) 0;
+    /* Folga do home indicator vive AQUI (externa) -> o card flutua com respiro do fundo, sem
+       colar na borda da tela. max() = só a folga do indicator quando há, senão o space-2 mínimo. */
+    padding: var(--space-2) var(--space-3) max(var(--space-2), env(safe-area-inset-bottom));
   }
 
   /* Card unico que reune status, textarea e controles. */
@@ -416,15 +417,12 @@
       0 1px 2px rgba(0, 0, 0, 0.18),
       0 12px 40px var(--glass-shadow);
     border-radius: var(--radius-lg);
-    /* O card COBRE ate o fundo (a lista some atras dele -> nada de mensagem vazando embaixo). O
-       safe-area e padding INTERNO no rodape: o conteudo (controles) fica acima do home indicator e o
-       glass do card preenche a zona ate a borda da tela. max() (nao soma) -> so a folga do indicator,
-       sem banda dupla. Adapta por device via env. */
-    padding: var(--space-3) var(--space-3) max(var(--space-3), env(safe-area-inset-bottom));
+    /* Padding interno uniforme. A folga do home indicator saiu daqui pro .composer (margem externa)
+       -> o card nao cola mais na borda; flutua com respiro do fundo. */
+    padding: var(--space-3);
   }
 
-  /* ÚNICA camada com backdrop-filter: leaf bare (sem conteúdo, sem descendente posicionado), bounded
-     à caixa do dock -> não promove/corrompe a camada da tela. Mesmo gradiente+blur de antes. */
+  /* Camada de vidro: leaf bare (sem conteúdo, sem descendente posicionado), bounded à caixa do dock. */
   .composer-card::before {
     content: "";
     position: absolute;
@@ -432,21 +430,16 @@
     z-index: -1;                /* atrás do conteúdo, dentro do stacking context do card */
     border-radius: inherit;
     pointer-events: none;
-    background: var(--glass-bg);
-    backdrop-filter: blur(40px) saturate(180%);
-    -webkit-backdrop-filter: blur(40px) saturate(180%);
-  }
-  /* Chromium (data-liquid): refracao SVG real (liquid glass) + menos blur pra ela aparecer. */
-  :global(html[data-liquid]) .composer-card::before {
-    backdrop-filter: url(#liquid-glass) blur(16px) saturate(180%);
-  }
-
-  /* Rede de segurança durante o scroll: desliga o backdrop-filter e usa fundo quase opaco. MIGRADA
-     pro ::before (senão sumia silenciosamente com o filtro tendo mudado de elemento). */
-  .composer-card.scrolling::before {
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
+    /* WebKit/iOS: SEM backdrop-filter. Tira o blur(40px) e com ele o bug #89475 (bloco preto no
+       streaming/momentum) de vez — sem filtro, nada pra promover/corromper. Fundo quase opaco = o
+       look de "vidro" que antes só aparecia no scroll, agora permanente. */
     background: var(--glass-bg-solid);
+  }
+  /* Chromium (data-liquid): refracao SVG real (liquid glass). O blur fica aqui — Chromium não tem o
+     bug do WebKit. Fundo transparente pra refração aparecer. */
+  :global(html[data-liquid]) .composer-card::before {
+    background: var(--glass-bg);
+    backdrop-filter: url(#liquid-glass) blur(16px) saturate(180%);
   }
 
   /* Desktop: composer mais largo (aditivo; mobile fica nos 600px). */

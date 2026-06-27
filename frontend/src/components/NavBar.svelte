@@ -20,14 +20,11 @@
     // quando ha um overlay aberto que SO da pra interagir pela TUI.
     onOpenTerminal?: () => void;
     terminalAlert?: boolean;
-    // Durante o scroll da lista: desliga o backdrop-filter do glass (o re-amostrar no momentum dispara
-    // o bloco preto do iOS) e usa fundo quase opaco. Mesmo guard do composer.
-    scrolling?: boolean;
   }
-  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, scrolling = false }: Props = $props();
+  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false }: Props = $props();
 </script>
 
-<nav class="navbar" class:scrolling={scrolling}>
+<nav class="navbar">
   <div class="navbar-inner">
     {#if showBack}
       <button class="nav-btn back-btn" onclick={onBack} aria-label="Voltar">
@@ -91,10 +88,9 @@
 
 <style>
   .navbar {
-    /* Glass: blur num ::before LEAF (bare, sem descendente posicionado), igual ao composer -> nao
-       promove/corrompe a camada do scroller. Host transparente + stacking context proprio. O fallback
-       SOLIDO no .scrolling (abaixo) e a defesa contra o bloco preto do iOS no momentum (o gatilho real).
-       Ver WebKit #89475. */
+    /* Glass num ::before LEAF (bare, sem descendente posicionado), igual ao composer. Host
+       transparente + stacking context proprio. Fundo quase opaco SEM blur (WebKit/iOS) -> sem o bug
+       #89475 (bloco preto no momentum); refração liquid só no Chromium (data-liquid). */
     position: relative;
     isolation: isolate;
     background: transparent;
@@ -110,19 +106,14 @@
     inset: 0;
     z-index: -1;
     pointer-events: none;
-    background: var(--glass-bg);
-    backdrop-filter: blur(40px) saturate(180%);
-    -webkit-backdrop-filter: blur(40px) saturate(180%);
-  }
-  /* Chromium (data-liquid): refracao SVG real. */
-  :global(html[data-liquid]) .navbar::before {
-    backdrop-filter: url(#liquid-glass) blur(16px) saturate(180%);
-  }
-  /* Durante o scroll: sem blur + fundo quase opaco (evita o bloco preto do momentum no iOS). */
-  .navbar.scrolling::before {
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
+    /* WebKit/iOS: SEM backdrop-filter. Mesmo fix do composer — tira o blur(40px) e o bug #89475
+       (bloco preto no momentum) de vez. Fundo quase opaco = look de vidro permanente. */
     background: var(--glass-bg-solid);
+  }
+  /* Chromium (data-liquid): refracao SVG real. O blur fica — Chromium não tem o bug do WebKit. */
+  :global(html[data-liquid]) .navbar::before {
+    background: var(--glass-bg);
+    backdrop-filter: url(#liquid-glass) blur(16px) saturate(180%);
   }
 
   .navbar-inner {

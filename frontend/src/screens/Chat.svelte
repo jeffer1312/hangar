@@ -46,15 +46,6 @@
   // Altura real do dock (composer) -> vira padding da lista pra ultima msg sempre limpar o glass.
   let dockH = $state(150);
 
-  // Scroll ativo? -> o Composer desliga o backdrop-filter do glass durante o scroll (o backdrop
-  // re-amostrando o conteudo em movimento dispara o bloco preto no iOS). Volta ao parar (timer).
-  let scrolling = $state(false);
-  let scrollTimer: ReturnType<typeof setTimeout> | undefined;
-  function handleScrollActivity() {
-    scrolling = true;
-    clearTimeout(scrollTimer);
-    scrollTimer = setTimeout(() => (scrolling = false), 160);
-  }
 
   // ── Switcher de sessoes (NavBar -> sheet) + criar nova sem voltar ──────────
   let switcherOpen = $state(false);
@@ -428,7 +419,7 @@
 </script>
 
 <div class="chat-screen" bind:this={screenEl}>
-  <NavBar title={sessionName} showBack={true} onBack={onBack} onTitleTap={openSwitcher} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} {scrolling} />
+  <NavBar title={sessionName} showBack={true} onBack={onBack} onTitleTap={openSwitcher} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} />
 
   {#if loading}
     <div class="chat-loading">
@@ -449,7 +440,6 @@
       preview={previewText}
       onSelectOption={handleSelect}
       onCancel={handleInterrupt}
-      onScrollActivity={handleScrollActivity}
     />
   {/if}
 
@@ -476,7 +466,6 @@
         {sessionName}
         sessionState={currentState}
         status={status}
-        {scrolling}
         onSend={handleSend}
         onCommand={handleCommand}
         onInterrupt={handleInterrupt}
