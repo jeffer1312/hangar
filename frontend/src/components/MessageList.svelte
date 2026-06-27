@@ -21,10 +21,9 @@
     preview?: string;
     onSelectOption: (i: number) => void;
     onCancel: () => void;
-    onScrollActivity?: () => void;
   }
 
-  let { events, stateEvent, pending, sessionName, dockH, preview = '', onSelectOption, onCancel, onScrollActivity }: Props = $props();
+  let { events, stateEvent, pending, sessionName, dockH, preview = '', onSelectOption, onCancel }: Props = $props();
 
   let listEl: HTMLElement | undefined = $state();
   let previewEl: HTMLElement | undefined = $state();
@@ -42,7 +41,6 @@
     if (!listEl) return;
     const gap = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
     atBottom = gap < 64; // threshold ~64px do fim
-    onScrollActivity?.(); // avisa o Chat -> desliga o backdrop-filter do glass durante o scroll
   }
 
   // Build a map of tool_use_id -> tool_result
