@@ -127,6 +127,16 @@ export function addServer(
   return { id, existed };
 }
 
+// Renomeia um servidor (label custom persistido). Vazio volta pro rotulo derivado da URL — nao da
+// pra deixar sem nome. Nao mexe em token/baseUrl/ativo.
+export function renameServer(id: string, label: string): void {
+  const list = readServers();
+  const i = list.findIndex((s) => s.id === id);
+  if (i < 0) return;
+  list[i] = { ...list[i], label: label.trim() || labelFor(list[i].baseUrl) };
+  writeServers(list);
+}
+
 export function selectServer(id: string): void {
   const s = readServers().find((x) => x.id === id);
   if (!s) return;

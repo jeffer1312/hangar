@@ -5,7 +5,7 @@
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
   import QrScanner from '../components/QrScanner.svelte';
   import { getAllSessions, getSessions, createSession, deleteSession } from '../lib/api';
-  import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, serverColor } from '../lib/auth';
+  import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor } from '../lib/auth';
   import type { AggSession, State } from '../lib/types';
 
   interface Props {
@@ -27,6 +27,23 @@
   // agregada; o servidor-alvo de uma sessão é o dela, escolhido ao abrir/criar.
   let servers = $state(listServers());
   let scanning = $state(false);
+
+  // Rename inline de servidor no menu: id em edicao + valor do input.
+  let editingId = $state<string | null>(null);
+  let editLabel = $state('');
+
+  function startRename(id: string, current: string) {
+    editingId = id;
+    editLabel = current;
+  }
+  function saveRename() {
+    if (editingId) {
+      renameServer(editingId, editLabel);
+      servers = listServers();
+      loadSessions(true);   // reagrega pra os badges das sessoes pegarem o nome novo
+    }
+    editingId = null;
+  }
   const multiServer = $derived(servers.length > 1);
 
   // Adicionar servidor manual (no PC: digitar URL+token em vez de escanear QR).
@@ -218,7 +235,21 @@
           <div class="menu-server">
             <div class="server-row">
               <span class="server-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
-              <span class="server-label">{s.label}</span>
+              {#if editingId === s.id}
+                <!-- svelte-ignore a11y_autofocus -->
+                <input
+                  class="server-edit"
+                  bind:value={editLabel}
+                  onclick={(e) => e.stopPropagation()}
+                  onkeydown={(e) => { if (e.key === 'Enter') saveRename(); if (e.key === 'Escape') editingId = null; }}
+                  onblur={saveRename}
+                  autofocus
+                  aria-label="Novo nome do servidor"
+                />
+              {:else}
+                <span class="server-label">{s.label}</span>
+                <button class="server-rename" aria-label={`Renomear ${s.label}`} title="Renomear" onclick={(e) => { e.stopPropagation(); startRename(s.id, s.label); }}>✎</button>
+              {/if}
             </div>
             <button class="server-remove" aria-label={`Remover ${s.label}`} onclick={() => dropServer(s.id)}>×</button>
           </div>
@@ -539,6 +570,23 @@
   .server-label {
     flex: 1; min-width: 0;
     overflow-wrap: anywhere; word-break: break-word;
+  }
+  .server-rename {
+    width: 32px; height: 32px; flex-shrink: 0;
+    color: var(--text-muted); font-size: var(--text-sm);
+    border-radius: var(--radius-sm);
+  }
+  .server-rename:active { color: var(--accent); }
+  .server-edit {
+    flex: 1; min-width: 0; height: 32px;
+    background: var(--bg-base);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 16px; /* evita zoom no iOS */
+    padding: 0 var(--space-2);
+    outline: none;
   }
   .server-remove {
     width: 40px; height: 44px; flex-shrink: 0;
