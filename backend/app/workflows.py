@@ -35,26 +35,42 @@ def _script_name(sd: Path, run_id: str) -> str | None:
     return None
 
 
-def _agent_tokens(rundir: Path, agent_id: str) -> int:
-    # Soma os usos de token do transcript do subagente (agent-<id>.jsonl).
+def _agent_stats(rundir: Path, agent_id: str) -> dict:
+    # UMA passada no transcript do subagente (agent-<id>.jsonl) -> tokens, model, nº de tool calls,
+    # último tool e um preview do último texto do assistente. Sem isto o running so tinha hex+tokens
+    # (label/fase reais nao existem em disco durante o run); model/tools/preview SIM da pra extrair.
     f = rundir / f"agent-{agent_id}.jsonl"
+    out = {"tokens": 0, "model": None, "toolCalls": 0, "lastToolName": None, "resultPreview": None}
     if not f.is_file():
-        return 0
-    total = 0
+        return out
     try:
         for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
             try:
                 o = json.loads(line)
             except (json.JSONDecodeError, ValueError):
                 continue
-            usage = (o.get("message") or {}).get("usage") or {}
+            msg = o.get("message") or {}
+            usage = msg.get("usage") or {}
             for k in ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"):
                 v = usage.get(k)
                 if isinstance(v, int):
-                    total += v
+                    out["tokens"] += v
+            if msg.get("model"):
+                out["model"] = msg["model"]
+            if msg.get("role") == "assistant":
+                for c in (msg.get("content") or []):
+                    if not isinstance(c, dict):
+                        continue
+                    if c.get("type") == "tool_use":
+                        out["toolCalls"] += 1
+                        out["lastToolName"] = c.get("name")
+                    elif c.get("type") == "text":
+                        t = (c.get("text") or "").strip()
+                        if t:
+                            out["resultPreview"] = t[:200]
     except OSError:
-        return 0
-    return total
+        return out
+    return out
 
 
 def _live_agents(rundir: Path) -> list[dict]:
@@ -80,18 +96,19 @@ def _live_agents(rundir: Path) -> list[dict]:
             pass
     agents = []
     for aid in started:
+        st = _agent_stats(rundir, aid)
         agents.append({
             "agentId": aid,
             "label": aid[:8],
             "phaseTitle": None,
             "state": "done" if aid in resulted else "progress",
-            "model": None,
-            "tokens": _agent_tokens(rundir, aid),
+            "model": st["model"],
+            "tokens": st["tokens"],
             "durationMs": 0,
-            "toolCalls": 0,
-            "lastToolName": None,
+            "toolCalls": st["toolCalls"],
+            "lastToolName": st["lastToolName"],
             "lastToolSummary": None,
-            "resultPreview": None,
+            "resultPreview": st["resultPreview"],
         })
     return agents
 
