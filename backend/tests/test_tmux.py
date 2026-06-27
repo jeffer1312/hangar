@@ -23,16 +23,34 @@ def test_list_sessions_empty_when_no_server():
 def test_send_keys_literal_uses_dashdash():
     with patch.object(tmux, "RUN", return_value=MagicMock(returncode=0)) as run:
         tmux.send_keys("cc", "echo hi", literal=True)
-    assert run.call_args[0][0] == ["tmux", "send-keys", "-t", "cc", "-l", "--", "echo hi"]
+    assert run.call_args[0][0] == ["tmux", "send-keys", "-t", "=cc:", "-l", "--", "echo hi"]
 
 
 def test_send_keys_named_key():
     with patch.object(tmux, "RUN", return_value=MagicMock(returncode=0)) as run:
         tmux.send_keys("cc", "Enter")
-    assert run.call_args[0][0] == ["tmux", "send-keys", "-t", "cc", "Enter"]
+    assert run.call_args[0][0] == ["tmux", "send-keys", "-t", "=cc:", "Enter"]
 
 
 def test_capture_pane_returns_stdout():
     with patch.object(tmux, "RUN", return_value=MagicMock(stdout="screen", returncode=0)) as run:
         assert tmux.capture_pane("cc") == "screen"
     assert run.call_args[0][0][:2] == ["tmux", "capture-pane"]
+
+
+def test_pane_target_uses_exact_session_form():
+    # Nome NUMERICO (0/1/2) nao pode virar indice de window -> `=NAME:` forca match exato de sessao.
+    assert tmux._pane_target("0") == "=0:"
+    assert tmux._pane_target("cc") == "=cc:"
+
+
+def test_capture_pane_targets_exact_session():
+    with patch.object(tmux, "RUN", return_value=MagicMock(stdout="", returncode=0)) as run:
+        tmux.capture_pane("0")
+    assert "=0:" in run.call_args[0][0]
+
+
+def test_pane_pid_targets_exact_session():
+    with patch.object(tmux, "RUN", return_value=MagicMock(stdout="540144\n", returncode=0)) as run:
+        assert tmux.pane_pid("0") == 540144
+    assert "=0:" in run.call_args[0][0]

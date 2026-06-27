@@ -24,14 +24,25 @@
     selectServer(id);
   }
 
-  // Fluxo em dois passos: 1) escolher a pasta (scanner) -> 2) abrir a sessao ativa
-  // daquele cwd, ou criar uma nova com o nome derivado do basename.
+  // Fluxo em dois passos: 1) escolher a pasta (scanner) -> 2) criar uma sessao nova com nome UNICO
+  // derivado do basename. Varias sessoes na mesma pasta sao permitidas (cada uma tem nome+jsonl
+  // proprio); reabrir uma existente = clicar no card da lista.
   let picked = $state<string | null>(null);
   let name = $state('');
   let checking = $state(false);
-  let active = $state<SessionInfo | null>(null);
+  let takenNames = $state<Set<string>>(new Set());
+  let hasSameFolder = $state(false);
   let loading = $state(false);
   let error = $state('');
+
+  // Nome unico p/ tmux: sanitiza (igual ao backend) e, se ja existir, sufixa -2/-3...
+  function uniqueName(base: string, taken: Set<string>): string {
+    const clean = base.replace(/[^A-Za-z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || 'sessao';
+    if (!taken.has(clean)) return clean;
+    let i = 2;
+    while (taken.has(`${clean}-${i}`)) i++;
+    return `${clean}-${i}`;
+  }
 
   // Escape hatch: digitar o caminho na mao.
   let manualOpen = $state(false);
@@ -43,7 +54,8 @@
     if (open) {
       picked = null;
       name = '';
-      active = null;
+      takenNames = new Set();
+      hasSameFolder = false;
       error = '';
       checking = false;
       loading = false;
@@ -55,17 +67,21 @@
     }
   });
 
-  // Dedupe vs sessoes vivas: se ja existe uma com este cwd, oferecemos Abrir.
+  // Ao escolher a pasta: nome default = basename UNICO (sufixado se ja houver sessao com esse nome).
+  // hasSameFolder so informa que ja existe sessao no cwd; NAO bloqueia criar outra.
   async function handlePick(p: string) {
     picked = p;
-    name = basename(p);
     error = '';
     checking = true;
     try {
       const sessions = await getSessions();
-      active = sessions.find((s) => s.cwd === p) ?? null;
+      takenNames = new Set(sessions.map((s) => s.name));
+      hasSameFolder = sessions.some((s) => s.cwd === p);
+      name = uniqueName(basename(p), takenNames);
     } catch {
-      active = null;
+      takenNames = new Set();
+      hasSameFolder = false;
+      name = basename(p);
     } finally {
       checking = false;
     }
@@ -73,7 +89,8 @@
 
   function reset() {
     picked = null;
-    active = null;
+    takenNames = new Set();
+    hasSameFolder = false;
     error = '';
   }
 
@@ -97,12 +114,6 @@
     }
   }
 
-  function openActive() {
-    if (active) {
-      onOpenSession(active.name);
-      onClose();
-    }
-  }
 </script>
 
 <BottomSheet {open} {onClose} ariaLabel="Nova sessão">
@@ -159,18 +170,16 @@
     <div class="picked">
       <div class="picked-head">
         <span class="picked-name">{basename(picked)}</span>
-        {#if active}<span class="badge-active">ativa</span>{/if}
       </div>
       <span class="picked-path">{picked}</span>
     </div>
 
     {#if checking}
       <p class="hint">Verificando sessões…</p>
-    {:else if active}
-      <p class="hint">Já existe uma sessão neste diretório.</p>
-      <button class="primary-btn" onclick={openActive}>Abrir sessão</button>
-      <button class="ghost-btn" onclick={reset}>Escolher outra pasta</button>
     {:else}
+      {#if hasSameFolder}
+        <p class="hint">Já há uma sessão nesta pasta — criando outra com nome único.</p>
+      {/if}
       <div class="field">
         <label class="field-label" for="session-name">Nome</label>
         <input
@@ -318,18 +327,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .badge-active {
-    flex-shrink: 0;
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    padding: 2px 7px;
-    border-radius: var(--radius-full);
-    color: var(--success);
-    background: var(--pill-idle-bg);
   }
 
   .picked-path {
