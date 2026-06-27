@@ -9,8 +9,7 @@
   import ImageBubble from './ImageBubble.svelte';
   import FileAttachment from './FileAttachment.svelte';
   import { parseImageMessage, parseFilePaths } from '../lib/format';
-  import { getBaseUrl } from '../lib/auth';
-  import { transcriptImageUrl } from '../lib/api';
+  import { transcriptImageUrl, uploadUrl } from '../lib/api';
 
   interface Props {
     events: ChatEvent[];
@@ -108,13 +107,13 @@
                foi aceita" que o usuario pediu. -->
           <div class="queued-row" class:dim={working}>
             {#if img}
-              <ImageBubble caption={img.caption} srcs={img.filenames.map((f) => `${getBaseUrl()}/api/sessions/${encodeURIComponent(sessionName)}/uploads/${encodeURIComponent(f)}`)} />
+              <ImageBubble caption={img.caption} srcs={img.filenames.map((f) => uploadUrl(sessionName, f))} />
             {:else}
               <UserBubble text={ev.text} ts={ev.ts} />
             {/if}
           </div>
         {:else if img}
-          <ImageBubble caption={img.caption} srcs={img.filenames.map((f) => `${getBaseUrl()}/api/sessions/${encodeURIComponent(sessionName)}/uploads/${encodeURIComponent(f)}`)} />
+          <ImageBubble caption={img.caption} srcs={img.filenames.map((f) => uploadUrl(sessionName, f))} />
         {:else}
           <UserBubble text={ev.text} ts={ev.ts} />
           {#if ev.text}{@const fr = parseFilePaths(ev.text)}{#if fr.length}<FileAttachment {sessionName} refs={fr} />{/if}{/if}
@@ -141,7 +140,7 @@
       {@const pimg = parseImageMessage(p.text)}
       <div class="pending-bubble" class:solid={p.solid}>
         {#if pimg}
-          <ImageBubble caption={pimg.caption} srcs={pimg.filenames.map((f) => `${getBaseUrl()}/api/sessions/${encodeURIComponent(sessionName)}/uploads/${encodeURIComponent(f)}`)} />
+          <ImageBubble caption={pimg.caption} srcs={pimg.filenames.map((f) => uploadUrl(sessionName, f))} />
         {:else}
           <UserBubble text={p.text} ts={undefined} />
         {/if}

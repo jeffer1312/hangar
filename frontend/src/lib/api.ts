@@ -26,6 +26,13 @@ export function fileUrl(name: string, path: string): string {
   return `${getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}&token=${encodeURIComponent(t)}`;
 }
 
+// URL de uma imagem ENVIADA do phone (upload), servida por <cwd>/.claude-pocket-uploads/<basename>.
+// `?token` igual as de cima: <img> nao manda header Authorization e cross-origin nao leva cookie.
+export function uploadUrl(name: string, filename: string): string {
+  const t = getToken() ?? '';
+  return `${getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/uploads/${encodeURIComponent(filename)}?token=${encodeURIComponent(t)}`;
+}
+
 function authHeaders(): HeadersInit {
   const token = getToken();
   if (!token) return {};
