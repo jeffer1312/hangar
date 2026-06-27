@@ -153,8 +153,9 @@ async def merged_events(name: str, jsonl: str):
                 continue
             yield {"event": event, "data": data}
     finally:
+        # So cancela e retorna (NAO await): um pump preso num asyncio.to_thread (tmux) nao e
+        # cancelavel -> aguardar o gather aqui travava o aclose() do gerador, segurava a conexao
+        # meio-aberta e, em rajada de reconexao do mobile, ia acumulando ate exaurir o threadpool
+        # (a /api/sessions travava). Os inotify saem no GC; melhor isso que travar o disconnect.
         for t in tasks:
             t.cancel()
-        # Aguarda o cancelamento concluir -> libera os inotify (awatch dos pumps) na hora, nao so no GC.
-        # Em rajada de reconexao (mobile vai/volta) isso evitava acumular watches ate o limite do SO.
-        await asyncio.gather(*tasks, return_exceptions=True)
