@@ -38,9 +38,23 @@ The trick is to use the right source for each thing:
 
 Requirements: `tmux`, `claude` (Claude Code), Python 3.14 + [`uv`](https://docs.astral.sh/uv/), Node 20+.
 
-**1. Start Claude inside tmux:**
+**0. Install the `claude` wrapper (one-time, recommended):**
 ```bash
-tmux new -s cc          # then run `claude` inside it
+./scripts/install-claude-wrapper.sh          # auto-detects fish/bash/zsh; pass `all` for every shell
+```
+This makes the app track sessions reliably. After it, just run `claude` anywhere: it launches inside
+a tmux session named after the folder, with a unique `--session-id`. That id is what binds each
+session to its own transcript — so you can open **many sessions in the same folder** and none of them
+leak into or overwrite another. A `claude` started **without** it (no `--session-id`, or outside
+tmux) is either invisible to the app or shows up flagged **⚠ no id** with its chat disabled. The
+installer also adds the tmux truecolor + window-rename config, and offers to set the claude-pocket
+statusline (`scripts/omniroute-statusline.js`) as your Claude `statusLine` — that's the format the
+app parses into the model / context / cost / rate-limit badges (decline to keep your own; pass
+`--no-statusline` to skip). Bypass the wrapper anytime with `command claude`.
+
+**1. Or start Claude inside tmux manually:**
+```bash
+tmux new -s cc          # then run `claude --session-id $(uuidgen)` inside it
 ```
 
 > Theme colors look wrong inside tmux (teal / pink / washed-out)? That's a known Claude
