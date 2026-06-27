@@ -23,6 +23,9 @@ def _run(cwd: str, *args: str) -> subprocess.CompletedProcess:
         raise GitError(500, "git nao encontrado")
     except subprocess.TimeoutExpired:
         raise GitError(504, "git timeout")
+    except OSError as e:
+        # ex: sem permissao de executar git -> erro limpo em vez de 500 com traceback.
+        raise GitError(500, f"git falhou: {e}")
 
 
 def list_branches(cwd: str) -> dict:

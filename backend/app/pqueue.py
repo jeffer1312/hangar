@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -23,6 +24,9 @@ def _queue_dir() -> Path:
     d = Path(settings.projects_dir).parent / ".claude-pocket-queue"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+_append_lock = threading.Lock()  # serializa o read-modify-write do append (handlers sync no threadpool)
 
 
 def _sanitize(name: str) -> str:
@@ -78,16 +82,20 @@ class PromptQueue:
 
     def append(self, text: str) -> dict:
         entry = {"id": uuid.uuid4().hex, "text": text, "ts": time.time()}
-        rows = self.load()
-        rows.append(entry)
-        if len(rows) > _MAX_ENTRIES:
-            rows = rows[-_MAX_ENTRIES:]
-        # Escrita atomica (tmp + replace) pra um reader nunca pegar arquivo pela metade.
-        tmp = self.path.with_suffix(".jsonl.tmp")
-        tmp.write_text(
-            "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8"
-        )
-        tmp.replace(self.path)
+        # ponytail: lock global serializa o read-modify-write; 2 POSTs /input concorrentes (handlers
+        # sync no threadpool) senao liam as mesmas rows e um sobrescrevia o outro (entrada perdida).
+        # upgrade: lock per-path se o throughput de uma sessao virar gargalo.
+        with _append_lock:
+            rows = self.load()
+            rows.append(entry)
+            if len(rows) > _MAX_ENTRIES:
+                rows = rows[-_MAX_ENTRIES:]
+            # Escrita atomica (tmp + replace) pra um reader nunca pegar arquivo pela metade.
+            tmp = self.path.with_suffix(".jsonl.tmp")
+            tmp.write_text(
+                "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8"
+            )
+            tmp.replace(self.path)
         return entry
 
     def clear(self) -> None:

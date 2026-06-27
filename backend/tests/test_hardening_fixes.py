@@ -50,6 +50,23 @@ def test_registry_rename_migra_cache():
     SessionRegistry._jsonl_cache.clear()
 
 
+def test_read_from_nao_consome_linha_parcial(tmp_path):
+    # awatch pode disparar no meio de um append -> a ultima linha vem sem \n. _read_from nao pode
+    # consumi-la (senao a versao completa nunca seria relida). Deve ler so as completas e rebobinar.
+    from app.transcript import TranscriptTailer
+    f = tmp_path / "t.jsonl"
+    completa = '{"type":"user","uuid":"u1","message":{"role":"user","content":"oi"}}\n'
+    parcial = '{"type":"user","uuid":"u2","message":{"role":"user","content":"incompl'
+    f.write_text(completa + parcial, encoding="utf-8")
+    t = TranscriptTailer(f)
+    evs, pos = t._read_from(0)
+    assert [e.id for e in evs] == ["u1"]  # so a completa; a parcial ficou de fora
+    # quando a 2a linha completa, a releitura a partir de `pos` a pega (nao foi consumida pela metade)
+    f.write_text(completa + parcial + 'eto"}}\n', encoding="utf-8")
+    evs2, _ = t._read_from(pos)
+    assert [e.id for e in evs2] == ["u2"]
+
+
 def test_open_jsonl_rejeita_dir_irmao_com_mesmo_prefixo(monkeypatch):
     # _open_jsonl nao pode casar um fd que aponta pra dir IRMAO de mesmo prefixo de string
     # (projects-evil/ vs projects/) -> senao serviria o transcript de outra sessao.

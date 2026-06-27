@@ -62,14 +62,12 @@ def resolve_scan_roots(s: "Settings") -> list[Path]:
 def detect_lan_ip() -> str:
     """Best-effort primary LAN IP. Opens a UDP socket toward a public address to find
     which local interface egress traffic would use — no packet is actually sent."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
     except OSError:
         return "127.0.0.1"
-    finally:
-        s.close()
 
 
 def resolve_bind_ip(s: "Settings") -> str:

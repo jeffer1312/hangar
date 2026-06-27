@@ -8,8 +8,10 @@ def _run(args: list[str]) -> subprocess.CompletedProcess:
     # trata como falha (returncode=1), igual ao tmux recusar; os callers ja checam returncode != 0.
     try:
         return RUN(args, capture_output=True, text=True, timeout=5)
-    except subprocess.TimeoutExpired:
-        return subprocess.CompletedProcess(args, 1, stdout="", stderr="tmux timeout")
+    except (subprocess.TimeoutExpired, OSError) as e:
+        # OSError = tmux ausente (FileNotFoundError) / sem permissao; timeout = travado. Trata como
+        # falha (returncode=1) em vez de 500 com traceback — os callers ja checam returncode != 0.
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr=str(e))
 
 
 def _pane_target(name: str) -> str:
