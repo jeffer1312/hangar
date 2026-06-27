@@ -1,4 +1,5 @@
-"""Checks dos fixes batch 1-3: middleware global de body-size e migracao do cache no rename."""
+"""Checks dos fixes: middleware de body-size, cache no rename, prefixo do _open_jsonl."""
+from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from app.api import _BodySizeLimitMiddleware
@@ -47,3 +48,15 @@ def test_registry_rename_migra_cache():
     reg.rename("ghost", "new2")
     assert "new2" not in SessionRegistry._jsonl_cache
     SessionRegistry._jsonl_cache.clear()
+
+
+def test_open_jsonl_rejeita_dir_irmao_com_mesmo_prefixo(monkeypatch):
+    # _open_jsonl nao pode casar um fd que aponta pra dir IRMAO de mesmo prefixo de string
+    # (projects-evil/ vs projects/) -> senao serviria o transcript de outra sessao.
+    import app.registry as reg
+    base = Path("/home/u/.claude/projects")
+    evil = "/home/u/.claude/projects-evil/x.jsonl"  # prefixo de string casa, mas NAO e filho
+    good = "/home/u/.claude/projects/sess/y.jsonl"
+    monkeypatch.setattr(reg.os, "listdir", lambda p: ["0", "1"])
+    monkeypatch.setattr(reg.os, "readlink", lambda p: evil if p.endswith("/0") else good)
+    assert reg._open_jsonl(123, base) == good  # pula o irmao, acha o filho real
