@@ -1,17 +1,14 @@
 import os
+import re
 import secrets
 import time
 from pathlib import Path
 
-# content-type -> extensao. So imagens (o assistente le via Read).
-ALLOWED: dict[str, str] = {
-    "image/png": "png",
-    "image/jpeg": "jpg",
-    "image/webp": "webp",
-    "image/gif": "gif",
-}
-MAX_BYTES = 10 * 1024 * 1024  # 10 MiB
+# Qualquer tipo de arquivo (imagem, video, pdf, ...). A extensao vem do filename do cliente,
+# sanitizada; o NOME e gerado pelo servidor (sem path traversal). O assistente le/preview pelo path.
+MAX_BYTES = 100 * 1024 * 1024  # 100 MiB
 UPLOAD_SUBDIR = ".claude-pocket-uploads"
+_EXT_RE = re.compile(r"[^a-z0-9]")
 
 
 class UploadError(Exception):
@@ -22,18 +19,24 @@ class UploadError(Exception):
         self.detail = detail
 
 
-def save_upload(cwd: str, content: bytes, content_type: str | None) -> str:
-    """Salva os bytes da imagem em <cwd>/.claude-pocket-uploads/ com nome gerado pelo
-    servidor (nunca o filename do cliente -> sem path traversal). Devolve o path absoluto.
-    Levanta UploadError(status, detail) em tipo invalido / vazio / grande demais."""
-    ext = ALLOWED.get((content_type or "").split(";")[0].strip().lower())
-    if ext is None:
-        raise UploadError(415, "tipo de imagem nao suportado")
+def _safe_ext(filename: str | None) -> str:
+    """Extensao do filename do cliente, sanitizada -> [a-z0-9] ate 8 chars. So a EXTENSAO
+    vem do cliente; o nome do arquivo e gerado pelo servidor. Fallback 'bin' sem extensao."""
+    ext = Path(filename or "").suffix.lower().lstrip(".")
+    ext = _EXT_RE.sub("", ext)[:8]
+    return ext or "bin"
+
+
+def save_upload(cwd: str, content: bytes, filename: str | None) -> str:
+    """Salva os bytes em <cwd>/.claude-pocket-uploads/ com nome gerado pelo servidor
+    (nunca o filename do cliente -> sem path traversal). Devolve o path absoluto.
+    Levanta UploadError(status, detail) em arquivo vazio / grande demais."""
     if not content:
         raise UploadError(400, "arquivo vazio")
     if len(content) > MAX_BYTES:
-        raise UploadError(413, "imagem maior que 10 MiB")
+        raise UploadError(413, "arquivo maior que 100 MiB")
 
+    ext = _safe_ext(filename)
     base = Path(os.path.realpath(cwd)) / UPLOAD_SUBDIR
     base.mkdir(parents=True, exist_ok=True)
     fname = f"{int(time.time())}-{secrets.token_hex(3)}.{ext}"

@@ -69,7 +69,15 @@
   }
   function onMainClick(name: string) {
     if (longPressed) { longPressed = false; return; }   // foi toque longo (renomear) -> não abre
+    // sem id confiavel (tracked===false): nao abre o chat (evitaria mostrar transcript errado).
+    if (sessions.find((x) => x.name === name)?.tracked === false) return;
     onSelect(name);
+  }
+
+  // session-id (uuid) = basename do jsonl sem extensao; mostra os 8 primeiros pra identificar a sessao.
+  function shortId(s: SessionInfo): string | null {
+    const f = s.jsonl?.split('/').pop();
+    return f ? f.replace(/\.jsonl$/, '').slice(0, 8) : null;
   }
   async function saveEdit(old: string) {
     const nv = editValue.trim();
@@ -158,7 +166,8 @@
         {:else}
           <button
             class="sess-main"
-            title={collapsed ? s.name : 'Toque longo pra renomear'}
+            class:untracked={s.tracked === false}
+            title={collapsed ? s.name : (s.tracked === false ? 'claude aberto sem --session-id: transcript nao rastreavel' : 'Toque longo pra renomear')}
             onpointerdown={() => pressStart(s.name)}
             onpointerup={pressEnd}
             onpointerleave={pressEnd}
@@ -168,6 +177,13 @@
           >
             <span class="dot dot--{s.state}" aria-hidden="true"></span>
             {#if !collapsed}<span class="sess-name">{s.name}</span>{/if}
+            {#if !collapsed}
+              {#if s.tracked === false}
+                <span class="sess-badge" title="sem --session-id: nao rastreavel">sem id</span>
+              {:else if shortId(s)}
+                <span class="sess-id" title={`session-id: ${shortId(s)}…`}>#{shortId(s)}</span>
+              {/if}
+            {/if}
           </button>
           {#if !collapsed}
             <button class="sess-del" onclick={(e) => handleDelete(s.name, e)} aria-label={`Apagar ${s.name}`}>×</button>
@@ -265,6 +281,12 @@
   .sidebar.collapsed .sess-main { justify-content: center; padding: 0; }
   .sess-row.active .sess-main { color: var(--text-primary); }
   .sess-name { flex: 1; min-width: 0; font-size: var(--text-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sess-main.untracked { opacity: 0.45; cursor: default; }
+  .sess-badge {
+    flex-shrink: 0; font-size: 10px; padding: 1px 5px; border-radius: var(--radius-sm);
+    background: var(--bg-elevated); border: 1px solid var(--border-subtle); color: var(--warning); white-space: nowrap;
+  }
+  .sess-id { flex-shrink: 0; font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); white-space: nowrap; }
   .sess-edit {
     flex: 1; min-width: 0; height: 38px; padding: 0 var(--space-2);
     background: var(--bg-base); border: 1px solid var(--accent); border-radius: var(--radius-md);

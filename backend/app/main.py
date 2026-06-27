@@ -37,7 +37,7 @@ def main():
     bind = resolve_bind_ip(settings)
     startup_guard(settings)
     print_pairing(settings)
-    uvicorn.run("app.api:app", host=bind, port=settings.port)
+    uvicorn.run("app.api:app", host=bind, port=settings.port, reload=settings.reload)
 
 
 if __name__ == "__main__":

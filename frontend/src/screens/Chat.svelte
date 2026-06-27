@@ -6,6 +6,7 @@
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
   import UsageSheet from '../components/UsageSheet.svelte';
+  import GitSheet from '../components/GitSheet.svelte';
   import ActivitySheet from '../components/ActivitySheet.svelte';
   import TerminalMirror from '../components/TerminalMirror.svelte';
   import {
@@ -51,6 +52,7 @@
   let switcherOpen = $state(false);
   let createOpen = $state(false);
   let usageOpen = $state(false);
+  let gitOpen = $state(false);
   let activityOpen = $state(false);
   let allSessions = $state<SessionInfo[]>([]);
 
@@ -470,6 +472,7 @@
         onCommand={handleCommand}
         onInterrupt={handleInterrupt}
         onExpandUsage={() => (usageOpen = true)}
+        onOpenGit={() => (gitOpen = true)}
       />
     {/if}
   </div>
@@ -492,6 +495,8 @@
   />
 
   <UsageSheet open={usageOpen} {status} onClose={() => (usageOpen = false)} />
+
+  <GitSheet open={gitOpen} {sessionName} onClose={() => (gitOpen = false)} />
 
   <ActivitySheet open={activityOpen} {activity} {sessionName} onClose={() => (activityOpen = false)} />
 
