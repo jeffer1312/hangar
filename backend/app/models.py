@@ -19,7 +19,6 @@ class SessionInfo(BaseModel):
 class ChatEvent(BaseModel):
     kind: ChatKind
     id: str
-    parent_id: Optional[str] = None
     text: Optional[str] = None
     tool_name: Optional[str] = None
     tool_input: Optional[dict] = None

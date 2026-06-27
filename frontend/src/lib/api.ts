@@ -39,6 +39,22 @@ function authHeaders(): HeadersInit {
   return { Authorization: `Bearer ${token}` };
 }
 
+// Trata a resposta compartilhada por apiFetch e uploadFile. Self-heal de token invalido/rotacionado:
+// isAuthenticated() so checa se EXISTE token, nao se vale. Num 401 COM token salvo, limpamos a
+// credencial e recarregamos -> cai no Login pra re-parear (QR). O guard getToken() evita loop quando
+// ja estamos deslogados (Login nao chama a API). Qualquer outro !ok vira erro com o corpo.
+async function ensureOk(res: Response): Promise<void> {
+  if (res.status === 401 && getToken()) {
+    dropActiveServer();
+    if (typeof window !== 'undefined') window.location.reload();
+    throw new Error('401: sessão expirada — faça login novamente');
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`${res.status}: ${text}`);
+  }
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const base = getBaseUrl();
   const url = `${base}${path}`;
@@ -50,19 +66,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
   });
-  // Self-heal de token inválido/rotacionado: isAuthenticated() só checa se EXISTE token, nao
-  // se vale. Sem isto, um token velho deixa o app travado em 401 (sessao "undefined"). Num 401
-  // COM token salvo, limpamos a credencial e recarregamos -> cai no Login pra re-parear (QR).
-  // O guard `getToken()` evita loop quando ja estamos deslogados (Login nao chama a API).
-  if (res.status === 401 && getToken()) {
-    dropActiveServer();
-    if (typeof window !== 'undefined') window.location.reload();
-    throw new Error('401: sessão expirada — faça login novamente');
-  }
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new Error(`${res.status}: ${text}`);
-  }
+  await ensureOk(res);
   return res.json() as Promise<T>;
 }
 
@@ -195,15 +199,7 @@ export async function uploadFile(name: string, file: File): Promise<{ path: stri
     },
     body: file,
   });
-  if (res.status === 401 && getToken()) {
-    dropActiveServer();
-    if (typeof window !== 'undefined') window.location.reload();
-    throw new Error('401: sessão expirada — faça login novamente');
-  }
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new Error(`${res.status}: ${text}`);
-  }
+  await ensureOk(res);
   return res.json() as Promise<{ path: string }>;
 }
 

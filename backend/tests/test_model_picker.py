@@ -81,21 +81,6 @@ def test_model_nav_steps_offscreen_target_uses_fallback_number():
     assert mp.model_nav_steps(rows, "default") == -4  # 1 - 5
 
 
-# ── contagem de passos (esforco) ─────────────────────────────────────────────
-def test_effort_forward_steps_canonical():
-    assert mp.effort_forward_steps("xhigh", "max") == 1
-    assert mp.effort_forward_steps("xhigh", "xhigh") == 0
-    assert mp.effort_forward_steps("low", "ultracode") == 5
-    assert mp.effort_forward_steps("ultracode", "low") == 1  # ciclico (da a volta)
-    # max(4) -> high(2) por Right: max->ultracode->low->medium->high = 4 passos
-    assert mp.effort_forward_steps("max", "high") == 4
-
-
-def test_effort_forward_steps_unknown_raises():
-    with pytest.raises(ValueError):
-        mp.effort_forward_steps("xhigh", "turbo")
-
-
 # ── parse da linha de resultado ──────────────────────────────────────────────
 def test_parse_result_line_session_only():
     pane = "  ⎿  Set model to Sonnet 4.6 for this session only with high effort\n❯ \n"

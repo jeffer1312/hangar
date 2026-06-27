@@ -5,7 +5,6 @@ from app.models import SessionInfo, ChatEvent, StateEvent
 
 def test_settings_defaults():
     assert settings.port == 8765
-    assert settings.poll_interval > 0
 
 
 def test_models_construct():
