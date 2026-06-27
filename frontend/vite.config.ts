@@ -64,8 +64,8 @@ export default defineConfig({
         name: 'Claude Pocket',
         short_name: 'Pocket',
         display: 'standalone',
-        background_color: '#0d0d0f',
-        theme_color: '#0d0d0f',
+        background_color: '#100e11',
+        theme_color: '#100e11',
         orientation: 'portrait',
         start_url: '/',
         icons: [

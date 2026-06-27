@@ -81,6 +81,15 @@
   }
 </script>
 
+<!-- Filtro de refração do Liquid Glass (usado só em Chromium, via [data-liquid] na CSS do glass). -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <filter id="liquid-glass" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+    <feTurbulence type="fractalNoise" baseFrequency="0.013 0.013" numOctaves="2" seed="7" result="n" />
+    <feGaussianBlur in="n" stdDeviation="1.4" result="nb" />
+    <feDisplacementMap in="SourceGraphic" in2="nb" scale="16" xChannelSelector="R" yChannelSelector="G" />
+  </filter>
+</svg>
+
 <div class="app-root">
   {#if route.name === 'login'}
     <Login {onLogin} />

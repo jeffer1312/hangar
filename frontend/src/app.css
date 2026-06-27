@@ -29,10 +29,11 @@
   --accent-press:   #6e79d6;
 
   /* Glass (composer / navbar / sidebar) — translucido + blur por cima do conteudo */
-  --glass-bg:        rgba(28,23,26,0.62);
-  --glass-bg-solid:  rgba(26,22,25,0.94);   /* fallback durante o scroll (sem blur) */
-  --glass-border:    rgba(255,250,247,0.12);
-  --glass-highlight: rgba(255,250,247,0.13);
+  --glass-bg:        rgba(38,36,44,0.46);    /* frosted iOS: tint neutro limpo (warm embarrava) */
+  --glass-bg-solid:  rgba(24,23,28,0.94);    /* fallback durante o scroll (sem blur) */
+  --glass-border:    rgba(255,255,255,0.10);
+  --glass-highlight: rgba(255,255,255,0.16);
+  --glass-specular:  rgba(255,255,255,0.30);  /* brilho de borda (rim) — o que "vende" o glass */
   --glass-shadow:    rgba(0,0,0,0.42);       /* halo do card flutuante (forte no dark) */
 
   /* Semantic */
@@ -77,10 +78,11 @@
   --accent-press:   #4d5bc0;
 
   /* Glass claro: translucido sobre paper (mais sutil que no dark) */
-  --glass-bg:        rgba(255,253,250,0.62);
+  --glass-bg:        rgba(255,254,252,0.52);
   --glass-bg-solid:  rgba(255,253,250,0.96);
-  --glass-border:    rgba(50,40,35,0.12);
+  --glass-border:    rgba(40,32,28,0.10);
   --glass-highlight: rgba(255,255,255,0.85);
+  --glass-specular:  rgba(255,255,255,0.95);  /* rim claro */
   --glass-shadow:    rgba(60,50,45,0.13);    /* sombra leve no claro (a 0.42 do dark vira faixa preta) */
 
   /* Status pill (mesma semantica) */
