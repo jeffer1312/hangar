@@ -32,7 +32,6 @@ class Settings(BaseSettings):
     # CP_SCAN_ROOTS: raizes que o fs-scanner pode listar (string crua; resolvida por
     # resolve_scan_roots). Mantida como str pra aceitar o formato "a,b" direto do env.
     scan_roots: str = _DEFAULT_SCAN_ROOTS
-    poll_interval: float = 0.75
     reload: bool = False     # CP_RELOAD=1: uvicorn auto-reload no dev (NUNCA em prod). Default off.
     front_port: int = 5173   # where the PWA is served (vite dev / Caddy) — used for QR pairing
     public_url: str = ""     # CP_PUBLIC_URL: overrides the auto-built pairing base URL

@@ -146,16 +146,6 @@ def parse_current_effort(pane: str) -> str | None:
     return None
 
 
-def effort_forward_steps(current: str, target: str, order: list[str] = EFFORT_ORDER) -> int:
-    """Passos de Right (ciclico) de `current` ate `target` na ordem dada. ValueError se ausente."""
-    c, t = current.lower(), target.lower()
-    if c not in order:
-        raise ValueError(f"unknown current effort {current!r}")
-    if t not in order:
-        raise ValueError(f"unknown target effort {target!r}")
-    return (order.index(t) - order.index(c)) % len(order)
-
-
 def parse_result_line(pane: str) -> str | None:
     """Linha de resultado apos confirmar (ex: 'Set model to X for this session only ...')."""
     for ln in reversed(pane.splitlines()):

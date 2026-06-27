@@ -67,7 +67,6 @@ def parse_line(line: str) -> Optional[ChatEvent]:
 
     etype = obj.get("type")
     uid = obj.get("uuid", "")
-    parent = obj.get("parentUuid")
     msg = obj.get("message")
     if not isinstance(msg, dict):
         return None
@@ -80,7 +79,7 @@ def parse_line(line: str) -> Optional[ChatEvent]:
             cleaned = _strip_meta_blocks(content)
             if not cleaned or _IMAGE_SOURCE_RE.match(cleaned):
                 return None
-            return ChatEvent(kind="user_msg", id=uid, parent_id=parent, text=cleaned)
+            return ChatEvent(kind="user_msg", id=uid, text=cleaned)
         if isinstance(content, list):
             tr = _first(content, "tool_result")
             if tr is not None:
@@ -88,7 +87,7 @@ def parse_line(line: str) -> Optional[ChatEvent]:
                 if isinstance(res, list):
                     res = " ".join(str(b.get("text", "")) for b in res if isinstance(b, dict))
                 return ChatEvent(
-                    kind="tool_result", id=uid, parent_id=parent,
+                    kind="tool_result", id=uid,
                     tool_use_id=tr.get("tool_use_id"),
                     result=str(res) if res is not None else None,
                     is_error=bool(tr.get("is_error", False)),
@@ -105,7 +104,7 @@ def parse_line(line: str) -> Optional[ChatEvent]:
             cleaned = _IMAGE_MARKER_RE.sub("", cleaned).strip()   # tira "[Image #N]" da legenda
             if not cleaned and not img_count:
                 return None
-            return ChatEvent(kind="user_msg", id=uid, parent_id=parent, text=cleaned,
+            return ChatEvent(kind="user_msg", id=uid, text=cleaned,
                              image_count=img_count or None)
         return None
 
@@ -113,23 +112,14 @@ def parse_line(line: str) -> Optional[ChatEvent]:
         tu = _first(content, "tool_use")
         if tu is not None:
             return ChatEvent(
-                kind="tool_use", id=uid, parent_id=parent,
+                kind="tool_use", id=uid,
                 tool_name=tu.get("name"), tool_use_id=tu.get("id"),
                 tool_input=tu.get("input") or {},
             )
         txt = _first(content, "text")
         if txt is not None:
-            return ChatEvent(kind="assistant_msg", id=uid, parent_id=parent, text=txt.get("text", ""))
+            return ChatEvent(kind="assistant_msg", id=uid, text=txt.get("text", ""))
     return None
-
-
-def parse_transcript(path: str | Path) -> list[ChatEvent]:
-    events = []
-    for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
-        ev = parse_line(line)
-        if ev is not None:
-            events.append(ev)
-    return events
 
 
 def path_in_transcript(jsonl: str | Path, needle: str) -> bool:
@@ -186,9 +176,6 @@ def get_transcript_image(jsonl: str | Path, uuid: str, idx: int) -> Optional[tup
 class TranscriptTailer:
     def __init__(self, path: str | Path):
         self.path = Path(path)
-
-    def history(self) -> list[ChatEvent]:
-        return parse_transcript(self.path)
 
     def _read_from(self, pos: int) -> tuple[list[ChatEvent], int]:
         # Le do offset `pos` ate o fim -> (eventos parseados, novo offset). Sincrono de proposito:

@@ -16,7 +16,7 @@ def test_user_text_message():
         "type": "user", "uuid": "u1", "parentUuid": None,
         "message": {"role": "user", "content": "corrige o bug"},
     }))
-    assert ev == ChatEvent(kind="user_msg", id="u1", parent_id=None, text="corrige o bug")
+    assert ev == ChatEvent(kind="user_msg", id="u1", text="corrige o bug")
 
 
 def test_assistant_text_message():
@@ -26,7 +26,6 @@ def test_assistant_text_message():
     }))
     assert ev.kind == "assistant_msg"
     assert ev.text == "vou olhar"
-    assert ev.parent_id == "u1"
 
 
 def test_assistant_tool_use():

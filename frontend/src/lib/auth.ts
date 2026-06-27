@@ -166,11 +166,6 @@ export function dropActiveServer(): void {
   if (id) removeServer(id);
 }
 
-// Compat: pareamento (Login) chamava setCredentials -> agora adiciona+ativa (sem sobrescrever).
-export function setCredentials(baseUrl: string, token: string): void {
-  addServer(baseUrl, token);
-}
-
 // Logout total: limpa todos os servidores.
 export function clearCredentials(): void {
   localStorage.removeItem(SERVERS_KEY);

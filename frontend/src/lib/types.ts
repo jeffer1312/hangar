@@ -21,7 +21,6 @@ export interface AggSession extends SessionInfo {
 export interface ChatEvent {
   kind: 'user_msg' | 'assistant_msg' | 'tool_use' | 'tool_result';
   id: string;
-  parent_id?: string | null;
   text?: string | null;
   tool_name?: string | null;
   tool_input?: Record<string, unknown> | null;
