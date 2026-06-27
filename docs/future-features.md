@@ -65,6 +65,18 @@ The app already renders Claude Code's native selection menus: `state.py classify
 > from the phone (away from the PC) and currently has NO way to send screenshots for debugging
 > (e.g. the keyboard bug above). It unblocks the whole remote feedback loop.
 
+## 5. Git / branch control from the phone (requested — not built)
+The app only **shows** the current branch (read-only chip in the composer, from the statusline)
+and a `is_git` badge in the project picker. No way to act on git from the phone.
+- **Branch switch (lazy MVP):** make the branch chip tappable → sheet lists local branches →
+  switch. Backend `git -C <cwd>` via **argv list** (never a shell string); validate the target
+  against the listed branches (trust-boundary input — rejects injection + typos). No
+  `checkout -b`/arbitrary git in v1.
+- **Arbitrary git commands:** already possible by typing them to the live claude session
+  (send-keys). The new value is the branch-switch *control*, not a generic git terminal — a
+  run-any-command endpoint is an RCE-class footgun even on LAN; skip it.
+- Open: also surface quick actions (status/pull) as fixed buttons in the same sheet?
+
 ## Notes
 - These build on the existing infra: SSE stream, transcript parser, send-keys input, the
   HTTPS/secure-context (Tailscale), and the redesigned composer (a natural home for an

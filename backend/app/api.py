@@ -14,6 +14,7 @@ from app.registry import SessionRegistry
 from app.terminal_input import TerminalInput
 from app.sse import merged_events
 from app.uploads import save_upload, resolve_upload, UploadError
+from app.git_ops import list_branches, switch_branch, git_action, GitError
 
 app = FastAPI(title="claude-pocket")
 # CORS liberado (token-gated): deixa o app servido por UMA origem (ex: tunnel de casa) falar com o
@@ -226,11 +227,14 @@ async def upload(name: str, request: Request):
     if not info.cwd:
         raise HTTPException(409, "cwd da sessao indisponivel")
     clen = request.headers.get("content-length")
-    if clen and clen.isdigit() and int(clen) > 10 * 1024 * 1024:
-        raise HTTPException(413, "imagem maior que 10 MiB")
+    if clen and clen.isdigit() and int(clen) > 100 * 1024 * 1024:
+        raise HTTPException(413, "arquivo maior que 100 MiB")
     data = await request.body()
+    # Filename do cliente (X-Filename, percent-encoded) ou ?name= -> so a EXTENSAO e usada
+    # (o nome final e gerado pelo servidor). Qualquer tipo de arquivo.
+    filename = request.headers.get("x-filename") or request.query_params.get("name")
     try:
-        path = save_upload(info.cwd, data, request.headers.get("content-type"))
+        path = save_upload(info.cwd, data, filename)
     except UploadError as e:
         raise HTTPException(e.status, e.detail)
     return {"path": path}
@@ -246,6 +250,46 @@ def serve_upload(name: str, filename: str):
     except UploadError as e:
         raise HTTPException(e.status, e.detail)
     return FileResponse(path)
+
+
+class CheckoutBody(BaseModel):
+    branch: str
+
+
+class GitActionBody(BaseModel):
+    action: str  # 'status' | 'pull' (allowlist no git_ops)
+
+
+def _session_cwd(name: str) -> str:
+    # cwd da sessao tmux (mesmo lookup do upload). 404 se a sessao/cwd nao existe.
+    info = next((s for s in registry.list() if s.name == name), None)
+    if info is None or not info.cwd:
+        raise HTTPException(404, "sessao nao encontrada")
+    return info.cwd
+
+
+@app.get("/api/sessions/{name}/branches", dependencies=[Depends(require_auth)])
+def branches(name: str):
+    try:
+        return list_branches(_session_cwd(name))
+    except GitError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.post("/api/sessions/{name}/checkout", dependencies=[Depends(require_auth)])
+def checkout(name: str, body: CheckoutBody):
+    try:
+        return switch_branch(_session_cwd(name), body.branch)
+    except GitError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.post("/api/sessions/{name}/git", dependencies=[Depends(require_auth)])
+def git(name: str, body: GitActionBody):
+    try:
+        return git_action(_session_cwd(name), body.action)
+    except GitError as e:
+        raise HTTPException(e.status, e.detail)
 
 
 @app.get("/api/sessions/{name}/transcript-image/{uuid}/{idx}", dependencies=[Depends(require_auth)])

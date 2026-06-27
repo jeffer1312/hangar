@@ -14,7 +14,7 @@
   import SlashSuggest from './SlashSuggest.svelte';
   import CommandSheet from './CommandSheet.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
-  import { getCommands, setModelEffort, uploadImage, type ModelEffortBody } from '../lib/api';
+  import { getCommands, setModelEffort, uploadFile, type ModelEffortBody } from '../lib/api';
   import type { State } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
 
@@ -26,8 +26,9 @@
     onCommand: (cmd: string) => void;
     onInterrupt: () => void;
     onExpandUsage: () => void;
+    onOpenGit: () => void;
   }
-  let { sessionName, sessionState, status, onSend, onCommand, onInterrupt, onExpandUsage }: Props = $props();
+  let { sessionName, sessionState, status, onSend, onCommand, onInterrupt, onExpandUsage, onOpenGit }: Props = $props();
 
   // ── Slash commands: busca uma vez por sessao (com cache) ────────────────────
   // Comeca vazio; o $effect popula na hora a partir do cache (sincrono) ou da rede.
@@ -56,7 +57,7 @@
   let textareaEl: HTMLTextAreaElement | undefined = $state();
 
   // ── Anexos de imagem: lista de arquivos + preview local + estado de upload ──
-  let attachments = $state<{ file: File; url: string }[]>([]);
+  let attachments = $state<{ file: File; url: string; isImage: boolean }[]>([]);
   let fileInput: HTMLInputElement | undefined = $state();
   let uploading = $state(false);
   let attachError = $state('');
@@ -161,8 +162,9 @@
   // Adiciona arquivos de imagem a lista (do picker ou do paste), cada um com preview local.
   function addFiles(files: Iterable<File>) {
     for (const f of files) {
-      if (!f.type.startsWith('image/')) continue;
-      attachments = [...attachments, { file: f, url: URL.createObjectURL(f) }];
+      const isImage = f.type.startsWith('image/');
+      // url so pra preview de imagem; outros tipos viram chip com o nome (sem objectURL pra revogar).
+      attachments = [...attachments, { file: f, url: isImage ? URL.createObjectURL(f) : '', isImage }];
     }
     attachError = '';
   }
@@ -193,7 +195,7 @@
   // Remove um anexo pelo indice (libera o objectURL).
   function removeAttachment(idx: number) {
     const a = attachments[idx];
-    if (a) URL.revokeObjectURL(a.url);
+    if (a?.url) URL.revokeObjectURL(a.url);
     attachments = attachments.filter((_, i) => i !== idx);
     attachError = '';
     if (fileInput) fileInput.value = '';
@@ -201,7 +203,7 @@
 
   // Limpa todos os anexos (apos envio com sucesso).
   function clearAttachments() {
-    for (const a of attachments) URL.revokeObjectURL(a.url);
+    for (const a of attachments) if (a.url) URL.revokeObjectURL(a.url);
     attachments = [];
     if (fileInput) fileInput.value = '';
   }
@@ -214,15 +216,15 @@
       uploading = true;
       attachError = '';
       try {
-        // Sobe todas as imagens e junta os paths numa UNICA linha (o backend rejeita '\n' no
-        // send-keys). Cada path nao tem espaco (nome gerado) -> separa por " 📎 imagem: ".
-        const paths: string[] = [];
+        // Sobe todos os anexos e junta os paths numa UNICA linha (o backend rejeita '\n' no
+        // send-keys). Cada path nao tem espaco (nome gerado). Marca imagem x arquivo pelo tipo.
+        const parts: string[] = [];
         for (const a of attachments) {
-          const { path } = await uploadImage(sessionName, a.file);
-          paths.push(path);
+          const { path } = await uploadFile(sessionName, a.file);
+          parts.push((a.isImage ? '📎 imagem: ' : '📎 arquivo: ') + path);
         }
-        const imgPart = paths.map((p) => '📎 imagem: ' + p).join(' ');
-        const msg = (caption ? caption + ' — ' : '') + imgPart;
+        const attachPart = parts.join(' ');
+        const msg = (caption ? caption + ' — ' : '') + attachPart;
         await onSend(msg);                 // espera o /input; so limpa se foi
         inputText = '';
         if (textareaEl) textareaEl.style.height = 'auto';
@@ -259,7 +261,7 @@
 <footer class="composer">
   <input
     type="file"
-    accept="image/*"
+    accept="*/*"
     multiple
     bind:this={fileInput}
     onchange={onPickFile}
@@ -274,14 +276,14 @@
           <span class="slash-glyph" aria-hidden="true">/</span>
         </button>
         {#if status?.repo}
-          <span class="repo-chip" title="Pasta e branch">
+          <button class="repo-chip" title="Git: trocar branch / status / pull" onclick={onOpenGit}>
             <span class="repo-glyph" aria-hidden="true">📁</span>
             <span class="repo-name">{status.repo}</span>
             {#if status.branch}
               <span class="repo-sep" aria-hidden="true">·</span>
               <span class="repo-branch">{status.branch}{#if status.dirty}<span class="repo-dirty" aria-label="alterações não commitadas">*</span>{/if}</span>
             {/if}
-          </span>
+          </button>
         {/if}
       </div>
       {#if typeof status?.costUsd === 'number'}
@@ -293,9 +295,16 @@
 
     {#if attachments.length}
       <div class="attach-row">
-        {#each attachments as a, idx (a.url)}
+        {#each attachments as a, idx (a.file)}
           <div class="attach-chip">
-            <img class="attach-thumb" src={a.url} alt="anexo" />
+            {#if a.isImage}
+              <img class="attach-thumb" src={a.url} alt="anexo" />
+            {:else}
+              <span class="attach-file" title={a.file.name}>
+                <span class="attach-file-glyph" aria-hidden="true">📎</span>
+                <span class="attach-file-name">{a.file.name}</span>
+              </span>
+            {/if}
             <button class="attach-remove" onclick={() => removeAttachment(idx)} aria-label="Remover anexo">×</button>
           </div>
         {/each}
@@ -575,6 +584,11 @@
     font-size: var(--text-xs);
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
+    appearance: none;
+    border: 0;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
   }
   .repo-glyph { font-size: 11px; flex-shrink: 0; }
   .repo-name {
@@ -650,6 +664,26 @@
     border-radius: var(--radius-sm);
     object-fit: cover;
     display: block;
+  }
+  .attach-file {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 140px;
+    height: 48px;
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+  }
+  .attach-file-glyph { flex-shrink: 0; font-size: 13px; }
+  .attach-file-name {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .attach-status { font-size: var(--text-xs); color: var(--text-muted); }
   .attach-error { font-size: var(--text-xs); color: var(--error); }

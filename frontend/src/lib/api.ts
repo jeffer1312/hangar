@@ -180,16 +180,18 @@ export async function sendInput(name: string, text: string): Promise<void> {
 }
 
 /**
- * Envia os bytes crus de uma imagem pra sessao (sem multipart). O backend salva e devolve o
- * path; o app depois manda a legenda + path pelo /input. 401 -> self-heal (igual apiFetch).
+ * Envia os bytes crus de um arquivo (imagem, video, pdf, ...) pra sessao (sem multipart). O backend
+ * salva e devolve o path; o app depois manda a legenda + path pelo /input. O filename vai no header
+ * X-Filename (percent-encoded) so pra extensao; o nome final e gerado pelo servidor. 401 -> self-heal.
  */
-export async function uploadImage(name: string, file: File): Promise<{ path: string }> {
+export async function uploadFile(name: string, file: File): Promise<{ path: string }> {
   const base = getBaseUrl();
   const res = await fetch(`${base}/api/sessions/${encodeURIComponent(name)}/upload`, {
     method: 'POST',
     headers: {
       ...authHeaders(),
       'Content-Type': file.type || 'application/octet-stream',
+      'X-Filename': encodeURIComponent(file.name || 'arquivo'),
     },
     body: file,
   });
@@ -209,6 +211,30 @@ export async function selectOption(name: string, option: number): Promise<void> 
   await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/select`, {
     method: 'POST',
     body: JSON.stringify({ option }),
+  });
+}
+
+// ── Git pela sessao (cwd da sessao tmux): listar/trocar branch + status/pull ──
+export interface BranchInfo {
+  current: string | null;
+  branches: string[];
+}
+
+export function getBranches(name: string): Promise<BranchInfo> {
+  return apiFetch<BranchInfo>(`/api/sessions/${encodeURIComponent(name)}/branches`);
+}
+
+export function checkoutBranch(name: string, branch: string): Promise<{ current: string; output: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/checkout`, {
+    method: 'POST',
+    body: JSON.stringify({ branch }),
+  });
+}
+
+export function gitAction(name: string, action: 'status' | 'pull'): Promise<{ ok: boolean; output: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git`, {
+    method: 'POST',
+    body: JSON.stringify({ action }),
   });
 }
 
