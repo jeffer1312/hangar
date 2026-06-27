@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { getSessions, createSession, deleteSession, renameSession } from '../lib/api';
-  import { listServers, getActiveId, selectServer, removeServer, addServer, clearCredentials } from '../lib/auth';
+  import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, clearCredentials } from '../lib/auth';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import QrScanner from './QrScanner.svelte';
   import type { SessionInfo, State } from '../lib/types';
@@ -97,6 +97,21 @@
   function autofocus(node: HTMLInputElement) {
     node.focus();
     node.select();
+  }
+
+  // Rename inline de servidor no menu do rodape (mesma ideia do mobile). Label custom persistido.
+  let editingServer = $state<string | null>(null);
+  let editServerLabel = $state('');
+  function startServerRename(id: string, current: string) {
+    editingServer = id;
+    editServerLabel = current;
+  }
+  function saveServerRename() {
+    if (editingServer) {
+      renameServer(editingServer, editServerLabel);
+      servers = listServers();
+    }
+    editingServer = null;
   }
 
   function pickServer(id: string) {
@@ -199,11 +214,24 @@
         <div class="srv-menu">
           {#each servers as s (s.id)}
             <div class="srv-row">
-              <button class="srv-pick" onclick={() => pickServer(s.id)}>
+              {#if editingServer === s.id}
                 <span class="srv-dot" class:on={s.id === activeId} aria-hidden="true"></span>
-                <span class="srv-label">{s.label}</span>
-              </button>
-              {#if servers.length > 1}<button class="srv-del" onclick={() => dropServer(s.id)} aria-label="Remover">×</button>{/if}
+                <input
+                  class="srv-edit"
+                  bind:value={editServerLabel}
+                  use:autofocus
+                  onkeydown={(e) => { if (e.key === 'Enter') saveServerRename(); if (e.key === 'Escape') editingServer = null; }}
+                  onblur={saveServerRename}
+                  aria-label="Novo nome do servidor"
+                />
+              {:else}
+                <button class="srv-pick" onclick={() => pickServer(s.id)}>
+                  <span class="srv-dot" class:on={s.id === activeId} aria-hidden="true"></span>
+                  <span class="srv-label">{s.label}</span>
+                </button>
+                <button class="srv-rename" onclick={() => startServerRename(s.id, s.label)} aria-label={`Renomear ${s.label}`} title="Renomear">✎</button>
+                {#if servers.length > 1}<button class="srv-del" onclick={() => dropServer(s.id)} aria-label="Remover">×</button>{/if}
+              {/if}
             </div>
           {/each}
           <button class="srv-add" onclick={() => { scanning = true; serversOpen = false; }}>+ Adicionar (QR)</button>
@@ -324,6 +352,13 @@
   .srv-row { display: flex; align-items: center; }
   .srv-pick { flex: 1; display: flex; align-items: center; gap: var(--space-2); height: 32px; padding: 0 var(--space-2); justify-content: flex-start; color: var(--text-primary); font-size: var(--text-sm); border-radius: var(--radius-sm); }
   .srv-pick:hover { background: var(--bg-hover); }
+  .srv-rename { width: 28px; height: 32px; min-height: 0; flex-shrink: 0; color: var(--text-muted); font-size: var(--text-sm); }
+  .srv-rename:hover { color: var(--accent); }
+  .srv-edit {
+    flex: 1; min-width: 0; height: 32px; margin-left: var(--space-2); padding: 0 var(--space-2);
+    background: var(--bg-base); border: 1px solid var(--accent); border-radius: var(--radius-sm);
+    color: var(--text-primary); font-size: var(--text-sm); outline: none;
+  }
   .srv-del { width: 28px; height: 32px; min-height: 0; color: var(--text-muted); font-size: var(--text-base); }
   .srv-del:hover { color: var(--error); }
   .srv-add { height: 32px; padding: 0 var(--space-2); text-align: left; justify-content: flex-start; color: var(--accent); font-size: var(--text-sm); }
