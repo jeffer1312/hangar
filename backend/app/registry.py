@@ -54,7 +54,7 @@ def _open_jsonl(pid: int, projects_dir: Path) -> Optional[str]:
             target = os.readlink(f"{fddir}/{fd}")
         except OSError:
             continue
-        if target.endswith(".jsonl") and target.startswith(base):
+        if target.endswith(".jsonl") and target.startswith(base + os.sep):
             return target
     return None
 
@@ -101,7 +101,16 @@ class SessionRegistry:
         proj = self.projects_dir / sanitize_cwd(cwd)
         if not proj.is_dir():
             return None
-        files = sorted(proj.glob("*.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True)
+
+        def _mtime(f: Path) -> float:
+            # arquivo pode sumir entre o glob e o stat (sessao encerrando) -> nao deixar OSError subir
+            # ate o /api/sessions virar 500; o sumido vai pro fim da ordenacao (mtime 0).
+            try:
+                return f.stat().st_mtime
+            except OSError:
+                return 0.0
+
+        files = sorted(proj.glob("*.jsonl"), key=_mtime, reverse=True)
         return str(files[0]) if files else None
 
     def resolve(self, name: str, cwd: str) -> Optional[str]:
