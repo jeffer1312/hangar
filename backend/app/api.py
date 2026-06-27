@@ -1,9 +1,11 @@
 import mimetypes
 import os
 import re
+from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from app.auth import require_auth
@@ -312,3 +314,15 @@ def commands(name: str):
     # + skills globais (lista util mesmo sem cwd casado).
     cwd = next((s.cwd for s in registry.list() if s.name == name), None)
     return list_commands(cwd)
+
+
+# ── Servir o PWA buildado (frontend/dist) pela MESMA origem da API ──────────────────────
+# Com isto o tunnel Tailscale (-> :8765) entrega app + API juntos: o celular nao depende do
+# vite/maquina de casa, e o service worker (registerType:autoUpdate) busca o bundle novo a
+# cada deploy direto do backend. Montado por ULTIMO de proposito: as rotas /api/* acima tem
+# precedencia no roteamento. So monta se o dist existir (build feito) -> em dev sem build a
+# API sobe normal e o vite continua servindo o front em :5173. html=True serve index.html na
+# raiz. Sem auth: assets do app sao publicos (o token gateia /api/*; cada imagem ja leva ?token).
+_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if _DIST.is_dir():
+    app.mount("/", StaticFiles(directory=_DIST, html=True), name="pwa")
