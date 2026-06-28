@@ -3,6 +3,7 @@ from fastapi import FastAPI, Depends
 from fastapi.testclient import TestClient
 from app.auth import require_auth
 from app.config import settings
+import app.api as api_mod
 
 
 @pytest.fixture
@@ -85,3 +86,23 @@ def test_select_route(api_client):
 
 def test_routes_require_auth(api_client):
     assert api_client.get("/api/sessions").status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Testes de config dirs (Task 4)
+# ---------------------------------------------------------------------------
+
+def test_claude_configs_endpoint(api_client, monkeypatch):
+    monkeypatch.setattr(api_mod, "list_config_dirs",
+                        lambda: [api_mod.ConfigDirInfo(path="/h/.claude-work", label="work", active=True)])
+    r = api_client.get("/api/claude-configs", headers=_h())
+    assert r.status_code == 200
+    assert r.json() == [{"path": "/h/.claude-work", "label": "work", "active": True}]
+
+
+def test_create_rejects_unknown_config_dir(api_client, monkeypatch):
+    monkeypatch.setattr(api_mod, "list_config_dirs",
+                        lambda: [api_mod.ConfigDirInfo(path="/h/.claude-work", label="work", active=True)])
+    r = api_client.post("/api/sessions", headers=_h(),
+                        json={"name": "x", "cwd": "/tmp", "config_dir": "/h/.evil"})
+    assert r.status_code == 400
