@@ -240,6 +240,8 @@
        glass mesmo com anexo/multilinha. ResizeObserver nao dispara na animacao do teclado
        (composer mantem altura), entao nao volta o reflow que glitchava a NavBar. */
     padding-bottom: calc(var(--dock-h, 150px) + var(--space-3));
+    /* Navbar overlay (glass): a 1a msg limpa a navbar; ao rolar, o conteudo passa POR BAIXO dela. */
+    padding-top: calc(var(--nav-h, 56px) + var(--space-3));
   }
 
   .messages-inner {

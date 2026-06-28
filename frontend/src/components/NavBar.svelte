@@ -106,21 +106,23 @@
     position: relative;
     isolation: isolate;
     background: transparent;
-    border-bottom: 1px solid var(--glass-border);
-    box-shadow: inset 0 1px 1px var(--glass-specular);  /* rim no topo */
+    /* Sem barra: nada de border/box-shadow. O ::before pinta o glass (scrim). Fica colada no topo
+       (overlay via .navbar-mount no Chat); o conteudo rola POR BAIXO. */
     padding-top: env(safe-area-inset-top);
-    flex-shrink: 0;
     z-index: 20;
   }
   .navbar::before {
     content: "";
     position: absolute;
-    inset: 0;
+    inset: 0 0 -24px 0;       /* estende 24px abaixo p/ o fade do glass */
     z-index: -1;
     pointer-events: none;
-    /* WebKit/iOS: SEM backdrop-filter. Mesmo fix do composer — tira o blur(40px) e o bug #89475
-       (bloco preto no momentum) de vez. Fundo quase opaco = look de vidro permanente. */
-    background: var(--glass-bg-solid);
+    /* "Glass" sem blur (seguro no iOS): solido sob os botoes (legivel) e some num fade de 24px abaixo
+       -> o conteudo que rola por baixo aparece esfumado na costura, sem barra dura. */
+    background: linear-gradient(to bottom,
+      var(--bg-base) 0%,
+      var(--bg-base) calc(100% - 24px),
+      transparent 100%);
   }
   /* Chromium (data-liquid): refracao SVG real. O blur fica — Chromium não tem o bug do WebKit. */
   :global(html[data-liquid]) .navbar::before {
