@@ -61,6 +61,37 @@ def _open_jsonl(pid: int, projects_dir: Path) -> Optional[str]:
     return None
 
 
+def _newest_after_clear(projdir: Path, sid_jsonl: str, exclude: set[str]) -> str:
+    # /clear rola um session-id NOVO (novo .jsonl) sem alterar o --session-id do cmdline -> o jsonl do
+    # cmdline congela no transcript de BOOT. Se o projeto tem um .jsonl mais recente (e nao seguro por um
+    # subagente/daemon), ele e o transcript pos-clear do mesmo REPL: segue ele. Senao devolve sid_jsonl.
+    # ponytail: heuristica por mtime no mesmo cwd. Teto: durante uma Task, se o subagente escrever por
+    # ultimo SEM estar com fd aberto no instante (abre/escreve/fecha), pode pegar o jsonl dele num poll
+    # -> transitorio, o REPL reassume ao gravar a resposta. Upgrade: o REPL marcar seu transcript ativo
+    # explicitamente (ex: hook gravando o path).
+    try:
+        best_mt = os.path.getmtime(sid_jsonl)
+    except OSError:
+        # boot-id ainda nao escrito (sessao recem-criada) -> sem /clear possivel ainda; confia no
+        # --session-id deterministico (o tailer segue quando o arquivo aparecer). NAO cair pro mtime aqui
+        # senao um jsonl antigo do mesmo cwd venceria o transcript novo que ainda nem nasceu.
+        return sid_jsonl
+    best = sid_jsonl
+    try:
+        for f in projdir.glob("*.jsonl"):
+            if os.path.realpath(str(f)) in exclude:
+                continue
+            try:
+                mt = f.stat().st_mtime
+            except OSError:
+                continue
+            if mt > best_mt:
+                best, best_mt = str(f), mt
+    except OSError:
+        pass
+    return best
+
+
 # session-id (uuid) na linha de comando do claude: `--session-id <uuid>` / `--session-id=<uuid>` /
 # `--resume <uuid>`. Este e o sinal AUTORITATIVO e ESTAVEL (vive no /proc/PID/cmdline pela vida do
 # processo, inclusive em idle) -> o jsonl da sessao e <uuid>.jsonl. So casa uuid de verdade pra nao
@@ -129,6 +160,21 @@ class SessionRegistry:
         files = sorted(proj.glob("*.jsonl"), key=_mtime, reverse=True)
         return str(files[0]) if files else None
 
+    def _aux_open_jsonls(self, pids: list[int]) -> set[str]:
+        # realpaths de jsonl que processos auxiliares (subagente --agent / daemon) seguram abertos AGORA.
+        # Excluidos do "mais recente" em _newest_after_clear pra um Task em voo nao virar o transcript da
+        # sessao. Best-effort: fd raramente fica aberto em idle -> set vazio na maioria dos polls.
+        out: set[str] = set()
+        for p in pids:
+            cmd = _cmdline(p)
+            if not ("daemon" in cmd or "--bg-" in cmd or "--agent" in cmd):
+                continue
+            cdir = _config_dir_of(p)
+            j = _open_jsonl(p, (cdir / "projects") if cdir else self.projects_dir)
+            if j:
+                out.add(os.path.realpath(j))
+        return out
+
     def resolve(self, name: str, cwd: str) -> Optional[str]:
         return self.resolve_tracked(name, cwd)[0]
 
@@ -142,12 +188,30 @@ class SessionRegistry:
         pid = tmux.pane_pid(name)
         if pid is not None:
             pids = _descendant_pids(pid)
-            # 1. cmdline --session-id (DETERMINISTICO; app-created sempre, manual com flag). Vale mesmo
+            # jsonls que processos AUXILIARES (subagente --agent / daemon) seguram abertos AGORA: sao
+            # transcripts de outra sessao logica -> nunca devem virar o transcript do REPL principal.
+            aux_open = self._aux_open_jsonls(pids)
+            # 1. fd aberto do REPL = transcript REALMENTE ativo agora (mais preciso que o cmdline, que
+            #    congela no boot). Vem ANTES do --session-id: apos um /clear (que rola session-id NOVO
+            #    sem mexer no cmdline) o claude passa a escrever num jsonl novo -> o fd aponta pra ele.
+            #    Pula os auxiliares (subagente/daemon) p/ nao pegar o transcript de um deles.
+            for p in pids:
+                cmd = _cmdline(p)
+                if "daemon" in cmd or "--bg-" in cmd or "--agent" in cmd:
+                    continue
+                cdir = _config_dir_of(p)
+                j = _open_jsonl(p, (cdir / "projects") if cdir else self.projects_dir)
+                if j:
+                    self._jsonl_cache[name] = j
+                    return j, True
+            # 2. cmdline --session-id (DETERMINISTICO; app-created sempre, manual com flag). Vale mesmo
             #    sem o arquivo existir ainda (sessao recem-criada) -> o tailer segue quando aparecer.
             #    PULA os processos auxiliares da arvore do claude, que carregam um --session-id PROPRIO
             #    (transitorio) != o do REPL principal -> sem isto resolvia pro jsonl errado/inexistente:
             #      - `claude daemon` + bg-pty-host/spare (sockets em /tmp/cc-daemon-*): contem "daemon"/"--bg-"
             #      - SUB-AGENTES (`--agent`): cada Task/subagent roda seu proprio session-id.
+            #    O --session-id CONGELA no boot: o /clear gera um session-id novo e o cmdline segue o
+            #    velho -> _newest_after_clear segue o jsonl mais recente do projeto (= transcript pos-clear).
             for p in pids:
                 cmd = _cmdline(p)
                 if "daemon" in cmd or "--bg-" in cmd or "--agent" in cmd:
@@ -156,14 +220,8 @@ class SessionRegistry:
                 if sid:
                     cdir = _config_dir_of(p)
                     proj = (cdir / "projects") if cdir else self.projects_dir
-                    j = str(proj / sanitize_cwd(cwd) / f"{sid}.jsonl")
-                    self._jsonl_cache[name] = j
-                    return j, True
-            # 2. fd aberto (confiavel quando presente; raro, o claude nao segura em idle).
-            for p in pids:
-                cdir = _config_dir_of(p)
-                j = _open_jsonl(p, (cdir / "projects") if cdir else self.projects_dir)
-                if j:
+                    projdir = proj / sanitize_cwd(cwd)
+                    j = _newest_after_clear(projdir, str(projdir / f"{sid}.jsonl"), aux_open)
                     self._jsonl_cache[name] = j
                     return j, True
         # 3. cache: ultimo sinal confiavel. Estabiliza quando o processo com --session-id some
