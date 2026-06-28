@@ -293,10 +293,16 @@
       // EXPERIMENTO teclado iOS (#1): o pan (offsetTop) e bugado no iOS 26 (Apple #800125) e deixava o
       // composer com um vao acima do teclado. Mata o pan (scrollTo 0) e ancora top=0 -> a tela passa a
       // ser SO a altura visivel (vv.height), com o dock colado no rodape dela = topo do teclado.
-      window.scrollTo(0, 0);
+      // Guard: so scrolla se houver scroll REAL. scrollTo a cada evento do viewport (toda tecla)
+      // disparava o dialog "Desfazer" (shake-to-undo) do iOS toda hora.
+      if (window.scrollY !== 0) window.scrollTo(0, 0);
       if (screenEl.style.height !== h) screenEl.style.height = h;
       if (screenEl.style.top !== '0px') screenEl.style.top = '0px';
       if (screenEl.style.transform) screenEl.style.transform = '';
+      // Cola mais o composer no teclado: aberto -> zera o padding-bottom de safe-area (home indicator,
+      // inutil com teclado) que deixava um vao; fechado -> volta a safe-area (fallback do --composer-pb).
+      if (vv.height < window.innerHeight - 100) screenEl.style.setProperty('--composer-pb', 'var(--space-2)');
+      else screenEl.style.removeProperty('--composer-pb');
     }
     function onFocusIn() {
       requestAnimationFrame(fit);
