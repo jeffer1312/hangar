@@ -127,6 +127,56 @@ def test_resolve_caches_across_transient_absence(tmp_path):
     assert j1 == j2 and j1.endswith(f"{_UUID}.jsonl")
 
 
+# --- pos-/clear: o claude rola um session-id NOVO mas o --session-id do cmdline congela no de boot ---
+
+def test_resolve_follows_post_clear_transcript(tmp_path):
+    # /clear -> claude passa a escrever num jsonl NOVO (id novo), o cmdline segue o id de boot. Como o
+    # jsonl de boot JA existe (foi escrito antes do clear), seguir o mais recente do projeto = pos-clear.
+    proj = tmp_path / "-home-u-p"
+    proj.mkdir()
+    boot = proj / f"{_UUID}.jsonl"
+    boot.write_text("{}")
+    new = proj / "deadbeef-0000-0000-0000-000000000000.jsonl"  # transcript pos-clear
+    new.write_text("{}")
+    os.utime(boot, (1000, 1000))
+    os.utime(new, (2000, 2000))  # mais recente
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "pane_pid", return_value=1), \
+         patch.object(registry, "_descendant_pids", return_value=[1]), \
+         patch.object(registry, "_cmdline", return_value=f"claude --session-id {_UUID}"), \
+         patch.object(registry, "_open_jsonl", return_value=None):
+        j = reg.resolve("cc", "/home/u/p")
+    assert j.endswith("deadbeef-0000-0000-0000-000000000000.jsonl")
+
+
+def test_resolve_post_clear_ignores_subagent_transcript(tmp_path):
+    # Durante uma Task, o jsonl mais novo pode ser de um SUBAGENTE (--agent) com o fd aberto -> nao deve
+    # virar o transcript da sessao; fica no jsonl do REPL (boot, ainda nao havia /clear).
+    proj = tmp_path / "-home-u-p"
+    proj.mkdir()
+    boot = proj / f"{_UUID}.jsonl"
+    boot.write_text("{}")
+    sub = proj / "deadbeef-0000-0000-0000-000000000000.jsonl"  # transcript do subagente, mais novo
+    sub.write_text("{}")
+    os.utime(boot, (1000, 1000))
+    os.utime(sub, (2000, 2000))
+    reg = SessionRegistry(projects_dir=tmp_path)
+
+    def cmdline(p):
+        return f"claude --session-id deadbeef-0000-0000-0000-000000000000 --agent claude" if p == 2 \
+            else f"claude --session-id {_UUID}"
+
+    def open_jsonl(pid, _proj):
+        return str(sub) if pid == 2 else None  # so o subagente segura o fd aberto
+
+    with patch.object(registry.tmux, "pane_pid", return_value=1), \
+         patch.object(registry, "_descendant_pids", return_value=[1, 2]), \
+         patch.object(registry, "_cmdline", side_effect=cmdline), \
+         patch.object(registry, "_open_jsonl", side_effect=open_jsonl):
+        j = reg.resolve("cc", "/home/u/p")
+    assert j.endswith(f"{_UUID}.jsonl")  # subagente excluido -> fica no REPL
+
+
 def test_resolve_jsonl_picks_newest(tmp_path):
     proj = tmp_path / "-home-u-p"
     proj.mkdir()
