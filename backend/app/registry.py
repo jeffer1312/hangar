@@ -222,3 +222,6 @@ class SessionRegistry:
     def kill(self, name: str) -> None:
         tmux.kill_session(name)
         self._forget(name)  # cache invalido: nome pode ser reusado por outra sessao depois
+        # Sessao morta nao deixa fila pra tras: senao acumula orfaos e uma futura sessao de mesmo
+        # nome herdaria essas entradas como bubble-fantasma (mesmo motivo do clear no create()).
+        PromptQueue(name).clear()
