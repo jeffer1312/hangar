@@ -17,12 +17,41 @@ def _capture(name: str) -> str:
 
 
 def _review_matches(screen: str, answers: list[dict]) -> bool:
-    """Verifica se cada label esperada aparece numa linha '→ ...' da tela de Review."""
+    # Cada pergunta no review vira uma linha "→ <labels por ', '>". Compara por TOKEN exato (nao
+    # substring) pra um label curto nao casar dentro de outra palavra.
+    # ponytail: split por ',' assume que label nao contem ',' (labels do AskUserQuestion sao frases curtas)
+    arrow_tokens = [
+        {p.strip() for p in line.split("→", 1)[1].split(",")}
+        for line in screen.splitlines() if line.strip().startswith("→")
+    ]
     for a in answers:
         for lbl in a.get("labels", []):
-            if not any(line.strip().startswith("→") and lbl in line for line in screen.splitlines()):
+            if not any(lbl in toks for toks in arrow_tokens):
                 return False
     return True
+
+
+def _validate(answers: list[dict]) -> None:
+    # Valida tudo ANTES de mandar tecla: se algo falta, o TUI nunca e tocado e o ValueError vira 409
+    # limpo (em vez de 500 + TUI travado no meio do caminho).
+    for a in answers:
+        kind = a.get("kind")
+        if kind == "text":
+            v = a.get("value")
+            if v is None:
+                raise ValueError("value required for text kind")
+            if any(ord(c) < 32 and c not in "\t" for c in v):
+                raise ValueError("control characters not allowed")
+            if a.get("type_index") is None:
+                raise ValueError("type_index required for text kind")
+        elif kind == "chat":
+            if a.get("chat_index") is None:
+                raise ValueError("chat_index required for chat kind")
+        elif kind == "option":
+            if not a.get("indices"):
+                raise ValueError("indices required for option kind")
+        else:
+            raise ValueError(f"unknown answer kind: {kind!r}")
 
 
 def answer_questions(name: str, answers: list[dict]) -> None:
@@ -30,6 +59,8 @@ def answer_questions(name: str, answers: list[dict]) -> None:
     antes do Submit. Mismatch/erro -> Escape (cancela, nao envia) + ValueError (API -> 409).
     single = Down*idx + Enter (auto-avanca); multi = (Down ate idx + Space) por opcao, depois Right;
     texto = Down ate 'Type something' + Enter + digita + Enter; chat = Down ate 'Chat about this' + Enter."""
+    _validate(answers)  # valida ANTES de tocar no TUI; loop abaixo assume input valido
+
     def key(k: str) -> None:
         send_keys(name, k)
         time.sleep(_SETTLE)
@@ -55,9 +86,7 @@ def answer_questions(name: str, answers: list[dict]) -> None:
             for _ in range(a["type_index"]):
                 key("Down")
             key("Enter")
-            if any(ord(c) < 32 and c not in "\t" for c in a["value"]):
-                raise ValueError("control characters not allowed")
-            send_keys(name, a["value"], literal=True)
+            send_keys(name, a["value"], literal=True)  # control-char ja validado em _validate
             time.sleep(_SETTLE)
             key("Enter")
         elif kind == "chat":
