@@ -11,6 +11,7 @@ _SETTLE = 0.3  # apos uma tecla de navegacao
 _OPEN_SETTLE = 0.7  # apos abrir o picker / confirmar (precisa redesenhar/commitar o resultado)
 _NAV_GAP = 0.12  # entre toques Up/Down em rajada
 _SLASH_SETTLE = 0.3  # apos digitar "/cmd": deixa o menu de autocomplete renderizar antes do Enter
+_SUBMIT_SETTLE = 0.2  # entre o texto livre e o Enter: claude detecta input rapido como paste e engole o Enter
 
 
 def _capture(name: str) -> str:
@@ -207,6 +208,12 @@ class TerminalInput:
             send_keys(name, "Enter")
         else:
             send_keys(name, text, literal=True)
+            # Settle ANTES do Enter: sem isto o Enter corria a ingestao do texto e o claude (que detecta
+            # input rapido como paste) tratava o Enter como parte do conteudo -> o texto ficava no input
+            # SEM submeter (usuario tinha que reenviar). Espelha o gap do ramo multiline.
+            # ponytail: settle fixo; se ainda escapar em device lento, upgrade = capturar o pane e
+            # reenviar Enter se o input nao limpou.
+            time.sleep(_SUBMIT_SETTLE)
             send_keys(name, "Enter")
         return "sent"
 
