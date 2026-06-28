@@ -1,9 +1,68 @@
 import os
 import socket
 from pathlib import Path
+from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _LOOPBACK = {"127.0.0.1", "localhost", "::1", "0.0.0.0", "auto"}
+
+
+class ConfigDirInfo(BaseModel):
+    path: str
+    label: str
+    active: bool
+
+
+def _backend_config_base() -> Path:
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
+
+
+def _label_for(path: Path) -> str:
+    stripped = path.name.removeprefix(".claude-").removeprefix(".claude")
+    return stripped or "default"
+
+
+def _is_config_dir(p: Path) -> bool:
+    return (p / ".credentials.json").is_file() and (p / "projects").is_dir()
+
+
+def _projects_mtime(p: Path) -> float:
+    # Varre recursivamente pra pegar o arquivo mais recente (nao so o dir imediato)
+    try:
+        return max((f.stat().st_mtime for f in (p / "projects").rglob("*") if f.is_file()), default=0.0)
+    except OSError:
+        return 0.0
+
+
+def list_config_dirs() -> list[ConfigDirInfo]:
+    """Config dirs do Claude pra escolher na criacao. Hibrido: CP_CLAUDE_CONFIG_DIRS ('label:path'
+    por virgula) tem prioridade; senao auto-scan de ~/.claude* com login + projects/, label pelo
+    basename, ordenado por recencia (backup/abandonado afundam)."""
+    active_base = _backend_config_base().resolve()
+    raw = os.environ.get("CP_CLAUDE_CONFIG_DIRS", "").strip()
+    entries: list[tuple[str, Path]] = []
+    if raw:
+        for item in raw.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            label, sep, path = item.partition(":")
+            if not sep:
+                path, label = label, ""
+            p = Path(os.path.expanduser(path)).resolve()
+            entries.append((label.strip() or _label_for(p), p))
+    else:
+        found = [p.resolve() for p in Path.home().glob(".claude*") if p.is_dir() and _is_config_dir(p)]
+        found.sort(key=_projects_mtime, reverse=True)
+        entries = [(_label_for(p), p) for p in found]
+    out, seen = [], set()
+    for label, p in entries:
+        s = str(p)
+        if s in seen:
+            continue
+        seen.add(s)
+        out.append(ConfigDirInfo(path=s, label=label, active=(p == active_base)))
+    return out
 
 
 def _default_projects_dir() -> Path:
