@@ -218,6 +218,9 @@ class SessionRegistry:
         j = self._jsonl_cache.pop(old, None)
         if j is not None:
             self._jsonl_cache[new] = j
+        # A fila duravel tambem e keyed por NOME -> move junto, senao a sessao renomeada perde as
+        # entradas nao-drenadas e elas ficam orfas no nome velho (fantasma se reusarem `old`).
+        PromptQueue(old).rename(new)
 
     def kill(self, name: str) -> None:
         tmux.kill_session(name)

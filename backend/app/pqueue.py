@@ -105,6 +105,14 @@ class PromptQueue:
         self.path.unlink(missing_ok=True)
         self.path.with_suffix(".jsonl.tmp").unlink(missing_ok=True)
 
+    def rename(self, new_name: str) -> None:
+        # Move o sidecar pro nome novo, preservando entradas nao-drenadas (a fila e keyed pelo NOME;
+        # sem mover, a sessao renomeada perderia a fila e ela viraria orfa no nome velho). Move atomico
+        # (mesmo dir). Sem fila = no-op. O .tmp meio-escrito nao migra.
+        self.path.with_suffix(".jsonl.tmp").unlink(missing_ok=True)
+        if self.path.exists():
+            self.path.replace(_queue_dir() / f"{_sanitize(new_name)}.jsonl")
+
     def load(self) -> list[dict]:
         if not self.path.exists():
             return []
