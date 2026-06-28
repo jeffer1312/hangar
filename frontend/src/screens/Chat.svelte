@@ -10,6 +10,8 @@
   import ActivitySheet from '../components/ActivitySheet.svelte';
   import TerminalMirror from '../components/TerminalMirror.svelte';
   import AskQuestionSheet from '../components/AskQuestionSheet.svelte';
+  import Lottie from '../components/Lottie.svelte';
+  import splash from '../lib/lottie/splash.json';
   import {
     getHistory,
     sendInput,
@@ -465,7 +467,7 @@
 
   {#if loading}
     <div class="chat-loading">
-      <div class="spinner-lg" aria-label="Carregando…">⟳</div>
+      <Lottie data={splash as any} size={72} />
     </div>
   {:else if error}
     <div class="chat-error">
@@ -574,12 +576,6 @@
     align-items: center;
     justify-content: center;
     gap: var(--space-4);
-  }
-
-  .spinner-lg {
-    font-size: 36px;
-    color: var(--accent);
-    animation: spin 0.8s linear infinite;
   }
 
   .chat-error p {
