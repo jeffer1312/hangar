@@ -80,3 +80,19 @@ class FsScanResult(BaseModel):
     # entries vazio + error preenchido = pasta valida porem ilegivel (ex: sem permissao).
     entries: list[FsEntry] = []
     error: Optional[str] = None
+
+
+class AskOption(BaseModel):
+    label: str
+    description: str = ""
+
+
+class AskQuestionItem(BaseModel):
+    header: str
+    question: str
+    multiSelect: bool = False
+    options: list[AskOption]
+
+
+class AskQuestion(BaseModel):
+    questions: list[AskQuestionItem]
