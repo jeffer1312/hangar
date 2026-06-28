@@ -21,6 +21,12 @@ def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
     payload = read_pending_askq(jsonl)
     if payload is None:
         return None
+    # ponytail: o stepper nativo so vale pro AskUserQuestion MULTI-pergunta (tabbed). Com 1 pergunta
+    # o TUI submete direto no Enter da opcao (sem tela de Review pra verificar antes), entao o drive
+    # com verify-before-submit nao se aplica — e o caso de 1 pergunta cai no caminho ja existente do
+    # OptionButtons (menu de lista unica, non-goal do spec). Gate aqui evita disparar o stepper nele.
+    if len(payload.questions) < 2:
+        return None
     return {"event": "ask_question", "data": json.dumps(payload.model_dump(), ensure_ascii=False)}
 
 # Stateless (so projects_dir) — usado pelo watcher pra detectar troca de jsonl (ex: /clear abre um
