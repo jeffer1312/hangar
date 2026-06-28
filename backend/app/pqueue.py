@@ -80,8 +80,19 @@ class PromptQueue:
     def __init__(self, name: str):
         self.path = _queue_dir() / f"{_sanitize(name)}.jsonl"
 
-    def append(self, text: str) -> dict:
-        entry = {"id": uuid.uuid4().hex, "text": text, "ts": time.time()}
+    def _write_atomic(self, rows: list[dict]) -> None:
+        # Escrita atomica (tmp + replace) pra um reader nunca pegar o arquivo pela metade.
+        tmp = self.path.with_suffix(".jsonl.tmp")
+        tmp.write_text(
+            "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8"
+        )
+        tmp.replace(self.path)
+
+    def append(self, text: str, delivered: bool = False) -> dict:
+        # delivered=False por padrao = enfileirada mas NAO digitada na TUI (o /input passa True quando
+        # o send_prompt realmente digitou). So entradas False sao drenadas -> sem isto um upgrade
+        # re-enviaria toda entrada legada (= double-send em massa).
+        entry = {"id": uuid.uuid4().hex, "text": text, "ts": time.time(), "delivered": delivered}
         # ponytail: lock global serializa o read-modify-write; 2 POSTs /input concorrentes (handlers
         # sync no threadpool) senao liam as mesmas rows e um sobrescrevia o outro (entrada perdida).
         # upgrade: lock per-path se o throughput de uma sessao virar gargalo.
@@ -90,13 +101,39 @@ class PromptQueue:
             rows.append(entry)
             if len(rows) > _MAX_ENTRIES:
                 rows = rows[-_MAX_ENTRIES:]
-            # Escrita atomica (tmp + replace) pra um reader nunca pegar arquivo pela metade.
-            tmp = self.path.with_suffix(".jsonl.tmp")
-            tmp.write_text(
-                "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8"
-            )
-            tmp.replace(self.path)
+            self._write_atomic(rows)
         return entry
+
+    def claim_undelivered(self, min_ts: float = 0.0, limit: int | None = None) -> list[dict]:
+        """Reivindica (atomicamente) entradas ainda nao entregues: vira delivered=True e devolve as
+        reivindicadas. Sob _append_lock -> com N drains concorrentes so UM pega cada entrada (os
+        outros pegam []) = single-flight, sem double-send. `is False` ESTRITO: legada (sem a chave) ou
+        ja entregue NAO entra. min_ts poda entradas de sessao antiga (pre-/clear)."""
+        with _append_lock:
+            rows = self.load()
+            claimed = []
+            for r in rows:
+                if r.get("delivered") is False and float(r.get("ts") or 0.0) >= min_ts:
+                    r["delivered"] = True
+                    claimed.append(dict(r))
+                    if limit is not None and len(claimed) >= limit:
+                        break
+            if claimed:
+                self._write_atomic(rows)
+            return claimed
+
+    def set_delivered(self, entry_id: str, value: bool) -> None:
+        """Marca UMA entrada (por id) como delivered=value e reescreve atomico. Usado pra reverter um
+        claim quando o envio nao chegou a tocar a TUI (provadamente pre-envio)."""
+        with _append_lock:
+            rows = self.load()
+            for r in rows:
+                if str(r.get("id")) == entry_id:
+                    r["delivered"] = value
+                    break
+            else:
+                return
+            self._write_atomic(rows)
 
     def clear(self) -> None:
         # Remove o sidecar inteiro. Usado quando /clear reinicia a sessao do Claude Code: as entradas
