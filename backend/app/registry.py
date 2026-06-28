@@ -83,6 +83,18 @@ def _cmdline(pid: int) -> str:
         return ""
 
 
+def _config_dir_of(pid: int) -> Optional[Path]:
+    # CLAUDE_CONFIG_DIR do processo claude (setado pelo alias/picker). None se ausente -> fallback.
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as fh:
+            for kv in fh.read().split(b"\x00"):
+                if kv.startswith(b"CLAUDE_CONFIG_DIR="):
+                    return Path(kv.split(b"=", 1)[1].decode(errors="replace"))
+    except OSError:
+        return None
+    return None
+
+
 class SessionRegistry:
     # Cache name -> ultimo jsonl resolvido por sinal CONFIAVEL (cmdline --session-id / fd). De classe
     # (compartilhado entre instancias: api.registry e sse._registry). Estabiliza a resolucao quando o
@@ -138,7 +150,9 @@ class SessionRegistry:
                     continue
                 sid = _session_id_from_cmdline(cmd)
                 if sid:
-                    j = str(self.projects_dir / sanitize_cwd(cwd) / f"{sid}.jsonl")
+                    cdir = _config_dir_of(p)
+                    proj = (cdir / "projects") if cdir else self.projects_dir
+                    j = str(proj / sanitize_cwd(cwd) / f"{sid}.jsonl")
                     self._jsonl_cache[name] = j
                     return j, True
             # 2. fd aberto (confiavel quando presente; raro, o claude nao segura em idle).
@@ -165,7 +179,7 @@ class SessionRegistry:
             out.append(SessionInfo(name=s["name"], cwd=s["cwd"], jsonl=jsonl, tracked=tracked))
         return out
 
-    def create(self, name: str, cwd: str) -> SessionInfo:
+    def create(self, name: str, cwd: str, config_dir: str | None = None) -> SessionInfo:
         # Nome tmux nao aceita "."/":"/espaco -> sanitiza igual ao rename. Varias sessoes na MESMA
         # pasta sao permitidas: cada uma tem nome unico + --session-id proprio -> jsonl proprio.
         name = re.sub(r"[^A-Za-z0-9_-]", "-", name.strip()).strip("-")
@@ -174,8 +188,9 @@ class SessionRegistry:
         if tmux.has_session(name):
             raise ValueError("ja existe uma sessao com esse nome")
         sid = str(uuid.uuid4())
-        jsonl = str(self.projects_dir / sanitize_cwd(cwd) / f"{sid}.jsonl")
-        if not tmux.new_session(name, cwd, f"claude --session-id {sid}"):
+        base = (Path(config_dir) / "projects") if config_dir else self.projects_dir
+        jsonl = str(base / sanitize_cwd(cwd) / f"{sid}.jsonl")
+        if not tmux.new_session(name, cwd, f"claude --session-id {sid}", config_dir):
             raise ValueError("falha ao criar sessao no tmux")
         # Fixa o jsonl FRESCO no cache na hora: resolve() devolve este uuid mesmo antes do claude
         # escrever o arquivo, evitando o fallback newest-by-mtime pescar um jsonl ja existente da pasta.

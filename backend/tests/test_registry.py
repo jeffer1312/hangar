@@ -209,3 +209,26 @@ def test_resolve_tracked_false_on_mtime_fallback(tmp_path):
          patch.object(registry, "_open_jsonl", return_value=None):
         jsonl, tracked = reg.resolve_tracked("cc", "/home/u/p")
     assert tracked is False and jsonl.endswith("x.jsonl")
+
+
+def test_resolve_uses_session_config_dir(tmp_path, monkeypatch):
+    # resolve_tracked deve usar o config dir DO PROCESSO (via /proc/<pid>/environ) e nao o projects_dir
+    # do backend quando o session tem CLAUDE_CONFIG_DIR proprio.
+    cfg = tmp_path / ".cfg"
+    sid = "11111111-1111-1111-1111-111111111111"
+    cwd = "/work/proj"
+    jpath = cfg / "projects" / sanitize_cwd(cwd) / f"{sid}.jsonl"
+    jpath.parent.mkdir(parents=True, exist_ok=True)
+    jpath.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(registry.tmux, "pane_pid", lambda name: 4242)
+    monkeypatch.setattr(registry, "_descendant_pids", lambda root: [4242])
+    monkeypatch.setattr(registry, "_cmdline", lambda pid: f"claude --session-id {sid}")
+    monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
+
+    SessionRegistry._jsonl_cache.clear()
+    r = SessionRegistry(projects_dir=tmp_path / "backend-projects")  # dir diferente do session
+    resolved, tracked = r.resolve_tracked("cc", cwd)
+    assert tracked is True
+    assert resolved == str(jpath)   # usou o config dir da SESSAO, nao o backend projects_dir
+    SessionRegistry._jsonl_cache.clear()
