@@ -76,9 +76,15 @@ def drain(name: str, jsonl: str) -> int:
             # upgrade: render distinto / re-drain confirmado-por-transcript se virar reclamacao real.
             return sent
         if result == "deferred":
-            # send_prompt NAO tocou a TUI (overlay reabriu entre claim e envio): reverte com seguranca
-            # (provadamente pre-envio) e para — espera o proximo idle.
-            q.set_delivered(entry["id"], False)
+            # send_prompt NAO tocou a TUI (overlay reabriu entre claim e envio): reverte (provadamente
+            # pre-envio) e para — espera o proximo idle. Revert pode falhar (disco): nesse caso a entrada
+            # fica delivered=True (stranded-mas-VISIVEL como bubble queued-) -> nao re-dreva, mas nao some;
+            # nunca propaga (drain roda fire-and-forget no to_thread). delivered=True = "send_keys chamado",
+            # nao "Claude recebeu" (tmux engole erro de envio) -> a bubble visivel e a unica garantia.
+            try:
+                q.set_delivered(entry["id"], False)
+            except OSError:
+                pass
             return sent
         sent += 1
 
