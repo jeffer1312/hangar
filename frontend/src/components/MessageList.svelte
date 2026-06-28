@@ -29,6 +29,8 @@
   let previewEl: HTMLElement | undefined = $state();
   // O usuario "gruda" no fim por padrao; ao rolar pra cima, paramos de arrastar.
   let atBottom = $state(true);
+  // Rolou MUITO pra cima (mais de uma tela do fim) -> mostra o botao "ir pro fim".
+  let scrolledUp = $state(false);
 
   // Janela de render: monta SO os ultimos WINDOW eventos (a cauda). Sessao longa/compactada (milhares de
   // linhas no .jsonl) montando tudo = tempestade de mount/layout = congela no celular. windowEnd inicia
@@ -51,6 +53,7 @@
     if (!listEl) return;
     const gap = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
     atBottom = gap < 64; // threshold ~64px do fim
+    scrolledUp = gap > listEl.clientHeight; // mais de uma tela do fim = "muito pra cima" -> botao
     // Perto do topo + ainda ha eventos antigos fora da janela -> revela a proxima pagina.
     if (listEl.scrollTop < 200 && hasOlder) revealOlder();
   }
@@ -203,6 +206,20 @@
   </div>
 </section>
 
+{#if scrolledUp}
+  <!-- Botao "ir pro fim": aparece so quando rolou muito pra cima. Ao tocar, volta pra cauda E zera a
+       paginacao revelada (extra=0) -> nao fica montando/segurando paginas antigas que nao precisam. -->
+  <button
+    class="to-bottom"
+    style="bottom: calc({dockH}px + var(--space-3))"
+    onclick={() => { extra = 0; atBottom = true; scrollToBottom(); }}
+    aria-label="Ir para a última mensagem"
+  >
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+  </button>
+{/if}
+
 <style>
   .message-list {
     flex: 1;
@@ -290,4 +307,29 @@
     padding: 2px 0 2px var(--space-3);
   }
   .preview-bubble::-webkit-scrollbar { width: 0; height: 0; }
+
+  /* Botao flutuante "ir pro fim": fixo no canto, acima do dock (bottom = altura do composer + respiro).
+     z acima das msgs, abaixo dos sheets. So aparece quando scrolledUp (rolou +1 tela pra cima). */
+  .to-bottom {
+    position: fixed;
+    right: var(--space-4);
+    z-index: 6;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    color: var(--text-primary);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 140ms var(--ease-out), background 140ms var(--ease-out);
+  }
+  .to-bottom:active {
+    transform: scale(0.92);
+    background: var(--bg-hover);
+  }
 </style>
