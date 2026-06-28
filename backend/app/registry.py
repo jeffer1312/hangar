@@ -89,7 +89,9 @@ def _config_dir_of(pid: int) -> Optional[Path]:
         with open(f"/proc/{pid}/environ", "rb") as fh:
             for kv in fh.read().split(b"\x00"):
                 if kv.startswith(b"CLAUDE_CONFIG_DIR="):
-                    return Path(kv.split(b"=", 1)[1].decode(errors="replace"))
+                    # surrogateescape = round-trip fiel dos bytes POSIX (a camada de fs do Python usa o
+                    # mesmo) -> o Path ainda casa no disco mesmo com path nao-UTF-8. "replace" corromperia.
+                    return Path(kv.split(b"=", 1)[1].decode("utf-8", "surrogateescape"))
     except OSError:
         return None
     return None
@@ -106,11 +108,11 @@ class SessionRegistry:
     def __init__(self, projects_dir: Path | None = None):
         self.projects_dir = Path(projects_dir or settings.projects_dir)
 
-    def resolve_jsonl(self, cwd: str) -> Optional[str]:
+    def resolve_jsonl(self, cwd: str, projects_dir: Path | None = None) -> Optional[str]:
         # FALLBACK por cwd: jsonl mais recente do dir do projeto. So usado quando nao ha --session-id
         # nem fd aberto. NAO confiavel com varias sessoes no mesmo cwd (colide) -> por isso o
         # cmdline --session-id (em resolve()) vem primeiro.
-        proj = self.projects_dir / sanitize_cwd(cwd)
+        proj = (projects_dir or self.projects_dir) / sanitize_cwd(cwd)
         if not proj.is_dir():
             return None
 
@@ -157,7 +159,8 @@ class SessionRegistry:
                     return j, True
             # 2. fd aberto (confiavel quando presente; raro, o claude nao segura em idle).
             for p in pids:
-                j = _open_jsonl(p, self.projects_dir)
+                cdir = _config_dir_of(p)
+                j = _open_jsonl(p, (cdir / "projects") if cdir else self.projects_dir)
                 if j:
                     self._jsonl_cache[name] = j
                     return j, True
@@ -167,7 +170,12 @@ class SessionRegistry:
         if cached:
             return cached, True
         # 4. fallback: mais recente por mtime (ambiguo com varias sessoes bare no mesmo cwd) -> NAO tracked.
-        return self.resolve_jsonl(cwd), False
+        # usa o config dir da sessao (lido do pane pid, herdado pela arvore) pra achar o jsonl certo
+        # quando a sessao roda num config dir != o do backend. ponytail: le do pane pid; se um alias
+        # setasse CLAUDE_CONFIG_DIR so no exec do claude (nao exportado), cairia no dir do backend.
+        cdir = _config_dir_of(pid) if pid is not None else None
+        proj = (cdir / "projects") if cdir else self.projects_dir
+        return self.resolve_jsonl(cwd, proj), False
 
     def _forget(self, name: str) -> None:
         self._jsonl_cache.pop(name, None)
