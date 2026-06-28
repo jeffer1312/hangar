@@ -1,3 +1,7 @@
+/// <reference types="node" />
+// Dev-only: rodado via `npx tsx`. O svelte-check tambem inclui este arquivo, mas o tsconfig.app
+// restringe `types` a svelte/vite (sem node) -> o ref triple-slash puxa @types/node (ja instalado)
+// so aqui, resolvendo `node:assert` sem afrouxar o tsconfig do app.
 import { strict as assert } from 'node:assert';
 import { windowStartFor, nextWindowEnd } from './window';
 
