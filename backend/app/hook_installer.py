@@ -61,7 +61,10 @@ def ensure_askq_hook_installed() -> list[str]:
     """Instala (idempotente) o hook PreToolUse de captura do AskUserQuestion no settings.json
     de cada config dir do Claude. Fail-soft por arquivo: um settings.json problematico nunca
     derruba o backend no startup. Retorna os dirs onde gravou (so pra log)."""
-    dirs = {Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()}
+    try:
+        dirs = {Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()}
+    except Exception:
+        return []  # descoberta de dirs falhou (ex: HOME ausente) -> startup NUNCA quebra
     touched: list[str] = []
     for d in dirs:
         try:

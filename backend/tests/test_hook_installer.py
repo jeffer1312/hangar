@@ -83,6 +83,14 @@ def test_ensure_installed_targets_config_dirs(tmp_path, monkeypatch):
         assert data["hooks"]["PreToolUse"][0]["matcher"] == "AskUserQuestion"
 
 
+def test_ensure_installed_failsoft_when_discovery_raises(monkeypatch):
+    # list_config_dirs estourando (ex: HOME ausente) NUNCA pode derrubar o startup -> retorna [].
+    def _boom():
+        raise RuntimeError("HOME nao setado")
+    monkeypatch.setattr(hook_installer, "list_config_dirs", _boom)
+    assert hook_installer.ensure_askq_hook_installed() == []
+
+
 def test_capture_script_writes_sidecar(tmp_path):
     raw = json.dumps({
         "tool_name": "AskUserQuestion",
