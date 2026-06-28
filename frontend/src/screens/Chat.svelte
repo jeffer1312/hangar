@@ -10,8 +10,6 @@
   import ActivitySheet from '../components/ActivitySheet.svelte';
   import TerminalMirror from '../components/TerminalMirror.svelte';
   import AskQuestionSheet from '../components/AskQuestionSheet.svelte';
-  import Lottie from '../components/Lottie.svelte';
-  import splash from '../lib/lottie/splash.json';
   import {
     getHistory,
     sendInput,
@@ -463,11 +461,17 @@
 </script>
 
 <div class="chat-screen" bind:this={screenEl}>
-  <NavBar title={sessionName} showBack={true} onBack={onBack} onTitleTap={openSwitcher} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} />
+  <NavBar title={sessionName} showBack={true} onBack={onBack} onTitleTap={openSwitcher} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} working={currentState === 'working'} />
 
   {#if loading}
-    <div class="chat-loading">
-      <Lottie data={splash as any} size={72} />
+    <!-- Entrando na sessao: skeleton shimmer (familia Respiracao) enquanto o /history carrega. -->
+    <div class="chat-skeleton" aria-label="Carregando histórico" aria-busy="true">
+      <div class="sk-line sk-r" style="width:46%"></div>
+      <div class="sk-line" style="width:82%"></div>
+      <div class="sk-line" style="width:64%"></div>
+      <div class="sk-line sk-r" style="width:38%"></div>
+      <div class="sk-line" style="width:90%"></div>
+      <div class="sk-line" style="width:55%"></div>
     </div>
   {:else if error}
     <div class="chat-error">
@@ -568,7 +572,6 @@
     isolation: isolate;
   }
 
-  .chat-loading,
   .chat-error {
     flex: 1;
     display: flex;
@@ -576,6 +579,32 @@
     align-items: center;
     justify-content: center;
     gap: var(--space-4);
+  }
+
+  /* Skeleton de boot (no lugar do splash): linhas shimmer ocupando a area do chat. */
+  .chat-skeleton {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-6) var(--space-5);
+    max-width: 600px;
+    width: 100%;
+    margin: 0 auto;
+    overflow: hidden;
+  }
+  .sk-line {
+    height: 16px;
+    border-radius: 8px;
+    align-self: flex-start;
+    background: linear-gradient(90deg, var(--bg-elevated) 0%, var(--bg-hover) 40%, var(--accent-dim) 50%, var(--bg-hover) 60%, var(--bg-elevated) 100%);
+    background-size: 220% 100%;
+    animation: sk-shim 1.6s linear infinite;
+  }
+  .sk-line.sk-r { align-self: flex-end; }   /* algumas linhas "do usuario" a direita */
+  @keyframes sk-shim {
+    0%   { background-position: 140% 0; }
+    100% { background-position: -140% 0; }
   }
 
   .chat-error p {

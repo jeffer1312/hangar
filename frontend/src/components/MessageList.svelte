@@ -157,13 +157,13 @@
             {#if img}
               <ImageBubble caption={img.caption} srcs={img.filenames.map((f) => uploadUrl(sessionName, f))} />
             {:else}
-              <UserBubble text={ev.text} ts={ev.ts} />
+              <UserBubble text={ev.text ?? ''} ts={ev.ts} />
             {/if}
           </div>
         {:else if img}
           <ImageBubble caption={img.caption} srcs={img.filenames.map((f) => uploadUrl(sessionName, f))} />
         {:else}
-          <UserBubble text={ev.text} ts={ev.ts} />
+          <UserBubble text={ev.text ?? ''} ts={ev.ts} />
           {#if ev.text}{@const fr = parseFilePaths(ev.text)}{#if fr.length}<FileAttachment {sessionName} refs={fr} />{/if}{/if}
         {/if}
       {:else if ev.kind === 'assistant_msg' && ev.text}
@@ -177,7 +177,7 @@
       <!-- Preview ao vivo do bloco em voo: texto PLANO (markdown bonito so no final canonico, pra
            nao piscar ** / code-fence meio-aberto). Sob fullscreen e a CAUDA deslizante do pane ->
            box CONTIDO (altura fixa, rola DENTRO de si) pra a cauda deslizar suave sem PULAR o layout. -->
-      <div class="preview-bubble" bind:this={previewEl}>{preview}</div>
+      <div class="preview-bubble" bind:this={previewEl}>{preview}<span class="caret" aria-hidden="true"></span></div>
     {/if}
 
     {#if stateEvent?.state === 'working'}
@@ -267,10 +267,13 @@
        a direita sozinho; a ImageBubble usa align-self:flex-end. flex-end aqui encolheria o
        bubble-wrap pro min-content -> palavra curta ("sim") quebrava letra a letra. */
     opacity: 0.5;
+    transform: scale(0.97);
+    transition: opacity 360ms var(--spring), transform 360ms var(--spring);
   }
   /* Solidificado: o Claude ja consumiu a fila -> vira bubble normal (sem atenuar). */
   .pending-bubble.solid {
     opacity: 1;
+    transform: none;
   }
 
   /* Msg da fila durável (evento sintetico "queued-"): alinha a direita (como user) e atenua
@@ -280,10 +283,11 @@
     flex-direction: column;
     /* stretch (default): bubble de texto ocupa a largura e alinha sozinho; imagem usa align-self.
        flex-end encolhia o bubble pro min-content -> "sim" quebrava letra a letra. */
-    transition: opacity 240ms var(--ease-out);
+    transition: opacity 240ms var(--ease-out), transform 360ms var(--spring);
   }
   .queued-row.dim {
     opacity: 0.5;
+    transform: scale(0.97);   /* na fila: atenua E encolhe um tico; assenta com spring ao ser aceita. */
   }
 
   /* Preview ao vivo (cauda em voo): lado do assistente, texto plano levemente atenuado pra ler como
@@ -307,6 +311,14 @@
     padding: 2px 0 2px var(--space-3);
   }
   .preview-bubble::-webkit-scrollbar { width: 0; height: 0; }
+
+  /* Caret piscando no fim do preview ao vivo (familia Respiracao "Digitando"). */
+  .caret {
+    display: inline-block; width: 7px; height: 1.05em; vertical-align: -2px;
+    margin-left: 2px; border-radius: 1px; background: var(--accent);
+    animation: caret-blink 1s steps(1) infinite;
+  }
+  @keyframes caret-blink { 50% { opacity: 0; } }
 
   /* Botao flutuante "ir pro fim": fixo no canto, acima do dock (bottom = altura do composer + respiro).
      z acima das msgs, abaixo dos sheets. So aparece quando scrolledUp (rolou +1 tela pra cima). */

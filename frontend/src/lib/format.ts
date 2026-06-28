@@ -31,7 +31,7 @@ const _EXTS = Object.keys(EXT_KIND).join('|');
 // (pega path COM espaco tipo "/a/WhatsApp Video….mp4"). Global + case-insensitive.
 const _PATH_RE = new RegExp(`(~?/[^\\n]*?\\.(${_EXTS}))(?=$|[\\s)\\]"'\`,])`, 'gi');
 
-export interface FileRef { path: string; name: string; kind: FileKind; }
+export interface FileRef { path: string; name: string; kind: FileKind; url?: string; }
 
 export function parseFilePaths(text: string): FileRef[] {
   const out: FileRef[] = [];
@@ -42,6 +42,25 @@ export function parseFilePaths(text: string): FileRef[] {
     seen.add(path);
     const kind = EXT_KIND[m[2].toLowerCase()];
     out.push({ path, name: path.split('/').filter(Boolean).pop() || path, kind });
+  }
+  return out;
+}
+
+// URLs http(s) de MIDIA (imagem/video/audio) na conversa -> preview inline no chat, pra ver sem sair
+// pro navegador. So midia "tocavel": doc/html remoto fica fora (evita iframe de link aleatorio; o link
+// clicavel do markdown ja cobre). url = absoluta (FileAttachment usa direto, sem passar pelo backend).
+export function parseMediaUrls(text: string): FileRef[] {
+  const out: FileRef[] = [];
+  const seen = new Set<string>();
+  for (const m of text.matchAll(/https?:\/\/[^\s<>"'`\])]+/gi)) {
+    const u = m[0].replace(/[.,;:!?]+$/, '');   // tira pontuacao final colada
+    if (seen.has(u)) continue;
+    const base = u.split(/[?#]/)[0];            // path sem query/fragment
+    const ext = base.split('.').pop()?.toLowerCase() ?? '';
+    const kind = EXT_KIND[ext];
+    if (kind !== 'image' && kind !== 'video' && kind !== 'audio') continue;
+    seen.add(u);
+    out.push({ path: u, url: u, name: base.split('/').filter(Boolean).pop() || u, kind });
   }
   return out;
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { renderMarkdown } from '../lib/markdown';
-  import { parseFilePaths } from '../lib/format';
+  import { parseFilePaths, parseMediaUrls } from '../lib/format';
   import FileAttachment from './FileAttachment.svelte';
 
   interface Props {
@@ -13,6 +13,8 @@
   const html = $derived(renderMarkdown(text));
   // Anexos por caminho citado na minha msg (img/video/html/pdf que eu "mandar").
   const fileRefs = $derived(sessionName ? parseFilePaths(text) : []);
+  // Midia remota (URL http) -> preview inline; nao depende do backend/sessionName.
+  const mediaRefs = $derived(parseMediaUrls(text));
 
   function formatTime(ts: number | null | undefined): string {
     if (!ts) return '';
@@ -27,6 +29,7 @@
   <!-- eslint-disable-next-line svelte/no-at-html-tags -->
   <div class="prose">{@html html}</div>
   {#if fileRefs.length}<FileAttachment {sessionName} refs={fileRefs} />{/if}
+  {#if mediaRefs.length}<FileAttachment {sessionName} refs={mediaRefs} />{/if}
   {#if ts}
     <span class="ts">{formatTime(ts)}</span>
   {/if}
@@ -40,8 +43,14 @@
     align-items: flex-start;
     min-width: 0;        /* cadeia flex encolhe -> filhos (chip de arquivo) truncam, nao estouram */
     max-width: 100%;
-    animation: bubble-in 220ms var(--ease-out) both;
+    /* Mensagem entrando (familia Respiracao): sobe com spring (overshoot leve), so na bolha do assistente. */
+    animation: msg-in 420ms var(--spring) both;
     margin-bottom: var(--space-4);
+  }
+
+  @keyframes msg-in {
+    from { opacity: 0; transform: translateY(14px) scale(0.96); }
+    to   { opacity: 1; transform: none; }
   }
 
   .prose {

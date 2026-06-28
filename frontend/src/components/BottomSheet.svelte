@@ -110,7 +110,7 @@
     border-radius: 20px 20px 0 0;
     padding: var(--space-4) var(--space-5);
     padding-bottom: calc(env(safe-area-inset-bottom) + var(--space-5));
-    animation: slide-up 220ms var(--ease-out) both;
+    animation: slide-up 360ms var(--spring) both;
     touch-action: pan-y;
   }
 
