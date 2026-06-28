@@ -43,8 +43,8 @@ def has_session(name: str) -> bool:
 
 
 def new_session(name: str, cwd: str, command: str, config_dir: str | None = None) -> bool:
-    # -e: cores corretas do Claude Code DENTRO do tmux (o claude e spawnado direto, sem shell que
-    # leia o rc). COLORTERM=24-bit + CLAUDE_CODE_TMUX_TRUECOLOR curto-circuita o downgrade pra 256
+    # -e: cores corretas do Claude Code DENTRO do tmux (o claude e spawnado via `exec`, virando o
+    # processo do pane sem shell intermediario). COLORTERM=24-bit + CLAUDE_CODE_TMUX_TRUECOLOR curto-circuita o downgrade pra 256
     # (gate pink). O TERM nao-tmux (gate teal) vem do default-terminal no ~/.tmux.conf.
     # Ver docs/tmux-truecolor-setup.md.
     # Retorna False quando o tmux recusa (ex: nome duplicado) -> o caller NAO pode mapear a sessao
@@ -59,7 +59,10 @@ def new_session(name: str, cwd: str, command: str, config_dir: str | None = None
         # sessao app-criada usa o MESMO config dir que o backend (ou o escolhido), em vez de cair
         # no ~/.claude default (deslogado -> tela de boas-vindas).
         args += ["-e", f"CLAUDE_CONFIG_DIR={cfg}"]
-    args.append(command)
+    # `exec`: o tmux SEMPRE roda o comando via `$SHELL -c` (fish aqui). Sem exec, o fish fica como
+    # dono do tty/grupo de foreground e o `send-keys` (input do app) NAO chega no claude -> ele
+    # renderiza mas nunca le o teclado. Com exec o fish vira o claude (dono do tty) -> input chega.
+    args.append(f"exec {command}")
     return _run(args).returncode == 0
 
 
