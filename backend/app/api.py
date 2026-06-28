@@ -19,6 +19,7 @@ from app.sse import merged_events
 from app.uploads import save_upload, resolve_upload, UploadError, MAX_BYTES
 from app.config import list_config_dirs, ConfigDirInfo
 from app.git_ops import list_branches, switch_branch, git_action, GitError
+from app.askquestion import clear_pending_askq
 
 
 class _BodyTooLarge(Exception):
@@ -251,6 +252,8 @@ def input_prompt(name: str, body: InputBody):
                 PromptQueue(name).clear()
             except OSError:
                 pass
+            # ponytail: o sidecar do AskUserQuestion NAO e limpo aqui — /clear abre um transcript com
+            # session_id novo, entao o sidecar antigo vira lixo inofensivo (nao reabre nada).
     else:
         # Registra na fila duravel (sidecar) APOS o envio dar certo: aparece como user_msg em ordem e
         # persiste no reload; o merge dedup-a contra o transcript quando o Claude Code grava o prompt.
@@ -427,6 +430,11 @@ def answer(name: str, body: AnswerBody):
         terminal_input.answer_questions(name, [a.model_dump() for a in body.answers])
     except ValueError as e:
         raise HTTPException(409, str(e))
+    # Respondido: limpa o sidecar do hook pra um stale nao reabrir o stepper depois. Resolve o jsonl
+    # igual aos outros endpoints; se nao resolver, pula a limpeza sem falhar a request.
+    jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
+    if jsonl:
+        clear_pending_askq(jsonl)
     return {"ok": True}
 
 

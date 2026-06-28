@@ -7,6 +7,7 @@ from app import tmux
 from app.config import settings
 from app.models import SessionInfo
 from app.pqueue import PromptQueue
+from app.askquestion import clear_pending_askq
 
 
 def sanitize_cwd(cwd: str) -> str:
@@ -223,6 +224,15 @@ class SessionRegistry:
         PromptQueue(old).rename(new)
 
     def kill(self, name: str) -> None:
+        # Limpa o sidecar do AskUserQuestion ANTES de matar (precisa do processo vivo pra resolver o
+        # jsonl), best-effort: cleanup nunca bloqueia/quebra o kill. Senao um stale reabriria o stepper
+        # numa sessao futura de mesmo nome.
+        try:
+            jsonl = next((s.jsonl for s in self.list() if s.name == name), None)
+            if jsonl:
+                clear_pending_askq(jsonl)
+        except Exception:
+            pass
         tmux.kill_session(name)
         self._forget(name)  # cache invalido: nome pode ser reusado por outra sessao depois
         # Sessao morta nao deixa fila pra tras: senao acumula orfaos e uma futura sessao de mesmo

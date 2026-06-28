@@ -6,7 +6,7 @@ from app.pqueue import PromptQueue, _transcript_start_ts
 from app.preview import PreviewBroker, _norm
 from app.models import PreviewEvent
 from app.registry import SessionRegistry
-from app.askquestion import parse_ask_question
+from app.askquestion import read_pending_askq
 
 
 def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
@@ -18,7 +18,7 @@ def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
         return None
     if obj.get("state") != "awaiting_input" or not obj.get("overlay"):
         return None
-    payload = parse_ask_question(jsonl)
+    payload = read_pending_askq(jsonl)
     if payload is None:
         return None
     return {"event": "ask_question", "data": json.dumps(payload.model_dump(), ensure_ascii=False)}
