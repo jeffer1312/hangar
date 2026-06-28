@@ -168,7 +168,11 @@
         if (ev.kind === 'user_msg' && ev.text) {
           const covers = (a: string, b: string) => {
             const at = a.trim(), bt = b.trim();
-            return at === bt || at.split('\n').some((ln) => ln.trim() === bt);
+            if (at === bt || at.split('\n').some((ln) => ln.trim() === bt)) return true;
+            // Msg com imagem: eco/fila carrega "📎 imagem: <path>", o transcript grava so a legenda ->
+            // casa pela legenda canonica (senao a bolha com foto fica pendente eterna).
+            const ac = _cap(a), bc = _cap(b);
+            return !!bc && ac === bc;
           };
           if (ev.id.startsWith('queued-')) {
             if (events.some((x) => x.kind === 'user_msg' && !x.id.startsWith('queued-') && x.text && covers(x.text, ev.text!))) {
@@ -334,6 +338,14 @@
     return () => { cancelAnimationFrame(raf); ro.disconnect(); };
   });
 
+  // Legenda canonica de uma msg (sem o marcador "📎 imagem:/arquivo: <path>" + o "—" que liga). Pro
+  // dedup de pending/fila: o eco local carrega o marcador, mas o transcript grava SO a legenda -> sem
+  // normalizar, msg COM ANEXO nunca casava e ficava pendente pra sempre.
+  function _cap(text: string): string {
+    const i = text.search(/(?:\s*—\s*)?📎\s*(?:imagem|arquivo):/u);
+    return (i >= 0 ? text.slice(0, i) : text).trim();
+  }
+
   let pendingSeq = 0;
 
   async function handleSend(text: string) {
@@ -364,9 +376,15 @@
       if (e.kind !== 'user_msg' || !e.text) continue;
       const t = e.text.trim();
       committed.add(t);
+      committed.add(_cap(t));                       // legenda canonica (msg com imagem grava so ela)
       for (const line of t.split('\n')) committed.add(line.trim());
     }
-    const next = pending.filter((p) => !committed.has(p.text.trim()));
+    // Remove o eco quando o texto cru OU a legenda (sem "📎 imagem: <path>") ja commitou. Legenda
+    // vazia (imagem sem texto) nao casa por texto -> cai no solidify do idle, nao trava aqui.
+    const next = pending.filter((p) => {
+      const cap = _cap(p.text);
+      return !committed.has(p.text.trim()) && !(cap && committed.has(cap));
+    });
     if (next.length !== pending.length) pending = next;
   });
 

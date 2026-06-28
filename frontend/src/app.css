@@ -28,6 +28,9 @@
   --accent-dim:     rgba(124,135,232,0.18);
   --accent-press:   #6e79d6;
 
+  /* Bubble do usuario: cinza neutro (estilo Claude.ai), no lugar do indigo. Texto = --text-primary. */
+  --bubble-user:    #2b2a2e;
+
   /* Glass (composer / navbar / sidebar) — translucido + blur por cima do conteudo */
   --glass-bg:        rgba(38,36,44,0.46);    /* frosted iOS: tint neutro limpo (warm embarrava) */
   --glass-bg-solid:  rgba(24,23,28,0.94);    /* fallback durante o scroll (sem blur) */
@@ -76,6 +79,9 @@
   --accent:         #5b6ad0;
   --accent-dim:     rgba(91,106,208,0.12);
   --accent-press:   #4d5bc0;
+
+  /* Bubble do usuario: cinza neutro claro (estilo Claude.ai). Texto = --text-primary (escuro). */
+  --bubble-user:    #e8e5e0;
 
   /* Glass claro: translucido sobre paper (mais sutil que no dark) */
   --glass-bg:        rgba(255,254,252,0.52);

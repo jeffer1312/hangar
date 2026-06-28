@@ -27,21 +27,30 @@ const EXT_KIND: Record<string, FileKind> = {
   pdf: 'pdf',
 };
 const _EXTS = Object.keys(EXT_KIND).join('|');
-// Caminho absoluto (/ ou ~/) — lazy ate a 1a extensao conhecida, seguida de fim/espaco/delimitador
-// (pega path COM espaco tipo "/a/WhatsApp Video….mp4"). Global + case-insensitive.
-const _PATH_RE = new RegExp(`(~?/[^\\n]*?\\.(${_EXTS}))(?=$|[\\s)\\]"'\`,])`, 'gi');
+// Caminho ABSOLUTO (/ ou ~/) — lazy ate a 1a extensao conhecida, seguida de fim/espaco/delimitador
+// (pega path COM espaco tipo "/a/WhatsApp Video….mp4"). Lookbehind (?<![\w.~:/]) evita comecar dentro
+// de URL ("https://…") ou logo apos "." (o "/" do "./rel.png" e do REL, nao deste). Global + ci.
+const _PATH_RE = new RegExp(`(?<![\\w.~:/])(~?/[^\\n]*?\\.(${_EXTS}))(?=$|[\\s)\\]"'\`,])`, 'gi');
+// Caminho RELATIVO com DIRETORIO (./x.png, ../a/x.png, sub/dir/x.png) — jeito comum do Claude citar
+// arquivo que criou no cwd. Exige >=1 segmento "dir/" -> NAO casa nome puro "x.png" (ruido de prosa).
+// O backend resolve contra o cwd da sessao. Lookbehind tira word/`/`/~/./:/- (nao pega pedaco de path
+// absoluto nem de dentro de URL).
+const _REL_RE = new RegExp(`(?<![\\w/~.:-])((?:[\\w.-]+/)+[\\w.-]+\\.(${_EXTS}))(?=$|[\\s)\\]"'\`,:])`, 'gi');
 
 export interface FileRef { path: string; name: string; kind: FileKind; url?: string; }
 
 export function parseFilePaths(text: string): FileRef[] {
   const out: FileRef[] = [];
   const seen = new Set<string>();
-  for (const m of text.matchAll(_PATH_RE)) {
-    const path = m[1];
-    if (seen.has(path)) continue;
-    seen.add(path);
-    const kind = EXT_KIND[m[2].toLowerCase()];
-    out.push({ path, name: path.split('/').filter(Boolean).pop() || path, kind });
+  // Absoluto + relativo-com-dir. Os dois regexes nao se sobrepoem (lookbehind) -> dedup por string.
+  for (const re of [_PATH_RE, _REL_RE]) {
+    for (const m of text.matchAll(re)) {
+      const path = m[1];
+      if (seen.has(path)) continue;
+      seen.add(path);
+      const kind = EXT_KIND[m[2].toLowerCase()];
+      out.push({ path, name: path.split('/').filter(Boolean).pop() || path, kind });
+    }
   }
   return out;
 }

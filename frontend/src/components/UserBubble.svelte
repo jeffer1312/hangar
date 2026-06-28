@@ -33,8 +33,8 @@
   }
 
   .bubble {
-    background: var(--accent);
-    color: var(--text-inverse);
+    background: var(--bubble-user);
+    color: var(--text-primary);
     max-width: 80%;
     padding: var(--space-3) var(--space-4);
     border-radius: 18px 18px 4px 18px;
