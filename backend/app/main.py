@@ -4,6 +4,7 @@ import uvicorn
 import qrcode
 
 from app.config import settings, resolve_bind_ip, pairing_url
+from app.hook_installer import ensure_askq_hook_installed
 
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
@@ -36,6 +37,8 @@ def print_pairing(settings) -> None:
 def main():
     bind = resolve_bind_ip(settings)
     startup_guard(settings)
+    # Instala (idempotente, fail-soft) o hook que captura o payload do AskUserQuestion.
+    ensure_askq_hook_installed()
     print_pairing(settings)
     # workers=1 explicito: o cache de classe SessionRegistry._jsonl_cache e compartilhado SO dentro de
     # um processo. Multi-worker daria cache frio por worker -> transcript errado em requests roteados
