@@ -1,10 +1,27 @@
 import asyncio
+import json
 from app.transcript import TranscriptTailer
 from app.state import StateMonitor
 from app.pqueue import PromptQueue, _transcript_start_ts
 from app.preview import PreviewBroker, _norm
 from app.models import PreviewEvent
 from app.registry import SessionRegistry
+from app.askquestion import parse_ask_question
+
+
+def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
+    """Retorna o evento SSE ask_question quando o estado for awaiting_input com overlay
+    (rodape de navegacao por abas, indicando AskUserQuestion estruturado). Caso contrario, None."""
+    try:
+        obj = json.loads(state_json)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if obj.get("state") != "awaiting_input" or not obj.get("overlay"):
+        return None
+    payload = parse_ask_question(jsonl)
+    if payload is None:
+        return None
+    return {"event": "ask_question", "data": json.dumps(payload.model_dump(), ensure_ascii=False)}
 
 # Stateless (so projects_dir) — usado pelo watcher pra detectar troca de jsonl (ex: /clear abre um
 # transcript novo, mas a conexao SSE foi bindada no antigo).
@@ -117,6 +134,9 @@ async def merged_events(name: str, jsonl: str):
         except Exception as exc:  # surface, never swallow
             await queue.put(("__error__", exc))
 
+    current_jsonl = jsonl          # atualizado no __reset__ (ex: /clear abre novo transcript)
+    ask_q_emitted = False          # impede reemissao enquanto o mesmo prompt permanece na tela
+
     tail_task = asyncio.create_task(tail_pump(jsonl))
     tasks = [
         tail_task,
@@ -140,6 +160,8 @@ async def merged_events(name: str, jsonl: str):
                 tail_task.cancel()
                 committed["text"] = ""
                 _enqueue_preview("")
+                current_jsonl = data
+                ask_q_emitted = False
                 tail_task = asyncio.create_task(tail_pump(data))
                 tasks.append(tail_task)
                 yield {"event": "reset", "data": "{}"}
@@ -151,6 +173,18 @@ async def merged_events(name: str, jsonl: str):
                 yield {"event": "preview",
                        "data": PreviewEvent(session=name, text=preview_slot["text"]).model_dump_json()}
                 continue
+            if event == "state":
+                # Rastreia transicoes do awaiting_input pra resetar o guard de emissao unica.
+                # Quando awaiting_input + overlay (rodape de abas = AskUserQuestion estruturado),
+                # emite ask_question UMA VEZ por prompt; reseta ao sair do estado.
+                parsed_state = json.loads(data)
+                if parsed_state.get("state") != "awaiting_input":
+                    ask_q_emitted = False
+                elif not ask_q_emitted:
+                    ask_ev = _ask_question_event(data, current_jsonl)
+                    if ask_ev:
+                        ask_q_emitted = True
+                        yield ask_ev
             yield {"event": event, "data": data}
     finally:
         # So cancela e retorna (NAO await): um pump preso num asyncio.to_thread (tmux) nao e
