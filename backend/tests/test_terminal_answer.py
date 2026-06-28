@@ -2,6 +2,26 @@ from unittest.mock import patch
 from app import terminal_input as ti
 
 
+def test_send_prompt_waits_for_ready_before_sending():
+    # Core bug: msg mandada com claude bootando era engolida. send_prompt deve ESPERAR o input vivo
+    # (rodape 'bypass permissions') antes de enviar as teclas.
+    panes = iter(["bootando logo...", "bootando ainda...",
+                  "❯ \n⏵⏵ bypass permissions on (shift+tab to cycle)"])
+    captured = {"last": ""}
+    keys = []
+    with patch.object(ti, "_capture", lambda name: captured.__setitem__("last", next(panes, captured["last"])) or captured["last"]), \
+         patch.object(ti.time, "sleep", lambda *_: None), \
+         patch.object(ti, "send_keys", lambda name, k, **kw: keys.append(k)):
+        ti.TerminalInput().send_prompt("s", "oi")
+    assert keys == ["oi", "Enter"]  # enviou SO depois de ficar pronto
+
+
+def test_wait_input_ready_times_out_then_false():
+    with patch.object(ti, "_capture", lambda name: "bootando sem rodape"), \
+         patch.object(ti.time, "sleep", lambda *_: None):
+        assert ti._wait_input_ready("s", timeout=0.0) is False
+
+
 def test_single_select_macro():
     keys = []
     review = "Review your answers\n ● Q1\n   → B\nReady to submit\n❯ 1. Submit answers\n  2. Cancel\n"
