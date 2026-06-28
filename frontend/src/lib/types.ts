@@ -136,3 +136,12 @@ export interface FsScanResult {
   entries: FsEntry[];
   error?: FsScanError | null;
 }
+
+// ── AskUserQuestion (stepper nativo multi-pergunta) ─────────────────────────
+export interface AskOption { label: string; description: string }
+export interface AskQuestionItem { header: string; question: string; multiSelect: boolean; options: AskOption[] }
+export interface AskQuestionPayload { questions: AskQuestionItem[] }
+export type AnswerItem =
+  | { kind: 'option'; indices: number[]; multi: boolean; labels: string[] }
+  | { kind: 'text'; value: string; type_index: number; labels: string[] }
+  | { kind: 'chat'; chat_index: number };
