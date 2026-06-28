@@ -70,11 +70,30 @@ def test_list_sessions_route(api_client):
     assert r.json()[0]["name"] == "cc"
 
 
-def test_input_route_calls_terminal(api_client):
-    with patch("app.api.terminal.send_prompt") as sp:
+def test_input_eager_send_marks_delivered(api_client):
+    with patch("app.api.terminal.send_prompt", return_value="sent") as sp, \
+         patch("app.pqueue.PromptQueue.append") as ap:
         r = api_client.post("/api/sessions/cc/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 200
     sp.assert_called_once_with("cc", "oi")
+    ap.assert_called_once_with("oi", delivered=True)
+
+
+def test_input_defer_on_overlay_marks_pending(api_client):
+    with patch("app.api.terminal.send_prompt", return_value="deferred"), \
+         patch("app.pqueue.PromptQueue.append") as ap:
+        r = api_client.post("/api/sessions/cc/input", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 200
+    ap.assert_called_once_with("oi", delivered=False)
+
+
+def test_input_control_char_400_without_queue(api_client):
+    with patch("app.api.terminal.send_prompt",
+               side_effect=ValueError("control characters not allowed")), \
+         patch("app.pqueue.PromptQueue.append") as ap:
+        r = api_client.post("/api/sessions/cc/input", json={"text": "bad"}, headers=_h())
+    assert r.status_code == 400
+    ap.assert_not_called()   # validado no send_prompt ANTES de enfileirar
 
 
 def test_select_route(api_client):
