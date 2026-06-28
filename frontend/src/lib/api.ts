@@ -4,6 +4,7 @@ import type {
   SessionInfo,
   ChatEvent,
   CommandInfo,
+  ConfigDirInfo,
   FsRoot,
   FsScanResult,
   FsScanError,
@@ -104,10 +105,14 @@ export async function getAllSessions(servers: Server[]): Promise<ServerSessions[
   );
 }
 
-export function createSession(name: string, cwd?: string): Promise<SessionInfo> {
+export function listClaudeConfigs(): Promise<ConfigDirInfo[]> {
+  return apiFetch<ConfigDirInfo[]>('/api/claude-configs');
+}
+
+export function createSession(name: string, cwd?: string, configDir?: string | null): Promise<SessionInfo> {
   return apiFetch<SessionInfo>('/api/sessions', {
     method: 'POST',
-    body: JSON.stringify({ name, cwd }),
+    body: JSON.stringify({ name, cwd, config_dir: configDir ?? null }),
   });
 }
 

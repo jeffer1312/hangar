@@ -102,6 +102,13 @@ export interface WorkflowDetail {
   agents: WorkflowAgent[];
 }
 
+// ── Config dirs do Claude (~/.claude, alternativas) ────────────────────────
+export interface ConfigDirInfo {
+  path: string;
+  label: string;
+  active: boolean;
+}
+
 // ── Scanner de pastas ───────────────────────────────────────────────────────
 export interface FsRoot {
   name: string;   // basename da raiz (vira o rótulo do chip)

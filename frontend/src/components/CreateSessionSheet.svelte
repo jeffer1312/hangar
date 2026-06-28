@@ -1,17 +1,17 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
   import FolderScanner from './FolderScanner.svelte';
-  import { getSessions } from '../lib/api';
+  import { getSessions, listClaudeConfigs } from '../lib/api';
   import { basename } from '../lib/format';
   import { selectServer, getActiveId, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
-  import type { SessionInfo } from '../lib/types';
+  import type { SessionInfo, ConfigDirInfo } from '../lib/types';
 
   interface Props {
     open: boolean;
     servers: Server[];
     onClose: () => void;
-    onCreate: (name: string, cwd?: string) => Promise<void>;
+    onCreate: (name: string, cwd?: string, configDir?: string | null) => Promise<void>;
     onOpenSession: (name: string) => void;
   }
   let { open, servers, onClose, onCreate, onOpenSession }: Props = $props();
@@ -44,6 +44,10 @@
     return `${clean}-${i}`;
   }
 
+  // Config dirs do Claude (ex: ~/.claude, ~/.claude-work). Picker so aparece quando ha mais de um.
+  let configs = $state<ConfigDirInfo[]>([]);
+  let selectedConfig = $state<string | null>(null);
+
   // Escape hatch: digitar o caminho na mao.
   let manualOpen = $state(false);
   let manualPath = $state('');
@@ -64,6 +68,9 @@
       const cur = getActiveId();
       const target = servers.find((s) => s.id === cur) ? cur! : servers[0]?.id ?? '';
       if (target) pickTarget(target);
+      listClaudeConfigs()
+        .then((cs) => { configs = cs; selectedConfig = cs.find((c) => c.active)?.path ?? cs[0]?.path ?? null; })
+        .catch(() => {});
     }
   });
 
@@ -105,7 +112,7 @@
     loading = true;
     error = '';
     try {
-      await onCreate(name.trim(), picked);
+      await onCreate(name.trim(), picked, selectedConfig);
       onClose();
     } catch (err) {
       error = err instanceof Error ? err.message : 'Erro ao criar sessão';
@@ -195,6 +202,17 @@
           required
         />
       </div>
+
+      {#if configs.length > 1}
+        <div class="field">
+          <label class="field-label" for="cfg-pick">Claude config</label>
+          <select id="cfg-pick" class="field-input" bind:value={selectedConfig}>
+            {#each configs as c (c.path)}
+              <option value={c.path}>{c.label}{c.active ? ' (atual)' : ''}</option>
+            {/each}
+          </select>
+        </div>
+      {/if}
 
       {#if error}
         <p class="error-msg" role="alert">{error}</p>
