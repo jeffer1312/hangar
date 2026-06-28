@@ -16,6 +16,25 @@ def _capture(name: str) -> str:
     return tmux.capture_pane(name)
 
 
+# Marcas do rodapé do Claude Code quando o input já está VIVO (TUI interativo). Durante o BOOT
+# (logo + carregamento) elas ainda não aparecem.
+_READY_MARKERS = ("bypass permissions", "? for shortcuts", "for shortcuts")
+
+
+def _wait_input_ready(name: str, timeout: float = 12.0) -> bool:
+    """Espera o TUI do Claude ficar interativo antes de enviar. BUG: msg mandada logo após criar a
+    sessão (claude ainda bootando, TUI não aceita teclas) era ENGOLIDA -> sumia (ficava só na fila
+    como bubble fantasma, claude nunca recebia). Sessão já pronta -> retorna na 1ª leitura (sem
+    latência). Timeout -> retorna False e envia mesmo assim (não piora o caso de hoje)."""
+    deadline = time.monotonic() + timeout
+    while True:
+        if any(m in _capture(name) for m in _READY_MARKERS):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.2)
+
+
 def _review_matches(screen: str, answers: list[dict]) -> bool:
     # Cada pergunta no review vira uma linha "→ <labels por ', '>". Compara por TOKEN exato (nao
     # substring) pra um label curto nao casar dentro de outra palavra.
@@ -109,6 +128,9 @@ class TerminalInput:
         # na TUI). Multi-linha vai por bracketed paste (insere as quebras sem submeter); depois Enter.
         if any(ord(c) < 32 and c not in "\t\n" for c in text):
             raise ValueError("control characters not allowed in prompt")
+        # Não enviar pra um TUI ainda bootando: as teclas seriam engolidas e a msg sumiria (core bug —
+        # msg mandada logo após criar a sessão nunca chegava no claude). Espera o input ficar vivo.
+        _wait_input_ready(name)
         if "\n" in text:
             tmux.paste_text(name, text)
             time.sleep(0.05)  # deixa a TUI acomodar o paste antes do Enter submeter
