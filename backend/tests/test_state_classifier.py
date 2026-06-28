@@ -169,6 +169,15 @@ async def test_monitor_animating_spinner_reads_working():
     assert seen[-1] == ("working", "Pondering…")
 
 
+def test_is_overlay_true_with_nav_footer():
+    pane = "alguma conversa\n● resposta\n────────\n  Esc to cancel · Enter to select\n"
+    assert state_mod.is_overlay(pane) is True
+
+
+def test_is_overlay_false_without_footer():
+    assert state_mod.is_overlay("● PONG\n❯ \n") is False
+
+
 def test_status_line_is_the_chrome_below_the_input_box():
     pane = (
         "● the answer\n"

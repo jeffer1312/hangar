@@ -47,6 +47,14 @@ def _question(lines: list[str]) -> Optional[str]:
 # Rodape de navegacao da AskUserQuestion (e de pickers similares). Ancora o limite INFERIOR
 # do bloco. O menu nativo de permissao NAO tem esse rodape -> o limite cai num boundary.
 _FOOTER_RE = re.compile(r"to navigate|Esc to cancel|Enter to select")
+
+
+def is_overlay(pane_text: str) -> bool:
+    # Overlay so-TUI aberto: rodape de navegacao por teclas no FUNDO do pane (ultimas 8 linhas — nao o
+    # pane todo, senao a MESMA frase citada na conversa/scrollback dava falso-positivo). Cobre pickers
+    # (/model) e paineis (/status, /config, /help) alem do AskUserQuestion. Fonte unica de "overlay"
+    # (StateMonitor e terminal_input.deliverable usam esta).
+    return bool(_FOOTER_RE.search("\n".join(pane_text.splitlines()[-8:])))
 # Glifos que marcam a BORDA do box do picker: bullet de assistente, junta de tool-result e
 # spinners. Scrollback (incl. listas numeradas perdidas) vive alem dessas linhas.
 _BOUNDARY_GLYPHS = "●⎿" + SPINNER_GLYPHS
@@ -185,7 +193,7 @@ class StateMonitor:
             # (ex: uma msg citando o rodape abria o espelho por cima do chat). Inclui pickers (/model) e
             # paineis sem opcoes numeradas (/status, /config, /help). O front decide: com `options` (menu
             # nativo) usa botoes; sem opcoes mas overlay=True abre o espelho pra navegar via teclas.
-            overlay = bool(_FOOTER_RE.search("\n".join(pane.splitlines()[-8:])))
+            overlay = is_overlay(pane)
             key = (state, label, question, tuple(options or ()), status, overlay)
             if key != last_key:
                 last_key = key
