@@ -249,3 +249,21 @@ render). It works on **v2.1.195** with a minimal hook, but:
   the frontend types + `answerQuestions()`, and the `AskQuestionSheet` stepper component.
 - **Rework:** Tasks 1–2 (the jsonl parser + the jsonl-based emit) → swap to the hook sidecar
   source above. Add a hook-installer task.
+
+### ⚠️ UPDATE 2026-06-28 (SHIPPED) — single-question gate (found in live smoke)
+
+The feature is implemented and smoke-passed end-to-end on Claude Code v2.1.195
+(hook→sidecar→`read_pending_askq`→drive→Review-verify→submit→cleanup; installer registers the
+hook into every `~/.claude*` config dir's `settings.json`, idempotent, preserving existing hooks).
+
+**Gotcha confirmed live:** a **single-question** AskUserQuestion has **NO Review screen** —
+`Enter` on the option **submits immediately**. The verify-before-submit drive (which expects the
+Review screen that only appears for 2+ tabs) therefore over-acts on a 1-question prompt: it
+submits, finds no Review, sends a stray `Esc` (interrupts Claude), and returns a false 409.
+
+**Fix shipped:** `sse._ask_question_event` gates the `ask_question` event to
+`len(questions) >= 2`. A single-question AskUserQuestion falls through to the pre-existing
+`OptionButtons` single-list path (which drives one question correctly via the `/select` flow).
+The native stepper is **multi-question only** — consistent with the Non-goals above. Cleanup
+(`clear_pending_askq`) fires on answer-success and on `registry.kill` (both verified live); not on
+`/clear` (a new `session_id` makes the old sidecar harmless litter).
