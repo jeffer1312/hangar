@@ -7,6 +7,12 @@ from typing import AsyncIterator, Optional
 from watchfiles import awatch
 from app.models import ChatEvent
 
+# Backfill do SSE: re-envia so as ULTIMAS N linhas do transcript em cada (re)conexao, nao o arquivo
+# inteiro. Antes o follow() comecava em pos=0 e re-shippava dezenas de MB a cada reconexao do mobile
+# (background/foreground, watchdog). 200 e a maneta de calibracao: cobre o gap de uma reconexao normal
+# (poucos segundos) com folga; sessao com <= 200 linhas mantem o backfill completo (offset 0).
+_BACKFILL_LINES = 200
+
 # Imagem colada no TERMINAL (TUI do Claude). O Claude grava 2 coisas: a msg do user com um bloco
 # `image` (base64) + um marcador "[Image #N]" no texto; E uma entrada user SINTETICA cujo texto é só
 # "[Image: source: <path>]" (referência). A 1ª vira bubble com thumbnail (image_count); a 2ª é meta.
@@ -202,8 +208,32 @@ class TranscriptTailer:
                     evs.append(ev)
             return evs, fh.tell()
 
+    def _tail_offset(self, max_lines: int) -> int:
+        # Offset do inicio da (max_lines)-esima linha a partir do fim -> o follow() faz backfill so do
+        # tail. Conta LINHAS completas (terminadas em \n) sem parsear JSON (mais barato que _read_from).
+        # <= max_lines linhas, ou arquivo ausente -> 0 (backfill do inicio = comportamento antigo).
+        # ponytail: varre o arquivo pra frente sem parse; reverse-seek so se o disco virar gargalo.
+        if not self.path.exists():
+            return 0
+        starts: list[int] = []
+        with self.path.open(encoding="utf-8", errors="replace") as fh:
+            while True:
+                start = fh.tell()
+                line = fh.readline()
+                if not line:
+                    break
+                if not line.endswith("\n"):
+                    break  # ultima linha incompleta (append em voo): ignora, nao registra o start
+                starts.append(start)
+        if len(starts) <= max_lines:
+            return 0
+        return starts[-max_lines]
+
     async def follow(self) -> AsyncIterator[ChatEvent]:
-        pos = 0
+        # Backfill so do TAIL (ultimas _BACKFILL_LINES linhas), nao o arquivo inteiro. _tail_offset
+        # devolve 0 quando ha poucas linhas -> sessao curta mantem o backfill completo. A leitura roda
+        # no threadpool (nao bloqueia o loop); custo <= o _read_from(0) de antes (varredura sem parse).
+        pos = await asyncio.to_thread(self._tail_offset, _BACKFILL_LINES)
         # backfill inicial + cada append: a leitura de arquivo roda no threadpool (nao bloqueia o loop).
         evs, pos = await asyncio.to_thread(self._read_from, pos)
         for ev in evs:
