@@ -47,8 +47,18 @@
     dragY = 0;
   }
 
+  // Fechar por backdrop SO quando o gesto comeca E termina no backdrop. Sem isto, o overlay
+  // nativo do <select> no iOS, ao ser descartado, dispara um click-fantasma que cai no backdrop
+  // e fechava o sheet inteiro antes do usuario chegar no botao. O click sintetico nao vem com um
+  // pointerdown real no backdrop -> pressOnBackdrop fica false -> nao fecha.
+  let pressOnBackdrop = false;
+  function onBackdropPointerDown(e: PointerEvent) {
+    pressOnBackdrop = e.target === e.currentTarget;
+  }
   function onBackdropClick(e: MouseEvent) {
-    if (e.target === e.currentTarget) onClose();
+    const close = pressOnBackdrop && e.target === e.currentTarget;
+    pressOnBackdrop = false;
+    if (close) onClose();
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -62,7 +72,7 @@
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="backdrop" onclick={onBackdropClick}>
+  <div class="backdrop" onpointerdown={onBackdropPointerDown} onclick={onBackdropClick}>
     <div
       class="sheet"
       class:snapping
