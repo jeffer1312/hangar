@@ -7,6 +7,7 @@ from app.preview import PreviewBroker, _norm
 from app.models import PreviewEvent
 from app.registry import SessionRegistry
 from app.askquestion import read_pending_askq
+from app.terminal_input import drain
 
 
 def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
@@ -142,6 +143,9 @@ async def merged_events(name: str, jsonl: str):
 
     current_jsonl = jsonl          # atualizado no __reset__ (ex: /clear abre novo transcript)
     ask_q_emitted = False          # impede reemissao enquanto o mesmo prompt permanece na tela
+    prev_deliverable = False     # init False -> 1o estado entregavel pos-(re)connect tambem dispara 1
+                                 # drain (recovery de restart/reconexao com pendencia)
+    drain_tasks: set = set()     # drains fire-and-forget; NAO entram em `tasks` (nao cancelar no disconnect)
 
     tail_task = asyncio.create_task(tail_pump(jsonl))
     tasks = [
@@ -191,6 +195,21 @@ async def merged_events(name: str, jsonl: str):
                     if ask_ev:
                         ask_q_emitted = True
                         yield ask_ev
+                # Drain gatilho: quando o pane volta a aceitar texto livre (overlay/menu fechou, ou a
+                # sessao voltou ao idle), entrega as enfileiradas pendentes. Deriva a entregabilidade
+                # dos campos do PROPRIO StateEvent — reusa o stream do StateMonitor, sem novo poll.
+                deliverable_now = (
+                    parsed_state.get("state") not in ("awaiting_input", "dead")
+                    and not parsed_state.get("overlay")
+                )
+                if deliverable_now and not prev_deliverable:
+                    # fire-and-forget no threadpool (drain bloqueia em send_prompt) — nunca await no
+                    # loop SSE. FORA de `tasks`: deixar um drain em voo terminar apos o phone
+                    # desconectar e correto (entrega duravel nao depende do phone ficar conectado).
+                    dt = asyncio.create_task(asyncio.to_thread(drain, name, current_jsonl))
+                    drain_tasks.add(dt)
+                    dt.add_done_callback(drain_tasks.discard)
+                prev_deliverable = deliverable_now
             yield {"event": event, "data": data}
     finally:
         # So cancela e retorna (NAO await): um pump preso num asyncio.to_thread (tmux) nao e
