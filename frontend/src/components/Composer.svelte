@@ -9,6 +9,7 @@
   import { tick } from 'svelte';
   import IconSend from './icons/IconSend.svelte';
   import IconInterrupt from './icons/IconInterrupt.svelte';
+  import IconAttach from './icons/IconAttach.svelte';
   import ContextRing from './ContextRing.svelte';
   import ModelEffortSheet from './ModelEffortSheet.svelte';
   import SlashSuggest from './SlashSuggest.svelte';
@@ -79,10 +80,6 @@
 
   const pillModel = $derived(chosenModel ?? status?.model ?? null);
   const pillEffort = $derived(chosenEffort ?? status?.effort ?? null);
-  const pillText = $derived(
-    pillModel ? pillModel + (pillEffort ? ' · ' + pillEffort : '') : 'Modelo'
-  );
-
   // Reconciliacao do modelo: quando o statusline confirma a escolha (substring match),
   // solta a escolha otimista pra que mudancas feitas direto no terminal reaparecam.
   $effect(() => {
@@ -149,6 +146,14 @@
   function handleInput() {
     sendError = '';
     autoGrow();
+  }
+
+  // Tap em qualquer area do composer que nao seja um controle -> foca o input.
+  // .focus() dentro do gesto de clique levanta o teclado no mobile.
+  function focusInput(e: MouseEvent) {
+    const t = e.target as HTMLElement;
+    if (t.closest('button, a, input, textarea, [role="option"], [role="listbox"]')) return;
+    textareaEl?.focus();
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -272,7 +277,8 @@
     aria-hidden="true"
     tabindex="-1"
   />
-  <div class="composer-card">
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div class="composer-card" onclick={focusInput}>
     <div class="composer-top">
       <div class="top-left">
         <button class="slash-btn" onclick={() => (commandSheetOpen = true)} aria-label="Comandos">
@@ -341,11 +347,14 @@
           onclick={() => (sheetOpen = true)}
           aria-label="Modelo, esforço e contexto"
         >
-          <span class="pill-text">{pillText}</span>
+          <span class="pill-label">
+            <span class="pill-model">{pillModel ?? 'Modelo'}</span>
+            {#if pillEffort}<span class="pill-effort">· {pillEffort}</span>{/if}
+          </span>
           <ContextRing pct={status?.ctxPct ?? null} />
         </button>
         <button class="attach-btn" onclick={() => fileInput?.click()} aria-label="Anexar imagem">
-          <span class="attach-glyph" aria-hidden="true">📎</span>
+          <IconAttach size={20} />
         </button>
       </div>
 
@@ -354,7 +363,7 @@
           <!-- Pensando + input vazio -> o slot vira STOP. Ao digitar/colar algo, volta a ser SEND
                (enfileira a msg). Um slot so -> ganha espaco. -->
           <button class="stop-btn" onclick={() => (confirmStopOpen = true)} aria-label="Interromper Claude">
-            <IconInterrupt size={16} />
+            <IconInterrupt size={18} />
           </button>
         {:else}
           <button
@@ -516,30 +525,51 @@
     flex-shrink: 0;
   }
 
-  .pill-text {
+  .pill-label {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .pill-model {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 130px;
+    color: var(--text-primary);
+    font-weight: 600;
   }
 
-  /* Botao [ / ]: abre o CommandSheet. Alvo de 44px, visual leve (so feedback no :active). */
+  .pill-effort {
+    flex-shrink: 0;
+    color: var(--text-muted);
+  }
+
+  /* Botao [ / ]: abre o CommandSheet. Chip compacto na faixa do topo, igual ao cost-chip.
+     min-height/min-width:0 sobrescrevem o alvo global de 44px pra manter o chip enxuto
+     (tap confortavel dentro da faixa). */
   .slash-btn {
-    width: 44px;
-    height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 28px;
+    min-height: 0;
+    min-width: 0;
+    padding: 0 var(--space-2);
     flex-shrink: 0;
     border-radius: var(--radius-md);
-    background: transparent;
+    background: var(--bg-hover);
     color: var(--text-secondary);
   }
 
   .slash-btn:active {
-    background: var(--bg-hover);
+    background: var(--bg-elevated);
   }
 
   .slash-glyph {
     font-family: var(--font-mono);
-    font-size: var(--text-lg);
+    font-size: var(--text-sm);
     font-weight: 600;
     line-height: 1;
   }
@@ -555,15 +585,14 @@
     width: 44px;
     height: 44px;
     flex-shrink: 0;
-    background: transparent;
-    border: 1px solid var(--error);
+    background: var(--bg-elevated);
     border-radius: var(--radius-md);
     color: var(--error);
     transition: background 180ms var(--ease-out);
   }
 
   .stop-btn:active {
-    background: rgba(255, 69, 58, 0.08);
+    background: var(--bg-hover);
   }
 
   /* Linha fina no topo do card: slash a esquerda, custo a direita (fora do control-row). */
@@ -715,7 +744,7 @@
     color: var(--text-secondary);
   }
   .attach-btn:active { background: var(--bg-hover); }
-  .attach-glyph { font-size: var(--text-lg); line-height: 1; }
+  .attach-btn :global(svg) { display: block; }
 
   .send-error {
     font-size: var(--text-xs);

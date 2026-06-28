@@ -6,12 +6,8 @@
   width={size}
   height={size}
   viewBox="0 0 24 24"
-  fill="none"
-  stroke="currentColor"
-  stroke-width="2"
-  stroke-linecap="round"
-  stroke-linejoin="round"
+  fill="currentColor"
   aria-hidden="true"
 >
-  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+  <rect x="6" y="6" width="12" height="12" rx="2.5" ry="2.5" />
 </svg>
