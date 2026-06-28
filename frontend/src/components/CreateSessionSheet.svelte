@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import BottomSheet from './BottomSheet.svelte';
   import FolderScanner from './FolderScanner.svelte';
   import { getSessions, listClaudeConfigs } from '../lib/api';
@@ -54,8 +55,13 @@
 
   // Zera tudo a cada abertura. Fixa o servidor-alvo (ativo atual ou o 1º) e o seleciona, pra o
   // scanner do passo 1 já varrer o backend certo.
+  // IMPORTANTE: o reset depende SO de `open`. O corpo le `servers`/getActiveId DENTRO de untrack
+  // senao o effect vira reativo a `servers` -> e a tela mae re-atribui `servers = listServers()`
+  // a cada poll de 5s, o que re-disparava o reset no MEIO do fluxo (perdia a pasta escolhida e
+  // voltava pro passo 1). untrack mantem o reset so na transicao de abertura.
   $effect(() => {
-    if (open) {
+    if (!open) return;
+    untrack(() => {
       picked = null;
       name = '';
       takenNames = new Set();
@@ -71,7 +77,7 @@
       listClaudeConfigs()
         .then((cs) => { configs = cs; selectedConfig = cs.find((c) => c.active)?.path ?? cs[0]?.path ?? null; })
         .catch(() => {});
-    }
+    });
   });
 
   // Ao escolher a pasta: nome default = basename UNICO (sufixado se ja houver sessao com esse nome).
