@@ -36,7 +36,9 @@
   // ja no PRIMEIRO paint a fatia e a cauda, sem montar os 5000 e so depois encolher.
   // WINDOW = botao de calibragem (ajuste no device real); tool_result e filtrado depois, entao bolhas < WINDOW.
   const WINDOW = 120;
+  const PAGE = 100;            // quantos eventos antigos revelar por vez ao rolar pro topo (paginacao)
   let windowEnd = $state(events.length);
+  let extra = $state(0);       // eventos revelados ALEM da janela padrao (cresce ao rolar pro topo)
 
   // Mantem o box do preview rolado no fundo: a cauda desliza DENTRO da caixa (altura fixa) em vez de
   // empurrar/pular o layout do chat. Roda a cada update do preview.
@@ -49,6 +51,22 @@
     if (!listEl) return;
     const gap = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
     atBottom = gap < 64; // threshold ~64px do fim
+    // Perto do topo + ainda ha eventos antigos fora da janela -> revela a proxima pagina.
+    if (listEl.scrollTop < 200 && hasOlder) revealOlder();
+  }
+
+  let revealing = false;
+  async function revealOlder() {
+    if (revealing || !listEl || !hasOlder) return;
+    revealing = true;
+    // Preserva a posicao de leitura: o conteudo cresce PRA CIMA (prepend); mede a altura antes, revela,
+    // e empurra o scrollTop pelo delta -> a tela nao "pula" pro topo.
+    const prevH = listEl.scrollHeight;
+    const prevTop = listEl.scrollTop;
+    extra += PAGE;
+    await tick();
+    if (listEl) listEl.scrollTop = prevTop + (listEl.scrollHeight - prevH);
+    revealing = false;
   }
 
   // Build a map of tool_use_id -> tool_result
@@ -68,8 +86,13 @@
   // Fatiamos o array CRU por indice ANTES de filtrar -> windowEnd/length sao indices crus; filtrar a
   // fatia mantem o {#each} keyed (ev.id) valido. toolResults (acima) segue sobre o array INTEIRO, entao
   // um tool_use na janela ainda resolve seu result.
+  // Inicio da janela = windowEnd - (WINDOW + extra): por padrao so a cauda; cada reveal cresce `extra`,
+  // revelando uma pagina de eventos MAIS ANTIGOS (paginacao pra cima). Os antigos JA estao em `events`
+  // (o /history carrega tudo) -> revelar e so expandir a fatia, sem chamada ao backend.
+  const windowStart = $derived(windowStartFor(windowEnd, WINDOW + extra));
+  const hasOlder = $derived(windowStart > 0);   // ainda ha eventos fora da janela (acima)?
   const visibleEvents = $derived(
-    events.slice(windowStartFor(windowEnd, WINDOW), windowEnd).filter(ev => ev.kind !== 'tool_result')
+    events.slice(windowStart, windowEnd).filter(ev => ev.kind !== 'tool_result')
   );
 
   // Claude trabalhando? -> msgs da fila durável (id "queued-") ficam atenuadas (= na fila).
@@ -87,6 +110,9 @@
     // escrever windowEnd=len o effect re-roda e nextWindowEnd vira no-op.
     const next = nextWindowEnd(atBottom, len, windowEnd);
     if (next !== windowEnd) windowEnd = next;
+    // De volta ao fim (live): re-ancora na janela-cauda, descartando o que foi revelado pra cima ->
+    // limita o mount count de novo. So reseta quando colado no fim (lendo historico, extra persiste).
+    if (atBottom && extra !== 0) extra = 0;
     if (!atBottom) return;
     tick().then(scrollToBottom);
   });
