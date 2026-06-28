@@ -290,9 +290,12 @@
       // offsetTop = quanto o iOS PANEIA a visual viewport ao abrir o teclado (body travado -> e pan
       // VISUAL). Compensamos via `top` em position:relative (sem transform: nao promove layer com
       // tiled-backing -> SEM retangulo preto; nao cria containing-block que prenda os sheets fixed).
-      const top = (vv.offsetTop || 0) + 'px';
+      // EXPERIMENTO teclado iOS (#1): o pan (offsetTop) e bugado no iOS 26 (Apple #800125) e deixava o
+      // composer com um vao acima do teclado. Mata o pan (scrollTo 0) e ancora top=0 -> a tela passa a
+      // ser SO a altura visivel (vv.height), com o dock colado no rodape dela = topo do teclado.
+      window.scrollTo(0, 0);
       if (screenEl.style.height !== h) screenEl.style.height = h;
-      if (screenEl.style.top !== top) screenEl.style.top = top;
+      if (screenEl.style.top !== '0px') screenEl.style.top = '0px';
       if (screenEl.style.transform) screenEl.style.transform = '';
     }
     function onFocusIn() {
