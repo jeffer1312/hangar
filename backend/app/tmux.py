@@ -1,3 +1,4 @@
+import os
 import subprocess
 
 RUN = subprocess.run
@@ -41,20 +42,25 @@ def has_session(name: str) -> bool:
     return _run(["tmux", "has-session", "-t", name]).returncode == 0
 
 
-def new_session(name: str, cwd: str, command: str) -> bool:
+def new_session(name: str, cwd: str, command: str, config_dir: str | None = None) -> bool:
     # -e: cores corretas do Claude Code DENTRO do tmux (o claude e spawnado direto, sem shell que
     # leia o rc). COLORTERM=24-bit + CLAUDE_CODE_TMUX_TRUECOLOR curto-circuita o downgrade pra 256
     # (gate pink). O TERM nao-tmux (gate teal) vem do default-terminal no ~/.tmux.conf.
     # Ver docs/tmux-truecolor-setup.md.
     # Retorna False quando o tmux recusa (ex: nome duplicado) -> o caller NAO pode mapear a sessao
     # nova pra um jsonl, senao reusaria a sessao existente de mesmo nome (= "sessao nova foi pra 0").
-    cp = _run([
+    cfg = config_dir or os.environ.get("CLAUDE_CONFIG_DIR")
+    args = [
         "tmux", "new-session", "-d", "-s", name, "-c", cwd, "-x", "200", "-y", "50",
         "-e", "COLORTERM=truecolor",
         "-e", "CLAUDE_CODE_TMUX_TRUECOLOR=1",
-        command,
-    ])
-    return cp.returncode == 0
+    ]
+    if cfg:
+        # sessao app-criada usa o MESMO config dir que o backend (ou o escolhido), em vez de cair
+        # no ~/.claude default (deslogado -> tela de boas-vindas).
+        args += ["-e", f"CLAUDE_CONFIG_DIR={cfg}"]
+    args.append(command)
+    return _run(args).returncode == 0
 
 
 def kill_session(name: str) -> None:
