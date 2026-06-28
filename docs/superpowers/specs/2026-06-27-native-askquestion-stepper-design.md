@@ -175,3 +175,77 @@ mirror path is unchanged and always available.
 - `frontend/src/lib/types.ts` + `api.ts` — types + `answerQuestions()`.
 - `frontend/src/components/AskQuestionSheet.svelte` (new) + wiring in `Chat.svelte`.
 - Tests across the above.
+
+---
+
+## ⚠️ UPDATE 2026-06-28 — DATA SOURCE REVISION (read this BEFORE implementing)
+
+The original design above assumed the structured `AskUserQuestion` payload comes from the
+**transcript jsonl**. That is WRONG for the live case. A `Task 6` smoke proved it, and a
+follow-up investigation found the right source. **The driving model (§"Investigation
+findings"), the `/answer` endpoint+driving (§3), the frontend stepper (§2), and the types
+are all still valid — only the DATA SOURCE (§1 Detection) changes.**
+
+### Why the jsonl source fails
+
+While an `AskUserQuestion` prompt is **pending** (rendered, awaiting the answer), the
+assistant `tool_use` block is **NOT yet written to the jsonl** — it is flushed only AFTER
+the user answers (the assistant turn completes). Confirmed empirically: a live pending
+prompt → **zero** assistant `tool_use` lines in the jsonl. (My earlier success parsing the
+convite-casamento jsonl was on an ALREADY-ANSWERED prompt — the wrong case.)
+
+### Three sources investigated
+
+| Source | Verdict |
+| --- | --- |
+| **transcript jsonl** | ❌ payload only present AFTER answering — useless for the live prompt |
+| **PreToolUse hook on AskUserQuestion** | ✅ **CHOSEN** — full structured payload at the right moment, prompt stays functional (tested on v2.1.195) |
+| **TUI screen scrape** (`state.py` already parses the current tab's `question`+`options`; `OptionButtons` renders it) | ✅ works today but only one tab at a time; **fallback** if the hook ever breaks |
+
+### The chosen source — a `PreToolUse` hook (EMPIRICALLY VERIFIED on Claude Code v2.1.195)
+
+A minimal `PreToolUse` hook with matcher `AskUserQuestion` fires the moment the prompt
+appears and receives the **full structured payload** on stdin. Tested with the hook
+`{"type":"command","command":"cat > <file>"}`:
+
+- **It captured** `tool_input.questions` = the exact `[{question, header, multiSelect,
+  options:[{label, description}]}]` structure.
+- The hook stdin JSON also includes: `session_id`, `transcript_path`, `cwd`,
+  `permission_mode`, `effort`, `hook_event_name`, `tool_name`, `tool_use_id`. → use
+  `session_id` to key the captured file per session so the backend maps it to the session.
+- **The prompt still rendered and remained answerable** — the documented "PreToolUse breaks
+  AskUserQuestion / empty response" bug did NOT manifest with this minimal, no-stdout hook
+  on v2.1.195.
+
+### Revised detection (replaces §1)
+
+1. **Install** a minimal `PreToolUse`/`AskUserQuestion` hook into the Claude config dir's
+   settings (the claude-pocket installer ensures it). The hook writes the stdin JSON to a
+   per-session sidecar, e.g. `<config_dir>/.claude-pocket-askq/<session_id>.json`. Keep the
+   hook MINIMAL (read stdin → write file → exit 0, no stdout) to avoid the known breakage.
+2. **Backend:** on `awaiting_input`, look up the sidecar for the resolving session's
+   `session_id`; if present, emit `ask_question` with its `tool_input.questions`. (Replaces
+   the jsonl parse in Tasks 1–2.)
+3. **Cleanup:** clear the sidecar when the prompt is answered / the session moves on (mirror
+   the durable-queue lifecycle: clear on answer-submit and on session kill).
+
+### 🔧 MAINTENANCE WARNING — do not lose this
+
+This source relies on **undocumented-stable PreToolUse behavior** for an interactive tool
+that has a **known bug class** (PreToolUse can make `AskUserQuestion` return empty / not
+render). It works on **v2.1.195** with a minimal hook, but:
+
+- **Keep the hook minimal** (no stdout, fast exit). A heavier hook may trip the bug.
+- **Re-verify on every Claude Code upgrade.** If a future version breaks the prompt when
+  the hook is installed, **fall back to the TUI scrape** (the `state.py`/`OptionButtons`
+  path already renders the current tab; extend it tab-by-tab — see the table above).
+- The reproduction is in this session's history: install the hook in an isolated config,
+  induce a 2-question AskUserQuestion, confirm the sidecar gets `tool_input.questions` AND
+  the pane still shows the prompt footer (`Enter to select · … to navigate`).
+
+### What carries over from the already-committed work (commits d6d3f9..a84ddef)
+
+- **Reuse:** the `/answer` driving + Review-screen verify (`terminal_input.answer_questions`),
+  the frontend types + `answerQuestions()`, and the `AskQuestionSheet` stepper component.
+- **Rework:** Tasks 1–2 (the jsonl parser + the jsonl-based emit) → swap to the hook sidecar
+  source above. Add a hook-installer task.

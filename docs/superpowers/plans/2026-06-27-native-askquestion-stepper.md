@@ -352,3 +352,80 @@ git commit -m "feat(frontend): native AskUserQuestion stepper sheet + wiring"
 - **Spec coverage:** detection (T1), event (T2), drive+verify+endpoint (T3), types/api (T4), stepper+wiring (T5), tests throughout, smoke (T6). All mapped.
 - **Type consistency:** `AskQuestionItem{header,question,multiSelect,options[{label,description}]}` identical in models.py / types.ts. `AnswerItem` kinds (option/text/chat) identical across api.py body, terminal_input driving, types.ts, and the sheet's builder. `type_index = options.length`, `chat_index = options.length+1` consistent between frontend builder and backend driving.
 - **The risky part (driving) is anchored** to the empirically-confirmed model in the spec; the Review-screen verify (T3) is the safety net — a wrong drive Escapes and 409s, never submits, and the frontend falls back to the mirror (T5).
+
+---
+
+# ⚠️ REVISED PLAN 2026-06-28 — hook-based data source (SUPERSEDES Tasks 1–2)
+
+See the spec's "UPDATE 2026-06-28" section. The jsonl source (old T1–T2) is WRONG: the
+structured payload isn't in the jsonl while the prompt is pending. The verified source is a
+**`PreToolUse` hook** on `AskUserQuestion` (captures the full payload + `session_id` the
+moment the prompt appears, prompt stays functional on v2.1.195).
+
+**Status of already-committed work (d6d3f9..a84ddef):**
+- ✅ KEEP & reuse: `models.py` `AskQuestion*` (T1 models), `terminal_input.answer_questions`
+  + verify (T3), `/answer` endpoint (T3), frontend types + `answerQuestions()` (T4),
+  `AskQuestionSheet.svelte` + Chat wiring (T5).
+- ♻️ REWORK: the jsonl parse (`askquestion.parse_ask_question`) + the jsonl-based
+  `ask_question` emit (T2) → replace with the hook-sidecar source below.
+
+## Task R1: PreToolUse hook installer + the hook script
+
+**Files:** Create `backend/hooks/askq_capture.py` (the hook command) + a backend helper that
+ensures the hook is registered in the target config's `settings.json`. Test: a unit test of
+the installer (idempotent add) + a test of the capture script (stdin JSON → sidecar file).
+
+- The hook **script** (minimal — read stdin, write a per-session sidecar, exit 0, NO stdout):
+```python
+#!/usr/bin/env python3
+# ponytail: hook minimo — le o JSON do PreToolUse no stdin e grava o payload do AskUserQuestion
+# num sidecar por session_id. SEM stdout (o bug conhecido do PreToolUse + AskUserQuestion mora
+# em conflito de stdout/stdin -> nada de imprimir). Falha em silencio (nunca trava o prompt).
+import sys, json, os
+try:
+    raw = sys.stdin.read()
+    o = json.loads(raw)
+    if o.get("tool_name") != "AskUserQuestion":
+        sys.exit(0)
+    base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+    d = os.path.join(base, ".claude-pocket-askq")
+    os.makedirs(d, exist_ok=True)
+    sid = o.get("session_id") or "unknown"
+    with open(os.path.join(d, sid + ".json"), "w", encoding="utf-8") as fh:
+        fh.write(raw)
+except Exception:
+    pass
+sys.exit(0)
+```
+- The **installer** ensures `settings.json` (in the config dir the backend uses, and the dirs
+  from `list_config_dirs()`) contains a `PreToolUse` entry
+  `{"matcher":"AskUserQuestion","hooks":[{"type":"command","command":"python3 <abs path>/askq_capture.py"}]}`,
+  idempotently (don't duplicate if already present). Run it on backend startup.
+
+## Task R2: backend reads the sidecar → emit `ask_question` (replaces T1 parse + T2 emit)
+
+**Files:** Modify `backend/app/askquestion.py` — replace `parse_ask_question(jsonl)` with
+`read_pending_askq(config_dir, session_id) -> AskQuestion | None` that reads
+`<config_dir>/.claude-pocket-askq/<session_id>.json` and validates `tool_input.questions`
+into `AskQuestion`. Modify `sse.py` to call it (it already has the per-session config dir +
+session_id from the resolution layer) when `awaiting_input`, and emit `ask_question` once.
+Keep the AskQuestion models. Update the tests (sidecar fixture instead of jsonl fixture).
+
+## Task R3: sidecar cleanup lifecycle
+
+**Files:** `terminal_input.answer_questions` (on successful submit, delete the session's
+sidecar) + `registry.kill` (delete the sidecar for the name's session) + on `/clear`. Mirror
+the durable-queue lifecycle so a stale sidecar never re-opens the stepper.
+
+## Tasks T3, T4, T5 — UNCHANGED (already committed; reuse as-is)
+
+## Task R6: full verification + manual smoke (hook-based)
+
+- Backend suite + ruff.
+- Restart (the installer registers the hook on startup).
+- Smoke: create a throwaway session, induce a 2-question AskUserQuestion (1 single, 1 multi),
+  confirm (a) the sidecar `<config>/.claude-pocket-askq/<session_id>.json` gets written by the
+  hook AND the prompt still renders, (b) the `ask_question` SSE event fires with the payload,
+  (c) answering via the stepper drives + submits (no "User declined"), (d) a forced mismatch
+  Escapes + opens the mirror. Kill the throwaway. (Reproduction steps are in the
+  2026-06-27/28 session history.)
