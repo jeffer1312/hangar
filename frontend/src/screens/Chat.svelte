@@ -9,6 +9,7 @@
   import GitSheet from '../components/GitSheet.svelte';
   import ActivitySheet from '../components/ActivitySheet.svelte';
   import TerminalMirror from '../components/TerminalMirror.svelte';
+  import AskQuestionSheet from '../components/AskQuestionSheet.svelte';
   import {
     getHistory,
     sendInput,
@@ -18,11 +19,12 @@
     getSessions,
     createSession,
     getWorkflows,
+    answerQuestions,
   } from '../lib/api';
   import { parseStatusLine } from '../lib/statusline';
   import { listServers } from '../lib/auth';
   import { deriveActivity } from '../lib/activity';
-  import type { ChatEvent, StateEvent, State, SessionInfo } from '../lib/types';
+  import type { ChatEvent, StateEvent, State, SessionInfo, AskQuestionPayload, AnswerItem } from '../lib/types';
 
   interface Props {
     sessionName: string;
@@ -54,6 +56,8 @@
   let usageOpen = $state(false);
   let gitOpen = $state(false);
   let activityOpen = $state(false);
+  let askPayload = $state<AskQuestionPayload | null>(null);
+  let askOpen = $state(false);
   let allSessions = $state<SessionInfo[]>([]);
 
   async function openSwitcher() {
@@ -189,6 +193,11 @@
 
     // Heartbeat do backend: so prova de vida (reseta o watchdog numa conexao ociosa, sem msgs).
     es.addEventListener('ping', () => armWatchdog());
+
+    // Stepper nativo AskUserQuestion: abre o sheet com as perguntas recebidas via SSE
+    es.addEventListener('ask_question', (e: MessageEvent) => {
+      try { askPayload = JSON.parse(e.data); askOpen = true; } catch {}
+    });
 
     // Preview ao vivo (best-effort) do bloco de assistente em voo. Full-replace; tambem e prova de
     // vida (mas NAO a unica — entre turnos nao ha preview, por isso o ping ancora o watchdog).
@@ -418,6 +427,17 @@
       console.error('interrupt error:', err);
     }
   }
+
+  // 409 (mismatch de verificação) ou erro inesperado -> cai no espelho TUI p/ finalizar manual
+  async function handleAnswer(answers: AnswerItem[]) {
+    try {
+      await answerQuestions(sessionName, answers);
+      askOpen = false;
+    } catch {
+      askOpen = false;
+      openMirror();
+    }
+  }
 </script>
 
 <div class="chat-screen" bind:this={screenEl}>
@@ -501,6 +521,14 @@
   <ActivitySheet open={activityOpen} {activity} {sessionName} onClose={() => (activityOpen = false)} />
 
   <TerminalMirror open={mirrorOpen} {sessionName} onClose={closeMirror} />
+
+  <AskQuestionSheet
+    open={askOpen}
+    payload={askPayload}
+    onSubmit={handleAnswer}
+    onClose={() => (askOpen = false)}
+    onFallback={openMirror}
+  />
 </div>
 
 <style>
