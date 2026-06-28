@@ -1,4 +1,7 @@
 <script lang="ts">
+  import Lottie from './Lottie.svelte';
+  import pensando from '../lib/lottie/pensando.json';
+
   interface Props {
     label?: string | null;
   }
@@ -11,13 +14,12 @@
 </script>
 
 <div class="spinner" role="status" aria-live="polite">
-  <span class="dot" aria-hidden="true"></span>
+  <Lottie data={pensando as any} size={22} />
   <span class="spinner-label">{stateLabel}</span>
 </div>
 
 <style>
   /* Linha slim, sem bubble/card — estilo da linha de spinner do Claude Code. */
   .spinner { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-1); animation: bubble-in 200ms var(--ease-out); }
-  .dot { width: 7px; height: 7px; border-radius: var(--radius-full); flex-shrink: 0; background: var(--pill-working-fg); animation: pulse-scale 1.4s ease-in-out infinite; }
   .spinner-label { font-size: var(--text-sm); color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>
