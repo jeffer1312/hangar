@@ -2,6 +2,8 @@ import time
 
 from app import model_picker as mp
 from app import tmux
+from app.pqueue import PromptQueue, _transcript_start_ts
+from app.state import classify, is_overlay
 from app.tmux import send_keys
 
 # Tempos de acomodacao do TUI entre toque e leitura do pane (o picker redesenha em overlay).
@@ -33,6 +35,52 @@ def _wait_input_ready(name: str, timeout: float = 12.0) -> bool:
         if time.monotonic() >= deadline:
             return False
         time.sleep(0.2)
+
+
+def deliverable(name: str) -> bool:
+    # Pode entregar texto livre AGORA? False se a sessao morreu (defer p/ recriacao, sem queimar 12s no
+    # _wait_input_ready) ou se ha overlay/menu aberto (digitar as cegas navegaria o menu errado). Erro
+    # de captura (sessao viva, pane ileg.) -> True: degrada pro envio de hoje, sem regressao.
+    if not tmux.has_session(name):
+        return False
+    try:
+        pane = _capture(name)
+    except Exception:
+        return True
+    state, _, _, _ = classify(pane)
+    return state != "awaiting_input" and not is_overlay(pane)
+
+
+def drain(name: str, jsonl: str) -> int:
+    """Entrega ao tty as entradas pendentes (delivered=False) quando o pane volta a aceitar texto.
+    Retorna quantas entregou. claim-1-envia-1: um crash entre o claim e o envio deixa NO MAXIMO 1
+    entrada 'stranded', nao o lote, e recheca o overlay (via send_prompt) a cada iteracao."""
+    q = PromptQueue(name)
+    # ECC: cheap-check SEM subprocess primeiro — a maioria das reconexoes nao tem pendencia; sem isto,
+    # todo (re)connect dispararia um capture-pane atoa (pressao no threadpool em rajada de mobile).
+    if not any(e.get("delivered") is False for e in q.load()):
+        return 0
+    start_ts = _transcript_start_ts(jsonl)   # poda entradas de sessao antiga (pre-/clear)
+    ti = TerminalInput()
+    sent = 0
+    while True:
+        claimed = q.claim_undelivered(min_ts=start_ts, limit=1)
+        if not claimed:
+            return sent
+        entry = claimed[0]
+        try:
+            result = ti.send_prompt(name, entry["text"])
+        except Exception:
+            # Falha POS-gate (tty caiu no meio): pode ter emitido tecla -> at-most-once, NAO reverte.
+            # ponytail: stranded-mas-visivel (a bubble queued- segue aparecendo, display ignora delivered);
+            # upgrade: render distinto / re-drain confirmado-por-transcript se virar reclamacao real.
+            return sent
+        if result == "deferred":
+            # send_prompt NAO tocou a TUI (overlay reabriu entre claim e envio): reverte com seguranca
+            # (provadamente pre-envio) e para — espera o proximo idle.
+            q.set_delivered(entry["id"], False)
+            return sent
+        sent += 1
 
 
 def _review_matches(screen: str, answers: list[dict]) -> bool:
@@ -123,11 +171,16 @@ def answer_questions(name: str, answers: list[dict]) -> None:
 
 
 class TerminalInput:
-    def send_prompt(self, name: str, text: str) -> None:
-        # Permite \n (multi-linha) e \t; rejeita os OUTROS controles (ESC etc. poderiam disparar acoes
-        # na TUI). Multi-linha vai por bracketed paste (insere as quebras sem submeter); depois Enter.
+    def send_prompt(self, name: str, text: str) -> str:
+        # Validacao PRE-envio: input ruim nunca toca a TUI nem entra na fila. \n/\t ok; outros controles nao.
         if any(ord(c) < 32 and c not in "\t\n" for c in text):
             raise ValueError("control characters not allowed in prompt")
+        # Gate de entregabilidade (chokepoint UNICO p/ texto livre — /input e drain passam por aqui):
+        # nao digitar as cegas num overlay (AskUserQuestion/picker), as teclas o corromperiam. Sem pane
+        # entregavel agora, devolve "deferred" SEM tocar a TUI; o caller enfileira pendente e o drain
+        # entrega quando o overlay fechar / a sessao voltar.
+        if not deliverable(name):
+            return "deferred"
         # Não enviar pra um TUI ainda bootando: as teclas seriam engolidas e a msg sumiria (core bug —
         # msg mandada logo após criar a sessão nunca chegava no claude). Espera o input ficar vivo.
         _wait_input_ready(name)
@@ -149,6 +202,7 @@ class TerminalInput:
         else:
             send_keys(name, text, literal=True)
             send_keys(name, "Enter")
+        return "sent"
 
     # Teclas de navegacao liberadas pro espelho do pane (TerminalMirror dirige overlays so-TUI:
     # /status, /config, /help, pickers). Allowlist (nao texto livre) pra so passar navegacao -> nada

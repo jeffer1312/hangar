@@ -3,17 +3,18 @@ from app import terminal_input as ti
 
 
 def test_send_prompt_waits_for_ready_before_sending():
-    # Core bug: msg mandada com claude bootando era engolida. send_prompt deve ESPERAR o input vivo
-    # (rodape 'bypass permissions') antes de enviar as teclas.
-    panes = iter(["bootando logo...", "bootando ainda...",
-                  "❯ \n⏵⏵ bypass permissions on (shift+tab to cycle)"])
-    captured = {"last": ""}
+    # Core bug: msg mandada com claude bootando era engolida. Com o gate de entregabilidade, o pane
+    # precisa estar VIVO (has_session) + entregavel (sem overlay) + READY (rodape 'bypass permissions')
+    # pra send_prompt enviar e devolver "sent". O wait-for-boot em si (rodape ausente -> espera/timeout)
+    # fica coberto por test_wait_input_ready_times_out_then_false.
+    ready = "❯ \n⏵⏵ bypass permissions on (shift+tab to cycle)"
     keys = []
-    with patch.object(ti, "_capture", lambda name: captured.__setitem__("last", next(panes, captured["last"])) or captured["last"]), \
+    with patch.object(ti.tmux, "has_session", return_value=True), \
+         patch.object(ti, "_capture", lambda name: ready), \
          patch.object(ti.time, "sleep", lambda *_: None), \
          patch.object(ti, "send_keys", lambda name, k, **kw: keys.append(k)):
-        ti.TerminalInput().send_prompt("s", "oi")
-    assert keys == ["oi", "Enter"]  # enviou SO depois de ficar pronto
+        assert ti.TerminalInput().send_prompt("s", "oi") == "sent"
+    assert keys == ["oi", "Enter"]  # enviou (pane entregavel + ready)
 
 
 def test_wait_input_ready_times_out_then_false():
