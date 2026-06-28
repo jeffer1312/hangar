@@ -232,3 +232,26 @@ def test_resolve_uses_session_config_dir(tmp_path, monkeypatch):
     assert tracked is True
     assert resolved == str(jpath)   # usou o config dir da SESSAO, nao o backend projects_dir
     SessionRegistry._jsonl_cache.clear()
+
+
+def test_mtime_fallback_uses_session_config_dir(tmp_path, monkeypatch):
+    # Branch 4 (fallback newest-by-mtime): sessao SEM --session-id deve achar o jsonl mais recente sob o
+    # config dir do pane pid (herdado pela arvore), nao o do backend. tracked=False.
+    cfg = tmp_path / ".cfg"
+    cwd = "/work/proj"
+    proj = cfg / "projects" / sanitize_cwd(cwd)
+    proj.mkdir(parents=True, exist_ok=True)
+    f = proj / "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.jsonl"
+    f.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(registry.tmux, "pane_pid", lambda name: 4242)
+    monkeypatch.setattr(registry, "_descendant_pids", lambda root: [4242])
+    monkeypatch.setattr(registry, "_cmdline", lambda pid: "claude")          # sem --session-id
+    monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
+
+    SessionRegistry._jsonl_cache.clear()
+    r = SessionRegistry(projects_dir=tmp_path / "backend-projects")          # dir do backend != cfg
+    resolved, tracked = r.resolve_tracked("cc", cwd)
+    assert tracked is False
+    assert resolved == str(f)        # achou sob o config dir da SESSAO, nao o do backend
+    SessionRegistry._jsonl_cache.clear()
