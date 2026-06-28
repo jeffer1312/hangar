@@ -54,3 +54,24 @@ def test_pane_pid_targets_exact_session():
     with patch.object(tmux, "RUN", return_value=MagicMock(stdout="540144\n", returncode=0)) as run:
         assert tmux.pane_pid("0") == 540144
     assert "=0:" in run.call_args[0][0]
+
+
+class _CP:
+    returncode = 0
+    stdout = ""
+    stderr = ""
+
+
+def test_new_session_forwards_explicit_config_dir():
+    captured = {}
+    with patch.object(tmux, "RUN", lambda args, **k: (captured.update(args=args) or _CP())):
+        tmux.new_session("s", "/tmp", "claude --session-id x", config_dir="/home/u/.claude-clean")
+    assert "CLAUDE_CONFIG_DIR=/home/u/.claude-clean" in captured["args"]
+
+
+def test_new_session_falls_back_to_backend_config_dir(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/home/u/.claude-work")
+    captured = {}
+    with patch.object(tmux, "RUN", lambda args, **k: (captured.update(args=args) or _CP())):
+        tmux.new_session("s", "/tmp", "claude --session-id x")
+    assert "CLAUDE_CONFIG_DIR=/home/u/.claude-work" in captured["args"]
