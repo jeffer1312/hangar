@@ -5,8 +5,8 @@ from app.models import StateEvent
 from app.sse import _ask_question_event
 
 
-def _state_json(state: str, overlay: bool) -> str:
-    return StateEvent(session="s", state=state, overlay=overlay).model_dump_json()
+def _state_json(state: str, overlay: bool = False, options=None) -> str:
+    return StateEvent(session="s", state=state, overlay=overlay, options=options).model_dump_json()
 
 
 _Q = [{"header": "Cor", "question": "Escolha", "multiSelect": True,
@@ -67,32 +67,37 @@ def test_clear_pending_askq_removes_sidecar(tmp_path):
     clear_pending_askq(jsonl)  # idempotente: chamar de novo nao levanta
 
 
-# --- _ask_question_event (gate inalterado: so dispara em awaiting_input + overlay) ---
+# --- _ask_question_event: awaiting_input + sidecar(>=2) + opcoes batendo (SEM depender de overlay) ---
 
-def test_ask_question_event_emits_when_awaiting_with_overlay(tmp_path):
-    jsonl, _ = _layout(tmp_path)
-    ev = _ask_question_event(_state_json("awaiting_input", overlay=True), jsonl)
+def test_ask_question_event_emits_when_options_match(tmp_path):
+    jsonl, _ = _layout(tmp_path)  # _Q[0] = Cor, opcoes A/B
+    ev = _ask_question_event(_state_json("awaiting_input", options=["A", "B", "Type something."]), jsonl)
     assert ev is not None
     assert ev["event"] == "ask_question"
-    parsed = json.loads(ev["data"])
-    assert parsed["questions"][0]["header"] == "Cor"
+    assert json.loads(ev["data"])["questions"][0]["header"] == "Cor"
+
+
+def test_ask_question_event_emits_even_without_overlay(tmp_path):
+    # O BUG corrigido: is_overlay e falso p/ AskUserQuestion (rodape fora das ultimas 8 linhas). O
+    # evento DEVE disparar com overlay=False desde que as opcoes do menu batam com o sidecar.
+    jsonl, _ = _layout(tmp_path)
+    assert _ask_question_event(_state_json("awaiting_input", overlay=False, options=["A", "B"]), jsonl) is not None
 
 
 def test_ask_question_event_none_when_working(tmp_path):
     jsonl, _ = _layout(tmp_path)
-    assert _ask_question_event(_state_json("working", overlay=False), jsonl) is None
+    assert _ask_question_event(_state_json("working", options=["A", "B"]), jsonl) is None
 
 
-def test_ask_question_event_none_when_no_overlay(tmp_path):
-    # awaiting_input sem rodape de abas = menu nativo simples (nao AskUserQuestion tabulado)
+def test_ask_question_event_none_when_options_mismatch(tmp_path):
+    # Sidecar velho (Cor: A/B) sobre OUTRO prompt cujo menu e Sim/Nao -> NAO abre o stepper (freshness).
     jsonl, _ = _layout(tmp_path)
-    assert _ask_question_event(_state_json("awaiting_input", overlay=False), jsonl) is None
+    assert _ask_question_event(_state_json("awaiting_input", options=["Sim", "Nao"]), jsonl) is None
 
 
 def test_ask_question_event_none_for_single_question(tmp_path):
-    # 1 pergunta: o TUI submete direto no Enter da opcao (sem tela de Review), entao o stepper
-    # com verify-before-submit nao serve -> cai no caminho do OptionButtons. Gate: nao emite.
+    # 1 pergunta -> cai no OptionButtons (TUI submete no Enter, sem Review). Gate: nao emite.
     one = [{"header": "Cor", "question": "Escolha", "multiSelect": False,
             "options": [{"label": "A", "description": ""}]}]
     jsonl, _ = _layout(tmp_path, questions=one)
-    assert _ask_question_event(_state_json("awaiting_input", overlay=True), jsonl) is None
+    assert _ask_question_event(_state_json("awaiting_input", options=["A"]), jsonl) is None

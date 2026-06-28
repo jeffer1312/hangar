@@ -11,22 +11,28 @@ from app.terminal_input import drain
 
 
 def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
-    """Retorna o evento SSE ask_question quando o estado for awaiting_input com overlay
-    (rodape de navegacao por abas, indicando AskUserQuestion estruturado). Caso contrario, None."""
+    """Retorna o evento SSE ask_question p/ o AskUserQuestion MULTI-pergunta (tabbed), ou None.
+    Dispara em awaiting_input + sidecar do hook com >=2 perguntas cujas opcoes batem com o menu atual."""
     try:
         obj = json.loads(state_json)
     except (json.JSONDecodeError, ValueError):
         return None
-    if obj.get("state") != "awaiting_input" or not obj.get("overlay"):
+    if obj.get("state") != "awaiting_input":
         return None
     payload = read_pending_askq(jsonl)
-    if payload is None:
+    # 1 pergunta: o TUI submete direto no Enter da opcao (sem tela de Review) -> cai no OptionButtons
+    # (menu de lista unica, non-goal do spec). So multi-pergunta abre o stepper.
+    if payload is None or len(payload.questions) < 2:
         return None
-    # ponytail: o stepper nativo so vale pro AskUserQuestion MULTI-pergunta (tabbed). Com 1 pergunta
-    # o TUI submete direto no Enter da opcao (sem tela de Review pra verificar antes), entao o drive
-    # com verify-before-submit nao se aplica — e o caso de 1 pergunta cai no caminho ja existente do
-    # OptionButtons (menu de lista unica, non-goal do spec). Gate aqui evita disparar o stepper nele.
-    if len(payload.questions) < 2:
+    # NAO depende de `overlay`: is_overlay e fragil p/ AskUserQuestion — o rodape de navegacao sai das
+    # ultimas 8 linhas do pane (linhas em branco no fim) -> overlay=False -> o stepper NUNCA abria e caia
+    # no OptionButtons. Freshness pelo SIDECAR x menu atual: o sidecar nao e limpo se respondido pela TUI
+    # (so no /answer + kill), entao confere que as opcoes da 1a pergunta batem com as do menu corrente
+    # (classify) -> sidecar velho sobre OUTRO prompt (ex: permissao) nao abre o stepper.
+    # ponytail: opcao truncada no pane faria o subset falhar -> degrada pro OptionButtons (= hoje), sem regressao.
+    first_opts = {o.label for o in payload.questions[0].options}
+    state_opts = set(obj.get("options") or [])
+    if not first_opts or not first_opts <= state_opts:
         return None
     return {"event": "ask_question", "data": json.dumps(payload.model_dump(), ensure_ascii=False)}
 
