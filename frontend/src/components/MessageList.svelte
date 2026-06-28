@@ -10,6 +10,7 @@
   import FileAttachment from './FileAttachment.svelte';
   import { parseImageMessage, parseFilePaths } from '../lib/format';
   import { transcriptImageUrl, uploadUrl } from '../lib/api';
+  import { windowStartFor, nextWindowEnd } from '../lib/window';
 
   interface Props {
     events: ChatEvent[];
@@ -28,6 +29,14 @@
   let previewEl: HTMLElement | undefined = $state();
   // O usuario "gruda" no fim por padrao; ao rolar pra cima, paramos de arrastar.
   let atBottom = $state(true);
+
+  // Janela de render: monta SO os ultimos WINDOW eventos (a cauda). Sessao longa/compactada (milhares de
+  // linhas no .jsonl) montando tudo = tempestade de mount/layout = congela no celular. windowEnd inicia
+  // SINCRONO em events.length (o prop ja vem populado: o Chat so monta o MessageList apos loadHistory) ->
+  // ja no PRIMEIRO paint a fatia e a cauda, sem montar os 5000 e so depois encolher.
+  // WINDOW = botao de calibragem (ajuste no device real); tool_result e filtrado depois, entao bolhas < WINDOW.
+  const WINDOW = 120;
+  let windowEnd = $state(events.length);
 
   // Mantem o box do preview rolado no fundo: a cauda desliza DENTRO da caixa (altura fixa) em vez de
   // empurrar/pular o layout do chat. Roda a cada update do preview.
@@ -55,19 +64,29 @@
     })()
   );
 
-  // Only render tool_use events (not tool_result — they're merged into tool cards)
-  const visibleEvents = $derived(events.filter(ev => ev.kind !== 'tool_result'));
+  // Renderiza so tool_use (tool_result vira card) e SO dentro da janela [windowEnd-WINDOW, windowEnd].
+  // Fatiamos o array CRU por indice ANTES de filtrar -> windowEnd/length sao indices crus; filtrar a
+  // fatia mantem o {#each} keyed (ev.id) valido. toolResults (acima) segue sobre o array INTEIRO, entao
+  // um tool_use na janela ainda resolve seu result.
+  const visibleEvents = $derived(
+    events.slice(windowStartFor(windowEnd, WINDOW), windowEnd).filter(ev => ev.kind !== 'tool_result')
+  );
 
   // Claude trabalhando? -> msgs da fila durável (id "queued-") ficam atenuadas (= na fila).
   const working = $derived(stateEvent?.state === 'working');
 
-  // Auto-scroll APENAS quando ja estamos no fim. NAO depende de stateEvent (o tick do
-  // cronometro/status atualiza stateEvent toda hora e arrastaria o scroll-up do usuario).
+  // Auto-scroll APENAS quando ja estamos no fim. NAO depende de stateEvent (o tick do cronometro/status
+  // atualiza stateEvent toda hora e arrastaria o scroll-up do usuario).
   $effect(() => {
-    void events.length;
+    const len = events.length;
     void pending.length;
     void dockH; // composer cresceu (anexo/multilinha) -> re-scrolla pra ultima msg limpar o glass
     void preview; // preview cresce token a token -> acompanha o fundo enquanto o usuario esta colado
+    // Mantem a janela: encolheu (reset/clear) re-ancora na cauda; colado no fim acompanha a cauda
+    // (remonta o topo SO com o usuario no fundo = sem pulo); rolado pra cima congela. Termina: ao
+    // escrever windowEnd=len o effect re-roda e nextWindowEnd vira no-op.
+    const next = nextWindowEnd(atBottom, len, windowEnd);
+    if (next !== windowEnd) windowEnd = next;
     if (!atBottom) return;
     tick().then(scrollToBottom);
   });
