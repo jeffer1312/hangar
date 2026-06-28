@@ -11,6 +11,69 @@ _NAV_GAP = 0.12  # entre toques Up/Down em rajada
 _SLASH_SETTLE = 0.3  # apos digitar "/cmd": deixa o menu de autocomplete renderizar antes do Enter
 
 
+def _capture(name: str) -> str:
+    """Lê o pane atual da sessão tmux (wrapper em módulo para permitir patch nos testes)."""
+    return tmux.capture_pane(name)
+
+
+def _review_matches(screen: str, answers: list[dict]) -> bool:
+    """Verifica se cada label esperada aparece numa linha '→ ...' da tela de Review."""
+    for a in answers:
+        for lbl in a.get("labels", []):
+            if not any(line.strip().startswith("→") and lbl in line for line in screen.splitlines()):
+                return False
+    return True
+
+
+def answer_questions(name: str, answers: list[dict]) -> None:
+    """Dirige o prompt tabbed AskUserQuestion do estado INICIAL (cursor aba1/opt0) e CONFERE no Review
+    antes do Submit. Mismatch/erro -> Escape (cancela, nao envia) + ValueError (API -> 409).
+    single = Down*idx + Enter (auto-avanca); multi = (Down ate idx + Space) por opcao, depois Right;
+    texto = Down ate 'Type something' + Enter + digita + Enter; chat = Down ate 'Chat about this' + Enter."""
+    def key(k: str) -> None:
+        send_keys(name, k)
+        time.sleep(_SETTLE)
+
+    for a in answers:
+        kind = a.get("kind")
+        if kind == "option" and not a.get("multi"):
+            # single-select: desce ate o indice e Enter (TUI auto-avanca pro proximo tab)
+            for _ in range(a["indices"][0]):
+                key("Down")
+            key("Enter")
+        elif kind == "option":
+            # multi-select: para cada opcao (em ordem crescente) desce ate ela e Space; depois Right
+            cur = 0
+            for idx in sorted(a["indices"]):
+                for _ in range(idx - cur):
+                    key("Down")
+                cur = idx
+                key("Space")
+            key("Right")
+        elif kind == "text":
+            # texto livre: desce ate 'Type something', Enter abre campo, digita valor, Enter submete
+            for _ in range(a["type_index"]):
+                key("Down")
+            key("Enter")
+            if any(ord(c) < 32 and c not in "\t" for c in a["value"]):
+                raise ValueError("control characters not allowed")
+            send_keys(name, a["value"], literal=True)
+            time.sleep(_SETTLE)
+            key("Enter")
+        elif kind == "chat":
+            # 'Chat about this': desce ate o indice e Enter
+            for _ in range(a["chat_index"]):
+                key("Down")
+            key("Enter")
+
+    # Verifica a tela de Review ANTES de submeter — mismatch -> Escape (nunca submete) + erro
+    screen = _capture(name)
+    if "Submit answers" not in screen or not _review_matches(screen, answers):
+        send_keys(name, "Escape")
+        raise ValueError("review mismatch — nao submetido")
+    key("Enter")
+
+
 class TerminalInput:
     def send_prompt(self, name: str, text: str) -> None:
         # Permite \n (multi-linha) e \t; rejeita os OUTROS controles (ESC etc. poderiam disparar acoes

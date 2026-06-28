@@ -405,6 +405,31 @@ def serve_file(name: str, path: str):
     return FileResponse(real, media_type=media)
 
 
+class AnswerItem(_StrictBody):
+    kind: str
+    indices: list[int] | None = None
+    multi: bool = False
+    value: str | None = None
+    labels: list[str] = []
+    type_index: int | None = None
+    chat_index: int | None = None
+
+
+class AnswerBody(_StrictBody):
+    answers: list[AnswerItem]
+
+
+@app.post("/api/sessions/{name}/answer", dependencies=[Depends(require_auth)])
+def answer(name: str, body: AnswerBody):
+    # Dirige o AskUserQuestion tabbed: reproduz as teclas, confere o Review, submete ou 409.
+    from app import terminal_input
+    try:
+        terminal_input.answer_questions(name, [a.model_dump() for a in body.answers])
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    return {"ok": True}
+
+
 @app.post("/api/sessions/{name}/model-effort", dependencies=[Depends(require_auth)])
 def model_effort(name: str, body: ModelEffortBody):
     # Dirige o picker interativo do /model pra aplicar modelo/esforco SO na sessao (scope
