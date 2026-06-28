@@ -6,6 +6,7 @@ from typing import Optional
 from app import tmux
 from app.config import settings
 from app.models import SessionInfo
+from app.pqueue import PromptQueue
 
 
 def sanitize_cwd(cwd: str) -> str:
@@ -200,6 +201,11 @@ class SessionRegistry:
         jsonl = str(base / sanitize_cwd(cwd) / f"{sid}.jsonl")
         if not tmux.new_session(name, cwd, f"claude --session-id {sid}", config_dir):
             raise ValueError("falha ao criar sessao no tmux")
+        # Sessao NOVA = sid novo = transcript fresco. A fila duravel e keyed pelo NOME (sobrevive ao
+        # fim da sessao antiga), entao entradas remanescentes de uma sessao morta de mesmo nome
+        # fantasmariam aqui via merged_history. Limpa igual o /clear faz. Seguro: a sessao nova ainda
+        # nem aceitou input, nao ha fila legitima a preservar.
+        PromptQueue(name).clear()
         # Fixa o jsonl FRESCO no cache na hora: resolve() devolve este uuid mesmo antes do claude
         # escrever o arquivo, evitando o fallback newest-by-mtime pescar um jsonl ja existente da pasta.
         self._jsonl_cache[name] = jsonl
