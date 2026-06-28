@@ -413,7 +413,7 @@
     background: transparent;
     /* Folga do home indicator vive AQUI (externa) -> o card flutua com respiro do fundo, sem
        colar na borda da tela. max() = só a folga do indicator quando há, senão o space-2 mínimo. */
-    padding: var(--space-2) var(--space-3) max(var(--space-2), env(safe-area-inset-bottom));
+    padding: var(--space-2) var(--space-3) var(--composer-pb, max(var(--space-2), env(safe-area-inset-bottom)));
   }
 
   /* Card unico que reune status, textarea e controles. */
