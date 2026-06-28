@@ -34,6 +34,14 @@
   let { sessionName, onBack, onNavigateToChat }: Props = $props();
 
   let events = $state<ChatEvent[]>([]);
+  // Índice id->posição em `events`. O SSE re-emite o transcript INTEIRO a cada (re)conexão; sem isto
+  // o dedup fazia findIndex O(n) por evento = O(n²) por reconexão -> em conversa longa (n grande), no
+  // celular (reconecta a cada background/foreground), congelava a main thread. Map = lookup O(1).
+  const idIndex = new Map<string, number>();
+  function rebuildIndex() {
+    idIndex.clear();
+    for (let i = 0; i < events.length; i++) idIndex.set(events[i].id, i);
+  }
   let stateEvent = $state<StateEvent | null>(null);
   let loading = $state(true);
   let error = $state('');
@@ -126,6 +134,7 @@
   async function loadHistory() {
     try {
       events = await getHistory(sessionName);
+      rebuildIndex();
     } catch (err) {
       error = err instanceof Error ? err.message : 'Erro ao carregar histórico';
     } finally {
@@ -167,18 +176,19 @@
             }
           } else {
             const filtered = events.filter((x) => !(x.kind === 'user_msg' && x.id.startsWith('queued-') && x.text && covers(ev.text!, x.text)));
-            if (filtered.length !== events.length) events = filtered;
+            if (filtered.length !== events.length) { events = filtered; rebuildIndex(); }
           }
         }
         // Dedupe by id: the SSE replays the whole transcript on every (re)connect and
         // loadHistory() also seeds events — without this, messages double up and the
         // keyed {#each} chokes on duplicate ids.
-        const i = events.findIndex((x) => x.id === ev.id);
-        if (i >= 0) {
+        const i = idIndex.get(ev.id);
+        if (i !== undefined) {
           const next = events.slice();
           next[i] = ev;
           events = next;
         } else {
+          idIndex.set(ev.id, events.length);
           events = [...events, ev];
         }
       } catch {}
@@ -213,6 +223,7 @@
     es.addEventListener('reset', () => {
       armWatchdog();
       events = [];
+      idIndex.clear();
       previewText = '';
       stateEvent = null;
       loadHistory();
