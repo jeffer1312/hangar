@@ -17,6 +17,7 @@ from app.models import SessionInfo, ChatEvent
 from app.terminal_input import TerminalInput
 from app.sse import merged_events
 from app.uploads import save_upload, resolve_upload, UploadError, MAX_BYTES
+from app.config import list_config_dirs, ConfigDirInfo
 from app.git_ops import list_branches, switch_branch, git_action, GitError
 
 
@@ -98,6 +99,7 @@ class _StrictBody(BaseModel):
 class CreateBody(_StrictBody):
     name: str = Field(min_length=1)
     cwd: str = Field(min_length=1)
+    config_dir: str | None = None
 
 
 class InputBody(_StrictBody):
@@ -125,10 +127,17 @@ def list_sessions():
     return registry.list()
 
 
+@app.get("/api/claude-configs", dependencies=[Depends(require_auth)], response_model=list[ConfigDirInfo])
+def claude_configs():
+    return list_config_dirs()
+
+
 @app.post("/api/sessions", dependencies=[Depends(require_auth)], response_model=SessionInfo)
 def create_session(body: CreateBody):
+    if body.config_dir is not None and body.config_dir not in {c.path for c in list_config_dirs()}:
+        raise HTTPException(400, "config_dir invalido")
     try:
-        return registry.create(body.name, body.cwd)
+        return registry.create(body.name, body.cwd, body.config_dir)
     except ValueError as e:
         raise HTTPException(409, str(e))
 
