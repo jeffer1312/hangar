@@ -250,9 +250,12 @@
     }
   }
 
-  // Auto-focus quando ocioso
+  // Auto-focus quando ocioso — SO em desktop (ponteiro fino). No iOS, focus() programatico nao abre
+  // o teclado (so abre com gesto real) mas mexe no estado de foco do campo -> briga com o tap do
+  // usuario e o teclado so abre depois de varios toques. matchMedia('(pointer: fine)') = mouse/trackpad
+  // (desktop), exclui touch.
   $effect(() => {
-    if (sessionState === 'idle' && textareaEl) {
+    if (sessionState === 'idle' && textareaEl && window.matchMedia('(pointer: fine)').matches) {
       setTimeout(() => textareaEl?.focus(), 100);
     }
   });
