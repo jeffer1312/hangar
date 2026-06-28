@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 import uuid
@@ -8,20 +9,24 @@ from app.config import settings
 from app.models import SessionInfo
 from app.pqueue import PromptQueue
 from app.askquestion import clear_pending_askq
+from app.state import classify, _live_spinner
+
+# Sentinela: distingue "pid nao informado" (resolve sozinho via tmux) de "pid=None" (sem pane).
+_UNSET = object()
 
 
 def sanitize_cwd(cwd: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "-", cwd)
 
 
-def _descendant_pids(root: int) -> list[int]:
-    # root + todos os descendentes, via mapa ppid->filhos do /proc/*/stat. O claude pode ser filho do
-    # shell do pane (sessao manual) ou o proprio pane (app-criada com `claude` como comando).
+def _proc_children_map() -> dict[int, list[int]]:
+    # Mapa ppid->filhos varrendo o /proc/*/stat UMA vez. Caro (le o stat de todo processo da maquina);
+    # por isso a listagem constroi UM mapa e reusa pra todas as sessoes (em vez de re-varrer por sessao).
     children: dict[int, list[int]] = {}
     try:
         entries = os.listdir("/proc")
     except OSError:
-        return [root]
+        return children
     for entry in entries:
         if not entry.isdigit():
             continue
@@ -33,6 +38,15 @@ def _descendant_pids(root: int) -> list[int]:
         except (OSError, ValueError, IndexError):
             continue
         children.setdefault(ppid, []).append(int(entry))
+    return children
+
+
+def _descendant_pids(root: int, children: Optional[dict[int, list[int]]] = None) -> list[int]:
+    # root + todos os descendentes. O claude pode ser filho do shell do pane (sessao manual) ou o
+    # proprio pane (app-criada com `claude` como comando). children: mapa pre-construido reusavel; se
+    # None, constroi sob demanda (caminho single-session do SSE).
+    if children is None:
+        children = _proc_children_map()
     out, stack = [], [root]
     while stack:
         p = stack.pop()
@@ -107,6 +121,16 @@ def _session_id_from_cmdline(cmdline: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def _jsonl_mtime(jsonl: Optional[str]) -> Optional[float]:
+    # last_activity = mtime do transcript (epoch s). Usado pro desempate da ordenacao na lista.
+    if not jsonl:
+        return None
+    try:
+        return os.path.getmtime(jsonl)
+    except OSError:
+        return None
+
+
 def _cmdline(pid: int) -> str:
     # cmdline crua do processo (args separados por NUL -> espaco).
     try:
@@ -178,16 +202,20 @@ class SessionRegistry:
     def resolve(self, name: str, cwd: str) -> Optional[str]:
         return self.resolve_tracked(name, cwd)[0]
 
-    def resolve_tracked(self, name: str, cwd: str) -> tuple[Optional[str], bool]:
+    def resolve_tracked(self, name: str, cwd: str, pid=_UNSET,
+                        children: Optional[dict[int, list[int]]] = None) -> tuple[Optional[str], bool]:
         # Mapeia uma sessao tmux -> o jsonl CERTO + se o vinculo e CONFIAVEL (tracked).
         # tracked=True so com sinal DETERMINISTICO: --session-id do cmdline, fd aberto, ou cache
         # (semeado por um desses / pelo create()). tracked=False = chute newest-by-mtime, que COLIDE
         # com varias sessoes bare no mesmo cwd -> a UI marca "sem id" e desliga o chat (evita mostrar
         # /trocar transcript errado). Determinismo so com --session-id: o "+" do app, ou o wrapper
         # `claude --session-id <uuid>` no terminal.
-        pid = tmux.pane_pid(name)
+        # pid/children: quando a listagem ja os tem (pane_pid em lote + mapa /proc unico), evita um fork
+        # tmux e uma re-varredura do /proc por sessao. _UNSET = resolve sozinho (caminho single-session).
+        if pid is _UNSET:
+            pid = tmux.pane_pid(name)
         if pid is not None:
-            pids = _descendant_pids(pid)
+            pids = _descendant_pids(pid, children)
             # jsonls que processos AUXILIARES (subagente --agent / daemon) seguram abertos AGORA: sao
             # transcripts de outra sessao logica -> nunca devem virar o transcript do REPL principal.
             aux_open = self._aux_open_jsonls(pids)
@@ -241,11 +269,42 @@ class SessionRegistry:
         self._jsonl_cache.pop(name, None)
 
     def list(self) -> list[SessionInfo]:
+        # Resolucao de jsonl/tracked de todas as sessoes. Otimizado: UM mapa /proc + UMA chamada tmux
+        # (pane_pid em lote) reusados por sessao -> O(P + S·descendentes) em vez de O(S·P). NAO calcula
+        # state (sai 'idle' default): este caminho so resolve transcript; quem quer state usa
+        # list_with_state(). Usado por varios endpoints que so precisam do jsonl por nome.
+        children = _proc_children_map()
         out = []
-        for s in tmux.list_sessions():
-            jsonl, tracked = self.resolve_tracked(s["name"], s["cwd"])
-            out.append(SessionInfo(name=s["name"], cwd=s["cwd"], jsonl=jsonl, tracked=tracked))
+        for p in tmux.list_panes_active():
+            jsonl, tracked = self.resolve_tracked(p["name"], p["cwd"], p["pid"], children)
+            out.append(SessionInfo(name=p["name"], cwd=p["cwd"], jsonl=jsonl, tracked=tracked))
         return out
+
+    async def list_with_state(self) -> list[SessionInfo]:
+        # Listagem COM estado vivo por sessao (pro /api/sessions). Faz a resolucao otimizada (sync, num
+        # thread) e por cima classifica o pane de cada sessao concorrentemente.
+        infos = await asyncio.to_thread(self.list)
+        if not infos:
+            return infos
+        # Frame 1 de cada pane, em paralelo (captura tmux e IO-bound -> threads sobrepoem os forks).
+        frames = await asyncio.gather(*[asyncio.to_thread(tmux.capture_pane, i.name) for i in infos])
+        classified = [classify(t) for t in frames]
+        spinners = [_live_spinner(t) for t in frames]
+        # working e ambiguo num frame so (marcador de turno concluido parece spinner vivo). 2o frame SO
+        # nas que mostram spinner, com UM sleep compartilhado: spinner que mudou = vivo (working); igual
+        # ou sumiu = congelado (idle). awaiting_input/idle ja sao autoritativos no frame 1.
+        spin_idx = [k for k, c in enumerate(classified) if c[0] == "working"]
+        if spin_idx:
+            await asyncio.sleep(0.15)
+            f2 = await asyncio.gather(*[asyncio.to_thread(tmux.capture_pane, infos[k].name) for k in spin_idx])
+            for j, k in enumerate(spin_idx):
+                sp2 = _live_spinner(f2[j])
+                if sp2 is None or sp2 == spinners[k]:
+                    classified[k] = ("idle", None, None, None)
+        for info, c in zip(infos, classified):
+            info.state = c[0]
+            info.last_activity = _jsonl_mtime(info.jsonl)
+        return infos
 
     def create(self, name: str, cwd: str, config_dir: str | None = None) -> SessionInfo:
         # Nome tmux nao aceita "."/":"/espaco -> sanitiza igual ao rename. Varias sessoes na MESMA

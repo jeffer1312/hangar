@@ -193,11 +193,49 @@ def test_resolve_jsonl_picks_newest(tmp_path):
 
 def test_list_maps_sessions_to_jsonl(tmp_path):
     reg = SessionRegistry(projects_dir=tmp_path)
-    with patch.object(registry.tmux, "list_sessions",
-                      return_value=[{"name": "cc", "cwd": "/home/u/p"}]), \
+    with patch.object(registry.tmux, "list_panes_active",
+                      return_value=[{"name": "cc", "pid": 111, "cwd": "/home/u/p"}]), \
          patch.object(reg, "resolve_jsonl", return_value="/x/s.jsonl"):
         out = reg.list()
     assert out[0].name == "cc" and out[0].jsonl == "/x/s.jsonl"
+
+
+async def test_list_with_state_classifies(tmp_path, monkeypatch):
+    # list_with_state anexa o estado vivo: idle (sem spinner/menu), awaiting_input (menu ❯ N.) e
+    # working (spinner que ANIMA entre os 2 frames). Reusa list() pra resolucao (mockada aqui).
+    from app.models import SessionInfo
+    reg = SessionRegistry(projects_dir=tmp_path)
+    infos = [
+        SessionInfo(name="idle1", cwd="/p", jsonl=None, tracked=True),
+        SessionInfo(name="ask1", cwd="/p", jsonl=None, tracked=True),
+        SessionInfo(name="work1", cwd="/p", jsonl=None, tracked=True),
+    ]
+    monkeypatch.setattr(reg, "list", lambda: infos)
+
+    counter = {"work1": 0}
+
+    def fake_capture(name, lines=200):
+        if name == "idle1":
+            return "● resposta\n────\n❯ \n────\n"
+        if name == "ask1":
+            return "❯ 1. Sim\n  2. Nao\nEsc to cancel\n"
+        # work1: spinner muda entre frame 1 e 2 (animando) -> working confirmado no 2o frame
+        c = counter["work1"]; counter["work1"] += 1
+        return f"✻ Trabalhando… ({3 + c * 2}s)\n"
+
+    monkeypatch.setattr(registry.tmux, "capture_pane", fake_capture)
+    out = {s.name: s.state for s in await reg.list_with_state()}
+    assert out == {"idle1": "idle", "ask1": "awaiting_input", "work1": "working"}
+
+
+async def test_list_with_state_frozen_spinner_reads_idle(tmp_path, monkeypatch):
+    # Marcador de turno concluido (spinner IGUAL nos 2 frames) -> idle, nao working.
+    from app.models import SessionInfo
+    reg = SessionRegistry(projects_dir=tmp_path)
+    monkeypatch.setattr(reg, "list", lambda: [SessionInfo(name="f", cwd="/p", jsonl=None, tracked=True)])
+    monkeypatch.setattr(registry.tmux, "capture_pane", lambda name, lines=200: "✻ Worked for 8s\n")
+    out = await reg.list_with_state()
+    assert out[0].state == "idle"
 
 
 def test_resolve_jsonl_returns_none_when_dir_empty(tmp_path):
@@ -272,7 +310,7 @@ def test_resolve_uses_session_config_dir(tmp_path, monkeypatch):
     jpath.write_text("", encoding="utf-8")
 
     monkeypatch.setattr(registry.tmux, "pane_pid", lambda name: 4242)
-    monkeypatch.setattr(registry, "_descendant_pids", lambda root: [4242])
+    monkeypatch.setattr(registry, "_descendant_pids", lambda root, children=None: [4242])
     monkeypatch.setattr(registry, "_cmdline", lambda pid: f"claude --session-id {sid}")
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
 
@@ -295,7 +333,7 @@ def test_mtime_fallback_uses_session_config_dir(tmp_path, monkeypatch):
     f.write_text("", encoding="utf-8")
 
     monkeypatch.setattr(registry.tmux, "pane_pid", lambda name: 4242)
-    monkeypatch.setattr(registry, "_descendant_pids", lambda root: [4242])
+    monkeypatch.setattr(registry, "_descendant_pids", lambda root, children=None: [4242])
     monkeypatch.setattr(registry, "_cmdline", lambda pid: "claude")          # sem --session-id
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
 

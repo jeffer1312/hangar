@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { SessionInfo, State } from '../lib/types';
-  import { relativeTime } from '../lib/format';
+  import Lottie from './Lottie.svelte';
+  import pensando from '../lib/lottie/pensando.json';
 
   interface Props {
     session: SessionInfo;
@@ -24,8 +25,18 @@
     dead: 'var(--error)',
   };
 
-  // Titulo = NOME da sessao (tmux), pra distinguir sessoes na mesma pasta. O caminho (cwd) fica na
-  // linha de baixo como contexto.
+  // Frame parado da "pensando": f0 = anel cheio e simetrico (os frames do meio do loop ficam ralos e
+  // parecem bug). Mesmo frame em todos os estados parados; o que muda entre eles e a COR (tint).
+  const STATIC_FRAME = 0;
+
+  // Fundo translucido do chip de status, por estado.
+  const stateChipBg: Record<State, string> = {
+    working: 'var(--accent-dim)',
+    idle: 'rgba(52,199,89,0.12)',
+    awaiting_input: 'rgba(255,159,10,0.14)',
+    dead: 'rgba(255,69,58,0.12)',
+  };
+
   const title = $derived(session.name);
 
   // O que identifica a sessao e a ULTIMA pasta do cwd (nome do projeto). Ellipsis padrao corta o
@@ -37,116 +48,249 @@
   });
 
   // Sessao sem vinculo confiavel (claude manual sem --session-id): NAO da pra abrir o chat com
-  // seguranca (mostraria/trocaria a conversa errada). Marca "sem id" e bloqueia o clique.
+  // seguranca. Marca "sem id" e bloqueia o clique (delete continua valendo).
   const untracked = $derived(session.tracked === false);
 
-  // Swipe to delete state
-  let pressing = $state(false);
+  // "Precisa de voce": aguardando input -> barra de acao + fundo tingido.
+  const action = $derived(session.state === 'awaiting_input');
+
+  // ── Swipe-to-delete ────────────────────────────────────────────────────────
+  // Arrasta a linha pra esquerda revelando "Excluir". touch-action:pan-y deixa o scroll vertical
+  // pro navegador e o horizontal pra gente. Distingue tap / swipe-x / scroll-y por eixo dominante.
+  const OPEN = -84;
+  let offset = $state(0);
+  let startX = 0, startY = 0, startOffset = 0;
+  let dragging = false;
+  let axis: 'x' | 'y' | null = null;
+  let suppressClick = false;
+
+  function onDown(e: PointerEvent) {
+    startX = e.clientX; startY = e.clientY; startOffset = offset;
+    dragging = true; axis = null; suppressClick = false;
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  }
+  function onMove(e: PointerEvent) {
+    if (!dragging) return;
+    const dx = e.clientX - startX, dy = e.clientY - startY;
+    if (axis === null) {
+      if (Math.abs(dx) > 6 || Math.abs(dy) > 6) axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+    }
+    if (axis === 'y') { dragging = false; return; } // scroll vertical -> solta
+    if (axis === 'x') {
+      suppressClick = true;
+      offset = Math.max(OPEN, Math.min(0, startOffset + dx));
+    }
+  }
+  function onUp() {
+    if (!dragging) return;
+    dragging = false;
+    if (axis === 'x') offset = offset < OPEN / 2 ? OPEN : 0; // snap aberto/fechado
+  }
+
+  // Tap na linha: se aberto ou se acabou de arrastar, nao navega (fecha o swipe). Senao abre o chat.
+  function onRowClick() {
+    if (suppressClick || offset !== 0) { offset = 0; return; }
+    if (!untracked) onClick();
+  }
 </script>
 
-<div
-  class="session-card"
-  class:pressing
-  class:untracked
-  role="button"
-  tabindex="0"
-  aria-disabled={untracked}
-  onclick={() => !untracked && onClick()}
-  onkeydown={(e) => e.key === 'Enter' && !untracked && onClick()}
-  onpointerdown={() => (pressing = true)}
-  onpointerup={() => (pressing = false)}
-  onpointerleave={() => (pressing = false)}
->
-  <div class="card-left">
-    <span
-      class="state-dot"
-      class:state-dot--pulse={session.state === 'working'}
-      style="background: {stateColors[session.state]};"
-      aria-hidden="true"
-    >
-      {#if session.state === 'dead'}✕{/if}
+<div class="swipe-wrap" class:open={offset === OPEN}>
+  <button class="del-action" onclick={onDelete} aria-label="Excluir sessão {session.name}">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <polyline points="3 6 5 6 21 6"/>
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+      <path d="M10 11v6M14 11v6"/>
+    </svg>
+    <span>Excluir</span>
+  </button>
+
+  <div
+    class="session-row"
+    class:action
+    class:untracked
+    class:dragging
+    style="transform: translateX({offset}px);"
+    role="button"
+    tabindex="0"
+    aria-disabled={untracked}
+    onclick={onRowClick}
+    onkeydown={(e) => e.key === 'Enter' && !untracked && onClick()}
+    onpointerdown={onDown}
+    onpointermove={onMove}
+    onpointerup={onUp}
+    onpointercancel={onUp}
+  >
+    <span class="lead" aria-hidden="true">
+      {#if session.state === 'working'}
+        <!-- Working -> "pensando" animando, cores originais. -->
+        <Lottie data={pensando as any} size={20} loop autoplay />
+      {:else}
+        <!-- Outros estados -> mesmo icone PARADO em f0 (anel cheio), cores ORIGINAIS. -->
+        <Lottie data={pensando as any} size={20} loop={false} autoplay={false} frame={STATIC_FRAME} />
+      {/if}
     </span>
-    <div class="card-info">
+
+    <div class="row-info">
       <span class="name-row">
         <span class="session-name">{title}</span>
         {#if untracked}
           <span class="untracked-badge" title="claude aberto sem --session-id: nao da pra rastrear o transcript com seguranca">⚠ sem id</span>
         {/if}
       </span>
-      {#if serverBadge}
-        <!-- Origem (qual servidor/PC) em linha PROPRIA: na linha do nome ficava espremida e cortada. -->
-        <span class="server-line">
-          <span
-            class="server-badge"
-            style="color: {serverBadge.color}; border-color: {serverBadge.color};"
-          >{serverBadge.label}</span>
-        </span>
-      {/if}
-      {#if session.cwd}
-        <span class="session-cwd" title={session.cwd}>
-          <span class="cwd-prefix">{cwdParts.prefix}</span><span class="cwd-base">{cwdParts.base}</span>
-        </span>
-      {/if}
+      <span class="meta-line">
+        {#if serverBadge}
+          <span class="srv" style="color: {serverBadge.color};">{serverBadge.label}</span>
+          {#if session.cwd}<span class="meta-sep">·</span>{/if}
+        {/if}
+        {#if session.cwd}
+          <span class="cwd" title={session.cwd}><span class="cwd-prefix">{cwdParts.prefix}</span><span class="cwd-base">{cwdParts.base}</span></span>
+        {/if}
+      </span>
       {#if untracked}
-        <span class="untracked-hint">reabra com <code>claude --session-id …</code> (ou pelo wrapper) pra rastrear</span>
-      {/if}
-      {#if session.last_activity}
-        <span class="session-activity">
-          última atividade: {relativeTime(session.last_activity)}
-        </span>
+        <span class="untracked-hint">reabra com <code>claude --session-id …</code> pra rastrear</span>
       {/if}
     </div>
-  </div>
 
-  <div class="card-right">
-    <span class="state-badge" style="color: {stateColors[session.state]};">
-      {stateLabels[session.state]}
-    </span>
-    <button
-      class="delete-btn"
-      onclick={(e) => { e.stopPropagation(); onDelete(); }}
-      aria-label="Excluir sessão {session.name}"
-      title="Excluir"
-    >
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <polyline points="3 6 5 6 21 6"/>
-        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-        <path d="M10 11v6M14 11v6"/>
-        <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-      </svg>
-    </button>
+    <div class="row-right">
+      <span class="state-chip" style="color: {stateColors[session.state]}; background: {stateChipBg[session.state]};">
+        {stateLabels[session.state]}
+      </span>
+      <span class="chev" aria-hidden="true">›</span>
+    </div>
   </div>
 </div>
 
 <style>
-  .session-card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-xl);
-    padding: var(--space-4);
+  /* Wrapper do swipe: esconde o "Excluir" que fica atras da linha. */
+  .swipe-wrap {
+    position: relative;
+    overflow: hidden;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .del-action {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 84px;
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    background: var(--error);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 0;
+  }
+
+  .session-row {
+    position: relative;
+    display: flex;
+    align-items: center;
     gap: var(--space-3);
-    min-height: 56px;
+    padding: var(--space-3) var(--space-4);
+    min-height: 60px;
+    background: var(--bg-base);
     cursor: pointer;
-    transition: background 180ms ease-out, transform 80ms ease-in-out;
-    margin-bottom: var(--space-3);
+    touch-action: pan-y;
+    transition: transform 200ms var(--ease-out), background 160ms ease-out;
+  }
+  /* Enquanto arrasta, sem transicao no transform (segue o dedo). */
+  .session-row.dragging {
+    transition: background 160ms ease-out;
+  }
+  .session-row:active {
+    background: var(--bg-surface);
   }
 
-  .session-card.pressing {
-    transform: scale(0.97);
-    background: var(--bg-elevated);
+  /* "Precisa de voce": barra de acao na lateral + fundo levemente tingido. */
+  .session-row.action {
+    background: rgba(255, 159, 10, 0.06);
+  }
+  .session-row.action::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--warning);
   }
 
-  /* Sem id confiavel: visualmente apagada e nao-clicavel (chat off). Delete continua valendo. */
-  .session-card.untracked {
+  /* Sem id confiavel: apagada e nao-clicavel (chat off). */
+  .session-row.untracked {
     cursor: not-allowed;
     opacity: 0.62;
-    border-style: dashed;
   }
-  .session-card.untracked.pressing {
-    transform: none;
+
+  /* Slot do indicador: largura fixa pra alinhar os nomes (anim 20px centralizada). */
+  .lead {
+    width: 20px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .row-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .name-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  .session-name {
+    font-size: var(--text-base);
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .meta-line {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    font-size: var(--text-xs);
+  }
+  .srv {
+    font-weight: 600;
+    flex-shrink: 0;
+    max-width: 90px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .meta-sep { color: var(--text-muted); flex-shrink: 0; }
+  .cwd {
+    display: flex;
+    min-width: 0;
+    font-family: var(--font-mono);
+  }
+  .cwd-prefix {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-muted);
+  }
+  .cwd-base {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    color: var(--text-secondary);
   }
 
   .untracked-badge {
@@ -160,7 +304,6 @@
     border: 1px solid var(--warning);
     white-space: nowrap;
   }
-
   .untracked-hint {
     font-size: var(--text-xs);
     color: var(--warning);
@@ -171,134 +314,23 @@
     font-size: 0.92em;
   }
 
-  .card-left {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--space-3);
-    flex: 1;
-    min-width: 0;
-  }
-
-  .state-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: var(--radius-full);
-    flex-shrink: 0;
-    margin-top: 7px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 8px;
-    color: #fff;
-    font-weight: 700;
-  }
-
-  /* Pulsa so quando trabalhando; estatico nos demais estados. */
-  .state-dot--pulse {
-    animation: pulse-scale 1.4s ease-in-out infinite;
-  }
-
-  .card-info {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-  }
-
-  .name-row {
+  .row-right {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    min-width: 0;
-  }
-
-  .session-name {
-    font-size: var(--text-lg);
-    font-weight: 500;
-    color: var(--text-primary);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  /* Linha propria pra origem: chip alinhado a esquerda, nao estica. */
-  .server-line {
-    display: flex;
-    margin: 1px 0 2px;
-    min-width: 0;
-  }
-  .server-badge {
-    max-width: 100%;
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    padding: 1px 8px;
-    border-radius: var(--radius-full);
-    border: 1px solid;
-    background: transparent;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .session-cwd {
-    display: flex;
-    min-width: 0;
-    font-size: var(--text-sm);
-    font-family: var(--font-mono);
-  }
-  /* Prefixo encolhe e ganha o ellipsis; o basename (nome do projeto) fica sempre inteiro. */
-  .cwd-prefix {
-    flex: 0 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-muted);
-  }
-  .cwd-base {
-    flex: 0 0 auto;
-    white-space: nowrap;
-    color: var(--text-secondary);
-    font-weight: 500;
-  }
-
-  .session-activity {
-    font-size: var(--text-xs);
-    color: var(--text-muted);
-  }
-
-  .card-right {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: var(--space-1);
     flex-shrink: 0;
   }
-
-  .state-badge {
-    font-size: var(--text-xs);
-    font-weight: 500;
+  .state-chip {
+    font-size: 11px;
+    font-weight: 600;
     letter-spacing: 0.02em;
+    padding: 3px 9px;
+    border-radius: var(--radius-full);
+    white-space: nowrap;
   }
-
-  .delete-btn {
-    width: 32px;
-    height: 32px;
-    min-width: 32px;
-    min-height: 32px;
+  .chev {
     color: var(--text-muted);
-    border-radius: var(--radius-sm);
-    transition: color 180ms ease-out, background 180ms ease-out;
-    opacity: 0.6;
-  }
-
-  .session-card:hover .delete-btn {
-    opacity: 1;
-  }
-
-  .delete-btn:active {
-    background: rgba(255, 69, 58, 0.1);
-    color: var(--error);
+    font-size: var(--text-lg);
+    line-height: 1;
   }
 </style>
