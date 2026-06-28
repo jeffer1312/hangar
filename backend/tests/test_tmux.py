@@ -75,3 +75,13 @@ def test_new_session_falls_back_to_backend_config_dir(monkeypatch):
     with patch.object(tmux, "RUN", lambda args, **k: (captured.update(args=args) or _CP())):
         tmux.new_session("s", "/tmp", "claude --session-id x")
     assert "CLAUDE_CONFIG_DIR=/home/u/.claude-work" in captured["args"]
+
+
+def test_new_session_execs_command_so_claude_owns_tty(monkeypatch):
+    # O comando vai prefixado com `exec`: o tmux roda via `fish -c`, e sem exec o fish ficaria como
+    # dono do tty e o send-keys nao chegaria no claude. Com exec, o fish vira o claude.
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    captured = {}
+    with patch.object(tmux, "RUN", lambda args, **k: (captured.update(args=args) or _CP())):
+        tmux.new_session("s", "/tmp", "claude --session-id x")
+    assert captured["args"][-1] == "exec claude --session-id x"
