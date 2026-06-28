@@ -1,34 +1,31 @@
 import json
-from typing import Optional
+from pathlib import Path
 from app.models import AskQuestion
 
 
-def parse_ask_question(jsonl: str) -> Optional[AskQuestion]:
-    """Le o jsonl do transcript e devolve o payload do ULTIMO tool_use AskUserQuestion (perguntas
-    estruturadas), ou None. Robusto a linhas malformadas. A decisao de SE oferecer (sessao realmente
-    aguardando input) fica na camada de estado/SSE; aqui so extrai a estrutura."""
-    found = None
+def _sidecar_path(jsonl: str) -> Path:
+    # Deriva o sidecar a partir do path do jsonl do transcript. Ambos saem do mesmo config_dir:
+    #   <config_dir>/projects/<sanitized_cwd>/<session_id>.jsonl   (transcript)
+    #   <config_dir>/.claude-pocket-askq/<session_id>.json         (sidecar do hook)
+    p = Path(jsonl)
+    return p.parents[2] / ".claude-pocket-askq" / (p.stem + ".json")
+
+
+def read_pending_askq(jsonl: str) -> AskQuestion | None:
+    """Le o sidecar gravado pelo hook PreToolUse (askq_capture.py) e devolve o AskQuestion pendente,
+    ou None. O sidecar fica em <config_dir>/.claude-pocket-askq/<session_id>.json; ambos derivam do
+    path do jsonl do transcript: <config_dir>/projects/<sanitized_cwd>/<session_id>.jsonl."""
     try:
-        with open(jsonl, "r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or "AskUserQuestion" not in line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except (json.JSONDecodeError, ValueError):
-                    continue
-                content = ((obj.get("message") or {}).get("content")) or []
-                if not isinstance(content, list):
-                    continue
-                for block in content:
-                    if (isinstance(block, dict) and block.get("type") == "tool_use"
-                            and block.get("name") == "AskUserQuestion"):
-                        inp = block.get("input") or {}
-                        try:
-                            found = AskQuestion.model_validate(inp)
-                        except Exception:
-                            pass
-    except OSError:
+        data = json.loads(_sidecar_path(jsonl).read_text(encoding="utf-8"))
+        return AskQuestion.model_validate({"questions": data["tool_input"]["questions"]})
+    except Exception:
+        # fail-soft: arquivo ausente, JSON invalido, chave faltando ou payload malformado -> None.
         return None
-    return found
+
+
+def clear_pending_askq(jsonl: str) -> None:
+    """Remove o sidecar do AskUserQuestion da sessao (idempotente; ignora ausencia/erro)."""
+    try:
+        _sidecar_path(jsonl).unlink(missing_ok=True)
+    except Exception:
+        pass
