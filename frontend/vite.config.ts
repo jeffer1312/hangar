@@ -9,23 +9,25 @@ import type { IncomingMessage, ServerResponse } from 'http'
 // o browser bloqueia. Este plugin responde o OPTIONS de /api com os headers CORS (token continua
 // exigido pelo backend nas chamadas reais — preflight nao carrega credencial).
 function apiCorsPreflight(): PluginOption {
+  // Mesmo handler no dev (configureServer) e no BUILD servido (configurePreviewServer) -> o
+  // `vite preview` se comporta igual ao dev pro preflight de /api.
+  const preflight = (req: IncomingMessage, res: ServerResponse, next: () => void) => {
+    if (req.method === 'OPTIONS' && req.url?.startsWith('/api')) {
+      const reqHeaders = req.headers['access-control-request-headers'] ?? 'authorization,content-type';
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', reqHeaders);
+      res.setHeader('Access-Control-Max-Age', '86400');
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+    next();
+  };
   return {
     name: 'api-cors-preflight',
-    configureServer(server) {
-      server.middlewares.use((req: IncomingMessage, res: ServerResponse, next: () => void) => {
-        if (req.method === 'OPTIONS' && req.url?.startsWith('/api')) {
-          const reqHeaders = req.headers['access-control-request-headers'] ?? 'authorization,content-type';
-          res.setHeader('Access-Control-Allow-Origin', '*');
-          res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
-          res.setHeader('Access-Control-Allow-Headers', reqHeaders);
-          res.setHeader('Access-Control-Max-Age', '86400');
-          res.statusCode = 204;
-          res.end();
-          return;
-        }
-        next();
-      });
-    },
+    configureServer(server) { server.middlewares.use(preflight); },
+    configurePreviewServer(server) { server.middlewares.use(preflight); },
   };
 }
 
@@ -46,6 +48,18 @@ export default defineConfig({
     },
     // Allow access via the Tailscale MagicDNS host (tailscale serve → this dev server),
     // so the phone can reach it over trusted HTTPS on the tailnet.
+    allowedHosts: ['.ts.net'],
+  },
+  // `vite preview` serve o BUILD na MESMA URL/porta do dev (5173, atras do `tailscale serve`).
+  // Espelha o server: proxy /api -> backend (same-origin -> cookie cp_token chega no SSE), hosts do
+  // tailnet, porta fixa. Sem isto o preview nao herdaria o proxy (e o app nao falaria com o backend).
+  preview: {
+    port: 5173,
+    strictPort: true,
+    cors: false,
+    proxy: {
+      '/api': { target: 'http://127.0.0.1:8765', changeOrigin: true },
+    },
     allowedHosts: ['.ts.net'],
   },
   plugins: [
