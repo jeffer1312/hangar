@@ -238,11 +238,20 @@
     };
   }
 
-  // App voltou pro foreground (mobile suspende a conexao no background): reconecta na hora pra
-  // re-sincronizar (o SSE reenvia transcript + estado atual). Pega o caso de background sem esperar
-  // os 25s do watchdog.
-  function onVisible() {
-    if (document.visibilityState === 'visible') connectSSE();
+  // App voltou pro foreground (mobile suspende a conexao no background). Agora o backfill do SSE so
+  // traz o TAIL (ultimas _BACKFILL_LINES linhas), entao um background LONGO pode ter perdido mais que
+  // isso. Re-seed do history (REST, completo e ordenado) ANTES de reconectar fecha o buraco; o backfill
+  // tail do SSE so faz a ponte ate a subscricao (dedup por id, sem reordenar). Falha aqui NAO trava a
+  // tela (o connectSSE/onerror re-sincroniza) -> ignora e segue. Reconexoes de blip (watchdog/onerror)
+  // continuam SO com o tail-K: cobrem poucos segundos sem re-shippar o arquivo inteiro.
+  async function onVisible() {
+    if (document.visibilityState !== 'visible') return;
+    try {
+      const fresh = await getHistory(sessionName);
+      events = fresh;
+      rebuildIndex();
+    } catch { /* offline momentaneo: o connectSSE/onerror cuida do re-sync */ }
+    connectSSE();
   }
 
   onMount(async () => {
