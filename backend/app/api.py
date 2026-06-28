@@ -124,8 +124,10 @@ class ModelEffortBody(_StrictBody):
 
 
 @app.get("/api/sessions", dependencies=[Depends(require_auth)], response_model=list[SessionInfo])
-def list_sessions():
-    return registry.list()
+async def list_sessions():
+    # list_with_state: resolucao otimizada (1 scan /proc + 1 chamada tmux em lote) + estado vivo por
+    # sessao (working/idle/awaiting_input) classificado do pane. async pq captura os panes concorrente.
+    return await registry.list_with_state()
 
 
 @app.get("/api/claude-configs", dependencies=[Depends(require_auth)], response_model=list[ConfigDirInfo])

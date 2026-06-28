@@ -61,12 +61,12 @@
     dead: 3,
   };
 
-  // Ordena por atividade (desc) e desempata por urgencia; depois aplica o filtro.
+  // Ordena por URGENCIA (aguardando sempre no topo) e desempata por atividade (desc); depois filtra.
   const visibleSessions = $derived.by(() => {
     const sorted = [...sessions].sort((a, b) => {
-      const byAct = (b.last_activity ?? 0) - (a.last_activity ?? 0);
-      if (byAct !== 0) return byAct;
-      return urgency[a.state] - urgency[b.state];
+      const byUrg = urgency[a.state] - urgency[b.state];
+      if (byUrg !== 0) return byUrg;
+      return (b.last_activity ?? 0) - (a.last_activity ?? 0);
     });
     const q = filterText.trim().toLowerCase();
     if (!q) return sorted;
@@ -80,6 +80,10 @@
 
   // Filtro so aparece quando a lista fica longa.
   const showFilter = $derived(sessions.length > 6);
+
+  // Resumo do header: total + quantas precisam de voce (aguardando).
+  const awaitingCount = $derived(sessions.filter((s) => s.state === 'awaiting_input').length);
+  const summaryText = $derived(`${sessions.length} ${sessions.length === 1 ? 'sessão' : 'sessões'}`);
 
   // Agrega sessões de todos os servidores, marcando cada uma com a origem (id/label/cor). Servidor
   // offline vira aviso em serverErrors, não derruba a lista. silent=true nos polls (sem spinner).
@@ -217,6 +221,8 @@
 <div class="session-list-screen">
   <NavBar
     title="claude pocket"
+    subtitle={sessions.length > 0 ? summaryText : null}
+    subtitleHot={awaitingCount > 0 ? `${awaitingCount} aguardando` : null}
     onMenu={openMenu}
   />
 
@@ -412,7 +418,7 @@
     overflow-y: scroll;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: contain;
-    padding: var(--space-4);
+    padding: var(--space-2) 0;
     padding-bottom: calc(env(safe-area-inset-bottom) + 80px);
   }
 
@@ -420,7 +426,7 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
-    margin-bottom: var(--space-3);
+    margin: 0 var(--space-4) var(--space-3);
   }
   .server-warn-item {
     font-size: var(--text-xs);
@@ -432,7 +438,8 @@
   }
 
   .filter-input {
-    width: 100%;
+    display: block;
+    width: auto;
     height: 44px;
     background: var(--bg-surface);
     border: 1px solid var(--border-default);
@@ -442,7 +449,7 @@
     font-size: 16px; /* evita zoom no iOS */
     padding: 0 var(--space-3);
     outline: none;
-    margin-bottom: var(--space-3);
+    margin: 0 var(--space-4) var(--space-3);
     transition: border-color 180ms var(--ease-out);
   }
 

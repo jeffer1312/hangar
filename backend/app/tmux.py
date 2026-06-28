@@ -38,6 +38,25 @@ def list_sessions() -> list[dict]:
     return out
 
 
+def list_panes_active() -> list[dict]:
+    # UMA chamada traz nome + pane_pid + cwd da pane ATIVA de TODAS as sessoes. Substitui o
+    # list_sessions() + um pane_pid() por sessao (S+1 forks -> 1) no caminho da listagem.
+    cp = _run(["tmux", "list-panes", "-a", "-F",
+               "#{session_name}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}"])
+    if cp.returncode != 0:
+        return []
+    out: dict[str, dict] = {}
+    for line in cp.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 4:
+            continue
+        name, active, pid, cwd = parts
+        if active != "1" or name in out:
+            continue
+        out[name] = {"name": name, "pid": int(pid) if pid.isdigit() else None, "cwd": cwd}
+    return list(out.values())
+
+
 def has_session(name: str) -> bool:
     return _run(["tmux", "has-session", "-t", name]).returncode == 0
 

@@ -7,8 +7,9 @@
     size?: number; // lado do quadrado em px
     loop?: boolean;
     autoplay?: boolean;
+    frame?: number | null; // quando parado (autoplay=false), congela NESTE frame
   }
-  let { data, size = 24, loop = true, autoplay = true }: Props = $props();
+  let { data, size = 24, loop = true, autoplay = true, frame = null }: Props = $props();
 
   let el: HTMLDivElement;
   let anim: AnimationItem | undefined;
@@ -21,6 +22,11 @@
       autoplay,
       animationData: data,
     });
+  });
+
+  // Parado num frame especifico (ex: pose distinta por estado). Reage a mudanca de frame sem remount.
+  $effect(() => {
+    if (anim && !autoplay && frame != null) anim.goToAndStop(frame, true);
   });
 
   onDestroy(() => anim?.destroy());

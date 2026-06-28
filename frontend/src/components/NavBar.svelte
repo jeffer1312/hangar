@@ -22,8 +22,12 @@
     terminalAlert?: boolean;
     // Turno ativo (Claude trabalhando) -> barra fina varre o rodape da navbar (sinal "rodando").
     working?: boolean;
+    // Subtitulo opcional sob o titulo (ex: "4 sessões"); subtitleHot e o trecho em destaque ambar
+    // (ex: "1 aguardando"), so renderiza quando ha acao pendente.
+    subtitle?: string | null;
+    subtitleHot?: string | null;
   }
-  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, working = false }: Props = $props();
+  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, working = false, subtitle = null, subtitleHot = null }: Props = $props();
 </script>
 
 <nav class="navbar">
@@ -45,6 +49,11 @@
           <path d="M1 1l4.5 4.5L10 1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </button>
+    {:else if subtitle}
+      <div class="navbar-titlewrap">
+        <span class="navbar-title navbar-title--tight">{title}</span>
+        <span class="navbar-sub">{subtitle}{#if subtitleHot} · <span class="navbar-sub-hot">{subtitleHot}</span>{/if}</span>
+      </div>
     {:else}
       <span class="navbar-title">{title}</span>
     {/if}
@@ -137,6 +146,35 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  /* Titulo + subtitulo empilhados (ex: lista de sessoes com resumo). */
+  .navbar-titlewrap {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+  }
+  .navbar-title--tight {
+    flex: 0 0 auto;
+    font-size: var(--text-base);
+    line-height: 1.2;
+    max-width: 100%;
+  }
+  .navbar-sub {
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+  .navbar-sub-hot {
+    color: var(--warning);
+    font-weight: 600;
   }
 
   /* Titulo tappavel: chip centralizado com chevron (abre o switcher de sessoes). */
