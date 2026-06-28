@@ -23,6 +23,17 @@ function renderInline(escaped: string): string {
   // " já viraram &quot; -> seguro no atributo.
   text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
     (_, label, url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`);
+  // URL "pelada" (sem sintaxe [..](..)) -> vira link clicavel, pra nao ter que copiar e abrir no
+  // navegador. Roda DEPOIS dos links markdown: o lookbehind (?<![">=\]]) pula URL colada em
+  // href="..." ou logo apos > (texto de ancora) -> nao re-linka o que ja virou <a>. Pontuacao final
+  // (.,;:!?) e ) ]  ficam FORA do link (senao "(https://x)." engoliria parentese/ponto). &amp; de
+  // querystring fica no href (o browser decodifica) -> link valido.
+  text = text.replace(/(?<![">=\]])(https?:\/\/[^\s<]+)/g, (_m, url: string) => {
+    const trail = url.match(/[.,;:!?)\]]+$/);
+    const u = trail ? url.slice(0, -trail[0].length) : url;
+    const t = trail ? trail[0] : '';
+    return `<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>${t}`;
+  });
   return text;
 }
 

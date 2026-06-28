@@ -14,7 +14,8 @@
   let failed = $state<Set<string>>(new Set());
 
   function url(r: FileRef): string {
-    return fileUrl(sessionName, r.path);
+    // url absoluta (midia remota) usa direto; senao monta a do backend pelo path local.
+    return r.url ?? fileUrl(sessionName, r.path);
   }
   function fail(r: FileRef) {
     failed = new Set(failed).add(r.path);

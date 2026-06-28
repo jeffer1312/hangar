@@ -20,8 +20,10 @@
     // quando ha um overlay aberto que SO da pra interagir pela TUI.
     onOpenTerminal?: () => void;
     terminalAlert?: boolean;
+    // Turno ativo (Claude trabalhando) -> barra fina varre o rodape da navbar (sinal "rodando").
+    working?: boolean;
   }
-  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false }: Props = $props();
+  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, working = false }: Props = $props();
 </script>
 
 <nav class="navbar">
@@ -84,6 +86,7 @@
       {/if}
     </div>
   </div>
+  {#if working}<div class="work-sweep" aria-hidden="true"></div>{/if}
 </nav>
 
 <style>
@@ -236,5 +239,22 @@
     font-weight: 600;
     line-height: 16px;
     text-align: center;
+  }
+
+  /* Turno ativo: hairline accent varrendo o rodape da navbar (familia Respiracao "Trabalhando").
+     prefers-reduced-motion global (app.css) ja neutraliza o loop. */
+  .work-sweep {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 2px;
+    z-index: 1;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    background-size: 50% 100%;
+    background-repeat: no-repeat;
+    animation: work-sweep 1.8s ease-in-out infinite;
+  }
+  @keyframes work-sweep {
+    0%   { background-position: -60% 0; }
+    100% { background-position: 160% 0; }
   }
 </style>
