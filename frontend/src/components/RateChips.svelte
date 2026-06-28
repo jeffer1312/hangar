@@ -24,7 +24,7 @@
   <div class="rate-chips">
     {#if typeof status.fiveHourPct === 'number'}
       <button class="rchip {pctClass(status.fiveHourPct)}" onclick={onExpand} aria-label="Janela de 5 horas">
-        <span aria-hidden="true">⚡</span>{status.fiveHourPct}%{#if status.fiveHourReset}<span class="reset" aria-hidden="true">↺{status.fiveHourReset}</span>{/if}
+        <span aria-hidden="true">⚡</span>{status.fiveHourPct}%
       </button>
     {/if}
     {#if typeof status.weeklyPct === 'number'}
@@ -63,11 +63,4 @@
   .rchip.cool { color: var(--success); }
   .rchip.warm { color: var(--warning); }
   .rchip.hot  { color: var(--error); }
-
-  /* Reset da janela (ex "↺34m") — tom apagado pra nao competir com o %, que mantem a cor de saturacao. */
-  .reset {
-    margin-left: 4px;
-    color: var(--text-muted);
-    font-weight: 400;
-  }
 </style>

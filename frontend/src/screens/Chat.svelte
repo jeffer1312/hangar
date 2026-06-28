@@ -56,6 +56,10 @@
   let dockEl: HTMLElement | undefined = $state();
   // Altura real do dock (composer) -> vira padding da lista pra ultima msg sempre limpar o glass.
   let dockH = $state(150);
+  let navEl: HTMLElement | undefined = $state();
+  // Altura real da navbar (overlay colado no topo) -> --nav-h: padding-top da lista pra 1a msg limpar a
+  // navbar e o resto rolar POR BAIXO dela (= efeito glass). Mesmo modelo do dock.
+  let navH = $state(56);
 
 
   // ── Switcher de sessoes (NavBar -> sheet) + criar nova sem voltar ──────────
@@ -338,6 +342,22 @@
     return () => { cancelAnimationFrame(raf); ro.disconnect(); };
   });
 
+  // Mede a navbar (overlay) -> --nav-h, pra lista clarear a 1a msg e rolar por baixo. Igual ao dock.
+  $effect(() => {
+    if (!navEl) return;
+    let raf = 0;
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        if (!navEl) return;
+        const h = Math.round(navEl.getBoundingClientRect().height);
+        if (Math.abs(h - navH) > 2) navH = h;
+      });
+    });
+    ro.observe(navEl);
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
+  });
+
   // Legenda canonica de uma msg (sem o marcador "📎 imagem:/arquivo: <path>" + o "—" que liga). Pro
   // dedup de pending/fila: o eco local carrega o marcador, mas o transcript grava SO a legenda -> sem
   // normalizar, msg COM ANEXO nunca casava e ficava pendente pra sempre.
@@ -478,8 +498,10 @@
   }
 </script>
 
-<div class="chat-screen" bind:this={screenEl}>
-  <NavBar title={sessionName} showBack={true} onBack={onBack} onTitleTap={openSwitcher} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} working={currentState === 'working'} />
+<div class="chat-screen" bind:this={screenEl} style:--nav-h={navH + 'px'}>
+  <div class="navbar-mount" bind:this={navEl}>
+    <NavBar title={sessionName} showBack={true} onBack={onBack} onTitleTap={openSwitcher} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} working={currentState === 'working'} />
+  </div>
 
   {#if loading}
     <!-- Entrando na sessao: skeleton shimmer (familia Respiracao) enquanto o /history carrega. -->
@@ -590,6 +612,20 @@
     isolation: isolate;
   }
 
+  /* Navbar overlay colado no topo (nao descola): a lista rola POR BAIXO via --nav-h. pointer-events
+     deixa o fade transparente passar o toque pro conteudo; a navbar reativa. */
+  .navbar-mount {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 20;
+    pointer-events: none;
+  }
+  .navbar-mount > :global(.navbar) {
+    pointer-events: auto;
+  }
+
   .chat-error {
     flex: 1;
     display: flex;
@@ -597,6 +633,7 @@
     align-items: center;
     justify-content: center;
     gap: var(--space-4);
+    padding-top: var(--nav-h, 56px);
   }
 
   /* Skeleton de boot (no lugar do splash): linhas shimmer ocupando a area do chat. */
