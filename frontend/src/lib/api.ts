@@ -11,6 +11,7 @@ import type {
   WorkflowSummary,
   WorkflowDetail,
   WorkflowAgentDetail,
+  AnswerItem,
 } from './types';
 
 // URL da idx-ésima imagem (colada no terminal) de uma msg do transcript. `?token` porque <img> não
@@ -236,6 +237,13 @@ export function gitAction(name: string, action: 'status' | 'pull'): Promise<{ ok
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git`, {
     method: 'POST',
     body: JSON.stringify({ action }),
+  });
+}
+
+// Envia respostas do stepper AskUserQuestion para o backend.
+export function answerQuestions(name: string, answers: AnswerItem[]): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/answer`, {
+    method: 'POST', body: JSON.stringify({ answers }),
   });
 }
 
