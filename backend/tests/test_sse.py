@@ -2,7 +2,7 @@ import pytest
 import asyncio
 import json
 from app.sse import merged_events
-from app.models import ChatEvent
+from app.models import ChatEvent, StateEvent
 
 
 class _StubModel:
@@ -74,3 +74,34 @@ async def test_sse_data_is_json_string(monkeypatch):
         assert parsed["tool_name"] is None      # serialized as JSON null
         assert "null" in ev["data"] and "None" not in ev["data"]
         break
+
+
+async def _seq_states():
+    # overlay aberto (nao-entregavel) -> idle (entregavel): a transicao dispara o drain UMA vez.
+    yield StateEvent(session="cc", state="awaiting_input", overlay=True)
+    yield StateEvent(session="cc", state="idle", overlay=False)
+    yield StateEvent(session="cc", state="idle", overlay=False)   # repetido NAO redispara
+
+
+class _StubMonitorSeq:
+    def __init__(self, name):
+        pass
+
+    def stream(self):
+        return _seq_states()
+
+
+@pytest.mark.asyncio
+async def test_drain_fires_once_on_overlay_to_idle(monkeypatch):
+    calls = []
+    monkeypatch.setattr("app.sse.TranscriptTailer", _StubTailerOne)
+    monkeypatch.setattr("app.sse.StateMonitor", _StubMonitorSeq)
+    monkeypatch.setattr("app.sse.drain", lambda name, jsonl: calls.append((name, jsonl)) or 0)
+    seen_idle = 0
+    async for ev in merged_events("cc", "j"):
+        if ev["event"] == "state" and json.loads(ev["data"])["state"] == "idle":
+            seen_idle += 1
+            if seen_idle >= 2:
+                await asyncio.sleep(0.05)   # deixa o to_thread(drain) rodar
+                break
+    assert calls == [("cc", "j")]            # exatamente 1 drain, no jsonl corrente
