@@ -399,13 +399,24 @@ def serve_file(name: str, path: str):
     # so serve se o `path` aparece no transcript desta sessao (citado por voce ou pelo Claude =
     # consentido) E existe E e arquivo regular -> bloqueia leitura arbitraria de disco / path-traversal.
     # FileResponse trata Range -> <video> faz seek/streaming.
-    jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
-    if not jsonl:
+    # Path RELATIVO (ex "./mock.png", "sub/x.png") resolve contra o CWD DA SESSAO (onde o Claude criou
+    # o arquivo), nao o cwd do processo backend; guard extra: o resolvido nao pode ESCAPAR do cwd.
+    info = next((s for s in registry.list() if s.name == name), None)
+    if info is None or not info.jsonl:
         raise HTTPException(404, "session or transcript not found")
     from app.transcript import path_in_transcript
-    real = os.path.realpath(os.path.expanduser(path))
-    if not path_in_transcript(jsonl, path):
+    if not path_in_transcript(info.jsonl, path):
         raise HTTPException(403, "file not referenced in this conversation")
+    expanded = os.path.expanduser(path)
+    if os.path.isabs(expanded):
+        real = os.path.realpath(expanded)
+    else:
+        if not info.cwd:
+            raise HTTPException(409, "cwd da sessao indisponivel")
+        base = os.path.realpath(info.cwd)
+        real = os.path.realpath(os.path.join(base, expanded))
+        if real != base and not real.startswith(base + os.sep):
+            raise HTTPException(403, "path escapes session cwd")
     if not os.path.isfile(real):
         raise HTTPException(404, "file not found")
     media = mimetypes.guess_type(real)[0] or "application/octet-stream"

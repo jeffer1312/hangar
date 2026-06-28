@@ -23,7 +23,8 @@
   function icon(kind: string): string {
     return kind === 'html' ? '🌐' : kind === 'pdf' ? '📄' : '📎';
   }
-  const visible = $derived(refs.filter((r) => !failed.has(r.path)));
+  // Falha NAO some mais (sumir calado escondia o que quebrou) nem fica quadrado preto: vira um chip
+  // "nao carregou" com o nome -> visivel + debugavel. So filtramos no render (failed.has).
 
   // Move o overlay pro <body> -> escapa do overflow/posicionamento do .chat-screen (mesmo truque
   // do ImageBubble), senao o fixed fica preso e some atras do composer/topbar.
@@ -33,10 +34,12 @@
   }
 </script>
 
-{#if visible.length}
+{#if refs.length}
   <div class="atts">
-    {#each visible as r (r.path)}
-      {#if r.kind === 'image'}
+    {#each refs as r (r.path)}
+      {#if failed.has(r.path)}
+        <span class="att-broken" title={r.path}>⚠ {r.name} — não carregou</span>
+      {:else if r.kind === 'image'}
         <button class="thumb-btn" onclick={() => (open = r)} aria-label="Ver {r.name}">
           <img class="thumb" src={url(r)} alt={r.name} loading="lazy" onerror={() => fail(r)} />
         </button>
@@ -111,6 +114,16 @@
   .att-ico { flex-shrink: 0; }
   .att-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
   .att-open { flex-shrink: 0; color: var(--text-muted); font-size: var(--text-xs); }
+
+  /* Falha de carga (404/403/path errado): chip discreto no lugar do thumbnail. Visivel que quebrou
+     (mostra o nome pra debug), sem virar quadrado preto nem sumir calado. */
+  .att-broken {
+    display: inline-flex; align-items: center; gap: var(--space-1); max-width: 100%; min-width: 0;
+    height: 30px; padding: 0 var(--space-2); background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+    color: var(--text-muted); font-size: var(--text-xs); font-family: var(--font-mono);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
 
   /* Tela cheia (portal no body). */
   .att-overlay {
