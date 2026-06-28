@@ -235,7 +235,7 @@ async def events(name: str):
 @app.post("/api/sessions/{name}/input", dependencies=[Depends(require_auth)])
 def input_prompt(name: str, body: InputBody):
     try:
-        terminal.send_prompt(name, body.text)
+        result = terminal.send_prompt(name, body.text)
     except ValueError as e:
         # send_prompt rejeita control chars (ex: '\n'). Sem isto virava 500 -> a msg sumia sem
         # feedback. Agora vira 400 limpo (o frontend mostra). (Multi-linha de verdade: backlog.)
@@ -255,11 +255,13 @@ def input_prompt(name: str, body: InputBody):
             # ponytail: o sidecar do AskUserQuestion NAO e limpo aqui — /clear abre um transcript com
             # session_id novo, entao o sidecar antigo vira lixo inofensivo (nao reabre nada).
     else:
-        # Registra na fila duravel (sidecar) APOS o envio dar certo: aparece como user_msg em ordem e
-        # persiste no reload; o merge dedup-a contra o transcript quando o Claude Code grava o prompt.
-        # Falha ao gravar a fila nao quebra o envio (a msg ja foi pro tmux).
+        # Registra na fila duravel (sidecar) sempre — aparece como user_msg em ordem e persiste no
+        # reload; o merge dedup-a contra o transcript quando o Claude Code grava o prompt. delivered =
+        # o send_prompt REALMENTE digitou ("sent"); pane em overlay -> "deferred" (nao tocou a TUI) e a
+        # entrada fica pendente pro drain entregar quando o overlay fechar. Falha ao gravar a fila nao
+        # quebra o envio.
         try:
-            PromptQueue(name).append(body.text)
+            PromptQueue(name).append(body.text, delivered=(result == "sent"))
         except OSError:
             pass
     return {"ok": True}
