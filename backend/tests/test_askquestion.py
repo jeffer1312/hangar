@@ -10,7 +10,9 @@ def _state_json(state: str, overlay: bool) -> str:
 
 
 _Q = [{"header": "Cor", "question": "Escolha", "multiSelect": True,
-       "options": [{"label": "A", "description": "op A"}, {"label": "B", "description": ""}]}]
+       "options": [{"label": "A", "description": "op A"}, {"label": "B", "description": ""}]},
+      {"header": "Fruta", "question": "Escolha fruta", "multiSelect": False,
+       "options": [{"label": "X", "description": ""}, {"label": "Y", "description": ""}]}]
 
 
 def _layout(tmp_path: Path, questions=_Q, sid="sess-123",
@@ -85,3 +87,12 @@ def test_ask_question_event_none_when_no_overlay(tmp_path):
     # awaiting_input sem rodape de abas = menu nativo simples (nao AskUserQuestion tabulado)
     jsonl, _ = _layout(tmp_path)
     assert _ask_question_event(_state_json("awaiting_input", overlay=False), jsonl) is None
+
+
+def test_ask_question_event_none_for_single_question(tmp_path):
+    # 1 pergunta: o TUI submete direto no Enter da opcao (sem tela de Review), entao o stepper
+    # com verify-before-submit nao serve -> cai no caminho do OptionButtons. Gate: nao emite.
+    one = [{"header": "Cor", "question": "Escolha", "multiSelect": False,
+            "options": [{"label": "A", "description": ""}]}]
+    jsonl, _ = _layout(tmp_path, questions=one)
+    assert _ask_question_event(_state_json("awaiting_input", overlay=True), jsonl) is None
