@@ -40,8 +40,8 @@
     return () => clearInterval(iv);
   });
 
-  async function handleCreate(name: string, cwd?: string) {
-    const s = await createSession(name, cwd);
+  async function handleCreate(name: string, cwd?: string, configDir?: string | null) {
+    const s = await createSession(name, cwd, configDir);
     sessions = [s, ...sessions];
     onSelect(name);
   }

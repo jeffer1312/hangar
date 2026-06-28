@@ -127,8 +127,8 @@
 
   // O sheet de criar já posicionou o servidor-alvo como ativo (selectServer), então createSession
   // cai no servidor certo. Depois reagrega a lista pra a sessão nova aparecer com a marca correta.
-  async function handleCreate(name: string, cwd?: string) {
-    await createSession(name, cwd);
+  async function handleCreate(name: string, cwd?: string, configDir?: string | null) {
+    await createSession(name, cwd, configDir);
     await loadSessions(true);
   }
 
