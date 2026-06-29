@@ -114,11 +114,14 @@ def test_chip_header_excludes_prose_numbered_list_above():
 
 @pytest.mark.asyncio
 async def test_monitor_emits_only_on_change():
+    # Dedup: o spinner byte-identico no 2o poll NAO re-emite. Vai do spinner pro MENU (awaiting_input
+    # e autoritativo/sem debounce) em vez de voltar pra idle: idle->working tem IDLE_DEBOUNCE e o
+    # status_line flipa ao perder o spinner (re-emite working), o que polui um teste de "so na mudanca".
     panes = iter([
         "❯ \n",                  # idle
         "✽ Elucidating…\n",      # working
-        "✽ Elucidating…\n",      # still working, same label (no emit)
-        "❯ \n",                  # idle again
+        "✽ Elucidating…\n",      # byte-identico -> NAO emite de novo
+        "❯ 1. Religar\n  2. Deixar off\nEnter to select · ↑/↓ to navigate · Esc to cancel\n",  # menu
     ])
     with patch.object(state_mod.tmux, "has_session", return_value=True), \
          patch.object(state_mod.tmux, "capture_pane", side_effect=lambda *a, **k: next(panes)):
@@ -128,14 +131,17 @@ async def test_monitor_emits_only_on_change():
             seen.append((ev.state, ev.label))
             if len(seen) == 3:
                 break
-    assert seen == [("idle", None), ("working", "Elucidating…"), ("idle", None)]
+    # 3 emits, nao 4: o 2o spinner identico foi suprimido (senao haveria um working extra no meio).
+    assert seen == [("idle", None), ("working", "Elucidating…"), ("awaiting_input", None)]
 
 
 @pytest.mark.asyncio
 async def test_monitor_frozen_completed_marker_reads_idle():
-    """Regression (bug #4): a completed-turn marker ("✻ Worked for 13s") lingers in the
-    pane while Claude is idle. It is shaped exactly like a spinner but never changes, so
-    the monitor must NOT report it as working — otherwise the composer stays disabled."""
+    """Regression (bug #4): a completed-turn marker ("✻ Worked for 13s") lingers in the pane
+    while Claude is idle. It is shaped exactly like a live spinner; a single frame can't tell
+    them apart (classify reports 'working' for any spinner). The proof it's frozen is that it
+    NEVER changes — so the monitor reports 'working' briefly, then DOWNGRADES to 'idle' after
+    STALE_LIMIT identical polls. Net result the UI cares about: it does NOT stay stuck working."""
     frozen = "● the answer\n✻ Worked for 13s\n────\n❯ \n────\n  ⏵⏵ bypass permissions on\n"
     with patch.object(state_mod.tmux, "has_session", return_value=True), \
          patch.object(state_mod.tmux, "capture_pane", return_value=frozen):
@@ -143,8 +149,10 @@ async def test_monitor_frozen_completed_marker_reads_idle():
         seen = []
         async for ev in mon.stream():
             seen.append((ev.state, ev.label))
-            break
-    assert seen == [("idle", None)]
+            if ev.state == "idle":
+                break
+    assert seen[-1] == ("idle", None)                 # converge pra idle (composer nao trava working)
+    assert ("working", "Worked for 13s") in seen      # flash breve antes do downgrade (tradeoff anti-flicker)
 
 
 @pytest.mark.asyncio
