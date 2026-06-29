@@ -102,7 +102,10 @@
   // prendia). tuiOverlay = ha um overlay aberto que SO da pra interagir pela TUI (sem opcoes nativas;
   // awaiting_input vira OptionButtons na lista). Serve so pra DESTACAR (pulsar o botao + mostrar a
   // pilula), nao pra abrir.
-  const tuiOverlay = $derived(!!stateEvent?.overlay && currentState !== 'awaiting_input');
+  // login: sessao parada no welcome/login do Claude Code (sem .jsonl -> chat vazio). Reusa o mesmo
+  // affordance do overlay (pulsa o botao do terminal + pill -> abre o espelho), so com texto proprio.
+  const needsLogin = $derived(!!stateEvent?.login && currentState !== 'awaiting_input');
+  const tuiOverlay = $derived((!!stateEvent?.overlay || needsLogin) && currentState !== 'awaiting_input');
   let mirrorOpen = $state(false);
   function openMirror() { mirrorOpen = true; }
   // "Voltar ao chat" = SO esconde o espelho. NAO manda Escape -> a TUI fica como esta (nao fecha o
@@ -543,9 +546,9 @@
   {#if tuiOverlay && !mirrorOpen}
     <!-- Aviso DESTACADO: ha um painel que SO da pra interagir pela TUI. Pulsa pra chamar atencao;
          tocar abre o espelho. Nao toma a tela (so um banner acima do dock). -->
-    <button class="tui-pill" style:bottom={`${dockH + 10}px`} onclick={openMirror} aria-label="Abrir terminal para interagir">
+    <button class="tui-pill" style:bottom={`${dockH + 10}px`} onclick={openMirror} aria-label={needsLogin ? 'Abrir terminal para fazer login' : 'Abrir terminal para interagir'}>
       <span class="tui-pill-dot"></span>
-      <span class="tui-pill-text">Interação só pela TUI — toque pra abrir</span>
+      <span class="tui-pill-text">{needsLogin ? 'Sessão precisa de login — toque pra entrar' : 'Interação só pela TUI — toque pra abrir'}</span>
     </button>
   {/if}
 

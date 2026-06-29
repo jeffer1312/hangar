@@ -42,6 +42,10 @@ class StateEvent(BaseModel):
     # /model): tem rodape de navegacao ("Esc to cancel") mas NAO gera linha no .jsonl. O front abre o
     # espelho do pane (TerminalMirror) pra navegar via teclas, ja que so existe no terminal.
     overlay: bool = False
+    # True quando a sessao esta na tela de welcome/login do Claude Code (escolher tema -> metodo ->
+    # URL OAuth -> colar code). Pre-login NAO ha .jsonl, entao o chat fica vazio; o front usa esta
+    # flag pra avisar ("precisa de login") e abrir o espelho do pane em vez de um chat morto.
+    login: bool = False
 
 
 class PreviewEvent(BaseModel):
