@@ -167,6 +167,7 @@
     if (editingServer) {
       renameServer(editingServer, editServerLabel);
       servers = listServers();
+      recompute(); // reagrega pra os headers de grupo pegarem o nome novo (sem esperar o próximo SSE)
     }
     editingServer = null;
   }
