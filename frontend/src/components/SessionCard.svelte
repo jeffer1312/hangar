@@ -206,9 +206,10 @@
     background: var(--bg-surface);
   }
 
-  /* "Precisa de voce": barra de acao na lateral + fundo levemente tingido. */
+  /* "Precisa de voce": barra de acao na lateral + fundo levemente tingido. Tinta OPACA (camada
+     sobre o --bg-base): translucida deixava o "Excluir" vermelho atras vazar no swipe-to-delete. */
   .session-row.action {
-    background: rgba(255, 159, 10, 0.06);
+    background: linear-gradient(rgba(255, 159, 10, 0.06), rgba(255, 159, 10, 0.06)), var(--bg-base);
   }
   .session-row.action::before {
     content: "";
