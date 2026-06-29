@@ -1,10 +1,12 @@
 import io
+from pathlib import Path
 
 import uvicorn
 import qrcode
 
-from app.config import settings, resolve_bind_ip, pairing_url
-from app.hook_installer import ensure_askq_hook_installed
+from app.config import settings, resolve_bind_ip, pairing_url, list_config_dirs, _backend_config_base
+from app.hook_installer import ensure_askq_hook_installed, ensure_state_hooks_installed
+from app.hook_state import hook_state
 
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
@@ -37,8 +39,11 @@ def print_pairing(settings) -> None:
 def main():
     bind = resolve_bind_ip(settings)
     startup_guard(settings)
-    # Instala (idempotente, fail-soft) o hook que captura o payload do AskUserQuestion.
+    # Instala (idempotente, fail-soft) os hooks de estado e de AskUserQuestion.
     ensure_askq_hook_installed()
+    ensure_state_hooks_installed()
+    _state_dirs = list({Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()})
+    hook_state.load_existing(_state_dirs)
     print_pairing(settings)
     # workers=1 explicito: o cache de classe SessionRegistry._jsonl_cache e compartilhado SO dentro de
     # um processo. Multi-worker daria cache frio por worker -> transcript errado em requests roteados

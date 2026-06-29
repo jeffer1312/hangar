@@ -2,6 +2,8 @@ import asyncio
 import mimetypes
 import os
 import re
+from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Literal
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
@@ -17,9 +19,10 @@ from app.models import SessionInfo, ChatEvent
 from app.terminal_input import TerminalInput
 from app.sse import merged_events
 from app.uploads import save_upload, resolve_upload, UploadError, MAX_BYTES
-from app.config import list_config_dirs, ConfigDirInfo
+from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base
 from app.git_ops import list_branches, switch_branch, git_action, GitError
 from app.askquestion import clear_pending_askq
+from app.hook_state import hook_state
 
 
 class _BodyTooLarge(Exception):
@@ -74,7 +77,14 @@ class _BodySizeLimitMiddleware:
         await send({"type": "http.response.body", "body": b"request body too large"})
 
 
-app = FastAPI(title="claude-pocket")
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    _state_dirs = list({Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()})
+    asyncio.create_task(hook_state.watch(_state_dirs))
+    yield
+
+
+app = FastAPI(title="claude-pocket", lifespan=_lifespan)
 # Body-size ANTES do CORS no codigo -> CORS fica por FORA (envolve ate o 413, adicionando headers CORS
 # na rejeicao). Ver _BodySizeLimitMiddleware.
 app.add_middleware(_BodySizeLimitMiddleware, max_bytes=MAX_BYTES)

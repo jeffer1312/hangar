@@ -10,6 +10,7 @@ from app.models import SessionInfo
 from app.pqueue import PromptQueue
 from app.askquestion import clear_pending_askq
 from app.state import classify, _live_spinner
+from app.hook_state import hook_state
 
 # Sentinela: distingue "pid nao informado" (resolve sozinho via tmux) de "pid=None" (sem pane).
 _UNSET = object()
@@ -286,24 +287,32 @@ class SessionRegistry:
         infos = await asyncio.to_thread(self.list)
         if not infos:
             return infos
-        # Frame 1 de cada pane, em paralelo (captura tmux e IO-bound -> threads sobrepoem os forks).
-        frames = await asyncio.gather(*[asyncio.to_thread(tmux.capture_pane, i.name) for i in infos])
-        classified = [classify(t) for t in frames]
-        spinners = [_live_spinner(t) for t in frames]
-        # working e ambiguo num frame so (marcador de turno concluido parece spinner vivo). 2o frame SO
-        # nas que mostram spinner, com UM sleep compartilhado: spinner que mudou = vivo (working); igual
-        # ou sumiu = congelado (idle). awaiting_input/idle ja sao autoritativos no frame 1.
-        spin_idx = [k for k, c in enumerate(classified) if c[0] == "working"]
-        if spin_idx:
-            await asyncio.sleep(0.15)
-            f2 = await asyncio.gather(*[asyncio.to_thread(tmux.capture_pane, infos[k].name) for k in spin_idx])
-            for j, k in enumerate(spin_idx):
-                sp2 = _live_spinner(f2[j])
-                if sp2 is None or sp2 == spinners[k]:
-                    classified[k] = ("idle", None, None, None)
-        for info, c in zip(infos, classified):
-            info.state = c[0]
-            info.last_activity = _jsonl_mtime(info.jsonl)
+        # Estado pela marca dos hooks quando existe (custo ~0); senao cai no pane (fallback).
+        def _sid(jsonl):
+            return Path(jsonl).stem if jsonl else None
+        pending = []  # infos sem marcador -> precisa raspar o pane
+        for info in infos:
+            marker = hook_state.get_state(_sid(info.jsonl))
+            if marker:
+                info.state = marker[0]
+                info.last_activity = _jsonl_mtime(info.jsonl)
+            else:
+                pending.append(info)
+        if pending:
+            frames = await asyncio.gather(*[asyncio.to_thread(tmux.capture_pane, info.name) for info in pending])
+            classified = [classify(t) for t in frames]
+            spinners = [_live_spinner(t) for t in frames]
+            spin_idx = [k for k, c in enumerate(classified) if c[0] == "working"]
+            if spin_idx:
+                await asyncio.sleep(0.15)
+                f2 = await asyncio.gather(*[asyncio.to_thread(tmux.capture_pane, pending[k].name) for k in spin_idx])
+                for j, k in enumerate(spin_idx):
+                    sp2 = _live_spinner(f2[j])
+                    if sp2 is None or sp2 == spinners[k]:
+                        classified[k] = ("idle", None, None, None)
+            for info, c in zip(pending, classified):
+                info.state = c[0]
+                info.last_activity = _jsonl_mtime(info.jsonl)
         return infos
 
     def create(self, name: str, cwd: str, config_dir: str | None = None) -> SessionInfo:

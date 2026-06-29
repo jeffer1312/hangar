@@ -322,6 +322,34 @@ def test_resolve_uses_session_config_dir(tmp_path, monkeypatch):
     SessionRegistry._jsonl_cache.clear()
 
 
+import asyncio
+from app import hook_state as hs_mod
+
+
+def test_list_with_state_prefers_marker(monkeypatch):
+    reg = SessionRegistry()
+    info = type("I", (), {"name": "cc", "cwd": "/p", "jsonl": "/x/sid123.jsonl", "state": "idle", "last_activity": None})()
+    monkeypatch.setattr(reg, "list", lambda: [info])
+    monkeypatch.setattr(hs_mod.hook_state, "get_state", lambda sid: ("working", 1.0) if sid == "sid123" else None)
+    called = {"pane": 0}
+    def fake_capture(name):
+        called["pane"] += 1; return ""
+    monkeypatch.setattr("app.registry.tmux.capture_pane", fake_capture)
+    out = asyncio.run(reg.list_with_state())
+    assert out[0].state == "working"
+    assert called["pane"] == 0          # marcador presente -> NAO raspa o pane
+
+
+def test_list_with_state_falls_back_to_pane(monkeypatch):
+    reg = SessionRegistry()
+    info = type("I", (), {"name": "cc", "cwd": "/p", "jsonl": "/x/none.jsonl", "state": "idle", "last_activity": None})()
+    monkeypatch.setattr(reg, "list", lambda: [info])
+    monkeypatch.setattr(hs_mod.hook_state, "get_state", lambda sid: None)   # sem marcador
+    monkeypatch.setattr("app.registry.tmux.capture_pane", lambda name: "")  # pane vazio -> idle
+    out = asyncio.run(reg.list_with_state())
+    assert out[0].state == "idle"
+
+
 def test_mtime_fallback_uses_session_config_dir(tmp_path, monkeypatch):
     # Branch 4 (fallback newest-by-mtime): sessao SEM --session-id deve achar o jsonl mais recente sob o
     # config dir do pane pid (herdado pela arvore), nao o do backend. tracked=False.
