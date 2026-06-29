@@ -4,8 +4,9 @@
   import SessionCard from '../components/SessionCard.svelte';
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
   import QrScanner from '../components/QrScanner.svelte';
-  import { fetchSessionsForServer, getSessions, createSession, deleteSession } from '../lib/api';
+  import { getSessions, createSession, deleteSession, openSessionsStream } from '../lib/api';
   import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor } from '../lib/auth';
+  import type { Server } from '../lib/auth';
   import type { AggSession, SessionInfo, State } from '../lib/types';
 
   interface Props {
@@ -40,7 +41,7 @@
     if (editingId) {
       renameServer(editingId, editLabel);
       servers = listServers();
-      loadSessions(true);   // reagrega pra os badges das sessoes pegarem o nome novo
+      recompute(); // reagrega pra os badges das sessoes pegarem o nome novo
     }
     editingId = null;
   }
@@ -85,67 +86,72 @@
   const awaitingCount = $derived(sessions.filter((s) => s.state === 'awaiting_input').length);
   const summaryText = $derived(`${sessions.length} ${sessions.length === 1 ? 'sessão' : 'sessões'}`);
 
-  // Agrega sessões de todos os servidores, marcando cada uma com a origem (id/label/cor). Render
-  // INCREMENTAL: cada servidor é consultado em paralelo e a lista re-renderiza assim que CADA um
-  // responde — um servidor lento/offline (até 4s no timeout) não segura os que já voltaram. Servidor
-  // offline vira aviso em serverErrors, não derruba a lista. silent=true nos polls (sem spinner).
-  let loadGen = 0;
-  async function loadSessions(silent = false) {
-    const list = listServers();
-    servers = list;
-    if (list.length === 0) { sessions = []; serverErrors = []; loading = false; return; }
-    if (!silent) loading = true;
-    error = '';
-    const gen = ++loadGen;
-    // Slot por servidor; cada fetch preenche o seu e dispara recompute. Recompute reflatten na ORDEM
-    // de `list` (determinística), não na ordem de chegada.
-    const slots = new Map<string, { sessions: SessionInfo[] | null; error: string | null }>();
-    const recompute = () => {
-      if (gen !== loadGen) return; // resposta de um poll antigo (corrida) — descarta
-      const agg: AggSession[] = [];
-      const errs: { label: string; error: string }[] = [];
-      // Dedupe: vários servidores podem apontar pro MESMO backend (URLs diferentes). A identidade
-      // real da sessão é (jsonl, name) — o jsonl tem um uuid único por sessão, então sessões
-      // distintas nunca colidem; só a mesma sessão vista por 2 URLs colapsa (fica a 1ª).
-      const seen = new Set<string>();
-      for (const srv of list) {
-        const slot = slots.get(srv.id);
-        if (!slot) continue; // ainda não respondeu
-        if (slot.sessions) {
-          for (const s of slot.sessions) {
-            const key = `${s.jsonl ?? s.cwd ?? ''}::${s.name}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            agg.push({ ...s, serverId: srv.id, serverLabel: srv.label, serverColor: serverColor(srv.id) });
-          }
-        } else if (slot.error) {
-          errs.push({ label: srv.label, error: slot.error });
+  // Slot por servidor; cada stream SSE preenche o seu e dispara recompute. Recompute reflatten na
+  // ORDEM de `servers` (determinística). Servidor offline fica só em serverErrors, não derruba a lista.
+  const slots = new Map<string, { sessions: SessionInfo[] | null; error: string | null }>();
+
+  function recompute() {
+    const agg: AggSession[] = [];
+    const errs: { label: string; error: string }[] = [];
+    // Dedupe: vários servidores podem apontar pro MESMO backend (URLs diferentes). A identidade
+    // real da sessão é (jsonl, name) — o jsonl tem um uuid único por sessão, então sessões
+    // distintas nunca colidem; só a mesma sessão vista por 2 URLs colapsa (fica a 1ª).
+    const seen = new Set<string>();
+    for (const srv of servers) {
+      const slot = slots.get(srv.id);
+      if (!slot) continue; // ainda não recebeu evento
+      if (slot.sessions) {
+        for (const s of slot.sessions) {
+          const key = `${s.jsonl ?? s.cwd ?? ''}::${s.name}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          agg.push({ ...s, serverId: srv.id, serverLabel: srv.label, serverColor: serverColor(srv.id) });
         }
+      } else if (slot.error) {
+        errs.push({ label: srv.label, error: slot.error });
       }
-      sessions = agg;
-      serverErrors = errs;
-    };
-    await Promise.all(list.map((srv) =>
-      fetchSessionsForServer(srv)
-        .then((ss) => { slots.set(srv.id, { sessions: ss, error: null }); })
-        .catch((e) => { slots.set(srv.id, { sessions: null, error: e instanceof Error ? e.message : 'offline' }); })
-        .finally(recompute),
-    ));
-    if (gen === loadGen) loading = false;
+    }
+    sessions = agg;
+    serverErrors = errs;
+  }
+
+  let streams = new Map<string, EventSource>(); // server.id → EventSource
+
+  function connect(list: Server[]) {
+    if (list.length === 0) { sessions = []; serverErrors = []; loading = false; return; }
+    // fecha streams de servers removidos
+    for (const [id, es] of streams) {
+      if (!list.some((s) => s.id === id)) { es.close(); streams.delete(id); slots.delete(id); }
+    }
+    // abre streams novos (já conectado = pula)
+    for (const s of list) {
+      if (streams.has(s.id)) continue;
+      const es = openSessionsStream(s);
+      es.addEventListener('sessions', (e) => {
+        slots.set(s.id, { sessions: JSON.parse((e as MessageEvent).data) as SessionInfo[], error: null });
+        loading = false;
+        recompute();
+      });
+      es.onerror = () => {
+        // falha ISOLADA: só este servidor. EventSource auto-reconecta.
+        slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
+        recompute();
+      };
+      streams.set(s.id, es);
+    }
+    recompute();
   }
 
   onMount(() => {
-    loadSessions();
-    // Poll for updates every 5 seconds (silent: sem spinner)
-    const interval = setInterval(() => loadSessions(true), 5000);
-    return () => clearInterval(interval);
+    servers = listServers();
+    connect(servers);
+    return () => { for (const es of streams.values()) es.close(); streams.clear(); };
   });
 
   // O sheet de criar já posicionou o servidor-alvo como ativo (selectServer), então createSession
-  // cai no servidor certo. Depois reagrega a lista pra a sessão nova aparecer com a marca correta.
+  // cai no servidor certo. O stream SSE emitirá um evento sessions com a sessão nova.
   async function handleCreate(name: string, cwd?: string, configDir?: string | null) {
     await createSession(name, cwd, configDir);
-    await loadSessions(true);
   }
 
   // Abrir/apagar precisam mirar o servidor DA sessão: selectServer(serverId) antes, pois api.ts lê
@@ -173,12 +179,12 @@
     showMenu = !showMenu;
   }
 
-  // Remove um servidor da lista. Sem "ativo" pra restaurar — só reagrega (ou desloga se zerou).
+  // Remove um servidor da lista. Sem "ativo" pra restaurar — fecha o stream e reagrega (ou desloga se zerou).
   function dropServer(id: string) {
     removeServer(id);
     servers = listServers();
     if (servers.length === 0) { handleLogout(); return; }
-    loadSessions(true);
+    connect(servers);
   }
 
   // Abre o sheet de adicionar servidor manual (URL + token), limpando o estado anterior.
@@ -276,7 +282,7 @@
           + Adicionar servidor
         </button>
         <div class="menu-divider"></div>
-        <button class="menu-item" role="menuitem" onclick={() => { loadSessions(); showMenu = false; }}>
+        <button class="menu-item" role="menuitem" onclick={() => { for (const es of streams.values()) es.close(); streams.clear(); connect(servers); showMenu = false; }}>
           Atualizar
         </button>
         <button class="menu-item menu-item--danger" role="menuitem" onclick={handleLogout}>
@@ -302,7 +308,7 @@
     {:else if error}
       <div class="empty-state">
         <p class="error-text">{error}</p>
-        <button class="retry-btn" onclick={() => loadSessions()}>Tentar novamente</button>
+        <button class="retry-btn" onclick={() => { for (const es of streams.values()) es.close(); streams.clear(); connect(servers); }}>Tentar novamente</button>
       </div>
     {:else if sessions.length === 0}
       <div class="empty-state">
