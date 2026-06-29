@@ -8,8 +8,9 @@
     ts?: number | null;
     sessionName?: string;
     preview?: boolean;
+    noEntrance?: boolean;
   }
-  let { text, ts, sessionName = '', preview = false }: Props = $props();
+  let { text, ts, sessionName = '', preview = false, noEntrance = false }: Props = $props();
 
   const html = $derived(preview ? '' : renderMarkdown(text));
   // Anexos por caminho citado na minha msg (img/video/html/pdf que eu "mandar").
@@ -26,7 +27,7 @@
   }
 </script>
 
-<div class="assistant-msg">
+<div class="assistant-msg" class:no-entrance={noEntrance}>
   {#if preview}
     <!-- Preview ao vivo: texto PLANO (markdown so no snap final canonico, pra nao piscar **/code-fence
          meio-aberto) + caret. Mesma casca da bolha real -> swap quase invisivel. -->
@@ -59,6 +60,11 @@
     from { opacity: 0; transform: translateY(14px) scale(0.96); }
     to   { opacity: 1; transform: none; }
   }
+
+  /* Swap a partir de um preview ao vivo: sem o slide de entrada (a bolha ja estava ali como preview);
+     fade curto pra amaciar o reformat plano->markdown. */
+  .assistant-msg.no-entrance { animation: msg-fade 150ms var(--ease-out) both; }
+  @keyframes msg-fade { from { opacity: 0; } to { opacity: 1; } }
 
   .prose {
     color: var(--text-primary);
