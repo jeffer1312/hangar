@@ -54,8 +54,16 @@ async def list_events(poll: float = 1.5, ping_every: int = 7):
     while True:
         infos = await _list_registry.list_with_state()
         data = json.dumps([i.model_dump(mode="json") for i in infos], ensure_ascii=False)
-        if data != last:
-            last = data
+        # Dedup IGNORA last_activity: e o mtime do jsonl (float sub-segundo) que muda a CADA escrita
+        # de uma sessao ativa -> sem isto a lista inteira re-emitia a cada poll (~1.5s) sem nada
+        # visivel mudar = flicker no front. last_activity so e tiebreak de ordenacao + tempo relativo
+        # coarse (minutos) no switcher; uns segundos defasado e invisivel. Re-emite so em mudanca de
+        # membership/state/cwd/tracked/jsonl. O payload ainda CARREGA last_activity (so nao dispara).
+        sig = json.dumps(
+            [(i.name, i.cwd, i.state, i.tracked, i.jsonl) for i in infos], ensure_ascii=False
+        )
+        if sig != last:
+            last = sig
             yield {"event": "sessions", "data": data}
         ticks += 1
         if ping_every and ticks % ping_every == 0:
