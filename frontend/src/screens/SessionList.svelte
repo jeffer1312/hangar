@@ -135,6 +135,7 @@
       es.onerror = () => {
         // falha ISOLADA: só este servidor. EventSource auto-reconecta.
         slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
+        loading = false;
         recompute();
       };
       streams.set(s.id, es);
