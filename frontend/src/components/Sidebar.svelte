@@ -6,6 +6,23 @@
   import QrScanner from './QrScanner.svelte';
   import type { SessionInfo, State } from '../lib/types';
   import type { Server } from '../lib/auth';
+  import Lottie from './Lottie.svelte';
+  import pensando from '../lib/lottie/pensando.json';
+
+  const stateLabels: Record<State, string> = { working: 'exec', idle: 'pronto', awaiting_input: 'aguardando', dead: 'encerrado' };
+  const stateColors: Record<State, string> = { working: 'var(--accent)', idle: 'var(--success)', awaiting_input: 'var(--warning)', dead: 'var(--error)' };
+  const stateChipBg: Record<State, string> = {
+    working: 'var(--accent-dim)', idle: 'rgba(52,199,89,0.12)',
+    awaiting_input: 'rgba(255,159,10,0.14)', dead: 'rgba(255,69,58,0.12)',
+  };
+  const STATIC_FRAME = 0; // f0 = anel cheio e simétrico (frames do meio ficam ralos)
+
+  // cwd -> prefixo truncável + basename que nunca encolhe (mesma lógica do SessionCard).
+  function cwdParts(cwd: string | undefined) {
+    const p = (cwd ?? '').replace(/\/+$/, '');
+    const i = p.lastIndexOf('/');
+    return i < 0 ? { prefix: '', base: p } : { prefix: p.slice(0, i + 1), base: p.slice(i + 1) };
+  }
 
   // Sidebar do DESKTOP (so monta >=820px). Reusa as MESMAS APIs/componentes do mobile, sem tocar
   // no fluxo mobile (SessionList continua intacto). Recolhe pra um trilho de ícones.
@@ -103,11 +120,6 @@
     onSelect(name);
   }
 
-  // session-id (uuid) = basename do jsonl sem extensao; mostra os 8 primeiros pra identificar a sessao.
-  function shortId(s: SessionInfo): string | null {
-    const f = s.jsonl?.split('/').pop();
-    return f ? f.replace(/\.jsonl$/, '').slice(0, 8) : null;
-  }
   async function saveEdit(old: string, serverId: string) {
     const nv = editValue.trim();
     editing = null;
@@ -227,14 +239,25 @@
               oncontextmenu={(e) => e.preventDefault()}
               onclick={() => onMainClick(s.name, g.server.id, s.tracked)}
             >
-              <span class="dot dot--{s.state}" aria-hidden="true"></span>
-              {#if !collapsed}<span class="sess-name">{s.name}</span>{/if}
-              {#if !collapsed}
-                {#if s.tracked === false}
-                  <span class="sess-badge" title="sem --session-id: nao rastreavel">sem id</span>
-                {:else if shortId(s)}
-                  <span class="sess-id" title={`session-id: ${shortId(s)}…`}>#{shortId(s)}</span>
+              <span class="lead" aria-hidden="true">
+                {#if s.state === 'working'}
+                  <Lottie data={pensando as any} size={18} loop autoplay />
+                {:else}
+                  <Lottie data={pensando as any} size={18} loop={false} autoplay={false} frame={STATIC_FRAME} />
                 {/if}
+              </span>
+              {#if !collapsed}
+                <span class="row-info">
+                  <span class="name-row">
+                    <span class="sess-name">{s.name}</span>
+                    {#if s.tracked === false}<span class="sess-badge" title="sem --session-id: nao rastreavel">sem id</span>{/if}
+                  </span>
+                  {#if s.cwd}
+                    {@const cp = cwdParts(s.cwd)}
+                    <span class="cwd" title={s.cwd}><span class="cwd-prefix">{cp.prefix}</span><span class="cwd-base">{cp.base}</span></span>
+                  {/if}
+                </span>
+                <span class="state-chip" style="color: {stateColors[s.state]}; background: {stateChipBg[s.state]};">{stateLabels[s.state]}</span>
               {/if}
             </button>
             {#if !collapsed}
@@ -349,10 +372,20 @@
   @media (hover: hover) { .sess-row:hover { background: var(--bg-hover); } }
   .sess-row.active { background: var(--bg-elevated); }
   .sess-main {
-    flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-2); height: 38px;
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-2); min-height: 46px;
     padding: 0 var(--space-2); text-align: left; justify-content: flex-start; color: var(--text-secondary);
     border-radius: var(--radius-md);
   }
+  .row-info { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+  .name-row { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+  .cwd { display: flex; min-width: 0; font-family: var(--font-mono); font-size: 10px; }
+  .cwd-prefix { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
+  .cwd-base { flex: 0 0 auto; white-space: nowrap; color: var(--text-secondary); }
+  .state-chip {
+    flex-shrink: 0; font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+    padding: 2px 7px; border-radius: var(--radius-full); white-space: nowrap;
+  }
+  .lead { width: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
   .sidebar.collapsed .sess-row { justify-content: center; }
   .sidebar.collapsed .sess-main { justify-content: center; padding: 0; }
   .sess-row.active .sess-main { color: var(--text-primary); }
@@ -362,7 +395,6 @@
     flex-shrink: 0; font-size: 10px; padding: 1px 5px; border-radius: var(--radius-sm);
     background: var(--bg-elevated); border: 1px solid var(--border-subtle); color: var(--warning); white-space: nowrap;
   }
-  .sess-id { flex-shrink: 0; font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); white-space: nowrap; }
   .sess-edit {
     flex: 1; min-width: 0; height: 38px; padding: 0 var(--space-2);
     background: var(--bg-base); border: 1px solid var(--accent); border-radius: var(--radius-md);
@@ -375,16 +407,6 @@
   @media (hover: hover) { .sess-row:hover .sess-del { opacity: 1; } }
   @media (hover: none) { .sess-del { opacity: 0.55; } }   /* touch: × sempre visível, sem o trap do :hover */
   .sess-del:hover { color: var(--error); background: var(--bg-base); }
-
-  .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--text-muted); }
-  /* working/awaiting "pensando": pulsa pra dar o badge de atividade na sidebar (igual ao botão de
-     atividade do topo). prefers-reduced-motion -> só a cor. */
-  .dot--working { background: var(--accent); animation: dot-pulse 1.4s ease-in-out infinite; }
-  .dot--awaiting_input { background: var(--warning); animation: dot-pulse 1.4s ease-in-out infinite; }
-  .dot--idle { background: var(--success, #3fb950); }
-  .dot--dead { background: var(--error); }
-  @keyframes dot-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.7); } }
-  @media (prefers-reduced-motion: reduce) { .dot--working, .dot--awaiting_input { animation: none; } }
 
   .side-foot { display: flex; flex-direction: column; gap: var(--space-1); border-top: 1px solid var(--border-subtle); padding-top: var(--space-2); }
   .server-btn {
