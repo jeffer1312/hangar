@@ -1,0 +1,51 @@
+import asyncio, json
+from app import sse
+
+
+class _Info:
+    def __init__(self, name, state):
+        self.name, self.state, self.cwd, self.jsonl, self.tracked, self.last_activity = name, state, "/p", f"/x/{name}.jsonl", True, None
+
+    def model_dump(self, mode="json"):
+        return {"name": self.name, "state": self.state, "cwd": self.cwd, "jsonl": self.jsonl, "tracked": self.tracked, "last_activity": self.last_activity}
+
+
+async def _take(gen, n):
+    out = []
+    async for ev in gen:
+        out.append(ev)
+        if len(out) >= n:
+            break
+    return out
+
+
+def test_emits_snapshot_on_connect(monkeypatch):
+    async def fake_list():
+        return [_Info("cc", "idle")]
+    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
+    evs = asyncio.run(_take(sse.list_events(poll=0.001, ping_every=9999), 1))
+    assert evs[0]["event"] == "sessions"
+    assert json.loads(evs[0]["data"])[0]["name"] == "cc"
+
+
+def test_emits_again_only_on_change(monkeypatch):
+    seq = [[_Info("cc", "idle")], [_Info("cc", "idle")], [_Info("cc", "working")]]
+    calls = {"i": 0}
+    async def fake_list():
+        r = seq[min(calls["i"], len(seq) - 1)]; calls["i"] += 1; return r
+    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
+    # connect-emit (idle), unchanged (idle, no emit), then working -> 2nd emit
+    evs = asyncio.run(_take(sse.list_events(poll=0.001, ping_every=9999), 2))
+    assert [e["event"] for e in evs] == ["sessions", "sessions"]
+    assert json.loads(evs[0]["data"])[0]["state"] == "idle"
+    assert json.loads(evs[1]["data"])[0]["state"] == "working"
+
+
+def test_ping_emitted_on_cadence(monkeypatch):
+    async def fake_list():
+        return [_Info("cc", "idle")]
+    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
+    # ping_every=1 -> after the connect snapshot, the next tick has no change but emits a ping
+    evs = asyncio.run(_take(sse.list_events(poll=0.001, ping_every=1), 2))
+    assert evs[0]["event"] == "sessions"
+    assert evs[1]["event"] == "ping"

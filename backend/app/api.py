@@ -252,6 +252,12 @@ def workflow_agent_detail(name: str, run_id: str, agent_id: str):
     return a
 
 
+@app.get("/api/sessions/events", dependencies=[Depends(require_auth)])
+async def sessions_events():
+    from app.sse import list_events
+    return EventSourceResponse(list_events())
+
+
 @app.get("/api/sessions/{name}/events", dependencies=[Depends(require_auth)])
 async def events(name: str):
     # handler async -> registry.list() (subprocess tmux) vai pro threadpool pra nao bloquear o loop.

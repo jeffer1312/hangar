@@ -40,6 +40,28 @@ def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
 # transcript novo, mas a conexao SSE foi bindada no antigo).
 _registry = SessionRegistry()
 
+# Instancia stateless pro stream de lista (separada do _registry do jsonl_watcher pra clareza).
+_list_registry = SessionRegistry()
+
+
+async def list_events(poll: float = 1.5, ping_every: int = 7):
+    """SSE da LISTA de sessoes. Emite o snapshot de list_with_state() na conexao e, num loop de
+    `poll`s, reemite SO quando o resultado muda (estado via markers do A; membership por re-listar).
+    Heartbeat 'ping' a cada `ping_every` ticks (alimenta o watchdog do front). Fail-loud: excecao
+    do list_with_state propaga e encerra o stream (o EventSource do cliente reconecta)."""
+    last = None
+    ticks = 0
+    while True:
+        infos = await _list_registry.list_with_state()
+        data = json.dumps([i.model_dump(mode="json") for i in infos], ensure_ascii=False)
+        if data != last:
+            last = data
+            yield {"event": "sessions", "data": data}
+        ticks += 1
+        if ping_every and ticks % ping_every == 0:
+            yield {"event": "ping", "data": "{}"}
+        await asyncio.sleep(poll)
+
 
 async def merged_events(name: str, jsonl: str):
     monitor = StateMonitor(name)
