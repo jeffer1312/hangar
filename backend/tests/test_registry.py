@@ -16,8 +16,10 @@ _UUID = "12345678-1234-1234-1234-123456789abc"
 def _clear_jsonl_cache():
     # O cache e de CLASSE (compartilhado) -> zera entre testes pra nao vazar resolucao de um pro outro.
     SessionRegistry._jsonl_cache.clear()
+    SessionRegistry._fd_locked.clear()
     yield
     SessionRegistry._jsonl_cache.clear()
+    SessionRegistry._fd_locked.clear()
 
 
 def test_sanitize_cwd_matches_claude_scheme():
@@ -196,6 +198,31 @@ def test_resolve_no_cross_contamination_with_siblings(tmp_path):
          patch.object(registry.tmux, "list_panes_active", return_value=panes):
         j, tracked = reg.resolve_tracked("cc", "/home/u/p")
     assert j.endswith(f"{my_id}.jsonl")  # o MEU id, nao o orfao mais novo
+    assert tracked
+
+
+def test_resolve_fd_lock_survives_transient_fd_absence(tmp_path):
+    # fd pego num write trava a resolucao; nos polls SEGUINTES sem fd, MANTEM (nao reverte pro id da
+    # cmdline). Resume: o id da cmdline nunca vira arquivo -> sem o lock oscilava fd<->id e o chat piscava.
+    proj = tmp_path / "-home-u-p"
+    proj.mkdir()
+    real = str(proj / "3843d4e2-0000-0000-0000-000000000000.jsonl")
+    cmd_id = "f5d2c518-0000-0000-0000-000000000000"  # id da cmdline; jsonl nunca existe
+    reg = SessionRegistry(projects_dir=tmp_path)
+    # poll 1: fd ABERTO -> trava em `real`
+    with patch.object(registry.tmux, "pane_pid", return_value=1), \
+         patch.object(registry, "_descendant_pids", return_value=[1]), \
+         patch.object(registry, "_cmdline", return_value=f"claude --session-id {cmd_id}"), \
+         patch.object(registry, "_open_jsonl", return_value=real):
+        j1, _ = reg.resolve_tracked("cc", "/home/u/p")
+    assert j1 == real
+    # poll 2: fd AUSENTE -> mantem `real` (nao volta pro f5d2c518.jsonl fantasma)
+    with patch.object(registry.tmux, "pane_pid", return_value=1), \
+         patch.object(registry, "_descendant_pids", return_value=[1]), \
+         patch.object(registry, "_cmdline", return_value=f"claude --session-id {cmd_id}"), \
+         patch.object(registry, "_open_jsonl", return_value=None):
+        j2, tracked = reg.resolve_tracked("cc", "/home/u/p")
+    assert j2 == real
     assert tracked
 
 
