@@ -162,6 +162,9 @@ class SessionRegistry:
     # spawna claude por turno) -> sem isto a resolucao oscilava pro mtime e o watcher do SSE limpava o
     # chat. Atualizado quando um sinal confiavel reaparece (ex: /clear -> session-id novo).
     _jsonl_cache: dict[str, str] = {}
+    # nomes cujo cache veio do fd ABERTO (verdade do FS, nao chute). Mantido entre polls sem fd p/ nao
+    # oscilar pro --session-id da cmdline (resume: o id da cmdline nunca vira arquivo). De classe.
+    _fd_locked: set[str] = set()
 
     def __init__(self, projects_dir: Path | None = None):
         self.projects_dir = Path(projects_dir or settings.projects_dir)
@@ -241,7 +244,16 @@ class SessionRegistry:
                 j = _open_jsonl(p, (cdir / "projects") if cdir else self.projects_dir)
                 if j:
                     self._jsonl_cache[name] = j
+                    self._fd_locked.add(name)  # fd = verdade -> trava p/ os polls sem fd nao reverterem
                     return j, True
+            # fd AUSENTE neste instante: se ja travamos por fd (transcript REAL desta sessao, pego num
+            # write anterior), MANTEM o cache. Sem isto, um resume cujo --session-id da cmdline nunca
+            # vira arquivo oscilava fd<->id entre writes (e o watcher do SSE resetava o chat).
+            if name in self._fd_locked:
+                cached = self._jsonl_cache.get(name)
+                if cached:
+                    return cached, True
+                self._fd_locked.discard(name)
             # 2. cmdline --session-id (DETERMINISTICO; app-created sempre, manual com flag). Vale mesmo
             #    sem o arquivo existir ainda (sessao recem-criada) -> o tailer segue quando aparecer.
             #    PULA os processos auxiliares da arvore do claude, que carregam um --session-id PROPRIO
@@ -286,6 +298,7 @@ class SessionRegistry:
 
     def _forget(self, name: str) -> None:
         self._jsonl_cache.pop(name, None)
+        self._fd_locked.discard(name)
 
     def list(self) -> list[SessionInfo]:
         # Resolucao de jsonl/tracked de todas as sessoes. Otimizado: UM mapa /proc + UMA chamada tmux
@@ -363,6 +376,9 @@ class SessionRegistry:
         j = self._jsonl_cache.pop(old, None)
         if j is not None:
             self._jsonl_cache[new] = j
+        if old in self._fd_locked:           # move o fd-lock junto com o cache
+            self._fd_locked.discard(old)
+            self._fd_locked.add(new)
         # A fila duravel tambem e keyed por NOME -> move junto, senao a sessao renomeada perde as
         # entradas nao-drenadas e elas ficam orfas no nome velho (fantasma se reusarem `old`).
         PromptQueue(old).rename(new)
