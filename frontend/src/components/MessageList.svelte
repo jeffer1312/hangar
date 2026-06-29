@@ -26,7 +26,6 @@
   let { events, stateEvent, pending, sessionName, dockH, preview = '', onSelectOption, onCancel }: Props = $props();
 
   let listEl: HTMLElement | undefined = $state();
-  let previewEl: HTMLElement | undefined = $state();
   // O usuario "gruda" no fim por padrao; ao rolar pra cima, paramos de arrastar.
   let atBottom = $state(true);
   // Rolou MUITO pra cima (mais de uma tela do fim) -> mostra o botao "ir pro fim".
@@ -41,13 +40,6 @@
   const PAGE = 100;            // quantos eventos antigos revelar por vez ao rolar pro topo (paginacao)
   let windowEnd = $state(events.length);
   let extra = $state(0);       // eventos revelados ALEM da janela padrao (cresce ao rolar pro topo)
-
-  // Mantem o box do preview rolado no fundo: a cauda desliza DENTRO da caixa (altura fixa) em vez de
-  // empurrar/pular o layout do chat. Roda a cada update do preview.
-  $effect(() => {
-    void preview;
-    if (previewEl) previewEl.scrollTop = previewEl.scrollHeight;
-  });
 
   function onScroll() {
     if (!listEl) return;
@@ -174,10 +166,7 @@
     {/each}
 
     {#if preview}
-      <!-- Preview ao vivo do bloco em voo: texto PLANO (markdown bonito so no final canonico, pra
-           nao piscar ** / code-fence meio-aberto). Sob fullscreen e a CAUDA deslizante do pane ->
-           box CONTIDO (altura fixa, rola DENTRO de si) pra a cauda deslizar suave sem PULAR o layout. -->
-      <div class="preview-bubble" bind:this={previewEl}>{preview}<span class="caret" aria-hidden="true"></span></div>
+      <AssistantBubble text={preview} ts={undefined} preview />
     {/if}
 
     {#if stateEvent?.state === 'working'}
@@ -291,36 +280,6 @@
     opacity: 0.5;
     transform: scale(0.97);   /* na fila: atenua E encolhe um tico; assenta com spring ao ser aceita. */
   }
-
-  /* Preview ao vivo (cauda em voo): lado do assistente, texto plano levemente atenuado pra ler como
-     "ainda escrevendo". Some quando o assistant_msg canonico chega (reconcile no Chat). */
-  .preview-bubble {
-    align-self: stretch;
-    width: 100%;
-    max-width: 100%;
-    white-space: pre-wrap;
-    word-break: break-word;
-    font-size: var(--text-sm);
-    line-height: 1.55;
-    color: var(--text-secondary);
-    opacity: 0.9;
-    /* Contido: a cauda desliza DENTRO (altura fixa + auto-scroll no fundo) -> NAO pula o layout. */
-    max-height: 9.5em;
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
-    /* marcador "ao vivo": hairline accent a esquerda, distingue da msg final committada */
-    border-left: 2px solid var(--accent);
-    padding: 2px 0 2px var(--space-3);
-  }
-  .preview-bubble::-webkit-scrollbar { width: 0; height: 0; }
-
-  /* Caret piscando no fim do preview ao vivo (familia Respiracao "Digitando"). */
-  .caret {
-    display: inline-block; width: 7px; height: 1.05em; vertical-align: -2px;
-    margin-left: 2px; border-radius: 1px; background: var(--accent);
-    animation: caret-blink 1s steps(1) infinite;
-  }
-  @keyframes caret-blink { 50% { opacity: 0; } }
 
   /* Botao flutuante "ir pro fim": fixo no canto, acima do dock (bottom = altura do composer + respiro).
      z acima das msgs, abaixo dos sheets. So aparece quando scrolledUp (rolou +1 tela pra cima). */

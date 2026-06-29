@@ -7,14 +7,15 @@
     text: string;
     ts?: number | null;
     sessionName?: string;
+    preview?: boolean;
   }
-  let { text, ts, sessionName = '' }: Props = $props();
+  let { text, ts, sessionName = '', preview = false }: Props = $props();
 
-  const html = $derived(renderMarkdown(text));
+  const html = $derived(preview ? '' : renderMarkdown(text));
   // Anexos por caminho citado na minha msg (img/video/html/pdf que eu "mandar").
-  const fileRefs = $derived(sessionName ? parseFilePaths(text) : []);
+  const fileRefs = $derived(!preview && sessionName ? parseFilePaths(text) : []);
   // Midia remota (URL http) -> preview inline; nao depende do backend/sessionName.
-  const mediaRefs = $derived(parseMediaUrls(text));
+  const mediaRefs = $derived(preview ? [] : parseMediaUrls(text));
 
   function formatTime(ts: number | null | undefined): string {
     if (!ts) return '';
@@ -26,12 +27,18 @@
 </script>
 
 <div class="assistant-msg">
-  <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-  <div class="prose">{@html html}</div>
-  {#if fileRefs.length}<FileAttachment {sessionName} refs={fileRefs} />{/if}
-  {#if mediaRefs.length}<FileAttachment {sessionName} refs={mediaRefs} />{/if}
-  {#if ts}
-    <span class="ts">{formatTime(ts)}</span>
+  {#if preview}
+    <!-- Preview ao vivo: texto PLANO (markdown so no snap final canonico, pra nao piscar **/code-fence
+         meio-aberto) + caret. Mesma casca da bolha real -> swap quase invisivel. -->
+    <div class="prose plain">{text}<span class="caret" aria-hidden="true"></span></div>
+  {:else}
+    <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+    <div class="prose">{@html html}</div>
+    {#if fileRefs.length}<FileAttachment {sessionName} refs={fileRefs} />{/if}
+    {#if mediaRefs.length}<FileAttachment {sessionName} refs={mediaRefs} />{/if}
+    {#if ts}
+      <span class="ts">{formatTime(ts)}</span>
+    {/if}
   {/if}
 </div>
 
@@ -139,4 +146,15 @@
     color: var(--text-muted);
     margin-top: var(--space-1);
   }
+
+  /* Preview plano: preserva quebras de linha do pane (sem markdown -> sem blocos). */
+  .prose.plain { white-space: pre-wrap; }
+
+  /* Caret piscando no fim do preview ao vivo (familia Respiracao "Digitando"). */
+  .caret {
+    display: inline-block; width: 7px; height: 1.05em; vertical-align: -2px;
+    margin-left: 2px; border-radius: 1px; background: var(--accent);
+    animation: caret-blink 1s steps(1) infinite;
+  }
+  @keyframes caret-blink { 50% { opacity: 0; } }
 </style>
