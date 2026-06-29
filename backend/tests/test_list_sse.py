@@ -41,6 +41,24 @@ def test_emits_again_only_on_change(monkeypatch):
     assert json.loads(evs[1]["data"])[0]["state"] == "working"
 
 
+def test_no_reemit_on_last_activity_only_change(monkeypatch):
+    # last_activity = mtime do jsonl (float sub-segundo); muda a cada escrita de uma sessao ativa.
+    # Sozinho NAO pode re-emitir (senao a lista inteira pisca a cada poll). State change SIM emite.
+    a0 = _Info("cc", "working"); a0.last_activity = 1.0
+    a1 = _Info("cc", "working"); a1.last_activity = 2.5   # so last_activity mudou -> sem emit
+    a2 = _Info("cc", "idle");    a2.last_activity = 3.0   # state mudou -> emite
+    seq = [[a0], [a1], [a2]]
+    calls = {"i": 0}
+    async def fake_list():
+        r = seq[min(calls["i"], len(seq) - 1)]; calls["i"] += 1; return r
+    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
+    evs = asyncio.run(_take(sse.list_events(poll=0.001, ping_every=9999), 2))
+    assert [e["event"] for e in evs] == ["sessions", "sessions"]
+    assert json.loads(evs[0]["data"])[0]["state"] == "working"
+    assert json.loads(evs[1]["data"])[0]["state"] == "idle"
+    assert json.loads(evs[1]["data"])[0]["last_activity"] == 3.0  # ainda no payload
+
+
 def test_ping_emitted_on_cadence(monkeypatch):
     async def fake_list():
         return [_Info("cc", "idle")]
