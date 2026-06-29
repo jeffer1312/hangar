@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# claude-pocket — persist & restore the live `claude` conversation per tmux session across reboot.
+#
+# Why this exists: tmux-resurrect restores panes + cwd but NOT `claude` (it isn't in resurrect's
+# restore whitelist), and when an MCP server runs as a child it mis-captures that child (e.g.
+# `npm exec chrome-devtools-mcp`) as the pane command. So resurrect alone brings sessions back as
+# bare shells = the app shows "no id" and the conversation is unreachable.
+#
+# Fix: keep our OWN map  session-name -> claude session-id (uuid), refreshed on every resurrect
+# save (while claude is alive). On restore we relaunch `claude --resume <uuid>` in each bare pane,
+# so the exact transcript (<uuid>.jsonl) comes back instead of a blank shell. The app then tracks
+# it again (registry matches `--resume <uuid>` the same as `--session-id`).
+#
+# Wired via resurrect hooks (installed by scripts/tmux-persist-setup.sh):
+#   @resurrect-hook-post-save-all     -> tmux-claude-resume.sh save
+#   @resurrect-hook-post-restore-all  -> tmux-claude-resume.sh restore
+#
+# ponytail: map is keyed by tmux session name (unique even when many sessions share one cwd, where
+# newest-by-mtime would collide). Ceiling: a /clear mid-session rolls a NEW uuid while the cmdline
+# keeps the boot uuid -> we resume the boot transcript, not the post-clear one. Acceptable: the boot
+# thread is the main conversation. Upgrade path: read the live fd / newest-after-clear like the
+# backend's registry does, if post-clear loss ever bites.
+#
+# Usage: tmux-claude-resume.sh save | restore
+set -euo pipefail
+
+MAP="${TMUX_RESURRECT_DIR:-$HOME/.local/share/tmux/resurrect}/claude-sessions.tsv"
+# session-id (uuid) on claude's command line: --session-id <uuid> / --resume <uuid> (= the .jsonl).
+SID_RE='--(session-id|resume)[ =]([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
+
+# uuid of the claude running under a pane pid (search the pid + all its descendants). claude may be
+# a direct child of the pane shell (manual/wrapper) or the pane pid itself (app-created).
+claude_uuid() {
+  local stack=("$1") p k cl
+  while [ ${#stack[@]} -gt 0 ]; do
+    p=${stack[-1]}; unset 'stack[-1]'
+    cl=$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null) || cl=""
+    if [[ $cl == *claude* && $cl =~ $SID_RE ]]; then
+      printf '%s\n' "${BASH_REMATCH[2]}"; return 0
+    fi
+    for k in $(ps -o pid= --ppid "$p" 2>/dev/null); do stack+=("$k"); done
+  done
+  return 1
+}
+
+save() {
+  mkdir -p "$(dirname "$MAP")"
+  local tmp name pid u; tmp=$(mktemp)
+  # One pid per session (active pane); these sessions are single-pane by design.
+  while read -r name pid; do
+    [ -n "${pid:-}" ] || continue
+    u=$(claude_uuid "$pid") || continue
+    printf '%s\t%s\n' "$name" "$u" >> "$tmp"
+  done < <(tmux list-sessions -F '#{session_name} #{pane_pid}' 2>/dev/null)
+  mv "$tmp" "$MAP"
+}
+
+restore() {
+  [ -f "$MAP" ] || return 0
+  local name uuid cur
+  while IFS=$'\t' read -r name uuid; do
+    [ -n "${name:-}" ] && [ -n "${uuid:-}" ] || continue
+    tmux has-session -t "$name" 2>/dev/null || continue
+    cur=$(tmux display -t "$name" -p '#{pane_current_command}' 2>/dev/null) || cur=""
+    # Only inject into a bare shell — never clobber a claude that's already running.
+    case "$cur" in
+      fish|bash|zsh|sh|"") tmux send-keys -t "$name" "claude --resume $uuid" Enter ;;
+    esac
+    # Note: an untrusted cwd (e.g. $HOME) makes claude show its "trust this folder?" prompt and
+    # wait — answer it once on that session; trusted project dirs resume unattended.
+  done < "$MAP"
+}
+
+case "${1:-}" in
+  save) save ;;
+  restore) restore ;;
+  *) echo "usage: $0 save|restore" >&2; exit 2 ;;
+esac
