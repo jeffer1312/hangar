@@ -100,6 +100,25 @@ export function createSession(name: string, cwd?: string, configDir?: string | n
   });
 }
 
+// Web Push: chave VAPID publica deste servidor (applicationServerKey). Vazia = push desligado la.
+export async function getVapidKey(s: Server): Promise<string> {
+  const res = await fetch(`${s.baseUrl}/api/push/vapid`, {
+    headers: { Authorization: `Bearer ${s.token}` },
+  });
+  if (!res.ok) throw new Error(`vapid ${res.status}`);
+  return ((await res.json()).key ?? '') as string;
+}
+
+// Registra a inscricao push do celular NESTE servidor, com label + id locais (pra notif e deep-link).
+export async function subscribePush(s: Server, subscription: PushSubscriptionJSON): Promise<void> {
+  const res = await fetch(`${s.baseUrl}/api/push/subscribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
+    body: JSON.stringify({ subscription, label: s.label, serverId: s.id }),
+  });
+  if (!res.ok) throw new Error(`subscribe ${res.status}`);
+}
+
 export async function deleteSession(name: string): Promise<void> {
   await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}`, {
     method: 'DELETE',

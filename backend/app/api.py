@@ -3,6 +3,7 @@ import logging
 import mimetypes
 import os
 import re
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
@@ -20,10 +21,11 @@ from app.models import SessionInfo, ChatEvent
 from app.terminal_input import TerminalInput
 from app.sse import merged_events
 from app.uploads import save_upload, resolve_upload, UploadError, MAX_BYTES
-from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base
+from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base, settings
 from app.git_ops import list_branches, switch_branch, git_action, GitError
 from app.askquestion import clear_pending_askq
 from app.hook_state import hook_state
+from app import push
 
 _log = logging.getLogger("claude_pocket")
 
@@ -83,6 +85,7 @@ class _BodySizeLimitMiddleware:
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     _state_dirs = list({Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()})
+    hook_state.on_awaiting = _on_awaiting  # transicao -> awaiting_input dispara web push
     task = asyncio.create_task(hook_state.watch(_state_dirs))
 
     def _watch_done(t: asyncio.Task) -> None:
@@ -120,6 +123,22 @@ registry = SessionRegistry()
 terminal = TerminalInput()
 
 
+def _on_awaiting(session_id: str) -> None:
+    """hook_state -> transicao awaiting_input. Resolve uuid->nome e manda push, TUDO numa thread:
+    registry.list() mexe no tmux e o webpush e rede — nada disso pode bloquear o loop do watch."""
+    def _work() -> None:
+        try:
+            name = next(
+                (s.name for s in registry.list() if s.jsonl and Path(s.jsonl).stem == session_id),
+                None,
+            )
+            if name:
+                push.notify_awaiting(name)
+        except Exception:
+            _log.warning("push on_awaiting falhou (%s)", session_id, exc_info=True)
+    threading.Thread(target=_work, daemon=True).start()
+
+
 class _StrictBody(BaseModel):
     # rejeita campos desconhecidos no corpo (contrato estrito; pega typo de campo do cliente -> 422).
     model_config = ConfigDict(extra="forbid")
@@ -129,6 +148,27 @@ class CreateBody(_StrictBody):
     name: str = Field(min_length=1)
     cwd: str = Field(min_length=1)
     config_dir: str | None = None
+
+
+class PushSubscribeBody(_StrictBody):
+    subscription: dict  # PushSubscription do browser: {endpoint, keys:{p256dh, auth}}
+    label: str = Field(min_length=1)    # nome do servidor escolhido no celular (Casa/my-org)
+    serverId: str = Field(min_length=1)  # id local do servidor no celular (pro deep-link da notif)
+
+
+@app.get("/api/push/vapid", dependencies=[Depends(require_auth)])
+def push_vapid():
+    # Chave publica VAPID (applicationServerKey) pro browser assinar. Vazia = push desligado no backend.
+    return {"key": settings.vapid_public}
+
+
+@app.post("/api/push/subscribe", dependencies=[Depends(require_auth)])
+def push_subscribe(body: PushSubscribeBody):
+    try:
+        push.add_subscription(body.subscription, body.label, body.serverId)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
 
 
 class InputBody(_StrictBody):

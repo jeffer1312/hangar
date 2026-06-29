@@ -94,6 +94,12 @@ class Settings(BaseSettings):
     reload: bool = False     # CP_RELOAD=1: uvicorn auto-reload no dev (NUNCA em prod). Default off.
     front_port: int = 5173   # where the PWA is served (vite dev / Caddy) — used for QR pairing
     public_url: str = ""     # CP_PUBLIC_URL: overrides the auto-built pairing base URL
+    # Web Push (notificacao quando uma sessao fica awaiting_input). Par VAPID COMPARTILHADO entre os
+    # servidores (single-user controla todos -> uma inscricao do celular serve os 3). Vazio = push
+    # desligado (degrada gracioso: subscribe vira no-op). CP_VAPID_PUBLIC/PRIVATE/SUBJECT.
+    vapid_public: str = ""
+    vapid_private: str = ""
+    vapid_subject: str = "mailto:claude-pocket@local"
 
 
 settings = Settings()
