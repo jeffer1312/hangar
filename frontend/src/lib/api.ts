@@ -292,3 +292,14 @@ export function openEventStream(name: string): EventSource {
 
   return new EventSource(url, { withCredentials: isSameOrigin });
 }
+
+// EventSource da LISTA de UM servidor (baseUrl/token explícitos). ?token cross-origin (EventSource
+// não manda header e cross-origin não leva cookie); withCredentials same-origin. Por-servidor:
+// cada um tem o seu, falha isolada.
+export function openSessionsStream(s: Server): EventSource {
+  const isSameOrigin = !s.baseUrl || s.baseUrl === window.location.origin;
+  const url = isSameOrigin
+    ? `${s.baseUrl}/api/sessions/events`
+    : `${s.baseUrl}/api/sessions/events?token=${encodeURIComponent(s.token)}`;
+  return new EventSource(url, { withCredentials: isSameOrigin });
+}
