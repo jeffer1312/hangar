@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import mimetypes
 import os
 import re
@@ -23,6 +24,8 @@ from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base
 from app.git_ops import list_branches, switch_branch, git_action, GitError
 from app.askquestion import clear_pending_askq
 from app.hook_state import hook_state
+
+_log = logging.getLogger("claude_pocket")
 
 
 class _BodyTooLarge(Exception):
@@ -80,8 +83,23 @@ class _BodySizeLimitMiddleware:
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     _state_dirs = list({Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()})
-    asyncio.create_task(hook_state.watch(_state_dirs))
-    yield
+    task = asyncio.create_task(hook_state.watch(_state_dirs))
+
+    def _watch_done(t: asyncio.Task) -> None:
+        if not t.cancelled():
+            exc = t.exception()
+            if exc is not None:
+                _log.exception("hook_state.watch crashed", exc_info=exc)
+
+    task.add_done_callback(_watch_done)
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="claude-pocket", lifespan=_lifespan)
