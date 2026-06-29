@@ -86,6 +86,35 @@
   const awaitingCount = $derived(sessions.filter((s) => s.state === 'awaiting_input').length);
   const summaryText = $derived(`${sessions.length} ${sessions.length === 1 ? 'sessão' : 'sessões'}`);
 
+  // Agrupamento por servidor (so multi-servidor): cada grupo = um servidor, com header colapsavel +
+  // contagem de sessoes abertas. Ordem dos grupos segue `servers` (deterministica, igual ao menu);
+  // grupos sem sessao visivel somem. Reaproveita visibleSessions (ja ordenado + filtrado).
+  const grouped = $derived.by(() => {
+    const byId = new Map<string, AggSession[]>();
+    for (const s of visibleSessions) {
+      const arr = byId.get(s.serverId);
+      if (arr) arr.push(s);
+      else byId.set(s.serverId, [s]);
+    }
+    return servers
+      .map((srv) => ({ id: srv.id, label: srv.label, color: serverColor(srv.id), sessions: byId.get(srv.id) ?? [] }))
+      .filter((g) => g.sessions.length > 0);
+  });
+
+  // Estado colapsado por servidor, persistido (sobrevive ao reload que add/scan de servidor dispara).
+  const COLLAPSE_KEY = 'cp_collapsed_servers';
+  function loadCollapsed(): Set<string> {
+    try { return new Set(JSON.parse(localStorage.getItem(COLLAPSE_KEY) ?? '[]')); } catch { return new Set(); }
+  }
+  let collapsed = $state<Set<string>>(loadCollapsed());
+  function toggleGroup(id: string) {
+    const next = new Set(collapsed);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    collapsed = next;
+    try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next])); } catch { /* quota/priv mode: ignora */ }
+  }
+
   // Slot por servidor; cada stream SSE preenche o seu e dispara recompute. Recompute reflatten na
   // ORDEM de `servers` (determinística). Servidor offline fica só em serverErrors, não derruba a lista.
   const slots = new Map<string, { sessions: SessionInfo[] | null; error: string | null }>();
@@ -333,14 +362,46 @@
       {#if visibleSessions.length === 0}
         <p class="filter-empty">Nenhuma sessão corresponde ao filtro.</p>
       {:else}
-        {#each visibleSessions as session (session.serverId + ':' + session.name)}
-          <SessionCard
-            {session}
-            serverBadge={multiServer ? { label: session.serverLabel, color: session.serverColor } : null}
-            onClick={() => openSession(session)}
-            onDelete={() => handleDelete(session)}
-          />
-        {/each}
+        {#if multiServer}
+          {#each grouped as g (g.id)}
+            {@const awaiting = g.sessions.filter((s) => s.state === 'awaiting_input').length}
+            <div class="group">
+              <button
+                class="group-head"
+                onclick={() => toggleGroup(g.id)}
+                aria-expanded={!collapsed.has(g.id)}
+                aria-label={`${g.label}: ${g.sessions.length} ${g.sessions.length === 1 ? 'sessão' : 'sessões'}`}
+              >
+                <span class="group-chevron" class:collapsed={collapsed.has(g.id)} aria-hidden="true">▾</span>
+                <span class="group-dot" style="background: {g.color};" aria-hidden="true"></span>
+                <span class="group-label">{g.label}</span>
+                <span class="group-count">{g.sessions.length}</span>
+                {#if awaiting > 0}
+                  <span class="group-await">{awaiting} aguardando</span>
+                {/if}
+              </button>
+              {#if !collapsed.has(g.id)}
+                {#each g.sessions as session (session.serverId + ':' + session.name)}
+                  <SessionCard
+                    {session}
+                    serverBadge={null}
+                    onClick={() => openSession(session)}
+                    onDelete={() => handleDelete(session)}
+                  />
+                {/each}
+              {/if}
+            </div>
+          {/each}
+        {:else}
+          {#each visibleSessions as session (session.serverId + ':' + session.name)}
+            <SessionCard
+              {session}
+              serverBadge={null}
+              onClick={() => openSession(session)}
+              onDelete={() => handleDelete(session)}
+            />
+          {/each}
+        {/if}
       {/if}
     {/if}
   </div>
@@ -486,6 +547,47 @@
     color: var(--text-muted);
     text-align: center;
     padding: var(--space-6) var(--space-3);
+  }
+
+  /* Grupo por servidor: header colapsavel (mobile + desktop, mesmo componente). */
+  .group { margin-bottom: var(--space-1); }
+  .group-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    padding: var(--space-2) var(--space-4);
+    background: transparent;
+    text-align: left;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .group-head:active { background: var(--bg-hover); }
+  .group-chevron {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    transition: transform 160ms var(--ease-out);
+  }
+  .group-chevron.collapsed { transform: rotate(-90deg); }
+  .group-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .group-label {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .group-count {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    background: var(--bg-surface);
+    border-radius: var(--radius-full);
+    padding: 1px 8px;
+    min-width: 20px;
+    text-align: center;
+  }
+  .group-await {
+    margin-left: auto;
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--warning);
   }
 
   .empty-state {
