@@ -44,6 +44,13 @@
   }
 
   const summary = $derived(summarizeInput(event.tool_name, event.tool_input));
+
+  // Bash com run_in_background retorna NA HORA (vira shell destacado) -> "Executou" engana. Marca
+  // como background; a saida viva chega depois pelos cards de BashOutput (o agente puxa via bash_id).
+  const isBackground = $derived(
+    event.tool_name === 'Bash' && (event.tool_input as Record<string, unknown> | null)?.['run_in_background'] === true
+  );
+  const label = $derived(isBackground && phase !== 'error' ? 'Rodando em background' : verb);
 </script>
 
 <div
@@ -60,7 +67,7 @@
       <span class="row-spin" aria-label="Executando…">⟳</span>
     {/if}
     <span class="row-label">
-      {verb} <span class="row-tool">{event.tool_name ?? 'Tool'}</span>{#if summary} · {summary}{/if}
+      {label} <span class="row-tool">{event.tool_name ?? 'Tool'}</span>{#if isBackground}<span class="row-badge">background</span>{/if}{#if summary} · {summary}{/if}
     </span>
     <span class="row-chevron" class:open={expanded} aria-hidden="true">›</span>
   </div>
@@ -110,6 +117,19 @@
   .row-tool {
     font-family: var(--font-mono);
     color: var(--text-secondary);
+  }
+
+  .row-badge {
+    flex-shrink: 0;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 1px 6px;
+    margin-left: 4px;
+    border-radius: var(--radius-full);
+    color: var(--accent);
+    background: var(--accent-dim);
   }
 
   .tool-row--error .row-label {
