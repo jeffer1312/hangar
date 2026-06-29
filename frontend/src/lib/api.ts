@@ -81,6 +81,10 @@ export function getSessions(): Promise<SessionInfo[]> {
 async function fetchSessionsForServer(s: Server): Promise<SessionInfo[]> {
   const res = await fetch(`${s.baseUrl}/api/sessions`, {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
+    // Sem timeout, um servidor offline (ex: PC do trabalho) trava o Promise.all do poll
+    // (a cada 5s) ate o timeout default do browser -> lista "as vezes" lenta. 4s < intervalo
+    // do poll: servidor morto falha rapido e os outros renderizam na hora.
+    signal: AbortSignal.timeout(4000),
   });
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json() as Promise<SessionInfo[]>;
