@@ -47,6 +47,11 @@
   // Linhas de chrome do rodape (statusline + box de input) sao ruido aqui — mas mantemos o pane
   // INTEIRO pra nao esconder nada do overlay. Trim so as linhas vazias do fim.
   const lines = $derived(text.replace(/\s+$/, '').split('\n'));
+
+  // URL no pane (ex: link OAuth do login). O pane tem 200 cols, entao a URL cabe numa linha so e o
+  // match pega ela inteira. Vira botao tocavel -> abre no browser do celular (copiar link gigante de
+  // uma fonte 10px era o atrito no login). Primeira URL basta; null some o botao.
+  const paneUrl = $derived(text.match(/https?:\/\/\S+/)?.[0] ?? null);
 </script>
 
 {#if open}
@@ -64,6 +69,10 @@
       {/if}
       <pre class="tm-pane">{lines.join('\n')}</pre>
     </div>
+
+    {#if paneUrl}
+      <a class="tm-link" href={paneUrl} target="_blank" rel="noopener noreferrer">↗ Abrir link no navegador</a>
+    {/if}
 
     <nav class="tm-keys" aria-label="Teclas de resgate">
       <span class="tm-keys-hint">resgate</span>
@@ -131,6 +140,25 @@
     min-width: max-content;      /* deixa rolar horizontal em vez de quebrar */
     tab-size: 2;
   }
+
+  /* Botao tocavel quando ha URL no pane (link OAuth do login). Largo e obvio — vs a URL crua 10px. */
+  .tm-link {
+    flex-shrink: 0;
+    display: block;
+    text-align: center;
+    margin: 0 var(--space-3) var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    background: var(--accent-soft, rgba(124, 147, 255, 0.16));
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-md, 8px);
+    color: var(--accent);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    text-decoration: none;
+    word-break: break-all;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .tm-link:active { background: var(--bg-hover); }
 
   .tm-keys {
     flex-shrink: 0;

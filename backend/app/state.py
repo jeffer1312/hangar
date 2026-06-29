@@ -55,6 +55,21 @@ def is_overlay(pane_text: str) -> bool:
     # (/model) e paineis (/status, /config, /help) alem do AskUserQuestion. Fonte unica de "overlay"
     # (StateMonitor e terminal_input.deliverable usam esta).
     return bool(_FOOTER_RE.search("\n".join(pane_text.splitlines()[-8:])))
+
+
+# Marcadores da tela de welcome/login do Claude Code (tema -> metodo -> URL OAuth -> colar code).
+# Nenhum aparece numa sessao ja logada e em uso, entao servem de sinal de "precisa logar". ponytail:
+# strings best-effort — se uma versao futura do claude mudar o texto, ajustar AQUI (calibration knob).
+# Ancorado na URL OAuth (sempre presente no passo de login) + frases exclusivas do onboarding.
+_LOGIN_RE = re.compile(
+    r"/oauth/authorize|Paste code here|Select login method|Choose the text style",
+    re.I,
+)
+
+
+def is_login(pane_text: str) -> bool:
+    """Sessao parada na tela de welcome/login do Claude Code (sem .jsonl ainda)."""
+    return bool(_LOGIN_RE.search(pane_text))
 # Glifos que marcam a BORDA do box do picker: bullet de assistente, junta de tool-result e
 # spinners. Scrollback (incl. listas numeradas perdidas) vive alem dessas linhas.
 _BOUNDARY_GLYPHS = "●⎿" + SPINNER_GLYPHS
@@ -194,11 +209,12 @@ class StateMonitor:
             # paineis sem opcoes numeradas (/status, /config, /help). O front decide: com `options` (menu
             # nativo) usa botoes; sem opcoes mas overlay=True abre o espelho pra navegar via teclas.
             overlay = is_overlay(pane)
-            key = (state, label, question, tuple(options or ()), status, overlay)
+            login = is_login(pane)
+            key = (state, label, question, tuple(options or ()), status, overlay, login)
             if key != last_key:
                 last_key = key
                 held_state, held_label = state, label
                 yield StateEvent(session=self.name, state=state, label=label,
                                  question=question, options=options, status_line=status,
-                                 overlay=overlay)
+                                 overlay=overlay, login=login)
             await asyncio.sleep(self.poll)
