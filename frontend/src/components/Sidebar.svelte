@@ -55,8 +55,8 @@
   async function load() {
     const list = listServers();
     servers = list;
+    const gen = ++loadGen; // ponytail: bump before early-return so stale in-flight can't overwrite
     if (list.length === 0) { groups = []; return; }
-    const gen = ++loadGen;
     const slots = new Map<string, { sessions: SessionInfo[] | null; error: string | null }>();
     const recompute = () => {
       if (gen !== loadGen) return; // resposta de poll antigo — descarta
@@ -89,13 +89,16 @@
   async function handleCreate(name: string, cwd?: string, configDir?: string | null) {
     // O CreateSessionSheet já posicionou o servidor-alvo como ativo (selectServer).
     await createSession(name, cwd, configDir);
+    activeId = getActiveId(); // I2: sync local state after sheet's selectServer
     onSelect(name);
     load();
   }
   async function handleDelete(name: string, serverId: string, e: MouseEvent) {
     e.stopPropagation();
+    const prev = getActiveId(); // C1: save before pointing at target server
     selectServer(serverId); // api.ts mira o server ativo -> aponta pro dono da sessão
     try { await deleteSession(name); } catch { /* ignora */ }
+    if (prev && prev !== serverId) selectServer(prev); // C1: restore so open chat stays on its server
     load();
   }
 
@@ -117,6 +120,7 @@
     if (longPressed) { longPressed = false; return; } // foi toque longo (renomear)
     if (tracked === false) return; // sem id confiável -> não abre
     selectServer(serverId); // o Chat usa o server ativo
+    activeId = serverId; // I2: keep local badge in sync immediately
     onSelect(name);
   }
 
@@ -124,12 +128,16 @@
     const nv = editValue.trim();
     editing = null;
     if (!nv || nv === old) return;
+    const prev = getActiveId(); // C1: save before pointing at target server
     selectServer(serverId);
     try {
       const r = await renameSession(old, nv);
       if (old === currentSession) onSelect(r.name);
     } catch { /* load corrige */ }
-    load();
+    finally {
+      if (prev && prev !== serverId) selectServer(prev); // C1: restore so open chat stays on its server
+      load();
+    }
   }
   function onEditKey(e: KeyboardEvent, old: string) {
     if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
