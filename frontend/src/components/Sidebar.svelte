@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { fetchSessionsForServer, createSession, deleteSession, renameSession } from '../lib/api';
+  import { openSessionsStream, createSession, deleteSession, renameSession } from '../lib/api';
   import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor, clearCredentials } from '../lib/auth';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import QrScanner from './QrScanner.svelte';
@@ -51,39 +51,47 @@
     });
   }
 
-  let loadGen = 0;
-  async function load() {
-    const list = listServers();
-    servers = list;
-    const gen = ++loadGen; // ponytail: bump before early-return so stale in-flight can't overwrite
-    if (list.length === 0) { groups = []; return; }
-    const slots = new Map<string, { sessions: SessionInfo[] | null; error: string | null }>();
-    const recompute = () => {
-      if (gen !== loadGen) return; // resposta de poll antigo — descarta
-      const seen = new Set<string>(); // dedup global: backend compartilhado por 2 URLs não duplica
-      groups = list.map((srv) => {
-        const slot = slots.get(srv.id);
-        if (!slot || !slot.sessions) return { server: srv, sessions: [], error: slot?.error ?? null };
-        const fresh = slot.sessions.filter((s) => {
-          const key = `${s.jsonl ?? s.cwd ?? ''}::${s.name}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-        return { server: srv, sessions: sortSessions(fresh), error: null };
+  const slots = new Map<string, { sessions: SessionInfo[] | null; error: string | null }>();
+  function recompute() {
+    if (servers.length === 0) { groups = []; return; }
+    const seen = new Set<string>(); // dedup global: backend compartilhado por 2 URLs não duplica
+    groups = servers.map((srv) => {
+      const slot = slots.get(srv.id);
+      if (!slot || !slot.sessions) return { server: srv, sessions: [], error: slot?.error ?? null };
+      const fresh = slot.sessions.filter((s) => {
+        const key = `${s.jsonl ?? s.cwd ?? ''}::${s.name}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
       });
-    };
-    await Promise.all(list.map((srv) =>
-      fetchSessionsForServer(srv)
-        .then((ss) => { slots.set(srv.id, { sessions: ss, error: null }); })
-        .catch((e) => { slots.set(srv.id, { sessions: null, error: e instanceof Error ? e.message : 'offline' }); })
-        .finally(recompute),
-    ));
+      return { server: srv, sessions: sortSessions(fresh), error: null };
+    });
+  }
+
+  let streams = new Map<string, EventSource>();
+  function connect(list: Server[]) {
+    for (const [id, es] of streams) {
+      if (!list.some((s) => s.id === id)) { es.close(); streams.delete(id); slots.delete(id); }
+    }
+    for (const s of list) {
+      if (streams.has(s.id)) continue;
+      const es = openSessionsStream(s);
+      es.addEventListener('sessions', (e) => {
+        slots.set(s.id, { sessions: JSON.parse((e as MessageEvent).data), error: null });
+        recompute();
+      });
+      es.onerror = () => {
+        slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
+        recompute();
+      };
+      streams.set(s.id, es);
+    }
+    recompute();
   }
   onMount(() => {
-    load();
-    const iv = setInterval(load, 5000);
-    return () => clearInterval(iv);
+    servers = listServers();
+    connect(servers);
+    return () => { for (const es of streams.values()) es.close(); streams.clear(); };
   });
 
   async function handleCreate(name: string, cwd?: string, configDir?: string | null) {
@@ -91,7 +99,7 @@
     await createSession(name, cwd, configDir);
     activeId = getActiveId(); // I2: sync local state after sheet's selectServer
     onSelect(name);
-    load();
+    // SSE stream emitirá a sessão nova automaticamente
   }
   async function handleDelete(name: string, serverId: string, e: MouseEvent) {
     e.stopPropagation();
@@ -99,7 +107,7 @@
     selectServer(serverId); // api.ts mira o server ativo -> aponta pro dono da sessão
     try { await deleteSession(name); } catch { /* ignora */ }
     if (prev && prev !== serverId) selectServer(prev); // C1: restore so open chat stays on its server
-    load();
+    // SSE stream emitirá a lista atualizada automaticamente
   }
 
   // ── Renomear sessão do tmux: TOQUE LONGO no nome -> edita inline ──────────────
@@ -136,7 +144,7 @@
     } catch { /* load corrige */ }
     finally {
       if (prev && prev !== serverId) selectServer(prev); // C1: restore so open chat stays on its server
-      load();
+      // SSE stream emitirá a sessão renomeada automaticamente
     }
   }
   function onEditKey(e: KeyboardEvent, old: string) {
@@ -174,6 +182,7 @@
     servers = listServers();
     activeId = getActiveId();
     if (servers.length === 0) { clearCredentials(); onLogout(); return; }
+    connect(servers);
     if (was) window.location.reload();
   }
   function handleScan(text: string) {
