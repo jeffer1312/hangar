@@ -8,6 +8,7 @@
   import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
   import type { AggSession, SessionInfo, State } from '../lib/types';
+  import { enablePush, pushSupported } from '../lib/push';
 
   interface Props {
     onNavigateToChat: (name: string) => void;
@@ -28,6 +29,22 @@
   // agregada; o servidor-alvo de uma sessão é o dela, escolhido ao abrir/criar.
   let servers = $state(listServers());
   let scanning = $state(false);
+
+  // Web push: liga notificacao de "sessao aguardando" (assina + registra nos servidores).
+  let pushBusy = $state(false);
+  let pushMsg = $state('');
+  async function handleEnablePush() {
+    pushBusy = true;
+    pushMsg = '';
+    try {
+      const n = await enablePush();
+      pushMsg = `Ativado em ${n} servidor${n > 1 ? 'es' : ''}.`;
+    } catch (e) {
+      pushMsg = e instanceof Error ? e.message : 'Erro ao ativar.';
+    } finally {
+      pushBusy = false;
+    }
+  }
 
   // Rename inline de servidor no menu: id em edicao + valor do input.
   let editingId = $state<string | null>(null);
@@ -312,6 +329,14 @@
           + Adicionar servidor
         </button>
         <div class="menu-divider"></div>
+        {#if pushSupported()}
+          <button class="menu-item" role="menuitem" onclick={handleEnablePush} disabled={pushBusy}>
+            {pushBusy ? 'Ativando…' : '🔔 Ativar notificações'}
+          </button>
+          {#if pushMsg}
+            <div class="menu-push-msg">{pushMsg}</div>
+          {/if}
+        {/if}
         <button class="menu-item" role="menuitem" onclick={() => { for (const es of streams.values()) es.close(); streams.clear(); connect(servers); showMenu = false; }}>
           Atualizar
         </button>
@@ -824,5 +849,12 @@
 
   .menu-item--danger {
     color: var(--error);
+  }
+
+  .menu-push-msg {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    padding: var(--space-1) var(--space-4) var(--space-2);
+    border-bottom: 1px solid var(--border-subtle);
   }
 </style>

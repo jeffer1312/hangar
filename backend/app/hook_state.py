@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from watchfiles import awatch
 
@@ -14,20 +14,33 @@ class HookState:
 
     def __init__(self) -> None:
         self._map: dict[str, tuple[str, float]] = {}
+        # Disparado na transicao -> awaiting_input (so no watch ao vivo, nao no load_existing do boot).
+        # Wiring em api.py manda o push. Recebe o session_id (uuid); best-effort, nunca levanta.
+        self.on_awaiting: Optional[Callable[[str], None]] = None
 
     def get_state(self, session_id: Optional[str]) -> Optional[tuple[str, float]]:
         if not session_id:
             return None
         return self._map.get(session_id)
 
-    def _apply(self, path: Path) -> None:
+    def _apply(self, path: Path, notify: bool = False) -> None:
         # Le UM marcador pro mapa. Falha-soft: marcador parcial/corrompido e ignorado.
         try:
             o = json.loads(path.read_text(encoding="utf-8"))
             state, ts = o["state"], float(o["ts"])
         except Exception:
             return
+        prev = self._map.get(path.stem)
         self._map[path.stem] = (state, ts)
+        # Transicao -> awaiting_input (so ao vivo). prev None = marcador novo aparecendo ja awaiting
+        # (sessao acabou de pedir input) tambem conta. awaiting->awaiting (so o ts mudou) nao re-dispara.
+        if notify and state == "awaiting_input" and (prev is None or prev[0] != "awaiting_input"):
+            cb = self.on_awaiting
+            if cb:
+                try:
+                    cb(path.stem)
+                except Exception:
+                    pass
 
     def load_existing(self, dirs: list[Path]) -> None:
         # Semeia o mapa com os marcadores ja presentes (no startup do backend).
@@ -49,7 +62,7 @@ class HookState:
             for _change, p in changes:
                 path = Path(p)
                 if path.suffix == ".json":
-                    self._apply(path)
+                    self._apply(path, notify=True)
 
 
 # Singleton de modulo (igual ao padrao do registry/installer).
