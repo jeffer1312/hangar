@@ -4,9 +4,9 @@
   import SessionCard from '../components/SessionCard.svelte';
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
   import QrScanner from '../components/QrScanner.svelte';
-  import { getAllSessions, getSessions, createSession, deleteSession } from '../lib/api';
+  import { fetchSessionsForServer, getSessions, createSession, deleteSession } from '../lib/api';
   import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor } from '../lib/auth';
-  import type { AggSession, State } from '../lib/types';
+  import type { AggSession, SessionInfo, State } from '../lib/types';
 
   interface Props {
     onNavigateToChat: (name: string) => void;
@@ -85,41 +85,53 @@
   const awaitingCount = $derived(sessions.filter((s) => s.state === 'awaiting_input').length);
   const summaryText = $derived(`${sessions.length} ${sessions.length === 1 ? 'sessão' : 'sessões'}`);
 
-  // Agrega sessões de todos os servidores, marcando cada uma com a origem (id/label/cor). Servidor
+  // Agrega sessões de todos os servidores, marcando cada uma com a origem (id/label/cor). Render
+  // INCREMENTAL: cada servidor é consultado em paralelo e a lista re-renderiza assim que CADA um
+  // responde — um servidor lento/offline (até 4s no timeout) não segura os que já voltaram. Servidor
   // offline vira aviso em serverErrors, não derruba a lista. silent=true nos polls (sem spinner).
+  let loadGen = 0;
   async function loadSessions(silent = false) {
     const list = listServers();
     servers = list;
     if (list.length === 0) { sessions = []; serverErrors = []; loading = false; return; }
     if (!silent) loading = true;
     error = '';
-    try {
-      const results = await getAllSessions(list);
+    const gen = ++loadGen;
+    // Slot por servidor; cada fetch preenche o seu e dispara recompute. Recompute reflatten na ORDEM
+    // de `list` (determinística), não na ordem de chegada.
+    const slots = new Map<string, { sessions: SessionInfo[] | null; error: string | null }>();
+    const recompute = () => {
+      if (gen !== loadGen) return; // resposta de um poll antigo (corrida) — descarta
       const agg: AggSession[] = [];
       const errs: { label: string; error: string }[] = [];
       // Dedupe: vários servidores podem apontar pro MESMO backend (URLs diferentes). A identidade
       // real da sessão é (jsonl, name) — o jsonl tem um uuid único por sessão, então sessões
       // distintas nunca colidem; só a mesma sessão vista por 2 URLs colapsa (fica a 1ª).
       const seen = new Set<string>();
-      for (const r of results) {
-        if (r.sessions) {
-          for (const s of r.sessions) {
+      for (const srv of list) {
+        const slot = slots.get(srv.id);
+        if (!slot) continue; // ainda não respondeu
+        if (slot.sessions) {
+          for (const s of slot.sessions) {
             const key = `${s.jsonl ?? s.cwd ?? ''}::${s.name}`;
             if (seen.has(key)) continue;
             seen.add(key);
-            agg.push({ ...s, serverId: r.server.id, serverLabel: r.server.label, serverColor: serverColor(r.server.id) });
+            agg.push({ ...s, serverId: srv.id, serverLabel: srv.label, serverColor: serverColor(srv.id) });
           }
-        } else {
-          errs.push({ label: r.server.label, error: r.error ?? 'offline' });
+        } else if (slot.error) {
+          errs.push({ label: srv.label, error: slot.error });
         }
       }
       sessions = agg;
       serverErrors = errs;
-    } catch (err) {
-      error = err instanceof Error ? err.message : 'Erro ao carregar sessões';
-    } finally {
-      loading = false;
-    }
+    };
+    await Promise.all(list.map((srv) =>
+      fetchSessionsForServer(srv)
+        .then((ss) => { slots.set(srv.id, { sessions: ss, error: null }); })
+        .catch((e) => { slots.set(srv.id, { sessions: null, error: e instanceof Error ? e.message : 'offline' }); })
+        .finally(recompute),
+    ));
+    if (gen === loadGen) loading = false;
   }
 
   onMount(() => {
