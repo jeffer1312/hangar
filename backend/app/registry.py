@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import re
 import uuid
@@ -105,6 +106,21 @@ def _newest_after_clear(projdir: Path, sid_jsonl: str, exclude: set[str]) -> str
     except OSError:
         pass
     return best
+
+
+def _active_marker_jsonl(config_base: Path, sid: str, exclude: set[str]) -> Optional[str]:
+    # Marcador do hook (state_hook.py): <config>/.claude-pocket-active/<boot_id>.json = {"jsonl": <path>}
+    # = o transcript REALMENTE ativo daquele boot_id. Sinal DETERMINISTICO pro caso resume/clear, onde
+    # o <boot_id>.jsonl do cmdline NUNCA nasce (o claude escreve no <uuid> resumido) -> sem isto resolvia
+    # pro path fantasma = chat vazio. So vale se o arquivo existe e nao e de um auxiliar (subagente/daemon).
+    p = config_base / ".claude-pocket-active" / f"{sid}.json"
+    try:
+        j = json.loads(p.read_text(encoding="utf-8")).get("jsonl")
+    except (OSError, ValueError):
+        return None
+    if not j or not os.path.exists(j) or os.path.realpath(j) in exclude:
+        return None
+    return j
 
 
 # session-id (uuid) na linha de comando do claude: `--session-id <uuid>` / `--session-id=<uuid>` /
@@ -270,6 +286,13 @@ class SessionRegistry:
                 if sid:
                     cdir = _config_dir_of(p)
                     proj = (cdir / "projects") if cdir else self.projects_dir
+                    # Marcador do hook (boot_id -> transcript ativo): DETERMINISTICO. Vence o chute por
+                    # mtime e resolve o resume/clear cujo <sid>.jsonl do cmdline nunca nasce (chat vazio).
+                    config_base = cdir if cdir else self.projects_dir.parent
+                    marker = _active_marker_jsonl(config_base, sid, aux_open)
+                    if marker:
+                        self._jsonl_cache[name] = marker
+                        return marker, True
                     projdir = proj / sanitize_cwd(cwd)
                     sid_jsonl = str(projdir / f"{sid}.jsonl")
                     # _newest_after_clear (segue o jsonl mais NOVO do cwd pra pegar o pos-/clear) so e

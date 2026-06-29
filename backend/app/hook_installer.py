@@ -59,7 +59,9 @@ def _ensure_settings_file(settings_path: Path) -> bool:
 
 STATE_HOOK = str((Path(__file__).parent.parent / "hooks" / "state_hook.py").resolve())
 _STATE_COMMAND = f"python3 {STATE_HOOK}"
-_STATE_EVENTS = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop"]
+# SessionStart inclui o caso de abrir ja com --resume/clear (fixa o transcript ativo na hora); os
+# demais eventos cobrem o /resume feito DENTRO da sessao (marca no 1o prompt/tool depois dele).
+_STATE_EVENTS = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "SessionStart"]
 
 
 def _ensure_event_hook(settings_path: Path, event: str, command: str) -> bool:
