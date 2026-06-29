@@ -249,8 +249,10 @@ export function answerQuestions(name: string, answers: AnswerItem[]): Promise<{ 
   });
 }
 
-export async function interrupt(name: string): Promise<void> {
-  await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/interrupt`, {
+// clear=true tambem limpa o input do terminal (2o Esc no backend). So passar quando havia msg pendente.
+export async function interrupt(name: string, clear = false): Promise<void> {
+  const q = clear ? '?clear=true' : '';
+  await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/interrupt${q}`, {
     method: 'POST',
     body: JSON.stringify({}),
   });

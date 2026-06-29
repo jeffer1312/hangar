@@ -28,8 +28,12 @@
     onInterrupt: () => void;
     onExpandUsage: () => void;
     onOpenGit: () => void;
+    inputText?: string;  // bindable: o pai injeta um draft (ex: interrupt devolve a msg pendente)
   }
-  let { sessionName, sessionState, status, onSend, onCommand, onInterrupt, onExpandUsage, onOpenGit }: Props = $props();
+  let {
+    sessionName, sessionState, status, onSend, onCommand, onInterrupt, onExpandUsage, onOpenGit,
+    inputText = $bindable(''),
+  }: Props = $props();
 
   // ── Slash commands: busca uma vez por sessao (com cache) ────────────────────
   // Comeca vazio; o $effect popula na hora a partir do cache (sincrono) ou da rede.
@@ -54,7 +58,6 @@
       });
   });
 
-  let inputText = $state('');
   let textareaEl: HTMLTextAreaElement | undefined = $state();
 
   // ── Anexos de imagem: lista de arquivos + preview local + estado de upload ──

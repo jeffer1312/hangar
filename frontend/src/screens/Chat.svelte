@@ -50,6 +50,8 @@
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let screenEl: HTMLElement | undefined = $state();
   let pending = $state<{ id: string; text: string; solid?: boolean }[]>([]);
+  // Draft do composer (bindable): o interrupt devolve a msg pendente aqui pra editar e reenviar.
+  let composerText = $state('');
   // Preview AO VIVO do bloco de assistente em voo (lido do pane via SSE 'preview'). Texto-completo,
   // full-replace; some quando o assistant_msg canonico (do .jsonl) cobre o texto, ou ao sair de working.
   let previewText = $state('');
@@ -491,8 +493,16 @@
   }
 
   async function handleInterrupt() {
+    // Ao interromper, o Claude Code MANTEM a msg enfileirada no input -> proximo envio concatenava.
+    // Se ha pendente, devolve o texto pro composer (editavel) e remove a bubble; pede clear ao backend
+    // (2o Esc) pra limpar o input do terminal. Sem pendente: interrupt simples (sem clear -> sem rewind).
+    const last = pending.length ? pending[pending.length - 1] : null;
+    if (last) {
+      composerText = last.text;
+      pending = pending.filter((p) => p.id !== last.id);
+    }
     try {
-      await interrupt(sessionName);
+      await interrupt(sessionName, !!last);
     } catch (err) {
       console.error('interrupt error:', err);
     }
@@ -564,6 +574,7 @@
            Os OptionButtons continuam aparecendo na lista; o composer fica como saida garantida. -->
       <Composer
         {sessionName}
+        bind:inputText={composerText}
         sessionState={currentState}
         status={status}
         onSend={handleSend}
