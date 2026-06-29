@@ -16,10 +16,8 @@ _UUID = "12345678-1234-1234-1234-123456789abc"
 def _clear_jsonl_cache():
     # O cache e de CLASSE (compartilhado) -> zera entre testes pra nao vazar resolucao de um pro outro.
     SessionRegistry._jsonl_cache.clear()
-    SessionRegistry._resume_seen.clear()
     yield
     SessionRegistry._jsonl_cache.clear()
-    SessionRegistry._resume_seen.clear()
 
 
 def test_sanitize_cwd_matches_claude_scheme():
@@ -179,38 +177,26 @@ def test_resolve_post_clear_ignores_subagent_transcript(tmp_path):
     assert j.endswith(f"{_UUID}.jsonl")  # subagente excluido -> fica no REPL
 
 
-def test_resolve_follows_resumed_transcript_after_grace(tmp_path):
-    # RESUME: o claude relancou com --session-id NOVO cujo jsonl NUNCA foi escrito, mas continua
-    # escrevendo o transcript ANTIGO (vivo). Depois da graca, resolve segue o VIVO, nao o id fantasma.
+def test_resolve_no_cross_contamination_with_siblings(tmp_path):
+    # VARIAS sessoes no MESMO cwd: um jsonl orfao mais NOVO (resume/clear de outra sessao) NAO pode
+    # virar o transcript desta. Com irmaos no cwd, resolve usa o <id>.jsonl direto, nao o mais novo.
     proj = tmp_path / "-home-u-p"
     proj.mkdir()
-    live = proj / "3843d4e2-0000-0000-0000-000000000000.jsonl"
-    live.write_text("{}\n")  # transcript vivo (existe, mtime = agora)
-    new_id = "f5d2c518-0000-0000-0000-000000000000"  # id da cmdline; jsonl NAO existe
+    (proj / "5f3a45ba-0000-0000-0000-000000000000.jsonl").write_text("{}\n")  # o MEU (do id)
+    orphan = proj / "3843d4e2-0000-0000-0000-000000000000.jsonl"
+    orphan.write_text("{}\n")  # mais novo, de OUTRA sessao -> nao deve me contaminar
+    os.utime(proj / "5f3a45ba-0000-0000-0000-000000000000.jsonl", (1, 1))  # o meu e mais VELHO
+    my_id = "5f3a45ba-0000-0000-0000-000000000000"
     reg = SessionRegistry(projects_dir=tmp_path)
-    SessionRegistry._resume_seen["cc"] = time.monotonic() - 100  # graca ja decorrida
+    panes = [{"name": "cc", "cwd": "/home/u/p"}, {"name": "cc2", "cwd": "/home/u/p"}]  # 2 no cwd
     with patch.object(registry.tmux, "pane_pid", return_value=1), \
          patch.object(registry, "_descendant_pids", return_value=[1]), \
-         patch.object(registry, "_cmdline", return_value=f"claude --session-id {new_id}"), \
-         patch.object(registry, "_open_jsonl", return_value=None):
+         patch.object(registry, "_cmdline", return_value=f"claude --session-id {my_id}"), \
+         patch.object(registry, "_open_jsonl", return_value=None), \
+         patch.object(registry.tmux, "list_panes_active", return_value=panes):
         j, tracked = reg.resolve_tracked("cc", "/home/u/p")
-    assert j == str(live)
+    assert j.endswith(f"{my_id}.jsonl")  # o MEU id, nao o orfao mais novo
     assert tracked
-
-
-def test_resolve_keeps_cmdline_id_before_grace(tmp_path):
-    # Mesmo cenario SEM graca decorrida (sessao recem-criada: o sid_jsonl vai nascer) -> id vence.
-    proj = tmp_path / "-home-u-p"
-    proj.mkdir()
-    (proj / "other.jsonl").write_text("{}\n")  # recente, mas e sessao nova -> nao deve vencer ainda
-    new_id = "f5d2c518-0000-0000-0000-000000000000"
-    reg = SessionRegistry(projects_dir=tmp_path)
-    with patch.object(registry.tmux, "pane_pid", return_value=1), \
-         patch.object(registry, "_descendant_pids", return_value=[1]), \
-         patch.object(registry, "_cmdline", return_value=f"claude --session-id {new_id}"), \
-         patch.object(registry, "_open_jsonl", return_value=None):
-        j, tracked = reg.resolve_tracked("cc", "/home/u/p")
-    assert j.endswith(f"{new_id}.jsonl")  # graca nao decorreu -> confia no id
 
 
 def test_resolve_jsonl_picks_newest(tmp_path):

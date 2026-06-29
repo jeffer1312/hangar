@@ -1,7 +1,6 @@
 import asyncio
 import os
 import re
-import time
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -108,34 +107,6 @@ def _newest_after_clear(projdir: Path, sid_jsonl: str, exclude: set[str]) -> str
     return best
 
 
-# Resume: o claude relanca com um --session-id NOVO (cmdline) mas CONTINUA escrevendo o transcript
-# ANTIGO -> o jsonl do id novo NUNCA aparece. Num poll so nao da pra distinguir "sessao nova (arquivo
-# a nascer)" de "resume (arquivo nunca vem, outro transcript vivo)". Discrimina por PERSISTENCIA: o
-# sid_jsonl ausente por > _RESUME_GRACE s, com um transcript VIVO no cwd, = resume -> segue o vivo.
-_RESUME_GRACE = 8.0          # s sem o sid_jsonl aparecer antes de tratar como resume
-_RESUME_LIVE_WINDOW = 300.0  # s: jsonl com mtime nesta janela = transcript ATIVO (nao um velho qualquer)
-
-
-def _newest_live(projdir: Path, exclude: set[str], window: float = _RESUME_LIVE_WINDOW) -> Optional[str]:
-    # Mais recente *.jsonl do projdir (fora de `exclude`) cujo mtime esta dentro de `window`s de agora,
-    # ou None. Distingue um transcript sendo escrito AGORA (resume) de jsonls velhos do mesmo cwd.
-    now = time.time()
-    best, best_mt = None, 0.0
-    try:
-        for f in projdir.glob("*.jsonl"):
-            if os.path.realpath(str(f)) in exclude:
-                continue
-            try:
-                mt = f.stat().st_mtime
-            except OSError:
-                continue
-            if mt > best_mt and (now - mt) <= window:
-                best, best_mt = str(f), mt
-    except OSError:
-        pass
-    return best
-
-
 # session-id (uuid) na linha de comando do claude: `--session-id <uuid>` / `--session-id=<uuid>` /
 # `--resume <uuid>`. Este e o sinal AUTORITATIVO e ESTAVEL (vive no /proc/PID/cmdline pela vida do
 # processo, inclusive em idle) -> o jsonl da sessao e <uuid>.jsonl. So casa uuid de verdade pra nao
@@ -191,10 +162,6 @@ class SessionRegistry:
     # spawna claude por turno) -> sem isto a resolucao oscilava pro mtime e o watcher do SSE limpava o
     # chat. Atualizado quando um sinal confiavel reaparece (ex: /clear -> session-id novo).
     _jsonl_cache: dict[str, str] = {}
-    # name -> monotonic do 1o poll em que o sid_jsonl estava ausente COM um transcript vivo no cwd.
-    # Mede a graca de resume (ver _RESUME_GRACE): sessao nova escreve seu sid_jsonl em segundos; se
-    # apos a graca ele AINDA nao existe, e resume -> segue o transcript vivo. De classe igual ao cache.
-    _resume_seen: dict[str, float] = {}
 
     def __init__(self, projects_dir: Path | None = None):
         self.projects_dir = Path(projects_dir or settings.projects_dir)
@@ -232,6 +199,15 @@ class SessionRegistry:
             if j:
                 out.add(os.path.realpath(j))
         return out
+
+    def _cwd_has_siblings(self, cwd: str) -> bool:
+        # >1 sessao tmux com este MESMO cwd? Com varias, seguir o jsonl mais novo do cwd (newest-by-mtime)
+        # cruza o transcript de uma sessao pra outra -> a resolucao por mtime fica ambigua. ponytail: 1
+        # fork tmux por chamada; aceitavel (poucas sessoes). Fail-safe: erro -> trata como sem irmaos.
+        try:
+            return sum(1 for p in tmux.list_panes_active() if p.get("cwd") == cwd) > 1
+        except Exception:
+            return False
 
     def resolve(self, name: str, cwd: str) -> Optional[str]:
         return self.resolve_tracked(name, cwd)[0]
@@ -284,25 +260,15 @@ class SessionRegistry:
                     proj = (cdir / "projects") if cdir else self.projects_dir
                     projdir = proj / sanitize_cwd(cwd)
                     sid_jsonl = str(projdir / f"{sid}.jsonl")
-                    if os.path.exists(sid_jsonl):
-                        # boot-id ja escrito -> _newest_after_clear trata o /clear (segue o pos-clear).
-                        self._resume_seen.pop(name, None)
-                        j = _newest_after_clear(projdir, sid_jsonl, aux_open)
+                    # _newest_after_clear (segue o jsonl mais NOVO do cwd pra pegar o pos-/clear) so e
+                    # seguro com UMA sessao na pasta. Com VARIAS sessoes no mesmo cwd, o jsonl mais novo
+                    # de uma (ex: resume/clear) CONTAMINA as outras (vira o transcript delas). Nesse caso
+                    # usa o <id>.jsonl DIRETO; o fd (passo 1) ainda corrige /clear+resume da PROPRIA
+                    # sessao quando pega o arquivo aberto no write.
+                    if self._cwd_has_siblings(cwd):
+                        j = sid_jsonl
                     else:
-                        # sid_jsonl AUSENTE: sessao nova (arquivo a nascer) OU resume (id novo, transcript
-                        # antigo; o id novo nunca aparece). Travado num transcript real? mantem (resume e
-                        # permanente, sem oscilar no idle). Senao, mede a graca contra um transcript VIVO.
-                        cached = self._jsonl_cache.get(name)
-                        if cached and cached != sid_jsonl and os.path.exists(cached):
-                            j = cached
-                        else:
-                            live = _newest_live(projdir, aux_open)
-                            if live:
-                                first = self._resume_seen.setdefault(name, time.monotonic())
-                                j = live if (time.monotonic() - first) >= _RESUME_GRACE else sid_jsonl
-                            else:
-                                self._resume_seen.pop(name, None)
-                                j = sid_jsonl
+                        j = _newest_after_clear(projdir, sid_jsonl, aux_open)
                     self._jsonl_cache[name] = j
                     return j, True
         # 3. cache: ultimo sinal confiavel. Estabiliza quando o processo com --session-id some
