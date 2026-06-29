@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getSessions, createSession, deleteSession, renameSession } from '../lib/api';
-  import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, clearCredentials } from '../lib/auth';
+  import { fetchSessionsForServer, createSession, deleteSession, renameSession } from '../lib/api';
+  import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor, clearCredentials } from '../lib/auth';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import QrScanner from './QrScanner.svelte';
   import type { SessionInfo, State } from '../lib/types';
+  import type { Server } from '../lib/auth';
 
   // Sidebar do DESKTOP (so monta >=820px). Reusa as MESMAS APIs/componentes do mobile, sem tocar
   // no fluxo mobile (SessionList continua intacto). Recolhe pra um trilho de ícones.
@@ -15,7 +16,8 @@
   }
   let { currentSession, onSelect, onLogout }: Props = $props();
 
-  let sessions = $state<SessionInfo[]>([]);
+  interface Group { server: Server; sessions: SessionInfo[]; error: string | null }
+  let groups = $state<Group[]>([]);
   let collapsed = $state(false);
   let servers = $state(listServers());
   let activeId = $state(getActiveId());
@@ -24,15 +26,42 @@
   let serversOpen = $state(false);
 
   const urgency: Record<State, number> = { awaiting_input: 0, working: 1, idle: 2, dead: 3 };
-  const sorted = $derived(
-    [...sessions].sort((a, b) => {
+  // Ordena DENTRO de cada grupo: atividade desc, depois urgência do estado.
+  function sortSessions(list: SessionInfo[]): SessionInfo[] {
+    return [...list].sort((a, b) => {
       const byAct = (b.last_activity ?? 0) - (a.last_activity ?? 0);
       return byAct !== 0 ? byAct : urgency[a.state] - urgency[b.state];
-    }),
-  );
+    });
+  }
 
+  let loadGen = 0;
   async function load() {
-    try { sessions = await getSessions(); } catch { /* mantem a lista atual */ }
+    const list = listServers();
+    servers = list;
+    if (list.length === 0) { groups = []; return; }
+    const gen = ++loadGen;
+    const slots = new Map<string, { sessions: SessionInfo[] | null; error: string | null }>();
+    const recompute = () => {
+      if (gen !== loadGen) return; // resposta de poll antigo — descarta
+      const seen = new Set<string>(); // dedup global: backend compartilhado por 2 URLs não duplica
+      groups = list.map((srv) => {
+        const slot = slots.get(srv.id);
+        if (!slot || !slot.sessions) return { server: srv, sessions: [], error: slot?.error ?? null };
+        const fresh = slot.sessions.filter((s) => {
+          const key = `${s.jsonl ?? s.cwd ?? ''}::${s.name}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        return { server: srv, sessions: sortSessions(fresh), error: null };
+      });
+    };
+    await Promise.all(list.map((srv) =>
+      fetchSessionsForServer(srv)
+        .then((ss) => { slots.set(srv.id, { sessions: ss, error: null }); })
+        .catch((e) => { slots.set(srv.id, { sessions: null, error: e instanceof Error ? e.message : 'offline' }); })
+        .finally(recompute),
+    ));
   }
   onMount(() => {
     load();
@@ -41,16 +70,16 @@
   });
 
   async function handleCreate(name: string, cwd?: string, configDir?: string | null) {
-    const s = await createSession(name, cwd, configDir);
-    sessions = [s, ...sessions];
+    // O CreateSessionSheet já posicionou o servidor-alvo como ativo (selectServer).
+    await createSession(name, cwd, configDir);
     onSelect(name);
+    load();
   }
-  async function handleDelete(name: string, e: MouseEvent) {
+  async function handleDelete(name: string, serverId: string, e: MouseEvent) {
     e.stopPropagation();
-    try {
-      await deleteSession(name);
-      sessions = sessions.filter((s) => s.name !== name);
-    } catch { /* ignora */ }
+    selectServer(serverId); // api.ts mira o server ativo -> aponta pro dono da sessão
+    try { await deleteSession(name); } catch { /* ignora */ }
+    load();
   }
 
   // ── Renomear sessão do tmux: TOQUE LONGO no nome -> edita inline ──────────────
@@ -59,18 +88,18 @@
   let pressTimer: ReturnType<typeof setTimeout> | undefined;
   let longPressed = false;
 
-  function pressStart(name: string) {
+  function pressStart(key: string) {
     longPressed = false;
     clearTimeout(pressTimer);
-    pressTimer = setTimeout(() => { longPressed = true; editing = name; editValue = name; }, 500);
+    pressTimer = setTimeout(() => { longPressed = true; editing = key; editValue = key.split('::').slice(1).join('::'); }, 500);
   }
   function pressEnd() {
     clearTimeout(pressTimer);
   }
-  function onMainClick(name: string) {
-    if (longPressed) { longPressed = false; return; }   // foi toque longo (renomear) -> não abre
-    // sem id confiavel (tracked===false): nao abre o chat (evitaria mostrar transcript errado).
-    if (sessions.find((x) => x.name === name)?.tracked === false) return;
+  function onMainClick(name: string, serverId: string, tracked: boolean | undefined) {
+    if (longPressed) { longPressed = false; return; } // foi toque longo (renomear)
+    if (tracked === false) return; // sem id confiável -> não abre
+    selectServer(serverId); // o Chat usa o server ativo
     onSelect(name);
   }
 
@@ -79,15 +108,15 @@
     const f = s.jsonl?.split('/').pop();
     return f ? f.replace(/\.jsonl$/, '').slice(0, 8) : null;
   }
-  async function saveEdit(old: string) {
+  async function saveEdit(old: string, serverId: string) {
     const nv = editValue.trim();
     editing = null;
     if (!nv || nv === old) return;
+    selectServer(serverId);
     try {
       const r = await renameSession(old, nv);
-      sessions = sessions.map((s) => (s.name === old ? { ...s, name: r.name } : s));
       if (old === currentSession) onSelect(r.name);
-    } catch { /* reload corrige */ }
+    } catch { /* load corrige */ }
     load();
   }
   function onEditKey(e: KeyboardEvent, old: string) {
@@ -166,45 +195,54 @@
   </button>
 
   <nav class="sess-list" aria-label="Sessões">
-    {#each sorted as s (s.name)}
-      <div class="sess-row" class:active={s.name === currentSession}>
-        {#if editing === s.name}
-          <!-- Toque longo no nome -> edita inline. Enter/blur salva, Esc cancela. -->
-          <input
-            class="sess-edit"
-            bind:value={editValue}
-            use:autofocus
-            onkeydown={(e) => onEditKey(e, s.name)}
-            onblur={() => saveEdit(s.name)}
-            aria-label="Renomear sessão"
-          />
-        {:else}
-          <button
-            class="sess-main"
-            class:untracked={s.tracked === false}
-            title={collapsed ? s.name : (s.tracked === false ? 'claude aberto sem --session-id: transcript nao rastreavel' : 'Toque longo pra renomear')}
-            onpointerdown={() => pressStart(s.name)}
-            onpointerup={pressEnd}
-            onpointerleave={pressEnd}
-            onpointercancel={pressEnd}
-            oncontextmenu={(e) => e.preventDefault()}
-            onclick={() => onMainClick(s.name)}
-          >
-            <span class="dot dot--{s.state}" aria-hidden="true"></span>
-            {#if !collapsed}<span class="sess-name">{s.name}</span>{/if}
-            {#if !collapsed}
-              {#if s.tracked === false}
-                <span class="sess-badge" title="sem --session-id: nao rastreavel">sem id</span>
-              {:else if shortId(s)}
-                <span class="sess-id" title={`session-id: ${shortId(s)}…`}>#{shortId(s)}</span>
+    {#each groups as g (g.server.id)}
+      {#if !collapsed}
+        <div class="grp-head" title={g.error ? `${g.server.label}: ${g.error}` : g.server.label}>
+          <span class="grp-dot" style="background: {serverColor(g.server.id)};" aria-hidden="true"></span>
+          <span class="grp-label">{g.server.label}</span>
+          {#if g.error}<span class="grp-off">offline</span>{/if}
+        </div>
+      {/if}
+      {#each g.sessions as s (s.name)}
+        {@const rowKey = `${g.server.id}::${s.name}`}
+        <div class="sess-row" class:active={g.server.id === activeId && s.name === currentSession}>
+          {#if editing === rowKey}
+            <input
+              class="sess-edit"
+              bind:value={editValue}
+              use:autofocus
+              onkeydown={(e) => onEditKey(e, s.name)}
+              onblur={() => saveEdit(s.name, g.server.id)}
+              aria-label="Renomear sessão"
+            />
+          {:else}
+            <button
+              class="sess-main"
+              class:untracked={s.tracked === false}
+              title={collapsed ? s.name : (s.tracked === false ? 'claude aberto sem --session-id: transcript nao rastreavel' : 'Toque longo pra renomear')}
+              onpointerdown={() => pressStart(rowKey)}
+              onpointerup={pressEnd}
+              onpointerleave={pressEnd}
+              onpointercancel={pressEnd}
+              oncontextmenu={(e) => e.preventDefault()}
+              onclick={() => onMainClick(s.name, g.server.id, s.tracked)}
+            >
+              <span class="dot dot--{s.state}" aria-hidden="true"></span>
+              {#if !collapsed}<span class="sess-name">{s.name}</span>{/if}
+              {#if !collapsed}
+                {#if s.tracked === false}
+                  <span class="sess-badge" title="sem --session-id: nao rastreavel">sem id</span>
+                {:else if shortId(s)}
+                  <span class="sess-id" title={`session-id: ${shortId(s)}…`}>#{shortId(s)}</span>
+                {/if}
               {/if}
+            </button>
+            {#if !collapsed}
+              <button class="sess-del" onclick={(e) => handleDelete(s.name, g.server.id, e)} aria-label={`Apagar ${s.name}`}>×</button>
             {/if}
-          </button>
-          {#if !collapsed}
-            <button class="sess-del" onclick={(e) => handleDelete(s.name, e)} aria-label={`Apagar ${s.name}`}>×</button>
           {/if}
-        {/if}
-      </div>
+        </div>
+      {/each}
     {/each}
   </nav>
 
@@ -295,6 +333,16 @@
   .new-plus { font-size: var(--text-lg); line-height: 1; flex-shrink: 0; }
 
   .sess-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin-top: var(--space-2); }
+  .grp-head {
+    display: flex; align-items: center; gap: var(--space-2);
+    padding: var(--space-2) var(--space-2) 4px;
+    font-size: var(--text-xs); font-weight: 600; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .grp-head:not(:first-child) { margin-top: var(--space-2); }
+  .grp-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .grp-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .grp-off { color: var(--warning); font-weight: 600; text-transform: none; letter-spacing: 0; }
   .sess-row { display: flex; align-items: center; border-radius: var(--radius-md); }
   /* hover SÓ em dispositivo com mouse. No touch (tablet), o :hover fazia o 1º toque virar "hover" e
      o 2º o clique -> precisava de 2 toques pra abrir a sessão. hover:hover isola isso. */
