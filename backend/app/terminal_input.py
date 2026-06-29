@@ -270,8 +270,15 @@ class TerminalInput:
             send_keys(name, "Down")
         send_keys(name, "Enter")
 
-    def interrupt(self, name: str) -> None:
+    def interrupt(self, name: str, clear: bool = False) -> None:
+        # Esc UNICO = interrompe o Claude MAS mantem o texto enfileirado no input (doc oficial). Por isso
+        # o proximo envio digitava EM CIMA do residuo -> concatenava. clear=True manda um 2o Esc: com o
+        # input nao-vazio (garantido pelo caller — so passa clear quando havia msg pendente) o Esc-Esc
+        # limpa o draft. NUNCA mandar o 2o Esc as cegas: input vazio + Esc-Esc abre o menu de rewind.
         send_keys(name, "Escape")
+        if clear:
+            time.sleep(_SETTLE)  # deixa o interrupt assentar e o texto voltar pro input antes de limpar
+            send_keys(name, "Escape")
 
     def set_model_effort(
         self,

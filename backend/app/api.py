@@ -350,8 +350,10 @@ def select(name: str, body: SelectBody):
 
 
 @app.post("/api/sessions/{name}/interrupt", dependencies=[Depends(require_auth)])
-def interrupt(name: str):
-    terminal.interrupt(name)
+def interrupt(name: str, clear: bool = False):
+    # clear=True: alem de interromper, limpa o input (2o Esc). So o front com msg pendente passa isso —
+    # garante input nao-vazio, evitando que o Esc-Esc abra o menu de rewind num input ja vazio.
+    terminal.interrupt(name, clear=clear)
     return {"ok": True}
 
 
