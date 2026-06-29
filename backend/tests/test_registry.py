@@ -151,6 +151,29 @@ def test_resolve_follows_post_clear_transcript(tmp_path):
     assert j.endswith("deadbeef-0000-0000-0000-000000000000.jsonl")
 
 
+def test_resolve_uses_active_marker_for_resumed_transcript(tmp_path):
+    # RESUME: cmdline --session-id X mas X.jsonl NUNCA existe (o claude escreve no Y resumido). O hook
+    # gravou o marcador X -> Y; resolve deve devolver Y (real), nao o path fantasma X.jsonl.
+    import json as _json
+    projects = tmp_path / "projects"
+    proj = projects / "-home-u-p"
+    proj.mkdir(parents=True)
+    real = proj / "deadbeef-0000-0000-0000-000000000000.jsonl"  # transcript resumido (existe)
+    real.write_text("{}")
+    mk = tmp_path / ".claude-pocket-active"   # config_base = projects.parent = tmp_path
+    mk.mkdir()
+    (mk / f"{_UUID}.json").write_text(_json.dumps({"jsonl": str(real), "ts": 1.0}))
+    reg = SessionRegistry(projects_dir=projects)
+    with patch.object(registry.tmux, "pane_pid", return_value=1), \
+         patch.object(registry, "_descendant_pids", return_value=[1]), \
+         patch.object(registry, "_cmdline", return_value=f"claude --session-id {_UUID}"), \
+         patch.object(registry, "_open_jsonl", return_value=None), \
+         patch.object(registry, "_config_dir_of", return_value=None):
+        j, tracked = reg.resolve_tracked("cc", "/home/u/p")
+    assert j == str(real)
+    assert tracked is True
+
+
 def test_resolve_post_clear_ignores_subagent_transcript(tmp_path):
     # Durante uma Task, o jsonl mais novo pode ser de um SUBAGENTE (--agent) com o fd aberto -> nao deve
     # virar o transcript da sessao; fica no jsonl do REPL (boot, ainda nao havia /clear).

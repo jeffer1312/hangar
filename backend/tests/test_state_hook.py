@@ -38,3 +38,26 @@ def test_unknown_event_writes_nothing(tmp_path):
 
 def test_missing_session_id_does_not_crash(tmp_path):
     _run({"hook_event_name": "Stop"}, tmp_path)  # exit 0, no marker
+
+
+def _active_jsonls(config_dir: Path) -> list:
+    # Lista os transcripts dos marcadores ativos. Checamos pelo VALOR jsonl, nao pela chave: o boot_id
+    # vem da ancestralidade /proc e sob o test-runner (que roda dentro de um claude) ele acha o claude
+    # ancestral real em vez de cair pro session_id -> a chave varia com o ambiente, o valor nao.
+    d = config_dir / ".claude-pocket-active"
+    return [json.loads(f.read_text())["jsonl"] for f in d.glob("*.json")] if d.is_dir() else []
+
+
+def test_active_marker_written_with_transcript_path(tmp_path):
+    _run({"hook_event_name": "UserPromptSubmit", "session_id": "Y", "transcript_path": "/p/Y.jsonl"}, tmp_path)
+    assert "/p/Y.jsonl" in _active_jsonls(tmp_path)
+
+
+def test_session_start_writes_active_marker(tmp_path):
+    _run({"hook_event_name": "SessionStart", "session_id": "Y", "transcript_path": "/p/Y.jsonl", "source": "resume"}, tmp_path)
+    assert "/p/Y.jsonl" in _active_jsonls(tmp_path)
+
+
+def test_no_active_marker_without_transcript_path(tmp_path):
+    _run({"hook_event_name": "Stop", "session_id": "Y"}, tmp_path)
+    assert _active_jsonls(tmp_path) == []
