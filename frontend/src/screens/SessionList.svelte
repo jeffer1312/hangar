@@ -7,7 +7,7 @@
   import { getSessions, createSession, deleteSession, openSessionsStream } from '../lib/api';
   import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
-  import type { AggSession, SessionInfo, State } from '../lib/types';
+  import type { AggSession, SessionInfo } from '../lib/types';
   import { enablePush, pushSupported } from '../lib/push';
 
   interface Props {
@@ -71,21 +71,10 @@
   let addError = $state('');
   let addBusy = $state(false);
 
-  // Urgencia pra desempate: aguardando_input puxa pro topo; dead pro fim.
-  const urgency: Record<State, number> = {
-    awaiting_input: 0,
-    working: 1,
-    idle: 2,
-    dead: 3,
-  };
-
-  // Ordena por URGENCIA (aguardando sempre no topo) e desempata por atividade (desc); depois filtra.
+  // Ordem ALFABETICA por nome (estavel — nao pula). Antes ordenava por urgencia+atividade, e a
+  // atividade muda a todo poll -> a lista dancava. Alfabetico fixa a posicao de cada sessao.
   const visibleSessions = $derived.by(() => {
-    const sorted = [...sessions].sort((a, b) => {
-      const byUrg = urgency[a.state] - urgency[b.state];
-      if (byUrg !== 0) return byUrg;
-      return (b.last_activity ?? 0) - (a.last_activity ?? 0);
-    });
+    const sorted = [...sessions].sort((a, b) => a.name.localeCompare(b.name));
     const q = filterText.trim().toLowerCase();
     if (!q) return sorted;
     return sorted.filter(
@@ -115,7 +104,8 @@
     }
     return servers
       .map((srv) => ({ id: srv.id, label: srv.label, color: serverColor(srv.id), sessions: byId.get(srv.id) ?? [] }))
-      .filter((g) => g.sessions.length > 0);
+      .filter((g) => g.sessions.length > 0)
+      .sort((a, b) => a.label.localeCompare(b.label)); // grupos fixos em ordem alfabetica (nao pulam)
   });
 
   // Estado colapsado por servidor, persistido (sobrevive ao reload que add/scan de servidor dispara).
