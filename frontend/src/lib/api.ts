@@ -76,38 +76,17 @@ export function getSessions(): Promise<SessionInfo[]> {
   return apiFetch<SessionInfo[]>('/api/sessions');
 }
 
-// Lista sessões de UM servidor específico (baseUrl+token explícitos), sem mexer no ativo. Usado
-// pela visão agregada: cada servidor é consultado direto, então um ativo "global" não importa aqui.
-async function fetchSessionsForServer(s: Server): Promise<SessionInfo[]> {
+// Lista sessões de UM servidor específico (baseUrl+token explícitos), sem mexer no ativo. A visão
+// agregada chama um por um e renderiza cada resposta assim que chega (sem esperar os outros), então
+// um servidor lento/offline não segura os demais. Timeout de 4s: servidor morto falha rápido (< o
+// intervalo de poll de 5s) em vez de pendurar no timeout default do browser.
+export async function fetchSessionsForServer(s: Server): Promise<SessionInfo[]> {
   const res = await fetch(`${s.baseUrl}/api/sessions`, {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
-    // Sem timeout, um servidor offline (ex: PC do trabalho) trava o Promise.all do poll
-    // (a cada 5s) ate o timeout default do browser -> lista "as vezes" lenta. 4s < intervalo
-    // do poll: servidor morto falha rapido e os outros renderizam na hora.
     signal: AbortSignal.timeout(4000),
   });
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json() as Promise<SessionInfo[]>;
-}
-
-// Resultado por-servidor: sessões OU erro (servidor offline/token ruim). Nunca rejeita —
-// uma falha num servidor não pode esconder os outros nem o 401 não força logout aqui.
-export interface ServerSessions {
-  server: Server;
-  sessions: SessionInfo[] | null;
-  error: string | null;
-}
-
-export async function getAllSessions(servers: Server[]): Promise<ServerSessions[]> {
-  return Promise.all(
-    servers.map(async (server): Promise<ServerSessions> => {
-      try {
-        return { server, sessions: await fetchSessionsForServer(server), error: null };
-      } catch (e) {
-        return { server, sessions: null, error: e instanceof Error ? e.message : 'erro' };
-      }
-    }),
-  );
 }
 
 export function listClaudeConfigs(): Promise<ConfigDirInfo[]> {
