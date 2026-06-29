@@ -23,6 +23,8 @@ set -euo pipefail
 
 PLUGIN_DIR="$HOME/.tmux/plugins"
 CONF="$HOME/.tmux.conf"
+# Persist/restore the claude conversation per session (resurrect alone restores only a bare shell).
+RESUME_SH="$(cd "$(dirname "$0")" && pwd)/tmux-claude-resume.sh"
 SD_DIR="$HOME/.config/systemd/user"
 SERVICE="tmux-resurrect-save.service"
 TIMER="tmux-resurrect-save.timer"
@@ -74,6 +76,9 @@ set -g @plugin 'tmux-plugins/tmux-continuum'
 set -g @resurrect-capture-pane-contents 'on'
 set -g @continuum-restore 'on'
 set -g @continuum-save-interval '0'   # save driven by systemd timer (status bar is off)
+# Bring the claude conversation back (not a bare shell): save name->uuid, restore via --resume.
+set -g @resurrect-hook-post-save-all    '$RESUME_SH save'
+set -g @resurrect-hook-post-restore-all '$RESUME_SH restore'
 run '$PLUGIN_DIR/tpm/tpm'             # keep TPM init at the very end
 # <<< claude-pocket tmux-persist <<<
 EOF
