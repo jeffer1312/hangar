@@ -25,6 +25,24 @@
 
   let { events, stateEvent, pending, sessionName, dockH, preview = '', onSelectOption, onCancel }: Props = $props();
 
+  // Quando o preview ao vivo some (bloco commitou), a ULTIMA bolha de assistente que aparece
+  // tomou o lugar dele -> entra sem o slide (no-entrance), pra a troca nao "pular". One-shot.
+  let swapNext = $state(false);
+  let prevPreview = $state('');
+  $effect(() => {
+    const now = preview;
+    if (prevPreview && !now) swapNext = true;   // falling edge: preview -> vazio
+    prevPreview = now;
+  });
+
+  // Consome o one-shot: assim que ha evento no fim com swapNext setado, limpa no proximo frame.
+  $effect(() => {
+    if (swapNext && events.length) {
+      const id = requestAnimationFrame(() => { swapNext = false; });
+      return () => cancelAnimationFrame(id);
+    }
+  });
+
   let listEl: HTMLElement | undefined = $state();
   // O usuario "gruda" no fim por padrao; ao rolar pra cima, paramos de arrastar.
   let atBottom = $state(true);
@@ -135,7 +153,7 @@
   aria-label="Mensagens"
 >
   <div class="messages-inner">
-    {#each visibleEvents as ev (ev.id)}
+    {#each visibleEvents as ev, i (ev.id)}
       {#if ev.kind === 'user_msg' && (ev.text || ev.image_count)}
         {@const img = ev.text ? parseImageMessage(ev.text) : null}
         {#if ev.image_count}
@@ -159,7 +177,12 @@
           {#if ev.text}{@const fr = parseFilePaths(ev.text)}{#if fr.length}<FileAttachment {sessionName} refs={fr} />{/if}{/if}
         {/if}
       {:else if ev.kind === 'assistant_msg' && ev.text}
-        <AssistantBubble text={ev.text} ts={ev.ts} {sessionName} />
+        <AssistantBubble
+          text={ev.text}
+          ts={ev.ts}
+          {sessionName}
+          noEntrance={swapNext && i === visibleEvents.length - 1}
+        />
       {:else if ev.kind === 'tool_use'}
         <ToolCard event={ev} result={toolResults.get(ev.tool_use_id ?? '') ?? null} />
       {/if}
