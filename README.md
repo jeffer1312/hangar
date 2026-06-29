@@ -4,7 +4,7 @@ Drive a live [Claude Code](https://code.claude.com) session from your phone — 
 
 You leave `claude` running in a `tmux` session on your machine. claude-pocket exposes that **same live session** to a phone: it renders the conversation as chat, shows what Claude is doing right now, and lets you send prompts, answer Claude's interactive questions, and interrupt — all from an iPhone on the couch.
 
-> **Status:** Backend is complete and tested (41 passing tests). The Svelte PWA frontend is a working first cut. Network deployment (TLS + reverse proxy + firewall) is on the roadmap. Personal-use, single-user tool.
+> **Status:** Backend is complete and tested (221 passing tests). The Svelte PWA frontend is feature-rich — chat, uploads, git ops, slash commands, workflows, model picker, native AskUserQuestion. Typically run over a Tailscale tailnet (`tailscale serve` → HTTPS). Personal-use, single-user tool.
 
 > **Using it?** Step-by-step guide — pairing, Tailscale, install as PWA, every feature: **[docs/USAGE.md](docs/USAGE.md)**.
 
@@ -85,16 +85,62 @@ Run the backend tests with `cd backend && uv run pytest -v`.
 
 All routes require `Authorization: Bearer <token>` (SSE uses a `cp_token` cookie since `EventSource` can't set headers).
 
+**Sessions**
+
 | Method | Route | Purpose |
 |---|---|---|
 | GET | `/api/sessions` | list tmux sessions + state |
 | POST | `/api/sessions` | create a session (`{name, cwd}`) |
 | DELETE | `/api/sessions/{name}` | kill a session |
+| POST | `/api/sessions/{name}/rename` | rename a session |
+| GET | `/api/claude-configs` | list available `CLAUDE_CONFIG_DIR` options |
+
+**Transcript & stream**
+
+| Method | Route | Purpose |
+|---|---|---|
 | GET | `/api/sessions/{name}/history` | full transcript (initial load) |
-| GET | `/api/sessions/{name}/events` | **SSE**: `message` + `state` events |
+| GET | `/api/sessions/{name}/events` | **SSE**: `message` / `state` / `preview` / `ask_question` / `ping` / `reset` |
+| GET | `/api/sessions/{name}/transcript-image/{uuid}/{idx}` | image embedded in a transcript message |
+| GET | `/api/sessions/{name}/pane` | raw `tmux capture-pane` (live peek / debug) |
+
+**Input**
+
+| Method | Route | Purpose |
+|---|---|---|
 | POST | `/api/sessions/{name}/input` | send a prompt (`{text}`) |
-| POST | `/api/sessions/{name}/select` | answer an interactive question (`{option}`, 1-based) |
+| POST | `/api/sessions/{name}/select` | answer an interactive menu (`{option}`, 1-based) |
+| POST | `/api/sessions/{name}/answer` | answer a native AskUserQuestion |
 | POST | `/api/sessions/{name}/interrupt` | send `Esc` |
+| POST | `/api/sessions/{name}/keys` | send raw key(s) |
+| POST | `/api/sessions/{name}/model-effort` | set model / reasoning effort |
+
+**Files & uploads**
+
+| Method | Route | Purpose |
+|---|---|---|
+| POST | `/api/sessions/{name}/upload` | upload a file into the session cwd |
+| GET | `/api/sessions/{name}/uploads/{filename}` | fetch an uploaded file |
+| GET | `/api/sessions/{name}/file` | read a file from the session cwd |
+| GET | `/api/fs/roots` | list filesystem roots (new-session picker) |
+| GET | `/api/fs/scan` | scan a dir for subfolders (new-session picker) |
+
+**Git**
+
+| Method | Route | Purpose |
+|---|---|---|
+| GET | `/api/sessions/{name}/branches` | list git branches |
+| POST | `/api/sessions/{name}/checkout` | checkout a branch |
+| POST | `/api/sessions/{name}/git` | run a git op |
+
+**Commands & workflows**
+
+| Method | Route | Purpose |
+|---|---|---|
+| GET | `/api/sessions/{name}/commands` | list available slash commands |
+| GET | `/api/sessions/{name}/workflows` | list workflow runs |
+| GET | `/api/sessions/{name}/workflows/{run_id}` | workflow run detail |
+| GET | `/api/sessions/{name}/workflows/{run_id}/agents/{agent_id}` | workflow agent detail |
 
 ## Security
 
