@@ -1,3 +1,4 @@
+import re
 import time
 
 from app import model_picker as mp
@@ -90,6 +91,16 @@ def drain(name: str, jsonl: str) -> int:
         sent += 1
 
 
+# Linha destacada do picker: "❯ 3. OPT-TWO" -> 3 (1-based). Numerico de proposito: robusto a label
+# longo/quebrado em multiplas linhas, que um match por texto erraria.
+_CURSOR_ROW = re.compile(r"❯\s*(\d+)\.")
+
+
+def _cursor_row(screen: str) -> int | None:
+    m = _CURSOR_ROW.search(screen)
+    return int(m.group(1)) if m else None
+
+
 def _review_matches(screen: str, answers: list[dict]) -> bool:
     # Cada pergunta no review vira uma linha "→ <labels por ', '>". Compara por TOKEN exato (nao
     # substring) pra um label curto nao casar dentro de outra palavra.
@@ -145,6 +156,15 @@ def answer_questions(name: str, answers: list[dict]) -> None:
             # single-select: desce ate o indice e Enter (TUI auto-avanca pro proximo tab)
             for _ in range(a["indices"][0]):
                 key("Down")
+            # Guard PRE-Enter: numa pergunta UNICA o Enter ja SUBMETE (nao ha tela de Review depois p/
+            # pegar drift). Um Down engolido no redraw do overlay submetia a opcao errada calado -> a
+            # resposta no terminal != a escolhida. Confere a linha do cursor ANTES do Enter; drift ->
+            # Escape (cancela, nao submete). Cursor abre na linha 1 (indice 0), logo esperado = indice+1.
+            expected = a["indices"][0] + 1
+            row = _cursor_row(_capture(name))
+            if row is not None and row != expected:
+                send_keys(name, "Escape")
+                raise ValueError(f"nav drift — cursor na linha {row}, esperava {expected}; nao submetido")
             key("Enter")
         elif kind == "option":
             # multi-select: para cada opcao (em ordem crescente) desce ate ela e Space; depois Right
@@ -169,12 +189,21 @@ def answer_questions(name: str, answers: list[dict]) -> None:
                 key("Down")
             key("Enter")
 
-    # Verifica a tela de Review ANTES de submeter — mismatch -> Escape (nunca submete) + erro
+    # Passo final depende do shape do TUI:
+    #  - MULTIPLAS perguntas -> tela "Review your answers / Submit answers": confere e da Enter p/ submeter.
+    #  - UNICA pergunta -> NAO ha review; o Enter da selecao ja submeteu. Sucesso, sem Escape (mandar
+    #    Escape aqui interrompia o Claude que ja recebeu a resposta -> bug do "aceitou mas deu ruim").
+    #  - Picker ainda aberto sem review (algo travou) -> Escape e erro, nunca submete as cegas.
     screen = _capture(name)
-    if "Submit answers" not in screen or not _review_matches(screen, answers):
+    if "Submit answers" in screen:
+        if not _review_matches(screen, answers):
+            send_keys(name, "Escape")
+            raise ValueError("review mismatch — nao submetido")
+        key("Enter")
+    elif "Esc to cancel" in screen:
         send_keys(name, "Escape")
-        raise ValueError("review mismatch — nao submetido")
-    key("Enter")
+        raise ValueError("picker preso sem tela de review — nao submetido")
+    # senao: pergunta unica ja submeteu na selecao; nada a confirmar.
 
 
 class TerminalInput:
