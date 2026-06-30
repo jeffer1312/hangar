@@ -362,6 +362,15 @@ class TerminalInput:
         send_keys(name, "s" if scope == "session" else "Enter")
         time.sleep(_OPEN_SETTLE)
         pane = tmux.capture_pane(name)
+
+        # 4b. Trocar o effort pode disparar um follow-up CONDICIONAL "Change effort level?" (so
+        #     quando ha cache a re-ler). Por design NAO confirmamos sozinhos: deixamos o menu pra
+        #     o usuario decidir (o app o mostra como OptionButtons via state.classify). Reporta
+        #     pending_confirm em vez de mascarar como ok aplicado -- o effort so pega quando o
+        #     usuario tocar "Yes". (O picker ja fechou; nao mexer no menu.)
+        if mp.effort_confirm_open(pane):
+            return {"ok": True, "scope": scope, "pending_confirm": effort_kw, "result": None}
+
         if mp.picker_open(pane):
             self._abort(name)
             raise mp.PickerError(409, "model picker did not close after confirm")

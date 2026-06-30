@@ -49,6 +49,14 @@ EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max", "ultracode"]
 _ROW_RE = re.compile(r"^\s*([❯↑↓]?)\s*(\d+)\.\s+(.+?)\s{2,}")
 # Marcador de esforco ajustavel: "<glifo> <Palavra> effort ... to adjust".
 _EFFORT_RE = re.compile(r"^\S\s+(\w+)\s+effort\b")
+# Follow-up CONDICIONAL que o /model dispara ao confirmar uma TROCA de effort que invalida o
+# cache da conversa:
+#   Change effort level?
+#   ❯ 1. Yes, switch to <nivel>
+#     2. No, go back
+# Nao aparece sempre (so quando ha cache a re-ler). Por design, NAO confirmamos sozinhos: o app
+# mostra esse menu como OptionButtons (via state.classify) pro usuario escolher Yes/No.
+_EFFORT_CONFIRM_RE = re.compile(r"Yes,\s+switch\s+to\s+\w+", re.IGNORECASE)
 
 
 class PickerError(Exception):
@@ -145,6 +153,11 @@ def parse_current_effort(pane: str) -> str | None:
         if m and "to adjust" in s:
             return m.group(1).lower()
     return None
+
+
+def effort_confirm_open(pane: str) -> bool:
+    """True se o follow-up condicional 'Change effort level?' (re-leitura do cache) esta aberto."""
+    return bool(_EFFORT_CONFIRM_RE.search(pane))
 
 
 def parse_result_line(pane: str) -> str | None:
