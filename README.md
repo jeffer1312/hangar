@@ -81,6 +81,21 @@ npm run dev            # open it, set the API base URL + token on the Login scre
 
 Run the backend tests with `cd backend && uv run pytest -v`.
 
+## Environment Variables
+
+| Var | Default | Purpose |
+|---|---|---|
+| `CP_AUTH_TOKEN` | `change-me` | Bearer token protecting all routes — generate a strong one. Refuses to start with `change-me` on non-loopback. |
+| `CP_LAN_BIND_IP` | `127.0.0.1` | `auto` = detect LAN IP for phone access; fixed IP also works. |
+| `CP_PORT` | `8765` | Backend server port. |
+| `CP_FRONT_PORT` | `5173` | Frontend dev server port (included in startup QR). |
+| `CP_PUBLIC_URL` | — | Override QR base URL (e.g., Tailscale hostname). |
+| `CP_SCAN_ROOTS` | — | Comma-separated paths for "New session" folder picker. |
+| `CP_SYNC` | `false` | Enable cloud-sync hub (`/api/sync/*` routes) and "Criar acesso" registration. |
+| `CP_SYNC_BOOTSTRAP` | — | One-time bootstrap secret for first-run account registration; locks after first use. |
+| `CP_SYNC_DATA` | `~/.claude-pocket/sync-vault.json` | Path to encrypted server-list vault file. |
+| `CP_SYNC_SESSION_SECRET` | — | HMAC key for session cookies; empty = random per process (logout on restart). |
+
 ## API
 
 All routes require `Authorization: Bearer <token>` (SSE uses a `cp_token` cookie since `EventSource` can't set headers).
