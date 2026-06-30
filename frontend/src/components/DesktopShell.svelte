@@ -16,7 +16,7 @@
   <Sidebar {currentSession} onSelect={onNavigateToChat} {onLogout} />
 
   <main class="desktop-main">
-    {#if currentSession}
+    {#if currentSession && currentSession !== 'null' && currentSession !== 'undefined'}
       {#key currentSession}
         <Chat
           sessionName={currentSession}

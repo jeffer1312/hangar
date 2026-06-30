@@ -21,7 +21,9 @@
       // Auto-cura: um hash #/chat/undefined (ou vazio) preso na URL fazia o Chat montar com
       // sessionName "undefined" -> SSE em /sessions/undefined/events (404 em loop eterno).
       // Trata como invalido e cai na lista, em vez de prender o usuario numa sessao fantasma.
-      if (sessionName && sessionName !== 'undefined') {
+      // Barra "undefined" E "null" (string): ambos viravam #/chat/null -> currentSession="null"
+      // (truthy) -> Chat monta -> openEventStream("null") -> GET /api/sessions/null/events 404 em loop.
+      if (sessionName && sessionName !== 'undefined' && sessionName !== 'null') {
         return { name: 'chat', sessionName };
       }
     }
@@ -89,8 +91,8 @@
   }
 
   function navigateToChat(name: string) {
-    // Nunca cria um hash de chat com nome invalido (evita gerar #/chat/undefined na origem).
-    if (!name || name === 'undefined') {
+    // Nunca cria um hash de chat com nome invalido (evita gerar #/chat/undefined|null na origem).
+    if (!name || name === 'undefined' || name === 'null') {
       navigateTo('#/');
       return;
     }
