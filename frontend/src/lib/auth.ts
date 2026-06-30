@@ -2,6 +2,8 @@
 // guarda baseUrl ABSOLUTO (origin) + token. O ativo decide pra quem os requests vão. API usa
 // header Bearer (cross-origin OK via CORS); SSE same-origin usa cookie, cross-origin usa ?token.
 
+import { normalizeBaseUrl } from './url';
+
 const SERVERS_KEY = 'cp_servers';
 const ACTIVE_KEY = 'cp_active';
 // Chaves legadas do modelo single-server: migradas pra lista uma vez.
@@ -107,6 +109,7 @@ export function addServer(
   token: string,
   label?: string,
 ): { id: string; existed: boolean } {
+  baseUrl = normalizeBaseUrl(baseUrl);
   const norm = (u: string) => u.replace(/\/+$/, '');
   const list = readServers();
   const i = list.findIndex((s) => norm(s.baseUrl) === norm(baseUrl));
