@@ -36,6 +36,26 @@ function writeServers(list: Server[]): void {
   localStorage.setItem(SERVERS_KEY, JSON.stringify(list));
 }
 
+// Listener unico: o sync registra aqui pra empurrar pro hub apos qualquer mutacao local.
+let _changed: (() => void) | null = null;
+export function onServersChanged(cb: () => void): void {
+  _changed = cb;
+}
+function notifyChanged(): void {
+  if (_changed) _changed();
+}
+
+// Sobrescreve a lista inteira (hidratacao a partir do vault decifrado). Mantem o ativo se ainda
+// existir, senao cai pro primeiro. NAO dispara notifyChanged (veio do hub, nao re-empurrar).
+export function setServers(list: Server[]): void {
+  writeServers(list);
+  const active = localStorage.getItem(ACTIVE_KEY);
+  if (!active || !list.some((s) => s.id === active)) {
+    if (list[0]) localStorage.setItem(ACTIVE_KEY, list[0].id);
+    else localStorage.removeItem(ACTIVE_KEY);
+  }
+}
+
 function makeId(): string {
   return 'srv-' + Math.random().toString(36).slice(2, 10);
 }
@@ -127,6 +147,7 @@ export function addServer(
   writeServers(list);
   localStorage.setItem(ACTIVE_KEY, id);
   syncCookie(token);
+  notifyChanged();
   return { id, existed };
 }
 
@@ -138,6 +159,7 @@ export function renameServer(id: string, label: string): void {
   if (i < 0) return;
   list[i] = { ...list[i], label: label.trim() || labelFor(list[i].baseUrl) };
   writeServers(list);
+  notifyChanged();
 }
 
 export function selectServer(id: string): void {
@@ -160,6 +182,7 @@ export function removeServer(id: string): void {
       syncCookie(null);
     }
   }
+  notifyChanged();
 }
 
 // Token do servidor ATIVO furou (401): remove só ele e cai pro próximo (se houver). Assim um token
