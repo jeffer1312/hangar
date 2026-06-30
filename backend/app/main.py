@@ -48,7 +48,11 @@ def main():
     # workers=1 explicito: o cache de classe SessionRegistry._jsonl_cache e compartilhado SO dentro de
     # um processo. Multi-worker daria cache frio por worker -> transcript errado em requests roteados
     # pra outro worker. Multi-worker exigiria mover o cache pra um backend compartilhado.
-    uvicorn.run("app.api:app", host=bind, port=settings.port, reload=settings.reload, workers=1)
+    # proxy_headers + forwarded_allow_ips: atras de um TLS proxy (Caddy/Tailscale), faz o uvicorn ler
+    # X-Forwarded-For/-Proto SO do proxy confiavel -> request.client.host vira o IP real do cliente
+    # (rate limiter por-cliente, nao um balde global) e request.url.scheme vira https (cookie Secure).
+    uvicorn.run("app.api:app", host=bind, port=settings.port, reload=settings.reload, workers=1,
+                proxy_headers=True, forwarded_allow_ips=settings.forwarded_allow_ips)
 
 
 if __name__ == "__main__":

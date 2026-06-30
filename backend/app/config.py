@@ -106,6 +106,12 @@ class Settings(BaseSettings):
     sync_bootstrap: str = ""        # CP_SYNC_BOOTSTRAP: one-time secret to gate first registration
     sync_data: Path = Path.home() / ".claude-pocket" / "sync-vault.json"
     sync_session_secret: str = ""   # CP_SYNC_SESSION_SECRET: HMAC key for the session cookie; empty -> random at boot
+    sync_rate_max: int = 10         # CP_SYNC_RATE_MAX: failed sync logins allowed in the window before 429
+    sync_rate_window: int = 300     # CP_SYNC_RATE_WINDOW: rate-limit window in seconds (default 5 min)
+    # CP_FORWARDED_ALLOW_IPS: proxy IP(s) uvicorn trusts for X-Forwarded-For/-Proto, so the real client
+    # IP (rate limiter) and the https scheme (cookie Secure) are seen behind a TLS proxy. "*" trusts any
+    # upstream (only safe when nothing untrusted can reach the port directly).
+    forwarded_allow_ips: str = "127.0.0.1"
 
 
 settings = Settings()

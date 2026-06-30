@@ -5,12 +5,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-def _make_client(tmp_path, monkeypatch, bind_ip="127.0.0.1"):
+def _make_client(tmp_path, monkeypatch, bind_ip="127.0.0.1", **extra_env):
     monkeypatch.setenv("CP_SYNC", "1")
     monkeypatch.setenv("CP_SYNC_BOOTSTRAP", "boot-secret")
     monkeypatch.setenv("CP_SYNC_DATA", str(tmp_path / "vault.json"))
     monkeypatch.setenv("CP_SYNC_SESSION_SECRET", "test-session-secret")
     monkeypatch.setenv("CP_LAN_BIND_IP", bind_ip)
+    for k, v in extra_env.items():
+        monkeypatch.setenv(k, str(v))
     import app.config as config
     importlib.reload(config)
     import app.sync as sync
@@ -110,10 +112,10 @@ def test_login_cookie_secure_when_non_loopback(tmp_path, monkeypatch):
     assert "samesite=lax" in cookie.lower()
 
 
-def test_login_rate_limited_after_5_fails(client):
-    _register(client)
-    for _ in range(5):
-        r = client.post("/api/sync/login", json={"user": "j", "auth_hash": "wronghash"})
-        assert r.status_code == 401
-    r = client.post("/api/sync/login", json={"user": "j", "auth_hash": "wronghash"})
-    assert r.status_code == 429
+def test_login_rate_limited_at_configured_max(tmp_path, monkeypatch):
+    # CP_SYNC_RATE_MAX is configurable; here 3 bad logins are allowed, the 4th trips 429.
+    c = _make_client(tmp_path, monkeypatch, CP_SYNC_RATE_MAX=3)
+    _register(c)
+    for _ in range(3):
+        assert c.post("/api/sync/login", json={"user": "j", "auth_hash": "wronghash"}).status_code == 401
+    assert c.post("/api/sync/login", json={"user": "j", "auth_hash": "wronghash"}).status_code == 429

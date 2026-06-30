@@ -99,16 +99,17 @@ def require_session(request: Request) -> str:
 
 # ── Login rate limiter (in-memory) ───────────────────────────────────────────────────────────
 # ponytail: per-process dict, fine for one user; reset on restart. Not a distributed limiter.
+# Window/max are configurable (CP_SYNC_RATE_*) so a single user fat-fingering the password isn't
+# locked out for long. Keyed by request.client.host -> the REAL client only when uvicorn trusts the
+# proxy (forwarded_allow_ips); otherwise it's the proxy IP (a shared bucket) -- hence the loose default.
 _FAILS: dict[str, list[float]] = {}
-_RL_WINDOW = 15 * 60
-_RL_MAX = 5
 
 
 def rate_limited(ip: str) -> bool:
     now = time.time()
-    hits = [t for t in _FAILS.get(ip, []) if now - t < _RL_WINDOW]
+    hits = [t for t in _FAILS.get(ip, []) if now - t < settings.sync_rate_window]
     _FAILS[ip] = hits
-    return len(hits) >= _RL_MAX
+    return len(hits) >= settings.sync_rate_max
 
 
 def record_fail(ip: str) -> None:
