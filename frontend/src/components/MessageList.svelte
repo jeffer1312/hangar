@@ -161,7 +161,7 @@
       {:else if ev.kind === 'assistant_msg' && ev.text}
         <AssistantBubble text={ev.text} ts={ev.ts} {sessionName} />
       {:else if ev.kind === 'tool_use'}
-        <ToolCard event={ev} result={toolResults.get(ev.tool_use_id ?? '') ?? null} />
+        <ToolCard event={ev} result={toolResults.get(ev.tool_use_id ?? '') ?? null} {sessionName} />
       {/if}
     {/each}
 
