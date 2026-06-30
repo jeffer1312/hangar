@@ -49,14 +49,12 @@
   let selectedModel = $state('default');
   let effortIdx = $state(EFFORT_DEFAULT);
   let applying = $state(false);
-  let errorMsg = $state<string | null>(null);
 
   $effect(() => {
     if (open) {
       selectedModel = modelArgFromCurrent(currentModel);
       effortIdx = effortIndex(currentEffort);
       applying = false;
-      errorMsg = null;
     }
   });
 
@@ -75,13 +73,14 @@
   async function apply(scope: 'session' | 'default') {
     if (applying) return;
     applying = true;
-    errorMsg = null;
     try {
       await onApply({ model: selectedModel, effort: EFFORTS[effortIdx], scope });
-      onClose();
     } catch {
-      errorMsg = 'Não foi possível aplicar. Tente de novo.';
-      applying = false;
+      // Falha real (rede/picker): nao deixa a folha aberta. Se a troca de effort dispara o
+      // follow-up "Change effort level?", ele vira OptionButtons ATRAS da folha -- folha
+      // aberta bloquearia o toque. Sempre fechar; o estado/pill refletem o resultado real.
+    } finally {
+      onClose();
     }
   }
 </script>
@@ -146,10 +145,6 @@
   </div>
   {#if isHaiku}
     <p class="effort-note">O Haiku não usa esforço de raciocínio.</p>
-  {/if}
-
-  {#if errorMsg}
-    <p class="apply-error" role="alert">{errorMsg}</p>
   {/if}
 
   <div class="actions">
@@ -340,12 +335,6 @@
   }
 
   /* ── Acoes: aplicar so na sessao (primario) ou salvar como padrao (secundario) ── */
-  .apply-error {
-    font-size: var(--text-sm);
-    color: var(--error);
-    margin-top: var(--space-3);
-  }
-
   .actions {
     display: flex;
     flex-direction: column;

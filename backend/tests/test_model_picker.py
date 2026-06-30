@@ -147,6 +147,39 @@ def test_set_model_effort_adjusts_effort_with_right():
     assert keys[-1] == "s"
 
 
+# Pane real do follow-up condicional disparado ao confirmar uma troca de effort (cache re-read).
+EFFORT_CONFIRM_PANE = (
+    "   Change effort level?\n"
+    "   Your next response will be slower and use more tokens\n"
+    "\n"
+    "   This conversation is cached for the current effort level. Switching to max means the\n"
+    "   full history gets re-read on your next message.\n"
+    "\n"
+    "   ❯ 1. Yes, switch to max\n"
+    "     2. No, go back\n"
+)
+
+
+def test_effort_confirm_open_detects_dialog():
+    assert mp.effort_confirm_open(EFFORT_CONFIRM_PANE) is True
+    assert mp.effort_confirm_open(PANE_OPUS) is False  # picker normal != dialog de confirmacao
+
+
+def test_set_model_effort_reports_pending_confirm_on_dialog():
+    # xHigh -> max (1 Right); apos `s`, o follow-up "Change effort level?" aparece -> NAO auto-
+    # confirma: retorna pending_confirm pro usuario decidir via OptionButtons. Ultimo toque = `s`.
+    panes = [PANE_OPUS, _pane_with_effort("Max"), EFFORT_CONFIRM_PANE]
+    with patch.object(terminal_input.tmux, "capture_pane", side_effect=panes), patch.object(
+        terminal_input, "send_keys"
+    ) as sk, patch.object(terminal_input.time, "sleep"):
+        out = TerminalInput().set_model_effort("cc", effort="max", scope="session")
+    keys = [c.args[1] for c in sk.call_args_list]
+    assert keys[-1] == "s"  # confirmou a sessao; nao tocou no menu de follow-up
+    assert "Enter" not in keys[-2:]  # nao auto-confirmou o "Yes"
+    assert out["pending_confirm"] == "max"
+    assert out["result"] is None
+
+
 def test_set_model_effort_aborts_when_picker_never_opens():
     not_open = "❯ \nsem picker aqui\n"
     with patch.object(terminal_input.tmux, "capture_pane", return_value=not_open), patch.object(
