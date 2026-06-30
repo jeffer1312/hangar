@@ -2,18 +2,28 @@
   import { onMount } from 'svelte';
   import { addServer, removeServer, selectServer, getActiveId, getBaseUrl } from '../lib/auth';
   import { getSessions } from '../lib/api';
+  import { syncStatus, register as syncRegister, login as syncLogin } from '../lib/sync';
   import QrScanner from '../components/QrScanner.svelte';
 
   interface Props {
     onLogin: () => void;
+    onSyncLogin?: (encKey: CryptoKey) => void | Promise<void>; // sync mode: hydrate the vault before flipping in
   }
-  let { onLogin }: Props = $props();
+  let { onLogin, onSyncLogin }: Props = $props();
 
   let baseUrl = $state(getBaseUrl());
   let token = $state('');
   let loading = $state(false);
   let error = $state('');
   let scanning = $state(false);
+
+  // Cloud-sync: quando o hub tem CP_SYNC=1, troca o form URL+token por user/senha. null = desabilitado.
+  let syncMode = $state<null | { registered: boolean }>(null);
+  let user = $state('');
+  let password = $state('');
+  let bootstrap = $state('');
+  let syncLoading = $state(false);
+  let syncError = $state('');
 
   // The QR encodes the pairing URL (…/?token=…). Pull the token (and optional ?api=)
   // out of it — or accept a bare token — then connect. Needed because an installed iOS
@@ -63,9 +73,35 @@
     await connect();
   }
 
-  // QR pairing: the QR opens this app with ?token=… (and optional ?api=…). Pick it up,
-  // strip it from the URL (don't leave the secret in history), and connect automatically.
-  onMount(() => {
+  // Sync mode: registra (1o acesso) e faz login. A hidratacao do vault (onSyncLogin) precisa
+  // TERMINAR antes de onLogin() flipar a tela, senao o app monta com a lista vazia e popula depois.
+  async function doSyncSubmit(e: SubmitEvent) {
+    e.preventDefault();
+    syncLoading = true;
+    syncError = '';
+    try {
+      if (syncMode && !syncMode.registered) {
+        await syncRegister(user.trim(), password, bootstrap.trim());
+      }
+      const encKey = await syncLogin(user.trim(), password);
+      await onSyncLogin?.(encKey);
+      onLogin();
+    } catch (err) {
+      syncError = err instanceof Error ? err.message : 'falha';
+    } finally {
+      syncLoading = false;
+    }
+  }
+
+  onMount(async () => {
+    // Sync ligado? Mostra o form user/senha e NAO roda o pareamento ?token= (o form URL+token fica oculto).
+    const s = await syncStatus();
+    if (s?.enabled) {
+      syncMode = { registered: s.registered };
+      return;
+    }
+    // QR pairing: the QR opens this app with ?token=… (and optional ?api=…). Pick it up,
+    // strip it from the URL (don't leave the secret in history), and connect automatically.
     const params = new URLSearchParams(window.location.search);
     const t = params.get('token');
     if (!t) return;
@@ -82,6 +118,30 @@
     <h1 class="app-name">Claude Pocket</h1>
     <p class="app-tagline">Controle suas sessões de qualquer lugar</p>
 
+    {#if syncMode}
+      <form onsubmit={doSyncSubmit} class="login-form">
+        <div class="field">
+          <label class="field-label" for="sync-user">Usuário</label>
+          <input id="sync-user" class="field-input" bind:value={user} autocomplete="username" autocapitalize="off" spellcheck={false} required />
+        </div>
+        <div class="field">
+          <label class="field-label" for="sync-pass">Senha</label>
+          <input id="sync-pass" type="password" class="field-input" bind:value={password} autocomplete="current-password" required />
+        </div>
+        {#if !syncMode.registered}
+          <div class="field">
+            <label class="field-label" for="sync-boot">Token de ativação (primeiro acesso)</label>
+            <input id="sync-boot" type="password" class="field-input" bind:value={bootstrap} required />
+          </div>
+        {/if}
+        {#if syncError}
+          <p class="error-msg" role="alert">{syncError}</p>
+        {/if}
+        <button type="submit" class="connect-btn" disabled={syncLoading || !user.trim() || !password}>
+          {syncLoading ? 'Entrando…' : (syncMode.registered ? 'Entrar' : 'Criar acesso')}
+        </button>
+      </form>
+    {:else}
     <form onsubmit={handleSubmit} class="login-form">
       <div class="field">
         <label class="field-label" for="base-url">URL do servidor</label>
@@ -128,6 +188,7 @@
         Escanear QR
       </button>
     </form>
+    {/if}
   </div>
 </div>
 
