@@ -131,7 +131,39 @@ mesmo celular.
 Abrindo a mesma URL num monitor largo, vira **shell de duas colunas**: sidebar de sessões +
 chat largo. O fluxo mobile fica intacto abaixo de 820px.
 
-## 5. Problemas comuns
+## 5. Sync na nuvem (opcional)
+
+Para sincronizar a lista de servidores entre múltiplos PCs no mesmo celular, ative o hub de sincronização na nuvem:
+
+**Ativar:**
+Defina `CP_SYNC=1` no backend. Na primeira execução, defina também `CP_SYNC_BOOTSTRAP=<secret>`:
+
+```bash
+cd backend
+CP_AUTH_TOKEN=$(openssl rand -hex 24) CP_SYNC=1 CP_SYNC_BOOTSTRAP=$(openssl rand -hex 24) uv run python -m app.main
+```
+
+**Primeira vez ("Criar acesso"):**
+
+1. Abra a PWA naquele host.
+2. Aparece **"Criar acesso"** em vez de "Adicionar servidor".
+3. Escolha um **nome de usuário** e uma **master password** (forte!) — cole o token bootstrap.
+4. Pronto — a lista de servidores fica criptografada no hub.
+
+**⚠ Aviso: Zero-knowledge (sem recuperação):**
+- A master password **nunca sai do seu celular**.
+- O hub armazena apenas salt + verificador de autenticação + ciphertext AES-GCM. **Nunca vê a senha nem os tokens dos servidores.**
+- **Se esquecer a master password, os dados sincronizados ficam irrecuperáveis.**
+- Não há "recuperar senha" ou reset — guarde-a bem.
+
+**HTTPS obrigatório (produção):**
+- Localmente (LAN): HTTP funciona.
+- Fora de casa: o hub **deve estar em HTTPS** (Tailscale, Caddy, …). O cookie de sessão só fica seguro sob TLS.
+
+**Padrão (desativado):**
+- Sem `CP_SYNC=1`: o app funciona como antes — servidor único + token/QR, zero sincronização.
+
+## 6. Problemas comuns
 
 | Sintoma | Causa / fix |
 |---|---|
@@ -141,7 +173,7 @@ chat largo. O fluxo mobile fica intacto abaixo de 820px.
 | Não vejo código novo após mudar | PWA com service worker servindo JS velho → **hard reload** / limpar dados do site / re-adicionar o PWA. |
 | Backend reiniciar | precisa do cwd=`backend` (`python -m app.main` acha `app`). Sem `--reload` (trava SSE no SIGTERM). |
 
-## 6. Segurança (resumo)
+## 7. Segurança (resumo)
 
 - Bind só na LAN/VPN, **nunca** interface pública; **nunca** port-forward no roteador.
 - O token é a senha — trate como senha de shell. TLS na frente (Caddy/Tailscale) antes de uso real.
