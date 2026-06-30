@@ -90,10 +90,21 @@ def verify_session(cookie: str | None) -> str | None:
     return user
 
 
-def require_session(request: Request) -> str:
+def _set_session_cookie(response: Response, user: str, request: Request) -> None:
+    # Loopback bind = dev over http (Secure off senao o cookie nao gruda); qualquer bind non-loopback
+    # = deploy real (HTTPS exigido) -> forca Secure mesmo que o proxy reporte http.
+    secure = request.url.scheme == "https" or settings.lan_bind_ip not in _LOOPBACK
+    response.set_cookie(
+        COOKIE_NAME, sign_session(user),
+        max_age=_SESSION_TTL, httponly=True, samesite="lax", secure=secure, path="/",
+    )
+
+
+def require_session(request: Request, response: Response) -> str:
     user = verify_session(request.cookies.get(COOKIE_NAME))
     if not user:
         raise HTTPException(status_code=401, detail="unauthorized")
+    _set_session_cookie(response, user, request)  # sliding: renova o prazo a cada request autenticado
     return user
 
 
@@ -177,14 +188,7 @@ def login(body: LoginBody, request: Request, response: Response) -> dict:
     if not verify_credentials(body.user, body.auth_hash):
         record_fail(ip)
         raise HTTPException(status_code=401, detail="unauthorized")
-    # Loopback bind = local dev over http (Secure off so the cookie works);
-    # any non-loopback bind = real deployment where HTTPS is required, so force Secure
-    # regardless of the proxy-reported scheme.
-    secure = request.url.scheme == "https" or settings.lan_bind_ip not in _LOOPBACK
-    response.set_cookie(
-        COOKIE_NAME, sign_session(body.user),
-        max_age=_SESSION_TTL, httponly=True, samesite="lax", secure=secure, path="/",
-    )
+    _set_session_cookie(response, body.user, request)
     return {"ok": True}
 
 

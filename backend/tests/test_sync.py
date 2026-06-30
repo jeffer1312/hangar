@@ -119,3 +119,12 @@ def test_login_rate_limited_at_configured_max(tmp_path, monkeypatch):
     for _ in range(3):
         assert c.post("/api/sync/login", json={"user": "j", "auth_hash": "wronghash"}).status_code == 401
     assert c.post("/api/sync/login", json={"user": "j", "auth_hash": "wronghash"}).status_code == 429
+
+
+def test_session_slides_on_authed_request(client):
+    # Sliding: cada request autenticado re-emite o cookie com prazo novo -> nao expira em uso.
+    _register(client)
+    assert "cp_sync" in client.post("/api/sync/login", json={"user": "j", "auth_hash": AUTH}).cookies
+    r = client.get("/api/sync/vault")
+    assert r.status_code == 200
+    assert "cp_sync=" in r.headers.get("set-cookie", "")
