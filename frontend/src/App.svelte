@@ -99,7 +99,7 @@
 
   async function onLogout() {
     if (encKey) {
-      await syncLogout();
+      try { await syncLogout(); } catch { /* hub unreachable — log out locally regardless */ }
       clearCredentials();
       encKey = null;
     }
