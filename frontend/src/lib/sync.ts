@@ -29,9 +29,30 @@ export async function deriveKeys(
   );
   const encKey = await crypto.subtle.deriveKey(
     { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: enc.encode('cp-enc') },
-    masterKey, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'],
+    masterKey, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt'],  // extractable: persistir entre reloads
   );
   return { authHash: b64(authBits), encKey };
+}
+
+// Persiste a encKey no sessionStorage (vive enquanto a aba existe, some ao fechar) pra a sessao de
+// sync sobreviver a um reload — senao a chave some da memoria e os pushes pro hub viram no-op silencioso.
+// NAO vai pro localStorage/disco (nao sincroniza, nao persiste alem da aba): mantem o zero-knowledge.
+const KEY_STASH = 'cp_enckey';
+export async function stashKey(encKey: CryptoKey): Promise<void> {
+  const raw = await crypto.subtle.exportKey('raw', encKey);
+  sessionStorage.setItem(KEY_STASH, b64(raw));
+}
+export async function loadKey(): Promise<CryptoKey | null> {
+  const s = sessionStorage.getItem(KEY_STASH);
+  if (!s) return null;
+  try {
+    return await crypto.subtle.importKey('raw', unb64(s), { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
+  } catch {
+    return null;
+  }
+}
+export function clearKey(): void {
+  sessionStorage.removeItem(KEY_STASH);
 }
 
 export async function encryptList(encKey: CryptoKey, servers: Server[]): Promise<{ iv: string; data: string }> {
