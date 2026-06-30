@@ -1,6 +1,6 @@
 <script lang="ts">
   import { isAuthenticated, setServers, listServers, mergeServers, onServersChanged, clearCredentials } from './lib/auth';
-  import { getVault, decryptList, encryptList, putVault, logout as syncLogout } from './lib/sync';
+  import { getVault, decryptList, encryptList, putVault, logout as syncLogout, syncStatus, stashKey, loadKey, clearKey } from './lib/sync';
   import Login from './screens/Login.svelte';
   import SessionList from './screens/SessionList.svelte';
   import Chat from './screens/Chat.svelte';
@@ -8,6 +8,7 @@
 
   // ── Hash-based Router ────────────────────────────────────────────────
   type Route =
+    | { name: 'loading' }
     | { name: 'login' }
     | { name: 'sessions' }
     | { name: 'chat'; sessionName: string };
@@ -30,6 +31,13 @@
   let currentHash = $state(window.location.hash || '#/');
   let authenticated = $state(isAuthenticated());
 
+  // Cloud-sync gate. syncEnabled: null enquanto sondamos /sync/status; depois true/false.
+  // syncReady: ha encKey (login fresco OU restaurado do sessionStorage). Com sync ligado, o app so
+  // entra com syncReady -> senao forca o login do hub, mesmo havendo servers em cache (senao os
+  // pushes pro hub ficariam mudos por falta de chave).
+  let syncEnabled = $state<boolean | null>(null);
+  let syncReady = $state(false);
+
   // Desktop: >=820px renderiza o shell de duas colunas (sidebar + chat largo). Mobile (<820px)
   // mantem o fluxo de telas atual, INTOCADO (mesmos componentes, mesmas regras).
   let isDesktop = $state(false);
@@ -42,8 +50,30 @@
   });
 
   const route: Route = $derived(
-    !authenticated ? { name: 'login' } : parseHash(currentHash)
+    syncEnabled === null
+      ? { name: 'loading' }                                            // sondando o hub
+      : syncEnabled
+        ? (syncReady ? parseHash(currentHash) : { name: 'login' })     // sync: exige sessao com chave
+        : (authenticated ? parseHash(currentHash) : { name: 'login' }) // sem sync: regra antiga
   );
+
+  // Boot: sonda o hub. Se ligado, tenta restaurar a sessao do sessionStorage (encKey sobrevive ao
+  // reload) sem repedir senha; senao cai no login do hub. Sem sync, segue a regra de localStorage.
+  $effect(() => {
+    (async () => {
+      const s = await syncStatus();
+      if (!s?.enabled) { syncEnabled = false; return; }
+      syncEnabled = true;
+      const key = await loadKey();
+      if (key) {
+        try {
+          await establishSync(key);          // cookie ainda valido -> restaura sem repedir senha
+        } catch {
+          clearKey();                         // sessao morta (cookie expirado) -> cai no login do hub
+        }
+      }
+    })();
+  });
 
   // Listen for hash changes
   $effect(() => {
@@ -80,8 +110,15 @@
   let encKey: CryptoKey | null = null;
   let vaultRev = 0;
 
-  // Apos login no hub: puxa o vault, decifra, hidrata a lista local e fica empurrando mutacoes locais.
+  // Login fresco no hub (vindo da tela de login): persiste a chave na aba e estabelece a sessao.
   async function onSyncLogin(key: CryptoKey) {
+    await stashKey(key);
+    await establishSync(key);
+  }
+
+  // Estabelece a sessao de sync (login fresco OU restauracao no boot): puxa o vault, decifra,
+  // reconcilia com a lista local, semeia o que faltava no hub e fica empurrando mutacoes locais.
+  async function establishSync(key: CryptoKey) {
     encKey = key;
     const { enc_blob, rev } = await getVault();
     vaultRev = rev;
@@ -109,13 +146,17 @@
         console.error('sync push falhou — server nao subiu pro hub:', e);
       }
     });
+    syncReady = true;
+    authenticated = true;
   }
 
   async function onLogout() {
     if (encKey) {
       try { await syncLogout(); } catch { /* hub unreachable — log out locally regardless */ }
+      clearKey();
       clearCredentials();
       encKey = null;
+      syncReady = false;
     }
     authenticated = false;
     navigateTo('#/');
@@ -132,7 +173,9 @@
 </svg>
 
 <div class="app-root">
-  {#if route.name === 'login'}
+  {#if route.name === 'loading'}
+    <div class="boot" aria-busy="true"></div>
+  {:else if route.name === 'login'}
     <Login {onLogin} onSyncLogin={onSyncLogin} />
   {:else if isDesktop}
     <DesktopShell
