@@ -92,6 +92,13 @@ def _menu_block(lines: list[str]) -> Optional[tuple[int, int]]:
             cursor = i  # cursor mais ao fundo = o picker vivo
     if cursor is None:
         return None
+    # Um menu VIVO substitui o composer de input. Se ABAIXO do cursor renderiza o composer vivo (linha
+    # de prompt "❯ " vazia ou com rascunho — comeca com ❯ mas NAO e "❯ N." de opcao), entao este "❯ N."
+    # e PROSA citada no scrollback (ex: o assistente citando o menu nativo "❯ 1. Yes, switch...") e nao
+    # um widget selecionavel. Sem essa guarda a citacao trava o app num menu fantasma (awaiting_input).
+    if any(ln.lstrip()[:1] == "❯" and not _CURSOR_RE.match(ln)
+           for ln in lines[cursor + 1:]):
+        return None
     # Subindo do cursor, o topo do picker e o CHIP header (☐/☑ da AskUserQuestion) ou um boundary
     # (bullet/spinner do menu nativo, que nao tem chip). Parar no chip mantem FORA do bloco uma
     # LISTA NUMERADA EM PROSA da mensagem do assistente — ela vive acima do chip e, sem essa

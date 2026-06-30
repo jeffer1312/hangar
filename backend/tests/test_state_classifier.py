@@ -58,6 +58,16 @@ def test_real_fixtures():
     assert s2 == "awaiting_input" and opts2 and "proceed?" in (q2 or "")
 
 
+def test_quoted_menu_in_scrollback_is_idle():
+    """O assistente citou o menu nativo na propria mensagem ("❯ 1. Yes, switch to xhigh / 2. No,
+    go back"). Esse "❯ N." vive no scrollback com o composer vivo (input box) renderizado ABAIXO,
+    entao NAO e um widget selecionavel -> idle, nao awaiting_input (senao o app trava num menu
+    fantasma). Captura real do pane que travou o claude-pocket."""
+    fx = Path(__file__).parent / "fixtures" / "pane_quoted_menu_scrollback.txt"
+    state, _, _, options = classify(fx.read_text())
+    assert state == "idle", f"menu citado virou {state} com opcoes {options}"
+
+
 def test_askuserquestion_real_fixture():
     """A AskUserQuestion (widget do assistente) capturada de verdade do pane: o classificador
     tem que extrair a pergunta e as opcoes reais, escopadas ao box do picker."""
