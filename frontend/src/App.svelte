@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { isAuthenticated } from './lib/auth';
+  import { isAuthenticated, setServers, listServers, onServersChanged, clearCredentials } from './lib/auth';
+  import { getVault, decryptList, encryptList, putVault, logout as syncLogout } from './lib/sync';
   import Login from './screens/Login.svelte';
   import SessionList from './screens/SessionList.svelte';
   import Chat from './screens/Chat.svelte';
@@ -75,7 +76,33 @@
     navigateTo('#/');
   }
 
-  function onLogout() {
+  // Cloud-sync: chave em memoria (vive a sessao) + revisao do vault no hub. Nada disso toca o disco.
+  let encKey: CryptoKey | null = null;
+  let vaultRev = 0;
+
+  // Apos login no hub: puxa o vault, decifra, hidrata a lista local e fica empurrando mutacoes locais.
+  async function onSyncLogin(key: CryptoKey) {
+    encKey = key;
+    const { enc_blob, rev } = await getVault();
+    vaultRev = rev;
+    if (enc_blob) setServers(await decryptList(key, enc_blob));
+    onServersChanged(async () => {
+      if (!encKey) return;
+      let res = await putVault(await encryptList(encKey, listServers()), vaultRev);
+      if ('conflict' in res) {           // rev velha: adota a do hub e tenta de novo uma vez
+        vaultRev = res.conflict.rev;
+        res = await putVault(await encryptList(encKey, listServers()), vaultRev);
+      }
+      if ('rev' in res) vaultRev = res.rev;
+    });
+  }
+
+  async function onLogout() {
+    if (encKey) {
+      await syncLogout();
+      clearCredentials();
+      encKey = null;
+    }
     authenticated = false;
     navigateTo('#/');
   }
@@ -92,7 +119,7 @@
 
 <div class="app-root">
   {#if route.name === 'login'}
-    <Login {onLogin} />
+    <Login {onLogin} onSyncLogin={onSyncLogin} />
   {:else if isDesktop}
     <DesktopShell
       currentSession={route.name === 'chat' ? route.sessionName : null}
