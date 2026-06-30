@@ -146,3 +146,63 @@ def register(body: RegisterBody) -> dict:
         "rev": 0,
     })
     return {"ok": True}
+
+
+class LoginBody(BaseModel):
+    user: str
+    auth_hash: str
+
+
+class VaultPutBody(BaseModel):
+    enc_blob: dict | None
+    base_rev: int
+
+
+@sync_router.get("/prelogin")
+def prelogin(user: str) -> dict:
+    # Always return the stored salt + iterations regardless of username, to avoid user enumeration.
+    # A wrong user just fails later at /login. If no account yet, return a stable placeholder salt.
+    v = load_vault()
+    salt = v["salt"] if v else base64.b64encode(b"unregistered----").decode()
+    return {"salt": salt, "iterations": 600000}
+
+
+@sync_router.post("/login")
+def login(body: LoginBody, request: Request, response: Response) -> dict:
+    ip = request.client.host if request.client else "?"
+    if rate_limited(ip):
+        raise HTTPException(status_code=429, detail="too many attempts")
+    if not verify_credentials(body.user, body.auth_hash):
+        record_fail(ip)
+        raise HTTPException(status_code=401, detail="unauthorized")
+    secure = request.url.scheme == "https"
+    response.set_cookie(
+        COOKIE_NAME, sign_session(body.user),
+        max_age=_SESSION_TTL, httponly=True, samesite="lax", secure=secure, path="/",
+    )
+    return {"ok": True}
+
+
+@sync_router.post("/logout")
+def logout(response: Response) -> dict:
+    response.delete_cookie(COOKIE_NAME, path="/")
+    return {"ok": True}
+
+
+@sync_router.get("/vault")
+def get_vault(user: str = Depends(require_session)) -> dict:
+    v = load_vault() or {"enc_blob": None, "rev": 0}
+    return {"enc_blob": v.get("enc_blob"), "rev": v.get("rev", 0)}
+
+
+@sync_router.put("/vault")
+def put_vault(body: VaultPutBody, user: str = Depends(require_session)) -> dict:
+    v = load_vault()
+    if not v:
+        raise HTTPException(status_code=409, detail={"enc_blob": None, "rev": 0})
+    if body.base_rev != v["rev"]:
+        raise HTTPException(status_code=409, detail={"enc_blob": v["enc_blob"], "rev": v["rev"]})
+    v["enc_blob"] = body.enc_blob
+    v["rev"] += 1
+    save_vault(v)
+    return {"rev": v["rev"]}
