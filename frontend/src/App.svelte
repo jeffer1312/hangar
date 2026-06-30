@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { isAuthenticated, setServers, listServers, onServersChanged, clearCredentials } from './lib/auth';
+  import { isAuthenticated, setServers, listServers, mergeServers, onServersChanged, clearCredentials } from './lib/auth';
   import { getVault, decryptList, encryptList, putVault, logout as syncLogout } from './lib/sync';
   import Login from './screens/Login.svelte';
   import SessionList from './screens/SessionList.svelte';
@@ -85,15 +85,29 @@
     encKey = key;
     const { enc_blob, rev } = await getVault();
     vaultRev = rev;
-    if (enc_blob) setServers(await decryptList(key, enc_blob));
+    // Reconcilia: junta o que o hub tem (remote) com o que ja existia so neste navegador. Sem isso,
+    // servers adicionados ANTES do login nunca subiam -- o login so BAIXAVA. setServers nao re-empurra.
+    const remote = enc_blob ? await decryptList(key, enc_blob) : [];
+    const merged = mergeServers(remote, listServers());
+    setServers(merged);
+    if (merged.length !== remote.length) {
+      // havia servers locais fora do hub -> semeia/atualiza o vault agora (1a subida)
+      const seed = await putVault(await encryptList(key, merged), vaultRev);
+      if ('rev' in seed) vaultRev = seed.rev;
+    }
     onServersChanged(async () => {
       if (!encKey) return;
-      let res = await putVault(await encryptList(encKey, listServers()), vaultRev);
-      if ('conflict' in res) {           // rev velha: adota a do hub e tenta de novo uma vez
-        vaultRev = res.conflict.rev;
-        res = await putVault(await encryptList(encKey, listServers()), vaultRev);
+      try {
+        let res = await putVault(await encryptList(encKey, listServers()), vaultRev);
+        if ('conflict' in res) {           // rev velha: adota a do hub e tenta de novo uma vez
+          vaultRev = res.conflict.rev;
+          res = await putVault(await encryptList(encKey, listServers()), vaultRev);
+        }
+        if ('rev' in res) vaultRev = res.rev;
+      } catch (e) {
+        // Nao engole: um push que falha (rede/sessao) some sem isso. Loga pra ficar visivel.
+        console.error('sync push falhou — server nao subiu pro hub:', e);
       }
-      if ('rev' in res) vaultRev = res.rev;
     });
   }
 

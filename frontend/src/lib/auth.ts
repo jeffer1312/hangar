@@ -45,6 +45,15 @@ function notifyChanged(): void {
   if (_changed) _changed();
 }
 
+// Une a lista do hub (remote) com a local: remote tem precedencia em duplicata (mesma baseUrl
+// normalizada); servers locais que o hub ainda nao tem sao acrescentados. Usado no login do sync
+// pra SEMEAR no hub os servers que ja existiam so no navegador (senao nunca subiam).
+export function mergeServers(remote: Server[], local: Server[]): Server[] {
+  const norm = (u: string) => u.replace(/\/+$/, '');
+  const seen = new Set(remote.map((s) => norm(s.baseUrl)));
+  return [...remote, ...local.filter((s) => !seen.has(norm(s.baseUrl)))];
+}
+
 // Sobrescreve a lista inteira (hidratacao a partir do vault decifrado). Mantem o ativo se ainda
 // existir, senao cai pro primeiro. NAO dispara notifyChanged (veio do hub, nao re-empurrar).
 export function setServers(list: Server[]): void {
