@@ -34,16 +34,17 @@ export async function deriveKeys(
   return { authHash: b64(authBits), encKey };
 }
 
-// Persiste a encKey no sessionStorage (vive enquanto a aba existe, some ao fechar) pra a sessao de
-// sync sobreviver a um reload — senao a chave some da memoria e os pushes pro hub viram no-op silencioso.
-// NAO vai pro localStorage/disco (nao sincroniza, nao persiste alem da aba): mantem o zero-knowledge.
+// Persiste a encKey no localStorage pra a sessao de sync sobreviver a fechar/reabrir o app (senao
+// pediria login toda vez). Zero-knowledge protege o HUB (servidor), nao este device: a lista de
+// servers ja fica no localStorage com os tokens em texto puro (cp_servers), entao a chave aqui nao
+// expoe nada novo localmente. Some so no logout (clearKey) ou ao limpar os dados do site.
 const KEY_STASH = 'cp_enckey';
 export async function stashKey(encKey: CryptoKey): Promise<void> {
   const raw = await crypto.subtle.exportKey('raw', encKey);
-  sessionStorage.setItem(KEY_STASH, b64(raw));
+  localStorage.setItem(KEY_STASH, b64(raw));
 }
 export async function loadKey(): Promise<CryptoKey | null> {
-  const s = sessionStorage.getItem(KEY_STASH);
+  const s = localStorage.getItem(KEY_STASH);
   if (!s) return null;
   try {
     return await crypto.subtle.importKey('raw', unb64(s), { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
@@ -52,7 +53,7 @@ export async function loadKey(): Promise<CryptoKey | null> {
   }
 }
 export function clearKey(): void {
-  sessionStorage.removeItem(KEY_STASH);
+  localStorage.removeItem(KEY_STASH);
 }
 
 export async function encryptList(encKey: CryptoKey, servers: Server[]): Promise<{ iv: string; data: string }> {
