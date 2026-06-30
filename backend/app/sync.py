@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from app.config import settings
+from app.config import settings, _LOOPBACK
 
 # ── Zero-knowledge sync hub ──────────────────────────────────────────────────────────────────
 # The browser derives masterKey = PBKDF2(password, salt); from it, authHash (sent here) and encKey
@@ -18,6 +18,7 @@ from app.config import settings
 # We can recover neither the password nor the backend tokens.
 
 _PBKDF2_VERIFIER_ITERS = 200_000
+PBKDF2_ITERATIONS = 600_000  # master-key derivation iters; MUST match the frontend constant of the same name
 
 
 def _data_path() -> Path:
@@ -164,7 +165,7 @@ def prelogin(user: str) -> dict:
     # A wrong user just fails later at /login. If no account yet, return a stable placeholder salt.
     v = load_vault()
     salt = v["salt"] if v else base64.b64encode(b"unregistered----").decode()
-    return {"salt": salt, "iterations": 600000}
+    return {"salt": salt, "iterations": PBKDF2_ITERATIONS}
 
 
 @sync_router.post("/login")
@@ -175,7 +176,10 @@ def login(body: LoginBody, request: Request, response: Response) -> dict:
     if not verify_credentials(body.user, body.auth_hash):
         record_fail(ip)
         raise HTTPException(status_code=401, detail="unauthorized")
-    secure = request.url.scheme == "https"
+    # Loopback bind = local dev over http (Secure off so the cookie works);
+    # any non-loopback bind = real deployment where HTTPS is required, so force Secure
+    # regardless of the proxy-reported scheme.
+    secure = request.url.scheme == "https" or settings.lan_bind_ip not in _LOOPBACK
     response.set_cookie(
         COOKIE_NAME, sign_session(body.user),
         max_age=_SESSION_TTL, httponly=True, samesite="lax", secure=secure, path="/",

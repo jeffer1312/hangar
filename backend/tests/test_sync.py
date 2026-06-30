@@ -5,13 +5,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-@pytest.fixture
-def client(tmp_path, monkeypatch):
-    # Point the vault at a temp file and enable sync BEFORE importing the app, so the router mounts.
+def _make_client(tmp_path, monkeypatch, bind_ip="127.0.0.1"):
     monkeypatch.setenv("CP_SYNC", "1")
     monkeypatch.setenv("CP_SYNC_BOOTSTRAP", "boot-secret")
     monkeypatch.setenv("CP_SYNC_DATA", str(tmp_path / "vault.json"))
     monkeypatch.setenv("CP_SYNC_SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("CP_LAN_BIND_IP", bind_ip)
     import app.config as config
     importlib.reload(config)
     import app.sync as sync
@@ -19,6 +18,11 @@ def client(tmp_path, monkeypatch):
     import app.api as api
     importlib.reload(api)
     return TestClient(api.app)
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    return _make_client(tmp_path, monkeypatch)
 
 
 # A fake client-derived pair. The server never derives these; it only stores/compares.
@@ -93,3 +97,23 @@ def test_vault_round_trip_and_stale_rev(client):
 def test_vault_requires_session(client):
     _register(client)
     assert client.get("/api/sync/vault").status_code == 401
+
+
+def test_login_cookie_secure_when_non_loopback(tmp_path, monkeypatch):
+    c = _make_client(tmp_path, monkeypatch, "192.168.1.50")
+    _register(c)
+    resp = c.post("/api/sync/login", json={"user": "j", "auth_hash": AUTH})
+    assert resp.status_code == 200
+    cookie = resp.headers.get("set-cookie", "")
+    assert "Secure" in cookie
+    assert "HttpOnly" in cookie
+    assert "samesite=lax" in cookie.lower()
+
+
+def test_login_rate_limited_after_5_fails(client):
+    _register(client)
+    for _ in range(5):
+        r = client.post("/api/sync/login", json={"user": "j", "auth_hash": "wronghash"})
+        assert r.status_code == 401
+    r = client.post("/api/sync/login", json={"user": "j", "auth_hash": "wronghash"})
+    assert r.status_code == 429
