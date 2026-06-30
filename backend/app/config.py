@@ -100,6 +100,12 @@ class Settings(BaseSettings):
     vapid_public: str = ""
     vapid_private: str = ""
     vapid_subject: str = "mailto:claude-pocket@local"
+    # Cloud sync hub (opt-in). CP_SYNC=1 turns THIS backend into the sync hub: it mounts /api/sync/*.
+    # Stores only salt + auth verifier + ciphertext (zero-knowledge; tokens are encrypted client-side).
+    sync: bool = False
+    sync_bootstrap: str = ""        # CP_SYNC_BOOTSTRAP: one-time secret to gate first registration
+    sync_data: Path = Path.home() / ".claude-pocket" / "sync-vault.json"
+    sync_session_secret: str = ""   # CP_SYNC_SESSION_SECRET: HMAC key for the session cookie; empty -> random at boot
 
 
 settings = Settings()
