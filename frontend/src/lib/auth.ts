@@ -169,7 +169,7 @@ export function selectServer(id: string): void {
   syncCookie(s.token);
 }
 
-export function removeServer(id: string): void {
+export function removeServer(id: string, notify = true): void {
   const list = readServers().filter((s) => s.id !== id);
   writeServers(list);
   if (localStorage.getItem(ACTIVE_KEY) === id) {
@@ -182,14 +182,17 @@ export function removeServer(id: string): void {
       syncCookie(null);
     }
   }
-  notifyChanged();
+  if (notify) notifyChanged();
 }
 
 // Token do servidor ATIVO furou (401): remove só ele e cai pro próximo (se houver). Assim um token
 // expirado num PC não desloga dos outros.
+// A 401 token-drop is local-only — it must not push the removal to the sync hub, so a
+// rotated/expired token doesn't delete the server from the vault across all devices;
+// on reload it re-hydrates and the user re-pairs.
 export function dropActiveServer(): void {
   const id = getActiveId();
-  if (id) removeServer(id);
+  if (id) removeServer(id, false);
 }
 
 // Logout total: limpa todos os servidores.

@@ -2,6 +2,7 @@ import type { Server } from './auth';
 
 // Zero-knowledge: the password never leaves the browser. From PBKDF2(masterKey) we split two HKDF
 // branches — authHash (sent to the hub) and encKey (stays here, encrypts the server list).
+const PBKDF2_ITERATIONS = 600000; // MUST match the backend PBKDF2_ITERATIONS
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
@@ -69,7 +70,7 @@ export async function prelogin(user: string): Promise<{ salt: string; iterations
 
 export async function register(user: string, password: string, bootstrap: string): Promise<void> {
   const salt = b64(crypto.getRandomValues(new Uint8Array(16)).buffer);
-  const { authHash } = await deriveKeys(password, salt, 600000);
+  const { authHash } = await deriveKeys(password, salt, PBKDF2_ITERATIONS);
   const r = await jf('/api/sync/register', {
     method: 'POST', body: JSON.stringify({ user, salt, auth_hash: authHash, bootstrap }),
   });
