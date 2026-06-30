@@ -26,6 +26,7 @@ from app.git_ops import list_branches, switch_branch, git_action, GitError
 from app.askquestion import clear_pending_askq
 from app.hook_state import hook_state
 from app import push
+from app.sync import sync_router
 
 _log = logging.getLogger("claude_pocket")
 
@@ -119,6 +120,8 @@ app.add_middleware(
     allow_headers=["*"],
     allow_credentials=False,
 )
+if settings.sync:
+    app.include_router(sync_router)
 registry = SessionRegistry()
 terminal = TerminalInput()
 
