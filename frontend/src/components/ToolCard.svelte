@@ -1,13 +1,25 @@
 <script lang="ts">
   import type { ChatEvent } from '../lib/types';
+  import { parseFilePaths } from '../lib/format';
+  import FileAttachment from './FileAttachment.svelte';
 
   interface Props {
     event: ChatEvent;
     result?: ChatEvent | null;
+    sessionName: string;
   }
-  let { event, result = null }: Props = $props();
+  let { event, result = null, sessionName }: Props = $props();
 
   let expanded = $state(false);
+
+  // Imagem (ou midia/doc) que o Claude LEU: o transcript dropa o bloco image do tool_result, mas o
+  // path do Read esta citado na conversa -> serve pelo /file (parseFilePaths filtra por extensao
+  // conhecida, entao codigo/.md nao vira anexo). Reusa a mesma trava + componente do chat.
+  const fileRefs = $derived(
+    event.tool_name === 'Read'
+      ? parseFilePaths(String((event.tool_input as Record<string, unknown> | null)?.['file_path'] ?? ''))
+      : []
+  );
 
   const phase = $derived<'pending' | 'done' | 'error'>(
     result === null
@@ -78,6 +90,8 @@
     </div>
   {/if}
 </div>
+
+{#if fileRefs.length}<FileAttachment {sessionName} refs={fileRefs} />{/if}
 
 <style>
   /* Linha muda colapsada (estilo Claude iOS): "Executou <tool> · <summary> ›". Tap expande. */
