@@ -330,6 +330,9 @@
         <button class="menu-item" role="menuitem" onclick={() => { for (const es of streams.values()) es.close(); streams.clear(); connect(servers); showMenu = false; }}>
           Atualizar
         </button>
+        <button class="menu-item" role="menuitem" onclick={() => { showMenu = false; window.location.hash = '#/costs'; }}>
+          Custos
+        </button>
         <button class="menu-item menu-item--danger" role="menuitem" onclick={handleLogout}>
           Sair
         </button>
