@@ -34,6 +34,21 @@ def test_load_dedups_cumulative_snapshots_by_session_id(tmp_path):
     assert rows[0]["out"] == 20
 
 
+def test_load_last_line_wins_on_timestamp_tie(tmp_path):
+    src = tmp_path / "metrics" / "costs.jsonl"
+    _write_jsonl(src, [
+        {"timestamp": "2026-07-01T10:00:00.000Z", "session_id": "s1",
+         "model": "claude-opus-4-8", "input_tokens": 100, "output_tokens": 0,
+         "cache_write_tokens": 0, "cache_read_tokens": 0},
+        {"timestamp": "2026-07-01T10:00:00.000Z", "session_id": "s1",
+         "model": "claude-opus-4-8", "input_tokens": 999, "output_tokens": 0,
+         "cache_write_tokens": 0, "cache_read_tokens": 0},
+    ])
+    rows = costs._load(tmp_path)
+    assert len(rows) == 1
+    assert rows[0]["in"] == 999  # ultima linha vence mesmo com timestamp igual
+
+
 def test_load_missing_file_returns_empty(tmp_path):
     assert costs._load(tmp_path) == []
 

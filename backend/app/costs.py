@@ -43,9 +43,7 @@ def _load(config_dir: Path) -> list[dict]:
             if not ts:
                 continue
             key = d.get("session_id") or d.get("transcript_path") or ts
-            prev = latest.get(key)
-            if prev is None or ts > prev["timestamp"]:
-                latest[key] = d
+            latest[key] = d  # last line wins (append-only log), no timestamp comparison
     rows: list[dict] = []
     for d in latest.values():
         dt = datetime.fromisoformat(d["timestamp"].replace("Z", "+00:00")).astimezone(LOCAL)
