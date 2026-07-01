@@ -12,6 +12,7 @@ import type {
   WorkflowDetail,
   WorkflowAgentDetail,
   AnswerItem,
+  CostReport,
 } from './types';
 
 // URL da idx-ésima imagem (colada no terminal) de uma msg do transcript. `?token` porque <img> não
@@ -87,6 +88,18 @@ export async function fetchSessionsForServer(s: Server): Promise<SessionInfo[]> 
   });
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json() as Promise<SessionInfo[]>;
+}
+
+// Custo de UM servidor (baseUrl+token explicitos), sem mexer no ativo. Igual fetchSessionsForServer:
+// a visao agregada chama todos em paralelo; um servidor lento/offline falha rapido (timeout 4s) e e
+// pulado, sem segurar os demais.
+export async function fetchCostsForServer(s: Server): Promise<CostReport> {
+  const res = await fetch(`${s.baseUrl}/api/costs`, {
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
+    signal: AbortSignal.timeout(4000),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json() as Promise<CostReport>;
 }
 
 export function listClaudeConfigs(): Promise<ConfigDirInfo[]> {
