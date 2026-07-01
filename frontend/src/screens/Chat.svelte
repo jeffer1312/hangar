@@ -72,6 +72,14 @@
   let activityOpen = $state(false);
   let askPayload = $state<AskQuestionPayload | null>(null);
   let askOpen = $state(false);
+  // Viewport largo → pergunta vira card inline no chat (contexto visível); estreito → bottom-sheet.
+  let isWide = $state(typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches);
+  onMount(() => {
+    const mq = window.matchMedia('(min-width: 768px)');
+    const on = () => (isWide = mq.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  });
   let allSessions = $state<SessionInfo[]>([]);
 
   async function openSwitcher() {
@@ -550,6 +558,10 @@
       preview={previewText}
       onSelectOption={handleSelect}
       onCancel={handleInterrupt}
+      askOpen={isWide && askOpen}
+      askPayload={askPayload}
+      onAnswer={handleAnswer}
+      onAskClose={() => (askOpen = false)}
     />
   {/if}
 
@@ -611,13 +623,15 @@
 
   <TerminalMirror open={mirrorOpen} {sessionName} onClose={closeMirror} />
 
-  <AskQuestionSheet
-    open={askOpen}
-    payload={askPayload}
-    onSubmit={handleAnswer}
-    onClose={() => (askOpen = false)}
-    onFallback={openMirror}
-  />
+  {#if !isWide}
+    <AskQuestionSheet
+      open={askOpen}
+      payload={askPayload}
+      onSubmit={handleAnswer}
+      onClose={() => (askOpen = false)}
+      onFallback={openMirror}
+    />
+  {/if}
 </div>
 
 <style>
