@@ -36,9 +36,24 @@ def print_pairing(settings) -> None:
     print(f"  Scan to pair, or open: {url}\n", flush=True)
 
 
+def _setup_diag_logging() -> None:
+    # DIAG: garante que os logs "claude_pocket.*" (RESOLVE/SEND) saiam no stderr -> journald. O uvicorn
+    # so configura os proprios loggers; sem isto, INFO de app propaga pro root (WARNING) e some.
+    import logging
+    import sys
+    cp = logging.getLogger("claude_pocket")
+    if not cp.handlers:
+        h = logging.StreamHandler(sys.stderr)
+        h.setFormatter(logging.Formatter("%(levelname)s:     [%(name)s] %(message)s"))
+        cp.addHandler(h)
+        cp.setLevel(logging.INFO)
+        cp.propagate = False
+
+
 def main():
     bind = resolve_bind_ip(settings)
     startup_guard(settings)
+    _setup_diag_logging()
     # Instala (idempotente, fail-soft) os hooks de estado e de AskUserQuestion.
     ensure_askq_hook_installed()
     ensure_state_hooks_installed()

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import re
 import uuid
@@ -15,6 +16,8 @@ from app.hook_state import hook_state
 
 # Sentinela: distingue "pid nao informado" (resolve sozinho via tmux) de "pid=None" (sem pane).
 _UNSET = object()
+
+_log = logging.getLogger("claude_pocket.registry")
 
 
 def sanitize_cwd(cwd: str) -> str:
@@ -181,6 +184,9 @@ class SessionRegistry:
     # nomes cujo cache veio do fd ABERTO (verdade do FS, nao chute). Mantido entre polls sem fd p/ nao
     # oscilar pro --session-id da cmdline (resume: o id da cmdline nunca vira arquivo). De classe.
     _fd_locked: set[str] = set()
+    # DIAG: ultima resolucao logada por nome ("<jsonl>|<tracked>") -> loga so quando MUDA (o momento do
+    # split/cross-wire), sem spammar a cada poll. Remover quando o bug de colisao estiver resolvido.
+    _last_res: dict[str, str] = {}
 
     def __init__(self, projects_dir: Path | None = None):
         self.projects_dir = Path(projects_dir or settings.projects_dir)
@@ -231,7 +237,24 @@ class SessionRegistry:
     def resolve(self, name: str, cwd: str) -> Optional[str]:
         return self.resolve_tracked(name, cwd)[0]
 
+    def _log_change(self, name: str, jsonl: Optional[str], tracked: bool) -> None:
+        # DIAG: loga a resolucao SO quando muda pra um nome (baseline no 1o poll, depois so transicoes).
+        key = f"{jsonl}|{tracked}"
+        if self._last_res.get(name) == key:
+            return
+        prev = self._last_res.get(name)
+        self._last_res[name] = key
+        _log.info("RESOLVE name=%s jsonl=%s tracked=%s prev=%s",
+                  name, (jsonl or "").rsplit("/", 1)[-1], tracked,
+                  (prev or "-").rsplit("/", 1)[-1].split("|")[0])
+
     def resolve_tracked(self, name: str, cwd: str, pid=_UNSET,
+                        children: Optional[dict[int, list[int]]] = None) -> tuple[Optional[str], bool]:
+        jsonl, tracked = self._resolve_tracked_impl(name, cwd, pid, children)
+        self._log_change(name, jsonl, tracked)
+        return jsonl, tracked
+
+    def _resolve_tracked_impl(self, name: str, cwd: str, pid=_UNSET,
                         children: Optional[dict[int, list[int]]] = None) -> tuple[Optional[str], bool]:
         # Mapeia uma sessao tmux -> o jsonl CERTO + se o vinculo e CONFIAVEL (tracked).
         # tracked=True so com sinal DETERMINISTICO: --session-id do cmdline, fd aberto, ou cache
