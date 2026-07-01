@@ -146,3 +146,37 @@ export type AnswerItem =
   | { kind: 'option'; indices: number[]; multi: boolean; labels: string[] }
   | { kind: 'text'; value: string; type_index: number; labels: string[] }
   | { kind: 'chat'; chat_index: number };
+
+// ── Custos (visão agregada de uso/gasto por conta) ──────────────────────────
+export interface CostBucket {
+  key: string;
+  sessions: number;
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
+  cost: number;
+}
+
+export interface CostModelBucket {
+  model: string;
+  sessions: number;
+  cost: number;
+}
+
+export interface AccountCost {
+  account_id: string;
+  email: string | null;
+  label: string;
+  totals: CostBucket;
+  today: number;
+  yesterday: number;
+  by_day: CostBucket[];
+  by_week: CostBucket[];
+  by_month: CostBucket[];
+  by_model: CostModelBucket[];
+}
+
+export interface CostReport {
+  accounts: AccountCost[];
+}
