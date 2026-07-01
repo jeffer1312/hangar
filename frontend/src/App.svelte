@@ -182,6 +182,8 @@
     <div class="boot" aria-busy="true"></div>
   {:else if route.name === 'login'}
     <Login {onLogin} onSyncLogin={onSyncLogin} />
+  {:else if route.name === 'costs'}
+    <Costs onBack={() => navigateTo('#/')} />
   {:else if isDesktop}
     <DesktopShell
       currentSession={route.name === 'chat' ? route.sessionName : null}
@@ -193,8 +195,6 @@
       onNavigateToChat={navigateToChat}
       {onLogout}
     />
-  {:else if route.name === 'costs'}
-    <Costs onBack={() => navigateTo('#/')} />
   {:else if route.name === 'chat'}
     <!-- Remonta ao trocar de sessao (switcher): re-roda loadHistory + reconecta o SSE. -->
     {#key route.sessionName}

@@ -321,6 +321,7 @@
         <span class="srv-label">{activeServer?.label ?? 'servidor'}</span>
         <span class="srv-caret" aria-hidden="true">⌃</span>
       </button>
+      <button class="costs-btn" onclick={() => (window.location.hash = '#/costs')}>Custos</button>
       <button class="logout-btn" onclick={logout}>Sair</button>
     </div>
   {/if}
@@ -450,6 +451,8 @@
   .srv-del { width: 28px; height: 32px; min-height: 0; color: var(--text-muted); font-size: var(--text-base); }
   .srv-del:hover { color: var(--error); }
   .srv-add { height: 32px; padding: 0 var(--space-2); text-align: left; justify-content: flex-start; color: var(--accent); font-size: var(--text-sm); }
+  .costs-btn { height: 34px; padding: 0 var(--space-2); text-align: left; justify-content: flex-start; color: var(--text-secondary); font-size: var(--text-sm); border-radius: var(--radius-md); }
+  .costs-btn:hover { background: var(--bg-hover); color: var(--accent); }
   .logout-btn { height: 34px; padding: 0 var(--space-2); text-align: left; justify-content: flex-start; color: var(--text-muted); font-size: var(--text-sm); border-radius: var(--radius-md); }
   .logout-btn:hover { background: var(--bg-hover); color: var(--error); }
 </style>
