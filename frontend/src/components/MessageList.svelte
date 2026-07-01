@@ -1,10 +1,11 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import type { ChatEvent, StateEvent } from '../lib/types';
+  import type { ChatEvent, StateEvent, AskQuestionPayload, AnswerItem } from '../lib/types';
   import UserBubble from './UserBubble.svelte';
   import AssistantBubble from './AssistantBubble.svelte';
   import ToolCard from './ToolCard.svelte';
   import OptionButtons from './OptionButtons.svelte';
+  import AskQuestionCard from './AskQuestionCard.svelte';
   import Spinner from './Spinner.svelte';
   import ImageBubble from './ImageBubble.svelte';
   import FileAttachment from './FileAttachment.svelte';
@@ -21,9 +22,17 @@
     preview?: string;
     onSelectOption: (i: number) => void;
     onCancel: () => void;
+    // AskUserQuestion inline (desktop): quando askOpen, renderiza o card no fim da lista.
+    askOpen?: boolean;
+    askPayload?: AskQuestionPayload | null;
+    onAnswer?: (answers: AnswerItem[]) => Promise<void>;
+    onAskClose?: () => void;
   }
 
-  let { events, stateEvent, pending, sessionName, dockH, preview = '', onSelectOption, onCancel }: Props = $props();
+  let {
+    events, stateEvent, pending, sessionName, dockH, preview = '', onSelectOption, onCancel,
+    askOpen = false, askPayload = null, onAnswer, onAskClose
+  }: Props = $props();
 
   let listEl: HTMLElement | undefined = $state();
   // O usuario "gruda" no fim por padrao; ao rolar pra cima, paramos de arrastar.
@@ -190,6 +199,15 @@
         options={stateEvent.options ?? []}
         onSelect={onSelectOption}
         onCancel={onCancel}
+      />
+    {/if}
+
+    {#if askOpen && askPayload && onAnswer}
+      <AskQuestionCard
+        open={askOpen}
+        payload={askPayload}
+        onSubmit={onAnswer}
+        onClose={onAskClose ?? (() => {})}
       />
     {/if}
   </div>
