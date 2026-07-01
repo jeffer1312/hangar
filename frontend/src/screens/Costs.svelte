@@ -2,7 +2,7 @@
   import NavBar from '../components/NavBar.svelte';
   import { listServers } from '../lib/auth';
   import { fetchCostsForServer } from '../lib/api';
-  import { mergeAccounts, type ServerResult, type MergedReport } from '../lib/costs';
+  import { mergeAccounts, addBuckets, sortDesc, type ServerResult, type MergedReport } from '../lib/costs';
   import { abbrevNum } from '../lib/format';
   import type { AccountCost, CostBucket } from '../lib/types';
 
@@ -33,15 +33,8 @@
   // Soma uma lista de listas de buckets por key (usado no modo "Todas").
   function sumBuckets(lists: CostBucket[][]): CostBucket[] {
     const m = new Map<string, CostBucket>();
-    for (const list of lists) for (const b of list) {
-      const cur = m.get(b.key);
-      if (!cur) m.set(b.key, { ...b });
-      else {
-        cur.sessions += b.sessions; cur.input += b.input; cur.output += b.output;
-        cur.cache_read += b.cache_read; cur.cache_write += b.cache_write; cur.cost += b.cost;
-      }
-    }
-    return [...m.values()].sort((a, b) => (a.key < b.key ? 1 : -1));
+    for (const list of lists) addBuckets(m, list);
+    return sortDesc(m);
   }
 
   const view = $derived.by<AccountCost | null>(() => {
@@ -92,9 +85,9 @@
     {/if}
 
     <div class="tabs" role="tablist" aria-label="Conta">
-      <button class:on={selected === 'all'} onclick={() => (selected = 'all')}>Todas</button>
+      <button role="tab" aria-selected={selected === 'all'} class:on={selected === 'all'} onclick={() => (selected = 'all')}>Todas</button>
       {#each merged.accounts as a}
-        <button class:on={selected === a.account_id} onclick={() => (selected = a.account_id)}>
+        <button role="tab" aria-selected={selected === a.account_id} class:on={selected === a.account_id} onclick={() => (selected = a.account_id)}>
           {a.email ?? a.label}
         </button>
       {/each}
@@ -113,9 +106,9 @@
     </div>
 
     <div class="tabs" role="tablist" aria-label="Período">
-      <button class:on={period === 'day'} onclick={() => (period = 'day')}>Dia</button>
-      <button class:on={period === 'week'} onclick={() => (period = 'week')}>Semana</button>
-      <button class:on={period === 'month'} onclick={() => (period = 'month')}>Mês</button>
+      <button role="tab" aria-selected={period === 'day'} class:on={period === 'day'} onclick={() => (period = 'day')}>Dia</button>
+      <button role="tab" aria-selected={period === 'week'} class:on={period === 'week'} onclick={() => (period = 'week')}>Semana</button>
+      <button role="tab" aria-selected={period === 'month'} class:on={period === 'month'} onclick={() => (period = 'month')}>Mês</button>
     </div>
 
     <table>

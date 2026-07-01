@@ -9,7 +9,7 @@ export interface MergedReport {
   partial: boolean; // algum servidor nao respondeu
 }
 
-function addBuckets(into: Map<string, CostBucket>, list: CostBucket[]): void {
+export function addBuckets(into: Map<string, CostBucket>, list: CostBucket[]): void {
   for (const b of list) {
     const cur = into.get(b.key);
     if (!cur) {
@@ -51,7 +51,7 @@ function emptyTotals(): CostBucket {
 }
 
 // Ordena buckets de periodo por key desc (data mais recente primeiro).
-function sortDesc(m: Map<string, CostBucket>): CostBucket[] {
+export function sortDesc(m: Map<string, CostBucket>): CostBucket[] {
   return [...m.values()].sort((a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0));
 }
 

@@ -136,7 +136,8 @@ def _account_info(config_dir: Path, fallback_label: str) -> tuple[str, str | Non
     for f in (config_dir / ".claude.json", Path.home() / ".claude.json"):
         try:
             oa = (json.loads(f.read_text()).get("oauthAccount") or {})
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+            # AttributeError/TypeError: .claude.json existe mas root nao e dict (corrompido) -> fallback
             continue
         uuid = oa.get("accountUuid")
         if uuid:
