@@ -263,7 +263,7 @@
 
   /* Desktop: usa mais largura (aditivo; mobile fica nos 600px). */
   @media (min-width: 820px) {
-    .messages-inner { max-width: 920px; }
+    .messages-inner { max-width: 1400px; }
   }
 
   /* Bubble enfileirado: ainda nao processado pelo Claude — atenuado ate solidificar. Precisa ser
