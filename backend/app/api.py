@@ -321,6 +321,16 @@ async def events(name: str):
 def input_prompt(name: str, body: InputBody):
     try:
         result = terminal.send_prompt(name, body.text)
+        # DIAG: correlaciona o send com o jsonl pra onde ESTE nome resolve AGORA -> pega o cross-wire
+        # (msg indo pro transcript/terminal errado). Best-effort, nunca quebra o envio.
+        try:
+            from app import tmux as _tmux
+            _cwd = next((p["cwd"] for p in _tmux.list_panes_active() if p["name"] == name), "")
+            _j, _t = registry.resolve_tracked(name, _cwd)
+            _log.info("SEND name=%s -> jsonl=%s tracked=%s result=%s text=%r",
+                      name, (_j or "").rsplit("/", 1)[-1], _t, result, body.text[:80])
+        except Exception:
+            pass
     except ValueError as e:
         # send_prompt rejeita control chars (ex: '\n'). Sem isto virava 500 -> a msg sumia sem
         # feedback. Agora vira 400 limpo (o frontend mostra). (Multi-linha de verdade: backlog.)
