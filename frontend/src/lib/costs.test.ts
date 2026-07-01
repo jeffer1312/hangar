@@ -25,7 +25,23 @@ describe('mergeAccounts', () => {
     expect(merged.accounts[0].totals.cost).toBe(8);
     expect(merged.accounts[0].by_day).toHaveLength(1);
     expect(merged.accounts[0].by_day[0].cost).toBe(8);
+    expect(merged.accounts[0].by_model).toEqual([{ model: 'opus', sessions: 2, cost: 8 }]);
     expect(merged.partial).toBe(false);
+  });
+
+  it('sorts by_day desc by key and by_model desc by cost', () => {
+    const account: AccountCost = {
+      account_id: 'u1', email: null, label: 'u1',
+      totals: { key: 'totals', sessions: 2, input: 0, output: 0, cache_read: 0, cache_write: 0, cost: 9 },
+      today: 0, yesterday: 0,
+      by_day: [bucket('2026-06-30', 4), bucket('2026-07-02', 5)], // fora de ordem
+      by_week: [], by_month: [],
+      by_model: [{ model: 'sonnet', sessions: 1, cost: 3 }, { model: 'opus', sessions: 1, cost: 6 }], // fora de ordem
+    };
+    const merged = mergeAccounts([{ report: { accounts: [account] } }]);
+    const a = merged.accounts[0];
+    expect(a.by_day.map((b) => b.key)).toEqual(['2026-07-02', '2026-06-30']); // key desc
+    expect(a.by_model.map((m) => m.model)).toEqual(['opus', 'sonnet']); // cost desc
   });
 
   it('keeps different accounts separate', () => {

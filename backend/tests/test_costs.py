@@ -112,19 +112,19 @@ def test_account_info_reads_oauth(tmp_path):
     assert (aid, email, label) == ("u-9", "x@y.com", "x@y.com")
 
 
-def test_account_info_fallback_when_missing(tmp_path):
-    # dir sem .claude.json E sem oauthAccount em ~/.claude.json usavel -> cai no fallback.
-    # (usa um dir isolado; se ~/.claude.json existir e tiver conta, o teste ainda passa pois
-    #  _account_info tenta config_dir primeiro — aqui config_dir esta vazio, entao vai pro home;
-    #  para isolar de verdade, o teste roda com HOME apontando pro tmp_path.)
-    import os
-    old = os.environ.get("HOME")
-    os.environ["HOME"] = str(tmp_path)
-    try:
-        aid, email, label = costs._account_info(tmp_path / "cfg", "fallback")
-    finally:
-        if old is not None:
-            os.environ["HOME"] = old
+def test_account_info_fallback_when_missing(tmp_path, monkeypatch):
+    # config_dir sem .claude.json E HOME isolado (sem ~/.claude.json) -> cai no fallback.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    aid, email, label = costs._account_info(tmp_path / "cfg", "fallback")
+    assert aid == "fallback"
+    assert email is None
+
+
+def test_account_info_fallback_when_json_root_not_dict(tmp_path, monkeypatch):
+    # .claude.json corrompido (root e lista, nao dict) -> nao explode, cai no fallback.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".claude.json").write_text("[1, 2, 3]")
+    aid, email, label = costs._account_info(tmp_path, "fallback")
     assert aid == "fallback"
     assert email is None
     assert label == "fallback"
