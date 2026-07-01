@@ -443,3 +443,39 @@ def test_mtime_fallback_uses_session_config_dir(tmp_path, monkeypatch):
     assert tracked is False
     assert resolved == str(f)        # achou sob o config dir da SESSAO, nao o do backend
     SessionRegistry._jsonl_cache.clear()
+
+
+# --- guarda de colisao: 2+ sessoes -> MESMO jsonl. So a DONA (cmdline sid == basename do jsonl) mantem;
+#     quem tomou emprestado o transcript de outra e rebaixada (jsonl=None, tracked=False) -> sem
+#     duplicata na lista nem send roteado pro terminal errado. ---
+
+def test_dedupe_collision_owner_keeps_borrower_demoted():
+    from app.models import SessionInfo
+    reg = SessionRegistry()
+    owner = SessionInfo(name="A", cwd="/c", jsonl="/p/X.jsonl", tracked=True)
+    borrower = SessionInfo(name="B", cwd="/c", jsonl="/p/X.jsonl", tracked=True)
+    sids = {"A": "X", "B": "Y"}      # A e dona de X; B tem sid proprio Y -> X.jsonl nao e dela
+    reg._dedupe_collisions([owner, borrower], sids)
+    assert owner.jsonl == "/p/X.jsonl" and owner.tracked is True
+    assert borrower.jsonl is None and borrower.tracked is False
+
+
+def test_dedupe_no_collision_untouched():
+    from app.models import SessionInfo
+    reg = SessionRegistry()
+    a = SessionInfo(name="A", cwd="/c", jsonl="/p/X.jsonl", tracked=True)
+    b = SessionInfo(name="B", cwd="/c", jsonl="/p/Y.jsonl", tracked=True)
+    reg._dedupe_collisions([a, b], {"A": "X", "B": "Y"})
+    assert a.jsonl == "/p/X.jsonl" and b.jsonl == "/p/Y.jsonl"
+    assert a.tracked and b.tracked
+
+
+def test_dedupe_collision_no_owner_demotes_all():
+    # Nenhuma e dona (ambas resumiram o transcript de um terceiro) -> rebaixa as duas: nao arriscar
+    # mostrar/rotear pro transcript errado pra ninguem.
+    from app.models import SessionInfo
+    reg = SessionRegistry()
+    a = SessionInfo(name="A", cwd="/c", jsonl="/p/Z.jsonl", tracked=True)
+    b = SessionInfo(name="B", cwd="/c", jsonl="/p/Z.jsonl", tracked=True)
+    reg._dedupe_collisions([a, b], {"A": "X", "B": "Y"})
+    assert a.jsonl is None and b.jsonl is None
