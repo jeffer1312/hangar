@@ -3,6 +3,7 @@
   import { getVault, decryptList, encryptList, putVault, logout as syncLogout, syncStatus, stashKey, loadKey, clearKey } from './lib/sync';
   import Login from './screens/Login.svelte';
   import SessionList from './screens/SessionList.svelte';
+  import Costs from './screens/Costs.svelte';
   import Chat from './screens/Chat.svelte';
   import DesktopShell from './components/DesktopShell.svelte';
 
@@ -11,6 +12,7 @@
     | { name: 'loading' }
     | { name: 'login' }
     | { name: 'sessions' }
+    | { name: 'costs' }
     | { name: 'chat'; sessionName: string };
 
   function parseHash(hash: string): Route {
@@ -27,6 +29,7 @@
         return { name: 'chat', sessionName };
       }
     }
+    if (path === '/costs') return { name: 'costs' };
     return { name: 'sessions' };
   }
 
@@ -190,6 +193,8 @@
       onNavigateToChat={navigateToChat}
       {onLogout}
     />
+  {:else if route.name === 'costs'}
+    <Costs onBack={() => navigateTo('#/')} />
   {:else if route.name === 'chat'}
     <!-- Remonta ao trocar de sessao (switcher): re-roda loadHistory + reconecta o SSE. -->
     {#key route.sessionName}
