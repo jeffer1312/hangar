@@ -346,6 +346,46 @@ class SessionRegistry:
         self._jsonl_cache.pop(name, None)
         self._fd_locked.discard(name)
 
+    def _repl_sid(self, pid, children: Optional[dict[int, list[int]]] = None) -> Optional[str]:
+        # --session-id do REPL principal da sessao (pula daemon/agent). Identidade do DONO de um
+        # transcript: <sid>.jsonl PERTENCE a sessao cujo cmdline traz esse sid. Usado na guarda de
+        # colisao. None se ausente (REPL bare sem flag / sem pid).
+        if pid is None:
+            return None
+        for p in _descendant_pids(pid, children):
+            cmd = _cmdline(p)
+            if "daemon" in cmd or "--bg-" in cmd or "--agent" in cmd:
+                continue
+            sid = _session_id_from_cmdline(cmd)
+            if sid:
+                return sid
+        return None
+
+    def _dedupe_collisions(self, infos: list[SessionInfo], sids: dict[str, Optional[str]]) -> list[SessionInfo]:
+        # 2+ sessoes resolvidas pro MESMO jsonl = colisao (uma tomou emprestado o transcript de outra
+        # via marcador/fallback-mtime). So a DONA (cmdline sid == basename do jsonl) mantem; as demais
+        # sao rebaixadas (jsonl=None, tracked=False) -> a UI nao duplica e o send nao rota pro terminal
+        # errado. Sem dona clara (todas resumiram transcript de terceiro) -> rebaixa todas (nao arriscar
+        # transcript errado pra ninguem). Roda no list() (unico ponto com a lista TODA); a resolucao
+        # por-sessao segue intacta.
+        groups: dict[str, list[SessionInfo]] = {}
+        for info in infos:
+            if info.jsonl:
+                groups.setdefault(os.path.realpath(info.jsonl), []).append(info)
+        for jsonl, group in groups.items():
+            if len(group) < 2:
+                continue
+            base = os.path.basename(jsonl).removesuffix(".jsonl")
+            owner = next((i for i in group if sids.get(i.name) == base), None)
+            for info in group:
+                if info is owner:
+                    continue
+                _log.info("COLLISION name=%s dropped borrowed jsonl=%s owner=%s",
+                          info.name, base, owner.name if owner else "none")
+                info.jsonl = None
+                info.tracked = False
+        return infos
+
     def list(self) -> list[SessionInfo]:
         # Resolucao de jsonl/tracked de todas as sessoes. Otimizado: UM mapa /proc + UMA chamada tmux
         # (pane_pid em lote) reusados por sessao -> O(P + S·descendentes) em vez de O(S·P). NAO calcula
@@ -353,9 +393,13 @@ class SessionRegistry:
         # list_with_state(). Usado por varios endpoints que so precisam do jsonl por nome.
         children = _proc_children_map()
         out = []
+        sids: dict[str, Optional[str]] = {}
         for p in tmux.list_panes_active():
             jsonl, tracked = self.resolve_tracked(p["name"], p["cwd"], p["pid"], children)
             out.append(SessionInfo(name=p["name"], cwd=p["cwd"], jsonl=jsonl, tracked=tracked))
+            sids[p["name"]] = self._repl_sid(p["pid"], children)
+        # Guarda de colisao: 2+ sessoes no mesmo jsonl -> so a dona mantem (mata a duplicata/cross-wire).
+        self._dedupe_collisions(out, sids)
         return out
 
     async def list_with_state(self) -> list[SessionInfo]:
