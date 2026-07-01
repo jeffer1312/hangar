@@ -81,3 +81,50 @@ def test_bucket_sums_and_orders():
     assert [b["key"] for b in out] == ["2026-07-01", "2026-06-30"]  # reverse
     assert out[0]["cost"] == 5.0
     assert out[1]["cost"] == 10.0
+
+
+def test_aggregate_today_yesterday_and_totals():
+    now = datetime(2026, 7, 1, 12, 0, tzinfo=costs.LOCAL)
+    y = now - timedelta(days=1)
+    rows = [
+        {"dt": now, "model": "claude-opus-4-8",
+         "in": 1_000_000, "out": 0, "cw": 0, "cr": 0},   # hoje, $5
+        {"dt": y, "model": "claude-opus-4-8",
+         "in": 2_000_000, "out": 0, "cw": 0, "cr": 0},    # ontem, $10
+    ]
+    acc = costs.aggregate(rows, "uuid-1", "a@b.com", "a@b.com", now)
+    assert acc.account_id == "uuid-1"
+    assert acc.email == "a@b.com"
+    assert acc.today == 5.0
+    assert acc.yesterday == 10.0
+    assert acc.totals.cost == 15.0
+    assert acc.totals.sessions == 2
+    # soma dos by_day bate com o total
+    assert sum(b.cost for b in acc.by_day) == acc.totals.cost
+    assert len(acc.by_model) == 1
+    assert acc.by_model[0].model == "claude-opus-4-8"
+
+
+def test_account_info_reads_oauth(tmp_path):
+    (tmp_path / ".claude.json").write_text(json.dumps(
+        {"oauthAccount": {"accountUuid": "u-9", "emailAddress": "x@y.com"}}))
+    aid, email, label = costs._account_info(tmp_path, "fallback")
+    assert (aid, email, label) == ("u-9", "x@y.com", "x@y.com")
+
+
+def test_account_info_fallback_when_missing(tmp_path):
+    # dir sem .claude.json E sem oauthAccount em ~/.claude.json usavel -> cai no fallback.
+    # (usa um dir isolado; se ~/.claude.json existir e tiver conta, o teste ainda passa pois
+    #  _account_info tenta config_dir primeiro — aqui config_dir esta vazio, entao vai pro home;
+    #  para isolar de verdade, o teste roda com HOME apontando pro tmp_path.)
+    import os
+    old = os.environ.get("HOME")
+    os.environ["HOME"] = str(tmp_path)
+    try:
+        aid, email, label = costs._account_info(tmp_path / "cfg", "fallback")
+    finally:
+        if old is not None:
+            os.environ["HOME"] = old
+    assert aid == "fallback"
+    assert email is None
+    assert label == "fallback"
