@@ -154,7 +154,11 @@
 
   {#if !picked}
     <!-- Passo 1: escolher a pasta -->
-    <FolderScanner onPick={handlePick} />
+    <!-- Remonta ao trocar de servidor: o scanner busca roots/pastas do server ATIVO só no onMount;
+         sem o key ele ficava com as pastas do server anterior até fechar o app. -->
+    {#key targetServer}
+      <FolderScanner onPick={handlePick} />
+    {/key}
 
     <div class="advanced">
       <button class="advanced-toggle" onclick={() => (manualOpen = !manualOpen)}>
