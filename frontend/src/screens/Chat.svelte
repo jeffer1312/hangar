@@ -664,6 +664,7 @@
     flex: 1;
     display: flex;
     flex-direction: column;
+    justify-content: center;
     gap: var(--space-3);
     padding: var(--space-6) var(--space-5);
     max-width: 600px;
