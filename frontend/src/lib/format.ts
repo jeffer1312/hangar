@@ -95,3 +95,11 @@ export function parseImageMessage(text: string): { caption: string; filenames: s
   if (caption.endsWith('—')) caption = caption.slice(0, -1).trim();
   return { caption, filenames };
 }
+
+// Abrevia contagem grande: 3668662 -> "3.7M", 1.5e9 -> "1.5B", 999 -> "999".
+export function abbrevNum(n: number): string {
+  for (const [div, suf] of [[1e9, 'B'], [1e6, 'M'], [1e3, 'K']] as const) {
+    if (n >= div) return (n / div).toFixed(1).replace(/\.0$/, '') + suf;
+  }
+  return String(Math.round(n));
+}
