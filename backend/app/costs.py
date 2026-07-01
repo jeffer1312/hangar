@@ -4,6 +4,9 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from app.config import list_config_dirs
+from app.models import AccountCost, Bucket, CostReport, ModelBucket
+
 LOCAL = timezone(timedelta(hours=-3))  # America/Sao_Paulo (sem horario de verao)
 
 # Preco real por 1M tokens (fonte: skill claude-api). cache write = 1.25x input, read = 0.1x.
@@ -76,3 +79,78 @@ def _bucket(rows: list[dict], keyfn) -> list[dict]:
         a["cw"] += row["cw"]
         a["cost"] += _cost(row)
     return [{"key": k, **a} for k, a in sorted(agg.items(), reverse=True)]
+
+
+def _iso_week(dt: datetime) -> str:
+    y, w, _ = dt.isocalendar()
+    return f"{y}-W{w:02d}"
+
+
+def _to_bucket(d: dict) -> Bucket:
+    return Bucket(key=d["key"], sessions=d["sessions"], input=d["in"],
+                  output=d["out"], cache_read=d["cr"], cache_write=d["cw"],
+                  cost=d["cost"])
+
+
+def _totals(rows: list[dict]) -> Bucket:
+    b = _bucket(rows, lambda _dt: "totals")
+    return _to_bucket(b[0]) if b else Bucket(
+        key="totals", sessions=0, input=0, output=0,
+        cache_read=0, cache_write=0, cost=0.0)
+
+
+def _by_model(rows: list[dict]) -> list[ModelBucket]:
+    agg: dict[str, dict] = {}
+    for row in rows:
+        m = row["model"] or "?"
+        a = agg.setdefault(m, {"sessions": 0, "cost": 0.0})
+        a["sessions"] += 1
+        a["cost"] += _cost(row)
+    return [ModelBucket(model=m, sessions=a["sessions"], cost=a["cost"])
+            for m, a in sorted(agg.items(), key=lambda kv: -kv[1]["cost"])]
+
+
+def aggregate(rows: list[dict], account_id: str, email: str | None,
+              label: str, now: datetime) -> AccountCost:
+    today = now.strftime("%Y-%m-%d")
+    yest = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    day = _bucket(rows, lambda d: d.strftime("%Y-%m-%d"))
+    week = _bucket(rows, _iso_week)
+    month = _bucket(rows, lambda d: d.strftime("%Y-%m"))
+    return AccountCost(
+        account_id=account_id,
+        email=email,
+        label=label,
+        totals=_totals(rows),
+        today=sum(b["cost"] for b in day if b["key"] == today),
+        yesterday=sum(b["cost"] for b in day if b["key"] == yest),
+        by_day=[_to_bucket(b) for b in day],
+        by_week=[_to_bucket(b) for b in week],
+        by_month=[_to_bucket(b) for b in month],
+        by_model=_by_model(rows),
+    )
+
+
+def _account_info(config_dir: Path, fallback_label: str) -> tuple[str, str | None, str]:
+    # .claude.json fica DENTRO do config dir (CLAUDE_CONFIG_DIR custom) ou em ~/.claude.json (default).
+    for f in (config_dir / ".claude.json", Path.home() / ".claude.json"):
+        try:
+            oa = (json.loads(f.read_text()).get("oauthAccount") or {})
+        except (OSError, json.JSONDecodeError):
+            continue
+        uuid = oa.get("accountUuid")
+        if uuid:
+            email = oa.get("emailAddress")
+            return uuid, email, (email or fallback_label)
+    return fallback_label, None, fallback_label
+
+
+def report(now: datetime | None = None) -> CostReport:
+    now = now or datetime.now(LOCAL)
+    accounts: list[AccountCost] = []
+    for cfg in list_config_dirs():
+        cdir = Path(cfg.path)
+        rows = _load(cdir)
+        acc_id, email, label = _account_info(cdir, cfg.label)
+        accounts.append(aggregate(rows, acc_id, email, label, now))
+    return CostReport(accounts=accounts)

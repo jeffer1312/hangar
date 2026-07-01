@@ -100,3 +100,36 @@ class AskQuestionItem(BaseModel):
 
 class AskQuestion(BaseModel):
     questions: list[AskQuestionItem]
+
+
+class Bucket(BaseModel):
+    key: str
+    sessions: int
+    input: int
+    output: int
+    cache_read: int
+    cache_write: int
+    cost: float
+
+
+class ModelBucket(BaseModel):
+    model: str
+    sessions: int
+    cost: float
+
+
+class AccountCost(BaseModel):
+    account_id: str
+    email: Optional[str] = None
+    label: str
+    totals: Bucket
+    today: float
+    yesterday: float
+    by_day: list[Bucket]
+    by_week: list[Bucket]
+    by_month: list[Bucket]
+    by_model: list[ModelBucket]
+
+
+class CostReport(BaseModel):
+    accounts: list[AccountCost]

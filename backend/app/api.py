@@ -17,11 +17,12 @@ from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
 from app.model_picker import PickerError
 from app.registry import SessionRegistry
-from app.models import SessionInfo, ChatEvent
+from app.models import SessionInfo, ChatEvent, CostReport
 from app.terminal_input import TerminalInput
 from app.sse import merged_events
 from app.uploads import save_upload, resolve_upload, UploadError, MAX_BYTES
 from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base, settings
+from app.costs import report as costs_report
 from app.git_ops import list_branches, switch_branch, git_action, GitError
 from app.askquestion import clear_pending_askq
 from app.hook_state import hook_state
@@ -204,6 +205,11 @@ async def list_sessions():
 @app.get("/api/claude-configs", dependencies=[Depends(require_auth)], response_model=list[ConfigDirInfo])
 def claude_configs():
     return list_config_dirs()
+
+
+@app.get("/api/costs", dependencies=[Depends(require_auth)], response_model=CostReport)
+def costs_endpoint():
+    return costs_report()
 
 
 @app.post("/api/sessions", dependencies=[Depends(require_auth)], response_model=SessionInfo)
