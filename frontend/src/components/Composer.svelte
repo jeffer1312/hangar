@@ -468,7 +468,7 @@
 
   /* Desktop: composer mais largo (aditivo; mobile fica nos 600px). */
   @media (min-width: 820px) {
-    .composer-card { max-width: 920px; }
+    .composer-card { max-width: 1400px; }
   }
 
   /* ── Textarea (transparente dentro do card) ─────────────────────────────── */
