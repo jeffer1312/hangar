@@ -148,27 +148,27 @@
 
 <style>
   .costs { padding: 12px 16px 40px; }
-  .muted { color: var(--text-dim, #8b949e); }
+  .muted { color: var(--text-secondary); }
   .warn { color: #d29922; font-size: 13px; }
   .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
   .tabs button {
-    background: var(--surface, #161b22); border: 1px solid var(--border, #30363d);
+    background: var(--bg-surface); border: 1px solid var(--border-default);
     color: inherit; padding: 6px 14px; border-radius: 8px; font-size: 14px;
   }
-  .tabs button.on { background: var(--accent, #238636); border-color: var(--accent, #3fb950); }
+  .tabs button.on { background: var(--accent); border-color: var(--accent); }
   .chips { display: flex; gap: 10px; margin: 8px 0; }
-  .chip { background: var(--surface, #161b22); border: 1px solid var(--border, #30363d); border-radius: 8px; padding: 6px 12px; font-size: 13px; }
+  .chip { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 8px; padding: 6px 12px; font-size: 13px; }
   .cards { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0; }
-  .card { background: var(--surface, #161b22); border: 1px solid var(--border, #30363d); border-radius: 10px; padding: 12px 16px; min-width: 92px; }
+  .card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 10px; padding: 12px 16px; min-width: 92px; }
   .card .v { font-size: 20px; font-weight: 700; }
-  .card .l { font-size: 11px; color: var(--text-dim, #8b949e); text-transform: uppercase; }
+  .card .l { font-size: 11px; color: var(--text-secondary); text-transform: uppercase; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
-  th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border, #30363d); }
-  th { color: var(--text-dim, #8b949e); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border-subtle); }
+  th { color: var(--text-secondary); font-weight: 600; font-size: 11px; text-transform: uppercase; }
   .n, .c { text-align: right; font-variant-numeric: tabular-nums; }
-  .c { font-weight: 700; color: var(--accent, #3fb950); }
+  .c { font-weight: 700; color: var(--accent); }
   .k { white-space: nowrap; }
   .bar { width: 80px; }
-  .bar span { display: block; height: 8px; border-radius: 4px; background: var(--accent, #3fb950); }
+  .bar span { display: block; height: 8px; border-radius: 4px; background: var(--accent); }
   h3 { margin: 20px 0 4px; font-size: 15px; }
 </style>
