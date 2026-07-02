@@ -128,11 +128,20 @@
     onSelect(name);
     // SSE stream emitirá a sessão nova automaticamente
   }
-  async function handleDelete(name: string, serverId: string, e: MouseEvent) {
+  // Excluir sessao pede confirmacao (com o nome) — clique unico no × era facil de errar. O delete real
+  // so acontece no doDelete.
+  let confirmDel = $state<{ name: string; serverId: string } | null>(null);
+  function handleDelete(name: string, serverId: string, e: MouseEvent) {
     e.stopPropagation();
+    confirmDel = { name, serverId };
+  }
+  async function doDelete() {
+    if (!confirmDel) return;
+    const { name, serverId } = confirmDel;
+    confirmDel = null;
     const prev = getActiveId(); // C1: save before pointing at target server
     selectServer(serverId); // api.ts mira o server ativo -> aponta pro dono da sessão
-    try { await deleteSession(name); } catch { /* ignora */ }
+    try { await deleteSession(name); } catch { /* ignora; SSE corrige */ }
     if (prev && prev !== serverId) selectServer(prev); // C1: restore so open chat stays on its server
     // SSE stream emitirá a lista atualizada automaticamente
   }
@@ -251,12 +260,10 @@
       flash(r.output.trim().split('\n')[0] || 'pull ok');
     } catch (e) { flash(`git pull: ${errMsg(e)}`); }
   }
-  async function menuDelete() {
+  function menuDelete() {
     if (!menu) return;
-    const { name, serverId } = menu;
+    confirmDel = { name: menu.name, serverId: menu.serverId };
     closeMenu();
-    try { await withServer(serverId, () => deleteSession(name)); }
-    catch { /* SSE corrige a lista */ }
   }
 
   // Rename inline de servidor no menu do rodape (mesma ideia do mobile). Label custom persistido.
@@ -445,7 +452,7 @@
 <CreateSessionSheet open={showCreate} {servers} onClose={() => (showCreate = false)} onCreate={handleCreate} onOpenSession={onSelect} />
 {#if scanning}<QrScanner onScan={handleScan} onClose={() => (scanning = false)} />{/if}
 
-<svelte:window onkeydown={(e) => menu && e.key === 'Escape' && closeMenu()} />
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape') { if (menu) closeMenu(); else if (confirmDel) confirmDel = null; } }} />
 
 <!-- Menu de contexto (botao direito na sessao). Backdrop full-screen captura o clique-fora. -->
 {#if menu}
@@ -463,6 +470,19 @@
   </div>
 {/if}
 {#if menuMsg}<div class="menu-toast" role="status">{menuMsg}</div>{/if}
+
+<!-- Confirmar exclusao (com o nome) — modal centrado, so desktop (sidebar e desktop-only). -->
+{#if confirmDel}
+  <div class="confirm-backdrop" onclick={() => (confirmDel = null)} role="presentation"></div>
+  <div class="confirm-card" role="alertdialog" aria-modal="true" aria-label="Confirmar exclusão">
+    <p class="confirm-title">Excluir esta sessão?</p>
+    <p class="confirm-name">{confirmDel.name}</p>
+    <div class="confirm-actions">
+      <button type="button" class="c-btn" onclick={() => (confirmDel = null)}>Cancelar</button>
+      <button type="button" class="c-btn c-danger" onclick={doDelete}>Excluir</button>
+    </div>
+  </div>
+{/if}
 
 <style>
   .sidebar {
@@ -624,6 +644,37 @@
   .ctx-menu button.danger { color: var(--error); }
   .ctx-menu button.danger:hover { background: rgba(255,69,58,0.12); }
   .ctx-sep { height: 1px; margin: 4px 6px; background: var(--border-subtle); }
+
+  /* ── Confirmar exclusao (modal centrado) ── */
+  .confirm-backdrop { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, 0.5); }
+  .confirm-card {
+    position: fixed; z-index: 51; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: min(340px, 90vw); padding: var(--space-5);
+    display: flex; flex-direction: column; gap: var(--space-2);
+    background: var(--bg-elevated); border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg); box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+    animation: confirm-in 160ms var(--ease-out) both;
+  }
+  @keyframes confirm-in {
+    from { opacity: 0; transform: translate(-50%, -48%) scale(0.97); }
+    to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  }
+  .confirm-title { font-size: var(--text-base); font-weight: 600; color: var(--text-primary); }
+  .confirm-name {
+    font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-secondary);
+    padding: var(--space-2) var(--space-3); background: var(--bg-base);
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+    word-break: break-all;
+  }
+  .confirm-actions { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
+  .c-btn {
+    flex: 1; height: 40px; border-radius: var(--radius-md);
+    font-size: var(--text-sm); font-weight: 600;
+    background: var(--bg-hover); color: var(--text-secondary);
+  }
+  .c-btn:hover { background: var(--bg-surface); }
+  .c-danger { background: var(--error); color: #fff; }
+  .c-danger:hover { background: var(--error); filter: brightness(1.08); }
 
   /* Banner efemero (resultado do git pull / erro do editor). */
   .menu-toast {
