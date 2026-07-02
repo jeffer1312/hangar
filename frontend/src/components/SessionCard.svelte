@@ -105,7 +105,7 @@
     tabindex="0"
     aria-disabled={untracked}
     onclick={onRowClick}
-    onkeydown={(e) => e.key === 'Enter' && !untracked && onClick()}
+    onkeydown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && !untracked) { e.preventDefault(); onClick(); } }}
     onpointerdown={onDown}
     onpointermove={onMove}
     onpointerup={onUp}
@@ -150,6 +150,21 @@
       <span class="state-chip" style="color: {stateColors[session.state]}; background: {stateChipBg[session.state]};">
         {stateLabels[session.state]}
       </span>
+      <!-- Caminho de exclusao por TECLADO/leitor de tela: o swipe-to-delete e pointer-only e deixava
+           o usuario de teclado/SR sem como excluir no mobile. Escondido visualmente (mouse/touch usam
+           swipe), mas sempre focavel e anunciado; reaparece no foco de teclado (:focus-visible). -->
+      <button
+        class="del-kbd"
+        onpointerdown={(e) => e.stopPropagation()}
+        onclick={(e) => { e.stopPropagation(); onDelete(); }}
+        aria-label="Excluir sessão {session.name}"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="3 6 5 6 21 6"/>
+          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+          <path d="M10 11v6M14 11v6"/>
+        </svg>
+      </button>
       <span class="chev" aria-hidden="true">›</span>
     </div>
   </div>
@@ -338,6 +353,23 @@
     padding: 3px 9px;
     border-radius: var(--radius-full);
     white-space: nowrap;
+  }
+
+  /* Escondido do layout (mouse/touch usam swipe) mas SEMPRE na arvore de a11y (SR anuncia "Excluir
+     sessao X"). No foco de teclado (:focus-visible) vira um botao 40px visivel na row-right. Sobrescreve
+     o min-height/min-width 44px global do <button> pra sumir de fato quando fechado. */
+  .del-kbd {
+    position: absolute;
+    width: 1px; height: 1px; min-width: 0; min-height: 0;
+    padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%);
+    color: var(--text-muted); border-radius: var(--radius-sm);
+  }
+  .del-kbd:focus-visible {
+    position: static;
+    width: 40px; height: 40px; min-width: 40px; min-height: 40px;
+    margin: 0; overflow: visible; clip-path: none;
+    color: var(--error);
+    outline: 2px solid var(--accent); outline-offset: -2px;
   }
   .chev {
     color: var(--text-muted);

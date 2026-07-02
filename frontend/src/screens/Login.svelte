@@ -293,8 +293,11 @@
     background: var(--accent-press);
   }
 
+  /* Disabled = inerte de verdade (bg neutro flat + texto muted), nao indigo cheio a 50% que parece
+     meio-clicavel. Mesmo padrao do send-btn--disabled. */
   .connect-btn:disabled {
-    opacity: 0.5;
+    background: var(--bg-hover);
+    color: var(--text-muted);
     cursor: default;
   }
 
