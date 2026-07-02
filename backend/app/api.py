@@ -24,6 +24,7 @@ from app.uploads import save_upload, resolve_upload, UploadError, MAX_BYTES
 from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base, settings
 from app.costs import report as costs_report
 from app.git_ops import list_branches, switch_branch, git_action, GitError
+from app.archive import ArchiveEntry, archive_jsonl, list_archive
 from app.askquestion import clear_pending_askq
 from app.hook_state import hook_state
 from app import push
@@ -513,6 +514,43 @@ def transcript_image(name: str, uuid: str, idx: int):
         raise HTTPException(404, "image not found")
     raw, media = got
     # immutable: o conteudo de um uuid+idx nunca muda -> cache agressivo no cliente.
+    return Response(content=raw, media_type=media, headers={"Cache-Control": "max-age=31536000, immutable"})
+
+
+# ── Arquivo: conversas mortas (transcripts sem sessao tmux viva) ──────────────
+@app.get("/api/archive", dependencies=[Depends(require_auth)], response_model=list[ArchiveEntry])
+def archive_index():
+    # live = transcripts em uso agora (badge na lista; a conversa viva abre pelo chat normal).
+    live = {os.path.realpath(s.jsonl) for s in registry.list() if s.jsonl}
+    return list_archive(live)
+
+
+@app.get("/api/archive/{project}/{session_id}/history",
+         dependencies=[Depends(require_auth)], response_model=list[ChatEvent])
+def archive_history(project: str, session_id: str):
+    try:
+        p = archive_jsonl(project, session_id)
+    except ValueError:
+        raise HTTPException(400, "invalid path")
+    except FileNotFoundError:
+        raise HTTPException(404, "transcript not found")
+    from app.pqueue import merged_history
+    # Nome de fila inexistente -> sem entradas de fila: so os eventos do transcript, ordenados por ts.
+    return merged_history("__archive__", str(p))
+
+
+@app.get("/api/archive/{project}/{session_id}/transcript-image/{uuid}/{idx}",
+         dependencies=[Depends(require_auth)])
+def archive_image(project: str, session_id: str, uuid: str, idx: int):
+    try:
+        p = archive_jsonl(project, session_id)
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(404, "not found")
+    from app.transcript import get_transcript_image
+    got = get_transcript_image(str(p), uuid, idx)
+    if got is None:
+        raise HTTPException(404, "image not found")
+    raw, media = got
     return Response(content=raw, media_type=media, headers={"Cache-Control": "max-age=31536000, immutable"})
 
 

@@ -35,29 +35,30 @@ def _write_marker(base: str, subdir: str, key: str, payload: dict) -> None:
     os.replace(tmp, os.path.join(d, key + ".json"))  # escrita atomica (leitor nunca pega parcial)
 
 
-def _boot_session_id(start_pid: int) -> str | None:
-    # Sobe a arvore /proc a partir do hook ate achar o claude com --session-id/--resume <uuid> no
-    # cmdline = o boot_id que o backend ve. Limite de saltos pra nunca enroscar.
+def _boot_claude(start_pid: int) -> tuple[str | None, int | None]:
+    # Sobe a arvore /proc a partir do hook ate achar o processo claude: devolve (boot_id, pid).
+    # boot_id = --session-id/--resume do cmdline (None em sessao BARE, sem flag); pid = o pid do
+    # REPL claude em si — e a chave que permite ao backend casar marcador<->pane por ancestralidade
+    # mesmo sem id no cmdline. Limite de saltos pra nunca enroscar.
     pid = start_pid
     for _ in range(12):
         try:
             with open(f"/proc/{pid}/cmdline", "rb") as fh:
                 cl = fh.read().replace(b"\x00", b" ").decode("utf-8", "replace")
         except OSError:
-            return None
+            return None, None
         if "claude" in cl:
             m = _SID_RE.search(cl)
-            if m:
-                return m.group(1)
+            return (m.group(1) if m else None), pid
         try:
             with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as fh:
                 ppid = int(fh.read().rsplit(")", 1)[-1].split()[1])
         except (OSError, ValueError, IndexError):
-            return None
+            return None, None
         if ppid <= 1:
-            return None
+            return None, None
         pid = ppid
-    return None
+    return None, None
 
 
 try:
@@ -77,9 +78,13 @@ try:
     # cmdline do claude (via ancestralidade /proc) = a chave que o backend ve.
     tp = o.get("transcript_path")
     if tp:
-        boot = _boot_session_id(os.getppid()) or sid  # sem ancestral -> usa o proprio (Y->Y inocuo)
+        boot_sid, claude_pid = _boot_claude(os.getppid())
+        boot = boot_sid or sid  # sem sid no cmdline (sessao bare) -> chave = o proprio session_id
         if boot:
-            _write_marker(base, ".claude-pocket-active", boot, {"jsonl": tp, "ts": time.time()})
+            # cwd + pid: permitem ao backend casar marcador<->pane por descendencia de processo,
+            # resolvendo sessoes BARE (sem --session-id) de forma deterministica.
+            _write_marker(base, ".claude-pocket-active", boot,
+                          {"jsonl": tp, "ts": time.time(), "cwd": o.get("cwd"), "pid": claude_pid})
 except Exception:
     pass
 sys.exit(0)

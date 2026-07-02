@@ -541,3 +541,21 @@ def test_resume_candidates_lists_recent_with_preview(tmp_path):
     assert resolved_cwd == cwd and ambiguous is True
     assert cands[0]["session_id"] == "deadbeef-0000-0000-0000-000000000000"  # mais recente
     assert cands[1]["session_id"] == _UUID and cands[1]["preview"] == "primeiro pedido"
+
+
+def test_marker_by_pids_matches_descendant_and_newest(tmp_path):
+    # Marcador do hook casado por PID (sessao bare): pid descendente casa; o ts mais novo vence;
+    # jsonl excluido (subagente) cai pro proximo candidato.
+    import json as _json
+    import os as _os
+    from app.registry import _marker_by_pids
+    d = tmp_path / ".claude-pocket-active"
+    d.mkdir()
+    j1 = tmp_path / "a.jsonl"; j1.write_text("x", encoding="utf-8")
+    j2 = tmp_path / "b.jsonl"; j2.write_text("x", encoding="utf-8")
+    (d / "k1.json").write_text(_json.dumps({"jsonl": str(j1), "ts": 1.0, "pid": 42}), encoding="utf-8")
+    (d / "k2.json").write_text(_json.dumps({"jsonl": str(j2), "ts": 2.0, "pid": 42}), encoding="utf-8")
+    (d / "k3.json").write_text(_json.dumps({"jsonl": str(j2), "ts": 9.0, "pid": 99}), encoding="utf-8")
+    assert _marker_by_pids(tmp_path, [42], set()) == str(j2)      # mais recente do pid 42
+    assert _marker_by_pids(tmp_path, [7], set()) is None          # pid nao casa
+    assert _marker_by_pids(tmp_path, [42], {_os.path.realpath(str(j2))}) == str(j1)  # exclusao

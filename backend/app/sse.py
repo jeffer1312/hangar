@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from pathlib import Path
 from app.transcript import TranscriptTailer
 from app.state import StateMonitor
 from app.pqueue import PromptQueue, _transcript_start_ts
@@ -95,7 +96,10 @@ async def list_events(poll: float = 1.5, ping_every: int = 7):
 
 
 async def merged_events(name: str, jsonl: str):
-    monitor = StateMonitor(name)
+    current_jsonl = jsonl          # atualizado no __reset__ (ex: /clear abre novo transcript)
+    # Ancora de hook do estado: o monitor le o marcador do sid VIVO (a closure acompanha o rebind
+    # do /clear, que troca o current_jsonl -> sid novo).
+    monitor = StateMonitor(name, sid_get=lambda: Path(current_jsonl).stem if current_jsonl else None)
     pqueue = PromptQueue(name)
     broker = PreviewBroker.get(name)
     # Inicio da sessao atual: poda entradas de fila pre-/clear no live SSE (mesma regra do history).
@@ -200,7 +204,6 @@ async def merged_events(name: str, jsonl: str):
         except Exception as exc:  # surface, never swallow
             await queue.put(("__error__", exc))
 
-    current_jsonl = jsonl          # atualizado no __reset__ (ex: /clear abre novo transcript)
     ask_q_emitted = False          # impede reemissao enquanto o mesmo prompt permanece na tela
     prev_deliverable = False     # init False -> 1o estado entregavel pos-(re)connect tambem dispara 1
                                  # drain (recovery de restart/reconexao com pendencia)

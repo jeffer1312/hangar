@@ -366,6 +366,9 @@
         <button class="menu-item" role="menuitem" onclick={() => { showMenu = false; window.location.hash = '#/costs'; }}>
           Custos
         </button>
+        <button class="menu-item" role="menuitem" onclick={() => { showMenu = false; window.location.hash = '#/archive'; }}>
+          Arquivo
+        </button>
         <button class="menu-item menu-item--danger" role="menuitem" onclick={handleLogout}>
           Sair
         </button>

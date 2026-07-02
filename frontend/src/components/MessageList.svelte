@@ -27,11 +27,13 @@
     askPayload?: AskQuestionPayload | null;
     onAnswer?: (answers: AnswerItem[]) => Promise<void>;
     onAskClose?: () => void;
+    // Override da URL de imagem do transcript (ex: arquivo de conversas mortas, que nao tem sessao).
+    imageUrl?: (id: string, idx: number) => string;
   }
 
   let {
     events, stateEvent, pending, sessionName, dockH, preview = '', onSelectOption, onCancel,
-    askOpen = false, askPayload = null, onAnswer, onAskClose
+    askOpen = false, askPayload = null, onAnswer, onAskClose, imageUrl
   }: Props = $props();
 
   let listEl: HTMLElement | undefined = $state();
@@ -159,7 +161,7 @@
         {@const img = ev.text ? parseImageMessage(ev.text) : null}
         {#if ev.image_count}
           <!-- Imagem(ns) colada(s) no TERMINAL: thumbnail buscado lazy do .jsonl (base64). -->
-          <ImageBubble caption={ev.text ?? ''} srcs={Array.from({ length: ev.image_count }, (_, i) => transcriptImageUrl(sessionName, ev.id, i))} />
+          <ImageBubble caption={ev.text ?? ''} srcs={Array.from({ length: ev.image_count }, (_, i) => imageUrl ? imageUrl(ev.id, i) : transcriptImageUrl(sessionName, ev.id, i))} />
         {:else if ev.id.startsWith('queued-')}
           <!-- Msg da fila durável: atenuada enquanto o Claude trabalha (= na fila, ainda nao
                processada); acende solida quando ele fica idle (= aceita). Da o sinal de "quando

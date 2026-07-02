@@ -111,6 +111,34 @@ def _newest_after_clear(projdir: Path, sid_jsonl: str, exclude: set[str]) -> str
     return best
 
 
+def _marker_by_pids(config_base: Path, pids: list[int], exclude: set[str]) -> Optional[str]:
+    # Marcador do hook casado por PID: o state_hook grava {jsonl, ts, cwd, pid} onde pid = o REPL
+    # claude que disparou o evento. Se esse pid e DESCENDENTE deste pane, o marcador e desta sessao
+    # — resolve sessao BARE (sem --session-id no cmdline) de forma deterministica, sem chute por
+    # mtime. Varios marcadores casando (ex: restart do claude no mesmo pane) -> o mais recente vence.
+    d = config_base / ".claude-pocket-active"
+    pidset = set(pids)
+    best: tuple[float, str] | None = None
+    try:
+        files = list(d.glob("*.json"))
+    except OSError:
+        return None
+    for f in files:
+        try:
+            o = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        j, pid = o.get("jsonl"), o.get("pid")
+        if not j or pid not in pidset:
+            continue
+        if not os.path.exists(j) or os.path.realpath(j) in exclude:
+            continue
+        ts = float(o.get("ts") or 0.0)
+        if best is None or ts > best[0]:
+            best = (ts, j)
+    return best[1] if best else None
+
+
 def _active_marker_jsonl(config_base: Path, sid: str, exclude: set[str]) -> Optional[str]:
     # Marcador do hook (state_hook.py): <config>/.claude-pocket-active/<boot_id>.json = {"jsonl": <path>}
     # = o transcript REALMENTE ativo daquele boot_id. Sinal DETERMINISTICO pro caso resume/clear, onde
@@ -329,6 +357,17 @@ class SessionRegistry:
                         j = _newest_after_clear(projdir, sid_jsonl, aux_open)
                     self._jsonl_cache[name] = j
                     return j, True
+            # 2.5. Marcador do hook casado por PID (sessao BARE: `claude` sem --session-id, nada no
+            #      cmdline). O state_hook grava o pid do REPL no marcador; se ele e descendente deste
+            #      pane, o transcript e desta sessao — DETERMINISTICO, vira tracked (o chat liga).
+            #      Cobre tambem resume feito por fora. So nao existe marcador antes do 1o evento de
+            #      hook da sessao -> cai nos passos seguintes ate o 1o prompt.
+            cdir_m = _config_dir_of(pid)
+            config_base_m = cdir_m if cdir_m else self.projects_dir.parent
+            marker = _marker_by_pids(config_base_m, pids, aux_open)
+            if marker:
+                self._jsonl_cache[name] = marker
+                return marker, True
         # 3. cache: ultimo sinal confiavel. Estabiliza quando o processo com --session-id some
         #    transitoriamente (senao a resolucao oscilava pro mtime e o watcher limpava o chat).
         cached = self._jsonl_cache.get(name)
