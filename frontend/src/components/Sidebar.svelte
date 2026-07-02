@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { openSessionsStream, createSession, deleteSession, renameSession, openEditor, gitAction } from '../lib/api';
+  import { openSessionsStream, createSession, deleteSession, renameSession, openEditor, gitAction, getBranches, checkoutBranch } from '../lib/api';
   import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor, clearCredentials } from '../lib/auth';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import QrScanner from './QrScanner.svelte';
@@ -206,7 +206,40 @@
     clearTimeout(pressTimer);   // cancela o long-press (senao dispararia rename junto)
     menu = { x: e.clientX, y: e.clientY, name: s.name, serverId, cwd: s.cwd ?? '' };
   }
-  function closeMenu() { menu = null; }
+  function closeMenu() { menu = null; branchView = null; }
+
+  // Submenu "Trocar branch" (2a pagina do menu, evita flyout). branchView != null = mostrando a lista.
+  let branchView = $state<{ list: string[]; current: string | null } | null>(null);
+  let branchLoading = $state(false);
+  async function menuBranches() {
+    if (!menu) return;
+    const { name, serverId } = menu;
+    branchView = { list: [], current: null };
+    branchLoading = true;
+    try {
+      const info = await withServer(serverId, () => getBranches(name));
+      branchView = { list: info.branches, current: info.current };
+    } catch (e) {
+      branchView = null;
+      flash(`branches: ${errMsg(e)}`);
+    } finally {
+      branchLoading = false;
+    }
+  }
+  async function pickBranch(branch: string) {
+    if (!menu) return;
+    const { name, serverId } = menu;
+    const cur = branchView?.current;
+    closeMenu();
+    if (branch === cur) return;
+    flash(`checkout ${branch}…`);
+    try {
+      await withServer(serverId, () => checkoutBranch(name, branch));
+      flash(`branch: ${branch}`);
+    } catch (e) {
+      flash(`checkout: ${errMsg(e)}`);
+    }
+  }
   function flash(msg: string) {
     menuMsg = msg;
     clearTimeout(flashTimer);
@@ -458,15 +491,34 @@
 {#if menu}
   <div class="menu-backdrop" onclick={closeMenu} oncontextmenu={(e) => { e.preventDefault(); closeMenu(); }} role="presentation"></div>
   <div class="ctx-menu" style="left: {menu.x}px; top: {menu.y}px;" role="menu">
-    <button type="button" role="menuitem" onclick={menuRename}>Renomear</button>
-    {#if menu.cwd}
-      <button type="button" role="menuitem" onclick={menuCopyCwd}>Copiar cwd</button>
-      <button type="button" role="menuitem" onclick={menuOpenEditor}>Abrir no editor</button>
+    {#if branchView}
+      <button type="button" class="ctx-back" onclick={() => (branchView = null)}>‹ Trocar branch</button>
       <div class="ctx-sep"></div>
-      <button type="button" role="menuitem" onclick={menuGitPull}>Git pull</button>
+      {#if branchLoading}
+        <div class="ctx-info">carregando…</div>
+      {:else if branchView.list.length}
+        <div class="ctx-scroll">
+          {#each branchView.list as b (b)}
+            <button type="button" role="menuitem" class="ctx-branch" class:current={b === branchView.current} onclick={() => pickBranch(b)}>
+              {b}{#if b === branchView.current}<span class="ctx-cur">✓</span>{/if}
+            </button>
+          {/each}
+        </div>
+      {:else}
+        <div class="ctx-info">sem branches</div>
+      {/if}
+    {:else}
+      <button type="button" role="menuitem" onclick={menuRename}>Renomear</button>
+      {#if menu.cwd}
+        <button type="button" role="menuitem" onclick={menuCopyCwd}>Copiar cwd</button>
+        <button type="button" role="menuitem" onclick={menuOpenEditor}>Abrir no editor</button>
+        <div class="ctx-sep"></div>
+        <button type="button" role="menuitem" onclick={menuGitPull}>Git pull</button>
+        <button type="button" role="menuitem" onclick={menuBranches}>Trocar branch<span class="ctx-more">›</span></button>
+      {/if}
+      <div class="ctx-sep"></div>
+      <button type="button" role="menuitem" class="danger" onclick={menuDelete}>Excluir</button>
     {/if}
-    <div class="ctx-sep"></div>
-    <button type="button" role="menuitem" class="danger" onclick={menuDelete}>Excluir</button>
   </div>
 {/if}
 {#if menuMsg}<div class="menu-toast" role="status">{menuMsg}</div>{/if}
@@ -644,6 +696,15 @@
   .ctx-menu button.danger { color: var(--error); }
   .ctx-menu button.danger:hover { background: rgba(255,69,58,0.12); }
   .ctx-sep { height: 1px; margin: 4px 6px; background: var(--border-subtle); }
+  /* Item que abre submenu: chevron a direita. */
+  .ctx-more { margin-left: auto; color: var(--text-muted); padding-left: var(--space-3); }
+  .ctx-back { color: var(--text-secondary); font-weight: 600; }
+  .ctx-info { padding: 6px 10px; font-size: var(--text-sm); color: var(--text-muted); }
+  /* Lista de branches rolavel (repo com muitas branches nao estoura a tela). */
+  .ctx-scroll { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; }
+  .ctx-branch { font-family: var(--font-mono); font-size: var(--text-xs); }
+  .ctx-branch.current { color: var(--accent); }
+  .ctx-cur { margin-left: auto; padding-left: var(--space-2); }
 
   /* ── Confirmar exclusao (modal centrado) ── */
   .confirm-backdrop { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, 0.5); }
