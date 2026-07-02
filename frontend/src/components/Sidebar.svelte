@@ -174,13 +174,14 @@
   }
 
   // api.ts mira SEMPRE o server ativo -> aponta pro dono da sessao e restaura (igual handleDelete).
-  async function withServer<T>(serverId: string, fn: () => Promise<T>): Promise<T | undefined> {
+  // Propaga o erro (o caller decide mostrar): o finally garante o restore mesmo em throw.
+  async function withServer<T>(serverId: string, fn: () => Promise<T>): Promise<T> {
     const prev = getActiveId();
     selectServer(serverId);
     try { return await fn(); }
-    catch { return undefined; }
     finally { if (prev && prev !== serverId) selectServer(prev); }
   }
+  const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
   async function copyToClipboard(s: string) {
     try { await navigator.clipboard.writeText(s); }
@@ -206,22 +207,25 @@
     if (!menu) return;
     const { name, serverId } = menu;
     closeMenu();
-    const r = await withServer(serverId, () => openEditor(name));
-    if (r === undefined) flash('editor falhou — ver CP_EDITOR / DISPLAY no backend');
+    try { await withServer(serverId, () => openEditor(name)); }
+    catch (e) { flash(`abrir editor: ${errMsg(e)}`); }   // 404 = backend desatualizado; 500 = CP_EDITOR/DISPLAY
   }
   async function menuGitPull() {
     if (!menu) return;
     const { name, serverId } = menu;
     closeMenu();
     flash('git pull…');
-    const r = await withServer(serverId, () => gitAction(name, 'pull'));
-    flash(r ? (r.output.trim().split('\n')[0] || 'pull ok') : 'git pull falhou (nao e repo? conflito?)');
+    try {
+      const r = await withServer(serverId, () => gitAction(name, 'pull'));
+      flash(r.output.trim().split('\n')[0] || 'pull ok');
+    } catch (e) { flash(`git pull: ${errMsg(e)}`); }
   }
   async function menuDelete() {
     if (!menu) return;
     const { name, serverId } = menu;
     closeMenu();
-    await withServer(serverId, () => deleteSession(name));
+    try { await withServer(serverId, () => deleteSession(name)); }
+    catch { /* SSE corrige a lista */ }
   }
 
   // Rename inline de servidor no menu do rodape (mesma ideia do mobile). Label custom persistido.
