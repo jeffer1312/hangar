@@ -194,13 +194,14 @@
     max-width: 100%; margin: var(--space-2) 0;
   }
   .prose :global(.md-table table) {
-    /* largura NATURAL (nao espreme): rola no wrapper se passar da tela. */
-    border-collapse: collapse; width: max-content; max-width: none; font-size: var(--text-sm);
+    /* largura NATURAL (nao espreme) MAS estica ate a coluna da msg quando ha espaco (desktop);
+       rola no wrapper se passar da tela (mobile fica igual). */
+    border-collapse: collapse; width: max-content; min-width: 100%; max-width: none; font-size: var(--text-sm);
   }
   .prose :global(th), .prose :global(td) {
     border: 1px solid var(--border-subtle); padding: 6px 10px; text-align: left; vertical-align: top;
     /* piso = nao colapsa pra quebra letra-a-letra; teto = nao vira uma mega-coluna (quebra por palavra). */
-    min-width: 4.5em; max-width: 15em; overflow-wrap: break-word;
+    min-width: 4.5em; max-width: 32em; overflow-wrap: break-word;
   }
   .prose :global(th) {
     background: var(--bg-elevated); font-weight: 600; color: var(--text-primary); white-space: nowrap;
