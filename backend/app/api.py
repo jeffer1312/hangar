@@ -4,6 +4,7 @@ import mimetypes
 import os
 import re
 import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
@@ -18,13 +19,14 @@ from app.fs import FsError, list_roots, scan_dir
 from app.model_picker import PickerError
 from app.registry import SessionRegistry
 from app.models import SessionInfo, ChatEvent, CostReport
-from app.terminal_input import TerminalInput
+from app.pqueue import PromptQueue, _transcript_start_ts, committed_user_lines
+from app.terminal_input import TerminalInput, drain
 from app.sse import merged_events
 from app.uploads import save_upload, resolve_upload, UploadError, MAX_BYTES
 from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base, settings
 from app.costs import report as costs_report
 from app.git_ops import list_branches, switch_branch, git_action, GitError
-from app.archive import ArchiveEntry, archive_jsonl, list_archive
+from app.archive import ArchiveEntry, ArchiveFolder, archive_jsonl, list_conversations, list_folders
 from app.askquestion import clear_pending_askq
 from app.hook_state import hook_state
 from app import push
@@ -89,6 +91,7 @@ class _BodySizeLimitMiddleware:
 async def _lifespan(app: FastAPI):
     _state_dirs = list({Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()})
     hook_state.on_awaiting = _on_awaiting  # transicao -> awaiting_input dispara web push
+    hook_state.on_transition = _on_hook_transition  # drain server-side + confirmacao de entrega
     task = asyncio.create_task(hook_state.watch(_state_dirs))
 
     def _watch_done(t: asyncio.Task) -> None:
@@ -141,6 +144,61 @@ def _on_awaiting(session_id: str) -> None:
                 push.notify_awaiting(name)
         except Exception:
             _log.warning("push on_awaiting falhou (%s)", session_id, exc_info=True)
+    threading.Thread(target=_work, daemon=True).start()
+
+
+_CONFIRM_GRACE = 8.0  # s entre o send e a checagem "o transcript gravou o prompt?"
+
+
+def _drain_session(name: str) -> None:
+    """Entrega enfileiradas pendentes desta sessao (best-effort, roda fora do request)."""
+    try:
+        info = next((s for s in registry.list() if s.name == name), None)
+        if info and info.jsonl:
+            drain(name, info.jsonl)
+    except Exception:
+        pass
+
+
+def _confirm_and_drain(name: str) -> None:
+    """Confirmacao de entrega: delivered=True so diz 'send_keys chamado' — a TUI pode ter engolido
+    as teclas e a msg sumia com cara de entregue. Confere contra o transcript; engolida ->
+    re-enfileira (reconcile) e re-drena. Best-effort, roda em Timer/thread."""
+    try:
+        q = PromptQueue(name)
+        if not any(r.get("delivered") is True and not r.get("confirmed") for r in q.load()):
+            return  # nada a confirmar: nao paga registry nem o scan do transcript
+        info = next((s for s in registry.list() if s.name == name), None)
+        if not info or not info.jsonl:
+            return
+        requeued = q.reconcile_delivered(
+            committed_user_lines(info.jsonl), _transcript_start_ts(info.jsonl), time.time(),
+            grace=_CONFIRM_GRACE,
+        )
+        if requeued:
+            _log.info("REQUEUE name=%s n=%d (TUI engoliu o send; re-drenando)", name, len(requeued))
+            drain(name, info.jsonl)
+    except Exception:
+        pass
+
+
+def _on_hook_transition(session_id: str, state: str) -> None:
+    """hook_state -> mudanca de estado. Drain SERVER-SIDE: o gatilho antigo morava na conexao SSE de
+    cada chat — sem celular conectado, entrada deferred ficava parada indefinidamente. idle/working =
+    o pane aceita texto (Claude Code enfileira internamente); o drain re-checa deliverable sozinho.
+    Tambem agenda a confirmacao de entrega das drenadas."""
+    if state == "awaiting_input":
+        return
+    def _work() -> None:
+        try:
+            info = next((s for s in registry.list()
+                         if s.jsonl and Path(s.jsonl).stem == session_id), None)
+            if info and info.jsonl:
+                if drain(info.name, info.jsonl):
+                    threading.Timer(_CONFIRM_GRACE + 0.5, _confirm_and_drain,
+                                    args=(info.name,)).start()
+        except Exception:
+            pass
     threading.Thread(target=_work, daemon=True).start()
 
 
@@ -364,7 +422,6 @@ def input_prompt(name: str, body: InputBody):
         # send_prompt rejeita control chars (ex: '\n'). Sem isto virava 500 -> a msg sumia sem
         # feedback. Agora vira 400 limpo (o frontend mostra). (Multi-linha de verdade: backlog.)
         raise HTTPException(400, str(e))
-    from app.pqueue import PromptQueue
     stripped = body.text.lstrip()
     if stripped.startswith("/"):
         # Slash-commands NAO entram na fila — sao meta, nao viram bubble. Excecao /clear: ele reinicia
@@ -388,6 +445,14 @@ def input_prompt(name: str, body: InputBody):
             PromptQueue(name).append(body.text, delivered=(result == "sent"))
         except OSError:
             pass
+        if result == "sent":
+            # Confirmacao de entrega: em ~8s confere se o transcript gravou; engolida -> re-drena.
+            threading.Timer(_CONFIRM_GRACE + 0.5, _confirm_and_drain, args=(name,)).start()
+        else:
+            # Kick: fecha a corrida append-depois-da-transicao — se o estado virou entregavel entre
+            # o "deferred" do send_prompt e o append acima, o gatilho daquele ciclo nao viu esta
+            # entrada (e sem SSE aberto nao havia gatilho nenhum). O drain re-checa deliverable.
+            threading.Thread(target=_drain_session, args=(name,), daemon=True).start()
     return {"ok": True}
 
 
@@ -518,11 +583,23 @@ def transcript_image(name: str, uuid: str, idx: int):
 
 
 # ── Arquivo: conversas mortas (transcripts sem sessao tmux viva) ──────────────
-@app.get("/api/archive", dependencies=[Depends(require_auth)], response_model=list[ArchiveEntry])
+@app.get("/api/archive", dependencies=[Depends(require_auth)], response_model=list[ArchiveFolder])
 def archive_index():
+    # Nivel 1: so as PASTAS (agregado barato). As conversas vem por pasta, no endpoint abaixo.
+    return list_folders()
+
+
+@app.get("/api/archive/{project}", dependencies=[Depends(require_auth)],
+         response_model=list[ArchiveEntry])
+def archive_folder(project: str):
     # live = transcripts em uso agora (badge na lista; a conversa viva abre pelo chat normal).
     live = {os.path.realpath(s.jsonl) for s in registry.list() if s.jsonl}
-    return list_archive(live)
+    try:
+        return list_conversations(project, live)
+    except ValueError:
+        raise HTTPException(400, "invalid path")
+    except FileNotFoundError:
+        raise HTTPException(404, "project not found")
 
 
 @app.get("/api/archive/{project}/{session_id}/history",

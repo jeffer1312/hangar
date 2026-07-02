@@ -19,6 +19,15 @@ _PROJ_RE = re.compile(r"^[A-Za-z0-9-]+$")   # nomes de dir gerados por sanitize_
 _SID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
+class ArchiveFolder(BaseModel):
+    # Nivel 1 (pastas): agregado barato — nao abre os transcripts (so 1 leitura de cabecalho por
+    # pasta pro cwd real). O preview das conversas so e pago ao ENTRAR na pasta.
+    project: str                 # nome do dir em projects/ (cwd sanitizado)
+    cwd: Optional[str] = None    # cwd real, lido do transcript mais recente
+    count: int                   # quantas conversas na pasta
+    mtime: float                 # atividade mais recente
+
+
 class ArchiveEntry(BaseModel):
     project: str                 # nome do dir em projects/ (cwd sanitizado)
     cwd: Optional[str] = None    # cwd real, lido de dentro do transcript
@@ -55,32 +64,51 @@ def _head_info(jsonl: Path, max_lines: int = 60) -> tuple[str, Optional[str]]:
     return preview, cwd
 
 
-def list_archive(live_realpaths: set[str], per_project: int = 30,
-                 total_cap: int = 300) -> list[ArchiveEntry]:
-    # Mais recentes primeiro, com teto por projeto e global (uma maquina antiga acumula milhares de
-    # jsonl; o preview abre cada arquivo -> os tetos limitam o custo por request).
+def _folder_files(proj: Path) -> list[tuple[float, Path]]:
+    files: list[tuple[float, Path]] = []
+    for f in proj.glob("*.jsonl"):
+        try:
+            files.append((f.stat().st_mtime, f))
+        except OSError:
+            continue
+    files.sort(key=lambda t: t[0], reverse=True)
+    return files
+
+
+def list_folders() -> list[ArchiveFolder]:
+    # Nivel 1: as pastas (projetos) com conversa arquivada, mais recentes primeiro.
     base = Path(settings.projects_dir)
-    out: list[ArchiveEntry] = []
+    out: list[ArchiveFolder] = []
     try:
         projdirs = [d for d in base.iterdir() if d.is_dir()]
     except OSError:
         return []
     for proj in projdirs:
-        files: list[tuple[float, Path]] = []
-        for f in proj.glob("*.jsonl"):
-            try:
-                files.append((f.stat().st_mtime, f))
-            except OSError:
-                continue
-        files.sort(key=lambda t: t[0], reverse=True)
-        for mt, f in files[:per_project]:
-            preview, cwd = _head_info(f)
-            out.append(ArchiveEntry(
-                project=proj.name, cwd=cwd, session_id=f.stem, mtime=mt,
-                preview=preview, live=os.path.realpath(str(f)) in live_realpaths,
-            ))
+        files = _folder_files(proj)
+        if not files:
+            continue
+        _, cwd = _head_info(files[0][1])   # cwd real do transcript mais recente (1 leitura/pasta)
+        out.append(ArchiveFolder(project=proj.name, cwd=cwd, count=len(files), mtime=files[0][0]))
     out.sort(key=lambda e: e.mtime, reverse=True)
-    return out[:total_cap]
+    return out
+
+
+def list_conversations(project: str, live_realpaths: set[str], cap: int = 100) -> list[ArchiveEntry]:
+    """Nivel 2: conversas de UMA pasta, mais recentes primeiro. O preview abre cada arquivo -> o
+    teto limita o custo por request. ValueError/FileNotFoundError como archive_jsonl."""
+    if not _PROJ_RE.match(project):
+        raise ValueError("caminho invalido")
+    proj = Path(settings.projects_dir) / project
+    if not proj.is_dir():
+        raise FileNotFoundError(project)
+    out: list[ArchiveEntry] = []
+    for mt, f in _folder_files(proj)[:cap]:
+        preview, cwd = _head_info(f)
+        out.append(ArchiveEntry(
+            project=project, cwd=cwd, session_id=f.stem, mtime=mt,
+            preview=preview, live=os.path.realpath(str(f)) in live_realpaths,
+        ))
+    return out
 
 
 def archive_jsonl(project: str, session_id: str) -> Path:

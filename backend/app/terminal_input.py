@@ -1,4 +1,5 @@
 import re
+import threading
 import time
 
 from app import model_picker as mp
@@ -53,6 +54,16 @@ def deliverable(name: str) -> bool:
     return state != "awaiting_input" and not is_overlay(pane)
 
 
+# Lock POR SESSAO serializando o send_prompt: dois /input quase simultaneos (ou /input + drain)
+# rodavam em threads digitando no MESMO tty — o texto de B aterrissava na janela de settle de A e o
+# Enter de A submetia os dois CONCATENADOS. setdefault e atomico no CPython (pior caso: Lock orfao).
+_send_locks: dict[str, threading.Lock] = {}
+
+
+def _send_lock(name: str) -> threading.Lock:
+    return _send_locks.setdefault(name, threading.Lock())
+
+
 def drain(name: str, jsonl: str) -> int:
     """Entrega ao tty as entradas pendentes (delivered=False) quando o pane volta a aceitar texto.
     Retorna quantas entregou. claim-1-envia-1: um crash entre o claim e o envio deixa NO MAXIMO 1
@@ -63,6 +74,9 @@ def drain(name: str, jsonl: str) -> int:
     if not any(e.get("delivered") is False for e in q.load()):
         return 0
     start_ts = _transcript_start_ts(jsonl)   # poda entradas de sessao antiga (pre-/clear)
+    # Orfas de sessao anterior: nunca mais casam nem drenam — remove (senao o cheap-check acima
+    # fica quente pra sempre e o lixo acumula ate o cap).
+    q.prune_before(start_ts)
     ti = TerminalInput()
     sent = 0
     while True:
@@ -211,40 +225,43 @@ class TerminalInput:
         # Validacao PRE-envio: input ruim nunca toca a TUI nem entra na fila. \n/\t ok; outros controles nao.
         if any(ord(c) < 32 and c not in "\t\n" for c in text):
             raise ValueError("control characters not allowed in prompt")
-        # Gate de entregabilidade (chokepoint UNICO p/ texto livre — /input e drain passam por aqui):
-        # nao digitar as cegas num overlay (AskUserQuestion/picker), as teclas o corromperiam. Sem pane
-        # entregavel agora, devolve "deferred" SEM tocar a TUI; o caller enfileira pendente e o drain
-        # entrega quando o overlay fechar / a sessao voltar.
-        if not deliverable(name):
-            return "deferred"
-        # Não enviar pra um TUI ainda bootando: as teclas seriam engolidas e a msg sumiria (core bug —
-        # msg mandada logo após criar a sessão nunca chegava no claude). Espera o input ficar vivo.
-        _wait_input_ready(name)
-        if "\n" in text:
-            tmux.paste_text(name, text)
-            time.sleep(0.05)  # deixa a TUI acomodar o paste antes do Enter submeter
-            send_keys(name, "Enter")
-        elif text.lstrip().startswith("/"):
-            # Slash command: ao digitar "/..." o Claude Code abre um menu de autocomplete. Sem dar tempo
-            # do menu renderizar, o Enter corre com o redraw e e ENGOLIDO pelo menu (o comando fica
-            # digitado mas NAO executa -> "o slash nao chega no terminal"). Espera o menu acomodar, Enter
-            # pra executar; um 2o Enter cobre o caso do 1o so ter selecionado a sugestao (o comando ja
-            # rodou e o prompt esta vazio -> o 2o Enter e no-op inofensivo).
-            send_keys(name, text, literal=True)
-            time.sleep(_SLASH_SETTLE)
-            send_keys(name, "Enter")
-            time.sleep(_SLASH_SETTLE)
-            send_keys(name, "Enter")
-        else:
-            send_keys(name, text, literal=True)
-            # Settle ANTES do Enter: sem isto o Enter corria a ingestao do texto e o claude (que detecta
-            # input rapido como paste) tratava o Enter como parte do conteudo -> o texto ficava no input
-            # SEM submeter (usuario tinha que reenviar). Espelha o gap do ramo multiline.
-            # ponytail: settle fixo; se ainda escapar em device lento, upgrade = capturar o pane e
-            # reenviar Enter se o input nao limpou.
-            time.sleep(_SUBMIT_SETTLE)
-            send_keys(name, "Enter")
-        return "sent"
+        # Serializa por sessao (gate + digitacao + Enter como unidade): sem o lock, envios
+        # concorrentes intercalavam teclas no mesmo tty e as mensagens saiam concatenadas.
+        with _send_lock(name):
+            # Gate de entregabilidade (chokepoint UNICO p/ texto livre — /input e drain passam por
+            # aqui): nao digitar as cegas num overlay (AskUserQuestion/picker), as teclas o
+            # corromperiam. Sem pane entregavel agora, devolve "deferred" SEM tocar a TUI; o caller
+            # enfileira pendente e o drain entrega quando o overlay fechar / a sessao voltar.
+            if not deliverable(name):
+                return "deferred"
+            # Não enviar pra um TUI ainda bootando: as teclas seriam engolidas e a msg sumiria (core
+            # bug — msg mandada logo após criar a sessão nunca chegava no claude).
+            _wait_input_ready(name)
+            if "\n" in text:
+                tmux.paste_text(name, text)
+                time.sleep(0.05)  # deixa a TUI acomodar o paste antes do Enter submeter
+                send_keys(name, "Enter")
+            elif text.lstrip().startswith("/"):
+                # Slash command: ao digitar "/..." o Claude Code abre um menu de autocomplete. Sem dar
+                # tempo do menu renderizar, o Enter corre com o redraw e e ENGOLIDO pelo menu (o comando
+                # fica digitado mas NAO executa -> "o slash nao chega no terminal"). Espera o menu
+                # acomodar, Enter pra executar; um 2o Enter cobre o caso do 1o so ter selecionado a
+                # sugestao (o comando ja rodou e o prompt esta vazio -> o 2o Enter e no-op inofensivo).
+                send_keys(name, text, literal=True)
+                time.sleep(_SLASH_SETTLE)
+                send_keys(name, "Enter")
+                time.sleep(_SLASH_SETTLE)
+                send_keys(name, "Enter")
+            else:
+                send_keys(name, text, literal=True)
+                # Settle ANTES do Enter: sem isto o Enter corria a ingestao do texto e o claude (que
+                # detecta input rapido como paste) tratava o Enter como parte do conteudo -> o texto
+                # ficava no input SEM submeter (usuario tinha que reenviar). Espelha o gap multiline.
+                # ponytail: settle fixo; se ainda escapar em device lento, upgrade = capturar o pane e
+                # reenviar Enter se o input nao limpou.
+                time.sleep(_SUBMIT_SETTLE)
+                send_keys(name, "Enter")
+            return "sent"
 
     # Teclas de navegacao liberadas pro espelho do pane (TerminalMirror dirige overlays so-TUI:
     # /status, /config, /help, pickers). Allowlist (nao texto livre) pra so passar navegacao -> nada

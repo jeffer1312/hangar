@@ -42,6 +42,9 @@
     idIndex.clear();
     for (let i = 0; i < events.length; i++) idIndex.set(events[i].id, i);
   }
+  // Ids de assistant_msg que SUBSTITUIRAM um preview visivel: entram sem animacao (o texto ja
+  // estava na tela via preview — re-animar era o "pisca" que fazia perder a posicao de leitura).
+  const swapIds = new Set<string>();
   let stateEvent = $state<StateEvent | null>(null);
   let loading = $state(true);
   let error = $state('');
@@ -206,12 +209,20 @@
             return !!bc && ac === bc;
           };
           if (ev.id.startsWith('queued-')) {
-            if (events.some((x) => x.kind === 'user_msg' && !x.id.startsWith('queued-') && x.text && covers(x.text, ev.text!))) {
+            // Dedup limitado ao TAIL: um "ok" ANTIGO la atras nao pode engolir a bubble de um "ok"
+            // NOVO na fila (falso-positivo); o caso legitimo (real ja presente, replay/reconexao)
+            // esta sempre perto do fim.
+            if (events.slice(-30).some((x) => x.kind === 'user_msg' && !x.id.startsWith('queued-') && x.text && covers(x.text, ev.text!))) {
               return; // real ja cobre este texto -> ignora o sintetico
             }
           } else {
-            const filtered = events.filter((x) => !(x.kind === 'user_msg' && x.id.startsWith('queued-') && x.text && covers(ev.text!, x.text)));
-            if (filtered.length !== events.length) { events = filtered; rebuildIndex(); }
+            // Remove SO a 1a queued- que casar (nao todas): com duas "ok" na fila e uma real
+            // commitada, a 2a continua pendente e visivel.
+            const qi = events.findIndex((x) => x.kind === 'user_msg' && x.id.startsWith('queued-') && x.text && covers(ev.text!, x.text));
+            if (qi >= 0) {
+              events = [...events.slice(0, qi), ...events.slice(qi + 1)];
+              rebuildIndex();
+            }
           }
         }
         // Dedupe by id: the SSE replays the whole transcript on every (re)connect and
@@ -232,6 +243,15 @@
             activity = actFolder.snapshot();
           } else if (ev.kind === 'assistant_msg' && ev.text) {
             asstCount += 1;
+            // Swap preview->bolha ATOMICO: o bloco real entra SEM animacao (swapIds) e o preview
+            // zera AQUI, sincrono, no mesmo flush do append -> UM paint so, sem frame vazio nem
+            // texto duplicado. A bolha nasce no mesmo y do preview: o que ja foi lido nao se move.
+            // (Antes: append num flush + limpeza do preview num $effect pos-render = 2 repaints,
+            // bolha re-animando e scroll pulando — o usuario perdia o ponto da leitura.)
+            if (previewText) {
+              swapIds.add(ev.id);
+              previewText = '';
+            }
           }
         }
       } catch {}
@@ -257,7 +277,12 @@
     es.addEventListener('preview', (e: MessageEvent) => {
       armWatchdog();
       try {
-        previewText = (JSON.parse(e.data) as { text?: string }).text ?? '';
+        const t = (JSON.parse(e.data) as { text?: string }).text ?? '';
+        // Guard de monotonicidade: frame TRANSITORIO do pane (mid-redraw) as vezes chega como
+        // PREFIXO do texto ja mostrado -> ignorar, senao o texto recua e re-cresce (stuttering).
+        // Vazio (drop) e conteudo realmente novo passam.
+        if (t && t.length < previewText.length && previewText.startsWith(t)) return;
+        previewText = t;
       } catch {}
     });
 
@@ -586,6 +611,7 @@
       {pending}
       {sessionName}
       {dockH}
+      {swapIds}
       preview={previewText}
       onSelectOption={handleSelect}
       onCancel={handleInterrupt}

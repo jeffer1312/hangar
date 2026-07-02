@@ -17,6 +17,9 @@ class HookState:
         # Disparado na transicao -> awaiting_input (so no watch ao vivo, nao no load_existing do boot).
         # Wiring em api.py manda o push. Recebe o session_id (uuid); best-effort, nunca levanta.
         self.on_awaiting: Optional[Callable[[str], None]] = None
+        # Disparado em QUALQUER mudanca de estado ao vivo: (session_id, state). Wiring em api.py:
+        # drain server-side (entrega a fila sem depender de conexao SSE) + confirmacao de entrega.
+        self.on_transition: Optional[Callable[[str, str], None]] = None
 
     def get_state(self, session_id: Optional[str]) -> Optional[tuple[str, float]]:
         if not session_id:
@@ -39,6 +42,14 @@ class HookState:
             if cb:
                 try:
                     cb(path.stem)
+                except Exception:
+                    pass
+        # Mudanca de estado (qualquer) ao vivo -> on_transition (drain server-side / confirmacao).
+        if notify and (prev is None or prev[0] != state):
+            cb2 = self.on_transition
+            if cb2:
+                try:
+                    cb2(path.stem, state)
                 except Exception:
                     pass
 
