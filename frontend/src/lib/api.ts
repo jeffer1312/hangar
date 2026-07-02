@@ -156,6 +156,13 @@ export function resumeSession(name: string, sessionId?: string): Promise<ResumeR
   });
 }
 
+// Abre o cwd da sessao no editor da MAQUINA do backend (so-desktop). Binario fixo (CP_EDITOR).
+export function openEditor(name: string): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/open-editor`, {
+    method: 'POST',
+  });
+}
+
 export function getHistory(name: string): Promise<ChatEvent[]> {
   return apiFetch<ChatEvent[]>(`/api/sessions/${encodeURIComponent(name)}/history`);
 }
