@@ -33,6 +33,9 @@ function apiCorsPreflight(): PluginOption {
 
 export default defineConfig({
   server: {
+    // Bind IPv4 loopback: vite default `localhost` resolve pra ::1 (IPv6-only) nesta maquina,
+    // mas o `tailscale serve` proxia pra 127.0.0.1:5173 (IPv4) -> sem isto da 502. Forca IPv4.
+    host: '127.0.0.1',
     // Desliga o CORS embutido do vite: ele só libera origens localhost e intercepta o preflight
     // OPTIONS de /api SEM setar Access-Control-Allow-Origin pra origens .ts.net (quebrava o
     // multi-PC cross-origin). Com false, o preflight cai no apiCorsPreflight (plugin) / no backend.
