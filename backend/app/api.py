@@ -31,6 +31,7 @@ from app.askquestion import clear_pending_askq
 from app.hook_state import hook_state
 from app import push
 from app.sync import sync_router
+from app.deploy import deploy_router
 
 _log = logging.getLogger("claude_pocket")
 
@@ -127,6 +128,7 @@ app.add_middleware(
 )
 if settings.sync:
     app.include_router(sync_router)
+app.include_router(deploy_router)
 registry = SessionRegistry()
 terminal = TerminalInput()
 
