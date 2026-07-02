@@ -232,7 +232,7 @@
             {/if}
 
             {#if workflows.length === 0 && activity.tasks.length === 0 && runningAgents.length === 0}
-              <p class="activity-empty">Nada rolando agora.</p>
+              <p class="activity-empty">Nada rolando agora. Tarefas, agentes e workflows que o Claude criar nesta sessão aparecem aqui, ao vivo.</p>
             {/if}
           </div>
         {:else if level === 'workflow'}
@@ -351,21 +351,24 @@
     background: var(--bg-elevated);
     animation: slide-up 220ms var(--ease-out) both;
   }
-  @media (min-width: 720px) {
-    .backdrop { align-items: center; padding: var(--space-5); }
+  /* Desktop (>=820px, mesmo corte do DesktopShell): DOCA como painel lateral direito, igual aos
+     demais sheets (Git/Custo/Sessões) — era o único overlay que abria como modal central. Um pouco
+     mais largo que os 420px dos outros: o detalhe de workflow tem duas colunas (fases + agentes). */
+  @media (min-width: 820px) {
+    .backdrop { align-items: stretch; justify-content: flex-end; background: rgba(0, 0, 0, 0.4); }
     .modal {
-      width: 100%;
-      max-width: 820px;
-      height: auto;
-      max-height: 85vh;
-      border: 1px solid var(--border-subtle);
-      border-radius: var(--radius-xl);
-      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
-      animation: zoom-in 180ms var(--ease-out) both;
+      width: min(520px, 92vw);
+      height: 100%;
+      max-height: none;
+      border-left: 1px solid var(--border-default);
+      animation: slide-in-right 300ms var(--ease-out) both;
     }
   }
   @keyframes slide-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
-  @keyframes zoom-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
+  @keyframes slide-in-right {
+    from { transform: translateX(100%); opacity: 0; }
+    to   { transform: translateX(0);    opacity: 1; }
+  }
 
   .modal-head {
     display: flex;

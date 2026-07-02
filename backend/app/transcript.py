@@ -55,6 +55,12 @@ _COMMAND_META_PREFIXES = (
 # se sobrar so o bloco, a msg inteira e meta e nao vira bubble.
 _META_BLOCK_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
 
+# task-id de uma <task-notification> (fim de agente/workflow em background). A notificacao fica
+# fora do chat (e ruido), mas o painel de Atividade precisa do sinal de termino: viram um
+# tool_result SINTETICO com tool_use_id="task:<id>" (o front nunca renderiza tool_result orfao;
+# so o fold de atividade consome).
+_TASK_NOTIF_RE = re.compile(r"<task-id>([^<]+)</task-id>")
+
 
 def _is_command_meta(text: str) -> bool:
     return text.lstrip().startswith(_COMMAND_META_PREFIXES)
@@ -95,6 +101,13 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
 
     if etype == "user":
         if isinstance(content, str):
+            if content.lstrip().startswith("<task-notification>"):
+                m = _TASK_NOTIF_RE.search(content)
+                if m:
+                    return [ChatEvent(kind="tool_result", id=uid,
+                                      tool_use_id=f"task:{m.group(1).strip()}",
+                                      result="task-notification")]
+                return []
             if _is_command_meta(content):
                 return []
             cleaned = _strip_meta_blocks(content)

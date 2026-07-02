@@ -40,7 +40,9 @@ Real blur is Chromium-only (`html[data-liquid]`). Do not add glass to content su
 
 ## Motion
 Shared tokens/keyframes in `app.css`: `--ease-out`, `--spring`, `msg-in`, `bubble-in`, etc.
-Ease-out (no bounce/elastic). A global `prefers-reduced-motion` rule neutralizes loops, so new
+Default is ease-out; the `--spring` light-overshoot token is a deliberate exception — the
+"Respiração" motion family (message entering, sheet rising, queued→accepted). Keep it scoped
+to that family; don't spread bounce to new UI. A global `prefers-reduced-motion` rule neutralizes loops, so new
 keyframes don't each need a guard. Never animate layout props; the sidebar width transition is a
 deliberate, contained exception.
 

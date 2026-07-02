@@ -5,6 +5,7 @@
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
   import QrScanner from '../components/QrScanner.svelte';
   import BottomSheet from '../components/BottomSheet.svelte';
+  import ConfirmSheet from '../components/ConfirmSheet.svelte';
   import { getSessions, createSession, deleteSession, resumeSession, openSessionsStream } from '../lib/api';
   import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
@@ -249,8 +250,18 @@
     showMenu = !showMenu;
   }
 
-  // Remove um servidor da lista. Sem "ativo" pra restaurar — fecha o stream e reagrega (ou desloga se zerou).
+  // Remover servidor pede confirmacao — o × de um toque removia na hora e, se fosse o unico
+  // servidor, deslogava junto (com o token de pareamento la no PC). O remove real so acontece
+  // no doDropServer. Sem "ativo" pra restaurar — fecha o stream e reagrega (ou desloga se zerou).
+  let confirmSrv = $state<{ id: string; label: string } | null>(null);
   function dropServer(id: string) {
+    const s = servers.find((x) => x.id === id);
+    confirmSrv = { id, label: s?.label ?? id };
+  }
+  function doDropServer() {
+    if (!confirmSrv) return;
+    const id = confirmSrv.id;
+    confirmSrv = null;
     removeServer(id);
     servers = listServers();
     if (servers.length === 0) { handleLogout(); return; }
@@ -568,6 +579,20 @@
   {#if scanning}
     <QrScanner onScan={handleScanServer} onClose={() => (scanning = false)} />
   {/if}
+
+  <ConfirmSheet
+    open={confirmSrv !== null}
+    title="Remover este servidor?"
+    message={confirmSrv
+      ? servers.length === 1
+        ? `${confirmSrv.label} é o único servidor — remover desconecta o app e o pareamento precisa ser refeito (QR ou token no PC).`
+        : confirmSrv.label
+      : null}
+    confirmLabel="Remover"
+    danger
+    onConfirm={doDropServer}
+    onClose={() => (confirmSrv = null)}
+  />
 </div>
 
 <style>

@@ -9,6 +9,22 @@ export function relativeTime(ts: number | null | undefined): string {
   return new Date(ts * 1000).toLocaleDateString('pt-BR');
 }
 
+// Vocabulário único de estado (label pt-BR + cor) — compartilhado por SessionCard, Sidebar e
+// SessionSwitcherSheet pra mesma sessão nunca aparecer com nomes/cores divergentes.
+import type { State } from './types';
+export const stateLabels: Record<State, string> = {
+  working: 'em execução',
+  idle: 'pronto',
+  awaiting_input: 'aguardando',
+  dead: 'encerrado',
+};
+export const stateColors: Record<State, string> = {
+  working: 'var(--accent)',
+  idle: 'var(--success)',
+  awaiting_input: 'var(--warning)',
+  dead: 'var(--error)',
+};
+
 // Último segmento não vazio de um caminho absoluto (basename do projeto).
 export function basename(path: string): string {
   const parts = path.split('/').filter(Boolean);

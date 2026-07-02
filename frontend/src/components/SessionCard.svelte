@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { SessionInfo, State } from '../lib/types';
+  import { stateLabels, stateColors } from '../lib/format';
   import Lottie from './Lottie.svelte';
   import pensando from '../lib/lottie/pensando.json';
 
@@ -12,19 +13,6 @@
   }
   let { session, serverBadge = null, onClick, onDelete, onResume }: Props = $props();
 
-  const stateLabels: Record<State, string> = {
-    working: 'em execução',
-    idle: 'pronto',
-    awaiting_input: 'aguardando',
-    dead: 'encerrado',
-  };
-
-  const stateColors: Record<State, string> = {
-    working: 'var(--accent)',
-    idle: 'var(--success)',
-    awaiting_input: 'var(--warning)',
-    dead: 'var(--error)',
-  };
 
   // Frame parado da "pensando": f0 = anel cheio e simetrico (os frames do meio do loop ficam ralos e
   // parecem bug). Mesmo frame em todos os estados parados; o que muda entre eles e a COR (tint).
