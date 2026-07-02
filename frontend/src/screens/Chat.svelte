@@ -54,7 +54,17 @@
   let screenEl: HTMLElement | undefined = $state();
   let pending = $state<{ id: string; text: string; solid?: boolean }[]>([]);
   // Draft do composer (bindable): o interrupt devolve a msg pendente aqui pra editar e reenviar.
-  let composerText = $state('');
+  // PERSISTIDO por sessao no localStorage: o iOS mata/recarrega o PWA em background e o texto
+  // digitado evaporava (ir buscar algo noutro app = perder o rascunho); trocar de sessao remonta
+  // o Chat e zerava tambem. Restaura no mount; enviar limpa o campo -> remove a chave junto.
+  // Snapshot do mount de proposito: o App remonta o Chat por {#key sessionName} a cada troca.
+  // svelte-ignore state_referenced_locally
+  const draftKey = `cp-draft:${sessionName}`;
+  let composerText = $state(localStorage.getItem(draftKey) ?? '');
+  $effect(() => {
+    if (composerText) localStorage.setItem(draftKey, composerText);
+    else localStorage.removeItem(draftKey);
+  });
   // Preview AO VIVO do bloco de assistente em voo (lido do pane via SSE 'preview'). Texto-completo,
   // full-replace; some quando o assistant_msg canonico (do .jsonl) cobre o texto, ou ao sair de working.
   let previewText = $state('');
@@ -209,10 +219,11 @@
             return !!bc && ac === bc;
           };
           if (ev.id.startsWith('queued-')) {
-            // Dedup limitado ao TAIL: um "ok" ANTIGO la atras nao pode engolir a bubble de um "ok"
-            // NOVO na fila (falso-positivo); o caso legitimo (real ja presente, replay/reconexao)
-            // esta sempre perto do fim.
-            if (events.slice(-30).some((x) => x.kind === 'user_msg' && !x.id.startsWith('queued-') && x.text && covers(x.text, ev.text!))) {
+            // Dedup INTEGRAL (todos os events): o follow re-emite a fila INTEIRA a cada reconexao;
+            // limitar a janela (tentado em 2026-07-02) deixava entradas antigas escaparem e
+            // aparecerem soltas no fim do chat. O falso-positivo raro (um "ok" antigo engolindo a
+            // bubble de um "ok" novo na fila) e o custo aceito — cosmetico e a entrega nao muda.
+            if (events.some((x) => x.kind === 'user_msg' && !x.id.startsWith('queued-') && x.text && covers(x.text, ev.text!))) {
               return; // real ja cobre este texto -> ignora o sintetico
             }
           } else {
