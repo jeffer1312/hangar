@@ -22,6 +22,13 @@ def test_list_branches(tmp_path):
     info = git_ops.list_branches(_repo(tmp_path))
     assert info["current"] == "main"
     assert set(info["branches"]) == {"main", "feature"}
+    assert info["dirty"] is False
+
+
+def test_list_branches_dirty(tmp_path):
+    d = _repo(tmp_path)
+    (tmp_path / "novo.txt").write_text("x")  # arquivo untracked -> tree suja
+    assert git_ops.list_branches(d)["dirty"] is True
 
 
 def test_switch_branch_ok(tmp_path):

@@ -237,6 +237,10 @@
     asstCount = countAssts(events);
   }
 
+  // Classifica o erro de carga: 404 / "not found" = transcript trocado ou backend reiniciou (o caso
+  // mais comum) -> copy propria + saida. O resto mostra a mensagem crua.
+  const errorInfo = $derived({ notFound: /(^|\D)404(\D|$)/.test(error) || /not found/i.test(error) });
+
   async function loadHistory() {
     try {
       events = await getHistory(sessionName);
@@ -678,8 +682,17 @@
     </div>
   {:else if error}
     <div class="chat-error">
-      <p>{error}</p>
-      <button class="retry-btn" onclick={loadHistory}>Tentar novamente</button>
+      {#if errorInfo.notFound}
+        <p class="chat-error-title">Não encontrei o transcript desta sessão.</p>
+        <p class="chat-error-hint">O transcript pode ter sido trocado (por exemplo com <code>/clear</code>) ou o backend reiniciou. Tentar de novo costuma resolver.</p>
+      {:else}
+        <p class="chat-error-title">Não deu pra carregar o histórico.</p>
+        <p class="chat-error-hint">{error}</p>
+      {/if}
+      <div class="chat-error-actions">
+        <button class="retry-btn" onclick={loadHistory}>Tentar novamente</button>
+        <button class="back-btn-inline" onclick={onBack}>Voltar às sessões</button>
+      </div>
     </div>
   {:else}
     <MessageList
@@ -835,14 +848,49 @@
     100% { background-position: -140% 0; }
   }
 
-  .chat-error p {
-    font-size: var(--text-sm);
-    color: var(--error);
+  .chat-error {
+    max-width: 380px;
+    margin: 0 auto;
+    padding-left: var(--space-5);
+    padding-right: var(--space-5);
+  }
+  .chat-error-title {
+    font-size: var(--text-base);
+    font-weight: 600;
+    color: var(--text-primary);
     text-align: center;
-    padding: 0 var(--space-4);
+  }
+  .chat-error-hint {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    text-align: center;
+    line-height: 1.5;
+  }
+  .chat-error-hint code {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    background: var(--bg-elevated);
+    padding: 1px 5px;
+    border-radius: var(--radius-sm);
+  }
+  .chat-error-actions {
+    display: flex;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    justify-content: center;
   }
 
   .retry-btn {
+    height: 44px;
+    padding: 0 var(--space-5);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    background: var(--accent);
+    color: #fff;
+    font-size: var(--text-sm);
+    font-weight: 500;
+  }
+  .back-btn-inline {
     height: 44px;
     padding: 0 var(--space-5);
     border: 1px solid var(--border-default);
