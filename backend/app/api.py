@@ -259,6 +259,13 @@ class KeyBody(_StrictBody):
     key: str  # nome da tecla de navegacao (allowlist em TerminalInput._NAV_KEYS)
 
 
+class TermInputBody(_StrictBody):
+    # Terminal interativo (so desktop): texto livre (literal) e/ou uma tecla nomeada (allowlist
+    # em TerminalInput._TERM_KEYS). Os dois opcionais -> um POST pode mandar so texto OU so tecla.
+    text: str | None = None
+    key: str | None = None
+
+
 class ModelEffortBody(_StrictBody):
     # ambos opcionais: so esforco (sem modelo) ainda dirige o picker do /model, deixando o
     # modelo na linha atual. scope: 'session' (aperta `s`) ou 'default' (aperta Enter).
@@ -498,6 +505,19 @@ def keys(name: str, body: KeyBody):
     # Uma tecla de navegacao (allowlist) pro pane — dirige overlays so-TUI a partir do espelho.
     try:
         terminal.send_key(name, body.key)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@app.post("/api/sessions/{name}/term-input", dependencies=[Depends(require_auth)])
+def term_input(name: str, body: TermInputBody):
+    # Terminal interativo (so desktop): manda texto digitado (literal) e/ou uma tecla nomeada pro pane.
+    try:
+        if body.text:
+            terminal.send_text(name, body.text)
+        if body.key:
+            terminal.send_term_key(name, body.key)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True}

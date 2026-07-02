@@ -280,6 +280,27 @@ class TerminalInput:
             raise ValueError(f"key not allowed: {key!r}")
         send_keys(name, tmux_key)
 
+    # Terminal INTERATIVO (so desktop): alem da navegacao, edicao de linha + control-chars de
+    # shell/TUI. Texto livre vai literal (send_text); teclas nomeadas por esta allowlist.
+    _TERM_KEYS = {
+        **_NAV_KEYS,
+        "Backspace": "BSpace", "Delete": "DC", "Home": "Home", "End": "End",
+        "C-c": "C-c", "C-d": "C-d", "C-r": "C-r", "C-u": "C-u", "C-k": "C-k",
+        "C-w": "C-w", "C-a": "C-a", "C-e": "C-e", "C-l": "C-l", "C-z": "C-z",
+        "C-p": "C-p", "C-n": "C-n", "C-b": "C-b", "C-f": "C-f", "C-g": "C-g",
+    }
+
+    def send_text(self, name: str, text: str) -> None:
+        # Texto digitado no terminal desktop. Literal -> tmux nao interpreta como nome de tecla.
+        if text:
+            send_keys(name, text, literal=True)
+
+    def send_term_key(self, name: str, key: str) -> None:
+        tmux_key = self._TERM_KEYS.get(key)
+        if tmux_key is None:
+            raise ValueError(f"key not allowed: {key!r}")
+        send_keys(name, tmux_key)
+
     def select(self, name: str, option: int) -> None:
         if option < 1:
             raise ValueError("option must be >= 1")
