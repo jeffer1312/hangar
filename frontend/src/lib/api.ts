@@ -207,6 +207,32 @@ export async function scanDir(root: string, path?: string): Promise<FsScanResult
   }
 }
 
+// ── Arquivo: conversas mortas (transcripts sem sessão tmux viva) ──────────────
+export interface ArchiveEntry {
+  project: string;
+  cwd: string | null;
+  session_id: string;
+  mtime: number;
+  preview: string;
+  live: boolean;
+}
+
+export function getArchive(): Promise<ArchiveEntry[]> {
+  return apiFetch<ArchiveEntry[]>('/api/archive');
+}
+
+export function getArchiveHistory(project: string, sid: string): Promise<ChatEvent[]> {
+  return apiFetch<ChatEvent[]>(
+    `/api/archive/${encodeURIComponent(project)}/${encodeURIComponent(sid)}/history`,
+  );
+}
+
+// URL de imagem colada no terminal, versão arquivo (mesmo ?token das outras URLs de <img>).
+export function archiveImageUrl(project: string, sid: string, id: string, idx: number): string {
+  const t = getToken() ?? '';
+  return `${getBaseUrl()}/api/archive/${encodeURIComponent(project)}/${encodeURIComponent(sid)}/transcript-image/${encodeURIComponent(id)}/${idx}?token=${encodeURIComponent(t)}`;
+}
+
 export async function sendInput(name: string, text: string): Promise<void> {
   await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/input`, {
     method: 'POST',

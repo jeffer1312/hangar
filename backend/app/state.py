@@ -1,8 +1,9 @@
 import asyncio
 import re
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Callable, Optional
 
 from app import tmux
+from app.hook_state import hook_state
 from app.models import StateEvent
 
 SPINNER_GLYPHS = "✻✽✶✺✢·∗✳✦✧"
@@ -168,10 +169,17 @@ class StateMonitor:
     # mid-redraw (sem a linha do spinner por 1 frame); sem este debounce o estado piscava working
     # <-> idle e a UI (spinner/botão stop/scroll) ficava "pulando" o tempo todo durante o streaming.
     IDLE_DEBOUNCE = 4
+    # Polls sem spinner no pane apos os quais um marcador de hook "working" deixa de ser confiavel
+    # (claude morreu mid-turn sem disparar Stop -> marcador preso em working; o pane e a verdade).
+    HOOK_WORKING_GRACE = 8
 
-    def __init__(self, name: str, poll: float = 0.75):
+    def __init__(self, name: str, poll: float = 0.75,
+                 sid_get: Optional[Callable[[], Optional[str]]] = None):
         self.name = name
         self.poll = poll
+        # sid_get: session-id VIVO da sessao (muda no /clear) -> ancora o estado nos marcadores dos
+        # hooks (deterministicos) em vez de depender so da leitura visual do pane. None = so pane.
+        self.sid_get = sid_get
 
     async def stream(self) -> AsyncIterator[StateEvent]:
         last_key = object()
@@ -207,6 +215,19 @@ class StateMonitor:
                 frozen = 0
                 if held_state == "working" and no_spinner < self.IDLE_DEBOUNCE:
                     state, label = "working", held_label
+
+            # Ancora de hook: working/idle dos marcadores (UserPromptSubmit/PreToolUse/Stop) e
+            # deterministico — corrige o pane mal-lido (spinner congelado, redraw). O pane segue
+            # dono de awaiting_input/overlay (menus NAO disparam hook) e de dead. Marcador
+            # "working" preso (claude morto mid-turn) expira via HOOK_WORKING_GRACE.
+            if self.sid_get is not None and state in ("working", "idle"):
+                m = hook_state.get_state(self.sid_get())
+                if m is not None:
+                    if m[0] == "idle" and state == "working":
+                        state, label = "idle", None
+                    elif m[0] == "working" and state == "idle" \
+                            and no_spinner < self.HOOK_WORKING_GRACE:
+                        state = "working"
 
             status = status_line(pane)
             # Overlay so-TUI aberto: rodape de navegacao presente NO FUNDO do pane. So as ultimas linhas

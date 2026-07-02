@@ -29,7 +29,7 @@ class _StubTailerRaises:
 
 
 class _StubMonitorIdle:
-    def __init__(self, name):
+    def __init__(self, name, **kw):
         pass
 
     def stream(self):
@@ -84,7 +84,7 @@ async def _seq_states():
 
 
 class _StubMonitorSeq:
-    def __init__(self, name):
+    def __init__(self, name, **kw):
         pass
 
     def stream(self):

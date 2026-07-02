@@ -4,6 +4,7 @@
   import Login from './screens/Login.svelte';
   import SessionList from './screens/SessionList.svelte';
   import Costs from './screens/Costs.svelte';
+  import Archive from './screens/Archive.svelte';
   import Chat from './screens/Chat.svelte';
   import DesktopShell from './components/DesktopShell.svelte';
 
@@ -13,6 +14,7 @@
     | { name: 'login' }
     | { name: 'sessions' }
     | { name: 'costs' }
+    | { name: 'archive' }
     | { name: 'chat'; sessionName: string };
 
   function parseHash(hash: string): Route {
@@ -30,6 +32,7 @@
       }
     }
     if (path === '/costs') return { name: 'costs' };
+    if (path === '/archive') return { name: 'archive' };
     return { name: 'sessions' };
   }
 
@@ -184,6 +187,8 @@
     <Login {onLogin} onSyncLogin={onSyncLogin} />
   {:else if route.name === 'costs'}
     <Costs onBack={() => navigateTo('#/')} />
+  {:else if route.name === 'archive'}
+    <Archive onBack={() => navigateTo('#/')} />
   {:else if isDesktop}
     <DesktopShell
       currentSession={route.name === 'chat' ? route.sessionName : null}
