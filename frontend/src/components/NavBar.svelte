@@ -26,8 +26,12 @@
     // (ex: "1 aguardando"), so renderiza quando ha acao pendente.
     subtitle?: string | null;
     subtitleHot?: string | null;
+    // Desktop: breadcrumb (servidor › sessao › branch) no lugar do titulo centralizado + pilula de estado.
+    crumbs?: { server: string; session: string; branch?: string; dirty?: boolean } | null;
+    stateLabel?: string;
+    stateColor?: string;
   }
-  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, working = false, subtitle = null, subtitleHot = null }: Props = $props();
+  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, working = false, subtitle = null, subtitleHot = null, crumbs = null, stateLabel, stateColor }: Props = $props();
 </script>
 
 <nav class="navbar">
@@ -42,7 +46,20 @@
       <div class="nav-spacer"></div>
     {/if}
 
-    {#if onTitleTap}
+    {#if crumbs}
+      <div class="crumbs">
+        {#if crumbs.server}
+          <span class="crumb crumb-dim">{crumbs.server}</span>
+          <span class="crumb-sep" aria-hidden="true">›</span>
+        {/if}
+        <span class="crumb crumb-strong">{crumbs.session}</span>
+        {#if crumbs.branch}
+          <span class="crumb-sep" aria-hidden="true">›</span>
+          <span class="crumb crumb-branch">{crumbs.branch}{#if crumbs.dirty}<span class="dirty">*</span>{/if}</span>
+        {/if}
+        {#if stateLabel}<span class="state-pill" style="color: {stateColor};">{stateLabel}</span>{/if}
+      </div>
+    {:else if onTitleTap}
       <button class="title-chip" onclick={onTitleTap} aria-label="Trocar de sessão">
         <span class="chip-text">{title}</span>
         <svg class="chip-chevron" width="11" height="7" viewBox="0 0 11 7" fill="none" aria-hidden="true">
@@ -148,6 +165,22 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  /* Desktop: breadcrumb servidor › sessao › branch + pilula de estado (esquerda, nao centralizado). */
+  .crumbs {
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-2); overflow: hidden;
+  }
+  .crumb { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: var(--text-sm); }
+  .crumb-dim { color: var(--text-muted); flex-shrink: 2; }
+  .crumb-strong { color: var(--text-primary); font-weight: 600; flex-shrink: 1; }
+  .crumb-branch { color: var(--text-secondary); font-family: var(--font-mono); font-size: var(--text-xs); flex-shrink: 1; }
+  .crumb-sep { color: var(--text-muted); flex-shrink: 0; }
+  .dirty { color: var(--warning); }
+  .state-pill {
+    flex-shrink: 0; margin-left: var(--space-1);
+    font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.02em;
+    padding: 2px 9px; border-radius: var(--radius-full); background: var(--bg-elevated);
   }
 
   /* Titulo + subtitulo empilhados (ex: lista de sessoes com resumo). */
