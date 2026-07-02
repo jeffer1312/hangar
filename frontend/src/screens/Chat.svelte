@@ -22,7 +22,7 @@
     answerQuestions,
   } from '../lib/api';
   import { parseStatusLine } from '../lib/statusline';
-  import { listServers } from '../lib/auth';
+  import { listServers, getActiveId } from '../lib/auth';
   import { createActivityFolder } from '../lib/activity';
   import type { ChatEvent, StateEvent, State, SessionInfo, AskQuestionPayload, AnswerItem } from '../lib/types';
 
@@ -176,6 +176,21 @@
   function closeMirror() { mirrorOpen = false; }
   // Statusline crua -> campos tipados (modelo, contexto, custo, tempo de sessao).
   const status = $derived(parseStatusLine(stateEvent?.status_line ?? null));
+
+  // Header desktop: breadcrumb (servidor › sessao › branch) + pilula de estado. Dados ja vem do
+  // status; server label vem do auth. So computa no desktop.
+  const serverLabel = $derived(
+    desktop ? (listServers().find((s) => s.id === getActiveId())?.label ?? '') : ''
+  );
+  const crumbs = $derived(
+    desktop ? { server: serverLabel, session: sessionName, branch: status?.branch, dirty: status?.dirty ?? false } : null
+  );
+  const STATE_META: Record<State, { label: string; color: string }> = {
+    working: { label: 'em execução', color: 'var(--accent)' },
+    idle: { label: 'pronto', color: 'var(--success)' },
+    awaiting_input: { label: 'aguardando', color: 'var(--warning)' },
+    dead: { label: 'encerrado', color: 'var(--error)' },
+  };
   // Painel de atividade: tarefas (TaskCreate/Update) + agentes rodando. Fold INCREMENTAL: o handler
   // do SSE dá push evento a evento — deriveActivity(events) como $derived re-varria o histórico
   // INTEIRO a cada mensagem (O(n) por evento em sessão longa).
@@ -639,7 +654,7 @@
 
 <div class="chat-screen" bind:this={screenEl} style:--nav-h={navH + 'px'}>
   <div class="navbar-mount" bind:this={navEl}>
-    <NavBar title={sessionName} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} working={currentState === 'working'} />
+    <NavBar title={sessionName} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? STATE_META[currentState].label : undefined} stateColor={STATE_META[currentState].color} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} working={currentState === 'working'} />
   </div>
 
   {#if loading}
