@@ -142,6 +142,8 @@
     </button>
   </div>
 
+  <p class="kbd-hint" aria-hidden="true">↑↓ mover · Enter abrir · Esc fechar</p>
+
   <div class="theme-row">
     <span class="theme-label">Tema</span>
     <ThemeToggle />
@@ -167,6 +169,18 @@
   .theme-label {
     font-size: var(--text-sm);
     color: var(--text-secondary);
+  }
+
+  /* Dica de teclado (desktop): torna os atalhos ↑↓/Enter/Esc do switcher descobriveis. Escondida em
+     ponteiro coarse (toque), onde nao ha teclado e a dica so ocuparia espaco. */
+  .kbd-hint {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    text-align: center;
+    margin-top: var(--space-3);
+  }
+  @media (pointer: coarse) {
+    .kbd-hint { display: none; }
   }
 
   .search {

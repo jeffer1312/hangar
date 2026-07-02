@@ -74,7 +74,7 @@
   tabindex="0"
   aria-expanded={expanded}
   onclick={() => (expanded = !expanded)}
-  onkeydown={(e) => e.key === 'Enter' && (expanded = !expanded)}
+  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expanded = !expanded; } }}
 >
   <div class="row-line">
     {#if phase === 'pending'}

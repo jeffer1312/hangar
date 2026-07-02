@@ -936,7 +936,8 @@
     transition: background 180ms ease-out;
   }
   .add-primary:active:not(:disabled) { background: var(--accent-press); }
-  .add-primary:disabled { opacity: 0.5; cursor: default; }
+  /* Disabled inerte (bg neutro + texto muted), nao indigo cheio a 50% que parece meio-clicavel. */
+  .add-primary:disabled { background: var(--bg-hover); color: var(--text-muted); cursor: default; }
   .add-secondary {
     height: 48px;
     background: transparent;

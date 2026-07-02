@@ -65,6 +65,23 @@
     if (!open) return;
     if (e.key === 'Escape') onClose();
   }
+
+  // Foco a11y: ao abrir, move o foco pra DENTRO da sheet (a menos que um filho ja tenha focado — ex.
+  // a busca do switcher) pra o leitor de tela anunciar o dialog e o Tab ficar no conteudo. Ao fechar,
+  // devolve o foco pro gatilho; senao ele cai no body, atras do conteudo.
+  let sheetEl = $state<HTMLElement | null>(null);
+  let prevFocus: HTMLElement | null = null;
+  $effect(() => {
+    if (open) {
+      prevFocus = document.activeElement as HTMLElement | null;
+      requestAnimationFrame(() => {
+        if (open && sheetEl && !sheetEl.contains(document.activeElement)) sheetEl.focus();
+      });
+    } else if (prevFocus) {
+      prevFocus.focus?.();
+      prevFocus = null;
+    }
+  });
 </script>
 
 <svelte:window onkeydown={onKeydown} />
@@ -74,6 +91,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="backdrop" onpointerdown={onBackdropPointerDown} onclick={onBackdropClick}>
     <div
+      bind:this={sheetEl}
       class="sheet"
       class:snapping
       role="dialog"
