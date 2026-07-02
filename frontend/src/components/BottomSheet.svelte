@@ -131,4 +131,25 @@
     border-radius: var(--radius-full);
     margin: 0 auto var(--space-4);
   }
+
+  /* Desktop (>=820px, mesmo corte do DesktopShell): em vez de subir de baixo, DOCA como painel
+     lateral direito de altura cheia. Todos os sheets (Git/Usage/...) herdam sem tocar em cada um. */
+  @media (min-width: 820px) {
+    .backdrop { align-items: stretch; justify-content: flex-end; background: rgba(0, 0, 0, 0.4); }
+    .sheet {
+      width: min(420px, 92vw); max-width: none; height: 100%;
+      border-radius: 0; border-left: 1px solid var(--border-default);
+      padding: var(--space-5) var(--space-5);
+      padding-bottom: var(--space-5);
+      overflow-y: auto;
+      animation: slide-in-right 300ms var(--ease-out) both;
+      touch-action: auto;
+    }
+    .sheet.snapping { transition: none; }
+    .drag-handle { display: none; }
+  }
+  @keyframes slide-in-right {
+    from { transform: translateX(100%); opacity: 0; }
+    to   { transform: translateX(0);    opacity: 1; }
+  }
 </style>
