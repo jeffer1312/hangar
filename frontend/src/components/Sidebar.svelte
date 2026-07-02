@@ -35,12 +35,20 @@
 
   interface Group { server: Server; sessions: SessionInfo[]; error: string | null }
   let groups = $state<Group[]>([]);
-  let collapsed = $state(false);
+  let collapsed = $state(false);   // pin: recolhido persistente (botao)
+  let hovering = $state(false);    // hover sobre a sidebar recolhida -> expande temporario
   let servers = $state(listServers());
   let activeId = $state(getActiveId());
   let scanning = $state(false);
   let showCreate = $state(false);
   let serversOpen = $state(false);
+
+  // Iniciais pro rail recolhido (identificar sem o nome). "claude-pocket"->CP, "jeffer1312"->JE.
+  function initials(name: string): string {
+    const parts = name.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    return (parts[0] ?? name).slice(0, 2).toUpperCase();
+  }
 
   const urgency: Record<State, number> = { awaiting_input: 0, working: 1, idle: 2, dead: 3 };
   // Ordena DENTRO de cada grupo: atividade desc, depois urgência do estado.
@@ -161,6 +169,10 @@
   let menuMsg = $state('');   // banner efemero pro resultado do git pull / erro do editor
   let flashTimer: ReturnType<typeof setTimeout> | undefined;
 
+  // Largura efetiva: pin aberto, OU hover, OU overlay preso a uma linha (menu/rename) ativo -> nao
+  // recolhe por baixo dele. Rail de iniciais so quando nada disso vale. (Apos menu/editing existirem.)
+  const expanded = $derived(!collapsed || hovering || menu !== null || editing !== null);
+
   function openMenu(e: MouseEvent, s: SessionInfo, serverId: string) {
     e.preventDefault();
     clearTimeout(pressTimer);   // cancela o long-press (senao dispararia rename junto)
@@ -280,7 +292,8 @@
   const activeServer = $derived(servers.find((s) => s.id === activeId) ?? servers[0] ?? null);
 </script>
 
-<aside class="sidebar" class:collapsed>
+<aside class="sidebar" class:collapsed={!expanded}
+  onmouseenter={() => (hovering = true)} onmouseleave={() => (hovering = false)}>
   <div class="side-top">
     <button class="icon-btn" onclick={() => (collapsed = !collapsed)} aria-label={collapsed ? 'Expandir' : 'Recolher'}>
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -288,17 +301,17 @@
         <line x1="9" y1="4" x2="9" y2="20"/>
       </svg>
     </button>
-    {#if !collapsed}<span class="side-brand">claude pocket</span>{/if}
+    {#if expanded}<span class="side-brand">claude pocket</span>{/if}
   </div>
 
   <button class="new-btn" onclick={() => (showCreate = true)} aria-label="Nova sessão">
     <span class="new-plus" aria-hidden="true">+</span>
-    {#if !collapsed}<span>Nova sessão</span>{/if}
+    {#if expanded}<span>Nova sessão</span>{/if}
   </button>
 
   <nav class="sess-list" aria-label="Sessões">
     {#each groups as g (g.server.id)}
-      {#if !collapsed}
+      {#if expanded}
         <div class="grp-head" title={g.error ? `${g.server.label}: ${g.error}` : g.server.label}>
           <span class="grp-dot" style="background: {serverColor(g.server.id)};" aria-hidden="true"></span>
           <span class="grp-label">{g.server.label}</span>
@@ -321,7 +334,7 @@
             <button
               class="sess-main"
               class:untracked={s.tracked === false}
-              title={collapsed ? s.name : (s.tracked === false ? 'claude aberto sem --session-id: transcript nao rastreavel' : 'Toque longo pra renomear')}
+              title={!expanded ? s.name : (s.tracked === false ? 'claude aberto sem --session-id: transcript nao rastreavel' : 'Toque longo pra renomear')}
               onpointerdown={() => pressStart(rowKey)}
               onpointerup={pressEnd}
               onpointerleave={pressEnd}
@@ -330,13 +343,16 @@
               onclick={() => onMainClick(s.name, g.server.id, s.tracked)}
             >
               <span class="lead" aria-hidden="true">
-                {#if s.state === 'working'}
+                {#if !expanded && s.state !== 'working'}
+                  <!-- Rail recolhido: iniciais tingidas pelo estado (identifica sem o nome). -->
+                  <span class="initials" style="color: {stateColors[s.state]}; border-color: {stateColors[s.state]}; background: {stateChipBg[s.state]};">{initials(s.name)}</span>
+                {:else if s.state === 'working'}
                   <Lottie data={pensando as any} size={18} loop autoplay />
                 {:else}
                   <Lottie data={pensando as any} size={18} loop={false} autoplay={false} frame={STATIC_FRAME} />
                 {/if}
               </span>
-              {#if !collapsed}
+              {#if expanded}
                 <span class="row-info">
                   <span class="name-row">
                     <span class="sess-name">{s.name}</span>
@@ -350,7 +366,7 @@
                 <span class="state-chip" style="color: {stateColors[s.state]}; background: {stateChipBg[s.state]};">{stateLabels[s.state]}</span>
               {/if}
             </button>
-            {#if !collapsed}
+            {#if expanded}
               <button class="sess-del" onclick={(e) => handleDelete(s.name, g.server.id, e)} aria-label={`Apagar ${s.name}`}>×</button>
             {/if}
           {/if}
@@ -359,7 +375,7 @@
     {/each}
   </nav>
 
-  {#if !collapsed}
+  {#if expanded}
     <div class="side-foot">
       {#if serversOpen}
         <div class="srv-menu">
@@ -496,6 +512,14 @@
     padding: 2px 7px; border-radius: var(--radius-full); white-space: nowrap;
   }
   .lead { width: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
+  /* Rail recolhido: iniciais precisam de mais espaco que o icone de 18px. */
+  .sidebar.collapsed .lead { width: auto; }
+  .initials {
+    width: 30px; height: 30px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
+    border: 1px solid;
+  }
   .sidebar.collapsed .sess-row { justify-content: center; }
   .sidebar.collapsed .sess-main { justify-content: center; padding: 0; }
   .sess-row.active .sess-main { color: var(--text-primary); }
