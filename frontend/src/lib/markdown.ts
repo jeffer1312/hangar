@@ -50,12 +50,18 @@ export function renderMarkdown(input: string): string {
   const lines = input.split('\n');
   const out: string[] = [];
   let i = 0;
+  // Linha em branco = quebra de PARAGRAFO: marca o proximo <p> com class="para" (respiro maior no
+  // CSS). Antes virava <br> solto e o espacamento saia INVERTIDO (linha simples 12px via p+p,
+  // paragrafo real 8px via br). Blocos (code/tabela/heading/lista/quote) resetam a marca — eles
+  // tem margem propria.
+  let parabreak = false;
 
   while (i < lines.length) {
     const line = lines[i];
 
     // ── Fenced code block ──────────────────────────────────────────────
     if (line.startsWith('```')) {
+      parabreak = false;
       const lang = line.slice(3).trim();
       const code: string[] = [];
       i++;
@@ -71,6 +77,7 @@ export function renderMarkdown(input: string): string {
 
     // ── Tabela GFM: linha com | seguida de separador |---|--- ──────────
     if (line.includes('|') && i + 1 < lines.length && _SEP_RE.test(lines[i + 1])) {
+      parabreak = false;
       const head = _cells(line);
       i += 2; // pula header + separador
       const body: string[][] = [];
@@ -89,6 +96,7 @@ export function renderMarkdown(input: string): string {
     // ── Heading ────────────────────────────────────────────────────────
     const h = line.match(/^(#{1,6})\s+(.+)$/);
     if (h) {
+      parabreak = false;
       const n = h[1].length;
       out.push(`<h${n}>${renderInline(escapeHtml(h[2]))}</h${n}>`);
       i++;
@@ -99,6 +107,7 @@ export function renderMarkdown(input: string): string {
     const ulm = line.match(/^\s*[-*+]\s+(.+)$/);
     const olm = line.match(/^\s*\d+[.)]\s+(.+)$/);
     if (ulm || olm) {
+      parabreak = false;
       const ordered = !!olm;
       const items: string[] = [];
       while (i < lines.length) {
@@ -115,6 +124,7 @@ export function renderMarkdown(input: string): string {
     // ── Blockquote ─────────────────────────────────────────────────────
     const bq = line.match(/^\s*>\s?(.*)$/);
     if (bq) {
+      parabreak = false;
       out.push(`<blockquote>${renderInline(escapeHtml(bq[1]))}</blockquote>`);
       i++;
       continue;
@@ -122,9 +132,10 @@ export function renderMarkdown(input: string): string {
 
     // ── Vazio / parágrafo ──────────────────────────────────────────────
     if (line.trim() === '') {
-      out.push('<br>');
+      parabreak = true;
     } else {
-      out.push(`<p>${renderInline(escapeHtml(line))}</p>`);
+      out.push(`<p${parabreak ? ' class="para"' : ''}>${renderInline(escapeHtml(line))}</p>`);
+      parabreak = false;
     }
     i++;
   }

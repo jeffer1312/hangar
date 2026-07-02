@@ -7,8 +7,9 @@
     event: ChatEvent;
     result?: ChatEvent | null;
     sessionName: string;
+    animate?: boolean;   // false = card de HISTORICO remontado (paginacao/janela): sem fade
   }
-  let { event, result = null, sessionName }: Props = $props();
+  let { event, result = null, sessionName, animate = true }: Props = $props();
 
   let expanded = $state(false);
 
@@ -67,6 +68,7 @@
 
 <div
   class="tool-row"
+  class:noanim={!animate}
   class:tool-row--error={phase === 'error'}
   role="button"
   tabindex="0"
@@ -102,6 +104,9 @@
     min-height: 32px;
     animation: bubble-in 180ms ease-out both;
   }
+
+  /* Historico remontado (paginacao/janela): entra parado. */
+  .tool-row.noanim { animation: none; }
 
   .row-line {
     display: flex;

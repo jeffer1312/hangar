@@ -73,18 +73,28 @@
     revealing = false;
   }
 
-  // Build a map of tool_use_id -> tool_result
-  const toolResults = $derived(
-    (() => {
-      const m = new Map<string, ChatEvent>();
-      for (const ev of events) {
-        if (ev.kind === 'tool_result' && ev.tool_use_id) {
-          m.set(ev.tool_use_id, ev);
-        }
-      }
-      return m;
-    })()
-  );
+  // tool_use_id -> tool_result, INCREMENTAL: `events` e append-only na pratica (replaces do replay
+  // repetem o mesmo conteudo; encolheu = reset//clear -> refaz do zero). Reconstruir o Map inteiro a
+  // cada evento era O(n) por mensagem. Devolve um wrapper NOVO por rodada (notifica o template; o
+  // Map interno persiste) — entradas de transcript antigo pos-reset ficam orfas no Map, inofensivas.
+  let _trMap = new Map<string, ChatEvent>();
+  let _trLen = 0;
+  const toolResults = $derived.by(() => {
+    if (events.length < _trLen) { _trMap = new Map(); _trLen = 0; }
+    for (let i = _trLen; i < events.length; i++) {
+      const ev = events[i];
+      if (ev.kind === 'tool_result' && ev.tool_use_id) _trMap.set(ev.tool_use_id, ev);
+    }
+    _trLen = events.length;
+    return { get: (id: string) => _trMap.get(id) };
+  });
+
+  // Ids presentes no MOMENTO do mount = historico. Bubble de historico NAO anima: a paginacao pra
+  // cima (revealOlder) e o re-ancorar da janela REMONTAM eventos antigos — sem isto, mensagem de
+  // ontem entrava com fade/slide como se fosse nova (historico "piscando"). So evento que CHEGA
+  // com a tela aberta anima. Snapshot do valor INICIAL de proposito (nao reativo).
+  // svelte-ignore state_referenced_locally
+  const histIds = new Set(events.map((e) => e.id));
 
   // Renderiza so tool_use (tool_result vira card) e SO dentro da janela [windowEnd-WINDOW, windowEnd].
   // Fatiamos o array CRU por indice ANTES de filtrar -> windowEnd/length sao indices crus; filtrar a
@@ -164,13 +174,13 @@
         {:else if img}
           <ImageBubble caption={img.caption} srcs={img.filenames.map((f) => uploadUrl(sessionName, f))} />
         {:else}
-          <UserBubble text={ev.text ?? ''} ts={ev.ts} />
+          <UserBubble text={ev.text ?? ''} ts={ev.ts} animate={!histIds.has(ev.id)} />
           {#if ev.text}{@const fr = parseFilePaths(ev.text)}{#if fr.length}<FileAttachment {sessionName} refs={fr} />{/if}{/if}
         {/if}
       {:else if ev.kind === 'assistant_msg' && ev.text}
-        <AssistantBubble text={ev.text} ts={ev.ts} {sessionName} />
+        <AssistantBubble text={ev.text} ts={ev.ts} {sessionName} animate={!histIds.has(ev.id)} />
       {:else if ev.kind === 'tool_use'}
-        <ToolCard event={ev} result={toolResults.get(ev.tool_use_id ?? '') ?? null} {sessionName} />
+        <ToolCard event={ev} result={toolResults.get(ev.tool_use_id ?? '') ?? null} {sessionName} animate={!histIds.has(ev.id)} />
       {/if}
     {/each}
 
@@ -261,9 +271,10 @@
     margin: 0 auto;
   }
 
-  /* Desktop: usa mais largura (aditivo; mobile fica nos 600px). */
+  /* Desktop: usa mais largura (aditivo; mobile fica nos 600px). min() suaviza o degrau: um tablet
+     de ~830px nao pula de 600 direto pra 1400 — cresce com a viewport ate o teto. */
   @media (min-width: 820px) {
-    .messages-inner { max-width: 1400px; }
+    .messages-inner { max-width: min(1400px, 94vw); }
   }
 
   /* Bubble enfileirado: ainda nao processado pelo Claude — atenuado ate solidificar. Precisa ser

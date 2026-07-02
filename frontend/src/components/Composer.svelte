@@ -466,9 +466,10 @@
     backdrop-filter: url(#liquid-glass) blur(16px) saturate(180%);
   }
 
-  /* Desktop: composer mais largo (aditivo; mobile fica nos 600px). */
+  /* Desktop: composer mais largo (aditivo; mobile fica nos 600px). min() acompanha a lista
+     (messages-inner): sem degrau 600->1400 em tablet. */
   @media (min-width: 820px) {
-    .composer-card { max-width: 1400px; }
+    .composer-card { max-width: min(1400px, 94vw); }
   }
 
   /* ── Textarea (transparente dentro do card) ─────────────────────────────── */
