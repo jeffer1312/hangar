@@ -116,6 +116,9 @@ class Settings(BaseSettings):
     # desligado (retorna 404). O push na main dispara /api/deploy/github-webhook -> valida a assinatura ->
     # start (nao-bloqueante) da unit systemd 'claude-pocket-deploy.service' (pull + build + restart).
     deploy_secret: str = ""
+    # CP_EDITOR: binario do editor pro "abrir pasta no editor" (menu da sessao). So-desktop: abre na
+    # maquina que roda o backend. Binario unico (sem args/shell) -> exec seguro com o cwd da sessao.
+    editor: str = "code"
 
 
 settings = Settings()

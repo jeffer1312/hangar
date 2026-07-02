@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { openSessionsStream, createSession, deleteSession, renameSession } from '../lib/api';
+  import { openSessionsStream, createSession, deleteSession, renameSession, openEditor, gitAction } from '../lib/api';
   import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor, clearCredentials } from '../lib/auth';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import QrScanner from './QrScanner.svelte';
@@ -156,6 +156,74 @@
     node.select();
   }
 
+  // ── Menu de contexto (botao direito) na linha da sessao — so desktop ──────────
+  let menu = $state<{ x: number; y: number; name: string; serverId: string; cwd: string } | null>(null);
+  let menuMsg = $state('');   // banner efemero pro resultado do git pull / erro do editor
+  let flashTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function openMenu(e: MouseEvent, s: SessionInfo, serverId: string) {
+    e.preventDefault();
+    clearTimeout(pressTimer);   // cancela o long-press (senao dispararia rename junto)
+    menu = { x: e.clientX, y: e.clientY, name: s.name, serverId, cwd: s.cwd ?? '' };
+  }
+  function closeMenu() { menu = null; }
+  function flash(msg: string) {
+    menuMsg = msg;
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => { menuMsg = ''; }, 4000);
+  }
+
+  // api.ts mira SEMPRE o server ativo -> aponta pro dono da sessao e restaura (igual handleDelete).
+  async function withServer<T>(serverId: string, fn: () => Promise<T>): Promise<T | undefined> {
+    const prev = getActiveId();
+    selectServer(serverId);
+    try { return await fn(); }
+    catch { return undefined; }
+    finally { if (prev && prev !== serverId) selectServer(prev); }
+  }
+
+  async function copyToClipboard(s: string) {
+    try { await navigator.clipboard.writeText(s); }
+    catch {  // LAN via HTTP puro: clipboard API off -> fallback execCommand.
+      const ta = document.createElement('textarea');
+      ta.value = s; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+    }
+  }
+
+  function menuRename() {
+    if (!menu) return;
+    editing = `${menu.serverId}::${menu.name}`;
+    editValue = menu.name;
+    closeMenu();
+  }
+  function menuCopyCwd() {
+    if (!menu) return;
+    copyToClipboard(menu.cwd);
+    closeMenu();
+  }
+  async function menuOpenEditor() {
+    if (!menu) return;
+    const { name, serverId } = menu;
+    closeMenu();
+    const r = await withServer(serverId, () => openEditor(name));
+    if (r === undefined) flash('editor falhou — ver CP_EDITOR / DISPLAY no backend');
+  }
+  async function menuGitPull() {
+    if (!menu) return;
+    const { name, serverId } = menu;
+    closeMenu();
+    flash('git pull…');
+    const r = await withServer(serverId, () => gitAction(name, 'pull'));
+    flash(r ? (r.output.trim().split('\n')[0] || 'pull ok') : 'git pull falhou (nao e repo? conflito?)');
+  }
+  async function menuDelete() {
+    if (!menu) return;
+    const { name, serverId } = menu;
+    closeMenu();
+    await withServer(serverId, () => deleteSession(name));
+  }
+
   // Rename inline de servidor no menu do rodape (mesma ideia do mobile). Label custom persistido.
   let editingServer = $state<string | null>(null);
   let editServerLabel = $state('');
@@ -254,7 +322,7 @@
               onpointerup={pressEnd}
               onpointerleave={pressEnd}
               onpointercancel={pressEnd}
-              oncontextmenu={(e) => e.preventDefault()}
+              oncontextmenu={(e) => openMenu(e, s, g.server.id)}
               onclick={() => onMainClick(s.name, g.server.id, s.tracked)}
             >
               <span class="lead" aria-hidden="true">
@@ -329,6 +397,25 @@
 
 <CreateSessionSheet open={showCreate} {servers} onClose={() => (showCreate = false)} onCreate={handleCreate} onOpenSession={onSelect} />
 {#if scanning}<QrScanner onScan={handleScan} onClose={() => (scanning = false)} />{/if}
+
+<svelte:window onkeydown={(e) => menu && e.key === 'Escape' && closeMenu()} />
+
+<!-- Menu de contexto (botao direito na sessao). Backdrop full-screen captura o clique-fora. -->
+{#if menu}
+  <div class="menu-backdrop" onclick={closeMenu} oncontextmenu={(e) => { e.preventDefault(); closeMenu(); }} role="presentation"></div>
+  <div class="ctx-menu" style="left: {menu.x}px; top: {menu.y}px;" role="menu">
+    <button type="button" role="menuitem" onclick={menuRename}>Renomear</button>
+    {#if menu.cwd}
+      <button type="button" role="menuitem" onclick={menuCopyCwd}>Copiar cwd</button>
+      <button type="button" role="menuitem" onclick={menuOpenEditor}>Abrir no editor</button>
+      <div class="ctx-sep"></div>
+      <button type="button" role="menuitem" onclick={menuGitPull}>Git pull</button>
+    {/if}
+    <div class="ctx-sep"></div>
+    <button type="button" role="menuitem" class="danger" onclick={menuDelete}>Excluir</button>
+  </div>
+{/if}
+{#if menuMsg}<div class="menu-toast" role="status">{menuMsg}</div>{/if}
 
 <style>
   .sidebar {
@@ -455,4 +542,31 @@
   .costs-btn:hover { background: var(--bg-hover); color: var(--accent); }
   .logout-btn { height: 34px; padding: 0 var(--space-2); text-align: left; justify-content: flex-start; color: var(--text-muted); font-size: var(--text-sm); border-radius: var(--radius-md); }
   .logout-btn:hover { background: var(--bg-hover); color: var(--error); }
+
+  /* ── Menu de contexto ── */
+  .menu-backdrop { position: fixed; inset: 0; z-index: 40; }
+  .ctx-menu {
+    position: fixed; z-index: 41; min-width: 168px; padding: 4px;
+    display: flex; flex-direction: column;
+    background: var(--bg-elevated); border: 1px solid var(--border-default);
+    border-radius: var(--radius-md); box-shadow: 0 8px 28px rgba(0,0,0,0.4);
+  }
+  .ctx-menu button {
+    height: 32px; padding: 0 10px; text-align: left; justify-content: flex-start;
+    color: var(--text-primary); font-size: var(--text-sm); border-radius: var(--radius-sm);
+  }
+  .ctx-menu button:hover { background: var(--bg-hover); }
+  .ctx-menu button.danger { color: var(--error); }
+  .ctx-menu button.danger:hover { background: rgba(255,69,58,0.12); }
+  .ctx-sep { height: 1px; margin: 4px 6px; background: var(--border-subtle); }
+
+  /* Banner efemero (resultado do git pull / erro do editor). */
+  .menu-toast {
+    position: fixed; z-index: 42; left: 50%; bottom: 20px; transform: translateX(-50%);
+    max-width: min(520px, 90vw); padding: 8px 14px;
+    background: var(--bg-elevated); border: 1px solid var(--border-default);
+    border-radius: var(--radius-md); box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+    color: var(--text-primary); font-size: var(--text-sm); font-family: var(--font-mono);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
 </style>
