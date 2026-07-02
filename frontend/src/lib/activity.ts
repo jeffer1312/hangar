@@ -56,10 +56,34 @@ export function createActivityFolder(): ActivityFolder {
   let todoWrite: TaskItem[] | null = null;
   let createSeq = 0;
   let agents: { id: string; kind: 'agent' | 'workflow'; description: string }[] = [];
+  // Agent em BACKGROUND: o tool_result chega NA HORA ("Async agent launched...") com o agentId no
+  // texto — o agente segue rodando e o fim real chega como <task-notification> numa user_msg.
+  // Sem tratar isso, todo agent background aparecia como terminado (painel dizia "Nada rolando"
+  // com agents ativos). Mapa: agentId (= task-id da notificação) -> tool_use_id do launch.
+  let bgAgent = new Map<string, string>();
 
   function push(e: ChatEvent): void {
     if (e.kind === 'tool_result' && e.tool_use_id) {
+      // tool_result sintetico do backend (transcript.py): <task-notification> virou "task:<id>".
+      // Resolve o launch background correspondente e marca como terminado.
+      if (e.tool_use_id.startsWith('task:')) {
+        const tuid = bgAgent.get(e.tool_use_id.slice(5));
+        if (tuid) resulted.add(tuid);
+        return;
+      }
+      const r = e.result ?? '';
+      if (/Async agent launched/i.test(r)) {
+        const m = r.match(/agentId:\s*([A-Za-z0-9_-]+)/);
+        if (m) bgAgent.set(m[1], e.tool_use_id);
+        return; // launch imediato: NAO marca resulted — o agente continua rodando
+      }
       resulted.add(e.tool_use_id);
+      return;
+    }
+    if (e.kind === 'user_msg' && e.text && e.text.includes('<task-notification>')) {
+      const m = e.text.match(/<task-id>([^<]+)<\/task-id>/);
+      const tuid = m ? bgAgent.get(m[1].trim()) : undefined;
+      if (tuid) resulted.add(tuid);
       return;
     }
     if (e.kind !== 'tool_use' || !e.tool_name) return;
@@ -142,6 +166,7 @@ export function createActivityFolder(): ActivityFolder {
     todoWrite = null;
     createSeq = 0;
     agents = [];
+    bgAgent = new Map();
     for (const e of events) push(e);
   }
 

@@ -25,6 +25,7 @@
   import { listServers, getActiveId } from '../lib/auth';
   import { createActivityFolder } from '../lib/activity';
   import type { ChatEvent, StateEvent, State, SessionInfo, AskQuestionPayload, AnswerItem } from '../lib/types';
+  import { stateLabels, stateColors } from '../lib/format';
 
   interface Props {
     sessionName: string;
@@ -185,12 +186,19 @@
   const crumbs = $derived(
     desktop ? { server: serverLabel, session: sessionName, branch: status?.branch, dirty: status?.dirty ?? false } : null
   );
-  const STATE_META: Record<State, { label: string; color: string }> = {
-    working: { label: 'em execução', color: 'var(--accent)' },
-    idle: { label: 'pronto', color: 'var(--success)' },
-    awaiting_input: { label: 'aguardando', color: 'var(--warning)' },
-    dead: { label: 'encerrado', color: 'var(--error)' },
-  };
+  // Anuncio de estado pra screen reader: a transicao que pede acao humana (awaiting_input) nao
+  // tinha NENHUM sinal nao-visual. role="status" (aria-live polite) num no visualmente escondido.
+  let stateAnnounce = $state('');
+  let prevAnnounced: State | null = null;
+  $effect(() => {
+    const s = currentState;
+    if (prevAnnounced !== null && s !== prevAnnounced) {
+      if (s === 'awaiting_input') stateAnnounce = `${sessionName} aguardando sua resposta`;
+      else if (s === 'dead') stateAnnounce = `Sessão ${sessionName} encerrada`;
+      else stateAnnounce = '';
+    }
+    prevAnnounced = s;
+  });
   // Painel de atividade: tarefas (TaskCreate/Update) + agentes rodando. Fold INCREMENTAL: o handler
   // do SSE dá push evento a evento — deriveActivity(events) como $derived re-varria o histórico
   // INTEIRO a cada mensagem (O(n) por evento em sessão longa).
@@ -653,8 +661,9 @@
 <svelte:window onkeydown={onGlobalKey} />
 
 <div class="chat-screen" bind:this={screenEl} style:--nav-h={navH + 'px'}>
+  <div class="sr-only" role="status">{stateAnnounce}</div>
   <div class="navbar-mount" bind:this={navEl}>
-    <NavBar title={sessionName} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? STATE_META[currentState].label : undefined} stateColor={STATE_META[currentState].color} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} working={currentState === 'working'} />
+    <NavBar title={sessionName} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} working={currentState === 'working'} />
   </div>
 
   {#if loading}

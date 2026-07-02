@@ -5,12 +5,11 @@
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import QrScanner from './QrScanner.svelte';
   import type { SessionInfo, State } from '../lib/types';
+  import { stateLabels, stateColors } from '../lib/format';
   import type { Server } from '../lib/auth';
   import Lottie from './Lottie.svelte';
   import pensando from '../lib/lottie/pensando.json';
 
-  const stateLabels: Record<State, string> = { working: 'exec', idle: 'pronto', awaiting_input: 'aguardando', dead: 'encerrado' };
-  const stateColors: Record<State, string> = { working: 'var(--accent)', idle: 'var(--success)', awaiting_input: 'var(--warning)', dead: 'var(--error)' };
   const stateChipBg: Record<State, string> = {
     working: 'var(--accent-dim)', idle: 'rgba(52,199,89,0.12)',
     awaiting_input: 'rgba(255,159,10,0.14)', dead: 'rgba(255,69,58,0.12)',
@@ -320,7 +319,17 @@
     selectServer(id);
     window.location.reload();
   }
+  // Remover servidor pede confirmacao (com o nome) — o × de um toque removia na hora e, se fosse o
+  // unico servidor, deslogava junto. O remove real so acontece no doDropServer.
+  let confirmSrv = $state<{ id: string; label: string } | null>(null);
   function dropServer(id: string) {
+    const s = servers.find((x) => x.id === id);
+    confirmSrv = { id, label: s?.label ?? id };
+  }
+  function doDropServer() {
+    if (!confirmSrv) return;
+    const id = confirmSrv.id;
+    confirmSrv = null;
     const was = id === getActiveId();
     removeServer(id);
     servers = listServers();
@@ -427,7 +436,7 @@
               {/if}
             </button>
             {#if expanded}
-              <button class="sess-del" onclick={(e) => handleDelete(s.name, g.server.id, e)} aria-label={`Apagar ${s.name}`}>×</button>
+              <button class="sess-del" onclick={(e) => handleDelete(s.name, g.server.id, e)} aria-label={`Excluir ${s.name}`}>×</button>
             {/if}
           {/if}
         </div>
@@ -485,7 +494,7 @@
 <CreateSessionSheet open={showCreate} {servers} onClose={() => (showCreate = false)} onCreate={handleCreate} onOpenSession={onSelect} />
 {#if scanning}<QrScanner onScan={handleScan} onClose={() => (scanning = false)} />{/if}
 
-<svelte:window onkeydown={(e) => { if (e.key === 'Escape') { if (menu) closeMenu(); else if (confirmDel) confirmDel = null; } }} />
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape') { if (menu) closeMenu(); else if (confirmDel) confirmDel = null; else if (confirmSrv) confirmSrv = null; } }} />
 
 <!-- Menu de contexto (botao direito na sessao). Backdrop full-screen captura o clique-fora. -->
 {#if menu}
@@ -522,6 +531,19 @@
   </div>
 {/if}
 {#if menuMsg}<div class="menu-toast" role="status">{menuMsg}</div>{/if}
+
+<!-- Confirmar remocao de servidor (com o nome) — mesmo padrao do excluir sessao. -->
+{#if confirmSrv}
+  <div class="confirm-backdrop" onclick={() => (confirmSrv = null)} role="presentation"></div>
+  <div class="confirm-card" role="alertdialog" aria-modal="true" aria-label="Confirmar remoção de servidor">
+    <p class="confirm-title">Remover este servidor?</p>
+    <p class="confirm-name">{confirmSrv.label}</p>
+    <div class="confirm-actions">
+      <button type="button" class="c-btn" onclick={() => (confirmSrv = null)}>Cancelar</button>
+      <button type="button" class="c-btn c-danger" onclick={doDropServer}>Remover</button>
+    </div>
+  </div>
+{/if}
 
 <!-- Confirmar exclusao (com o nome) — modal centrado, so desktop (sidebar e desktop-only). -->
 {#if confirmDel}
