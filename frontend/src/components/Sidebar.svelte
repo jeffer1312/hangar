@@ -208,16 +208,18 @@
   function closeMenu() { menu = null; branchView = null; }
 
   // Submenu "Trocar branch" (2a pagina do menu, evita flyout). branchView != null = mostrando a lista.
-  let branchView = $state<{ list: string[]; current: string | null } | null>(null);
+  let branchView = $state<{ list: string[]; current: string | null; dirty: boolean } | null>(null);
+  // Confirmacao de troca com working tree suja (switch carrega mudancas nao-conflitantes pra outra branch).
+  let confirmBranch = $state<{ name: string; serverId: string; branch: string } | null>(null);
   let branchLoading = $state(false);
   async function menuBranches() {
     if (!menu) return;
     const { name, serverId } = menu;
-    branchView = { list: [], current: null };
+    branchView = { list: [], current: null, dirty: false };
     branchLoading = true;
     try {
       const info = await withServer(serverId, () => getBranches(name));
-      branchView = { list: info.branches, current: info.current };
+      branchView = { list: info.branches, current: info.current, dirty: info.dirty ?? false };
     } catch (e) {
       branchView = null;
       flash(`branches: ${errMsg(e)}`);
@@ -229,8 +231,18 @@
     if (!menu) return;
     const { name, serverId } = menu;
     const cur = branchView?.current;
+    const dirty = branchView?.dirty ?? false;
+    if (branch === cur) { closeMenu(); return; }
+    // Tree suja: switch levaria as mudancas nao-commitadas pra outra branch -> confirma antes.
+    if (dirty) {
+      confirmBranch = { name, serverId, branch };
+      closeMenu();
+      return;
+    }
     closeMenu();
-    if (branch === cur) return;
+    await doCheckout(name, serverId, branch);
+  }
+  async function doCheckout(name: string, serverId: string, branch: string) {
     flash(`checkout ${branch}…`);
     try {
       await withServer(serverId, () => checkoutBranch(name, branch));
@@ -356,6 +368,8 @@
     clearCredentials();
     onLogout();
   }
+  // Sair pede confirmacao (recuperacao exige o token/QR de novo).
+  let confirmLogout = $state(false);
 
   const activeServer = $derived(servers.find((s) => s.id === activeId) ?? servers[0] ?? null);
 </script>
@@ -479,7 +493,7 @@
         <span class="srv-caret" aria-hidden="true">⌃</span>
       </button>
       <button class="costs-btn" onclick={() => (window.location.hash = '#/costs')}>Custos</button>
-      <button class="logout-btn" onclick={logout}>Sair</button>
+      <button class="logout-btn" onclick={() => (confirmLogout = true)}>Sair</button>
     </div>
   {/if}
 
@@ -494,7 +508,7 @@
 <CreateSessionSheet open={showCreate} {servers} onClose={() => (showCreate = false)} onCreate={handleCreate} onOpenSession={onSelect} />
 {#if scanning}<QrScanner onScan={handleScan} onClose={() => (scanning = false)} />{/if}
 
-<svelte:window onkeydown={(e) => { if (e.key === 'Escape') { if (menu) closeMenu(); else if (confirmDel) confirmDel = null; else if (confirmSrv) confirmSrv = null; } }} />
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape') { if (menu) closeMenu(); else if (confirmDel) confirmDel = null; else if (confirmSrv) confirmSrv = null; else if (confirmBranch) confirmBranch = null; else if (confirmLogout) confirmLogout = false; } }} />
 
 <!-- Menu de contexto (botao direito na sessao). Backdrop full-screen captura o clique-fora. -->
 {#if menu}
@@ -554,6 +568,33 @@
     <div class="confirm-actions">
       <button type="button" class="c-btn" onclick={() => (confirmDel = null)}>Cancelar</button>
       <button type="button" class="c-btn c-danger" onclick={doDelete}>Excluir</button>
+    </div>
+  </div>
+{/if}
+
+<!-- Confirmar troca de branch com working tree suja (switch carrega mudancas nao-commitadas). -->
+{#if confirmBranch}
+  <div class="confirm-backdrop" onclick={() => (confirmBranch = null)} role="presentation"></div>
+  <div class="confirm-card" role="alertdialog" aria-modal="true" aria-label="Confirmar troca de branch">
+    <p class="confirm-title">Trocar de branch com mudanças não salvas?</p>
+    <p class="confirm-name">→ {confirmBranch.branch}</p>
+    <p class="confirm-hint">Há alterações não commitadas. O git leva elas junto pra branch nova (ou recusa se conflitar).</p>
+    <div class="confirm-actions">
+      <button type="button" class="c-btn" onclick={() => (confirmBranch = null)}>Cancelar</button>
+      <button type="button" class="c-btn c-danger" onclick={() => { const c = confirmBranch; confirmBranch = null; if (c) doCheckout(c.name, c.serverId, c.branch); }}>Trocar</button>
+    </div>
+  </div>
+{/if}
+
+<!-- Confirmar saida (recuperacao exige token/QR de novo). -->
+{#if confirmLogout}
+  <div class="confirm-backdrop" onclick={() => (confirmLogout = false)} role="presentation"></div>
+  <div class="confirm-card" role="alertdialog" aria-modal="true" aria-label="Confirmar saída">
+    <p class="confirm-title">Sair do app?</p>
+    <p class="confirm-hint">Você vai precisar do token (QR ou digitado) pra entrar de novo — e ele pode estar no PC.</p>
+    <div class="confirm-actions">
+      <button type="button" class="c-btn" onclick={() => (confirmLogout = false)}>Cancelar</button>
+      <button type="button" class="c-btn c-danger" onclick={() => { confirmLogout = false; logout(); }}>Sair</button>
     </div>
   </div>
 {/if}
@@ -743,6 +784,7 @@
     to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
   }
   .confirm-title { font-size: var(--text-base); font-weight: 600; color: var(--text-primary); }
+  .confirm-hint { font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.5; }
   .confirm-name {
     font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-secondary);
     padding: var(--space-2) var(--space-3); background: var(--bg-base);

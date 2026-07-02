@@ -201,7 +201,17 @@
     onNavigateToChat(s.name);
   }
 
-  async function handleDelete(s: AggSession) {
+  // Excluir sessao pede confirmacao (com o nome + estado) — a superficie de toque no mobile e imprecisa,
+  // e um toque acidental matava o tmux vivo na hora. O delete real so acontece no doDelete (paridade com
+  // o desktop, que ja confirmava).
+  let confirmDel = $state<AggSession | null>(null);
+  function handleDelete(s: AggSession) {
+    confirmDel = s;
+  }
+  async function doDelete() {
+    if (!confirmDel) return;
+    const s = confirmDel;
+    confirmDel = null;
     selectServer(s.serverId);
     await deleteSession(s.name);
     sessions = sessions.filter((x) => !(x.serverId === s.serverId && x.name === s.name));
@@ -243,6 +253,9 @@
     clearCredentials();
     onLogout();
   }
+  // Sair pelo botao pede confirmacao (recuperacao exige o token/QR de novo, e o token pode estar no PC).
+  // O handleLogout cru continua sendo chamado direto quando o ultimo servidor e removido (ja confirmado la).
+  let confirmLogout = $state(false);
 
   // Abre o menu recarregando a lista de servidores (pode ter mudado desde a última abertura).
   function openMenu() {
@@ -380,7 +393,7 @@
         <button class="menu-item" role="menuitem" onclick={() => { showMenu = false; window.location.hash = '#/archive'; }}>
           Arquivo
         </button>
-        <button class="menu-item menu-item--danger" role="menuitem" onclick={handleLogout}>
+        <button class="menu-item menu-item--danger" role="menuitem" onclick={() => { showMenu = false; confirmLogout = true; }}>
           Sair
         </button>
       </div>
@@ -579,6 +592,30 @@
   {#if scanning}
     <QrScanner onScan={handleScanServer} onClose={() => (scanning = false)} />
   {/if}
+
+  <ConfirmSheet
+    open={confirmDel !== null}
+    title="Excluir esta sessão?"
+    message={confirmDel
+      ? confirmDel.state === 'working'
+        ? `${confirmDel.name} está em execução — excluir encerra o processo do tmux e perde o que estiver rodando.`
+        : confirmDel.name
+      : null}
+    confirmLabel="Excluir"
+    danger
+    onConfirm={doDelete}
+    onClose={() => (confirmDel = null)}
+  />
+
+  <ConfirmSheet
+    open={confirmLogout}
+    title="Sair do app?"
+    message="Você vai precisar do token (QR ou digitado) pra entrar de novo — e ele pode estar no PC."
+    confirmLabel="Sair"
+    danger
+    onConfirm={() => { confirmLogout = false; handleLogout(); }}
+    onClose={() => (confirmLogout = false)}
+  />
 
   <ConfirmSheet
     open={confirmSrv !== null}

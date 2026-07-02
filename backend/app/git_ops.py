@@ -29,14 +29,17 @@ def _run(cwd: str, *args: str) -> subprocess.CompletedProcess:
 
 
 def list_branches(cwd: str) -> dict:
-    """Branches locais + a atual."""
+    """Branches locais + a atual + se a working tree esta suja (pro front avisar antes do checkout:
+    `git switch` carrega mudancas nao-conflitantes pra outra branch silenciosamente)."""
     p = _run(cwd, "branch", "--format=%(refname:short)")
     if p.returncode != 0:
         raise GitError(409, (p.stderr or "git branch falhou").strip() or "git branch falhou")
     branches = [b.strip() for b in p.stdout.splitlines() if b.strip()]
     cur = _run(cwd, "rev-parse", "--abbrev-ref", "HEAD")
     current = cur.stdout.strip() if cur.returncode == 0 else None
-    return {"current": current, "branches": branches}
+    st = _run(cwd, "status", "--porcelain")
+    dirty = st.returncode == 0 and bool(st.stdout.strip())
+    return {"current": current, "branches": branches, "dirty": dirty}
 
 
 def switch_branch(cwd: str, branch: str) -> dict:
