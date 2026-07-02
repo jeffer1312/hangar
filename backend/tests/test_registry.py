@@ -249,6 +249,44 @@ def test_resolve_fd_lock_survives_transient_fd_absence(tmp_path):
     assert tracked
 
 
+def test_resolve_marker_unsticks_fd_lock_after_clear(tmp_path):
+    # REGRESSAO: /clear rola transcript NOVO escrito em append-and-close (fd quase nunca aberto no poll)
+    # e cujo session-id novo NUNCA vai pro cmdline (congela no boot). O fd-lock ficava preso no transcript
+    # PRE-clear e o chat nao migrava (nem limpava, nem recebia msg nova). O marcador do hook
+    # (boot_id -> transcript ativo) deve DESTRAVAR o cache e resolver pro transcript pos-clear.
+    import json as _json
+    projects = tmp_path / "projects"
+    proj = projects / "-home-u-p"
+    proj.mkdir(parents=True)
+    boot_id = _UUID  # session-id do cmdline (congela no boot)
+    pre = str(proj / "aaaa0000-0000-0000-0000-000000000000.jsonl")   # transcript PRE-clear (fd-locked)
+    post = proj / "bbbb1111-0000-0000-0000-000000000000.jsonl"       # transcript POS-clear (marcador)
+    post.write_text("{}")
+    mk = tmp_path / ".claude-pocket-active"   # config_base = projects.parent = tmp_path
+    mk.mkdir()
+    reg = SessionRegistry(projects_dir=projects)
+    # poll 1: fd ABERTO no transcript PRE-clear -> trava em `pre`
+    with patch.object(registry.tmux, "pane_pid", return_value=1), \
+         patch.object(registry, "_descendant_pids", return_value=[1]), \
+         patch.object(registry, "_cmdline", return_value=f"claude --session-id {boot_id}"), \
+         patch.object(registry, "_config_dir_of", return_value=None), \
+         patch.object(registry, "_open_jsonl", return_value=pre):
+        j1, _ = reg.resolve_tracked("cc", "/home/u/p")
+    assert j1 == pre
+    assert "cc" in SessionRegistry._fd_locked
+    # /clear: o hook grava o marcador boot_id -> transcript POS-clear
+    (mk / f"{boot_id}.json").write_text(_json.dumps({"jsonl": str(post), "ts": 2.0}))
+    # poll 2: fd AUSENTE (append-and-close) -> o marcador destrava o lock e migra pro POS-clear
+    with patch.object(registry.tmux, "pane_pid", return_value=1), \
+         patch.object(registry, "_descendant_pids", return_value=[1]), \
+         patch.object(registry, "_cmdline", return_value=f"claude --session-id {boot_id}"), \
+         patch.object(registry, "_config_dir_of", return_value=None), \
+         patch.object(registry, "_open_jsonl", return_value=None):
+        j2, tracked = reg.resolve_tracked("cc", "/home/u/p")
+    assert j2 == str(post)   # migrou pro pos-clear, NAO ficou preso no pre
+    assert tracked
+
+
 def test_resolve_jsonl_picks_newest(tmp_path):
     proj = tmp_path / "-home-u-p"
     proj.mkdir()
