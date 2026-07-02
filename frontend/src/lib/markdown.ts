@@ -71,7 +71,8 @@ export function renderMarkdown(input: string): string {
       }
       i++; // pula o ``` de fechamento (se houver)
       const langAttr = lang ? ` class="language-${escapeHtml(lang)}"` : '';
-      out.push(`<pre><code${langAttr}>${escapeHtml(code.join('\n'))}</code></pre>`);
+      // Wrapper + botao copiar (handler delegado no AssistantBubble: le o textContent do <pre>).
+      out.push(`<div class="code-block"><button class="copy-btn" type="button" aria-label="Copiar código"></button><pre><code${langAttr}>${escapeHtml(code.join('\n'))}</code></pre></div>`);
       continue;
     }
 

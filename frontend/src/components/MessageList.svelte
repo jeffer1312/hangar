@@ -277,9 +277,10 @@
   }
 
   /* Desktop: usa mais largura (aditivo; mobile fica nos 600px). min() suaviza o degrau: um tablet
-     de ~830px nao pula de 600 direto pra 1400 — cresce com a viewport ate o teto. */
+     de ~830px nao pula de 600 direto pra 1600 — cresce com a viewport ate o teto. 96vw = margem
+     minima nas laterais; em tela ultrawide a coluna acompanha em vez de deixar espaco morto. */
   @media (min-width: 820px) {
-    .messages-inner { max-width: min(1400px, 94vw); }
+    .messages-inner { max-width: min(1600px, 96vw); }
   }
 
   /* Bubble enfileirado: ainda nao processado pelo Claude — atenuado ate solidificar. Precisa ser
