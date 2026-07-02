@@ -23,3 +23,18 @@ docs/superpowers/**/*.html
 # local backend log
 server.log
 backend/server.log
+
+# Test coverage
+backend/.coverage
+
+# Design mocks / experimentos locais (nao fazem parte do app)
+frontend/animation-plan.*
+frontend/public/lottie/
+frontend/public/lottie-mock.html
+frontend/public/lottie2.html
+frontend/public/motion-mock.html
+frontend/public/stitch/
+lottie-preview.html
+splash-preview.html
+robot-icon.png
+analysis-checkpoints.md
