@@ -286,6 +286,10 @@ class PromptQueue:
                 seen.add(eid)
                 if min_ts and float(entry.get("ts") or 0.0) < min_ts:
                     continue
+                # CONFIRMADA = texto comprovadamente no transcript (reconcile): a bolha real existe
+                # -> re-emitir o eco so duplicava (bolha antiga "solta" no fim a cada reconexao).
+                if entry.get("confirmed"):
+                    continue
                 evs.append(_entry_event(entry))
             return evs
 
@@ -344,6 +348,8 @@ def merged_history(name: str, jsonl: str) -> list[ChatEvent]:
 
     # Entradas da fila entram com tiebreaker alto -> caem DEPOIS de eventos do transcript de mesmo ts.
     for entry in PromptQueue(name).load():
+        if entry.get("confirmed"):
+            continue  # comprovadamente no transcript (reconcile) -> a bolha real ja cobre
         text = (entry.get("text") or "").strip()
         if not text:
             continue
