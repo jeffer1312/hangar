@@ -94,12 +94,17 @@ def committed_user_lines(jsonl: str) -> set[str]:
     out: set[str] = set()
 
     def add(t: str) -> None:
-        t = t.strip()
-        if not t:
-            return
-        out.add(t)
-        for ln in t.split("\n"):
-            out.add(ln.strip())
+        # Indexa a variante CRUA e a SEM marcador de anexo: a msg do app e digitada COM o
+        # "📎 imagem: <path>" na mesma linha (o transcript guarda a linha inteira), mas o reconcile
+        # compara o texto podado — sem indexar as DUAS variantes, msg COM ANEXO nunca confirmava
+        # e era redigitada (as duplicatas so-com-imagem de 2026-07-02).
+        for variant in (t, _strip_attach(t)):
+            variant = variant.strip()
+            if not variant:
+                continue
+            out.add(variant)
+            for ln in variant.split("\n"):
+                out.add(ln.strip())
 
     try:
         with open(jsonl, encoding="utf-8", errors="replace") as fh:
@@ -226,9 +231,15 @@ class PromptQueue:
                     continue
                 if now - ts < grace:
                     continue                # recente demais: o transcript pode nao ter gravado ainda
-                text = _strip_attach(str(r.get("text") or "")).strip()
-                lines = {text, *(ln.strip() for ln in text.split("\n"))}
-                if not text or lines & committed:
+                # Compara CRU e podado (espelha o lado do committed_user_lines): so um dos lados
+                # podado deixava msg com anexo orfa -> requeue indevido.
+                text_raw = str(r.get("text") or "").strip()
+                text = _strip_attach(text_raw).strip()
+                lines = {text_raw, text,
+                         *(ln.strip() for ln in text_raw.split("\n")),
+                         *(ln.strip() for ln in text.split("\n"))}
+                lines.discard("")
+                if not text_raw or lines & committed:
                     r["confirmed"] = True
                 elif int(r.get("attempts") or 0) >= max_attempts:
                     r["confirmed"] = True

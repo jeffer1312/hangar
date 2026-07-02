@@ -193,3 +193,20 @@ def test_merged_history_skips_confirmed_entries(tmp_path):
         {"id": "c1", "text": "ja coberta", "ts": 900.0, "delivered": True, "confirmed": True}
     ) + "\n", encoding="utf-8")
     assert not any(e.id == "queued-c1" for e in pqueue.merged_history("s", str(j)))
+
+
+def test_reconcile_confirms_attachment_message_against_raw_line(tmp_path):
+    # Msg do app COM anexo e digitada com o marcador na MESMA linha; o transcript guarda a linha
+    # inteira. A comparacao casa raw-com-raw E podado-com-podado — a versao que podava so o lado
+    # da fila deixava msg com imagem orfa pra sempre -> redigitada (duplicatas so-com-anexo).
+    import json
+    j = tmp_path / "t.jsonl"
+    full = "olha esse bug — 📎 imagem: /up/x.png"
+    j.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": full}}) + "\n",
+                 encoding="utf-8")
+    q = PromptQueue("s")
+    q.path.write_text(json.dumps({"id": "a1", "text": full, "ts": 900.0, "delivered": True}) + "\n",
+                      encoding="utf-8")
+    committed = pqueue.committed_user_lines(str(j))
+    assert q.reconcile_delivered(committed, min_ts=100.0, now=1000.0) == []   # confirma, nao requeua
+    assert q.load()[0]["confirmed"] is True
