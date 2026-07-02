@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from app.transcript import TranscriptTailer
 from app.state import StateMonitor
 from app.pqueue import PromptQueue, _transcript_start_ts
@@ -43,6 +44,25 @@ _registry = SessionRegistry()
 # Instancia stateless pro stream de lista (separada do _registry do jsonl_watcher pra clareza).
 _list_registry = SessionRegistry()
 
+# Snapshot compartilhado de registry.list() pros LOOPS do SSE (jsonl_watcher de cada conexao de chat
+# + list_events): cada um re-varria o /proc inteiro + tmux no proprio ciclo -> N conexoes = N
+# varreduras completas a cada ~2s. Com TTL < poll dos consumidores, vira no maximo ~1 varredura/s no
+# total, sem atraso percebido. Endpoints request/response seguem chamando registry.list() fresco.
+# ponytail: check-then-set sem lock (dois callers no vencimento do TTL = 2 scans, igual a hoje);
+# lock de asyncio aqui arriscaria bind em event loop errado nos testes.
+_LIST_TTL = 1.0
+_list_snap: dict = {"t": 0.0, "infos": None}
+
+
+async def _cached_list():
+    now = time.monotonic()
+    if _list_snap["infos"] is not None and now - _list_snap["t"] < _LIST_TTL:
+        return _list_snap["infos"]
+    infos = await asyncio.to_thread(_registry.list)
+    _list_snap["infos"] = infos
+    _list_snap["t"] = time.monotonic()
+    return infos
+
 
 async def list_events(poll: float = 1.5, ping_every: int = 7):
     """SSE da LISTA de sessoes. Emite o snapshot de list_with_state() na conexao e, num loop de
@@ -52,7 +72,10 @@ async def list_events(poll: float = 1.5, ping_every: int = 7):
     last = None
     ticks = 0
     while True:
-        infos = await _list_registry.list_with_state()
+        # Resolucao via snapshot compartilhado (copias: list_with_state MUTA state/last_activity e o
+        # cache e compartilhado com os jsonl_watchers); a classificacao de estado roda fresca.
+        snap = [i.model_copy() for i in await _cached_list()]
+        infos = await _list_registry.list_with_state(snap)
         data = json.dumps([i.model_dump(mode="json") for i in infos], ensure_ascii=False)
         # Dedup IGNORA last_activity: e o mtime do jsonl (float sub-segundo) que muda a CADA escrita
         # de uma sessao ativa -> sem isto a lista inteira re-emitia a cada poll (~1.5s) sem nada
@@ -150,7 +173,7 @@ async def merged_events(name: str, jsonl: str):
         while True:
             await asyncio.sleep(2)
             try:
-                live = next((s.jsonl for s in await asyncio.to_thread(_registry.list) if s.name == name), None)
+                live = next((s.jsonl for s in await _cached_list() if s.name == name), None)
             except Exception:
                 live = None
             if not live or live == current:
