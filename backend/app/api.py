@@ -3,6 +3,7 @@ import logging
 import mimetypes
 import os
 import re
+import subprocess
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -577,6 +578,20 @@ def git(name: str, body: GitActionBody):
         return git_action(_session_cwd(name), body.action)
     except GitError as e:
         raise HTTPException(e.status, e.detail)
+
+
+@app.post("/api/sessions/{name}/open-editor", dependencies=[Depends(require_auth)])
+def open_editor(name: str):
+    # So-desktop: abre o editor na MAQUINA do backend, no cwd da sessao. Binario fixo (settings.editor,
+    # nao input do cliente) + arg unico validado -> sem shell, sem injecao. GUI precisa do DISPLAY/
+    # WAYLAND_DISPLAY do backend (sessao grafica); sob systemd headless pode nao abrir -> 500.
+    cwd = _session_cwd(name)
+    try:
+        subprocess.Popen([settings.editor, cwd],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        raise HTTPException(500, f"editor '{settings.editor}' falhou: {e}")
+    return {"ok": True}
 
 
 @app.get("/api/sessions/{name}/transcript-image/{uuid}/{idx}", dependencies=[Depends(require_auth)])
