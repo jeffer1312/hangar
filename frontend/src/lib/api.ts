@@ -208,6 +208,14 @@ export async function scanDir(root: string, path?: string): Promise<FsScanResult
 }
 
 // ── Arquivo: conversas mortas (transcripts sem sessão tmux viva) ──────────────
+// Navegação pasta-primeiro: nível 1 = pastas (agregado barato), nível 2 = conversas da pasta.
+export interface ArchiveFolder {
+  project: string;
+  cwd: string | null;
+  count: number;
+  mtime: number;
+}
+
 export interface ArchiveEntry {
   project: string;
   cwd: string | null;
@@ -217,8 +225,12 @@ export interface ArchiveEntry {
   live: boolean;
 }
 
-export function getArchive(): Promise<ArchiveEntry[]> {
-  return apiFetch<ArchiveEntry[]>('/api/archive');
+export function getArchive(): Promise<ArchiveFolder[]> {
+  return apiFetch<ArchiveFolder[]>('/api/archive');
+}
+
+export function getArchiveFolder(project: string): Promise<ArchiveEntry[]> {
+  return apiFetch<ArchiveEntry[]>(`/api/archive/${encodeURIComponent(project)}`);
 }
 
 export function getArchiveHistory(project: string, sid: string): Promise<ChatEvent[]> {

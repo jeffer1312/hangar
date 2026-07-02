@@ -29,11 +29,13 @@
     onAskClose?: () => void;
     // Override da URL de imagem do transcript (ex: arquivo de conversas mortas, que nao tem sessao).
     imageUrl?: (id: string, idx: number) => string;
+    // Ids de assistant_msg que substituiram um preview em tela: montam SEM animacao (swap invisivel).
+    swapIds?: Set<string>;
   }
 
   let {
     events, stateEvent, pending, sessionName, dockH, preview = '', onSelectOption, onCancel,
-    askOpen = false, askPayload = null, onAnswer, onAskClose, imageUrl
+    askOpen = false, askPayload = null, onAnswer, onAskClose, imageUrl, swapIds
   }: Props = $props();
 
   let listEl: HTMLElement | undefined = $state();
@@ -180,7 +182,8 @@
           {#if ev.text}{@const fr = parseFilePaths(ev.text)}{#if fr.length}<FileAttachment {sessionName} refs={fr} />{/if}{/if}
         {/if}
       {:else if ev.kind === 'assistant_msg' && ev.text}
-        <AssistantBubble text={ev.text} ts={ev.ts} {sessionName} animate={!histIds.has(ev.id)} />
+        <AssistantBubble text={ev.text} ts={ev.ts} {sessionName}
+                         animate={!histIds.has(ev.id) && !swapIds?.has(ev.id)} />
       {:else if ev.kind === 'tool_use'}
         <ToolCard event={ev} result={toolResults.get(ev.tool_use_id ?? '') ?? null} {sessionName} animate={!histIds.has(ev.id)} />
       {/if}

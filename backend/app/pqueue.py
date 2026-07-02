@@ -75,6 +75,36 @@ def _transcript_start_ts(jsonl: str) -> float:
     return 0.0
 
 
+# Marcador de anexo no texto do app ("legenda — 📎 imagem: <path>"): o transcript grava SO a
+# legenda -> tirar antes de casar com o transcript (senao msg com anexo nunca confirmaria).
+_ATTACH_RE = re.compile(r"(?:\s*—\s*)?📎\s*(?:imagem|arquivo):.*$", re.S)
+
+
+def _strip_attach(text: str) -> str:
+    return _ATTACH_RE.sub("", text)
+
+
+def committed_user_lines(jsonl: str) -> set[str]:
+    """Textos de user_msg do transcript (inteiros + por linha), pra confirmar entregas da fila."""
+    out: set[str] = set()
+    try:
+        with open(jsonl, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    obj = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                for ev in parse_obj(obj):
+                    if ev.kind == "user_msg" and ev.text:
+                        t = ev.text.strip()
+                        out.add(t)
+                        for ln in t.split("\n"):
+                            out.add(ln.strip())
+    except OSError:
+        pass
+    return out
+
+
 class PromptQueue:
     """Fila duravel de prompts por sessao (sidecar JSONL). Registra cada envio pra que msgs
     enfileiradas (mandadas com o Claude trabalhando) — que o Claude Code NEM sempre grava no
@@ -138,6 +168,55 @@ class PromptQueue:
             else:
                 return
             self._write_atomic(rows)
+
+    def prune_before(self, min_ts: float) -> None:
+        # Entradas de sessao ANTERIOR (ts < inicio do transcript atual) nunca mais casam nem drenam
+        # — so acumulavam lixo e mantinham o cheap-check do drain quente pra sempre. Remove.
+        if min_ts <= 0:
+            return
+        with _append_lock:
+            rows = self.load()
+            kept = [r for r in rows if float(r.get("ts") or 0.0) >= min_ts]
+            if len(kept) != len(rows):
+                self._write_atomic(kept)
+
+    def reconcile_delivered(self, committed: set[str], min_ts: float, now: float,
+                            grace: float = 8.0, max_attempts: int = 2) -> list[dict]:
+        """Confirma entregas contra o transcript ou RE-ENFILEIRA as engolidas. delivered=True quer
+        dizer 'send_keys chamado', nao 'Claude recebeu' — a TUI pode engolir as teclas (redraw) e a
+        msg sumia com cara de entregue. Entrada delivered, nao-confirmada, da sessao atual e mais
+        velha que `grace`: texto no transcript -> confirmed=True (para de checar); ausente ->
+        delivered=False + attempts+1 (o drain reentrega); attempts >= max_attempts -> desiste
+        (confirmed=True: fica visivel como bubble = comportamento antigo, sem loop de redigitacao).
+        Devolve as re-enfileiradas."""
+        with _append_lock:
+            rows = self.load()
+            requeued: list[dict] = []
+            changed = False
+            for r in rows:
+                if r.get("delivered") is not True or r.get("confirmed"):
+                    continue
+                ts = float(r.get("ts") or 0.0)
+                if ts < min_ts:
+                    r["confirmed"] = True   # sessao anterior: fora do escopo (e silencia o check)
+                    changed = True
+                    continue
+                if now - ts < grace:
+                    continue                # recente demais: o transcript pode nao ter gravado ainda
+                text = _strip_attach(str(r.get("text") or "")).strip()
+                lines = {text, *(ln.strip() for ln in text.split("\n"))}
+                if not text or lines & committed:
+                    r["confirmed"] = True
+                elif int(r.get("attempts") or 0) >= max_attempts:
+                    r["confirmed"] = True
+                else:
+                    r["delivered"] = False
+                    r["attempts"] = int(r.get("attempts") or 0) + 1
+                    requeued.append(dict(r))
+                changed = True
+            if changed:
+                self._write_atomic(rows)
+            return requeued
 
     def clear(self) -> None:
         # Remove o sidecar inteiro. Usado quando /clear reinicia a sessao do Claude Code: as entradas

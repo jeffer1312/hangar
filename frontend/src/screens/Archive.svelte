@@ -1,7 +1,10 @@
 <script lang="ts">
   import NavBar from '../components/NavBar.svelte';
   import MessageList from '../components/MessageList.svelte';
-  import { getArchive, getArchiveHistory, archiveImageUrl, type ArchiveEntry } from '../lib/api';
+  import {
+    getArchive, getArchiveFolder, getArchiveHistory, archiveImageUrl,
+    type ArchiveFolder, type ArchiveEntry,
+  } from '../lib/api';
   import type { ChatEvent } from '../lib/types';
 
   interface Props {
@@ -9,10 +12,13 @@
   }
   let { onBack }: Props = $props();
 
+  // Navegacao pasta-primeiro (3 niveis, estado interno): pastas -> conversas da pasta -> leitor.
   let loading = $state(true);
   let error = $state('');
+  let folders = $state<ArchiveFolder[]>([]);
+  let folder = $state<ArchiveFolder | null>(null);
   let entries = $state<ArchiveEntry[]>([]);
-  // Conversa aberta (read-only). Navegacao interna: lista <-> leitor (sem rota propria por item).
+  let loadingEntries = $state(false);
   let selected = $state<ArchiveEntry | null>(null);
   let events = $state<ChatEvent[]>([]);
   let loadingChat = $state(false);
@@ -21,7 +27,7 @@
     loading = true;
     error = '';
     try {
-      entries = await getArchive();
+      folders = await getArchive();
     } catch (e) {
       error = e instanceof Error ? e.message : 'Erro ao carregar o arquivo';
     } finally {
@@ -30,7 +36,21 @@
   }
   $effect(() => { load(); });
 
-  async function open(e: ArchiveEntry) {
+  async function openFolder(f: ArchiveFolder) {
+    folder = f;
+    loadingEntries = true;
+    entries = [];
+    try {
+      entries = await getArchiveFolder(f.project);
+    } catch {
+      error = 'Erro ao abrir a pasta';
+      folder = null;
+    } finally {
+      loadingEntries = false;
+    }
+  }
+
+  async function openConversation(e: ArchiveEntry) {
     selected = e;
     loadingChat = true;
     events = [];
@@ -44,17 +64,11 @@
     }
   }
 
-  // Agrupa por cwd real (fallback: nome do dir do projeto), preservando a ordem por data.
-  const groups = $derived.by(() => {
-    const m = new Map<string, ArchiveEntry[]>();
-    for (const e of entries) {
-      const k = e.cwd ?? e.project;
-      const g = m.get(k);
-      if (g) g.push(e);
-      else m.set(k, [e]);
-    }
-    return [...m.entries()];
-  });
+  // Nome curto da pasta (ultimo segmento do cwd real; fallback: nome sanitizado do projeto).
+  function folderName(f: ArchiveFolder): string {
+    if (f.cwd) return f.cwd.split('/').filter(Boolean).pop() ?? f.cwd;
+    return f.project;
+  }
 
   function fmtDate(ts: number): string {
     return new Date(ts * 1000).toLocaleString('pt-BR', {
@@ -83,6 +97,31 @@
       />
     {/if}
   </div>
+{:else if folder}
+  {@const f = folder}
+  <div class="archive-screen">
+    <NavBar title={folderName(f)} showBack={true} onBack={() => (folder = null)} />
+    <div class="archive-list">
+      {#if f.cwd}<div class="group-label">{f.cwd}</div>{/if}
+      {#if loadingEntries}
+        <p class="muted">Carregando…</p>
+      {:else if entries.length === 0}
+        <p class="muted">Nenhuma conversa nesta pasta.</p>
+      {:else}
+        {#each entries as e (e.session_id)}
+          <button class="row" onclick={() => openConversation(e)}>
+            <span class="row-main">
+              <span class="row-preview">{e.preview || '(sem mensagens)'}</span>
+              <span class="row-meta">
+                {fmtDate(e.mtime)}{#if e.live}<b class="live"> · ativa</b>{/if}
+              </span>
+            </span>
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
+        {/each}
+      {/if}
+    </div>
+  </div>
 {:else}
   <div class="archive-screen">
     <NavBar title="Arquivo" showBack={true} onBack={onBack} />
@@ -91,24 +130,18 @@
         <p class="muted">Carregando…</p>
       {:else if error}
         <p class="err">{error}</p>
-      {:else if entries.length === 0}
+      {:else if folders.length === 0}
         <p class="muted">Nenhuma conversa arquivada ainda.</p>
       {:else}
-        {#each groups as [cwd, list] (cwd)}
-          <div class="group">
-            <div class="group-label">{cwd}</div>
-            {#each list as e (e.project + e.session_id)}
-              <button class="row" onclick={() => open(e)}>
-                <span class="row-main">
-                  <span class="row-preview">{e.preview || '(sem mensagens)'}</span>
-                  <span class="row-meta">
-                    {fmtDate(e.mtime)}{#if e.live}<b class="live"> · ativa</b>{/if}
-                  </span>
-                </span>
-                <span class="chev" aria-hidden="true">›</span>
-              </button>
-            {/each}
-          </div>
+        {#each folders as f (f.project)}
+          <button class="row" onclick={() => openFolder(f)}>
+            <span class="row-icon" aria-hidden="true">📁</span>
+            <span class="row-main">
+              <span class="row-preview">{folderName(f)}</span>
+              <span class="row-meta">{f.count} conversa{f.count === 1 ? '' : 's'} · {fmtDate(f.mtime)}</span>
+            </span>
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
         {/each}
       {/if}
     </div>
@@ -136,12 +169,10 @@
   .muted { color: var(--text-secondary); padding: var(--space-4); }
   .err { color: var(--error); padding: var(--space-4); }
 
-  .group { margin-bottom: var(--space-5); }
   .group-label {
     font-size: var(--text-xs);
     font-family: var(--font-mono);
     color: var(--text-muted);
-    text-transform: none;
     padding: var(--space-2) var(--space-1);
     white-space: nowrap;
     overflow: hidden;
@@ -161,6 +192,8 @@
     margin-bottom: var(--space-2);
   }
   .row:active { background: var(--bg-hover); }
+
+  .row-icon { flex-shrink: 0; }
 
   .row-main {
     flex: 1;

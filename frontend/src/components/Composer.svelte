@@ -160,7 +160,12 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // Enter-envia SO no desktop (hover + pointer fine). No teclado do celular, Enter QUEBRA LINHA
+    // (comportamento nativo do textarea): enviar era facil demais de disparar sem querer — no
+    // mobile o envio e pelo botao. Shift+Enter segue quebrando linha no desktop. Checado na hora
+    // (nao cacheado): tablet que pluga/despluga teclado troca de modo sem reload.
+    if (e.key === 'Enter' && !e.shiftKey
+        && window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
       e.preventDefault();
       submit();
     }

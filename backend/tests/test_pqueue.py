@@ -116,3 +116,50 @@ def test_merged_history_ignores_delivered_flag(tmp_path):
     PromptQueue("s").append("oi claude", delivered=True)
     hist = pqueue.merged_history("s", str(j))
     assert any(e.id.startswith("queued-") and e.text == "oi claude" for e in hist)
+
+
+def test_prune_before_drops_previous_session_entries():
+    q = PromptQueue("s")
+    q.path.write_text(
+        '{"id":"a","text":"velha","ts":10.0,"delivered":false}\n'
+        '{"id":"b","text":"nova","ts":100.0,"delivered":false}\n', encoding="utf-8")
+    q.prune_before(50.0)
+    assert [r["id"] for r in q.load()] == ["b"]
+    q.prune_before(0.0)                       # sem ts no transcript -> no-op seguro
+    assert [r["id"] for r in q.load()] == ["b"]
+
+
+def test_reconcile_confirms_requeues_and_silences_old():
+    import json
+    q = PromptQueue("s")
+    rows = [
+        {"id": "ok1", "text": "chegou", "ts": 900.0, "delivered": True},
+        {"id": "gone", "text": "engolida", "ts": 900.0, "delivered": True},
+        {"id": "fresh", "text": "recente", "ts": 999.0, "delivered": True},
+        {"id": "old", "text": "pre-clear", "ts": 10.0, "delivered": True},
+    ]
+    q.path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    req = q.reconcile_delivered({"chegou"}, min_ts=100.0, now=1000.0)
+    assert [r["id"] for r in req] == ["gone"]
+    got = {r["id"]: r for r in q.load()}
+    assert got["ok1"]["confirmed"] is True                       # no transcript -> confirmada
+    assert got["gone"]["delivered"] is False and got["gone"]["attempts"] == 1  # re-drena
+    assert "confirmed" not in got["fresh"]                       # dentro do grace: checa depois
+    assert got["old"]["confirmed"] is True                       # sessao anterior: silenciada
+
+
+def test_reconcile_gives_up_after_max_attempts():
+    q = PromptQueue("s")
+    q.path.write_text('{"id":"x","text":"t","ts":900.0,"delivered":true,"attempts":2}\n', encoding="utf-8")
+    assert q.reconcile_delivered(set(), min_ts=100.0, now=1000.0) == []
+    assert q.load()[0]["confirmed"] is True    # desiste: fica visivel, sem loop de redigitacao
+
+
+def test_reconcile_strips_attachment_marker():
+    import json
+    q = PromptQueue("s")
+    q.path.write_text(json.dumps(
+        {"id": "i", "text": "legenda — 📎 imagem: /x.png", "ts": 900.0, "delivered": True}
+    ) + "\n", encoding="utf-8")
+    assert q.reconcile_delivered({"legenda"}, min_ts=100.0, now=1000.0) == []
+    assert q.load()[0]["confirmed"] is True    # transcript grava so a legenda -> casa sem o 📎
