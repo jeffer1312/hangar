@@ -60,6 +60,9 @@
 
   let textareaEl: HTMLTextAreaElement | undefined = $state();
 
+  // Exposto pro pai (atalho de teclado desktop "/" foca o campo).
+  export function focus() { textareaEl?.focus(); }
+
   // ── Anexos de imagem: lista de arquivos + preview local + estado de upload ──
   let attachments = $state<{ file: File; url: string; isImage: boolean }[]>([]);
   let fileInput: HTMLInputElement | undefined = $state();
