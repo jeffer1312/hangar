@@ -18,6 +18,17 @@ export interface AggSession extends SessionInfo {
   serverColor: string;
 }
 
+// Candidato de resume: um transcript <uuid>.jsonl do cwd que a sessão "sem id" poderia retomar.
+export interface ResumeCandidate {
+  session_id: string;
+  mtime?: number | null;
+  preview: string;         // 1ª msg de usuário da conversa (pra reconhecer qual é)
+  in_use: boolean;         // já é o transcript de outra sessão viva -> retomar aqui roubaria
+}
+
+// Resposta do /resume: ou a sessão já religada, ou (caso ambíguo) os candidatos pra confirmar.
+export type ResumeResult = SessionInfo | { ambiguous: true; candidates: ResumeCandidate[] };
+
 export interface ChatEvent {
   kind: 'user_msg' | 'assistant_msg' | 'tool_use' | 'tool_result';
   id: string;

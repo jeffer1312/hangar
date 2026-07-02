@@ -13,6 +13,7 @@ import type {
   WorkflowAgentDetail,
   AnswerItem,
   CostReport,
+  ResumeResult,
 } from './types';
 
 // URL da idx-ésima imagem (colada no terminal) de uma msg do transcript. `?token` porque <img> não
@@ -143,6 +144,15 @@ export async function renameSession(name: string, newName: string): Promise<{ ok
   return apiFetch<{ ok: boolean; name: string }>(`/api/sessions/${encodeURIComponent(name)}/rename`, {
     method: 'POST',
     body: JSON.stringify({ new: newName }),
+  });
+}
+
+// Relança uma sessão "sem id" com `claude --resume <uuid>` -> passa a rastreá-la, continuando a
+// conversa. sessionId ausente = deixa o backend escolher (caso seguro) ou devolver candidatos (ambíguo).
+export function resumeSession(name: string, sessionId?: string): Promise<ResumeResult> {
+  return apiFetch<ResumeResult>(`/api/sessions/${encodeURIComponent(name)}/resume`, {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sessionId ?? null }),
   });
 }
 
