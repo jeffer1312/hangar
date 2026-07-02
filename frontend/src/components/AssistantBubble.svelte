@@ -1,6 +1,7 @@
 <script lang="ts">
   import { renderMarkdown } from '../lib/markdown';
   import { parseFilePaths, parseMediaUrls } from '../lib/format';
+  import { copyText } from '../lib/clipboard';
   import FileAttachment from './FileAttachment.svelte';
 
   interface Props {
@@ -27,22 +28,6 @@
   }
 
   // Copiar bloco de codigo: handler delegado (o botao vem do {@html}, sem handler Svelte proprio).
-  async function copyText(s: string) {
-    try {
-      await navigator.clipboard.writeText(s);   // so em contexto seguro (https/localhost)
-    } catch {
-      // LAN/Tailscale via HTTP puro: clipboard API indisponivel -> fallback execCommand.
-      const ta = document.createElement('textarea');
-      ta.value = s;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      ta.remove();
-    }
-  }
-
   function onProseClick(e: MouseEvent) {
     const btn = (e.target as HTMLElement).closest('.copy-btn');
     if (!btn) return;
@@ -50,6 +35,14 @@
     copyText(code);
     btn.classList.add('copied');
     setTimeout(() => btn.classList.remove('copied'), 1200);
+  }
+
+  // Copiar a MENSAGEM inteira (markdown cru). Botao aparece no hover (desktop).
+  let msgCopied = $state(false);
+  function copyMessage() {
+    copyText(text);
+    msgCopied = true;
+    setTimeout(() => (msgCopied = false), 1200);
   }
 </script>
 
@@ -66,12 +59,14 @@
     {#if ts}
       <span class="ts">{formatTime(ts)}</span>
     {/if}
+    <button class="msg-copy" class:copied={msgCopied} onclick={copyMessage} aria-label="Copiar mensagem" title="Copiar mensagem"></button>
   {/if}
 </div>
 
 <style>
   /* Mensagem do assistente SEM bubble: texto full-width (estilo Claude iOS), mais legivel. */
   .assistant-msg {
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
@@ -89,6 +84,24 @@
 
   /* Historico remontado (paginacao pra cima / re-ancorar da janela): entra parado. */
   .assistant-msg.noanim { animation: none; }
+
+  /* Copiar-mensagem: so desktop (hover). Aparece no hover da mensagem, canto sup. direito. */
+  .msg-copy {
+    position: absolute; top: 0; right: 0;
+    width: 26px; height: 26px; padding: 0;
+    display: none; align-items: center; justify-content: center;
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+    background: var(--bg-elevated); color: var(--text-secondary);
+    opacity: 0; transition: opacity 120ms var(--ease-out);
+  }
+  .msg-copy::before { content: '⧉'; font-size: 14px; line-height: 1; }
+  .msg-copy.copied { color: var(--accent); opacity: 1; }
+  .msg-copy.copied::before { content: '✓'; }
+  @media (hover: hover) and (pointer: fine) {
+    .msg-copy { display: flex; }
+    .assistant-msg:hover .msg-copy { opacity: 0.6; }
+    .msg-copy:hover { opacity: 1 !important; }
+  }
 
   .prose {
     color: var(--text-primary);
