@@ -4,9 +4,19 @@ Drive a live [Claude Code](https://code.claude.com) session from your phone — 
 
 You leave `claude` running in a `tmux` session on your machine. claude-pocket exposes that **same live session** to a phone: it renders the conversation as chat, shows what Claude is doing right now, and lets you send prompts, answer Claude's interactive questions, and interrupt — all from an iPhone on the couch.
 
-> **Status:** Backend is complete and tested (221 passing tests). The Svelte PWA frontend is feature-rich — chat, uploads, git ops, slash commands, workflows, model picker, native AskUserQuestion. Typically run over a Tailscale tailnet (`tailscale serve` → HTTPS). Personal-use, single-user tool.
+> **Status:** Backend is complete and tested (300+ passing tests, CI on every push). The Svelte PWA frontend is feature-rich — chat with live streaming preview, uploads, git ops, slash commands, workflows, model picker, native AskUserQuestion, permission prompts as tappable cards, durable input queue (send while Claude works), per-session composer drafts, session archive (browse dead conversations), multi-server, web push notifications, and a costs dashboard. Typically run over a Tailscale tailnet (`tailscale serve` → HTTPS). Personal-use, single-user tool.
 
 > **Using it?** Step-by-step guide — pairing, Tailscale, install as PWA, every feature: **[docs/USAGE.md](docs/USAGE.md)**.
+
+## Quickstart
+
+```bash
+git clone https://github.com/jeffer1312/claude-pocket && cd claude-pocket
+./install.sh        # checa deps, instala backend+frontend, gera token, oferece wrapper + serviços
+```
+
+Then open the URL from the backend's startup QR on your phone and paste the token from
+`backend/.env`. Details (Tailscale, PWA install): [docs/USAGE.md](docs/USAGE.md).
 
 ## Why
 
@@ -108,7 +118,9 @@ All routes require `Authorization: Bearer <token>` (SSE uses a `cp_token` cookie
 | POST | `/api/sessions` | create a session (`{name, cwd}`) |
 | DELETE | `/api/sessions/{name}` | kill a session |
 | POST | `/api/sessions/{name}/rename` | rename a session |
+| POST | `/api/sessions/{name}/resume` | relaunch an untracked session with `--resume` (continues the conversation) |
 | GET | `/api/claude-configs` | list available `CLAUDE_CONFIG_DIR` options |
+| GET | `/api/costs` | usage/cost report (per account, day/week/month) |
 
 **Transcript & stream**
 
@@ -148,6 +160,22 @@ All routes require `Authorization: Bearer <token>` (SSE uses a `cp_token` cookie
 | POST | `/api/sessions/{name}/checkout` | checkout a branch |
 | POST | `/api/sessions/{name}/git` | run a git op |
 
+**Archive (dead conversations)**
+
+| Method | Route | Purpose |
+|---|---|---|
+| GET | `/api/archive` | folders (projects) with archived transcripts |
+| GET | `/api/archive/{project}` | conversations of one folder (preview, date, live badge) |
+| GET | `/api/archive/{project}/{session_id}/history` | read-only transcript of a dead conversation |
+| GET | `/api/archive/{project}/{session_id}/transcript-image/{uuid}/{idx}` | image inside an archived transcript |
+
+**Push**
+
+| Method | Route | Purpose |
+|---|---|---|
+| GET | `/api/push/vapid` | server's VAPID public key |
+| POST | `/api/push/subscribe` | register the phone's push subscription |
+
 **Commands & workflows**
 
 | Method | Route | Purpose |
@@ -171,4 +199,4 @@ Backend: Python 3.14, FastAPI, `sse-starlette`, `watchfiles`. Frontend: Svelte 5
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
