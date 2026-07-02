@@ -313,6 +313,26 @@ class SessionRegistry:
                     self._jsonl_cache[name] = j
                     self._fd_locked.add(name)  # fd = verdade -> trava p/ os polls sem fd nao reverterem
                     return j, True
+            # 1.5. Marcador do hook por cmdline sid: DETERMINISTICO e reescrito a cada evento -> vem
+            #      ANTES do fd-lock duravel. Apos um /clear que rola transcript novo escrito em
+            #      append-and-close (fd quase nunca aberto no poll) e cujo sid novo NUNCA vai pro
+            #      cmdline, o fd-lock ficava preso no transcript PRE-clear e o chat nao migrava. O
+            #      marcador sabe o transcript ativo do boot_id -> deixa ele destravar o cache velho.
+            for p in pids:
+                cmd = _cmdline(p)
+                if "daemon" in cmd or "--bg-" in cmd or "--agent" in cmd:
+                    continue
+                sid = _session_id_from_cmdline(cmd)
+                if not sid:
+                    continue
+                cdir = _config_dir_of(p)
+                config_base = cdir if cdir else self.projects_dir.parent
+                marker = _active_marker_jsonl(config_base, sid, aux_open)
+                if marker:
+                    if self._jsonl_cache.get(name) != marker:
+                        self._fd_locked.discard(name)  # transcript rolou (/clear|resume) -> solta o lock velho
+                    self._jsonl_cache[name] = marker
+                    return marker, True
             # fd AUSENTE neste instante: se ja travamos por fd (transcript REAL desta sessao, pego num
             # write anterior), MANTEM o cache. Sem isto, um resume cujo --session-id da cmdline nunca
             # vira arquivo oscilava fd<->id entre writes (e o watcher do SSE resetava o chat).
@@ -337,13 +357,8 @@ class SessionRegistry:
                 if sid:
                     cdir = _config_dir_of(p)
                     proj = (cdir / "projects") if cdir else self.projects_dir
-                    # Marcador do hook (boot_id -> transcript ativo): DETERMINISTICO. Vence o chute por
-                    # mtime e resolve o resume/clear cujo <sid>.jsonl do cmdline nunca nasce (chat vazio).
-                    config_base = cdir if cdir else self.projects_dir.parent
-                    marker = _active_marker_jsonl(config_base, sid, aux_open)
-                    if marker:
-                        self._jsonl_cache[name] = marker
-                        return marker, True
+                    # Marcador do hook ja tratado no passo 1.5 (antes do fd-lock). Aqui so o fallback
+                    # deterministico por <sid>.jsonl / newest-after-clear quando nao ha marcador.
                     projdir = proj / sanitize_cwd(cwd)
                     sid_jsonl = str(projdir / f"{sid}.jsonl")
                     # _newest_after_clear (segue o jsonl mais NOVO do cwd pra pegar o pos-/clear) so e
