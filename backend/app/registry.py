@@ -402,10 +402,12 @@ class SessionRegistry:
         self._dedupe_collisions(out, sids)
         return out
 
-    async def list_with_state(self) -> list[SessionInfo]:
+    async def list_with_state(self, infos: Optional[list[SessionInfo]] = None) -> list[SessionInfo]:
         # Listagem COM estado vivo por sessao (pro /api/sessions). Faz a resolucao otimizada (sync, num
-        # thread) e por cima classifica o pane de cada sessao concorrentemente.
-        infos = await asyncio.to_thread(self.list)
+        # thread) e por cima classifica o pane de cada sessao concorrentemente. `infos` opcional: um
+        # snapshot ja resolvido (ex: cache compartilhado dos pollers do SSE) pula a re-resolucao.
+        if infos is None:
+            infos = await asyncio.to_thread(self.list)
         if not infos:
             return infos
         # Estado pela marca dos hooks quando existe (custo ~0); senao cai no pane (fallback).
@@ -505,9 +507,9 @@ class SessionRegistry:
         try:
             with open(jsonl, encoding="utf-8", errors="replace") as fh:
                 for _, line in zip(range(max_lines), fh):
-                    ev = parse_line(line)
-                    if ev and ev.kind == "user_msg" and ev.text:
-                        return ev.text[:100]
+                    for ev in parse_line(line):
+                        if ev.kind == "user_msg" and ev.text:
+                            return ev.text[:100]
         except OSError:
             pass
         return ""

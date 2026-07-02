@@ -1,7 +1,9 @@
 import asyncio
 import base64
 import json
+import os
 import re
+from collections import deque
 from pathlib import Path
 from typing import AsyncIterator, Optional
 from watchfiles import awatch
@@ -62,70 +64,92 @@ def _strip_meta_blocks(text: str) -> str:
     return _META_BLOCK_RE.sub("", text).strip()
 
 
-def parse_line(line: str) -> Optional[ChatEvent]:
+def parse_line(line: str) -> list[ChatEvent]:
     line = line.strip()
     if not line:
-        return None
+        return []
     try:
         obj = json.loads(line)
     except (json.JSONDecodeError, ValueError):
-        return None
+        return []
+    return parse_obj(obj)
 
+
+def _sub_id(uid: str, k: int) -> str:
+    # Eventos extras da MESMA linha ganham sufixo deterministico (":1", ":2"...): o front deduplica
+    # e keia bubble por id -> ids repetidos colapsariam blocos distintos numa bubble so. O 1o fica
+    # com o uuid puro (o fetch de imagem usa o id cru como uuid da entrada no jsonl).
+    return uid if k == 0 else f"{uid}:{k}"
+
+
+def parse_obj(obj: dict) -> list[ChatEvent]:
+    """Eventos de chat de UMA entrada (ja parseada) do transcript. Lista pq uma entrada pode
+    carregar VARIOS blocos (tool calls paralelas = varios tool_result numa msg user so; assistant
+    com text + tool_use juntos) — devolver so o 1o engolia os demais silenciosamente."""
     etype = obj.get("type")
     uid = obj.get("uuid", "")
     msg = obj.get("message")
     if not isinstance(msg, dict):
-        return None
+        return []
     content = msg.get("content")
 
     if etype == "user":
         if isinstance(content, str):
             if _is_command_meta(content):
-                return None
+                return []
             cleaned = _strip_meta_blocks(content)
             if not cleaned or _IMAGE_SOURCE_RE.match(cleaned):
-                return None
-            return ChatEvent(kind="user_msg", id=uid, text=cleaned)
+                return []
+            return [ChatEvent(kind="user_msg", id=uid, text=cleaned)]
         if isinstance(content, list):
-            tr = _first(content, "tool_result")
-            if tr is not None:
-                res = tr.get("content")
-                if isinstance(res, list):
-                    res = " ".join(str(b.get("text", "")) for b in res if isinstance(b, dict))
-                return ChatEvent(
-                    kind="tool_result", id=uid,
-                    tool_use_id=tr.get("tool_use_id"),
-                    result=str(res) if res is not None else None,
-                    is_error=bool(tr.get("is_error", False)),
-                )
+            trs = [it for it in content if isinstance(it, dict) and it.get("type") == "tool_result"]
+            if trs:
+                out = []
+                for k, tr in enumerate(trs):
+                    res = tr.get("content")
+                    if isinstance(res, list):
+                        res = " ".join(str(b.get("text", "")) for b in res if isinstance(b, dict))
+                    out.append(ChatEvent(
+                        kind="tool_result", id=_sub_id(uid, k),
+                        tool_use_id=tr.get("tool_use_id"),
+                        result=str(res) if res is not None else None,
+                        is_error=bool(tr.get("is_error", False)),
+                    ))
+                return out
             # Imagens coladas no terminal: contar os blocos `image` -> o front busca cada uma lazy.
             img_count = sum(1 for it in content if isinstance(it, dict) and it.get("type") == "image")
             txt = _first(content, "text")
             t = txt.get("text", "") if txt is not None else ""
             if _is_command_meta(t):
-                return None
+                return []
             cleaned = _strip_meta_blocks(t)
             if _IMAGE_SOURCE_RE.match(cleaned):
-                return None
+                return []
             cleaned = _IMAGE_MARKER_RE.sub("", cleaned).strip()   # tira "[Image #N]" da legenda
             if not cleaned and not img_count:
-                return None
-            return ChatEvent(kind="user_msg", id=uid, text=cleaned,
-                             image_count=img_count or None)
-        return None
+                return []
+            return [ChatEvent(kind="user_msg", id=uid, text=cleaned,
+                              image_count=img_count or None)]
+        return []
 
     if etype == "assistant" and isinstance(content, list):
-        tu = _first(content, "tool_use")
-        if tu is not None:
-            return ChatEvent(
-                kind="tool_use", id=uid,
-                tool_name=tu.get("name"), tool_use_id=tu.get("id"),
-                tool_input=tu.get("input") or {},
-            )
-        txt = _first(content, "text")
-        if txt is not None:
-            return ChatEvent(kind="assistant_msg", id=uid, text=txt.get("text", ""))
-    return None
+        # Um evento POR BLOCO, na ordem do content (thinking etc. ignorados). Antes o 1o tool_use
+        # vencia e um bloco text na mesma entrada sumia do chat.
+        out = []
+        for it in content:
+            if not isinstance(it, dict):
+                continue
+            if it.get("type") == "tool_use":
+                out.append(ChatEvent(
+                    kind="tool_use", id=_sub_id(uid, len(out)),
+                    tool_name=it.get("name"), tool_use_id=it.get("id"),
+                    tool_input=it.get("input") or {},
+                ))
+            elif it.get("type") == "text":
+                out.append(ChatEvent(kind="assistant_msg", id=_sub_id(uid, len(out)),
+                                     text=it.get("text", "")))
+        return out
+    return []
 
 
 def path_in_transcript(jsonl: str | Path, needle: str) -> bool:
@@ -188,46 +212,52 @@ class TranscriptTailer:
         # Le do offset `pos` ate o fim -> (eventos parseados, novo offset). Sincrono de proposito:
         # chamado via asyncio.to_thread no follow() pra nao bloquear o event loop com I/O de arquivo
         # (o backfill inicial le o transcript inteiro, que cresce pra dezenas de MB em sessao longa).
+        # Binario: tell()/seek() em modo texto sao cookies opacos (nao offsets em bytes) -> nao
+        # daria pra comparar com st_size no guard de truncamento; o decode fica por linha lida.
         if not self.path.exists():
             return [], pos
-        evs = []
-        with self.path.open(encoding="utf-8", errors="replace") as fh:
+        evs: list[ChatEvent] = []
+        with self.path.open("rb") as fh:
+            if os.fstat(fh.fileno()).st_size < pos:
+                # arquivo ENCOLHEU (truncado/reescrito): o offset antigo cairia alem do EOF e a
+                # leitura retomaria no meio de linha nova = lixo/eventos perdidos. Recomeca do
+                # zero (o arquivo pos-truncamento e pequeno; o front deduplica por id).
+                pos = 0
             fh.seek(pos)
             while True:
                 start = fh.tell()
                 line = fh.readline()
                 if not line:
                     break
-                if not line.endswith("\n"):
+                if not line.endswith(b"\n"):
                     # awatch disparou no meio de um append -> linha incompleta. Rebobina pro inicio
                     # dela e nao avanca pos: a versao COMPLETA e relida no proximo evento do watcher.
                     fh.seek(start)
                     break
-                ev = parse_line(line)
-                if ev is not None:
-                    evs.append(ev)
+                evs.extend(parse_line(line.decode("utf-8", "replace")))
             return evs, fh.tell()
 
     def _tail_offset(self, max_lines: int) -> int:
         # Offset do inicio da (max_lines)-esima linha a partir do fim -> o follow() faz backfill so do
-        # tail. Conta LINHAS completas (terminadas em \n) sem parsear JSON (mais barato que _read_from).
+        # tail. Conta LINHAS completas (terminadas em \n) sem parsear JSON, em binario (sem decodar o
+        # arquivo inteiro) e com deque(maxlen) (nao acumula o offset de TODAS as linhas).
         # <= max_lines linhas, ou arquivo ausente -> 0 (backfill do inicio = comportamento antigo).
         # ponytail: varre o arquivo pra frente sem parse; reverse-seek so se o disco virar gargalo.
         if not self.path.exists():
             return 0
-        starts: list[int] = []
-        with self.path.open(encoding="utf-8", errors="replace") as fh:
+        starts: deque[int] = deque(maxlen=max_lines)
+        with self.path.open("rb") as fh:
             while True:
                 start = fh.tell()
                 line = fh.readline()
                 if not line:
                     break
-                if not line.endswith("\n"):
+                if not line.endswith(b"\n"):
                     break  # ultima linha incompleta (append em voo): ignora, nao registra o start
                 starts.append(start)
-        if len(starts) <= max_lines:
-            return 0
-        return starts[-max_lines]
+        # deque cheio = havia >= max_lines linhas; starts[0] e o inicio da max_lines-esima a partir
+        # do fim (com EXATAMENTE max_lines linhas, starts[0] == 0 = backfill completo, como antes).
+        return starts[0] if len(starts) == max_lines else 0
 
     async def follow(self) -> AsyncIterator[ChatEvent]:
         # Backfill so do TAIL (ultimas _BACKFILL_LINES linhas), nao o arquivo inteiro. _tail_offset
@@ -238,7 +268,15 @@ class TranscriptTailer:
         evs, pos = await asyncio.to_thread(self._read_from, pos)
         for ev in evs:
             yield ev
-        async for _ in awatch(self.path.parent):
+        # yield_on_timeout: alem dos eventos do FS, acorda a cada rust_timeout mesmo sem mudanca
+        # (changes vazio) e rele -> fecha a janela morta entre o backfill acima e o watcher armar
+        # (evento gravado nesse gap so apareceria no proximo write) e cobre inotify perdido.
+        async for changes in awatch(self.path.parent, yield_on_timeout=True, rust_timeout=5000):
+            # O watch e do DIRETORIO (o proprio arquivo pode nem existir ainda), mas escrita de
+            # jsonl IRMAO (ex: subagente gravando o proprio transcript ao lado) acordava todos os
+            # tailers -> so rele quando o toque e no NOSSO arquivo (ou no timeout do heartbeat).
+            if changes and not any(Path(p).name == self.path.name for _, p in changes):
+                continue
             evs, pos = await asyncio.to_thread(self._read_from, pos)
             for ev in evs:
                 yield ev

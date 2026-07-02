@@ -86,6 +86,28 @@ def test_set_delivered_reverts():
     assert PromptQueue("s").load()[0]["delivered"] is False
 
 
+def test_merged_history_dedup_is_ts_aware(tmp_path):
+    # Texto REPETIDO: entrada enfileirada DEPOIS do commit de um texto igual NAO e absorvida por ele
+    # (senao o 2o "ok" sumia do historico); a entrada anterior ao commit e absorvida (fluxo normal).
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(
+        json.dumps({"type": "user", "uuid": "u0", "timestamp": "2026-01-01T00:00:00Z",
+                    "message": {"role": "user", "content": "inicio"}}) + "\n" +
+        json.dumps({"type": "user", "uuid": "u1", "timestamp": "2026-01-01T00:01:40Z",
+                    "message": {"role": "user", "content": "ok"}}) + "\n",
+        encoding="utf-8")
+    tc = pqueue._ts_of_line(j.read_text(encoding="utf-8").splitlines()[1])  # epoch do commit de "ok"
+    q = PromptQueue("s")
+    q.path.write_text(
+        json.dumps({"id": "e1", "text": "ok", "ts": tc - 5, "delivered": True}) + "\n" +
+        json.dumps({"id": "e2", "text": "ok", "ts": tc + 5, "delivered": False}) + "\n",
+        encoding="utf-8")
+    ids = [e.id for e in pqueue.merged_history("s", str(j))]
+    assert "queued-e1" not in ids      # anterior ao commit -> absorvida pelo user_msg real
+    assert "queued-e2" in ids          # posterior ao commit -> ainda pendente, nao some
+
+
 def test_merged_history_ignores_delivered_flag(tmp_path):
     # delivered NAO afeta exibicao: entrada entregue mas ainda nao gravada no transcript continua
     # aparecendo como bubble queued- (o dedup por texto so a remove quando o user_msg real cai).

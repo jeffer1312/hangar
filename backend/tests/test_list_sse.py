@@ -1,5 +1,15 @@
 import asyncio, json
+import pytest
 from app import sse
+
+
+@pytest.fixture(autouse=True)
+def _stub_cached_list(monkeypatch):
+    # list_events resolve via snapshot compartilhado (_cached_list) antes do list_with_state; stubba
+    # pra nao varrer tmux//proc reais no teste (o fake de list_with_state ignora o snapshot).
+    async def _fc():
+        return []
+    monkeypatch.setattr(sse, "_cached_list", _fc)
 
 
 class _Info:
@@ -20,7 +30,7 @@ async def _take(gen, n):
 
 
 def test_emits_snapshot_on_connect(monkeypatch):
-    async def fake_list():
+    async def fake_list(_snap=None):
         return [_Info("cc", "idle")]
     monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
     evs = asyncio.run(_take(sse.list_events(poll=0.001, ping_every=9999), 1))
@@ -31,7 +41,7 @@ def test_emits_snapshot_on_connect(monkeypatch):
 def test_emits_again_only_on_change(monkeypatch):
     seq = [[_Info("cc", "idle")], [_Info("cc", "idle")], [_Info("cc", "working")]]
     calls = {"i": 0}
-    async def fake_list():
+    async def fake_list(_snap=None):
         r = seq[min(calls["i"], len(seq) - 1)]; calls["i"] += 1; return r
     monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
     # connect-emit (idle), unchanged (idle, no emit), then working -> 2nd emit
@@ -49,7 +59,7 @@ def test_no_reemit_on_last_activity_only_change(monkeypatch):
     a2 = _Info("cc", "idle");    a2.last_activity = 3.0   # state mudou -> emite
     seq = [[a0], [a1], [a2]]
     calls = {"i": 0}
-    async def fake_list():
+    async def fake_list(_snap=None):
         r = seq[min(calls["i"], len(seq) - 1)]; calls["i"] += 1; return r
     monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
     evs = asyncio.run(_take(sse.list_events(poll=0.001, ping_every=9999), 2))
@@ -60,7 +70,7 @@ def test_no_reemit_on_last_activity_only_change(monkeypatch):
 
 
 def test_ping_emitted_on_cadence(monkeypatch):
-    async def fake_list():
+    async def fake_list(_snap=None):
         return [_Info("cc", "idle")]
     monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
     # ping_every=1 -> after the connect snapshot, the next tick has no change but emits a ping

@@ -12,7 +12,7 @@ from watchfiles import awatch
 
 from app.config import settings
 from app.models import ChatEvent
-from app.transcript import parse_line
+from app.transcript import parse_obj
 
 # Limite de entradas mantidas no sidecar (poda no append pra nao crescer sem fim).
 _MAX_ENTRIES = 1000
@@ -40,12 +40,8 @@ def _entry_event(entry: dict) -> ChatEvent:
     return ChatEvent(kind="user_msg", id="queued-" + str(entry.get("id")), text=entry.get("text"))
 
 
-def _ts_of_line(line: str) -> float:
-    # Epoch (s) do campo `timestamp` (ISO 8601 com Z) de uma linha do transcript; 0.0 se ausente.
-    try:
-        obj = json.loads(line)
-    except (json.JSONDecodeError, ValueError):
-        return 0.0
+def _ts_of_obj(obj: dict) -> float:
+    # Epoch (s) do campo `timestamp` (ISO 8601 com Z) de uma entrada do transcript; 0.0 se ausente.
     t = obj.get("timestamp")
     if not isinstance(t, str):
         return 0.0
@@ -53,6 +49,14 @@ def _ts_of_line(line: str) -> float:
         return datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp()
     except ValueError:
         return 0.0
+
+
+def _ts_of_line(line: str) -> float:
+    try:
+        obj = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return 0.0
+    return _ts_of_obj(obj)
 
 
 def _transcript_start_ts(jsonl: str) -> float:
@@ -187,46 +191,65 @@ class PromptQueue:
         # sao sequenciais (uma await por vez), entao o set `seen` que ela muta nao corre risco de corrida.
         for ev in await asyncio.to_thread(emit_new):
             yield ev
-        async for _ in awatch(self.path.parent):
+        # yield_on_timeout: cobre entrada gravada entre o emit_new acima e o watcher armar (senao so
+        # apareceria no proximo write da fila). O dir e COMPARTILHADO por todas as sessoes -> filtra:
+        # so recarrega quando o toque e no NOSSO arquivo (ou no timeout do heartbeat).
+        async for changes in awatch(self.path.parent, yield_on_timeout=True, rust_timeout=5000):
+            if changes and not any(Path(p).name == self.path.name for _, p in changes):
+                continue
             for ev in await asyncio.to_thread(emit_new):
                 yield ev
 
 
 def merged_history(name: str, jsonl: str) -> list[ChatEvent]:
     """Historico = eventos do transcript + entradas da fila ainda NAO absorvidas pelo transcript,
-    ordenado por timestamp. Dedup: descarta entrada da fila cujo texto ja apareca (por linha) num
-    user_msg do transcript (o Claude Code consumiu o prompt -> a versao real vence). Entradas sem
-    timestamp herdam o ts anterior (carry-forward) pra manter a ordem do arquivo."""
+    ordenado por timestamp. Dedup TS-AWARE: descarta entrada da fila cujo texto ja apareca (por
+    linha) num user_msg commitado DEPOIS dela (o transcript grava o prompt apos a entrega). Match
+    por texto sozinho engolia repeticao: o 2o "ok" enfileirado sumia por causa do 1o ja commitado.
+    Entradas sem timestamp herdam o ts anterior (carry-forward) pra manter a ordem do arquivo."""
     items: list[tuple[float, int, ChatEvent]] = []
-    committed_lines: set[str] = set()
+    committed_ts: dict[str, float] = {}  # linha normalizada -> maior ts em que commitou
     prev_ts = 0.0
     start_ts = 0.0  # 1o ts real do transcript = inicio da sessao atual (pra podar fila pre-/clear)
     try:
-        raw = Path(jsonl).read_text(encoding="utf-8", errors="replace")
+        fh = open(jsonl, encoding="utf-8", errors="replace")
     except OSError:
-        raw = ""  # sessao nova: jsonl ainda nao existe -> historico vazio (limpo), nao 500
-    for i, line in enumerate(raw.splitlines()):
-        ev = parse_line(line)
-        if ev is None:
-            continue
-        line_ts = _ts_of_line(line)
-        if line_ts > 0 and start_ts == 0.0:
-            start_ts = line_ts
-        ts = line_ts or prev_ts
-        prev_ts = ts
-        items.append((ts, i, ev))
-        if ev.kind == "user_msg" and ev.text:
-            t = ev.text.strip()
-            committed_lines.add(t)
-            for ln in t.split("\n"):
-                committed_lines.add(ln.strip())
+        fh = None  # sessao nova: jsonl ainda nao existe -> historico vazio (limpo), nao 500
+    if fh is not None:
+        # Itera linha-a-linha (nao carrega o transcript inteiro em RAM) e parseia o JSON UMA vez por
+        # linha (antes parse_line + _ts_of_line = 2x json.loads do arquivo inteiro por /history).
+        with fh:
+            for i, line in enumerate(fh):
+                try:
+                    obj = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                evs = parse_obj(obj)
+                if not evs:
+                    continue
+                line_ts = _ts_of_obj(obj)
+                if line_ts > 0 and start_ts == 0.0:
+                    start_ts = line_ts
+                ts = line_ts or prev_ts
+                prev_ts = ts
+                for ev in evs:
+                    items.append((ts, i, ev))
+                    if ev.kind == "user_msg" and ev.text:
+                        t = ev.text.strip()
+                        for ln in (t, *(s.strip() for s in t.split("\n"))):
+                            if ts > committed_ts.get(ln, 0.0):
+                                committed_ts[ln] = ts
 
     # Entradas da fila entram com tiebreaker alto -> caem DEPOIS de eventos do transcript de mesmo ts.
     for entry in PromptQueue(name).load():
         text = (entry.get("text") or "").strip()
-        if not text or text in committed_lines:
+        if not text:
             continue
         ts = float(entry.get("ts") or prev_ts)
+        # Absorvida so se o texto commitou DEPOIS de enfileirada (>=: o write real e sempre
+        # posterior ao append da fila). Commit ANTERIOR e de outra msg igual -> esta segue pendente.
+        if committed_ts.get(text, -1.0) >= ts:
+            continue
         # Poda: entrada anterior ao inicio da sessao atual e de uma sessao antiga (ex: pre-/clear, que
         # cria transcript novo). Sem isto, nunca casaria com o transcript novo e viraria fantasma.
         if start_ts and ts < start_ts:

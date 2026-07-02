@@ -43,6 +43,19 @@ def test_tail_offset_missing_file_is_zero(tmp_path):
     assert TranscriptTailer(tmp_path / "nope.jsonl")._tail_offset(5) == 0
 
 
+def test_read_from_restarts_after_shrink(tmp_path):
+    # Arquivo REESCRITO menor (truncamento): o offset antigo cairia alem do EOF e, quando o arquivo
+    # voltasse a crescer, a leitura retomaria no meio de linha nova = lixo/eventos perdidos. O guard
+    # detecta size < pos e recomeca do zero.
+    f = tmp_path / "s.jsonl"
+    f.write_text(_user("u1", "primeira mensagem bem comprida") + _user("u2", "segunda"))
+    t = TranscriptTailer(f)
+    _, pos = t._read_from(0)
+    f.write_text(_user("u9", "novo"))          # rewrite menor que o pos antigo
+    evs, _ = t._read_from(pos)
+    assert [e.id for e in evs] == ["u9"]
+
+
 @pytest.mark.asyncio
 async def test_follow_backfills_only_tail(tmp_path, monkeypatch):
     monkeypatch.setattr("app.transcript._BACKFILL_LINES", 2)
