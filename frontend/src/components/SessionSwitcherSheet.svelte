@@ -1,7 +1,7 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
-  import { basename, relativeTime } from '../lib/format';
+  import { relativeTime, stateLabels, stateColors } from '../lib/format';
   import type { SessionInfo, State } from '../lib/types';
 
   // Troca de sessao sem voltar pra home: busca + lista das outras sessoes vivas (a atual
@@ -28,12 +28,6 @@
     dead: 3,
   };
 
-  const stateColors: Record<State, string> = {
-    working: 'var(--accent)',
-    idle: 'var(--success)',
-    awaiting_input: 'var(--warning)',
-    dead: 'var(--error)',
-  };
 
   // Ordena por atividade (desc) + urgencia; aplica busca por nome/cwd.
   const sorted = $derived.by(() => {
@@ -48,10 +42,6 @@
         (s) => !q || s.name.toLowerCase().includes(q) || (s.cwd ?? '').toLowerCase().includes(q),
       );
   });
-
-  function title(s: SessionInfo): string {
-    return s.cwd ? basename(s.cwd) : s.name;
-  }
 
   function tap(s: SessionInfo) {
     if (s.name === currentName) {
@@ -86,10 +76,12 @@
           class="row"
           class:row--current={s.name === currentName}
           onclick={() => tap(s)}
+          aria-label={`${s.name} — ${stateLabels[s.state]}`}
         >
           <span class="dot" style="background: {stateColors[s.state]};" aria-hidden="true"></span>
           <span class="row-main">
-            <span class="row-name">{title(s)}</span>
+            <!-- Identidade primaria = nome da sessao (o mesmo do sidebar/lista); o cwd e a linha secundaria. -->
+            <span class="row-name">{s.name}</span>
             {#if s.cwd}<span class="row-cwd">{s.cwd}</span>{/if}
           </span>
           {#if s.name === currentName}
