@@ -100,9 +100,9 @@
   --error:    #b3251c;
   --warning:  #7a5408;
 
-  /* Status pill (mesma semantica; fg >=4.5:1 sobre o bg tintado blendado com o paper) */
+  /* Status pill (mesma semantica; fg >=4.5:1 sobre o bg tintado blendado com o paper, ate no pior fundo) */
   --pill-working-bg:  rgba(91,106,208,0.14);
-  --pill-working-fg:  #4d5bc0;
+  --pill-working-fg:  #4453b8;
   --pill-idle-bg:     rgba(40,160,70,0.14);
   --pill-idle-fg:     #146c30;
   --pill-dead-bg:     rgba(220,50,40,0.12);

@@ -17,8 +17,24 @@
   let { open, sessions, currentName, onPick, onNew, onClose }: Props = $props();
 
   let query = $state('');
+  let searchEl = $state<HTMLInputElement | null>(null);
+  // Item destacado pra navegacao por teclado (setas): 0..sorted.length-1 = sessoes; sorted.length = "Nova sessao".
+  let activeIdx = $state(0);
+
+  // Ao abrir: limpa busca, foca o campo (o switcher e de teclado — Ctrl+K abria com foco no body e
+  // digitar nao filtrava) e reseta o destaque.
   $effect(() => {
-    if (open) query = '';
+    if (open) {
+      query = '';
+      activeIdx = 0;
+      // espera o sheet montar/animar antes de focar
+      requestAnimationFrame(() => searchEl?.focus());
+    }
+  });
+  // Digitar refiltra -> o destaque volta pro topo pra nunca apontar pra um item fora da lista.
+  $effect(() => {
+    query;
+    activeIdx = 0;
   });
 
   const urgency: Record<State, number> = {
@@ -43,12 +59,30 @@
       );
   });
 
+  // Total navegavel = sessoes filtradas + a linha "Nova sessao".
+  const itemCount = $derived(sorted.length + 1);
+
   function tap(s: SessionInfo) {
     if (s.name === currentName) {
       onClose();
       return;
     }
     onPick(s.name);
+  }
+
+  // Setas movem o destaque (com wrap); Enter aciona o item destacado (sessao ou "Nova sessao").
+  function onKeydown(e: KeyboardEvent) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      activeIdx = (activeIdx + 1) % itemCount;
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      activeIdx = (activeIdx - 1 + itemCount) % itemCount;
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (activeIdx >= sorted.length) onNew();
+      else if (sorted[activeIdx]) tap(sorted[activeIdx]);
+    }
   }
 </script>
 
@@ -59,6 +93,8 @@
     type="text"
     class="search"
     bind:value={query}
+    bind:this={searchEl}
+    onkeydown={onKeydown}
     placeholder="Buscar sessão"
     autocomplete="off"
     autocorrect="off"
@@ -71,11 +107,13 @@
     {#if sorted.length === 0}
       <p class="empty">Nenhuma sessão encontrada.</p>
     {:else}
-      {#each sorted as s (s.name)}
+      {#each sorted as s, i (s.name)}
         <button
           class="row"
           class:row--current={s.name === currentName}
+          class:row--active={i === activeIdx}
           onclick={() => tap(s)}
+          onmousemove={() => (activeIdx = i)}
           aria-label={`${s.name} — ${stateLabels[s.state]}`}
         >
           <span class="dot" style="background: {stateColors[s.state]};" aria-hidden="true"></span>
@@ -93,7 +131,12 @@
       {/each}
     {/if}
 
-    <button class="row row--new" onclick={onNew}>
+    <button
+      class="row row--new"
+      class:row--active={activeIdx >= sorted.length}
+      onclick={onNew}
+      onmousemove={() => (activeIdx = sorted.length)}
+    >
       <span class="plus" aria-hidden="true">+</span>
       <span class="row-name row-name--new">Nova sessão</span>
     </button>
@@ -171,6 +214,11 @@
   }
   .row:active {
     background: var(--bg-hover);
+  }
+  /* Item destacado por teclado (setas): mesmo realce do hover. */
+  .row--active {
+    background: var(--bg-hover);
+    box-shadow: inset 0 0 0 1px var(--border-default);
   }
   .row--current {
     background: var(--bg-surface);
