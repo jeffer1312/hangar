@@ -37,6 +37,25 @@
   let groups = $state<Group[]>([]);
   let collapsed = $state(false);   // pin: recolhido persistente (botao)
   let hovering = $state(false);    // hover sobre a sidebar recolhida -> expande temporario
+
+  // ── Largura redimensionavel (drag na borda direita), persistida ─────────────
+  const WMIN = 200, WMAX = 520;
+  const clampW = (w: number) => Math.max(WMIN, Math.min(WMAX, w));
+  let width = $state(clampW(Number(localStorage.getItem('cp_sidebar_w')) || 270));
+  let resizing = $state(false);
+  function resizeStart(e: PointerEvent) {
+    resizing = true;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }
+  function resizeMove(e: PointerEvent) {
+    if (resizing) width = clampW(e.clientX);   // sidebar cola na esquerda -> clientX = largura
+  }
+  function resizeEnd() {
+    if (!resizing) return;
+    resizing = false;
+    try { localStorage.setItem('cp_sidebar_w', String(width)); } catch { /* storage cheio/off */ }
+  }
   let servers = $state(listServers());
   let activeId = $state(getActiveId());
   let scanning = $state(false);
@@ -292,7 +311,8 @@
   const activeServer = $derived(servers.find((s) => s.id === activeId) ?? servers[0] ?? null);
 </script>
 
-<aside class="sidebar" class:collapsed={!expanded}
+<aside class="sidebar" class:collapsed={!expanded} class:resizing
+  style:width={expanded ? width + 'px' : undefined}
   onmouseenter={() => (hovering = true)} onmouseleave={() => (hovering = false)}>
   <div class="side-top">
     <button class="icon-btn" onclick={() => (collapsed = !collapsed)} aria-label={collapsed ? 'Expandir' : 'Recolher'}>
@@ -413,6 +433,13 @@
       <button class="logout-btn" onclick={logout}>Sair</button>
     </div>
   {/if}
+
+  {#if !collapsed}
+    <!-- Drag na borda direita pra redimensionar (so pin aberto). -->
+    <div class="resize-handle" onpointerdown={resizeStart} onpointermove={resizeMove}
+      onpointerup={resizeEnd} onpointercancel={resizeEnd}
+      role="separator" aria-label="Redimensionar barra lateral" aria-orientation="vertical"></div>
+  {/if}
 </aside>
 
 <CreateSessionSheet open={showCreate} {servers} onClose={() => (showCreate = false)} onCreate={handleCreate} onOpenSession={onSelect} />
@@ -439,6 +466,7 @@
 
 <style>
   .sidebar {
+    position: relative;   /* ancora o resize-handle */
     width: 270px;
     flex-shrink: 0;
     height: 100%;
@@ -455,6 +483,15 @@
     gap: var(--space-2);
     transition: width 160ms var(--ease-out);
     overflow: hidden;
+  }
+  /* Enquanto arrasta: sem transicao (segue o ponteiro sem lag). */
+  .sidebar.resizing { transition: none; }
+  .resize-handle {
+    position: absolute; top: 0; right: 0; width: 6px; height: 100%;
+    cursor: col-resize; z-index: 6; touch-action: none;
+  }
+  @media (hover: hover) {
+    .resize-handle:hover { background: var(--accent-dim); }
   }
   /* Chromium (data-liquid): refracao SVG real (liquid). No desktop a sidebar fica AO LADO do chat
      (nada atras pra refratar) -> efeito sutil; mais visivel quando ha conteudo atras. */
