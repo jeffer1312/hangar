@@ -20,6 +20,7 @@
       {#key currentSession}
         <Chat
           sessionName={currentSession}
+          desktop={true}
           onBack={() => onNavigateToChat('')}
           onNavigateToChat={onNavigateToChat}
         />

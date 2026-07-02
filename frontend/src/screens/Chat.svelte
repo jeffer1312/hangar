@@ -30,8 +30,9 @@
     sessionName: string;
     onBack: () => void;
     onNavigateToChat: (name: string) => void;
+    desktop?: boolean;   // montado no DesktopShell -> header sem "voltar"/switcher + atalhos de teclado
   }
-  let { sessionName, onBack, onNavigateToChat }: Props = $props();
+  let { sessionName, onBack, onNavigateToChat, desktop = false }: Props = $props();
 
   let events = $state<ChatEvent[]>([]);
   // Índice id->posição em `events`. O SSE re-emite o transcript INTEIRO a cada (re)conexão; sem isto
@@ -117,6 +118,45 @@
   async function handleCreate(name: string, cwd?: string) {
     await createSession(name, cwd);
     onNavigateToChat(name);
+  }
+
+  // ── Atalhos de teclado (so desktop) ────────────────────────────────────────
+  let composerRef = $state<{ focus: () => void } | undefined>();
+
+  // Lista pra navegar sessao com Ctrl/Cmd+setas. Carregada no mount (desktop); openSwitcher tb atualiza.
+  async function loadSessionsForNav() {
+    try { allSessions = await getSessions(); } catch { /* sem lista -> setas viram no-op */ }
+  }
+  onMount(() => { if (desktop) loadSessionsForNav(); });
+
+  function switchRelative(delta: number) {
+    const names = allSessions.map((s) => s.name);
+    if (names.length < 2) { loadSessionsForNav(); return; }
+    const i = names.indexOf(sessionName);
+    const next = names[((i < 0 ? 0 : i + delta) + names.length) % names.length];
+    if (next && next !== sessionName) onNavigateToChat(next);
+  }
+
+  const anyOverlayOpen = () =>
+    switcherOpen || createOpen || usageOpen || gitOpen || activityOpen || mirrorOpen || askOpen;
+  function closeOverlays() {
+    switcherOpen = createOpen = usageOpen = gitOpen = activityOpen = false;
+    if (mirrorOpen) closeMirror();
+    askOpen = false;
+  }
+
+  function onGlobalKey(e: KeyboardEvent) {
+    if (!desktop) return;
+    const mod = e.ctrlKey || e.metaKey;
+    if (e.key === 'Escape' && anyOverlayOpen()) { e.preventDefault(); closeOverlays(); return; }
+    if (mod && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openSwitcher(); return; }
+    if (mod && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      e.preventDefault(); switchRelative(e.key === 'ArrowDown' ? 1 : -1); return;
+    }
+    const el = e.target as HTMLElement | null;
+    const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+    if (typing) return;   // "/" foca o composer so quando NAO ja digitando num campo
+    if (e.key === '/') { e.preventDefault(); composerRef?.focus(); }
   }
 
   const currentState = $derived<State>(stateEvent?.state ?? 'idle');
@@ -595,9 +635,11 @@
   }
 </script>
 
+<svelte:window onkeydown={onGlobalKey} />
+
 <div class="chat-screen" bind:this={screenEl} style:--nav-h={navH + 'px'}>
   <div class="navbar-mount" bind:this={navEl}>
-    <NavBar title={sessionName} showBack={true} onBack={onBack} onTitleTap={openSwitcher} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} working={currentState === 'working'} />
+    <NavBar title={sessionName} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} working={currentState === 'working'} />
   </div>
 
   {#if loading}
@@ -653,6 +695,7 @@
            se as opcoes nao fossem parseadas, o usuario ficava sem input E sem botoes = preso.
            Os OptionButtons continuam aparecendo na lista; o composer fica como saida garantida. -->
       <Composer
+        bind:this={composerRef}
         {sessionName}
         bind:inputText={composerText}
         sessionState={currentState}
