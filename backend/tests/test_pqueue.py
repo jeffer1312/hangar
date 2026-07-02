@@ -180,3 +180,16 @@ def test_committed_lines_include_queue_ops_and_raw_meta(tmp_path):
     lines = pqueue.committed_user_lines(str(j))
     assert "mandada mid-turn" in lines
     assert "na fila interna" in lines
+
+
+def test_merged_history_skips_confirmed_entries(tmp_path):
+    # Entrada CONFIRMADA (texto comprovado no transcript pelo reconcile) nao vira bolha nunca mais
+    # — nem no history nem no follow (mesmo flag) — mesmo que o dedup por texto nao a alcance.
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text("", encoding="utf-8")
+    q = PromptQueue("s")
+    q.path.write_text(json.dumps(
+        {"id": "c1", "text": "ja coberta", "ts": 900.0, "delivered": True, "confirmed": True}
+    ) + "\n", encoding="utf-8")
+    assert not any(e.id == "queued-c1" for e in pqueue.merged_history("s", str(j)))

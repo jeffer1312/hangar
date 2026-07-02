@@ -201,7 +201,10 @@ def _on_hook_transition(session_id: str, state: str) -> None:
             info = next((s for s in registry.list()
                          if s.jsonl and Path(s.jsonl).stem == session_id), None)
             if info and info.jsonl:
-                if drain(info.name, info.jsonl):
+                sent = drain(info.name, info.jsonl)
+                # Confirmacao em TODO idle (nao so pos-drain): Timers pendentes morrem no restart
+                # do backend — sem isto, entrada entregue ficava sem confirmar indefinidamente.
+                if sent or state == "idle":
                     threading.Timer(_CONFIRM_GRACE + 0.5, _confirm_and_drain,
                                     args=(info.name,)).start()
         except Exception:
