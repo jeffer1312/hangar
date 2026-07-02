@@ -259,6 +259,34 @@ def rename_session(name: str, body: RenameBody):
     return {"ok": True, "name": new}
 
 
+class ResumeBody(_StrictBody):
+    # None = "escolha por mim" (caso seguro) ou pede confirmacao (caso ambiguo). uuid = o candidato que o
+    # usuario escolheu no sheet de confirmacao.
+    session_id: str | None = None
+
+
+@app.post("/api/sessions/{name}/resume", dependencies=[Depends(require_auth)])
+def resume_session(name: str, body: ResumeBody):
+    # Relança uma sessao "sem id" com `claude --resume <uuid>` pra passar a rastrea-la (chat volta a abrir,
+    # continuando a conversa). Sem session_id: se so ha esta sessao no cwd, retoma o transcript mais
+    # recente direto; se ha outras (ambiguo), devolve os candidatos pro app confirmar antes.
+    sid = body.session_id
+    if sid is None:
+        try:
+            _, ambiguous, candidates = registry.resume_candidates(name)
+        except ValueError as e:
+            raise HTTPException(404, str(e))
+        if not candidates:
+            raise HTTPException(404, "nenhum transcript pra retomar neste diretorio")
+        if ambiguous and len(candidates) > 1:
+            return {"ambiguous": True, "candidates": candidates}
+        sid = candidates[0]["session_id"]
+    try:
+        return registry.resume(name, sid)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+
 @app.get("/api/sessions/{name}/history", dependencies=[Depends(require_auth)], response_model=list[ChatEvent])
 def history(name: str):
     jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)

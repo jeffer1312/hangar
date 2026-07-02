@@ -8,8 +8,9 @@
     serverBadge?: { label: string; color: string } | null;
     onClick: () => void;
     onDelete: () => void;
+    onResume?: () => void;
   }
-  let { session, serverBadge = null, onClick, onDelete }: Props = $props();
+  let { session, serverBadge = null, onClick, onDelete, onResume }: Props = $props();
 
   const stateLabels: Record<State, string> = {
     working: 'em execução',
@@ -147,7 +148,11 @@
         {/if}
       </span>
       {#if untracked}
-        <span class="untracked-hint">reabra com <code>claude --session-id …</code> pra rastrear</span>
+        <button
+          class="resume-btn"
+          onpointerdown={(e) => e.stopPropagation()}
+          onclick={(e) => { e.stopPropagation(); onResume?.(); }}
+        >↻ Retomar conversa</button>
       {/if}
     </div>
 
@@ -221,10 +226,35 @@
     background: var(--warning);
   }
 
-  /* Sem id confiavel: apagada e nao-clicavel (chat off). */
+  /* Sem id confiavel: textos apagados (chat off), mas o botao Retomar fica nitido/clicavel. NAO usar
+     opacity na row inteira: translucida deixa o "Excluir" vermelho de tras vazar no swipe-to-delete
+     (mesmo motivo do fundo OPACO no .action). */
   .session-row.untracked {
     cursor: not-allowed;
-    opacity: 0.62;
+  }
+  .session-row.untracked .session-name,
+  .session-row.untracked .meta-line,
+  .session-row.untracked .lead {
+    opacity: 0.55;
+  }
+  .resume-btn {
+    align-self: flex-start;
+    margin-top: 3px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-dim);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-full);
+    padding: 3px 10px;
+    cursor: pointer;
+  }
+  .resume-btn:active {
+    background: var(--accent);
+    color: #fff;
   }
 
   /* Slot do indicador: largura fixa pra alinhar os nomes (anim 20px centralizada). */
@@ -305,16 +335,6 @@
     border: 1px solid var(--warning);
     white-space: nowrap;
   }
-  .untracked-hint {
-    font-size: var(--text-xs);
-    color: var(--warning);
-    opacity: 0.85;
-  }
-  .untracked-hint code {
-    font-family: var(--font-mono);
-    font-size: 0.92em;
-  }
-
   .row-right {
     display: flex;
     align-items: center;

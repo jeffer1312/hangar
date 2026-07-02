@@ -479,3 +479,65 @@ def test_dedupe_collision_no_owner_demotes_all():
     b = SessionInfo(name="B", cwd="/c", jsonl="/p/Z.jsonl", tracked=True)
     reg._dedupe_collisions([a, b], {"A": "X", "B": "Y"})
     assert a.jsonl is None and b.jsonl is None
+
+
+# --- resume de sessao "sem id": relança com --resume -> passa a rastrear, continuando a conversa ---
+
+def test_resume_respawns_with_resume_flag(tmp_path):
+    cwd = "/home/u/p"
+    proj = tmp_path / sanitize_cwd(cwd)
+    proj.mkdir()
+    (proj / f"{_UUID}.jsonl").write_text("{}\n")  # o transcript a retomar (precisa existir)
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "list_panes_active",
+                      return_value=[{"name": "cc", "pid": 111, "cwd": cwd}]), \
+         patch.object(registry, "_config_dir_of", return_value=None), \
+         patch.object(registry.tmux, "kill_session") as kill, \
+         patch.object(registry.tmux, "new_session", return_value=True) as ns:
+        info = reg.resume("cc", _UUID)
+    assert info.tracked is True and info.jsonl.endswith(f"{_UUID}.jsonl")
+    kill.assert_called_once_with("cc")
+    assert f"--resume {_UUID}" in ns.call_args[0][2]        # comando relançado carrega --resume
+    assert SessionRegistry._jsonl_cache["cc"].endswith(f"{_UUID}.jsonl")
+
+
+def test_resume_rejects_bad_uuid(tmp_path):
+    # session_id vai DIRETO pro comando do shell -> uuid invalido (injecao) e recusado antes de tocar tmux.
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with pytest.raises(ValueError):
+        reg.resume("cc", "; rm -rf ~")
+
+
+def test_resume_missing_transcript_raises(tmp_path):
+    cwd = "/home/u/p"
+    (tmp_path / sanitize_cwd(cwd)).mkdir()  # dir existe, mas o <uuid>.jsonl NAO
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "list_panes_active",
+                      return_value=[{"name": "cc", "pid": 111, "cwd": cwd}]), \
+         patch.object(registry, "_config_dir_of", return_value=None), \
+         patch.object(registry.tmux, "new_session", return_value=True):
+        with pytest.raises(ValueError):
+            reg.resume("cc", _UUID)
+
+
+def test_resume_candidates_lists_recent_with_preview(tmp_path):
+    import json as _json
+    cwd = "/home/u/p"
+    proj = tmp_path / sanitize_cwd(cwd)
+    proj.mkdir()
+    old = proj / f"{_UUID}.jsonl"
+    old.write_text(_json.dumps({"type": "user", "uuid": "a", "message": {"content": "primeiro pedido"}}) + "\n")
+    new = proj / "deadbeef-0000-0000-0000-000000000000.jsonl"
+    new.write_text("{}\n")
+    os.utime(old, (1000, 1000))
+    os.utime(new, (2000, 2000))  # mais recente -> vem primeiro
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "list_panes_active",
+                      return_value=[{"name": "cc", "pid": 111, "cwd": cwd}]), \
+         patch.object(registry, "_config_dir_of", return_value=None), \
+         patch.object(reg, "_cwd_has_siblings", return_value=True), \
+         patch.object(reg, "list", return_value=[]):
+        resolved_cwd, ambiguous, cands = reg.resume_candidates("cc")
+    assert resolved_cwd == cwd and ambiguous is True
+    assert cands[0]["session_id"] == "deadbeef-0000-0000-0000-000000000000"  # mais recente
+    assert cands[1]["session_id"] == _UUID and cands[1]["preview"] == "primeiro pedido"

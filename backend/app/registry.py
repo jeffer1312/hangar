@@ -488,3 +488,74 @@ class SessionRegistry:
         # Sessao morta nao deixa fila pra tras: senao acumula orfaos e uma futura sessao de mesmo
         # nome herdaria essas entradas como bubble-fantasma (mesmo motivo do clear no create()).
         PromptQueue(name).clear()
+
+    # ── Resume de sessao "sem id" ────────────────────────────────────────────────
+    # Uma sessao aberta com `claude` cru (sem --session-id) JA tem um transcript <uuid>.jsonl; so nao da
+    # pra ligar o pane a ele com seguranca (o uuid nao esta no cmdline). Relançar o pane com
+    # `claude --resume <uuid>` poe o uuid no cmdline -> resolve() volta a rastrear (tracked=True) e o chat
+    # abre CONTINUANDO a mesma conversa. Reusa kill+new_session (trata cores/config-dir corretamente).
+
+    def _pane_of(self, name: str) -> Optional[dict]:
+        return next((p for p in tmux.list_panes_active() if p["name"] == name), None)
+
+    def _first_user_text(self, jsonl: str, max_lines: int = 60) -> str:
+        # Preview do candidato = 1a msg de usuario da conversa (identifica "qual conversa e essa"). Le so
+        # as primeiras linhas; import local pra evitar ciclo (transcript -> models -> ...).
+        from app.transcript import parse_line
+        try:
+            with open(jsonl, encoding="utf-8", errors="replace") as fh:
+                for _, line in zip(range(max_lines), fh):
+                    ev = parse_line(line)
+                    if ev and ev.kind == "user_msg" and ev.text:
+                        return ev.text[:100]
+        except OSError:
+            pass
+        return ""
+
+    def resume_candidates(self, name: str) -> tuple[str, bool, list[dict]]:
+        # (cwd, ambiguo, candidatos). ambiguo = ha OUTRA sessao tmux no mesmo cwd -> o "mais recente por
+        # mtime" pode ser de outra sessao (a UI pede confirmacao). candidatos = ate 6 jsonls recentes do
+        # cwd, cada um com preview + se ja esta em uso por outra sessao viva.
+        pane = self._pane_of(name)
+        if pane is None:
+            raise ValueError("sessao nao encontrada")
+        cwd = pane["cwd"]
+        cdir = _config_dir_of(pane["pid"]) if pane.get("pid") else None
+        proj = ((cdir / "projects") if cdir else self.projects_dir) / sanitize_cwd(cwd)
+        files = sorted(proj.glob("*.jsonl"),
+                       key=lambda f: (f.stat().st_mtime if f.exists() else 0.0), reverse=True)[:6] \
+            if proj.is_dir() else []
+        taken = {os.path.realpath(s.jsonl) for s in self.list() if s.jsonl and s.name != name}
+        cands = [{
+            "session_id": f.stem,
+            "mtime": _jsonl_mtime(str(f)),
+            "preview": self._first_user_text(str(f)),
+            "in_use": os.path.realpath(str(f)) in taken,
+        } for f in files]
+        return cwd, self._cwd_has_siblings(cwd), cands
+
+    def resume(self, name: str, session_id: str) -> SessionInfo:
+        # Relança o pane com `claude --resume <session_id>`, continuando a conversa. Valida o uuid (vai
+        # DIRETO pro comando do shell -> barra injecao) e exige o .jsonl existir (nao resume fantasma).
+        try:
+            uuid.UUID(session_id)
+        except (ValueError, AttributeError, TypeError):
+            raise ValueError("session_id invalido")
+        pane = self._pane_of(name)
+        if pane is None:
+            raise ValueError("sessao nao encontrada")
+        cwd = pane["cwd"]
+        cdir = _config_dir_of(pane["pid"]) if pane.get("pid") else None
+        proj = ((cdir / "projects") if cdir else self.projects_dir) / sanitize_cwd(cwd)
+        jsonl = proj / f"{session_id}.jsonl"
+        if not jsonl.exists():
+            raise ValueError("transcript nao encontrado")
+        tmux.kill_session(name)
+        self._forget(name)
+        if not tmux.new_session(name, cwd, f"claude --resume {session_id}",
+                                str(cdir) if cdir else None):
+            raise ValueError("falha ao relançar a sessao")
+        # Fixa o transcript resumido no cache: resolve() ja o devolveria (o --resume esta no cmdline),
+        # mas semear evita a janela onde o pane ainda esta subindo e cairia no fallback por mtime.
+        self._jsonl_cache[name] = str(jsonl)
+        return SessionInfo(name=name, cwd=cwd, jsonl=str(jsonl), tracked=True)

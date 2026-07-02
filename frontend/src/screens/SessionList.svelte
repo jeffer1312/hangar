@@ -4,10 +4,11 @@
   import SessionCard from '../components/SessionCard.svelte';
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
   import QrScanner from '../components/QrScanner.svelte';
-  import { getSessions, createSession, deleteSession, openSessionsStream } from '../lib/api';
+  import BottomSheet from '../components/BottomSheet.svelte';
+  import { getSessions, createSession, deleteSession, resumeSession, openSessionsStream } from '../lib/api';
   import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
-  import type { AggSession, SessionInfo } from '../lib/types';
+  import type { AggSession, SessionInfo, ResumeCandidate } from '../lib/types';
   import { enablePush, pushSupported } from '../lib/push';
 
   interface Props {
@@ -203,6 +204,38 @@
     selectServer(s.serverId);
     await deleteSession(s.name);
     sessions = sessions.filter((x) => !(x.serverId === s.serverId && x.name === s.name));
+  }
+
+  // Retomar uma sessão "sem id": relança o pane com `claude --resume <uuid>` -> passa a rastrear. Caso
+  // seguro (sessão sozinha no cwd) resolve direto; caso ambíguo (outras sessões no mesmo cwd) o backend
+  // devolve candidatos e abrimos o sheet pra confirmar qual conversa retomar. O SSE de sessions atualiza
+  // o card sozinho (vira tracked) — não mexemos na lista aqui.
+  let resumeSheet = $state<{ session: AggSession; candidates: ResumeCandidate[] } | null>(null);
+  let resumeBusy = $state('');   // nome da sessão em processamento (desabilita o botão/itens)
+  let resumeError = $state('');
+
+  async function handleResume(s: AggSession, sessionId?: string) {
+    resumeError = '';
+    resumeBusy = s.name;
+    selectServer(s.serverId);
+    try {
+      const r = await resumeSession(s.name, sessionId);
+      if (r && 'ambiguous' in r && r.ambiguous) {
+        resumeSheet = { session: s, candidates: r.candidates };
+      } else {
+        resumeSheet = null;   // religada (caso seguro ou escolha confirmada)
+      }
+    } catch (e) {
+      resumeError = e instanceof Error ? e.message : 'falha ao retomar';
+    } finally {
+      resumeBusy = '';
+    }
+  }
+
+  // Formata a data da última atividade do candidato (epoch s) de forma curta e local.
+  function fmtWhen(mtime?: number | null): string {
+    if (!mtime) return '';
+    return new Date(mtime * 1000).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
   }
 
   function handleLogout() {
@@ -405,6 +438,7 @@
                     serverBadge={null}
                     onClick={() => openSession(session)}
                     onDelete={() => handleDelete(session)}
+                    onResume={() => handleResume(session)}
                   />
                 {/each}
               {/if}
@@ -417,6 +451,7 @@
               serverBadge={null}
               onClick={() => openSession(session)}
               onDelete={() => handleDelete(session)}
+              onResume={() => handleResume(session)}
             />
           {/each}
         {/if}
@@ -443,6 +478,36 @@
     onCreate={handleCreate}
     onOpenSession={onNavigateToChat}
   />
+
+  <!-- Caso ambíguo do resume: várias sessões no mesmo cwd -> o usuário confirma QUAL conversa retomar. -->
+  <BottomSheet open={resumeSheet !== null} onClose={() => (resumeSheet = null)} ariaLabel="Retomar conversa">
+    {#if resumeSheet}
+      {@const sheet = resumeSheet}
+      <div class="resume-sheet">
+        <h2 class="resume-title">Retomar qual conversa?</h2>
+        <p class="resume-sub">
+          Há mais de uma sessão nesta pasta — escolha o transcript pra continuar em <strong>{sheet.session.name}</strong>.
+        </p>
+        {#if resumeError}<p class="resume-err">{resumeError}</p>{/if}
+        <ul class="resume-list">
+          {#each sheet.candidates as c (c.session_id)}
+            <li>
+              <button
+                class="resume-item"
+                disabled={c.in_use || resumeBusy === sheet.session.name}
+                onclick={() => handleResume(sheet.session, c.session_id)}
+              >
+                <span class="resume-item-preview">{c.preview || '(sem prévia)'}</span>
+                <span class="resume-item-meta">
+                  {fmtWhen(c.mtime)}{#if c.in_use} · em uso por outra sessão{/if}
+                </span>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
+  </BottomSheet>
 
   {#if showAddServer}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -849,5 +914,63 @@
     color: var(--text-muted);
     padding: var(--space-1) var(--space-4) var(--space-2);
     border-bottom: 1px solid var(--border-subtle);
+  }
+
+  /* Sheet de resume (caso ambíguo): lista de transcripts candidatos pra escolher. */
+  .resume-sheet {
+    padding: var(--space-4) var(--space-4) var(--space-6);
+  }
+  .resume-title {
+    font-size: var(--text-lg);
+    font-weight: 700;
+    margin: 0 0 var(--space-1);
+  }
+  .resume-sub {
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+    margin: 0 0 var(--space-3);
+  }
+  .resume-err {
+    font-size: var(--text-sm);
+    color: var(--error);
+    margin: 0 0 var(--space-2);
+  }
+  .resume-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .resume-item {
+    width: 100%;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: var(--space-3);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+  }
+  .resume-item:active {
+    background: var(--bg-elevated, var(--bg-surface));
+  }
+  .resume-item:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .resume-item-preview {
+    font-size: var(--text-sm);
+    color: var(--text-base);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .resume-item-meta {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
   }
 </style>
