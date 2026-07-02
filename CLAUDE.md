@@ -66,9 +66,12 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   reveals older pages (in-memory, no backend call). Don't render the whole transcript at once.
 - **Queue/pending dedup.** Messages sent while Claude is `working` echo as `pending` / `queued-` bubbles and
   reconcile against the real transcript by normalized text/line. Touch `Chat.svelte` dedup carefully.
-- **The phone app does NOT render native prompts.** `AskUserQuestion` / interactive option menus don't show
-  up in the mobile chat. When you need a choice from the user, ask with **numbered plain text**, not
-  AskUserQuestion.
+- **The phone app renders `AskUserQuestion` natively.** The `ask_question` SSE event opens the
+  `AskQuestionSheet` stepper; since the pending payload isn't in the jsonl, a PreToolUse hook
+  (`askq_capture.py`, installed idempotently by `hook_installer.py`) captures it into a sidecar. Verified
+  live: use AskUserQuestion freely, it shows as the stepper. Numbered plain text is only a fallback for a
+  session where that capture hook isn't installed. Raw TUI option pickers (not the tool) surface separately
+  via `OptionButtons` (selection sent by `terminal_input.py`), so free composer text does not answer a picker.
 - **Restarting the backend.** No `--reload` (it holds SSE + watchfiles). `pkill -f app.main` can match your
   own shell; SIGTERM can hang on an open SSE connection. Kill `-9` the pid bound to the port and relaunch
   detached (`setsid`).
