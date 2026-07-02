@@ -39,26 +39,35 @@ function workflowName(script: unknown): string | null {
   return m ? m[1] : null;
 }
 
-export function deriveActivity(events: ChatEvent[]): Activity {
-  // tool_use_id que já tem tool_result -> usado pra detectar agente ainda rodando.
-  const resulted = new Set<string>();
-  for (const e of events) {
-    if (e.kind === 'tool_result' && e.tool_use_id) resulted.add(e.tool_use_id);
-  }
+export interface ActivityFolder {
+  push(e: ChatEvent): void;
+  reset(events: ChatEvent[]): void;
+  snapshot(): Activity;
+}
 
-  // ── Tarefas ──────────────────────────────────────────────────────────────
-  // Este build usa TaskCreate/TaskUpdate (incremental, event-sourced) — é preciso FOLDAR o
-  // stream, não "pegar o último". Suporta também TodoWrite stock (lista inteira por chamada) como
-  // fallback: se houver, a última vence (é canônica).
-  const byId = new Map<string, TaskItem>();
-  const order: string[] = [];
+// Fold INCREMENTAL: o Chat alimenta evento a evento (push) conforme chegam do SSE, em vez de
+// re-varrer o array inteiro a cada mensagem (deriveActivity como $derived era O(n) por evento e
+// crescia com o historico). reset() refaz do zero (reseed do history / /clear); snapshot()
+// materializa o Activity (custo O(tasks+agentes), pequeno).
+export function createActivityFolder(): ActivityFolder {
+  let resulted = new Set<string>();      // tool_use_id que ja tem tool_result (agente terminou)
+  let byId = new Map<string, TaskItem>();
+  let order: string[] = [];
   let todoWrite: TaskItem[] | null = null;
   let createSeq = 0;
+  let agents: { id: string; kind: 'agent' | 'workflow'; description: string }[] = [];
 
-  for (const e of events) {
-    if (e.kind !== 'tool_use' || !e.tool_name) continue;
+  function push(e: ChatEvent): void {
+    if (e.kind === 'tool_result' && e.tool_use_id) {
+      resulted.add(e.tool_use_id);
+      return;
+    }
+    if (e.kind !== 'tool_use' || !e.tool_name) return;
     const input = (e.tool_input ?? {}) as Record<string, unknown>;
 
+    // Tarefas: este build usa TaskCreate/TaskUpdate (incremental, event-sourced) — é preciso FOLDAR
+    // o stream, não "pegar o último". Suporta também TodoWrite stock (lista inteira por chamada)
+    // como fallback: se houver, a última vence (é canônica).
     switch (e.tool_name) {
       case 'TodoWrite': {
         let todos: unknown = input.todos;
@@ -101,40 +110,65 @@ export function deriveActivity(events: ChatEvent[]): Activity {
         if (item) item.status = 'deleted';
         break;
       }
+      case 'Agent': {
+        if (e.tool_use_id) {
+          agents.push({
+            id: e.tool_use_id,
+            kind: 'agent',
+            description: String(input.description ?? input.subagent_type ?? 'Agente'),
+          });
+        }
+        break;
+      }
+      case 'Workflow': {
+        // Workflow roda em background e devolve o tool_result na hora -> não dá pra inferir o
+        // término só pelos eventos (o Chat polla o backend enquanto houver razão).
+        if (e.tool_use_id) {
+          agents.push({
+            id: e.tool_use_id,
+            kind: 'workflow',
+            description: workflowName(input.script) ?? 'Workflow',
+          });
+        }
+        break;
+      }
     }
   }
 
-  const all = todoWrite ?? order.map((id) => byId.get(id)).filter((t): t is TaskItem => !!t);
-  const tasks = all.filter((t) => t.status !== 'deleted');
-
-  // ── Agentes / Workflows ────────────────────────────────────────────────────
-  const agents: AgentRun[] = [];
-  for (const e of events) {
-    if (e.kind !== 'tool_use' || !e.tool_use_id) continue;
-    const input = (e.tool_input ?? {}) as Record<string, unknown>;
-    if (e.tool_name === 'Agent') {
-      agents.push({
-        id: e.tool_use_id,
-        kind: 'agent',
-        description: String(input.description ?? input.subagent_type ?? 'Agente'),
-        running: !resulted.has(e.tool_use_id), // bloqueante: sem result = rodando
-      });
-    } else if (e.tool_name === 'Workflow') {
-      // Workflow roda em background e devolve o tool_result na hora -> não dá pra inferir o
-      // término só pelos eventos (precisaria ler os arquivos do run no disco; fica pra depois).
-      agents.push({
-        id: e.tool_use_id,
-        kind: 'workflow',
-        description: workflowName(input.script) ?? 'Workflow',
-        running: false,
-      });
-    }
+  function reset(events: ChatEvent[]): void {
+    resulted = new Set();
+    byId = new Map();
+    order = [];
+    todoWrite = null;
+    createSeq = 0;
+    agents = [];
+    for (const e of events) push(e);
   }
-  agents.sort((a, b) => Number(b.running) - Number(a.running));
 
-  const done = tasks.filter((t) => t.status === 'completed').length;
-  const inProgress = tasks.filter((t) => t.status === 'in_progress').length;
-  const runningAgents = agents.filter((a) => a.running).length;
+  function snapshot(): Activity {
+    // Copia os itens: o fold MUTA os TaskItem internos (TaskUpdate) — sem copiar, um snapshot
+    // antigo mudaria por baixo do estado que a UI segura.
+    const all = (todoWrite ?? order.map((id) => byId.get(id)).filter((t): t is TaskItem => !!t))
+      .map((t) => ({ ...t }));
+    const tasks = all.filter((t) => t.status !== 'deleted');
+    // running calculado AQUI (não no push): o tool_result do agente chega DEPOIS do tool_use.
+    // Agent é bloqueante (sem result = rodando); Workflow devolve result imediato -> nunca "rodando".
+    const runs: AgentRun[] = agents.map((a) => ({
+      ...a,
+      running: a.kind === 'agent' && !resulted.has(a.id),
+    }));
+    runs.sort((a, b) => Number(b.running) - Number(a.running));
+    const done = tasks.filter((t) => t.status === 'completed').length;
+    const inProgress = tasks.filter((t) => t.status === 'in_progress').length;
+    const runningAgents = runs.filter((a) => a.running).length;
+    return { tasks, agents: runs, total: tasks.length, done, inProgress, runningAgents };
+  }
 
-  return { tasks, agents, total: tasks.length, done, inProgress, runningAgents };
+  return { push, reset, snapshot };
+}
+
+export function deriveActivity(events: ChatEvent[]): Activity {
+  const f = createActivityFolder();
+  f.reset(events);
+  return f.snapshot();
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import QrScanner from 'qr-scanner';
+  import type QrScanner from 'qr-scanner';
 
   interface Props {
     onScan: (text: string) => void;
@@ -11,10 +11,14 @@
   let videoEl: HTMLVideoElement | undefined = $state();
   let scanner: QrScanner | null = null;
   let error = $state('');
+  let dead = false;
 
   onMount(async () => {
     if (!videoEl) return;
-    scanner = new QrScanner(
+    // qr-scanner fora do bundle inicial: so carrega quando o scanner abre (pareamento e raro).
+    const { default: Scanner } = await import('qr-scanner');
+    if (dead || !videoEl) return; // fechou enquanto o chunk carregava
+    scanner = new Scanner(
       videoEl,
       (result) => {
         scanner?.stop(); // first hit wins — stop before handing off
@@ -30,6 +34,7 @@
   });
 
   onDestroy(() => {
+    dead = true;
     scanner?.stop();
     scanner?.destroy();
     scanner = null;

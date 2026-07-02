@@ -23,7 +23,7 @@
   } from '../lib/api';
   import { parseStatusLine } from '../lib/statusline';
   import { listServers } from '../lib/auth';
-  import { deriveActivity } from '../lib/activity';
+  import { createActivityFolder } from '../lib/activity';
   import type { ChatEvent, StateEvent, State, SessionInfo, AskQuestionPayload, AnswerItem } from '../lib/types';
 
   interface Props {
@@ -123,19 +123,25 @@
   function closeMirror() { mirrorOpen = false; }
   // Statusline crua -> campos tipados (modelo, contexto, custo, tempo de sessao).
   const status = $derived(parseStatusLine(stateEvent?.status_line ?? null));
-  // Painel de atividade: tarefas (TaskCreate/Update) + agentes rodando, derivado dos eventos.
-  const activity = $derived(deriveActivity(events));
+  // Painel de atividade: tarefas (TaskCreate/Update) + agentes rodando. Fold INCREMENTAL: o handler
+  // do SSE dá push evento a evento — deriveActivity(events) como $derived re-varria o histórico
+  // INTEIRO a cada mensagem (O(n) por evento em sessão longa).
+  const actFolder = createActivityFolder();
+  let activity = $state(actFolder.snapshot());
   const activityBadge = $derived(activity.inProgress + activity.runningAgents);
   const hasActivity = $derived(activity.tasks.length > 0 || activity.agents.length > 0);
 
   // Workflow roda em BACKGROUND -> nao da pra inferir "rodando" so pelos eventos (activity.ts marca
-  // workflow running:false). Pergunta ao backend (le os arquivos do run) enquanto houver workflow no
-  // painel; alimenta o "respira" do botao de atividade no topo (sinal de que nao travou).
+  // workflow running:false). Pergunta ao backend (le os arquivos do run) SÓ com motivo: sheet de
+  // atividade aberto ou run ainda ativo; um workflow NOVO no transcript (wfCount muda) dispara UM
+  // poll (kick) que, se estiver rodando, liga o loop de 4s até terminar. Antes: qualquer workflow
+  // no histórico (mesmo finalizado há dias) pollava a cada 4s pra sempre.
   let workflowRunning = $state(false);
-  const hasWorkflow = $derived(activity.agents.some((a) => a.kind === 'workflow'));
+  const wfCount = $derived(activity.agents.filter((a) => a.kind === 'workflow').length);
   const activityRunning = $derived(workflowRunning || activity.runningAgents > 0);
   $effect(() => {
-    if (!hasWorkflow) { workflowRunning = false; return; }
+    if (!wfCount) { workflowRunning = false; return; }
+    const sustain = activityOpen || workflowRunning;
     let alive = true;
     async function poll() {
       try {
@@ -143,15 +149,23 @@
         if (alive) workflowRunning = ws.some((w) => w.running);
       } catch { /* offline / sem run -> ignora */ }
     }
-    poll();
-    const id = setInterval(poll, 4000);
-    return () => { alive = false; clearInterval(id); };
+    poll(); // kick: roda 1x a cada mudança de wfCount/activityOpen/workflowRunning
+    const id = sustain ? setInterval(poll, 4000) : undefined;
+    return () => { alive = false; if (id !== undefined) clearInterval(id); };
   });
+
+  // Contadores/folds incrementais re-semeados junto com `events` (reseed completo).
+  function reseedDerived() {
+    actFolder.reset(events);
+    activity = actFolder.snapshot();
+    asstCount = countAssts(events);
+  }
 
   async function loadHistory() {
     try {
       events = await getHistory(sessionName);
       rebuildIndex();
+      reseedDerived();
     } catch (err) {
       error = err instanceof Error ? err.message : 'Erro ao carregar histórico';
     } finally {
@@ -211,6 +225,14 @@
         } else {
           idIndex.set(ev.id, events.length);
           events = [...events, ev];
+          // Folds incrementais: evento NOVO alimenta o painel de atividade e o contador de
+          // assistant_msg (replaces do replay não passam aqui -> não contam dobrado).
+          if (ev.kind === 'tool_use' || ev.kind === 'tool_result') {
+            actFolder.push(ev);
+            activity = actFolder.snapshot();
+          } else if (ev.kind === 'assistant_msg' && ev.text) {
+            asstCount += 1;
+          }
         }
       } catch {}
     });
@@ -245,6 +267,7 @@
       armWatchdog();
       events = [];
       idIndex.clear();
+      reseedDerived();          // zera activity/asstCount junto (loadHistory re-semeia com o novo)
       previewText = '';
       stateEvent = null;
       loadHistory();
@@ -271,6 +294,7 @@
       const fresh = await getHistory(sessionName);
       events = fresh;
       rebuildIndex();
+      reseedDerived();
     } catch { /* offline momentaneo: o connectSSE/onerror cuida do re-sync */ }
     connectSSE();
   }
@@ -453,17 +477,24 @@
   // markdown), o .jsonl tem o markdown cru -> sem tirar, "**Confirma**" != "Confirma" e o preview
   // duplicado de uma msg com formatação NÃO casava com a commitada (ficava como bolha fantasma).
   const _norm = (s: string) => s.replace(/[`*_~#>]/g, '').replace(/\s+/g, ' ').trim();
-  let _asstCount = 0;
+  // Contador INCREMENTAL de assistant_msg (mantido no handler do SSE + reseedDerived): o effect
+  // abaixo rodava um loop no `events` inteiro A CADA frame de preview (~150ms em streaming) só pra
+  // detectar um commit novo — O(n) por frame em sessão longa.
+  let asstCount = $state(0);
+  function countAssts(evs: ChatEvent[]): number {
+    let c = 0;
+    for (const e of evs) if (e.kind === 'assistant_msg' && e.text) c++;
+    return c;
+  }
+  let _asstSeen = 0;
   $effect(() => {
     // CRÍTICO: ler previewText AQUI no topo, SEMPRE -> em Svelte 5 a dep só é rastreada se LIDA na
     // execução. Se a gente retornasse antes de ler (caminho idle), o effect não re-rodaria quando o
     // broker REEMITISSE o preview no idle -> o tail ficava (a duplicata que não saía). Lendo aqui, o
     // effect re-roda a cada update do preview e limpa.
     const pv = previewText;
-    let c = 0;
-    for (const e of events) if (e.kind === 'assistant_msg' && e.text) c++;
-    const committed = c > _asstCount;
-    _asstCount = c;
+    const committed = asstCount > _asstSeen;
+    _asstSeen = asstCount;
     if (!pv) return;
     // (a) bloco novo commitou OU (b) saiu de working -> dropa.
     if (committed || currentState !== 'working') { previewText = ''; return; }

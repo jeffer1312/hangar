@@ -2,8 +2,9 @@
   interface Props {
     text: string;
     ts?: number | null;
+    animate?: boolean;   // false = bubble de HISTORICO remontada (paginacao/janela): sem fade
   }
-  let { text, ts }: Props = $props();
+  let { text, ts, animate = true }: Props = $props();
 
   function formatTime(ts: number | null | undefined): string {
     if (!ts) return '';
@@ -14,7 +15,7 @@
   }
 </script>
 
-<div class="bubble-wrap">
+<div class="bubble-wrap" class:noanim={!animate}>
   <div class="bubble">
     <p class="bubble-text">{text}</p>
   </div>
@@ -32,10 +33,15 @@
     margin-bottom: var(--space-3);
   }
 
+  /* Historico remontado (paginacao/janela): entra parado. */
+  .bubble-wrap.noanim { animation: none; }
+
   .bubble {
     background: var(--bubble-user);
     color: var(--text-primary);
-    max-width: 80%;
+    /* 80% do container, com teto de leitura: na coluna larga do desktop (ate 1400px) 80% viraria
+       um balao de ~1100px com linhas ilegiveis. */
+    max-width: min(80%, 46rem);
     padding: var(--space-3) var(--space-4);
     border-radius: 18px 18px 4px 18px;
     word-break: break-word;

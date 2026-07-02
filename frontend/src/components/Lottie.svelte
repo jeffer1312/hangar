@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import lottie, { type AnimationItem } from 'lottie-web';
+  import type { AnimationItem } from 'lottie-web';
 
   interface Props {
     data: unknown; // JSON da animacao (importado)
@@ -15,13 +15,22 @@
   let anim: AnimationItem | undefined;
 
   onMount(() => {
-    anim = lottie.loadAnimation({
-      container: el,
-      renderer: 'svg',
-      loop,
-      autoplay,
-      animationData: data,
+    let dead = false;
+    // lottie-web (~250KB) fora do bundle inicial: import dinamico no 1o mount (chunk proprio,
+    // cacheado dai em diante). O spinner e progressivo por natureza — nao trava nada esperando.
+    import('lottie-web').then(({ default: lottie }) => {
+      if (dead || !el) return;
+      anim = lottie.loadAnimation({
+        container: el,
+        renderer: 'svg',
+        loop,
+        autoplay,
+        animationData: data,
+      });
+      // O $effect do frame pode ter rodado antes do load (anim undefined): aplica a pose atual.
+      if (!autoplay && frame != null) anim.goToAndStop(frame, true);
     });
+    return () => { dead = true; };
   });
 
   // Parado num frame especifico (ex: pose distinta por estado). Reage a mudanca de frame sem remount.

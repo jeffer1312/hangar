@@ -8,8 +8,9 @@
     ts?: number | null;
     sessionName?: string;
     preview?: boolean;
+    animate?: boolean;   // false = bubble de HISTORICO remontada (paginacao/janela): sem fade/slide
   }
-  let { text, ts, sessionName = '', preview = false }: Props = $props();
+  let { text, ts, sessionName = '', preview = false, animate = true }: Props = $props();
 
   const html = $derived(preview ? '' : renderMarkdown(text));
   // Anexos por caminho citado na minha msg (img/video/html/pdf que eu "mandar").
@@ -26,7 +27,7 @@
   }
 </script>
 
-<div class="assistant-msg">
+<div class="assistant-msg" class:noanim={!animate}>
   {#if preview}
     <!-- Preview ao vivo: texto PLANO (markdown so no snap final canonico, pra nao piscar **/code-fence
          meio-aberto) + caret. Mesma casca da bolha real -> swap quase invisivel. -->
@@ -60,17 +61,26 @@
     to   { opacity: 1; transform: none; }
   }
 
+  /* Historico remontado (paginacao pra cima / re-ancorar da janela): entra parado. */
+  .assistant-msg.noanim { animation: none; }
+
   .prose {
     color: var(--text-primary);
-    max-width: 100%;
+    /* Medida de leitura: no desktop largo (coluna de ate 1400px) linha de texto sem teto passa de
+       200 caracteres — ilegivel. 80ch ~ o conforto tipografico; tabela/code/tool card continuam
+       usando a largura toda. */
+    max-width: min(100%, 80ch);
     word-break: break-word;
     font-size: var(--text-base);
     line-height: 1.6;
   }
 
   .prose :global(p) { margin: 0; }
-  .prose :global(p + p) { margin-top: var(--space-3); }
-  .prose :global(br) { display: block; content: ''; margin-top: var(--space-2); }
+  /* Linhas consecutivas (sem linha em branco) = mesmo bloco: quase coladas. Paragrafo REAL (linha
+     em branco no markdown -> class="para") ganha o respiro maior. Antes era o INVERSO (linha solta
+     12px, paragrafo 8px via <br>). */
+  .prose :global(p + p) { margin-top: var(--space-1); }
+  .prose :global(p.para) { margin-top: var(--space-3); }
   .prose :global(strong) { font-weight: 600; color: var(--text-primary); }
   .prose :global(em) { font-style: italic; color: var(--text-secondary); }
 

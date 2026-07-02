@@ -20,7 +20,9 @@
   /* Text */
   --text-primary:   #eee8e9;
   --text-secondary: #a0989b;
-  --text-muted:     #665d60;
+  /* muted: clareado de #665d60 (3.0:1 sobre --bg-base, abaixo do AA 4.5:1 pra texto pequeno —
+     timestamps/labels usam text-xs) pra ~5.3:1 na base e ~4.6:1 no elevated, mantendo o tom. */
+  --text-muted:     #8d8489;
   --text-inverse:   #100e11;
 
   /* Accent (índigo) */
@@ -72,7 +74,8 @@
   /* Text */
   --text-primary:   #221d1b;
   --text-secondary: #5f564f;
-  --text-muted:     #9c9085;
+  /* muted: escurecido de #9c9085 (2.9:1 sobre o paper, abaixo do AA) pra ~5.2:1, mesmo tom. */
+  --text-muted:     #6f6660;
   --text-inverse:   #fffdfa;
 
   /* Accent (índigo um pouco mais fundo p/ contraste no claro) */
