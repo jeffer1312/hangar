@@ -98,12 +98,13 @@
       <span class="chip">Ontem <b>{money(view.yesterday)}</b></span>
     </div>
 
-    <div class="cards">
-      <div class="card"><div class="v">{money(view.totals.cost)}</div><div class="l">custo total</div></div>
-      <div class="card"><div class="v">{view.totals.sessions}</div><div class="l">sessões</div></div>
-      <div class="card"><div class="v">{abbrevNum(view.totals.input)}</div><div class="l">input</div></div>
-      <div class="card"><div class="v">{abbrevNum(view.totals.output)}</div><div class="l">output</div></div>
-    </div>
+    <!-- Stat-strip: um painel unico com tipografia contida (NAO o template hero de numero-gigante). -->
+    <dl class="stats">
+      <div><dt>custo total</dt><dd class="accent">{money(view.totals.cost)}</dd></div>
+      <div><dt>sessões</dt><dd>{view.totals.sessions}</dd></div>
+      <div><dt>input</dt><dd>{abbrevNum(view.totals.input)}</dd></div>
+      <div><dt>output</dt><dd>{abbrevNum(view.totals.output)}</dd></div>
+    </dl>
 
     <div class="tabs" role="tablist" aria-label="Período">
       <button role="tab" aria-selected={period === 'day'} class:on={period === 'day'} onclick={() => (period = 'day')}>Dia</button>
@@ -111,57 +112,73 @@
       <button role="tab" aria-selected={period === 'month'} class:on={period === 'month'} onclick={() => (period = 'month')}>Mês</button>
     </div>
 
-    <table>
-      <thead><tr><th>período</th><th>sess</th><th>in</th><th>out</th><th>cache</th><th>custo</th><th></th></tr></thead>
-      <tbody>
-        {#each rows as r}
-          <tr>
-            <td class="k">{r.key}</td>
-            <td class="n">{r.sessions}</td>
-            <td class="n">{abbrevNum(r.input)}</td>
-            <td class="n">{abbrevNum(r.output)}</td>
-            <td class="n">{abbrevNum(r.cache_read)}</td>
-            <td class="c">{money(r.cost)}</td>
-            <td class="bar"><span style="width:{(r.cost / peak) * 100}%"></span></td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
+    <!-- overflow-x: a tabela e larga (7 col) e nao pode empurrar o body no mobile (375px). -->
+    <div class="twrap">
+      <table>
+        <thead><tr><th>período</th><th>sess</th><th>in</th><th>out</th><th>cache</th><th>custo</th><th></th></tr></thead>
+        <tbody>
+          {#each rows as r}
+            <tr>
+              <td class="k">{r.key}</td>
+              <td class="n">{r.sessions}</td>
+              <td class="n">{abbrevNum(r.input)}</td>
+              <td class="n">{abbrevNum(r.output)}</td>
+              <td class="n">{abbrevNum(r.cache_read)}</td>
+              <td class="c">{money(r.cost)}</td>
+              <td class="bar"><span style="width:{(r.cost / peak) * 100}%"></span></td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
 
     <h3>Por modelo</h3>
-    <table>
-      <tbody>
-        {#each view.by_model as m}
-          <tr><td class="k">{m.model}</td><td class="n">{m.sessions}</td><td class="c">{money(m.cost)}</td></tr>
-        {/each}
-      </tbody>
-    </table>
+    <div class="twrap">
+      <table>
+        <tbody>
+          {#each view.by_model as m}
+            <tr><td class="k">{m.model}</td><td class="n">{m.sessions}</td><td class="c">{money(m.cost)}</td></tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
   {/if}
 </div>
 
 <style>
-  .costs { padding: 12px 16px 40px; }
+  .costs { padding: var(--space-3) var(--space-4) var(--space-10); }
   .muted { color: var(--text-secondary); }
-  .warn { color: #d29922; font-size: 13px; }
-  .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+  .warn { color: var(--warning); font-size: var(--text-sm); }
+  .tabs { display: flex; gap: var(--space-2); flex-wrap: wrap; margin: var(--space-3) 0; }
   .tabs button {
     background: var(--bg-surface); border: 1px solid var(--border-default);
-    color: inherit; padding: 6px 14px; border-radius: 8px; font-size: 14px;
+    color: inherit; padding: var(--space-2) var(--space-4); border-radius: var(--radius-sm);
+    font-size: var(--text-sm); min-height: 36px;
   }
-  .tabs button.on { background: var(--accent); border-color: var(--accent); }
-  .chips { display: flex; gap: 10px; margin: 8px 0; }
-  .chip { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 8px; padding: 6px 12px; font-size: 13px; }
-  .cards { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0; }
-  .card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 10px; padding: 12px 16px; min-width: 92px; }
-  .card .v { font-size: 20px; font-weight: 700; }
-  .card .l { font-size: 11px; color: var(--text-secondary); text-transform: uppercase; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
-  th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border-subtle); }
-  th { color: var(--text-secondary); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  .tabs button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .chips { display: flex; gap: var(--space-3); margin: var(--space-2) 0; }
+  .chip {
+    background: var(--bg-surface); border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3); font-size: var(--text-sm);
+  }
+  /* Stat-strip: painel unico, tipografia contida — substitui o grid de 4 cards hero. */
+  .stats {
+    display: flex; flex-wrap: wrap; gap: var(--space-5) var(--space-6);
+    background: var(--bg-surface); border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); margin: var(--space-3) 0;
+  }
+  .stats > div { display: flex; flex-direction: column; gap: 2px; }
+  .stats dt { font-size: var(--text-xs); color: var(--text-muted); }
+  .stats dd { font-size: var(--text-lg); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stats dd.accent { color: var(--accent); }
+  .twrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); margin-top: var(--space-2); }
+  th, td { padding: var(--space-2); text-align: left; border-bottom: 1px solid var(--border-subtle); white-space: nowrap; }
+  th { color: var(--text-secondary); font-weight: 600; font-size: var(--text-xs); text-transform: uppercase; }
   .n, .c { text-align: right; font-variant-numeric: tabular-nums; }
   .c { font-weight: 700; color: var(--accent); }
   .k { white-space: nowrap; }
   .bar { width: 80px; }
   .bar span { display: block; height: 8px; border-radius: 4px; background: var(--accent); }
-  h3 { margin: 20px 0 4px; font-size: 15px; }
+  h3 { margin: var(--space-5) 0 var(--space-1); font-size: var(--text-base); }
 </style>
