@@ -85,8 +85,22 @@ def _strip_attach(text: str) -> str:
 
 
 def committed_user_lines(jsonl: str) -> set[str]:
-    """Textos de user_msg do transcript (inteiros + por linha), pra confirmar entregas da fila."""
+    """Textos que ATERRISSARAM no transcript (inteiros + por linha), pra confirmar entregas.
+    Fontes CRUAS, sem o filtro de meta do parser: (a) entradas `user` — mensagem entregue MID-TURN
+    e injetada depois vem embrulhada em meta que o parse_obj descartaria; (b) `queue-operation`
+    enqueue — a fila INTERNA do Claude Code registra o texto NO MOMENTO da digitacao, antes de
+    virar entrada user. Sem (b), mensagem enfileirada durante um turno longo parecia 'engolida'
+    e era REDIGITADA em loop (o bug das mensagens fantasma repetidas)."""
     out: set[str] = set()
+
+    def add(t: str) -> None:
+        t = t.strip()
+        if not t:
+            return
+        out.add(t)
+        for ln in t.split("\n"):
+            out.add(ln.strip())
+
     try:
         with open(jsonl, encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -94,12 +108,21 @@ def committed_user_lines(jsonl: str) -> set[str]:
                     obj = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
                     continue
-                for ev in parse_obj(obj):
-                    if ev.kind == "user_msg" and ev.text:
-                        t = ev.text.strip()
-                        out.add(t)
-                        for ln in t.split("\n"):
-                            out.add(ln.strip())
+                etype = obj.get("type")
+                if etype == "queue-operation":
+                    c = obj.get("content")
+                    if isinstance(c, str):
+                        add(c)
+                    continue
+                if etype != "user":
+                    continue
+                content = (obj.get("message") or {}).get("content")
+                if isinstance(content, str):
+                    add(content)
+                elif isinstance(content, list):
+                    for b in content:
+                        if isinstance(b, dict) and b.get("type") == "text":
+                            add(str(b.get("text", "")))
     except OSError:
         pass
     return out

@@ -171,6 +171,13 @@ def _confirm_and_drain(name: str) -> None:
         info = next((s for s in registry.list() if s.name == name), None)
         if not info or not info.jsonl:
             return
+        # MID-TURN o prompt entregue ainda pode nao ter virado entrada no transcript (vive na fila
+        # interna do Claude Code) — decidir requeue agora arriscaria redigitar mensagem ja recebida.
+        # Adia pro proximo ciclo (o turno acabando dispara transicao -> novo timer).
+        m = hook_state.get_state(Path(info.jsonl).stem)
+        if m and m[0] == "working":
+            threading.Timer(_CONFIRM_GRACE + 0.5, _confirm_and_drain, args=(name,)).start()
+            return
         requeued = q.reconcile_delivered(
             committed_user_lines(info.jsonl), _transcript_start_ts(info.jsonl), time.time(),
             grace=_CONFIRM_GRACE,

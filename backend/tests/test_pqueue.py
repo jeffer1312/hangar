@@ -163,3 +163,20 @@ def test_reconcile_strips_attachment_marker():
     ) + "\n", encoding="utf-8")
     assert q.reconcile_delivered({"legenda"}, min_ts=100.0, now=1000.0) == []
     assert q.load()[0]["confirmed"] is True    # transcript grava so a legenda -> casa sem o 📎
+
+
+def test_committed_lines_include_queue_ops_and_raw_meta(tmp_path):
+    # Mensagem entregue MID-TURN: (a) aparece embrulhada em meta na entrada user (o parser
+    # descartaria) e (b) na fila interna do Claude Code (queue-operation) desde a digitacao.
+    # As duas fontes contam como "aterrissou" — senao o reconcile redigitava msg ja recebida.
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(
+        json.dumps({"type": "user", "message": {"role": "user",
+                    "content": "<system-reminder>meta</system-reminder>\nmandada mid-turn"}}) + "\n" +
+        json.dumps({"type": "queue-operation", "operation": "enqueue",
+                    "content": "na fila interna"}) + "\n",
+        encoding="utf-8")
+    lines = pqueue.committed_user_lines(str(j))
+    assert "mandada mid-turn" in lines
+    assert "na fila interna" in lines
