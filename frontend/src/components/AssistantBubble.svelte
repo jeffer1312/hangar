@@ -25,6 +25,32 @@
       minute: '2-digit',
     });
   }
+
+  // Copiar bloco de codigo: handler delegado (o botao vem do {@html}, sem handler Svelte proprio).
+  async function copyText(s: string) {
+    try {
+      await navigator.clipboard.writeText(s);   // so em contexto seguro (https/localhost)
+    } catch {
+      // LAN/Tailscale via HTTP puro: clipboard API indisponivel -> fallback execCommand.
+      const ta = document.createElement('textarea');
+      ta.value = s;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+  }
+
+  function onProseClick(e: MouseEvent) {
+    const btn = (e.target as HTMLElement).closest('.copy-btn');
+    if (!btn) return;
+    const code = btn.parentElement?.querySelector('pre')?.textContent ?? '';
+    copyText(code);
+    btn.classList.add('copied');
+    setTimeout(() => btn.classList.remove('copied'), 1200);
+  }
 </script>
 
 <div class="assistant-msg" class:noanim={!animate}>
@@ -34,7 +60,7 @@
     <div class="prose plain">{text}<span class="caret" aria-hidden="true"></span></div>
   {:else}
     <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-    <div class="prose">{@html html}</div>
+    <div class="prose" onclick={onProseClick} role="presentation">{@html html}</div>
     {#if fileRefs.length}<FileAttachment {sessionName} refs={fileRefs} />{/if}
     {#if mediaRefs.length}<FileAttachment {sessionName} refs={mediaRefs} />{/if}
     {#if ts}
@@ -66,10 +92,9 @@
 
   .prose {
     color: var(--text-primary);
-    /* Medida de leitura: no desktop largo (coluna de ate 1400px) linha de texto sem teto passa de
-       200 caracteres — ilegivel. 80ch ~ o conforto tipografico; tabela/code/tool card continuam
-       usando a largura toda. */
-    max-width: min(100%, 80ch);
+    /* Usa a largura toda da coluna (ate ao teto de .messages-inner). Sem cap de medida (80ch): em
+       tela grande o texto/tabela/code precisam ocupar o espaco — cap deixava metade direita vazia. */
+    max-width: 100%;
     word-break: break-word;
     font-size: var(--text-base);
     line-height: 1.6;
@@ -102,6 +127,23 @@
     margin: var(--space-2) 0;
     -webkit-overflow-scrolling: touch;
   }
+
+  /* Bloco de codigo com botao copiar no canto. */
+  .prose :global(.code-block) { position: relative; }
+  .prose :global(.copy-btn) {
+    position: absolute; top: 6px; right: 6px;
+    width: 28px; height: 28px; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+    background: var(--bg-elevated); color: var(--text-secondary);
+    cursor: pointer; opacity: 0.65; transition: opacity 120ms var(--ease-out);
+  }
+  .prose :global(.copy-btn:hover), .prose :global(.copy-btn:active) { opacity: 1; }
+  .prose :global(.copy-btn)::before {
+    content: '⧉'; font-size: 15px; line-height: 1;
+  }
+  .prose :global(.copy-btn.copied) { color: var(--accent); opacity: 1; }
+  .prose :global(.copy-btn.copied)::before { content: '✓'; }
 
   .prose :global(pre code) {
     font-family: var(--font-mono);
