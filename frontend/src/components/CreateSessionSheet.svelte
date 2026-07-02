@@ -23,6 +23,10 @@
   function pickTarget(id: string) {
     targetServer = id;
     selectServer(id);
+    // Configs sao DO SERVIDOR DE DESTINO: re-busca a cada troca (a pasta ja re-busca via {#key};
+    // sem isto a lista ficava a do servidor da ABERTURA e o create mandava um config_dir de outra
+    // maquina -> 400 "config_dir invalido" no backend de destino).
+    loadConfigs();
   }
 
   // Fluxo em dois passos: 1) escolher a pasta (scanner) -> 2) criar uma sessao nova com nome UNICO
@@ -48,6 +52,21 @@
   // Config dirs do Claude (ex: ~/.claude, ~/.claude-work). Picker so aparece quando ha mais de um.
   let configs = $state<ConfigDirInfo[]>([]);
   let selectedConfig = $state<string | null>(null);
+  // Guard de corrida: trocas rapidas de servidor deixam fetches em voo; so a resposta do ULTIMO
+  // pedido pode escrever (senao a lista de um servidor antigo aterrissava por cima da atual).
+  let cfgSeq = 0;
+  function loadConfigs() {
+    const seq = ++cfgSeq;
+    configs = [];
+    selectedConfig = null;
+    listClaudeConfigs()
+      .then((cs) => {
+        if (seq !== cfgSeq) return;
+        configs = cs;
+        selectedConfig = cs.find((c) => c.active)?.path ?? cs[0]?.path ?? null;
+      })
+      .catch(() => {});
+  }
 
   // Escape hatch: digitar o caminho na mao.
   let manualOpen = $state(false);
@@ -73,10 +92,8 @@
       manualPath = '';
       const cur = getActiveId();
       const target = servers.find((s) => s.id === cur) ? cur! : servers[0]?.id ?? '';
-      if (target) pickTarget(target);
-      listClaudeConfigs()
-        .then((cs) => { configs = cs; selectedConfig = cs.find((c) => c.active)?.path ?? cs[0]?.path ?? null; })
-        .catch(() => {});
+      if (target) pickTarget(target);      // pickTarget ja carrega os configs do alvo
+      else loadConfigs();                  // sem lista de servidores: carrega do ativo mesmo
     });
   });
 
