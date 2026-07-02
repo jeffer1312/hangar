@@ -202,15 +202,6 @@ body {
   border: 0;
 }
 
-/* ── Focus ring (teclado) ────────────────────────────────────────────── */
-/* Anel unico de foco por teclado, no accent. O !important e de proposito: os componentes usam
-   outline:none (escopado com hash do Svelte, especificidade maior) pra matar o anel no foco por
-   mouse/toque; :focus-visible so dispara no teclado, entao aqui ele vence sem editar cada um. */
-:focus-visible {
-  outline: 2px solid var(--accent) !important;
-  outline-offset: 2px;
-}
-
 /* ── Tap Targets ─────────────────────────────────────────────────────── */
 button {
   min-height: 44px;
