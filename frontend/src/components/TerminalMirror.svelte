@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getPane, sendKey, type NavKey } from '../lib/api';
+  import { getPane, sendKey, sendTermInput, type NavKey } from '../lib/api';
 
   interface Props {
     open: boolean;
@@ -44,6 +44,44 @@
     }
   }
 
+  // ── Terminal INTERATIVO (so desktop): digitar direto no pane -> tmux ────────
+  // Mobile fica read-only de proposito (barra de teclas de resgate). Desktop (ponteiro fino) captura
+  // o teclado e manda pro backend (/term-input): texto literal + control-chars de shell/TUI.
+  const interactive = typeof window !== 'undefined'
+    && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+  let paneEl: HTMLElement | undefined = $state();
+
+  const NAMED: Record<string, string> = {
+    Enter: 'Enter', Backspace: 'Backspace', Tab: 'Tab', Escape: 'Escape',
+    ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+    Delete: 'Delete', Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
+  };
+
+  async function sendInput(payload: { text?: string; key?: string }) {
+    try {
+      await sendTermInput(sessionName, payload);
+      text = await getPane(sessionName);   // refresh imediato
+    } catch (e) {
+      err = e instanceof Error ? e.message : 'erro';
+    }
+  }
+
+  async function onTermKey(e: KeyboardEvent) {
+    // stopPropagation: nao deixa o Esc/atalhos do Chat (fechar overlay, Cmd+K) roubarem a tecla.
+    if (e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
+      e.preventDefault(); e.stopPropagation();
+      await sendInput({ key: 'C-' + e.key.toLowerCase() });   // Ctrl+C, Ctrl+R, Ctrl+D...
+      return;
+    }
+    if (e.altKey || e.metaKey) return;   // atalhos do SO/navegador passam
+    const named = NAMED[e.key];
+    if (named) { e.preventDefault(); e.stopPropagation(); await sendInput({ key: named }); return; }
+    if (e.key.length === 1) { e.preventDefault(); e.stopPropagation(); await sendInput({ text: e.key }); }
+  }
+
+  // Foca o pane ao abrir no desktop -> digita direto sem clicar.
+  $effect(() => { if (open && interactive) setTimeout(() => paneEl?.focus(), 60); });
+
   // Linhas de chrome do rodape (statusline + box de input) sao ruido aqui — mas mantemos o pane
   // INTEIRO pra nao esconder nada do overlay. Trim so as linhas vazias do fim.
   const lines = $derived(text.replace(/\s+$/, '').split('\n'));
@@ -60,10 +98,19 @@
       <button class="tm-back" onclick={onClose} aria-label="Voltar ao chat">
         <span class="tm-back-arrow">←</span> Voltar ao chat
       </button>
-      <span class="tm-title">⌨ {sessionName}</span>
+      <span class="tm-title">⌨ {sessionName}{#if interactive} · <span class="tm-live">interativo</span>{/if}</span>
     </header>
 
-    <div class="tm-screen">
+    <!-- svelte-ignore a11y_no_static_element_interactions a11y_no_noninteractive_tabindex -->
+    <div
+      class="tm-screen"
+      class:interactive
+      bind:this={paneEl}
+      tabindex={interactive ? 0 : undefined}
+      role={interactive ? 'textbox' : undefined}
+      aria-label={interactive ? 'Terminal interativo — digite' : undefined}
+      onkeydown={interactive ? onTermKey : undefined}
+    >
       {#if err}
         <p class="tm-err">{err}</p>
       {/if}
@@ -127,6 +174,10 @@
   .tm-back-arrow { font-size: var(--text-base); line-height: 1; }
 
   .tm-screen { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; }
+  /* Interativo (desktop): focavel -> anel accent discreto, sinaliza que o teclado vai pro tmux. */
+  .tm-screen.interactive { outline: none; cursor: text; }
+  .tm-screen.interactive:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+  .tm-live { color: var(--accent); font-weight: 600; }
   .tm-err { color: var(--danger, #f87171); font-size: var(--text-xs); padding: var(--space-2) var(--space-3); margin: 0; }
   .tm-pane {
     margin: 0;

@@ -344,6 +344,14 @@ export async function sendKey(name: string, key: NavKey): Promise<void> {
   });
 }
 
+// Terminal interativo (desktop): texto digitado (literal) e/ou tecla nomeada (allowlist no backend).
+export async function sendTermInput(name: string, payload: { text?: string; key?: string }): Promise<void> {
+  await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/term-input`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 export interface ModelEffortBody {
   model?: string; // 'default' | 'opus' | 'sonnet' | 'haiku'
   effort?: string; // low | medium | high | xhigh | max | ultracode
