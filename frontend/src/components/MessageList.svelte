@@ -280,7 +280,9 @@
      de ~830px nao pula de 600 direto pra 1600 — cresce com a viewport ate o teto. 96vw = margem
      minima nas laterais; em tela ultrawide a coluna acompanha em vez de deixar espaco morto. */
   @media (min-width: 820px) {
-    .messages-inner { max-width: min(1600px, 96vw); }
+    /* Enche a area do chat (viewport menos a sidebar). Sem cap px: em ultrawide o teto de 1600 deixava
+       faixa morta a direita. O padding lateral segura o texto longe da borda. */
+    .messages-inner { max-width: none; padding-left: var(--space-6); padding-right: var(--space-6); }
   }
 
   /* Bubble enfileirado: ainda nao processado pelo Claude — atenuado ate solidificar. Precisa ser
