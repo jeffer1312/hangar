@@ -253,13 +253,18 @@
       }
       return;
     }
-    // texto puro: espera o envio; so limpa no sucesso, mostra erro na falha.
+    // texto puro: limpa a caixa OTIMISTA (no toque) pra tirar a sensacao de lag do round-trip; restaura
+    // o texto se o /input falhar (nao perde nada). O settle ~200ms do backend (anti-"Enter engolido")
+    // continua valendo no servidor, mas a UI nao bloqueia mais a limpeza nele.
     sending = true;
+    inputText = '';
+    if (textareaEl) textareaEl.style.height = 'auto';
     try {
       await onSend(caption);
-      inputText = '';
-      if (textareaEl) textareaEl.style.height = 'auto';
     } catch (err) {
+      // falhou -> devolve o texto, MAS so se a caixa segue vazia (nao pisa no que o usuario digitou
+      // na janela do envio em voo).
+      if (!inputText.trim()) inputText = caption;
       sendError = err instanceof Error ? err.message : 'Falha no envio';
     } finally {
       sending = false;
