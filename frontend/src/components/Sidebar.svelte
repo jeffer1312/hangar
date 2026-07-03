@@ -69,13 +69,9 @@
     return (parts[0] ?? name).slice(0, 2).toUpperCase();
   }
 
-  const urgency: Record<State, number> = { awaiting_input: 0, working: 1, idle: 2, dead: 3 };
-  // Ordena DENTRO de cada grupo: atividade desc, depois urgência do estado.
+  // Ordena DENTRO de cada grupo por nome (ordem alfabética estável — não pula quando a atividade muda).
   function sortSessions(list: SessionInfo[]): SessionInfo[] {
-    return [...list].sort((a, b) => {
-      const byAct = (b.last_activity ?? 0) - (a.last_activity ?? 0);
-      return byAct !== 0 ? byAct : urgency[a.state] - urgency[b.state];
-    });
+    return [...list].sort((a, b) => a.name.localeCompare(b.name));
   }
 
   const slots = new Map<string, { sessions: SessionInfo[] | null; error: string | null }>();
