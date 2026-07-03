@@ -147,6 +147,26 @@ def test_system_reminder_stripped_from_real_message():
     assert ev.kind == "user_msg" and ev.text == "roda o teste"
 
 
+def test_ismeta_user_entry_is_skipped():
+    # Expansao de slash-command/skill: o Claude Code injeta o CORPO do comando como entrada "user"
+    # marcada isMeta=True. Sem tag nenhuma (texto puro), so o flag isMeta a distingue de conversa.
+    # No terminal nao aparece; aqui nao pode virar bubble. Vale tanto content str quanto lista.
+    assert parse_line(_line({
+        "type": "user", "uuid": "m1", "isMeta": True,
+        "message": {"role": "user", "content": "Resolva automaticamente o review do CodeRabbit no MR."},
+    })) == []
+    assert parse_line(_line({
+        "type": "user", "uuid": "m2", "isMeta": True,
+        "message": {"role": "user", "content": [{"type": "text", "text": "Loop /my-org:iniciar-review-auto"}]},
+    })) == []
+    # Mesmo texto SEM isMeta e conversa real -> vira bubble.
+    [ev] = parse_line(_line({
+        "type": "user", "uuid": "m3",
+        "message": {"role": "user", "content": "Resolva automaticamente o review do CodeRabbit no MR."},
+    }))
+    assert ev.kind == "user_msg"
+
+
 def test_attachment_returns_no_events():
     assert parse_line(_line({"type": "attachment", "uuid": "x"})) == []
 
