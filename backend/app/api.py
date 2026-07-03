@@ -569,7 +569,7 @@ class CheckoutBody(_StrictBody):
 
 class GitActionBody(_StrictBody):
     # allowlist declarativa no schema (alem do git_ops)
-    action: Literal["status", "pull", "fetch", "stash", "stash-pop"]
+    action: Literal["status", "pull", "fetch", "stash", "stash-pop", "log"]
 
 
 class GitPathBody(_StrictBody):
