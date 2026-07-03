@@ -85,6 +85,78 @@ def test_switch_remote_dwim_creates_local(tmp_path):
     assert "only-remote" in git_ops.list_branches(d)["branches"]  # DWIM criou a local
 
 
+def _repo_with_file(tmp_path):
+    """Repo com um arquivo tracked commitado (pra exercitar changed_files/diff/discard/stash)."""
+    d = _repo(tmp_path)
+    f = tmp_path / "tracked.txt"
+    f.write_text("linha original\n")
+    git_ops._run(d, "add", "tracked.txt")
+    git_ops._run(d, "commit", "-q", "-m", "add tracked")
+    return d, f
+
+
+def test_changed_files_lists_tracked_and_untracked(tmp_path):
+    d, f = _repo_with_file(tmp_path)
+    f.write_text("linha modificada\n")            # tracked modificado
+    (tmp_path / "novo.txt").write_text("x")        # untracked
+    files = {c["path"]: c for c in git_ops.changed_files(d)}
+    assert files["tracked.txt"]["code"] == " M" and files["tracked.txt"]["staged"] is False
+    assert files["novo.txt"]["code"] == "??"
+
+
+def test_file_diff_rejects_unlisted_path(tmp_path):
+    d, _ = _repo_with_file(tmp_path)
+    for bad in ("nao-existe.txt", "../../etc/passwd", "--output=x"):
+        with pytest.raises(GitError) as e:
+            git_ops.file_diff(d, bad)              # so paths na lista de alterados passam
+        assert e.value.status == 400
+
+
+def test_file_diff_shows_edits(tmp_path):
+    d, f = _repo_with_file(tmp_path)
+    f.write_text("linha modificada\n")
+    out = git_ops.file_diff(d, "tracked.txt")["diff"]
+    assert "linha modificada" in out and "linha original" in out
+
+
+def test_file_diff_untracked_shows_content(tmp_path):
+    d, _ = _repo_with_file(tmp_path)
+    (tmp_path / "novo.txt").write_text("conteudo novo\n")
+    assert "conteudo novo" in git_ops.file_diff(d, "novo.txt")["diff"]
+
+
+def test_discard_tracked_restores_head(tmp_path):
+    d, f = _repo_with_file(tmp_path)
+    f.write_text("estragado\n")
+    git_ops.discard_file(d, "tracked.txt")
+    assert f.read_text() == "linha original\n"     # voltou ao HEAD
+    assert "tracked.txt" not in git_ops._changed_map(d)
+
+
+def test_discard_untracked_removes_file(tmp_path):
+    d, _ = _repo_with_file(tmp_path)
+    novo = tmp_path / "novo.txt"
+    novo.write_text("lixo")
+    git_ops.discard_file(d, "novo.txt")
+    assert not novo.exists()
+
+
+def test_discard_rejects_unlisted_path(tmp_path):
+    d, _ = _repo_with_file(tmp_path)
+    with pytest.raises(GitError) as e:
+        git_ops.discard_file(d, "../../etc/passwd")
+    assert e.value.status == 400
+
+
+def test_stash_and_pop_roundtrip(tmp_path):
+    d, f = _repo_with_file(tmp_path)
+    f.write_text("mudanca pendente\n")
+    assert git_ops.git_action(d, "stash")["ok"] is True
+    assert git_ops.changed_files(d) == []          # tree limpa apos stash
+    assert git_ops.git_action(d, "stash-pop")["ok"] is True
+    assert f.read_text() == "mudanca pendente\n"    # reaplicado
+
+
 def test_run_git_not_found(tmp_path, monkeypatch):
     # FileNotFoundError (git ausente) -> GitError 500, nao traceback cru.
     def boom(*a, **k):
