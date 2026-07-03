@@ -55,7 +55,13 @@ async function ensureOk(res: Response): Promise<void> {
   }
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
-    throw new Error(`${res.status}: ${text}`);
+    // FastAPI devolve {"detail": "..."} -> mostra a mensagem limpa, nao o JSON cru.
+    let detail = text;
+    try {
+      const j = JSON.parse(text);
+      if (j && typeof j.detail === 'string') detail = j.detail;
+    } catch { /* corpo nao-JSON: mantem o texto cru */ }
+    throw new Error(`${res.status}: ${detail}`);
   }
 }
 
@@ -305,10 +311,36 @@ export function checkoutBranch(name: string, branch: string): Promise<{ current:
   });
 }
 
-export function gitAction(name: string, action: 'status' | 'pull' | 'fetch'): Promise<{ ok: boolean; output: string }> {
+export type GitAction = 'status' | 'pull' | 'fetch' | 'stash' | 'stash-pop';
+
+export function gitAction(name: string, action: GitAction): Promise<{ ok: boolean; output: string }> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git`, {
     method: 'POST',
     body: JSON.stringify({ action }),
+  });
+}
+
+export interface ChangedFile {
+  path: string;
+  code: string;      // 2 chars XY do git porcelain: ' M', 'M ', '??', 'A '...
+  staged: boolean;
+}
+
+export function getChangedFiles(name: string): Promise<{ files: ChangedFile[] }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/files`);
+}
+
+export function getFileDiff(name: string, path: string): Promise<{ path: string; diff: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/diff`, {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  });
+}
+
+export function discardFile(name: string, path: string): Promise<{ ok: boolean; path: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/discard`, {
+    method: 'POST',
+    body: JSON.stringify({ path }),
   });
 }
 
