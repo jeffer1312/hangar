@@ -10,10 +10,13 @@ contexto** de uma sessão (botão direito) — SEM precisar abrir a conversa. O 
 sessão (`name` + `serverId` já estão no menu). Referência visual do usuário: commit graph estilo
 GitLens (histórico com a árvore, autor, branches/tags).
 
-- **Fase 1 (atual):** menu de contexto → abre a GitSheet no repo da sessão via `withServer(serverId)`,
-  sem navegar pro chat; **lista de commits** da branch atual (hash, msg, autor, data). Backend: a action
-  `log` já existe no `git_ops`, mas FALTA adicionar `'log'` ao `Literal` de action em `api.py` + reiniciar
-  o backend. Remover o "Git log" inline bugado que foi adicionado no menu (dava 422).
+- **Fase 1 — DESKTOP FEITO (commitado 2026-07-03):** menu de contexto da Sidebar → item **Git** abre a
+  GitSheet no repo da sessão via `selectServer(serverId)` (restaura o server ativo no fechar), sem entrar
+  no chat; o botão **log** da GitSheet lista os commits da branch (backend: action `log` no `git_ops` + no
+  `Literal` de `api.py`, corrigido e reiniciado). Log inline bugado removido.
+  **FALTA O MOBILE:** a `SessionList` não tem menu de contexto de sessão — o `SessionCard` só faz
+  long-press→renomear. Pra retomar: criar um menu (long-press ou botão ⋯) no `SessionCard` com o item
+  **Git** e renderizar a GitSheet a partir dele (mesmo padrão do Sidebar: apontar o server + restaurar).
 - **Fase 2:** grafo visual dos commits (as linhas da árvore + branches/tags), estilo GitLens.
 - **Fase 3:** trocar branch e demais ações (stash, pull…) integradas no mesmo gerenciador.
 
