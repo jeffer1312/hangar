@@ -61,29 +61,42 @@ export function createActivityFolder(): ActivityFolder {
   // Sem tratar isso, todo agent background aparecia como terminado (painel dizia "Nada rolando"
   // com agents ativos). Mapa: agentId (= task-id da notificação) -> tool_use_id do launch.
   let bgAgent = new Map<string, string>();
+  // agentId cujo FIM chegou ANTES de o launch ser mapeado (ex: a troca de transcript no /clear reordena
+  // o fold, ou o launch cai num transcript e o fim no outro). Sem isto o par nao fechava e o agente
+  // ficava "rodando" pra sempre. Guardado aqui e resolvido quando o launch aparecer -> pareamento
+  // INDEPENDENTE DE ORDEM.
+  let completedIds = new Set<string>();
+  // Marca um agente background como terminado pelo agentId, com o launch vindo ANTES ou DEPOIS do fim.
+  function completeAgent(agentId: string): void {
+    const tuid = bgAgent.get(agentId);
+    if (tuid) resulted.add(tuid);
+    else completedIds.add(agentId);   // launch ainda nao visto -> resolvido quando ele chegar
+  }
 
   function push(e: ChatEvent): void {
     if (e.kind === 'tool_result' && e.tool_use_id) {
       // tool_result sintetico do backend (transcript.py): <task-notification> virou "task:<id>".
       // Resolve o launch background correspondente e marca como terminado.
       if (e.tool_use_id.startsWith('task:')) {
-        const tuid = bgAgent.get(e.tool_use_id.slice(5));
-        if (tuid) resulted.add(tuid);
+        completeAgent(e.tool_use_id.slice(5));
         return;
       }
       const r = e.result ?? '';
       if (/Async agent launched/i.test(r)) {
         const m = r.match(/agentId:\s*([A-Za-z0-9_-]+)/);
-        if (m) bgAgent.set(m[1], e.tool_use_id);
-        return; // launch imediato: NAO marca resulted — o agente continua rodando
+        if (m) {
+          bgAgent.set(m[1], e.tool_use_id);
+          // o fim ja tinha chegado antes do launch (reorder do reseed) -> fecha o par agora.
+          if (completedIds.delete(m[1])) resulted.add(e.tool_use_id);
+        }
+        return; // launch imediato: so marca resulted se o fim ja veio; senao segue rodando
       }
       resulted.add(e.tool_use_id);
       return;
     }
     if (e.kind === 'user_msg' && e.text && e.text.includes('<task-notification>')) {
       const m = e.text.match(/<task-id>([^<]+)<\/task-id>/);
-      const tuid = m ? bgAgent.get(m[1].trim()) : undefined;
-      if (tuid) resulted.add(tuid);
+      if (m) completeAgent(m[1].trim());
       return;
     }
     if (e.kind !== 'tool_use' || !e.tool_name) return;
@@ -167,6 +180,7 @@ export function createActivityFolder(): ActivityFolder {
     createSeq = 0;
     agents = [];
     bgAgent = new Map();
+    completedIds = new Set();
     for (const e of events) push(e);
   }
 
