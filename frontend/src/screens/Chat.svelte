@@ -7,6 +7,7 @@
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
   import UsageSheet from '../components/UsageSheet.svelte';
   import GitSheet from '../components/GitSheet.svelte';
+  import PreviewSheet from '../components/PreviewSheet.svelte';
   import ActivitySheet from '../components/ActivitySheet.svelte';
   import TerminalMirror from '../components/TerminalMirror.svelte';
   import AskQuestionSheet from '../components/AskQuestionSheet.svelte';
@@ -84,6 +85,7 @@
   let createOpen = $state(false);
   let usageOpen = $state(false);
   let gitOpen = $state(false);
+  let previewOpen = $state(false);
   let activityOpen = $state(false);
   let askPayload = $state<AskQuestionPayload | null>(null);
   let askOpen = $state(false);
@@ -139,9 +141,9 @@
   }
 
   const anyOverlayOpen = () =>
-    switcherOpen || createOpen || usageOpen || gitOpen || activityOpen || mirrorOpen || askOpen;
+    switcherOpen || createOpen || usageOpen || gitOpen || previewOpen || activityOpen || mirrorOpen || askOpen;
   function closeOverlays() {
-    switcherOpen = createOpen = usageOpen = gitOpen = activityOpen = false;
+    switcherOpen = createOpen = usageOpen = gitOpen = previewOpen = activityOpen = false;
     if (mirrorOpen) closeMirror();
     askOpen = false;
   }
@@ -742,6 +744,7 @@
         onInterrupt={handleInterrupt}
         onExpandUsage={() => (usageOpen = true)}
         onOpenGit={() => (gitOpen = true)}
+        onOpenPreview={() => (previewOpen = true)}
       />
     {/if}
   </div>
@@ -766,6 +769,8 @@
   <UsageSheet open={usageOpen} {status} onClose={() => (usageOpen = false)} />
 
   <GitSheet open={gitOpen} {sessionName} onClose={() => (gitOpen = false)} />
+
+  <PreviewSheet open={previewOpen} onClose={() => (previewOpen = false)} />
 
   <ActivitySheet open={activityOpen} {activity} {sessionName} onClose={() => (activityOpen = false)} />
 

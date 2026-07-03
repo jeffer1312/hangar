@@ -434,3 +434,23 @@ export function openSessionsStream(s: Server): EventSource {
     : `${s.baseUrl}/api/sessions/events?token=${encodeURIComponent(s.token)}`;
   return new EventSource(url, { withCredentials: isSameOrigin });
 }
+
+// ── Preview: expõe um projeto local (porta) via `tailscale serve` da máquina do backend, pra ver
+// num iframe. Global por máquina (slot único), não por sessão.
+export interface PreviewState {
+  active: boolean;
+  port: number | null;
+  url: string | null;
+}
+
+export function getPreview(): Promise<PreviewState> {
+  return apiFetch<PreviewState>('/api/preview');
+}
+
+export function startPreview(port: number): Promise<{ url: string; port: number }> {
+  return apiFetch('/api/preview', { method: 'POST', body: JSON.stringify({ port }) });
+}
+
+export function stopPreview(): Promise<PreviewState> {
+  return apiFetch('/api/preview', { method: 'DELETE' });
+}

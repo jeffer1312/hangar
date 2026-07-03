@@ -29,6 +29,7 @@ from app.costs import report as costs_report
 from app.git_ops import (
     list_branches, switch_branch, git_action, changed_files, file_diff, discard_file, GitError,
 )
+from app import tunnel
 from app.archive import ArchiveEntry, ArchiveFolder, archive_jsonl, list_conversations, list_folders
 from app.askquestion import clear_pending_askq
 from app.hook_state import hook_state
@@ -793,6 +794,38 @@ def fs_scan(root: str, path: str | None = None):
     try:
         return scan_dir(root, path)
     except FsError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+# ── Preview: expoe um projeto local (porta) via tailscale serve, pro app ver num iframe ──
+# GLOBAL por maquina (nao por sessao): o tunel usa uma porta-slot unica (10000), entao qualquer
+# sessao que ligar o preview compartilha o mesmo slot. O backend que atende E o da maquina onde o
+# projeto roda -> o preview sai da maquina certa sem config extra.
+class PreviewBody(_StrictBody):
+    port: int = Field(ge=1, le=65535)
+
+
+@app.get("/api/preview", dependencies=[Depends(require_auth)])
+def preview_status():
+    try:
+        return tunnel.status()
+    except tunnel.TunnelError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.post("/api/preview", dependencies=[Depends(require_auth)])
+def preview_start(body: PreviewBody):
+    try:
+        return tunnel.start(body.port)
+    except tunnel.TunnelError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.delete("/api/preview", dependencies=[Depends(require_auth)])
+def preview_stop():
+    try:
+        return tunnel.stop()
+    except tunnel.TunnelError as e:
         raise HTTPException(e.status, e.detail)
 
 
