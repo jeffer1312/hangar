@@ -440,6 +440,19 @@ class SessionRegistry:
                 info.tracked = False
         return infos
 
+    @staticmethod
+    def _branch_of(cwd: Optional[str]) -> Optional[str]:
+        """Branch atual do repo em cwd, lida direto de .git/HEAD (sem subprocess -> barato pra rodar
+        por sessao na listagem). 'ref: refs/heads/<b>' -> <b>; detached/nao-repo/worktree -> None."""
+        if not cwd:
+            return None
+        try:
+            head = Path(cwd, ".git", "HEAD").read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            return None
+        prefix = "ref: refs/heads/"
+        return (head[len(prefix):] or None) if head.startswith(prefix) else None
+
     def list(self) -> list[SessionInfo]:
         # Resolucao de jsonl/tracked de todas as sessoes. Otimizado: UM mapa /proc + UMA chamada tmux
         # (pane_pid em lote) reusados por sessao -> O(P + S·descendentes) em vez de O(S·P). NAO calcula
@@ -450,7 +463,8 @@ class SessionRegistry:
         sids: dict[str, Optional[str]] = {}
         for p in tmux.list_panes_active():
             jsonl, tracked = self.resolve_tracked(p["name"], p["cwd"], p["pid"], children)
-            out.append(SessionInfo(name=p["name"], cwd=p["cwd"], jsonl=jsonl, tracked=tracked))
+            out.append(SessionInfo(name=p["name"], cwd=p["cwd"], jsonl=jsonl, tracked=tracked,
+                                   branch=self._branch_of(p["cwd"])))
             sids[p["name"]] = self._repl_sid(p["pid"], children)
         # Guarda de colisao: 2+ sessoes no mesmo jsonl -> so a dona mantem (mata a duplicata/cross-wire).
         self._dedupe_collisions(out, sids)
