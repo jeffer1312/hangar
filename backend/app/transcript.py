@@ -100,6 +100,13 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
     content = msg.get("content")
 
     if etype == "user":
+        # Entrada sintetica que o proprio Claude Code marca com isMeta: expansao de slash-command/
+        # skill (o corpo do comando vira "mensagem do usuario"), prompt injetado de loop/cron,
+        # "Continue from where you left off", avisos de hook. No terminal isso nao aparece; aqui
+        # viraria bubble e poluiria o chat. Fora do chat. (Os <command-*> tags e a task-notification
+        # NAO vem com isMeta -> seguem tratados abaixo pelo caminho de sempre.)
+        if obj.get("isMeta") is True:
+            return []
         if isinstance(content, str):
             if content.lstrip().startswith("<task-notification>"):
                 m = _TASK_NOTIF_RE.search(content)
