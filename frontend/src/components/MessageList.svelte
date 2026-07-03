@@ -276,13 +276,12 @@
     margin: 0 auto;
   }
 
-  /* Desktop: usa mais largura (aditivo; mobile fica nos 600px). min() suaviza o degrau: um tablet
-     de ~830px nao pula de 600 direto pra 1600 — cresce com a viewport ate o teto. 96vw = margem
-     minima nas laterais; em tela ultrawide a coluna acompanha em vez de deixar espaco morto. */
+  /* Desktop: coluna de leitura fixa (~920px), como Claude/ChatGPT/Gemini (~740-920). Linha curta
+     cansa menos que encher a viewport. Codigo/tabela longos rolam na horizontal dentro do proprio
+     bloco (pre/.md-table tem overflow-x:auto), entao o cap nao os espreme. min(,94vw) da margem
+     lateral em telas menores. */
   @media (min-width: 820px) {
-    /* Enche a area do chat (viewport menos a sidebar). Sem cap px: em ultrawide o teto de 1600 deixava
-       faixa morta a direita. O padding lateral segura o texto longe da borda. */
-    .messages-inner { max-width: none; padding-left: var(--space-6); padding-right: var(--space-6); }
+    .messages-inner { max-width: min(920px, 94vw); }
   }
 
   /* Bubble enfileirado: ainda nao processado pelo Claude — atenuado ate solidificar. Precisa ser
