@@ -58,6 +58,13 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
 
 ## Conventions & gotchas (read before touching UI / backend lifecycle)
 
+- **Two views: mobile & desktop (820px breakpoint).** `App.svelte` switches on
+  `matchMedia('(min-width: 820px)')`: desktop → `DesktopShell` (which uses `Sidebar.svelte`), mobile →
+  `SessionList.svelte`. Lots of UI has a per-view path (the session list is the clearest — `Sidebar` vs
+  `SessionList`; sheets also re-dock as a right-side panel via `@media (min-width: 820px)`). Whenever you
+  touch the front, make the change in BOTH views and verify BOTH — they drift apart easily (e.g. the
+  session-list ordering ended up alphabetical only in `SessionList`, not `Sidebar`).
+
 - **iOS black-rectangle repaint.** Glass on NavBar/Composer lives in a `::before` leaf with a near-opaque
   solid bg and **no** `backdrop-filter` / `transform` / `translateZ` on WebKit — those promote a layer that
   renders pure black during momentum scroll. Don't reintroduce them. Liquid-glass blur is Chromium-only
