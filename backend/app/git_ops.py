@@ -29,23 +29,47 @@ def _run(cwd: str, *args: str) -> subprocess.CompletedProcess:
 
 
 def list_branches(cwd: str) -> dict:
-    """Branches locais + a atual + se a working tree esta suja (pro front avisar antes do checkout:
-    `git switch` carrega mudancas nao-conflitantes pra outra branch silenciosamente)."""
+    """Branches locais + remotas (sem local correspondente) + a atual + se a working tree esta
+    suja (pro front avisar antes do checkout: `git switch` carrega mudancas nao-conflitantes pra
+    outra branch silenciosamente). As remotas vem pelo nome curto (sem o prefixo do remote): trocar
+    pra uma delas faz o DWIM do `git switch` (cria a local rastreando origin/<nome>). Ficam
+    defasadas ate um fetch."""
     p = _run(cwd, "branch", "--format=%(refname:short)")
     if p.returncode != 0:
         raise GitError(409, (p.stderr or "git branch falhou").strip() or "git branch falhou")
     branches = [b.strip() for b in p.stdout.splitlines() if b.strip()]
+    local = set(branches)
+
+    # Remotas: -r lista refs/remotes/*. Nome curto = tira o primeiro segmento (o nome do remote).
+    # Ignora o 'origin/HEAD' simbolico (refname:short = so 'origin', sem '/') e dedup pelo nome
+    # curto contra as locais (uma remota que ja tem local nao precisa aparecer duas vezes).
+    r = _run(cwd, "branch", "-r", "--format=%(refname:short)")
+    remotes: list[str] = []
+    seen: set[str] = set()
+    if r.returncode == 0:
+        for full in r.stdout.splitlines():
+            full = full.strip()
+            if not full or "/" not in full:   # '' ou 'origin' (o HEAD simbolico) -> ignora
+                continue
+            short = full.split("/", 1)[1]
+            if short == "HEAD" or short in local or short in seen:
+                continue
+            seen.add(short)
+            remotes.append(short)
+
     cur = _run(cwd, "rev-parse", "--abbrev-ref", "HEAD")
     current = cur.stdout.strip() if cur.returncode == 0 else None
     st = _run(cwd, "status", "--porcelain")
     dirty = st.returncode == 0 and bool(st.stdout.strip())
-    return {"current": current, "branches": branches, "dirty": dirty}
+    return {"current": current, "branches": branches, "remotes": remotes, "dirty": dirty}
 
 
 def switch_branch(cwd: str, branch: str) -> dict:
-    """Troca pra uma branch EXISTENTE. Valida contra a lista (rejeita injecao/typo/flag-like).
-    Falha (tree suja, etc) volta como 409 com o stderr do git."""
-    valid = list_branches(cwd)["branches"]
+    """Troca pra uma branch EXISTENTE — local OU remota (nome curto -> DWIM cria a local
+    rastreando o remote). Valida contra a lista real (rejeita injecao/typo/flag-like). Falha (tree
+    suja, nome curto ambiguo entre remotes, etc) volta como 409 com o stderr do git."""
+    info = list_branches(cwd)
+    valid = set(info["branches"]) | set(info["remotes"])
     if branch not in valid:
         raise GitError(400, "branch inexistente")
     p = _run(cwd, "switch", branch)
@@ -58,6 +82,7 @@ def switch_branch(cwd: str, branch: str) -> dict:
 _ACTIONS = {
     "status": ["status", "--short", "--branch"],
     "pull": ["pull", "--ff-only"],
+    "fetch": ["fetch", "--all", "--prune"],
 }
 
 
@@ -100,5 +125,23 @@ if __name__ == "__main__":
             raise AssertionError("acao invalida deveria falhar")
         except GitError as e:
             assert e.status == 400
+
+        # Remotas: um segundo repo vira 'origin'; fetch traz as refs. Valida dedup + DWIM + fetch.
+        with tempfile.TemporaryDirectory() as rd:
+            _run(rd, "init", "-q", "-b", "main")
+            _run(rd, "config", "user.email", "t@t")
+            _run(rd, "config", "user.name", "t")
+            _run(rd, "commit", "-q", "--allow-empty", "-m", "r")
+            _run(rd, "branch", "only-remote")
+            _run(d, "remote", "add", "origin", rd)
+
+            assert git_action(d, "fetch")["ok"] is True
+            info = list_branches(d)
+            assert "only-remote" in info["remotes"], info      # remota sem local -> aparece
+            assert "main" not in info["remotes"], info          # ja tem local -> dedup
+            assert "only-remote" not in info["branches"], info  # ainda nao e local
+            # switch DWIM: cria a local rastreando origin/only-remote
+            assert switch_branch(d, "only-remote")["current"] == "only-remote"
+            assert "only-remote" in list_branches(d)["branches"], "DWIM devia criar local"
 
         print("git_ops self-check OK")
