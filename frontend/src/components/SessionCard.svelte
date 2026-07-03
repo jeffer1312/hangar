@@ -178,6 +178,10 @@
         {#if session.cwd}
           <span class="cwd" title={session.cwd}><span class="cwd-prefix">{cwdParts.prefix}</span><span class="cwd-base">{cwdParts.base}</span></span>
         {/if}
+        {#if session.branch}
+          <span class="meta-sep">·</span>
+          <span class="branch" title="branch git atual">⎇ {session.branch}</span>
+        {/if}
       </span>
       {#if untracked}
         <button
@@ -384,6 +388,15 @@
     flex: 0 0 auto;
     white-space: nowrap;
     color: var(--text-secondary);
+  }
+  .branch {
+    flex: 0 1 auto;
+    min-width: 0;
+    font-family: var(--font-mono);
+    color: var(--accent);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .untracked-badge {
