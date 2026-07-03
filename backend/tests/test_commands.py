@@ -1,3 +1,4 @@
+import json
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -91,6 +92,46 @@ def test_home_skills_scanned(monkeypatch, tmp_path):
     by = _by_name(list_commands(None))
     assert "globber" in by
     assert by["globber"].source == "skill"
+
+
+def test_scan_installed_plugins(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    # installPath de um plugin instalado, com um comando e uma skill
+    install = tmp_path / "cache" / "my-org" / "1.0"
+    (install / "commands").mkdir(parents=True)
+    (install / "commands" / "abrir-ticket.md").write_text(
+        "---\ndescription: Abre a PM\nargument-hint: <chave>\n---\n\ncorpo\n",
+        encoding="utf-8",
+    )
+    (install / "skills" / "kubectl").mkdir(parents=True)
+    (install / "skills" / "kubectl" / "SKILL.md").write_text(
+        "---\nname: kubectl\ndescription: Opera k8s\n---\n\ncorpo\n",
+        encoding="utf-8",
+    )
+
+    plugins = home / ".claude" / "plugins"
+    plugins.mkdir(parents=True)
+    (plugins / "installed_plugins.json").write_text(
+        json.dumps({
+            "version": 2,
+            "plugins": {
+                "my-org@my-org-marketplace": [
+                    {"scope": "user", "installPath": str(install)}
+                ]
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    by = _by_name(list_commands(None))
+    assert by["my-org:abrir-ticket"].source == "plugin"
+    assert by["my-org:abrir-ticket"].display == "/my-org:abrir-ticket"
+    assert by["my-org:abrir-ticket"].argumentHint == "<chave>"
+    assert by["my-org:kubectl"].source == "plugin"
+    assert by["my-org:kubectl"].description == "Opera k8s"
 
 
 def test_missing_dirs_skip(monkeypatch, tmp_path):
