@@ -28,10 +28,12 @@
     onInterrupt: () => void;
     onExpandUsage: () => void;
     onOpenGit: () => void;
+    onOpenPreview: () => void;
     inputText?: string;  // bindable: o pai injeta um draft (ex: interrupt devolve a msg pendente)
   }
   let {
     sessionName, sessionState, status, onSend, onCommand, onInterrupt, onExpandUsage, onOpenGit,
+    onOpenPreview,
     inputText = $bindable(''),
   }: Props = $props();
 
@@ -299,6 +301,9 @@
       <div class="top-left">
         <button class="slash-btn" onclick={() => (commandSheetOpen = true)} aria-label="Comandos">
           <span class="slash-glyph" aria-hidden="true">/</span>
+        </button>
+        <button class="slash-btn" onclick={onOpenPreview} aria-label="Preview de projeto rodando">
+          <span class="slash-glyph" aria-hidden="true">🖥</span>
         </button>
         {#if status?.repo}
           <button class="repo-chip" title="Git: trocar branch / status / pull" onclick={onOpenGit}>
