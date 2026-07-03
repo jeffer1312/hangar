@@ -251,6 +251,21 @@
       flash(`checkout: ${errMsg(e)}`);
     }
   }
+  // Tree suja: guarda tudo no stash (deixa a tree limpa) e ENTAO troca -> resolve o "would be
+  // overwritten by checkout". As mudancas ficam recuperaveis com "pop" na aba Git.
+  async function stashAndCheckout(name: string, serverId: string, branch: string) {
+    flash(`guardando mudanças…`);
+    try {
+      await withServer(serverId, async () => {
+        const r = await gitAction(name, 'stash');
+        if (!r.ok) throw new Error(r.output || 'stash falhou');
+        await checkoutBranch(name, branch);
+      });
+      flash(`branch: ${branch} — mudanças guardadas (use "pop" na aba Git pra recuperar)`);
+    } catch (e) {
+      flash(`checkout: ${errMsg(e)}`);
+    }
+  }
   function flash(msg: string) {
     menuMsg = msg;
     clearTimeout(flashTimer);
@@ -578,10 +593,11 @@
   <div class="confirm-card" role="alertdialog" aria-modal="true" aria-label="Confirmar troca de branch">
     <p class="confirm-title">Trocar de branch com mudanças não salvas?</p>
     <p class="confirm-name">→ {confirmBranch.branch}</p>
-    <p class="confirm-hint">Há alterações não commitadas. O git leva elas junto pra branch nova (ou recusa se conflitar).</p>
+    <p class="confirm-hint">Há alterações não commitadas. <strong>Guardar e trocar</strong> põe elas no stash (recupera com “pop” na aba Git). <strong>Trocar assim</strong> deixa o git carregá-las — e pode recusar se conflitar.</p>
     <div class="confirm-actions">
       <button type="button" class="c-btn" onclick={() => (confirmBranch = null)}>Cancelar</button>
-      <button type="button" class="c-btn c-danger" onclick={() => { const c = confirmBranch; confirmBranch = null; if (c) doCheckout(c.name, c.serverId, c.branch); }}>Trocar</button>
+      <button type="button" class="c-btn" onclick={() => { const c = confirmBranch; confirmBranch = null; if (c) doCheckout(c.name, c.serverId, c.branch); }}>Trocar assim</button>
+      <button type="button" class="c-btn c-primary" onclick={() => { const c = confirmBranch; confirmBranch = null; if (c) stashAndCheckout(c.name, c.serverId, c.branch); }}>Guardar e trocar</button>
     </div>
   </div>
 {/if}
@@ -808,6 +824,8 @@
     background: var(--bg-elevated); border: 1px solid var(--border-default);
     border-radius: var(--radius-md); box-shadow: 0 6px 20px rgba(0,0,0,0.35);
     color: var(--text-primary); font-size: var(--text-sm); font-family: var(--font-mono);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    white-space: pre-wrap; word-break: break-word; max-height: 40vh; overflow-y: auto;
   }
+  /* Ação primária do confirm (guardar e trocar): destaque com o accent. */
+  .c-primary { background: var(--accent); border-color: var(--accent); color: var(--bg-base); font-weight: 600; }
 </style>

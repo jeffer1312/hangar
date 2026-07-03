@@ -14,6 +14,7 @@ class SessionInfo(BaseModel):
     # Vinculo nome<->transcript e confiavel? True = resolvido por --session-id/fd/cache (determinismo).
     # False = chute newest-by-mtime (claude manual sem --session-id) -> UI marca "sem id" e desliga chat.
     tracked: bool = True
+    branch: Optional[str] = None   # branch git atual do cwd (lida de .git/HEAD) — mostra na lista
 
 
 class ChatEvent(BaseModel):
