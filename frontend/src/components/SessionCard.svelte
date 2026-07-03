@@ -10,8 +10,9 @@
     onClick: () => void;
     onDelete: () => void;
     onResume?: () => void;
+    onRename?: (newName: string) => void;
   }
-  let { session, serverBadge = null, onClick, onDelete, onResume }: Props = $props();
+  let { session, serverBadge = null, onClick, onDelete, onResume, onRename }: Props = $props();
 
 
   // Frame parado da "pensando": f0 = anel cheio e simetrico (os frames do meio do loop ficam ralos e
@@ -53,16 +54,41 @@
   let axis: 'x' | 'y' | null = null;
   let suppressClick = false;
 
+  // ── Renomear por TOQUE LONGO (500ms parado, sem swipe) -> edita o nome inline (espelha o Sidebar) ──
+  let editing = $state(false);
+  let editValue = $state('');
+  let longPressed = false;
+  let pressTimer: ReturnType<typeof setTimeout> | undefined;
+  function startPress() {
+    longPressed = false;
+    clearTimeout(pressTimer);
+    if (untracked) return;                       // sessao sem id confiavel nao renomeia
+    pressTimer = setTimeout(() => { longPressed = true; editValue = session.name; editing = true; }, 500);
+  }
+  function cancelPress() { clearTimeout(pressTimer); }
+  function saveRename() {
+    const nv = editValue.trim();
+    editing = false;
+    if (nv && nv !== session.name) onRename?.(nv);   // o SSE de sessions re-emite com o nome novo
+  }
+  function onEditKey(e: KeyboardEvent) {
+    if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
+    else if (e.key === 'Escape') { editing = false; }
+  }
+  function editAutofocus(node: HTMLInputElement) { node.focus(); node.select(); }
+
   function onDown(e: PointerEvent) {
+    if (editing) return;                         // em edicao: nao inicia swipe/press
     startX = e.clientX; startY = e.clientY; startOffset = offset;
     dragging = true; axis = null; suppressClick = false;
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    startPress();                                // arma o long-press (cancelado por movimento/soltar)
   }
   function onMove(e: PointerEvent) {
     if (!dragging) return;
     const dx = e.clientX - startX, dy = e.clientY - startY;
     if (axis === null) {
-      if (Math.abs(dx) > 6 || Math.abs(dy) > 6) axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+      if (Math.abs(dx) > 6 || Math.abs(dy) > 6) { axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'; cancelPress(); }
     }
     if (axis === 'y') { dragging = false; return; } // scroll vertical -> solta
     if (axis === 'x') {
@@ -71,13 +97,15 @@
     }
   }
   function onUp() {
+    cancelPress();
     if (!dragging) return;
     dragging = false;
     if (axis === 'x') offset = offset < OPEN / 2 ? OPEN : 0; // snap aberto/fechado
   }
 
-  // Tap na linha: se aberto ou se acabou de arrastar, nao navega (fecha o swipe). Senao abre o chat.
+  // Tap na linha: toque longo (renomeou) nao navega; se aberto ou acabou de arrastar, fecha o swipe.
   function onRowClick() {
+    if (longPressed) { longPressed = false; return; }   // foi toque longo (renomear) -> nao abre o chat
     if (suppressClick || offset !== 0) { offset = 0; return; }
     if (!untracked) onClick();
   }
@@ -123,7 +151,21 @@
 
     <div class="row-info">
       <span class="name-row">
-        <span class="session-name">{title}</span>
+        {#if editing}
+          <!-- svelte-ignore a11y_autofocus -->
+          <input
+            class="name-edit"
+            bind:value={editValue}
+            use:editAutofocus
+            onclick={(e) => e.stopPropagation()}
+            onpointerdown={(e) => e.stopPropagation()}
+            onkeydown={onEditKey}
+            onblur={saveRename}
+            aria-label="Novo nome da sessão"
+          />
+        {:else}
+          <span class="session-name">{title}</span>
+        {/if}
         {#if untracked}
           <span class="untracked-badge" title="claude aberto sem --session-id: nao da pra rastrear o transcript com seguranca">⚠ sem id</span>
         {/if}
@@ -292,6 +334,21 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* Input do rename inline (toque longo). Mesmo visual do .server-edit da lista de servidores. */
+  .name-edit {
+    flex: 1;
+    min-width: 0;
+    height: 32px;
+    background: var(--bg-base);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 16px; /* evita zoom no iOS */
+    font-weight: 600;
+    padding: 0 var(--space-2);
+    outline: none;
   }
 
   .meta-line {

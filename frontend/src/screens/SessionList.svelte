@@ -6,7 +6,7 @@
   import QrScanner from '../components/QrScanner.svelte';
   import BottomSheet from '../components/BottomSheet.svelte';
   import ConfirmSheet from '../components/ConfirmSheet.svelte';
-  import { getSessions, createSession, deleteSession, resumeSession, openSessionsStream } from '../lib/api';
+  import { getSessions, createSession, deleteSession, renameSession, resumeSession, openSessionsStream } from '../lib/api';
   import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
   import type { AggSession, SessionInfo, ResumeCandidate } from '../lib/types';
@@ -215,6 +215,17 @@
     selectServer(s.serverId);
     await deleteSession(s.name);
     sessions = sessions.filter((x) => !(x.serverId === s.serverId && x.name === s.name));
+  }
+
+  // Renomear sessao (toque longo no card): renomeia o pane tmux no servidor dela. O stream SSE re-emite
+  // a sessao com o nome novo -> nao mexemos na lista aqui (igual ao Sidebar do desktop).
+  async function handleRename(s: AggSession, newName: string) {
+    selectServer(s.serverId);
+    try {
+      await renameSession(s.name, newName);
+    } catch {
+      /* falha -> o proximo poll do stream corrige o nome exibido */
+    }
   }
 
   // Retomar uma sessão "sem id": relança o pane com `claude --resume <uuid>` -> passa a rastrear. Caso
@@ -466,6 +477,7 @@
                     onClick={() => openSession(session)}
                     onDelete={() => handleDelete(session)}
                     onResume={() => handleResume(session)}
+                    onRename={(nv) => handleRename(session, nv)}
                   />
                 {/each}
               {/if}
@@ -479,6 +491,7 @@
               onClick={() => openSession(session)}
               onDelete={() => handleDelete(session)}
               onResume={() => handleResume(session)}
+              onRename={(nv) => handleRename(session, nv)}
             />
           {/each}
         {/if}
