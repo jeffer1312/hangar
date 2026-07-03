@@ -54,6 +54,37 @@ def test_git_action_invalid(tmp_path):
     assert e.value.status == 400
 
 
+def _with_remote(tmp_path):
+    """Repo local + um segundo repo como 'origin' (com uma branch so-remota), ja com fetch feito."""
+    d = _repo(tmp_path)
+    (tmp_path / "remote").mkdir()   # git -C exige o path existente
+    rd = str(tmp_path / "remote")
+    for args in (
+        ["init", "-q", "-b", "main"],
+        ["config", "user.email", "t@t"],
+        ["config", "user.name", "t"],
+        ["commit", "-q", "--allow-empty", "-m", "r"],
+        ["branch", "only-remote"],
+    ):
+        git_ops._run(rd, *args)
+    git_ops._run(d, "remote", "add", "origin", rd)
+    assert git_ops.git_action(d, "fetch")["ok"] is True
+    return d
+
+
+def test_list_branches_remotes_dedup(tmp_path):
+    info = git_ops.list_branches(_with_remote(tmp_path))
+    assert "only-remote" in info["remotes"]        # remota sem local -> aparece
+    assert "main" not in info["remotes"]            # ja tem local -> dedup pelo nome curto
+    assert "only-remote" not in info["branches"]    # ainda nao e local
+
+
+def test_switch_remote_dwim_creates_local(tmp_path):
+    d = _with_remote(tmp_path)
+    assert git_ops.switch_branch(d, "only-remote")["current"] == "only-remote"
+    assert "only-remote" in git_ops.list_branches(d)["branches"]  # DWIM criou a local
+
+
 def test_run_git_not_found(tmp_path, monkeypatch):
     # FileNotFoundError (git ausente) -> GitError 500, nao traceback cru.
     def boom(*a, **k):

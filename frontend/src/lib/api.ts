@@ -290,7 +290,8 @@ export async function selectOption(name: string, option: number): Promise<void> 
 export interface BranchInfo {
   current: string | null;
   branches: string[];
-  dirty?: boolean;   // working tree suja -> o front avisa antes de trocar (switch carrega mudancas)
+  remotes?: string[];  // remotas sem local correspondente (nome curto); trocar pra uma faz o DWIM do switch
+  dirty?: boolean;     // working tree suja -> o front avisa antes de trocar (switch carrega mudancas)
 }
 
 export function getBranches(name: string): Promise<BranchInfo> {
@@ -304,7 +305,7 @@ export function checkoutBranch(name: string, branch: string): Promise<{ current:
   });
 }
 
-export function gitAction(name: string, action: 'status' | 'pull'): Promise<{ ok: boolean; output: string }> {
+export function gitAction(name: string, action: 'status' | 'pull' | 'fetch'): Promise<{ ok: boolean; output: string }> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git`, {
     method: 'POST',
     body: JSON.stringify({ action }),
