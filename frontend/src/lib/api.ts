@@ -311,7 +311,7 @@ export function checkoutBranch(name: string, branch: string): Promise<{ current:
   });
 }
 
-export type GitAction = 'status' | 'pull' | 'fetch' | 'stash' | 'stash-pop';
+export type GitAction = 'status' | 'pull' | 'fetch' | 'stash' | 'stash-pop' | 'log';
 
 export function gitAction(name: string, action: GitAction): Promise<{ ok: boolean; output: string }> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git`, {

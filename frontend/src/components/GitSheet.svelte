@@ -168,6 +168,7 @@
         <h2 class="git-title">Git</h2>
         <div class="git-actions">
           <button class="git-act" disabled={!!busy} onclick={() => runAction('status')}>status</button>
+          <button class="git-act" disabled={!!busy} onclick={() => runAction('log')} title="últimos commits (git log)">log</button>
           <button class="git-act" disabled={!!busy} onclick={() => runAction('fetch')}>fetch</button>
           <button class="git-act" disabled={!!busy} onclick={() => runAction('pull')}>pull</button>
           <button class="git-act" disabled={!!busy} onclick={() => runAction('stash')} title="guarda as mudanças (git stash)">stash</button>

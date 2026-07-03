@@ -87,6 +87,8 @@ _ACTIONS = {
     # stash guarda TUDO (inclui untracked) -> deixa a tree limpa pra trocar de branch; pop reaplica.
     "stash": ["stash", "push", "--include-untracked"],
     "stash-pop": ["stash", "pop"],
+    # log: ultimos 30 commits, uma linha cada (hash curto + msg + autor + data relativa).
+    "log": ["log", "-n", "30", "--pretty=format:%h  %s  (%an, %ar)"],
 }
 
 
