@@ -565,7 +565,7 @@ class CheckoutBody(_StrictBody):
 
 
 class GitActionBody(_StrictBody):
-    action: Literal["status", "pull"]  # allowlist declarativa no schema (alem do git_ops)
+    action: Literal["status", "pull", "fetch"]  # allowlist declarativa no schema (alem do git_ops)
 
 
 def _session_cwd(name: str) -> str:
