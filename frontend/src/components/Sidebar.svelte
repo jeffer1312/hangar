@@ -4,6 +4,7 @@
   import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor, clearCredentials } from '../lib/auth';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import QrScanner from './QrScanner.svelte';
+  import GitSheet from './GitSheet.svelte';
   import type { SessionInfo, State } from '../lib/types';
   import { stateLabels, stateColors } from '../lib/format';
   import type { Server } from '../lib/auth';
@@ -205,30 +206,28 @@
     clearTimeout(pressTimer);   // cancela o long-press (senao dispararia rename junto)
     menu = { x: e.clientX, y: e.clientY, name: s.name, serverId, cwd: s.cwd ?? '' };
   }
-  function closeMenu() { menu = null; branchView = null; logView = null; }
+  function closeMenu() { menu = null; branchView = null; }
 
   // Submenu "Trocar branch" (2a pagina do menu, evita flyout). branchView != null = mostrando a lista.
   let branchView = $state<{ list: string[]; current: string | null; dirty: boolean } | null>(null);
   // Confirmacao de troca com working tree suja (switch carrega mudancas nao-conflitantes pra outra branch).
   let confirmBranch = $state<{ name: string; serverId: string; branch: string } | null>(null);
   let branchLoading = $state(false);
-  // Submenu "Git log" (2a pagina, igual o de branch). logView != null = mostrando os commits.
-  let logView = $state<string | null>(null);
-  let logLoading = $state(false);
-  async function menuLog() {
+  // Gerenciador git (GitSheet) aberto pelo menu de contexto, no repo da sessao, SEM abrir o chat.
+  // A GitSheet mira o server ATIVO -> aponto pro dono da sessao enquanto aberta e restauro no fechar.
+  let gitSheet = $state<{ name: string } | null>(null);
+  let gitSheetPrevServer: string | null = null;
+  function menuGit() {
     if (!menu) return;
     const { name, serverId } = menu;
-    logView = '';
-    logLoading = true;
-    try {
-      const r = await withServer(serverId, () => gitAction(name, 'log'));
-      logView = r.output || '(sem commits)';
-    } catch (e) {
-      logView = null;
-      flash(`log: ${errMsg(e)}`);
-    } finally {
-      logLoading = false;
-    }
+    gitSheetPrevServer = getActiveId();
+    selectServer(serverId);
+    gitSheet = { name };
+    closeMenu();
+  }
+  function closeGitSheet() {
+    gitSheet = null;
+    if (gitSheetPrevServer) { selectServer(gitSheetPrevServer); gitSheetPrevServer = null; }
   }
   async function menuBranches() {
     if (!menu) return;
@@ -563,22 +562,14 @@
       {:else}
         <div class="ctx-info">sem branches</div>
       {/if}
-    {:else if logView !== null}
-      <button type="button" class="ctx-back" onclick={() => (logView = null)}>‹ Git log</button>
-      <div class="ctx-sep"></div>
-      {#if logLoading}
-        <div class="ctx-info">carregando…</div>
-      {:else}
-        <pre class="ctx-log">{logView}</pre>
-      {/if}
     {:else}
       <button type="button" role="menuitem" onclick={menuRename}>Renomear</button>
       {#if menu.cwd}
         <button type="button" role="menuitem" onclick={menuCopyCwd}>Copiar cwd</button>
         <button type="button" role="menuitem" onclick={menuOpenEditor}>Abrir no editor</button>
         <div class="ctx-sep"></div>
+        <button type="button" role="menuitem" onclick={menuGit}>Git<span class="ctx-more">›</span></button>
         <button type="button" role="menuitem" onclick={menuGitPull}>Git pull</button>
-        <button type="button" role="menuitem" onclick={menuLog}>Git log<span class="ctx-more">›</span></button>
         <button type="button" role="menuitem" onclick={menuBranches}>Trocar branch<span class="ctx-more">›</span></button>
       {/if}
       <div class="ctx-sep"></div>
@@ -587,6 +578,11 @@
   </div>
 {/if}
 {#if menuMsg}<div class="menu-toast" role="status">{menuMsg}</div>{/if}
+
+<!-- Gerenciador git aberto pelo menu de contexto (repo da sessao, sem abrir o chat). -->
+{#if gitSheet}
+  <GitSheet open={true} sessionName={gitSheet.name} onClose={closeGitSheet} />
+{/if}
 
 <!-- Confirmar remocao de servidor (com o nome) — mesmo padrao do excluir sessao. -->
 {#if confirmSrv}
@@ -811,12 +807,6 @@
   .ctx-branch { font-family: var(--font-mono); font-size: var(--text-xs); }
   .ctx-branch.current { color: var(--accent); }
   .ctx-cur { margin-left: auto; padding-left: var(--space-2); }
-  /* Log de commits inline (git log): pre monoespacado, rolavel, quebra linhas longas. */
-  .ctx-log {
-    margin: 0; padding: 6px 10px; max-height: 280px; max-width: 340px; overflow: auto;
-    font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.5;
-    color: var(--text-secondary); white-space: pre-wrap; word-break: break-word;
-  }
 
   /* ── Confirmar exclusao (modal centrado) ── */
   .confirm-backdrop { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, 0.5); }
