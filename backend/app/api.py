@@ -26,7 +26,9 @@ from app.sse import merged_events
 from app.uploads import save_upload, resolve_upload, UploadError, MAX_BYTES
 from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base, settings
 from app.costs import report as costs_report
-from app.git_ops import list_branches, switch_branch, git_action, GitError
+from app.git_ops import (
+    list_branches, switch_branch, git_action, changed_files, file_diff, discard_file, GitError,
+)
 from app.archive import ArchiveEntry, ArchiveFolder, archive_jsonl, list_conversations, list_folders
 from app.askquestion import clear_pending_askq
 from app.hook_state import hook_state
@@ -565,7 +567,12 @@ class CheckoutBody(_StrictBody):
 
 
 class GitActionBody(_StrictBody):
-    action: Literal["status", "pull", "fetch"]  # allowlist declarativa no schema (alem do git_ops)
+    # allowlist declarativa no schema (alem do git_ops)
+    action: Literal["status", "pull", "fetch", "stash", "stash-pop"]
+
+
+class GitPathBody(_StrictBody):
+    path: str   # validado em git_ops contra a lista real de arquivos alterados (anti-traversal)
 
 
 def _session_cwd(name: str) -> str:
@@ -596,6 +603,30 @@ def checkout(name: str, body: CheckoutBody):
 def git(name: str, body: GitActionBody):
     try:
         return git_action(_session_cwd(name), body.action)
+    except GitError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.get("/api/sessions/{name}/git/files", dependencies=[Depends(require_auth)])
+def git_files(name: str):
+    try:
+        return {"files": changed_files(_session_cwd(name))}
+    except GitError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.post("/api/sessions/{name}/git/diff", dependencies=[Depends(require_auth)])
+def git_diff(name: str, body: GitPathBody):
+    try:
+        return file_diff(_session_cwd(name), body.path)
+    except GitError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.post("/api/sessions/{name}/git/discard", dependencies=[Depends(require_auth)])
+def git_discard(name: str, body: GitPathBody):
+    try:
+        return discard_file(_session_cwd(name), body.path)
     except GitError as e:
         raise HTTPException(e.status, e.detail)
 

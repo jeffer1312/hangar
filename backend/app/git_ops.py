@@ -34,7 +34,8 @@ def list_branches(cwd: str) -> dict:
     outra branch silenciosamente). As remotas vem pelo nome curto (sem o prefixo do remote): trocar
     pra uma delas faz o DWIM do `git switch` (cria a local rastreando origin/<nome>). Ficam
     defasadas ate um fetch."""
-    p = _run(cwd, "branch", "--format=%(refname:short)")
+    # --sort=-committerdate: mais recentemente commitada primeiro (nao alfabetico).
+    p = _run(cwd, "branch", "--sort=-committerdate", "--format=%(refname:short)")
     if p.returncode != 0:
         raise GitError(409, (p.stderr or "git branch falhou").strip() or "git branch falhou")
     branches = [b.strip() for b in p.stdout.splitlines() if b.strip()]
@@ -43,7 +44,7 @@ def list_branches(cwd: str) -> dict:
     # Remotas: -r lista refs/remotes/*. Nome curto = tira o primeiro segmento (o nome do remote).
     # Ignora o 'origin/HEAD' simbolico (refname:short = so 'origin', sem '/') e dedup pelo nome
     # curto contra as locais (uma remota que ja tem local nao precisa aparecer duas vezes).
-    r = _run(cwd, "branch", "-r", "--format=%(refname:short)")
+    r = _run(cwd, "branch", "-r", "--sort=-committerdate", "--format=%(refname:short)")
     remotes: list[str] = []
     seen: set[str] = set()
     if r.returncode == 0:
@@ -83,6 +84,9 @@ _ACTIONS = {
     "status": ["status", "--short", "--branch"],
     "pull": ["pull", "--ff-only"],
     "fetch": ["fetch", "--all", "--prune"],
+    # stash guarda TUDO (inclui untracked) -> deixa a tree limpa pra trocar de branch; pop reaplica.
+    "stash": ["stash", "push", "--include-untracked"],
+    "stash-pop": ["stash", "pop"],
 }
 
 
@@ -92,6 +96,58 @@ def git_action(cwd: str, action: str) -> dict:
         raise GitError(400, "acao invalida")
     p = _run(cwd, *argv)
     return {"ok": p.returncode == 0, "output": (p.stdout + p.stderr).strip()}
+
+
+def changed_files(cwd: str) -> list[dict]:
+    """Arquivos com mudanca nao-commitada (git status --porcelain). Cada item: `path`, `code` (os 2
+    chars XY do porcelain: ' M', 'M ', '??', 'A '...) e `staged`. So leitura."""
+    p = _run(cwd, "status", "--porcelain")
+    if p.returncode != 0:
+        raise GitError(409, (p.stderr or "git status falhou").strip() or "git status falhou")
+    out = []
+    for line in p.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        code, path = line[:2], line[3:]
+        if " -> " in path:                      # rename/copy: "old -> new" -> usa o novo path
+            path = path.split(" -> ", 1)[1]
+        out.append({"path": path, "code": code, "staged": code[0] not in " ?"})
+    return out
+
+
+def _changed_map(cwd: str) -> dict:
+    return {f["path"]: f for f in changed_files(cwd)}
+
+
+def file_diff(cwd: str, path: str) -> dict:
+    """Diff (staged + unstaged, vs HEAD) de UM arquivo. Valida o path contra a lista real de
+    alterados (rejeita traversal/injecao/flag-like); `--` separa o path de flags no argv."""
+    files = _changed_map(cwd)
+    if path not in files:
+        raise GitError(400, "arquivo nao esta na lista de alterados")
+    if files[path]["code"] == "??":             # untracked: HEAD nao tem -> mostra tudo como adicao
+        p = _run(cwd, "diff", "--no-index", "--", "/dev/null", path)
+    else:
+        p = _run(cwd, "diff", "HEAD", "--", path)
+    # git diff sai 1 quando HA diferenca (normal) -> so 128+ e erro real (path invalido, etc)
+    if p.returncode >= 128:
+        raise GitError(409, (p.stderr or "git diff falhou").strip() or "git diff falhou")
+    return {"path": path, "diff": p.stdout}
+
+
+def discard_file(cwd: str, path: str) -> dict:
+    """DESTRUTIVO: descarta a mudanca nao-commitada de UM arquivo. Valida o path contra a lista real.
+    Untracked -> remove o arquivo do disco (git clean); tracked -> git restore ao HEAD (staged+tree)."""
+    files = _changed_map(cwd)
+    if path not in files:
+        raise GitError(400, "arquivo nao esta na lista de alterados")
+    if files[path]["code"] == "??":
+        p = _run(cwd, "clean", "-f", "--", path)
+    else:
+        p = _run(cwd, "restore", "--staged", "--worktree", "--source=HEAD", "--", path)
+    if p.returncode != 0:
+        raise GitError(409, (p.stderr or "descartar falhou").strip() or "descartar falhou")
+    return {"ok": True, "path": path}
 
 
 if __name__ == "__main__":
