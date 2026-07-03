@@ -20,6 +20,21 @@ GitLens (histórico com a árvore, autor, branches/tags).
 - **Fase 2:** grafo visual dos commits (as linhas da árvore + branches/tags), estilo GitLens.
 - **Fase 3:** trocar branch e demais ações (stash, pull…) integradas no mesmo gerenciador.
 
+**Melhorias de UX pedidas (feedback 2026-07-03, olhando a GitSheet aberta):**
+- **log pouco visível ("não vê nada"):** hoje o botão `log` só joga os commits no `<pre>` de output
+  (rodapé, cortado). Dar uma **view dedicada** que ocupa a sheet (igual o visualizador de diff), com a
+  lista de commits legível (hash + msg + autor + data).
+- **arquivos alterados ruins de ler:** os nomes longos (ex. `docs/superpowers/plans/2026-…`) truncam feio.
+  Melhorar: **basename em destaque + path/dir menor** (ou wrap), pra bater o olho e entender.
+- **renderizar código/diff com syntax highlighting** estilo editor do VS Code — **só VISUALIZAR, não
+  editar**. Ex.: Shiki / highlight.js / Prism inline (self-contained, sem CDN). Aplicar no visualizador de
+  diff e, se fizer sentido, no log.
+- **log = UMA LINHA POR COMMIT (estilo TortoiseGit):** hoje o texto faz wrap e fica ilegível. Cada commit
+  numa linha única (hash + msg + autor + data), truncada com ellipsis se longa; sem wrap. Idealmente scroll
+  horizontal ou tap pra expandir um commit.
+- **sheet redimensionável:** deixar o usuário **aumentar o tamanho** da sheet lateral (arrastar a borda /
+  handle, ou um botão de largura) — a de 420px fica apertada pra ler log/diff.
+
 Fazer nas **2 views** (Sidebar desktop + menu equivalente no mobile) — ver o gotcha das 2 views no CLAUDE.md.
 
 ## 1. See running agents (subagents + workflows)
