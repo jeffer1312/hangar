@@ -178,11 +178,13 @@
         {#if session.cwd}
           <span class="cwd" title={session.cwd}><span class="cwd-prefix">{cwdParts.prefix}</span><span class="cwd-base">{cwdParts.base}</span></span>
         {/if}
-        {#if session.branch}
-          <span class="meta-sep">·</span>
-          <span class="branch" title="branch git atual">⎇ {session.branch}</span>
-        {/if}
       </span>
+      {#if session.branch}
+        <!-- Branch numa linha própria: no celular ela concorria com o cwd e ficava truncada. -->
+        <span class="meta-line">
+          <span class="branch" title="branch git atual">⎇ {session.branch}</span>
+        </span>
+      {/if}
       {#if untracked}
         <button
           class="resume-btn"
