@@ -3,6 +3,22 @@
 Next things to design + build after the current redesign phases. Mobile-first. The backend
 drives the live claude via tmux send-keys + reads the JSONL transcript + capture-pane.
 
+## 0. Git manager (EM CONSTRUÇÃO — iniciado 2026-07-03)
+
+Objetivo: transformar a GitSheet num **gerenciador de git** de verdade, aberto pelo **menu de
+contexto** de uma sessão (botão direito) — SEM precisar abrir a conversa. O repo vem da própria
+sessão (`name` + `serverId` já estão no menu). Referência visual do usuário: commit graph estilo
+GitLens (histórico com a árvore, autor, branches/tags).
+
+- **Fase 1 (atual):** menu de contexto → abre a GitSheet no repo da sessão via `withServer(serverId)`,
+  sem navegar pro chat; **lista de commits** da branch atual (hash, msg, autor, data). Backend: a action
+  `log` já existe no `git_ops`, mas FALTA adicionar `'log'` ao `Literal` de action em `api.py` + reiniciar
+  o backend. Remover o "Git log" inline bugado que foi adicionado no menu (dava 422).
+- **Fase 2:** grafo visual dos commits (as linhas da árvore + branches/tags), estilo GitLens.
+- **Fase 3:** trocar branch e demais ações (stash, pull…) integradas no mesmo gerenciador.
+
+Fazer nas **2 views** (Sidebar desktop + menu equivalente no mobile) — ver o gotcha das 2 views no CLAUDE.md.
+
 ## 1. See running agents (subagents + workflows)
 A way to view, from the phone, what's executing inside the live claude session: the
 running **Agent(...)** subagents and **Workflow** runs (mirrors what the terminal shows —
