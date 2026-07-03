@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 from typing import Optional
@@ -108,11 +109,74 @@ def _scan_skills(skills_dir: Path) -> list[dict]:
     return out
 
 
+def _scan_plugins(plugins_dir: Path) -> list[dict]:
+    # ~/.claude/plugins/installed_plugins.json -> para cada plugin instalado, varre o seu
+    # installPath: commands/*.md e skills/<nome>/SKILL.md. Nome vira '<plugin>:<nome>'
+    # (namespaced, como o Claude Code invoca), fonte 'plugin'. Le so os instalados (dedup
+    # de versao via manifest) em vez dos milhares de arquivos crus sob plugins/.
+    manifest = plugins_dir / "installed_plugins.json"
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    plugins = data.get("plugins") if isinstance(data, dict) else None
+    if not isinstance(plugins, dict):
+        return []
+
+    out: list[dict] = []
+    for key, entries in plugins.items():
+        plugin = key.split("@", 1)[0]
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            root = entry.get("installPath") if isinstance(entry, dict) else None
+            if not root:
+                continue
+            base = Path(root)
+
+            cmd_dir = base / "commands"
+            if cmd_dir.is_dir():
+                for md in sorted(cmd_dir.glob("*.md")):
+                    if not md.is_file():
+                        continue
+                    fm = _parse_frontmatter(_read_text(md))
+                    stem = _clean(fm.get("name")) or md.stem
+                    if not stem:
+                        continue
+                    out.append({
+                        "name": f"{plugin}:{stem}",
+                        "description": _clean(fm.get("description")),
+                        "argumentHint": _clean(fm.get("argument-hint") or fm.get("argumentHint")),
+                        "source": "plugin",
+                    })
+
+            skills_dir = base / "skills"
+            if skills_dir.is_dir():
+                for sub in sorted(skills_dir.iterdir()):
+                    if not sub.is_dir():
+                        continue
+                    skill_md = sub / "SKILL.md"
+                    if not skill_md.is_file():
+                        continue
+                    fm = _parse_frontmatter(_read_text(skill_md))
+                    stem = _clean(fm.get("name")) or sub.name
+                    if not stem:
+                        continue
+                    out.append({
+                        "name": f"{plugin}:{stem}",
+                        "description": _clean(fm.get("description")),
+                        "argumentHint": None,
+                        "source": "plugin",
+                    })
+    return out
+
+
 def list_commands(cwd: Optional[str]) -> list[CommandInfo]:
-    """Built-ins + comandos/skills do projeto (cwd) + skills globais (~/.claude/skills).
+    """Built-ins + comandos/skills do projeto (cwd) + skills globais (~/.claude/skills)
+    + skills/comandos de plugins instalados (~/.claude/plugins, namespaced '<plugin>:<nome>').
 
     Tolerante a diretorios ausentes: cada scan so roda se o diretorio existir. Dedupe por
-    nome preservando a ordem de prioridade (built-in > projeto > global)."""
+    nome preservando a ordem de prioridade (built-in > projeto > global > plugin)."""
     raw: list[dict] = [{**b, "source": "builtin"} for b in BUILTINS]
 
     if cwd:
@@ -121,6 +185,7 @@ def list_commands(cwd: Optional[str]) -> list[CommandInfo]:
         raw += _scan_skills(base / ".claude" / "skills")
 
     raw += _scan_skills(Path.home() / ".claude" / "skills")
+    raw += _scan_plugins(Path.home() / ".claude" / "plugins")
 
     seen: set[str] = set()
     out: list[CommandInfo] = []
