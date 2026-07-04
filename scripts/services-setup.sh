@@ -60,6 +60,9 @@ After=network.target
 
 [Service]
 WorkingDirectory=$REPO/backend
+# Explicit PATH: the backend spawns \`claude\` (~/.local/bin) and \`tmux\` — the user manager's
+# PATH may lack ~/.local/bin on a lingering boot with no login session.
+Environment=PATH=$NODE_BIN:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=$UV_BIN run python -m app.main
 Restart=on-failure
 RestartSec=2

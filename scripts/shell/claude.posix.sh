@@ -8,19 +8,24 @@
 #     tmux is invisible to the app.
 #
 # Rules:
-#  - already passed --session-id/--resume  -> respected, untouched.
+#  - already passed --session-id/--resume/-c/--continue -> respected, untouched (the CLI rejects
+#     --session-id combined with --resume/--continue).
 #  - already in tmux ($TMUX) / -p / --print / stdin not a tty (pipe/script) -> only inject the id.
 #  - outside tmux + interactive            -> create a tmux session named after the folder BASENAME
 #     (suffix -2/-3 if it already exists) and run claude (with the id) inside it. Quitting claude
 #     ends the command, so the tmux session dies and disappears from the app.
 #
+# COLORTERM + CLAUDE_CODE_TMUX_TRUECOLOR keep Claude's theme 24-bit inside tmux (see
+# docs/tmux-truecolor-setup.md). The tmux server goes in its own systemd scope so closing the
+# terminal that spawned it doesn't kill every session (same fix as backend/app/tmux.py).
+#
 # Escape hatch: `command claude ...` runs the raw binary, bypassing this wrapper.
 claude() {
     local a
-    # respect an explicit --session-id / --resume
+    # respect flags that manage their own session (injecting --session-id alongside them errors)
     for a in "$@"; do
         case "$a" in
-            --session-id|--session-id=*|--resume|--resume=*) command claude "$@"; return ;;
+            --session-id|--session-id=*|--resume|--resume=*|-c|--continue) command claude "$@"; return ;;
         esac
     done
 
@@ -31,7 +36,7 @@ claude() {
     local print=0
     for a in "$@"; do case "$a" in -p|--print) print=1 ;; esac; done
     if [ -n "${TMUX:-}" ] || [ "$print" = 1 ] || [ ! -t 0 ]; then
-        command claude --session-id "$id" "$@"
+        COLORTERM=truecolor CLAUDE_CODE_TMUX_TRUECOLOR=1 command claude --session-id "$id" "$@"
         return
     fi
 
@@ -45,5 +50,12 @@ claude() {
         name="$base-$i"; i=$((i + 1))
     done
 
-    tmux new-session -s "$name" -c "$PWD" claude --session-id "$id" "$@"
+    # duplicated call: zsh doesn't word-split an unquoted prefix var, so no $run trick here
+    if command -v systemd-run >/dev/null 2>&1 && [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+        systemd-run --user --scope --collect -q -- tmux new-session -s "$name" -c "$PWD" \
+            -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 claude --session-id "$id" "$@"
+    else
+        tmux new-session -s "$name" -c "$PWD" \
+            -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 claude --session-id "$id" "$@"
+    fi
 }

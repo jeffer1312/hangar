@@ -8,8 +8,10 @@ set -ga terminal-overrides ",xterm-kitty:Tc,xterm-256color:Tc"
 set -ga terminal-features ",xterm-kitty:RGB,xterm-256color:RGB"
 # tmux doesn't propagate COLORTERM by default; without it Claude starts at 256-color.
 set-environment -g COLORTERM truecolor
-# NOTE: also export COLORTERM=truecolor and CLAUDE_CODE_TMUX_TRUECOLOR=1 in your SHELL
-# rc (bash/zsh/fish) — the shell env is what actually fixes the in-tmux downgrade.
+set-environment -g CLAUDE_CODE_TMUX_TRUECOLOR 1
+# NOTE: the claude-pocket wrapper/backend already inject both vars into the sessions they
+# create; these lines cover sessions you make by hand. A `command claude` launched outside
+# the wrapper in an OLD pane may still need the exports in your shell rc (bash/zsh/fish).
 
 # --- Terminal transparency (optional; lets a transparent terminal show through) ---
 set -g window-style 'bg=default'

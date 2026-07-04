@@ -43,6 +43,11 @@ Related upstream issues: anthropics/claude-code #60788, #59867, #35148, #39566.
 
 ## The fix
 
+> **Shortcut:** `scripts/install-claude-wrapper.sh` handles all of this. The `claude` wrapper
+> sets both variables on every path (including `tmux new-session -e ...`), and the managed
+> `~/.tmux.conf` block sets them for sessions you create by hand. The manual steps below are
+> only needed for a `claude` launched **without** the wrapper (e.g. `command claude`).
+
 You need **both** of these in the environment **before** `claude` starts (putting them only
 in `~/.claude/settings.json` `env` is not reliable for this — set them in your shell):
 
@@ -70,6 +75,7 @@ set -g default-terminal "xterm-256color"
 set -ga terminal-overrides ",xterm-256color:Tc"
 set -ga terminal-features ",xterm-256color:RGB"
 set-environment -g COLORTERM truecolor
+set-environment -g CLAUDE_CODE_TMUX_TRUECOLOR 1
 ```
 A full reference config is in [`tmux.conf.example`](./tmux.conf.example).
 

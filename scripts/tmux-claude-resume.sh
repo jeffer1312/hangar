@@ -60,11 +60,13 @@ restore() {
   local name uuid cur
   while IFS=$'\t' read -r name uuid; do
     [ -n "${name:-}" ] && [ -n "${uuid:-}" ] || continue
-    tmux has-session -t "$name" 2>/dev/null || continue
-    cur=$(tmux display -t "$name" -p '#{pane_current_command}' 2>/dev/null) || cur=""
+    # "=" = exact-match target: without it tmux prefix-matches, and a dead "api" entry
+    # would resolve to a live "api-2" — resuming the wrong transcript in the wrong session.
+    tmux has-session -t "=$name" 2>/dev/null || continue
+    cur=$(tmux display -t "=$name" -p '#{pane_current_command}' 2>/dev/null) || cur=""
     # Only inject into a bare shell — never clobber a claude that's already running.
     case "$cur" in
-      fish|bash|zsh|sh|"") tmux send-keys -t "$name" "claude --resume $uuid" Enter ;;
+      fish|bash|zsh|sh|"") tmux send-keys -t "=$name" "claude --resume $uuid" Enter ;;
     esac
     # Note: an untrusted cwd (e.g. $HOME) makes claude show its "trust this folder?" prompt and
     # wait — answer it once on that session; trusted project dirs resume unattended.

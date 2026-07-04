@@ -7,23 +7,31 @@
 #     tmux is invisible to the app.
 #
 # Rules:
-#  - already passed --session-id/--resume  -> respected, untouched.
+#  - already passed --session-id/--resume/-c/--continue -> respected, untouched (the CLI rejects
+#     --session-id combined with --resume/--continue).
 #  - already in tmux ($TMUX) / -p / --print / stdin not a tty (pipe/script) -> only inject the id.
 #  - outside tmux + interactive            -> create a tmux session named after the folder BASENAME
 #     (suffix -2/-3 if it already exists) and run claude (with the id) inside it. Quitting claude
 #     ends the command, so the tmux session dies and disappears from the app.
 #
+# COLORTERM + CLAUDE_CODE_TMUX_TRUECOLOR keep Claude's theme 24-bit inside tmux (see
+# docs/tmux-truecolor-setup.md). The tmux server goes in its own systemd scope so closing the
+# terminal that spawned it doesn't kill every session (same fix as backend/app/tmux.py).
+#
 # Escape hatch: `command claude ...` runs the raw binary, bypassing this wrapper.
 function claude
-    if string match -qr -- '--session-id|--resume' "$argv"
-        command claude $argv
-        return
+    for a in $argv
+        switch $a
+            case --session-id '--session-id=*' --resume '--resume=*' -c --continue
+                command claude $argv
+                return
+        end
     end
 
     set -l id (uuidgen)
 
     if set -q TMUX; or contains -- -p $argv; or contains -- --print $argv; or not isatty stdin
-        command claude --session-id $id $argv
+        COLORTERM=truecolor CLAUDE_CODE_TMUX_TRUECOLOR=1 command claude --session-id $id $argv
         return
     end
 
@@ -36,5 +44,11 @@ function claude
         set i (math $i + 1)
     end
 
-    tmux new-session -s $name -c "$PWD" claude --session-id $id $argv
+    set -l run
+    if command -q systemd-run; and set -q XDG_RUNTIME_DIR
+        set run systemd-run --user --scope --collect -q --
+    end
+    $run tmux new-session -s $name -c "$PWD" \
+        -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 \
+        claude --session-id $id $argv
 end
