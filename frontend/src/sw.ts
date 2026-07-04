@@ -14,6 +14,17 @@ clientsClaim();
 cleanupOutdatedCaches();
 precacheAndRoute(self.__WB_MANIFEST);
 
+// App-icon badge (feature #13): o payload do push NAO carrega uma contagem agregada (so a sessao
+// que acabou de virar awaiting_input). Como as notificacoes ja sao dedupadas por `tag: session`
+// (linha abaixo), o Nº DE NOTIFICACOES ATIVAS *e* o nº de sessoes aguardando — sem precisar do app
+// aberto pra recontar. setAppBadge/clearAppBadge podem faltar em algum navegador -> feature-detect.
+async function syncBadgeFromNotifications(): Promise<void> {
+  if (!('setAppBadge' in self.navigator)) return;
+  const open = await self.registration.getNotifications();
+  const p = open.length > 0 ? self.navigator.setAppBadge(open.length) : self.navigator.clearAppBadge();
+  await p.catch(() => {});
+}
+
 // Web Push: o backend manda {title, body, session, url} quando uma sessao fica awaiting_input.
 self.addEventListener('push', (event) => {
   let data: { title?: string; body?: string; session?: string; url?: string } = {};
@@ -23,13 +34,16 @@ self.addEventListener('push', (event) => {
     /* payload nao-JSON: cai no default */
   }
   event.waitUntil(
-    self.registration.showNotification(data.title || 'Claude Pocket', {
-      body: data.body || 'Aguardando sua resposta',
-      tag: data.session, // mesma sessao -> substitui a notif anterior em vez de empilhar
-      data: { url: data.url || '/' },
-      icon: '/icons/icon-192.png',
-      badge: '/icons/icon-192.png',
-    }),
+    (async () => {
+      await self.registration.showNotification(data.title || 'Claude Pocket', {
+        body: data.body || 'Aguardando sua resposta',
+        tag: data.session, // mesma sessao -> substitui a notif anterior em vez de empilhar
+        data: { url: data.url || '/' },
+        icon: '/icons/icon-192.png',
+        badge: '/icons/icon-192.png',
+      });
+      await syncBadgeFromNotifications();
+    })(),
   );
 });
 
@@ -39,6 +53,7 @@ self.addEventListener('notificationclick', (event) => {
   const url = (event.notification.data as { url?: string } | undefined)?.url || '/';
   event.waitUntil(
     (async () => {
+      await syncBadgeFromNotifications(); // fechou 1 notif -> recontabiliza o badge
       const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       for (const c of wins) {
         await c.focus();

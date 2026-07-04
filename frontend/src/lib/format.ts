@@ -25,6 +25,12 @@ export const stateColors: Record<State, string> = {
   dead: 'var(--error)',
 };
 
+// Conta sessões aguardando resposta numa lista agregada — usado pro contador do header (mobile/
+// desktop) E pro badge do ícone do app (feature #13: navigator.setAppBadge). Pure, sem side-effect.
+export function countAwaiting(sessions: { state: State }[]): number {
+  return sessions.filter((s) => s.state === 'awaiting_input').length;
+}
+
 // Último segmento não vazio de um caminho absoluto (basename do projeto).
 export function basename(path: string): string {
   const parts = path.split('/').filter(Boolean);
