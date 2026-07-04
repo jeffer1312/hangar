@@ -192,3 +192,21 @@ export interface AccountCost {
 export interface CostReport {
   accounts: AccountCost[];
 }
+
+export interface Runner {
+  label: string;
+  command: string;
+  source: 'npm' | 'make' | 'stack';
+  is_dev_guess: boolean;
+}
+
+export interface RunInfo {
+  command: string;
+  since?: number | null;
+}
+
+export interface RunnersResponse {
+  detected: Runner[];
+  remembered: string | null;
+  running: RunInfo | null;
+}
