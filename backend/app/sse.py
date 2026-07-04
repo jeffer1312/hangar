@@ -85,10 +85,12 @@ async def list_events(poll: float = 1.5, ping_every: int = 7):
         # membership/state/cwd/tracked/jsonl/question/stalled/limited. O payload ainda CARREGA
         # last_activity (so nao dispara). question entra pra a linha atualizar quando uma sessao passa a
         # perguntar algo novo; stalled (feature #7) entra pra a linha tingir/destingir quando o watchdog
-        # flipar o bool; limited (feature #8) entra pro chip "limitado" aparecer/sumir na hora;
+        # flipar o bool; limited + limit_reset (feature #8) entram pro chip "limitado · HH:MM" aparecer/
+        # sumir E re-emitir quando so o horario de reset muda (mesmo limited seguindo True);
         # then_target (feature #12) entra pro indicador de vinculo aparecer/sumir/trocar de alvo na hora.
         sig = json.dumps(
-            [(i.name, i.cwd, i.state, i.tracked, i.jsonl, i.question, i.stalled, i.limited, i.then_target)
+            [(i.name, i.cwd, i.state, i.tracked, i.jsonl, i.question, i.stalled, i.limited,
+              i.limit_reset, i.then_target)
              for i in infos],
             ensure_ascii=False,
         )

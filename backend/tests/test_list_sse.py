@@ -122,6 +122,21 @@ def test_reemit_on_limited_change(monkeypatch):
     assert json.loads(evs[1]["data"])[0]["limit_reset"] == "3pm"
 
 
+def test_reemit_on_limit_reset_change(monkeypatch):
+    # Mesmo com limited seguindo True, mudar SO o horario de reset re-emite (feature #8): o chip
+    # "limitado · HH:MM" atualiza. Sem limit_reset na sig, a 2a emissao nao viria.
+    a0 = _Info("cc", "working"); a0.limited = True; a0.limit_reset = "3pm"
+    a1 = _Info("cc", "working"); a1.limited = True; a1.limit_reset = "4pm"
+    seq = [[a0], [a1]]
+    calls = {"i": 0}
+    async def fake_list(_snap=None):
+        r = seq[min(calls["i"], len(seq) - 1)]; calls["i"] += 1; return r
+    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
+    evs = asyncio.run(_take(sse.list_events(poll=0.001, ping_every=9999), 2))
+    assert [e["event"] for e in evs] == ["sessions", "sessions"]
+    assert json.loads(evs[1]["data"])[0]["limit_reset"] == "4pm"
+
+
 def test_ping_emitted_on_cadence(monkeypatch):
     async def fake_list(_snap=None):
         return [_Info("cc", "idle")]
