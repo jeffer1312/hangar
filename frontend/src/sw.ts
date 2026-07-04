@@ -25,9 +25,10 @@ async function syncBadgeFromNotifications(): Promise<void> {
   await p.catch(() => {});
 }
 
-// Web Push: o backend manda {title, body, session, url} quando uma sessao fica awaiting_input.
+// Web Push: o backend manda {title, body, session, url, tag?} quando uma sessao fica awaiting_input
+// (ou N sessoes coalescidas numa unica notif — feature #5).
 self.addEventListener('push', (event) => {
-  let data: { title?: string; body?: string; session?: string; url?: string } = {};
+  let data: { title?: string; body?: string; session?: string; url?: string; tag?: string } = {};
   try {
     data = event.data?.json() ?? {};
   } catch {
@@ -37,7 +38,9 @@ self.addEventListener('push', (event) => {
     (async () => {
       await self.registration.showNotification(data.title || 'Claude Pocket', {
         body: data.body || 'Aguardando sua resposta',
-        tag: data.session, // mesma sessao -> substitui a notif anterior em vez de empilhar
+        // tag explicito (coalescido: mesma tag CONSTANTE pra N sessoes) sobrepoe o default (a
+        // sessao) -> mesma sessao/grupo substitui a notif anterior em vez de empilhar.
+        tag: data.tag || data.session,
         data: { url: data.url || '/' },
         icon: '/icons/icon-192.png',
         badge: '/icons/icon-192.png',

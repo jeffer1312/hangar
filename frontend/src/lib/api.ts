@@ -141,6 +141,20 @@ export async function subscribePush(s: Server, subscription: PushSubscriptionJSO
   if (!res.ok) throw new Error(`subscribe ${res.status}`);
 }
 
+// Preferencias de push (feature #5): sessoes silenciadas + janela de quiet hours global — do servidor
+// ATIVO (mesma convencao das ops por-sessao, que sempre miram o server selecionado no momento).
+export function getPushSettings(): Promise<{ muted: string[]; quiet_hours: { start: string; end: string } | null }> {
+  return apiFetch('/api/push/settings');
+}
+
+export function setSessionMute(session: string, muted: boolean): Promise<{ ok: boolean }> {
+  return apiFetch('/api/push/mute', { method: 'POST', body: JSON.stringify({ session, muted }) });
+}
+
+export function setQuietHours(start: string | null, end: string | null): Promise<{ ok: boolean }> {
+  return apiFetch('/api/push/quiet-hours', { method: 'POST', body: JSON.stringify({ start, end }) });
+}
+
 export async function deleteSession(name: string): Promise<void> {
   await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}`, {
     method: 'DELETE',
