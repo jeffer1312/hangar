@@ -31,9 +31,10 @@
   interface Props {
     currentSession: string | null;
     onSelect: (name: string) => void;
+    onCompare: (ids: { serverId: string; name: string }[]) => void;
     onLogout: () => void;
   }
-  let { currentSession, onSelect, onLogout }: Props = $props();
+  let { currentSession, onSelect, onCompare, onLogout }: Props = $props();
 
   // Grupo generico: por SERVIDOR (hoje) ou por PROJETO (cwd) — mesmo shape nos dois modos. Cada
   // sessao carrega o serverId dela (no modo projeto um grupo pode juntar sessoes de servidores
@@ -507,6 +508,17 @@
   const broadcastIsSlash = $derived(broadcastText.trim().startsWith('/'));
   const broadcastDisabled = $derived(broadcastBusy || selected.size === 0 || !broadcastText.trim() || broadcastIsSlash);
 
+  // "Comparar" (feature #11): reusa a MESMA seleção multipla do broadcast pra abrir a grade lado a
+  // lado. Precisa de 2+ (comparar 1 sessão não tem propósito).
+  const compareDisabled = $derived(selected.size < 2);
+  function openCompare() {
+    const allSessions = groups.flatMap((g) => g.sessions);
+    const ids = allSessions
+      .filter((s) => selected.has(`${s.serverId}:${s.name}`))
+      .map((s) => ({ serverId: s.serverId, name: s.name }));
+    onCompare(ids);
+  }
+
   async function sendBroadcast() {
     const text = broadcastText.trim();
     if (broadcastDisabled) return;
@@ -670,6 +682,7 @@
     <div class="broadcast-bar">
       <div class="broadcast-row">
         <span class="broadcast-count">{selected.size} selecionada{selected.size === 1 ? '' : 's'}</span>
+        <button class="broadcast-compare" onclick={openCompare} disabled={compareDisabled} aria-label="Comparar sessões selecionadas" title="Comparar">Comparar</button>
         <button class="broadcast-cancel" onclick={toggleSelectMode} aria-label="Cancelar seleção">×</button>
       </div>
       {#if broadcastMsg}<p class="broadcast-msg">{broadcastMsg}</p>{/if}
@@ -1006,6 +1019,13 @@
   .broadcast-count { font-size: var(--text-xs); font-weight: 600; color: var(--text-primary); }
   .broadcast-cancel { width: 24px; height: 24px; color: var(--text-secondary); font-size: var(--text-base); line-height: 1; border-radius: var(--radius-sm); }
   .broadcast-cancel:hover { background: var(--bg-hover); }
+  .broadcast-compare {
+    font-size: var(--text-xs); font-weight: 600; color: var(--accent);
+    padding: 4px 10px; border: 1px solid var(--accent); border-radius: var(--radius-full);
+    background: transparent;
+  }
+  .broadcast-compare:disabled { color: var(--text-muted); border-color: var(--border-default); }
+  @media (hover: hover) { .broadcast-compare:not(:disabled):hover { background: var(--accent-dim); } }
   .broadcast-msg { font-size: var(--text-xs); color: var(--warning); margin: 0; }
   .broadcast-hint { font-size: var(--text-xs); color: var(--text-muted); margin: 0; }
   .broadcast-input-row { display: flex; gap: var(--space-2); }
