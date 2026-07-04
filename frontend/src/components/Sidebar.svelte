@@ -642,6 +642,9 @@
                 {:else if !expanded && s.state !== 'working'}
                   <!-- Rail recolhido: iniciais tingidas pelo estado (identifica sem o nome). -->
                   <span class="initials" style="color: {stateColors[s.state]}; border-color: {stateColors[s.state]}; background: {stateChipBg[s.state]};">{initials(s.name)}</span>
+                {:else if !expanded && s.stalled}
+                  <!-- Working travada no rail recolhido: iniciais com anel âmbar (sem o spinner, que sumiria o aviso). -->
+                  <span class="initials stalled" title="Pode estar travada" style="color: {stateColors[s.state]}; border-color: {stateColors[s.state]}; background: {stateChipBg[s.state]};">{initials(s.name)}</span>
                 {:else if s.state === 'working'}
                   <Lottie data={pensando as any} size={18} loop autoplay />
                 {:else}
@@ -664,7 +667,12 @@
                     <span class="cwd" title={s.cwd}><span class="cwd-prefix">{cp.prefix}</span><span class="cwd-base">{cp.base}</span></span>
                   {/if}
                 </span>
-                <span class="state-chip" style="color: {stateColors[s.state]}; background: {stateChipBg[s.state]};">{stateLabels[s.state]}</span>
+                <span
+                  class="state-chip"
+                  class:stalled={s.stalled === true}
+                  style="color: {stateColors[s.state]}; background: {stateChipBg[s.state]};"
+                  title={s.stalled ? 'Pode estar travada — sem atividade há um tempo' : undefined}
+                >{stateLabels[s.state]}</span>
               {/if}
             </button>
             {#if expanded && !selectMode}
@@ -978,6 +986,10 @@
     flex-shrink: 0; font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
     padding: 2px 7px; border-radius: var(--radius-full); white-space: nowrap;
   }
+  /* Travada (feature #7): anel âmbar sutil no chip — avisa sem gritar. */
+  .state-chip.stalled {
+    box-shadow: inset 0 0 0 1px var(--warning);
+  }
   .lead { width: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
   /* Rail recolhido: iniciais precisam de mais espaco que o icone de 18px. */
   .sidebar.collapsed .lead { width: auto; }
@@ -986,6 +998,10 @@
     display: flex; align-items: center; justify-content: center;
     font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
     border: 1px solid;
+  }
+  /* Travada (feature #7) no rail recolhido: anel âmbar sutil, mesma ideia do .state-chip.stalled. */
+  .initials.stalled {
+    box-shadow: inset 0 0 0 1px var(--warning);
   }
   .sidebar.collapsed .sess-row { justify-content: center; }
   .sidebar.collapsed .sess-main { justify-content: center; padding: 0; }

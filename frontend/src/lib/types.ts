@@ -14,6 +14,9 @@ export interface SessionInfo {
   label?: string | null;       // working: texto do spinner
   question?: string | null;    // awaiting_input: a pergunta
   options?: string[] | null;   // awaiting_input: rótulos das opções
+  // True quando "working" ha mais de CP_STALL_SECONDS sem avancar (feature #7: watchdog de travada) —
+  // so tinge a linha; o backend (stall_watch.py) e quem decide o push.
+  stalled?: boolean;
 }
 
 // Sessão marcada com o servidor de origem (visão agregada multi-servidor).
