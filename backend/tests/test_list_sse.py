@@ -15,9 +15,10 @@ def _stub_cached_list(monkeypatch):
 class _Info:
     def __init__(self, name, state):
         self.name, self.state, self.cwd, self.jsonl, self.tracked, self.last_activity = name, state, "/p", f"/x/{name}.jsonl", True, None
+        self.question = None
 
     def model_dump(self, mode="json"):
-        return {"name": self.name, "state": self.state, "cwd": self.cwd, "jsonl": self.jsonl, "tracked": self.tracked, "last_activity": self.last_activity}
+        return {"name": self.name, "state": self.state, "cwd": self.cwd, "jsonl": self.jsonl, "tracked": self.tracked, "last_activity": self.last_activity, "question": self.question}
 
 
 async def _take(gen, n):
@@ -67,6 +68,21 @@ def test_no_reemit_on_last_activity_only_change(monkeypatch):
     assert json.loads(evs[0]["data"])[0]["state"] == "working"
     assert json.loads(evs[1]["data"])[0]["state"] == "idle"
     assert json.loads(evs[1]["data"])[0]["last_activity"] == 3.0  # ainda no payload
+
+
+def test_reemit_on_question_change(monkeypatch):
+    # Uma sessao awaiting que troca a pergunta re-emite a lista (feature #1): a linha atualiza o texto,
+    # mesmo com name/state/cwd/jsonl iguais. Sem question na sig, a 2a emissao nao viria.
+    a0 = _Info("cc", "awaiting_input"); a0.question = "Qual ambiente?"
+    a1 = _Info("cc", "awaiting_input"); a1.question = "Confirma o deploy?"
+    seq = [[a0], [a1]]
+    calls = {"i": 0}
+    async def fake_list(_snap=None):
+        r = seq[min(calls["i"], len(seq) - 1)]; calls["i"] += 1; return r
+    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
+    evs = asyncio.run(_take(sse.list_events(poll=0.001, ping_every=9999), 2))
+    assert [e["event"] for e in evs] == ["sessions", "sessions"]
+    assert json.loads(evs[1]["data"])[0]["question"] == "Confirma o deploy?"
 
 
 def test_ping_emitted_on_cadence(monkeypatch):
