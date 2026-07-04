@@ -6,7 +6,7 @@
     type ArchiveFolder, type ArchiveEntry,
   } from '../lib/api';
   import type { ChatEvent } from '../lib/types';
-  import { selectServer } from '../lib/auth';
+  import { selectServer, listServers, getActiveId, serverColor } from '../lib/auth';
 
   interface Props {
     onBack: () => void;
@@ -29,6 +29,19 @@
   let resuming = $state(false);
   let resumeError = $state('');
 
+  // Servidor DE ONDE navegar o arquivo: apiFetch usa o servidor ATIVO, entao sem um seletor o arquivo
+  // so mostrava o servidor ativo e nao dava pra saber/escolher de qual servidor abrir (multi-servidor).
+  const servers = listServers();
+  let activeServerId = $state(getActiveId());
+  function pickServer(id: string) {
+    if (id === activeServerId) return;
+    selectServer(id);
+    activeServerId = id;
+    folder = null;      // volta pro nivel de pastas do servidor novo
+    selected = null;
+    load();
+  }
+
   async function load() {
     loading = true;
     error = '';
@@ -45,6 +58,7 @@
       // Aponta pro servidor dono ANTES de qualquer fetch (apiFetch le o ativo na hora da chamada),
       // carrega as pastas por baixo (pro "voltar" da conversa cair na lista) e abre a conversa direto.
       selectServer(deepLink.serverId);
+      activeServerId = deepLink.serverId;   // mantem o seletor coerente ao voltar da conversa
       load();
       openConversation({
         project: deepLink.project, session_id: deepLink.sessionId,
@@ -169,6 +183,21 @@
 {:else}
   <div class="archive-screen">
     <NavBar title="Arquivo" showBack={true} onBack={onBack} />
+    {#if servers.length >= 2}
+      <!-- Seletor: de qual servidor navegar o arquivo. So aparece com 2+ servidores. -->
+      <div class="srv-picker" role="tablist" aria-label="Servidor do arquivo">
+        {#each servers as s (s.id)}
+          <button
+            class="srv-pill" class:on={s.id === activeServerId}
+            role="tab" aria-selected={s.id === activeServerId}
+            onclick={() => pickServer(s.id)}
+          >
+            <span class="srv-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
+            {s.label}
+          </button>
+        {/each}
+      </div>
+    {/if}
     <div class="archive-list">
       {#if loading}
         <p class="muted">Carregando…</p>
@@ -209,6 +238,37 @@
     width: 100%;
     margin: 0 auto;
   }
+
+  /* Seletor de servidor (multi-servidor): de qual servidor navegar o arquivo. */
+  .srv-picker {
+    display: flex;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-4) 0;
+    max-width: 700px;
+    width: 100%;
+    margin: 0 auto;
+    overflow-x: auto;
+  }
+  .srv-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    padding: 5px 12px;
+    border-radius: var(--radius-full);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    transition: color 160ms var(--ease-out), background 160ms var(--ease-out), border-color 160ms var(--ease-out);
+  }
+  .srv-pill.on {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+    border-color: var(--border-default);
+  }
+  .srv-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 
   .muted { color: var(--text-secondary); padding: var(--space-4); }
   .err { color: var(--error); padding: var(--space-4); }
