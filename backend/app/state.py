@@ -89,7 +89,14 @@ _LIMIT_RE = re.compile(
 
 def rate_limit_reset(pane_text: str) -> Optional[str]:
     """Horario de reset do limite de uso (string crua, ex: "3pm"/"15:30"), se o pane mostra o
-    banner de rate-limit. None numa sessao normal. ponytail: calibration knob -- ver _LIMIT_RE."""
+    banner de rate-limit. None numa sessao normal. ponytail: calibration knob -- ver _LIMIT_RE.
+
+    LIMITACAO DE COBERTURA (feature #8): so roda sobre um pane REALMENTE capturado. O StateMonitor
+    (chat aberto) captura sempre, entao o campo `limited` funciona la; mas a LISTA (list_with_state)
+    fast-pathea sessoes working/idle pelo marcador do hook e PULA a captura -> nesse caminho (o normal
+    pra uma sessao rate-limited, que fica working/idle) rate_limit_reset nunca e chamado e limited fica
+    False. Ver a nota no fast-path de registry.list_with_state. Nao mover a deteccao pro watchdog antes
+    de _LIMIT_RE ser calibrado contra o banner real (hoje e chute nao-calibrado)."""
     m = _LIMIT_RE.search(pane_text)
     return m.group(1).strip() if m else None
 # Glifos que marcam a BORDA do box do picker: bullet de assistente, junta de tool-result e
