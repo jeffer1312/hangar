@@ -204,3 +204,85 @@ def test_create_rejects_unknown_config_dir(api_client, monkeypatch):
     r = api_client.post("/api/sessions", headers=_h(),
                         json={"name": "x", "cwd": "/tmp", "config_dir": "/h/.evil"})
     assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Feature #5: corpo rico do push de awaiting (askq -> classify -> fallback) + endpoints de mute/quiet-hours
+# ---------------------------------------------------------------------------
+from types import SimpleNamespace
+from app.models import AskQuestion, AskQuestionItem, AskOption
+
+
+def test_awaiting_body_prefers_askq(monkeypatch):
+    info = SimpleNamespace(name="s1", jsonl="/x/u.jsonl", cwd="/x")
+    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: AskQuestion(questions=[
+        AskQuestionItem(header="h", question="Qual branch usar?", options=[AskOption(label="a")]),
+    ]))
+    assert api_mod._awaiting_body(info) == "Qual branch usar?"
+
+
+def test_awaiting_body_falls_back_to_classify(monkeypatch):
+    import app.state as state_mod
+    import app.tmux as tmux_mod
+    info = SimpleNamespace(name="s1", jsonl="/x/u.jsonl", cwd="/x")
+    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)  # sem AskUserQuestion nativo
+    monkeypatch.setattr(tmux_mod, "capture_pane", lambda name: "pane cru")
+    monkeypatch.setattr(state_mod, "classify",
+                        lambda pane: ("awaiting_input", None, "Pode sobrescrever o arquivo?", ["a", "b"]))
+    assert api_mod._awaiting_body(info) == "Pode sobrescrever o arquivo?"
+
+
+def test_awaiting_body_fallback_static(monkeypatch):
+    import app.state as state_mod
+    import app.tmux as tmux_mod
+    info = SimpleNamespace(name="s1", jsonl="/x/u.jsonl", cwd="/x")
+    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)
+    monkeypatch.setattr(tmux_mod, "capture_pane", lambda name: "pane cru")
+    monkeypatch.setattr(state_mod, "classify", lambda pane: ("idle", None, None, None))
+    assert api_mod._awaiting_body(info) == "Aguardando sua resposta"
+
+
+def test_do_notify_awaiting_resolves_name_and_body(monkeypatch):
+    calls = []
+    info = SimpleNamespace(name="minha-sessao", jsonl="/x/uuid1.jsonl", cwd="/x")
+    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
+    monkeypatch.setattr(api_mod, "_awaiting_body", lambda i: "corpo rico")
+    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
+    api_mod._do_notify_awaiting("uuid1")
+    assert calls == [("minha-sessao", "corpo rico")]
+
+
+def test_do_notify_awaiting_no_match_is_noop(monkeypatch):
+    calls = []
+    monkeypatch.setattr(api_mod.registry, "list", lambda: [])
+    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
+    api_mod._do_notify_awaiting("uuid-nenhuma")
+    assert calls == []
+
+
+def test_push_mute_route(api_client, monkeypatch, tmp_path):
+    monkeypatch.setattr(api_mod.push, "_file", lambda: tmp_path / "subs.json")
+    r = api_client.post("/api/push/mute", json={"session": "s1", "muted": True}, headers=_h())
+    assert r.status_code == 200
+    assert api_mod.push.is_muted("s1") is True
+
+
+def test_push_quiet_hours_route(api_client, monkeypatch, tmp_path):
+    monkeypatch.setattr(api_mod.push, "_file", lambda: tmp_path / "subs.json")
+    r = api_client.post("/api/push/quiet-hours", json={"start": "22:00", "end": "07:00"}, headers=_h())
+    assert r.status_code == 200
+    assert api_mod.push.get_push_prefs()["quiet_hours"] == {"start": "22:00", "end": "07:00"}
+
+
+def test_push_quiet_hours_route_rejects_bad_format(api_client, monkeypatch, tmp_path):
+    monkeypatch.setattr(api_mod.push, "_file", lambda: tmp_path / "subs.json")
+    r = api_client.post("/api/push/quiet-hours", json={"start": "25:99", "end": "07:00"}, headers=_h())
+    assert r.status_code == 422
+
+
+def test_push_settings_route(api_client, monkeypatch, tmp_path):
+    monkeypatch.setattr(api_mod.push, "_file", lambda: tmp_path / "subs.json")
+    api_mod.push.set_muted("s1", True)
+    r = api_client.get("/api/push/settings", headers=_h())
+    assert r.status_code == 200
+    assert r.json()["muted"] == ["s1"]
