@@ -11,8 +11,9 @@
     onDelete: () => void;
     onResume?: () => void;
     onRename?: (newName: string) => void;
+    onGit?: () => void;
   }
-  let { session, serverBadge = null, onClick, onDelete, onResume, onRename }: Props = $props();
+  let { session, serverBadge = null, onClick, onDelete, onResume, onRename, onGit }: Props = $props();
 
 
   // Frame parado da "pensando": f0 = anel cheio e simetrico (os frames do meio do loop ficam ralos e
@@ -198,6 +199,25 @@
       <span class="state-chip" style="color: {stateColors[session.state]}; background: {stateChipBg[session.state]};">
         {stateLabels[session.state]}
       </span>
+      <!-- Git da sessao: abre o gerenciador (GitSheet) no repo do cwd, sem abrir o chat. So aparece
+           quando ha cwd (repo) — paridade com o menu de contexto do desktop. stopPropagation pra nao
+           disparar swipe/navegacao da linha. -->
+      {#if session.cwd}
+        <button
+          class="git-btn"
+          onpointerdown={(e) => e.stopPropagation()}
+          onclick={(e) => { e.stopPropagation(); onGit?.(); }}
+          aria-label="Git de {session.name}"
+          title="Gerenciador git"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="6" y1="3" x2="6" y2="15"/>
+            <circle cx="18" cy="6" r="3"/>
+            <circle cx="6" cy="18" r="3"/>
+            <path d="M18 9a9 9 0 0 1-9 9"/>
+          </svg>
+        </button>
+      {/if}
       <!-- Caminho de exclusao por TECLADO/leitor de tela: o swipe-to-delete e pointer-only e deixava
            o usuario de teclado/SR sem como excluir no mobile. Escondido visualmente (mouse/touch usam
            swipe), mas sempre focavel e anunciado; reaparece no foco de teclado (:focus-visible). -->
@@ -443,6 +463,14 @@
     color: var(--error);
     outline: 2px solid var(--accent); outline-offset: -2px;
   }
+  /* Botao git dedicado na row-right: area de toque 40px, cinza ate ser tocado. */
+  .git-btn {
+    width: 40px; height: 40px; min-width: 40px; min-height: 40px;
+    flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text-muted); border-radius: var(--radius-sm);
+  }
+  .git-btn:active { color: var(--accent); background: var(--bg-hover); }
   .chev {
     color: var(--text-muted);
     font-size: var(--text-lg);

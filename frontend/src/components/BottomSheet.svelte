@@ -7,9 +7,31 @@
     open: boolean;
     onClose: () => void;
     ariaLabel?: string;
+    resizable?: boolean;   // opt-in: so o GitSheet usa. Habilita drag-resize no dock desktop (>=820px).
     children: Snippet;
   }
-  let { open, onClose, ariaLabel = 'Painel', children }: Props = $props();
+  let { open, onClose, ariaLabel = 'Painel', resizable = false, children }: Props = $props();
+
+  // ── Redimensionar (SO no dock desktop >=820px): arrasta a borda ESQUERDA do painel direito.
+  // Largura persistida em localStorage; aplicada via --sheet-w (a media query desktop consome a var,
+  // o mobile ignora -> sheet de baixo continua 100%). Mesma mecanica do resize da Sidebar.
+  const WMIN = 360, WMAX = 720;
+  const clampW = (w: number) => Math.max(WMIN, Math.min(WMAX, w));
+  let width = $state(clampW(Number(localStorage.getItem('cp_gitsheet_w')) || 460));
+  let resizing = $state(false);
+  function resizeStart(e: PointerEvent) {
+    resizing = true;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }
+  function resizeMove(e: PointerEvent) {
+    if (resizing) width = clampW(window.innerWidth - e.clientX);   // painel colado na direita
+  }
+  function resizeEnd() {
+    if (!resizing) return;
+    resizing = false;
+    try { localStorage.setItem('cp_gitsheet_w', String(width)); } catch { /* storage off/cheio */ }
+  }
 
   // ── Swipe-to-dismiss: o painel acompanha o dedo; solto abaixo do limiar, volta ──
   let dragY = $state(0);
@@ -17,6 +39,12 @@
   let startY = 0;
   let dragging = false;
   const DISMISS_PX = 90; // distancia minima de arraste pra fechar ao soltar
+
+  // Style combinado do painel: transform do swipe (mobile) + --sheet-w (desktop resizable).
+  const sheetStyle = $derived(
+    (dragY || snapping ? `transform: translateY(${dragY}px);` : '') +
+    (resizable ? `--sheet-w: ${width}px;` : ''),
+  );
 
   function onTouchStart(e: TouchEvent) {
     if (e.touches.length !== 1) return;
@@ -94,16 +122,30 @@
       bind:this={sheetEl}
       class="sheet"
       class:snapping
+      class:resizing
       role="dialog"
       aria-modal="true"
       aria-label={ariaLabel}
       tabindex="-1"
-      style={dragY || snapping ? `transform: translateY(${dragY}px)` : undefined}
+      style={sheetStyle || undefined}
       ontouchstart={onTouchStart}
       ontouchmove={onTouchMove}
       ontouchend={onTouchEnd}
       ontransitionend={() => (snapping = false)}
     >
+      {#if resizable}
+        <!-- Handle de resize (so visivel no dock desktop via CSS): arrasta a borda esquerda. -->
+        <div
+          class="resize-handle"
+          onpointerdown={resizeStart}
+          onpointermove={resizeMove}
+          onpointerup={resizeEnd}
+          onpointercancel={resizeEnd}
+          role="separator"
+          aria-label="Redimensionar painel"
+          aria-orientation="vertical"
+        ></div>
+      {/if}
       <div class="drag-handle" aria-hidden="true"></div>
       {@render children()}
     </div>
@@ -152,10 +194,14 @@
 
   /* Desktop (>=820px, mesmo corte do DesktopShell): em vez de subir de baixo, DOCA como painel
      lateral direito de altura cheia. Todos os sheets (Git/Usage/...) herdam sem tocar em cada um. */
+  /* Handle de resize: escondido por padrao (mobile = sheet de baixo, largura 100%). */
+  .resize-handle { display: none; }
+
   @media (min-width: 820px) {
     .backdrop { align-items: stretch; justify-content: flex-end; background: rgba(0, 0, 0, 0.4); }
     .sheet {
-      width: min(420px, 92vw); max-width: none; height: 100%;
+      position: relative;   /* ancora o resize-handle */
+      width: var(--sheet-w, min(420px, 92vw)); max-width: 92vw; height: 100%;
       border-radius: 0; border-left: 1px solid var(--border-default);
       padding: var(--space-5) var(--space-5);
       padding-bottom: var(--space-5);
@@ -164,7 +210,15 @@
       touch-action: auto;
     }
     .sheet.snapping { transition: none; }
+    /* Enquanto arrasta o resize: sem animacao (segue o ponteiro sem lag). */
+    .sheet.resizing { animation: none; }
     .drag-handle { display: none; }
+    /* Handle na borda ESQUERDA do painel docado (arrasta pra esquerda -> alarga). */
+    .resize-handle {
+      display: block; position: absolute; top: 0; left: 0; width: 8px; height: 100%;
+      cursor: col-resize; touch-action: none; z-index: 6;
+    }
+    .resize-handle:hover { background: var(--accent-dim); }
   }
   @keyframes slide-in-right {
     from { transform: translateX(100%); opacity: 0; }

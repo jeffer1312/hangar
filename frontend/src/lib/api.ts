@@ -337,6 +337,25 @@ export function getFileDiff(name: string, path: string): Promise<{ path: string;
   });
 }
 
+// Um commit da view de log. Campos superset (parents/refs) pro detalhe-de-commit e o grafo (fase 2).
+export interface GitCommit {
+  hash: string;       // hash completo (âncora do grafo + lookup de detalhe)
+  short: string;      // hash curto pra exibir
+  parents: string[];  // hashes dos parents (vazio no root; 2+ num merge)
+  refs: string;       // decoração %D (branches/tags), sem os parênteses; '' se nenhuma
+  author: string;
+  ts: number;         // author date, unix epoch (ordenação estável)
+  rel: string;        // data relativa pronta ("2 hours ago")
+  subject: string;
+  col?: number;       // coluna (lane) do commit no grafo — preenchida por assign_lanes no backend
+  edges?: { to_col: number; curved: boolean }[];  // arestas descendo pros parents (merge = curva)
+  passthrough?: number[];  // colunas de outras lanes que cruzam esta linha sem dot (vertical cheia)
+}
+
+export function getGitLog(name: string): Promise<{ commits: GitCommit[] }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/log`);
+}
+
 export function discardFile(name: string, path: string): Promise<{ ok: boolean; path: string }> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/discard`, {
     method: 'POST',

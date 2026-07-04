@@ -27,7 +27,7 @@ from app.uploads import save_upload, resolve_upload, UploadError, MAX_BYTES
 from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base, settings
 from app.costs import report as costs_report
 from app.git_ops import (
-    list_branches, switch_branch, git_action, changed_files, file_diff, discard_file, GitError,
+    list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, GitError,
 )
 from app import tunnel
 from app.archive import ArchiveEntry, ArchiveFolder, archive_jsonl, list_conversations, list_folders
@@ -612,6 +612,14 @@ def git(name: str, body: GitActionBody):
 def git_files(name: str):
     try:
         return {"files": changed_files(_session_cwd(name))}
+    except GitError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.get("/api/sessions/{name}/git/log", dependencies=[Depends(require_auth)])
+def git_log_route(name: str):
+    try:
+        return {"commits": assign_lanes(git_log(_session_cwd(name)))}
     except GitError as e:
         raise HTTPException(e.status, e.detail)
 
