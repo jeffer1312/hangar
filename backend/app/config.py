@@ -105,6 +105,12 @@ class Settings(BaseSettings):
     notify_finished: bool = True   # CP_NOTIFY_FINISHED
     notify_dead: bool = True       # CP_NOTIFY_DEAD
     finish_min_seconds: int = 45   # CP_FINISH_MIN_SECONDS: debounce — turno mais curto que isso nao avisa
+    # Watchdog de sessao travada (feature #7): "working" silencioso ha muito tempo (loop infinito de
+    # ferramenta, subprocesso esperando stdin) nunca vira awaiting/finished/dead -> nunca pinga sozinho.
+    # 300s de default: ha chamada de ferramenta longa legitima (build, teste) — muito baixo geraria
+    # falso-positivo. CP_STALL_POLL_SECONDS: intervalo do watchdog que varre a lista.
+    stall_seconds: int = 300         # CP_STALL_SECONDS
+    stall_poll_seconds: int = 30     # CP_STALL_POLL_SECONDS
     # Cloud sync hub (opt-in). CP_SYNC=1 turns THIS backend into the sync hub: it mounts /api/sync/*.
     # Stores only salt + auth verifier + ciphertext (zero-knowledge; tokens are encrypted client-side).
     sync: bool = False

@@ -53,6 +53,10 @@
   // "Precisa de voce": aguardando input -> barra de acao + fundo tingido.
   const action = $derived(session.state === 'awaiting_input');
 
+  // Travada (feature #7): "working" ha muito tempo sem avancar (watchdog do backend). Tinge o chip
+  // de estado com um anel âmbar sutil — nao grita, so avisa.
+  const stalled = $derived(session.stalled === true);
+
   // ── Swipe-to-delete ────────────────────────────────────────────────────────
   // Arrasta a linha pra esquerda revelando "Excluir". touch-action:pan-y deixa o scroll vertical
   // pro navegador e o horizontal pra gente. Distingue tap / swipe-x / scroll-y por eixo dominante.
@@ -219,7 +223,12 @@
     </div>
 
     <div class="row-right">
-      <span class="state-chip" style="color: {stateColors[session.state]}; background: {stateChipBg[session.state]};">
+      <span
+        class="state-chip"
+        class:stalled
+        style="color: {stateColors[session.state]}; background: {stateChipBg[session.state]};"
+        title={stalled ? 'Pode estar travada — sem atividade há um tempo' : undefined}
+      >
         {stateLabels[session.state]}
       </span>
       <!-- Git da sessao: abre o gerenciador (GitSheet) no repo do cwd, sem abrir o chat. So aparece
@@ -486,6 +495,10 @@
     padding: 3px 9px;
     border-radius: var(--radius-full);
     white-space: nowrap;
+  }
+  /* Travada (feature #7): anel âmbar sutil no chip — avisa sem gritar. */
+  .state-chip.stalled {
+    box-shadow: inset 0 0 0 1px var(--warning);
   }
 
   /* Escondido do layout (mouse/touch usam swipe) mas SEMPRE na arvore de a11y (SR anuncia "Excluir
