@@ -100,6 +100,11 @@ class Settings(BaseSettings):
     vapid_public: str = ""
     vapid_private: str = ""
     vapid_subject: str = "mailto:claude-pocket@local"
+    # Push extras (feature #2): "terminou" (working->idle apos turno longo) e "caiu" (dead). Cada um
+    # com seu flag on/off; default ligado (mesmo padrao do awaiting, que nao tem flag proprio).
+    notify_finished: bool = True   # CP_NOTIFY_FINISHED
+    notify_dead: bool = True       # CP_NOTIFY_DEAD
+    finish_min_seconds: int = 45   # CP_FINISH_MIN_SECONDS: debounce — turno mais curto que isso nao avisa
     # Cloud sync hub (opt-in). CP_SYNC=1 turns THIS backend into the sync hub: it mounts /api/sync/*.
     # Stores only salt + auth verifier + ciphertext (zero-knowledge; tokens are encrypted client-side).
     sync: bool = False

@@ -47,14 +47,14 @@ def add_subscription(subscription: dict, label: str, server_id: str) -> None:
         _save(subs)
 
 
-def _send_one(entry: dict, session_name: str) -> bool:
+def _send_one(entry: dict, session_name: str, body: str) -> bool:
     """Envia 1 push. Retorna False se a inscricao morreu (404/410) -> caller poda."""
     from pywebpush import webpush, WebPushException
 
     label = entry.get("label") or "claude"
     payload = {
         "title": f"{label} · {session_name}",
-        "body": "Aguardando sua resposta",
+        "body": body,
         "session": session_name,
         # deep-link best-effort (App pode honrar ?server/?session; senao so abre o app)
         "url": f"/?server={entry.get('serverId', '')}&session={session_name}",
@@ -78,15 +78,31 @@ def _send_one(entry: dict, session_name: str) -> bool:
         return True
 
 
-def notify_awaiting(session_name: str) -> None:
-    """Manda push de 'sessao aguardando' pra todas as inscricoes; poda as mortas. No-op se nao ha
-    chaves VAPID configuradas (push desligado)."""
+def _broadcast(session_name: str, body: str) -> None:
+    """Manda push com o corpo dado pra todas as inscricoes; poda as mortas. No-op se nao ha chaves
+    VAPID configuradas (push desligado). Compartilhado pelos 3 gatilhos (awaiting/finished/dead) —
+    so o texto muda."""
     if not (settings.vapid_private and settings.vapid_public):
         return
     with _lock:
         subs = _load()
         if not subs:
             return
-        alive = [s for s in subs if _send_one(s, session_name)]
+        alive = [s for s in subs if _send_one(s, session_name, body)]
         if len(alive) != len(subs):
             _save(alive)
+
+
+def notify_awaiting(session_name: str) -> None:
+    """Push: sessao ficou awaiting_input (Claude esperando voce)."""
+    _broadcast(session_name, "Aguardando sua resposta")
+
+
+def notify_finished(session_name: str) -> None:
+    """Push: sessao terminou um turno longo (working -> idle apos > CP_FINISH_MIN_SECONDS)."""
+    _broadcast(session_name, "Terminou")
+
+
+def notify_dead(session_name: str) -> None:
+    """Push: sessao morreu (tmux/pane caiu)."""
+    _broadcast(session_name, "Caiu")
