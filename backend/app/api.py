@@ -138,9 +138,9 @@ registry = SessionRegistry()
 terminal = TerminalInput()
 
 
-def _on_awaiting(session_id: str) -> None:
-    """hook_state -> transicao awaiting_input. Resolve uuid->nome e manda push, TUDO numa thread:
-    registry.list() mexe no tmux e o webpush e rede — nada disso pode bloquear o loop do watch."""
+def _notify_async(session_id: str, send_fn) -> None:
+    """Resolve uuid->nome e manda o push escolhido, TUDO numa thread: registry.list() mexe no tmux
+    e o webpush e rede — nada disso pode bloquear o loop do watch."""
     def _work() -> None:
         try:
             name = next(
@@ -148,10 +148,15 @@ def _on_awaiting(session_id: str) -> None:
                 None,
             )
             if name:
-                push.notify_awaiting(name)
+                send_fn(name)
         except Exception:
-            _log.warning("push on_awaiting falhou (%s)", session_id, exc_info=True)
+            _log.warning("push falhou (%s)", session_id, exc_info=True)
     threading.Thread(target=_work, daemon=True).start()
+
+
+def _on_awaiting(session_id: str) -> None:
+    """hook_state -> transicao awaiting_input. Manda push de 'aguardando'."""
+    _notify_async(session_id, push.notify_awaiting)
 
 
 _CONFIRM_GRACE = 8.0  # s entre o send e a checagem "o transcript gravou o prompt?"
@@ -196,11 +201,33 @@ def _confirm_and_drain(name: str) -> None:
         pass
 
 
+_working_started: dict[str, float] = {}  # session_id -> ts de quando entrou em "working" (mede duracao do turno pro push de "terminou")
+
+
 def _on_hook_transition(session_id: str, state: str) -> None:
     """hook_state -> mudanca de estado. Drain SERVER-SIDE: o gatilho antigo morava na conexao SSE de
     cada chat — sem celular conectado, entrada deferred ficava parada indefinidamente. idle/working =
     o pane aceita texto (Claude Code enfileira internamente); o drain re-checa deliverable sozinho.
-    Tambem agenda a confirmacao de entrega das drenadas."""
+    Tambem agenda a confirmacao de entrega das drenadas.
+
+    Alem do drain, e o choke-point dos pushes de 'terminou' (working -> idle apos turno longo, com
+    debounce) e 'caiu' (-> dead, sempre) — ver push.py."""
+    if state == "working":
+        m = hook_state.get_state(session_id)
+        if m:
+            _working_started[session_id] = m[1]
+    elif state == "idle":
+        started = _working_started.pop(session_id, None)
+        if started is not None and settings.notify_finished:
+            m = hook_state.get_state(session_id)
+            elapsed = (m[1] if m else time.time()) - started
+            if elapsed >= settings.finish_min_seconds:
+                _notify_async(session_id, push.notify_finished)
+    elif state == "dead":
+        _working_started.pop(session_id, None)
+        if settings.notify_dead:
+            _notify_async(session_id, push.notify_dead)
+
     if state == "awaiting_input":
         return
     def _work() -> None:
