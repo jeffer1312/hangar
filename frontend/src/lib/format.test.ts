@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  abbrevNum, attentionFeed, countAwaiting, groupSelectedByServer, nextAwaiting, projectKey,
-  projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent,
+  abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, groupSelectedByServer, nextAwaiting,
+  projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent,
 } from './format';
 import type { ChatEvent } from './types';
 
@@ -173,6 +173,20 @@ describe('groupSelectedByServer', () => {
     const grouped = groupSelectedByServer(sessions, new Set(['s1:a', 's3:ghost']));
     expect(grouped.size).toBe(1);
     expect(grouped.get('s1')).toEqual(['a']);
+  });
+});
+
+describe('effectiveGroupBy', () => {
+  it('keeps the preference when there are 2+ servers', () => {
+    expect(effectiveGroupBy('server', 2)).toBe('server');
+    expect(effectiveGroupBy('project', 3)).toBe('project');
+  });
+  it('forces project with a single server (server grouping would be one giant group)', () => {
+    expect(effectiveGroupBy('server', 1)).toBe('project');
+    expect(effectiveGroupBy('project', 1)).toBe('project');
+  });
+  it('forces project with zero servers too', () => {
+    expect(effectiveGroupBy('server', 0)).toBe('project');
   });
 });
 
