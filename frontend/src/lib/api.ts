@@ -14,6 +14,8 @@ import type {
   AnswerItem,
   CostReport,
   ResumeResult,
+  RunnersResponse,
+  RunInfo,
 } from './types';
 
 // URL da idx-ésima imagem (colada no terminal) de uma msg do transcript. `?token` porque <img> não
@@ -472,4 +474,23 @@ export function startPreview(port: number): Promise<{ url: string; port: number 
 
 export function stopPreview(): Promise<PreviewState> {
   return apiFetch('/api/preview', { method: 'DELETE' });
+}
+
+export function getRunners(name: string): Promise<RunnersResponse> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/runners`);
+}
+
+export function startRun(name: string, command: string): Promise<RunInfo> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/run`, {
+    method: 'POST',
+    body: JSON.stringify({ command }),
+  });
+}
+
+export function stopRun(name: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/run/stop`, { method: 'POST' });
+}
+
+export function getRunPane(name: string): Promise<{ pane: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/run/pane`);
 }
