@@ -55,11 +55,13 @@ export function parseStatusLine(raw: string | null | undefined): StatusFields | 
     }
   }
 
-  // 💬 44k/18 40k/1M  — context. Take the last "<used>/<total>" pair as the window usage.
+  // 💬 20k/1k 40k/200k — o 1º par é tokens-do-turno (in/out); o 2º, quando existe, é o uso de
+  // contexto (usado/janela). Numa sessão zerada (pós /clear) a statusline traz só o par in/out —
+  // sem métrica de contexto. Exigir ≥2 pares evita ler in/out como contexto (in>out → 100% falso).
   const ctxSeg = raw.match(/💬([^│]*)/u);
   if (ctxSeg) {
     const pairs = [...ctxSeg[1].matchAll(/([\d.,]+)\s*([kKmM])?\s*\/\s*([\d.,]+)\s*([kKmM])?/g)];
-    const last = pairs[pairs.length - 1];
+    const last = pairs.length >= 2 ? pairs[pairs.length - 1] : null;
     if (last) {
       const used = toNumber(last[1], last[2]);
       const total = toNumber(last[3], last[4]);
