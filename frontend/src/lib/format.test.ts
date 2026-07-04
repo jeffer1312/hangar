@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { abbrevNum, attentionFeed, countAwaiting, groupSelectedByServer, nextAwaiting, projectKey, projectLabel } from './format';
+import {
+  abbrevNum, attentionFeed, countAwaiting, groupSelectedByServer, nextAwaiting, projectKey,
+  projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent,
+} from './format';
+import type { ChatEvent } from './types';
 
 describe('abbrevNum', () => {
   it('abbreviates millions', () => {
@@ -185,5 +189,57 @@ describe('projectLabel', () => {
   it('has a fixed label when there is no cwd', () => {
     expect(projectLabel(undefined)).toBe('sem projeto');
     expect(projectLabel(null)).toBe('sem projeto');
+  });
+});
+
+describe('encodeCompareIds / parseCompareIds', () => {
+  it('round-trips a normal list', () => {
+    const ids = [{ serverId: 's1', name: 'work' }, { serverId: 's2', name: 'home' }];
+    expect(parseCompareIds(encodeCompareIds(ids))).toEqual(ids);
+  });
+
+  it('escapes literal separators inside ids/names so they never collide with , or :', () => {
+    const ids = [{ serverId: 'a:b', name: 'x,y' }, { serverId: 'c,d', name: 'e:f' }];
+    const encoded = encodeCompareIds(ids);
+    expect(encoded).not.toMatch(/a:b|x,y|c,d|e:f/); // valores crus não sobrevivem ao encode
+    expect(parseCompareIds(encoded)).toEqual(ids);
+  });
+
+  it('parses an empty param as an empty list', () => {
+    expect(parseCompareIds('')).toEqual([]);
+  });
+
+  it('drops malformed pairs (no colon, or missing side)', () => {
+    expect(parseCompareIds('noColonHere')).toEqual([]);
+    expect(parseCompareIds(':nome')).toEqual([]); // serverId vazio
+    expect(parseCompareIds('srv:')).toEqual([]); // nome vazio
+  });
+
+  it('keeps well-formed pairs alongside malformed ones', () => {
+    const encoded = `${encodeURIComponent('s1')}:${encodeURIComponent('a')},garbage,${encodeURIComponent('s2')}:${encodeURIComponent('b')}`;
+    expect(parseCompareIds(encoded)).toEqual([{ serverId: 's1', name: 'a' }, { serverId: 's2', name: 'b' }]);
+  });
+});
+
+describe('latestAssistantEvent', () => {
+  const asst = (id: string, text: string): ChatEvent => ({ kind: 'assistant_msg', id, text });
+  const userMsg = (id: string, text: string): ChatEvent => ({ kind: 'user_msg', id, text });
+
+  it('returns the last assistant_msg with text', () => {
+    const events = [asst('1', 'oi'), userMsg('2', 'e ai'), asst('3', 'tudo bem')];
+    expect(latestAssistantEvent(events)?.id).toBe('3');
+  });
+
+  it('skips assistant_msg entries without text', () => {
+    const events = [asst('1', 'primeira'), { kind: 'assistant_msg', id: '2' } as ChatEvent];
+    expect(latestAssistantEvent(events)?.id).toBe('1');
+  });
+
+  it('returns null when there is no assistant_msg', () => {
+    expect(latestAssistantEvent([userMsg('1', 'oi')])).toBeNull();
+  });
+
+  it('returns null for an empty list', () => {
+    expect(latestAssistantEvent([])).toBeNull();
   });
 });

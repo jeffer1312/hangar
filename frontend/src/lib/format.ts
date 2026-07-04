@@ -11,7 +11,7 @@ export function relativeTime(ts: number | null | undefined): string {
 
 // Vocabulário único de estado (label pt-BR + cor) — compartilhado por SessionCard, Sidebar e
 // SessionSwitcherSheet pra mesma sessão nunca aparecer com nomes/cores divergentes.
-import type { State } from './types';
+import type { State, ChatEvent } from './types';
 export const stateLabels: Record<State, string> = {
   working: 'em execução',
   idle: 'pronto',
@@ -175,6 +175,39 @@ export function groupSelectedByServer(
     else out.set(s.serverId, [s.name]);
   }
   return out;
+}
+
+// ── Compare (feature #11): grade lado a lado com a última resposta de N sessões ─────────────────
+export interface CompareId { serverId: string; name: string }
+
+// Codifica a seleção pro hash da rota (#/compare/<param>): cada par "serverId:nome" com AMBOS os
+// lados URI-encoded separadamente, juntos por vírgula. encodeURIComponent escapa ':' e ',' -> o
+// texto codificado nunca contém os separadores literais, então o parse abaixo nunca ambigua.
+export function encodeCompareIds(ids: CompareId[]): string {
+  return ids.map((s) => `${encodeURIComponent(s.serverId)}:${encodeURIComponent(s.name)}`).join(',');
+}
+
+export function parseCompareIds(param: string): CompareId[] {
+  if (!param) return [];
+  return param
+    .split(',')
+    .map((pair): CompareId | null => {
+      const i = pair.indexOf(':');
+      if (i < 0) return null;
+      const serverId = decodeURIComponent(pair.slice(0, i));
+      const name = decodeURIComponent(pair.slice(i + 1));
+      return serverId && name ? { serverId, name } : null;
+    })
+    .filter((x): x is CompareId => x !== null);
+}
+
+// Último assistant_msg com texto de uma lista de eventos (transcript ou stream ao vivo) — usado
+// pelo card da grade de comparação pra mostrar só a resposta MAIS RECENTE, sem montar o chat inteiro.
+export function latestAssistantEvent(events: ChatEvent[]): ChatEvent | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].kind === 'assistant_msg' && events[i].text) return events[i];
+  }
+  return null;
 }
 
 // Abrevia contagem grande: 3668662 -> "3.7M", 1.5e9 -> "1.5B", 999 -> "999".

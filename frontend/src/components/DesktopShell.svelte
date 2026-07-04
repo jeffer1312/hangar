@@ -7,13 +7,14 @@
   interface Props {
     currentSession: string | null;
     onNavigateToChat: (name: string) => void;
+    onCompare: (ids: { serverId: string; name: string }[]) => void;
     onLogout: () => void;
   }
-  let { currentSession, onNavigateToChat, onLogout }: Props = $props();
+  let { currentSession, onNavigateToChat, onCompare, onLogout }: Props = $props();
 </script>
 
 <div class="desktop-shell">
-  <Sidebar {currentSession} onSelect={onNavigateToChat} {onLogout} />
+  <Sidebar {currentSession} onSelect={onNavigateToChat} {onCompare} {onLogout} />
 
   <main class="desktop-main">
     {#if currentSession && currentSession !== 'null' && currentSession !== 'undefined'}
