@@ -19,7 +19,7 @@ from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
 from app.model_picker import PickerError
 from app.registry import SessionRegistry
-from app.models import SessionInfo, ChatEvent, CostReport
+from app.models import SessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody, RunInfo
 from app.pqueue import PromptQueue, _transcript_start_ts, committed_user_lines
 from app.terminal_input import TerminalInput, drain
 from app.sse import merged_events
@@ -30,6 +30,7 @@ from app.git_ops import (
     list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, GitError,
 )
 from app import tunnel
+from app import runner
 from app.archive import ArchiveEntry, ArchiveFolder, archive_jsonl, list_conversations, list_folders
 from app.askquestion import clear_pending_askq
 from app.hook_state import hook_state
@@ -638,6 +639,34 @@ def git_discard(name: str, body: GitPathBody):
         return discard_file(_session_cwd(name), body.path)
     except GitError as e:
         raise HTTPException(e.status, e.detail)
+
+
+@app.get("/api/sessions/{name}/runners", dependencies=[Depends(require_auth)],
+         response_model=RunnersResponse)
+def list_runners(name: str):
+    cwd = _session_cwd(name)
+    return RunnersResponse(
+        detected=runner.detect_runners(cwd),
+        remembered=runner.remembered(cwd),
+        running=runner.run_status(cwd),
+    )
+
+
+@app.post("/api/sessions/{name}/run", dependencies=[Depends(require_auth)],
+          response_model=RunInfo)
+def start_runner(name: str, body: RunBody):
+    return runner.start_run(_session_cwd(name), body.command)
+
+
+@app.post("/api/sessions/{name}/run/stop", dependencies=[Depends(require_auth)])
+def stop_runner(name: str):
+    runner.stop_run(_session_cwd(name))
+    return {"ok": True}
+
+
+@app.get("/api/sessions/{name}/run/pane", dependencies=[Depends(require_auth)])
+def runner_pane(name: str):
+    return {"pane": runner.run_pane(_session_cwd(name))}
 
 
 @app.post("/api/sessions/{name}/open-editor", dependencies=[Depends(require_auth)])
