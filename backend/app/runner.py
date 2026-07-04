@@ -1,11 +1,15 @@
 import json
+import os
 import re
+import shlex
+import subprocess
 import tomllib
 from pathlib import Path
 from typing import Optional
 
 from app.config import settings
-from app.models import Runner
+from app.models import Runner, RunInfo
+from app.tmux import _scope_prefix
 
 # nome -> peso pra escolher o melhor palpite de "dev" (so um vence).
 _DEV_RANK = {"dev": 5, "start": 4, "serve": 3, "watch": 2, "run": 1}
@@ -111,3 +115,58 @@ def remember(cwd: str, command: str) -> None:
     tmp = p.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(d), encoding="utf-8")
     tmp.replace(p)  # escrita atomica
+
+
+RUN = subprocess.run
+SOCK = "cppkt-run"  # socket tmux dedicado -> nao aparece na lista de sessoes do app
+
+
+def _sock(args: list[str]) -> subprocess.CompletedProcess:
+    try:
+        return RUN(["tmux", "-L", SOCK, *args], capture_output=True, text=True, timeout=5)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return subprocess.CompletedProcess(args, 1, "", str(e))
+
+
+def _slug(cwd: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_-]", "-", Path(cwd).name) or "proj"
+
+
+def start_run(cwd: str, command: str) -> RunInfo:
+    """Mata o run anterior do projeto (1 por projeto), inicia o novo numa sessao tmux
+    no socket dedicado, grava como lembrado, devolve o status."""
+    name = _slug(cwd)
+    _sock(["kill-session", "-t", name])
+    shell = os.environ.get("SHELL", "/bin/sh")
+    # login shell (-lc) herda env/PATH do projeto; exec faz o comando virar dono do pane.
+    spawn = _scope_prefix() + [
+        "tmux", "-L", SOCK, "new-session", "-d", "-s", name, "-c", cwd, "-x", "200", "-y", "50",
+        f"exec {shell} -lc {shlex.quote(command)}",
+    ]
+    try:
+        RUN(spawn, capture_output=True, text=True, timeout=5)
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    remember(cwd, command)
+    return run_status(cwd) or RunInfo(command=command)
+
+
+def stop_run(cwd: str) -> None:
+    _sock(["kill-session", "-t", _slug(cwd)])
+
+
+def run_status(cwd: str) -> Optional[RunInfo]:
+    name = _slug(cwd)
+    cp = _sock(["list-sessions", "-F", "#{session_name}\t#{session_created}"])
+    if cp.returncode != 0:
+        return None
+    for line in cp.stdout.splitlines():
+        sn, _, created = line.partition("\t")
+        if sn == name:
+            return RunInfo(command=remembered(cwd) or "", since=int(created) if created.isdigit() else None)
+    return None
+
+
+def run_pane(cwd: str) -> str:
+    cp = _sock(["capture-pane", "-p", "-t", f"={_slug(cwd)}:", "-S", "-200"])
+    return cp.stdout
