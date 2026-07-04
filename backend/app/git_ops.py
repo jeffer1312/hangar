@@ -100,6 +100,99 @@ def git_action(cwd: str, action: str) -> dict:
     return {"ok": p.returncode == 0, "output": (p.stdout + p.stderr).strip()}
 
 
+# Log estruturado (view dedicada de commits): campos delimitados por bytes de controle. Superset —
+# inclui parents (%P) e refs (%D) pra servir a lista, o detalhe-de-commit e o grafo (fase 2) sem
+# trocar de formato depois. %x1f (unit sep) entre campos, %x1e (record sep) entre commits: nenhum dos
+# dois aparece em texto de commit -> split trivial e a prova de espacos/quebras no assunto/autor.
+_LOG_FMT = "%H%x1f%h%x1f%P%x1f%D%x1f%an%x1f%at%x1f%ar%x1f%s%x1e"
+
+
+def git_log(cwd: str, n: int = 50) -> list[dict]:
+    """Ultimos n commits, estruturados. --topo-order (nao por data) pro grafo nao intercalar branches."""
+    p = _run(cwd, "log", "--topo-order", "-n", str(n), f"--pretty=format:{_LOG_FMT}")
+    if p.returncode != 0:
+        # repo sem nenhum commit ainda: git log sai !=0 -> lista vazia em vez de erro.
+        if "does not have any commits" in p.stderr or "bad default revision" in p.stderr:
+            return []
+        raise GitError(409, (p.stderr or "git log falhou").strip() or "git log falhou")
+    out = []
+    for rec in p.stdout.split("\x1e"):
+        rec = rec.strip("\n")
+        if not rec:
+            continue
+        f = rec.split("\x1f")
+        if len(f) < 8:
+            continue
+        full, short, parents, refs, author, ts, rel, subject = f[:8]
+        out.append({
+            "hash": full,
+            "short": short,
+            "parents": parents.split() if parents else [],
+            "refs": refs.strip(),
+            "author": author,
+            "ts": int(ts) if ts.isdigit() else 0,
+            "rel": rel,
+            "subject": subject,
+        })
+    return out
+
+
+def assign_lanes(commits: list[dict]) -> list[dict]:
+    """Atribui uma coluna (lane) a cada commit pro grafo, a partir da saida de git_log (topo-order,
+    child antes de parent). Mantem 'lanes' ativas (cada slot = hash esperado naquela coluna). O 1o
+    parent HERDA a coluna do commit (linha reta pra baixo); parents extras de um merge abrem colunas
+    novas (aresta curva). Colunas que esperavam o mesmo commit convergem nele. Acrescenta a cada
+    commit: 'col' (int), 'edges' (arestas descendo pros parents: [{'to_col': int, 'curved': bool}]) e
+    'passthrough' (colunas de outras lanes que atravessam esta linha sem dot — o front desenha uma
+    vertical cheia nelas). Muta e devolve a mesma lista. Historico linear -> todos col=0, passthrough=[]."""
+    lanes: list[str | None] = []
+
+    def first_free() -> int:
+        for i, x in enumerate(lanes):
+            if x is None:
+                return i
+        lanes.append(None)
+        return len(lanes) - 1
+
+    for c in commits:
+        h = c["hash"]
+        waiting = [i for i, x in enumerate(lanes) if x == h]
+        if waiting:
+            col = waiting[0]
+            for extra in waiting[1:]:
+                lanes[extra] = None          # convergem neste commit
+        else:
+            col = first_free()               # tip/head sem filho na vista atual
+        parents = c.get("parents", [])
+        edges: list[dict] = []
+        if not parents:
+            lanes[col] = None                # root: coluna fecha
+        else:
+            for idx, p in enumerate(parents):
+                existing = next((i for i, x in enumerate(lanes) if x == p), None)
+                if existing is not None:
+                    # esse parent JA e esperado noutra coluna -> a aresta converge pra la
+                    # (nao abre lane nova). Sem isto, uma branch mesclada depois da main avancar
+                    # ficava com a aresta solta, apontando pra uma coluna vazia.
+                    edges.append({"to_col": existing, "curved": existing != col})
+                    if idx == 0 and existing != col:
+                        lanes[col] = None    # 1o parent vive noutra coluna -> a do commit fecha
+                elif idx == 0:
+                    lanes[col] = p           # 1o parent segue reto na coluna do commit
+                    edges.append({"to_col": col, "curved": False})
+                else:
+                    fc = first_free()        # parent de merge sem lane -> coluna nova
+                    lanes[fc] = p
+                    edges.append({"to_col": fc, "curved": True})
+        # Lanes que ATRAVESSAM esta linha sem serem tocadas pelo commit (passam reto, sem dot). Sem
+        # isto o grafo perde a linha vertical de qualquer branch que nao seja a do commit atual.
+        touched = {e["to_col"] for e in edges} | {col}
+        c["col"] = col
+        c["edges"] = edges
+        c["passthrough"] = [i for i, x in enumerate(lanes) if x is not None and i not in touched]
+    return commits
+
+
 def changed_files(cwd: str) -> list[dict]:
     """Arquivos com mudanca nao-commitada (git status --porcelain). Cada item: `path`, `code` (os 2
     chars XY do porcelain: ' M', 'M ', '??', 'A '...) e `staged`. So leitura."""
@@ -202,4 +295,33 @@ if __name__ == "__main__":
             assert switch_branch(d, "only-remote")["current"] == "only-remote"
             assert "only-remote" in list_branches(d)["branches"], "DWIM devia criar local"
 
+        # git_log estruturado: parseia os commits do repo temp e valida os campos.
+        commits = git_log(d, n=10)
+        assert commits and all(c["hash"] and c["subject"] for c in commits), commits
+        assert isinstance(commits[0]["parents"], list), commits[0]
+        assert commits[0]["ts"] > 0, commits[0]
+
+        # assign_lanes: caso realista — feat baseada num commit antigo, main avanca 2x, depois merge.
+        # Valida col/edges do merge E o passthrough (a lane do feat tem que atravessar as linhas da main).
+        with tempfile.TemporaryDirectory() as gd:
+            _run(gd, "init", "-q", "-b", "main")
+            _run(gd, "config", "user.email", "t@t")
+            _run(gd, "config", "user.name", "t")
+            _run(gd, "commit", "-q", "--allow-empty", "-m", "base")
+            _run(gd, "switch", "-q", "-c", "feat")
+            _run(gd, "commit", "-q", "--allow-empty", "-m", "feat-1")
+            _run(gd, "switch", "-q", "main")
+            _run(gd, "commit", "-q", "--allow-empty", "-m", "main-1")
+            _run(gd, "commit", "-q", "--allow-empty", "-m", "main-2")
+            _run(gd, "merge", "-q", "--no-ff", "feat", "-m", "merge feat")
+            g = assign_lanes(git_log(gd))
+            # Asserts invariantes a ordem do topo-order (as colunas exatas variam, a estrutura nao):
+            assert all("col" in c and "passthrough" in c for c in g), g
+            merges = [c for c in g if len(c["parents"]) >= 2]
+            assert len(merges) == 1 and len(merges[0]["edges"]) == 2, merges         # merge = 2 arestas
+            assert any(e["curved"] for e in merges[0]["edges"]), merges[0]            # uma delas curva
+            assert max(c["col"] for c in g) >= 1, [c["col"] for c in g]               # usa >1 coluna
+            assert any(c["passthrough"] for c in g), [c["passthrough"] for c in g]    # lane atravessa
+            # ha uma convergencia: um commit NAO-merge com aresta curva (branch voltando pro tronco)
+            assert any(any(e["curved"] for e in c["edges"]) for c in g if len(c["parents"]) == 1), g
         print("git_ops self-check OK")
