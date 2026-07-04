@@ -10,6 +10,10 @@ export interface SessionInfo {
   // marca "sem id" e bloqueia o chat (evita mostrar/trocar a conversa errada).
   tracked?: boolean;
   branch?: string | null;   // branch git atual do cwd (mostrada na lista de sessões)
+  // Estado vivo detalhado, pra a linha ser acionável sem abrir a sessão (feature #1):
+  label?: string | null;       // working: texto do spinner
+  question?: string | null;    // awaiting_input: a pergunta
+  options?: string[] | null;   // awaiting_input: rótulos das opções
 }
 
 // Sessão marcada com o servidor de origem (visão agregada multi-servidor).
