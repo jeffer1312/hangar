@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { abbrevNum, countAwaiting, projectKey, projectLabel } from './format';
+import { abbrevNum, countAwaiting, nextAwaiting, projectKey, projectLabel } from './format';
 
 describe('abbrevNum', () => {
   it('abbreviates millions', () => {
@@ -37,6 +37,44 @@ describe('countAwaiting', () => {
 
   it('returns 0 when none are awaiting', () => {
     expect(countAwaiting([{ state: 'working' as const }, { state: 'idle' as const }])).toBe(0);
+  });
+});
+
+describe('nextAwaiting', () => {
+  it('returns null when nothing is awaiting', () => {
+    const sessions = [{ name: 'a', state: 'idle' as const }, { name: 'b', state: 'working' as const }];
+    expect(nextAwaiting(sessions, 'a')).toBeNull();
+  });
+
+  it('jumps to the single awaiting session when current is not it', () => {
+    const sessions = [
+      { name: 'a', state: 'idle' as const },
+      { name: 'b', state: 'awaiting_input' as const },
+    ];
+    expect(nextAwaiting(sessions, 'a')).toBe('b');
+  });
+
+  it('wraps around from the last awaiting session back to the first', () => {
+    const sessions = [
+      { name: 'a', state: 'awaiting_input' as const },
+      { name: 'b', state: 'awaiting_input' as const },
+      { name: 'c', state: 'awaiting_input' as const },
+    ];
+    expect(nextAwaiting(sessions, 'c')).toBe('a');
+  });
+
+  it('skips past the current session when it is itself awaiting', () => {
+    const sessions = [
+      { name: 'a', state: 'awaiting_input' as const },
+      { name: 'b', state: 'awaiting_input' as const },
+      { name: 'c', state: 'awaiting_input' as const },
+    ];
+    expect(nextAwaiting(sessions, 'a')).toBe('b');
+  });
+
+  it('returns itself when it is the only awaiting session', () => {
+    const sessions = [{ name: 'a', state: 'awaiting_input' as const }];
+    expect(nextAwaiting(sessions, 'a')).toBe('a');
   });
 });
 
