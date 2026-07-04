@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -9,7 +10,7 @@ from typing import Optional
 
 from app.config import settings
 from app.models import Runner, RunInfo
-from app.tmux import _scope_prefix
+from app.tmux import _scope_prefix, _pane_target
 
 # nome -> peso pra escolher o melhor palpite de "dev" (so um vence).
 _DEV_RANK = {"dev": 5, "start": 4, "serve": 3, "watch": 2, "run": 1}
@@ -129,7 +130,8 @@ def _sock(args: list[str]) -> subprocess.CompletedProcess:
 
 
 def _slug(cwd: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_-]", "-", Path(cwd).name) or "proj"
+    base = re.sub(r"[^a-zA-Z0-9_-]", "-", Path(cwd).name) or "proj"
+    return f"{base}-{hashlib.sha1(cwd.encode()).hexdigest()[:6]}"
 
 
 def start_run(cwd: str, command: str) -> RunInfo:
@@ -168,5 +170,5 @@ def run_status(cwd: str) -> Optional[RunInfo]:
 
 
 def run_pane(cwd: str) -> str:
-    cp = _sock(["capture-pane", "-p", "-t", f"={_slug(cwd)}:", "-S", "-200"])
+    cp = _sock(["capture-pane", "-p", "-t", _pane_target(_slug(cwd)), "-S", "-200"])
     return cp.stdout

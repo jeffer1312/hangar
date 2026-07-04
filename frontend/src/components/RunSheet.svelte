@@ -7,8 +7,9 @@
     open: boolean;
     sessionName: string;
     onClose: () => void;
+    onRunningChange?: (running: boolean) => void;
   }
-  let { open, sessionName, onClose }: Props = $props();
+  let { open, sessionName, onClose, onRunningChange }: Props = $props();
 
   let detected = $state<Runner[]>([]);
   let running = $state<RunInfo | null>(null);
@@ -28,6 +29,7 @@
     } catch (e) {
       err = String(e);
     }
+    onRunningChange?.(!!running);
   }
 
   async function run(command: string) {
@@ -38,6 +40,7 @@
     } catch (e) {
       err = String(e);
     }
+    onRunningChange?.(!!running);
   }
 
   async function stop() {
@@ -45,6 +48,7 @@
     running = null;
     paneText = '';
     picking = true;
+    onRunningChange?.(!!running);
   }
 
   async function poll() {
