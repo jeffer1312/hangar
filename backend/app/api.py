@@ -33,6 +33,7 @@ from app.git_ops import (
 from app import tunnel
 from app import runner
 from app.archive import ArchiveEntry, ArchiveFolder, archive_jsonl, list_conversations, list_folders
+from app.search import SearchHit, search
 from app.askquestion import clear_pending_askq, read_pending_askq
 from app.hook_state import hook_state
 from app import push
@@ -935,6 +936,15 @@ def archive_image(project: str, session_id: str, uuid: str, idx: int):
         raise HTTPException(404, "image not found")
     raw, media = got
     return Response(content=raw, media_type=media, headers={"Cache-Control": "max-age=31536000, immutable"})
+
+
+# ── Busca de conteudo cross-session: grep (rg) em todos os transcripts (vivos + arquivados) ──
+@app.get("/api/search", dependencies=[Depends(require_auth)], response_model=list[SearchHit])
+def search_transcripts(q: str = ""):
+    # live: realpath(jsonl) -> nome tmux das sessoes VIVAS (mesmo join do /api/archive). A busca marca
+    # o hit como vivo e carrega o nome pra a UI abrir o chat (viva) ou o arquivo (morta). q vazia -> [].
+    live = {os.path.realpath(s.jsonl): s.name for s in registry.list() if s.jsonl}
+    return search(q, live)
 
 
 @app.get("/api/sessions/{name}/file", dependencies=[Depends(require_auth)])
