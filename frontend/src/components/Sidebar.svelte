@@ -940,6 +940,15 @@
         <span class="srv-caret" aria-hidden="true">⌃</span>
       </button>
       <button class="costs-btn" onclick={() => (window.location.hash = '#/costs')}>Custos</button>
+      <!-- Arquivo (conversas mortas): mesmo destino do menu mobile (SessionList), so entrypoint no desktop. -->
+      <button class="archive-btn" onclick={() => (window.location.hash = '#/archive')}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="4" rx="1"/>
+          <path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/>
+          <line x1="10" y1="12" x2="14" y2="12"/>
+        </svg>
+        <span>Arquivo</span>
+      </button>
       <button class="logout-btn" onclick={() => (confirmLogout = true)}>Sair</button>
     </div>
   {/if}
@@ -1421,6 +1430,8 @@
   .srv-add { height: 32px; padding: 0 var(--space-2); text-align: left; justify-content: flex-start; color: var(--text-secondary); font-size: var(--text-sm); }
   .costs-btn { height: 34px; padding: 0 var(--space-2); text-align: left; justify-content: flex-start; color: var(--text-secondary); font-size: var(--text-sm); border-radius: var(--radius-md); }
   .costs-btn:hover { background: var(--bg-hover); color: var(--accent); }
+  .archive-btn { display: flex; align-items: center; gap: var(--space-2); height: 34px; padding: 0 var(--space-2); justify-content: flex-start; color: var(--text-secondary); font-size: var(--text-sm); border-radius: var(--radius-md); }
+  .archive-btn:hover { background: var(--bg-hover); color: var(--accent); }
   .logout-btn { height: 34px; padding: 0 var(--space-2); text-align: left; justify-content: flex-start; color: var(--text-muted); font-size: var(--text-sm); border-radius: var(--radius-md); }
   .logout-btn:hover { background: var(--bg-hover); color: var(--error); }
 

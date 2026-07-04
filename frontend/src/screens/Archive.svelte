@@ -2,7 +2,7 @@
   import NavBar from '../components/NavBar.svelte';
   import MessageList from '../components/MessageList.svelte';
   import {
-    getArchive, getArchiveFolder, getArchiveHistory, archiveImageUrl,
+    getArchive, getArchiveFolder, getArchiveHistory, archiveImageUrl, resumeArchivedConversation,
     type ArchiveFolder, type ArchiveEntry,
   } from '../lib/api';
   import type { ChatEvent } from '../lib/types';
@@ -26,6 +26,8 @@
   let selected = $state<ArchiveEntry | null>(null);
   let events = $state<ChatEvent[]>([]);
   let loadingChat = $state(false);
+  let resuming = $state(false);
+  let resumeError = $state('');
 
   async function load() {
     loading = true;
@@ -71,6 +73,7 @@
     selected = e;
     loadingChat = true;
     events = [];
+    resumeError = '';
     try {
       events = await getArchiveHistory(e.project, e.session_id);
     } catch {
@@ -78,6 +81,24 @@
       selected = null;
     } finally {
       loadingChat = false;
+    }
+  }
+
+  // "Retomar conversa": sobe uma sessao tmux nova (claude --resume <uuid>) no cwd original e navega
+  // pro chat dela. Serverid do deep-link (se veio da busca) e reaplicado ANTES de trocar de tela, pra
+  // o chat abrir no servidor DONO da conversa (mesma convencao de openCompareSession no App.svelte).
+  async function resumeConversation() {
+    if (!selected) return;
+    resuming = true;
+    resumeError = '';
+    try {
+      const info = await resumeArchivedConversation(selected.project, selected.session_id);
+      if (deepLink) selectServer(deepLink.serverId);
+      window.location.hash = '#/chat/' + encodeURIComponent(info.name);
+    } catch (e) {
+      resumeError = e instanceof Error ? e.message : 'Erro ao retomar a conversa';
+    } finally {
+      resuming = false;
     }
   }
 
@@ -99,6 +120,12 @@
   {@const sel = selected}
   <div class="archive-screen" style="--nav-h: 0px">
     <NavBar title={sel.preview || sel.session_id.slice(0, 8)} showBack={true} onBack={() => (selected = null)} />
+    <div class="resume-bar">
+      <button class="resume-btn" onclick={resumeConversation} disabled={resuming}>
+        {resuming ? 'Retomando…' : 'Retomar conversa'}
+      </button>
+      {#if resumeError}<p class="resume-err">{resumeError}</p>{/if}
+    </div>
     {#if loadingChat}
       <p class="muted">Carregando conversa…</p>
     {:else}
@@ -229,4 +256,24 @@
   .row-meta { font-size: var(--text-xs); color: var(--text-muted); }
   .live { color: var(--success); }
   .chev { color: var(--text-muted); flex-shrink: 0; }
+
+  .resume-bar {
+    padding: var(--space-3) var(--space-4) 0;
+    max-width: 700px;
+    width: 100%;
+    margin: 0 auto;
+  }
+  .resume-btn {
+    width: 100%;
+    height: 44px;
+    background: var(--accent-dim);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    transition: background 180ms var(--ease-out);
+  }
+  .resume-btn:hover:not(:disabled) { background: var(--accent); color: #fff; }
+  .resume-btn:disabled { opacity: 0.6; cursor: default; }
+  .resume-err { color: var(--error); font-size: var(--text-xs); margin: var(--space-2) 0 0; }
 </style>

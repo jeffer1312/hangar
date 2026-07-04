@@ -120,3 +120,13 @@ def archive_jsonl(project: str, session_id: str) -> Path:
     if not p.is_file():
         raise FileNotFoundError(str(p))
     return p
+
+
+def archive_cwd(project: str, session_id: str) -> Optional[str]:
+    """cwd real da conversa arquivada (lido do cabecalho do transcript) -- usado pra retomar (feature
+    'Retomar conversa'): a sessao tmux nova precisa nascer no MESMO cwd da conversa original. Mesma
+    validacao de archive_jsonl (propaga ValueError/FileNotFoundError); None = cwd nao ficou gravado
+    nas primeiras linhas do transcript (conversa nao pode ser retomada)."""
+    p = archive_jsonl(project, session_id)
+    _, cwd = _head_info(p)
+    return cwd

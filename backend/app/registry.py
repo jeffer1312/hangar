@@ -537,7 +537,8 @@ class SessionRegistry:
             )
         return infos
 
-    def create(self, name: str, cwd: str, config_dir: str | None = None) -> SessionInfo:
+    def create(self, name: str, cwd: str, config_dir: str | None = None,
+               resume_session_id: str | None = None) -> SessionInfo:
         # Nome tmux nao aceita "."/":"/espaco -> sanitiza igual ao rename. Varias sessoes na MESMA
         # pasta sao permitidas: cada uma tem nome unico + --session-id proprio -> jsonl proprio.
         name = re.sub(r"[^A-Za-z0-9_-]", "-", name.strip()).strip("-")
@@ -545,10 +546,22 @@ class SessionRegistry:
             raise ValueError("nome invalido")
         if tmux.has_session(name):
             raise ValueError("ja existe uma sessao com esse nome")
-        sid = str(uuid.uuid4())
+        # resume_session_id (retomar conversa MORTA do Arquivo): reusa o uuid existente e sobe com
+        # `--resume` em vez de `--session-id` -> o claude CONTINUA aquele jsonl (nao comeca um novo).
+        # Mesmo uuid ja validado no endpoint, mas revalida aqui tambem (vai direto pro comando do shell).
+        if resume_session_id is not None:
+            try:
+                uuid.UUID(resume_session_id)
+            except (ValueError, AttributeError, TypeError):
+                raise ValueError("session_id invalido")
+            sid = resume_session_id
+            cmd = f"claude --resume {sid}"
+        else:
+            sid = str(uuid.uuid4())
+            cmd = f"claude --session-id {sid}"
         base = (Path(config_dir) / "projects") if config_dir else self.projects_dir
         jsonl = str(base / sanitize_cwd(cwd) / f"{sid}.jsonl")
-        if not tmux.new_session(name, cwd, f"claude --session-id {sid}", config_dir):
+        if not tmux.new_session(name, cwd, cmd, config_dir):
             raise ValueError("falha ao criar sessao no tmux")
         # Sessao NOVA = sid novo = transcript fresco. A fila duravel e keyed pelo NOME (sobrevive ao
         # fim da sessao antiga), entao entradas remanescentes de uma sessao morta de mesmo nome
