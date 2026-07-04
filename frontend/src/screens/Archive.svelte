@@ -6,11 +6,15 @@
     type ArchiveFolder, type ArchiveEntry,
   } from '../lib/api';
   import type { ChatEvent } from '../lib/types';
+  import { selectServer } from '../lib/auth';
 
   interface Props {
     onBack: () => void;
+    // Deep-link vindo da busca (feature #10): abre direto uma conversa arquivada de um servidor
+    // especifico, sem passar pela navegacao pasta-a-pasta.
+    deepLink?: { serverId: string; project: string; sessionId: string } | null;
   }
-  let { onBack }: Props = $props();
+  let { onBack, deepLink = null }: Props = $props();
 
   // Navegacao pasta-primeiro (3 niveis, estado interno): pastas -> conversas da pasta -> leitor.
   let loading = $state(true);
@@ -34,7 +38,20 @@
       loading = false;
     }
   }
-  $effect(() => { load(); });
+  $effect(() => {
+    if (deepLink) {
+      // Aponta pro servidor dono ANTES de qualquer fetch (apiFetch le o ativo na hora da chamada),
+      // carrega as pastas por baixo (pro "voltar" da conversa cair na lista) e abre a conversa direto.
+      selectServer(deepLink.serverId);
+      load();
+      openConversation({
+        project: deepLink.project, session_id: deepLink.sessionId,
+        cwd: null, mtime: 0, preview: '', live: false,
+      });
+    } else {
+      load();
+    }
+  });
 
   async function openFolder(f: ArchiveFolder) {
     folder = f;
