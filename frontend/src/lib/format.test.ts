@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, groupSelectedByServer, nextAwaiting,
+  abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, fmtWhen, groupSelectedByServer, nextAwaiting,
   projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent,
 } from './format';
 import type { ChatEvent } from './types';
@@ -255,5 +255,20 @@ describe('latestAssistantEvent', () => {
 
   it('returns null for an empty list', () => {
     expect(latestAssistantEvent([])).toBeNull();
+  });
+});
+
+describe('fmtWhen', () => {
+  it('returns empty string for falsy timestamps', () => {
+    expect(fmtWhen(0)).toBe('');
+    expect(fmtWhen(null)).toBe('');
+    expect(fmtWhen(undefined)).toBe('');
+  });
+
+  it('formats epoch SECONDS (x1000) as a local short date-time', () => {
+    const ts = 1_700_000_000; // epoch em segundos
+    const expected = new Date(ts * 1000).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+    expect(fmtWhen(ts)).toBe(expected);
+    expect(fmtWhen(ts)).not.toBe('');
   });
 });
