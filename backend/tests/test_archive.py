@@ -66,3 +66,11 @@ def test_archive_jsonl_rejects_traversal_and_missing(tmp_path):
         archive.archive_jsonl("-home-u-proj", "../../x")  # sid nao-uuid
     with pytest.raises(FileNotFoundError):
         archive.archive_jsonl("-home-u-proj", "22222222-2222-2222-2222-222222222222")
+
+
+def test_archive_cwd_reads_from_header(tmp_path):
+    # usado por "Retomar conversa": precisa do cwd real pra subir a sessao nova no lugar certo.
+    _write_transcript(tmp_path / "-home-u-proj", cwd="/home/u/proj")
+    assert archive.archive_cwd("-home-u-proj", SID) == "/home/u/proj"
+    with pytest.raises(FileNotFoundError):
+        archive.archive_cwd("-home-u-proj", "22222222-2222-2222-2222-222222222222")

@@ -277,6 +277,15 @@ export function getArchiveFolder(project: string): Promise<ArchiveEntry[]> {
   return apiFetch<ArchiveEntry[]>(`/api/archive/${encodeURIComponent(project)}`);
 }
 
+// "Retomar conversa": sobe uma sessao tmux NOVA no cwd original com `claude --resume <uuid>`,
+// continuando esta conversa morta. Devolve a SessionInfo da sessao nova (o front navega pro chat dela).
+export function resumeArchivedConversation(project: string, sessionId: string): Promise<SessionInfo> {
+  return apiFetch<SessionInfo>(
+    `/api/archive/${encodeURIComponent(project)}/${encodeURIComponent(sessionId)}/resume`,
+    { method: 'POST' },
+  );
+}
+
 export function getArchiveHistory(project: string, sid: string): Promise<ChatEvent[]> {
   return apiFetch<ChatEvent[]>(
     `/api/archive/${encodeURIComponent(project)}/${encodeURIComponent(sid)}/history`,
