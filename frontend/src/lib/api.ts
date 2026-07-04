@@ -281,6 +281,18 @@ export async function sendInput(name: string, text: string): Promise<void> {
   });
 }
 
+// Fan-out de um prompt pra N sessoes DO SERVIDOR ATIVO (feature #9). Mira sempre 1 servidor por
+// chamada — selecao cross-server manda 1 chamada por servidor (selectServer antes, igual ao resto
+// do app). O backend roda a MESMA sequencia do /input por nome (fila duravel + confirmacao).
+export interface BroadcastResult { ok: boolean; error: string | null }
+export async function broadcast(names: string[], text: string): Promise<Record<string, BroadcastResult>> {
+  const res = await apiFetch<{ results: Record<string, BroadcastResult> }>('/api/broadcast', {
+    method: 'POST',
+    body: JSON.stringify({ names, text }),
+  });
+  return res.results;
+}
+
 /**
  * Envia os bytes crus de um arquivo (imagem, video, pdf, ...) pra sessao (sem multipart). O backend
  * salva e devolve o path; o app depois manda a legenda + path pelo /input. O filename vai no header

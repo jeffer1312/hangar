@@ -96,6 +96,47 @@ def test_input_control_char_400_without_queue(api_client):
     ap.assert_not_called()   # validado no send_prompt ANTES de enfileirar
 
 
+def test_broadcast_invokes_send_once_per_name(api_client):
+    # POST /api/broadcast pra N nomes precisa rodar a MESMA sequencia do /input (send_prompt +
+    # PromptQueue.append) uma vez por nome — nao um mecanismo de entrega novo.
+    with patch("app.api.terminal.send_prompt", return_value="sent") as sp, \
+         patch("app.pqueue.PromptQueue.append") as ap:
+        r = api_client.post(
+            "/api/broadcast", json={"names": ["a", "b", "c"], "text": "oi"}, headers=_h()
+        )
+    assert r.status_code == 200
+    assert sp.call_count == 3
+    assert ap.call_count == 3
+    results = r.json()["results"]
+    assert set(results.keys()) == {"a", "b", "c"}
+    assert all(v["ok"] for v in results.values())
+
+
+def test_broadcast_reports_per_name_failure_without_aborting_others(api_client):
+    def fake_send(name, text):
+        if name == "bad":
+            raise ValueError("control characters not allowed")
+        return "sent"
+
+    with patch("app.api.terminal.send_prompt", side_effect=fake_send), \
+         patch("app.pqueue.PromptQueue.append") as ap:
+        r = api_client.post(
+            "/api/broadcast", json={"names": ["bad", "ok"], "text": "oi"}, headers=_h()
+        )
+    assert r.status_code == 200
+    results = r.json()["results"]
+    assert results["bad"]["ok"] is False
+    assert results["ok"]["ok"] is True
+    ap.assert_called_once_with("oi", delivered=True)   # so a sessao "ok" enfileirou
+
+
+def test_broadcast_rejects_slash_commands(api_client):
+    with patch("app.api.terminal.send_prompt") as sp:
+        r = api_client.post("/api/broadcast", json={"names": ["a"], "text": "/clear"}, headers=_h())
+    assert r.status_code == 400
+    sp.assert_not_called()
+
+
 def test_select_route(api_client):
     with patch("app.api.terminal.select") as sel:
         r = api_client.post("/api/sessions/cc/select", json={"option": 2}, headers=_h())
