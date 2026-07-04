@@ -15,6 +15,10 @@ class SessionInfo(BaseModel):
     # False = chute newest-by-mtime (claude manual sem --session-id) -> UI marca "sem id" e desliga chat.
     tracked: bool = True
     branch: Optional[str] = None   # branch git atual do cwd (lida de .git/HEAD) — mostra na lista
+    # Estado vivo detalhado, pra a linha da lista ser acionável sem abrir a sessão (feature #1):
+    label: Optional[str] = None          # working: texto do spinner ("Elucidating…")
+    question: Optional[str] = None       # awaiting_input: a pergunta
+    options: Optional[list[str]] = None  # awaiting_input: rótulos das opções
 
 
 class ChatEvent(BaseModel):
