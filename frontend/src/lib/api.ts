@@ -482,6 +482,19 @@ export function openSessionsStream(s: Server): EventSource {
   return new EventSource(url, { withCredentials: isSameOrigin });
 }
 
+// EventSource de UMA sessão de um servidor ESPECÍFICO (baseUrl/token explícitos, sem tocar no
+// ativo) — usado pela grade de comparação (feature #11), que pode misturar sessões de servidores
+// diferentes no mesmo relance. Mesma convenção de openSessionsStream (?token cross-origin,
+// withCredentials same-origin).
+export function openEventStreamForServer(s: Server, name: string): EventSource {
+  const path = `/api/sessions/${encodeURIComponent(name)}/events`;
+  const isSameOrigin = !s.baseUrl || s.baseUrl === window.location.origin;
+  const url = isSameOrigin
+    ? `${s.baseUrl}${path}`
+    : `${s.baseUrl}${path}?token=${encodeURIComponent(s.token)}`;
+  return new EventSource(url, { withCredentials: isSameOrigin });
+}
+
 // ── Preview: expõe um projeto local (porta) via `tailscale serve` da máquina do backend, pra ver
 // num iframe. Global por máquina (slot único), não por sessão.
 export interface PreviewState {

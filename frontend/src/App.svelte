@@ -1,11 +1,13 @@
 <script lang="ts">
   import { isAuthenticated, setServers, listServers, mergeServers, onServersChanged, clearCredentials, selectServer } from './lib/auth';
   import { getVault, decryptList, encryptList, putVault, logout as syncLogout, syncStatus, stashKey, loadKey, clearKey } from './lib/sync';
+  import { encodeCompareIds, parseCompareIds, type CompareId } from './lib/format';
   import Login from './screens/Login.svelte';
   import SessionList from './screens/SessionList.svelte';
   import Costs from './screens/Costs.svelte';
   import Archive from './screens/Archive.svelte';
   import Chat from './screens/Chat.svelte';
+  import Compare from './screens/Compare.svelte';
   import DesktopShell from './components/DesktopShell.svelte';
 
   // ── Hash-based Router ────────────────────────────────────────────────
@@ -15,7 +17,8 @@
     | { name: 'sessions' }
     | { name: 'costs' }
     | { name: 'archive' }
-    | { name: 'chat'; sessionName: string };
+    | { name: 'chat'; sessionName: string }
+    | { name: 'compare'; ids: CompareId[] };
 
   function parseHash(hash: string): Route {
     const path = hash.replace(/^#/, '');
@@ -31,6 +34,11 @@
         return { name: 'chat', sessionName };
       }
     }
+    // Grade de comparação (feature #11): #/compare/<ids codificados>, ver encodeCompareIds/
+    // parseCompareIds em lib/format.ts. Sem decodeURIComponent aqui — parseCompareIds já decodifica
+    // cada campo por dentro (decodificar o param inteiro de novo ia dar decode duplo).
+    const compareMatch = path.match(/^\/compare\/(.+)$/);
+    if (compareMatch) return { name: 'compare', ids: parseCompareIds(compareMatch[1]) };
     if (path === '/costs') return { name: 'costs' };
     if (path === '/archive') return { name: 'archive' };
     return { name: 'sessions' };
@@ -120,6 +128,20 @@
     navigateTo('#/');
   }
 
+  // Entrada da grade de comparação (feature #11): vem da seleção múltipla da lista de sessões
+  // (Sidebar/SessionList), reusando a MESMA seleção do broadcast. Menos de 2 não abre — comparar
+  // 0/1 sessão não faz sentido (o botão de origem já fica desabilitado antes disso, mas defensivo).
+  function navigateToCompare(ids: CompareId[]) {
+    if (ids.length < 2) return;
+    navigateTo('#/compare/' + encodeCompareIds(ids));
+  }
+
+  // Abrir um card da grade: troca pro servidor dono e vai pro chat completo dele.
+  function openCompareSession(name: string, serverId: string) {
+    selectServer(serverId);
+    navigateToChat(name);
+  }
+
   function onLogin() {
     authenticated = true;
     navigateTo('#/');
@@ -200,15 +222,22 @@
     <Costs onBack={() => navigateTo('#/')} />
   {:else if route.name === 'archive'}
     <Archive onBack={() => navigateTo('#/')} />
+  {:else if route.name === 'compare'}
+    <!-- Remonta ao trocar o conjunto comparado: fecha os streams antigos e abre os novos. -->
+    {#key encodeCompareIds(route.ids)}
+      <Compare ids={route.ids} onOpenSession={openCompareSession} onBack={navigateToSessions} />
+    {/key}
   {:else if isDesktop}
     <DesktopShell
       currentSession={route.name === 'chat' ? route.sessionName : null}
       onNavigateToChat={navigateToChat}
+      onCompare={navigateToCompare}
       {onLogout}
     />
   {:else if route.name === 'sessions'}
     <SessionList
       onNavigateToChat={navigateToChat}
+      onCompare={navigateToCompare}
       {onLogout}
     />
   {:else if route.name === 'chat'}
