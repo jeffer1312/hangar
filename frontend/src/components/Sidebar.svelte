@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { openSessionsStream, createSession, deleteSession, renameSession, openEditor, gitAction, getBranches, checkoutBranch, getPushSettings, setSessionMute, broadcast, setThenLink, clearThenLink } from '../lib/api';
-  import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor, clearCredentials } from '../lib/auth';
+  import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor, clearCredentials, parseServerPairing } from '../lib/auth';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import QrScanner from './QrScanner.svelte';
   import GitSheet from './GitSheet.svelte';
@@ -43,8 +43,23 @@
   interface SessRow extends SessionInfo { serverId: string }
   interface Group { id: string; label: string; color: string | null; error: string | null; sessions: SessRow[] }
   let groups = $state<Group[]>([]);
-  let collapsed = $state(false);   // pin: recolhido persistente (botao)
+  let collapsed = $state(false);   // pin: recolhido persistente (botao) — trilho de iniciais
   let hovering = $state(false);    // hover sobre a sidebar recolhida -> expande temporario
+  let filterText = $state('');     // filtro por nome/cwd/servidor (aparece quando a lista fica longa)
+
+  // Grupos colapsados por id (servidor ou projeto), persistido — MESMA chave do mobile (SessionList)
+  // pra o estado ser compartilhado onde faz sentido. Diferente do `collapsed` (pin do rail).
+  const COLLAPSE_KEY = 'cp_collapsed_servers';
+  function loadCollapsedGroups(): Set<string> {
+    try { return new Set(JSON.parse(localStorage.getItem(COLLAPSE_KEY) ?? '[]')); } catch { return new Set(); }
+  }
+  let collapsedGroups = $state<Set<string>>(loadCollapsedGroups());
+  function toggleGroup(id: string) {
+    const next = new Set(collapsedGroups);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    collapsedGroups = next;
+    try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next])); } catch { /* quota/priv mode */ }
+  }
 
   // Toggle "Servidor | Projeto" (feature #3), persistido — mesmo padrao de cp_sidebar_w.
   const GROUP_BY_KEY = 'cp_group_by';
@@ -482,17 +497,20 @@
     if (was) window.location.reload();
   }
   function handleScan(text: string) {
-    let tok = text.trim();
-    let base = '';
-    try {
-      const u = new URL(text);
-      const t = u.searchParams.get('token');
-      if (t) tok = t;
-      base = u.searchParams.get('api') ?? u.origin;
-    } catch { base = ''; }
     scanning = false;
-    if (!tok || !base) return;
-    addServer(base, tok);
+    const parsed = parseServerPairing(text);
+    if (!parsed) return;
+    addServer(parsed.base, parsed.token);
+    window.location.reload();
+  }
+  // Colar servidor manual (desktop nao tem camera): cola a URL de pareamento (com token) e adiciona
+  // pela MESMA rota de parse do QR. Primaria no menu; "Escanear QR" fica como secundaria.
+  let addUrlText = $state('');
+  let addError = $state('');
+  function submitPasteServer() {
+    const parsed = parseServerPairing(addUrlText.trim());
+    if (!parsed) { addError = 'Cole a URL de pareamento (com o token).'; return; }
+    addServer(parsed.base, parsed.token);
     window.location.reload();
   }
   function logout() {
@@ -518,6 +536,37 @@
       serverColor: serverColor(s.serverId),
     })),
   );
+
+  // Filtro (paridade com o mobile): so aparece quando ha muitas sessoes; casa nome/cwd/rotulo do
+  // grupo. Aplicado sobre `groups` num derived (reativo ao texto) — nao mexe no fluxo do SSE. Grupo
+  // que zera apos o filtro some; sem filtro, `groups` passa intacto (mantem grupo offline/vazio).
+  const totalSessions = $derived(groups.reduce((n, g) => n + g.sessions.length, 0));
+  const showFilter = $derived(totalSessions > 6);
+  const filteredGroups = $derived.by(() => {
+    const q = filterText.trim().toLowerCase();
+    if (!q) return groups;
+    return groups
+      .map((g) => ({
+        ...g,
+        sessions: g.sessions.filter(
+          (s) =>
+            s.name.toLowerCase().includes(q) ||
+            (s.cwd ?? '').toLowerCase().includes(q) ||
+            g.label.toLowerCase().includes(q),
+        ),
+      }))
+      .filter((g) => g.sessions.length > 0);
+  });
+  const filterEmpty = $derived(filterText.trim() !== '' && filteredGroups.length === 0);
+
+  // Gerenciador git (GitSheet) aberto pelo botao git DA LINHA (repo da sessao, sem abrir o chat) —
+  // mesma mecânica do menuGit (mira o server dono, restaura no fechar via closeGitSheet).
+  function rowGit(name: string, serverId: string, e: MouseEvent) {
+    e.stopPropagation();
+    gitSheetPrevServer = getActiveId();
+    selectServer(serverId);
+    gitSheet = { name };
+  }
 
   // ── Broadcast (feature #9): selecionar N sessoes e mandar 1 prompt pra todas ──────────────────
   // Mesmo padrao do mobile (SessionList): selecao = "<serverId>:<name>", groupSelectedByServer
@@ -633,15 +682,42 @@
         <button type="button" class:active={groupBy === 'server'} role="radio" aria-checked={groupBy === 'server'} onclick={() => setGroupBy('server')}>Servidor</button>
         <button type="button" class:active={groupBy === 'project'} role="radio" aria-checked={groupBy === 'project'} onclick={() => setGroupBy('project')}>Projeto</button>
       </div>
+      <!-- Filtro (paridade com o mobile): so aparece quando a lista fica longa. -->
+      {#if showFilter}
+        <input
+          type="text"
+          class="filter-input"
+          bind:value={filterText}
+          placeholder="Filtrar sessões"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck={false}
+          aria-label="Filtrar sessões"
+        />
+      {/if}
+      {#if filterEmpty}
+        <p class="filter-empty">Nenhuma sessão corresponde ao filtro.</p>
+      {/if}
     {/if}
-    {#each groups as g (g.id)}
+    {#each filteredGroups as g (g.id)}
+      {@const awaiting = countAwaiting(g.sessions)}
       {#if expanded}
         <div class="grp-head-row">
-          <div class="grp-head" title={g.error ? `${g.label}: ${g.error}` : g.label}>
+          <!-- Header colapsavel (paridade com o mobile): chevron + label + contagem + aguardando. -->
+          <button
+            class="grp-head"
+            onclick={() => toggleGroup(g.id)}
+            aria-expanded={!collapsedGroups.has(g.id)}
+            title={g.error ? `${g.label}: ${g.error}` : g.label}
+          >
+            <span class="grp-chevron" class:collapsed={collapsedGroups.has(g.id)} aria-hidden="true">▾</span>
             {#if g.color}<span class="grp-dot" style="background: {g.color};" aria-hidden="true"></span>{/if}
             <span class="grp-label">{g.label}</span>
+            {#if g.sessions.length > 0}<span class="grp-count">{g.sessions.length}</span>{/if}
+            {#if awaiting > 0}<span class="grp-await" title={`${awaiting} aguardando`}>{awaiting}</span>{/if}
             {#if g.error}<span class="grp-off">offline</span>{/if}
-          </div>
+          </button>
           <!-- "enviar p/ todas" (feature #9): entra em modo seleção com o grupo inteiro marcado. -->
           <button
             class="grp-broadcast"
@@ -651,6 +727,7 @@
           >➤</button>
         </div>
       {/if}
+      {#if !expanded || !collapsedGroups.has(g.id)}
       {#each g.sessions as s (s.serverId + '::' + s.name)}
         {@const rowKey = `${s.serverId}::${s.name}`}
         {@const selKey = `${s.serverId}:${s.name}`}
@@ -710,6 +787,10 @@
                     {@const cp = cwdParts(s.cwd)}
                     <span class="cwd" title={s.cwd}><span class="cwd-prefix">{cp.prefix}</span><span class="cwd-base">{cp.base}</span></span>
                   {/if}
+                  {#if s.branch}
+                    <!-- Branch git atual (paridade com o mobile), linha propria pra nao competir com o cwd. -->
+                    <span class="branch" title="branch git atual">⎇ {s.branch}</span>
+                  {/if}
                 </span>
                 {#if s.limited}
                   <span
@@ -730,11 +811,24 @@
               {/if}
             </button>
             {#if expanded && !selectMode}
+              <!-- Git da linha (paridade com o mobile): abre a GitSheet no repo do cwd, sem abrir o
+                   chat. So quando ha cwd. stopPropagation pra nao disparar rename/navegacao da linha. -->
+              {#if s.cwd}
+                <button class="sess-git" onclick={(e) => rowGit(s.name, s.serverId, e)} aria-label={`Git de ${s.name}`} title="Gerenciador git">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <line x1="6" y1="3" x2="6" y2="15"/>
+                    <circle cx="18" cy="6" r="3"/>
+                    <circle cx="6" cy="18" r="3"/>
+                    <path d="M18 9a9 9 0 0 1-9 9"/>
+                  </svg>
+                </button>
+              {/if}
               <button class="sess-del" onclick={(e) => handleDelete(s.name, s.serverId, e)} aria-label={`Excluir ${s.name}`}>×</button>
             {/if}
           {/if}
         </div>
       {/each}
+      {/if}
     {/each}
   </nav>
 
@@ -794,7 +888,25 @@
               {/if}
             </div>
           {/each}
-          <button class="srv-add" onclick={() => { scanning = true; serversOpen = false; }}>+ Adicionar (QR)</button>
+          <!-- Adicionar servidor: no desktop nao ha camera -> colar a URL de pareamento (com token) e a
+               primaria; "Escanear QR" fica secundaria. Mesma rota de parse do QR (parseServerPairing). -->
+          <div class="srv-add-form">
+            <input
+              type="url"
+              class="srv-add-input"
+              bind:value={addUrlText}
+              placeholder="Colar URL do servidor (com token)"
+              autocomplete="off"
+              autocorrect="off"
+              autocapitalize="off"
+              spellcheck={false}
+              onkeydown={(e) => { addError = ''; if (e.key === 'Enter') submitPasteServer(); }}
+              aria-label="URL de pareamento do servidor"
+            />
+            <button class="srv-add-btn" onclick={submitPasteServer} disabled={!addUrlText.trim()}>Adicionar</button>
+          </div>
+          {#if addError}<p class="srv-add-err" role="alert">{addError}</p>{/if}
+          <button class="srv-add" onclick={() => { scanning = true; serversOpen = false; }}>Escanear QR</button>
         </div>
       {/if}
       <button class="server-btn" onclick={() => (serversOpen = !serversOpen)}>
@@ -923,6 +1035,13 @@
   <div class="confirm-card" role="alertdialog" aria-modal="true" aria-label="Confirmar exclusão">
     <p class="confirm-title">Excluir esta sessão?</p>
     <p class="confirm-name">{confirmDel.name}</p>
+    <!-- Um mesmo nome pode existir em varios servidores: mostra o dono pra a exclusao nao ser ambigua. -->
+    {#if servers.length > 1}
+      {@const srv = servers.find((s) => s.id === confirmDel?.serverId)}
+      {#if srv}
+        <p class="confirm-srv"><span class="confirm-srv-dot" style="background: {serverColor(srv.id)};" aria-hidden="true"></span>{srv.label}</p>
+      {/if}
+    {/if}
     <div class="confirm-actions">
       <button type="button" class="c-btn" onclick={() => (confirmDel = null)}>Cancelar</button>
       <button type="button" class="c-btn c-danger" onclick={doDelete}>Excluir</button>
@@ -1029,18 +1148,51 @@
   }
   .group-toggle button { flex: 1; height: 28px; border-radius: var(--radius-sm); font-size: var(--text-xs); color: var(--text-secondary); }
   .group-toggle button.active { background: var(--bg-elevated); color: var(--text-primary); font-weight: 600; }
+  /* Filtro (paridade com o mobile) — compacto, alinhado ao conteudo da sidebar. */
+  .filter-input {
+    width: 100%; height: 32px; margin: 0 0 var(--space-2); padding: 0 var(--space-2);
+    background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+    color: var(--text-primary); font-family: var(--font-ui); font-size: var(--text-sm); outline: none;
+    transition: border-color 160ms var(--ease-out);
+  }
+  .filter-input::placeholder { color: var(--text-muted); }
+  .filter-input:focus { border-color: var(--accent); }
+  .filter-empty { font-size: var(--text-xs); color: var(--text-muted); text-align: center; padding: var(--space-4) var(--space-2); }
+  /* Precisa de você (AttentionFeed): alinha a caixa a largura do conteudo da sidebar (margens laterais
+     do componente sao pensadas pro mobile — desktop-only, nao mexe no mobile). */
+  .sess-list :global(.attn) { margin-left: 0; margin-right: 0; margin-bottom: var(--space-2); }
   /* Header do grupo virou uma row (label + "enviar p/ todas", feature #9). */
   .grp-head-row { display: flex; align-items: center; }
   .grp-head-row:not(:first-child) { margin-top: var(--space-2); }
   .grp-head-row .grp-head { flex: 1; min-width: 0; }
   .grp-head {
     display: flex; align-items: center; gap: var(--space-2);
+    width: 100%; text-align: left;
     padding: var(--space-2) var(--space-2) 4px;
     font-size: var(--text-xs); font-weight: 600; color: var(--text-muted);
-    text-transform: uppercase; letter-spacing: 0.04em;
+    text-transform: uppercase; letter-spacing: 0.04em; border-radius: var(--radius-sm);
   }
+  @media (hover: hover) { .grp-head:hover { color: var(--text-secondary); } }
+  .grp-chevron {
+    flex-shrink: 0; font-size: 9px; color: var(--text-muted);
+    transition: transform 160ms var(--ease-out);
+  }
+  .grp-chevron.collapsed { transform: rotate(-90deg); }
   .grp-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
   .grp-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Contagem de sessoes do grupo (paridade com o mobile). */
+  .grp-count {
+    flex-shrink: 0; text-transform: none; letter-spacing: 0; font-weight: 600;
+    color: var(--text-muted); background: var(--bg-base);
+    border-radius: var(--radius-full); padding: 0 6px; min-width: 18px; text-align: center;
+  }
+  /* Badge de aguardando (âmbar) — numero + title "N aguardando". */
+  .grp-await {
+    flex-shrink: 0; text-transform: none; letter-spacing: 0; font-weight: 700;
+    color: var(--warning); background: rgba(255, 159, 10, 0.14);
+    border-radius: var(--radius-full); padding: 0 6px; min-width: 18px; text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
   .grp-off { color: var(--warning); font-weight: 600; text-transform: none; letter-spacing: 0; }
   .grp-broadcast {
     flex-shrink: 0; width: 24px; height: 24px; margin-right: var(--space-1);
@@ -1075,6 +1227,11 @@
   .cwd { display: flex; min-width: 0; font-family: var(--font-mono); font-size: 10px; }
   .cwd-prefix { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
   .cwd-base { flex: 0 0 auto; white-space: nowrap; color: var(--text-secondary); }
+  /* Branch git da linha (paridade com o mobile): mono, accent, truncada. */
+  .branch {
+    min-width: 0; font-family: var(--font-mono); font-size: 10px; color: var(--accent);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
   .state-chip {
     flex-shrink: 0; font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
     padding: 2px 7px; border-radius: var(--radius-full); white-space: nowrap;
@@ -1131,6 +1288,15 @@
   @media (hover: hover) { .sess-row:hover .sess-del { opacity: 1; } }
   @media (hover: none) { .sess-del { opacity: 0.55; } }   /* touch: × sempre visível, sem o trap do :hover */
   .sess-del:hover { color: var(--error); background: var(--bg-base); }
+  /* Git da linha: mesma mecânica hover-revealed do ×, tinge de accent ao passar. */
+  .sess-git {
+    width: 22px; height: 22px; min-height: 0; flex-shrink: 0; border-radius: var(--radius-sm);
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text-muted); opacity: 0;
+  }
+  @media (hover: hover) { .sess-row:hover .sess-git { opacity: 1; } }
+  @media (hover: none) { .sess-git { opacity: 0.55; } }   /* touch: sempre visível */
+  .sess-git:hover { color: var(--accent); background: var(--bg-base); }
 
   /* Composer compacto do broadcast (feature #9): so texto + enviar, sem anexos/slash-UI. */
   .broadcast-bar {
@@ -1187,7 +1353,22 @@
   }
   .srv-del { width: 28px; height: 32px; min-height: 0; color: var(--text-muted); font-size: var(--text-base); }
   .srv-del:hover { color: var(--error); }
-  .srv-add { height: 32px; padding: 0 var(--space-2); text-align: left; justify-content: flex-start; color: var(--accent); font-size: var(--text-sm); }
+  /* Colar servidor manual (primaria no desktop) — input + Adicionar; QR vira secundaria abaixo. */
+  .srv-add-form { display: flex; gap: 4px; padding: var(--space-1) var(--space-1) 2px; }
+  .srv-add-input {
+    flex: 1; min-width: 0; height: 30px; padding: 0 var(--space-2);
+    background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+    color: var(--text-primary); font-family: var(--font-ui); font-size: var(--text-xs); outline: none;
+  }
+  .srv-add-input::placeholder { color: var(--text-muted); }
+  .srv-add-input:focus { border-color: var(--accent); }
+  .srv-add-btn {
+    flex-shrink: 0; height: 30px; padding: 0 var(--space-2); border-radius: var(--radius-sm);
+    color: var(--accent); background: var(--accent-dim); font-size: var(--text-xs); font-weight: 600;
+  }
+  .srv-add-btn:disabled { color: var(--text-muted); background: var(--bg-hover); }
+  .srv-add-err { font-size: var(--text-xs); color: var(--error); padding: 0 var(--space-2) var(--space-1); margin: 0; }
+  .srv-add { height: 32px; padding: 0 var(--space-2); text-align: left; justify-content: flex-start; color: var(--text-secondary); font-size: var(--text-sm); }
   .costs-btn { height: 34px; padding: 0 var(--space-2); text-align: left; justify-content: flex-start; color: var(--text-secondary); font-size: var(--text-sm); border-radius: var(--radius-md); }
   .costs-btn:hover { background: var(--bg-hover); color: var(--accent); }
   .logout-btn { height: 34px; padding: 0 var(--space-2); text-align: left; justify-content: flex-start; color: var(--text-muted); font-size: var(--text-sm); border-radius: var(--radius-md); }
@@ -1253,6 +1434,9 @@
     border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
     word-break: break-all;
   }
+  /* Servidor dono da sessao no confirm de exclusao (desambigua nome repetido entre servidores). */
+  .confirm-srv { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-xs); color: var(--text-muted); }
+  .confirm-srv-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
   .confirm-actions { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
   .c-btn {
     flex: 1; height: 40px; border-radius: var(--radius-md);
