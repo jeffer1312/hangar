@@ -414,6 +414,27 @@ def test_create_raises_when_tmux_fails(tmp_path):
             reg.create("cc", "/home/u/p")
 
 
+# --- create(resume_session_id=...): retomar conversa MORTA do Arquivo (sobe sessao NOVA com --resume) ---
+
+def test_create_with_resume_session_id_builds_resume_command(tmp_path):
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "has_session", return_value=False), \
+         patch.object(registry.tmux, "new_session", return_value=True) as ns:
+        info = reg.create("cc", "/home/u/p", resume_session_id=_UUID)
+    # comando relançado carrega --resume (nao --session-id) com o uuid EXISTENTE
+    assert ns.call_args[0][2] == f"claude --resume {_UUID}"
+    assert info.jsonl.endswith(f"{_UUID}.jsonl")
+    assert SessionRegistry._jsonl_cache["cc"] == info.jsonl
+
+
+def test_create_with_resume_session_id_rejects_bad_uuid(tmp_path):
+    # uuid vai DIRETO pro comando do shell -> invalido (injecao) e recusado antes de tocar tmux.
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "has_session", return_value=False):
+        with pytest.raises(ValueError):
+            reg.create("cc", "/home/u/p", resume_session_id="; rm -rf ~")
+
+
 def test_resolve_tracked_true_with_session_id(tmp_path):
     reg = SessionRegistry(projects_dir=tmp_path)
     with patch.object(registry.tmux, "pane_pid", return_value=111), \

@@ -3,6 +3,7 @@ from fastapi import FastAPI, Depends
 from fastapi.testclient import TestClient
 from app.auth import require_auth
 from app.config import settings
+from app import tmux
 import app.api as api_mod
 
 
@@ -398,3 +399,42 @@ def test_push_settings_route(api_client, monkeypatch, tmp_path):
     r = api_client.get("/api/push/settings", headers=_h())
     assert r.status_code == 200
     assert r.json()["muted"] == ["s1"]
+
+
+# --- POST /api/archive/{project}/{session_id}/resume: "Retomar conversa" do Arquivo ---
+
+_SID = "11111111-1111-1111-1111-111111111111"
+
+
+def test_resume_archived_route_derives_name_from_cwd(api_client):
+    with patch("app.api.archive_cwd", return_value="/home/u/my-proj"), \
+         patch.object(tmux, "has_session", return_value=False), \
+         patch("app.api.registry.create",
+               return_value=SessionInfo(name="my-proj", cwd="/home/u/my-proj")) as create:
+        r = api_client.post(f"/api/archive/-home-u-my-proj/{_SID}/resume", headers=_h())
+    assert r.status_code == 200
+    assert r.json()["name"] == "my-proj"
+    create.assert_called_once_with("my-proj", "/home/u/my-proj", resume_session_id=_SID)
+
+
+def test_resume_archived_route_suffixes_on_name_collision(api_client):
+    # ja existe uma sessao tmux "my-proj" viva -> mesmo esquema de sufixo -2/-3... do CreateSessionSheet.
+    with patch("app.api.archive_cwd", return_value="/home/u/my-proj"), \
+         patch.object(tmux, "has_session", side_effect=[True, False]), \
+         patch("app.api.registry.create",
+               return_value=SessionInfo(name="my-proj-2", cwd="/home/u/my-proj")) as create:
+        r = api_client.post(f"/api/archive/-home-u-my-proj/{_SID}/resume", headers=_h())
+    assert r.status_code == 200
+    create.assert_called_once_with("my-proj-2", "/home/u/my-proj", resume_session_id=_SID)
+
+
+def test_resume_archived_route_422_when_cwd_missing(api_client):
+    with patch("app.api.archive_cwd", return_value=None):
+        r = api_client.post(f"/api/archive/-home-u-my-proj/{_SID}/resume", headers=_h())
+    assert r.status_code == 422
+
+
+def test_resume_archived_route_404_when_transcript_missing(api_client):
+    with patch("app.api.archive_cwd", side_effect=FileNotFoundError()):
+        r = api_client.post(f"/api/archive/-home-u-my-proj/{_SID}/resume", headers=_h())
+    assert r.status_code == 404

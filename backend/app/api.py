@@ -32,7 +32,7 @@ from app.git_ops import (
 )
 from app import tunnel
 from app import runner
-from app.archive import ArchiveEntry, ArchiveFolder, archive_jsonl, list_conversations, list_folders
+from app.archive import ArchiveEntry, ArchiveFolder, archive_cwd, archive_jsonl, list_conversations, list_folders
 from app.search import SearchHit, search
 from app.askquestion import clear_pending_askq, read_pending_askq
 from app.hook_state import hook_state
@@ -936,6 +936,34 @@ def archive_image(project: str, session_id: str, uuid: str, idx: int):
         raise HTTPException(404, "image not found")
     raw, media = got
     return Response(content=raw, media_type=media, headers={"Cache-Control": "max-age=31536000, immutable"})
+
+
+@app.post("/api/archive/{project}/{session_id}/resume", dependencies=[Depends(require_auth)],
+          response_model=SessionInfo)
+def resume_archived(project: str, session_id: str):
+    # "Retomar conversa" do Arquivo: sobe uma sessao tmux NOVA no cwd original com `claude --resume
+    # <uuid>` -- reusa registry.create (nome/config_dir/spawn tmux ja tratados), so troca o comando pro
+    # uuid EXISTENTE (nao um novo transcript). Nome derivado do basename do cwd, igual ao
+    # CreateSessionSheet do front; colisao suffixa -2/-3... (mesmo esquema, do lado do backend pq aqui
+    # nao ha form pro usuario escolher nome).
+    from app import tmux
+    try:
+        cwd = archive_cwd(project, session_id)
+    except ValueError:
+        raise HTTPException(400, "invalid path")
+    except FileNotFoundError:
+        raise HTTPException(404, "transcript not found")
+    if not cwd:
+        raise HTTPException(422, "cwd not found in transcript")
+    base = re.sub(r"[^A-Za-z0-9_-]", "-", Path(cwd).name).strip("-") or "sessao"
+    name, i = base, 2
+    while tmux.has_session(name):
+        name = f"{base}-{i}"
+        i += 1
+    try:
+        return registry.create(name, cwd, resume_session_id=session_id)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
 
 
 # ── Busca de conteudo cross-session: grep (rg) em todos os transcripts (vivos + arquivados) ──
