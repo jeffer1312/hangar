@@ -709,6 +709,7 @@
       onCancel={handleInterrupt}
       askOpen={isWide && askOpen}
       askPayload={askPayload}
+      askActive={askOpen && askPayload != null}
       onAnswer={handleAnswer}
       onAskClose={() => (askOpen = false)}
     />
