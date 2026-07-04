@@ -12,7 +12,7 @@
   import type { Server } from '../lib/auth';
   import type { AggSession, SessionInfo, ResumeCandidate } from '../lib/types';
   import { enablePush, pushSupported } from '../lib/push';
-  import { countAwaiting } from '../lib/format';
+  import { countAwaiting, projectKey, projectLabel } from '../lib/format';
   import { updateBadge } from '../lib/badge';
 
   interface Props {
@@ -101,10 +101,36 @@
   // lista mudar (novo snapshot SSE, servidor removido, etc). Zero aguardando -> limpa o badge.
   $effect(() => { updateBadge(awaitingCount); });
 
-  // Agrupamento por servidor (so multi-servidor): cada grupo = um servidor, com header colapsavel +
-  // contagem de sessoes abertas. Ordem dos grupos segue `servers` (deterministica, igual ao menu);
-  // grupos sem sessao visivel somem. Reaproveita visibleSessions (ja ordenado + filtrado).
+  // Toggle "Servidor | Projeto" (feature #3): alterna a CHAVE de agrupamento, persistido — igual
+  // ao padrao de cp_collapsed_servers/cp_sidebar_w. "Servidor" = comportamento de sempre.
+  const GROUP_BY_KEY = 'cp_group_by';
+  type GroupBy = 'server' | 'project';
+  function loadGroupBy(): GroupBy {
+    return localStorage.getItem(GROUP_BY_KEY) === 'project' ? 'project' : 'server';
+  }
+  let groupBy = $state<GroupBy>(loadGroupBy());
+  function setGroupBy(mode: GroupBy) {
+    groupBy = mode;
+    try { localStorage.setItem(GROUP_BY_KEY, mode); } catch { /* quota/priv mode: ignora */ }
+  }
+
+  // Agrupamento: por SERVIDOR (so multi-servidor, comportamento de sempre) ou por PROJETO (cwd da
+  // sessao — feature #3, uma sessao qualquer servidor). Cada grupo = header colapsavel + contagem +
+  // badge de aguardando. Ordem alfabetica (deterministica, nao pula). Reaproveita visibleSessions
+  // (ja ordenado + filtrado).
   const grouped = $derived.by(() => {
+    if (groupBy === 'project') {
+      const byKey = new Map<string, AggSession[]>();
+      for (const s of visibleSessions) {
+        const key = projectKey(s.cwd);
+        const arr = byKey.get(key);
+        if (arr) arr.push(s);
+        else byKey.set(key, [s]);
+      }
+      return [...byKey.entries()]
+        .map(([key, list]) => ({ id: key, label: projectLabel(list[0]?.cwd), color: null as string | null, sessions: list }))
+        .sort((a, b) => a.label.localeCompare(b.label));
+    }
     const byId = new Map<string, AggSession[]>();
     for (const s of visibleSessions) {
       const arr = byId.get(s.serverId);
@@ -112,10 +138,14 @@
       else byId.set(s.serverId, [s]);
     }
     return servers
-      .map((srv) => ({ id: srv.id, label: srv.label, color: serverColor(srv.id), sessions: byId.get(srv.id) ?? [] }))
+      .map((srv) => ({ id: srv.id, label: srv.label, color: serverColor(srv.id) as string | null, sessions: byId.get(srv.id) ?? [] }))
       .filter((g) => g.sessions.length > 0)
       .sort((a, b) => a.label.localeCompare(b.label)); // grupos fixos em ordem alfabetica (nao pulam)
   });
+
+  // Mostra a UI agrupada quando ha mais de 1 servidor OU quando o modo e "projeto" (o ponto da
+  // feature e ver "todas as sessoes do repo X" mesmo com 1 so servidor).
+  const showGrouped = $derived(multiServer || groupBy === 'project');
 
   // Estado colapsado por servidor, persistido (sobrevive ao reload que add/scan de servidor dispara).
   const COLLAPSE_KEY = 'cp_collapsed_servers';
@@ -434,6 +464,13 @@
   {/if}
 
   <div class="list-content">
+    {#if sessions.length > 0}
+      <!-- Toggle Servidor|Projeto (feature #3): so faz sentido com sessao pra agrupar. -->
+      <div class="group-toggle" role="radiogroup" aria-label="Agrupar por">
+        <button type="button" class:active={groupBy === 'server'} role="radio" aria-checked={groupBy === 'server'} onclick={() => setGroupBy('server')}>Servidor</button>
+        <button type="button" class:active={groupBy === 'project'} role="radio" aria-checked={groupBy === 'project'} onclick={() => setGroupBy('project')}>Projeto</button>
+      </div>
+    {/if}
     {#if serverErrors.length > 0}
       <div class="server-warn" role="status">
         {#each serverErrors as e (e.label)}
@@ -473,9 +510,9 @@
       {#if visibleSessions.length === 0}
         <p class="filter-empty">Nenhuma sessão corresponde ao filtro.</p>
       {:else}
-        {#if multiServer}
+        {#if showGrouped}
           {#each grouped as g (g.id)}
-            {@const awaiting = g.sessions.filter((s) => s.state === 'awaiting_input').length}
+            {@const awaiting = countAwaiting(g.sessions)}
             <div class="group">
               <button
                 class="group-head"
@@ -484,7 +521,7 @@
                 aria-label={`${g.label}: ${g.sessions.length} ${g.sessions.length === 1 ? 'sessão' : 'sessões'}`}
               >
                 <span class="group-chevron" class:collapsed={collapsed.has(g.id)} aria-hidden="true">▾</span>
-                <span class="group-dot" style="background: {g.color};" aria-hidden="true"></span>
+                {#if g.color}<span class="group-dot" style="background: {g.color};" aria-hidden="true"></span>{/if}
                 <span class="group-label">{g.label}</span>
                 <span class="group-count">{g.sessions.length}</span>
                 {#if awaiting > 0}
@@ -730,6 +767,29 @@
   .filter-input:focus {
     border-color: var(--accent);
     box-shadow: 0 0 0 2px var(--accent-dim);
+  }
+
+  /* Toggle Servidor|Projeto (feature #3): segmentado, mesma largura dos 2 lados. */
+  .group-toggle {
+    display: flex;
+    gap: 2px;
+    margin: 0 var(--space-4) var(--space-3);
+    padding: 2px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+  }
+  .group-toggle button {
+    flex: 1;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+  }
+  .group-toggle button.active {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    font-weight: 600;
   }
 
   .filter-empty {
