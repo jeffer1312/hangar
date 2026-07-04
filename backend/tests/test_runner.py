@@ -61,3 +61,15 @@ def test_pyproject_scripts_stack(tmp_path):
 def test_malformed_pyproject_no_raise(tmp_path):
     (tmp_path / "pyproject.toml").write_text("project = 'not-a-table'\n", encoding="utf-8")
     assert detect_runners(str(tmp_path)) == []  # nao levanta, nao emite lixo
+
+
+def test_remember_roundtrip(tmp_path, monkeypatch):
+    from app import runner
+    from app.config import settings
+    monkeypatch.setattr(settings, "projects_dir", str(tmp_path / "projects"))
+    assert runner.remembered("/proj/a") is None
+    runner.remember("/proj/a", "pnpm run dev")
+    assert runner.remembered("/proj/a") == "pnpm run dev"
+    runner.remember("/proj/a", "make serve")  # sobrescreve
+    assert runner.remembered("/proj/a") == "make serve"
+    assert runner.remembered("/proj/b") is None
