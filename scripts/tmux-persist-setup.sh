@@ -84,6 +84,21 @@ run '$PLUGIN_DIR/tpm/tpm'             # keep TPM init at the very end
 EOF
 fi
 
+# 2b. Resume hooks: a conf that already had the plugin lines (e.g. copied from
+# docs/tmux.conf.example) skipped the block above and has NO hooks — without them the
+# name->uuid map is never saved and restore brings back bare shells. Append just the hooks.
+if ! grep -qF "tmux-claude-resume.sh" "$CONF"; then
+  log "Appending claude-resume hooks to $CONF"
+  cat >> "$CONF" <<EOF
+
+# >>> claude-pocket resume hooks >>>
+# Bring the claude conversation back (not a bare shell): save name->uuid, restore via --resume.
+set -g @resurrect-hook-post-save-all    '$RESUME_SH save'
+set -g @resurrect-hook-post-restore-all '$RESUME_SH restore'
+# <<< claude-pocket resume hooks <<<
+EOF
+fi
+
 # 3. systemd user timer + service (auto-save every 15 min)
 log "Installing systemd user timer (socket: $SOCKET)"
 mkdir -p "$SD_DIR"

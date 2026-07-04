@@ -38,7 +38,7 @@ for arg in "$@"; do
     --statusline) DO_STATUS=1 ;;
     --no-statusline) DO_STATUS=0 ;;
     fish|bash|zsh|all) TARGET="$arg" ;;
-    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+    -h|--help) awk 'NR==1{next} /^#/{print;next} {exit}' "$0"; exit 0 ;;
     *) echo "unknown arg: $arg" >&2; exit 2 ;;
   esac
 done
@@ -109,6 +109,10 @@ install_statusline() {
     fs.writeFileSync(p, JSON.stringify(d, null, 2));
   '
   echo "  set Claude statusLine -> $node $STATUSLINE_JS (backup: $settings.bak)"
+  case "$node" in
+    *fnm*|*nvm*|*node-versions*)
+      echo "  note: statusLine is pinned to this exact node version path — re-run this installer after upgrading node" ;;
+  esac
 }
 
 case "$TARGET" in
@@ -126,6 +130,10 @@ set -g default-terminal "xterm-256color"
 set -ga terminal-overrides ",xterm-kitty:Tc,xterm-256color:Tc"
 set -ga terminal-features ",xterm-kitty:RGB,xterm-256color:RGB"
 set-environment -g COLORTERM truecolor
+set-environment -g CLAUDE_CODE_TMUX_TRUECOLOR 1
+# Clipboard de imagem (wl-paste) dentro do Claude Code: sessao criada por um client anexado
+# herda o WAYLAND_DISPLAY dele mesmo quando o server tmux nasceu sem a var (ex: via backend).
+set -ga update-environment "WAYLAND_DISPLAY"
 # Window/title name = basename of the pane's cwd (not 0/1/2 nor the command name).
 set -g allow-rename off
 set -g automatic-rename on

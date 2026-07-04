@@ -90,6 +90,36 @@ def test_scope_prefix_wraps_when_systemd_available(monkeypatch):
     assert tmux._scope_prefix()[:3] == ["systemd-run", "--user", "--scope"]
 
 
+def test_new_session_passes_wayland_display_from_env(monkeypatch):
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-7")
+    captured = {}
+    with patch.object(tmux, "RUN", lambda args, **k: (captured.update(args=args) or _CP())):
+        tmux.new_session("s", "/tmp", "claude --session-id x")
+    assert "WAYLAND_DISPLAY=wayland-7" in captured["args"]
+
+
+def test_new_session_detects_wayland_socket(monkeypatch, tmp_path):
+    # Backend como servico systemd nao tem WAYLAND_DISPLAY -> detecta o socket no runtime dir
+    # (ignorando o .lock). Sem isto, wl-paste no pane falha e o paste de imagem no claude morre.
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    (tmp_path / "wayland-1").touch()
+    (tmp_path / "wayland-1.lock").touch()
+    captured = {}
+    with patch.object(tmux, "RUN", lambda args, **k: (captured.update(args=args) or _CP())):
+        tmux.new_session("s", "/tmp", "claude --session-id x")
+    assert "WAYLAND_DISPLAY=wayland-1" in captured["args"]
+
+
+def test_new_session_skips_wayland_without_socket(monkeypatch, tmp_path):
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    captured = {}
+    with patch.object(tmux, "RUN", lambda args, **k: (captured.update(args=args) or _CP())):
+        tmux.new_session("s", "/tmp", "claude --session-id x")
+    assert not any(str(a).startswith("WAYLAND_DISPLAY=") for a in captured["args"])
+
+
 def test_new_session_execs_command_so_claude_owns_tty(monkeypatch):
     # O comando vai prefixado com `exec`: o tmux roda via `fish -c`, e sem exec o fish ficaria como
     # dono do tty e o send-keys nao chegaria no claude. Com exec, o fish vira o claude.
