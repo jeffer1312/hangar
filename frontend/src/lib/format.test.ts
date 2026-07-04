@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { abbrevNum, countAwaiting, nextAwaiting, projectKey, projectLabel } from './format';
+import { abbrevNum, attentionFeed, countAwaiting, nextAwaiting, projectKey, projectLabel } from './format';
 
 describe('abbrevNum', () => {
   it('abbreviates millions', () => {
@@ -75,6 +75,47 @@ describe('nextAwaiting', () => {
   it('returns itself when it is the only awaiting session', () => {
     const sessions = [{ name: 'a', state: 'awaiting_input' as const }];
     expect(nextAwaiting(sessions, 'a')).toBe('a');
+  });
+});
+
+describe('attentionFeed', () => {
+  it('keeps only awaiting_input sessions', () => {
+    const sessions = [
+      { name: 'a', state: 'working' as const, last_activity: 1 },
+      { name: 'b', state: 'awaiting_input' as const, last_activity: 2 },
+      { name: 'c', state: 'idle' as const, last_activity: 3 },
+      { name: 'd', state: 'awaiting_input' as const, last_activity: 4 },
+    ];
+    expect(attentionFeed(sessions).map((s) => s.name)).toEqual(['b', 'd']);
+  });
+
+  it('sorts oldest-waiting (smallest last_activity) first', () => {
+    const sessions = [
+      { name: 'newer', state: 'awaiting_input' as const, last_activity: 200 },
+      { name: 'older', state: 'awaiting_input' as const, last_activity: 100 },
+      { name: 'mid', state: 'awaiting_input' as const, last_activity: 150 },
+    ];
+    expect(attentionFeed(sessions).map((s) => s.name)).toEqual(['older', 'mid', 'newer']);
+  });
+
+  it('merges across servers (any shape with the fields) and puts missing last_activity last', () => {
+    const sessions = [
+      { name: 'z', state: 'awaiting_input' as const, last_activity: null, serverId: 's2' },
+      { name: 'a', state: 'awaiting_input' as const, last_activity: 50, serverId: 's1' },
+    ];
+    expect(attentionFeed(sessions).map((s) => s.name)).toEqual(['a', 'z']);
+  });
+
+  it('breaks ties by name for a stable order', () => {
+    const sessions = [
+      { name: 'beta', state: 'awaiting_input' as const, last_activity: 10 },
+      { name: 'alpha', state: 'awaiting_input' as const, last_activity: 10 },
+    ];
+    expect(attentionFeed(sessions).map((s) => s.name)).toEqual(['alpha', 'beta']);
+  });
+
+  it('returns an empty list when nothing is awaiting', () => {
+    expect(attentionFeed([{ name: 'a', state: 'idle' as const }])).toEqual([]);
   });
 });
 
