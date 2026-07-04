@@ -171,6 +171,11 @@
           <span class="untracked-badge" title="claude aberto sem --session-id: nao da pra rastrear o transcript com seguranca">⚠ sem id</span>
         {/if}
       </span>
+      {#if session.state === 'awaiting_input' && session.question}
+        <span class="status-sub asking" title={session.question}>{session.question}</span>
+      {:else if session.state === 'working' && session.label}
+        <span class="status-sub working" title={session.label}>{session.label}</span>
+      {/if}
       <span class="meta-line">
         {#if serverBadge}
           <span class="srv" style="color: {serverBadge.color};">{serverBadge.label}</span>
@@ -384,6 +389,17 @@
     min-width: 0;
     font-size: var(--text-xs);
   }
+  /* Subtítulo de estado vivo: a pergunta (awaiting) ou o texto do spinner (working), truncado —
+     deixa a linha acionável sem abrir a sessão (feature #1). */
+  .status-sub {
+    font-size: var(--text-xs);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .status-sub.asking { color: var(--warning); font-weight: 600; }
+  .status-sub.working { color: var(--text-secondary); font-style: italic; }
   .srv {
     font-weight: 600;
     flex-shrink: 0;

@@ -469,6 +469,11 @@
                     <span class="sess-name">{s.name}</span>
                     {#if s.tracked === false}<span class="sess-badge" title="sem --session-id: nao rastreavel">sem id</span>{/if}
                   </span>
+                  {#if s.state === 'awaiting_input' && s.question}
+                    <span class="status-sub asking" title={s.question}>{s.question}</span>
+                  {:else if s.state === 'working' && s.label}
+                    <span class="status-sub working" title={s.label}>{s.label}</span>
+                  {/if}
                   {#if s.cwd}
                     {@const cp = cwdParts(s.cwd)}
                     <span class="cwd" title={s.cwd}><span class="cwd-prefix">{cp.prefix}</span><span class="cwd-base">{cp.base}</span></span>
@@ -711,6 +716,17 @@
   }
   .row-info { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
   .name-row { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+  /* Subtítulo de estado vivo: a pergunta (awaiting) ou o texto do spinner (working), truncado —
+     linha acionável sem abrir a sessão (feature #1). */
+  .status-sub {
+    min-width: 0;
+    font-size: var(--text-xs);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .status-sub.asking { color: var(--warning); font-weight: 600; }
+  .status-sub.working { color: var(--text-secondary); font-style: italic; }
   .cwd { display: flex; min-width: 0; font-family: var(--font-mono); font-size: 10px; }
   .cwd-prefix { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
   .cwd-base { flex: 0 0 auto; white-space: nowrap; color: var(--text-secondary); }
