@@ -21,10 +21,11 @@ from app.model_picker import PickerError
 from app.registry import SessionRegistry
 from app.models import SessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody, RunInfo
 from app.pqueue import PromptQueue, _transcript_start_ts, committed_user_lines
+from app.chain import ThenLink
 from app.terminal_input import TerminalInput, drain
 from app.sse import merged_events
 from app.uploads import save_upload, resolve_upload, UploadError, MAX_BYTES
-from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base, settings
+from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base, settings, automations_enabled
 from app.costs import report as costs_report
 from app.git_ops import (
     list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, GitError,
@@ -250,6 +251,28 @@ def _confirm_and_drain(name: str) -> None:
         pass
 
 
+def _maybe_chain(name: str) -> None:
+    """Encadeamento de sessao (feature #12): `name` acabou de confirmar idle no MESMO ponto do push de
+    'terminou' (state == 'idle' em _on_hook_transition — so vira idle no hook Stop, entao ja e turno
+    REALMENTE terminado, nao redraw). Se ha um vinculo 'then' armado, enfileira o prompt na sessao ALVO
+    e dispara o drain dela (mesmo mecanismo do /input), depois consome o vinculo (one-shot: nao e DAG,
+    so 1 hop -- sem isto o alvo levaria o MESMO prompt de novo no proximo turno da fonte).
+    Kill-switch mestre no topo (app.config.automations_enabled) -- desliga esta e a auto-resume junto."""
+    if not automations_enabled():
+        return
+    link = ThenLink(name)
+    data = link.get()
+    if not data:
+        return
+    target, text = data.get("target"), data.get("text")
+    try:
+        if target and text:
+            PromptQueue(target).append(text, delivered=False)
+            _drain_session(target)
+    finally:
+        link.clear()  # one-shot sempre, mesmo se target/text vier malformado -> nao fica repetindo lixo
+
+
 _working_started: dict[str, float] = {}  # session_id -> ts de quando entrou em "working" (mede duracao do turno pro push de "terminou")
 
 
@@ -260,7 +283,9 @@ def _on_hook_transition(session_id: str, state: str) -> None:
     Tambem agenda a confirmacao de entrega das drenadas.
 
     Alem do drain, e o choke-point dos pushes de 'terminou' (working -> idle apos turno longo, com
-    debounce) e 'caiu' (-> dead, sempre) — ver push.py."""
+    debounce) e 'caiu' (-> dead, sempre) — ver push.py. Tambem o choke-point do encadeamento de sessao
+    (feature #12, _maybe_chain): idle == turno realmente terminado (so o hook Stop escreve idle), entao
+    e o ponto certo pra disparar o vinculo 'then' sem correr risco de pegar um redraw no meio do turno."""
     if state == "working":
         m = hook_state.get_state(session_id)
         if m:
@@ -290,6 +315,10 @@ def _on_hook_transition(session_id: str, state: str) -> None:
                 if sent or state == "idle":
                     threading.Timer(_CONFIRM_GRACE + 0.5, _confirm_and_drain,
                                     args=(info.name,)).start()
+                # Encadeamento (feature #12): mesmo "state == idle" acima (turno REALMENTE terminado),
+                # reusando o info.name ja resolvido nesta thread — ver _maybe_chain.
+                if state == "idle":
+                    _maybe_chain(info.name)
         except Exception:
             pass
     threading.Thread(target=_work, daemon=True).start()
@@ -453,6 +482,31 @@ def rename_session(name: str, body: RenameBody):
     except OSError:
         pass
     return {"ok": True, "name": new}
+
+
+class ThenLinkBody(_StrictBody):
+    target: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+
+
+@app.put("/api/sessions/{name}/then", dependencies=[Depends(require_auth)])
+def set_then_link(name: str, body: ThenLinkBody):
+    """Arma o vinculo 'then' (feature #12): quando `name` confirmar idle (turno terminado), `body.text`
+    e enviado pra `body.target` -- ver app.chain.ThenLink e app.api._maybe_chain. Um hop so (nao DAG):
+    setar de novo so troca alvo/texto, nao encadeia mais niveis."""
+    from app import tmux
+    if body.target == name:
+        raise HTTPException(400, "sessao nao pode encadear pra si mesma")
+    if not tmux.has_session(body.target):
+        raise HTTPException(404, "sessao alvo nao encontrada")
+    ThenLink(name).set(body.target, body.text)
+    return {"ok": True}
+
+
+@app.delete("/api/sessions/{name}/then", dependencies=[Depends(require_auth)])
+def clear_then_link(name: str):
+    ThenLink(name).clear()
+    return {"ok": True}
 
 
 class ResumeBody(_StrictBody):

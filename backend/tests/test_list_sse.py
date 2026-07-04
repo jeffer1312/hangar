@@ -19,9 +19,10 @@ class _Info:
         self.stalled = False
         self.limited = False
         self.limit_reset = None
+        self.then_target = None
 
     def model_dump(self, mode="json"):
-        return {"name": self.name, "state": self.state, "cwd": self.cwd, "jsonl": self.jsonl, "tracked": self.tracked, "last_activity": self.last_activity, "question": self.question, "stalled": self.stalled, "limited": self.limited, "limit_reset": self.limit_reset}
+        return {"name": self.name, "state": self.state, "cwd": self.cwd, "jsonl": self.jsonl, "tracked": self.tracked, "last_activity": self.last_activity, "question": self.question, "stalled": self.stalled, "limited": self.limited, "limit_reset": self.limit_reset, "then_target": self.then_target}
 
 
 async def _take(gen, n):

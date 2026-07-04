@@ -185,3 +185,20 @@ def test_auto_resume_arms_timer_at_drain(monkeypatch):
     # Nao re-arma no proximo tick (mesma sessao ainda limited): 1 Timer so por janela.
     asyncio.run(stall_watch._tick(list_fn))
     assert len(armed) == 1
+
+
+def test_auto_resume_requires_master_switch(monkeypatch):
+    # Feature #12: o kill-switch mestre (automations_enabled) e um portao ADICIONAL -- auto-resume so
+    # arma com ELE *e* o proprio CP_AUTO_RESUME ligados. Aqui o auto_resume esta ON mas o mestre OFF.
+    monkeypatch.setattr(stall_watch.push, "notify_limited", lambda *a, **k: None)
+    monkeypatch.setattr(stall_watch.settings, "auto_resume", True)
+    monkeypatch.setattr(stall_watch.settings, "automations", False)
+    monkeypatch.setattr(stall_watch, "_has_undelivered_queue", lambda name: True)
+    armed = []
+    monkeypatch.setattr(stall_watch.threading, "Timer", lambda *a, **k: armed.append(a) or _FakeTimer())
+
+    async def list_fn():
+        return [_Info("cc", False, limited=True, limit_reset="3pm")]
+
+    asyncio.run(stall_watch._tick(list_fn))
+    assert armed == []  # mestre desligado -> nao arma, mesmo com auto_resume ON + fila + reset bons
