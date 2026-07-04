@@ -11,6 +11,7 @@
   import ActivitySheet from '../components/ActivitySheet.svelte';
   import TerminalMirror from '../components/TerminalMirror.svelte';
   import AskQuestionSheet from '../components/AskQuestionSheet.svelte';
+  import RunSheet from '../components/RunSheet.svelte';
   import {
     getHistory,
     sendInput,
@@ -85,6 +86,8 @@
   let createOpen = $state(false);
   let usageOpen = $state(false);
   let gitOpen = $state(false);
+  let runOpen = $state(false);
+  let runRunning = $state(false);
   let previewOpen = $state(false);
   let activityOpen = $state(false);
   let askPayload = $state<AskQuestionPayload | null>(null);
@@ -141,9 +144,9 @@
   }
 
   const anyOverlayOpen = () =>
-    switcherOpen || createOpen || usageOpen || gitOpen || previewOpen || activityOpen || mirrorOpen || askOpen;
+    switcherOpen || createOpen || usageOpen || gitOpen || runOpen || previewOpen || activityOpen || mirrorOpen || askOpen;
   function closeOverlays() {
-    switcherOpen = createOpen = usageOpen = gitOpen = previewOpen = activityOpen = false;
+    switcherOpen = createOpen = usageOpen = gitOpen = runOpen = previewOpen = activityOpen = false;
     if (mirrorOpen) closeMirror();
     askOpen = false;
   }
@@ -669,7 +672,7 @@
 <div class="chat-screen" bind:this={screenEl} style:--nav-h={navH + 'px'}>
   <div class="sr-only" role="status">{stateAnnounce}</div>
   <div class="navbar-mount" bind:this={navEl}>
-    <NavBar title={sessionName} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} working={currentState === 'working'} />
+    <NavBar title={sessionName} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} onOpenRun={() => (runOpen = true)} {runRunning} working={currentState === 'working'} />
   </div>
 
   {#if loading}
@@ -770,6 +773,8 @@
   <UsageSheet open={usageOpen} {status} onClose={() => (usageOpen = false)} />
 
   <GitSheet open={gitOpen} {sessionName} onClose={() => (gitOpen = false)} />
+
+  <RunSheet open={runOpen} {sessionName} onClose={() => (runOpen = false)} />
 
   <PreviewSheet open={previewOpen} onClose={() => (previewOpen = false)} />
 
