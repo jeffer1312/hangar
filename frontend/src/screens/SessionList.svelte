@@ -8,13 +8,13 @@
   import ConfirmSheet from '../components/ConfirmSheet.svelte';
   import GitSheet from '../components/GitSheet.svelte';
   import AttentionFeed from '../components/AttentionFeed.svelte';
-  import { getSessions, createSession, deleteSession, renameSession, resumeSession, openSessionsStream } from '../lib/api';
+  import { getSessions, createSession, deleteSession, renameSession, resumeSession, openSessionsStream, broadcast } from '../lib/api';
   import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
   import type { AggSession, SessionInfo, ResumeCandidate } from '../lib/types';
   import { enablePush, pushSupported } from '../lib/push';
   import { getPushSettings, setQuietHours } from '../lib/api';
-  import { countAwaiting, projectKey, projectLabel } from '../lib/format';
+  import { countAwaiting, groupSelectedByServer, projectKey, projectLabel } from '../lib/format';
   import { updateBadge } from '../lib/badge';
 
   interface Props {
@@ -148,6 +148,70 @@
   // Mostra a UI agrupada quando ha mais de 1 servidor OU quando o modo e "projeto" (o ponto da
   // feature e ver "todas as sessoes do repo X" mesmo com 1 so servidor).
   const showGrouped = $derived(multiServer || groupBy === 'project');
+
+  // ── Broadcast (feature #9): selecionar N sessoes e mandar 1 prompt pra todas ──────────────────
+  // Selecao = chaves "<serverId>:<name>" (mesma composta usada nas keys #each abaixo). Cross-server:
+  // groupSelectedByServer particiona por servidor-dono -> 1 chamada a broadcast() por servidor
+  // (selectServer/restore, igual ao resto do app — ver withServer do Sidebar).
+  let selectMode = $state(false);
+  let selected = $state<Set<string>>(new Set());
+  let broadcastText = $state('');
+  let broadcastBusy = $state(false);
+  let broadcastMsg = $state('');
+
+  function toggleSelectMode() {
+    selectMode = !selectMode;
+    selected = new Set();
+    broadcastText = '';
+    broadcastMsg = '';
+    showMenu = false;
+  }
+  function toggleSelected(key: string) {
+    const next = new Set(selected);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    selected = next;
+  }
+  // "enviar p/ todas" no header do grupo: entra em modo selecao ja com o grupo inteiro marcado
+  // (so as sessoes rastreaveis — "sem id" nao aceita input). Continua editavel (dá pra desmarcar).
+  function selectGroupForBroadcast(g: { sessions: AggSession[] }) {
+    selectMode = true;
+    selected = new Set(
+      g.sessions.filter((s) => s.tracked !== false).map((s) => `${s.serverId}:${s.name}`),
+    );
+  }
+  // Slash-command manda por sessao (correcao de rota, nao broadcast) — desabilita o envio aqui em vez
+  // de replicar "/comando" pra N sessoes de uma vez (ambiguo/perigoso, ex: /clear em todas sem querer).
+  const broadcastIsSlash = $derived(broadcastText.trim().startsWith('/'));
+  const broadcastDisabled = $derived(broadcastBusy || selected.size === 0 || !broadcastText.trim() || broadcastIsSlash);
+
+  async function sendBroadcast() {
+    const text = broadcastText.trim();
+    if (broadcastDisabled) return;
+    broadcastBusy = true;
+    broadcastMsg = '';
+    const groups = groupSelectedByServer(sessions, selected);
+    const prevActive = getActiveId();
+    const failed: string[] = [];
+    for (const [serverId, names] of groups) {
+      selectServer(serverId);
+      try {
+        const results = await broadcast(names, text);
+        for (const [n, r] of Object.entries(results)) if (!r.ok) failed.push(n);
+      } catch {
+        failed.push(...names); // servidor offline/erro de rede -> conta todo o lote dele como falho
+      }
+    }
+    if (prevActive) selectServer(prevActive);
+    broadcastBusy = false;
+    if (failed.length) {
+      broadcastMsg = `falha: ${failed.join(', ')}`;
+    } else {
+      broadcastText = '';
+      selected = new Set();
+      selectMode = false;
+    }
+  }
 
   // Estado colapsado por servidor, persistido (sobrevive ao reload que add/scan de servidor dispara).
   const COLLAPSE_KEY = 'cp_collapsed_servers';
@@ -483,6 +547,9 @@
             {#if qhMsg}<div class="menu-push-msg">{qhMsg}</div>{/if}
           </div>
         {/if}
+        <button class="menu-item" role="menuitem" onclick={toggleSelectMode}>
+          {selectMode ? 'Cancelar seleção' : 'Selecionar sessões'}
+        </button>
         <button class="menu-item" role="menuitem" onclick={() => { for (const es of streams.values()) es.close(); streams.clear(); connect(servers); showMenu = false; }}>
           Atualizar
         </button>
@@ -499,7 +566,7 @@
     </div>
   {/if}
 
-  <div class="list-content">
+  <div class="list-content" class:select-mode={selectMode}>
     <!-- "Precisa de você" (feature #6): fila fixa no topo com as sessoes AGUARDANDO de TODOS os
          servidores. Responder aqui (picker inline) nao abre o chat; nativo AskUserQuestion abre. -->
     <AttentionFeed {sessions} onOpenChat={openSession} />
@@ -553,20 +620,29 @@
           {#each grouped as g (g.id)}
             {@const awaiting = countAwaiting(g.sessions)}
             <div class="group">
-              <button
-                class="group-head"
-                onclick={() => toggleGroup(g.id)}
-                aria-expanded={!collapsed.has(g.id)}
-                aria-label={`${g.label}: ${g.sessions.length} ${g.sessions.length === 1 ? 'sessão' : 'sessões'}`}
-              >
-                <span class="group-chevron" class:collapsed={collapsed.has(g.id)} aria-hidden="true">▾</span>
-                {#if g.color}<span class="group-dot" style="background: {g.color};" aria-hidden="true"></span>{/if}
-                <span class="group-label">{g.label}</span>
-                <span class="group-count">{g.sessions.length}</span>
-                {#if awaiting > 0}
-                  <span class="group-await">{awaiting} aguardando</span>
-                {/if}
-              </button>
+              <div class="group-head-row">
+                <button
+                  class="group-head"
+                  onclick={() => toggleGroup(g.id)}
+                  aria-expanded={!collapsed.has(g.id)}
+                  aria-label={`${g.label}: ${g.sessions.length} ${g.sessions.length === 1 ? 'sessão' : 'sessões'}`}
+                >
+                  <span class="group-chevron" class:collapsed={collapsed.has(g.id)} aria-hidden="true">▾</span>
+                  {#if g.color}<span class="group-dot" style="background: {g.color};" aria-hidden="true"></span>{/if}
+                  <span class="group-label">{g.label}</span>
+                  <span class="group-count">{g.sessions.length}</span>
+                  {#if awaiting > 0}
+                    <span class="group-await">{awaiting} aguardando</span>
+                  {/if}
+                </button>
+                <!-- "enviar p/ todas" (feature #9): entra em modo seleção com o grupo inteiro marcado. -->
+                <button
+                  class="group-broadcast"
+                  onclick={() => selectGroupForBroadcast(g)}
+                  aria-label={`Enviar mensagem para todas as sessões de ${g.label}`}
+                  title="Enviar p/ todas"
+                >➤</button>
+              </div>
               {#if !collapsed.has(g.id)}
                 {#each g.sessions as session (session.serverId + ':' + session.name)}
                   <SessionCard
@@ -577,6 +653,9 @@
                     onResume={() => handleResume(session)}
                     onRename={(nv) => handleRename(session, nv)}
                     onGit={() => handleGit(session)}
+                    {selectMode}
+                    selected={selected.has(`${session.serverId}:${session.name}`)}
+                    onToggleSelect={() => toggleSelected(`${session.serverId}:${session.name}`)}
                   />
                 {/each}
               {/if}
@@ -592,6 +671,9 @@
               onResume={() => handleResume(session)}
               onRename={(nv) => handleRename(session, nv)}
               onGit={() => handleGit(session)}
+              {selectMode}
+              selected={selected.has(`${session.serverId}:${session.name}`)}
+              onToggleSelect={() => toggleSelected(`${session.serverId}:${session.name}`)}
             />
           {/each}
         {/if}
@@ -599,17 +681,46 @@
     {/if}
   </div>
 
-  <!-- FAB: new session -->
-  <button
-    class="fab"
-    onclick={() => (showCreateSheet = true)}
-    aria-label="Nova sessão"
-  >
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true">
-      <line x1="12" y1="5" x2="12" y2="19"/>
-      <line x1="5" y1="12" x2="19" y2="12"/>
-    </svg>
-  </button>
+  {#if selectMode}
+    <!-- Composer compacto do broadcast (feature #9): so texto + enviar, sem anexos/slash-UI (isso
+         fica no Composer normal, por sessão). Slash-command desabilita o envio (rota por sessão). -->
+    <div class="broadcast-bar">
+      <div class="broadcast-row">
+        <button class="broadcast-cancel" onclick={toggleSelectMode} aria-label="Cancelar seleção">×</button>
+        <span class="broadcast-count">{selected.size} selecionada{selected.size === 1 ? '' : 's'}</span>
+      </div>
+      {#if broadcastMsg}<p class="broadcast-msg">{broadcastMsg}</p>{/if}
+      <div class="broadcast-input-row">
+        <input
+          type="text"
+          class="broadcast-input"
+          bind:value={broadcastText}
+          placeholder="Mensagem para as sessões selecionadas"
+          disabled={broadcastBusy}
+          onkeydown={(e) => { if (e.key === 'Enter' && !broadcastDisabled) sendBroadcast(); }}
+          aria-label="Mensagem de broadcast"
+        />
+        <button class="broadcast-send" onclick={sendBroadcast} disabled={broadcastDisabled} aria-label="Enviar">
+          {broadcastBusy ? '…' : '➤'}
+        </button>
+      </div>
+      {#if broadcastIsSlash}
+        <p class="broadcast-hint">Slash-commands não têm broadcast — envie dentro da sessão.</p>
+      {/if}
+    </div>
+  {:else}
+    <!-- FAB: new session -->
+    <button
+      class="fab"
+      onclick={() => (showCreateSheet = true)}
+      aria-label="Nova sessão"
+    >
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true">
+        <line x1="12" y1="5" x2="12" y2="19"/>
+        <line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+    </button>
+  {/if}
 
   <CreateSessionSheet
     open={showCreateSheet}
@@ -767,6 +878,10 @@
     padding: var(--space-2) 0;
     padding-bottom: calc(env(safe-area-inset-bottom) + 80px);
   }
+  /* Broadcast-bar (feature #9) e mais alta que o FAB -> mais espaco embaixo pra nao cobrir a ultima linha. */
+  .list-content.select-mode {
+    padding-bottom: calc(env(safe-area-inset-bottom) + 160px);
+  }
 
   .server-warn {
     display: flex;
@@ -878,6 +993,67 @@
     font-weight: 600;
     color: var(--warning);
   }
+
+  /* Header do grupo virou uma row (toggle colapsar + "enviar p/ todas", feature #9). */
+  .group-head-row { display: flex; align-items: center; }
+  .group-head-row .group-head { flex: 1; min-width: 0; }
+  .group-broadcast {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    margin-right: var(--space-2);
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+    border-radius: var(--radius-sm);
+  }
+  .group-broadcast:active { color: var(--accent); background: var(--bg-hover); }
+
+  /* Composer compacto do broadcast: texto + enviar, no lugar do FAB enquanto seleciona (feature #9). */
+  .broadcast-bar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
+    background: var(--bg-elevated);
+    border-top: 1px solid var(--border-default);
+    padding: var(--space-3) var(--space-4) calc(env(safe-area-inset-bottom) + var(--space-3));
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .broadcast-row { display: flex; align-items: center; gap: var(--space-3); }
+  .broadcast-cancel {
+    width: 32px; height: 32px; flex-shrink: 0;
+    color: var(--text-secondary); font-size: var(--text-lg); line-height: 1;
+    border-radius: var(--radius-sm);
+  }
+  .broadcast-cancel:active { background: var(--bg-hover); }
+  .broadcast-count { font-size: var(--text-sm); font-weight: 600; color: var(--text-primary); }
+  .broadcast-msg { font-size: var(--text-xs); color: var(--warning); margin: 0; }
+  .broadcast-hint { font-size: var(--text-xs); color: var(--text-muted); margin: 0; }
+  .broadcast-input-row { display: flex; gap: var(--space-2); }
+  .broadcast-input {
+    flex: 1;
+    height: 44px;
+    background: var(--bg-base);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 16px; /* evita zoom no iOS */
+    padding: 0 var(--space-3);
+    outline: none;
+  }
+  .broadcast-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+  .broadcast-send {
+    width: 44px; height: 44px; flex-shrink: 0;
+    background: var(--accent);
+    border-radius: var(--radius-md);
+    color: #fff;
+    font-size: var(--text-base);
+  }
+  .broadcast-send:disabled { background: var(--bg-hover); color: var(--text-muted); }
 
   .empty-state {
     display: flex;

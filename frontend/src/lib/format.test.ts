@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { abbrevNum, attentionFeed, countAwaiting, nextAwaiting, projectKey, projectLabel } from './format';
+import { abbrevNum, attentionFeed, countAwaiting, groupSelectedByServer, nextAwaiting, projectKey, projectLabel } from './format';
 
 describe('abbrevNum', () => {
   it('abbreviates millions', () => {
@@ -137,6 +137,38 @@ describe('projectKey', () => {
     expect(projectKey(null)).toBe(noCwd);
     expect(projectKey('')).toBe(noCwd);
     expect(noCwd).not.toBe(projectKey('/'));
+  });
+});
+
+describe('groupSelectedByServer', () => {
+  const sessions = [
+    { name: 'a', serverId: 's1' },
+    { name: 'b', serverId: 's1' },
+    { name: 'c', serverId: 's2' },
+    { name: 'd', serverId: 's2' },
+  ];
+
+  it('groups selected names by their owning server', () => {
+    const selected = new Set(['s1:a', 's2:c', 's2:d']);
+    const grouped = groupSelectedByServer(sessions, selected);
+    expect(grouped.get('s1')).toEqual(['a']);
+    expect(grouped.get('s2')).toEqual(['c', 'd']);
+    expect(grouped.size).toBe(2);
+  });
+
+  it('omits servers with nothing selected', () => {
+    const grouped = groupSelectedByServer(sessions, new Set(['s1:a']));
+    expect(grouped.has('s2')).toBe(false);
+  });
+
+  it('returns an empty map when nothing is selected', () => {
+    expect(groupSelectedByServer(sessions, new Set()).size).toBe(0);
+  });
+
+  it('ignores selection keys that do not match any session', () => {
+    const grouped = groupSelectedByServer(sessions, new Set(['s1:a', 's3:ghost']));
+    expect(grouped.size).toBe(1);
+    expect(grouped.get('s1')).toEqual(['a']);
   });
 });
 

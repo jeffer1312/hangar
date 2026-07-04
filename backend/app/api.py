@@ -347,6 +347,11 @@ class InputBody(_StrictBody):
     text: str
 
 
+class BroadcastBody(_StrictBody):
+    names: list[str] = Field(min_length=1)
+    text: str
+
+
 class SelectBody(_StrictBody):
     option: int = Field(ge=1, le=50)  # picker 1-based; teto evita loop de fork tmux (DoS)
 
@@ -520,10 +525,13 @@ async def events(name: str):
     return EventSourceResponse(merged_events(name, jsonl))
 
 
-@app.post("/api/sessions/{name}/input", dependencies=[Depends(require_auth)])
-def input_prompt(name: str, body: InputBody):
+def _send_one(name: str, text: str) -> dict:
+    """Sequencia UNICA de envio de prompt: send_prompt + registro na fila duravel + confirmacao/drain.
+    Usada pelo /input (uma sessao) e pelo /broadcast (loop por N sessoes) — o broadcast NAO reimplementa
+    entrega, so repete esta mesma sequencia por nome. Nunca levanta (devolve ok/error) pra o broadcast
+    reportar falha de uma sessao sem abortar as demais."""
     try:
-        result = terminal.send_prompt(name, body.text)
+        result = terminal.send_prompt(name, text)
         # DIAG: correlaciona o send com o jsonl pra onde ESTE nome resolve AGORA -> pega o cross-wire
         # (msg indo pro transcript/terminal errado). Best-effort, nunca quebra o envio.
         try:
@@ -531,14 +539,14 @@ def input_prompt(name: str, body: InputBody):
             _cwd = next((p["cwd"] for p in _tmux.list_panes_active() if p["name"] == name), "")
             _j, _t = registry.resolve_tracked(name, _cwd)
             _log.info("SEND name=%s -> jsonl=%s tracked=%s result=%s text=%r",
-                      name, (_j or "").rsplit("/", 1)[-1], _t, result, body.text[:80])
+                      name, (_j or "").rsplit("/", 1)[-1], _t, result, text[:80])
         except Exception:
             pass
     except ValueError as e:
         # send_prompt rejeita control chars (ex: '\n'). Sem isto virava 500 -> a msg sumia sem
         # feedback. Agora vira 400 limpo (o frontend mostra). (Multi-linha de verdade: backlog.)
-        raise HTTPException(400, str(e))
-    stripped = body.text.lstrip()
+        return {"ok": False, "error": str(e)}
+    stripped = text.lstrip()
     if stripped.startswith("/"):
         # Slash-commands NAO entram na fila — sao meta, nao viram bubble. Excecao /clear: ele reinicia
         # a sessao do Claude Code (novo session-id/transcript), mas a fila e keyed pelo NOME da sessao
@@ -558,7 +566,7 @@ def input_prompt(name: str, body: InputBody):
         # entrada fica pendente pro drain entregar quando o overlay fechar. Falha ao gravar a fila nao
         # quebra o envio.
         try:
-            PromptQueue(name).append(body.text, delivered=(result == "sent"))
+            PromptQueue(name).append(text, delivered=(result == "sent"))
         except OSError:
             pass
         if result == "sent":
@@ -569,7 +577,27 @@ def input_prompt(name: str, body: InputBody):
             # o "deferred" do send_prompt e o append acima, o gatilho daquele ciclo nao viu esta
             # entrada (e sem SSE aberto nao havia gatilho nenhum). O drain re-checa deliverable.
             threading.Thread(target=_drain_session, args=(name,), daemon=True).start()
+    return {"ok": True, "error": None}
+
+
+@app.post("/api/sessions/{name}/input", dependencies=[Depends(require_auth)])
+def input_prompt(name: str, body: InputBody):
+    res = _send_one(name, body.text)
+    if not res["ok"]:
+        raise HTTPException(400, res["error"])
     return {"ok": True}
+
+
+@app.post("/api/broadcast", dependencies=[Depends(require_auth)])
+def broadcast(body: BroadcastBody):
+    """Fan-out de UM prompt pra N sessoes (feature #9): mesma sequencia do /input, em loop — sessao
+    ocupada enfileira na fila duravel dela (crash-safe), sessao ociosa recebe na hora, sem mecanismo
+    de entrega novo. Slash-commands ficam FORA (rota por sessao so): "/clear" pra N sessoes de uma vez
+    e ambiguo/perigoso (o front ja desabilita o envio; isto e defesa em profundidade)."""
+    if body.text.lstrip().startswith("/"):
+        raise HTTPException(400, "broadcast nao suporta slash-commands: envie por sessao")
+    results = {name: _send_one(name, body.text) for name in body.names}
+    return {"results": results}
 
 
 @app.post("/api/sessions/{name}/select", dependencies=[Depends(require_auth)])
