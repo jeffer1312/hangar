@@ -71,6 +71,27 @@ _LOGIN_RE = re.compile(
 def is_login(pane_text: str) -> bool:
     """Sessao parada na tela de welcome/login do Claude Code (sem .jsonl ainda)."""
     return bool(_LOGIN_RE.search(pane_text))
+
+
+# Banner de rate-limit (feature #8). ponytail: texto EXATO do Claude Code nao documentado
+# publicamente -- CALIBRATION KNOB, igual ao _LOGIN_RE acima: melhor-esforco, ajustar aqui quando
+# confirmado contra o banner real. Cobre variantes plausiveis ("usage limit reached" / "5-hour limit
+# reached" / "rate limit") seguidas da frase de reset ("resets at 3pm" / "resets 15:30" / "try again
+# at ..."), capturando so o horario.
+_LIMIT_RE = re.compile(
+    r"(?:usage limit reached|rate limit reached|limit reached)"
+    r".{0,80}?"
+    r"(?:resets?|reset|try again)\s*(?:at\s*)?"
+    r"([0-9]{1,2}(?::[0-9]{2})?\s*(?:am|pm)?)",
+    re.I | re.S,
+)
+
+
+def rate_limit_reset(pane_text: str) -> Optional[str]:
+    """Horario de reset do limite de uso (string crua, ex: "3pm"/"15:30"), se o pane mostra o
+    banner de rate-limit. None numa sessao normal. ponytail: calibration knob -- ver _LIMIT_RE."""
+    m = _LIMIT_RE.search(pane_text)
+    return m.group(1).strip() if m else None
 # Glifos que marcam a BORDA do box do picker: bullet de assistente, junta de tool-result e
 # spinners. Scrollback (incl. listas numeradas perdidas) vive alem dessas linhas.
 _BOUNDARY_GLYPHS = "●⎿" + SPINNER_GLYPHS
@@ -238,11 +259,17 @@ class StateMonitor:
             # nativo) usa botoes; sem opcoes mas overlay=True abre o espelho pra navegar via teclas.
             overlay = is_overlay(pane)
             login = is_login(pane)
-            key = (state, label, question, tuple(options or ()), status, overlay, login)
+            # Rate-limit radar (feature #8): banner de limite de uso no pane, best-effort (ver
+            # rate_limit_reset/_LIMIT_RE). limited deriva do proprio reset (achou horario -> limited).
+            limit_reset = rate_limit_reset(pane)
+            limited = limit_reset is not None
+            key = (state, label, question, tuple(options or ()), status, overlay, login,
+                   limited, limit_reset)
             if key != last_key:
                 last_key = key
                 held_state, held_label = state, label
                 yield StateEvent(session=self.name, state=state, label=label,
                                  question=question, options=options, status_line=status,
-                                 overlay=overlay, login=login)
+                                 overlay=overlay, login=login,
+                                 limited=limited, limit_reset=limit_reset)
             await asyncio.sleep(self.poll)

@@ -57,6 +57,10 @@
   // de estado com um anel âmbar sutil — nao grita, so avisa.
   const stalled = $derived(session.stalled === true);
 
+  // Rate-limit radar (feature #8): banner de limite de uso detectado no pane (best-effort). Chip
+  // proprio "⏳ HH:MM" ao lado do state-chip — calmo, so avisa quando volta.
+  const limited = $derived(session.limited === true);
+
   // ── Swipe-to-delete ────────────────────────────────────────────────────────
   // Arrasta a linha pra esquerda revelando "Excluir". touch-action:pan-y deixa o scroll vertical
   // pro navegador e o horizontal pra gente. Distingue tap / swipe-x / scroll-y por eixo dominante.
@@ -223,6 +227,12 @@
     </div>
 
     <div class="row-right">
+      {#if limited}
+        <span
+          class="limited-chip"
+          title={session.limit_reset ? `Limite de uso atingido — volta ${session.limit_reset}` : 'Limite de uso atingido'}
+        >⏳{#if session.limit_reset}&nbsp;{session.limit_reset}{/if}</span>
+      {/if}
       <span
         class="state-chip"
         class:stalled
@@ -499,6 +509,19 @@
   /* Travada (feature #7): anel âmbar sutil no chip — avisa sem gritar. */
   .state-chip.stalled {
     box-shadow: inset 0 0 0 1px var(--warning);
+  }
+
+  /* Rate-limit radar (feature #8): chip proprio, mesma familia visual do stalled (âmbar, calmo). */
+  .limited-chip {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    padding: 3px 9px;
+    border-radius: var(--radius-full);
+    white-space: nowrap;
+    color: var(--warning);
+    background: rgba(255, 159, 10, 0.12);
+    font-variant-numeric: tabular-nums;
   }
 
   /* Escondido do layout (mouse/touch usam swipe) mas SEMPRE na arvore de a11y (SR anuncia "Excluir

@@ -23,6 +23,11 @@ class SessionInfo(BaseModel):
     # loop infinito de ferramenta / subprocesso esperando stdin nunca vira awaiting/finished/dead sozinho.
     # Derivado em list_with_state(); so tinta a linha, o watchdog (stall_watch.py) e quem pinga 1x.
     stalled: bool = False
+    # Feature #8 (rate-limit radar): banner de limite de uso detectado no pane (best-effort, ver
+    # app.state.rate_limit_reset). limit_reset = horario cru ("3pm"/"15:30") pro chip "limitado · HH:MM".
+    # Derivado em list_with_state(); o push (1x, dedupe) e o auto-resume opt-in moram no stall_watch.py.
+    limited: bool = False
+    limit_reset: Optional[str] = None
 
 
 class ChatEvent(BaseModel):
@@ -55,6 +60,10 @@ class StateEvent(BaseModel):
     # URL OAuth -> colar code). Pre-login NAO ha .jsonl, entao o chat fica vazio; o front usa esta
     # flag pra avisar ("precisa de login") e abrir o espelho do pane em vez de um chat morto.
     login: bool = False
+    # Feature #8 (rate-limit radar): banner de limite de uso no pane (best-effort, ver
+    # app.state.rate_limit_reset). limit_reset = horario cru do reset ("3pm"/"15:30"), ou None.
+    limited: bool = False
+    limit_reset: Optional[str] = None
 
 
 class PreviewEvent(BaseModel):

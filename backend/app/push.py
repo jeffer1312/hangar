@@ -240,3 +240,11 @@ def notify_stalled(session_name: str) -> None:
     ferramenta, subprocesso esperando stdin) que nunca vira awaiting/finished/dead sozinho. Disparado
     UMA vez pelo watchdog (app.stall_watch); o dedupe/re-arme mora la, aqui e so o envio."""
     _broadcast(session_name, "Pode estar travada")
+
+
+def notify_limited(session_name: str, reset: str | None = None) -> None:
+    """Push: sessao bateu no rate-limit de uso (feature #8) — banner de limite detectado no pane
+    (best-effort, ver app.state.rate_limit_reset). Disparado UMA vez pelo watchdog (app.stall_watch,
+    que reusa o MESMO ciclo do stall pra isto); dedupe/re-arme mora la, aqui e so o envio."""
+    body = f"Limite de uso atingido · volta {reset}" if reset else "Limite de uso atingido"
+    _broadcast(session_name, body)

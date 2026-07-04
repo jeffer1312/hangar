@@ -11,6 +11,10 @@
     onTitleTap?: () => void;
     status?: StatusFields | null;
     onExpandUsage?: () => void;
+    // Feature #8 (rate-limit radar): repassado pro RateChips -- pode existir mesmo sem status
+    // (o banner de limite e independente da statusline custom do usuario).
+    limited?: boolean;
+    limitReset?: string | null;
     onOpenActivity?: () => void;
     activityBadge?: number;
     // Tem trabalho VIVO (workflow/agent rodando) -> o botao de atividade "respira" pra sinalizar
@@ -35,7 +39,7 @@
     stateLabel?: string;
     stateColor?: string;
   }
-  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, onOpenRun, runRunning = false, working = false, subtitle = null, subtitleHot = null, crumbs = null, stateLabel, stateColor }: Props = $props();
+  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, limited = false, limitReset = null, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, onOpenRun, runRunning = false, working = false, subtitle = null, subtitleHot = null, crumbs = null, stateLabel, stateColor }: Props = $props();
 </script>
 
 <nav class="navbar">
@@ -113,8 +117,8 @@
           {#if activityBadge > 0}<span class="activity-badge">{activityBadge}</span>{/if}
         </button>
       {/if}
-      {#if status && onExpandUsage}
-        <RateChips {status} onExpand={onExpandUsage} />
+      {#if (status && onExpandUsage) || limited}
+        <RateChips {status} onExpand={onExpandUsage} {limited} {limitReset} />
       {:else if onMenu}
         <button class="nav-btn menu-btn" onclick={onMenu} aria-label="Menu">
           <svg width="20" height="5" viewBox="0 0 20 5" fill="currentColor" aria-hidden="true">

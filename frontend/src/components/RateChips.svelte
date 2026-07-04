@@ -3,9 +3,16 @@
 
   interface Props {
     status: StatusFields | null;
-    onExpand: () => void;
+    // Optional: com `limited` sem status (banner sem statusline custom), o NavBar pode nao ter
+    // uma tela de detalhe pra abrir -- o clique so-existe se o caller passar um handler.
+    onExpand?: () => void;
+    // Feature #8 (rate-limit radar): banner de limite de uso detectado no pane (independente da
+    // statusline custom do usuario -- pode existir mesmo sem status). limitReset = horario cru do
+    // reset ("3pm"/"15:30"), ou null/undefined se nao deu pra ler.
+    limited?: boolean;
+    limitReset?: string | null;
   }
-  let { status, onExpand }: Props = $props();
+  let { status, onExpand, limited = false, limitReset = null }: Props = $props();
 
   // Saturacao da janela: verde calmo -> ambar -> vermelho.
   function pctClass(pct: number | undefined): string {
@@ -16,20 +23,27 @@
   }
 
   const has = $derived(
-    typeof status?.fiveHourPct === 'number' || typeof status?.weeklyPct === 'number'
+    typeof status?.fiveHourPct === 'number' || typeof status?.weeklyPct === 'number' || limited
   );
 </script>
 
-{#if status && has}
+{#if has}
   <div class="rate-chips">
-    {#if typeof status.fiveHourPct === 'number'}
+    {#if status && typeof status.fiveHourPct === 'number'}
       <button class="rchip {pctClass(status.fiveHourPct)}" onclick={onExpand} aria-label="Janela de 5 horas">
         <span aria-hidden="true">⚡</span>{status.fiveHourPct}%
       </button>
     {/if}
-    {#if typeof status.weeklyPct === 'number'}
+    {#if status && typeof status.weeklyPct === 'number'}
       <button class="rchip {pctClass(status.weeklyPct)}" onclick={onExpand} aria-label="Janela de 7 dias">
         <span aria-hidden="true">📅</span>{status.weeklyPct}%
+      </button>
+    {/if}
+    {#if limited}
+      <!-- Banner de limite detectado no pane (feature #8), independente da statusline custom.
+           Calmo (mesma cor "warm" do resto), nao alarmante. -->
+      <button class="rchip warm" onclick={onExpand} aria-label="Limite de uso atingido">
+        <span aria-hidden="true">⏳</span>{limitReset ? `volta ${limitReset}` : 'limitado'}
       </button>
     {/if}
   </div>
