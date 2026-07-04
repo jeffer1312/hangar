@@ -134,9 +134,20 @@ class Settings(BaseSettings):
     # CP_EDITOR: binario do editor pro "abrir pasta no editor" (menu da sessao). So-desktop: abre na
     # maquina que roda o backend. Binario unico (sem args/shell) -> exec seguro com o cwd da sessao.
     editor: str = "code"
+    # Kill-switch MESTRE (feature #12) pra qualquer acao autonoma sem o usuario olhar: encadeamento de
+    # sessao (chain.py) e auto-resume (feature #8, stall_watch.py). Default ON (as duas features ja tem
+    # seu proprio opt-in/config — isto e um portao ADICIONAL, nao substitui CP_AUTO_RESUME). CP_AUTOMATIONS=0
+    # desliga tudo de uma vez (ex: antes de um teste manual, ou se uma automacao ficar barulhenta).
+    automations: bool = True
 
 
 settings = Settings()
+
+
+def automations_enabled() -> bool:
+    """Kill-switch mestre: True = automacoes desatendidas (encadeamento de sessao, auto-resume) podem
+    disparar. Cada feature ainda mantem seu proprio flag por cima (ex: auto_resume exige ESTE + CP_AUTO_RESUME)."""
+    return settings.automations
 
 
 def resolve_scan_roots(s: "Settings") -> list[Path]:

@@ -21,6 +21,10 @@ export interface SessionInfo {
   // = horario cru do reset ("3pm"/"15:30"), pro chip "limitado · HH:MM".
   limited?: boolean;
   limit_reset?: string | null;
+  // Feature #12 (encadeamento de sessao): nome da sessao ALVO se ha um vinculo 'then' armado
+  // ("quando terminar -> enviar pra"), null senao. So o alvo (indicador na lista); o texto do prompt
+  // fica no backend, so exposto na hora de setar/limpar.
+  then_target?: string | null;
 }
 
 // Sessão marcada com o servidor de origem (visão agregada multi-servidor).

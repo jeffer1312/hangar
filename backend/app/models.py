@@ -28,6 +28,10 @@ class SessionInfo(BaseModel):
     # Derivado em list_with_state(); o push (1x, dedupe) e o auto-resume opt-in moram no stall_watch.py.
     limited: bool = False
     limit_reset: Optional[str] = None
+    # Feature #12 (encadeamento de sessao): nome da sessao ALVO se esta sessao tem um vinculo 'then'
+    # armado ("quando terminar -> enviar pra"), None senao. So o alvo (pro indicador na lista); o texto
+    # do prompt fica no sidecar (app.chain.ThenLink), lido so na hora de disparar.
+    then_target: Optional[str] = None
 
 
 class ChatEvent(BaseModel):

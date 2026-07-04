@@ -178,6 +178,21 @@ export function resumeSession(name: string, sessionId?: string): Promise<ResumeR
   });
 }
 
+// Encadeamento de sessao (feature #12): arma o vinculo 'then' — quando `name` terminar o turno,
+// `text` e enviado pra `target` (mesmo backend/servidor; ver app.chain no backend). Um hop so.
+export function setThenLink(name: string, target: string, text: string): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/then`, {
+    method: 'PUT',
+    body: JSON.stringify({ target, text }),
+  });
+}
+
+export function clearThenLink(name: string): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/then`, {
+    method: 'DELETE',
+  });
+}
+
 // Abre o cwd da sessao no editor da MAQUINA do backend (so-desktop). Binario fixo (CP_EDITOR).
 export function openEditor(name: string): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/open-editor`, {
