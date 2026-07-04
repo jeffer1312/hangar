@@ -48,3 +48,16 @@ def test_cargo_stack(tmp_path):
     by = _by_label(detect_runners(str(tmp_path)))
     assert by["cargo run"].command == "cargo run"
     assert by["cargo run"].source == "stack"
+
+
+def test_pyproject_scripts_stack(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='x'\n[project.scripts]\napp='pkg:main'\n", encoding="utf-8")
+    by = _by_label(detect_runners(str(tmp_path)))
+    assert by["app"].command == "uv run app"
+    assert by["app"].source == "stack"
+
+
+def test_malformed_pyproject_no_raise(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("project = 'not-a-table'\n", encoding="utf-8")
+    assert detect_runners(str(tmp_path)) == []  # nao levanta, nao emite lixo

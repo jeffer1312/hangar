@@ -61,10 +61,12 @@ def _scan_stack(cwd: Path) -> list[Runner]:
             d = tomllib.loads(pyproj.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             d = {}
-        scripts = (d.get("project") or {}).get("scripts") or {}
-        for name in scripts:
-            if isinstance(name, str) and name:
-                out.append(Runner(label=name, command=f"uv run {name}", source="stack"))
+        project = d.get("project") if isinstance(d, dict) else None
+        scripts = project.get("scripts") if isinstance(project, dict) else None
+        if isinstance(scripts, dict):
+            for name in scripts:
+                if isinstance(name, str) and name:
+                    out.append(Runner(label=name, command=f"uv run {name}", source="stack"))
     return out
 
 
