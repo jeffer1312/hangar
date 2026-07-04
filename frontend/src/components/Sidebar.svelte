@@ -1,13 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { openSessionsStream, createSession, deleteSession, renameSession, openEditor, gitAction, getBranches, checkoutBranch, getPushSettings, setSessionMute } from '../lib/api';
+  import { openSessionsStream, createSession, deleteSession, renameSession, openEditor, gitAction, getBranches, checkoutBranch, getPushSettings, setSessionMute, broadcast } from '../lib/api';
   import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor, clearCredentials } from '../lib/auth';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import QrScanner from './QrScanner.svelte';
   import GitSheet from './GitSheet.svelte';
   import AttentionFeed from './AttentionFeed.svelte';
   import type { SessionInfo, State, AggSession } from '../lib/types';
-  import { stateLabels, stateColors, countAwaiting, projectKey, projectLabel } from '../lib/format';
+  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, projectKey, projectLabel } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import type { Server } from '../lib/auth';
   import Lottie from './Lottie.svelte';
@@ -473,6 +473,68 @@
       serverColor: serverColor(s.serverId),
     })),
   );
+
+  // ── Broadcast (feature #9): selecionar N sessoes e mandar 1 prompt pra todas ──────────────────
+  // Mesmo padrao do mobile (SessionList): selecao = "<serverId>:<name>", groupSelectedByServer
+  // particiona por servidor-dono -> 1 chamada a broadcast() por servidor (withServer restaura o ativo).
+  let selectMode = $state(false);
+  let selected = $state<Set<string>>(new Set());
+  let broadcastText = $state('');
+  let broadcastBusy = $state(false);
+  let broadcastMsg = $state('');
+
+  function toggleSelectMode() {
+    selectMode = !selectMode;
+    selected = new Set();
+    broadcastText = '';
+    broadcastMsg = '';
+  }
+  function toggleSelected(key: string) {
+    const next = new Set(selected);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    selected = next;
+  }
+  // "enviar p/ todas" no header do grupo: entra em selecao com o grupo inteiro marcado (exceto "sem id").
+  function selectGroupForBroadcast(g: Group) {
+    selectMode = true;
+    selected = new Set(
+      g.sessions.filter((s) => s.tracked !== false).map((s) => `${s.serverId}:${s.name}`),
+    );
+  }
+  // Slash-command manda por sessao (correcao de rota) -> desabilita o broadcast em vez de replicar
+  // "/comando" pra N sessoes de uma vez (ex: /clear em todas sem querer).
+  const broadcastIsSlash = $derived(broadcastText.trim().startsWith('/'));
+  const broadcastDisabled = $derived(broadcastBusy || selected.size === 0 || !broadcastText.trim() || broadcastIsSlash);
+
+  async function sendBroadcast() {
+    const text = broadcastText.trim();
+    if (broadcastDisabled) return;
+    broadcastBusy = true;
+    broadcastMsg = '';
+    const allSessions = groups.flatMap((g) => g.sessions);
+    const byServer = groupSelectedByServer(allSessions, selected);
+    const prev = getActiveId();
+    const failed: string[] = [];
+    for (const [serverId, names] of byServer) {
+      selectServer(serverId);
+      try {
+        const results = await broadcast(names, text);
+        for (const [n, r] of Object.entries(results)) if (!r.ok) failed.push(n);
+      } catch {
+        failed.push(...names); // servidor offline/erro de rede -> conta todo o lote dele como falho
+      }
+    }
+    if (prev) selectServer(prev);
+    broadcastBusy = false;
+    if (failed.length) {
+      broadcastMsg = `falha: ${failed.join(', ')}`;
+    } else {
+      broadcastText = '';
+      selected = new Set();
+      selectMode = false;
+    }
+  }
 </script>
 
 <aside class="sidebar" class:collapsed={!expanded} class:resizing
@@ -488,10 +550,22 @@
     {#if expanded}<span class="side-brand">claude pocket</span>{/if}
   </div>
 
-  <button class="new-btn" onclick={() => (showCreate = true)} aria-label="Nova sessão">
-    <span class="new-plus" aria-hidden="true">+</span>
-    {#if expanded}<span>Nova sessão</span>{/if}
-  </button>
+  <div class="new-row">
+    <button class="new-btn" onclick={() => (showCreate = true)} aria-label="Nova sessão">
+      <span class="new-plus" aria-hidden="true">+</span>
+      {#if expanded}<span>Nova sessão</span>{/if}
+    </button>
+    {#if expanded}
+      <!-- Broadcast (feature #9): entra/sai do modo seleção multipla. -->
+      <button
+        class="select-toggle-btn"
+        class:active={selectMode}
+        onclick={toggleSelectMode}
+        aria-label={selectMode ? 'Cancelar seleção' : 'Selecionar sessões'}
+        title={selectMode ? 'Cancelar seleção' : 'Selecionar sessões'}
+      >☑</button>
+    {/if}
+  </div>
 
   <nav class="sess-list" aria-label="Sessões">
     {#if expanded}
@@ -506,14 +580,24 @@
     {/if}
     {#each groups as g (g.id)}
       {#if expanded}
-        <div class="grp-head" title={g.error ? `${g.label}: ${g.error}` : g.label}>
-          {#if g.color}<span class="grp-dot" style="background: {g.color};" aria-hidden="true"></span>{/if}
-          <span class="grp-label">{g.label}</span>
-          {#if g.error}<span class="grp-off">offline</span>{/if}
+        <div class="grp-head-row">
+          <div class="grp-head" title={g.error ? `${g.label}: ${g.error}` : g.label}>
+            {#if g.color}<span class="grp-dot" style="background: {g.color};" aria-hidden="true"></span>{/if}
+            <span class="grp-label">{g.label}</span>
+            {#if g.error}<span class="grp-off">offline</span>{/if}
+          </div>
+          <!-- "enviar p/ todas" (feature #9): entra em modo seleção com o grupo inteiro marcado. -->
+          <button
+            class="grp-broadcast"
+            onclick={() => selectGroupForBroadcast(g)}
+            aria-label={`Enviar mensagem para todas as sessões de ${g.label}`}
+            title="Enviar p/ todas"
+          >➤</button>
         </div>
       {/if}
       {#each g.sessions as s (s.serverId + '::' + s.name)}
         {@const rowKey = `${s.serverId}::${s.name}`}
+        {@const selKey = `${s.serverId}:${s.name}`}
         <div class="sess-row" class:active={s.serverId === activeId && s.name === currentSession}>
           {#if editing === rowKey}
             <input
@@ -528,16 +612,22 @@
             <button
               class="sess-main"
               class:untracked={s.tracked === false}
+              aria-pressed={selectMode ? selected.has(selKey) : undefined}
               title={!expanded ? s.name : (s.tracked === false ? 'claude aberto sem --session-id: transcript nao rastreavel' : 'Toque longo pra renomear')}
-              onpointerdown={() => pressStart(rowKey)}
+              onpointerdown={() => { if (!selectMode) pressStart(rowKey); }}
               onpointerup={pressEnd}
               onpointerleave={pressEnd}
               onpointercancel={pressEnd}
-              oncontextmenu={(e) => openMenu(e, s, s.serverId)}
-              onclick={() => onMainClick(s.name, s.serverId, s.tracked)}
+              oncontextmenu={(e) => { if (!selectMode) openMenu(e, s, s.serverId); }}
+              onclick={() => {
+                if (selectMode) { if (s.tracked !== false) toggleSelected(selKey); return; }
+                onMainClick(s.name, s.serverId, s.tracked);
+              }}
             >
               <span class="lead" aria-hidden="true">
-                {#if !expanded && s.state !== 'working'}
+                {#if selectMode}
+                  <input type="checkbox" class="select-check" checked={selected.has(selKey)} tabindex="-1" aria-hidden="true" />
+                {:else if !expanded && s.state !== 'working'}
                   <!-- Rail recolhido: iniciais tingidas pelo estado (identifica sem o nome). -->
                   <span class="initials" style="color: {stateColors[s.state]}; border-color: {stateColors[s.state]}; background: {stateChipBg[s.state]};">{initials(s.name)}</span>
                 {:else if s.state === 'working'}
@@ -565,7 +655,7 @@
                 <span class="state-chip" style="color: {stateColors[s.state]}; background: {stateChipBg[s.state]};">{stateLabels[s.state]}</span>
               {/if}
             </button>
-            {#if expanded}
+            {#if expanded && !selectMode}
               <button class="sess-del" onclick={(e) => handleDelete(s.name, s.serverId, e)} aria-label={`Excluir ${s.name}`}>×</button>
             {/if}
           {/if}
@@ -573,6 +663,35 @@
       {/each}
     {/each}
   </nav>
+
+  {#if expanded && selectMode}
+    <!-- Composer compacto do broadcast (feature #9): so texto + enviar, sem anexos/slash-UI (isso
+         fica no Composer normal, por sessão). Slash-command desabilita o envio (rota por sessão). -->
+    <div class="broadcast-bar">
+      <div class="broadcast-row">
+        <span class="broadcast-count">{selected.size} selecionada{selected.size === 1 ? '' : 's'}</span>
+        <button class="broadcast-cancel" onclick={toggleSelectMode} aria-label="Cancelar seleção">×</button>
+      </div>
+      {#if broadcastMsg}<p class="broadcast-msg">{broadcastMsg}</p>{/if}
+      <div class="broadcast-input-row">
+        <input
+          type="text"
+          class="broadcast-input"
+          bind:value={broadcastText}
+          placeholder="Mensagem para as sessões selecionadas"
+          disabled={broadcastBusy}
+          onkeydown={(e) => { if (e.key === 'Enter' && !broadcastDisabled) sendBroadcast(); }}
+          aria-label="Mensagem de broadcast"
+        />
+        <button class="broadcast-send" onclick={sendBroadcast} disabled={broadcastDisabled} aria-label="Enviar">
+          {broadcastBusy ? '…' : '➤'}
+        </button>
+      </div>
+      {#if broadcastIsSlash}
+        <p class="broadcast-hint">Slash-commands não têm broadcast — envie dentro da sessão.</p>
+      {/if}
+    </div>
+  {/if}
 
   {#if expanded}
     <div class="side-foot">
@@ -770,6 +889,8 @@
   .icon-btn:active, .icon-btn:hover { background: var(--bg-hover); }
   .side-brand { font-size: var(--text-base); font-weight: 600; color: var(--text-primary); white-space: nowrap; }
 
+  .new-row { display: flex; gap: var(--space-2); }
+  .new-row .new-btn { flex: 1; min-width: 0; }
   .new-btn {
     display: flex; align-items: center; gap: var(--space-2); height: 40px; padding: 0 var(--space-3);
     border-radius: var(--radius-md); background: var(--accent-dim); color: var(--text-primary);
@@ -778,6 +899,13 @@
   .sidebar.collapsed .new-btn { justify-content: center; padding: 0; }
   .new-btn:hover { background: var(--accent); color: #fff; }
   .new-plus { font-size: var(--text-lg); line-height: 1; flex-shrink: 0; }
+  /* Toggle do modo selecao (feature #9), ao lado de "Nova sessão". */
+  .select-toggle-btn {
+    flex-shrink: 0; width: 40px; height: 40px;
+    border-radius: var(--radius-md); color: var(--text-secondary);
+  }
+  .select-toggle-btn:hover { background: var(--bg-hover); }
+  .select-toggle-btn.active { color: var(--accent); background: var(--accent-dim); }
 
   .sess-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin-top: var(--space-2); }
   /* Toggle Servidor|Projeto (feature #3): segmentado, mesma largura dos 2 lados. */
@@ -787,16 +915,26 @@
   }
   .group-toggle button { flex: 1; height: 28px; border-radius: var(--radius-sm); font-size: var(--text-xs); color: var(--text-secondary); }
   .group-toggle button.active { background: var(--bg-elevated); color: var(--text-primary); font-weight: 600; }
+  /* Header do grupo virou uma row (label + "enviar p/ todas", feature #9). */
+  .grp-head-row { display: flex; align-items: center; }
+  .grp-head-row:not(:first-child) { margin-top: var(--space-2); }
+  .grp-head-row .grp-head { flex: 1; min-width: 0; }
   .grp-head {
     display: flex; align-items: center; gap: var(--space-2);
     padding: var(--space-2) var(--space-2) 4px;
     font-size: var(--text-xs); font-weight: 600; color: var(--text-muted);
     text-transform: uppercase; letter-spacing: 0.04em;
   }
-  .grp-head:not(:first-child) { margin-top: var(--space-2); }
   .grp-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
   .grp-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .grp-off { color: var(--warning); font-weight: 600; text-transform: none; letter-spacing: 0; }
+  .grp-broadcast {
+    flex-shrink: 0; width: 24px; height: 24px; margin-right: var(--space-1);
+    color: var(--text-muted); font-size: var(--text-xs); border-radius: var(--radius-sm);
+  }
+  .grp-broadcast:hover { color: var(--accent); background: var(--bg-hover); }
+  /* Checkbox do modo seleção: so decorativo (o toque na row inteira alterna). */
+  .select-check { width: 16px; height: 16px; accent-color: var(--accent); pointer-events: none; }
   .sess-row { display: flex; align-items: center; border-radius: var(--radius-md); }
   /* hover SÓ em dispositivo com mouse. No touch (tablet), o :hover fazia o 1º toque virar "hover" e
      o 2º o clique -> precisava de 2 toques pra abrir a sessão. hover:hover isola isso. */
@@ -857,6 +995,31 @@
   @media (hover: hover) { .sess-row:hover .sess-del { opacity: 1; } }
   @media (hover: none) { .sess-del { opacity: 0.55; } }   /* touch: × sempre visível, sem o trap do :hover */
   .sess-del:hover { color: var(--error); background: var(--bg-base); }
+
+  /* Composer compacto do broadcast (feature #9): so texto + enviar, sem anexos/slash-UI. */
+  .broadcast-bar {
+    display: flex; flex-direction: column; gap: var(--space-2);
+    padding-top: var(--space-2); margin-top: var(--space-2);
+    border-top: 1px solid var(--border-subtle);
+  }
+  .broadcast-row { display: flex; align-items: center; justify-content: space-between; }
+  .broadcast-count { font-size: var(--text-xs); font-weight: 600; color: var(--text-primary); }
+  .broadcast-cancel { width: 24px; height: 24px; color: var(--text-secondary); font-size: var(--text-base); line-height: 1; border-radius: var(--radius-sm); }
+  .broadcast-cancel:hover { background: var(--bg-hover); }
+  .broadcast-msg { font-size: var(--text-xs); color: var(--warning); margin: 0; }
+  .broadcast-hint { font-size: var(--text-xs); color: var(--text-muted); margin: 0; }
+  .broadcast-input-row { display: flex; gap: var(--space-2); }
+  .broadcast-input {
+    flex: 1; min-width: 0; height: 34px;
+    background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+    color: var(--text-primary); font-size: var(--text-sm); padding: 0 var(--space-2); outline: none;
+  }
+  .broadcast-input:focus { border-color: var(--accent); }
+  .broadcast-send {
+    width: 34px; height: 34px; flex-shrink: 0;
+    background: var(--accent); border-radius: var(--radius-sm); color: #fff; font-size: var(--text-sm);
+  }
+  .broadcast-send:disabled { background: var(--bg-hover); color: var(--text-muted); }
 
   .side-foot { display: flex; flex-direction: column; gap: var(--space-1); border-top: 1px solid var(--border-subtle); padding-top: var(--space-2); }
   .server-btn {

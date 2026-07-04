@@ -159,6 +159,24 @@ export function parseImageMessage(text: string): { caption: string; filenames: s
   return { caption, filenames };
 }
 
+// Selecao do broadcast (feature #9): agrupa os nomes SELECIONADOS por servidor-dono, na ordem em
+// que aparecem em `sessions` — cada grupo vira 1 chamada a broadcast() nesse servidor (selectServer/
+// restore, igual ao resto do app). Chave de selecao = "<serverId>:<name>" (mesma composta usada nas
+// keys #each da lista). Pura/testavel; servidor sem nenhum selecionado nao entra no Map.
+export function groupSelectedByServer(
+  sessions: { name: string; serverId: string }[],
+  selected: Set<string>,
+): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const s of sessions) {
+    if (!selected.has(`${s.serverId}:${s.name}`)) continue;
+    const arr = out.get(s.serverId);
+    if (arr) arr.push(s.name);
+    else out.set(s.serverId, [s.name]);
+  }
+  return out;
+}
+
 // Abrevia contagem grande: 3668662 -> "3.7M", 1.5e9 -> "1.5B", 999 -> "999".
 export function abbrevNum(n: number): string {
   for (const [div, suf] of [[1e9, 'B'], [1e6, 'M'], [1e3, 'K']] as const) {

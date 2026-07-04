@@ -12,8 +12,16 @@
     onResume?: () => void;
     onRename?: (newName: string) => void;
     onGit?: () => void;
+    // Modo seleção do broadcast (feature #9): row vira checkbox (toque alterna); swipe/rename ficam
+    // fora enquanto seleciona, pra não competir com o toque de marcar.
+    selectMode?: boolean;
+    selected?: boolean;
+    onToggleSelect?: () => void;
   }
-  let { session, serverBadge = null, onClick, onDelete, onResume, onRename, onGit }: Props = $props();
+  let {
+    session, serverBadge = null, onClick, onDelete, onResume, onRename, onGit,
+    selectMode = false, selected = false, onToggleSelect,
+  }: Props = $props();
 
 
   // Frame parado da "pensando": f0 = anel cheio e simetrico (os frames do meio do loop ficam ralos e
@@ -79,7 +87,7 @@
   function editAutofocus(node: HTMLInputElement) { node.focus(); node.select(); }
 
   function onDown(e: PointerEvent) {
-    if (editing) return;                         // em edicao: nao inicia swipe/press
+    if (editing || selectMode) return;            // selecionando: sem swipe/rename, so toggle no tap
     startX = e.clientX; startY = e.clientY; startOffset = offset;
     dragging = true; axis = null; suppressClick = false;
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
@@ -106,6 +114,7 @@
 
   // Tap na linha: toque longo (renomeou) nao navega; se aberto ou acabou de arrastar, fecha o swipe.
   function onRowClick() {
+    if (selectMode) { if (!untracked) onToggleSelect?.(); return; }  // sem id -> nao entra no broadcast
     if (longPressed) { longPressed = false; return; }   // foi toque longo (renomear) -> nao abre o chat
     if (suppressClick || offset !== 0) { offset = 0; return; }
     if (!untracked) onClick();
@@ -133,15 +142,24 @@
     role="button"
     tabindex="0"
     aria-disabled={untracked}
+    aria-pressed={selectMode ? selected : undefined}
     onclick={onRowClick}
-    onkeydown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && !untracked) { e.preventDefault(); onClick(); } }}
+    onkeydown={(e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      if (untracked) return;
+      e.preventDefault();
+      if (selectMode) onToggleSelect?.(); else onClick();
+    }}
     onpointerdown={onDown}
     onpointermove={onMove}
     onpointerup={onUp}
     onpointercancel={onUp}
   >
     <span class="lead" aria-hidden="true">
-      {#if session.state === 'working'}
+      {#if selectMode}
+        <!-- Checkbox visual (a semantica de check fica no role="checkbox" da row -> so decorativo). -->
+        <input type="checkbox" class="select-check" checked={selected} tabindex="-1" aria-hidden="true" />
+      {:else if session.state === 'working'}
         <!-- Working -> "pensando" animando, cores originais. -->
         <Lottie data={pensando as any} size={20} loop autoplay />
       {:else}
@@ -342,6 +360,13 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+  }
+  /* Checkbox do modo seleção (feature #9): so decorativo (o toque na row inteira alterna). */
+  .select-check {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent);
+    pointer-events: none;
   }
 
   .row-info {
