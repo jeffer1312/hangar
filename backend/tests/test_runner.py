@@ -114,4 +114,4 @@ def test_stop_run_kills_session(monkeypatch):
                         lambda args, **k: seen.update(args=args) or MagicMock(returncode=0, stdout=""))
     runner.stop_run("/home/u/myproj")
     assert seen["args"][:4] == ["tmux", "-L", "cppkt-run", "kill-session"]
-    assert "myproj" in seen["args"]
+    assert runner._slug("/home/u/myproj") in seen["args"]

@@ -22,6 +22,7 @@
     createSession,
     getWorkflows,
     answerQuestions,
+    getRunners,
   } from '../lib/api';
   import { parseStatusLine } from '../lib/statusline';
   import { listServers, getActiveId } from '../lib/auth';
@@ -88,6 +89,7 @@
   let gitOpen = $state(false);
   let runOpen = $state(false);
   let runRunning = $state(false);
+  onMount(() => { getRunners(sessionName).then((r) => (runRunning = !!r.running)).catch(() => {}); });
   let previewOpen = $state(false);
   let activityOpen = $state(false);
   let askPayload = $state<AskQuestionPayload | null>(null);
@@ -774,7 +776,7 @@
 
   <GitSheet open={gitOpen} {sessionName} onClose={() => (gitOpen = false)} />
 
-  <RunSheet open={runOpen} {sessionName} onClose={() => (runOpen = false)} />
+  <RunSheet open={runOpen} {sessionName} onClose={() => (runOpen = false)} onRunningChange={(r) => (runRunning = r)} />
 
   <PreviewSheet open={previewOpen} onClose={() => (previewOpen = false)} />
 
