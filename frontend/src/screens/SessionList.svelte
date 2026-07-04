@@ -6,6 +6,7 @@
   import QrScanner from '../components/QrScanner.svelte';
   import BottomSheet from '../components/BottomSheet.svelte';
   import ConfirmSheet from '../components/ConfirmSheet.svelte';
+  import GitSheet from '../components/GitSheet.svelte';
   import { getSessions, createSession, deleteSession, renameSession, resumeSession, openSessionsStream } from '../lib/api';
   import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
@@ -226,6 +227,21 @@
     } catch {
       /* falha -> o proximo poll do stream corrige o nome exibido */
     }
+  }
+
+  // Gerenciador git (GitSheet) aberto pelo botao git do card, no repo da sessao, SEM abrir o chat.
+  // A GitSheet mira o server ATIVO (api.ts) -> aponto pro dono da sessao enquanto aberta e restauro
+  // no fechar (mesmo padrao do Sidebar do desktop: menuGit/closeGitSheet).
+  let gitSheet = $state<{ name: string } | null>(null);
+  let gitSheetPrevServer: string | null = null;
+  function handleGit(s: AggSession) {
+    gitSheetPrevServer = getActiveId();
+    selectServer(s.serverId);
+    gitSheet = { name: s.name };
+  }
+  function closeGitSheet() {
+    gitSheet = null;
+    if (gitSheetPrevServer) { selectServer(gitSheetPrevServer); gitSheetPrevServer = null; }
   }
 
   // Retomar uma sessão "sem id": relança o pane com `claude --resume <uuid>` -> passa a rastrear. Caso
@@ -478,6 +494,7 @@
                     onDelete={() => handleDelete(session)}
                     onResume={() => handleResume(session)}
                     onRename={(nv) => handleRename(session, nv)}
+                    onGit={() => handleGit(session)}
                   />
                 {/each}
               {/if}
@@ -492,6 +509,7 @@
               onDelete={() => handleDelete(session)}
               onResume={() => handleResume(session)}
               onRename={(nv) => handleRename(session, nv)}
+              onGit={() => handleGit(session)}
             />
           {/each}
         {/if}
@@ -643,6 +661,11 @@
     onConfirm={doDropServer}
     onClose={() => (confirmSrv = null)}
   />
+
+  <!-- Gerenciador git aberto pelo botao git do card (repo da sessao, sem abrir o chat). -->
+  {#if gitSheet}
+    <GitSheet open={true} sessionName={gitSheet.name} onClose={closeGitSheet} />
+  {/if}
 </div>
 
 <style>

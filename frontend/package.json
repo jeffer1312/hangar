@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "lottie-web": "^5.13.0",
-    "qr-scanner": "^1.4.2"
+    "qr-scanner": "^1.4.2",
+    "shiki": "^4.3.1"
   }
 }
