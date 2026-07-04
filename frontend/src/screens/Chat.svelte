@@ -28,7 +28,7 @@
   import { listServers, getActiveId } from '../lib/auth';
   import { createActivityFolder } from '../lib/activity';
   import type { ChatEvent, StateEvent, State, SessionInfo, AskQuestionPayload, AnswerItem } from '../lib/types';
-  import { stateLabels, stateColors } from '../lib/format';
+  import { stateLabels, stateColors, countAwaiting, nextAwaiting } from '../lib/format';
 
   interface Props {
     sessionName: string;
@@ -131,17 +131,35 @@
   // ── Atalhos de teclado (so desktop) ────────────────────────────────────────
   let composerRef = $state<{ focus: () => void } | undefined>();
 
-  // Lista pra navegar sessao com Ctrl/Cmd+setas. Carregada no mount (desktop); openSwitcher tb atualiza.
+  // Lista pra navegar sessao com Ctrl/Cmd+setas (desktop) e pra pilula "N aguardando" (mobile,
+  // feature #4). Carregada no mount nos dois; no mobile reconsulta a cada 5s pra o contador da
+  // pilula refletir sessoes que entram/saem de awaiting_input enquanto o usuario fica parado aqui
+  // (esta tela nao tem SSE agregado de sessoes — reusa o mesmo REST de sempre, so com poll).
   async function loadSessionsForNav() {
-    try { allSessions = await getSessions(); } catch { /* sem lista -> setas viram no-op */ }
+    try { allSessions = await getSessions(); } catch { /* sem lista -> setas/pilula viram no-op */ }
   }
-  onMount(() => { if (desktop) loadSessionsForNav(); });
+  onMount(() => {
+    loadSessionsForNav();
+    if (desktop) return;
+    const id = setInterval(loadSessionsForNav, 5000);
+    return () => clearInterval(id);
+  });
 
   function switchRelative(delta: number) {
     const names = allSessions.map((s) => s.name);
     if (names.length < 2) { loadSessionsForNav(); return; }
     const i = names.indexOf(sessionName);
     const next = names[((i < 0 ? 0 : i + delta) + names.length) % names.length];
+    if (next && next !== sessionName) onNavigateToChat(next);
+  }
+
+  // Pilula de triage "N aguardando" (mobile only, feature #4): conta e pula direto pra proxima
+  // sessao awaiting_input (wrap-around), reusando o MESMO onNavigateToChat do switchRelative acima
+  // — so a escolha do alvo muda (filtrada+ordenada por nextAwaiting em vez de delta sequencial).
+  // $derived de allSessions -> nunca cacheia a contagem; some sozinha quando ninguem mais aguarda.
+  const awaitingCount = $derived(countAwaiting(allSessions));
+  function goNextAwaiting() {
+    const next = nextAwaiting(allSessions, sessionName);
     if (next && next !== sessionName) onNavigateToChat(next);
   }
 
@@ -729,6 +747,15 @@
     </button>
   {/if}
 
+  {#if !desktop && awaitingCount > 0}
+    <!-- Triage mobile (feature #4): pula pra proxima sessao aguardando resposta (wrap-around).
+         Canto inferior direito (alcance do polegar) pra nao brigar com o tui-pill (centralizado)
+         nem cobrir o composer/navbar. Some sozinha quando o contador zera (derived, sem cache). -->
+    <button class="awaiting-pill" style:bottom={`${dockH + 10}px`} onclick={goNextAwaiting} aria-label={`${awaitingCount} sessão${awaitingCount > 1 ? 'ões' : ''} aguardando — ir para a próxima`}>
+      {awaitingCount} aguardando →
+    </button>
+  {/if}
+
   <div class="bottom-dock" bind:this={dockEl}>
     {#if currentState === 'dead'}
       <div class="dead-footer">
@@ -956,6 +983,26 @@
   @media (prefers-reduced-motion: reduce) {
     .tui-pill { animation: none; }
   }
+
+  /* Pilula de triage "N aguardando" (mobile, feature #4): FAB no canto inferior direito, acima do
+     dock, alcance de polegar. Sem pulso (nao e alerta de bloqueio como o tui-pill, e uma acao
+     disponivel) — cor de destaque so pra chamar atencao sem ansiedade visual. */
+  .awaiting-pill {
+    position: absolute;
+    right: var(--space-4);
+    z-index: 21;
+    padding: var(--space-2) var(--space-4);
+    border: none;
+    border-radius: var(--radius-full, 999px);
+    background: var(--accent);
+    color: #fff;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    white-space: nowrap;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .awaiting-pill:active { opacity: 0.85; }
 
   /* Dead state footer */
   .dead-footer {

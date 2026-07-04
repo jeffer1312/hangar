@@ -31,6 +31,18 @@ export function countAwaiting(sessions: { state: State }[]): number {
   return sessions.filter((s) => s.state === 'awaiting_input').length;
 }
 
+// Proxima sessao "aguardando resposta" a partir da atual, com wrap-around — usado pela pilula de
+// triage do mobile (feature #4). Ordena por NOME (mesmo criterio alfabetico do resto da lista de
+// sessoes) pra posicao estavel entre chamadas, mesmo com last_activity mudando a todo instante.
+// Sem awaiting nenhum -> null. Atual ja aguardando -> pula pra PROXIMA (nao fica nela mesma), exceto
+// se for a unica aguardando (nao ha outra opcao). Mesmo padrao de indice do switchRelative (Chat.svelte).
+export function nextAwaiting(sessions: { name: string; state: State }[], currentName: string): string | null {
+  const names = sessions.filter((s) => s.state === 'awaiting_input').map((s) => s.name).sort();
+  if (names.length === 0) return null;
+  const i = names.indexOf(currentName);
+  return names[(i < 0 ? 0 : i + 1) % names.length];
+}
+
 // Último segmento não vazio de um caminho absoluto (basename do projeto).
 export function basename(path: string): string {
   const parts = path.split('/').filter(Boolean);
