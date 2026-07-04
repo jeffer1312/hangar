@@ -73,3 +73,45 @@ def test_remember_roundtrip(tmp_path, monkeypatch):
     runner.remember("/proj/a", "make serve")  # sobrescreve
     assert runner.remembered("/proj/a") == "make serve"
     assert runner.remembered("/proj/b") is None
+
+
+from unittest.mock import MagicMock
+
+
+def test_start_run_builds_isolated_socket_command(tmp_path, monkeypatch):
+    from app import runner
+    from app.config import settings
+    monkeypatch.setattr(settings, "projects_dir", str(tmp_path / "projects"))
+    calls = []
+
+    def fake_run(args, **k):
+        calls.append(args)
+        if "list-sessions" in args:  # status devolve a sessao viva
+            return MagicMock(returncode=0, stdout="myproj\t1700000000\n")
+        return MagicMock(returncode=0, stdout="")
+
+    monkeypatch.setattr(runner, "RUN", fake_run)
+    info = runner.start_run(str(tmp_path / "myproj"), "pnpm run dev")
+
+    spawn = next(a for a in calls if "new-session" in a)
+    assert "-L" in spawn and "cppkt-run" in spawn          # socket dedicado
+    assert "pnpm run dev" in spawn[-1]                       # comando no exec
+    assert info.command == "pnpm run dev"
+    assert runner.remembered(str(tmp_path / "myproj")) == "pnpm run dev"  # gravou
+
+
+def test_run_status_none_when_no_session(monkeypatch):
+    from app import runner
+    monkeypatch.setattr(runner, "RUN",
+                        lambda args, **k: MagicMock(returncode=1, stdout=""))
+    assert runner.run_status("/proj/x") is None
+
+
+def test_stop_run_kills_session(monkeypatch):
+    from app import runner
+    seen = {}
+    monkeypatch.setattr(runner, "RUN",
+                        lambda args, **k: seen.update(args=args) or MagicMock(returncode=0, stdout=""))
+    runner.stop_run("/home/u/myproj")
+    assert seen["args"][:4] == ["tmux", "-L", "cppkt-run", "kill-session"]
+    assert "myproj" in seen["args"]
