@@ -289,6 +289,28 @@ export function archiveImageUrl(project: string, sid: string, id: string, idx: n
   return `${getBaseUrl()}/api/archive/${encodeURIComponent(project)}/${encodeURIComponent(sid)}/transcript-image/${encodeURIComponent(id)}/${idx}?token=${encodeURIComponent(t)}`;
 }
 
+// ── Busca de conteudo cross-session (feature #10): grep (rg) em todos os transcripts do servidor ──
+export interface SearchHit {
+  project: string;
+  session_id: string;
+  session_name: string | null;  // nome tmux se a sessao esta viva -> abre o chat; null = arquivo
+  cwd: string | null;
+  line: string;                 // trecho legivel (texto da msg) ja capado no backend
+  mtime: number;
+  live: boolean;
+}
+
+// Busca em UM servidor (baseUrl+token explicitos), sem mexer no ativo — a UI faz fan-out por servidor
+// (mesmo padrao de fetchSessionsForServer) e junta os resultados. Timeout 4s: server morto falha rapido.
+export async function searchTranscriptsForServer(s: Server, q: string): Promise<SearchHit[]> {
+  const res = await fetch(`${s.baseUrl}/api/search?q=${encodeURIComponent(q)}`, {
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
+    signal: AbortSignal.timeout(4000),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json() as Promise<SearchHit[]>;
+}
+
 export async function sendInput(name: string, text: string): Promise<void> {
   await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/input`, {
     method: 'POST',

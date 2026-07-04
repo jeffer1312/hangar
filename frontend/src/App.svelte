@@ -16,7 +16,7 @@
     | { name: 'login' }
     | { name: 'sessions' }
     | { name: 'costs' }
-    | { name: 'archive' }
+    | { name: 'archive'; deepLink?: { serverId: string; project: string; sessionId: string } }
     | { name: 'chat'; sessionName: string }
     | { name: 'compare'; ids: CompareId[] };
 
@@ -40,6 +40,19 @@
     const compareMatch = path.match(/^\/compare\/(.+)$/);
     if (compareMatch) return { name: 'compare', ids: parseCompareIds(compareMatch[1]) };
     if (path === '/costs') return { name: 'costs' };
+    // Deep-link da busca (feature #10): #/archive/<serverId>/<project>/<sid> abre a conversa arquivada
+    // direto no servidor dono. #/archive puro segue no browser normal de pastas.
+    const archiveDeep = path.match(/^\/archive\/([^/]+)\/([^/]+)\/([^/]+)$/);
+    if (archiveDeep) {
+      return {
+        name: 'archive',
+        deepLink: {
+          serverId: decodeURIComponent(archiveDeep[1]),
+          project: decodeURIComponent(archiveDeep[2]),
+          sessionId: decodeURIComponent(archiveDeep[3]),
+        },
+      };
+    }
     if (path === '/archive') return { name: 'archive' };
     return { name: 'sessions' };
   }
@@ -221,7 +234,10 @@
   {:else if route.name === 'costs'}
     <Costs onBack={() => navigateTo('#/')} />
   {:else if route.name === 'archive'}
-    <Archive onBack={() => navigateTo('#/')} />
+    <!-- Remonta ao trocar de deep-link (busca -> outra conversa): reabre com o novo alvo. -->
+    {#key route.deepLink ? `${route.deepLink.serverId}/${route.deepLink.project}/${route.deepLink.sessionId}` : ''}
+      <Archive onBack={() => navigateTo('#/')} deepLink={route.deepLink ?? null} />
+    {/key}
   {:else if route.name === 'compare'}
     <!-- Remonta ao trocar o conjunto comparado: fecha os streams antigos e abre os novos. -->
     {#key encodeCompareIds(route.ids)}
