@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { isAuthenticated, setServers, listServers, mergeServers, onServersChanged, clearCredentials } from './lib/auth';
+  import { isAuthenticated, setServers, listServers, mergeServers, onServersChanged, clearCredentials, selectServer } from './lib/auth';
   import { getVault, decryptList, encryptList, putVault, logout as syncLogout, syncStatus, stashKey, loadKey, clearKey } from './lib/sync';
   import Login from './screens/Login.svelte';
   import SessionList from './screens/SessionList.svelte';
@@ -35,6 +35,17 @@
     if (path === '/archive') return { name: 'archive' };
     return { name: 'sessions' };
   }
+
+  // Deep-link do push (feature #5): a notif abre '/?server=<id>&session=<name>' — o router so olha
+  // window.location.hash, entao sem isto os query params eram ignorados e sempre caia na lista.
+  // Roda ANTES do currentHash ler o hash (uma vez, no load do modulo).
+  (function applyPushDeepLink() {
+    const params = new URLSearchParams(window.location.search);
+    const server = params.get('server');
+    const session = params.get('session');
+    if (server) selectServer(server); // no-op se o id nao existir na lista local
+    if (session) window.location.hash = '#/chat/' + encodeURIComponent(session);
+  })();
 
   let currentHash = $state(window.location.hash || '#/');
   let authenticated = $state(isAuthenticated());

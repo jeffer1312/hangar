@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { openSessionsStream, createSession, deleteSession, renameSession, openEditor, gitAction, getBranches, checkoutBranch } from '../lib/api';
+  import { openSessionsStream, createSession, deleteSession, renameSession, openEditor, gitAction, getBranches, checkoutBranch, getPushSettings, setSessionMute } from '../lib/api';
   import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor, clearCredentials } from '../lib/auth';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import QrScanner from './QrScanner.svelte';
@@ -241,8 +241,25 @@
     e.preventDefault();
     clearTimeout(pressTimer);   // cancela o long-press (senao dispararia rename junto)
     menu = { x: e.clientX, y: e.clientY, name: s.name, serverId, cwd: s.cwd ?? '' };
+    // Silenciar (feature #5): estado carregado sob demanda (nao trava a abertura do menu). null =
+    // ainda carregando/desconhecido -> o botao mostra "Silenciar" ate a resposta chegar.
+    menuMuted = null;
+    withServer(serverId, () => getPushSettings())
+      .then((p) => { if (menu?.name === s.name) menuMuted = p.muted.includes(s.name); })
+      .catch(() => { menuMuted = false; });
   }
   function closeMenu() { menu = null; branchView = null; }
+  let menuMuted = $state<boolean | null>(null);
+  async function menuToggleMute() {
+    if (!menu) return;
+    const { name, serverId } = menu;
+    const next = !menuMuted;
+    closeMenu();
+    try {
+      await withServer(serverId, () => setSessionMute(name, next));
+      flash(next ? 'notificações silenciadas' : 'notificações religadas');
+    } catch (e) { flash(`silenciar: ${errMsg(e)}`); }
+  }
 
   // Submenu "Trocar branch" (2a pagina do menu, evita flyout). branchView != null = mostrando a lista.
   let branchView = $state<{ list: string[]; current: string | null; dirty: boolean } | null>(null);
@@ -617,6 +634,9 @@
       {/if}
     {:else}
       <button type="button" role="menuitem" onclick={menuRename}>Renomear</button>
+      <button type="button" role="menuitem" onclick={menuToggleMute}>
+        {menuMuted ? 'Reativar notificações' : 'Silenciar notificações'}
+      </button>
       {#if menu.cwd}
         <button type="button" role="menuitem" onclick={menuCopyCwd}>Copiar cwd</button>
         <button type="button" role="menuitem" onclick={menuOpenEditor}>Abrir no editor</button>

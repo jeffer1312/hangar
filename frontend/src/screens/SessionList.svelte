@@ -12,6 +12,7 @@
   import type { Server } from '../lib/auth';
   import type { AggSession, SessionInfo, ResumeCandidate } from '../lib/types';
   import { enablePush, pushSupported } from '../lib/push';
+  import { getPushSettings, setQuietHours } from '../lib/api';
   import { countAwaiting, projectKey, projectLabel } from '../lib/format';
   import { updateBadge } from '../lib/badge';
 
@@ -324,6 +325,30 @@
   function openMenu() {
     servers = listServers();
     showMenu = !showMenu;
+    if (showMenu) void loadQuietHours();
+  }
+
+  // Quiet hours (feature #5): janela GLOBAL de silencio pro push de "aguardando", do servidor ATIVO.
+  // <input type="time"> nativo -> sem picker custom. Carrega ao abrir o menu; best-effort (servidor
+  // offline/sem suporte -> campos ficam vazios, nao trava o menu).
+  let qhStart = $state('');
+  let qhEnd = $state('');
+  let qhMsg = $state('');
+  async function loadQuietHours() {
+    try {
+      const p = await getPushSettings();
+      qhStart = p.quiet_hours?.start ?? '';
+      qhEnd = p.quiet_hours?.end ?? '';
+    } catch { /* offline/sem rota: campos ficam vazios, usuario tenta salvar de novo depois */ }
+    qhMsg = '';
+  }
+  async function saveQuietHours() {
+    try {
+      await setQuietHours(qhStart || null, qhEnd || null);
+      qhMsg = qhStart && qhEnd ? `silenciado ${qhStart}–${qhEnd}` : 'desligado';
+    } catch (e) {
+      qhMsg = e instanceof Error ? e.message : 'erro ao salvar';
+    }
   }
 
   // Remover servidor pede confirmacao — o × de um toque removia na hora e, se fosse o unico
@@ -446,6 +471,16 @@
           {#if pushMsg}
             <div class="menu-push-msg">{pushMsg}</div>
           {/if}
+          <div class="menu-quiet-hours">
+            <span class="menu-section-label">Silenciar notificações entre</span>
+            <div class="qh-row">
+              <input type="time" bind:value={qhStart} aria-label="Início do silêncio" />
+              <span>e</span>
+              <input type="time" bind:value={qhEnd} aria-label="Fim do silêncio" />
+              <button class="qh-save" onclick={saveQuietHours}>Salvar</button>
+            </div>
+            {#if qhMsg}<div class="menu-push-msg">{qhMsg}</div>{/if}
+          </div>
         {/if}
         <button class="menu-item" role="menuitem" onclick={() => { for (const es of streams.values()) es.close(); streams.clear(); connect(servers); showMenu = false; }}>
           Atualizar
@@ -1082,6 +1117,41 @@
     color: var(--text-muted);
     padding: var(--space-1) var(--space-4) var(--space-2);
     border-bottom: 1px solid var(--border-subtle);
+  }
+
+  /* Quiet hours (feature #5): janela global de silencio, no mesmo menu do "Ativar notificações". */
+  .menu-quiet-hours {
+    border-bottom: 1px solid var(--border-subtle);
+    padding-bottom: var(--space-2);
+  }
+  .qh-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 0 var(--space-4) var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+  }
+  .qh-row input[type='time'] {
+    background: var(--bg-base);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    padding: 4px 6px;
+  }
+  .qh-save {
+    margin-left: auto;
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--accent);
+    padding: 4px 10px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--accent);
+  }
+  .qh-save:active {
+    background: var(--accent);
+    color: #fff;
   }
 
   /* Sheet de resume (caso ambíguo): lista de transcripts candidatos pra escolher. */
