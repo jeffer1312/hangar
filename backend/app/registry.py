@@ -481,10 +481,12 @@ class SessionRegistry:
         # Estado pela marca dos hooks quando existe (custo ~0); senao cai no pane (fallback).
         def _sid(jsonl):
             return Path(jsonl).stem if jsonl else None
-        pending = []  # infos sem marcador -> precisa raspar o pane
+        pending = []  # infos sem marcador (ou awaiting) -> precisa raspar o pane
         for info in infos:
             marker = hook_state.get_state(_sid(info.jsonl))
-            if marker:
+            # Marker autoritativo pra working/idle/dead (custo ~0). Pra awaiting_input o marcador NAO
+            # carrega a pergunta -> raspa o pane (junto das sem-marcador) pra pegar question/options.
+            if marker and marker[0] != "awaiting_input":
                 info.state = marker[0]
                 info.last_activity = _jsonl_mtime(info.jsonl)
             else:
@@ -503,6 +505,9 @@ class SessionRegistry:
                         classified[k] = ("idle", None, None, None)
             for info, c in zip(pending, classified):
                 info.state = c[0]
+                info.label = c[1]
+                info.question = c[2]
+                info.options = c[3]
                 info.last_activity = _jsonl_mtime(info.jsonl)
         return infos
 

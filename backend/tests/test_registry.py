@@ -334,8 +334,10 @@ async def test_list_with_state_classifies(tmp_path, monkeypatch):
         return f"✻ Trabalhando… ({3 + c * 2}s)\n"
 
     monkeypatch.setattr(registry.tmux, "capture_pane", fake_capture)
-    out = {s.name: s.state for s in await reg.list_with_state()}
-    assert out == {"idle1": "idle", "ask1": "awaiting_input", "work1": "working"}
+    out = {s.name: s for s in await reg.list_with_state()}
+    assert {n: s.state for n, s in out.items()} == {"idle1": "idle", "ask1": "awaiting_input", "work1": "working"}
+    # As opções do menu chegam no SessionInfo, não só o state (feature #1 — linha acionável).
+    assert out["ask1"].options == ["Sim", "Nao"]
 
 
 async def test_list_with_state_frozen_spinner_reads_idle(tmp_path, monkeypatch):
@@ -346,6 +348,32 @@ async def test_list_with_state_frozen_spinner_reads_idle(tmp_path, monkeypatch):
     monkeypatch.setattr(registry.tmux, "capture_pane", lambda name, lines=200: "✻ Worked for 8s\n")
     out = await reg.list_with_state()
     assert out[0].state == "idle"
+
+
+async def test_list_with_state_scrapes_pane_for_awaiting_marker(tmp_path, monkeypatch):
+    # Um marcador de hook "awaiting_input" NAO carrega a pergunta (so state+ts); list_with_state
+    # precisa raspar o pane dessas sessoes pra obter question/options — senao a linha mostra
+    # awaiting SEM a pergunta (o caso real: sessoes bloqueadas TEM marcador awaiting).
+    from app.models import SessionInfo
+    ASK_PANE = (
+        "☐ Plano\n"
+        "Would you like to proceed?\n"
+        "\n"
+        "❯ 1. Yes\n"
+        "  2. No\n"
+        "Esc to cancel\n"
+    )
+    reg = SessionRegistry(projects_dir=tmp_path)
+    info = SessionInfo(name="ask1", cwd="/p", jsonl="/x/abc.jsonl", tracked=True)
+    monkeypatch.setattr(reg, "list", lambda: [info])
+    monkeypatch.setattr(registry.hook_state, "get_state", lambda sid: ("awaiting_input", 1.0))
+    monkeypatch.setattr(registry.tmux, "capture_pane", lambda name, lines=200: ASK_PANE)
+
+    out = await reg.list_with_state()
+
+    assert out[0].state == "awaiting_input"
+    assert out[0].question == "Would you like to proceed?"
+    assert out[0].options == ["Yes", "No"]
 
 
 def test_resolve_jsonl_returns_none_when_dir_empty(tmp_path):
