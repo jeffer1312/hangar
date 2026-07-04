@@ -20,6 +20,10 @@
     // quando ha um overlay aberto que SO da pra interagir pela TUI.
     onOpenTerminal?: () => void;
     terminalAlert?: boolean;
+    // Play do runner detectado (npm/etc): abre o RunSheet. runRunning "respira" o botao (verde)
+    // quando ha um processo rodando (sinal de que ha algo pra observar/parar).
+    onOpenRun?: () => void;
+    runRunning?: boolean;
     // Turno ativo (Claude trabalhando) -> barra fina varre o rodape da navbar (sinal "rodando").
     working?: boolean;
     // Subtitulo opcional sob o titulo (ex: "4 sessões"); subtitleHot e o trecho em destaque ambar
@@ -31,7 +35,7 @@
     stateLabel?: string;
     stateColor?: string;
   }
-  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, working = false, subtitle = null, subtitleHot = null, crumbs = null, stateLabel, stateColor }: Props = $props();
+  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, onOpenRun, runRunning = false, working = false, subtitle = null, subtitleHot = null, crumbs = null, stateLabel, stateColor }: Props = $props();
 </script>
 
 <nav class="navbar">
@@ -82,6 +86,14 @@
             <rect x="2.5" y="4" width="19" height="16" rx="2"/>
             <path d="M6.5 9l3 3-3 3"/>
             <line x1="12.5" y1="15" x2="17" y2="15"/>
+          </svg>
+        </button>
+      {/if}
+      {#if onOpenRun}
+        <button class="nav-btn run-btn" class:running={runRunning} onclick={onOpenRun}
+                aria-label="Rodar projeto">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M8 5v14l11-7z" />
           </svg>
         </button>
       {/if}
@@ -279,6 +291,13 @@
   .terminal-btn.alert svg { animation: breathe 1.4s ease-in-out infinite; }
   @media (prefers-reduced-motion: reduce) {
     .terminal-btn.alert svg { animation: none; }
+  }
+
+  .run-btn { position: relative; }
+  .run-btn.running { color: var(--success); }
+  .run-btn.running::after {
+    content: ''; position: absolute; top: 6px; right: 6px; width: 6px; height: 6px;
+    border-radius: 50%; background: var(--success); animation: pulse 1.6s var(--ease-out) infinite;
   }
 
   .activity-btn {
