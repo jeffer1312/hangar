@@ -12,6 +12,8 @@
   import type { Server } from '../lib/auth';
   import type { AggSession, SessionInfo, ResumeCandidate } from '../lib/types';
   import { enablePush, pushSupported } from '../lib/push';
+  import { countAwaiting } from '../lib/format';
+  import { updateBadge } from '../lib/badge';
 
   interface Props {
     onNavigateToChat: (name: string) => void;
@@ -92,8 +94,12 @@
   const showFilter = $derived(sessions.length > 6);
 
   // Resumo do header: total + quantas precisam de voce (aguardando).
-  const awaitingCount = $derived(sessions.filter((s) => s.state === 'awaiting_input').length);
+  const awaitingCount = $derived(countAwaiting(sessions));
   const summaryText = $derived(`${sessions.length} ${sessions.length === 1 ? 'sessão' : 'sessões'}`);
+
+  // Badge do ícone do app (feature #13): reflete o agregado de TODOS os servidores, sempre que a
+  // lista mudar (novo snapshot SSE, servidor removido, etc). Zero aguardando -> limpa o badge.
+  $effect(() => { updateBadge(awaitingCount); });
 
   // Agrupamento por servidor (so multi-servidor): cada grupo = um servidor, com header colapsavel +
   // contagem de sessoes abertas. Ordem dos grupos segue `servers` (deterministica, igual ao menu);

@@ -6,7 +6,8 @@
   import QrScanner from './QrScanner.svelte';
   import GitSheet from './GitSheet.svelte';
   import type { SessionInfo, State } from '../lib/types';
-  import { stateLabels, stateColors } from '../lib/format';
+  import { stateLabels, stateColors, countAwaiting } from '../lib/format';
+  import { updateBadge } from '../lib/badge';
   import type { Server } from '../lib/auth';
   import Lottie from './Lottie.svelte';
   import pensando from '../lib/lottie/pensando.json';
@@ -400,6 +401,11 @@
   let confirmLogout = $state(false);
 
   const activeServer = $derived(servers.find((s) => s.id === activeId) ?? servers[0] ?? null);
+
+  // Badge do ícone do app (feature #13): mesmo agregado do mobile (SessionList), so que a partir de
+  // `groups` (por servidor) — flatten pra contar aguardando em TODOS os servidores.
+  const awaitingTotal = $derived(groups.reduce((n, g) => n + countAwaiting(g.sessions), 0));
+  $effect(() => { updateBadge(awaitingTotal); });
 </script>
 
 <aside class="sidebar" class:collapsed={!expanded} class:resizing
