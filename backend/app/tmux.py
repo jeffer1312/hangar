@@ -1,7 +1,19 @@
 import os
+import shutil
 import subprocess
 
 RUN = subprocess.run
+
+
+def _scope_prefix() -> list[str]:
+    # Spawn the tmux SERVER in its OWN transient systemd scope so it does NOT inherit the
+    # backend service's cgroup. Without this, `systemctl restart claude-pocket-backend`
+    # SIGTERMs the whole control-group -> kills the tmux server and every session (incl. the
+    # one driving this app). ponytail: gated on systemd-run + a user runtime dir; on non-systemd
+    # hosts returns [] and spawns plainly, where the cgroup teardown problem doesn't exist.
+    if os.name == "posix" and os.environ.get("XDG_RUNTIME_DIR") and shutil.which("systemd-run"):
+        return ["systemd-run", "--user", "--scope", "--collect", "-q", "--"]
+    return []
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess:
@@ -69,7 +81,7 @@ def new_session(name: str, cwd: str, command: str, config_dir: str | None = None
     # Retorna False quando o tmux recusa (ex: nome duplicado) -> o caller NAO pode mapear a sessao
     # nova pra um jsonl, senao reusaria a sessao existente de mesmo nome (= "sessao nova foi pra 0").
     cfg = config_dir or os.environ.get("CLAUDE_CONFIG_DIR")
-    args = [
+    args = _scope_prefix() + [
         "tmux", "new-session", "-d", "-s", name, "-c", cwd, "-x", "200", "-y", "50",
         "-e", "COLORTERM=truecolor",
         "-e", "CLAUDE_CODE_TMUX_TRUECOLOR=1",
