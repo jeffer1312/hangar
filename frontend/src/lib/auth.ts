@@ -171,6 +171,25 @@ export function renameServer(id: string, label: string): void {
   notifyChanged();
 }
 
+// Extrai base (origin do backend) + token de um texto de pareamento — o mesmo conteudo que o QR
+// carrega: uma URL com ?token=… (e opcional ?api=… apontando o backend por tras de um proxy). Token
+// cru sem URL nao tem origem confiavel -> null. Pura/testavel (nao toca storage): usada tanto pelo
+// scan do QR quanto pelo colar manual da URL no desktop (mesma rota de parse).
+export function parseServerPairing(text: string): { base: string; token: string } | null {
+  let tok = text.trim();
+  let base = '';
+  try {
+    const u = new URL(text);
+    const t = u.searchParams.get('token');
+    if (t) tok = t;
+    base = u.searchParams.get('api') ?? u.origin;
+  } catch {
+    base = ''; // token cru sem URL -> sem origem confiavel
+  }
+  if (!tok || !base) return null;
+  return { base, token: tok };
+}
+
 export function selectServer(id: string): void {
   const s = readServers().find((x) => x.id === id);
   if (!s) return;
