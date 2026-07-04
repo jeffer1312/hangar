@@ -2,7 +2,9 @@ import json
 import re
 import tomllib
 from pathlib import Path
+from typing import Optional
 
+from app.config import settings
 from app.models import Runner
 
 # nome -> peso pra escolher o melhor palpite de "dev" (so um vence).
@@ -82,3 +84,30 @@ def detect_runners(cwd: str) -> list[Runner]:
     if best_i >= 0:
         runners[best_i].is_dev_guess = True
     return runners
+
+
+def _prefs_path() -> Path:
+    return Path(settings.projects_dir).parent / ".claude-pocket-runner.json"
+
+
+def _load_prefs() -> dict:
+    try:
+        data = json.loads(_prefs_path().read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def remembered(cwd: str) -> Optional[str]:
+    v = _load_prefs().get(cwd)
+    return v if isinstance(v, str) else None
+
+
+def remember(cwd: str, command: str) -> None:
+    p = _prefs_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    d = _load_prefs()
+    d[cwd] = command
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(d), encoding="utf-8")
+    tmp.replace(p)  # escrita atomica
