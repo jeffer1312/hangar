@@ -78,6 +78,17 @@ export function projectLabel(cwd: string | null | undefined): string {
   return cwd ? basename(cwd) : 'sem projeto';
 }
 
+// Modo de agrupamento da lista de sessões (toggle Servidor|Projeto, feature #3).
+export type GroupBy = 'server' | 'project';
+
+// Modo EFETIVO dada a preferência do usuário e o nº de servidores. Com <2 servidores, agrupar "por
+// servidor" produz 1 único grupo gigante (nada pra separar) e o toggle Servidor|Projeto fica sem
+// sentido -> força "por projeto", que ainda organiza a lista por repositório. A preferência crua
+// fica intacta (volta a valer assim que houver >=2 servidores). Pura/testável.
+export function effectiveGroupBy(pref: GroupBy, serverCount: number): GroupBy {
+  return serverCount >= 2 ? pref : 'project';
+}
+
 // Anexos de arquivo por CAMINHO citado na conversa (sua ou minha msg). v1 = só "preview-worthy"
 // (mídia + html + pdf); texto/código fora de proposito pra nao virar ruido (caminho de codigo
 // aparece toda hora na prosa). O backend so serve o que esta no transcript (consentido).
