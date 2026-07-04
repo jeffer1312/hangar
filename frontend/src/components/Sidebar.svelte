@@ -7,7 +7,7 @@
   import GitSheet from './GitSheet.svelte';
   import AttentionFeed from './AttentionFeed.svelte';
   import type { SessionInfo, State, AggSession } from '../lib/types';
-  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, projectKey, projectLabel } from '../lib/format';
+  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, projectKey, projectLabel, effectiveGroupBy, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import type { Server } from '../lib/auth';
   import Lottie from './Lottie.svelte';
@@ -61,9 +61,9 @@
     try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next])); } catch { /* quota/priv mode */ }
   }
 
-  // Toggle "Servidor | Projeto" (feature #3), persistido — mesmo padrao de cp_sidebar_w.
+  // Toggle "Servidor | Projeto" (feature #3), persistido — mesmo padrao de cp_sidebar_w. Guarda a
+  // PREFERENCIA crua; o modo efetivo (effectiveGroupBy) força "projeto" quando ha <2 servidores.
   const GROUP_BY_KEY = 'cp_group_by';
-  type GroupBy = 'server' | 'project';
   let groupBy = $state<GroupBy>(localStorage.getItem(GROUP_BY_KEY) === 'project' ? 'project' : 'server');
   function setGroupBy(mode: GroupBy) {
     groupBy = mode;
@@ -111,7 +111,9 @@
   function recompute() {
     if (servers.length === 0) { groups = []; return; }
     const seen = new Set<string>(); // dedup global: backend compartilhado por 2 URLs não duplica
-    if (groupBy === 'project') {
+    // Modo efetivo: com <2 servidores, "por servidor" viraria 1 grupo gigante -> força "por projeto".
+    const mode = effectiveGroupBy(groupBy, servers.length);
+    if (mode === 'project') {
       // Modo projeto: junta sessoes de TODOS os servidores pela chave do cwd. Servidor offline so
       // perde as sessoes dele (sem banner por grupo — nao ha "1 servidor" pra apontar o erro).
       const byKey = new Map<string, SessRow[]>();
@@ -668,7 +670,14 @@
         onclick={toggleSelectMode}
         aria-label={selectMode ? 'Cancelar seleção' : 'Selecionar sessões'}
         title={selectMode ? 'Cancelar seleção' : 'Selecionar sessões'}
-      >☑</button>
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="m3 7 2 2 4-4"/>
+          <path d="m3 17 2 2 4-4"/>
+          <line x1="13" y1="6" x2="21" y2="6"/>
+          <line x1="13" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
     {/if}
   </div>
 
@@ -677,11 +686,15 @@
       <!-- "Precisa de você" (feature #6): fila cross-server de sessoes aguardando, fixa no topo.
            Picker inline (OptionButtons) responde sem abrir o chat; nativo AskUserQuestion abre. -->
       <AttentionFeed sessions={attnSessions} onOpenChat={(s) => onMainClick(s.name, s.serverId, s.tracked)} />
-      <!-- Toggle Servidor|Projeto (feature #3): agrupa por servidor (hoje) ou por cwd. -->
-      <div class="group-toggle" role="radiogroup" aria-label="Agrupar por">
-        <button type="button" class:active={groupBy === 'server'} role="radio" aria-checked={groupBy === 'server'} onclick={() => setGroupBy('server')}>Servidor</button>
-        <button type="button" class:active={groupBy === 'project'} role="radio" aria-checked={groupBy === 'project'} onclick={() => setGroupBy('project')}>Projeto</button>
-      </div>
+      <!-- Toggle Servidor|Projeto (feature #3): agrupa por servidor ou por cwd. So aparece com >=2
+           servidores — com 1 so, "por servidor" daria 1 grupo gigante, entao o app agrupa por projeto
+           (effectiveGroupBy) e o toggle fica escondido por ser redundante. -->
+      {#if servers.length >= 2}
+        <div class="group-toggle" role="radiogroup" aria-label="Agrupar por">
+          <button type="button" class:active={groupBy === 'server'} role="radio" aria-checked={groupBy === 'server'} onclick={() => setGroupBy('server')}>Servidor</button>
+          <button type="button" class:active={groupBy === 'project'} role="radio" aria-checked={groupBy === 'project'} onclick={() => setGroupBy('project')}>Projeto</button>
+        </div>
+      {/if}
       <!-- Filtro (paridade com o mobile): so aparece quando a lista fica longa. -->
       {#if showFilter}
         <input
@@ -724,7 +737,12 @@
             onclick={() => selectGroupForBroadcast(g)}
             aria-label={`Enviar mensagem para todas as sessões de ${g.label}`}
             title="Enviar p/ todas"
-          >➤</button>
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="22" y1="2" x2="11" y2="13"/>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
+          </button>
         </div>
       {/if}
       {#if !expanded || !collapsedGroups.has(g.id)}
@@ -853,7 +871,14 @@
           aria-label="Mensagem de broadcast"
         />
         <button class="broadcast-send" onclick={sendBroadcast} disabled={broadcastDisabled} aria-label="Enviar">
-          {broadcastBusy ? '…' : '➤'}
+          {#if broadcastBusy}
+            …
+          {:else}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="22" y1="2" x2="11" y2="13"/>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
+          {/if}
         </button>
       </div>
       {#if broadcastIsSlash}
@@ -1114,6 +1139,25 @@
   }
   .sidebar.collapsed { width: 56px; padding: var(--space-3) var(--space-2); }
 
+  /* ── Polish: foco de teclado + transições de estado ──────────────────────
+     Foco visível (dev-tool: anel accent), inset pra nao ser cortado pelo overflow da sidebar/lista.
+     Cobre todo controle do componente (sidebar + menus/modais). Inputs ja sinalizam foco pela borda. */
+  button:focus-visible,
+  [role="separator"]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+  /* Transições de hover/estado consistentes (150–300ms): cor/fundo/opacidade suaves, mantendo o
+     press-scale (transform) do reset global — este seletor mais específico o sobrescreveria. Só nos
+     controles da sidebar; menus de contexto/modais têm hover próprio. */
+  .sidebar button,
+  .sidebar .sess-row {
+    transition: background-color 180ms var(--ease-out),
+                color 180ms var(--ease-out),
+                opacity 180ms var(--ease-out),
+                transform 160ms var(--ease-out);
+  }
+
   .side-top { display: flex; align-items: center; gap: var(--space-2); min-height: 36px; }
   .icon-btn {
     width: 36px; height: 36px; flex-shrink: 0; border-radius: var(--radius-md);
@@ -1141,12 +1185,18 @@
   .select-toggle-btn.active { color: var(--accent); background: var(--accent-dim); }
 
   .sess-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin-top: var(--space-2); }
-  /* Toggle Servidor|Projeto (feature #3): segmentado, mesma largura dos 2 lados. */
+  /* Toggle Servidor|Projeto (feature #3): controle segmentado COMPACTO e subordinado — inline (nao
+     ocupa a largura toda), baixo e discreto, um agrupador silencioso e nao um CTA. min-height:0
+     derruba o piso global de 44px dos botoes. So aparece com >=2 servidores. */
   .group-toggle {
-    display: flex; gap: 2px; padding: 2px; margin: 0 0 var(--space-2);
+    display: inline-flex; align-self: flex-start; gap: 2px; padding: 2px; margin: 0 0 var(--space-2);
     background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
   }
-  .group-toggle button { flex: 1; height: 28px; border-radius: var(--radius-sm); font-size: var(--text-xs); color: var(--text-secondary); }
+  .group-toggle button {
+    min-height: 0; height: 24px; min-width: 0; padding: 0 var(--space-2);
+    border-radius: var(--radius-sm); font-size: var(--text-xs); font-weight: 500; color: var(--text-muted);
+  }
+  @media (hover: hover) { .group-toggle button:hover { color: var(--text-secondary); } }
   .group-toggle button.active { background: var(--bg-elevated); color: var(--text-primary); font-weight: 600; }
   /* Filtro (paridade com o mobile) — compacto, alinhado ao conteudo da sidebar. */
   .filter-input {
@@ -1160,7 +1210,7 @@
   .filter-empty { font-size: var(--text-xs); color: var(--text-muted); text-align: center; padding: var(--space-4) var(--space-2); }
   /* Precisa de você (AttentionFeed): alinha a caixa a largura do conteudo da sidebar (margens laterais
      do componente sao pensadas pro mobile — desktop-only, nao mexe no mobile). */
-  .sess-list :global(.attn) { margin-left: 0; margin-right: 0; margin-bottom: var(--space-2); }
+  .sess-list :global(.attn) { margin-left: 0; margin-right: 0; margin-bottom: var(--space-2); border-radius: var(--radius-md); }
   /* Header do grupo virou uma row (label + "enviar p/ todas", feature #9). */
   .grp-head-row { display: flex; align-items: center; }
   .grp-head-row:not(:first-child) { margin-top: var(--space-2); }
