@@ -297,7 +297,7 @@
   .run-btn.running { color: var(--success); }
   .run-btn.running::after {
     content: ''; position: absolute; top: 6px; right: 6px; width: 6px; height: 6px;
-    border-radius: 50%; background: var(--success); animation: pulse 1.6s var(--ease-out) infinite;
+    border-radius: 50%; background: var(--success); animation: pulse-scale 1.6s var(--ease-out) infinite;
   }
 
   .activity-btn {
