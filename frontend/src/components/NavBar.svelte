@@ -91,9 +91,13 @@
       {/if}
       {#if onOpenRun}
         <button class="nav-btn run-btn" class:running={runRunning} onclick={onOpenRun}
-                aria-label="Rodar projeto">
+                aria-label={runRunning ? 'Rodando (abrir)' : 'Rodar projeto'}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M8 5v14l11-7z" />
+            {#if runRunning}
+              <rect x="6" y="6" width="12" height="12" rx="2" />
+            {:else}
+              <path d="M8 5v14l11-7z" />
+            {/if}
           </svg>
         </button>
       {/if}
