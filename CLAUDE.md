@@ -88,13 +88,10 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
 ## tmux + Claude Code truecolor
 
 Inside tmux, Claude Code caps color depth to 256 and renders theme colors wrong (teal / pink / washed-out)
-while rendering correctly outside tmux. Fix in the **shell rc** (settings.json env is unreliable here):
-
-```sh
-export COLORTERM=truecolor
-export CLAUDE_CODE_TMUX_TRUECOLOR=1
-```
-
-Plus a `~/.tmux.conf` with `default-terminal "xterm-256color"` (not `tmux-256color`). Full explanation, fish
-syntax, reference config, and verify steps: [`docs/tmux-truecolor-setup.md`](docs/tmux-truecolor-setup.md)
+while rendering correctly outside tmux. Fix: `COLORTERM=truecolor` + `CLAUDE_CODE_TMUX_TRUECOLOR=1` in the
+environment before `claude` starts (settings.json env is unreliable here). The installer covers this: the
+`claude` wrapper sets both on every path, the backend passes them via `tmux new-session -e`, and the managed
+`~/.tmux.conf` block (with `default-terminal "xterm-256color"`, not `tmux-256color`) sets them for hand-made
+sessions. Only a `command claude` outside the wrapper still needs the exports in the shell rc. Full
+explanation, reference config, and verify steps: [`docs/tmux-truecolor-setup.md`](docs/tmux-truecolor-setup.md)
 and [`docs/tmux.conf.example`](docs/tmux.conf.example).

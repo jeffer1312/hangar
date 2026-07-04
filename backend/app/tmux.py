@@ -16,6 +16,23 @@ def _scope_prefix() -> list[str]:
     return []
 
 
+def _wayland_display() -> str | None:
+    # Paste de IMAGEM no Claude Code depende do wl-paste, que precisa de WAYLAND_DISPLAY. O backend
+    # roda como servico systemd (env de boot, sem a var) -> detecta o socket do compositor no
+    # runtime dir (ex: wayland-1 no Hyprland; o fallback wayland-0 do wl-paste NAO acha esse).
+    if os.environ.get("WAYLAND_DISPLAY"):
+        return os.environ["WAYLAND_DISPLAY"]
+    run_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if not run_dir:
+        return None
+    try:
+        socks = sorted(f for f in os.listdir(run_dir)
+                       if f.startswith("wayland-") and not f.endswith(".lock"))
+    except OSError:
+        return None
+    return socks[0] if socks else None
+
+
 def _run(args: list[str]) -> subprocess.CompletedProcess:
     # timeout: tmux travado nao pode prender o event loop / worker do threadpool pra sempre. Estouro ->
     # trata como falha (returncode=1), igual ao tmux recusar; os callers ja checam returncode != 0.
@@ -86,6 +103,10 @@ def new_session(name: str, cwd: str, command: str, config_dir: str | None = None
         "-e", "COLORTERM=truecolor",
         "-e", "CLAUDE_CODE_TMUX_TRUECOLOR=1",
     ]
+    wl = _wayland_display()
+    if wl:
+        # sem isto o wl-paste dentro do pane nao conecta -> paste de imagem no Claude Code morre.
+        args += ["-e", f"WAYLAND_DISPLAY={wl}"]
     if cfg:
         # sessao app-criada usa o MESMO config dir que o backend (ou o escolhido), em vez de cair
         # no ~/.claude default (deslogado -> tela de boas-vindas).
