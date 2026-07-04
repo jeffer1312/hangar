@@ -115,6 +115,13 @@ def _in_quiet_hours(now: dtime | None = None) -> bool:
     return now >= start or now < end  # janela cruza meia-noite (ex: 22:00-07:00)
 
 
+def _suppressed(session_name: str) -> bool:
+    """True se este push deve ser silenciado: sessao mutada (mute por sessao) OU dentro da janela de
+    quiet hours (global). Consultado no topo de TODO notify_* (awaiting/finished/dead/stalled/limited)
+    -> quiet hours silencia TODOS os pushes; mutar uma sessao silencia TODOS os tipos de push dela."""
+    return is_muted(session_name) or _in_quiet_hours()
+
+
 def add_subscription(subscription: dict, label: str, server_id: str) -> None:
     """Upsert por endpoint (idempotente: re-assinar nao duplica). label/server_id sao do CELULAR
     (nome amigavel + id local do servidor) -> a notificacao mostra 'Casa · sessao' e linka certo."""
@@ -190,7 +197,7 @@ def notify_awaiting(session_name: str, body: str = "Aguardando sua resposta") ->
     Silenciada (mute por sessao) ou dentro da janela de quiet hours -> no-op (nem entra no buffer).
     Senao entra no buffer de coalescing: varios awaiting quase-simultaneos (~_COALESCE_WINDOW s)
     colapsam numa unica notificacao agregada em vez de empilhar N."""
-    if is_muted(session_name) or _in_quiet_hours():
+    if _suppressed(session_name):
         return
     _queue_awaiting(session_name, body)
 
@@ -227,11 +234,15 @@ def _flush_coalesce() -> None:
 
 def notify_finished(session_name: str) -> None:
     """Push: sessao terminou um turno longo (working -> idle apos > CP_FINISH_MIN_SECONDS)."""
+    if _suppressed(session_name):
+        return
     _broadcast(session_name, "Terminou")
 
 
 def notify_dead(session_name: str) -> None:
     """Push: sessao morreu (tmux/pane caiu)."""
+    if _suppressed(session_name):
+        return
     _broadcast(session_name, "Caiu")
 
 
@@ -239,6 +250,8 @@ def notify_stalled(session_name: str) -> None:
     """Push: sessao travada (feature #7) — "working" silencioso ha muito tempo (loop infinito de
     ferramenta, subprocesso esperando stdin) que nunca vira awaiting/finished/dead sozinho. Disparado
     UMA vez pelo watchdog (app.stall_watch); o dedupe/re-arme mora la, aqui e so o envio."""
+    if _suppressed(session_name):
+        return
     _broadcast(session_name, "Pode estar travada")
 
 
@@ -246,5 +259,7 @@ def notify_limited(session_name: str, reset: str | None = None) -> None:
     """Push: sessao bateu no rate-limit de uso (feature #8) — banner de limite detectado no pane
     (best-effort, ver app.state.rate_limit_reset). Disparado UMA vez pelo watchdog (app.stall_watch,
     que reusa o MESMO ciclo do stall pra isto); dedupe/re-arme mora la, aqui e so o envio."""
+    if _suppressed(session_name):
+        return
     body = f"Limite de uso atingido · volta {reset}" if reset else "Limite de uso atingido"
     _broadcast(session_name, body)

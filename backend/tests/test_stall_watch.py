@@ -6,19 +6,22 @@ from app import stall_watch
 @pytest.fixture(autouse=True)
 def _reset_notified():
     # Sets globais (dedupe entre ciclos) -> zera entre testes pra nao vazar de um pro outro.
-    stall_watch._notified.clear()
-    stall_watch._notified_limited.clear()
-    stall_watch._armed_limited.clear()
+    def _clear():
+        stall_watch._notified.clear()
+        stall_watch._notified_limited.clear()
+        stall_watch._armed_limited.clear()
+        stall_watch._seen_live.clear()
+        stall_watch._notified_dead.clear()
+    _clear()
     yield
-    stall_watch._notified.clear()
-    stall_watch._notified_limited.clear()
-    stall_watch._armed_limited.clear()
+    _clear()
 
 
 class _Info:
-    def __init__(self, name, stalled, limited=False, limit_reset=None):
+    def __init__(self, name, stalled, limited=False, limit_reset=None, jsonl=None):
         self.name, self.stalled = name, stalled
         self.limited, self.limit_reset = limited, limit_reset
+        self.jsonl = jsonl
 
 
 def test_tick_notifies_once_while_stalled(monkeypatch):
@@ -60,6 +63,86 @@ def test_tick_no_notify_when_nothing_stalled(monkeypatch):
 
     asyncio.run(stall_watch._tick(list_fn))
     assert sent == []
+
+
+# ---------------------------------------------------------------------------
+# Feature #2: death ping — sessao que sumiu da lista entre ciclos = morreu (o marcador do state_hook
+# nunca emite "dead", entao o watchdog e o unico gatilho do push de "caiu")
+# ---------------------------------------------------------------------------
+
+def test_tick_notifies_dead_when_session_disappears(monkeypatch):
+    monkeypatch.setattr(stall_watch.push, "notify_stalled", lambda *a, **k: None)
+    dead = []
+    monkeypatch.setattr(stall_watch.push, "notify_dead", dead.append)
+    seq = [[_Info("cc", False)], []]  # viva -> ausente
+
+    async def list_fn():
+        return seq.pop(0)
+
+    asyncio.run(stall_watch._tick(list_fn))
+    asyncio.run(stall_watch._tick(list_fn))
+    assert dead == ["cc"]
+
+
+def test_tick_dead_notifies_once(monkeypatch):
+    # Ausente por varios ciclos -> so a transicao viva->ausente pinga (dedupe), nao a cada poll.
+    monkeypatch.setattr(stall_watch.push, "notify_stalled", lambda *a, **k: None)
+    dead = []
+    monkeypatch.setattr(stall_watch.push, "notify_dead", dead.append)
+    seq = [[_Info("cc", False)], [], []]
+
+    async def list_fn():
+        return seq.pop(0)
+
+    for _ in range(3):
+        asyncio.run(stall_watch._tick(list_fn))
+    assert dead == ["cc"]
+
+
+def test_tick_dead_cleans_working_started(monkeypatch):
+    # Morte limpa o _working_started (api.py, keyed por session_id = stem do jsonl) pra nao vazar.
+    from app import api
+    monkeypatch.setattr(stall_watch.push, "notify_stalled", lambda *a, **k: None)
+    monkeypatch.setattr(stall_watch.push, "notify_dead", lambda *a, **k: None)
+    api._working_started["uuid1"] = 100.0
+    seq = [[_Info("cc", False, jsonl="/x/uuid1.jsonl")], []]
+
+    async def list_fn():
+        return seq.pop(0)
+
+    asyncio.run(stall_watch._tick(list_fn))
+    asyncio.run(stall_watch._tick(list_fn))
+    assert "uuid1" not in api._working_started
+
+
+def test_tick_dead_respects_notify_flag(monkeypatch):
+    monkeypatch.setattr(stall_watch.push, "notify_stalled", lambda *a, **k: None)
+    monkeypatch.setattr(stall_watch.settings, "notify_dead", False)
+    dead = []
+    monkeypatch.setattr(stall_watch.push, "notify_dead", dead.append)
+    seq = [[_Info("cc", False)], []]
+
+    async def list_fn():
+        return seq.pop(0)
+
+    asyncio.run(stall_watch._tick(list_fn))
+    asyncio.run(stall_watch._tick(list_fn))
+    assert dead == []  # CP_NOTIFY_DEAD off -> nao pinga
+
+
+def test_tick_dead_rearms_on_reappear(monkeypatch):
+    # Nome reusado por sessao nova: morreu, reapareceu vivo, morreu de novo -> 2 pings (nao fica mudo).
+    monkeypatch.setattr(stall_watch.push, "notify_stalled", lambda *a, **k: None)
+    dead = []
+    monkeypatch.setattr(stall_watch.push, "notify_dead", dead.append)
+    seq = [[_Info("cc", False)], [], [_Info("cc", False)], []]
+
+    async def list_fn():
+        return seq.pop(0)
+
+    for _ in range(4):
+        asyncio.run(stall_watch._tick(list_fn))
+    assert dead == ["cc", "cc"]
 
 
 # ---------------------------------------------------------------------------

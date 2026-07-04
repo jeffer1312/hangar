@@ -490,6 +490,15 @@ class SessionRegistry:
             marker = hook_state.get_state(_sid(info.jsonl))
             # Marker autoritativo pra working/idle/dead (custo ~0). Pra awaiting_input o marcador NAO
             # carrega a pergunta -> raspa o pane (junto das sem-marcador) pra pegar question/options.
+            # LIMITACAO CONHECIDA (rate-limit radar, feature #8): este fast-path PULA a captura do pane,
+            # entao rate_limit_reset() NUNCA roda por aqui -> limited/limit_reset ficam no default
+            # (False/None). Uma sessao rate-limited fica working/idle (o banner nao e menu), logo cai
+            # SEMPRE neste caminho de marcador -> na pratica o chip "limitado"/notify_limited/auto-resume
+            # so disparam pela sessao com o chat aberto (StateMonitor raspa o pane), nunca pelo radar da
+            # lista. NAO corrigido de proposito: fazer o watchdog raspar o pane de toda sessao working/idle
+            # a cada poll so faz sentido depois que _LIMIT_RE (app/state.py) for calibrado contra o banner
+            # REAL — hoje e um chute nao-calibrado, entao a deteccao nao funcionaria de verdade mesmo com
+            # a plumbing pronta. Calibrar _LIMIT_RE primeiro; so entao vale mover a deteccao pro watchdog.
             if marker and marker[0] != "awaiting_input":
                 info.state = marker[0]
                 info.last_activity = _jsonl_mtime(info.jsonl)

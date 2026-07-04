@@ -168,6 +168,42 @@ def test_notify_awaiting_respects_quiet_hours(tmp_path, monkeypatch):
     assert sent == {}
 
 
+# ---------------------------------------------------------------------------
+# Feature #3: quiet hours + mute silenciam TODOS os pushes (nao so o awaiting)
+# ---------------------------------------------------------------------------
+
+def test_muted_session_silences_all_push_types(tmp_path, monkeypatch):
+    sent = _mock_webpush_multi(monkeypatch, tmp_path)
+    push.set_muted("s", True)
+    push.notify_finished("s")
+    push.notify_dead("s")
+    push.notify_stalled("s")
+    push.notify_limited("s", "3pm")
+    assert sent == []  # mute silencia finished/dead/stalled/limited
+
+
+def test_quiet_hours_silences_all_push_types(tmp_path, monkeypatch):
+    sent = _mock_webpush_multi(monkeypatch, tmp_path)
+    monkeypatch.setattr(push, "_in_quiet_hours", lambda *a, **k: True)
+    push.notify_finished("s")
+    push.notify_dead("s")
+    push.notify_stalled("s")
+    push.notify_limited("s", "3pm")
+    assert sent == []  # dentro da janela: nenhum tipo dispara
+
+
+def test_all_push_types_send_when_not_suppressed(tmp_path, monkeypatch):
+    # Fora de quiet hours e sem mute -> os 4 tipos saem (guarda da regressao inversa: a suppression
+    # nao pode engolir push legitimo).
+    sent = _mock_webpush_multi(monkeypatch, tmp_path)
+    push.notify_finished("s")
+    push.notify_dead("s")
+    push.notify_stalled("s")
+    push.notify_limited("s", "3pm")
+    bodies = [p["body"] for p in sent]
+    assert bodies == ["Terminou", "Caiu", "Pode estar travada", "Limite de uso atingido · volta 3pm"]
+
+
 def test_set_muted_toggle(tmp_path, monkeypatch):
     monkeypatch.setattr(push, "_file", lambda: tmp_path / "subs.json")
     assert push.is_muted("s1") is False

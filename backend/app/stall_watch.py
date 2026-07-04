@@ -6,9 +6,11 @@ classificada (registry.list_with_state() deriva `stalled`; ver app/registry.py) 
 novo, e dispara push.notify_stalled() UMA vez por sessao ao entrar em stalled. Dedupe/re-arme aqui;
 o bool `stalled` (pra UI) e derivado a parte, em list_with_state — concerns separados de proposito.
 
-Tambem faz o mesmo pro rate-limit radar (feature #8, campo `limited`): PIGGYBACK neste MESMO ciclo
-(em vez de um 2o loop/Timer proprio) pq ja reusa a lista classificada a cada poll — dedupe/re-arme
-espelha exatamente o padrao do stall acima, so trocando o campo. Alem do push, tenta o auto-resume
+PIGGYBACK neste MESMO ciclo (em vez de loops/Timers proprios) tambem: (a) o rate-limit radar (feature
+#8, campo `limited`) — dedupe/re-arme espelha o padrao do stall, so trocando o campo; (b) o death ping
+(feature #2) — o marcador do state_hook NUNCA emite "dead", entao o push de "caiu" nao teria gatilho;
+aqui detectamos morte pelo diff do conjunto vivo entre ciclos (sessao que estava na lista e sumiu).
+Alem do push (rate-limit), tenta o auto-resume
 opt-in (CP_AUTO_RESUME): se a sessao tem fila nao-entregue e o reset parseia num horario confiavel,
 arma um Timer pra drenar sozinha (ver _maybe_auto_resume). O auto-resume tambem exige o kill-switch
 MESTRE (feature #12, app.config.automations_enabled) — o mesmo portao que governa o encadeamento de
@@ -19,6 +21,7 @@ import logging
 import re
 import threading
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from app.config import settings, automations_enabled
 from app import push
@@ -28,6 +31,16 @@ _log = logging.getLogger("claude_pocket.stall_watch")
 # Sessoes ja notificadas na janela de stall atual. ponytail: set global — single-user, 1 backend;
 # reset natural quando a sessao sai de stalled (state muda ou last_activity avanca).
 _notified: set[str] = set()
+
+# Death ping (feature #2): o marcador do state_hook so emite working/awaiting_input/idle — NUNCA
+# "dead" — entao o branch dead de _on_hook_transition nunca dispara e o push de "caiu" ficava sem
+# gatilho. Sinal confiavel de morte = uma sessao que ESTAVA na lista e sumiu no ciclo seguinte. Este
+# watchdog ja varre tudo a cada poll, entao detecta aqui pelo diff do conjunto vivo entre ciclos.
+# _seen_live: nome -> session_id (stem do jsonl) da ultima varredura, guardado pra limpar o
+# _working_started (api.py, keyed por session_id) da sessao morta. _notified_dead: dedupe (re-arma
+# quando o nome reaparece vivo). ponytail: dict/set globais — single-user, 1 backend, igual _notified.
+_seen_live: dict[str, str | None] = {}
+_notified_dead: set[str] = set()
 
 # Mesmo padrao acima, pro rate-limit (feature #8): sessoes ja notificadas na janela LIMITED atual.
 _notified_limited: set[str] = set()
@@ -85,7 +98,9 @@ def _maybe_auto_resume(name: str, reset: str | None) -> None:
         return
     from app.api import _drain_session  # import local: api importa stall_watch (evita ciclo)
     _log.info("auto-resume: sessao %s limited, armando drain em %.0fs (reset=%s)", name, delay, reset)
-    threading.Timer(delay, _drain_session, args=(name,)).start()
+    t = threading.Timer(delay, _drain_session, args=(name,))
+    t.daemon = True  # nao segura o interpretador vivo (delay pode ser horas) — igual ao coalesce de push.py
+    t.start()
     _armed_limited.add(name)
 
 
@@ -102,6 +117,25 @@ async def _tick(list_fn) -> None:
     """Uma varredura: notifica quem ENTROU em stalled/limited desde a ultima vez; libera (re-arma)
     quem saiu de cada um (concerns independentes -- uma sessao pode estar nos dois, so um, ou nenhum)."""
     infos = await list_fn()
+
+    # Death ping (feature #2): quem estava vivo no ciclo anterior e sumiu agora = morreu (ver docstring
+    # dos sets no topo). Dispara notify_dead 1x (respeita CP_NOTIFY_DEAD) e limpa o _working_started da
+    # api pra a sessao morta nao vazar no dict. Dedupe/re-arme por _notified_dead.
+    now_live = {i.name: (Path(i.jsonl).stem if getattr(i, "jsonl", None) else None) for i in infos}
+    for name in _seen_live.keys() - now_live.keys():
+        if name in _notified_dead:
+            continue
+        if settings.notify_dead:
+            push.notify_dead(name)
+        sid = _seen_live.get(name)
+        if sid:
+            from app import api  # import local: api importa stall_watch (evita ciclo)
+            api._working_started.pop(sid, None)
+        _notified_dead.add(name)
+    _notified_dead.difference_update(now_live)  # reaparecer vivo -> pode re-notificar se morrer de novo
+    _seen_live.clear()
+    _seen_live.update(now_live)
+
     live = {i.name for i in infos if i.stalled}
     for name in live - _notified:
         push.notify_stalled(name)
