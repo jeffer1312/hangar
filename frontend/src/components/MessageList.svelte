@@ -25,6 +25,9 @@
     // AskUserQuestion inline (desktop): quando askOpen, renderiza o card no fim da lista.
     askOpen?: boolean;
     askPayload?: AskQuestionPayload | null;
+    // Stepper nativo AskUserQuestion ativo (em qualquer view). Suprime os OptionButtons crus:
+    // o AskUserQuestion tambem desenha um picker TUI no pane -> sem isto os dois apareciam juntos.
+    askActive?: boolean;
     onAnswer?: (answers: AnswerItem[]) => Promise<void>;
     onAskClose?: () => void;
     // Override da URL de imagem do transcript (ex: arquivo de conversas mortas, que nao tem sessao).
@@ -35,7 +38,7 @@
 
   let {
     events, stateEvent, pending, sessionName, dockH, preview = '', onSelectOption, onCancel,
-    askOpen = false, askPayload = null, onAnswer, onAskClose, imageUrl, swapIds
+    askOpen = false, askPayload = null, askActive = false, onAnswer, onAskClose, imageUrl, swapIds
   }: Props = $props();
 
   let listEl: HTMLElement | undefined = $state();
@@ -208,7 +211,7 @@
       </div>
     {/each}
 
-    {#if stateEvent?.state === 'awaiting_input' && stateEvent.question}
+    {#if stateEvent?.state === 'awaiting_input' && stateEvent.question && !askActive}
       <OptionButtons
         question={stateEvent.question}
         options={stateEvent.options ?? []}
