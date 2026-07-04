@@ -6,7 +6,7 @@
   import QrScanner from './QrScanner.svelte';
   import GitSheet from './GitSheet.svelte';
   import type { SessionInfo, State } from '../lib/types';
-  import { stateLabels, stateColors, countAwaiting } from '../lib/format';
+  import { stateLabels, stateColors, countAwaiting, projectKey, projectLabel } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import type { Server } from '../lib/auth';
   import Lottie from './Lottie.svelte';
@@ -34,10 +34,25 @@
   }
   let { currentSession, onSelect, onLogout }: Props = $props();
 
-  interface Group { server: Server; sessions: SessionInfo[]; error: string | null }
+  // Grupo generico: por SERVIDOR (hoje) ou por PROJETO (cwd) — mesmo shape nos dois modos. Cada
+  // sessao carrega o serverId dela (no modo projeto um grupo pode juntar sessoes de servidores
+  // diferentes; no modo servidor e sempre o mesmo serverId do grupo, mas mantem uniforme pro
+  // template nao precisar saber em qual modo esta).
+  interface SessRow extends SessionInfo { serverId: string }
+  interface Group { id: string; label: string; color: string | null; error: string | null; sessions: SessRow[] }
   let groups = $state<Group[]>([]);
   let collapsed = $state(false);   // pin: recolhido persistente (botao)
   let hovering = $state(false);    // hover sobre a sidebar recolhida -> expande temporario
+
+  // Toggle "Servidor | Projeto" (feature #3), persistido — mesmo padrao de cp_sidebar_w.
+  const GROUP_BY_KEY = 'cp_group_by';
+  type GroupBy = 'server' | 'project';
+  let groupBy = $state<GroupBy>(localStorage.getItem(GROUP_BY_KEY) === 'project' ? 'project' : 'server');
+  function setGroupBy(mode: GroupBy) {
+    groupBy = mode;
+    try { localStorage.setItem(GROUP_BY_KEY, mode); } catch { /* storage cheio/off */ }
+    recompute();
+  }
 
   // ── Largura redimensionavel (drag na borda direita), persistida ─────────────
   const WMIN = 200, WMAX = 520;
@@ -71,7 +86,7 @@
   }
 
   // Ordena DENTRO de cada grupo por nome (ordem alfabética estável — não pula quando a atividade muda).
-  function sortSessions(list: SessionInfo[]): SessionInfo[] {
+  function sortSessions<T extends SessionInfo>(list: T[]): T[] {
     return [...list].sort((a, b) => a.name.localeCompare(b.name));
   }
 
@@ -79,16 +94,40 @@
   function recompute() {
     if (servers.length === 0) { groups = []; return; }
     const seen = new Set<string>(); // dedup global: backend compartilhado por 2 URLs não duplica
+    if (groupBy === 'project') {
+      // Modo projeto: junta sessoes de TODOS os servidores pela chave do cwd. Servidor offline so
+      // perde as sessoes dele (sem banner por grupo — nao ha "1 servidor" pra apontar o erro).
+      const byKey = new Map<string, SessRow[]>();
+      for (const srv of servers) {
+        const slot = slots.get(srv.id);
+        if (!slot?.sessions) continue;
+        for (const s of slot.sessions) {
+          const key = `${s.jsonl ?? s.cwd ?? ''}::${s.name}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const pk = projectKey(s.cwd);
+          const arr = byKey.get(pk);
+          const row: SessRow = { ...s, serverId: srv.id };
+          if (arr) arr.push(row); else byKey.set(pk, [row]);
+        }
+      }
+      groups = [...byKey.entries()]
+        .map(([key, rows]) => ({ id: key, label: projectLabel(rows[0]?.cwd), color: null, error: null, sessions: sortSessions(rows) }))
+        .sort((a, b) => a.label.localeCompare(b.label));
+      return;
+    }
+    // Modo servidor (comportamento de sempre): 1 grupo por servidor, sempre presente (mesmo vazio
+    // ou offline), na ORDEM de `servers`.
     groups = servers.map((srv) => {
       const slot = slots.get(srv.id);
-      if (!slot || !slot.sessions) return { server: srv, sessions: [], error: slot?.error ?? null };
+      if (!slot || !slot.sessions) return { id: srv.id, label: srv.label, color: serverColor(srv.id), error: slot?.error ?? null, sessions: [] };
       const fresh = slot.sessions.filter((s) => {
         const key = `${s.jsonl ?? s.cwd ?? ''}::${s.name}`;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
-      });
-      return { server: srv, sessions: sortSessions(fresh), error: null };
+      }).map((s): SessRow => ({ ...s, serverId: srv.id }));
+      return { id: srv.id, label: srv.label, color: serverColor(srv.id), error: null, sessions: sortSessions(fresh) };
     });
   }
 
@@ -427,24 +466,31 @@
   </button>
 
   <nav class="sess-list" aria-label="Sessões">
-    {#each groups as g (g.server.id)}
+    {#if expanded}
+      <!-- Toggle Servidor|Projeto (feature #3): agrupa por servidor (hoje) ou por cwd. -->
+      <div class="group-toggle" role="radiogroup" aria-label="Agrupar por">
+        <button type="button" class:active={groupBy === 'server'} role="radio" aria-checked={groupBy === 'server'} onclick={() => setGroupBy('server')}>Servidor</button>
+        <button type="button" class:active={groupBy === 'project'} role="radio" aria-checked={groupBy === 'project'} onclick={() => setGroupBy('project')}>Projeto</button>
+      </div>
+    {/if}
+    {#each groups as g (g.id)}
       {#if expanded}
-        <div class="grp-head" title={g.error ? `${g.server.label}: ${g.error}` : g.server.label}>
-          <span class="grp-dot" style="background: {serverColor(g.server.id)};" aria-hidden="true"></span>
-          <span class="grp-label">{g.server.label}</span>
+        <div class="grp-head" title={g.error ? `${g.label}: ${g.error}` : g.label}>
+          {#if g.color}<span class="grp-dot" style="background: {g.color};" aria-hidden="true"></span>{/if}
+          <span class="grp-label">{g.label}</span>
           {#if g.error}<span class="grp-off">offline</span>{/if}
         </div>
       {/if}
-      {#each g.sessions as s (s.name)}
-        {@const rowKey = `${g.server.id}::${s.name}`}
-        <div class="sess-row" class:active={g.server.id === activeId && s.name === currentSession}>
+      {#each g.sessions as s (s.serverId + '::' + s.name)}
+        {@const rowKey = `${s.serverId}::${s.name}`}
+        <div class="sess-row" class:active={s.serverId === activeId && s.name === currentSession}>
           {#if editing === rowKey}
             <input
               class="sess-edit"
               bind:value={editValue}
               use:autofocus
               onkeydown={(e) => onEditKey(e, s.name)}
-              onblur={() => saveEdit(s.name, g.server.id)}
+              onblur={() => saveEdit(s.name, s.serverId)}
               aria-label="Renomear sessão"
             />
           {:else}
@@ -456,8 +502,8 @@
               onpointerup={pressEnd}
               onpointerleave={pressEnd}
               onpointercancel={pressEnd}
-              oncontextmenu={(e) => openMenu(e, s, g.server.id)}
-              onclick={() => onMainClick(s.name, g.server.id, s.tracked)}
+              oncontextmenu={(e) => openMenu(e, s, s.serverId)}
+              onclick={() => onMainClick(s.name, s.serverId, s.tracked)}
             >
               <span class="lead" aria-hidden="true">
                 {#if !expanded && s.state !== 'working'}
@@ -489,7 +535,7 @@
               {/if}
             </button>
             {#if expanded}
-              <button class="sess-del" onclick={(e) => handleDelete(s.name, g.server.id, e)} aria-label={`Excluir ${s.name}`}>×</button>
+              <button class="sess-del" onclick={(e) => handleDelete(s.name, s.serverId, e)} aria-label={`Excluir ${s.name}`}>×</button>
             {/if}
           {/if}
         </div>
@@ -700,6 +746,13 @@
   .new-plus { font-size: var(--text-lg); line-height: 1; flex-shrink: 0; }
 
   .sess-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin-top: var(--space-2); }
+  /* Toggle Servidor|Projeto (feature #3): segmentado, mesma largura dos 2 lados. */
+  .group-toggle {
+    display: flex; gap: 2px; padding: 2px; margin: 0 0 var(--space-2);
+    background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+  }
+  .group-toggle button { flex: 1; height: 28px; border-radius: var(--radius-sm); font-size: var(--text-xs); color: var(--text-secondary); }
+  .group-toggle button.active { background: var(--bg-elevated); color: var(--text-primary); font-weight: 600; }
   .grp-head {
     display: flex; align-items: center; gap: var(--space-2);
     padding: var(--space-2) var(--space-2) 4px;
