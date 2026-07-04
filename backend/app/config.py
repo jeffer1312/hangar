@@ -111,6 +111,10 @@ class Settings(BaseSettings):
     # falso-positivo. CP_STALL_POLL_SECONDS: intervalo do watchdog que varre a lista.
     stall_seconds: int = 300         # CP_STALL_SECONDS
     stall_poll_seconds: int = 30     # CP_STALL_POLL_SECONDS
+    # Auto-resume (feature #8, opt-in): quando uma sessao LIMITED tem fila nao-entregue e o reset
+    # parseia num horario confiavel, arma um Timer pra drenar sozinha no reset. Default OFF -- e uma
+    # acao UNATTENDED (manda prompt sem o usuario olhar); liga so quem quer. CP_AUTO_RESUME.
+    auto_resume: bool = False
     # Cloud sync hub (opt-in). CP_SYNC=1 turns THIS backend into the sync hub: it mounts /api/sync/*.
     # Stores only salt + auth verifier + ciphertext (zero-knowledge; tokens are encrypted client-side).
     sync: bool = False

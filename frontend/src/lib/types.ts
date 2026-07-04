@@ -17,6 +17,10 @@ export interface SessionInfo {
   // True quando "working" ha mais de CP_STALL_SECONDS sem avancar (feature #7: watchdog de travada) —
   // so tinge a linha; o backend (stall_watch.py) e quem decide o push.
   stalled?: boolean;
+  // Feature #8 (rate-limit radar): banner de limite de uso detectado no pane (best-effort). limit_reset
+  // = horario cru do reset ("3pm"/"15:30"), pro chip "limitado · HH:MM".
+  limited?: boolean;
+  limit_reset?: string | null;
 }
 
 // Sessão marcada com o servidor de origem (visão agregada multi-servidor).
@@ -59,6 +63,10 @@ export interface StateEvent {
   status_line?: string | null; // raw bottom chrome from the pane, shown as-is
   overlay?: boolean;            // overlay so-TUI aberto (/status, /config, /help, picker) -> espelho do pane
   login?: boolean;             // sessao na tela de welcome/login do Claude Code -> avisa + abre o espelho
+  // Feature #8 (rate-limit radar): banner de limite de uso no pane (best-effort). limit_reset = horario
+  // cru do reset ("3pm"/"15:30"), ou null.
+  limited?: boolean;
+  limit_reset?: string | null;
 }
 
 export interface CommandInfo {

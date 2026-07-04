@@ -12,7 +12,7 @@ from app.config import settings
 from app.models import SessionInfo
 from app.pqueue import PromptQueue
 from app.askquestion import clear_pending_askq
-from app.state import classify, _live_spinner
+from app.state import classify, _live_spinner, rate_limit_reset
 from app.hook_state import hook_state
 
 # Sentinela: distingue "pid nao informado" (resolve sozinho via tmux) de "pid=None" (sem pane).
@@ -504,12 +504,16 @@ class SessionRegistry:
                     sp2 = _live_spinner(f2[j])
                     if sp2 is None or sp2 == spinners[k]:
                         classified[k] = ("idle", None, None, None)
-            for info, c in zip(pending, classified):
+            for info, c, frame in zip(pending, classified, frames):
                 info.state = c[0]
                 info.label = c[1]
                 info.question = c[2]
                 info.options = c[3]
                 info.last_activity = _jsonl_mtime(info.jsonl)
+                # Rate-limit radar (feature #8): so pane-derivado, entao so nas infos raspadas aqui
+                # (marker path fica com o default False/None, igual a label/question/options).
+                info.limit_reset = rate_limit_reset(frame)
+                info.limited = info.limit_reset is not None
         # Travada (feature #7): "working" ha mais de CP_STALL_SECONDS sem o transcript avancar. So o
         # bool derivado pra UI/sig — o push (1x, com dedupe) e responsabilidade do stall_watch, nao daqui.
         now = time.time()

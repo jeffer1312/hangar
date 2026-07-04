@@ -692,7 +692,7 @@
 <div class="chat-screen" bind:this={screenEl} style:--nav-h={navH + 'px'}>
   <div class="sr-only" role="status">{stateAnnounce}</div>
   <div class="navbar-mount" bind:this={navEl}>
-    <NavBar title={sessionName} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} onOpenRun={() => (runOpen = true)} {runRunning} working={currentState === 'working'} />
+    <NavBar title={sessionName} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} onOpenRun={() => (runOpen = true)} {runRunning} working={currentState === 'working'} />
   </div>
 
   {#if loading}
