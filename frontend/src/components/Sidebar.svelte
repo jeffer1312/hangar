@@ -5,7 +5,8 @@
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import QrScanner from './QrScanner.svelte';
   import GitSheet from './GitSheet.svelte';
-  import type { SessionInfo, State } from '../lib/types';
+  import AttentionFeed from './AttentionFeed.svelte';
+  import type { SessionInfo, State, AggSession } from '../lib/types';
   import { stateLabels, stateColors, countAwaiting, projectKey, projectLabel } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import type { Server } from '../lib/auth';
@@ -462,6 +463,16 @@
   // `groups` (por servidor) — flatten pra contar aguardando em TODOS os servidores.
   const awaitingTotal = $derived(groups.reduce((n, g) => n + countAwaiting(g.sessions), 0));
   $effect(() => { updateBadge(awaitingTotal); });
+
+  // Fila cross-server pra a AttentionFeed (feature #6): achata os grupos (ja deduplicados no
+  // recompute) e enriquece cada linha com label/cor do servidor. Independe do modo de agrupamento.
+  const attnSessions = $derived<AggSession[]>(
+    groups.flatMap((g) => g.sessions).map((s) => ({
+      ...s,
+      serverLabel: servers.find((v) => v.id === s.serverId)?.label ?? s.serverId,
+      serverColor: serverColor(s.serverId),
+    })),
+  );
 </script>
 
 <aside class="sidebar" class:collapsed={!expanded} class:resizing
@@ -484,6 +495,9 @@
 
   <nav class="sess-list" aria-label="Sessões">
     {#if expanded}
+      <!-- "Precisa de você" (feature #6): fila cross-server de sessoes aguardando, fixa no topo.
+           Picker inline (OptionButtons) responde sem abrir o chat; nativo AskUserQuestion abre. -->
+      <AttentionFeed sessions={attnSessions} onOpenChat={(s) => onMainClick(s.name, s.serverId, s.tracked)} />
       <!-- Toggle Servidor|Projeto (feature #3): agrupa por servidor (hoje) ou por cwd. -->
       <div class="group-toggle" role="radiogroup" aria-label="Agrupar por">
         <button type="button" class:active={groupBy === 'server'} role="radio" aria-checked={groupBy === 'server'} onclick={() => setGroupBy('server')}>Servidor</button>

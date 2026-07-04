@@ -43,6 +43,21 @@ export function nextAwaiting(sessions: { name: string; state: State }[], current
   return names[(i < 0 ? 0 : i + 1) % names.length];
 }
 
+// "Precisa de você" (feature #6): fila de sessões AGUARDANDO resposta, mesclada de TODOS os
+// servidores, ordenada por quem espera HÁ MAIS TEMPO primeiro (last_activity mais antigo = topo,
+// mais urgente). Pura, sem side-effect (testável). Sem last_activity vai pro fim; empate desempata
+// por nome (posição estável entre polls, mesmo com last_activity mudando).
+export function attentionFeed<T extends { name: string; state: State; last_activity?: number | null }>(
+  sessions: T[],
+): T[] {
+  return sessions
+    .filter((s) => s.state === 'awaiting_input')
+    .sort(
+      (a, b) =>
+        (a.last_activity ?? Infinity) - (b.last_activity ?? Infinity) || a.name.localeCompare(b.name),
+    );
+}
+
 // Último segmento não vazio de um caminho absoluto (basename do projeto).
 export function basename(path: string): string {
   const parts = path.split('/').filter(Boolean);

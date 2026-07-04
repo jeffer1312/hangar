@@ -7,6 +7,7 @@
   import BottomSheet from '../components/BottomSheet.svelte';
   import ConfirmSheet from '../components/ConfirmSheet.svelte';
   import GitSheet from '../components/GitSheet.svelte';
+  import AttentionFeed from '../components/AttentionFeed.svelte';
   import { getSessions, createSession, deleteSession, renameSession, resumeSession, openSessionsStream } from '../lib/api';
   import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
@@ -499,6 +500,9 @@
   {/if}
 
   <div class="list-content">
+    <!-- "Precisa de você" (feature #6): fila fixa no topo com as sessoes AGUARDANDO de TODOS os
+         servidores. Responder aqui (picker inline) nao abre o chat; nativo AskUserQuestion abre. -->
+    <AttentionFeed {sessions} onOpenChat={openSession} />
     {#if sessions.length > 0}
       <!-- Toggle Servidor|Projeto (feature #3): so faz sentido com sessao pra agrupar. -->
       <div class="group-toggle" role="radiogroup" aria-label="Agrupar por">
