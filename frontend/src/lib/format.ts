@@ -37,6 +37,20 @@ export function basename(path: string): string {
   return parts.length ? parts[parts.length - 1] : path;
 }
 
+// Chave de agrupamento por PROJETO (toggle Servidor|Projeto da lista de sessões, feature #3): o cwd
+// normalizado (sem barra final) — duas sessões no MESMO caminho caem no mesmo grupo mesmo vindo de
+// servidores diferentes. Sessão sem cwd cai numa chave fixa isolada (não mistura com um projeto real).
+const NO_CWD_KEY = 'no-cwd'; // sentinela: cwd real sempre comeca com "/" ou "~", nunca colide
+export function projectKey(cwd: string | null | undefined): string {
+  if (!cwd) return NO_CWD_KEY;
+  return cwd.replace(/\/+$/, '') || '/';
+}
+
+// Rótulo exibido pro grupo de projeto: basename do cwd (reusa basename); sem cwd -> rótulo fixo.
+export function projectLabel(cwd: string | null | undefined): string {
+  return cwd ? basename(cwd) : 'sem projeto';
+}
+
 // Anexos de arquivo por CAMINHO citado na conversa (sua ou minha msg). v1 = só "preview-worthy"
 // (mídia + html + pdf); texto/código fora de proposito pra nao virar ruido (caminho de codigo
 // aparece toda hora na prosa). O backend so serve o que esta no transcript (consentido).
