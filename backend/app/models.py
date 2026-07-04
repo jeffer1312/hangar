@@ -134,3 +134,25 @@ class AccountCost(BaseModel):
 
 class CostReport(BaseModel):
     accounts: list[AccountCost]
+
+
+class Runner(BaseModel):
+    label: str
+    command: str
+    source: Literal["npm", "make", "stack"] = "npm"
+    is_dev_guess: bool = False
+
+
+class RunInfo(BaseModel):
+    command: str
+    since: Optional[int] = None
+
+
+class RunnersResponse(BaseModel):
+    detected: list[Runner]
+    remembered: Optional[str] = None
+    running: Optional[RunInfo] = None
+
+
+class RunBody(BaseModel):
+    command: str
