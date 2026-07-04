@@ -667,6 +667,12 @@
                     <span class="cwd" title={s.cwd}><span class="cwd-prefix">{cp.prefix}</span><span class="cwd-base">{cp.base}</span></span>
                   {/if}
                 </span>
+                {#if s.limited}
+                  <span
+                    class="limited-chip"
+                    title={s.limit_reset ? `Limite de uso atingido — volta ${s.limit_reset}` : 'Limite de uso atingido'}
+                  >⏳{#if s.limit_reset}&nbsp;{s.limit_reset}{/if}</span>
+                {/if}
                 <span
                   class="state-chip"
                   class:stalled={s.stalled === true}
@@ -989,6 +995,13 @@
   /* Travada (feature #7): anel âmbar sutil no chip — avisa sem gritar. */
   .state-chip.stalled {
     box-shadow: inset 0 0 0 1px var(--warning);
+  }
+  /* Rate-limit radar (feature #8): chip proprio, mesma familia visual do stalled (âmbar, calmo). */
+  .limited-chip {
+    flex-shrink: 0; font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+    padding: 2px 7px; border-radius: var(--radius-full); white-space: nowrap;
+    color: var(--warning); background: rgba(255, 159, 10, 0.12);
+    font-variant-numeric: tabular-nums;
   }
   .lead { width: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
   /* Rail recolhido: iniciais precisam de mais espaco que o icone de 18px. */

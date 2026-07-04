@@ -82,11 +82,13 @@ async def list_events(poll: float = 1.5, ping_every: int = 7):
         # de uma sessao ativa -> sem isto a lista inteira re-emitia a cada poll (~1.5s) sem nada
         # visivel mudar = flicker no front. last_activity so e tiebreak de ordenacao + tempo relativo
         # coarse (minutos) no switcher; uns segundos defasado e invisivel. Re-emite so em mudanca de
-        # membership/state/cwd/tracked/jsonl/question/stalled. O payload ainda CARREGA last_activity (so
-        # nao dispara). question entra pra a linha atualizar quando uma sessao passa a perguntar algo
-        # novo; stalled (feature #7) entra pra a linha tingir/destingir quando o watchdog flipar o bool.
+        # membership/state/cwd/tracked/jsonl/question/stalled/limited. O payload ainda CARREGA
+        # last_activity (so nao dispara). question entra pra a linha atualizar quando uma sessao passa a
+        # perguntar algo novo; stalled (feature #7) entra pra a linha tingir/destingir quando o watchdog
+        # flipar o bool; limited (feature #8) entra pro chip "limitado" aparecer/sumir na hora.
         sig = json.dumps(
-            [(i.name, i.cwd, i.state, i.tracked, i.jsonl, i.question, i.stalled) for i in infos],
+            [(i.name, i.cwd, i.state, i.tracked, i.jsonl, i.question, i.stalled, i.limited)
+             for i in infos],
             ensure_ascii=False,
         )
         if sig != last:
