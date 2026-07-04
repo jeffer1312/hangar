@@ -58,6 +58,13 @@ export function attentionFeed<T extends { name: string; state: State; last_activ
     );
 }
 
+// Data/hora local curta a partir de um epoch em SEGUNDOS — usado pra rotular os candidatos de resume
+// (última atividade de cada transcript) nos dois views. Falsy -> string vazia. Pura/testável.
+export function fmtWhen(mtime?: number | null): string {
+  if (!mtime) return '';
+  return new Date(mtime * 1000).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+}
+
 // Último segmento não vazio de um caminho absoluto (basename do projeto).
 export function basename(path: string): string {
   const parts = path.split('/').filter(Boolean);

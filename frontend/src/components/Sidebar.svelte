@@ -1,13 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { openSessionsStream, createSession, deleteSession, renameSession, openEditor, gitAction, getBranches, checkoutBranch, getPushSettings, setSessionMute, broadcast, setThenLink, clearThenLink } from '../lib/api';
+  import { openSessionsStream, createSession, deleteSession, renameSession, openEditor, gitAction, getBranches, checkoutBranch, getPushSettings, setSessionMute, setQuietHours, resumeSession, broadcast, setThenLink, clearThenLink } from '../lib/api';
   import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor, clearCredentials, parseServerPairing } from '../lib/auth';
+  import { enablePush, pushSupported } from '../lib/push';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import QrScanner from './QrScanner.svelte';
   import GitSheet from './GitSheet.svelte';
   import AttentionFeed from './AttentionFeed.svelte';
-  import type { SessionInfo, State, AggSession } from '../lib/types';
-  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, projectKey, projectLabel, effectiveGroupBy, type GroupBy } from '../lib/format';
+  import type { SessionInfo, State, AggSession, ResumeCandidate } from '../lib/types';
+  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, projectKey, projectLabel, effectiveGroupBy, fmtWhen, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import type { Server } from '../lib/auth';
   import Lottie from './Lottie.svelte';
@@ -173,8 +174,85 @@
   onMount(() => {
     servers = listServers();
     connect(servers);
+    if (pushSupported()) void loadQuietHours();   // pre-carrega a janela de silencio do server ativo
     return () => { for (const es of streams.values()) es.close(); streams.clear(); };
   });
+
+  // ── Web push (paridade com o mobile): assina + registra a inscricao em TODOS os servidores. Reusa o
+  // MESMO enablePush do mobile (lib/push) — nao reimplementa. Desktop nao tinha jeito de ligar push,
+  // entao features que dependem dele (notif de "aguardando") nao funcionavam por aqui. ──────────────
+  let pushBusy = $state(false);
+  let pushMsg = $state('');
+  async function handleEnablePush() {
+    pushBusy = true;
+    pushMsg = '';
+    try {
+      const n = await enablePush();
+      pushMsg = `Ativado em ${n} servidor${n > 1 ? 'es' : ''}.`;
+    } catch (e) {
+      pushMsg = e instanceof Error ? e.message : 'Erro ao ativar.';
+    } finally {
+      pushBusy = false;
+    }
+  }
+
+  // Quiet hours (feature #5): janela GLOBAL de silencio pro push de "aguardando", do servidor ATIVO.
+  // <input type="time"> nativo. Carrega no mount (troca de server ativo faz reload -> revalida). Best-
+  // effort (offline/sem rota -> campos vazios, nao trava).
+  let qhStart = $state('');
+  let qhEnd = $state('');
+  let qhMsg = $state('');
+  async function loadQuietHours() {
+    try {
+      const p = await getPushSettings();
+      qhStart = p.quiet_hours?.start ?? '';
+      qhEnd = p.quiet_hours?.end ?? '';
+    } catch { /* offline/sem rota: campos ficam vazios, tenta salvar de novo depois */ }
+    qhMsg = '';
+  }
+  async function saveQuietHours() {
+    try {
+      await setQuietHours(qhStart || null, qhEnd || null);
+      qhMsg = qhStart && qhEnd ? `silenciado ${qhStart}–${qhEnd}` : 'desligado';
+    } catch (e) {
+      qhMsg = e instanceof Error ? e.message : 'erro ao salvar';
+    }
+  }
+
+  // Reconectar streams (paridade com o "Atualizar" do menu mobile): fecha e reabre os EventSources de
+  // todos os servidores — resgata um stream meio-aberto sem recarregar a pagina. Mesmo bloco do menu
+  // mobile (SessionList).
+  function reconnectStreams() {
+    for (const es of streams.values()) es.close();
+    streams.clear();
+    connect(servers);
+  }
+
+  // ── Retomar sessao "sem id" (paridade com o SessionCard do mobile): relança o pane com
+  // `claude --resume <uuid>` -> passa a rastrear. Caso seguro resolve direto; caso ambiguo o backend
+  // devolve candidatos e abrimos o modal pra confirmar QUAL conversa retomar. Reusa o MESMO
+  // resumeSession. withServer mira o dono e restaura (igual ao resto das ops). ──────────────────────
+  let resumeModal = $state<{ name: string; serverId: string; candidates: ResumeCandidate[] } | null>(null);
+  let resumeBusy = $state('');   // nome da sessao em processamento (desabilita o botao/itens)
+  let resumeError = $state('');
+  async function handleResume(name: string, serverId: string, sessionId?: string, e?: MouseEvent) {
+    e?.stopPropagation();
+    resumeError = '';
+    resumeBusy = name;
+    try {
+      const r = await withServer(serverId, () => resumeSession(name, sessionId));
+      if (r && 'ambiguous' in r && r.ambiguous) {
+        resumeModal = { name, serverId, candidates: r.candidates };   // ambiguo: escolher no modal
+      } else {
+        resumeModal = null;   // religada (caso seguro ou escolha confirmada); o SSE atualiza a linha
+      }
+    } catch (err) {
+      resumeError = err instanceof Error ? err.message : 'falha ao retomar';
+      if (!resumeModal) flash(`retomar: ${resumeError}`);   // erro do botao da linha -> toast
+    } finally {
+      resumeBusy = '';
+    }
+  }
 
   async function handleCreate(name: string, cwd?: string, configDir?: string | null) {
     // O CreateSessionSheet já posicionou o servidor-alvo como ativo (selectServer).
@@ -829,6 +907,22 @@
               {/if}
             </button>
             {#if expanded && !selectMode}
+              <!-- Retomar (paridade com o SessionCard do mobile): unica acao possivel numa linha "sem
+                   id" -> visivel sempre (nao escondida no hover), tingida de accent. Reusa resumeSession. -->
+              {#if s.tracked === false}
+                <button
+                  class="sess-resume"
+                  onclick={(e) => handleResume(s.name, s.serverId, undefined, e)}
+                  disabled={resumeBusy === s.name}
+                  aria-label={`Retomar conversa de ${s.name}`}
+                  title="Retomar conversa"
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="1 4 1 10 7 10"/>
+                    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+                  </svg>
+                </button>
+              {/if}
               <!-- Git da linha (paridade com o mobile): abre a GitSheet no repo do cwd, sem abrir o
                    chat. So quando ha cwd. stopPropagation pra nao disparar rename/navegacao da linha. -->
               {#if s.cwd}
@@ -939,6 +1033,27 @@
         <span class="srv-label">{activeServer?.label ?? 'servidor'}</span>
         <span class="srv-caret" aria-hidden="true">⌃</span>
       </button>
+      {#if pushSupported()}
+        <!-- Notificacoes (paridade com o menu mobile): ligar web push + janela de silencio. Desktop nao
+             tinha como ligar push -> notif de "aguardando" nao chegava por aqui. -->
+        <div class="notif-box">
+          <button class="notif-enable" onclick={handleEnablePush} disabled={pushBusy}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+              <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+            </svg>
+            <span>{pushBusy ? 'Ativando…' : 'Ativar notificações'}</span>
+          </button>
+          {#if pushMsg}<p class="notif-msg">{pushMsg}</p>{/if}
+          <div class="qh-row">
+            <input type="time" bind:value={qhStart} aria-label="Início do silêncio" />
+            <span>e</span>
+            <input type="time" bind:value={qhEnd} aria-label="Fim do silêncio" />
+            <button class="qh-save" onclick={saveQuietHours}>Salvar</button>
+          </div>
+          {#if qhMsg}<p class="notif-msg">{qhMsg}</p>{/if}
+        </div>
+      {/if}
       <button class="costs-btn" onclick={() => (window.location.hash = '#/costs')}>Custos</button>
       <!-- Arquivo (conversas mortas): mesmo destino do menu mobile (SessionList), so entrypoint no desktop. -->
       <button class="archive-btn" onclick={() => (window.location.hash = '#/archive')}>
@@ -948,6 +1063,15 @@
           <line x1="10" y1="12" x2="14" y2="12"/>
         </svg>
         <span>Arquivo</span>
+      </button>
+      <!-- Reconectar streams (paridade com o "Atualizar" do menu mobile): fecha e reabre os SSE. -->
+      <button class="reconnect-btn" onclick={reconnectStreams}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="23 4 23 10 17 10"/>
+          <polyline points="1 20 1 14 7 14"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
+        <span>Atualizar</span>
       </button>
       <button class="logout-btn" onclick={() => (confirmLogout = true)}>Sair</button>
     </div>
@@ -964,7 +1088,7 @@
 <CreateSessionSheet open={showCreate} {servers} onClose={() => (showCreate = false)} onCreate={handleCreate} onOpenSession={onSelect} />
 {#if scanning}<QrScanner onScan={handleScan} onClose={() => (scanning = false)} />{/if}
 
-<svelte:window onkeydown={(e) => { if (e.key === 'Escape') { if (menu) closeMenu(); else if (confirmDel) confirmDel = null; else if (confirmSrv) confirmSrv = null; else if (confirmBranch) confirmBranch = null; else if (confirmLogout) confirmLogout = false; } }} />
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape') { if (menu) closeMenu(); else if (resumeModal) resumeModal = null; else if (confirmDel) confirmDel = null; else if (confirmSrv) confirmSrv = null; else if (confirmBranch) confirmBranch = null; else if (confirmLogout) confirmLogout = false; } }} />
 
 <!-- Menu de contexto (botao direito na sessao). Backdrop full-screen captura o clique-fora. -->
 {#if menu}
@@ -1094,6 +1218,38 @@
       <button type="button" class="c-btn" onclick={() => (confirmBranch = null)}>Cancelar</button>
       <button type="button" class="c-btn" onclick={() => { const c = confirmBranch; confirmBranch = null; if (c) doCheckout(c.name, c.serverId, c.branch); }}>Trocar assim</button>
       <button type="button" class="c-btn c-primary" onclick={() => { const c = confirmBranch; confirmBranch = null; if (c) stashAndCheckout(c.name, c.serverId, c.branch); }}>Guardar e trocar</button>
+    </div>
+  </div>
+{/if}
+
+<!-- Retomar conversa — caso AMBIGUO (varias sessoes no mesmo cwd): escolher qual transcript retomar.
+     Paridade com o BottomSheet de resume do mobile (SessionList), no estilo dos modais do desktop. -->
+{#if resumeModal}
+  {@const rm = resumeModal}
+  <div class="confirm-backdrop" onclick={() => (resumeModal = null)} role="presentation"></div>
+  <div class="confirm-card resume-card" role="dialog" aria-modal="true" aria-label="Retomar conversa">
+    <p class="confirm-title">Retomar qual conversa?</p>
+    <p class="confirm-hint">Há mais de uma sessão nesta pasta — escolha o transcript pra continuar em <strong>{rm.name}</strong>.</p>
+    {#if resumeError}<p class="resume-err">{resumeError}</p>{/if}
+    <ul class="resume-list">
+      {#each rm.candidates as c (c.session_id)}
+        <li>
+          <button
+            type="button"
+            class="resume-item"
+            disabled={c.in_use || resumeBusy === rm.name}
+            onclick={() => handleResume(rm.name, rm.serverId, c.session_id)}
+          >
+            <span class="resume-item-preview">{c.preview || '(sem prévia)'}</span>
+            <span class="resume-item-meta">
+              {fmtWhen(c.mtime)}{#if c.in_use} · em uso por outra sessão{/if}
+            </span>
+          </button>
+        </li>
+      {/each}
+    </ul>
+    <div class="confirm-actions">
+      <button type="button" class="c-btn" onclick={() => (resumeModal = null)}>Fechar</button>
     </div>
   </div>
 {/if}
@@ -1356,6 +1512,15 @@
   @media (hover: hover) { .sess-row:hover .sess-git { opacity: 1; } }
   @media (hover: none) { .sess-git { opacity: 0.55; } }   /* touch: sempre visível */
   .sess-git:hover { color: var(--accent); background: var(--bg-base); }
+  /* Retomar da linha "sem id": unica acao possivel -> SEMPRE visivel (nao hover-revealed), tingida de
+     accent pra puxar o olho (a row inteira fica apagada com opacity 0.45). */
+  .sess-resume {
+    width: 22px; height: 22px; min-height: 0; flex-shrink: 0; border-radius: var(--radius-sm);
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--accent); background: var(--accent-dim); margin-right: 2px;
+  }
+  .sess-resume:hover { background: var(--accent); color: #fff; }
+  .sess-resume:disabled { opacity: 0.5; }
 
   /* Composer compacto do broadcast (feature #9): so texto + enviar, sem anexos/slash-UI. */
   .broadcast-bar {
@@ -1434,6 +1599,34 @@
   .archive-btn:hover { background: var(--bg-hover); color: var(--accent); }
   .logout-btn { height: 34px; padding: 0 var(--space-2); text-align: left; justify-content: flex-start; color: var(--text-muted); font-size: var(--text-sm); border-radius: var(--radius-md); }
   .logout-btn:hover { background: var(--bg-hover); color: var(--error); }
+  /* Reconectar streams: mesmo formato dos itens de rodape (icone + rotulo). */
+  .reconnect-btn { display: flex; align-items: center; gap: var(--space-2); height: 34px; padding: 0 var(--space-2); justify-content: flex-start; color: var(--text-secondary); font-size: var(--text-sm); border-radius: var(--radius-md); }
+  .reconnect-btn:hover { background: var(--bg-hover); color: var(--accent); }
+
+  /* ── Notificacoes (push + quiet hours), paridade com o menu mobile ── */
+  .notif-box {
+    display: flex; flex-direction: column; gap: var(--space-1);
+    margin: var(--space-1) 0; padding: var(--space-2);
+    background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+  }
+  .notif-enable {
+    display: flex; align-items: center; gap: var(--space-2); height: 32px; min-height: 0;
+    padding: 0 var(--space-2); justify-content: flex-start;
+    color: var(--text-secondary); font-size: var(--text-sm); border-radius: var(--radius-sm);
+  }
+  .notif-enable:hover { background: var(--bg-hover); color: var(--accent); }
+  .notif-enable:disabled { color: var(--text-muted); }
+  .notif-msg { font-size: var(--text-xs); color: var(--text-muted); margin: 0; padding: 0 var(--space-2); }
+  .qh-row { display: flex; align-items: center; gap: var(--space-1); padding: 0 var(--space-2); font-size: var(--text-xs); color: var(--text-secondary); }
+  .qh-row input[type='time'] {
+    min-width: 0; flex: 1; background: var(--bg-surface); border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm); color: var(--text-primary); font-size: var(--text-xs); padding: 3px 4px;
+  }
+  .qh-save {
+    flex-shrink: 0; min-height: 0; font-size: var(--text-xs); font-weight: 600; color: var(--accent);
+    padding: 4px 8px; border-radius: var(--radius-full); border: 1px solid var(--accent);
+  }
+  .qh-save:hover { background: var(--accent); color: #fff; }
 
   /* ── Menu de contexto ── */
   .menu-backdrop { position: fixed; inset: 0; z-index: 40; }
@@ -1507,6 +1700,21 @@
   .c-btn:hover { background: var(--bg-surface); }
   .c-danger { background: var(--error); color: #fff; }
   .c-danger:hover { background: var(--error); filter: brightness(1.08); }
+
+  /* Modal de resume (caso ambiguo): lista de transcripts candidatos pra escolher — mais largo que os
+     confirms simples pra caber as previas. */
+  .resume-card { width: min(440px, 92vw); }
+  .resume-err { font-size: var(--text-sm); color: var(--error); margin: 0; }
+  .resume-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); max-height: 50vh; overflow-y: auto; }
+  .resume-item {
+    width: 100%; text-align: left; display: flex; flex-direction: column; gap: 3px;
+    padding: var(--space-3); background: var(--bg-base);
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-md); cursor: pointer;
+  }
+  .resume-item:hover { background: var(--bg-hover); }
+  .resume-item:disabled { opacity: 0.5; cursor: not-allowed; }
+  .resume-item-preview { font-size: var(--text-sm); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .resume-item-meta { font-size: var(--text-xs); color: var(--text-muted); }
 
   /* Banner efemero (resultado do git pull / erro do editor). */
   .menu-toast {
