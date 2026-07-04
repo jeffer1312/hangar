@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { openSessionsStream, createSession, deleteSession, renameSession, openEditor, gitAction, getBranches, checkoutBranch, getPushSettings, setSessionMute, broadcast } from '../lib/api';
+  import { openSessionsStream, createSession, deleteSession, renameSession, openEditor, gitAction, getBranches, checkoutBranch, getPushSettings, setSessionMute, broadcast, setThenLink, clearThenLink } from '../lib/api';
   import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor, clearCredentials } from '../lib/auth';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import QrScanner from './QrScanner.svelte';
@@ -231,7 +231,7 @@
   }
 
   // ── Menu de contexto (botao direito) na linha da sessao — so desktop ──────────
-  let menu = $state<{ x: number; y: number; name: string; serverId: string; cwd: string } | null>(null);
+  let menu = $state<{ x: number; y: number; name: string; serverId: string; cwd: string; thenTarget: string | null } | null>(null);
   let menuMsg = $state('');   // banner efemero pro resultado do git pull / erro do editor
   let flashTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -242,7 +242,7 @@
   function openMenu(e: MouseEvent, s: SessionInfo, serverId: string) {
     e.preventDefault();
     clearTimeout(pressTimer);   // cancela o long-press (senao dispararia rename junto)
-    menu = { x: e.clientX, y: e.clientY, name: s.name, serverId, cwd: s.cwd ?? '' };
+    menu = { x: e.clientX, y: e.clientY, name: s.name, serverId, cwd: s.cwd ?? '', thenTarget: s.then_target ?? null };
     // Silenciar (feature #5): estado carregado sob demanda (nao trava a abertura do menu). null =
     // ainda carregando/desconhecido -> o botao mostra "Silenciar" ate a resposta chegar.
     menuMuted = null;
@@ -250,7 +250,7 @@
       .then((p) => { if (menu?.name === s.name) menuMuted = p.muted.includes(s.name); })
       .catch(() => { menuMuted = false; });
   }
-  function closeMenu() { menu = null; branchView = null; }
+  function closeMenu() { menu = null; branchView = null; chainView = null; }
   let menuMuted = $state<boolean | null>(null);
   async function menuToggleMute() {
     if (!menu) return;
@@ -342,6 +342,50 @@
     menuMsg = msg;
     clearTimeout(flashTimer);
     flashTimer = setTimeout(() => { menuMsg = ''; }, 4000);
+  }
+
+  // Submenu "Quando terminar, enviar p/…" (feature #12, 2a pagina do menu — mesma ideia do branchView):
+  // picker de sessao ALVO (mesmo servidor da fonte, ThenLink/registry sao locais ao backend) + texto do
+  // prompt. target=null ate escolher; pre-preenche com o vinculo ja armado (so o alvo — o texto fica no
+  // backend e nao volta por GET, entao reabrir pra editar exige redigitar).
+  let chainView = $state<{ target: string | null; text: string } | null>(null);
+  let chainBusy = $state(false);
+  function menuChain() {
+    if (!menu) return;
+    chainView = { target: menu.thenTarget, text: '' };
+  }
+  // Candidatas ao encadeamento: sessoes do MESMO servidor da fonte (o vinculo e resolvido pelo backend
+  // dessa sessao — nao ha como encadear pra uma sessao de OUTRO servidor), exceto ela mesma.
+  function chainCandidates(serverId: string, exclude: string) {
+    return groups.flatMap((g) => g.sessions).filter((s) => s.serverId === serverId && s.name !== exclude);
+  }
+  async function saveChain() {
+    if (!menu || !chainView?.target) return;
+    const text = chainView.text.trim();
+    if (!text) return;
+    const { name, serverId } = menu;
+    const target = chainView.target;
+    chainBusy = true;
+    try {
+      await withServer(serverId, () => setThenLink(name, target, text));
+      flash(`encadeado → ${target}`);
+    } catch (e) {
+      flash(`encadear: ${errMsg(e)}`);
+    } finally {
+      chainBusy = false;
+      closeMenu();
+    }
+  }
+  async function removeChain() {
+    if (!menu) return;
+    const { name, serverId } = menu;
+    closeMenu();
+    try {
+      await withServer(serverId, () => clearThenLink(name));
+      flash('vínculo removido');
+    } catch (e) {
+      flash(`remover vínculo: ${errMsg(e)}`);
+    }
   }
 
   // api.ts mira SEMPRE o server ativo -> aponta pro dono da sessao e restaura (igual handleDelete).
@@ -673,6 +717,10 @@
                     title={s.limit_reset ? `Limite de uso atingido — volta ${s.limit_reset}` : 'Limite de uso atingido'}
                   >⏳{#if s.limit_reset}&nbsp;{s.limit_reset}{/if}</span>
                 {/if}
+                {#if s.then_target}
+                  <!-- Feature #12: indicador do vinculo 'then' armado ("quando terminar -> enviar pra"). -->
+                  <span class="chain-chip" title={`Quando terminar, envia pra "${s.then_target}"`}>🔗&nbsp;{s.then_target}</span>
+                {/if}
                 <span
                   class="state-chip"
                   class:stalled={s.stalled === true}
@@ -792,6 +840,41 @@
       {:else}
         <div class="ctx-info">sem branches</div>
       {/if}
+    {:else if chainView}
+      <button type="button" class="ctx-back" onclick={() => (chainView = null)}>‹ Quando terminar, enviar p/</button>
+      <div class="ctx-sep"></div>
+      {#if chainCandidates(menu.serverId, menu.name).length}
+        <div class="ctx-scroll">
+          {#each chainCandidates(menu.serverId, menu.name) as c (c.serverId + c.name)}
+            <button
+              type="button" role="menuitem" class="ctx-branch"
+              class:current={c.name === chainView.target}
+              onclick={() => { if (chainView) chainView.target = c.name; }}
+            >{c.name}{#if c.name === chainView.target}<span class="ctx-cur">✓</span>{/if}</button>
+          {/each}
+        </div>
+      {:else}
+        <div class="ctx-info">nenhuma outra sessão neste servidor</div>
+      {/if}
+      <div class="ctx-sep"></div>
+      <div class="ctx-chain-form">
+        <input
+          type="text"
+          class="ctx-chain-input"
+          placeholder="Prompt a enviar…"
+          bind:value={chainView.text}
+          onkeydown={(e) => { if (e.key === 'Enter') saveChain(); }}
+          aria-label="Prompt a enviar pra sessão alvo"
+        />
+        <button
+          type="button" class="ctx-chain-save" onclick={saveChain}
+          disabled={!chainView.target || !chainView.text.trim() || chainBusy}
+        >Salvar</button>
+      </div>
+      {#if menu.thenTarget}
+        <div class="ctx-sep"></div>
+        <button type="button" role="menuitem" class="danger" onclick={removeChain}>Remover vínculo</button>
+      {/if}
     {:else}
       <button type="button" role="menuitem" onclick={menuRename}>Renomear</button>
       <button type="button" role="menuitem" onclick={menuToggleMute}>
@@ -805,6 +888,10 @@
         <button type="button" role="menuitem" onclick={menuGitPull}>Git pull</button>
         <button type="button" role="menuitem" onclick={menuBranches}>Trocar branch<span class="ctx-more">›</span></button>
       {/if}
+      <div class="ctx-sep"></div>
+      <button type="button" role="menuitem" onclick={menuChain}>
+        {menu.thenTarget ? `Encadeado → ${menu.thenTarget}` : 'Quando terminar, enviar p/…'}<span class="ctx-more">›</span>
+      </button>
       <div class="ctx-sep"></div>
       <button type="button" role="menuitem" class="danger" onclick={menuDelete}>Excluir</button>
     {/if}
@@ -1003,6 +1090,13 @@
     color: var(--warning); background: rgba(255, 159, 10, 0.12);
     font-variant-numeric: tabular-nums;
   }
+  /* Feature #12: indicador do vinculo 'then' — mesmo formato do limited-chip, cor neutra (accent). */
+  .chain-chip {
+    flex-shrink: 0; font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+    padding: 2px 7px; border-radius: var(--radius-full); white-space: nowrap;
+    max-width: 96px; overflow: hidden; text-overflow: ellipsis;
+    color: var(--accent); background: var(--accent-dim);
+  }
   .lead { width: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
   /* Rail recolhido: iniciais precisam de mais espaco que o icone de 18px. */
   .sidebar.collapsed .lead { width: auto; }
@@ -1124,6 +1218,18 @@
   .ctx-branch { font-family: var(--font-mono); font-size: var(--text-xs); }
   .ctx-branch.current { color: var(--accent); }
   .ctx-cur { margin-left: auto; padding-left: var(--space-2); }
+  /* Feature #12: form do encadeamento (alvo escolhido acima na lista + texto do prompt). */
+  .ctx-chain-form { display: flex; gap: 4px; padding: 4px 6px; }
+  .ctx-chain-input {
+    flex: 1; min-width: 0; height: 28px; padding: 0 8px; font-size: var(--text-sm);
+    color: var(--text-primary); background: var(--bg-base); border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+  }
+  .ctx-chain-save {
+    height: 28px; padding: 0 10px; font-size: var(--text-sm); font-weight: 600;
+    color: var(--accent); background: var(--accent-dim); border-radius: var(--radius-sm);
+  }
+  .ctx-chain-save:disabled { opacity: 0.5; }
 
   /* ── Confirmar exclusao (modal centrado) ── */
   .confirm-backdrop { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, 0.5); }

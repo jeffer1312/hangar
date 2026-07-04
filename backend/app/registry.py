@@ -11,6 +11,7 @@ from app import tmux
 from app.config import settings
 from app.models import SessionInfo
 from app.pqueue import PromptQueue
+from app.chain import ThenLink
 from app.askquestion import clear_pending_askq
 from app.state import classify, _live_spinner, rate_limit_reset
 from app.hook_state import hook_state
@@ -464,8 +465,10 @@ class SessionRegistry:
         sids: dict[str, Optional[str]] = {}
         for p in tmux.list_panes_active():
             jsonl, tracked = self.resolve_tracked(p["name"], p["cwd"], p["pid"], children)
+            link = ThenLink(p["name"]).get()
             out.append(SessionInfo(name=p["name"], cwd=p["cwd"], jsonl=jsonl, tracked=tracked,
-                                   branch=self._branch_of(p["cwd"])))
+                                   branch=self._branch_of(p["cwd"]),
+                                   then_target=link.get("target") if link else None))
             sids[p["name"]] = self._repl_sid(p["pid"], children)
         # Guarda de colisao: 2+ sessoes no mesmo jsonl -> so a dona mantem (mata a duplicata/cross-wire).
         self._dedupe_collisions(out, sids)
@@ -543,6 +546,9 @@ class SessionRegistry:
         # fantasmariam aqui via merged_history. Limpa igual o /clear faz. Seguro: a sessao nova ainda
         # nem aceitou input, nao ha fila legitima a preservar.
         PromptQueue(name).clear()
+        # Mesmo motivo, pro vinculo 'then' (feature #12): nome reusado nao deve herdar um encadeamento
+        # de uma sessao antiga e ja morta.
+        ThenLink(name).clear()
         # Fixa o jsonl FRESCO no cache na hora: resolve() devolve este uuid mesmo antes do claude
         # escrever o arquivo, evitando o fallback newest-by-mtime pescar um jsonl ja existente da pasta.
         self._jsonl_cache[name] = jsonl
@@ -561,6 +567,9 @@ class SessionRegistry:
         # A fila duravel tambem e keyed por NOME -> move junto, senao a sessao renomeada perde as
         # entradas nao-drenadas e elas ficam orfas no nome velho (fantasma se reusarem `old`).
         PromptQueue(old).rename(new)
+        # Vinculo 'then' (feature #12): mesmo motivo — keyed por NOME, move junto pra sessao renomeada
+        # nao perder o encadeamento armado.
+        ThenLink(old).rename(new)
 
     def kill(self, name: str) -> None:
         # Limpa o sidecar do AskUserQuestion ANTES de matar (precisa do processo vivo pra resolver o
@@ -577,6 +586,7 @@ class SessionRegistry:
         # Sessao morta nao deixa fila pra tras: senao acumula orfaos e uma futura sessao de mesmo
         # nome herdaria essas entradas como bubble-fantasma (mesmo motivo do clear no create()).
         PromptQueue(name).clear()
+        ThenLink(name).clear()  # mesmo motivo, pro vinculo 'then' (feature #12)
 
     # ── Resume de sessao "sem id" ────────────────────────────────────────────────
     # Uma sessao aberta com `claude` cru (sem --session-id) JA tem um transcript <uuid>.jsonl; so nao da

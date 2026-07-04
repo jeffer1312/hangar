@@ -10,7 +10,9 @@ Tambem faz o mesmo pro rate-limit radar (feature #8, campo `limited`): PIGGYBACK
 (em vez de um 2o loop/Timer proprio) pq ja reusa a lista classificada a cada poll — dedupe/re-arme
 espelha exatamente o padrao do stall acima, so trocando o campo. Alem do push, tenta o auto-resume
 opt-in (CP_AUTO_RESUME): se a sessao tem fila nao-entregue e o reset parseia num horario confiavel,
-arma um Timer pra drenar sozinha (ver _maybe_auto_resume).
+arma um Timer pra drenar sozinha (ver _maybe_auto_resume). O auto-resume tambem exige o kill-switch
+MESTRE (feature #12, app.config.automations_enabled) — o mesmo portao que governa o encadeamento de
+sessao em app/chain.py + app/api.py.
 """
 import asyncio
 import logging
@@ -18,7 +20,7 @@ import re
 import threading
 from datetime import datetime, timedelta
 
-from app.config import settings
+from app.config import settings, automations_enabled
 from app import push
 
 _log = logging.getLogger("claude_pocket.stall_watch")
@@ -68,11 +70,12 @@ def _has_undelivered_queue(name: str) -> bool:
 
 
 def _maybe_auto_resume(name: str, reset: str | None) -> None:
-    """Arma o auto-resume (feature #8, opt-in via CP_AUTO_RESUME) SE: a flag esta ligada, ha fila
-    NAO entregue pra esta sessao, e o reset parseia num delay confiavel. So arma 1x por janela
-    limited (ver _armed_limited); sem reset parseavel, so loga e desiste (nao arma timer sobre
-    chute ruim -- prefere SHIP deteccao+chip+push a arriscar um drain na hora errada)."""
-    if not settings.auto_resume or name in _armed_limited or not reset:
+    """Arma o auto-resume (feature #8, opt-in via CP_AUTO_RESUME) SE: o kill-switch MESTRE
+    (automations_enabled, feature #12) E a flag propria estao ligados, ha fila NAO entregue pra esta
+    sessao, e o reset parseia num delay confiavel. So arma 1x por janela limited (ver _armed_limited);
+    sem reset parseavel, so loga e desiste (nao arma timer sobre chute ruim -- prefere SHIP
+    deteccao+chip+push a arriscar um drain na hora errada)."""
+    if not automations_enabled() or not settings.auto_resume or name in _armed_limited or not reset:
         return
     if not _has_undelivered_queue(name):
         return

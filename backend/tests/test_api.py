@@ -239,6 +239,77 @@ def test_working_started_cleaned_up_on_dead(_transition_fixture, monkeypatch):
     assert "s7" not in api_mod._working_started
 
 
+# ---------------------------------------------------------------------------
+# Feature #12: encadeamento de sessao (_maybe_chain) + kill-switch mestre (automations_enabled)
+# ---------------------------------------------------------------------------
+from app import chain as chain_mod
+from app.chain import ThenLink
+
+
+@pytest.fixture(autouse=False)
+def _tmp_chain_dir(tmp_path, monkeypatch):
+    # ThenLink usa o mesmo settings.projects_dir do PromptQueue -> redireciona pro tmp (isola do
+    # sidecar real da maquina, mesmo padrao de test_chain.py/test_pqueue.py).
+    monkeypatch.setattr(chain_mod.settings, "projects_dir", tmp_path / "projects")
+    return tmp_path
+
+
+def test_maybe_chain_noop_without_link(_tmp_chain_dir, monkeypatch):
+    monkeypatch.setattr(api_mod.settings, "automations", True)
+    with patch("app.pqueue.PromptQueue.append") as ap, patch("app.api._drain_session") as ds:
+        api_mod._maybe_chain("a")
+    ap.assert_not_called()
+    ds.assert_not_called()
+
+
+def test_maybe_chain_fires_and_clears_link_once(_tmp_chain_dir, monkeypatch):
+    monkeypatch.setattr(api_mod.settings, "automations", True)
+    ThenLink("a").set("b", "prossiga")
+    with patch("app.pqueue.PromptQueue.append") as ap, patch("app.api._drain_session") as ds:
+        api_mod._maybe_chain("a")
+    ap.assert_called_once_with("prossiga", delivered=False)
+    ds.assert_called_once_with("b")
+    assert ThenLink("a").get() is None  # one-shot: o vinculo foi consumido
+
+
+def test_maybe_chain_master_switch_off_skips_and_keeps_link(_tmp_chain_dir, monkeypatch):
+    monkeypatch.setattr(api_mod.settings, "automations", False)
+    ThenLink("a").set("b", "prossiga")
+    with patch("app.pqueue.PromptQueue.append") as ap, patch("app.api._drain_session") as ds:
+        api_mod._maybe_chain("a")
+    ap.assert_not_called()
+    ds.assert_not_called()
+    assert ThenLink("a").get() == {"target": "b", "text": "prossiga"}  # nada consumido -> segue armado
+
+
+def test_set_then_link_route(api_client, _tmp_chain_dir, monkeypatch):
+    from app import tmux
+    monkeypatch.setattr(tmux, "has_session", lambda name: True)
+    r = api_client.put("/api/sessions/a/then", json={"target": "b", "text": "prossiga"}, headers=_h())
+    assert r.status_code == 200
+    assert ThenLink("a").get() == {"target": "b", "text": "prossiga"}
+
+
+def test_set_then_link_rejects_self_target(api_client, _tmp_chain_dir):
+    r = api_client.put("/api/sessions/a/then", json={"target": "a", "text": "x"}, headers=_h())
+    assert r.status_code == 400
+    assert ThenLink("a").get() is None
+
+
+def test_set_then_link_rejects_missing_target_session(api_client, _tmp_chain_dir, monkeypatch):
+    from app import tmux
+    monkeypatch.setattr(tmux, "has_session", lambda name: False)
+    r = api_client.put("/api/sessions/a/then", json={"target": "ghost", "text": "x"}, headers=_h())
+    assert r.status_code == 404
+
+
+def test_clear_then_link_route(api_client, _tmp_chain_dir):
+    ThenLink("a").set("b", "x")
+    r = api_client.delete("/api/sessions/a/then", headers=_h())
+    assert r.status_code == 200
+    assert ThenLink("a").get() is None
+
+
 def test_create_rejects_unknown_config_dir(api_client, monkeypatch):
     monkeypatch.setattr(api_mod, "list_config_dirs",
                         lambda: [api_mod.ConfigDirInfo(path="/h/.claude-work", label="work", active=True)])
