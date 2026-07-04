@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -509,6 +510,15 @@ class SessionRegistry:
                 info.question = c[2]
                 info.options = c[3]
                 info.last_activity = _jsonl_mtime(info.jsonl)
+        # Travada (feature #7): "working" ha mais de CP_STALL_SECONDS sem o transcript avancar. So o
+        # bool derivado pra UI/sig — o push (1x, com dedupe) e responsabilidade do stall_watch, nao daqui.
+        now = time.time()
+        for info in infos:
+            info.stalled = (
+                info.state == "working"
+                and info.last_activity is not None
+                and (now - info.last_activity) > settings.stall_seconds
+            )
         return infos
 
     def create(self, name: str, cwd: str, config_dir: str | None = None) -> SessionInfo:

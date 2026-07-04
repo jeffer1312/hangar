@@ -488,6 +488,55 @@ def test_list_with_state_falls_back_to_pane(monkeypatch):
     assert out[0].state == "idle"
 
 
+# ---------------------------------------------------------------------------
+# Feature #7: bool "stalled" derivado (working ha mais de CP_STALL_SECONDS sem o jsonl avancar)
+# ---------------------------------------------------------------------------
+
+def test_list_with_state_marks_stalled_past_threshold(tmp_path, monkeypatch):
+    reg = SessionRegistry(projects_dir=tmp_path)
+    jsonl = tmp_path / "sid123.jsonl"
+    jsonl.write_text("{}\n")
+    old = time.time() - 999
+    os.utime(jsonl, (old, old))  # transcript parado ha muito mais que o threshold
+    info = type("I", (), {"name": "cc", "cwd": "/p", "jsonl": str(jsonl), "state": "idle", "last_activity": None})()
+    monkeypatch.setattr(reg, "list", lambda: [info])
+    monkeypatch.setattr(hs_mod.hook_state, "get_state", lambda sid: ("working", old) if sid == "sid123" else None)
+    monkeypatch.setattr(registry.settings, "stall_seconds", 300)
+    out = asyncio.run(reg.list_with_state())
+    assert out[0].state == "working"
+    assert out[0].stalled is True
+
+
+def test_list_with_state_not_stalled_when_recent(tmp_path, monkeypatch):
+    # "working" mas o jsonl acabou de mexer (mtime fresco) -> ainda dentro do threshold, nao travada.
+    reg = SessionRegistry(projects_dir=tmp_path)
+    jsonl = tmp_path / "sid456.jsonl"
+    jsonl.write_text("{}\n")  # mtime = agora
+    info = type("I", (), {"name": "cc", "cwd": "/p", "jsonl": str(jsonl), "state": "idle", "last_activity": None})()
+    monkeypatch.setattr(reg, "list", lambda: [info])
+    monkeypatch.setattr(hs_mod.hook_state, "get_state", lambda sid: ("working", time.time()) if sid == "sid456" else None)
+    monkeypatch.setattr(registry.settings, "stall_seconds", 300)
+    out = asyncio.run(reg.list_with_state())
+    assert out[0].state == "working"
+    assert out[0].stalled is False
+
+
+def test_list_with_state_not_stalled_when_not_working(tmp_path, monkeypatch):
+    # Parada ha muito tempo mas em "idle" (nao "working") -> nao e travada, e conversa terminada.
+    reg = SessionRegistry(projects_dir=tmp_path)
+    jsonl = tmp_path / "sid789.jsonl"
+    jsonl.write_text("{}\n")
+    old = time.time() - 999
+    os.utime(jsonl, (old, old))
+    info = type("I", (), {"name": "cc", "cwd": "/p", "jsonl": str(jsonl), "state": "idle", "last_activity": None})()
+    monkeypatch.setattr(reg, "list", lambda: [info])
+    monkeypatch.setattr(hs_mod.hook_state, "get_state", lambda sid: ("idle", old) if sid == "sid789" else None)
+    monkeypatch.setattr(registry.settings, "stall_seconds", 300)
+    out = asyncio.run(reg.list_with_state())
+    assert out[0].state == "idle"
+    assert out[0].stalled is False
+
+
 def test_mtime_fallback_uses_session_config_dir(tmp_path, monkeypatch):
     # Branch 4 (fallback newest-by-mtime): sessao SEM --session-id deve achar o jsonl mais recente sob o
     # config dir do pane pid (herdado pela arvore), nao o do backend. tracked=False.

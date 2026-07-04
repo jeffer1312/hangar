@@ -19,6 +19,10 @@ class SessionInfo(BaseModel):
     label: Optional[str] = None          # working: texto do spinner ("Elucidating…")
     question: Optional[str] = None       # awaiting_input: a pergunta
     options: Optional[list[str]] = None  # awaiting_input: rótulos das opções
+    # True quando "working" ha mais de CP_STALL_SECONDS sem avancar (last_activity parado) — feature #7:
+    # loop infinito de ferramenta / subprocesso esperando stdin nunca vira awaiting/finished/dead sozinho.
+    # Derivado em list_with_state(); so tinta a linha, o watchdog (stall_watch.py) e quem pinga 1x.
+    stalled: bool = False
 
 
 class ChatEvent(BaseModel):

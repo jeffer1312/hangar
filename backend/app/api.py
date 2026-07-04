@@ -35,6 +35,7 @@ from app.archive import ArchiveEntry, ArchiveFolder, archive_jsonl, list_convers
 from app.askquestion import clear_pending_askq, read_pending_askq
 from app.hook_state import hook_state
 from app import push
+from app import stall_watch
 from app.sync import sync_router
 from app.deploy import deploy_router
 
@@ -107,12 +108,27 @@ async def _lifespan(app: FastAPI):
                 _log.exception("hook_state.watch crashed", exc_info=exc)
 
     task.add_done_callback(_watch_done)
+
+    stall_task = asyncio.create_task(stall_watch.watch())
+
+    def _stall_watch_done(t: asyncio.Task) -> None:
+        if not t.cancelled():
+            exc = t.exception()
+            if exc is not None:
+                _log.exception("stall_watch.watch crashed", exc_info=exc)
+
+    stall_task.add_done_callback(_stall_watch_done)
     try:
         yield
     finally:
         task.cancel()
+        stall_task.cancel()
         try:
             await task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await stall_task
         except asyncio.CancelledError:
             pass
 

@@ -16,9 +16,10 @@ class _Info:
     def __init__(self, name, state):
         self.name, self.state, self.cwd, self.jsonl, self.tracked, self.last_activity = name, state, "/p", f"/x/{name}.jsonl", True, None
         self.question = None
+        self.stalled = False
 
     def model_dump(self, mode="json"):
-        return {"name": self.name, "state": self.state, "cwd": self.cwd, "jsonl": self.jsonl, "tracked": self.tracked, "last_activity": self.last_activity, "question": self.question}
+        return {"name": self.name, "state": self.state, "cwd": self.cwd, "jsonl": self.jsonl, "tracked": self.tracked, "last_activity": self.last_activity, "question": self.question, "stalled": self.stalled}
 
 
 async def _take(gen, n):
@@ -83,6 +84,22 @@ def test_reemit_on_question_change(monkeypatch):
     evs = asyncio.run(_take(sse.list_events(poll=0.001, ping_every=9999), 2))
     assert [e["event"] for e in evs] == ["sessions", "sessions"]
     assert json.loads(evs[1]["data"])[0]["question"] == "Confirma o deploy?"
+
+
+def test_reemit_on_stalled_change(monkeypatch):
+    # Uma sessao "working" que passa a stalled re-emite a lista (feature #7): a linha tinge mesmo com
+    # name/state/cwd/jsonl/question iguais. Sem stalled na sig, a 2a emissao nao viria.
+    a0 = _Info("cc", "working"); a0.stalled = False
+    a1 = _Info("cc", "working"); a1.stalled = True
+    seq = [[a0], [a1]]
+    calls = {"i": 0}
+    async def fake_list(_snap=None):
+        r = seq[min(calls["i"], len(seq) - 1)]; calls["i"] += 1; return r
+    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
+    evs = asyncio.run(_take(sse.list_events(poll=0.001, ping_every=9999), 2))
+    assert [e["event"] for e in evs] == ["sessions", "sessions"]
+    assert json.loads(evs[0]["data"])[0]["stalled"] is False
+    assert json.loads(evs[1]["data"])[0]["stalled"] is True
 
 
 def test_ping_emitted_on_cadence(monkeypatch):

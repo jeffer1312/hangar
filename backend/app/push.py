@@ -233,3 +233,10 @@ def notify_finished(session_name: str) -> None:
 def notify_dead(session_name: str) -> None:
     """Push: sessao morreu (tmux/pane caiu)."""
     _broadcast(session_name, "Caiu")
+
+
+def notify_stalled(session_name: str) -> None:
+    """Push: sessao travada (feature #7) — "working" silencioso ha muito tempo (loop infinito de
+    ferramenta, subprocesso esperando stdin) que nunca vira awaiting/finished/dead sozinho. Disparado
+    UMA vez pelo watchdog (app.stall_watch); o dedupe/re-arme mora la, aqui e so o envio."""
+    _broadcast(session_name, "Pode estar travada")
