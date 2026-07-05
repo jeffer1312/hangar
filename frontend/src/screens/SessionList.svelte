@@ -29,8 +29,7 @@
   let loading = $state(true);
   let error = $state('');
   let showCreateSheet = $state(false);
-  let accountOpen = $state(false);   // menu de conta (avatar do rodapé)
-  let acctAnchorEl = $state<HTMLElement>();  // âncora do popover do menu de conta
+  let drawerOpen = $state(false);    // menu lateral (hamburger): navegação + conta
   let searchOpen = $state(false);    // "Buscar conversas" (switcher em modo só-busca)
   let filterText = $state('');
 
@@ -154,7 +153,7 @@
     selected = new Set();
     broadcastText = '';
     broadcastMsg = '';
-    accountOpen = false;
+    drawerOpen = false;
   }
   function toggleSelected(key: string) {
     const next = new Set(selected);
@@ -386,10 +385,11 @@
   // O handleLogout cru continua sendo chamado direto quando o ultimo servidor e removido (ja confirmado la).
   let confirmLogout = $state(false);
 
-  // Abre o menu de conta recarregando a lista de servidores (pode ter mudado desde a última abertura).
-  function openAccount() {
+  // Abre o drawer recarregando a lista de servidores (pode ter mudado desde a última abertura) — o
+  // AccountMenu embedded vive lá dentro.
+  function openDrawer() {
     servers = listServers();
-    accountOpen = !accountOpen;
+    drawerOpen = true;
   }
 
   // Remover servidor pede confirmacao — o × de um toque removia na hora e, se fosse o unico
@@ -415,7 +415,7 @@
     addUrl = '';
     addToken = '';
     addError = '';
-    accountOpen = false;
+    drawerOpen = false;
     showAddServer = true;
   }
 
@@ -460,8 +460,13 @@
 </script>
 
 <div class="session-list-screen">
-  <!-- Cabeçalho: marca + botão de seleção/broadcast (antes era o menu "…"; a conta migrou pro rodapé). -->
+  <!-- Cabeçalho: hamburger (abre o drawer: navegação + conta) + marca + seleção/broadcast. -->
   <header class="sl-head">
+    <button class="sl-ham" onclick={openDrawer} aria-label="Abrir menu">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+        <path d="M4 7h16M4 12h13M4 17h16"/>
+      </svg>
+    </button>
     <span class="sl-brand">claude pocket</span>
     <button
       class="sl-icon-btn"
@@ -476,33 +481,14 @@
     </button>
   </header>
 
-  <!-- Navegação (estilo Claude: separada da configuração). Cada item roteia pra ação/rota existente. -->
-  <nav class="sl-nav" aria-label="Navegação">
-    <button class="sl-nav-item on" aria-current="page">
-      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-      Sessões
-    </button>
-    <button class="sl-nav-item" onclick={() => { accountOpen = false; searchOpen = true; }}>
-      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-      Buscar conversas
-    </button>
-    <button class="sl-nav-item" onclick={() => { window.location.hash = '#/archive'; }}>
-      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg>
-      Arquivo
-    </button>
-    <button class="sl-nav-item" onclick={() => { window.location.hash = '#/costs'; }}>
-      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
-      Custos
-    </button>
-  </nav>
-  <div class="sl-sep"></div>
-
   <div class="list-content" class:select-mode={selectMode}>
     <!-- "Precisa de você" (feature #6): fila fixa no topo com as sessoes AGUARDANDO de TODOS os
          servidores. Responder aqui (picker inline) nao abre o chat; nativo AskUserQuestion abre. -->
     <AttentionFeed {sessions} onOpenChat={openSession} />
-    {#if sessions.length > 0}
-      <!-- Toggle Servidor|Projeto (feature #3): so faz sentido com sessao pra agrupar. -->
+    {#if sessions.length > 0 && multiServer}
+      <!-- Toggle Servidor|Projeto (feature #3): so aparece com >=2 servidores (paridade com o desktop
+           via effectiveGroupBy) — com 1 servidor "por servidor" seria 1 grupo so, entao o toggle vira
+           ruido e some. -->
       <div class="group-toggle" role="radiogroup" aria-label="Agrupar por">
         <button type="button" class:active={groupBy === 'server'} role="radio" aria-checked={groupBy === 'server'} onclick={() => setGroupBy('server')}>Servidor</button>
         <button type="button" class:active={groupBy === 'project'} role="radio" aria-checked={groupBy === 'project'} onclick={() => setGroupBy('project')}>Projeto</button>
@@ -641,37 +627,74 @@
       {/if}
     </div>
   {:else}
-    <!-- Rodapé (estilo Claude): botão da conta (avatar -> menu de conta) + CTA "Nova sessão". -->
+    <!-- Rodapé: só o CTA "Nova sessão" (a conta migrou pro drawer do hamburger). -->
     <footer class="sl-foot">
-      <div class="account-anchor" bind:this={acctAnchorEl}>
-        <button class="acct-btn" onclick={openAccount} aria-haspopup="menu" aria-expanded={accountOpen} aria-label="Menu da conta">
-          <span class="acct-avatar" aria-hidden="true">{accountInitials}</span>
-          <span class="acct-who">
-            <span class="acct-name">{accountName}</span>
-            <span class="acct-sub">{accountSub}</span>
-          </span>
-        </button>
-        <AccountMenu
-          open={accountOpen}
-          onClose={() => (accountOpen = false)}
-          initials={accountInitials}
-          {accountName}
-          {accountSub}
-          {servers}
-          anchorEl={acctAnchorEl}
-          {onRenameServer}
-          onRemoveServer={dropServer}
-          onAddServer={openAddServer}
-          onReconnect={reconnectStreams}
-          onLogout={() => (confirmLogout = true)}
-        />
-      </div>
       <button class="cta-new" onclick={() => (showCreateSheet = true)} aria-label="Nova sessão">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
         Nova sessão
       </button>
     </footer>
   {/if}
+
+  <!-- Drawer (hamburger, estilo Claude): navegação + conta. Desliza da esquerda; backdrop fecha. Fica
+       sempre montado (só o transform anima) pra a transição rodar nos dois sentidos. -->
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div
+    class="drawer-backdrop"
+    class:open={drawerOpen}
+    onclick={() => (drawerOpen = false)}
+    role="button"
+    tabindex="-1"
+    aria-label="Fechar menu"
+  ></div>
+  <aside class="drawer" class:open={drawerOpen} aria-hidden={!drawerOpen}>
+    <div class="drawer-acct">
+      <span class="drawer-avatar" aria-hidden="true">{accountInitials}</span>
+      <span class="drawer-who">
+        <span class="drawer-name">{accountName}</span>
+        <span class="drawer-sub">{accountSub}</span>
+      </span>
+      <button class="drawer-close" onclick={() => (drawerOpen = false)} aria-label="Fechar menu">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="drawer-sep"></div>
+    <nav class="drawer-nav" aria-label="Navegação">
+      <button class="drawer-nav-item on" aria-current="page" onclick={() => (drawerOpen = false)}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        Sessões
+      </button>
+      <button class="drawer-nav-item" onclick={() => { drawerOpen = false; searchOpen = true; }}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        Buscar conversas
+      </button>
+      <button class="drawer-nav-item" onclick={() => { drawerOpen = false; window.location.hash = '#/archive'; }}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg>
+        Arquivo
+      </button>
+      <button class="drawer-nav-item" onclick={() => { drawerOpen = false; window.location.hash = '#/costs'; }}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
+        Custos
+      </button>
+    </nav>
+    <div class="drawer-sep"></div>
+    <div class="drawer-scroll">
+      <AccountMenu
+        embedded
+        open={drawerOpen}
+        onClose={() => (drawerOpen = false)}
+        initials={accountInitials}
+        {accountName}
+        {accountSub}
+        {servers}
+        {onRenameServer}
+        onRemoveServer={dropServer}
+        onAddServer={openAddServer}
+        onReconnect={reconnectStreams}
+        onLogout={() => (confirmLogout = true)}
+      />
+    </div>
+  </aside>
 
   <!-- "Buscar conversas" (nav): switcher em modo só-busca (busca de conteúdo cross-servidor, feature #10). -->
   <SessionSwitcherSheet
@@ -832,19 +855,35 @@
     overflow: hidden;
   }
 
-  /* ── Cabeçalho (marca + seleção/broadcast) ── */
+  /* ── Cabeçalho (hamburger + marca + seleção/broadcast) ── */
   .sl-head {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: var(--space-2);
     flex-shrink: 0;
     padding: calc(env(safe-area-inset-top) + var(--space-3)) var(--space-4) var(--space-2);
   }
+  .sl-ham {
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    color: var(--text-primary);
+    border-radius: var(--radius-full);
+    transition: background 150ms var(--ease-out);
+  }
+  .sl-ham:active { background: var(--bg-hover); }
   .sl-brand {
+    flex: 1;
+    min-width: 0;
     font-size: var(--text-lg);
     font-weight: 700;
     color: var(--text-primary);
     letter-spacing: -0.01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .sl-icon-btn {
     width: 40px;
@@ -859,15 +898,110 @@
   .sl-icon-btn:active { background: var(--bg-hover); color: var(--text-primary); }
   .sl-icon-btn.active { color: var(--accent); background: var(--accent-dim); }
 
-  /* ── Navegação (arejada, ícone + rótulo) ── */
-  .sl-nav {
+  .list-content {
+    flex: 1;
+    overflow-y: scroll;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+    padding: var(--space-2) 0 var(--space-4);
+  }
+  /* Broadcast-bar (feature #9) é fixa embaixo -> reserva espaço pra não cobrir a última linha. */
+  .list-content.select-mode {
+    padding-bottom: calc(env(safe-area-inset-bottom) + 160px);
+  }
+
+  /* ── Rodapé: só o CTA "Nova sessão" (a conta migrou pro drawer do hamburger). ── */
+  .sl-foot {
+    display: flex;
+    flex-shrink: 0;
+    padding: var(--space-3) var(--space-4) calc(env(safe-area-inset-bottom) + var(--space-3));
+    border-top: 1px solid var(--border-subtle);
+    background: var(--bg-base);
+  }
+  .cta-new {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    flex: 1;
+    height: 48px;
+    background: var(--accent);
+    color: #fff;
+    font-size: var(--text-base);
+    font-weight: 600;
+    border-radius: var(--radius-full);
+    white-space: nowrap;
+    transition: background 150ms var(--ease-out), transform 80ms ease-in-out;
+  }
+  .cta-new svg { flex-shrink: 0; }
+  .cta-new:active { background: var(--accent-press); transform: scale(0.98); }
+
+  /* ── Drawer (hamburger): navegação + conta. ── */
+  .drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: rgba(0, 0, 0, 0.55);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 280ms var(--ease-out);
+  }
+  .drawer-backdrop.open { opacity: 1; pointer-events: auto; }
+  .drawer {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 41;
+    width: min(310px, 86vw);
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-base);
+    border-right: 1px solid var(--border-default);
+    box-shadow: 10px 0 44px rgba(0, 0, 0, 0.5);
+    transform: translateX(-102%);
+    transition: transform 300ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .drawer.open { transform: translateX(0); }
+  .drawer-acct {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: calc(env(safe-area-inset-top) + var(--space-3)) var(--space-3) var(--space-3);
+  }
+  .drawer-avatar {
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: linear-gradient(135deg, var(--accent), #a06de0);
+    color: #fff;
+    font-size: var(--text-sm);
+    font-weight: 700;
+  }
+  .drawer-who { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+  .drawer-name { font-size: var(--text-base); font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .drawer-sub { font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .drawer-close {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    color: var(--text-secondary);
+    border-radius: var(--radius-full);
+  }
+  .drawer-close:active { background: var(--bg-hover); }
+  .drawer-sep { height: 1px; background: var(--border-subtle); margin: 0 var(--space-3); }
+  .drawer-nav {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    flex-shrink: 0;
-    padding: 0 var(--space-3) var(--space-2);
+    padding: var(--space-2);
   }
-  .sl-nav-item {
+  .drawer-nav-item {
     display: flex;
     align-items: center;
     gap: var(--space-3);
@@ -882,87 +1016,14 @@
     border-radius: var(--radius-md);
     transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
   }
-  .sl-nav-item svg { flex-shrink: 0; }
-  .sl-nav-item:active { background: var(--bg-hover); color: var(--text-primary); }
-  .sl-nav-item.on { background: var(--accent-dim); color: var(--text-primary); font-weight: 600; }
-
-  .sl-sep {
-    height: 1px;
-    flex-shrink: 0;
-    background: var(--border-subtle);
-    margin: 0 var(--space-4) var(--space-2);
-  }
-
-  .list-content {
+  .drawer-nav-item svg { flex-shrink: 0; }
+  .drawer-nav-item:active { background: var(--bg-hover); color: var(--text-primary); }
+  .drawer-nav-item.on { background: var(--accent-dim); color: var(--text-primary); font-weight: 600; }
+  .drawer-scroll {
     flex: 1;
-    overflow-y: scroll;
+    overflow-y: auto;
     -webkit-overflow-scrolling: touch;
-    overscroll-behavior-y: contain;
-    padding: var(--space-2) 0 var(--space-4);
   }
-  /* Broadcast-bar (feature #9) é fixa embaixo -> reserva espaço pra não cobrir a última linha. */
-  .list-content.select-mode {
-    padding-bottom: calc(env(safe-area-inset-bottom) + 160px);
-  }
-
-  /* ── Rodapé: conta (avatar -> menu) + CTA "Nova sessão" ── */
-  .sl-foot {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    flex-shrink: 0;
-    padding: var(--space-2) var(--space-3) calc(env(safe-area-inset-bottom) + var(--space-2));
-    border-top: 1px solid var(--border-subtle);
-    background: var(--bg-base);
-  }
-  /* Âncora do popover do menu de conta (abre pra cima). */
-  .account-anchor { position: relative; flex: 1; min-width: 0; }
-  .acct-btn {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    width: 100%;
-    min-width: 0;
-    padding: var(--space-2);
-    justify-content: flex-start;
-    text-align: left;
-    color: var(--text-primary);
-    border-radius: var(--radius-md);
-    transition: background 150ms var(--ease-out);
-  }
-  .acct-btn:active { background: var(--bg-hover); }
-  .acct-avatar {
-    width: 32px;
-    height: 32px;
-    flex-shrink: 0;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    background: linear-gradient(135deg, var(--accent), #a06de0);
-    color: #fff;
-    font-size: var(--text-xs);
-    font-weight: 700;
-  }
-  .acct-who { min-width: 0; display: flex; flex-direction: column; }
-  .acct-name { font-size: var(--text-sm); font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .acct-sub { font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .cta-new {
-    display: flex;
-    align-items: center;
-    gap: var(--space-1);
-    flex-shrink: 0;
-    height: 40px;
-    padding: 0 var(--space-4);
-    background: var(--accent);
-    color: #fff;
-    font-size: var(--text-sm);
-    font-weight: 600;
-    border-radius: var(--radius-full);
-    white-space: nowrap;
-    transition: background 150ms var(--ease-out), transform 80ms ease-in-out;
-  }
-  .cta-new svg { flex-shrink: 0; }
-  .cta-new:active { background: var(--accent-press); transform: scale(0.96); }
 
   .server-warn {
     display: flex;
@@ -1004,27 +1065,30 @@
     box-shadow: 0 0 0 2px var(--accent-dim);
   }
 
-  /* Toggle Servidor|Projeto (feature #3): segmentado, mesma largura dos 2 lados. */
+  /* Toggle Servidor|Projeto (feature #3): slim/inline (NÃO full-width) — pill discreto alinhado à
+     esquerda, mesma linguagem do toggle do Sidebar desktop. */
   .group-toggle {
-    display: flex;
+    display: inline-flex;
     gap: 2px;
     margin: 0 var(--space-4) var(--space-3);
     padding: 2px;
+    height: 28px;
     background: var(--bg-surface);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-full);
   }
   .group-toggle button {
-    flex: 1;
-    height: 32px;
-    border-radius: var(--radius-sm);
+    min-height: 0;
+    height: 24px;
+    padding: 0 var(--space-3);
+    border-radius: var(--radius-full);
     font-size: var(--text-sm);
+    font-weight: 600;
     color: var(--text-secondary);
   }
   .group-toggle button.active {
     background: var(--bg-elevated);
     color: var(--text-primary);
-    font-weight: 600;
   }
 
   .filter-empty {
