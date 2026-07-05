@@ -18,6 +18,9 @@
     servers: Server[];
     // Elemento âncora (o botão/avatar do rodapé) — usado pra posicionar o popover que abre pra cima.
     anchorEl?: HTMLElement | null;
+    // embedded: renderiza o MESMO corpo inline (sem portal/backdrop/posição fixed), pro drawer do
+    // mobile. O head (avatar) some — o drawer já tem o seu. Desktop/mobile-footer seguem como popover.
+    embedded?: boolean;
     // Servidor ATIVO (desktop) — destaca + habilita a troca. null no mobile (lista agregada, sem "ativo").
     activeId?: string | null;
     onSwitchServer?: (id: string) => void;   // só desktop (troca + reload)
@@ -28,7 +31,7 @@
     onLogout: () => void;
   }
   let {
-    open, onClose, initials, accountName, accountSub = null, servers, anchorEl = null, activeId = null,
+    open, onClose, initials, accountName, accountSub = null, servers, anchorEl = null, embedded = false, activeId = null,
     onSwitchServer, onRenameServer, onRemoveServer, onAddServer, onReconnect, onLogout,
   }: Props = $props();
 
@@ -112,20 +115,9 @@
   }
 </script>
 
-{#if open}
-  <div use:portal>
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div class="am-backdrop" role="button" tabindex="-1" aria-label="Fechar menu da conta" onclick={onClose}></div>
-  <div class="am-card" role="menu" style="left: {pos.left}px; bottom: {pos.bottom}px;">
-    <div class="am-head">
-      <span class="am-avatar" aria-hidden="true">{initials}</span>
-      <span class="am-who">
-        <span class="am-name">{accountName}</span>
-        {#if accountSub}<span class="am-sub">{accountSub}</span>{/if}
-      </span>
-    </div>
-    <div class="am-sep"></div>
-
+<!-- Corpo do menu (servidores → sair): reusado igual no popover e no drawer embedded (uma só fonte
+     de verdade pros handlers de push/quiet/rename/reconnect/logout). -->
+{#snippet menuBody()}
     <div class="am-section">Servidores</div>
     {#each servers as s (s.id)}
       <div class="am-srv" class:on={s.id === activeId}>
@@ -197,6 +189,27 @@
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
       Sair
     </button>
+{/snippet}
+
+{#if embedded}
+  <!-- Drawer do mobile: corpo inline, sem portal/backdrop/posição. O drawer é o "card". -->
+  <div class="am-embedded">
+    {@render menuBody()}
+  </div>
+{:else if open}
+  <div use:portal>
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="am-backdrop" role="button" tabindex="-1" aria-label="Fechar menu da conta" onclick={onClose}></div>
+  <div class="am-card" role="menu" style="left: {pos.left}px; bottom: {pos.bottom}px;">
+    <div class="am-head">
+      <span class="am-avatar" aria-hidden="true">{initials}</span>
+      <span class="am-who">
+        <span class="am-name">{accountName}</span>
+        {#if accountSub}<span class="am-sub">{accountSub}</span>{/if}
+      </span>
+    </div>
+    <div class="am-sep"></div>
+    {@render menuBody()}
   </div>
   </div>
 {/if}
@@ -226,6 +239,10 @@
     from { opacity: 0; transform: translateY(6px) scale(0.98); }
     to   { opacity: 1; transform: translateY(0) scale(1); }
   }
+
+  /* Embedded (drawer mobile): sem card/portal — os itens (.am-*) já se estilizam sozinhos; só o
+     respiro do rodapé pra safe-area. */
+  .am-embedded { padding-bottom: calc(env(safe-area-inset-bottom) + var(--space-2)); }
 
   .am-head { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4) var(--space-2); }
   .am-avatar {
