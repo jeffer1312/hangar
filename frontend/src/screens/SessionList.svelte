@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import NavBar from '../components/NavBar.svelte';
   import SessionCard from '../components/SessionCard.svelte';
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
   import QrScanner from '../components/QrScanner.svelte';
@@ -8,13 +7,13 @@
   import ConfirmSheet from '../components/ConfirmSheet.svelte';
   import GitSheet from '../components/GitSheet.svelte';
   import AttentionFeed from '../components/AttentionFeed.svelte';
+  import AccountMenu from '../components/AccountMenu.svelte';
+  import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
   import { getSessions, createSession, deleteSession, renameSession, resumeSession, openSessionsStream, broadcast } from '../lib/api';
   import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
   import type { AggSession, SessionInfo, ResumeCandidate } from '../lib/types';
-  import { enablePush, pushSupported } from '../lib/push';
-  import { getPushSettings, setQuietHours } from '../lib/api';
-  import { countAwaiting, groupSelectedByServer, projectKey, projectLabel } from '../lib/format';
+  import { countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel } from '../lib/format';
   import { updateBadge } from '../lib/badge';
 
   interface Props {
@@ -30,47 +29,38 @@
   let loading = $state(true);
   let error = $state('');
   let showCreateSheet = $state(false);
-  let showMenu = $state(false);
+  let accountOpen = $state(false);   // menu de conta (avatar do rodapé)
+  let acctAnchorEl = $state<HTMLElement>();  // âncora do popover do menu de conta
+  let searchOpen = $state(false);    // "Buscar conversas" (switcher em modo só-busca)
   let filterText = $state('');
 
-  // Lista de servidores (gerenciada no menu: adicionar/remover). Sem "ativo" fixo — a lista é
+  // Lista de servidores (gerenciada no menu de conta: adicionar/remover). Sem "ativo" fixo — a lista é
   // agregada; o servidor-alvo de uma sessão é o dela, escolhido ao abrir/criar.
   let servers = $state(listServers());
   let scanning = $state(false);
 
-  // Web push: liga notificacao de "sessao aguardando" (assina + registra nos servidores).
-  let pushBusy = $state(false);
-  let pushMsg = $state('');
-  async function handleEnablePush() {
-    pushBusy = true;
-    pushMsg = '';
-    try {
-      const n = await enablePush();
-      pushMsg = `Ativado em ${n} servidor${n > 1 ? 'es' : ''}.`;
-    } catch (e) {
-      pushMsg = e instanceof Error ? e.message : 'Erro ao ativar.';
-    } finally {
-      pushBusy = false;
-    }
+  // Renomear servidor: o AccountMenu cuida da UI inline; aqui só persistimos e reagregamos pra os
+  // badges das sessões pegarem o nome novo.
+  function onRenameServer(id: string, label: string) {
+    renameServer(id, label);
+    servers = listServers();
+    recompute();
   }
-
-  // Rename inline de servidor no menu: id em edicao + valor do input.
-  let editingId = $state<string | null>(null);
-  let editLabel = $state('');
-
-  function startRename(id: string, current: string) {
-    editingId = id;
-    editLabel = current;
-  }
-  function saveRename() {
-    if (editingId) {
-      renameServer(editingId, editLabel);
-      servers = listServers();
-      recompute(); // reagrega pra os badges das sessoes pegarem o nome novo
-    }
-    editingId = null;
+  // Reconectar (item "Reconectar" do menu de conta): fecha e reabre os SSE de todos os servidores.
+  function reconnectStreams() {
+    for (const es of streams.values()) es.close();
+    streams.clear();
+    connect(servers);
   }
   const multiServer = $derived(servers.length > 1);
+
+  // Conta (avatar do rodapé): lista agregada, sem servidor "ativo" — usa o rótulo do 1º servidor como
+  // nome e a contagem como subtítulo. Iniciais reusam o helper compartilhado (format).
+  const accountName = $derived(servers[0]?.label ?? 'conta');
+  const accountSub = $derived(`${servers.length} servidor${servers.length === 1 ? '' : 'es'}`);
+  const accountInitials = $derived(initials(accountName));
+
+  // Toggle do modo seleção/broadcast (feature #9), agora no botão do header (antes vivia no menu "…").
 
   // Adicionar servidor manual (no PC: digitar URL+token em vez de escanear QR).
   let showAddServer = $state(false);
@@ -96,9 +86,8 @@
   // Filtro so aparece quando a lista fica longa.
   const showFilter = $derived(sessions.length > 6);
 
-  // Resumo do header: total + quantas precisam de voce (aguardando).
+  // Quantas sessões precisam de você (aguardando) — alimenta o badge do ícone do app.
   const awaitingCount = $derived(countAwaiting(sessions));
-  const summaryText = $derived(`${sessions.length} ${sessions.length === 1 ? 'sessão' : 'sessões'}`);
 
   // Badge do ícone do app (feature #13): reflete o agregado de TODOS os servidores, sempre que a
   // lista mudar (novo snapshot SSE, servidor removido, etc). Zero aguardando -> limpa o badge.
@@ -165,7 +154,7 @@
     selected = new Set();
     broadcastText = '';
     broadcastMsg = '';
-    showMenu = false;
+    accountOpen = false;
   }
   function toggleSelected(key: string) {
     const next = new Set(selected);
@@ -397,34 +386,10 @@
   // O handleLogout cru continua sendo chamado direto quando o ultimo servidor e removido (ja confirmado la).
   let confirmLogout = $state(false);
 
-  // Abre o menu recarregando a lista de servidores (pode ter mudado desde a última abertura).
-  function openMenu() {
+  // Abre o menu de conta recarregando a lista de servidores (pode ter mudado desde a última abertura).
+  function openAccount() {
     servers = listServers();
-    showMenu = !showMenu;
-    if (showMenu) void loadQuietHours();
-  }
-
-  // Quiet hours (feature #5): janela GLOBAL de silencio pro push de "aguardando", do servidor ATIVO.
-  // <input type="time"> nativo -> sem picker custom. Carrega ao abrir o menu; best-effort (servidor
-  // offline/sem suporte -> campos ficam vazios, nao trava o menu).
-  let qhStart = $state('');
-  let qhEnd = $state('');
-  let qhMsg = $state('');
-  async function loadQuietHours() {
-    try {
-      const p = await getPushSettings();
-      qhStart = p.quiet_hours?.start ?? '';
-      qhEnd = p.quiet_hours?.end ?? '';
-    } catch { /* offline/sem rota: campos ficam vazios, usuario tenta salvar de novo depois */ }
-    qhMsg = '';
-  }
-  async function saveQuietHours() {
-    try {
-      await setQuietHours(qhStart || null, qhEnd || null);
-      qhMsg = qhStart && qhEnd ? `silenciado ${qhStart}–${qhEnd}` : 'desligado';
-    } catch (e) {
-      qhMsg = e instanceof Error ? e.message : 'erro ao salvar';
-    }
+    accountOpen = !accountOpen;
   }
 
   // Remover servidor pede confirmacao — o × de um toque removia na hora e, se fosse o unico
@@ -450,7 +415,7 @@
     addUrl = '';
     addToken = '';
     addError = '';
-    showMenu = false;
+    accountOpen = false;
     showAddServer = true;
   }
 
@@ -495,87 +460,42 @@
 </script>
 
 <div class="session-list-screen">
-  <NavBar
-    title="claude pocket"
-    subtitle={sessions.length > 0 ? summaryText : null}
-    subtitleHot={awaitingCount > 0 ? `${awaitingCount} aguardando` : null}
-    onMenu={openMenu}
-  />
-
-  {#if showMenu}
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div
-      class="menu-backdrop"
-      role="button"
-      tabindex="-1"
-      aria-label="Fechar menu"
-      onclick={() => (showMenu = false)}
+  <!-- Cabeçalho: marca + botão de seleção/broadcast (antes era o menu "…"; a conta migrou pro rodapé). -->
+  <header class="sl-head">
+    <span class="sl-brand">claude pocket</span>
+    <button
+      class="sl-icon-btn"
+      class:active={selectMode}
+      onclick={toggleSelectMode}
+      aria-label={selectMode ? 'Cancelar seleção' : 'Selecionar sessões'}
+      title={selectMode ? 'Cancelar seleção' : 'Selecionar / broadcast'}
     >
-      <div class="menu-popup" role="menu">
-        <div class="menu-section-label">Servidores</div>
-        {#each servers as s (s.id)}
-          <div class="menu-server">
-            <div class="server-row">
-              <span class="server-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
-              {#if editingId === s.id}
-                <!-- svelte-ignore a11y_autofocus -->
-                <input
-                  class="server-edit"
-                  bind:value={editLabel}
-                  onclick={(e) => e.stopPropagation()}
-                  onkeydown={(e) => { if (e.key === 'Enter') saveRename(); if (e.key === 'Escape') editingId = null; }}
-                  onblur={saveRename}
-                  autofocus
-                  aria-label="Novo nome do servidor"
-                />
-              {:else}
-                <span class="server-label">{s.label}</span>
-                <button class="server-rename" aria-label={`Renomear ${s.label}`} title="Renomear" onclick={(e) => { e.stopPropagation(); startRename(s.id, s.label); }}>✎</button>
-              {/if}
-            </div>
-            <button class="server-remove" aria-label={`Remover ${s.label}`} onclick={() => dropServer(s.id)}>×</button>
-          </div>
-        {/each}
-        <button class="menu-item" role="menuitem" onclick={openAddServer}>
-          + Adicionar servidor
-        </button>
-        <div class="menu-divider"></div>
-        {#if pushSupported()}
-          <button class="menu-item" role="menuitem" onclick={handleEnablePush} disabled={pushBusy}>
-            {pushBusy ? 'Ativando…' : '🔔 Ativar notificações'}
-          </button>
-          {#if pushMsg}
-            <div class="menu-push-msg">{pushMsg}</div>
-          {/if}
-          <div class="menu-quiet-hours">
-            <span class="menu-section-label">Silenciar notificações entre</span>
-            <div class="qh-row">
-              <input type="time" bind:value={qhStart} aria-label="Início do silêncio" />
-              <span>e</span>
-              <input type="time" bind:value={qhEnd} aria-label="Fim do silêncio" />
-              <button class="qh-save" onclick={saveQuietHours}>Salvar</button>
-            </div>
-            {#if qhMsg}<div class="menu-push-msg">{qhMsg}</div>{/if}
-          </div>
-        {/if}
-        <button class="menu-item" role="menuitem" onclick={toggleSelectMode}>
-          {selectMode ? 'Cancelar seleção' : 'Selecionar sessões'}
-        </button>
-        <button class="menu-item" role="menuitem" onclick={() => { for (const es of streams.values()) es.close(); streams.clear(); connect(servers); showMenu = false; }}>
-          Atualizar
-        </button>
-        <button class="menu-item" role="menuitem" onclick={() => { showMenu = false; window.location.hash = '#/costs'; }}>
-          Custos
-        </button>
-        <button class="menu-item" role="menuitem" onclick={() => { showMenu = false; window.location.hash = '#/archive'; }}>
-          Arquivo
-        </button>
-        <button class="menu-item menu-item--danger" role="menuitem" onclick={() => { showMenu = false; confirmLogout = true; }}>
-          Sair
-        </button>
-      </div>
-    </div>
-  {/if}
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+      </svg>
+    </button>
+  </header>
+
+  <!-- Navegação (estilo Claude: separada da configuração). Cada item roteia pra ação/rota existente. -->
+  <nav class="sl-nav" aria-label="Navegação">
+    <button class="sl-nav-item on" aria-current="page">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      Sessões
+    </button>
+    <button class="sl-nav-item" onclick={() => { accountOpen = false; searchOpen = true; }}>
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      Buscar conversas
+    </button>
+    <button class="sl-nav-item" onclick={() => { window.location.hash = '#/archive'; }}>
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg>
+      Arquivo
+    </button>
+    <button class="sl-nav-item" onclick={() => { window.location.hash = '#/costs'; }}>
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
+      Custos
+    </button>
+  </nav>
+  <div class="sl-sep"></div>
 
   <div class="list-content" class:select-mode={selectMode}>
     <!-- "Precisa de você" (feature #6): fila fixa no topo com as sessoes AGUARDANDO de TODOS os
@@ -721,18 +641,48 @@
       {/if}
     </div>
   {:else}
-    <!-- FAB: new session -->
-    <button
-      class="fab"
-      onclick={() => (showCreateSheet = true)}
-      aria-label="Nova sessão"
-    >
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true">
-        <line x1="12" y1="5" x2="12" y2="19"/>
-        <line x1="5" y1="12" x2="19" y2="12"/>
-      </svg>
-    </button>
+    <!-- Rodapé (estilo Claude): botão da conta (avatar -> menu de conta) + CTA "Nova sessão". -->
+    <footer class="sl-foot">
+      <div class="account-anchor" bind:this={acctAnchorEl}>
+        <button class="acct-btn" onclick={openAccount} aria-haspopup="menu" aria-expanded={accountOpen} aria-label="Menu da conta">
+          <span class="acct-avatar" aria-hidden="true">{accountInitials}</span>
+          <span class="acct-who">
+            <span class="acct-name">{accountName}</span>
+            <span class="acct-sub">{accountSub}</span>
+          </span>
+        </button>
+        <AccountMenu
+          open={accountOpen}
+          onClose={() => (accountOpen = false)}
+          initials={accountInitials}
+          {accountName}
+          {accountSub}
+          {servers}
+          anchorEl={acctAnchorEl}
+          {onRenameServer}
+          onRemoveServer={dropServer}
+          onAddServer={openAddServer}
+          onReconnect={reconnectStreams}
+          onLogout={() => (confirmLogout = true)}
+        />
+      </div>
+      <button class="cta-new" onclick={() => (showCreateSheet = true)} aria-label="Nova sessão">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        Nova sessão
+      </button>
+    </footer>
   {/if}
+
+  <!-- "Buscar conversas" (nav): switcher em modo só-busca (busca de conteúdo cross-servidor, feature #10). -->
+  <SessionSwitcherSheet
+    open={searchOpen}
+    searchOnly
+    sessions={[]}
+    currentName=""
+    onPick={(name) => { searchOpen = false; onNavigateToChat(name); }}
+    onNew={() => { searchOpen = false; showCreateSheet = true; }}
+    onClose={() => (searchOpen = false)}
+  />
 
   <CreateSessionSheet
     open={showCreateSheet}
@@ -882,18 +832,137 @@
     overflow: hidden;
   }
 
+  /* ── Cabeçalho (marca + seleção/broadcast) ── */
+  .sl-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    padding: calc(env(safe-area-inset-top) + var(--space-3)) var(--space-4) var(--space-2);
+  }
+  .sl-brand {
+    font-size: var(--text-lg);
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+  }
+  .sl-icon-btn {
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    color: var(--text-secondary);
+    border-radius: var(--radius-full);
+    transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
+  }
+  .sl-icon-btn:active { background: var(--bg-hover); color: var(--text-primary); }
+  .sl-icon-btn.active { color: var(--accent); background: var(--accent-dim); }
+
+  /* ── Navegação (arejada, ícone + rótulo) ── */
+  .sl-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex-shrink: 0;
+    padding: 0 var(--space-3) var(--space-2);
+  }
+  .sl-nav-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    min-height: 44px;
+    padding: var(--space-2) var(--space-3);
+    justify-content: flex-start;
+    text-align: left;
+    color: var(--text-secondary);
+    font-size: var(--text-base);
+    font-weight: 500;
+    border-radius: var(--radius-md);
+    transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
+  }
+  .sl-nav-item svg { flex-shrink: 0; }
+  .sl-nav-item:active { background: var(--bg-hover); color: var(--text-primary); }
+  .sl-nav-item.on { background: var(--accent-dim); color: var(--text-primary); font-weight: 600; }
+
+  .sl-sep {
+    height: 1px;
+    flex-shrink: 0;
+    background: var(--border-subtle);
+    margin: 0 var(--space-4) var(--space-2);
+  }
+
   .list-content {
     flex: 1;
     overflow-y: scroll;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: contain;
-    padding: var(--space-2) 0;
-    padding-bottom: calc(env(safe-area-inset-bottom) + 80px);
+    padding: var(--space-2) 0 var(--space-4);
   }
-  /* Broadcast-bar (feature #9) e mais alta que o FAB -> mais espaco embaixo pra nao cobrir a ultima linha. */
+  /* Broadcast-bar (feature #9) é fixa embaixo -> reserva espaço pra não cobrir a última linha. */
   .list-content.select-mode {
     padding-bottom: calc(env(safe-area-inset-bottom) + 160px);
   }
+
+  /* ── Rodapé: conta (avatar -> menu) + CTA "Nova sessão" ── */
+  .sl-foot {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-shrink: 0;
+    padding: var(--space-2) var(--space-3) calc(env(safe-area-inset-bottom) + var(--space-2));
+    border-top: 1px solid var(--border-subtle);
+    background: var(--bg-base);
+  }
+  /* Âncora do popover do menu de conta (abre pra cima). */
+  .account-anchor { position: relative; flex: 1; min-width: 0; }
+  .acct-btn {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    min-width: 0;
+    padding: var(--space-2);
+    justify-content: flex-start;
+    text-align: left;
+    color: var(--text-primary);
+    border-radius: var(--radius-md);
+    transition: background 150ms var(--ease-out);
+  }
+  .acct-btn:active { background: var(--bg-hover); }
+  .acct-avatar {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: linear-gradient(135deg, var(--accent), #a06de0);
+    color: #fff;
+    font-size: var(--text-xs);
+    font-weight: 700;
+  }
+  .acct-who { min-width: 0; display: flex; flex-direction: column; }
+  .acct-name { font-size: var(--text-sm); font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .acct-sub { font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cta-new {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-shrink: 0;
+    height: 40px;
+    padding: 0 var(--space-4);
+    background: var(--accent);
+    color: #fff;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    border-radius: var(--radius-full);
+    white-space: nowrap;
+    transition: background 150ms var(--ease-out), transform 80ms ease-in-out;
+  }
+  .cta-new svg { flex-shrink: 0; }
+  .cta-new:active { background: var(--accent-press); transform: scale(0.96); }
 
   .server-warn {
     display: flex;
@@ -1116,98 +1185,6 @@
     animation: spin 0.8s linear infinite;
   }
 
-  .fab {
-    position: fixed;
-    bottom: calc(env(safe-area-inset-bottom) + var(--space-5));
-    right: var(--space-5);
-    width: 52px;
-    height: 52px;
-    background: var(--accent);
-    border-radius: var(--radius-full);
-    color: #fff;
-    box-shadow: 0 4px 16px rgba(124,106,247,0.4);
-    transition: background 180ms ease-out, transform 80ms ease-in-out;
-    z-index: 20;
-  }
-
-  .fab:active {
-    background: var(--accent-press);
-    transform: scale(0.94);
-  }
-
-  /* Overflow menu */
-  .menu-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 50;
-  }
-
-  .menu-popup {
-    position: absolute;
-    top: calc(env(safe-area-inset-top) + 56px);
-    right: var(--space-4);
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    overflow: hidden;
-    min-width: 200px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-  }
-
-  /* Seção de servidores (multi-PC) no menu */
-  .menu-section-label {
-    font-size: var(--text-xs);
-    color: var(--text-muted);
-    padding: var(--space-3) var(--space-4) var(--space-1);
-  }
-  .menu-server {
-    display: flex;
-    align-items: center;
-    border-bottom: 1px solid var(--border-subtle);
-  }
-  .server-row {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    min-height: 44px;
-    padding: var(--space-2) var(--space-4);
-    font-size: var(--text-sm);
-    color: var(--text-primary);
-    min-width: 0;
-  }
-  .server-dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: var(--border-default); flex-shrink: 0;
-  }
-  .server-label {
-    flex: 1; min-width: 0;
-    overflow-wrap: anywhere; word-break: break-word;
-  }
-  .server-rename {
-    width: 32px; height: 32px; flex-shrink: 0;
-    color: var(--text-muted); font-size: var(--text-sm);
-    border-radius: var(--radius-sm);
-  }
-  .server-rename:active { color: var(--accent); }
-  .server-edit {
-    flex: 1; min-width: 0; height: 32px;
-    background: var(--bg-base);
-    border: 1px solid var(--accent);
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-    font-family: var(--font-ui);
-    font-size: 16px; /* evita zoom no iOS */
-    padding: 0 var(--space-2);
-    outline: none;
-  }
-  .server-remove {
-    width: 40px; height: 44px; flex-shrink: 0;
-    color: var(--text-muted); font-size: var(--text-lg); line-height: 1;
-  }
-  .server-remove:active { color: var(--error); }
-  .menu-divider { height: 1px; background: var(--border-subtle); }
-
   /* Sheet de adicionar servidor manual */
   .sheet-backdrop {
     position: fixed;
@@ -1287,72 +1264,6 @@
     transition: background 180ms ease-out;
   }
   .add-secondary:active { background: var(--bg-hover); }
-
-  .menu-item {
-    width: 100%;
-    height: 48px;
-    padding: 0 var(--space-4);
-    text-align: left;
-    font-size: var(--text-base);
-    color: var(--text-primary);
-    border-bottom: 1px solid var(--border-subtle);
-    justify-content: flex-start;
-    border-radius: 0;
-  }
-
-  .menu-item:last-child {
-    border-bottom: none;
-  }
-
-  .menu-item:active {
-    background: var(--bg-hover);
-  }
-
-  .menu-item--danger {
-    color: var(--error);
-  }
-
-  .menu-push-msg {
-    font-size: var(--text-xs);
-    color: var(--text-muted);
-    padding: var(--space-1) var(--space-4) var(--space-2);
-    border-bottom: 1px solid var(--border-subtle);
-  }
-
-  /* Quiet hours (feature #5): janela global de silencio, no mesmo menu do "Ativar notificações". */
-  .menu-quiet-hours {
-    border-bottom: 1px solid var(--border-subtle);
-    padding-bottom: var(--space-2);
-  }
-  .qh-row {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: 0 var(--space-4) var(--space-2);
-    font-size: var(--text-sm);
-    color: var(--text-secondary);
-  }
-  .qh-row input[type='time'] {
-    background: var(--bg-base);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-    font-size: var(--text-sm);
-    padding: 4px 6px;
-  }
-  .qh-save {
-    margin-left: auto;
-    font-size: var(--text-xs);
-    font-weight: 600;
-    color: var(--accent);
-    padding: 4px 10px;
-    border-radius: var(--radius-full);
-    border: 1px solid var(--accent);
-  }
-  .qh-save:active {
-    background: var(--accent);
-    color: #fff;
-  }
 
   /* Sheet de resume (caso ambíguo): lista de transcripts candidatos pra escolher. */
   .resume-sheet {
