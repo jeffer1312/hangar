@@ -1,14 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { openSessionsStream, createSession, deleteSession, renameSession, openEditor, gitAction, getBranches, checkoutBranch, getPushSettings, setSessionMute, setQuietHours, resumeSession, broadcast, setThenLink, clearThenLink } from '../lib/api';
+  import { openSessionsStream, createSession, deleteSession, renameSession, openEditor, gitAction, getBranches, checkoutBranch, getPushSettings, setSessionMute, resumeSession, broadcast, setThenLink, clearThenLink } from '../lib/api';
   import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor, clearCredentials, parseServerPairing } from '../lib/auth';
-  import { enablePush, pushSupported } from '../lib/push';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import QrScanner from './QrScanner.svelte';
   import GitSheet from './GitSheet.svelte';
   import AttentionFeed from './AttentionFeed.svelte';
+  import AccountMenu from './AccountMenu.svelte';
+  import SessionSwitcherSheet from './SessionSwitcherSheet.svelte';
   import type { SessionInfo, State, AggSession, ResumeCandidate } from '../lib/types';
-  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, projectKey, projectLabel, effectiveGroupBy, fmtWhen, type GroupBy } from '../lib/format';
+  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import type { Server } from '../lib/auth';
   import Lottie from './Lottie.svelte';
@@ -94,14 +95,10 @@
   let activeId = $state(getActiveId());
   let scanning = $state(false);
   let showCreate = $state(false);
-  let serversOpen = $state(false);
-
-  // Iniciais pro rail recolhido (identificar sem o nome). "claude-pocket"->CP, "jeffer1312"->JE.
-  function initials(name: string): string {
-    const parts = name.split(/[^a-zA-Z0-9]+/).filter(Boolean);
-    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-    return (parts[0] ?? name).slice(0, 2).toUpperCase();
-  }
+  let accountOpen = $state(false);    // menu de conta (avatar do rodapé)
+  let acctAnchorEl = $state<HTMLElement>();  // âncora do popover do menu de conta
+  let searchOpen = $state(false);     // "Buscar conversas" (switcher em modo só-busca)
+  let showAddServer = $state(false);  // modal de adicionar servidor (colar URL / QR)
 
   // Ordena DENTRO de cada grupo por nome (ordem alfabética estável — não pula quando a atividade muda).
   function sortSessions<T extends SessionInfo>(list: T[]): T[] {
@@ -174,50 +171,11 @@
   onMount(() => {
     servers = listServers();
     connect(servers);
-    if (pushSupported()) void loadQuietHours();   // pre-carrega a janela de silencio do server ativo
     return () => { for (const es of streams.values()) es.close(); streams.clear(); };
   });
 
-  // ── Web push (paridade com o mobile): assina + registra a inscricao em TODOS os servidores. Reusa o
-  // MESMO enablePush do mobile (lib/push) — nao reimplementa. Desktop nao tinha jeito de ligar push,
-  // entao features que dependem dele (notif de "aguardando") nao funcionavam por aqui. ──────────────
-  let pushBusy = $state(false);
-  let pushMsg = $state('');
-  async function handleEnablePush() {
-    pushBusy = true;
-    pushMsg = '';
-    try {
-      const n = await enablePush();
-      pushMsg = `Ativado em ${n} servidor${n > 1 ? 'es' : ''}.`;
-    } catch (e) {
-      pushMsg = e instanceof Error ? e.message : 'Erro ao ativar.';
-    } finally {
-      pushBusy = false;
-    }
-  }
-
-  // Quiet hours (feature #5): janela GLOBAL de silencio pro push de "aguardando", do servidor ATIVO.
-  // <input type="time"> nativo. Carrega no mount (troca de server ativo faz reload -> revalida). Best-
-  // effort (offline/sem rota -> campos vazios, nao trava).
-  let qhStart = $state('');
-  let qhEnd = $state('');
-  let qhMsg = $state('');
-  async function loadQuietHours() {
-    try {
-      const p = await getPushSettings();
-      qhStart = p.quiet_hours?.start ?? '';
-      qhEnd = p.quiet_hours?.end ?? '';
-    } catch { /* offline/sem rota: campos ficam vazios, tenta salvar de novo depois */ }
-    qhMsg = '';
-  }
-  async function saveQuietHours() {
-    try {
-      await setQuietHours(qhStart || null, qhEnd || null);
-      qhMsg = qhStart && qhEnd ? `silenciado ${qhStart}–${qhEnd}` : 'desligado';
-    } catch (e) {
-      qhMsg = e instanceof Error ? e.message : 'erro ao salvar';
-    }
-  }
+  // Web push + horas silenciosas migraram pro AccountMenu (menu de conta do rodapé), que reusa os
+  // mesmos enablePush/getPushSettings/setQuietHours — não reimplementa nada aqui.
 
   // Reconectar streams (paridade com o "Atualizar" do menu mobile): fecha e reabre os EventSources de
   // todos os servidores — resgata um stream meio-aberto sem recarregar a pagina. Mesmo bloco do menu
@@ -536,24 +494,23 @@
     closeMenu();
   }
 
-  // Rename inline de servidor no menu do rodape (mesma ideia do mobile). Label custom persistido.
-  let editingServer = $state<string | null>(null);
-  let editServerLabel = $state('');
-  function startServerRename(id: string, current: string) {
-    editingServer = id;
-    editServerLabel = current;
-  }
-  function saveServerRename() {
-    if (editingServer) {
-      renameServer(editingServer, editServerLabel);
-      servers = listServers();
-      recompute(); // reagrega pra os headers de grupo pegarem o nome novo (sem esperar o próximo SSE)
-    }
-    editingServer = null;
+  // Renomear servidor: o AccountMenu cuida da UI inline; aqui só persistimos e reagregamos pra os
+  // headers de grupo pegarem o nome novo (sem esperar o próximo SSE).
+  function onRenameServer(id: string, label: string) {
+    renameServer(id, label);
+    servers = listServers();
+    recompute();
   }
 
+  // Abre o menu de conta recarregando a lista de servidores (pode ter mudado desde a última abertura).
+  function openAccount() {
+    servers = listServers();
+    accountOpen = !accountOpen;
+  }
+
+  // Trocar de servidor ativo (menu de conta): reload pra o app inteiro apontar pro novo backend.
   function pickServer(id: string) {
-    if (id === getActiveId()) { serversOpen = false; return; }
+    if (id === getActiveId()) { accountOpen = false; return; }
     selectServer(id);
     window.location.reload();
   }
@@ -584,9 +541,14 @@
     window.location.reload();
   }
   // Colar servidor manual (desktop nao tem camera): cola a URL de pareamento (com token) e adiciona
-  // pela MESMA rota de parse do QR. Primaria no menu; "Escanear QR" fica como secundaria.
+  // pela MESMA rota de parse do QR. Aberto pelo item "Adicionar servidor" do menu de conta.
   let addUrlText = $state('');
   let addError = $state('');
+  function openAddServer() {
+    addUrlText = '';
+    addError = '';
+    showAddServer = true;
+  }
   function submitPasteServer() {
     const parsed = parseServerPairing(addUrlText.trim());
     if (!parsed) { addError = 'Cole a URL de pareamento (com o token).'; return; }
@@ -601,6 +563,12 @@
   let confirmLogout = $state(false);
 
   const activeServer = $derived(servers.find((s) => s.id === activeId) ?? servers[0] ?? null);
+
+  // Conta (avatar do rodapé): nome = servidor ativo; subtítulo = contagem de servidores. Iniciais
+  // reusam o helper compartilhado (format).
+  const accountName = $derived(activeServer?.label ?? 'conta');
+  const accountSub = $derived(`${servers.length} servidor${servers.length === 1 ? '' : 'es'}`);
+  const accountInitials = $derived(initials(accountName));
 
   // Badge do ícone do app (feature #13): mesmo agregado do mobile (SessionList), so que a partir de
   // `groups` (por servidor) — flatten pra contar aguardando em TODOS os servidores.
@@ -733,13 +701,6 @@
       </svg>
     </button>
     {#if expanded}<span class="side-brand">claude pocket</span>{/if}
-  </div>
-
-  <div class="new-row">
-    <button class="new-btn" onclick={() => (showCreate = true)} aria-label="Nova sessão">
-      <span class="new-plus" aria-hidden="true">+</span>
-      {#if expanded}<span>Nova sessão</span>{/if}
-    </button>
     {#if expanded}
       <!-- Broadcast (feature #9): entra/sai do modo seleção multipla. -->
       <button
@@ -747,17 +708,35 @@
         class:active={selectMode}
         onclick={toggleSelectMode}
         aria-label={selectMode ? 'Cancelar seleção' : 'Selecionar sessões'}
-        title={selectMode ? 'Cancelar seleção' : 'Selecionar sessões'}
+        title={selectMode ? 'Cancelar seleção' : 'Selecionar / broadcast'}
       >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="m3 7 2 2 4-4"/>
-          <path d="m3 17 2 2 4-4"/>
-          <line x1="13" y1="6" x2="21" y2="6"/>
-          <line x1="13" y1="18" x2="21" y2="18"/>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
         </svg>
       </button>
     {/if}
   </div>
+
+  <!-- Navegação (estilo Claude: separada da configuração). Ícone-only quando o rail está recolhido. -->
+  <nav class="side-nav" aria-label="Navegação">
+    <button class="side-nav-item on" aria-current="page" title="Sessões">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      {#if expanded}<span>Sessões</span>{/if}
+    </button>
+    <button class="side-nav-item" onclick={() => { accountOpen = false; searchOpen = true; }} title="Buscar conversas">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      {#if expanded}<span>Buscar conversas</span>{/if}
+    </button>
+    <button class="side-nav-item" onclick={() => (window.location.hash = '#/archive')} title="Arquivo">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg>
+      {#if expanded}<span>Arquivo</span>{/if}
+    </button>
+    <button class="side-nav-item" onclick={() => (window.location.hash = '#/costs')} title="Custos">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
+      {#if expanded}<span>Custos</span>{/if}
+    </button>
+  </nav>
+  {#if expanded}<div class="side-nav-sep"></div>{/if}
 
   <nav class="sess-list" aria-label="Sessões">
     {#if expanded}
@@ -981,101 +960,41 @@
     </div>
   {/if}
 
-  {#if expanded}
-    <div class="side-foot">
-      {#if serversOpen}
-        <div class="srv-menu">
-          {#each servers as s (s.id)}
-            <div class="srv-row">
-              {#if editingServer === s.id}
-                <span class="srv-dot" class:on={s.id === activeId} aria-hidden="true"></span>
-                <input
-                  class="srv-edit"
-                  bind:value={editServerLabel}
-                  use:autofocus
-                  onkeydown={(e) => { if (e.key === 'Enter') saveServerRename(); if (e.key === 'Escape') editingServer = null; }}
-                  onblur={saveServerRename}
-                  aria-label="Novo nome do servidor"
-                />
-              {:else}
-                <button class="srv-pick" onclick={() => pickServer(s.id)}>
-                  <span class="srv-dot" class:on={s.id === activeId} aria-hidden="true"></span>
-                  <span class="srv-label">{s.label}</span>
-                </button>
-                <button class="srv-rename" onclick={() => startServerRename(s.id, s.label)} aria-label={`Renomear ${s.label}`} title="Renomear">✎</button>
-                {#if servers.length > 1}<button class="srv-del" onclick={() => dropServer(s.id)} aria-label="Remover">×</button>{/if}
-              {/if}
-            </div>
-          {/each}
-          <!-- Adicionar servidor: no desktop nao ha camera -> colar a URL de pareamento (com token) e a
-               primaria; "Escanear QR" fica secundaria. Mesma rota de parse do QR (parseServerPairing). -->
-          <div class="srv-add-form">
-            <input
-              type="url"
-              class="srv-add-input"
-              bind:value={addUrlText}
-              placeholder="Colar URL do servidor (com token)"
-              autocomplete="off"
-              autocorrect="off"
-              autocapitalize="off"
-              spellcheck={false}
-              onkeydown={(e) => { addError = ''; if (e.key === 'Enter') submitPasteServer(); }}
-              aria-label="URL de pareamento do servidor"
-            />
-            <button class="srv-add-btn" onclick={submitPasteServer} disabled={!addUrlText.trim()}>Adicionar</button>
-          </div>
-          {#if addError}<p class="srv-add-err" role="alert">{addError}</p>{/if}
-          <button class="srv-add" onclick={() => { scanning = true; serversOpen = false; }}>Escanear QR</button>
-        </div>
-      {/if}
-      <button class="server-btn" onclick={() => (serversOpen = !serversOpen)}>
-        <span class="srv-dot on" aria-hidden="true"></span>
-        <span class="srv-label">{activeServer?.label ?? 'servidor'}</span>
-        <span class="srv-caret" aria-hidden="true">⌃</span>
+  <!-- Rodapé (estilo Claude): botão da conta (avatar -> menu de conta) + CTA "Nova sessão". Tudo que
+       era config/conta (servidores, notificações, horas silenciosas, reconectar, sair) vive no menu. -->
+  <div class="side-foot" class:rail={!expanded}>
+    <div class="account-anchor" bind:this={acctAnchorEl}>
+      <button class="acct-btn" onclick={openAccount} aria-haspopup="menu" aria-expanded={accountOpen} aria-label="Menu da conta" title={expanded ? undefined : accountName}>
+        <span class="acct-avatar" aria-hidden="true">{accountInitials}</span>
+        {#if expanded}
+          <span class="acct-who">
+            <span class="acct-name">{accountName}</span>
+            <span class="acct-sub">{accountSub}</span>
+          </span>
+        {/if}
       </button>
-      {#if pushSupported()}
-        <!-- Notificacoes (paridade com o menu mobile): ligar web push + janela de silencio. Desktop nao
-             tinha como ligar push -> notif de "aguardando" nao chegava por aqui. -->
-        <div class="notif-box">
-          <button class="notif-enable" onclick={handleEnablePush} disabled={pushBusy}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
-              <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-            </svg>
-            <span>{pushBusy ? 'Ativando…' : 'Ativar notificações'}</span>
-          </button>
-          {#if pushMsg}<p class="notif-msg">{pushMsg}</p>{/if}
-          <div class="qh-row">
-            <input type="time" bind:value={qhStart} aria-label="Início do silêncio" />
-            <span>e</span>
-            <input type="time" bind:value={qhEnd} aria-label="Fim do silêncio" />
-            <button class="qh-save" onclick={saveQuietHours}>Salvar</button>
-          </div>
-          {#if qhMsg}<p class="notif-msg">{qhMsg}</p>{/if}
-        </div>
-      {/if}
-      <button class="costs-btn" onclick={() => (window.location.hash = '#/costs')}>Custos</button>
-      <!-- Arquivo (conversas mortas): mesmo destino do menu mobile (SessionList), so entrypoint no desktop. -->
-      <button class="archive-btn" onclick={() => (window.location.hash = '#/archive')}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <rect x="3" y="4" width="18" height="4" rx="1"/>
-          <path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/>
-          <line x1="10" y1="12" x2="14" y2="12"/>
-        </svg>
-        <span>Arquivo</span>
-      </button>
-      <!-- Reconectar streams (paridade com o "Atualizar" do menu mobile): fecha e reabre os SSE. -->
-      <button class="reconnect-btn" onclick={reconnectStreams}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <polyline points="23 4 23 10 17 10"/>
-          <polyline points="1 20 1 14 7 14"/>
-          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-        </svg>
-        <span>Atualizar</span>
-      </button>
-      <button class="logout-btn" onclick={() => (confirmLogout = true)}>Sair</button>
+      <AccountMenu
+        open={accountOpen}
+        onClose={() => (accountOpen = false)}
+        initials={accountInitials}
+        {accountName}
+        {accountSub}
+        {servers}
+        anchorEl={acctAnchorEl}
+        {activeId}
+        onSwitchServer={pickServer}
+        {onRenameServer}
+        onRemoveServer={dropServer}
+        onAddServer={openAddServer}
+        onReconnect={reconnectStreams}
+        onLogout={() => (confirmLogout = true)}
+      />
     </div>
-  {/if}
+    <button class="cta-new" onclick={() => (showCreate = true)} aria-label="Nova sessão" title="Nova sessão">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      {#if expanded}<span>Nova</span>{/if}
+    </button>
+  </div>
 
   {#if !collapsed}
     <!-- Drag na borda direita pra redimensionar (so pin aberto). -->
@@ -1087,6 +1006,44 @@
 
 <CreateSessionSheet open={showCreate} {servers} onClose={() => (showCreate = false)} onCreate={handleCreate} onOpenSession={onSelect} />
 {#if scanning}<QrScanner onScan={handleScan} onClose={() => (scanning = false)} />{/if}
+
+<!-- "Buscar conversas" (nav): switcher em modo só-busca (busca de conteúdo cross-servidor, feature #10). -->
+<SessionSwitcherSheet
+  open={searchOpen}
+  searchOnly
+  sessions={[]}
+  currentName=""
+  onPick={(name) => { searchOpen = false; onSelect(name); }}
+  onNew={() => { searchOpen = false; showCreate = true; }}
+  onClose={() => (searchOpen = false)}
+/>
+
+<!-- Adicionar servidor (do menu de conta): colar a URL de pareamento (com token) ou escanear QR.
+     Mesma rota de parse do QR (parseServerPairing). Estilo dos modais do desktop (confirm-card). -->
+{#if showAddServer}
+  <div class="confirm-backdrop" onclick={() => (showAddServer = false)} role="presentation"></div>
+  <div class="confirm-card" role="dialog" aria-modal="true" aria-label="Adicionar servidor">
+    <p class="confirm-title">Adicionar servidor</p>
+    <input
+      type="url"
+      class="add-srv-input"
+      bind:value={addUrlText}
+      placeholder="Colar URL do servidor (com token)"
+      autocomplete="off"
+      autocorrect="off"
+      autocapitalize="off"
+      spellcheck={false}
+      use:autofocus
+      onkeydown={(e) => { addError = ''; if (e.key === 'Enter') submitPasteServer(); }}
+      aria-label="URL de pareamento do servidor"
+    />
+    {#if addError}<p class="resume-err" role="alert">{addError}</p>{/if}
+    <div class="confirm-actions">
+      <button type="button" class="c-btn" onclick={() => { showAddServer = false; scanning = true; }}>Escanear QR</button>
+      <button type="button" class="c-btn c-primary" onclick={submitPasteServer} disabled={!addUrlText.trim()}>Adicionar</button>
+    </div>
+  </div>
+{/if}
 
 <svelte:window onkeydown={(e) => { if (e.key === 'Escape') { if (menu) closeMenu(); else if (resumeModal) resumeModal = null; else if (confirmDel) confirmDel = null; else if (confirmSrv) confirmSrv = null; else if (confirmBranch) confirmBranch = null; else if (confirmLogout) confirmLogout = false; } }} />
 
@@ -1329,25 +1286,29 @@
     color: var(--text-secondary); display: inline-flex; align-items: center; justify-content: center;
   }
   .icon-btn:active, .icon-btn:hover { background: var(--bg-hover); }
-  .side-brand { font-size: var(--text-base); font-weight: 600; color: var(--text-primary); white-space: nowrap; }
-
-  .new-row { display: flex; gap: var(--space-2); }
-  .new-row .new-btn { flex: 1; min-width: 0; }
-  .new-btn {
-    display: flex; align-items: center; gap: var(--space-2); height: 40px; padding: 0 var(--space-3);
-    border-radius: var(--radius-md); background: var(--accent-dim); color: var(--text-primary);
-    font-size: var(--text-sm); font-weight: 500; justify-content: flex-start; white-space: nowrap;
-  }
-  .sidebar.collapsed .new-btn { justify-content: center; padding: 0; }
-  .new-btn:hover { background: var(--accent); color: #fff; }
-  .new-plus { font-size: var(--text-lg); line-height: 1; flex-shrink: 0; }
-  /* Toggle do modo selecao (feature #9), ao lado de "Nova sessão". */
+  .side-brand { flex: 1; min-width: 0; font-size: var(--text-base); font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Toggle do modo selecao (feature #9), no topo ao lado da marca. */
   .select-toggle-btn {
-    flex-shrink: 0; width: 40px; height: 40px;
+    flex-shrink: 0; width: 36px; height: 36px;
     border-radius: var(--radius-md); color: var(--text-secondary);
   }
   .select-toggle-btn:hover { background: var(--bg-hover); }
   .select-toggle-btn.active { color: var(--accent); background: var(--accent-dim); }
+
+  /* ── Navegação (Sessões / Buscar / Arquivo / Custos) ── */
+  .side-nav { display: flex; flex-direction: column; gap: 2px; margin-top: var(--space-2); }
+  .side-nav-item {
+    display: flex; align-items: center; gap: var(--space-3);
+    width: 100%; height: 40px; padding: 0 var(--space-3);
+    justify-content: flex-start; text-align: left;
+    color: var(--text-secondary); font-size: var(--text-sm); font-weight: 500;
+    border-radius: var(--radius-md); white-space: nowrap;
+  }
+  .side-nav-item svg { flex-shrink: 0; }
+  .side-nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .side-nav-item.on { background: var(--accent-dim); color: var(--text-primary); font-weight: 600; }
+  .sidebar.collapsed .side-nav-item { justify-content: center; padding: 0; gap: 0; }
+  .side-nav-sep { height: 1px; background: var(--border-subtle); margin: var(--space-2) var(--space-1); }
 
   .sess-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin-top: var(--space-2); }
   /* Toggle Servidor|Projeto (feature #3): controle segmentado COMPACTO e subordinado — inline (nao
@@ -1554,79 +1515,49 @@
   }
   .broadcast-send:disabled { background: var(--bg-hover); color: var(--text-muted); }
 
-  .side-foot { display: flex; flex-direction: column; gap: var(--space-1); border-top: 1px solid var(--border-subtle); padding-top: var(--space-2); }
-  .server-btn {
-    display: flex; align-items: center; gap: var(--space-2); height: 36px; padding: 0 var(--space-2);
-    border-radius: var(--radius-md); justify-content: flex-start; color: var(--text-secondary);
+  /* ── Rodapé: conta (avatar -> menu) + CTA "Nova sessão" ── */
+  .side-foot {
+    display: flex; align-items: center; gap: var(--space-2);
+    border-top: 1px solid var(--border-subtle); padding-top: var(--space-2); margin-top: var(--space-1);
   }
-  .server-btn:hover { background: var(--bg-hover); }
-  .srv-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border-default); flex-shrink: 0; }
-  .srv-dot.on { background: var(--accent); }
-  .srv-label { flex: 1; min-width: 0; font-size: var(--text-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .srv-caret { color: var(--text-muted); font-size: var(--text-xs); }
-  .srv-menu { display: flex; flex-direction: column; gap: 2px; padding: var(--space-1); background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); margin-bottom: var(--space-1); }
-  .srv-row { display: flex; align-items: center; }
-  .srv-pick { flex: 1; display: flex; align-items: center; gap: var(--space-2); height: 32px; padding: 0 var(--space-2); justify-content: flex-start; color: var(--text-primary); font-size: var(--text-sm); border-radius: var(--radius-sm); }
-  .srv-pick:hover { background: var(--bg-hover); }
-  .srv-rename { width: 28px; height: 32px; min-height: 0; flex-shrink: 0; color: var(--text-muted); font-size: var(--text-sm); }
-  .srv-rename:hover { color: var(--accent); }
-  .srv-edit {
-    flex: 1; min-width: 0; height: 32px; margin-left: var(--space-2); padding: 0 var(--space-2);
-    background: var(--bg-base); border: 1px solid var(--accent); border-radius: var(--radius-sm);
-    color: var(--text-primary); font-size: var(--text-sm); outline: none;
+  .side-foot.rail { flex-direction: column; }
+  /* Âncora do popover do menu de conta (abre pra cima). */
+  .account-anchor { position: relative; flex: 1; min-width: 0; }
+  .side-foot.rail .account-anchor { flex: 0 0 auto; }
+  .acct-btn {
+    display: flex; align-items: center; gap: var(--space-2); width: 100%; min-width: 0;
+    padding: var(--space-1) var(--space-2); justify-content: flex-start; text-align: left;
+    color: var(--text-primary); border-radius: var(--radius-md);
   }
-  .srv-del { width: 28px; height: 32px; min-height: 0; color: var(--text-muted); font-size: var(--text-base); }
-  .srv-del:hover { color: var(--error); }
-  /* Colar servidor manual (primaria no desktop) — input + Adicionar; QR vira secundaria abaixo. */
-  .srv-add-form { display: flex; gap: 4px; padding: var(--space-1) var(--space-1) 2px; }
-  .srv-add-input {
-    flex: 1; min-width: 0; height: 30px; padding: 0 var(--space-2);
-    background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
-    color: var(--text-primary); font-family: var(--font-ui); font-size: var(--text-xs); outline: none;
+  .acct-btn:hover { background: var(--bg-hover); }
+  .side-foot.rail .acct-btn { justify-content: center; padding: var(--space-1); }
+  .acct-avatar {
+    width: 30px; height: 30px; flex-shrink: 0; border-radius: 50%;
+    display: grid; place-items: center;
+    background: linear-gradient(135deg, var(--accent), #a06de0);
+    color: #fff; font-size: var(--text-xs); font-weight: 700;
   }
-  .srv-add-input::placeholder { color: var(--text-muted); }
-  .srv-add-input:focus { border-color: var(--accent); }
-  .srv-add-btn {
-    flex-shrink: 0; height: 30px; padding: 0 var(--space-2); border-radius: var(--radius-sm);
-    color: var(--accent); background: var(--accent-dim); font-size: var(--text-xs); font-weight: 600;
+  .acct-who { min-width: 0; display: flex; flex-direction: column; }
+  .acct-name { font-size: var(--text-sm); font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .acct-sub { font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cta-new {
+    display: flex; align-items: center; gap: var(--space-1); flex-shrink: 0;
+    height: 36px; padding: 0 var(--space-3);
+    background: var(--accent); color: #fff; font-size: var(--text-sm); font-weight: 600;
+    border-radius: var(--radius-full); white-space: nowrap;
   }
-  .srv-add-btn:disabled { color: var(--text-muted); background: var(--bg-hover); }
-  .srv-add-err { font-size: var(--text-xs); color: var(--error); padding: 0 var(--space-2) var(--space-1); margin: 0; }
-  .srv-add { height: 32px; padding: 0 var(--space-2); text-align: left; justify-content: flex-start; color: var(--text-secondary); font-size: var(--text-sm); }
-  .costs-btn { height: 34px; padding: 0 var(--space-2); text-align: left; justify-content: flex-start; color: var(--text-secondary); font-size: var(--text-sm); border-radius: var(--radius-md); }
-  .costs-btn:hover { background: var(--bg-hover); color: var(--accent); }
-  .archive-btn { display: flex; align-items: center; gap: var(--space-2); height: 34px; padding: 0 var(--space-2); justify-content: flex-start; color: var(--text-secondary); font-size: var(--text-sm); border-radius: var(--radius-md); }
-  .archive-btn:hover { background: var(--bg-hover); color: var(--accent); }
-  .logout-btn { height: 34px; padding: 0 var(--space-2); text-align: left; justify-content: flex-start; color: var(--text-muted); font-size: var(--text-sm); border-radius: var(--radius-md); }
-  .logout-btn:hover { background: var(--bg-hover); color: var(--error); }
-  /* Reconectar streams: mesmo formato dos itens de rodape (icone + rotulo). */
-  .reconnect-btn { display: flex; align-items: center; gap: var(--space-2); height: 34px; padding: 0 var(--space-2); justify-content: flex-start; color: var(--text-secondary); font-size: var(--text-sm); border-radius: var(--radius-md); }
-  .reconnect-btn:hover { background: var(--bg-hover); color: var(--accent); }
+  .cta-new svg { flex-shrink: 0; }
+  .cta-new:hover { background: var(--accent-press); }
+  .side-foot.rail .cta-new { width: 36px; padding: 0; justify-content: center; }
 
-  /* ── Notificacoes (push + quiet hours), paridade com o menu mobile ── */
-  .notif-box {
-    display: flex; flex-direction: column; gap: var(--space-1);
-    margin: var(--space-1) 0; padding: var(--space-2);
-    background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+  /* Input do modal "Adicionar servidor" (colar URL de pareamento). */
+  .add-srv-input {
+    width: 100%; height: 44px; padding: 0 var(--space-3);
+    background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-md);
+    color: var(--text-primary); font-family: var(--font-ui); font-size: var(--text-sm); outline: none;
   }
-  .notif-enable {
-    display: flex; align-items: center; gap: var(--space-2); height: 32px; min-height: 0;
-    padding: 0 var(--space-2); justify-content: flex-start;
-    color: var(--text-secondary); font-size: var(--text-sm); border-radius: var(--radius-sm);
-  }
-  .notif-enable:hover { background: var(--bg-hover); color: var(--accent); }
-  .notif-enable:disabled { color: var(--text-muted); }
-  .notif-msg { font-size: var(--text-xs); color: var(--text-muted); margin: 0; padding: 0 var(--space-2); }
-  .qh-row { display: flex; align-items: center; gap: var(--space-1); padding: 0 var(--space-2); font-size: var(--text-xs); color: var(--text-secondary); }
-  .qh-row input[type='time'] {
-    min-width: 0; flex: 1; background: var(--bg-surface); border: 1px solid var(--border-default);
-    border-radius: var(--radius-sm); color: var(--text-primary); font-size: var(--text-xs); padding: 3px 4px;
-  }
-  .qh-save {
-    flex-shrink: 0; min-height: 0; font-size: var(--text-xs); font-weight: 600; color: var(--accent);
-    padding: 4px 8px; border-radius: var(--radius-full); border: 1px solid var(--accent);
-  }
-  .qh-save:hover { background: var(--accent); color: #fff; }
+  .add-srv-input::placeholder { color: var(--text-muted); }
+  .add-srv-input:focus { border-color: var(--accent); }
 
   /* ── Menu de contexto ── */
   .menu-backdrop { position: fixed; inset: 0; z-index: 40; }

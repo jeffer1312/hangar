@@ -65,6 +65,15 @@ export function fmtWhen(mtime?: number | null): string {
   return new Date(mtime * 1000).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
 }
 
+// Iniciais pra avatar/rail (identifica sem o nome inteiro). "claude-pocket" -> CP, "jeffer1312" -> JE.
+// Duas palavras -> 1a letra de cada; uma só -> 2 primeiros chars. Puro/testável. Reusado pelo
+// avatar da conta (AccountMenu) e pelo rail recolhido da sidebar.
+export function initials(name: string): string {
+  const parts = name.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return (parts[0] ?? name).slice(0, 2).toUpperCase();
+}
+
 // Último segmento não vazio de um caminho absoluto (basename do projeto).
 export function basename(path: string): string {
   const parts = path.split('/').filter(Boolean);

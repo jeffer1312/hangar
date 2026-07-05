@@ -16,8 +16,11 @@
     onPick: (name: string) => void;
     onNew: () => void;
     onClose: () => void;
+    // Modo "só busca" (feature #10): entrada "Buscar conversas" da navegação da lista/sidebar. Abre
+    // direto na busca de conteúdo cross-servidor, sem a aba "Sessões" (não há sessão atual pra trocar).
+    searchOnly?: boolean;
   }
-  let { open, sessions, currentName, onPick, onNew, onClose }: Props = $props();
+  let { open, sessions, currentName, onPick, onNew, onClose, searchOnly = false }: Props = $props();
 
   type Mode = 'sessions' | 'search';
   // Hit da busca + de qual servidor veio (o fan-out chama 1 por servidor e junta) -> tap rota pro dono.
@@ -38,7 +41,7 @@
   // abria com foco no body e digitar nao filtrava) e reseta o destaque.
   $effect(() => {
     if (open) {
-      mode = 'sessions';
+      mode = searchOnly ? 'search' : 'sessions';   // "Buscar conversas" abre direto na busca
       query = '';
       results = [];
       activeIdx = 0;
@@ -167,10 +170,12 @@
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel="Trocar de sessão">
-  <h2 class="sheet-title">Sessões</h2>
+<BottomSheet {open} {onClose} ariaLabel={searchOnly ? 'Buscar conversas' : 'Trocar de sessão'}>
+  <h2 class="sheet-title">{searchOnly ? 'Buscar conversas' : 'Sessões'}</h2>
 
-  <!-- Alterna entre trocar de sessao (vivas) e buscar conteudo em todas as conversas (feature #10). -->
+  <!-- Alterna entre trocar de sessao (vivas) e buscar conteudo em todas as conversas (feature #10).
+       Escondido no modo "só busca" (a navegação abre direto na busca, sem sessão atual pra trocar). -->
+  {#if !searchOnly}
   <div class="tabs" role="tablist">
     <button
       class="tab" class:tab--on={mode === 'sessions'}
@@ -183,6 +188,7 @@
       onclick={() => setMode('search')}
     >Buscar conversas</button>
   </div>
+  {/if}
 
   <input
     type="text"

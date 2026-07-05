@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, fmtWhen, groupSelectedByServer, nextAwaiting,
+  abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, fmtWhen, groupSelectedByServer, initials, nextAwaiting,
   projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent,
 } from './format';
 import type { ChatEvent } from './types';
@@ -20,6 +20,25 @@ describe('abbrevNum', () => {
   });
   it('drops trailing .0', () => {
     expect(abbrevNum(2_000_000)).toBe('2M');
+  });
+});
+
+describe('initials', () => {
+  it('takes first letter of each of two words', () => {
+    expect(initials('claude-pocket')).toBe('CP');
+  });
+  it('splits on non-alphanumeric separators', () => {
+    expect(initials('my-org_web')).toBe('PW');
+    expect(initials('foo bar baz')).toBe('FB');
+  });
+  it('uses first two chars for a single word', () => {
+    expect(initials('jeffer1312')).toBe('JE');
+  });
+  it('uppercases', () => {
+    expect(initials('vps')).toBe('VP');
+  });
+  it('returns empty string for empty input', () => {
+    expect(initials('')).toBe('');
   });
 });
 
