@@ -100,6 +100,17 @@
   let searchOpen = $state(false);     // "Buscar conversas" (switcher em modo só-busca)
   let showAddServer = $state(false);  // modal de adicionar servidor (colar URL / QR)
 
+  // Kebab "⋯" do header: popover com a nav secundária (Buscar/Arquivo/Custos) + o toggle de
+  // agrupamento — o que antes empilhava no topo da sidebar. Ancorado ao botão, abre pra baixo.
+  let kebabOpen = $state(false);
+  let kebabPos = $state({ left: 0, top: 0 });
+  function openKebab(e: MouseEvent) {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    kebabPos = { left: Math.max(8, r.right - 220), top: r.bottom + 6 }; // alinha o popover à direita do botão
+    kebabOpen = true;
+  }
+  function closeKebab() { kebabOpen = false; }
+
   // Ordena DENTRO de cada grupo por nome (ordem alfabética estável — não pula quando a atividade muda).
   function sortSessions<T extends SessionInfo>(list: T[]): T[] {
     return [...list].sort((a, b) => a.name.localeCompare(b.name));
@@ -715,43 +726,21 @@
         </svg>
       </button>
     {/if}
+    <!-- Kebab "⋯": nav secundária (Buscar/Arquivo/Custos) + agrupamento, docado no header — o twin
+         desktop do hamburger do mobile. Abre um popover ancorado (renderizado fora do <aside>). -->
+    <button class="kebab-btn" class:active={kebabOpen} onclick={openKebab} aria-haspopup="menu" aria-expanded={kebabOpen} aria-label="Mais opções" title="Buscar, Arquivo, Custos, Agrupar">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+    </button>
   </div>
-
-  <!-- Navegação (estilo Claude: separada da configuração). Ícone-only quando o rail está recolhido. -->
-  <nav class="side-nav" aria-label="Navegação">
-    <button class="side-nav-item on" aria-current="page" title="Sessões">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-      {#if expanded}<span>Sessões</span>{/if}
-    </button>
-    <button class="side-nav-item" onclick={() => { accountOpen = false; searchOpen = true; }} title="Buscar conversas">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-      {#if expanded}<span>Buscar conversas</span>{/if}
-    </button>
-    <button class="side-nav-item" onclick={() => (window.location.hash = '#/archive')} title="Arquivo">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg>
-      {#if expanded}<span>Arquivo</span>{/if}
-    </button>
-    <button class="side-nav-item" onclick={() => (window.location.hash = '#/costs')} title="Custos">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
-      {#if expanded}<span>Custos</span>{/if}
-    </button>
-  </nav>
-  {#if expanded}<div class="side-nav-sep"></div>{/if}
 
   <nav class="sess-list" aria-label="Sessões">
     {#if expanded}
       <!-- "Precisa de você" (feature #6): fila cross-server de sessoes aguardando, fixa no topo.
            Picker inline (OptionButtons) responde sem abrir o chat; nativo AskUserQuestion abre. -->
       <AttentionFeed sessions={attnSessions} onOpenChat={(s) => onMainClick(s.name, s.serverId, s.tracked)} />
-      <!-- Toggle Servidor|Projeto (feature #3): agrupa por servidor ou por cwd. So aparece com >=2
-           servidores — com 1 so, "por servidor" daria 1 grupo gigante, entao o app agrupa por projeto
-           (effectiveGroupBy) e o toggle fica escondido por ser redundante. -->
-      {#if servers.length >= 2}
-        <div class="group-toggle" role="radiogroup" aria-label="Agrupar por">
-          <button type="button" class:active={groupBy === 'server'} role="radio" aria-checked={groupBy === 'server'} onclick={() => setGroupBy('server')}>Servidor</button>
-          <button type="button" class:active={groupBy === 'project'} role="radio" aria-checked={groupBy === 'project'} onclick={() => setGroupBy('project')}>Projeto</button>
-        </div>
-      {/if}
+      <!-- Toggle Servidor|Projeto (feature #3) migrou pro popover do kebab (header) — não empilha
+           mais no topo da lista. Continua condicional a >=2 servidores (dentro do popover). -->
+
       <!-- Filtro (paridade com o mobile): so aparece quando a lista fica longa. -->
       {#if showFilter}
         <input
@@ -1018,6 +1007,34 @@
   onClose={() => (searchOpen = false)}
 />
 
+<!-- Popover do kebab "⋯" (header): nav secundária + agrupamento. Renderizado FORA do <aside> pra
+     escapar o backdrop-filter da sidebar (mesmo motivo do menu de contexto). Ancorado via kebabPos. -->
+{#if kebabOpen}
+  <div class="menu-backdrop" onclick={closeKebab} role="presentation"></div>
+  <div class="kebab-menu" style="left: {kebabPos.left}px; top: {kebabPos.top}px;" role="menu">
+    <button type="button" role="menuitem" class="kebab-item" onclick={() => { closeKebab(); accountOpen = false; searchOpen = true; }}>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      Buscar conversas
+    </button>
+    <button type="button" role="menuitem" class="kebab-item" onclick={() => { closeKebab(); window.location.hash = '#/archive'; }}>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg>
+      Arquivo
+    </button>
+    <button type="button" role="menuitem" class="kebab-item" onclick={() => { closeKebab(); window.location.hash = '#/costs'; }}>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
+      Custos
+    </button>
+    {#if servers.length >= 2}
+      <div class="ctx-sep"></div>
+      <div class="kebab-group-label">Agrupar por</div>
+      <div class="group-toggle" role="radiogroup" aria-label="Agrupar por">
+        <button type="button" class:active={groupBy === 'server'} role="radio" aria-checked={groupBy === 'server'} onclick={() => setGroupBy('server')}>Servidor</button>
+        <button type="button" class:active={groupBy === 'project'} role="radio" aria-checked={groupBy === 'project'} onclick={() => setGroupBy('project')}>Projeto</button>
+      </div>
+    {/if}
+  </div>
+{/if}
+
 <!-- Adicionar servidor (do menu de conta): colar a URL de pareamento (com token) ou escanear QR.
      Mesma rota de parse do QR (parseServerPairing). Estilo dos modais do desktop (confirm-card). -->
 {#if showAddServer}
@@ -1045,7 +1062,7 @@
   </div>
 {/if}
 
-<svelte:window onkeydown={(e) => { if (e.key === 'Escape') { if (menu) closeMenu(); else if (resumeModal) resumeModal = null; else if (confirmDel) confirmDel = null; else if (confirmSrv) confirmSrv = null; else if (confirmBranch) confirmBranch = null; else if (confirmLogout) confirmLogout = false; } }} />
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape') { if (kebabOpen) closeKebab(); else if (menu) closeMenu(); else if (resumeModal) resumeModal = null; else if (confirmDel) confirmDel = null; else if (confirmSrv) confirmSrv = null; else if (confirmBranch) confirmBranch = null; else if (confirmLogout) confirmLogout = false; } }} />
 
 <!-- Menu de contexto (botao direito na sessao). Backdrop full-screen captura o clique-fora. -->
 {#if menu}
@@ -1295,20 +1312,37 @@
   .select-toggle-btn:hover { background: var(--bg-hover); }
   .select-toggle-btn.active { color: var(--accent); background: var(--accent-dim); }
 
-  /* ── Navegação (Sessões / Buscar / Arquivo / Custos) ── */
-  .side-nav { display: flex; flex-direction: column; gap: 2px; margin-top: var(--space-2); }
-  .side-nav-item {
-    display: flex; align-items: center; gap: var(--space-3);
-    width: 100%; height: 40px; padding: 0 var(--space-3);
-    justify-content: flex-start; text-align: left;
-    color: var(--text-secondary); font-size: var(--text-sm); font-weight: 500;
-    border-radius: var(--radius-md); white-space: nowrap;
+  /* ── Kebab "⋯" do header + seu popover (nav secundária + agrupamento) ── */
+  .kebab-btn {
+    flex-shrink: 0; width: 36px; height: 36px;
+    border-radius: var(--radius-md); color: var(--text-secondary);
+    display: inline-flex; align-items: center; justify-content: center;
   }
-  .side-nav-item svg { flex-shrink: 0; }
-  .side-nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
-  .side-nav-item.on { background: var(--accent-dim); color: var(--text-primary); font-weight: 600; }
-  .sidebar.collapsed .side-nav-item { justify-content: center; padding: 0; gap: 0; }
-  .side-nav-sep { height: 1px; background: var(--border-subtle); margin: var(--space-2) var(--space-1); }
+  .kebab-btn:hover, .kebab-btn.active { background: var(--bg-hover); color: var(--text-primary); }
+  /* Rail recolhido: o header empilha (recolher em cima, kebab embaixo) — a nav secundária segue
+     acessível num toque sem precisar expandir. */
+  .sidebar.collapsed .side-top { flex-direction: column; gap: var(--space-2); }
+  /* Popover do kebab: mesmo visual do menu de contexto (bg/borda/sombra), aberto pra baixo. */
+  .kebab-menu {
+    position: fixed; z-index: 41; min-width: 220px; padding: 4px;
+    display: flex; flex-direction: column;
+    background: var(--bg-elevated); border: 1px solid var(--border-default);
+    border-radius: var(--radius-md); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+  }
+  .kebab-item {
+    display: flex; align-items: center; gap: var(--space-3);
+    width: 100%; height: 40px; padding: 0 10px;
+    justify-content: flex-start; text-align: left;
+    color: var(--text-primary); font-size: var(--text-sm); border-radius: var(--radius-sm);
+  }
+  .kebab-item svg { flex-shrink: 0; color: var(--text-secondary); }
+  .kebab-item:hover { background: var(--bg-hover); }
+  .kebab-group-label {
+    font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--text-muted); padding: var(--space-2) 10px var(--space-1);
+  }
+  /* Toggle dentro do popover: zera a margem que tinha quando ficava na lista. */
+  .kebab-menu .group-toggle { margin: 0 6px 4px; }
 
   .sess-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin-top: var(--space-2); }
   /* Toggle Servidor|Projeto (feature #3): controle segmentado COMPACTO e subordinado — inline (nao
