@@ -105,6 +105,13 @@ def drain(name: str, jsonl: str) -> int:
         sent += 1
 
 
+class DriveError(RuntimeError):
+    """Falha ao dirigir o picker (nav nao convergiu / review mismatch / picker preso). NADA foi
+    submetido e NENHUM Escape foi mandado — o picker segue aberto; o caller (api /answer) decide o
+    fallback (Escape + resposta por texto). Nao herda ValueError de proposito: ValueError = input
+    invalido pre-TUI (409), DriveError = TUI nao cooperou (fallback)."""
+
+
 # Linha destacada do picker: "❯ 3. OPT-TWO" -> 3 (1-based). Numerico de proposito: robusto a label
 # longo/quebrado em multiplas linhas, que um match por texto erraria.
 _CURSOR_ROW = re.compile(r"❯\s*(\d+)\.")
@@ -155,7 +162,9 @@ def _validate(answers: list[dict]) -> None:
 
 def answer_questions(name: str, answers: list[dict]) -> None:
     """Dirige o prompt tabbed AskUserQuestion do estado INICIAL (cursor aba1/opt0) e CONFERE no Review
-    antes do Submit. Mismatch/erro -> Escape (cancela, nao envia) + ValueError (API -> 409).
+    antes do Submit. Input invalido -> ValueError pre-TUI (API -> 409). Drive falhou (nav nao
+    convergiu / mismatch / preso) -> DriveError SEM submeter e SEM Escape — o caller manda Escape e
+    reenvia a resposta como texto (fallback), pra o Escape solto nao virar "user declined".
     single = Down*idx + Enter (auto-avanca); multi = (Down ate idx + Space) por opcao, depois Right;
     texto = Down ate 'Type something' + Enter + digita + Enter; chat = Down ate 'Chat about this' + Enter."""
     _validate(answers)  # valida ANTES de tocar no TUI; loop abaixo assume input valido
@@ -170,15 +179,22 @@ def answer_questions(name: str, answers: list[dict]) -> None:
             # single-select: desce ate o indice e Enter (TUI auto-avanca pro proximo tab)
             for _ in range(a["indices"][0]):
                 key("Down")
-            # Guard PRE-Enter: numa pergunta UNICA o Enter ja SUBMETE (nao ha tela de Review depois p/
-            # pegar drift). Um Down engolido no redraw do overlay submetia a opcao errada calado -> a
-            # resposta no terminal != a escolhida. Confere a linha do cursor ANTES do Enter; drift ->
-            # Escape (cancela, nao submete). Cursor abre na linha 1 (indice 0), logo esperado = indice+1.
+            # Guard PRE-Enter em MALHA FECHADA: numa pergunta UNICA o Enter ja SUBMETE (nao ha tela
+            # de Review depois p/ pegar drift). Um Down engolido no redraw do overlay submetia a
+            # opcao errada calado. Le a linha REAL do cursor e CORRIGE (Down/Up + re-le, ate 3x) —
+            # tecla engolida vira ruido auto-corrigido, nao erro. Cursor abre na linha 1 (indice 0),
+            # logo esperado = indice+1. Linha ilegivel -> segue como hoje (guard so age se leu).
+            # Nao convergiu -> DriveError SEM Escape (caller faz Escape + fallback por texto).
             expected = a["indices"][0] + 1
             row = _cursor_row(_capture(name))
+            for _ in range(3):
+                if row is None or row == expected:
+                    break
+                for _ in range(abs(expected - row)):
+                    key("Down" if expected > row else "Up")
+                row = _cursor_row(_capture(name))
             if row is not None and row != expected:
-                send_keys(name, "Escape")
-                raise ValueError(f"nav drift — cursor na linha {row}, esperava {expected}; nao submetido")
+                raise DriveError(f"nav drift nao corrigido — cursor na linha {row}, esperava {expected}; nao submetido")
             key("Enter")
         elif kind == "option":
             # multi-select: para cada opcao (em ordem crescente) desce ate ela e Space; depois Right
@@ -211,12 +227,10 @@ def answer_questions(name: str, answers: list[dict]) -> None:
     screen = _capture(name)
     if "Submit answers" in screen:
         if not _review_matches(screen, answers):
-            send_keys(name, "Escape")
-            raise ValueError("review mismatch — nao submetido")
+            raise DriveError("review mismatch — nao submetido")
         key("Enter")
     elif "Esc to cancel" in screen:
-        send_keys(name, "Escape")
-        raise ValueError("picker preso sem tela de review — nao submetido")
+        raise DriveError("picker preso sem tela de review — nao submetido")
     # senao: pergunta unica ja submeteu na selecao; nada a confirmar.
 
 
