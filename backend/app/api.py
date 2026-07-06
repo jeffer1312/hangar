@@ -1019,20 +1019,62 @@ class AnswerBody(_StrictBody):
     answers: list[AnswerItem]
 
 
+def _askq_fallback_text(answers: list[dict], jsonl: str | None) -> str:
+    """Monta a resposta em TEXTO pro fallback do AskUserQuestion (drive da TUI falhou): pareia cada
+    answer com a pergunta do sidecar (mesma ordem — o stepper monta answers via questions.map) e vira
+    linhas "pergunta → resposta". Sem sidecar, so as respostas. kind=chat nao vira linha (o usuario
+    escolheu conversar — o Escape do fallback ja o poe no chat)."""
+    questions = []
+    if jsonl:
+        askq = read_pending_askq(jsonl)
+        if askq:
+            questions = askq.questions
+    lines = []
+    for i, a in enumerate(answers):
+        if a["kind"] == "option":
+            resp = ", ".join(a.get("labels") or [])
+        elif a["kind"] == "text":
+            resp = a.get("value") or ""
+        else:  # chat: sem resposta estruturada
+            continue
+        if not resp:
+            continue
+        q = questions[i].question if i < len(questions) else None
+        lines.append(f"- {q} → {resp}" if q else f"- {resp}")
+    if not lines:
+        return ""
+    return "Respondendo as perguntas (o seletor de opções falhou, vai por texto):\n" + "\n".join(lines)
+
+
 @app.post("/api/sessions/{name}/answer", dependencies=[Depends(require_auth)])
 def answer(name: str, body: AnswerBody):
-    # Dirige o AskUserQuestion tabbed: reproduz as teclas, confere o Review, submete ou 409.
+    # Dirige o AskUserQuestion tabbed: reproduz as teclas (nav em malha fechada), confere o Review e
+    # submete. Input invalido -> 409. Drive falhou (DriveError: nada submetido, sem Escape) ->
+    # FALLBACK automatico: Escape (fecha o picker; o "declined" e intencional aqui) + resposta como
+    # texto via _send_one (fila duravel: se o pane ainda estiver em overlay vira deferred e o drain
+    # entrega). A resposta do usuario NUNCA se perde — pior caso chega como texto, nao como interrupt mudo.
     from app import terminal_input
+    answers = [a.model_dump() for a in body.answers]
+    jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
+    fallback = False
     try:
-        terminal_input.answer_questions(name, [a.model_dump() for a in body.answers])
+        terminal_input.answer_questions(name, answers)
     except ValueError as e:
         raise HTTPException(409, str(e))
+    except terminal_input.DriveError as e:
+        text = _askq_fallback_text(answers, jsonl)
+        _log.warning("ASKQ fallback name=%s reason=%s text=%r", name, e, text[:120])
+        terminal.interrupt(name)  # Escape unico: fecha o picker (sem clear — input vazio)
+        if text:
+            res = _send_one(name, text)
+            if not res["ok"]:
+                raise HTTPException(409, f"drive falhou e fallback por texto tambem: {res['error']}")
+        fallback = True
     # Respondido: limpa o sidecar do hook pra um stale nao reabrir o stepper depois. Resolve o jsonl
     # igual aos outros endpoints; se nao resolver, pula a limpeza sem falhar a request.
-    jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
     if jsonl:
         clear_pending_askq(jsonl)
-    return {"ok": True}
+    return {"ok": True, "fallback": fallback}
 
 
 @app.post("/api/sessions/{name}/model-effort", dependencies=[Depends(require_auth)])

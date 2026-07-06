@@ -438,3 +438,55 @@ def test_resume_archived_route_404_when_transcript_missing(api_client):
     with patch("app.api.archive_cwd", side_effect=FileNotFoundError()):
         r = api_client.post(f"/api/archive/-home-u-my-proj/{_SID}/resume", headers=_h())
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# /answer: fallback por texto quando o drive da TUI falha (DriveError)
+# ---------------------------------------------------------------------------
+from app import terminal_input as ti_mod
+
+
+def test_askq_fallback_text_pairs_questions_and_answers(monkeypatch):
+    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: AskQuestion(questions=[
+        AskQuestionItem(header="h1", question="Como validar?", options=[AskOption(label="Type-check")]),
+        AskQuestionItem(header="h2", question="Commit + push?", options=[AskOption(label="Sim")]),
+    ]))
+    text = api_mod._askq_fallback_text(
+        [{"kind": "option", "labels": ["Type-check"]}, {"kind": "option", "labels": ["Sim"]}],
+        "/x/u.jsonl",
+    )
+    assert "Como validar? → Type-check" in text and "Commit + push? → Sim" in text
+
+
+def test_askq_fallback_text_without_sidecar_and_chat_kind(monkeypatch):
+    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)
+    text = api_mod._askq_fallback_text(
+        [{"kind": "chat"}, {"kind": "text", "value": "minha resposta"}], "/x/u.jsonl")
+    assert "minha resposta" in text and "chat" not in text
+    # so chat -> sem texto (o Escape do fallback ja poe o usuario no chat)
+    assert api_mod._askq_fallback_text([{"kind": "chat"}], None) == ""
+
+
+def test_answer_drive_error_falls_back_to_text(api_client):
+    # DriveError no drive -> Escape (interrupt) + resposta como texto (_send_one) + 200 fallback:true.
+    info = SessionInfo(name="s1", cwd="/x", jsonl="/x/u.jsonl")
+    with patch.object(ti_mod, "answer_questions", side_effect=ti_mod.DriveError("nav drift")), \
+         patch("app.api.registry.list", return_value=[info]), \
+         patch.object(api_mod, "read_pending_askq", return_value=None), \
+         patch.object(api_mod.terminal, "interrupt") as intr, \
+         patch.object(api_mod, "_send_one", return_value={"ok": True, "error": None}) as send, \
+         patch.object(api_mod, "clear_pending_askq") as clear:
+        r = api_client.post("/api/sessions/s1/answer", headers=_h(),
+                            json={"answers": [{"kind": "option", "indices": [1], "labels": ["Sim"]}]})
+    assert r.status_code == 200 and r.json()["fallback"] is True
+    intr.assert_called_once_with("s1")
+    assert "Sim" in send.call_args[0][1]
+    clear.assert_called_once()
+
+
+def test_answer_validation_error_still_409(api_client):
+    with patch.object(ti_mod, "answer_questions", side_effect=ValueError("indices required")), \
+         patch("app.api.registry.list", return_value=[]):
+        r = api_client.post("/api/sessions/s1/answer", headers=_h(),
+                            json={"answers": [{"kind": "option", "labels": []}]})
+    assert r.status_code == 409

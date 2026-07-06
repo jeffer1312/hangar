@@ -46,17 +46,34 @@ def test_single_question_no_review_submits_without_escape():
     assert "Escape" not in keys                 # SEM Escape espurio (era o interrupt do bug)
 
 
-def test_single_question_nav_drift_aborts_before_submit():
-    # Um Down engolido no redraw: cursor fica na linha 2 quando esperavamos a 3. Guard pega ANTES do
-    # Enter -> Escape, levanta, NUNCA submete (era assim que a opcao errada chegava calada no terminal).
+def test_single_question_nav_drift_self_corrects_then_submits():
+    # Um Down engolido no redraw: cursor fica na linha 2 quando esperavamos a 3. Malha fechada: le a
+    # linha real, manda o delta (1 Down) e re-le — corrigiu -> Enter submete. Drift vira ruido, nao erro.
+    keys = []
+    caps = iter([
+        "Pick one\n❯ 2. OPT-ONE\n  3. OPT-TWO\nEnter to select · Esc to cancel",  # guard: drift (2 != 3)
+        "Pick one\n  2. OPT-ONE\n❯ 3. OPT-TWO\nEnter to select · Esc to cancel",  # re-le: corrigido
+        "❯ \n⏵⏵ bypass permissions on",                                            # picker fechou: submeteu
+    ])
+    with patch.object(ti, "send_keys", lambda name, k, **kw: keys.append(k)), \
+         patch.object(ti, "_capture", lambda name: next(caps)):
+        ti.answer_questions("s", [{"kind": "option", "indices": [2], "multi": False, "labels": ["OPT-TWO"]}])
+    assert keys == ["Down", "Down", "Down", "Enter"]  # 2 cegos + 1 correcao + submit
+    assert "Escape" not in keys
+
+
+def test_single_question_nav_drift_unrecoverable_raises_drive_error():
+    # Cursor preso na linha 2 apos 3 correcoes: DriveError SEM Enter (nao submete errado) e SEM
+    # Escape (o Escape solto virava "user declined/interrupted" — agora e o caller que decide,
+    # mandando Escape + resposta por texto).
     import pytest
     keys = []
     drift = "Pick one\n❯ 2. OPT-ONE\n  3. OPT-TWO\nEnter to select · Esc to cancel"
     with patch.object(ti, "send_keys", lambda name, k, **kw: keys.append(k)), \
          patch.object(ti, "_capture", lambda name: drift):
-        with pytest.raises(ValueError):
+        with pytest.raises(ti.DriveError):
             ti.answer_questions("s", [{"kind": "option", "indices": [2], "multi": False, "labels": ["OPT-TWO"]}])
-    assert "Escape" in keys and "Enter" not in keys  # abortou pre-submit
+    assert "Enter" not in keys and "Escape" not in keys  # inerte: nada submetido, nada interrompido
 
 
 def test_multi_question_review_submits():
@@ -78,17 +95,17 @@ def test_multi_question_review_submits():
     assert "Escape" not in keys
 
 
-def test_multi_select_macro_and_mismatch_aborts():
+def test_multi_select_macro_and_mismatch_raises_drive_error():
     keys = []
     bad_review = "Review your answers\n ● Q1\n   → Z\n❯ 1. Submit answers\n  2. Cancel\n"
     import pytest
     with patch.object(ti, "send_keys", lambda name, k, **kw: keys.append(k)), \
          patch.object(ti, "_capture", lambda name: bad_review):
-        with pytest.raises(ValueError):
+        with pytest.raises(ti.DriveError):
             ti.answer_questions("s", [{"kind": "option", "indices": [0, 1], "multi": True, "labels": ["X", "Y"]}])
-    # multi: Space, Down, Space, Right ; depois verify falha (review tem Z, nao X/Y) -> Escape
-    assert keys[:4] == ["Space", "Down", "Space", "Right"]
-    assert "Escape" in keys and "Enter" not in keys[4:]  # nunca submeteu
+    # multi: Space, Down, Space, Right ; verify falha (review tem Z, nao X/Y) -> DriveError sem
+    # Escape (caller faz Escape + fallback texto) e sem Enter (nunca submeteu)
+    assert keys == ["Space", "Down", "Space", "Right"]
 
 
 def test_text_without_value_raises_before_any_key():
@@ -118,6 +135,6 @@ def test_review_substring_not_false_positive():
     import pytest
     with patch.object(ti, "send_keys", lambda name, k, **kw: keys.append(k)), \
          patch.object(ti, "_capture", lambda name: review):
-        with pytest.raises(ValueError):  # "A" nao e token exato de "Apply" -> mismatch -> Escape
+        with pytest.raises(ti.DriveError):  # "A" nao e token exato de "Apply" -> mismatch
             ti.answer_questions("s", [{"kind": "option", "indices": [0], "multi": False, "labels": ["A"]}])
-    assert "Escape" in keys
+    assert "Escape" not in keys  # inerte: fallback e do caller
