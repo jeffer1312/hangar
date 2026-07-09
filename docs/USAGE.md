@@ -131,6 +131,16 @@ mesmo celular.
 Abrindo a mesma URL num monitor largo, vira **shell de duas colunas**: sidebar de sessões +
 chat largo. O fluxo mobile fica intacto abaixo de 820px.
 
+### Git
+- **Painel:** ícone de branch abre a tela git da sessão. No **desktop (≥820px)** o painel vira **3
+  zonas** (branches | commits + grafo | detalhe do commit/diff) em vez da lista estreita; no mobile
+  o fluxo de telas continua o mesmo.
+- **Commit:** em "Working tree changes", marque os arquivos desejados, escreva a mensagem e confirme
+  — só os arquivos marcados entram no commit (funciona igual em mobile e desktop).
+- **Push:** botão **Commit & Push** sobe a branch atual (usa o upstream, ou cria com `-u origin` no
+  primeiro push).
+- **Histórico:** tocar/clicar num commit mostra os arquivos alterados e o diff de cada um.
+
 ## 5. Sync na nuvem (opcional)
 
 Para sincronizar a lista de servidores entre múltiplos PCs no mesmo celular, ative o hub de sincronização na nuvem:
