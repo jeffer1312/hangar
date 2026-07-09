@@ -302,6 +302,27 @@ def commit(cwd: str, message: str, paths: list[str]) -> dict:
     return {"ok": True, "output": (r.stdout + r.stderr).strip()}
 
 
+def push(cwd: str) -> dict:
+    """Push da branch atual. Se ja tem upstream, `git push`; se nao, `git push -u origin <branch>`
+    (1o push cria a branch no servidor e vincula). NUNCA --force. Sem 'origin' -> erro claro (409)."""
+    br = _run(cwd, "rev-parse", "--abbrev-ref", "HEAD")
+    branch = br.stdout.strip()
+    if not branch or branch == "HEAD":
+        raise GitError(409, "sem branch atual (detached HEAD)")
+    up = _run(cwd, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+    if up.returncode == 0 and up.stdout.strip():
+        r = _run(cwd, "push")
+    else:
+        # sem upstream: exige o remote 'origin'
+        rem = _run(cwd, "remote")
+        if "origin" not in rem.stdout.split():
+            raise GitError(409, "branch sem upstream e sem remote 'origin' — configure um remote antes")
+        r = _run(cwd, "push", "-u", "origin", branch)
+    if r.returncode != 0:
+        raise GitError(409, (r.stderr or r.stdout or "push falhou").strip() or "push falhou")
+    return {"ok": True, "output": (r.stdout + r.stderr).strip()}
+
+
 if __name__ == "__main__":
     # Self-check: repo temp, cria branch, valida switch + rejeicao + allowlist. Sem framework.
     import tempfile
@@ -351,6 +372,13 @@ if __name__ == "__main__":
             # switch DWIM: cria a local rastreando origin/only-remote
             assert switch_branch(d, "only-remote")["current"] == "only-remote"
             assert "only-remote" in list_branches(d)["branches"], "DWIM devia criar local"
+
+            # push: com upstream configurado, sobe pro origin. rd precisa aceitar push (bare-like):
+            _run(rd, "config", "receive.denyCurrentBranch", "ignore")
+            _run(d, "switch", "-q", "-c", "pushme")
+            _run(d, "commit", "-q", "--allow-empty", "-m", "p1")
+            pr = push(d)               # sem upstream -> push -u origin pushme
+            assert pr["ok"], pr
 
         # git_log estruturado: parseia os commits do repo temp e valida os campos.
         commits = git_log(d, n=10)
