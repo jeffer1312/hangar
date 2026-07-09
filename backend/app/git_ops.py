@@ -293,10 +293,10 @@ def commit(cwd: str, message: str, paths: list[str]) -> dict:
     for p in paths:
         if p not in valid:
             raise GitError(400, f"arquivo nao esta na lista de alterados: {p}")
-    # Stage apenas os arquivos solicitados
+    # `add` primeiro: --only sozinho falha em arquivo untracked ("pathspec did not match").
+    # `commit --only -- <paths>` grava SO esses paths, mesmo que outros estejam staged no indice.
     _run(cwd, "add", "--", *paths)
-    # Commit apenas os staged (sem --only, pois todos os paths ja foram adicionados)
-    r = _run(cwd, "commit", "-m", message)
+    r = _run(cwd, "commit", "--only", "-m", message, "--", *paths)
     if r.returncode != 0:
         raise GitError(409, (r.stderr or r.stdout or "commit falhou").strip() or "commit falhou")
     return {"ok": True, "output": (r.stdout + r.stderr).strip()}
@@ -429,6 +429,14 @@ if __name__ == "__main__":
             # a.txt commitado, b.txt ainda untracked
             st = _run(cd, "status", "--porcelain").stdout
             assert "a.txt" not in st and "b.txt" in st, st
+
+            # arquivo pré-staged NAO pode vazar pro commit de outro path.
+            (pathlib.Path(cd) / "c.txt").write_text("C\n")
+            _run(cd, "add", "b.txt")            # b fica staged, fora do commit pedido
+            commit(cd, "so o c", ["c.txt"])
+            names = _run(cd, "show", "--name-only", "--format=", "HEAD").stdout.split()
+            assert "c.txt" in names and "b.txt" not in names, names
+
             for bad in [(["a.txt"], ""), (["../x"], "m"), (["--flag"], "m")]:
                 try:
                     commit(cd, bad[1], bad[0])
