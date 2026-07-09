@@ -280,6 +280,28 @@ def commit_file_diff(cwd: str, sha: str, path: str) -> dict:
     return {"path": path, "diff": p.stdout}
 
 
+def commit(cwd: str, message: str, paths: list[str]) -> dict:
+    """Commita SO os paths marcados (checkbox estilo Tortoise). Valida cada path contra a lista real
+    de alterados (anti-traversal/flag-like); mensagem nao pode ser vazia. `git add <paths>` depois
+    `git commit` faz stage+commit apenas desses arquivos, deixando o resto fora do commit. `-m` recebe
+    a mensagem como argv (nunca shell) -> sem injecao."""
+    if not message.strip():
+        raise GitError(400, "mensagem vazia")
+    if not paths:
+        raise GitError(400, "nenhum arquivo selecionado")
+    valid = {f["path"] for f in changed_files(cwd)}
+    for p in paths:
+        if p not in valid:
+            raise GitError(400, f"arquivo nao esta na lista de alterados: {p}")
+    # Stage apenas os arquivos solicitados
+    _run(cwd, "add", "--", *paths)
+    # Commit apenas os staged (sem --only, pois todos os paths ja foram adicionados)
+    r = _run(cwd, "commit", "-m", message)
+    if r.returncode != 0:
+        raise GitError(409, (r.stderr or r.stdout or "commit falhou").strip() or "commit falhou")
+    return {"ok": True, "output": (r.stdout + r.stderr).strip()}
+
+
 if __name__ == "__main__":
     # Self-check: repo temp, cria branch, valida switch + rejeicao + allowlist. Sem framework.
     import tempfile
@@ -394,4 +416,23 @@ if __name__ == "__main__":
             assert any(c["passthrough"] for c in g), [c["passthrough"] for c in g]    # lane atravessa
             # ha uma convergencia: um commit NAO-merge com aresta curva (branch voltando pro tronco)
             assert any(any(e["curved"] for e in c["edges"]) for c in g if len(c["parents"]) == 1), g
+
+        # commit: grava so os paths marcados; valida path contra a lista real; mensagem vazia falha.
+        with tempfile.TemporaryDirectory() as cd:
+            _run(cd, "init", "-q", "-b", "main")
+            _run(cd, "config", "user.email", "t@t")
+            _run(cd, "config", "user.name", "t")
+            (pathlib.Path(cd) / "a.txt").write_text("A\n")
+            (pathlib.Path(cd) / "b.txt").write_text("B\n")
+            r = commit(cd, "so o a", ["a.txt"])
+            assert r["ok"], r
+            # a.txt commitado, b.txt ainda untracked
+            st = _run(cd, "status", "--porcelain").stdout
+            assert "a.txt" not in st and "b.txt" in st, st
+            for bad in [(["a.txt"], ""), (["../x"], "m"), (["--flag"], "m")]:
+                try:
+                    commit(cd, bad[1], bad[0])
+                    raise AssertionError(f"deveria falhar: {bad!r}")
+                except GitError:
+                    pass
         print("git_ops self-check OK")

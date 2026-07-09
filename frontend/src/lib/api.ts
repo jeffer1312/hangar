@@ -446,6 +446,13 @@ export function discardFile(name: string, path: string): Promise<{ ok: boolean; 
   });
 }
 
+export function commitFiles(name: string, message: string, paths: string[]): Promise<{ ok: boolean; output: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/commit`, {
+    method: 'POST',
+    body: JSON.stringify({ message, paths }),
+  });
+}
+
 // Envia respostas do stepper AskUserQuestion para o backend.
 export function answerQuestions(name: string, answers: AnswerItem[]): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/answer`, {
