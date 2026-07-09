@@ -37,7 +37,7 @@
 
 <style>
   .git-diff-head {
-    display: flex; flex-direction: column; gap: var(--space-3); flex-shrink: 0;
+    display: flex; flex-direction: column; gap: var(--space-2); flex-shrink: 0;
     padding-bottom: var(--space-2); border-bottom: 1px solid var(--border-subtle);
   }
   .git-diff-name {
