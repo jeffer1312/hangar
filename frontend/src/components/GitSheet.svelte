@@ -27,11 +27,8 @@
   let logLoading = $state(false);
   let commitSel = $state<GitCommit | null>(null);  // commit aberto no detalhe (view 'commit')
 
-  // openDiff/doDiscard ainda nao vivem no store (proxima tarefa) — busy/error proprios, so
-  // usados por eles; nas telas onde importam (view 'list'), o template combina com git.busy/git.error.
-  let busy = $state('');
-  let error = $state('');
-
+  // openDiff/doDiscard ainda nao vivem no store (proxima tarefa) — usam git.busy/git.error
+  // direto (mesmo padrao de pick/runAction), um so slot de estado pra sheet inteira.
   function cleanErr(e: unknown): string {
     const m = e instanceof Error ? e.message : 'falhou';
     return m.replace(/^\d+:\s*/, '');   // tira o prefixo "409: " do status HTTP
@@ -65,32 +62,34 @@
 
   // Recarrega a cada abertura (o estado do repo pode ter mudado fora do app). Fecha o diff/busca.
   $effect(() => {
-    if (open) { filter = ''; view = 'list'; diffPath = ''; confirmDiscard = ''; error = ''; git.load(); }
+    if (open) { filter = ''; view = 'list'; diffPath = ''; confirmDiscard = ''; git.load(); }
   });
 
   async function openDiff(path: string) {
-    if (git.busy || busy) return;
+    if (git.busy) return;
     diffPath = path;
     diffRows = [];
     diffLoading = true;
-    error = '';
+    git.error = '';
+    git.busy = path;
     view = 'diff';
     try {
       const { diff } = await getFileDiff(sessionName, path);
       const { highlightDiff } = await import('../lib/highlight');   // Shiki carrega on-demand
       diffRows = await highlightDiff(diff, path);
     } catch (e) {
-      error = cleanErr(e);
+      git.error = cleanErr(e);
       diffPath = '';
       view = 'list';   // falhou -> volta pra lista
     } finally {
       diffLoading = false;
+      git.busy = '';
     }
   }
 
   // Carrega o log e abre a view dedicada (uma-linha-por-commit). Espelha o openDiff.
   async function openLog() {
-    if (git.busy || busy) return;
+    if (git.busy) return;
     view = 'log';
     logLoading = true;
     try {
@@ -102,17 +101,18 @@
   }
 
   async function doDiscard(path: string) {
-    busy = path;
-    error = '';
+    if (git.busy) return;
+    git.error = '';
+    git.busy = path;
     try {
       await discardFile(sessionName, path);
       confirmDiscard = '';
       if (diffPath === path) { diffPath = ''; if (view === 'diff') view = 'list'; }
       await git.refresh();
     } catch (e) {
-      error = cleanErr(e);
+      git.error = cleanErr(e);
     } finally {
-      busy = '';
+      git.busy = '';
     }
   }
 
@@ -215,12 +215,12 @@
       <div class="git-head">
         <h2 class="git-title">Git</h2>
         <div class="git-actions">
-          <button class="git-act" disabled={!!git.busy || !!busy} onclick={() => git.runAction('status')}>status</button>
-          <button class="git-act" disabled={!!git.busy || !!busy} onclick={openLog} title="últimos commits (git log)">log</button>
-          <button class="git-act" disabled={!!git.busy || !!busy} onclick={() => git.runAction('fetch')}>fetch</button>
-          <button class="git-act" disabled={!!git.busy || !!busy} onclick={() => git.runAction('pull')}>pull</button>
-          <button class="git-act" disabled={!!git.busy || !!busy} onclick={() => git.runAction('stash')} title="guarda as mudanças (git stash)">stash</button>
-          <button class="git-act" disabled={!!git.busy || !!busy} onclick={() => git.runAction('stash-pop')} title="reaplica o último stash">pop</button>
+          <button class="git-act" disabled={!!git.busy} onclick={() => git.runAction('status')}>status</button>
+          <button class="git-act" disabled={!!git.busy} onclick={openLog} title="últimos commits (git log)">log</button>
+          <button class="git-act" disabled={!!git.busy} onclick={() => git.runAction('fetch')}>fetch</button>
+          <button class="git-act" disabled={!!git.busy} onclick={() => git.runAction('pull')}>pull</button>
+          <button class="git-act" disabled={!!git.busy} onclick={() => git.runAction('stash')} title="guarda as mudanças (git stash)">stash</button>
+          <button class="git-act" disabled={!!git.busy} onclick={() => git.runAction('stash-pop')} title="reaplica o último stash">pop</button>
         </div>
         {#if git.branches.length > 6 || git.remotes.length}
           <input
@@ -247,7 +247,7 @@
               {#each git.files as f (f.path)}
                 {@const slash = f.path.lastIndexOf('/')}
                 <div class="git-file-row" class:danger={confirmDiscard === f.path}>
-                  <button class="git-file" disabled={!!git.busy || !!busy} onclick={() => openDiff(f.path)} title="ver diff">
+                  <button class="git-file" disabled={!!git.busy} onclick={() => openDiff(f.path)} title="ver diff">
                     <span class="git-file-tag" data-t={fileTag(f.code)}>{fileTag(f.code)}</span>
                     <!-- basename em destaque: o dir trunca no COMECO (direction:rtl), o basename nunca encolhe.
                          Um LRM (\u200e) no fim ancora a "/" final em contexto LTR — sem ele o rtl joga a
@@ -255,10 +255,10 @@
                     <span class="git-path">{#if slash >= 0}<span class="git-path-dir">{'\u200e' + f.path.slice(0, slash + 1) + '\u200e'}</span>{/if}<span class="git-path-base">{slash >= 0 ? f.path.slice(slash + 1) : f.path}</span></span>
                   </button>
                   {#if confirmDiscard === f.path}
-                    <button class="git-mini danger" disabled={!!git.busy || !!busy} onclick={() => doDiscard(f.path)}>descartar</button>
-                    <button class="git-mini" disabled={!!git.busy || !!busy} onclick={() => (confirmDiscard = '')}>não</button>
+                    <button class="git-mini danger" disabled={!!git.busy} onclick={() => doDiscard(f.path)}>descartar</button>
+                    <button class="git-mini" disabled={!!git.busy} onclick={() => (confirmDiscard = '')}>não</button>
                   {:else}
-                    <button class="git-mini" disabled={!!git.busy || !!busy} onclick={() => (confirmDiscard = f.path)} aria-label="descartar mudanças" title="descartar mudanças">⟲</button>
+                    <button class="git-mini" disabled={!!git.busy} onclick={() => (confirmDiscard = f.path)} aria-label="descartar mudanças" title="descartar mudanças">⟲</button>
                   {/if}
                 </div>
               {/each}
@@ -267,7 +267,7 @@
 
           <div class="git-branches">
             {#each localList as b (b)}
-              <button class="git-branch" class:current={b === git.current} disabled={!!git.busy || !!busy} onclick={() => git.pick(b)}>
+              <button class="git-branch" class:current={b === git.current} disabled={!!git.busy} onclick={() => git.pick(b)}>
                 <span class="git-dot" aria-hidden="true">{b === git.current ? '●' : '○'}</span>
                 <span class="git-name">{b}</span>
                 {#if git.busy === b}<span class="git-spin" aria-hidden="true">…</span>{/if}
@@ -280,7 +280,7 @@
             <p class="git-section">remotas</p>
             <div class="git-branches">
               {#each remoteList as b (b)}
-                <button class="git-branch git-remote" disabled={!!git.busy || !!busy} onclick={() => git.pick(b)} title="cria uma branch local rastreando a remota">
+                <button class="git-branch git-remote" disabled={!!git.busy} onclick={() => git.pick(b)} title="cria uma branch local rastreando a remota">
                   <span class="git-dot" aria-hidden="true">○</span>
                   <span class="git-name">{b}</span>
                   <span class="git-badge">remote</span>
@@ -293,7 +293,7 @@
       {/if}
 
       {#if git.output}<pre class="git-output">{git.output}</pre>{/if}
-      {#if git.error || error}<p class="git-error">{git.error || error}</p>{/if}
+      {#if git.error}<p class="git-error">{git.error}</p>{/if}
     </div>
   {/if}
 </BottomSheet>

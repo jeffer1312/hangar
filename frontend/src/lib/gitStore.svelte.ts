@@ -64,8 +64,10 @@ export function createGitStore(sessionName: string) {
     get branches() { return branches; }, get remotes() { return remotes; },
     get current() { return current; }, get dirty() { return dirty; },
     get files() { return files; }, get commits() { return commits; },
-    get loading() { return loading; }, get busy() { return busy; },
-    get error() { return error; }, get output() { return output; },
+    get loading() { return loading; },
+    get busy() { return busy; }, set busy(v: string) { busy = v; },
+    get error() { return error; }, set error(v: string) { error = v; },
+    get output() { return output; },
     load, refresh, pick, runAction, openLog, doCommit, doPush,
   };
 }
