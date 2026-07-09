@@ -7,6 +7,7 @@
   import CommitDetail from './git/CommitDetail.svelte';
   import DiffView from './git/DiffView.svelte';
   import CommitBox from './git/CommitBox.svelte';
+  import GitPanel from './GitPanel.svelte';
   import { getFileDiff, type GitCommit } from '../lib/api';
   import { createGitStore } from '../lib/gitStore.svelte';
   // Import de TIPO (elidido no build); a lib do Shiki entra via import() dinamico no openDiff -> o
@@ -33,14 +34,27 @@
   let logLoading = $state(false);
   let commitSel = $state<GitCommit | null>(null);  // commit aberto no detalhe (view 'commit')
 
+  // Breakpoint desktop (mesmo corte do resto do app): acima disso, delega pro GitPanel de 3 zonas.
+  let isDesktop = $state(false);
+  $effect(() => {
+    const mq = window.matchMedia('(min-width: 820px)');
+    const on = () => (isDesktop = mq.matches); on();
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  });
+
   function cleanErr(e: unknown): string {
     const m = e instanceof Error ? e.message : 'falhou';
     return m.replace(/^\d+:\s*/, '');   // tira o prefixo "409: " do status HTTP
   }
 
   // Recarrega a cada abertura (o estado do repo pode ter mudado fora do app). Fecha o diff/busca.
+  // No desktop tambem abre o log de cara: o GitPanel precisa dos commits no centro.
   $effect(() => {
-    if (open) { filter = ''; view = 'list'; diffPath = ''; git.load(); }
+    if (open) {
+      filter = ''; view = 'list'; diffPath = '';
+      git.load().then(() => { if (isDesktop) git.openLog(); });
+    }
   });
 
   async function openDiff(path: string) {
@@ -85,8 +99,10 @@
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel="Git" resizable>
-  {#if view === 'diff'}
+<BottomSheet {open} {onClose} ariaLabel="Git" wide={isDesktop} resizable={!isDesktop}>
+  {#if isDesktop}
+    <GitPanel {git} />
+  {:else if view === 'diff'}
     <!-- Visualizador de diff: ocupa a sheet no lugar da lista (volta pelo botao). -->
     <div class="git">
       <button class="git-back" onclick={() => (view = 'list')} aria-label="Voltar">‹ voltar</button>

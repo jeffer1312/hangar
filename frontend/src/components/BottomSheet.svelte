@@ -8,9 +8,10 @@
     onClose: () => void;
     ariaLabel?: string;
     resizable?: boolean;   // opt-in: so o GitSheet usa. Habilita drag-resize no dock desktop (>=820px).
+    wide?: boolean;        // opt-in: dock desktop usa largura fixa min(1100px, 92vw) em vez de --sheet-w.
     children: Snippet;
   }
-  let { open, onClose, ariaLabel = 'Painel', resizable = false, children }: Props = $props();
+  let { open, onClose, ariaLabel = 'Painel', resizable = false, wide = false, children }: Props = $props();
 
   // ── Redimensionar (SO no dock desktop >=820px): arrasta a borda ESQUERDA do painel direito.
   // Largura persistida em localStorage; aplicada via --sheet-w (a media query desktop consome a var,
@@ -123,6 +124,7 @@
       class="sheet"
       class:snapping
       class:resizing
+      class:wide
       role="dialog"
       aria-modal="true"
       aria-label={ariaLabel}
@@ -219,6 +221,8 @@
       cursor: col-resize; touch-action: none; z-index: 6;
     }
     .resize-handle:hover { background: var(--accent-dim); }
+    .sheet.wide { width: min(1100px, 92vw); max-width: 92vw; }
+    .sheet.wide .resize-handle { display: none; }  /* largura fixa no modo largo */
   }
   @keyframes slide-in-right {
     from { transform: translateX(100%); opacity: 0; }
