@@ -159,6 +159,10 @@ All routes require `Authorization: Bearer <token>` (SSE uses a `cp_token` cookie
 | GET | `/api/sessions/{name}/branches` | list git branches |
 | POST | `/api/sessions/{name}/checkout` | checkout a branch |
 | POST | `/api/sessions/{name}/git` | run a git op |
+| POST | `/api/sessions/{name}/git/commit` | commit only the selected files (`{message, paths[]}`) |
+| POST | `/api/sessions/{name}/git/push` | push current branch (upstream, or `-u origin` on first push) |
+| GET | `/api/sessions/{name}/git/commit/{sha}/files` | files changed in a commit |
+| GET | `/api/sessions/{name}/git/commit/{sha}/diff?path=` | diff of one file within a commit |
 
 **Archive (dead conversations)**
 
