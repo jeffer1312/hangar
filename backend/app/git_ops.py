@@ -326,11 +326,19 @@ if __name__ == "__main__":
         assert commits[0]["ts"] > 0, commits[0]
 
         # commit_files: os arquivos alterados de UM commit (name-status).
-        import re as _re
         _run(d, "commit", "-q", "--allow-empty", "-m", "empty2")
         head = _run(d, "rev-parse", "HEAD").stdout.strip()
         cf = commit_files(d, head)
         assert isinstance(cf, list), cf
+
+        # commit com arquivo real -> exercita o parsing (code/path), nao so o tipo.
+        import pathlib
+        (pathlib.Path(d) / "cf.txt").write_text("x\n")
+        _run(d, "add", "cf.txt")
+        _run(d, "commit", "-q", "-m", "add cf")
+        real = commit_files(d, _run(d, "rev-parse", "HEAD").stdout.strip())
+        assert any(f["path"] == "cf.txt" and f["code"] == "A" for f in real), real
+
         for bad in ["nope; rm -rf /", "--all", "zzz"]:
             try:
                 commit_files(d, bad)
