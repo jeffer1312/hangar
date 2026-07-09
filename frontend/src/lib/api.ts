@@ -453,6 +453,10 @@ export function commitFiles(name: string, message: string, paths: string[]): Pro
   });
 }
 
+export function gitPush(name: string): Promise<{ ok: boolean; output: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/push`, { method: 'POST' });
+}
+
 // Envia respostas do stepper AskUserQuestion para o backend.
 export function answerQuestions(name: string, answers: AnswerItem[]): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/answer`, {
