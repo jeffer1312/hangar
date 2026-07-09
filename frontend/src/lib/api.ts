@@ -415,6 +415,11 @@ export function getCommitFiles(name: string, sha: string): Promise<{ files: Chan
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/commit/${encodeURIComponent(sha)}/files`);
 }
 
+export function getCommitFileDiff(name: string, sha: string, path: string): Promise<{ path: string; diff: string }> {
+  const q = new URLSearchParams({ path });
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/commit/${encodeURIComponent(sha)}/diff?${q}`);
+}
+
 // Um commit da view de log. Campos superset (parents/refs) pro detalhe-de-commit e o grafo (fase 2).
 export interface GitCommit {
   hash: string;       // hash completo (âncora do grafo + lookup de detalhe)
