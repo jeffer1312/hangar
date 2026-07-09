@@ -2,9 +2,17 @@ import re
 import subprocess
 
 # Git pela sessao (cwd da sessao tmux). Tudo via argv list -> nunca string de shell (sem injecao).
-# So acoes fixas: listar/trocar branch + status/pull. Comando git arbitrario NAO e exposto (o usuario
-# digita direto na sessao claude se precisar) -> sem superficie de RCE.
+# Acoes fixas: listar/trocar branch, status/pull/fetch/stash, e o write-path (commit/push) + navegacao
+# de historico (commit_files/commit_file_diff). Comando git arbitrario NAO e exposto (o usuario digita
+# direto na sessao claude se precisar); input do usuario (paths/sha/mensagem) sempre validado e passado
+# como argv apos `--` -> sem superficie de RCE.
 _TIMEOUT = 20
+
+
+def _scrub(text: str) -> str:
+    """Redige userinfo (user:token@) de URLs no texto -> um remote HTTPS com PAT embutido nao vaza a
+    credencial no stderr do push (que vai pro git.error da UI / estado do celular)."""
+    return re.sub(r"(://)[^/@\s]+@", r"\1***@", text)
 
 
 class GitError(Exception):
@@ -270,10 +278,13 @@ def commit_files(cwd: str, sha: str) -> list[dict]:
 
 
 def commit_file_diff(cwd: str, sha: str, path: str) -> dict:
-    """Diff de UM arquivo num commit. Valida o sha; o path entra apos `--` (nunca como flag). Usa
+    """Diff de UM arquivo num commit. Valida o sha E o path contra a lista real de arquivos do commit
+    (mesmo invariante de file_diff/commit/discard); o path ainda entra apos `--` (nunca como flag). Usa
     `git show <sha> -- <path>` (cobre o root commit, sem precisar de <sha>^)."""
     if not _SHA_RE.match(sha):
         raise GitError(400, "sha invalido")
+    if path not in {f["path"] for f in commit_files(cwd, sha)}:
+        raise GitError(400, "arquivo nao esta nesse commit")
     p = _run(cwd, "show", "--format=", sha, "--", path)
     if p.returncode >= 128:
         raise GitError(409, (p.stderr or "git show falhou").strip() or "git show falhou")
@@ -319,8 +330,8 @@ def push(cwd: str) -> dict:
             raise GitError(409, "branch sem upstream e sem remote 'origin' — configure um remote antes")
         r = _run(cwd, "push", "-u", "origin", branch)
     if r.returncode != 0:
-        raise GitError(409, (r.stderr or r.stdout or "push falhou").strip() or "push falhou")
-    return {"ok": True, "output": (r.stdout + r.stderr).strip()}
+        raise GitError(409, _scrub((r.stderr or r.stdout or "push falhou").strip()) or "push falhou")
+    return {"ok": True, "output": _scrub((r.stdout + r.stderr).strip())}
 
 
 if __name__ == "__main__":
@@ -421,6 +432,13 @@ if __name__ == "__main__":
             raise AssertionError("deveria rejeitar sha invalido")
         except GitError as e:
             assert e.status == 400, e.status
+        # path fora do commit -> 400 (mesmo invariante de file_diff/commit); e _scrub redige credencial.
+        try:
+            commit_file_diff(d, sha, "nao/existe.txt")
+            raise AssertionError("deveria rejeitar path fora do commit")
+        except GitError as e:
+            assert e.status == 400, e.status
+        assert "ghp_x" not in _scrub("https://u:ghp_x@h/r.git"), "scrub deve redigir userinfo"
 
         # assign_lanes: caso realista — feat baseada num commit antigo, main avanca 2x, depois merge.
         # Valida col/edges do merge E o passthrough (a lane do feat tem que atravessar as linhas da main).
