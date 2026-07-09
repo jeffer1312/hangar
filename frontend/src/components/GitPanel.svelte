@@ -7,7 +7,7 @@
   import DiffView from './git/DiffView.svelte';
   import GitToolbar from './git/GitToolbar.svelte';
   import type { GitCommit } from '../lib/api';
-  import { getFileDiff } from '../lib/api';
+  import { getFileDiff, getCommitFileDiff } from '../lib/api';
   import type { DiffRow } from '../lib/highlight';
   import type { GitStore } from '../lib/gitStore.svelte';
 
@@ -19,16 +19,35 @@
   let diffPath = $state('');
   let diffRows = $state<DiffRow[]>([]);
   let diffLoading = $state(false);
+  let diffSha = $state('');  // sha do commit dono do diffPath aberto ('' = diff da working tree)
 
   async function openWtDiff(path: string) {   // diff de arquivo na working tree
     if (git.busy) return;
     selected = undefined;  // Reset selection so diffPath wins in the if chain
+    diffSha = '';
     diffPath = path;
     diffRows = [];
     diffLoading = true;
     git.busy = path;
     try {
       const { diff } = await getFileDiff(git.sessionName, path);
+      const { highlightDiff } = await import('../lib/highlight');
+      diffRows = await highlightDiff(diff, path);
+    } finally {
+      diffLoading = false;
+      git.busy = '';
+    }
+  }
+
+  async function openCommitDiff(sha: string, path: string) {   // diff de arquivo dentro de um commit historico
+    if (git.busy) return;
+    diffSha = sha;
+    diffPath = path;
+    diffRows = [];
+    diffLoading = true;
+    git.busy = path;
+    try {
+      const { diff } = await getCommitFileDiff(git.sessionName, sha, path);
       const { highlightDiff } = await import('../lib/highlight');
       diffRows = await highlightDiff(diff, path);
     } finally {
@@ -48,13 +67,15 @@
     <section class="gp-center">
       <CommitList commits={git.commits} wtCount={git.files.length}
         selectedHash={selected === null ? '' : selected?.hash}
-        onSelect={(c) => { selected = c; diffPath = ''; }} />
+        onSelect={(c) => { selected = c; diffPath = ''; diffSha = ''; }} />
     </section>
     <section class="gp-right">
       {#if selected === null}
         <CommitBox {git} />
       {:else if selected}
-        <CommitDetail commit={selected} />
+        {@const sha = selected.hash}
+        <CommitDetail commit={selected} sessionName={git.sessionName} onOpenFile={(p) => openCommitDiff(sha, p)} />
+        {#if diffPath && diffSha}<DiffView path={diffPath} rows={diffRows} loading={diffLoading} />{/if}
       {:else if diffPath}
         <DiffView path={diffPath} rows={diffRows} loading={diffLoading} />
       {:else}
