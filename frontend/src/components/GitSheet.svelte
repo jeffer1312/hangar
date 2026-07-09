@@ -6,6 +6,7 @@
   import CommitList from './git/CommitList.svelte';
   import CommitDetail from './git/CommitDetail.svelte';
   import DiffView from './git/DiffView.svelte';
+  import CommitBox from './git/CommitBox.svelte';
   import { getFileDiff, type GitCommit } from '../lib/api';
   import { createGitStore } from '../lib/gitStore.svelte';
   // Import de TIPO (elidido no build); a lib do Shiki entra via import() dinamico no openDiff -> o
@@ -24,7 +25,7 @@
   let filter = $state('');      // busca que filtra as branches (BranchList so le, o input mora aqui)
   // View ativa: cada uma OCUPA a sheet (push-view). O "voltar" leva de volta a 'list'; o diff/commit
   // e alcancado a partir da lista/log. Enum em vez de booleanos soltos -> um so caminho de render.
-  type GitView = 'list' | 'log' | 'diff' | 'commit';
+  type GitView = 'list' | 'log' | 'diff' | 'commit' | 'commitbox';
   let view = $state<GitView>('list');
   let diffPath = $state('');    // arquivo aberto no diff viewer (qual)
   let diffRows = $state<DiffRow[]>([]);   // diff tokenizado (Shiki) pra render
@@ -115,6 +116,15 @@
         <CommitDetail commit={commitSel} />
       {/if}
     </div>
+  {:else if view === 'commitbox'}
+    <!-- Commit box: stage por arquivo + mensagem + commit/push. Primeira feature de escrita da UI. -->
+    <div class="git">
+      <div class="git-head">
+        <button class="git-back" onclick={() => (view = 'list')} aria-label="Voltar">‹ voltar</button>
+        <span class="git-diff-name">commit</span>
+      </div>
+      <CommitBox {git} onDone={() => (view = 'list')} />
+    </div>
   {:else}
     <div class="git">
       <!-- HEADER FIXO: titulo + acoes + busca nao rolam junto com a lista -->
@@ -139,7 +149,7 @@
       {:else}
         <!-- CORPO SCROLLÁVEL -->
         <div class="git-scroll">
-          <ChangedFiles {git} onOpenDiff={openDiff} />
+          <ChangedFiles {git} onOpenDiff={openDiff} onCommit={() => (view = 'commitbox')} />
           <BranchList {git} {filter} />
         </div>
       {/if}

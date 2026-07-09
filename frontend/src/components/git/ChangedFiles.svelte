@@ -6,8 +6,9 @@
   interface Props {
     git: GitStore;
     onOpenDiff: (path: string) => void;
+    onCommit: () => void;
   }
-  let { git, onOpenDiff }: Props = $props();
+  let { git, onOpenDiff, onCommit }: Props = $props();
 
   let confirmDiscard = $state('');   // path aguardando confirmacao de descarte
 
@@ -24,7 +25,10 @@
 
 {#if git.dirty && git.files.length}
   <div class="git-warn">working tree suja — troque de branch só depois de commit ou stash</div>
-  <p class="git-section">{git.files.length} arquivo{git.files.length > 1 ? 's' : ''} alterado{git.files.length > 1 ? 's' : ''}</p>
+  <div class="git-section-row">
+    <p class="git-section">{git.files.length} arquivo{git.files.length > 1 ? 's' : ''} alterado{git.files.length > 1 ? 's' : ''}</p>
+    <button class="git-mini" disabled={!!git.busy} onclick={onCommit}>commit</button>
+  </div>
   <div class="git-files">
     {#each git.files as f (f.path)}
       {@const slash = f.path.lastIndexOf('/')}
@@ -54,8 +58,9 @@
     border: 1px solid color-mix(in srgb, var(--warning, #d9a441) 40%, transparent);
     color: var(--text-secondary); font-size: var(--text-xs); line-height: 1.4;
   }
+  .git-section-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-top: var(--space-2); }
   .git-section {
-    margin: var(--space-2) 0 0; font-size: var(--text-xs); color: var(--text-muted);
+    margin: 0; font-size: var(--text-xs); color: var(--text-muted);
     text-transform: uppercase; letter-spacing: 0.05em;
   }
 
