@@ -259,10 +259,12 @@ _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 def commit_files(cwd: str, sha: str) -> list[dict]:
     """Arquivos alterados num commit especifico (git show --name-status). Valida o sha (hex 7-40)
-    antes de passar pro git -> rejeita injecao/flag-like. `code` = a 1a letra do status (M/A/D/R/C)."""
+    antes de passar pro git -> rejeita injecao/flag-like. `code` = a 1a letra do status (M/A/D/R/C).
+    `-m --first-parent`: sem isso, um merge commit vem VAZIO (heuristica de combined-diff do git); com,
+    lista o que o merge trouxe vs o 1o parent. Em commit normal/root o par de flags e no-op."""
     if not _SHA_RE.match(sha):
         raise GitError(400, "sha invalido")
-    p = _run(cwd, "show", "--name-status", "--format=", sha)
+    p = _run(cwd, "show", "--name-status", "--format=", "-m", "--first-parent", sha)
     if p.returncode != 0:
         raise GitError(409, (p.stderr or "git show falhou").strip() or "git show falhou")
     out = []
@@ -285,7 +287,8 @@ def commit_file_diff(cwd: str, sha: str, path: str) -> dict:
         raise GitError(400, "sha invalido")
     if path not in {f["path"] for f in commit_files(cwd, sha)}:
         raise GitError(400, "arquivo nao esta nesse commit")
-    p = _run(cwd, "show", "--format=", sha, "--", path)
+    # -m --first-parent: consistente com commit_files -> num merge, diff vs o 1o parent (senao vem vazio).
+    p = _run(cwd, "show", "--format=", "-m", "--first-parent", sha, "--", path)
     if p.returncode >= 128:
         raise GitError(409, (p.stderr or "git show falhou").strip() or "git show falhou")
     return {"path": path, "diff": p.stdout}
@@ -304,10 +307,20 @@ def commit(cwd: str, message: str, paths: list[str]) -> dict:
     for p in paths:
         if p not in valid:
             raise GitError(400, f"arquivo nao esta na lista de alterados: {p}")
+    # Renomeados: o git colapsa "R old -> new" e changed_files so expoe `new`. Committar so `new`
+    # transformaria o rename num "add" e deixaria a delecao de `old` staged e orfã. Detecta o par pelo
+    # status e inclui `old` no pathspec do commit pra manter o rename atômico. (`old` vem do git, nao do
+    # usuario -> nao precisa da validacao anti-traversal que os `paths` ja passaram.)
+    renames: dict[str, str] = {}
+    for line in _run(cwd, "status", "--porcelain").stdout.splitlines():
+        if line[:1] == "R" and " -> " in line[3:]:
+            old, new = line[3:].split(" -> ", 1)
+            renames[new] = old
+    extra = [renames[p] for p in paths if p in renames]
     # `add` primeiro: --only sozinho falha em arquivo untracked ("pathspec did not match").
     # `commit --only -- <paths>` grava SO esses paths, mesmo que outros estejam staged no indice.
     _run(cwd, "add", "--", *paths)
-    r = _run(cwd, "commit", "--only", "-m", message, "--", *paths)
+    r = _run(cwd, "commit", "--only", "-m", message, "--", *paths, *extra)
     if r.returncode != 0:
         raise GitError(409, (r.stderr or r.stdout or "commit falhou").strip() or "commit falhou")
     return {"ok": True, "output": (r.stdout + r.stderr).strip()}
@@ -490,4 +503,37 @@ if __name__ == "__main__":
                     raise AssertionError(f"deveria falhar: {bad!r}")
                 except GitError:
                     pass
+        # commit_files/commit_file_diff num MERGE commit: sem -m --first-parent viriam vazios.
+        with tempfile.TemporaryDirectory() as md:
+            _run(md, "init", "-q", "-b", "main")
+            _run(md, "config", "user.email", "t@t")
+            _run(md, "config", "user.name", "t")
+            (pathlib.Path(md) / "base.txt").write_text("base\n")
+            _run(md, "add", "base.txt")
+            _run(md, "commit", "-q", "-m", "base")
+            _run(md, "switch", "-q", "-c", "feat")
+            (pathlib.Path(md) / "feat.txt").write_text("feat\n")
+            _run(md, "add", "feat.txt")
+            _run(md, "commit", "-q", "-m", "featfile")
+            _run(md, "switch", "-q", "main")
+            (pathlib.Path(md) / "base.txt").write_text("base2\n")
+            _run(md, "commit", "-q", "-am", "mainadv")
+            _run(md, "merge", "-q", "--no-ff", "feat", "-m", "merge")
+            msha = _run(md, "rev-parse", "HEAD").stdout.strip()
+            assert any(f["path"] == "feat.txt" for f in commit_files(md, msha)), "merge veio vazio"
+            assert "feat" in commit_file_diff(md, msha, "feat.txt")["diff"], "diff do merge vazio"
+
+        # commit de um arquivo RENOMEADO: mantem o rename atômico (nao vira add + delecao órfã).
+        with tempfile.TemporaryDirectory() as rn:
+            _run(rn, "init", "-q", "-b", "main")
+            _run(rn, "config", "user.email", "t@t")
+            _run(rn, "config", "user.name", "t")
+            (pathlib.Path(rn) / "old.txt").write_text("X\n")
+            _run(rn, "add", "old.txt")
+            _run(rn, "commit", "-q", "-m", "base")
+            _run(rn, "mv", "old.txt", "new.txt")
+            commit(rn, "rename", ["new.txt"])
+            assert _run(rn, "show", "--name-status", "--format=", "HEAD").stdout[:1] == "R", "rename perdido"
+            assert not _run(rn, "status", "--porcelain").stdout.strip(), "sobrou delecao órfã staged"
+
         print("git_ops self-check OK")
