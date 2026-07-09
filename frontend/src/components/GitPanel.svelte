@@ -14,6 +14,11 @@
   interface Props { git: GitStore; }
   let { git }: Props = $props();
 
+  function cleanErr(e: unknown): string {
+    const m = e instanceof Error ? e.message : 'falhou';
+    return m.replace(/^\d+:\s*/, '');   // tira o prefixo "409: " do status HTTP
+  }
+
   // Selecao no centro: null = "Working tree changes" (commit box); um commit = detalhe.
   let selected = $state<GitCommit | null | undefined>(undefined);  // undefined = nada selecionado ainda
   let diffPath = $state('');
@@ -29,10 +34,15 @@
     diffRows = [];
     diffLoading = true;
     git.busy = path;
+    git.error = '';
     try {
       const { diff } = await getFileDiff(git.sessionName, path);
       const { highlightDiff } = await import('../lib/highlight');
       diffRows = await highlightDiff(diff, path);
+    } catch (e) {
+      git.error = cleanErr(e);
+      diffPath = '';
+      diffSha = '';
     } finally {
       diffLoading = false;
       git.busy = '';
@@ -46,10 +56,15 @@
     diffRows = [];
     diffLoading = true;
     git.busy = path;
+    git.error = '';
     try {
       const { diff } = await getCommitFileDiff(git.sessionName, sha, path);
       const { highlightDiff } = await import('../lib/highlight');
       diffRows = await highlightDiff(diff, path);
+    } catch (e) {
+      git.error = cleanErr(e);
+      diffPath = '';
+      diffSha = '';
     } finally {
       diffLoading = false;
       git.busy = '';
