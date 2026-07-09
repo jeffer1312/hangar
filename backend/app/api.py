@@ -768,7 +768,7 @@ class GitPathBody(_StrictBody):
     path: str   # validado em git_ops contra a lista real de arquivos alterados (anti-traversal)
 
 
-class GitCommitBody(BaseModel):
+class GitCommitBody(_StrictBody):
     message: str = Field(min_length=1)
     paths: list[str] = Field(min_length=1)
 
