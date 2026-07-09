@@ -1,3 +1,4 @@
+import re
 import subprocess
 
 # Git pela sessao (cwd da sessao tmux). Tudo via argv list -> nunca string de shell (sem injecao).
@@ -245,6 +246,29 @@ def discard_file(cwd: str, path: str) -> dict:
     return {"ok": True, "path": path}
 
 
+_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def commit_files(cwd: str, sha: str) -> list[dict]:
+    """Arquivos alterados num commit especifico (git show --name-status). Valida o sha (hex 7-40)
+    antes de passar pro git -> rejeita injecao/flag-like. `code` = a 1a letra do status (M/A/D/R/C)."""
+    if not _SHA_RE.match(sha):
+        raise GitError(400, "sha invalido")
+    p = _run(cwd, "show", "--name-status", "--format=", sha)
+    if p.returncode != 0:
+        raise GitError(409, (p.stderr or "git show falhou").strip() or "git show falhou")
+    out = []
+    for line in p.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        code = parts[0][:1]
+        path = parts[-1]                 # rename/copy: "R100\told\tnew" -> usa o novo path
+        out.append({"path": path, "code": code})
+    return out
+
+
 if __name__ == "__main__":
     # Self-check: repo temp, cria branch, valida switch + rejeicao + allowlist. Sem framework.
     import tempfile
@@ -300,6 +324,19 @@ if __name__ == "__main__":
         assert commits and all(c["hash"] and c["subject"] for c in commits), commits
         assert isinstance(commits[0]["parents"], list), commits[0]
         assert commits[0]["ts"] > 0, commits[0]
+
+        # commit_files: os arquivos alterados de UM commit (name-status).
+        import re as _re
+        _run(d, "commit", "-q", "--allow-empty", "-m", "empty2")
+        head = _run(d, "rev-parse", "HEAD").stdout.strip()
+        cf = commit_files(d, head)
+        assert isinstance(cf, list), cf
+        for bad in ["nope; rm -rf /", "--all", "zzz"]:
+            try:
+                commit_files(d, bad)
+                raise AssertionError(f"deveria rejeitar sha invalido: {bad!r}")
+            except GitError as e:
+                assert e.status == 400, e.status
 
         # assign_lanes: caso realista — feat baseada num commit antigo, main avanca 2x, depois merge.
         # Valida col/edges do merge E o passthrough (a lane do feat tem que atravessar as linhas da main).
