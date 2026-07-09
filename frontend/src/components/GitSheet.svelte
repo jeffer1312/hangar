@@ -8,7 +8,7 @@
   import DiffView from './git/DiffView.svelte';
   import CommitBox from './git/CommitBox.svelte';
   import GitPanel from './GitPanel.svelte';
-  import { getFileDiff, type GitCommit } from '../lib/api';
+  import { getFileDiff, getCommitFileDiff, type GitCommit } from '../lib/api';
   import { createGitStore } from '../lib/gitStore.svelte';
   // Import de TIPO (elidido no build); a lib do Shiki entra via import() dinamico no openDiff -> o
   // core+temas viram um chunk carregado SO ao abrir um diff, sem pesar o bundle inicial do app.
@@ -31,6 +31,7 @@
   let diffPath = $state('');    // arquivo aberto no diff viewer (qual)
   let diffRows = $state<DiffRow[]>([]);   // diff tokenizado (Shiki) pra render
   let diffLoading = $state(false);
+  let diffSha = $state('');     // sha do commit dono do diff aberto ('' = diff da working tree)
   let logLoading = $state(false);
   let commitSel = $state<GitCommit | null>(null);  // commit aberto no detalhe (view 'commit')
 
@@ -52,13 +53,14 @@
   // No desktop tambem abre o log de cara: o GitPanel precisa dos commits no centro.
   $effect(() => {
     if (open) {
-      filter = ''; view = 'list'; diffPath = '';
+      filter = ''; view = 'list'; diffPath = ''; diffSha = '';
       git.load().then(() => { if (isDesktop) git.openLog(); });
     }
   });
 
   async function openDiff(path: string) {
     if (git.busy) return;
+    diffSha = '';
     diffPath = path;
     diffRows = [];
     diffLoading = true;
@@ -73,6 +75,31 @@
       git.error = cleanErr(e);
       diffPath = '';
       view = 'list';   // falhou -> volta pra lista
+    } finally {
+      diffLoading = false;
+      git.busy = '';
+    }
+  }
+
+  // Diff de um arquivo DENTRO de um commit historico (aberto a partir do detalhe do commit).
+  async function openCommitFileDiff(path: string) {
+    if (git.busy || !commitSel) return;
+    const sha = commitSel.hash;
+    diffSha = sha;
+    diffPath = path;
+    diffRows = [];
+    diffLoading = true;
+    git.error = '';
+    git.busy = path;
+    view = 'diff';
+    try {
+      const { diff } = await getCommitFileDiff(sessionName, sha, path);
+      const { highlightDiff } = await import('../lib/highlight');
+      diffRows = await highlightDiff(diff, path);
+    } catch (e) {
+      git.error = cleanErr(e);
+      diffPath = '';
+      view = 'commit';   // falhou -> volta pro detalhe do commit
     } finally {
       diffLoading = false;
       git.busy = '';
@@ -105,7 +132,7 @@
   {:else if view === 'diff'}
     <!-- Visualizador de diff: ocupa a sheet no lugar da lista (volta pelo botao). -->
     <div class="git">
-      <button class="git-back" onclick={() => (view = 'list')} aria-label="Voltar">‹ voltar</button>
+      <button class="git-back" onclick={() => (view = diffSha ? 'commit' : 'list')} aria-label="Voltar">‹ voltar</button>
       <DiffView path={diffPath} rows={diffRows} loading={diffLoading} />
     </div>
   {:else if view === 'log'}
@@ -129,7 +156,7 @@
         <span class="git-diff-name">commit {commitSel?.short}</span>
       </div>
       {#if commitSel}
-        <CommitDetail commit={commitSel} />
+        <CommitDetail commit={commitSel} {sessionName} onOpenFile={openCommitFileDiff} />
       {/if}
     </div>
   {:else if view === 'commitbox'}
