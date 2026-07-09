@@ -28,7 +28,7 @@ from app.uploads import save_upload, resolve_upload, UploadError, MAX_BYTES
 from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base, settings, automations_enabled
 from app.costs import report as costs_report
 from app.git_ops import (
-    list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, GitError,
+    list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit, GitError,
 )
 from app import tunnel
 from app import runner
@@ -768,6 +768,11 @@ class GitPathBody(_StrictBody):
     path: str   # validado em git_ops contra a lista real de arquivos alterados (anti-traversal)
 
 
+class GitCommitBody(BaseModel):
+    message: str = Field(min_length=1)
+    paths: list[str] = Field(min_length=1)
+
+
 def _session_cwd(name: str) -> str:
     # cwd da sessao tmux (mesmo lookup do upload). 404 se a sessao/cwd nao existe.
     info = next((s for s in registry.list() if s.name == name), None)
@@ -828,6 +833,14 @@ def git_diff(name: str, body: GitPathBody):
 def git_discard(name: str, body: GitPathBody):
     try:
         return discard_file(_session_cwd(name), body.path)
+    except GitError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.post("/api/sessions/{name}/git/commit", dependencies=[Depends(require_auth)])
+def git_commit(name: str, body: GitCommitBody):
+    try:
+        return commit(_session_cwd(name), body.message, body.paths)
     except GitError as e:
         raise HTTPException(e.status, e.detail)
 
