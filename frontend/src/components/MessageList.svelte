@@ -4,6 +4,7 @@
   import UserBubble from './UserBubble.svelte';
   import AssistantBubble from './AssistantBubble.svelte';
   import ToolCard from './ToolCard.svelte';
+  import ToolGroup from './ToolGroup.svelte';
   import OptionButtons from './OptionButtons.svelte';
   import AskQuestionCard from './AskQuestionCard.svelte';
   import Spinner from './Spinner.svelte';
@@ -116,6 +117,32 @@
     events.slice(windowStart, windowEnd).filter(ev => ev.kind !== 'tool_result')
   );
 
+  // Agrupa RUNS de tool_use consecutivos (sem texto no meio) num card recolhível — uma sessao de
+  // exploracao (dezenas de Read/Bash/grep) vira uma linha só em vez de encher a lista. Threshold: 1-2
+  // seguidos ficam inline (nao e clutter); >=3 colapsam. `event` = user/assistant normal; `tool` = tool
+  // solto; `group` = burst. Key do grupo = 1o tool id (estavel enquanto o run cresce na cauda).
+  const GROUP_MIN = 3;
+  type RenderItem =
+    | { type: 'event'; id: string; ev: ChatEvent }
+    | { type: 'tool'; id: string; ev: ChatEvent }
+    | { type: 'group'; id: string; tools: ChatEvent[] };
+  const renderItems = $derived.by(() => {
+    const items: RenderItem[] = [];
+    let run: ChatEvent[] = [];
+    const flush = () => {
+      if (run.length >= GROUP_MIN) items.push({ type: 'group', id: `g-${run[0].id}`, tools: run });
+      else for (const t of run) items.push({ type: 'tool', id: t.id, ev: t });
+      run = [];
+    };
+    for (const ev of visibleEvents) {
+      if (ev.kind === 'tool_use') { run.push(ev); continue; }
+      flush();
+      items.push({ type: 'event', id: ev.id, ev });
+    }
+    flush();
+    return items;
+  });
+
   // Claude trabalhando? -> msgs da fila durável (id "queued-") ficam atenuadas (= na fila).
   const working = $derived(stateEvent?.state === 'working');
 
@@ -161,8 +188,12 @@
   aria-label="Mensagens"
 >
   <div class="messages-inner">
-    {#each visibleEvents as ev (ev.id)}
-      {#if ev.kind === 'user_msg' && (ev.text || ev.image_count)}
+    {#each renderItems as item (item.id)}
+      {#if item.type === 'group'}
+        <ToolGroup tools={item.tools} {toolResults} {sessionName} animate={!histIds.has(item.tools[0].id)} />
+      {:else}
+        {@const ev = item.ev}
+        {#if ev.kind === 'user_msg' && (ev.text || ev.image_count)}
         {@const img = ev.text ? parseImageMessage(ev.text) : null}
         {#if ev.image_count}
           <!-- Imagem(ns) colada(s) no TERMINAL: thumbnail buscado lazy do .jsonl (base64). -->
@@ -187,8 +218,9 @@
       {:else if ev.kind === 'assistant_msg' && ev.text}
         <AssistantBubble text={ev.text} ts={ev.ts} {sessionName}
                          animate={!histIds.has(ev.id) && !swapIds?.has(ev.id)} />
-      {:else if ev.kind === 'tool_use'}
-        <ToolCard event={ev} result={toolResults.get(ev.tool_use_id ?? '') ?? null} {sessionName} animate={!histIds.has(ev.id)} />
+        {:else if ev.kind === 'tool_use'}
+          <ToolCard event={ev} result={toolResults.get(ev.tool_use_id ?? '') ?? null} {sessionName} animate={!histIds.has(ev.id)} />
+        {/if}
       {/if}
     {/each}
 
