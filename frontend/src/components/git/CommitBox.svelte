@@ -14,7 +14,7 @@
   async function doCommit(thenPush: boolean) {
     if (!canCommit) return;
     const ok = await git.doCommit(message, chosen);
-    if (ok && thenPush) await git.doPush();
+    if (ok && thenPush) { const pushOk = await git.doPush(); }
     if (ok) { message = ''; onDone?.(); }
   }
 </script>

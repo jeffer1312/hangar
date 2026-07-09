@@ -13,6 +13,7 @@
   <button class="git-act" disabled={!!git.busy} onclick={onLog} title="últimos commits (git log)">log</button>
   <button class="git-act" disabled={!!git.busy} onclick={() => git.runAction('fetch')}>fetch</button>
   <button class="git-act" disabled={!!git.busy} onclick={() => git.runAction('pull')}>pull</button>
+  <button class="git-act" disabled={!!git.busy} onclick={() => git.doPush()} title="envia os commits (git push)">push</button>
   <button class="git-act" disabled={!!git.busy} onclick={() => git.runAction('stash')} title="guarda as mudanças (git stash)">stash</button>
   <button class="git-act" disabled={!!git.busy} onclick={() => git.runAction('stash-pop')} title="reaplica o último stash">pop</button>
 </div>
