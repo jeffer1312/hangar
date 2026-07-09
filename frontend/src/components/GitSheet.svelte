@@ -160,7 +160,7 @@
   @keyframes view-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: translateX(0); } }
 
   /* Header fixo: nao rola com a lista. */
-  .git-head { display: flex; flex-direction: column; gap: var(--space-3); flex-shrink: 0; }
+  .git-head { display: flex; flex-direction: column; gap: var(--space-2); flex-shrink: 0; }
   /* Toolbar de voltar (log/commit) ganha uma costura fina do conteudo abaixo. Na view de diff o
      .git-back fica fora do .git-head (ver DiffView.svelte), que tem a sua propria costura. */
   .git-head:has(.git-back) { padding-bottom: var(--space-2); border-bottom: 1px solid var(--border-subtle); }
