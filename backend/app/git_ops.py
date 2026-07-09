@@ -269,6 +269,17 @@ def commit_files(cwd: str, sha: str) -> list[dict]:
     return out
 
 
+def commit_file_diff(cwd: str, sha: str, path: str) -> dict:
+    """Diff de UM arquivo num commit. Valida o sha; o path entra apos `--` (nunca como flag). Usa
+    `git show <sha> -- <path>` (cobre o root commit, sem precisar de <sha>^)."""
+    if not _SHA_RE.match(sha):
+        raise GitError(400, "sha invalido")
+    p = _run(cwd, "show", "--format=", sha, "--", path)
+    if p.returncode >= 128:
+        raise GitError(409, (p.stderr or "git show falhou").strip() or "git show falhou")
+    return {"path": path, "diff": p.stdout}
+
+
 if __name__ == "__main__":
     # Self-check: repo temp, cria branch, valida switch + rejeicao + allowlist. Sem framework.
     import tempfile
@@ -345,6 +356,20 @@ if __name__ == "__main__":
                 raise AssertionError(f"deveria rejeitar sha invalido: {bad!r}")
             except GitError as e:
                 assert e.status == 400, e.status
+
+        # commit_file_diff: diff de um arquivo dentro de um commit. Cria um commit com conteudo real.
+        import pathlib
+        (pathlib.Path(d) / "f.txt").write_text("linha1\n")
+        _run(d, "add", "f.txt")
+        _run(d, "commit", "-q", "-m", "add f")
+        sha = _run(d, "rev-parse", "HEAD").stdout.strip()
+        fd = commit_file_diff(d, sha, "f.txt")
+        assert "linha1" in fd["diff"], fd
+        try:
+            commit_file_diff(d, "--all", "f.txt")
+            raise AssertionError("deveria rejeitar sha invalido")
+        except GitError as e:
+            assert e.status == 400, e.status
 
         # assign_lanes: caso realista — feat baseada num commit antigo, main avanca 2x, depois merge.
         # Valida col/edges do merge E o passthrough (a lane do feat tem que atravessar as linhas da main).

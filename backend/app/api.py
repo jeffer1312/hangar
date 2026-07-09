@@ -28,7 +28,7 @@ from app.uploads import save_upload, resolve_upload, UploadError, MAX_BYTES
 from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base, settings, automations_enabled
 from app.costs import report as costs_report
 from app.git_ops import (
-    list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, GitError,
+    list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, GitError,
 )
 from app import tunnel
 from app import runner
@@ -836,6 +836,14 @@ def git_discard(name: str, body: GitPathBody):
 def git_commit_files(name: str, sha: str):
     try:
         return {"files": commit_files(_session_cwd(name), sha)}
+    except GitError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.get("/api/sessions/{name}/git/commit/{sha}/diff", dependencies=[Depends(require_auth)])
+def git_commit_diff(name: str, sha: str, path: str):
+    try:
+        return commit_file_diff(_session_cwd(name), sha, path)
     except GitError as e:
         raise HTTPException(e.status, e.detail)
 
