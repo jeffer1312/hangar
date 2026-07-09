@@ -379,6 +379,7 @@ if __name__ == "__main__":
             _run(d, "commit", "-q", "--allow-empty", "-m", "p1")
             pr = push(d)               # sem upstream -> push -u origin pushme
             assert pr["ok"], pr
+            assert _run(rd, "rev-parse", "pushme").returncode == 0, "branch nao chegou no remote"
 
         # git_log estruturado: parseia os commits do repo temp e valida os campos.
         commits = git_log(d, n=10)
