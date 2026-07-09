@@ -21,12 +21,20 @@
   let diffLoading = $state(false);
 
   async function openWtDiff(path: string) {   // diff de arquivo na working tree
-    diffPath = path; diffRows = []; diffLoading = true;
+    if (git.busy) return;
+    selected = undefined;  // Reset selection so diffPath wins in the if chain
+    diffPath = path;
+    diffRows = [];
+    diffLoading = true;
+    git.busy = path;
     try {
       const { diff } = await getFileDiff(git.sessionName, path);
       const { highlightDiff } = await import('../lib/highlight');
       diffRows = await highlightDiff(diff, path);
-    } finally { diffLoading = false; }
+    } finally {
+      diffLoading = false;
+      git.busy = '';
+    }
   }
 </script>
 
