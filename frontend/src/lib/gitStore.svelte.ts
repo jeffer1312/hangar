@@ -67,6 +67,7 @@ export function createGitStore(sessionName: string) {
   }
 
   return {
+    get sessionName() { return sessionName; },
     get branches() { return branches; }, get remotes() { return remotes; },
     get current() { return current; }, get dirty() { return dirty; },
     get files() { return files; }, get commits() { return commits; },
