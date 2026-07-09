@@ -2,7 +2,7 @@
 // .svelte.ts permite runes fora de componente.
 import {
   getBranches, checkoutBranch, gitAction, getGitLog, getChangedFiles,
-  commitFiles, gitPush,
+  commitFiles, gitPush, discardFile,
   type GitAction, type ChangedFile, type GitCommit,
 } from './api';
 
@@ -59,6 +59,12 @@ export function createGitStore(sessionName: string) {
     try { const r = await gitPush(sessionName); output = r.output || 'push ok'; return true; }
     catch (e) { error = cleanErr(e); return false; } finally { busy = ''; }
   }
+  async function discard(path: string) {
+    if (busy) return false;
+    busy = path; error = '';
+    try { await discardFile(sessionName, path); await refresh(); return true; }
+    catch (e) { error = cleanErr(e); return false; } finally { busy = ''; }
+  }
 
   return {
     get branches() { return branches; }, get remotes() { return remotes; },
@@ -68,6 +74,8 @@ export function createGitStore(sessionName: string) {
     get busy() { return busy; }, set busy(v: string) { busy = v; },
     get error() { return error; }, set error(v: string) { error = v; },
     get output() { return output; },
-    load, refresh, pick, runAction, openLog, doCommit, doPush,
+    load, refresh, pick, runAction, openLog, doCommit, doPush, discard,
   };
 }
+
+export type GitStore = ReturnType<typeof createGitStore>;
