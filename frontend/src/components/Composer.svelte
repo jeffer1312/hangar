@@ -215,6 +215,10 @@
   // Transcreve o audio (Groq) e joga o texto no composer, anexando ao que ja houver — o usuario
   // revisa e envia. NAO envia sozinho. Transcricao vazia / falha -> avisa em recError, sem sumir.
   async function transcribeIntoComposer(file: File) {
+    // Uma por vez: transcribing e setado SINCRONO antes de qualquer await, entao um segundo audio
+    // (ex: multi-selecao no picker) cai aqui e avisa em vez de correr concorrente e pisar no estado
+    // compartilhado (transcribing/recError/inputText) — que sairia fora de ordem.
+    if (transcribing) { recError = 'Aguarde a transcrição atual terminar'; return; }
     transcribing = true;
     recError = '';
     try {
@@ -226,6 +230,7 @@
       autoGrow();
       textareaEl?.focus();
     } catch (err) {
+      console.error('transcrição falhou', err);
       recError = err instanceof Error ? err.message : 'Falha na transcrição';
     } finally {
       transcribing = false;

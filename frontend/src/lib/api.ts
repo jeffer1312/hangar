@@ -374,6 +374,9 @@ export async function transcribeFile(name: string, file: File): Promise<{ path: 
       'X-Filename': encodeURIComponent(file.name || 'audio.webm'),
     },
     body: file,
+    // timeout (mesmo teto do backend): rede travada rejeita em vez de deixar o composer preso em
+    // "transcrevendo…" pra sempre (transcribing nunca voltaria a false).
+    signal: AbortSignal.timeout(120_000),
   });
   await ensureOk(res);
   return res.json() as Promise<{ path: string; text: string }>;
