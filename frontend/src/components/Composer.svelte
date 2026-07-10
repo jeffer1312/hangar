@@ -6,7 +6,7 @@
 </script>
 
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { tick, onDestroy } from 'svelte';
   import IconSend from './icons/IconSend.svelte';
   import IconInterrupt from './icons/IconInterrupt.svelte';
   import IconAttach from './icons/IconAttach.svelte';
@@ -199,37 +199,67 @@
   }
 
   // ── Gravar audio: toggle (tap grava, tap para) -> vira um anexo de audio ─────
+  // Para o stream do mic e zera o estado. Chamado no onstop, no onerror, em falha e no onDestroy
+  // (trocar de sessao com gravacao ativa desmonta o Composer -> sem isto o mic ficaria ligado).
+  function teardownRecording() {
+    recStream?.getTracks().forEach((t) => t.stop());
+    recStream = undefined;
+    mediaRecorder = undefined;
+    recording = false;
+  }
+
   async function toggleRecord() {
     if (recording) {
-      mediaRecorder?.stop();   // dispara onstop, que cria o arquivo e limpa o stream
+      // Guard: so para se ainda esta gravando. Duplo-toque no stop chamaria .stop() num recorder ja
+      // 'inactive' -> InvalidStateError nao tratado.
+      if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
       return;
     }
     recError = '';
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
-      recError = 'Sem acesso ao microfone';
+    } catch (err) {
+      console.error('getUserMedia falhou', err);
+      const name = err instanceof DOMException ? err.name : '';
+      recError = name === 'NotFoundError' ? 'Nenhum microfone encontrado'
+        : name === 'NotReadableError' ? 'Microfone em uso por outro app'
+        : 'Sem acesso ao microfone';
       return;
     }
     recStream = stream;
     recChunks = [];
-    mediaRecorder = new MediaRecorder(stream);
-    mediaRecorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
-    mediaRecorder.onstop = () => {
-      const type = mediaRecorder?.mimeType || 'audio/webm';
-      // Chrome grava webm/opus; iOS Safari grava mp4/aac. A Groq aceita os dois direto.
-      const ext = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
-      const blob = new Blob(recChunks, { type });
-      const file = new File([blob], `gravacao-${Date.now()}.${ext}`, { type });
-      addFiles([file]);
-      recStream?.getTracks().forEach((t) => t.stop());
-      recStream = undefined;
-      recording = false;
-    };
-    mediaRecorder.start();
+    // Construcao/wiring/start dentro do try: mimeType nao suportado ou API ausente lancam aqui —
+    // sem isto, a falha some e o mic fica ligado (stream nunca parado).
+    try {
+      mediaRecorder = new MediaRecorder(stream);
+      mediaRecorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
+      mediaRecorder.onstop = () => {
+        const type = mediaRecorder?.mimeType || 'audio/webm';
+        // Chrome grava webm/opus; iOS Safari grava mp4/aac. A Groq aceita os dois direto.
+        const ext = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
+        if (recChunks.length) {
+          const blob = new Blob(recChunks, { type });
+          addFiles([new File([blob], `gravacao-${Date.now()}.${ext}`, { type })]);
+        }
+        teardownRecording();
+      };
+      mediaRecorder.onerror = (e) => {
+        console.error('MediaRecorder erro', e);
+        recError = 'Falha na gravação';
+        teardownRecording();
+      };
+      mediaRecorder.start();
+    } catch (err) {
+      console.error('MediaRecorder falhou', err);
+      recError = 'Gravação de áudio não suportada neste navegador';
+      teardownRecording();
+      return;
+    }
     recording = true;
   }
+
+  onDestroy(teardownRecording);
 
   function onPickFile(e: Event) {
     const files = (e.target as HTMLInputElement).files;

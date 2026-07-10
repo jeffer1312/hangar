@@ -1,8 +1,10 @@
+import http.client
 import secrets
 import urllib.error
 import urllib.request
 
 from app.config import settings
+from app.uploads import _safe_ext
 
 # Transcricao de audio via Groq (whisper-large-v3-turbo). Groq aceita webm/mp4/m4a/mp3/wav/ogg
 # direto -> sem pre-conversao com ffmpeg. HTTP feito com urllib (stdlib): multipart montado a mao,
@@ -42,7 +44,13 @@ def transcribe(content: bytes, filename: str | None) -> str:
     api_key = settings.groq_api_key.strip()
     if not api_key:
         raise TranscribeError(503, "GROQ_API_KEY (ou CP_GROQ_API_KEY) nao configurada no backend")
-    body, boundary = build_multipart(filename or "audio.webm", content)
+    # Nome enviado a Groq: FIXO no servidor, so a extensao sanitizada (_safe_ext) — nunca o nome cru do
+    # cliente, que interpolado no header Content-Disposition permitiria injecao de aspas/CRLF (partes/campos
+    # extras no multipart). A Groq so usa a extensao pra detectar o formato. 'bin' (sem ext) -> webm.
+    ext = _safe_ext(filename)
+    if ext == "bin":
+        ext = "webm"
+    body, boundary = build_multipart(f"audio.{ext}", content)
     req = urllib.request.Request(
         GROQ_URL, data=body, method="POST",
         headers={
@@ -59,7 +67,9 @@ def transcribe(content: bytes, filename: str | None) -> str:
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:300]
         raise TranscribeError(502, f"Groq {e.code}: {detail}")
-    except urllib.error.URLError as e:
-        raise TranscribeError(502, f"falha ao contatar a Groq: {e.reason}")
+    except (OSError, http.client.HTTPException) as e:
+        # OSError cobre URLError (conexao) e TimeoutError/socket.timeout no read(); http.client cobre
+        # IncompleteRead (conexao cai no meio da resposta). Sem isto, timeout no read vazaria como 500.
+        raise TranscribeError(502, f"falha ao contatar a Groq: {e}")
     # response_format=text -> corpo e o texto puro. Achata espacos/quebras numa linha so.
     return " ".join(text.split())
