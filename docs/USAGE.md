@@ -108,7 +108,12 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
 
 ### Enviar
 - **Texto:** digite e envie. **Multi-linha** funciona (Shift+Enter / colar — vai por bracketed paste).
-- **Imagem:** 📎 no composer (upload) — ou cole no terminal do Claude que o app mostra o thumbnail.
+- **Imagem / arquivo:** 📎 no composer (upload) — ou cole no terminal do Claude que o app mostra o thumbnail.
+- **Áudio:** 🎤 no composer grava pelo microfone (toque grava, toque ⏹ para); ou anexe um arquivo de
+  áudio pelo 📎. No envio o áudio é **transcrito** (Groq / whisper-large-v3-turbo) e vai como texto
+  + o áudio anexado. **Requer a chave da Groq:** `CP_GROQ_API_KEY=<sua-chave>` no `backend/.env`
+  (ou `GROQ_API_KEY` no ambiente do backend) e reinício do backend. Sem chave, o envio de áudio
+  responde 503. Pegue a chave grátis em <https://console.groq.com>.
 - **Slash commands:** `/` abre a lista (`/clear`, `/compact`, …). `/clear` limpa de verdade (zera a fila).
 - **Modelo/esforço:** toque na pill (ex `Opus4.8·1M·high`) → escolhe modelo + esforço (só na sessão).
 - **Pergunta interativa do Claude** (AskUserQuestion/permissão): as opções viram **botões** —

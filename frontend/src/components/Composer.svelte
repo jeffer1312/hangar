@@ -10,12 +10,13 @@
   import IconSend from './icons/IconSend.svelte';
   import IconInterrupt from './icons/IconInterrupt.svelte';
   import IconAttach from './icons/IconAttach.svelte';
+  import IconMic from './icons/IconMic.svelte';
   import ContextRing from './ContextRing.svelte';
   import ModelEffortSheet from './ModelEffortSheet.svelte';
   import SlashSuggest from './SlashSuggest.svelte';
   import CommandSheet from './CommandSheet.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
-  import { getCommands, setModelEffort, uploadFile, type ModelEffortBody } from '../lib/api';
+  import { getCommands, setModelEffort, uploadFile, transcribeFile, type ModelEffortBody } from '../lib/api';
   import type { State } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
 
@@ -65,17 +66,25 @@
   // Exposto pro pai (atalho de teclado desktop "/" foca o campo).
   export function focus() { textareaEl?.focus(); }
 
-  // ── Anexos de imagem: lista de arquivos + preview local + estado de upload ──
-  let attachments = $state<{ file: File; url: string; isImage: boolean }[]>([]);
+  // ── Anexos: lista de arquivos + preview local + estado de upload ────────────
+  // isAudio -> transcrito via Groq no envio (ver submit); isImage -> preview; resto -> chip de arquivo.
+  let attachments = $state<{ file: File; url: string; isImage: boolean; isAudio: boolean }[]>([]);
   let fileInput: HTMLInputElement | undefined = $state();
   let uploading = $state(false);
   let attachError = $state('');
   let sending = $state(false);
   let sendError = $state('');
 
+  // ── Gravacao de audio pelo microfone (MediaRecorder) ────────────────────────
+  let recording = $state(false);
+  let recError = $state('');
+  let mediaRecorder: MediaRecorder | undefined;
+  let recChunks: Blob[] = [];
+  let recStream: MediaStream | undefined;
+
   // hasInput: tem texto OU anexo. Usado tb pro botao stop/send (ver control-right).
   const hasInput = $derived(inputText.trim().length > 0 || attachments.length > 0);
-  const canSend = $derived(hasInput && !uploading && !sending);
+  const canSend = $derived(hasInput && !uploading && !sending && !recording);
   const isWorking = $derived(sessionState === 'working');
 
   // ── Pill de modelo + esforco: abre o ModelEffortSheet (aplica via endpoint dedicado) ──
@@ -181,10 +190,45 @@
   function addFiles(files: Iterable<File>) {
     for (const f of files) {
       const isImage = f.type.startsWith('image/');
-      // url so pra preview de imagem; outros tipos viram chip com o nome (sem objectURL pra revogar).
-      attachments = [...attachments, { file: f, url: isImage ? URL.createObjectURL(f) : '', isImage }];
+      // audio (arquivo audio/* ou gravacao do mic) -> transcrito no envio. url so pra preview de
+      // imagem; outros tipos viram chip com o nome (sem objectURL pra revogar).
+      const isAudio = f.type.startsWith('audio/');
+      attachments = [...attachments, { file: f, url: isImage ? URL.createObjectURL(f) : '', isImage, isAudio }];
     }
     attachError = '';
+  }
+
+  // ── Gravar audio: toggle (tap grava, tap para) -> vira um anexo de audio ─────
+  async function toggleRecord() {
+    if (recording) {
+      mediaRecorder?.stop();   // dispara onstop, que cria o arquivo e limpa o stream
+      return;
+    }
+    recError = '';
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      recError = 'Sem acesso ao microfone';
+      return;
+    }
+    recStream = stream;
+    recChunks = [];
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
+    mediaRecorder.onstop = () => {
+      const type = mediaRecorder?.mimeType || 'audio/webm';
+      // Chrome grava webm/opus; iOS Safari grava mp4/aac. A Groq aceita os dois direto.
+      const ext = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
+      const blob = new Blob(recChunks, { type });
+      const file = new File([blob], `gravacao-${Date.now()}.${ext}`, { type });
+      addFiles([file]);
+      recStream?.getTracks().forEach((t) => t.stop());
+      recStream = undefined;
+      recording = false;
+    };
+    mediaRecorder.start();
+    recording = true;
   }
 
   function onPickFile(e: Event) {
@@ -238,6 +282,12 @@
         // send-keys). Cada path nao tem espaco (nome gerado). Marca imagem x arquivo pelo tipo.
         const parts: string[] = [];
         for (const a of attachments) {
+          if (a.isAudio) {
+            // audio: backend salva + transcreve (Groq) -> texto em UMA linha + path do audio anexado.
+            const { path, text } = await transcribeFile(sessionName, a.file);
+            parts.push((text ? text + ' — ' : '') + '📎 áudio: ' + path);
+            continue;
+          }
           const { path } = await uploadFile(sessionName, a.file);
           parts.push((a.isImage ? '📎 imagem: ' : '📎 arquivo: ') + path);
         }
@@ -331,8 +381,8 @@
               <img class="attach-thumb" src={a.url} alt="anexo" />
             {:else}
               <span class="attach-file" title={a.file.name}>
-                <span class="attach-file-glyph" aria-hidden="true">📎</span>
-                <span class="attach-file-name">{a.file.name}</span>
+                <span class="attach-file-glyph" aria-hidden="true">{a.isAudio ? '🎤' : '📎'}</span>
+                <span class="attach-file-name">{a.isAudio ? 'áudio' : a.file.name}</span>
               </span>
             {/if}
             <button class="attach-remove" onclick={() => removeAttachment(idx)} aria-label="Remover anexo">×</button>
@@ -357,6 +407,12 @@
       aria-label="Mensagem"
     ></textarea>
 
+    {#if recording}
+      <div class="rec-hint" role="status"><span class="rec-dot" aria-hidden="true"></span> gravando… toque ⏹ para parar</div>
+    {/if}
+    {#if recError}
+      <div class="send-error" role="alert">{recError}</div>
+    {/if}
     {#if sendError}
       <div class="send-error" role="alert">{sendError}</div>
     {/if}
@@ -374,8 +430,16 @@
           </span>
           <ContextRing pct={status?.ctxPct ?? null} />
         </button>
-        <button class="attach-btn" onclick={() => fileInput?.click()} aria-label="Anexar imagem">
+        <button class="attach-btn" onclick={() => fileInput?.click()} aria-label="Anexar arquivo">
           <IconAttach size={20} />
+        </button>
+        <button
+          class="attach-btn mic-btn"
+          class:mic-btn--recording={recording}
+          onclick={toggleRecord}
+          aria-label={recording ? 'Parar gravação' : 'Gravar áudio'}
+        >
+          {#if recording}<IconInterrupt size={18} />{:else}<IconMic size={20} />{/if}
         </button>
       </div>
 
@@ -767,6 +831,31 @@
   }
   .attach-btn:active { background: var(--bg-hover); }
   .attach-btn :global(svg) { display: block; }
+
+  /* Botao de gravar audio: ícone de mic (IconMic) / quadrado stop (IconInterrupt) enquanto grava.
+     Gravando -> vermelho e pulsa. */
+  .mic-btn--recording { color: var(--error); animation: mic-pulse 1.2s var(--ease-out) infinite; }
+  @keyframes mic-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+
+  /* Aviso "gravando…" com bolinha vermelha piscando. */
+  .rec-hint {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    padding: 0 var(--space-1);
+  }
+  .rec-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: var(--radius-full);
+    background: var(--error);
+    animation: mic-pulse 1.2s var(--ease-out) infinite;
+  }
 
   .send-error {
     font-size: var(--text-xs);

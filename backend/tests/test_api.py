@@ -373,6 +373,37 @@ def test_do_notify_awaiting_no_match_is_noop(monkeypatch):
     assert calls == []
 
 
+def test_transcribe_route_salva_audio_e_transcreve(api_client, monkeypatch, tmp_path):
+    # Wiring do /transcribe: acha a sessao, SALVA o audio no cwd e chama transcribe.
+    info = SessionInfo(name="cc", cwd=str(tmp_path))
+    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
+    monkeypatch.setattr(api_mod, "transcribe", lambda data, fn: "ola mundo")
+    r = api_client.post(
+        "/api/sessions/cc/transcribe",
+        content=b"\x00audio-bytes",
+        headers={**_h(), "X-Filename": "gravacao.webm", "Content-Type": "audio/webm"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["text"] == "ola mundo"
+    assert body["path"].endswith(".webm")
+    # o audio foi mesmo gravado no disco (pra ser anexado no chat)
+    from pathlib import Path
+    assert Path(body["path"]).read_bytes() == b"\x00audio-bytes"
+
+
+def test_transcribe_route_sem_chave_da_503(api_client, monkeypatch, tmp_path):
+    info = SessionInfo(name="cc", cwd=str(tmp_path))
+    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
+    monkeypatch.setattr(settings, "groq_api_key", "")
+    r = api_client.post(
+        "/api/sessions/cc/transcribe",
+        content=b"audio",
+        headers={**_h(), "X-Filename": "a.webm"},
+    )
+    assert r.status_code == 503
+
+
 def test_push_mute_route(api_client, monkeypatch, tmp_path):
     monkeypatch.setattr(api_mod.push, "_file", lambda: tmp_path / "subs.json")
     r = api_client.post("/api/push/mute", json={"session": "s1", "muted": True}, headers=_h())
