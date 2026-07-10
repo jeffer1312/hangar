@@ -90,7 +90,10 @@
   let audioCtx: AudioContext | undefined;
   let rafId = 0;
   let recTimer: ReturnType<typeof setInterval> | undefined;
-  const WAVE_BARS = 40;
+  let waveW = $state(0);   // largura medida da faixa da waveform (bind:clientWidth)
+  // densidade adaptativa: ~1 barra a cada 5px (barra ~3px + gap ~2px) -> preenche denso de mobile a
+  // desktop, sem numero fixo que fica esparso na tela larga ou apertado na estreita.
+  const barCount = $derived(Math.min(320, Math.max(24, Math.floor((waveW || 320) / 5))));
   const recTimeLabel = $derived(
     `${Math.floor(recSeconds / 60)}:${String(recSeconds % 60).padStart(2, '0')}`,
   );
@@ -270,9 +273,10 @@
         // *5: RMS de voz normal fica baixo (~0.05-0.2); sem ganho as barras mal saem do minimo.
         const level = Math.min(1, Math.sqrt(sum / data.length) * 5);
         const now = performance.now();
-        if (now - last > 55) {   // desliza a ~18fps (nao re-renderiza o array a cada frame de tela)
+        if (now - last > 55) {   // ~18fps (nao re-renderiza o array a cada frame de tela)
           last = now;
-          recBars = [...recBars.slice(1), level];
+          // cresce da esquerda ate encher a largura (barCount), depois desliza mantendo os ultimos.
+          recBars = [...recBars, level].slice(-barCount);
         }
         rafId = requestAnimationFrame(loop);
       };
@@ -339,7 +343,7 @@
       };
       mediaRecorder.start();
       recSeconds = 0;
-      recBars = new Array(WAVE_BARS).fill(0);
+      recBars = [];   // comeca vazia e cresce da esquerda conforme fala (osciloscopio)
       recTimer = setInterval(() => recSeconds++, 1000);
       startMeter(stream);
     } catch (err) {
@@ -531,7 +535,7 @@
         <!-- timer aria-hidden: senao o leitor de tela re-anunciaria a cada segundo (a live region so
              precisa dizer "Gravando áudio" uma vez, via aria-label). -->
         <span class="rec-time" aria-hidden="true">{recTimeLabel}</span>
-        <span class="rec-wave" aria-hidden="true">
+        <span class="rec-wave" bind:clientWidth={waveW} aria-hidden="true">
           {#each recBars as b, i (i)}<span class="rec-bar" style="--h: {b}"></span>{/each}
         </span>
       </div>
@@ -999,17 +1003,14 @@
   .rec-wave {
     display: flex;
     align-items: center;
-    /* space-between espalha as barras (largura fixa) por TODA a largura, em vez de amontoar num canto.
-       gap = espaco minimo; o extra e distribuido -> preenche de ponta a ponta em qualquer tela. */
-    justify-content: space-between;
     gap: 2px;
     height: 64px;
     flex: 1;
     min-width: 0;
-    overflow: hidden;
+    overflow: hidden;   /* barras de largura fixa entram da esquerda; nunca vazam a faixa */
   }
   .rec-bar {
-    flex: 0 0 3px;   /* largura fixa (nao estica); a distribuicao vem do space-between */
+    flex: 0 0 3px;   /* largura fixa 3px + gap 2px = 5px/barra; barCount = largura/5 preenche exato */
     border-radius: 3px;
     background: var(--accent);
     height: calc(8px + var(--h, 0) * 56px);
