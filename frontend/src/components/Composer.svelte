@@ -81,6 +81,8 @@
   let mediaRecorder: MediaRecorder | undefined;
   let recChunks: Blob[] = [];
   let recStream: MediaStream | undefined;
+  let recFailed = false;   // marcado no onerror -> onstop nao anexa audio truncado
+  let starting = false;    // guarda reentrancia entre o tap e o await getUserMedia resolver
 
   // hasInput: tem texto OU anexo. Usado tb pro botao stop/send (ver control-right).
   const hasInput = $derived(inputText.trim().length > 0 || attachments.length > 0);
@@ -215,7 +217,10 @@
       if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
       return;
     }
+    if (starting) return;   // 2o tap na janela do await getUserMedia abriria um 2o stream (vaza o mic)
+    starting = true;
     recError = '';
+    recFailed = false;
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -225,6 +230,7 @@
       recError = name === 'NotFoundError' ? 'Nenhum microfone encontrado'
         : name === 'NotReadableError' ? 'Microfone em uso por outro app'
         : 'Sem acesso ao microfone';
+      starting = false;
       return;
     }
     recStream = stream;
@@ -238,14 +244,22 @@
         const type = mediaRecorder?.mimeType || 'audio/webm';
         // Chrome grava webm/opus; iOS Safari grava mp4/aac. A Groq aceita os dois direto.
         const ext = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
-        if (recChunks.length) {
+        // onerror dispara stop logo depois -> se ja falhou, nao anexa o audio (truncado). Sem chunk
+        // nenhum (gravacao rapida demais / driver sem dado) -> avisa, nao some calado.
+        if (recFailed) {
+          teardownRecording();
+        } else if (recChunks.length) {
           const blob = new Blob(recChunks, { type });
           addFiles([new File([blob], `gravacao-${Date.now()}.${ext}`, { type })]);
+          teardownRecording();
+        } else {
+          recError = 'Gravação vazia, tente de novo';
+          teardownRecording();
         }
-        teardownRecording();
       };
       mediaRecorder.onerror = (e) => {
-        console.error('MediaRecorder erro', e);
+        console.error('MediaRecorder erro', (e as { error?: unknown }).error ?? e);
+        recFailed = true;
         recError = 'Falha na gravação';
         teardownRecording();
       };
@@ -254,9 +268,11 @@
       console.error('MediaRecorder falhou', err);
       recError = 'Gravação de áudio não suportada neste navegador';
       teardownRecording();
+      starting = false;
       return;
     }
     recording = true;
+    starting = false;
   }
 
   onDestroy(teardownRecording);

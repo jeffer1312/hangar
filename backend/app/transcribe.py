@@ -65,7 +65,12 @@ def transcribe(content: bytes, filename: str | None) -> str:
         with urllib.request.urlopen(req, timeout=120) as resp:
             text = resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")[:300]
+        try:
+            detail = e.read().decode("utf-8", "replace")[:300]
+        except (OSError, http.client.HTTPException):
+            # ler o corpo de erro tambem e um read() de socket -> pode cair/timeout. Nao deixa
+            # vazar cru (viraria 500); mantem o 502 com o codigo, sem o corpo.
+            detail = "(sem corpo)"
         raise TranscribeError(502, f"Groq {e.code}: {detail}")
     except (OSError, http.client.HTTPException) as e:
         # OSError cobre URLError (conexao) e TimeoutError/socket.timeout no read(); http.client cobre
