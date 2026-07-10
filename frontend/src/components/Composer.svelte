@@ -90,7 +90,7 @@
   let audioCtx: AudioContext | undefined;
   let rafId = 0;
   let recTimer: ReturnType<typeof setInterval> | undefined;
-  const WAVE_BARS = 28;
+  const WAVE_BARS = 40;
   const recTimeLabel = $derived(
     `${Math.floor(recSeconds / 60)}:${String(recSeconds % 60).padStart(2, '0')}`,
   );
@@ -999,16 +999,17 @@
   .rec-wave {
     display: flex;
     align-items: center;
-    gap: 3px;
+    /* space-between espalha as barras (largura fixa) por TODA a largura, em vez de amontoar num canto.
+       gap = espaco minimo; o extra e distribuido -> preenche de ponta a ponta em qualquer tela. */
+    justify-content: space-between;
+    gap: 2px;
     height: 64px;
     flex: 1;
     min-width: 0;
     overflow: hidden;
   }
   .rec-bar {
-    flex: 1;
-    min-width: 3px;
-    max-width: 5px;
+    flex: 0 0 3px;   /* largura fixa (nao estica); a distribuicao vem do space-between */
     border-radius: 3px;
     background: var(--accent);
     height: calc(8px + var(--h, 0) * 56px);
