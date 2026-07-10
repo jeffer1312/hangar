@@ -21,3 +21,26 @@ def test_transcribe_sem_chave_levanta_503(monkeypatch):
     with pytest.raises(TranscribeError) as ei:
         transcribe(b"audio", "a.webm")
     assert ei.value.status == 503
+
+
+def test_transcribe_ignora_filename_do_cliente(monkeypatch):
+    # Filename malicioso (aspas + CRLF tentando injetar um campo 'model') NAO pode vazar pro multipart:
+    # o nome enviado a Groq e fixo no servidor (audio.<ext sanitizada>).
+    monkeypatch.setattr(settings, "groq_api_key", "k")
+    captured = {}
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b"ok"
+
+    monkeypatch.setattr(
+        "app.transcribe.urllib.request.urlopen",
+        lambda req, timeout=None: captured.setdefault("body", req.data) and None or FakeResp(),
+    )
+    evil = 'x".webm\r\nContent-Disposition: form-data; name="model"\r\n\r\nhacked\r\n'
+    transcribe(b"audio", evil)
+    body = captured["body"]
+    assert body.count(b'name="model"') == 1      # so o campo model legitimo, nada injetado
+    assert b"hacked" not in body
+    assert b'filename="audio.' in body           # nome fixo do servidor
