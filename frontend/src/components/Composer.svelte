@@ -379,10 +379,13 @@
         const parts: string[] = [];
         for (const a of attachments) {
           if (a.isAudio) {
-            // audio: backend salva + transcreve (Groq) -> texto em UMA linha + path do audio anexado.
-            // Transcricao marcada com 🎤 "..." pra ficar identificavel na conversa como a fala do usuario.
-            const { path, text } = await transcribeFile(sessionName, a.file);
-            parts.push((text ? `🎤 "${text}" ` : '') + '📎 áudio: ' + path);
+            // audio: o backend transcreve (Groq) e mandamos SO o texto — o Claude nao processa audio,
+            // a transcricao E o comando. Marcada com 🎤 "..." pra ficar clara na conversa. O path do
+            // audio nao vai (seria ruido). Transcricao vazia -> erro (mantem o anexo, nao envia em branco).
+            const { text } = await transcribeFile(sessionName, a.file);
+            const t = text.trim();
+            if (!t) throw new Error('Transcrição vazia — grave de novo');
+            parts.push(`🎤 "${t}"`);
             continue;
           }
           const { path } = await uploadFile(sessionName, a.file);
@@ -972,19 +975,19 @@
   .rec-wave {
     display: flex;
     align-items: center;
-    gap: 2px;
-    height: 22px;
+    gap: 3px;
+    height: 48px;
     flex: 1;
     min-width: 0;
     overflow: hidden;
   }
   .rec-bar {
     flex: 1;
-    min-width: 2px;
-    max-width: 3px;
-    border-radius: 2px;
+    min-width: 3px;
+    max-width: 4px;
+    border-radius: 3px;
     background: var(--accent);
-    height: calc(3px + var(--h, 0) * 19px);
+    height: calc(6px + var(--h, 0) * 42px);
     transition: height 60ms linear;
   }
 
