@@ -88,6 +88,7 @@
   let recognition: any;    // SpeechRecognition (Web Speech API) quando disponivel -> transcricao ao vivo
   let liveBase = '';       // inputText antes do ditado (o texto reconhecido e apendado a ele)
   let liveFinal = '';      // parte ja finalizada do ditado atual
+  let liveInterim = '';    // hipotese atual (nao finalizada); commitada no restart pra nao "apagar"
   let liveStopping = false; // true = parada intencional/erro fatal -> onend NAO reinicia o ditado
   // Feedback ao vivo da gravacao: timer (segundos) + waveform (nivel de voz por barra, deslizante).
   let recSeconds = $state(0);
@@ -335,6 +336,7 @@
     recognition.interimResults = true;
     liveBase = inputText.trim();
     liveFinal = '';
+    liveInterim = '';
     liveStopping = false;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     recognition.onresult = (e: any) => {
@@ -344,6 +346,7 @@
         if (e.results[i].isFinal) liveFinal += seg;
         else interim += seg;
       }
+      liveInterim = interim;
       // Enquanto grava, o campo e "controlado" pelo ditado (edicao manual so depois de parar) — como
       // no dictation de qualquer app. liveBase preserva o que ja havia antes de comecar.
       inputText = [liveBase, (liveFinal + interim).trim()].filter(Boolean).join(' ');
@@ -364,10 +367,32 @@
     // erro fatal, reinicia pra manter o ditado vivo; senao a UI ficaria "gravando" sem captar nada.
     recognition.onend = () => {
       if (recording && !liveStopping) {
+        // iOS encerra a sessao a cada pausa. Commita o interim pendente ANTES de reiniciar, senao o
+        // trecho nao-finalizado se perde e o texto "apaga e recomeca".
+        if (liveInterim) { liveFinal += liveInterim; liveInterim = ''; }
         try { recognition?.start(); } catch { teardownRecording(); }
       }
     };
     recognition.start();
+  }
+
+  // Waveform "ouvindo" pro modo ao vivo: no iOS abrir um 2o acesso ao mic (getUserMedia p/ AnalyserNode)
+  // ao lado do SpeechRecognition prende o mic e re-pede permissao. Entao no ditado a barra e SINTETICA
+  // (onda animada, sem audio real), so pra sinalizar atividade. Sem AudioContext, so o rAF.
+  function startFakeMeter() {
+    let last = 0;
+    let phase = 0;
+    const loop = () => {
+      const now = performance.now();
+      if (now - last > 55) {
+        last = now;
+        phase += 0.4;
+        const level = 0.3 + 0.3 * Math.abs(Math.sin(phase)) + 0.2 * Math.abs(Math.sin(phase * 2.7));
+        recBars = [...recBars, Math.min(1, level)].slice(-barCount);
+      }
+      rafId = requestAnimationFrame(loop);
+    };
+    rafId = requestAnimationFrame(loop);
   }
 
   async function toggleRecord() {
@@ -382,6 +407,31 @@
     starting = true;
     recError = '';
     recFailed = false;
+    recBars = [];
+    recSeconds = 0;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const SR: any = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
+
+    // MODO AO VIVO (Web Speech): so o reconhecimento acessa o mic -> sem conflito/re-prompt no iOS.
+    // A barra e sintetica (startFakeMeter). Sem getUserMedia aqui.
+    if (SR) {
+      try {
+        startLiveRecognition(SR);
+      } catch (err) {
+        console.error('início do ditado falhou', err);
+        recError = 'Não foi possível iniciar o ditado';
+        teardownRecording();
+        starting = false;
+        return;
+      }
+      recTimer = setInterval(() => recSeconds++, 1000);
+      startFakeMeter();
+      recording = true;
+      starting = false;
+      return;
+    }
+
+    // FALLBACK (sem Web Speech): grava pelo mic e transcreve na Groq ao parar; waveform real do audio.
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -396,14 +446,8 @@
     }
     recStream = stream;
     recChunks = [];
-    recBars = [];      // waveform comeca vazia e cresce da esquerda (osciloscopio)
-    recSeconds = 0;
-    // Web Speech disponivel -> transcricao ao vivo; senao -> grava e transcreve na Groq ao parar.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const SR: any = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
     try {
-      if (SR) startLiveRecognition(SR);
-      else startMediaRecorder(stream);
+      startMediaRecorder(stream);
       recTimer = setInterval(() => recSeconds++, 1000);
       startMeter(stream);
     } catch (err) {
