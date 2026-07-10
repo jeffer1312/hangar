@@ -83,6 +83,16 @@
   let recStream: MediaStream | undefined;
   let recFailed = false;   // marcado no onerror -> onstop nao anexa audio truncado
   let starting = false;    // guarda reentrancia entre o tap e o await getUserMedia resolver
+  // Feedback ao vivo da gravacao: timer (segundos) + waveform (nivel de voz por barra, deslizante).
+  let recSeconds = $state(0);
+  let recBars = $state<number[]>([]);
+  let audioCtx: AudioContext | undefined;
+  let rafId = 0;
+  let recTimer: ReturnType<typeof setInterval> | undefined;
+  const WAVE_BARS = 28;
+  const recTimeLabel = $derived(
+    `${Math.floor(recSeconds / 60)}:${String(recSeconds % 60).padStart(2, '0')}`,
+  );
 
   // hasInput: tem texto OU anexo. Usado tb pro botao stop/send (ver control-right).
   const hasInput = $derived(inputText.trim().length > 0 || attachments.length > 0);
@@ -204,10 +214,43 @@
   // Para o stream do mic e zera o estado. Chamado no onstop, no onerror, em falha e no onDestroy
   // (trocar de sessao com gravacao ativa desmonta o Composer -> sem isto o mic ficaria ligado).
   function teardownRecording() {
+    if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+    if (recTimer) { clearInterval(recTimer); recTimer = undefined; }
+    audioCtx?.close().catch(() => {});
+    audioCtx = undefined;
     recStream?.getTracks().forEach((t) => t.stop());
     recStream = undefined;
     mediaRecorder = undefined;
     recording = false;
+  }
+
+  // Medidor de voz: liga um AnalyserNode no stream do mic e empurra o nivel (RMS) numa janela
+  // deslizante de barras (~18fps). E so feedback visual — se o Web Audio falhar, a gravacao segue.
+  function startMeter(stream: MediaStream) {
+    try {
+      audioCtx = new AudioContext();
+      void audioCtx.resume().catch(() => {});   // iOS: pode iniciar 'suspended' -> waveform ficaria parada
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      audioCtx.createMediaStreamSource(stream).connect(analyser);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      let last = 0;
+      const loop = () => {
+        analyser.getByteTimeDomainData(data);
+        let sum = 0;
+        for (const v of data) { const x = (v - 128) / 128; sum += x * x; }
+        const level = Math.min(1, Math.sqrt(sum / data.length) * 2.2);
+        const now = performance.now();
+        if (now - last > 55) {   // desliza a ~18fps (nao re-renderiza o array a cada frame de tela)
+          last = now;
+          recBars = [...recBars.slice(1), level];
+        }
+        rafId = requestAnimationFrame(loop);
+      };
+      rafId = requestAnimationFrame(loop);
+    } catch (err) {
+      console.warn('medidor de áudio indisponível', err);
+    }
   }
 
   async function toggleRecord() {
@@ -264,6 +307,10 @@
         teardownRecording();
       };
       mediaRecorder.start();
+      recSeconds = 0;
+      recBars = new Array(WAVE_BARS).fill(0);
+      recTimer = setInterval(() => recSeconds++, 1000);
+      startMeter(stream);
     } catch (err) {
       console.error('MediaRecorder falhou', err);
       recError = 'Gravação de áudio não suportada neste navegador';
@@ -454,7 +501,13 @@
     ></textarea>
 
     {#if recording}
-      <div class="rec-hint" role="status"><span class="rec-dot" aria-hidden="true"></span> gravando… toque ⏹ para parar</div>
+      <div class="rec-hint" aria-label="Gravando áudio">
+        <span class="rec-dot" aria-hidden="true"></span>
+        <span class="rec-time">{recTimeLabel}</span>
+        <span class="rec-wave" aria-hidden="true">
+          {#each recBars as b, i (i)}<span class="rec-bar" style="--h: {b}"></span>{/each}
+        </span>
+      </div>
     {/if}
     {#if recError}
       <div class="send-error" role="alert">{recError}</div>
@@ -886,21 +939,47 @@
     50% { opacity: 0.45; }
   }
 
-  /* Aviso "gravando…" com bolinha vermelha piscando. */
+  /* Feedback de gravação: bolinha vermelha piscando + timer + waveform de voz. */
   .rec-hint {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: var(--text-xs);
-    color: var(--text-secondary);
+    gap: var(--space-2);
     padding: 0 var(--space-1);
   }
   .rec-dot {
     width: 8px;
     height: 8px;
+    flex-shrink: 0;
     border-radius: var(--radius-full);
     background: var(--error);
     animation: mic-pulse 1.2s var(--ease-out) infinite;
+  }
+  .rec-time {
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+    min-width: 30px;
+  }
+  /* Waveform: fileira de barras cuja altura reflete o nível de voz (--h de 0 a 1). O array desliza
+     -> a transição suaviza o passo entre frames, dando o movimento de "andar". */
+  .rec-wave {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    height: 22px;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .rec-bar {
+    flex: 1;
+    min-width: 2px;
+    max-width: 3px;
+    border-radius: 2px;
+    background: var(--accent);
+    height: calc(3px + var(--h, 0) * 19px);
+    transition: height 60ms linear;
   }
 
   .send-error {
