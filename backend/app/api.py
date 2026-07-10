@@ -25,6 +25,7 @@ from app.chain import ThenLink
 from app.terminal_input import TerminalInput, drain
 from app.sse import merged_events
 from app.uploads import save_upload, resolve_upload, UploadError, MAX_BYTES
+from app.transcribe import transcribe, TranscribeError
 from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base, settings, automations_enabled
 from app.costs import report as costs_report
 from app.git_ops import (
@@ -741,6 +742,33 @@ async def upload(name: str, request: Request):
     except UploadError as e:
         raise HTTPException(e.status, e.detail)
     return {"path": path}
+
+
+@app.post("/api/sessions/{name}/transcribe", dependencies=[Depends(require_auth)])
+async def transcribe_audio(name: str, request: Request):
+    # Salva o audio (pra anexar o path no chat) E transcreve via Groq num round-trip. Mesmo padrao
+    # de upload (raw body + X-Filename). Devolve {path, text} -> o front monta "texto — 📎 audio: path".
+    sessions = await asyncio.to_thread(registry.list)
+    info = next((s for s in sessions if s.name == name), None)
+    if info is None:
+        raise HTTPException(404, "sessao nao encontrada")
+    if not info.cwd:
+        raise HTTPException(409, "cwd da sessao indisponivel")
+    clen = request.headers.get("content-length")
+    if clen and clen.isdigit() and int(clen) > 100 * 1024 * 1024:
+        raise HTTPException(413, "arquivo maior que 100 MiB")
+    data = await request.body()
+    filename = request.headers.get("x-filename") or request.query_params.get("name")
+    try:
+        path = await asyncio.to_thread(save_upload, info.cwd, data, filename)
+    except UploadError as e:
+        raise HTTPException(e.status, e.detail)
+    # Transcricao (chamada de rede bloqueante) no threadpool pra nao travar o loop.
+    try:
+        text = await asyncio.to_thread(transcribe, data, filename)
+    except TranscribeError as e:
+        raise HTTPException(e.status, e.detail)
+    return {"path": path, "text": text}
 
 
 @app.get("/api/sessions/{name}/uploads/{filename}", dependencies=[Depends(require_auth)])
