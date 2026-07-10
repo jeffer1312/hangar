@@ -67,13 +67,14 @@
   export function focus() { textareaEl?.focus(); }
 
   // ── Anexos: lista de arquivos + preview local + estado de upload ────────────
-  // isAudio -> transcrito via Groq no envio (ver submit); isImage -> preview; resto -> chip de arquivo.
-  let attachments = $state<{ file: File; url: string; isImage: boolean; isAudio: boolean }[]>([]);
+  // isImage -> preview; resto -> chip de arquivo. Audio NAO vira anexo: e transcrito e cai no textarea.
+  let attachments = $state<{ file: File; url: string; isImage: boolean }[]>([]);
   let fileInput: HTMLInputElement | undefined = $state();
   let uploading = $state(false);
   let attachError = $state('');
   let sending = $state(false);
   let sendError = $state('');
+  let transcribing = $state(false);   // audio gravado/anexado sendo transcrito pro composer
 
   // ── Gravacao de audio pelo microfone (MediaRecorder) ────────────────────────
   let recording = $state(false);
@@ -96,7 +97,7 @@
 
   // hasInput: tem texto OU anexo. Usado tb pro botao stop/send (ver control-right).
   const hasInput = $derived(inputText.trim().length > 0 || attachments.length > 0);
-  const canSend = $derived(hasInput && !uploading && !sending && !recording);
+  const canSend = $derived(hasInput && !uploading && !sending && !recording && !transcribing);
   const isWorking = $derived(sessionState === 'working');
 
   // ── Pill de modelo + esforco: abre o ModelEffortSheet (aplica via endpoint dedicado) ──
@@ -201,13 +202,34 @@
   // Adiciona arquivos de imagem a lista (do picker ou do paste), cada um com preview local.
   function addFiles(files: Iterable<File>) {
     for (const f of files) {
+      // audio (gravacao do mic ou arquivo audio/*) NAO vira anexo: transcreve e cai no textarea,
+      // como se o usuario tivesse digitado — ele revisa/edita e envia quando quiser.
+      if (f.type.startsWith('audio/')) { transcribeIntoComposer(f); continue; }
       const isImage = f.type.startsWith('image/');
-      // audio (arquivo audio/* ou gravacao do mic) -> transcrito no envio. url so pra preview de
-      // imagem; outros tipos viram chip com o nome (sem objectURL pra revogar).
-      const isAudio = f.type.startsWith('audio/');
-      attachments = [...attachments, { file: f, url: isImage ? URL.createObjectURL(f) : '', isImage, isAudio }];
+      // url so pra preview de imagem; outros tipos viram chip com o nome (sem objectURL pra revogar).
+      attachments = [...attachments, { file: f, url: isImage ? URL.createObjectURL(f) : '', isImage }];
     }
     attachError = '';
+  }
+
+  // Transcreve o audio (Groq) e joga o texto no composer, anexando ao que ja houver — o usuario
+  // revisa e envia. NAO envia sozinho. Transcricao vazia / falha -> avisa em recError, sem sumir.
+  async function transcribeIntoComposer(file: File) {
+    transcribing = true;
+    recError = '';
+    try {
+      const { text } = await transcribeFile(sessionName, file);
+      const t = text.trim();
+      if (!t) { recError = 'Transcrição vazia — grave de novo'; return; }
+      inputText = inputText.trim() ? `${inputText.trim()} ${t}` : t;
+      await tick();
+      autoGrow();
+      textareaEl?.focus();
+    } catch (err) {
+      recError = err instanceof Error ? err.message : 'Falha na transcrição';
+    } finally {
+      transcribing = false;
+    }
   }
 
   // ── Gravar audio: toggle (tap grava, tap para) -> vira um anexo de audio ─────
@@ -263,7 +285,7 @@
       if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
       return;
     }
-    if (starting) return;   // 2o tap na janela do await getUserMedia abriria um 2o stream (vaza o mic)
+    if (starting || transcribing) return;   // nao regravar durante o start em voo nem a transcricao
     starting = true;
     recError = '';
     recFailed = false;
@@ -378,16 +400,6 @@
         // send-keys). Cada path nao tem espaco (nome gerado). Marca imagem x arquivo pelo tipo.
         const parts: string[] = [];
         for (const a of attachments) {
-          if (a.isAudio) {
-            // audio: o backend transcreve (Groq) e mandamos SO o texto — o Claude nao processa audio,
-            // a transcricao E o comando. Marcada com 🎤 "..." pra ficar clara na conversa. O path do
-            // audio nao vai (seria ruido). Transcricao vazia -> erro (mantem o anexo, nao envia em branco).
-            const { text } = await transcribeFile(sessionName, a.file);
-            const t = text.trim();
-            if (!t) throw new Error('Transcrição vazia — grave de novo');
-            parts.push(`🎤 "${t}"`);
-            continue;
-          }
           const { path } = await uploadFile(sessionName, a.file);
           parts.push((a.isImage ? '📎 imagem: ' : '📎 arquivo: ') + path);
         }
@@ -481,8 +493,8 @@
               <img class="attach-thumb" src={a.url} alt="anexo" />
             {:else}
               <span class="attach-file" title={a.file.name}>
-                <span class="attach-file-glyph" aria-hidden="true">{a.isAudio ? '🎤' : '📎'}</span>
-                <span class="attach-file-name">{a.isAudio ? 'áudio' : a.file.name}</span>
+                <span class="attach-file-glyph" aria-hidden="true">📎</span>
+                <span class="attach-file-name">{a.file.name}</span>
               </span>
             {/if}
             <button class="attach-remove" onclick={() => removeAttachment(idx)} aria-label="Remover anexo">×</button>
@@ -516,6 +528,12 @@
         <span class="rec-wave" aria-hidden="true">
           {#each recBars as b, i (i)}<span class="rec-bar" style="--h: {b}"></span>{/each}
         </span>
+      </div>
+    {/if}
+    {#if transcribing}
+      <div class="rec-hint" role="status" aria-label="Transcrevendo áudio">
+        <span class="rec-dot" aria-hidden="true"></span>
+        <span class="rec-time">transcrevendo…</span>
       </div>
     {/if}
     {#if recError}
