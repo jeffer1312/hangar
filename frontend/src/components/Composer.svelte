@@ -267,7 +267,8 @@
         analyser.getByteTimeDomainData(data);
         let sum = 0;
         for (const v of data) { const x = (v - 128) / 128; sum += x * x; }
-        const level = Math.min(1, Math.sqrt(sum / data.length) * 2.2);
+        // *5: RMS de voz normal fica baixo (~0.05-0.2); sem ganho as barras mal saem do minimo.
+        const level = Math.min(1, Math.sqrt(sum / data.length) * 5);
         const now = performance.now();
         if (now - last > 55) {   // desliza a ~18fps (nao re-renderiza o array a cada frame de tela)
           last = now;
@@ -999,7 +1000,7 @@
     display: flex;
     align-items: center;
     gap: 3px;
-    height: 48px;
+    height: 64px;
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -1007,10 +1008,10 @@
   .rec-bar {
     flex: 1;
     min-width: 3px;
-    max-width: 4px;
+    max-width: 5px;
     border-radius: 3px;
     background: var(--accent);
-    height: calc(6px + var(--h, 0) * 42px);
+    height: calc(8px + var(--h, 0) * 56px);
     transition: height 60ms linear;
   }
 
