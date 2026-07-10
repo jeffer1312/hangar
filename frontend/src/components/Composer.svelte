@@ -216,7 +216,7 @@
   function teardownRecording() {
     if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
     if (recTimer) { clearInterval(recTimer); recTimer = undefined; }
-    audioCtx?.close().catch(() => {});
+    audioCtx?.close().catch((err) => console.warn('audioCtx.close falhou', err));
     audioCtx = undefined;
     recStream?.getTracks().forEach((t) => t.stop());
     recStream = undefined;
@@ -229,7 +229,8 @@
   function startMeter(stream: MediaStream) {
     try {
       audioCtx = new AudioContext();
-      void audioCtx.resume().catch(() => {});   // iOS: pode iniciar 'suspended' -> waveform ficaria parada
+      // iOS: pode iniciar 'suspended' -> waveform ficaria parada. Loga se nao resumir (unica pista).
+      void audioCtx.resume().catch((err) => console.warn('audioCtx.resume falhou', err));
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 256;
       audioCtx.createMediaStreamSource(stream).connect(analyser);
@@ -250,6 +251,8 @@
       rafId = requestAnimationFrame(loop);
     } catch (err) {
       console.warn('medidor de áudio indisponível', err);
+      audioCtx?.close().catch(() => {});   // wiring falhou apos criar o ctx -> fecha ja, nao deixa ocioso
+      audioCtx = undefined;
     }
   }
 
@@ -377,8 +380,9 @@
         for (const a of attachments) {
           if (a.isAudio) {
             // audio: backend salva + transcreve (Groq) -> texto em UMA linha + path do audio anexado.
+            // Transcricao marcada com 🎤 "..." pra ficar identificavel na conversa como a fala do usuario.
             const { path, text } = await transcribeFile(sessionName, a.file);
-            parts.push((text ? text + ' — ' : '') + '📎 áudio: ' + path);
+            parts.push((text ? `🎤 "${text}" ` : '') + '📎 áudio: ' + path);
             continue;
           }
           const { path } = await uploadFile(sessionName, a.file);
@@ -501,9 +505,11 @@
     ></textarea>
 
     {#if recording}
-      <div class="rec-hint" aria-label="Gravando áudio">
+      <div class="rec-hint" role="status" aria-label="Gravando áudio">
         <span class="rec-dot" aria-hidden="true"></span>
-        <span class="rec-time">{recTimeLabel}</span>
+        <!-- timer aria-hidden: senao o leitor de tela re-anunciaria a cada segundo (a live region so
+             precisa dizer "Gravando áudio" uma vez, via aria-label). -->
+        <span class="rec-time" aria-hidden="true">{recTimeLabel}</span>
         <span class="rec-wave" aria-hidden="true">
           {#each recBars as b, i (i)}<span class="rec-bar" style="--h: {b}"></span>{/each}
         </span>
