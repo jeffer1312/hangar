@@ -88,6 +88,7 @@
   let recognition: any;    // SpeechRecognition (Web Speech API) quando disponivel -> transcricao ao vivo
   let liveBase = '';       // inputText antes do ditado (o texto reconhecido e apendado a ele)
   let liveFinal = '';      // parte ja finalizada do ditado atual
+  let liveStopping = false; // true = parada intencional/erro fatal -> onend NAO reinicia o ditado
   // Feedback ao vivo da gravacao: timer (segundos) + waveform (nivel de voz por barra, deslizante).
   let recSeconds = $state(0);
   let recBars = $state<number[]>([]);
@@ -334,6 +335,7 @@
     recognition.interimResults = true;
     liveBase = inputText.trim();
     liveFinal = '';
+    liveStopping = false;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     recognition.onresult = (e: any) => {
       let interim = '';
@@ -342,14 +344,28 @@
         if (e.results[i].isFinal) liveFinal += seg;
         else interim += seg;
       }
+      // Enquanto grava, o campo e "controlado" pelo ditado (edicao manual so depois de parar) — como
+      // no dictation de qualquer app. liveBase preserva o que ja havia antes de comecar.
       inputText = [liveBase, (liveFinal + interim).trim()].filter(Boolean).join(' ');
       void tick().then(autoGrow);
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     recognition.onerror = (e: any) => {
       console.warn('SpeechRecognition erro', e?.error);
-      if (e?.error === 'no-speech' || e?.error === 'aborted') return;   // nao e falha real
-      recError = e?.error === 'not-allowed' ? 'Sem permissão pro microfone' : 'Falha no reconhecimento de voz';
+      if (e?.error === 'no-speech' || e?.error === 'aborted') return;   // transitorio -> onend decide
+      // erro fatal (audio-capture/network/not-allowed): encerra a UI, nao deixa "gravando" mentiroso.
+      liveStopping = true;
+      recError = e?.error === 'not-allowed' ? 'Sem permissão pro microfone'
+        : e?.error === 'audio-capture' ? 'Microfone indisponível (em uso por outro app?)'
+        : 'Falha no reconhecimento de voz';
+      teardownRecording();
+    };
+    // O navegador encerra 'continuous' sozinho (timeout/silencio). Se o usuario NAO parou e nao houve
+    // erro fatal, reinicia pra manter o ditado vivo; senao a UI ficaria "gravando" sem captar nada.
+    recognition.onend = () => {
+      if (recording && !liveStopping) {
+        try { recognition?.start(); } catch { teardownRecording(); }
+      }
     };
     recognition.start();
   }
@@ -358,7 +374,7 @@
     if (recording) {
       // parar: modo ao vivo -> encerra o reconhecimento (texto ja esta no campo); modo Groq -> para o
       // gravador (dispara onstop). Guard de state cobre duplo-toque no stop do gravador.
-      if (recognition) { try { recognition.stop(); } catch { /* ja parado */ } teardownRecording(); }
+      if (recognition) { liveStopping = true; teardownRecording(); }   // teardown ja chama recognition.stop()
       else if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
       return;
     }
