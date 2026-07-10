@@ -84,6 +84,10 @@
   let recStream: MediaStream | undefined;
   let recFailed = false;   // marcado no onerror -> onstop nao anexa audio truncado
   let starting = false;    // guarda reentrancia entre o tap e o await getUserMedia resolver
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let recognition: any;    // SpeechRecognition (Web Speech API) quando disponivel -> transcricao ao vivo
+  let liveBase = '';       // inputText antes do ditado (o texto reconhecido e apendado a ele)
+  let liveFinal = '';      // parte ja finalizada do ditado atual
   // Feedback ao vivo da gravacao: timer (segundos) + waveform (nivel de voz por barra, deslizante).
   let recSeconds = $state(0);
   let recBars = $state<number[]>([]);
@@ -244,6 +248,7 @@
   // Para o stream do mic e zera o estado. Chamado no onstop, no onerror, em falha e no onDestroy
   // (trocar de sessao com gravacao ativa desmonta o Composer -> sem isto o mic ficaria ligado).
   function teardownRecording() {
+    if (recognition) { try { recognition.stop(); } catch { /* ja parado */ } recognition = undefined; }
     if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
     if (recTimer) { clearInterval(recTimer); recTimer = undefined; }
     audioCtx?.close().catch((err) => console.warn('audioCtx.close falhou', err));
@@ -288,11 +293,73 @@
     }
   }
 
+  // Fallback (sem Web Speech): grava webm/mp4 e transcreve na Groq ao parar -> cai no composer.
+  function startMediaRecorder(stream: MediaStream) {
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
+    mediaRecorder.onstop = () => {
+      const type = mediaRecorder?.mimeType || 'audio/webm';
+      // Chrome grava webm/opus; iOS Safari grava mp4/aac. A Groq aceita os dois direto.
+      const ext = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
+      // onerror dispara stop logo depois -> se ja falhou, nao anexa o audio (truncado). Sem chunk
+      // nenhum (gravacao rapida demais / driver sem dado) -> avisa, nao some calado.
+      if (recFailed) {
+        teardownRecording();
+      } else if (recChunks.length) {
+        const blob = new Blob(recChunks, { type });
+        addFiles([new File([blob], `gravacao-${Date.now()}.${ext}`, { type })]);
+        teardownRecording();
+      } else {
+        recError = 'Gravação vazia, tente de novo';
+        teardownRecording();
+      }
+    };
+    mediaRecorder.onerror = (e) => {
+      console.error('MediaRecorder erro', (e as { error?: unknown }).error ?? e);
+      recFailed = true;
+      recError = 'Falha na gravação';
+      teardownRecording();
+    };
+    mediaRecorder.start();
+  }
+
+  // Transcricao AO VIVO (Web Speech API): o texto reconhecido cai no textarea enquanto o usuario fala,
+  // apendado ao que ja houver — ele revisa e envia. So quando o navegador suporta (Chrome/Android bem;
+  // iOS Safari em PWA instavel -> por isso o fallback Groq acima).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function startLiveRecognition(SR: any) {
+    recognition = new SR();
+    recognition.lang = 'pt-BR';
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    liveBase = inputText.trim();
+    liveFinal = '';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    recognition.onresult = (e: any) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const seg = e.results[i][0].transcript;
+        if (e.results[i].isFinal) liveFinal += seg;
+        else interim += seg;
+      }
+      inputText = [liveBase, (liveFinal + interim).trim()].filter(Boolean).join(' ');
+      void tick().then(autoGrow);
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    recognition.onerror = (e: any) => {
+      console.warn('SpeechRecognition erro', e?.error);
+      if (e?.error === 'no-speech' || e?.error === 'aborted') return;   // nao e falha real
+      recError = e?.error === 'not-allowed' ? 'Sem permissão pro microfone' : 'Falha no reconhecimento de voz';
+    };
+    recognition.start();
+  }
+
   async function toggleRecord() {
     if (recording) {
-      // Guard: so para se ainda esta gravando. Duplo-toque no stop chamaria .stop() num recorder ja
-      // 'inactive' -> InvalidStateError nao tratado.
-      if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
+      // parar: modo ao vivo -> encerra o reconhecimento (texto ja esta no campo); modo Groq -> para o
+      // gravador (dispara onstop). Guard de state cobre duplo-toque no stop do gravador.
+      if (recognition) { try { recognition.stop(); } catch { /* ja parado */ } teardownRecording(); }
+      else if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
       return;
     }
     if (starting || transcribing) return;   // nao regravar durante o start em voo nem a transcricao
@@ -313,41 +380,18 @@
     }
     recStream = stream;
     recChunks = [];
-    // Construcao/wiring/start dentro do try: mimeType nao suportado ou API ausente lancam aqui —
-    // sem isto, a falha some e o mic fica ligado (stream nunca parado).
+    recBars = [];      // waveform comeca vazia e cresce da esquerda (osciloscopio)
+    recSeconds = 0;
+    // Web Speech disponivel -> transcricao ao vivo; senao -> grava e transcreve na Groq ao parar.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const SR: any = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
     try {
-      mediaRecorder = new MediaRecorder(stream);
-      mediaRecorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
-      mediaRecorder.onstop = () => {
-        const type = mediaRecorder?.mimeType || 'audio/webm';
-        // Chrome grava webm/opus; iOS Safari grava mp4/aac. A Groq aceita os dois direto.
-        const ext = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
-        // onerror dispara stop logo depois -> se ja falhou, nao anexa o audio (truncado). Sem chunk
-        // nenhum (gravacao rapida demais / driver sem dado) -> avisa, nao some calado.
-        if (recFailed) {
-          teardownRecording();
-        } else if (recChunks.length) {
-          const blob = new Blob(recChunks, { type });
-          addFiles([new File([blob], `gravacao-${Date.now()}.${ext}`, { type })]);
-          teardownRecording();
-        } else {
-          recError = 'Gravação vazia, tente de novo';
-          teardownRecording();
-        }
-      };
-      mediaRecorder.onerror = (e) => {
-        console.error('MediaRecorder erro', (e as { error?: unknown }).error ?? e);
-        recFailed = true;
-        recError = 'Falha na gravação';
-        teardownRecording();
-      };
-      mediaRecorder.start();
-      recSeconds = 0;
-      recBars = [];   // comeca vazia e cresce da esquerda conforme fala (osciloscopio)
+      if (SR) startLiveRecognition(SR);
+      else startMediaRecorder(stream);
       recTimer = setInterval(() => recSeconds++, 1000);
       startMeter(stream);
     } catch (err) {
-      console.error('MediaRecorder falhou', err);
+      console.error('início da gravação falhou', err);
       recError = 'Gravação de áudio não suportada neste navegador';
       teardownRecording();
       starting = false;
