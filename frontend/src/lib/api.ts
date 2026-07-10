@@ -359,6 +359,26 @@ export async function uploadFile(name: string, file: File): Promise<{ path: stri
   return res.json() as Promise<{ path: string }>;
 }
 
+/**
+ * Envia os bytes de um audio (gravado no mic ou arquivo) pra sessao. O backend salva o audio E o
+ * transcreve via Groq num round-trip, devolvendo { path, text }. O app monta a mensagem
+ * "<transcricao> — 📎 audio: <path>". Mesmo esquema de header (X-Filename) do uploadFile.
+ */
+export async function transcribeFile(name: string, file: File): Promise<{ path: string; text: string }> {
+  const base = getBaseUrl();
+  const res = await fetch(`${base}/api/sessions/${encodeURIComponent(name)}/transcribe`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(),
+      'Content-Type': file.type || 'application/octet-stream',
+      'X-Filename': encodeURIComponent(file.name || 'audio.webm'),
+    },
+    body: file,
+  });
+  await ensureOk(res);
+  return res.json() as Promise<{ path: string; text: string }>;
+}
+
 export async function selectOption(name: string, option: number): Promise<void> {
   await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/select`, {
     method: 'POST',

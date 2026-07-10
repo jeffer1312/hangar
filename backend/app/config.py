@@ -1,7 +1,7 @@
 import os
 import socket
 from pathlib import Path
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _LOOPBACK = {"127.0.0.1", "localhost", "::1", "0.0.0.0", "auto"}
@@ -139,6 +139,10 @@ class Settings(BaseSettings):
     # seu proprio opt-in/config — isto e um portao ADICIONAL, nao substitui CP_AUTO_RESUME). CP_AUTOMATIONS=0
     # desliga tudo de uma vez (ex: antes de um teste manual, ou se uma automacao ficar barulhenta).
     automations: bool = True
+    # Chave da Groq pra transcricao de audio (whisper-large-v3-turbo). Aceita CP_GROQ_API_KEY (padrao
+    # do .env, com prefixo) OU GROQ_API_KEY (convencao do Groq/OpenAI SDK, ex: no Environment do systemd).
+    # Vazio = transcricao desligada (o endpoint /transcribe responde 503). Ver docs/USAGE.md.
+    groq_api_key: str = Field("", validation_alias=AliasChoices("CP_GROQ_API_KEY", "GROQ_API_KEY"))
 
 
 settings = Settings()
