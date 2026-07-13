@@ -2,14 +2,12 @@ import asyncio
 import json
 import time
 from pathlib import Path
-from app.transcript import TranscriptTailer
-from app.state import StateMonitor
+from app.adapters import get_adapter
 from app.pqueue import PromptQueue, _transcript_start_ts
 from app.preview import PreviewBroker, _norm
 from app.models import PreviewEvent
 from app.registry import SessionRegistry
 from app.askquestion import read_pending_askq
-from app.terminal_input import drain
 
 
 def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
@@ -103,11 +101,15 @@ async def list_events(poll: float = 1.5, ping_every: int = 7):
         await asyncio.sleep(poll)
 
 
-async def merged_events(name: str, jsonl: str):
+async def merged_events(name: str, jsonl: str, provider: str = "claude"):
+    # provider: default "claude" preserva o comportamento de hoje pros callers que ainda nao passam
+    # (api.py so passa quando uma tarefa futura ligar o seletor de provider no endpoint).
+    adapter = get_adapter(provider)
     current_jsonl = jsonl          # atualizado no __reset__ (ex: /clear abre novo transcript)
     # Ancora de hook do estado: o monitor le o marcador do sid VIVO (a closure acompanha o rebind
     # do /clear, que troca o current_jsonl -> sid novo).
-    monitor = StateMonitor(name, sid_get=lambda: Path(current_jsonl).stem if current_jsonl else None)
+    monitor_stream = adapter.state_monitor(
+        name, sid_get=lambda: Path(current_jsonl).stem if current_jsonl else None)
     pqueue = PromptQueue(name)
     broker = PreviewBroker.get(name)
     # Inicio da sessao atual: poda entradas de fila pre-/clear no live SSE (mesma regra do history).
@@ -161,7 +163,7 @@ async def merged_events(name: str, jsonl: str):
         # que e exatamente o que o preview mostra, LIMPA o preview na hora (sem esperar o broker mudar).
         # Recebe o path (em vez de fechar sobre um tailer fixo) pra poder ser recriado no rebind do /clear.
         try:
-            async for ev in TranscriptTailer(path).follow():
+            async for ev in adapter.transcript_stream(path):
                 if ev.kind == "assistant_msg" and ev.text:
                     committed["text"] = _norm(ev.text)
                     if _already_committed(preview_slot["text"]):
@@ -223,7 +225,7 @@ async def merged_events(name: str, jsonl: str):
         # Fila duravel: user_msg sinteticos (id "queued-") pras msgs enfileiradas. O front faz o
         # dedup cruzado (queued- vs real) por texto.
         asyncio.create_task(pump("message", pqueue.follow(min_ts=start_ts))),
-        asyncio.create_task(pump("state", monitor.stream())),
+        asyncio.create_task(pump("state", monitor_stream)),
         asyncio.create_task(ping_loop()),
         asyncio.create_task(preview_pump()),
         asyncio.create_task(jsonl_watcher()),
@@ -273,10 +275,10 @@ async def merged_events(name: str, jsonl: str):
                     and not parsed_state.get("overlay")
                 )
                 if deliverable_now and not prev_deliverable:
-                    # fire-and-forget no threadpool (drain bloqueia em send_prompt) — nunca await no
-                    # loop SSE. FORA de `tasks`: deixar um drain em voo terminar apos o phone
+                    # fire-and-forget (adapter.drain ja roda no threadpool internamente) — nunca await
+                    # no loop SSE. FORA de `tasks`: deixar um drain em voo terminar apos o phone
                     # desconectar e correto (entrega duravel nao depende do phone ficar conectado).
-                    dt = asyncio.create_task(asyncio.to_thread(drain, name, current_jsonl))
+                    dt = asyncio.create_task(adapter.drain(name, current_jsonl))
                     drain_tasks.add(dt)
                     dt.add_done_callback(drain_tasks.discard)
                 prev_deliverable = deliverable_now
