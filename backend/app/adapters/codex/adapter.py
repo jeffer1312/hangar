@@ -16,6 +16,7 @@ from typing import AsyncIterator, Callable, Optional
 
 from app.adapters.codex import sessions as codex_sessions
 from app.adapters.codex.appserver import AppServerClient
+from app.adapters.codex.preview import CodexPreviewSource
 from app.adapters.codex.rollout import parse_rollout_line
 from app.pqueue import PromptQueue
 from app.state import StateEvent
@@ -34,8 +35,8 @@ _APPROVAL = "never"
 class MappedState:
     """Resultado CRU e testavel de map_state — NAO e o StateEvent do app (StateEvent exige
     `state` e nao tem campo de preview). state_monitor() traduz isto pro StateEvent real;
-    preview_delta e um mecanismo PARALELO ainda sem fiacao no sse.py (ver nota em
-    CodexAdapter._state_stream e o concern no report da task)."""
+    preview_delta e consumido em paralelo por CodexAdapter._state_stream (acumula por turno e
+    empurra pro CodexPreviewSource — ver Task 5b), fora do StateEvent."""
     state: Optional[str] = None          # "working" | "idle" | None (neutro/sem info)
     status_line: Optional[str] = None
     preview_delta: Optional[str] = None
@@ -157,15 +158,35 @@ class CodexAdapter:
             yield StateEvent(session=name, state="dead")
             return
         sess = self._sessions[name]
+        preview = CodexPreviewSource.get(name)
+        # Buffer do turno em voo (deltas sao INCREMENTAIS -- concatena; ver docs/codex-app-server-
+        # contract.md). Local ao generator: 1 state_monitor ativo por sessao no uso normal (1 SSE
+        # aberto por sessao); N conexoes simultaneas cada uma chamaria ensure_running de novo e
+        # teria seu proprio buffer, mas todas empurram pro MESMO CodexPreviewSource (registry por
+        # nome) -- ainda convergem, so nao e o caso comum.
+        # ponytail: buffer por-generator, nao por-sessao no adapter; multi-consumidor corrigido se
+        # virar necessario (hoje o front so abre 1 SSE por sessao).
+        buf = ""
         async for notif in client.notifications():
             mapped = map_state(notif)
+            method = notif.get("method")
+            if method == "turn/started":
+                buf = ""  # novo turno -- zera pra nao vazar o texto do turno anterior
+            elif mapped.preview_delta is not None:
+                buf += mapped.preview_delta
+                await preview.push(buf)
+            elif method == "turn/completed":
+                # o texto final ja caiu no rollout -> vira ChatEvent autoritativo via
+                # transcript_stream; o sse.py tambem suprime via _already_committed. Limpa aqui pra
+                # nao deixar o ultimo delta pendurado ate o proximo turno.
+                await preview.push("")
             if mapped.state is not None:
                 sess["state"] = mapped.state
                 sess["in_progress"] = mapped.state == "working"
             if mapped.state is None and mapped.status_line is None:
                 # Neutro (method desconhecido) ou so preview_delta: StateEvent nao tem campo de
-                # preview -> nada a emitir aqui. O texto ao vivo do delta fica sem rota pro SSE
-                # neste adapter (Task 5b faz a fiacao do preview).
+                # preview -> nada a emitir aqui (o preview ja foi empurrado acima, fora do
+                # StateEvent -- efeito colateral adicional, nao substitui).
                 continue
             yield StateEvent(session=name, state=sess["state"], status_line=mapped.status_line)
         # notifications() terminou = EOF do app-server (o read loop empurra o sentinela ao morrer).
