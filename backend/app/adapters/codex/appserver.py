@@ -9,7 +9,15 @@ de stdin do subprocess nunca e fechado ate `close()`."""
 import asyncio
 import contextlib
 import json
+import logging
 from typing import AsyncIterator
+
+logger = logging.getLogger(__name__)
+
+# Limite de linha do StreamReader (default da stdlib e 64 KiB). Notifications do Codex podem
+# carregar diffs grandes (item/fileChange/patchUpdated, item/commandExecution/outputDelta) que
+# estouram 64 KiB -> LimitOverrunError. Dimensionado pra alguns MiB.
+_READ_LIMIT = 8 * 1024 * 1024
 
 
 class AppServerClient:
@@ -30,6 +38,7 @@ class AppServerClient:
             self._codex_bin, "app-server", "--stdio",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
+            limit=_READ_LIMIT,
         )
         self._attach(self._proc.stdout, self._proc.stdin)
 
@@ -44,23 +53,43 @@ class AppServerClient:
         assert self._reader is not None
         try:
             while True:
-                raw = await self._reader.readline()
-                if not raw:
-                    break  # EOF - processo encerrou ou stream fechado
-                raw = raw.strip()
-                if not raw:
-                    continue
+                # Corpo inteiro do loop protegido: readline() pode levantar LimitOverrunError
+                # (linha > _READ_LIMIT), json.loads erros, e o dispatch pode ver JSON valido
+                # nao-objeto. Nenhum desses pode matar a reader task (senao requests futuras so
+                # destravam por timeout e close() fica com subprocess orfao). CancelledError
+                # (cancel de close()) DEVE continuar propagando -> por isso except Exception, nao
+                # BaseException.
                 try:
+                    raw = await self._reader.readline()
+                    if not raw:
+                        break  # EOF - processo encerrou ou stream fechado
+                    raw = raw.strip()
+                    if not raw:
+                        continue
                     msg = json.loads(raw)
-                except (json.JSONDecodeError, ValueError):
-                    continue  # linha corrompida - ignora, nao derruba o loop
-                msg_id = msg.get("id")
-                fut = self._pending.pop(msg_id, None) if msg_id is not None else None
-                if fut is not None:
-                    if not fut.done():
-                        fut.set_result(msg)
-                else:
-                    await self._notifications.put(msg)
+                    if not isinstance(msg, dict):
+                        continue  # JSON valido mas nao-objeto (ex: "42", "[]") - ignora
+                    msg_id = msg.get("id")
+                    if msg_id is not None:
+                        # Resposta de request: casa o Future pendente. Se o id nao tem Future
+                        # (resposta tardia de request que ja deu timeout), dropa com warning -
+                        # NAO enfileira em notifications (resposta nao tem `method`, poluiria a
+                        # fila e quebraria consumidor que faz msg["method"]).
+                        fut = self._pending.pop(msg_id, None)
+                        if fut is not None:
+                            if not fut.done():
+                                fut.set_result(msg)
+                        else:
+                            logger.warning("codex app-server: resposta orfa id=%r (request ja expirou?)", msg_id)
+                    elif "method" in msg:
+                        await self._notifications.put(msg)  # notification legitima
+                    else:
+                        logger.warning("codex app-server: mensagem sem id e sem method, ignorada: %.200r", raw)
+                except asyncio.CancelledError:
+                    raise  # cancel de close() - propaga, nao engole
+                except Exception:
+                    logger.exception("codex app-server: erro processando linha, seguindo")
+                    continue
         finally:
             # conexao encerrou (EOF ou cancel de close()) - nenhuma request pendente pode
             # ficar orfa esperando um Future que nunca vai resolver.
