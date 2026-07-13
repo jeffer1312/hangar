@@ -184,6 +184,15 @@ class CodexAdapter:
                 # transcript_stream; o sse.py tambem suprime via _already_committed. Limpa aqui pra
                 # nao deixar o ultimo delta pendurado ate o proximo turno.
                 await preview.push("")
+                # Marca idle ANTES de drenar (nao depender do thread/status/changed idle ter chegado
+                # antes -- a ordem das notifications do app-server nao e garantida). A drain chama
+                # send_prompt -> deliverable(), que le in_progress: se ficasse True aqui, deliverable
+                # daria False, send_prompt viraria "deferred", a drain reverteria e a entrada
+                # enfileirada ficaria presa pra sempre (perda silenciosa). Tambem zera o turn_id: o
+                # turno morreu -> interrupt vira no-op em vez de mandar turn/interrupt de turno morto.
+                sess["state"] = "idle"
+                sess["in_progress"] = False
+                sess["turn_id"] = None
                 # drain-on-complete (P2): turno terminou -> entrega a fila pendente (msgs enviadas
                 # via /input enquanto o Codex trabalhava). Reusa adapter.drain (claim-1-envia-1 via
                 # turn/start). ACOPLADO ao SSE ativo -- este generator so roda com um consumidor
