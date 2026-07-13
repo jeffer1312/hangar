@@ -243,6 +243,33 @@ async def test_state_monitor_drains_queue_on_turn_completed(monkeypatch):
     assert calls == [("sess-drain", "")]
 
 
+async def test_turn_completed_delivers_queue_without_idle_status(monkeypatch, tmp_path):
+    # Regressao (ordenacao de notification): turn/completed deve marcar idle ANTES de drenar. Aqui a
+    # sequencia e turn/started -> turn/completed SEM um thread/status/changed idle no meio. Sem o fix,
+    # in_progress fica True na hora da drain -> send_prompt="deferred" -> a entrada enfileirada durante
+    # o working nunca e entregue (perda silenciosa). Com o fix, ela sai via turn/start. Drain REAL
+    # (nao mockado) pra provar a ENTREGA, nao so o wiring.
+    from app.config import settings
+    monkeypatch.setattr(settings, "projects_dir", tmp_path / "projects")
+    from app.pqueue import PromptQueue
+    q = PromptQueue("sess-realdrain")
+    q.append("msg pendente", delivered=False)
+
+    adapter = CodexAdapter()
+    client = _FakeClient([
+        {"method": "turn/started", "params": {}},    # in_progress -> True
+        {"method": "turn/completed", "params": {}},   # SEM idle-status antes: tem que drenar assim mesmo
+    ])
+    adapter.attach("sess-realdrain", client, "thread-x")
+    async for _ in adapter.state_monitor("sess-realdrain", lambda: "sess-realdrain"):
+        pass
+
+    starts = [r for r in client.requests if r[0] == "turn/start"]
+    assert len(starts) == 1  # a entrada pendente foi entregue via turn/start
+    assert starts[0][1]["input"][0]["text"] == "msg pendente"
+    assert all(e["delivered"] for e in q.load())  # nao ficou presa na fila
+
+
 # --- CodexAdapter.transcript_stream (reaproveita TranscriptTailer + parse_rollout_line) ------
 
 async def test_transcript_stream_parses_rollout_lines(tmp_path):
