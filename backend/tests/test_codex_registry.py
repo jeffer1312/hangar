@@ -127,6 +127,45 @@ def test_kill_codex_closes_client_and_removes_sidecar(tmp_path):
     kill_tmux.assert_not_called()                    # NAO toca tmux numa sessao Codex
 
 
+# --- Colisao de nome cross-provider (review Important #1) ------------------------------------
+
+def test_create_claude_rejects_existing_codex_name(tmp_path):
+    codex_sessions.save("dup", "tid-1", "/home/u/.codex/rollout.jsonl", "/tmp/a")
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "has_session", return_value=False), \
+         patch.object(registry.tmux, "new_session", return_value=True) as new_sess:
+        with pytest.raises(ValueError):
+            reg.create("dup", "/tmp/proj")
+    new_sess.assert_not_called()  # nao chegou a spawnar pane tmux orfao
+
+
+async def test_create_codex_rejects_existing_tmux_name(tmp_path):
+    reg = SessionRegistry(projects_dir=tmp_path)
+    adapter = CodexAdapter()
+    with patch.object(registry.tmux, "has_session", return_value=True), \
+         patch.object(registry, "AppServerClient", lambda *a, **k: _FakeClient()), \
+         patch("app.adapters.get_adapter", return_value=adapter):
+        with pytest.raises(ValueError):
+            await reg.create_codex("dup", "/tmp/proj")
+
+
+# --- Orfao de processo se save() falhar (review Important #2) --------------------------------
+
+async def test_create_codex_closes_client_when_save_fails(tmp_path):
+    reg = SessionRegistry(projects_dir=tmp_path)
+    fake = _FakeClient()
+    adapter = CodexAdapter()
+    with patch.object(registry, "AppServerClient", lambda *a, **k: fake), \
+         patch("app.adapters.get_adapter", return_value=adapter), \
+         patch.object(registry.tmux, "has_session", return_value=False), \
+         patch.object(codex_sessions, "save", side_effect=OSError("disco cheio")):
+        with pytest.raises(OSError):
+            await reg.create_codex("mysess", "/tmp/proj")
+    assert fake.closed is True                       # client fechado, sem orfao
+    assert codex_sessions.load("mysess") is None     # nenhum sidecar orfao
+    assert "mysess" not in adapter._sessions         # nao anexado
+
+
 # --- Teste 5: ensure_running pos-restart reabre client e retoma pelo thread_id --------------
 
 async def test_ensure_running_resumes_by_thread_id(tmp_path):
