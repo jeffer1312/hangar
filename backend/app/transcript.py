@@ -225,8 +225,12 @@ def get_transcript_image(jsonl: str | Path, uuid: str, idx: int) -> Optional[tup
 
 
 class TranscriptTailer:
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, parse_line=parse_line):
         self.path = Path(path)
+        # Parser injetavel: default e o parse_line do Claude (snake_case), mas o CodexAdapter
+        # reaproveita a mesma mecanica de tail (backfill + watch de append) passando
+        # parse_rollout_line (shape do rollout do Codex e diferente).
+        self._parse_line = parse_line
 
     def _read_from(self, pos: int) -> tuple[list[ChatEvent], int]:
         # Le do offset `pos` ate o fim -> (eventos parseados, novo offset). Sincrono de proposito:
@@ -254,7 +258,7 @@ class TranscriptTailer:
                     # dela e nao avanca pos: a versao COMPLETA e relida no proximo evento do watcher.
                     fh.seek(start)
                     break
-                evs.extend(parse_line(line.decode("utf-8", "replace")))
+                evs.extend(self._parse_line(line.decode("utf-8", "replace")))
             return evs, fh.tell()
 
     def _tail_offset(self, max_lines: int) -> int:
