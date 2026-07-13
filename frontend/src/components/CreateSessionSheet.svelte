@@ -12,10 +12,13 @@
     open: boolean;
     servers: Server[];
     onClose: () => void;
-    onCreate: (name: string, cwd?: string, configDir?: string | null) => Promise<void>;
+    onCreate: (name: string, cwd?: string, configDir?: string | null, provider?: 'claude' | 'codex') => Promise<void>;
     onOpenSession: (name: string) => void;
   }
   let { open, servers, onClose, onCreate, onOpenSession }: Props = $props();
+
+  // Provider da sessao nova: Claude (padrao, tmux) ou Codex (app-server, sem tmux/config_dir).
+  let provider = $state<'claude' | 'codex'>('claude');
 
   // Servidor-alvo da nova sessão. Como o scanner/dedupe/criação leem o servidor ATIVO, escolher
   // aqui = selectServer(id): todas as chamadas seguintes do sheet caem nesse backend.
@@ -90,6 +93,7 @@
       loading = false;
       manualOpen = false;
       manualPath = '';
+      provider = 'claude';
       const cur = getActiveId();
       const target = servers.find((s) => s.id === cur) ? cur! : servers[0]?.id ?? '';
       if (target) pickTarget(target);      // pickTarget ja carrega os configs do alvo
@@ -135,7 +139,7 @@
     loading = true;
     error = '';
     try {
-      await onCreate(name.trim(), picked, selectedConfig);
+      await onCreate(name.trim(), picked, provider === 'claude' ? selectedConfig : null, provider);
       onClose();
     } catch (err) {
       error = err instanceof Error ? err.message : 'Erro ao criar sessão';
@@ -230,7 +234,25 @@
         />
       </div>
 
-      {#if configs.length > 1}
+      <div class="field">
+        <span class="field-label">Provider</span>
+        <div class="provider-toggle" role="group" aria-label="Provider da sessão">
+          <button
+            type="button"
+            class="provider-btn"
+            class:on={provider === 'claude'}
+            onclick={() => (provider = 'claude')}
+          >Claude</button>
+          <button
+            type="button"
+            class="provider-btn"
+            class:on={provider === 'codex'}
+            onclick={() => (provider = 'codex')}
+          >Codex</button>
+        </div>
+      </div>
+
+      {#if provider === 'claude' && configs.length > 1}
         <div class="field">
           <label class="field-label" for="cfg-pick">Claude config</label>
           <select id="cfg-pick" class="field-input" bind:value={selectedConfig}>
@@ -297,6 +319,27 @@
   }
   .chip-dot {
     width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  }
+
+  /* Toggle Claude/Codex (mesmo visual dos chips de servidor). */
+  .provider-toggle {
+    display: flex;
+    gap: var(--space-2);
+  }
+  .provider-btn {
+    height: 34px;
+    padding: 0 var(--space-4);
+    border-radius: var(--radius-full);
+    border: 1px solid var(--border-default);
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+    font-weight: 500;
+    transition: border-color 160ms ease-out, color 160ms ease-out;
+  }
+  .provider-btn.on {
+    border-color: var(--accent);
+    color: var(--text-primary);
   }
 
   /* ── Escape hatch: digitar caminho ─────────────────────────────────────── */
