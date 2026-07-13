@@ -231,8 +231,14 @@ class CodexAdapter:
         # guarda o turnId do turno recem-iniciado (turn/interrupt exige threadId+turnId; ver schema
         # TurnInterruptParams). turn/start devolve {"turn": {"id", ...}}.
         turn_id = (result.get("turn") or {}).get("id")
+        sess = self._sessions[name]
         if turn_id:
-            self._sessions[name]["turn_id"] = turn_id
+            sess["turn_id"] = turn_id
+        # Marca in_progress AQUI (nao so esperar o turn/started chegar no loop de notifications):
+        # o drain roda dentro desse mesmo loop, entao um turn/started concorrente pode nao ser
+        # processado a tempo -- sem isto, deliverable() ficaria True e o drain mandaria todas as
+        # entradas pendentes como turn/start back-to-back (ver test_drain_stops_after_first_delivery).
+        sess["in_progress"] = True
         return "sent"
 
     async def interrupt(self, name: str) -> bool:

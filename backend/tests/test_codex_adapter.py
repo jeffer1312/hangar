@@ -179,6 +179,17 @@ async def test_send_prompt_calls_turn_start():
     )]
 
 
+async def test_send_prompt_marks_in_progress_on_sent():
+    # Fix 2: send_prompt tem que setar in_progress=True ao entregar -- senao deliverable() continua
+    # True logo em seguida e um drain com varias entradas pendentes as manda todas como turn/start
+    # concorrentes (o turn/started do 1o envio so seria processado depois, no loop de notifications).
+    adapter = CodexAdapter()
+    client = _FakeClient([])
+    adapter.attach("sess", client, "thread-1")
+    assert await adapter.send_prompt("sess", "oi") == "sent"
+    assert await adapter.deliverable("sess") is False
+
+
 async def test_deliverable_true_when_untracked():
     adapter = CodexAdapter()
     assert await adapter.deliverable("ghost") is True
@@ -268,6 +279,28 @@ async def test_turn_completed_delivers_queue_without_idle_status(monkeypatch, tm
     assert len(starts) == 1  # a entrada pendente foi entregue via turn/start
     assert starts[0][1]["input"][0]["text"] == "msg pendente"
     assert all(e["delivered"] for e in q.load())  # nao ficou presa na fila
+
+
+async def test_drain_stops_after_first_delivery_with_two_pending(monkeypatch, tmp_path):
+    # Fix 2 (via drain): com 2 entradas pendentes e deliverable inicial True, o drain so pode
+    # entregar 1 (turn/start) -- a 2a fica presa ate o proximo turn/completed. Sem o fix, in_progress
+    # nunca vira True apos o 1o envio e as 2 saem back-to-back como turn/start concorrentes.
+    from app.config import settings
+    monkeypatch.setattr(settings, "projects_dir", tmp_path / "projects")
+    from app.pqueue import PromptQueue
+    q = PromptQueue("sess-drain2")
+    q.append("msg 1", delivered=False)
+    q.append("msg 2", delivered=False)
+
+    adapter = CodexAdapter()
+    client = _FakeClient([])
+    adapter.attach("sess-drain2", client, "thread-y")
+    sent = await adapter.drain("sess-drain2", "")
+
+    starts = [r for r in client.requests if r[0] == "turn/start"]
+    assert len(starts) == 1
+    assert sent == 1
+    assert sum(1 for e in q.load() if e["delivered"] is False) == 1
 
 
 # --- CodexAdapter.transcript_stream (reaproveita TranscriptTailer + parse_rollout_line) ------

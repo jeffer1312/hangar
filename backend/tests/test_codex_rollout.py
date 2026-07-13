@@ -24,6 +24,24 @@ def test_user_message():
     assert len(evs) == 1 and evs[0].kind == "user_msg" and "oi" in evs[0].text
 
 
+def test_user_environment_context_wrapper_ignored():
+    # Fix 1: o Codex injeta um response_item/message/role:"user" no inicio de toda thread cujo
+    # unico bloco input_text e um wrapper de contexto interno -- nao e chat do usuario, nao pode
+    # virar a 1a bolha da sessao.
+    obj = {"timestamp": "t", "type": "response_item",
+           "payload": {"type": "message", "role": "user",
+                       "content": [{"type": "input_text",
+                                    "text": "<environment_context>\ncwd: /x\n</environment_context>"}]}}
+    assert parse_rollout_obj(obj) == []
+
+
+def test_user_generic_instructions_wrapper_ignored():
+    obj = {"timestamp": "t", "type": "response_item",
+           "payload": {"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "<user_instructions>seja util</user_instructions>"}]}}
+    assert parse_rollout_obj(obj) == []
+
+
 def test_assistant_message_output_text():
     obj = {"timestamp": "t", "type": "response_item",
            "payload": {"type": "message", "role": "assistant",
