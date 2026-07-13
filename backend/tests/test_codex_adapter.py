@@ -4,6 +4,7 @@ spawnar o codex real — o wire protocol ja e testado em test_codex_appserver.py
 import json
 
 from app.adapters.codex.adapter import CodexAdapter, map_state
+from app.adapters.codex.preview import CodexPreviewSource
 from app.state import StateEvent
 
 
@@ -106,6 +107,54 @@ async def test_state_monitor_carries_status_line_without_changing_state():
     events = [ev async for ev in adapter.state_monitor("sess", lambda: "sess")]
     assert [e.state for e in events] == ["working", "working"]  # segue o ultimo estado conhecido
     assert events[1].status_line and "50" in events[1].status_line
+
+
+async def test_state_monitor_accumulates_deltas_into_preview_source():
+    # item/agentMessage/delta e INCREMENTAL (docs/codex-app-server-contract.md: "o","k" -> "ok").
+    # state_monitor acumula no buffer do turno e empurra pro CodexPreviewSource -- efeito colateral
+    # ADICIONAL aos StateEvent (working/idle), que continuam saindo como antes (Task 4).
+    adapter = CodexAdapter()
+    client = _FakeClient([
+        {"method": "turn/started", "params": {"threadId": "t"}},
+        {"method": "item/agentMessage/delta", "params": {"delta": "o"}},
+        {"method": "item/agentMessage/delta", "params": {"delta": "k"}},
+        {"method": "turn/completed", "params": {"threadId": "t"}},
+    ])
+    adapter.attach("sess-preview", client, "t")
+    events = [ev async for ev in adapter.state_monitor("sess-preview", lambda: "sess-preview")]
+    assert [e.state for e in events] == ["working", "idle"]  # StateEvents intactos (nao regrediu)
+    # o preview foi empurrado a cada delta (visivel via subscribe: "o" depois "ok") e limpo no fim.
+    assert CodexPreviewSource.get("sess-preview").text == ""  # turn/completed -> push("") limpa
+
+
+async def test_state_monitor_pushes_incremental_deltas_before_clearing():
+    adapter = CodexAdapter()
+    client = _FakeClient([
+        {"method": "turn/started", "params": {"threadId": "t"}},
+        {"method": "item/agentMessage/delta", "params": {"delta": "o"}},
+    ])
+    adapter.attach("sess-preview2", client, "t")
+    events = [ev async for ev in adapter.state_monitor("sess-preview2", lambda: "sess-preview2")]
+    assert [e.state for e in events] == ["working"]
+    assert CodexPreviewSource.get("sess-preview2").text == "o"  # sem turn/completed, nao limpou
+
+
+async def test_state_monitor_resets_buffer_on_new_turn_started():
+    # 1o turno acumula "ok" e completa (limpa); 2o turno comeca do zero -- sem isto, um delta "!"
+    # sozinho no 2o turno viraria "ok!" (vazamento do buffer do turno anterior).
+    adapter = CodexAdapter()
+    client = _FakeClient([
+        {"method": "turn/started", "params": {}},
+        {"method": "item/agentMessage/delta", "params": {"delta": "o"}},
+        {"method": "item/agentMessage/delta", "params": {"delta": "k"}},
+        {"method": "turn/completed", "params": {}},
+        {"method": "turn/started", "params": {}},
+        {"method": "item/agentMessage/delta", "params": {"delta": "!"}},
+    ])
+    adapter.attach("sess-preview3", client, "t")
+    async for _ in adapter.state_monitor("sess-preview3", lambda: "sess-preview3"):
+        pass
+    assert CodexPreviewSource.get("sess-preview3").text == "!"
 
 
 # --- CodexAdapter.send_prompt / deliverable -------------------------------------------------

@@ -3,6 +3,7 @@ import json
 import time
 from pathlib import Path
 from app.adapters import get_adapter
+from app.adapters.codex.preview import CodexPreviewSource
 from app.pqueue import PromptQueue, _transcript_start_ts
 from app.preview import PreviewBroker, _norm
 from app.models import PreviewEvent
@@ -111,7 +112,12 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude"):
     monitor_stream = adapter.state_monitor(
         name, sid_get=lambda: Path(current_jsonl).stem if current_jsonl else None)
     pqueue = PromptQueue(name)
-    broker = PreviewBroker.get(name)
+    # Fonte do preview ao vivo ramifica por provider: Claude nao tem push (o app-server manda os
+    # deltas, o TUI do Claude nao) -> continua no PreviewBroker (poll do pane). Codex nao tem pane
+    # -> CodexPreviewSource, alimentado por push do CodexAdapter.state_monitor. Mesma interface
+    # publica (get/subscribe) -> o resto do pump (preview_pump/_enqueue_preview/_already_committed)
+    # fica IGUAL pras duas fontes.
+    broker = CodexPreviewSource.get(name) if provider == "codex" else PreviewBroker.get(name)
     # Inicio da sessao atual: poda entradas de fila pre-/clear no live SSE (mesma regra do history).
     start_ts = _transcript_start_ts(jsonl)
     queue: asyncio.Queue = asyncio.Queue()
@@ -205,7 +211,8 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude"):
                 queue.put_nowait(("__reset__", live))
 
     async def preview_pump():
-        # Assina o broker COMPARTILHADO da sessao (1 loop de capture pra N conexoes). Coalesce (slot +
+        # Assina a fonte COMPARTILHADA da sessao (1 broker pra N conexoes: PreviewBroker faz 1 loop
+        # de capture do pane; CodexPreviewSource so guarda o ultimo push, sem loop). Coalesce (slot +
         # 1 marcador). SUPRIME texto JA COMMITADO no .jsonl (gap entre blocos) -> manda "" pra nao
         # duplicar. Fail-loud como os outros pumps.
         try:
