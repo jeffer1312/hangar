@@ -21,6 +21,9 @@ class _FakeClient:
 
     async def request(self, method: str, params: dict, timeout: float = 30.0) -> dict:
         self.requests.append((method, params))
+        # turn/start devolve um Turn real -> expõe o turnId (necessario pro turn/interrupt).
+        if method == "turn/start":
+            return {"turn": {"id": "turn-fake"}}
         return {}
 
 
@@ -188,6 +191,56 @@ async def test_deliverable_false_during_turn():
     async for _ in adapter.state_monitor("sess", lambda: "sess"):
         pass
     assert await adapter.deliverable("sess") is False
+
+
+# --- CodexAdapter.interrupt (turn/interrupt) ------------------------------------------------
+
+async def test_interrupt_calls_turn_interrupt():
+    # send_prompt captura o turnId do turno recem-iniciado; interrupt manda turn/interrupt com
+    # threadId+turnId (shape confirmado no schema TurnInterruptParams da 0.141.0).
+    adapter = CodexAdapter()
+    client = _FakeClient([])
+    adapter.attach("sess", client, "thread-1")
+    await adapter.send_prompt("sess", "oi")
+    assert await adapter.interrupt("sess") is True
+    assert ("turn/interrupt", {"threadId": "thread-1", "turnId": "turn-fake"}) in client.requests
+
+
+async def test_interrupt_noop_when_not_attached():
+    adapter = CodexAdapter()
+    assert await adapter.interrupt("ghost") is False
+
+
+async def test_interrupt_noop_when_no_turn_in_flight():
+    # anexada mas sem turno em voo (nunca deu send_prompt) -> nada a interromper, no-op seguro.
+    adapter = CodexAdapter()
+    client = _FakeClient([])
+    adapter.attach("sess", client, "thread-1")
+    assert await adapter.interrupt("sess") is False
+    assert client.requests == []
+
+
+# --- CodexAdapter drain-on-complete (P2) ----------------------------------------------------
+
+async def test_state_monitor_drains_queue_on_turn_completed(monkeypatch):
+    # turn/completed dispara adapter.drain -> a fila pendente (msgs enviadas durante o working) e
+    # entregue quando o turno termina. Aqui so verifica o WIRING (drain mockado).
+    adapter = CodexAdapter()
+    client = _FakeClient([
+        {"method": "turn/started", "params": {}},
+        {"method": "turn/completed", "params": {}},
+    ])
+    adapter.attach("sess-drain", client, "t")
+    calls = []
+
+    async def fake_drain(name, path):
+        calls.append((name, path))
+        return 0
+
+    monkeypatch.setattr(adapter, "drain", fake_drain)
+    async for _ in adapter.state_monitor("sess-drain", lambda: "sess-drain"):
+        pass
+    assert calls == [("sess-drain", "")]
 
 
 # --- CodexAdapter.transcript_stream (reaproveita TranscriptTailer + parse_rollout_line) ------
