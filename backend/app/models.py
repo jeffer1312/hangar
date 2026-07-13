@@ -9,6 +9,9 @@ class SessionInfo(BaseModel):
     name: str
     cwd: Optional[str] = None
     jsonl: Optional[str] = None
+    # Qual Adapter dirige esta sessao (app.adapters.get_adapter). "claude" cobre TODA sessao de hoje
+    # (o unico provider registrado); futuros providers (ex: "codex") setam no create().
+    provider: str = "claude"
     state: State = "idle"
     last_activity: Optional[float] = None
     # Vinculo nome<->transcript e confiavel? True = resolvido por --session-id/fd/cache (determinismo).
