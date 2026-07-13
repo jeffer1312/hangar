@@ -38,8 +38,11 @@
     crumbs?: { server: string; session: string; branch?: string; dirty?: boolean } | null;
     stateLabel?: string;
     stateColor?: string;
+    // Badge discreto do provider (ex: "Codex") junto do titulo/crumb — so aparece quando != Claude
+    // (Claude e o caso comum, sem ruido visual extra). Ver Chat.svelte.
+    providerLabel?: string | null;
   }
-  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, limited = false, limitReset = null, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, onOpenRun, runRunning = false, working = false, subtitle = null, subtitleHot = null, crumbs = null, stateLabel, stateColor }: Props = $props();
+  let { title = 'claude pocket', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, limited = false, limitReset = null, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, onOpenRun, runRunning = false, working = false, subtitle = null, subtitleHot = null, crumbs = null, stateLabel, stateColor, providerLabel = null }: Props = $props();
 </script>
 
 <nav class="navbar">
@@ -65,11 +68,13 @@
           <span class="crumb-sep" aria-hidden="true">›</span>
           <span class="crumb crumb-branch">{crumbs.branch}{#if crumbs.dirty}<span class="dirty">*</span>{/if}</span>
         {/if}
+        {#if providerLabel}<span class="provider-badge">{providerLabel}</span>{/if}
         {#if stateLabel}<span class="state-pill" style="color: {stateColor};">{stateLabel}</span>{/if}
       </div>
     {:else if onTitleTap}
       <button class="title-chip" onclick={onTitleTap} aria-label="Trocar de sessão">
         <span class="chip-text">{title}</span>
+        {#if providerLabel}<span class="provider-badge">{providerLabel}</span>{/if}
         <svg class="chip-chevron" width="11" height="7" viewBox="0 0 11 7" fill="none" aria-hidden="true">
           <path d="M1 1l4.5 4.5L10 1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
@@ -201,6 +206,14 @@
     flex-shrink: 0; margin-left: var(--space-1);
     font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.02em;
     padding: 2px 9px; border-radius: var(--radius-full); background: var(--bg-elevated);
+  }
+
+  /* Badge discreto do provider (ex: "Codex") junto do titulo/crumb. */
+  .provider-badge {
+    flex-shrink: 0; margin-left: var(--space-1);
+    font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.02em;
+    padding: 2px 9px; border-radius: var(--radius-full);
+    background: var(--accent-dim); color: var(--accent);
   }
 
   /* Titulo + subtitulo empilhados (ex: lista de sessoes com resumo). */

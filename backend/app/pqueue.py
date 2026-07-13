@@ -318,12 +318,21 @@ class PromptQueue:
                 yield ev
 
 
-def merged_history(name: str, jsonl: str) -> list[ChatEvent]:
+def merged_history(name: str, jsonl: str, provider: str = "claude") -> list[ChatEvent]:
     """Historico = eventos do transcript + entradas da fila ainda NAO absorvidas pelo transcript,
     ordenado por timestamp. Dedup TS-AWARE: descarta entrada da fila cujo texto ja apareca (por
     linha) num user_msg commitado DEPOIS dela (o transcript grava o prompt apos a entrega). Match
     por texto sozinho engolia repeticao: o 2o "ok" enfileirado sumia por causa do 1o ja commitado.
-    Entradas sem timestamp herdam o ts anterior (carry-forward) pra manter a ordem do arquivo."""
+    Entradas sem timestamp herdam o ts anterior (carry-forward) pra manter a ordem do arquivo.
+
+    provider: qual parser usar pra `jsonl` -- Claude e Codex tem shapes diferentes (ver
+    app.adapters.codex.rollout). _ts_of_obj fica igual pros dois: ambos gravam `timestamp` ISO
+    no topo da linha. Import local do parser do Codex evita ciclo (app.adapters importa
+    app.pqueue no boot, pra PromptQueue)."""
+    if provider == "codex":
+        from app.adapters.codex.rollout import parse_rollout_obj as _parse
+    else:
+        _parse = parse_obj
     items: list[tuple[float, int, ChatEvent]] = []
     committed_ts: dict[str, float] = {}  # linha normalizada -> maior ts em que commitou
     prev_ts = 0.0
@@ -341,7 +350,7 @@ def merged_history(name: str, jsonl: str) -> list[ChatEvent]:
                     obj = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
                     continue
-                evs = parse_obj(obj)
+                evs = _parse(obj)
                 if not evs:
                     continue
                 line_ts = _ts_of_obj(obj)

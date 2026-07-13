@@ -31,12 +31,18 @@
     onOpenGit: () => void;
     onOpenPreview: () => void;
     inputText?: string;  // bindable: o pai injeta um draft (ex: interrupt devolve a msg pendente)
+    // Provider da sessao (Chat.svelte, via allSessions). undefined/"claude" = comportamento de
+    // sempre; "codex" esconde o picker de /model e o autocomplete de slash-commands (Claude-only —
+    // o Codex nao tem nem um nem outro).
+    provider?: 'claude' | 'codex';
   }
   let {
     sessionName, sessionState, status, onSend, onCommand, onInterrupt, onExpandUsage, onOpenGit,
     onOpenPreview,
     inputText = $bindable(''),
+    provider = 'claude',
   }: Props = $props();
+  const isCodex = $derived(provider === 'codex');
 
   // ── Slash commands: busca uma vez por sessao (com cache) ────────────────────
   // Comeca vazio; o $effect popula na hora a partir do cache (sincrono) ou da rede.
@@ -45,6 +51,7 @@
   let confirmStopOpen = $state(false);
 
   $effect(() => {
+    if (isCodex) return;   // Codex nao tem slash-commands do Claude Code -> nem busca a lista
     const sn = sessionName;
     const cached = commandCache.get(sn);
     if (cached) {
@@ -575,9 +582,11 @@
   <div class="composer-card" onclick={focusInput}>
     <div class="composer-top">
       <div class="top-left">
-        <button class="slash-btn" onclick={() => (commandSheetOpen = true)} aria-label="Comandos">
-          <span class="slash-glyph" aria-hidden="true">/</span>
-        </button>
+        {#if !isCodex}
+          <button class="slash-btn" onclick={() => (commandSheetOpen = true)} aria-label="Comandos">
+            <span class="slash-glyph" aria-hidden="true">/</span>
+          </button>
+        {/if}
         <button class="slash-btn" onclick={onOpenPreview} aria-label="Preview de projeto rodando">
           <span class="slash-glyph" aria-hidden="true">🖥</span>
         </button>
@@ -619,7 +628,9 @@
       </div>
     {/if}
 
-    <SlashSuggest {commands} query={inputText} onPick={handleSuggestPick} />
+    {#if !isCodex}
+      <SlashSuggest {commands} query={inputText} onPick={handleSuggestPick} />
+    {/if}
 
     <textarea
       bind:this={textareaEl}
@@ -659,17 +670,19 @@
 
     <div class="control-row">
       <div class="control-left">
-        <button
-          class="model-pill"
-          onclick={() => (sheetOpen = true)}
-          aria-label="Modelo, esforço e contexto"
-        >
-          <span class="pill-label">
-            <span class="pill-model">{pillModel ?? 'Modelo'}</span>
-            {#if pillEffort}<span class="pill-effort">· {pillEffort}</span>{/if}
-          </span>
-          <ContextRing pct={status?.ctxPct ?? null} />
-        </button>
+        {#if !isCodex}
+          <button
+            class="model-pill"
+            onclick={() => (sheetOpen = true)}
+            aria-label="Modelo, esforço e contexto"
+          >
+            <span class="pill-label">
+              <span class="pill-model">{pillModel ?? 'Modelo'}</span>
+              {#if pillEffort}<span class="pill-effort">· {pillEffort}</span>{/if}
+            </span>
+            <ContextRing pct={status?.ctxPct ?? null} />
+          </button>
+        {/if}
         <button class="attach-btn" onclick={() => fileInput?.click()} aria-label="Anexar arquivo">
           <IconAttach size={20} />
         </button>

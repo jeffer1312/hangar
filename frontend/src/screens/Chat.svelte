@@ -123,8 +123,8 @@
     createOpen = true;
   }
 
-  async function handleCreate(name: string, cwd?: string) {
-    await createSession(name, cwd);
+  async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: 'claude' | 'codex') {
+    await createSession(name, cwd, configDir, provider);
     onNavigateToChat(name);
   }
 
@@ -186,6 +186,10 @@
   }
 
   const currentState = $derived<State>(stateEvent?.state ?? 'idle');
+  // Provider desta sessao (allSessions ja carregada pro switcher/nav — sem round-trip extra).
+  // "claude" e o caso comum e some do header; so "codex" ganha badge + esconde controles Claude-only.
+  const sessionProvider = $derived(allSessions.find((s) => s.name === sessionName)?.provider);
+  const isCodex = $derived(sessionProvider === 'codex');
   // Espelho do pane (overlays so-TUI: /status, /config, /help, pickers). MANUAL: o usuario abre pelo
   // botao da NavBar ou pela pilula de aviso — NUNCA toma a tela sozinho (auto-takeover assustava +
   // prendia). tuiOverlay = ha um overlay aberto que SO da pra interagir pela TUI (sem opcoes nativas;
@@ -692,7 +696,7 @@
 <div class="chat-screen" bind:this={screenEl} style:--nav-h={navH + 'px'}>
   <div class="sr-only" role="status">{stateAnnounce}</div>
   <div class="navbar-mount" bind:this={navEl}>
-    <NavBar title={sessionName} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} onOpenRun={() => (runOpen = true)} {runRunning} working={currentState === 'working'} />
+    <NavBar title={sessionName} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} onOpenRun={() => (runOpen = true)} {runRunning} working={currentState === 'working'} providerLabel={isCodex ? 'Codex' : null} />
   </div>
 
   {#if loading}
@@ -778,6 +782,7 @@
         onExpandUsage={() => (usageOpen = true)}
         onOpenGit={() => (gitOpen = true)}
         onOpenPreview={() => (previewOpen = true)}
+        provider={sessionProvider}
       />
     {/if}
   </div>

@@ -335,6 +335,9 @@ class CreateBody(_StrictBody):
     name: str = Field(min_length=1)
     cwd: str = Field(min_length=1)
     config_dir: str | None = None
+    # Qual Adapter cria a sessao (app.adapters.get_adapter). Default "claude" preserva o
+    # comportamento de hoje pros clientes que ainda nao mandam o campo.
+    provider: str = "claude"
 
 
 class PushSubscribeBody(_StrictBody):
@@ -440,11 +443,21 @@ def costs_endpoint():
 
 
 @app.post("/api/sessions", dependencies=[Depends(require_auth)], response_model=SessionInfo)
-def create_session(body: CreateBody):
+async def create_session(body: CreateBody):
+    # handler async pra poder `await registry.create_codex` (precisa viver no loop principal —
+    # ver docstring de create_codex). O caminho Claude (registry.create) e SINCRONO e spawna um
+    # subprocess tmux (bloqueante) -> rodar direto aqui travaria o event loop / o SSE de outras
+    # sessoes; vai pro threadpool via asyncio.to_thread, igual aos outros handlers async deste
+    # arquivo que chamam registry.list()/save_upload (menor risco de regressao: comportamento e
+    # exceções do create() Claude ficam IDENTICOS, so a chamada muda de sync p/ thread).
+    if body.provider not in ("claude", "codex"):
+        raise HTTPException(400, "provider invalido")
     if body.config_dir is not None and body.config_dir not in {c.path for c in list_config_dirs()}:
         raise HTTPException(400, "config_dir invalido")
     try:
-        return registry.create(body.name, body.cwd, body.config_dir)
+        if body.provider == "codex":
+            return await registry.create_codex(body.name, body.cwd)
+        return await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir)
     except ValueError as e:
         raise HTTPException(409, str(e))
 
@@ -541,11 +554,15 @@ def resume_session(name: str, body: ResumeBody):
 
 @app.get("/api/sessions/{name}/history", dependencies=[Depends(require_auth)], response_model=list[ChatEvent])
 def history(name: str):
-    jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
-    if not jsonl:
+    info = next((s for s in registry.list() if s.name == name), None)
+    if not info or not info.jsonl:
         raise HTTPException(404, "session or transcript not found")
     from app.pqueue import merged_history
-    return merged_history(name, jsonl)
+    # provider: o rollout do Codex tem um shape DIFERENTE do jsonl do Claude (ver
+    # app.adapters.codex.rollout) -- sem isto merged_history tentava o parser do Claude em toda
+    # linha do rollout, nunca casava e devolvia [] (chat do Codex abria vazio ate o SSE encher via
+    # backfill do tail; reabrir apos ficar horas em segundo plano perdia o que passou do tail-200).
+    return merged_history(name, info.jsonl, provider=info.provider)
 
 
 @app.get("/api/sessions/{name}/workflows", dependencies=[Depends(require_auth)])
@@ -591,10 +608,14 @@ async def sessions_events():
 async def events(name: str):
     # handler async -> registry.list() (subprocess tmux) vai pro threadpool pra nao bloquear o loop.
     sessions = await asyncio.to_thread(registry.list)
-    jsonl = next((s.jsonl for s in sessions if s.name == name), None)
-    if not jsonl:
+    info = next((s for s in sessions if s.name == name), None)
+    if not info or not info.jsonl:
         raise HTTPException(404, "session or transcript not found")
-    return EventSourceResponse(merged_events(name, jsonl))
+    # provider da sessao (SessionInfo.provider, ja marcado por registry.list() -- tmux -> "claude",
+    # sidecar Codex -> "codex") -> merged_events escolhe o Adapter certo (tail do jsonl, monitor de
+    # estado, fonte do preview). Sem isto TODA sessao caia no default "claude" do merged_events e o
+    # SSE do Codex nunca ligava (chat vazio, sem estado ao vivo).
+    return EventSourceResponse(merged_events(name, info.jsonl, provider=info.provider))
 
 
 def _send_one(name: str, text: str) -> dict:
