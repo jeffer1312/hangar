@@ -3,11 +3,22 @@ Traduz o envelope `{type, payload}` do Codex; regras confirmadas contra codex-cl
 (fixture em tests/fixtures/codex/rollout_sample.jsonl)."""
 import hashlib
 import json
+import re
 
 from app.transcript import ChatEvent
 
 # message.role que sao system prompt/instrucoes internas do Codex, nao chat do usuario.
 _NON_CHAT_ROLES = {"developer", "system"}
+
+# O Codex injeta, no 1o response_item de toda thread, um role:"user" cujo unico conteudo e um
+# wrapper de contexto interno (<environment_context>...</environment_context> ou variantes tipo
+# <user_instructions>...</user_instructions>) -- nao e chat do usuario. Conservador: so casa se o
+# texto (apos strip) COMECA com a tag, pra nao descartar uma mensagem real que so mencione a tag.
+_CONTEXT_WRAPPER_RE = re.compile(r"^<(environment_context|\w+_instructions)>")
+
+
+def _is_context_wrapper(text: str) -> bool:
+    return bool(_CONTEXT_WRAPPER_RE.match(text.strip()))
 
 
 def _event_id(obj: dict) -> str:
@@ -46,6 +57,8 @@ def parse_rollout_obj(obj: dict) -> list[ChatEvent]:
             return []
         if role == "user":
             text = _blocks_text(payload.get("content"), "input_text")
+            if _is_context_wrapper(text):
+                return []
             return [ChatEvent(kind="user_msg", id=_event_id(obj), text=text)]
         if role == "assistant":
             text = _blocks_text(payload.get("content"), "output_text")

@@ -636,7 +636,7 @@
       bind:this={textareaEl}
       bind:value={inputText}
       class="composer-textarea"
-      placeholder="Mensagem para Claude…"
+      placeholder={isCodex ? "Mensagem para Codex…" : "Mensagem para Claude…"}
       rows={1}
       oninput={handleInput}
       onkeydown={handleKeydown}
