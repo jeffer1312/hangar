@@ -538,7 +538,7 @@ class SessionRegistry:
         return infos
 
     def create(self, name: str, cwd: str, config_dir: str | None = None,
-               resume_session_id: str | None = None) -> SessionInfo:
+               resume_session_id: str | None = None, provider: str = "claude") -> SessionInfo:
         # Nome tmux nao aceita "."/":"/espaco -> sanitiza igual ao rename. Varias sessoes na MESMA
         # pasta sao permitidas: cada uma tem nome unico + --session-id proprio -> jsonl proprio.
         name = re.sub(r"[^A-Za-z0-9_-]", "-", name.strip()).strip("-")
@@ -549,6 +549,8 @@ class SessionRegistry:
         # resume_session_id (retomar conversa MORTA do Arquivo): reusa o uuid existente e sobe com
         # `--resume` em vez de `--session-id` -> o claude CONTINUA aquele jsonl (nao comeca um novo).
         # Mesmo uuid ja validado no endpoint, mas revalida aqui tambem (vai direto pro comando do shell).
+        # ponytail: resume so cobre o path do Claude por ora (--resume nao existe no Codex — a Task 5
+        # do plano de Codex resolve o resume dele por fora deste branch).
         if resume_session_id is not None:
             try:
                 uuid.UUID(resume_session_id)
@@ -558,7 +560,10 @@ class SessionRegistry:
             cmd = f"claude --resume {sid}"
         else:
             sid = str(uuid.uuid4())
-            cmd = f"claude --session-id {sid}"
+            # spawn_command vem do Adapter do provider (import local: get_adapter->ClaudeAdapter nao
+            # importa registry, mas evita qualquer ciclo se um adapter futuro vier a importar daqui).
+            from app.adapters import get_adapter
+            cmd = " ".join(get_adapter(provider).spawn_command(cwd, sid))
         base = (Path(config_dir) / "projects") if config_dir else self.projects_dir
         jsonl = str(base / sanitize_cwd(cwd) / f"{sid}.jsonl")
         if not tmux.new_session(name, cwd, cmd, config_dir):
@@ -574,7 +579,7 @@ class SessionRegistry:
         # Fixa o jsonl FRESCO no cache na hora: resolve() devolve este uuid mesmo antes do claude
         # escrever o arquivo, evitando o fallback newest-by-mtime pescar um jsonl ja existente da pasta.
         self._jsonl_cache[name] = jsonl
-        return SessionInfo(name=name, cwd=cwd, jsonl=jsonl)
+        return SessionInfo(name=name, cwd=cwd, jsonl=jsonl, provider=provider)
 
     def rename(self, old: str, new: str) -> None:
         # Cache e keyed por NOME -> ao renomear, move a entrada pro nome novo e esquece o velho. Senao
