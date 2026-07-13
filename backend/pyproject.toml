@@ -24,3 +24,6 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 asyncio_mode = "auto"
+markers = [
+    "integration: toca binario/rede externo (codex real) - skip por default",
+]
