@@ -4,6 +4,10 @@ export interface SessionInfo {
   name: string;
   cwd?: string;
   jsonl?: string | null;
+  // Qual Adapter dirige a sessao (app.adapters.get_adapter no backend). "claude" cobre toda
+  // sessao de hoje; "codex" identifica as criadas via registry.create_codex — o front usa isto
+  // pra esconder controles Claude-only (picker de /model, slash-commands) e mostrar o badge.
+  provider?: 'claude' | 'codex';
   state: State;
   last_activity?: number | null;
   // Vínculo nome<->transcript confiável? false = claude manual sem --session-id (chute mtime) ->

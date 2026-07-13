@@ -320,6 +320,94 @@ def test_create_rejects_unknown_config_dir(api_client, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Task 6: POST /api/sessions ramifica por `provider` (default "claude" preserva o caminho de
+# hoje). Codex e async (create_codex, mocado -- nao spawna o app-server real); Claude continua
+# indo pro registry.create sincrono (agora via asyncio.to_thread, ver docstring do endpoint).
+# ---------------------------------------------------------------------------
+def test_create_default_provider_routes_to_claude_create(api_client):
+    with patch("app.api.registry.create",
+              return_value=SessionInfo(name="x", cwd="/tmp", provider="claude")) as cr:
+        r = api_client.post("/api/sessions", headers=_h(), json={"name": "x", "cwd": "/tmp"})
+    assert r.status_code == 200
+    assert r.json()["provider"] == "claude"
+    cr.assert_called_once_with("x", "/tmp", None)
+
+
+def test_create_explicit_claude_provider_routes_to_claude_create(api_client):
+    with patch("app.api.registry.create",
+              return_value=SessionInfo(name="x", cwd="/tmp", provider="claude")) as cr:
+        r = api_client.post("/api/sessions", headers=_h(),
+                            json={"name": "x", "cwd": "/tmp", "provider": "claude"})
+    assert r.status_code == 200
+    cr.assert_called_once_with("x", "/tmp", None)
+
+
+def test_create_codex_provider_routes_to_create_codex(api_client):
+    from unittest.mock import AsyncMock
+    fake = AsyncMock(return_value=SessionInfo(name="cx", cwd="/tmp", provider="codex"))
+    with patch("app.api.registry.create_codex", fake), \
+         patch("app.api.registry.create") as claude_create:
+        r = api_client.post("/api/sessions", headers=_h(),
+                            json={"name": "cx", "cwd": "/tmp", "provider": "codex"})
+    assert r.status_code == 200
+    assert r.json()["provider"] == "codex"
+    fake.assert_awaited_once_with("cx", "/tmp")
+    claude_create.assert_not_called()   # nao passa pelo caminho tmux/Claude
+
+
+def test_create_rejects_unknown_provider(api_client):
+    with patch("app.api.registry.create") as cr, \
+         patch("app.api.registry.create_codex") as cc:
+        r = api_client.post("/api/sessions", headers=_h(),
+                            json={"name": "x", "cwd": "/tmp", "provider": "gemini"})
+    assert r.status_code == 400
+    cr.assert_not_called()
+    cc.assert_not_called()
+
+
+def test_create_codex_conflict_maps_to_409(api_client):
+    from unittest.mock import AsyncMock
+    fake = AsyncMock(side_effect=ValueError("ja existe uma sessao com esse nome"))
+    with patch("app.api.registry.create_codex", fake):
+        r = api_client.post("/api/sessions", headers=_h(),
+                            json={"name": "cx", "cwd": "/tmp", "provider": "codex"})
+    assert r.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Task 6: /events e /history descobrem o provider da sessao (via registry.list()) e repassam pro
+# merged_events / merged_history -- sem isto TODA sessao caia no default "claude" desses helpers
+# e o caminho Codex (parser do rollout, Adapter certo) nunca era usado de verdade.
+# ---------------------------------------------------------------------------
+def test_events_route_passes_session_provider_to_merged_events():
+    # Chama a coroutine da rota DIRETO (nao via TestClient): EventSourceResponse so consome o
+    # generator ao ser efetivamente streamado, mas abrir a conexao SSE de verdade no TestClient
+    # pendura o teste esperando o stream fechar. Confirma so o roteamento (provider certo pro
+    # merged_events), que e o que o Task 6 mudou aqui.
+    import asyncio
+    info = SessionInfo(name="cx", cwd="/tmp", jsonl="/r/cx.jsonl", provider="codex")
+
+    async def _fake_merged_events(name, jsonl, provider="claude"):
+        return
+        yield  # pragma: no cover -- nunca alcancado; so torna isto um async generator
+
+    with patch("app.api.registry.list", return_value=[info]), \
+         patch("app.api.merged_events", side_effect=_fake_merged_events) as me:
+        resp = asyncio.run(api_mod.events("cx"))
+    assert resp is not None
+    me.assert_called_once_with("cx", "/r/cx.jsonl", provider="codex")
+
+
+def test_history_route_passes_session_provider_to_merged_history(api_client):
+    info = SessionInfo(name="cx", cwd="/tmp", jsonl="/r/cx.jsonl", provider="codex")
+    with patch("app.api.registry.list", return_value=[info]), \
+         patch("app.pqueue.merged_history", return_value=[]) as mh:
+        r = api_client.get("/api/sessions/cx/history", headers=_h())
+    assert r.status_code == 200
+    mh.assert_called_once_with("cx", "/r/cx.jsonl", provider="codex")
+
+
+# ---------------------------------------------------------------------------
 # Feature #5: corpo rico do push de awaiting (askq -> classify -> fallback) + endpoints de mute/quiet-hours
 # ---------------------------------------------------------------------------
 from types import SimpleNamespace

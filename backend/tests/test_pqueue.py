@@ -118,6 +118,35 @@ def test_merged_history_ignores_delivered_flag(tmp_path):
     assert any(e.id.startswith("queued-") and e.text == "oi claude" for e in hist)
 
 
+def test_merged_history_provider_claude_ignores_codex_rollout_shape(tmp_path):
+    # Baseline: uma linha no shape do ROLLOUT do Codex (envelope response_item/payload) nao bate
+    # com o parser do Claude (parse_obj espera obj["message"]) -> sem branch por provider isto
+    # devolvia [] pra sessoes Codex (chat abria vazio ate o SSE encher via backfill do tail).
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({
+        "type": "response_item", "timestamp": "2026-01-01T00:00:00Z",
+        "payload": {"type": "message", "role": "user",
+                    "content": [{"type": "input_text", "text": "oi"}]},
+    }) + "\n", encoding="utf-8")
+    assert pqueue.merged_history("s", str(j)) == []                    # default "claude"
+    assert pqueue.merged_history("s", str(j), provider="claude") == []
+
+
+def test_merged_history_provider_codex_parses_rollout_shape(tmp_path):
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({
+        "type": "response_item", "timestamp": "2026-01-01T00:00:00Z",
+        "payload": {"type": "message", "role": "user",
+                    "content": [{"type": "input_text", "text": "oi"}]},
+    }) + "\n", encoding="utf-8")
+    hist = pqueue.merged_history("s", str(j), provider="codex")
+    assert len(hist) == 1
+    assert hist[0].kind == "user_msg"
+    assert hist[0].text == "oi"
+
+
 def test_prune_before_drops_previous_session_entries():
     q = PromptQueue("s")
     q.path.write_text(

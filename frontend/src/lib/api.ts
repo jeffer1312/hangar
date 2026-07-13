@@ -115,10 +115,15 @@ export function listClaudeConfigs(): Promise<ConfigDirInfo[]> {
   return apiFetch<ConfigDirInfo[]>('/api/claude-configs');
 }
 
-export function createSession(name: string, cwd?: string, configDir?: string | null): Promise<SessionInfo> {
+export function createSession(
+  name: string,
+  cwd?: string,
+  configDir?: string | null,
+  provider: 'claude' | 'codex' = 'claude',
+): Promise<SessionInfo> {
   return apiFetch<SessionInfo>('/api/sessions', {
     method: 'POST',
-    body: JSON.stringify({ name, cwd, config_dir: configDir ?? null }),
+    body: JSON.stringify({ name, cwd, config_dir: configDir ?? null, provider }),
   });
 }
 
