@@ -569,7 +569,11 @@ class SessionRegistry:
         # Por isso o create() sync e Claude-only e recusa Codex alto (Task 6 fia o endpoint async).
         if provider == "codex":
             raise ValueError("sessoes Codex sao criadas via create_codex (async)")
-        if tmux.has_session(name):
+        # Unicidade contra tmux (Claude) E sidecars Codex: sem o segundo check, um nome de sessao
+        # Codex reusado aqui geraria DOIS SessionInfo com o mesmo name no list() (front keyed por
+        # nome) e o kill(name) cairia no branch Codex (checado 1o) -> fecharia o client Codex sem
+        # matar o pane tmux (pane orfao inkillavel).
+        if tmux.has_session(name) or codex_sessions.exists(name):
             raise ValueError("ja existe uma sessao com esse nome")
         # resume_session_id (retomar conversa MORTA do Arquivo): reusa o uuid existente e sobe com
         # `--resume` em vez de `--session-id` -> o claude CONTINUA aquele jsonl (nao comeca um novo).
@@ -636,11 +640,20 @@ class SessionRegistry:
         if not thread_id or not rollout_path:
             await client.close()
             raise ValueError("thread/start nao devolveu id/path")
-        # Sidecar duravel: sobrevive ao restart do backend (identidade + ponteiro pro rollout).
-        codex_sessions.save(name, thread_id, rollout_path, cwd)
-        # Client vivo (efemero) anexado no adapter; limpa fila/then herdados de nome reusado.
-        from app.adapters import get_adapter
-        get_adapter("codex").attach(name, client, thread_id)
+        # save() (mkdir+write_text -> pode dar OSError: disco cheio/permissao) e attach() rodam com o
+        # app-server JA spawnado -> qualquer falha aqui tem que fechar o client, senao vira orfao. Se
+        # save deu certo mas attach falhou, remove o sidecar recem-escrito (estado consistente: nao
+        # fica sidecar apontando pra um client fechado).
+        try:
+            # Sidecar duravel: sobrevive ao restart do backend (identidade + ponteiro pro rollout).
+            codex_sessions.save(name, thread_id, rollout_path, cwd)
+            # Client vivo (efemero) anexado no adapter; limpa fila/then herdados de nome reusado.
+            from app.adapters import get_adapter
+            get_adapter("codex").attach(name, client, thread_id)
+        except Exception:
+            await client.close()
+            codex_sessions.delete(name)  # idempotente; remove sidecar orfao se save ja tinha passado
+            raise
         PromptQueue(name).clear()
         ThenLink(name).clear()
         return SessionInfo(name=name, cwd=cwd, jsonl=rollout_path, provider="codex")
