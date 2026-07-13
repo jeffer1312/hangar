@@ -172,6 +172,10 @@ class CodexAdapter:
             method = notif.get("method")
             if method == "turn/started":
                 buf = ""  # novo turno -- zera pra nao vazar o texto do turno anterior
+                # guarda o turnId do turno em voo (turn/interrupt exige threadId+turnId).
+                turn_id = ((notif.get("params") or {}).get("turn") or {}).get("id")
+                if turn_id:
+                    sess["turn_id"] = turn_id
             elif mapped.preview_delta is not None:
                 buf += mapped.preview_delta
                 await preview.push(buf)
@@ -180,6 +184,15 @@ class CodexAdapter:
                 # transcript_stream; o sse.py tambem suprime via _already_committed. Limpa aqui pra
                 # nao deixar o ultimo delta pendurado ate o proximo turno.
                 await preview.push("")
+                # drain-on-complete (P2): turno terminou -> entrega a fila pendente (msgs enviadas
+                # via /input enquanto o Codex trabalhava). Reusa adapter.drain (claim-1-envia-1 via
+                # turn/start). ACOPLADO ao SSE ativo -- este generator so roda com um consumidor
+                # aberto; sem celular conectado nao ha drain-on-complete (mesma limitacao do preview,
+                # ver ponytail acima). Best-effort: falha aqui nunca derruba o state stream.
+                try:
+                    await self.drain(name, "")
+                except Exception:
+                    _log.exception("codex drain-on-complete falhou name=%s", name)
             if mapped.state is not None:
                 sess["state"] = mapped.state
                 sess["in_progress"] = mapped.state == "working"
@@ -202,11 +215,36 @@ class CodexAdapter:
         client = await self.ensure_running(name)
         if client is None or not await self.deliverable(name):
             return "deferred"
-        await client.request("turn/start", {
+        result = await client.request("turn/start", {
             "threadId": self._sessions[name]["thread_id"],
             "input": [{"type": "text", "text": text, "text_elements": []}],
         })
+        # guarda o turnId do turno recem-iniciado (turn/interrupt exige threadId+turnId; ver schema
+        # TurnInterruptParams). turn/start devolve {"turn": {"id", ...}}.
+        turn_id = (result.get("turn") or {}).get("id")
+        if turn_id:
+            self._sessions[name]["turn_id"] = turn_id
         return "sent"
+
+    async def interrupt(self, name: str) -> bool:
+        """Interrompe o turno em curso via app-server turn/interrupt (exige threadId+turnId, shape
+        confirmado no schema TurnInterruptParams da 0.141.0). No-op seguro (retorna False, nunca
+        levanta) se a sessao nao tem client vivo ou nao ha turno em voo -- o endpoint /interrupt
+        trata isso como ok pro Codex (nao quebra)."""
+        sess = self._sessions.get(name)
+        if sess is None:
+            return False
+        turn_id = sess.get("turn_id")
+        if not turn_id:
+            return False
+        try:
+            await sess["client"].request("turn/interrupt", {
+                "threadId": sess["thread_id"], "turnId": turn_id,
+            })
+        except Exception:
+            _log.exception("codex interrupt falhou name=%s", name)
+            return False
+        return True
 
     async def deliverable(self, name: str) -> bool:
         # Predicado BARATO (nao spawna): so olha o in_progress cacheado. Sessao nao anexada = nada

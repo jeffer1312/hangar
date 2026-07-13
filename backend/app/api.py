@@ -23,6 +23,8 @@ from app.models import SessionInfo, ChatEvent, CostReport, RunnersResponse, RunB
 from app.pqueue import PromptQueue, _transcript_start_ts, committed_user_lines
 from app.chain import ThenLink
 from app.terminal_input import TerminalInput, drain
+from app.adapters import get_adapter
+from app.adapters.codex import sessions as codex_sessions
 from app.sse import merged_events
 from app.uploads import save_upload, resolve_upload, UploadError, MAX_BYTES
 from app.transcribe import transcribe, TranscribeError
@@ -673,23 +675,79 @@ def _send_one(name: str, text: str) -> dict:
     return {"ok": True, "error": None}
 
 
+def _provider_of(name: str) -> str:
+    """Resolve o provider de uma sessao PELO NOME, barato e sem tmux: sidecar Codex existe -> "codex",
+    senao "claude". Default "claude" preserva 100% o caminho tmux de hoje pra qualquer nome que nao seja
+    de uma sessao Codex conhecida (regra de ouro: Claude identico, tudo Codex e ramo condicional)."""
+    return "codex" if codex_sessions.exists(name) else "claude"
+
+
+async def _send_one_codex(name: str, text: str) -> dict:
+    """Envio de prompt pra sessao Codex — versao MINIMA conversavel (sem tmux/overlay/slash/DIAG do
+    caminho Claude). Registra na fila duravel (aparece como user_msg em ordem e persiste no reload; o
+    merge dedup-a contra o rollout do Codex) e entrega via app-server turn/start SE a sessao esta idle;
+    senao deixa pendente pro drain-on-complete entregar quando o turno terminar. Codex nao tem
+    slash-commands do Claude -> envia o texto como esta. Nunca levanta (mesmo contrato do _send_one pro
+    broadcast: devolve ok/error por sessao)."""
+    adapter = get_adapter("codex")
+    try:
+        deliverable = await adapter.deliverable(name)
+    except Exception:
+        deliverable = False
+    # Enfileira sempre como pendente; so marca entregue apos o turn/start REALMENTE iniciar o turno.
+    try:
+        entry = PromptQueue(name).append(text, delivered=False)
+    except OSError:
+        entry = None
+    if not deliverable:
+        # turno em andamento -> fica pendente na fila; o drain-on-complete entrega no proximo idle.
+        return {"ok": True, "error": None}
+    try:
+        result = await adapter.send_prompt(name, text)
+    except Exception as e:
+        _log.exception("codex send_prompt falhou name=%s", name)
+        return {"ok": False, "error": str(e)}
+    if result == "sent" and entry is not None:
+        # turno iniciou -> marca entregue pra o drain-on-complete nao reenviar a mesma entrada.
+        try:
+            PromptQueue(name).set_delivered(entry["id"], True)
+        except OSError:
+            pass
+    # result == "deferred" (corrida idle->working entre o deliverable e o send): fica pendente (delivered
+    # ja e False) -> o drain-on-complete entrega depois. Nada a fazer.
+    return {"ok": True, "error": None}
+
+
 @app.post("/api/sessions/{name}/input", dependencies=[Depends(require_auth)])
-def input_prompt(name: str, body: InputBody):
-    res = _send_one(name, body.text)
+async def input_prompt(name: str, body: InputBody):
+    # Ramifica por provider: Claude via asyncio.to_thread (_send_one e SYNC/bloqueante — tmux; mesmo
+    # padrao async-bridge do create_session, comportamento IDENTICO ao de hoje), Codex via
+    # _send_one_codex (async, app-server). Default "claude" pra qualquer nome nao-Codex.
+    if _provider_of(name) == "codex":
+        res = await _send_one_codex(name, body.text)
+    else:
+        res = await asyncio.to_thread(_send_one, name, body.text)
     if not res["ok"]:
         raise HTTPException(400, res["error"])
     return {"ok": True}
 
 
 @app.post("/api/broadcast", dependencies=[Depends(require_auth)])
-def broadcast(body: BroadcastBody):
+async def broadcast(body: BroadcastBody):
     """Fan-out de UM prompt pra N sessoes (feature #9): mesma sequencia do /input, em loop — sessao
     ocupada enfileira na fila duravel dela (crash-safe), sessao ociosa recebe na hora, sem mecanismo
-    de entrega novo. Slash-commands ficam FORA (rota por sessao so): "/clear" pra N sessoes de uma vez
-    e ambiguo/perigoso (o front ja desabilita o envio; isto e defesa em profundidade)."""
+    de entrega novo. Ramifica por provider por nome (Claude via to_thread, Codex via _send_one_codex),
+    reportando por-sessao sem abortar as demais. Slash-commands ficam FORA (rota por sessao so):
+    "/clear" pra N sessoes de uma vez e ambiguo/perigoso (o front ja desabilita o envio; isto e defesa
+    em profundidade)."""
     if body.text.lstrip().startswith("/"):
         raise HTTPException(400, "broadcast nao suporta slash-commands: envie por sessao")
-    results = {name: _send_one(name, body.text) for name in body.names}
+    results: dict[str, dict] = {}
+    for name in body.names:
+        if _provider_of(name) == "codex":
+            results[name] = await _send_one_codex(name, body.text)
+        else:
+            results[name] = await asyncio.to_thread(_send_one, name, body.text)
     return {"results": results}
 
 
@@ -700,10 +758,16 @@ def select(name: str, body: SelectBody):
 
 
 @app.post("/api/sessions/{name}/interrupt", dependencies=[Depends(require_auth)])
-def interrupt(name: str, clear: bool = False):
+async def interrupt(name: str, clear: bool = False):
+    # Codex: interrompe o turno via app-server turn/interrupt (no-op seguro se nao ha turno em voo).
+    # O `clear` (2o Esc do Claude) nao se aplica ao Codex — nao ha input de TUI pra limpar.
+    if _provider_of(name) == "codex":
+        await get_adapter("codex").interrupt(name)
+        return {"ok": True}
     # clear=True: alem de interromper, limpa o input (2o Esc). So o front com msg pendente passa isso —
     # garante input nao-vazio, evitando que o Esc-Esc abra o menu de rewind num input ja vazio.
-    terminal.interrupt(name, clear=clear)
+    # terminal.interrupt e SYNC (tmux) -> threadpool pra nao bloquear o event loop (handler async agora).
+    await asyncio.to_thread(terminal.interrupt, name, clear=clear)
     return {"ok": True}
 
 

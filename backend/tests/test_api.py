@@ -138,6 +138,93 @@ def test_broadcast_rejects_slash_commands(api_client):
     sp.assert_not_called()
 
 
+# ---------------------------------------------------------------------------
+# Input/broadcast/interrupt por provider (Task 7 — tornar o Codex conversavel)
+# ---------------------------------------------------------------------------
+from unittest.mock import AsyncMock, MagicMock
+
+
+def _fake_codex_adapter(deliverable=True, send_result="sent"):
+    fake = MagicMock()
+    fake.deliverable = AsyncMock(return_value=deliverable)
+    fake.send_prompt = AsyncMock(return_value=send_result)
+    fake.interrupt = AsyncMock(return_value=True)
+    return fake
+
+
+def test_input_codex_idle_sends_via_adapter(api_client):
+    # Sessao Codex ociosa: /input entrega via adapter.send_prompt (turn/start), NAO via terminal
+    # (tmux), e registra na fila duravel marcando entregue.
+    fake = _fake_codex_adapter(deliverable=True, send_result="sent")
+    with patch("app.api._provider_of", return_value="codex"), \
+         patch("app.api.get_adapter", return_value=fake), \
+         patch("app.api.terminal.send_prompt") as term_sp, \
+         patch("app.pqueue.PromptQueue.append", return_value={"id": "x1"}) as ap, \
+         patch("app.pqueue.PromptQueue.set_delivered") as sd:
+        r = api_client.post("/api/sessions/cx/input", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 200
+    fake.send_prompt.assert_awaited_once_with("cx", "oi")
+    term_sp.assert_not_called()
+    ap.assert_called_once()
+    sd.assert_called_once_with("x1", True)
+
+
+def test_input_codex_working_stays_pending(api_client):
+    # Turno em andamento (deliverable=False): a entrada fica pendente na fila e NAO chama send_prompt
+    # agora — o drain-on-complete entrega quando o turno terminar.
+    fake = _fake_codex_adapter(deliverable=False)
+    with patch("app.api._provider_of", return_value="codex"), \
+         patch("app.api.get_adapter", return_value=fake), \
+         patch("app.pqueue.PromptQueue.append", return_value={"id": "x1"}) as ap:
+        r = api_client.post("/api/sessions/cx/input", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 200
+    fake.send_prompt.assert_not_awaited()
+    ap.assert_called_once_with("oi", delivered=False)
+
+
+def test_input_claude_untouched_by_codex_path(api_client):
+    # Caminho Claude intacto: usa terminal.send_prompt e NUNCA toca o adapter Codex.
+    fake = _fake_codex_adapter()
+    with patch("app.api.terminal.send_prompt", return_value="sent") as term_sp, \
+         patch("app.api.get_adapter", return_value=fake), \
+         patch("app.pqueue.PromptQueue.append"):
+        r = api_client.post("/api/sessions/cc/input", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 200
+    term_sp.assert_called_once_with("cc", "oi")
+    fake.send_prompt.assert_not_awaited()
+
+
+def test_broadcast_codex_uses_adapter(api_client):
+    fake = _fake_codex_adapter(deliverable=True)
+    with patch("app.api._provider_of", return_value="codex"), \
+         patch("app.api.get_adapter", return_value=fake), \
+         patch("app.api.terminal.send_prompt") as term_sp, \
+         patch("app.pqueue.PromptQueue.append", return_value={"id": "x1"}), \
+         patch("app.pqueue.PromptQueue.set_delivered"):
+        r = api_client.post("/api/broadcast", json={"names": ["cx1", "cx2"], "text": "oi"}, headers=_h())
+    assert r.status_code == 200
+    assert fake.send_prompt.await_count == 2
+    term_sp.assert_not_called()
+
+
+def test_interrupt_codex_calls_adapter(api_client):
+    fake = _fake_codex_adapter()
+    with patch("app.api._provider_of", return_value="codex"), \
+         patch("app.api.get_adapter", return_value=fake), \
+         patch("app.api.terminal.interrupt") as term_int:
+        r = api_client.post("/api/sessions/cx/interrupt", headers=_h())
+    assert r.status_code == 200
+    fake.interrupt.assert_awaited_once_with("cx")
+    term_int.assert_not_called()
+
+
+def test_interrupt_claude_uses_terminal(api_client):
+    with patch("app.api.terminal.interrupt") as term_int:
+        r = api_client.post("/api/sessions/cc/interrupt", headers=_h())
+    assert r.status_code == 200
+    term_int.assert_called_once_with("cc", clear=False)
+
+
 def test_select_route(api_client):
     with patch("app.api.terminal.select") as sel:
         r = api_client.post("/api/sessions/cc/select", json={"option": 2}, headers=_h())
