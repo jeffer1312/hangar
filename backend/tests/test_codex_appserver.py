@@ -7,7 +7,7 @@ import shutil
 
 import pytest
 
-from app.adapters.codex.appserver import AppServerClient
+from app.adapters.codex.appserver import _READ_LIMIT, AppServerClient
 
 
 class _FakeWriter:
@@ -31,10 +31,11 @@ class _FakeWriter:
         pass
 
 
-def _fake_reader(*chunks: bytes) -> asyncio.StreamReader:
+def _fake_reader(*chunks: bytes, limit: int = _READ_LIMIT) -> asyncio.StreamReader:
     """asyncio.StreamReader alimentado manualmente com feed_data/feed_eof - stub padrao da
-    stdlib pra simular stdout do subprocess sem precisar de pipe/socket real."""
-    reader = asyncio.StreamReader()
+    stdlib pra simular stdout do subprocess sem precisar de pipe/socket real. `limit` espelha
+    o `limit=` que start() passa pro create_subprocess_exec (default = producao)."""
+    reader = asyncio.StreamReader(limit=limit)
     for chunk in chunks:
         reader.feed_data(chunk)
     return reader
@@ -94,6 +95,76 @@ async def test_pending_request_rejected_on_stream_eof():
         await req_task
 
     await client.close()
+
+
+async def test_oversized_line_processed_and_reader_stays_alive():
+    """Notification maior que o limite antigo de 64 KiB (ex: diff grande) e processada com o
+    novo limit, sem matar a reader - e o cliente segue respondendo requests depois."""
+    big_text = "x" * (128 * 1024)  # > 64 KiB
+    big_notif = json.dumps({"jsonrpc": "2.0", "method": "item/fileChange/patchUpdated",
+                            "params": {"diff": big_text}}).encode() + b"\n"
+    writer = _FakeWriter()
+    reader = _fake_reader(big_notif)  # usa o _READ_LIMIT de producao
+    client = _client_with(reader, writer)
+
+    notif = await asyncio.wait_for(client.notifications().__anext__(), timeout=1)
+    assert notif["method"] == "item/fileChange/patchUpdated"
+    assert len(notif["params"]["diff"]) == 128 * 1024
+
+    # reader continua viva: uma request posterior ainda resolve
+    req_task = asyncio.create_task(client.request("m", {}))
+    await asyncio.sleep(0)
+    reader.feed_data(b'{"jsonrpc":"2.0","id":1,"result":{"ok":true}}\n')
+    assert await asyncio.wait_for(req_task, timeout=1) == {"ok": True}
+
+    await client.close()
+
+
+async def test_non_dict_json_line_does_not_kill_reader():
+    """JSON valido mas nao-objeto (ex: `42`, `[]`) nao pode derrubar a reader - a proxima
+    resposta ainda tem que resolver."""
+    writer = _FakeWriter()
+    reader = _fake_reader(b"42\n", b"[]\n")
+    client = _client_with(reader, writer)
+
+    req_task = asyncio.create_task(client.request("m", {}))
+    await asyncio.sleep(0)
+    reader.feed_data(b'{"jsonrpc":"2.0","id":1,"result":{"ok":true}}\n')
+    assert await asyncio.wait_for(req_task, timeout=1) == {"ok": True}
+
+    await client.close()
+
+
+async def test_orphan_response_not_enqueued_in_notifications():
+    """Resposta com `id` mas sem Future pendente (request que ja deu timeout) e dropada, NAO
+    vai pra notifications(); so a notification real (com `method`) aparece."""
+    writer = _FakeWriter()
+    reader = _fake_reader(
+        b'{"jsonrpc":"2.0","id":999,"result":{"stale":true}}\n',          # resposta orfa
+        b'{"jsonrpc":"2.0","method":"turn/completed","params":{"y":2}}\n',  # notification real
+    )
+    client = _client_with(reader, writer)
+
+    notif = await asyncio.wait_for(client.notifications().__anext__(), timeout=1)
+    assert notif["method"] == "turn/completed"  # a orfa foi pulada, nao enfileirada
+
+    await client.close()
+
+
+async def test_close_clean_after_limit_overrun_line():
+    """Linha problematica (estoura ate o _READ_LIMIT -> LimitOverrunError no readline) nao
+    trava nem mata a reader; request posterior resolve e close() encerra limpo, sem hang."""
+    writer = _FakeWriter()
+    # reader com limite pequeno pra forcar o overrun sem alocar MiB; sem newline dentro do limite.
+    reader = _fake_reader(b"Z" * 500, limit=128)
+    client = _client_with(reader, writer)
+
+    req_task = asyncio.create_task(client.request("m", {}))
+    await asyncio.sleep(0)
+    reader.feed_data(b'{"jsonrpc":"2.0","id":1,"result":{"ok":true}}\n')
+    assert await asyncio.wait_for(req_task, timeout=1) == {"ok": True}  # reader sobreviveu
+
+    await asyncio.wait_for(client.close(), timeout=1)  # sem hang
 
 
 @pytest.mark.integration
