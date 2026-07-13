@@ -30,6 +30,13 @@ class AppServerClient:
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
         self._notifications: asyncio.Queue = asyncio.Queue()
+        # True quando o read loop encerrou (EOF do processo / close()). Deixa o adapter distinguir
+        # "app-server morreu" de "sem mais notifications no momento" -> emite estado dead (Task 5).
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
 
     async def start(self) -> None:
         """Spawna `codex app-server --stdio` com stdin/stdout em PIPE e mantem o stdin aberto
@@ -97,6 +104,10 @@ class AppServerClient:
                 if not fut.done():
                     fut.set_exception(ConnectionError("codex app-server: conexao encerrada"))
             self._pending.clear()
+            # Sinaliza morte: marca fechado e empurra um sentinela None pra fila -> notifications()
+            # termina o async-for e o adapter emite dead (em vez de bloquear pra sempre num get()).
+            self._closed = True
+            self._notifications.put_nowait(None)
 
     async def request(self, method: str, params: dict, timeout: float = 30.0) -> dict:
         if self._writer is None:
@@ -118,7 +129,19 @@ class AppServerClient:
 
     async def notifications(self) -> AsyncIterator[dict]:
         while True:
-            yield await self._notifications.get()
+            item = await self._notifications.get()
+            if item is None:
+                return  # sentinela de EOF (processo morreu / close()): encerra o stream
+            yield item
+
+    def terminate(self) -> None:
+        """Best-effort SIGTERM SINCRONO no subprocess -- seguro de chamar de outra thread (so manda
+        o sinal, nao toca o event loop). Usado pelo registry.kill() (sync) sem precisar de bridge
+        async: o read loop no loop principal vai ver o EOF e rodar seu finally (dead-detection)."""
+        proc = self._proc
+        if proc is not None:
+            with contextlib.suppress(ProcessLookupError, Exception):
+                proc.terminate()
 
     async def close(self) -> None:
         if self._reader_task is not None:

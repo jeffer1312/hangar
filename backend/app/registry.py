@@ -12,6 +12,9 @@ from app.config import settings
 from app.models import SessionInfo
 from app.pqueue import PromptQueue
 from app.chain import ThenLink
+from app.adapters.codex import sessions as codex_sessions
+from app.adapters.codex import adapter as codex_adapter
+from app.adapters.codex.appserver import AppServerClient
 from app.askquestion import clear_pending_askq
 from app.state import classify, _live_spinner, rate_limit_reset
 from app.hook_state import hook_state
@@ -472,6 +475,16 @@ class SessionRegistry:
             sids[p["name"]] = self._repl_sid(p["pid"], children)
         # Guarda de colisao: 2+ sessoes no mesmo jsonl -> so a dona mantem (mata a duplicata/cross-wire).
         self._dedupe_collisions(out, sids)
+        # Sessoes Codex: nao vivem em tmux -> vem dos sidecars duraveis (sobrevivem a restart do
+        # backend; o historico esta no rollout). jsonl = rollout_path; tracked=True (identidade
+        # deterministica via thread_id). O client vivo e reaberto sob demanda (ensure_running).
+        for meta in codex_sessions.list_all():
+            out.append(SessionInfo(
+                name=meta["name"], cwd=meta.get("cwd"), jsonl=meta.get("rollout_path"),
+                provider="codex", tracked=True,
+                branch=self._branch_of(meta.get("cwd")),
+                then_target=(ThenLink(meta["name"]).get() or {}).get("target"),
+            ))
         return out
 
     async def list_with_state(self, infos: Optional[list[SessionInfo]] = None) -> list[SessionInfo]:
@@ -487,6 +500,12 @@ class SessionRegistry:
             return Path(jsonl).stem if jsonl else None
         pending = []  # infos sem marcador (ou awaiting) -> precisa raspar o pane
         for info in infos:
+            # Sessoes Codex nao vivem no tmux -> nunca raspar o pane (capture_pane erraria numa
+            # sessao inexistente). O estado vivo (working/idle) chega em runtime pelo adapter via SSE;
+            # aqui fica o default idle + last_activity do rollout.
+            if getattr(info, "provider", "claude") == "codex":
+                info.last_activity = _jsonl_mtime(info.jsonl)
+                continue
             marker = hook_state.get_state(_sid(info.jsonl))
             # Marker autoritativo pra working/idle/dead (custo ~0). Pra awaiting_input o marcador NAO
             # carrega a pergunta -> raspa o pane (junto das sem-marcador) pra pegar question/options.
@@ -544,6 +563,12 @@ class SessionRegistry:
         name = re.sub(r"[^A-Za-z0-9_-]", "-", name.strip()).strip("-")
         if not name:
             raise ValueError("nome invalido")
+        # Codex nao e tmux: o caminho async (spawn do app-server, thread/start) roda no loop
+        # principal via create_codex(); o create() sync spawnaria o AppServerClient num loop
+        # descartavel (asyncio.run) que morre ao retornar -> orfanaria o subprocess/reader task.
+        # Por isso o create() sync e Claude-only e recusa Codex alto (Task 6 fia o endpoint async).
+        if provider == "codex":
+            raise ValueError("sessoes Codex sao criadas via create_codex (async)")
         if tmux.has_session(name):
             raise ValueError("ja existe uma sessao com esse nome")
         # resume_session_id (retomar conversa MORTA do Arquivo): reusa o uuid existente e sobe com
@@ -581,6 +606,45 @@ class SessionRegistry:
         self._jsonl_cache[name] = jsonl
         return SessionInfo(name=name, cwd=cwd, jsonl=jsonl, provider=provider)
 
+    async def create_codex(self, name: str, cwd: str) -> SessionInfo:
+        # Caminho Codex do create (NAO-tmux): spawna o app-server, abre um thread, grava o sidecar
+        # duravel e anexa o client vivo. async porque o AppServerClient precisa viver no loop
+        # principal (o mesmo que serve SSE/send_prompt depois) -- ver nota no create() sync.
+        name = re.sub(r"[^A-Za-z0-9_-]", "-", name.strip()).strip("-")
+        if not name:
+            raise ValueError("nome invalido")
+        # Unicidade contra sessoes tmux (Claude) E sidecars Codex existentes.
+        if tmux.has_session(name) or codex_sessions.exists(name):
+            raise ValueError("ja existe uma sessao com esse nome")
+        client = AppServerClient()
+        try:
+            await client.start()
+            await client.request("initialize", {
+                "clientInfo": codex_adapter._CLIENT_INFO, "capabilities": None})
+            result = await client.request("thread/start", {
+                "cwd": cwd,
+                "sandbox": codex_adapter._SANDBOX,
+                "approvalPolicy": codex_adapter._APPROVAL,
+            })
+        except Exception:
+            # Falha no handshake: nao deixa o subprocess orfao.
+            await client.close()
+            raise
+        thread = result.get("thread") or {}
+        thread_id = thread.get("id")
+        rollout_path = thread.get("path")
+        if not thread_id or not rollout_path:
+            await client.close()
+            raise ValueError("thread/start nao devolveu id/path")
+        # Sidecar duravel: sobrevive ao restart do backend (identidade + ponteiro pro rollout).
+        codex_sessions.save(name, thread_id, rollout_path, cwd)
+        # Client vivo (efemero) anexado no adapter; limpa fila/then herdados de nome reusado.
+        from app.adapters import get_adapter
+        get_adapter("codex").attach(name, client, thread_id)
+        PromptQueue(name).clear()
+        ThenLink(name).clear()
+        return SessionInfo(name=name, cwd=cwd, jsonl=rollout_path, provider="codex")
+
     def rename(self, old: str, new: str) -> None:
         # Cache e keyed por NOME -> ao renomear, move a entrada pro nome novo e esquece o velho. Senao
         # o nome velho apontaria pro jsonl pra sempre (reuso futuro = transcript errado) e o nome novo
@@ -599,6 +663,17 @@ class SessionRegistry:
         ThenLink(old).rename(new)
 
     def kill(self, name: str) -> None:
+        # Sessao Codex (tem sidecar duravel): fecha o client vivo (SIGTERM sync via adapter -> o read
+        # loop no loop principal ve o EOF), apaga o sidecar (nao reaparece na lista / nao resume) e
+        # limpa fila/then. NAO toca tmux (nao ha pane).
+        if codex_sessions.exists(name):
+            from app.adapters import get_adapter
+            get_adapter("codex").close_sync(name)
+            codex_sessions.delete(name)
+            self._forget(name)
+            PromptQueue(name).clear()
+            ThenLink(name).clear()
+            return
         # Limpa o sidecar do AskUserQuestion ANTES de matar (precisa do processo vivo pra resolver o
         # jsonl), best-effort: cleanup nunca bloqueia/quebra o kill. Senao um stale reabriria o stepper
         # numa sessao futura de mesmo nome.
