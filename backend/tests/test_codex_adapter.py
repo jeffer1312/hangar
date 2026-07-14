@@ -7,7 +7,7 @@ import pytest
 from unittest.mock import patch
 
 from app.adapters.codex import sessions as codex_sessions
-from app.adapters.codex.adapter import CodexAdapter, map_state
+from app.adapters.codex.adapter import CodexAdapter, format_status_line, map_state
 from app.adapters.codex.preview import CodexPreviewSource
 from app.state import StateEvent
 
@@ -65,12 +65,16 @@ def test_thread_status_changed_idle():
     assert map_state(ev).state == "idle"
 
 
-def test_token_usage_statusline():
+def test_token_usage_updated_captures_raw_snapshot():
+    # Task D: map_state so captura o snapshot cru -- quem formata pro status_line completo e
+    # format_status_line, chamado pelo _state_stream com o que estiver acumulado por sessao.
+    usage = {"total": {"totalTokens": 1000}, "last": {"totalTokens": 1000},
+             "modelContextWindow": 10000}
     ev = {"method": "thread/tokenUsage/updated", "params": {"threadId": "x", "turnId": "t",
-          "tokenUsage": {"total": {"totalTokens": 1000}, "last": {"totalTokens": 1000},
-                          "modelContextWindow": 10000}}}
-    sl = map_state(ev).status_line
-    assert "10%" in sl or "10" in sl  # 1000/10000
+          "tokenUsage": usage}}
+    mapped = map_state(ev)
+    assert mapped.token_usage == usage
+    assert mapped.state is None and mapped.status_line is None
 
 
 def test_agent_message_delta_is_preview():
@@ -80,9 +84,90 @@ def test_agent_message_delta_is_preview():
     assert r.preview_delta == "ok"
 
 
+def test_rate_limits_updated_captures_raw_snapshot():
+    # Task D: antes era "unknown method = neutro" -- agora account/rateLimits/updated e
+    # reconhecido e o snapshot cru (primary/secondary) e capturado pro _state_stream acumular.
+    snapshot = {"limitId": "codex", "primary": {"usedPercent": 12, "windowDurationMins": 300,
+                "resetsAt": 123}, "secondary": None}
+    ev = {"method": "account/rateLimits/updated", "params": {"rateLimits": snapshot}}
+    mapped = map_state(ev)
+    assert mapped.rate_limits == snapshot
+    assert mapped.state is None and mapped.status_line is None
+
+
 def test_unknown_method_is_neutral():
-    r = map_state({"method": "account/rateLimits/updated", "params": {}})
-    assert r.state is None and r.status_line is None and r.preview_delta is None
+    r = map_state({"method": "some/unmapped/method", "params": {}})
+    assert (r.state is None and r.status_line is None and r.preview_delta is None
+            and r.token_usage is None and r.rate_limits is None)
+
+
+# --- format_status_line (Task D: formatador puro, casa os regexes do parseStatusLine do front) --
+
+def test_format_status_line_full_example_matches_brief():
+    # Reproduz o exemplo do brief: modelo+effort, 1 par turno zerado + 1 par de contexto, e so a
+    # janela semanal (sem primary de 5h -- caso comum, so windowDurationMins=10080).
+    now = 1_000_000.0
+    token_usage = {"total": {"totalTokens": 14389},
+                    "last": {"inputTokens": 0, "outputTokens": 0, "totalTokens": 14389},
+                    "modelContextWindow": 258400}
+    rate_limits = {"primary": {"usedPercent": 0, "windowDurationMins": 10080,
+                    "resetsAt": now + 6 * 86400}}
+    sl = format_status_line("GPT-5.5", "high", token_usage, rate_limits, now=now)
+    assert sl == "🤖 GPT-5.5 (high) │ 💬 0/0 14k/258k │ 📅7d:0% ↺6d"
+
+
+def test_format_status_line_both_rate_windows():
+    now = 1_000_000.0
+    rate_limits = {
+        "primary": {"usedPercent": 46, "windowDurationMins": 300, "resetsAt": now + 34 * 60},
+        "secondary": {"usedPercent": 57, "windowDurationMins": 10080,
+                      "resetsAt": now + 2 * 86400 + 3600},
+    }
+    sl = format_status_line(None, None, None, rate_limits, now=now)
+    assert sl == "⚡5h:46% ↺34m │ 📅7d:57% ↺2d1h"
+
+
+def test_format_status_line_omits_missing_sections():
+    # so modelo, sem effort/token_usage/rate_limits -- as demais secoes somem, nao viram "│ │".
+    assert format_status_line("gpt-5.5", None, None, None) == "🤖 gpt-5.5"
+
+
+def test_format_status_line_all_missing_is_none():
+    assert format_status_line(None, None, None, None) is None
+
+
+def test_format_status_line_context_needs_total_and_window():
+    # tokenUsage presente mas sem total/window utilizavel -> secao 💬 omitida (best-effort).
+    sl = format_status_line("gpt-5.5", None, {"last": {"inputTokens": 1}}, None)
+    assert sl == "🤖 gpt-5.5"
+
+
+def test_format_status_line_matches_parse_status_line_regexes():
+    # TDD: casa os MESMOS regexes que frontend/src/lib/statusline.ts::parseStatusLine usa, pra
+    # garantir que o formato gerado e realmente entendido pelo front (sem rodar TS aqui).
+    import re
+    now = 1_000_000.0
+    token_usage = {"total": {"totalTokens": 5000},
+                   "last": {"inputTokens": 100, "outputTokens": 50, "totalTokens": 5000},
+                   "modelContextWindow": 10000}
+    rate_limits = {"primary": {"usedPercent": 46, "windowDurationMins": 300, "resetsAt": now + 34 * 60},
+                   "secondary": {"usedPercent": 57, "windowDurationMins": 10080,
+                                 "resetsAt": now + 2 * 86400 + 3600}}
+    sl = format_status_line("GPT-5.5", "high", token_usage, rate_limits, now=now)
+
+    model_re = re.compile(r"🤖\s*([^(│]+?)\s*(?:\(([^)]*)\))?\s*(?:👤|│|$)")
+    m = model_re.search(sl)
+    assert m and m.group(1).strip() == "GPT-5.5" and m.group(2) == "high"
+
+    ctx_seg = re.search(r"💬([^│]*)", sl).group(1)
+    pairs = re.findall(r"([\d.,]+)\s*([kKmM])?\s*/\s*([\d.,]+)\s*([kKmM])?", ctx_seg)
+    assert len(pairs) >= 2  # o parser exige >=2 pares e usa o ultimo como contexto
+
+    five_h = re.search(r"⚡[^│]*?(\d+)\s*%\s*(?:↺\s*([^│⚡📅🕐]+))?", sl)
+    assert five_h and int(five_h.group(1)) == 46
+
+    weekly = re.search(r"📅[^│]*?(\d+)\s*%\s*(?:↺\s*([^│🕐]+))?", sl)
+    assert weekly and int(weekly.group(1)) == 57
 
 
 # --- CodexAdapter.state_monitor ------------------------------------------------------------
@@ -127,7 +212,31 @@ async def test_state_monitor_carries_status_line_without_changing_state():
     adapter.attach("sess", client, "t")
     events = [ev async for ev in adapter.state_monitor("sess", lambda: "sess")]
     assert [e.state for e in events] == ["working", "working"]  # segue o ultimo estado conhecido
-    assert events[1].status_line and "50" in events[1].status_line
+    # sem model/effort escolhidos (attach sem eles) -> so a secao de contexto aparece.
+    assert events[1].status_line == "💬 0/0 5k/10k"
+
+
+async def test_state_monitor_accumulates_token_usage_and_rate_limits_across_events():
+    # Task D: tokenUsage/rateLimits sao notifications esparsas -- uma vez recebidas, TODO
+    # StateEvent seguinte (mesmo working/idle puro, sem token/limite novo) carrega o snapshot
+    # mais recente acumulado, junto com model/effort ja anexados via attach().
+    adapter = CodexAdapter()
+    client = _FakeClient([
+        {"method": "turn/started", "params": {}},
+        {"method": "thread/tokenUsage/updated", "params": {
+            "tokenUsage": {"total": {"totalTokens": 1000},
+                           "last": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 1000},
+                           "modelContextWindow": 10000}}},
+        {"method": "account/rateLimits/updated", "params": {
+            "rateLimits": {"primary": {"usedPercent": 20, "windowDurationMins": 10080,
+                           "resetsAt": 0}}}},
+        {"method": "turn/completed", "params": {}},
+    ])
+    adapter.attach("sess", client, "t", model="gpt-5.5", effort="high")
+    events = [ev async for ev in adapter.state_monitor("sess", lambda: "sess")]
+    last = events[-1]  # turn/completed -> idle, SEM token/limite novo neste notif
+    assert last.state == "idle"
+    assert last.status_line.startswith("🤖 gpt-5.5 (high) │ 💬 10/5 1k/10k │ 📅7d:20%")
 
 
 async def test_state_monitor_accumulates_deltas_into_preview_source():

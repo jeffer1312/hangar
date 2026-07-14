@@ -126,9 +126,11 @@
   let chosenEffort = $state<string | null>(null);   // low | medium | high | xhigh | max | ultracode
 
   // ── Pill de modelo do Codex (Task C): equivalente do pill acima, so quando isCodex ──
-  // Sem read-back de statusline (Codex nao expoe modelo/effort no status_line hoje) -- a fonte de
-  // verdade e o GET /models (sidecar/dict do backend). Seedado ao montar/trocar de sessao; o sheet
-  // atualiza via onApplied apos um POST /model com sucesso.
+  // Fonte de verdade do rotulo do pill e o GET /models (sidecar/dict do backend), nao a
+  // statusline -- mais preciso (o backend guarda o valor exato escolhido). O anel de contexto
+  // (Task D) ja vem da statusline, igual ao Claude, ja que o CodexAdapter agora acumula
+  // tokenUsage/rateLimits e emite o status_line no mesmo formato. Seedado ao montar/trocar de
+  // sessao; o sheet atualiza via onApplied apos um POST /model com sucesso.
   let codexSheetOpen = $state(false);
   let codexModel = $state<string | null>(null);
   let codexEffort = $state<string | null>(null);
@@ -719,6 +721,7 @@
               <span class="pill-model">{codexModel ?? 'Modelo'}</span>
               {#if codexEffort}<span class="pill-effort">· {codexEffort}</span>{/if}
             </span>
+            <ContextRing pct={status?.ctxPct ?? null} />
           </button>
         {/if}
         <button class="attach-btn" onclick={() => fileInput?.click()} aria-label="Anexar arquivo">
