@@ -208,14 +208,22 @@ class CodexAdapter:
         self._locks: dict[str, asyncio.Lock] = {}
 
     def attach(self, name: str, client: AppServerClient, thread_id: str,
-               model: Optional[str] = None, effort: Optional[str] = None) -> None:
+               model: Optional[str] = None, effort: Optional[str] = None,
+               default_model: Optional[str] = None, default_effort: Optional[str] = None) -> None:
         """Liga uma sessao (por nome) a um AppServerClient + threadId ja vivos. Chamado pelo
         registry.create_codex (spawn novo, sem model/effort ainda -- sessao nova) e por
         ensure_running (resume pos-restart, passando model/effort lidos do sidecar -- Task C:
-        a escolha sobrevive ao restart)."""
+        a escolha sobrevive ao restart).
+
+        model/effort = ESCOLHA explicita do usuario (o que vai no turn/start). default_model/
+        default_effort = o default da THREAD (devolvido por thread/start/thread/resume) -- so pra
+        DISPLAY (pill/statusline) quando nao ha escolha; nunca mandado pro app-server. Efemero
+        (nao vai pro sidecar): re-populado a cada attach (create ou resume), suficiente porque
+        list_models()/state_monitor sempre chamam ensure_running antes de ler o display."""
         self._sessions[name] = {"client": client, "thread_id": thread_id,
                                  "state": "idle", "in_progress": False,
-                                 "model": model, "effort": effort}
+                                 "model": model, "effort": effort,
+                                 "default_model": default_model, "default_effort": default_effort}
 
     async def ensure_running(self, name: str) -> Optional[AppServerClient]:
         """Garante um AppServerClient VIVO pra sessao Codex `name` (resume LAZY):
@@ -261,7 +269,11 @@ class CodexAdapter:
             thread_id = (result.get("thread") or {}).get("id") or meta["thread_id"]
             # model/effort (Task C): repovoa a escolha do sidecar no dict quente, senao o 1o
             # turn/start pos-restart perderia a escolha ate a proxima chamada de set_model.
-            self.attach(name, client, thread_id, model=meta.get("model"), effort=meta.get("effort"))
+            # default_model/default_effort: o default da thread tambem vem no thread/resume
+            # response (mesmo campo `model` do thread/start) -- so pra display, nao sobrescreve a
+            # escolha acima.
+            self.attach(name, client, thread_id, model=meta.get("model"), effort=meta.get("effort"),
+                        default_model=result.get("model"), default_effort=result.get("effort"))
             _log.info("codex ensure_running: resumed thread=%s name=%s", thread_id, name)
             return client
 
@@ -366,8 +378,11 @@ class CodexAdapter:
             # dict quente + token_usage/rate_limits guardados acima) -- nao so quando ESTE notif
             # trouxe token/limite novo, senao o front perderia contexto/limites em StateEvents de
             # working/idle puros (a maioria).
+            # model-or-default (mesma regra de current_model): sem escolha explicita, mostra o
+            # default real da thread em vez de omitir o 🤖 inteiro.
             status_line = format_status_line(
-                sess.get("model"), sess.get("effort"),
+                sess.get("model") or sess.get("default_model"),
+                sess.get("effort") or sess.get("default_effort"),
                 sess.get("token_usage"), sess.get("rate_limits"),
             )
             yield StateEvent(session=name, state=sess["state"], status_line=status_line)
@@ -541,12 +556,15 @@ class CodexAdapter:
         codex_sessions.update_model(name, model, effort)
 
     def current_model(self, name: str) -> dict:
-        """Modelo/effort escolhidos pra sessao: dict quente primeiro (mais recente), senao o
-        sidecar duravel (sessao conhecida mas nao anexada agora); {model: None, effort: None} se
-        nunca escolhido -- o proximo turn/start usa o default da thread."""
+        """Modelo/effort pra DISPLAY (pill do front): a escolha explicita do usuario tem
+        prioridade; sem escolha, cai pro default da thread (dict quente, populado no attach) --
+        so entao {model: None, effort: None} pra sessao nunca vista. NUNCA usado pro turn/start
+        (isso e sess["model"]/sess["effort"] puros, lidos direto em send_prompt)."""
         sess = self._sessions.get(name)
-        if sess is not None and (sess.get("model") is not None or sess.get("effort") is not None):
-            return {"model": sess.get("model"), "effort": sess.get("effort")}
+        if sess is not None and (sess.get("model") or sess.get("effort")
+                                  or sess.get("default_model") or sess.get("default_effort")):
+            return {"model": sess.get("model") or sess.get("default_model"),
+                    "effort": sess.get("effort") or sess.get("default_effort")}
         meta = codex_sessions.load(name)
         if meta is not None:
             return {"model": meta.get("model"), "effort": meta.get("effort")}
