@@ -14,6 +14,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import AsyncIterator, Callable, Optional
 
 from app.adapters.codex import sessions as codex_sessions
@@ -278,6 +279,11 @@ class CodexAdapter:
     def transcript_stream(self, path: str) -> AsyncIterator[ChatEvent]:
         # Mesma mecanica de tail (backfill do tail + watch de append) do Claude, so trocando o
         # parser pro shape do rollout do Codex (snake_case, envelope {type, payload}).
+        # Garante o dir do rollout (~/.codex/sessions/YYYY/MM/DD/): na 1a sessao Codex do dia o
+        # Codex ainda nao criou a pasta do dia quando o SSE abre o tail -> awatch(parent) em
+        # transcript.follow() levantaria FileNotFoundError e derrubaria o SSE inteiro (chat nao
+        # carrega/atualiza). mkdir idempotente fecha essa janela; o Codex grava ali de todo jeito.
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
         return TranscriptTailer(path, parse_line=parse_rollout_line).follow()
 
     def state_monitor(self, name: str, sid_get: Callable[[], str]) -> AsyncIterator[StateEvent]:
