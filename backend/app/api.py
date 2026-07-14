@@ -688,7 +688,10 @@ async def _send_one_codex(name: str, text: str) -> dict:
     merge dedup-a contra o rollout do Codex) e entrega via app-server turn/start SE a sessao esta idle;
     senao deixa pendente pro drain-on-complete entregar quando o turno terminar. Codex nao tem
     slash-commands do Claude -> envia o texto como esta. Nunca levanta (mesmo contrato do _send_one pro
-    broadcast: devolve ok/error por sessao)."""
+    broadcast: devolve ok/error por sessao).
+
+    IMPORTANT 2: PromptQueue.append/set_delivered fazem I/O de arquivo sincrono com lock -- chamados
+    direto aqui (corrotina) bloqueariam o event loop. Mesmo padrao de to_thread do drain do Codex."""
     adapter = get_adapter("codex")
     try:
         deliverable = await adapter.deliverable(name)
@@ -696,7 +699,7 @@ async def _send_one_codex(name: str, text: str) -> dict:
         deliverable = False
     # Enfileira sempre como pendente; so marca entregue apos o turn/start REALMENTE iniciar o turno.
     try:
-        entry = PromptQueue(name).append(text, delivered=False)
+        entry = await asyncio.to_thread(PromptQueue(name).append, text, delivered=False)
     except OSError:
         entry = None
     if not deliverable:
@@ -710,7 +713,7 @@ async def _send_one_codex(name: str, text: str) -> dict:
     if result == "sent" and entry is not None:
         # turno iniciou -> marca entregue pra o drain-on-complete nao reenviar a mesma entrada.
         try:
-            PromptQueue(name).set_delivered(entry["id"], True)
+            await asyncio.to_thread(PromptQueue(name).set_delivered, entry["id"], True)
         except OSError:
             pass
     # result == "deferred" (corrida idle->working entre o deliverable e o send): fica pendente (delivered

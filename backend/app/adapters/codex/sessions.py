@@ -30,15 +30,20 @@ def _path(name: str) -> Path:
 
 
 def save(name: str, thread_id: str, rollout_path: str, cwd: str) -> None:
-    """Grava (ou sobrescreve) o sidecar duravel da sessao Codex."""
+    """Grava (ou sobrescreve) o sidecar duravel da sessao Codex. Escrita ATOMICA (tmp + replace,
+    mesmo padrao de PromptQueue._write_atomic em pqueue.py) -- write_text direto podia corromper
+    o sidecar em crash/concorrencia no meio da escrita."""
     _dir().mkdir(parents=True, exist_ok=True)
-    _path(name).write_text(json.dumps({
+    p = _path(name)
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({
         "name": name,
         "provider": "codex",
         "thread_id": thread_id,
         "rollout_path": rollout_path,
         "cwd": cwd,
     }), encoding="utf-8")
+    tmp.replace(p)
 
 
 def load(name: str) -> dict | None:
