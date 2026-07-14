@@ -648,8 +648,13 @@ class SessionRegistry:
             # Sidecar duravel: sobrevive ao restart do backend (identidade + ponteiro pro rollout).
             codex_sessions.save(name, thread_id, rollout_path, cwd)
             # Client vivo (efemero) anexado no adapter; limpa fila/then herdados de nome reusado.
+            # default_model/effort: thread/start ja devolve o modelo default da thread (ex.
+            # "gpt-5.6-sol") -- passa pro attach so pra DISPLAY (pill/statusline); a sessao nova
+            # ainda nao tem escolha explicita (model=None acima).
             from app.adapters import get_adapter
-            get_adapter("codex").attach(name, client, thread_id)
+            get_adapter("codex").attach(name, client, thread_id,
+                                         default_model=result.get("model"),
+                                         default_effort=result.get("effort"))
         except Exception:
             await client.close()
             codex_sessions.delete(name)  # idempotente; remove sidecar orfao se save ja tinha passado
