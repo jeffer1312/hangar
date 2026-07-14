@@ -103,16 +103,20 @@ def _fmt_tok(n: float) -> str:
 
 
 def _format_context_segment(token_usage: dict) -> Optional[str]:
-    """Monta a secao `💬 <in>/<out> <ctxUsed>/<ctxTotal>` (Task D). Exige total+window pra ter
-    contexto de verdade -- sem isso, omite a secao inteira (best-effort, igual ao Claude)."""
-    total = (token_usage.get("total") or {}).get("totalTokens")
-    window = token_usage.get("modelContextWindow")
-    if not total or not window:
-        return None
+    """Monta a secao `💬 <in>/<out> <ctxUsed>/<ctxTotal>` (Task D).
+
+    O contexto USADO na janela e o input do ULTIMO turno (`last.inputTokens` = o historico inteiro
+    reenviado ao modelo naquele turno), NAO o `total_token_usage.total` -- este e ACUMULADO: soma o
+    input de TODOS os turnos, entao infla a cada mensagem mesmo trivial. Bug real observado: 5 turnos
+    de "Ola" davam total=97k (38% de 258k) enquanto o contexto real era ~19k (8%), estavel. Exige
+    last.input + window; sem isso omite a secao (best-effort)."""
     last = token_usage.get("last") or {}
-    turn_in = last.get("inputTokens") or 0
+    used = last.get("inputTokens")
+    window = token_usage.get("modelContextWindow")
+    if not used or not window:
+        return None
     turn_out = last.get("outputTokens") or 0
-    return f"💬 {_fmt_tok(turn_in)}/{_fmt_tok(turn_out)} {_fmt_tok(total)}/{_fmt_tok(window)}"
+    return f"💬 {_fmt_tok(used)}/{_fmt_tok(turn_out)} {_fmt_tok(used)}/{_fmt_tok(window)}"
 
 
 def _format_reset(resets_at: float, now: float) -> str:

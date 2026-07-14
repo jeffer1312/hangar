@@ -107,13 +107,14 @@ def test_format_status_line_full_example_matches_brief():
     # Reproduz o exemplo do brief: modelo+effort, 1 par turno zerado + 1 par de contexto, e so a
     # janela semanal (sem primary de 5h -- caso comum, so windowDurationMins=10080).
     now = 1_000_000.0
-    token_usage = {"total": {"totalTokens": 14389},
-                    "last": {"inputTokens": 0, "outputTokens": 0, "totalTokens": 14389},
+    # contexto usado = input do ULTIMO turno (14389), NAO o total acumulado.
+    token_usage = {"total": {"totalTokens": 99999},
+                    "last": {"inputTokens": 14389, "outputTokens": 0, "totalTokens": 14389},
                     "modelContextWindow": 258400}
     rate_limits = {"primary": {"usedPercent": 0, "windowDurationMins": 10080,
                     "resetsAt": now + 6 * 86400}}
     sl = format_status_line("GPT-5.5", "high", token_usage, rate_limits, now=now)
-    assert sl == "🤖 GPT-5.5 (high) │ 💬 0/0 14k/258k │ 📅7d:0% ↺6d"
+    assert sl == "🤖 GPT-5.5 (high) │ 💬 14k/0 14k/258k │ 📅7d:0% ↺6d"
 
 
 def test_format_status_line_both_rate_windows():
@@ -207,13 +208,16 @@ async def test_state_monitor_carries_status_line_without_changing_state():
     client = _FakeClient([
         {"method": "turn/started", "params": {}},
         {"method": "thread/tokenUsage/updated", "params": {
-            "tokenUsage": {"total": {"totalTokens": 5000}, "modelContextWindow": 10000}}},
+            "tokenUsage": {"total": {"totalTokens": 99999},
+                           "last": {"inputTokens": 5000, "outputTokens": 0},
+                           "modelContextWindow": 10000}}},
     ])
     adapter.attach("sess", client, "t")
     events = [ev async for ev in adapter.state_monitor("sess", lambda: "sess")]
     assert [e.state for e in events] == ["working", "working"]  # segue o ultimo estado conhecido
     # sem model/effort escolhidos (attach sem eles) -> so a secao de contexto aparece.
-    assert events[1].status_line == "💬 0/0 5k/10k"
+    # contexto = input do ultimo turno (5000), nao o total acumulado.
+    assert events[1].status_line == "💬 5k/0 5k/10k"
 
 
 async def test_state_monitor_accumulates_token_usage_and_rate_limits_across_events():
@@ -236,7 +240,7 @@ async def test_state_monitor_accumulates_token_usage_and_rate_limits_across_even
     events = [ev async for ev in adapter.state_monitor("sess", lambda: "sess")]
     last = events[-1]  # turn/completed -> idle, SEM token/limite novo neste notif
     assert last.state == "idle"
-    assert last.status_line.startswith("🤖 gpt-5.5 (high) │ 💬 10/5 1k/10k │ 📅7d:20%")
+    assert last.status_line.startswith("🤖 gpt-5.5 (high) │ 💬 10/5 10/10k │ 📅7d:20%")
 
 
 async def test_state_monitor_accumulates_deltas_into_preview_source():
