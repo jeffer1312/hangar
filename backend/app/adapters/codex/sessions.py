@@ -29,10 +29,15 @@ def _path(name: str) -> Path:
     return _dir() / f"{_sanitize(name)}.json"
 
 
-def save(name: str, thread_id: str, rollout_path: str, cwd: str) -> None:
+def save(name: str, thread_id: str, rollout_path: str, cwd: str,
+         model: str | None = None, effort: str | None = None) -> None:
     """Grava (ou sobrescreve) o sidecar duravel da sessao Codex. Escrita ATOMICA (tmp + replace,
     mesmo padrao de PromptQueue._write_atomic em pqueue.py) -- write_text direto podia corromper
-    o sidecar em crash/concorrencia no meio da escrita."""
+    o sidecar em crash/concorrencia no meio da escrita.
+
+    model/effort (Task C): escolha de modelo/reasoning effort da sessao, opcional -- None pra
+    sessao nova (usa o default da thread) ou sidecar antigo (chave ausente = load().get() -> None,
+    sem quebrar)."""
     _dir().mkdir(parents=True, exist_ok=True)
     p = _path(name)
     tmp = p.with_suffix(".json.tmp")
@@ -42,8 +47,20 @@ def save(name: str, thread_id: str, rollout_path: str, cwd: str) -> None:
         "thread_id": thread_id,
         "rollout_path": rollout_path,
         "cwd": cwd,
+        "model": model,
+        "effort": effort,
     }), encoding="utf-8")
     tmp.replace(p)
+
+
+def update_model(name: str, model: str | None, effort: str | None) -> None:
+    """Atualiza SO a escolha de modelo/effort no sidecar existente, preservando thread_id/
+    rollout_path/cwd (re-le e regrava via save()). No-op silencioso se o sidecar nao existe
+    (nome desconhecido) -- quem chama (CodexAdapter.set_model) ja mantem a copia em memoria."""
+    meta = load(name)
+    if meta is None:
+        return
+    save(name, meta["thread_id"], meta["rollout_path"], meta["cwd"], model=model, effort=effort)
 
 
 def load(name: str) -> dict | None:
