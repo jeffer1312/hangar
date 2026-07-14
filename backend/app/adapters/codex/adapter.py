@@ -12,6 +12,7 @@ o sidecar duravel (app.adapters.codex.sessions) guarda thread_id/rollout_path/cw
 reabre o AppServerClient e retoma pelo thread/resume sob demanda."""
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from typing import AsyncIterator, Callable, Optional
 
@@ -37,10 +38,14 @@ class MappedState:
     """Resultado CRU e testavel de map_state — NAO e o StateEvent do app (StateEvent exige
     `state` e nao tem campo de preview). state_monitor() traduz isto pro StateEvent real;
     preview_delta e consumido em paralelo por CodexAdapter._state_stream (acumula por turno e
-    empurra pro CodexPreviewSource — ver Task 5b), fora do StateEvent."""
+    empurra pro CodexPreviewSource — ver Task 5b), fora do StateEvent. token_usage/rate_limits
+    sao os snapshots CRUS (shape do app-server) das notifications de mesmo nome — quem acumula
+    por sessao e monta o status_line completo e o _state_stream (Task D), nao este mapper."""
     state: Optional[str] = None          # "working" | "idle" | None (neutro/sem info)
     status_line: Optional[str] = None
     preview_delta: Optional[str] = None
+    token_usage: Optional[dict] = None
+    rate_limits: Optional[dict] = None
 
 
 def map_state(notif: dict) -> MappedState:
@@ -63,18 +68,128 @@ def map_state(notif: dict) -> MappedState:
         return MappedState()
 
     if method == "thread/tokenUsage/updated":
+        # So captura o snapshot CRU (total/last/modelContextWindow) -- quem formata pro
+        # status_line completo (Task D) e _format_status_line, chamado pelo _state_stream com o
+        # que estiver acumulado por sessao (model/effort/rate_limits inclusive).
         usage = params.get("tokenUsage") or {}
-        total = (usage.get("total") or {}).get("totalTokens")
-        window = usage.get("modelContextWindow")
-        if not total or not window:
+        if not usage:
             return MappedState()
-        pct = round(total / window * 100)
-        return MappedState(status_line=f"{pct}% context")
+        return MappedState(token_usage=usage)
+
+    if method == "account/rateLimits/updated":
+        # Task D: antes ignorado. Guarda o snapshot cru (primary/secondary) pro _state_stream
+        # acumular por sessao -- mesmo shape de account/rateLimits/read (ver read_rate_limits).
+        rate_limits = params.get("rateLimits") or {}
+        if not rate_limits:
+            return MappedState()
+        return MappedState(rate_limits=rate_limits)
 
     if method == "item/agentMessage/delta":
         return MappedState(preview_delta=params.get("delta"))
 
     return MappedState()
+
+
+def _fmt_tok(n: float) -> str:
+    """Formata contagem de tokens com sufixo k/M (ex: 14389 -> "14k"), como o parseStatusLine do
+    front ja entende (frontend/src/lib/statusline.ts toNumber). Sem sufixo abaixo de 1000."""
+    n = int(round(n))
+    if abs(n) >= 1_000_000:
+        return f"{round(n / 1_000_000)}M"
+    if abs(n) >= 1_000:
+        return f"{round(n / 1_000)}k"
+    return str(n)
+
+
+def _format_context_segment(token_usage: dict) -> Optional[str]:
+    """Monta a secao `💬 <in>/<out> <ctxUsed>/<ctxTotal>` (Task D). Exige total+window pra ter
+    contexto de verdade -- sem isso, omite a secao inteira (best-effort, igual ao Claude)."""
+    total = (token_usage.get("total") or {}).get("totalTokens")
+    window = token_usage.get("modelContextWindow")
+    if not total or not window:
+        return None
+    last = token_usage.get("last") or {}
+    turn_in = last.get("inputTokens") or 0
+    turn_out = last.get("outputTokens") or 0
+    return f"💬 {_fmt_tok(turn_in)}/{_fmt_tok(turn_out)} {_fmt_tok(total)}/{_fmt_tok(window)}"
+
+
+def _format_reset(resets_at: float, now: float) -> str:
+    """Tempo relativo curto ate resets_at (epoch-s), ex: "2d1h", "34m". Sem '│'/'⚡'/'📅'/'🕐'
+    (o parseStatusLine do front corta o campo de reset nesses caracteres)."""
+    delta = max(0, int(resets_at - now))
+    days, rem = divmod(delta, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    if days:
+        return f"{days}d{hours}h" if hours else f"{days}d"
+    if hours:
+        return f"{hours}h{minutes}m" if minutes else f"{hours}h"
+    return f"{minutes}m"
+
+
+# janela ~5h (windowDurationMins~300) -> chip ⚡5h; janela semanal (~10080) -> chip 📅7d. Tolerancia
+# pra nao exigir o minuto exato (o app-server pode devolver 299/301 etc.).
+_WINDOW_5H = (270, 330)
+_WINDOW_7D = (10020, 10140)
+
+
+def _format_rate_window(window: Optional[dict], now: float) -> Optional[str]:
+    if not window:
+        return None
+    mins = window.get("windowDurationMins")
+    pct = window.get("usedPercent")
+    if mins is None or pct is None:
+        return None
+    if _WINDOW_5H[0] <= mins <= _WINDOW_5H[1]:
+        emoji, label = "⚡", "5h"
+    elif _WINDOW_7D[0] <= mins <= _WINDOW_7D[1]:
+        emoji, label = "📅", "7d"
+    else:
+        return None
+    seg = f"{emoji}{label}:{round(pct)}%"
+    resets_at = window.get("resetsAt")
+    if resets_at:
+        seg += f" ↺{_format_reset(resets_at, now)}"
+    return seg
+
+
+def _format_rate_limit_segments(rate_limits: dict, now: float) -> list[str]:
+    segs = []
+    for key in ("primary", "secondary"):
+        seg = _format_rate_window(rate_limits.get(key), now)
+        if seg:
+            segs.append(seg)
+    return segs
+
+
+def format_status_line(
+    model: Optional[str],
+    effort: Optional[str],
+    token_usage: Optional[dict],
+    rate_limits: Optional[dict],
+    now: Optional[float] = None,
+) -> Optional[str]:
+    """Formatador PURO do status_line completo (Task D), testavel isolado do stream. Monta
+    `🤖 <model> (<effort>) │ 💬 <in>/<out> <used>/<total> │ ⚡5h:<pct>% ↺<reset> │ 📅7d:...`
+    casando os regexes do parseStatusLine do front (ver docs no topo de statusline.ts) -- cada
+    secao e best-effort, o que faltar e omitido. None se nao sobrar nenhuma secao."""
+    now = time.time() if now is None else now
+    parts: list[str] = []
+    if model:
+        seg = f"🤖 {model}"
+        if effort:
+            seg += f" ({effort})"
+        parts.append(seg)
+    if token_usage:
+        ctx = _format_context_segment(token_usage)
+        if ctx:
+            parts.append(ctx)
+    if rate_limits:
+        parts.extend(_format_rate_limit_segments(rate_limits, now))
+    if not parts:
+        return None
+    return " │ ".join(parts)
 
 
 class CodexAdapter:
@@ -228,12 +343,28 @@ class CodexAdapter:
             if mapped.state is not None:
                 sess["state"] = mapped.state
                 sess["in_progress"] = mapped.state == "working"
-            if mapped.state is None and mapped.status_line is None:
+            # Task D: acumula tokenUsage/rateLimits por sessao (snapshot mais recente de cada) --
+            # sao notifications esparsas, nao vem toda hora, entao guarda no dict quente pra
+            # sobreviver ate o proximo StateEvent emitido (mesmo que seja por outro motivo, tipo
+            # turn/started).
+            if mapped.token_usage is not None:
+                sess["token_usage"] = mapped.token_usage
+            if mapped.rate_limits is not None:
+                sess["rate_limits"] = mapped.rate_limits
+            if mapped.state is None and mapped.token_usage is None and mapped.rate_limits is None:
                 # Neutro (method desconhecido) ou so preview_delta: StateEvent nao tem campo de
                 # preview -> nada a emitir aqui (o preview ja foi empurrado acima, fora do
                 # StateEvent -- efeito colateral adicional, nao substitui).
                 continue
-            yield StateEvent(session=name, state=sess["state"], status_line=mapped.status_line)
+            # status_line SEMPRE montado com o que ha de mais recente acumulado (model/effort do
+            # dict quente + token_usage/rate_limits guardados acima) -- nao so quando ESTE notif
+            # trouxe token/limite novo, senao o front perderia contexto/limites em StateEvents de
+            # working/idle puros (a maioria).
+            status_line = format_status_line(
+                sess.get("model"), sess.get("effort"),
+                sess.get("token_usage"), sess.get("rate_limits"),
+            )
+            yield StateEvent(session=name, state=sess["state"], status_line=status_line)
         # notifications() terminou = EOF do app-server (o read loop empurra o sentinela ao morrer).
         # Dead-detection (backlog T4-m2): emite dead pra o front + limpa a sessao da memoria (o
         # sidecar duravel fica; ensure_running reabre num acesso futuro). getattr: um client FAKE de
