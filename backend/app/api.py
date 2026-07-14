@@ -774,6 +774,35 @@ async def interrupt(name: str, clear: bool = False):
     return {"ok": True}
 
 
+def _normalize_rate_window(window: dict | None) -> dict | None:
+    # RateLimitWindow (app-server) -> shape neutro do front: usedPercent/windowMins/resetsAt.
+    # window None (secondary/credits costumam vir null) -> None, o front so mostra o que existe.
+    if window is None:
+        return None
+    return {
+        "usedPercent": window.get("usedPercent"),
+        "windowMins": window.get("windowDurationMins"),
+        "resetsAt": window.get("resetsAt"),
+    }
+
+
+@app.get("/api/sessions/{name}/limits", dependencies=[Depends(require_auth)])
+async def limits(name: str):
+    # So Codex tem rate limits expostos pelo app-server (account/rateLimits/read) -- Claude tem o
+    # proprio chip de rate-limit (status_line), fora do escopo aqui (regra de ouro: Claude intocado).
+    if _provider_of(name) != "codex":
+        raise HTTPException(400, "limits so existe pra sessoes Codex")
+    snapshot = await get_adapter("codex").read_rate_limits(name)
+    if snapshot is None:
+        # app-server indisponivel/recusou -- resposta neutra (sem erro), o front so nao mostra nada.
+        return {"primary": None, "secondary": None, "planType": None}
+    return {
+        "primary": _normalize_rate_window(snapshot.get("primary")),
+        "secondary": _normalize_rate_window(snapshot.get("secondary")),
+        "planType": snapshot.get("planType"),
+    }
+
+
 @app.get("/api/sessions/{name}/pane", dependencies=[Depends(require_auth)])
 def pane(name: str):
     # Pane CRU (texto ja composto pelo tmux: sem ANSI/cursor-move). O espelho do pane (TerminalMirror)

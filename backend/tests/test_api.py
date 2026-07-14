@@ -225,6 +225,45 @@ def test_interrupt_claude_uses_terminal(api_client):
     term_int.assert_called_once_with("cc", clear=False)
 
 
+def test_limits_codex_returns_normalized_snapshot(api_client):
+    fake = _fake_codex_adapter()
+    fake.read_rate_limits = AsyncMock(return_value={
+        "limitId": "codex", "limitName": None,
+        "primary": {"usedPercent": 42, "windowDurationMins": 10080, "resetsAt": 1784494806},
+        "secondary": None, "credits": None, "individualLimit": None,
+        "planType": "plus", "rateLimitReachedType": None,
+    })
+    with patch("app.api._provider_of", return_value="codex"), \
+         patch("app.api.get_adapter", return_value=fake):
+        r = api_client.get("/api/sessions/cx/limits", headers=_h())
+    assert r.status_code == 200
+    body = r.json()
+    assert body["primary"] == {"usedPercent": 42, "windowMins": 10080, "resetsAt": 1784494806}
+    assert body["secondary"] is None
+    assert body["planType"] == "plus"
+    fake.read_rate_limits.assert_awaited_once_with("cx")
+
+
+def test_limits_codex_returns_neutral_when_adapter_has_no_snapshot(api_client):
+    # app-server indisponivel/recusou (read_rate_limits devolve None) -> resposta neutra, sem 500.
+    fake = _fake_codex_adapter()
+    fake.read_rate_limits = AsyncMock(return_value=None)
+    with patch("app.api._provider_of", return_value="codex"), \
+         patch("app.api.get_adapter", return_value=fake):
+        r = api_client.get("/api/sessions/cx/limits", headers=_h())
+    assert r.status_code == 200
+    assert r.json() == {"primary": None, "secondary": None, "planType": None}
+
+
+def test_limits_claude_rejected_with_400(api_client):
+    # Claude nao tem account/rateLimits/read (tem o proprio chip) -> erro claro, nao 500/vazio silencioso.
+    fake = _fake_codex_adapter()
+    with patch("app.api.get_adapter", return_value=fake):
+        r = api_client.get("/api/sessions/cc/limits", headers=_h())
+    assert r.status_code == 400
+    fake.read_rate_limits.assert_not_called()
+
+
 def test_select_route(api_client):
     with patch("app.api.terminal.select") as sel:
         r = api_client.post("/api/sessions/cc/select", json={"option": 2}, headers=_h())

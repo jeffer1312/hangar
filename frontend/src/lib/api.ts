@@ -16,6 +16,7 @@ import type {
   ResumeResult,
   RunnersResponse,
   RunInfo,
+  SessionLimits,
 } from './types';
 
 // URL da idx-ésima imagem (colada no terminal) de uma msg do transcript. `?token` porque <img> não
@@ -626,4 +627,9 @@ export function stopRun(name: string): Promise<{ ok: boolean }> {
 
 export function getRunPane(name: string): Promise<{ pane: string }> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/run/pane`);
+}
+
+// Limites de uso da conta Codex (Task B) — so sessoes Codex; o back devolve 400 pra Claude.
+export function getLimits(name: string): Promise<SessionLimits> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/limits`);
 }
