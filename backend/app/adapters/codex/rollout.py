@@ -10,11 +10,15 @@ from app.transcript import ChatEvent
 # message.role que sao system prompt/instrucoes internas do Codex, nao chat do usuario.
 _NON_CHAT_ROLES = {"developer", "system"}
 
-# O Codex injeta, no 1o response_item de toda thread, um role:"user" cujo unico conteudo e um
-# wrapper de contexto interno (<environment_context>...</environment_context> ou variantes tipo
-# <user_instructions>...</user_instructions>) -- nao e chat do usuario. Conservador: so casa se o
-# texto (apos strip) COMECA com a tag, pra nao descartar uma mensagem real que so mencione a tag.
-_CONTEXT_WRAPPER_RE = re.compile(r"^<(environment_context|\w+_instructions)>")
+# O Codex injeta, nos 1os response_item de toda thread, role:"user" cujo conteudo e contexto interno
+# (nao chat do usuario). Dois formatos vistos na 0.141.0:
+#   - wrapper em tag: <environment_context>...</environment_context>, <user_instructions>..., etc.
+#   - AGENTS.md do projeto: comeca com "# AGENTS.md instructions for <path>" (quando o cwd tem AGENTS.md;
+#     o env-context vem concatenado no fim dessa mesma msg gigante -> por isso o filtro de tag sozinho
+#     nao pegava e a bolha vazava). Conservador: so casa se o texto (apos strip) COMECA com o marcador,
+#     pra nao descartar uma mensagem real que apenas mencione a tag/o nome.
+_CONTEXT_WRAPPER_RE = re.compile(
+    r"^(<(environment_context|\w+_instructions)>|# AGENTS\.md instructions for )")
 
 
 def _is_context_wrapper(text: str) -> bool:
