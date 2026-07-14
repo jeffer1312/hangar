@@ -233,3 +233,16 @@ export interface RunnersResponse {
   remembered: string | null;
   running: RunInfo | null;
 }
+
+// Janela de rate-limit normalizada (GET /limits, Task B) — so Codex; ver docs/codex-app-server-contract.md.
+export interface RateLimitWindow {
+  usedPercent: number | null;
+  windowMins: number | null;
+  resetsAt: number | null; // epoch em SEGUNDOS
+}
+
+export interface SessionLimits {
+  primary: RateLimitWindow | null;
+  secondary: RateLimitWindow | null;
+  planType: string | null;
+}

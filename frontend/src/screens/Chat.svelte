@@ -12,6 +12,7 @@
   import TerminalMirror from '../components/TerminalMirror.svelte';
   import AskQuestionSheet from '../components/AskQuestionSheet.svelte';
   import RunSheet from '../components/RunSheet.svelte';
+  import CodexLimitsSheet from '../components/CodexLimitsSheet.svelte';
   import {
     getHistory,
     sendInput,
@@ -92,6 +93,7 @@
   onMount(() => { getRunners(sessionName).then((r) => (runRunning = !!r.running)).catch(() => {}); });
   let previewOpen = $state(false);
   let activityOpen = $state(false);
+  let limitsOpen = $state(false);  // Task B: sheet de limites de uso Codex (badge da NavBar)
   let askPayload = $state<AskQuestionPayload | null>(null);
   let askOpen = $state(false);
   // Viewport largo → pergunta vira card inline no chat (contexto visível); estreito → bottom-sheet.
@@ -164,9 +166,9 @@
   }
 
   const anyOverlayOpen = () =>
-    switcherOpen || createOpen || usageOpen || gitOpen || runOpen || previewOpen || activityOpen || mirrorOpen || askOpen;
+    switcherOpen || createOpen || usageOpen || gitOpen || runOpen || previewOpen || activityOpen || limitsOpen || mirrorOpen || askOpen;
   function closeOverlays() {
-    switcherOpen = createOpen = usageOpen = gitOpen = runOpen = previewOpen = activityOpen = false;
+    switcherOpen = createOpen = usageOpen = gitOpen = runOpen = previewOpen = activityOpen = limitsOpen = false;
     if (mirrorOpen) closeMirror();
     askOpen = false;
   }
@@ -696,7 +698,7 @@
 <div class="chat-screen" bind:this={screenEl} style:--nav-h={navH + 'px'}>
   <div class="sr-only" role="status">{stateAnnounce}</div>
   <div class="navbar-mount" bind:this={navEl}>
-    <NavBar title={sessionName} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} onOpenRun={() => (runOpen = true)} {runRunning} working={currentState === 'working'} providerLabel={isCodex ? 'Codex' : null} />
+    <NavBar title={sessionName} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} onOpenRun={() => (runOpen = true)} {runRunning} working={currentState === 'working'} providerLabel={isCodex ? 'Codex' : null} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} />
   </div>
 
   {#if loading}
@@ -809,6 +811,8 @@
   <GitSheet open={gitOpen} {sessionName} onClose={() => (gitOpen = false)} />
 
   <RunSheet open={runOpen} {sessionName} onClose={() => (runOpen = false)} onRunningChange={(r) => (runRunning = r)} />
+
+  <CodexLimitsSheet open={limitsOpen} {sessionName} onClose={() => (limitsOpen = false)} />
 
   <PreviewSheet open={previewOpen} onClose={() => (previewOpen = false)} />
 

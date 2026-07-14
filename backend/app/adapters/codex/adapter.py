@@ -325,6 +325,26 @@ class CodexAdapter:
                 return sent
             sent += 1
 
+    async def read_rate_limits(self, name: str) -> Optional[dict]:
+        """Le os limites de uso da conta Codex via `account/rateLimits/read` (Task B). Devolve o
+        `RateLimitSnapshot` cru (limitId/limitName/primary/secondary/credits/individualLimit/
+        planType/rateLimitReachedType) ou None se a sessao nao tem client vivo/sidecar (mesmo
+        contrato de ensure_running) ou se o app-server recusar o pedido -- nunca levanta, o
+        endpoint trata None como "sem dado" em vez de derrubar a request."""
+        try:
+            client = await self.ensure_running(name)
+        except Exception:
+            _log.exception("codex read_rate_limits: ensure_running falhou name=%s", name)
+            return None
+        if client is None:
+            return None
+        try:
+            result = await client.request("account/rateLimits/read", {})
+        except Exception:
+            _log.exception("codex read_rate_limits: request falhou name=%s", name)
+            return None
+        return result.get("rateLimits")
+
     def spawn_command(self, cwd: str, session_id: str) -> list[str]:
         # Sessao Codex NAO nasce de um comando tmux -- nasce de thread/start no app-server
         # (registry.create_codex). registry.create ramifica por provider ANTES de chamar isto no
