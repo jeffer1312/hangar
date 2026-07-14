@@ -42,6 +42,28 @@ def test_user_generic_instructions_wrapper_ignored():
     assert parse_rollout_obj(obj) == []
 
 
+def test_user_agents_md_injection_ignored():
+    # Quando o cwd tem AGENTS.md, o Codex injeta o conteudo dele como role:"user" gigante que COMECA
+    # com "# AGENTS.md instructions for <path>" (com o environment_context concatenado no fim) -- nao
+    # e chat do usuario. Sem este filtro, vazava como a 1a bolha da sessao (bug visto ao vivo).
+    text = ("# AGENTS.md instructions for /home/jefferson/pessoal/advocacia\n\n<INSTRUCTIONS>\n"
+            "# AGENTS.md\n...regras...\n</INSTRUCTIONS>\n<environment_context>\n<cwd>/x</cwd>\n"
+            "</environment_context>")
+    obj = {"timestamp": "t", "type": "response_item",
+           "payload": {"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": text}]}}
+    assert parse_rollout_obj(obj) == []
+
+
+def test_user_message_mentioning_agents_md_kept():
+    # Conservador: uma mensagem REAL do usuario que apenas MENCIONA AGENTS.md nao pode ser descartada.
+    obj = {"timestamp": "t", "type": "response_item",
+           "payload": {"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "edita o AGENTS.md pra adicionar X"}]}}
+    evs = parse_rollout_obj(obj)
+    assert len(evs) == 1 and evs[0].kind == "user_msg"
+
+
 def test_assistant_message_output_text():
     obj = {"timestamp": "t", "type": "response_item",
            "payload": {"type": "message", "role": "assistant",
