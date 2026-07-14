@@ -3,6 +3,7 @@
 Mocka o AppServerClient (NAO spawna o codex real). Cobre: create_codex (durable sidecar +
 attach), list() incluindo Codex + Claude, nao-regressao do caminho Claude no create(), kill de
 Codex (fecha client + apaga sidecar), e ensure_running pos-restart (dict vazio -> thread/resume)."""
+import asyncio
 import json
 
 import pytest
@@ -195,6 +196,52 @@ async def test_ensure_running_reuses_live_client(tmp_path):
     client = await adapter.ensure_running("cx")
     assert client is fake
     assert fake.started is False  # nao reabriu nada
+
+
+# --- IMPORTANT 1: lock por-nome evita spawn duplicado em ensure_running concorrente ----------
+
+async def test_ensure_running_concurrent_calls_spawn_once(tmp_path):
+    # 2 chamadores concorrentes pro mesmo nome, sem client vivo (pos-restart): sem lock, ambos
+    # passavam pelo `sess is None`, ambos spawnavam+resumiam, e o 2o attach() sobrescrevia o 1o
+    # AppServerClient no dict -- o 1o (subprocess + reader task) ficava orfao, nunca fechado.
+    codex_sessions.save("cx-race", "tid-race", "/home/u/.codex/rollout-race.jsonl", "/tmp/race")
+    adapter = CodexAdapter()
+    starts = 0
+
+    class _SlowFakeClient(_FakeClient):
+        async def start(self):
+            nonlocal starts
+            starts += 1
+            await asyncio.sleep(0)  # forca o interleaving entre as 2 corrotinas
+            self.started = True
+
+    with patch("app.adapters.codex.adapter.AppServerClient", lambda *a, **k: _SlowFakeClient()):
+        c1, c2 = await asyncio.gather(
+            adapter.ensure_running("cx-race"), adapter.ensure_running("cx-race"),
+        )
+    assert starts == 1          # client.start() chamado 1x so
+    assert c1 is c2             # os dois chamadores recebem o MESMO client
+    assert len(adapter._sessions) == 1
+
+
+async def test_ensure_running_double_check_skips_spawn_if_attached_meanwhile(tmp_path):
+    # Versao deterministica (sem depender de timing real de interleaving): segura o lock na mao,
+    # dispara ensure_running numa task (que bloqueia em `async with lock`), anexa a sessao como se
+    # OUTRO chamador tivesse vencido a corrida, e so entao libera o lock -- o double-check tem que
+    # ver a sessao ja anexada e NAO spawnar de novo.
+    codex_sessions.save("cx-dc", "tid-dc", "/home/u/.codex/rollout-dc.jsonl", "/tmp/dc")
+    adapter = CodexAdapter()
+    fake_first = _FakeClient()
+    lock = adapter._locks.setdefault("cx-dc", asyncio.Lock())
+    await lock.acquire()
+    task = asyncio.create_task(adapter.ensure_running("cx-dc"))
+    await asyncio.sleep(0)  # deixa a task bloquear em `async with lock`
+    adapter.attach("cx-dc", fake_first, "tid-dc")
+    lock.release()
+    with patch("app.adapters.codex.adapter.AppServerClient",
+               lambda *a, **k: pytest.fail("nao deveria spawnar de novo")):
+        client = await task
+    assert client is fake_first
 
 
 # --- Dead-detection: state_monitor emite "dead" quando o app-server morre --------------------
