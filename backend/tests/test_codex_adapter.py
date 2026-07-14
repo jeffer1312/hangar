@@ -673,6 +673,69 @@ async def test_ensure_running_resume_restores_model_effort_from_sidecar():
     assert start_params["effort"] == "high"
 
 
+# --- default_model (fix-model-display): display cai pro default da thread sem escolha ------
+
+async def test_current_model_falls_back_to_default_when_no_explicit_choice():
+    # attach() so com default_model (thread/start sem escolha do usuario) -> current_model
+    # (usado pelo GET /models e pelo pill do front) mostra o default, nao None.
+    adapter = CodexAdapter()
+    adapter.attach("sess", _FakeClient([]), "thread-1", default_model="gpt-5.6-sol")
+    assert adapter.current_model("sess") == {"model": "gpt-5.6-sol", "effort": None}
+
+
+async def test_current_model_explicit_choice_wins_over_default():
+    adapter = CodexAdapter()
+    adapter.attach("sess", _FakeClient([]), "thread-1", default_model="gpt-5.6-sol")
+    await adapter.set_model("sess", "gpt-5-codex", "high")
+    assert adapter.current_model("sess") == {"model": "gpt-5-codex", "effort": "high"}
+
+
+async def test_send_prompt_omits_default_model_even_when_present():
+    # NUNCA manda o default no turn/start -- so a escolha explicita (aqui ausente) vai;
+    # sem escolha, omite e deixa o Codex usar o default da thread por conta propria.
+    adapter = CodexAdapter()
+    client = _FakeClient([])
+    adapter.attach("sess", client, "thread-1", default_model="gpt-5.6-sol", default_effort="high")
+    await adapter.send_prompt("sess", "oi")
+    assert client.requests == [(
+        "turn/start",
+        {"threadId": "thread-1", "input": [{"type": "text", "text": "oi", "text_elements": []}]},
+    )]
+
+
+async def test_status_line_shows_default_model_when_no_explicit_choice():
+    # 🤖 no statusline usa model-or-default (Task fix-model-display) -- sem isso o pill/status
+    # ficavam genericos ate o usuario escolher, mesmo com um modelo default rodando de verdade.
+    adapter = CodexAdapter()
+    client = _FakeClient([{"method": "turn/completed", "params": {}}])
+    adapter.attach("sess", client, "t", default_model="gpt-5.6-sol")
+    events = [e async for e in adapter.state_monitor("sess", lambda: "sess")]
+    assert any(e.status_line and "🤖 gpt-5.6-sol" in e.status_line for e in events)
+
+
+async def test_ensure_running_resume_captures_default_without_overwriting_choice():
+    # Pos-restart: sidecar tem a escolha explicita gravada; thread/resume devolve o `model` da
+    # thread (default) -- ensure_running tem que popular default_model SEM pisar na escolha.
+    codex_sessions.save("sess", "thread-1", "/rollout.jsonl", "/tmp/proj",
+                         model="gpt-5-codex", effort="high")
+    adapter = CodexAdapter()
+
+    class _ResumeClient(_FakeClient):
+        async def request(self, method, params, timeout=30.0):
+            self.requests.append((method, params))
+            if method == "thread/resume":
+                return {"thread": {"id": "thread-1"}, "model": "gpt-5.6-sol"}
+            return {}
+
+    client = _ResumeClient([])
+    with patch("app.adapters.codex.adapter.AppServerClient", lambda *a, **k: client):
+        await adapter.ensure_running("sess")
+    sess = adapter._sessions["sess"]
+    assert sess["model"] == "gpt-5-codex"       # escolha preservada
+    assert sess["default_model"] == "gpt-5.6-sol"  # default capturado, so pra display
+    assert adapter.current_model("sess") == {"model": "gpt-5-codex", "effort": "high"}
+
+
 def test_transcript_stream_creates_rollout_dir(tmp_path):
     # 1a sessao Codex do dia: o dir do rollout (~/.codex/sessions/YYYY/MM/DD) ainda nao existe quando o
     # SSE abre o tail -> sem o mkdir, awatch(parent) em follow() derruba o SSE com FileNotFoundError.

@@ -43,7 +43,7 @@ class _FakeClient:
     async def request(self, method, params, timeout=30.0):
         self.requests.append((method, params))
         if method in ("thread/start", "thread/resume"):
-            return {"thread": {"id": self._thread_id, "path": self._path}}
+            return {"thread": {"id": self._thread_id, "path": self._path}, "model": "gpt-5.6-sol"}
         return {}
 
     def terminate(self):
@@ -77,6 +77,23 @@ async def test_create_codex_writes_sidecar_and_returns_provider(tmp_path):
     assert "initialize" in methods and "thread/start" in methods
     start_params = next(p for m, p in fake.requests if m == "thread/start")
     assert start_params["sandbox"] == "workspace-write"
+
+
+async def test_create_codex_captures_default_model_for_display_only(tmp_path):
+    # fix-model-display: thread/start devolve o modelo default da thread (result.model) -- o
+    # create_codex tem que repassar pro attach() como default_model (display), NUNCA como a
+    # escolha (model=None continua ate o usuario escolher no picker).
+    reg = SessionRegistry(projects_dir=tmp_path)
+    fake = _FakeClient()  # response inclui "model": "gpt-5.6-sol" (ver classe acima)
+    adapter = CodexAdapter()
+    with patch.object(registry, "AppServerClient", lambda *a, **k: fake), \
+         patch("app.adapters.get_adapter", return_value=adapter), \
+         patch.object(registry.tmux, "has_session", return_value=False):
+        await reg.create_codex("mysess", "/tmp/proj")
+    sess = adapter._sessions["mysess"]
+    assert sess["default_model"] == "gpt-5.6-sol"   # display
+    assert sess["model"] is None                    # NAO e a escolha
+    assert adapter.current_model("mysess") == {"model": "gpt-5.6-sol", "effort": None}
 
 
 # --- Teste 2: list() inclui Codex (sidecar) E Claude (tmux) ---------------------------------
