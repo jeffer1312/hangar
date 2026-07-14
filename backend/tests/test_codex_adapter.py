@@ -305,6 +305,31 @@ async def test_drain_stops_after_first_delivery_with_two_pending(monkeypatch, tm
 
 # --- CodexAdapter.transcript_stream (reaproveita TranscriptTailer + parse_rollout_line) ------
 
+async def test_drain_reverts_claim_when_send_prompt_raises(monkeypatch, tmp_path):
+    # CRITICAL: claim_undelivered ja marcou delivered=True (otimista) antes do send_prompt. Se
+    # send_prompt LEVANTA (app-server morto/timeout/RuntimeError do JSON-RPC), o except tinha que
+    # reverter igual ao branch "deferred" -- sem isto a entrada ficava delivered=True pra sempre
+    # (bolha "queued-" eterna, nunca reenviada = perda silenciosa).
+    from app.config import settings
+    monkeypatch.setattr(settings, "projects_dir", tmp_path / "projects")
+    from app.pqueue import PromptQueue
+    q = PromptQueue("sess-drainexc")
+    q.append("msg pendente", delivered=False)
+
+    adapter = CodexAdapter()
+    client = _FakeClient([])
+    adapter.attach("sess-drainexc", client, "thread-z")
+
+    async def boom(name, text):
+        raise RuntimeError("app-server morreu")
+
+    monkeypatch.setattr(adapter, "send_prompt", boom)
+    sent = await adapter.drain("sess-drainexc", "")  # nao pode crashar
+
+    assert sent == 0
+    assert all(e["delivered"] is False for e in q.load())  # reivindicavel de novo
+
+
 async def test_transcript_stream_parses_rollout_lines(tmp_path):
     f = tmp_path / "rollout.jsonl"
     f.write_text(json.dumps({

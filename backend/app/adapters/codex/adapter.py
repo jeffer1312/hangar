@@ -10,6 +10,7 @@ deliverable, agora tem drain/spawn_command/transcript_path + o lifecycle vivo (a
 close_sync). ensure_running e o resume LAZY: pos-restart do backend o processo app-server morre mas
 o sidecar duravel (app.adapters.codex.sessions) guarda thread_id/rollout_path/cwd -> ensure_running
 reabre o AppServerClient e retoma pelo thread/resume sob demanda."""
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import AsyncIterator, Callable, Optional
@@ -84,6 +85,11 @@ class CodexAdapter:
         # "in_progress": bool}. Vazio ate attach() ser chamado (Task 5, ao spawnar o app-server
         # e dar thread/start) — sem entrada, a sessao e tratada como "dead"/"deliverable".
         self._sessions: dict[str, dict] = {}
+        # Lock por-nome pra ensure_running: sem isto, 2 chamadores concorrentes pro mesmo nome sem
+        # client vivo (ex: SSE reconnect + /input logo apos restart) podiam ambos passar pelo `sess
+        # is None`, ambos spawnar+resume, e o 2o attach() sobrescrever o 1o AppServerClient no dict
+        # -- o 1o (subprocess + reader task) ficava orfao, nunca fechado.
+        self._locks: dict[str, asyncio.Lock] = {}
 
     def attach(self, name: str, client: AppServerClient, thread_id: str) -> None:
         """Liga uma sessao (por nome) a um AppServerClient + threadId ja vivos. Chamado pelo
@@ -98,33 +104,44 @@ class CodexAdapter:
         - com sidecar (pos-restart): reabre o app-server, initialize, e RETOMA o thread existente
           via `thread/resume` passando o threadId gravado (metodo confirmado no schema da 0.141.0;
           docstring do ThreadResumeParams: 'Prefer using thread_id whenever possible'). O historico
-          nao se perde: ja esta no rollout JSONL; o resume so reconecta o processo vivo."""
+          nao se perde: ja esta no rollout JSONL; o resume so reconecta o processo vivo.
+
+        Lock por-nome (IMPORTANT 1): sem ele, 2 chamadores concorrentes pro mesmo nome sem client
+        vivo spawnavam 2 AppServerClient e o 2o attach() sobrescrevia o 1o no dict, vazando o
+        subprocess orfao do 1o. setdefault no dict de locks e seguro sem lock proprio: nao ha
+        `await` entre o get e o set, entao nenhuma outra corrotina roda no meio (cooperativo)."""
         sess = self._sessions.get(name)
         if sess is not None:
             return sess["client"]
-        meta = codex_sessions.load(name)
-        if meta is None:
-            return None
-        client = AppServerClient()
-        try:
-            await client.start()
-            await client.request("initialize", {"clientInfo": _CLIENT_INFO, "capabilities": None})
-            result = await client.request("thread/resume", {
-                "threadId": meta["thread_id"],
-                "cwd": meta.get("cwd"),
-                "sandbox": _SANDBOX,
-                "approvalPolicy": _APPROVAL,
-            })
-        except Exception:
-            # resume falhou (app-server morreu, thread perdido, etc.): nao deixa o subprocess orfao.
-            await client.close()
-            raise
-        # thread/resume devolve {"thread": {"id","path",...}}; reusa o thread_id do sidecar como
-        # fonte de verdade (o id nao muda no resume).
-        thread_id = (result.get("thread") or {}).get("id") or meta["thread_id"]
-        self.attach(name, client, thread_id)
-        _log.info("codex ensure_running: resumed thread=%s name=%s", thread_id, name)
-        return client
+        lock = self._locks.setdefault(name, asyncio.Lock())
+        async with lock:
+            # Double-check: outro chamador pode ter terminado de spawnar enquanto esperavamos o lock.
+            sess = self._sessions.get(name)
+            if sess is not None:
+                return sess["client"]
+            meta = codex_sessions.load(name)
+            if meta is None:
+                return None
+            client = AppServerClient()
+            try:
+                await client.start()
+                await client.request("initialize", {"clientInfo": _CLIENT_INFO, "capabilities": None})
+                result = await client.request("thread/resume", {
+                    "threadId": meta["thread_id"],
+                    "cwd": meta.get("cwd"),
+                    "sandbox": _SANDBOX,
+                    "approvalPolicy": _APPROVAL,
+                })
+            except Exception:
+                # resume falhou (app-server morreu, thread perdido, etc.): nao deixa o subprocess orfao.
+                await client.close()
+                raise
+            # thread/resume devolve {"thread": {"id","path",...}}; reusa o thread_id do sidecar como
+            # fonte de verdade (o id nao muda no resume).
+            thread_id = (result.get("thread") or {}).get("id") or meta["thread_id"]
+            self.attach(name, client, thread_id)
+            _log.info("codex ensure_running: resumed thread=%s name=%s", thread_id, name)
+            return client
 
     def close_sync(self, name: str) -> None:
         """Encerramento SINCRONO do client vivo (chamado pelo registry.kill, que e sync). Manda
@@ -272,13 +289,17 @@ class CodexAdapter:
     async def drain(self, name: str, path: str) -> int:
         """Entrega a fila duravel (PromptQueue keyed por nome) via send_prompt (turn/start). Sem
         tty/overlay como no Claude: claim-1-envia-1, para no primeiro `deferred` (turno em curso).
-        Retorna quantas entregou. `path` (rollout) mantido por assinatura do Protocol; nao usado."""
+        Retorna quantas entregou. `path` (rollout) mantido por assinatura do Protocol; nao usado.
+
+        IMPORTANT 2: PromptQueue.load/claim_undelivered/set_delivered fazem I/O de arquivo SINCRONO
+        com lock -- chamados direto numa corrotina bloqueariam o event loop (que serve o SSE de
+        outras sessoes). Mesmo padrao do ClaudeAdapter (ver adapters/claude.py): to_thread."""
         q = PromptQueue(name)
-        if not any(e.get("delivered") is False for e in q.load()):
+        if not any(e.get("delivered") is False for e in await asyncio.to_thread(q.load)):
             return 0
         sent = 0
         while True:
-            claimed = q.claim_undelivered(limit=1)
+            claimed = await asyncio.to_thread(q.claim_undelivered, limit=1)
             if not claimed:
                 return sent
             entry = claimed[0]
@@ -286,11 +307,19 @@ class CodexAdapter:
                 result = await self.send_prompt(name, entry["text"])
             except Exception:
                 _log.exception("codex drain: falha ao entregar entry=%s name=%s", entry.get("id"), name)
+                # CRITICAL: claim_undelivered ja marcou delivered=True (otimista). send_prompt
+                # levantou (app-server morto/timeout/RuntimeError do JSON-RPC) -- sem reverter, a
+                # entrada fica delivered=True pra sempre (nunca reenviada, bolha "queued-" eterna).
+                # Mesmo tratamento do branch "deferred" abaixo.
+                try:
+                    await asyncio.to_thread(q.set_delivered, entry["id"], False)
+                except OSError:
+                    pass
                 return sent
             if result != "sent":
                 # turno em curso / sessao indisponivel: reverte (nada foi enviado) e espera o proximo idle.
                 try:
-                    q.set_delivered(entry["id"], False)
+                    await asyncio.to_thread(q.set_delivered, entry["id"], False)
                 except OSError:
                     pass
                 return sent
