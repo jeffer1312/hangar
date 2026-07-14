@@ -3,6 +3,14 @@
   // Cache de comandos por sessao: sobrevive a remontagens do Composer (ex: voltar de
   // awaiting_input) pra buscar a lista so uma vez por sessao.
   const commandCache = new Map<string, CommandInfo[]>();
+
+  // Cache de anexos por sessao: sobrevive ao remount do Composer/Chat ao trocar de sessao
+  // (App.svelte usa {#key route.sessionName}). So em memoria -> File nao cabe no localStorage
+  // (ao contrario do texto do draft). Nao revogamos o objectURL aqui: ele so morre ao enviar
+  // ou remover o anexo (removeAttachment/clearAttachments), entao volta valido ao restaurar.
+  // ponytail: sem limite/expiracao -> anexar e nunca enviar em varias sessoes acumula memoria;
+  // adicionar TTL/limite se isso virar problema real.
+  const attachmentCache = new Map<string, { file: File; url: string; isImage: boolean }[]>();
 </script>
 
 <script lang="ts">
@@ -76,7 +84,14 @@
 
   // ── Anexos: lista de arquivos + preview local + estado de upload ────────────
   // isImage -> preview; resto -> chip de arquivo. Audio NAO vira anexo: e transcrito e cai no textarea.
-  let attachments = $state<{ file: File; url: string; isImage: boolean }[]>([]);
+  // Restaura do cache em memoria da sessao atual (mesma ideia do draft de texto em Chat.svelte).
+  // svelte-ignore state_referenced_locally
+  let attachments = $state<{ file: File; url: string; isImage: boolean }[]>(attachmentCache.get(sessionName) ?? []);
+  // Mantem o cache em sincronia a cada mudanca (add/remove/clear); some da sessao ao esvaziar.
+  $effect(() => {
+    if (attachments.length) attachmentCache.set(sessionName, attachments);
+    else attachmentCache.delete(sessionName);
+  });
   let fileInput: HTMLInputElement | undefined = $state();
   let uploading = $state(false);
   let attachError = $state('');
