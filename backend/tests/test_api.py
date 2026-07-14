@@ -264,6 +264,67 @@ def test_limits_claude_rejected_with_400(api_client):
     fake.read_rate_limits.assert_not_called()
 
 
+# ---------------------------------------------------------------------------
+# Modelo + reasoning effort do Codex (Task C) — GET/POST /model(s)
+# ---------------------------------------------------------------------------
+
+def test_codex_models_returns_list_and_current(api_client):
+    fake = _fake_codex_adapter()
+    fake.list_models = AsyncMock(return_value=[{
+        "model": "gpt-5-codex", "displayName": "GPT-5 Codex", "description": "padrao",
+        "efforts": [{"value": "high", "description": "mais capaz"}], "defaultEffort": "medium",
+    }])
+    fake.current_model = MagicMock(return_value={"model": "gpt-5-codex", "effort": "high"})
+    with patch("app.api._provider_of", return_value="codex"), \
+         patch("app.api.get_adapter", return_value=fake):
+        r = api_client.get("/api/sessions/cx/models", headers=_h())
+    assert r.status_code == 200
+    body = r.json()
+    assert body["models"][0]["model"] == "gpt-5-codex"
+    assert body["current"] == {"model": "gpt-5-codex", "effort": "high"}
+    fake.list_models.assert_awaited_once_with("cx")
+    fake.current_model.assert_called_once_with("cx")
+
+
+def test_codex_models_claude_rejected_with_400(api_client):
+    fake = _fake_codex_adapter()
+    with patch("app.api.get_adapter", return_value=fake):
+        r = api_client.get("/api/sessions/cc/models", headers=_h())
+    assert r.status_code == 400
+
+
+def test_set_codex_model_calls_adapter(api_client):
+    fake = _fake_codex_adapter()
+    fake.set_model = AsyncMock(return_value=None)
+    with patch("app.api._provider_of", return_value="codex"), \
+         patch("app.api.get_adapter", return_value=fake):
+        r = api_client.post(
+            "/api/sessions/cx/model", json={"model": "gpt-5-codex", "effort": "high"}, headers=_h()
+        )
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+    fake.set_model.assert_awaited_once_with("cx", "gpt-5-codex", "high")
+
+
+def test_set_codex_model_effort_optional(api_client):
+    fake = _fake_codex_adapter()
+    fake.set_model = AsyncMock(return_value=None)
+    with patch("app.api._provider_of", return_value="codex"), \
+         patch("app.api.get_adapter", return_value=fake):
+        r = api_client.post("/api/sessions/cx/model", json={"model": "gpt-5-codex"}, headers=_h())
+    assert r.status_code == 200
+    fake.set_model.assert_awaited_once_with("cx", "gpt-5-codex", None)
+
+
+def test_set_codex_model_claude_rejected_with_400(api_client):
+    fake = _fake_codex_adapter()
+    fake.set_model = AsyncMock(return_value=None)
+    with patch("app.api.get_adapter", return_value=fake):
+        r = api_client.post("/api/sessions/cc/model", json={"model": "opus"}, headers=_h())
+    assert r.status_code == 400
+    fake.set_model.assert_not_awaited()
+
+
 def test_select_route(api_client):
     with patch("app.api.terminal.select") as sel:
         r = api_client.post("/api/sessions/cc/select", json={"option": 2}, headers=_h())

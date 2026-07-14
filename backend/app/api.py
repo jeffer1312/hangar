@@ -803,6 +803,30 @@ async def limits(name: str):
     }
 
 
+class CodexModelBody(_StrictBody):
+    model: str
+    effort: str | None = None
+
+
+@app.get("/api/sessions/{name}/models", dependencies=[Depends(require_auth)])
+async def codex_models(name: str):
+    # Task C: modelo + reasoning effort so pra Codex (via model/list) -- o /model do Claude e o
+    # picker interativo dedicado (/model-effort), sem esta rota.
+    if _provider_of(name) != "codex":
+        raise HTTPException(400, "models so existe pra sessoes Codex")
+    adapter = get_adapter("codex")
+    return {"models": await adapter.list_models(name), "current": adapter.current_model(name)}
+
+
+@app.post("/api/sessions/{name}/model", dependencies=[Depends(require_auth)])
+async def set_codex_model(name: str, body: CodexModelBody):
+    # Grava a escolha (dict + sidecar); vale a partir do PROXIMO turn/start, ver CodexAdapter.set_model.
+    if _provider_of(name) != "codex":
+        raise HTTPException(400, "model so existe pra sessoes Codex")
+    await get_adapter("codex").set_model(name, body.model, body.effort)
+    return {"ok": True}
+
+
 @app.get("/api/sessions/{name}/pane", dependencies=[Depends(require_auth)])
 def pane(name: str):
     # Pane CRU (texto ja composto pelo tmux: sem ANSI/cursor-move). O espelho do pane (TerminalMirror)

@@ -91,11 +91,15 @@ class CodexAdapter:
         # -- o 1o (subprocess + reader task) ficava orfao, nunca fechado.
         self._locks: dict[str, asyncio.Lock] = {}
 
-    def attach(self, name: str, client: AppServerClient, thread_id: str) -> None:
+    def attach(self, name: str, client: AppServerClient, thread_id: str,
+               model: Optional[str] = None, effort: Optional[str] = None) -> None:
         """Liga uma sessao (por nome) a um AppServerClient + threadId ja vivos. Chamado pelo
-        registry.create_codex (spawn novo) e por ensure_running (resume pos-restart)."""
+        registry.create_codex (spawn novo, sem model/effort ainda -- sessao nova) e por
+        ensure_running (resume pos-restart, passando model/effort lidos do sidecar -- Task C:
+        a escolha sobrevive ao restart)."""
         self._sessions[name] = {"client": client, "thread_id": thread_id,
-                                 "state": "idle", "in_progress": False}
+                                 "state": "idle", "in_progress": False,
+                                 "model": model, "effort": effort}
 
     async def ensure_running(self, name: str) -> Optional[AppServerClient]:
         """Garante um AppServerClient VIVO pra sessao Codex `name` (resume LAZY):
@@ -139,7 +143,9 @@ class CodexAdapter:
             # thread/resume devolve {"thread": {"id","path",...}}; reusa o thread_id do sidecar como
             # fonte de verdade (o id nao muda no resume).
             thread_id = (result.get("thread") or {}).get("id") or meta["thread_id"]
-            self.attach(name, client, thread_id)
+            # model/effort (Task C): repovoa a escolha do sidecar no dict quente, senao o 1o
+            # turn/start pos-restart perderia a escolha ate a proxima chamada de set_model.
+            self.attach(name, client, thread_id, model=meta.get("model"), effort=meta.get("effort"))
             _log.info("codex ensure_running: resumed thread=%s name=%s", thread_id, name)
             return client
 
@@ -241,14 +247,22 @@ class CodexAdapter:
         client = await self.ensure_running(name)
         if client is None or not await self.deliverable(name):
             return "deferred"
-        result = await client.request("turn/start", {
-            "threadId": self._sessions[name]["thread_id"],
+        sess = self._sessions[name]
+        params = {
+            "threadId": sess["thread_id"],
             "input": [{"type": "text", "text": text, "text_elements": []}],
-        })
+        }
+        # model/effort (Task C): so inclui quando ha escolha guardada -- omitido, o app-server usa
+        # o default da thread. O schema documenta "override... AND subsequent turns": basta mandar
+        # aqui de novo em CADA turn/start (nao ha metodo "set model" separado).
+        if sess.get("model"):
+            params["model"] = sess["model"]
+        if sess.get("effort"):
+            params["effort"] = sess["effort"]
+        result = await client.request("turn/start", params)
         # guarda o turnId do turno recem-iniciado (turn/interrupt exige threadId+turnId; ver schema
         # TurnInterruptParams). turn/start devolve {"turn": {"id", ...}}.
         turn_id = (result.get("turn") or {}).get("id")
-        sess = self._sessions[name]
         if turn_id:
             sess["turn_id"] = turn_id
         # Marca in_progress AQUI (nao so esperar o turn/started chegar no loop de notifications):
@@ -344,6 +358,62 @@ class CodexAdapter:
             _log.exception("codex read_rate_limits: request falhou name=%s", name)
             return None
         return result.get("rateLimits")
+
+    async def list_models(self, name: str) -> list[dict]:
+        """Lista os modelos disponiveis pra sessao via `model/list` (Task C), normalizados:
+        {model, displayName, description, efforts: [{value, description}], defaultEffort}.
+        Filtra hidden=True (schema 0.141.0: `Model.hidden`). Mesmo contrato de nao-levantar de
+        read_rate_limits -- lista vazia se a sessao nao tem client vivo/sidecar ou o app-server
+        recusar o pedido."""
+        try:
+            client = await self.ensure_running(name)
+        except Exception:
+            _log.exception("codex list_models: ensure_running falhou name=%s", name)
+            return []
+        if client is None:
+            return []
+        try:
+            result = await client.request("model/list", {})
+        except Exception:
+            _log.exception("codex list_models: request falhou name=%s", name)
+            return []
+        return [
+            {
+                "model": m.get("model"),
+                "displayName": m.get("displayName"),
+                "description": m.get("description"),
+                "efforts": [
+                    {"value": e.get("reasoningEffort"), "description": e.get("description")}
+                    for e in (m.get("supportedReasoningEfforts") or [])
+                ],
+                "defaultEffort": m.get("defaultReasoningEffort"),
+            }
+            for m in (result.get("data") or [])
+            if not m.get("hidden")
+        ]
+
+    async def set_model(self, name: str, model: Optional[str], effort: Optional[str]) -> None:
+        """Grava a escolha de modelo/effort da sessao (Task C): dict quente (se anexada) + sidecar
+        duravel (sobrevive ao restart). NAO manda nada pro app-server agora -- vale a partir do
+        PROXIMO turn/start (send_prompt inclui a escolha nos params; ver descoberta-chave no
+        brief: turn/start "override... AND subsequent turns", sem metodo "set model" separado)."""
+        sess = self._sessions.get(name)
+        if sess is not None:
+            sess["model"] = model
+            sess["effort"] = effort
+        codex_sessions.update_model(name, model, effort)
+
+    def current_model(self, name: str) -> dict:
+        """Modelo/effort escolhidos pra sessao: dict quente primeiro (mais recente), senao o
+        sidecar duravel (sessao conhecida mas nao anexada agora); {model: None, effort: None} se
+        nunca escolhido -- o proximo turn/start usa o default da thread."""
+        sess = self._sessions.get(name)
+        if sess is not None and (sess.get("model") is not None or sess.get("effort") is not None):
+            return {"model": sess.get("model"), "effort": sess.get("effort")}
+        meta = codex_sessions.load(name)
+        if meta is not None:
+            return {"model": meta.get("model"), "effort": meta.get("effort")}
+        return {"model": None, "effort": None}
 
     def spawn_command(self, cwd: str, session_id: str) -> list[str]:
         # Sessao Codex NAO nasce de um comando tmux -- nasce de thread/start no app-server

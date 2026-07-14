@@ -3,9 +3,21 @@
 spawnar o codex real — o wire protocol ja e testado em test_codex_appserver.py)."""
 import json
 
+import pytest
+from unittest.mock import patch
+
+from app.adapters.codex import sessions as codex_sessions
 from app.adapters.codex.adapter import CodexAdapter, map_state
 from app.adapters.codex.preview import CodexPreviewSource
 from app.state import StateEvent
+
+
+@pytest.fixture(autouse=True)
+def _isolate_sidecar(tmp_path):
+    # Sidecars duraveis redirecionados pra tmp -- mesmo padrao de test_codex_registry.py (evita
+    # os testes de model/effort tocarem ~/.claude-pocket/codex-sessions de verdade).
+    with patch.object(codex_sessions, "_dir", lambda: tmp_path / "codex-sessions"):
+        yield
 
 
 class _FakeClient:
@@ -18,6 +30,12 @@ class _FakeClient:
     async def notifications(self):
         for n in self._notifs:
             yield n
+
+    async def start(self):
+        pass  # ensure_running (resume) chama start(); duck-type suficiente pros testes daqui
+
+    async def close(self):
+        pass
 
     async def request(self, method: str, params: dict, timeout: float = 30.0) -> dict:
         self.requests.append((method, params))
@@ -392,3 +410,155 @@ async def test_read_rate_limits_none_when_request_raises():
 def test_codex_registered_in_providers():
     from app.adapters import PROVIDERS
     assert isinstance(PROVIDERS["codex"], CodexAdapter)
+
+
+# --- CodexAdapter.list_models / set_model / current_model (Task C) -------------------------
+
+_MODEL_LIST_RESULT = {
+    "data": [
+        {
+            "id": "gpt-5-codex", "model": "gpt-5-codex", "displayName": "GPT-5 Codex",
+            "description": "modelo padrao", "hidden": False,
+            "supportedReasoningEfforts": [
+                {"reasoningEffort": "low", "description": "mais rapido"},
+                {"reasoningEffort": "high", "description": "mais capaz"},
+            ],
+            "defaultReasoningEffort": "medium",
+        },
+        {
+            "id": "gpt-5-legacy", "model": "gpt-5-legacy", "displayName": "GPT-5 (legacy)",
+            "description": "descontinuado", "hidden": True,
+            "supportedReasoningEfforts": [], "defaultReasoningEffort": None,
+        },
+    ],
+}
+
+
+class _ModelListClient(_FakeClient):
+    async def request(self, method, params, timeout=30.0):
+        self.requests.append((method, params))
+        if method == "model/list":
+            return _MODEL_LIST_RESULT
+        return {}
+
+
+async def test_list_models_filters_hidden_and_normalizes():
+    adapter = CodexAdapter()
+    client = _ModelListClient([])
+    adapter.attach("sess", client, "thread-1")
+    models = await adapter.list_models("sess")
+    assert models == [{
+        "model": "gpt-5-codex", "displayName": "GPT-5 Codex", "description": "modelo padrao",
+        "efforts": [
+            {"value": "low", "description": "mais rapido"},
+            {"value": "high", "description": "mais capaz"},
+        ],
+        "defaultEffort": "medium",
+    }]  # o hidden=True foi filtrado
+    assert ("model/list", {}) in client.requests
+
+
+async def test_list_models_empty_when_not_attached():
+    adapter = CodexAdapter()
+    assert await adapter.list_models("ghost") == []
+
+
+async def test_list_models_empty_when_request_raises():
+    adapter = CodexAdapter()
+
+    class _BoomClient(_FakeClient):
+        async def request(self, method, params, timeout=30.0):
+            raise RuntimeError("app-server recusou")
+
+    adapter.attach("sess", _BoomClient([]), "thread-1")
+    assert await adapter.list_models("sess") == []
+
+
+async def test_set_model_updates_dict_and_sidecar():
+    adapter = CodexAdapter()
+    client = _FakeClient([])
+    adapter.attach("sess", client, "thread-1")
+    codex_sessions.save("sess", "thread-1", "/rollout.jsonl", "/tmp/proj")
+    await adapter.set_model("sess", "gpt-5-codex", "high")
+    assert adapter._sessions["sess"]["model"] == "gpt-5-codex"
+    assert adapter._sessions["sess"]["effort"] == "high"
+    saved = codex_sessions.load("sess")
+    assert saved["model"] == "gpt-5-codex"
+    assert saved["effort"] == "high"
+    # thread_id/rollout_path/cwd preservados -- set_model nao pode corromper a identidade da sessao
+    assert saved["thread_id"] == "thread-1"
+    assert saved["rollout_path"] == "/rollout.jsonl"
+
+
+async def test_set_model_noop_on_sidecar_when_never_saved():
+    # sessao anexada so em memoria (sem sidecar ainda) -- update_model nao deve levantar.
+    adapter = CodexAdapter()
+    adapter.attach("sess", _FakeClient([]), "thread-1")
+    await adapter.set_model("sess", "gpt-5-codex", None)
+    assert adapter._sessions["sess"]["model"] == "gpt-5-codex"
+    assert codex_sessions.load("sess") is None
+
+
+async def test_current_model_from_dict_when_set():
+    adapter = CodexAdapter()
+    adapter.attach("sess", _FakeClient([]), "thread-1")
+    await adapter.set_model("sess", "gpt-5-codex", "high")
+    assert adapter.current_model("sess") == {"model": "gpt-5-codex", "effort": "high"}
+
+
+async def test_current_model_falls_back_to_sidecar_when_not_attached():
+    codex_sessions.save("sess", "thread-1", "/rollout.jsonl", "/tmp/proj",
+                         model="gpt-5-codex", effort="low")
+    adapter = CodexAdapter()
+    assert adapter.current_model("sess") == {"model": "gpt-5-codex", "effort": "low"}
+
+
+async def test_current_model_null_when_never_chosen():
+    adapter = CodexAdapter()
+    assert adapter.current_model("ghost") == {"model": None, "effort": None}
+
+
+# --- send_prompt inclui model/effort no turn/start (Task C) ---------------------------------
+
+async def test_send_prompt_includes_model_and_effort_when_set():
+    adapter = CodexAdapter()
+    client = _FakeClient([])
+    adapter.attach("sess", client, "thread-1")
+    await adapter.set_model("sess", "gpt-5-codex", "high")
+    await adapter.send_prompt("sess", "oi")
+    assert client.requests == [(
+        "turn/start",
+        {"threadId": "thread-1", "input": [{"type": "text", "text": "oi", "text_elements": []}],
+         "model": "gpt-5-codex", "effort": "high"},
+    )]
+
+
+async def test_send_prompt_omits_model_effort_when_unset():
+    # sem escolha -> turn/start nao carrega model/effort, app-server usa o default da thread
+    # (mesmo shape do teste original test_send_prompt_calls_turn_start -- nao regride).
+    adapter = CodexAdapter()
+    client = _FakeClient([])
+    adapter.attach("sess", client, "thread-1")
+    await adapter.send_prompt("sess", "oi")
+    assert client.requests == [(
+        "turn/start",
+        {"threadId": "thread-1", "input": [{"type": "text", "text": "oi", "text_elements": []}]},
+    )]
+
+
+async def test_ensure_running_resume_restores_model_effort_from_sidecar():
+    # Pos-restart: dict vazio, sidecar tem a escolha gravada antes do restart. ensure_running
+    # (resume) tem que repovoar model/effort no dict quente -- senao o proximo turn/start
+    # "esqueceria" a escolha ate o usuario reabrir o picker.
+    codex_sessions.save("sess", "thread-1", "/rollout.jsonl", "/tmp/proj",
+                         model="gpt-5-codex", effort="high")
+    adapter = CodexAdapter()
+    client = _FakeClient([])
+    with patch("app.adapters.codex.adapter.AppServerClient", lambda *a, **k: client):
+        await adapter.ensure_running("sess")
+    assert adapter._sessions["sess"]["model"] == "gpt-5-codex"
+    assert adapter._sessions["sess"]["effort"] == "high"
+    await adapter.send_prompt("sess", "oi")
+    start_params = next(p for m, p in client.requests if m == "turn/start")
+    assert start_params["model"] == "gpt-5-codex"
+    assert start_params["effort"] == "high"

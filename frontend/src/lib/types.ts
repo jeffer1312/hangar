@@ -246,3 +246,28 @@ export interface SessionLimits {
   secondary: RateLimitWindow | null;
   planType: string | null;
 }
+
+// Modelo + reasoning effort do Codex (GET /models, Task C) — normalizado no backend a partir de
+// `model/list` (hidden ja filtrado). effort e string livre (o que vier de supportedReasoningEfforts).
+export interface CodexModelEffort {
+  value: string;
+  description: string | null;
+}
+
+export interface CodexModel {
+  model: string;
+  displayName: string | null;
+  description: string | null;
+  efforts: CodexModelEffort[];
+  defaultEffort: string | null;
+}
+
+export interface CodexModelChoice {
+  model: string | null;
+  effort: string | null;
+}
+
+export interface CodexModelsResponse {
+  models: CodexModel[];
+  current: CodexModelChoice;
+}
