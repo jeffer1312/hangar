@@ -345,6 +345,48 @@ async def test_transcript_stream_parses_rollout_lines(tmp_path):
     assert got[0].kind == "user_msg"
 
 
+# --- CodexAdapter.read_rate_limits (Task B) -------------------------------------------------
+
+async def test_read_rate_limits_returns_snapshot():
+    adapter = CodexAdapter()
+    snapshot = {
+        "limitId": "codex", "limitName": None,
+        "primary": {"usedPercent": 42, "windowDurationMins": 10080, "resetsAt": 1784494806},
+        "secondary": None, "credits": None, "individualLimit": None,
+        "planType": "plus", "rateLimitReachedType": None,
+    }
+
+    class _RateClient(_FakeClient):
+        async def request(self, method, params, timeout=30.0):
+            self.requests.append((method, params))
+            if method == "account/rateLimits/read":
+                return {"rateLimits": snapshot}
+            return {}
+
+    client = _RateClient([])
+    adapter.attach("sess", client, "thread-1")
+    got = await adapter.read_rate_limits("sess")
+    assert got == snapshot
+    assert ("account/rateLimits/read", {}) in client.requests
+
+
+async def test_read_rate_limits_none_when_not_attached():
+    # sem client vivo e sem sidecar (nome desconhecido) -> None, nunca levanta.
+    adapter = CodexAdapter()
+    assert await adapter.read_rate_limits("ghost") is None
+
+
+async def test_read_rate_limits_none_when_request_raises():
+    adapter = CodexAdapter()
+
+    class _BoomClient(_FakeClient):
+        async def request(self, method, params, timeout=30.0):
+            raise RuntimeError("app-server recusou")
+
+    adapter.attach("sess", _BoomClient([]), "thread-1")
+    assert await adapter.read_rate_limits("sess") is None
+
+
 # --- registro em PROVIDERS -------------------------------------------------------------------
 
 def test_codex_registered_in_providers():
