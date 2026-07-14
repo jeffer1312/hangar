@@ -2,8 +2,10 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
+import tempfile
 import time
 from pathlib import Path
 
@@ -11,6 +13,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from app.config import settings, _LOOPBACK
+
+log = logging.getLogger(__name__)
 
 # ── Zero-knowledge sync hub ──────────────────────────────────────────────────────────────────
 # The browser derives masterKey = PBKDF2(password, salt); from it, authHash (sent here) and encKey
@@ -29,17 +33,27 @@ def load_vault() -> dict | None:
     try:
         return json.loads(_data_path().read_text())
     except FileNotFoundError:
-        return None
+        return None  # sem cadastro ainda
     except (OSError, json.JSONDecodeError):
-        return None
+        # Arquivo existe mas está ilegível/corrompido: NÃO tratar como "não registrado" — isso deixaria
+        # a tela de "criar acesso" sobrescrever um cadastro existente. Falha visível > falha silenciosa.
+        log.exception("vault ilegível/corrompido em %s", _data_path())
+        raise
 
 
 def save_vault(v: dict) -> None:
     p = _data_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps(v))
-    os.replace(tmp, p)  # atomic
+    # tmp ÚNICO por escrita (mesmo diretório, pra o os.replace ser atômico). Um nome de tmp fixo
+    # rasgava o arquivo quando duas gravações concorriam (mesmo pid, threads do threadpool).
+    fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=p.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(v))
+        os.replace(tmp, p)  # atomic
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)  # não deixa tmp órfão se falhar no meio
+        raise
 
 
 def is_registered() -> bool:
