@@ -671,3 +671,13 @@ async def test_ensure_running_resume_restores_model_effort_from_sidecar():
     start_params = next(p for m, p in client.requests if m == "turn/start")
     assert start_params["model"] == "gpt-5-codex"
     assert start_params["effort"] == "high"
+
+
+def test_transcript_stream_creates_rollout_dir(tmp_path):
+    # 1a sessao Codex do dia: o dir do rollout (~/.codex/sessions/YYYY/MM/DD) ainda nao existe quando o
+    # SSE abre o tail -> sem o mkdir, awatch(parent) em follow() derruba o SSE com FileNotFoundError.
+    from app.adapters.codex.adapter import CodexAdapter
+    rollout = tmp_path / "2026" / "07" / "14" / "rollout-x.jsonl"
+    assert not rollout.parent.exists()
+    CodexAdapter().transcript_stream(str(rollout))   # a chamada sync ja roda o mkdir (antes do return)
+    assert rollout.parent.exists()
