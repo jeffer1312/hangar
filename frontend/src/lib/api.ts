@@ -17,6 +17,7 @@ import type {
   RunnersResponse,
   RunInfo,
   SessionLimits,
+  CodexModelsResponse,
 } from './types';
 
 // URL da idx-ésima imagem (colada no terminal) de uma msg do transcript. `?token` porque <img> não
@@ -632,4 +633,17 @@ export function getRunPane(name: string): Promise<{ pane: string }> {
 // Limites de uso da conta Codex (Task B) — so sessoes Codex; o back devolve 400 pra Claude.
 export function getLimits(name: string): Promise<SessionLimits> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/limits`);
+}
+
+// Modelo + reasoning effort do Codex (Task C) — so sessoes Codex; o back devolve 400 pra Claude.
+export function getCodexModels(name: string): Promise<CodexModelsResponse> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/models`);
+}
+
+// Grava a escolha (dict + sidecar no backend); vale a partir do PROXIMO turno enviado.
+export function setCodexModel(name: string, model: string, effort?: string | null): Promise<void> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/model`, {
+    method: 'POST',
+    body: JSON.stringify({ model, effort: effort ?? undefined }),
+  });
 }

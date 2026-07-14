@@ -13,10 +13,11 @@
   import IconMic from './icons/IconMic.svelte';
   import ContextRing from './ContextRing.svelte';
   import ModelEffortSheet from './ModelEffortSheet.svelte';
+  import CodexModelSheet from './CodexModelSheet.svelte';
   import SlashSuggest from './SlashSuggest.svelte';
   import CommandSheet from './CommandSheet.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
-  import { getCommands, setModelEffort, uploadFile, transcribeFile, type ModelEffortBody } from '../lib/api';
+  import { getCommands, setModelEffort, uploadFile, transcribeFile, getCodexModels, type ModelEffortBody } from '../lib/api';
   import type { State } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
 
@@ -123,6 +124,32 @@
   let sheetOpen = $state(false);
   let chosenModel = $state<string | null>(null);   // rotulo otimista: 'Opus' | 'Sonnet' | ...
   let chosenEffort = $state<string | null>(null);   // low | medium | high | xhigh | max | ultracode
+
+  // ── Pill de modelo do Codex (Task C): equivalente do pill acima, so quando isCodex ──
+  // Sem read-back de statusline (Codex nao expoe modelo/effort no status_line hoje) -- a fonte de
+  // verdade e o GET /models (sidecar/dict do backend). Seedado ao montar/trocar de sessao; o sheet
+  // atualiza via onApplied apos um POST /model com sucesso.
+  let codexSheetOpen = $state(false);
+  let codexModel = $state<string | null>(null);
+  let codexEffort = $state<string | null>(null);
+
+  $effect(() => {
+    if (!isCodex) return;
+    const sn = sessionName;
+    getCodexModels(sn)
+      .then((res) => {
+        codexModel = res.current.model;
+        codexEffort = res.current.effort;
+      })
+      .catch(() => {
+        // endpoint indisponivel -> pill fica com o rotulo generico, sem quebrar a UI
+      });
+  });
+
+  function handleCodexModelApplied(model: string, effort: string | null) {
+    codexModel = model;
+    codexEffort = effort;
+  }
 
   const pillModel = $derived(chosenModel ?? status?.model ?? null);
   const pillEffort = $derived(chosenEffort ?? status?.effort ?? null);
@@ -682,6 +709,17 @@
             </span>
             <ContextRing pct={status?.ctxPct ?? null} />
           </button>
+        {:else}
+          <button
+            class="model-pill"
+            onclick={() => (codexSheetOpen = true)}
+            aria-label="Modelo do Codex"
+          >
+            <span class="pill-label">
+              <span class="pill-model">{codexModel ?? 'Modelo'}</span>
+              {#if codexEffort}<span class="pill-effort">· {codexEffort}</span>{/if}
+            </span>
+          </button>
         {/if}
         <button class="attach-btn" onclick={() => fileInput?.click()} aria-label="Anexar arquivo">
           <IconAttach size={20} />
@@ -724,6 +762,13 @@
     currentEffort={pillEffort}
     onApply={handleApply}
     onClose={() => (sheetOpen = false)}
+  />
+
+  <CodexModelSheet
+    open={codexSheetOpen}
+    {sessionName}
+    onApplied={handleCodexModelApplied}
+    onClose={() => (codexSheetOpen = false)}
   />
 
   <CommandSheet
