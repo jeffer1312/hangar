@@ -3,7 +3,7 @@
   // Codex, aberto pelo badge "Codex" da NavBar. Fetch-on-open, mesmo padrao do RunSheet.
   import BottomSheet from './BottomSheet.svelte';
   import { getLimits } from '../lib/api';
-  import { relativeTime } from '../lib/format';
+  import { resetsIn } from '../lib/format';
   import type { SessionLimits, RateLimitWindow } from '../lib/types';
 
   interface Props {
@@ -31,7 +31,8 @@
 
   function label(w: RateLimitWindow): string {
     const pct = w.usedPercent != null ? `${Math.round(w.usedPercent)}%` : '—';
-    const reset = w.resetsAt ? ` · reseta ${relativeTime(w.resetsAt)}` : '';
+    const inTxt = resetsIn(w.resetsAt);
+    const reset = inTxt ? ` · reseta ${inTxt}` : '';
     return `Uso: ${pct}${reset}`;
   }
 </script>

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, fmtWhen, groupSelectedByServer, initials, nextAwaiting,
-  projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent,
+  projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent, resetsIn,
 } from './format';
 import type { ChatEvent } from './types';
 
@@ -274,6 +274,20 @@ describe('latestAssistantEvent', () => {
 
   it('returns null for an empty list', () => {
     expect(latestAssistantEvent([])).toBeNull();
+  });
+});
+
+describe('resetsIn', () => {
+  const now = () => Date.now() / 1000;
+  it('formata instante FUTURO como "em X" (o bug era cair em "agora")', () => {
+    expect(resetsIn(now() + 7 * 86400)).toBe('em 7 d');
+    expect(resetsIn(now() + 2 * 3600)).toBe('em 2 h');
+    expect(resetsIn(now() + 30 * 60)).toBe('em 30 min');
+  });
+  it('arredonda pra pelo menos 1 min e trata falsy/passado como vazio', () => {
+    expect(resetsIn(now() + 20)).toBe('em 1 min');   // <1min -> não vira "em 0 min"
+    expect(resetsIn(null)).toBe('');
+    expect(resetsIn(now() - 3600)).toBe('');          // já passou -> vazio
   });
 });
 

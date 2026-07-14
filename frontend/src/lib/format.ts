@@ -9,6 +9,18 @@ export function relativeTime(ts: number | null | undefined): string {
   return new Date(ts * 1000).toLocaleDateString('pt-BR');
 }
 
+// Tempo relativo FUTURO ("em X") a partir de um epoch em SEGUNDOS — pro reset de rate limit do Codex
+// (resetsAt é sempre um instante futuro; relativeTime() acima só serve pra passado e cairia em "agora"
+// pra qualquer futuro). Falsy ou já-passado -> string vazia. Pura/testável.
+export function resetsIn(ts: number | null | undefined): string {
+  if (!ts) return '';
+  const diff = ts - Date.now() / 1000;
+  if (diff <= 0) return '';
+  if (diff < 3600) return `em ${Math.max(1, Math.floor(diff / 60))} min`;
+  if (diff < 86400) return `em ${Math.floor(diff / 3600)} h`;
+  return `em ${Math.floor(diff / 86400)} d`;
+}
+
 // Vocabulário único de estado (label pt-BR + cor) — compartilhado por SessionCard, Sidebar e
 // SessionSwitcherSheet pra mesma sessão nunca aparecer com nomes/cores divergentes.
 import type { State, ChatEvent } from './types';
