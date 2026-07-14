@@ -6,6 +6,7 @@ import logging
 import os
 import secrets
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -54,6 +55,12 @@ def save_vault(v: dict) -> None:
     except BaseException:
         Path(tmp).unlink(missing_ok=True)  # não deixa tmp órfão se falhar no meio
         raise
+
+
+# Serializa o read-modify-write do vault. As rotas sync são `def` (rodam em threads do threadpool do
+# FastAPI), então register/put_vault concorrentes checariam e gravariam sem ordem — perdendo um
+# enc_blob ou sobrescrevendo cadastro. Single-user/single-process: um lock de módulo basta.
+_vault_lock = threading.Lock()
 
 
 def is_registered() -> bool:
@@ -159,19 +166,20 @@ def status() -> dict:
 
 @sync_router.post("/register")
 def register(body: RegisterBody) -> dict:
-    if is_registered():
-        raise HTTPException(status_code=403, detail="already registered")
     if not settings.sync_bootstrap or not hmac.compare_digest(body.bootstrap, settings.sync_bootstrap):
         raise HTTPException(status_code=403, detail="bad bootstrap")
-    vsalt = secrets.token_bytes(16)
-    save_vault({
-        "user": body.user,
-        "salt": body.salt,
-        "verifier_salt": base64.b64encode(vsalt).decode(),
-        "auth_verifier": make_verifier(body.auth_hash, vsalt),
-        "enc_blob": None,
-        "rev": 0,
-    })
+    with _vault_lock:
+        if is_registered():
+            raise HTTPException(status_code=403, detail="already registered")
+        vsalt = secrets.token_bytes(16)
+        save_vault({
+            "user": body.user,
+            "salt": body.salt,
+            "verifier_salt": base64.b64encode(vsalt).decode(),
+            "auth_verifier": make_verifier(body.auth_hash, vsalt),
+            "enc_blob": None,
+            "rev": 0,
+        })
     return {"ok": True}
 
 
@@ -220,12 +228,13 @@ def get_vault(user: str = Depends(require_session)) -> dict:
 
 @sync_router.put("/vault")
 def put_vault(body: VaultPutBody, user: str = Depends(require_session)) -> dict:
-    v = load_vault()
-    if not v:
-        raise HTTPException(status_code=409, detail={"enc_blob": None, "rev": 0})
-    if body.base_rev != v["rev"]:
-        raise HTTPException(status_code=409, detail={"enc_blob": v["enc_blob"], "rev": v["rev"]})
-    v["enc_blob"] = body.enc_blob
-    v["rev"] += 1
-    save_vault(v)
-    return {"rev": v["rev"]}
+    with _vault_lock:
+        v = load_vault()
+        if not v:
+            raise HTTPException(status_code=409, detail={"enc_blob": None, "rev": 0})
+        if body.base_rev != v["rev"]:
+            raise HTTPException(status_code=409, detail={"enc_blob": v["enc_blob"], "rev": v["rev"]})
+        v["enc_blob"] = body.enc_blob
+        v["rev"] += 1
+        save_vault(v)
+        return {"rev": v["rev"]}
