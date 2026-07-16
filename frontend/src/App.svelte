@@ -18,7 +18,10 @@
     | { name: 'costs' }
     | { name: 'archive'; deepLink?: { serverId: string; project: string; sessionId: string } }
     | { name: 'chat'; sessionName: string; serverId: string | null }
-    | { name: 'board' }
+    // Quadro: sessionName/serverId preenchidos = overlay do card aberto por cima dele (#/board puro
+    // = quadro sem overlay). Mesmo par de campos do 'chat' de propósito — é o que deixa o $effect
+    // do servidor ativo servir às duas rotas sem duplicar a regra.
+    | { name: 'board'; sessionName: string | null; serverId: string | null }
     | { name: 'compare'; ids: CompareId[] };
 
   function parseHash(hash: string): Route {
@@ -63,8 +66,22 @@
     }
     if (path === '/archive') return { name: 'archive' };
     // Quadro kanban (visualização irmã da lista+chat) — só existe no desktop; no mobile o render
-    // trata board como a lista normal.
-    if (path === '/board') return { name: 'board' };
+    // trata board como a lista normal. ANTES do regex de 2 segmentos: só pra deixar explícito que o
+    // quadro puro é a forma base (os dois padrões não se sobrepõem — o regex exige serverId+nome).
+    if (path === '/board') return { name: 'board', sessionName: null, serverId: null };
+    // Overlay do card é ROTA (#/board/<serverId>/<nome>), não estado do shell: deep-link, botão
+    // VOLTAR e reload saem de graça, e o servidor ativo vira função da rota (o $effect abaixo aponta
+    // ele) em vez de exigir capture/restore manual ao abrir/fechar o overlay.
+    const boardMatch = path.match(/^\/board\/([^/]+)\/(.+)$/);
+    if (boardMatch) {
+      const sessionName = decodeURIComponent(boardMatch[2]);
+      // Mesma auto-cura do #/chat: um hash podre montaria o Chat com sessionName "undefined"/"null"
+      // -> SSE em /sessions/undefined/events (404 em loop). Aqui degrada pro quadro sem overlay.
+      if (sessionName && sessionName !== 'undefined' && sessionName !== 'null') {
+        return { name: 'board', sessionName, serverId: decodeURIComponent(boardMatch[1]) };
+      }
+      return { name: 'board', sessionName: null, serverId: null };
+    }
     return { name: 'sessions' };
   }
 
@@ -142,13 +159,18 @@
     return () => window.removeEventListener('hashchange', onHashChange);
   });
 
-  // Rota manda no servidor ativo: URL colada/back-button com #/chat/<server>/<nome> ativa o
-  // servidor certo mesmo sem passar por um clique (que já chama selectServer antes de navegar).
-  // Servidor DESCONHECIDO (link de outra máquina, id re-pareado) -> volta pra lista em vez de
-  // montar o chat contra o servidor ativo errado (cross-wire calado com sessão homônima).
+  // Rota manda no servidor ativo: URL colada/back-button com #/chat/<server>/<nome> — ou
+  // #/board/<server>/<nome>, o overlay do card — ativa o servidor certo mesmo sem passar por um
+  // clique (que já chama selectServer antes de navegar). Servidor DESCONHECIDO (link de outra
+  // máquina, id re-pareado) -> cai na tela-base da rota em vez de montar o chat contra o servidor
+  // ativo errado (cross-wire calado com sessão homônima).
+  // UMA regra pras duas rotas (em vez de um $effect por rota): as duas montam o MESMO Chat contra o
+  // servidor ativo, então a condição é idêntica — só o destino do fallback muda. Duplicar seria
+  // convidar as duas cópias a divergir.
   $effect(() => {
-    if (route.name === 'chat' && route.serverId && route.serverId !== getActiveId()) {
-      if (!selectServer(route.serverId)) navigateTo('#/');
+    const routed = route.name === 'chat' || route.name === 'board' ? route.serverId : null;
+    if (routed && routed !== getActiveId() && !selectServer(routed)) {
+      navigateTo(route.name === 'board' ? '#/board' : '#/');
     }
   });
 
@@ -185,6 +207,13 @@
   function openCompareSession(name: string, serverId: string) {
     selectServer(serverId);
     navigateToChat(name);
+  }
+
+  // Abrir um card do QUADRO: vira rota (overlay por cima do kanban), não estado do shell. Sem
+  // selectServer aqui de propósito — o $effect da rota é quem aponta o ativo, e é o mesmo caminho
+  // que o deep-link/reload percorre. Um único lugar decide o servidor.
+  function navigateToBoardCard(name: string, serverId: string) {
+    navigateTo('#/board/' + encodeURIComponent(serverId) + '/' + encodeURIComponent(name));
   }
 
   function onLogin() {
@@ -285,6 +314,11 @@
       currentSession={route.name === 'chat' ? route.sessionName : null}
       currentKey={route.name === 'chat' ? (route.serverId ?? '') + '::' + route.sessionName : null}
       view={route.name === 'board' ? 'board' : 'chat'}
+      overlaySession={route.name === 'board' && route.sessionName && route.serverId
+        ? { name: route.sessionName, serverId: route.serverId }
+        : null}
+      onOpenBoardSession={navigateToBoardCard}
+      onCloseOverlay={() => navigateTo('#/board')}
       onToggleBoard={() => navigateTo(route.name === 'board' ? '#/' : '#/board')}
       onNavigateToChat={navigateToChat}
       onCompare={navigateToCompare}
