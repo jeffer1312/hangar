@@ -336,21 +336,24 @@ export async function sendInput(name: string, text: string): Promise<void> {
 
 // Pareamento ("trabalhando juntas"): o backend grava o vínculo simétrico e injeta o prompt de
 // pareamento nas DUAS sessões — daí em diante elas se falam via cp-send por iniciativa própria.
-export async function pairSession(name: string, peer: string, task = ''): Promise<void> {
-  await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/pair`, {
+// warning: falha PARCIAL de aviso (algum membro sem o prompt do grupo) — o backend reporta de
+// propósito; descartar isso virava "sucesso" mudo com membro que não sabe que está no grupo.
+export interface PairResult { ok: boolean; warning: string | null }
+export async function pairSession(name: string, peer: string, task = ''): Promise<PairResult> {
+  return apiFetch<PairResult>(`/api/sessions/${encodeURIComponent(name)}/pair`, {
     method: 'POST',
     body: JSON.stringify({ peer, task }),
   });
 }
 
-export async function unpairSession(name: string): Promise<void> {
-  await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/pair`, {
+export async function unpairSession(name: string): Promise<PairResult> {
+  return apiFetch<PairResult>(`/api/sessions/${encodeURIComponent(name)}/pair`, {
     method: 'DELETE',
   });
 }
 
 // Contrato compartilhado do par: markdown que as duas sessões editam via fs; o app só exibe.
-export interface PairContract { peer: string; path: string; content: string }
+export interface PairContract { peers: string[]; path: string; content: string }
 export function getPairContract(name: string): Promise<PairContract> {
   return apiFetch<PairContract>(`/api/sessions/${encodeURIComponent(name)}/pair/contract`);
 }

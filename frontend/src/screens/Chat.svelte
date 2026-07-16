@@ -113,8 +113,15 @@
   let forwardText = $state<string | null>(null);
   // Pareamento ("trabalhando juntas"): sheet + par atual derivado da lista já carregada.
   let pairOpen = $state(false);
-  const pairedWith = $derived(allSessions.find((s) => s.name === sessionName)?.paired_with ?? null);
-  const pairedState = $derived(pairedWith ? (allSessions.find((s) => s.name === pairedWith)?.state ?? null) : null);
+  // Grupo de trabalho: os OUTROS membros (null = sem grupo). Estado vivo só quando o grupo tem 1
+  // par (bolinha de 1 sessão faz sentido; de N vira ruído).
+  const pairPeers = $derived(allSessions.find((s) => s.name === sessionName)?.pair_peers ?? null);
+  // Chave PRIMITIVA do grupo: pair_peers é um array NOVO por referência a cada poll de 5s do
+  // getSessions — efeitos que dependessem do array re-rodavam sem o grupo ter mudado (toggle se
+  // autodesligava, sheet resetava). String igual não re-notifica.
+  const pairPeersKey = $derived(pairPeers?.join(',') ?? '');
+  const pairedState = $derived(pairPeers?.length === 1
+    ? (allSessions.find((s) => s.name === pairPeers[0])?.state ?? null) : null);
 
   async function openSwitcher() {
     switcherOpen = true;
@@ -565,7 +572,7 @@
   // parear com C reacendia o toggle invisível e o próximo envio ia pra C sem o usuário pedir.
   let sendToPair = $state(false);
   $effect(() => {
-    void pairedWith;
+    void pairPeersKey;
     sendToPair = false;
   });
 
@@ -578,11 +585,11 @@
       pending = [...pending, { id: pendingId, text }];
     }
     try {
-      if (sendToPair && pairedWith && !text.trimStart().startsWith('/')) {
+      if (sendToPair && pairPeers?.length && !text.trimStart().startsWith('/')) {
         // Slash-command nunca em broadcast (o backend rejeita; mesmo racional do /api/broadcast).
-        // /broadcast responde 200 com resultado POR sessão — falha individual (pane do par morto)
-        // não rejeita a promise; sem conferir, o envio pro par falhava calado.
-        const results = await broadcast([sessionName, pairedWith], text);
+        // /broadcast responde 200 com resultado POR sessão — falha individual (pane de membro
+        // morto) não rejeita a promise; sem conferir, o envio pro grupo falhava calado.
+        const results = await broadcast([sessionName, ...pairPeers], text);
         const failed = Object.entries(results).filter(([, r]) => !r.ok);
         if (failed.length) {
           const ok = Object.keys(results).filter((n) => results[n].ok);
@@ -823,7 +830,7 @@
         onOpenGit={() => (gitOpen = true)}
         onOpenPreview={() => (previewOpen = true)}
         provider={sessionProvider}
-        {pairedWith}
+        {pairPeers}
         {pairedState}
         onOpenPair={() => (pairOpen = true)}
         {sendToPair}
@@ -859,11 +866,11 @@
   <PairSheet
     open={pairOpen}
     {sessionName}
-    {pairedWith}
+    {pairPeers}
     onClose={() => (pairOpen = false)}
     onChanged={loadSessionsForNav}
-    onOpenSplit={onOpenSplit && pairedWith
-      ? () => { const p = pairedWith; if (p) { pairOpen = false; onOpenSplit?.(p); } }
+    onOpenSplit={onOpenSplit
+      ? (peer) => { pairOpen = false; onOpenSplit?.(peer); }
       : undefined}
   />
 

@@ -138,11 +138,13 @@ process.stdin.on('end', () => {
           { encoding: 'utf8', timeout: 1000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
         if (s) {
           tmuxSess = ' \x1b[95m📟 ' + s + '\x1b[0m';
-          // Pareamento (claude-pocket): sidecar <config>/.claude-pocket-pair/<sessao>.json -> chip 🤝 peer.
+          // Pareamento (claude-pocket): sidecar <config>/.claude-pocket-pair/<sessao>.json -> chip 🤝.
+          // Grupo = {peers: [...]} (legado 1:1 = {peer}); 1 par mostra o nome, N mostra "a,b".
           try {
             const pair = JSON.parse(fs.readFileSync(
               path.join(claudeDir, '.claude-pocket-pair', s + '.json'), 'utf8'));
-            if (pair.peer) tmuxSess += ' \x1b[93m🤝 ' + pair.peer + '\x1b[0m';
+            const peers = pair.peers || (pair.peer ? [pair.peer] : []);
+            if (peers.length) tmuxSess += ' \x1b[93m🤝 ' + peers.join(',') + '\x1b[0m';
           } catch {}
         }
       } catch {}

@@ -35,8 +35,9 @@ class SessionInfo(BaseModel):
     # armado ("quando terminar -> enviar pra"), None senao. So o alvo (pro indicador na lista); o texto
     # do prompt fica no sidecar (app.chain.ThenLink), lido so na hora de disparar.
     then_target: Optional[str] = None
-    # Pareamento ativo (feature "trabalhando juntas"): nome da sessão-par, ou None. Badge na UI.
-    paired_with: Optional[str] = None
+    # Pareamento ativo (feature "trabalhando juntas"): os OUTROS membros do grupo, ou None.
+    # Grupo de 2 = lista de 1 (o antigo 1:1 é caso particular). Badge/chip na UI.
+    pair_peers: Optional[list[str]] = None
 
 
 class ChatEvent(BaseModel):
