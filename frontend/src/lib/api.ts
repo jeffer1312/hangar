@@ -47,6 +47,20 @@ function authHeaders(): HeadersInit {
   return { Authorization: `Bearer ${token}` };
 }
 
+// Mensagem de erro legivel a partir do corpo de uma resposta !ok. FastAPI devolve {"detail": "..."}
+// -> extrai a mensagem limpa em vez do JSON cru (esse texto vai direto pra UI). Fallbacks: corpo
+// nao-JSON vira o texto cru; corpo vazio/ilegivel cai no res.statusText. Compartilhado pelo ensureOk
+// (caminho do servidor ativo) e pelas funcoes *ForServer, pra que o MESMO 404 do backend produza a
+// MESMA string nos dois caminhos.
+async function errorDetail(res: Response): Promise<string> {
+  const text = await res.text().catch(() => '');
+  try {
+    const j = JSON.parse(text);
+    if (j && typeof j.detail === 'string') return j.detail;
+  } catch { /* corpo nao-JSON: cai no texto cru abaixo */ }
+  return text || res.statusText;
+}
+
 // Trata a resposta compartilhada por apiFetch e uploadFile. Self-heal de token invalido/rotacionado:
 // isAuthenticated() so checa se EXISTE token, nao se vale. Num 401 COM token salvo, limpamos a
 // credencial e recarregamos -> cai no Login pra re-parear (QR). O guard getToken() evita loop quando
@@ -57,16 +71,7 @@ async function ensureOk(res: Response): Promise<void> {
     if (typeof window !== 'undefined') window.location.reload();
     throw new Error('401: sessão expirada — faça login novamente');
   }
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    // FastAPI devolve {"detail": "..."} -> mostra a mensagem limpa, nao o JSON cru.
-    let detail = text;
-    try {
-      const j = JSON.parse(text);
-      if (j && typeof j.detail === 'string') detail = j.detail;
-    } catch { /* corpo nao-JSON: mantem o texto cru */ }
-    throw new Error(`${res.status}: ${detail}`);
-  }
+  if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -136,10 +141,7 @@ export async function sendInputForServer(s: Server, name: string, text: string):
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
     body: JSON.stringify({ text }),
   });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => res.statusText);
-    throw new Error(`${res.status}: ${detail}`);
-  }
+  if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
 }
 
 // Responde uma opção do picker (awaiting_input) direto do card. Mesma convenção de índice do
@@ -151,7 +153,8 @@ export async function selectOptionForServer(s: Server, name: string, option: num
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
     body: JSON.stringify({ option }),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  // Mesmo tratamento do sendInputForServer: o erro do picker tambem e renderizado no card.
+  if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
 }
 
 export function listClaudeConfigs(): Promise<ConfigDirInfo[]> {
