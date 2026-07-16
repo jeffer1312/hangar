@@ -70,6 +70,18 @@ export function attentionFeed<T extends { name: string; state: State; last_activ
     );
 }
 
+// Ordenação compartilhada das LISTAS de sessões (Sidebar + SessionList): quem aguarda resposta
+// primeiro (realce de atenção), depois alfabético. Estável: rows só trocam de posição quando o
+// ESTADO muda, não a cada last_activity. O Board NÃO usa isto (colunas já separam por estado;
+// lá é por atividade recente).
+export function sortSessions<T extends { name: string; state: State }>(list: T[]): T[] {
+  return [...list].sort(
+    (a, b) =>
+      Number(b.state === 'awaiting_input') - Number(a.state === 'awaiting_input') ||
+      a.name.localeCompare(b.name),
+  );
+}
+
 // Data/hora local curta a partir de um epoch em SEGUNDOS — usado pra rotular os candidatos de resume
 // (última atividade de cada transcript) nos dois views. Falsy -> string vazia. Pura/testável.
 export function fmtWhen(mtime?: number | null): string {

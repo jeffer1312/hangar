@@ -9,7 +9,7 @@
   import AccountMenu from './AccountMenu.svelte';
   import SessionSwitcherSheet from './SessionSwitcherSheet.svelte';
   import type { SessionInfo, State, AggSession, ResumeCandidate } from '../lib/types';
-  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, type GroupBy } from '../lib/format';
+  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import type { Server } from '../lib/auth';
   import Lottie from './Lottie.svelte';
@@ -110,11 +110,6 @@
     kebabOpen = true;
   }
   function closeKebab() { kebabOpen = false; }
-
-  // Ordena DENTRO de cada grupo por nome (ordem alfabética estável — não pula quando a atividade muda).
-  function sortSessions<T extends SessionInfo>(list: T[]): T[] {
-    return [...list].sort((a, b) => a.name.localeCompare(b.name));
-  }
 
   const slots = new Map<string, { sessions: SessionInfo[] | null; error: string | null }>();
   function recompute() {

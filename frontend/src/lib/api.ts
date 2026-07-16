@@ -113,6 +113,47 @@ export async function fetchCostsForServer(s: Server): Promise<CostReport> {
   return res.json() as Promise<CostReport>;
 }
 
+// Cauda do histórico de UMA sessão de um servidor específico — cards do quadro kanban.
+// limit corta payload (backend ainda parseia o jsonl todo); só mount + transição de estado chamam.
+// Timeout maior (8s) que os fan-outs de 4s acima: aqui o backend parseia o jsonl inteiro antes de
+// cortar a cauda, e transcript grande passa dos 4s num disco frio.
+export async function getHistoryTailForServer(s: Server, name: string, limit: number): Promise<ChatEvent[]> {
+  const res = await fetch(
+    `${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/history?limit=${limit}`,
+    { headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` }, signal: AbortSignal.timeout(8000) },
+  );
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json() as Promise<ChatEvent[]>;
+}
+
+// Envia prompt pra sessão de um servidor específico (input do card do quadro). 404 = sessão morta:
+// o chamador REMOVE o eco pendente e sinaliza — mensagem nunca "some" calada (mesmo contrato do
+// feedback de entrega do Chat). SEM timeout de propósito (igual ao sendInput por-servidor-ativo):
+// abortar um POST já em voo não desfaz o envio, e reportaria "não entregue" pra recado entregue.
+export async function sendInputForServer(s: Server, name: string, text: string): Promise<void> {
+  const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/input`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => res.statusText);
+    throw new Error(`${res.status}: ${detail}`);
+  }
+}
+
+// Responde uma opção do picker (awaiting_input) direto do card. Mesma convenção de índice do
+// selectOption por-servidor-ativo (api.ts): option é 1-BASED (1 = primeira opção) — o backend
+// valida ge=1 e traduz pra (option-1)×Down + Enter no tmux.
+export async function selectOptionForServer(s: Server, name: string, option: number): Promise<void> {
+  const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/select`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
+    body: JSON.stringify({ option }),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+}
+
 export function listClaudeConfigs(): Promise<ConfigDirInfo[]> {
   return apiFetch<ConfigDirInfo[]>('/api/claude-configs');
 }
