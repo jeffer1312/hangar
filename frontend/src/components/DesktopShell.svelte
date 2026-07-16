@@ -16,19 +16,25 @@
   }
   let { currentSession, currentKey = null, onNavigateToChat, onCompare, onLogout }: Props = $props();
 
-  // Split view (pareamento): segundo Chat lado a lado — assiste a conversa das duas sessões sem
-  // alternar. Aberto pelo PairSheet ("Abrir lado a lado"); fecha no X ou ao trocar a sessão principal.
-  let splitSession = $state<string | null>(null);
+  // Split view (pareamento): N Chats lado a lado — assiste o GRUPO inteiro sem alternar.
+  // Aberto pelo PairSheet (por membro ou "todas"); cada painel fecha no próprio ×; trocar a
+  // sessão principal fecha tudo (o split é relativo a ela).
+  let splitSessions = $state<string[]>([]);
+  function openSplit(name: string) {
+    if (name !== currentSession && !splitSessions.includes(name)) {
+      splitSessions = [...splitSessions, name];
+    }
+  }
   $effect(() => {
     void (currentKey ?? currentSession);
-    splitSession = null; // trocou a principal (mesmo nome/outro servidor conta) -> fecha o split
+    splitSessions = []; // trocou a principal (mesmo nome/outro servidor conta) -> fecha o split
   });
 </script>
 
 <div class="desktop-shell">
   <Sidebar {currentSession} onSelect={onNavigateToChat} {onCompare} {onLogout} />
 
-  <main class="desktop-main" class:split={!!splitSession}>
+  <main class="desktop-main" class:split={splitSessions.length > 0}>
     {#if currentSession && currentSession !== 'null' && currentSession !== 'undefined'}
       {#key currentKey ?? currentSession}
         <div class="pane">
@@ -37,24 +43,22 @@
             desktop={true}
             onBack={() => onNavigateToChat('')}
             onNavigateToChat={onNavigateToChat}
-            onOpenSplit={(name) => (splitSession = name)}
+            onOpenSplit={openSplit}
           />
         </div>
       {/key}
-      {#if splitSession}
-        {#key splitSession}
-          <div class="pane pane--split">
-            <button class="split-close" onclick={() => (splitSession = null)}
-                    aria-label="Fechar painel lado a lado" title="Fechar painel">×</button>
-            <Chat
-              sessionName={splitSession}
-              desktop={true}
-              onBack={() => (splitSession = null)}
-              onNavigateToChat={onNavigateToChat}
-            />
-          </div>
-        {/key}
-      {/if}
+      {#each splitSessions as split (split)}
+        <div class="pane pane--split">
+          <button class="split-close" onclick={() => (splitSessions = splitSessions.filter((s) => s !== split))}
+                  aria-label={`Fechar painel de ${split}`} title="Fechar painel">×</button>
+          <Chat
+            sessionName={split}
+            desktop={true}
+            onBack={() => (splitSessions = splitSessions.filter((s) => s !== split))}
+            onNavigateToChat={onNavigateToChat}
+          />
+        </div>
+      {/each}
     {:else}
       <div class="desktop-empty">
         <p class="empty-title">Selecione uma sessão</p>

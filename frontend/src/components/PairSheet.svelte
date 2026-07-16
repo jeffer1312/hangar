@@ -1,7 +1,8 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
   import { getSessions, pairSession, unpairSession, getHistory, getPairContract } from '../lib/api';
-  import { stateLabels, stateColors, parsePeerMessage, relativeTime } from '../lib/format';
+  import { stateLabels, stateColors, parsePeerMessage, relativeTime, encodeCompareIds } from '../lib/format';
+  import { getActiveId } from '../lib/auth';
   import type { SessionInfo } from '../lib/types';
 
   interface Props {
@@ -146,6 +147,24 @@
   function stateOf(name: string): string | null {
     return sessions.find((s) => s.name === name)?.state ?? null;
   }
+
+  // "Ver em grade": abre o GRUPO inteiro (eu + membros) na grade de comparação existente —
+  // cards ao vivo (transcript/preview/estado), 1 clique entra na sessão. Grupo é sempre do
+  // servidor ativo (pareamento é por servidor).
+  function openGrid() {
+    const sid = getActiveId();
+    if (!sid) return;
+    const ids = [sessionName, ...peers].map((name) => ({ serverId: sid, name }));
+    onClose();
+    window.location.hash = '#/compare/' + encodeCompareIds(ids);
+  }
+
+  // "Abrir todas lado a lado" (desktop): fixa cada membro num painel próprio do split.
+  function openAllSplit() {
+    if (!onOpenSplit) return;
+    for (const p of peers) onOpenSplit(p);
+    onClose();
+  }
 </script>
 
 <BottomSheet {open} {onClose} ariaLabel="Parear sessões">
@@ -171,6 +190,14 @@
             {/if}
           </div>
         {/each}
+      </div>
+
+      <!-- Visualizar o grupo inteiro: grade (cards ao vivo, 1 clique abre) ou split (N chats fixos). -->
+      <div class="view-row">
+        <button class="view-btn" onclick={openGrid} title="Grade com todos os membros ao vivo">▦ Ver em grade</button>
+        {#if onOpenSplit && peers.length > 0}
+          <button class="view-btn" onclick={openAllSplit} title="Fixa cada membro num painel lado a lado">⫽ Todas lado a lado</button>
+        {/if}
       </div>
 
       {#if !adding}
@@ -324,6 +351,16 @@
     font-size: 13px; cursor: pointer;
   }
   .split-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+  /* Botões de visualização do grupo (grade / lado a lado). */
+  .view-row { display: flex; gap: var(--space-2); }
+  .view-btn {
+    flex: 1; height: 40px;
+    border: 1px solid var(--border-default); border-radius: var(--radius-md);
+    background: var(--bg-surface); color: var(--text-primary);
+    font-size: var(--text-sm); cursor: pointer;
+  }
+  .view-btn:hover { background: var(--bg-hover); }
 
   /* "+ Adicionar sessão ao grupo": discreto, abre o picker. */
   .ghost-add {
