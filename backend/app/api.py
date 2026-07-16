@@ -635,6 +635,12 @@ def _send_one(name: str, text: str) -> dict:
     Usada pelo /input (uma sessao) e pelo /broadcast (loop por N sessoes) — o broadcast NAO reimplementa
     entrega, so repete esta mesma sequencia por nome. Nunca levanta (devolve ok/error) pra o broadcast
     reportar falha de uma sessao sem abortar as demais."""
+    # ts da entrada carimbado ANTES do send: o send_prompt digita + Enter e o Claude Code grava o
+    # prompt no transcript NA HORA, entao o append la embaixo roda DEPOIS do commit. Carimbar no
+    # append punha a entrada ~ms apos o proprio commit e o dedup ts-aware do merged_history a
+    # mantinha pendente (msg em dobro no historico ate o reconcile). A ordem send->append->drain
+    # NAO muda — so o valor gravado, que e o unico dado que o dedup le.
+    t0 = time.time()
     try:
         result = terminal.send_prompt(name, text)
         # DIAG: correlaciona o send com o jsonl pra onde ESTE nome resolve AGORA -> pega o cross-wire
@@ -671,7 +677,7 @@ def _send_one(name: str, text: str) -> dict:
         # entrada fica pendente pro drain entregar quando o overlay fechar. Falha ao gravar a fila nao
         # quebra o envio.
         try:
-            PromptQueue(name).append(text, delivered=(result == "sent"))
+            PromptQueue(name).append(text, delivered=(result == "sent"), ts=t0)
         except OSError:
             pass
         if result == "sent":
