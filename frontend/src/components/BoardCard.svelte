@@ -175,7 +175,9 @@
     {/if}
   </div>
 
-  {#if session.state !== 'dead' && session.tracked !== false}
+  <!-- `tracked === false` = claude aberto sem --session-id: transcript não rastreável, não recebe
+       input. (Sem checar `dead`: esta lista nunca traz esse estado — ver COLS no Board.) -->
+  {#if session.tracked !== false}
     <footer class="bc-foot">
       <textarea rows="1" placeholder="Mensagem…" bind:value={text} onkeydown={onKey}></textarea>
       <button class="bc-send" onclick={send} disabled={!text.trim()} aria-label="Enviar">↑</button>
