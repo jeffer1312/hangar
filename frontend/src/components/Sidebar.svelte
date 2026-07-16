@@ -88,6 +88,15 @@
     recompute();
   }
 
+  // Densidade compacta (1 linha por sessao: so lead+nome+chips), persistida — mesmo padrao do
+  // groupBy acima. Puramente visual: nao muda a lista, so esconde as linhas secundarias via CSS.
+  const DENSITY_KEY = 'cp_density';
+  let compact = $state(localStorage.getItem(DENSITY_KEY) === 'compact');
+  function toggleCompact() {
+    compact = !compact;
+    try { localStorage.setItem(DENSITY_KEY, compact ? 'compact' : 'normal'); } catch { /* storage cheio/off */ }
+  }
+
   // ── Largura redimensionavel (drag na borda direita), persistida ─────────────
   const WMIN = 200, WMAX = 520;
   const clampW = (w: number) => Math.max(WMIN, Math.min(WMAX, w));
@@ -754,7 +763,7 @@
     </button>
   </div>
 
-  <nav class="sess-list" aria-label="Sessões">
+  <nav class="sess-list" class:compact aria-label="Sessões">
     {#if expanded}
       <!-- "Precisa de você" (feature #6): fila cross-server de sessoes aguardando, fixa no topo.
            Picker inline (OptionButtons) responde sem abrir o chat; nativo AskUserQuestion abre. -->
@@ -1049,6 +1058,10 @@
     <button type="button" role="menuitem" class="kebab-item" onclick={() => { closeKebab(); window.location.hash = '#/costs'; }}>
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
       Custos
+    </button>
+    <button type="button" role="menuitem" class="kebab-item" onclick={() => { toggleCompact(); closeKebab(); }}>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M3 6h18"/><path d="M3 12h18"/><path d="M3 18h18"/></svg>
+      {compact ? 'Densidade normal' : 'Densidade compacta'}
     </button>
     {#if servers.length >= 2}
       <div class="ctx-sep"></div>
@@ -1460,6 +1473,13 @@
     padding: 0 var(--space-2); text-align: left; justify-content: flex-start; color: var(--text-secondary);
     border-radius: var(--radius-md);
   }
+  /* Modo compacto: só lead+nome+chips — cabe o dobro de sessões. Saem as 3 linhas secundárias
+     (subtítulo de estado, cwd e branch). A altura mora na .sess-main (a .sess-row não tem
+     min-height), então é ela que encolhe; os chips de estado/🤝 ficam, são o sinal da linha. */
+  .sess-list.compact .sess-main { min-height: 34px; }
+  .sess-list.compact .status-sub,
+  .sess-list.compact .cwd,
+  .sess-list.compact .branch { display: none; }
   .row-info { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
   .name-row { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
   /* Subtítulo de estado vivo: a pergunta (awaiting) ou o texto do spinner (working), truncado —
