@@ -51,6 +51,12 @@
   // Navegar pra fora a partir do overlay (ex.: "próxima aguardando" ou o switcher do Chat) PROMOVE a
   // sessão pro chat normal: o servidor do overlay vira o ativo de verdade e o restore acima seria um
   // bug — o chat que vai montar é dele. Por isso desarma o prevActive antes de sair.
+  // Serve OS DOIS caminhos de saída por navegação (o nome só nomeia o primeiro): o de dentro do Chat
+  // acima, e o clique na sidebar — que segue viva ao lado do overlay (ele é absolute dentro da
+  // .desktop-main, ela é irmã dela) e já faz selectServer(dono) antes de delegar (Sidebar.svelte:287).
+  // Sem isto o round-trip do hash acorda o $effect de view -> closeOverlay -> restore CLOBBERA esse
+  // selectServer, e o chat de destino monta apontado pro servidor errado. Fora do overlay é
+  // passthrough puro: prevActive/overlaySession já são null.
   function navigateFromOverlay(name: string) {
     prevActive = null;
     overlaySession = null;
@@ -85,7 +91,7 @@
 </script>
 
 <div class="desktop-shell">
-  <Sidebar {currentSession} onSelect={onNavigateToChat} {onCompare} {onLogout}
+  <Sidebar {currentSession} onSelect={navigateFromOverlay} {onCompare} {onLogout}
            boardActive={view === 'board'} {onToggleBoard} />
 
   <main class="desktop-main" class:split={!!splitSession}>
