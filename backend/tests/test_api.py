@@ -599,6 +599,67 @@ def test_history_route_passes_session_provider_to_merged_history(api_client):
 
 
 # ---------------------------------------------------------------------------
+# Quadro kanban: GET /history?limit=N devolve so a CAUDA do transcript por card
+# (janela comeca no 1o user_msg interno pra nao mostrar tool_result/assistant orfao).
+# ---------------------------------------------------------------------------
+from app.models import ChatEvent
+
+
+@pytest.fixture
+def fake_session_with_transcript(api_client):
+    # Transcript de 7 eventos: a cauda (limit=3) cai no meio de um turno, entao a janela precisa
+    # ser cortada no 1o user_msg interno (id6) — descartando o assistant_msg orfao (id5) antes dele.
+    evs = [
+        ChatEvent(kind="user_msg", id="1", text="oi"),
+        ChatEvent(kind="assistant_msg", id="2", text="ola"),
+        ChatEvent(kind="tool_use", id="3", tool_name="Bash"),
+        ChatEvent(kind="tool_result", id="4", result="ok"),
+        ChatEvent(kind="assistant_msg", id="5", text="pensando"),
+        ChatEvent(kind="user_msg", id="6", text="valeu"),
+        ChatEvent(kind="assistant_msg", id="7", text="de nada"),
+    ]
+    info = SessionInfo(name="cc", cwd="/p", jsonl="/r/cc.jsonl", provider="claude")
+    with patch("app.api.registry.list", return_value=[info]), \
+         patch("app.pqueue.merged_history", return_value=evs):
+        yield "cc"
+
+
+def test_history_limit_devolve_so_a_cauda(api_client, fake_session_with_transcript):
+    full = api_client.get(f"/api/sessions/{fake_session_with_transcript}/history", headers=_h()).json()
+    assert len(full) >= 6
+
+    r = api_client.get(f"/api/sessions/{fake_session_with_transcript}/history?limit=3", headers=_h())
+    assert r.status_code == 200
+    tail = r.json()
+    assert len(tail) <= 3
+    # a janela e a CAUDA do transcript completo
+    assert tail == full[-len(tail):]
+    # janela cortada no 1o user_msg interno: sem assistant_msg/tool_result orfao antes dele
+    assert tail[0]["kind"] == "user_msg"
+
+
+def test_history_sem_limit_intacto(api_client, fake_session_with_transcript):
+    r = api_client.get(f"/api/sessions/{fake_session_with_transcript}/history", headers=_h())
+    assert r.status_code == 200
+    assert len(r.json()) == 7  # comportamento atual sem regressao
+
+
+def test_history_limit_zero_e_negativo_devolvem_tudo(api_client, fake_session_with_transcript):
+    full = api_client.get(f"/api/sessions/{fake_session_with_transcript}/history", headers=_h()).json()
+    for lim in (0, -5):
+        r = api_client.get(f"/api/sessions/{fake_session_with_transcript}/history?limit={lim}", headers=_h())
+        assert r.status_code == 200
+        assert r.json() == full  # limit<=0 nao filtra
+
+
+def test_history_limit_maior_que_total_devolve_tudo(api_client, fake_session_with_transcript):
+    full = api_client.get(f"/api/sessions/{fake_session_with_transcript}/history", headers=_h()).json()
+    r = api_client.get(f"/api/sessions/{fake_session_with_transcript}/history?limit=999", headers=_h())
+    assert r.status_code == 200
+    assert r.json() == full  # limit >= len(evs) -> transcript inteiro
+
+
+# ---------------------------------------------------------------------------
 # Feature #5: corpo rico do push de awaiting (askq -> classify -> fallback) + endpoints de mute/quiet-hours
 # ---------------------------------------------------------------------------
 from types import SimpleNamespace

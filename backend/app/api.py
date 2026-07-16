@@ -557,7 +557,7 @@ def resume_session(name: str, body: ResumeBody):
 
 
 @app.get("/api/sessions/{name}/history", dependencies=[Depends(require_auth)], response_model=list[ChatEvent])
-def history(name: str):
+def history(name: str, limit: int | None = None):
     info = next((s for s in registry.list() if s.name == name), None)
     if not info or not info.jsonl:
         raise HTTPException(404, "session or transcript not found")
@@ -566,7 +566,15 @@ def history(name: str):
     # app.adapters.codex.rollout) -- sem isto merged_history tentava o parser do Claude em toda
     # linha do rollout, nunca casava e devolvia [] (chat do Codex abria vazio ate o SSE encher via
     # backfill do tail; reabrir apos ficar horas em segundo plano perdia o que passou do tail-200).
-    return merged_history(name, info.jsonl, provider=info.provider)
+    evs = merged_history(name, info.jsonl, provider=info.provider)
+    # ponytail: limit corta PAYLOAD, nao CPU — merged_history ja parseou o jsonl inteiro; se perf
+    # virar problema, o upgrade e tail-read reverso do arquivo. Janela comeca no primeiro user_msg
+    # interno (quando houver) pra nao renderizar tool_result orfao no card do quadro.
+    if limit is not None and limit > 0 and len(evs) > limit:
+        window = evs[-limit:]
+        start = next((i for i, e in enumerate(window) if e.kind == "user_msg"), 0)
+        return window[start:] if start else window
+    return evs
 
 
 @app.get("/api/sessions/{name}/workflows", dependencies=[Depends(require_auth)])
