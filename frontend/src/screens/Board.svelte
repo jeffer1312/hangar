@@ -2,10 +2,15 @@
   import type { SessionInfo } from '../lib/types';
   // Linha do quadro: sessão + servidor dono (pro card falar com o backend certo).
   export interface BoardRow extends SessionInfo { serverId: string }
+  // Eco otimista de uma msg mandada do card. `ackAt` = instante em que o /input respondeu 200 (0 =
+  // ainda em voo) — é o que deixa retirar o eco por TEMPO, sem casar texto, quando a cauda seguinte
+  // chega (ver retirePending no BoardCard).
+  export interface PendingMsg { id: string; text: string; ackAt: number }
 </script>
 
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { SvelteMap } from 'svelte/reactivity';
   import BoardCard from '../components/BoardCard.svelte';
   import { openSessionsStream } from '../lib/api';
   import { listServers, onServersChanged, serverColor } from '../lib/auth';
@@ -54,7 +59,14 @@
       if (streams.has(s.id)) continue;
       const es = openSessionsStream(s);
       es.addEventListener('sessions', (e) => {
-        slots.set(s.id, { sessions: JSON.parse((e as MessageEvent).data), error: null });
+        try {
+          slots.set(s.id, { sessions: JSON.parse((e as MessageEvent).data), error: null });
+        } catch {
+          // Frame malformado: sem isto o throw sobe no dispatch do EventSource e o slot DESTE servidor
+          // congela em silêncio (o onerror não dispara pra erro de parse — só pra falha de conexão).
+          // Trata como offline e reusa o banner: mantém a última lista boa, mas avisa que parou.
+          slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
+        }
         recompute();
       });
       es.onerror = () => {
@@ -97,15 +109,52 @@
     localStorage.setItem('cp_board_dead', deadOpen ? '1' : '0');
   }
 
+  // Chave do estado içado: a MESMA pros rascunhos, ecos e erros.
+  const rowKey = (r: BoardRow) => `${r.serverId}::${r.name}`;
+
   // Rascunhos IÇADOS: o card troca de coluna (remonta) justamente quando o Claude termina —
   // o texto que você estava digitando não pode morrer com o card.
   const drafts = new Map<string, string>();
+
+  // Ecos e erro de envio IÇADOS pelo MESMO motivo, agravado: mandar msg de um card `idle` faz o
+  // Claude virar `working`, ou seja, o próprio envio MOVE o card de coluna e destrói a instância no
+  // meio do await. Guardados aqui, o eco sobrevive à remontagem e o erro sobrevive até ao SUMIÇO da
+  // linha. SvelteMap (e não Map, como os drafts): estes o quadro precisa LER de forma reativa — o
+  // card re-renderiza com eles e o banner de órfão depende deles (o draft só é semeado no mount).
+  const pendings = new SvelteMap<string, PendingMsg[]>();
+  const sendErrors = new SvelteMap<string, string>();
+  function updatePending(key: string, fn: (prev: PendingMsg[]) => PendingMsg[]) {
+    const next = fn(pendings.get(key) ?? []);
+    // Apaga a chave vazia: sem isto o Map só cresce (uma entrada morta por sessão já vista).
+    if (next.length) pendings.set(key, next);
+    else pendings.delete(key);
+  }
+  function setSendError(key: string, msg: string) {
+    if (msg) sendErrors.set(key, msg);
+    else sendErrors.delete(key);
+  }
+  // Erro de envio cuja sessão SUMIU da lista: matar uma sessão REMOVE a linha (o backend nunca emite
+  // `dead` nesta lista — classify() só devolve working/idle/awaiting_input, e o marcador dos hooks
+  // não emite dead; `dead` só existe no SSE por-sessão do Chat, state.py:228). Ou seja, o 404 do
+  // /input chega ~1.5s antes da linha evaporar e levar o card — e o erro junto. Verificado ao vivo.
+  // Estes órfãos não têm mais card pra renderizá-los: o quadro guarda o recibo, nomeado e dispensável,
+  // senão a msg some calada e você redigita (entrega dobrada — memória `queue-never-retype`).
+  const orphanErrors = $derived(
+    [...sendErrors].filter(([k]) => !rows.some((r) => rowKey(r) === k)),
+  );
 </script>
 
 <div class="board">
   {#if offline.length}
     <p class="board-offline">sem conexão: {offline.join(', ')}</p>
   {/if}
+  <!-- Recibo de msg não entregue a uma sessão que sumiu (o card que mostraria o erro já não existe).
+       Clique dispensa. -->
+  {#each orphanErrors as [key, msg] (key)}
+    <button class="board-senderr" onclick={() => sendErrors.delete(key)} title="Dispensar">
+      {key.split('::')[1]}: {msg} — msg não entregue
+    </button>
+  {/each}
   <div class="board-cols">
     {#each cols as col (col.state)}
       {#if col.state === 'dead' && !deadOpen}
@@ -128,13 +177,17 @@
             {/if}
           </header>
           <div class="col-cards">
-            {#each col.rows as row (row.serverId + '::' + row.name)}
+            {#each col.rows as row (rowKey(row))}
               <BoardCard
                 session={row}
                 server={servers.find((s) => s.id === row.serverId)!}
                 color={serverColor(row.serverId)}
-                draft={drafts.get(row.serverId + '::' + row.name) ?? ''}
-                onDraftChange={(t) => drafts.set(row.serverId + '::' + row.name, t)}
+                draft={drafts.get(rowKey(row)) ?? ''}
+                onDraftChange={(t) => drafts.set(rowKey(row), t)}
+                pending={pendings.get(rowKey(row)) ?? []}
+                updatePending={(fn) => updatePending(rowKey(row), fn)}
+                sendError={sendErrors.get(rowKey(row)) ?? ''}
+                onSendError={(m) => setSendError(rowKey(row), m)}
                 onOpen={() => onOpenSession(row.name, row.serverId)}
               />
             {/each}
@@ -153,6 +206,13 @@
      ~1200px o board scrolla em vez de espremer coluna (padrão de board com 4+ colunas). */
   .board { height: 100%; overflow-x: auto; overflow-y: hidden; padding: 24px; }
   .board-offline { color: var(--warning); font-size: var(--text-xs); margin: 0 0 var(--space-2); }
+  /* Mesmo lugar/peso do banner de offline (é a mesma classe de aviso: "isto não chegou"), na cor de
+     erro. min-* zerados = escape do alvo global de 44px, igual ao .col-collapse. */
+  .board-senderr {
+    display: block; text-align: left; padding: 0; margin: 0 0 var(--space-2);
+    background: none; border: 0; cursor: pointer; min-height: 0; min-width: 0;
+    color: var(--error); font-family: inherit; font-size: var(--text-xs);
+  }
   .board-cols { display: flex; gap: 16px; height: 100%; align-items: stretch; }
   /* Coluna NÃO tem fundo próprio nem borda: em dark, tingir fundo por estado mata a hierarquia de
      luminância (o card é que é a superfície). Estado vive só no header. */

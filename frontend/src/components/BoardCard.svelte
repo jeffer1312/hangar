@@ -4,24 +4,35 @@
   import { getHistoryTailForServer, sendInputForServer, selectOptionForServer } from '../lib/api';
   import { relativeTime } from '../lib/format';
   import type { Server } from '../lib/auth';
-  import type { ChatEvent, State } from '../lib/types';
-  import type { BoardRow } from '../screens/Board.svelte';
+  import type { ChatEvent } from '../lib/types';
+  import type { BoardRow, PendingMsg } from '../screens/Board.svelte';
 
   interface Props {
     session: BoardRow;
     server: Server;
     color: string;                    // cor do servidor (dot)
-    draft: string;                    // rascunho içado no Board (sobrevive à troca de coluna)
+    // Estado IÇADO no Board. O quadro tem um {#each} POR COLUNA, então quando a sessão muda de estado
+    // a row sai de um bloco e entra em outro — o Svelte DESTRÓI e recria este componente. Nada que
+    // precise sobreviver ao envio (que é justamente o que muda o estado) pode morar aqui dentro.
+    draft: string;
     onDraftChange: (t: string) => void;
+    pending: PendingMsg[];
+    // Updater (prev => next), não setter: o card pode ser destruído NO MEIO do próprio envio e o
+    // callback segue apontando pro Map do Board. Reler a prop `pending` depois do await leria a de
+    // uma instância morta; a função recebe sempre o valor atual da fonte da verdade.
+    updatePending: (fn: (prev: PendingMsg[]) => PendingMsg[]) => void;
+    sendError: string;
+    onSendError: (m: string) => void;
     onOpen: () => void;               // abre o chat completo
   }
-  let { session, server, color, draft, onDraftChange, onOpen }: Props = $props();
+  let {
+    session, server, color, draft, onDraftChange,
+    pending, updatePending, sendError, onSendError, onOpen,
+  }: Props = $props();
 
   const TAIL = 15;
   let events = $state<ChatEvent[]>([]);
-  // `solid` = eco já consumido pelo Claude, mas que pode nunca virar entrada no transcript (fila).
-  let pending = $state<{ id: string; text: string; solid?: boolean }[]>([]);
-  let sendError = $state('');
+  let tailError = $state('');
   let loading = $state(true);
   let bodyEl = $state<HTMLElement>();
   // Semeia UMA vez com o rascunho içado; daqui pra frente o dono do texto é o card (untrack: reagir a
@@ -34,63 +45,61 @@
     onDraftChange(text);
   });
 
+  // `seq` invalida o resultado de um fetch cuja instância já foi descartada (troca de coluna): sem
+  // isto uma cauda de 8s resolve em estado morto e ainda ocupa uma das ~6 conexões/host — competindo
+  // com a espiada do hover da Sidebar, que usa o MESMO endpoint.
+  let seq = 0;
   async function loadTail() {
+    const my = ++seq;
+    // Marcado ANTES do fetch: esta cauda só pode conter eco que o backend já tinha confirmado agora.
+    const startedAt = Date.now();
     try {
-      events = await getHistoryTailForServer(server, session.name, TAIL);
-      solidifyPending();
-      loading = false;
+      const evs = await getHistoryTailForServer(server, session.name, TAIL);
+      if (my !== seq) return;
+      events = evs;
+      tailError = '';
+      retirePending(startedAt);
       requestAnimationFrame(() => bodyEl?.scrollTo({ top: bodyEl.scrollHeight }));
-    } catch { loading = false; /* offline/sem transcript: card fica só com header */ }
+    } catch {
+      if (my !== seq) return;
+      // Falha por-requisição (timeout de 8s / 404 / 500) com o SSE do Board saudável NÃO acende o
+      // banner de offline (que é por servidor inteiro): sem marcador o card ficava em branco, igual a
+      // sessão vazia, e sem retry — a cauda só roda no mount.
+      tailError = 'falha ao carregar — tocar pra tentar de novo';
+    } finally {
+      if (my === seq) loading = false;
+    }
   }
   onMount(loadTail);
 
-  // Fila do Claude Code: msg enviada com ele `working` MUITAS VEZES não vira entrada no transcript
-  // (só as enviadas no idle viram prompt gravado) — mesma razão do solidify do Chat.svelte:634-646.
-  // Sem isto o dedup abaixo nunca casaria e o eco ficaria meio-apagado pra sempre. Solidificar só
-  // tira a marca de "não confirmada": o dedup ainda remove as que casarem com a cauda.
-  function solidifyPending() {
-    if (pending.some((p) => !p.solid)) pending = pending.map((p) => ({ ...p, solid: true }));
+  // Retira o eco que o backend JÁ tinha confirmado quando esta cauda começou: /input 200 = texto na
+  // fila durável (ou já digitado no transcript), e o merged_history devolve os dois deduplicados no
+  // BACKEND (ts-aware, pqueue.py:327) — daí em diante a bolha real cobre o eco. Compara TEMPO, nunca
+  // texto: casar por texto só conseguia falso-positivo (um "ok" antigo na cauda engolia o "ok"
+  // recém-digitado -> msg some sem rastro -> você redigita -> entrega dobrada).
+  // ackAt = 0 -> POST ainda em voo: segue pendente (a cauda não teria como conter).
+  function retirePending(startedAt: number) {
+    updatePending((prev) => prev.filter((p) => !p.ackAt || p.ackAt > startedAt));
   }
 
-  // Re-busca SÓ em transição de estado (working -> idle/awaiting: o texto estabilizou).
-  // NUNCA por last_activity (com N sessões working viraria fetch contínuo + parse de jsonl no backend).
-  let prevState: State = untrack(() => session.state);
-  $effect(() => {
-    const s = session.state;
-    if (prevState === 'working' && (s === 'idle' || s === 'awaiting_input')) loadTail();
-    prevState = s;
-  });
-
-  // Dedup do eco pendente contra a cauda (versão reduzida do contrato do Chat.svelte:612-632: texto
-  // normalizado + por LINHA, já que o Claude Code funde msgs enfileiradas numa só, separadas por \n).
-  $effect(() => {
-    if (pending.length === 0) return;
-    const committed = new Set<string>();
-    for (const e of events) {
-      if (e.kind !== 'user_msg' || !e.text) continue;
-      const t = e.text.trim();
-      committed.add(t);
-      for (const line of t.split('\n')) committed.add(line.trim());
-    }
-    const next = pending.filter((p) => !committed.has(p.text.trim()));
-    if (next.length !== pending.length) pending = next;
-  });
-
-  let seq = 0;
   async function send() {
     const t = text.trim();
     if (!t) return;
-    const id = `bp-${seq++}`;
-    pending = [...pending, { id, text: t }];
+    const id = 'bp-' + Math.random().toString(36).slice(2, 10);
+    updatePending((prev) => [...prev, { id, text: t, ackAt: 0 }]);
     text = '';
-    sendError = '';
+    onSendError('');
     try {
       await sendInputForServer(server, session.name, t);
+      // Aceito pelo backend: a partir daqui QUALQUER cauda nova já contém esta msg -> o eco pode sair.
+      updatePending((prev) => prev.map((p) => (p.id === id ? { ...p, ackAt: Date.now() } : p)));
     } catch (err) {
       // 404 = sessão morta etc: remove o eco e SINALIZA — msg nunca some calada.
-      pending = pending.filter((p) => p.id !== id);
-      text = t; // devolve pro input
-      sendError = err instanceof Error ? err.message : 'falha no envio';
+      updatePending((prev) => prev.filter((p) => p.id !== id));
+      // Devolve pro input SÓ se ele ainda estiver vazio: o envio NÃO tem timeout (de propósito), então
+      // a janela é ilimitada e o usuário pode ter digitado outra coisa — sobrescrever comeria o texto.
+      if (!text) text = t;
+      onSendError(err instanceof Error ? err.message : 'falha no envio');
     }
   }
   function onKey(e: KeyboardEvent) {
@@ -101,10 +110,10 @@
   async function answer(i: number) {
     if (optBusy) return;
     optBusy = true;
-    sendError = '';
+    onSendError('');
     // option é 1-BASED (api.ts:150 -> backend Field(ge=1) -> (option-1)×Down + Enter).
     try { await selectOptionForServer(server, session.name, i + 1); }
-    catch (err) { sendError = err instanceof Error ? err.message : 'falha'; }
+    catch (err) { onSendError(err instanceof Error ? err.message : 'falha'); }
     finally { optBusy = false; }
   }
 
@@ -127,7 +136,9 @@
   </header>
 
   <div class="bc-body" bind:this={bodyEl}>
-    {#if loading}
+    <!-- "carregando…" só quando NÃO há o que mostrar: o card remonta a cada troca de coluna e os ecos
+         içados sobrevivem — cair no loading por cima deles reintroduziria o sumiço da msg. -->
+    {#if loading && visible.length === 0 && pending.length === 0}
       <p class="bc-empty">carregando…</p>
     {:else}
       {#each visible as e (e.id)}
@@ -139,9 +150,13 @@
           <p class="bc-user">{e.text}</p>
         {/if}
       {/each}
+      <!-- Meio-apagado enquanto o POST está EM VOO; sólido assim que o backend aceita (ackAt). -->
       {#each pending as p (p.id)}
-        <p class="bc-user" class:bc-pending={!p.solid}>{p.text}</p>
+        <p class="bc-user" class:bc-pending={!p.ackAt}>{p.text}</p>
       {/each}
+      {#if tailError}
+        <button class="bc-error bc-retry" onclick={loadTail}>{tailError}</button>
+      {/if}
       {#if session.state === 'working' && session.label}
         <p class="bc-typing">✳ {session.label}</p>
       {/if}
@@ -165,7 +180,13 @@
       <textarea rows="1" placeholder="Mensagem…" bind:value={text} onkeydown={onKey}></textarea>
       <button class="bc-send" onclick={send} disabled={!text.trim()} aria-label="Enviar">↑</button>
     </footer>
-    {#if sendError}<p class="bc-error">{sendError}</p>{/if}
+  {/if}
+  <!-- FORA do guard acima de propósito: o erro não pode depender da condição que o input depende.
+       `tracked === false` esconde o input mas NÃO esconde o picker de opções (fica no corpo) — o
+       erro do answer() ficava engolido ali dentro. E se a sessão sumir da lista o card inteiro
+       evapora: aí o recibo é o do Board (orphanErrors). Clicar dispensa. -->
+  {#if sendError}
+    <button class="bc-error" onclick={() => onSendError('')} title="Dispensar">{sendError}</button>
   {/if}
 </article>
 
@@ -245,5 +266,15 @@
   .bc-foot textarea:focus { border-color: var(--accent); outline: none; }
   .bc-send { width: 28px; border-radius: var(--radius-sm); border: 0; background: var(--accent); color: var(--text-inverse); cursor: pointer; }
   .bc-send:disabled { opacity: 0.4; cursor: default; }
-  .bc-error { color: var(--error); font-size: var(--text-xs); padding: 0 var(--space-2) var(--space-2); margin: 0; }
+  /* Erro de envio e marcador de falha da cauda: mesma cor/tamanho. Os dois são <button> porque os
+     dois têm ação (dispensar / tentar de novo); min-* zerados = mesmo escape do alvo global de 44px
+     usado no .col-collapse do Board (o quadro é desktop-only). */
+  .bc-error {
+    display: block; width: 100%; text-align: left;
+    color: var(--error); font-family: inherit; font-size: var(--text-xs);
+    background: none; border: 0; cursor: pointer; min-height: 0; min-width: 0;
+    padding: 0 var(--space-2) var(--space-2); margin: 0;
+  }
+  /* No corpo do card o recuo já vem do .bc-body. */
+  .bc-retry { padding: 0; }
 </style>
