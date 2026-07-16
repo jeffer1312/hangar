@@ -45,6 +45,26 @@ npm --prefix frontend run check            # svelte-check + tsc — THIS is the 
 Sessions must run as `claude --session-id <uuid>` **inside tmux** — `scripts/install-claude-wrapper.sh`
 sets this up. A `claude` without an id, or outside tmux, is invisible to the app or flagged ⚠ no id.
 
+## Sessões-irmãs (cp-send) + pareamento
+
+Sessões Claude da MESMA máquina se falam via `scripts/cp-send` (`--list`, `<sessao> "msg"`,
+`--pair <sessao> "tarefa"`, `--unpair`, `--new <nome> [cwd]`) — tudo sobre a API local do backend
+(`/input`, `/pair`, fila durável). Pareamento = vínculo simétrico (`app/pair.py`, sidecars em
+`<config>/.claude-pocket-pair/`) + prompt de protocolo injetado nas duas sessões; a UI mostra chip
+🤝 (Composer), badges nas listas, PairSheet (conversa do par + contrato compartilhado `<a>__<b>.md`
++ split view desktop).
+
+**Instalar/atualizar numa máquina** (após `git pull`):
+
+```bash
+./scripts/install-cp-send.sh    # symlink ~/.local/bin/cp-send + bloco "Sessões-irmãs" no ~/.claude/CLAUDE.md (idempotente)
+systemctl --user restart claude-pocket-backend.service   # API de pareamento/preview
+npm --prefix frontend run build                          # só se o front for servido estático (vite dev pega via HMR)
+```
+
+Sessões Claude já abertas não releem o CLAUDE.md global — só as novas conhecem o cp-send.
+Escopo: sessões só se enxergam dentro da mesma máquina (backend local em 127.0.0.1).
+
 ## SSE event model
 
 The frontend `EventSource` (`screens/Chat.svelte`) listens for:
