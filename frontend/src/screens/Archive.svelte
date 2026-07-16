@@ -108,7 +108,9 @@
     try {
       const info = await resumeArchivedConversation(selected.project, selected.session_id);
       if (deepLink) selectServer(deepLink.serverId);
-      window.location.hash = '#/chat/' + encodeURIComponent(info.name);
+      // Rota server-aware (#/chat/<server>/<nome>): homônimas em servidores diferentes.
+      const sid = getActiveId();
+      window.location.hash = '#/chat/' + (sid ? encodeURIComponent(sid) + '/' : '') + encodeURIComponent(info.name);
     } catch (e) {
       resumeError = e instanceof Error ? e.message : 'Erro ao retomar a conversa';
     } finally {

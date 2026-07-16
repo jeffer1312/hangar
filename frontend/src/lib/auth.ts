@@ -190,11 +190,14 @@ export function parseServerPairing(text: string): { base: string; token: string 
   return { base, token: tok };
 }
 
-export function selectServer(id: string): void {
+export function selectServer(id: string): boolean {
+  // Devolve false quando o id não existe localmente (push antigo, link de outra máquina) — quem
+  // navega usa isso pra NÃO montar um chat contra o servidor ativo errado (cross-wire calado).
   const s = readServers().find((x) => x.id === id);
-  if (!s) return;
+  if (!s) return false;
   localStorage.setItem(ACTIVE_KEY, id);
   syncCookie(s.token);
+  return true;
 }
 
 export function removeServer(id: string, notify = true): void {
