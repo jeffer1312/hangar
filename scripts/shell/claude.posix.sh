@@ -35,6 +35,15 @@ claude() {
     # only inject the id (no tmux) when: already in tmux, print mode, or stdin not a tty
     local print=0
     for a in "$@"; do case "$a" in -p|--print) print=1 ;; esac; done
+    # TMUX herdado pode estar MORTO (ex: kitty single-instance cujo mestre nasceu dentro de um pane
+    # que já fechou). Valida o pane; stale -> limpa e segue pro caminho "fora do tmux" (cria sessão).
+    if [ -n "${TMUX:-}" ]; then
+        # list-panes -t <pane>: exit 1 se o pane não existe (display-message devolve 0 até pra pane morto).
+        if [ -z "${TMUX_PANE:-}" ] || ! tmux list-panes -t "$TMUX_PANE" >/dev/null 2>&1; then
+            unset TMUX TMUX_PANE
+        fi
+    fi
+
     if [ -n "${TMUX:-}" ] || [ "$print" = 1 ] || [ ! -t 0 ]; then
         COLORTERM=truecolor CLAUDE_CODE_TMUX_TRUECOLOR=1 command claude --session-id "$id" "$@"
         return
