@@ -74,5 +74,11 @@ sender=$(me)
 text="[de: $sender] $*"
 
 body=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1]}))' "$text")
-api POST "/api/sessions/$target/input" "$body" >/dev/null
-echo "enviado -> $target"
+resp=$(api POST "/api/sessions/$target/input" "$body")
+# delivered=True -> digitou agora na TUI; False -> fila durável (entrega quando a sessão ficar idle).
+# Sessão inexistente nem chega aqui (o backend responde 404 e o api() já mostrou o detail).
+if python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("delivered") else 1)' "$resp"; then
+    echo "entregue -> $target"
+else
+    echo "na fila -> $target (sessão ocupada; entrega no próximo idle)"
+fi
