@@ -13,7 +13,7 @@
   import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
   import type { AggSession, SessionInfo, ResumeCandidate } from '../lib/types';
-  import { countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, sortSessions } from '../lib/format';
+  import { countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, sortSessions, clusterByPair } from '../lib/format';
   import { updateBadge } from '../lib/badge';
 
   interface Props {
@@ -224,7 +224,9 @@
     if (next.has(id)) next.delete(id);
     else next.add(id);
     collapsed = next;
-    try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next])); } catch { /* quota/priv mode: ignora */ }
+    // Persiste só servidor/projeto; colapso de CLUSTER de pareamento ('pair:<gid>') é efêmero (gid
+    // regenera a cada pareamento -> salvar acumularia lixo morto). Ver mesmo filtro na Sidebar.
+    try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next].filter((k) => !k.startsWith('pair:')))); } catch { /* quota/priv mode: ignora */ }
   }
 
   // Slot por servidor; cada stream SSE preenche o seu e dispara recompute. Recompute reflatten na
@@ -562,19 +564,32 @@
                 >➤</button>
               </div>
               {#if !collapsed.has(g.id)}
-                {#each g.sessions as session (session.serverId + ':' + session.name)}
-                  <SessionCard
-                    {session}
-                    serverBadge={null}
-                    onClick={() => openSession(session)}
-                    onDelete={() => handleDelete(session)}
-                    onResume={() => handleResume(session)}
-                    onRename={(nv) => handleRename(session, nv)}
-                    onGit={() => handleGit(session)}
-                    {selectMode}
-                    selected={selected.has(`${session.serverId}:${session.name}`)}
-                    onToggleSelect={() => toggleSelected(`${session.serverId}:${session.name}`)}
-                  />
+                {#each clusterByPair(g.sessions) as item (item.kind === 'header' ? `ph:${item.gid}` : `${item.session.serverId}:${item.session.name}`)}
+                  {#if item.kind === 'header'}
+                    <!-- Cluster de pareamento (Opção C): sub-header colapsável do grupo. -->
+                    <button class="pair-head" onclick={() => toggleGroup(`pair:${item.gid}`)}
+                            aria-expanded={!collapsed.has(`pair:${item.gid}`)}>
+                      <span class="pair-chev" class:collapsed={collapsed.has(`pair:${item.gid}`)} aria-hidden="true">▾</span>
+                      <span class="pair-label">🤝&nbsp;{item.label}</span>
+                      <span class="pair-count">{item.count}</span>
+                    </button>
+                  {:else if !item.gid || !collapsed.has(`pair:${item.gid}`)}
+                    {@const session = item.session}
+                    <div class="pair-wrap" class:pair-member={!!item.gid}>
+                      <SessionCard
+                        {session}
+                        serverBadge={null}
+                        onClick={() => openSession(session)}
+                        onDelete={() => handleDelete(session)}
+                        onResume={() => handleResume(session)}
+                        onRename={(nv) => handleRename(session, nv)}
+                        onGit={() => handleGit(session)}
+                        {selectMode}
+                        selected={selected.has(`${session.serverId}:${session.name}`)}
+                        onToggleSelect={() => toggleSelected(`${session.serverId}:${session.name}`)}
+                      />
+                    </div>
+                  {/if}
                 {/each}
               {/if}
             </div>
@@ -848,6 +863,24 @@
 </div>
 
 <style>
+  /* Cluster de pareamento (Opção C): sub-header colapsável + faixa accent ligando os membros. */
+  .pair-head {
+    display: flex; align-items: center; gap: var(--space-2);
+    width: 100%; text-align: left;
+    padding: var(--space-2) var(--space-4);
+    background: none; border: none; cursor: pointer;
+    font-size: var(--text-sm); font-weight: 600; color: var(--accent);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .pair-chev { flex-shrink: 0; font-size: 10px; transition: transform 160ms var(--ease-out); }
+  .pair-chev.collapsed { transform: rotate(-90deg); }
+  .pair-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .pair-count {
+    flex-shrink: 0; font-size: var(--text-xs); color: var(--accent);
+    background: var(--accent-dim); border-radius: var(--radius-full); padding: 1px 8px;
+  }
+  .pair-wrap.pair-member { border-left: 2px solid var(--accent-dim); }
+
   .session-list-screen {
     display: flex;
     flex-direction: column;

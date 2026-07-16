@@ -144,6 +144,26 @@ def test_broadcast_rejects_slash_commands(api_client):
     sp.assert_not_called()
 
 
+def test_group_message_delivers_to_peers_not_self(api_client):
+    # cp-send --group: entrega "[grupo: me] ..." a CADA companheiro, nunca à própria sessão.
+    with patch("app.api.PairLink.get", return_value={"peers": ["b", "c"], "task": "", "gid": "g1"}), \
+         patch("app.api.terminal.send_prompt", return_value="sent") as sp, \
+         patch("app.pqueue.PromptQueue.append"):
+        r = api_client.post("/api/sessions/a/group-message", json={"text": "terminei"}, headers=_h())
+    assert r.status_code == 200
+    body = r.json()
+    assert body["peers"] == ["b", "c"] and body["warning"] is None
+    sent_to = [c.args[0] for c in sp.call_args_list]
+    assert sorted(sent_to) == ["b", "c"]  # nunca "a"
+    assert all(c.args[1] == "[grupo: a] terminei" for c in sp.call_args_list)
+
+
+def test_group_message_404_when_not_in_group(api_client):
+    with patch("app.api.PairLink.get", return_value=None):
+        r = api_client.post("/api/sessions/a/group-message", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # Input/broadcast/interrupt por provider (Task 7 — tornar o Codex conversavel)
 # ---------------------------------------------------------------------------
