@@ -29,6 +29,7 @@ export interface SessionInfo {
   // ("quando terminar -> enviar pra"), null senao. So o alvo (indicador na lista); o texto do prompt
   // fica no backend, so exposto na hora de setar/limpar.
   then_target?: string | null;
+  paired_with?: string | null;  // pareamento ativo ("trabalhando juntas"): nome da sessão-par
 }
 
 // Sessão marcada com o servidor de origem (visão agregada multi-servidor).
@@ -174,7 +175,7 @@ export interface FsScanResult {
 }
 
 // ── AskUserQuestion (stepper nativo multi-pergunta) ─────────────────────────
-export interface AskOption { label: string; description: string }
+export interface AskOption { label: string; description: string; preview?: string }
 export interface AskQuestionItem { header: string; question: string; multiSelect: boolean; options: AskOption[] }
 export interface AskQuestionPayload { questions: AskQuestionItem[] }
 export type AnswerItem =

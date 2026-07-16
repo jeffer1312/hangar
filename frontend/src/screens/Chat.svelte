@@ -13,9 +13,12 @@
   import AskQuestionSheet from '../components/AskQuestionSheet.svelte';
   import RunSheet from '../components/RunSheet.svelte';
   import CodexLimitsSheet from '../components/CodexLimitsSheet.svelte';
+  import ForwardSheet from '../components/ForwardSheet.svelte';
+  import PairSheet from '../components/PairSheet.svelte';
   import {
     getHistory,
     sendInput,
+    broadcast,
     selectOption,
     interrupt,
     openEventStream,
@@ -36,8 +39,9 @@
     onBack: () => void;
     onNavigateToChat: (name: string) => void;
     desktop?: boolean;   // montado no DesktopShell -> header sem "voltar"/switcher + atalhos de teclado
+    onOpenSplit?: (name: string) => void; // desktop: abre o chat do PAR lado a lado (split view)
   }
-  let { sessionName, onBack, onNavigateToChat, desktop = false }: Props = $props();
+  let { sessionName, onBack, onNavigateToChat, desktop = false, onOpenSplit }: Props = $props();
 
   let events = $state<ChatEvent[]>([]);
   // Índice id->posição em `events`. O SSE re-emite o transcript INTEIRO a cada (re)conexão; sem isto
@@ -105,6 +109,12 @@
     return () => mq.removeEventListener('change', on);
   });
   let allSessions = $state<SessionInfo[]>([]);
+  // Bolha sendo encaminhada pra outra sessao (long-press/hover ↗); null = sheet fechado.
+  let forwardText = $state<string | null>(null);
+  // Pareamento ("trabalhando juntas"): sheet + par atual derivado da lista já carregada.
+  let pairOpen = $state(false);
+  const pairedWith = $derived(allSessions.find((s) => s.name === sessionName)?.paired_with ?? null);
+  const pairedState = $derived(pairedWith ? (allSessions.find((s) => s.name === pairedWith)?.state ?? null) : null);
 
   async function openSwitcher() {
     switcherOpen = true;
@@ -142,7 +152,8 @@
   }
   onMount(() => {
     loadSessionsForNav();
-    if (desktop) return;
+    // Poll nos DOIS views (era só mobile): o chip 🤝 mostra o estado vivo do PAR — sem reconsultar,
+    // a bolinha congelava no desktop. Mesmo REST leve de sempre, a cada 5s.
     const id = setInterval(loadSessionsForNav, 5000);
     return () => clearInterval(id);
   });
@@ -548,6 +559,16 @@
 
   let pendingSeq = 0;
 
+  // Toggle "mandar pros dois" (pareada): quando ligado, o prompt vai pra ESTA sessão E pro par
+  // via /broadcast (mesma esteira do /input por sessão, fila durável). Fica ligado até o usuário
+  // desligar — mas RESETA quando o par muda (troca/despareamento): sem isto, desparear de B e
+  // parear com C reacendia o toggle invisível e o próximo envio ia pra C sem o usuário pedir.
+  let sendToPair = $state(false);
+  $effect(() => {
+    void pairedWith;
+    sendToPair = false;
+  });
+
   async function handleSend(text: string) {
     // Enviou enquanto o Claude trabalha -> entra na fila (Claude Code enfileira no tmux).
     // Eco imediato como bubble pendente; solidifica quando o transcript trouxer a msg real.
@@ -557,7 +578,22 @@
       pending = [...pending, { id: pendingId, text }];
     }
     try {
-      await sendInput(sessionName, text);
+      if (sendToPair && pairedWith && !text.trimStart().startsWith('/')) {
+        // Slash-command nunca em broadcast (o backend rejeita; mesmo racional do /api/broadcast).
+        // /broadcast responde 200 com resultado POR sessão — falha individual (pane do par morto)
+        // não rejeita a promise; sem conferir, o envio pro par falhava calado.
+        const results = await broadcast([sessionName, pairedWith], text);
+        const failed = Object.entries(results).filter(([, r]) => !r.ok);
+        if (failed.length) {
+          const ok = Object.keys(results).filter((n) => results[n].ok);
+          throw new Error(
+            `${ok.length ? `chegou em ${ok.join(', ')}, mas ` : ''}não chegou em ` +
+            `${failed.map(([n]) => n).join(', ')} (${failed[0][1].error ?? 'falha no envio'})`
+          );
+        }
+      } else {
+        await sendInput(sessionName, text);
+      }
     } catch (err) {
       console.error('sendInput error:', err);
       // Falhou o envio -> remove o pending que adicionamos (nao ficou enfileirado).
@@ -741,6 +777,8 @@
       askActive={askOpen && askPayload != null}
       onAnswer={handleAnswer}
       onAskClose={() => (askOpen = false)}
+      onForward={(t) => (forwardText = t)}
+      onOpenSession={onNavigateToChat}
     />
   {/if}
 
@@ -785,6 +823,11 @@
         onOpenGit={() => (gitOpen = true)}
         onOpenPreview={() => (previewOpen = true)}
         provider={sessionProvider}
+        {pairedWith}
+        {pairedState}
+        onOpenPair={() => (pairOpen = true)}
+        {sendToPair}
+        onToggleSendToPair={() => (sendToPair = !sendToPair)}
       />
     {/if}
   </div>
@@ -804,6 +847,24 @@
     onClose={() => (createOpen = false)}
     onCreate={handleCreate}
     onOpenSession={onNavigateToChat}
+  />
+
+  <ForwardSheet
+    open={forwardText != null}
+    text={forwardText ?? ''}
+    fromSession={sessionName}
+    onClose={() => (forwardText = null)}
+  />
+
+  <PairSheet
+    open={pairOpen}
+    {sessionName}
+    {pairedWith}
+    onClose={() => (pairOpen = false)}
+    onChanged={loadSessionsForNav}
+    onOpenSplit={onOpenSplit && pairedWith
+      ? () => { const p = pairedWith; if (p) { pairOpen = false; onOpenSplit?.(p); } }
+      : undefined}
   />
 
   <UsageSheet open={usageOpen} {status} onClose={() => (usageOpen = false)} />

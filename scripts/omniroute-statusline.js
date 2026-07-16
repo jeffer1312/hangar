@@ -129,6 +129,25 @@ process.stdin.on('end', () => {
       sevenDay = ' ' + c + '📅7d:' + Math.round(sd) + '%' + resetStr + '\x1b[0m';
     }
 
+    // Nome da sessão tmux (= endereço da sessão no cp-send / claude-pocket)
+    let tmuxSess = '';
+    if (process.env.TMUX && process.env.TMUX_PANE) {
+      try {
+        const { execFileSync } = require('child_process');
+        const s = execFileSync('tmux', ['display-message', '-p', '-t', process.env.TMUX_PANE, '#S'],
+          { encoding: 'utf8', timeout: 1000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+        if (s) {
+          tmuxSess = ' \x1b[95m📟 ' + s + '\x1b[0m';
+          // Pareamento (claude-pocket): sidecar <config>/.claude-pocket-pair/<sessao>.json -> chip 🤝 peer.
+          try {
+            const pair = JSON.parse(fs.readFileSync(
+              path.join(claudeDir, '.claude-pocket-pair', s + '.json'), 'utf8'));
+            if (pair.peer) tmuxSess += ' \x1b[93m🤝 ' + pair.peer + '\x1b[0m';
+          } catch {}
+        }
+      } catch {}
+    }
+
     // kubectl current-context (vermelho piscando se prod)
     let kctx = '';
     try {
@@ -175,7 +194,7 @@ process.stdin.on('end', () => {
     const segs = [
       '\x1b[1;35m🤖 ' + model + effortSuffix + '\x1b[0m',
       '\x1b[97m📁 ' + dir + '\x1b[0m' + gitBranch,
-      kctx, tokens, cost, rateLimit, sevenDay, clock
+      tmuxSess, kctx, tokens, cost, rateLimit, sevenDay, clock
     ].map(s => s.trim()).filter(Boolean);
 
     const sep = ' │ ';

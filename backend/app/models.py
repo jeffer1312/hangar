@@ -35,6 +35,8 @@ class SessionInfo(BaseModel):
     # armado ("quando terminar -> enviar pra"), None senao. So o alvo (pro indicador na lista); o texto
     # do prompt fica no sidecar (app.chain.ThenLink), lido so na hora de disparar.
     then_target: Optional[str] = None
+    # Pareamento ativo (feature "trabalhando juntas"): nome da sessão-par, ou None. Badge na UI.
+    paired_with: Optional[str] = None
 
 
 class ChatEvent(BaseModel):
@@ -114,6 +116,9 @@ class FsScanResult(BaseModel):
 class AskOption(BaseModel):
     label: str
     description: str = ""
+    # Mockup/código renderizado ao lado da opção (feature "preview" do AskUserQuestion do harness).
+    # Sem ele o pydantic descartava o campo e o stepper não tinha como mostrar.
+    preview: str = ""
 
 
 class AskQuestionItem(BaseModel):

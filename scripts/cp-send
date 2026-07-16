@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# cp-send — mensagem entre sessões Claude via claude-pocket.
+#
+#   cp-send --list                 lista sessões vivas (nome, estado, cwd)
+#   cp-send <sessao> <mensagem...> manda prompt pra sessão (fila durável se ocupada)
+#   cp-send --pair <sessao> [tarefa...]  pareia ESTA sessão com outra (registra no app:
+#                                        badge 🤝 na UI + protocolo injetado nos dois lados)
+#   cp-send --unpair               desfaz o pareamento desta sessão (avisa os dois lados)
+#   cp-send --new <nome> [cwd]     cria sessão Claude nova (tmux gerenciado pelo app: --session-id,
+#                                  truecolor, visível no pocket). cwd default = home.
+#
+# Remetente é detectado pelo nome da sessão tmux atual e prefixado como "[de: X]",
+# pra sessão destino saber a origem e pra onde responder.
+set -euo pipefail
+
+ENV_FILE="$(dirname "$(realpath "$0")")/../backend/.env"
+TOKEN=$(grep '^CP_AUTH_TOKEN=' "$ENV_FILE" | cut -d= -f2-)
+PORT=$(grep '^CP_PORT=' "$ENV_FILE" | cut -d= -f2- || true)
+BASE="http://127.0.0.1:${PORT:-8765}"
+AUTH="Authorization: Bearer $TOKEN"
+
+# api <METHOD> <path> [json-body] — imprime o corpo no stdout; falha (!2xx) imprime status + corpo
+# real da API no stderr e retorna 1. Sem -f: mascarar o detail ("sessão não encontrada" vs 401 vs
+# 502) deixava quem chama (inclusive um Claude) sem como se corrigir.
+api() {
+    local method=$1 path=$2 body=${3:-} out code
+    out=$(curl -s -w $'\n%{http_code}' -X "$method" -H "$AUTH" \
+        ${body:+-H "Content-Type: application/json" -d "$body"} "$BASE$path") || {
+        echo "erro: backend inacessível em $BASE (claude-pocket rodando?)" >&2; return 1; }
+    code=${out##*$'\n'}
+    out=${out%$'\n'*}
+    if [[ $code == 2* ]]; then printf '%s' "$out"; return 0; fi
+    echo "erro HTTP $code: $out" >&2
+    return 1
+}
+
+if [[ "${1:-}" == "--list" || $# -eq 0 ]]; then
+    api GET /api/sessions | python3 -c '
+import json, sys
+for s in json.load(sys.stdin):
+    print("%-24s %-15s %s" % (s["name"], s["state"], s["cwd"]))'
+    exit 0
+fi
+
+me() { tmux display-message -p '#S' 2>/dev/null || echo "cli"; }
+
+if [[ "$1" == "--pair" ]]; then
+    peer="${2:?uso: cp-send --pair <sessao> [tarefa...]}"; shift 2
+    body=$(python3 -c 'import json,sys; print(json.dumps({"peer": sys.argv[1], "task": sys.argv[2]}))' "$peer" "$*")
+    api POST "/api/sessions/$(me)/pair" "$body" >/dev/null
+    echo "pareado: $(me) <-> $peer (registrado no app; os dois lados recebem o protocolo)"
+    exit 0
+fi
+
+if [[ "$1" == "--new" ]]; then
+    name="${2:?uso: cp-send --new <nome> [cwd]}"
+    cwd="${3:-$HOME}"
+    body=$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1], "cwd": sys.argv[2]}))' "$name" "$cwd")
+    api POST /api/sessions "$body" >/dev/null
+    echo "sessão criada: $name ($cwd) — fala com ela via: cp-send $name \"msg\""
+    exit 0
+fi
+
+if [[ "$1" == "--unpair" ]]; then
+    api DELETE "/api/sessions/$(me)/pair" >/dev/null
+    echo "despareado"
+    exit 0
+fi
+
+target="$1"; shift
+[[ $# -ge 1 ]] || { echo "uso: cp-send <sessao> <mensagem...>" >&2; exit 2; }
+
+sender=$(me)
+text="[de: $sender] $*"
+
+body=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1]}))' "$text")
+api POST "/api/sessions/$target/input" "$body" >/dev/null
+echo "enviado -> $target"
