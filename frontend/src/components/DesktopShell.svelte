@@ -65,9 +65,14 @@
 
   // Sair do quadro (toggle da sidebar) com o overlay aberto fecha ele junto — e restaura o servidor.
   // Espelha o effect do splitSession acima. No-op quando não há overlay.
+  // O teardown cobre o caso em que o DesktopShell DESMONTA em vez de trocar de view: #/costs, #/archive
+  // e #/compare casam ANTES do branch isDesktop (App.svelte:242/244/249), e os três saem do kebab da
+  // sidebar, que segue visível no rail com o quadro aberto. Sem isto o prevActive morre com o componente
+  // e o ativo fica no servidor do card — o mesmo bug silencioso que o capture/restore existe pra evitar.
+  // Idempotente: navigateFromOverlay já zerou o prevActive, então não reintroduz o clobber do 05d3434.
   $effect(() => {
-    if (view === 'board') return;
-    closeOverlay();
+    if (view !== 'board') closeOverlay();
+    return closeOverlay; // registrado SEMPRE: com o quadro aberto é justamente quando o teardown importa
   });
 
   // Esc fecha — mas só quando o overlay é o dono do Esc. Todo sheet/espelho/preview aberto por dentro
