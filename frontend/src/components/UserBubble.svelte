@@ -4,10 +4,11 @@
     ts?: number | null;
     animate?: boolean;   // false = bubble de HISTORICO remontada (paginacao/janela): sem fade
     from?: string | null;          // recado de OUTRA sessao (cp-send): nome da sessao remetente
+    scope?: 'peer' | 'group' | null; // 'group' = aviso pro grupo todo ([grupo: X]) -> chip distinto
     onForward?: (() => void) | null; // abre o picker "encaminhar pra sessao" (long-press/hover)
     onOpenPeer?: (() => void) | null; // tap no chip "de: X" -> abre o chat da sessao remetente
   }
-  let { text, ts, animate = true, from = null, onForward = null, onOpenPeer = null }: Props = $props();
+  let { text, ts, animate = true, from = null, scope = 'peer', onForward = null, onOpenPeer = null }: Props = $props();
 
   function formatTime(ts: number | null | undefined): string {
     if (!ts) return '';
@@ -32,17 +33,19 @@
   <div
     class="bubble"
     class:peer={!!from}
+    class:group={scope === 'group'}
     ontouchstart={pressStart}
     ontouchend={pressCancel}
     ontouchmove={pressCancel}
     oncontextmenu={(e) => { if (onForward) { e.preventDefault(); onForward(); } }}
   >
     {#if from}
+      {@const label = scope === 'group' ? `📣 grupo · ${from}` : `📟 de: ${from}`}
       {#if onOpenPeer}
         <button class="peer-chip peer-chip--link" onclick={onOpenPeer}
-                title={`Abrir o chat de ${from}`}>📟 de: {from} ›</button>
+                title={`Abrir o chat de ${from}`}>{label} ›</button>
       {:else}
-        <span class="peer-chip">📟 de: {from}</span>
+        <span class="peer-chip">{label}</span>
       {/if}
     {/if}
     <p class="bubble-text">{text}</p>
@@ -84,6 +87,12 @@
     background: var(--accent-dim);
     border: 1px solid var(--accent);
   }
+  /* Aviso pro GRUPO ([grupo: X]): âmbar, pra distinguir do recado 1:1 (accent). */
+  .bubble.group {
+    background: rgba(255, 159, 10, 0.12);
+    border-color: var(--warning, #ff9f0a);
+  }
+  .bubble.group .peer-chip { color: var(--warning, #ff9f0a); }
 
   .peer-chip {
     display: block;

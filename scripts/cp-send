@@ -6,6 +6,9 @@
 #   cp-send --pair <sessao> [tarefa...]  pareia ESTA sessão com outra (registra no app:
 #                                        badge 🤝 na UI + protocolo injetado nos dois lados)
 #   cp-send --unpair               desfaz o pareamento desta sessão (avisa os dois lados)
+#   cp-send --group <mensagem...>  AVISO pro grupo TODO de uma vez (marco: "terminei", "contrato
+#                                  atualizado"). Chega como [grupo: X]. UNIDIRECIONAL — nunca
+#                                  responda um [grupo:] com --group (evita loop); responda 1:1.
 #   cp-send --new <nome> [cwd]     cria sessão Claude nova (tmux gerenciado pelo app: --session-id,
 #                                  truecolor, visível no pocket). cwd default = home.
 #
@@ -64,6 +67,15 @@ fi
 if [[ "$1" == "--unpair" ]]; then
     api DELETE "/api/sessions/$(me)/pair" >/dev/null
     echo "despareado"
+    exit 0
+fi
+
+if [[ "$1" == "--group" ]]; then
+    shift
+    [[ $# -ge 1 ]] || { echo "uso: cp-send --group <mensagem...>" >&2; exit 2; }
+    body=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1]}))' "$*")
+    resp=$(api POST "/api/sessions/$(me)/group-message" "$body")
+    python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print("aviso enviado ao grupo:", ", ".join(d["peers"])); w=d.get("warning"); print("  ⚠", w) if w else None' "$resp"
     exit 0
 fi
 

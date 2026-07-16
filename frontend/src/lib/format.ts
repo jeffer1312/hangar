@@ -117,13 +117,14 @@ export function effectiveGroupBy(pref: GroupBy, serverCount: number): GroupBy {
   return serverCount >= 2 ? pref : 'project';
 }
 
-// Recado de OUTRA sessão Claude (cp-send / pareamento): user_msg no formato "[de: <sessao>] texto".
-// Devolve remetente + texto sem o prefixo cru; null = mensagem normal do usuário. Só APRESENTAÇÃO:
-// o texto guardado em events/pending fica intacto (dedup do Chat compara o cru).
-const _PEER_RE = /^\[de:\s*([^\]]+)\]\s*/;
-export function parsePeerMessage(text: string): { from: string; text: string } | null {
+// Recado de OUTRA sessão Claude (cp-send): "[de: <sessao>] texto" (1:1) ou "[grupo: <sessao>] texto"
+// (aviso pro grupo). Devolve remetente + texto sem o prefixo + scope; null = msg normal do usuário.
+// Só APRESENTAÇÃO: o texto guardado em events/pending fica intacto (dedup do Chat compara o cru).
+const _PEER_RE = /^\[(de|grupo):\s*([^\]]+)\]\s*/;
+export function parsePeerMessage(text: string): { from: string; text: string; scope: 'peer' | 'group' } | null {
   const m = _PEER_RE.exec(text);
-  return m ? { from: m[1].trim(), text: text.slice(m[0].length) } : null;
+  if (!m) return null;
+  return { from: m[2].trim(), text: text.slice(m[0].length), scope: m[1] === 'grupo' ? 'group' : 'peer' };
 }
 
 // Anexos de arquivo por CAMINHO citado na conversa (sua ou minha msg). v1 = só "preview-worthy"

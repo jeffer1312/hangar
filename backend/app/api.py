@@ -786,8 +786,12 @@ def _group_text(me: str, others: list[str], task: str) -> str:
     return (
         f"[de: claude-pocket] GRUPO DE TRABALHO ATIVO: você ('{me}') trabalha junto com {quem}{t}. "
         f"Cada sessão mexe SÓ no próprio repo; quando precisar de algo de outro membro (contrato, "
-        f"endpoint, tipo, aviso de conclusão), mande por iniciativa própria via Bash: "
-        f'cp-send {exemplo} "sua mensagem" (qualquer membro) — recados chegam como [de: <membro>]. '
+        f"endpoint, tipo, dúvida), mande 1:1 por iniciativa própria via Bash: "
+        f'cp-send {exemplo} "sua mensagem" — recados 1:1 chegam como [de: <membro>]. '
+        f'AVISO pro grupo TODO (marco: "terminei minha parte", "contrato atualizado"): '
+        f'cp-send --group "sua mensagem" (uma vez, chega como [grupo: <membro>]). '
+        f"REGRA ANTI-LOOP: NUNCA responda um [grupo: ...] com --group (vira tempestade). Aviso de "
+        f"grupo é unidirecional; se precisar responder, faça 1:1 (cp-send <membro>) e só se necessário. "
         f"Contrato/decisões que o grupo precisa consultar: registrar no arquivo compartilhado "
         f"{contract_path_for(me)} (markdown; criar se não existir, manter curto e atual). "
         f"Commit/push e decisões de rumo continuam com o usuário. Confirme em uma linha."
@@ -838,6 +842,37 @@ async def pair_session(name: str, body: PairBody):
     # — o front mostra em vez de fingir sucesso total.
     return {"ok": True, "members": members,
             "warning": ("aviso falhou em: " + "; ".join(errs)) if errs else None}
+
+
+class GroupMsgBody(_StrictBody):
+    text: str
+
+
+@app.post("/api/sessions/{name}/group-message", dependencies=[Depends(require_auth)])
+async def group_message(name: str, body: GroupMsgBody):
+    """Aviso pro GRUPO todo (cp-send --group): entrega o texto a CADA companheiro de `name` numa
+    tacada, como `[grupo: <name>]`. Unidirecional por contrato (o prompt instrui a NUNCA responder
+    um [grupo:] com --group) — é o que impede o loop de N sessões se avisando em cascata.
+    Slash-command fora (mesmo racional do /broadcast)."""
+    if body.text.lstrip().startswith("/"):
+        raise HTTPException(400, "group-message não suporta slash-commands")
+    link = await asyncio.to_thread(lambda: PairLink(name).get())
+    peers = link.get("peers") if link else None
+    if not peers:
+        raise HTTPException(404, "sessão não está num grupo")
+    text = f"[grupo: {name}] {body.text}"
+    results: dict[str, dict] = {}
+    for p in peers:
+        if not await asyncio.to_thread(_session_exists, p):
+            results[p] = {"ok": False, "error": "sessão não encontrada", "delivered": False}
+            continue
+        if _provider_of(p) == "codex":
+            results[p] = await _send_one_codex(p, text)
+        else:
+            results[p] = await asyncio.to_thread(_send_one, p, text)
+    failed = [f"{n}: {r.get('error')}" for n, r in results.items() if not r.get("ok")]
+    return {"ok": True, "peers": peers,
+            "warning": ("falha em: " + "; ".join(failed)) if failed else None}
 
 
 @app.get("/api/sessions/{name}/pair/contract", dependencies=[Depends(require_auth)])
