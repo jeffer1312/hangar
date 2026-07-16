@@ -773,7 +773,9 @@ async def broadcast(body: BroadcastBody):
 
 
 class PairBody(_StrictBody):
-    peer: str
+    # peer (1) OU peers (N) — peers vence; peer fica por compat (cp-send --pair manda um só).
+    peer: str = ""
+    peers: list[str] = []
     task: str = ""
 
 
@@ -805,18 +807,22 @@ async def _deliver(name: str, text: str) -> str | None:
 
 @app.post("/api/sessions/{name}/pair", dependencies=[Depends(require_auth)])
 async def pair_session(name: str, body: PairBody):
-    """Junta `name` e `peer` num GRUPO de trabalho (une os grupos dos dois, se já existirem) e
-    injeta em CADA membro o prompt do grupo atualizado — a partir daí trocam recados via cp-send
-    por iniciativa própria, dentro do escopo da tarefa. Badge `pair_peers` aparece na lista."""
-    if body.peer == name:
+    """Junta `name` e peer(s) num GRUPO de trabalho (une os grupos existentes de todos) e injeta
+    em CADA membro o prompt do grupo atualizado — a partir daí trocam recados via cp-send por
+    iniciativa própria, dentro do escopo da tarefa. Badge `pair_peers` aparece na lista."""
+    others = [p for p in dict.fromkeys(body.peers or ([body.peer] if body.peer else [])) if p]
+    if not others:
+        raise HTTPException(400, "informe peer ou peers")
+    if name in others:
         raise HTTPException(400, "não dá pra parear uma sessão com ela mesma")
     names = {s.name for s in await asyncio.to_thread(registry.list)}
-    if name not in names or body.peer not in names:
-        raise HTTPException(404, "sessão não encontrada")
-    # join_with_snapshot: snapshot + join na MESMA seção crítica (em seções separadas, um join
-    # concorrente na janela entre elas entrava no grupo fora do snapshot e um rollback posterior
-    # não o reverteria). O snapshot volta pra cá pra desfazer se o aviso não chegar em ninguém.
-    members, snap = await asyncio.to_thread(pair.join_with_snapshot, name, body.peer, body.task)
+    missing = [p for p in [name, *others] if p not in names]
+    if missing:
+        raise HTTPException(404, f"sessão não encontrada: {', '.join(missing)}")
+    # join_group: snapshot + join na MESMA seção crítica (em seções separadas, um join concorrente
+    # na janela entre elas entrava no grupo fora do snapshot e um rollback posterior não o
+    # reverteria). O snapshot volta pra cá pra desfazer se o aviso não chegar em ninguém.
+    members, snap = await asyncio.to_thread(pair.join_group, name, others, body.task)
     link = await asyncio.to_thread(lambda: PairLink(name).get() or {})
     task = link.get("task", body.task)
     errs = []

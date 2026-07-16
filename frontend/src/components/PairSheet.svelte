@@ -20,8 +20,12 @@
   const peersKey = $derived(peers.join(','));
 
   let sessions = $state<SessionInfo[]>([]);
-  let picked = $state<string | null>(null);
+  let picked = $state<string[]>([]);   // MULTI-select: marca N sessões e pareia de uma vez
   let task = $state('');
+
+  function togglePick(name: string) {
+    picked = picked.includes(name) ? picked.filter((n) => n !== name) : [...picked, name];
+  }
   let busy = $state(false);
   let error = $state<string | null>(null);
   let adding = $state(false);   // grupo existente: mostrando o picker de "adicionar membro"
@@ -76,7 +80,7 @@
     // (poll de 5s) apagava seleção/task e refazia os fetches com o sheet aberto.
     const members = peersKey ? peersKey.split(',') : [];
     const my = ++epoch;
-    picked = null;
+    picked = [];
     task = '';
     busy = false;
     error = null;
@@ -99,7 +103,7 @@
   const candidates = $derived(sessions.filter((s) => !peers.includes(s.name)));
 
   async function doPair() {
-    if (!picked || busy) return;
+    if (!picked.length || busy) return;
     busy = true;
     error = null;
     try {
@@ -113,7 +117,7 @@
         onClose();
       }
     } catch {
-      error = `Falhou o pareamento com ${picked}.`;
+      error = `Falhou o pareamento com ${picked.join(', ')}.`;
     } finally {
       busy = false;
     }
@@ -177,8 +181,8 @@
             <p class="empty">Nenhuma outra sessão viva fora do grupo.</p>
           {:else}
             {#each candidates as s (s.name)}
-              <button class="row" class:row--picked={picked === s.name}
-                      onclick={() => (picked = picked === s.name ? null : s.name)}
+              <button class="row" class:row--picked={picked.includes(s.name)}
+                      onclick={() => togglePick(s.name)}
                       aria-label={`Adicionar ${s.name} ao grupo — ${stateLabels[s.state]}`}>
                 <span class="dot" style="background: {stateColors[s.state]};" aria-hidden="true"></span>
                 <span class="row-main">
@@ -192,8 +196,8 @@
             {/each}
           {/if}
         </div>
-        <button class="primary-btn" onclick={doPair} disabled={!picked || busy}>
-          {busy ? 'Adicionando…' : picked ? `Adicionar ${picked}` : 'Escolha uma sessão'}
+        <button class="primary-btn" onclick={doPair} disabled={!picked.length || busy}>
+          {busy ? 'Adicionando…' : picked.length ? `Adicionar ${picked.join(', ')}` : 'Escolha sessões'}
         </button>
       {/if}
 
@@ -245,8 +249,8 @@
           <p class="empty">Nenhuma outra sessão viva.</p>
         {:else}
           {#each candidates as s (s.name)}
-            <button class="row" class:row--picked={picked === s.name}
-                    onclick={() => (picked = picked === s.name ? null : s.name)}
+            <button class="row" class:row--picked={picked.includes(s.name)}
+                    onclick={() => togglePick(s.name)}
                     aria-label={`Parear com ${s.name} — ${stateLabels[s.state]}`}>
               <span class="dot" style="background: {stateColors[s.state]};" aria-hidden="true"></span>
               <span class="row-main">
@@ -268,8 +272,8 @@
         placeholder="Tarefa (opcional): ex. TICKET-000 — tela X + endpoint"
       />
 
-      <button class="primary-btn" onclick={doPair} disabled={!picked || busy}>
-        {busy ? 'Pareando…' : picked ? `Parear com ${picked}` : 'Escolha uma sessão'}
+      <button class="primary-btn" onclick={doPair} disabled={!picked.length || busy}>
+        {busy ? 'Pareando…' : picked.length ? `Parear com ${picked.join(', ')}` : 'Escolha sessões (uma ou várias)'}
       </button>
     {/if}
   </div>

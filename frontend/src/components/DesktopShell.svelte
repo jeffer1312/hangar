@@ -6,18 +6,22 @@
   // sem alteracao; abaixo de 820px o App nem monta isto (fica o fluxo mobile intacto).
   interface Props {
     currentSession: string | null;
+    // Key de remontagem servidor-aware ("<serverId>::<nome>"): homônimas em servidores diferentes
+    // têm o MESMO nome — sem o servidor na key, trocar entre elas não remontava o Chat (SSE preso
+    // no servidor antigo com o composer já falando com o novo).
+    currentKey?: string | null;
     onNavigateToChat: (name: string) => void;
     onCompare: (ids: { serverId: string; name: string }[]) => void;
     onLogout: () => void;
   }
-  let { currentSession, onNavigateToChat, onCompare, onLogout }: Props = $props();
+  let { currentSession, currentKey = null, onNavigateToChat, onCompare, onLogout }: Props = $props();
 
   // Split view (pareamento): segundo Chat lado a lado — assiste a conversa das duas sessões sem
   // alternar. Aberto pelo PairSheet ("Abrir lado a lado"); fecha no X ou ao trocar a sessão principal.
   let splitSession = $state<string | null>(null);
   $effect(() => {
-    void currentSession;
-    splitSession = null; // trocou a principal -> split não faz mais sentido, fecha
+    void (currentKey ?? currentSession);
+    splitSession = null; // trocou a principal (mesmo nome/outro servidor conta) -> fecha o split
   });
 </script>
 
@@ -26,7 +30,7 @@
 
   <main class="desktop-main" class:split={!!splitSession}>
     {#if currentSession && currentSession !== 'null' && currentSession !== 'undefined'}
-      {#key currentSession}
+      {#key currentKey ?? currentSession}
         <div class="pane">
           <Chat
             sessionName={currentSession}
