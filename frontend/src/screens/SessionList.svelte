@@ -13,7 +13,7 @@
   import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
   import type { AggSession, SessionInfo, ResumeCandidate } from '../lib/types';
-  import { countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel } from '../lib/format';
+  import { countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, sortSessions } from '../lib/format';
   import { updateBadge } from '../lib/badge';
 
   interface Props {
@@ -68,10 +68,11 @@
   let addError = $state('');
   let addBusy = $state(false);
 
-  // Ordem ALFABETICA por nome (estavel — nao pula). Antes ordenava por urgencia+atividade, e a
-  // atividade muda a todo poll -> a lista dancava. Alfabetico fixa a posicao de cada sessao.
+  // Aguardando primeiro, depois alfabetico por nome (sortSessions compartilhado com a Sidebar — as
+  // duas listas ja divergiram na ordenacao no passado). Estavel: so pula quando o ESTADO muda. Antes
+  // ordenava por urgencia+atividade, e a atividade muda a todo poll -> a lista dancava.
   const visibleSessions = $derived.by(() => {
-    const sorted = [...sessions].sort((a, b) => a.name.localeCompare(b.name));
+    const sorted = sortSessions(sessions);
     const q = filterText.trim().toLowerCase();
     if (!q) return sorted;
     return sorted.filter(
