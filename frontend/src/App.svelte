@@ -167,6 +167,7 @@
   // Cloud-sync: chave em memoria (vive a sessao) + revisao do vault no hub. Nada disso toca o disco.
   let encKey: CryptoKey | null = null;
   let vaultRev = 0;
+  let unsubSync: (() => void) | null = null;
 
   // Login fresco no hub (vindo da tela de login): persiste a chave na aba e estabelece a sessao.
   async function onSyncLogin(key: CryptoKey) {
@@ -190,7 +191,10 @@
       const seed = await putVault(await encryptList(key, merged), vaultRev);
       if ('rev' in seed) vaultRev = seed.rev;
     }
-    onServersChanged(async () => {
+    // Relogin sem reload chama establishSync de novo: solta o listener anterior pra nao acumular
+    // dois pushes do mesmo vault (o slot unico mascarava isto sobrescrevendo).
+    unsubSync?.();
+    unsubSync = onServersChanged(async () => {
       if (!encKey) return;
       try {
         let res = await putVault(await encryptList(encKey, listServers()), vaultRev);

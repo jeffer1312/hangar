@@ -36,13 +36,19 @@ function writeServers(list: Server[]): void {
   localStorage.setItem(SERVERS_KEY, JSON.stringify(list));
 }
 
-// Listener unico: o sync registra aqui pra empurrar pro hub apos qualquer mutacao local.
-let _changed: (() => void) | null = null;
-export function onServersChanged(cb: () => void): void {
-  _changed = cb;
+// Listeners de mutacao local: o sync empurra pro hub, as views reconciliam seus streams SSE. E
+// multi-listener de proposito — com um slot unico o 2o consumidor clobberava o 1o calado. Devolve o
+// unsubscribe: quem registra por montagem (ou re-registra no relogin) TEM que chamar.
+const _changed = new Set<() => void>();
+export function onServersChanged(cb: () => void): () => void {
+  _changed.add(cb);
+  return () => {
+    _changed.delete(cb);
+  };
 }
 function notifyChanged(): void {
-  if (_changed) _changed();
+  // Itera uma copia: um listener que se desregistra durante o notify nao mexe na iteracao.
+  for (const cb of [..._changed]) cb();
 }
 
 // Une a lista do hub (remote) com a local: remote tem precedencia em duplicata (mesma baseUrl
