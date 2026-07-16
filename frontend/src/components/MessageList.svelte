@@ -213,7 +213,7 @@
             {#if img}
               <ImageBubble caption={img.caption} srcs={img.filenames.map((f) => uploadUrl(sessionName, f))} />
             {:else}
-              <UserBubble text={shownText} ts={ev.ts} from={peer?.from}
+              <UserBubble text={shownText} ts={ev.ts} from={peer?.from} scope={peer?.scope}
                           onForward={onForward ? () => onForward(shownText) : null}
                           onOpenPeer={peer && onOpenSession ? () => onOpenSession(peer.from) : null} />
             {/if}
@@ -221,7 +221,7 @@
         {:else if img}
           <ImageBubble caption={img.caption} srcs={img.filenames.map((f) => uploadUrl(sessionName, f))} />
         {:else}
-          <UserBubble text={shownText} ts={ev.ts} animate={!histIds.has(ev.id)} from={peer?.from}
+          <UserBubble text={shownText} ts={ev.ts} animate={!histIds.has(ev.id)} from={peer?.from} scope={peer?.scope}
                       onForward={onForward ? () => onForward(shownText) : null}
                       onOpenPeer={peer && onOpenSession ? () => onOpenSession(peer.from) : null} />
           {#if ev.text}{@const fr = parseFilePaths(ev.text)}{#if fr.length}<FileAttachment {sessionName} refs={fr} />{/if}{/if}
