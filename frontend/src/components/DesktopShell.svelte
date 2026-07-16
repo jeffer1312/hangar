@@ -2,7 +2,7 @@
   import Sidebar from './Sidebar.svelte';
   import Chat from '../screens/Chat.svelte';
   import Board from '../screens/Board.svelte';
-  import { selectServer } from '../lib/auth';
+  import { selectServer, getActiveId } from '../lib/auth';
 
   // Shell de DESKTOP (>=820px): sidebar fixa + chat largo. Reusa o componente Chat do mobile
   // sem alteracao; abaixo de 820px o App nem monta isto (fica o fluxo mobile intacto).
@@ -23,6 +23,65 @@
     void currentSession;
     splitSession = null; // trocou a principal -> split não faz mais sentido, fecha
   });
+
+  // Overlay do quadro: o Chat REAL (mesmo componente do resto do app) por cima do kanban, em vez de
+  // navegar pra fora. O quadro fica montado atrás — volta intacto, com o mesmo scroll. Uma instância
+  // por vez: o overlay cobre a .desktop-main inteira, então não dá pra clicar noutro card sem fechar.
+  let overlaySession = $state<{ name: string; serverId: string } | null>(null);
+  // Servidor a restaurar ao fechar, ou null quando não há nada a desfazer. NÃO é $state: só o
+  // fluxo de abrir/fechar lê, nunca o template.
+  let prevActive: string | null = null;
+
+  // selectServer muta estado GLOBAL (localStorage cp_active + cookie do token) e o Chat fala com o
+  // servidor ATIVO via apiFetch — então abrir o card exige apontar o ativo pro dono dele. Sem
+  // restaurar no fechamento, criar sessão / git / broadcast pela sidebar passariam a mirar o servidor
+  // do último card aberto: bug silencioso. Mesmo par capture/restore do withServer (Sidebar.svelte:467).
+  function openOverlay(name: string, serverId: string) {
+    const prev = getActiveId();
+    prevActive = prev !== serverId ? prev : null; // já era o ativo -> nada a restaurar
+    selectServer(serverId);
+    overlaySession = { name, serverId };
+  }
+  function closeOverlay() {
+    if (prevActive) selectServer(prevActive);
+    prevActive = null;
+    overlaySession = null;
+  }
+
+  // Navegar pra fora a partir do overlay (ex.: "próxima aguardando" ou o switcher do Chat) PROMOVE a
+  // sessão pro chat normal: o servidor do overlay vira o ativo de verdade e o restore acima seria um
+  // bug — o chat que vai montar é dele. Por isso desarma o prevActive antes de sair.
+  function navigateFromOverlay(name: string) {
+    prevActive = null;
+    overlaySession = null;
+    onNavigateToChat(name);
+  }
+
+  // Sair do quadro (toggle da sidebar) com o overlay aberto fecha ele junto — e restaura o servidor.
+  // Espelha o effect do splitSession acima. No-op quando não há overlay.
+  $effect(() => {
+    if (view === 'board') return;
+    closeOverlay();
+  });
+
+  // Esc fecha — mas só quando o overlay é o dono do Esc. Todo sheet/espelho/preview aberto por dentro
+  // já se fecha no próprio keydown de window (BottomSheet.svelte:116, Chat.svelte:739) e nenhum deles
+  // para a propagação; sem esta guarda um único Esc fecharia o sheet E o overlay atrás dele.
+  // CAPTURA (3o arg = true) de propósito: na fase de bubble o Svelte já teria feito o flush SÍNCRONO
+  // do handler do sheet, e o dialog sumiria do DOM antes de eu poder vê-lo (verificado ao vivo — a
+  // versão bubble fechava os dois de uma vez). Na captura nada reagiu ainda: o DOM ainda mostra quem
+  // estava aberto ANTES da tecla. Por isso a checagem é no DOM e não em e.defaultPrevented — que só
+  // pegaria os overlays que o Chat rastreia, e não os sheets abertos pelo Composer.
+  $effect(() => {
+    if (!overlaySession) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (document.querySelector('[role="dialog"]:not(.board-overlay)')) return;
+      closeOverlay();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  });
 </script>
 
 <div class="desktop-shell">
@@ -31,8 +90,23 @@
 
   <main class="desktop-main" class:split={!!splitSession}>
     {#if view === 'board'}
-      <!-- Abrir do quadro troca de servidor antes de navegar (a sessão pode ser de outro server). -->
-      <Board onOpenSession={(name, serverId) => { selectServer(serverId); onNavigateToChat(name); }} />
+      <Board onOpenSession={openOverlay} />
+      {#if overlaySession}
+        <!-- {#key}: o Chat guarda estado pesado amarrado ao sessionName (SSE, histórico) e precisa
+             remontar por sessão — mesma razão do {#key currentSession} abaixo. -->
+        {#key overlaySession.name}
+          <div class="board-overlay" role="dialog" aria-label="Chat da sessão">
+            <button class="split-close" onclick={closeOverlay}
+                    aria-label="Fechar chat" title="Fechar (Esc)">×</button>
+            <Chat
+              sessionName={overlaySession.name}
+              desktop={true}
+              onBack={closeOverlay}
+              onNavigateToChat={navigateFromOverlay}
+            />
+          </div>
+        {/key}
+      {/if}
     {:else if currentSession && currentSession !== 'null' && currentSession !== 'undefined'}
       {#key currentSession}
         <div class="pane">
@@ -87,6 +161,17 @@
   .pane { height: 100%; position: relative; overflow: hidden; }
   .desktop-main.split .pane { flex: 1; min-width: 0; }
   .pane--split { border-left: 1px solid var(--border-default); }
+  /* Overlay: cobre só a .desktop-main (a sidebar segue viva ao lado), com o quadro montado atrás
+     preservando o scroll. Sem border-left — a sidebar já tem border-right, dobraria a linha.
+     Fade SEM transform de propósito: os sheets do Chat são position:fixed (BottomSheet.svelte:159) e
+     um transform aqui viraria containing block deles, clipando-os na pane (mesma regra do
+     Chat.svelte:912). Só a opacidade anima. */
+  .board-overlay {
+    position: absolute; inset: 0; z-index: 30;
+    background: var(--bg-base);
+    animation: overlay-in 160ms var(--ease-out);
+  }
+  @keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
   .split-close {
     position: absolute; top: 8px; right: 10px; z-index: 20;
     width: 28px; height: 28px;
