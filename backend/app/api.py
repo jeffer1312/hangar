@@ -673,7 +673,8 @@ def _send_one(name: str, text: str) -> dict:
             # o "deferred" do send_prompt e o append acima, o gatilho daquele ciclo nao viu esta
             # entrada (e sem SSE aberto nao havia gatilho nenhum). O drain re-checa deliverable.
             threading.Thread(target=_drain_session, args=(name,), daemon=True).start()
-    return {"ok": True, "error": None}
+    # delivered: digitou AGORA na TUI ("sent"); False = ficou na fila durável (sessão ocupada/overlay).
+    return {"ok": True, "error": None, "delivered": result == "sent"}
 
 
 def _provider_of(name: str) -> str:
@@ -705,7 +706,7 @@ async def _send_one_codex(name: str, text: str) -> dict:
         entry = None
     if not deliverable:
         # turno em andamento -> fica pendente na fila; o drain-on-complete entrega no proximo idle.
-        return {"ok": True, "error": None}
+        return {"ok": True, "error": None, "delivered": False}
     try:
         result = await adapter.send_prompt(name, text)
     except Exception as e:
@@ -719,7 +720,15 @@ async def _send_one_codex(name: str, text: str) -> dict:
             pass
     # result == "deferred" (corrida idle->working entre o deliverable e o send): fica pendente (delivered
     # ja e False) -> o drain-on-complete entrega depois. Nada a fazer.
-    return {"ok": True, "error": None}
+    return {"ok": True, "error": None, "delivered": result == "sent"}
+
+
+def _session_exists(name: str) -> bool:
+    """Sessão existe DE VERDADE (pane tmux vivo ou sidecar Codex)? Sem esta guarda o /input aceitava
+    qualquer nome e enfileirava no VOID: 'ok' pra sessão morta = recado órfão que só seria entregue
+    se um dia nascesse outra sessão com o mesmo nome (foi exatamente como um recado 'se perdeu')."""
+    from app import tmux
+    return codex_sessions.exists(name) or tmux.has_session(name)
 
 
 @app.post("/api/sessions/{name}/input", dependencies=[Depends(require_auth)])
@@ -727,13 +736,16 @@ async def input_prompt(name: str, body: InputBody):
     # Ramifica por provider: Claude via asyncio.to_thread (_send_one e SYNC/bloqueante — tmux; mesmo
     # padrao async-bridge do create_session, comportamento IDENTICO ao de hoje), Codex via
     # _send_one_codex (async, app-server). Default "claude" pra qualquer nome nao-Codex.
+    if not await asyncio.to_thread(_session_exists, name):
+        raise HTTPException(404, "sessão não encontrada — recado NÃO enfileirado")
     if _provider_of(name) == "codex":
         res = await _send_one_codex(name, body.text)
     else:
         res = await asyncio.to_thread(_send_one, name, body.text)
     if not res["ok"]:
         raise HTTPException(400, res["error"])
-    return {"ok": True}
+    # delivered: True = digitou agora na TUI; False = na fila durável (entrega no próximo idle).
+    return {"ok": True, "delivered": res.get("delivered", False)}
 
 
 @app.post("/api/broadcast", dependencies=[Depends(require_auth)])
@@ -748,6 +760,10 @@ async def broadcast(body: BroadcastBody):
         raise HTTPException(400, "broadcast nao suporta slash-commands: envie por sessao")
     results: dict[str, dict] = {}
     for name in body.names:
+        # Mesma guarda do /input: nome sem sessão viva -> erro POR SESSÃO (não enfileira no void).
+        if not await asyncio.to_thread(_session_exists, name):
+            results[name] = {"ok": False, "error": "sessão não encontrada", "delivered": False}
+            continue
         if _provider_of(name) == "codex":
             results[name] = await _send_one_codex(name, body.text)
         else:
