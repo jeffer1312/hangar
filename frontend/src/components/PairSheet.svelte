@@ -6,51 +6,65 @@
 
   interface Props {
     open: boolean;
-    sessionName: string;            // sessão atual (um dos lados do par)
-    pairedWith: string | null;      // par atual, ou null
+    sessionName: string;              // sessão atual (um membro do grupo)
+    pairPeers: string[] | null;       // os OUTROS membros do grupo, ou null
     onClose: () => void;
-    onChanged: () => void;          // pareou/despareou -> pai recarrega a lista (badge/chip)
-    onOpenSplit?: () => void;       // desktop: abre o chat do par lado a lado (split view)
+    onChanged: () => void;            // grupo mudou -> pai recarrega a lista (badge/chip)
+    onOpenSplit?: (peer: string) => void; // desktop: abre o chat do membro lado a lado (split view)
   }
-  let { open, sessionName, pairedWith, onClose, onChanged, onOpenSplit }: Props = $props();
+  let { open, sessionName, pairPeers, onClose, onChanged, onOpenSplit }: Props = $props();
+
+  const peers = $derived(pairPeers ?? []);
+  // Chave PRIMITIVA: a prop pairPeers é um array novo por referência a cada poll de 5s do pai —
+  // o $effect de (re)carga dependendo do array resetava seleção/task/feed com o sheet ABERTO.
+  const peersKey = $derived(peers.join(','));
 
   let sessions = $state<SessionInfo[]>([]);
   let picked = $state<string | null>(null);
   let task = $state('');
   let busy = $state(false);
   let error = $state<string | null>(null);
+  let adding = $state(false);   // grupo existente: mostrando o picker de "adicionar membro"
 
-  // Timeline "conversa do par": recados [de: X] trocados entre as duas sessões, garimpados dos
-  // DOIS históricos (user_msg com prefixo peer cujo remetente é o outro lado) e fundidos por ts.
+  // Timeline "conversa do grupo": recados [de: X] trocados entre os membros, garimpados dos
+  // históricos de TODOS (user_msg com prefixo peer cujo remetente é outro membro) e fundidos por ts.
   type PeerMsg = { from: string; to: string; text: string; ts: number };
   let feed = $state<PeerMsg[]>([]);
   let feedLoading = $state(false);
-  // Contrato compartilhado (markdown que as duas editam via fs): exibido cru, read-only.
+  let feedError = $state<string | null>(null); // membros cujo histórico falhou (≠ conversa vazia)
+  // Contrato compartilhado (markdown que os membros editam via fs): exibido cru, read-only.
   let contract = $state<{ path: string; content: string } | null>(null);
 
   // epoch: o BottomSheet mantem o componente MONTADO entre aberturas — abrir/fechar/reabrir rapido
-  // (ou trocar de par entre aberturas) deixava resposta ANTIGA resolver depois e sobrescrever
-  // feed/contrato/lista com dado stale do par anterior.
+  // (ou o grupo mudar entre aberturas) deixava resposta ANTIGA resolver depois e sobrescrever
+  // feed/contrato/lista com dado stale.
   let epoch = 0;
 
-  async function loadFeed(peer: string, my: number) {
+  async function loadFeed(members: string[], my: number) {
     feedLoading = true;
     try {
-      const [mine, theirs] = await Promise.all([
-        getHistory(sessionName).catch(() => []),
-        getHistory(peer).catch(() => []),
-      ]);
+      const all = [sessionName, ...members];
+      // Falha de fetch ≠ conversa vazia: sem distinguir, o histórico de um membro sumia do feed
+      // calado ("nenhuma troca" com mensagens existindo).
+      const results = await Promise.all(all.map((n) =>
+        getHistory(n).then((h) => ({ ok: true as const, h })).catch(() => ({ ok: false as const, h: [] }))));
       if (my !== epoch) return;
-      const pick = (evs: typeof mine, owner: string, sender: string): PeerMsg[] =>
-        evs.flatMap((e) => {
-          if (e.kind !== 'user_msg' || !e.text) return [];
+      const failed = all.filter((_, i) => !results[i].ok);
+      feedError = failed.length ? `sem histórico de: ${failed.join(', ')}` : null;
+      const names = new Set(all);
+      const msgs: PeerMsg[] = [];
+      results.forEach(({ h: evs }, i) => {
+        const owner = all[i];
+        for (const e of evs) {
+          if (e.kind !== 'user_msg' || !e.text) continue;
           const p = parsePeerMessage(e.text);
-          // Só recados vindos do OUTRO lado do par (ignora claude-pocket/terceiros).
-          return p && p.from === sender ? [{ from: sender, to: owner, text: p.text, ts: e.ts ?? 0 }] : [];
-        });
-      feed = [...pick(mine, sessionName, peer), ...pick(theirs, peer, sessionName)]
-        .sort((a, b) => a.ts - b.ts)
-        .slice(-40); // cauda: conversa recente; histórico completo vive nos chats
+          // Só recados vindos de OUTRO membro do grupo (ignora claude-pocket/terceiros).
+          if (p && p.from !== owner && names.has(p.from)) {
+            msgs.push({ from: p.from, to: owner, text: p.text, ts: e.ts ?? 0 });
+          }
+        }
+      });
+      feed = msgs.sort((a, b) => a.ts - b.ts).slice(-40); // cauda; histórico completo vive nos chats
     } finally {
       if (my === epoch) feedLoading = false;
     }
@@ -58,15 +72,20 @@
 
   $effect(() => {
     if (!open) return;
+    // Depende de open + peersKey (primitivos) — NUNCA do array peers: re-rodar por identidade
+    // (poll de 5s) apagava seleção/task e refazia os fetches com o sheet aberto.
+    const members = peersKey ? peersKey.split(',') : [];
     const my = ++epoch;
     picked = null;
     task = '';
     busy = false;
     error = null;
+    adding = false;
     feed = [];
+    feedError = null;
     contract = null;
-    if (pairedWith) {
-      loadFeed(pairedWith, my);
+    if (members.length) {
+      loadFeed(members, my);
       getPairContract(sessionName)
         .then((c) => { if (my === epoch) contract = { path: c.path, content: c.content }; })
         .catch(() => { if (my === epoch) contract = null; });
@@ -76,14 +95,23 @@
       .catch(() => { if (my === epoch) error = 'Não deu pra listar as sessões.'; });
   });
 
+  // Candidatas a ENTRAR no grupo: vivas, fora do grupo atual (sessions completa fica pra stateOf).
+  const candidates = $derived(sessions.filter((s) => !peers.includes(s.name)));
+
   async function doPair() {
     if (!picked || busy) return;
     busy = true;
     error = null;
     try {
-      await pairSession(sessionName, picked, task.trim());
+      // Mesmo endpoint pra criar grupo e pra ADICIONAR membro (o backend une os grupos).
+      const res = await pairSession(sessionName, picked, task.trim());
       onChanged();
-      onClose();
+      if (res.warning) {
+        // Falha PARCIAL de aviso (membro sem o prompt): mostra em vez de fechar mudo.
+        error = res.warning;
+      } else {
+        onClose();
+      }
     } catch {
       error = `Falhou o pareamento com ${picked}.`;
     } finally {
@@ -91,32 +119,82 @@
     }
   }
 
-  async function doUnpair() {
+  async function doLeave() {
     if (busy) return;
     busy = true;
     error = null;
     try {
-      await unpairSession(sessionName);
+      const res = await unpairSession(sessionName);
       onChanged();
-      onClose();
+      if (res.warning) {
+        error = res.warning;
+      } else {
+        onClose();
+      }
     } catch {
-      error = 'Falhou o despareamento.';
+      error = 'Falhou a saída do grupo.';
     } finally {
       busy = false;
     }
+  }
+
+  // Estado vivo de um membro (bolinha na linha), da lista já carregada pro picker.
+  function stateOf(name: string): string | null {
+    return sessions.find((s) => s.name === name)?.state ?? null;
   }
 </script>
 
 <BottomSheet {open} {onClose} ariaLabel="Parear sessões">
   <div class="pair">
-    {#if pairedWith}
-      <h2 class="title">🤝 Pareada com {pairedWith}</h2>
+    {#if peers.length}
+      <h2 class="title">🤝 Grupo de trabalho ({peers.length + 1})</h2>
       <p class="hint">
-        As duas sessões trabalham juntas: trocam contrato, avisos e dúvidas via cp-send por conta
-        própria, cada uma no seu repo. Desparear avisa as duas.
+        Os membros trabalham juntos: trocam contrato, avisos e dúvidas via cp-send por conta
+        própria, cada um no seu repo. Sair avisa o grupo (os demais continuam entre si).
       </p>
-      {#if onOpenSplit}
-        <button class="primary-btn" onclick={onOpenSplit}>⫽ Abrir lado a lado</button>
+
+      <!-- Membros: estado vivo + abrir lado a lado (desktop) por membro. -->
+      <div class="list">
+        {#each peers as p (p)}
+          {@const st = stateOf(p)}
+          <div class="row row--member">
+            {#if st}<span class="dot" style="background: {stateColors[st as keyof typeof stateColors]};" aria-hidden="true"></span>{/if}
+            <span class="row-main"><span class="row-name">{p}</span></span>
+            {#if st}<span class="row-paired">{stateLabels[st as keyof typeof stateLabels]}</span>{/if}
+            {#if onOpenSplit}
+              <button class="split-btn" onclick={() => onOpenSplit?.(p)}
+                      title={`Abrir ${p} lado a lado`} aria-label={`Abrir ${p} lado a lado`}>⫽</button>
+            {/if}
+          </div>
+        {/each}
+      </div>
+
+      {#if !adding}
+        <button class="ghost-add" onclick={() => (adding = true)}>+ Adicionar sessão ao grupo</button>
+      {:else}
+        <div class="list">
+          {#if candidates.length === 0}
+            <p class="empty">Nenhuma outra sessão viva fora do grupo.</p>
+          {:else}
+            {#each candidates as s (s.name)}
+              <button class="row" class:row--picked={picked === s.name}
+                      onclick={() => (picked = picked === s.name ? null : s.name)}
+                      aria-label={`Adicionar ${s.name} ao grupo — ${stateLabels[s.state]}`}>
+                <span class="dot" style="background: {stateColors[s.state]};" aria-hidden="true"></span>
+                <span class="row-main">
+                  <span class="row-name">{s.name}</span>
+                  {#if s.cwd}<span class="row-cwd">{s.cwd}</span>{/if}
+                </span>
+                {#if s.pair_peers?.length}
+                  <span class="row-paired" title={`Já agrupada com ${s.pair_peers.join(', ')}`}>🤝 {s.pair_peers.length}</span>
+                {/if}
+              </button>
+            {/each}
+          {/if}
+        </div>
+        <button class="primary-btn" onclick={doPair} disabled={!picked || busy}>
+          {busy ? 'Adicionando…' : picked ? `Adicionar ${picked}` : 'Escolha uma sessão'}
+        </button>
       {/if}
 
       {#if contract?.content}
@@ -128,13 +206,16 @@
         </div>
       {/if}
 
-      <!-- Conversa do par: o que as duas já combinaram, num lugar só. -->
+      <!-- Conversa do grupo: o que os membros já combinaram, num lugar só. -->
       <div class="feed">
-        <h3 class="feed-title">Conversa do par</h3>
+        <h3 class="feed-title">Conversa do grupo</h3>
+        {#if feedError}
+          <p class="empty">⚠ {feedError}</p>
+        {/if}
         {#if feedLoading}
           <p class="empty">Carregando…</p>
         {:else if feed.length === 0}
-          <p class="empty">Nenhuma troca entre as duas ainda.</p>
+          <p class="empty">Nenhuma troca entre os membros ainda.</p>
         {:else}
           {#each feed as m, i (i)}
             <div class="feed-item" class:feed-item--out={m.from === sessionName}>
@@ -146,23 +227,24 @@
       </div>
 
       {#if error}<p class="error">{error}</p>{/if}
-      <button class="danger-btn" onclick={doUnpair} disabled={busy}>
-        {busy ? 'Despareando…' : 'Desparear'}
+      <button class="danger-btn" onclick={doLeave} disabled={busy}>
+        {busy ? 'Saindo…' : 'Sair do grupo'}
       </button>
     {:else}
       <h2 class="title">Parear com sessão</h2>
       <p class="hint">
-        As duas passam a trabalhar juntas: cada uma no seu repo, mandando o que a outra precisar
-        (contrato, endpoint, aviso de conclusão) sem você intermediar.
+        Passam a trabalhar juntas: cada uma no seu repo, mandando o que a outra precisar
+        (contrato, endpoint, aviso de conclusão) sem você intermediar. Escolher uma sessão já
+        agrupada te coloca no grupo dela.
       </p>
 
       {#if error}<p class="error">{error}</p>{/if}
 
       <div class="list">
-        {#if sessions.length === 0 && !error}
+        {#if candidates.length === 0 && !error}
           <p class="empty">Nenhuma outra sessão viva.</p>
         {:else}
-          {#each sessions as s (s.name)}
+          {#each candidates as s (s.name)}
             <button class="row" class:row--picked={picked === s.name}
                     onclick={() => (picked = picked === s.name ? null : s.name)}
                     aria-label={`Parear com ${s.name} — ${stateLabels[s.state]}`}>
@@ -171,8 +253,8 @@
                 <span class="row-name">{s.name}</span>
                 {#if s.cwd}<span class="row-cwd">{s.cwd}</span>{/if}
               </span>
-              {#if s.paired_with}
-                <span class="row-paired" title={`Já pareada com ${s.paired_with}`}>🤝 {s.paired_with}</span>
+              {#if s.pair_peers?.length}
+                <span class="row-paired" title={`Já agrupada com ${s.pair_peers.join(', ')}`}>🤝 {s.pair_peers.length}</span>
               {/if}
             </button>
           {/each}
@@ -224,6 +306,29 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .row-paired { font-size: var(--text-xs); color: var(--text-muted); flex-shrink: 0; }
+
+  /* Linha de MEMBRO do grupo (não clicável; ações à direita). */
+  .row--member { cursor: default; }
+  .row--member:hover { background: none; }
+
+  /* Abrir membro lado a lado (desktop). */
+  .split-btn {
+    width: 30px; height: 30px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+    background: var(--bg-elevated); color: var(--text-secondary);
+    font-size: 13px; cursor: pointer;
+  }
+  .split-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+  /* "+ Adicionar sessão ao grupo": discreto, abre o picker. */
+  .ghost-add {
+    width: 100%; height: 40px;
+    border: 1px dashed var(--border-default); border-radius: var(--radius-md);
+    background: none; color: var(--text-secondary);
+    font-size: var(--text-sm); cursor: pointer;
+  }
+  .ghost-add:hover { color: var(--text-primary); background: var(--bg-hover); }
 
   .task-input {
     height: 44px;

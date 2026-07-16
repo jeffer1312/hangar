@@ -40,11 +40,11 @@
     onExpandUsage: () => void;
     onOpenGit: () => void;
     onOpenPreview: () => void;
-    // Pareamento ("trabalhando juntas"): chip 🤝 na fileira de cima; tap abre o PairSheet.
-    pairedWith?: string | null;
-    pairedState?: string | null;  // estado vivo do par (working/idle/awaiting_input) -> bolinha no chip
+    // Grupo de trabalho: chip 🤝 na fileira de cima (1 par = nome; N = "grupo (N)"); tap abre o PairSheet.
+    pairPeers?: string[] | null;
+    pairedState?: string | null;  // estado vivo do par ÚNICO (working/idle/...) -> bolinha no chip
     onOpenPair?: () => void;
-    // Toggle "mandar pros dois" (só aparece pareada): ligado = prompt vai pra esta sessão E pro par.
+    // Toggle "mandar pro grupo" (só aparece pareada): ligado = prompt vai pra esta sessão E pros membros.
     sendToPair?: boolean;
     onToggleSendToPair?: () => void;
     inputText?: string;  // bindable: o pai injeta um draft (ex: interrupt devolve a msg pendente)
@@ -55,7 +55,7 @@
   }
   let {
     sessionName, sessionState, status, onSend, onCommand, onInterrupt, onExpandUsage, onOpenGit,
-    onOpenPreview, pairedWith = null, pairedState = null, onOpenPair,
+    onOpenPreview, pairPeers = null, pairedState = null, onOpenPair,
     sendToPair = false, onToggleSendToPair,
     inputText = $bindable(''),
     provider = 'claude',
@@ -644,26 +644,28 @@
           <span class="slash-glyph" aria-hidden="true">🖥</span>
         </button>
         {#if onOpenPair}
-          <button class="repo-chip pair-chip" class:pair-chip--on={!!pairedWith}
-                  title={pairedWith ? `Pareada com ${pairedWith} — gerenciar` : 'Parear com outra sessão'}
+          {@const pairLabel = pairPeers?.length === 1 ? pairPeers[0]
+            : pairPeers?.length ? `grupo (${pairPeers.length + 1})` : null}
+          <button class="repo-chip pair-chip" class:pair-chip--on={!!pairPeers?.length}
+                  title={pairPeers?.length ? `Grupo: você + ${pairPeers.join(', ')} — gerenciar` : 'Parear com outra sessão'}
                   onclick={onOpenPair} aria-label="Pareamento de sessões">
             <span class="repo-glyph" aria-hidden="true">🤝</span>
-            {#if pairedWith}
-              <span class="repo-name">{pairedWith}</span>
+            {#if pairLabel}
+              <span class="repo-name">{pairLabel}</span>
               {#if pairedState}
-                <!-- Estado vivo do par (mesmas cores da lista): vê que o par trava/espera sem trocar de tela. -->
+                <!-- Estado vivo do par ÚNICO (mesmas cores da lista); grupo de N não tem bolinha. -->
                 <span class="pair-dot" style="background: {stateColors[pairedState as keyof typeof stateColors] ?? 'var(--text-muted)'};"
                       title={`par: ${pairedState}`} aria-hidden="true"></span>
               {/if}
             {/if}
           </button>
-          {#if pairedWith && onToggleSendToPair}
-            <!-- "Mandar pros dois": prompt vai pra esta sessão E pro par (broadcast). Aceso = ativo. -->
+          {#if pairPeers?.length && onToggleSendToPair}
+            <!-- "Mandar pro grupo": prompt vai pra esta sessão E pros membros (broadcast). Aceso = ativo. -->
             <button class="repo-chip both-chip" class:both-chip--on={sendToPair}
-                    title={sendToPair ? 'Mandando pros dois — tocar desliga' : `Mandar também pra ${pairedWith}`}
-                    onclick={onToggleSendToPair} aria-pressed={sendToPair} aria-label="Mandar pros dois">
+                    title={sendToPair ? 'Mandando pro grupo — tocar desliga' : `Mandar também pra ${pairPeers.join(', ')}`}
+                    onclick={onToggleSendToPair} aria-pressed={sendToPair} aria-label="Mandar pro grupo">
               <span class="repo-glyph" aria-hidden="true">⇄</span>
-              {#if sendToPair}<span class="repo-name">pros dois</span>{/if}
+              {#if sendToPair}<span class="repo-name">{pairPeers.length === 1 ? 'pros dois' : 'pro grupo'}</span>{/if}
             </button>
           {/if}
         {/if}

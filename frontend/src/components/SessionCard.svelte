@@ -227,9 +227,9 @@
     </div>
 
     <div class="row-right">
-      {#if session.paired_with}
-        <!-- Pareamento ("trabalhando juntas"): paridade com o chain-chip da Sidebar desktop. -->
-        <span class="paired-chip" title={`Pareada com "${session.paired_with}"`}>🤝&nbsp;{session.paired_with}</span>
+      {#if session.pair_peers?.length}
+        <!-- Grupo de trabalho: paridade com o chain-chip da Sidebar (1 par = nome; N = contagem). -->
+        <span class="paired-chip" title={`Grupo com ${session.pair_peers.join(', ')}`}>🤝&nbsp;{session.pair_peers.length === 1 ? session.pair_peers[0] : session.pair_peers.length + 1}</span>
       {/if}
       {#if limited}
         <span
