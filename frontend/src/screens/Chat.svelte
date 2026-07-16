@@ -577,13 +577,12 @@
   });
 
   async function handleSend(text: string) {
-    // Enviou enquanto o Claude trabalha -> entra na fila (Claude Code enfileira no tmux).
-    // Eco imediato como bubble pendente; solidifica quando o transcript trouxer a msg real.
-    let pendingId: string | null = null;
-    if (currentState === 'working') {
-      pendingId = `pending-${pendingSeq++}`;
-      pending = [...pending, { id: pendingId, text }];
-    }
+    // Eco imediato SEMPRE (não só em 'working'): o transcript só grava a msg quando o TURNO dela
+    // começa — sessão ocupada num turno longo deixava a msg invisível por minutos, e a corrida de
+    // estado (flip idle->working no instante do envio) derrubava até o eco condicional antigo
+    // ("mandei e sumiu"). O dedup abaixo reconcilia contra o evento real em qualquer estado.
+    const pendingId: string | null = `pending-${pendingSeq++}`;
+    pending = [...pending, { id: pendingId, text }];
     try {
       if (sendToPair && pairPeers?.length && !text.trimStart().startsWith('/')) {
         // Slash-command nunca em broadcast (o backend rejeita; mesmo racional do /api/broadcast).
