@@ -8,7 +8,7 @@
   import { onMount } from 'svelte';
   import BoardCard from '../components/BoardCard.svelte';
   import { openSessionsStream } from '../lib/api';
-  import { listServers, serverColor } from '../lib/auth';
+  import { listServers, onServersChanged, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
   import type { State } from '../lib/types';
   import { stateColors } from '../lib/format';
@@ -43,9 +43,15 @@
     offline = off;
   }
 
-  onMount(() => {
-    servers = listServers();
-    for (const s of servers) {
+  // Reconcilia os streams com a lista: fecha o que sumiu, abre o que entrou, mantem o resto (mesmo
+  // connect da Sidebar). Reabrir tudo a cada mudanca custaria o historico de sessoes dos servers que
+  // ficaram — e a cota de ~6 SSE/host.
+  function connect(list: Server[]) {
+    for (const [id, es] of streams) {
+      if (!list.some((s) => s.id === id)) { es.close(); streams.delete(id); slots.delete(id); }
+    }
+    for (const s of list) {
+      if (streams.has(s.id)) continue;
       const es = openSessionsStream(s);
       es.addEventListener('sessions', (e) => {
         slots.set(s.id, { sessions: JSON.parse((e as MessageEvent).data), error: null });
@@ -57,7 +63,17 @@
       };
       streams.set(s.id, es);
     }
-    return () => { for (const es of streams.values()) es.close(); streams.clear(); };
+    recompute();
+  }
+
+  onMount(() => {
+    servers = listServers();
+    connect(servers);
+    // O menu de conta (Sidebar) fica visivel com o quadro aberto, e remover um servidor NAO-ativo nao
+    // recarrega a pagina. Sem reconciliar aqui: `servers` stale, EventSource orfao contra o server
+    // removido e card apontando pra credencial que o usuario acabou de apagar.
+    const off = onServersChanged(() => { servers = listServers(); connect(servers); });
+    return () => { off(); for (const es of streams.values()) es.close(); streams.clear(); };
   });
 
   // Colunas fixas por estado; dentro, atividade recente primeiro (desempate por nome = estável).
