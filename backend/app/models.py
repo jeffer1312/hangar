@@ -38,6 +38,8 @@ class SessionInfo(BaseModel):
     # Pareamento ativo (feature "trabalhando juntas"): os OUTROS membros do grupo, ou None.
     # Grupo de 2 = lista de 1 (o antigo 1:1 é caso particular). Badge/chip na UI.
     pair_peers: Optional[list[str]] = None
+    pair_gid: Optional[str] = None   # id estável do grupo — cluster da lista agrupa por ele
+    pair_task: Optional[str] = None  # rótulo do grupo (ex: ABC-1234) pro header do cluster
 
 
 class ChatEvent(BaseModel):

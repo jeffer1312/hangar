@@ -30,6 +30,8 @@ export interface SessionInfo {
   // fica no backend, so exposto na hora de setar/limpar.
   then_target?: string | null;
   pair_peers?: string[] | null; // grupo de trabalho ativo: os OUTROS membros (2 sessões = lista de 1)
+  pair_gid?: string | null;     // id estável do grupo (cluster da lista agrupa por ele)
+  pair_task?: string | null;    // rótulo do grupo (ex: ABC-1234) pro header do cluster
 }
 
 // Sessão marcada com o servidor de origem (visão agregada multi-servidor).
