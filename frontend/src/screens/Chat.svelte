@@ -227,11 +227,9 @@
   // Statusline crua -> campos tipados (modelo, contexto, custo, tempo de sessao).
   const status = $derived(parseStatusLine(stateEvent?.status_line ?? null));
 
-  // Header desktop: breadcrumb (servidor › sessao › branch) + pilula de estado. Dados ja vem do
-  // status; server label vem do auth. So computa no desktop.
-  const serverLabel = $derived(
-    desktop ? (listServers().find((s) => s.id === getActiveId())?.label ?? '') : ''
-  );
+  // Header: breadcrumb desktop (servidor › sessao › branch) e subtítulo mobile (nome do servidor
+  // sob o título — com N servidores, sessões homônimas ficavam indistinguíveis no celular).
+  const serverLabel = $derived(listServers().find((s) => s.id === getActiveId())?.label ?? '');
   const crumbs = $derived(
     desktop ? { server: serverLabel, session: sessionName, branch: status?.branch, dirty: status?.dirty ?? false } : null
   );
@@ -577,13 +575,12 @@
   });
 
   async function handleSend(text: string) {
-    // Enviou enquanto o Claude trabalha -> entra na fila (Claude Code enfileira no tmux).
-    // Eco imediato como bubble pendente; solidifica quando o transcript trouxer a msg real.
-    let pendingId: string | null = null;
-    if (currentState === 'working') {
-      pendingId = `pending-${pendingSeq++}`;
-      pending = [...pending, { id: pendingId, text }];
-    }
+    // Eco imediato SEMPRE (não só em 'working'): o transcript só grava a msg quando o TURNO dela
+    // começa — sessão ocupada num turno longo deixava a msg invisível por minutos, e a corrida de
+    // estado (flip idle->working no instante do envio) derrubava até o eco condicional antigo
+    // ("mandei e sumiu"). O dedup abaixo reconcilia contra o evento real em qualquer estado.
+    const pendingId: string | null = `pending-${pendingSeq++}`;
+    pending = [...pending, { id: pendingId, text }];
     try {
       if (sendToPair && pairPeers?.length && !text.trimStart().startsWith('/')) {
         // Slash-command nunca em broadcast (o backend rejeita; mesmo racional do /api/broadcast).
@@ -741,7 +738,7 @@
 <div class="chat-screen" bind:this={screenEl} style:--nav-h={navH + 'px'}>
   <div class="sr-only" role="status">{stateAnnounce}</div>
   <div class="navbar-mount" bind:this={navEl}>
-    <NavBar title={sessionName} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} onOpenRun={() => (runOpen = true)} {runRunning} working={currentState === 'working'} providerLabel={isCodex ? 'Codex' : null} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} />
+    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} onOpenRun={() => (runOpen = true)} {runRunning} working={currentState === 'working'} providerLabel={isCodex ? 'Codex' : null} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} />
   </div>
 
   {#if loading}

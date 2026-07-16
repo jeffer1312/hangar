@@ -8,20 +8,30 @@
   // sem alteracao; abaixo de 820px o App nem monta isto (fica o fluxo mobile intacto).
   interface Props {
     currentSession: string | null;
+    // Key de remontagem servidor-aware ("<serverId>::<nome>"): homônimas em servidores diferentes
+    // têm o MESMO nome — sem o servidor na key, trocar entre elas não remontava o Chat (SSE preso
+    // no servidor antigo com o composer já falando com o novo).
+    currentKey?: string | null;
     view: 'chat' | 'board';   // quadro kanban = visualização irmã da lista+chat, mesma sidebar
     onToggleBoard: () => void;
     onNavigateToChat: (name: string) => void;
     onCompare: (ids: { serverId: string; name: string }[]) => void;
     onLogout: () => void;
   }
-  let { currentSession, view, onToggleBoard, onNavigateToChat, onCompare, onLogout }: Props = $props();
+  let { currentSession, currentKey = null, view, onToggleBoard, onNavigateToChat, onCompare, onLogout }: Props = $props();
 
-  // Split view (pareamento): segundo Chat lado a lado — assiste a conversa das duas sessões sem
-  // alternar. Aberto pelo PairSheet ("Abrir lado a lado"); fecha no X ou ao trocar a sessão principal.
-  let splitSession = $state<string | null>(null);
+  // Split view (pareamento): N Chats lado a lado — assiste o GRUPO inteiro sem alternar.
+  // Aberto pelo PairSheet (por membro ou "todas"); cada painel fecha no próprio ×; trocar a
+  // sessão principal fecha tudo (o split é relativo a ela).
+  let splitSessions = $state<string[]>([]);
+  function openSplit(name: string) {
+    if (name !== currentSession && !splitSessions.includes(name)) {
+      splitSessions = [...splitSessions, name];
+    }
+  }
   $effect(() => {
-    void currentSession;
-    splitSession = null; // trocou a principal -> split não faz mais sentido, fecha
+    void (currentKey ?? currentSession);
+    splitSessions = []; // trocou a principal (mesmo nome/outro servidor conta) -> fecha o split
   });
 
   // Overlay do quadro: o Chat REAL (mesmo componente do resto do app) por cima do kanban, em vez de
@@ -64,7 +74,7 @@
   }
 
   // Sair do quadro (toggle da sidebar) com o overlay aberto fecha ele junto — e restaura o servidor.
-  // Espelha o effect do splitSession acima. No-op quando não há overlay.
+  // Espelha o effect do splitSessions acima. No-op quando não há overlay.
   // O teardown cobre o caso em que o DesktopShell DESMONTA em vez de trocar de view: #/costs, #/archive
   // e #/compare casam ANTES do branch isDesktop (App.svelte:242/244/249), e os três saem do kebab da
   // sidebar, que segue visível no rail com o quadro aberto. Sem isto o prevActive morre com o componente
@@ -99,13 +109,15 @@
   <Sidebar {currentSession} onSelect={navigateFromOverlay} {onCompare} {onLogout}
            boardActive={view === 'board'} {onToggleBoard} />
 
-  <main class="desktop-main" class:split={!!splitSession}>
+  <main class="desktop-main" class:split={splitSessions.length > 0}>
     {#if view === 'board'}
       <Board onOpenSession={openOverlay} />
       {#if overlaySession}
-        <!-- {#key}: o Chat guarda estado pesado amarrado ao sessionName (SSE, histórico) e precisa
-             remontar por sessão — mesma razão do {#key currentSession} abaixo. -->
-        {#key overlaySession.name}
+        <!-- {#key}: o Chat guarda estado pesado amarrado à sessão (SSE, histórico) e precisa
+             remontar por sessão — mesma razão do {#key currentKey ?? currentSession} abaixo. Inclui o
+             SERVIDOR pelo mesmo motivo do currentKey: homônimas em servidores diferentes têm o mesmo
+             nome, e só o nome na key deixaria o Chat preso no servidor antigo. -->
+        {#key overlaySession.serverId + '::' + overlaySession.name}
           <div class="board-overlay" role="dialog" aria-label="Chat da sessão">
             <button class="split-close" onclick={closeOverlay}
                     aria-label="Fechar chat" title="Fechar (Esc)">×</button>
@@ -119,31 +131,29 @@
         {/key}
       {/if}
     {:else if currentSession && currentSession !== 'null' && currentSession !== 'undefined'}
-      {#key currentSession}
+      {#key currentKey ?? currentSession}
         <div class="pane">
           <Chat
             sessionName={currentSession}
             desktop={true}
             onBack={() => onNavigateToChat('')}
             onNavigateToChat={onNavigateToChat}
-            onOpenSplit={(name) => (splitSession = name)}
+            onOpenSplit={openSplit}
           />
         </div>
       {/key}
-      {#if splitSession}
-        {#key splitSession}
-          <div class="pane pane--split">
-            <button class="split-close" onclick={() => (splitSession = null)}
-                    aria-label="Fechar painel lado a lado" title="Fechar painel">×</button>
-            <Chat
-              sessionName={splitSession}
-              desktop={true}
-              onBack={() => (splitSession = null)}
-              onNavigateToChat={onNavigateToChat}
-            />
-          </div>
-        {/key}
-      {/if}
+      {#each splitSessions as split (split)}
+        <div class="pane pane--split">
+          <button class="split-close" onclick={() => (splitSessions = splitSessions.filter((s) => s !== split))}
+                  aria-label={`Fechar painel de ${split}`} title="Fechar painel">×</button>
+          <Chat
+            sessionName={split}
+            desktop={true}
+            onBack={() => (splitSessions = splitSessions.filter((s) => s !== split))}
+            onNavigateToChat={onNavigateToChat}
+          />
+        </div>
+      {/each}
     {:else}
       <div class="desktop-empty">
         <p class="empty-title">Selecione uma sessão</p>
