@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { openSessionsStream, createSession, deleteSession, renameSession, openEditor, gitAction, getBranches, checkoutBranch, getPushSettings, setSessionMute, resumeSession, broadcast, setThenLink, clearThenLink } from '../lib/api';
+  import { openSessionsStream, createSession, deleteSession, renameSession, openEditor, gitAction, getBranches, checkoutBranch, getPushSettings, setSessionMute, resumeSession, broadcast, setThenLink, clearThenLink, getHistoryTailForServer } from '../lib/api';
   import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor, clearCredentials, parseServerPairing } from '../lib/auth';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import QrScanner from './QrScanner.svelte';
@@ -8,8 +8,9 @@
   import AttentionFeed from './AttentionFeed.svelte';
   import AccountMenu from './AccountMenu.svelte';
   import SessionSwitcherSheet from './SessionSwitcherSheet.svelte';
+  import HoverPreview from './HoverPreview.svelte';
   import type { SessionInfo, State, AggSession, ResumeCandidate } from '../lib/types';
-  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, type GroupBy } from '../lib/format';
+  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import type { Server } from '../lib/auth';
   import Lottie from './Lottie.svelte';
@@ -201,7 +202,11 @@
   onMount(() => {
     servers = listServers();
     connect(servers);
-    return () => { for (const es of streams.values()) es.close(); streams.clear(); };
+    return () => {
+      for (const es of streams.values()) es.close();
+      streams.clear();
+      clearTimeout(hpTimer);   // espiada pendente nao sobrevive ao unmount (fetch orfao + setState)
+    };
   });
 
   // Web push + horas silenciosas migraram pro AccountMenu (menu de conta do rodapé), que reusa os
@@ -289,6 +294,59 @@
     onSelect(name);
   }
 
+  // ── Espiada no hover (desktop): ultima resposta da sessao sob o mouse, sem trocar de chat ───────
+  // Dois freios contra rajada de fetch: (1) so busca depois de 400ms PARADO — passar o mouse por
+  // cima de N linhas cancela cada timer no mouseleave e nao chama nada; (2) cache de 30s por sessao
+  // — voltar na mesma linha nao refaz o fetch. So com ponteiro de verdade: em touch o "hover" e o
+  // 1o toque, e o popover apareceria no caminho do clique.
+  const canHover = window.matchMedia('(hover: hover)').matches;
+  const HP_DELAY = 400;
+  const HP_TTL = 30_000;
+  // Cauda curta so pra achar o ultimo assistant_msg. 8 e nao 3: corridas de tool_use/tool_result
+  // empurram a resposta pra tras, e uma cauda de 3 costuma vir so com ferramentas -> o popover nunca
+  // abriria numa sessao que acabou de usar tools (medido: a cauda 3 desta sessao era
+  // tool_use/tool_result/tool_use). O board pede 15, mas ele desenha o card inteiro.
+  const HP_TAIL = 8;
+  const hpCache = new Map<string, { text: string; at: number }>();
+  let hp = $state<{ text: string; x: number; y: number } | null>(null);
+  let hpTimer: ReturnType<typeof setTimeout> | undefined;
+  let hpKey = '';   // linha sob o mouse AGORA — descarta resposta que chegou depois de o mouse sair
+
+  function hpEnter(e: MouseEvent, name: string, serverId: string) {
+    if (!canHover) return;
+    const key = `${serverId}::${name}`;
+    hpKey = key;
+    // Guarda o ELEMENTO agora (no timer o currentTarget do evento ja e null) mas mede so na hora de
+    // exibir: entrar no rail recolhido expande a sidebar (56 -> 520px) por baixo do mouse, e a medida
+    // do enter apontaria pro rail — o popover nasceria EM CIMA da lista. Medir no fim tambem
+    // acompanha scroll durante os 400ms.
+    const rowEl = e.currentTarget as HTMLElement;
+    clearTimeout(hpTimer);
+    hpTimer = setTimeout(async () => {
+      const hit = hpCache.get(key);
+      let text: string;
+      if (hit && Date.now() - hit.at < HP_TTL) {
+        text = hit.text;
+      } else {
+        const srv = servers.find((s) => s.id === serverId);
+        if (!srv) return;
+        try {
+          text = latestAssistantEvent(await getHistoryTailForServer(srv, name, HP_TAIL))?.text ?? '';
+        } catch { return; }   // offline/timeout: espiada e opcional, nao vira erro na tela
+        hpCache.set(key, { text, at: Date.now() });   // cacheia ate o vazio (senao refetch a cada passada)
+      }
+      if (hpKey !== key) return;   // mouse ja saiu (ou foi pra outra linha) enquanto buscava
+      if (!text) return;
+      const anchor = rowEl.getBoundingClientRect();
+      hp = { text, x: anchor.right + 8, y: Math.min(anchor.top, window.innerHeight - 240) };
+    }, HP_DELAY);
+  }
+  function hpLeave() {
+    hpKey = '';
+    clearTimeout(hpTimer);
+    hp = null;
+  }
+
   async function saveEdit(old: string, serverId: string) {
     const nv = editValue.trim();
     editing = null;
@@ -325,6 +383,7 @@
   function openMenu(e: MouseEvent, s: SessionInfo, serverId: string) {
     e.preventDefault();
     clearTimeout(pressTimer);   // cancela o long-press (senao dispararia rename junto)
+    hpLeave();   // botao direito nao move o mouse: fecha a espiada pra nao ficar atras do menu
     menu = { x: e.clientX, y: e.clientY, name: s.name, serverId, cwd: s.cwd ?? '', thenTarget: s.then_target ?? null };
     // Silenciar (feature #5): estado carregado sob demanda (nao trava a abertura do menu). null =
     // ainda carregando/desconhecido -> o botao mostra "Silenciar" ate a resposta chegar.
@@ -825,8 +884,12 @@
       {#each g.sessions as s (s.serverId + '::' + s.name)}
         {@const rowKey = `${s.serverId}::${s.name}`}
         {@const selKey = `${s.serverId}:${s.name}`}
+        <!-- role=presentation: a row e so o wrapper flex — a semantica toda vive no .sess-main
+             (button) e nos botoes irmaos. O hover aqui e decoracao redundante (a resposta ja esta no
+             chat), entao nao pede equivalente de teclado. -->
         <div class="sess-row" class:active={s.serverId === activeId && s.name === currentSession}
-             class:awaiting={s.state === 'awaiting_input'}>
+             class:awaiting={s.state === 'awaiting_input'} role="presentation"
+             onmouseenter={(e) => hpEnter(e, s.name, s.serverId)} onmouseleave={hpLeave}>
           {#if editing === rowKey}
             <input
               class="sess-edit"
@@ -848,6 +911,7 @@
               onpointercancel={pressEnd}
               oncontextmenu={(e) => { if (!selectMode) openMenu(e, s, s.serverId); }}
               onclick={() => {
+                hpLeave();   // clique nao move o mouse -> sem mouseleave; fecha a espiada na mao
                 if (selectMode) { if (s.tracked !== false) toggleSelected(selKey); return; }
                 onMainClick(s.name, s.serverId, s.tracked);
               }}
@@ -1027,6 +1091,10 @@
       role="separator" aria-label="Redimensionar barra lateral" aria-orientation="vertical"></div>
   {/if}
 </aside>
+
+<!-- Espiada no hover. FORA do <aside> pelo mesmo motivo do menu de contexto: a sidebar tem
+     overflow:hidden (e backdrop-filter no modo liquid, que vira containing block) e clipa o popover. -->
+{#if hp}<HoverPreview text={hp.text} x={hp.x} y={hp.y} />{/if}
 
 <CreateSessionSheet open={showCreate} {servers} onClose={() => (showCreate = false)} onCreate={handleCreate} onOpenSession={onSelect} />
 {#if scanning}<QrScanner onScan={handleScan} onClose={() => (scanning = false)} />{/if}
