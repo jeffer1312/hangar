@@ -227,6 +227,10 @@
     </div>
 
     <div class="row-right">
+      {#if session.paired_with}
+        <!-- Pareamento ("trabalhando juntas"): paridade com o chain-chip da Sidebar desktop. -->
+        <span class="paired-chip" title={`Pareada com "${session.paired_with}"`}>🤝&nbsp;{session.paired_with}</span>
+      {/if}
       {#if limited}
         <span
           class="limited-chip"
@@ -512,6 +516,19 @@
   }
 
   /* Rate-limit radar (feature #8): chip proprio, mesma familia visual do stalled (âmbar, calmo). */
+  .paired-chip {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: var(--radius-full);
+    white-space: nowrap;
+    max-width: 9em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--accent);
+    background: var(--accent-dim);
+  }
+
   .limited-chip {
     font-size: 11px;
     font-weight: 600;

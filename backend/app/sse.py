@@ -21,20 +21,38 @@ def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
     if obj.get("state") != "awaiting_input":
         return None
     payload = read_pending_askq(jsonl)
+    if payload is None:
+        return None
     # 1 pergunta: o TUI submete direto no Enter da opcao (sem tela de Review) -> cai no OptionButtons
-    # (menu de lista unica, non-goal do spec). So multi-pergunta abre o stepper.
-    if payload is None or len(payload.questions) < 2:
+    # (menu de lista unica, non-goal do spec). So multi-pergunta abre o stepper — EXCETO quando alguma
+    # opcao tem `preview` (codigo/mockup ao lado): o OptionButtons nao tem o payload, so o stepper
+    # renderiza o preview. answer_questions ja trata pergunta unica (Enter da selecao submete).
+    has_preview = any(o.preview for q in payload.questions for o in q.options)
+    if len(payload.questions) < 2 and not has_preview:
         return None
     # NAO depende de `overlay`: is_overlay e fragil p/ AskUserQuestion — o rodape de navegacao sai das
     # ultimas 8 linhas do pane (linhas em branco no fim) -> overlay=False -> o stepper NUNCA abria e caia
     # no OptionButtons. Freshness pelo SIDECAR x menu atual: o sidecar nao e limpo se respondido pela TUI
     # (so no /answer + kill), entao confere que as opcoes da 1a pergunta batem com as do menu corrente
     # (classify) -> sidecar velho sobre OUTRO prompt (ex: permissao) nao abre o stepper.
-    # ponytail: opcao truncada no pane faria o subset falhar -> degrada pro OptionButtons (= hoje), sem regressao.
+    # Freshness: sem preview, igualdade exata (sidecar ⊆ pane) — protecao original contra sidecar
+    # STALE abrir o stepper sobre OUTRO prompt (ex: menu de permissao). COM preview, a label do pane
+    # vem truncada pelo wrap da coluna ("System no topo (igual aos" vs "...igual aos irmãos)") ->
+    # relaxa pra prefixo NUMA DIRECAO SO (opcao do pane e prefixo da label completa; o inverso
+    # deixaria label curta "Yes" casar com "Yes, and bypass permissions" = cross-wire de permissao)
+    # + contagem igual de opcoes. Falhou -> degrada pro OptionButtons (= hoje), sem regressao.
     first_opts = {o.label for o in payload.questions[0].options}
     state_opts = set(obj.get("options") or [])
-    if not first_opts or not first_opts <= state_opts:
+    if not first_opts or not state_opts:
         return None
+    if not has_preview:
+        if not first_opts <= state_opts:
+            return None
+    else:
+        def _match(lbl: str) -> bool:
+            return any(s and lbl.startswith(s) for s in state_opts)
+        if len(first_opts) != len(state_opts) or not all(_match(l) for l in first_opts):
+            return None
     return {"event": "ask_question", "data": json.dumps(payload.model_dump(), ensure_ascii=False)}
 
 # Stateless (so projects_dir) — usado pelo watcher pra detectar troca de jsonl (ex: /clear abre um

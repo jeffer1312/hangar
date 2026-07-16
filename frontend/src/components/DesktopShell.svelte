@@ -11,21 +11,46 @@
     onLogout: () => void;
   }
   let { currentSession, onNavigateToChat, onCompare, onLogout }: Props = $props();
+
+  // Split view (pareamento): segundo Chat lado a lado — assiste a conversa das duas sessões sem
+  // alternar. Aberto pelo PairSheet ("Abrir lado a lado"); fecha no X ou ao trocar a sessão principal.
+  let splitSession = $state<string | null>(null);
+  $effect(() => {
+    void currentSession;
+    splitSession = null; // trocou a principal -> split não faz mais sentido, fecha
+  });
 </script>
 
 <div class="desktop-shell">
   <Sidebar {currentSession} onSelect={onNavigateToChat} {onCompare} {onLogout} />
 
-  <main class="desktop-main">
+  <main class="desktop-main" class:split={!!splitSession}>
     {#if currentSession && currentSession !== 'null' && currentSession !== 'undefined'}
       {#key currentSession}
-        <Chat
-          sessionName={currentSession}
-          desktop={true}
-          onBack={() => onNavigateToChat('')}
-          onNavigateToChat={onNavigateToChat}
-        />
+        <div class="pane">
+          <Chat
+            sessionName={currentSession}
+            desktop={true}
+            onBack={() => onNavigateToChat('')}
+            onNavigateToChat={onNavigateToChat}
+            onOpenSplit={(name) => (splitSession = name)}
+          />
+        </div>
       {/key}
+      {#if splitSession}
+        {#key splitSession}
+          <div class="pane pane--split">
+            <button class="split-close" onclick={() => (splitSession = null)}
+                    aria-label="Fechar painel lado a lado" title="Fechar painel">×</button>
+            <Chat
+              sessionName={splitSession}
+              desktop={true}
+              onBack={() => (splitSession = null)}
+              onNavigateToChat={onNavigateToChat}
+            />
+          </div>
+        {/key}
+      {/if}
     {:else}
       <div class="desktop-empty">
         <p class="empty-title">Selecione uma sessão</p>
@@ -49,6 +74,20 @@
     position: relative;
     overflow: hidden;
   }
+  /* Split: dois chats lado a lado, divisor sutil. Cada pane é um contexto próprio (NavBar/composer). */
+  .desktop-main.split { display: flex; }
+  .pane { height: 100%; position: relative; overflow: hidden; }
+  .desktop-main.split .pane { flex: 1; min-width: 0; }
+  .pane--split { border-left: 1px solid var(--border-default); }
+  .split-close {
+    position: absolute; top: 8px; right: 10px; z-index: 20;
+    width: 28px; height: 28px;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+    background: var(--bg-elevated); color: var(--text-secondary);
+    font-size: 16px; line-height: 1; cursor: pointer;
+  }
+  .split-close:hover { color: var(--text-primary); background: var(--bg-hover); }
   .desktop-empty {
     height: 100%;
     display: flex;

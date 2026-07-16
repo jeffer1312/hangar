@@ -334,6 +334,27 @@ export async function sendInput(name: string, text: string): Promise<void> {
   });
 }
 
+// Pareamento ("trabalhando juntas"): o backend grava o vínculo simétrico e injeta o prompt de
+// pareamento nas DUAS sessões — daí em diante elas se falam via cp-send por iniciativa própria.
+export async function pairSession(name: string, peer: string, task = ''): Promise<void> {
+  await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/pair`, {
+    method: 'POST',
+    body: JSON.stringify({ peer, task }),
+  });
+}
+
+export async function unpairSession(name: string): Promise<void> {
+  await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/pair`, {
+    method: 'DELETE',
+  });
+}
+
+// Contrato compartilhado do par: markdown que as duas sessões editam via fs; o app só exibe.
+export interface PairContract { peer: string; path: string; content: string }
+export function getPairContract(name: string): Promise<PairContract> {
+  return apiFetch<PairContract>(`/api/sessions/${encodeURIComponent(name)}/pair/contract`);
+}
+
 // Fan-out de um prompt pra N sessoes DO SERVIDOR ATIVO (feature #9). Mira sempre 1 servidor por
 // chamada — selecao cross-server manda 1 chamada por servidor (selectServer antes, igual ao resto
 // do app). O backend roda a MESMA sequencia do /input por nome (fila duravel + confirmacao).

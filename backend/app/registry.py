@@ -12,6 +12,7 @@ from app.config import settings
 from app.models import SessionInfo
 from app.pqueue import PromptQueue
 from app.chain import ThenLink
+from app.pair import PairLink, rename_pair, unpair_both
 from app.adapters.codex import sessions as codex_sessions
 from app.adapters.codex import adapter as codex_adapter
 from app.adapters.codex.appserver import AppServerClient
@@ -469,9 +470,11 @@ class SessionRegistry:
         for p in tmux.list_panes_active():
             jsonl, tracked = self.resolve_tracked(p["name"], p["cwd"], p["pid"], children)
             link = ThenLink(p["name"]).get()
+            pair = PairLink(p["name"]).get()
             out.append(SessionInfo(name=p["name"], cwd=p["cwd"], jsonl=jsonl, tracked=tracked,
                                    branch=self._branch_of(p["cwd"]),
-                                   then_target=link.get("target") if link else None))
+                                   then_target=link.get("target") if link else None,
+                                   paired_with=pair.get("peer") if pair else None))
             sids[p["name"]] = self._repl_sid(p["pid"], children)
         # Guarda de colisao: 2+ sessoes no mesmo jsonl -> so a dona mantem (mata a duplicata/cross-wire).
         self._dedupe_collisions(out, sids)
@@ -484,6 +487,7 @@ class SessionRegistry:
                 provider="codex", tracked=True,
                 branch=self._branch_of(meta.get("cwd")),
                 then_target=(ThenLink(meta["name"]).get() or {}).get("target"),
+                paired_with=(PairLink(meta["name"]).get() or {}).get("peer"),
             ))
         return out
 
@@ -679,6 +683,10 @@ class SessionRegistry:
         # Vinculo 'then' (feature #12): mesmo motivo — keyed por NOME, move junto pra sessao renomeada
         # nao perder o encadeamento armado.
         ThenLink(old).rename(new)
+        # Pareamento: move o próprio sidecar E re-aponta o do PAR (que referencia o nome velho) —
+        # senão o par ficaria pareado com um fantasma e o unpair simétrico quebrava. Sob o lock do
+        # módulo pair (rename_pair): sem ele, um unpair concorrente podia ser ressuscitado.
+        rename_pair(old, new)
 
     def kill(self, name: str) -> None:
         # Sessao Codex (tem sidecar duravel): fecha o client vivo (SIGTERM sync via adapter -> o read
@@ -691,6 +699,7 @@ class SessionRegistry:
             self._forget(name)
             PromptQueue(name).clear()
             ThenLink(name).clear()
+            self._clear_pair(name)
             return
         # Limpa o sidecar do AskUserQuestion ANTES de matar (precisa do processo vivo pra resolver o
         # jsonl), best-effort: cleanup nunca bloqueia/quebra o kill. Senao um stale reabriria o stepper
@@ -707,6 +716,17 @@ class SessionRegistry:
         # nome herdaria essas entradas como bubble-fantasma (mesmo motivo do clear no create()).
         PromptQueue(name).clear()
         ThenLink(name).clear()  # mesmo motivo, pro vinculo 'then' (feature #12)
+        self._clear_pair(name)
+
+    @staticmethod
+    def _clear_pair(name: str) -> None:
+        # Sessão morta desfaz o pareamento DOS DOIS lados (unpair_both: sob lock): o sidecar do par
+        # apontaria pra um fantasma (badge preso). Best-effort, nunca bloqueia o kill — mas LOGA:
+        # engolir calado deixava o badge-fantasma indiagnosticável.
+        try:
+            unpair_both(name)
+        except Exception as e:
+            _log.warning("kill(%s): falha ao limpar pareamento: %r", name, e)
 
     # ── Resume de sessao "sem id" ────────────────────────────────────────────────
     # Uma sessao aberta com `claude` cru (sem --session-id) JA tem um transcript <uuid>.jsonl; so nao da

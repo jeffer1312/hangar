@@ -8,6 +8,9 @@ from app.models import StateEvent
 
 SPINNER_GLYPHS = "✻✽✶✺✢·∗✳✦✧"
 _OPTION_RE = re.compile(r"^\s*❯?\s*\d+\.\s+(.*\S)\s*$")
+# Bordas do box de `preview` do AskUserQuestion (canto ╭/╰ na linha do cursor, │ nas demais):
+# renderiza NA MESMA LINHA da opção -> o label corta na primeira borda.
+_BOX_SPLIT_RE = re.compile(r"[│╭╮╰╯]")
 _CURSOR_RE = re.compile(r"^\s*❯\s*\d+\.\s", re.M)
 _RULE_RE = re.compile(r"^[\s─]*─{10,}[\s─]*$")  # a horizontal rule (the input box border)
 
@@ -177,8 +180,12 @@ def classify(pane_text: str) -> tuple[str, Optional[str], Optional[str], Optiona
     if block is not None:
         top, bot = block
         region = lines[top:bot]
-        options = [m.group(1).strip()
+        # AskUserQuestion com `preview` renderiza um box (│...│) NA MESMA LINHA da opção — sem o
+        # corte, o conteúdo do preview entrava no label ("Alfabético (obedece │ using System..."). A
+        # label ainda pode vir truncada por wrap de coluna; o gate do stepper (sse) casa por prefixo.
+        options = [_BOX_SPLIT_RE.split(m.group(1))[0].strip()
                    for m in (_OPTION_RE.match(ln) for ln in region) if m]
+        options = [o for o in options if o]
         if options:
             return ("awaiting_input", None, _question(region), options)
 

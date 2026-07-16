@@ -10,7 +10,7 @@
   import Spinner from './Spinner.svelte';
   import ImageBubble from './ImageBubble.svelte';
   import FileAttachment from './FileAttachment.svelte';
-  import { parseImageMessage, parseFilePaths } from '../lib/format';
+  import { parseImageMessage, parseFilePaths, parsePeerMessage } from '../lib/format';
   import { transcriptImageUrl, uploadUrl } from '../lib/api';
   import { windowStartFor, nextWindowEnd } from '../lib/window';
 
@@ -35,11 +35,16 @@
     imageUrl?: (id: string, idx: number) => string;
     // Ids de assistant_msg que substituiram um preview em tela: montam SEM animacao (swap invisivel).
     swapIds?: Set<string>;
+    // Encaminhar bolha pra outra sessao (long-press/hover ↗). Ausente (ex: Archive) = sem acao.
+    onForward?: (text: string) => void;
+    // Tap no chip "de: X" de recado peer -> abre o chat da sessao remetente. Ausente = chip estatico.
+    onOpenSession?: (name: string) => void;
   }
 
   let {
     events, stateEvent, pending, sessionName, dockH, preview = '', onSelectOption, onCancel,
-    askOpen = false, askPayload = null, askActive = false, onAnswer, onAskClose, imageUrl, swapIds
+    askOpen = false, askPayload = null, askActive = false, onAnswer, onAskClose, imageUrl, swapIds,
+    onForward, onOpenSession
   }: Props = $props();
 
   let listEl: HTMLElement | undefined = $state();
@@ -195,6 +200,8 @@
         {@const ev = item.ev}
         {#if ev.kind === 'user_msg' && (ev.text || ev.image_count)}
         {@const img = ev.text ? parseImageMessage(ev.text) : null}
+        {@const peer = ev.text ? parsePeerMessage(ev.text) : null}
+        {@const shownText = peer ? peer.text : ev.text ?? ''}
         {#if ev.image_count}
           <!-- Imagem(ns) colada(s) no TERMINAL: thumbnail buscado lazy do .jsonl (base64). -->
           <ImageBubble caption={ev.text ?? ''} srcs={Array.from({ length: ev.image_count }, (_, i) => imageUrl ? imageUrl(ev.id, i) : transcriptImageUrl(sessionName, ev.id, i))} />
@@ -206,18 +213,23 @@
             {#if img}
               <ImageBubble caption={img.caption} srcs={img.filenames.map((f) => uploadUrl(sessionName, f))} />
             {:else}
-              <UserBubble text={ev.text ?? ''} ts={ev.ts} />
+              <UserBubble text={shownText} ts={ev.ts} from={peer?.from}
+                          onForward={onForward ? () => onForward(shownText) : null}
+                          onOpenPeer={peer && onOpenSession ? () => onOpenSession(peer.from) : null} />
             {/if}
           </div>
         {:else if img}
           <ImageBubble caption={img.caption} srcs={img.filenames.map((f) => uploadUrl(sessionName, f))} />
         {:else}
-          <UserBubble text={ev.text ?? ''} ts={ev.ts} animate={!histIds.has(ev.id)} />
+          <UserBubble text={shownText} ts={ev.ts} animate={!histIds.has(ev.id)} from={peer?.from}
+                      onForward={onForward ? () => onForward(shownText) : null}
+                      onOpenPeer={peer && onOpenSession ? () => onOpenSession(peer.from) : null} />
           {#if ev.text}{@const fr = parseFilePaths(ev.text)}{#if fr.length}<FileAttachment {sessionName} refs={fr} />{/if}{/if}
         {/if}
       {:else if ev.kind === 'assistant_msg' && ev.text}
         <AssistantBubble text={ev.text} ts={ev.ts} {sessionName}
-                         animate={!histIds.has(ev.id) && !swapIds?.has(ev.id)} />
+                         animate={!histIds.has(ev.id) && !swapIds?.has(ev.id)}
+                         onForward={onForward ? () => onForward(ev.text ?? '') : null} />
         {:else if ev.kind === 'tool_use'}
           <ToolCard event={ev} result={toolResults.get(ev.tool_use_id ?? '') ?? null} {sessionName} animate={!histIds.has(ev.id)} />
         {/if}

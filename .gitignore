@@ -42,3 +42,7 @@ analysis-checkpoints.md
 # Planos/handoffs internos de desenvolvimento (rascunho local, fora do repo publico)
 docs/superpowers/
 docs/handoffs/
+
+# Certificados TLS locais (Tailscale) — chave privada NUNCA no repo
+*.ts.net.crt
+*.ts.net.key

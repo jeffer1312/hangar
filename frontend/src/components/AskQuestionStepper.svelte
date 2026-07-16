@@ -154,6 +154,11 @@
           {#if opt.description}
             <span class="opt-desc">{opt.description}</span>
           {/if}
+          {#if opt.preview}
+            <!-- span com white-space:pre (nao <pre>: button so aceita phrasing content). Box
+                 monospace rolavel — codigo/mockup nunca estoura a largura da opcao. -->
+            <span class="opt-preview">{opt.preview}</span>
+          {/if}
         </span>
       </button>
     {/each}
@@ -317,6 +322,27 @@
     font-size: var(--text-sm);
     color: var(--text-secondary);
     line-height: 1.4;
+  }
+
+  /* Preview da opção (código/mockup do AskUserQuestion): box mono rolável dentro do botão.
+     display:block + white-space:pre preservam as quebras; overflow próprio segura linha longa
+     (a página nunca rola na horizontal — guarda do message-list). */
+  .opt-preview {
+    display: block;
+    margin-top: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    line-height: 1.45;
+    color: var(--text-secondary);
+    white-space: pre;
+    overflow-x: auto;
+    max-height: 14em;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   /* Escape hatches */
