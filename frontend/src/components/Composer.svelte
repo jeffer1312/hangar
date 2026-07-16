@@ -1,5 +1,6 @@
 <script module lang="ts">
   import type { CommandInfo } from '../lib/types';
+  import { stateColors } from '../lib/format';
   // Cache de comandos por sessao: sobrevive a remontagens do Composer (ex: voltar de
   // awaiting_input) pra buscar a lista so uma vez por sessao.
   const commandCache = new Map<string, CommandInfo[]>();
@@ -39,6 +40,13 @@
     onExpandUsage: () => void;
     onOpenGit: () => void;
     onOpenPreview: () => void;
+    // Pareamento ("trabalhando juntas"): chip 🤝 na fileira de cima; tap abre o PairSheet.
+    pairedWith?: string | null;
+    pairedState?: string | null;  // estado vivo do par (working/idle/awaiting_input) -> bolinha no chip
+    onOpenPair?: () => void;
+    // Toggle "mandar pros dois" (só aparece pareada): ligado = prompt vai pra esta sessão E pro par.
+    sendToPair?: boolean;
+    onToggleSendToPair?: () => void;
     inputText?: string;  // bindable: o pai injeta um draft (ex: interrupt devolve a msg pendente)
     // Provider da sessao (Chat.svelte, via allSessions). undefined/"claude" = comportamento de
     // sempre; "codex" esconde o picker de /model e o autocomplete de slash-commands (Claude-only —
@@ -47,7 +55,8 @@
   }
   let {
     sessionName, sessionState, status, onSend, onCommand, onInterrupt, onExpandUsage, onOpenGit,
-    onOpenPreview,
+    onOpenPreview, pairedWith = null, pairedState = null, onOpenPair,
+    sendToPair = false, onToggleSendToPair,
     inputText = $bindable(''),
     provider = 'claude',
   }: Props = $props();
@@ -634,6 +643,30 @@
         <button class="slash-btn" onclick={onOpenPreview} aria-label="Preview de projeto rodando">
           <span class="slash-glyph" aria-hidden="true">🖥</span>
         </button>
+        {#if onOpenPair}
+          <button class="repo-chip pair-chip" class:pair-chip--on={!!pairedWith}
+                  title={pairedWith ? `Pareada com ${pairedWith} — gerenciar` : 'Parear com outra sessão'}
+                  onclick={onOpenPair} aria-label="Pareamento de sessões">
+            <span class="repo-glyph" aria-hidden="true">🤝</span>
+            {#if pairedWith}
+              <span class="repo-name">{pairedWith}</span>
+              {#if pairedState}
+                <!-- Estado vivo do par (mesmas cores da lista): vê que o par trava/espera sem trocar de tela. -->
+                <span class="pair-dot" style="background: {stateColors[pairedState as keyof typeof stateColors] ?? 'var(--text-muted)'};"
+                      title={`par: ${pairedState}`} aria-hidden="true"></span>
+              {/if}
+            {/if}
+          </button>
+          {#if pairedWith && onToggleSendToPair}
+            <!-- "Mandar pros dois": prompt vai pra esta sessão E pro par (broadcast). Aceso = ativo. -->
+            <button class="repo-chip both-chip" class:both-chip--on={sendToPair}
+                    title={sendToPair ? 'Mandando pros dois — tocar desliga' : `Mandar também pra ${pairedWith}`}
+                    onclick={onToggleSendToPair} aria-pressed={sendToPair} aria-label="Mandar pros dois">
+              <span class="repo-glyph" aria-hidden="true">⇄</span>
+              {#if sendToPair}<span class="repo-name">pros dois</span>{/if}
+            </button>
+          {/if}
+        {/if}
         {#if status?.repo}
           <button class="repo-chip" title="Git: trocar branch / status / pull" onclick={onOpenGit}>
             <span class="repo-glyph" aria-hidden="true">📁</span>
@@ -1010,6 +1043,14 @@
     gap: var(--space-2);
     min-width: 0;
   }
+  /* Pareada: chip acende no accent (o 🤝 sem par fica na cor muted padrão do repo-chip). */
+  .pair-chip--on { color: var(--accent); }
+  .pair-chip--on .repo-name { color: var(--accent); }
+  .pair-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  /* Toggle "pros dois": aceso = broadcast pro par ativo. */
+  .both-chip--on { color: var(--accent); }
+  .both-chip--on .repo-name { color: var(--accent); }
+
   .repo-chip {
     display: inline-flex;
     align-items: center;

@@ -38,6 +38,7 @@ from app import runner
 from app.archive import ArchiveEntry, ArchiveFolder, archive_cwd, archive_jsonl, list_conversations, list_folders
 from app.search import SearchHit, search
 from app.askquestion import clear_pending_askq, read_pending_askq
+from app.pair import PairLink, contract_path, pair_both, unpair_both
 from app.hook_state import hook_state
 from app import push
 from app import stall_watch
@@ -752,6 +753,86 @@ async def broadcast(body: BroadcastBody):
         else:
             results[name] = await asyncio.to_thread(_send_one, name, body.text)
     return {"results": results}
+
+
+class PairBody(_StrictBody):
+    peer: str
+    task: str = ""
+
+
+def _pairing_text(me: str, peer: str, task: str) -> str:
+    t = f" na tarefa: {task.strip()}" if task.strip() else ""
+    return (
+        f"[de: claude-pocket] PAREAMENTO ATIVO: você ('{me}') está pareada com a sessão '{peer}'{t}. "
+        f"Trabalhem juntas: cada sessão mexe SÓ no próprio repo; quando precisar de algo do outro lado "
+        f"(contrato, endpoint, tipo, aviso de conclusão), mande por iniciativa própria via Bash: "
+        f'cp-send {peer} "sua mensagem" — recados dele chegam como [de: {peer}]. '
+        f"Contrato/decisões que os DOIS lados precisam consultar: registrar no arquivo compartilhado "
+        f"{contract_path(me, peer)} (markdown; criar se não existir, manter curto e atual). "
+        f"Commit/push e decisões de rumo continuam com o usuário. Confirme o pareamento em uma linha."
+    )
+
+
+async def _deliver(name: str, text: str) -> str | None:
+    # Mesma esteira do /input (fila durável se ocupada), ramificada por provider.
+    # Devolve o erro (str) ou None — _send_one/_send_one_codex NUNCA levantam, reportam no dict;
+    # engolir isso fazia o pareamento dizer "ok" com o aviso jamais entregue.
+    if _provider_of(name) == "codex":
+        res = await _send_one_codex(name, text)
+    else:
+        res = await asyncio.to_thread(_send_one, name, text)
+    return None if res.get("ok") else (res.get("error") or "falha desconhecida no envio")
+
+
+@app.post("/api/sessions/{name}/pair", dependencies=[Depends(require_auth)])
+async def pair_session(name: str, body: PairBody):
+    """Pareia duas sessões ("trabalhando juntas"): grava o vínculo simétrico e injeta em AMBAS o
+    prompt de pareamento — a partir daí elas trocam recados via cp-send por iniciativa própria,
+    dentro do escopo da tarefa. Badge `paired_with` aparece na lista."""
+    if body.peer == name:
+        raise HTTPException(400, "não dá pra parear uma sessão com ela mesma")
+    names = {s.name for s in await asyncio.to_thread(registry.list)}
+    if name not in names or body.peer not in names:
+        raise HTTPException(404, "sessão não encontrada")
+    # pair_both: 2 sidecars sob lock, com rollback do lado A se o B falhar (nunca meio-pareado).
+    await asyncio.to_thread(pair_both, name, body.peer, body.task)
+    errs = [e for e in (await _deliver(name, _pairing_text(name, body.peer, body.task)),
+                        await _deliver(body.peer, _pairing_text(body.peer, name, body.task))) if e]
+    if errs:
+        # Aviso não chegou -> par não sabe que está pareado (meio-pareamento invisível). Desfaz e
+        # reporta em vez de fingir sucesso.
+        await asyncio.to_thread(unpair_both, name)
+        raise HTTPException(502, f"pareamento desfeito: falha ao avisar as sessões ({'; '.join(errs)})")
+    return {"ok": True}
+
+
+@app.get("/api/sessions/{name}/pair/contract", dependencies=[Depends(require_auth)])
+def pair_contract(name: str):
+    """Contrato compartilhado do par (markdown que as duas sessões editam via fs). 404 sem par;
+    content vazio se o arquivo ainda não existe."""
+    link = PairLink(name).get()
+    if not link or not link.get("peer"):
+        raise HTTPException(404, "sessão não está pareada")
+    p = contract_path(name, link["peer"])
+    try:
+        content = p.read_text(encoding="utf-8")
+    except OSError:
+        content = ""
+    return {"peer": link["peer"], "path": str(p), "content": content}
+
+
+@app.delete("/api/sessions/{name}/pair", dependencies=[Depends(require_auth)])
+async def unpair_session(name: str):
+    """Desfaz o pareamento dos DOIS lados (sob lock, via unpair_both) e avisa ambas. Idempotente.
+    Aviso que falhar NÃO refaz o vínculo (despareado é o estado desejado) — só reporta no result."""
+    peer = await asyncio.to_thread(unpair_both, name)
+    if peer is None:
+        return {"ok": True, "warning": None}
+    end = ("[de: claude-pocket] Pareamento com '{p}' encerrado. Volte a operar independente; "
+           "use cp-send só quando o usuário pedir.")
+    errs = [e for e in (await _deliver(name, end.format(p=peer)),
+                        await _deliver(peer, end.format(p=name))) if e]
+    return {"ok": True, "warning": ("aviso de despareamento falhou: " + "; ".join(errs)) if errs else None}
 
 
 @app.post("/api/sessions/{name}/select", dependencies=[Depends(require_auth)])

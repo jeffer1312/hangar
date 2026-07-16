@@ -38,6 +38,22 @@ def test_awaiting_input_parses_question_and_options():
     assert options == ["Yes, and bypass permissions", "Yes, manually approve edits", "No, keep planning"]
 
 
+def test_awaiting_input_option_cut_at_preview_box():
+    # AskUserQuestion com `preview`: box (│...│) renderiza NA MESMA LINHA da opção. O label deve
+    # parar na borda │ — sem o corte, o conteúdo do preview poluia a opção (bug real do my-service).
+    pane = (
+        "   Como deixo o meu?\n"
+        "\n"
+        " ❯ 1. System no topo (igual aos     ╭──────────────────────────────╮\n"
+        "      irmãos)                        │ using System.Reflection;     │\n"
+        "   2. Alfabético (obedece           │ using Xunit;                 │\n"
+        "      .editorconfig)                 ╰──────────────────────────────╯\n"
+    )
+    state, label, question, options = classify(pane)
+    assert state == "awaiting_input"
+    assert options == ["System no topo (igual aos", "Alfabético (obedece"]
+
+
 def test_numbered_list_without_cursor_stays_idle():
     # a plain numbered list (no ❯ cursor on an option) is NOT a widget
     state, *_ = classify("Steps:\n  1. do this\n  2. do that\n❯ \n")

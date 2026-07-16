@@ -101,3 +101,27 @@ def test_ask_question_event_none_for_single_question(tmp_path):
             "options": [{"label": "A", "description": ""}]}]
     jsonl, _ = _layout(tmp_path, questions=one)
     assert _ask_question_event(_state_json("awaiting_input", options=["A"]), jsonl) is None
+
+
+def test_ask_question_event_single_question_with_preview_emits(tmp_path):
+    # Excecao do gate de 1 pergunta: opcao com `preview` so renderiza no stepper (OptionButtons nao
+    # tem o payload) -> emite mesmo com pergunta unica, e o preview vai no data.
+    one = [{"header": "Ordem", "question": "Como deixo?", "multiSelect": False,
+            "options": [{"label": "System no topo (igual aos irmãos)", "description": "d",
+                         "preview": "using System.Reflection;\nusing Xunit;"},
+                        {"label": "Alfabético (obedece .editorconfig)", "description": "d"}]}]
+    jsonl, _ = _layout(tmp_path, questions=one)
+    ev = _ask_question_event(
+        _state_json("awaiting_input",
+                    options=["System no topo (igual aos", "Alfabético (obedece"]),  # truncadas (wrap)
+        jsonl)
+    assert ev is not None
+    opts = json.loads(ev["data"])["questions"][0]["options"]
+    assert opts[0]["preview"].startswith("using System.Reflection;")
+
+
+def test_ask_question_event_prefix_match_tolerates_truncated_pane(tmp_path):
+    # Freshness por prefixo: label do pane truncada por wrap ainda casa; menu de OUTRO prompt nao.
+    jsonl, _ = _layout(tmp_path)  # _Q: A/B + X/Y
+    assert _ask_question_event(_state_json("awaiting_input", options=["A", "B"]), jsonl) is not None
+    assert _ask_question_event(_state_json("awaiting_input", options=["Sim", "Nao"]), jsonl) is None

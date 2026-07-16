@@ -10,8 +10,9 @@
     sessionName?: string;
     preview?: boolean;
     animate?: boolean;   // false = bubble de HISTORICO remontada (paginacao/janela): sem fade/slide
+    onForward?: (() => void) | null; // abre o picker "encaminhar pra sessao" (long-press/hover)
   }
-  let { text, ts, sessionName = '', preview = false, animate = true }: Props = $props();
+  let { text, ts, sessionName = '', preview = false, animate = true, onForward = null }: Props = $props();
 
   const html = $derived(preview ? '' : renderMarkdown(text));
   // Anexos por caminho citado na minha msg (img/video/html/pdf que eu "mandar").
@@ -44,9 +45,25 @@
     msgCopied = true;
     setTimeout(() => (msgCopied = false), 1200);
   }
+
+  // Long-press (500ms, mesmo padrao do SessionCard) -> encaminhar. touchmove cancela (scroll).
+  let pressTimer: ReturnType<typeof setTimeout> | null = null;
+  function pressStart() {
+    if (!onForward) return;
+    pressTimer = setTimeout(() => { pressTimer = null; onForward?.(); }, 500);
+  }
+  function pressCancel() {
+    if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+  }
 </script>
 
-<div class="assistant-msg" class:noanim={!animate}>
+<div
+  class="assistant-msg"
+  class:noanim={!animate}
+  ontouchstart={pressStart}
+  ontouchend={pressCancel}
+  ontouchmove={pressCancel}
+>
   {#if preview}
     <!-- Preview ao vivo: texto PLANO (markdown so no snap final canonico, pra nao piscar **/code-fence
          meio-aberto) + caret. Mesma casca da bolha real -> swap quase invisivel. -->
@@ -60,6 +77,9 @@
       <span class="ts">{formatTime(ts)}</span>
     {/if}
     <button class="msg-copy" class:copied={msgCopied} onclick={copyMessage} aria-label="Copiar mensagem" title="Copiar mensagem"></button>
+    {#if onForward}
+      <button class="msg-fwd" onclick={onForward} aria-label="Encaminhar pra outra sessão" title="Encaminhar pra outra sessão"></button>
+    {/if}
   {/if}
 </div>
 
@@ -85,22 +105,28 @@
   /* Historico remontado (paginacao pra cima / re-ancorar da janela): entra parado. */
   .assistant-msg.noanim { animation: none; }
 
-  /* Copiar-mensagem: so desktop (hover). Aparece no hover da mensagem, canto sup. direito. */
-  .msg-copy {
-    position: absolute; top: 0; right: 0;
-    width: 26px; height: 26px; padding: 0;
+  /* Ações da mensagem (copiar / encaminhar): so desktop (hover). Botões leves, sem caixa —
+     top negativo tira do texto (não cobrem a primeira linha ao aparecer). */
+  .msg-copy, .msg-fwd {
+    position: absolute; top: -24px;
+    width: 24px; height: 24px; padding: 0;
     display: none; align-items: center; justify-content: center;
-    border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
-    background: var(--bg-elevated); color: var(--text-secondary);
-    opacity: 0; transition: opacity 120ms var(--ease-out);
+    border: none; border-radius: var(--radius-sm);
+    background: transparent; color: var(--text-muted);
+    opacity: 0; transition: opacity 120ms var(--ease-out), background 120ms var(--ease-out);
+    cursor: pointer;
   }
+  .msg-copy { right: 0; }
+  .msg-fwd { right: 26px; }
   .msg-copy::before { content: '⧉'; font-size: 14px; line-height: 1; }
+  .msg-fwd::before { content: '↗'; font-size: 14px; line-height: 1; }
   .msg-copy.copied { color: var(--accent); opacity: 1; }
   .msg-copy.copied::before { content: '✓'; }
+
   @media (hover: hover) and (pointer: fine) {
-    .msg-copy { display: flex; }
-    .assistant-msg:hover .msg-copy { opacity: 0.6; }
-    .msg-copy:hover { opacity: 1 !important; }
+    .msg-copy, .msg-fwd { display: flex; }
+    .assistant-msg:hover .msg-copy, .assistant-msg:hover .msg-fwd { opacity: 0.55; }
+    .msg-copy:hover, .msg-fwd:hover { opacity: 1 !important; background: var(--bg-hover); color: var(--text-primary); }
   }
 
   .prose {
