@@ -108,6 +108,44 @@ def test_merged_history_dedup_is_ts_aware(tmp_path):
     assert "queued-e2" in ids          # posterior ao commit -> ainda pendente, nao some
 
 
+def test_merged_history_dedup_ts_race(tmp_path, monkeypatch):
+    # Corrida REAL do envio (regressao de eb0f303): o send_prompt digita o texto + Enter e o Claude
+    # Code grava o prompt no jsonl NA HORA; o append da fila so roda depois (_send_one). Carimbando
+    # o ts DENTRO do append, a entrada nascia ~ms DEPOIS do commit do proprio texto -> o dedup lia
+    # "commit anterior = de outra msg igual" e mantinha a entrada pendente: a msg aparecia DUAS
+    # vezes no historico ate o reconcile (>= 8.5s). A faixa e de MILISSEGUNDOS — o teste irmao
+    # (test_merged_history_dedup_is_ts_aware) usa +-5s e nunca a toca. Aqui o ts vem do _send_one
+    # de verdade, que e onde a ordem send->append vive.
+    import json
+    from datetime import datetime, timezone
+    import app.api as api
+
+    j = tmp_path / "t.jsonl"
+    # 1a linha antiga = inicio da sessao: mantem start_ts no passado pra a poda pre-/clear nao ser
+    # quem remove a entrada (o que deve absorve-la e o dedup, e e isso que este teste mede).
+    j.write_text(json.dumps({"type": "user", "uuid": "u0", "timestamp": "2026-01-01T00:00:00Z",
+                             "message": {"role": "user", "content": "inicio"}}) + "\n",
+                 encoding="utf-8")
+
+    def fake_send_prompt(name, text):
+        # Espelha o Claude Code: o Enter do send_keys ja grava a entrada `user` no transcript.
+        with open(j, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({
+                "type": "user", "uuid": "u1",
+                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "message": {"role": "user", "content": text},
+            }) + "\n")
+        return "sent"
+
+    monkeypatch.setattr(api.terminal, "send_prompt", fake_send_prompt)
+    monkeypatch.setattr(api, "_confirm_and_drain", lambda name: None)  # Timer de 8.5s: fora do escopo
+    api._send_one("s", "JANELA-X")
+
+    hist = pqueue.merged_history("s", str(j))
+    assert [e.text for e in hist] == ["inicio", "JANELA-X"]   # uma bolha so, nao duas
+    assert not any(e.id.startswith("queued-") for e in hist)  # entrada absorvida pelo user_msg real
+
+
 def test_merged_history_ignores_delivered_flag(tmp_path):
     # delivered NAO afeta exibicao: entrada entregue mas ainda nao gravada no transcript continua
     # aparecendo como bubble queued- (o dedup por texto so a remove quando o user_msg real cai).
