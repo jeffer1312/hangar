@@ -383,10 +383,10 @@ export async function sendInput(name: string, text: string): Promise<void> {
 // warning: falha PARCIAL de aviso (algum membro sem o prompt do grupo) — o backend reporta de
 // propósito; descartar isso virava "sucesso" mudo com membro que não sabe que está no grupo.
 export interface PairResult { ok: boolean; warning: string | null }
-export async function pairSession(name: string, peer: string, task = ''): Promise<PairResult> {
+export async function pairSession(name: string, peers: string[], task = ''): Promise<PairResult> {
   return apiFetch<PairResult>(`/api/sessions/${encodeURIComponent(name)}/pair`, {
     method: 'POST',
-    body: JSON.stringify({ peer, task }),
+    body: JSON.stringify({ peers, task }),
   });
 }
 

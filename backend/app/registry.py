@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -28,6 +29,38 @@ _log = logging.getLogger("claude_pocket.registry")
 
 def sanitize_cwd(cwd: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "-", cwd)
+
+
+_pretrust_lock = threading.Lock()
+
+
+def _pretrust_cwd(cwd: str, config_dir: str | None) -> None:
+    """Marca `hasTrustDialogAccepted=True` pra `cwd` no .claude.json (o do config_dir, senão o
+    ~/.claude.json) — pré-aprova o "trust this folder?" que o Claude Code mostra no 1º acesso a uma
+    pasta nova. Read-modify-write atômico (tmp+replace) sob _pretrust_lock: dois create()
+    concorrentes (rodam em threads via to_thread) fariam read-modify-write no MESMO arquivo e
+    last-write-wins perderia uma entrada — mesmo padrão do _append_lock (pqueue) / _LOCK (pair).
+    ensure_ascii=False + indent=2: NÃO reserializa chaves com acento pra \\uXXXX nem colapsa o
+    arquivo pretty-printed do usuário (reescreve o dict inteiro; preserva o formato).
+    Best-effort — qualquer falha só deixa o dialog aparecer, como hoje.
+    JANELA RESIDUAL: o _lock é intra-processo; se o PRÓPRIO Claude Code CLI (processo externo)
+    reescrever o .claude.json entre nosso read e replace, essa escrita dele é perdida (last-write-
+    wins). Janela ~ms, o CLI escreve raro, e o guard 'já confiada -> return' limita a 1x/pasta ->
+    colisão rara e aceita; fechar exigiria flock que o CLI teria de respeitar (não verificável)."""
+    with _pretrust_lock:
+        try:
+            cfg = Path(config_dir or os.environ.get("CLAUDE_CONFIG_DIR") or Path.home()) / ".claude.json"
+            data = json.loads(cfg.read_text(encoding="utf-8")) if cfg.exists() else {}
+            projects = data.setdefault("projects", {})
+            entry = projects.setdefault(cwd, {})
+            if entry.get("hasTrustDialogAccepted") is True:
+                return  # já confiada -> não reescreve o arquivo (evita corrida à toa)
+            entry["hasTrustDialogAccepted"] = True
+            tmp = cfg.with_suffix(".json.cp-tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(cfg)
+        except Exception as e:
+            _log.warning("pretrust falhou pra %s: %r", cwd, e)
 
 
 def _proc_children_map() -> dict[int, list[int]]:
@@ -474,7 +507,9 @@ class SessionRegistry:
             out.append(SessionInfo(name=p["name"], cwd=p["cwd"], jsonl=jsonl, tracked=tracked,
                                    branch=self._branch_of(p["cwd"]),
                                    then_target=link.get("target") if link else None,
-                                   pair_peers=pair.get("peers") if pair else None))
+                                   pair_peers=pair.get("peers") if pair else None,
+                                   pair_gid=pair.get("gid") if pair else None,
+                                   pair_task=pair.get("task") if pair else None))
             sids[p["name"]] = self._repl_sid(p["pid"], children)
         # Guarda de colisao: 2+ sessoes no mesmo jsonl -> so a dona mantem (mata a duplicata/cross-wire).
         self._dedupe_collisions(out, sids)
@@ -488,6 +523,8 @@ class SessionRegistry:
                 branch=self._branch_of(meta.get("cwd")),
                 then_target=(ThenLink(meta["name"]).get() or {}).get("target"),
                 pair_peers=(PairLink(meta["name"]).get() or {}).get("peers"),
+                pair_gid=(PairLink(meta["name"]).get() or {}).get("gid"),
+                pair_task=(PairLink(meta["name"]).get() or {}).get("task"),
             ))
         return out
 
@@ -599,6 +636,10 @@ class SessionRegistry:
             cmd = " ".join(get_adapter(provider).spawn_command(cwd, sid))
         base = (Path(config_dir) / "projects") if config_dir else self.projects_dir
         jsonl = str(base / sanitize_cwd(cwd) / f"{sid}.jsonl")
+        # Pré-confia a pasta no .claude.json: sem isto, uma sessão criada pelo app numa pasta NOVA
+        # nasce presa no "trust this folder?" do Claude Code (invisível/ininteragível pelo chat até
+        # aceitar na TUI). Só é o 1º acesso à pasta — depois o próprio Claude Code grava. Best-effort.
+        _pretrust_cwd(cwd, config_dir)
         if not tmux.new_session(name, cwd, cmd, config_dir):
             raise ValueError("falha ao criar sessao no tmux")
         # Sessao NOVA = sid novo = transcript fresco. A fila duravel e keyed pelo NOME (sobrevive ao

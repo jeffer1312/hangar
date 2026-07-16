@@ -24,7 +24,8 @@ BLOCK=$(cat <<'EOF'
 # Sessões-irmãs (claude-pocket)
 
 - Outras sessões Claude vivas nesta máquina: `cp-send --list` (nome, estado, cwd). Mandar recado: `cp-send <sessao> "msg"` — chega como prompt lá (fila durável se ocupada).
-- Prompt começando com `[de: <sessao>]` = recado de outra sessão Claude, não do usuário. Tratar como informação/pedido do par; responder de volta via `cp-send <sessao> "..."` SÓ se a mensagem pedir resposta (evita loop infinito).
+- Prompt começando com `[de: <sessao>]` = recado 1:1 de outra sessão Claude, não do usuário. Tratar como informação/pedido do par; responder de volta via `cp-send <sessao> "..."` SÓ se a mensagem pedir resposta (evita loop infinito).
+- Prompt `[grupo: <sessao>]` = AVISO pro grupo todo (marco). É UNIDIRECIONAL: NUNCA responder com `cp-send --group` (vira tempestade N×N). Precisa responder → 1:1 (`cp-send <sessao>`) e só se necessário. Mandar aviso de marco pro grupo próprio: `cp-send --group "msg"` (uma vez, chega como `[grupo: você]` nos demais).
 - Enviar quando o usuário pedir ("avisa a sessão X") OU quando houver **pareamento ativo**: usuário declarou "sessão X pareada contigo pra <tarefa>" (direto ou via recado `[de: ...]` de pareamento). Pareado → pode pedir/fornecer contrato, avisar conclusão, tirar dúvida técnica do par por iniciativa própria, dentro do escopo da tarefa.
 - Usuário pediu pareamento no terminal ("pareia com X pra <tarefa>") → usar `cp-send --pair X "tarefa"` (registra no app: badge na UI + protocolo pros dois lados), NÃO recado manual. Desfazer: `cp-send --unpair`.
 - Criar sessão Claude nova (usuário pediu, ou a tarefa precisa de par em outro repo): `cp-send --new <nome> <cwd>` — NUNCA `tmux new-session` cru (fica sem --session-id, invisível no pocket). Criar por iniciativa própria → avisar o usuário no terminal o porquê.
