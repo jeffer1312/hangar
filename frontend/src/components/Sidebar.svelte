@@ -35,8 +35,10 @@
     onSelect: (name: string) => void;
     onCompare: (ids: { serverId: string; name: string }[]) => void;
     onLogout: () => void;
+    boardActive: boolean;      // quadro aberto -> destaca o toggle e recolhe a sidebar pro rail
+    onToggleBoard: () => void;
   }
-  let { currentSession, onSelect, onCompare, onLogout }: Props = $props();
+  let { currentSession, onSelect, onCompare, onLogout, boardActive, onToggleBoard }: Props = $props();
 
   // Grupo generico: por SERVIDOR (hoje) ou por PROJETO (cwd) — mesmo shape nos dois modos. Cada
   // sessao carrega o serverId dela (no modo projeto um grupo pode juntar sessoes de servidores
@@ -48,6 +50,19 @@
   let collapsed = $state(false);   // pin: recolhido persistente (botao) — trilho de iniciais
   let hovering = $state(false);    // hover sobre a sidebar recolhida -> expande temporario
   let filterText = $state('');     // filtro por nome/cwd/servidor (aparece quando a lista fica longa)
+
+  // Quadro aberto -> recolhe pro rail (as colunas do kanban querem a largura); sair restaura o pin
+  // como estava ANTES de entrar. Guarda o valor só na entrada: se o usuario re-expandir a mao dentro
+  // do quadro, nao recolhemos de novo — mas ao sair ainda voltamos ao estado pre-quadro.
+  let preBoardCollapsed: boolean | null = null;
+  $effect(() => {
+    if (boardActive) {
+      if (preBoardCollapsed === null) { preBoardCollapsed = collapsed; collapsed = true; }
+    } else if (preBoardCollapsed !== null) {
+      collapsed = preBoardCollapsed;
+      preBoardCollapsed = null;
+    }
+  });
 
   // Grupos colapsados por id (servidor ou projeto), persistido — MESMA chave do mobile (SessionList)
   // pra o estado ser compartilhado onde faz sentido. Diferente do `collapsed` (pin do rail).
@@ -721,6 +736,17 @@
         </svg>
       </button>
     {/if}
+    <!-- Toggle do quadro (visualização irmã da lista+chat). Fora do {#if expanded} de proposito: no
+         rail recolhido — que e justamente onde a sidebar fica com o quadro aberto — precisa aparecer
+         pra dar a volta. -->
+    <button class="board-btn" class:active={boardActive} onclick={onToggleBoard}
+            title={boardActive ? 'Voltar pra lista' : 'Quadro de sessões'}
+            aria-label="Alternar quadro de sessões" aria-pressed={boardActive}>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/>
+        <rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/>
+      </svg>
+    </button>
     <!-- Kebab "⋯": nav secundária (Buscar/Arquivo/Custos) + agrupamento, docado no header — o twin
          desktop do hamburger do mobile. Abre um popover ancorado (renderizado fora do <aside>). -->
     <button class="kebab-btn" class:active={kebabOpen} onclick={openKebab} aria-haspopup="menu" aria-expanded={kebabOpen} aria-label="Mais opções" title="Buscar, Arquivo, Custos, Agrupar">
@@ -1303,13 +1329,13 @@
   }
   .icon-btn:active, .icon-btn:hover { background: var(--bg-hover); }
   .side-brand { flex: 1; min-width: 0; font-size: var(--text-base); font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  /* Toggle do modo selecao (feature #9), no topo ao lado da marca. */
-  .select-toggle-btn {
+  /* Toggles do header (modo selecao / quadro): mesma caixa de 36px, acesa em accent quando ativa. */
+  .select-toggle-btn, .board-btn {
     flex-shrink: 0; width: 36px; height: 36px;
     border-radius: var(--radius-md); color: var(--text-secondary);
   }
-  .select-toggle-btn:hover { background: var(--bg-hover); }
-  .select-toggle-btn.active { color: var(--accent); background: var(--accent-dim); }
+  .select-toggle-btn:hover, .board-btn:hover { background: var(--bg-hover); }
+  .select-toggle-btn.active, .board-btn.active { color: var(--accent); background: var(--accent-dim); }
 
   /* ── Kebab "⋯" do header + seu popover (nav secundária + agrupamento) ── */
   .kebab-btn {
