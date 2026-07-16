@@ -30,6 +30,16 @@ function claude
 
     set -l id (uuidgen)
 
+    # TMUX herdado pode estar MORTO (ex: kitty single-instance cujo mestre nasceu dentro de um pane
+    # que já fechou -> todo terminal novo herda TMUX/TMUX_PANE stale). Sem esta guarda, o wrapper
+    # achava que "já está em tmux", só injetava o id e o claude abria CRU (invisível no app).
+    if set -q TMUX
+        # list-panes -t <pane>: exit 1 se o pane não existe (display-message devolve 0 até pra pane morto).
+        if not set -q TMUX_PANE; or not tmux list-panes -t "$TMUX_PANE" >/dev/null 2>&1
+            set -e TMUX TMUX_PANE
+        end
+    end
+
     if set -q TMUX; or contains -- -p $argv; or contains -- --print $argv; or not isatty stdin
         COLORTERM=truecolor CLAUDE_CODE_TMUX_TRUECOLOR=1 command claude --session-id $id $argv
         return
