@@ -150,11 +150,17 @@ class PromptQueue:
         )
         tmp.replace(self.path)
 
-    def append(self, text: str, delivered: bool = False) -> dict:
+    def append(self, text: str, delivered: bool = False, ts: float | None = None) -> dict:
         # delivered=False por padrao = enfileirada mas NAO digitada na TUI (o /input passa True quando
         # o send_prompt realmente digitou). So entradas False sao drenadas -> sem isto um upgrade
         # re-enviaria toda entrada legada (= double-send em massa).
-        entry = {"id": uuid.uuid4().hex, "text": text, "ts": time.time(), "delivered": delivered}
+        # ts = QUANDO O USUARIO MANDOU, nao quando este append rodou: quem envia primeiro digita na
+        # TUI (e o Claude Code ja grava o prompt no transcript) e so depois chama este append — o
+        # default time.time() cairia DEPOIS do commit e o dedup ts-aware do merged_history leria o
+        # proprio commit como "anterior, de outra msg igual" -> msg duplicada no historico. Quem tem
+        # send antes do append passa o ts capturado ANTES do send (ver api._send_one).
+        entry = {"id": uuid.uuid4().hex, "text": text,
+                 "ts": time.time() if ts is None else ts, "delivered": delivered}
         # ponytail: lock global serializa o read-modify-write; 2 POSTs /input concorrentes (handlers
         # sync no threadpool) senao liam as mesmas rows e um sobrescrevia o outro (entrada perdida).
         # upgrade: lock per-path se o throughput de uma sessao virar gargalo.
@@ -374,8 +380,11 @@ def merged_history(name: str, jsonl: str, provider: str = "claude") -> list[Chat
         if not text:
             continue
         ts = float(entry.get("ts") or prev_ts)
-        # Absorvida so se o texto commitou DEPOIS de enfileirada (>=: o write real e sempre
-        # posterior ao append da fila). Commit ANTERIOR e de outra msg igual -> esta segue pendente.
+        # Absorvida so se o texto commitou DEPOIS de enfileirada. O ts da entrada e o do INSTANTE DO
+        # ENVIO (carimbado antes do send — ver append/api._send_one), nao o do append; por isso o
+        # write do transcript e sempre >= ele e o commit da propria msg casa. Antes o ts saia do
+        # append, que roda DEPOIS do send: caia ~ms apos o commit e a msg duplicava no historico.
+        # Commit ANTERIOR ao envio e de outra msg igual -> esta segue pendente (ex: 2o "ok").
         if committed_ts.get(text, -1.0) >= ts:
             continue
         # Poda: entrada anterior ao inicio da sessao atual e de uma sessao antiga (ex: pre-/clear, que

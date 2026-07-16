@@ -49,7 +49,7 @@ def test_rejects_wrong_cookie(client):
 # ---------------------------------------------------------------------------
 # Route tests
 # ---------------------------------------------------------------------------
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 from app.models import SessionInfo
 
 
@@ -81,7 +81,9 @@ def test_input_eager_send_marks_delivered(api_client):
         r = api_client.post("/api/sessions/cc/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 200
     sp.assert_called_once_with("cc", "oi")
-    ap.assert_called_once_with("oi", delivered=True)
+    # ts=ANY: o _send_one carimba o instante do ENVIO (capturado antes do send_prompt) — o valor e
+    # relogio, o que importa aqui e o delivered.
+    ap.assert_called_once_with("oi", delivered=True, ts=ANY)
 
 
 def test_input_defer_on_overlay_marks_pending(api_client):
@@ -89,7 +91,7 @@ def test_input_defer_on_overlay_marks_pending(api_client):
          patch("app.pqueue.PromptQueue.append") as ap:
         r = api_client.post("/api/sessions/cc/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 200
-    ap.assert_called_once_with("oi", delivered=False)
+    ap.assert_called_once_with("oi", delivered=False, ts=ANY)
 
 
 def test_input_control_char_400_without_queue(api_client):
@@ -132,7 +134,7 @@ def test_broadcast_reports_per_name_failure_without_aborting_others(api_client):
     results = r.json()["results"]
     assert results["bad"]["ok"] is False
     assert results["ok"]["ok"] is True
-    ap.assert_called_once_with("oi", delivered=True)   # so a sessao "ok" enfileirou
+    ap.assert_called_once_with("oi", delivered=True, ts=ANY)   # so a sessao "ok" enfileirou
 
 
 def test_broadcast_rejects_slash_commands(api_client):
