@@ -54,8 +54,12 @@ from app.models import SessionInfo
 
 
 @pytest.fixture
-def api_client():
+def api_client(monkeypatch):
     settings.auth_token = "secret"
+    # Guarda de existência do /input//broadcast (sessão morta -> 404): os testes de rota fabricam
+    # sessões que não existem no tmux/Codex reais — a guarda não é o que eles testam.
+    import app.api as api_mod
+    monkeypatch.setattr(api_mod, "_session_exists", lambda name: True)
     from app.api import app
     return TestClient(app)
 

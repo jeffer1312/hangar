@@ -866,9 +866,9 @@
                   <!-- Feature #12: indicador do vinculo 'then' armado ("quando terminar -> enviar pra"). -->
                   <span class="chain-chip" title={`Quando terminar, envia pra "${s.then_target}"`}>🔗&nbsp;{s.then_target}</span>
                 {/if}
-                {#if s.paired_with}
-                  <!-- Pareamento ("trabalhando juntas"): mesmo formato do chain-chip. -->
-                  <span class="chain-chip" title={`Pareada com "${s.paired_with}" — trabalham juntas via cp-send`}>🤝&nbsp;{s.paired_with}</span>
+                {#if s.pair_peers?.length}
+                  <!-- Grupo de trabalho: mesmo formato do chain-chip (1 par = nome; N = contagem). -->
+                  <span class="chain-chip" title={`Grupo com ${s.pair_peers.join(', ')} — trabalham juntas via cp-send`}>🤝&nbsp;{s.pair_peers.length === 1 ? s.pair_peers[0] : s.pair_peers.length + 1}</span>
                 {/if}
                 <span
                   class="state-chip"

@@ -12,7 +12,7 @@ from app.config import settings
 from app.models import SessionInfo
 from app.pqueue import PromptQueue
 from app.chain import ThenLink
-from app.pair import PairLink, rename_pair, unpair_both
+from app.pair import PairLink, rename_pair, leave as pair_leave
 from app.adapters.codex import sessions as codex_sessions
 from app.adapters.codex import adapter as codex_adapter
 from app.adapters.codex.appserver import AppServerClient
@@ -474,7 +474,7 @@ class SessionRegistry:
             out.append(SessionInfo(name=p["name"], cwd=p["cwd"], jsonl=jsonl, tracked=tracked,
                                    branch=self._branch_of(p["cwd"]),
                                    then_target=link.get("target") if link else None,
-                                   paired_with=pair.get("peer") if pair else None))
+                                   pair_peers=pair.get("peers") if pair else None))
             sids[p["name"]] = self._repl_sid(p["pid"], children)
         # Guarda de colisao: 2+ sessoes no mesmo jsonl -> so a dona mantem (mata a duplicata/cross-wire).
         self._dedupe_collisions(out, sids)
@@ -487,7 +487,7 @@ class SessionRegistry:
                 provider="codex", tracked=True,
                 branch=self._branch_of(meta.get("cwd")),
                 then_target=(ThenLink(meta["name"]).get() or {}).get("target"),
-                paired_with=(PairLink(meta["name"]).get() or {}).get("peer"),
+                pair_peers=(PairLink(meta["name"]).get() or {}).get("peers"),
             ))
         return out
 
@@ -720,13 +720,13 @@ class SessionRegistry:
 
     @staticmethod
     def _clear_pair(name: str) -> None:
-        # Sessão morta desfaz o pareamento DOS DOIS lados (unpair_both: sob lock): o sidecar do par
-        # apontaria pra um fantasma (badge preso). Best-effort, nunca bloqueia o kill — mas LOGA:
-        # engolir calado deixava o badge-fantasma indiagnosticável.
+        # Sessão morta SAI do grupo (leave: sob lock, atualiza os demais membros): sem isto os
+        # companheiros apontariam pra um fantasma (badge preso). Best-effort, nunca bloqueia o
+        # kill — mas LOGA: engolir calado deixava o badge-fantasma indiagnosticável.
         try:
-            unpair_both(name)
+            pair_leave(name)
         except Exception as e:
-            _log.warning("kill(%s): falha ao limpar pareamento: %r", name, e)
+            _log.warning("kill(%s): falha ao sair do grupo de pareamento: %r", name, e)
 
     # ── Resume de sessao "sem id" ────────────────────────────────────────────────
     # Uma sessao aberta com `claude` cru (sem --session-id) JA tem um transcript <uuid>.jsonl; so nao da

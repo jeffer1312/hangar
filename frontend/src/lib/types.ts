@@ -29,7 +29,7 @@ export interface SessionInfo {
   // ("quando terminar -> enviar pra"), null senao. So o alvo (indicador na lista); o texto do prompt
   // fica no backend, so exposto na hora de setar/limpar.
   then_target?: string | null;
-  paired_with?: string | null;  // pareamento ativo ("trabalhando juntas"): nome da sessão-par
+  pair_peers?: string[] | null; // grupo de trabalho ativo: os OUTROS membros (2 sessões = lista de 1)
 }
 
 // Sessão marcada com o servidor de origem (visão agregada multi-servidor).
