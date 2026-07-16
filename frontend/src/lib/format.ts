@@ -117,6 +117,43 @@ export function effectiveGroupBy(pref: GroupBy, serverCount: number): GroupBy {
   return serverCount >= 2 ? pref : 'project';
 }
 
+// Cluster de pareamento DENTRO de um grupo (servidor/projeto): sessões do mesmo grupo (pair_gid)
+// viram um sub-cluster colapsável; as demais ficam soltas. Devolve LINHAS INTERCALADAS (header do
+// grupo seguido dos seus membros; solo = só a sessão) pra o template consumir num {#each} plano —
+// sem aninhar/extrair o bloco grande da linha. Preserva a ordem: o cluster nasce na posição do 1º
+// membro; os demais são puxados pra junto. N grupos = N clusters. Genérico em T (só exige os campos
+// de pareamento) — serve Sidebar e SessionList.
+export interface PairFields { name: string; pair_gid?: string | null; pair_peers?: string[] | null; pair_task?: string | null; }
+export type PairRow<T> =
+  | { kind: 'header'; gid: string; label: string; count: number }
+  | { kind: 'session'; session: T; gid: string | null };
+
+export function clusterByPair<T extends PairFields>(sessions: T[]): PairRow<T>[] {
+  // Pré-agrupa por gid numa passada (O(n)) — evita o filter-dentro-do-loop O(n²), já que roda
+  // inline no {#each} a cada render.
+  const byGid = new Map<string, T[]>();
+  for (const s of sessions) {
+    if (!s.pair_gid) continue;
+    const arr = byGid.get(s.pair_gid);
+    if (arr) arr.push(s); else byGid.set(s.pair_gid, [s]);
+  }
+  const out: PairRow<T>[] = [];
+  const emitted = new Set<string>();
+  for (const s of sessions) {
+    const gid = s.pair_gid ?? null;
+    if (!gid) { out.push({ kind: 'session', session: s, gid: null }); continue; }
+    if (emitted.has(gid)) continue;               // membro já entrou no cluster do 1º
+    emitted.add(gid);
+    const members = byGid.get(gid)!;
+    // Rótulo: tarefa (ex: ABC-1234) do 1º que tiver, senão os nomes.
+    const task = members.map((m) => m.pair_task).find((t) => t && t.trim());
+    const label = task ? task.trim() : members.map((m) => m.name).join(', ');
+    out.push({ kind: 'header', gid, label, count: members.length });
+    for (const m of members) out.push({ kind: 'session', session: m, gid });
+  }
+  return out;
+}
+
 // Recado de OUTRA sessão Claude (cp-send): "[de: <sessao>] texto" (1:1) ou "[grupo: <sessao>] texto"
 // (aviso pro grupo). Devolve remetente + texto sem o prefixo + scope; null = msg normal do usuário.
 // Só APRESENTAÇÃO: o texto guardado em events/pending fica intacto (dedup do Chat compara o cru).
