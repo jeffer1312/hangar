@@ -1,16 +1,20 @@
 <script lang="ts">
   import Sidebar from './Sidebar.svelte';
   import Chat from '../screens/Chat.svelte';
+  import Board from '../screens/Board.svelte';
+  import { selectServer } from '../lib/auth';
 
   // Shell de DESKTOP (>=820px): sidebar fixa + chat largo. Reusa o componente Chat do mobile
   // sem alteracao; abaixo de 820px o App nem monta isto (fica o fluxo mobile intacto).
   interface Props {
     currentSession: string | null;
+    view: 'chat' | 'board';   // quadro kanban = visualização irmã da lista+chat, mesma sidebar
+    onToggleBoard: () => void;
     onNavigateToChat: (name: string) => void;
     onCompare: (ids: { serverId: string; name: string }[]) => void;
     onLogout: () => void;
   }
-  let { currentSession, onNavigateToChat, onCompare, onLogout }: Props = $props();
+  let { currentSession, view, onToggleBoard, onNavigateToChat, onCompare, onLogout }: Props = $props();
 
   // Split view (pareamento): segundo Chat lado a lado — assiste a conversa das duas sessões sem
   // alternar. Aberto pelo PairSheet ("Abrir lado a lado"); fecha no X ou ao trocar a sessão principal.
@@ -22,10 +26,14 @@
 </script>
 
 <div class="desktop-shell">
-  <Sidebar {currentSession} onSelect={onNavigateToChat} {onCompare} {onLogout} />
+  <Sidebar {currentSession} onSelect={onNavigateToChat} {onCompare} {onLogout}
+           boardActive={view === 'board'} {onToggleBoard} />
 
   <main class="desktop-main" class:split={!!splitSession}>
-    {#if currentSession && currentSession !== 'null' && currentSession !== 'undefined'}
+    {#if view === 'board'}
+      <!-- Abrir do quadro troca de servidor antes de navegar (a sessão pode ser de outro server). -->
+      <Board onOpenSession={(name, serverId) => { selectServer(serverId); onNavigateToChat(name); }} />
+    {:else if currentSession && currentSession !== 'null' && currentSession !== 'undefined'}
       {#key currentSession}
         <div class="pane">
           <Chat

@@ -18,6 +18,7 @@
     | { name: 'costs' }
     | { name: 'archive'; deepLink?: { serverId: string; project: string; sessionId: string } }
     | { name: 'chat'; sessionName: string }
+    | { name: 'board' }
     | { name: 'compare'; ids: CompareId[] };
 
   function parseHash(hash: string): Route {
@@ -54,6 +55,9 @@
       };
     }
     if (path === '/archive') return { name: 'archive' };
+    // Quadro kanban (visualização irmã da lista+chat) — só existe no desktop; no mobile o render
+    // trata board como a lista normal.
+    if (path === '/board') return { name: 'board' };
     return { name: 'sessions' };
   }
 
@@ -244,13 +248,17 @@
       <Compare ids={route.ids} onOpenSession={openCompareSession} onBack={navigateToSessions} />
     {/key}
   {:else if isDesktop}
+    <!-- Desktop cobre sessions/chat/board (as demais rotas já saíram nos branches acima). -->
     <DesktopShell
       currentSession={route.name === 'chat' ? route.sessionName : null}
+      view={route.name === 'board' ? 'board' : 'chat'}
+      onToggleBoard={() => navigateTo(route.name === 'board' ? '#/' : '#/board')}
       onNavigateToChat={navigateToChat}
       onCompare={navigateToCompare}
       {onLogout}
     />
-  {:else if route.name === 'sessions'}
+  {:else if route.name === 'sessions' || route.name === 'board'}
+    <!-- Quadro é só desktop: #/board no mobile cai na lista normal (em vez de tela em branco). -->
     <SessionList
       onNavigateToChat={navigateToChat}
       onCompare={navigateToCompare}
