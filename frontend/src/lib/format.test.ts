@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, fmtWhen, groupSelectedByServer, initials, nextAwaiting,
   projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent, resetsIn,
+  clusterByPair,
 } from './format';
 import type { ChatEvent } from './types';
 
@@ -303,5 +304,37 @@ describe('fmtWhen', () => {
     const expected = new Date(ts * 1000).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
     expect(fmtWhen(ts)).toBe(expected);
     expect(fmtWhen(ts)).not.toBe('');
+  });
+});
+
+describe('clusterByPair', () => {
+  const S = (name: string, gid: string | null = null, task: string | null = null) =>
+    ({ name, pair_gid: gid, pair_task: task });
+
+  it('sessão sem grupo vira linha solo', () => {
+    const rows = clusterByPair([S('a'), S('b')]);
+    expect(rows).toEqual([
+      { kind: 'session', session: S('a'), gid: null },
+      { kind: 'session', session: S('b'), gid: null },
+    ]);
+  });
+
+  it('membros do mesmo gid viram header + linhas, na posição do 1º', () => {
+    const rows = clusterByPair([S('a', 'g1', 'TICKET-0000'), S('solo'), S('b', 'g1')]);
+    expect(rows[0]).toEqual({ kind: 'header', gid: 'g1', label: 'TICKET-0000', count: 2 });
+    expect(rows[1]).toMatchObject({ kind: 'session', gid: 'g1' });
+    expect(rows[2]).toMatchObject({ kind: 'session', gid: 'g1' });
+    expect(rows[3]).toEqual({ kind: 'session', session: S('solo'), gid: null }); // solo depois
+  });
+
+  it('N grupos = N clusters distintos', () => {
+    const rows = clusterByPair([S('a', 'g1'), S('c', 'g2'), S('b', 'g1'), S('d', 'g2')]);
+    const headers = rows.filter((r) => r.kind === 'header');
+    expect(headers.map((h: any) => h.gid)).toEqual(['g1', 'g2']);
+  });
+
+  it('label cai nos nomes quando não há task', () => {
+    const rows = clusterByPair([S('front', 'g1'), S('back', 'g1')]);
+    expect((rows[0] as any).label).toBe('front, back');
   });
 });

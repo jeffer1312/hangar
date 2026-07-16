@@ -9,7 +9,7 @@
   import AccountMenu from './AccountMenu.svelte';
   import SessionSwitcherSheet from './SessionSwitcherSheet.svelte';
   import type { SessionInfo, State, AggSession, ResumeCandidate } from '../lib/types';
-  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, type GroupBy } from '../lib/format';
+  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, clusterByPair, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import type { Server } from '../lib/auth';
   import Lottie from './Lottie.svelte';
@@ -60,7 +60,9 @@
     const next = new Set(collapsedGroups);
     if (next.has(id)) next.delete(id); else next.add(id);
     collapsedGroups = next;
-    try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next])); } catch { /* quota/priv mode */ }
+    // Persiste só o colapso de servidor/projeto; o de CLUSTER de pareamento (chave 'pair:<gid>') é
+    // efêmero — o gid é regenerado a cada pareamento, então salvar acumularia lixo morto pra sempre.
+    try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next].filter((k) => !k.startsWith('pair:')))); } catch { /* quota/priv mode */ }
   }
 
   // Toggle "Servidor | Projeto" (feature #3), persistido — mesmo padrao de cp_sidebar_w. Guarda a
@@ -792,10 +794,22 @@
         </div>
       {/if}
       {#if !expanded || !collapsedGroups.has(g.id)}
-      {#each g.sessions as s (s.serverId + '::' + s.name)}
+      {#each clusterByPair(g.sessions) as item (item.kind === 'header' ? `ph:${item.gid}` : `${item.session.serverId}::${item.session.name}`)}
+        {#if item.kind === 'header'}
+          {#if expanded}
+            <!-- Cluster de pareamento (Opção C): sub-header colapsável do grupo, dentro do servidor. -->
+            <button class="pair-head" onclick={() => toggleGroup(`pair:${item.gid}`)}
+                    aria-expanded={!collapsedGroups.has(`pair:${item.gid}`)} title={`Grupo pareado: ${item.label}`}>
+              <span class="grp-chevron" class:collapsed={collapsedGroups.has(`pair:${item.gid}`)} aria-hidden="true">▾</span>
+              <span class="pair-head-label">🤝&nbsp;{item.label}</span>
+              <span class="grp-count">{item.count}</span>
+            </button>
+          {/if}
+        {:else if !item.gid || !collapsedGroups.has(`pair:${item.gid}`)}
+        {@const s = item.session}
         {@const rowKey = `${s.serverId}::${s.name}`}
         {@const selKey = `${s.serverId}:${s.name}`}
-        <div class="sess-row" class:active={s.serverId === activeId && s.name === currentSession}>
+        <div class="sess-row" class:active={s.serverId === activeId && s.name === currentSession} class:pair-member={!!item.gid}>
           {#if editing === rowKey}
             <input
               class="sess-edit"
@@ -911,6 +925,7 @@
             {/if}
           {/if}
         </div>
+        {/if}
       {/each}
       {/if}
     {/each}
@@ -1387,6 +1402,20 @@
     text-transform: uppercase; letter-spacing: 0.04em; border-radius: var(--radius-sm);
   }
   @media (hover: hover) { .grp-head:hover { color: var(--text-secondary); } }
+
+  /* Sub-header do cluster de pareamento (Opção C): recuado sob o servidor, cor accent, colapsável. */
+  .pair-head {
+    display: flex; align-items: center; gap: var(--space-2);
+    width: 100%; text-align: left;
+    padding: 4px var(--space-2) 4px var(--space-4);
+    background: none; border: none; cursor: pointer;
+    font-size: var(--text-xs); font-weight: 600; color: var(--accent);
+    border-radius: var(--radius-sm);
+  }
+  .pair-head-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (hover: hover) { .pair-head:hover { background: var(--bg-hover); } }
+  /* Linha de MEMBRO do cluster: faixa accent na borda esquerda liga as sessões do grupo. */
+  .sess-row.pair-member { border-left: 2px solid var(--accent-dim); margin-left: var(--space-2); }
   .grp-chevron {
     flex-shrink: 0; font-size: 9px; color: var(--text-muted);
     transition: transform 160ms var(--ease-out);

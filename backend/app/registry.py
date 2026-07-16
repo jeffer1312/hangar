@@ -507,7 +507,9 @@ class SessionRegistry:
             out.append(SessionInfo(name=p["name"], cwd=p["cwd"], jsonl=jsonl, tracked=tracked,
                                    branch=self._branch_of(p["cwd"]),
                                    then_target=link.get("target") if link else None,
-                                   pair_peers=pair.get("peers") if pair else None))
+                                   pair_peers=pair.get("peers") if pair else None,
+                                   pair_gid=pair.get("gid") if pair else None,
+                                   pair_task=pair.get("task") if pair else None))
             sids[p["name"]] = self._repl_sid(p["pid"], children)
         # Guarda de colisao: 2+ sessoes no mesmo jsonl -> so a dona mantem (mata a duplicata/cross-wire).
         self._dedupe_collisions(out, sids)
@@ -521,6 +523,8 @@ class SessionRegistry:
                 branch=self._branch_of(meta.get("cwd")),
                 then_target=(ThenLink(meta["name"]).get() or {}).get("target"),
                 pair_peers=(PairLink(meta["name"]).get() or {}).get("peers"),
+                pair_gid=(PairLink(meta["name"]).get() or {}).get("gid"),
+                pair_task=(PairLink(meta["name"]).get() or {}).get("task"),
             ))
         return out
 
