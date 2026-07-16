@@ -816,7 +816,8 @@
       {#each g.sessions as s (s.serverId + '::' + s.name)}
         {@const rowKey = `${s.serverId}::${s.name}`}
         {@const selKey = `${s.serverId}:${s.name}`}
-        <div class="sess-row" class:active={s.serverId === activeId && s.name === currentSession}>
+        <div class="sess-row" class:active={s.serverId === activeId && s.name === currentSession}
+             class:awaiting={s.state === 'awaiting_input'}>
           {#if editing === rowKey}
             <input
               class="sess-edit"
@@ -1441,6 +1442,19 @@
      o 2º o clique -> precisava de 2 toques pra abrir a sessão. hover:hover isola isso. */
   @media (hover: hover) { .sess-row:hover { background: var(--bg-hover); } }
   .sess-row.active { background: var(--bg-elevated); }
+  /* Sessão aguardando resposta: realce âmbar — o olho acha sem ler chip por chip. Realce é EXCEÇÃO
+     (só awaiting): a barra carrega o sinal e o tint fica no mínimo, pra não virar fundo colorido.
+     Só na sidebar EXPANDIDA: no rail de 56px a barra descentralizaria as iniciais (que já vêm
+     tingidas pelo estado, tornando o realce redundante lá). A borda transparente na base — e não só
+     na .awaiting — é o que impede a row de pular 3px ao entrar/sair de awaiting. */
+  .sidebar:not(.collapsed) .sess-row { border-left: 3px solid transparent; }
+  .sidebar:not(.collapsed) .sess-row.awaiting {
+    border-left-color: var(--warning);
+    background: color-mix(in srgb, var(--warning) 7%, transparent);
+  }
+  @media (hover: hover) {
+    .sidebar:not(.collapsed) .sess-row.awaiting:hover { background: color-mix(in srgb, var(--warning) 12%, transparent); }
+  }
   .sess-main {
     flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-2); min-height: 46px;
     padding: 0 var(--space-2); text-align: left; justify-content: flex-start; color: var(--text-secondary);
