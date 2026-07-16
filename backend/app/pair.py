@@ -101,33 +101,37 @@ def restore(snap: dict[str, dict | None]) -> None:
         _restore_locked(snap)
 
 
-def join_with_snapshot(a: str, b: str, task: str = "") -> tuple[list[str], dict[str, dict | None]]:
-    """Une os grupos de `a` e `b` num só (2 sessões soltas = grupo novo de 2) e devolve
-    (membros finais, snapshot pré-join pra rollback). snapshot+join na MESMA seção crítica:
-    em seções separadas, um join concorrente na janela entre elas entrava no grupo sem entrar
-    no snapshot — e o restore() de um rollback nunca o reverteria (grupo fantasma parcial).
+def join_group(name: str, others: list[str], task: str = "") -> tuple[list[str], dict[str, dict | None]]:
+    """Une os grupos de `name` e de CADA sessão em `others` num só (N sessões soltas = grupo novo)
+    e devolve (membros finais, snapshot pré-join pra rollback). snapshot+join na MESMA seção
+    crítica: em seções separadas, um join concorrente na janela entre elas entrava no grupo sem
+    entrar no snapshot — e o restore() de um rollback nunca o reverteria (grupo fantasma parcial).
 
-    task informada substitui a anterior; vazia herda a existente. gid: mantém o do grupo de `a`
-    (senão o de `b`, senão cria) — estável pro arquivo de contrato. Merge de dois grupos com
-    contratos distintos: o conteúdo do contrato do lado `b` é ANEXADO ao sobrevivente (nenhum
-    combinado se perde órfão no disco)."""
+    task informada substitui a anterior; vazia herda a primeira existente. gid: mantém o primeiro
+    grupo existente (estável pro arquivo de contrato); contratos dos grupos absorvidos são
+    ANEXADOS ao sobrevivente (nenhum combinado se perde órfão no disco). Escrita parcial (ex:
+    disco cheio no 4º de 5 sidecars) restaura o snapshot e propaga — nunca grupo assimétrico."""
     with _LOCK:
-        ma, ta, ga = _members_of(a)
-        mb, tb, gb = _members_of(b)
-        members = list(dict.fromkeys([*ma, *mb]))  # união preservando ordem
+        all_names = list(dict.fromkeys([name, *others]))
+        infos = [_members_of(n) for n in all_names]
+        members = list(dict.fromkeys([m for ms, _, _ in infos for m in ms]))  # união, ordem estável
         snap = {m: PairLink(m).get() for m in members}
-        final_task = task.strip() or ta or tb
-        gid = ga or gb or uuid.uuid4().hex[:8]
-        if ga and gb and ga != gb:
-            _merge_contract(loser_gid=gb, survivor_gid=ga)
+        final_task = task.strip() or next((t for _, t, _ in infos if t), "")
+        gids = list(dict.fromkeys([g for _, _, g in infos if g]))
+        gid = gids[0] if gids else uuid.uuid4().hex[:8]
+        for loser in gids[1:]:
+            _merge_contract(loser_gid=loser, survivor_gid=gid)
         try:
             _write_group(members, final_task, gid)
         except OSError:
-            # Escrita parcial (ex: disco cheio no 4º de 5 sidecars) deixaria o grupo ASSIMÉTRICO
-            # e persistente. Restaura tudo do snapshot (mesma seção crítica) e propaga o erro.
             _restore_locked(snap)
             raise
         return members, snap
+
+
+def join_with_snapshot(a: str, b: str, task: str = "") -> tuple[list[str], dict[str, dict | None]]:
+    """Atalho de join_group pra um par (compat com callers/testes do modelo 2-a-2)."""
+    return join_group(a, [b], task)
 
 
 def _merge_contract(loser_gid: str, survivor_gid: str) -> None:

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { isAuthenticated, setServers, listServers, mergeServers, onServersChanged, clearCredentials, selectServer } from './lib/auth';
+  import { isAuthenticated, setServers, listServers, mergeServers, onServersChanged, clearCredentials, selectServer, getActiveId } from './lib/auth';
   import { getVault, decryptList, encryptList, putVault, logout as syncLogout, syncStatus, stashKey, loadKey, clearKey } from './lib/sync';
   import { encodeCompareIds, parseCompareIds, type CompareId } from './lib/format';
   import Login from './screens/Login.svelte';
@@ -17,21 +17,28 @@
     | { name: 'sessions' }
     | { name: 'costs' }
     | { name: 'archive'; deepLink?: { serverId: string; project: string; sessionId: string } }
-    | { name: 'chat'; sessionName: string }
+    | { name: 'chat'; sessionName: string; serverId: string | null }
     | { name: 'compare'; ids: CompareId[] };
 
   function parseHash(hash: string): Route {
     const path = hash.replace(/^#/, '');
-    const chatMatch = path.match(/^\/chat\/(.+)$/);
-    if (chatMatch) {
-      const sessionName = decodeURIComponent(chatMatch[1]);
+    // Rota de chat COM servidor: #/chat/<serverId>/<nome>. Sessões homônimas em servidores
+    // diferentes precisam de hashes distintos — só o nome fazia o clique "não trocar" (hash igual
+    // não dispara hashchange) e pior: o composer já falava com o servidor novo enquanto a tela
+    // mostrava o transcript do antigo (cross-wire). Forma legada #/chat/<nome> segue aceita
+    // (serverId null = servidor ativo).
+    const chatServerMatch = path.match(/^\/chat\/([^/]+)\/(.+)$/);
+    const chatMatch = chatServerMatch ? null : path.match(/^\/chat\/(.+)$/);
+    if (chatServerMatch || chatMatch) {
+      const serverId = chatServerMatch ? decodeURIComponent(chatServerMatch[1]) : null;
+      const sessionName = decodeURIComponent(chatServerMatch ? chatServerMatch[2] : chatMatch![1]);
       // Auto-cura: um hash #/chat/undefined (ou vazio) preso na URL fazia o Chat montar com
       // sessionName "undefined" -> SSE em /sessions/undefined/events (404 em loop eterno).
       // Trata como invalido e cai na lista, em vez de prender o usuario numa sessao fantasma.
       // Barra "undefined" E "null" (string): ambos viravam #/chat/null -> currentSession="null"
       // (truthy) -> Chat monta -> openEventStream("null") -> GET /api/sessions/null/events 404 em loop.
       if (sessionName && sessionName !== 'undefined' && sessionName !== 'null') {
-        return { name: 'chat', sessionName };
+        return { name: 'chat', sessionName, serverId };
       }
     }
     // Grade de comparação (feature #11): #/compare/<ids codificados>, ver encodeCompareIds/
@@ -64,8 +71,15 @@
     const params = new URLSearchParams(window.location.search);
     const server = params.get('server');
     const session = params.get('session');
-    if (server) selectServer(server); // no-op se o id nao existir na lista local
-    if (session) window.location.hash = '#/chat/' + encodeURIComponent(session);
+    // Servidor do push desconhecido localmente (re-pareado com id novo, storage limpo, push
+    // antigo)? NÃO navega pro chat — montaria contra o servidor ativo errado (cross-wire calado
+    // se houver sessão homônima). Cai na lista, que é sempre segura.
+    const serverOk = server ? selectServer(server) : true;
+    if (session && serverOk) {
+      window.location.hash = '#/chat/'
+        + (server ? encodeURIComponent(server) + '/' : '')
+        + encodeURIComponent(session);
+    }
   })();
 
   let currentHash = $state(window.location.hash || '#/');
@@ -124,6 +138,16 @@
     return () => window.removeEventListener('hashchange', onHashChange);
   });
 
+  // Rota manda no servidor ativo: URL colada/back-button com #/chat/<server>/<nome> ativa o
+  // servidor certo mesmo sem passar por um clique (que já chama selectServer antes de navegar).
+  // Servidor DESCONHECIDO (link de outra máquina, id re-pareado) -> volta pra lista em vez de
+  // montar o chat contra o servidor ativo errado (cross-wire calado com sessão homônima).
+  $effect(() => {
+    if (route.name === 'chat' && route.serverId && route.serverId !== getActiveId()) {
+      if (!selectServer(route.serverId)) navigateTo('#/');
+    }
+  });
+
   function navigateTo(hash: string) {
     window.location.hash = hash;
   }
@@ -134,7 +158,11 @@
       navigateTo('#/');
       return;
     }
-    navigateTo('#/chat/' + encodeURIComponent(name));
+    // O servidor vai NO hash: todos os pontos de entrada chamam selectServer() antes de navegar,
+    // então o ativo aqui é o dono da sessão. Sessões homônimas em servidores diferentes ganham
+    // hashes distintos -> hashchange dispara e o {#key} remonta o Chat (SSE reconecta no certo).
+    const sid = getActiveId();
+    navigateTo('#/chat/' + (sid ? encodeURIComponent(sid) + '/' : '') + encodeURIComponent(name));
   }
 
   function navigateToSessions() {
@@ -246,6 +274,7 @@
   {:else if isDesktop}
     <DesktopShell
       currentSession={route.name === 'chat' ? route.sessionName : null}
+      currentKey={route.name === 'chat' ? (route.serverId ?? '') + '::' + route.sessionName : null}
       onNavigateToChat={navigateToChat}
       onCompare={navigateToCompare}
       {onLogout}
@@ -257,8 +286,9 @@
       {onLogout}
     />
   {:else if route.name === 'chat'}
-    <!-- Remonta ao trocar de sessao (switcher): re-roda loadHistory + reconecta o SSE. -->
-    {#key route.sessionName}
+    <!-- Remonta ao trocar de sessao (switcher): re-roda loadHistory + reconecta o SSE.
+         Key inclui o SERVIDOR: homônimas em servidores diferentes precisam remontar. -->
+    {#key (route.serverId ?? '') + '::' + route.sessionName}
       <Chat
         sessionName={route.sessionName}
         onBack={navigateToSessions}
