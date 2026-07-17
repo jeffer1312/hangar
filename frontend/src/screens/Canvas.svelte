@@ -21,6 +21,19 @@
   const offline = $derived(sessionsStore.byServer.filter((b) => b.error).map((b) => b.server.label));
   const rowKey = (r: BoardRow) => `${r.serverId}::${r.name}`;
 
+  // Migração one-shot da VIEW: os formatos de cp_canvas_hidden/cp_canvas_collapsed mudaram
+  // (chave de grupo ganhou escopo de servidor) e marca órfã do formato antigo escondia cards sem
+  // nenhuma UI explicando (o "sumiu tudo" de 2026-07-17 — só resolvia limpando o storage na mão).
+  // Versão < atual -> descarta SÓ as marcas de exibição; layout de posições fica.
+  const VIEW_VERSION = 2;
+  try {
+    if (Number(localStorage.getItem('cp_canvas_v') ?? '1') < VIEW_VERSION) {
+      localStorage.removeItem('cp_canvas_hidden');
+      localStorage.removeItem('cp_canvas_collapsed');
+      localStorage.setItem('cp_canvas_v', String(VIEW_VERSION));
+    }
+  } catch { /* priv mode: sem storage, sem marca pra migrar */ }
+
   // ── Ocultar/desocultar cards (persistido): chave serverId::name, mesmo esquema do layout.
   // Sessão morta mantém a marca (se ressuscitar, volta oculta como estava) — barato, sem poda. ──
   const HIDDEN_KEY = 'cp_canvas_hidden';

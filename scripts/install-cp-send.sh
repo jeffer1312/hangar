@@ -30,6 +30,7 @@ BLOCK=$(cat <<'EOF'
 - Usuário pediu pareamento no terminal ("pareia com X pra <tarefa>") → usar `cp-send --pair X "tarefa"` (registra no app: badge na UI + protocolo pros dois lados), NÃO recado manual. Desfazer: `cp-send --unpair`.
 - Criar sessão Claude nova (usuário pediu, ou a tarefa precisa de par em outro repo): `cp-send --new <nome> <cwd>` — NUNCA `tmux new-session` cru (fica sem --session-id, invisível no pocket). Criar por iniciativa própria → avisar o usuário no terminal o porquê.
 - Pareamento NÃO é carta branca: cada sessão mexe só no próprio repo; commit/push/risco seguem as regras normais com o usuário; decisão de rumo/escopo → perguntar ao usuário, não ao par. Pareamento acaba quando o usuário disser ou a tarefa fechar.
+- Ao entrar em pareamento/grupo de uma PM: verificar `git branch --show-current` no próprio repo e alinhar pra branch da PM (fetch+checkout) ANTES de trabalhar; re-verificar após restart/resume. Exceção única: usuário pedir explicitamente outra branch. Repo com checkout DUPLICADO na máquina → alertar o usuário e perguntar qual é o canônico (sessão ressuscitada em checkout errado já perdeu rastreabilidade de commits de PM).
 - Recado de pareamento recebido → confirmar de volta via cp-send e avisar o usuário no próprio terminal.
 <!-- claude-pocket:sessoes-irmas:end -->
 EOF

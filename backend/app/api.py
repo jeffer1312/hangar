@@ -862,6 +862,10 @@ def _group_text(me: str, others: list[str], task: str) -> str:
         f"grupo é unidirecional; se precisar responder, faça 1:1 (cp-send <membro>) e só se necessário. "
         f"Contrato/decisões que o grupo precisa consultar: registrar no arquivo compartilhado "
         f"{contract_path_for(me)} (markdown; criar se não existir, manter curto e atual). "
+        f"BRANCH: antes de trabalhar, rode git branch --show-current no SEU repo e alinhe pra "
+        f"branch da PM da tarefa (fetch+checkout) — re-verifique após restart/resume da sessão. "
+        f"Exceção única: o usuário pedir explicitamente outra branch. Checkout DUPLICADO do repo "
+        f"na máquina → alerte o usuário e pergunte qual é o canônico antes de mexer. "
         f"Commit/push e decisões de rumo continuam com o usuário. Confirme em uma linha."
     )
 
