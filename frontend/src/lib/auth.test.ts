@@ -8,7 +8,7 @@ const store = new Map<string, string>();
   setItem: (k: string, v: string) => store.set(k, String(v)),
   removeItem: (k: string) => store.delete(k),
 };
-const { mergeServers, parseServerPairing } = await import('./auth');
+const { mergeServers, parseServerPairing, onServersChanged, removeServer } = await import('./auth');
 
 const S = (id: string, baseUrl: string, token = 't') => ({ id, label: id, baseUrl, token });
 
@@ -68,5 +68,53 @@ describe('parseServerPairing', () => {
   it('vazio -> null', () => {
     expect(parseServerPairing('')).toBeNull();
     expect(parseServerPairing('   ')).toBeNull();
+  });
+});
+
+// notifyChanged nao e exportado: o gatilho publico mais barato e removeServer (unico mutador que
+// notifica sem tocar cookie/crypto — o id fantasma nao casa com o ACTIVE_KEY, entao pula o syncCookie).
+describe('onServersChanged / notifyChanged', () => {
+  const fire = () => removeServer('ghost');
+
+  it('multi-listener: TODOS os inscritos sao chamados', () => {
+    // Era slot unico antes: o 2o consumidor clobberava o 1o calado.
+    const calls: string[] = [];
+    const un1 = onServersChanged(() => calls.push('a'));
+    const un2 = onServersChanged(() => calls.push('b'));
+    fire();
+    expect(calls).toEqual(['a', 'b']);
+    un1(); un2();
+  });
+
+  it('unsubscribe: o removido nao e mais chamado, o outro continua', () => {
+    const calls: string[] = [];
+    const un1 = onServersChanged(() => calls.push('a'));
+    const un2 = onServersChanged(() => calls.push('b'));
+    un1();
+    fire();
+    expect(calls).toEqual(['b']);
+    un2();
+  });
+
+  it('unsubscribe DURANTE o notify nao quebra a iteracao', () => {
+    // Por isso o loop itera uma copia do Set: mexer no Set original durante a iteracao pularia o 'b'.
+    const calls: string[] = [];
+    const un1 = onServersChanged(() => { calls.push('a'); un1(); un2(); });
+    const un2 = onServersChanged(() => calls.push('b'));
+    fire();
+    expect(calls).toEqual(['a', 'b']);
+    fire();
+    expect(calls).toEqual(['a', 'b']);   // ambos saidos: 2o disparo nao chama ninguem
+  });
+
+  it('um listener que LANCA nao impede o seguinte', () => {
+    // O do Board faz `new EventSource(url)` (lanca SyntaxError com baseUrl malformado do vault) e
+    // matava CALADO o push do vault do App — a ordem e de insercao, entao a vitima dependia de timing.
+    const calls: string[] = [];
+    const un1 = onServersChanged(() => { throw new Error('EventSource explodiu'); });
+    const un2 = onServersChanged(() => calls.push('sobrevivi'));
+    expect(() => fire()).not.toThrow();
+    expect(calls).toEqual(['sobrevivi']);
+    un1(); un2();
   });
 });
