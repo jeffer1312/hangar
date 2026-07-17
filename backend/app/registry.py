@@ -263,6 +263,9 @@ class SessionRegistry:
     # Statusline por sessao: name -> (monotonic da captura, linha crua ou None). De classe
     # (compartilhado entre api.registry e as instancias do sse) — uma captura serve todos.
     _status_cache: dict[str, tuple[float, Optional[str]]] = {}
+    # Texto do spinner ("Hyperspacing… (1m51s · ↓2.1k tokens)") extraido da MESMA captura do sweep:
+    # o fast-path de marcador deixa label=None e o card nunca mostrava a barrinha de "trabalhando".
+    _label_cache: dict[str, Optional[str]] = {}
 
     def __init__(self, projects_dir: Path | None = None):
         self.projects_dir = Path(projects_dir or settings.projects_dir)
@@ -450,6 +453,7 @@ class SessionRegistry:
         # Nome pode ser reusado por outra sessao: sem isto a nova herdaria a statusline da morta
         # por ate _STATUS_TTL (e o dict cresceria sem poda a cada create/kill).
         self._status_cache.pop(name, None)
+        self._label_cache.pop(name, None)
 
     def _repl_sid(self, pid, children: Optional[dict[int, list[int]]] = None) -> Optional[str]:
         # --session-id do REPL principal da sessao (pula daemon/agent). Identidade do DONO de um
@@ -577,6 +581,11 @@ class SessionRegistry:
             if marker and marker[0] != "awaiting_input":
                 info.state = marker[0]
                 info.last_activity = _jsonl_mtime(info.jsonl)
+                if marker[0] != "working":
+                    # Turno acabou (hook e autoritativo): o spinner cacheado e do PASSADO — sem
+                    # isto o proximo working herdava a barrinha do turno anterior como se fosse
+                    # ao vivo (label fantasma).
+                    self._label_cache.pop(info.name, None)
             else:
                 pending.append(info)
         if pending:
@@ -601,8 +610,9 @@ class SessionRegistry:
                 # (marker path fica com o default False/None, igual a label/question/options).
                 info.limit_reset = rate_limit_reset(frame)
                 info.limited = info.limit_reset is not None
-                # Statusline de graca: o frame ja foi capturado pra classificar.
+                # Statusline + label de graca: o frame ja foi capturado pra classificar.
                 self._status_cache[info.name] = (time.monotonic(), _pane_status(frame))
+                self._label_cache[info.name] = c[1]
         # Statusline pros cards (modelo/contexto/⚡5h/📅7d): cache com TTL — capturar o pane de TODAS
         # por tick seria a tempestade de forks que o fast-path de marcador evita. No maximo
         # _STATUS_BUDGET capturas por chamada, das entradas mais VELHAS do cache; quem foi raspada
@@ -620,6 +630,17 @@ class SessionRegistry:
             try:
                 pane = await asyncio.to_thread(tmux.capture_pane, info.name)
                 self._status_cache[info.name] = (time.monotonic(), _pane_status(pane))
+                # Spinner da MESMA captura (classify e puro/regex): e o que devolve a barrinha de
+                # "trabalhando" pro card quando o estado veio do marcador (que nao traz label).
+                # SO grava se a captura PARECE working — captura unica nao distingue spinner vivo
+                # de marcador congelado no scrollback (o caminho pending faz captura dupla pra
+                # isso; aqui dobrar o fork nao vale — pane nao-working derruba o label e o proximo
+                # sweep re-avalia).
+                st_c, lbl_c = classify(pane)[:2]
+                if st_c == "working":
+                    self._label_cache[info.name] = lbl_c
+                else:
+                    self._label_cache.pop(info.name, None)
             except Exception as e:
                 # tmux engasgado (transiente): carimba o relogio (senao o nome quebrado monopolizaria
                 # o budget a cada chamada) mas PRESERVA a ultima statusline boa — apagar aqui piscava
@@ -629,9 +650,17 @@ class SessionRegistry:
                 _log.debug("statusline capture falhou pra %s: %r", info.name, e)
                 prev = self._status_cache.get(info.name, (0.0, None))[1]
                 self._status_cache[info.name] = (time.monotonic(), prev)
+                # Label NAO segue o preserve do status_line: statusline velha ainda e verdadeira
+                # (modelo/custo mudam devagar); spinner velho vira fantasma — melhor sem barrinha.
+                self._label_cache.pop(info.name, None)
         for info in infos:
             if getattr(info, "provider", "claude") != "codex":
                 info.status_line = self._status_cache.get(info.name, (0.0, None))[1]
+                # So preenche o buraco do fast-path: quem foi classificada pelo pane ja tem label
+                # fresco (e idle de verdade fica sem label — o cache so vale se ainda working).
+                # getattr: fakes de teste nao tem o campo.
+                if info.state == "working" and getattr(info, "label", None) is None:
+                    info.label = self._label_cache.get(info.name)
         # Travada (feature #7): "working" ha mais de CP_STALL_SECONDS sem o transcript avancar. So o
         # bool derivado pra UI/sig — o push (1x, com dedupe) e responsabilidade do stall_watch, nao daqui.
         now = time.time()
@@ -767,6 +796,8 @@ class SessionRegistry:
         st = self._status_cache.pop(old, None)   # statusline move junto (mesma sessao, so outro nome)
         if st is not None:
             self._status_cache[new] = st
+        if old in self._label_cache:
+            self._label_cache[new] = self._label_cache.pop(old)
         # A fila duravel tambem e keyed por NOME -> move junto, senao a sessao renomeada perde as
         # entradas nao-drenadas e elas ficam orfas no nome velho (fantasma se reusarem `old`).
         PromptQueue(old).rename(new)
