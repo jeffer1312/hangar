@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import AssistantBubble from './AssistantBubble.svelte';
-  import { getHistoryTailForServer, sendInputForServer, selectOptionForServer } from '../lib/api';
+  import { getHistoryTailCached, sendInputForServer, selectOptionForServer } from '../lib/api';
   import { relativeTime, bubblesFromTail } from '../lib/format';
   import type { Server } from '../lib/auth';
   import type { ChatEvent } from '../lib/types';
@@ -53,14 +53,18 @@
   let seq = 0;
   async function loadTail() {
     const my = ++seq;
-    // Marcado ANTES do fetch: esta cauda só pode conter eco que o backend já tinha confirmado agora.
-    const startedAt = Date.now();
     try {
-      const evs = await getHistoryTailForServer(server, session.name, TAIL);
+      // Cache por serverId::name::state::last_activity (api.ts): reentrar na view não refaz as
+      // dezenas de GET; flip de coluna OU atividade nova mudam a chave -> fetch fresco. `at` =
+      // instante em que a cauda foi REALMENTE buscada (não o do hit): só ecos confirmados antes
+      // disso podem se aposentar.
+      const { evs, at } = await getHistoryTailCached(
+        server, session.name, TAIL, session.state, session.last_activity,
+      );
       if (my !== seq) return;
       events = evs;
       tailError = '';
-      retirePending(startedAt);
+      retirePending(at);
       requestAnimationFrame(() => bodyEl?.scrollTo({ top: bodyEl.scrollHeight }));
     } catch {
       if (my !== seq) return;
