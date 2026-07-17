@@ -158,6 +158,38 @@ export async function getHistoryTailCached(
   return { at: entry.at, evs: [...entry.evs] };
 }
 
+// Upload/transcrição pra sessão de um servidor específico — o composer COMPLETO do card do
+// board/canvas (mesmos endpoints/headers dos uploadFile/transcribeFile do servidor ativo; aqui
+// baseUrl+token vêm do Server dono do card, que pode não ser o ativo).
+export async function uploadFileForServer(s: Server, name: string, file: File): Promise<{ path: string }> {
+  const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/upload`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${s.token}`,
+      'Content-Type': file.type || 'application/octet-stream',
+      'X-Filename': encodeURIComponent(file.name || 'arquivo'),
+    },
+    body: file,
+  });
+  if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
+  return res.json() as Promise<{ path: string }>;
+}
+
+export async function transcribeFileForServer(s: Server, name: string, file: File): Promise<{ path: string; text: string }> {
+  const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/transcribe`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${s.token}`,
+      'Content-Type': file.type || 'application/octet-stream',
+      'X-Filename': encodeURIComponent(file.name || 'audio.webm'),
+    },
+    body: file,
+    signal: AbortSignal.timeout(120_000),   // mesmo teto do transcribeFile: sem "transcrevendo…" eterno
+  });
+  if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
+  return res.json() as Promise<{ path: string; text: string }>;
+}
+
 // Envia prompt pra sessão de um servidor específico (input do card do quadro). 404 = sessão morta:
 // o chamador REMOVE o eco pendente e sinaliza — mensagem nunca "some" calada (mesmo contrato do
 // feedback de entrega do Chat). SEM timeout de propósito (igual ao sendInput por-servidor-ativo):
