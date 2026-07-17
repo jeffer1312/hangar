@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import AssistantBubble from './AssistantBubble.svelte';
-  import { getHistoryTailCached, sendInputForServer, selectOptionForServer } from '../lib/api';
+  import { getHistoryTailCached, getHistoryTailForServer, sendInputForServer, selectOptionForServer } from '../lib/api';
   import { relativeTime, bubblesFromTail } from '../lib/format';
   import type { Server } from '../lib/auth';
   import type { ChatEvent } from '../lib/types';
@@ -53,6 +53,12 @@
   let seq = 0;
   async function loadTail() {
     const my = ++seq;
+    // Retry re-arma o estado de base: `loading` volta a bloquear o loadMore concorrente (sem isto
+    // as duas fetches dividiam o mesmo seq e a última a responder vencia calada) e a paginação é
+    // descartada de propósito (tailLimit/atEnd casam com os events de base que vão entrar).
+    loading = true;
+    tailLimit = TAIL;
+    atEnd = false;
     try {
       // Cache por serverId::name::state::last_activity (api.ts): reentrar na view não refaz as
       // dezenas de GET; flip de coluna OU atividade nova mudam a chave -> fetch fresco. `at` =
@@ -77,6 +83,46 @@
     }
   }
   onMount(loadTail);
+
+  // Paginação pra trás: rolar até o TOPO do corpo busca uma janela maior (a conversa inteira em
+  // páginas de PAGE, não só a cauda de 15). Direto no getHistoryTailForServer (sem cache): o limit
+  // varia e o backend faz tail-read barato. Âncora de leitura preservada via delta de scrollHeight.
+  const PAGE = 50;
+  let tailLimit = TAIL;
+  let atEnd = false; // veio menos que o pedido = conversa inteira já está no card
+  let loadingMore = $state(false);
+  async function loadMore() {
+    if (loadingMore || loading || atEnd || !bodyEl) return;
+    loadingMore = true;
+    const my = seq;
+    const prevH = bodyEl.scrollHeight;
+    const want = tailLimit + PAGE;
+    const startedAt = Date.now();
+    try {
+      const evs = await getHistoryTailForServer(server, session.name, want);
+      if (my !== seq) return;
+      if (evs.length < want) atEnd = true;
+      tailLimit = want;
+      events = evs;
+      tailError = '';
+      // Mesmo contrato do loadTail: a janela nova contém ecos que o backend já confirmou antes do
+      // fetch — sem aposentá-los, a msg aparecia 2x (bolha real + eco pendente) até o remount.
+      retirePending(startedAt);
+      requestAnimationFrame(() => {
+        if (bodyEl) bodyEl.scrollTop = bodyEl.scrollHeight - prevH;
+      });
+    } catch {
+      // Sinaliza no mesmo canal do tail inicial (retry recarrega a base) — nunca falha calada.
+      if (my === seq) tailError = 'falha ao carregar mais — tocar pra tentar de novo';
+    } finally {
+      // Incondicional: é o flag DESTA chamada, não do resultado compartilhado — condicionar ao seq
+      // deixava "carregando mais…" preso pra sempre quando um retry invalidava o fetch em voo.
+      loadingMore = false;
+    }
+  }
+  function onBodyScroll() {
+    if (bodyEl && bodyEl.scrollTop <= 0 && !loading) loadMore();
+  }
 
   // Retira o eco que o backend JÁ tinha confirmado quando esta cauda começou: /input 200 = texto na
   // fila durável (ou já digitado no transcript), e o merged_history devolve os dois deduplicados no
@@ -137,18 +183,24 @@
   <header class="bc-head" onclick={onOpen} onkeydown={(e) => e.key === 'Enter' && onOpen()} role="button" tabindex="0">
     <span class="bc-dot" style="background: {color}" aria-hidden="true"></span>
     <span class="bc-name">{session.name}</span>
+    <!-- Servidor por NOME, não só pela cor do dot: com 5+ servidores a cor sozinha não identifica. -->
+    <span class="bc-srv" style="color: {color}" title={server.label}>{server.label}</span>
     {#if session.branch}<span class="bc-branch">⎇ {session.branch}</span>{/if}
-    {#if session.pair_peers?.length}<span class="bc-chip">🤝 {session.pair_peers.length}</span>{/if}
+    <!-- Par visível pelo NOME (não só a contagem): tooltip traz a lista completa. -->
+    {#if session.pair_peers?.length}
+      <span class="bc-chip" title={'pareada com ' + session.pair_peers.join(', ')}>🤝 {session.pair_peers.join(', ')}</span>
+    {/if}
     <span class="bc-time">{relativeTime(session.last_activity)}</span>
     <span class="bc-open" title="Abrir chat completo">⤢</span>
   </header>
 
-  <div class="bc-body" bind:this={bodyEl}>
+  <div class="bc-body" bind:this={bodyEl} onscroll={onBodyScroll}>
     <!-- "carregando…" só quando NÃO há o que mostrar: o card remonta a cada troca de coluna e os ecos
          içados sobrevivem — cair no loading por cima deles reintroduziria o sumiço da msg. -->
     {#if loading && visible.length === 0 && pending.length === 0}
       <p class="bc-empty">carregando…</p>
     {:else}
+      {#if loadingMore}<p class="bc-empty">carregando mais…</p>{/if}
       {#each visible as e (e.id)}
         {#if e.kind === 'assistant_msg'}
           <!-- Sem sessionName: o FileAttachment resolveria o path contra o servidor ATIVO, que pode
@@ -234,21 +286,32 @@
   @keyframes bc-slide { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
   .bc-head {
     display: flex; align-items: center; gap: 6px; min-width: 0;
-    padding: var(--space-2); cursor: pointer;
+    padding: var(--space-2) var(--space-3); cursor: pointer;
   }
   .bc-head:hover { background: var(--bg-hover); }
   .bc-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
   /* Peso 510, não 600: hierarquia por luminância. */
   .bc-name { font-size: 13px; font-weight: 510; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .bc-branch, .bc-chip, .bc-time { font-size: var(--text-xs); color: var(--text-muted); flex-shrink: 0; }
+  /* Nome do servidor colorido (mesma cor do dot) — identifica com 5+ servidores. Encolhe com
+     ellipsis antes do nome da sessão. */
+  .bc-srv {
+    font-size: var(--text-xs); font-weight: 600; flex-shrink: 1; min-width: 0; max-width: 9em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* Chip do par carrega NOMES: teto + ellipsis pra não engolir o header (tooltip tem a lista). */
+  .bc-chip { max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bc-time { margin-left: auto; }
   .bc-open { color: var(--text-muted); flex-shrink: 0; }
   /* Fade SÓ no topo (o rodapé é a msg mais recente — o que você não quer apagar). Dois masks:
      o segundo preserva a scrollbar, senão ela some junto com o conteúdo mascarado. */
   .bc-body {
     max-height: 240px; overflow-y: auto;
-    padding: 0 var(--space-2) var(--space-2);
-    display: flex; flex-direction: column; gap: 6px;
+    /* contain: com o mouse sobre o card, o wheel para na borda do card — sem encadear pro scroll
+       da coluna/canvas (que fazia a lista subir e o card fugir de baixo do cursor). */
+    overscroll-behavior: contain;
+    padding: 0 var(--space-3) var(--space-3);
+    display: flex; flex-direction: column; gap: 8px;
     --mask-h: 28px; --sb-w: 8px;
     mask-image:
       linear-gradient(to bottom, transparent, black var(--mask-h)),
@@ -258,9 +321,14 @@
     mask-repeat: no-repeat, no-repeat;
   }
   .bc-empty { color: var(--text-muted); font-size: var(--text-xs); }
-  /* Papel por LUMINÂNCIA, não por bolha: bolha dentro de card é contenção dupla. */
+  /* Bolha de usuário MINI — mesma linguagem do chat (UserBubble: --bubble-user, canto reto embaixo
+     à direita, alinhada à direita), em escala de card. Substitui o texto cru muted que não se
+     distinguia da resposta. */
   .bc-user {
-    font-size: 13px; line-height: 1.45; color: var(--text-muted);
+    align-self: flex-end; max-width: 85%;
+    font-size: 13px; line-height: 1.45; color: var(--text-primary);
+    background: var(--bubble-user);
+    padding: 5px 10px; border-radius: 12px 12px 4px 12px;
     white-space: pre-wrap; word-break: break-word; margin: 0;
   }
   .bc-pending { opacity: 0.55; }
@@ -272,7 +340,7 @@
   .bc-opt:disabled { opacity: 0.5; cursor: default; }
   /* Input FANTASMA: 15 cards × 15 inputs com borda = 15 alvos competindo. Borda real só no
      hover/focus. */
-  .bc-foot { display: flex; gap: 6px; padding: var(--space-2); }
+  .bc-foot { display: flex; gap: 6px; padding: var(--space-2) var(--space-3) var(--space-3); }
   .bc-foot textarea {
     flex: 1; resize: none; min-height: 28px; max-height: 72px; font: inherit; font-size: 12px;
     background: rgba(255, 255, 255, 0.03); color: var(--text-primary);
@@ -291,7 +359,7 @@
     display: block; width: 100%; text-align: left;
     color: var(--error); font-family: inherit; font-size: var(--text-xs);
     background: none; border: 0; cursor: pointer; min-height: 0; min-width: 0;
-    padding: 0 var(--space-2) var(--space-2); margin: 0;
+    padding: 0 var(--space-3) var(--space-3); margin: 0;
   }
   /* No corpo do card o recuo já vem do .bc-body. */
   .bc-retry { padding: 0; }
