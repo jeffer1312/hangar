@@ -1,12 +1,16 @@
 <script lang="ts">
   // Popover de espiada (desktop): última resposta do Claude da sessão sob o mouse. A posição já vem
-  // resolvida pelo chamador (coordenadas de viewport) — aqui só desenha.
+  // resolvida pelo chamador (coordenadas de viewport) — aqui só desenha. Markdown de verdade
+  // (mesmo renderer das bolhas): a resposta é markdown, texto cru lia mal (** soltos, listas
+  // viravam parágrafo).
+  import { renderMarkdown } from '../lib/markdown';
   interface Props { text: string; x: number; y: number }
   let { text, x, y }: Props = $props();
+  const html = $derived(renderMarkdown(text));
 </script>
 
 <div class="hover-preview" style="left: {x}px; top: {y}px" role="tooltip">
-  <p>{text}</p>
+  {@html html}
 </div>
 
 <style>
@@ -23,14 +27,20 @@
     border-radius: var(--radius-md); padding: var(--space-2) var(--space-3);
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
     animation: hp-in 120ms var(--ease-out);
+    font-size: var(--text-xs); color: var(--text-secondary); line-height: 1.45;
   }
-  .hover-preview p {
-    margin: 0; font-size: var(--text-xs); font-weight: 400; color: var(--text-secondary);
-    line-height: 1.45;
-    white-space: pre-wrap; word-break: break-word;
-    /* line-clamp padrão junto do -webkit- (sem ele o svelte-check acusa compatibilidade). */
-    display: -webkit-box; -webkit-line-clamp: 10; line-clamp: 10; -webkit-box-orient: vertical; overflow: hidden;
+  /* Markdown vem do {@html} -> :global. Escala compacta de popover: sem margens generosas de chat. */
+  .hover-preview :global(p), .hover-preview :global(ul), .hover-preview :global(ol),
+  .hover-preview :global(pre), .hover-preview :global(blockquote) { margin: 0 0 6px; }
+  .hover-preview :global(ul), .hover-preview :global(ol) { padding-left: 18px; }
+  .hover-preview :global(h1), .hover-preview :global(h2), .hover-preview :global(h3),
+  .hover-preview :global(h4) { margin: 0 0 4px; font-size: var(--text-xs); font-weight: 600; color: var(--text-primary); }
+  .hover-preview :global(code) {
+    font-family: var(--font-mono); font-size: 0.7rem;
+    background: var(--bg-hover); padding: 1px 4px; border-radius: 4px;
   }
+  .hover-preview :global(pre) { overflow: hidden; background: var(--bg-hover); padding: 6px 8px; border-radius: var(--radius-sm); }
+  .hover-preview :global(pre code) { background: none; padding: 0; }
   /* Só opacidade: transform aqui promoveria camada (e o board já tem a única pulsação do sistema). */
   @keyframes hp-in { from { opacity: 0; } to { opacity: 1; } }
 </style>

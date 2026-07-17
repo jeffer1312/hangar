@@ -82,6 +82,12 @@
     } finally {
       if (my === seq) loading = false;
     }
+    // Cauda válida mas SEM bolha (turno longo só de tool_use/tool_result): o card ficava em branco.
+    // Amplia a janela UMA vez (+PAGE cobre a quase totalidade das cadeias de ferramenta reais);
+    // se mesmo assim não render bolha, o empty-state do template explica em vez de sumir.
+    if (my === seq && !tailError && events.length > 0 && bubblesFromTail(events).length === 0) {
+      loadMore();
+    }
   }
   onMount(loadTail);
 
@@ -174,6 +180,28 @@
   // latestAssistantEvent que a espiada do hover usa sobre a MESMA cauda.
   const visible = $derived(bubblesFromTail(events));
 
+  // Máscara de fade do topo SÓ quando o corpo transborda: com conversa curta o fade comia o texto
+  // (1ª linha quase invisível sem nada pra rolar). Medida via RO (resize do card no canvas) +
+  // re-medida quando a lista de bolhas muda.
+  let bodyOverflows = $state(false);
+  function measureOverflow() {
+    if (bodyEl) bodyOverflows = bodyEl.scrollHeight > bodyEl.clientHeight + 4;
+  }
+  $effect(() => {
+    if (!bodyEl) return;
+    const ro = new ResizeObserver(measureOverflow);
+    ro.observe(bodyEl);
+    measureOverflow();
+    return () => ro.disconnect();
+  });
+  $effect(() => {
+    // TUDO que muda a altura interna do corpo sem redimensionar a caixa (RO fica mudo com
+    // max-height fixo): bolhas, ecos pendentes, "carregando mais…", erro, pergunta/opções, spinner.
+    void visible; void pending; void loadingMore; void tailError;
+    void session.question; void session.options; void session.state; void session.label;
+    requestAnimationFrame(measureOverflow);
+  });
+
   // Modelo/contexto no composer: parse da statusline cacheada da lista (~20s de atraso, ver
   // SessionInfo.status_line). Sem statusline (captura pendente/tema sem emojis) a linha some.
   const meta = $derived(parseStatusLine(session.status_line));
@@ -211,13 +239,16 @@
     </div>
   {/if}
 
-  <div class="bc-body" bind:this={bodyEl} onscroll={onBodyScroll}>
+  <div class="bc-body" class:masked={bodyOverflows} bind:this={bodyEl} onscroll={onBodyScroll}>
     <!-- "carregando…" só quando NÃO há o que mostrar: o card remonta a cada troca de coluna e os ecos
          içados sobrevivem — cair no loading por cima deles reintroduziria o sumiço da msg. -->
     {#if loading && visible.length === 0 && pending.length === 0}
       <p class="bc-empty">carregando…</p>
     {:else}
       {#if loadingMore}<p class="bc-empty">carregando mais…</p>{/if}
+      {#if !loading && !loadingMore && visible.length === 0 && pending.length === 0 && !tailError && events.length > 0}
+        <p class="bc-empty">cauda recente só tem ferramentas — abrir o chat pra ver a conversa</p>
+      {/if}
       {#each visible as e (e.id)}
         {#if e.kind === 'assistant_msg'}
           <!-- Sem sessionName: o FileAttachment resolveria o path contra o servidor ATIVO, que pode
@@ -364,6 +395,10 @@
     overscroll-behavior: contain;
     padding: 0 var(--space-3) var(--space-3);
     display: flex; flex-direction: column; gap: 8px;
+  }
+  /* Fade SÓ com transbordo real (class:masked): em conversa curta a máscara comia a 1ª linha sem
+     haver nada pra rolar. Dois masks: o segundo preserva a scrollbar. */
+  .bc-body.masked {
     --mask-h: 28px; --sb-w: 8px;
     mask-image:
       linear-gradient(to bottom, transparent, black var(--mask-h)),
