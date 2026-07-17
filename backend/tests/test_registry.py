@@ -18,10 +18,12 @@ def _clear_jsonl_cache():
     SessionRegistry._jsonl_cache.clear()
     SessionRegistry._fd_locked.clear()
     SessionRegistry._status_cache.clear()
+    SessionRegistry._label_cache.clear()
     yield
     SessionRegistry._jsonl_cache.clear()
     SessionRegistry._fd_locked.clear()
     SessionRegistry._status_cache.clear()
+    SessionRegistry._label_cache.clear()
 
 
 def test_sanitize_cwd_matches_claude_scheme():
@@ -720,3 +722,26 @@ def test_marker_by_pids_matches_descendant_and_newest(tmp_path):
     assert _marker_by_pids(tmp_path, [42], set()) == str(j2)      # mais recente do pid 42
     assert _marker_by_pids(tmp_path, [7], set()) is None          # pid nao casa
     assert _marker_by_pids(tmp_path, [42], {_os.path.realpath(str(j2))}) == str(j1)  # exclusao
+
+
+def test_label_cache_preenche_working_e_nunca_idle(monkeypatch):
+    # Barrinha do card: marker "working" sem label -> preenche do cache; marker idle -> NUNCA
+    # serve label (e derruba a entrada: spinner cacheado e do turno passado — label fantasma).
+    import time as _t
+    reg = SessionRegistry()
+    mk = {"sidw": ("working", 1.0), "sidi": ("idle", 1.0)}
+    infos = [
+        type("I", (), {"name": "w", "cwd": "/p", "jsonl": "/x/sidw.jsonl", "state": "idle", "last_activity": None})(),
+        type("I", (), {"name": "i", "cwd": "/p", "jsonl": "/x/sidi.jsonl", "state": "idle", "last_activity": None})(),
+    ]
+    monkeypatch.setattr(reg, "list", lambda: infos)
+    monkeypatch.setattr(hs_mod.hook_state, "get_state", lambda sid: mk.get(sid))
+    SessionRegistry._status_cache["w"] = (_t.monotonic(), None)
+    SessionRegistry._status_cache["i"] = (_t.monotonic(), None)
+    SessionRegistry._label_cache["w"] = "Hyperspacing…"
+    SessionRegistry._label_cache["i"] = "Fantasma…"
+    out = asyncio.run(reg.list_with_state())
+    by = {o.name: o for o in out}
+    assert by["w"].label == "Hyperspacing…"                 # working herda a barrinha do cache
+    assert getattr(by["i"], "label", None) is None          # idle nunca ganha label
+    assert "i" not in SessionRegistry._label_cache          # e a entrada fantasma morre no marker
