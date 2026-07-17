@@ -21,9 +21,17 @@ export interface Aggregate {
   loading: boolean;          // nenhum servidor emitiu nada ainda (nem erro)
 }
 
+// Memo de enriquecimento por SLOT (o array `sessions` cru de um servidor): um evento SSE troca o
+// array só do servidor que emitiu, então as rows dos DEMAIS servidores são reusadas por identidade.
+// Sem isto, todo evento recriava {...s} pra TODAS as rows -> o keyed each das 4 views via prop nova
+// em 50+ cards e re-renderizava tudo ~3-4x/s com 5 servidores ativos. WeakMap: o array velho morre,
+// a entrada vai junto. label/color validados porque o usuário pode editar o servidor sem o slot mudar.
+const _rowCache = new WeakMap<object, { label: string; color: string; byKey: Map<string, AggSession> }>();
+
 // `hidden` = exclusão OTIMISTA: chaves `serverId::name` marcadas pelo doDelete das views somem da
 // lista na hora, sem esperar o SSE re-emitir (~1-2s). Se o delete falhar, a view desmarca e a linha
 // REAPARECE — rollback visual que o otimismo antigo (filter local no mobile) nunca teve.
+// (O filtro roda ANTES do memo: esconder/mostrar não invalida as rows cacheadas do slot.)
 export function aggregateSessions(
   servers: Server[],
   slots: ReadonlyMap<string, Slot>,
@@ -43,12 +51,22 @@ export function aggregateSessions(
       loaded: slot?.sessions != null,
     };
     if (slot?.sessions) {
+      const color = serverColor(srv.id);
+      let cache = _rowCache.get(slot.sessions);
+      if (!cache || cache.label !== srv.label || cache.color !== color) {
+        cache = { label: srv.label, color, byKey: new Map() };
+        _rowCache.set(slot.sessions, cache);
+      }
       for (const s of slot.sessions) {
         if (hidden?.has(`${srv.id}::${s.name}`)) continue;
         const key = `${s.jsonl ?? s.cwd ?? ''}::${s.name}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        const row: AggSession = { ...s, serverId: srv.id, serverLabel: srv.label, serverColor: serverColor(srv.id) };
+        let row = cache.byKey.get(key);
+        if (!row) {
+          row = { ...s, serverId: srv.id, serverLabel: srv.label, serverColor: color };
+          cache.byKey.set(key, row);
+        }
         bucket.sessions.push(row);
         rows.push(row);
       }

@@ -722,7 +722,8 @@ def test_history_route_passes_session_provider_to_merged_history(api_client):
          patch("app.pqueue.merged_history", return_value=[]) as mh:
         r = api_client.get("/api/sessions/cx/history", headers=_h())
     assert r.status_code == 200
-    mh.assert_called_once_with("cx", "/r/cx.jsonl", provider="codex")
+    # posicional: a rota agora repassa via asyncio.to_thread(merged_history, name, jsonl, provider, limit)
+    mh.assert_called_once_with("cx", "/r/cx.jsonl", "codex", None)
 
 
 # ---------------------------------------------------------------------------

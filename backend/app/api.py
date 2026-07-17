@@ -160,6 +160,27 @@ app.include_router(deploy_router)
 registry = SessionRegistry()
 terminal = TerminalInput()
 
+# Snapshot com TTL de registry.list() pros endpoints request/response QUENTES (history/workflows):
+# o mount do board dispara dezenas de /history de uma vez e cada list() fresco e um scan completo
+# de /proc + fork de tmux list-panes. Mesmo padrao do sse._list_snap (la pros loops de SSE; caches
+# separados porque as instancias de SessionRegistry sao separadas). Miss por nome (sessao criada ha
+# <1s) -> fallback pro list() fresco, entao o TTL nunca causa 404 falso.
+_LIST_TTL = 1.0
+_list_snap: dict = {"t": 0.0, "infos": None}
+
+
+async def _cached_info(name: str) -> SessionInfo | None:
+    now = time.monotonic()
+    if _list_snap["infos"] is None or now - _list_snap["t"] >= _LIST_TTL:
+        _list_snap["infos"] = await asyncio.to_thread(registry.list)
+        _list_snap["t"] = time.monotonic()
+    info = next((s for s in _list_snap["infos"] if s.name == name), None)
+    if info is None:
+        _list_snap["infos"] = await asyncio.to_thread(registry.list)
+        _list_snap["t"] = time.monotonic()
+        info = next((s for s in _list_snap["infos"] if s.name == name), None)
+    return info
+
 
 def _notify_async(session_id: str, send_fn) -> None:
     """Resolve uuid->nome e manda o push escolhido, TUDO numa thread: registry.list() mexe no tmux
@@ -557,8 +578,8 @@ def resume_session(name: str, body: ResumeBody):
 
 
 @app.get("/api/sessions/{name}/history", dependencies=[Depends(require_auth)], response_model=list[ChatEvent])
-def history(name: str, limit: int | None = None):
-    info = next((s for s in registry.list() if s.name == name), None)
+async def history(name: str, limit: int | None = None):
+    info = await _cached_info(name)
     if not info or not info.jsonl:
         raise HTTPException(404, "session or transcript not found")
     from app.pqueue import merged_history
@@ -566,9 +587,10 @@ def history(name: str, limit: int | None = None):
     # app.adapters.codex.rollout) -- sem isto merged_history tentava o parser do Claude em toda
     # linha do rollout, nunca casava e devolvia [] (chat do Codex abria vazio ate o SSE encher via
     # backfill do tail; reabrir apos ficar horas em segundo plano perdia o que passou do tail-200).
-    evs = merged_history(name, info.jsonl, provider=info.provider)
-    # ponytail: limit corta PAYLOAD, nao CPU — merged_history ja parseou o jsonl inteiro; se perf
-    # virar problema, o upgrade e tail-read reverso do arquivo. Cauda CRUA de proposito: o corte no 1o
+    # Com limit, merged_history faz tail-read (parseia so o fim do arquivo); to_thread porque o
+    # parse (mesmo da cauda) e CPU/IO sincrono.
+    evs = await asyncio.to_thread(merged_history, name, info.jsonl, info.provider, limit)
+    # Cauda CRUA de proposito: o corte no 1o
     # user_msg (pra nao desenhar resposta orfa) e preferencia de RENDERIZACAO do card do quadro e vive
     # no BoardCard.svelte. Aplicado AQUI, valia pra todo consumidor e matava a espiada do hover da
     # Sidebar (HP_TAIL=8), que so quer o ultimo assistant_msg: com o proximo prompt ja mandado, o corte
@@ -579,33 +601,33 @@ def history(name: str, limit: int | None = None):
 
 
 @app.get("/api/sessions/{name}/workflows", dependencies=[Depends(require_auth)])
-def workflows_list(name: str):
-    jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
-    if not jsonl:
+async def workflows_list(name: str):
+    info = await _cached_info(name)
+    if not info or not info.jsonl:
         raise HTTPException(404, "session or transcript not found")
     from app.workflows import list_workflows
-    return list_workflows(jsonl)
+    return await asyncio.to_thread(list_workflows, info.jsonl)
 
 
 @app.get("/api/sessions/{name}/workflows/{run_id}", dependencies=[Depends(require_auth)])
-def workflow_detail(name: str, run_id: str):
-    jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
-    if not jsonl:
+async def workflow_detail(name: str, run_id: str):
+    info = await _cached_info(name)
+    if not info or not info.jsonl:
         raise HTTPException(404, "session or transcript not found")
     from app.workflows import get_workflow
-    wf = get_workflow(jsonl, run_id)
+    wf = await asyncio.to_thread(get_workflow, info.jsonl, run_id)
     if wf is None:
         raise HTTPException(404, "workflow run not found")
     return wf
 
 
 @app.get("/api/sessions/{name}/workflows/{run_id}/agents/{agent_id}", dependencies=[Depends(require_auth)])
-def workflow_agent_detail(name: str, run_id: str, agent_id: str):
-    jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
-    if not jsonl:
+async def workflow_agent_detail(name: str, run_id: str, agent_id: str):
+    info = await _cached_info(name)
+    if not info or not info.jsonl:
         raise HTTPException(404, "session or transcript not found")
     from app.workflows import get_agent
-    a = get_agent(jsonl, run_id, agent_id)
+    a = await asyncio.to_thread(get_agent, info.jsonl, run_id, agent_id)
     if a is None:
         raise HTTPException(404, "agent not found")
     return a

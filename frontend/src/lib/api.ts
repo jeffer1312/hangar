@@ -119,9 +119,8 @@ export async function fetchCostsForServer(s: Server): Promise<CostReport> {
 }
 
 // Cauda do histórico de UMA sessão de um servidor específico — cards do quadro kanban.
-// limit corta payload (backend ainda parseia o jsonl todo); só mount + transição de estado chamam.
-// Timeout maior (8s) que os fan-outs de 4s acima: aqui o backend parseia o jsonl inteiro antes de
-// cortar a cauda, e transcript grande passa dos 4s num disco frio.
+// limit dispara o tail-read no backend (parseia só o fim do jsonl). Timeout de 8s mantido: disco
+// frio + arquivo grande ainda pode passar dos 4s dos fan-outs acima.
 export async function getHistoryTailForServer(s: Server, name: string, limit: number): Promise<ChatEvent[]> {
   const res = await fetch(
     `${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/history?limit=${limit}`,
@@ -129,6 +128,34 @@ export async function getHistoryTailForServer(s: Server, name: string, limit: nu
   );
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json() as Promise<ChatEvent[]>;
+}
+
+// Cache de cauda pros cards do board/canvas. Vive no MÓDULO de propósito: trocar de view no
+// DesktopShell desmonta board/canvas inteiros, então um cache em componente morreria junto — e é
+// exatamente a troca de view que dispara a tempestade de 50 GET /history. A chave inclui STATE e
+// LAST_ACTIVITY: só state deixava buraco — ciclo idle→working→idle completo dentro do TTL voltava
+// pra MESMA chave e servia a cauda pré-troca como atual; last_activity (mtime do jsonl, re-emitido
+// pelo stream de lista a cada mudança real) muda junto com conteúdo novo e fura o cache na volta.
+// `at` volta pro chamador: o retire de eco pendente do BoardCard só pode aposentar echos
+// confirmados ANTES da cauda ser buscada (não do hit) — senão msg entregue some da UI até o
+// próximo fetch real. `evs` sai como CÓPIA rasa: o chamador joga o array num $state (proxy sobre a
+// própria referência) — devolver o array do cache criaria aliasing e uma mutação futura no
+// componente corromperia a entrada pros demais consumidores da chave.
+const _tailCache = new Map<string, { at: number; evs: ChatEvent[] }>();
+const _TAIL_TTL = 30_000;
+
+export async function getHistoryTailCached(
+  s: Server, name: string, limit: number, state: string, lastActivity: number | null | undefined,
+): Promise<{ evs: ChatEvent[]; at: number }> {
+  const key = `${s.id}::${name}::${state}::${lastActivity ?? 0}::${limit}`;
+  const hit = _tailCache.get(key);
+  if (hit && Date.now() - hit.at < _TAIL_TTL) return { at: hit.at, evs: [...hit.evs] };
+  const entry = { at: Date.now(), evs: await getHistoryTailForServer(s, name, limit) };
+  _tailCache.set(key, entry);
+  if (_tailCache.size > 300) {
+    for (const [k, v] of _tailCache) if (Date.now() - v.at >= _TAIL_TTL) _tailCache.delete(k);
+  }
+  return { at: entry.at, evs: [...entry.evs] };
 }
 
 // Envia prompt pra sessão de um servidor específico (input do card do quadro). 404 = sessão morta:

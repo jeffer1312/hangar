@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import re
 import threading
 import time
@@ -324,7 +325,30 @@ class PromptQueue:
                 yield ev
 
 
-def merged_history(name: str, jsonl: str, provider: str = "claude") -> list[ChatEvent]:
+# Janela inicial do tail-read do /history com limit (board/hover): parsear so o fim do arquivo em
+# vez do jsonl inteiro (10-50MB em sessao longa). Cresce 4x ate render >= limit eventos ou alcancar
+# o inicio do arquivo.
+_TAIL_WINDOW = 256 * 1024
+
+
+def _tail_offset(path: str, window: int) -> int:
+    # Offset da 1a linha COMPLETA dentro dos ultimos `window` bytes. 0 = "parseia do inicio", que
+    # tambem e o fallback se o arquivo sumir no meio (rename/clear): _parse_from trata o proprio
+    # OSError e devolve historico vazio, igual ao caminho sem limit.
+    try:
+        size = os.path.getsize(path)
+        if size <= window:
+            return 0
+        with open(path, "rb") as fh:
+            fh.seek(size - window)
+            fh.readline()  # descarta a linha partida no corte
+            return fh.tell()
+    except OSError:
+        return 0
+
+
+def merged_history(name: str, jsonl: str, provider: str = "claude",
+                   limit: int | None = None) -> list[ChatEvent]:
     """Historico = eventos do transcript + entradas da fila ainda NAO absorvidas pelo transcript,
     ordenado por timestamp. Dedup TS-AWARE: descarta entrada da fila cujo texto ja apareca (por
     linha) num user_msg commitado DEPOIS dela (o transcript grava o prompt apos a entrega). Match
@@ -334,7 +358,14 @@ def merged_history(name: str, jsonl: str, provider: str = "claude") -> list[Chat
     provider: qual parser usar pra `jsonl` -- Claude e Codex tem shapes diferentes (ver
     app.adapters.codex.rollout). _ts_of_obj fica igual pros dois: ambos gravam `timestamp` ISO
     no topo da linha. Import local do parser do Codex evita ciclo (app.adapters importa
-    app.pqueue no boot, pra PromptQueue)."""
+    app.pqueue no boot, pra PromptQueue).
+
+    limit: quando dado, parseia so a CAUDA do arquivo (tail-read reverso, janela que cresce ate
+    render >= limit eventos) em vez do jsonl inteiro -- e o que torna o burst de /history do board
+    (dezenas de cards x transcripts de MB) barato. O caller ainda corta evs[-limit:]; aqui limit so
+    dimensiona a janela. Trade-off aceito (ponytail): committed_ts enxerga so a janela, entao
+    entrada de fila NAO-confirmada cujo commit ficou fora dela reapareceria como pendente -- na
+    pratica o reconcile marca `confirmed` e a entrada nem chega aqui."""
     if provider == "codex":
         from app.adapters.codex.rollout import parse_rollout_obj as _parse
     else:
@@ -343,14 +374,26 @@ def merged_history(name: str, jsonl: str, provider: str = "claude") -> list[Chat
     committed_ts: dict[str, float] = {}  # linha normalizada -> maior ts em que commitou
     prev_ts = 0.0
     start_ts = 0.0  # 1o ts real do transcript = inicio da sessao atual (pra podar fila pre-/clear)
-    try:
-        fh = open(jsonl, encoding="utf-8", errors="replace")
-    except OSError:
-        fh = None  # sessao nova: jsonl ainda nao existe -> historico vazio (limpo), nao 500
-    if fh is not None:
-        # Itera linha-a-linha (nao carrega o transcript inteiro em RAM) e parseia o JSON UMA vez por
-        # linha (antes parse_line + _ts_of_line = 2x json.loads do arquivo inteiro por /history).
+
+    def _parse_from(offset: int) -> None:
+        # Preenche items/committed_ts do offset ao fim. Zera acumuladores: a janela do tail-read
+        # pode crescer e re-parsear. Itera linha-a-linha (nao carrega o transcript inteiro em RAM)
+        # e parseia o JSON UMA vez por linha.
+        nonlocal prev_ts, start_ts
+        items.clear()
+        committed_ts.clear()
+        prev_ts = 0.0
+        # Tail: o inicio da sessao esta FORA da janela -> _transcript_start_ts le do comeco do
+        # arquivo ate o 1o ts (early return; sem cap de linhas — header longo sem timestamp
+        # inflaria o start_ts e podaria fila valida).
+        start_ts = _transcript_start_ts(jsonl) if offset else 0.0
+        try:
+            fh = open(jsonl, encoding="utf-8", errors="replace")
+        except OSError:
+            return  # sessao nova: jsonl ainda nao existe -> historico vazio (limpo), nao 500
         with fh:
+            if offset:
+                fh.seek(offset)
             for i, line in enumerate(fh):
                 try:
                     obj = json.loads(line)
@@ -371,6 +414,17 @@ def merged_history(name: str, jsonl: str, provider: str = "claude") -> list[Chat
                         for ln in (t, *(s.strip() for s in t.split("\n"))):
                             if ts > committed_ts.get(ln, 0.0):
                                 committed_ts[ln] = ts
+
+    if limit is not None and limit > 0:
+        window = _TAIL_WINDOW
+        while True:
+            off = _tail_offset(jsonl, window)
+            _parse_from(off)
+            if off == 0 or len(items) >= limit:
+                break
+            window *= 4
+    else:
+        _parse_from(0)
 
     # Entradas da fila entram com tiebreaker alto -> caem DEPOIS de eventos do transcript de mesmo ts.
     for entry in PromptQueue(name).load():

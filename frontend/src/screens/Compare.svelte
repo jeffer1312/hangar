@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import NavBar from '../components/NavBar.svelte';
   import AssistantBubble from '../components/AssistantBubble.svelte';
-  import { openEventStreamForServer } from '../lib/api';
+  import { openEventStreamForServer, getHistoryTailForServer } from '../lib/api';
   import { listServers, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
   import type { ChatEvent, StateEvent } from '../lib/types';
@@ -36,6 +36,22 @@
   // dentro de $state não ajuda em nada aqui (só o array `events` precisa disparar re-render).
   const idIndexes: Map<string, number>[] = [];
   const streams: EventSource[] = [];
+
+  // Browser capa ~6 conexões HTTP/1.1 por host — SSE ao vivo só pras primeiras MAX_LIVE sessões de
+  // CADA servidor (sobra folga pro stream de lista da Sidebar + fetches). A 7ª conexão não "falha":
+  // pendura em connecting e BLOQUEIA qualquer request seguinte pro host (history, upload). Cards
+  // além do teto mostram a última resposta via /history (sem preview ao vivo nem chip de estado).
+  const MAX_LIVE_PER_SERVER = 4;
+
+  async function loadTail(server: Server, i: number) {
+    try {
+      const evs = await getHistoryTailForServer(server, cards[i].name, 20);
+      idIndexes[i] = new Map(evs.map((e, k) => [e.id, k]));
+      cards[i] = { ...cards[i], events: evs, offline: false };
+    } catch {
+      if (cards[i].events.length === 0) cards[i] = { ...cards[i], offline: true };
+    }
+  }
 
   function connect(server: Server, i: number) {
     const es = openEventStreamForServer(server, cards[i].name);
@@ -94,9 +110,17 @@
     idIndexes.length = 0;
     ids.forEach(() => idIndexes.push(new Map()));
 
+    const liveCount = new Map<string, number>();
     ids.forEach((id, i) => {
       const srv = servers.find((s) => s.id === id.serverId);
-      if (srv) connect(srv, i);
+      if (!srv) return;
+      const n = liveCount.get(srv.id) ?? 0;
+      if (n < MAX_LIVE_PER_SERVER) {
+        liveCount.set(srv.id, n + 1);
+        connect(srv, i);
+      } else {
+        loadTail(srv, i);
+      }
     });
   });
 
