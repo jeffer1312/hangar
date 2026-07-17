@@ -145,3 +145,19 @@ def test_ping_emitted_on_cadence(monkeypatch):
     evs = asyncio.run(_take(sse.list_events(poll=0.001, ping_every=1), 2))
     assert evs[0]["event"] == "sessions"
     assert evs[1]["event"] == "ping"
+
+
+def test_status_sig_reduz_sem_relogio_e_custo():
+    # Sig da statusline: modelo + ctx (baldes de 5%) + ⚡5h% + 📅7d%; relogio/custo fora — a linha
+    # crua muda a cada captura e re-emitiria a lista inteira sem nada visivel mudar.
+    from app import sse
+    a = "🤖 Opus4.8·1M (high✦) │ 💬 20k/1k 40k/200k │ 💵 $1.23 │ ⚡5h:46% ↺34m │ 📅7d:57% │ ⏱ 2h37m"
+    b = "🤖 Opus4.8·1M (high✦) │ 💬 20k/1k 40k/200k │ 💵 $9.99 │ ⚡5h:46% ↺12m │ 📅7d:57% │ ⏱ 2h41m"
+    assert sse._status_sig(a) == sse._status_sig(b)          # so relogio/custo mudaram -> sig igual
+    assert sse._status_sig(a)[0].startswith("Opus")
+    assert sse._status_sig(a)[1] == 4                        # 40k/200k = 20% -> balde 4
+    assert sse._status_sig(a)[2] == "46" and sse._status_sig(a)[3] == "57"
+    c = a.replace("⚡5h:46%", "⚡5h:47%")
+    assert sse._status_sig(a) != sse._status_sig(c)          # % mudou -> sig muda
+    assert sse._status_sig(None) is None
+    assert sse._status_sig("sem emojis") == (None, None, None, None)
