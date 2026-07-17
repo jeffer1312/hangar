@@ -84,6 +84,9 @@
 
   // Moldura por grupo: bounding box dos MEMBROS RENDERIZADOS (2+), com folga pro header. Segue os
   // cards onde estiverem — arrastar um membro estica a moldura, o vínculo continua visível.
+  // Etiqueta do grupo (label + ações), ancorada acima do membro mais alto. Marcação de
+  // pertencimento é POR MEMBRO (aro no card, ver .cv-card.paired) — a versão anterior desenhava
+  // uma caixa envolvente das posições, e card ESTRANHO parado dentro do retângulo parecia membro.
   const groupFrames = $derived.by(() => {
     const byGid = new Map<string, BoardRow[]>();
     for (const r of visibleRows) {
@@ -92,18 +95,16 @@
       const arr = byGid.get(gk);
       if (arr) arr.push(r); else byGid.set(gk, [r]);
     }
-    const out: { gid: string; x: number; y: number; w: number; h: number; color: string; label: string; n: number }[] = [];
+    const out: { gid: string; x: number; y: number; color: string; label: string; n: number }[] = [];
     for (const [gk, members] of byGid) {
       const boxes = members.map((m) => layout[rowKey(m)]).filter(Boolean);
       if (boxes.length < 2) continue;
-      const x = Math.max(2, Math.min(...boxes.map((b) => b.x)) - 10);
-      // Clamp: grupo na 1ª linha (y = PAD = 24) jogava o topo da moldura pra -4px — o header com
-      // os botões ficava cortado num container que não rola pra offset negativo.
-      const y = Math.max(2, Math.min(...boxes.map((b) => b.y)) - 28);
-      const x2 = Math.max(...boxes.map((b) => b.x + b.w)) + 10;
-      const y2 = Math.max(...boxes.map((b) => b.y + b.h)) + 10;
+      const topmost = boxes.reduce((a, b) => (b.y < a.y || (b.y === a.y && b.x < a.x) ? b : a));
+      // Clamp: membro na 1ª linha (y = PAD) jogava a etiqueta pra fora do scroll (offset negativo).
       out.push({
-        gid: gk, x, y, w: x2 - x, h: y2 - y,
+        gid: gk,
+        x: Math.max(2, topmost.x),
+        y: Math.max(2, topmost.y - 20),
         color: pairColor(gk),
         label: members[0].pair_task ?? members.map((m) => m.name).join(' · '),
         n: members.length,
@@ -154,8 +155,11 @@
     for (const group of orderedGroups) {
       // Par não quebra linha: se o grupo cabe numa linha mas não no resto desta, pula pro início
       // da próxima — senão "lado a lado" virava extremos de duas linhas na quebra da grade.
+      // Grupo que não cabe no resto da linha começa em linha NOVA — vale também pra grupo maior
+      // que a própria grade (4+ membros com 3 colunas): senão ele partia do meio de uma linha
+      // dividida com estranhos.
       const rest = cols - (i % cols);
-      if (group.length > rest && group.length <= cols) i += rest;
+      if (i % cols !== 0 && group.length > rest) i += rest;
       for (const r of group) {
         next[rowKey(r)] = {
           x: PAD + (i % cols) * (w + GAP),
@@ -164,6 +168,9 @@
         };
         i++;
       }
+      // Linha de grupo é EXCLUSIVA: estranho não preenche a sobra (card solo caindo do lado dos
+      // últimos membros parecia parte do grupo — o bug do claude-pocket "dentro" do TICKET-0000).
+      if (group.length > 1 && i % cols !== 0) i += cols - (i % cols);
     }
     layout = next;
     saveLayout();
@@ -360,25 +367,24 @@
     </button>
   {/each}
   <div class="cv-plane" style="width: {extent.w}px; height: {extent.h}px;">
-    <!-- Molduras de grupo ANTES dos cards (ordem no DOM = ficam por trás). Moldura segue o
-         bounding box dos membros; header dela concentra as ações do grupo. -->
+    <!-- Etiqueta do grupo sobre o membro mais alto (label + ações). O pertencimento é o ARO nos
+         cards membros (.cv-card.paired) — a caixa envolvente antiga enganava: card estranho parado
+         dentro do retângulo parecia membro. -->
     {#each groupFrames as f (f.gid)}
-      <div class="cv-group" style="left: {f.x}px; top: {f.y}px; width: {f.w}px; height: {f.h}px; color: {f.color};">
-        <div class="cv-group-head">
-          <span class="cv-group-label" title={f.label}>🤝 {f.label} · {f.n}</span>
-          <!-- Âncora = um membro que JÁ TEM box (mesmo critério da moldura) — o primeiro de
-               visibleRows podia estar sem posição (placeNew roda pós-render) e o reunir virava
-               no-op mudo; grupo desfeito entre render e clique também não pode estourar. -->
-          <button onclick={() => {
-                    const anchor = visibleRows.find((r) => gkeyOf(r) === f.gid && layout[rowKey(r)]);
-                    if (anchor) gatherPair(rowKey(anchor), f.gid);
-                    else console.warn('reunir: grupo sem membro posicionado', f.gid);
-                  }}
-                  title="Reunir os membros lado a lado">⇱</button>
-          <button onclick={() => toggleCollapse(f.gid)} title="Colapsar o grupo num card só">▾</button>
-          <button onclick={() => (focusGid = focusGid === f.gid ? null : f.gid)}
-                  title="Ver só este grupo (esconde o resto)">◎</button>
-        </div>
+      <div class="cv-group-tag" style="left: {f.x}px; top: {f.y}px; color: {f.color};">
+        <span class="cv-group-label" title={f.label}>🤝 {f.label} · {f.n}</span>
+        <!-- Âncora = um membro que JÁ TEM box — o primeiro de visibleRows podia estar sem posição
+             (placeNew roda pós-render) e o reunir virava no-op mudo; grupo desfeito entre render e
+             clique também não pode estourar. -->
+        <button onclick={() => {
+                  const anchor = visibleRows.find((r) => gkeyOf(r) === f.gid && layout[rowKey(r)]);
+                  if (anchor) gatherPair(rowKey(anchor), f.gid);
+                  else console.warn('reunir: grupo sem membro posicionado', f.gid);
+                }}
+                title="Reunir os membros lado a lado">⇱</button>
+        <button onclick={() => toggleCollapse(f.gid)} title="Colapsar o grupo num card só">▾</button>
+        <button onclick={() => (focusGid = focusGid === f.gid ? null : f.gid)}
+                title="Ver só este grupo (esconde o resto)">◎</button>
       </div>
     {/each}
     <!-- Grupo colapsado: um card compacto no lugar dos membros. -->
@@ -402,8 +408,8 @@
       {@const key = rowKey(row)}
       {@const box = layout[key]}
       {#if box}
-        <div class="cv-card" use:observeSize={key}
-             style="left: {box.x}px; top: {box.y}px; width: {box.w}px; height: {box.h}px;">
+        <div class="cv-card" class:paired={!!row.pair_gid} use:observeSize={key}
+             style="left: {box.x}px; top: {box.y}px; width: {box.w}px; height: {box.h}px;{row.pair_gid ? ` --pair-c: ${pairColor(gkeyOf(row)!)};` : ''}">
           <!-- Barra tingida com a COR DO GRUPO (pairColor): membros do mesmo pareamento se
                reconhecem de longe no canvas; sem par, barra neutra de sempre. -->
           <div class="cv-handle" onpointerdown={(e) => dragStart(e, key)} onpointermove={dragMove}
@@ -525,29 +531,36 @@
   .cv-chip:hover { background: var(--bg-hover); color: var(--text-primary); }
   .cv-chip-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
 
-  /* Moldura de grupo: por trás dos cards (ordem no DOM), borda inteira + véu na cor do grupo.
-     pointer-events só no header — a moldura nunca rouba clique/drag dos cards. */
-  .cv-group {
-    position: absolute; pointer-events: none;
-    border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
-    background: color-mix(in srgb, currentColor 5%, transparent);
-    border-radius: var(--radius-lg);
+  /* Membro de grupo: ARO na cor do grupo (--pair-c inline) — pertencimento por CARD, não por
+     área. outline não mexe em layout e convive com a borda/resize do card. */
+  .cv-card.paired {
+    outline: 1.5px solid color-mix(in srgb, var(--pair-c) 55%, transparent);
+    outline-offset: 2px;
   }
-  .cv-group-head {
-    position: absolute; top: 3px; left: 10px; right: 10px;
-    display: flex; align-items: center; gap: 2px;
-    pointer-events: auto;
+  /* Etiqueta do grupo: pill flutuante acima do membro mais alto, com as ações. A etiqueta invade
+     ~4px do card de CIMA (GAP de 16 < altura do pill): container com pointer-events none — só os
+     BOTÕES capturam clique, a borda do card de cima continua clicável por baixo. */
+  .cv-group-tag {
+    position: absolute; z-index: 3;
+    pointer-events: none;
+    display: inline-flex; align-items: center; gap: 2px;
+    max-width: 340px;
+    background: var(--bg-elevated);
+    border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+    border-radius: var(--radius-full);
+    padding: 1px 4px 1px 10px;
     font-size: var(--text-xs); font-weight: 600;
   }
+  .cv-group-tag button { pointer-events: auto; }
   .cv-group-label {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; margin-right: 4px;
   }
-  .cv-group-head button {
+  .cv-group-tag button {
     background: none; border: 0; color: inherit; cursor: pointer;
-    font-size: 11px; line-height: 1; padding: 2px 5px; border-radius: var(--radius-sm);
+    font-size: 11px; line-height: 1; padding: 2px 5px; border-radius: var(--radius-full);
     min-height: 0; min-width: 0; opacity: 0.75;
   }
-  .cv-group-head button:hover { opacity: 1; background: color-mix(in srgb, currentColor 14%, transparent); }
+  .cv-group-tag button:hover { opacity: 1; background: color-mix(in srgb, currentColor 14%, transparent); }
 
   /* Grupo colapsado: card compacto — header expande, linhas abrem o chat do membro. */
   .cv-gcard {
