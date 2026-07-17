@@ -24,10 +24,12 @@
     sendError: string;
     onSendError: (m: string) => void;
     onOpen: () => void;               // abre o chat completo
+    // Canvas: o card preenche o wrapper (a altura vem de fora). Board não passa → comportamento intacto.
+    fill?: boolean;
   }
   let {
     session, server, color, draft, onDraftChange,
-    pending, updatePending, sendError, onSendError, onOpen,
+    pending, updatePending, sendError, onSendError, onOpen, fill = false,
   }: Props = $props();
 
   const TAIL = 15;
@@ -122,7 +124,7 @@
   const visible = $derived(bubblesFromTail(events));
 </script>
 
-<article class="bcard" class:attention={session.state === 'awaiting_input'}>
+<article class="bcard" class:attention={session.state === 'awaiting_input'} class:fill>
   {#if session.state === 'working'}
     <!-- Progresso indeterminado: o sinal de "trabalhando" do card. NÃO pulsa (só o dot da coluna
          "Precisa de você" pulsa no board inteiro). -->
@@ -213,6 +215,9 @@
   }
   /* Faixa colorida é EXCEÇÃO: só quem espera por você. Em todo card viraria listra decorativa. */
   .bcard.attention { border-left: 2px solid var(--warning); }
+  /* Canvas: o wrapper dita a altura; o corpo vira o flexível (o teto de 240px é regra da COLUNA). */
+  .bcard.fill { height: 100%; display: flex; flex-direction: column; }
+  .bcard.fill .bc-body { max-height: none; flex: 1; }
   .bc-progress {
     position: absolute; top: 0; left: 0; right: 0; height: 2px; overflow: hidden;
     background: transparent;
