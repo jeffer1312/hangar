@@ -1,4 +1,10 @@
+import shutil
+import subprocess
+import uuid
 from unittest.mock import MagicMock, patch
+
+import pytest
+
 from app import tmux
 
 
@@ -36,6 +42,30 @@ def test_capture_pane_returns_stdout():
     with patch.object(tmux, "RUN", return_value=MagicMock(stdout="screen", returncode=0)) as run:
         assert tmux.capture_pane("cc") == "screen"
     assert run.call_args[0][0][:2] == ["tmux", "capture-pane"]
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux nao instalado no ambiente")
+def test_has_session_is_exact_against_real_tmux():
+    # SEMANTICA REAL do tmux (nao mock): sem o `=`, o `-t` resolve exact -> fnmatch -> PREFIX match,
+    # entao `has_session("X")` respondia VIVO por causa da IRMA "X-2" — e o /input dava "entregue"
+    # digitando num pane que nao existe. Os outros testes stubam has_session, por isso nenhum via.
+    # Socket proprio (-L) e sessao de nome aleatorio: nao encosta no tmux/sessoes do usuario.
+    sock = f"cp-test-{uuid.uuid4().hex[:8]}"
+    base = f"pocket-{uuid.uuid4().hex[:6]}"
+
+    def tmux_on_sock(args, **_kw):
+        # injeta o `-L <socket>` logo apos o "tmux" -> o has_session real roda contra ESTE servidor
+        return subprocess.run(["tmux", "-L", sock, *args[1:]], capture_output=True, text=True)
+
+    subprocess.run(["tmux", "-L", sock, "new-session", "-d", "-s", f"{base}-2", "sleep 60"],
+                   capture_output=True, text=True)
+    try:
+        with patch.object(tmux, "RUN", tmux_on_sock):
+            assert tmux.has_session(f"{base}-2") is True   # exata e viva
+            assert tmux.has_session(base) is False         # NUNCA existiu (so a irma "-2") -> prefix mentia
+            assert tmux.has_session(base[:-3]) is False    # prefixo puro
+    finally:
+        subprocess.run(["tmux", "-L", sock, "kill-server"], capture_output=True, text=True)
 
 
 def test_pane_target_uses_exact_session_form():

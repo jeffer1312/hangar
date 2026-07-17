@@ -723,11 +723,25 @@ async def _send_one_codex(name: str, text: str) -> dict:
     try:
         deliverable = await adapter.deliverable(name)
     except Exception:
+        # Adapter quebrado/fora do ar nao pode passar calado: sem o log, um erro aqui virava um
+        # "delivered: false" indistinguivel de turno em andamento. Segue como NAO-entregavel -> a
+        # fila abaixo segura o prompt e o drain-on-complete tenta de novo no proximo idle.
+        _log.exception("codex deliverable falhou name=%s", name)
         deliverable = False
     # Enfileira sempre como pendente; so marca entregue apos o turn/start REALMENTE iniciar o turno.
     try:
         entry = await asyncio.to_thread(PromptQueue(name).append, text, delivered=False)
-    except OSError:
+    except OSError as e:
+        # Mesma regra do _send_one: sidecar nao gravou + NAO entregavel = a msg nao esta em lugar
+        # NENHUM, e responder "ok, na fila" era a mentira que o eeba30a tirou do caminho Claude.
+        # Vira erro (o front mostra), nunca sucesso.
+        if not deliverable:
+            _log.exception("fila indisponivel e prompt NAO entregue name=%s", name)
+            return {"ok": False, "error": f"fila indisponivel e prompt nao foi entregue: {e}"}
+        # Entregavel: o turn/start abaixo ainda leva o texto, entao a msg CHEGA. Perder o registro so
+        # desliga a rede de seguranca (o drain-on-complete nao acha o que reconferir) — nao e motivo
+        # pra falhar o envio, mas nao pode passar calado.
+        _log.exception("append na fila falhou (prompt sera entregue) name=%s", name)
         entry = None
     if not deliverable:
         # turno em andamento -> fica pendente na fila; o drain-on-complete entrega no proximo idle.

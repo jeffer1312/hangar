@@ -230,6 +230,49 @@ def test_input_codex_working_stays_pending(api_client):
     ap.assert_called_once_with("oi", delivered=False)
 
 
+def test_input_codex_pending_com_fila_indisponivel_falha(api_client):
+    # Espelha o test_input_deferred_com_fila_indisponivel_falha do caminho Claude: turno em andamento
+    # (deliverable=False) + sidecar morto = a msg nao esta no Codex nem na fila. O 200 "na fila" era a
+    # MESMA mentira que o eeba30a tirou do _send_one e que sobreviveu 3 linhas ao lado, no _send_one_codex.
+    fake = _fake_codex_adapter(deliverable=False)
+    with patch("app.api._provider_of", return_value="codex"), \
+         patch("app.api.get_adapter", return_value=fake), \
+         patch("app.pqueue.PromptQueue.append", side_effect=OSError("No space left on device")):
+        r = api_client.post("/api/sessions/cx/input", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 400
+    assert "nao foi entregue" in r.json()["detail"]
+    fake.send_prompt.assert_not_awaited()
+
+
+def test_input_codex_entregavel_com_fila_indisponivel_ainda_ok(api_client):
+    # Caminho oposto: entregavel -> o turn/start leva o texto, entao perder o sidecar so desliga a
+    # rede de seguranca. 200 continua correto (o erro vai pro log, nao pro usuario).
+    fake = _fake_codex_adapter(deliverable=True, send_result="sent")
+    with patch("app.api._provider_of", return_value="codex"), \
+         patch("app.api.get_adapter", return_value=fake), \
+         patch("app.pqueue.PromptQueue.append", side_effect=OSError("No space left on device")), \
+         patch("app.pqueue.PromptQueue.set_delivered") as sd:
+        r = api_client.post("/api/sessions/cx/input", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 200
+    assert r.json()["delivered"] is True
+    fake.send_prompt.assert_awaited_once_with("cx", "oi")
+    sd.assert_not_called()   # sem entry na fila nao ha id a marcar
+
+
+def test_input_codex_deliverable_quebrado_nao_passa_calado(api_client, caplog):
+    # Adapter fora do ar: o `except Exception` engolia tudo e o "delivered: false" ficava
+    # indistinguivel de turno em andamento. Agora loga (e o prompt fica seguro na fila pro drain).
+    fake = _fake_codex_adapter()
+    fake.deliverable = AsyncMock(side_effect=RuntimeError("app-server morreu"))
+    with patch("app.api._provider_of", return_value="codex"), \
+         patch("app.api.get_adapter", return_value=fake), \
+         patch("app.pqueue.PromptQueue.append", return_value={"id": "x1"}):
+        r = api_client.post("/api/sessions/cx/input", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 200
+    assert r.json()["delivered"] is False        # nao entregue: fica pendente pro drain-on-complete
+    assert "codex deliverable falhou" in caplog.text
+
+
 def test_input_claude_untouched_by_codex_path(api_client):
     # Caminho Claude intacto: usa terminal.send_prompt e NUNCA toca o adapter Codex.
     fake = _fake_codex_adapter()
