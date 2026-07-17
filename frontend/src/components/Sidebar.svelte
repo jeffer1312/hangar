@@ -231,7 +231,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     confirmDel = null;
     const prev = getActiveId(); // C1: save before pointing at target server
     selectServer(serverId); // api.ts mira o server ativo -> aponta pro dono da sessão
-    try { await deleteSession(name); } catch { /* ignora; SSE corrige */ }
+    try { await deleteSession(name); } catch (e) { flash(`excluir: ${errMsg(e)}`); }
     if (prev && prev !== serverId) selectServer(prev); // C1: restore so open chat stays on its server
     // SSE stream emitirá a lista atualizada automaticamente
   }
