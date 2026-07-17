@@ -104,6 +104,32 @@
     }
   })();
 
+  // Aponta o servidor ativo pro dono da rota, SINCRONAMENTE. Tem que rodar ANTES de currentHash
+  // mudar: `route` é $derived dele, e o Chat monta no MESMO tick buscando o histórico via apiFetch
+  // (= servidor ATIVO). Num $effect isto rodaria só DEPOIS do mount — o Chat já teria buscado no
+  // servidor anterior e mostrado "não encontrei o transcript" (era o bug de abrir card do quadro
+  // com >1 servidor; com 1 só, `routed === getActiveId()` e o furo não aparece).
+  // Devolve false quando o servidor é desconhecido (link de outra máquina, id re-pareado) -> o
+  // caller cai na tela-base em vez de montar o Chat contra o servidor errado.
+  // A ESPIADA entra aqui (e não num effect próprio) porque a ordem importa: o peekStep precisa ver o
+  // ativo de ANTES da rota nova, então tem que rodar antes do selectServer abaixo. A regra e seus
+  // casos de borda (deep-link frio, promoção pro chat, troca de card B->C) moram em lib/peek.ts,
+  // puros e testados — ela já foi apagada uma vez por refactor (62ee600 reverteu o fd79dda), e o que
+  // a protege é o peek.test.ts ficar vermelho, não este comentário.
+  let peekMemo = initialPeek;
+  function applyRouteServer(next: string): boolean {
+    const r = parseHash(next);
+    const peek = r.name === 'board' ? r.serverId : null;
+    const step = peekStep(peekMemo, r.name, peek, getActiveId());
+    peekMemo = step.memo;
+    if (step.restore) selectServer(step.restore);
+
+    const routed = r.name === 'chat' || r.name === 'board' ? r.serverId : null;
+    if (!routed || routed === getActiveId()) return true;
+    return selectServer(routed);
+  }
+  if (!applyRouteServer(window.location.hash || '#/')) window.location.hash = '#/';
+
   let currentHash = $state(window.location.hash || '#/');
   let authenticated = $state(isAuthenticated());
 
@@ -154,7 +180,13 @@
   // Listen for hash changes
   $effect(() => {
     function onHashChange() {
-      currentHash = window.location.hash || '#/';
+      const next = window.location.hash || '#/';
+      // Servidor ANTES do render (ver applyRouteServer): o Chat monta no mesmo tick.
+      if (!applyRouteServer(next)) {
+        window.location.hash = next.startsWith('#/board') ? '#/board' : '#/';
+        return; // o hash novo dispara este handler de novo, agora sem servidor a resolver
+      }
+      currentHash = next;
     }
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
@@ -177,19 +209,8 @@
   // Aqui e não no DesktopShell: o ativo já é decidido NESTE effect (um lugar só), e o App nunca
   // desmonta — #/costs e #/archive casam ANTES do branch isDesktop e DESMONTAM o shell, que foi o
   // que obrigou o teardown do fd79dda. Sem componente pra desmontar, aquela classe de bug some.
-  let peekMemo = initialPeek;
-  $effect(() => {
-    if (route.name === 'loading' || route.name === 'login') return;  // ainda não há rota de verdade
-    const peek = route.name === 'board' ? route.serverId : null;
-    const step = peekStep(peekMemo, route.name, peek, getActiveId());
-    peekMemo = step.memo;
-    if (step.restore) selectServer(step.restore);
-
-    const routed = route.name === 'chat' || route.name === 'board' ? route.serverId : null;
-    if (routed && routed !== getActiveId() && !selectServer(routed)) {
-      navigateTo(route.name === 'board' ? '#/board' : '#/');
-    }
-  });
+  // A aplicação da regra vive em applyRouteServer (acima), NÃO num $effect: efeito roda depois do
+  // DOM, e o Chat monta no mesmo tick buscando pelo servidor ativo — tarde demais.
 
   function navigateTo(hash: string) {
     window.location.hash = hash;
