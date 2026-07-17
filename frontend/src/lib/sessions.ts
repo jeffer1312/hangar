@@ -21,7 +21,14 @@ export interface Aggregate {
   loading: boolean;          // nenhum servidor emitiu nada ainda (nem erro)
 }
 
-export function aggregateSessions(servers: Server[], slots: ReadonlyMap<string, Slot>): Aggregate {
+// `hidden` = exclusão OTIMISTA: chaves `serverId::name` marcadas pelo doDelete das views somem da
+// lista na hora, sem esperar o SSE re-emitir (~1-2s). Se o delete falhar, a view desmarca e a linha
+// REAPARECE — rollback visual que o otimismo antigo (filter local no mobile) nunca teve.
+export function aggregateSessions(
+  servers: Server[],
+  slots: ReadonlyMap<string, Slot>,
+  hidden?: ReadonlySet<string>,
+): Aggregate {
   const seen = new Set<string>(); // dedup global: backend compartilhado por 2 URLs não duplica
   const rows: AggSession[] = [];
   const byServer: ServerBucket[] = [];
@@ -37,6 +44,7 @@ export function aggregateSessions(servers: Server[], slots: ReadonlyMap<string, 
     };
     if (slot?.sessions) {
       for (const s of slot.sessions) {
+        if (hidden?.has(`${srv.id}::${s.name}`)) continue;
         const key = `${s.jsonl ?? s.cwd ?? ''}::${s.name}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -48,4 +56,20 @@ export function aggregateSessions(servers: Server[], slots: ReadonlyMap<string, 
     byServer.push(bucket);
   }
   return { rows, byServer, loading: servers.length > 0 && !any };
+}
+
+// Faxina do `hidden`: quando o SSE re-emite a lista do servidor SEM a sessão, o backend já
+// confirmou a exclusão — a marca otimista não é mais necessária. Devolve só as chaves ainda
+// pendentes (sessão presente na última lista boa, ou servidor sem lista — aí não dá pra saber
+// e a marca fica). Puro, pra ser testável no vitest node.
+export function sweepHidden(hidden: ReadonlySet<string>, slots: ReadonlyMap<string, Slot>): Set<string> {
+  const kept = new Set<string>();
+  for (const key of hidden) {
+    const i = key.indexOf('::');
+    const serverId = key.slice(0, i);
+    const name = key.slice(i + 2);
+    const sessions = slots.get(serverId)?.sessions;
+    if (!sessions || sessions.some((s) => s.name === name)) kept.add(key);
+  }
+  return kept;
 }
