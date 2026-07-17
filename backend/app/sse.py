@@ -144,9 +144,13 @@ async def list_events(poll: float = 1.5, ping_every: int = 7):
         # then_target (feature #12) entra pro indicador de vinculo aparecer/sumir/trocar de alvo na hora.
         # status_line entra REDUZIDO (_status_sig): a linha crua carrega relogio/custo que mudam a
         # cada captura — o payload leva a crua, o sig so o que muda de verdade (modelo/ctx/5h/7d).
+        # bool(label): a PRESENÇA da barrinha de spinner precisa re-emitir (sem isto o sweep
+        # capturava o label e ninguém avisava o front); o TEXTO fica fora — muda a cada captura
+        # (timer/tokens) e re-emitiria a lista inteira à toa.
         sig = json.dumps(
             [(i.name, i.cwd, i.state, i.tracked, i.jsonl, i.question, i.stalled, i.limited,
-              i.limit_reset, i.then_target, _status_sig(getattr(i, "status_line", None)))
+              i.limit_reset, i.then_target, _status_sig(getattr(i, "status_line", None)),
+              bool(getattr(i, "label", None)))
              for i in infos],
             ensure_ascii=False,
         )

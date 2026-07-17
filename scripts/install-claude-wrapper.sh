@@ -160,6 +160,18 @@ if [ "$DO_STATUS" = 1 ]; then
   install_statusline
 fi
 
+# Sessões-irmãs: instala o cp-send junto (symlink + bloco no CLAUDE.md global). Idempotente —
+# era passo manual separado e máquina nova ficava sem o protocolo de pareamento sem ninguém avisar.
+CP_SEND_INSTALLER="$(dirname "$0")/install-cp-send.sh"
+if [ -x "$CP_SEND_INSTALLER" ]; then
+  echo
+  echo "cp-send (sessões-irmãs):"
+  # Não-fatal: o trabalho principal (wrapper/tmux/statusline) já foi feito — falha aqui avisa e segue.
+  "$CP_SEND_INSTALLER" || echo "aviso: install-cp-send falhou (não-fatal; wrapper já instalado)"
+else
+  echo "aviso: install-cp-send.sh não encontrado em $CP_SEND_INSTALLER — setup de sessões-irmãs PULADO"
+fi
+
 echo
 echo "Done. Open a NEW terminal (or reload your rc) so the wrapper loads, then run:"
 echo "  claude        # creates a tmux session named after the folder, with a --session-id"
