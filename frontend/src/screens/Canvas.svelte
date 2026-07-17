@@ -6,6 +6,7 @@
   import type { BoardRow, PendingMsg } from './Board.svelte';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { serverColor } from '../lib/auth';
+  import { pairColor } from '../lib/format';
   import { placeNew, PAD, GAP, CARD_W, CARD_H, type CanvasLayout, type CardBox } from '../lib/canvasLayout';
 
   interface Props { onOpenSession: (name: string, serverId: string) => void }
@@ -180,6 +181,30 @@
     return next;
   }
 
+  // Reúne o GRUPO de pareamento em volta do card âncora: membros empilham logo abaixo, com o
+  // mesmo tamanho; membro oculto é desocultado (reunir = "quero ver o grupo inteiro"); terceiros
+  // atropelados são empurrados pela cascata. Disparado pelo clique no chip 🤝 do card.
+  function gatherPair(anchorKey: string, gid: string) {
+    const a = layout[anchorKey];
+    if (!a) return;
+    const members = rows.filter((r) => r.pair_gid === gid && rowKey(r) !== anchorKey);
+    if (members.length === 0) return;
+    const memberKeys = members.map(rowKey);
+    if (hidden.some((k) => memberKeys.includes(k))) {
+      hidden = hidden.filter((k) => !memberKeys.includes(k));
+      saveHidden();
+    }
+    let next: CanvasLayout = { ...layout };
+    let y = a.y + a.h + GAP;
+    for (const k of memberKeys) {
+      next[k] = { x: a.x, y, w: a.w, h: a.h };
+      y += a.h + GAP;
+    }
+    for (const k of [anchorKey, ...memberKeys]) next = resolveCollisions(k, next);
+    layout = next;
+    saveLayout();
+  }
+
   // ── Resize: CSS resize:both nativo no wrapper; o observer captura, empurra vizinhos e persiste. ──
   function observeSize(node: HTMLElement, key: string) {
     const ro = new ResizeObserver(() => {
@@ -257,9 +282,12 @@
       {#if box}
         <div class="cv-card" use:observeSize={key}
              style="left: {box.x}px; top: {box.y}px; width: {box.w}px; height: {box.h}px;">
+          <!-- Barra tingida com a COR DO GRUPO (pairColor): membros do mesmo pareamento se
+               reconhecem de longe no canvas; sem par, barra neutra de sempre. -->
           <div class="cv-handle" onpointerdown={(e) => dragStart(e, key)} onpointermove={dragMove}
                onpointerup={dragEnd} onpointercancel={dragEnd}
                role="button" tabindex="-1" aria-label={`Mover ${row.name}`}
+               style={row.pair_gid ? `background: color-mix(in srgb, ${pairColor(row.pair_gid)} 16%, var(--bg-surface)); color: ${pairColor(row.pair_gid)};` : ''}
                title="Arrastar pra mover">⋮⋮</div>
           <!-- IRMÃO do handle (não filho): botão real dentro de role="button" é aninhamento
                interativo inválido (ARIA). Absoluto por cima da faixa; intercepta o ponteiro antes
@@ -279,6 +307,7 @@
               sendError={sendErrors.get(key) ?? ''}
               onSendError={(m) => setSendError(key, m)}
               onOpen={() => onOpenSession(row.name, row.serverId)}
+              onGatherPair={row.pair_gid ? () => gatherPair(key, row.pair_gid!) : null}
             />
           </div>
         </div>
