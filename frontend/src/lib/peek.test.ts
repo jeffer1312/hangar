@@ -93,3 +93,34 @@ describe('espiada do quadro: abrir um card não muda onde você está', () => {
     expect(active).toBe('B');
   });
 });
+
+// peekStep é agnóstico à rota — 'canvas' se comporta igual a 'board' (só #/chat promove). Estes casos
+// documentam o call-site do canvas; a proteção real do peek do canvas são as 3 linhas do App
+// (applyRouteServer) + o smoke ao vivo. Ver aviso no brief da Task 9.
+describe('espiada do canvas: mesma regra do quadro', () => {
+  it('A ativo -> card de B no canvas -> fecha overlay -> volta pra A', () => {
+    const { active, restores } = walk(
+      [{ name: 'sessions' }, { name: 'canvas', peek: 'B' }, { name: 'canvas' }],
+      'A',
+    );
+    expect(restores).toEqual(['A']);
+    expect(active).toBe('A');
+  });
+
+  it('ir do overlay do canvas pro chat PROMOVE, não restaura', () => {
+    const { active, restores } = walk(
+      [{ name: 'sessions' }, { name: 'canvas', peek: 'B' }, { name: 'chat' }],
+      'A',
+    );
+    expect(restores).toEqual([]);
+    expect(active).toBe('B');
+  });
+
+  it('trocar de card board B -> canvas C direto ainda volta pra A', () => {
+    const { active } = walk(
+      [{ name: 'sessions' }, { name: 'board', peek: 'B' }, { name: 'canvas', peek: 'C' }, { name: 'canvas' }],
+      'A',
+    );
+    expect(active).toBe('A');
+  });
+});

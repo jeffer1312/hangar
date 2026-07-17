@@ -2,6 +2,7 @@
   import Sidebar from './Sidebar.svelte';
   import Chat from '../screens/Chat.svelte';
   import Board from '../screens/Board.svelte';
+  import Canvas from '../screens/Canvas.svelte';
 
   // Shell de DESKTOP (>=820px): sidebar fixa + chat largo. Reusa o componente Chat do mobile
   // sem alteracao; abaixo de 820px o App nem monta isto (fica o fluxo mobile intacto).
@@ -11,20 +12,23 @@
     // têm o MESMO nome — sem o servidor na key, trocar entre elas não remontava o Chat (SSE preso
     // no servidor antigo com o composer já falando com o novo).
     currentKey?: string | null;
-    view: 'chat' | 'board';   // quadro kanban = visualização irmã da lista+chat, mesma sidebar
-    // Overlay do quadro: vem da ROTA (#/board/<serverId>/<nome>), não é estado daqui. O shell não
-    // aponta nem restaura servidor — quem faz isso é o $effect da rota no App, num lugar só.
+    view: 'chat' | 'board' | 'canvas';   // quadro/canvas = visualizações irmãs da lista+chat, mesma sidebar
+    // Overlay do quadro/canvas: vem da ROTA (#/board|#/canvas/<serverId>/<nome>), não é estado daqui.
+    // O shell não aponta nem restaura servidor — quem faz isso é o $effect da rota no App, num lugar só.
     overlaySession: { name: string; serverId: string } | null;
     onOpenBoardSession: (name: string, serverId: string) => void;
+    onOpenCanvasSession: (name: string, serverId: string) => void;
     onCloseOverlay: () => void;
     onToggleBoard: () => void;
+    onToggleCanvas: () => void;
     onNavigateToChat: (name: string) => void;
     onCompare: (ids: { serverId: string; name: string }[]) => void;
     onLogout: () => void;
   }
   let {
     currentSession, currentKey = null, view, overlaySession,
-    onOpenBoardSession, onCloseOverlay, onToggleBoard, onNavigateToChat, onCompare, onLogout,
+    onOpenBoardSession, onOpenCanvasSession, onCloseOverlay, onToggleBoard, onToggleCanvas,
+    onNavigateToChat, onCompare, onLogout,
   }: Props = $props();
 
   // Split view (pareamento): N Chats lado a lado — assiste o GRUPO inteiro sem alternar.
@@ -69,16 +73,22 @@
 
 <div class="desktop-shell">
   <Sidebar {currentSession} onSelect={onNavigateToChat} {onCompare} {onLogout}
-           boardActive={view === 'board'} {onToggleBoard} />
+           boardActive={view === 'board'} {onToggleBoard}
+           canvasActive={view === 'canvas'} {onToggleCanvas} />
 
   <main class="desktop-main" class:split={splitSessions.length > 0}>
-    {#if view === 'board'}
-      <Board onOpenSession={onOpenBoardSession} />
+    {#if view === 'board' || view === 'canvas'}
+      {#if view === 'board'}
+        <Board onOpenSession={onOpenBoardSession} />
+      {:else}
+        <Canvas onOpenSession={onOpenCanvasSession} />
+      {/if}
       {#if overlaySession}
-        <!-- {#key}: o Chat guarda estado pesado amarrado à sessão (SSE, histórico) e precisa
-             remontar por sessão — mesma razão do {#key currentKey ?? currentSession} abaixo. Inclui o
-             SERVIDOR pelo mesmo motivo do currentKey: homônimas em servidores diferentes têm o mesmo
-             nome, e só o nome na key deixaria o Chat preso no servidor antigo. -->
+        <!-- Overlay do chat compartilhado entre board e canvas (mesma rota-overlay). {#key}: o Chat
+             guarda estado pesado amarrado à sessão (SSE, histórico) e precisa remontar por sessão —
+             mesma razão do {#key currentKey ?? currentSession} abaixo. Inclui o SERVIDOR pelo mesmo
+             motivo do currentKey: homônimas em servidores diferentes têm o mesmo nome, e só o nome na
+             key deixaria o Chat preso no servidor antigo. -->
         {#key overlaySession.serverId + '::' + overlaySession.name}
           <div class="board-overlay" role="dialog" aria-label="Chat da sessão">
             <button class="split-close" onclick={onCloseOverlay}
