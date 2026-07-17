@@ -6,7 +6,8 @@ export interface CardBox { x: number; y: number; w: number; h: number }
 export type CanvasLayout = Record<string, CardBox>;
 
 export const CARD_W = 320;
-export const CARD_H = 300;
+// 380: altura padrão precisa mostrar conversa DE VERDADE (300 mal cabia header+sub+2 linhas+composer).
+export const CARD_H = 380;
 export const GAP = 16;
 export const PAD = 24;
 
