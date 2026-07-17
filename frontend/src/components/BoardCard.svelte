@@ -2,7 +2,7 @@
   import { onMount, untrack } from 'svelte';
   import AssistantBubble from './AssistantBubble.svelte';
   import { getHistoryTailCached, getHistoryTailForServer, sendInputForServer, selectOptionForServer } from '../lib/api';
-  import { relativeTime, bubblesFromTail, stateLabels } from '../lib/format';
+  import { relativeTime, bubblesFromTail, stateLabels, pairColor } from '../lib/format';
   import { parseStatusLine } from '../lib/statusline';
   import type { Server } from '../lib/auth';
   import type { ChatEvent } from '../lib/types';
@@ -27,10 +27,12 @@
     onOpen: () => void;               // abre o chat completo
     // Canvas: o card preenche o wrapper (a altura vem de fora). Board não passa → comportamento intacto.
     fill?: boolean;
+    // Canvas: clicar no chip 🤝 reúne o grupo em volta deste card. Board não passa → chip estático.
+    onGatherPair?: (() => void) | null;
   }
   let {
     session, server, color, draft, onDraftChange,
-    pending, updatePending, sendError, onSendError, onOpen, fill = false,
+    pending, updatePending, sendError, onSendError, onOpen, fill = false, onGatherPair = null,
   }: Props = $props();
 
   const TAIL = 15;
@@ -232,7 +234,21 @@
     <div class="bc-sub">
       {#if session.branch}<span class="bc-branch">⎇ {session.branch}</span>{/if}
       {#if session.pair_peers?.length}
-        <span class="bc-chip" title={'pareada com ' + session.pair_peers.join(', ')}>🤝 {session.pair_peers.join(', ')}</span>
+        {@const pc = session.pair_gid ? pairColor(session.pair_gid) : 'var(--text-muted)'}
+        <!-- Cor POR GRUPO (gid): todos os membros carregam o mesmo chip tingido — dá pra VER quem
+             pertence a quem em qualquer view. No canvas o chip vira botão: reúne o grupo. -->
+        {#if onGatherPair}
+          <button class="bc-chip bc-chip-btn"
+                  style="background: color-mix(in srgb, {pc} 16%, transparent); color: {pc};"
+                  onclick={(e) => { e.stopPropagation(); onGatherPair?.(); }}
+                  title={'pareada com ' + session.pair_peers.join(', ') + ' — clicar reúne o grupo aqui'}>
+            🤝 {session.pair_peers.join(', ')}
+          </button>
+        {:else}
+          <span class="bc-chip"
+                style="background: color-mix(in srgb, {pc} 16%, transparent); color: {pc};"
+                title={'pareada com ' + session.pair_peers.join(', ')}>🤝 {session.pair_peers.join(', ')}</span>
+        {/if}
       {/if}
       {#if meta?.costUsd != null}<span title="custo da sessão">💵 ${meta.costUsd.toFixed(2)}</span>{/if}
       {#if meta?.sessionTime}<span title="tempo de sessão">⏱ {meta.sessionTime}</span>{/if}
@@ -382,8 +398,17 @@
     background: color-mix(in srgb, currentColor 12%, transparent);
     padding: 1px 8px; border-radius: var(--radius-full);
   }
-  /* Chip do par carrega NOMES: teto + ellipsis pra não engolir o header (tooltip tem a lista). */
-  .bc-chip { max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Chip do par carrega NOMES: teto + ellipsis pra não engolir o header (tooltip tem a lista).
+     Tinta/cor vêm inline (pairColor por gid). */
+  .bc-chip {
+    max-width: 11em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    padding: 1px 8px; border-radius: var(--radius-full);
+  }
+  .bc-chip-btn {
+    border: 0; font: inherit; font-size: var(--text-xs); cursor: pointer;
+    min-height: 0; min-width: 0; line-height: inherit;
+  }
+  .bc-chip-btn:hover { filter: brightness(1.2); }
   .bc-time { margin-left: auto; }
   .bc-open { color: var(--text-muted); flex-shrink: 0; }
   /* Fade SÓ no topo (o rodapé é a msg mais recente — o que você não quer apagar). Dois masks:
