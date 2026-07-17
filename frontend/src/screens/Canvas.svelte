@@ -46,7 +46,9 @@
   let showHidden = $state(false);
 
   // ── Organizar: recoloca TODOS os visíveis numa grade — pareados (gid) contíguos, quem espera
-  // por você primeiro, depois working, depois idle; tamanho volta ao padrão (grade uniforme). ──
+  // por você primeiro, depois working, depois idle; 3 colunas dividindo a LARGURA da tela por
+  // igual (pedido: cards redimensionados pra preencher, não 320px fixos encostados à esquerda). ──
+  let planeWidth = $state(0);
   function autoArrange() {
     const rank = (s: string) => (s === 'awaiting_input' ? 0 : s === 'working' ? 1 : 2);
     const groups = new Map<string, BoardRow[]>();
@@ -61,8 +63,11 @@
       .sort((a, b) =>
         Math.min(...a.map((m) => rank(m.state))) - Math.min(...b.map((m) => rank(m.state))) ||
         Math.max(...b.map((m) => m.last_activity ?? 0)) - Math.max(...a.map((m) => m.last_activity ?? 0)));
-    // Grade fixa de 3 colunas (pedido do usuário: padrão constante lê melhor que encher a tela).
+    // 3 colunas dividindo a largura visível por igual (fallback CARD_W se a medida ainda não veio).
     const cols = 3;
+    const w = planeWidth > 0
+      ? Math.max(280, Math.floor((planeWidth - PAD * 2 - GAP * (cols - 1)) / cols))
+      : CARD_W;
     const next: CanvasLayout = { ...layout };
     let i = 0;
     for (const group of orderedGroups) {
@@ -72,9 +77,9 @@
       if (group.length > rest && group.length <= cols) i += rest;
       for (const r of group) {
         next[rowKey(r)] = {
-          x: PAD + (i % cols) * (CARD_W + GAP),
+          x: PAD + (i % cols) * (w + GAP),
           y: PAD + Math.floor(i / cols) * (CARD_H + GAP),
-          w: CARD_W, h: CARD_H,
+          w, h: CARD_H,
         };
         i++;
       }
@@ -211,7 +216,7 @@
   );
 </script>
 
-<div class="canvas">
+<div class="canvas" bind:clientWidth={planeWidth}>
   <!-- Topo fixo: ⚡5h/📅7d por servidor (compartilhado pela conta) + ações do canvas. -->
   <div class="cv-top">
     <RateStrip buckets={sessionsStore.byServer} />
