@@ -46,6 +46,10 @@
   --error:    #ff453a;
   --warning:  #ff9f0a;
 
+  /* Luminância das cores de grupo de pareamento (lib/format.ts pairColor): pastel claro sobre
+     fundo escuro; o tema claro sobrescreve pra mais fundo (aro fino sumia sobre quase-branco). */
+  --pair-l: 0.72;
+
   /* Status pill */
   --pill-working-bg:  rgba(124,135,232,0.16);
   --pill-working-fg:  #aab2f3;
@@ -99,6 +103,9 @@
   --success:  #146c30;
   --error:    #b3251c;
   --warning:  #7a5408;
+
+  /* Cores de grupo mais fundas no claro (mesma razao dos semanticos acima). */
+  --pair-l: 0.5;
 
   /* Status pill (mesma semantica; fg >=4.5:1 sobre o bg tintado blendado com o paper, ate no pior fundo) */
   --pill-working-bg:  rgba(91,106,208,0.14);

@@ -2,7 +2,7 @@
   import { onMount, untrack } from 'svelte';
   import AssistantBubble from './AssistantBubble.svelte';
   import { getHistoryTailCached, getHistoryTailForServer, sendInputForServer, selectOptionForServer } from '../lib/api';
-  import { relativeTime, bubblesFromTail, stateLabels, pairColor } from '../lib/format';
+  import { relativeTime, bubblesFromTail, stateLabels, pairColor, parsePeerMessage } from '../lib/format';
   import { parseStatusLine } from '../lib/statusline';
   import type { Server } from '../lib/auth';
   import type { ChatEvent } from '../lib/types';
@@ -96,6 +96,28 @@
   }
   onMount(loadTail);
 
+  // "Quase-live" sem SSE por card (invariante ~6 conexões/host): no canvas o card NUNCA remonta
+  // (não há colunas), então o corpo congelava no fetch do mount mesmo com o chip de estado
+  // atualizando pelo stream da lista. Aqui: estado/atividade novos na prop -> refaz a cauda (o
+  // cache por chave torna "nada mudou de verdade" um hit sem rede). Se o usuário está LENDO
+  // histórico (scroll fora do fim), adia — refaz quando ele voltar pro fim (onBodyScroll).
+  let liveSeen = '';
+  // $state: vira o chip "▼ novas mensagens" no template — adiar em silêncio fazia parecer que o
+  // card só recebia depois de rolar.
+  let refreshPending = $state(false);
+  function nearBottom(): boolean {
+    return !bodyEl || bodyEl.scrollTop >= bodyEl.scrollHeight - bodyEl.clientHeight - 120;
+  }
+  $effect(() => {
+    const sig = `${session.state}::${session.last_activity ?? 0}`;
+    if (liveSeen === sig) return;
+    const first = liveSeen === '';
+    liveSeen = sig;
+    if (first) return;              // mount já carrega via onMount
+    if (nearBottom()) loadTail();
+    else refreshPending = true;
+  });
+
   // Paginação pra trás: rolar até o TOPO do corpo busca uma janela maior (a conversa inteira em
   // páginas de PAGE, não só a cauda de 15). Direto no getHistoryTailForServer (sem cache): o limit
   // varia e o backend faz tail-read barato. Âncora de leitura preservada via delta de scrollHeight.
@@ -140,6 +162,11 @@
   }
   function onBodyScroll() {
     if (bodyEl && bodyEl.scrollTop <= 0 && !loading) loadMore();
+    // Atualização adiada enquanto lia histórico: voltou pro fim -> aplica.
+    if (refreshPending && nearBottom() && !loading) {
+      refreshPending = false;
+      loadTail();
+    }
   }
   // Wheel-pra-cima pagina MESMO sem overflow: conteúdo curto não gera evento de scroll nunca
   // (beco sem saída — "sei que tem mais msg e não consigo rolar"). No topo (ou sem barra), girar
@@ -294,7 +321,20 @@
                não ser o dono desta sessão (mesma razão do Compare.svelte:137-141). -->
           <AssistantBubble text={e.text ?? ''} animate={false} />
         {:else}
-          <p class="bc-user">{e.text}</p>
+          {@const peer = e.text ? parsePeerMessage(e.text) : null}
+          {#if peer}
+            <!-- Recado de par ([de: X]/[grupo: X]): mesma linguagem da bolha do chat cheio
+                 (chip 📟/📣 + tinta accent), versão compacta — sem isto o card mostrava o
+                 prefixo cru como se fosse msg tua. -->
+            <div class="bc-user bc-peer" class:bc-peer-group={peer.scope === 'group'}>
+              <span class="bc-peer-chip">{peer.scope === 'group' ? `📣 grupo · ${peer.from}` : `📟 de: ${peer.from}`}</span>
+              <!-- Em <p> próprio (padrão do UserBubble): {peer.text} solto como irmão do span
+                   herdava o whitespace do template como espaço inicial (pre-wrap o exibe). -->
+              <p class="bc-peer-text">{peer.text}</p>
+            </div>
+          {:else}
+            <p class="bc-user">{e.text}</p>
+          {/if}
         {/if}
       {/each}
       <!-- Meio-apagado enquanto o POST está EM VOO; sólido assim que o backend aceita (ackAt). -->
@@ -306,6 +346,12 @@
       {/if}
       {#if session.state === 'working' && session.label}
         <p class="bc-typing">✳ {session.label}</p>
+      {/if}
+      {#if refreshPending}
+        <!-- Chegou resposta enquanto lias histórico: aviso clicável em vez de puxar teu scroll. -->
+        <button class="bc-new" onclick={() => { refreshPending = false; loadTail(); }}>
+          ▼ novas mensagens
+        </button>
       {/if}
       {#if session.state === 'awaiting_input' && session.question}
         <div class="bc-question">
@@ -399,12 +445,12 @@
   @keyframes bc-slide { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
   .bc-head {
     display: flex; align-items: center; gap: 8px; min-width: 0;
-    padding: 10px var(--space-3) 6px; cursor: pointer;
+    padding: 10px var(--space-4) 6px; cursor: pointer;
   }
   /* Linha 2 do header: branch/par/custo/tempo — tira o ruído da linha do nome. */
   .bc-sub {
     display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
-    padding: 0 var(--space-3) 8px;
+    padding: 0 var(--space-4) 8px;
     font-size: var(--text-xs); color: var(--text-muted);
     font-variant-numeric: tabular-nums;
   }
@@ -441,8 +487,16 @@
     /* contain: com o mouse sobre o card, o wheel para na borda do card — sem encadear pro scroll
        da coluna/canvas (que fazia a lista subir e o card fugir de baixo do cursor). */
     overscroll-behavior: contain;
-    padding: 0 var(--space-3) var(--space-3);
-    display: flex; flex-direction: column; gap: 8px;
+    padding: 2px var(--space-4) var(--space-4);
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  /* Aviso de atualização adiada: sticky no pé do scroll, não puxa o teu ponto de leitura. */
+  .bc-new {
+    position: sticky; bottom: 0; align-self: center;
+    background: var(--accent-dim); color: var(--accent);
+    border: 0; border-radius: var(--radius-full);
+    font-family: inherit; font-size: var(--text-xs); font-weight: 600;
+    padding: 3px 12px; cursor: pointer; min-height: 0; min-width: 0;
   }
   /* Fade SÓ com transbordo real (class:masked): em conversa curta a máscara comia a 1ª linha sem
      haver nada pra rolar. Dois masks: o segundo preserva a scrollbar. */
@@ -473,6 +527,19 @@
     white-space: pre-wrap; word-break: break-word; margin: 0;
   }
   .bc-pending { opacity: 0.55; }
+  /* Recado de par: entra como "recebido" (esquerda, canto reto embaixo-esquerda), tinta accent —
+     espelho compacto do .bubble.peer do chat. Aviso de grupo troca o acento pra warning. */
+  .bc-peer {
+    align-self: flex-start;
+    display: flex; flex-direction: column; gap: 2px;
+    background: var(--accent-dim);
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    border-radius: 12px 12px 12px 4px;
+  }
+  .bc-peer-chip { font-size: 10.5px; font-weight: 600; color: var(--accent); }
+  .bc-peer-text { margin: 0; }
+  .bc-peer-group { border-color: color-mix(in srgb, var(--warning) 45%, transparent); }
+  .bc-peer-group .bc-peer-chip { color: var(--warning); }
   .bc-typing { color: var(--text-secondary); font-size: var(--text-xs); font-style: italic; }
   /* Pergunta pendente: tinta de fundo no vocabulário awaiting (--pill-input-*) — listra lateral
      é ban; a tinta preenche o bloco e lê melhor com o card estreito. */
@@ -489,7 +556,7 @@
      hover/focus. */
   .bc-foot {
     display: flex; flex-direction: column; gap: 4px;
-    padding: var(--space-2) var(--space-3) var(--space-3);
+    padding: var(--space-2) var(--space-4) var(--space-3);
     border-top: 1px solid var(--border-subtle);
   }
   /* Modelo + contexto da sessão (statusline cacheada): o contexto do que este composer alcança. */

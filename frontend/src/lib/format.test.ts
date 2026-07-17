@@ -281,9 +281,12 @@ describe('latestAssistantEvent', () => {
 describe('resetsIn', () => {
   const now = () => Date.now() / 1000;
   it('formata instante FUTURO como "em X" (o bug era cair em "agora")', () => {
-    expect(resetsIn(now() + 7 * 86400)).toBe('em 7 d');
-    expect(resetsIn(now() + 2 * 3600)).toBe('em 2 h');
-    expect(resetsIn(now() + 30 * 60)).toBe('em 30 min');
+    // +5s de folga: o now() daqui e o Date.now() interno do resetsIn leem relógios com ms de
+    // diferença — sem folga o floor() caía pro degrau de baixo sempre que um ms virava entre as
+    // duas leituras ("em 6 d" em vez de "em 7 d"; flake real observado).
+    expect(resetsIn(now() + 7 * 86400 + 5)).toBe('em 7 d');
+    expect(resetsIn(now() + 2 * 3600 + 5)).toBe('em 2 h');
+    expect(resetsIn(now() + 30 * 60 + 5)).toBe('em 30 min');
   });
   it('arredonda pra pelo menos 1 min e trata falsy/passado como vazio', () => {
     expect(resetsIn(now() + 20)).toBe('em 1 min');   // <1min -> não vira "em 0 min"
