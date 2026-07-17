@@ -1,0 +1,6 @@
+{
+  "outra-maquina": {
+    "base_url": "http://100.64.0.2:8765",
+    "token": "<CP_AUTH_TOKEN do backend/.env daquela máquina>"
+  }
+}
