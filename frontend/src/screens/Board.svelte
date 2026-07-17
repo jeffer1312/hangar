@@ -12,81 +12,26 @@
   import { onMount } from 'svelte';
   import { SvelteMap } from 'svelte/reactivity';
   import BoardCard from '../components/BoardCard.svelte';
-  import { openSessionsStream } from '../lib/api';
-  import { listServers, onServersChanged, serverColor } from '../lib/auth';
-  import type { Server } from '../lib/auth';
+  import { serverColor } from '../lib/auth';
   import type { State } from '../lib/types';
   import { stateColors } from '../lib/format';
+  import { sessionsStore } from '../lib/sessionsStore.svelte';
 
   interface Props { onOpenSession: (name: string, serverId: string) => void }
   let { onOpenSession }: Props = $props();
 
-  // Mesma agregação multi-servidor da Sidebar (slots/recompute/connect): 1 SSE por servidor —
-  // NUNCA por card (limite ~6 conexões SSE/host no HTTP/1.1). Falha de um servidor é isolada.
-  let servers = $state<Server[]>([]);
-  let rows = $state<BoardRow[]>([]);
-  let offline = $state<string[]>([]); // labels de servidores sem stream agora
-  const slots = new Map<string, { sessions: SessionInfo[] | null; error: string | null }>();
-  const streams = new Map<string, EventSource>();
-
-  function recompute() {
-    const seen = new Set<string>();
-    const out: BoardRow[] = [];
-    const off: string[] = [];
-    for (const srv of servers) {
-      const slot = slots.get(srv.id);
-      if (slot?.error) off.push(srv.label);
-      if (!slot?.sessions) continue;
-      for (const s of slot.sessions) {
-        const key = `${s.jsonl ?? s.cwd ?? ''}::${s.name}`; // dedup: backend atrás de 2 URLs
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push({ ...s, serverId: srv.id });
-      }
-    }
-    rows = out;
-    offline = off;
-  }
-
-  // Reconcilia os streams com a lista: fecha o que sumiu, abre o que entrou, mantem o resto (mesmo
-  // connect da Sidebar). Reabrir tudo a cada mudanca custaria o historico de sessoes dos servers que
-  // ficaram — e a cota de ~6 SSE/host.
-  function connect(list: Server[]) {
-    for (const [id, es] of streams) {
-      if (!list.some((s) => s.id === id)) { es.close(); streams.delete(id); slots.delete(id); }
-    }
-    for (const s of list) {
-      if (streams.has(s.id)) continue;
-      const es = openSessionsStream(s);
-      es.addEventListener('sessions', (e) => {
-        try {
-          slots.set(s.id, { sessions: JSON.parse((e as MessageEvent).data), error: null });
-        } catch {
-          // Frame malformado: sem isto o throw sobe no dispatch do EventSource e o slot DESTE servidor
-          // congela em silêncio (o onerror não dispara pra erro de parse — só pra falha de conexão).
-          // Trata como offline e reusa o banner: mantém a última lista boa, mas avisa que parou.
-          slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
-        }
-        recompute();
-      });
-      es.onerror = () => {
-        slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
-        recompute();
-      };
-      streams.set(s.id, es);
-    }
-    recompute();
-  }
-
+  // Agregação multi-servidor içada pro store único (era a cópia local slots/recompute/connect):
+  // 1 SSE por servidor, refcount compartilhado com a Sidebar. retain/release pareados EXATAMENTE 1x.
   onMount(() => {
-    servers = listServers();
-    connect(servers);
-    // O menu de conta (Sidebar) fica visivel com o quadro aberto, e remover um servidor NAO-ativo nao
-    // recarrega a pagina. Sem reconciliar aqui: `servers` stale, EventSource orfao contra o server
-    // removido e card apontando pra credencial que o usuario acabou de apagar.
-    const off = onServersChanged(() => { servers = listServers(); connect(servers); });
-    return () => { off(); for (const es of streams.values()) es.close(); streams.clear(); };
+    sessionsStore.retain();
+    return () => sessionsStore.release();
   });
+
+  // AggSession ⊇ BoardRow — o card só precisa de serverId a mais que SessionInfo (o store já enriquece).
+  const rows = $derived<BoardRow[]>(sessionsStore.rows);
+  // Banner de offline mesmo com lista stale: filtra por error SEM gate de loaded.
+  const offline = $derived(sessionsStore.byServer.filter((b) => b.error).map((b) => b.server.label));
+  const servers = $derived(sessionsStore.servers);
 
   // Colunas fixas por estado; dentro, atividade recente primeiro (desempate por nome = estável).
   // SEM coluna "dead": esta lista nunca recebe esse estado — o classify() do backend só devolve
