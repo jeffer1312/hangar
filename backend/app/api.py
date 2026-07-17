@@ -751,14 +751,22 @@ async def _send_one_codex(name: str, text: str) -> dict:
     except Exception as e:
         _log.exception("codex send_prompt falhou name=%s", name)
         return {"ok": False, "error": str(e)}
-    if result == "sent" and entry is not None:
-        # turno iniciou -> marca entregue pra o drain-on-complete nao reenviar a mesma entrada.
-        try:
-            await asyncio.to_thread(PromptQueue(name).set_delivered, entry["id"], True)
-        except OSError:
-            pass
-    # result == "deferred" (corrida idle->working entre o deliverable e o send): fica pendente (delivered
-    # ja e False) -> o drain-on-complete entrega depois. Nada a fazer.
+    if result == "sent":
+        if entry is not None:
+            # turno iniciou -> marca entregue pra o drain-on-complete nao reenviar a mesma entrada.
+            try:
+                await asyncio.to_thread(PromptQueue(name).set_delivered, entry["id"], True)
+            except OSError:
+                pass
+    elif entry is None:
+        # "deferred" (corrida idle->working entre o deliverable e o send) + sidecar morto: o texto NAO
+        # foi digitado E nao ha entrada pendente pro drain-on-complete drenar -- a msg nao esta em lugar
+        # NENHUM. Aqui morre a suposicao do append la em cima ("entregavel -> o turn/start leva o
+        # texto"): o deferred e exatamente o caso em que nao levou. Ultimo ponto onde o 200 "na fila"
+        # ainda seria a mentira do eeba30a.
+        _log.error("prompt deferido sem entrada na fila — NAO foi entregue name=%s", name)
+        return {"ok": False, "error": "fila indisponivel e o turno nao aceitou o prompt: nao foi entregue"}
+    # "deferred" COM entrada na fila: fica pendente (delivered ja e False) -> drain-on-complete entrega.
     return {"ok": True, "error": None, "delivered": result == "sent"}
 
 
