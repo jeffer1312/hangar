@@ -35,6 +35,10 @@ class SessionInfo(BaseModel):
     # armado ("quando terminar -> enviar pra"), None senao. So o alvo (pro indicador na lista); o texto
     # do prompt fica no sidecar (app.chain.ThenLink), lido so na hora de disparar.
     then_target: Optional[str] = None
+    # Statusline crua da sessao (mesma do StateEvent), pro card do board/canvas mostrar modelo/
+    # contexto/rate sem SSE por sessao. Vem de um cache com TTL em list_with_state (cadencia ~20s,
+    # max 2 capturas de pane por chamada) — pode atrasar; o Chat continua com a versao ao vivo.
+    status_line: Optional[str] = None
     # Pareamento ativo (feature "trabalhando juntas"): os OUTROS membros do grupo, ou None.
     # Grupo de 2 = lista de 1 (o antigo 1:1 é caso particular). Badge/chip na UI.
     pair_peers: Optional[list[str]] = None
