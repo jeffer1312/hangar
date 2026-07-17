@@ -322,12 +322,13 @@ export function bubblesFromTail(events: ChatEvent[]): ChatEvent[] {
 }
 
 // Cor determinística por grupo de pareamento (gid): mesmo grupo = mesma cor em QUALQUER view
-// (chip 🤝 do card, barra do canvas). Hash simples -> matiz; OKLCH com croma moderado lê bem
-// nos dois temas.
+// (chip 🤝 do card, barra/aro do canvas). Hash simples -> matiz. A LUMINÂNCIA vem do token
+// --pair-l (app.css: 0.72 no escuro, mais fundo no claro) — L fixa 0.72 era pastel invisível
+// sobre fundo quase-branco (aro de 1.5px sumia no tema claro).
 export function pairColor(gid: string): string {
   let h = 0;
   for (let i = 0; i < gid.length; i++) h = (h * 31 + gid.charCodeAt(i)) >>> 0;
-  return `oklch(0.72 0.14 ${h % 360})`;
+  return `oklch(var(--pair-l, 0.72) 0.14 ${h % 360})`;
 }
 
 // Abrevia contagem grande: 3668662 -> "3.7M", 1.5e9 -> "1.5B", 999 -> "999".
