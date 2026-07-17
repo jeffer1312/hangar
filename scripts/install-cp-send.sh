@@ -24,6 +24,7 @@ BLOCK=$(cat <<'EOF'
 # Sessões-irmãs (claude-pocket)
 
 - Outras sessões Claude vivas nesta máquina: `cp-send --list` (nome, estado, cwd). Mandar recado: `cp-send <sessao> "msg"` — chega como prompt lá (fila durável se ocupada).
+- Sessão em OUTRO servidor: endereço `servidor::sessao` (ex: `cp-send my-org::api-fix "msg"`). Requer `backend/peers.json` na máquina; `cp-send --list` já mostra as remotas com o prefixo. Recado `[de: servidor::sessao]` → responder usando o endereço completo. Pareamento/`--group` cross-server ainda NÃO existem — só recado 1:1.
 - Prompt começando com `[de: <sessao>]` = recado 1:1 de outra sessão Claude, não do usuário. Tratar como informação/pedido do par; responder de volta via `cp-send <sessao> "..."` SÓ se a mensagem pedir resposta (evita loop infinito).
 - Prompt `[grupo: <sessao>]` = AVISO pro grupo todo (marco). É UNIDIRECIONAL: NUNCA responder com `cp-send --group` (vira tempestade N×N). Precisa responder → 1:1 (`cp-send <sessao>`) e só se necessário. Mandar aviso de marco pro grupo próprio: `cp-send --group "msg"` (uma vez, chega como `[grupo: você]` nos demais).
 - Enviar quando o usuário pedir ("avisa a sessão X") OU quando houver **pareamento ativo**: usuário declarou "sessão X pareada contigo pra <tarefa>" (direto ou via recado `[de: ...]` de pareamento). Pareado → pode pedir/fornecer contrato, avisar conclusão, tirar dúvida técnica do par por iniciativa própria, dentro do escopo da tarefa.

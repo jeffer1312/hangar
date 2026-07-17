@@ -84,7 +84,10 @@ npm --prefix frontend run build                          # só se o front for se
 ```
 
 Sessões Claude já abertas não releem o CLAUDE.md global — só as novas conhecem o cp-send.
-Escopo: sessões só se enxergam dentro da mesma máquina (backend local em 127.0.0.1).
+Escopo: pareamento e `--group` só dentro da mesma máquina. Recado 1:1 e `--list` alcançam OUTROS
+servidores via endereço `servidor::sessao`: `backend/peers.json` (id → base_url+token, gitignored;
+ver `peers.json.example`) + `CP_SERVER_ID` no `backend/.env` (id desta máquina, endereço de
+resposta do `[de: id::sessao]`). Só o cp-send muda — o backend nem sabe da feature.
 
 ## SSE event model
 

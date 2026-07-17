@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # cp-send — mensagem entre sessões Claude via claude-pocket.
 #
-#   cp-send --list                 lista sessões vivas (nome, estado, cwd)
+#   cp-send --list                 lista sessões vivas (nome, estado, cwd) — locais e remotas
 #   cp-send <sessao> <mensagem...> manda prompt pra sessão (fila durável se ocupada)
+#   cp-send <servidor>::<sessao> <mensagem...>  idem, pra sessão em OUTRO servidor (peers.json)
 #   cp-send --pair <sessao> [tarefa...]  pareia ESTA sessão com outra (registra no app:
 #                                        badge 🤝 na UI + protocolo injetado nos dois lados)
 #   cp-send --unpair               desfaz o pareamento desta sessão (avisa os dois lados)
@@ -14,6 +15,11 @@
 #
 # Remetente é detectado pelo nome da sessão tmux atual e prefixado como "[de: X]",
 # pra sessão destino saber a origem e pra onde responder.
+#
+# Cross-server: backend/peers.json (ver peers.json.example; NUNCA commitar — tem token) mapeia
+# id -> {base_url, token} dos outros servidores, e CP_SERVER_ID no backend/.env é o id DESTA
+# máquina — vira o endereço de resposta ([de: <id>::<sessao>]) quando o recado cruza servidor.
+# ponytail: fase 2 (pareamento/--group cross-server) não existe — só recado 1:1 e --list.
 set -euo pipefail
 
 ENV_FILE="$(dirname "$(realpath "$0")")/../backend/.env"
@@ -21,6 +27,29 @@ TOKEN=$(grep '^CP_AUTH_TOKEN=' "$ENV_FILE" | cut -d= -f2-)
 PORT=$(grep '^CP_PORT=' "$ENV_FILE" | cut -d= -f2- || true)
 BASE="http://127.0.0.1:${PORT:-8765}"
 AUTH="Authorization: Bearer $TOKEN"
+PEERS_FILE="$(dirname "$ENV_FILE")/peers.json"
+SERVER_ID=$(grep '^CP_SERVER_ID=' "$ENV_FILE" | cut -d= -f2- || true)
+
+# peer_cfg <id> — imprime "base_url token" do servidor remoto no peers.json; erro claro se ausente.
+peer_cfg() {
+    if [[ ! -f "$PEERS_FILE" ]]; then
+        echo "erro: servidor '$1' desconhecido — crie $PEERS_FILE (ver peers.json.example)" >&2
+        return 1
+    fi
+    python3 - "$PEERS_FILE" "$1" <<'PY'
+import json, sys
+try:
+    peers = json.load(open(sys.argv[1]))
+    p = peers.get(sys.argv[2])
+    if not p:
+        known = ", ".join(peers) or "nenhum"
+        sys.exit("erro: servidor '%s' não está em %s (conhecidos: %s)" % (sys.argv[2], sys.argv[1], known))
+    # \t como separador (mesmo formato do peers_tsv do --list): token/URL com espaço não quebra o parse.
+    print("%s\t%s" % (p["base_url"].rstrip("/"), p["token"]))
+except Exception as e:  # qualquer problema de parse vira mensagem clara, nunca traceback
+    sys.exit("erro: %s inválido (%s)" % (sys.argv[1], e))
+PY
+}
 
 # api <METHOD> <path> [json-body] — imprime o corpo no stdout; falha (!2xx) imprime status + corpo
 # real da API no stderr e retorna 1. Sem -f: mascarar o detail ("sessão não encontrada" vs 401 vs
@@ -42,6 +71,26 @@ if [[ "${1:-}" == "--list" || $# -eq 0 ]]; then
 import json, sys
 for s in json.load(sys.stdin):
     print("%-24s %-15s %s" % (s["name"], s["state"], s["cwd"]))'
+    # Servidores do peers.json: mesmas colunas, nome prefixado servidor::sessao (é o endereço
+    # que o cp-send de envio aceita). Peer fora do ar não derruba a lista local — vira aviso.
+    if [[ -f "$PEERS_FILE" ]]; then
+        peers_tsv=$(python3 -c 'import json, sys
+for k, v in json.load(open(sys.argv[1])).items():
+    print("%s\t%s\t%s" % (k, v["base_url"].rstrip("/"), v["token"]))' "$PEERS_FILE") \
+            || { echo "⚠ $PEERS_FILE inválido — servidores remotos ignorados" >&2; peers_tsv=""; }
+        while IFS=$'\t' read -r pid pbase ptok; do
+            [[ -n "$pid" ]] || continue
+            BASE="$pbase" AUTH="Authorization: Bearer $ptok" api GET /api/sessions \
+                | python3 -c 'import json, sys
+try:
+    sessions = json.load(sys.stdin)
+except ValueError:  # api() falhou -> stdin vazio; o detalhe real já saiu no stderr dela
+    sys.exit(1)
+for s in sessions:
+    print("%-24s %-15s %s" % (sys.argv[1] + "::" + s["name"], s["state"], s["cwd"]))' "$pid" \
+                || echo "⚠ servidor '$pid' falhou ($pbase) — detalhe acima" >&2
+        done <<< "$peers_tsv"
+    fi
     exit 0
 fi
 
@@ -49,6 +98,10 @@ me() { tmux display-message -p '#S' 2>/dev/null || echo "cli"; }
 
 if [[ "$1" == "--pair" ]]; then
     peer="${2:?uso: cp-send --pair <sessao> [tarefa...]}"; shift 2
+    if [[ "$peer" == *::* ]]; then
+        echo "erro: pareamento cross-server ainda não existe — por enquanto só recado 1:1: cp-send $peer \"msg\"" >&2
+        exit 2
+    fi
     body=$(python3 -c 'import json,sys; print(json.dumps({"peer": sys.argv[1], "task": sys.argv[2]}))' "$peer" "$*")
     api POST "/api/sessions/$(me)/pair" "$body" >/dev/null
     echo "pareado: $(me) <-> $peer (registrado no app; os dois lados recebem o protocolo)"
@@ -57,6 +110,10 @@ fi
 
 if [[ "$1" == "--new" ]]; then
     name="${2:?uso: cp-send --new <nome> [cwd]}"
+    if [[ "$name" == *::* ]]; then
+        echo "erro: '::' é reservado pro endereço servidor::sessao — escolha outro nome" >&2
+        exit 2
+    fi
     cwd="${3:-$HOME}"
     body=$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1], "cwd": sys.argv[2]}))' "$name" "$cwd")
     api POST /api/sessions "$body" >/dev/null
@@ -80,13 +137,27 @@ if [[ "$1" == "--group" ]]; then
 fi
 
 target="$1"; shift
-[[ $# -ge 1 ]] || { echo "uso: cp-send <sessao> <mensagem...>" >&2; exit 2; }
+[[ $# -ge 1 ]] || { echo "uso: cp-send <sessao|servidor::sessao> <mensagem...>" >&2; exit 2; }
 
 sender=$(me)
+sess="$target"
+if [[ "$target" == *::* ]]; then
+    # Destino em OUTRO servidor: resolve base/token no peers.json e qualifica o remetente —
+    # sem [de: <este-servidor>::<sessao>] o outro lado não teria endereço de resposta.
+    srv="${target%%::*}"; sess="${target#*::}"
+    if [[ -z "$SERVER_ID" ]]; then
+        echo "erro: CP_SERVER_ID ausente no backend/.env — obrigatório pra envio cross-server (endereço de resposta [de: <id>::$sender])" >&2
+        exit 1
+    fi
+    cfg=$(peer_cfg "$srv")
+    IFS=$'\t' read -r BASE rtok <<< "$cfg"
+    AUTH="Authorization: Bearer $rtok"
+    sender="${SERVER_ID}::${sender}"
+fi
 text="[de: $sender] $*"
 
 body=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1]}))' "$text")
-resp=$(api POST "/api/sessions/$target/input" "$body")
+resp=$(api POST "/api/sessions/$sess/input" "$body")
 # delivered=True -> digitou agora na TUI; False -> fila durável (entrega quando a sessão ficar idle).
 # Sessão inexistente nem chega aqui (o backend responde 404 e o api() já mostrou o detail).
 if python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("delivered") else 1)' "$resp"; then
