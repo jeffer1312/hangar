@@ -26,13 +26,13 @@ the code, and it already cost real bugs this session. In order of value per risk
    component, owning `menuMuted`/`branchView`/`chainView`; it also uses the shared `withServer`
    from `lib/auth.ts`.
 
-Real result: `Sidebar.svelte` went from **1859 lines / 44 `$state`** to **1557 lines / 37 `$state`**
+Real result: `Sidebar.svelte` went from **1859 lines / 44 `$state`** to **1570 lines / 25 `$state`**
 (the backlog's ~1100/~25 estimate was optimistic — the three items were done in full; the rest of
 what remains is legitimate list template/CSS, not duplication).
 
-**The bigger fish, still deliberately NOT done:** `Sidebar.svelte` (1859) and
-`SessionList.svelte` (1423) are *the same feature written twice* — the session list, one for
-desktop and one for mobile, 3282 lines combined. CLAUDE.md already flags the risk ("make the
+**The bigger fish, still deliberately NOT done:** `Sidebar.svelte` (1570) and
+`SessionList.svelte` (1371) are *the same feature written twice* — the session list, one for
+desktop and one for mobile, 2941 lines combined. CLAUDE.md already flags the risk ("make the
 change in BOTH views and verify BOTH — they drift apart easily"). Unifying them is the
 largest win available, but it means rewriting both views, and they just absorbed a merge.
 Worth its own session with the repo at rest.

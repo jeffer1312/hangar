@@ -265,7 +265,11 @@
     const s = confirmDel;
     confirmDel = null;
     selectServer(s.serverId);
-    await deleteSession(s.name);
+    try {
+      await deleteSession(s.name);
+    } catch {
+      /* sem canal de toast no mobile; lista segue via SSE */
+    }
     // Sem remoção otimista: `sessions` agora é derived (read-only). O SSE do store re-emite a lista
     // sem a sessão morta — mesmo caminho já verificado no Board (matar remove a linha).
   }

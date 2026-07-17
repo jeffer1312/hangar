@@ -39,4 +39,19 @@ describe('placeNew', () => {
     const out = placeNew({}, [row('z::n', 'z')], []);
     expect(out['z::n'].x).toBe(PAD);
   });
+
+  it('adjacência exata (borda direita em PAD) não conta como interseção', () => {
+    // Box à esquerda com x+w === PAD: encosta na coluna 0 mas não a sobrepõe -> não empurra o card novo.
+    const existing: CanvasLayout = { 'x': { x: PAD - CARD_W, y: 600, w: CARD_W, h: 200 } };
+    const out = placeNew(existing, [row('a::n', 'a')], ['a']);
+    expect(out['a::n'].y).toBe(PAD);
+  });
+
+  it('coluna B cheia não muda o y de um card novo na coluna A', () => {
+    const bx = PAD + CARD_W + GAP;   // x da coluna do servidor b
+    const existing: CanvasLayout = { 'b::deep': { x: bx, y: 900, w: CARD_W, h: 300 } };
+    const out = placeNew(existing, [row('a::n', 'a')], ['a', 'b']);
+    expect(out['a::n'].x).toBe(PAD);
+    expect(out['a::n'].y).toBe(PAD);
+  });
 });
