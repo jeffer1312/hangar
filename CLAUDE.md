@@ -22,9 +22,21 @@ only peeks at the tmux pane for live **state**. Backend pieces (`backend/app/`):
   (native AskUserQuestion stepper), `uploads.py`, `git_ops.py`, `commands.py`, `workflows.py`,
   `model_picker.py`, `config.py`, `fs.py`, `hook_installer.py`.
 
-Frontend (`frontend/src/`): `screens/` (Chat, …), `components/` (MessageList, NavBar, Composer, bubbles,
-sheets, Spinner/Lottie, …), `lib/` (`api.ts` SSE client, `activity.ts`, `markdown.ts`, `format.ts`,
-`types.ts`), `app.css` (design tokens + shared keyframes).
+Frontend (`frontend/src/`): `screens/` (Chat, Board, …), `components/` (MessageList, NavBar, Composer,
+bubbles, sheets, Spinner/Lottie, …), `lib/` (`api.ts` SSE client, `activity.ts`, `markdown.ts`,
+`format.ts`, `types.ts`), `app.css` (design tokens + shared keyframes).
+
+**Two sibling desktop views**, toggled by the grid button in the sidebar header/rail:
+- **list + chat** — `Sidebar` + `Chat` (the original).
+- **board** (`#/board`) — `screens/Board.svelte`: a kanban of sessions in 3 columns by state
+  (`awaiting_input` / `working` / `idle`), each card a live mini-chat (`components/BoardCard.svelte`):
+  tail of the conversation, an inline input, and option buttons for a pending picker. Clicking a card
+  opens the **real `Chat`** as an overlay via the route `#/board/<serverId>/<name>` (so deep-link, browser
+  back and reload all work). Entering the board auto-collapses the sidebar to its rail.
+  - **The board must never open an SSE per card** — browsers cap ~6 per host. Live state comes from the
+    aggregated `openSessionsStream` (one per *server*); the card's conversation comes from
+    `GET /history?limit=N` on mount only. There is no `dead` column: `classify()` never returns `dead`
+    for the list (only the per-session SSE does), so a killed session's row simply disappears.
 
 ## Dev commands
 
@@ -84,6 +96,12 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   `SessionList`; sheets also re-dock as a right-side panel via `@media (min-width: 820px)`). Whenever you
   touch the front, make the change in BOTH views and verify BOTH — they drift apart easily (e.g. the
   session-list ordering ended up alphabetical only in `SessionList`, not `Sidebar`).
+  - **The multi-server SSE aggregation (`slots`/`recompute`/`connect`) is COPIED in three files** —
+    `Sidebar`, `SessionList` and `Board`. Changing how sessions are listed/deduped/ordered means editing
+    all three, or they drift (that's how the ordering bug above happened; `sortSessions` had to be pulled
+    into `lib/format.ts` mid-feature for the same reason). Extracting it into a store is the top item in
+    [`docs/polish-backlog.md`](docs/polish-backlog.md#structural-debt-in-the-session-list-2026-07-16) —
+    read that section before any refactor of the session list.
 
 - **iOS black-rectangle repaint.** Glass on NavBar/Composer lives in a `::before` leaf with a near-opaque
   solid bg and **no** `backdrop-filter` / `transform` / `translateZ` on WebKit — those promote a layer that
