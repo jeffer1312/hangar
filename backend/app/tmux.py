@@ -87,7 +87,13 @@ def list_panes_active() -> list[dict]:
 
 
 def has_session(name: str) -> bool:
-    return _run(["tmux", "has-session", "-t", name]).returncode == 0
+    # `=NAME`: match EXATO, mesma pegadinha do _pane_target acima. Sem o `=`, o target-session do tmux
+    # cai em exact -> fnmatch -> PREFIX match: com "pocket-2" viva, `has_session("pocket")` respondia
+    # VIVO pra uma sessao que NUNCA existiu. Como o app fabrica nomes que colidem por prefixo
+    # (`<base>`, `<base>-2`, `<base>-3`...), a sessao morta herdava o "vivo" da irma -> o /input
+    # confirmava "entregue" digitando num pane inexistente e o state.py nunca marcava `dead`.
+    # Sem `:` aqui (ao contrario do _pane_target): has-session so resolve SESSAO, nao pane/window.
+    return _run(["tmux", "has-session", "-t", f"={name}"]).returncode == 0
 
 
 def new_session(name: str, cwd: str, command: str, config_dir: str | None = None) -> bool:
