@@ -313,6 +313,15 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     clearTimeout(hpTimer);
     hp = null;
   }
+  // Rede de segurança do popover PRESO: mouseleave se perde quando a linha re-ordena/some por baixo
+  // do ponteiro parado (o browser não dispara enter/leave em movimento de ELEMENTO, só de ponteiro)
+  // — o popover ficava aberto pra sempre (pointer-events: none, nem clicável). Qualquer movimento
+  // de ponteiro fora de uma linha de sessão fecha. Só roda com hp aberto: custo zero no resto.
+  function hpGuard(e: PointerEvent) {
+    if (!hp) return;
+    const el = e.target as Element | null;
+    if (!el?.closest?.('.sess-row')) hpLeave();
+  }
 
   async function saveEdit(old: string, serverId: string) {
     const nv = editValue.trim();
@@ -1027,7 +1036,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   </ConfirmDialog>
 {/if}
 
-<svelte:window onkeydown={(e) => { if (e.key === 'Escape') { if (kebabOpen) closeKebab(); else if (menu) closeMenu(); else if (resumeModal) resumeModal = null; else if (confirmDel) confirmDel = null; else if (confirmSrv) confirmSrv = null; else if (confirmBranch) confirmBranch = null; else if (confirmLogout) confirmLogout = false; } }} />
+<svelte:window onpointermove={hpGuard} onkeydown={(e) => { if (e.key === 'Escape') { if (kebabOpen) closeKebab(); else if (menu) closeMenu(); else if (resumeModal) resumeModal = null; else if (confirmDel) confirmDel = null; else if (confirmSrv) confirmSrv = null; else if (confirmBranch) confirmBranch = null; else if (confirmLogout) confirmLogout = false; } }} />
 
 <!-- Menu de contexto (botao direito na sessao). Backdrop + itens vivem no componente; o Sidebar so
      guarda posicao/alvo em `menu` e decide o que dirty->confirm / checkout / GitSheet fazem. -->
