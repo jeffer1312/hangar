@@ -26,7 +26,7 @@ Frontend (`frontend/src/`): `screens/` (Chat, Board, …), `components/` (Messag
 bubbles, sheets, Spinner/Lottie, …), `lib/` (`api.ts` SSE client, `activity.ts`, `markdown.ts`,
 `format.ts`, `types.ts`), `app.css` (design tokens + shared keyframes).
 
-**Two sibling desktop views**, toggled by the grid button in the sidebar header/rail:
+**Three sibling desktop views**, toggled by the grid button in the sidebar header/rail:
 - **list + chat** — `Sidebar` + `Chat` (the original).
 - **board** (`#/board`) — `screens/Board.svelte`: a kanban of sessions in 3 columns by state
   (`awaiting_input` / `working` / `idle`), each card a live mini-chat (`components/BoardCard.svelte`):
@@ -37,6 +37,15 @@ bubbles, sheets, Spinner/Lottie, …), `lib/` (`api.ts` SSE client, `activity.ts
     aggregated `openSessionsStream` (one per *server*); the card's conversation comes from
     `GET /history?limit=N` on mount only. There is no `dead` column: `classify()` never returns `dead`
     for the list (only the per-session SSE does), so a killed session's row simply disappears.
+- **canvas** (`#/canvas`) — `screens/Canvas.svelte`: the free-form sibling of the board. Same
+  `BoardCard` (now with a `fill` prop), but each card is a floating tile you drag by its handle and
+  resize with the native CSS resize corner (a `ResizeObserver` captures the size). No columns and no
+  auto-grouping by state — the trade-off the user chose for full position/size freedom. Same
+  invariants as the board: **never an SSE per card** (state comes from the shared `sessionsStore`),
+  and clicking a card opens the real `Chat` as an overlay via `#/canvas/<serverId>/<name>` (peek
+  covers the canvas, Esc restores). Layout is persisted in `localStorage` under `cp_canvas_layout`,
+  keyed `serverId::name`; first-seen cards get an initial slot in per-server columns via
+  `lib/canvasLayout.ts` (`placeNew`). Mobile falls back to `SessionList` (canvas is desktop-only).
 
 ## Dev commands
 
@@ -96,12 +105,15 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   `SessionList`; sheets also re-dock as a right-side panel via `@media (min-width: 820px)`). Whenever you
   touch the front, make the change in BOTH views and verify BOTH — they drift apart easily (e.g. the
   session-list ordering ended up alphabetical only in `SessionList`, not `Sidebar`).
-  - **The multi-server SSE aggregation (`slots`/`recompute`/`connect`) is COPIED in three files** —
-    `Sidebar`, `SessionList` and `Board`. Changing how sessions are listed/deduped/ordered means editing
-    all three, or they drift (that's how the ordering bug above happened; `sortSessions` had to be pulled
-    into `lib/format.ts` mid-feature for the same reason). Extracting it into a store is the top item in
+  - **The multi-server SSE aggregation lives in ONE place now** — `lib/sessions.ts` (pure dedup/order/
+    classify helpers, unit-tested) + `lib/sessionsStore.svelte.ts` (a refcounted singleton: one
+    `openSessionsStream` per *server* for the whole app, `retain`/`release` by consumer). `Sidebar`,
+    `SessionList`, `Board` and `Canvas` all subscribe to it — the old `slots`/`recompute`/`connect` trio
+    copied in three files is gone (top item of the polish-backlog structural debt, resolved 2026-07-17).
+    The **two-views drift warning still stands**, though: `Sidebar` and `SessionList` are still separate
+    files, so template/CSS changes to the list must be made and verified in BOTH. See
     [`docs/polish-backlog.md`](docs/polish-backlog.md#structural-debt-in-the-session-list-2026-07-16) —
-    read that section before any refactor of the session list.
+    unifying the two list views is the remaining "bigger fish", deliberately not done yet.
 
 - **iOS black-rectangle repaint.** Glass on NavBar/Composer lives in a `::before` leaf with a near-opaque
   solid bg and **no** `backdrop-filter` / `transform` / `translateZ` on WebKit — those promote a layer that

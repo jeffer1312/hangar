@@ -5,32 +5,32 @@ phase — not blockers. Newest first.
 
 ## Structural debt in the session list (2026-07-16)
 
+> **Items 1–3 DONE (2026-07-17).** All three extractions shipped in full. Real numbers below.
+
 Measured while building the kanban board. Nothing is broken — this is about the shape of
 the code, and it already cost real bugs this session. In order of value per risk:
 
-1. **Extract the multi-server SSE aggregation into a store** (`sessionsStore.svelte.ts`).
-   The `slots`/`recompute`/`connect` trio (one `openSessionsStream` per server, dedup by
-   `jsonl::name`, isolate offline servers) now exists in **three copies**: `Sidebar.svelte`,
-   `SessionList.svelte` and `Board.svelte` — the third one because the board's own plan said
-   "copy the pattern from the Sidebar". This is the only item that fixes an *active* problem
-   rather than just reducing size: the copies already drifted twice (the ordering that lived
-   only in `SessionList`, and `sortSessions`, which had to be extracted to `lib/format.ts`
-   mid-feature). ~60 lines per consumer.
+1. ✅ **DONE (2026-07-17) — Extract the multi-server SSE aggregation into a store.** The
+   `slots`/`recompute`/`connect` trio now lives in `lib/sessions.ts` (pure dedup/order/classify,
+   7 unit tests) + `lib/sessionsStore.svelte.ts` (a refcounted singleton: one `openSessionsStream`
+   per server for the whole app, `retain`/`release` per consumer, Board's parse strategy — try/catch
+   + `onServersChanged`). The three drifting copies (`Sidebar`, `SessionList`, `Board`) are gone;
+   `Canvas` is a fourth consumer that reuses the same store instead of a fourth copy.
 
-2. **`ConfirmDialog.svelte`** — `Sidebar.svelte` has **7** dialogs sharing one structure
-   (`.confirm-backdrop` + `.confirm-card` + `.confirm-actions`): drop server, delete session,
-   switch branch, log out, add server, resume conversation. Seven existing uses is
-   duplication, not speculation. Frees ~150 lines of template + ~35 of CSS. Caveat: two of
-   them aren't plain confirms (resume carries a candidate list, add-server carries an input)
-   — they need a `{#snippet}` for the body, or stay out.
+2. ✅ **DONE (2026-07-17) — `ConfirmDialog.svelte`.** Extracted as a chassis
+   (`.confirm-backdrop`/`.confirm-card`/`.confirm-actions`); the two non-plain confirms (resume with
+   a candidate list, add-server with an input) pass their body via a `{#snippet}` children slot, with
+   that body's CSS kept in `Sidebar`. The shared `withServer` helper moved to `lib/auth.ts`.
 
-3. **`SessionContextMenu.svelte`** — the row's context menu (~78 lines) owns 4 states of its
-   own (`menu`, `menuMsg`, `menuMuted`, `branchView`) and is self-contained.
+3. ✅ **DONE (2026-07-17) — `SessionContextMenu.svelte`.** The row's context menu is now its own
+   component, owning `menuMuted`/`branchView`/`chainView`; it also uses the shared `withServer`
+   from `lib/auth.ts`.
 
-Doing 1–3 takes `Sidebar.svelte` from **1859 lines / 44 `$state`** to roughly 1100 / ~25 —
-each remaining state about the one subject left (the list and its chrome).
+Real result: `Sidebar.svelte` went from **1859 lines / 44 `$state`** to **1557 lines / 37 `$state`**
+(the backlog's ~1100/~25 estimate was optimistic — the three items were done in full; the rest of
+what remains is legitimate list template/CSS, not duplication).
 
-**The bigger fish, deliberately NOT recommended yet:** `Sidebar.svelte` (1859) and
+**The bigger fish, still deliberately NOT done:** `Sidebar.svelte` (1859) and
 `SessionList.svelte` (1423) are *the same feature written twice* — the session list, one for
 desktop and one for mobile, 3282 lines combined. CLAUDE.md already flags the risk ("make the
 change in BOTH views and verify BOTH — they drift apart easily"). Unifying them is the
