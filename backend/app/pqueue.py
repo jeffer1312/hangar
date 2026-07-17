@@ -85,6 +85,11 @@ def _strip_attach(text: str) -> str:
     return _ATTACH_RE.sub("", text)
 
 
+# Prefixo que o Claude Code PREPENDA ao prompt quando o texto referencia imagem anexada
+# ("[Image #1]<texto>"; multiplas imagens empilham). A fila guarda o texto SEM ele.
+_IMG_PREFIX = re.compile(r"^(?:\[Image #\d+\])+\s*")
+
+
 def committed_user_lines(jsonl: str) -> set[str]:
     """Textos que ATERRISSARAM no transcript (inteiros + por linha), pra confirmar entregas.
     Fontes CRUAS, sem o filtro de meta do parser: (a) entradas `user` — mensagem entregue MID-TURN
@@ -99,7 +104,12 @@ def committed_user_lines(jsonl: str) -> set[str]:
         # "📎 imagem: <path>" na mesma linha (o transcript guarda a linha inteira), mas o reconcile
         # compara o texto podado — sem indexar as DUAS variantes, msg COM ANEXO nunca confirmava
         # e era redigitada (as duplicatas so-com-imagem de 2026-07-02).
-        for variant in (t, _strip_attach(t)):
+        # E a variante SEM o prefixo "[Image #N]": o Claude Code PREPENDA isso ao prompt quando
+        # anexa imagem (e remove o path do marcador) — sem normalizar, msg com imagem entregue
+        # mid-turn nunca confirmava e era redigitada ate max_attempts (a entrega tripla de
+        # 2026-07-17).
+        base = _IMG_PREFIX.sub("", t)
+        for variant in (t, base, _strip_attach(t), _strip_attach(base)):
             variant = variant.strip()
             if not variant:
                 continue

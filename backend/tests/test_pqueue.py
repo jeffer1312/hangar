@@ -301,3 +301,24 @@ def test_merged_history_limit_tail_read_e_sufixo_do_parse_completo(tmp_path, mon
         tail = [e.id for e in pqueue.merged_history("s", str(j), limit=lim)]
         assert len(tail) >= lim
         assert tail == full[-len(tail):]
+
+def test_reconcile_confirma_msg_com_imagem_prefixo_image_n(tmp_path):
+    # Claude Code grava prompt com anexo como "[Image #N]<texto> — 📎 imagem:" (prefixo prependado,
+    # path removido). Sem normalizar o prefixo, a entrada delivered nunca confirmava contra o
+    # transcript e era redigitada ate max_attempts (msg do app chegava 3x na sessao).
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(
+        json.dumps({"type": "user", "timestamp": "2026-01-01T00:00:00Z",
+                    "message": {"role": "user",
+                                "content": [{"type": "text",
+                                             "text": "[Image #1]olha isso — 📎 imagem:"}]}}) + "\n",
+        encoding="utf-8")
+    q = PromptQueue("s")
+    q.path.write_text(
+        json.dumps({"id": "e1", "text": "olha isso — 📎 imagem: /tmp/x.png",
+                    "ts": 100.0, "delivered": True}) + "\n",
+        encoding="utf-8")
+    requeued = q.reconcile_delivered(pqueue.committed_user_lines(str(j)), 0.0, now=1000.0)
+    assert requeued == []                       # texto TA no transcript -> nao redigitar
+    assert q.load()[0]["confirmed"] is True
