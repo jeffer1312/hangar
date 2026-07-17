@@ -42,9 +42,80 @@
     hidden = hidden.filter((k) => k !== key);
     saveHidden();
   }
-  const visibleRows = $derived(rows.filter((r) => !hidden.includes(rowKey(r))));
+  // ── Grupos de pareamento como CIDADÃOS do canvas: moldura visual em volta dos membros,
+  // colapsar o grupo num card compacto único (persistido) e focar ("só este grupo"). ──
+  const COLLAPSED_KEY = 'cp_canvas_collapsed';
+  function loadCollapsed(): string[] {
+    try {
+      const v = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? '[]');
+      return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [];
+    } catch { return []; }
+  }
+  let collapsedGids = $state<string[]>(loadCollapsed());
+  function saveCollapsed() {
+    try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsedGids)); }
+    catch (e) { console.warn('cp_canvas_collapsed: falha ao persistir', e); }
+  }
+  function toggleCollapse(gid: string) {
+    collapsedGids = collapsedGids.includes(gid)
+      ? collapsedGids.filter((g) => g !== gid)
+      : [...collapsedGids, gid];
+    saveCollapsed();
+  }
+  // Foco é efêmero de propósito (não persiste): "ver só eles" é um modo momentâneo, voltar do
+  // reload com o canvas filtrado sem aviso seria o bug do card sumido de novo.
+  let focusGid = $state<string | null>(null);
+
+  const visibleRows = $derived(rows.filter((r) => {
+    const k = rowKey(r);
+    if (hidden.includes(k)) return false;
+    if (focusGid && r.pair_gid !== focusGid) return false;
+    if (r.pair_gid && collapsedGids.includes(r.pair_gid)) return false;
+    return true;
+  }));
   const hiddenRows = $derived(rows.filter((r) => hidden.includes(rowKey(r))));
   let showHidden = $state(false);
+
+  // Moldura por grupo: bounding box dos MEMBROS RENDERIZADOS (2+), com folga pro header. Segue os
+  // cards onde estiverem — arrastar um membro estica a moldura, o vínculo continua visível.
+  const groupFrames = $derived.by(() => {
+    const byGid = new Map<string, BoardRow[]>();
+    for (const r of visibleRows) {
+      if (!r.pair_gid) continue;
+      const arr = byGid.get(r.pair_gid);
+      if (arr) arr.push(r); else byGid.set(r.pair_gid, [r]);
+    }
+    const out: { gid: string; x: number; y: number; w: number; h: number; color: string; label: string; n: number }[] = [];
+    for (const [gid, members] of byGid) {
+      const boxes = members.map((m) => layout[rowKey(m)]).filter(Boolean);
+      if (boxes.length < 2) continue;
+      const x = Math.min(...boxes.map((b) => b.x)) - 10;
+      const y = Math.min(...boxes.map((b) => b.y)) - 28;
+      const x2 = Math.max(...boxes.map((b) => b.x + b.w)) + 10;
+      const y2 = Math.max(...boxes.map((b) => b.y + b.h)) + 10;
+      out.push({
+        gid, x, y, w: x2 - x, h: y2 - y,
+        color: pairColor(gid),
+        label: members[0].pair_task ?? members.map((m) => m.name).join(' · '),
+        n: members.length,
+      });
+    }
+    return out;
+  });
+
+  // Grupo colapsado = UM card compacto no lugar dos membros (posição = canto do bounding box
+  // salvo; expande de volta no clique). Membros mantêm posição no layout — expandir restaura.
+  const collapsedCards = $derived.by(() =>
+    collapsedGids.flatMap((gid) => {
+      const members = rows.filter((r) => r.pair_gid === gid && !hidden.includes(rowKey(r)));
+      if (members.length === 0) return [];
+      if (focusGid && focusGid !== gid) return [];
+      const boxes = members.map((m) => layout[rowKey(m)]).filter(Boolean);
+      const x = boxes.length ? Math.min(...boxes.map((b) => b.x)) : PAD;
+      const y = boxes.length ? Math.min(...boxes.map((b) => b.y)) : PAD;
+      const w = boxes.length ? Math.max(...boxes.map((b) => b.w)) : CARD_W;
+      return [{ gid, x, y, w, color: pairColor(gid), label: members[0].pair_task ?? null, members }];
+    }));
 
   // ── Organizar: recoloca TODOS os visíveis numa grade — pareados (gid) contíguos, quem espera
   // por você primeiro, depois working, depois idle; 3 colunas dividindo a LARGURA da tela por
@@ -246,6 +317,10 @@
   <div class="cv-top">
     <RateStrip buckets={sessionsStore.byServer} />
     <div class="cv-actions">
+      {#if focusGid}
+        <button class="cv-btn active" onclick={() => (focusGid = null)}
+                title="Sair do modo foco e mostrar todas as sessões">✕ mostrando só 1 grupo</button>
+      {/if}
       <button class="cv-btn" onclick={autoArrange}
               title="Reorganiza numa grade: quem espera por você primeiro, pareados lado a lado">
         Organizar
@@ -276,6 +351,37 @@
     </button>
   {/each}
   <div class="cv-plane" style="width: {extent.w}px; height: {extent.h}px;">
+    <!-- Molduras de grupo ANTES dos cards (ordem no DOM = ficam por trás). Moldura segue o
+         bounding box dos membros; header dela concentra as ações do grupo. -->
+    {#each groupFrames as f (f.gid)}
+      <div class="cv-group" style="left: {f.x}px; top: {f.y}px; width: {f.w}px; height: {f.h}px; color: {f.color};">
+        <div class="cv-group-head">
+          <span class="cv-group-label" title={f.label}>🤝 {f.label} · {f.n}</span>
+          <button onclick={() => gatherPair(rowKey(visibleRows.find((r) => r.pair_gid === f.gid)!), f.gid)}
+                  title="Reunir os membros lado a lado">⇱</button>
+          <button onclick={() => toggleCollapse(f.gid)} title="Colapsar o grupo num card só">▾</button>
+          <button onclick={() => (focusGid = focusGid === f.gid ? null : f.gid)}
+                  title="Ver só este grupo (esconde o resto)">◎</button>
+        </div>
+      </div>
+    {/each}
+    <!-- Grupo colapsado: um card compacto no lugar dos membros. -->
+    {#each collapsedCards as g (g.gid)}
+      <div class="cv-gcard" style="left: {g.x}px; top: {g.y}px; width: {g.w}px; color: {g.color};">
+        <button class="cv-gcard-head" onclick={() => toggleCollapse(g.gid)}
+                title="Expandir o grupo de volta">
+          ▸ 🤝 {g.label ?? g.members.map((m) => m.name).join(' · ')}
+        </button>
+        {#each g.members as m (rowKey(m))}
+          <button class="cv-gcard-row" onclick={() => onOpenSession(m.name, m.serverId)}
+                  title="Abrir chat de {m.name}">
+            <span class="cv-chip-dot" style="background: {serverColor(m.serverId)}" aria-hidden="true"></span>
+            <span class="cv-gcard-name">{m.name}</span>
+            <span class="cv-gcard-state" data-state={m.state}>{m.state === 'awaiting_input' ? 'você' : m.state === 'working' ? 'exec' : 'pronto'}</span>
+          </button>
+        {/each}
+      </div>
+    {/each}
     {#each visibleRows as row (rowKey(row))}
       {@const key = rowKey(row)}
       {@const box = layout[key]}
@@ -393,6 +499,55 @@
   }
   .cv-chip:hover { background: var(--bg-hover); color: var(--text-primary); }
   .cv-chip-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+
+  /* Moldura de grupo: por trás dos cards (ordem no DOM), borda inteira + véu na cor do grupo.
+     pointer-events só no header — a moldura nunca rouba clique/drag dos cards. */
+  .cv-group {
+    position: absolute; pointer-events: none;
+    border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+    background: color-mix(in srgb, currentColor 5%, transparent);
+    border-radius: var(--radius-lg);
+  }
+  .cv-group-head {
+    position: absolute; top: 3px; left: 10px; right: 10px;
+    display: flex; align-items: center; gap: 2px;
+    pointer-events: auto;
+    font-size: var(--text-xs); font-weight: 600;
+  }
+  .cv-group-label {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; margin-right: 4px;
+  }
+  .cv-group-head button {
+    background: none; border: 0; color: inherit; cursor: pointer;
+    font-size: 11px; line-height: 1; padding: 2px 5px; border-radius: var(--radius-sm);
+    min-height: 0; min-width: 0; opacity: 0.75;
+  }
+  .cv-group-head button:hover { opacity: 1; background: color-mix(in srgb, currentColor 14%, transparent); }
+
+  /* Grupo colapsado: card compacto — header expande, linhas abrem o chat do membro. */
+  .cv-gcard {
+    position: absolute; display: flex; flex-direction: column;
+    background: var(--bg-surface);
+    border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+    border-radius: var(--radius-lg); overflow: hidden;
+    padding-bottom: 4px;
+  }
+  .cv-gcard-head {
+    text-align: left; background: color-mix(in srgb, currentColor 10%, transparent);
+    border: 0; color: inherit; font: inherit; font-size: var(--text-sm); font-weight: 600;
+    padding: 8px 12px; cursor: pointer; min-height: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .cv-gcard-row {
+    display: flex; align-items: center; gap: 8px; text-align: left;
+    background: none; border: 0; cursor: pointer; min-height: 0; min-width: 0;
+    padding: 5px 12px; font: inherit; font-size: var(--text-xs); color: var(--text-primary);
+  }
+  .cv-gcard-row:hover { background: var(--bg-hover); }
+  .cv-gcard-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cv-gcard-state { color: var(--text-muted); }
+  .cv-gcard-state[data-state='awaiting_input'] { color: var(--pill-input-fg); }
+  .cv-gcard-state[data-state='working'] { color: var(--pill-working-fg); }
   .cv-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   /* O BoardCard interno preenche o corpo (prop fill). flex-shrink não se aplica (absolute),
      mas o min-height: 0 acima é o equivalente aqui: sem ele o body estoura em vez de rolar. */
