@@ -2,6 +2,7 @@
   import { isAuthenticated, setServers, listServers, mergeServers, onServersChanged, clearCredentials, selectServer, getActiveId } from './lib/auth';
   import { getVault, decryptList, encryptList, putVault, logout as syncLogout, syncStatus, stashKey, loadKey, clearKey } from './lib/sync';
   import { encodeCompareIds, parseCompareIds, type CompareId } from './lib/format';
+  import { peekStep, initialPeek } from './lib/peek';
   import Login from './screens/Login.svelte';
   import SessionList from './screens/SessionList.svelte';
   import Costs from './screens/Costs.svelte';
@@ -167,7 +168,23 @@
   // UMA regra pras duas rotas (em vez de um $effect por rota): as duas montam o MESMO Chat contra o
   // servidor ativo, então a condição é idêntica — só o destino do fallback muda. Duplicar seria
   // convidar as duas cópias a divergir.
+  //
+  // ESPIADA (#/board/<server>/<nome>): num quadro que mostra TODAS as máquinas, abrir um card não
+  // muda onde você está — o ativo volta pro de antes ao fechar. A REGRA (e seus casos de borda:
+  // deep-link frio, promoção pro chat, troca de card B->C) mora em lib/peek.ts, pura e testada; aqui
+  // fica só a aplicação dela. Ela já foi apagada uma vez por refactor (62ee600 reverteu o fd79dda),
+  // então o que a protege é o peek.test.ts ficar vermelho, não este comentário.
+  // Aqui e não no DesktopShell: o ativo já é decidido NESTE effect (um lugar só), e o App nunca
+  // desmonta — #/costs e #/archive casam ANTES do branch isDesktop e DESMONTAM o shell, que foi o
+  // que obrigou o teardown do fd79dda. Sem componente pra desmontar, aquela classe de bug some.
+  let peekMemo = initialPeek;
   $effect(() => {
+    if (route.name === 'loading' || route.name === 'login') return;  // ainda não há rota de verdade
+    const peek = route.name === 'board' ? route.serverId : null;
+    const step = peekStep(peekMemo, route.name, peek, getActiveId());
+    peekMemo = step.memo;
+    if (step.restore) selectServer(step.restore);
+
     const routed = route.name === 'chat' || route.name === 'board' ? route.serverId : null;
     if (routed && routed !== getActiveId() && !selectServer(routed)) {
       navigateTo(route.name === 'board' ? '#/board' : '#/');
