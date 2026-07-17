@@ -118,6 +118,7 @@ def test_merged_history_dedup_ts_race(tmp_path, monkeypatch):
     # de verdade, que e onde a ordem send->append vive.
     import json
     from datetime import datetime, timezone
+    from types import SimpleNamespace
     import app.api as api
 
     j = tmp_path / "t.jsonl"
@@ -138,7 +139,10 @@ def test_merged_history_dedup_ts_race(tmp_path, monkeypatch):
         return "sent"
 
     monkeypatch.setattr(api.terminal, "send_prompt", fake_send_prompt)
-    monkeypatch.setattr(api, "_confirm_and_drain", lambda name: None)  # Timer de 8.5s: fora do escopo
+    # Neutraliza o proprio Timer, nao so o _confirm_and_drain: result=="sent" constroi um
+    # threading.Timer(8.5s) NAO-daemon de qualquer jeito — trocar o alvo por um no-op deixava o
+    # interpretador esperando 8.5s pra sair (pytest reportava 0.26s, wall-clock 9.06s).
+    monkeypatch.setattr(api.threading, "Timer", lambda *a, **k: SimpleNamespace(start=lambda: None))
     api._send_one("s", "JANELA-X")
 
     hist = pqueue.merged_history("s", str(j))

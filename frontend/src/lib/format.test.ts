@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, fmtWhen, groupSelectedByServer, initials, nextAwaiting,
   projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent, resetsIn,
-  clusterByPair,
+  clusterByPair, sortSessions, bubblesFromTail,
 } from './format';
-import type { ChatEvent } from './types';
+import type { ChatEvent, State } from './types';
 
 describe('abbrevNum', () => {
   it('abbreviates millions', () => {
@@ -336,5 +336,94 @@ describe('clusterByPair', () => {
   it('label cai nos nomes quando não há task', () => {
     const rows = clusterByPair([S('front', 'g1'), S('back', 'g1')]);
     expect((rows[0] as any).label).toBe('front, back');
+  });
+});
+
+// A ordenação foi EXTRAÍDA (Sidebar + SessionList) justamente porque as duas listas já divergiram na
+// ordenação no passado. Extrair sem fixar a ordem num teste deixaria o mesmo bug livre pra voltar —
+// é isto que estes testes trancam.
+describe('sortSessions', () => {
+  const S = (name: string, state: State = 'idle') => ({ name, state });
+
+  it('awaiting_input vem primeiro, independente do nome', () => {
+    const out = sortSessions([S('aaa'), S('zzz', 'awaiting_input'), S('bbb')]);
+    expect(out.map((s) => s.name)).toEqual(['zzz', 'aaa', 'bbb']);
+  });
+
+  it('desempata alfabeticamente dentro do mesmo grupo', () => {
+    const out = sortSessions([S('charlie'), S('alpha'), S('bravo')]);
+    expect(out.map((s) => s.name)).toEqual(['alpha', 'bravo', 'charlie']);
+  });
+
+  it('alfabético também ENTRE os que aguardam (não só entre os demais)', () => {
+    const out = sortSessions([S('zeta', 'awaiting_input'), S('alfa', 'awaiting_input'), S('m')]);
+    expect(out.map((s) => s.name)).toEqual(['alfa', 'zeta', 'm']);
+  });
+
+  it('working/idle/dead não se ordenam entre si — só awaiting_input sobe', () => {
+    const out = sortSessions([S('d', 'dead'), S('c', 'working'), S('b', 'idle'), S('a', 'awaiting_input')]);
+    expect(out.map((s) => s.name)).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('é estável: empate total preserva a ordem de entrada', () => {
+    // Mesmo nome + mesmo estado = comparador devolve 0 nos dois critérios. `id` distingue quem é quem.
+    const list = [
+      { name: 'dup', state: 'idle' as State, id: 1 },
+      { name: 'dup', state: 'idle' as State, id: 2 },
+      { name: 'dup', state: 'idle' as State, id: 3 },
+    ];
+    expect(sortSessions(list).map((s) => s.id)).toEqual([1, 2, 3]);
+  });
+
+  it('não muta a entrada (devolve lista nova)', () => {
+    const list = [S('zzz'), S('aaa')];
+    const out = sortSessions(list);
+    expect(list.map((s) => s.name)).toEqual(['zzz', 'aaa']);   // original intacto
+    expect(out).not.toBe(list);
+  });
+
+  it('lista vazia -> lista vazia', () => {
+    expect(sortSessions([])).toEqual([]);
+  });
+});
+
+describe('bubblesFromTail', () => {
+  const E = (id: string, kind: ChatEvent['kind'], text?: string) => ({ id, kind, text }) as ChatEvent;
+
+  it('descarta o assistant_msg órfão antes do 1º user_msg', () => {
+    // Janela REAL medida ao vivo numa sessão que acabou de usar ferramentas: a cauda de 8 começa num
+    // assistant_msg cujo prompt ficou de fora. O card não pode desenhá-lo (resposta sem pergunta);
+    // a rota TEM que devolvê-lo (é o que a espiada do hover procura). Daí o corte morar aqui.
+    const tail = [
+      E('1', 'assistant_msg', 'PIZZA-ANTERIOR'), E('2', 'user_msg', 'rode os comandos'),
+      E('3', 'tool_use'), E('4', 'tool_result'), E('5', 'tool_use'), E('6', 'tool_result'),
+    ];
+    expect(bubblesFromTail(tail).map((e) => e.id)).toEqual(['2']);
+  });
+
+  it('mantém tudo quando a janela já começa num user_msg', () => {
+    const tail = [E('1', 'user_msg', 'oi'), E('2', 'assistant_msg', 'olá'), E('3', 'tool_use')];
+    expect(bubblesFromTail(tail).map((e) => e.id)).toEqual(['1', '2']);
+  });
+
+  it('sem user_msg na janela -> devolve as bolhas que houver (card vazio é pior)', () => {
+    const tail = [E('1', 'assistant_msg', 'so resposta'), E('2', 'tool_use'), E('3', 'tool_result')];
+    expect(bubblesFromTail(tail).map((e) => e.id)).toEqual(['1']);
+  });
+
+  it('filtra tool_use/tool_result e bolha sem texto', () => {
+    const tail = [E('1', 'user_msg', 'oi'), E('2', 'assistant_msg'), E('3', 'tool_result'),
+                  E('4', 'assistant_msg', 'pronto')];
+    expect(bubblesFromTail(tail).map((e) => e.id)).toEqual(['1', '4']);
+  });
+
+  it('não muta a entrada', () => {
+    const tail = [E('1', 'assistant_msg', 'orfa'), E('2', 'user_msg', 'oi')];
+    bubblesFromTail(tail);
+    expect(tail.map((e) => e.id)).toEqual(['1', '2']);
+  });
+
+  it('cauda vazia -> vazio', () => {
+    expect(bubblesFromTail([])).toEqual([]);
   });
 });
