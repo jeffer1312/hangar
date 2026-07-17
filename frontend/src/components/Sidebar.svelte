@@ -6,6 +6,7 @@
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import QrScanner from './QrScanner.svelte';
   import GitSheet from './GitSheet.svelte';
+import ConfirmDialog from './ConfirmDialog.svelte';
   import AttentionFeed from './AttentionFeed.svelte';
   import AccountMenu from './AccountMenu.svelte';
   import SessionSwitcherSheet from './SessionSwitcherSheet.svelte';
@@ -1111,9 +1112,12 @@
 <!-- Adicionar servidor (do menu de conta): colar a URL de pareamento (com token) ou escanear QR.
      Mesma rota de parse do QR (parseServerPairing). Estilo dos modais do desktop (confirm-card). -->
 {#if showAddServer}
-  <div class="confirm-backdrop" onclick={() => (showAddServer = false)} role="presentation"></div>
-  <div class="confirm-card" role="dialog" aria-modal="true" aria-label="Adicionar servidor">
-    <p class="confirm-title">Adicionar servidor</p>
+  <ConfirmDialog title="Adicionar servidor" aria="Adicionar servidor" role="dialog"
+    onClose={() => (showAddServer = false)}
+    actions={[
+      { label: 'Escanear QR', onClick: () => { showAddServer = false; scanning = true; } },
+      { label: 'Adicionar', kind: 'primary', disabled: !addUrlText.trim(), onClick: submitPasteServer },
+    ]}>
     <input
       type="url"
       class="add-srv-input"
@@ -1128,11 +1132,7 @@
       aria-label="URL de pareamento do servidor"
     />
     {#if addError}<p class="resume-err" role="alert">{addError}</p>{/if}
-    <div class="confirm-actions">
-      <button type="button" class="c-btn" onclick={() => { showAddServer = false; scanning = true; }}>Escanear QR</button>
-      <button type="button" class="c-btn c-primary" onclick={submitPasteServer} disabled={!addUrlText.trim()}>Adicionar</button>
-    </div>
-  </div>
+  </ConfirmDialog>
 {/if}
 
 <svelte:window onkeydown={(e) => { if (e.key === 'Escape') { if (kebabOpen) closeKebab(); else if (menu) closeMenu(); else if (resumeModal) resumeModal = null; else if (confirmDel) confirmDel = null; else if (confirmSrv) confirmSrv = null; else if (confirmBranch) confirmBranch = null; else if (confirmLogout) confirmLogout = false; } }} />
@@ -1223,22 +1223,24 @@
 
 <!-- Confirmar remocao de servidor (com o nome) — mesmo padrao do excluir sessao. -->
 {#if confirmSrv}
-  <div class="confirm-backdrop" onclick={() => (confirmSrv = null)} role="presentation"></div>
-  <div class="confirm-card" role="alertdialog" aria-modal="true" aria-label="Confirmar remoção de servidor">
-    <p class="confirm-title">Remover este servidor?</p>
+  <ConfirmDialog title="Remover este servidor?" aria="Confirmar remoção de servidor"
+    onClose={() => (confirmSrv = null)}
+    actions={[
+      { label: 'Cancelar', onClick: () => (confirmSrv = null) },
+      { label: 'Remover', kind: 'danger', onClick: doDropServer },
+    ]}>
     <p class="confirm-name">{confirmSrv.label}</p>
-    <div class="confirm-actions">
-      <button type="button" class="c-btn" onclick={() => (confirmSrv = null)}>Cancelar</button>
-      <button type="button" class="c-btn c-danger" onclick={doDropServer}>Remover</button>
-    </div>
-  </div>
+  </ConfirmDialog>
 {/if}
 
 <!-- Confirmar exclusao (com o nome) — modal centrado, so desktop (sidebar e desktop-only). -->
 {#if confirmDel}
-  <div class="confirm-backdrop" onclick={() => (confirmDel = null)} role="presentation"></div>
-  <div class="confirm-card" role="alertdialog" aria-modal="true" aria-label="Confirmar exclusão">
-    <p class="confirm-title">Excluir esta sessão?</p>
+  <ConfirmDialog title="Excluir esta sessão?" aria="Confirmar exclusão"
+    onClose={() => (confirmDel = null)}
+    actions={[
+      { label: 'Cancelar', onClick: () => (confirmDel = null) },
+      { label: 'Excluir', kind: 'danger', onClick: doDelete },
+    ]}>
     <p class="confirm-name">{confirmDel.name}</p>
     <!-- Um mesmo nome pode existir em varios servidores: mostra o dono pra a exclusao nao ser ambigua. -->
     {#if servers.length > 1}
@@ -1247,35 +1249,30 @@
         <p class="confirm-srv"><span class="confirm-srv-dot" style="background: {serverColor(srv.id)};" aria-hidden="true"></span>{srv.label}</p>
       {/if}
     {/if}
-    <div class="confirm-actions">
-      <button type="button" class="c-btn" onclick={() => (confirmDel = null)}>Cancelar</button>
-      <button type="button" class="c-btn c-danger" onclick={doDelete}>Excluir</button>
-    </div>
-  </div>
+  </ConfirmDialog>
 {/if}
 
 <!-- Confirmar troca de branch com working tree suja (switch carrega mudancas nao-commitadas). -->
 {#if confirmBranch}
-  <div class="confirm-backdrop" onclick={() => (confirmBranch = null)} role="presentation"></div>
-  <div class="confirm-card" role="alertdialog" aria-modal="true" aria-label="Confirmar troca de branch">
-    <p class="confirm-title">Trocar de branch com mudanças não salvas?</p>
+  <ConfirmDialog title="Trocar de branch com mudanças não salvas?" aria="Confirmar troca de branch"
+    onClose={() => (confirmBranch = null)}
+    actions={[
+      { label: 'Cancelar', onClick: () => (confirmBranch = null) },
+      { label: 'Trocar assim', onClick: () => { const c = confirmBranch; confirmBranch = null; if (c) doCheckout(c.name, c.serverId, c.branch); } },
+      { label: 'Guardar e trocar', kind: 'primary', onClick: () => { const c = confirmBranch; confirmBranch = null; if (c) stashAndCheckout(c.name, c.serverId, c.branch); } },
+    ]}>
     <p class="confirm-name">→ {confirmBranch.branch}</p>
     <p class="confirm-hint">Há alterações não commitadas. <strong>Guardar e trocar</strong> põe elas no stash (recupera com “pop” na aba Git). <strong>Trocar assim</strong> deixa o git carregá-las — e pode recusar se conflitar.</p>
-    <div class="confirm-actions">
-      <button type="button" class="c-btn" onclick={() => (confirmBranch = null)}>Cancelar</button>
-      <button type="button" class="c-btn" onclick={() => { const c = confirmBranch; confirmBranch = null; if (c) doCheckout(c.name, c.serverId, c.branch); }}>Trocar assim</button>
-      <button type="button" class="c-btn c-primary" onclick={() => { const c = confirmBranch; confirmBranch = null; if (c) stashAndCheckout(c.name, c.serverId, c.branch); }}>Guardar e trocar</button>
-    </div>
-  </div>
+  </ConfirmDialog>
 {/if}
 
 <!-- Retomar conversa — caso AMBIGUO (varias sessoes no mesmo cwd): escolher qual transcript retomar.
      Paridade com o BottomSheet de resume do mobile (SessionList), no estilo dos modais do desktop. -->
 {#if resumeModal}
   {@const rm = resumeModal}
-  <div class="confirm-backdrop" onclick={() => (resumeModal = null)} role="presentation"></div>
-  <div class="confirm-card resume-card" role="dialog" aria-modal="true" aria-label="Retomar conversa">
-    <p class="confirm-title">Retomar qual conversa?</p>
+  <ConfirmDialog title="Retomar qual conversa?" aria="Retomar conversa" role="dialog" wide
+    onClose={() => (resumeModal = null)}
+    actions={[{ label: 'Fechar', onClick: () => (resumeModal = null) }]}>
     <p class="confirm-hint">Há mais de uma sessão nesta pasta — escolha o transcript pra continuar em <strong>{rm.name}</strong>.</p>
     {#if resumeError}<p class="resume-err">{resumeError}</p>{/if}
     <ul class="resume-list">
@@ -1295,23 +1292,19 @@
         </li>
       {/each}
     </ul>
-    <div class="confirm-actions">
-      <button type="button" class="c-btn" onclick={() => (resumeModal = null)}>Fechar</button>
-    </div>
-  </div>
+  </ConfirmDialog>
 {/if}
 
 <!-- Confirmar saida (recuperacao exige token/QR de novo). -->
 {#if confirmLogout}
-  <div class="confirm-backdrop" onclick={() => (confirmLogout = false)} role="presentation"></div>
-  <div class="confirm-card" role="alertdialog" aria-modal="true" aria-label="Confirmar saída">
-    <p class="confirm-title">Sair do app?</p>
+  <ConfirmDialog title="Sair do app?" aria="Confirmar saída"
+    onClose={() => (confirmLogout = false)}
+    actions={[
+      { label: 'Cancelar', onClick: () => (confirmLogout = false) },
+      { label: 'Sair', kind: 'danger', onClick: () => { confirmLogout = false; logout(); } },
+    ]}>
     <p class="confirm-hint">Você vai precisar do token (QR ou digitado) pra entrar de novo — e ele pode estar no PC.</p>
-    <div class="confirm-actions">
-      <button type="button" class="c-btn" onclick={() => (confirmLogout = false)}>Cancelar</button>
-      <button type="button" class="c-btn c-danger" onclick={() => { confirmLogout = false; logout(); }}>Sair</button>
-    </div>
-  </div>
+  </ConfirmDialog>
 {/if}
 
 <style>
@@ -1744,21 +1737,8 @@
   }
   .ctx-chain-save:disabled { opacity: 0.5; }
 
-  /* ── Confirmar exclusao (modal centrado) ── */
-  .confirm-backdrop { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, 0.5); }
-  .confirm-card {
-    position: fixed; z-index: 51; top: 50%; left: 50%; transform: translate(-50%, -50%);
-    width: min(340px, 90vw); padding: var(--space-5);
-    display: flex; flex-direction: column; gap: var(--space-2);
-    background: var(--bg-elevated); border: 1px solid var(--border-default);
-    border-radius: var(--radius-lg); box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
-    animation: confirm-in 160ms var(--ease-out) both;
-  }
-  @keyframes confirm-in {
-    from { opacity: 0; transform: translate(-50%, -48%) scale(0.97); }
-    to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-  }
-  .confirm-title { font-size: var(--text-base); font-weight: 600; color: var(--text-primary); }
+  /* ── Corpo dos modais de confirmação (o chassi vive em ConfirmDialog.svelte;
+     estas classes alcançam nós do snippet, compilado no escopo deste componente). ── */
   .confirm-hint { font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.5; }
   .confirm-name {
     font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-secondary);
@@ -1769,19 +1749,9 @@
   /* Servidor dono da sessao no confirm de exclusao (desambigua nome repetido entre servidores). */
   .confirm-srv { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-xs); color: var(--text-muted); }
   .confirm-srv-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-  .confirm-actions { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
-  .c-btn {
-    flex: 1; height: 40px; border-radius: var(--radius-md);
-    font-size: var(--text-sm); font-weight: 600;
-    background: var(--bg-hover); color: var(--text-secondary);
-  }
-  .c-btn:hover { background: var(--bg-surface); }
-  .c-danger { background: var(--error); color: #fff; }
-  .c-danger:hover { background: var(--error); filter: brightness(1.08); }
 
-  /* Modal de resume (caso ambiguo): lista de transcripts candidatos pra escolher — mais largo que os
-     confirms simples pra caber as previas. */
-  .resume-card { width: min(440px, 92vw); }
+  /* Modal de resume (caso ambiguo): lista de transcripts candidatos pra escolher — o card fica mais
+     largo (wide) que os confirms simples pra caber as previas. */
   .resume-err { font-size: var(--text-sm); color: var(--error); margin: 0; }
   .resume-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); max-height: 50vh; overflow-y: auto; }
   .resume-item {
@@ -1803,6 +1773,4 @@
     color: var(--text-primary); font-size: var(--text-sm); font-family: var(--font-mono);
     white-space: pre-wrap; word-break: break-word; max-height: 40vh; overflow-y: auto;
   }
-  /* Ação primária do confirm (guardar e trocar): destaque com o accent. */
-  .c-primary { background: var(--accent); border-color: var(--accent); color: var(--bg-base); font-weight: 600; }
 </style>
