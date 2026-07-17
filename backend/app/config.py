@@ -80,7 +80,7 @@ _DEFAULT_SCAN_ROOTS = "~/pessoal,~/sistemas"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="CP_", env_file=".env")
+    model_config = SettingsConfigDict(env_prefix="CP_", env_file=".env", extra="ignore")
 
     # Loopback by default: portable (exists on every machine) and safe (not exposed to
     # the network unless you opt in). Set CP_LAN_BIND_IP to your LAN IP for phone access.
