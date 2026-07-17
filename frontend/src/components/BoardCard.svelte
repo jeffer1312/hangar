@@ -84,10 +84,10 @@
     } finally {
       if (my === seq) loading = false;
     }
-    // Cauda válida mas SEM bolha (turno longo só de tool_use/tool_result): o card ficava em branco.
-    // Amplia a janela UMA vez (+PAGE cobre a quase totalidade das cadeias de ferramenta reais);
-    // se mesmo assim não render bolha, o empty-state do template explica em vez de sumir.
-    if (my === seq && !tailError && events.length > 0 && bubblesFromTail(events).length === 0) {
+    // Cauda válida mas quase sem bolha (<2 — turno longo de tool_use/tool_result espreme o texto
+    // pra fora da janela): amplia UMA vez (+PAGE cobre a quase totalidade das cadeias reais).
+    // Se ainda ficar curto, o botão "mensagens anteriores" e o wheel-pra-cima continuam de lá.
+    if (my === seq && !tailError && events.length > 0 && bubblesFromTail(events).length < 2) {
       loadMore();
     }
   }
@@ -98,7 +98,8 @@
   // varia e o backend faz tail-read barato. Âncora de leitura preservada via delta de scrollHeight.
   const PAGE = 50;
   let tailLimit = TAIL;
-  let atEnd = false; // veio menos que o pedido = conversa inteira já está no card
+  // $state: o template esconde o botão "mensagens anteriores" quando a conversa inteira já veio.
+  let atEnd = $state(false);
   let loadingMore = $state(false);
   async function loadMore() {
     if (loadingMore || loading || atEnd || !bodyEl) return;
@@ -131,6 +132,12 @@
   }
   function onBodyScroll() {
     if (bodyEl && bodyEl.scrollTop <= 0 && !loading) loadMore();
+  }
+  // Wheel-pra-cima pagina MESMO sem overflow: conteúdo curto não gera evento de scroll nunca
+  // (beco sem saída — "sei que tem mais msg e não consigo rolar"). No topo (ou sem barra), girar
+  // pra cima busca a página anterior.
+  function onBodyWheel(e: WheelEvent) {
+    if (e.deltaY < 0 && bodyEl && bodyEl.scrollTop <= 0 && !loading) loadMore();
   }
 
   // Retira o eco que o backend JÁ tinha confirmado quando esta cauda começou: /input 200 = texto na
@@ -255,13 +262,17 @@
     </div>
   {/if}
 
-  <div class="bc-body" class:masked={bodyOverflows} bind:this={bodyEl} onscroll={onBodyScroll}>
+  <div class="bc-body" class:masked={bodyOverflows} bind:this={bodyEl} onscroll={onBodyScroll} onwheel={onBodyWheel}>
     <!-- "carregando…" só quando NÃO há o que mostrar: o card remonta a cada troca de coluna e os ecos
          içados sobrevivem — cair no loading por cima deles reintroduziria o sumiço da msg. -->
     {#if loading && visible.length === 0 && pending.length === 0}
       <p class="bc-empty">carregando…</p>
     {:else}
       {#if loadingMore}<p class="bc-empty">carregando mais…</p>{/if}
+      <!-- Descoberta explícita da paginação quando há mais história e o corpo não rola sozinho. -->
+      {#if !loadingMore && !loading && !atEnd && events.length >= TAIL}
+        <button class="bc-more" onclick={loadMore}>· mensagens anteriores ·</button>
+      {/if}
       {#if !loading && !loadingMore && visible.length === 0 && pending.length === 0 && !tailError && events.length > 0}
         <p class="bc-empty">cauda recente só tem ferramentas — abrir o chat pra ver a conversa</p>
       {/if}
@@ -433,6 +444,12 @@
     mask-repeat: no-repeat, no-repeat;
   }
   .bc-empty { color: var(--text-muted); font-size: var(--text-xs); }
+  .bc-more {
+    align-self: center; background: none; border: 0; cursor: pointer;
+    color: var(--text-muted); font-family: inherit; font-size: var(--text-xs);
+    padding: 2px 8px; min-height: 0; min-width: 0; border-radius: var(--radius-full);
+  }
+  .bc-more:hover { color: var(--text-primary); background: var(--bg-hover); }
   /* Bolha de usuário MINI — mesma linguagem do chat (UserBubble: --bubble-user, canto reto embaixo
      à direita, alinhada à direita), em escala de card. Substitui o texto cru muted que não se
      distinguia da resposta. */
