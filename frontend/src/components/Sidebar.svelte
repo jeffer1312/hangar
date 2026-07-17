@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { openSessionsStream, createSession, deleteSession, renameSession, openEditor, gitAction, getBranches, checkoutBranch, getPushSettings, setSessionMute, resumeSession, broadcast, setThenLink, clearThenLink, getHistoryTailForServer } from '../lib/api';
+  import { createSession, deleteSession, renameSession, openEditor, gitAction, getBranches, checkoutBranch, getPushSettings, setSessionMute, resumeSession, broadcast, setThenLink, clearThenLink, getHistoryTailForServer } from '../lib/api';
   import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor, clearCredentials, parseServerPairing } from '../lib/auth';
+  import { sessionsStore } from '../lib/sessionsStore.svelte';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import QrScanner from './QrScanner.svelte';
   import GitSheet from './GitSheet.svelte';
@@ -12,7 +13,6 @@
   import type { SessionInfo, State, AggSession, ResumeCandidate } from '../lib/types';
   import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
-  import type { Server } from '../lib/auth';
   import Lottie from './Lottie.svelte';
   import pensando from '../lib/lottie/pensando.json';
 
@@ -47,7 +47,6 @@
   // template nao precisar saber em qual modo esta).
   interface SessRow extends SessionInfo { serverId: string }
   interface Group { id: string; label: string; color: string | null; error: string | null; sessions: SessRow[] }
-  let groups = $state<Group[]>([]);
   let collapsed = $state(false);   // pin: recolhido persistente (botao) — trilho de iniciais
   let hovering = $state(false);    // hover sobre a sidebar recolhida -> expande temporario
   let filterText = $state('');     // filtro por nome/cwd/servidor (aparece quando a lista fica longa)
@@ -88,7 +87,7 @@
   function setGroupBy(mode: GroupBy) {
     groupBy = mode;
     try { localStorage.setItem(GROUP_BY_KEY, mode); } catch { /* storage cheio/off */ }
-    recompute();
+    // `groups` é derived — reage sozinho à mudança de groupBy, sem recompute manual.
   }
 
   // Densidade compacta (1 linha por sessao: so lead+nome+chips), persistida — mesmo padrao do
@@ -118,7 +117,7 @@
     resizing = false;
     try { localStorage.setItem('cp_sidebar_w', String(width)); } catch { /* storage cheio/off */ }
   }
-  let servers = $state(listServers());
+  const servers = $derived(sessionsStore.servers);
   let activeId = $state(getActiveId());
   let scanning = $state(false);
   let showCreate = $state(false);
@@ -138,90 +137,48 @@
   }
   function closeKebab() { kebabOpen = false; }
 
-  const slots = new Map<string, { sessions: SessionInfo[] | null; error: string | null }>();
-  function recompute() {
-    if (servers.length === 0) { groups = []; return; }
-    const seen = new Set<string>(); // dedup global: backend compartilhado por 2 URLs não duplica
+  // Agregação SSE multi-servidor vive no store compartilhado (1 EventSource por servidor pros 3
+  // consumidores — Sidebar/SessionList/Board). Aqui só seguramos 1 retain e derivamos os grupos.
+  onMount(() => {
+    sessionsStore.retain();
+    return () => {
+      sessionsStore.release();
+      clearTimeout(hpTimer);   // espiada pendente nao sobrevive ao unmount (fetch orfao + setState)
+    };
+  });
+
+  // Agrupamento é POLÍTICA do Sidebar (servidor|projeto); o dado agregado/deduplicado vem do store.
+  const groups = $derived.by<Group[]>(() => {
+    if (servers.length === 0) return [];
     // Modo efetivo: com <2 servidores, "por servidor" viraria 1 grupo gigante -> força "por projeto".
     const mode = effectiveGroupBy(groupBy, servers.length);
     if (mode === 'project') {
       // Modo projeto: junta sessoes de TODOS os servidores pela chave do cwd. Servidor offline so
       // perde as sessoes dele (sem banner por grupo — nao ha "1 servidor" pra apontar o erro).
       const byKey = new Map<string, SessRow[]>();
-      for (const srv of servers) {
-        const slot = slots.get(srv.id);
-        if (!slot?.sessions) continue;
-        for (const s of slot.sessions) {
-          const key = `${s.jsonl ?? s.cwd ?? ''}::${s.name}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          const pk = projectKey(s.cwd);
-          const arr = byKey.get(pk);
-          const row: SessRow = { ...s, serverId: srv.id };
-          if (arr) arr.push(row); else byKey.set(pk, [row]);
-        }
+      for (const s of sessionsStore.rows) {
+        const pk = projectKey(s.cwd);
+        const arr = byKey.get(pk);
+        if (arr) arr.push(s); else byKey.set(pk, [s]);
       }
-      groups = [...byKey.entries()]
-        .map(([key, rows]) => ({ id: key, label: projectLabel(rows[0]?.cwd), color: null, error: null, sessions: sortSessions(rows) }))
+      return [...byKey.entries()]
+        .map(([key, rowsOf]) => ({ id: key, label: projectLabel(rowsOf[0]?.cwd), color: null, error: null, sessions: sortSessions(rowsOf) }))
         .sort((a, b) => a.label.localeCompare(b.label));
-      return;
     }
     // Modo servidor (comportamento de sempre): 1 grupo por servidor, sempre presente (mesmo vazio
-    // ou offline), na ORDEM de `servers`.
-    groups = servers.map((srv) => {
-      const slot = slots.get(srv.id);
-      if (!slot || !slot.sessions) return { id: srv.id, label: srv.label, color: serverColor(srv.id), error: slot?.error ?? null, sessions: [] };
-      const fresh = slot.sessions.filter((s) => {
-        const key = `${s.jsonl ?? s.cwd ?? ''}::${s.name}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      }).map((s): SessRow => ({ ...s, serverId: srv.id }));
-      return { id: srv.id, label: srv.label, color: serverColor(srv.id), error: null, sessions: sortSessions(fresh) };
-    });
-  }
-
-  let streams = new Map<string, EventSource>();
-  function connect(list: Server[]) {
-    for (const [id, es] of streams) {
-      if (!list.some((s) => s.id === id)) { es.close(); streams.delete(id); slots.delete(id); }
-    }
-    for (const s of list) {
-      if (streams.has(s.id)) continue;
-      const es = openSessionsStream(s);
-      es.addEventListener('sessions', (e) => {
-        slots.set(s.id, { sessions: JSON.parse((e as MessageEvent).data), error: null });
-        recompute();
-      });
-      es.onerror = () => {
-        slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
-        recompute();
-      };
-      streams.set(s.id, es);
-    }
-    recompute();
-  }
-  onMount(() => {
-    servers = listServers();
-    connect(servers);
-    return () => {
-      for (const es of streams.values()) es.close();
-      streams.clear();
-      clearTimeout(hpTimer);   // espiada pendente nao sobrevive ao unmount (fetch orfao + setState)
-    };
+    // ou offline), na ORDEM de `servers`. Semântica de erro preservada: "offline" só aparece quando
+    // NÃO há lista (com lista stale o grupo mostra as sessões e não o banner).
+    return sessionsStore.byServer.map((b) => ({
+      id: b.server.id,
+      label: b.server.label,
+      color: serverColor(b.server.id),
+      error: b.loaded ? null : b.error,
+      sessions: sortSessions(b.sessions),
+    }));
   });
 
   // Web push + horas silenciosas migraram pro AccountMenu (menu de conta do rodapé), que reusa os
   // mesmos enablePush/getPushSettings/setQuietHours — não reimplementa nada aqui.
-
-  // Reconectar streams (paridade com o "Atualizar" do menu mobile): fecha e reabre os EventSources de
-  // todos os servidores — resgata um stream meio-aberto sem recarregar a pagina. Mesmo bloco do menu
-  // mobile (SessionList).
-  function reconnectStreams() {
-    for (const es of streams.values()) es.close();
-    streams.clear();
-    connect(servers);
-  }
 
   // ── Retomar sessao "sem id" (paridade com o SessionCard do mobile): relança o pane com
   // `claude --resume <uuid>` -> passa a rastrear. Caso seguro resolve direto; caso ambiguo o backend
@@ -589,13 +546,12 @@
   // headers de grupo pegarem o nome novo (sem esperar o próximo SSE).
   function onRenameServer(id: string, label: string) {
     renameServer(id, label);
-    servers = listServers();
-    recompute();
+    sessionsStore.refreshServers();   // reagrega pra os headers de grupo pegarem o nome novo já
   }
 
   // Abre o menu de conta recarregando a lista de servidores (pode ter mudado desde a última abertura).
   function openAccount() {
-    servers = listServers();
+    sessionsStore.refreshServers();
     accountOpen = !accountOpen;
   }
 
@@ -617,11 +573,9 @@
     const id = confirmSrv.id;
     confirmSrv = null;
     const was = id === getActiveId();
-    removeServer(id);
-    servers = listServers();
+    removeServer(id);   // auth notifica o store (onServersChanged) -> ele reconcilia os streams sozinho
     activeId = getActiveId();
-    if (servers.length === 0) { clearCredentials(); onLogout(); return; }
-    connect(servers);
+    if (listServers().length === 0) { clearCredentials(); onLogout(); return; }
     if (was) window.location.reload();
   }
   function handleScan(text: string) {
@@ -666,15 +620,10 @@
   const awaitingTotal = $derived(groups.reduce((n, g) => n + countAwaiting(g.sessions), 0));
   $effect(() => { updateBadge(awaitingTotal); });
 
-  // Fila cross-server pra a AttentionFeed (feature #6): achata os grupos (ja deduplicados no
-  // recompute) e enriquece cada linha com label/cor do servidor. Independe do modo de agrupamento.
-  const attnSessions = $derived<AggSession[]>(
-    groups.flatMap((g) => g.sessions).map((s) => ({
-      ...s,
-      serverLabel: servers.find((v) => v.id === s.serverId)?.label ?? s.serverId,
-      serverColor: serverColor(s.serverId),
-    })),
-  );
+  // Fila cross-server pra a AttentionFeed (feature #6): as rows do store já vêm deduplicadas e
+  // enriquecidas com label/cor do servidor (AggSession). Independe do modo de agrupamento; o
+  // attentionFeed reordena por urgência internamente.
+  const attnSessions = $derived<AggSession[]>(sessionsStore.rows);
 
   // Filtro (paridade com o mobile): so aparece quando ha muitas sessoes; casa nome/cwd/rotulo do
   // grupo. Aplicado sobre `groups` num derived (reativo ao texto) — nao mexe no fluxo do SSE. Grupo
@@ -1091,7 +1040,7 @@
         {onRenameServer}
         onRemoveServer={dropServer}
         onAddServer={openAddServer}
-        onReconnect={reconnectStreams}
+        onReconnect={sessionsStore.reconnect}
         onLogout={() => (confirmLogout = true)}
       />
     </div>
