@@ -3,7 +3,26 @@
 Next things to design + build after the current redesign phases. Mobile-first. The backend
 drives the live claude via tmux send-keys + reads the JSONL transcript + capture-pane.
 
-## 00. Board: canvas livre (PEDIDO 2026-07-16 — escolhido pelo usuário, não iniciado)
+## 00. Board: canvas livre (✅ ENTREGUE v1 — 2026-07-17)
+
+> **ENTREGUE v1 (2026-07-17).** `screens/Canvas.svelte` na rota `#/canvas`, convivendo com `#/board`
+> como um terceiro modo desktop (não substituiu o quadro). Decisões tomadas:
+> - **Convive** com `#/board` — o board continua sendo o modo agrupado por estado.
+> - **Drag pelo handle + resize nativo** (CSS resize corner capturado por `ResizeObserver`).
+> - **Layout persistido** em `localStorage` sob `cp_canvas_layout`, keyed `serverId::name`.
+> - **Posição inicial em colunas por servidor** via `lib/canvasLayout.ts` (`placeNew`, 6 testes) —
+>   atende o pedido "separasse por servidores pra não ficar tudo jogado".
+> - **Pareados nascem adjacentes, mas NÃO movem juntos** (decisão conservadora: agrupamento visual
+>   no nascimento, sem arrasto solidário).
+> - **Sem pan/zoom** — scroll nativo do container.
+> - **`BoardCard` ganhou a prop `fill`** (o card preenche o tile dimensionável em vez do tamanho fixo do board).
+> - **Mobile cai na `SessionList`** (canvas é desktop-only). Overlay do chat = rota `#/canvas/<serverId>/<nome>`.
+> - **Smoke ao vivo passou:** drag/resize/reload persistem, overlay abre no servidor certo com 2
+>   servidores, Esc restaura, mobile intocado.
+>
+> **Ficou de fora (v2):** mover-junto de pareados (arrasto solidário do grupo 🤝); auto-arrumar
+> contínuo (reflow quando entra/sai sessão); poda de entradas mortas do `cp_canvas_layout` (sessões
+> que sumiram deixam a posição órfã no localStorage). O texto original do pedido segue abaixo.
 
 **O pedido, nas palavras dele:** *"queria poder ajustar a altura e a largura de cada card
 individualmente"*, e — sobre os cards de um grupo de pareamento — *"os que estão em pareamento
