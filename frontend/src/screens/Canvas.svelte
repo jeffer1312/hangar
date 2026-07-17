@@ -5,7 +5,7 @@
   import type { BoardRow, PendingMsg } from './Board.svelte';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { serverColor } from '../lib/auth';
-  import { placeNew, PAD, type CanvasLayout } from '../lib/canvasLayout';
+  import { placeNew, PAD, type CanvasLayout, type CardBox } from '../lib/canvasLayout';
 
   interface Props { onOpenSession: (name: string, serverId: string) => void }
   let { onOpenSession }: Props = $props();
@@ -22,7 +22,17 @@
   // ── Layout persistido: posição+tamanho por serverId::name (mesmo padrão dos drafts do Board). ──
   const LAYOUT_KEY = 'cp_canvas_layout';
   function loadLayout(): CanvasLayout {
-    try { return JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '{}'); } catch { return {}; }
+    let raw: unknown;
+    try { raw = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '{}'); } catch { return {}; }
+    // O try/catch só pega JSON inválido, não shape errado: uma entrada sem x/y/w/h numéricos viraria
+    // NaN no style e envenenaria o extent. Fica só com as entradas cujos 4 campos sejam todos finitos.
+    const src = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+    const out: CanvasLayout = {};
+    for (const [k, v] of Object.entries(src)) {
+      const b = v as Record<string, unknown>;
+      if (b && ['x', 'y', 'w', 'h'].every((f) => Number.isFinite(b[f]))) out[k] = b as unknown as CardBox;
+    }
+    return out;
   }
   let layout = $state<CanvasLayout>(loadLayout());
   function saveLayout() {
@@ -64,6 +74,7 @@
   function dragMove(e: PointerEvent) {
     if (!drag) return;
     const b = layout[drag.key];
+    if (!b) { drag = null; return; }   // sessão morreu no meio do arrasto -> não grava entrada corrompida sem w/h
     layout = { ...layout, [drag.key]: { ...b, x: Math.max(0, e.clientX - drag.dx), y: Math.max(0, e.clientY - drag.dy) } };
   }
   function dragEnd() {

@@ -66,7 +66,9 @@ function createSessionsStore() {
     get loading() { return agg.loading; },
     get servers() { return servers; },
     retain() { if (++refs === 1) start(); },
-    release() { if (--refs === 0) stop(); },
+    // Guarda contra consumidor futuro desbalanceado: um release a mais deixaria refs negativo e o
+    // singleton nunca mais reconectaria (nenhum retain voltaria a bater 1). Piso em 0.
+    release() { if (refs > 0 && --refs === 0) stop(); },
     reconnect() {
       // Resgata streams meio-abertos sem recarregar a página (o "Atualizar" dos menus).
       for (const es of streams.values()) es.close();
