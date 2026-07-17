@@ -1,7 +1,10 @@
 <script lang="ts">
-  import { onMount, untrack } from 'svelte';
+  import { onMount, onDestroy, untrack } from 'svelte';
   import AssistantBubble from './AssistantBubble.svelte';
-  import { getHistoryTailCached, getHistoryTailForServer, sendInputForServer, selectOptionForServer } from '../lib/api';
+  import {
+    getHistoryTailCached, getHistoryTailForServer, sendInputForServer, selectOptionForServer,
+    uploadFileForServer, transcribeFileForServer,
+  } from '../lib/api';
   import { relativeTime, bubblesFromTail, stateLabels, pairColor, parsePeerMessage } from '../lib/format';
   import { parseStatusLine } from '../lib/statusline';
   import type { Server } from '../lib/auth';
@@ -187,15 +190,106 @@
     updatePending((prev) => prev.filter((p) => !p.ackAt || p.ackAt > startedAt));
   }
 
-  async function send() {
-    const t = text.trim();
-    if (!t) return;
-    const id = 'bp-' + Math.random().toString(36).slice(2, 10);
-    updatePending((prev) => [...prev, { id, text: t, ackAt: 0 }]);
-    text = '';
-    onSendError('');
+  // ── Composer completo (anexos + ditado): mini do Composer do chat, MESMO formato de mensagem
+  // ("legenda — 📎 imagem: <path>", uma linha; transcrição vira texto + "📎 audio: <path>") pra
+  // toda a esteira de dedup/confirmação do backend funcionar igual. ──
+  let fileInput = $state<HTMLInputElement>();
+  let attach = $state<File[]>([]);
+  let attachBusy = $state(false);
+  let recState = $state<'idle' | 'rec' | 'busy'>('idle');
+  let recorder: MediaRecorder | null = null;
+  let recStream: MediaStream | null = null;
+  let recChunks: Blob[] = [];
+
+  // Card destruído GRAVANDO (troca de coluna/estado remonta o card — ver comentário do topo): sem
+  // teardown o mic ficava ligado pra sempre numa closure morta, indicador aceso. Mesmo papel do
+  // teardownRecording+onDestroy do Composer do chat.
+  onDestroy(() => {
+    if (recorder?.state === 'recording') recorder.stop();
+    recStream?.getTracks().forEach((t) => t.stop());
+  });
+
+  function onFiles(e: Event) {
+    const files = [...((e.target as HTMLInputElement).files ?? [])];
+    if (files.length) attach = [...attach, ...files];
+    if (fileInput) fileInput.value = '';
+  }
+  function dropAttach(i: number) {
+    attach = attach.filter((_, k) => k !== i);
+  }
+
+  async function toggleRec() {
+    if (recState === 'rec') { recorder?.stop(); return; }
+    if (recState !== 'idle') return;
+    let stream: MediaStream | null = null;
     try {
-      await sendInputForServer(server, session.name, t);
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recStream = stream;
+      recChunks = [];
+      recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
+      recorder.onstop = async () => {
+        recStream?.getTracks().forEach((t) => t.stop());
+        recStream = null;
+        recState = 'busy';
+        try {
+          const blob = new Blob(recChunks, { type: recorder?.mimeType || 'audio/webm' });
+          const { path, text: tx } = await transcribeFileForServer(
+            server, session.name, new File([blob], 'audio.webm', { type: blob.type || 'audio/webm' }),
+          );
+          // Igual ao chat: transcrição entra como texto editável + marcador do áudio original.
+          const nt = (text ? text + ' ' : '') + tx + ' — 📎 audio: ' + path;
+          text = nt;
+          // DIRETO no draft içado do Board (não só via $effect): se o card foi destruído durante o
+          // await da transcrição (troca de coluna), o $effect já morreu e o texto sumia calado —
+          // o draft sobrevive e o card remontado re-semeia dele.
+          onDraftChange(nt);
+        } catch (err) {
+          onSendError(err instanceof Error ? err.message : 'falha na transcrição');
+        } finally {
+          recState = 'idle';
+          recorder = null;
+        }
+      };
+      recorder.start();
+      recState = 'rec';
+    } catch (err) {
+      // getUserMedia deu certo mas MediaRecorder/start falhou: solta o mic também neste caminho.
+      stream?.getTracks().forEach((t) => t.stop());
+      recStream = null;
+      onSendError(err instanceof Error ? err.message : 'microfone indisponível');
+    }
+  }
+
+  async function send() {
+    const raw = text.trim();
+    if (!raw && attach.length === 0) return;
+    onSendError('');
+    let msg = raw;
+    if (attach.length) {
+      attachBusy = true;
+      try {
+        // Paths numa ÚNICA linha (backend rejeita '\n' no send-keys), imagem × arquivo pelo tipo.
+        const parts: string[] = [];
+        for (const f of attach) {
+          const { path } = await uploadFileForServer(server, session.name, f);
+          parts.push((f.type.startsWith('image/') ? '📎 imagem: ' : '📎 arquivo: ') + path);
+        }
+        msg = (raw ? raw + ' — ' : '') + parts.join(' ');
+      } catch (err) {
+        // Upload falhou: mantém anexos + texto pro retry, nada se perde calado.
+        onSendError(err instanceof Error ? err.message : 'falha no upload');
+        attachBusy = false;
+        return;
+      }
+      attachBusy = false;
+    }
+    const id = 'bp-' + Math.random().toString(36).slice(2, 10);
+    updatePending((prev) => [...prev, { id, text: msg, ackAt: 0 }]);
+    text = '';
+    attach = [];
+    try {
+      await sendInputForServer(server, session.name, msg);
       // Aceito pelo backend: a partir daqui QUALQUER cauda nova já contém esta msg -> o eco pode sair.
       updatePending((prev) => prev.map((p) => (p.id === id ? { ...p, ackAt: Date.now() } : p)));
     } catch (err) {
@@ -203,7 +297,9 @@
       updatePending((prev) => prev.filter((p) => p.id !== id));
       // Devolve pro input SÓ se ele ainda estiver vazio: o envio NÃO tem timeout (de propósito), então
       // a janela é ilimitada e o usuário pode ter digitado outra coisa — sobrescrever comeria o texto.
-      if (!text) text = t;
+      // Devolve a MSG COMPLETA (com os 📎 path já uploadados), não só o raw: os anexos já subiram e
+      // reenviar o texto com os paths reaproveita — restaurar só o texto órfãozava os uploads.
+      if (!text) text = msg;
       onSendError(err instanceof Error ? err.message : 'falha no envio');
     }
   }
@@ -382,9 +478,27 @@
           {/if}
         </div>
       {/if}
+      {#if attach.length}
+        <div class="bc-attach">
+          {#each attach as f, i (i)}
+            <button class="bc-att" onclick={() => dropAttach(i)} title="Remover anexo">
+              {f.type.startsWith('image/') ? '🖼' : '📄'} {f.name} ✕
+            </button>
+          {/each}
+        </div>
+      {/if}
       <div class="bc-inrow">
-        <textarea rows="1" placeholder="Mensagem…" bind:value={text} onkeydown={onKey}></textarea>
-        <button class="bc-send" onclick={send} disabled={!text.trim()} aria-label="Enviar">↑</button>
+        <input type="file" multiple hidden bind:this={fileInput} onchange={onFiles} />
+        <button class="bc-tool" onclick={() => fileInput?.click()} disabled={attachBusy}
+                title="Anexar imagem/arquivo" aria-label="Anexar">📎</button>
+        <button class="bc-tool" class:bc-rec={recState === 'rec'} onclick={toggleRec}
+                disabled={recState === 'busy'}
+                title={recState === 'rec' ? 'Parar e transcrever' : 'Gravar áudio (vira texto + anexo)'}
+                aria-label="Gravar áudio">{recState === 'busy' ? '…' : '🎤'}</button>
+        <textarea rows="1" placeholder={attachBusy ? 'enviando anexos…' : recState === 'busy' ? 'transcrevendo…' : 'Mensagem…'}
+                  bind:value={text} onkeydown={onKey}></textarea>
+        <button class="bc-send" onclick={send}
+                disabled={(!text.trim() && attach.length === 0) || attachBusy} aria-label="Enviar">↑</button>
       </div>
     </footer>
   {/if}
@@ -565,7 +679,28 @@
     font-variant-numeric: tabular-nums;
   }
   .bc-ctx-warn { color: var(--warning); }
-  .bc-inrow { display: flex; gap: 6px; }
+  .bc-inrow { display: flex; gap: 6px; align-items: flex-end; }
+  /* Ferramentas do composer (anexo/mic): fantasmas como o input — borda só em interação. */
+  .bc-tool {
+    width: 28px; height: 28px; flex-shrink: 0; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: none; border: 0; border-radius: var(--radius-md);
+    font-size: 14px; cursor: pointer; min-height: 0; min-width: 0;
+    opacity: 0.7; transition: opacity 120ms var(--ease-out), background 120ms var(--ease-out);
+  }
+  .bc-tool:hover:not(:disabled) { opacity: 1; background: var(--bg-hover); }
+  .bc-tool:disabled { opacity: 0.4; cursor: default; }
+  /* Gravando: o vocabulário de erro/atenção já usa --error pra "olha aqui". */
+  .bc-tool.bc-rec { opacity: 1; background: color-mix(in srgb, var(--error) 18%, transparent); }
+  .bc-attach { display: flex; flex-wrap: wrap; gap: 4px; }
+  .bc-att {
+    display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
+    font-family: inherit; font-size: var(--text-xs); color: var(--text-secondary);
+    background: var(--bg-elevated); border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-full); padding: 2px 8px; cursor: pointer;
+    min-height: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .bc-att:hover { border-color: var(--error); color: var(--text-primary); }
   .bc-foot textarea {
     flex: 1; resize: none; min-height: 28px; max-height: 72px; font: inherit; font-size: 12px;
     background: var(--bg-elevated); color: var(--text-primary);
