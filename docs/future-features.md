@@ -3,6 +3,50 @@
 Next things to design + build after the current redesign phases. Mobile-first. The backend
 drives the live claude via tmux send-keys + reads the JSONL transcript + capture-pane.
 
+## 00. Board: canvas livre (PEDIDO 2026-07-16 — escolhido pelo usuário, não iniciado)
+
+**O pedido, nas palavras dele:** *"queria poder ajustar a altura e a largura de cada card
+individualmente"*, e — sobre os cards de um grupo de pareamento — *"os que estão em pareamento
+deveriam ficar diferentes e agrupados"*.
+
+**A decisão:** foram apresentadas 3 opções (altura-por-card + largura-por-coluna; canvas livre;
+altura + span de 2 colunas). Ele escolheu **canvas livre**, ciente do trade-off explicado:
+
+> Largura individual por card **quebra o conceito de coluna** — num kanban a coluna define a
+> largura; se cada card tem a sua, não há mais alinhamento vertical, e o que existe é um canvas.
+
+Então isto **não é um ajuste do quadro atual — é uma tela nova**. O que se ganha: liberdade total
+de posição e tamanho. O que se perde: o agrupamento automático por estado, que é o eixo do quadro
+de hoje (nada se reorganiza sozinho quando uma sessão muda de estado). Decidir se o canvas
+**substitui** `#/board` ou convive como um terceiro modo é parte do design — pergunte antes.
+
+**O que existe hoje pra reusar** (`#/board`, entregue 2026-07-16):
+- `screens/Board.svelte` — agregação SSE (1 stream por *servidor*, nunca por card), colunas por
+  estado, Maps içados de `drafts`/`pending`/`sendError` (o card remonta ao trocar de coluna).
+- `components/BoardCard.svelte` — o card é um mini-chat: cauda via `GET /history?limit=N` no mount,
+  input que envia cross-server, botões de opção, recibo de erro. **Reusável quase inteiro** — o que
+  muda é quem posiciona/dimensiona o card, não o que ele mostra.
+- O overlay do chat completo é a rota `#/board/<serverId>/<nome>`.
+
+**Restrições que NÃO podem ser afrouxadas** (custaram bugs reais nesta feature):
+- **Nunca um SSE por card** — o navegador limita ~6 por host. Estado ao vivo vem do stream agregado.
+- **O servidor ativo tem que ser apontado ANTES do render** (síncrono, no `hashchange`), senão o
+  Chat monta e busca no servidor errado — ver `applyRouteServer` em `App.svelte` e o commit `5288ea4`.
+- **Espiar um card não muda em que servidor você está** (`lib/peek.ts` + `peek.test.ts`). Essa regra
+  já foi apagada uma vez por um refactor; o teste é o que a protege.
+
+**Pontas soltas do quadro atual, a decidir junto** (podem morrer com o canvas, ou não):
+- **Agrupar os pareados** (o outro pedido do mesmo dia): um grupo 🤝 é uma unidade lógica (N sessões
+  na mesma tarefa) e deveria ser um bloco, não N cards soltos. A **lista já faz isso** — o cluster
+  colapsável do commit `6497b8f` (`SessionList`/`Sidebar`); o quadro não herdou. Num canvas isso
+  vira "cards do mesmo grupo nascem juntos / movem juntos"?
+- **Organizar por servidor** — ele levantou (*"separasse por servidores? pra não ficar tudo jogado"*)
+  antes de escolher o canvas. Num canvas, isso provavelmente vira posição inicial/auto-arrumar.
+
+**Dica de implementação (só uma):** persistir posição+tamanho por `serverId::name` no localStorage,
+no mesmo padrão dos `drafts` do Board. E cuidado com o que já mordeu: card é flex item — em qualquer
+container flex, `flex-shrink: 0` (ver `23e137d`, os cards nasceram espremidos e vazios com 13 sessões).
+
 ## 0. Git manager (EM CONSTRUÇÃO — iniciado 2026-07-03)
 
 Objetivo: transformar a GitSheet num **gerenciador de git** de verdade, aberto pelo **menu de
