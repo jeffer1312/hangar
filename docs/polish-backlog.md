@@ -26,7 +26,7 @@ the code, and it already cost real bugs this session. In order of value per risk
    component, owning `menuMuted`/`branchView`/`chainView`; it also uses the shared `withServer`
    from `lib/auth.ts`.
 
-Real result: `Sidebar.svelte` went from **1859 lines / 44 `$state`** to **1570 lines / 25 `$state`**
+Real result: `Sidebar.svelte` went from **1859 lines / 44 `$state`** to **1570 lines / 37 `$state`**
 (the backlog's ~1100/~25 estimate was optimistic — the three items were done in full; the rest of
 what remains is legitimate list template/CSS, not duplication).
 
