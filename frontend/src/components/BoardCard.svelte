@@ -2,7 +2,7 @@
   import { onMount, untrack } from 'svelte';
   import AssistantBubble from './AssistantBubble.svelte';
   import { getHistoryTailCached, getHistoryTailForServer, sendInputForServer, selectOptionForServer } from '../lib/api';
-  import { relativeTime, bubblesFromTail } from '../lib/format';
+  import { relativeTime, bubblesFromTail, stateLabels } from '../lib/format';
   import { parseStatusLine } from '../lib/statusline';
   import type { Server } from '../lib/auth';
   import type { ChatEvent } from '../lib/types';
@@ -190,14 +190,26 @@
     <span class="bc-name">{session.name}</span>
     <!-- Servidor por NOME, não só pela cor do dot: com 5+ servidores a cor sozinha não identifica. -->
     <span class="bc-srv" style="color: {color}" title={server.label}>{server.label}</span>
-    {#if session.branch}<span class="bc-branch">⎇ {session.branch}</span>{/if}
-    <!-- Par visível pelo NOME (não só a contagem): tooltip traz a lista completa. -->
-    {#if session.pair_peers?.length}
-      <span class="bc-chip" title={'pareada com ' + session.pair_peers.join(', ')}>🤝 {session.pair_peers.join(', ')}</span>
+    <!-- Pill de estado SÓ no canvas (fill): lá não há colunas dizendo o estado; no board a coluna
+         já diz e o pill viraria ruído repetido. Vocabulário --pill-* do design system. -->
+    {#if fill}
+      <span class="bc-state" data-state={session.state}>{stateLabels[session.state]}</span>
     {/if}
     <span class="bc-time">{relativeTime(session.last_activity)}</span>
     <span class="bc-open" title="Abrir chat completo">⤢</span>
   </header>
+  <!-- Linha de contexto do card: branch/par + infos da statusline (custo, tempo de sessão) — a
+       "parte de cima" das infos compartilhadas do turno. Só aparece quando há o que mostrar. -->
+  {#if session.branch || session.pair_peers?.length || meta?.costUsd != null || meta?.sessionTime}
+    <div class="bc-sub">
+      {#if session.branch}<span class="bc-branch">⎇ {session.branch}</span>{/if}
+      {#if session.pair_peers?.length}
+        <span class="bc-chip" title={'pareada com ' + session.pair_peers.join(', ')}>🤝 {session.pair_peers.join(', ')}</span>
+      {/if}
+      {#if meta?.costUsd != null}<span title="custo da sessão">💵 ${meta.costUsd.toFixed(2)}</span>{/if}
+      {#if meta?.sessionTime}<span title="tempo de sessão">⏱ {meta.sessionTime}</span>{/if}
+    </div>
+  {/if}
 
   <div class="bc-body" bind:this={bodyEl} onscroll={onBodyScroll}>
     <!-- "carregando…" só quando NÃO há o que mostrar: o card remonta a cada troca de coluna e os ecos
@@ -281,15 +293,27 @@
        nenhuma. A coluna já tem overflow-y: auto; é ela que deve rolar, não o card encolher. */
     flex-shrink: 0;
     background: var(--bg-surface);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
     box-shadow: none;
     overflow: hidden;
     transition: border-color 140ms var(--ease-out);
   }
-  .bcard:hover { border-color: rgba(255, 255, 255, 0.12); }
-  /* Faixa colorida é EXCEÇÃO: só quem espera por você. Em todo card viraria listra decorativa. */
-  .bcard.attention { border-left: 2px solid var(--warning); }
+  .bcard:hover { border-color: var(--border-default); }
+  /* Quem espera por você: borda INTEIRA tingida de warning (side-stripe é ban do design system;
+     a listra lateral virou aro completo, mais legível de qualquer ângulo do canvas). */
+  .bcard.attention { border-color: color-mix(in srgb, var(--warning) 45%, transparent); }
+  .bcard.attention:hover { border-color: color-mix(in srgb, var(--warning) 65%, transparent); }
+  /* Estado como pill (vocabulário --pill-* do app.css) — só renderizado no canvas. */
+  .bc-state {
+    font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em;
+    padding: 1px 8px; border-radius: var(--radius-full); flex-shrink: 0; white-space: nowrap;
+  }
+  .bc-state[data-state='working'] { background: var(--pill-working-bg); color: var(--pill-working-fg); }
+  .bc-state[data-state='idle'] { background: var(--pill-idle-bg); color: var(--pill-idle-fg); }
+  .bc-state[data-state='awaiting_input'] { background: var(--pill-input-bg); color: var(--pill-input-fg); }
+  /* Sem branch 'dead' de propósito: a lista nunca traz esse estado (classify() não devolve dead
+     pra lista — só o SSE por-sessão do Chat; ver CLAUDE.md). */
   /* Canvas: o wrapper dita a altura; o corpo vira o flexível (o teto de 240px é regra da COLUNA). */
   .bcard.fill { height: 100%; display: flex; flex-direction: column; }
   .bcard.fill .bc-body { max-height: none; flex: 1; }
@@ -304,13 +328,20 @@
   }
   @keyframes bc-slide { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
   .bc-head {
-    display: flex; align-items: center; gap: 6px; min-width: 0;
-    padding: var(--space-2) var(--space-3); cursor: pointer;
+    display: flex; align-items: center; gap: 8px; min-width: 0;
+    padding: 10px var(--space-3) 6px; cursor: pointer;
+  }
+  /* Linha 2 do header: branch/par/custo/tempo — tira o ruído da linha do nome. */
+  .bc-sub {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    padding: 0 var(--space-3) 8px;
+    font-size: var(--text-xs); color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
   }
   .bc-head:hover { background: var(--bg-hover); }
   .bc-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-  /* Peso 510, não 600: hierarquia por luminância. */
-  .bc-name { font-size: 13px; font-weight: 510; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Peso 510, não 600: hierarquia por luminância. 14px: é o título do card. */
+  .bc-name { font-size: 14px; font-weight: 510; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .bc-branch, .bc-chip, .bc-time { font-size: var(--text-xs); color: var(--text-muted); flex-shrink: 0; }
   /* Nome do servidor como PILL tingida na cor do dot — identifica com 5+ servidores sem gritar.
      Encolhe com ellipsis antes do nome da sessão. */
@@ -354,7 +385,13 @@
   }
   .bc-pending { opacity: 0.55; }
   .bc-typing { color: var(--text-secondary); font-size: var(--text-xs); font-style: italic; }
-  .bc-question { border-left: 2px solid var(--warning); padding-left: var(--space-2); font-size: var(--text-xs); }
+  /* Pergunta pendente: tinta de fundo no vocabulário awaiting (--pill-input-*) — listra lateral
+     é ban; a tinta preenche o bloco e lê melhor com o card estreito. */
+  .bc-question {
+    background: var(--pill-input-bg);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px; font-size: var(--text-xs);
+  }
   .bc-options { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .bc-opt { font-size: var(--text-xs); padding: 3px 10px; border-radius: var(--radius-full); border: 1px solid var(--border-default); background: var(--bg-elevated); color: var(--text-primary); cursor: pointer; }
   .bc-opt:hover:not(:disabled) { background: var(--bg-hover); }
@@ -364,7 +401,7 @@
   .bc-foot {
     display: flex; flex-direction: column; gap: 4px;
     padding: var(--space-2) var(--space-3) var(--space-3);
-    border-top: 1px solid rgba(255, 255, 255, 0.04);
+    border-top: 1px solid var(--border-subtle);
   }
   /* Modelo + contexto da sessão (statusline cacheada): o contexto do que este composer alcança. */
   .bc-meta {
@@ -375,7 +412,7 @@
   .bc-inrow { display: flex; gap: 6px; }
   .bc-foot textarea {
     flex: 1; resize: none; min-height: 28px; max-height: 72px; font: inherit; font-size: 12px;
-    background: rgba(255, 255, 255, 0.04); color: var(--text-primary);
+    background: var(--bg-elevated); color: var(--text-primary);
     border: 1px solid transparent; border-radius: var(--radius-md); padding: 6px 10px;
     transition: border-color 120ms var(--ease-out);
   }
