@@ -321,6 +321,15 @@ export function bubblesFromTail(events: ChatEvent[]): ChatEvent[] {
   return start > 0 ? msgs.slice(start) : msgs;
 }
 
+// Cor determinística por grupo de pareamento (gid): mesmo grupo = mesma cor em QUALQUER view
+// (chip 🤝 do card, barra do canvas). Hash simples -> matiz; OKLCH com croma moderado lê bem
+// nos dois temas.
+export function pairColor(gid: string): string {
+  let h = 0;
+  for (let i = 0; i < gid.length; i++) h = (h * 31 + gid.charCodeAt(i)) >>> 0;
+  return `oklch(0.72 0.14 ${h % 360})`;
+}
+
 // Abrevia contagem grande: 3668662 -> "3.7M", 1.5e9 -> "1.5B", 999 -> "999".
 export function abbrevNum(n: number): string {
   for (const [div, suf] of [[1e9, 'B'], [1e6, 'M'], [1e3, 'K']] as const) {
