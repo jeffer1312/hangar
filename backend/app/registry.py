@@ -18,7 +18,7 @@ from app.adapters.codex import sessions as codex_sessions
 from app.adapters.codex import adapter as codex_adapter
 from app.adapters.codex.appserver import AppServerClient
 from app.askquestion import clear_pending_askq
-from app.state import classify, _live_spinner, rate_limit_reset
+from app.state import classify, _live_spinner, rate_limit_reset, status_line as _pane_status
 from app.hook_state import hook_state
 
 # Sentinela: distingue "pid nao informado" (resolve sozinho via tmux) de "pid=None" (sem pane).
@@ -241,6 +241,12 @@ def _config_dir_of(pid: int) -> Optional[Path]:
     return None
 
 
+# Cadencia do cache de statusline da lista (list_with_state): TTL por sessao + teto de capturas de
+# pane por chamada (o custo real e o fork do tmux).
+_STATUS_TTL = 20.0
+_STATUS_BUDGET = 2
+
+
 class SessionRegistry:
     # Cache name -> ultimo jsonl resolvido por sinal CONFIAVEL (cmdline --session-id / fd). De classe
     # (compartilhado entre instancias: api.registry e sse._registry). Estabiliza a resolucao quando o
@@ -254,6 +260,9 @@ class SessionRegistry:
     # DIAG: ultima resolucao logada por nome ("<jsonl>|<tracked>") -> loga so quando MUDA (o momento do
     # split/cross-wire), sem spammar a cada poll. Remover quando o bug de colisao estiver resolvido.
     _last_res: dict[str, str] = {}
+    # Statusline por sessao: name -> (monotonic da captura, linha crua ou None). De classe
+    # (compartilhado entre api.registry e as instancias do sse) — uma captura serve todos.
+    _status_cache: dict[str, tuple[float, Optional[str]]] = {}
 
     def __init__(self, projects_dir: Path | None = None):
         self.projects_dir = Path(projects_dir or settings.projects_dir)
@@ -438,6 +447,9 @@ class SessionRegistry:
     def _forget(self, name: str) -> None:
         self._jsonl_cache.pop(name, None)
         self._fd_locked.discard(name)
+        # Nome pode ser reusado por outra sessao: sem isto a nova herdaria a statusline da morta
+        # por ate _STATUS_TTL (e o dict cresceria sem poda a cada create/kill).
+        self._status_cache.pop(name, None)
 
     def _repl_sid(self, pid, children: Optional[dict[int, list[int]]] = None) -> Optional[str]:
         # --session-id do REPL principal da sessao (pula daemon/agent). Identidade do DONO de um
@@ -537,6 +549,9 @@ class SessionRegistry:
         if not infos:
             return infos
         # Estado pela marca dos hooks quando existe (custo ~0); senao cai no pane (fallback).
+        # NOTA: o sweep de STATUSLINE (mais abaixo) captura pane mesmo de sessao com marcador —
+        # a statusline nao tem outra fonte. O "custo ~0" continua valendo pra CLASSIFICACAO; o
+        # sweep e limitado a _STATUS_BUDGET capturas por chamada com TTL de _STATUS_TTL.
         def _sid(jsonl):
             return Path(jsonl).stem if jsonl else None
         pending = []  # infos sem marcador (ou awaiting) -> precisa raspar o pane
@@ -586,6 +601,37 @@ class SessionRegistry:
                 # (marker path fica com o default False/None, igual a label/question/options).
                 info.limit_reset = rate_limit_reset(frame)
                 info.limited = info.limit_reset is not None
+                # Statusline de graca: o frame ja foi capturado pra classificar.
+                self._status_cache[info.name] = (time.monotonic(), _pane_status(frame))
+        # Statusline pros cards (modelo/contexto/⚡5h/📅7d): cache com TTL — capturar o pane de TODAS
+        # por tick seria a tempestade de forks que o fast-path de marcador evita. No maximo
+        # _STATUS_BUDGET capturas por chamada, das entradas mais VELHAS do cache; quem foi raspada
+        # acima ja atualizou de graca. ponytail: cadencia ~(N/_STATUS_BUDGET)×poll — com 15 sessoes
+        # e poll 1.5s, ciclo completo ~11s; statusline muda devagar, atraso e invisivel.
+        now_m = time.monotonic()
+        stale = [
+            i for i in infos
+            if getattr(i, "provider", "claude") != "codex"
+            and all(i is not p for p in pending)
+            and now_m - self._status_cache.get(i.name, (0.0, None))[0] > _STATUS_TTL
+        ]
+        stale.sort(key=lambda i: self._status_cache.get(i.name, (0.0, None))[0])
+        for info in stale[:_STATUS_BUDGET]:
+            try:
+                pane = await asyncio.to_thread(tmux.capture_pane, info.name)
+                self._status_cache[info.name] = (time.monotonic(), _pane_status(pane))
+            except Exception as e:
+                # tmux engasgado (transiente): carimba o relogio (senao o nome quebrado monopolizaria
+                # o budget a cada chamada) mas PRESERVA a ultima statusline boa — apagar aqui piscava
+                # o badge do card e forcava re-emissao da lista a toa. Sessao morta de verdade sai da
+                # lista sozinha (e kill via app limpa no _forget). Logado em debug: tmux quebrado
+                # cronico deixaria toda statusline congelada sem rastro nenhum.
+                _log.debug("statusline capture falhou pra %s: %r", info.name, e)
+                prev = self._status_cache.get(info.name, (0.0, None))[1]
+                self._status_cache[info.name] = (time.monotonic(), prev)
+        for info in infos:
+            if getattr(info, "provider", "claude") != "codex":
+                info.status_line = self._status_cache.get(info.name, (0.0, None))[1]
         # Travada (feature #7): "working" ha mais de CP_STALL_SECONDS sem o transcript avancar. So o
         # bool derivado pra UI/sig — o push (1x, com dedupe) e responsabilidade do stall_watch, nao daqui.
         now = time.time()
@@ -718,6 +764,9 @@ class SessionRegistry:
         if old in self._fd_locked:           # move o fd-lock junto com o cache
             self._fd_locked.discard(old)
             self._fd_locked.add(new)
+        st = self._status_cache.pop(old, None)   # statusline move junto (mesma sessao, so outro nome)
+        if st is not None:
+            self._status_cache[new] = st
         # A fila duravel tambem e keyed por NOME -> move junto, senao a sessao renomeada perde as
         # entradas nao-drenadas e elas ficam orfas no nome velho (fantasma se reusarem `old`).
         PromptQueue(old).rename(new)

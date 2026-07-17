@@ -14,12 +14,14 @@ _UUID = "12345678-1234-1234-1234-123456789abc"
 
 @pytest.fixture(autouse=True)
 def _clear_jsonl_cache():
-    # O cache e de CLASSE (compartilhado) -> zera entre testes pra nao vazar resolucao de um pro outro.
+    # Os caches sao de CLASSE (compartilhados) -> zera entre testes pra nao vazar de um pro outro.
     SessionRegistry._jsonl_cache.clear()
     SessionRegistry._fd_locked.clear()
+    SessionRegistry._status_cache.clear()
     yield
     SessionRegistry._jsonl_cache.clear()
     SessionRegistry._fd_locked.clear()
+    SessionRegistry._status_cache.clear()
 
 
 def test_sanitize_cwd_matches_claude_scheme():
@@ -494,9 +496,32 @@ def test_list_with_state_prefers_marker(monkeypatch):
     def fake_capture(name):
         called["pane"] += 1; return ""
     monkeypatch.setattr("app.registry.tmux.capture_pane", fake_capture)
+    # Statusline cacheada fresca: o sweep de statusline (que LEGITIMAMENTE captura ate
+    # _STATUS_BUDGET panes por chamada, mesmo de sessao com marcador) nao dispara — o assert
+    # abaixo volta a medir SO o fast-path da classificacao, que e o que este teste protege.
+    import time as _t
+    SessionRegistry._status_cache["cc"] = (_t.monotonic(), None)
     out = asyncio.run(reg.list_with_state())
     assert out[0].state == "working"
-    assert called["pane"] == 0          # marcador presente -> NAO raspa o pane
+    assert called["pane"] == 0          # marcador presente -> classificacao NAO raspa o pane
+
+
+def test_list_with_state_statusline_sweep_respeita_budget(monkeypatch):
+    # O sweep de statusline captura no maximo _STATUS_BUDGET panes por chamada, mesmo com todas
+    # as sessoes stale — e o que impede a feature de virar tempestade de forks.
+    import app.registry as reg_mod
+    reg = SessionRegistry()
+    infos = [type("I", (), {"name": f"s{i}", "cwd": "/p", "jsonl": f"/x/sid{i}.jsonl",
+                            "state": "idle", "last_activity": None})() for i in range(5)]
+    monkeypatch.setattr(reg, "list", lambda: infos)
+    monkeypatch.setattr(hs_mod.hook_state, "get_state", lambda sid: ("idle", 1.0))
+    called = {"pane": 0}
+    def fake_capture(name):
+        called["pane"] += 1; return "🤖 X │ ⚡5h:10%"
+    monkeypatch.setattr("app.registry.tmux.capture_pane", fake_capture)
+    out = asyncio.run(reg.list_with_state())
+    assert called["pane"] == reg_mod._STATUS_BUDGET
+    assert sum(1 for i in out if getattr(i, "status_line", None)) == reg_mod._STATUS_BUDGET
 
 
 def test_list_with_state_falls_back_to_pane(monkeypatch):

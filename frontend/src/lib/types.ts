@@ -32,6 +32,9 @@ export interface SessionInfo {
   pair_peers?: string[] | null; // grupo de trabalho ativo: os OUTROS membros (2 sessões = lista de 1)
   pair_gid?: string | null;     // id estável do grupo (cluster da lista agrupa por ele)
   pair_task?: string | null;    // rótulo do grupo (ex: ABC-1234) pro header do cluster
+  // Statusline crua da sessão (cache ~20s no backend) — o card do board/canvas parseia com
+  // parseStatusLine (modelo/contexto no composer; ⚡5h/📅7d na RateStrip). Chat usa a versão ao vivo.
+  status_line?: string | null;
 }
 
 // Sessão marcada com o servidor de origem (visão agregada multi-servidor).

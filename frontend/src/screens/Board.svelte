@@ -12,6 +12,7 @@
   import { onMount } from 'svelte';
   import { SvelteMap } from 'svelte/reactivity';
   import BoardCard from '../components/BoardCard.svelte';
+  import RateStrip from '../components/RateStrip.svelte';
   import { serverColor } from '../lib/auth';
   import type { State } from '../lib/types';
   import { stateColors } from '../lib/format';
@@ -86,6 +87,8 @@
 </script>
 
 <div class="board">
+  <!-- ⚡5h/📅7d por servidor — compartilhado pela conta, então acima de todas as sessões. -->
+  <RateStrip buckets={sessionsStore.byServer} />
   {#if offline.length}
     <p class="board-offline">sem conexão: {offline.join(', ')}</p>
   {/if}

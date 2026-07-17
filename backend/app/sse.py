@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import time
 from pathlib import Path
 from app.adapters import get_adapter
@@ -82,6 +83,42 @@ async def _cached_list():
     return infos
 
 
+# Reducao ESTAVEL da statusline pro dedup da lista: modelo, contexto em baldes de 5%, ⚡5h% e 📅7d%.
+# Relogio (⏱) e custo ficam DE FORA — mudam a cada captura e re-emitiriam a lista inteira a toa.
+# Espelha o parse do front (frontend/src/lib/statusline.ts), so o subset que o sig precisa.
+_ST_MODEL = re.compile(r"🤖\s*([^(│]+)")
+_ST_5H = re.compile(r"⚡[^│]*?(\d+)\s*%")
+_ST_7D = re.compile(r"📅[^│]*?(\d+)\s*%")
+_ST_PAIR = re.compile(r"([\d.,]+)\s*([kKmM])?\s*/\s*([\d.,]+)\s*([kKmM])?")
+
+
+def _status_sig(s):
+    if not s:
+        return None
+    ctx = None
+    seg = re.search(r"💬([^│]*)", s)
+    if seg:
+        pairs = _ST_PAIR.findall(seg.group(1))
+        # >=2 pares: o 1o e in/out do turno; o ULTIMO e uso/janela (mesma regra do front).
+        if len(pairs) >= 2:
+            def _num(x, unit):
+                mult = {"k": 1e3, "m": 1e6}.get((unit or "").lower(), 1.0)
+                try:
+                    return float(x.replace(",", "")) * mult
+                except ValueError:
+                    return 0.0
+            u, uu, t, tu = pairs[-1]
+            total = _num(t, tu)
+            if total > 0:
+                ctx = round(_num(u, uu) / total * 20)  # baldes de 5% (round: 4.9999… nao vira 4)
+    return (
+        m.group(1).strip() if (m := _ST_MODEL.search(s)) else None,
+        ctx,
+        m.group(1) if (m := _ST_5H.search(s)) else None,
+        m.group(1) if (m := _ST_7D.search(s)) else None,
+    )
+
+
 async def list_events(poll: float = 1.5, ping_every: int = 7):
     """SSE da LISTA de sessoes. Emite o snapshot de list_with_state() na conexao e, num loop de
     `poll`s, reemite SO quando o resultado muda (estado via markers do A; membership por re-listar).
@@ -105,9 +142,11 @@ async def list_events(poll: float = 1.5, ping_every: int = 7):
         # flipar o bool; limited + limit_reset (feature #8) entram pro chip "limitado · HH:MM" aparecer/
         # sumir E re-emitir quando so o horario de reset muda (mesmo limited seguindo True);
         # then_target (feature #12) entra pro indicador de vinculo aparecer/sumir/trocar de alvo na hora.
+        # status_line entra REDUZIDO (_status_sig): a linha crua carrega relogio/custo que mudam a
+        # cada captura — o payload leva a crua, o sig so o que muda de verdade (modelo/ctx/5h/7d).
         sig = json.dumps(
             [(i.name, i.cwd, i.state, i.tracked, i.jsonl, i.question, i.stalled, i.limited,
-              i.limit_reset, i.then_target)
+              i.limit_reset, i.then_target, _status_sig(getattr(i, "status_line", None)))
              for i in infos],
             ensure_ascii=False,
         )

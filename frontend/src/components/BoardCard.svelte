@@ -3,6 +3,7 @@
   import AssistantBubble from './AssistantBubble.svelte';
   import { getHistoryTailCached, getHistoryTailForServer, sendInputForServer, selectOptionForServer } from '../lib/api';
   import { relativeTime, bubblesFromTail } from '../lib/format';
+  import { parseStatusLine } from '../lib/statusline';
   import type { Server } from '../lib/auth';
   import type { ChatEvent } from '../lib/types';
   import type { BoardRow, PendingMsg } from '../screens/Board.svelte';
@@ -172,6 +173,10 @@
   // Corte da cauda crua em bolhas (sem resposta órfã) — puro/testável em format.ts, junto do
   // latestAssistantEvent que a espiada do hover usa sobre a MESMA cauda.
   const visible = $derived(bubblesFromTail(events));
+
+  // Modelo/contexto no composer: parse da statusline cacheada da lista (~20s de atraso, ver
+  // SessionInfo.status_line). Sem statusline (captura pendente/tema sem emojis) a linha some.
+  const meta = $derived(parseStatusLine(session.status_line));
 </script>
 
 <article class="bcard" class:attention={session.state === 'awaiting_input'} class:fill>
@@ -239,8 +244,20 @@
        input. (Sem checar `dead`: esta lista nunca traz esse estado — ver COLS no Board.) -->
   {#if session.tracked !== false}
     <footer class="bc-foot">
-      <textarea rows="1" placeholder="Mensagem…" bind:value={text} onkeydown={onKey}></textarea>
-      <button class="bc-send" onclick={send} disabled={!text.trim()} aria-label="Enviar">↑</button>
+      {#if meta?.model || meta?.ctxPct != null}
+        <div class="bc-meta">
+          {#if meta.model}<span title="modelo da sessão">🤖 {meta.model}</span>{/if}
+          {#if meta.ctxPct != null}
+            <span class:bc-ctx-warn={meta.ctxPct >= 80} title="uso da janela de contexto">
+              💬 {Math.round(meta.ctxPct)}%
+            </span>
+          {/if}
+        </div>
+      {/if}
+      <div class="bc-inrow">
+        <textarea rows="1" placeholder="Mensagem…" bind:value={text} onkeydown={onKey}></textarea>
+        <button class="bc-send" onclick={send} disabled={!text.trim()} aria-label="Enviar">↑</button>
+      </div>
     </footer>
   {/if}
   <!-- FORA do guard acima de propósito: o erro não pode depender da condição que o input depende.
@@ -265,10 +282,12 @@
     flex-shrink: 0;
     background: var(--bg-surface);
     border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg);
     box-shadow: none;
     overflow: hidden;
+    transition: border-color 140ms var(--ease-out);
   }
+  .bcard:hover { border-color: rgba(255, 255, 255, 0.12); }
   /* Faixa colorida é EXCEÇÃO: só quem espera por você. Em todo card viraria listra decorativa. */
   .bcard.attention { border-left: 2px solid var(--warning); }
   /* Canvas: o wrapper dita a altura; o corpo vira o flexível (o teto de 240px é regra da COLUNA). */
@@ -293,11 +312,13 @@
   /* Peso 510, não 600: hierarquia por luminância. */
   .bc-name { font-size: 13px; font-weight: 510; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .bc-branch, .bc-chip, .bc-time { font-size: var(--text-xs); color: var(--text-muted); flex-shrink: 0; }
-  /* Nome do servidor colorido (mesma cor do dot) — identifica com 5+ servidores. Encolhe com
-     ellipsis antes do nome da sessão. */
+  /* Nome do servidor como PILL tingida na cor do dot — identifica com 5+ servidores sem gritar.
+     Encolhe com ellipsis antes do nome da sessão. */
   .bc-srv {
     font-size: var(--text-xs); font-weight: 600; flex-shrink: 1; min-width: 0; max-width: 9em;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    background: color-mix(in srgb, currentColor 12%, transparent);
+    padding: 1px 8px; border-radius: var(--radius-full);
   }
   /* Chip do par carrega NOMES: teto + ellipsis pra não engolir o header (tooltip tem a lista). */
   .bc-chip { max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -340,17 +361,28 @@
   .bc-opt:disabled { opacity: 0.5; cursor: default; }
   /* Input FANTASMA: 15 cards × 15 inputs com borda = 15 alvos competindo. Borda real só no
      hover/focus. */
-  .bc-foot { display: flex; gap: 6px; padding: var(--space-2) var(--space-3) var(--space-3); }
+  .bc-foot {
+    display: flex; flex-direction: column; gap: 4px;
+    padding: var(--space-2) var(--space-3) var(--space-3);
+    border-top: 1px solid rgba(255, 255, 255, 0.04);
+  }
+  /* Modelo + contexto da sessão (statusline cacheada): o contexto do que este composer alcança. */
+  .bc-meta {
+    display: flex; gap: 10px; font-size: var(--text-xs); color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .bc-ctx-warn { color: var(--warning); }
+  .bc-inrow { display: flex; gap: 6px; }
   .bc-foot textarea {
     flex: 1; resize: none; min-height: 28px; max-height: 72px; font: inherit; font-size: 12px;
-    background: rgba(255, 255, 255, 0.03); color: var(--text-primary);
-    border: 1px solid transparent; border-radius: var(--radius-sm); padding: 5px 8px;
+    background: rgba(255, 255, 255, 0.04); color: var(--text-primary);
+    border: 1px solid transparent; border-radius: var(--radius-md); padding: 6px 10px;
     transition: border-color 120ms var(--ease-out);
   }
   .bc-foot textarea::placeholder { color: var(--text-muted); }
   .bc-foot:hover textarea { border-color: var(--border-subtle); }
   .bc-foot textarea:focus { border-color: var(--accent); outline: none; }
-  .bc-send { width: 28px; border-radius: var(--radius-sm); border: 0; background: var(--accent); color: var(--text-inverse); cursor: pointer; }
+  .bc-send { width: 28px; border-radius: var(--radius-md); border: 0; background: var(--accent); color: var(--text-inverse); cursor: pointer; }
   .bc-send:disabled { opacity: 0.4; cursor: default; }
   /* Erro de envio e marcador de falha da cauda: mesma cor/tamanho. Os dois são <button> porque os
      dois têm ação (dispensar / tentar de novo); min-* zerados = mesmo escape do alvo global de 44px
