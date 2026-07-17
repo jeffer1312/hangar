@@ -259,6 +259,34 @@ def test_input_codex_entregavel_com_fila_indisponivel_ainda_ok(api_client):
     sd.assert_not_called()   # sem entry na fila nao ha id a marcar
 
 
+def test_input_codex_deferred_sem_entry_falha(api_client):
+    # Ultimo furo do mesmo par: entregavel (nao caiu no erro do append) MAS o send_prompt devolveu
+    # "deferred" (corrida idle->working entre o deliverable e o send) com o sidecar morto (entry=None).
+    # O texto NAO foi digitado E nao ha entrada pro drain-on-complete drenar: a msg nao esta em lugar
+    # nenhum, e o 200 "delivered: false" dizia "ta na fila, calma". Nao esta. Vira erro.
+    fake = _fake_codex_adapter(deliverable=True, send_result="deferred")
+    with patch("app.api._provider_of", return_value="codex"), \
+         patch("app.api.get_adapter", return_value=fake), \
+         patch("app.pqueue.PromptQueue.append", side_effect=OSError("No space left on device")):
+        r = api_client.post("/api/sessions/cx/input", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 400
+    assert "nao foi entregue" in r.json()["detail"]
+
+
+def test_input_codex_deferred_com_entry_fica_pendente(api_client):
+    # Contraprova do teste acima: MESMO "deferred", mas com a fila viva -> ha entrada pendente pro
+    # drain-on-complete entregar no proximo idle. 200 + delivered:false continua a resposta certa.
+    fake = _fake_codex_adapter(deliverable=True, send_result="deferred")
+    with patch("app.api._provider_of", return_value="codex"), \
+         patch("app.api.get_adapter", return_value=fake), \
+         patch("app.pqueue.PromptQueue.append", return_value={"id": "x1"}), \
+         patch("app.pqueue.PromptQueue.set_delivered") as sd:
+        r = api_client.post("/api/sessions/cx/input", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 200
+    assert r.json()["delivered"] is False
+    sd.assert_not_called()   # deferred nao entregou -> nao pode marcar entregue
+
+
 def test_input_codex_deliverable_quebrado_nao_passa_calado(api_client, caplog):
     # Adapter fora do ar: o `except Exception` engolia tudo e o "delivered: false" ficava
     # indistinguivel de turno em andamento. Agora loga (e o prompt fica seguro na fila pro drain).
