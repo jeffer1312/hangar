@@ -12,7 +12,7 @@ const store = new Map<string, string>();
   setItem: (k: string, v: string) => store.set(k, String(v)),
   removeItem: (k: string) => store.delete(k),
 };
-const { aggregateSessions } = await import('./sessions');
+const { aggregateSessions, sweepHidden } = await import('./sessions');
 
 const srv = (id: string): Server => ({ id, label: `srv-${id}`, baseUrl: `http://${id}`, token: 't' });
 const sess = (name: string, extra: Partial<SessionInfo> = {}): SessionInfo =>
@@ -71,5 +71,44 @@ describe('aggregateSessions', () => {
     const a = aggregateSessions([srv('a'), srv('b')], slots({ b: { sessions: [sess('y')], error: null } }));
     expect(a.byServer.map((b) => b.server.id)).toEqual(['a', 'b']);
     expect(a.byServer[0]).toMatchObject({ error: null, loaded: false, sessions: [] });
+  });
+
+  it('hidden esconde a sessão marcada (exclusão otimista) sem afetar as vizinhas', () => {
+    const a = aggregateSessions(
+      [srv('a')],
+      slots({ a: { sessions: [sess('x'), sess('y')], error: null } }),
+      new Set(['a::x']),
+    );
+    expect(a.rows.map((r) => r.name)).toEqual(['y']);
+    expect(a.byServer[0].sessions.map((s) => s.name)).toEqual(['y']);
+  });
+
+  it('hidden é por servidor: mesma sessão em outro servidor não some', () => {
+    const a = aggregateSessions(
+      [srv('a'), srv('b')],
+      slots({
+        a: { sessions: [sess('x', { jsonl: '/j/ax.jsonl' })], error: null },
+        b: { sessions: [sess('x', { jsonl: '/j/bx.jsonl' })], error: null },
+      }),
+      new Set(['a::x']),
+    );
+    expect(a.rows.map((r) => `${r.serverId}:${r.name}`)).toEqual(['b:x']);
+  });
+});
+
+describe('sweepHidden', () => {
+  it('mantém a marca enquanto a sessão ainda aparece na lista do servidor', () => {
+    const kept = sweepHidden(new Set(['a::x']), slots({ a: { sessions: [sess('x')], error: null } }));
+    expect([...kept]).toEqual(['a::x']);
+  });
+
+  it('remove a marca quando o SSE re-emite a lista sem a sessão (delete confirmado)', () => {
+    const kept = sweepHidden(new Set(['a::x']), slots({ a: { sessions: [sess('y')], error: null } }));
+    expect(kept.size).toBe(0);
+  });
+
+  it('servidor sem lista (offline/ainda sem slot): não dá pra saber, marca fica', () => {
+    expect(sweepHidden(new Set(['a::x']), slots({ a: { sessions: null, error: 'offline' } })).size).toBe(1);
+    expect(sweepHidden(new Set(['a::x']), new Map()).size).toBe(1);
   });
 });

@@ -7,7 +7,7 @@
 // consumidor ficar permanentemente montado, considerar um keep-alive com delay no release.
 import { openSessionsStream } from './api';
 import { listServers, onServersChanged, type Server } from './auth';
-import { aggregateSessions, type Slot, type Aggregate } from './sessions';
+import { aggregateSessions, sweepHidden, type Slot, type Aggregate } from './sessions';
 
 function createSessionsStore() {
   let servers = $state<Server[]>([]);
@@ -16,8 +16,14 @@ function createSessionsStore() {
   const streams = new Map<string, EventSource>();
   let refs = 0;
   let offChanged: (() => void) | null = null;
+  // Exclusão otimista: chaves `serverId::name` escondidas da lista enquanto o delete está em voo.
+  // A faxina roda a cada recompute — quando o SSE confirma o sumiço, a marca sai sozinha.
+  let hidden = new Set<string>();
 
-  function recompute() { agg = aggregateSessions(servers, slots); }
+  function recompute() {
+    hidden = sweepHidden(hidden, slots);
+    agg = aggregateSessions(servers, slots, hidden);
+  }
 
   // Reconcilia streams com a lista: fecha o que sumiu, abre o que entrou, mantém o resto.
   function connect(list: Server[]) {
@@ -76,6 +82,11 @@ function createSessionsStore() {
       connect(servers);
     },
     refreshServers() { servers = listServers(); connect(servers); },
+    // Exclusão otimista: a view marca antes do await (linha some na hora) e desmarca no catch
+    // (linha REAPARECE = rollback visual). No sucesso ninguém desmarca — a faxina do recompute
+    // remove a marca quando o SSE re-emitir a lista sem a sessão.
+    markDeleting(serverId: string, name: string) { hidden.add(`${serverId}::${name}`); recompute(); },
+    unmarkDeleting(serverId: string, name: string) { hidden.delete(`${serverId}::${name}`); recompute(); },
   };
 }
 
