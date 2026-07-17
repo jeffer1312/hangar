@@ -47,7 +47,6 @@
 
   // ── Organizar: recoloca TODOS os visíveis numa grade — pareados (gid) contíguos, quem espera
   // por você primeiro, depois working, depois idle; tamanho volta ao padrão (grade uniforme). ──
-  let planeWidth = $state(0);
   function autoArrange() {
     const rank = (s: string) => (s === 'awaiting_input' ? 0 : s === 'working' ? 1 : 2);
     const groups = new Map<string, BoardRow[]>();
@@ -62,7 +61,8 @@
       .sort((a, b) =>
         Math.min(...a.map((m) => rank(m.state))) - Math.min(...b.map((m) => rank(m.state))) ||
         Math.max(...b.map((m) => m.last_activity ?? 0)) - Math.max(...a.map((m) => m.last_activity ?? 0)));
-    const cols = Math.max(1, Math.floor((planeWidth - PAD) / (CARD_W + GAP)));
+    // Grade fixa de 3 colunas (pedido do usuário: padrão constante lê melhor que encher a tela).
+    const cols = 3;
     const next: CanvasLayout = { ...layout };
     let i = 0;
     for (const group of orderedGroups) {
@@ -148,14 +148,41 @@
     saveLayout();
   }
 
-  // ── Resize: CSS resize:both nativo no wrapper; o observer captura e persiste. ──
+  // Empurra pra BAIXO (cascata) quem intersecta o card `key` — crescer um card não deixa mais
+  // vizinho coberto por baixo dele. Card pode ser re-empurrado (dois irmãos jogados pro mesmo y
+  // precisam se resolver ENTRE SI — um set de "já empurrado" deixava os dois sobrepostos); cada
+  // empurrão só AUMENTA y (estritamente, pela condição de overlap), então termina — o teto de
+  // iterações é só cinto de segurança.
+  function resolveCollisions(key: string, base: CanvasLayout): CanvasLayout {
+    const next = { ...base };
+    const queue = [key];
+    let iter = 0;
+    while (queue.length && ++iter < 500) {
+      const ak = queue.shift()!;
+      const a = next[ak];
+      if (!a) continue;
+      for (const r of visibleRows) {
+        const bk = rowKey(r);
+        if (bk === ak || bk === key) continue;   // nunca re-empurra o card que o usuário segura
+        const b = next[bk];
+        if (!b) continue;
+        if (a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y) {
+          next[bk] = { ...b, y: a.y + a.h + GAP };
+          queue.push(bk);
+        }
+      }
+    }
+    return next;
+  }
+
+  // ── Resize: CSS resize:both nativo no wrapper; o observer captura, empurra vizinhos e persiste. ──
   function observeSize(node: HTMLElement, key: string) {
     const ro = new ResizeObserver(() => {
       const b = layout[key];
       if (!b) return;
       const w = node.offsetWidth, h = node.offsetHeight;
       if (w === b.w && h === b.h) return;
-      layout = { ...layout, [key]: { ...b, w, h } };
+      layout = resolveCollisions(key, { ...layout, [key]: { ...b, w, h } });
       saveLayout();   // dispara a cada passo do arrasto de resize; barato (um setItem)
     });
     ro.observe(node);
@@ -184,7 +211,7 @@
   );
 </script>
 
-<div class="canvas" bind:clientWidth={planeWidth}>
+<div class="canvas">
   <!-- Topo fixo: ⚡5h/📅7d por servidor (compartilhado pela conta) + ações do canvas. -->
   <div class="cv-top">
     <RateStrip buckets={sessionsStore.byServer} />
