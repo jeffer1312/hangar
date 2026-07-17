@@ -568,12 +568,13 @@ def history(name: str, limit: int | None = None):
     # backfill do tail; reabrir apos ficar horas em segundo plano perdia o que passou do tail-200).
     evs = merged_history(name, info.jsonl, provider=info.provider)
     # ponytail: limit corta PAYLOAD, nao CPU — merged_history ja parseou o jsonl inteiro; se perf
-    # virar problema, o upgrade e tail-read reverso do arquivo. Janela comeca no primeiro user_msg
-    # interno (quando houver) pra nao renderizar tool_result orfao no card do quadro.
-    if limit is not None and limit > 0 and len(evs) > limit:
-        window = evs[-limit:]
-        start = next((i for i, e in enumerate(window) if e.kind == "user_msg"), 0)
-        return window[start:] if start else window
+    # virar problema, o upgrade e tail-read reverso do arquivo. Cauda CRUA de proposito: o corte no 1o
+    # user_msg (pra nao desenhar resposta orfa) e preferencia de RENDERIZACAO do card do quadro e vive
+    # no BoardCard.svelte. Aplicado AQUI, valia pra todo consumidor e matava a espiada do hover da
+    # Sidebar (HP_TAIL=8), que so quer o ultimo assistant_msg: com o proximo prompt ja mandado, o corte
+    # jogava fora a resposta anterior -> latestAssistantEvent = None -> popover vazio, cacheado por 30s.
+    if limit is not None and limit > 0:
+        return evs[-limit:]
     return evs
 
 
@@ -678,8 +679,17 @@ def _send_one(name: str, text: str) -> dict:
         # quebra o envio.
         try:
             PromptQueue(name).append(text, delivered=(result == "sent"), ts=t0)
-        except OSError:
-            pass
+        except OSError as e:
+            if result != "sent":
+                # NAO digitado na TUI (overlay/picker aberto) + sidecar nao gravou = a msg nao esta em
+                # lugar NENHUM. Era aqui que o "ok, na fila" mentia: 200 + delivered=False pra uma msg
+                # que sumiu. Vira erro (o front mostra), nunca sucesso.
+                _log.exception("fila indisponivel e prompt NAO digitado name=%s", name)
+                return {"ok": False, "error": f"fila indisponivel e prompt nao foi digitado: {e}"}
+            # Digitado na TUI: a msg CHEGOU, o envio nao falhou. Perder o registro so desliga a rede de
+            # seguranca (o _confirm_and_drain abaixo nao vai achar o que reconferir) — nao e motivo pra
+            # falhar o envio, mas nao pode passar calado.
+            _log.exception("append na fila falhou (prompt ja digitado) name=%s", name)
         if result == "sent":
             # Confirmacao de entrega: em ~8s confere se o transcript gravou; engolida -> re-drena.
             threading.Timer(_CONFIRM_GRACE + 0.5, _confirm_and_drain, args=(name,)).start()
@@ -932,6 +942,14 @@ async def unpair_session(name: str):
 
 @app.post("/api/sessions/{name}/select", dependencies=[Depends(require_auth)])
 def select(name: str, body: SelectBody):
+    # Mesma guarda do /input — e aqui ela é a ÚNICA: a cadeia abaixo não sabe falhar. terminal.select
+    # devolve None, send_keys descarta o returncode e tmux._run converte tmux morto/travado
+    # (TimeoutExpired/OSError) num CompletedProcess(returncode=1) que ninguém lê. Sem isto, responder
+    # uma opção de sessão morta digitava no vazio e a resposta era {"ok": true} — o catch do card
+    # nunca disparava. (O fix de raiz em send_keys/_run é outro diff: interrupt/model_picker/
+    # TerminalMirror também passam por lá.)
+    if not _session_exists(name):
+        raise HTTPException(404, "sessão não encontrada — opção NÃO enviada")
     terminal.select(name, body.option)
     return {"ok": True}
 
