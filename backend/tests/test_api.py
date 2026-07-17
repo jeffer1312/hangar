@@ -94,6 +94,28 @@ def test_input_defer_on_overlay_marks_pending(api_client):
     ap.assert_called_once_with("oi", delivered=False, ts=ANY)
 
 
+def test_input_deferred_com_fila_indisponivel_falha(api_client):
+    # Fila morta (disco cheio/permissao) + send NAO digitou (overlay/picker aberto) = a msg nao esta
+    # na TUI nem na fila: sumiu. Antes o OSError era engolido e a rota devolvia 200 "na fila" — o
+    # front anunciava entrega de uma msg que nao existia em lugar nenhum.
+    with patch("app.api.terminal.send_prompt", return_value="deferred"), \
+         patch("app.pqueue.PromptQueue.append", side_effect=OSError("No space left on device")):
+        r = api_client.post("/api/sessions/cc/input", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 400
+    assert "nao foi digitado" in r.json()["detail"]
+
+
+def test_input_sent_com_fila_indisponivel_ainda_ok(api_client):
+    # Caminho oposto: o texto FOI digitado na TUI, entao o envio nao falhou — perder o sidecar so
+    # desliga a confirmacao de entrega. 200 continua correto (o erro vai pro log, nao pro usuario).
+    with patch("app.api.terminal.send_prompt", return_value="sent"), \
+         patch("app.pqueue.PromptQueue.append", side_effect=OSError("No space left on device")), \
+         patch("app.api.threading.Timer"):   # nao deixa o Timer de 8.5s (nao-daemon) segurar o exit
+        r = api_client.post("/api/sessions/cc/input", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 200
+    assert r.json()["delivered"] is True
+
+
 def test_input_control_char_400_without_queue(api_client):
     with patch("app.api.terminal.send_prompt",
                side_effect=ValueError("control characters not allowed")), \
@@ -356,6 +378,18 @@ def test_select_route(api_client):
         r = api_client.post("/api/sessions/cc/select", json={"option": 2}, headers=_h())
     assert r.status_code == 200
     sel.assert_called_once_with("cc", 2)
+
+
+def test_select_404_when_session_missing(api_client, monkeypatch):
+    # Mesma guarda do /input: sessao morta -> 404, e o terminal.select NEM e chamado. Sem ela a rota
+    # respondia {"ok": true} SEMPRE — a cadeia terminal.select -> send_keys -> tmux._run engole a
+    # falha do tmux (returncode=1 que ninguem le), entao o "ok" era digitado no vazio.
+    monkeypatch.setattr(api_mod, "_session_exists", lambda name: False)
+    with patch("app.api.terminal.select") as sel:
+        r = api_client.post("/api/sessions/ghost/select", json={"option": 2}, headers=_h())
+    assert r.status_code == 404
+    assert "NÃO enviada" in r.json()["detail"]
+    sel.assert_not_called()
 
 
 def test_routes_require_auth(api_client):
@@ -621,16 +655,17 @@ def test_history_route_passes_session_provider_to_merged_history(api_client):
 
 
 # ---------------------------------------------------------------------------
-# Quadro kanban: GET /history?limit=N devolve so a CAUDA do transcript por card
-# (janela comeca no 1o user_msg interno pra nao mostrar tool_result/assistant orfao).
+# GET /history?limit=N devolve a CAUDA CRUA do transcript. O corte no 1o user_msg (nao desenhar
+# resposta orfa) e do card do quadro e vive no BoardCard.svelte: aqui ele valia pra TODO consumidor
+# e matava a espiada do hover da Sidebar, que so quer o ultimo assistant_msg da cauda.
 # ---------------------------------------------------------------------------
 from app.models import ChatEvent
 
 
 @pytest.fixture
 def fake_session_with_transcript(api_client):
-    # Transcript de 7 eventos: a cauda (limit=3) cai no meio de um turno, entao a janela precisa
-    # ser cortada no 1o user_msg interno (id6) — descartando o assistant_msg orfao (id5) antes dele.
+    # Transcript de 7 eventos: a cauda (limit=3) cai no meio de um turno — id5 e um assistant_msg cujo
+    # prompt ficou de fora da janela. A rota devolve os 3 crus; quem corta e quem desenha bolha.
     evs = [
         ChatEvent(kind="user_msg", id="1", text="oi"),
         ChatEvent(kind="assistant_msg", id="2", text="ola"),
@@ -653,11 +688,20 @@ def test_history_limit_devolve_so_a_cauda(api_client, fake_session_with_transcri
     r = api_client.get(f"/api/sessions/{fake_session_with_transcript}/history?limit=3", headers=_h())
     assert r.status_code == 200
     tail = r.json()
-    assert len(tail) <= 3
-    # a janela e a CAUDA do transcript completo
-    assert tail == full[-len(tail):]
-    # janela cortada no 1o user_msg interno: sem assistant_msg/tool_result orfao antes dele
-    assert tail[0]["kind"] == "user_msg"
+    # cauda CRUA: exatamente os N ultimos, sem corte extra
+    assert len(tail) == 3
+    assert tail == full[-3:]
+
+
+def test_history_limit_nao_corta_no_user_msg(api_client, fake_session_with_transcript):
+    # Regressao da espiada do hover (Sidebar, HP_TAIL=8): o corte no 1o user_msg da janela vivia AQUI e
+    # descartava o assistant_msg anterior a ele — com o proximo prompt ja mandado, o popover perdia a
+    # resposta e cacheava o vazio por 30s. A cauda de 3 aqui comeca num assistant_msg orfao (id5) e ele
+    # TEM que vir; quem o esconde e o BoardCard.
+    tail = api_client.get(f"/api/sessions/{fake_session_with_transcript}/history?limit=3",
+                          headers=_h()).json()
+    assert [e["id"] for e in tail] == ["5", "6", "7"]
+    assert tail[0]["kind"] == "assistant_msg"   # orfao preservado: a rota nao decide renderizacao
 
 
 def test_history_sem_limit_intacto(api_client, fake_session_with_transcript):
