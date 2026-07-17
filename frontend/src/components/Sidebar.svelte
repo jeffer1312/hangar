@@ -231,9 +231,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     confirmDel = null;
     const prev = getActiveId(); // C1: save before pointing at target server
     selectServer(serverId); // api.ts mira o server ativo -> aponta pro dono da sessão
-    try { await deleteSession(name); } catch (e) { flash(`excluir: ${errMsg(e)}`); }
+    // Exclusão otimista via store: some na hora; falhou -> desmarca (reaparece) + toast.
+    sessionsStore.markDeleting(serverId, name);
+    try { await deleteSession(name); }
+    catch (e) { sessionsStore.unmarkDeleting(serverId, name); flash(`excluir: ${errMsg(e)}`); }
     if (prev && prev !== serverId) selectServer(prev); // C1: restore so open chat stays on its server
-    // SSE stream emitirá a lista atualizada automaticamente
+    // No sucesso o SSE re-emite a lista sem a sessão e a faxina do store limpa a marca.
   }
 
   // ── Renomear sessão do tmux: TOQUE LONGO no nome -> edita inline ──────────────

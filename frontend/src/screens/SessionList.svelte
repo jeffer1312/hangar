@@ -265,13 +265,15 @@
     const s = confirmDel;
     confirmDel = null;
     selectServer(s.serverId);
+    // Exclusão otimista via store: some na hora. Falhou -> desmarca e a linha REAPARECE — esse
+    // rollback visual é o feedback do mobile (não há canal de toast aqui).
+    sessionsStore.markDeleting(s.serverId, s.name);
     try {
       await deleteSession(s.name);
     } catch {
-      /* sem canal de toast no mobile; lista segue via SSE */
+      sessionsStore.unmarkDeleting(s.serverId, s.name);
     }
-    // Sem remoção otimista: `sessions` agora é derived (read-only). O SSE do store re-emite a lista
-    // sem a sessão morta — mesmo caminho já verificado no Board (matar remove a linha).
+    // No sucesso o SSE re-emite a lista sem a sessão e a faxina do store limpa a marca.
   }
 
   // Renomear sessao (toque longo no card): renomeia o pane tmux no servidor dela. O stream SSE re-emite
