@@ -48,7 +48,12 @@ export function onServersChanged(cb: () => void): () => void {
 }
 function notifyChanged(): void {
   // Itera uma copia: um listener que se desregistra durante o notify nao mexe na iteracao.
-  for (const cb of [..._changed]) cb();
+  for (const cb of [..._changed]) {
+    // Isola por listener: sem o try, um que lanca (ex: o do Board faz `new EventSource(url)`, que
+    // lanca SyntaxError com baseUrl malformado vindo do vault) abortava o loop e matava CALADO o
+    // push do vault do App — a ordem e de insercao, entao quem morria dependia de timing.
+    try { cb(); } catch (e) { console.error('listener de onServersChanged lancou:', e); }
+  }
 }
 
 // Une a lista do hub (remote) com a local: remote tem precedencia em duplicata (mesma baseUrl

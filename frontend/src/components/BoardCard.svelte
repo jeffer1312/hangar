@@ -2,7 +2,7 @@
   import { onMount, untrack } from 'svelte';
   import AssistantBubble from './AssistantBubble.svelte';
   import { getHistoryTailForServer, sendInputForServer, selectOptionForServer } from '../lib/api';
-  import { relativeTime } from '../lib/format';
+  import { relativeTime, bubblesFromTail } from '../lib/format';
   import type { Server } from '../lib/auth';
   import type { ChatEvent } from '../lib/types';
   import type { BoardRow, PendingMsg } from '../screens/Board.svelte';
@@ -117,7 +117,9 @@
     finally { optBusy = false; }
   }
 
-  const visible = $derived(events.filter((e) => (e.kind === 'user_msg' || e.kind === 'assistant_msg') && e.text));
+  // Corte da cauda crua em bolhas (sem resposta órfã) — puro/testável em format.ts, junto do
+  // latestAssistantEvent que a espiada do hover usa sobre a MESMA cauda.
+  const visible = $derived(bubblesFromTail(events));
 </script>
 
 <article class="bcard" class:attention={session.state === 'awaiting_input'}>

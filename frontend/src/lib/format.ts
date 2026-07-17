@@ -308,6 +308,19 @@ export function latestAssistantEvent(events: ChatEvent[]): ChatEvent | null {
   return null;
 }
 
+// Cauda CRUA do /history -> só as bolhas que o card do quadro desenha: user/assistant com texto,
+// começando no 1º user_msg. A cauda corta no meio de um turno, então o 1º assistant_msg pode ser
+// resposta a um prompt que ficou de fora — órfã, sem o "porquê" acima dela.
+// Mora AQUI e não na rota: /history?limit é compartilhado com a espiada do hover da Sidebar, que só
+// quer o último assistant_msg — cortar no backend jogava fora justamente a resposta que ela procura
+// (medido: cauda [assistant_msg, user_msg, tool_use…] -> o corte matava o popover). É preferência de
+// RENDERIZAÇÃO do card, não do endpoint. Sem user_msg na janela -> devolve tudo (card vazio é pior).
+export function bubblesFromTail(events: ChatEvent[]): ChatEvent[] {
+  const msgs = events.filter((e) => (e.kind === 'user_msg' || e.kind === 'assistant_msg') && e.text);
+  const start = msgs.findIndex((e) => e.kind === 'user_msg');
+  return start > 0 ? msgs.slice(start) : msgs;
+}
+
 // Abrevia contagem grande: 3668662 -> "3.7M", 1.5e9 -> "1.5B", 999 -> "999".
 export function abbrevNum(n: number): string {
   for (const [div, suf] of [[1e9, 'B'], [1e6, 'M'], [1e3, 'K']] as const) {
