@@ -200,6 +200,11 @@
   .bcard {
     position: relative;
     display: flex; flex-direction: column;
+    /* flex-shrink: 0 é OBRIGATÓRIO: o card é flex item da .col-cards (column). No default
+       (shrink: 1) o navegador espreme TODOS os cards pra caber na coluna — com ~13 sessões cada
+       um cai pra ~54px, o header resiste e o .bc-body colapsa pra ~0: cards vazios, sem conversa
+       nenhuma. A coluna já tem overflow-y: auto; é ela que deve rolar, não o card encolher. */
+    flex-shrink: 0;
     background: var(--bg-surface);
     border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: var(--radius-md);
