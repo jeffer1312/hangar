@@ -9,10 +9,10 @@
   import AttentionFeed from '../components/AttentionFeed.svelte';
   import AccountMenu from '../components/AccountMenu.svelte';
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
-  import { getSessions, createSession, deleteSession, renameSession, resumeSession, openSessionsStream, broadcast } from '../lib/api';
+  import { getSessions, createSession, deleteSession, renameSession, resumeSession, broadcast } from '../lib/api';
   import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor } from '../lib/auth';
-  import type { Server } from '../lib/auth';
-  import type { AggSession, SessionInfo, ResumeCandidate } from '../lib/types';
+  import type { AggSession, ResumeCandidate } from '../lib/types';
+  import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, sortSessions, clusterByPair } from '../lib/format';
   import { updateBadge } from '../lib/badge';
 
@@ -23,10 +23,17 @@
   }
   let { onNavigateToChat, onCompare, onLogout }: Props = $props();
 
-  // Visão agregada: sessões de TODOS os servidores numa lista só, cada uma marcada com a origem.
-  let sessions = $state<AggSession[]>([]);
-  let serverErrors = $state<{ label: string; error: string }[]>([]);
-  let loading = $state(true);
+  // Visão agregada içada pro store único (era a cópia local slots/recompute/connect): 1 SSE por
+  // servidor, refcount compartilhado com Sidebar/Board. As listas vêm do store como $derived.
+  const sessions = $derived(sessionsStore.rows);
+  const loading = $derived(sessionsStore.loading);
+  // Semântica ATUAL preservada: o recompute só empurrava serverErrors quando o servidor NÃO tinha
+  // lista (só erro). Com lista stale o banner NÃO aparece — gate !b.loaded, igual à Sidebar/Board.
+  const serverErrors = $derived(
+    sessionsStore.byServer
+      .filter((b) => b.error && !b.loaded)
+      .map((b) => ({ label: b.server.label, error: b.error! })),
+  );
   let error = $state('');
   let showCreateSheet = $state(false);
   let drawerOpen = $state(false);    // menu lateral (hamburger): navegação + conta
@@ -34,22 +41,25 @@
   let filterText = $state('');
 
   // Lista de servidores (gerenciada no menu de conta: adicionar/remover). Sem "ativo" fixo — a lista é
-  // agregada; o servidor-alvo de uma sessão é o dela, escolhido ao abrir/criar.
-  let servers = $state(listServers());
+  // agregada; o servidor-alvo de uma sessão é o dela, escolhido ao abrir/criar. Vem do store (derived).
+  const servers = $derived(sessionsStore.servers);
   let scanning = $state(false);
 
-  // Renomear servidor: o AccountMenu cuida da UI inline; aqui só persistimos e reagregamos pra os
-  // badges das sessões pegarem o nome novo.
+  // 1 SSE por servidor via store, refcount pareado EXATAMENTE 1x (retain no mount, release no cleanup).
+  onMount(() => {
+    sessionsStore.retain();
+    return () => sessionsStore.release();
+  });
+
+  // Renomear servidor: o AccountMenu cuida da UI inline; aqui só persistimos e mandamos o store
+  // recarregar a lista de servidores pra os badges das sessões pegarem o nome novo.
   function onRenameServer(id: string, label: string) {
     renameServer(id, label);
-    servers = listServers();
-    recompute();
+    sessionsStore.refreshServers();
   }
   // Reconectar (item "Reconectar" do menu de conta): fecha e reabre os SSE de todos os servidores.
   function reconnectStreams() {
-    for (const es of streams.values()) es.close();
-    streams.clear();
-    connect(servers);
+    sessionsStore.reconnect();
   }
   const multiServer = $derived(servers.length > 1);
 
@@ -229,69 +239,6 @@
     try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next].filter((k) => !k.startsWith('pair:')))); } catch { /* quota/priv mode: ignora */ }
   }
 
-  // Slot por servidor; cada stream SSE preenche o seu e dispara recompute. Recompute reflatten na
-  // ORDEM de `servers` (determinística). Servidor offline fica só em serverErrors, não derruba a lista.
-  const slots = new Map<string, { sessions: SessionInfo[] | null; error: string | null }>();
-
-  function recompute() {
-    const agg: AggSession[] = [];
-    const errs: { label: string; error: string }[] = [];
-    // Dedupe: vários servidores podem apontar pro MESMO backend (URLs diferentes). A identidade
-    // real da sessão é (jsonl, name) — o jsonl tem um uuid único por sessão, então sessões
-    // distintas nunca colidem; só a mesma sessão vista por 2 URLs colapsa (fica a 1ª).
-    const seen = new Set<string>();
-    for (const srv of servers) {
-      const slot = slots.get(srv.id);
-      if (!slot) continue; // ainda não recebeu evento
-      if (slot.sessions) {
-        for (const s of slot.sessions) {
-          const key = `${s.jsonl ?? s.cwd ?? ''}::${s.name}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          agg.push({ ...s, serverId: srv.id, serverLabel: srv.label, serverColor: serverColor(srv.id) });
-        }
-      } else if (slot.error) {
-        errs.push({ label: srv.label, error: slot.error });
-      }
-    }
-    sessions = agg;
-    serverErrors = errs;
-  }
-
-  let streams = new Map<string, EventSource>(); // server.id → EventSource
-
-  function connect(list: Server[]) {
-    if (list.length === 0) { sessions = []; serverErrors = []; loading = false; return; }
-    // fecha streams de servers removidos
-    for (const [id, es] of streams) {
-      if (!list.some((s) => s.id === id)) { es.close(); streams.delete(id); slots.delete(id); }
-    }
-    // abre streams novos (já conectado = pula)
-    for (const s of list) {
-      if (streams.has(s.id)) continue;
-      const es = openSessionsStream(s);
-      es.addEventListener('sessions', (e) => {
-        slots.set(s.id, { sessions: JSON.parse((e as MessageEvent).data) as SessionInfo[], error: null });
-        loading = false;
-        recompute();
-      });
-      es.onerror = () => {
-        // falha ISOLADA: só este servidor. EventSource auto-reconecta.
-        slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
-        loading = false;
-        recompute();
-      };
-      streams.set(s.id, es);
-    }
-    recompute();
-  }
-
-  onMount(() => {
-    servers = listServers();
-    connect(servers);
-    return () => { for (const es of streams.values()) es.close(); streams.clear(); };
-  });
-
   // O sheet de criar já posicionou o servidor-alvo como ativo (selectServer), então createSession
   // cai no servidor certo. O stream SSE emitirá um evento sessions com a sessão nova.
   async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: 'claude' | 'codex') {
@@ -319,7 +266,8 @@
     confirmDel = null;
     selectServer(s.serverId);
     await deleteSession(s.name);
-    sessions = sessions.filter((x) => !(x.serverId === s.serverId && x.name === s.name));
+    // Sem remoção otimista: `sessions` agora é derived (read-only). O SSE do store re-emite a lista
+    // sem a sessão morta — mesmo caminho já verificado no Board (matar remove a linha).
   }
 
   // Renomear sessao (toque longo no card): renomeia o pane tmux no servidor dela. O stream SSE re-emite
@@ -391,7 +339,7 @@
   // Abre o drawer recarregando a lista de servidores (pode ter mudado desde a última abertura) — o
   // AccountMenu embedded vive lá dentro.
   function openDrawer() {
-    servers = listServers();
+    sessionsStore.refreshServers();
     drawerOpen = true;
   }
 
@@ -407,10 +355,10 @@
     if (!confirmSrv) return;
     const id = confirmSrv.id;
     confirmSrv = null;
+    // removeServer() dispara onServersChanged -> o store reconcilia os streams sozinho (fecha o SSE
+    // do removido). Só tratamos o caso "zerou" aqui; sem "ativo" pra restaurar.
     removeServer(id);
-    servers = listServers();
-    if (servers.length === 0) { handleLogout(); return; }
-    connect(servers);
+    if (listServers().length === 0) { handleLogout(); return; }
   }
 
   // Abre o sheet de adicionar servidor manual (URL + token), limpando o estado anterior.
@@ -512,7 +460,7 @@
     {:else if error}
       <div class="empty-state">
         <p class="error-text">{error}</p>
-        <button class="retry-btn" onclick={() => { for (const es of streams.values()) es.close(); streams.clear(); connect(servers); }}>Tentar novamente</button>
+        <button class="retry-btn" onclick={() => sessionsStore.reconnect()}>Tentar novamente</button>
       </div>
     {:else if sessions.length === 0}
       <div class="empty-state">
