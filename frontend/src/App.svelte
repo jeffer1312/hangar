@@ -276,6 +276,11 @@
       clearCredentials();
       encKey = null;
       syncReady = false;
+      // Solta o listener do push (quem registra TEM que chamar — auth.ts:41). Sem isto ele ficava no
+      // Set pela vida da pagina e o unico freio era o `if (!encKey) return` la dentro: real, mas
+      // implicito, e um relogin ja empilhava o proximo por cima.
+      unsubSync?.();
+      unsubSync = null;
     }
     authenticated = false;
     navigateTo('#/');
