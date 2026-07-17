@@ -40,8 +40,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     onLogout: () => void;
     boardActive: boolean;      // quadro aberto -> destaca o toggle e recolhe a sidebar pro rail
     onToggleBoard: () => void;
+    canvasActive: boolean;     // canvas aberto -> mesmo tratamento do quadro (destaca + recolhe)
+    onToggleCanvas: () => void;
   }
-  let { currentSession, onSelect, onCompare, onLogout, boardActive, onToggleBoard }: Props = $props();
+  let { currentSession, onSelect, onCompare, onLogout, boardActive, onToggleBoard, canvasActive, onToggleCanvas }: Props = $props();
 
   // Grupo generico: por SERVIDOR (hoje) ou por PROJETO (cwd) — mesmo shape nos dois modos. Cada
   // sessao carrega o serverId dela (no modo projeto um grupo pode juntar sessoes de servidores
@@ -53,12 +55,13 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   let hovering = $state(false);    // hover sobre a sidebar recolhida -> expande temporario
   let filterText = $state('');     // filtro por nome/cwd/servidor (aparece quando a lista fica longa)
 
-  // Quadro aberto -> recolhe pro rail (as colunas do kanban querem a largura); sair restaura o pin
-  // como estava ANTES de entrar. Guarda o valor só na entrada: se o usuario re-expandir a mao dentro
-  // do quadro, nao recolhemos de novo — mas ao sair ainda voltamos ao estado pre-quadro.
+  // Quadro OU canvas aberto -> recolhe pro rail (as colunas/canvas querem a largura); sair restaura o
+  // pin como estava ANTES de entrar. Guarda o valor só na entrada: se o usuario re-expandir a mao
+  // dentro da visão geral, nao recolhemos de novo — mas ao sair ainda voltamos ao estado pre-visão.
+  const overviewActive = $derived(boardActive || canvasActive);
   let preBoardCollapsed: boolean | null = null;
   $effect(() => {
-    if (boardActive) {
+    if (overviewActive) {
       if (preBoardCollapsed === null) { preBoardCollapsed = collapsed; collapsed = true; }
     } else if (preBoardCollapsed !== null) {
       collapsed = preBoardCollapsed;
@@ -641,6 +644,16 @@ import ConfirmDialog from './ConfirmDialog.svelte';
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true">
         <rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/>
         <rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/>
+      </svg>
+    </button>
+    <!-- Toggle do canvas livre (visualização irmã do quadro). Fora do {#if expanded} pelo mesmo motivo
+         do board: no rail recolhido — onde a sidebar fica com o canvas aberto — precisa aparecer. -->
+    <button class="board-btn" class:active={canvasActive} onclick={onToggleCanvas}
+            title={canvasActive ? 'Voltar pra lista' : 'Canvas de sessões'}
+            aria-label="Alternar canvas de sessões" aria-pressed={canvasActive}>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="4" width="9" height="7" rx="1.5"/><rect x="14.5" y="8" width="6.5" height="10" rx="1.5"/>
+        <rect x="5" y="14.5" width="7" height="5.5" rx="1.5"/>
       </svg>
     </button>
     <!-- Kebab "⋯": nav secundária (Buscar/Arquivo/Custos) + agrupamento, docado no header — o twin
