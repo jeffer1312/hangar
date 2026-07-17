@@ -237,6 +237,15 @@ export function dropActiveServer(): void {
   if (id) removeServer(id, false);
 }
 
+// api.ts mira SEMPRE o servidor ativo -> aponta pro dono da operação e restaura no fim (mesmo em
+// throw). Compartilhado por Sidebar e SessionContextMenu.
+export async function withServer<T>(serverId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = getActiveId();
+  selectServer(serverId);
+  try { return await fn(); }
+  finally { if (prev && prev !== serverId) selectServer(prev); }
+}
+
 // Logout total: limpa todos os servidores.
 export function clearCredentials(): void {
   localStorage.removeItem(SERVERS_KEY);
