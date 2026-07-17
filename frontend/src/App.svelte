@@ -23,6 +23,9 @@
     // = quadro sem overlay). Mesmo par de campos do 'chat' de propósito — é o que deixa o $effect
     // do servidor ativo servir às duas rotas sem duplicar a regra.
     | { name: 'board'; sessionName: string | null; serverId: string | null }
+    // Canvas livre: visualização irmã do quadro (#/canvas), mesmos campos overlay do board de
+    // propósito — o servidor ativo e a espiada seguem a mesma regra pras duas rotas.
+    | { name: 'canvas'; sessionName: string | null; serverId: string | null }
     | { name: 'compare'; ids: CompareId[] };
 
   function parseHash(hash: string): Route {
@@ -83,6 +86,17 @@
       }
       return { name: 'board', sessionName: null, serverId: null };
     }
+    // Canvas livre (#/canvas) — espelha o board em tudo: rota base + overlay do card com a MESMA
+    // auto-cura de undefined/null. Só desktop; no mobile cai na lista (ver render).
+    if (path === '/canvas') return { name: 'canvas', sessionName: null, serverId: null };
+    const canvasMatch = path.match(/^\/canvas\/([^/]+)\/(.+)$/);
+    if (canvasMatch) {
+      const sessionName = decodeURIComponent(canvasMatch[2]);
+      if (sessionName && sessionName !== 'undefined' && sessionName !== 'null') {
+        return { name: 'canvas', sessionName, serverId: decodeURIComponent(canvasMatch[1]) };
+      }
+      return { name: 'canvas', sessionName: null, serverId: null };
+    }
     return { name: 'sessions' };
   }
 
@@ -119,12 +133,12 @@
   let peekMemo = initialPeek;
   function applyRouteServer(next: string): boolean {
     const r = parseHash(next);
-    const peek = r.name === 'board' ? r.serverId : null;
+    const peek = r.name === 'board' || r.name === 'canvas' ? r.serverId : null;
     const step = peekStep(peekMemo, r.name, peek, getActiveId());
     peekMemo = step.memo;
     if (step.restore) selectServer(step.restore);
 
-    const routed = r.name === 'chat' || r.name === 'board' ? r.serverId : null;
+    const routed = r.name === 'chat' || r.name === 'board' || r.name === 'canvas' ? r.serverId : null;
     if (!routed || routed === getActiveId()) return true;
     return selectServer(routed);
   }
@@ -183,7 +197,7 @@
       const next = window.location.hash || '#/';
       // Servidor ANTES do render (ver applyRouteServer): o Chat monta no mesmo tick.
       if (!applyRouteServer(next)) {
-        window.location.hash = next.startsWith('#/board') ? '#/board' : '#/';
+        window.location.hash = next.startsWith('#/board') ? '#/board' : next.startsWith('#/canvas') ? '#/canvas' : '#/';
         return; // o hash novo dispara este handler de novo, agora sem servidor a resolver
       }
       currentHash = next;
@@ -252,6 +266,13 @@
   // que o deep-link/reload percorre. Um único lugar decide o servidor.
   function navigateToBoardCard(name: string, serverId: string) {
     navigateTo('#/board/' + encodeURIComponent(serverId) + '/' + encodeURIComponent(name));
+  }
+
+  // Abrir um card do CANVAS: espelha o navigateToBoardCard — vira rota (overlay por cima do canvas),
+  // sem selectServer aqui (o $effect da rota aponta o ativo). Separado do board pra o fechar do
+  // overlay voltar pro #/canvas, não pro #/board.
+  function navigateToCanvasCard(name: string, serverId: string) {
+    navigateTo('#/canvas/' + encodeURIComponent(serverId) + '/' + encodeURIComponent(name));
   }
 
   function onLogin() {
@@ -352,23 +373,25 @@
       <Compare ids={route.ids} onOpenSession={openCompareSession} onBack={navigateToSessions} />
     {/key}
   {:else if isDesktop}
-    <!-- Desktop cobre sessions/chat/board (as demais rotas já saíram nos branches acima). -->
+    <!-- Desktop cobre sessions/chat/board/canvas (as demais rotas já saíram nos branches acima). -->
     <DesktopShell
       currentSession={route.name === 'chat' ? route.sessionName : null}
       currentKey={route.name === 'chat' ? (route.serverId ?? '') + '::' + route.sessionName : null}
-      view={route.name === 'board' ? 'board' : 'chat'}
-      overlaySession={route.name === 'board' && route.sessionName && route.serverId
+      view={route.name === 'board' ? 'board' : route.name === 'canvas' ? 'canvas' : 'chat'}
+      overlaySession={(route.name === 'board' || route.name === 'canvas') && route.sessionName && route.serverId
         ? { name: route.sessionName, serverId: route.serverId }
         : null}
       onOpenBoardSession={navigateToBoardCard}
-      onCloseOverlay={() => navigateTo('#/board')}
+      onOpenCanvasSession={navigateToCanvasCard}
+      onCloseOverlay={() => navigateTo(route.name === 'canvas' ? '#/canvas' : '#/board')}
       onToggleBoard={() => navigateTo(route.name === 'board' ? '#/' : '#/board')}
+      onToggleCanvas={() => navigateTo(route.name === 'canvas' ? '#/' : '#/canvas')}
       onNavigateToChat={navigateToChat}
       onCompare={navigateToCompare}
       {onLogout}
     />
-  {:else if route.name === 'sessions' || route.name === 'board'}
-    <!-- Quadro é só desktop: #/board no mobile cai na lista normal (em vez de tela em branco). -->
+  {:else if route.name === 'sessions' || route.name === 'board' || route.name === 'canvas'}
+    <!-- Quadro/canvas são só desktop: no mobile caem na lista normal (em vez de tela em branco). -->
     <SessionList
       onNavigateToChat={navigateToChat}
       onCompare={navigateToCompare}
