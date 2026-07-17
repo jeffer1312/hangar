@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { createSession, deleteSession, renameSession, openEditor, gitAction, getBranches, checkoutBranch, getPushSettings, setSessionMute, resumeSession, broadcast, setThenLink, clearThenLink, getHistoryTailForServer } from '../lib/api';
-  import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor, clearCredentials, parseServerPairing } from '../lib/auth';
+  import { createSession, deleteSession, renameSession, gitAction, checkoutBranch, resumeSession, broadcast, getHistoryTailForServer } from '../lib/api';
+  import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor, clearCredentials, parseServerPairing, withServer } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
+  import SessionContextMenu from './SessionContextMenu.svelte';
   import QrScanner from './QrScanner.svelte';
   import GitSheet from './GitSheet.svelte';
 import ConfirmDialog from './ConfirmDialog.svelte';
@@ -345,31 +346,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     clearTimeout(pressTimer);   // cancela o long-press (senao dispararia rename junto)
     hpLeave();   // botao direito nao move o mouse: fecha a espiada pra nao ficar atras do menu
     menu = { x: e.clientX, y: e.clientY, name: s.name, serverId, cwd: s.cwd ?? '', thenTarget: s.then_target ?? null };
-    // Silenciar (feature #5): estado carregado sob demanda (nao trava a abertura do menu). null =
-    // ainda carregando/desconhecido -> o botao mostra "Silenciar" ate a resposta chegar.
-    menuMuted = null;
-    withServer(serverId, () => getPushSettings())
-      .then((p) => { if (menu?.name === s.name) menuMuted = p.muted.includes(s.name); })
-      .catch(() => { menuMuted = false; });
+    // O SessionContextMenu carrega o estado de silenciar/branches/encadeamento na propria montagem.
   }
-  function closeMenu() { menu = null; branchView = null; chainView = null; }
-  let menuMuted = $state<boolean | null>(null);
-  async function menuToggleMute() {
-    if (!menu) return;
-    const { name, serverId } = menu;
-    const next = !menuMuted;
-    closeMenu();
-    try {
-      await withServer(serverId, () => setSessionMute(name, next));
-      flash(next ? 'notificações silenciadas' : 'notificações religadas');
-    } catch (e) { flash(`silenciar: ${errMsg(e)}`); }
-  }
+  function closeMenu() { menu = null; }
 
-  // Submenu "Trocar branch" (2a pagina do menu, evita flyout). branchView != null = mostrando a lista.
-  let branchView = $state<{ list: string[]; current: string | null; dirty: boolean } | null>(null);
   // Confirmacao de troca com working tree suja (switch carrega mudancas nao-conflitantes pra outra branch).
   let confirmBranch = $state<{ name: string; serverId: string; branch: string } | null>(null);
-  let branchLoading = $state(false);
   // Gerenciador git (GitSheet) aberto pelo menu de contexto, no repo da sessao, SEM abrir o chat.
   // A GitSheet mira o server ATIVO -> aponto pro dono da sessao enquanto aberta e restauro no fechar.
   let gitSheet = $state<{ name: string } | null>(null);
@@ -385,36 +367,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   function closeGitSheet() {
     gitSheet = null;
     if (gitSheetPrevServer) { selectServer(gitSheetPrevServer); gitSheetPrevServer = null; }
-  }
-  async function menuBranches() {
-    if (!menu) return;
-    const { name, serverId } = menu;
-    branchView = { list: [], current: null, dirty: false };
-    branchLoading = true;
-    try {
-      const info = await withServer(serverId, () => getBranches(name));
-      branchView = { list: info.branches, current: info.current, dirty: info.dirty ?? false };
-    } catch (e) {
-      branchView = null;
-      flash(`branches: ${errMsg(e)}`);
-    } finally {
-      branchLoading = false;
-    }
-  }
-  async function pickBranch(branch: string) {
-    if (!menu) return;
-    const { name, serverId } = menu;
-    const cur = branchView?.current;
-    const dirty = branchView?.dirty ?? false;
-    if (branch === cur) { closeMenu(); return; }
-    // Tree suja: switch levaria as mudancas nao-commitadas pra outra branch -> confirma antes.
-    if (dirty) {
-      confirmBranch = { name, serverId, branch };
-      closeMenu();
-      return;
-    }
-    closeMenu();
-    await doCheckout(name, serverId, branch);
   }
   async function doCheckout(name: string, serverId: string, branch: string) {
     flash(`checkout ${branch}…`);
@@ -446,96 +398,20 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     flashTimer = setTimeout(() => { menuMsg = ''; }, 4000);
   }
 
-  // Submenu "Quando terminar, enviar p/…" (feature #12, 2a pagina do menu — mesma ideia do branchView):
-  // picker de sessao ALVO (mesmo servidor da fonte, ThenLink/registry sao locais ao backend) + texto do
-  // prompt. target=null ate escolher; pre-preenche com o vinculo ja armado (so o alvo — o texto fica no
-  // backend e nao volta por GET, entao reabrir pra editar exige redigitar).
-  let chainView = $state<{ target: string | null; text: string } | null>(null);
-  let chainBusy = $state(false);
-  function menuChain() {
-    if (!menu) return;
-    chainView = { target: menu.thenTarget, text: '' };
-  }
   // Candidatas ao encadeamento: sessoes do MESMO servidor da fonte (o vinculo e resolvido pelo backend
-  // dessa sessao — nao ha como encadear pra uma sessao de OUTRO servidor), exceto ela mesma.
+  // dessa sessao — nao ha como encadear pra uma sessao de OUTRO servidor), exceto ela mesma. Passado
+  // como prop pro SessionContextMenu (que precisa de `groups`, so o Sidebar tem).
   function chainCandidates(serverId: string, exclude: string) {
     return groups.flatMap((g) => g.sessions).filter((s) => s.serverId === serverId && s.name !== exclude);
   }
-  async function saveChain() {
-    if (!menu || !chainView?.target) return;
-    const text = chainView.text.trim();
-    if (!text) return;
-    const { name, serverId } = menu;
-    const target = chainView.target;
-    chainBusy = true;
-    try {
-      await withServer(serverId, () => setThenLink(name, target, text));
-      flash(`encadeado → ${target}`);
-    } catch (e) {
-      flash(`encadear: ${errMsg(e)}`);
-    } finally {
-      chainBusy = false;
-      closeMenu();
-    }
-  }
-  async function removeChain() {
-    if (!menu) return;
-    const { name, serverId } = menu;
-    closeMenu();
-    try {
-      await withServer(serverId, () => clearThenLink(name));
-      flash('vínculo removido');
-    } catch (e) {
-      flash(`remover vínculo: ${errMsg(e)}`);
-    }
-  }
 
-  // api.ts mira SEMPRE o server ativo -> aponta pro dono da sessao e restaura (igual handleDelete).
-  // Propaga o erro (o caller decide mostrar): o finally garante o restore mesmo em throw.
-  async function withServer<T>(serverId: string, fn: () => Promise<T>): Promise<T> {
-    const prev = getActiveId();
-    selectServer(serverId);
-    try { return await fn(); }
-    finally { if (prev && prev !== serverId) selectServer(prev); }
-  }
   const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
-
-  async function copyToClipboard(s: string) {
-    try { await navigator.clipboard.writeText(s); }
-    catch {  // LAN via HTTP puro: clipboard API off -> fallback execCommand.
-      const ta = document.createElement('textarea');
-      ta.value = s; ta.style.position = 'fixed'; ta.style.opacity = '0';
-      document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
-    }
-  }
 
   function menuRename() {
     if (!menu) return;
     editing = `${menu.serverId}::${menu.name}`;
     editValue = menu.name;
     closeMenu();
-  }
-  function menuCopyCwd() {
-    if (!menu) return;
-    copyToClipboard(menu.cwd);
-    closeMenu();
-  }
-  async function menuOpenEditor() {
-    if (!menu) return;
-    const { name, serverId } = menu;
-    closeMenu();
-    try { await withServer(serverId, () => openEditor(name)); }
-    catch (e) { flash(`abrir editor: ${errMsg(e)}`); }   // 404 = backend desatualizado; 500 = CP_EDITOR/DISPLAY
-  }
-  async function menuGitPull() {
-    if (!menu) return;
-    const { name, serverId } = menu;
-    closeMenu();
-    flash('git pull…');
-    try {
-      const r = await withServer(serverId, () => gitAction(name, 'pull'));
-      flash(r.output.trim().split('\n')[0] || 'pull ok');
-    } catch (e) { flash(`git pull: ${errMsg(e)}`); }
   }
   function menuDelete() {
     if (!menu) return;
@@ -1137,82 +1013,19 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 
 <svelte:window onkeydown={(e) => { if (e.key === 'Escape') { if (kebabOpen) closeKebab(); else if (menu) closeMenu(); else if (resumeModal) resumeModal = null; else if (confirmDel) confirmDel = null; else if (confirmSrv) confirmSrv = null; else if (confirmBranch) confirmBranch = null; else if (confirmLogout) confirmLogout = false; } }} />
 
-<!-- Menu de contexto (botao direito na sessao). Backdrop full-screen captura o clique-fora. -->
+<!-- Menu de contexto (botao direito na sessao). Backdrop + itens vivem no componente; o Sidebar so
+     guarda posicao/alvo em `menu` e decide o que dirty->confirm / checkout / GitSheet fazem. -->
 {#if menu}
-  <div class="menu-backdrop" onclick={closeMenu} oncontextmenu={(e) => { e.preventDefault(); closeMenu(); }} role="presentation"></div>
-  <div class="ctx-menu" style="left: {menu.x}px; top: {menu.y}px;" role="menu">
-    {#if branchView}
-      <button type="button" class="ctx-back" onclick={() => (branchView = null)}>‹ Trocar branch</button>
-      <div class="ctx-sep"></div>
-      {#if branchLoading}
-        <div class="ctx-info">carregando…</div>
-      {:else if branchView.list.length}
-        <div class="ctx-scroll">
-          {#each branchView.list as b (b)}
-            <button type="button" role="menuitem" class="ctx-branch" class:current={b === branchView.current} onclick={() => pickBranch(b)}>
-              {b}{#if b === branchView.current}<span class="ctx-cur">✓</span>{/if}
-            </button>
-          {/each}
-        </div>
-      {:else}
-        <div class="ctx-info">sem branches</div>
-      {/if}
-    {:else if chainView}
-      <button type="button" class="ctx-back" onclick={() => (chainView = null)}>‹ Quando terminar, enviar p/</button>
-      <div class="ctx-sep"></div>
-      {#if chainCandidates(menu.serverId, menu.name).length}
-        <div class="ctx-scroll">
-          {#each chainCandidates(menu.serverId, menu.name) as c (c.serverId + c.name)}
-            <button
-              type="button" role="menuitem" class="ctx-branch"
-              class:current={c.name === chainView.target}
-              onclick={() => { if (chainView) chainView.target = c.name; }}
-            >{c.name}{#if c.name === chainView.target}<span class="ctx-cur">✓</span>{/if}</button>
-          {/each}
-        </div>
-      {:else}
-        <div class="ctx-info">nenhuma outra sessão neste servidor</div>
-      {/if}
-      <div class="ctx-sep"></div>
-      <div class="ctx-chain-form">
-        <input
-          type="text"
-          class="ctx-chain-input"
-          placeholder="Prompt a enviar…"
-          bind:value={chainView.text}
-          onkeydown={(e) => { if (e.key === 'Enter') saveChain(); }}
-          aria-label="Prompt a enviar pra sessão alvo"
-        />
-        <button
-          type="button" class="ctx-chain-save" onclick={saveChain}
-          disabled={!chainView.target || !chainView.text.trim() || chainBusy}
-        >Salvar</button>
-      </div>
-      {#if menu.thenTarget}
-        <div class="ctx-sep"></div>
-        <button type="button" role="menuitem" class="danger" onclick={removeChain}>Remover vínculo</button>
-      {/if}
-    {:else}
-      <button type="button" role="menuitem" onclick={menuRename}>Renomear</button>
-      <button type="button" role="menuitem" onclick={menuToggleMute}>
-        {menuMuted ? 'Reativar notificações' : 'Silenciar notificações'}
-      </button>
-      {#if menu.cwd}
-        <button type="button" role="menuitem" onclick={menuCopyCwd}>Copiar cwd</button>
-        <button type="button" role="menuitem" onclick={menuOpenEditor}>Abrir no editor</button>
-        <div class="ctx-sep"></div>
-        <button type="button" role="menuitem" onclick={menuGit}>Git<span class="ctx-more">›</span></button>
-        <button type="button" role="menuitem" onclick={menuGitPull}>Git pull</button>
-        <button type="button" role="menuitem" onclick={menuBranches}>Trocar branch<span class="ctx-more">›</span></button>
-      {/if}
-      <div class="ctx-sep"></div>
-      <button type="button" role="menuitem" onclick={menuChain}>
-        {menu.thenTarget ? `Encadeado → ${menu.thenTarget}` : 'Quando terminar, enviar p/…'}<span class="ctx-more">›</span>
-      </button>
-      <div class="ctx-sep"></div>
-      <button type="button" role="menuitem" class="danger" onclick={menuDelete}>Excluir</button>
-    {/if}
-  </div>
+  {@const m = menu}
+  <SessionContextMenu x={m.x} y={m.y} name={m.name} serverId={m.serverId} cwd={m.cwd} thenTarget={m.thenTarget}
+    chainCandidates={chainCandidates(m.serverId, m.name)}
+    onClose={closeMenu}
+    onRename={menuRename} onDelete={menuDelete} onGit={menuGit}
+    onPickBranch={(branch, dirty) => {
+      if (dirty) confirmBranch = { name: m.name, serverId: m.serverId, branch };
+      else doCheckout(m.name, m.serverId, branch);
+    }}
+    onFlash={flash} />
 {/if}
 {#if menuMsg}<div class="menu-toast" role="status">{menuMsg}</div>{/if}
 
@@ -1700,42 +1513,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .add-srv-input:focus { border-color: var(--accent); }
 
   /* ── Menu de contexto ── */
+  /* .menu-backdrop e .ctx-sep ficam aqui porque o kebab do header tambem os usa; o resto do menu de
+     contexto (.ctx-menu/.ctx-branch/.ctx-chain-*) migrou pro SessionContextMenu.svelte. */
   .menu-backdrop { position: fixed; inset: 0; z-index: 40; }
-  .ctx-menu {
-    position: fixed; z-index: 41; min-width: 168px; padding: 4px;
-    display: flex; flex-direction: column;
-    background: var(--bg-elevated); border: 1px solid var(--border-default);
-    border-radius: var(--radius-md); box-shadow: 0 8px 28px rgba(0,0,0,0.4);
-  }
-  .ctx-menu button {
-    height: 32px; padding: 0 10px; text-align: left; justify-content: flex-start;
-    color: var(--text-primary); font-size: var(--text-sm); border-radius: var(--radius-sm);
-  }
-  .ctx-menu button:hover { background: var(--bg-hover); }
-  .ctx-menu button.danger { color: var(--error); }
-  .ctx-menu button.danger:hover { background: rgba(255,69,58,0.12); }
   .ctx-sep { height: 1px; margin: 4px 6px; background: var(--border-subtle); }
-  /* Item que abre submenu: chevron a direita. */
-  .ctx-more { margin-left: auto; color: var(--text-muted); padding-left: var(--space-3); }
-  .ctx-back { color: var(--text-secondary); font-weight: 600; }
-  .ctx-info { padding: 6px 10px; font-size: var(--text-sm); color: var(--text-muted); }
-  /* Lista de branches rolavel (repo com muitas branches nao estoura a tela). */
-  .ctx-scroll { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; }
-  .ctx-branch { font-family: var(--font-mono); font-size: var(--text-xs); }
-  .ctx-branch.current { color: var(--accent); }
-  .ctx-cur { margin-left: auto; padding-left: var(--space-2); }
-  /* Feature #12: form do encadeamento (alvo escolhido acima na lista + texto do prompt). */
-  .ctx-chain-form { display: flex; gap: 4px; padding: 4px 6px; }
-  .ctx-chain-input {
-    flex: 1; min-width: 0; height: 28px; padding: 0 8px; font-size: var(--text-sm);
-    color: var(--text-primary); background: var(--bg-base); border: 1px solid var(--border-default);
-    border-radius: var(--radius-sm);
-  }
-  .ctx-chain-save {
-    height: 28px; padding: 0 10px; font-size: var(--text-sm); font-weight: 600;
-    color: var(--accent); background: var(--accent-dim); border-radius: var(--radius-sm);
-  }
-  .ctx-chain-save:disabled { opacity: 0.5; }
 
   /* ── Corpo dos modais de confirmação (o chassi vive em ConfirmDialog.svelte;
      estas classes alcançam nós do snippet, compilado no escopo deste componente). ── */
