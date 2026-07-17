@@ -73,6 +73,9 @@
       if (my !== seq) return;
       events = evs;
       tailError = '';
+      // Veio menos que o pedido = a conversa INTEIRA já está aqui — sem isto o botão "mensagens
+      // anteriores" aparecia em toda sessão de >=15 eventos e o clique só descobria o fim à toa.
+      atEnd = evs.length < TAIL;
       retirePending(at);
       requestAnimationFrame(() => bodyEl?.scrollTo({ top: bodyEl.scrollHeight }));
     } catch {
@@ -101,8 +104,13 @@
   // $state: o template esconde o botão "mensagens anteriores" quando a conversa inteira já veio.
   let atEnd = $state(false);
   let loadingMore = $state(false);
+  let lastMoreAt = 0;
   async function loadMore() {
     if (loadingMore || loading || atEnd || !bodyEl) return;
+    // Throttle: wheel dispara por notch/frame — sem isto, backend fora + gesto contínuo de
+    // scroll-up virava rajada de fetches falhando em sequência.
+    if (Date.now() - lastMoreAt < 400) return;
+    lastMoreAt = Date.now();
     loadingMore = true;
     const my = seq;
     const prevH = bodyEl.scrollHeight;
@@ -137,7 +145,9 @@
   // (beco sem saída — "sei que tem mais msg e não consigo rolar"). No topo (ou sem barra), girar
   // pra cima busca a página anterior.
   function onBodyWheel(e: WheelEvent) {
-    if (e.deltaY < 0 && bodyEl && bodyEl.scrollTop <= 0 && !loading) loadMore();
+    // Com erro pendente, o wheel NÃO re-tenta (senão spam contra backend instável) — a retomada é
+    // pelo botão de retry explícito.
+    if (e.deltaY < 0 && bodyEl && bodyEl.scrollTop <= 0 && !loading && !tailError) loadMore();
   }
 
   // Retira o eco que o backend JÁ tinha confirmado quando esta cauda começou: /input 200 = texto na
@@ -241,7 +251,9 @@
     <div class="bc-sub">
       {#if session.branch}<span class="bc-branch">⎇ {session.branch}</span>{/if}
       {#if session.pair_peers?.length}
-        {@const pc = session.pair_gid ? pairColor(session.pair_gid) : 'var(--text-muted)'}
+        <!-- Mesma chave escopada por servidor que o canvas usa (gid cru colide entre máquinas) —
+             chip e moldura do MESMO grupo têm que ter a MESMA cor. -->
+        {@const pc = session.pair_gid ? pairColor(`${session.serverId}::${session.pair_gid}`) : 'var(--text-muted)'}
         <!-- Cor POR GRUPO (gid): todos os membros carregam o mesmo chip tingido — dá pra VER quem
              pertence a quem em qualquer view. No canvas o chip vira botão: reúne o grupo. -->
         {#if onGatherPair}

@@ -66,11 +66,17 @@
   // reload com o canvas filtrado sem aviso seria o bug do card sumido de novo.
   let focusGid = $state<string | null>(null);
 
+  // Chave de grupo com ESCOPO DE SERVIDOR: o gid é 8 hex gerado por máquina (pair.py) e o canvas
+  // opera sobre o agregado multi-servidor — dois grupos independentes em backends diferentes
+  // podiam colidir no mesmo gid e virar uma moldura só (com "reunir" arrastando sessão alheia).
+  const gkeyOf = (r: BoardRow) => (r.pair_gid ? `${r.serverId}::${r.pair_gid}` : null);
+
   const visibleRows = $derived(rows.filter((r) => {
     const k = rowKey(r);
+    const gk = gkeyOf(r);
     if (hidden.includes(k)) return false;
-    if (focusGid && r.pair_gid !== focusGid) return false;
-    if (r.pair_gid && collapsedGids.includes(r.pair_gid)) return false;
+    if (focusGid && gk !== focusGid) return false;
+    if (gk && collapsedGids.includes(gk)) return false;
     return true;
   }));
   const hiddenRows = $derived(rows.filter((r) => hidden.includes(rowKey(r))));
@@ -81,21 +87,24 @@
   const groupFrames = $derived.by(() => {
     const byGid = new Map<string, BoardRow[]>();
     for (const r of visibleRows) {
-      if (!r.pair_gid) continue;
-      const arr = byGid.get(r.pair_gid);
-      if (arr) arr.push(r); else byGid.set(r.pair_gid, [r]);
+      const gk = gkeyOf(r);
+      if (!gk) continue;
+      const arr = byGid.get(gk);
+      if (arr) arr.push(r); else byGid.set(gk, [r]);
     }
     const out: { gid: string; x: number; y: number; w: number; h: number; color: string; label: string; n: number }[] = [];
-    for (const [gid, members] of byGid) {
+    for (const [gk, members] of byGid) {
       const boxes = members.map((m) => layout[rowKey(m)]).filter(Boolean);
       if (boxes.length < 2) continue;
-      const x = Math.min(...boxes.map((b) => b.x)) - 10;
-      const y = Math.min(...boxes.map((b) => b.y)) - 28;
+      const x = Math.max(2, Math.min(...boxes.map((b) => b.x)) - 10);
+      // Clamp: grupo na 1ª linha (y = PAD = 24) jogava o topo da moldura pra -4px — o header com
+      // os botões ficava cortado num container que não rola pra offset negativo.
+      const y = Math.max(2, Math.min(...boxes.map((b) => b.y)) - 28);
       const x2 = Math.max(...boxes.map((b) => b.x + b.w)) + 10;
       const y2 = Math.max(...boxes.map((b) => b.y + b.h)) + 10;
       out.push({
-        gid, x, y, w: x2 - x, h: y2 - y,
-        color: pairColor(gid),
+        gid: gk, x, y, w: x2 - x, h: y2 - y,
+        color: pairColor(gk),
         label: members[0].pair_task ?? members.map((m) => m.name).join(' · '),
         n: members.length,
       });
@@ -106,15 +115,15 @@
   // Grupo colapsado = UM card compacto no lugar dos membros (posição = canto do bounding box
   // salvo; expande de volta no clique). Membros mantêm posição no layout — expandir restaura.
   const collapsedCards = $derived.by(() =>
-    collapsedGids.flatMap((gid) => {
-      const members = rows.filter((r) => r.pair_gid === gid && !hidden.includes(rowKey(r)));
+    collapsedGids.flatMap((gk) => {
+      const members = rows.filter((r) => gkeyOf(r) === gk && !hidden.includes(rowKey(r)));
       if (members.length === 0) return [];
-      if (focusGid && focusGid !== gid) return [];
+      if (focusGid && focusGid !== gk) return [];
       const boxes = members.map((m) => layout[rowKey(m)]).filter(Boolean);
       const x = boxes.length ? Math.min(...boxes.map((b) => b.x)) : PAD;
       const y = boxes.length ? Math.min(...boxes.map((b) => b.y)) : PAD;
       const w = boxes.length ? Math.max(...boxes.map((b) => b.w)) : CARD_W;
-      return [{ gid, x, y, w, color: pairColor(gid), label: members[0].pair_task ?? null, members }];
+      return [{ gid: gk, x, y, w, color: pairColor(gk), label: members[0].pair_task ?? null, members }];
     }));
 
   // ── Organizar: recoloca TODOS os visíveis numa grade — pareados (gid) contíguos, quem espera
@@ -255,10 +264,10 @@
   // Reúne o GRUPO de pareamento em volta do card âncora: membros empilham logo abaixo, com o
   // mesmo tamanho; membro oculto é desocultado (reunir = "quero ver o grupo inteiro"); terceiros
   // atropelados são empurrados pela cascata. Disparado pelo clique no chip 🤝 do card.
-  function gatherPair(anchorKey: string, gid: string) {
+  function gatherPair(anchorKey: string, gk: string) {
     const a = layout[anchorKey];
-    if (!a) return;
-    const members = rows.filter((r) => r.pair_gid === gid && rowKey(r) !== anchorKey);
+    if (!a) { console.warn('reunir: âncora sem posição no layout', anchorKey); return; }
+    const members = rows.filter((r) => gkeyOf(r) === gk && rowKey(r) !== anchorKey);
     if (members.length === 0) return;
     const memberKeys = members.map(rowKey);
     if (hidden.some((k) => memberKeys.includes(k))) {
@@ -357,7 +366,14 @@
       <div class="cv-group" style="left: {f.x}px; top: {f.y}px; width: {f.w}px; height: {f.h}px; color: {f.color};">
         <div class="cv-group-head">
           <span class="cv-group-label" title={f.label}>🤝 {f.label} · {f.n}</span>
-          <button onclick={() => gatherPair(rowKey(visibleRows.find((r) => r.pair_gid === f.gid)!), f.gid)}
+          <!-- Âncora = um membro que JÁ TEM box (mesmo critério da moldura) — o primeiro de
+               visibleRows podia estar sem posição (placeNew roda pós-render) e o reunir virava
+               no-op mudo; grupo desfeito entre render e clique também não pode estourar. -->
+          <button onclick={() => {
+                    const anchor = visibleRows.find((r) => gkeyOf(r) === f.gid && layout[rowKey(r)]);
+                    if (anchor) gatherPair(rowKey(anchor), f.gid);
+                    else console.warn('reunir: grupo sem membro posicionado', f.gid);
+                  }}
                   title="Reunir os membros lado a lado">⇱</button>
           <button onclick={() => toggleCollapse(f.gid)} title="Colapsar o grupo num card só">▾</button>
           <button onclick={() => (focusGid = focusGid === f.gid ? null : f.gid)}
@@ -393,7 +409,7 @@
           <div class="cv-handle" onpointerdown={(e) => dragStart(e, key)} onpointermove={dragMove}
                onpointerup={dragEnd} onpointercancel={dragEnd}
                role="button" tabindex="-1" aria-label={`Mover ${row.name}`}
-               style={row.pair_gid ? `background: color-mix(in srgb, ${pairColor(row.pair_gid)} 16%, var(--bg-surface)); color: ${pairColor(row.pair_gid)};` : ''}
+               style={row.pair_gid ? `background: color-mix(in srgb, ${pairColor(gkeyOf(row)!)} 16%, var(--bg-surface)); color: ${pairColor(gkeyOf(row)!)};` : ''}
                title="Arrastar pra mover">⋮⋮</div>
           <!-- IRMÃO do handle (não filho): botão real dentro de role="button" é aninhamento
                interativo inválido (ARIA). Absoluto por cima da faixa; intercepta o ponteiro antes
@@ -413,7 +429,7 @@
               sendError={sendErrors.get(key) ?? ''}
               onSendError={(m) => setSendError(key, m)}
               onOpen={() => onOpenSession(row.name, row.serverId)}
-              onGatherPair={row.pair_gid ? () => gatherPair(key, row.pair_gid!) : null}
+              onGatherPair={row.pair_gid ? () => gatherPair(key, gkeyOf(row)!) : null}
             />
           </div>
         </div>
@@ -421,6 +437,15 @@
     {/each}
     {#if rows.length === 0}
       <p class="cv-empty">nenhuma sessão viva</p>
+    {:else if visibleRows.length === 0 && collapsedCards.length > 0}
+      <!-- Vazio de cards individuais mas COM grupos colapsados na tela: os compactos são o
+           conteúdo — nenhuma mensagem (o texto de "ocultos" aqui mentiria sobre a causa). -->
+    {:else if visibleRows.length === 0 && focusGid}
+      <!-- Vazio POR CAUSA do foco (grupo focado esvaziou/desfez): a instrução certa é sair do
+           foco, não o botão «Ocultos». -->
+      <button class="cv-empty cv-empty-btn" onclick={() => (focusGid = null)}>
+        o grupo em foco ficou sem sessões visíveis — clicar pra mostrar tudo de novo
+      </button>
     {:else if visibleRows.length === 0}
       <p class="cv-empty">todos os cards estão ocultos — use «Ocultos» no topo pra trazer de volta</p>
     {/if}
@@ -553,4 +578,9 @@
      mas o min-height: 0 acima é o equivalente aqui: sem ele o body estoura em vez de rolar. */
   .cv-body > :global(.bcard) { flex: 1; min-height: 0; }
   .cv-empty { color: var(--text-muted); font-size: var(--text-xs); padding: var(--space-6); }
+  .cv-empty-btn {
+    display: block; background: none; border: 0; cursor: pointer; text-align: left;
+    font-family: inherit; min-height: 0; min-width: 0;
+  }
+  .cv-empty-btn:hover { color: var(--text-primary); }
 </style>
