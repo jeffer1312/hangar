@@ -281,3 +281,23 @@ def test_reconcile_confirms_attachment_message_against_raw_line(tmp_path):
     committed = pqueue.committed_user_lines(str(j))
     assert q.reconcile_delivered(committed, min_ts=100.0, now=1000.0) == []   # confirma, nao requeua
     assert q.load()[0]["confirmed"] is True
+
+def test_merged_history_limit_tail_read_e_sufixo_do_parse_completo(tmp_path, monkeypatch):
+    # Tail-read (limit): parseia so o fim do arquivo, mas o resultado tem que ser um SUFIXO
+    # identico ao parse completo. Janela encolhida via monkeypatch pra exercitar o crescimento 4x
+    # (limit=50 nao cabe em 2KB -> cresce ate cobrir).
+    import json
+    j = tmp_path / "t.jsonl"
+    lines = [
+        json.dumps({"type": "user", "uuid": f"u{i}",
+                    "timestamp": f"2026-01-01T00:{i // 60:02d}:{i % 60:02d}Z",
+                    "message": {"role": "user", "content": f"msg {i} " + "x" * 100}})
+        for i in range(200)
+    ]
+    j.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    full = [e.id for e in pqueue.merged_history("s", str(j))]
+    monkeypatch.setattr(pqueue, "_TAIL_WINDOW", 2048)
+    for lim in (5, 50):
+        tail = [e.id for e in pqueue.merged_history("s", str(j), limit=lim)]
+        assert len(tail) >= lim
+        assert tail == full[-len(tail):]

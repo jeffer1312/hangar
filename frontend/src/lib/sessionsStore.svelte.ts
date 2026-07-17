@@ -11,9 +11,18 @@ import { aggregateSessions, sweepHidden, type Slot, type Aggregate } from './ses
 
 function createSessionsStore() {
   let servers = $state<Server[]>([]);
-  let agg = $state<Aggregate>({ rows: [], byServer: [], loading: false });
+  // $state.raw: agg é SUBSTITUÍDO inteiro a cada recompute e nunca mutado — o proxy profundo do
+  // $state só custava, e embrulhar as rows em proxy quebrava a identidade que o memo do
+  // aggregateSessions preserva (rows de servidor que não emitiu = mesmo objeto -> keyed each das
+  // views não re-renderiza os cards dos outros servidores).
+  let agg = $state.raw<Aggregate>({ rows: [], byServer: [], loading: false });
   const slots = new Map<string, Slot>();
   const streams = new Map<string, EventSource>();
+  // Watchdog por stream (mesmo padrão do Chat): o backend emite `ping` a cada ~10s no stream de
+  // lista justamente pra isto — suspend/VPN flap deixa a conexão MEIO-ABERTA sem onerror e as 4
+  // views congelavam em silêncio até um reconnect manual. Sem sinal por 25s -> fecha e reabre.
+  const watchdogs = new Map<string, ReturnType<typeof setTimeout>>();
+  const WATCHDOG_MS = 25_000;
   let refs = 0;
   let offChanged: (() => void) | null = null;
   // Exclusão otimista: chaves `serverId::name` escondidas da lista enquanto o delete está em voo.
@@ -28,12 +37,33 @@ function createSessionsStore() {
   // Reconcilia streams com a lista: fecha o que sumiu, abre o que entrou, mantém o resto.
   function connect(list: Server[]) {
     for (const [id, es] of streams) {
-      if (!list.some((s) => s.id === id)) { es.close(); streams.delete(id); slots.delete(id); }
+      if (!list.some((s) => s.id === id)) {
+        es.close(); streams.delete(id); slots.delete(id);
+        clearTimeout(watchdogs.get(id)); watchdogs.delete(id);
+      }
     }
     for (const s of list) {
       if (streams.has(s.id)) continue;
       const es = openSessionsStream(s);
+      const arm = () => {
+        clearTimeout(watchdogs.get(s.id));
+        watchdogs.set(s.id, setTimeout(() => {
+          // es.close() num stream já fechado é noop; connect() reabre só este servidor (os outros
+          // seguem em streams). O arm() do stream novo substitui este timer no mesmo id.
+          es.close();
+          streams.delete(s.id);
+          watchdogs.delete(s.id);
+          // Mesmo tratamento do onerror: o slot que motivou o watchdog está potencialmente velho —
+          // marca offline (mantendo a última lista boa) em vez de segui-lo servindo como bom.
+          slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
+          recompute();
+          connect(servers);
+        }, WATCHDOG_MS));
+      };
+      arm();
+      es.addEventListener('ping', arm);
       es.addEventListener('sessions', (e) => {
+        arm();
         try {
           slots.set(s.id, { sessions: JSON.parse((e as MessageEvent).data), error: null });
         } catch {
@@ -60,6 +90,9 @@ function createSessionsStore() {
   function stop() {
     offChanged?.();
     offChanged = null;
+    // Timers primeiro: um watchdog disparando pós-stop reabriria streams com refs = 0.
+    for (const t of watchdogs.values()) clearTimeout(t);
+    watchdogs.clear();
     for (const es of streams.values()) es.close();
     streams.clear();
     slots.clear();
