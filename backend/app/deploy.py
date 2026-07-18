@@ -3,7 +3,7 @@
 Fluxo: push na `main` -> GitHub POST em /api/deploy/github-webhook com header
 `X-Hub-Signature-256` (HMAC-SHA256 do corpo cru, chave = CP_DEPLOY_SECRET). Aqui a assinatura
 e validada em tempo constante e, se bater E o evento for push na main, dispara (nao-bloqueante)
-a unit `claude-pocket-deploy.service` que faz pull+build+restart num processo INDEPENDENTE.
+a unit `claude-cockpit-deploy.service` que faz pull+build+restart num processo INDEPENDENTE.
 
 Por que unit separada e nao rodar o deploy aqui: o deploy reinicia ESTE backend. Rodar inline
 mataria o handler no meio da request (GitHub veria timeout/falha). Delegando pra uma oneshot
@@ -24,7 +24,7 @@ _log = logging.getLogger("claude_pocket")
 
 deploy_router = APIRouter()
 
-DEPLOY_UNIT = "claude-pocket-deploy.service"
+DEPLOY_UNIT = "claude-cockpit-deploy.service"
 
 
 def _verify_signature(body: bytes, header: str) -> bool:

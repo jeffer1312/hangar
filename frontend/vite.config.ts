@@ -78,8 +78,8 @@ export default defineConfig({
         swDest: 'dist/sw.js',
       },
       manifest: {
-        name: 'Claude Pocket',
-        short_name: 'Pocket',
+        name: 'Claude Cockpit',
+        short_name: 'Cockpit',
         display: 'standalone',
         background_color: '#100e11',
         theme_color: '#100e11',

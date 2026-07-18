@@ -1,4 +1,4 @@
-# Como usar o claude-pocket
+# Como usar o claude-cockpit
 
 Guia de uso ponta-a-ponta: subir, conectar o celular (LAN ou Tailscale), instalar
 como PWA e operar o chat. Pra arquitetura/API ver o [README](../README.md).
@@ -178,6 +178,11 @@ N sessões uma a uma os grupos se fundem num só.
 pedir "orquestra a tarefa X nos repos A e B" vira a **líder**: cria/pareia uma sessão
 visível por repo, escreve o contrato do grupo, distribui o escopo, acompanha os
 reportes de teste e consolida o painel final — você só aprova os marcos (push, MR).
+
+**Painel/tray no desktop (só Hyprland + Quickshell):** painel flutuante de sessões
+(SUPER+SHIFT+U) + ícone na bandeja. O passo 7/7 do `install.sh` oferece quando detecta
+o ambiente; manual: `./scripts/install-cp-panel.sh`. Outros desktops ainda não têm painel
+— use a view board/canvas do app no navegador.
 
 ## 6. Sync na nuvem (opcional)
 
