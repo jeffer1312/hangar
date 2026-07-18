@@ -92,7 +92,10 @@ def main() -> int:
             # fragmento solto ("and the repository exists.") sem o motivo. No SUCESSO a primeira
             # linha do status é só o cabeçalho de branch ("## main"), daí somar a contagem.
             msg = lines[0] if lines else action
-            if ok and len(lines) > 1:
+            # Contagem SÓ no status: é a única ação cuja saída é "cabeçalho + 1 linha por
+            # arquivo". Em log/pull/fetch as demais linhas são commits e refs — rotular aquilo
+            # de "arquivo(s)" seria número errado dito com confiança.
+            if ok and action == "status" and len(lines) > 1:
                 msg = f"{msg} · {len(lines) - 1} arquivo(s)"
             out = {"ok": ok, "message": msg[:140]}
         elif op == "commit":

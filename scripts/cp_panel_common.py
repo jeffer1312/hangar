@@ -48,11 +48,16 @@ def peer_fields(cfg: object) -> tuple[str, str, str]:
 def peers() -> dict:
     """Mapa id -> {base_url, token, web_url?}. Ausente = máquina só-local (não é erro)."""
     try:
-        return json.loads((BACKEND / "peers.json").read_text(encoding="utf-8"))
+        data = json.loads((BACKEND / "peers.json").read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
     except (OSError, ValueError) as e:
         raise PanelError(f"peers.json inválido: {e}") from e
+    # Raiz precisa ser objeto: JSON válido mas não-dict (um `[` sobrando vira lista) passava
+    # direto e estourava AttributeError no .get/.items de quem chama — fora de qualquer try.
+    if not isinstance(data, dict):
+        raise PanelError("peers.json inválido: raiz deve ser um objeto {id: {...}}")
+    return data
 
 
 def local_base() -> str:
