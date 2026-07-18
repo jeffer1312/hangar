@@ -30,6 +30,21 @@ def env(key: str) -> str:
     return ""
 
 
+def peer_fields(cfg: object) -> tuple[str, str, str]:
+    """(base_url, token, web_url) de UMA entrada do peers.json, ou strings vazias se a entrada
+    estiver malformada. Valida TIPO, não só presença: `"srv": "oops"` (não-dict) ou
+    `"base_url": 8080` (sem aspas) passavam por checagem de verdade-lógica e só estouravam
+    AttributeError lá no rstrip — fora de qualquer try, derrubando a coleta inteira."""
+    if not isinstance(cfg, dict):
+        return "", "", ""
+
+    def s(key: str) -> str:
+        v = cfg.get(key)
+        return v.strip() if isinstance(v, str) else ""
+
+    return s("base_url"), s("token"), s("web_url")
+
+
 def peers() -> dict:
     """Mapa id -> {base_url, token, web_url?}. Ausente = máquina só-local (não é erro)."""
     try:
@@ -53,11 +68,9 @@ def resolve(address: str) -> tuple[str, str, str]:
     cfg = known.get(server)
     if not cfg:
         raise PanelError(f"servidor '{server}' desconhecido (conhecidos: {', '.join(known) or 'nenhum'})")
-    # `or ""`, não `.get(k, "")`: chave presente com valor null (typo comum ao editar à mão)
-    # passava batido e estourava AttributeError/KeyError cru lá na frente.
-    base, token = (cfg.get("base_url") or ""), (cfg.get("token") or "")
+    base, token, _ = peer_fields(cfg)
     if not base or not token:
-        raise PanelError(f"peers.json: entrada '{server}' sem base_url ou token")
+        raise PanelError(f"peers.json: entrada '{server}' sem base_url/token válidos (string)")
     return base.rstrip("/"), token, name
 
 

@@ -113,7 +113,10 @@ class TrayItem(dbus.service.Object):
 
     # --- propriedades ---------------------------------------------------------------------
     def _props(self) -> dict:
-        icon = ICON_ATTENTION if self.awaiting else ICON_IDLE
+        # Espelha `status` (inclui problem): host que lê IconName direto, em vez de trocar pelo
+        # AttentionIconName quando Status=NeedsAttention, mostraria ícone de ocioso com o poll
+        # quebrado — que é justamente o que a distinção deveria evitar.
+        icon = ICON_ATTENTION if (self.awaiting or self.problem) else ICON_IDLE
         return {
             "Category": "ApplicationStatus",
             "Id": "claude-pocket",
