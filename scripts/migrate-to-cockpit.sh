@@ -101,7 +101,7 @@ fi
 
 # ── 5. Re-instalar symlinks (cp-send, skills, painel) ────────────────────────
 ./scripts/install-cp-send.sh
-if command -v qs >/dev/null && [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+if command -v qs >/dev/null && pgrep -x Hyprland >/dev/null; then
     ./scripts/install-cp-panel.sh
 fi
 
