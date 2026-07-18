@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 # resolve(): roda via symlink em ~/.local/bin — sem resolver, o import iria procurar lá.
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from cp_panel_common import PanelError, env, local_base, peers  # noqa: E402
+from cp_panel_common import PanelError, env, local_base, peer_fields, peers  # noqa: E402
 
 TIMEOUT = 4
 
@@ -76,15 +76,14 @@ def main() -> int:
     # o intervalo de poll do painel. Em paralelo o pior caso é o servidor mais lento.
     targets = [("local", None, local_base(), token, "")]
     for pid, cfg in known.items():
-        # `or ""`, não `.get(k, "")`: chave presente com valor null (typo comum ao editar à mão)
-        # passava batido e só estourava no rstrip, DENTRO da thread — o erro subia no pool.map,
-        # fora de qualquer try, e matava a coleta inteira (a local junto). Peer malformado tem
-        # que virar linha de erro, não derrubar o painel.
-        base, tok = (cfg.get("base_url") or ""), (cfg.get("token") or "")
+        # peer_fields valida TIPO: entrada não-dict ou base_url sem aspas estourava
+        # AttributeError AQUI — neste laço, que roda FORA do try do worker — e matava a coleta
+        # inteira, local junto. Peer malformado vira linha de erro, nunca derruba o painel.
+        base, tok, web = peer_fields(cfg)
         if not base or not tok:
-            errors.append(f"{pid}: entrada sem base_url ou token no peers.json")
+            errors.append(f"{pid}: entrada sem base_url/token válidos no peers.json")
             continue
-        targets.append((pid, pid, base, tok, cfg.get("web_url") or base))
+        targets.append((pid, pid, base, tok, web or base))
 
     attached = attached_locally()
 

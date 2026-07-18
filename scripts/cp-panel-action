@@ -86,10 +86,15 @@ def main() -> int:
             # git_action devolve ok=False com a saída real quando o comando falha (ex: pull com
             # conflito). Propagar isso: dizer "pull ok" num merge sujo seria mentira.
             lines = [x for x in (r.get("output") or "").splitlines() if x.strip()]
+            ok = bool(r.get("ok"))
             # PRIMEIRA linha, não a última: erro de git tem o motivo no topo ("fatal: Could not
             # read from remote repository.") e continuação embaixo — pegar o fim entregava
-            # fragmento solto ("and the repository exists.") sem o motivo.
-            out = {"ok": bool(r.get("ok")), "message": (lines[0] if lines else action)[:140]}
+            # fragmento solto ("and the repository exists.") sem o motivo. No SUCESSO a primeira
+            # linha do status é só o cabeçalho de branch ("## main"), daí somar a contagem.
+            msg = lines[0] if lines else action
+            if ok and len(lines) > 1:
+                msg = f"{msg} · {len(lines) - 1} arquivo(s)"
+            out = {"ok": ok, "message": msg[:140]}
         elif op == "commit":
             out = op_commit(addr, " ".join(rest) or "wip", push=False)
         elif op == "commit-push":
