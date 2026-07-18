@@ -632,7 +632,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         <line x1="9" y1="4" x2="9" y2="20"/>
       </svg>
     </button>
-    {#if expanded}<span class="side-brand">claude pocket</span>{/if}
+    {#if expanded}<span class="side-brand">claude cockpit</span>{/if}
     {#if expanded}
       <!-- Broadcast (feature #9): entra/sai do modo seleção multipla. -->
       <button

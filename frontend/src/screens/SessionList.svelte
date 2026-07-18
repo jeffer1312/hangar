@@ -424,7 +424,7 @@
         <path d="M4 7h16M4 12h13M4 17h16"/>
       </svg>
     </button>
-    <span class="sl-brand">claude pocket</span>
+    <span class="sl-brand">claude cockpit</span>
     <button
       class="sl-icon-btn"
       class:active={selectMode}
