@@ -98,10 +98,10 @@ fi
 # Painel flutuante de sessões + ícone na bandeja. Hoje só suporta Hyprland com
 # Quickshell (testado no rice end-4/dots-hyprland); outros desktops: pulado.
 say "7/7 Painel de sessões no desktop (Hyprland + Quickshell)"
-if [ "$PANEL" = 1 ] && command -v qs >/dev/null && [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] \
+if [ "$PANEL" = 1 ] && command -v qs >/dev/null && pgrep -x Hyprland >/dev/null \
    && ask "Instalar painel flutuante + tray (SUPER+SHIFT+U)?"; then
   ./scripts/install-cp-panel.sh
-elif command -v qs >/dev/null && [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
+elif command -v qs >/dev/null && pgrep -x Hyprland >/dev/null; then
   echo "  pulado — instale depois com ./scripts/install-cp-panel.sh"
 else
   echo "  pulado — requer Hyprland + Quickshell (qs); este desktop não tem"
