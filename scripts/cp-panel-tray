@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+"""cp-panel-tray — ícone de bandeja (StatusNotifierItem) do painel do claude-pocket.
+
+Clique esquerdo abre/fecha o painel; clique do meio força um refresh. O ícone entra em
+NeedsAttention quando alguma sessão está awaiting_input, e o tooltip resume o estado.
+
+SNI de verdade (org.kde.StatusNotifierItem) em vez de widget na barra: o Quickshell só CONSOME
+tray (não publica), e assim o ícone aparece na bandeja de qualquer barra — sem editar um arquivo
+sequer do rice, então update do dots-hyprland não apaga nada.
+"""
+import json
+import os
+import socket
+import subprocess
+import sys
+
+import dbus
+import dbus.mainloop.glib
+import dbus.service
+from gi.repository import GLib
+
+SNI_IFACE = "org.kde.StatusNotifierItem"
+WATCHER = "org.kde.StatusNotifierWatcher"
+DATA = os.path.expanduser("~/.local/bin/cp-panel-data")
+POLL_SECONDS = 10
+
+# Nomes do tema de ícones (freedesktop). Attention separado pra bandeja destacar sem depender
+# só do Status, que nem todo host renderiza diferente.
+ICON_IDLE = "utilities-terminal"
+ICON_ATTENTION = "dialog-information"
+
+
+def panel_ipc(*args: str) -> None:
+    subprocess.Popen(["qs", "-c", "claude-pocket", "ipc", "call", "panel", *args],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+class TrayItem(dbus.service.Object):
+    def __init__(self, bus: dbus.SessionBus) -> None:
+        super().__init__(bus, "/StatusNotifierItem")
+        self.awaiting = 0
+        self.working = 0
+        self.total = 0
+        self.problem = ""
+
+    # --- estado ---------------------------------------------------------------------------
+    @property
+    def status(self) -> str:
+        return "NeedsAttention" if self.awaiting else "Active"
+
+    def tooltip_text(self) -> str:
+        if self.problem:
+            return self.problem
+        parts = []
+        if self.awaiting:
+            parts.append(f"{self.awaiting} esperando você")
+        if self.working:
+            parts.append(f"{self.working} rodando")
+        return " · ".join(parts) or f"{self.total} sessões ociosas"
+
+    def poll(self) -> bool:
+        try:
+            out = subprocess.run([DATA], capture_output=True, text=True, timeout=20,
+                                 check=True).stdout
+            data = json.loads(out)
+            sessions = data.get("sessions", [])
+            self.awaiting = sum(1 for s in sessions if s.get("state") == "awaiting_input")
+            self.working = sum(1 for s in sessions if s.get("state") == "working")
+            self.total = len(sessions)
+            errs = data.get("errors") or []
+            # Servidor fora do ar VIRA tooltip: engolir deixaria a bandeja mostrando "tudo ocioso"
+            # enquanto metade da malha está inacessível.
+            self.problem = ("⚠ " + "; ".join(errs)) if errs else ""
+        except (OSError, subprocess.SubprocessError, ValueError) as e:
+            self.awaiting = self.working = self.total = 0
+            self.problem = f"⚠ cp-panel-data falhou: {e}"
+        self.NewStatus(self.status)
+        self.NewIcon()
+        self.NewToolTip()
+        return True     # GLib: manter o timer vivo.
+
+    # --- interface SNI --------------------------------------------------------------------
+    @dbus.service.method(SNI_IFACE, in_signature="ii")
+    def Activate(self, x: int, y: int) -> None:
+        panel_ipc("toggle")
+
+    @dbus.service.method(SNI_IFACE, in_signature="ii")
+    def SecondaryActivate(self, x: int, y: int) -> None:
+        self.poll()
+
+    @dbus.service.method(SNI_IFACE, in_signature="ii")
+    def ContextMenu(self, x: int, y: int) -> None:
+        panel_ipc("settings")
+
+    @dbus.service.method(SNI_IFACE, in_signature="is")
+    def Scroll(self, delta: int, orientation: str) -> None:
+        pass
+
+    @dbus.service.signal(SNI_IFACE, signature="s")
+    def NewStatus(self, status: str) -> None:
+        pass
+
+    @dbus.service.signal(SNI_IFACE)
+    def NewIcon(self) -> None:
+        pass
+
+    @dbus.service.signal(SNI_IFACE)
+    def NewToolTip(self) -> None:
+        pass
+
+    # --- propriedades ---------------------------------------------------------------------
+    def _props(self) -> dict:
+        icon = ICON_ATTENTION if self.awaiting else ICON_IDLE
+        return {
+            "Category": "ApplicationStatus",
+            "Id": "claude-pocket",
+            "Title": "Claude Pocket",
+            "Status": self.status,
+            "IconName": icon,
+            "AttentionIconName": ICON_ATTENTION,
+            "OverlayIconName": "",
+            "ItemIsMenu": False,
+            # Sem DBusMenu: o clique já abre o painel, que É o menu. Path inválido de propósito
+            # (hosts aceitam e não tentam montar menu).
+            "Menu": dbus.ObjectPath("/NO_DBUSMENU"),
+            "ToolTip": (icon, dbus.Array([], signature="(iiay)"), "Claude Pocket",
+                        self.tooltip_text()),
+        }
+
+    @dbus.service.method(dbus.PROPERTIES_IFACE, in_signature="ss", out_signature="v")
+    def Get(self, interface: str, prop: str):
+        try:
+            return self._props()[prop]
+        except KeyError:
+            raise dbus.exceptions.DBusException(f"No such property {prop}")
+
+    @dbus.service.method(dbus.PROPERTIES_IFACE, in_signature="s", out_signature="a{sv}")
+    def GetAll(self, interface: str):
+        return self._props() if interface == SNI_IFACE else {}
+
+
+def single_instance() -> socket.socket | None:
+    """Trava de instância única via socket abstrato (Linux): o autostart do Hyprland roda de novo
+    a cada `hyprctl reload`, e sem isto cada reload somava mais um ícone igual na bandeja.
+    Abstrato e não lockfile: some junto com o processo, sem resto obsoleto pra limpar."""
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.bind("\0cp-panel-tray")
+    except OSError:
+        return None
+    return s      # devolvido pra manter referência viva: fechado, a trava cairia.
+
+
+def main() -> int:
+    lock = single_instance()
+    if lock is None:
+        print("cp-panel-tray já está rodando — nada a fazer", file=sys.stderr)
+        return 0
+
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    bus = dbus.SessionBus()
+    # O nome PRECISA do pid: a spec do SNI resolve o item por org.kde.StatusNotifierItem-<pid>-<n>.
+    name = dbus.service.BusName(f"org.kde.StatusNotifierItem-{os.getpid()}-1", bus)
+    item = TrayItem(bus)
+    item.poll()
+
+    try:
+        watcher = bus.get_object(WATCHER, "/StatusNotifierWatcher")
+        watcher.RegisterStatusNotifierItem(name.get_name(), dbus_interface=WATCHER)
+    except dbus.exceptions.DBusException as e:
+        print(f"erro: nenhum StatusNotifierWatcher no barramento ({e}) — a barra tem bandeja?",
+              file=sys.stderr)
+        return 1
+
+    GLib.timeout_add_seconds(POLL_SECONDS, item.poll)
+    GLib.MainLoop().run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
