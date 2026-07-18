@@ -1,8 +1,25 @@
 # claude-cockpit
 
-Drive a live [Claude Code](https://code.claude.com) session from your phone — over your own LAN/VPN, no vendor cloud — as a clean mobile chat.
+**Mission control for your live [Claude Code](https://code.claude.com) sessions** — from your phone or a desktop board, over your own LAN/VPN, no vendor cloud.
 
 *Third-party tool for Claude Code. Not affiliated with or endorsed by Anthropic; "Claude" is a trademark of Anthropic, PBC.*
+
+<p align="center">
+  <img src="docs/img/mobile-list.png" width="260" alt="Session list on the phone — live states, pairing badges, branches" />
+  <img src="docs/img/mobile-chat.png" width="260" alt="Chat on the phone — full markdown, code blocks, model picker, cost" />
+</p>
+<p align="center">
+  <img src="docs/img/desktop-chat.png" width="720" alt="Desktop two-column shell — sidebar + wide chat" />
+</p>
+
+## Highlights
+
+- 📱 **Phone-first PWA** — your real terminal sessions as a clean mobile chat: send prompts, answer Claude's interactive questions as tappable buttons, interrupt, upload images/audio (voice → Whisper transcription).
+- 🖥️ **Desktop board & canvas** — kanban of every live session by state (*needs you / working / idle*), each card a live mini-chat; or free-form draggable tiles.
+- 🤝 **Session pairing & orchestration** — sessions on the same machine message each other (`cp-send`), form working groups with a shared contract file, and an `orquestrar` skill turns one session into the lead of a multi-repo task.
+- 📡 **Live everything** — streaming preview while Claude writes, live status labels, model/context/cost badges, git panel (commit & push from the phone), workflows/agents activity tree.
+- 🔒 **Your network only** — a small FastAPI server on your machine talks to your already-running `claude` in tmux; typically served over a Tailscale tailnet with HTTPS. No vendor cloud in the path.
+- ♻️ **Survives reboots** — tmux-resurrect integration relaunches `claude --resume` per session, so conversations come back after a restart.
 
 You leave `claude` running in a `tmux` session on your machine. claude-cockpit exposes that **same live session** to a phone: it renders the conversation as chat, shows what Claude is doing right now, and lets you send prompts, answer Claude's interactive questions, and interrupt — all from an iPhone on the couch.
 
