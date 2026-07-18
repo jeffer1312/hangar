@@ -1,23 +1,25 @@
 #!/usr/bin/env bash
 # claude-pocket — instalação em um comando.
 #
-#   ./install.sh              # interativo (pergunta wrapper + serviços)
+#   ./install.sh              # interativo (pergunta wrapper + serviços + cp-send)
 #   ./install.sh --yes        # não-interativo: instala tudo
-#   ./install.sh --no-wrapper --no-services   # só backend + frontend
+#   ./install.sh --no-wrapper --no-services --no-cp-send   # só backend + frontend
 #
 # O que faz: checa dependências, instala deps do backend (uv sync), builda o
 # frontend, gera um CP_AUTH_TOKEN forte em backend/.env (se não houver), e
-# opcionalmente instala o wrapper do `claude` (scripts/install-claude-wrapper.sh)
-# e os serviços systemd de usuário (scripts/services-setup.sh).
+# opcionalmente instala o wrapper do `claude` (scripts/install-claude-wrapper.sh),
+# os serviços systemd de usuário (scripts/services-setup.sh) e o cp-send + skills
+# de orquestração (scripts/install-cp-send.sh).
 set -euo pipefail
 cd "$(dirname "$0")"
 
-YES=0; WRAPPER=1; SERVICES=1
+YES=0; WRAPPER=1; SERVICES=1; CPSEND=1
 for arg in "$@"; do
   case "$arg" in
     --yes|-y) YES=1 ;;
     --no-wrapper) WRAPPER=0 ;;
     --no-services) SERVICES=0 ;;
+    --no-cp-send) CPSEND=0 ;;
     *) echo "flag desconhecida: $arg"; exit 1 ;;
   esac
 done
@@ -33,7 +35,7 @@ ask() { # ask "pergunta" -> 0/1 (em --yes, sempre sim)
 }
 
 # ── 1. Dependências ──────────────────────────────────────────────────────────
-say "1/5 Checando dependências"
+say "1/6 Checando dependências"
 command -v tmux   >/dev/null || fail "tmux não encontrado — instale com o gerenciador do teu sistema"
 command -v claude >/dev/null || fail "claude (Claude Code) não encontrado — https://code.claude.com"
 command -v uv     >/dev/null || fail "uv não encontrado — https://docs.astral.sh/uv/ (curl -LsSf https://astral.sh/uv/install.sh | sh)"
@@ -43,7 +45,7 @@ node -e 'process.exit(parseInt(process.versions.node) >= 20 ? 0 : 1)' \
 ok "tmux, claude, uv e node $(node --version) presentes"
 
 # ── 2. Backend ───────────────────────────────────────────────────────────────
-say "2/5 Backend (uv sync)"
+say "2/6 Backend (uv sync)"
 (cd backend && uv sync --quiet)
 ok "dependências do backend instaladas"
 
@@ -58,14 +60,14 @@ else
 fi
 
 # ── 3. Frontend ──────────────────────────────────────────────────────────────
-say "3/5 Frontend (npm ci + build)"
+say "3/6 Frontend (npm ci + build)"
 (cd frontend && npm ci --silent && npm run build --silent)
 ok "frontend buildado em frontend/dist/"
 
 # ── 4. Wrapper do claude (recomendado) ───────────────────────────────────────
 # Faz todo `claude` abrir dentro do tmux com --session-id próprio — é o que
 # permite o app rastrear cada sessão com segurança (sem ele: "⚠ no id").
-say "4/5 Wrapper do claude"
+say "4/6 Wrapper do claude"
 if [ "$WRAPPER" = 1 ] && ask "Instalar o wrapper do claude (recomendado)?"; then
   ./scripts/install-claude-wrapper.sh
 else
@@ -73,11 +75,21 @@ else
 fi
 
 # ── 5. Serviços systemd (opcional; Linux) ────────────────────────────────────
-say "5/5 Serviços systemd de usuário"
+say "5/6 Serviços systemd de usuário"
 if [ "$SERVICES" = 1 ] && command -v systemctl >/dev/null && ask "Rodar backend+frontend como serviços persistentes?"; then
   ./scripts/services-setup.sh
 else
   echo "  pulado — depois: ./scripts/services-setup.sh (ou rode na mão, ver abaixo)"
+fi
+
+# ── 6. cp-send + skills (sessões-irmãs / orquestração) ──────────────────────
+# Recado e pareamento entre sessões Claude via o backend, e as skills do repo
+# (ex: orquestrar) symlinkadas em ~/.claude/skills/.
+say "6/6 cp-send + skills de orquestração"
+if [ "$CPSEND" = 1 ] && ask "Instalar cp-send + skills (sessões conversam entre si e se pareiam)?"; then
+  ./scripts/install-cp-send.sh
+else
+  echo "  pulado — instale depois com ./scripts/install-cp-send.sh"
 fi
 
 say "Pronto! Próximos passos"

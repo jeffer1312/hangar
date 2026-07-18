@@ -75,10 +75,14 @@ Sessões Claude da MESMA máquina se falam via `scripts/cp-send` (`--list`, `<se
 🤝 (Composer), badges nas listas, PairSheet (conversa do par + contrato compartilhado `<a>__<b>.md`
 + split view desktop).
 
+Skills do repo em `skills/` (symlinkadas em `~/.claude/skills/` pelo installer):
+`orquestrar` — esta sessão vira líder de um grupo multi-repo (cria/pareia sessões via
+cp-send, escreve o contrato do grupo, distribui escopo, monitora e consolida).
+
 **Instalar/atualizar numa máquina** (após `git pull`):
 
 ```bash
-./scripts/install-cp-send.sh    # symlink ~/.local/bin/cp-send + bloco "Sessões-irmãs" no ~/.claude/CLAUDE.md (idempotente)
+./scripts/install-cp-send.sh    # symlink ~/.local/bin/cp-send + skills/* + bloco "Sessões-irmãs" no ~/.claude/CLAUDE.md (idempotente)
 systemctl --user restart claude-pocket-backend.service   # API de pareamento/preview
 npm --prefix frontend run build                          # só se o front for servido estático (vite dev pega via HMR)
 ```
