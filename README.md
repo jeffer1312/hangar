@@ -5,11 +5,17 @@
 *Third-party tool for Claude Code. Not affiliated with or endorsed by Anthropic; "Claude" is a trademark of Anthropic, PBC.*
 
 <p align="center">
-  <img src="docs/img/mobile-list.png" width="260" alt="Session list on the phone — live states, pairing badges, branches" />
+  <img src="docs/img/mobile-list.png" width="260" alt="Session list on the phone — needs-you feed, live states, pairing badges" />
   <img src="docs/img/mobile-chat.png" width="260" alt="Chat on the phone — full markdown, code blocks, model picker, cost" />
 </p>
 <p align="center">
-  <img src="docs/img/desktop-chat.png" width="720" alt="Desktop two-column shell — sidebar + wide chat" />
+  <img src="docs/img/desktop-board.png" width="800" alt="Board — kanban of live sessions by state, each card a live mini-chat with tappable answers" />
+</p>
+<p align="center">
+  <img src="docs/img/desktop-canvas.png" width="800" alt="Canvas — free-form draggable session tiles, paired sessions framed as a group" />
+</p>
+<p align="center">
+  <img src="docs/img/desktop-chat.png" width="800" alt="Desktop two-column shell — sidebar + wide chat" />
 </p>
 
 ## Highlights
