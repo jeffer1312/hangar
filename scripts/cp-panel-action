@@ -20,7 +20,7 @@ import sys
 # resolve(): o script roda via symlink em ~/.local/bin — sem resolver, o import do módulo
 # irmão procuraria em ~/.local/bin em vez de scripts/ do repo.
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from cp_panel_common import PanelError, api  # noqa: E402
+from cp_panel_common import WRITE_TIMEOUT, PanelError, api  # noqa: E402
 
 
 def op_info(addr: str) -> dict:
@@ -30,9 +30,12 @@ def op_info(addr: str) -> dict:
     try:
         files = api(addr, "GET", "/api/sessions/{name}/git/files")
         n = len(files if isinstance(files, list) else files.get("files", []))
-    except PanelError:
-        # cwd fora de repo git é caso NORMAL (ex: sessão em ~), não falha: o menu só esconde
-        # as ações de git em vez de mostrar erro vermelho.
+    except PanelError as e:
+        # SÓ "não é repo git" é caso normal (sessão em ~) e vira menu sem git. Rede caída ou
+        # token errado tem que APARECER: engolir tudo aqui escondia falha real como se a pasta
+        # simplesmente não tivesse git.
+        if "not a git repository" not in str(e):
+            raise
         return {"ok": True, "branch": "", "changed": 0, "git": False,
                 "message": "sem repositório git"}
     return {"ok": True, "branch": branch or "?", "changed": n, "git": True,
@@ -45,10 +48,17 @@ def op_commit(addr: str, msg: str, push: bool) -> dict:
     paths = [f["path"] if isinstance(f, dict) else f for f in items]
     if not paths:
         return {"ok": False, "message": "nada modificado pra commitar"}
-    api(addr, "POST", "/api/sessions/{name}/git/commit", {"message": msg, "paths": paths})
+    api(addr, "POST", "/api/sessions/{name}/git/commit", {"message": msg, "paths": paths},
+        timeout=WRITE_TIMEOUT)
     if not push:
         return {"ok": True, "message": f"commit de {len(paths)} arquivo(s)"}
-    api(addr, "POST", "/api/sessions/{name}/git/push")
+    try:
+        api(addr, "POST", "/api/sessions/{name}/git/push", timeout=WRITE_TIMEOUT)
+    except PanelError as e:
+        # Commit e push são chamadas separadas, sem transação: reportar só o erro do push
+        # escondia que o commit JÁ EXISTE local. O usuário tentaria de novo e ouviria "nada
+        # modificado" — sem nunca saber que tem commit pendente de push.
+        return {"ok": False, "message": f"commit local OK ({len(paths)} arquivo(s)), push falhou: {e}"}
     return {"ok": True, "message": f"commit de {len(paths)} arquivo(s) + push"}
 
 
@@ -75,14 +85,17 @@ def main() -> int:
             r = api(addr, "POST", "/api/sessions/{name}/git", {"action": action})
             # git_action devolve ok=False com a saída real quando o comando falha (ex: pull com
             # conflito). Propagar isso: dizer "pull ok" num merge sujo seria mentira.
-            text = (r.get("output") or "").strip().splitlines()
-            out = {"ok": bool(r.get("ok")), "message": (text[-1] if text else action) [:120]}
+            lines = [x for x in (r.get("output") or "").splitlines() if x.strip()]
+            # PRIMEIRA linha, não a última: erro de git tem o motivo no topo ("fatal: Could not
+            # read from remote repository.") e continuação embaixo — pegar o fim entregava
+            # fragmento solto ("and the repository exists.") sem o motivo.
+            out = {"ok": bool(r.get("ok")), "message": (lines[0] if lines else action)[:140]}
         elif op == "commit":
             out = op_commit(addr, " ".join(rest) or "wip", push=False)
         elif op == "commit-push":
             out = op_commit(addr, " ".join(rest) or "wip", push=True)
         elif op == "push":
-            api(addr, "POST", "/api/sessions/{name}/git/push")
+            api(addr, "POST", "/api/sessions/{name}/git/push", timeout=WRITE_TIMEOUT)
             out = {"ok": True, "message": "push feito"}
         else:
             out = {"ok": False, "message": f"operação desconhecida: {op}"}

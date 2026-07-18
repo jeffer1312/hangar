@@ -75,8 +75,16 @@ def main() -> int:
     # paralelo: sequencial, o custo era a SOMA das latências e um peer no timeout (4s) estourava
     # o intervalo de poll do painel. Em paralelo o pior caso é o servidor mais lento.
     targets = [("local", None, local_base(), token, "")]
-    targets += [(pid, pid, cfg.get("base_url", ""), cfg.get("token", ""),
-                 cfg.get("web_url") or cfg.get("base_url", "")) for pid, cfg in known.items()]
+    for pid, cfg in known.items():
+        # `or ""`, não `.get(k, "")`: chave presente com valor null (typo comum ao editar à mão)
+        # passava batido e só estourava no rstrip, DENTRO da thread — o erro subia no pool.map,
+        # fora de qualquer try, e matava a coleta inteira (a local junto). Peer malformado tem
+        # que virar linha de erro, não derrubar o painel.
+        base, tok = (cfg.get("base_url") or ""), (cfg.get("token") or "")
+        if not base or not tok:
+            errors.append(f"{pid}: entrada sem base_url ou token no peers.json")
+            continue
+        targets.append((pid, pid, base, tok, cfg.get("web_url") or base))
 
     attached = attached_locally()
 
@@ -84,7 +92,7 @@ def main() -> int:
         label, server, base, tok, web = t
         try:
             return label, [slim(s, server, web, attached) for s in fetch(base, tok)], None
-        except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
+        except Exception as e:   # falha de UM servidor nunca derruba a coleta dos outros
             return label, [], str(e)
 
     with ThreadPoolExecutor(max_workers=max(1, len(targets))) as pool:

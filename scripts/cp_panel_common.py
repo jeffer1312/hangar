@@ -9,6 +9,11 @@ from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parent.parent / "backend"
 TIMEOUT = 8
+# Operação de ESCRITA (commit/push) precisa de folga MAIOR que o timeout do subprocesso git do
+# backend (git_ops._TIMEOUT = 20). Com o timeout curto, um push lento (link ruim, diff grande)
+# estourava aqui e virava "servidor inacessível" — mentira: o push seguia rodando lá e podia
+# até completar, deixando o usuário sem saber se caiu ou não.
+WRITE_TIMEOUT = 30
 
 
 class PanelError(Exception):
@@ -44,14 +49,19 @@ def resolve(address: str) -> tuple[str, str, str]:
     if "::" not in address:
         return local_base(), env("CP_AUTH_TOKEN"), address
     server, _, name = address.partition("::")
-    cfg = peers().get(server)
+    known = peers()
+    cfg = known.get(server)
     if not cfg:
-        known = ", ".join(peers()) or "nenhum"
-        raise PanelError(f"servidor '{server}' desconhecido (conhecidos: {known})")
-    return cfg["base_url"].rstrip("/"), cfg["token"], name
+        raise PanelError(f"servidor '{server}' desconhecido (conhecidos: {', '.join(known) or 'nenhum'})")
+    # `or ""`, não `.get(k, "")`: chave presente com valor null (typo comum ao editar à mão)
+    # passava batido e estourava AttributeError/KeyError cru lá na frente.
+    base, token = (cfg.get("base_url") or ""), (cfg.get("token") or "")
+    if not base or not token:
+        raise PanelError(f"peers.json: entrada '{server}' sem base_url ou token")
+    return base.rstrip("/"), token, name
 
 
-def api(address: str, method: str, path: str, body: dict | None = None):
+def api(address: str, method: str, path: str, body: dict | None = None, timeout: int = TIMEOUT):
     """Chama a API do servidor DONO da sessão. `path` usa {name} como placeholder do nome."""
     base, token, name = resolve(address)
     url = base + path.replace("{name}", urllib.parse.quote(name, safe=""))
@@ -60,9 +70,14 @@ def api(address: str, method: str, path: str, body: dict | None = None):
                                  headers={"Authorization": f"Bearer {token}",
                                           "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode()
-            return json.loads(raw) if raw else {}
+            try:
+                return json.loads(raw) if raw else {}
+            except ValueError as e:
+                # 200 com corpo não-JSON (proxy devolvendo HTML, backend cuspindo texto):
+                # sem isto o ValueError subia cru e quebrava o contrato "sempre imprime JSON".
+                raise PanelError(f"resposta não-JSON de {base}: {e}") from e
     except urllib.error.HTTPError as e:
         # detail do FastAPI é a mensagem ÚTIL ("sessao nao encontrada"); sem extrair, o usuário
         # via só "HTTP 404" e não tinha como se corrigir.

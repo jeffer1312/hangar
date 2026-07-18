@@ -46,7 +46,10 @@ class TrayItem(dbus.service.Object):
     # --- estado ---------------------------------------------------------------------------
     @property
     def status(self) -> str:
-        return "NeedsAttention" if self.awaiting else "Active"
+        # problem também entra: com só `awaiting`, uma falha PERSISTENTE de poll zerava as
+        # contagens e o ícone virava idêntico a "tudo ocioso" — a olhada rápida na bandeja não
+        # distinguia "nada a fazer" de "não consigo saber". A causa fica no tooltip.
+        return "NeedsAttention" if (self.awaiting or self.problem) else "Active"
 
     def tooltip_text(self) -> str:
         if self.problem:
