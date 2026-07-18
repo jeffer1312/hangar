@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""cp-panel-open <sessao> — abre a sessão tmux no desktop, sem duplicar cliente.
+
+Se já existe uma janela de terminal com a sessão attachada, FOCA ela. Só abre terminal novo
+quando não existe nenhuma: `tmux attach` num alvo já attachado cria um SEGUNDO cliente, e o
+tmux encolhe a sessão pro menor cliente — o terminal que já estava aberto ficaria espremido.
+
+Detecção pelo TÍTULO da janela (o tmux põe o nome da sessão nele), não por pid: o kitty roda
+single-instance, então todas as janelas compartilham o mesmo pid e casar por pid não separa uma
+da outra. Sem janela correspondente, degrada pro terminal novo (comportamento antigo).
+"""
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+TERM_CLASSES = {"kitty", "foot", "alacritty", "wezterm", "org.wezfurlong.wezterm"}
+
+
+def find_window(name: str) -> str | None:
+    """Endereço da janela de terminal cujo título é a sessão (exato > prefixo). None se não há."""
+    try:
+        out = subprocess.run(["hyprctl", "clients", "-j"], capture_output=True, text=True,
+                             timeout=5, check=True).stdout
+        clients = json.loads(out)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    terms = [c for c in clients if str(c.get("class", "")).lower() in TERM_CLASSES]
+    for match in (lambda t: t == name, lambda t: t.startswith(name)):
+        for c in terms:
+            if match(str(c.get("title", ""))) and c.get("address"):
+                return c["address"]
+    return None
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        print("uso: cp-panel-open <sessao>", file=sys.stderr)
+        return 2
+    name = sys.argv[1]
+
+    addr = find_window(name)
+    if addr:
+        # Sintaxe LUA obrigatória: neste rice o hyprctl (e o próprio socket IPC) roda o dispatch
+        # como Lua — o "focuswindow address:0x..." clássico é rejeitado como sintaxe inválida.
+        subprocess.run(["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "address:{addr}" }})'],
+                       check=False)
+        return 0
+
+    term = next((t for t in ("kitty", "foot", "alacritty") if shutil.which(t)), None)
+    if not term:
+        print("erro: nenhum terminal conhecido encontrado (kitty/foot/alacritty)", file=sys.stderr)
+        return 1
+    # -A: attacha se existe, cria se não — sessão morta entre o poll e o clique não vira erro mudo.
+    os.execvp(term, [term, "-e", "tmux", "new-session", "-A", "-s", name])
+
+
+if __name__ == "__main__":
+    sys.exit(main())

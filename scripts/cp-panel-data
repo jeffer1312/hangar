@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""cp-panel-data — snapshot JSON de TODAS as sessões (deste servidor + peers) pro painel do
+Quickshell. Existe pra manter o QML burro: ele só roda isto e faz JSON.parse, sem token, sem
+merge de servidor, sem HTTP na mão.
+
+Saída: {"sessions": [...], "errors": [...]} — sessão local tem server=null e address=<nome>;
+remota tem server=<id> e address=<id>::<nome> (o mesmo endereço que o cp-send aceita).
+Servidor fora do ar entra em errors e NÃO derruba o resto (painel degrada, não some).
+"""
+import json
+import os
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+
+# resolve(): roda via symlink em ~/.local/bin — sem resolver, o import iria procurar lá.
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from cp_panel_common import PanelError, env, local_base, peers  # noqa: E402
+
+TIMEOUT = 4
+
+# Campos que o painel usa. Enxugar aqui evita despejar o transcript inteiro no QML a cada poll.
+KEEP = ("name", "cwd", "state", "branch", "status_line", "question", "options", "stalled",
+        "limited", "pair_peers", "provider", "last_activity")
+
+
+def fetch(base_url: str, token: str) -> list[dict]:
+    req = urllib.request.Request(f"{base_url.rstrip('/')}/api/sessions",
+                                 headers={"Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        return json.load(resp)
+
+
+def attached_locally() -> set[str]:
+    """Sessões tmux DESTA máquina com pelo menos um cliente. Diz ao painel se o clique vai focar
+    um terminal já aberto ou abrir um novo. Só faz sentido local — sessão remota abre a web UI."""
+    try:
+        out = subprocess.run(["tmux", "list-clients", "-F", "#{session_name}"],
+                             capture_output=True, text=True, timeout=3, check=True).stdout
+        return {line.strip() for line in out.splitlines() if line.strip()}
+    except (OSError, subprocess.SubprocessError):
+        return set()      # sem tmux/servidor: ninguém attachado, não é erro pro painel.
+
+
+def slim(s: dict, server: str | None, web: str = "", attached: set[str] = frozenset()) -> dict:
+    out = {k: s.get(k) for k in KEEP}
+    out["server"] = server
+    out["address"] = f"{server}::{s['name']}" if server else s["name"]
+    # local=True: só nestas dá pra `tmux attach` nesta máquina; remota abre a web UI.
+    out["local"] = server is None
+    # web_url: onde o painel abre a sessão remota. Vem do peers.json ("web_url", senão base_url)
+    # — NÃO dá pra derivar do id: nem todo servidor está atrás de tailscale serve (um responde
+    # em IP:porta crua), então um padrão chumbado tipo <id>.ts.net abriria link quebrado.
+    out["web_url"] = f"{web.rstrip('/')}/#/{s['name']}" if web else ""
+    out["attached"] = server is None and s["name"] in attached
+    # group: chave de seção do painel. Local e remoto viram blocos separados porque a AÇÃO é
+    # outra — local attacha no terminal daqui, remota só abre no navegador.
+    out["group"] = server or "local"
+    return out
+
+
+def main() -> int:
+    token = env("CP_AUTH_TOKEN")
+    sessions: list[dict] = []
+    errors: list[str] = []
+
+    try:
+        known = peers()
+    except PanelError as e:
+        known, _ = {}, errors.append(str(e))
+
+    # (label, server_id, base_url, token, web_url) — local junto dos peers pra buscar tudo em
+    # paralelo: sequencial, o custo era a SOMA das latências e um peer no timeout (4s) estourava
+    # o intervalo de poll do painel. Em paralelo o pior caso é o servidor mais lento.
+    targets = [("local", None, local_base(), token, "")]
+    targets += [(pid, pid, cfg.get("base_url", ""), cfg.get("token", ""),
+                 cfg.get("web_url") or cfg.get("base_url", "")) for pid, cfg in known.items()]
+
+    attached = attached_locally()
+
+    def one(t: tuple) -> tuple:
+        label, server, base, tok, web = t
+        try:
+            return label, [slim(s, server, web, attached) for s in fetch(base, tok)], None
+        except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
+            return label, [], str(e)
+
+    with ThreadPoolExecutor(max_workers=max(1, len(targets))) as pool:
+        for label, got, err in pool.map(one, targets):
+            sessions += got
+            if err:
+                errors.append(f"{label}: {err}")
+
+    # Ordem: bloco local primeiro (é onde dá pra agir direto), depois um bloco por servidor
+    # remoto em ordem alfabética. DENTRO de cada bloco, awaiting_input primeiro (exige ação),
+    # depois working, idle por último; nome desempata. A seção do painel depende desta ordem —
+    # ListView agrupa por vizinhança, então registro fora de ordem quebraria o bloco em dois.
+    rank = {"awaiting_input": 0, "working": 1}
+    sessions.sort(key=lambda s: (s["server"] is not None, s["server"] or "",
+                                 rank.get(s["state"], 2), s["name"]))
+    json.dump({"sessions": sessions, "errors": errors}, sys.stdout, ensure_ascii=False)
+    print()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
