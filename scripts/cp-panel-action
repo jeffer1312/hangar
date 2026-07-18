@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""cp-panel-action <endereço> <operação> [args] — ações do menu de contexto do painel.
+
+    info                 branch + arquivos modificados (pro cabeçalho do menu)
+    rename <novo>        renomeia a sessão
+    kill                 encerra a sessão tmux
+    git <ação>           pull | fetch | status  (ações de LEITURA/atualização, sem reescrever)
+    commit <msg>         commita TUDO que está modificado (sem push)
+    push                 push da branch atual
+    commit-push <msg>    commit + push numa tacada
+
+Tudo pela API do servidor DONO da sessão (endereço servidor::sessao funciona igual), então
+rename/git valem também pras sessões remotas — o que NÃO dá remoto é só o attach no terminal.
+Sempre imprime JSON: {"ok": bool, "message": str, ...}. O QML só mostra a message.
+"""
+import json
+import os
+import sys
+
+# resolve(): o script roda via symlink em ~/.local/bin — sem resolver, o import do módulo
+# irmão procuraria em ~/.local/bin em vez de scripts/ do repo.
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from cp_panel_common import PanelError, api  # noqa: E402
+
+
+def op_info(addr: str) -> dict:
+    sessions = api(addr, "GET", "/api/sessions")
+    name = addr.split("::")[-1]
+    branch = next((s.get("branch") for s in sessions if s.get("name") == name), None)
+    try:
+        files = api(addr, "GET", "/api/sessions/{name}/git/files")
+        n = len(files if isinstance(files, list) else files.get("files", []))
+    except PanelError:
+        # cwd fora de repo git é caso NORMAL (ex: sessão em ~), não falha: o menu só esconde
+        # as ações de git em vez de mostrar erro vermelho.
+        return {"ok": True, "branch": "", "changed": 0, "git": False,
+                "message": "sem repositório git"}
+    return {"ok": True, "branch": branch or "?", "changed": n, "git": True,
+            "message": f"{branch or '?'} · {n} modificado(s)"}
+
+
+def op_commit(addr: str, msg: str, push: bool) -> dict:
+    files = api(addr, "GET", "/api/sessions/{name}/git/files")
+    items = files if isinstance(files, list) else files.get("files", [])
+    paths = [f["path"] if isinstance(f, dict) else f for f in items]
+    if not paths:
+        return {"ok": False, "message": "nada modificado pra commitar"}
+    api(addr, "POST", "/api/sessions/{name}/git/commit", {"message": msg, "paths": paths})
+    if not push:
+        return {"ok": True, "message": f"commit de {len(paths)} arquivo(s)"}
+    api(addr, "POST", "/api/sessions/{name}/git/push")
+    return {"ok": True, "message": f"commit de {len(paths)} arquivo(s) + push"}
+
+
+def main() -> int:
+    if len(sys.argv) < 3:
+        print(json.dumps({"ok": False, "message": "uso: cp-panel-action <endereço> <operação> [args]"}))
+        return 2
+    addr, op, rest = sys.argv[1], sys.argv[2], sys.argv[3:]
+
+    try:
+        if op == "info":
+            out = op_info(addr)
+        elif op == "rename":
+            if not rest or not rest[0].strip():
+                out = {"ok": False, "message": "nome vazio"}
+            else:
+                r = api(addr, "POST", "/api/sessions/{name}/rename", {"new": rest[0]})
+                out = {"ok": True, "message": f"renomeada para {r.get('name', rest[0])}"}
+        elif op == "kill":
+            api(addr, "DELETE", "/api/sessions/{name}")
+            out = {"ok": True, "message": "sessão encerrada"}
+        elif op == "git":
+            action = rest[0] if rest else "status"
+            r = api(addr, "POST", "/api/sessions/{name}/git", {"action": action})
+            # git_action devolve ok=False com a saída real quando o comando falha (ex: pull com
+            # conflito). Propagar isso: dizer "pull ok" num merge sujo seria mentira.
+            text = (r.get("output") or "").strip().splitlines()
+            out = {"ok": bool(r.get("ok")), "message": (text[-1] if text else action) [:120]}
+        elif op == "commit":
+            out = op_commit(addr, " ".join(rest) or "wip", push=False)
+        elif op == "commit-push":
+            out = op_commit(addr, " ".join(rest) or "wip", push=True)
+        elif op == "push":
+            api(addr, "POST", "/api/sessions/{name}/git/push")
+            out = {"ok": True, "message": "push feito"}
+        else:
+            out = {"ok": False, "message": f"operação desconhecida: {op}"}
+    except PanelError as e:
+        out = {"ok": False, "message": str(e)}
+
+    print(json.dumps(out, ensure_ascii=False))
+    return 0 if out.get("ok") else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
