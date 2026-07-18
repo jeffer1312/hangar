@@ -91,6 +91,27 @@ npm run dev            # open it, set the API base URL + token on the Login scre
 
 Run the backend tests with `cd backend && uv run pytest -v`.
 
+## Sibling sessions, pairing & orchestration (cp-send)
+
+Sessions on the same machine can talk to each other through the backend via
+`scripts/cp-send` — list live sessions, send a prompt to another session (durable
+queue if it's busy), and **pair** N sessions into a working group: the backend
+injects a collaboration protocol into every member and gives the group a shared
+markdown contract, shown in the app's PairSheet. `cp-send --new <name> [cwd]`
+spawns a new app-managed session (proper `--session-id`, visible in the UI).
+
+```bash
+./scripts/install-cp-send.sh   # or say yes at install.sh step 6/6
+```
+
+The installer symlinks `cp-send` into `~/.local/bin`, adds a "sibling sessions"
+block to your global `~/.claude/CLAUDE.md` (so every Claude session knows the
+tool), and symlinks the repo's `skills/` into `~/.claude/skills/` — including
+**`orquestrar`**, a skill that turns a session into the *lead* of a multi-repo
+task: it creates/pairs one visible session per repo, writes the group contract,
+distributes scope, monitors progress reports and consolidates a final status
+board, while pushes and merges stay with you.
+
 ## Environment Variables
 
 | Var | Default | Purpose |
