@@ -72,7 +72,9 @@ insere_bloco "$HOME/.config/hypr/custom/keybinds.lua" "panel-bind" \
 'hl.bind("SUPER + SHIFT + U", hl.dsp.global("claude-pocket:toggle"), { description = "Claude Pocket: painel de sessões" })'
 
 insere_bloco "$HOME/.config/hypr/custom/execs.lua" "panel-exec" \
-'hl.exec_cmd("qs -c claude-pocket")
+'-- -n/--no-duplicate: o autostart re-executa a CADA hyprctl reload; sem isto cada reload
+-- somava mais uma instância do painel (chegou a 7 numa sessão de desenvolvimento).
+hl.exec_cmd("qs -n -c claude-pocket")
 -- Ícone na bandeja (SNI). sleep: precisa do StatusNotifierWatcher da barra já no barramento.
 hl.exec_cmd("bash -c \"sleep 5; $HOME/.local/bin/cp-panel-tray\"")'
 
