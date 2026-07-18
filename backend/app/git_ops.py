@@ -1,3 +1,4 @@
+import os
 import re
 import subprocess
 
@@ -27,6 +28,11 @@ def _run(cwd: str, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
             ["git", "-C", cwd, *args],
             capture_output=True, text=True, timeout=_TIMEOUT,
+            # LC_ALL=C: a saida do git aqui e LIDA POR CODIGO (ex: detectar "not a git
+            # repository" pra esconder o menu de git em vez de reportar erro). Numa maquina com
+            # catalogo NLS do git instalado, a mensagem sairia traduzida e a checagem quebraria
+            # calada. Idioma da mensagem nao e superficie de usuario -- ela e dado.
+            env={**os.environ, "LC_ALL": "C", "LANGUAGE": "C"},
         )
     except FileNotFoundError:
         raise GitError(500, "git nao encontrado")
