@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run claude-pocket back + front as persistent systemd *user* services.
+# Run claude-cockpit back + front as persistent systemd *user* services.
 #
 # They keep running after you close the terminal (and across logout/reboot if
 # `loginctl enable-linger $USER` is set). The frontend runs `vite` (`npm run dev`)
@@ -18,8 +18,8 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SD_DIR="$HOME/.config/systemd/user"
-BACK="claude-pocket-backend.service"
-FRONT="claude-pocket-frontend.service"
+BACK="claude-cockpit-backend.service"
+FRONT="claude-cockpit-frontend.service"
 
 # Stable node/npm dir (fnm's `default` alias — survives shell exit, unlike the
 # ephemeral fnm_multishells PATH). uvicorn is launched via the system `uv`.
@@ -55,7 +55,7 @@ mkdir -p "$SD_DIR"
 log "Writing $BACK"
 cat > "$SD_DIR/$BACK" <<EOF
 [Unit]
-Description=claude-pocket backend (FastAPI/uvicorn)
+Description=claude-cockpit backend (FastAPI/uvicorn)
 After=network.target
 
 [Service]
@@ -74,7 +74,7 @@ EOF
 log "Writing $FRONT"
 cat > "$SD_DIR/$FRONT" <<EOF
 [Unit]
-Description=claude-pocket frontend (Vite dev, HMR)
+Description=claude-cockpit frontend (Vite dev, HMR)
 After=network.target
 
 [Service]

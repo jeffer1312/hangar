@@ -1,8 +1,10 @@
-# claude-pocket
+# claude-cockpit
 
 Drive a live [Claude Code](https://code.claude.com) session from your phone — over your own LAN/VPN, no vendor cloud — as a clean mobile chat.
 
-You leave `claude` running in a `tmux` session on your machine. claude-pocket exposes that **same live session** to a phone: it renders the conversation as chat, shows what Claude is doing right now, and lets you send prompts, answer Claude's interactive questions, and interrupt — all from an iPhone on the couch.
+*Third-party tool for Claude Code. Not affiliated with or endorsed by Anthropic; "Claude" is a trademark of Anthropic, PBC.*
+
+You leave `claude` running in a `tmux` session on your machine. claude-cockpit exposes that **same live session** to a phone: it renders the conversation as chat, shows what Claude is doing right now, and lets you send prompts, answer Claude's interactive questions, and interrupt — all from an iPhone on the couch.
 
 > **Status:** Backend is complete and tested (300+ passing tests, CI on every push). The Svelte PWA frontend is feature-rich — chat with live streaming preview, uploads, git ops, slash commands, workflows, model picker, native AskUserQuestion, permission prompts as tappable cards, durable input queue (send while Claude works), per-session composer drafts, session archive (browse dead conversations), multi-server, web push notifications, and a costs dashboard. Typically run over a Tailscale tailnet (`tailscale serve` → HTTPS). Personal-use, single-user tool.
 
@@ -11,7 +13,7 @@ You leave `claude` running in a `tmux` session on your machine. claude-pocket ex
 ## Quickstart
 
 ```bash
-git clone https://github.com/jeffer1312/claude-pocket && cd claude-pocket
+git clone https://github.com/jeffer1312/claude-cockpit && cd claude-cockpit
 ./install.sh        # checa deps, instala backend+frontend, gera token, oferece wrapper + serviços
 ```
 
@@ -20,7 +22,7 @@ Then open the URL from the backend's startup QR on your phone and paste the toke
 
 ## Why
 
-The official remote options route through a vendor cloud. claude-pocket stays entirely on your own network: the phone talks to a small server on your machine, which talks to your already-running `claude`. Nothing leaves your LAN.
+The official remote options route through a vendor cloud. claude-cockpit stays entirely on your own network: the phone talks to a small server on your machine, which talks to your already-running `claude`. Nothing leaves your LAN.
 
 ## How it works
 
@@ -57,7 +59,7 @@ a tmux session named after the folder, with a unique `--session-id`. That id is 
 session to its own transcript — so you can open **many sessions in the same folder** and none of them
 leak into or overwrite another. A `claude` started **without** it (no `--session-id`, or outside
 tmux) is either invisible to the app or shows up flagged **⚠ no id** with its chat disabled. The
-installer also adds the tmux truecolor + window-rename config, and offers to set the claude-pocket
+installer also adds the tmux truecolor + window-rename config, and offers to set the claude-cockpit
 statusline (`scripts/omniroute-statusline.js`) as your Claude `statusLine` — that's the format the
 app parses into the model / context / cost / rate-limit badges (decline to keep your own; pass
 `--no-statusline` to skip). Bypass the wrapper anytime with `command claude`.
@@ -124,7 +126,7 @@ board, while pushes and merges stay with you.
 | `CP_SCAN_ROOTS` | — | Comma-separated paths for "New session" folder picker. |
 | `CP_SYNC` | `false` | Enable cloud-sync hub (`/api/sync/*` routes) and "Criar acesso" registration. |
 | `CP_SYNC_BOOTSTRAP` | — | One-time bootstrap secret for first-run account registration; locks after first use. |
-| `CP_SYNC_DATA` | `~/.claude-pocket/sync-vault.json` | Path to encrypted server-list vault file. |
+| `CP_SYNC_DATA` | `~/.claude-cockpit/sync-vault.json` | Path to encrypted server-list vault file. |
 | `CP_SYNC_SESSION_SECRET` | — | HMAC key for session cookies; empty = random per process (logout on restart). |
 
 ## API

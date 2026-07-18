@@ -1,4 +1,4 @@
-# claude-pocket
+# claude-cockpit
 
 Drive a live Claude Code session (running in a `tmux` session on your machine) from your phone over
 LAN/VPN, as a mobile chat. Single-user, LAN/VPN-only by design. Backend: Python 3.14 + FastAPI
@@ -83,7 +83,7 @@ cp-send, escreve o contrato do grupo, distribui escopo, monitora e consolida).
 
 ```bash
 ./scripts/install-cp-send.sh    # symlink ~/.local/bin/cp-send + skills/* + bloco "Sessões-irmãs" no ~/.claude/CLAUDE.md (idempotente)
-systemctl --user restart claude-pocket-backend.service   # API de pareamento/preview
+systemctl --user restart claude-cockpit-backend.service   # API de pareamento/preview
 npm --prefix frontend run build                          # só se o front for servido estático (vite dev pega via HMR)
 ```
 

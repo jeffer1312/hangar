@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Auto-deploy do claude-pocket: pull da main -> build -> restart. Disparado pela unit
-# 'claude-pocket-deploy.service' (que o webhook do GitHub aciona), ou manual pra testar.
+# Auto-deploy do claude-cockpit: pull da main -> build -> restart. Disparado pela unit
+# 'claude-cockpit-deploy.service' (que o webhook do GitHub aciona), ou manual pra testar.
 #
 #   ./scripts/deploy.sh            # deploy se houver commit novo na origin/main
 #   ./scripts/deploy.sh --force    # rebuild+restart mesmo sem commit novo
@@ -18,8 +18,8 @@ NODE_BIN="$HOME/.local/share/fnm/aliases/default/bin"
 export PATH="$NODE_BIN:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
-BACK="claude-pocket-backend.service"
-FRONT="claude-pocket-frontend.service"
+BACK="claude-cockpit-backend.service"
+FRONT="claude-cockpit-frontend.service"
 FORCE="${1:-}"
 
 log() { printf '%s [deploy] %s\n' "$(date '+%F %T')" "$*"; }

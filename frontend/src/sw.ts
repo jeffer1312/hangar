@@ -36,7 +36,7 @@ self.addEventListener('push', (event) => {
   }
   event.waitUntil(
     (async () => {
-      await self.registration.showNotification(data.title || 'Claude Pocket', {
+      await self.registration.showNotification(data.title || 'Claude Cockpit', {
         body: data.body || 'Aguardando sua resposta',
         // tag explicito (coalescido: mesma tag CONSTANTE pra N sessoes) sobrepoe o default (a
         // sessao) -> mesma sessao/grupo substitui a notif anterior em vez de empilhar.

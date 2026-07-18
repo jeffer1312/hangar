@@ -115,7 +115,7 @@
 
 <div class="login-screen">
   <div class="login-content">
-    <h1 class="app-name">Claude Pocket</h1>
+    <h1 class="app-name">Claude Cockpit</h1>
     <p class="app-tagline">Controle suas sessões de qualquer lugar</p>
 
     {#if syncMode}
