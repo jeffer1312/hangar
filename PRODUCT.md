@@ -1,4 +1,4 @@
-# claude-pocket — Product Context
+# claude-cockpit — Product Context
 
 **Register:** product (app UI — design serves the tool, not the marketing).
 
