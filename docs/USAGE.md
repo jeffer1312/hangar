@@ -146,7 +146,40 @@ chat largo. O fluxo mobile fica intacto abaixo de 820px.
   primeiro push).
 - **Histórico:** tocar/clicar num commit mostra os arquivos alterados e o diff de cada um.
 
-## 5. Sync na nuvem (opcional)
+## 5. Sessões-irmãs, pareamento e orquestração (cp-send)
+
+Sessões Claude da mesma máquina conversam entre si pelo backend via `scripts/cp-send`:
+
+```bash
+cp-send --list                    # sessões vivas (nome, estado, cwd)
+cp-send api-fix "mensagem"        # manda prompt pra outra sessão (fila se ocupada)
+cp-send --pair api-fix "tarefa"   # pareia ESTA sessão com outra num grupo de trabalho
+cp-send --group "terminei"        # aviso de marco pro grupo todo (unidirecional)
+cp-send --new front ~/repo/front  # cria sessão nova gerenciada pelo app (visível na UI)
+```
+
+**Instalar** (uma vez por máquina; o passo 6/6 do `install.sh` também oferece):
+
+```bash
+./scripts/install-cp-send.sh
+```
+
+O installer symlinka o `cp-send` em `~/.local/bin`, adiciona o bloco "Sessões-irmãs"
+no `~/.claude/CLAUDE.md` global (toda sessão Claude nova passa a conhecer a ferramenta)
+e symlinka as skills do repo (`skills/*`) em `~/.claude/skills/`.
+
+**Pareamento:** `--pair` registra um grupo no app (badge 🤝 na lista, PairSheet com a
+conversa do par + contrato compartilhado em markdown) e injeta o protocolo de
+colaboração em cada membro — cada sessão mexe só no próprio repo, recados 1:1 por
+iniciativa própria dentro da tarefa, push/merge continuam com o usuário. Pareando
+N sessões uma a uma os grupos se fundem num só.
+
+**Skill `orquestrar`:** pra tarefa que atravessa vários repos. A sessão em que você
+pedir "orquestra a tarefa X nos repos A e B" vira a **líder**: cria/pareia uma sessão
+visível por repo, escreve o contrato do grupo, distribui o escopo, acompanha os
+reportes de teste e consolida o painel final — você só aprova os marcos (push, MR).
+
+## 6. Sync na nuvem (opcional)
 
 Para sincronizar a lista de servidores entre múltiplos PCs no mesmo celular, ative o hub de sincronização na nuvem:
 
@@ -178,7 +211,7 @@ CP_AUTH_TOKEN=$(openssl rand -hex 24) CP_SYNC=1 CP_SYNC_BOOTSTRAP=$(openssl rand
 **Padrão (desativado):**
 - Sem `CP_SYNC=1`: o app funciona como antes — servidor único + token/QR, zero sincronização.
 
-## 6. Problemas comuns
+## 7. Problemas comuns
 
 | Sintoma | Causa / fix |
 |---|---|
@@ -188,7 +221,7 @@ CP_AUTH_TOKEN=$(openssl rand -hex 24) CP_SYNC=1 CP_SYNC_BOOTSTRAP=$(openssl rand
 | Não vejo código novo após mudar | PWA com service worker servindo JS velho → **hard reload** / limpar dados do site / re-adicionar o PWA. |
 | Backend reiniciar | precisa do cwd=`backend` (`python -m app.main` acha `app`). Sem `--reload` (trava SSE no SIGTERM). |
 
-## 7. Segurança (resumo)
+## 8. Segurança (resumo)
 
 - Bind só na LAN/VPN, **nunca** interface pública; **nunca** port-forward no roteador.
 - O token é a senha — trate como senha de shell. TLS na frente (Caddy/Tailscale) antes de uso real.

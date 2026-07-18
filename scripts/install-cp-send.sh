@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # install-cp-send.sh — instala o cp-send NESTA máquina e ensina o Claude local a usar.
 #
-# Faz duas coisas (idempotente; re-rodar atualiza):
+# Faz três coisas (idempotente; re-rodar atualiza):
 #   1. symlink ~/.local/bin/cp-send -> scripts/cp-send deste clone;
 #   2. insere/atualiza a seção "Sessões-irmãs" no ~/.claude/CLAUDE.md global (entre marcadores),
-#      pra toda sessão Claude da máquina saber listar/mandar recado/parear/criar sessões.
+#      pra toda sessão Claude da máquina saber listar/mandar recado/parear/criar sessões;
+#   3. symlink das skills do repo (skills/*) em ~/.claude/skills/ (ex: orquestrar).
 #
 # Rode uma vez por máquina, do clone local:  ./scripts/install-cp-send.sh
 set -euo pipefail
@@ -14,6 +15,14 @@ REPO="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)"
 mkdir -p "$HOME/.local/bin"
 ln -sf "$REPO/scripts/cp-send" "$HOME/.local/bin/cp-send"
 echo "ok: ~/.local/bin/cp-send -> $REPO/scripts/cp-send"
+
+mkdir -p "$HOME/.claude/skills"
+for skill in "$REPO"/skills/*/; do
+    [ -d "$skill" ] || continue
+    name=$(basename "$skill")
+    ln -sfn "${skill%/}" "$HOME/.claude/skills/$name"
+    echo "ok: ~/.claude/skills/$name -> ${skill%/}"
+done
 
 MD="$HOME/.claude/CLAUDE.md"
 START="<!-- claude-pocket:sessoes-irmas:start -->"
