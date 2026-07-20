@@ -181,14 +181,16 @@
   .navbar::before {
     content: "";
     position: absolute;
-    inset: 0 0 -24px 0;       /* estende 24px abaixo p/ o fade do glass */
+    /* Estende abaixo p/ o fade do glass. O MESMO token que as telas usam de padding-top —
+       um número só, os dois lados sempre de acordo. */
+    inset: 0 0 calc(-1 * var(--navbar-fade)) 0;
     z-index: -1;
     pointer-events: none;
     /* "Glass" sem blur (seguro no iOS): solido sob os botoes (legivel) e some num fade de 24px abaixo
        -> o conteudo que rola por baixo aparece esfumado na costura, sem barra dura. */
     background: linear-gradient(to bottom,
       var(--bg-base) 0%,
-      var(--bg-base) calc(100% - 24px),
+      var(--bg-base) calc(100% - var(--navbar-fade)),
       transparent 100%);
   }
   /* Chromium (data-liquid): refracao SVG real. O blur fica — Chromium não tem o bug do WebKit. */

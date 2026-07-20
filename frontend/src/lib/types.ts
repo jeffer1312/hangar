@@ -203,6 +203,13 @@ export interface CostModelBucket {
   model: string;
   sessions: number;
   cost: number;
+  // Opcionais de propósito: a tela junta relatórios de VÁRIOS servidores da malha, e um que ainda
+  // não subiu esta versão responde sem os tokens. Marcar como obrigatório aqui seria mentir sobre
+  // o que chega no fio — todo uso trata como `?? 0`.
+  input?: number;
+  output?: number;
+  cache_read?: number;
+  cache_write?: number;
 }
 
 export interface AccountCost {
