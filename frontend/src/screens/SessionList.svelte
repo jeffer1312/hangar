@@ -10,7 +10,7 @@
   import AccountMenu from '../components/AccountMenu.svelte';
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
   import { getSessions, createSession, deleteSession, renameSession, resumeSession, broadcast } from '../lib/api';
-  import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor } from '../lib/auth';
+  import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, renameServer, updateServer, serverColor } from '../lib/auth';
   import type { AggSession, ResumeCandidate } from '../lib/types';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, sortSessions, clusterByPair } from '../lib/format';
@@ -56,6 +56,20 @@
   function onRenameServer(id: string, label: string) {
     renameServer(id, label);
     sessionsStore.refreshServers();
+  }
+
+  // Trocar o token de um servidor já cadastrado (rotação de CP_AUTH_TOKEN, sem remover+re-parear).
+  // Aceita o token cru OU a URL de pareamento inteira — mesmo parse do fluxo de adicionar.
+  function onUpdateServerToken(id: string, token: string): boolean {
+    // Só o token: o AccountMenu já extraiu e validou (inclusive o caso "URL de pareamento de outro
+    // host", que NÃO reaponta o servidor — o botão promete trocar token, não endereço).
+    const ok = updateServer(id, { token });
+    if (!ok) return false;                      // servidor sumiu: quem avisa é o AccountMenu
+    sessionsStore.refreshServers();
+    // reconnect, não só refresh: os SSE abertos seguem autenticados com o token ANTIGO até serem
+    // derrubados, e a tela ficaria viva com conexões que o servidor já ia recusar.
+    sessionsStore.reconnect();
+    return true;
   }
   // Reconectar (item "Reconectar" do menu de conta): fecha e reabre os SSE de todos os servidores.
   function reconnectStreams() {
@@ -658,6 +672,7 @@
         {accountSub}
         {servers}
         {onRenameServer}
+        {onUpdateServerToken}
         onRemoveServer={dropServer}
         onAddServer={openAddServer}
         onReconnect={reconnectStreams}

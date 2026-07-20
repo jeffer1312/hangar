@@ -97,6 +97,15 @@ function labelFor(baseUrl: string): string {
   }
 }
 
+// Mesmo criterio do openSessionsStream (api.ts): so o servidor servido pela PROPRIA origem usa
+// cookie; o resto vai por ?token= na URL. typeof window: auth.ts e importado em teste (env node,
+// sem DOM) — sem origem conhecida nao da pra afirmar "mesma origem", entao false, que e o caminho
+// conservador (cross-origin nao depende de cookie).
+function isSameOrigin(baseUrl: string): boolean {
+  if (typeof window === 'undefined') return false;
+  return !baseUrl || baseUrl === window.location.origin;
+}
+
 function syncCookie(token: string | null): void {
   // Cookie same-origin pro SSE (EventSource não manda Authorization). Cross-origin usa ?token.
   if (token) document.cookie = `cp_token=${token}; path=/; SameSite=Lax`;
@@ -180,6 +189,31 @@ export function renameServer(id: string, label: string): void {
   list[i] = { ...list[i], label: label.trim() || labelFor(list[i].baseUrl) };
   writeServers(list);
   notifyChanged();
+}
+
+// Atualiza token e/ou baseUrl de um servidor JA cadastrado, PRESERVANDO id e label. Sem isto, o
+// unico jeito de trocar um token era remover + re-parear: perdia o label custom e a posicao na
+// lista, e com 4 servidores rotacionar o CP_AUTH_TOKEN virava uma tarde de recadastro.
+// Devolve false quando o id nao existe (mesma convencao do selectServer) pra UI poder avisar.
+export function updateServer(id: string, patch: { token?: string; baseUrl?: string }): boolean {
+  const list = readServers();
+  const i = list.findIndex((s) => s.id === id);
+  if (i < 0) return false;
+  // Campo vazio = "nao mexe neste", nao "apaga": um token em branco desautenticaria o servidor
+  // silenciosamente, e o formulario tem os dois campos.
+  const token = patch.token?.trim() || list[i].token;
+  const baseUrl = patch.baseUrl?.trim() ? normalizeBaseUrl(patch.baseUrl) : list[i].baseUrl;
+  list[i] = { ...list[i], token, baseUrl };
+  writeServers(list);
+  // Cookie: ATIVO **ou** SAME-ORIGIN. O renameServer nao precisa disto (label nao autentica), mas
+  // token sim — sem o resync, trocar o token gravava no storage e seguia mandando o ANTIGO.
+  // O "ou same-origin" nao e zelo: openSessionsStream autentica o servidor same-origin PELO COOKIE
+  // (withCredentials) e o cross-origin por ?token= na URL. So com "ativo", trocar o token do
+  // servidor que HOSPEDA o PWA enquanto outro esta ativo atualizava o storage, e o reconnect
+  // reabria o SSE dele com o cookie VELHO — justo o servidor que esta feature existe pra consertar.
+  if (localStorage.getItem(ACTIVE_KEY) === id || isSameOrigin(baseUrl)) syncCookie(token);
+  notifyChanged();
+  return true;
 }
 
 // Extrai base (origin do backend) + token de um texto de pareamento — o mesmo conteudo que o QR

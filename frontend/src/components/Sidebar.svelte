@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { createSession, deleteSession, renameSession, gitAction, checkoutBranch, resumeSession, broadcast, getHistoryTailForServer } from '../lib/api';
-  import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, serverColor, clearCredentials, parseServerPairing, withServer } from '../lib/auth';
+  import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, updateServer, serverColor, clearCredentials, parseServerPairing, withServer } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import SessionContextMenu from './SessionContextMenu.svelte';
@@ -439,6 +439,21 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   function onRenameServer(id: string, label: string) {
     renameServer(id, label);
     sessionsStore.refreshServers();   // reagrega pra os headers de grupo pegarem o nome novo já
+  }
+
+  // Trocar o token de um servidor já cadastrado (rotação de CP_AUTH_TOKEN, sem remover+re-parear).
+  // Aceita o token cru OU a URL de pareamento inteira — mesmo parse do fluxo de adicionar.
+  function onUpdateServerToken(id: string, token: string): boolean {
+    // Só o token: o AccountMenu já extraiu e validou (inclusive o caso "URL de pareamento de outro
+    // host", que NÃO reaponta o servidor — o botão promete trocar token, não endereço).
+    const ok = updateServer(id, { token });
+    if (!ok) return false;                      // servidor sumiu: quem avisa é o AccountMenu
+    sessionsStore.refreshServers();
+    // reconnect, não só refresh: os SSE abertos seguem autenticados com o token ANTIGO até serem
+    // derrubados. Sem isto a tela ficava viva com conexões que o servidor já ia recusar, e o
+    // sintoma só aparecia no próximo reconnect espontâneo.
+    sessionsStore.reconnect();
+    return true;
   }
 
   // Abre o menu de conta recarregando a lista de servidores (pode ter mudado desde a última abertura).
@@ -940,6 +955,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         {activeId}
         onSwitchServer={pickServer}
         {onRenameServer}
+        {onUpdateServerToken}
         onRemoveServer={dropServer}
         onAddServer={openAddServer}
         onReconnect={sessionsStore.reconnect}

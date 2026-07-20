@@ -1,6 +1,7 @@
 <script lang="ts">
   import { isAuthenticated, setServers, listServers, mergeServers, onServersChanged, clearCredentials, selectServer, getActiveId } from './lib/auth';
   import { getVault, decryptList, encryptList, putVault, logout as syncLogout, syncStatus, stashKey, loadKey, clearKey } from './lib/sync';
+  import { vaultPush } from './lib/vaultPush.svelte';
   import { encodeCompareIds, parseCompareIds, type CompareId } from './lib/format';
   import { peekStep, initialPeek } from './lib/peek';
   import Login from './screens/Login.svelte';
@@ -311,7 +312,9 @@
     // dois pushes do mesmo vault (o slot unico mascarava isto sobrescrevendo).
     unsubSync?.();
     unsubSync = onServersChanged(async () => {
-      if (!encKey) return;
+      // Publica o resultado no vaultPush: console.error sozinho nao chega no usuario, e numa troca
+      // de TOKEN o silencio significa "os outros aparelhos seguem com a chave velha".
+      if (!encKey) { vaultPush.locked(); return; }
       try {
         let res = await putVault(await encryptList(encKey, listServers()), vaultRev);
         if ('conflict' in res) {           // rev velha: adota a do hub e tenta de novo uma vez
@@ -319,9 +322,11 @@
           res = await putVault(await encryptList(encKey, listServers()), vaultRev);
         }
         if ('rev' in res) vaultRev = res.rev;
+        vaultPush.ok();
       } catch (e) {
         // Nao engole: um push que falha (rede/sessao) some sem isso. Loga pra ficar visivel.
         console.error('sync push falhou — server nao subiu pro hub:', e);
+        vaultPush.error(e);
       }
     });
     syncReady = true;
