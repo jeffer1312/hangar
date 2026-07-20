@@ -1,7 +1,10 @@
 """Resolução de servidor/token compartilhada pelos scripts do painel (cp-panel-data,
 cp-panel-action). Módulo em vez de copiar: é o ponto que lê CREDENCIAL e monta a URL — duas
 cópias divergindo aqui viraria bug de auth silencioso."""
+import fcntl
 import json
+import os
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -45,6 +48,17 @@ def peer_fields(cfg: object) -> tuple[str, str, str]:
     return s("base_url"), s("token"), s("web_url")
 
 
+def enabled(cfg: object) -> bool:
+    """Peer LIGADO pra varredura. `"enabled": false` no peers.json marca máquina que o dono sabe
+    que está desligada: cada varredura pagava o timeout inteiro (4s) esperando host que não vai
+    responder. Ausente = ligado, então peers.json antigo segue idêntico.
+
+    Vale só pra ENUMERAÇÃO (painel, cp-send --list). Endereçar explicitamente
+    (`cp-send pc::sessao`) continua resolvendo — senão "desativar" viraria "sumiu", e o usuário
+    ia levar um "servidor desconhecido" sem entender que foi ele mesmo que desligou."""
+    return not (isinstance(cfg, dict) and cfg.get("enabled") is False)
+
+
 def peers() -> dict:
     """Mapa id -> {base_url, token, web_url?}. Ausente = máquina só-local (não é erro)."""
     try:
@@ -58,6 +72,60 @@ def peers() -> dict:
     if not isinstance(data, dict):
         raise PanelError("peers.json inválido: raiz deve ser um objeto {id: {...}}")
     return data
+
+
+def set_peer_enabled(pid: str, on: bool, path: Path | None = None) -> None:
+    """Grava o "enabled" de UM peer no peers.json (o toggle de servidor do painel).
+
+    Escrita ATÔMICA (tmp + os.replace) sob lock exclusivo, preservando o modo do arquivo: o
+    peers.json guarda os TOKENS da malha inteira, e um write cortado no meio deixaria todo
+    servidor remoto inalcançável — estrago muito maior que os 4s de timeout que o toggle evita.
+    Mora aqui, e não no cp-panel-action, porque este é o módulo que já lê o arquivo — e é
+    importável, então dá pra testar a gravação sem mexer no peers.json de verdade."""
+    path = path or (BACKEND / "peers.json")
+    # Lock EXCLUSIVO cobrindo leitura+escrita: isto é read-modify-write do arquivo inteiro, e o
+    # painel (Quickshell) e a CLI podem chamar ao mesmo tempo. Sem lock, quem grava por último
+    # apaga a mudança do outro — sem erro, sem log. Sidecar e não o próprio peers.json porque o
+    # os.replace troca o INODE: quem travasse o arquivo antigo seguraria um inode órfão.
+    lock_path = path.with_name(path.name + ".lock")
+    try:
+        lock = open(lock_path, "w")
+    except OSError as e:
+        raise PanelError(f"não consegui abrir o lock do peers.json: {e}") from e
+
+    with lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+
+        # Sob o lock, qualquer .tmp que sobrou é órfão de um processo morto entre o write e o
+        # replace (kill -9/OOM não roda except nenhum). Contém a malha inteira de tokens, então
+        # não pode ficar apodrecendo no disco à espera da próxima gravação.
+        for stale in path.parent.glob(path.name + ".*.tmp"):
+            stale.unlink(missing_ok=True)
+
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise PanelError(f"peers.json ilegível: {e}") from e
+        if not isinstance(data, dict) or not isinstance(data.get(pid), dict):
+            raise PanelError(f"servidor '{pid}' não está no peers.json")
+
+        data[pid]["enabled"] = on
+        # mkstemp e não um nome fixo, por DOIS motivos: (1) nome único — com "peers.json.tmp"
+        # chumbado, dois processos abriam o MESMO caminho em modo truncate e o replace podia
+        # promover conteúdo entrelaçado dos dois; (2) nasce 0600 — write_text criava com o umask
+        # (medido: 0644), deixando os tokens todos legíveis por qualquer usuário local durante a
+        # janela até o chmod. Aqui o arquivo nunca é mais frouxo que o destino.
+        fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+            # Só DEPOIS de escrito: alarga do 0600 do mkstemp pro modo real do original.
+            os.chmod(tmp, path.stat().st_mode & 0o777)
+            os.replace(tmp, path)
+        except OSError as e:
+            tmp.unlink(missing_ok=True)
+            raise PanelError(f"falha ao gravar peers.json: {e}") from e
 
 
 def local_base() -> str:

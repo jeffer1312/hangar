@@ -76,6 +76,12 @@ for s in json.load(sys.stdin):
     if [[ -f "$PEERS_FILE" ]]; then
         peers_tsv=$(python3 -c 'import json, sys
 for k, v in json.load(open(sys.argv[1])).items():
+    # "enabled": false -> máquina que o dono sabe que está desligada. Fica FORA da varredura
+    # (cada uma custa o timeout inteiro), mas avisa: some da lista sem nota nenhuma e daqui a
+    # duas semanas vira "cadê meu PC?". Endereçar servidor::sessao continua funcionando.
+    if isinstance(v, dict) and v.get("enabled") is False:
+        print("(%s desativado no peers.json — enderece direto se precisar)" % k, file=sys.stderr)
+        continue
     print("%s\t%s\t%s" % (k, v["base_url"].rstrip("/"), v["token"]))' "$PEERS_FILE") \
             || { echo "⚠ $PEERS_FILE inválido — servidores remotos ignorados" >&2; peers_tsv=""; }
         while IFS=$'\t' read -r pid pbase ptok; do

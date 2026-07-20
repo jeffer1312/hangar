@@ -21,6 +21,8 @@ ShellRoot {
     property var menuSession: null
     property real menuX: 0
     property real menuY: 0
+    // Mensagem de erro do último toggle de servidor ("" = sem erro).
+    property string peerResult: ""
 
     onOpenChanged: if (!open)
         menuSession = null;
@@ -58,6 +60,11 @@ ShellRoot {
         function settings(): void {
             win.settingsOpen = !win.settingsOpen;
         }
+        // Mesmo efeito do switch de servidor na faixa de ajustes; existe pra script/teste
+        // alcançar o toggle sem depender de clique real.
+        function peer(id: string, state: string): void {
+            shellRoot.setPeer(id, state === "on");
+        }
         // Mesmo efeito do botão direito na linha; existe pra script/teste alcançar o menu.
         function menu(address: string): void {
             const s = Sessions.sessions.find(x => x.address === address);
@@ -71,6 +78,39 @@ ShellRoot {
         appid: "claude-pocket"
         name: "toggle"
         onPressed: shellRoot.toggle()
+    }
+
+    // Toggle de servidor: liga/desliga um peer na varredura, gravando o peers.json pelo
+    // cp-panel-action. Peer offline custa o timeout (4s) em TODO poll e, como a coleta espera o
+    // servidor mais lento, é o painel inteiro que fica lento por causa de uma máquina desligada.
+    function setPeer(id: string, on: bool): void {
+        if (peerProc.running)
+            return;
+        shellRoot.peerResult = "";
+        peerProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", id, "peer", on ? "on" : "off"];
+        peerProc.running = true;
+    }
+
+    Process {
+        id: peerProc
+        stdout: StdioCollector {
+            onStreamFinished: {
+                let r = {};
+                try {
+                    r = JSON.parse(text);
+                } catch (e) {
+                    r = {
+                        ok: false,
+                        message: "resposta inválida do cp-panel-action"
+                    };
+                }
+                // Falha VIRA texto na UI: sem isto, um peers.json somente-leitura deixava o
+                // switch voltar sozinho no próximo poll, sem dizer que a gravação não aconteceu —
+                // o usuário culparia o toggle "que não pega".
+                shellRoot.peerResult = r.ok ? "" : (r.message ?? "falhou");
+                Sessions.refresh();
+            }
+        }
     }
 
     PanelWindow {
@@ -204,7 +244,9 @@ ShellRoot {
                     // roubar altura da lista, que é o conteúdo principal.
                     Rectangle {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: win.settingsOpen ? 64 : 0
+                        // Altura pelo CONTEÚDO: com a lista de servidores a faixa deixou de ter
+                        // tamanho fixo — 64 chumbado cortava o toggle do segundo peer.
+                        Layout.preferredHeight: win.settingsOpen ? settingsCol.implicitHeight + 20 : 0
                         clip: true
                         radius: 12
                         color: "#14ffffff"
@@ -218,6 +260,7 @@ ShellRoot {
                         }
 
                         ColumnLayout {
+                            id: settingsCol
                             anchors.fill: parent
                             anchors.margins: 10
                             spacing: 2
@@ -258,6 +301,62 @@ ShellRoot {
                                 text: PanelConfig.options.opacity < PanelConfig.blurCutoff ? "sem desfoque abaixo de 79% (limite do rice)" : "com desfoque do compositor"
                                 color: PanelConfig.options.opacity < PanelConfig.blurCutoff ? "#f9c784" : "#6e7079"
                                 font.pixelSize: 9
+                            }
+
+                            // Servidores da malha. Só aparece com peer configurado — máquina
+                            // sozinha não tem por que ganhar uma seção vazia.
+                            Text {
+                                visible: Sessions.servers.length > 0
+                                Layout.topMargin: 8
+                                text: "Servidores"
+                                color: "#c8c6cf"
+                                font.pixelSize: 11
+                            }
+
+                            Repeater {
+                                model: Sessions.servers
+
+                                RowLayout {
+                                    id: srvRow
+
+                                    required property var modelData
+
+                                    Layout.fillWidth: true
+                                    spacing: 8
+
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: srvRow.modelData.id
+                                        color: srvRow.modelData.enabled ? "#c8c6cf" : "#6e7079"
+                                        font.pixelSize: 11
+                                        elide: Text.ElideRight
+                                    }
+
+                                    Text {
+                                        // Estado REAL, não o do switch: peer LIGADO que não
+                                        // responde precisa aparecer como problema. Mostrar só
+                                        // "ligado" faria o toggle parecer garantia de que a
+                                        // máquina está lá — que é justamente o que ele não é.
+                                        text: !srvRow.modelData.enabled ? "fora da varredura" : (srvRow.modelData.ok ? "respondendo" : "sem resposta")
+                                        color: !srvRow.modelData.enabled ? "#6e7079" : (srvRow.modelData.ok ? "#8fce9b" : "#f9c784")
+                                        font.pixelSize: 9
+                                    }
+
+                                    Switch {
+                                        checked: srvRow.modelData.enabled
+                                        enabled: !peerProc.running
+                                        onToggled: shellRoot.setPeer(srvRow.modelData.id, checked)
+                                    }
+                                }
+                            }
+
+                            Text {
+                                visible: shellRoot.peerResult !== ""
+                                Layout.fillWidth: true
+                                text: shellRoot.peerResult
+                                color: "#f28b82"
+                                font.pixelSize: 9
+                                wrapMode: Text.Wrap
                             }
                         }
                     }

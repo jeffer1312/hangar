@@ -3,5 +3,10 @@
     "base_url": "http://100.64.0.2:8765",
     "token": "<CP_AUTH_TOKEN do backend/.env daquela máquina>",
     "web_url": "https://outra-maquina.tailnet.ts.net"
+  },
+  "pc-que-fica-desligado": {
+    "base_url": "http://100.64.0.3:8765",
+    "token": "<...>",
+    "enabled": false
   }
 }
