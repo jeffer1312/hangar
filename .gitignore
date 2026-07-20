@@ -9,6 +9,10 @@ backend/.venv/
 backend/.env
 # peers de outros servidores (cp-send cross-server) — contém tokens
 backend/peers.json
+# Sidecars da gravação do toggle de peer: .lock (flock do read-modify-write) e .tmp (escrita
+# atômica). O .tmp carrega a malha INTEIRA de tokens enquanto existe — nunca pode ser commitado.
+backend/peers.json.lock
+backend/peers.json.*.tmp
 
 # Generated plan/spec HTML (created by local hook)
 docs/superpowers/**/*.html

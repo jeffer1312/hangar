@@ -72,9 +72,12 @@ insere_bloco "$HOME/.config/hypr/custom/keybinds.lua" "panel-bind" \
 'hl.bind("SUPER + SHIFT + U", hl.dsp.global("claude-pocket:toggle"), { description = "Claude Pocket: painel de sessões" })'
 
 insere_bloco "$HOME/.config/hypr/custom/execs.lua" "panel-exec" \
-'-- -n/--no-duplicate: o autostart re-executa a CADA hyprctl reload; sem isto cada reload
--- somava mais uma instância do painel (chegou a 7 numa sessão de desenvolvimento).
-hl.exec_cmd("qs -n -c claude-pocket")
+'-- flock -n: o autostart re-executa a CADA hyprctl reload, e o Hyprland recarrega o config no
+-- próprio boot — as duas chamadas saem no MESMO segundo. O -n/--no-duplicate do qs perde essa
+-- corrida (as duas instâncias sobem antes de qualquer uma se registrar) e a segunda fica zumbi,
+-- sem layer, roubando o GlobalShortcut. O flock é atômico e não perde. O -n do qs fica como
+-- rede pro caso de alguém subir o painel na mão, fora do flock.
+hl.exec_cmd("bash -c '\''exec flock -n \"${XDG_RUNTIME_DIR:-$HOME}/cp-panel.lock\" qs -n -c claude-pocket'\''")
 -- Ícone na bandeja (SNI). sleep: precisa do StatusNotifierWatcher da barra já no barramento.
 hl.exec_cmd("bash -c \"sleep 5; $HOME/.local/bin/cp-panel-tray\"")'
 

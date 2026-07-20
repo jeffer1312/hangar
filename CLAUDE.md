@@ -90,7 +90,9 @@ npm --prefix frontend run build                          # só se o front for se
 Sessões Claude já abertas não releem o CLAUDE.md global — só as novas conhecem o cp-send.
 Escopo: pareamento e `--group` só dentro da mesma máquina. Recado 1:1 e `--list` alcançam OUTROS
 servidores via endereço `servidor::sessao`: `backend/peers.json` (id → base_url+token, gitignored;
-ver `peers.json.example`) + `CP_SERVER_ID` no `backend/.env` (id desta máquina, endereço de
+ver `peers.json.example`) + `CP_SERVER_ID` no `backend/.env`. Peer com `"enabled": false` sai da
+VARREDURA (painel e `--list`) mas segue endereçável por `servidor::sessao` — é pra máquina que
+você sabe que está desligada, senão cada poll paga o timeout de 4s esperando ela (id desta máquina, endereço de
 resposta do `[de: id::sessao]`). Só o cp-send muda — o backend nem sabe da feature.
 
 ## SSE event model

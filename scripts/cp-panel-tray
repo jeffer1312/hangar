@@ -13,6 +13,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 
 import dbus
 import dbus.mainloop.glib
@@ -42,6 +43,7 @@ class TrayItem(dbus.service.Object):
         self.working = 0
         self.total = 0
         self.problem = ""
+        self.polling = False
 
     # --- estado ---------------------------------------------------------------------------
     @property
@@ -62,25 +64,50 @@ class TrayItem(dbus.service.Object):
         return " · ".join(parts) or f"{self.total} sessões ociosas"
 
     def poll(self) -> bool:
+        """Dispara a coleta. NÃO bloqueia: o main loop do GLib é o mesmo que despacha o Activate
+        do clique, e o cp-panel-data espera até o timeout (4s) por peer offline. Com a coleta
+        síncrona aqui, o clique no ícone ficava na fila atrás dela — medido, 3,95s pra abrir o
+        painel com um servidor da malha fora do ar."""
+        if self.polling:
+            return True     # coleta anterior ainda de pé; empilhar processo não adiantaria.
+        self.polling = True
+        threading.Thread(target=self._collect, daemon=True).start()
+        return True     # GLib: manter o timer vivo.
+
+    def _collect(self) -> None:
+        """Roda na thread. Só coleta e devolve — nada de estado nem sinal dbus daqui."""
         try:
             out = subprocess.run([DATA], capture_output=True, text=True, timeout=20,
                                  check=True).stdout
             data = json.loads(out)
             sessions = data.get("sessions", [])
-            self.awaiting = sum(1 for s in sessions if s.get("state") == "awaiting_input")
-            self.working = sum(1 for s in sessions if s.get("state") == "working")
-            self.total = len(sessions)
             errs = data.get("errors") or []
             # Servidor fora do ar VIRA tooltip: engolir deixaria a bandeja mostrando "tudo ocioso"
             # enquanto metade da malha está inacessível.
-            self.problem = ("⚠ " + "; ".join(errs)) if errs else ""
+            got = (sum(1 for s in sessions if s.get("state") == "awaiting_input"),
+                   sum(1 for s in sessions if s.get("state") == "working"),
+                   len(sessions),
+                   ("⚠ " + "; ".join(errs)) if errs else "")
         except (OSError, subprocess.SubprocessError, ValueError) as e:
-            self.awaiting = self.working = self.total = 0
-            self.problem = f"⚠ cp-panel-data falhou: {e}"
+            got = (0, 0, 0, f"⚠ cp-panel-data falhou: {e}")
+        except Exception as e:      # noqa: BLE001
+            # Rede de segurança DELIBERADAMENTE ampla: esta thread é daemon, então exceção não
+            # prevista (formato novo do cp-panel-data, bug futuro) morreria calada e deixaria
+            # `polling` travado em True — todo poll seguinte sairia cedo e a bandeja congelaria no
+            # último estado, sem nem o ⚠ que existe justamente pra denunciar poll quebrado.
+            got = (0, 0, 0, f"⚠ cp-panel-data: erro inesperado ({type(e).__name__}: {e})")
+        # Fora de todo except: é o idle_add que devolve `polling` a False no main loop. Não chegar
+        # aqui é o que trava o poll pra sempre.
+        GLib.idle_add(self._apply, *got)
+
+    def _apply(self, awaiting: int, working: int, total: int, problem: str) -> bool:
+        """De volta no main loop: emitir sinal dbus da thread da coleta não é seguro."""
+        self.awaiting, self.working, self.total, self.problem = awaiting, working, total, problem
+        self.polling = False
         self.NewStatus(self.status)
         self.NewIcon()
         self.NewToolTip()
-        return True     # GLib: manter o timer vivo.
+        return False    # GLib: idle roda uma vez só.
 
     # --- interface SNI --------------------------------------------------------------------
     @dbus.service.method(SNI_IFACE, in_signature="ii")

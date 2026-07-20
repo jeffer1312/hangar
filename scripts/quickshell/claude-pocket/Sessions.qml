@@ -13,6 +13,9 @@ Singleton {
 
     property var sessions: []
     property var errors: []
+    // Servidores do peers.json com {id, enabled, ok, error} — inclui os DESLIGADOS, que não
+    // aparecem em sessions[] mas precisam de linha na UI pra ter como religar.
+    property var servers: []
     property bool everLoaded: false
     // Poll rápido só com o painel aberto: fechado é passivo (badge/notificação), não precisa de 2s.
     property bool fast: false
@@ -57,6 +60,7 @@ Singleton {
                     const data = JSON.parse(text);
                     root.sessions = data.sessions ?? [];
                     root.errors = data.errors ?? [];
+                    root.servers = data.servers ?? [];
                     root.everLoaded = true;
                     root._notify(root.sessions);
                 } catch (e) {
