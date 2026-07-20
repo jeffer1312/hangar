@@ -3,9 +3,13 @@
 Quickshell. Existe pra manter o QML burro: ele só roda isto e faz JSON.parse, sem token, sem
 merge de servidor, sem HTTP na mão.
 
-Saída: {"sessions": [...], "errors": [...]} — sessão local tem server=null e address=<nome>;
+Saída: {"sessions": [...], "errors": [...], "servers": [...]} — sessão local tem server=null e
+address=<nome>;
 remota tem server=<id> e address=<id>::<nome> (o mesmo endereço que o cp-send aceita).
 Servidor fora do ar entra em errors e NÃO derruba o resto (painel degrada, não some).
+
+servers[] lista TODO peer do peers.json com {id, enabled, ok, error} — inclusive o desligado,
+que fica fora da varredura mas precisa aparecer no painel pra ter como religar.
 """
 import json
 import os
@@ -17,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 # resolve(): roda via symlink em ~/.local/bin — sem resolver, o import iria procurar lá.
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from cp_panel_common import PanelError, env, local_base, peer_fields, peers  # noqa: E402
+from cp_panel_common import PanelError, enabled, env, local_base, peer_fields, peers  # noqa: E402
 
 TIMEOUT = 4
 
@@ -75,30 +79,48 @@ def main() -> int:
     # paralelo: sequencial, o custo era a SOMA das latências e um peer no timeout (4s) estourava
     # o intervalo de poll do painel. Em paralelo o pior caso é o servidor mais lento.
     targets = [("local", None, local_base(), token, "")]
+    # TODO peer conhecido entra em servers[], ligado ou não: é a lista que o painel usa pra
+    # desenhar o toggle. Sem ela, desligar um peer o apagaria da UI junto — e não sobraria botão
+    # nenhum pra religar, só editar o peers.json na mão.
+    servers: list[dict] = []
     for pid, cfg in known.items():
+        on = enabled(cfg)
+        servers.append({"id": pid, "enabled": on, "ok": False, "error": ""})
+        # Desativado à mão: sai da varredura SEM virar linha de erro — é escolha do dono, não
+        # falha. Um peer offline custava o timeout inteiro (4s) em TODO poll, e como o pior
+        # servidor define o tempo da coleta, era o painel inteiro esperando por ele.
+        if not on:
+            continue
         # peer_fields valida TIPO: entrada não-dict ou base_url sem aspas estourava
         # AttributeError AQUI — neste laço, que roda FORA do try do worker — e matava a coleta
         # inteira, local junto. Peer malformado vira linha de erro, nunca derruba o painel.
         base, tok, web = peer_fields(cfg)
         if not base or not tok:
             errors.append(f"{pid}: entrada sem base_url/token válidos no peers.json")
+            servers[-1]["error"] = "entrada inválida no peers.json"
             continue
         targets.append((pid, pid, base, tok, web or base))
 
     attached = attached_locally()
+    by_id = {s["id"]: s for s in servers}
 
     def one(t: tuple) -> tuple:
         label, server, base, tok, web = t
         try:
-            return label, [slim(s, server, web, attached) for s in fetch(base, tok)], None
+            return label, server, [slim(s, server, web, attached) for s in fetch(base, tok)], None
         except Exception as e:   # falha de UM servidor nunca derruba a coleta dos outros
-            return label, [], str(e)
+            return label, server, [], str(e)
 
     with ThreadPoolExecutor(max_workers=max(1, len(targets))) as pool:
-        for label, got, err in pool.map(one, targets):
+        for label, server, got, err in pool.map(one, targets):
             sessions += got
             if err:
                 errors.append(f"{label}: {err}")
+            # Casa por server_id, não pelo label: o local usa label "local" e um peer batizado
+            # de "local" no peers.json sobrescreveria o resultado dele com o próprio.
+            if server is not None and server in by_id:
+                by_id[server]["ok"] = not err
+                by_id[server]["error"] = err or ""
 
     # Ordem: bloco local primeiro (é onde dá pra agir direto), depois um bloco por servidor
     # remoto em ordem alfabética. DENTRO de cada bloco, awaiting_input primeiro (exige ação),
@@ -107,7 +129,8 @@ def main() -> int:
     rank = {"awaiting_input": 0, "working": 1}
     sessions.sort(key=lambda s: (s["server"] is not None, s["server"] or "",
                                  rank.get(s["state"], 2), s["name"]))
-    json.dump({"sessions": sessions, "errors": errors}, sys.stdout, ensure_ascii=False)
+    json.dump({"sessions": sessions, "errors": errors, "servers": servers}, sys.stdout,
+              ensure_ascii=False)
     print()
     return 0
 

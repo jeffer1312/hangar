@@ -9,6 +9,10 @@
     push                 push da branch atual
     commit-push <msg>    commit + push numa tacada
 
+O op `peer` é a exceção: o 1º argumento é um SERVIDOR do peers.json, não um endereço de sessão.
+
+    <servidor> peer on|off   liga/desliga o servidor na varredura (toggle do painel)
+
 Tudo pela API do servidor DONO da sessão (endereço servidor::sessao funciona igual), então
 rename/git valem também pras sessões remotas — o que NÃO dá remoto é só o attach no terminal.
 Sempre imprime JSON: {"ok": bool, "message": str, ...}. O QML só mostra a message.
@@ -20,7 +24,16 @@ import sys
 # resolve(): o script roda via symlink em ~/.local/bin — sem resolver, o import do módulo
 # irmão procuraria em ~/.local/bin em vez de scripts/ do repo.
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from cp_panel_common import WRITE_TIMEOUT, PanelError, api  # noqa: E402
+from cp_panel_common import WRITE_TIMEOUT, PanelError, api, set_peer_enabled  # noqa: E402
+
+
+def op_peer(pid: str, arg: str) -> dict:
+    """Liga/desliga um peer na varredura. A gravação em si mora no cp_panel_common, junto da
+    leitura do peers.json — PanelError sobe pro dispatcher e vira {"ok": false, message}."""
+    if arg not in ("on", "off"):
+        return {"ok": False, "message": "uso: cp-panel-action <servidor> peer on|off"}
+    set_peer_enabled(pid, arg == "on")
+    return {"ok": True, "message": f"{pid} {'ligado' if arg == 'on' else 'desligado'}"}
 
 
 def op_info(addr: str) -> dict:
@@ -102,6 +115,10 @@ def main() -> int:
             out = op_commit(addr, " ".join(rest) or "wip", push=False)
         elif op == "commit-push":
             out = op_commit(addr, " ".join(rest) or "wip", push=True)
+        elif op == "peer":
+            # Único op cujo 1º argumento é um SERVIDOR, não um endereço de sessão: mexe no
+            # peers.json local, sem chamar API nenhuma.
+            out = op_peer(addr, rest[0] if rest else "")
         elif op == "push":
             api(addr, "POST", "/api/sessions/{name}/git/push", timeout=WRITE_TIMEOUT)
             out = {"ok": True, "message": "push feito"}
