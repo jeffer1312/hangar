@@ -137,6 +137,11 @@
   --space-4: 16px;
   --space-5: 20px;
   --space-6: 24px;
+  /* Quanto o glass da NavBar pinta ABAIXO dela (fade da costura, por cima do conteúdo). Toda tela
+     que põe conteúdo logo depois da NavBar precisa disto de padding-top, senão o primeiro
+     elemento nasce parcialmente coberto. Era um 24 chumbado nos dois lados sem nada ligando um ao
+     outro: as telas usavam --space-3 (12px) e o primeiro filho ficava com 12px comidos. */
+  --navbar-fade: 24px;
   --space-8: 32px;
   --space-10: 40px;
 

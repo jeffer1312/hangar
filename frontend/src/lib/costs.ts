@@ -28,8 +28,28 @@ export function addBuckets(into: Map<string, CostBucket>, list: CostBucket[]): v
 function addModels(into: Map<string, CostModelBucket>, list: CostModelBucket[]): void {
   for (const m of list) {
     const cur = into.get(m.model);
-    if (!cur) into.set(m.model, { ...m });
-    else { cur.sessions += m.sessions; cur.cost += m.cost; }
+    if (!cur) {
+      // Normaliza os tokens JÁ NA ENTRADA: servidor da malha em versão antiga manda by_model sem
+      // eles, e guardar `undefined` aqui congelava o campo — nem o `+=` de um servidor novo
+      // depois recuperava (undefined + n = NaN), e a coluna aparecia zerada via `?? 0`.
+      into.set(m.model, {
+        ...m,
+        input: m.input ?? 0,
+        output: m.output ?? 0,
+        cache_read: m.cache_read ?? 0,
+        cache_write: m.cache_write ?? 0,
+      });
+    } else {
+      cur.sessions += m.sessions;
+      cur.cost += m.cost;
+      // Somar os tokens era o que faltava: o `else` antigo só acumulava sessions/cost, então a
+      // MESMA conta espalhada em mais de um servidor perdia os tokens de todos menos o primeiro.
+      // Silencioso e só no caminho "conta específica" — o modo "Todas" agrega noutro lugar.
+      cur.input = (cur.input ?? 0) + (m.input ?? 0);
+      cur.output = (cur.output ?? 0) + (m.output ?? 0);
+      cur.cache_read = (cur.cache_read ?? 0) + (m.cache_read ?? 0);
+      cur.cache_write = (cur.cache_write ?? 0) + (m.cache_write ?? 0);
+    }
   }
 }
 

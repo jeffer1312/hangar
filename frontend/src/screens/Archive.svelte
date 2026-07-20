@@ -235,7 +235,8 @@
   .archive-list {
     flex: 1;
     overflow-y: auto;
-    padding: var(--space-3) var(--space-4) var(--space-8);
+    /* topo = --navbar-fade: o glass da navbar pinta por cima desse tanto de conteúdo. */
+    padding: var(--navbar-fade) var(--space-4) var(--space-8);
     max-width: 700px;
     width: 100%;
     margin: 0 auto;

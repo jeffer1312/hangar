@@ -153,6 +153,14 @@ class ModelBucket(BaseModel):
     model: str
     sessions: int
     cost: float
+    # Default 0 e não obrigatórios: a UI junta relatórios de VÁRIOS servidores da malha, que nem
+    # sempre estão na mesma versão. Servidor antigo responde sem estes campos — com default, a
+    # linha dele entra com token zerado; sem, a resposta inteira dele viraria erro de validação e
+    # o custo daquela máquina sumiria da soma.
+    input: int = 0
+    output: int = 0
+    cache_read: int = 0
+    cache_write: int = 0
 
 
 class AccountCost(BaseModel):

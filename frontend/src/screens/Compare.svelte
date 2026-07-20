@@ -185,7 +185,14 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
-    padding: var(--space-3) var(--space-4) var(--space-10);
+    /* flex+min-height+overflow: mesmo idioma do Archive/Costs. Sem isto a grade não rolava — o
+       #app é `overflow: hidden`, então card que passasse de 100vh ficava inalcançável.
+       topo = --navbar-fade: o glass da navbar pinta por cima desse tanto de conteúdo. */
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: var(--navbar-fade) var(--space-4) var(--space-10);
   }
   .compare-card {
     display: flex;

@@ -128,3 +128,41 @@ def test_account_info_fallback_when_json_root_not_dict(tmp_path, monkeypatch):
     assert aid == "fallback"
     assert email is None
     assert label == "fallback"
+
+
+def test_by_model_sums_tokens_per_model():
+    """by_model passou a carregar tokens, não só sessions/cost. Agregar por modelo é somar linhas
+    de dias diferentes num balde só — errar a chave (ex: reusar o acumulador entre modelos)
+    daria número plausível e errado, do tipo que ninguém confere de cabeça."""
+    rows = [
+        {"dt": datetime(2026, 7, 1), "model": "claude-opus-4-8",
+         "in": 1_000_000, "out": 10, "cw": 100, "cr": 1_000},
+        {"dt": datetime(2026, 6, 30), "model": "claude-opus-4-8",
+         "in": 2_000_000, "out": 20, "cw": 200, "cr": 2_000},
+        {"dt": datetime(2026, 6, 30), "model": "claude-fable-5",
+         "in": 5_000_000, "out": 30, "cw": 300, "cr": 3_000},
+    ]
+    by = {m.model: m for m in costs._by_model(rows)}
+
+    assert by["claude-opus-4-8"].sessions == 2
+    assert by["claude-opus-4-8"].input == 3_000_000     # 1M + 2M, atravessando o mês
+    assert by["claude-opus-4-8"].output == 30
+    assert by["claude-opus-4-8"].cache_write == 300
+    assert by["claude-opus-4-8"].cache_read == 3_000
+    # Modelo vizinho intocado: sem isto, um acumulador compartilhado passaria despercebido.
+    assert by["claude-fable-5"].input == 5_000_000
+    assert by["claude-fable-5"].sessions == 1
+
+
+def test_by_model_tokens_batem_com_o_total():
+    """Invariante: fatiar por modelo não pode criar nem sumir token."""
+    now = datetime(2026, 7, 1, 12, 0, tzinfo=costs.LOCAL)
+    rows = [
+        {"dt": now, "model": "claude-opus-4-8", "in": 7, "out": 11, "cw": 13, "cr": 17},
+        {"dt": now, "model": "claude-fable-5", "in": 19, "out": 23, "cw": 29, "cr": 31},
+    ]
+    acc = costs.aggregate(rows, "uuid-1", None, "l", now)
+    assert sum(m.input for m in acc.by_model) == acc.totals.input
+    assert sum(m.output for m in acc.by_model) == acc.totals.output
+    assert sum(m.cache_write for m in acc.by_model) == acc.totals.cache_write
+    assert sum(m.cache_read for m in acc.by_model) == acc.totals.cache_read
