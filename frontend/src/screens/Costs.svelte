@@ -4,7 +4,7 @@
   import { fetchCostsForServer } from '../lib/api';
   import { mergeAccounts, addBuckets, sortDesc, type ServerResult, type MergedReport } from '../lib/costs';
   import { abbrevNum } from '../lib/format';
-  import type { AccountCost, CostBucket } from '../lib/types';
+  import type { AccountCost, CostBucket, CostModelBucket } from '../lib/types';
 
   interface Props { onBack: () => void; }
   let { onBack }: Props = $props();
@@ -43,11 +43,26 @@
     if (selected !== 'all') return accs.find((a) => a.account_id === selected) ?? null;
     // "Todas" = agrega todas as contas
     const sum = (f: (a: AccountCost) => number) => accs.reduce((t, a) => t + f(a), 0);
-    const modelMap = new Map<string, { model: string; sessions: number; cost: number }>();
+    const modelMap = new Map<string, Required<CostModelBucket>>();
     for (const a of accs) for (const mb of a.by_model) {
       const cur = modelMap.get(mb.model);
-      if (!cur) modelMap.set(mb.model, { ...mb });
-      else { cur.sessions += mb.sessions; cur.cost += mb.cost; }
+      // `?? 0` em toda entrada: servidor da malha em versão antiga manda by_model SEM tokens, e
+      // `undefined + n` viraria NaN — que se espalha e apaga a coluna inteira, inclusive as
+      // linhas dos servidores que mandaram o dado certo.
+      if (!cur) {
+        modelMap.set(mb.model, {
+          model: mb.model, sessions: mb.sessions, cost: mb.cost,
+          input: mb.input ?? 0, output: mb.output ?? 0,
+          cache_read: mb.cache_read ?? 0, cache_write: mb.cache_write ?? 0,
+        });
+      } else {
+        cur.sessions += mb.sessions;
+        cur.cost += mb.cost;
+        cur.input += mb.input ?? 0;
+        cur.output += mb.output ?? 0;
+        cur.cache_read += mb.cache_read ?? 0;
+        cur.cache_write += mb.cache_write ?? 0;
+      }
     }
     return {
       account_id: 'all', email: null, label: 'Todas',
@@ -69,12 +84,18 @@
     view ? (period === 'day' ? view.by_day : period === 'week' ? view.by_week : view.by_month) : [],
   );
   const peak = $derived(Math.max(1, ...rows.map((r) => r.cost)));
+  // Barra do "por modelo" escala pelo MAIOR MODELO, não pelo pico do período: são tabelas com
+  // recortes diferentes, e reaproveitar `peak` deixaria todas as barras curtas sem motivo.
+  const modelPeak = $derived(Math.max(1, ...(view?.by_model ?? []).map((m) => m.cost)));
   const money = (n: number) => `$${n.toFixed(2)}`;
+  // total 0 -> "—": 0/0 daria NaN%, e "0%" mentiria dizendo que existe um total do qual isto é 0.
+  const pct = (n: number, total: number) => (total > 0 ? `${((n / total) * 100).toFixed(1)}%` : '—');
 </script>
 
 <NavBar title="Custos" showBack={true} onBack={onBack} />
 
 <div class="costs">
+ <div class="inner">
   {#if loading}
     <p class="muted">Carregando…</p>
   {:else if !view}
@@ -102,8 +123,14 @@
     <dl class="stats">
       <div><dt>custo total</dt><dd class="accent">{money(view.totals.cost)}</dd></div>
       <div><dt>sessões</dt><dd>{view.totals.sessions}</dd></div>
+      <div><dt>por sessão</dt><dd>{money(view.totals.sessions ? view.totals.cost / view.totals.sessions : 0)}</dd></div>
       <div><dt>input</dt><dd>{abbrevNum(view.totals.input)}</dd></div>
       <div><dt>output</dt><dd>{abbrevNum(view.totals.output)}</dd></div>
+      <!-- Cache estava sendo BUSCADO e jogado fora: é a maior massa de tokens da página (bilhões
+           contra milhões de input), e cache write é cobrado mais caro que read. Some da soma, o
+           usuário não tem como entender de onde vem a conta. -->
+      <div><dt>cache escrito</dt><dd>{abbrevNum(view.totals.cache_write)}</dd></div>
+      <div><dt>cache lido</dt><dd>{abbrevNum(view.totals.cache_read)}</dd></div>
     </dl>
 
     <div class="tabs" role="tablist" aria-label="Período">
@@ -115,7 +142,21 @@
     <!-- overflow-x: a tabela e larga (7 col) e nao pode empurrar o body no mobile (375px). -->
     <div class="twrap">
       <table>
-        <thead><tr><th>período</th><th>sess</th><th>in</th><th>out</th><th>cache</th><th>custo</th><th></th></tr></thead>
+        <thead>
+          <tr>
+            <th>período</th>
+            <!-- th alinhado com a coluna: o padrão era `text-align: left` em TODO th, sobre
+                 colunas numéricas alinhadas à direita. Num monitor largo o título ficava a
+                 centenas de px do número que rotula. -->
+            <th class="n">sess</th>
+            <th class="n">in</th>
+            <th class="n">out</th>
+            <th class="n">cache W</th>
+            <th class="n">cache R</th>
+            <th class="n">custo</th>
+            <th></th>
+          </tr>
+        </thead>
         <tbody>
           {#each rows as r}
             <tr>
@@ -123,6 +164,7 @@
               <td class="n">{r.sessions}</td>
               <td class="n">{abbrevNum(r.input)}</td>
               <td class="n">{abbrevNum(r.output)}</td>
+              <td class="n">{abbrevNum(r.cache_write)}</td>
               <td class="n">{abbrevNum(r.cache_read)}</td>
               <td class="c">{money(r.cost)}</td>
               <td class="bar"><span style="width:{(r.cost / peak) * 100}%"></span></td>
@@ -135,18 +177,50 @@
     <h3>Por modelo</h3>
     <div class="twrap">
       <table>
+        <!-- thead que faltava: a coluna do meio era um número solto, sem rótulo nenhum. -->
+        <thead><tr><th>modelo</th><th class="n">sess</th><th class="n">in</th><th class="n">out</th><th class="n">cache W</th><th class="n">cache R</th><th class="n">% do custo</th><th class="n">custo</th><th></th></tr></thead>
         <tbody>
           {#each view.by_model as m}
-            <tr><td class="k">{m.model}</td><td class="n">{m.sessions}</td><td class="c">{money(m.cost)}</td></tr>
+            <tr>
+              <td class="k">{m.model}</td>
+              <td class="n">{m.sessions}</td>
+              <!-- `?? 0`: servidor antigo da malha não manda estes campos (ver CostModelBucket). -->
+              <td class="n">{abbrevNum(m.input ?? 0)}</td>
+              <td class="n">{abbrevNum(m.output ?? 0)}</td>
+              <td class="n">{abbrevNum(m.cache_write ?? 0)}</td>
+              <td class="n">{abbrevNum(m.cache_read ?? 0)}</td>
+              <!-- % é o que responde "quem está comendo a conta": com 4 modelos e valores em
+                   ordens diferentes, comparar dólar a dólar de cabeça não é imediato. -->
+              <td class="n muted">{pct(m.cost, view.totals.cost)}</td>
+              <td class="c">{money(m.cost)}</td>
+              <td class="bar"><span style="width:{(m.cost / modelPeak) * 100}%"></span></td>
+            </tr>
           {/each}
         </tbody>
       </table>
     </div>
   {/if}
+ </div>
 </div>
 
 <style>
-  .costs { padding: var(--space-3) var(--space-4) var(--space-10); }
+  /* flex+min-height+overflow: MESMO idioma do Archive. Sem isto a tela não rolava — o #app é
+     `overflow: hidden`, então o conteúdo que passava de 100vh era simplesmente cortado (643px
+     inalcançáveis no modo "Dia", com o "Por modelo" fora de alcance). min-height:0 é o pulo do
+     gato: sem ele o item flex não encolhe e o overflow vaza pro pai, que corta de novo.
+     padding-top = --navbar-fade porque o ::before da navbar pinta esse tanto ABAIXO dela (z-index
+     acima do conteúdo). Com os 12px de antes, o primeiro filho ficava com 12px cobertos — visível
+     no .warn, único sem margem própria pra escapar por acidente. */
+  .costs {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: var(--navbar-fade) var(--space-4) var(--space-10);
+  }
+  /* Largura máxima: a tabela é `width: 100%` e num monitor de 1900px as colunas se afastavam tanto
+     que o cabeçalho perdia relação visual com o número embaixo. Centralizado, não esticado. */
+  .inner { max-width: 1040px; margin-inline: auto; }
   .muted { color: var(--text-secondary); }
   .warn { color: var(--warning); font-size: var(--text-sm); }
   .tabs { display: flex; gap: var(--space-2); flex-wrap: wrap; margin: var(--space-3) 0; }

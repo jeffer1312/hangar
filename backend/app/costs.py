@@ -103,10 +103,16 @@ def _by_model(rows: list[dict]) -> list[ModelBucket]:
     agg: dict[str, dict] = {}
     for row in rows:
         m = row["model"] or "?"
-        a = agg.setdefault(m, {"sessions": 0, "cost": 0.0})
+        a = agg.setdefault(m, {"sessions": 0, "in": 0, "out": 0, "cr": 0, "cw": 0, "cost": 0.0})
         a["sessions"] += 1
+        a["in"] += row["in"]
+        a["out"] += row["out"]
+        a["cr"] += row["cr"]
+        a["cw"] += row["cw"]
         a["cost"] += _cost(row)
-    return [ModelBucket(model=m, sessions=a["sessions"], cost=a["cost"])
+    return [ModelBucket(model=m, sessions=a["sessions"], cost=a["cost"],
+                        input=a["in"], output=a["out"],
+                        cache_read=a["cr"], cache_write=a["cw"])
             for m, a in sorted(agg.items(), key=lambda kv: -kv[1]["cost"])]
 
 
