@@ -1,7 +1,8 @@
 <script lang="ts">
   import { enablePush, pushSupported } from '../lib/push';
   import { getPushSettings, setQuietHours } from '../lib/api';
-  import { serverColor } from '../lib/auth';
+  import { serverColor, parseServerPairing } from '../lib/auth';
+  import { vaultPush } from '../lib/vaultPush.svelte';
   import type { Server } from '../lib/auth';
 
   // Menu de CONTA (estilo Claude): tudo que é conta/config vive aqui, fora da navegação. Popover que
@@ -25,6 +26,10 @@
     activeId?: string | null;
     onSwitchServer?: (id: string) => void;   // só desktop (troca + reload)
     onRenameServer: (id: string, label: string) => void;
+    // Recebe o TOKEN ja extraido e validado (o parse mora aqui, num arquivo so — nos dois pais
+    // viraria validacao duplicada, e Sidebar/SessionList sao justamente os que vivem divergindo).
+    // Devolve false quando o servidor nao existe mais, pra UI poder dizer isso em vez de fingir.
+    onUpdateServerToken: (id: string, token: string) => boolean;
     onRemoveServer: (id: string) => void;
     onAddServer: () => void;
     onReconnect: () => void;
@@ -32,7 +37,7 @@
   }
   let {
     open, onClose, initials, accountName, accountSub = null, servers, anchorEl = null, embedded = false, activeId = null,
-    onSwitchServer, onRenameServer, onRemoveServer, onAddServer, onReconnect, onLogout,
+    onSwitchServer, onRenameServer, onUpdateServerToken, onRemoveServer, onAddServer, onReconnect, onLogout,
   }: Props = $props();
 
   // Portal pro <body>: a sidebar tem `backdrop-filter` (liquid glass no Chromium), que vira bloco de
@@ -96,6 +101,73 @@
     editingId = null;
   }
 
+  // Edicao de TOKEN, separada do rename: mesmo padrao inline, mas o campo comeca VAZIO (nunca
+  // pre-preenche com o token atual — segredo nao vai pra tela) e aceita tanto o token cru quanto a
+  // URL de pareamento inteira, pra quem cola do QR nao ter que extrair nada na mao.
+  let editingTokenId = $state<string | null>(null);
+  let editToken = $state('');
+  let tokenError = $state('');
+  function startEditToken(id: string) {
+    editingTokenId = id;
+    editToken = '';
+    tokenError = '';
+    editingId = null;      // os dois modos usam a mesma linha; abrir um fecha o outro
+    // NAO limpa o vaultPush aqui: abrir o campo nao conserta push nenhum. Limpando no clique, um
+    // erro NAO RESOLVIDO sumia da tela so por o usuario abrir o editor de outro servidor e apertar
+    // Esc — e "o aviso sumiu" se le como "resolvido", enquanto os outros aparelhos seguem com o
+    // token velho. Some so quando ha uma tentativa NOVA (saveToken).
+  }
+  function saveToken() {
+    const id = editingTokenId;
+    const text = editToken.trim();
+    // Vazio = desistiu. Gravar string vazia desautenticaria o servidor calado, e o campo em branco
+    // e exatamente o que sobra quando o usuario abre e clica fora.
+    if (!id || !text) {
+      editingTokenId = null;
+      editToken = '';
+      tokenError = '';
+      return;
+    }
+
+    const parsed = parseServerPairing(text);
+    // Parece URL mas nao parseou: RECUSA em vez de aceitar o texto inteiro como token. O fluxo de
+    // "Adicionar servidor" ja rejeita este mesmo caso com mensagem; aceitar aqui gravava a URL
+    // quebrada COMO token, e o campo e password — o usuario nao ve o lixo que ficou salvo. O
+    // sintoma vinha depois como 401, sem pista nenhuma de que foi um paste malformado.
+    const pareceUrl = text.includes('://');
+    if (pareceUrl && !parsed) {
+      tokenError = 'URL de pareamento inválida — cole a URL completa (com ?token=) ou só o token.';
+      return;                                   // campo CONTINUA aberto, com o texto, pra corrigir
+    }
+    // URL que PARSEOU mas nao tinha ?token=: o parseServerPairing so substitui o token quando acha o
+    // parametro — sem ele, devolve o proprio texto como "token". Ou seja, colar a URL do app copiada
+    // da barra de enderecos (que ja teve o token removido) gravaria a URL INTEIRA como credencial,
+    // sem erro nenhum. O guard de cima nao pega isto, porque aqui `parsed` nao e nulo.
+    if (pareceUrl && parsed && parsed.token === text) {
+      tokenError = 'essa URL não tem ?token= — cole a URL de pareamento completa ou só o token.';
+      return;
+    }
+    // So o TOKEN. O botao diz "Trocar token": colar a URL de pareamento de outra maquina nao pode
+    // reapontar calado um servidor ja cadastrado (com label e historico) pra outro host.
+    const token = parsed ? parsed.token : text;
+    const alvo = servers.find((s) => s.id === id);
+    const outroHost = parsed && alvo && parsed.base.replace(/\/+$/, '') !== alvo.baseUrl.replace(/\/+$/, '');
+
+    vaultPush.clear();                          // tentativa NOVA: agora sim zera o resultado antigo
+    const ok = onUpdateServerToken(id, token);
+    if (!ok) {
+      // false = o id sumiu (removido noutra aba/aparelho pelo sync entre abrir e salvar). Raro,
+      // mas indistinguivel de sucesso se ficasse calado — o campo ja teria fechado.
+      tokenError = 'esse servidor não existe mais nesta lista.';
+      return;
+    }
+    editingTokenId = null;
+    editToken = '';
+    tokenError = outroHost
+      ? `token trocado. O endereço NÃO mudou (segue ${alvo!.baseUrl}) — pra trocar o host, remova e adicione de novo.`
+      : '';
+  }
+
   // Posição do card: FIXED, medida da âncora (rodapé) via getBoundingClientRect. Abre pra cima.
   let pos = $state({ left: 0, bottom: 0 });
   $effect(() => {
@@ -121,7 +193,22 @@
     <div class="am-section">Servidores</div>
     {#each servers as s (s.id)}
       <div class="am-srv" class:on={s.id === activeId}>
-        {#if editingId === s.id}
+        {#if editingTokenId === s.id}
+          <span class="am-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
+          <!-- svelte-ignore a11y_autofocus -->
+          <input
+            class="am-srv-edit"
+            type="password"
+            autocomplete="off"
+            bind:value={editToken}
+            placeholder="token novo ou URL de pareamento"
+            onclick={(e) => e.stopPropagation()}
+            onkeydown={(e) => { if (e.key === 'Enter') saveToken(); if (e.key === 'Escape') { editingTokenId = null; editToken = ''; } }}
+            onblur={saveToken}
+            autofocus
+            aria-label={`Novo token de ${s.label}`}
+          />
+        {:else if editingId === s.id}
           <span class="am-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
           <!-- svelte-ignore a11y_autofocus -->
           <input
@@ -140,6 +227,7 @@
             {#if s.id === activeId}<span class="am-tag">ativo</span>{/if}
           </button>
           <button class="am-srv-rename" onclick={() => startRename(s.id, s.label)} aria-label={`Renomear ${s.label}`} title="Renomear">✎</button>
+          <button class="am-srv-rename" onclick={() => startEditToken(s.id)} aria-label={`Trocar token de ${s.label}`} title="Trocar token">🔑</button>
           {#if servers.length > 1}
             <button class="am-srv-del" onclick={() => onRemoveServer(s.id)} aria-label={`Remover ${s.label}`}>×</button>
           {/if}
@@ -147,10 +235,24 @@
           <span class="am-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
           <span class="am-srv-label">{s.label}</span>
           <button class="am-srv-rename" onclick={() => startRename(s.id, s.label)} aria-label={`Renomear ${s.label}`} title="Renomear">✎</button>
+          <button class="am-srv-rename" onclick={() => startEditToken(s.id)} aria-label={`Trocar token de ${s.label}`} title="Trocar token">🔑</button>
           <button class="am-srv-del" onclick={() => onRemoveServer(s.id)} aria-label={`Remover ${s.label}`}>×</button>
         {/if}
       </div>
     {/each}
+    <!-- Só aparece quando o push do vault FALHOU (ou o sync está deslogado). 'idle' = ninguém
+         configurou sync, e nesse caso não há o que avisar. Sucesso também não vira linha: a
+         mudança já está visível na lista, confirmar cada uma seria ruído. -->
+    <!-- Resultado da própria edição (recusa de URL inválida, servidor sumido, host preservado):
+         separado do aviso de sync, que é sobre o push pro hub e não sobre o que você digitou. -->
+    {#if tokenError}
+      <div class="am-sync-warn" role="status">{tokenError}</div>
+    {/if}
+
+    {#if vaultPush.estado === 'error' || vaultPush.estado === 'locked'}
+      <div class="am-sync-warn" role="status">⚠ {vaultPush.detalhe}</div>
+    {/if}
+
     <button class="am-item" role="menuitem" onclick={addServer}>
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
       Adicionar servidor
@@ -260,6 +362,13 @@
   .am-section {
     font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
     color: var(--text-muted); padding: var(--space-2) var(--space-4) var(--space-1);
+  }
+
+  /* Aviso de push do vault que nao subiu. Fica logo abaixo dos servidores porque e ali que a
+     acao aconteceu — mensagem longe do lugar do erro ninguem associa. */
+  .am-sync-warn {
+    font-size: var(--text-xs); color: var(--warning); line-height: 1.4;
+    padding: var(--space-1) var(--space-4) var(--space-2);
   }
 
   /* Linha de servidor: dot + label (+ tag "ativo" no desktop) + renomear + remover. */
