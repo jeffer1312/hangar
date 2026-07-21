@@ -105,11 +105,16 @@ EOF
 # matá-la, o flock -n do serviço bate no lock e entra em restart-loop até ela morrer. O pattern
 # não casa a cmdline deste script (que é "bash install-cp-panel.sh"), então é seguro aqui.
 pkill -f "qs -n -c claude-pocket" 2>/dev/null || true
-sleep 1
+sleep 1   # dá tempo do processo morto soltar o flock; se não bastar, o Restart do serviço recupera
 
 systemctl --user daemon-reload
-systemctl --user enable --now cp-panel.service >/dev/null 2>&1 || true
-echo "ok: cp-panel.service (systemd --user) habilitado + iniciado"
+# && / else em vez de "|| true": engolir o código e ecoar "ok" incondicional reportava sucesso
+# mesmo com unit malformada ou sessão systemd --user fora do ar. Falha tem que aparecer.
+if systemctl --user enable --now cp-panel.service; then
+    echo "ok: cp-panel.service (systemd --user) habilitado + iniciado"
+else
+    echo "ERRO: cp-panel.service não subiu — veja 'systemctl --user status cp-panel.service'" >&2
+fi
 
 # Ícone da bandeja como serviço systemd --user (antes era exec_cmd one-shot no execs.lua, que
 # morria se a barra ainda não tivesse publicado o StatusNotifierWatcher). StartLimitIntervalSec=0
@@ -132,8 +137,11 @@ RestartSec=3
 WantedBy=default.target
 EOF
 systemctl --user daemon-reload
-systemctl --user enable --now cp-panel-tray.service >/dev/null 2>&1 || true
-echo "ok: cp-panel-tray.service (systemd --user) habilitado + iniciado"
+if systemctl --user enable --now cp-panel-tray.service; then
+    echo "ok: cp-panel-tray.service (systemd --user) habilitado + iniciado"
+else
+    echo "ERRO: cp-panel-tray.service não subiu — veja 'systemctl --user status cp-panel-tray.service'" >&2
+fi
 
 # Backend desatualizado após git pull foi a causa do HTTP 404 no launcher — reinicia se existir.
 if systemctl --user list-unit-files claude-cockpit-backend.service >/dev/null 2>&1; then
@@ -141,8 +149,7 @@ if systemctl --user list-unit-files claude-cockpit-backend.service >/dev/null 2>
 fi
 
 echo
-echo "Falta só subir o painel (uma vez; nos próximos logins o autostart cuida):"
-echo "    qs -c claude-pocket &"
-echo "    hyprctl reload        # pra pegar o keybind"
+echo "Painel e tray já subiram como serviço systemd --user (e sobem sozinhos no boot)."
+echo "Rode 'hyprctl reload' uma vez pra pegar o keybind e o autostart de env."
 echo
 echo "Uso: SUPER + SHIFT + U  (ou: qs -c claude-pocket ipc call panel toggle)"
