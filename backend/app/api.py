@@ -8,7 +8,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -1343,6 +1343,22 @@ def project_stop(name: str):
 def project_pane(name: str):
     try:
         return {"pane": projects.pane(name)}
+    except projects.ProjectError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+class ProjectUpsert(BaseModel):
+    name: str
+    cwd: str
+    command: str
+    port: Optional[int] = None          # Pydantic coage "3000" (string do form QML) -> int
+    stop_command: Optional[str] = None
+
+
+@app.post("/api/projects", dependencies=[Depends(require_auth)], response_model=ProjectStatus)
+def project_upsert(body: ProjectUpsert):
+    try:
+        return projects.upsert(body.name, body.cwd, body.command, body.port, body.stop_command)
     except projects.ProjectError as e:
         raise HTTPException(e.status, e.detail)
 
