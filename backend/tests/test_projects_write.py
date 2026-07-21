@@ -60,3 +60,29 @@ def test_upsert_concorrente_nao_perde_entry(cfg):
     [t.join() for t in ts]
     data = json.loads(Path(cfg["path"]).read_text())
     assert len([k for k in data if k.startswith("p")]) == 10
+
+
+def test_remove_apaga_entry(cfg):
+    projects.upsert("some", cfg["cwd"], "pnpm dev")
+    projects.remove("some")
+    data = json.loads(Path(cfg["path"]).read_text())
+    assert "some" not in data
+
+
+def test_remove_inexistente_404(cfg):
+    projects.upsert("a", cfg["cwd"], "pnpm dev")  # garante arquivo
+    with pytest.raises(projects.ProjectError) as e:
+        projects.remove("naoexiste")
+    assert e.value.status == 404
+
+
+def test_remove_rodando_409(cfg, monkeypatch):
+    projects.upsert("run", cfg["cwd"], "pnpm dev")
+    # finge run vivo do slug desse cwd
+    from app.models import RunInfo
+    slug = projects.runner._slug(cfg["cwd"])
+    monkeypatch.setattr(projects.runner, "all_runs",
+                        lambda: {slug: RunInfo(command="pnpm dev", exited=False)})
+    with pytest.raises(projects.ProjectError) as e:
+        projects.remove("run")
+    assert e.value.status == 409
