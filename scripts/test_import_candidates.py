@@ -35,3 +35,10 @@ def test_match_colisao_nao_chuta(tmp_path):
 def test_cmd_com_abspath_morto():
     assert cpa._cmd_has_dead_abspath("bash /home/nada/x/launcher.sh")
     assert not cpa._cmd_has_dead_abspath("pnpm dev")
+
+
+def test_scan_roots_executa():
+    # _scan_roots usa env() de cp_panel_common — se o import faltar, dá NameError. Este teste
+    # exercita o caminho inteiro (sem ele os 4 acima nunca chamam _scan_roots e o bug passa).
+    roots = cpa._scan_roots()
+    assert isinstance(roots, list)
