@@ -130,3 +130,48 @@ def test_contract_path_stable_and_none_without_group(tmp_path):
     p1 = pair.contract_path_for("a")
     pair.join("a", "c")
     assert pair.contract_path_for("c") == p1  # gid estável: mesmo arquivo após entrar membro
+
+
+def test_join_with_remote_peer_skips_its_sidecar():
+    # Pareamento cross-server: peer remoto (srv::sess) entra só como STRING na lista de peers do
+    # local — o sidecar dele vive na máquina dele, não aqui. Sem o skip, gravava 'srv--sess.json'
+    # fantasma local e o restore/leave mexeriam num arquivo que não é desta máquina.
+    members = pair.join("a", "srv::b", "tarefa cross")
+    assert sorted(members) == ["a", "srv::b"]
+    assert _peers("a") == ["srv::b"]          # local sabe do par remoto
+    assert PairLink("srv::b").get() is None    # nenhum sidecar local pro remoto
+    # nenhum arquivo com o nome sanitizado do remoto foi criado
+    assert not list(pair._pair_dir().glob("srv*b.json"))
+
+
+def test_leave_cross_server_pair_clears_local_only():
+    pair.join("a", "srv::b")
+    ex = pair.leave("a")
+    assert ex == ["srv::b"]                     # devolve o par remoto pro caller avisar via /unpair-remote
+    assert _peers("a") is None
+
+
+def test_join_rejects_folding_local_into_cross_server_pair():
+    # Achado CRÍTICO do review: 'a' pareada cross-server com srv::x; parear 'b' localmente com 'a'
+    # vazava srv::x pro sidecar de 'b' sem handshake, e um unpair de 'b' dissolvia o par legítimo do
+    # OUTRO server. Agora join_group rejeita a mistura na raiz.
+    pair.join("a", "srv::x")
+    with pytest.raises(pair.PairMixError):
+        pair.join_group("b", ["a"])
+    # estado intacto: 'a' segue no par cross 1:1, 'b' nunca ganhou o remoto vazado
+    assert _peers("a") == ["srv::x"]
+    assert _peers("b") is None
+
+
+def test_join_rejects_two_remotes():
+    pair.join("a", "srv::x")
+    with pytest.raises(pair.PairMixError):
+        pair.join_group("a", ["srv::y"])       # 2 remotos num par -> ilegal
+    assert _peers("a") == ["srv::x"]           # sem mutação após o raise
+
+
+def test_join_rejects_cross_pairing_a_local_group_member():
+    pair.join("a", "b")                        # grupo local a<->b
+    with pytest.raises(pair.PairMixError):
+        pair.join_group("a", ["srv::x"])       # 'a' num grupo local não pode cross-parear
+    assert _peers("a") == ["b"] and _peers("b") == ["a"]

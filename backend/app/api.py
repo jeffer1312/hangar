@@ -41,6 +41,7 @@ from app.archive import ArchiveEntry, ArchiveFolder, archive_cwd, archive_jsonl,
 from app.search import SearchHit, search
 from app.askquestion import clear_pending_askq, read_pending_askq
 from app import pair
+from app import peers
 from app.pair import PairLink, contract_path_for
 from app.hook_state import hook_state
 from app import push
@@ -853,6 +854,12 @@ def _group_text(me: str, others: list[str], task: str) -> str:
     t = f" na tarefa: {task.strip()}" if task.strip() else ""
     quem = ", ".join(f"'{o}'" for o in others)
     exemplo = others[0]
+    # Par remoto (srv::sessao): contrato compartilhado não sincroniza cross-server no MVP — some a
+    # linha do arquivo (cada máquina teria o seu, com gid diferente). cp-send já roteia srv::sessao.
+    cross = any(peers.is_remote(o) for o in others)
+    contrato = "" if cross else (
+        f"Contrato/decisões que o grupo precisa consultar: registrar no arquivo compartilhado "
+        f"{contract_path_for(me)} (markdown; criar se não existir, manter curto e atual). ")
     return (
         f"[de: claude-pocket] GRUPO DE TRABALHO ATIVO: você ('{me}') trabalha junto com {quem}{t}. "
         f"Cada sessão mexe SÓ no próprio repo; quando precisar de algo de outro membro (contrato, "
@@ -862,8 +869,7 @@ def _group_text(me: str, others: list[str], task: str) -> str:
         f'cp-send --group "sua mensagem" (uma vez, chega como [grupo: <membro>]). '
         f"REGRA ANTI-LOOP: NUNCA responda um [grupo: ...] com --group (vira tempestade). Aviso de "
         f"grupo é unidirecional; se precisar responder, faça 1:1 (cp-send <membro>) e só se necessário. "
-        f"Contrato/decisões que o grupo precisa consultar: registrar no arquivo compartilhado "
-        f"{contract_path_for(me)} (markdown; criar se não existir, manter curto e atual). "
+        f"{contrato}"
         f"BRANCH: antes de trabalhar, rode git branch --show-current no SEU repo e alinhe pra "
         f"branch da PM da tarefa (fetch+checkout) — re-verifique após restart/resume da sessão. "
         f"Exceção única: o usuário pedir explicitamente outra branch. Checkout DUPLICADO do repo "
@@ -893,6 +899,16 @@ async def pair_session(name: str, body: PairBody):
         raise HTTPException(400, "informe peer ou peers")
     if name in others:
         raise HTTPException(400, "não dá pra parear uma sessão com ela mesma")
+    if any(peers.is_remote(o) for o in others):
+        # Cross-server é 1:1 puro (um peer remoto, sem misturar grupo local) — grupo cross-server de
+        # N fica pra fase 2. ponytail: 1:1 cobre "trabalhar junto entre máquinas"; N quando doer.
+        if len(others) != 1:
+            raise HTTPException(400, "pareamento cross-server é 1:1 por enquanto: um peer remoto, "
+                                     "sem misturar com grupo local")
+        if not settings.server_id:
+            raise HTTPException(400, "CP_SERVER_ID ausente no backend/.env — obrigatório pra "
+                                     "pareamento cross-server (é o endereço de resposta srv::sessao)")
+        return await _pair_cross_server(name, others[0], body.task)
     names = {s.name for s in await asyncio.to_thread(registry.list)}
     missing = [p for p in [name, *others] if p not in names]
     if missing:
@@ -900,7 +916,11 @@ async def pair_session(name: str, body: PairBody):
     # join_group: snapshot + join na MESMA seção crítica (em seções separadas, um join concorrente
     # na janela entre elas entrava no grupo fora do snapshot e um rollback posterior não o
     # reverteria). O snapshot volta pra cá pra desfazer se o aviso não chegar em ninguém.
-    members, snap = await asyncio.to_thread(pair.join_group, name, others, body.task)
+    try:
+        members, snap = await asyncio.to_thread(pair.join_group, name, others, body.task)
+    except pair.PairMixError as e:
+        # Uma das sessões locais já está pareada cross-server (1:1) — não dá pra fundir em grupo local.
+        raise HTTPException(400, str(e))
     link = await asyncio.to_thread(lambda: PairLink(name).get() or {})
     task = link.get("task", body.task)
     errs = []
@@ -916,6 +936,102 @@ async def pair_session(name: str, body: PairBody):
     # — o front mostra em vez de fingir sucesso total.
     return {"ok": True, "members": members,
             "warning": ("aviso falhou em: " + "; ".join(errs)) if errs else None}
+
+
+async def _pair_cross_server(name: str, peer: str, task: str) -> dict:
+    """Pareamento 1:1 entre máquinas. Registra o vínculo LOCAL (name.json peers=[srv::sessao];
+    sidecar do remoto vive na máquina dele) e chama o /pair-remote do backend peer pra registrar o
+    reverso + injetar o protocolo lá. Falha na chamada remota desfaz o vínculo local (mesmo racional
+    do 'grupo fantasma' do pair local). Transporte já provado pelo cp-send cross-server (peers.json)."""
+    local_names = {s.name for s in await asyncio.to_thread(registry.list)}
+    if name not in local_names:
+        raise HTTPException(404, f"sessão não encontrada: {name}")
+    srv, sess = peers.split_addr(peer)
+    try:
+        members, snap = await asyncio.to_thread(pair.join_group, name, [peer], task)
+    except pair.PairMixError as e:
+        # `name` já está num grupo local (ou já pareada cross-server): não dá pra cross-parear.
+        raise HTTPException(400, str(e))
+    link = await asyncio.to_thread(lambda: PairLink(name).get() or {})
+    task = link.get("task", task)
+    initiator = f"{settings.server_id}::{name}"
+    try:
+        await asyncio.to_thread(
+            peers.call, srv, "POST", f"/api/sessions/{sess}/pair-remote",
+            {"initiator": initiator, "task": task})
+    except peers.PeerError as e:
+        await asyncio.to_thread(pair.restore, snap)
+        if e.transport:
+            # Rede caiu / resposta perdida: o /pair-remote PODE ter comitado no peer antes de a
+            # resposta se perder. Desfiz este lado; tento limpar o outro por garantia (best-effort —
+            # se o peer está mesmo inacessível isto também falha, e aí o usuário desapareia lá na mão).
+            try:
+                await asyncio.to_thread(peers.call, srv, "POST",
+                                        f"/api/sessions/{sess}/unpair-remote", {"peer": initiator})
+            except peers.PeerError:
+                pass
+            raise HTTPException(502, f"pareamento NÃO confirmado (falha de rede com '{srv}'): desfeito "
+                                     f"deste lado; se o peer tiver ficado pareado, rode unpair lá. ({e})")
+        raise HTTPException(502, f"pareamento desfeito (peer rejeitou): {e}")
+    # Reverso registrado. Injeta o protocolo NESTE lado; se este falhar (sessão morreu na janela), o
+    # vínculo já vale dos dois lados — só avisa, não desfaz (o par remoto já sabe).
+    warn = None
+    e = await _deliver(name, _group_text(name, [peer], task))
+    if e:
+        warn = f"vínculo criado, mas o aviso local falhou ({name}: {e}) — refaça o pair se precisar"
+    return {"ok": True, "members": members, "warning": warn}
+
+
+class PairRemoteBody(_StrictBody):
+    initiator: str        # 'srv::nome' — quem iniciou o pareamento, na máquina remota
+    task: str = ""
+
+
+@app.post("/api/sessions/{name}/pair-remote", dependencies=[Depends(require_auth)])
+async def pair_remote(name: str, body: PairRemoteBody):
+    """Lado RECEPTOR do pareamento cross-server: registra `name` (sessão LOCAL) pareada ao iniciador
+    remoto `body.initiator` (srv::nome) e injeta o protocolo. NÃO chama de volta (o iniciador já
+    registrou o próprio lado — chamar de volta recursaria). Chamado só pelo backend do outro server
+    via peers.call, autenticado pelo token do peers.json."""
+    if not peers.is_remote(body.initiator):
+        raise HTTPException(400, "initiator precisa ser qualificado (srv::nome)")
+    local_names = {s.name for s in await asyncio.to_thread(registry.list)}
+    if name not in local_names:
+        raise HTTPException(404, f"sessão não encontrada: {name}")
+    try:
+        members, snap = await asyncio.to_thread(pair.join_group, name, [body.initiator], body.task)
+    except pair.PairMixError as e:
+        # `name` já está num grupo local aqui — não pode virar par cross-server de outra máquina.
+        raise HTTPException(409, str(e))
+    e = await _deliver(name, _group_text(name, [body.initiator], body.task))
+    if e:
+        await asyncio.to_thread(pair.restore, snap)
+        raise HTTPException(502, f"pareamento desfeito: falha ao avisar '{name}': {e}")
+    return {"ok": True, "members": members}
+
+
+class UnpairRemoteBody(_StrictBody):
+    peer: str             # 'srv::nome' que saiu do pareamento, na máquina remota
+
+
+@app.post("/api/sessions/{name}/unpair-remote", dependencies=[Depends(require_auth)])
+async def unpair_remote(name: str, body: UnpairRemoteBody):
+    """`name` (local) tinha um par remoto que saiu — remove o vínculo local e avisa. Idempotente
+    (sair de quem não está pareado é no-op). Chamado pelo backend peer no unpair do outro lado."""
+    # Defesa: só dissolve se `name` está MESMO pareado com quem diz estar saindo. Sem isto, um
+    # /unpair-remote perdido, duplicado ou com peer errado dissolvia um pareamento legítimo de `name`
+    # e mandava aviso falso (era o vetor de dano cross-máquina do achado crítico do review).
+    link = await asyncio.to_thread(lambda: PairLink(name).get())
+    if not link or body.peer not in (link.get("peers") or []):
+        return {"ok": True, "warning": None, "noop": f"'{name}' não está pareado com '{body.peer}'"}
+    ex = await asyncio.to_thread(pair.leave, name)
+    warn = None
+    if ex:
+        e = await _deliver(name, f"[de: claude-pocket] '{body.peer}' saiu do pareamento. "
+                                 "Volte a operar independente; use cp-send só quando o usuário pedir.")
+        if e:
+            warn = f"{name}: {e}"
+    return {"ok": True, "warning": warn}
 
 
 class GroupMsgBody(_StrictBody):
@@ -969,16 +1085,36 @@ async def unpair_session(name: str):
     """`name` SAI do grupo (os demais membros continuam entre si; grupo restante de 1 dissolve).
     Avisa quem saiu e quem ficou. Idempotente. Aviso que falhar NÃO refaz o vínculo (fora do grupo
     é o estado desejado) — só reporta no result."""
-    peers = await asyncio.to_thread(pair.leave, name)
-    if not peers:
+    expeers = await asyncio.to_thread(pair.leave, name)   # nome próprio: 'peers' é o módulo importado
+    if not expeers:
         return {"ok": True, "warning": None}
     errs = []
+    # Pares REMOTOS (srv::sessao): avisa o backend deles pra limpar o reverso — não dá pra _deliver
+    # local numa sessão de outra máquina. Os locais são avisados no loop abaixo.
+    for p in expeers:
+        if not peers.is_remote(p):
+            continue
+        if not settings.server_id:
+            errs.append(f"{p}: CP_SERVER_ID ausente — par remoto não avisado")
+            continue
+        srv, sess = peers.split_addr(p)
+        try:
+            await asyncio.to_thread(peers.call, srv, "POST",
+                                    f"/api/sessions/{sess}/unpair-remote",
+                                    {"peer": f"{settings.server_id}::{name}"})
+        except peers.PeerError as ex:
+            # `name` já saiu localmente (pair.leave acima); o peer não pôde ser avisado -> sidecar
+            # remoto fica órfão até alguém desparear lá. Loga pra rastreabilidade (journalctl) além
+            # do warning no result. ponytail: sem fila de retry durável — single-user, recuperável na
+            # mão; se virar comum, enfileirar via pqueue como o /input faz.
+            _log.warning("unpair: peer remoto '%s' não avisado (sidecar de lá fica órfão): %s", p, ex)
+            errs.append(f"{p}: {ex}")
     e = await _deliver(name, "[de: claude-pocket] Você saiu do grupo de trabalho "
-                             f"({', '.join(peers)}). Volte a operar independente; use cp-send só "
+                             f"({', '.join(expeers)}). Volte a operar independente; use cp-send só "
                              "quando o usuário pedir.")
     if e:
         errs.append(f"{name}: {e}")
-    resto = [p for p in peers]
+    resto = [p for p in expeers if not peers.is_remote(p)]
     for p in resto:
         ainda = [x for x in resto if x != p]
         msg = (f"[de: claude-pocket] '{name}' saiu do grupo de trabalho. "

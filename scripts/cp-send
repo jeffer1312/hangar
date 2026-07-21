@@ -19,7 +19,8 @@
 # Cross-server: backend/peers.json (ver peers.json.example; NUNCA commitar — tem token) mapeia
 # id -> {base_url, token} dos outros servidores, e CP_SERVER_ID no backend/.env é o id DESTA
 # máquina — vira o endereço de resposta ([de: <id>::<sessao>]) quando o recado cruza servidor.
-# ponytail: fase 2 (pareamento/--group cross-server) não existe — só recado 1:1 e --list.
+# --pair cross-server (servidor::sessao) FUNCIONA (1:1): o backend local resolve peers.json + chama
+# o /pair-remote do outro. ponytail: --group cross-server ainda não existe — só recado 1:1 e --list.
 set -euo pipefail
 
 ENV_FILE="$(dirname "$(realpath "$0")")/../backend/.env"
@@ -103,11 +104,9 @@ fi
 me() { tmux display-message -p '#S' 2>/dev/null || echo "cli"; }
 
 if [[ "$1" == "--pair" ]]; then
-    peer="${2:?uso: cp-send --pair <sessao> [tarefa...]}"; shift 2
-    if [[ "$peer" == *::* ]]; then
-        echo "erro: pareamento cross-server ainda não existe — por enquanto só recado 1:1: cp-send $peer \"msg\"" >&2
-        exit 2
-    fi
+    peer="${2:?uso: cp-send --pair <sessao|servidor::sessao> [tarefa...]}"; shift 2
+    # peer local (nome cru) OU remoto (servidor::sessao) — o backend local resolve o remoto via
+    # peers.json + CP_SERVER_ID e registra o vínculo dos dois lados (/pair-remote). Cross-server é 1:1.
     body=$(python3 -c 'import json,sys; print(json.dumps({"peer": sys.argv[1], "task": sys.argv[2]}))' "$peer" "$*")
     api POST "/api/sessions/$(me)/pair" "$body" >/dev/null
     echo "pareado: $(me) <-> $peer (registrado no app; os dois lados recebem o protocolo)"

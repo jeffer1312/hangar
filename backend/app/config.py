@@ -94,6 +94,10 @@ class Settings(BaseSettings):
     reload: bool = False     # CP_RELOAD=1: uvicorn auto-reload no dev (NUNCA em prod). Default off.
     front_port: int = 5173   # where the PWA is served (vite dev / Caddy) — used for QR pairing
     public_url: str = ""     # CP_PUBLIC_URL: overrides the auto-built pairing base URL
+    # CP_SERVER_ID: id DESTA maquina no peers.json (mesmo que o cp-send usa). Vazio = pareamento
+    # cross-server desligado; quando setado, vira o endereco de resposta 'srv::sessao' que o backend
+    # remoto recebe pra registrar o vinculo reverso. Recado 1:1 cross-server segue so no cp-send.
+    server_id: str = ""
     # Web Push (notificacao quando uma sessao fica awaiting_input). Par VAPID COMPARTILHADO entre os
     # servidores (single-user controla todos -> uma inscricao do celular serve os 3). Vazio = push
     # desligado (degrada gracioso: subscribe vira no-op). CP_VAPID_PUBLIC/PRIVATE/SUBJECT.
