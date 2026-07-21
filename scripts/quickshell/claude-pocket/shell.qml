@@ -142,6 +142,8 @@ ShellRoot {
         id: pickProc
         stdout: StdioCollector {
             onStreamFinished: {
+                // Reabre o painel escondido em pickFolder() — tanto se escolheu quanto se cancelou.
+                shellRoot.open = true;
                 let r = {};
                 try {
                     r = JSON.parse(text);
@@ -169,6 +171,10 @@ ShellRoot {
     function pickFolder(): void {
         if (pickProc.running)
             return;
+        // Esconde o painel enquanto o kdialog abre: o painel é layer-shell (fica ACIMA das janelas
+        // normais), então sem isto o diálogo nativo abre ATRÁS dele (e o botão Cancelar fica coberto).
+        // onStreamFinished reabre o painel quando a seleção volta.
+        shellRoot.open = false;
         pickProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", "x", "pick-folder", fCwd.text];
         pickProc.running = true;
     }
