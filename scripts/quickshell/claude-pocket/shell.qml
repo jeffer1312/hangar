@@ -107,6 +107,37 @@ ShellRoot {
         projActionProc.running = true;
     }
 
+    // Importar de outra máquina: candidatos do peer escolhido (✓ casado / ✗ sem pasta local).
+    property var importCandidates: []
+    property string importServer: ""
+
+    Process {
+        id: importProc
+        stdout: StdioCollector {
+            onStreamFinished: {
+                let r = {};
+                try {
+                    r = JSON.parse(text);
+                } catch (e) {
+                    r = {
+                        ok: false
+                    };
+                }
+                shellRoot.importCandidates = (r.ok && r.candidates) ? r.candidates : [];
+                shellRoot.projActionError = r.ok ? "" : (r.message ?? "import falhou");
+            }
+        }
+    }
+
+    function importFrom(server): void {
+        if (importProc.running)
+            return;
+        shellRoot.importServer = server;
+        shellRoot.projActionError = "";
+        importProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", server, "import-candidates"];
+        importProc.running = true;
+    }
+
     onOpenChanged: if (!open)
         menuSession = null;
 
@@ -920,6 +951,49 @@ ShellRoot {
                                         fCwd.text = "";
                                         fCommand.text = "";
                                         fPort.text = "";
+                                    }
+                                }
+                            }
+
+                            // Importar de outra máquina: um botão por peer -> lista candidatos.
+                            RowLayout {
+                                visible: Sessions.servers.length > 0
+                                Layout.topMargin: 8
+                                Layout.fillWidth: true
+                                spacing: 6
+                                Text {
+                                    text: "Importar de:"
+                                    color: "#c8c6cf"
+                                    font.pixelSize: 11
+                                }
+                                Repeater {
+                                    model: Sessions.servers
+                                    Button {
+                                        required property var modelData
+                                        text: modelData.id
+                                        onClicked: shellRoot.importFrom(modelData.id)
+                                    }
+                                }
+                            }
+
+                            // Candidatos casados: um toque cadastra (só os matched têm pasta local).
+                            Repeater {
+                                model: shellRoot.importCandidates
+                                RowLayout {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    spacing: 6
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: (modelData.matched ? "✓ " : "✗ ") + modelData.name
+                                        color: modelData.matched ? "#a5d6a7" : "#6e7079"
+                                        font.pixelSize: 10
+                                        elide: Text.ElideRight
+                                    }
+                                    Button {
+                                        text: "adicionar"
+                                        enabled: modelData.matched === true
+                                        onClicked: shellRoot.projAdd(modelData.name, modelData.cwd, modelData.command, modelData.port)
                                     }
                                 }
                             }
