@@ -1,3 +1,9 @@
+<script lang="ts" module>
+  // Scroll da lista sobrevive ao ir-e-voltar do chat: no mobile a rota #/chat DESMONTA este
+  // componente, então o scrollTop tem que viver no módulo (não na instância) pra restaurar.
+  let savedScroll = 0;
+</script>
+
 <script lang="ts">
   import { onMount } from 'svelte';
   import SessionCard from '../components/SessionCard.svelte';
@@ -109,6 +115,16 @@
 
   // Filtro so aparece quando a lista fica longa.
   const showFilter = $derived(sessions.length > 6);
+
+  // Restaura o scroll salvo (ver <script module>) DEPOIS da lista renderizar — no remount os dados
+  // chegam async do store, e restaurar com a lista vazia clamparia o scrollTop pra 0.
+  let listEl = $state<HTMLDivElement | null>(null);
+  let scrollRestored = savedScroll === 0;
+  $effect(() => {
+    if (scrollRestored || !listEl || visibleSessions.length === 0) return;
+    listEl.scrollTop = savedScroll;
+    scrollRestored = true;
+  });
 
   // Quantas sessões precisam de você (aguardando) — alimenta o badge do ícone do app.
   const awaitingCount = $derived(countAwaiting(sessions));
@@ -452,7 +468,12 @@
     </button>
   </header>
 
-  <div class="list-content" class:select-mode={selectMode}>
+  <div
+    class="list-content"
+    class:select-mode={selectMode}
+    bind:this={listEl}
+    onscroll={() => (savedScroll = listEl?.scrollTop ?? 0)}
+  >
     <!-- "Precisa de você" (feature #6): fila fixa no topo com as sessoes AGUARDANDO de TODOS os
          servidores. Responder aqui (picker inline) nao abre o chat; nativo AskUserQuestion abre. -->
     <AttentionFeed {sessions} onOpenChat={openSession} />
