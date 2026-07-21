@@ -54,7 +54,11 @@
   // 1 SSE por servidor via store, refcount pareado EXATAMENTE 1x (retain no mount, release no cleanup).
   onMount(() => {
     sessionsStore.retain();
-    return () => sessionsStore.release();
+    return () => {
+      // Captura a posição na SAÍDA (cinto-e-suspensório do onscroll; cleanup roda antes do DOM
+      // sair). Saindo no MEIO da fase de restore, o scrollTop está parcial — mantém o alvo original.
+      sessionsStore.release();
+    };
   });
 
   // Renomear servidor: o AccountMenu cuida da UI inline; aqui só persistimos e mandamos o store
@@ -116,15 +120,48 @@
   // Filtro so aparece quando a lista fica longa.
   const showFilter = $derived(sessions.length > 6);
 
-  // Restaura o scroll salvo (ver <script module>) DEPOIS da lista renderizar — no remount os dados
-  // chegam async do store, e restaurar com a lista vazia clamparia o scrollTop pra 0.
+  // Restaura o scroll salvo (ver <script module>) em FASES, não de uma vez: no remount o release()
+  // anterior zerou o store, e as sessões voltam em ONDAS (1 SSE por servidor). Restaurar no primeiro
+  // render não-vazio clampava o scrollTop na altura da primeira onda -> "voltou pro topo". Reaplica
+  // a cada crescimento da lista até o alvo caber; o primeiro gesto de scroll do usuário cancela a
+  // fase (não puxar a lista da mão dele).
+  //
+  // A posição é capturada no CLIQUE que sai da tela (openSession), nunca no unmount: durante o
+  // teardown o browser colapsa o container e zera o scrollTop ANTES do cleanup ler — e ainda emite
+  // um scroll(0) espúrio. Salvar ali clobberava a posição pra 0 (verificado com trace no Chromium;
+  // era por isso que o restore "não funcionava"). `leaving` congela o save a partir do clique.
   let listEl = $state<HTMLDivElement | null>(null);
-  let scrollRestored = savedScroll === 0;
+  let restoreTarget = savedScroll;
+  let lastApplied = -1;
+  let leaving = false;
   $effect(() => {
-    if (scrollRestored || !listEl || visibleSessions.length === 0) return;
-    listEl.scrollTop = savedScroll;
-    scrollRestored = true;
+    void visibleSessions;
+    const el = listEl;
+    if (restoreTarget <= 0 || !el) return;
+    // Anchoring nativo desligado DURANTE a fase: onda inserindo conteúdo acima da viewport faz o
+    // browser reajustar o scrollTop sozinho, e esse scroll "fantasma" cancelaria a fase como se
+    // fosse gesto do usuário. Fora da fase o anchoring volta ao default (segura a posição viva).
+    el.style.overflowAnchor = 'none';
+    // rAF: pós-layout — no effect o WebKit às vezes ainda não mediu o conteúdo novo.
+    requestAnimationFrame(() => {
+      if (restoreTarget <= 0 || !el.isConnected) return;
+      el.scrollTop = restoreTarget;
+      lastApplied = el.scrollTop;
+      if (restoreTarget - lastApplied <= 1) { restoreTarget = 0; el.style.overflowAnchor = ''; } // chegou (±1px)
+    });
   });
+  function onListScroll() {
+    const el = listEl;
+    if (!el || leaving) return;
+    // scroll(~0) com o conteúdo colapsado = teardown por OUTRO caminho de saída (drawer, switcher),
+    // não gesto do usuário — ignorar (senão clobbera a posição salva pra 0). `< 1` e não `=== 0`:
+    // iOS reporta scrollTop fracionário até no reset do colapso.
+    if (el.scrollTop < 1 && el.scrollHeight - el.clientHeight < 2) return;
+    // Scroll que não veio do restore = usuário mexeu -> cancela a fase (tolerância: iOS reporta
+    // scrollTop fracionário). Fora da fase, cada scroll atualiza a posição salva.
+    if (restoreTarget > 0 && Math.abs(el.scrollTop - lastApplied) > 1) { restoreTarget = 0; el.style.overflowAnchor = ''; }
+    if (restoreTarget <= 0) savedScroll = el.scrollTop;
+  }
 
   // Quantas sessões precisam de você (aguardando) — alimenta o badge do ícone do app.
   const awaitingCount = $derived(countAwaiting(sessions));
@@ -279,6 +316,11 @@
   // o ativo a cada chamada (sem reload). Assim chat/SSE/delete vão pro backend certo.
   function openSession(s: AggSession) {
     if (s.tracked === false) return; // sem id confiavel: chat bloqueado (evita transcript errado)
+    // Captura a posição AGORA (DOM intacto) e congela o save — ver comentário do restore.
+    if (restoreTarget <= 0) savedScroll = listEl?.scrollTop ?? savedScroll;
+    leaving = true;
+    // Navegação abortada (nome inválido etc.) deixaria o save congelado pra sempre — destrava.
+    setTimeout(() => (leaving = false), 1000);
     selectServer(s.serverId);
     onNavigateToChat(s.name);
   }
@@ -472,7 +514,7 @@
     class="list-content"
     class:select-mode={selectMode}
     bind:this={listEl}
-    onscroll={() => (savedScroll = listEl?.scrollTop ?? 0)}
+    onscroll={onListScroll}
   >
     <!-- "Precisa de você" (feature #6): fila fixa no topo com as sessoes AGUARDANDO de TODOS os
          servidores. Responder aqui (picker inline) nao abre o chat; nativo AskUserQuestion abre. -->
