@@ -22,6 +22,11 @@ from app.pqueue import _sanitize
 _LOCK = threading.Lock()
 
 
+class PairMixError(ValueError):
+    """Tentativa de misturar pareamento cross-server (1:1) com grupo local — proibido (ver
+    join_group). O caller (api.py) traduz pra HTTP 400."""
+
+
 def _pair_dir() -> Path:
     d = Path(settings.projects_dir).parent / ".claude-pocket-pair"
     d.mkdir(parents=True, exist_ok=True)
@@ -70,8 +75,13 @@ def _members_of(name: str) -> tuple[list[str], str, str]:
 
 
 def _write_group(members: list[str], task: str, gid: str) -> None:
-    """Grava o sidecar de CADA membro com os demais como peers (chamada já sob _LOCK)."""
+    """Grava o sidecar de CADA membro LOCAL com os demais como peers (chamada já sob _LOCK). Membro
+    REMOTO (nome qualificado 'srv::sessao') não tem sidecar aqui — ele vive na máquina dele; entra só
+    como string na lista de peers dos locais. O reverso (o sidecar de lá) é escrito pelo backend
+    remoto via /pair-remote."""
     for m in members:
+        if "::" in m:
+            continue
         PairLink(m).set([p for p in members if p != m], task, gid)
 
 
@@ -115,6 +125,18 @@ def join_group(name: str, others: list[str], task: str = "") -> tuple[list[str],
         all_names = list(dict.fromkeys([name, *others]))
         infos = [_members_of(n) for n in all_names]
         members = list(dict.fromkeys([m for ms, _, _ in infos for m in ms]))  # união, ordem estável
+        # INVARIANTE local/remoto: um par cross-server (nome 'srv::sessao') só existe como 1:1 — UMA
+        # sessão local + UM remoto. A união de grupos podia arrastar um remoto pré-existente de um
+        # membro pra dentro de um grupo local (join_group('B',['A']) com A já pareada a srv::X vazava
+        # srv::X pro sidecar de B), criando vínculo local com um remoto que NUNCA passou pelo handshake
+        # /pair-remote — e um unpair depois dissolvia o par legítimo do OUTRO server. Rejeita a mistura
+        # aqui (root cause), não só no check de shape do request lá no api.py. Nada foi mutado ainda.
+        remotes = [m for m in members if "::" in m]
+        locals_ = [m for m in members if "::" not in m]
+        if remotes and (len(remotes) > 1 or len(locals_) != 1):
+            raise PairMixError(
+                "pareamento cross-server é 1:1 (uma sessão local + um peer remoto); uma sessão já "
+                "pareada cross-server não entra em grupo local nem pareia com outro remoto")
         snap = {m: PairLink(m).get() for m in members}
         final_task = task.strip() or next((t for _, t, _ in infos if t), "")
         gids = list(dict.fromkeys([g for _, _, g in infos if g]))
