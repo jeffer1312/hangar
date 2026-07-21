@@ -51,3 +51,14 @@ def test_start_sem_lock_sem_package_manager(tmp_path):
 def test_sem_scripts(tmp_path):
     _write_pkg(tmp_path, scripts={})
     assert cpa._detect_command(str(tmp_path)) == ""
+
+
+def test_package_json_nao_e_objeto(tmp_path):
+    # JSON válido mas não-dict não pode estourar AttributeError (derrubaria a varredura toda).
+    (tmp_path / "package.json").write_text("[1, 2, 3]")
+    assert cpa._detect_command(str(tmp_path)) == ""
+
+
+def test_scripts_nao_e_objeto(tmp_path):
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": "oops"}))
+    assert cpa._detect_command(str(tmp_path)) == ""

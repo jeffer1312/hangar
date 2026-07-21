@@ -181,7 +181,11 @@ def _detect_command(path: str) -> str:
             pkg = json.load(f)
     except (OSError, ValueError):
         return ""
-    scripts = pkg.get("scripts") or {}
+    # JSON válido mas não-objeto ([], "x", 42, null): pkg.get() estouraria AttributeError e
+    # derrubaria a varredura INTEIRA por causa de UMA subpasta ruim. Trata como "sem detecção".
+    if not isinstance(pkg, dict):
+        return ""
+    scripts = pkg.get("scripts") if isinstance(pkg.get("scripts"), dict) else {}
     if "dev" in scripts:
         script = "dev"
     elif "start" in scripts:
@@ -210,10 +214,14 @@ def op_scan_folder(root: str) -> dict:
     marcado, um de cada vez."""
     if not root or not os.path.isdir(root):
         return {"ok": False, "message": "pasta inválida"}
+    # Falha ao listar os já cadastrados NÃO pode virar "tudo novo" mudo: o QML recadastraria os
+    # existentes. Avisa no message em vez de esconder.
+    check_failed = False
     try:
         existing = {p.get("cwd") for p in api("x", "GET", "/api/projects")}
     except PanelError:
         existing = set()
+        check_failed = True
     with os.scandir(root) as it:
         subdirs = [e for e in it if e.is_dir() and not e.name.startswith(".")]
     entries = []
@@ -221,7 +229,10 @@ def op_scan_folder(root: str) -> dict:
         cwd = os.path.realpath(entry.path)
         entries.append({"name": entry.name, "cwd": cwd, "command": _detect_command(cwd),
                         "already": cwd in existing})
-    return {"ok": True, "entries": entries, "message": f"{len(entries)} subpastas em {root}"}
+    msg = f"{len(entries)} subpastas em {root}"
+    if check_failed:
+        msg += " — ⚠ não checei duplicados (backend fora?)"
+    return {"ok": True, "entries": entries, "message": msg}
 
 
 def op_info(addr: str) -> dict:
