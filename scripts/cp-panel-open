@@ -5,9 +5,12 @@ Se já existe uma janela de terminal com a sessão attachada, FOCA ela. Só abre
 quando não existe nenhuma: `tmux attach` num alvo já attachado cria um SEGUNDO cliente, e o
 tmux encolhe a sessão pro menor cliente — o terminal que já estava aberto ficaria espremido.
 
-Detecção pelo TÍTULO da janela (o tmux põe o nome da sessão nele), não por pid: o kitty roda
-single-instance, então todas as janelas compartilham o mesmo pid e casar por pid não separa uma
-da outra. Sem janela correspondente, degrada pro terminal novo (comportamento antigo).
+Detecção primária por PID: `tmux list-clients` dá o pid do cliente attachado; subindo a
+ancestralidade (/proc) chega no processo do terminal, que é o pid da janela no
+`hyprctl clients`. Determinístico — título NÃO serve como chave primária aqui: o
+set-titles-string deste rice é `#{b:pane_current_path}`, então duas sessões no mesmo repo
+têm o MESMO título (era o bug: clicar em claude-cockpit-2 com ela já aberta abria um segundo
+attach em vez de focar). Título fica só como fallback (terminal fora do hyprctl, edge cases).
 """
 import json
 import os
@@ -18,14 +21,60 @@ import sys
 TERM_CLASSES = {"kitty", "foot", "alacritty", "wezterm", "org.wezfurlong.wezterm"}
 
 
-def find_window(name: str) -> str | None:
-    """Endereço da janela de terminal cujo título é a sessão (exato > prefixo). None se não há."""
+def hypr_clients() -> list[dict]:
     try:
         out = subprocess.run(["hyprctl", "clients", "-j"], capture_output=True, text=True,
                              timeout=5, check=True).stdout
-        clients = json.loads(out)
-    except (OSError, subprocess.SubprocessError, ValueError):
+        return json.loads(out)
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        # Visível no log do quickshell: sem isto, hyprctl quebrado = "nenhuma janela" mudo, e o
+        # clique abre um attach duplicado sem pista do porquê.
+        print(f"cp-panel-open: hyprctl clients falhou ({e}) — sem janela pra focar", file=sys.stderr)
+        return []
+
+
+def ppid_of(pid: int) -> int:
+    """PPID via /proc/<pid>/stat (campo 4, depois do ')' — comm pode conter espaço)."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            stat = f.read()
+        return int(stat.rsplit(")", 1)[1].split()[1])
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
+def tmux_client_pids(name: str) -> list[int]:
+    """Pids dos clientes attachados na sessão (vazio se sessão não existe/sem cliente)."""
+    try:
+        out = subprocess.run(["tmux", "list-clients", "-t", name, "-F", "#{client_pid}"],
+                             capture_output=True, text=True, timeout=5).stdout
+        return [int(p) for p in out.split()]
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        # Falha de invocação ≠ "sem cliente", mas o degrade é o mesmo (abrir terminal) — só não
+        # pode ser mudo. Sessão inexistente NÃO cai aqui (tmux sai !=0 com stdout vazio, sem check).
+        print(f"cp-panel-open: tmux list-clients falhou ({e})", file=sys.stderr)
+        return []
+
+
+def find_window(name: str) -> str | None:
+    """Endereço da janela com a sessão attachada. Pid do cliente tmux > título. None se não há."""
+    clients = hypr_clients()
+    by_pid = {c.get("pid"): c["address"] for c in clients if c.get("address")}
+    cpids = tmux_client_pids(name)
+    for cpid in cpids:
+        pid = cpid
+        for _ in range(5):  # sobe até 5 níveis (cobre wrapper/shell entre terminal e tmux)
+            pid = ppid_of(pid)
+            if pid <= 1:
+                break
+            if pid in by_pid:
+                return by_pid[pid]
+    # Sem cliente attachado = não há janela a focar. NÃO cai no título: com o set-titles-string
+    # de cwd, o título casaria a janela de OUTRA sessão do mesmo repo (foco errado silencioso).
+    if not cpids:
         return None
+    # Fallback: cliente existe mas a ancestralidade não mapeou (terminal fora do hyprctl?) —
+    # título (comportamento antigo), exato antes de prefixo.
     terms = [c for c in clients if str(c.get("class", "")).lower() in TERM_CLASSES]
     for match in (lambda t: t == name, lambda t: t.startswith(name)):
         for c in terms:
