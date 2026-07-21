@@ -138,17 +138,8 @@ ShellRoot {
         importProc.running = true;
     }
 
-    // Navegador de pastas do form de projeto (fs-roots/fs-scan): substitui o TextField cru de
-    // cwd. fsRoot/fsPath vazios = ainda nos chips de raiz; fsSelected = pasta escolhida (cwd).
-    property var fsRoots: []
-    property string fsRoot: ""
-    property string fsPath: ""
-    property var fsEntries: []
-    property string fsSelected: ""
-    property string fsError: ""
-
     Process {
-        id: fsProc
+        id: pickProc
         stdout: StdioCollector {
             onStreamFinished: {
                 let r = {};
@@ -160,54 +151,26 @@ ShellRoot {
                         message: "resposta inválida do cp-panel-action"
                     };
                 }
-                if (!r.ok) {
-                    shellRoot.fsError = r.message ?? "falhou";
-                    return;
-                }
-                // fs-roots devolve "roots"; fs-scan devolve "entries" — mesmo Process pros dois.
-                if (r.roots !== undefined) {
-                    shellRoot.fsRoots = r.roots;
-                } else {
-                    shellRoot.fsEntries = r.entries ?? [];
-                    shellRoot.fsError = r.error ?? "";
+                if (r.ok && r.path) {
+                    fCwd.text = r.path;
+                    // Basename da pasta como nome do projeto por padrão — economiza digitação,
+                    // mas só se o campo ainda estiver vazio (não pisa num nome já digitado).
+                    if (fName.text.trim() === "")
+                        fName.text = r.path.split("/").pop();
+                } else if (!r.ok) {
+                    shellRoot.projActionError = r.message ?? "falhou";
                 }
             }
         }
     }
 
-    function fsLoadRoots(): void {
-        if (fsProc.running)
+    // Dispara a caixa de diálogo NATIVA (kdialog/zenity) do sistema pra escolher a pasta do
+    // projeto — substitui o navegador de pastas embutido no painel.
+    function pickFolder(): void {
+        if (pickProc.running)
             return;
-        fsProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", "x", "fs-roots"];
-        fsProc.running = true;
-    }
-
-    function fsOpen(root, path): void {
-        if (fsProc.running)
-            return;
-        shellRoot.fsError = "";
-        shellRoot.fsRoot = root;
-        shellRoot.fsPath = path;
-        let cmd = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", "x", "fs-scan", root];
-        if (path)
-            cmd.push(path);
-        fsProc.command = cmd;
-        fsProc.running = true;
-    }
-
-    function fsSelect(entry): void {
-        shellRoot.fsSelected = entry.path;
-        // Basename da pasta como nome do projeto por padrão — economiza digitação, mas só se o
-        // campo ainda estiver vazio (não pisa num nome que o usuário já digitou).
-        if (fName.text.trim() === "")
-            fName.text = entry.name;
-    }
-
-    function fsReset(): void {
-        shellRoot.fsSelected = "";
-        shellRoot.fsRoot = "";
-        shellRoot.fsPath = "";
-        shellRoot.fsEntries = [];
+        pickProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", "x", "pick-folder", fCwd.text];
+        pickProc.running = true;
     }
 
     onOpenChanged: if (!open)
@@ -796,466 +759,369 @@ ShellRoot {
                         }
 
                         // ---- aba Ajustes ------------------------------------------------------
+                        // Flickable espelhando o padrão da aba Projetos (projFlick/projCol):
+                        // com 13+ projetos cadastrados + o form, o conteúdo passa da altura do
+                        // painel — sem rolagem o cartão "Novo projeto" ficava inalcançável.
 
-                        ColumnLayout {
+                        Flickable {
+                            id: ajustesFlick
                             visible: shellRoot.tab === "ajustes"
                             Layout.fillWidth: true
-                            spacing: 2
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: 8
-
-                                Text {
-                                    text: "Transparência"
-                                    color: "#c8c6cf"
-                                    font.pixelSize: 11
-                                }
-
-                                Slider {
-                                    id: opacitySlider
-                                    Layout.fillWidth: true
-                                    from: 0.5
-                                    to: 1.0
-                                    value: PanelConfig.options.opacity
-                                    onMoved: PanelConfig.options.opacity = value
-                                }
-
-                                Text {
-                                    text: Math.round(PanelConfig.options.opacity * 100) + "%"
-                                    color: "#c8c6cf"
-                                    font.pixelSize: 11
-                                    // Largura fixa: sem isto o slider pulava a cada dígito trocado.
-                                    Layout.preferredWidth: 32
-                                    horizontalAlignment: Text.AlignRight
-                                }
+                            Layout.fillHeight: true
+                            Layout.preferredHeight: Math.min(contentHeight, 560)
+                            contentHeight: ajustesCol.implicitHeight
+                            clip: true
+                            boundsBehavior: Flickable.StopAtBounds
+                            ScrollBar.vertical: ScrollBar {
+                                policy: ScrollBar.AsNeeded
                             }
 
-                            Text {
-                                Layout.fillWidth: true
-                                // O corte não é escolha minha: é o ignore_alpha do rice. Dizer o
-                                // porquê evita o usuário achar que o blur "bugou" ao baixar demais.
-                                text: PanelConfig.options.opacity < PanelConfig.blurCutoff ? "sem desfoque abaixo de 79% (limite do rice)" : "com desfoque do compositor"
-                                color: PanelConfig.options.opacity < PanelConfig.blurCutoff ? "#f9c784" : "#6e7079"
-                                font.pixelSize: 9
-                            }
+                            ColumnLayout {
+                                id: ajustesCol
+                                width: ajustesFlick.width
+                                spacing: 2
 
-                            // Servidores da malha. Só aparece com peer configurado — máquina
-                            // sozinha não tem por que ganhar uma seção vazia.
-                            Text {
-                                visible: Sessions.servers.length > 0
-                                Layout.topMargin: 8
-                                text: "Servidores"
-                                color: "#c8c6cf"
-                                font.pixelSize: 11
-                            }
-
-                            // Tiles-pílula (padrão Internet/Bluetooth do rice): aceso = na
-                            // varredura, apagado = fora. Toque alterna — mais direto que uma
-                            // linha com switch pra um estado binário.
-                            GridLayout {
-                                Layout.fillWidth: true
-                                Layout.topMargin: 4
-                                columns: 2
-                                columnSpacing: 6
-                                rowSpacing: 6
-
-                                Repeater {
-                                    model: Sessions.servers
-
-                                    Rectangle {
-                                        id: srvTile
-
-                                        required property var modelData
-                                        readonly property bool on: srvTile.modelData.enabled
-
-                                        Layout.fillWidth: true
-                                        implicitHeight: 46
-                                        radius: 14
-                                        color: srvTile.on ? "#e3e2e6" : srvMouse.containsMouse ? "#28ffffff" : "#14ffffff"
-
-                                        Behavior on color {
-                                            ColorAnimation {
-                                                duration: 120
-                                            }
-                                        }
-
-                                        RowLayout {
-                                            anchors.fill: parent
-                                            anchors.leftMargin: 12
-                                            anchors.rightMargin: 12
-                                            spacing: 8
-
-                                            Text {
-                                                text: "dns"
-                                                font.family: "Material Symbols Rounded"
-                                                font.pixelSize: 16
-                                                color: srvTile.on ? "#1b1d24" : "#8e9099"
-                                                renderType: Text.NativeRendering
-                                            }
-
-                                            ColumnLayout {
-                                                Layout.fillWidth: true
-                                                spacing: 0
-
-                                                Text {
-                                                    Layout.fillWidth: true
-                                                    text: srvTile.modelData.id
-                                                    color: srvTile.on ? "#1b1d24" : "#c8c6cf"
-                                                    font.pixelSize: 11
-                                                    font.weight: Font.DemiBold
-                                                    elide: Text.ElideRight
-                                                }
-
-                                                Text {
-                                                    Layout.fillWidth: true
-                                                    // Estado REAL, não o do tile: peer LIGADO que
-                                                    // não responde precisa aparecer como problema.
-                                                    // Tile aceso não é garantia de máquina viva.
-                                                    text: !srvTile.on ? "fora da varredura" : (srvTile.modelData.ok ? "respondendo" : "sem resposta")
-                                                    color: !srvTile.on ? "#6e7079" : (srvTile.modelData.ok ? "#3d6b46" : "#8a5a00")
-                                                    font.pixelSize: 9
-                                                    elide: Text.ElideRight
-                                                }
-                                            }
-                                        }
-
-                                        MouseArea {
-                                            id: srvMouse
-                                            anchors.fill: parent
-                                            hoverEnabled: true
-                                            cursorShape: Qt.PointingHandCursor
-                                            enabled: !peerProc.running
-                                            onClicked: shellRoot.setPeer(srvTile.modelData.id, !srvTile.on)
-                                        }
-                                    }
-                                }
-                            }
-
-                            Text {
-                                visible: shellRoot.peerResult !== ""
-                                Layout.fillWidth: true
-                                text: shellRoot.peerResult
-                                color: "#f28b82"
-                                font.pixelSize: 9
-                                wrapMode: Text.Wrap
-                            }
-
-                            // ---- Projetos do launcher (cadastro) --------------------------
-                            Text {
-                                Layout.topMargin: 10
-                                text: "Projetos"
-                                color: "#c8c6cf"
-                                font.pixelSize: 11
-                            }
-
-                            // Lista dos cadastrados: nome + pasta, com botão remover.
-                            Repeater {
-                                model: Sessions.projects
                                 RowLayout {
-                                    required property var modelData
                                     Layout.fillWidth: true
-                                    spacing: 6
-                                    ColumnLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 0
-                                        Text {
-                                            text: parent.parent.modelData.name
-                                            color: "#e3e2e6"
-                                            font.pixelSize: 11
-                                        }
-                                        Text {
-                                            Layout.fillWidth: true
-                                            text: parent.parent.modelData.cwd
-                                            color: "#6e7079"
-                                            font.pixelSize: 9
-                                            elide: Text.ElideMiddle
-                                        }
-                                    }
-                                    // remover
-                                    Text {
-                                        text: "delete"
-                                        font.family: "Material Symbols Rounded"
-                                        font.pixelSize: 16
-                                        color: delMouse.containsMouse ? "#f28b82" : "#8e9099"
-                                        MouseArea {
-                                            id: delMouse
-                                            anchors.fill: parent
-                                            hoverEnabled: true
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: shellRoot.projDel(parent.parent.modelData.name)
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Título do cartão de cadastro.
-                            Text {
-                                Layout.topMargin: 8
-                                text: "Novo projeto"
-                                color: "#c8c6cf"
-                                font.pixelSize: 11
-                            }
-
-                            // Form dentro de um cartão sutil — separa visualmente do resto da
-                            // aba em vez de campos soltos empilhados.
-                            Rectangle {
-                                Layout.fillWidth: true
-                                Layout.topMargin: 4
-                                radius: 12
-                                color: "#14ffffff"
-                                implicitHeight: formCol.implicitHeight + 20
-
-                                ColumnLayout {
-                                    id: formCol
-                                    anchors.fill: parent
-                                    anchors.margins: 10
                                     spacing: 8
 
-                                    TextField {
-                                        id: fName
-                                        Layout.fillWidth: true
-                                        placeholderText: "nome"
+                                    Text {
+                                        text: "Transparência"
+                                        color: "#c8c6cf"
+                                        font.pixelSize: 11
                                     }
 
-                                    // Navegador de pastas (fs-roots/fs-scan) no lugar do antigo
-                                    // TextField cru de cwd.
-                                    ColumnLayout {
+                                    Slider {
+                                        id: opacitySlider
                                         Layout.fillWidth: true
-                                        spacing: 6
-                                        Component.onCompleted: if (shellRoot.fsRoots.length === 0)
-                                            shellRoot.fsLoadRoots()
-
-                                        // Já escolhida: mostra o caminho + botão pra trocar.
-                                        RowLayout {
-                                            visible: shellRoot.fsSelected !== ""
-                                            Layout.fillWidth: true
-                                            spacing: 6
-                                            Text {
-                                                Layout.fillWidth: true
-                                                text: "📁 " + shellRoot.fsSelected
-                                                color: "#e3e2e6"
-                                                font.pixelSize: 10
-                                                elide: Text.ElideMiddle
-                                            }
-                                            Text {
-                                                text: "close"
-                                                font.family: "Material Symbols Rounded"
-                                                font.pixelSize: 14
-                                                color: fsResetMouse.containsMouse ? "#f28b82" : "#8e9099"
-                                                MouseArea {
-                                                    id: fsResetMouse
-                                                    anchors.fill: parent
-                                                    hoverEnabled: true
-                                                    cursorShape: Qt.PointingHandCursor
-                                                    onClicked: shellRoot.fsReset()
-                                                }
-                                            }
-                                        }
-
-                                        // Ainda não escolheu: chips de raiz ou lista de subpastas.
-                                        ColumnLayout {
-                                            visible: shellRoot.fsSelected === ""
-                                            Layout.fillWidth: true
-                                            spacing: 6
-
-                                            // Chips de raiz — só quando ainda não entrou em nenhuma.
-                                            RowLayout {
-                                                visible: shellRoot.fsRoot === ""
-                                                Layout.fillWidth: true
-                                                spacing: 6
-                                                Repeater {
-                                                    model: shellRoot.fsRoots
-                                                    Rectangle {
-                                                        id: rootChip
-                                                        required property var modelData
-                                                        implicitWidth: rootLabel.implicitWidth + 20
-                                                        implicitHeight: 26
-                                                        radius: 13
-                                                        color: rootMouse.containsMouse ? "#28ffffff" : "#14ffffff"
-                                                        Text {
-                                                            id: rootLabel
-                                                            anchors.centerIn: parent
-                                                            text: rootChip.modelData.name
-                                                            color: "#c8c6cf"
-                                                            font.pixelSize: 10
-                                                        }
-                                                        MouseArea {
-                                                            id: rootMouse
-                                                            anchors.fill: parent
-                                                            hoverEnabled: true
-                                                            cursorShape: Qt.PointingHandCursor
-                                                            onClicked: shellRoot.fsOpen(rootChip.modelData.path, "")
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            // Dentro de uma raiz: cabeçalho (caminho + voltar) e a
-                                            // lista de subpastas.
-                                            ColumnLayout {
-                                                visible: shellRoot.fsRoot !== ""
-                                                Layout.fillWidth: true
-                                                spacing: 4
-
-                                                RowLayout {
-                                                    Layout.fillWidth: true
-                                                    spacing: 6
-                                                    Text {
-                                                        text: "arrow_back"
-                                                        font.family: "Material Symbols Rounded"
-                                                        font.pixelSize: 14
-                                                        color: fsBackMouse.containsMouse ? "#e3e2e6" : "#8e9099"
-                                                        MouseArea {
-                                                            id: fsBackMouse
-                                                            anchors.fill: parent
-                                                            hoverEnabled: true
-                                                            cursorShape: Qt.PointingHandCursor
-                                                            onClicked: {
-                                                                // Já na raiz -> volta pros chips; senão sobe um nível.
-                                                                if (shellRoot.fsPath === "" || shellRoot.fsPath === shellRoot.fsRoot) {
-                                                                    shellRoot.fsRoot = "";
-                                                                    shellRoot.fsEntries = [];
-                                                                } else {
-                                                                    let up = shellRoot.fsPath.substring(0, shellRoot.fsPath.lastIndexOf("/"));
-                                                                    shellRoot.fsOpen(shellRoot.fsRoot, up);
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                    Text {
-                                                        Layout.fillWidth: true
-                                                        text: shellRoot.fsPath || shellRoot.fsRoot
-                                                        color: "#6e7079"
-                                                        font.pixelSize: 9
-                                                        elide: Text.ElideMiddle
-                                                    }
-                                                }
-
-                                                Text {
-                                                    visible: shellRoot.fsError !== ""
-                                                    Layout.fillWidth: true
-                                                    text: shellRoot.fsError
-                                                    color: "#f28b82"
-                                                    font.pixelSize: 9
-                                                    wrapMode: Text.Wrap
-                                                }
-
-                                                Repeater {
-                                                    model: shellRoot.fsEntries
-                                                    RowLayout {
-                                                        id: fsRow
-                                                        required property var modelData
-                                                        Layout.fillWidth: true
-                                                        spacing: 6
-
-                                                        // Toque no nome SELECIONA a pasta como cwd.
-                                                        Text {
-                                                            Layout.fillWidth: true
-                                                            text: fsRow.modelData.name
-                                                            color: "#e3e2e6"
-                                                            font.pixelSize: 10
-                                                            elide: Text.ElideRight
-                                                            MouseArea {
-                                                                anchors.fill: parent
-                                                                cursorShape: Qt.PointingHandCursor
-                                                                onClicked: shellRoot.fsSelect(fsRow.modelData)
-                                                            }
-                                                        }
-                                                        // Chevron ENTRA na pasta (navega, não seleciona).
-                                                        Text {
-                                                            text: "chevron_right"
-                                                            font.family: "Material Symbols Rounded"
-                                                            font.pixelSize: 14
-                                                            color: fsDrillMouse.containsMouse ? "#e3e2e6" : "#8e9099"
-                                                            MouseArea {
-                                                                id: fsDrillMouse
-                                                                anchors.fill: parent
-                                                                hoverEnabled: true
-                                                                cursorShape: Qt.PointingHandCursor
-                                                                onClicked: shellRoot.fsOpen(shellRoot.fsRoot, fsRow.modelData.path)
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
+                                        from: 0.5
+                                        to: 1.0
+                                        value: PanelConfig.options.opacity
+                                        onMoved: PanelConfig.options.opacity = value
                                     }
 
-                                    TextField {
-                                        id: fCommand
-                                        Layout.fillWidth: true
-                                        placeholderText: "comando (ex: pnpm dev)"
-                                    }
-                                    TextField {
-                                        id: fPort
-                                        Layout.fillWidth: true
-                                        placeholderText: "porta (opcional)"
-                                    }
-                                    Button {
-                                        text: "＋ adicionar projeto"
-                                        enabled: fName.text.trim() !== "" && shellRoot.fsSelected !== "" && fCommand.text.trim() !== ""
-                                        onClicked: {
-                                            shellRoot.projAdd(fName.text.trim(), shellRoot.fsSelected, fCommand.text.trim(), fPort.text);
-                                            fName.text = "";
-                                            fCommand.text = "";
-                                            fPort.text = "";
-                                            shellRoot.fsReset();
-                                        }
+                                    Text {
+                                        text: Math.round(PanelConfig.options.opacity * 100) + "%"
+                                        color: "#c8c6cf"
+                                        font.pixelSize: 11
+                                        // Largura fixa: sem isto o slider pulava a cada dígito trocado.
+                                        Layout.preferredWidth: 32
+                                        horizontalAlignment: Text.AlignRight
                                     }
                                 }
-                            }
 
-                            // Importar de outra máquina: um botão por peer -> lista candidatos.
-                            RowLayout {
-                                visible: Sessions.servers.length > 0
-                                Layout.topMargin: 8
-                                Layout.fillWidth: true
-                                spacing: 6
                                 Text {
-                                    text: "Importar de:"
+                                    Layout.fillWidth: true
+                                    // O corte não é escolha minha: é o ignore_alpha do rice. Dizer o
+                                    // porquê evita o usuário achar que o blur "bugou" ao baixar demais.
+                                    text: PanelConfig.options.opacity < PanelConfig.blurCutoff ? "sem desfoque abaixo de 79% (limite do rice)" : "com desfoque do compositor"
+                                    color: PanelConfig.options.opacity < PanelConfig.blurCutoff ? "#f9c784" : "#6e7079"
+                                    font.pixelSize: 9
+                                }
+
+                                // Servidores da malha. Só aparece com peer configurado — máquina
+                                // sozinha não tem por que ganhar uma seção vazia.
+                                Text {
+                                    visible: Sessions.servers.length > 0
+                                    Layout.topMargin: 8
+                                    text: "Servidores"
                                     color: "#c8c6cf"
                                     font.pixelSize: 11
                                 }
-                                Repeater {
-                                    model: Sessions.servers
-                                    Button {
-                                        required property var modelData
-                                        text: modelData.id
-                                        onClicked: shellRoot.importFrom(modelData.id)
+
+                                // Tiles-pílula (padrão Internet/Bluetooth do rice): aceso = na
+                                // varredura, apagado = fora. Toque alterna — mais direto que uma
+                                // linha com switch pra um estado binário.
+                                GridLayout {
+                                    Layout.fillWidth: true
+                                    Layout.topMargin: 4
+                                    columns: 2
+                                    columnSpacing: 6
+                                    rowSpacing: 6
+
+                                    Repeater {
+                                        model: Sessions.servers
+
+                                        Rectangle {
+                                            id: srvTile
+
+                                            required property var modelData
+                                            readonly property bool on: srvTile.modelData.enabled
+
+                                            Layout.fillWidth: true
+                                            implicitHeight: 46
+                                            radius: 14
+                                            color: srvTile.on ? "#e3e2e6" : srvMouse.containsMouse ? "#28ffffff" : "#14ffffff"
+
+                                            Behavior on color {
+                                                ColorAnimation {
+                                                    duration: 120
+                                                }
+                                            }
+
+                                            RowLayout {
+                                                anchors.fill: parent
+                                                anchors.leftMargin: 12
+                                                anchors.rightMargin: 12
+                                                spacing: 8
+
+                                                Text {
+                                                    text: "dns"
+                                                    font.family: "Material Symbols Rounded"
+                                                    font.pixelSize: 16
+                                                    color: srvTile.on ? "#1b1d24" : "#8e9099"
+                                                    renderType: Text.NativeRendering
+                                                }
+
+                                                ColumnLayout {
+                                                    Layout.fillWidth: true
+                                                    spacing: 0
+
+                                                    Text {
+                                                        Layout.fillWidth: true
+                                                        text: srvTile.modelData.id
+                                                        color: srvTile.on ? "#1b1d24" : "#c8c6cf"
+                                                        font.pixelSize: 11
+                                                        font.weight: Font.DemiBold
+                                                        elide: Text.ElideRight
+                                                    }
+
+                                                    Text {
+                                                        Layout.fillWidth: true
+                                                        // Estado REAL, não o do tile: peer LIGADO que
+                                                        // não responde precisa aparecer como problema.
+                                                        // Tile aceso não é garantia de máquina viva.
+                                                        text: !srvTile.on ? "fora da varredura" : (srvTile.modelData.ok ? "respondendo" : "sem resposta")
+                                                        color: !srvTile.on ? "#6e7079" : (srvTile.modelData.ok ? "#3d6b46" : "#8a5a00")
+                                                        font.pixelSize: 9
+                                                        elide: Text.ElideRight
+                                                    }
+                                                }
+                                            }
+
+                                            MouseArea {
+                                                id: srvMouse
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                enabled: !peerProc.running
+                                                onClicked: shellRoot.setPeer(srvTile.modelData.id, !srvTile.on)
+                                            }
+                                        }
                                     }
                                 }
-                            }
 
-                            // Candidatos casados: um toque cadastra (só os matched têm pasta local).
-                            Repeater {
-                                model: shellRoot.importCandidates
+                                Text {
+                                    visible: shellRoot.peerResult !== ""
+                                    Layout.fillWidth: true
+                                    text: shellRoot.peerResult
+                                    color: "#f28b82"
+                                    font.pixelSize: 9
+                                    wrapMode: Text.Wrap
+                                }
+
+                                // ---- Projetos do launcher (cadastro) --------------------------
+                                Text {
+                                    Layout.topMargin: 10
+                                    text: "Projetos"
+                                    color: "#c8c6cf"
+                                    font.pixelSize: 11
+                                }
+
+                                // Lista dos cadastrados: nome + pasta, com botão remover.
+                                Repeater {
+                                    model: Sessions.projects
+                                    RowLayout {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        spacing: 6
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 0
+                                            Text {
+                                                text: parent.parent.modelData.name
+                                                color: "#e3e2e6"
+                                                font.pixelSize: 11
+                                            }
+                                            Text {
+                                                Layout.fillWidth: true
+                                                text: parent.parent.modelData.cwd
+                                                color: "#6e7079"
+                                                font.pixelSize: 9
+                                                elide: Text.ElideMiddle
+                                            }
+                                        }
+                                        // remover
+                                        Text {
+                                            text: "delete"
+                                            font.family: "Material Symbols Rounded"
+                                            font.pixelSize: 16
+                                            color: delMouse.containsMouse ? "#f28b82" : "#8e9099"
+                                            MouseArea {
+                                                id: delMouse
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: shellRoot.projDel(parent.parent.modelData.name)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Título do cartão de cadastro.
+                                Text {
+                                    Layout.topMargin: 8
+                                    text: "Novo projeto"
+                                    color: "#c8c6cf"
+                                    font.pixelSize: 11
+                                }
+
+                                // Form dentro de um cartão sutil — separa visualmente do resto da
+                                // aba em vez de campos soltos empilhados.
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.topMargin: 4
+                                    radius: 12
+                                    color: "#14ffffff"
+                                    implicitHeight: formCol.implicitHeight + 20
+
+                                    ColumnLayout {
+                                        id: formCol
+                                        anchors.fill: parent
+                                        anchors.margins: 10
+                                        spacing: 8
+
+                                        TextField {
+                                            id: fName
+                                            Layout.fillWidth: true
+                                            placeholderText: "nome"
+                                            color: "#e3e2e6"
+                                            placeholderTextColor: "#6e7079"
+                                            background: Rectangle {
+                                                radius: 8
+                                                color: "#1e1e26"
+                                                border.color: "#33ffffff"
+                                                border.width: 1
+                                            }
+                                        }
+
+                                        // Pasta do projeto: caixa de diálogo NATIVA do sistema
+                                        // (kdialog/zenity via pick-folder) no lugar do navegador
+                                        // embutido — o campo só mostra o path escolhido.
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 6
+                                            TextField {
+                                                id: fCwd
+                                                Layout.fillWidth: true
+                                                readOnly: true
+                                                placeholderText: "pasta do projeto"
+                                                color: "#e3e2e6"
+                                                placeholderTextColor: "#6e7079"
+                                                background: Rectangle {
+                                                    radius: 8
+                                                    color: "#1e1e26"
+                                                    border.color: "#33ffffff"
+                                                    border.width: 1
+                                                }
+                                            }
+                                            Button {
+                                                text: "📁 escolher pasta"
+                                                onClicked: shellRoot.pickFolder()
+                                            }
+                                        }
+
+                                        TextField {
+                                            id: fCommand
+                                            Layout.fillWidth: true
+                                            placeholderText: "comando (ex: pnpm dev)"
+                                            color: "#e3e2e6"
+                                            placeholderTextColor: "#6e7079"
+                                            background: Rectangle {
+                                                radius: 8
+                                                color: "#1e1e26"
+                                                border.color: "#33ffffff"
+                                                border.width: 1
+                                            }
+                                        }
+                                        TextField {
+                                            id: fPort
+                                            Layout.fillWidth: true
+                                            placeholderText: "porta (opcional)"
+                                            color: "#e3e2e6"
+                                            placeholderTextColor: "#6e7079"
+                                            background: Rectangle {
+                                                radius: 8
+                                                color: "#1e1e26"
+                                                border.color: "#33ffffff"
+                                                border.width: 1
+                                            }
+                                        }
+                                        Button {
+                                            text: "＋ adicionar projeto"
+                                            enabled: fName.text.trim() !== "" && fCwd.text.trim() !== "" && fCommand.text.trim() !== ""
+                                            onClicked: {
+                                                shellRoot.projAdd(fName.text.trim(), fCwd.text.trim(), fCommand.text.trim(), fPort.text);
+                                                fName.text = "";
+                                                fCwd.text = "";
+                                                fCommand.text = "";
+                                                fPort.text = "";
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Importar de outra máquina: um botão por peer -> lista candidatos.
                                 RowLayout {
-                                    required property var modelData
+                                    visible: Sessions.servers.length > 0
+                                    Layout.topMargin: 8
                                     Layout.fillWidth: true
                                     spacing: 6
                                     Text {
-                                        Layout.fillWidth: true
-                                        text: (modelData.matched ? "✓ " : "✗ ") + modelData.name
-                                        color: modelData.matched ? "#a5d6a7" : "#6e7079"
-                                        font.pixelSize: 10
-                                        elide: Text.ElideRight
+                                        text: "Importar de:"
+                                        color: "#c8c6cf"
+                                        font.pixelSize: 11
                                     }
-                                    Button {
-                                        text: "adicionar"
-                                        enabled: modelData.matched === true
-                                        onClicked: shellRoot.projAdd(modelData.name, modelData.cwd, modelData.command, modelData.port)
+                                    Repeater {
+                                        model: Sessions.servers
+                                        Button {
+                                            required property var modelData
+                                            text: modelData.id
+                                            onClicked: shellRoot.importFrom(modelData.id)
+                                        }
                                     }
                                 }
-                            }
 
-                            Text {
-                                visible: shellRoot.projActionError !== ""
-                                Layout.fillWidth: true
-                                text: shellRoot.projActionError
-                                color: "#f28b82"
-                                font.pixelSize: 9
-                                wrapMode: Text.Wrap
+                                // Candidatos casados: um toque cadastra (só os matched têm pasta local).
+                                Repeater {
+                                    model: shellRoot.importCandidates
+                                    RowLayout {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        spacing: 6
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: (modelData.matched ? "✓ " : "✗ ") + modelData.name
+                                            color: modelData.matched ? "#a5d6a7" : "#6e7079"
+                                            font.pixelSize: 10
+                                            elide: Text.ElideRight
+                                        }
+                                        Button {
+                                            text: "adicionar"
+                                            enabled: modelData.matched === true
+                                            onClicked: shellRoot.projAdd(modelData.name, modelData.cwd, modelData.command, modelData.port)
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    visible: shellRoot.projActionError !== ""
+                                    Layout.fillWidth: true
+                                    text: shellRoot.projActionError
+                                    color: "#f28b82"
+                                    font.pixelSize: 9
+                                    wrapMode: Text.Wrap
+                                }
                             }
                         }
                     }
