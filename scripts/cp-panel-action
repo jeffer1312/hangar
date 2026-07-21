@@ -29,7 +29,7 @@ import sys
 # resolve(): o script roda via symlink em ~/.local/bin — sem resolver, o import do módulo
 # irmão procuraria em ~/.local/bin em vez de scripts/ do repo.
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from cp_panel_common import WRITE_TIMEOUT, PanelError, api, set_peer_enabled  # noqa: E402
+from cp_panel_common import WRITE_TIMEOUT, PanelError, api, env, set_peer_enabled  # noqa: E402
 
 
 def op_peer(pid: str, arg: str) -> dict:
