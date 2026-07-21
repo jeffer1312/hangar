@@ -72,18 +72,73 @@ insere_bloco "$HOME/.config/hypr/custom/keybinds.lua" "panel-bind" \
 'hl.bind("SUPER + SHIFT + U", hl.dsp.global("claude-pocket:toggle"), { description = "Claude Pocket: painel de sessões" })'
 
 insere_bloco "$HOME/.config/hypr/custom/execs.lua" "panel-exec" \
-'-- flock -n: o autostart re-executa a CADA hyprctl reload, e o Hyprland recarrega o config no
--- próprio boot — as duas chamadas saem no MESMO segundo. O -n/--no-duplicate do qs perde essa
--- corrida (as duas instâncias sobem antes de qualquer uma se registrar) e a segunda fica zumbi,
--- sem layer, roubando o GlobalShortcut. O flock é atômico e não perde. O -n do qs fica como
--- rede pro caso de alguém subir o painel na mão, fora do flock.
-hl.exec_cmd("bash -c '\''exec flock -n \"${XDG_RUNTIME_DIR:-$HOME}/cp-panel.lock\" qs -n -c claude-pocket'\''")
--- Ícone na bandeja (SNI). sleep: precisa do StatusNotifierWatcher da barra já no barramento.
-hl.exec_cmd("bash -c \"sleep 5; $HOME/.local/bin/cp-panel-tray\"")'
+'-- Painel e tray sobem como serviço systemd --user (gerados por este install). Aqui só
+-- garantimos o ENV gráfico: o serviço pode subir antes do Hyprland exportar WAYLAND_DISPLAY /
+-- HYPRLAND_INSTANCE_SIGNATURE. import-environment + restart resolve (idempotente, barato) — é a
+-- rede pra máquinas onde essas vars não estão no systemd --user antes do serviço.
+hl.exec_cmd("bash -c '\''systemctl --user import-environment WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE XDG_RUNTIME_DIR; systemctl --user restart cp-panel.service cp-panel-tray.service'\''")'
 
 # Sem regra de blur aqui de propósito: o rice já aplica blur em "quickshell:.*", e o painel usa
 # alpha dentro do ignore_alpha dele (0.79). Regra própria seria config redundante pra manter.
 remove_bloco "$HOME/.config/hypr/custom/rules.lua" "panel-blur"
+
+# --- serviço do painel -----------------------------------------------------------------------
+PANEL_UNIT="$HOME/.config/systemd/user/cp-panel.service"
+mkdir -p "$(dirname "$PANEL_UNIT")"
+cat > "$PANEL_UNIT" <<EOF
+[Unit]
+Description=Claude Pocket — painel (Quickshell layer-shell)
+# O Hyprland não é gerenciado pelo systemd, então não dá After=; o Restart cobre a espera pelo
+# compositor. flock -n no ExecStart evita instância zumbi em hyprctl reload.
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=/bin/bash -c 'exec flock -n "\$XDG_RUNTIME_DIR/cp-panel.lock" qs -n -c claude-pocket'
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+EOF
+
+# Instância avulsa do painel (subida na mão ou pelo login antigo) segura o cp-panel.lock; sem
+# matá-la, o flock -n do serviço bate no lock e entra em restart-loop até ela morrer. O pattern
+# não casa a cmdline deste script (que é "bash install-cp-panel.sh"), então é seguro aqui.
+pkill -f "qs -n -c claude-pocket" 2>/dev/null || true
+sleep 1
+
+systemctl --user daemon-reload
+systemctl --user enable --now cp-panel.service >/dev/null 2>&1 || true
+echo "ok: cp-panel.service (systemd --user) habilitado + iniciado"
+
+# Ícone da bandeja como serviço systemd --user (antes era exec_cmd one-shot no execs.lua, que
+# morria se a barra ainda não tivesse publicado o StatusNotifierWatcher). StartLimitIntervalSec=0
+# + Restart=on-failure: o script sai com 1 enquanto o watcher não existe, e o systemd re-tenta sem
+# teto até a barra subir — nada de ordenar via After=, já que o Quickshell do rice não é do systemd.
+UNIT="$HOME/.config/systemd/user/cp-panel-tray.service"
+mkdir -p "$(dirname "$UNIT")"
+cat > "$UNIT" <<EOF
+[Unit]
+Description=Claude Pocket — ícone de bandeja (SNI) do painel
+StartLimitIntervalSec=0
+
+[Service]
+Environment=PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=$HOME/.local/bin/cp-panel-tray
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user daemon-reload
+systemctl --user enable --now cp-panel-tray.service >/dev/null 2>&1 || true
+echo "ok: cp-panel-tray.service (systemd --user) habilitado + iniciado"
+
+# Backend desatualizado após git pull foi a causa do HTTP 404 no launcher — reinicia se existir.
+if systemctl --user list-unit-files claude-cockpit-backend.service >/dev/null 2>&1; then
+    systemctl --user restart claude-cockpit-backend.service && echo "ok: backend reiniciado"
+fi
 
 echo
 echo "Falta só subir o painel (uma vez; nos próximos logins o autostart cuida):"
