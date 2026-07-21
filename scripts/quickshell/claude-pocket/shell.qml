@@ -68,6 +68,9 @@ ShellRoot {
 
     // Cadastro de projetos (aba Ajustes): erro da última ação de add/del.
     property string projActionError: ""
+    // Fila de cadastros pendentes da varredura (scanAddChecked): um Process por vez, então o
+    // próximo da fila só dispara quando o anterior termina (ver onStreamFinished abaixo).
+    property var scanQueue: []
 
     Process {
         id: projActionProc
@@ -84,6 +87,13 @@ ShellRoot {
                 }
                 shellRoot.projActionError = r.ok ? "" : (r.message ?? "falhou");
                 Sessions.refresh();
+                // Se a varredura deixou itens pendentes na fila, cadastra o próximo agora que o
+                // Process está livre de novo.
+                if (shellRoot.scanQueue.length > 0) {
+                    const next = shellRoot.scanQueue[0];
+                    shellRoot.scanQueue = shellRoot.scanQueue.slice(1);
+                    shellRoot.projAdd(next.name, next.cwd, next.command, "");
+                }
             }
         }
     }
@@ -177,6 +187,92 @@ ShellRoot {
         shellRoot.open = false;
         pickProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", "x", "pick-folder", fCwd.text];
         pickProc.running = true;
+    }
+
+    // Varredura de pasta pai (aba Ajustes, "Varrer uma pasta"): escolhe UMA pasta pai e cadastra
+    // várias subpastas de uma vez, com comando auto-detectado — soma ao form manual acima.
+    property var scanCandidates: []
+
+    Process {
+        id: scanPickProc
+        stdout: StdioCollector {
+            onStreamFinished: {
+                // Reabre o painel escondido em scanStart() — mesmo motivo do pickFolder.
+                shellRoot.open = true;
+                let r = {};
+                try {
+                    r = JSON.parse(text);
+                } catch (e) {
+                    r = {
+                        ok: false,
+                        message: "resposta inválida do cp-panel-action"
+                    };
+                }
+                if (r.ok && r.path) {
+                    shellRoot.projActionError = "";
+                    scanProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", "x", "scan-folder", r.path];
+                    scanProc.running = true;
+                }
+                // cancelou: sem path, não faz nada (igual pickFolder).
+            }
+        }
+    }
+
+    Process {
+        id: scanProc
+        stdout: StdioCollector {
+            onStreamFinished: {
+                let r = {};
+                try {
+                    r = JSON.parse(text);
+                } catch (e) {
+                    r = {
+                        ok: false,
+                        message: "resposta inválida do cp-panel-action"
+                    };
+                }
+                if (r.ok) {
+                    // já desmarca os "already" (não recadastra sem querer o que já existe).
+                    shellRoot.scanCandidates = (r.entries ?? []).map(e => Object.assign({}, e, {
+                                checked: !e.already
+                            }));
+                    shellRoot.projActionError = "";
+                } else {
+                    shellRoot.scanCandidates = [];
+                    shellRoot.projActionError = r.message ?? "varredura falhou";
+                }
+            }
+        }
+    }
+
+    // Dispara o kdialog pra escolher a pasta PAI e depois varre as subpastas dela.
+    function scanStart(): void {
+        if (scanPickProc.running || scanProc.running)
+            return;
+        shellRoot.projActionError = "";
+        // Esconde o painel: kdialog é coberto pelo layer-shell senão (mesmo caso do pickFolder).
+        shellRoot.open = false;
+        scanPickProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", "x", "pick-folder", ""];
+        scanPickProc.running = true;
+    }
+
+    // Objetos plain do JS não notificam mudança de propriedade interna — pra marcar/desmarcar um
+    // candidato é preciso reatribuir o array inteiro (reatribuição dispara o binding).
+    function scanToggle(cwd): void {
+        shellRoot.scanCandidates = shellRoot.scanCandidates.map(c => c.cwd === cwd ? Object.assign({}, c, {
+                checked: !c.checked
+            }) : c);
+    }
+
+    // Cadastra os candidatos marcados (e ainda não cadastrados), um de cada vez via projAdd —
+    // o restante fica em scanQueue e é disparado pelo onStreamFinished do projActionProc.
+    function scanAddChecked(): void {
+        const pending = shellRoot.scanCandidates.filter(c => c.checked && !c.already);
+        shellRoot.scanCandidates = [];
+        if (pending.length === 0)
+            return;
+        shellRoot.scanQueue = pending.slice(1);
+        shellRoot.projAdd(pending[0].name, pending[0].cwd, pending[0].command, "");
     }
 
     onOpenChanged: if (!open)
@@ -972,6 +1068,64 @@ ShellRoot {
                                             }
                                         }
                                     }
+                                }
+
+                                // ---- Varrer uma pasta pai (cadastro em lote) -------------------
+                                Text {
+                                    Layout.topMargin: 10
+                                    text: "Varrer uma pasta"
+                                    color: "#c8c6cf"
+                                    font.pixelSize: 11
+                                }
+
+                                Button {
+                                    text: "📁 escolher pasta e varrer"
+                                    onClicked: shellRoot.scanStart()
+                                }
+
+                                // Cada subpasta encontrada: checkbox de seleção (já cadastrado vem
+                                // desmarcado e desabilitado), nome, comando detectado em cinza.
+                                Repeater {
+                                    model: shellRoot.scanCandidates
+                                    RowLayout {
+                                        id: scanRow
+
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        spacing: 6
+
+                                        CheckBox {
+                                            checked: scanRow.modelData.checked
+                                            enabled: !scanRow.modelData.already
+                                            onToggled: shellRoot.scanToggle(scanRow.modelData.cwd)
+                                        }
+
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 0
+                                            Text {
+                                                Layout.fillWidth: true
+                                                text: scanRow.modelData.name + (scanRow.modelData.already ? "  · já cadastrado" : "")
+                                                color: scanRow.modelData.already ? "#6e7079" : "#e3e2e6"
+                                                font.pixelSize: 11
+                                                elide: Text.ElideRight
+                                            }
+                                            Text {
+                                                Layout.fillWidth: true
+                                                text: scanRow.modelData.command !== "" ? scanRow.modelData.command : "sem comando"
+                                                color: "#6e7079"
+                                                font.pixelSize: 9
+                                                elide: Text.ElideRight
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Button {
+                                    visible: shellRoot.scanCandidates.length > 0
+                                    text: "cadastrar marcados (" + shellRoot.scanCandidates.filter(c => c.checked && !c.already).length + ")"
+                                    enabled: shellRoot.scanCandidates.some(c => c.checked && !c.already)
+                                    onClicked: shellRoot.scanAddChecked()
                                 }
 
                                 // Título do cartão de cadastro.
