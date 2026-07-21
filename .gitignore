@@ -17,6 +17,9 @@ backend/launchers/
 # atômica). O .tmp carrega a malha INTEIRA de tokens enquanto existe — nunca pode ser commitado.
 backend/peers.json.lock
 backend/peers.json.*.tmp
+# Mesmos sidecars pra gravação do projects.json (projects._mutate): flock + escrita atômica.
+backend/projects.json.lock
+backend/projects.json.*.tmp
 
 # Generated plan/spec HTML (created by local hook)
 docs/superpowers/**/*.html
