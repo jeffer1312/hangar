@@ -1,7 +1,42 @@
 import { defineConfig, type PluginOption } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { VitePWA } from 'vite-plugin-pwa'
+import { build as esbuild } from 'esbuild'
+import { fileURLToPath } from 'url'
 import type { IncomingMessage, ServerResponse } from 'http'
+
+// Serve /sw.js DE VERDADE no dev. Sem isto, um PWA que instalou o SW de um build (preview/prod)
+// fica PRESO nesse build pra sempre: o update check de /sw.js recebe o fallback HTML do SPA
+// (text/html), o browser rejeita como script de SW, o SW velho continua servindo o app shell do
+// PRECACHE antigo — e nenhum deploy chega no celular (foi o iPhone rodando o build de 2026-07-18
+// enquanto o vite dev tinha código novo). Aqui compilamos o src/sw.ts com precache VAZIO: o SW
+// novo instala (skipWaiting), o precache some, e o app volta a puxar tudo da rede (HMR incluso).
+// Push continua funcionando — os handlers de push/notificationclick vêm do sw.ts real.
+function devServiceWorker(): PluginOption {
+  const swSrc = fileURLToPath(new URL('./src/sw.ts', import.meta.url));
+  const serveSw = async (req: IncomingMessage, res: ServerResponse, next: (err?: unknown) => void) => {
+    // Match exato (não startsWith cru): /sw.jsx ou /sw.json não podem cair aqui.
+    const path = req.url?.split('?')[0];
+    if (path !== '/sw.js') return next();
+    // try/catch obrigatório: connect não espera nem captura a promise do handler — um esbuild
+    // rejeitado viraria unhandled rejection (request pendurada, e Node pode derrubar o processo).
+    try {
+      const out = await esbuild({
+        entryPoints: [swSrc],
+        bundle: true,
+        write: false,
+        define: { 'self.__WB_MANIFEST': '[]' }, // dev: nada precacheado -> tudo vem da rede
+      });
+      res.setHeader('Content-Type', 'text/javascript');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.end(out.outputFiles[0].text);
+    } catch (err) {
+      next(err);
+    }
+  };
+  // Só no dev (apply: 'serve') — o preview já serve o dist/sw.js buildado de verdade.
+  return { name: 'dev-service-worker', apply: 'serve', configureServer(s) { s.middlewares.use(serveSw); } };
+}
 
 // Multi-PC: quando o app (servido por uma origem, ex: casa) fala com o backend de OUTRA maquina
 // (ex: trabalho), o browser faz preflight CORS (OPTIONS) por causa do header Authorization. O vite
@@ -67,6 +102,7 @@ export default defineConfig({
   },
   plugins: [
     apiCorsPreflight(),
+    devServiceWorker(),
     svelte(),
     VitePWA({
       registerType: 'autoUpdate',
