@@ -9,9 +9,12 @@
     push                 push da branch atual
     commit-push <msg>    commit + push numa tacada
 
-O op `peer` é a exceção: o 1º argumento é um SERVIDOR do peers.json, não um endereço de sessão.
+Ops `peer` e `project` são exceções — o 1º argumento não é endereço de sessão:
 
-    <servidor> peer on|off   liga/desliga o servidor na varredura (toggle do painel)
+    <servidor> peer on|off                liga/desliga o servidor na varredura (toggle do painel)
+    <projeto> project start|stop|pane|open   launcher de projetos (projects.json, só local):
+                                          play/stop, tail do log (pane) e log completo (open =
+                                          terminal attachado na sessão do runner)
 
 Tudo pela API do servidor DONO da sessão (endereço servidor::sessao funciona igual), então
 rename/git valem também pras sessões remotas — o que NÃO dá remoto é só o attach no terminal.
@@ -19,6 +22,8 @@ Sempre imprime JSON: {"ok": bool, "message": str, ...}. O QML só mostra a messa
 """
 import json
 import os
+import shutil
+import subprocess
 import sys
 
 # resolve(): o script roda via symlink em ~/.local/bin — sem resolver, o import do módulo
@@ -34,6 +39,36 @@ def op_peer(pid: str, arg: str) -> dict:
         return {"ok": False, "message": "uso: cp-panel-action <servidor> peer on|off"}
     set_peer_enabled(pid, arg == "on")
     return {"ok": True, "message": f"{pid} {'ligado' if arg == 'on' else 'desligado'}"}
+
+
+def op_project(name: str, action: str) -> dict:
+    """Launcher de projetos (projects.json): o 1º argumento é o NOME DO PROJETO, não endereço
+    de sessão — sempre no servidor local, que é onde os cwd existem."""
+    if action == "start":
+        r = api(name, "POST", "/api/projects/{name}/start", {}, timeout=WRITE_TIMEOUT)
+        return {"ok": True, "message": f"iniciado ({r.get('state', '?')})", "project": r}
+    if action == "stop":
+        api(name, "POST", "/api/projects/{name}/stop", {}, timeout=WRITE_TIMEOUT)
+        return {"ok": True, "message": "parado"}
+    if action == "pane":
+        r = api(name, "GET", "/api/projects/{name}/pane")
+        return {"ok": True, "message": "", "pane": r.get("pane", "")}
+    if action == "open":
+        # Log completo: terminal attachado na sessão do runner (socket dedicado "cppkt-run",
+        # mesmo nome do runner.SOCK do backend). Pane morto (remain-on-exit) também abre — é
+        # exatamente o caso de inspecionar por que caiu.
+        plist = api(name, "GET", "/api/projects")
+        target = next((p.get("tmux") for p in plist if p.get("name") == name), "")
+        if not target:
+            return {"ok": False, "message": f"projeto '{name}' não está no projects.json"}
+        term = next((t for t in ("kitty", "foot", "alacritty") if shutil.which(t)), None)
+        if not term:
+            return {"ok": False, "message": "nenhum terminal conhecido (kitty/foot/alacritty)"}
+        subprocess.Popen([term, "-e", "tmux", "-L", "cppkt-run", "attach-session",
+                          "-t", f"={target}"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return {"ok": True, "message": "log aberto no terminal"}
+    return {"ok": False, "message": "uso: cp-panel-action <projeto> project start|stop|pane|open"}
 
 
 def op_info(addr: str) -> dict:
@@ -115,6 +150,9 @@ def main() -> int:
             out = op_commit(addr, " ".join(rest) or "wip", push=False)
         elif op == "commit-push":
             out = op_commit(addr, " ".join(rest) or "wip", push=True)
+        elif op == "project":
+            # 1º argumento = nome de projeto do projects.json (local), não endereço de sessão.
+            out = op_project(addr, rest[0] if rest else "")
         elif op == "peer":
             # Único op cujo 1º argumento é um SERVIDOR, não um endereço de sessão: mexe no
             # peers.json local, sem chamar API nenhuma.

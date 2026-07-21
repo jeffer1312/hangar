@@ -139,6 +139,11 @@ def start_run(cwd: str, command: str) -> RunInfo:
     no socket dedicado, grava como lembrado, devolve o status."""
     name = _slug(cwd)
     _sock(["kill-session", "-t", name])
+    # remain-on-exit ANTES do spawn (global no socket, que so tem runs): processo que morre
+    # logo apos o play mantem pane+log e vira "failed" com exit code, em vez de sumir sem
+    # rastro. Setar depois do new-session deixava exatamente essa janela aberta.
+    _sock(["start-server"])
+    _sock(["set-option", "-g", "remain-on-exit", "on"])
     shell = os.environ.get("SHELL", "/bin/sh")
     # login shell (-lc) herda env/PATH do projeto; exec faz o comando virar dono do pane.
     spawn = _scope_prefix() + [
@@ -157,16 +162,32 @@ def stop_run(cwd: str) -> None:
     _sock(["kill-session", "-t", _slug(cwd)])
 
 
-def run_status(cwd: str) -> Optional[RunInfo]:
-    name = _slug(cwd)
-    cp = _sock(["list-sessions", "-F", "#{session_name}\t#{session_created}"])
+def all_runs() -> dict[str, RunInfo]:
+    """Todos os runs do socket dedicado, por nome de sessao — INCLUSIVE os de pane morto
+    (remain-on-exit), que carregam exited/exit_status. Uma chamada tmux so, pro /api/projects
+    nao pagar um subprocesso por projeto."""
+    cp = _sock(["list-panes", "-a", "-F",
+                "#{session_name}\t#{session_created}\t#{pane_dead}\t#{pane_dead_status}"])
+    out: dict[str, RunInfo] = {}
     if cp.returncode != 0:
-        return None
+        return out
     for line in cp.stdout.splitlines():
-        sn, _, created = line.partition("\t")
-        if sn == name:
-            return RunInfo(command=remembered(cwd) or "", since=int(created) if created.isdigit() else None)
-    return None
+        parts = line.split("\t")
+        if len(parts) != 4:
+            continue
+        sn, created, dead, status = parts
+        out[sn] = RunInfo(command="", since=int(created) if created.isdigit() else None,
+                          exited=dead == "1",
+                          # vazio quando vivo ou morto por sinal — ai nao ha exit code.
+                          exit_status=int(status) if status.lstrip("-").isdigit() else None)
+    return out
+
+
+def run_status(cwd: str) -> Optional[RunInfo]:
+    info = all_runs().get(_slug(cwd))
+    if info:
+        info.command = remembered(cwd) or ""
+    return info
 
 
 def run_pane(cwd: str) -> str:

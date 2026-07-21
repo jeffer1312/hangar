@@ -190,6 +190,24 @@ class Runner(BaseModel):
 class RunInfo(BaseModel):
     command: str
     since: Optional[int] = None
+    # Pane morto (remain-on-exit): o processo saiu mas o log ficou. Distingue "falhou" de
+    # "parado" — sem isto o run que morria logo apos o play sumia sem rastro.
+    exited: bool = False
+    exit_status: Optional[int] = None
+
+
+class ProjectStatus(BaseModel):
+    name: str
+    cwd: str
+    command: str
+    port: Optional[int] = None
+    # external: porta aberta SEM pane nosso — o projeto roda fora do launcher (subido na mao).
+    state: Literal["stopped", "starting", "running", "failed", "external"]
+    since: Optional[int] = None
+    exit_status: Optional[int] = None
+    tmux: str = ""  # sessao no socket dedicado do runner (pro attach de log completo)
+    # Tem stop_command no config — unico jeito de parar um run externo (nao ha pane pra matar).
+    has_stop_command: bool = False
 
 
 class RunnersResponse(BaseModel):
