@@ -1363,6 +1363,15 @@ def project_upsert(body: ProjectUpsert):
         raise HTTPException(e.status, e.detail)
 
 
+@app.delete("/api/projects/{name}", dependencies=[Depends(require_auth)])
+def project_delete(name: str):
+    try:
+        projects.remove(name)
+    except projects.ProjectError as e:
+        raise HTTPException(e.status, e.detail)
+    return {"ok": True}
+
+
 @app.post("/api/sessions/{name}/open-editor", dependencies=[Depends(require_auth)])
 def open_editor(name: str):
     # So-desktop: abre o editor na MAQUINA do backend, no cwd da sessao. Binario fixo (settings.editor,

@@ -100,6 +100,22 @@ def upsert(name: str, cwd: str, command: str, port: int | None = None,
     return _status(name, cfg, runner.all_runs(), _ports_of([(name, cfg)]))
 
 
+def remove(name: str) -> None:
+    """Tira a entry do projects.json. Recusa (409) se houver run vivo — deletar por baixo de um
+    processo rodando deixaria órfão invisível (sem port não vira nem 'external'). Pare antes."""
+    cfg = _load().get(name)
+    if not isinstance(cfg, dict):
+        raise ProjectError(404, f"projeto '{name}' não está no projects.json")
+    info = runner.all_runs().get(runner._slug(str(cfg.get("cwd", ""))))
+    if info is not None and not info.exited:
+        raise ProjectError(409, f"projeto '{name}' está rodando — pare antes de remover")
+
+    def mut(data: dict) -> None:
+        data.pop(name, None)
+
+    _mutate(mut)
+
+
 def _entry(name: str) -> dict:
     cfg = _load().get(name)
     if not isinstance(cfg, dict):
