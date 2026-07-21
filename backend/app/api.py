@@ -19,7 +19,8 @@ from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
 from app.model_picker import PickerError
 from app.registry import SessionRegistry
-from app.models import SessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody, RunInfo
+from app.models import (SessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody, RunInfo,
+                        ProjectStatus)
 from app.pqueue import PromptQueue, _transcript_start_ts, committed_user_lines
 from app.chain import ThenLink
 from app.terminal_input import TerminalInput, drain
@@ -35,6 +36,7 @@ from app.git_ops import (
 )
 from app import tunnel
 from app import runner
+from app import projects
 from app.archive import ArchiveEntry, ArchiveFolder, archive_cwd, archive_jsonl, list_conversations, list_folders
 from app.search import SearchHit, search
 from app.askquestion import clear_pending_askq, read_pending_askq
@@ -1306,6 +1308,43 @@ def stop_runner(name: str):
 @app.get("/api/sessions/{name}/run/pane", dependencies=[Depends(require_auth)])
 def runner_pane(name: str):
     return {"pane": runner.run_pane(_session_cwd(name))}
+
+
+# --- launcher de projetos (standalone, chaveado pelo projects.json — nao por sessao viva) ----
+
+@app.get("/api/projects", dependencies=[Depends(require_auth)],
+         response_model=list[ProjectStatus])
+def projects_list():
+    try:
+        return projects.list_projects()
+    except projects.ProjectError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.post("/api/projects/{name}/start", dependencies=[Depends(require_auth)],
+          response_model=ProjectStatus)
+def project_start(name: str):
+    try:
+        return projects.start(name)
+    except projects.ProjectError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.post("/api/projects/{name}/stop", dependencies=[Depends(require_auth)])
+def project_stop(name: str):
+    try:
+        projects.stop(name)
+    except projects.ProjectError as e:
+        raise HTTPException(e.status, e.detail)
+    return {"ok": True}
+
+
+@app.get("/api/projects/{name}/pane", dependencies=[Depends(require_auth)])
+def project_pane(name: str):
+    try:
+        return {"pane": projects.pane(name)}
+    except projects.ProjectError as e:
+        raise HTTPException(e.status, e.detail)
 
 
 @app.post("/api/sessions/{name}/open-editor", dependencies=[Depends(require_auth)])

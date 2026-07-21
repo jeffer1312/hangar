@@ -37,6 +37,19 @@ def fetch(base_url: str, token: str) -> list[dict]:
         return json.load(resp)
 
 
+def fetch_projects(base_url: str, token: str) -> tuple[list, str]:
+    """Launcher de projetos — SO do servidor local: o projects.json descreve caminhos desta
+    maquina, e play/stop remoto nao existe. Falha vira linha de erro, nunca derruba a coleta."""
+    req = urllib.request.Request(f"{base_url.rstrip('/')}/api/projects",
+                                 headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            data = json.load(resp)
+            return (data if isinstance(data, list) else []), ""
+    except Exception as e:
+        return [], f"projetos: {e}"
+
+
 def attached_locally() -> set[str]:
     """Sessões tmux DESTA máquina com pelo menos um cliente. Diz ao painel se o clique vai focar
     um terminal já aberto ou abrir um novo. Só faz sentido local — sessão remota abre a web UI."""
@@ -111,7 +124,10 @@ def main() -> int:
         except Exception as e:   # falha de UM servidor nunca derruba a coleta dos outros
             return label, server, [], str(e)
 
-    with ThreadPoolExecutor(max_workers=max(1, len(targets))) as pool:
+    with ThreadPoolExecutor(max_workers=max(1, len(targets)) + 1) as pool:
+        # Junto no pool: sequencial depois da varredura somaria a latencia do /api/projects
+        # (probes de porta inclusos) ao pior servidor da malha.
+        proj_future = pool.submit(fetch_projects, local_base(), token)
         for label, server, got, err in pool.map(one, targets):
             sessions += got
             if err:
@@ -129,8 +145,11 @@ def main() -> int:
     rank = {"awaiting_input": 0, "working": 1}
     sessions.sort(key=lambda s: (s["server"] is not None, s["server"] or "",
                                  rank.get(s["state"], 2), s["name"]))
-    json.dump({"sessions": sessions, "errors": errors, "servers": servers}, sys.stdout,
-              ensure_ascii=False)
+    projects, perr = proj_future.result()
+    if perr:
+        errors.append(perr)
+    json.dump({"sessions": sessions, "errors": errors, "servers": servers,
+               "projects": projects}, sys.stdout, ensure_ascii=False)
     print()
     return 0
 
