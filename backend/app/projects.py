@@ -9,9 +9,11 @@ Estados: stopped (sem sessao tmux) / starting (pane vivo, porta configurada aind
 running (pane vivo e porta aberta, ou sem porta configurada) / failed (pane morto via
 remain-on-exit — o log final fica capturavel ate o proximo play/stop).
 """
+import fcntl
 import json
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 from app import runner
@@ -36,6 +38,66 @@ def _load() -> dict:
         # Config quebrado vira erro VISIVEL no painel (via errors[]), nunca lista vazia muda.
         raise ProjectError(500, f"projects.json invalido: {e}") from e
     return data if isinstance(data, dict) else {}
+
+
+def _validate(name: str, cwd: str, command: str, port: object) -> None:
+    """Barra entrada ruim ANTES de gravar (400 com motivo claro). name é chave de arquivo, então
+    sem '/' nem '..' (path traversal); cwd tem que existir; command não-vazio."""
+    if not name or "/" in name or ".." in name:
+        raise ProjectError(400, "nome inválido (sem '/' nem '..')")
+    if not isinstance(command, str) or not command.strip():
+        raise ProjectError(400, "command é obrigatório")
+    if not Path(os.path.expanduser(cwd)).is_dir():
+        raise ProjectError(400, f"cwd não existe: {cwd}")
+    if port is not None and not isinstance(port, int):
+        raise ProjectError(400, "port deve ser inteiro")
+
+
+def _mutate(fn) -> None:
+    """Read-modify-write do projects.json inteiro sob lock EXCLUSIVO, atômico (mkstemp 0600 +
+    os.replace). Espelha cp_panel_common.set_peer_enabled: o import dispara vários POST
+    concorrentes, e sem lock quem grava por último apaga as entries dos outros — sem erro, sem log.
+    `fn(data)` muta o dict in place."""
+    lock_path = _CONFIG.with_name(_CONFIG.name + ".lock")
+    lock = open(lock_path, "w")
+    with lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        for stale in _CONFIG.parent.glob(_CONFIG.name + ".*.tmp"):
+            stale.unlink(missing_ok=True)
+        data = _load()      # FileNotFound -> {}; JSON inválido -> ProjectError(500)
+        fn(data)
+        fd, tmp_name = tempfile.mkstemp(dir=_CONFIG.parent, prefix=_CONFIG.name + ".", suffix=".tmp")
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+            if _CONFIG.exists():
+                os.chmod(tmp, _CONFIG.stat().st_mode & 0o777)
+            os.replace(tmp, _CONFIG)
+        except OSError as e:
+            tmp.unlink(missing_ok=True)
+            raise ProjectError(500, f"falha ao gravar projects.json: {e}") from e
+
+
+def upsert(name: str, cwd: str, command: str, port: int | None = None,
+           stop_command: str | None = None) -> "ProjectStatus":
+    """Cria ou MESCLA a entry `name`: campos não passados (port/stop_command/futuros) são
+    preservados — editar só a porta não zera o stop_command feito na mão."""
+    _validate(name, cwd, command, port)
+
+    def mut(data: dict) -> None:
+        entry = data.get(name) if isinstance(data.get(name), dict) else {}
+        entry["cwd"] = cwd
+        entry["command"] = command
+        if port is not None:
+            entry["port"] = port
+        if stop_command is not None:
+            entry["stop_command"] = stop_command
+        data[name] = entry
+
+    _mutate(mut)
+    cfg = _entry(name)
+    return _status(name, cfg, runner.all_runs(), _ports_of([(name, cfg)]))
 
 
 def _entry(name: str) -> dict:
