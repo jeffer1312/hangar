@@ -17,6 +17,9 @@ Ops `peer` e `project` são exceções — o 1º argumento não é endereço de 
                                           terminal attachado na sessão do runner)
     <qualquer> pick-folder [start]         abre o seletor de pasta NATIVO (kdialog/zenity) e
                                           devolve o path escolhido — 1º arg é ignorado (dummy)
+    <qualquer> scan-folder <pasta_pai>     varre as subpastas de <pasta_pai> e monta candidatos a
+                                          projeto (nome, cwd, comando auto-detectado) — NÃO grava,
+                                          1º arg é ignorado (dummy)
 
 Tudo pela API do servidor DONO da sessão (endereço servidor::sessao funciona igual), então
 rename/git valem também pras sessões remotas — o que NÃO dá remoto é só o attach no terminal.
@@ -170,6 +173,57 @@ def op_pick_folder(start: str) -> dict:
     return {"ok": False, "message": "seleção cancelada"}
 
 
+def _detect_command(path: str) -> str:
+    """Auto-detecta o comando de start a partir do package.json + lockfile da pasta. Vazio se não
+    dá pra detectar (sem package.json válido, sem scripts.dev/start)."""
+    try:
+        with open(os.path.join(path, "package.json"), encoding="utf-8") as f:
+            pkg = json.load(f)
+    except (OSError, ValueError):
+        return ""
+    scripts = pkg.get("scripts") or {}
+    if "dev" in scripts:
+        script = "dev"
+    elif "start" in scripts:
+        script = "start"
+    else:
+        return ""
+    if os.path.exists(os.path.join(path, "pnpm-lock.yaml")):
+        mgr = "pnpm"
+    elif os.path.exists(os.path.join(path, "yarn.lock")):
+        mgr = "yarn"
+    elif os.path.exists(os.path.join(path, "bun.lockb")):
+        mgr = "bun"
+    elif os.path.exists(os.path.join(path, "package-lock.json")):
+        mgr = "npm"
+    else:
+        # sem lockfile: cai pro campo packageManager ("pnpm@9..." -> pnpm); sem nada, npm.
+        field = str(pkg.get("packageManager", "")).split("@")[0]
+        mgr = field if field in ("pnpm", "yarn", "bun", "npm") else "npm"
+    # pnpm/yarn rodam o script direto; npm/bun precisam do "run".
+    return f"{mgr} {script}" if mgr in ("pnpm", "yarn") else f"{mgr} run {script}"
+
+
+def op_scan_folder(root: str) -> dict:
+    """Varre as subpastas imediatas de root e monta candidatos a projeto (nome, cwd, comando
+    auto-detectado, se já cadastrado). NÃO grava — o QML confirma e chama project-add por item
+    marcado, um de cada vez."""
+    if not root or not os.path.isdir(root):
+        return {"ok": False, "message": "pasta inválida"}
+    try:
+        existing = {p.get("cwd") for p in api("x", "GET", "/api/projects")}
+    except PanelError:
+        existing = set()
+    with os.scandir(root) as it:
+        subdirs = [e for e in it if e.is_dir() and not e.name.startswith(".")]
+    entries = []
+    for entry in sorted(subdirs, key=lambda e: e.name.lower()):
+        cwd = os.path.realpath(entry.path)
+        entries.append({"name": entry.name, "cwd": cwd, "command": _detect_command(cwd),
+                        "already": cwd in existing})
+    return {"ok": True, "entries": entries, "message": f"{len(entries)} subpastas em {root}"}
+
+
 def op_info(addr: str) -> dict:
     sessions = api(addr, "GET", "/api/sessions")
     name = addr.split("::")[-1]
@@ -260,6 +314,8 @@ def main() -> int:
             out = op_import_candidates(addr)
         elif op == "pick-folder":
             out = op_pick_folder(rest[0] if rest else "")
+        elif op == "scan-folder":
+            out = op_scan_folder(rest[0] if rest else "")
         elif op == "peer":
             # Único op cujo 1º argumento é um SERVIDOR, não um endereço de sessão: mexe no
             # peers.json local, sem chamar API nenhuma.
