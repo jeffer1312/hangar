@@ -138,6 +138,78 @@ ShellRoot {
         importProc.running = true;
     }
 
+    // Navegador de pastas do form de projeto (fs-roots/fs-scan): substitui o TextField cru de
+    // cwd. fsRoot/fsPath vazios = ainda nos chips de raiz; fsSelected = pasta escolhida (cwd).
+    property var fsRoots: []
+    property string fsRoot: ""
+    property string fsPath: ""
+    property var fsEntries: []
+    property string fsSelected: ""
+    property string fsError: ""
+
+    Process {
+        id: fsProc
+        stdout: StdioCollector {
+            onStreamFinished: {
+                let r = {};
+                try {
+                    r = JSON.parse(text);
+                } catch (e) {
+                    r = {
+                        ok: false,
+                        message: "resposta inválida do cp-panel-action"
+                    };
+                }
+                if (!r.ok) {
+                    shellRoot.fsError = r.message ?? "falhou";
+                    return;
+                }
+                // fs-roots devolve "roots"; fs-scan devolve "entries" — mesmo Process pros dois.
+                if (r.roots !== undefined) {
+                    shellRoot.fsRoots = r.roots;
+                } else {
+                    shellRoot.fsEntries = r.entries ?? [];
+                    shellRoot.fsError = r.error ?? "";
+                }
+            }
+        }
+    }
+
+    function fsLoadRoots(): void {
+        if (fsProc.running)
+            return;
+        fsProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", "x", "fs-roots"];
+        fsProc.running = true;
+    }
+
+    function fsOpen(root, path): void {
+        if (fsProc.running)
+            return;
+        shellRoot.fsError = "";
+        shellRoot.fsRoot = root;
+        shellRoot.fsPath = path;
+        let cmd = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", "x", "fs-scan", root];
+        if (path)
+            cmd.push(path);
+        fsProc.command = cmd;
+        fsProc.running = true;
+    }
+
+    function fsSelect(entry): void {
+        shellRoot.fsSelected = entry.path;
+        // Basename da pasta como nome do projeto por padrão — economiza digitação, mas só se o
+        // campo ainda estiver vazio (não pisa num nome que o usuário já digitou).
+        if (fName.text.trim() === "")
+            fName.text = entry.name;
+    }
+
+    function fsReset(): void {
+        shellRoot.fsSelected = "";
+        shellRoot.fsRoot = "";
+        shellRoot.fsPath = "";
+        shellRoot.fsEntries = [];
+    }
+
     onOpenChanged: if (!open)
         menuSession = null;
 
@@ -917,40 +989,219 @@ ShellRoot {
                                 }
                             }
 
-                            // Form de adicionar. Campos simples; o backend valida e devolve o erro.
-                            ColumnLayout {
+                            // Título do cartão de cadastro.
+                            Text {
+                                Layout.topMargin: 8
+                                text: "Novo projeto"
+                                color: "#c8c6cf"
+                                font.pixelSize: 11
+                            }
+
+                            // Form dentro de um cartão sutil — separa visualmente do resto da
+                            // aba em vez de campos soltos empilhados.
+                            Rectangle {
                                 Layout.fillWidth: true
-                                Layout.topMargin: 6
-                                spacing: 4
-                                TextField {
-                                    id: fName
-                                    Layout.fillWidth: true
-                                    placeholderText: "nome"
-                                }
-                                TextField {
-                                    id: fCwd
-                                    Layout.fillWidth: true
-                                    placeholderText: "pasta (ex: ~/sistemas/meu-app)"
-                                }
-                                TextField {
-                                    id: fCommand
-                                    Layout.fillWidth: true
-                                    placeholderText: "comando (ex: pnpm dev)"
-                                }
-                                TextField {
-                                    id: fPort
-                                    Layout.fillWidth: true
-                                    placeholderText: "porta (opcional)"
-                                }
-                                Button {
-                                    text: "＋ adicionar projeto"
-                                    enabled: fName.text.trim() !== "" && fCwd.text.trim() !== "" && fCommand.text.trim() !== ""
-                                    onClicked: {
-                                        shellRoot.projAdd(fName.text.trim(), fCwd.text.trim(), fCommand.text.trim(), fPort.text);
-                                        fName.text = "";
-                                        fCwd.text = "";
-                                        fCommand.text = "";
-                                        fPort.text = "";
+                                Layout.topMargin: 4
+                                radius: 12
+                                color: "#14ffffff"
+                                implicitHeight: formCol.implicitHeight + 20
+
+                                ColumnLayout {
+                                    id: formCol
+                                    anchors.fill: parent
+                                    anchors.margins: 10
+                                    spacing: 8
+
+                                    TextField {
+                                        id: fName
+                                        Layout.fillWidth: true
+                                        placeholderText: "nome"
+                                    }
+
+                                    // Navegador de pastas (fs-roots/fs-scan) no lugar do antigo
+                                    // TextField cru de cwd.
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+                                        Component.onCompleted: if (shellRoot.fsRoots.length === 0)
+                                            shellRoot.fsLoadRoots()
+
+                                        // Já escolhida: mostra o caminho + botão pra trocar.
+                                        RowLayout {
+                                            visible: shellRoot.fsSelected !== ""
+                                            Layout.fillWidth: true
+                                            spacing: 6
+                                            Text {
+                                                Layout.fillWidth: true
+                                                text: "📁 " + shellRoot.fsSelected
+                                                color: "#e3e2e6"
+                                                font.pixelSize: 10
+                                                elide: Text.ElideMiddle
+                                            }
+                                            Text {
+                                                text: "close"
+                                                font.family: "Material Symbols Rounded"
+                                                font.pixelSize: 14
+                                                color: fsResetMouse.containsMouse ? "#f28b82" : "#8e9099"
+                                                MouseArea {
+                                                    id: fsResetMouse
+                                                    anchors.fill: parent
+                                                    hoverEnabled: true
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onClicked: shellRoot.fsReset()
+                                                }
+                                            }
+                                        }
+
+                                        // Ainda não escolheu: chips de raiz ou lista de subpastas.
+                                        ColumnLayout {
+                                            visible: shellRoot.fsSelected === ""
+                                            Layout.fillWidth: true
+                                            spacing: 6
+
+                                            // Chips de raiz — só quando ainda não entrou em nenhuma.
+                                            RowLayout {
+                                                visible: shellRoot.fsRoot === ""
+                                                Layout.fillWidth: true
+                                                spacing: 6
+                                                Repeater {
+                                                    model: shellRoot.fsRoots
+                                                    Rectangle {
+                                                        id: rootChip
+                                                        required property var modelData
+                                                        implicitWidth: rootLabel.implicitWidth + 20
+                                                        implicitHeight: 26
+                                                        radius: 13
+                                                        color: rootMouse.containsMouse ? "#28ffffff" : "#14ffffff"
+                                                        Text {
+                                                            id: rootLabel
+                                                            anchors.centerIn: parent
+                                                            text: rootChip.modelData.name
+                                                            color: "#c8c6cf"
+                                                            font.pixelSize: 10
+                                                        }
+                                                        MouseArea {
+                                                            id: rootMouse
+                                                            anchors.fill: parent
+                                                            hoverEnabled: true
+                                                            cursorShape: Qt.PointingHandCursor
+                                                            onClicked: shellRoot.fsOpen(rootChip.modelData.path, "")
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            // Dentro de uma raiz: cabeçalho (caminho + voltar) e a
+                                            // lista de subpastas.
+                                            ColumnLayout {
+                                                visible: shellRoot.fsRoot !== ""
+                                                Layout.fillWidth: true
+                                                spacing: 4
+
+                                                RowLayout {
+                                                    Layout.fillWidth: true
+                                                    spacing: 6
+                                                    Text {
+                                                        text: "arrow_back"
+                                                        font.family: "Material Symbols Rounded"
+                                                        font.pixelSize: 14
+                                                        color: fsBackMouse.containsMouse ? "#e3e2e6" : "#8e9099"
+                                                        MouseArea {
+                                                            id: fsBackMouse
+                                                            anchors.fill: parent
+                                                            hoverEnabled: true
+                                                            cursorShape: Qt.PointingHandCursor
+                                                            onClicked: {
+                                                                // Já na raiz -> volta pros chips; senão sobe um nível.
+                                                                if (shellRoot.fsPath === "" || shellRoot.fsPath === shellRoot.fsRoot) {
+                                                                    shellRoot.fsRoot = "";
+                                                                    shellRoot.fsEntries = [];
+                                                                } else {
+                                                                    let up = shellRoot.fsPath.substring(0, shellRoot.fsPath.lastIndexOf("/"));
+                                                                    shellRoot.fsOpen(shellRoot.fsRoot, up);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    Text {
+                                                        Layout.fillWidth: true
+                                                        text: shellRoot.fsPath || shellRoot.fsRoot
+                                                        color: "#6e7079"
+                                                        font.pixelSize: 9
+                                                        elide: Text.ElideMiddle
+                                                    }
+                                                }
+
+                                                Text {
+                                                    visible: shellRoot.fsError !== ""
+                                                    Layout.fillWidth: true
+                                                    text: shellRoot.fsError
+                                                    color: "#f28b82"
+                                                    font.pixelSize: 9
+                                                    wrapMode: Text.Wrap
+                                                }
+
+                                                Repeater {
+                                                    model: shellRoot.fsEntries
+                                                    RowLayout {
+                                                        id: fsRow
+                                                        required property var modelData
+                                                        Layout.fillWidth: true
+                                                        spacing: 6
+
+                                                        // Toque no nome SELECIONA a pasta como cwd.
+                                                        Text {
+                                                            Layout.fillWidth: true
+                                                            text: fsRow.modelData.name
+                                                            color: "#e3e2e6"
+                                                            font.pixelSize: 10
+                                                            elide: Text.ElideRight
+                                                            MouseArea {
+                                                                anchors.fill: parent
+                                                                cursorShape: Qt.PointingHandCursor
+                                                                onClicked: shellRoot.fsSelect(fsRow.modelData)
+                                                            }
+                                                        }
+                                                        // Chevron ENTRA na pasta (navega, não seleciona).
+                                                        Text {
+                                                            text: "chevron_right"
+                                                            font.family: "Material Symbols Rounded"
+                                                            font.pixelSize: 14
+                                                            color: fsDrillMouse.containsMouse ? "#e3e2e6" : "#8e9099"
+                                                            MouseArea {
+                                                                id: fsDrillMouse
+                                                                anchors.fill: parent
+                                                                hoverEnabled: true
+                                                                cursorShape: Qt.PointingHandCursor
+                                                                onClicked: shellRoot.fsOpen(shellRoot.fsRoot, fsRow.modelData.path)
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    TextField {
+                                        id: fCommand
+                                        Layout.fillWidth: true
+                                        placeholderText: "comando (ex: pnpm dev)"
+                                    }
+                                    TextField {
+                                        id: fPort
+                                        Layout.fillWidth: true
+                                        placeholderText: "porta (opcional)"
+                                    }
+                                    Button {
+                                        text: "＋ adicionar projeto"
+                                        enabled: fName.text.trim() !== "" && shellRoot.fsSelected !== "" && fCommand.text.trim() !== ""
+                                        onClicked: {
+                                            shellRoot.projAdd(fName.text.trim(), shellRoot.fsSelected, fCommand.text.trim(), fPort.text);
+                                            fName.text = "";
+                                            fCommand.text = "";
+                                            fPort.text = "";
+                                            shellRoot.fsReset();
+                                        }
                                     }
                                 }
                             }
