@@ -1,0 +1,14 @@
+{
+  "_comentario": "Launcher de projetos do painel (tray). Copie para projects.json (gitignored — caminhos são desta máquina). Campos: cwd + command obrigatórios; port (health-check TCP em 127.0.0.1, distingue 'subindo' de 'rodando' e detecta run externo) e stop_command (roda antes de matar o pane — pra projeto que cria processos em background) são opcionais. Script de start complexo que não deve morar no repo do projeto: põe em backend/launchers/ (gitignored) e chama por caminho absoluto — o launcher roda tudo com cwd na raiz do projeto.",
+  "meu-front": {
+    "cwd": "/home/eu/projetos/meu-front",
+    "command": "pnpm dev",
+    "port": 3000
+  },
+  "meu-orquestrador": {
+    "cwd": "/home/eu/projetos/orquestrador",
+    "command": "bash start.sh",
+    "stop_command": "bash stop.sh",
+    "port": 8116
+  }
+}

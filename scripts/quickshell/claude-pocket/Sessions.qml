@@ -16,6 +16,8 @@ Singleton {
     // Servidores do peers.json com {id, enabled, ok, error} — inclui os DESLIGADOS, que não
     // aparecem em sessions[] mas precisam de linha na UI pra ter como religar.
     property var servers: []
+    // Launcher de projetos (projects.json, só local): {name, cwd, command, port, state, ...}.
+    property var projects: []
     property bool everLoaded: false
     // Poll rápido só com o painel aberto: fechado é passivo (badge/notificação), não precisa de 2s.
     property bool fast: false
@@ -25,6 +27,27 @@ Singleton {
     // Endereços em awaiting_input no ciclo anterior — a notificação dispara só na TRANSIÇÃO
     // pra awaiting (sem isto, todo poll re-notificaria a mesma sessão em loop).
     property var _notified: ({})
+
+    // Tail de log aberto por projeto (chave = nome). Mora AQUI e não no ProjectRow porque o
+    // delegate morre quando o modelo troca — o estado sobrevive no singleton.
+    property var openLogs: ({})
+
+    // Grava o estado EFETIVO desejado (não um flip cego): o card falhado abre o tail por
+    // padrão sem entrada no mapa, então o toggle precisa receber o valor visível atual.
+    function setLog(name: string, open: bool): void {
+        const m = Object.assign({}, openLogs);
+        m[name] = open;
+        openLogs = m;
+    }
+
+    // Só reatribui quando MUDOU de verdade: cada reassign destrói os delegates da ListView
+    // (scroll volta pro topo, tail de log aberto fecha). Poll sem mudança — a imensa maioria
+    // com o painel aberto a 2s — vira no-op. Stringify é estável aqui: o backend serializa os
+    // mesmos campos na mesma ordem a cada poll.
+    function _assign(prop: string, val: var): void {
+        if (JSON.stringify(root[prop]) !== JSON.stringify(val))
+            root[prop] = val;
+    }
 
     function refresh(): void {
         // Guarda: com um servidor lento, um novo poll antes do anterior terminar empilharia
@@ -58,9 +81,10 @@ Singleton {
             onStreamFinished: {
                 try {
                     const data = JSON.parse(text);
-                    root.sessions = data.sessions ?? [];
-                    root.errors = data.errors ?? [];
-                    root.servers = data.servers ?? [];
+                    root._assign("sessions", data.sessions ?? []);
+                    root._assign("errors", data.errors ?? []);
+                    root._assign("servers", data.servers ?? []);
+                    root._assign("projects", data.projects ?? []);
                     root.everLoaded = true;
                     root._notify(root.sessions);
                 } catch (e) {

@@ -9,20 +9,62 @@ import Quickshell.Io
 import Quickshell.Wayland
 import Quickshell.Hyprland
 
-// Painel "control center" do claude-pocket: lista as sessões dos 3 servidores, clique abre o
-// terminal já attachado (local) ou a web UI (remota). Instância SEPARADA do quickshell
-// (qs -c claude-pocket) de propósito: não toca em nenhum arquivo do rice, então update do
-// dots-hyprland não apaga isto e um bug daqui não derruba a barra.
+// Painel "control center" do claude-pocket, organizado em ABAS por um trilho à esquerda
+// (mesmo padrão do control center do rice): Sessões / Projetos / Ajustes — pensado pra crescer
+// por páginas, não por seções empilhadas. Instância SEPARADA do quickshell (qs -c claude-pocket)
+// de propósito: não toca em nenhum arquivo do rice, então update do dots-hyprland não apaga
+// isto e um bug daqui não derruba a barra.
 ShellRoot {
     id: shellRoot
 
     property bool open: false
+    // Aba ativa do trilho. Persiste enquanto o processo vive — reabrir volta onde estava.
+    property string tab: "sessoes"
     // Sessão com menu de contexto aberto (null = nenhum) e o ponto onde ele abre. Um só por vez.
     property var menuSession: null
     property real menuX: 0
     property real menuY: 0
     // Mensagem de erro do último toggle de servidor ("" = sem erro).
     property string peerResult: ""
+
+    // Projetos por estado: vivo (ou falhado) ganha card completo com log; parado vira tile
+    // compacto na grade — mesmo padrão do control center do rice, onde só o que toca/importa
+    // é card grande e os toggles são pílulas.
+    readonly property var activeProjects: Sessions.projects.filter(p => p.state !== "stopped")
+    readonly property var stoppedProjects: Sessions.projects.filter(p => p.state === "stopped")
+    // Tile com start em andamento ("" = nenhum) e erro da última ação da grade.
+    property string startingProject: ""
+    property string projectError: ""
+
+    function startProject(name: string): void {
+        if (projStartProc.running)
+            return;
+        shellRoot.projectError = "";
+        shellRoot.startingProject = name;
+        projStartProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", name, "project", "start"];
+        projStartProc.running = true;
+    }
+
+    Process {
+        id: projStartProc
+        stdout: StdioCollector {
+            onStreamFinished: {
+                let r = {};
+                try {
+                    r = JSON.parse(text);
+                } catch (e) {
+                    r = {
+                        ok: false,
+                        message: "resposta inválida do cp-panel-action"
+                    };
+                }
+                // Mesmo contrato do peer: falha vira texto na aba, nunca morre muda num botão.
+                shellRoot.projectError = r.ok ? "" : (r.message ?? "falhou");
+                shellRoot.startingProject = "";
+                Sessions.refresh();
+            }
+        }
+    }
 
     onOpenChanged: if (!open)
         menuSession = null;
@@ -58,15 +100,19 @@ ShellRoot {
             shellRoot.open = false;
         }
         function settings(): void {
-            win.settingsOpen = !win.settingsOpen;
+            // Ajustes virou ABA: o clique direito no tray cai direto nela, painel aberto.
+            shellRoot.tab = "ajustes";
+            shellRoot.open = true;
         }
-        // Mesmo efeito do switch de servidor na faixa de ajustes; existe pra script/teste
+        // Mesmo efeito do switch de servidor na aba de ajustes; existe pra script/teste
         // alcançar o toggle sem depender de clique real.
         function peer(id: string, state: string): void {
             shellRoot.setPeer(id, state === "on");
         }
         // Mesmo efeito do botão direito na linha; existe pra script/teste alcançar o menu.
+        // Menu é de SESSÃO — força a aba certa antes de abrir.
         function menu(address: string): void {
+            shellRoot.tab = "sessoes";
             const s = Sessions.sessions.find(x => x.address === address);
             shellRoot.menuSession = (s && shellRoot.menuSession?.address !== address) ? s : null;
             shellRoot.menuX = 40;
@@ -116,17 +162,11 @@ ShellRoot {
     PanelWindow {
         id: win
 
-        property bool settingsOpen: false
-
-        // Abrir/fechar os ajustes redimensiona a lista; sem reposicionar, ela fica presa no
-        // contentY antigo e mostra meia linha cortada no topo.
-        onSettingsOpenChanged: list.positionViewAtBeginning()
-
         visible: shellRoot.open
         color: "transparent"
         exclusiveZone: 0
         implicitWidth: 460
-        // Cresce com o conteúdo até o teto; passando disso, a ListView rola por dentro.
+        // Cresce com o conteúdo até o teto; passando disso, as ListView rolam por dentro.
         implicitHeight: Math.min(720, content.implicitHeight + 24)
         WlrLayershell.namespace: "quickshell:claudePocket"
         WlrLayershell.layer: WlrLayer.Overlay
@@ -180,89 +220,442 @@ ShellRoot {
                 anchors.margins: 12
                 implicitHeight: layout.implicitHeight + 32
                 radius: 22
-                // Opacidade ajustável no botão de config (persistida). Default acima do
+                // Opacidade ajustável na aba de ajustes (persistida). Default acima do
                 // ignore_alpha 0.79 que o rice aplica em "quickshell:.*": abaixo disso o
-                // compositor pula o blur e sobra vidro sujo — a faixa de ajustes avisa.
+                // compositor pula o blur e sobra vidro sujo — a aba de ajustes avisa.
                 color: Qt.rgba(0.094, 0.102, 0.122, PanelConfig.options.opacity)
                 border.width: 1
                 border.color: "#26ffffff"
 
-                ColumnLayout {
+                RowLayout {
                     id: layout
                     anchors.fill: parent
                     anchors.margins: 16
-                    spacing: 12
+                    spacing: 14
 
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
+                    // Trilho de abas: ícones com badge. Coluna própria pra novas abas só
+                    // custarem uma entrada no model.
+                    ColumnLayout {
+                        Layout.fillHeight: true
+                        Layout.alignment: Qt.AlignTop
+                        spacing: 6
 
-                        Text {
-                            text: "Claude Pocket"
-                            color: "#e3e2e6"
-                            font.pixelSize: 18
-                            font.weight: Font.DemiBold
-                            Layout.fillWidth: true
-                        }
+                        Repeater {
+                            model: [
+                                {key: "sessoes", icon: "terminal"},
+                                {key: "projetos", icon: "rocket_launch"},
+                                {key: "ajustes", icon: "settings"}
+                            ]
 
-                        // Engrenagem: abre a faixa de ajustes embutida (não outra janela — um
-                        // painel de 1 opção não justifica segunda camada de foco/dismiss).
-                        Text {
-                            text: "settings"
-                            font.family: "Material Symbols Rounded"
-                            font.pixelSize: 18
-                            color: settingsMouse.containsMouse || win.settingsOpen ? "#e3e2e6" : "#8e9099"
+                            Rectangle {
+                                id: tabBtn
 
-                            MouseArea {
-                                id: settingsMouse
-                                anchors.fill: parent
-                                anchors.margins: -6
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: win.settingsOpen = !win.settingsOpen
+                                required property var modelData
+                                readonly property bool active: shellRoot.tab === tabBtn.modelData.key
+                                // Badge: sessões esperando / projetos vivos. Vermelho = pede
+                                // ação (esperando você, ou projeto que falhou).
+                                readonly property int badge: tabBtn.modelData.key === "sessoes" ? Sessions.awaitingCount : tabBtn.modelData.key === "projetos" ? Sessions.projects.filter(p => p.state !== "stopped").length : 0
+                                readonly property bool alert: tabBtn.modelData.key === "sessoes" ? Sessions.awaitingCount > 0 : tabBtn.modelData.key === "projetos" ? Sessions.projects.some(p => p.state === "failed") : false
+
+                                implicitWidth: 40
+                                implicitHeight: 40
+                                radius: 12
+                                color: tabBtn.active ? "#33ffffff" : tabMouse.containsMouse ? "#1fffffff" : "transparent"
+
+                                Behavior on color {
+                                    ColorAnimation {
+                                        duration: 120
+                                    }
+                                }
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: tabBtn.modelData.icon
+                                    font.family: "Material Symbols Rounded"
+                                    font.pixelSize: 19
+                                    color: tabBtn.active ? "#e3e2e6" : "#8e9099"
+                                    renderType: Text.NativeRendering
+                                }
+
+                                Rectangle {
+                                    visible: tabBtn.badge > 0
+                                    anchors.top: parent.top
+                                    anchors.right: parent.right
+                                    anchors.topMargin: 1
+                                    anchors.rightMargin: 1
+                                    width: 15
+                                    height: 15
+                                    radius: 7.5
+                                    color: tabBtn.alert ? "#f2b8b5" : "#8fce9b"
+
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: tabBtn.badge
+                                        color: "#1b1d24"
+                                        font.pixelSize: 9
+                                        font.weight: Font.DemiBold
+                                    }
+                                }
+
+                                MouseArea {
+                                    id: tabMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: shellRoot.tab = tabBtn.modelData.key
+                                }
                             }
                         }
 
-                        // Resumo numérico: o mesmo dado do badge, pra quem já está com o painel aberto.
-                        Text {
-                            visible: Sessions.awaitingCount > 0
-                            text: `${Sessions.awaitingCount} esperando`
-                            color: "#f2b8b5"
-                            font.pixelSize: 12
-                            font.weight: Font.DemiBold
-                        }
-
-                        Text {
-                            visible: Sessions.workingCount > 0
-                            text: `${Sessions.workingCount} rodando`
-                            color: "#f9c784"
-                            font.pixelSize: 12
+                        Item {
+                            Layout.fillHeight: true
                         }
                     }
 
-                    // Faixa de ajustes: some por completo quando fechada (height 0) pra não
-                    // roubar altura da lista, que é o conteúdo principal.
-                    Rectangle {
+                    // Página da aba ativa. Itens invisíveis saem do layout (comportamento
+                    // padrão), então a altura da janela acompanha a aba.
+                    ColumnLayout {
+                        id: page
                         Layout.fillWidth: true
-                        // Altura pelo CONTEÚDO: com a lista de servidores a faixa deixou de ter
-                        // tamanho fixo — 64 chumbado cortava o toggle do segundo peer.
-                        Layout.preferredHeight: win.settingsOpen ? settingsCol.implicitHeight + 20 : 0
-                        clip: true
-                        radius: 12
-                        color: "#14ffffff"
-                        visible: Layout.preferredHeight > 0
+                        Layout.fillHeight: true
+                        spacing: 12
 
-                        Behavior on Layout.preferredHeight {
-                            NumberAnimation {
-                                duration: 140
-                                easing.type: Easing.OutCubic
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Text {
+                                text: "Claude Pocket"
+                                color: "#e3e2e6"
+                                font.pixelSize: 18
+                                font.weight: Font.DemiBold
+                                Layout.fillWidth: true
+                            }
+
+                            // Resumo numérico: o mesmo dado do badge, pra quem já está com o painel aberto.
+                            Text {
+                                visible: Sessions.awaitingCount > 0
+                                text: `${Sessions.awaitingCount} esperando`
+                                color: "#f2b8b5"
+                                font.pixelSize: 12
+                                font.weight: Font.DemiBold
+                            }
+
+                            Text {
+                                visible: Sessions.workingCount > 0
+                                text: `${Sessions.workingCount} rodando`
+                                color: "#f9c784"
+                                font.pixelSize: 12
                             }
                         }
 
+                        // Erro de servidor aparece SEMPRE que existe, em qualquer aba: sem isto,
+                        // um peer fora do ar sumiria silenciosamente da lista e pareceria "sem
+                        // sessões".
+                        Repeater {
+                            model: Sessions.errors
+
+                            Text {
+                                required property string modelData
+                                Layout.fillWidth: true
+                                text: "⚠ " + modelData
+                                color: "#f2b8b5"
+                                font.pixelSize: 10
+                                wrapMode: Text.Wrap
+                            }
+                        }
+
+                        // ---- aba Sessões ------------------------------------------------------
+
+                        Text {
+                            visible: shellRoot.tab === "sessoes" && Sessions.everLoaded && Sessions.sessions.length === 0
+                            Layout.fillWidth: true
+                            text: "Nenhuma sessão viva."
+                            color: "#a0a0a8"
+                            font.pixelSize: 12
+                        }
+
+                        // ListView (não Repeater em Column): com 13+ sessões nos 3 servidores a lista
+                        // passa da altura da tela — sem rolagem as de baixo ficavam inalcançáveis.
+                        ListView {
+                            id: list
+                            visible: shellRoot.tab === "sessoes"
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredHeight: Math.min(contentHeight, 480)
+                            clip: true
+                            spacing: 6
+                            model: Sessions.sessions
+                            boundsBehavior: Flickable.StopAtBounds
+                            ScrollBar.vertical: ScrollBar {
+                                policy: ScrollBar.AsNeeded
+                            }
+
+                            // Seções: bloco deste PC (attacha no terminal) separado de cada servidor
+                            // remoto (só abre no navegador) — ação diferente, lista diferente.
+                            section.property: "group"
+                            section.delegate: Item {
+                                required property string section
+                                width: ListView.view.width
+                                implicitHeight: 26
+
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.topMargin: 8
+                                    spacing: 6
+
+                                    Text {
+                                        text: parent.parent.section === "local" ? "computer" : "dns"
+                                        font.family: "Material Symbols Rounded"
+                                        font.pixelSize: 13
+                                        color: "#8e9099"
+                                    }
+
+                                    Text {
+                                        text: parent.parent.section === "local" ? "Este computador" : parent.parent.section
+                                        color: "#8e9099"
+                                        font.pixelSize: 10
+                                        font.weight: Font.DemiBold
+                                        font.capitalization: Font.AllUppercase
+                                    }
+
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        implicitHeight: 1
+                                        color: "#1affffff"
+                                    }
+                                }
+                            }
+
+                            delegate: SessionRow {
+                                required property var modelData
+                                session: modelData
+                                width: ListView.view.width
+                                onActivated: shellRoot.activate(modelData)
+                                onMenuRequested: (sx, sy) => {
+                                    shellRoot.menuSession = modelData;
+                                    shellRoot.menuX = sx;
+                                    shellRoot.menuY = sy;
+                                }
+                            }
+                        }
+
+                        // Legenda: ícone e rótulo são Text separados de propósito — o glifo só sai
+                        // com font.family Material Symbols, então não cabe na mesma string do texto.
+                        RowLayout {
+                            visible: shellRoot.tab === "sessoes"
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            Repeater {
+                                model: [
+                                    {icon: "terminal", label: "focar"},
+                                    {icon: "add", label: "abrir"},
+                                    {icon: "language", label: "web"}
+                                ]
+
+                                RowLayout {
+                                    required property var modelData
+                                    spacing: 3
+
+                                    Text {
+                                        text: parent.modelData.icon
+                                        font.family: "Material Symbols Rounded"
+                                        font.pixelSize: 13
+                                        color: "#6e7079"
+                                    }
+
+                                    Text {
+                                        text: parent.modelData.label
+                                        font.pixelSize: 10
+                                        color: "#6e7079"
+                                        rightPadding: 6
+                                    }
+                                }
+                            }
+
+                            Item {
+                                Layout.fillWidth: true
+                            }
+
+                            Text {
+                                text: "Esc fecha"
+                                font.pixelSize: 10
+                                color: "#6e7079"
+                            }
+                        }
+
+                        // ---- aba Projetos -----------------------------------------------------
+                        // Hierarquia do control center: card completo só pro que está VIVO (ou
+                        // falhou — pede leitura de log); os parados viram grade de tiles de um
+                        // toque. 15 linhas de "parado" repetido não merecem lista cheia.
+
+                        Text {
+                            visible: shellRoot.tab === "projetos" && Sessions.projects.length === 0
+                            Layout.fillWidth: true
+                            text: "Nenhum projeto no backend/projects.json."
+                            color: "#a0a0a8"
+                            font.pixelSize: 12
+                        }
+
+                        Flickable {
+                            id: projFlick
+                            visible: shellRoot.tab === "projetos" && Sessions.projects.length > 0
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredHeight: Math.min(contentHeight, 560)
+                            contentHeight: projCol.implicitHeight
+                            clip: true
+                            boundsBehavior: Flickable.StopAtBounds
+                            ScrollBar.vertical: ScrollBar {
+                                policy: ScrollBar.AsNeeded
+                            }
+
+                            ColumnLayout {
+                                id: projCol
+                                width: projFlick.width
+                                spacing: 6
+
+                                RowLayout {
+                                    visible: shellRoot.activeProjects.length > 0
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Text {
+                                        text: "Em execução"
+                                        color: "#8e9099"
+                                        font.pixelSize: 10
+                                        font.weight: Font.DemiBold
+                                        font.capitalization: Font.AllUppercase
+                                    }
+
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        implicitHeight: 1
+                                        color: "#1affffff"
+                                    }
+                                }
+
+                                Text {
+                                    visible: shellRoot.activeProjects.length === 0
+                                    Layout.fillWidth: true
+                                    text: "Nada rodando — toque num projeto pra subir."
+                                    color: "#a0a0a8"
+                                    font.pixelSize: 11
+                                }
+
+                                Repeater {
+                                    model: shellRoot.activeProjects
+
+                                    ProjectRow {
+                                        required property var modelData
+                                        project: modelData
+                                        Layout.fillWidth: true
+                                        onChanged: Sessions.refresh()
+                                    }
+                                }
+
+                                RowLayout {
+                                    visible: shellRoot.stoppedProjects.length > 0
+                                    Layout.fillWidth: true
+                                    Layout.topMargin: 6
+                                    spacing: 6
+
+                                    Text {
+                                        text: "Parados"
+                                        color: "#8e9099"
+                                        font.pixelSize: 10
+                                        font.weight: Font.DemiBold
+                                        font.capitalization: Font.AllUppercase
+                                    }
+
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        implicitHeight: 1
+                                        color: "#1affffff"
+                                    }
+                                }
+
+                                // Grade 2 colunas de tiles (padrão dos toggles do rice): um
+                                // toque = play. Detalhe/stop/log só existem no card, e o
+                                // projeto sobe pra lá sozinho assim que sai de "parado".
+                                GridLayout {
+                                    Layout.fillWidth: true
+                                    columns: 2
+                                    columnSpacing: 6
+                                    rowSpacing: 6
+
+                                    Repeater {
+                                        model: shellRoot.stoppedProjects
+
+                                        Rectangle {
+                                            id: tile
+
+                                            required property var modelData
+                                            readonly property bool busy: shellRoot.startingProject === tile.modelData.name
+
+                                            Layout.fillWidth: true
+                                            implicitHeight: 40
+                                            radius: 12
+                                            color: tile.busy ? "#33ffffff" : tileMouse.containsMouse ? "#28ffffff" : "#14ffffff"
+
+                                            Behavior on color {
+                                                ColorAnimation {
+                                                    duration: 120
+                                                }
+                                            }
+
+                                            RowLayout {
+                                                anchors.fill: parent
+                                                anchors.leftMargin: 12
+                                                anchors.rightMargin: 10
+                                                spacing: 8
+
+                                                Text {
+                                                    Layout.fillWidth: true
+                                                    text: tile.modelData.name
+                                                    color: "#c8c6cf"
+                                                    font.pixelSize: 11
+                                                    elide: Text.ElideMiddle
+                                                }
+
+                                                Text {
+                                                    text: tile.busy ? "hourglass_empty" : "play_arrow"
+                                                    color: tile.busy ? "#f9c784" : "#8fce9b"
+                                                    font.family: "Material Symbols Rounded"
+                                                    font.pixelSize: 16
+                                                    renderType: Text.NativeRendering
+                                                }
+                                            }
+
+                                            MouseArea {
+                                                id: tileMouse
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                enabled: !projStartProc.running
+                                                onClicked: shellRoot.startProject(tile.modelData.name)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    visible: shellRoot.projectError !== ""
+                                    Layout.fillWidth: true
+                                    text: shellRoot.projectError
+                                    color: "#f28b82"
+                                    font.pixelSize: 9
+                                    wrapMode: Text.Wrap
+                                }
+                            }
+                        }
+
+                        // ---- aba Ajustes ------------------------------------------------------
+
                         ColumnLayout {
-                            id: settingsCol
-                            anchors.fill: parent
-                            anchors.margins: 10
+                            visible: shellRoot.tab === "ajustes"
+                            Layout.fillWidth: true
                             spacing: 2
 
                             RowLayout {
@@ -313,39 +706,84 @@ ShellRoot {
                                 font.pixelSize: 11
                             }
 
-                            Repeater {
-                                model: Sessions.servers
+                            // Tiles-pílula (padrão Internet/Bluetooth do rice): aceso = na
+                            // varredura, apagado = fora. Toque alterna — mais direto que uma
+                            // linha com switch pra um estado binário.
+                            GridLayout {
+                                Layout.fillWidth: true
+                                Layout.topMargin: 4
+                                columns: 2
+                                columnSpacing: 6
+                                rowSpacing: 6
 
-                                RowLayout {
-                                    id: srvRow
+                                Repeater {
+                                    model: Sessions.servers
 
-                                    required property var modelData
+                                    Rectangle {
+                                        id: srvTile
 
-                                    Layout.fillWidth: true
-                                    spacing: 8
+                                        required property var modelData
+                                        readonly property bool on: srvTile.modelData.enabled
 
-                                    Text {
                                         Layout.fillWidth: true
-                                        text: srvRow.modelData.id
-                                        color: srvRow.modelData.enabled ? "#c8c6cf" : "#6e7079"
-                                        font.pixelSize: 11
-                                        elide: Text.ElideRight
-                                    }
+                                        implicitHeight: 46
+                                        radius: 14
+                                        color: srvTile.on ? "#e3e2e6" : srvMouse.containsMouse ? "#28ffffff" : "#14ffffff"
 
-                                    Text {
-                                        // Estado REAL, não o do switch: peer LIGADO que não
-                                        // responde precisa aparecer como problema. Mostrar só
-                                        // "ligado" faria o toggle parecer garantia de que a
-                                        // máquina está lá — que é justamente o que ele não é.
-                                        text: !srvRow.modelData.enabled ? "fora da varredura" : (srvRow.modelData.ok ? "respondendo" : "sem resposta")
-                                        color: !srvRow.modelData.enabled ? "#6e7079" : (srvRow.modelData.ok ? "#8fce9b" : "#f9c784")
-                                        font.pixelSize: 9
-                                    }
+                                        Behavior on color {
+                                            ColorAnimation {
+                                                duration: 120
+                                            }
+                                        }
 
-                                    Switch {
-                                        checked: srvRow.modelData.enabled
-                                        enabled: !peerProc.running
-                                        onToggled: shellRoot.setPeer(srvRow.modelData.id, checked)
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.leftMargin: 12
+                                            anchors.rightMargin: 12
+                                            spacing: 8
+
+                                            Text {
+                                                text: "dns"
+                                                font.family: "Material Symbols Rounded"
+                                                font.pixelSize: 16
+                                                color: srvTile.on ? "#1b1d24" : "#8e9099"
+                                                renderType: Text.NativeRendering
+                                            }
+
+                                            ColumnLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 0
+
+                                                Text {
+                                                    Layout.fillWidth: true
+                                                    text: srvTile.modelData.id
+                                                    color: srvTile.on ? "#1b1d24" : "#c8c6cf"
+                                                    font.pixelSize: 11
+                                                    font.weight: Font.DemiBold
+                                                    elide: Text.ElideRight
+                                                }
+
+                                                Text {
+                                                    Layout.fillWidth: true
+                                                    // Estado REAL, não o do tile: peer LIGADO que
+                                                    // não responde precisa aparecer como problema.
+                                                    // Tile aceso não é garantia de máquina viva.
+                                                    text: !srvTile.on ? "fora da varredura" : (srvTile.modelData.ok ? "respondendo" : "sem resposta")
+                                                    color: !srvTile.on ? "#6e7079" : (srvTile.modelData.ok ? "#3d6b46" : "#8a5a00")
+                                                    font.pixelSize: 9
+                                                    elide: Text.ElideRight
+                                                }
+                                            }
+                                        }
+
+                                        MouseArea {
+                                            id: srvMouse
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            enabled: !peerProc.running
+                                            onClicked: shellRoot.setPeer(srvTile.modelData.id, !srvTile.on)
+                                        }
                                     }
                                 }
                             }
@@ -358,139 +796,6 @@ ShellRoot {
                                 font.pixelSize: 9
                                 wrapMode: Text.Wrap
                             }
-                        }
-                    }
-
-                    // Erro de servidor aparece SEMPRE que existe: sem isto, um peer fora do ar
-                    // sumiria silenciosamente da lista e pareceria "sem sessões".
-                    Repeater {
-                        model: Sessions.errors
-
-                        Text {
-                            required property string modelData
-                            Layout.fillWidth: true
-                            text: "⚠ " + modelData
-                            color: "#f2b8b5"
-                            font.pixelSize: 10
-                            wrapMode: Text.Wrap
-                        }
-                    }
-
-                    Text {
-                        visible: Sessions.everLoaded && Sessions.sessions.length === 0
-                        Layout.fillWidth: true
-                        text: "Nenhuma sessão viva."
-                        color: "#a0a0a8"
-                        font.pixelSize: 12
-                    }
-
-                    // ListView (não Repeater em Column): com 13+ sessões nos 3 servidores a lista
-                    // passa da altura da tela — sem rolagem as de baixo ficavam inalcançáveis.
-                    ListView {
-                        id: list
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        Layout.preferredHeight: Math.min(contentHeight, 480)
-                        clip: true
-                        spacing: 6
-                        model: Sessions.sessions
-                        boundsBehavior: Flickable.StopAtBounds
-                        ScrollBar.vertical: ScrollBar {
-                            policy: ScrollBar.AsNeeded
-                        }
-
-                        // Seções: bloco deste PC (attacha no terminal) separado de cada servidor
-                        // remoto (só abre no navegador) — ação diferente, lista diferente.
-                        section.property: "group"
-                        section.delegate: Item {
-                            required property string section
-                            width: ListView.view.width
-                            implicitHeight: 26
-
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.topMargin: 8
-                                spacing: 6
-
-                                Text {
-                                    text: parent.parent.section === "local" ? "computer" : "dns"
-                                    font.family: "Material Symbols Rounded"
-                                    font.pixelSize: 13
-                                    color: "#8e9099"
-                                }
-
-                                Text {
-                                    text: parent.parent.section === "local" ? "Este computador" : parent.parent.section
-                                    color: "#8e9099"
-                                    font.pixelSize: 10
-                                    font.weight: Font.DemiBold
-                                    font.capitalization: Font.AllUppercase
-                                }
-
-                                Rectangle {
-                                    Layout.fillWidth: true
-                                    implicitHeight: 1
-                                    color: "#1affffff"
-                                }
-                            }
-                        }
-
-                        delegate: SessionRow {
-                            required property var modelData
-                            session: modelData
-                            width: ListView.view.width
-                            onActivated: shellRoot.activate(modelData)
-                            onMenuRequested: (sx, sy) => {
-                                shellRoot.menuSession = modelData;
-                                shellRoot.menuX = sx;
-                                shellRoot.menuY = sy;
-                            }
-                        }
-                    }
-
-                    // (menu de contexto flutua na camada acima — ver menuLayer)
-
-                    // Legenda: ícone e rótulo são Text separados de propósito — o glifo só sai
-                    // com font.family Material Symbols, então não cabe na mesma string do texto.
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 4
-
-                        Repeater {
-                            model: [
-                                {icon: "terminal", label: "focar"},
-                                {icon: "add", label: "abrir"},
-                                {icon: "language", label: "web"}
-                            ]
-
-                            RowLayout {
-                                required property var modelData
-                                spacing: 3
-
-                                Text {
-                                    text: parent.modelData.icon
-                                    font.family: "Material Symbols Rounded"
-                                    font.pixelSize: 13
-                                    color: "#6e7079"
-                                }
-
-                                Text {
-                                    text: parent.modelData.label
-                                    font.pixelSize: 10
-                                    color: "#6e7079"
-                                    rightPadding: 6
-                                }
-                            }
-                        }
-
-                        Item {
-                            Layout.fillWidth: true
-                        }
-
-                        Text {
-                            text: "Esc fecha"
-                            font.pixelSize: 10
-                            color: "#6e7079"
                         }
                     }
                 }
