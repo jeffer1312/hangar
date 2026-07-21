@@ -92,6 +92,62 @@ def op_project_del(name: str) -> dict:
     return {"ok": True, "message": f"'{name}' removido"}
 
 
+def _scan_roots() -> list:
+    """Raízes de busca do import = CP_SCAN_ROOTS (default ~/pessoal,~/sistemas), realpath'd e só as
+    que existem. Mesma fronteira que o backend usa pro fs-scan — não invento lista nova."""
+    raw = env("CP_SCAN_ROOTS") or "~/pessoal,~/sistemas"
+    out = []
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        p = os.path.realpath(os.path.expanduser(entry))
+        if os.path.isdir(p) and p not in out:
+            out.append(p)
+    return out
+
+
+def _match_local(cwd: str, roots: list) -> tuple:
+    """Casa o basename do cwd remoto sob as roots locais. Retorna (cwd_local, matched). NÃO chuta:
+    matched=True só quando há EXATAMENTE um candidato (colisão de nome vira desmarcado)."""
+    base = os.path.basename(cwd.rstrip("/"))
+    hits = []
+    for r in roots:
+        cand = os.path.realpath(os.path.join(r, base))
+        if os.path.isdir(cand) and cand not in hits:
+            hits.append(cand)
+    if len(hits) == 1:
+        return hits[0], True
+    return (hits[0] if hits else cwd), False
+
+
+def _cmd_has_dead_abspath(cmd: str) -> bool:
+    """True se o command referencia um path absoluto que NÃO existe aqui (ex.: launcher do peer,
+    'bash /home/.../launchers/x.sh') — cadastrar isso daria comando quebrado."""
+    return any(tok.startswith("/") and not os.path.exists(tok) for tok in cmd.split())
+
+
+def op_import_candidates(server: str) -> dict:
+    """Puxa os projetos do peer <server> e casa as pastas nesta máquina. NÃO grava — só sugere; o
+    QML confirma e chama project-add por item marcado. Fetch remoto via cp_panel_common.api, então
+    o backend continua sem saber de peers."""
+    remote = api(server, "GET", "/api/projects")
+    if not isinstance(remote, list):
+        return {"ok": False, "message": f"resposta inesperada de {server}"}
+    roots = _scan_roots()
+    cands = []
+    for p in remote:
+        cwd = str(p.get("cwd", ""))
+        cmd = str(p.get("command", ""))
+        local, matched = _match_local(cwd, roots)
+        if matched and _cmd_has_dead_abspath(cmd):
+            matched = False        # pasta existe mas o comando é launcher do peer
+        cands.append({"name": p.get("name"), "cwd": local, "command": cmd,
+                      "port": p.get("port"), "matched": matched})
+    ok = sum(1 for c in cands if c["matched"])
+    return {"ok": True, "message": f"{ok}/{len(cands)} casados", "candidates": cands}
+
+
 def op_info(addr: str) -> dict:
     sessions = api(addr, "GET", "/api/sessions")
     name = addr.split("::")[-1]
@@ -178,6 +234,8 @@ def main() -> int:
             out = op_project_add(addr, rest)
         elif op == "project-del":
             out = op_project_del(addr)
+        elif op == "import-candidates":
+            out = op_import_candidates(addr)
         elif op == "peer":
             # Único op cujo 1º argumento é um SERVIDOR, não um endereço de sessão: mexe no
             # peers.json local, sem chamar API nenhuma.
