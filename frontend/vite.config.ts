@@ -98,7 +98,9 @@ export default defineConfig({
     proxy: {
       '/api': { target: 'http://127.0.0.1:8765', changeOrigin: true },
     },
-    allowedHosts: ['.ts.net'],
+    // .omniwise.com.br: a VPS (srv1633222) serve o BUILD via preview atrás do traefik do Coolify
+    // (Host pocket.omniwise.com.br chega intacto no vite; sem isto o preview responde 403).
+    allowedHosts: ['.ts.net', '.omniwise.com.br'],
   },
   plugins: [
     apiCorsPreflight(),
