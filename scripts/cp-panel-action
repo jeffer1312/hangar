@@ -71,6 +71,27 @@ def op_project(name: str, action: str) -> dict:
     return {"ok": False, "message": "uso: cp-panel-action <projeto> project start|stop|pane|open"}
 
 
+def op_project_add(name: str, rest: list) -> dict:
+    """Cadastra/edita um projeto no projects.json local (POST /api/projects). rest = [cwd,
+    command, port?]. name vazio/sem cwd/command -> o backend valida e devolve 400 legível."""
+    cwd = rest[0] if len(rest) > 0 else ""
+    command = rest[1] if len(rest) > 1 else ""
+    body = {"name": name, "cwd": cwd, "command": command}
+    if len(rest) > 2 and str(rest[2]).strip():
+        try:
+            body["port"] = int(rest[2])
+        except ValueError:
+            raise PanelError(f"porta inválida: {rest[2]!r}")
+    r = api(name, "POST", "/api/projects", body, timeout=WRITE_TIMEOUT)
+    return {"ok": True, "message": f"'{name}' salvo", "project": r}
+
+
+def op_project_del(name: str) -> dict:
+    """Remove um projeto do projects.json local (DELETE /api/projects/{name})."""
+    api(name, "DELETE", "/api/projects/{name}", timeout=WRITE_TIMEOUT)
+    return {"ok": True, "message": f"'{name}' removido"}
+
+
 def op_info(addr: str) -> dict:
     sessions = api(addr, "GET", "/api/sessions")
     name = addr.split("::")[-1]
@@ -153,6 +174,10 @@ def main() -> int:
         elif op == "project":
             # 1º argumento = nome de projeto do projects.json (local), não endereço de sessão.
             out = op_project(addr, rest[0] if rest else "")
+        elif op == "project-add":
+            out = op_project_add(addr, rest)
+        elif op == "project-del":
+            out = op_project_del(addr)
         elif op == "peer":
             # Único op cujo 1º argumento é um SERVIDOR, não um endereço de sessão: mexe no
             # peers.json local, sem chamar API nenhuma.
