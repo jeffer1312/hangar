@@ -85,14 +85,20 @@ ShellRoot {
                         message: "resposta inválida do cp-panel-action"
                     };
                 }
-                shellRoot.projActionError = r.ok ? "" : (r.message ?? "falhou");
+                // ACUMULA o erro (não sobrescreve): num lote (scanAddChecked) o erro de um item do
+                // meio não pode ser apagado pelo sucesso do item seguinte — senão o usuário vê
+                // "tudo ok" com uma pasta que nunca entrou. Sucesso NÃO limpa aqui: a limpeza é no
+                // início de cada ação (projAdd/projDel), pra o erro sobreviver até o fim do lote.
+                if (!r.ok)
+                    shellRoot.projActionError = (shellRoot.projActionError ? shellRoot.projActionError + " | " : "") + (r.message ?? "falhou");
                 Sessions.refresh();
-                // Se a varredura deixou itens pendentes na fila, cadastra o próximo agora que o
-                // Process está livre de novo.
+                // Próximo da fila: dispara o Process DIRETO (não via projAdd, que limparia o erro
+                // acumulado do lote).
                 if (shellRoot.scanQueue.length > 0) {
                     const next = shellRoot.scanQueue[0];
                     shellRoot.scanQueue = shellRoot.scanQueue.slice(1);
-                    shellRoot.projAdd(next.name, next.cwd, next.command, "");
+                    projActionProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", next.name, "project-add", next.cwd, next.command];
+                    projActionProc.running = true;
                 }
             }
         }
@@ -179,7 +185,9 @@ ShellRoot {
     // Dispara a caixa de diálogo NATIVA (kdialog/zenity) do sistema pra escolher a pasta do
     // projeto — substitui o navegador de pastas embutido no painel.
     function pickFolder(): void {
-        if (pickProc.running)
+        // Guard cruzado: se um kdialog da varredura já está aberto, não dispara outro — dois
+        // pickers concorrentes recobririam um ao outro ao reabrir o painel.
+        if (pickProc.running || scanPickProc.running || scanProc.running)
             return;
         // Esconde o painel enquanto o kdialog abre: o painel é layer-shell (fica ACIMA das janelas
         // normais), então sem isto o diálogo nativo abre ATRÁS dele (e o botão Cancelar fica coberto).
@@ -247,7 +255,7 @@ ShellRoot {
 
     // Dispara o kdialog pra escolher a pasta PAI e depois varre as subpastas dela.
     function scanStart(): void {
-        if (scanPickProc.running || scanProc.running)
+        if (scanPickProc.running || scanProc.running || pickProc.running)
             return;
         shellRoot.projActionError = "";
         // Esconde o painel: kdialog é coberto pelo layer-shell senão (mesmo caso do pickFolder).
