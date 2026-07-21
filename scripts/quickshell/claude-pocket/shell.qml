@@ -66,6 +66,47 @@ ShellRoot {
         }
     }
 
+    // Cadastro de projetos (aba Ajustes): erro da última ação de add/del.
+    property string projActionError: ""
+
+    Process {
+        id: projActionProc
+        stdout: StdioCollector {
+            onStreamFinished: {
+                let r = {};
+                try {
+                    r = JSON.parse(text);
+                } catch (e) {
+                    r = {
+                        ok: false,
+                        message: "resposta inválida do cp-panel-action"
+                    };
+                }
+                shellRoot.projActionError = r.ok ? "" : (r.message ?? "falhou");
+                Sessions.refresh();
+            }
+        }
+    }
+
+    // add: rest = [cwd, command, port?]; del: sem rest. Um Process serializa os cliques.
+    function projAdd(name, cwd, command, port): void {
+        if (projActionProc.running)
+            return;
+        shellRoot.projActionError = "";
+        let cmd = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", name, "project-add", cwd, command];
+        if (port && String(port).trim() !== "")
+            cmd.push(String(port).trim());
+        projActionProc.command = cmd;
+        projActionProc.running = true;
+    }
+    function projDel(name): void {
+        if (projActionProc.running)
+            return;
+        shellRoot.projActionError = "";
+        projActionProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", name, "project-del"];
+        projActionProc.running = true;
+    }
+
     onOpenChanged: if (!open)
         menuSession = null;
 
@@ -792,6 +833,101 @@ ShellRoot {
                                 visible: shellRoot.peerResult !== ""
                                 Layout.fillWidth: true
                                 text: shellRoot.peerResult
+                                color: "#f28b82"
+                                font.pixelSize: 9
+                                wrapMode: Text.Wrap
+                            }
+
+                            // ---- Projetos do launcher (cadastro) --------------------------
+                            Text {
+                                Layout.topMargin: 10
+                                text: "Projetos"
+                                color: "#c8c6cf"
+                                font.pixelSize: 11
+                            }
+
+                            // Lista dos cadastrados: nome + pasta, com botão remover.
+                            Repeater {
+                                model: Sessions.projects
+                                RowLayout {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    spacing: 6
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 0
+                                        Text {
+                                            text: parent.parent.modelData.name
+                                            color: "#e3e2e6"
+                                            font.pixelSize: 11
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: parent.parent.modelData.cwd
+                                            color: "#6e7079"
+                                            font.pixelSize: 9
+                                            elide: Text.ElideMiddle
+                                        }
+                                    }
+                                    // remover
+                                    Text {
+                                        text: "delete"
+                                        font.family: "Material Symbols Rounded"
+                                        font.pixelSize: 16
+                                        color: delMouse.containsMouse ? "#f28b82" : "#8e9099"
+                                        MouseArea {
+                                            id: delMouse
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: shellRoot.projDel(parent.parent.modelData.name)
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Form de adicionar. Campos simples; o backend valida e devolve o erro.
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                Layout.topMargin: 6
+                                spacing: 4
+                                TextField {
+                                    id: fName
+                                    Layout.fillWidth: true
+                                    placeholderText: "nome"
+                                }
+                                TextField {
+                                    id: fCwd
+                                    Layout.fillWidth: true
+                                    placeholderText: "pasta (ex: ~/sistemas/meu-app)"
+                                }
+                                TextField {
+                                    id: fCommand
+                                    Layout.fillWidth: true
+                                    placeholderText: "comando (ex: pnpm dev)"
+                                }
+                                TextField {
+                                    id: fPort
+                                    Layout.fillWidth: true
+                                    placeholderText: "porta (opcional)"
+                                }
+                                Button {
+                                    text: "＋ adicionar projeto"
+                                    enabled: fName.text.trim() !== "" && fCwd.text.trim() !== "" && fCommand.text.trim() !== ""
+                                    onClicked: {
+                                        shellRoot.projAdd(fName.text.trim(), fCwd.text.trim(), fCommand.text.trim(), fPort.text);
+                                        fName.text = "";
+                                        fCwd.text = "";
+                                        fCommand.text = "";
+                                        fPort.text = "";
+                                    }
+                                }
+                            }
+
+                            Text {
+                                visible: shellRoot.projActionError !== ""
+                                Layout.fillWidth: true
+                                text: shellRoot.projActionError
                                 color: "#f28b82"
                                 font.pixelSize: 9
                                 wrapMode: Text.Wrap
