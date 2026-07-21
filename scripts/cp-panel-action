@@ -15,9 +15,8 @@ Ops `peer` e `project` são exceções — o 1º argumento não é endereço de 
     <projeto> project start|stop|pane|open   launcher de projetos (projects.json, só local):
                                           play/stop, tail do log (pane) e log completo (open =
                                           terminal attachado na sessão do runner)
-    <qualquer> fs-roots                   raízes liberadas do navegador de pastas (CP_SCAN_ROOTS)
-    <qualquer> fs-scan <root> [path]      subpastas imediatas de path (default = root), sempre
-                                          no backend LOCAL — 1º arg é ignorado (dummy)
+    <qualquer> pick-folder [start]         abre o seletor de pasta NATIVO (kdialog/zenity) e
+                                          devolve o path escolhido — 1º arg é ignorado (dummy)
 
 Tudo pela API do servidor DONO da sessão (endereço servidor::sessao funciona igual), então
 rename/git valem também pras sessões remotas — o que NÃO dá remoto é só o attach no terminal.
@@ -28,7 +27,6 @@ import os
 import shutil
 import subprocess
 import sys
-import urllib.parse
 
 # resolve(): o script roda via symlink em ~/.local/bin — sem resolver, o import do módulo
 # irmão procuraria em ~/.local/bin em vez de scripts/ do repo.
@@ -152,23 +150,24 @@ def op_import_candidates(server: str) -> dict:
     return {"ok": True, "message": f"{ok}/{len(cands)} casados", "candidates": cands}
 
 
-def op_fs_roots() -> dict:
-    """Raízes do navegador de pastas do form de projeto (mesma allowlist do CP_SCAN_ROOTS que o
-    backend usa pro fs-scan). "local" é endereço dummy sem "::" -> api() resolve pro backend
-    local (local_base()), não pra uma sessão de verdade."""
-    roots = api("local", "GET", "/api/fs/roots")
-    return {"ok": True, "roots": roots}
-
-
-def op_fs_scan(root: str, path: str) -> dict:
-    """Subpastas imediatas de <path> (default = a própria raiz). cp_panel_common.api só troca
-    {name} na rota e não aceita querystring separada, então a querystring já vai pronta dentro
-    do argumento path do api() — o '?' passa intacto pelo .replace."""
-    params = {"root": root}
-    if path:
-        params["path"] = path
-    r = api("local", "GET", "/api/fs/scan?" + urllib.parse.urlencode(params))
-    return {"ok": True, "entries": r.get("entries", []), "error": r.get("error") or ""}
+def op_pick_folder(start: str) -> dict:
+    """Abre a caixa de diálogo NATIVA do sistema pra escolher uma pasta (kdialog, com zenity como
+    fallback). start vazio -> primeira raiz de _scan_roots() ou ~. Timeout longo: quem espera é o
+    humano na janela, não o script."""
+    if not start:
+        roots = _scan_roots()
+        start = roots[0] if roots else os.path.expanduser("~")
+    if shutil.which("kdialog"):
+        cmd = ["kdialog", "--getexistingdirectory", start]
+    elif shutil.which("zenity"):
+        cmd = ["zenity", "--file-selection", "--directory", f"--filename={start}/"]
+    else:
+        return {"ok": False, "message": "nenhum seletor de pasta (instale kdialog ou zenity)"}
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    path = r.stdout.strip()
+    if r.returncode == 0 and path:
+        return {"ok": True, "path": path}
+    return {"ok": False, "message": "seleção cancelada"}
 
 
 def op_info(addr: str) -> dict:
@@ -259,10 +258,8 @@ def main() -> int:
             out = op_project_del(addr)
         elif op == "import-candidates":
             out = op_import_candidates(addr)
-        elif op == "fs-roots":
-            out = op_fs_roots()
-        elif op == "fs-scan":
-            out = op_fs_scan(rest[0] if rest else "", rest[1] if len(rest) > 1 else "")
+        elif op == "pick-folder":
+            out = op_pick_folder(rest[0] if rest else "")
         elif op == "peer":
             # Único op cujo 1º argumento é um SERVIDOR, não um endereço de sessão: mexe no
             # peers.json local, sem chamar API nenhuma.
