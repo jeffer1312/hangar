@@ -30,6 +30,14 @@ KEEP = ("name", "cwd", "state", "branch", "status_line", "question", "options", 
         "limited", "pair_peers", "provider", "last_activity")
 
 
+def with_cwd_real(d: dict) -> dict:
+    """Seta cwd_real = realpath(cwd) pro casamento sessão↔projeto no painel. QML não tem
+    realpath, e os dois lados divergem (projeto varrido/importado é realpath'd, session.cwd vem
+    cru do /api/sessions), então o match tem que ser sobre o mesmo referencial resolvido."""
+    d["cwd_real"] = os.path.realpath(d["cwd"]) if d.get("cwd") else ""
+    return d
+
+
 def fetch(base_url: str, token: str) -> list[dict]:
     req = urllib.request.Request(f"{base_url.rstrip('/')}/api/sessions",
                                  headers={"Authorization": f"Bearer {token}"})
@@ -75,7 +83,7 @@ def slim(s: dict, server: str | None, web: str = "", attached: set[str] = frozen
     # group: chave de seção do painel. Local e remoto viram blocos separados porque a AÇÃO é
     # outra — local attacha no terminal daqui, remota só abre no navegador.
     out["group"] = server or "local"
-    return out
+    return with_cwd_real(out)
 
 
 def main() -> int:
@@ -146,6 +154,8 @@ def main() -> int:
     sessions.sort(key=lambda s: (s["server"] is not None, s["server"] or "",
                                  rank.get(s["state"], 2), s["name"]))
     projects, perr = proj_future.result()
+    for p in projects:
+        with_cwd_real(p)
     if perr:
         errors.append(perr)
     json.dump({"sessions": sessions, "errors": errors, "servers": servers,
