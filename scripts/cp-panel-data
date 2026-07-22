@@ -27,7 +27,8 @@ TIMEOUT = 4
 
 # Campos que o painel usa. Enxugar aqui evita despejar o transcript inteiro no QML a cada poll.
 KEEP = ("name", "cwd", "state", "branch", "status_line", "question", "options", "stalled",
-        "limited", "pair_peers", "provider", "last_activity")
+        "limited", "pair_peers", "provider", "last_activity",
+        "git_dirty", "git_ahead", "git_behind")
 
 
 def with_cwd_real(d: dict) -> dict:
