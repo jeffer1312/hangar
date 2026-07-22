@@ -1,9 +1,5 @@
-pragma ComponentBehavior: Bound
-
 import QtQuick
 import QtQuick.Layouts
-import Quickshell
-import Quickshell.Io
 
 // Uma sessão na lista: bolinha de estado + nome + subtítulo. Clique = ação do painel
 // (attach local / abrir web remota), sinalizada pro pai.
@@ -27,36 +23,11 @@ Rectangle {
         : null
     readonly property bool projAlive: project && (project.state === "running" || project.state === "starting")
     readonly property bool projExternal: project && project.state === "external"
-    // Última ação de dev server falhou (texto do cp-panel-action). Some na próxima ação.
-    property string projError: ""
-
-    function projAct(action: string): void {
-        if (projProc.running || !project)
-            return;
-        row.projError = "";
-        projProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", row.project.name, "project", action];
-        projProc.running = true;
-    }
-
-    Process {
-        id: projProc
-        stdout: StdioCollector {
-            onStreamFinished: {
-                let r = {};
-                try {
-                    r = JSON.parse(text);
-                } catch (e) {
-                    r = {
-                        ok: false,
-                        message: "resposta inválida do cp-panel-action"
-                    };
-                }
-                // Falha vira texto na linha (mesmo contrato do ProjectRow): stop_command quebrado
-                // ou API fora não podem morrer mudos num botão de play.
-                row.projError = r.ok ? "" : (r.message ?? "falhou");
-            }
-        }
-    }
+    // Erro da última ação de start/stop e o "em voo" moram no singleton Sessions (não aqui): o
+    // delegate da lista é recriado a cada poll que muda sessions[] (status_line de uma sessão
+    // working), e um Process/estado local morreria em voo — o "falhou" sumiria calado.
+    readonly property string projError: row.project ? (Sessions.projErrors[row.project.name] ?? "") : ""
+    readonly property bool projBusy: row.project && Sessions.togglePending === row.project.name
 
     implicitHeight: 56
     radius: 14
@@ -158,8 +129,8 @@ Rectangle {
         // o activated(). Sem hoverEnabled: roubaria o containsMouse que a linha usa pro realce.
         Text {
             visible: row.project && (!row.projExternal || row.project.has_stop_command)
-            text: projProc.running ? "hourglass_empty" : (row.projAlive || row.projExternal ? "stop_circle" : "play_circle")
-            color: projProc.running ? "#6e7079" : (row.projAlive || row.projExternal ? "#f2b8b5" : "#8fce9b")
+            text: row.projBusy ? "hourglass_empty" : (row.projAlive || row.projExternal ? "stop_circle" : "play_circle")
+            color: row.projBusy ? "#6e7079" : (row.projAlive || row.projExternal ? "#f2b8b5" : "#8fce9b")
             font.family: "Material Symbols Rounded"
             font.pixelSize: 18
             renderType: Text.NativeRendering
@@ -169,8 +140,8 @@ Rectangle {
                 anchors.fill: parent
                 anchors.margins: -6
                 cursorShape: Qt.PointingHandCursor
-                enabled: !projProc.running
-                onClicked: row.projAct(row.projAlive || row.projExternal ? "stop" : "start")
+                enabled: !row.projBusy
+                onClicked: Sessions.toggleProject(row.project.name, row.projAlive || row.projExternal ? "stop" : "start")
             }
         }
 
