@@ -123,6 +123,35 @@ Rectangle {
             font.pixelSize: 10
         }
 
+        // Badge de git: não-commitado (●N âmbar) e não-pushado (↑N azul), ou ✓ sincronizado.
+        // Campos vêm do /api/sessions; null (não-repo/sem-upstream) → some. Glyphs unicode na fonte
+        // padrão (pixelSize casando o chip de branch), não Material Symbols — ●↑✓ pesam certo aqui.
+        Text {
+            visible: (row.session.git_dirty ?? 0) > 0
+            text: "●" + row.session.git_dirty
+            color: "#f9c784"
+            font.pixelSize: 10
+            renderType: Text.NativeRendering
+        }
+
+        Text {
+            visible: (row.session.git_ahead ?? 0) > 0
+            text: "↑" + row.session.git_ahead
+            color: "#8ab4f8"
+            font.pixelSize: 10
+            renderType: Text.NativeRendering
+        }
+
+        Text {
+            // Sincronizado: repo com upstream, sem sujo e sem commits à frente. git_ahead null (sem
+            // upstream) NÃO conta — aí não há "sincronizado" a afirmar.
+            visible: (row.session.git_ahead ?? null) === 0 && (row.session.git_dirty ?? 0) === 0
+            text: "✓"
+            color: "#6e7079"
+            font.pixelSize: 10
+            renderType: Text.NativeRendering
+        }
+
         // Play/stop do dev server do projeto casado (projects.json). Só aparece se a sessão bate
         // num projeto; externo só mostra stop com stop_command (sem pane pra matar). Z-order já
         // isola o clique — o RowLayout renderiza sobre o MouseArea da linha, então este não dispara
