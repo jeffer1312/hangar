@@ -29,6 +29,12 @@ Rectangle {
     readonly property string projError: row.project ? Sessions.projErr(row.project.name) : ""
     readonly property bool projBusy: row.project && Sessions.togglePending === row.project.name
 
+    readonly property bool pushConfirming: Sessions.pushConfirm === row.session.address
+    readonly property bool pushing: Sessions.pushPending === row.session.address
+    readonly property string pushError: Sessions.pushErr(row.session.address)
+    // Um erro só no subtítulo: dev server tem precedência sobre push (raro os dois juntos).
+    readonly property string rowError: row.projError !== "" ? row.projError : row.pushError
+
     implicitHeight: 56
     radius: 14
     color: mouse.containsMouse ? "#33ffffff" : "#14ffffff"
@@ -107,9 +113,9 @@ Rectangle {
                 Layout.fillWidth: true
                 // Subtítulo carrega o que importa naquele estado: erro de dev server > pergunta
                 // pendente > pasta.
-                text: row.projError !== "" ? row.projError
+                text: row.rowError !== "" ? row.rowError
                     : (row.awaiting && row.session.question ? String(row.session.question) : (row.session.cwd ?? ""))
-                color: row.projError !== "" ? "#f28b82"
+                color: row.rowError !== "" ? "#f28b82"
                     : (row.awaiting ? "#f2b8b5" : "#a0a0a8")
                 font.pixelSize: 11
                 elide: Text.ElideMiddle
@@ -134,12 +140,69 @@ Rectangle {
             renderType: Text.NativeRendering
         }
 
+        // ↑N não-pushado: 1º toque arma o confirm inline; em voo vira ↑…; confirmando vira
+        // "push N em <branch>? ✓ ✕". Estado no singleton (sobrevive à recria do delegate).
         Text {
-            visible: (row.session.git_ahead ?? 0) > 0
+            visible: (row.session.git_ahead ?? 0) > 0 && !row.pushConfirming && !row.pushing
             text: "↑" + row.session.git_ahead
             color: "#8ab4f8"
             font.pixelSize: 10
             renderType: Text.NativeRendering
+
+            MouseArea {
+                anchors.fill: parent
+                anchors.margins: -6
+                cursorShape: Qt.PointingHandCursor
+                onClicked: Sessions.pushConfirmToggle(row.session.address)
+            }
+        }
+
+        Text {
+            visible: row.pushing
+            text: "↑…"
+            color: "#6e7079"
+            font.pixelSize: 10
+            renderType: Text.NativeRendering
+        }
+
+        Row {
+            visible: row.pushConfirming
+            spacing: 6
+            Layout.alignment: Qt.AlignVCenter
+
+            Text {
+                text: "push " + (row.session.git_ahead ?? 0) + " em " + (row.session.branch ?? "?") + "?"
+                color: "#e3e2e6"
+                font.pixelSize: 10
+                elide: Text.ElideRight
+                width: Math.min(implicitWidth, 150)
+            }
+
+            Text {
+                text: "✓"
+                color: "#8fce9b"
+                font.pixelSize: 13
+                renderType: Text.NativeRendering
+                MouseArea {
+                    anchors.fill: parent
+                    anchors.margins: -6
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: Sessions.pushSession(row.session.address)
+                }
+            }
+
+            Text {
+                text: "✕"
+                color: "#f28b82"
+                font.pixelSize: 13
+                renderType: Text.NativeRendering
+                MouseArea {
+                    anchors.fill: parent
+                    anchors.margins: -6
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: Sessions.pushCancel()
+                }
+            }
         }
 
         Text {
