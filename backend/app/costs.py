@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -152,6 +155,29 @@ def _account_info(config_dir: Path, fallback_label: str) -> tuple[str, str | Non
     return fallback_label, None, fallback_label
 
 
+# Cotação USD/BRL: cache em memória de 1h. Falha também "conta" como tentativa (atualiza o
+# timestamp) — senão cada request offline pagaria os 3s de timeout até a rede voltar.
+_RATE_URL = "https://economia.awesomeapi.com.br/json/last/USD-BRL"
+_rate: float | None = None
+_rate_at: float = 0.0
+
+
+def usd_brl() -> float | None:
+    global _rate, _rate_at
+    now = time.monotonic()
+    if _rate_at and now - _rate_at < 3600:
+        return _rate
+    _rate_at = now
+    try:
+        with urllib.request.urlopen(_RATE_URL, timeout=3) as r:
+            _rate = float(json.load(r)["USDBRL"]["bid"])
+    except Exception as e:
+        # Mantém a última cotação conhecida (ou None) — front cai pra USD. O log distingue
+        # timeout de mudança de schema da API (senão os dois falham idênticos pra sempre).
+        logging.getLogger(__name__).warning("cotação USD/BRL falhou: %r", e)
+    return _rate
+
+
 def report(now: datetime | None = None) -> CostReport:
     now = now or datetime.now(LOCAL)
     accounts: list[AccountCost] = []
@@ -160,4 +186,4 @@ def report(now: datetime | None = None) -> CostReport:
         rows = _load(cdir)
         acc_id, email, label = _account_info(cdir, cfg.label)
         accounts.append(aggregate(rows, acc_id, email, label, now))
-    return CostReport(accounts=accounts)
+    return CostReport(accounts=accounts, usd_brl=usd_brl())

@@ -227,6 +227,8 @@ export interface AccountCost {
 
 export interface CostReport {
   accounts: AccountCost[];
+  // Opcional: servidor da malha em versão antiga não manda cotação.
+  usd_brl?: number | null;
 }
 
 export interface Runner {

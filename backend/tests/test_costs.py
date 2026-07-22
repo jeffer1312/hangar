@@ -166,3 +166,42 @@ def test_by_model_tokens_batem_com_o_total():
     assert sum(m.output for m in acc.by_model) == acc.totals.output
     assert sum(m.cache_write for m in acc.by_model) == acc.totals.cache_write
     assert sum(m.cache_read for m in acc.by_model) == acc.totals.cache_read
+
+
+def test_usd_brl_cacheia_e_nao_rebate_na_rede(monkeypatch):
+    """1ª chamada busca; 2ª usa cache; falha mantém última cotação conhecida."""
+    import io
+
+    calls = {"n": 0}
+
+    class FakeResp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(url, timeout=None):
+        calls["n"] += 1
+        return FakeResp(b'{"USDBRL": {"bid": "5.4321"}}')
+
+    monkeypatch.setattr(costs.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(costs, "_rate", None)
+    monkeypatch.setattr(costs, "_rate_at", 0.0)
+
+    assert costs.usd_brl() == 5.4321
+    assert costs.usd_brl() == 5.4321  # cache: sem novo hit
+    assert calls["n"] == 1
+
+    # Cache expirado + rede fora -> mantém a última cotação, e a falha "conta" como tentativa
+    monkeypatch.setattr(costs, "_rate_at", 0.0)
+
+    def boom(url, timeout=None):
+        calls["n"] += 1
+        raise OSError("offline")
+
+    monkeypatch.setattr(costs.urllib.request, "urlopen", boom)
+    assert costs.usd_brl() == 5.4321
+    n_after_fail = calls["n"]
+    assert costs.usd_brl() == 5.4321  # falha cacheada: não tenta de novo já
+    assert calls["n"] == n_after_fail

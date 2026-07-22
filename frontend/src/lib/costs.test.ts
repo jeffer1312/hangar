@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeAccounts, type ServerResult } from './costs';
+import { mergeAccounts, fillDayGaps, type ServerResult } from './costs';
 import type { AccountCost, CostBucket } from './types';
 
 function bucket(key: string, cost: number): CostBucket {
@@ -99,5 +99,40 @@ describe('addModels (via mergeAccounts) — tokens por modelo', () => {
     expect(m.cache_read).toBe(42);
     expect(Number.isNaN(m.input)).toBe(false);
     expect(Number.isNaN(m.output)).toBe(false);
+  });
+});
+
+describe('usdBrl no merge', () => {
+  it('pega a primeira cotação não-nula entre os servidores', () => {
+    const a: ServerResult = { report: { accounts: [acc('u1', 1, [])] } }; // servidor antigo, sem campo
+    const b: ServerResult = { report: { accounts: [acc('u1', 1, [])], usd_brl: 5.5 } };
+    expect(mergeAccounts([a, b]).usdBrl).toBe(5.5);
+  });
+
+  it('null quando nenhum servidor mandou', () => {
+    expect(mergeAccounts([{ report: { accounts: [] } }]).usdBrl).toBeNull();
+  });
+});
+
+describe('fillDayGaps', () => {
+  it('preenche buracos com dias zerados', () => {
+    const out = fillDayGaps([bucket('2026-07-22', 3), bucket('2026-07-18', 1)]);
+    expect(out.map((b) => b.key)).toEqual([
+      '2026-07-22', '2026-07-21', '2026-07-20', '2026-07-19', '2026-07-18',
+    ]);
+    expect(out[1].cost).toBe(0);
+    expect(out[1].sessions).toBe(0);
+  });
+
+  it('não mexe em lista contínua nem em lista de 1 item', () => {
+    const cont = [bucket('2026-07-22', 3), bucket('2026-07-21', 1)];
+    expect(fillDayGaps(cont)).toEqual(cont);
+    const one = [bucket('2026-07-22', 3)];
+    expect(fillDayGaps(one)).toBe(one);
+  });
+
+  it('atravessa virada de mês', () => {
+    const out = fillDayGaps([bucket('2026-07-02', 1), bucket('2026-06-29', 1)]);
+    expect(out.map((b) => b.key)).toEqual(['2026-07-02', '2026-07-01', '2026-06-30', '2026-06-29']);
   });
 });
