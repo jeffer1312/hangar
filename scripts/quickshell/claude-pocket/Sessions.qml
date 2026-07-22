@@ -32,12 +32,58 @@ Singleton {
     // delegate morre quando o modelo troca — o estado sobrevive no singleton.
     property var openLogs: ({})
 
+    // Erro da última ação de start/stop de dev server por projeto (chave = nome; vazio = sem
+    // erro) e o nome do projeto com toggle em voo. Moram AQUI pelo mesmo motivo do openLogs: o
+    // delegate SessionRow é recriado a cada poll que muda sessions[], e um Process/erro local
+    // morreria em voo — o onStreamFinished nunca dispararia e o "falhou" sumiria calado.
+    property var projErrors: ({})
+    property string togglePending: ""
+
     // Grava o estado EFETIVO desejado (não um flip cego): o card falhado abre o tail por
     // padrão sem entrada no mapa, então o toggle precisa receber o valor visível atual.
     function setLog(name: string, open: bool): void {
         const m = Object.assign({}, openLogs);
         m[name] = open;
         openLogs = m;
+    }
+
+    function setProjError(name: string, msg: string): void {
+        const m = Object.assign({}, projErrors);
+        if (msg)
+            m[name] = msg;
+        else
+            delete m[name];
+        projErrors = m;
+    }
+
+    // Start/stop do dev server disparado pela linha de sessão. O Process (toggler) mora no
+    // singleton pra sobreviver à recriação do delegate. Um toggle por vez basta no painel
+    // single-user; clique num segundo enquanto um roda é ignorado.
+    function toggleProject(name: string, action: string): void {
+        if (toggler.running)
+            return;
+        root.togglePending = name;
+        setProjError(name, "");
+        toggler.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", name, "project", action];
+        toggler.running = true;
+    }
+
+    // Erro de start/stop vira stale quando o projeto sobe (running/starting/external) ou some —
+    // limpa aí pra não grudar no subtítulo escondendo a pergunta de uma sessão awaiting. Enquanto
+    // failed/stopped o texto FICA: é o único aviso de falha na linha da sessão.
+    function _pruneProjErrors(): void {
+        if (Object.keys(root.projErrors).length === 0)
+            return;
+        const st = {};
+        for (const p of root.projects)
+            st[p.name] = p.state;
+        const m = {};
+        for (const name in root.projErrors) {
+            if (st[name] === "failed" || st[name] === "stopped")
+                m[name] = root.projErrors[name];
+        }
+        if (JSON.stringify(m) !== JSON.stringify(root.projErrors))
+            root.projErrors = m;
     }
 
     // Só reatribui quando MUDOU de verdade: cada reassign destrói os delegates da ListView
@@ -85,6 +131,7 @@ Singleton {
                     root._assign("errors", data.errors ?? []);
                     root._assign("servers", data.servers ?? []);
                     root._assign("projects", data.projects ?? []);
+                    root._pruneProjErrors();
                     root.everLoaded = true;
                     root._notify(root.sessions);
                 } catch (e) {
@@ -93,6 +140,28 @@ Singleton {
                     root.errors = [`cp-panel-data: saída inválida (${e.message})`];
                     root.everLoaded = true;
                 }
+            }
+        }
+    }
+
+    Process {
+        id: toggler
+        stdout: StdioCollector {
+            onStreamFinished: {
+                let r = {};
+                try {
+                    r = JSON.parse(text);
+                } catch (e) {
+                    r = {
+                        ok: false,
+                        message: "resposta inválida do cp-panel-action"
+                    };
+                }
+                // Falha vira texto na linha da sessão; não pode morrer muda num botão de play.
+                root.setProjError(root.togglePending, r.ok ? "" : (r.message ?? "falhou"));
+                root.togglePending = "";
+                // Reflete o novo estado do projeto sem esperar o próximo tick do Timer.
+                root.refresh();
             }
         }
     }
