@@ -7,6 +7,7 @@ export interface ServerResult {
 export interface MergedReport {
   accounts: AccountCost[];
   partial: boolean; // algum servidor nao respondeu
+  usdBrl: number | null; // primeira cotação não-nula entre os servidores
 }
 
 export function addBuckets(into: Map<string, CostBucket>, list: CostBucket[]): void {
@@ -78,9 +79,11 @@ export function sortDesc(m: Map<string, CostBucket>): CostBucket[] {
 export function mergeAccounts(results: ServerResult[]): MergedReport {
   const byId = new Map<string, Acc>();
   let partial = false;
+  let usdBrl: number | null = null;
 
   for (const r of results) {
     if (!r.report) { partial = true; continue; }
+    usdBrl ??= r.report.usd_brl ?? null;
     for (const a of r.report.accounts) {
       let acc = byId.get(a.account_id);
       if (!acc) {
@@ -119,5 +122,31 @@ export function mergeAccounts(results: ServerResult[]): MergedReport {
     by_model: [...acc.model.values()].sort((a, b) => b.cost - a.cost),
   }));
 
-  return { accounts, partial };
+  return { accounts, partial, usdBrl };
+}
+
+// Preenche buracos de data na lista de buckets diários (desc) com dias zerados, pra série
+// visual ficar contínua. Só faz sentido no período "dia" — semana/mês ficam como estão.
+export function fillDayGaps(list: CostBucket[]): CostBucket[] {
+  if (list.length < 2) return list;
+  const zero = (key: string): CostBucket => ({
+    key, sessions: 0, input: 0, output: 0, cache_read: 0, cache_write: 0, cost: 0,
+  });
+  const fmt = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const out: CostBucket[] = [];
+  for (let i = 0; i < list.length; i++) {
+    out.push(list[i]);
+    const next = list[i + 1];
+    if (!next) break;
+    const d = new Date(`${list[i].key}T00:00:00`);
+    // guarda de sanidade: key malformada não pode virar loop infinito
+    for (let g = 0; g < 366; g++) {
+      d.setDate(d.getDate() - 1);
+      const k = fmt(d);
+      if (k <= next.key) break;
+      out.push(zero(k));
+    }
+  }
+  return out;
 }
