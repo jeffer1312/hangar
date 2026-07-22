@@ -26,7 +26,7 @@ Rectangle {
     // Erro da última ação de start/stop e o "em voo" moram no singleton Sessions (não aqui): o
     // delegate da lista é recriado a cada poll que muda sessions[] (status_line de uma sessão
     // working), e um Process/estado local morreria em voo — o "falhou" sumiria calado.
-    readonly property string projError: row.project ? (Sessions.projErrors[row.project.name] ?? "") : ""
+    readonly property string projError: row.project ? Sessions.projErr(row.project.name) : ""
     readonly property bool projBusy: row.project && Sessions.togglePending === row.project.name
 
     implicitHeight: 56
