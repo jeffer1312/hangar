@@ -96,9 +96,12 @@
   // recortes diferentes, e reaproveitar `peak` deixaria todas as barras curtas sem motivo.
   const modelPeak = $derived(Math.max(1, ...(view?.by_model ?? []).map((m) => m.cost)));
   const rate = $derived(merged.usdBrl);
+  // Intl com separador de milhar: "R$ 109.014,35" em vez de "R$ 109014.35".
+  const fmtBRL = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+  const fmtUSD = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'USD' });
   // BRL só quando há cotação — sem cotação, cai pra USD em vez de mostrar número errado.
   const money = (n: number) =>
-    currency === 'BRL' && rate ? `R$ ${(n * rate).toFixed(2)}` : `$${n.toFixed(2)}`;
+    currency === 'BRL' && rate ? fmtBRL.format(n * rate) : fmtUSD.format(n);
   // Média dos últimos 7 dias-calendário (não 7 linhas: dia sem uso conta como zero).
   const avg7 = $derived.by(() => {
     if (!view) return 0;
