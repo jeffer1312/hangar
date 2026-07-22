@@ -40,6 +40,13 @@ Singleton {
     property string togglePending: ""
     property string togglePendingAction: ""
 
+    // Push de branch pela linha de sessão (badge ↑N). TODO o estado mora aqui, keyed por address,
+    // não no SessionRow: o delegate é recriado a cada poll que muda sessions[] (status_line de uma
+    // sessão working) — um bool de confirm ou Process local morreria no meio do dois-toques.
+    property string pushConfirm: ""   // address aguardando o 2º toque
+    property string pushPending: ""   // address com push em voo
+    property var pushErrors: ({})      // address -> msg de erro
+
     // Grava o estado EFETIVO desejado (não um flip cego): o card falhado abre o tail por
     // padrão sem entrada no mapa, então o toggle precisa receber o valor visível atual.
     function setLog(name: string, open: bool): void {
@@ -103,6 +110,56 @@ Singleton {
             root.projErrors = m;
     }
 
+    function pushConfirmToggle(address: string): void {
+        // 1º toque arma; tocar de novo (ou o ✕) desarma; armar em outra troca o alvo.
+        root.pushConfirm = (root.pushConfirm === address) ? "" : address;
+    }
+
+    function pushCancel(): void {
+        root.pushConfirm = "";
+    }
+
+    function setPushError(address: string, msg: string): void {
+        const m = Object.assign({}, pushErrors);
+        if (msg)
+            m[address] = msg;
+        else
+            delete m[address];
+        pushErrors = m;
+    }
+
+    function pushErr(address: string): string {
+        return pushErrors[address] ?? "";
+    }
+
+    function pushSession(address: string): void {
+        if (pusher.running)
+            return;
+        root.pushConfirm = "";
+        root.pushPending = address;
+        setPushError(address, "");
+        pusher.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", address, "push"];
+        pusher.running = true;
+    }
+
+    // Erro de push some quando o push deu certo (git_ahead volta a 0 no próximo poll) ou a sessão
+    // sai da lista. Enquanto ainda há commits à frente (ahead > 0), o push falhou de verdade e o
+    // texto FICA — mesmo contrato do _pruneProjErrors.
+    function _prunePushErrors(): void {
+        if (Object.keys(root.pushErrors).length === 0)
+            return;
+        const ahead = {};
+        for (const s of root.sessions)
+            ahead[s.address] = s.git_ahead;
+        const m = {};
+        for (const addr in root.pushErrors) {
+            if (ahead[addr] > 0)
+                m[addr] = root.pushErrors[addr];
+        }
+        if (JSON.stringify(m) !== JSON.stringify(root.pushErrors))
+            root.pushErrors = m;
+    }
+
     // Só reatribui quando MUDOU de verdade: cada reassign destrói os delegates da ListView
     // (scroll volta pro topo, tail de log aberto fecha). Poll sem mudança — a imensa maioria
     // com o painel aberto a 2s — vira no-op. Stringify é estável aqui: o backend serializa os
@@ -145,6 +202,7 @@ Singleton {
                 try {
                     const data = JSON.parse(text);
                     root._assign("sessions", data.sessions ?? []);
+                    root._prunePushErrors();
                     root._assign("errors", data.errors ?? []);
                     root._assign("servers", data.servers ?? []);
                     root._assign("projects", data.projects ?? []);
@@ -179,6 +237,28 @@ Singleton {
                 root.togglePending = "";
                 root.togglePendingAction = "";
                 // Reflete o novo estado do projeto sem esperar o próximo tick do Timer.
+                root.refresh();
+            }
+        }
+    }
+
+    Process {
+        id: pusher
+        stdout: StdioCollector {
+            onStreamFinished: {
+                let r = {};
+                try {
+                    r = JSON.parse(text);
+                } catch (e) {
+                    r = {
+                        ok: false,
+                        message: "resposta inválida do cp-panel-action"
+                    };
+                }
+                // Falha de push vira texto na linha; não pode morrer muda.
+                root.setPushError(root.pushPending, r.ok ? "" : (r.message ?? "push falhou"));
+                root.pushPending = "";
+                // Puxa o novo git_ahead (0 se deu certo) sem esperar o Timer.
                 root.refresh();
             }
         }
