@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import time
 
 # Git pela sessao (cwd da sessao tmux). Tudo via argv list -> nunca string de shell (sem injecao).
 # Acoes fixas: listar/trocar branch, status/pull/fetch/stash, e o write-path (commit/push) + navegacao
@@ -41,6 +42,59 @@ def _run(cwd: str, *args: str) -> subprocess.CompletedProcess:
     except OSError as e:
         # ex: sem permissao de executar git -> erro limpo em vez de 500 com traceback.
         raise GitError(500, f"git falhou: {e}")
+
+
+_AHEAD_RE = re.compile(r"ahead (\d+)")
+_BEHIND_RE = re.compile(r"behind (\d+)")
+
+
+def _parse_status_branch(out: str) -> dict | None:
+    """Parseia `git status --porcelain=v1 --branch`. dirty = linhas de arquivo (todas menos o
+    cabeçalho `## ...`; rename é UMA linha em porcelain=v1). ahead/behind só com upstream REAL:
+    header sem `...` (detached/sem-upstream/sem-commits) ou com `[gone]` -> None."""
+    lines = out.splitlines()
+    if not lines or not lines[0].startswith("## "):
+        return None
+    header = lines[0]
+    dirty = len(lines) - 1
+    if "..." not in header or "[gone]" in header:
+        return {"dirty": dirty, "ahead": None, "behind": None}
+    a = _AHEAD_RE.search(header)
+    b = _BEHIND_RE.search(header)
+    return {"dirty": dirty,
+            "ahead": int(a.group(1)) if a else 0,
+            "behind": int(b.group(1)) if b else 0}
+
+
+# Cache de módulo por cwd (TTL curto): git_summary roda por sessão na decoração da listagem, e o
+# poll do painel é 2s. Ele é chamado de dentro de um asyncio.to_thread (ver registry), então
+# requests concorrentes podem bater no dict de threads distintas -> pior caso um fork redundante,
+# sem corrupção (benigno por idempotência, mesma classe do _status_cache de classe). Sem lock.
+_summary_cache: dict[str, tuple[float, dict | None]] = {}
+_SUMMARY_TTL = 3.0
+
+
+def git_summary(cwd: str | None) -> dict | None:
+    """{dirty, ahead, behind} do repo em cwd, ou None (não-repo/erro). Gate em `.git` existir pra
+    não forkar `git status` numa pasta sem repo (ex.: sessão em ~). `.git` como ARQUIVO (worktree)
+    passa o gate — git status funciona; só `.git` ausente cai fora. NUNCA levanta: _run estoura
+    GitError no timeout (repo enorme/NFS) e isso não pode virar 500 no /api/sessions."""
+    if not cwd or not os.path.exists(os.path.join(cwd, ".git")):
+        return None
+    now = time.monotonic()
+    hit = _summary_cache.get(cwd)
+    if hit and now - hit[0] < _SUMMARY_TTL:
+        return hit[1]
+    try:
+        p = _run(cwd, "status", "--porcelain=v1", "--branch")
+    except GitError:
+        # timeout / git ausente: sem badge, nunca 500. Cacheia o None pra não re-forkar o lento
+        # a cada poll (o TTL segura a re-tentativa).
+        result = None
+    else:
+        result = _parse_status_branch(p.stdout) if p.returncode == 0 else None
+    _summary_cache[cwd] = (now, result)
+    return result
 
 
 def list_branches(cwd: str) -> dict:
