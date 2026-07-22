@@ -184,6 +184,16 @@ def single_instance() -> socket.socket | None:
     return s      # devolvido pra manter referência viva: fechado, a trava cairia.
 
 
+def register(bus: dbus.SessionBus, name: str) -> bool:
+    try:
+        watcher = bus.get_object(WATCHER, "/StatusNotifierWatcher")
+        watcher.RegisterStatusNotifierItem(name, dbus_interface=WATCHER)
+        return True
+    except dbus.exceptions.DBusException as e:
+        print(f"erro ao registrar no StatusNotifierWatcher ({e})", file=sys.stderr)
+        return False
+
+
 def main() -> int:
     lock = single_instance()
     if lock is None:
@@ -197,13 +207,18 @@ def main() -> int:
     item = TrayItem(bus)
     item.poll()
 
-    try:
-        watcher = bus.get_object(WATCHER, "/StatusNotifierWatcher")
-        watcher.RegisterStatusNotifierItem(name.get_name(), dbus_interface=WATCHER)
-    except dbus.exceptions.DBusException as e:
-        print(f"erro: nenhum StatusNotifierWatcher no barramento ({e}) — a barra tem bandeja?",
-              file=sys.stderr)
-        return 1
+    # A barra que publica o Watcher reinicia (hyprctl reload, update do dots-hyprland) e ganha dono
+    # novo no bus; a inscrição feita no dono antigo some junto. Sem re-registrar, o ícone sumia da
+    # bandeja até o próximo boot. watch_name_owner já dispara com o dono ATUAL ao inscrever, então
+    # cobre também o registro inicial — daí não há RegisterStatusNotifierItem manual aqui.
+    def on_watcher_owner(new_owner: str) -> None:
+        if new_owner:
+            register(bus, name.get_name())
+        else:
+            print("nenhum StatusNotifierWatcher agora — aguardando a barra aparecer",
+                  file=sys.stderr)
+
+    bus.watch_name_owner(WATCHER, on_watcher_owner)
 
     GLib.timeout_add_seconds(POLL_SECONDS, item.poll)
     GLib.MainLoop().run()
