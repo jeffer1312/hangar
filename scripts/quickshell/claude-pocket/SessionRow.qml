@@ -1,5 +1,9 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Layouts
+import Quickshell
+import Quickshell.Io
 
 // Uma sessão na lista: bolinha de estado + nome + subtítulo. Clique = ação do painel
 // (attach local / abrir web remota), sinalizada pro pai.
@@ -15,6 +19,44 @@ Rectangle {
     readonly property bool awaiting: session.state === "awaiting_input"
     readonly property bool working: session.state === "working"
     readonly property color stateColor: awaiting ? "#f2b8b5" : working ? "#f9c784" : "#8e9099"
+
+    // Projeto do launcher casado com esta sessão, por cwd resolvido (realpath, campo cwd_real do
+    // cp-panel-data). Só sessão local: dev server e projects.json são local-only. null = sem botão.
+    readonly property var project: session.local
+        ? (Sessions.projects.find(p => p.cwd_real && p.cwd_real === session.cwd_real) ?? null)
+        : null
+    readonly property bool projAlive: project && (project.state === "running" || project.state === "starting")
+    readonly property bool projExternal: project && project.state === "external"
+    // Última ação de dev server falhou (texto do cp-panel-action). Some na próxima ação.
+    property string projError: ""
+
+    function projAct(action: string): void {
+        if (projProc.running || !project)
+            return;
+        row.projError = "";
+        projProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", row.project.name, "project", action];
+        projProc.running = true;
+    }
+
+    Process {
+        id: projProc
+        stdout: StdioCollector {
+            onStreamFinished: {
+                let r = {};
+                try {
+                    r = JSON.parse(text);
+                } catch (e) {
+                    r = {
+                        ok: false,
+                        message: "resposta inválida do cp-panel-action"
+                    };
+                }
+                // Falha vira texto na linha (mesmo contrato do ProjectRow): stop_command quebrado
+                // ou API fora não podem morrer mudos num botão de play.
+                row.projError = r.ok ? "" : (r.message ?? "falhou");
+            }
+        }
+    }
 
     implicitHeight: 56
     radius: 14
@@ -92,9 +134,12 @@ Rectangle {
 
             Text {
                 Layout.fillWidth: true
-                // Subtítulo carrega o que importa naquele estado: pergunta pendente > pasta.
-                text: row.awaiting && row.session.question ? String(row.session.question) : (row.session.cwd ?? "")
-                color: row.awaiting ? "#f2b8b5" : "#a0a0a8"
+                // Subtítulo carrega o que importa naquele estado: erro de dev server > pergunta
+                // pendente > pasta.
+                text: row.projError !== "" ? row.projError
+                    : (row.awaiting && row.session.question ? String(row.session.question) : (row.session.cwd ?? ""))
+                color: row.projError !== "" ? "#f28b82"
+                    : (row.awaiting ? "#f2b8b5" : "#a0a0a8")
                 font.pixelSize: 11
                 elide: Text.ElideMiddle
             }
@@ -105,6 +150,28 @@ Rectangle {
             text: row.session.branch ?? ""
             color: "#8e9099"
             font.pixelSize: 10
+        }
+
+        // Play/stop do dev server do projeto casado (projects.json). Só aparece se a sessão bate
+        // num projeto; externo só mostra stop com stop_command (sem pane pra matar). Z-order já
+        // isola o clique — o RowLayout renderiza sobre o MouseArea da linha, então este não dispara
+        // o activated(). Sem hoverEnabled: roubaria o containsMouse que a linha usa pro realce.
+        Text {
+            visible: row.project && (!row.projExternal || row.project.has_stop_command)
+            text: projProc.running ? "hourglass_empty" : (row.projAlive || row.projExternal ? "stop_circle" : "play_circle")
+            color: projProc.running ? "#6e7079" : (row.projAlive || row.projExternal ? "#f2b8b5" : "#8fce9b")
+            font.family: "Material Symbols Rounded"
+            font.pixelSize: 18
+            renderType: Text.NativeRendering
+            Layout.alignment: Qt.AlignVCenter
+
+            MouseArea {
+                anchors.fill: parent
+                anchors.margins: -6
+                cursorShape: Qt.PointingHandCursor
+                enabled: !projProc.running
+                onClicked: row.projAct(row.projAlive || row.projExternal ? "stop" : "start")
+            }
         }
 
         // Diz o que o clique vai fazer: focar terminal já aberto, abrir um novo, ou abrir a web
