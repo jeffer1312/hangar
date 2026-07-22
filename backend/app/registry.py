@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 from app import tmux
 from app.config import settings
+from app.git_ops import git_summary
 from app.models import SessionInfo
 from app.pqueue import PromptQueue
 from app.chain import ThenLink
@@ -670,6 +671,21 @@ class SessionRegistry:
                 and info.last_activity is not None
                 and (now - info.last_activity) > settings.stall_seconds
             )
+        # Estado de git por sessão — SÓ aqui (payload do /api/sessions), nunca em list(): git_summary
+        # forka `git status` e list() é o caminho leve chamado por kill()/resume/SSE. E como
+        # list_with_state é awaitado direto no event loop (/api/sessions, sse, stall_watch), o loop
+        # de forks vai pro threadpool via asyncio.to_thread — rodar na corrotina congelaria o backend
+        # inteiro no cache-miss. Gate em .git e except GitError moram no git_summary; cache de 3s
+        # segura o custo vs o poll de 2s.
+        def _decorate_git() -> None:
+            for info in infos:
+                summary = git_summary(info.cwd)
+                if summary is not None:
+                    info.git_dirty = summary["dirty"]
+                    info.git_ahead = summary["ahead"]
+                    info.git_behind = summary["behind"]
+
+        await asyncio.to_thread(_decorate_git)
         return infos
 
     def create(self, name: str, cwd: str, config_dir: str | None = None,
