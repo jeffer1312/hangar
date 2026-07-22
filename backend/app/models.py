@@ -178,6 +178,7 @@ class AccountCost(BaseModel):
 
 class CostReport(BaseModel):
     accounts: list[AccountCost]
+    usd_brl: Optional[float] = None  # cotação p/ exibir em R$ no front; None = indisponível
 
 
 class Runner(BaseModel):

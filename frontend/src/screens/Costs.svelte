@@ -2,7 +2,7 @@
   import NavBar from '../components/NavBar.svelte';
   import { listServers } from '../lib/auth';
   import { fetchCostsForServer } from '../lib/api';
-  import { mergeAccounts, addBuckets, sortDesc, type ServerResult, type MergedReport } from '../lib/costs';
+  import { mergeAccounts, addBuckets, sortDesc, fillDayGaps, type ServerResult, type MergedReport } from '../lib/costs';
   import { abbrevNum } from '../lib/format';
   import type { AccountCost, CostBucket, CostModelBucket } from '../lib/types';
 
@@ -10,9 +10,15 @@
   let { onBack }: Props = $props();
 
   let loading = $state(true);
-  let merged = $state<MergedReport>({ accounts: [], partial: false });
+  let merged = $state<MergedReport>({ accounts: [], partial: false, usdBrl: null });
   let selected = $state<string>('all'); // account_id ou 'all'
   let period = $state<'day' | 'week' | 'month'>('day');
+  let currency = $state<'USD' | 'BRL'>(localStorage.getItem('cp_costs_currency') === 'BRL' ? 'BRL' : 'USD');
+
+  function setCurrency(c: 'USD' | 'BRL') {
+    currency = c;
+    localStorage.setItem('cp_costs_currency', c);
+  }
 
   async function load() {
     loading = true;
@@ -81,13 +87,26 @@
   });
 
   const rows = $derived(
-    view ? (period === 'day' ? view.by_day : period === 'week' ? view.by_week : view.by_month) : [],
+    view
+      ? period === 'day' ? fillDayGaps(view.by_day) : period === 'week' ? view.by_week : view.by_month
+      : [],
   );
   const peak = $derived(Math.max(1, ...rows.map((r) => r.cost)));
   // Barra do "por modelo" escala pelo MAIOR MODELO, não pelo pico do período: são tabelas com
   // recortes diferentes, e reaproveitar `peak` deixaria todas as barras curtas sem motivo.
   const modelPeak = $derived(Math.max(1, ...(view?.by_model ?? []).map((m) => m.cost)));
-  const money = (n: number) => `$${n.toFixed(2)}`;
+  const rate = $derived(merged.usdBrl);
+  // BRL só quando há cotação — sem cotação, cai pra USD em vez de mostrar número errado.
+  const money = (n: number) =>
+    currency === 'BRL' && rate ? `R$ ${(n * rate).toFixed(2)}` : `$${n.toFixed(2)}`;
+  // Média dos últimos 7 dias-calendário (não 7 linhas: dia sem uso conta como zero).
+  const avg7 = $derived.by(() => {
+    if (!view) return 0;
+    const d = new Date();
+    d.setDate(d.getDate() - 6);
+    const cutoff = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return view.by_day.filter((b) => b.key >= cutoff).reduce((t, b) => t + b.cost, 0) / 7;
+  });
   // total 0 -> "—": 0/0 daria NaN%, e "0%" mentiria dizendo que existe um total do qual isto é 0.
   const pct = (n: number, total: number) => (total > 0 ? `${((n / total) * 100).toFixed(1)}%` : '—');
 </script>
@@ -102,7 +121,10 @@
     <p class="muted">Sem dados ainda. O custo aparece após a 1ª sessão parar.</p>
   {:else}
     {#if merged.partial}
-      <p class="warn">⚠ Alguns servidores não responderam — total parcial.</p>
+      <p class="warn">
+        ⚠ Alguns servidores não responderam — total parcial.
+        <button class="retry" onclick={load}>Tentar de novo</button>
+      </p>
     {/if}
 
     <div class="tabs" role="tablist" aria-label="Conta">
@@ -117,6 +139,12 @@
     <div class="chips">
       <span class="chip">Hoje <b>{money(view.today)}</b></span>
       <span class="chip">Ontem <b>{money(view.yesterday)}</b></span>
+      <span class="chip">Média 7d <b>{money(avg7)}/dia</b></span>
+      <span class="curr" role="tablist" aria-label="Moeda">
+        <button role="tab" aria-selected={currency === 'USD'} class:on={currency === 'USD'} onclick={() => setCurrency('USD')}>US$</button>
+        <button role="tab" aria-selected={currency === 'BRL'} class:on={currency === 'BRL'} onclick={() => setCurrency('BRL')}
+          disabled={!rate} title={rate ? undefined : 'cotação indisponível'}>R$</button>
+      </span>
     </div>
 
     <!-- Stat-strip: um painel unico com tipografia contida (NAO o template hero de numero-gigante). -->
@@ -132,6 +160,13 @@
       <div><dt>cache escrito</dt><dd>{abbrevNum(view.totals.cache_write)}</dd></div>
       <div><dt>cache lido</dt><dd>{abbrevNum(view.totals.cache_read)}</dd></div>
     </dl>
+
+    <!-- Não é fatura: são tarifas pay-as-you-go da API aplicadas ao consumo. Quem usa plano de
+         assinatura não paga por token — sem esta nota o número lê como cobrança. -->
+    <p class="note">
+      Custo-tabela da API (estimativa de consumo) — não é fatura.
+      {#if currency === 'BRL' && rate}Cotação US$ 1 = R$ {rate.toFixed(2)}.{/if}
+    </p>
 
     <div class="tabs" role="tablist" aria-label="Período">
       <button role="tab" aria-selected={period === 'day'} class:on={period === 'day'} onclick={() => (period = 'day')}>Dia</button>
@@ -167,7 +202,7 @@
               <td class="n">{abbrevNum(r.cache_write)}</td>
               <td class="n">{abbrevNum(r.cache_read)}</td>
               <td class="c">{money(r.cost)}</td>
-              <td class="bar"><span style="width:{(r.cost / peak) * 100}%"></span></td>
+              <td class="bar" title="{money(r.cost)} — {pct(r.cost, view.totals.cost)} do total"><span style="width:{(r.cost / peak) * 100}%"></span></td>
             </tr>
           {/each}
         </tbody>
@@ -193,7 +228,7 @@
                    ordens diferentes, comparar dólar a dólar de cabeça não é imediato. -->
               <td class="n muted">{pct(m.cost, view.totals.cost)}</td>
               <td class="c">{money(m.cost)}</td>
-              <td class="bar"><span style="width:{(m.cost / modelPeak) * 100}%"></span></td>
+              <td class="bar" title="{money(m.cost)} — {pct(m.cost, view.totals.cost)} do total"><span style="width:{(m.cost / modelPeak) * 100}%"></span></td>
             </tr>
           {/each}
         </tbody>
@@ -223,6 +258,21 @@
   .inner { max-width: 1040px; margin-inline: auto; }
   .muted { color: var(--text-secondary); }
   .warn { color: var(--warning); font-size: var(--text-sm); }
+  .retry {
+    background: none; border: 1px solid var(--warning); color: var(--warning);
+    border-radius: var(--radius-sm); padding: 2px var(--space-2);
+    font-size: var(--text-xs); margin-left: var(--space-2); cursor: pointer;
+  }
+  .note { color: var(--text-muted); font-size: var(--text-xs); margin: calc(-1 * var(--space-2)) 0 var(--space-2); }
+  .curr { display: inline-flex; margin-left: auto; }
+  .curr button {
+    background: var(--bg-surface); border: 1px solid var(--border-default);
+    color: inherit; padding: var(--space-2) var(--space-3); font-size: var(--text-sm); min-height: 36px;
+  }
+  .curr button:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+  .curr button:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; border-left: none; }
+  .curr button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .curr button:disabled { opacity: 0.5; }
   .tabs { display: flex; gap: var(--space-2); flex-wrap: wrap; margin: var(--space-3) 0; }
   .tabs button {
     background: var(--bg-surface); border: 1px solid var(--border-default);
