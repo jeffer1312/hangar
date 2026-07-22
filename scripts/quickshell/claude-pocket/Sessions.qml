@@ -38,6 +38,7 @@ Singleton {
     // morreria em voo — o onStreamFinished nunca dispararia e o "falhou" sumiria calado.
     property var projErrors: ({})
     property string togglePending: ""
+    property string togglePendingAction: ""
 
     // Grava o estado EFETIVO desejado (não um flip cego): o card falhado abre o tail por
     // padrão sem entrada no mapa, então o toggle precisa receber o valor visível atual.
@@ -47,13 +48,21 @@ Singleton {
         openLogs = m;
     }
 
-    function setProjError(name: string, msg: string): void {
+    function setProjError(name: string, msg: string, action: string): void {
         const m = Object.assign({}, projErrors);
         if (msg)
-            m[name] = msg;
+            m[name] = {
+                msg: msg,
+                action: action
+            };
         else
             delete m[name];
         projErrors = m;
+    }
+
+    function projErr(name: string): string {
+        const e = projErrors[name];
+        return e ? e.msg : "";
     }
 
     // Start/stop do dev server disparado pela linha de sessão. O Process (toggler) mora no
@@ -63,14 +72,17 @@ Singleton {
         if (toggler.running)
             return;
         root.togglePending = name;
-        setProjError(name, "");
+        root.togglePendingAction = action;
+        setProjError(name, "", "");
         toggler.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", name, "project", action];
         toggler.running = true;
     }
 
-    // Erro de start/stop vira stale quando o projeto sobe (running/starting/external) ou some —
-    // limpa aí pra não grudar no subtítulo escondendo a pergunta de uma sessão awaiting. Enquanto
-    // failed/stopped o texto FICA: é o único aviso de falha na linha da sessão.
+    // Limpa o erro só quando a ação que falhou VISIVELMENTE deu certo depois: start -> projeto no
+    // ar (running/starting/external); stop -> parado. Enquanto não deu (start em failed/stopped,
+    // stop com o server ainda de pé), o texto FICA — é o único aviso de falha na linha da sessão,
+    // e limpar por estado cru sumiria com o erro de um stop que falhou (o server segue running).
+    // Projeto sumido do launcher também limpa.
     function _pruneProjErrors(): void {
         if (Object.keys(root.projErrors).length === 0)
             return;
@@ -79,8 +91,13 @@ Singleton {
             st[p.name] = p.state;
         const m = {};
         for (const name in root.projErrors) {
-            if (st[name] === "failed" || st[name] === "stopped")
-                m[name] = root.projErrors[name];
+            const e = root.projErrors[name];
+            const s = st[name];
+            const succeeded = e.action === "start"
+                ? (s === "running" || s === "starting" || s === "external")
+                : (s === "stopped");
+            if (s !== undefined && !succeeded)
+                m[name] = e;
         }
         if (JSON.stringify(m) !== JSON.stringify(root.projErrors))
             root.projErrors = m;
@@ -158,8 +175,9 @@ Singleton {
                     };
                 }
                 // Falha vira texto na linha da sessão; não pode morrer muda num botão de play.
-                root.setProjError(root.togglePending, r.ok ? "" : (r.message ?? "falhou"));
+                root.setProjError(root.togglePending, r.ok ? "" : (r.message ?? "falhou"), root.togglePendingAction);
                 root.togglePending = "";
+                root.togglePendingAction = "";
                 // Reflete o novo estado do projeto sem esperar o próximo tick do Timer.
                 root.refresh();
             }
