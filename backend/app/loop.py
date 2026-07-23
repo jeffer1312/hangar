@@ -235,8 +235,38 @@ _REFINE_REFUSAL_PREFIXES = ("não consigo", "nao consigo", "não posso", "nao po
                             "desculpe", "não é possível", "nao e possivel")
 
 
-class RefineError(Exception):
-    """claude -p indisponivel/timeout/exit≠0/vazio no refinador de objetivo."""
+class ClaudePError(Exception):
+    """claude -p indisponivel/timeout/exit≠0/vazio. Compartilhado por refine_goal e ask-history;
+    o endpoint mapeia pra 502."""
+
+
+# O texto vem do body do usuario e vira prompt de um claude -p HEADLESS (sem TUI pra negar tool)
+# rodando com o perfil do host -> prompt injection poderia executar tool real. Estes usos sao PURO
+# TEXTO: nega toda ferramenta com efeito colateral (exec/edit/rede). --disallowedTools e variadico
+# (nargs), entao NAO pode ter positional depois dele -> o prompt vai por STDIN, nunca no argv.
+_REFINE_DISALLOWED = ("Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch")
+
+
+def _claude_p(prompt: str) -> str:
+    """Roda um claude -p efemero (sonnet) com o prompt por STDIN, tools de efeito colateral negadas,
+    cwd neutro (tempdir), argv sem shell, timeout 60s. Devolve o stdout (strip). Levanta ClaudePError
+    em qualquer falha (CLI ausente/timeout/exit≠0/vazio) — o endpoint mapeia pra 502."""
+    try:
+        p = subprocess.run(
+            ["claude", "-p", "--model", "sonnet", "--disallowedTools", *_REFINE_DISALLOWED],
+            input=prompt, cwd=tempfile.gettempdir(), capture_output=True, text=True,
+            errors="replace", timeout=_REFINE_TIMEOUT,
+        )
+    except FileNotFoundError:
+        raise ClaudePError("claude CLI não encontrado")
+    except (subprocess.TimeoutExpired, OSError):
+        raise ClaudePError("claude -p excedeu o tempo ou falhou ao iniciar")
+    if p.returncode != 0:
+        raise ClaudePError(f"claude -p falhou (exit {p.returncode}): {(p.stderr or '').strip()[-500:]}")
+    out = (p.stdout or "").strip()
+    if not out:
+        raise ClaudePError("claude -p devolveu saída vazia")
+    return out
 
 
 def _refine_prompt(goal: str, check_cmd: str | None) -> str:
@@ -246,35 +276,12 @@ def _refine_prompt(goal: str, check_cmd: str | None) -> str:
     return "\n".join(parts)
 
 
-# O goal vem do body do usuario e vira prompt de um claude -p HEADLESS (sem TUI pra negar tool) rodando
-# com o perfil do host -> prompt injection poderia executar tool real. refine e PURO TEXTO: nega toda
-# ferramenta com efeito colateral (exec/edit/rede). --disallowedTools e variadico (nargs), entao NAO
-# pode ter positional depois dele -> o prompt vai por STDIN, nunca no argv.
-_REFINE_DISALLOWED = ("Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch")
-
-
 def refine_goal(goal: str, check_cmd: str | None = None) -> str:
-    """Refina o objetivo via claude -p efemero (sonnet), cwd neutro (nao o da sessao), argv sem shell,
-    prompt por stdin, tools de efeito colateral negadas, timeout 60s. Levanta RefineError em qualquer
-    falha (o endpoint mapeia pra 502)."""
-    prompt = _refine_prompt(goal, check_cmd)
-    try:
-        p = subprocess.run(
-            ["claude", "-p", "--model", "sonnet", "--disallowedTools", *_REFINE_DISALLOWED],
-            input=prompt, cwd=tempfile.gettempdir(), capture_output=True, text=True,
-            errors="replace", timeout=_REFINE_TIMEOUT,
-        )
-    except FileNotFoundError:
-        raise RefineError("claude CLI não encontrado")
-    except (subprocess.TimeoutExpired, OSError):
-        raise RefineError("refinamento excedeu o tempo ou falhou ao iniciar")
-    if p.returncode != 0:
-        raise RefineError(f"claude -p falhou (exit {p.returncode}): {(p.stderr or '').strip()[-500:]}")
-    out = (p.stdout or "").strip()
-    if not out:
-        raise RefineError("refinamento vazio")
+    """Refina o objetivo via claude -p efemero. Levanta ClaudePError em falha do CLI; ClaudePError
+    'refine falhou...' se a saida for pergunta/recusa em vez de objetivo (goal vago)."""
+    out = _claude_p(_refine_prompt(goal, check_cmd))
     if out.endswith("?") or out.lower().startswith(_REFINE_REFUSAL_PREFIXES):
-        raise RefineError("refine falhou, tente detalhar o objetivo")
+        raise ClaudePError("refine falhou, tente detalhar o objetivo")
     return out[:_REFINE_MAX]
 
 

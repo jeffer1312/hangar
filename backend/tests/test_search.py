@@ -102,3 +102,45 @@ def test_query_passed_as_argv_not_shell(tmp_path, monkeypatch):
     # a query vai como VALOR de -e (proximo item), literal — nunca concatenada num comando
     assert argv[argv.index("-e") + 1] == "; rm -rf /"
     assert len(hits) == 1
+
+
+# --- ask-history helpers (RAG lexical) ---------------------------------------
+from app.search import extract_terms, search_terms, build_ask_prompt, SearchHit
+
+
+def test_extract_terms_strips_stopwords_short_and_dups():
+    terms = extract_terms("Onde eu falei sobre o DEPLOY do backend e o deploy?")
+    assert "deploy" in terms and "backend" in terms
+    # stopwords/curtas fora, minusculo, sem duplicata
+    for junk in ("onde", "eu", "sobre", "do", "o", "e"):
+        assert junk not in terms
+    assert terms == [t.lower() for t in terms]
+    assert len(terms) == len(set(terms))
+
+
+def test_extract_terms_caps_at_max():
+    terms = extract_terms("alpha bravo charlie delta echo foxtrot golf hotel", max_terms=6)
+    assert len(terms) == 6
+
+
+def test_search_terms_dedups_by_session_and_line(monkeypatch):
+    from app import search as search_mod
+    h = SearchHit(project="p", session_id="s1", session_name="viva", cwd="/c",
+                  line="trecho igual", mtime=1.0, live=True)
+    # mesmo hit devolvido por 2 termos -> aparece 1x
+    monkeypatch.setattr(search_mod, "search", lambda q, live, limit=30: [h])
+    out = search_terms(["a", "b"], {}, cap=30)
+    assert len(out) == 1
+
+
+def test_build_ask_prompt_labels_live_and_archived():
+    hits = [
+        SearchHit(project="p", session_id="s1", session_name="minha-sessao", cwd="/c",
+                  line="falei de deploy", mtime=2.0, live=True),
+        SearchHit(project="proj-morto", session_id="deadbeef1234", session_name=None, cwd="/c",
+                  line="deploy antigo", mtime=1.0, live=False),
+    ]
+    p = build_ask_prompt("onde falei de deploy?", hits)
+    assert "[sessão minha-sessao — viva]: falei de deploy" in p
+    assert "— arquivada]:" in p and "proj-morto" in p
+    assert "onde falei de deploy?" in p

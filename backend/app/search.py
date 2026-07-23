@@ -9,6 +9,7 @@ interpolada). A query e tratada como STRING LITERAL (-F fixed-string) e passada 
 despeje o mundo."""
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -145,3 +146,67 @@ def search(q: str, live_names: dict[str, str], limit: int = _MAX_HITS) -> list[S
         proc.wait()
     hits.sort(key=lambda h: h.mtime, reverse=True)
     return hits
+
+
+# Stopwords pt/en (busca lexical "onde falei sobre X" — RAG). Curta de proposito: so o ruido comum
+# que degradaria o OR de termos; palavra de conteudo fica.
+_ASK_STOPWORDS = {
+    # pt
+    "que", "qual", "quais", "quando", "onde", "como", "por", "porque", "para", "pra", "com", "sem",
+    "dos", "das", "uma", "uns", "umas", "meu", "minha", "seu", "sua", "nos", "nas", "isso", "isto",
+    "aquilo", "sobre", "falei", "falamos", "conversa", "conversamos", "disse", "mencionei", "assunto",
+    "ele", "ela", "eles", "elas", "voce", "vc", "eu", "tem", "ter", "foi", "era", "sao", "num", "numa",
+    # en
+    "the", "and", "for", "with", "was", "were", "did", "does", "what", "when", "where", "which", "who",
+    "about", "said", "told", "talked", "spoke", "mentioned", "this", "that", "these", "those", "you",
+    "have", "has", "had", "are", "our", "their",
+}
+
+
+def extract_terms(question: str, max_terms: int = 6) -> list[str]:
+    """Termos da pergunta pra busca lexical: minusculiza, tira stopwords pt/en e palavras <3 chars,
+    dedup preservando ordem, no maximo `max_terms`."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for w in re.findall(r"\w+", (question or "").lower(), re.UNICODE):
+        if len(w) < 3 or w in _ASK_STOPWORDS or w in seen:
+            continue
+        seen.add(w)
+        out.append(w)
+        if len(out) >= max_terms:
+            break
+    return out
+
+
+_ASK_SYSTEM = (
+    "Você responde onde um assunto apareceu nas conversas do usuário, a partir de TRECHOS de "
+    "transcripts. Responda curto em pt-BR: diga em QUAL(is) sessão(ões) o assunto apareceu e o "
+    "contexto, citando os NOMES EXATOS das sessões como aparecem nos rótulos. Se os trechos não "
+    "responderem à pergunta, diga que não encontrou. Sem preâmbulo, sem markdown."
+)
+
+
+def build_ask_prompt(question: str, hits: list[SearchHit]) -> str:
+    """Prompt do ask-history: pergunta + trechos rotulados '[sessão NOME — viva|arquivada]: trecho'."""
+    lines = [_ASK_SYSTEM, "", f"PERGUNTA: {question}", "", "Trechos das conversas:"]
+    for h in hits:
+        name = h.session_name or h.project or h.session_id[:8]
+        estado = "viva" if h.live else "arquivada"
+        lines.append(f"[sessão {name} — {estado}]: {h.line}")
+    return "\n".join(lines)
+
+
+def search_terms(terms: list[str], live_names: dict[str, str], cap: int = 30) -> list[SearchHit]:
+    """Busca OR: roda `search` por termo, dedup por (session_id, trecho), ordena por mtime desc, cap.
+    Cada termo ja e capado em `search`; o cap global segura o custo do prompt do ask-history."""
+    seen: set[tuple[str, str]] = set()
+    out: list[SearchHit] = []
+    for t in terms:
+        for h in search(t, live_names, limit=cap):
+            key = (h.session_id, h.line)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(h)
+    out.sort(key=lambda h: h.mtime, reverse=True)
+    return out[:cap]

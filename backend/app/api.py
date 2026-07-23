@@ -40,7 +40,7 @@ from app import tunnel
 from app import runner
 from app import projects
 from app.archive import ArchiveEntry, ArchiveFolder, archive_cwd, archive_jsonl, list_conversations, list_folders
-from app.search import SearchHit, search
+from app.search import SearchHit, search, extract_terms, search_terms, build_ask_prompt
 from app.askquestion import clear_pending_askq, read_pending_askq
 from app import pair
 from app import peers
@@ -701,7 +701,7 @@ def loop_refine(name: str, body: LoopRefine):
         raise HTTPException(409, "automações desligadas (kill-switch)")
     try:
         return {"goal": loop_mod.refine_goal(body.goal, body.check_cmd)}
-    except loop_mod.RefineError as e:
+    except loop_mod.ClaudePError as e:
         _log.warning("loop/refine falhou (%s): %s", name, e)
         raise HTTPException(502, str(e))
 
@@ -1800,6 +1800,29 @@ def search_transcripts(q: str = ""):
     # o hit como vivo e carrega o nome pra a UI abrir o chat (viva) ou o arquivo (morta). q vazia -> [].
     live = {os.path.realpath(s.jsonl): s.name for s in registry.list() if s.jsonl}
     return search(q, live)
+
+
+class AskHistoryBody(_StrictBody):
+    question: str = Field(min_length=1, max_length=500)
+
+
+@app.post("/api/ask-history", dependencies=[Depends(require_auth)])
+def ask_history(body: AskHistoryBody):
+    """RAG lexical ("onde falei sobre X"): extrai termos da pergunta -> busca OR nos transcripts ->
+    claude -p resume EM QUAL sessao o assunto apareceu. Sob o kill-switch (dispara claude -p). Sem
+    trecho -> resposta vazia sem chamar o CLI. v1: so o servidor que recebe a chamada (cross-server v2)."""
+    if not automations_enabled():
+        raise HTTPException(409, "automações desligadas (kill-switch)")
+    live = {os.path.realpath(s.jsonl): s.name for s in registry.list() if s.jsonl}
+    hits = search_terms(extract_terms(body.question), live)
+    if not hits:
+        return {"answer": "não achei nada sobre isso nas conversas", "hits": []}
+    try:
+        answer = loop_mod._claude_p(build_ask_prompt(body.question, hits))
+    except loop_mod.ClaudePError as e:
+        _log.warning("ask-history falhou: %s", e)
+        raise HTTPException(502, str(e))
+    return {"answer": answer, "hits": hits}
 
 
 @app.get("/api/sessions/{name}/file", dependencies=[Depends(require_auth)])
