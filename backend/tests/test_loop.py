@@ -236,6 +236,16 @@ def test_suggest_checks_node(tmp_path):
     assert suggest_checks(str(tmp_path)) == ["npm run check", "npm run test"]
 
 
+def test_suggest_checks_cargo_go_are_single_argv(tmp_path):
+    # _run_check faz shlex.split SEM shell -> nenhum chip sugerido pode ter '&&' (viraria argv
+    # literal e o check nunca passaria).
+    (tmp_path / "Cargo.toml").write_text("[package]")
+    (tmp_path / "go.mod").write_text("module x")
+    got = suggest_checks(str(tmp_path))
+    assert got == ["cargo test", "go test ./..."]
+    assert all("&&" not in c for c in got)
+
+
 def test_notify_loop_no_subs_is_noop(tmp_path, monkeypatch):
     from app import push
     monkeypatch.setattr(push.settings, "projects_dir", tmp_path / "projects")
