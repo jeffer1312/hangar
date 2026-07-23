@@ -916,7 +916,14 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   </svg>
                 </button>
                 <!-- Loop runner da linha: mesma mecânica hover-revealed do botao git. -->
-                <button class="sess-git" onclick={(e) => rowLoop(s.name, s.serverId, e)} aria-label={`Loop de ${s.name}`} title="Loop runner">🔁</button>
+                <button class="sess-git" onclick={(e) => rowLoop(s.name, s.serverId, e)} aria-label={`Loop de ${s.name}`} title="Loop runner">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="m17 2 4 4-4 4"/>
+                    <path d="M3 11v-1a4 4 0 0 1 4-4h14"/>
+                    <path d="m7 22-4-4 4-4"/>
+                    <path d="M21 13v1a4 4 0 0 1-4 4H3"/>
+                  </svg>
+                </button>
               {/if}
               <button class="sess-del" onclick={(e) => handleDelete(s.name, s.serverId, e)} aria-label={`Excluir ${s.name}`}>×</button>
             {/if}

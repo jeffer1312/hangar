@@ -7,7 +7,7 @@ describe('loopBadge', () => {
     expect(loopBadge(undefined)).toBeNull();
   });
   it('running mostra N/M', () => {
-    expect(loopBadge('running', 3, 10)).toEqual({ label: '🔁 3/10', tone: 'ok' });
+    expect(loopBadge('running', 3, 10)).toEqual({ label: '↻ 3/10', tone: 'ok' });
   });
   it('paused_awaiting e done_claimed pedem atenção', () => {
     expect(loopBadge('paused_awaiting', 2, 10)?.tone).toBe('attention');
