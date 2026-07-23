@@ -188,6 +188,21 @@ def path_in_transcript(jsonl: str | Path, needle: str) -> bool:
     return False
 
 
+def last_assistant_text(jsonl: str | Path) -> Optional[str]:
+    """Texto do ULTIMO evento de assistant do transcript (modo done_claimed do loop procura
+    'LOOP_DONE' aqui). Streaming linha a linha (padrao path_in_transcript); None se ausente."""
+    last: Optional[str] = None
+    try:
+        with open(jsonl, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                for ev in parse_line(line):
+                    if ev.kind == "assistant_msg" and ev.text:
+                        last = ev.text
+    except OSError:
+        return None
+    return last
+
+
 def get_transcript_image(jsonl: str | Path, uuid: str, idx: int) -> Optional[tuple[bytes, str]]:
     """Bytes + media_type da idx-ésima imagem base64 da msg de uuid no transcript, ou None.
 
