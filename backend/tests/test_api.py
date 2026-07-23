@@ -880,6 +880,30 @@ def test_do_notify_awaiting_retry_catches_late_menu(monkeypatch):
     assert calls == [("perm", "Pode rodar X?")]
 
 
+def test_do_notify_awaiting_retry_catches_late_askq(monkeypatch):
+    # Sidecar askq pode ser o que atrasa (nao so o render do pane): 1a leitura None, retry acha a
+    # pergunta -> push sai. O retry re-le askq ALEM do pane.
+    calls = []
+    reads = {"n": 0}
+    info = SimpleNamespace(name="ask", jsonl="/x/uuid1.jsonl", cwd="/x")
+    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
+
+    def _late_askq(jsonl):
+        reads["n"] += 1
+        if reads["n"] < 2:
+            return None
+        return AskQuestion(questions=[
+            AskQuestionItem(header="h", question="Qual branch?", options=[AskOption(label="a")]),
+        ])
+
+    monkeypatch.setattr(api_mod, "read_pending_askq", _late_askq)
+    monkeypatch.setattr(api_mod, "_pane_wants_input", lambda name: False)
+    monkeypatch.setattr(api_mod, "_AWAITING_PUSH_RETRY_S", 0)
+    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
+    api_mod._do_notify_awaiting("uuid1")
+    assert calls == [("ask", "Qual branch?")]
+
+
 def test_do_notify_awaiting_askq_pending_pushes_without_pane(monkeypatch):
     # AskUserQuestion pendente no sidecar = awaiting real por definicao — push sem depender do pane.
     calls = []

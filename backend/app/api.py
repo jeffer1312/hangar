@@ -257,6 +257,7 @@ def _pane_wants_input(name: str) -> bool:
     try:
         pane = tmux.capture_pane(name)
     except Exception:
+        _log.warning("_pane_wants_input falhou name=%s", name, exc_info=True)
         return True
     return classify(pane)[0] == "awaiting_input" or is_overlay(pane)
 
@@ -272,11 +273,14 @@ def _do_notify_awaiting(session_id: str) -> None:
     info = next((s for s in registry.list() if s.jsonl and Path(s.jsonl).stem == session_id), None)
     if info is None:
         return
-    askq = read_pending_askq(info.jsonl) if info.jsonl else None
-    real = bool(askq and askq.questions) or _pane_wants_input(info.name)
+    def _real() -> bool:
+        askq = read_pending_askq(info.jsonl) if info.jsonl else None
+        return bool(askq and askq.questions) or _pane_wants_input(info.name)
+
+    real = _real()
     if not real:
         time.sleep(_AWAITING_PUSH_RETRY_S)
-        real = _pane_wants_input(info.name)
+        real = _real()  # re-le askq TAMBEM: o sidecar pode ser o que atrasou, nao so o pane
     if real:
         push.notify_awaiting(info.name, _awaiting_body(info))
 
