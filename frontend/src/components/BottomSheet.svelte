@@ -52,6 +52,9 @@
     // nao inicia o arraste quando o toque comeca num controle: preserva forms/rows
     const t = e.target as HTMLElement;
     if (t.closest('input, textarea, select, button, a')) return;
+    // conteudo rolado pra baixo: o gesto e scroll interno, nao dismiss — senao o swipe
+    // que deveria voltar o scroll pro topo arrastava o sheet junto
+    if (sheetEl && sheetEl.scrollTop > 0) return;
     startY = e.touches[0].clientY;
     dragging = true;
     snapping = false;
@@ -174,6 +177,12 @@
     padding-bottom: calc(env(safe-area-inset-bottom) + var(--space-5));
     animation: slide-up 360ms var(--spring) both;
     touch-action: pan-y;
+    /* conteudo alto (LoopSheet com guia aberto, etc.) NUNCA pode passar da tela:
+       teto + scroll interno; overscroll contido pra nao rolar a pagina atras */
+    max-height: calc(100dvh - var(--space-8));
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
   }
 
   /* Snap-back apos um swipe curto (entra so durante o retorno). */
@@ -203,7 +212,7 @@
     .backdrop { align-items: stretch; justify-content: flex-end; background: rgba(0, 0, 0, 0.4); }
     .sheet {
       position: relative;   /* ancora o resize-handle */
-      width: var(--sheet-w, min(420px, 92vw)); max-width: 92vw; height: 100%;
+      width: var(--sheet-w, min(420px, 92vw)); max-width: 92vw; height: 100%; max-height: none;
       border-radius: 0; border-left: 1px solid var(--border-default);
       padding: var(--space-5) var(--space-5);
       padding-bottom: var(--space-5);
