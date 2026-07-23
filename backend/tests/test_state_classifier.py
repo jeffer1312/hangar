@@ -203,6 +203,25 @@ async def test_monitor_animating_spinner_reads_working():
     assert seen[-1] == ("working", "Pondering…")
 
 
+@pytest.mark.asyncio
+async def test_monitor_carries_loop_fields(tmp_path, monkeypatch):
+    # Chip 🔁 no Chat mobile vem do evento 'state' por sessao (sem reter o sessionsStore -> 1 SSE/sessao).
+    from app import loop as loop_mod
+    monkeypatch.setattr(loop_mod.settings, "projects_dir", tmp_path / "projects")
+    d = loop_mod.new_loop("g", "pytest", 7, True)
+    d["iter"] = 3
+    loop_mod.LoopLink("cc").set(d)
+    with patch.object(state_mod.tmux, "has_session", return_value=True), \
+         patch.object(state_mod.tmux, "capture_pane", return_value="❯ \n"):
+        mon = StateMonitor("cc", poll=0.001)
+        first = None
+        async for ev in mon.stream():
+            first = ev
+            break
+    assert first is not None
+    assert first.loop_status == "running" and first.loop_iter == 3 and first.loop_max == 7
+
+
 def test_is_overlay_true_with_nav_footer():
     pane = "alguma conversa\n● resposta\n────────\n  Esc to cancel · Enter to select\n"
     assert state_mod.is_overlay(pane) is True
