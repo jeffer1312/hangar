@@ -694,11 +694,15 @@ def loop_stop(name: str):
 
 @app.post("/api/sessions/{name}/loop/refine", dependencies=[Depends(require_auth)])
 def loop_refine(name: str, body: LoopRefine):
-    """Refina o objetivo do loop via claude -p efemero (haiku). Stateless — nao toca a sessao nem o
-    sidecar; o {name} da rota so mantem a familia de URLs consistente. Falha do CLI -> 502."""
+    """Refina o objetivo do loop via claude -p efemero (sonnet). Stateless — nao toca a sessao nem o
+    sidecar; o {name} da rota so mantem a familia de URLs consistente. Falha do CLI -> 502.
+    Sob o kill-switch mestre: refine dispara um agente autonomo, entao respeita automations_enabled."""
+    if not automations_enabled():
+        raise HTTPException(409, "automações desligadas (kill-switch)")
     try:
         return {"goal": loop_mod.refine_goal(body.goal, body.check_cmd)}
     except loop_mod.RefineError as e:
+        _log.warning("loop/refine falhou (%s): %s", name, e)
         raise HTTPException(502, str(e))
 
 
