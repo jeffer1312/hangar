@@ -1286,3 +1286,42 @@ def test_send_thread_isolated_from_saturated_default_executor():
         await _aio.gather(*blockers)
 
     _aio.run(_run())
+
+
+# --- Nucleo: broadcast e group-message tambem no pool dedicado de envio -------
+def test_broadcast_uses_send_thread(api_client, monkeypatch):
+    # broadcast e trafego cp-send entre sessoes = nucleo -> tem que ir pelo pool DEDICADO (_send_thread),
+    # nao pelo executor default que a decoracao satura.
+    from app import api as api_mod
+    calls = []
+
+    async def spy(fn, *a):
+        calls.append(fn.__name__)
+        if fn is api_mod._session_exists:
+            return True
+        return {"ok": True, "delivered": True}
+
+    monkeypatch.setattr(api_mod, "_send_thread", spy)
+    monkeypatch.setattr(api_mod, "_provider_of", lambda n: "claude")
+    r = api_client.post("/api/broadcast", json={"names": ["a", "b"], "text": "oi"}, headers=_h())
+    assert r.status_code == 200
+    # _session_exists e patchado como lambda pelo fixture -> checa o ENVIO real (_send_one) pelas 2 sessoes
+    assert calls.count("_send_one") == 2
+
+
+def test_group_message_uses_send_thread(api_client, monkeypatch):
+    from app import api as api_mod
+    calls = []
+
+    async def spy(fn, *a):
+        calls.append(fn.__name__)
+        if fn is api_mod._session_exists:
+            return True
+        return {"ok": True, "delivered": True}
+
+    monkeypatch.setattr(api_mod, "_send_thread", spy)
+    monkeypatch.setattr(api_mod, "_provider_of", lambda n: "claude")
+    monkeypatch.setattr(api_mod.PairLink, "get", lambda self: {"peers": ["peer1"]})
+    r = api_client.post("/api/sessions/lider/group-message", json={"text": "marco"}, headers=_h())
+    assert r.status_code == 200
+    assert "_send_one" in calls
