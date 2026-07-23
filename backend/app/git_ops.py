@@ -2,6 +2,7 @@ import os
 import re
 import subprocess
 import time
+from pathlib import Path
 
 # Git pela sessao (cwd da sessao tmux). Tudo via argv list -> nunca string de shell (sem injecao).
 # Acoes fixas: listar/trocar branch, status/pull/fetch/stash, e o write-path (commit/push) + navegacao
@@ -15,6 +16,19 @@ def _scrub(text: str) -> str:
     """Redige userinfo (user:token@) de URLs no texto -> um remote HTTPS com PAT embutido nao vaza a
     credencial no stderr do push (que vai pro git.error da UI / estado do celular)."""
     return re.sub(r"(://)[^/@\s]+@", r"\1***@", text)
+
+
+def branch_of(cwd: str | None) -> str | None:
+    """Branch atual do repo em cwd, lida direto de .git/HEAD (sem subprocess -> barato pra rodar
+    por sessao na listagem). 'ref: refs/heads/<b>' -> <b>; detached/nao-repo/worktree -> None."""
+    if not cwd:
+        return None
+    try:
+        head = Path(cwd, ".git", "HEAD").read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    prefix = "ref: refs/heads/"
+    return (head[len(prefix):] or None) if head.startswith(prefix) else None
 
 
 class GitError(Exception):
