@@ -999,3 +999,102 @@ def test_answer_validation_error_still_409(api_client):
         r = api_client.post("/api/sessions/s1/answer", headers=_h(),
                             json={"answers": [{"kind": "option", "labels": []}]})
     assert r.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Loop runner (harness bloco A — task 6)
+# ---------------------------------------------------------------------------
+from app import loop as loop_mod
+
+
+@pytest.fixture
+def loop_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(loop_mod.settings, "projects_dir", tmp_path / "projects")
+    return tmp_path
+
+
+def _info(name="cc", cwd="/repo", jsonl="/repo/t.jsonl"):
+    return SessionInfo(name=name, cwd=cwd, jsonl=jsonl)
+
+
+def test_loop_create_404_when_session_missing(api_client, loop_dir):
+    with patch("app.api.registry.list", return_value=[]):
+        r = api_client.post("/api/sessions/cc/loop", json={"goal": "g"}, headers=_h())
+    assert r.status_code == 404
+
+
+def test_loop_create_409_on_main_branch(api_client, loop_dir):
+    with patch("app.api.registry.list", return_value=[_info()]), \
+         patch("app.api.automations_enabled", return_value=True), \
+         patch("app.api.branch_of", return_value="main"):
+        r = api_client.post("/api/sessions/cc/loop",
+                            json={"goal": "g", "require_branch": True}, headers=_h())
+    assert r.status_code == 409
+
+
+def test_loop_create_ok(api_client, loop_dir):
+    calls = []
+    with patch("app.api.registry.list", return_value=[_info()]), \
+         patch("app.api.automations_enabled", return_value=True), \
+         patch("app.api.branch_of", return_value="TICKET-0000"), \
+         patch("app.api.drain", side_effect=lambda n, j: calls.append((n, j)) or 1):
+        r = api_client.post("/api/sessions/cc/loop",
+                            json={"goal": "criar ok.txt", "check_cmd": "test -f ok.txt"}, headers=_h())
+    assert r.status_code == 200
+    d = r.json()["loop"]
+    assert d["status"] == "running" and d["goal_entry_id"]
+    assert calls  # drain chamado
+
+
+def test_loop_create_409_when_already_running(api_client, loop_dir):
+    loop_mod.LoopLink("cc").set(loop_mod.new_loop("g", None, 10, True))
+    with patch("app.api.registry.list", return_value=[_info()]), \
+         patch("app.api.automations_enabled", return_value=True), \
+         patch("app.api.branch_of", return_value="TICKET-0000"):
+        r = api_client.post("/api/sessions/cc/loop", json={"goal": "g"}, headers=_h())
+    assert r.status_code == 409
+
+
+def test_loop_get_none_returns_suggestions(api_client, loop_dir):
+    with patch("app.api.registry.list", return_value=[_info(cwd=str(loop_dir))]):
+        r = api_client.get("/api/sessions/cc/loop", headers=_h())
+    assert r.status_code == 200
+    body = r.json()
+    assert body["loop"] is None and isinstance(body["suggestions"], list)
+
+
+def test_loop_delete_stops(api_client, loop_dir):
+    loop_mod.LoopLink("cc").set(loop_mod.new_loop("g", None, 10, True))
+    with patch("app.api.registry.list", return_value=[_info()]):
+        r = api_client.delete("/api/sessions/cc/loop", headers=_h())
+    assert r.status_code == 200
+    assert r.json()["loop"]["status"] == "stopped"
+
+
+def test_loop_resolve_accept(api_client, loop_dir):
+    d = loop_mod.new_loop("g", None, 10, True)
+    d["status"] = "done_claimed"
+    loop_mod.LoopLink("cc").set(d)
+    with patch("app.api.registry.list", return_value=[_info()]):
+        r = api_client.post("/api/sessions/cc/loop/resolve", json={"accept": True}, headers=_h())
+    assert r.status_code == 200 and r.json()["loop"]["status"] == "done"
+
+
+def test_loop_resolve_409_when_not_done_claimed(api_client, loop_dir):
+    loop_mod.LoopLink("cc").set(loop_mod.new_loop("g", None, 10, True))  # running
+    with patch("app.api.registry.list", return_value=[_info()]):
+        r = api_client.post("/api/sessions/cc/loop/resolve", json={"accept": True}, headers=_h())
+    assert r.status_code == 409
+
+
+def test_loop_resolve_reject_reprompts(api_client, loop_dir):
+    d = loop_mod.new_loop("g", None, 10, True)
+    d["status"] = "done_claimed"
+    d["goal_delivered_ts"] = 1.0
+    loop_mod.LoopLink("cc").set(d)
+    with patch("app.api.registry.list", return_value=[_info()]), \
+         patch("app.api.drain", return_value=1):
+        r = api_client.post("/api/sessions/cc/loop/resolve", json={"accept": False}, headers=_h())
+    assert r.status_code == 200
+    out = r.json()["loop"]
+    assert out["status"] == "running" and out["iter"] == 1

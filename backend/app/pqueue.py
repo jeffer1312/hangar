@@ -214,6 +214,16 @@ class PromptQueue:
                 return
             self._write_atomic(rows)
 
+    def entry_delivered(self, entry_id: str) -> bool | None:
+        """delivered? de UMA entrada por id. None = entrada nao existe (prunada/sumiu com /clear).
+        Ancora do loop runner: so tica depois do goal constar entregue na TUI."""
+        if not entry_id:
+            return None
+        for r in self.load():
+            if str(r.get("id")) == entry_id:
+                return bool(r.get("delivered"))
+        return None
+
     def prune_before(self, min_ts: float) -> None:
         # Entradas de sessao ANTERIOR (ts < inicio do transcript atual) nunca mais casam nem drenam
         # — so acumulavam lixo e mantinham o cheap-check do drain quente pra sempre. Remove.
