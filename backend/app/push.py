@@ -263,3 +263,11 @@ def notify_limited(session_name: str, reset: str | None = None) -> None:
         return
     body = f"Limite de uso atingido · volta {reset}" if reset else "Limite de uso atingido"
     _broadcast(session_name, body)
+
+
+def notify_loop(session_name: str, body: str) -> None:
+    """Push do loop runner (harness bloco A). Envio burro (padrao notify_stalled); o dedupe mora
+    no app.loop, por transicao de status do sidecar — aqui e so o envio."""
+    if _suppressed(session_name):
+        return
+    _broadcast(session_name, body)

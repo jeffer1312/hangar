@@ -234,3 +234,9 @@ def test_tick_history_capped_20(tmp_path, monkeypatch):
 def test_suggest_checks_node(tmp_path):
     (tmp_path / "package.json").write_text('{"scripts": {"check": "x", "test": "y"}}')
     assert suggest_checks(str(tmp_path)) == ["npm run check", "npm run test"]
+
+
+def test_notify_loop_no_subs_is_noop(tmp_path, monkeypatch):
+    from app import push
+    monkeypatch.setattr(push.settings, "projects_dir", tmp_path / "projects")
+    push.notify_loop("sessao-x", "loop terminou: check passou")  # nao deve levantar
