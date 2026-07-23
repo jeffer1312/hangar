@@ -277,13 +277,21 @@ class StateMonitor:
             # rate_limit_reset/_LIMIT_RE). limited deriva do proprio reset (achou horario -> limited).
             limit_reset = rate_limit_reset(pane)
             limited = limit_reset is not None
+            # Loop runner: le o sidecar (barato) e leva no MESMO evento -> chip 🔁 no Chat mobile sem
+            # reter o sessionsStore. Entra no key pra re-emitir quando SO o loop muda (sessao parada).
+            from app.loop import LoopLink
+            loop_d = LoopLink(self.name).get()
+            loop_status = loop_d.get("status") if loop_d else None
+            loop_iter = loop_d.get("iter") if loop_d else None
+            loop_max = loop_d.get("max_iters") if loop_d else None
             key = (state, label, question, tuple(options or ()), status, overlay, login,
-                   limited, limit_reset)
+                   limited, limit_reset, loop_status, loop_iter, loop_max)
             if key != last_key:
                 last_key = key
                 held_state, held_label = state, label
                 yield StateEvent(session=self.name, state=state, label=label,
                                  question=question, options=options, status_line=status,
                                  overlay=overlay, login=login,
-                                 limited=limited, limit_reset=limit_reset)
+                                 limited=limited, limit_reset=limit_reset,
+                                 loop_status=loop_status, loop_iter=loop_iter, loop_max=loop_max)
             await asyncio.sleep(self.poll)

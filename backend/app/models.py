@@ -92,6 +92,11 @@ class StateEvent(BaseModel):
     # app.state.rate_limit_reset). limit_reset = horario cru do reset ("3pm"/"15:30"), ou None.
     limited: bool = False
     limit_reset: Optional[str] = None
+    # Loop runner: estado do loop desta sessao, no MESMO evento 'state' (chip 🔁 no Chat mobile sem
+    # reter o sessionsStore -> uma conexao SSE por sessao, nao N). Entram no dedupe do StateMonitor.
+    loop_status: Optional[str] = None
+    loop_iter: Optional[int] = None
+    loop_max: Optional[int] = None
 
 
 class PreviewEvent(BaseModel):
