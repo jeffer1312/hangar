@@ -260,8 +260,11 @@
     // (comportamento nativo do textarea): enviar era facil demais de disparar sem querer — no
     // mobile o envio e pelo botao. Shift+Enter segue quebrando linha no desktop. Checado na hora
     // (nao cacheado): tablet que pluga/despluga teclado troca de modo sem reload.
+    // Enter envia no LAYOUT desktop (>=820px) — não em "hover+pointer fine": iPad com teclado
+    // físico segue coarse/touch pro WebKit e o Enter só quebrava linha (visto ao vivo no iPad 10).
+    // Celular (<820) continua: Enter quebra linha, envio pelo botão. Shift+Enter quebra sempre.
     if (e.key === 'Enter' && !e.shiftKey
-        && window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
+        && window.matchMedia('(min-width: 820px)').matches) {
       e.preventDefault();
       submit();
     }
