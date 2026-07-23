@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 from app import tmux
 from app.config import settings
-from app.git_ops import git_summary
+from app.git_ops import git_summary, branch_of
 from app.models import SessionInfo
 from app.pqueue import PromptQueue
 from app.chain import ThenLink
@@ -498,16 +498,8 @@ class SessionRegistry:
 
     @staticmethod
     def _branch_of(cwd: Optional[str]) -> Optional[str]:
-        """Branch atual do repo em cwd, lida direto de .git/HEAD (sem subprocess -> barato pra rodar
-        por sessao na listagem). 'ref: refs/heads/<b>' -> <b>; detached/nao-repo/worktree -> None."""
-        if not cwd:
-            return None
-        try:
-            head = Path(cwd, ".git", "HEAD").read_text(encoding="utf-8", errors="replace").strip()
-        except OSError:
-            return None
-        prefix = "ref: refs/heads/"
-        return (head[len(prefix):] or None) if head.startswith(prefix) else None
+        """Delega pro helper publico git_ops.branch_of (mantido pra nao quebrar chamadores)."""
+        return branch_of(cwd)
 
     def list(self) -> list[SessionInfo]:
         # Resolucao de jsonl/tracked de todas as sessoes. Otimizado: UM mapa /proc + UMA chamada tmux
