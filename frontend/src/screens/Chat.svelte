@@ -16,7 +16,6 @@
   import ForwardSheet from '../components/ForwardSheet.svelte';
   import PairSheet from '../components/PairSheet.svelte';
   import LoopSheet from '../components/LoopSheet.svelte';
-  import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import {
     getHistory,
@@ -237,15 +236,10 @@
   // Chip de loop no header: dentro do chat não havia NENHUM sinal de loop ativo (só a lista tinha
   // badge). Os campos vêm do sessionsStore (singleton refcounted — zero SSE novo); tap abre o sheet.
   let loopSheetOpen = $state(false);
-  // onMount (NAO $effect): retain()->start() escreve E le o $state interno do store; dentro de
-  // $effect isso registra dependencia de si mesmo -> re-run infinito -> release/retain em loop e o
-  // stream da lista abre-fecha sem parar (visto ao vivo no mobile, onde o Chat e o unico retainer).
-  onMount(() => {
-    sessionsStore.retain();
-    return () => sessionsStore.release();
-  });
-  const loopRow = $derived(sessionsStore.rows.find((r) => r.serverId === getActiveId() && r.name === sessionName));
-  const loopChip = $derived(loopBadge(loopRow?.loop_status, loopRow?.loop_iter, loopRow?.loop_max));
+  // Campos de loop vêm do SSE DA PRÓPRIA SESSÃO (stateEvent), não do sessionsStore: reter o
+  // store aqui abria 1 stream de lista POR SERVIDOR no celular (com offline = retry eterno) e
+  // derrubava a conexão do pocket — regressão real vista no iPhone, revertida.
+  const loopChip = $derived(loopBadge(stateEvent?.loop_status, stateEvent?.loop_iter, stateEvent?.loop_max));
   const crumbs = $derived(
     desktop ? { server: serverLabel, session: sessionName, branch: status?.branch, dirty: status?.dirty ?? false } : null
   );

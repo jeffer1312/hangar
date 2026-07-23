@@ -105,6 +105,12 @@ export interface StateEvent {
   // cru do reset ("3pm"/"15:30"), ou null.
   limited?: boolean;
   limit_reset?: string | null;
+  // Loop runner: campos no SSE DA SESSÃO (chip do header do chat) — o Chat NÃO usa o
+  // sessionsStore pra isso (reter o store no mobile abria N streams de lista e derrubava
+  // a conexão do celular; regressão real revertida).
+  loop_status?: LoopState['status'] | null;
+  loop_iter?: number | null;
+  loop_max?: number | null;
 }
 
 export interface CommandInfo {
