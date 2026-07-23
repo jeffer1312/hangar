@@ -108,14 +108,26 @@ function createSessionsStore() {
     recompute();
   }
 
+  // Wake do aparelho (iOS congela timers em background): zera o backoff e reconecta os caidos NA
+  // HORA — sem isto, o retry agendado pre-sleep deixava a lista "offline" por ate 60s com rede boa.
+  function onVisibleKick() {
+    if (document.visibilityState !== 'visible' || refs === 0) return;
+    retryDelays.clear();
+    for (const t of retryTimers.values()) clearTimeout(t);
+    retryTimers.clear();
+    connect(servers);
+  }
+
   function start() {
     servers = listServers();
     connect(servers);
     offChanged = onServersChanged(() => { servers = listServers(); connect(servers); });
+    document.addEventListener('visibilitychange', onVisibleKick);
   }
   function stop() {
     offChanged?.();
     offChanged = null;
+    document.removeEventListener('visibilitychange', onVisibleKick);
     // Timers primeiro: um watchdog disparando pós-stop reabriria streams com refs = 0.
     for (const t of watchdogs.values()) clearTimeout(t);
     watchdogs.clear();
