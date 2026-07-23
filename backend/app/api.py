@@ -246,11 +246,38 @@ def _awaiting_body(info) -> str:
     return "Aguardando sua resposta"
 
 
+_AWAITING_PUSH_RETRY_S = 1.5  # Notification chega junto do pedido; o menu pode atrasar um frame
+
+
+def _pane_wants_input(name: str) -> bool:
+    """Pane mostra menu (classify awaiting) ou overlay de teclas — algo REAL esperando resposta.
+    Falha de captura -> True (erro de leitura nao pode segurar um push legitimo)."""
+    from app import tmux
+    from app.state import classify, is_overlay
+    try:
+        pane = tmux.capture_pane(name)
+    except Exception:
+        return True
+    return classify(pane)[0] == "awaiting_input" or is_overlay(pane)
+
+
 def _do_notify_awaiting(session_id: str) -> None:
     """Logica sincrona de _on_awaiting: resolve nome+corpo rico e manda pro push (que decide
-    mute/quiet-hours/coalescing). Extraida da thread pra ficar testavel direto, sem mockar Thread."""
+    mute/quiet-hours/coalescing). Extraida da thread pra ficar testavel direto, sem mockar Thread.
+
+    Gate anti-fantasma: o state_hook mapeia QUALQUER Notification pra awaiting — inclusive a de
+    "idle ha 60s" do Claude Code, que chega DEPOIS do Stop com a sessao apenas parada. Sem o gate,
+    toda sessao parada >60s empurrava push falso "Aguardando sua resposta". Push so sai com awaiting
+    REAL: askq pendente no sidecar OU menu/overlay no pane (retry curto cobre o frame de render)."""
     info = next((s for s in registry.list() if s.jsonl and Path(s.jsonl).stem == session_id), None)
-    if info is not None:
+    if info is None:
+        return
+    askq = read_pending_askq(info.jsonl) if info.jsonl else None
+    real = bool(askq and askq.questions) or _pane_wants_input(info.name)
+    if not real:
+        time.sleep(_AWAITING_PUSH_RETRY_S)
+        real = _pane_wants_input(info.name)
+    if real:
         push.notify_awaiting(info.name, _awaiting_body(info))
 
 

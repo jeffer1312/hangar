@@ -383,34 +383,85 @@ async def test_list_with_state_scrapes_pane_for_awaiting_marker(tmp_path, monkey
     assert out[0].options == ["Yes", "No"]
 
 
-async def test_list_with_state_stale_awaiting_marker_skips_pane(tmp_path, monkeypatch):
-    # Marcador awaiting_input VELHO (>120s): o hook do Claude manda Notification DEPOIS do Stop, entao
-    # sessoes ficavam presas em awaiting stale e forcavam capture_pane de TODAS a cada poll (a rajada
-    # de forks da instabilidade). Stale -> fast-path (sem raspar): state segue awaiting, question None.
+async def test_list_with_state_stale_awaiting_with_menu_keeps_question(tmp_path, monkeypatch):
+    # Marcador awaiting VELHO + menu REAL no pane: raspa (awaiting sempre raspa) e a lista mostra a
+    # pergunta — o fast-path stale antigo perdia question/options apos 120s.
     import time as _time
     from app.models import SessionInfo
     reg = SessionRegistry(projects_dir=tmp_path)
     info = SessionInfo(name="ask1", cwd="/p", jsonl="/x/abc.jsonl", tracked=True)
     monkeypatch.setattr(reg, "list", lambda: [info])
     monkeypatch.setattr(registry.hook_state, "get_state",
-                        lambda sid: ("awaiting_input", _time.time() - 200))  # 200s > 120s
-    # Primo o cache de statusline FRESCO pra o sweep throttled (proprio, TTL 20s) nao capturar aqui —
-    # isola o caminho de CLASSIFICACAO, que e a tempestade que o fast-path elimina.
-    import time as _t2
-    reg._status_cache["ask1"] = (_t2.monotonic(), None)
-    scraped = {"n": 0}
-
-    def _spy_capture(name, lines=200):
-        scraped["n"] += 1
-        return "❯ 1. Yes\nEsc to cancel\n"
-
-    monkeypatch.setattr(registry.tmux, "capture_pane", _spy_capture)
+                        lambda sid: ("awaiting_input", _time.time() - 200))
+    monkeypatch.setattr(registry.tmux, "capture_pane",
+                        lambda name, lines=200: "Proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel\n")
 
     out = await reg.list_with_state()
 
-    assert out[0].state == "awaiting_input"      # marcador ainda vale pro estado
-    assert out[0].question is None               # nao raspou pra classificar -> sem pergunta
-    assert scraped["n"] == 0                      # NENHUM capture_pane no caminho classify (fast-path)
+    assert out[0].state == "awaiting_input"
+    assert out[0].options == ["Yes", "No"]
+
+
+async def test_list_with_state_demotes_phantom_awaiting(tmp_path, monkeypatch):
+    # RAIZ do "aguardando" fantasma: Notification de idle-60s do Claude Code vira marcador awaiting
+    # DEPOIS do Stop e nada corrigia -> lista mostrava aguardando com a sessao parada. O pane raspado
+    # sem menu deve REBAIXAR o marcador (mapa + sidecar) e o poll seguinte cai no fast-path de idle
+    # (sem capture_pane — e o que desarma a tempestade de forks que o fast-path stale remendava).
+    import json as _json
+    import time as _time
+    from app.hook_state import HookState
+    from app.models import SessionInfo
+    sd = tmp_path / ".claude-pocket-state"
+    sd.mkdir(parents=True)
+    marker_f = sd / "abc.json"
+    marker_f.write_text(_json.dumps({"state": "awaiting_input", "ts": _time.time() - 200}))
+    hs = HookState()
+    hs.load_existing([tmp_path])
+    monkeypatch.setattr(registry, "hook_state", hs)
+    reg = SessionRegistry(projects_dir=tmp_path)
+    info = SessionInfo(name="s1", cwd="/p", jsonl="/x/abc.jsonl", tracked=True)
+    monkeypatch.setattr(reg, "list", lambda: [info])
+    # Primo o cache de statusline pra isolar o caminho de classificacao no 2o poll.
+    reg._status_cache["s1"] = (time.monotonic(), None)
+    scraped = {"n": 0}
+
+    def _idle_capture(name, lines=200):
+        scraped["n"] += 1
+        return "● resposta\n────\n❯ \n────\n"
+
+    monkeypatch.setattr(registry.tmux, "capture_pane", _idle_capture)
+
+    out = await reg.list_with_state()
+    assert out[0].state == "idle"                          # pane e a verdade
+    assert hs.get_state("abc")[0] == "idle"                # marcador rebaixado no mapa
+    assert _json.loads(marker_f.read_text())["state"] == "idle"  # ...e no sidecar (sobrevive boot)
+
+    scraped["n"] = 0
+    out2 = await reg.list_with_state()
+    assert out2[0].state == "idle"
+    assert scraped["n"] == 0                               # fast-path: sem capture no poll seguinte
+
+
+async def test_list_with_state_fresh_awaiting_idle_pane_not_demoted(tmp_path, monkeypatch):
+    # Grace anti-corrida: Notification acabou de chegar (<10s) e o menu pode ainda nao ter renderizado.
+    # Pane sem menu NESSE vao mostra idle na lista, mas NAO rebaixa o marcador — o proximo poll raspa
+    # de novo e, se o menu apareceu, volta a awaiting.
+    import time as _time
+    from app.models import SessionInfo
+    reg = SessionRegistry(projects_dir=tmp_path)
+    info = SessionInfo(name="s1", cwd="/p", jsonl="/x/abc.jsonl", tracked=True)
+    monkeypatch.setattr(reg, "list", lambda: [info])
+    monkeypatch.setattr(registry.hook_state, "get_state",
+                        lambda sid: ("awaiting_input", _time.time()))
+    demoted = []
+    monkeypatch.setattr(registry.hook_state, "demote_awaiting", lambda sid: demoted.append(sid))
+    monkeypatch.setattr(registry.tmux, "capture_pane",
+                        lambda name, lines=200: "● resposta\n────\n❯ \n────\n")
+
+    out = await reg.list_with_state()
+
+    assert out[0].state == "idle"
+    assert demoted == []
 
 
 def test_resolve_jsonl_returns_none_when_dir_empty(tmp_path):

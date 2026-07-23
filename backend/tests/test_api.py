@@ -837,10 +837,62 @@ def test_do_notify_awaiting_resolves_name_and_body(monkeypatch):
     calls = []
     info = SimpleNamespace(name="minha-sessao", jsonl="/x/uuid1.jsonl", cwd="/x")
     monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
+    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)
+    monkeypatch.setattr(api_mod, "_pane_wants_input", lambda name: True)  # menu real no pane
     monkeypatch.setattr(api_mod, "_awaiting_body", lambda i: "corpo rico")
     monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
     api_mod._do_notify_awaiting("uuid1")
     assert calls == [("minha-sessao", "corpo rico")]
+
+
+def test_do_notify_awaiting_skips_idle_notification(monkeypatch):
+    # Notification de "idle 60s" (state_hook mapeia pra awaiting): sem askq pendente e sem menu no
+    # pane (nas 2 checagens) -> NENHUM push. Era o push falso "Aguardando sua resposta" em toda
+    # sessao parada >60s.
+    calls = []
+    info = SimpleNamespace(name="parada", jsonl="/x/uuid1.jsonl", cwd="/x")
+    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
+    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)
+    monkeypatch.setattr(api_mod, "_pane_wants_input", lambda name: False)
+    monkeypatch.setattr(api_mod, "_AWAITING_PUSH_RETRY_S", 0)
+    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
+    api_mod._do_notify_awaiting("uuid1")
+    assert calls == []
+
+
+def test_do_notify_awaiting_retry_catches_late_menu(monkeypatch):
+    # Corrida de render: 1a checagem sem menu, retry acha o menu -> push sai (permissao legitima).
+    calls = []
+    seen = {"n": 0}
+    info = SimpleNamespace(name="perm", jsonl="/x/uuid1.jsonl", cwd="/x")
+    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
+    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)
+
+    def _late_menu(name):
+        seen["n"] += 1
+        return seen["n"] >= 2
+
+    monkeypatch.setattr(api_mod, "_pane_wants_input", _late_menu)
+    monkeypatch.setattr(api_mod, "_AWAITING_PUSH_RETRY_S", 0)
+    monkeypatch.setattr(api_mod, "_awaiting_body", lambda i: "Pode rodar X?")
+    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
+    api_mod._do_notify_awaiting("uuid1")
+    assert calls == [("perm", "Pode rodar X?")]
+
+
+def test_do_notify_awaiting_askq_pending_pushes_without_pane(monkeypatch):
+    # AskUserQuestion pendente no sidecar = awaiting real por definicao — push sem depender do pane.
+    calls = []
+    info = SimpleNamespace(name="ask", jsonl="/x/uuid1.jsonl", cwd="/x")
+    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
+    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: AskQuestion(questions=[
+        AskQuestionItem(header="h", question="Qual branch?", options=[AskOption(label="a")]),
+    ]))
+    monkeypatch.setattr(api_mod, "_pane_wants_input",
+                        lambda name: (_ for _ in ()).throw(AssertionError("nao devia capturar pane")))
+    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
+    api_mod._do_notify_awaiting("uuid1")
+    assert calls == [("ask", "Qual branch?")]
 
 
 def test_do_notify_awaiting_no_match_is_noop(monkeypatch):
