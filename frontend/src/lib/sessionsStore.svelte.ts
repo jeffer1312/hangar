@@ -94,6 +94,13 @@ function createSessionsStore() {
         }
         recompute();
       });
+      // Refresher do backend falhou (achado do hunter): sem isto, lista vazia por erro interno era
+      // indistinguível de zero sessões. Mantém a última lista boa; o erro aparece distinto de offline.
+      es.addEventListener('list_error', () => {
+        arm();   // conexão está viva — só o produtor de dados falhou
+        slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'erro no servidor' });
+        recompute();
+      });
       es.onerror = () => {
         slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
         recompute();

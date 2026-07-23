@@ -764,7 +764,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
             <span class="grp-label">{g.label}</span>
             {#if g.sessions.length > 0}<span class="grp-count">{g.sessions.length}</span>{/if}
             {#if awaiting > 0}<span class="grp-await" title={`${awaiting} aguardando`}>{awaiting}</span>{/if}
-            {#if g.error}<span class="grp-off">offline</span>{/if}
+            {#if g.error}<span class="grp-off">{g.error}</span>{/if}
           </button>
           <!-- "enviar p/ todas" (feature #9): entra em modo seleção com o grupo inteiro marcado. -->
           <button
