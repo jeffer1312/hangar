@@ -319,7 +319,9 @@
   // O EventSource.onerror NAO dispara em half-open -> sem isto o front congela no ultimo estado.
   function armWatchdog() {
     clearTimeout(watchdog);
-    watchdog = setTimeout(() => connectSSE(), 25000);
+    // Mesmo guard do onerror: sessao 'dead' nao ganha reconexao infinita de 25s (o estado final
+    // ja chegou; reviver e acao do usuario via resume, nao do watchdog).
+    watchdog = setTimeout(() => { if (currentState !== 'dead') connectSSE(); }, 25000);
   }
   // Qualquer evento recebido = conexao viva: rearma o watchdog E zera o backoff do onerror.
   function noteAlive() {
@@ -492,6 +494,10 @@
   onMount(async () => {
     alive = true;
     await loadHistory();
+    // Pos-await: o componente pode ter morrido durante o loadHistory (troca rapida de sessao via
+    // {#key}). Sem o guard, o addEventListener rodava DEPOIS do removeEventListener do destroy ->
+    // listener orfao preso pra sempre fazendo getHistory fantasma a cada visibilitychange.
+    if (!alive) return;
     connectSSE();
     document.addEventListener('visibilitychange', onVisible);
   });
