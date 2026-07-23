@@ -936,6 +936,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                 </button>
               {/if}
               <button class="sess-del" onclick={(e) => handleDelete(s.name, s.serverId, e)} aria-label={`Excluir ${s.name}`}>×</button>
+              <!-- TOUCH (tablet): os 3 botoes inline esmagavam o nome (iPad, visto ao vivo) — viram
+                   um kebab que abre o MESMO menu de contexto do botao direito (Git/Loop/renomear/excluir). -->
+              <button class="sess-kebab" onclick={(e) => { e.stopPropagation(); openMenu(e, s, s.serverId); }} aria-label={`Opções de ${s.name}`} title="Opções">⋯</button>
             {/if}
           {/if}
         </div>
@@ -1551,7 +1554,19 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     .sess-row:hover .sess-git, .sess-row:focus-within .sess-git,
     .sess-row:hover .sess-del, .sess-row:focus-within .sess-del { display: inline-flex; }
   }
-  @media (hover: none) { .sess-git, .sess-del { opacity: 0.55; } }   /* touch: sempre visíveis */
+  /* TOUCH (tablet/celular na sidebar): 3 botoes inline esmagavam o nome -> some git/loop/x,
+     fica SO o kebab (abre o menu de contexto completo). Desktop com mouse: kebab nao existe,
+     hover revela os botoes como antes. */
+  .sess-kebab {
+    display: none; width: 22px; height: 22px; min-height: 0; flex-shrink: 0;
+    border-radius: var(--radius-sm); color: var(--text-muted);
+    font-size: var(--text-base); line-height: 1;
+    align-items: center; justify-content: center;
+  }
+  @media (hover: none) {
+    .sess-git, .sess-del { display: none; }
+    .sess-kebab { display: inline-flex; opacity: 0.7; }
+  }
   /* Retomar da linha "sem id": unica acao possivel -> SEMPRE visivel (nao hover-revealed), tingida de
      accent pra puxar o olho (a row inteira fica apagada com opacity 0.45). */
   .sess-resume {
