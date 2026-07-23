@@ -130,6 +130,31 @@ async def _lifespan(app: FastAPI):
                 _log.exception("stall_watch.watch crashed", exc_info=exc)
 
     stall_task.add_done_callback(_stall_watch_done)
+
+    # Boot-resume dos loops: flags em memoria (tick em voo) morrem no restart; o sidecar e a verdade.
+    # Loop ACTIVE cuja sessao existe e esta idle -> reagenda o tick; sessao sumida -> failed.
+    def _boot_resume_loops() -> None:
+        try:
+            live = {loop_mod._sanitize(i.name): i for i in registry.list()}
+            for p in loop_mod._loop_dir().glob("*.json"):
+                stem = p.stem
+                link = loop_mod.LoopLink(stem)
+                d = link.get()
+                if not d or d["status"] not in loop_mod.ACTIVE:
+                    continue
+                info = live.get(stem)
+                if info is None:
+                    link.update(status="failed", ended_ts=time.time(),
+                                ended_reason="sessão morta no boot")
+                    push.notify_loop(stem, "loop falhou: sessão morta no boot")
+                    continue
+                m = hook_state.get_state(Path(info.jsonl).stem) if info.jsonl else None
+                if m and m[0] == "idle":
+                    loop_mod.schedule_tick(info.name, lambda n=info.name: _loop_ctx(n))
+        except Exception:
+            _log.warning("boot-resume de loops falhou", exc_info=True)
+
+    await asyncio.to_thread(_boot_resume_loops)
     try:
         yield
     finally:
