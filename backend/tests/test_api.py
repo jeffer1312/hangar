@@ -1133,9 +1133,9 @@ def test_loop_refine_ok(api_client):
                             json={"goal": "arruma as datas", "check_cmd": "npm run check"}, headers=_h())
     assert r.status_code == 200
     assert "date-fns" in r.json()["goal"]
-    # argv sem shell, modelo haiku
+    # argv sem shell, modelo sonnet
     args = run.call_args[0][0]
-    assert args[:4] == ["claude", "-p", "--model", "haiku"]
+    assert args[:4] == ["claude", "-p", "--model", "sonnet"]
 
 
 def test_loop_refine_timeout_502(api_client):

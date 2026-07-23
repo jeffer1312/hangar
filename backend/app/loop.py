@@ -246,13 +246,13 @@ def _refine_prompt(goal: str, check_cmd: str | None) -> str:
 
 
 def refine_goal(goal: str, check_cmd: str | None = None) -> str:
-    """Refina o objetivo via claude -p efemero (haiku), cwd neutro (nao o da sessao), argv sem shell,
+    """Refina o objetivo via claude -p efemero (sonnet), cwd neutro (nao o da sessao), argv sem shell,
     timeout 60s. Levanta RefineError em qualquer falha (o endpoint mapeia pra 502)."""
     import tempfile
     prompt = _refine_prompt(goal, check_cmd)
     try:
         p = subprocess.run(
-            ["claude", "-p", "--model", "haiku", prompt],
+            ["claude", "-p", "--model", "sonnet", prompt],
             cwd=tempfile.gettempdir(), capture_output=True, text=True, timeout=_REFINE_TIMEOUT,
         )
     except FileNotFoundError:
