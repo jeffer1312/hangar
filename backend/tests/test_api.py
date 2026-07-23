@@ -1023,6 +1023,24 @@ def test_loop_create_404_when_session_missing(api_client, loop_dir):
     assert r.status_code == 404
 
 
+def test_loop_create_409_on_codex_session(api_client, loop_dir):
+    # Codex nao e tmux: loop ficaria running mudo pra sempre (sem hook/tick). Recusa cedo.
+    info = SessionInfo(name="cx", cwd="/repo", jsonl="/repo/t.jsonl", provider="codex")
+    with patch("app.api.registry.list", return_value=[info]), \
+         patch("app.api.automations_enabled", return_value=True):
+        r = api_client.post("/api/sessions/cx/loop", json={"goal": "g"}, headers=_h())
+    assert r.status_code == 409
+
+
+def test_loop_create_422_when_max_iters_too_high(api_client, loop_dir):
+    with patch("app.api.registry.list", return_value=[_info()]), \
+         patch("app.api.automations_enabled", return_value=True), \
+         patch("app.api.branch_of", return_value="TICKET-0000"):
+        r = api_client.post("/api/sessions/cc/loop",
+                            json={"goal": "g", "max_iters": 500}, headers=_h())
+    assert r.status_code == 422
+
+
 def test_loop_create_409_on_main_branch(api_client, loop_dir):
     with patch("app.api.registry.list", return_value=[_info()]), \
          patch("app.api.automations_enabled", return_value=True), \

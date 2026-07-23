@@ -144,9 +144,7 @@ async def _lifespan(app: FastAPI):
                     continue
                 info = live.get(stem)
                 if info is None:
-                    link.update(status="failed", ended_ts=time.time(),
-                                ended_reason="sessão morta no boot")
-                    push.notify_loop(stem, "loop falhou: sessão morta no boot")
+                    loop_mod._end(link, stem, "failed", "sessão morta no boot", push.notify_loop)
                     continue
                 m = hook_state.get_state(Path(info.jsonl).stem) if info.jsonl else None
                 if m and m[0] == "idle":
@@ -606,7 +604,7 @@ def clear_then_link(name: str):
 class LoopCreate(_StrictBody):
     goal: str = Field(min_length=1)
     check_cmd: str | None = None
-    max_iters: int = 10
+    max_iters: int = Field(default=10, ge=1, le=100)  # teto: loop nao vira gerador infinito de prompts
     require_branch: bool = True
 
 
@@ -621,9 +619,7 @@ def _loop_ctx(name: str) -> "loop_mod.TickCtx | None":
     run_tick (senao duplicaria a entrada). Sessao sumida -> loop failed + notify, return None."""
     info = next((i for i in registry.list() if i.name == name), None)
     if info is None or not info.jsonl:
-        loop_mod.LoopLink(name).update(status="failed", ended_ts=time.time(),
-                                       ended_reason="sessão morta")
-        push.notify_loop(name, "loop falhou: sessão morta")
+        loop_mod._end(loop_mod.LoopLink(name), name, "failed", "sessão morta", push.notify_loop)
         return None
     jsonl = info.jsonl
 
@@ -651,6 +647,10 @@ def loop_create(name: str, body: LoopCreate):
     info = next((i for i in registry.list() if i.name == name), None)
     if info is None:
         raise HTTPException(404, "sessão não encontrada")
+    if getattr(info, "provider", "claude") != "claude":
+        # Codex e outros nao sao tmux: sem hook de transicao, o tick nunca dispara -> loop ficaria
+        # running mudo pra sempre. Recusa cedo em vez de criar um loop-zumbi.
+        raise HTTPException(409, "loop runner só suporta sessões claude")
     if not automations_enabled():
         raise HTTPException(409, "automações desligadas (kill-switch)")
     with loop_mod._lock:
@@ -683,8 +683,7 @@ def loop_stop(name: str):
         link = loop_mod.LoopLink(name)
         if link.get() is None:
             raise HTTPException(404, "nenhum loop nesta sessão")
-        d = link.update(status="stopped", ended_ts=time.time(), ended_reason="parado pelo usuário")
-    push.notify_loop(name, "loop parado: parado pelo usuário")
+        d = loop_mod._end(link, name, "stopped", "parado pelo usuário", push.notify_loop)
     return {"loop": d}
 
 
@@ -696,16 +695,14 @@ def loop_resolve(name: str, body: LoopResolve):
         if cur is None or cur["status"] != "done_claimed":
             raise HTTPException(409, "loop não está aguardando confirmação")
         if body.accept:
-            d = link.update(status="done", ended_ts=time.time(), ended_reason="confirmado pronto")
-            push.notify_loop(name, "loop concluído: confirmado pronto")
+            d = loop_mod._end(link, name, "done", "confirmado pronto", push.notify_loop)
             return {"loop": d}
         # reject: conta iteracao e re-prompta (reusa o MESMO helper do run_tick)
         cur["status"] = "running"
         link.set(cur)
         if cur["iter"] + 1 > cur["max_iters"]:
-            d = link.update(status="exhausted", ended_ts=time.time(),
-                            ended_reason=f"esgotou {cur['max_iters']} iterações")
-            push.notify_loop(name, f"loop esgotou as iterações: {d['ended_reason']}")
+            d = loop_mod._end(link, name, "exhausted", f"esgotou {cur['max_iters']} iterações",
+                              push.notify_loop)
             return {"loop": d}
         ctx = _loop_ctx(name)
         if ctx is None:
