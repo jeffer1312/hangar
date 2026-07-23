@@ -22,7 +22,7 @@
   }
 
   const FINAL = new Set(['done', 'stopped', 'exhausted', 'failed']);
-  const STATUS_LABEL: Record<string, string> = {
+  const STATUS_LABEL: Record<LoopState['status'], string> = {
     running: 'rodando',
     paused_awaiting: 'aguardando input',
     done_claimed: 'pronto (aguardando confirmação)',
@@ -36,6 +36,13 @@
   let loadErr = $state('');
   let forceForm = $state(false);   // "novo loop" clicado num estado final -> mostra o form de novo
 
+  // Race poll (load, a cada 3s) x ações (startLoop/doStop/resolveClaim): um GET em voo pode
+  // resolver DEPOIS de uma ação e sobrescrever o estado novo com o velho. `gen` é a geração atual;
+  // toda ação incrementa ao INICIAR e aplica seu próprio resultado incondicionalmente (é a fonte
+  // mais nova); load() captura a geração antes do fetch e só aplica se ninguém mexeu enquanto
+  // esperava. Sem AbortController -- o arquivo não usa esse padrão, só descarte de resposta velha.
+  let gen = 0;
+
   const isFinal = $derived(!!loop && FINAL.has(loop.status));
   const isForm = $derived(!loop || (isFinal && forceForm));
   const isPolling = $derived(!!loop && !isFinal);   // running / paused_awaiting / done_claimed
@@ -48,11 +55,14 @@
   async function load() {
     const s = activeServer();
     if (!s) { loadErr = 'servidor não encontrado'; return; }
+    const g = gen;
     try {
       const r = await getLoopForServer(s, sessionName);
+      if (g !== gen) return;   // uma ação rodou enquanto o GET estava em voo -> descarta
       loop = r.loop;
       suggestions = r.suggestions;
     } catch (e) {
+      if (g !== gen) return;
       loadErr = cleanErr(e);
     }
   }
@@ -81,7 +91,7 @@
   async function startLoop() {
     const s = activeServer();
     if (!s || !goal.trim() || creating) return;
-    creating = true; createErr = '';
+    creating = true; createErr = ''; gen++;
     try {
       const r = await createLoopForServer(s, sessionName, {
         goal: goal.trim(),
@@ -109,6 +119,7 @@
     const s = activeServer();
     confirmStop = false;
     if (!s) return;
+    gen++;
     try { loop = (await stopLoopForServer(s, sessionName)).loop; }
     catch (e) { stopErr = cleanErr(e); }
   }
@@ -117,7 +128,7 @@
   async function resolveClaim(accept: boolean) {
     const s = activeServer();
     if (!s || resolving) return;
-    resolving = true;
+    resolving = true; gen++;
     try { loop = (await resolveLoopForServer(s, sessionName, accept)).loop; }
     catch (e) { stopErr = cleanErr(e); }
     finally { resolving = false; }
@@ -126,6 +137,7 @@
   // Recarrega a cada abertura; zera o form e o override de "novo loop".
   $effect(() => {
     if (open) {
+      gen++;
       loadErr = ''; stopErr = ''; forceForm = false; expandedHist = null;
       resetForm();
       load();

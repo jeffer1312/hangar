@@ -1,5 +1,7 @@
 // Helpers puros do loop runner: badge de status (Task 11 consome — Sidebar/SessionList/BoardCard/Canvas).
 
+import type { LoopState } from './types';
+
 export type LoopTone = 'ok' | 'warn' | 'attention' | 'muted';
 
 export interface LoopBadge {
@@ -7,7 +9,7 @@ export interface LoopBadge {
   tone: LoopTone;
 }
 
-const TONE_BY_STATUS: Record<string, LoopTone> = {
+const TONE_BY_STATUS: Record<LoopState['status'], LoopTone> = {
   running: 'ok',
   done: 'ok',
   paused_awaiting: 'attention',
@@ -29,7 +31,7 @@ export const LOOP_TONE_COLOR: Record<LoopTone, string> = {
 // null = sem loop (status ausente) — o chamador esconde o badge. Estados finais silenciosos não
 // existem hoje (todo status conhecido tem tom); mantém a assinatura null-safe pro Task 11.
 export function loopBadge(
-  status: string | null | undefined,
+  status: LoopState['status'] | null | undefined,
   iter?: number | null,
   max?: number | null,
 ): LoopBadge | null {
