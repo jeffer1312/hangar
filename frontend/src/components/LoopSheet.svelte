@@ -49,6 +49,8 @@
 
   function cleanErr(e: unknown): string {
     const m = e instanceof Error ? e.message : 'falhou';
+    // Erro de rede cru ("Failed to fetch" = backend reiniciando/offline) vira pt-BR acionável.
+    if (/failed to fetch|networkerror|load failed|timed? ?out/i.test(m)) return 'servidor não respondeu';
     return m.replace(/^\d+:\s*/, '');   // tira o prefixo "409: " do status HTTP
   }
 
@@ -180,7 +182,12 @@
   <div class="loop">
     <h2 class="loop-title">Loop</h2>
 
-    {#if loadErr}<p class="error-msg" role="alert">{loadErr}</p>{/if}
+    {#if loadErr}
+      <p class="error-msg" role="alert">
+        {loadErr}
+        <button type="button" class="retry-btn" onclick={() => { loadErr = ''; load(); }}>tentar de novo</button>
+      </p>
+    {/if}
 
     {#if isForm}
       <div class="field">
@@ -334,6 +341,7 @@
   .refine-btn:active:not(:disabled) { border-color: var(--accent); color: var(--text-primary); }
   .refine-btn:disabled { opacity: 0.45; cursor: default; }
   .undo-btn { color: var(--text-muted); font-size: var(--text-xs); text-decoration: underline; }
+  .retry-btn { color: var(--text-secondary); font-size: var(--text-xs); text-decoration: underline; margin-left: var(--space-2); }
 
   /* iteracoes + branch lado a lado: form mais curto no celular (queixa real de altura) */
   .loop-row { display: flex; gap: var(--space-4); }
