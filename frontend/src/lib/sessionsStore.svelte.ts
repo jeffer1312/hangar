@@ -23,6 +23,13 @@ function createSessionsStore() {
   // views congelavam em silêncio até um reconnect manual. Sem sinal por 25s -> fecha e reabre.
   const watchdogs = new Map<string, ReturnType<typeof setTimeout>>();
   const WATCHDOG_MS = 25_000;
+  // Backoff por servidor OFFLINE: o auto-retry do EventSource martela a cada ~3s pra sempre —
+  // num tablet com 2+ servidores desligados isso é rádio/bateria à toa. Falhou -> fecha o stream
+  // e re-tenta com espera crescente (5s -> 60s); qualquer frame bom zera a espera.
+  const RETRY_MIN_MS = 5_000;
+  const RETRY_MAX_MS = 60_000;
+  const retryDelays = new Map<string, number>();
+  const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let refs = 0;
   let offChanged: (() => void) | null = null;
   // Exclusão otimista: chaves `serverId::name` escondidas da lista enquanto o delete está em voo.
@@ -40,6 +47,7 @@ function createSessionsStore() {
       if (!list.some((s) => s.id === id)) {
         es.close(); streams.delete(id); slots.delete(id);
         clearTimeout(watchdogs.get(id)); watchdogs.delete(id);
+        clearTimeout(retryTimers.get(id)); retryTimers.delete(id); retryDelays.delete(id);
       }
     }
     for (const s of list) {
@@ -64,6 +72,7 @@ function createSessionsStore() {
       es.addEventListener('ping', arm);
       es.addEventListener('sessions', (e) => {
         arm();
+        retryDelays.delete(s.id);   // sinal de vida: proximo erro recomeca do backoff minimo
         try {
           slots.set(s.id, { sessions: JSON.parse((e as MessageEvent).data), error: null });
         } catch {
@@ -76,6 +85,17 @@ function createSessionsStore() {
       es.onerror = () => {
         slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
         recompute();
+        // Assume o controle do retry (o nativo martela): fecha e reagenda com backoff.
+        es.close();
+        streams.delete(s.id);
+        clearTimeout(watchdogs.get(s.id)); watchdogs.delete(s.id);
+        const delay = retryDelays.get(s.id) ?? RETRY_MIN_MS;
+        retryDelays.set(s.id, Math.min(delay * 2, RETRY_MAX_MS));
+        clearTimeout(retryTimers.get(s.id));
+        retryTimers.set(s.id, setTimeout(() => {
+          retryTimers.delete(s.id);
+          if (refs > 0 && servers.some((x) => x.id === s.id)) connect(servers);
+        }, delay));
       };
       streams.set(s.id, es);
     }
@@ -93,6 +113,8 @@ function createSessionsStore() {
     // Timers primeiro: um watchdog disparando pós-stop reabriria streams com refs = 0.
     for (const t of watchdogs.values()) clearTimeout(t);
     watchdogs.clear();
+    for (const t of retryTimers.values()) clearTimeout(t);
+    retryTimers.clear(); retryDelays.clear();
     for (const es of streams.values()) es.close();
     streams.clear();
     slots.clear();

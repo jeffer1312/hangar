@@ -171,6 +171,9 @@ export async function uploadFileForServer(s: Server, name: string, file: File): 
       'X-Filename': encodeURIComponent(file.name || 'arquivo'),
     },
     body: file,
+    // Sem teto, uma foto grande num link ruim (tablet em relay) deixava o composer preso em
+    // "enviando…" pra sempre. 3min cobre upload legítimo lento; estourou -> erro visível + retry.
+    signal: AbortSignal.timeout(180_000),
   });
   if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
   return res.json() as Promise<{ path: string }>;
