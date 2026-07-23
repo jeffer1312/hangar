@@ -56,7 +56,7 @@ export interface SessionInfo {
   // parseStatusLine (modelo/contexto no composer; ⚡5h/📅7d na RateStrip). Chat usa a versão ao vivo.
   status_line?: string | null;
   // Feature loop runner (Task 9+): estado de um loop autônomo por sessão
-  loop_status?: string | null;  // status atual: 'running' | 'paused_awaiting' | 'done_claimed' | 'done' | 'stopped' | 'exhausted' | 'failed'
+  loop_status?: LoopState['status'] | null;
   loop_iter?: number | null;    // iteração atual dentro do loop
   loop_max?: number | null;     // máximo de iterações permitidas
 }
