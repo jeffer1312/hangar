@@ -30,6 +30,18 @@ function createSessionsStore() {
   const RETRY_MAX_MS = 60_000;
   const retryDelays = new Map<string, number>();
   const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // Agenda a re-tentativa de UM servidor com backoff. Usado pelo onerror E pelo watchdog — o
+  // watchdog reconectando na hora deixava servidor PENDURADO (tailscale pra nó morto não recusa,
+  // trava o socket) ciclando 25s/25s pra sempre e afogando os sockets do servidor bom no iOS.
+  function scheduleRetry(id: string) {
+    const delay = retryDelays.get(id) ?? RETRY_MIN_MS;
+    retryDelays.set(id, Math.min(delay * 2, RETRY_MAX_MS));
+    clearTimeout(retryTimers.get(id));
+    retryTimers.set(id, setTimeout(() => {
+      retryTimers.delete(id);
+      if (refs > 0 && servers.some((x) => x.id === id)) connect(servers);
+    }, delay));
+  }
   let refs = 0;
   let offChanged: (() => void) | null = null;
   // Exclusão otimista: chaves `serverId::name` escondidas da lista enquanto o delete está em voo.
@@ -65,7 +77,7 @@ function createSessionsStore() {
           // marca offline (mantendo a última lista boa) em vez de segui-lo servindo como bom.
           slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
           recompute();
-          connect(servers);
+          scheduleRetry(s.id);
         }, WATCHDOG_MS));
       };
       arm();
@@ -89,13 +101,7 @@ function createSessionsStore() {
         es.close();
         streams.delete(s.id);
         clearTimeout(watchdogs.get(s.id)); watchdogs.delete(s.id);
-        const delay = retryDelays.get(s.id) ?? RETRY_MIN_MS;
-        retryDelays.set(s.id, Math.min(delay * 2, RETRY_MAX_MS));
-        clearTimeout(retryTimers.get(s.id));
-        retryTimers.set(s.id, setTimeout(() => {
-          retryTimers.delete(s.id);
-          if (refs > 0 && servers.some((x) => x.id === s.id)) connect(servers);
-        }, delay));
+        scheduleRetry(s.id);
       };
       streams.set(s.id, es);
     }
