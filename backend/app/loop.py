@@ -5,6 +5,7 @@ Spec: docs/superpowers/specs/2026-07-22-loop-runner-design.md"""
 import json
 import shlex
 import subprocess
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -245,22 +246,29 @@ def _refine_prompt(goal: str, check_cmd: str | None) -> str:
     return "\n".join(parts)
 
 
+# O goal vem do body do usuario e vira prompt de um claude -p HEADLESS (sem TUI pra negar tool) rodando
+# com o perfil do host -> prompt injection poderia executar tool real. refine e PURO TEXTO: nega toda
+# ferramenta com efeito colateral (exec/edit/rede).
+_REFINE_DISALLOWED = "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch"
+
+
 def refine_goal(goal: str, check_cmd: str | None = None) -> str:
     """Refina o objetivo via claude -p efemero (sonnet), cwd neutro (nao o da sessao), argv sem shell,
-    timeout 60s. Levanta RefineError em qualquer falha (o endpoint mapeia pra 502)."""
-    import tempfile
+    tools de efeito colateral negadas, timeout 60s. Levanta RefineError em qualquer falha (o endpoint
+    mapeia pra 502)."""
     prompt = _refine_prompt(goal, check_cmd)
     try:
         p = subprocess.run(
-            ["claude", "-p", "--model", "sonnet", prompt],
-            cwd=tempfile.gettempdir(), capture_output=True, text=True, timeout=_REFINE_TIMEOUT,
+            ["claude", "-p", "--model", "sonnet", "--disallowedTools", _REFINE_DISALLOWED, prompt],
+            cwd=tempfile.gettempdir(), capture_output=True, text=True, errors="replace",
+            timeout=_REFINE_TIMEOUT,
         )
     except FileNotFoundError:
         raise RefineError("claude CLI não encontrado")
     except (subprocess.TimeoutExpired, OSError):
         raise RefineError("refinamento excedeu o tempo ou falhou ao iniciar")
     if p.returncode != 0:
-        raise RefineError(f"claude -p falhou (exit {p.returncode})")
+        raise RefineError(f"claude -p falhou (exit {p.returncode}): {(p.stderr or '').strip()[-500:]}")
     out = (p.stdout or "").strip()
     if not out:
         raise RefineError("refinamento vazio")

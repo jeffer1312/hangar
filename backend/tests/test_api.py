@@ -1127,15 +1127,35 @@ def _completed(returncode=0, stdout="", stderr=""):
 
 
 def test_loop_refine_ok(api_client):
-    with patch("app.loop.subprocess.run",
+    with patch("app.api.automations_enabled", return_value=True), \
+         patch("app.loop.subprocess.run",
                return_value=_completed(0, stdout="Migre date.ts pra date-fns e mostre o check verde")) as run:
         r = api_client.post("/api/sessions/cc/loop/refine",
                             json={"goal": "arruma as datas", "check_cmd": "npm run check"}, headers=_h())
     assert r.status_code == 200
     assert "date-fns" in r.json()["goal"]
-    # argv sem shell, modelo sonnet
+    # argv sem shell, modelo sonnet, tools de efeito colateral negadas (prompt injection headless)
     args = run.call_args[0][0]
     assert args[:4] == ["claude", "-p", "--model", "sonnet"]
+    assert "--disallowedTools" in args
+    tools = args[args.index("--disallowedTools") + 1]
+    for t in ("Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"):
+        assert t in tools
+
+
+def test_loop_refine_409_when_automations_off(api_client):
+    with patch("app.api.automations_enabled", return_value=False):
+        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x"}, headers=_h())
+    assert r.status_code == 409
+
+
+def test_loop_refine_stderr_in_detail(api_client):
+    with patch("app.api.automations_enabled", return_value=True), \
+         patch("app.loop.subprocess.run",
+               return_value=_completed(2, stderr="erro-especifico-do-cli")):
+        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x"}, headers=_h())
+    assert r.status_code == 502
+    assert "erro-especifico-do-cli" in r.json()["detail"]
 
 
 def test_loop_refine_timeout_502(api_client):
