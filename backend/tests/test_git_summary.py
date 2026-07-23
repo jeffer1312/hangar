@@ -110,6 +110,32 @@ def test_git_summary_cache_negativo_mais_longo(tmp_path, monkeypatch):
     assert calls["n"] == 2
 
 
+def test_git_summary_returncode_nao_zero_usa_ttl_curto(tmp_path, monkeypatch):
+    # returncode!=0 (ex. index.lock transitorio) NAO ganha o TTL negativo de 30s: badge some mas volta
+    # em 3s quando o lock sai — senao repo SAO ficaria 30s sem badge silenciosamente. So o TIMEOUT (30s).
+    (tmp_path / ".git").mkdir()
+    from app import git_ops
+
+    clock = [1000.0]
+    monkeypatch.setattr(git_ops.time, "monotonic", lambda: clock[0])
+    calls = {"n": 0}
+
+    def rc1(cwd, *a, timeout=None, **k):
+        calls["n"] += 1
+        return type("P", (), {"returncode": 1, "stdout": ""})()
+
+    monkeypatch.setattr(git_ops, "_run", rc1)
+    git_ops._summary_cache.clear()
+
+    assert git_ops.git_summary(str(tmp_path)) is None
+    clock[0] = 1002.0                       # +2s: ainda no TTL curto (3s) -> cache
+    assert git_ops.git_summary(str(tmp_path)) is None
+    assert calls["n"] == 1
+    clock[0] = 1004.0                       # +4s: TTL curto expirou (NAO 30s) -> re-tenta
+    assert git_ops.git_summary(str(tmp_path)) is None
+    assert calls["n"] == 2
+
+
 def test_sessioninfo_serializa_campos_git():
     from app.models import SessionInfo
     s = SessionInfo(name="x", git_dirty=3, git_ahead=2, git_behind=0)

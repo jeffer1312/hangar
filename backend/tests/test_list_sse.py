@@ -160,15 +160,31 @@ def test_ping_not_blocked_by_slow_refresher(monkeypatch):
     assert evs[0]["event"] == "ping"   # ping chegou apesar do refresher pendurado (sem snapshot ainda)
 
 
-def test_refresher_error_keeps_stream_alive(monkeypatch):
-    # Desenho do jefferson: erro no refresher (decoracao/raspagem) NAO derruba a conexao — engole,
-    # mantem o snapshot anterior (aqui: nenhum ainda) e a conexao segue pingando. stale > morto.
+def test_refresher_error_emits_list_error(monkeypatch):
+    # Erro no refresher NAO derruba a conexao E aparece pro USUARIO: emite 'list_error' (front distingue
+    # de offline; lista vazia por falha != zero sessoes). Sem ping (9999) -> o 1o evento e o list_error.
     async def boom(_snap=None):
         raise RuntimeError("list quebrou")
     monkeypatch.setattr(sse._list_registry, "list_with_state", boom)
-    # nao levanta; a conexao continua viva e o ping chega
-    evs = asyncio.run(_take(sse.list_events(ping_secs=0.001), 1))
-    assert evs[0]["event"] == "ping"
+    evs = asyncio.run(_take(sse.list_events(ping_secs=9999), 1))
+    assert evs[0]["event"] == "list_error"
+
+
+def test_refresher_recovers_after_error_emits_sessions(monkeypatch):
+    # Ciclo bom depois de um erro re-emite 'sessions' (o front LIMPA o list_error). 1o falha, depois ok.
+    calls = {"i": 0}
+
+    async def flaky(_snap=None):
+        calls["i"] += 1
+        if calls["i"] == 1:
+            raise RuntimeError("primeiro ciclo falhou")
+        return [_Info("cc", "idle")]
+
+    monkeypatch.setattr(sse._list_registry, "list_with_state", flaky)
+    evs = asyncio.run(_take(sse.list_events(ping_secs=9999), 2))
+    assert evs[0]["event"] == "list_error"
+    assert evs[1]["event"] == "sessions"
+    assert json.loads(evs[1]["data"])[0]["name"] == "cc"
 
 
 def test_status_sig_reduz_sem_relogio_e_custo():
