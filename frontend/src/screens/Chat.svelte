@@ -15,6 +15,9 @@
   import CodexLimitsSheet from '../components/CodexLimitsSheet.svelte';
   import ForwardSheet from '../components/ForwardSheet.svelte';
   import PairSheet from '../components/PairSheet.svelte';
+  import LoopSheet from '../components/LoopSheet.svelte';
+  import { sessionsStore } from '../lib/sessionsStore.svelte';
+  import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import {
     getHistory,
     sendInput,
@@ -230,6 +233,19 @@
   // Header: breadcrumb desktop (servidor › sessao › branch) e subtítulo mobile (nome do servidor
   // sob o título — com N servidores, sessões homônimas ficavam indistinguíveis no celular).
   const serverLabel = $derived(listServers().find((s) => s.id === getActiveId())?.label ?? '');
+
+  // Chip de loop no header: dentro do chat não havia NENHUM sinal de loop ativo (só a lista tinha
+  // badge). Os campos vêm do sessionsStore (singleton refcounted — zero SSE novo); tap abre o sheet.
+  let loopSheetOpen = $state(false);
+  // onMount (NAO $effect): retain()->start() escreve E le o $state interno do store; dentro de
+  // $effect isso registra dependencia de si mesmo -> re-run infinito -> release/retain em loop e o
+  // stream da lista abre-fecha sem parar (visto ao vivo no mobile, onde o Chat e o unico retainer).
+  onMount(() => {
+    sessionsStore.retain();
+    return () => sessionsStore.release();
+  });
+  const loopRow = $derived(sessionsStore.rows.find((r) => r.serverId === getActiveId() && r.name === sessionName));
+  const loopChip = $derived(loopBadge(loopRow?.loop_status, loopRow?.loop_iter, loopRow?.loop_max));
   const crumbs = $derived(
     desktop ? { server: serverLabel, session: sessionName, branch: status?.branch, dirty: status?.dirty ?? false } : null
   );
@@ -738,7 +754,11 @@
 <div class="chat-screen" bind:this={screenEl} style:--nav-h={navH + 'px'}>
   <div class="sr-only" role="status">{stateAnnounce}</div>
   <div class="navbar-mount" bind:this={navEl}>
-    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} onOpenRun={() => (runOpen = true)} {runRunning} working={currentState === 'working'} providerLabel={isCodex ? 'Codex' : null} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} />
+    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} onOpenRun={() => (runOpen = true)} {runRunning} working={currentState === 'working'} providerLabel={isCodex ? 'Codex' : null} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
+
+    {#if loopSheetOpen}
+      <LoopSheet open={true} sessionName={sessionName} onClose={() => (loopSheetOpen = false)} />
+    {/if}
   </div>
 
   {#if loading}
