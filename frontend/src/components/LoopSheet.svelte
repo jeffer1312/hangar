@@ -164,7 +164,7 @@
         <label class="field-label" for="loop-check">Check (comando que decide se acabou)</label>
         <input
           id="loop-check" type="text" class="field-input" bind:value={checkCmd}
-          placeholder="npm run check" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
+          placeholder="vazio = parada só com tua confirmação" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
         />
         {#if suggestions.length}
           <div class="loop-chips">
