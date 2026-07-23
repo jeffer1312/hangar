@@ -17,6 +17,15 @@ const TONE_BY_STATUS: Record<string, LoopTone> = {
   stopped: 'muted',
 };
 
+// Tone -> cor, mesmo vocabulário dos badges de estado (awaiting = --warning, erro = --error,
+// ok = accent, parado = muted). Canônico: SessionCard/BoardCard/Sidebar/LoopSheet importam daqui.
+export const LOOP_TONE_COLOR: Record<LoopTone, string> = {
+  ok: 'var(--accent)',
+  warn: 'var(--error)',
+  attention: 'var(--warning)',
+  muted: 'var(--text-muted)',
+};
+
 // null = sem loop (status ausente) — o chamador esconde o badge. Estados finais silenciosos não
 // existem hoje (todo status conhecido tem tom); mantém a assinatura null-safe pro Task 11.
 export function loopBadge(

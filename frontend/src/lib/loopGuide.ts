@@ -14,7 +14,7 @@ export const LOOP_GUIDE: LoopGuideSection[] = [
   },
   {
     title: 'Check — quem decide que acabou é um comando.',
-    body: 'Exit 0 = pronto. Usar o gate real do projeto (chips sugeridos). Check bom: rápido (<2min), determinístico, roda igual duas vezes. Sem check possível → o loop só para com a TUA confirmação; supervise mais de perto.',
+    body: 'Exit 0 = pronto. Usar o gate real do projeto (chips sugeridos). Check bom: rápido (<2min), determinístico, roda igual duas vezes. Sem check possível → o loop só para com a TUA confirmação; supervise mais de perto. O check roda como comando único (argv), sem shell: "&&", "|" e redirecionamento não funcionam — pra encadear, crie um script no repo e use ele como check.',
   },
   {
     title: 'Iterações — o freio.',
