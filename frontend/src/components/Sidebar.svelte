@@ -857,28 +857,31 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                     <!-- Branch git atual (paridade com o mobile), linha propria pra nao competir com o cwd. -->
                     <span class="branch" title="branch git atual">⎇ {s.branch}</span>
                   {/if}
-                </span>
-                {#if s.limited}
-                  <span
-                    class="limited-chip"
-                    title={s.limit_reset ? `Limite de uso atingido — volta ${s.limit_reset}` : 'Limite de uso atingido'}
-                  >⏳{#if s.limit_reset}&nbsp;{s.limit_reset}{/if}</span>
-                {/if}
-                {#if s.then_target}
-                  <!-- Feature #12: indicador do vinculo 'then' armado ("quando terminar -> enviar pra"). -->
-                  <span class="chain-chip" title={`Quando terminar, envia pra "${s.then_target}"`}>🔗&nbsp;{s.then_target}</span>
-                {/if}
-                {#if s.pair_peers?.length}
-                  <!-- Grupo de trabalho: mesmo formato do chain-chip (1 par = nome; N = contagem). -->
-                  <span class="chain-chip" title={`Grupo com ${s.pair_peers.join(', ')} — trabalham juntas via cp-send`}>🤝&nbsp;{s.pair_peers.length === 1 ? s.pair_peers[0] : s.pair_peers.length + 1}</span>
-                {/if}
-                {#if s.loop_status}
-                  {@const lb = loopBadge(s.loop_status, s.loop_iter, s.loop_max)}
-                  {#if lb}
-                    <!-- Loop runner (Task 11): mesmo formato do chain-chip, cor por tone (LOOP_TONE_COLOR). -->
-                    <span class="chain-chip" style="color: {LOOP_TONE_COLOR[lb.tone]}; background: color-mix(in srgb, {LOOP_TONE_COLOR[lb.tone]} 14%, transparent);" title="Loop runner">{lb.label}</span>
+                  {#if s.limited || s.then_target || s.pair_peers?.length || s.loop_status}
+                    <!-- Chips informativos (⏳/🔗/🤝/↻) na COLUNA DE TEXTO, nao ao lado do state-chip:
+                         inline eles cobriam o cwd em sidebar estreita (mesmo fix do SessionCard mobile). -->
+                    <span class="badges-line">
+                      {#if s.limited}
+                        <span
+                          class="limited-chip"
+                          title={s.limit_reset ? `Limite de uso atingido — volta ${s.limit_reset}` : 'Limite de uso atingido'}
+                        >⏳{#if s.limit_reset}&nbsp;{s.limit_reset}{/if}</span>
+                      {/if}
+                      {#if s.then_target}
+                        <span class="chain-chip" title={`Quando terminar, envia pra "${s.then_target}"`}>🔗&nbsp;{s.then_target}</span>
+                      {/if}
+                      {#if s.pair_peers?.length}
+                        <span class="chain-chip" title={`Grupo com ${s.pair_peers.join(', ')} — trabalham juntas via cp-send`}>🤝&nbsp;{s.pair_peers.length === 1 ? s.pair_peers[0] : s.pair_peers.length + 1}</span>
+                      {/if}
+                      {#if s.loop_status}
+                        {@const lb = loopBadge(s.loop_status, s.loop_iter, s.loop_max)}
+                        {#if lb}
+                          <span class="chain-chip" style="color: {LOOP_TONE_COLOR[lb.tone]}; background: color-mix(in srgb, {LOOP_TONE_COLOR[lb.tone]} 14%, transparent);" title="Loop runner">{lb.label}</span>
+                        {/if}
+                      {/if}
+                    </span>
                   {/if}
-                {/if}
+                </span>
                 <span
                   class="state-chip"
                   class:stalled={s.stalled === true}
@@ -1442,7 +1445,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .status-sub.working { color: var(--text-secondary); font-style: italic; }
   .cwd { display: flex; min-width: 0; font-family: var(--font-mono); font-size: 10px; }
   .cwd-prefix { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
-  .cwd-base { flex: 0 0 auto; white-space: nowrap; color: var(--text-secondary); }
+  .cwd-base {
+    /* encolhe COM ellipsis (era 0 0 auto e vazava por baixo dos chips em sidebar estreita) */
+    flex: 0 1 auto; min-width: 3ch; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; color: var(--text-secondary);
+  }
+  .badges-line { display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap; min-width: 0; margin-top: 2px; }
   /* Branch git da linha (paridade com o mobile): mono, accent, truncada. */
   .branch {
     min-width: 0; font-family: var(--font-mono); font-size: 10px; color: var(--accent);
@@ -1499,20 +1507,24 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
   .sess-del {
     width: 22px; height: 22px; min-height: 0; flex-shrink: 0; border-radius: var(--radius-sm);
-    color: var(--text-muted); font-size: var(--text-base); line-height: 1; opacity: 0; margin-right: 2px;
+    color: var(--text-muted); font-size: var(--text-base); line-height: 1; margin-right: 2px;
   }
-  @media (hover: hover) { .sess-row:hover .sess-del { opacity: 1; } }
-  @media (hover: none) { .sess-del { opacity: 0.55; } }   /* touch: × sempre visível, sem o trap do :hover */
   .sess-del:hover { color: var(--error); background: var(--bg-base); }
-  /* Git da linha: mesma mecânica hover-revealed do ×, tinge de accent ao passar. */
+  /* Git/Loop da linha: hover-revealed. display:none (nao opacity) — invisivel NAO pode reservar
+     largura, senao em sidebar estreita os botoes fantasma esmagavam o nome (visto ao vivo). O
+     foco por teclado tambem revela (focus-within). */
   .sess-git {
     width: 22px; height: 22px; min-height: 0; flex-shrink: 0; border-radius: var(--radius-sm);
     display: inline-flex; align-items: center; justify-content: center;
-    color: var(--text-muted); opacity: 0;
+    color: var(--text-muted);
   }
-  @media (hover: hover) { .sess-row:hover .sess-git { opacity: 1; } }
-  @media (hover: none) { .sess-git { opacity: 0.55; } }   /* touch: sempre visível */
   .sess-git:hover { color: var(--accent); background: var(--bg-base); }
+  @media (hover: hover) {
+    .sess-git, .sess-del { display: none; }
+    .sess-row:hover .sess-git, .sess-row:focus-within .sess-git,
+    .sess-row:hover .sess-del, .sess-row:focus-within .sess-del { display: inline-flex; }
+  }
+  @media (hover: none) { .sess-git, .sess-del { opacity: 0.55; } }   /* touch: sempre visíveis */
   /* Retomar da linha "sem id": unica acao possivel -> SEMPRE visivel (nao hover-revealed), tingida de
      accent pra puxar o olho (a row inteira fica apagada com opacity 0.45). */
   .sess-resume {
