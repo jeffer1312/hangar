@@ -1,5 +1,25 @@
 export type State = 'working' | 'idle' | 'awaiting_input' | 'dead';
 
+export interface LoopHistoryEntry {
+  n: number;
+  ts: number;
+  check_exit: number | null;
+  tail: string;
+}
+
+export interface LoopState {
+  goal: string;
+  check_cmd: string | null;
+  max_iters: number;
+  require_branch: boolean;
+  status: 'running' | 'paused_awaiting' | 'done_claimed' | 'done' | 'stopped' | 'exhausted' | 'failed';
+  iter: number;
+  history: LoopHistoryEntry[];
+  started_ts: number;
+  ended_ts: number | null;
+  ended_reason: string | null;
+}
+
 export interface SessionInfo {
   name: string;
   cwd?: string;
@@ -35,6 +55,10 @@ export interface SessionInfo {
   // Statusline crua da sessão (cache ~20s no backend) — o card do board/canvas parseia com
   // parseStatusLine (modelo/contexto no composer; ⚡5h/📅7d na RateStrip). Chat usa a versão ao vivo.
   status_line?: string | null;
+  // Feature loop runner (Task 9+): estado de um loop autônomo por sessão
+  loop_status?: string | null;  // status atual: 'running' | 'paused_awaiting' | 'done_claimed' | 'done' | 'stopped' | 'exhausted' | 'failed'
+  loop_iter?: number | null;    // iteração atual dentro do loop
+  loop_max?: number | null;     // máximo de iterações permitidas
 }
 
 // Sessão marcada com o servidor de origem (visão agregada multi-servidor).

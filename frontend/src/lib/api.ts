@@ -18,6 +18,7 @@ import type {
   RunInfo,
   SessionLimits,
   CodexModelsResponse,
+  LoopState,
 } from './types';
 
 // URL da idx-ésima imagem (colada no terminal) de uma msg do transcript. `?token` porque <img> não
@@ -773,4 +774,48 @@ export function setCodexModel(name: string, model: string, effort?: string | nul
     method: 'POST',
     body: JSON.stringify({ model, effort: effort ?? undefined }),
   });
+}
+
+// ── Loop runner (Task 9+): obter, criar, parar e resolver loops autonomos por sessao ───────────
+
+// Obtem o estado atual de um loop (ou null se nao existe) e sugestoes de próximas ações.
+export async function getLoopForServer(s: Server, name: string): Promise<{ loop: LoopState | null; suggestions: string[] }> {
+  const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/loop`, {
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
+  return res.json() as Promise<{ loop: LoopState | null; suggestions: string[] }>;
+}
+
+// Cria um novo loop com goal, check_cmd opcional, max_iters e require_branch.
+export async function createLoopForServer(s: Server, name: string, body: { goal: string; check_cmd?: string | null; max_iters?: number; require_branch?: boolean }): Promise<{ loop: LoopState }> {
+  const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/loop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
+  return res.json() as Promise<{ loop: LoopState }>;
+}
+
+// Para um loop em execucao (muda status para 'stopped').
+export async function stopLoopForServer(s: Server, name: string): Promise<{ loop: LoopState }> {
+  const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/loop/stop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
+  });
+  if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
+  return res.json() as Promise<{ loop: LoopState }>;
+}
+
+// Resolve um loop no estado 'done_claimed' (accept=true) ou 'stopped' (accept=false).
+export async function resolveLoopForServer(s: Server, name: string, accept: boolean): Promise<{ loop: LoopState }> {
+  const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/loop/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
+    body: JSON.stringify({ accept }),
+  });
+  if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
+  return res.json() as Promise<{ loop: LoopState }>;
 }
