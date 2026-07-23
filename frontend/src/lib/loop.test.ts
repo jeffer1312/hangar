@@ -21,4 +21,8 @@ describe('loopBadge', () => {
     expect(loopBadge('done', 4, 10)?.tone).toBe('ok');
     expect(loopBadge('stopped', 4, 10)?.tone).toBe('muted');
   });
+  it('null quando status desconhecido (payload de peer em versão diferente)', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- runtime guard contra valor fora do union
+    expect(loopBadge('bogus' as any)).toBeNull();
+  });
 });
