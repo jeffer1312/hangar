@@ -28,6 +28,17 @@ _UNSET = object()
 _log = logging.getLogger("claude_pocket.registry")
 
 
+def _decorate_loop(info) -> None:
+    """Decora loop_status/iter/max de UMA sessao a partir do sidecar (app.loop). Sem loop -> tudo None
+    (sem badge). Module-level (nao closure) pra ser testavel isolado."""
+    from app.loop import LoopLink
+    d = LoopLink(info.name).get()
+    if d is not None:
+        info.loop_status = d.get("status")
+        info.loop_iter = d.get("iter")
+        info.loop_max = d.get("max_iters")
+
+
 def sanitize_cwd(cwd: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "-", cwd)
 
@@ -678,6 +689,8 @@ class SessionRegistry:
                     info.git_behind = summary["behind"]
 
         await asyncio.to_thread(_decorate_git)
+        for info in infos:
+            _decorate_loop(info)
         return infos
 
     def create(self, name: str, cwd: str, config_dir: str | None = None,

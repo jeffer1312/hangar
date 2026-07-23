@@ -50,6 +50,12 @@ class SessionInfo(BaseModel):
     pair_peers: Optional[list[str]] = None
     pair_gid: Optional[str] = None   # id estável do grupo — cluster da lista agrupa por ele
     pair_task: Optional[str] = None  # rótulo do grupo (ex: ABC-1234) pro header do cluster
+    # Loop runner (harness bloco A): estado do loop autonomo desta sessao, decorado em list_with_state
+    # (app.loop.LoopLink). Sem loop -> tudo None (sem badge). Entram no sig do SSE de lista (sse.py)
+    # pra o badge nao congelar quando so o loop muda com a sessao parada em idle.
+    loop_status: Optional[str] = None
+    loop_iter: Optional[int] = None
+    loop_max: Optional[int] = None
 
 
 class ChatEvent(BaseModel):
