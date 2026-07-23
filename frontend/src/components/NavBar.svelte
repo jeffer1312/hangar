@@ -44,8 +44,13 @@
     // Task B: tocar o badge do provider abre os limites de uso (so Codex tem -- Claude usa o RateChips
     // acima). Sem handler, o badge fica so leitura (span) -- nao vira botao a-toa.
     onProviderTap?: () => void;
+    // Chip do loop runner da sessao aberta (🔁 N/M): so aparece com loop; tap abre o LoopSheet.
+    // Dentro do chat era o unico lugar SEM sinal de loop (a lista ja tem badge).
+    loopLabel?: string | null;
+    loopColor?: string;
+    onLoopTap?: () => void;
   }
-  let { title = 'claude cockpit', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, limited = false, limitReset = null, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, onOpenRun, runRunning = false, working = false, subtitle = null, subtitleHot = null, crumbs = null, stateLabel, stateColor, providerLabel = null, onProviderTap }: Props = $props();
+  let { title = 'claude cockpit', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, limited = false, limitReset = null, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, onOpenRun, runRunning = false, working = false, subtitle = null, subtitleHot = null, crumbs = null, stateLabel, stateColor, providerLabel = null, onProviderTap, loopLabel = null, loopColor, onLoopTap }: Props = $props();
 </script>
 
 <nav class="navbar">
@@ -84,6 +89,9 @@
           <span class="provider-badge">{providerLabel}</span>
         {/if}
         {#if stateLabel}<span class="state-pill" style="color: {stateColor};">{stateLabel}</span>{/if}
+        {#if loopLabel}
+          <button type="button" class="loop-chip" style="color: {loopColor};" onclick={(e) => { e.stopPropagation(); onLoopTap?.(); }} aria-label="Loop da sessão">{loopLabel}</button>
+        {/if}
       </div>
     {:else if onTitleTap}
       <button class="title-chip" onclick={onTitleTap} aria-label="Trocar de sessão">
@@ -99,6 +107,18 @@
           >{providerLabel}</span>
         {:else if providerLabel}
           <span class="provider-badge">{providerLabel}</span>
+        {/if}
+        {#if loopLabel}
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <span
+            class="loop-chip"
+            role="button"
+            tabindex="0"
+            style="color: {loopColor};"
+            aria-label="Loop da sessão"
+            onclick={(e) => { e.stopPropagation(); onLoopTap?.(); }}
+            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onLoopTap?.(); } }}
+          >{loopLabel}</span>
         {/if}
         <svg class="chip-chevron" width="11" height="7" viewBox="0 0 11 7" fill="none" aria-hidden="true">
           <path d="M1 1l4.5 4.5L10 1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
@@ -248,6 +268,15 @@
   }
   .provider-badge--tap:active { background: var(--accent); color: var(--bg-elevated); }
 
+  /* Chip do loop (🔁 N/M): mono como os badges numericos; cor vem do tone via style inline. */
+  .loop-chip {
+    flex-shrink: 0; margin-left: var(--space-1);
+    font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 600;
+    padding: 2px 8px; border-radius: var(--radius-full);
+    background: var(--bg-surface); border: 1px solid var(--border-subtle); cursor: pointer;
+  }
+  .loop-chip:active { background: var(--bg-hover); }
+
   /* Titulo + subtitulo empilhados (ex: lista de sessoes com resumo). */
   .navbar-titlewrap {
     flex: 1;
@@ -304,6 +333,8 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    /* o NOME nunca some: badges (provider/loop) encolhem depois; nome trunca com reticencia */
+    min-width: 56px;
   }
 
   .chip-chevron {
