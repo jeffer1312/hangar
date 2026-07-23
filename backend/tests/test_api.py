@@ -1166,3 +1166,18 @@ def test_loop_refine_empty_output_502(api_client):
 def test_loop_refine_422_when_goal_too_long(api_client):
     r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x" * 2001}, headers=_h())
     assert r.status_code == 422
+
+
+def test_loop_refine_refusal_is_502(api_client):
+    # haiku devolveu pergunta/recusa em vez do objetivo -> guard 502 (nao repassa meta-resposta).
+    with patch("app.loop.subprocess.run",
+               return_value=_completed(0, stdout="Não consigo reescrever sem saber qual arquivo você quer?")):
+        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "arruma o haiku"}, headers=_h())
+    assert r.status_code == 502
+
+
+def test_loop_refine_question_ending_is_502(api_client):
+    with patch("app.loop.subprocess.run",
+               return_value=_completed(0, stdout="Qual haiku você quer melhorar?")):
+        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "melhora"}, headers=_h())
+    assert r.status_code == 502
