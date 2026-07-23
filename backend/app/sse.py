@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import re
 import time
 from pathlib import Path
@@ -63,6 +64,8 @@ _registry = SessionRegistry()
 # Instancia stateless pro stream de lista (separada do _registry do jsonl_watcher pra clareza).
 _list_registry = SessionRegistry()
 
+_log = logging.getLogger("claude_pocket.sse")
+
 # Snapshot compartilhado de registry.list() pros LOOPS do SSE (jsonl_watcher de cada conexao de chat
 # + list_events): cada um re-varria o /proc inteiro + tmux no proprio ciclo -> N conexoes = N
 # varreduras completas a cada ~2s. Com TTL < poll dos consumidores, vira no maximo ~1 varredura/s no
@@ -119,49 +122,122 @@ def _status_sig(s):
     )
 
 
-async def list_events(poll: float = 1.5, ping_every: int = 7):
-    """SSE da LISTA de sessoes. Emite o snapshot de list_with_state() na conexao e, num loop de
-    `poll`s, reemite SO quando o resultado muda (estado via markers do A; membership por re-listar).
-    Heartbeat 'ping' a cada `ping_every` ticks (alimenta o watchdog do front). Fail-loud: excecao
-    do list_with_state propaga e encerra o stream (o EventSource do cliente reconecta)."""
-    last = None
-    ticks = 0
-    while True:
-        # Resolucao via snapshot compartilhado (copias: list_with_state MUTA state/last_activity e o
-        # cache e compartilhado com os jsonl_watchers); a classificacao de estado roda fresca.
-        snap = [i.model_copy() for i in await _cached_list()]
-        infos = await _list_registry.list_with_state(snap)
-        data = json.dumps([i.model_dump(mode="json") for i in infos], ensure_ascii=False)
-        # Dedup IGNORA last_activity: e o mtime do jsonl (float sub-segundo) que muda a CADA escrita
-        # de uma sessao ativa -> sem isto a lista inteira re-emitia a cada poll (~1.5s) sem nada
-        # visivel mudar = flicker no front. last_activity so e tiebreak de ordenacao + tempo relativo
-        # coarse (minutos) no switcher; uns segundos defasado e invisivel. Re-emite so em mudanca de
-        # membership/state/cwd/tracked/jsonl/question/stalled/limited. O payload ainda CARREGA
-        # last_activity (so nao dispara). question entra pra a linha atualizar quando uma sessao passa a
-        # perguntar algo novo; stalled (feature #7) entra pra a linha tingir/destingir quando o watchdog
-        # flipar o bool; limited + limit_reset (feature #8) entram pro chip "limitado · HH:MM" aparecer/
-        # sumir E re-emitir quando so o horario de reset muda (mesmo limited seguindo True);
-        # then_target (feature #12) entra pro indicador de vinculo aparecer/sumir/trocar de alvo na hora.
-        # status_line entra REDUZIDO (_status_sig): a linha crua carrega relogio/custo que mudam a
-        # cada captura — o payload leva a crua, o sig so o que muda de verdade (modelo/ctx/5h/7d).
-        # bool(label): a PRESENÇA da barrinha de spinner precisa re-emitir (sem isto o sweep
-        # capturava o label e ninguém avisava o front); o TEXTO fica fora — muda a cada captura
-        # (timer/tokens) e re-emitiria a lista inteira à toa.
-        sig = json.dumps(
-            [(i.name, i.cwd, i.state, i.tracked, i.jsonl, i.question, i.stalled, i.limited,
-              i.limit_reset, i.then_target, _status_sig(getattr(i, "status_line", None)),
-              bool(getattr(i, "label", None)),
-              getattr(i, "loop_status", None), getattr(i, "loop_iter", None))
-             for i in infos],
-            ensure_ascii=False,
-        )
-        if sig != last:
-            last = sig
-            yield {"event": "sessions", "data": data}
-        ticks += 1
-        if ping_every and ticks % ping_every == 0:
-            yield {"event": "ping", "data": "{}"}
-        await asyncio.sleep(poll)
+def _list_sig(infos) -> str:
+    # Dedup IGNORA last_activity: e o mtime do jsonl (float sub-segundo) que muda a CADA escrita de uma
+    # sessao ativa -> sem isto a lista inteira re-emitia a cada poll sem nada visivel mudar = flicker.
+    # Re-emite so em mudanca de membership/state/cwd/tracked/jsonl/question/stalled/limited/
+    # limit_reset/then_target/status_line-reduzida/presenca-de-label/loop.
+    return json.dumps(
+        [(i.name, i.cwd, i.state, i.tracked, i.jsonl, i.question, i.stalled, i.limited,
+          i.limit_reset, i.then_target, _status_sig(getattr(i, "status_line", None)),
+          bool(getattr(i, "label", None)),
+          getattr(i, "loop_status", None), getattr(i, "loop_iter", None))
+         for i in infos],
+        ensure_ascii=False,
+    )
+
+
+class _ListRefresher:
+    """UM refresher em background (single-flight, compartilhado por TODAS as conexoes da lista) que
+    produz o snapshot de list_with_state no ritmo dele. Desenho (decisao do jefferson): a conexao SSE
+    e PRIORIDADE ABSOLUTA e NUNCA espera trabalho — ela so LE o ultimo snapshot pronto e emite quando
+    a versao muda; o custo de raspar/decorar mora AQUI, uma vez, nao M×conexoes. Decoracao que falha
+    (git 2s pendurado etc.) e LOGADA (warning — isolamento sim, silencio nao) mantendo o snapshot
+    anterior (stale > morto): refresher travado = clientes seguem pingando e vendo a lista velha, nunca
+    desconectam. O ref-count para o refresher quando a ultima conexao sai (nao raspa tmux com zero clientes)."""
+
+    def __init__(self, poll: float = 1.5):
+        self.poll = poll
+        self.data: str | None = None
+        self.sig: str | None = None
+        self.version = 0
+        self._task: asyncio.Task | None = None
+        self._refs = 0
+        self._loop = None
+        self._cond: asyncio.Condition | None = None
+
+    def _ensure(self):
+        # (Re)inicia o refresher se nao ha task viva NESTE event loop. O bind por-loop e o que deixa o
+        # singleton sobreviver aos asyncio.run() dos testes (cada um e um loop novo).
+        loop = asyncio.get_running_loop()
+        if self._task is None or self._task.done() or self._loop is not loop:
+            self._loop = loop
+            self._cond = asyncio.Condition()
+            self.data = None
+            self.sig = None
+            self.version = 0
+            self._refs = 0
+            self._task = asyncio.create_task(self._run())
+
+    async def _run(self):
+        while True:
+            try:
+                snap = [i.model_copy() for i in await _cached_list()]
+                infos = await _list_registry.list_with_state(snap)
+                data = json.dumps([i.model_dump(mode="json") for i in infos], ensure_ascii=False)
+                sig = _list_sig(infos)
+            except Exception:
+                # Decoracao/raspagem falhou -> MANTEM o snapshot anterior (stale > morto). Nunca
+                # propaga pra conexao. Loga e segue no proximo ciclo.
+                _log.warning("refresher da lista falhou; mantem snapshot anterior", exc_info=True)
+                await asyncio.sleep(self.poll)
+                continue
+            if sig != self.sig:
+                async with self._cond:
+                    self.sig = sig
+                    self.data = data
+                    self.version += 1
+                    self._cond.notify_all()
+            await asyncio.sleep(self.poll)
+
+    def acquire(self) -> asyncio.Condition:
+        self._ensure()
+        self._refs += 1
+        return self._cond
+
+    def release(self):
+        self._refs -= 1
+        if self._refs <= 0 and self._task is not None:
+            self._task.cancel()
+            self._task = None
+            self._refs = 0
+
+
+_list_refresher = _ListRefresher()
+
+
+async def list_events(ping_secs: float = 8.0):
+    """SSE da LISTA de sessoes. Conexao = PRIORIDADE ABSOLUTA, zero trabalho: um reader que so LE o
+    snapshot compartilhado (produzido pelo _ListRefresher unico) e emite quando a versao muda, + um
+    ping em timer FIXO por conexao (incondicional). Refresher travado nao afeta a conexao — o ping
+    segue e o front ve a lista velha (stale > desconectado)."""
+    queue: asyncio.Queue = asyncio.Queue()
+    cond = _list_refresher.acquire()
+
+    async def reader():
+        last_version = -1
+        while True:
+            async with cond:
+                await cond.wait_for(lambda: _list_refresher.version != last_version)
+                last_version = _list_refresher.version
+                data = _list_refresher.data
+            if data is not None:
+                await queue.put(("sessions", data))
+
+    async def ping_loop():
+        while True:
+            await asyncio.sleep(ping_secs)
+            await queue.put(("ping", "{}"))
+
+    tasks = [asyncio.create_task(reader()), asyncio.create_task(ping_loop())]
+    try:
+        while True:
+            event, data = await queue.get()
+            yield {"event": event, "data": data}
+    finally:
+        for t in tasks:
+            t.cancel()
+        _list_refresher.release()
 
 
 async def merged_events(name: str, jsonl: str, provider: str = "claude"):
