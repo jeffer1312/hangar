@@ -10,6 +10,8 @@ def _stub_cached_list(monkeypatch):
     async def _fc():
         return []
     monkeypatch.setattr(sse, "_cached_list", _fc)
+    # Refresher unico (singleton): poll rapido pros testes; re-bind por event loop cuida do reset.
+    monkeypatch.setattr(sse._list_refresher, "poll", 0.001)
 
 
 class _Info:
@@ -38,7 +40,7 @@ def test_emits_snapshot_on_connect(monkeypatch):
     async def fake_list(_snap=None):
         return [_Info("cc", "idle")]
     monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    evs = asyncio.run(_take(sse.list_events(poll=0.001, ping_every=9999), 1))
+    evs = asyncio.run(_take(sse.list_events(ping_secs=9999), 1))
     assert evs[0]["event"] == "sessions"
     assert json.loads(evs[0]["data"])[0]["name"] == "cc"
 
@@ -50,7 +52,7 @@ def test_emits_again_only_on_change(monkeypatch):
         r = seq[min(calls["i"], len(seq) - 1)]; calls["i"] += 1; return r
     monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
     # connect-emit (idle), unchanged (idle, no emit), then working -> 2nd emit
-    evs = asyncio.run(_take(sse.list_events(poll=0.001, ping_every=9999), 2))
+    evs = asyncio.run(_take(sse.list_events(ping_secs=9999), 2))
     assert [e["event"] for e in evs] == ["sessions", "sessions"]
     assert json.loads(evs[0]["data"])[0]["state"] == "idle"
     assert json.loads(evs[1]["data"])[0]["state"] == "working"
@@ -67,7 +69,7 @@ def test_no_reemit_on_last_activity_only_change(monkeypatch):
     async def fake_list(_snap=None):
         r = seq[min(calls["i"], len(seq) - 1)]; calls["i"] += 1; return r
     monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    evs = asyncio.run(_take(sse.list_events(poll=0.001, ping_every=9999), 2))
+    evs = asyncio.run(_take(sse.list_events(ping_secs=9999), 2))
     assert [e["event"] for e in evs] == ["sessions", "sessions"]
     assert json.loads(evs[0]["data"])[0]["state"] == "working"
     assert json.loads(evs[1]["data"])[0]["state"] == "idle"
@@ -84,7 +86,7 @@ def test_reemit_on_question_change(monkeypatch):
     async def fake_list(_snap=None):
         r = seq[min(calls["i"], len(seq) - 1)]; calls["i"] += 1; return r
     monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    evs = asyncio.run(_take(sse.list_events(poll=0.001, ping_every=9999), 2))
+    evs = asyncio.run(_take(sse.list_events(ping_secs=9999), 2))
     assert [e["event"] for e in evs] == ["sessions", "sessions"]
     assert json.loads(evs[1]["data"])[0]["question"] == "Confirma o deploy?"
 
@@ -99,7 +101,7 @@ def test_reemit_on_stalled_change(monkeypatch):
     async def fake_list(_snap=None):
         r = seq[min(calls["i"], len(seq) - 1)]; calls["i"] += 1; return r
     monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    evs = asyncio.run(_take(sse.list_events(poll=0.001, ping_every=9999), 2))
+    evs = asyncio.run(_take(sse.list_events(ping_secs=9999), 2))
     assert [e["event"] for e in evs] == ["sessions", "sessions"]
     assert json.loads(evs[0]["data"])[0]["stalled"] is False
     assert json.loads(evs[1]["data"])[0]["stalled"] is True
@@ -115,7 +117,7 @@ def test_reemit_on_limited_change(monkeypatch):
     async def fake_list(_snap=None):
         r = seq[min(calls["i"], len(seq) - 1)]; calls["i"] += 1; return r
     monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    evs = asyncio.run(_take(sse.list_events(poll=0.001, ping_every=9999), 2))
+    evs = asyncio.run(_take(sse.list_events(ping_secs=9999), 2))
     assert [e["event"] for e in evs] == ["sessions", "sessions"]
     assert json.loads(evs[0]["data"])[0]["limited"] is False
     assert json.loads(evs[1]["data"])[0]["limited"] is True
@@ -132,7 +134,7 @@ def test_reemit_on_limit_reset_change(monkeypatch):
     async def fake_list(_snap=None):
         r = seq[min(calls["i"], len(seq) - 1)]; calls["i"] += 1; return r
     monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    evs = asyncio.run(_take(sse.list_events(poll=0.001, ping_every=9999), 2))
+    evs = asyncio.run(_take(sse.list_events(ping_secs=9999), 2))
     assert [e["event"] for e in evs] == ["sessions", "sessions"]
     assert json.loads(evs[1]["data"])[0]["limit_reset"] == "4pm"
 
@@ -141,10 +143,32 @@ def test_ping_emitted_on_cadence(monkeypatch):
     async def fake_list(_snap=None):
         return [_Info("cc", "idle")]
     monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    # ping_every=1 -> after the connect snapshot, the next tick has no change but emits a ping
-    evs = asyncio.run(_take(sse.list_events(poll=0.001, ping_every=1), 2))
+    # ping em timer FIXO por conexao: apos o snapshot, o ping chega pelo seu proprio timer.
+    evs = asyncio.run(_take(sse.list_events(ping_secs=0.001), 2))
     assert evs[0]["event"] == "sessions"
-    assert evs[1]["event"] == "ping"
+    assert any(e["event"] == "ping" for e in evs[1:])
+
+
+def test_ping_not_blocked_by_slow_refresher(monkeypatch):
+    # CERNE do desenho: o refresher (shared) pendurado num list_with_state lento (git status) NAO pode
+    # atrasar o ping — a conexao so LE o snapshot e pinga em task propria. Ping chega mesmo travado.
+    async def slow_list(_snap=None):
+        await asyncio.sleep(9999)   # trava o refresher no 1o ciclo (nenhum snapshot pronto)
+
+    monkeypatch.setattr(sse._list_registry, "list_with_state", slow_list)
+    evs = asyncio.run(_take(sse.list_events(ping_secs=0.001), 1))
+    assert evs[0]["event"] == "ping"   # ping chegou apesar do refresher pendurado (sem snapshot ainda)
+
+
+def test_refresher_error_keeps_stream_alive(monkeypatch):
+    # Desenho do jefferson: erro no refresher (decoracao/raspagem) NAO derruba a conexao — engole,
+    # mantem o snapshot anterior (aqui: nenhum ainda) e a conexao segue pingando. stale > morto.
+    async def boom(_snap=None):
+        raise RuntimeError("list quebrou")
+    monkeypatch.setattr(sse._list_registry, "list_with_state", boom)
+    # nao levanta; a conexao continua viva e o ping chega
+    evs = asyncio.run(_take(sse.list_events(ping_secs=0.001), 1))
+    assert evs[0]["event"] == "ping"
 
 
 def test_status_sig_reduz_sem_relogio_e_custo():

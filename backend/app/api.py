@@ -6,6 +6,7 @@ import re
 import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal, Optional
@@ -835,6 +836,18 @@ async def events(name: str):
     return EventSourceResponse(merged_events(name, info.jsonl, provider=info.provider))
 
 
+# Pool DEDICADO ao caminho de ENVIO (nucleo sagrado). Separado do executor default do asyncio, que a
+# decoracao da lista (git_summary/capture_pane via asyncio.to_thread) pode ocupar em rajada -> sem isto,
+# um burst de decoracao lenta atrasaria o POST /input. Poucos workers bastam (single-user; envios a uma
+# mesma sessao ja serializam no _send_lock do terminal_input).
+_send_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cp-send")
+
+
+def _send_thread(fn, *args):
+    """Roda `fn(*args)` no pool DEDICADO de envio (nao no executor default, saturavel pela decoracao)."""
+    return asyncio.get_running_loop().run_in_executor(_send_executor, fn, *args)
+
+
 def _send_one(name: str, text: str) -> dict:
     """Sequencia UNICA de envio de prompt: send_prompt + registro na fila duravel + confirmacao/drain.
     Usada pelo /input (uma sessao) e pelo /broadcast (loop por N sessoes) — o broadcast NAO reimplementa
@@ -984,15 +997,18 @@ def _session_exists(name: str) -> bool:
 
 @app.post("/api/sessions/{name}/input", dependencies=[Depends(require_auth)])
 async def input_prompt(name: str, body: InputBody):
-    # Ramifica por provider: Claude via asyncio.to_thread (_send_one e SYNC/bloqueante — tmux; mesmo
-    # padrao async-bridge do create_session, comportamento IDENTICO ao de hoje), Codex via
+    # Ramifica por provider: Claude via _send_thread (_send_one e SYNC/bloqueante — tmux), Codex via
     # _send_one_codex (async, app-server). Default "claude" pra qualquer nome nao-Codex.
-    if not await asyncio.to_thread(_session_exists, name):
+    # NUCLEO SAGRADO: o envio NUNCA disputa executor com feature. _send_thread e um pool DEDICADO
+    # (nao o default do asyncio, que a decoracao — git_summary/capture_pane — pode ocupar). Assim um
+    # git status pendurado + refine (60s, pool do anyio) + check (600s, thread propria) nao seguram
+    # o POST /input. Ver _send_thread.
+    if not await _send_thread(_session_exists, name):
         raise HTTPException(404, "sessão não encontrada — recado NÃO enfileirado")
     if _provider_of(name) == "codex":
         res = await _send_one_codex(name, body.text)
     else:
-        res = await asyncio.to_thread(_send_one, name, body.text)
+        res = await _send_thread(_send_one, name, body.text)
     if not res["ok"]:
         raise HTTPException(400, res["error"])
     # delivered: True = digitou agora na TUI; False = na fila durável (entrega no próximo idle).

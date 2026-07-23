@@ -1258,3 +1258,31 @@ def test_ask_history_409_when_automations_off(api_client):
 def test_ask_history_422_when_question_too_long(api_client):
     r = api_client.post("/api/ask-history", json={"question": "x" * 501}, headers=_h())
     assert r.status_code == 422
+
+
+# --- Nucleo sagrado: caminho de envio isolado do executor default ------------
+def test_send_thread_isolated_from_saturated_default_executor():
+    # Criterio de aceite (jefferson): com o executor default saturado (simula decoracao/git pendurados),
+    # o caminho de envio (_send_thread, pool dedicado) roda MESMO ASSIM — nao disputa recurso com feature.
+    import asyncio as _aio
+    import threading as _th
+    from app import api as api_mod
+
+    async def _run():  # noqa
+        release = _th.Event()
+        # satura o executor DEFAULT com mais jobs bloqueados que os workers dele
+        blockers = [_aio.create_task(_aio.to_thread(release.wait)) for _ in range(64)]
+        await _aio.sleep(0.05)   # deixa os blockers ocuparem o pool default
+        done = {"ran": False}
+
+        def quick():
+            done["ran"] = True
+            return "ok"
+
+        # pool DEDICADO -> roda apesar do default saturado
+        r = await _aio.wait_for(api_mod._send_thread(quick), timeout=2.0)
+        assert r == "ok" and done["ran"]
+        release.set()
+        await _aio.gather(*blockers)
+
+    _aio.run(_run())
