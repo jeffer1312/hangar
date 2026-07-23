@@ -2,8 +2,8 @@
   import BottomSheet from './BottomSheet.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
   import { relativeTime, stateLabels, stateColors } from '../lib/format';
-  import { listServers, selectServer, serverColor } from '../lib/auth';
-  import { searchTranscriptsForServer, type SearchHit } from '../lib/api';
+  import { listServers, selectServer, serverColor, getActiveId } from '../lib/auth';
+  import { searchTranscriptsForServer, askHistoryForServer, type SearchHit } from '../lib/api';
   import type { SessionInfo, State } from '../lib/types';
 
   // Troca de sessao sem voltar pra home. Dois modos: "sessoes" (lista das outras sessoes vivas +
@@ -37,6 +37,29 @@
   let searching = $state(false);
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
+  // "Perguntar" (RAG lexical): claude -p no backend responde onde o assunto apareceu.
+  // v1 roda SO no servidor ativo (cross-server fica pra v2 — decisao anotada no contrato).
+  let asking = $state(false);
+  let askAnswer = $state<{ answer: string; hits: Hit[] } | null>(null);
+  let askErr = $state('');
+  async function askAI() {
+    const q = query.trim();
+    const srv = listServers().find((x) => x.id === getActiveId());
+    if (!q || !srv || asking) return;
+    asking = true; askErr = ''; askAnswer = null;
+    try {
+      const r = await askHistoryForServer(srv, q);
+      askAnswer = {
+        answer: r.answer,
+        hits: r.hits.map((h) => ({ ...h, serverId: srv.id, serverLabel: srv.label })),
+      };
+    } catch (e) {
+      askErr = e instanceof Error ? e.message.replace(/^\d+:\s*/, '') : 'falhou';
+    } finally {
+      asking = false;
+    }
+  }
+
   // Ao abrir: volta pro modo sessoes, limpa busca, foca o campo (o switcher e de teclado — Ctrl+K
   // abria com foco no body e digitar nao filtrava) e reseta o destaque.
   $effect(() => {
@@ -44,6 +67,7 @@
       mode = searchOnly ? 'search' : 'sessions';   // "Buscar conversas" abre direto na busca
       query = '';
       results = [];
+      askAnswer = null; askErr = ''; asking = false;
       activeIdx = 0;
       // espera o sheet montar/animar antes de focar
       requestAnimationFrame(() => searchEl?.focus());
@@ -61,6 +85,7 @@
     mode = m;
     query = '';
     results = [];
+    askAnswer = null; askErr = ''; asking = false;
     activeIdx = 0;
     requestAnimationFrame(() => searchEl?.focus());
   }
@@ -205,6 +230,31 @@
   />
 
   {#if mode === 'search'}
+    {#if query.trim()}
+      <!-- RAG lexical: pergunta em linguagem natural -> claude responde onde o assunto apareceu. -->
+      <button class="ask-btn" onclick={askAI} disabled={asking}>
+        {asking ? 'Perguntando…' : '✦ Perguntar: onde falei sobre isso?'}
+      </button>
+    {/if}
+    {#if askErr}<p class="ask-err" role="alert">{askErr}</p>{/if}
+    {#if askAnswer}
+      <div class="ask-card">
+        <p class="ask-answer">{askAnswer.answer}</p>
+        {#each askAnswer.hits as h (h.project + '/' + h.session_id + '/' + h.line)}
+          <button class="row row--hit" onclick={() => tapHit(h)}>
+            <span class="row-main">
+              <span class="hit-snippet">{h.line}</span>
+              <span class="hit-meta">
+                <span class="hit-folder">{folderShort(h)}</span>
+                <span class="sep">·</span>
+                <span class:live={h.live}>{h.live ? 'ativa' : 'arquivo'}</span>
+              </span>
+            </span>
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
     <div class="list">
       {#if !query.trim()}
         <p class="empty">Digite para buscar em todas as conversas.</p>
@@ -511,6 +561,25 @@
 
   .row-name--new {
     color: var(--accent);
+  }
+
+  /* "Perguntar" (RAG lexical): botao discreto sob o campo + card de resposta acima dos hits. */
+  .ask-btn {
+    width: 100%; min-height: 38px; margin-top: var(--space-2);
+    border: 1px dashed var(--border-default); border-radius: var(--radius-md);
+    color: var(--accent); font-size: var(--text-sm); font-weight: 500;
+    background: transparent;
+  }
+  .ask-btn:active:not(:disabled) { background: var(--accent-dim); }
+  .ask-btn:disabled { opacity: 0.6; }
+  .ask-err { margin: var(--space-2) 0 0; color: var(--error); font-size: var(--text-sm); }
+  .ask-card {
+    margin-top: var(--space-3); padding: var(--space-3);
+    background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+  }
+  .ask-answer {
+    margin: 0 0 var(--space-2); color: var(--text-primary);
+    font-size: var(--text-sm); line-height: 1.5; white-space: pre-wrap;
   }
 
   .empty {
