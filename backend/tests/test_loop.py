@@ -56,3 +56,21 @@ def test_branch_of(tmp_path):
     (git / "HEAD").write_text("abc123def\n", encoding="utf-8")  # detached
     assert branch_of(str(tmp_path)) is None
     assert branch_of(str(tmp_path / "nao-existe")) is None
+
+
+from app.transcript import last_assistant_text
+
+
+def test_last_assistant_text(tmp_path):
+    j = tmp_path / "t.jsonl"
+    lines = [
+        {"type": "user", "message": {"role": "user", "content": "oi"}},
+        {"type": "assistant", "message": {"role": "assistant",
+            "content": [{"type": "text", "text": "primeira"}]}},
+        {"type": "assistant", "message": {"role": "assistant",
+            "content": [{"type": "text", "text": "trabalho feito. LOOP_DONE"}]}},
+    ]
+    j.write_text("\n".join(json.dumps(x) for x in lines), encoding="utf-8")
+    out = last_assistant_text(str(j))
+    assert out is not None and "LOOP_DONE" in out
+    assert last_assistant_text(str(tmp_path / "nada.jsonl")) is None
