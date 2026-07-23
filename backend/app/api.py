@@ -612,6 +612,11 @@ class LoopResolve(_StrictBody):
     accept: bool
 
 
+class LoopRefine(_StrictBody):
+    goal: str = Field(min_length=1, max_length=2000)
+    check_cmd: str | None = None
+
+
 def _loop_ctx(name: str) -> "loop_mod.TickCtx | None":
     """Monta o TickCtx real da sessao CORRENTE (nome -> jsonl/cwd via registry, sobrevive /clear).
     deliver = enfileira delivered=False + drain (caminho unico de entrega; a entrada e duravel, entao
@@ -685,6 +690,16 @@ def loop_stop(name: str):
             raise HTTPException(404, "nenhum loop nesta sessão")
         d = loop_mod._end(link, name, "stopped", "parado pelo usuário", push.notify_loop)
     return {"loop": d}
+
+
+@app.post("/api/sessions/{name}/loop/refine", dependencies=[Depends(require_auth)])
+def loop_refine(name: str, body: LoopRefine):
+    """Refina o objetivo do loop via claude -p efemero (haiku). Stateless — nao toca a sessao nem o
+    sidecar; o {name} da rota so mantem a familia de URLs consistente. Falha do CLI -> 502."""
+    try:
+        return {"goal": loop_mod.refine_goal(body.goal, body.check_cmd)}
+    except loop_mod.RefineError as e:
+        raise HTTPException(502, str(e))
 
 
 @app.post("/api/sessions/{name}/loop/resolve", dependencies=[Depends(require_auth)])

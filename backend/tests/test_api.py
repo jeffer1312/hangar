@@ -1116,3 +1116,53 @@ def test_loop_resolve_reject_reprompts(api_client, loop_dir):
     assert r.status_code == 200
     out = r.json()["loop"]
     assert out["status"] == "running" and out["iter"] == 1
+
+
+# --- Loop goal refiner (claude -p efemero) -----------------------------------
+import subprocess as _subprocess
+
+
+def _completed(returncode=0, stdout="", stderr=""):
+    return _subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+def test_loop_refine_ok(api_client):
+    with patch("app.loop.subprocess.run",
+               return_value=_completed(0, stdout="Migre date.ts pra date-fns e mostre o check verde")) as run:
+        r = api_client.post("/api/sessions/cc/loop/refine",
+                            json={"goal": "arruma as datas", "check_cmd": "npm run check"}, headers=_h())
+    assert r.status_code == 200
+    assert "date-fns" in r.json()["goal"]
+    # argv sem shell, modelo haiku
+    args = run.call_args[0][0]
+    assert args[:4] == ["claude", "-p", "--model", "haiku"]
+
+
+def test_loop_refine_timeout_502(api_client):
+    with patch("app.loop.subprocess.run",
+               side_effect=_subprocess.TimeoutExpired(cmd="claude", timeout=60)):
+        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x"}, headers=_h())
+    assert r.status_code == 502
+
+
+def test_loop_refine_enoent_502(api_client):
+    with patch("app.loop.subprocess.run", side_effect=FileNotFoundError("claude")):
+        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x"}, headers=_h())
+    assert r.status_code == 502
+
+
+def test_loop_refine_nonzero_exit_502(api_client):
+    with patch("app.loop.subprocess.run", return_value=_completed(1, stderr="boom")):
+        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x"}, headers=_h())
+    assert r.status_code == 502
+
+
+def test_loop_refine_empty_output_502(api_client):
+    with patch("app.loop.subprocess.run", return_value=_completed(0, stdout="   ")):
+        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x"}, headers=_h())
+    assert r.status_code == 502
+
+
+def test_loop_refine_422_when_goal_too_long(api_client):
+    r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x" * 2001}, headers=_h())
+    assert r.status_code == 422
