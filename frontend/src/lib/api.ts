@@ -801,9 +801,9 @@ export async function createLoopForServer(s: Server, name: string, body: { goal:
 
 // Para um loop em execucao (muda status para 'stopped').
 export async function stopLoopForServer(s: Server, name: string): Promise<{ loop: LoopState }> {
-  const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/loop/stop`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
+  const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/loop`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${s.token}` },
   });
   if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
   return res.json() as Promise<{ loop: LoopState }>;
