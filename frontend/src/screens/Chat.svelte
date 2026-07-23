@@ -156,8 +156,12 @@
   // feature #4). Carregada no mount nos dois; no mobile reconsulta a cada 5s pra o contador da
   // pilula refletir sessoes que entram/saem de awaiting_input enquanto o usuario fica parado aqui
   // (esta tela nao tem SSE agregado de sessoes — reusa o mesmo REST de sempre, so com poll).
+  let navInFlight = false;   // socket pendurado empilhava 1 fetch por tick de 5s ate esgotar o host
   async function loadSessionsForNav() {
+    if (navInFlight) return;
+    navInFlight = true;
     try { allSessions = await getSessions(); } catch { /* sem lista -> setas/pilula viram no-op */ }
+    finally { navInFlight = false; }
   }
   onMount(() => {
     loadSessionsForNav();
@@ -317,8 +321,22 @@
     clearTimeout(watchdog);
     watchdog = setTimeout(() => connectSSE(), 25000);
   }
+  // Qualquer evento recebido = conexao viva: rearma o watchdog E zera o backoff do onerror.
+  function noteAlive() {
+    sseRetryDelay = SSE_RETRY_MIN;
+    armWatchdog();
+  }
+  // Backoff do reconnect por erro (3s -> 30s). Auditoria: sem isto, com a VPN caida, o retry
+  // nativo do EventSource + o setTimeout de 3s martelavam ~2 conexoes a cada 3s pra sempre.
+  const SSE_RETRY_MIN = 3000;
+  const SSE_RETRY_MAX = 30000;
+  let sseRetryDelay = SSE_RETRY_MIN;
+  // Componente vivo? connectSSE pos-destroy criava EventSource FANTASMA (watchdog proprio,
+  // reconectando pra sempre, nada nunca fecha) — 1 leak por ciclo background->foreground->navegar.
+  let alive = false;
 
   function connectSSE() {
+    if (!alive) return;
     clearTimeout(reconnectTimer);
     if (es) { es.close(); es = null; }
 
@@ -326,7 +344,7 @@
     armWatchdog();
 
     es.addEventListener('message', (e: MessageEvent) => {
-      armWatchdog();
+      noteAlive();
       try {
         const ev = JSON.parse(e.data) as ChatEvent;
         // Dedup cruzado fila<->transcript: a fila duravel emite user_msg sintetico (id "queued-").
@@ -393,14 +411,14 @@
     });
 
     es.addEventListener('state', (e: MessageEvent) => {
-      armWatchdog();
+      noteAlive();
       try {
         stateEvent = JSON.parse(e.data) as StateEvent;
       } catch {}
     });
 
     // Heartbeat do backend: so prova de vida (reseta o watchdog numa conexao ociosa, sem msgs).
-    es.addEventListener('ping', () => armWatchdog());
+    es.addEventListener('ping', () => noteAlive());
 
     // Stepper nativo AskUserQuestion: abre o sheet com as perguntas recebidas via SSE
     es.addEventListener('ask_question', (e: MessageEvent) => {
@@ -410,7 +428,7 @@
     // Preview ao vivo (best-effort) do bloco de assistente em voo. Full-replace; tambem e prova de
     // vida (mas NAO a unica — entre turnos nao ha preview, por isso o ping ancora o watchdog).
     es.addEventListener('preview', (e: MessageEvent) => {
-      armWatchdog();
+      noteAlive();
       try {
         const t = (JSON.parse(e.data) as { text?: string }).text ?? '';
         // Guard de monotonicidade: frame TRANSITORIO do pane (mid-redraw) as vezes chega como
@@ -424,7 +442,7 @@
     // Reset de sessao (ex: /clear): o backend trocou de transcript. O dedup-por-id NAO limparia as
     // bolhas antigas (ids diferentes) -> zera tudo e recarrega o history do jsonl novo (vem limpo).
     es.addEventListener('reset', () => {
-      armWatchdog();
+      noteAlive();
       events = [];
       idIndex.clear();
       reseedDerived();          // zera activity/asstCount junto (loadHistory re-semeia com o novo)
@@ -434,11 +452,14 @@
     });
 
     es.onerror = () => {
-      // Erro REAL (TCP RST): reconecta em 3s. Half-open nao cai aqui -> coberto pelo watchdog.
-      if (currentState !== 'dead') {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = setTimeout(connectSSE, 3000);
-      }
+      // Erro REAL (TCP RST). FECHA o es (senao o auto-retry nativo vira uma 2ª maquina de retry
+      // martelando em paralelo) e reagenda com backoff. Half-open nao cai aqui -> watchdog cobre.
+      es?.close(); es = null;
+      clearTimeout(watchdog);
+      if (currentState === 'dead' || !alive) return;
+      clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(connectSSE, sseRetryDelay);
+      sseRetryDelay = Math.min(sseRetryDelay * 2, SSE_RETRY_MAX);
     };
   }
 
@@ -448,24 +469,36 @@
   // tail do SSE so faz a ponte ate a subscricao (dedup por id, sem reordenar). Falha aqui NAO trava a
   // tela (o connectSSE/onerror re-sincroniza) -> ignora e segue. Reconexoes de blip (watchdog/onerror)
   // continuam SO com o tail-K: cobrem poucos segundos sem re-shippar o arquivo inteiro.
+  let visGen = 0;   // descarta getHistory velho: um resume novo (ou destroy) invalida o anterior
   async function onVisible() {
     if (document.visibilityState !== 'visible') return;
+    // Segura watchdog/retry DURANTE o re-seed: no wake do iOS o watchdog vencido disparava um
+    // connectSSE proprio e o onVisible outro logo atras — 2 reconexoes + replay em toda volta.
+    clearTimeout(watchdog);
+    clearTimeout(reconnectTimer);
+    sseRetryDelay = SSE_RETRY_MIN;   // rede provavelmente voltou: reconexao rapida de novo
+    const g = ++visGen;
     try {
       const fresh = await getHistory(sessionName);
+      if (g !== visGen || !alive) return;   // resposta velha/pos-destroy: NAO sobrescreve nem conecta
       events = fresh;
       rebuildIndex();
       reseedDerived();
     } catch { /* offline momentaneo: o connectSSE/onerror cuida do re-sync */ }
+    if (g !== visGen || !alive) return;
     connectSSE();
   }
 
   onMount(async () => {
+    alive = true;
     await loadHistory();
     connectSSE();
     document.addEventListener('visibilitychange', onVisible);
   });
 
   onDestroy(() => {
+    alive = false;   // connectSSE/onVisible em voo viram no-op — sem EventSource fantasma
+    visGen++;
     es?.close();
     clearTimeout(watchdog);
     clearTimeout(reconnectTimer);

@@ -91,7 +91,9 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function getSessions(): Promise<SessionInfo[]> {
-  return apiFetch<SessionInfo[]>('/api/sessions');
+  // Timeout curto: este alimenta polls (ex. nav do Chat a cada 5s) — socket pendurado (tailscale
+  // pra nó morto nao recusa) empilhava um fetch por tick até esgotar as 6 conexões do host.
+  return apiFetch<SessionInfo[]>('/api/sessions', { signal: AbortSignal.timeout(4000) });
 }
 
 // Lista sessões de UM servidor específico (baseUrl+token explícitos), sem mexer no ativo. A visão
@@ -315,7 +317,10 @@ export function openEditor(name: string): Promise<{ ok: boolean }> {
 }
 
 export function getHistory(name: string): Promise<ChatEvent[]> {
-  return apiFetch<ChatEvent[]>(`/api/sessions/${encodeURIComponent(name)}/history`);
+  // Teto largo (transcript grande em link lento existe), mas TETO: o resume do iOS chamava isto
+  // sem timeout e um socket pendurado deixava o fetch em voo por minutos, sobrescrevendo estado
+  // novo com foto velha quando enfim resolvia.
+  return apiFetch<ChatEvent[]>(`/api/sessions/${encodeURIComponent(name)}/history`, { signal: AbortSignal.timeout(45_000) });
 }
 
 export function getCommands(name: string): Promise<CommandInfo[]> {
@@ -508,6 +513,9 @@ export async function uploadFile(name: string, file: File): Promise<{ path: stri
       'X-Filename': encodeURIComponent(file.name || 'arquivo'),
     },
     body: file,
+    // Mesmo teto do uploadFileForServer (o fix de ontem cobriu só a variante do board; esta é a
+    // do chat principal — auditoria achou o composer preso em "enviando…" por aqui também).
+    signal: AbortSignal.timeout(180_000),
   });
   await ensureOk(res);
   return res.json() as Promise<{ path: string }>;
