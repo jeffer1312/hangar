@@ -1,8 +1,11 @@
+import logging
 import os
 import re
 import subprocess
 import time
 from pathlib import Path
+
+_log = logging.getLogger("claude_pocket.git_ops")
 
 # Git pela sessao (cwd da sessao tmux). Tudo via argv list -> nunca string de shell (sem injecao).
 # Acoes fixas: listar/trocar branch, status/pull/fetch/stash, e o write-path (commit/push) + navegacao
@@ -38,11 +41,11 @@ class GitError(Exception):
         self.detail = detail
 
 
-def _run(cwd: str, *args: str) -> subprocess.CompletedProcess:
+def _run(cwd: str, *args: str, timeout: float | None = None) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(
             ["git", "-C", cwd, *args],
-            capture_output=True, text=True, timeout=_TIMEOUT,
+            capture_output=True, text=True, timeout=timeout or _TIMEOUT,
             # LC_ALL=C: a saida do git aqui e LIDA POR CODIGO (ex: detectar "not a git
             # repository" pra esconder o menu de git em vez de reportar erro). Numa maquina com
             # catalogo NLS do git instalado, a mensagem sairia traduzida e a checagem quebraria
@@ -85,7 +88,11 @@ def _parse_status_branch(out: str) -> dict | None:
 # requests concorrentes podem bater no dict de threads distintas -> pior caso um fork redundante,
 # sem corrupção (benigno por idempotência, mesma classe do _status_cache de classe). Sem lock.
 _summary_cache: dict[str, tuple[float, dict | None]] = {}
-_SUMMARY_TTL = 3.0
+_SUMMARY_TTL = 3.0          # resultado bom: curto (dirty/ahead muda rapido)
+_SUMMARY_TTL_NEG = 30.0     # None (timeout/non-repo/erro): longo — nao re-forka o git lento a cada poll
+_SUMMARY_TIMEOUT = 2.0      # proprio (nao o _TIMEOUT global de 20s de push/log): um git status pendurado
+                            # num NFS/repo enorme custava 20s de tick re-pago a cada poll -> watchdog
+                            # de 25s dos clientes estourava em massa. 2s corta a cauda cedo.
 
 
 def git_summary(cwd: str | None) -> dict | None:
@@ -97,13 +104,17 @@ def git_summary(cwd: str | None) -> dict | None:
         return None
     now = time.monotonic()
     hit = _summary_cache.get(cwd)
-    if hit and now - hit[0] < _SUMMARY_TTL:
-        return hit[1]
+    if hit:
+        ttl = _SUMMARY_TTL if hit[1] is not None else _SUMMARY_TTL_NEG
+        if now - hit[0] < ttl:
+            return hit[1]
     try:
-        p = _run(cwd, "status", "--porcelain=v1", "--branch")
-    except GitError:
-        # timeout / git ausente: sem badge, nunca 500. Cacheia o None pra não re-forkar o lento
-        # a cada poll (o TTL segura a re-tentativa).
+        p = _run(cwd, "status", "--porcelain=v1", "--branch", timeout=_SUMMARY_TIMEOUT)
+    except GitError as e:
+        # timeout / git ausente: sem badge, nunca 500. Cacheia o None por MAIS tempo (_SUMMARY_TTL_NEG)
+        # pra não re-forkar o git lento a cada poll — a causa das rajadas que estouravam o watchdog.
+        # Falha APARECE (padrao da casa): loga o warning — o cache negativo de 30s evita spam.
+        _log.warning("git_summary falhou em %s: %s (badge omitido)", cwd, e.detail)
         result = None
     else:
         result = _parse_status_branch(p.stdout) if p.returncode == 0 else None

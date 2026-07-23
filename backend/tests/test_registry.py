@@ -367,10 +367,13 @@ async def test_list_with_state_scrapes_pane_for_awaiting_marker(tmp_path, monkey
         "  2. No\n"
         "Esc to cancel\n"
     )
+    import time as _time
     reg = SessionRegistry(projects_dir=tmp_path)
     info = SessionInfo(name="ask1", cwd="/p", jsonl="/x/abc.jsonl", tracked=True)
     monkeypatch.setattr(reg, "list", lambda: [info])
-    monkeypatch.setattr(registry.hook_state, "get_state", lambda sid: ("awaiting_input", 1.0))
+    # marcador FRESCO (ts=agora): ainda raspa o pane pra pegar a pergunta.
+    monkeypatch.setattr(registry.hook_state, "get_state",
+                        lambda sid: ("awaiting_input", _time.time()))
     monkeypatch.setattr(registry.tmux, "capture_pane", lambda name, lines=200: ASK_PANE)
 
     out = await reg.list_with_state()
@@ -378,6 +381,36 @@ async def test_list_with_state_scrapes_pane_for_awaiting_marker(tmp_path, monkey
     assert out[0].state == "awaiting_input"
     assert out[0].question == "Would you like to proceed?"
     assert out[0].options == ["Yes", "No"]
+
+
+async def test_list_with_state_stale_awaiting_marker_skips_pane(tmp_path, monkeypatch):
+    # Marcador awaiting_input VELHO (>120s): o hook do Claude manda Notification DEPOIS do Stop, entao
+    # sessoes ficavam presas em awaiting stale e forcavam capture_pane de TODAS a cada poll (a rajada
+    # de forks da instabilidade). Stale -> fast-path (sem raspar): state segue awaiting, question None.
+    import time as _time
+    from app.models import SessionInfo
+    reg = SessionRegistry(projects_dir=tmp_path)
+    info = SessionInfo(name="ask1", cwd="/p", jsonl="/x/abc.jsonl", tracked=True)
+    monkeypatch.setattr(reg, "list", lambda: [info])
+    monkeypatch.setattr(registry.hook_state, "get_state",
+                        lambda sid: ("awaiting_input", _time.time() - 200))  # 200s > 120s
+    # Primo o cache de statusline FRESCO pra o sweep throttled (proprio, TTL 20s) nao capturar aqui —
+    # isola o caminho de CLASSIFICACAO, que e a tempestade que o fast-path elimina.
+    import time as _t2
+    reg._status_cache["ask1"] = (_t2.monotonic(), None)
+    scraped = {"n": 0}
+
+    def _spy_capture(name, lines=200):
+        scraped["n"] += 1
+        return "❯ 1. Yes\nEsc to cancel\n"
+
+    monkeypatch.setattr(registry.tmux, "capture_pane", _spy_capture)
+
+    out = await reg.list_with_state()
+
+    assert out[0].state == "awaiting_input"      # marcador ainda vale pro estado
+    assert out[0].question is None               # nao raspou pra classificar -> sem pergunta
+    assert scraped["n"] == 0                      # NENHUM capture_pane no caminho classify (fast-path)
 
 
 def test_resolve_jsonl_returns_none_when_dir_empty(tmp_path):

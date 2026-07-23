@@ -66,6 +66,50 @@ def test_git_summary_timeout_vira_none(tmp_path, monkeypatch):
     assert git_ops.git_summary(str(tmp_path)) is None
 
 
+def test_git_summary_usa_timeout_proprio_2s(tmp_path, monkeypatch):
+    # git_summary passa timeout PROPRIO (2s), nao o _TIMEOUT global de 20s (push/log): um git status
+    # pendurado num NFS custava 20s de tick re-pago a cada poll = watchdog dos clientes estourando.
+    (tmp_path / ".git").mkdir()
+    from app import git_ops
+
+    seen = {}
+
+    def fake_run(cwd, *a, timeout=None, **k):
+        seen["timeout"] = timeout
+        return type("P", (), {"returncode": 0, "stdout": "## main...origin/main\n"})()
+
+    monkeypatch.setattr(git_ops, "_run", fake_run)
+    git_ops._summary_cache.clear()
+    git_ops.git_summary(str(tmp_path))
+    assert seen["timeout"] == git_ops._SUMMARY_TIMEOUT == 2.0
+
+
+def test_git_summary_cache_negativo_mais_longo(tmp_path, monkeypatch):
+    # None (timeout/erro) cacheado por _SUMMARY_TTL_NEG (30s), nao 3s: sem isto o git lento era
+    # re-forkado a cada poll (3s) = a rajada de forks que estourava o watchdog. Resultado bom segue 3s.
+    (tmp_path / ".git").mkdir()
+    from app import git_ops
+
+    clock = [1000.0]
+    monkeypatch.setattr(git_ops.time, "monotonic", lambda: clock[0])
+    calls = {"n": 0}
+
+    def boom(cwd, *a, timeout=None, **k):
+        calls["n"] += 1
+        raise git_ops.GitError(504, "git timeout")
+
+    monkeypatch.setattr(git_ops, "_run", boom)
+    git_ops._summary_cache.clear()
+
+    assert git_ops.git_summary(str(tmp_path)) is None
+    clock[0] = 1005.0                       # +5s: dentro do TTL negativo de 30s -> cache, sem re-fork
+    assert git_ops.git_summary(str(tmp_path)) is None
+    assert calls["n"] == 1
+    clock[0] = 1035.0                       # +35s: expirou -> re-tenta
+    assert git_ops.git_summary(str(tmp_path)) is None
+    assert calls["n"] == 2
+
+
 def test_sessioninfo_serializa_campos_git():
     from app.models import SessionInfo
     s = SessionInfo(name="x", git_dirty=3, git_ahead=2, git_behind=0)
