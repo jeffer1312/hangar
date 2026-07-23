@@ -212,6 +212,53 @@ def _run_check(cmd: str, cwd: str) -> tuple[int, str]:
     return (p.returncode, out[-_TAIL:])
 
 
+_REFINE_TIMEOUT = 60
+_REFINE_MAX = 2000
+
+_REFINE_SYSTEM = (
+    "Você reescreve OBJETIVOS pra um loop autônomo de código. Boas práticas:\n"
+    "- Objetivo é UMA coisa só e VERIFICÁVEL: descreve o RESULTADO final, não os passos.\n"
+    "- Pequeno e concreto (ex: \"migre utils/date.ts pra date-fns mantendo o check verde\"), "
+    "nunca amplo (\"refatore o projeto\").\n"
+    "- Peça EVIDÊNCIA, não promessa: inclua \"rode o comando de verificação e mostre a saída\".\n"
+    "- Deixe explícito: não editar arquivos de teste nem o comando de verificação; corrigir o código.\n"
+    "Responda SÓ com o objetivo reescrito em pt-BR, texto puro, sem preâmbulo, sem aspas, sem markdown."
+)
+
+
+class RefineError(Exception):
+    """claude -p indisponivel/timeout/exit≠0/vazio no refinador de objetivo."""
+
+
+def _refine_prompt(goal: str, check_cmd: str | None) -> str:
+    parts = [_REFINE_SYSTEM, "", "Objetivo do usuário:", goal]
+    if check_cmd:
+        parts += ["", f"Comando de verificação (check): {check_cmd}"]
+    return "\n".join(parts)
+
+
+def refine_goal(goal: str, check_cmd: str | None = None) -> str:
+    """Refina o objetivo via claude -p efemero (haiku), cwd neutro (nao o da sessao), argv sem shell,
+    timeout 60s. Levanta RefineError em qualquer falha (o endpoint mapeia pra 502)."""
+    import tempfile
+    prompt = _refine_prompt(goal, check_cmd)
+    try:
+        p = subprocess.run(
+            ["claude", "-p", "--model", "haiku", prompt],
+            cwd=tempfile.gettempdir(), capture_output=True, text=True, timeout=_REFINE_TIMEOUT,
+        )
+    except FileNotFoundError:
+        raise RefineError("claude CLI não encontrado")
+    except (subprocess.TimeoutExpired, OSError):
+        raise RefineError("refinamento excedeu o tempo ou falhou ao iniciar")
+    if p.returncode != 0:
+        raise RefineError(f"claude -p falhou (exit {p.returncode})")
+    out = (p.stdout or "").strip()
+    if not out:
+        raise RefineError("refinamento vazio")
+    return out[:_REFINE_MAX]
+
+
 def suggest_checks(cwd: str) -> list[str]:
     c = Path(cwd)
     out: list[str] = []
