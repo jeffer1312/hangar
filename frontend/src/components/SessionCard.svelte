@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { SessionInfo, State } from '../lib/types';
   import { stateLabels, stateColors } from '../lib/format';
-  import { loopBadge } from '../lib/loop';
+  import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import Lottie from './Lottie.svelte';
   import pensando from '../lib/lottie/pensando.json';
 
@@ -63,11 +63,6 @@
   // proprio "⏳ HH:MM" ao lado do state-chip — calmo, so avisa quando volta.
   const limited = $derived(session.limited === true);
 
-  // Badge do loop runner (Task 11): mesmo vocabulário do resto do card (awaiting = --warning,
-  // erro = --error, ok = accent, parado = muted).
-  const loopToneColor: Record<string, string> = {
-    ok: 'var(--accent)', warn: 'var(--error)', attention: 'var(--warning)', muted: 'var(--text-muted)',
-  };
   const loopChip = $derived(loopBadge(session.loop_status, session.loop_iter, session.loop_max));
 
   // ── Swipe-to-delete ────────────────────────────────────────────────────────
@@ -247,10 +242,10 @@
         >⏳{#if session.limit_reset}&nbsp;{session.limit_reset}{/if}</span>
       {/if}
       {#if loopChip}
-        <!-- Loop runner (Task 11): mesmo formato do paired-chip, cor por tone (loopToneColor). -->
+        <!-- Loop runner (Task 11): mesmo formato do paired-chip, cor por tone (LOOP_TONE_COLOR). -->
         <span
           class="paired-chip"
-          style="color: {loopToneColor[loopChip.tone]}; background: color-mix(in srgb, {loopToneColor[loopChip.tone]} 14%, transparent);"
+          style="color: {LOOP_TONE_COLOR[loopChip.tone]}; background: color-mix(in srgb, {LOOP_TONE_COLOR[loopChip.tone]} 14%, transparent);"
           title="Loop runner"
         >{loopChip.label}</span>
       {/if}

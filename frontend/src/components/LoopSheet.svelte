@@ -5,7 +5,7 @@
   import { listServers, getActiveId } from '../lib/auth';
   import type { Server } from '../lib/auth';
   import type { LoopState } from '../lib/types';
-  import { loopBadge } from '../lib/loop';
+  import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import { LOOP_GUIDE } from '../lib/loopGuide';
 
   interface Props {
@@ -31,10 +31,6 @@
     exhausted: 'esgotou iterações',
     failed: 'falhou',
   };
-  const TONE_COLOR: Record<string, string> = {
-    ok: 'var(--success)', warn: 'var(--warning)', attention: 'var(--warning)', muted: 'var(--text-muted)',
-  };
-
   let loop = $state<LoopState | null>(null);
   let suggestions = $state<string[]>([]);
   let loadErr = $state('');
@@ -215,7 +211,7 @@
       {/if}
     {:else if loop}
       <div class="loop-status-row">
-        <span class="loop-status-dot" style="background: {TONE_COLOR[loopBadge(loop.status)?.tone ?? 'muted']};"></span>
+        <span class="loop-status-dot" style="background: {LOOP_TONE_COLOR[loopBadge(loop.status)?.tone ?? 'muted']};"></span>
         <span class="loop-status-label">{STATUS_LABEL[loop.status] ?? loop.status}</span>
         <span class="loop-iter">{loop.iter}/{loop.max_iters}</span>
       </div>
