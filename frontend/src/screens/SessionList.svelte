@@ -543,10 +543,13 @@
       </div>
     {/if}
     {#if serverErrors.length > 0}
+      <!-- Uma linha-resumo (N chips só enchiam a tela do celular — pedido do usuário). -->
       <div class="server-warn" role="status">
-        {#each serverErrors as e (e.label)}
-          <span class="server-warn-item">⚠ {e.label} offline</span>
-        {/each}
+        <span class="server-warn-item">
+          ⚠ {serverErrors.length === 1
+            ? `${serverErrors[0].label} offline`
+            : `${serverErrors.length} servidores offline (${serverErrors.map((e) => e.label).join(', ')})`}
+        </span>
       </div>
     {/if}
     {#if loading && sessions.length === 0}

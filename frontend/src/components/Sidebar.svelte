@@ -572,6 +572,13 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   });
   const filterEmpty = $derived(filterText.trim() !== '' && filteredGroups.length === 0);
 
+  // Servidores offline SAEM da lista (pedido do usuário: 4 headers "offline" só enchiam) e viram
+  // UMA linha-resumo no fim, expansível — sumir total esconderia a queda e a chance de reconectar.
+  let showOffline = $state(false);
+  const onlineGroups = $derived(filteredGroups.filter((g) => !g.error));
+  const offlineGroups = $derived(filteredGroups.filter((g) => g.error));
+  const renderGroups = $derived(showOffline ? [...onlineGroups, ...offlineGroups] : onlineGroups);
+
   // Gerenciador git (GitSheet) aberto pelo botao git DA LINHA (repo da sessao, sem abrir o chat) —
   // mesma mecânica do menuGit (mira o server dono, restaura no fechar via closeGitSheet).
   function rowGit(name: string, serverId: string, e: MouseEvent) {
@@ -741,7 +748,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         <p class="filter-empty">Nenhuma sessão corresponde ao filtro.</p>
       {/if}
     {/if}
-    {#each filteredGroups as g (g.id)}
+    {#each renderGroups as g (g.id)}
       {@const awaiting = countAwaiting(g.sessions)}
       {#if expanded}
         <div class="grp-head-row">
@@ -936,6 +943,14 @@ import ConfirmDialog from './ConfirmDialog.svelte';
       {/each}
       {/if}
     {/each}
+    {#if expanded && offlineGroups.length > 0}
+      <!-- Resumo dos offline (uma linha em vez de N headers): expande pra ver/gerenciar. -->
+      <button class="grp-offline-sum" onclick={() => (showOffline = !showOffline)} aria-expanded={showOffline}>
+        <span class="grp-chevron" class:collapsed={!showOffline} aria-hidden="true">▾</span>
+        ⚠ {offlineGroups.length} servidor{offlineGroups.length === 1 ? '' : 'es'} offline
+        {#if !showOffline}<span class="grp-offline-names">({offlineGroups.map((g) => g.label).join(', ')})</span>{/if}
+      </button>
+    {/if}
   </nav>
 
   {#if expanded && selectMode}
@@ -1387,6 +1402,18 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     font-variant-numeric: tabular-nums;
   }
   .grp-off { color: var(--warning); font-weight: 600; text-transform: none; letter-spacing: 0; }
+  /* Linha-resumo dos servidores offline (colapsados fora da lista). */
+  .grp-offline-sum {
+    display: flex; align-items: center; gap: var(--space-2);
+    width: 100%; min-height: 34px; padding: 0 var(--space-2); margin-top: var(--space-2);
+    border-radius: var(--radius-md); font-size: var(--text-xs); font-weight: 600;
+    color: var(--warning); text-align: left;
+  }
+  .grp-offline-sum:hover { background: var(--bg-hover); }
+  .grp-offline-names {
+    color: var(--text-muted); font-weight: 500; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+  }
   .grp-broadcast {
     flex-shrink: 0; width: 24px; height: 24px; margin-right: var(--space-1);
     color: var(--text-muted); font-size: var(--text-xs); border-radius: var(--radius-sm);
