@@ -90,7 +90,7 @@
         {/if}
         {#if stateLabel}<span class="state-pill" style="color: {stateColor};">{stateLabel}</span>{/if}
         {#if loopLabel}
-          <button type="button" class="loop-chip" style="color: {loopColor};" onclick={(e) => { e.stopPropagation(); onLoopTap?.(); }} aria-label="Loop da sessão">{loopLabel}</button>
+          <button type="button" class="loop-chip" style="color: {loopColor};" onclick={(e) => { e.stopPropagation(); onLoopTap?.(); }} aria-label="Loop da sessão: {loopLabel}">{loopLabel}</button>
         {/if}
       </div>
     {:else if onTitleTap}
@@ -115,7 +115,7 @@
             role="button"
             tabindex="0"
             style="color: {loopColor};"
-            aria-label="Loop da sessão"
+            aria-label="Loop da sessão: {loopLabel}"
             onclick={(e) => { e.stopPropagation(); onLoopTap?.(); }}
             onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onLoopTap?.(); } }}
           >{loopLabel}</span>
