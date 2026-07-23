@@ -150,7 +150,8 @@ async def list_events(poll: float = 1.5, ping_every: int = 7):
         sig = json.dumps(
             [(i.name, i.cwd, i.state, i.tracked, i.jsonl, i.question, i.stalled, i.limited,
               i.limit_reset, i.then_target, _status_sig(getattr(i, "status_line", None)),
-              bool(getattr(i, "label", None)))
+              bool(getattr(i, "label", None)),
+              getattr(i, "loop_status", None), getattr(i, "loop_iter", None))
              for i in infos],
             ensure_ascii=False,
         )

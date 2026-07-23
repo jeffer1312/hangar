@@ -240,3 +240,27 @@ def test_notify_loop_no_subs_is_noop(tmp_path, monkeypatch):
     from app import push
     monkeypatch.setattr(push.settings, "projects_dir", tmp_path / "projects")
     push.notify_loop("sessao-x", "loop terminou: check passou")  # nao deve levantar
+
+
+def test_decorate_loop(tmp_path, monkeypatch):
+    _mk("sessao-a", tmp_path, monkeypatch, iter=3)
+    from app.registry import _decorate_loop
+
+    class Info:  # objeto minimo com os atributos usados
+        name = "sessao-a"; loop_status = None; loop_iter = None; loop_max = None
+
+    i = Info()
+    _decorate_loop(i)
+    assert i.loop_status == "running" and i.loop_iter == 3 and i.loop_max == 10
+
+
+def test_decorate_loop_no_sidecar(tmp_path, monkeypatch):
+    _patch_dir(tmp_path, monkeypatch)
+    from app.registry import _decorate_loop
+
+    class Info:
+        name = "sem-loop"; loop_status = None; loop_iter = None; loop_max = None
+
+    i = Info()
+    _decorate_loop(i)
+    assert i.loop_status is None and i.loop_iter is None
