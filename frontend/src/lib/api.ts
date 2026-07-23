@@ -422,6 +422,22 @@ export interface SearchHit {
 
 // Busca em UM servidor (baseUrl+token explicitos), sem mexer no ativo — a UI faz fan-out por servidor
 // (mesmo padrao de fetchSessionsForServer) e junta os resultados. Timeout 4s: server morto falha rapido.
+// RAG lexical "onde falei sobre X": o backend busca trechos (rg) e um claude -p efemero responde
+// apontando as sessoes. Timeout largo (90s): busca + chamada de modelo.
+export async function askHistoryForServer(
+  s: Server,
+  question: string,
+): Promise<{ answer: string; hits: SearchHit[] }> {
+  const res = await fetch(`${s.baseUrl}/api/ask-history`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
+    body: JSON.stringify({ question }),
+    signal: AbortSignal.timeout(90000),
+  });
+  if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
+  return res.json();
+}
+
 export async function searchTranscriptsForServer(s: Server, q: string): Promise<SearchHit[]> {
   const res = await fetch(`${s.baseUrl}/api/search?q=${encodeURIComponent(q)}`, {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
