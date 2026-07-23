@@ -38,6 +38,8 @@ export function loopBadge(
   if (!status) return null;
   const tone = TONE_BY_STATUS[status];
   if (!tone) return null;
-  const label = iter != null && max != null ? `🔁 ${iter}/${max}` : '🔁';
+  // ↻ tipografico (nao emoji): monocromatico, herda a cor do tone — o 🔁 virava o emoji azul
+  // brilhante do iOS e brigava com o resto da UI (feedback real de celular).
+  const label = iter != null && max != null ? `↻ ${iter}/${max}` : '↻';
   return { label, tone };
 }

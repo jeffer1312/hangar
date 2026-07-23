@@ -286,7 +286,14 @@
           onclick={(e) => { e.stopPropagation(); onLoop?.(); }}
           aria-label="Loop de {session.name}"
           title="Loop runner"
-        >🔁</button>
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="m17 2 4 4-4 4"/>
+            <path d="M3 11v-1a4 4 0 0 1 4-4h14"/>
+            <path d="m7 22-4-4 4-4"/>
+            <path d="M21 13v1a4 4 0 0 1-4 4H3"/>
+          </svg>
+        </button>
       {/if}
       <!-- Caminho de exclusao por TECLADO/leitor de tela: o swipe-to-delete e pointer-only e deixava
            o usuario de teclado/SR sem como excluir no mobile. Escondido visualmente (mouse/touch usam
