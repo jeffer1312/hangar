@@ -221,6 +221,28 @@
           <span class="branch" title="branch git atual">⎇ {session.branch}</span>
         </span>
       {/if}
+      {#if session.pair_peers?.length || limited || loopChip}
+        <!-- Chips informativos (🤝 grupo, ⏳ rate-limit, 🔁 loop) moram AQUI, no fluxo da coluna de
+             texto — na row-right eles esmagavam o nome e o cwd vazava por baixo (visto no iPhone). -->
+        <span class="badges-line">
+          {#if session.pair_peers?.length}
+            <span class="paired-chip" title={`Grupo com ${session.pair_peers.join(', ')}`}>🤝&nbsp;{session.pair_peers.length === 1 ? session.pair_peers[0] : session.pair_peers.length + 1}</span>
+          {/if}
+          {#if limited}
+            <span
+              class="limited-chip"
+              title={session.limit_reset ? `Limite de uso atingido — volta ${session.limit_reset}` : 'Limite de uso atingido'}
+            >⏳{#if session.limit_reset}&nbsp;{session.limit_reset}{/if}</span>
+          {/if}
+          {#if loopChip}
+            <span
+              class="paired-chip"
+              style="color: {LOOP_TONE_COLOR[loopChip.tone]}; background: color-mix(in srgb, {LOOP_TONE_COLOR[loopChip.tone]} 14%, transparent);"
+              title="Loop runner"
+            >{loopChip.label}</span>
+          {/if}
+        </span>
+      {/if}
       {#if untracked}
         <button
           class="resume-btn"
@@ -231,24 +253,6 @@
     </div>
 
     <div class="row-right">
-      {#if session.pair_peers?.length}
-        <!-- Grupo de trabalho: paridade com o chain-chip da Sidebar (1 par = nome; N = contagem). -->
-        <span class="paired-chip" title={`Grupo com ${session.pair_peers.join(', ')}`}>🤝&nbsp;{session.pair_peers.length === 1 ? session.pair_peers[0] : session.pair_peers.length + 1}</span>
-      {/if}
-      {#if limited}
-        <span
-          class="limited-chip"
-          title={session.limit_reset ? `Limite de uso atingido — volta ${session.limit_reset}` : 'Limite de uso atingido'}
-        >⏳{#if session.limit_reset}&nbsp;{session.limit_reset}{/if}</span>
-      {/if}
-      {#if loopChip}
-        <!-- Loop runner (Task 11): mesmo formato do paired-chip, cor por tone (LOOP_TONE_COLOR). -->
-        <span
-          class="paired-chip"
-          style="color: {LOOP_TONE_COLOR[loopChip.tone]}; background: color-mix(in srgb, {LOOP_TONE_COLOR[loopChip.tone]} 14%, transparent);"
-          title="Loop runner"
-        >{loopChip.label}</span>
-      {/if}
       <span
         class="state-chip"
         class:stalled
@@ -275,9 +279,7 @@
             <path d="M18 9a9 9 0 0 1-9 9"/>
           </svg>
         </button>
-      {/if}
-      <!-- Loop runner da sessao: mesma mecânica do git-btn (stopPropagation, so quando ha cwd). -->
-      {#if session.cwd}
+        <!-- Loop runner da sessao: mesma mecânica do git-btn. -->
         <button
           class="git-btn"
           onpointerdown={(e) => e.stopPropagation()}
@@ -459,6 +461,15 @@
     min-width: 0;
     font-size: var(--text-xs);
   }
+  /* Chips informativos no fluxo da coluna de texto (nao na row-right). */
+  .badges-line {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+    min-width: 0;
+    margin-top: 2px;
+  }
   /* Subtítulo de estado vivo: a pergunta (awaiting) ou o texto do spinner (working), truncado —
      deixa a linha acionável sem abrir a sessão (feature #1). */
   .status-sub {
@@ -493,7 +504,13 @@
     color: var(--text-muted);
   }
   .cwd-base {
-    flex: 0 0 auto;
+    /* encolhe COM ellipsis: "flex: 0 0 auto" nunca encolhia e o basename vazava por baixo
+       da row-right (overlap visto no iPhone). O prefixo continua encolhendo primeiro. */
+    flex: 0 1 auto;
+    min-width: 3ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     white-space: nowrap;
     color: var(--text-secondary);
   }
