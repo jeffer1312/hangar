@@ -32,8 +32,10 @@ from app.transcribe import transcribe, TranscribeError
 from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base, settings, automations_enabled
 from app.costs import report as costs_report
 from app.git_ops import (
-    list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit, push as push_branch, GitError,
+    list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit, push as push_branch, GitError, branch_of,
 )
+from app import loop as loop_mod
+from app.transcript import last_assistant_text
 from app import tunnel
 from app import runner
 from app import projects
@@ -333,6 +335,21 @@ def _on_hook_transition(session_id: str, state: str) -> None:
             _notify_async(session_id, push.notify_dead)
 
     if state == "awaiting_input":
+        # Loop runner: awaiting cobre pedido de permissao tb -> pausa o loop (retoma no idle seguinte).
+        # Thread propria (registry.list toca tmux); sem push proprio (o _on_awaiting ja empurra).
+        def _pause_loop() -> None:
+            try:
+                info = next((s for s in registry.list()
+                             if s.jsonl and Path(s.jsonl).stem == session_id), None)
+                if info:
+                    with loop_mod._lock:
+                        link = loop_mod.LoopLink(info.name)
+                        d = link.get()
+                        if d and d["status"] == "running":
+                            link.update(status="paused_awaiting")
+            except Exception:
+                pass
+        threading.Thread(target=_pause_loop, daemon=True).start()
         return
     def _work() -> None:
         try:
@@ -345,9 +362,16 @@ def _on_hook_transition(session_id: str, state: str) -> None:
                 if sent or state == "idle":
                     threading.Timer(_CONFIRM_GRACE + 0.5, _confirm_and_drain,
                                     args=(info.name,)).start()
-                # Encadeamento (feature #12): mesmo "state == idle" acima (turno REALMENTE terminado),
+                # Loop runner: no idle, se ha loop ativo e o drain NAO acabou de digitar algo
+                # (sent == 0 -> este idle e fim de turno de trabalho, nao o eco do goal/re-prompt),
+                # tica o loop. Loop ativo SUPRIME o chain (senao cada idle entre iteracoes dispararia).
+                loop_d = loop_mod.LoopLink(info.name).get()
+                loop_active = loop_d is not None and loop_d["status"] in loop_mod.ACTIVE
+                if state == "idle" and loop_active and sent == 0:
+                    loop_mod.schedule_tick(info.name, lambda: _loop_ctx(info.name))
+                # Encadeamento (feature #12): so quando NAO ha loop ativo — turno REALMENTE terminado,
                 # reusando o info.name ja resolvido nesta thread — ver _maybe_chain.
-                if state == "idle":
+                if state == "idle" and not loop_active:
                     _maybe_chain(info.name)
         except Exception:
             pass
@@ -550,6 +574,120 @@ def set_then_link(name: str, body: ThenLinkBody):
 def clear_then_link(name: str):
     ThenLink(name).clear()
     return {"ok": True}
+
+
+# --- Loop runner (harness bloco A) -------------------------------------------
+
+class LoopCreate(_StrictBody):
+    goal: str = Field(min_length=1)
+    check_cmd: str | None = None
+    max_iters: int = 10
+    require_branch: bool = True
+
+
+class LoopResolve(_StrictBody):
+    accept: bool
+
+
+def _loop_ctx(name: str) -> "loop_mod.TickCtx | None":
+    """Monta o TickCtx real da sessao CORRENTE (nome -> jsonl/cwd via registry, sobrevive /clear).
+    deliver = enfileira delivered=False + drain (caminho unico de entrega; a entrada e duravel, entao
+    o drain server-side reentrega depois) -> retorna True sempre; enqueue nunca dispara o fallback do
+    run_tick (senao duplicaria a entrada). Sessao sumida -> loop failed + notify, return None."""
+    info = next((i for i in registry.list() if i.name == name), None)
+    if info is None or not info.jsonl:
+        loop_mod.LoopLink(name).update(status="failed", ended_ts=time.time(),
+                                       ended_reason="sessão morta")
+        push.notify_loop(name, "loop falhou: sessão morta")
+        return None
+    jsonl = info.jsonl
+
+    def deliver(prompt: str) -> bool:
+        PromptQueue(name).append(prompt, delivered=False)
+        drain(name, jsonl)
+        return True
+
+    return loop_mod.TickCtx(
+        cwd=info.cwd or "",
+        jsonl=jsonl,
+        deliver=deliver,
+        enqueue=lambda p: PromptQueue(name).append(p, delivered=False),
+        notify=push.notify_loop,
+        automations=automations_enabled,
+        branch=branch_of,
+        last_assistant=last_assistant_text,
+        run_check=loop_mod._run_check,
+        entry_delivered=lambda eid: PromptQueue(name).entry_delivered(eid),
+    )
+
+
+@app.post("/api/sessions/{name}/loop", dependencies=[Depends(require_auth)])
+def loop_create(name: str, body: LoopCreate):
+    info = next((i for i in registry.list() if i.name == name), None)
+    if info is None:
+        raise HTTPException(404, "sessão não encontrada")
+    if not automations_enabled():
+        raise HTTPException(409, "automações desligadas (kill-switch)")
+    with loop_mod._lock:
+        link = loop_mod.LoopLink(name)
+        cur = link.get()
+        if cur and cur["status"] in loop_mod.ACTIVE:
+            raise HTTPException(409, "já existe um loop ativo nesta sessão")
+        br = branch_of(info.cwd) if info.cwd else None
+        if body.require_branch and br in ("main", "master"):
+            raise HTTPException(409, f"sessão está na branch {br} — crie uma branch ou desligue 'exigir branch'")
+        d = loop_mod.new_loop(body.goal, body.check_cmd, body.max_iters, body.require_branch)
+        entry = PromptQueue(name).append(body.goal, delivered=False)
+        d["goal_entry_id"] = entry["id"]
+        link.set(d)
+    if info.jsonl:
+        drain(name, info.jsonl)   # entrega ja se a sessao estiver entregavel; senao o drain server-side entrega depois
+    return {"loop": link.get()}
+
+
+@app.get("/api/sessions/{name}/loop", dependencies=[Depends(require_auth)])
+def loop_get(name: str):
+    info = next((i for i in registry.list() if i.name == name), None)
+    suggestions = loop_mod.suggest_checks(info.cwd) if info and info.cwd else []
+    return {"loop": loop_mod.LoopLink(name).get(), "suggestions": suggestions}
+
+
+@app.delete("/api/sessions/{name}/loop", dependencies=[Depends(require_auth)])
+def loop_stop(name: str):
+    with loop_mod._lock:
+        link = loop_mod.LoopLink(name)
+        if link.get() is None:
+            raise HTTPException(404, "nenhum loop nesta sessão")
+        d = link.update(status="stopped", ended_ts=time.time(), ended_reason="parado pelo usuário")
+    push.notify_loop(name, "loop parado: parado pelo usuário")
+    return {"loop": d}
+
+
+@app.post("/api/sessions/{name}/loop/resolve", dependencies=[Depends(require_auth)])
+def loop_resolve(name: str, body: LoopResolve):
+    with loop_mod._lock:
+        link = loop_mod.LoopLink(name)
+        cur = link.get()
+        if cur is None or cur["status"] != "done_claimed":
+            raise HTTPException(409, "loop não está aguardando confirmação")
+        if body.accept:
+            d = link.update(status="done", ended_ts=time.time(), ended_reason="confirmado pronto")
+            push.notify_loop(name, "loop concluído: confirmado pronto")
+            return {"loop": d}
+        # reject: conta iteracao e re-prompta (reusa o MESMO helper do run_tick)
+        cur["status"] = "running"
+        link.set(cur)
+        if cur["iter"] + 1 > cur["max_iters"]:
+            d = link.update(status="exhausted", ended_ts=time.time(),
+                            ended_reason=f"esgotou {cur['max_iters']} iterações")
+            push.notify_loop(name, f"loop esgotou as iterações: {d['ended_reason']}")
+            return {"loop": d}
+        ctx = _loop_ctx(name)
+        if ctx is None:
+            return {"loop": link.get()}
+        loop_mod._reprompt(link, cur, "conclusão rejeitada pelo usuário", None,
+                           ctx.deliver, ctx.enqueue)
+    return {"loop": link.get()}
 
 
 class ResumeBody(_StrictBody):
