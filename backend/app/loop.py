@@ -218,10 +218,13 @@ def suggest_checks(cwd: str) -> list[str]:
                     out.append(f"npm run {s}")
         if (c / "pyproject.toml").is_file() or (c / "pytest.ini").is_file():
             out.append("uv run pytest -x -q")
+        # Comando UNICO: _run_check faz shlex.split sem shell -> '&&' viraria argv literal e o check
+        # nunca passaria (a estagnacao mataria o loop com motivo confuso). 'cargo test'/'go test'
+        # ja compilam antes de rodar, entao cobrem o build.
         if (c / "Cargo.toml").is_file():
-            out.append("cargo check && cargo test")
+            out.append("cargo test")
         if (c / "go.mod").is_file():
-            out.append("go build ./... && go test ./...")
+            out.append("go test ./...")
     except (OSError, json.JSONDecodeError, ValueError):
         pass
     return out[:4]
