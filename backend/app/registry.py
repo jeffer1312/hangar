@@ -27,11 +27,10 @@ _UNSET = object()
 
 _log = logging.getLogger("claude_pocket.registry")
 
-# Marcador awaiting_input mais velho que isto perde a exclusividade da raspagem de pane: o hook do
-# Claude Code manda Notification DEPOIS do Stop, entao sessoes ficavam presas em awaiting_input stale
-# e forcavam capture_pane de TODAS a cada poll × conexao (tempestade de forks -> watchdog do front
-# estourando). Awaiting stale vira elegivel ao fast-path de marcador (como working/idle).
-_AWAITING_STALE_S = 120.0
+# Idade minima de um marcador awaiting_input pra que um pane raspado SEM menu o rebaixe pra idle
+# (hook_state.demote_awaiting). O grace cobre a janela Notification->menu renderizado: raspar nesse
+# vao nao pode matar um awaiting real que ainda nem apareceu na tela.
+_AWAITING_DEMOTE_GRACE_S = 10.0
 
 
 def _decorate_loop(info) -> None:
@@ -588,15 +587,13 @@ class SessionRegistry:
             # a cada poll so faz sentido depois que _LIMIT_RE (app/state.py) for calibrado contra o banner
             # REAL — hoje e um chute nao-calibrado, entao a deteccao nao funcionaria de verdade mesmo com
             # a plumbing pronta. Calibrar _LIMIT_RE primeiro; so entao vale mover a deteccao pro watchdog.
-            # awaiting_input FRESCO ainda raspa o pane (o marcador nao carrega question/options).
-            # STALE (>120s) cai no fast-path: hook manda Notification depois do Stop -> awaiting preso
-            # forcava capture_pane de todas a cada poll (a tempestade de forks da instabilidade).
-            # LIMITACAO CONHECIDA: no fast-path stale, question/options ficam None na LISTA (o marcador
-            # nao os carrega) — a linha mostra "awaiting" sem a pergunta apos 120s. O CHAT ABERTO segue
-            # raspando o pane (StateMonitor) e mostra a pergunta ao vivo; so a lista perde o detalhe.
-            awaiting_fresh = (marker and marker[0] == "awaiting_input"
-                              and (time.time() - marker[1]) <= _AWAITING_STALE_S)
-            if marker and not awaiting_fresh:
+            # awaiting_input SEMPRE raspa o pane (o marcador nao carrega question/options). O que
+            # segurava a tempestade de capture_pane era marcador awaiting PRESO — a Notification de
+            # "idle 60s" do Claude Code chega DEPOIS do Stop e nada corrigia, entao a sessao parada
+            # raspava a cada poll (e, com o fast-path stale antigo, mostrava "aguardando" falso pra
+            # sempre). Corrigido na RAIZ: pane raspado sem menu REBAIXA o marcador pra idle
+            # (demote_awaiting, abaixo) -> proximo poll cai no fast-path de marcador como idle.
+            if marker and marker[0] != "awaiting_input":
                 info.state = marker[0]
                 info.last_activity = _jsonl_mtime(info.jsonl)
                 if marker[0] != "working":
@@ -624,6 +621,14 @@ class SessionRegistry:
                 info.question = c[2]
                 info.options = c[3]
                 info.last_activity = _jsonl_mtime(info.jsonl)
+                # Pane (verdade) contradisse marcador awaiting (Notification de idle-60s, nao menu):
+                # rebaixa pra idle no hook_state (mapa+sidecar) — mata o "aguardando" fantasma e
+                # devolve a sessao ao fast-path (anti-tempestade). Grace: ver _AWAITING_DEMOTE_GRACE_S.
+                sid = _sid(info.jsonl)
+                m = hook_state.get_state(sid)
+                if (m and m[0] == "awaiting_input" and c[0] != "awaiting_input"
+                        and time.time() - m[1] > _AWAITING_DEMOTE_GRACE_S):
+                    hook_state.demote_awaiting(sid)
                 # Rate-limit radar (feature #8): so pane-derivado, entao so nas infos raspadas aqui
                 # (marker path fica com o default False/None, igual a label/question/options).
                 info.limit_reset = rate_limit_reset(frame)
