@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { SessionInfo, State } from '../lib/types';
   import { stateLabels, stateColors } from '../lib/format';
+  import { loopBadge } from '../lib/loop';
   import Lottie from './Lottie.svelte';
   import pensando from '../lib/lottie/pensando.json';
 
@@ -12,6 +13,7 @@
     onResume?: () => void;
     onRename?: (newName: string) => void;
     onGit?: () => void;
+    onLoop?: () => void;
     // Modo seleção do broadcast (feature #9): row vira checkbox (toque alterna); swipe/rename ficam
     // fora enquanto seleciona, pra não competir com o toque de marcar.
     selectMode?: boolean;
@@ -19,7 +21,7 @@
     onToggleSelect?: () => void;
   }
   let {
-    session, serverBadge = null, onClick, onDelete, onResume, onRename, onGit,
+    session, serverBadge = null, onClick, onDelete, onResume, onRename, onGit, onLoop,
     selectMode = false, selected = false, onToggleSelect,
   }: Props = $props();
 
@@ -60,6 +62,13 @@
   // Rate-limit radar (feature #8): banner de limite de uso detectado no pane (best-effort). Chip
   // proprio "⏳ HH:MM" ao lado do state-chip — calmo, so avisa quando volta.
   const limited = $derived(session.limited === true);
+
+  // Badge do loop runner (Task 11): mesmo vocabulário do resto do card (awaiting = --warning,
+  // erro = --error, ok = accent, parado = muted).
+  const loopToneColor: Record<string, string> = {
+    ok: 'var(--accent)', warn: 'var(--error)', attention: 'var(--warning)', muted: 'var(--text-muted)',
+  };
+  const loopChip = $derived(loopBadge(session.loop_status, session.loop_iter, session.loop_max));
 
   // ── Swipe-to-delete ────────────────────────────────────────────────────────
   // Arrasta a linha pra esquerda revelando "Excluir". touch-action:pan-y deixa o scroll vertical
@@ -237,6 +246,14 @@
           title={session.limit_reset ? `Limite de uso atingido — volta ${session.limit_reset}` : 'Limite de uso atingido'}
         >⏳{#if session.limit_reset}&nbsp;{session.limit_reset}{/if}</span>
       {/if}
+      {#if loopChip}
+        <!-- Loop runner (Task 11): mesmo formato do paired-chip, cor por tone (loopToneColor). -->
+        <span
+          class="paired-chip"
+          style="color: {loopToneColor[loopChip.tone]}; background: color-mix(in srgb, {loopToneColor[loopChip.tone]} 14%, transparent);"
+          title="Loop runner"
+        >{loopChip.label}</span>
+      {/if}
       <span
         class="state-chip"
         class:stalled
@@ -263,6 +280,16 @@
             <path d="M18 9a9 9 0 0 1-9 9"/>
           </svg>
         </button>
+      {/if}
+      <!-- Loop runner da sessao: mesma mecânica do git-btn (stopPropagation, so quando ha cwd). -->
+      {#if session.cwd}
+        <button
+          class="git-btn"
+          onpointerdown={(e) => e.stopPropagation()}
+          onclick={(e) => { e.stopPropagation(); onLoop?.(); }}
+          aria-label="Loop de {session.name}"
+          title="Loop runner"
+        >🔁</button>
       {/if}
       <!-- Caminho de exclusao por TECLADO/leitor de tela: o swipe-to-delete e pointer-only e deixava
            o usuario de teclado/SR sem como excluir no mobile. Escondido visualmente (mouse/touch usam
