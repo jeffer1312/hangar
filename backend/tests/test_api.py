@@ -1203,3 +1203,58 @@ def test_loop_refine_question_ending_is_502(api_client):
                return_value=_completed(0, stdout="Qual haiku você quer melhorar?")):
         r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "melhora"}, headers=_h())
     assert r.status_code == 502
+
+
+# --- ask-history (RAG lexical) -----------------------------------------------
+from app.search import SearchHit as _SearchHit
+
+
+def _hit(name="minha-sessao"):
+    return _SearchHit(project="p", session_id="s1", session_name=name, cwd="/c",
+                      line="falei de deploy aqui", mtime=1.0, live=True)
+
+
+def test_ask_history_no_hits_200_empty(api_client):
+    with patch("app.api.automations_enabled", return_value=True), \
+         patch("app.api.registry.list", return_value=[]), \
+         patch("app.api.search_terms", return_value=[]), \
+         patch("app.loop.subprocess.run") as run:
+        r = api_client.post("/api/ask-history", json={"question": "onde falei de X"}, headers=_h())
+    assert r.status_code == 200
+    body = r.json()
+    assert body["hits"] == [] and "não achei" in body["answer"]
+    run.assert_not_called()  # sem trecho -> nao chama o CLI
+
+
+def test_ask_history_ok(api_client):
+    with patch("app.api.automations_enabled", return_value=True), \
+         patch("app.api.registry.list", return_value=[]), \
+         patch("app.api.search_terms", return_value=[_hit()]), \
+         patch("app.loop.subprocess.run",
+               return_value=_completed(0, stdout="Apareceu na sessão minha-sessao, sobre deploy.")):
+        r = api_client.post("/api/ask-history", json={"question": "onde falei de deploy"}, headers=_h())
+    assert r.status_code == 200
+    body = r.json()
+    assert "minha-sessao" in body["answer"]
+    assert len(body["hits"]) == 1 and body["hits"][0]["session_name"] == "minha-sessao"
+
+
+def test_ask_history_cli_fail_502(api_client):
+    with patch("app.api.automations_enabled", return_value=True), \
+         patch("app.api.registry.list", return_value=[]), \
+         patch("app.api.search_terms", return_value=[_hit()]), \
+         patch("app.loop.subprocess.run", return_value=_completed(1, stderr="boom-ask")):
+        r = api_client.post("/api/ask-history", json={"question": "q"}, headers=_h())
+    assert r.status_code == 502
+    assert "boom-ask" in r.json()["detail"]
+
+
+def test_ask_history_409_when_automations_off(api_client):
+    with patch("app.api.automations_enabled", return_value=False):
+        r = api_client.post("/api/ask-history", json={"question": "q"}, headers=_h())
+    assert r.status_code == 409
+
+
+def test_ask_history_422_when_question_too_long(api_client):
+    r = api_client.post("/api/ask-history", json={"question": "x" * 501}, headers=_h())
+    assert r.status_code == 422
