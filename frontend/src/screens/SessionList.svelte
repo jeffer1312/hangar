@@ -12,6 +12,7 @@
   import BottomSheet from '../components/BottomSheet.svelte';
   import ConfirmSheet from '../components/ConfirmSheet.svelte';
   import GitSheet from '../components/GitSheet.svelte';
+  import LoopSheet from '../components/LoopSheet.svelte';
   import AttentionFeed from '../components/AttentionFeed.svelte';
   import AccountMenu from '../components/AccountMenu.svelte';
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
@@ -374,6 +375,19 @@
     if (gitSheetPrevServer) { selectServer(gitSheetPrevServer); gitSheetPrevServer = null; }
   }
 
+  // Loop runner (LoopSheet) aberto pelo botao 🔁 do card, mesma mecânica do gitSheet acima.
+  let loopSheet = $state<{ name: string } | null>(null);
+  let loopSheetPrevServer: string | null = null;
+  function handleLoop(s: AggSession) {
+    loopSheetPrevServer = getActiveId();
+    selectServer(s.serverId);
+    loopSheet = { name: s.name };
+  }
+  function closeLoopSheet() {
+    loopSheet = null;
+    if (loopSheetPrevServer) { selectServer(loopSheetPrevServer); loopSheetPrevServer = null; }
+  }
+
   // Retomar uma sessão "sem id": relança o pane com `claude --resume <uuid>` -> passa a rastrear. Caso
   // seguro (sessão sozinha no cwd) resolve direto; caso ambíguo (outras sessões no mesmo cwd) o backend
   // devolve candidatos e abrimos o sheet pra confirmar qual conversa retomar. O SSE de sessions atualiza
@@ -615,6 +629,7 @@
                         onResume={() => handleResume(session)}
                         onRename={(nv) => handleRename(session, nv)}
                         onGit={() => handleGit(session)}
+                        onLoop={() => handleLoop(session)}
                         {selectMode}
                         selected={selected.has(`${session.serverId}:${session.name}`)}
                         onToggleSelect={() => toggleSelected(`${session.serverId}:${session.name}`)}
@@ -635,6 +650,7 @@
               onResume={() => handleResume(session)}
               onRename={(nv) => handleRename(session, nv)}
               onGit={() => handleGit(session)}
+              onLoop={() => handleLoop(session)}
               {selectMode}
               selected={selected.has(`${session.serverId}:${session.name}`)}
               onToggleSelect={() => toggleSelected(`${session.serverId}:${session.name}`)}
@@ -891,6 +907,11 @@
   <!-- Gerenciador git aberto pelo botao git do card (repo da sessao, sem abrir o chat). -->
   {#if gitSheet}
     <GitSheet open={true} sessionName={gitSheet.name} onClose={closeGitSheet} />
+  {/if}
+
+  <!-- Loop runner aberto pelo botao 🔁 do card (repo da sessao, sem abrir o chat). -->
+  {#if loopSheet}
+    <LoopSheet open={true} sessionName={loopSheet.name} onClose={closeLoopSheet} />
   {/if}
 </div>
 

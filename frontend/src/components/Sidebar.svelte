@@ -7,6 +7,7 @@
   import SessionContextMenu from './SessionContextMenu.svelte';
   import QrScanner from './QrScanner.svelte';
   import GitSheet from './GitSheet.svelte';
+  import LoopSheet from './LoopSheet.svelte';
 import ConfirmDialog from './ConfirmDialog.svelte';
   import AttentionFeed from './AttentionFeed.svelte';
   import AccountMenu from './AccountMenu.svelte';
@@ -15,6 +16,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import type { SessionInfo, State, AggSession, ResumeCandidate } from '../lib/types';
   import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
+  import { loopBadge } from '../lib/loop';
   import Lottie from './Lottie.svelte';
   import pensando from '../lib/lottie/pensando.json';
 
@@ -23,6 +25,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     awaiting_input: 'rgba(255,159,10,0.14)', dead: 'rgba(255,69,58,0.12)',
   };
   const STATIC_FRAME = 0; // f0 = anel cheio e simétrico (frames do meio ficam ralos)
+
+  // Badge do loop runner (Task 11): tone -> cor, mesmo vocabulário do resto da linha (awaiting =
+  // --warning, erro = --error, ok = accent, parado = muted).
+  const loopToneColor: Record<string, string> = {
+    ok: 'var(--accent)', warn: 'var(--error)', attention: 'var(--warning)', muted: 'var(--text-muted)',
+  };
 
   // cwd -> prefixo truncável + basename que nunca encolhe (mesma lógica do SessionCard).
   function cwdParts(cwd: string | undefined) {
@@ -383,6 +391,22 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     gitSheet = null;
     if (gitSheetPrevServer) { selectServer(gitSheetPrevServer); gitSheetPrevServer = null; }
   }
+  // Loop runner (LoopSheet) aberto pelo menu de contexto, no repo da sessao, SEM abrir o chat.
+  // Mesma mecânica do gitSheet/menuGit acima (mira o server dono, restaura no fechar).
+  let loopSheet = $state<{ name: string } | null>(null);
+  let loopSheetPrevServer: string | null = null;
+  function menuLoop() {
+    if (!menu) return;
+    const { name, serverId } = menu;
+    loopSheetPrevServer = getActiveId();
+    selectServer(serverId);
+    loopSheet = { name };
+    closeMenu();
+  }
+  function closeLoopSheet() {
+    loopSheet = null;
+    if (loopSheetPrevServer) { selectServer(loopSheetPrevServer); loopSheetPrevServer = null; }
+  }
   async function doCheckout(name: string, serverId: string, branch: string) {
     flash(`checkout ${branch}…`);
     try {
@@ -561,6 +585,13 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     gitSheetPrevServer = getActiveId();
     selectServer(serverId);
     gitSheet = { name };
+  }
+  // Loop runner (LoopSheet) aberto pelo botao da linha, mesma mecânica do rowGit acima.
+  function rowLoop(name: string, serverId: string, e: MouseEvent) {
+    e.stopPropagation();
+    loopSheetPrevServer = getActiveId();
+    selectServer(serverId);
+    loopSheet = { name };
   }
 
   // ── Broadcast (feature #9): selecionar N sessoes e mandar 1 prompt pra todas ──────────────────
@@ -847,6 +878,13 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   <!-- Grupo de trabalho: mesmo formato do chain-chip (1 par = nome; N = contagem). -->
                   <span class="chain-chip" title={`Grupo com ${s.pair_peers.join(', ')} — trabalham juntas via cp-send`}>🤝&nbsp;{s.pair_peers.length === 1 ? s.pair_peers[0] : s.pair_peers.length + 1}</span>
                 {/if}
+                {#if s.loop_status}
+                  {@const lb = loopBadge(s.loop_status, s.loop_iter, s.loop_max)}
+                  {#if lb}
+                    <!-- Loop runner (Task 11): mesmo formato do chain-chip, cor por tone (loopToneColor). -->
+                    <span class="chain-chip" style="color: {loopToneColor[lb.tone]}; background: color-mix(in srgb, {loopToneColor[lb.tone]} 14%, transparent);" title="Loop runner">{lb.label}</span>
+                  {/if}
+                {/if}
                 <span
                   class="state-chip"
                   class:stalled={s.stalled === true}
@@ -883,6 +921,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                     <path d="M18 9a9 9 0 0 1-9 9"/>
                   </svg>
                 </button>
+                <!-- Loop runner da linha: mesma mecânica hover-revealed do botao git. -->
+                <button class="sess-git" onclick={(e) => rowLoop(s.name, s.serverId, e)} aria-label={`Loop de ${s.name}`} title="Loop runner">🔁</button>
               {/if}
               <button class="sess-del" onclick={(e) => handleDelete(s.name, s.serverId, e)} aria-label={`Excluir ${s.name}`}>×</button>
             {/if}
@@ -1061,7 +1101,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   <SessionContextMenu x={m.x} y={m.y} name={m.name} serverId={m.serverId} cwd={m.cwd} thenTarget={m.thenTarget}
     chainCandidates={chainCandidates(m.serverId, m.name)}
     onClose={closeMenu}
-    onRename={menuRename} onDelete={menuDelete} onGit={menuGit}
+    onRename={menuRename} onDelete={menuDelete} onGit={menuGit} onLoop={menuLoop}
     onPickBranch={(branch, dirty) => {
       if (dirty) confirmBranch = { name: m.name, serverId: m.serverId, branch };
       else doCheckout(m.name, m.serverId, branch);
@@ -1073,6 +1113,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 <!-- Gerenciador git aberto pelo menu de contexto (repo da sessao, sem abrir o chat). -->
 {#if gitSheet}
   <GitSheet open={true} sessionName={gitSheet.name} onClose={closeGitSheet} />
+{/if}
+
+<!-- Loop runner aberto pelo menu de contexto / botao da linha (repo da sessao, sem abrir o chat). -->
+{#if loopSheet}
+  <LoopSheet open={true} sessionName={loopSheet.name} onClose={closeLoopSheet} />
 {/if}
 
 <!-- Confirmar remocao de servidor (com o nome) — mesmo padrao do excluir sessao. -->
