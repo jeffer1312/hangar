@@ -143,6 +143,14 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   detached (`setsid`).
 - **CSS animations.** Shared tokens/keyframes live in `app.css` (`--ease-out`, `--spring`, …); a global
   `prefers-reduced-motion` rule neutralizes loops, so new keyframes don't each need their own guard.
+- **Loop runner** (`app/loop.py` + `components/LoopSheet.svelte`): loop autônomo por sessão —
+  goal → sessão trabalha → idle dispara tick (`_on_hook_transition`, dentro do `_work`, só com
+  `sent == 0`) → roda `check_cmd` (exit 0 = `done`) ou procura `LOOP_DONE` (→ `done_claimed`,
+  que SÓ fecha com confirmação humana via `/loop/resolve`) → senão re-prompta com a cauda do erro.
+  Sidecar em `.claude-pocket-loop/<nome>.json` (sobrevive `/clear`); guardrails: max_iters,
+  branch≠main, kill-switch `automations_enabled`, anti-estagnação (mesma cauda 2×). Loop ativo
+  **suprime o chain** da sessão. Campos `loop_status/loop_iter/loop_max` fluem no `/api/sessions`
+  e no `sig` do SSE (badge 🔁 nas 2 views). Spec/decisões: docs/superpowers/specs/2026-07-22-*.md.
 
 ## tmux + Claude Code truecolor
 

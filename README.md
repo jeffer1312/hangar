@@ -188,6 +188,15 @@ All routes require `Authorization: Bearer <token>` (SSE uses a `cp_token` cookie
 | POST | `/api/sessions/{name}/keys` | send raw key(s) |
 | POST | `/api/sessions/{name}/model-effort` | set model / reasoning effort |
 
+**Loop runner** (autonomous goal→check→re-prompt loop per session)
+
+| Method | Route | Purpose |
+|---|---|---|
+| POST | `/api/sessions/{name}/loop` | create+start a loop (`{goal, check_cmd?, max_iters?, require_branch?}`) |
+| GET | `/api/sessions/{name}/loop` | loop state + history + suggested check commands |
+| DELETE | `/api/sessions/{name}/loop` | stop the loop |
+| POST | `/api/sessions/{name}/loop/resolve` | confirm/reject a `done_claimed` loop (`{accept}`) |
+
 **Files & uploads**
 
 | Method | Route | Purpose |
