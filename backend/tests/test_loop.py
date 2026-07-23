@@ -236,6 +236,22 @@ def test_suggest_checks_node(tmp_path):
     assert suggest_checks(str(tmp_path)) == ["npm run check", "npm run test"]
 
 
+def test_run_check_unbalanced_quote_is_neg404():
+    # shlex.split com aspas desbalanceadas levanta ValueError ANTES do subprocess -> tem que virar
+    # -404 (check nao executavel), senao a thread do tick morre e o loop trava em running.
+    from app.loop import _run_check
+    exit_code, tail = _run_check('echo "sem fechar', "/tmp")
+    assert exit_code == -404 and tail
+
+
+def test_tick_check_valueerror_fails(tmp_path, monkeypatch):
+    # cauda de aspas quebradas -> _run_check devolve -404 -> loop failed (nao trava em running).
+    link = _mk("s", tmp_path, monkeypatch)
+    ctx, _, _, pushed = _ctx(tmp_path, monkeypatch, check=("x", -404, "No closing quotation"))
+    run_tick("s", ctx)
+    assert link.get()["status"] == "failed" and pushed
+
+
 def test_suggest_checks_cargo_go_are_single_argv(tmp_path):
     # _run_check faz shlex.split SEM shell -> nenhum chip sugerido pode ter '&&' (viraria argv
     # literal e o check nunca passaria).

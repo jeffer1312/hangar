@@ -99,15 +99,17 @@ def _body(status: str, reason: str | None) -> str:
     }.get(status, reason or status)
 
 
-def _end(link: "LoopLink", ctx: TickCtx, name: str, status: str, reason: str) -> dict | None:
-    """Transiciona pra estado terminal/atencao. Notify SO se o status entra na whitelist (regra 8).
-    Caller segura _lock."""
+def _end(link: "LoopLink", name: str, status: str, reason: str,
+         notify: Callable[[str, str], None]) -> dict | None:
+    """Transiciona pra estado terminal/atencao (grava status/ended_ts/ended_reason + push com corpo
+    canonico do _body). Notify SO se o status entra na whitelist (regra 8). Caller segura _lock.
+    Fonte unica pros endpoints (resolve/stop) e o run_tick -> zero string de push duplicada."""
     fields = {"status": status, "ended_reason": reason}
     if status != "done_claimed":   # done_claimed NAO e terminal (aguarda confirmacao humana)
         fields["ended_ts"] = time.time()
     d = link.update(**fields)
     if status in _NOTIFY_STATUSES:
-        ctx.notify(name, _body(status, reason))
+        notify(name, _body(status, reason))
     return d
 
 
@@ -151,11 +153,11 @@ def run_tick(name: str, ctx: TickCtx) -> dict | None:
             link.set(d)
         # 3: kill-switch mestre -> parada NOTIFICADA (nunca silenciosa)
         if not ctx.automations():
-            return _end(link, ctx, name, "stopped", "automations_disabled")
+            return _end(link, name, "stopped", "automations_disabled", ctx.notify)
         # 4: guardrail de branch, re-verificado a cada tick
         br = ctx.branch(ctx.cwd)
         if d["require_branch"] and br in ("main", "master"):
-            return _end(link, ctx, name, "stopped", f"branch {br}")
+            return _end(link, name, "stopped", f"branch {br}", ctx.notify)
         check_cmd = d["check_cmd"]
 
     # FORA do lock: o check pode segurar 600s.
@@ -175,21 +177,21 @@ def run_tick(name: str, ctx: TickCtx) -> dict | None:
         if check_cmd:
             # 5
             if exit_code == 0:
-                return _end(link, ctx, name, "done", "check passou")
+                return _end(link, name, "done", "check passou", ctx.notify)
             if exit_code == -404:
-                return _end(link, ctx, name, "failed", f"check_cmd não executável: {tail}")
+                return _end(link, name, "failed", f"check_cmd não executável: {tail}", ctx.notify)
             if d["history"] and d["history"][-1]["tail"] == tail:
-                return _end(link, ctx, name, "stopped", "estagnado — mesmo erro 2x")
+                return _end(link, name, "stopped", "estagnado — mesmo erro 2x", ctx.notify)
             # 7
             if d["iter"] + 1 > d["max_iters"]:
-                return _end(link, ctx, name, "exhausted", f"esgotou {d['max_iters']} iterações")
+                return _end(link, name, "exhausted", f"esgotou {d['max_iters']} iterações", ctx.notify)
             _reprompt(link, d, tail, exit_code, ctx.deliver, ctx.enqueue)
             return link.get()
         # 6: sem check_cmd
         if "LOOP_DONE" in (txt or ""):
-            return _end(link, ctx, name, "done_claimed", "declarou pronto — confirmar?")
+            return _end(link, name, "done_claimed", "declarou pronto — confirmar?", ctx.notify)
         if d["iter"] + 1 > d["max_iters"]:
-            return _end(link, ctx, name, "exhausted", f"esgotou {d['max_iters']} iterações")
+            return _end(link, name, "exhausted", f"esgotou {d['max_iters']} iterações", ctx.notify)
         _reprompt(link, d, "(sem check — iteração de continuação)", None, ctx.deliver, ctx.enqueue)
         return link.get()
 
@@ -199,7 +201,10 @@ def _run_check(cmd: str, cwd: str) -> tuple[int, str]:
     try:
         p = subprocess.run(shlex.split(cmd), cwd=cwd, capture_output=True,
                            text=True, timeout=600)
-    except FileNotFoundError as e:
+    except (ValueError, OSError) as e:
+        # ValueError = shlex.split com aspas desbalanceadas (ANTES do subprocess); OSError cobre
+        # FileNotFoundError (comando inexistente) e afins. Sem capturar, a thread do tick morreria
+        # e o loop travaria em running pra sempre.
         return (-404, str(e))
     except subprocess.TimeoutExpired:
         return (124, "timeout 600s")
