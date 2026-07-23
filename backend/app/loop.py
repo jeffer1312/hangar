@@ -248,20 +248,21 @@ def _refine_prompt(goal: str, check_cmd: str | None) -> str:
 
 # O goal vem do body do usuario e vira prompt de um claude -p HEADLESS (sem TUI pra negar tool) rodando
 # com o perfil do host -> prompt injection poderia executar tool real. refine e PURO TEXTO: nega toda
-# ferramenta com efeito colateral (exec/edit/rede).
-_REFINE_DISALLOWED = "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch"
+# ferramenta com efeito colateral (exec/edit/rede). --disallowedTools e variadico (nargs), entao NAO
+# pode ter positional depois dele -> o prompt vai por STDIN, nunca no argv.
+_REFINE_DISALLOWED = ("Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch")
 
 
 def refine_goal(goal: str, check_cmd: str | None = None) -> str:
     """Refina o objetivo via claude -p efemero (sonnet), cwd neutro (nao o da sessao), argv sem shell,
-    tools de efeito colateral negadas, timeout 60s. Levanta RefineError em qualquer falha (o endpoint
-    mapeia pra 502)."""
+    prompt por stdin, tools de efeito colateral negadas, timeout 60s. Levanta RefineError em qualquer
+    falha (o endpoint mapeia pra 502)."""
     prompt = _refine_prompt(goal, check_cmd)
     try:
         p = subprocess.run(
-            ["claude", "-p", "--model", "sonnet", "--disallowedTools", _REFINE_DISALLOWED, prompt],
-            cwd=tempfile.gettempdir(), capture_output=True, text=True, errors="replace",
-            timeout=_REFINE_TIMEOUT,
+            ["claude", "-p", "--model", "sonnet", "--disallowedTools", *_REFINE_DISALLOWED],
+            input=prompt, cwd=tempfile.gettempdir(), capture_output=True, text=True,
+            errors="replace", timeout=_REFINE_TIMEOUT,
         )
     except FileNotFoundError:
         raise RefineError("claude CLI não encontrado")
