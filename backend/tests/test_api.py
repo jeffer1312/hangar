@@ -1138,9 +1138,11 @@ def test_loop_refine_ok(api_client):
     args = run.call_args[0][0]
     assert args[:4] == ["claude", "-p", "--model", "sonnet"]
     assert "--disallowedTools" in args
-    tools = args[args.index("--disallowedTools") + 1]
     for t in ("Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"):
-        assert t in tools
+        assert t in args
+    # prompt vai por STDIN (nunca no argv — --disallowedTools e variadico e engoliria o positional)
+    assert "arruma as datas" in run.call_args.kwargs["input"]
+    assert all("arruma as datas" not in a for a in args)
 
 
 def test_loop_refine_409_when_automations_off(api_client):
