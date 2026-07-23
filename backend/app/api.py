@@ -1028,13 +1028,13 @@ async def broadcast(body: BroadcastBody):
     results: dict[str, dict] = {}
     for name in body.names:
         # Mesma guarda do /input: nome sem sessão viva -> erro POR SESSÃO (não enfileira no void).
-        if not await asyncio.to_thread(_session_exists, name):
+        if not await _send_thread(_session_exists, name):
             results[name] = {"ok": False, "error": "sessão não encontrada", "delivered": False}
             continue
         if _provider_of(name) == "codex":
             results[name] = await _send_one_codex(name, body.text)
         else:
-            results[name] = await asyncio.to_thread(_send_one, name, body.text)
+            results[name] = await _send_thread(_send_one, name, body.text)
     return {"results": results}
 
 
@@ -1080,7 +1080,7 @@ async def _deliver(name: str, text: str) -> str | None:
     if _provider_of(name) == "codex":
         res = await _send_one_codex(name, text)
     else:
-        res = await asyncio.to_thread(_send_one, name, text)
+        res = await _send_thread(_send_one, name, text)
     return None if res.get("ok") else (res.get("error") or "falha desconhecida no envio")
 
 
@@ -1248,13 +1248,13 @@ async def group_message(name: str, body: GroupMsgBody):
     text = f"[grupo: {name}] {body.text}"
     results: dict[str, dict] = {}
     for p in peers:
-        if not await asyncio.to_thread(_session_exists, p):
+        if not await _send_thread(_session_exists, p):
             results[p] = {"ok": False, "error": "sessão não encontrada", "delivered": False}
             continue
         if _provider_of(p) == "codex":
             results[p] = await _send_one_codex(p, text)
         else:
-            results[p] = await asyncio.to_thread(_send_one, p, text)
+            results[p] = await _send_thread(_send_one, p, text)
     failed = [f"{n}: {r.get('error')}" for n, r in results.items() if not r.get("ok")]
     return {"ok": True, "peers": peers,
             "warning": ("falha em: " + "; ".join(failed)) if failed else None}

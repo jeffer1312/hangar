@@ -151,6 +151,7 @@ class _ListRefresher:
         self.data: str | None = None
         self.sig: str | None = None
         self.version = 0
+        self.errored = False
         self._task: asyncio.Task | None = None
         self._refs = 0
         self._loop = None
@@ -166,6 +167,7 @@ class _ListRefresher:
             self.data = None
             self.sig = None
             self.version = 0
+            self.errored = False
             self._refs = 0
             self._task = asyncio.create_task(self._run())
 
@@ -177,13 +179,22 @@ class _ListRefresher:
                 data = json.dumps([i.model_dump(mode="json") for i in infos], ensure_ascii=False)
                 sig = _list_sig(infos)
             except Exception:
-                # Decoracao/raspagem falhou -> MANTEM o snapshot anterior (stale > morto). Nunca
-                # propaga pra conexao. Loga e segue no proximo ciclo.
+                # Decoracao/raspagem falhou -> MANTEM o snapshot anterior (stale > morto), nunca derruba
+                # a conexao. Loga (padrao da casa) E sinaliza 'list_error' UMA vez (na transicao) pras
+                # conexoes — lista vazia por falha e indistinguivel de zero sessoes; o front distingue
+                # "erro" de "offline". Ciclo bom seguinte re-emite 'sessions' e limpa o erro no front.
                 _log.warning("refresher da lista falhou; mantem snapshot anterior", exc_info=True)
+                if not self.errored:
+                    async with self._cond:
+                        self.errored = True
+                        self.version += 1
+                        self._cond.notify_all()
                 await asyncio.sleep(self.poll)
                 continue
-            if sig != self.sig:
+            # sucesso: emite se a sig mudou OU se estava em erro (pra o front LIMPAR o list_error).
+            if sig != self.sig or self.errored:
                 async with self._cond:
+                    self.errored = False
                     self.sig = sig
                     self.data = data
                     self.version += 1
@@ -220,8 +231,11 @@ async def list_events(ping_secs: float = 8.0):
             async with cond:
                 await cond.wait_for(lambda: _list_refresher.version != last_version)
                 last_version = _list_refresher.version
+                errored = _list_refresher.errored
                 data = _list_refresher.data
-            if data is not None:
+            if errored:
+                await queue.put(("list_error", "{}"))   # falha do refresher — front distingue de offline
+            elif data is not None:
                 await queue.put(("sessions", data))
 
     async def ping_loop():

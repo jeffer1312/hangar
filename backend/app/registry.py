@@ -591,6 +591,9 @@ class SessionRegistry:
             # awaiting_input FRESCO ainda raspa o pane (o marcador nao carrega question/options).
             # STALE (>120s) cai no fast-path: hook manda Notification depois do Stop -> awaiting preso
             # forcava capture_pane de todas a cada poll (a tempestade de forks da instabilidade).
+            # LIMITACAO CONHECIDA: no fast-path stale, question/options ficam None na LISTA (o marcador
+            # nao os carrega) — a linha mostra "awaiting" sem a pergunta apos 120s. O CHAT ABERTO segue
+            # raspando o pane (StateMonitor) e mostra a pergunta ao vivo; so a lista perde o detalhe.
             awaiting_fresh = (marker and marker[0] == "awaiting_input"
                               and (time.time() - marker[1]) <= _AWAITING_STALE_S)
             if marker and not awaiting_fresh:

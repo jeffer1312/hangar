@@ -87,9 +87,11 @@ def _parse_status_branch(out: str) -> dict | None:
 # poll do painel é 2s. Ele é chamado de dentro de um asyncio.to_thread (ver registry), então
 # requests concorrentes podem bater no dict de threads distintas -> pior caso um fork redundante,
 # sem corrupção (benigno por idempotência, mesma classe do _status_cache de classe). Sem lock.
-_summary_cache: dict[str, tuple[float, dict | None]] = {}
-_SUMMARY_TTL = 3.0          # resultado bom: curto (dirty/ahead muda rapido)
-_SUMMARY_TTL_NEG = 30.0     # None (timeout/non-repo/erro): longo — nao re-forka o git lento a cada poll
+# cache: cwd -> (ts, result, ttl). O ttl e gravado por-entrada: SO o timeout (GitError) ganha o TTL
+# longo (30s); resultado bom E falha transitoria (returncode!=0, ex. index.lock) ficam no TTL curto.
+_summary_cache: dict[str, tuple[float, dict | None, float]] = {}
+_SUMMARY_TTL = 3.0          # resultado bom OU falha transitoria: curto (volta rapido quando normaliza)
+_SUMMARY_TTL_NEG = 30.0     # SO timeout de git (repo enorme/NFS): longo — nao re-forka o lento a cada poll
 _SUMMARY_TIMEOUT = 2.0      # proprio (nao o _TIMEOUT global de 20s de push/log): um git status pendurado
                             # num NFS/repo enorme custava 20s de tick re-pago a cada poll -> watchdog
                             # de 25s dos clientes estourava em massa. 2s corta a cauda cedo.
@@ -104,21 +106,30 @@ def git_summary(cwd: str | None) -> dict | None:
         return None
     now = time.monotonic()
     hit = _summary_cache.get(cwd)
-    if hit:
-        ttl = _SUMMARY_TTL if hit[1] is not None else _SUMMARY_TTL_NEG
-        if now - hit[0] < ttl:
-            return hit[1]
+    if hit and now - hit[0] < hit[2]:
+        return hit[1]
+    ttl = _SUMMARY_TTL
     try:
         p = _run(cwd, "status", "--porcelain=v1", "--branch", timeout=_SUMMARY_TIMEOUT)
     except GitError as e:
-        # timeout / git ausente: sem badge, nunca 500. Cacheia o None por MAIS tempo (_SUMMARY_TTL_NEG)
-        # pra não re-forkar o git lento a cada poll — a causa das rajadas que estouravam o watchdog.
+        # timeout / git ausente: sem badge, nunca 500. SO este caso ganha o TTL longo (30s) pra não
+        # re-forkar o git lento a cada poll — a causa das rajadas que estouravam o watchdog.
         # Falha APARECE (padrao da casa): loga o warning — o cache negativo de 30s evita spam.
-        _log.warning("git_summary falhou em %s: %s (badge omitido)", cwd, e.detail)
+        _log.warning("git_summary timeout/erro em %s: %s (badge omitido, retry em %ss)",
+                     cwd, e.detail, _SUMMARY_TTL_NEG)
         result = None
+        ttl = _SUMMARY_TTL_NEG
     else:
-        result = _parse_status_branch(p.stdout) if p.returncode == 0 else None
-    _summary_cache[cwd] = (now, result)
+        if p.returncode == 0:
+            result = _parse_status_branch(p.stdout)
+        else:
+            # returncode != 0 com repo SAO (ex. index.lock transitorio durante um commit concorrente):
+            # o badge some, mas TTL NORMAL (3s) -> volta rapido quando o lock sai, NAO fica 30s mudo.
+            # Falha aparece: log.
+            _log.warning("git_summary returncode=%s em %s (badge omitido, retry em %ss)",
+                         p.returncode, cwd, _SUMMARY_TTL)
+            result = None
+    _summary_cache[cwd] = (now, result, ttl)
     return result
 
 
