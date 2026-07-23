@@ -800,6 +800,24 @@ export async function createLoopForServer(s: Server, name: string, body: { goal:
 }
 
 // Para um loop em execucao (muda status para 'stopped').
+// Refina o objetivo do loop via claude -p efemero no backend (boas praticas embutidas no prompt).
+// Timeout proprio de 60s: o claude -p leva segundos e nao e mutacao — abortar e seguro.
+export async function refineLoopForServer(
+  s: Server,
+  name: string,
+  goal: string,
+  check_cmd: string | null,
+): Promise<{ goal: string }> {
+  const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/loop/refine`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
+    body: JSON.stringify({ goal, check_cmd }),
+    signal: AbortSignal.timeout(60000),
+  });
+  if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
+  return res.json();
+}
+
 export async function stopLoopForServer(s: Server, name: string): Promise<{ loop: LoopState }> {
   const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/loop`, {
     method: 'DELETE',

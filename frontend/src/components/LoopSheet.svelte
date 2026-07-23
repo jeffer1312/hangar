@@ -1,7 +1,7 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
   import ConfirmDialog from './ConfirmDialog.svelte';
-  import { getLoopForServer, createLoopForServer, stopLoopForServer, resolveLoopForServer } from '../lib/api';
+  import { getLoopForServer, createLoopForServer, stopLoopForServer, resolveLoopForServer, refineLoopForServer } from '../lib/api';
   import { listServers, getActiveId } from '../lib/auth';
   import type { Server } from '../lib/auth';
   import type { LoopState } from '../lib/types';
@@ -80,6 +80,29 @@
   function resetForm() {
     goal = ''; checkCmd = ''; maxIters = 10; requireBranch = true; createErr = '';
     guideOpen = false; guideOpenSections = new Set();
+    refining = false; refineErr = ''; prevGoal = null;
+  }
+
+  // ── Refinar objetivo (claude -p efemero no backend) ───────────────────────
+  let refining = $state(false);
+  let refineErr = $state('');
+  let prevGoal = $state<string | null>(null);   // versao pre-refine -> botao desfazer
+  async function refineGoal() {
+    const s = activeServer();
+    if (!s || !goal.trim() || refining) return;
+    refining = true; refineErr = '';
+    try {
+      const r = await refineLoopForServer(s, sessionName, goal.trim(), checkCmd.trim() || null);
+      prevGoal = goal;
+      goal = r.goal;
+    } catch (e) {
+      refineErr = cleanErr(e);
+    } finally {
+      refining = false;
+    }
+  }
+  function undoRefine() {
+    if (prevGoal !== null) { goal = prevGoal; prevGoal = null; }
   }
 
   function toggleGuideSection(i: number) {
@@ -161,11 +184,26 @@
 
     {#if isForm}
       <div class="field">
-        <label class="field-label" for="loop-goal">Objetivo</label>
+        <div class="field-head">
+          <label class="field-label" for="loop-goal">Objetivo</label>
+          <div class="field-head-actions">
+            {#if prevGoal !== null}
+              <button type="button" class="undo-btn" onclick={undoRefine}>desfazer</button>
+            {/if}
+            <button
+              type="button" class="refine-btn" onclick={refineGoal}
+              disabled={refining || !goal.trim()}
+              title="Reescreve o objetivo seguindo as boas práticas de loop"
+            >
+              {refining ? 'Melhorando…' : '✨ Melhorar'}
+            </button>
+          </div>
+        </div>
         <textarea
           id="loop-goal" class="field-input loop-textarea" bind:value={goal} rows="4"
           placeholder="ex: migre utils/date.ts pra date-fns e mantenha npm run check verde"
         ></textarea>
+        {#if refineErr}<p class="error-msg" role="alert">{refineErr}</p>{/if}
       </div>
 
       <div class="field">
@@ -183,16 +221,18 @@
         {/if}
       </div>
 
-      <div class="field">
-        <label class="field-label" for="loop-max">Máx. iterações</label>
-        <input id="loop-max" type="number" class="field-input loop-max-input" bind:value={maxIters} min="1" />
-      </div>
+      <div class="loop-row">
+        <div class="field">
+          <label class="field-label" for="loop-max">Máx. iterações</label>
+          <input id="loop-max" type="number" class="field-input loop-max-input" bind:value={maxIters} min="1" max="100" />
+        </div>
 
-      <div class="field">
-        <span class="field-label">Exigir branch</span>
-        <div class="provider-toggle" role="group" aria-label="Exigir branch">
-          <button type="button" class="provider-btn" class:on={requireBranch} onclick={() => (requireBranch = true)}>Sim</button>
-          <button type="button" class="provider-btn" class:on={!requireBranch} onclick={() => (requireBranch = false)}>Não</button>
+        <div class="field">
+          <span class="field-label">Exigir branch</span>
+          <div class="provider-toggle" role="group" aria-label="Exigir branch">
+            <button type="button" class="provider-btn" class:on={requireBranch} onclick={() => (requireBranch = true)}>Sim</button>
+            <button type="button" class="provider-btn" class:on={!requireBranch} onclick={() => (requireBranch = false)}>Não</button>
+          </div>
         </div>
       </div>
 
@@ -284,6 +324,20 @@
 
   .field { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-4); }
   .field-label { font-size: var(--text-sm); color: var(--text-secondary); font-weight: 500; }
+  .field-head { display: flex; align-items: center; justify-content: space-between; min-height: 28px; }
+  .field-head-actions { display: flex; align-items: center; gap: var(--space-2); }
+  .refine-btn {
+    height: 28px; padding: 0 var(--space-3); border-radius: var(--radius-full);
+    border: 1px solid var(--border-default); background: var(--bg-surface); color: var(--text-secondary);
+    font-size: var(--text-xs); font-weight: 500; transition: border-color 160ms ease-out, color 160ms ease-out;
+  }
+  .refine-btn:active:not(:disabled) { border-color: var(--accent); color: var(--text-primary); }
+  .refine-btn:disabled { opacity: 0.45; cursor: default; }
+  .undo-btn { color: var(--text-muted); font-size: var(--text-xs); text-decoration: underline; }
+
+  /* iteracoes + branch lado a lado: form mais curto no celular (queixa real de altura) */
+  .loop-row { display: flex; gap: var(--space-4); }
+  .loop-row .field { flex: 1; min-width: 0; }
   .field-input {
     height: 44px; background: var(--bg-surface); border: 1px solid var(--border-default);
     border-radius: var(--radius-md); color: var(--text-primary); font-family: var(--font-ui);
@@ -292,7 +346,7 @@
   .field-input::placeholder { color: var(--text-muted); }
   .field-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
   .loop-textarea { height: auto; padding: var(--space-3); resize: vertical; font-size: var(--text-sm); line-height: 1.4; }
-  .loop-max-input { width: 100px; }
+  .loop-max-input { width: 100%; }
 
   .loop-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-1); }
   .chip {
