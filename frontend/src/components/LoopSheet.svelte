@@ -208,6 +208,7 @@
         </div>
         <textarea
           id="loop-goal" class="field-input loop-textarea" bind:value={goal} rows="4"
+          disabled={refining}
           placeholder="ex: migre utils/date.ts pra date-fns e mantenha npm run check verde"
         ></textarea>
         {#if refineErr}<p class="error-msg" role="alert">{refineErr}</p>{/if}
