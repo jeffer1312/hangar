@@ -222,8 +222,16 @@ _REFINE_SYSTEM = (
     "nunca amplo (\"refatore o projeto\").\n"
     "- Peça EVIDÊNCIA, não promessa: inclua \"rode o comando de verificação e mostre a saída\".\n"
     "- Deixe explícito: não editar arquivos de teste nem o comando de verificação; corrigir o código.\n"
+    "A saída é SEMPRE um objetivo reescrito — NUNCA uma pergunta, recusa ou comentário. Se faltar "
+    "contexto, PRESERVE a intenção e marque a lacuna inline entre <colchetes> "
+    "(ex: \"Melhore o haiku em <arquivo> até <critério de qualidade>, rode o check e mostre a saída\").\n"
     "Responda SÓ com o objetivo reescrito em pt-BR, texto puro, sem preâmbulo, sem aspas, sem markdown."
 )
+
+# Recusa/meta-resposta do haiku (goal vago) — nao e objetivo. O prompt ja pede pra evitar; este guard
+# segura o residual: objetivo reescrito e afirmacao, nunca termina em '?' nem comeca com recusa.
+_REFINE_REFUSAL_PREFIXES = ("não consigo", "nao consigo", "não posso", "nao posso",
+                            "desculpe", "não é possível", "nao e possivel")
 
 
 class RefineError(Exception):
@@ -256,6 +264,8 @@ def refine_goal(goal: str, check_cmd: str | None = None) -> str:
     out = (p.stdout or "").strip()
     if not out:
         raise RefineError("refinamento vazio")
+    if out.endswith("?") or out.lower().startswith(_REFINE_REFUSAL_PREFIXES):
+        raise RefineError("refine falhou, tente detalhar o objetivo")
     return out[:_REFINE_MAX]
 
 
