@@ -7,7 +7,7 @@
   } from '../lib/api';
   import { relativeTime, bubblesFromTail, stateLabels, pairColor, parsePeerMessage } from '../lib/format';
   import { parseStatusLine } from '../lib/statusline';
-  import { loopBadge } from '../lib/loop';
+  import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import type { Server } from '../lib/auth';
   import type { ChatEvent } from '../lib/types';
   import type { BoardRow, PendingMsg } from '../screens/Board.svelte';
@@ -349,11 +349,6 @@
   // SessionInfo.status_line). Sem statusline (captura pendente/tema sem emojis) a linha some.
   const meta = $derived(parseStatusLine(session.status_line));
 
-  // Badge do loop runner (Task 11): mesmo vocabulário das outras views (awaiting = --warning,
-  // erro = --error, ok = accent, parado = muted).
-  const loopToneColor: Record<string, string> = {
-    ok: 'var(--accent)', warn: 'var(--error)', attention: 'var(--warning)', muted: 'var(--text-muted)',
-  };
   const loopChip = $derived(loopBadge(session.loop_status, session.loop_iter, session.loop_max));
 </script>
 
@@ -382,10 +377,10 @@
     <div class="bc-sub">
       {#if session.branch}<span class="bc-branch">⎇ {session.branch}</span>{/if}
       {#if loopChip}
-        <!-- Loop runner (Task 11): mesmo formato do bc-chip, cor por tone (loopToneColor). -->
+        <!-- Loop runner (Task 11): mesmo formato do bc-chip, cor por tone (LOOP_TONE_COLOR). -->
         <span
           class="bc-chip"
-          style="color: {loopToneColor[loopChip.tone]}; background: color-mix(in srgb, {loopToneColor[loopChip.tone]} 16%, transparent);"
+          style="color: {LOOP_TONE_COLOR[loopChip.tone]}; background: color-mix(in srgb, {LOOP_TONE_COLOR[loopChip.tone]} 16%, transparent);"
           title="Loop runner"
         >{loopChip.label}</span>
       {/if}

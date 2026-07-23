@@ -16,7 +16,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import type { SessionInfo, State, AggSession, ResumeCandidate } from '../lib/types';
   import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
-  import { loopBadge } from '../lib/loop';
+  import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import Lottie from './Lottie.svelte';
   import pensando from '../lib/lottie/pensando.json';
 
@@ -25,12 +25,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     awaiting_input: 'rgba(255,159,10,0.14)', dead: 'rgba(255,69,58,0.12)',
   };
   const STATIC_FRAME = 0; // f0 = anel cheio e simétrico (frames do meio ficam ralos)
-
-  // Badge do loop runner (Task 11): tone -> cor, mesmo vocabulário do resto da linha (awaiting =
-  // --warning, erro = --error, ok = accent, parado = muted).
-  const loopToneColor: Record<string, string> = {
-    ok: 'var(--accent)', warn: 'var(--error)', attention: 'var(--warning)', muted: 'var(--text-muted)',
-  };
 
   // cwd -> prefixo truncável + basename que nunca encolhe (mesma lógica do SessionCard).
   function cwdParts(cwd: string | undefined) {
@@ -881,8 +875,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                 {#if s.loop_status}
                   {@const lb = loopBadge(s.loop_status, s.loop_iter, s.loop_max)}
                   {#if lb}
-                    <!-- Loop runner (Task 11): mesmo formato do chain-chip, cor por tone (loopToneColor). -->
-                    <span class="chain-chip" style="color: {loopToneColor[lb.tone]}; background: color-mix(in srgb, {loopToneColor[lb.tone]} 14%, transparent);" title="Loop runner">{lb.label}</span>
+                    <!-- Loop runner (Task 11): mesmo formato do chain-chip, cor por tone (LOOP_TONE_COLOR). -->
+                    <span class="chain-chip" style="color: {LOOP_TONE_COLOR[lb.tone]}; background: color-mix(in srgb, {LOOP_TONE_COLOR[lb.tone]} 14%, transparent);" title="Loop runner">{lb.label}</span>
                   {/if}
                 {/if}
                 <span
