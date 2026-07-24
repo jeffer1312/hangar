@@ -18,6 +18,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import Lottie from './Lottie.svelte';
   import pensando from '../lib/lottie/pensando.json';
+  import type { WorkspaceAction } from '../lib/workspaceCommands';
 
   const stateChipBg: Record<State, string> = {
     working: 'var(--accent-dim)', idle: 'rgba(52,199,89,0.12)',
@@ -41,8 +42,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     onLogout: () => void;
     boardActive: boolean;      // quadro aberto -> destaca o toggle e recolhe a sidebar pro rail
     canvasActive: boolean;     // canvas aberto -> mesmo tratamento do quadro (destaca + recolhe)
+    onWorkspaceActionsChange?: (actions: WorkspaceAction[]) => void;
   }
-  let { currentSession, onSelect, onCompare, onLogout, boardActive, canvasActive }: Props = $props();
+  let {
+    currentSession, onSelect, onCompare, onLogout, boardActive, canvasActive,
+    onWorkspaceActionsChange,
+  }: Props = $props();
 
   // Grupo generico: por SERVIDOR (hoje) ou por PROJETO (cwd) — mesmo shape nos dois modos. Cada
   // sessao carrega o serverId dela (no modo projeto um grupo pode juntar sessoes de servidores
@@ -602,6 +607,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     broadcastText = '';
     broadcastMsg = '';
   }
+  function openSelectMode() {
+    if (!selectMode) toggleSelectMode();
+  }
   function toggleSelected(key: string) {
     const next = new Set(selected);
     if (next.has(key)) next.delete(key);
@@ -630,6 +638,62 @@ import ConfirmDialog from './ConfirmDialog.svelte';
       .map((s) => ({ serverId: s.serverId, name: s.name }));
     onCompare(ids);
   }
+
+  $effect(() => {
+    const publish = onWorkspaceActionsChange;
+    if (!publish) return;
+    publish([
+      {
+        id: 'new',
+        title: 'Nova sessão',
+        detail: 'Criar uma nova sessão',
+        keywords: ['nova', 'criar', 'sessão'],
+        group: 'Sessão',
+        run: () => (showCreate = true),
+      },
+      {
+        id: 'search',
+        title: 'Buscar histórico',
+        detail: 'Buscar conteúdo nas conversas',
+        keywords: ['buscar', 'histórico', 'conversas'],
+        group: 'Sessão',
+        run: () => (searchOpen = true),
+      },
+      {
+        id: 'archive',
+        title: 'Arquivo',
+        detail: 'Conversas encerradas',
+        keywords: ['arquivo', 'arquivadas', 'histórico'],
+        group: 'Sessão',
+        run: () => (window.location.hash = '#/archive'),
+      },
+      {
+        id: 'costs',
+        title: 'Custos',
+        detail: 'Uso e custos por conta',
+        keywords: ['custos', 'uso', 'tokens'],
+        group: 'Ferramentas',
+        run: () => (window.location.hash = '#/costs'),
+      },
+      {
+        id: 'compare',
+        title: 'Comparar sessões',
+        detail: 'Selecione 2 ou mais sessões',
+        keywords: ['comparar', 'sessões', 'lado a lado'],
+        group: 'Colaboração',
+        run: openSelectMode,
+      },
+      {
+        id: 'broadcast',
+        title: 'Broadcast',
+        detail: 'Selecione sessões para enviar em conjunto',
+        keywords: ['broadcast', 'enviar', 'mensagem', 'sessões'],
+        group: 'Colaboração',
+        run: openSelectMode,
+      },
+    ]);
+    return () => publish([]);
+  });
 
   async function sendBroadcast() {
     const text = broadcastText.trim();
