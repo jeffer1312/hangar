@@ -249,7 +249,7 @@
 
   // Tap em qualquer area do composer que nao seja um controle -> foca o input.
   // .focus() dentro do gesto de clique levanta o teclado no mobile.
-  function focusInput(e: MouseEvent) {
+  function focusInput(e: Event) {
     const t = e.target as HTMLElement;
     if (t.closest('button, a, input, textarea, [role="option"], [role="listbox"]')) return;
     textareaEl?.focus();
@@ -634,8 +634,9 @@
     aria-hidden="true"
     tabindex="-1"
   />
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div class="composer-card" onclick={focusInput}>
+  <!-- O card precisa delegar foco para a textarea em areas vazias, mas contem varios botoes:
+       nao pode virar button/role=button sem aninhar controles interativos. -->
+  <div class="composer-card" role="button" tabindex="-1" onclick={focusInput} onkeydown={focusInput}>
     <div class="composer-top">
       <div class="top-left">
         {#if !isCodex}

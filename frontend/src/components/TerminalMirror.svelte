@@ -102,13 +102,13 @@
       <span class="tm-title">⌨ {sessionName}{#if interactive} · <span class="tm-live">interativo</span>{/if}</span>
     </header>
 
-    <!-- svelte-ignore a11y_no_static_element_interactions a11y_no_noninteractive_tabindex -->
     <div
       class="tm-screen"
       class:interactive
       bind:this={paneEl}
       tabindex={interactive ? 0 : undefined}
-      role={interactive ? 'textbox' : undefined}
+      role="textbox"
+      aria-readonly={!interactive}
       aria-label={interactive ? 'Terminal interativo — digite' : undefined}
       onkeydown={interactive ? onTermKey : undefined}
     >

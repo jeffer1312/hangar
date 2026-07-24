@@ -60,7 +60,7 @@
   // WINDOW = botao de calibragem (ajuste no device real); tool_result e filtrado depois, entao bolhas < WINDOW.
   const WINDOW = 120;
   const PAGE = 100;            // quantos eventos antigos revelar por vez ao rolar pro topo (paginacao)
-  let windowEnd = $state(events.length);
+  let windowEnd = $state(0);
   let extra = $state(0);       // eventos revelados ALEM da janela padrao (cresce ao rolar pro topo)
 
   function onScroll() {
