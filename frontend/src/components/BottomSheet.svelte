@@ -96,10 +96,26 @@
 
   function onKeydown(e: KeyboardEvent) {
     if (!open) return;
-    if (e.key === 'Escape') onClose();
+    if (e.key === 'Escape') {
+      // A sheet owns Escape while it is open. Prevent the event from reaching
+      // Chat/DesktopShell global handlers, which would otherwise dismiss an
+      // overlay behind this one in the same keypress.
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+    }
   }
 
   function onSheetKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      // Handle Escape at the dialog boundary as well as the window fallback.
+      // This is the normal path for focused controls inside the sheet and
+      // guarantees that lower global listeners never see the key.
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+      return;
+    }
     if (e.key !== 'Tab' || !sheetEl || !window.matchMedia('(min-width: 820px)').matches) return;
     e.preventDefault();
     e.stopPropagation();
