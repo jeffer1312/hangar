@@ -42,6 +42,7 @@
   let commandOpen = $state(false);
   let lastSession = $state<string | null>(null);
   let sidebarActions = $state<WorkspaceAction[]>([]);
+  let chatActions = $state<WorkspaceAction[]>([]);
   const rows = $derived<AggSession[]>(sessionsStore.rows);
   const hasAttention = $derived(rows.some((row) => row.state === 'awaiting_input'));
 
@@ -104,7 +105,9 @@
   ];
   const workspaceActions = $derived.by<WorkspaceAction[]>(() => {
     const actionsById = new Map<string, WorkspaceAction>();
-    for (const action of [...navigationActions, ...sidebarActions]) actionsById.set(action.id, action);
+    for (const action of [...navigationActions, ...sidebarActions, ...chatActions]) {
+      actionsById.set(action.id, action);
+    }
     return actionGroups.flatMap((group) =>
       [...actionsById.values()].filter((action) => action.group === group),
     );
@@ -112,6 +115,10 @@
 
   function handleSidebarActionsChange(actions: WorkspaceAction[]) {
     sidebarActions = actions;
+  }
+
+  function handleChatActionsChange(actions: WorkspaceAction[]) {
+    chatActions = actions;
   }
 
   function openSession(session: AggSession) {
@@ -211,6 +218,8 @@
               topInset={hasAttention ? 52 : 0}
               onOpenWorkspacePalette={() => (commandOpen = true)}
               showContextPanel={true}
+              publishWorkspaceActions={true}
+              onWorkspaceActionsChange={handleChatActionsChange}
             />
           </div>
         {/key}
@@ -227,6 +236,8 @@
             topInset={hasAttention ? 52 : 0}
             onOpenWorkspacePalette={() => (commandOpen = true)}
             showContextPanel={splitSessions.length === 0}
+            publishWorkspaceActions={true}
+            onWorkspaceActionsChange={handleChatActionsChange}
           />
         </div>
       {/key}
