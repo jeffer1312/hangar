@@ -16,7 +16,9 @@
   }
   let { title, aria, role = 'alertdialog', wide = false, actions, onClose, children }: Props = $props();
   let safeButton = $state<HTMLButtonElement | null>(null);
-  const safeIndex = $derived(Math.max(0, actions.findIndex((action) => action.kind !== 'danger')));
+  // O foco inicial nunca deve cair em uma ação destrutiva. Se não houver uma
+  // alternativa segura habilitada, deixamos o ModalDialog focar o container.
+  const safeIndex = $derived(actions.findIndex((action) => action.kind !== 'danger' && !action.disabled));
   function captureSafe(node: HTMLButtonElement, index: number) {
     if (index === safeIndex) safeButton = node;
     return {
@@ -43,7 +45,16 @@
   {@render children?.()}
   <div class="confirm-actions">
     {#each actions as a, i (a.label)}
-      <button use:captureSafe={i} type="button" class="c-btn" class:c-danger={a.kind === 'danger'} class:c-primary={a.kind === 'primary'} disabled={a.disabled} onclick={a.onClick}>{a.label}</button>
+      <button
+        use:captureSafe={i}
+        type="button"
+        class="c-btn"
+        class:c-danger={a.kind === 'danger'}
+        class:c-primary={a.kind === 'primary'}
+        tabindex={safeIndex < 0 && a.kind === 'danger' ? -1 : undefined}
+        disabled={a.disabled}
+        onclick={a.onClick}
+      >{a.label}</button>
     {/each}
   </div>
 </ModalDialog>
