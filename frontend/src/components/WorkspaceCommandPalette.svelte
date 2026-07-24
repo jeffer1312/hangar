@@ -1,42 +1,43 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import type { AggSession } from '../lib/types';
-
-  type WorkspaceView = 'chat' | 'board' | 'canvas';
-  type PaletteItem =
-    | { key: string; kind: 'view'; view: WorkspaceView; title: string; detail: string }
-    | { key: string; kind: 'session'; session: AggSession; title: string; detail: string };
+  import {
+    filterWorkspaceItems,
+    workspaceSessionItems,
+    type PaletteItem,
+    type WorkspaceAction,
+    type WorkspaceView,
+  } from '../lib/workspaceCommands';
 
   interface Props {
     open: boolean;
     rows: AggSession[];
     view: WorkspaceView;
+    actions: WorkspaceAction[];
     onClose: () => void;
-    onSelectView: (view: WorkspaceView) => void;
     onOpenSession: (session: AggSession) => void;
   }
 
-  let { open, rows, view, onClose, onSelectView, onOpenSession }: Props = $props();
+  let { open, rows, view, actions, onClose, onOpenSession }: Props = $props();
   let query = $state('');
   let selected = $state(0);
   let searchInput = $state<HTMLInputElement>();
 
   const items = $derived.by<PaletteItem[]>(() => {
     const base: PaletteItem[] = [
-      { key: 'view:chat', kind: 'view', view: 'chat', title: 'Abrir Conversa', detail: 'Espaço principal de chat' },
-      { key: 'view:board', kind: 'view', view: 'board', title: 'Abrir Quadro', detail: 'Sessões agrupadas por estado' },
-      { key: 'view:canvas', kind: 'view', view: 'canvas', title: 'Abrir Canvas', detail: 'Organização livre das sessões' },
-      ...rows.map((session) => ({
-        key: `session:${session.serverId}:${session.name}`,
-        kind: 'session' as const,
-        session,
-        title: session.name,
-        detail: `${session.serverLabel} · ${session.cwd ?? 'sem diretório'}`,
+      ...actions.map((action) => ({
+        key: `action:${action.id}`,
+        kind: 'action' as const,
+        action,
+        title: action.title,
+        detail: action.detail,
+        keywords: action.keywords,
+        group: action.group,
+        disabled: action.disabled,
       })),
+      ...workspaceSessionItems(rows),
     ];
-    const q = query.trim().toLocaleLowerCase();
-    if (!q) return base;
-    return base.filter((item) => `${item.title} ${item.detail}`.toLocaleLowerCase().includes(q));
+    return filterWorkspaceItems(base, query);
   });
 
   $effect(() => {
@@ -53,10 +54,10 @@
   });
 
   function choose(item: PaletteItem | undefined) {
-    if (!item) return;
+    if (!item || item.disabled) return;
     onClose();
-    if (item.kind === 'view') onSelectView(item.view);
-    else onOpenSession(item.session);
+    if (item.kind === 'session') onOpenSession(item.session);
+    else queueMicrotask(item.action.run);
   }
 
   function onKey(e: KeyboardEvent) {
@@ -110,30 +111,38 @@
       <div class="palette-results" id="workspace-command-results" role="listbox">
         {#if items.length}
           {#each items as item, i (item.key)}
+            {#if i === 0 || items[i - 1].group !== item.group}
+              <div class="result-group" role="presentation">{item.group}</div>
+            {/if}
             <button
               id={item.key}
               type="button"
               role="option"
               aria-selected={i === selected}
+              aria-disabled={item.disabled ? 'true' : undefined}
               class:selected={i === selected}
+              class:disabled={item.disabled}
               onmouseenter={() => (selected = i)}
               onclick={() => choose(item)}
             >
               <span class="result-icon" data-kind={item.kind}>
                 {#if item.kind === 'session'}
                   <span class="server-dot" style="background: {item.session.serverColor}"></span>
-                {:else if item.view === 'chat'}C
-                {:else if item.view === 'board'}Q
-                {:else}✦{/if}
+                {:else if item.action.id === 'view:chat'}C
+                {:else if item.action.id === 'view:board'}Q
+                {:else if item.action.id === 'view:canvas'}◆
+                {:else}·{/if}
               </span>
               <span class="result-copy">
                 <span class="result-title">{item.title}</span>
                 <span class="result-detail">{item.detail}</span>
               </span>
-              {#if item.kind === 'view' && item.view === view}
+              {#if item.kind === 'action' && item.action.id === `view:${view}`}
                 <span class="current">atual</span>
               {:else if item.kind === 'session' && item.session.state === 'awaiting_input'}
                 <span class="attention">aguardando</span>
+              {:else if item.kind === 'action' && item.action.shortcut}
+                <kbd>{item.action.shortcut}</kbd>
               {/if}
             </button>
           {/each}
@@ -223,6 +232,15 @@
     padding: var(--space-2);
   }
 
+  .result-group {
+    padding: var(--space-3) var(--space-3) var(--space-1);
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
   .palette-results button {
     width: 100%;
     min-height: 54px;
@@ -235,6 +253,10 @@
   }
 
   .palette-results button.selected { background: var(--bg-hover); }
+  .palette-results button.disabled {
+    cursor: not-allowed;
+    opacity: 0.48;
+  }
 
   .result-icon {
     width: 30px;

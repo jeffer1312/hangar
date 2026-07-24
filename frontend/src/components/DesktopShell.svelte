@@ -10,6 +10,7 @@
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { selectServer } from '../lib/auth';
   import type { AggSession } from '../lib/types';
+  import type { WorkspaceAction, WorkspaceView } from '../lib/workspaceCommands';
 
   // Shell de DESKTOP (>=820px): sidebar fixa + chat largo. Reusa o componente Chat do mobile
   // sem alteracao; abaixo de 820px o App nem monta isto (fica o fluxo mobile intacto).
@@ -38,7 +39,6 @@
     onNavigateToChat, onCompare, onLogout,
   }: Props = $props();
 
-  type WorkspaceView = 'chat' | 'board' | 'canvas';
   let commandOpen = $state(false);
   let lastSession = $state<string | null>(null);
   const rows = $derived<AggSession[]>(sessionsStore.rows);
@@ -71,6 +71,33 @@
       onToggleCanvas();
     }
   }
+
+  const navigationActions: WorkspaceAction[] = [
+    {
+      id: 'view:chat',
+      title: 'Abrir Conversa',
+      detail: 'Espaço principal de chat',
+      keywords: ['chat', 'conversa'],
+      group: 'Navegação',
+      run: () => selectView('chat'),
+    },
+    {
+      id: 'view:board',
+      title: 'Abrir Quadro',
+      detail: 'Sessões agrupadas por estado',
+      keywords: ['board', 'quadro', 'kanban'],
+      group: 'Navegação',
+      run: () => selectView('board'),
+    },
+    {
+      id: 'view:canvas',
+      title: 'Abrir Canvas',
+      detail: 'Organização livre das sessões',
+      keywords: ['canvas', 'organização'],
+      group: 'Navegação',
+      run: () => selectView('canvas'),
+    },
+  ];
 
   function openSession(session: AggSession) {
     selectServer(session.serverId);
@@ -213,8 +240,8 @@
     open={commandOpen}
     {rows}
     {view}
+    actions={navigationActions}
     onClose={() => (commandOpen = false)}
-    onSelectView={selectView}
     onOpenSession={openSession}
   />
 </div>

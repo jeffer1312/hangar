@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { filterWorkspaceItems } from './workspaceCommands';
+import type { AggSession } from './types';
+import { filterWorkspaceItems, workspaceSessionItems } from './workspaceCommands';
 
 const items = [
   { key: 'archive', title: 'Arquivo', detail: 'Sessões encerradas', keywords: ['histórico'], group: 'Sessão' as const },
@@ -37,5 +38,32 @@ describe('filterWorkspaceItems', () => {
     ];
 
     expect(filterWorkspaceItems(tiedItems, 'projeto').map((item) => item.key)).toEqual(['first', 'second']);
+  });
+});
+
+describe('workspaceSessionItems', () => {
+  it('uses a server-aware key and exposes server/cwd as searchable text', () => {
+    const rows: AggSession[] = [
+      {
+        name: 'api',
+        cwd: '/workspace/checkout',
+        state: 'idle',
+        serverId: 'server-b',
+        serverLabel: 'Produção',
+        serverColor: '#22c55e',
+      },
+    ];
+
+    const sessionItems = workspaceSessionItems(rows);
+
+    expect(sessionItems[0]).toMatchObject({
+      key: 'server-b::api',
+      kind: 'session',
+      title: 'api',
+      detail: 'Produção · /workspace/checkout',
+      group: 'Sessões',
+    });
+    expect(filterWorkspaceItems(sessionItems, 'producao')).toHaveLength(1);
+    expect(filterWorkspaceItems(sessionItems, 'checkout')).toHaveLength(1);
   });
 });
