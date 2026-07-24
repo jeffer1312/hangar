@@ -14,6 +14,8 @@ export function focusableElements(container: HTMLElement): HTMLElement[] {
     (element) =>
       element.tabIndex >= 0 &&
       !element.hasAttribute('disabled') &&
+      !('disabled' in element && element.disabled) &&
+      !element.matches?.(':disabled') &&
       !element.closest('[inert], [aria-hidden="true"]') &&
       element.getClientRects().length > 0,
   );
