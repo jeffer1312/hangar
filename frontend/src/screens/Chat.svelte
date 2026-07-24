@@ -16,6 +16,7 @@
   import ForwardSheet from '../components/ForwardSheet.svelte';
   import PairSheet from '../components/PairSheet.svelte';
   import LoopSheet from '../components/LoopSheet.svelte';
+  import DesktopSessionContext from '../components/DesktopSessionContext.svelte';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import {
     getHistory,
@@ -42,8 +43,16 @@
     onNavigateToChat: (name: string) => void;
     desktop?: boolean;   // montado no DesktopShell -> header sem "voltar"/switcher + atalhos de teclado
     onOpenSplit?: (name: string) => void; // desktop: abre o chat do PAR lado a lado (split view)
+    // Chrome global do DesktopShell: reserva espaço acima da 1ª mensagem e delega Cmd/Ctrl+K à
+    // paleta cross-server. O mobile não passa nenhum dos dois e mantém o comportamento anterior.
+    topInset?: number;
+    onOpenWorkspacePalette?: () => void;
+    showContextPanel?: boolean;
   }
-  let { sessionName, onBack, onNavigateToChat, desktop = false, onOpenSplit }: Props = $props();
+  let {
+    sessionName, onBack, onNavigateToChat, desktop = false, onOpenSplit,
+    topInset = 0, onOpenWorkspacePalette, showContextPanel = false,
+  }: Props = $props();
 
   let events = $state<ChatEvent[]>([]);
   // Índice id->posição em `events`. O SSE re-emite o transcript INTEIRO a cada (re)conexão; sem isto
@@ -201,7 +210,13 @@
     if (!desktop) return;
     const mod = e.ctrlKey || e.metaKey;
     if (e.key === 'Escape' && anyOverlayOpen()) { e.preventDefault(); closeOverlays(); return; }
-    if (mod && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openSwitcher(); return; }
+    if (mod && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (onOpenWorkspacePalette) onOpenWorkspacePalette();
+      else openSwitcher();
+      return;
+    }
     if (mod && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
       e.preventDefault(); switchRelative(e.key === 'ArrowDown' ? 1 : -1); return;
     }
@@ -784,7 +799,12 @@
 
 <svelte:window onkeydown={onGlobalKey} />
 
-<div class="chat-screen" bind:this={screenEl} style:--nav-h={navH + 'px'}>
+<div
+  class="chat-screen"
+  class:with-context={desktop && showContextPanel}
+  bind:this={screenEl}
+  style:--nav-h={navH + topInset + 'px'}
+>
   <div class="sr-only" role="status">{stateAnnounce}</div>
   <div class="navbar-mount" bind:this={navEl}>
     <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} onOpenRun={() => (runOpen = true)} {runRunning} working={currentState === 'working'} providerLabel={isCodex ? 'Codex' : null} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
@@ -793,6 +813,17 @@
       <LoopSheet open={true} sessionName={sessionName} onClose={() => (loopSheetOpen = false)} />
     {/if}
   </div>
+
+  {#if desktop && showContextPanel}
+    <DesktopSessionContext
+      state={currentState}
+      stateDetail={stateEvent?.label}
+      {status}
+      {pairPeers}
+      {serverLabel}
+      provider={sessionProvider}
+    />
+  {/if}
 
   {#if loading}
     <!-- Entrando na sessao: skeleton shimmer (familia Respiracao) enquanto o /history carrega. -->
@@ -1073,6 +1104,19 @@
     left: 0;
     right: 0;
     z-index: 20;
+  }
+
+  /* O painel contextual só entra em desktop largo. A conversa e o composer cedem espaço de verdade
+     (não ficam cobertos por overlay); em split ou viewport menor ele nem é montado/é ocultado. */
+  @media (min-width: 1280px) {
+    .chat-screen.with-context :global(.messages-inner) {
+      max-width: min(780px, calc(100% - 300px));
+      margin-left: auto;
+      margin-right: 276px;
+    }
+    .chat-screen.with-context .bottom-dock { right: 248px; }
+    .chat-screen.with-context .chat-skeleton,
+    .chat-screen.with-context .chat-error { transform: translateX(-124px); }
   }
 
   /* Aviso flutuante "interação só pela TUI": acima do dock (bottom = altura do dock + gap, via JS).

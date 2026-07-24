@@ -1,8 +1,15 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import Sidebar from './Sidebar.svelte';
+  import WorkspaceNav from './WorkspaceNav.svelte';
+  import WorkspaceCommandPalette from './WorkspaceCommandPalette.svelte';
+  import WorkspaceAttentionStrip from './WorkspaceAttentionStrip.svelte';
   import Chat from '../screens/Chat.svelte';
   import Board from '../screens/Board.svelte';
   import Canvas from '../screens/Canvas.svelte';
+  import { sessionsStore } from '../lib/sessionsStore.svelte';
+  import { selectServer } from '../lib/auth';
+  import type { AggSession } from '../lib/types';
 
   // Shell de DESKTOP (>=820px): sidebar fixa + chat largo. Reusa o componente Chat do mobile
   // sem alteracao; abaixo de 820px o App nem monta isto (fica o fluxo mobile intacto).
@@ -30,6 +37,53 @@
     onOpenBoardSession, onOpenCanvasSession, onCloseOverlay, onToggleBoard, onToggleCanvas,
     onNavigateToChat, onCompare, onLogout,
   }: Props = $props();
+
+  type WorkspaceView = 'chat' | 'board' | 'canvas';
+  let commandOpen = $state(false);
+  let lastSession = $state<string | null>(null);
+  const rows = $derived<AggSession[]>(sessionsStore.rows);
+  const hasAttention = $derived(rows.some((row) => row.state === 'awaiting_input'));
+
+  // O shell é o dono do chrome global (navegação/paleta/atenção), então também segura uma referência
+  // ao store agregado. O singleton continua abrindo só 1 EventSource por servidor mesmo com
+  // Sidebar/Board montados: retain/release é refcount, não cria streams por consumidor.
+  onMount(() => {
+    sessionsStore.retain();
+    return () => sessionsStore.release();
+  });
+
+  $effect(() => {
+    if (currentSession) lastSession = currentSession;
+    else if (overlaySession?.name) lastSession = overlaySession.name;
+  });
+
+  function selectView(next: WorkspaceView) {
+    if (next === view) {
+      // Num chat aberto por cima do quadro/canvas, clicar na aba ativa volta à visualização atrás.
+      if (overlaySession) onCloseOverlay();
+      return;
+    }
+    if (next === 'chat') {
+      onNavigateToChat(overlaySession?.name ?? lastSession ?? '');
+    } else if (next === 'board') {
+      onToggleBoard();
+    } else {
+      onToggleCanvas();
+    }
+  }
+
+  function openSession(session: AggSession) {
+    selectServer(session.serverId);
+    onNavigateToChat(session.name);
+  }
+
+  function onShellKey(e: KeyboardEvent) {
+    if (e.defaultPrevented) return;
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault();
+      commandOpen = true;
+    }
+  }
 
   // Split view (pareamento): N Chats lado a lado — assiste o GRUPO inteiro sem alternar.
   // Aberto pelo PairSheet (por membro ou "todas"); cada painel fecha no próprio ×; trocar a
@@ -71,18 +125,31 @@
   });
 </script>
 
+<svelte:window onkeydown={onShellKey} />
+
 <div class="desktop-shell">
   <Sidebar {currentSession} onSelect={onNavigateToChat} {onCompare} {onLogout}
-           boardActive={view === 'board'} {onToggleBoard}
-           canvasActive={view === 'canvas'} {onToggleCanvas} />
+           boardActive={view === 'board'}
+           canvasActive={view === 'canvas'} />
 
-  <main class="desktop-main" class:split={splitSessions.length > 0}>
+  <main class="desktop-main" class:split={splitSessions.length > 0} class:has-attention={hasAttention}>
+    <div class="workspace-nav-layer">
+      <WorkspaceNav {view} onSelect={selectView} onOpenCommand={() => (commandOpen = true)} />
+    </div>
+    {#if hasAttention}
+      <div class="workspace-attention-layer">
+        <WorkspaceAttentionStrip {rows} onOpenSession={openSession} />
+      </div>
+    {/if}
+
     {#if view === 'board' || view === 'canvas'}
-      {#if view === 'board'}
-        <Board onOpenSession={onOpenBoardSession} />
-      {:else}
-        <Canvas onOpenSession={onOpenCanvasSession} />
-      {/if}
+      <div class="workspace-view">
+        {#if view === 'board'}
+          <Board onOpenSession={onOpenBoardSession} />
+        {:else}
+          <Canvas onOpenSession={onOpenCanvasSession} />
+        {/if}
+      </div>
       {#if overlaySession}
         <!-- Overlay do chat compartilhado entre board e canvas (mesma rota-overlay). {#key}: o Chat
              guarda estado pesado amarrado à sessão (SSE, histórico) e precisa remontar por sessão —
@@ -98,6 +165,9 @@
               desktop={true}
               onBack={onCloseOverlay}
               onNavigateToChat={onNavigateToChat}
+              topInset={hasAttention ? 52 : 0}
+              onOpenWorkspacePalette={() => (commandOpen = true)}
+              showContextPanel={true}
             />
           </div>
         {/key}
@@ -111,6 +181,9 @@
             onBack={() => onNavigateToChat('')}
             onNavigateToChat={onNavigateToChat}
             onOpenSplit={openSplit}
+            topInset={hasAttention ? 52 : 0}
+            onOpenWorkspacePalette={() => (commandOpen = true)}
+            showContextPanel={splitSessions.length === 0}
           />
         </div>
       {/key}
@@ -123,6 +196,8 @@
             desktop={true}
             onBack={() => (splitSessions = splitSessions.filter((s) => s !== split))}
             onNavigateToChat={onNavigateToChat}
+            topInset={hasAttention ? 52 : 0}
+            onOpenWorkspacePalette={() => (commandOpen = true)}
           />
         </div>
       {/each}
@@ -133,6 +208,15 @@
       </div>
     {/if}
   </main>
+
+  <WorkspaceCommandPalette
+    open={commandOpen}
+    {rows}
+    {view}
+    onClose={() => (commandOpen = false)}
+    onSelectView={selectView}
+    onOpenSession={openSession}
+  />
 </div>
 
 <style>
@@ -149,6 +233,30 @@
     position: relative;
     overflow: hidden;
   }
+  .workspace-nav-layer {
+    position: absolute;
+    top: 4px;
+    left: 50%;
+    z-index: 40;
+    transform: translateX(-50%);
+    pointer-events: none;
+  }
+  .workspace-attention-layer {
+    position: absolute;
+    top: 54px;
+    left: 0;
+    right: 0;
+    z-index: 39;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+  }
+  .workspace-view {
+    height: 100%;
+    box-sizing: border-box;
+    padding-top: 56px;
+  }
+  .desktop-main.has-attention .workspace-view { padding-top: 108px; }
   /* Split: dois chats lado a lado, divisor sutil. Cada pane é um contexto próprio (NavBar/composer). */
   .desktop-main.split { display: flex; }
   .pane { height: 100%; position: relative; overflow: hidden; }

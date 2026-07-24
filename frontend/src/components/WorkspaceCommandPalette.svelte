@@ -1,0 +1,319 @@
+<script lang="ts">
+  import { tick } from 'svelte';
+  import type { AggSession } from '../lib/types';
+
+  type WorkspaceView = 'chat' | 'board' | 'canvas';
+  type PaletteItem =
+    | { key: string; kind: 'view'; view: WorkspaceView; title: string; detail: string }
+    | { key: string; kind: 'session'; session: AggSession; title: string; detail: string };
+
+  interface Props {
+    open: boolean;
+    rows: AggSession[];
+    view: WorkspaceView;
+    onClose: () => void;
+    onSelectView: (view: WorkspaceView) => void;
+    onOpenSession: (session: AggSession) => void;
+  }
+
+  let { open, rows, view, onClose, onSelectView, onOpenSession }: Props = $props();
+  let query = $state('');
+  let selected = $state(0);
+  let searchInput = $state<HTMLInputElement>();
+
+  const items = $derived.by<PaletteItem[]>(() => {
+    const base: PaletteItem[] = [
+      { key: 'view:chat', kind: 'view', view: 'chat', title: 'Abrir Conversa', detail: 'Espaço principal de chat' },
+      { key: 'view:board', kind: 'view', view: 'board', title: 'Abrir Quadro', detail: 'Sessões agrupadas por estado' },
+      { key: 'view:canvas', kind: 'view', view: 'canvas', title: 'Abrir Canvas', detail: 'Organização livre das sessões' },
+      ...rows.map((session) => ({
+        key: `session:${session.serverId}:${session.name}`,
+        kind: 'session' as const,
+        session,
+        title: session.name,
+        detail: `${session.serverLabel} · ${session.cwd ?? 'sem diretório'}`,
+      })),
+    ];
+    const q = query.trim().toLocaleLowerCase();
+    if (!q) return base;
+    return base.filter((item) => `${item.title} ${item.detail}`.toLocaleLowerCase().includes(q));
+  });
+
+  $effect(() => {
+    if (open) {
+      query = '';
+      selected = 0;
+      void tick().then(() => searchInput?.focus());
+    }
+  });
+
+  $effect(() => {
+    void items.length;
+    if (selected >= items.length) selected = Math.max(0, items.length - 1);
+  });
+
+  function choose(item: PaletteItem | undefined) {
+    if (!item) return;
+    onClose();
+    if (item.kind === 'view') onSelectView(item.view);
+    else onOpenSession(item.session);
+  }
+
+  function onKey(e: KeyboardEvent) {
+    if (!open) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      selected = items.length ? (selected + 1) % items.length : 0;
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      selected = items.length ? (selected - 1 + items.length) % items.length : 0;
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      choose(items[selected]);
+    }
+  }
+</script>
+
+<svelte:window onkeydown={onKey} />
+
+{#if open}
+  <div
+    class="palette-backdrop"
+    role="presentation"
+    onclick={(e) => { if (e.currentTarget === e.target) onClose(); }}
+  >
+    <div class="palette" role="dialog" aria-modal="true" aria-label="Busca e comandos" tabindex="-1">
+      <div class="palette-search">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="7"></circle>
+          <path d="m20 20-3.2-3.2"></path>
+        </svg>
+        <input
+          bind:this={searchInput}
+          bind:value={query}
+          oninput={() => (selected = 0)}
+          placeholder="Ir para uma sessão ou visualização…"
+          aria-label="Buscar sessão ou comando"
+          aria-controls="workspace-command-results"
+          aria-activedescendant={items[selected]?.key}
+          autocomplete="off"
+          spellcheck={false}
+        />
+        <kbd>Esc</kbd>
+      </div>
+
+      <div class="palette-results" id="workspace-command-results" role="listbox">
+        {#if items.length}
+          {#each items as item, i (item.key)}
+            <button
+              id={item.key}
+              type="button"
+              role="option"
+              aria-selected={i === selected}
+              class:selected={i === selected}
+              onmouseenter={() => (selected = i)}
+              onclick={() => choose(item)}
+            >
+              <span class="result-icon" data-kind={item.kind}>
+                {#if item.kind === 'session'}
+                  <span class="server-dot" style="background: {item.session.serverColor}"></span>
+                {:else if item.view === 'chat'}C
+                {:else if item.view === 'board'}Q
+                {:else}✦{/if}
+              </span>
+              <span class="result-copy">
+                <span class="result-title">{item.title}</span>
+                <span class="result-detail">{item.detail}</span>
+              </span>
+              {#if item.kind === 'view' && item.view === view}
+                <span class="current">atual</span>
+              {:else if item.kind === 'session' && item.session.state === 'awaiting_input'}
+                <span class="attention">aguardando</span>
+              {/if}
+            </button>
+          {/each}
+        {:else}
+          <p class="palette-empty">Nenhuma sessão ou comando encontrado.</p>
+        {/if}
+      </div>
+
+      <footer>
+        <span><kbd>↑</kbd><kbd>↓</kbd> navegar</span>
+        <span><kbd>↵</kbd> abrir</span>
+      </footer>
+    </div>
+  </div>
+{/if}
+
+<style>
+  .palette-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: min(14vh, 120px) var(--space-4) var(--space-4);
+    background: rgba(4, 6, 10, 0.52);
+    backdrop-filter: blur(4px);
+  }
+
+  .palette {
+    width: min(660px, 100%);
+    max-height: min(620px, 74vh);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-xl, 16px);
+    background: var(--bg-elevated);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.48);
+    animation: palette-in 160ms var(--ease-out);
+  }
+
+  @keyframes palette-in {
+    from { opacity: 0; transform: translateY(-8px) scale(0.985); }
+    to { opacity: 1; transform: none; }
+  }
+
+  .palette-search {
+    min-height: 58px;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 0 var(--space-4);
+    border-bottom: 1px solid var(--border-subtle);
+    color: var(--text-muted);
+  }
+
+  .palette-search input {
+    flex: 1;
+    min-width: 0;
+    height: 56px;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: var(--text-base);
+  }
+
+  .palette-search input::placeholder { color: var(--text-muted); }
+
+  kbd {
+    min-width: 22px;
+    padding: 1px 5px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 17px;
+    text-align: center;
+  }
+
+  .palette-results {
+    overflow-y: auto;
+    padding: var(--space-2);
+  }
+
+  .palette-results button {
+    width: 100%;
+    min-height: 54px;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    text-align: left;
+  }
+
+  .palette-results button.selected { background: var(--bg-hover); }
+
+  .result-icon {
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+    font-weight: 700;
+  }
+
+  .server-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 10%, transparent);
+  }
+
+  .result-copy {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .result-title {
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    font-weight: 580;
+  }
+
+  .result-detail {
+    overflow: hidden;
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .current, .attention {
+    flex-shrink: 0;
+    padding: 2px 7px;
+    border-radius: var(--radius-full);
+    color: var(--text-muted);
+    background: var(--bg-surface);
+    font-size: 10px;
+    font-weight: 650;
+  }
+
+  .attention {
+    color: var(--warning);
+    background: color-mix(in srgb, var(--warning) 12%, transparent);
+  }
+
+  .palette-empty {
+    padding: var(--space-8) var(--space-4);
+    color: var(--text-muted);
+    text-align: center;
+  }
+
+  footer {
+    min-height: 38px;
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    padding: 0 var(--space-4);
+    border-top: 1px solid var(--border-subtle);
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+  }
+
+  footer span { display: inline-flex; align-items: center; gap: 4px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .palette { animation: none; }
+  }
+</style>

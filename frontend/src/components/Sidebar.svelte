@@ -9,11 +9,10 @@
   import GitSheet from './GitSheet.svelte';
   import LoopSheet from './LoopSheet.svelte';
 import ConfirmDialog from './ConfirmDialog.svelte';
-  import AttentionFeed from './AttentionFeed.svelte';
   import AccountMenu from './AccountMenu.svelte';
   import SessionSwitcherSheet from './SessionSwitcherSheet.svelte';
   import HoverPreview from './HoverPreview.svelte';
-  import type { SessionInfo, State, AggSession, ResumeCandidate } from '../lib/types';
+  import type { SessionInfo, State, ResumeCandidate } from '../lib/types';
   import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
@@ -41,11 +40,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     onCompare: (ids: { serverId: string; name: string }[]) => void;
     onLogout: () => void;
     boardActive: boolean;      // quadro aberto -> destaca o toggle e recolhe a sidebar pro rail
-    onToggleBoard: () => void;
     canvasActive: boolean;     // canvas aberto -> mesmo tratamento do quadro (destaca + recolhe)
-    onToggleCanvas: () => void;
   }
-  let { currentSession, onSelect, onCompare, onLogout, boardActive, onToggleBoard, canvasActive, onToggleCanvas }: Props = $props();
+  let { currentSession, onSelect, onCompare, onLogout, boardActive, canvasActive }: Props = $props();
 
   // Grupo generico: por SERVIDOR (hoje) ou por PROJETO (cwd) — mesmo shape nos dois modos. Cada
   // sessao carrega o serverId dela (no modo projeto um grupo pode juntar sessoes de servidores
@@ -545,11 +542,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   const awaitingTotal = $derived(groups.reduce((n, g) => n + countAwaiting(g.sessions), 0));
   $effect(() => { updateBadge(awaitingTotal); });
 
-  // Fila cross-server pra a AttentionFeed (feature #6): as rows do store já vêm deduplicadas e
-  // enriquecidas com label/cor do servidor (AggSession). Independe do modo de agrupamento; o
-  // attentionFeed reordena por urgência internamente.
-  const attnSessions = $derived<AggSession[]>(sessionsStore.rows);
-
   // Filtro (paridade com o mobile): so aparece quando ha muitas sessoes; casa nome/cwd/rotulo do
   // grupo. Aplicado sobre `groups` num derived (reativo ao texto) — nao mexe no fluxo do SSE. Grupo
   // que zera apos o filtro some; sem filtro, `groups` passa intacto (mantem grupo offline/vazio).
@@ -694,27 +686,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         </svg>
       </button>
     {/if}
-    <!-- Toggle do quadro (visualização irmã da lista+chat). Fora do {#if expanded} de proposito: no
-         rail recolhido — que e justamente onde a sidebar fica com o quadro aberto — precisa aparecer
-         pra dar a volta. -->
-    <button class="board-btn" class:active={boardActive} onclick={onToggleBoard}
-            title={boardActive ? 'Voltar pra lista' : 'Quadro de sessões'}
-            aria-label="Alternar quadro de sessões" aria-pressed={boardActive}>
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true">
-        <rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/>
-        <rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/>
-      </svg>
-    </button>
-    <!-- Toggle do canvas livre (visualização irmã do quadro). Fora do {#if expanded} pelo mesmo motivo
-         do board: no rail recolhido — onde a sidebar fica com o canvas aberto — precisa aparecer. -->
-    <button class="board-btn" class:active={canvasActive} onclick={onToggleCanvas}
-            title={canvasActive ? 'Voltar pra lista' : 'Canvas de sessões'}
-            aria-label="Alternar canvas de sessões" aria-pressed={canvasActive}>
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true">
-        <rect x="3" y="4" width="9" height="7" rx="1.5"/><rect x="14.5" y="8" width="6.5" height="10" rx="1.5"/>
-        <rect x="5" y="14.5" width="7" height="5.5" rx="1.5"/>
-      </svg>
-    </button>
     <!-- Kebab "⋯": nav secundária (Buscar/Arquivo/Custos) + agrupamento, docado no header — o twin
          desktop do hamburger do mobile. Abre um popover ancorado (renderizado fora do <aside>). -->
     <button class="kebab-btn" class:active={kebabOpen} onclick={openKebab} aria-haspopup="menu" aria-expanded={kebabOpen} aria-label="Mais opções" title="Buscar, Arquivo, Custos, Agrupar">
@@ -724,11 +695,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 
   <nav class="sess-list" class:compact aria-label="Sessões">
     {#if expanded}
-      <!-- "Precisa de você" (feature #6): fila cross-server de sessoes aguardando, fixa no topo.
-           Picker inline (OptionButtons) responde sem abrir o chat; nativo AskUserQuestion abre. -->
-      <AttentionFeed sessions={attnSessions} onOpenChat={(s) => onMainClick(s.name, s.serverId, s.tracked)} />
-      <!-- Toggle Servidor|Projeto (feature #3) migrou pro popover do kebab (header) — não empilha
-           mais no topo da lista. Continua condicional a >=2 servidores (dentro do popover). -->
+      <!-- A fila "Precisa de você" migrou para o chrome global do DesktopShell: continua visível
+           em Conversa/Quadro/Canvas e deixa de duplicar conteúdo no topo da lista. -->
 
       <!-- Filtro (paridade com o mobile): so aparece quando a lista fica longa. -->
       {#if showFilter}
@@ -1291,13 +1259,13 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
   .icon-btn:active, .icon-btn:hover { background: var(--bg-hover); }
   .side-brand { flex: 1; min-width: 0; font-size: var(--text-base); font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  /* Toggles do header (modo selecao / quadro): mesma caixa de 36px, acesa em accent quando ativa. */
-  .select-toggle-btn, .board-btn {
+  /* Toggle do modo de seleção: mesma caixa de 36px dos outros controles do header. */
+  .select-toggle-btn {
     flex-shrink: 0; width: 36px; height: 36px;
     border-radius: var(--radius-md); color: var(--text-secondary);
   }
-  .select-toggle-btn:hover, .board-btn:hover { background: var(--bg-hover); }
-  .select-toggle-btn.active, .board-btn.active { color: var(--accent); background: var(--accent-dim); }
+  .select-toggle-btn:hover { background: var(--bg-hover); }
+  .select-toggle-btn.active { color: var(--accent); background: var(--accent-dim); }
 
   /* ── Kebab "⋯" do header + seu popover (nav secundária + agrupamento) ── */
   .kebab-btn {
@@ -1355,9 +1323,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .filter-input::placeholder { color: var(--text-muted); }
   .filter-input:focus { border-color: var(--accent); }
   .filter-empty { font-size: var(--text-xs); color: var(--text-muted); text-align: center; padding: var(--space-4) var(--space-2); }
-  /* Precisa de você (AttentionFeed): alinha a caixa a largura do conteudo da sidebar (margens laterais
-     do componente sao pensadas pro mobile — desktop-only, nao mexe no mobile). */
-  .sess-list :global(.attn) { margin-left: 0; margin-right: 0; margin-bottom: var(--space-2); border-radius: var(--radius-md); }
   /* Header do grupo virou uma row (label + "enviar p/ todas", feature #9). */
   .grp-head-row { display: flex; align-items: center; }
   .grp-head-row:not(:first-child) { margin-top: var(--space-2); }
