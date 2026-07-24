@@ -101,7 +101,10 @@
       // Chat/DesktopShell global handlers, which would otherwise dismiss an
       // overlay behind this one in the same keypress.
       e.preventDefault();
-      e.stopPropagation();
+      // This listener is attached to window; stopPropagation alone still
+      // allows sibling window listeners to run. Stop them as well so only the
+      // sheet that owns this fallback handles the key.
+      e.stopImmediatePropagation();
       onClose();
     }
   }
