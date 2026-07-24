@@ -213,7 +213,7 @@
              motivo do currentKey: homônimas em servidores diferentes têm o mesmo nome, e só o nome na
              key deixaria o Chat preso no servidor antigo. -->
         {#key workspaceSessionKey(overlaySession)}
-          <div class="board-overlay" role="dialog" aria-label="Chat da sessão">
+          <div class="board-overlay" role="region" aria-label="Chat da sessão">
             <button class="split-close" onclick={onCloseOverlay}
                     aria-label="Fechar chat" title="Fechar (Esc)">×</button>
             <Chat
