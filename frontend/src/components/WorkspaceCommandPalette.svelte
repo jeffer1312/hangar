@@ -22,6 +22,8 @@
   let query = $state('');
   let selected = $state(0);
   let searchInput = $state<HTMLInputElement>();
+  let palette = $state<HTMLElement>();
+  let previousFocus: HTMLElement | null = null;
 
   const items = $derived.by<PaletteItem[]>(() => {
     const base: PaletteItem[] = [
@@ -42,9 +44,18 @@
 
   $effect(() => {
     if (open) {
+      previousFocus = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
       query = '';
       selected = 0;
       void tick().then(() => searchInput?.focus());
+    } else if (previousFocus) {
+      const target = previousFocus;
+      previousFocus = null;
+      void tick().then(() => {
+        if (!open && target.isConnected) target.focus();
+      });
     }
   });
 
@@ -60,26 +71,64 @@
     else queueMicrotask(item.action.run);
   }
 
+  function focusableElements(): HTMLElement[] {
+    if (!palette) return [];
+    return [...palette.querySelectorAll<HTMLElement>(
+      'input, button, [href], [tabindex]:not([tabindex="-1"])',
+    )].filter((element) => element.getClientRects().length > 0);
+  }
+
+  function trapTab(e: KeyboardEvent) {
+    const focusable = focusableElements();
+    if (!focusable.length) {
+      e.preventDefault();
+      palette?.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (!palette?.contains(active)) {
+      e.preventDefault();
+      (e.shiftKey ? last : first).focus();
+    } else if (e.shiftKey && active === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+
   function onKey(e: KeyboardEvent) {
-    if (!open) return;
     if (e.key === 'Escape') {
       e.preventDefault();
-      e.stopPropagation();
+      e.stopImmediatePropagation();
       onClose();
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
+      e.stopImmediatePropagation();
       selected = items.length ? (selected + 1) % items.length : 0;
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
+      e.stopImmediatePropagation();
       selected = items.length ? (selected - 1 + items.length) % items.length : 0;
     } else if (e.key === 'Enter') {
       e.preventDefault();
+      e.stopImmediatePropagation();
       choose(items[selected]);
+    } else if (e.key === 'Tab') {
+      e.stopImmediatePropagation();
+      trapTab(e);
     }
   }
-</script>
 
-<svelte:window onkeydown={onKey} />
+  $effect(() => {
+    if (!open) return;
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  });
+</script>
 
 {#if open}
   <div
@@ -87,7 +136,14 @@
     role="presentation"
     onclick={(e) => { if (e.currentTarget === e.target) onClose(); }}
   >
-    <div class="palette" role="dialog" aria-modal="true" aria-label="Busca e comandos" tabindex="-1">
+    <div
+      bind:this={palette}
+      class="palette"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Busca e comandos"
+      tabindex="-1"
+    >
       <div class="palette-search">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2" stroke-linecap="round" aria-hidden="true">
@@ -163,7 +219,7 @@
   .palette-backdrop {
     position: fixed;
     inset: 0;
-    z-index: 80;
+    z-index: 1100;
     display: flex;
     align-items: flex-start;
     justify-content: center;
