@@ -10,7 +10,7 @@
     sessionName?: string;
     preview?: boolean;
     animate?: boolean;   // false = bubble de HISTORICO remontada (paginacao/janela): sem fade/slide
-    onForward?: (() => void) | null; // abre o picker "encaminhar pra sessao" (long-press/hover)
+    onForward?: (() => void) | null; // abre o picker "encaminhar pra sessao" (botao ↗)
   }
   let { text, ts, sessionName = '', preview = false, animate = true, onForward = null }: Props = $props();
 
@@ -45,25 +45,11 @@
     msgCopied = true;
     setTimeout(() => (msgCopied = false), 1200);
   }
-
-  // Long-press (500ms, mesmo padrao do SessionCard) -> encaminhar. touchmove cancela (scroll).
-  let pressTimer: ReturnType<typeof setTimeout> | null = null;
-  function pressStart() {
-    if (!onForward) return;
-    pressTimer = setTimeout(() => { pressTimer = null; onForward?.(); }, 500);
-  }
-  function pressCancel() {
-    if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
-  }
 </script>
 
-<div
-  class="assistant-msg"
-  class:noanim={!animate}
-  ontouchstart={pressStart}
-  ontouchend={pressCancel}
-  ontouchmove={pressCancel}
->
+<!-- ponytail: sem long-press aqui de proposito — o timer de 500ms roubava o gesto de SELECIONAR
+     texto do iOS (segurar abria a sheet de encaminhar). As acoes moram na linha do horario. -->
+<div class="assistant-msg" class:noanim={!animate}>
   {#if preview}
     <!-- Preview ao vivo: texto PLANO (markdown so no snap final canonico, pra nao piscar **/code-fence
          meio-aberto) + caret. Mesma casca da bolha real -> swap quase invisivel. -->
@@ -73,13 +59,15 @@
     <div class="prose" onclick={onProseClick} role="presentation">{@html html}</div>
     {#if fileRefs.length}<FileAttachment {sessionName} refs={fileRefs} />{/if}
     {#if mediaRefs.length}<FileAttachment {sessionName} refs={mediaRefs} />{/if}
-    {#if ts}
-      <span class="ts">{formatTime(ts)}</span>
-    {/if}
-    <button class="msg-copy" class:copied={msgCopied} onclick={copyMessage} aria-label="Copiar mensagem" title="Copiar mensagem"></button>
-    {#if onForward}
-      <button class="msg-fwd" onclick={onForward} aria-label="Encaminhar pra outra sessão" title="Encaminhar pra outra sessão"></button>
-    {/if}
+    <div class="msg-actions">
+      {#if ts}
+        <span class="ts">{formatTime(ts)}</span>
+      {/if}
+      <button class="msg-copy" class:copied={msgCopied} onclick={copyMessage} aria-label="Copiar mensagem" title="Copiar mensagem"></button>
+      {#if onForward}
+        <button class="msg-fwd" onclick={onForward} aria-label="Encaminhar pra outra sessão" title="Encaminhar pra outra sessão"></button>
+      {/if}
+    </div>
   {/if}
 </div>
 
@@ -105,26 +93,28 @@
   /* Historico remontado (paginacao pra cima / re-ancorar da janela): entra parado. */
   .assistant-msg.noanim { animation: none; }
 
-  /* Ações da mensagem (copiar / encaminhar): so desktop (hover). Botões leves, sem caixa —
-     top negativo tira do texto (não cobrem a primeira linha ao aparecer). */
+  /* Ações da mensagem (copiar / encaminhar) na linha do horário: no toque ficam SEMPRE visíveis
+     (é a única forma de encaminhar agora que o long-press saiu); no desktop aparecem no hover. */
+  .msg-actions {
+    display: flex; align-items: center; gap: var(--space-1);
+    margin-top: var(--space-1);
+  }
   .msg-copy, .msg-fwd {
-    position: absolute; top: -24px;
-    width: 24px; height: 24px; padding: 0;
-    display: none; align-items: center; justify-content: center;
+    width: 28px; height: 28px; padding: 0;
+    display: flex; align-items: center; justify-content: center;
     border: none; border-radius: var(--radius-sm);
     background: transparent; color: var(--text-muted);
-    opacity: 0; transition: opacity 120ms var(--ease-out), background 120ms var(--ease-out);
+    opacity: 0.5; transition: opacity 120ms var(--ease-out), background 120ms var(--ease-out);
     cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
   }
-  .msg-copy { right: 0; }
-  .msg-fwd { right: 26px; }
   .msg-copy::before { content: '⧉'; font-size: 14px; line-height: 1; }
   .msg-fwd::before { content: '↗'; font-size: 14px; line-height: 1; }
   .msg-copy.copied { color: var(--accent); opacity: 1; }
   .msg-copy.copied::before { content: '✓'; }
 
   @media (hover: hover) and (pointer: fine) {
-    .msg-copy, .msg-fwd { display: flex; }
+    .msg-copy, .msg-fwd { opacity: 0; }
     .assistant-msg:hover .msg-copy, .assistant-msg:hover .msg-fwd { opacity: 0.55; }
     .msg-copy:hover, .msg-fwd:hover { opacity: 1 !important; background: var(--bg-hover); color: var(--text-primary); }
   }
@@ -236,7 +226,7 @@
   .ts {
     font-size: var(--text-xs);
     color: var(--text-muted);
-    margin-top: var(--space-1);
+    margin-right: var(--space-1);
   }
 
   /* Preview plano: preserva quebras de linha do pane (sem markdown -> sem blocos). */
