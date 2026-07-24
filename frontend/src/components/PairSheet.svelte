@@ -438,7 +438,7 @@
   .feed-text {
     font-size: var(--text-sm); color: var(--text-primary); line-height: 1.45;
     white-space: pre-wrap; word-break: break-word;
-    display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+    display: -webkit-box; line-clamp: 4; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
   }
 
   .danger-btn {
