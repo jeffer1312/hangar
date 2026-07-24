@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getPane, sendKey, sendTermInput, type NavKey } from '../lib/api';
+  import ModalDialog from './ModalDialog.svelte';
 
   interface Props {
     open: boolean;
@@ -92,8 +93,8 @@
   const paneUrl = $derived(text.match(/https?:\/\/\S+/)?.[0] ?? null);
 </script>
 
-{#if open}
-  <div class="tm-backdrop" role="dialog" aria-modal="true" aria-label="Terminal (overlay TUI)">
+<ModalDialog {open} ariaLabel="Terminal (overlay TUI)" onClose={onClose} className="tm-dialog">
+  <div class="tm-backdrop">
     <header class="tm-head">
       <button class="tm-back" onclick={onClose} aria-label="Voltar ao chat">
         <span class="tm-back-arrow">←</span> Voltar ao chat
@@ -134,15 +135,14 @@
       <button class="tm-key tm-enter" onclick={() => press('Enter')}>⏎</button>
     </nav>
   </div>
-{/if}
+</ModalDialog>
 
 <style>
   /* Overlay fullscreen (NAO bottom sheet): o pane e largo (200 cols) e precisa da tela toda. position:
      fixed cobrindo a viewport; o backing solido evita o glitch preto do iOS. */
+  :global(.tm-dialog) { width: 100%; max-width: 100%; height: 100%; max-height: 100%; padding: 0; border: 0; border-radius: 0; }
   .tm-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 60;
+    height: 100%;
     display: flex;
     flex-direction: column;
     background: var(--bg-base);
