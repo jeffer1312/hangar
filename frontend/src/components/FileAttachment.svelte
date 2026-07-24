@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ModalDialog from './ModalDialog.svelte';
   import { fileUrl } from '../lib/api';
   import type { FileRef } from '../lib/format';
 
@@ -10,6 +11,8 @@
 
   // Item aberto em tela cheia (img/video/html/pdf). null = fechado.
   let open = $state<FileRef | null>(null);
+  let imageClose = $state<HTMLButtonElement | null>(null);
+  let videoClose = $state<HTMLButtonElement | null>(null);
   // Paths que falharam ao carregar -> some o anexo.
   let failed = $state<Set<string>>(new Set());
 
@@ -26,12 +29,6 @@
   // Falha NAO some mais (sumir calado escondia o que quebrou) nem fica quadrado preto: vira um chip
   // "nao carregou" com o nome -> visivel + debugavel. So filtramos no render (failed.has).
 
-  // Move o overlay pro <body> -> escapa do overflow/posicionamento do .chat-screen (mesmo truque
-  // do ImageBubble), senao o fixed fica preso e some atras do composer/topbar.
-  function portal(node: HTMLElement) {
-    document.body.appendChild(node);
-    return { destroy() { node.remove(); } };
-  }
 </script>
 
 {#if refs.length}
@@ -66,25 +63,37 @@
 
 {#if open}
   {@const cur = open}
-  <div use:portal class="att-overlay" role="dialog" aria-modal="true" onclick={() => (open = null)}>
+  <ModalDialog
+    open={true}
+    ariaLabel={`Visualizar ${cur.name}`}
+    onClose={() => (open = null)}
+    initialFocus={cur.kind === 'video' ? videoClose : null}
+    className="attachment-dialog"
+  >
     {#if cur.kind === 'image'}
-      <img class="full-media" src={url(cur)} alt={cur.name} />
+      <div class="media-modal">
+        <button bind:this={imageClose} class="media-close" type="button" onclick={() => (open = null)} aria-label="Fechar visualização">✕</button>
+        <img class="full-media" src={url(cur)} alt={cur.name} />
+      </div>
     {:else if cur.kind === 'video'}
-      <!-- svelte-ignore a11y_media_has_caption -->
-      <video class="full-media" src={url(cur)} controls autoplay playsinline onclick={(e) => e.stopPropagation()}></video>
+      <div class="media-modal">
+        <button bind:this={videoClose} class="media-close" type="button" onclick={() => (open = null)} aria-label="Fechar visualização">✕</button>
+        <!-- svelte-ignore a11y_media_has_caption -->
+        <video class="full-media" src={url(cur)} controls autoplay playsinline></video>
+      </div>
     {:else}
-      <div class="doc-modal" onclick={(e) => e.stopPropagation()}>
+      <div class="doc-modal">
         <div class="doc-bar">
           <span class="doc-name">{cur.name}</span>
-          <a class="doc-btn" href={url(cur)} target="_blank" rel="noopener noreferrer">↗ nova aba</a>
-          <button class="doc-btn" onclick={() => (open = null)} aria-label="Fechar">✕</button>
+          <a class="doc-btn" href={url(cur)} target="_blank" rel="noopener noreferrer" aria-label={`Abrir ${cur.name} em nova aba`}>↗ nova aba</a>
+          <button class="doc-btn" type="button" onclick={() => (open = null)} aria-label="Fechar visualização">✕</button>
         </div>
         <!-- html: sandbox SEM allow-same-origin -> roda isolado, nao toca no app. pdf: viewer do browser. -->
         <iframe class="doc-frame" src={url(cur)} title={cur.name}
           sandbox={cur.kind === 'html' ? 'allow-scripts allow-popups' : undefined}></iframe>
       </div>
     {/if}
-  </div>
+  </ModalDialog>
 {/if}
 
 <style>
@@ -125,17 +134,30 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
 
-  /* Tela cheia (portal no body). */
-  .att-overlay {
-    position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center;
-    padding: var(--space-3); background: rgba(0, 0, 0, 0.92);
+  :global(.modal-backdrop:has(.attachment-dialog)) {
+    background: rgba(0, 0, 0, 0.92);
+    padding: var(--space-3);
     padding-top: calc(var(--space-3) + env(safe-area-inset-top));
     padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom));
   }
+  :global(.modal-dialog.attachment-dialog) {
+    width: 100%; max-width: 1100px; height: min(100%, 900px); max-height: 100%;
+    overflow: hidden; background: transparent; border: 0; border-radius: 0; box-shadow: none;
+  }
+  .media-modal {
+    position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+  }
+  .media-close {
+    position: absolute; z-index: 1; top: var(--space-2); right: var(--space-2);
+    width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid rgba(255,255,255,0.25); border-radius: 999px; background: rgba(0,0,0,0.65);
+    color: #fff; font-size: var(--text-base); cursor: pointer;
+  }
+  .media-close:active, .media-close:focus-visible { background: rgba(255,255,255,0.18); }
   .full-media { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--radius-md); }
 
   .doc-modal {
-    width: 100%; max-width: 1100px; height: 100%; display: flex; flex-direction: column;
+    width: 100%; height: 100%; display: flex; flex-direction: column;
     background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); overflow: hidden;
   }
   .doc-bar { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border-subtle); }
