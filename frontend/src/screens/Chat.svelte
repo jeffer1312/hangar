@@ -213,7 +213,17 @@
   function onGlobalKey(e: KeyboardEvent) {
     if (!desktop) return;
     const mod = e.ctrlKey || e.metaKey;
-    if (e.key === 'Escape' && anyOverlayOpen()) { e.preventDefault(); closeOverlays(); return; }
+    if (e.key === 'Escape' && anyOverlayOpen()) {
+      // Dialog/sheet components own Escape at their boundary. If the event
+      // originated inside one, do not let this page-level fallback dismiss
+      // every tracked overlay behind it.
+      const target = e.target;
+      if (target instanceof Element && target.closest('[role="dialog"]')) return;
+      if (e.defaultPrevented) return;
+      e.preventDefault();
+      closeOverlays();
+      return;
+    }
     if (mod && (e.key === 'k' || e.key === 'K')) {
       e.preventDefault();
       e.stopPropagation();
