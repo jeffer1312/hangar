@@ -41,6 +41,7 @@
 
   let commandOpen = $state(false);
   let lastSession = $state<string | null>(null);
+  let sidebarActions = $state<WorkspaceAction[]>([]);
   const rows = $derived<AggSession[]>(sessionsStore.rows);
   const hasAttention = $derived(rows.some((row) => row.state === 'awaiting_input'));
 
@@ -75,7 +76,7 @@
   const navigationActions: WorkspaceAction[] = [
     {
       id: 'view:chat',
-      title: 'Abrir Conversa',
+      title: 'Conversa',
       detail: 'Espaço principal de chat',
       keywords: ['chat', 'conversa'],
       group: 'Navegação',
@@ -83,7 +84,7 @@
     },
     {
       id: 'view:board',
-      title: 'Abrir Quadro',
+      title: 'Quadro',
       detail: 'Sessões agrupadas por estado',
       keywords: ['board', 'quadro', 'kanban'],
       group: 'Navegação',
@@ -91,13 +92,27 @@
     },
     {
       id: 'view:canvas',
-      title: 'Abrir Canvas',
+      title: 'Canvas',
       detail: 'Organização livre das sessões',
       keywords: ['canvas', 'organização'],
       group: 'Navegação',
       run: () => selectView('canvas'),
     },
   ];
+  const actionGroups: WorkspaceAction['group'][] = [
+    'Navegação', 'Sessão', 'Ferramentas', 'Colaboração',
+  ];
+  const workspaceActions = $derived.by<WorkspaceAction[]>(() => {
+    const actionsById = new Map<string, WorkspaceAction>();
+    for (const action of [...navigationActions, ...sidebarActions]) actionsById.set(action.id, action);
+    return actionGroups.flatMap((group) =>
+      [...actionsById.values()].filter((action) => action.group === group),
+    );
+  });
+
+  function handleSidebarActionsChange(actions: WorkspaceAction[]) {
+    sidebarActions = actions;
+  }
 
   function openSession(session: AggSession) {
     selectServer(session.serverId);
@@ -157,7 +172,8 @@
 <div class="desktop-shell">
   <Sidebar {currentSession} onSelect={onNavigateToChat} {onCompare} {onLogout}
            boardActive={view === 'board'}
-           canvasActive={view === 'canvas'} />
+           canvasActive={view === 'canvas'}
+           onWorkspaceActionsChange={handleSidebarActionsChange} />
 
   <main class="desktop-main" class:split={splitSessions.length > 0} class:has-attention={hasAttention}>
     <div class="workspace-nav-layer">
@@ -240,7 +256,7 @@
     open={commandOpen}
     {rows}
     {view}
-    actions={navigationActions}
+    actions={workspaceActions}
     onClose={() => (commandOpen = false)}
     onOpenSession={openSession}
   />
