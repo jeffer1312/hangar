@@ -5,7 +5,7 @@
     animate?: boolean;   // false = bubble de HISTORICO remontada (paginacao/janela): sem fade
     from?: string | null;          // recado de OUTRA sessao (cp-send): nome da sessao remetente
     scope?: 'peer' | 'group' | null; // 'group' = aviso pro grupo todo ([grupo: X]) -> chip distinto
-    onForward?: (() => void) | null; // abre o picker "encaminhar pra sessao" (long-press/hover)
+    onForward?: (() => void) | null; // abre o picker "encaminhar pra sessao" (botao ↗)
     onOpenPeer?: (() => void) | null; // tap no chip "de: X" -> abre o chat da sessao remetente
   }
   let { text, ts, animate = true, from = null, scope = 'peer', onForward = null, onOpenPeer = null }: Props = $props();
@@ -17,27 +17,15 @@
       minute: '2-digit',
     });
   }
-
-  // Long-press (500ms, mesmo padrao do SessionCard) -> encaminhar. touchmove cancela (scroll).
-  let pressTimer: ReturnType<typeof setTimeout> | null = null;
-  function pressStart() {
-    if (!onForward) return;
-    pressTimer = setTimeout(() => { pressTimer = null; onForward?.(); }, 500);
-  }
-  function pressCancel() {
-    if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
-  }
 </script>
 
+<!-- ponytail: sem long-press / oncontextmenu aqui de proposito — roubavam a selecao de texto do
+     iOS e o menu nativo do desktop. Encaminhar = botao ↗ na linha do horario. -->
 <div class="bubble-wrap" class:noanim={!animate}>
   <div
     class="bubble"
     class:peer={!!from}
     class:group={scope === 'group'}
-    ontouchstart={pressStart}
-    ontouchend={pressCancel}
-    ontouchmove={pressCancel}
-    oncontextmenu={(e) => { if (onForward) { e.preventDefault(); onForward(); } }}
   >
     {#if from}
       {@const label = scope === 'group' ? `📣 grupo · ${from}` : `📟 de: ${from}`}
@@ -49,12 +37,16 @@
       {/if}
     {/if}
     <p class="bubble-text">{text}</p>
-    {#if onForward}
-      <button class="msg-fwd" onclick={onForward} aria-label="Encaminhar pra outra sessão" title="Encaminhar pra outra sessão"></button>
-    {/if}
   </div>
-  {#if ts}
-    <span class="ts">{formatTime(ts)}</span>
+  {#if ts || onForward}
+    <div class="msg-actions">
+      {#if ts}
+        <span class="ts">{formatTime(ts)}</span>
+      {/if}
+      {#if onForward}
+        <button class="msg-fwd" onclick={onForward} aria-label="Encaminhar pra outra sessão" title="Encaminhar pra outra sessão"></button>
+      {/if}
+    </div>
   {/if}
 </div>
 
@@ -116,28 +108,31 @@
     white-space: pre-wrap;
   }
 
-  /* Encaminhar: so desktop (hover), botão leve à ESQUERDA do balão (fora do texto), centrado
-     na vertical — mesmo estilo das ações do AssistantBubble. Mobile = long-press. */
+  /* Encaminhar na linha do horário (abaixo do balão): no toque fica SEMPRE visível — é a única
+     forma de encaminhar agora que o long-press saiu. No desktop, só no hover. */
+  .msg-actions {
+    display: flex; align-items: center; gap: var(--space-1);
+    margin-top: var(--space-1);
+  }
   .msg-fwd {
-    position: absolute; top: 50%; left: -30px; transform: translateY(-50%);
-    width: 24px; height: 24px; padding: 0;
-    display: none; align-items: center; justify-content: center;
+    width: 28px; height: 28px; padding: 0;
+    display: flex; align-items: center; justify-content: center;
     border: none; border-radius: var(--radius-sm);
     background: transparent; color: var(--text-muted);
-    opacity: 0; transition: opacity 120ms var(--ease-out), background 120ms var(--ease-out);
+    opacity: 0.5; transition: opacity 120ms var(--ease-out), background 120ms var(--ease-out);
     cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
   }
   .msg-fwd::before { content: '↗'; font-size: 14px; line-height: 1; }
   @media (hover: hover) and (pointer: fine) {
-    .msg-fwd { display: flex; }
-    .bubble:hover .msg-fwd { opacity: 0.55; }
+    .msg-fwd { opacity: 0; }
+    .bubble-wrap:hover .msg-fwd { opacity: 0.55; }
     .msg-fwd:hover { opacity: 1 !important; background: var(--bg-hover); color: var(--text-primary); }
   }
 
   .ts {
     font-size: var(--text-xs);
     color: var(--text-muted);
-    margin-top: var(--space-1);
     padding-right: var(--space-1);
   }
 </style>
