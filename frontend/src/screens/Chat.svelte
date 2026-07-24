@@ -281,7 +281,7 @@
       },
       pair: {
         detail: 'Parear a sessão atual com outra sessão',
-        keywords: ['parear', 'par', 'sessão', 'split'],
+        keywords: ['parear', 'pair', 'par', 'sessão', 'split'],
         group: 'Colaboração',
       },
       run: {
