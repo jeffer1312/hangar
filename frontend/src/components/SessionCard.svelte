@@ -148,6 +148,7 @@
   function onCancel() {
     cancelPress();
     releasePointerCapture();
+    if (dragging) offset = startOffset;
     dragging = false;
     axis = null;
     suppressClick = false;
