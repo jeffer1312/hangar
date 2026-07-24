@@ -10,6 +10,7 @@
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
   import QrScanner from '../components/QrScanner.svelte';
   import BottomSheet from '../components/BottomSheet.svelte';
+  import ModalDialog from '../components/ModalDialog.svelte';
   import ConfirmSheet from '../components/ConfirmSheet.svelte';
   import GitSheet from '../components/GitSheet.svelte';
   import LoopSheet from '../components/LoopSheet.svelte';
@@ -813,16 +814,8 @@
   </BottomSheet>
 
   {#if showAddServer}
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div
-      class="sheet-backdrop"
-      role="button"
-      tabindex="-1"
-      aria-label="Fechar"
-      onclick={() => (showAddServer = false)}
-    >
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="add-sheet" role="dialog" tabindex="-1" aria-label="Adicionar servidor" onclick={(e) => e.stopPropagation()}>
+    <ModalDialog open={showAddServer} ariaLabel="Adicionar servidor" onClose={() => (showAddServer = false)} className="add-server-dialog">
+      <div class="add-sheet">
         <h2 class="add-title">Adicionar servidor</h2>
         <form onsubmit={submitAddServer} class="add-form">
           <div class="field">
@@ -862,7 +855,7 @@
           </button>
         </form>
       </div>
-    </div>
+    </ModalDialog>
   {/if}
 
   {#if scanning}
@@ -1340,16 +1333,7 @@
   }
 
   /* Sheet de adicionar servidor manual */
-  .sheet-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 50;
-    background: rgba(0, 0, 0, 0.55);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: var(--space-6);
-  }
+  :global(.add-server-dialog) { width: min(400px, 100%); }
   .add-sheet {
     width: 100%;
     max-width: 400px;

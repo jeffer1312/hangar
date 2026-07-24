@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getWorkflows, getWorkflow, getWorkflowAgent } from '../lib/api';
+  import ModalDialog from './ModalDialog.svelte';
   import type { Activity, TaskStatus } from '../lib/activity';
   import type { WorkflowSummary, WorkflowDetail, WorkflowAgentDetail } from '../lib/types';
 
@@ -151,25 +152,10 @@
     : (agentDetail?.label ?? 'Agente')
   );
 
-  function onBackdrop(e: MouseEvent) {
-    if (e.target === e.currentTarget) onClose();
-  }
-  function onKeydown(e: KeyboardEvent) {
-    if (!open) return;
-    if (e.key === 'Escape') {
-      if (level === 'list') onClose();
-      else back();
-    }
-  }
 </script>
 
-<svelte:window onkeydown={onKeydown} />
-
-{#if open}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="backdrop" onclick={onBackdrop}>
-    <div class="modal" role="dialog" aria-modal="true" aria-label="Atividade">
+<ModalDialog {open} ariaLabel={headerTitle} onClose={() => (level === 'list' ? onClose() : back())} className="activity-dialog">
+    <div class="modal">
       <header class="modal-head">
         {#if level !== 'list'}
           <button class="modal-icon-btn" onclick={back} aria-label="Voltar">‹</button>
@@ -328,20 +314,11 @@
         {/if}
       </div>
     </div>
-  </div>
-{/if}
+</ModalDialog>
 
 <style>
   /* ── Modal responsivo: mobile = full-screen; desktop (≥720px) = card central largo ── */
-  .backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 100;
-    background: rgba(0, 0, 0, 0.6);
-    display: flex;
-    align-items: flex-end;
-    justify-content: center;
-  }
+  :global(.activity-dialog) { width: 100%; max-width: 100%; height: 100%; max-height: 100%; padding: 0; border: 0; border-radius: 0; }
   .modal {
     display: flex;
     flex-direction: column;
@@ -355,7 +332,7 @@
      demais sheets (Git/Custo/Sessões) — era o único overlay que abria como modal central. Um pouco
      mais largo que os 420px dos outros: o detalhe de workflow tem duas colunas (fases + agentes). */
   @media (min-width: 820px) {
-    .backdrop { align-items: stretch; justify-content: flex-end; background: rgba(0, 0, 0, 0.4); }
+    :global(.activity-dialog) { width: min(520px, 92vw); max-width: 92vw; height: 100%; max-height: 100%; border: 0; border-radius: 0; padding: 0; }
     .modal {
       width: min(520px, 92vw);
       height: 100%;
