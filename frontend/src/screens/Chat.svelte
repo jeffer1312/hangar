@@ -35,6 +35,7 @@
   import { listServers, getActiveId } from '../lib/auth';
   import { createActivityFolder } from '../lib/activity';
   import type { ChatEvent, StateEvent, State, SessionInfo, AskQuestionPayload, AnswerItem } from '../lib/types';
+  import type { WorkspaceAction } from '../lib/workspaceCommands';
   import { stateLabels, stateColors, countAwaiting, nextAwaiting } from '../lib/format';
 
   interface Props {
@@ -48,10 +49,13 @@
     topInset?: number;
     onOpenWorkspacePalette?: () => void;
     showContextPanel?: boolean;
+    publishWorkspaceActions?: boolean;
+    onWorkspaceActionsChange?: (actions: WorkspaceAction[]) => void;
   }
   let {
     sessionName, onBack, onNavigateToChat, desktop = false, onOpenSplit,
     topInset = 0, onOpenWorkspacePalette, showContextPanel = false,
+    publishWorkspaceActions = false, onWorkspaceActionsChange,
   }: Props = $props();
 
   let events = $state<ChatEvent[]>([]);
@@ -262,6 +266,60 @@
   const crumbs = $derived(
     desktop ? { server: serverLabel, session: sessionName, branch: status?.branch, dirty: status?.dirty ?? false } : null
   );
+
+  function action(id: string, title: string, run: () => void): WorkspaceAction {
+    const metadata: Record<string, Pick<WorkspaceAction, 'detail' | 'keywords' | 'group'>> = {
+      git: {
+        detail: 'Abrir alterações Git da sessão atual',
+        keywords: ['git', 'alterações', 'diff', 'branch'],
+        group: 'Ferramentas',
+      },
+      loop: {
+        detail: 'Configurar o loop da sessão atual',
+        keywords: ['loop', 'automação', 'iterações'],
+        group: 'Ferramentas',
+      },
+      pair: {
+        detail: 'Parear a sessão atual com outra sessão',
+        keywords: ['parear', 'par', 'sessão', 'split'],
+        group: 'Colaboração',
+      },
+      run: {
+        detail: 'Executar um workflow na sessão atual',
+        keywords: ['executar', 'workflow', 'run'],
+        group: 'Ferramentas',
+      },
+      terminal: {
+        detail: currentState === 'dead'
+          ? 'Indisponível porque a sessão atual foi encerrada'
+          : 'Abrir o espelho do terminal da sessão atual',
+        keywords: ['terminal', 'espelho', 'tui', 'pane'],
+        group: 'Ferramentas',
+      },
+    };
+    return {
+      id,
+      title,
+      ...metadata[id],
+      disabled: id === 'terminal' && currentState === 'dead',
+      run,
+    };
+  }
+
+  $effect(() => {
+    const publish = onWorkspaceActionsChange;
+    if (!desktop || !publishWorkspaceActions || !publish) return;
+    publish([
+      action('git', 'Git', () => (gitOpen = true)),
+      action('loop', 'Loop', () => (loopSheetOpen = true)),
+      action('pair', 'Parear sessão', () => (pairOpen = true)),
+      action('run', 'Executar workflow', () => (runOpen = true)),
+      action('terminal', 'Espelho do terminal', openMirror),
+    ]);
+    // Ao trocar a key servidor-aware ou desmontar este Chat, nenhum callback pode sobreviver.
+    return () => publish([]);
+  });
+
   // Anuncio de estado pra screen reader: a transicao que pede acao humana (awaiting_input) nao
   // tinha NENHUM sinal nao-visual. role="status" (aria-live polite) num no visualmente escondido.
   let stateAnnounce = $state('');
