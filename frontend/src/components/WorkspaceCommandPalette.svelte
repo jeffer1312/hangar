@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import ModalDialog from './ModalDialog.svelte';
   import type { AggSession } from '../lib/types';
   import {
     filterWorkspaceItems,
@@ -22,8 +22,6 @@
   let query = $state('');
   let selected = $state(0);
   let searchInput = $state<HTMLInputElement>();
-  let palette = $state<HTMLElement>();
-  let previousFocus: HTMLElement | null = null;
 
   const items = $derived.by<PaletteItem[]>(() => {
     const base: PaletteItem[] = [
@@ -44,18 +42,8 @@
 
   $effect(() => {
     if (open) {
-      previousFocus = document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
       query = '';
       selected = 0;
-      void tick().then(() => searchInput?.focus());
-    } else if (previousFocus) {
-      const target = previousFocus;
-      previousFocus = null;
-      void tick().then(() => {
-        if (!open && target.isConnected) target.focus();
-      });
     }
   });
 
@@ -71,41 +59,8 @@
     else queueMicrotask(item.action.run);
   }
 
-  function focusableElements(): HTMLElement[] {
-    if (!palette) return [];
-    return [...palette.querySelectorAll<HTMLElement>(
-      'input, button, [href], [tabindex]:not([tabindex="-1"])',
-    )].filter((element) => element.getClientRects().length > 0);
-  }
-
-  function trapTab(e: KeyboardEvent) {
-    const focusable = focusableElements();
-    if (!focusable.length) {
-      e.preventDefault();
-      palette?.focus();
-      return;
-    }
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    const active = document.activeElement;
-    if (!palette?.contains(active)) {
-      e.preventDefault();
-      (e.shiftKey ? last : first).focus();
-    } else if (e.shiftKey && active === first) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && active === last) {
-      e.preventDefault();
-      first.focus();
-    }
-  }
-
   function onKey(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      onClose();
-    } else if (e.key === 'ArrowDown') {
+    if (e.key === 'ArrowDown') {
       e.preventDefault();
       e.stopImmediatePropagation();
       selected = items.length ? (selected + 1) % items.length : 0;
@@ -117,9 +72,6 @@
       e.preventDefault();
       e.stopImmediatePropagation();
       choose(items[selected]);
-    } else if (e.key === 'Tab') {
-      e.stopImmediatePropagation();
-      trapTab(e);
     }
   }
 
@@ -131,19 +83,14 @@
 </script>
 
 {#if open}
-  <div
-    class="palette-backdrop"
-    role="presentation"
-    onclick={(e) => { if (e.currentTarget === e.target) onClose(); }}
+  <ModalDialog
+    {open}
+    ariaLabel="Busca e comandos"
+    onClose={onClose}
+    initialFocus={searchInput}
+    className="palette"
+    layer="command"
   >
-    <div
-      bind:this={palette}
-      class="palette"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Busca e comandos"
-      tabindex="-1"
-    >
       <div class="palette-search">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2" stroke-linecap="round" aria-hidden="true">
@@ -211,24 +158,16 @@
         <span><kbd>↑</kbd><kbd>↓</kbd> navegar</span>
         <span><kbd>↵</kbd> abrir</span>
       </footer>
-    </div>
-  </div>
+  </ModalDialog>
 {/if}
 
 <style>
-  .palette-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 1100;
-    display: flex;
-    align-items: flex-start;
-    justify-content: center;
-    padding: min(14vh, 120px) var(--space-4) var(--space-4);
-    background: rgba(4, 6, 10, 0.52);
-    backdrop-filter: blur(4px);
+  :global(.modal-dialog.palette) {
+    align-self: flex-start;
+    margin-top: min(14vh, 120px);
   }
 
-  .palette {
+  :global(.palette) {
     width: min(660px, 100%);
     max-height: min(620px, 74vh);
     display: flex;
@@ -246,7 +185,7 @@
     to { opacity: 1; transform: none; }
   }
 
-  .palette-search {
+  :global(.palette-search) {
     min-height: 58px;
     display: flex;
     align-items: center;
@@ -256,7 +195,7 @@
     color: var(--text-muted);
   }
 
-  .palette-search input {
+  :global(.palette-search input) {
     flex: 1;
     min-width: 0;
     height: 56px;
@@ -268,7 +207,7 @@
     font-size: var(--text-base);
   }
 
-  .palette-search input::placeholder { color: var(--text-muted); }
+  :global(.palette-search input::placeholder) { color: var(--text-muted); }
 
   kbd {
     min-width: 22px;
@@ -283,12 +222,12 @@
     text-align: center;
   }
 
-  .palette-results {
+  :global(.palette-results) {
     overflow-y: auto;
     padding: var(--space-2);
   }
 
-  .result-group {
+  :global(.result-group) {
     padding: var(--space-3) var(--space-3) var(--space-1);
     color: var(--text-muted);
     font-size: 10px;
@@ -297,7 +236,7 @@
     text-transform: uppercase;
   }
 
-  .palette-results button {
+  :global(.palette-results button) {
     width: 100%;
     min-height: 54px;
     display: flex;
@@ -308,8 +247,8 @@
     text-align: left;
   }
 
-  .palette-results button.selected { background: var(--bg-hover); }
-  .palette-results button.disabled {
+  :global(.palette-results button.selected) { background: var(--bg-hover); }
+  :global(.palette-results button.disabled) {
     cursor: not-allowed;
     opacity: 0.48;
   }
@@ -392,6 +331,6 @@
   footer span { display: inline-flex; align-items: center; gap: 4px; }
 
   @media (prefers-reduced-motion: reduce) {
-    .palette { animation: none; }
+    :global(.palette) { animation: none; }
   }
 </style>
