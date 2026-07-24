@@ -8,9 +8,16 @@
   import Board from '../screens/Board.svelte';
   import Canvas from '../screens/Canvas.svelte';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
-  import { selectServer } from '../lib/auth';
+  import { getActiveId, selectServer } from '../lib/auth';
   import type { AggSession } from '../lib/types';
-  import type { WorkspaceAction, WorkspaceView } from '../lib/workspaceCommands';
+  import {
+    aggregateWorkspaceActions,
+    resolveWorkspaceChatTarget,
+    workspaceSessionKey,
+    type WorkspaceAction,
+    type WorkspaceSessionRef,
+    type WorkspaceView,
+  } from '../lib/workspaceCommands';
 
   // Shell de DESKTOP (>=820px): sidebar fixa + chat largo. Reusa o componente Chat do mobile
   // sem alteracao; abaixo de 820px o App nem monta isto (fica o fluxo mobile intacto).
@@ -20,7 +27,7 @@
     // têm o MESMO nome — sem o servidor na key, trocar entre elas não remontava o Chat (SSE preso
     // no servidor antigo com o composer já falando com o novo).
     currentKey?: string | null;
-    view: 'chat' | 'board' | 'canvas';   // quadro/canvas = visualizações irmãs da lista+chat, mesma sidebar
+    view: WorkspaceView;   // quadro/canvas = visualizações irmãs da lista+chat, mesma sidebar
     // Overlay do quadro/canvas: vem da ROTA (#/board|#/canvas/<serverId>/<nome>), não é estado daqui.
     // O shell não aponta nem restaura servidor — quem faz isso é o $effect da rota no App, num lugar só.
     overlaySession: { name: string; serverId: string } | null;
@@ -40,7 +47,7 @@
   }: Props = $props();
 
   let commandOpen = $state(false);
-  let lastSession = $state<string | null>(null);
+  let lastSession = $state<WorkspaceSessionRef | null>(null);
   let sidebarActions = $state<WorkspaceAction[]>([]);
   let chatActions = $state<WorkspaceAction[]>([]);
   const rows = $derived<AggSession[]>(sessionsStore.rows);
@@ -55,8 +62,10 @@
   });
 
   $effect(() => {
-    if (currentSession) lastSession = currentSession;
-    else if (overlaySession?.name) lastSession = overlaySession.name;
+    void currentKey;
+    if (!currentSession) return;
+    const serverId = getActiveId();
+    if (serverId) lastSession = { serverId, name: currentSession };
   });
 
   function selectView(next: WorkspaceView) {
@@ -66,7 +75,13 @@
       return;
     }
     if (next === 'chat') {
-      onNavigateToChat(overlaySession?.name ?? lastSession ?? '');
+      const target = resolveWorkspaceChatTarget(lastSession, overlaySession);
+      if (!target) {
+        onNavigateToChat('');
+        return;
+      }
+      selectServer(target.serverId);
+      onNavigateToChat(target.name);
     } else if (next === 'board') {
       onToggleBoard();
     } else {
@@ -100,18 +115,9 @@
       run: () => selectView('canvas'),
     },
   ];
-  const actionGroups: WorkspaceAction['group'][] = [
-    'Navegação', 'Sessão', 'Ferramentas', 'Colaboração',
-  ];
-  const workspaceActions = $derived.by<WorkspaceAction[]>(() => {
-    const actionsById = new Map<string, WorkspaceAction>();
-    for (const action of [...navigationActions, ...sidebarActions, ...chatActions]) {
-      actionsById.set(action.id, action);
-    }
-    return actionGroups.flatMap((group) =>
-      [...actionsById.values()].filter((action) => action.group === group),
-    );
-  });
+  const workspaceActions = $derived(
+    aggregateWorkspaceActions([...navigationActions, ...sidebarActions, ...chatActions]),
+  );
 
   function handleSidebarActionsChange(actions: WorkspaceAction[]) {
     sidebarActions = actions;
@@ -206,7 +212,7 @@
              mesma razão do {#key currentKey ?? currentSession} abaixo. Inclui o SERVIDOR pelo mesmo
              motivo do currentKey: homônimas em servidores diferentes têm o mesmo nome, e só o nome na
              key deixaria o Chat preso no servidor antigo. -->
-        {#key overlaySession.serverId + '::' + overlaySession.name}
+        {#key workspaceSessionKey(overlaySession)}
           <div class="board-overlay" role="dialog" aria-label="Chat da sessão">
             <button class="split-close" onclick={onCloseOverlay}
                     aria-label="Fechar chat" title="Fechar (Esc)">×</button>

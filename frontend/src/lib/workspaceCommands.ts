@@ -3,6 +3,11 @@ import type { AggSession } from './types';
 export type WorkspaceView = 'chat' | 'board' | 'canvas';
 export type WorkspaceActionGroup = 'Navegação' | 'Sessão' | 'Ferramentas' | 'Colaboração';
 
+export interface WorkspaceSessionRef {
+  serverId: string;
+  name: string;
+}
+
 export interface WorkspaceAction {
   id: string;
   title: string;
@@ -37,7 +42,33 @@ export interface WorkspaceSessionItem extends SearchableWorkspaceItem {
 export type PaletteItem = WorkspaceActionItem | WorkspaceSessionItem;
 
 const normalize = (value: string) =>
-  value.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase().trim();
+  value.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim();
+
+const actionGroups: WorkspaceActionGroup[] = [
+  'Navegação',
+  'Sessão',
+  'Ferramentas',
+  'Colaboração',
+];
+
+export function workspaceSessionKey(session: WorkspaceSessionRef): string {
+  return `${session.serverId}::${session.name}`;
+}
+
+export function resolveWorkspaceChatTarget(
+  lastNormalChat: WorkspaceSessionRef | null,
+  overlaySession: WorkspaceSessionRef | null,
+): WorkspaceSessionRef | null {
+  return overlaySession ?? lastNormalChat;
+}
+
+export function aggregateWorkspaceActions(actions: WorkspaceAction[]): WorkspaceAction[] {
+  const actionsById = new Map<string, WorkspaceAction>();
+  for (const action of actions) actionsById.set(action.id, action);
+  return actionGroups.flatMap((group) =>
+    [...actionsById.values()].filter((action) => action.group === group),
+  );
+}
 
 export function filterWorkspaceItems<T extends SearchableWorkspaceItem>(items: T[], query: string): T[] {
   const needle = normalize(query);
@@ -49,7 +80,7 @@ export function filterWorkspaceItems<T extends SearchableWorkspaceItem>(items: T
 
 export function workspaceSessionItems(rows: AggSession[]): WorkspaceSessionItem[] {
   return rows.map((session) => ({
-    key: `${session.serverId}::${session.name}`,
+    key: workspaceSessionKey(session),
     kind: 'session',
     session,
     title: session.name,
