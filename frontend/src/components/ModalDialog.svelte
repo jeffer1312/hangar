@@ -11,6 +11,7 @@
     closeOnBackdrop?: boolean;
     className?: string;
     layer?: 'default' | 'command';
+    role?: 'dialog' | 'alertdialog';
     children: Snippet;
   }
 
@@ -22,6 +23,7 @@
     closeOnBackdrop = true,
     className = '',
     layer = 'default',
+    role = 'dialog',
     children,
   }: Props = $props();
 
@@ -119,7 +121,7 @@
     <div
       bind:this={dialog}
       class="modal-dialog {className}"
-      role="dialog"
+      {role}
       aria-modal="true"
       aria-label={ariaLabel}
       tabindex="-1"

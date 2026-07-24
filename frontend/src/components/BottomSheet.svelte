@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
+  import { focusableElements, nextFocusIndex } from '../lib/focusCycle';
 
   // Shell reutilizavel de bottom-sheet: backdrop + painel que sobe de baixo.
   // Fecha por tap no backdrop, Esc ou swipe pra baixo. Conteudo entra via children.
@@ -98,6 +99,22 @@
     if (e.key === 'Escape') onClose();
   }
 
+  function onSheetKeydown(e: KeyboardEvent) {
+    if (e.key !== 'Tab' || !sheetEl || !window.matchMedia('(min-width: 820px)').matches) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const elements = focusableElements(sheetEl);
+    if (!elements.length) {
+      sheetEl.focus();
+      return;
+    }
+    const activeIndex = elements.indexOf(document.activeElement as HTMLElement);
+    const nextIndex = activeIndex < 0
+      ? (e.shiftKey ? elements.length - 1 : 0)
+      : nextFocusIndex(activeIndex, elements.length, e.shiftKey ? -1 : 1);
+    elements[nextIndex].focus();
+  }
+
   // Foco a11y: ao abrir, move o foco pra DENTRO da sheet (a menos que um filho ja tenha focado — ex.
   // a busca do switcher) pra o leitor de tela anunciar o dialog e o Tab ficar no conteudo. Ao fechar,
   // devolve o foco pro gatilho; senao ele cai no body, atras do conteudo.
@@ -109,8 +126,8 @@
       requestAnimationFrame(() => {
         if (open && sheetEl && !sheetEl.contains(document.activeElement)) sheetEl.focus();
       });
-    } else if (prevFocus) {
-      prevFocus.focus?.();
+    } else if (prevFocus?.isConnected) {
+      prevFocus.focus();
       prevFocus = null;
     }
   });
@@ -136,6 +153,7 @@
       ontouchstart={onTouchStart}
       ontouchmove={onTouchMove}
       ontouchend={onTouchEnd}
+      onkeydown={onSheetKeydown}
       ontransitionend={() => (snapping = false)}
     >
       {#if resizable}
