@@ -11,14 +11,17 @@ from app.transcript import ChatEvent
 _NON_CHAT_ROLES = {"developer", "system"}
 
 # O Codex injeta, nos 1os response_item de toda thread, role:"user" cujo conteudo e contexto interno
-# (nao chat do usuario). Dois formatos vistos na 0.141.0:
+# (nao chat do usuario). Formatos vistos:
 #   - wrapper em tag: <environment_context>...</environment_context>, <user_instructions>..., etc.
+#   - blocos do host: <recommended_plugins>... e <permissions instructions>... (este ultimo usa
+#     ESPACO no nome da tag, portanto nao casava o antigo `\w+_instructions`);
 #   - AGENTS.md do projeto: comeca com "# AGENTS.md instructions for <path>" (quando o cwd tem AGENTS.md;
 #     o env-context vem concatenado no fim dessa mesma msg gigante -> por isso o filtro de tag sozinho
 #     nao pegava e a bolha vazava). Conservador: so casa se o texto (apos strip) COMECA com o marcador,
 #     pra nao descartar uma mensagem real que apenas mencione a tag/o nome.
 _CONTEXT_WRAPPER_RE = re.compile(
-    r"^(<(environment_context|\w+_instructions)>|# AGENTS\.md instructions for )")
+    r"^(<(?:environment_context|recommended_plugins|[a-z][a-z_ ]*instructions)>|"
+    r"# AGENTS\.md instructions for )")
 
 
 def _is_context_wrapper(text: str) -> bool:

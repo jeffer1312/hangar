@@ -20,7 +20,10 @@ def _isolate_sidecar(tmp_path):
     # Sidecars duraveis redirecionados pra tmp -- mesmo padrao de test_codex_registry.py (evita
     # os testes de model/effort tocarem ~/.claude-pocket/codex-sessions de verdade).
     with patch.object(codex_sessions, "_dir", lambda: tmp_path / "codex-sessions"), \
-         patch.object(codex_adapter, "ensure_tmux_tui"):
+         patch.object(codex_adapter, "ensure_tmux_tui"), \
+         patch.object(codex_adapter.tmux, "has_session", return_value=True), \
+         patch.object(codex_adapter.tmux, "paste_text"), \
+         patch.object(codex_adapter.tmux, "send_keys"):
         yield
 
 
@@ -305,25 +308,32 @@ async def test_send_prompt_deferred_when_not_attached():
     assert await adapter.send_prompt("ghost", "oi") == "deferred"
 
 
-async def test_send_prompt_calls_turn_start():
+async def test_send_prompt_types_into_tmux(monkeypatch):
     adapter = CodexAdapter()
     client = _FakeClient([])
     adapter.attach("sess", client, "thread-1")
+    calls = []
+    monkeypatch.setattr(codex_adapter.tmux, "has_session", lambda _name: True)
+    monkeypatch.setattr(codex_adapter.tmux, "paste_text",
+                        lambda name, text: calls.append(("paste", name, text)))
+    monkeypatch.setattr(codex_adapter.tmux, "send_keys",
+                        lambda name, key: calls.append(("key", name, key)))
     result = await adapter.send_prompt("sess", "oi")
     assert result == "sent"
-    assert client.requests == [(
-        "turn/start",
-        {"threadId": "thread-1", "input": [{"type": "text", "text": "oi", "text_elements": []}]},
-    )]
+    assert calls == [("paste", "sess", "oi"), ("key", "sess", "Enter")]
+    assert client.requests == []
 
 
-async def test_send_prompt_marks_in_progress_on_sent():
+async def test_send_prompt_marks_in_progress_on_sent(monkeypatch):
     # Fix 2: send_prompt tem que setar in_progress=True ao entregar -- senao deliverable() continua
     # True logo em seguida e um drain com varias entradas pendentes as manda todas como turn/start
     # concorrentes (o turn/started do 1o envio so seria processado depois, no loop de notifications).
     adapter = CodexAdapter()
     client = _FakeClient([])
     adapter.attach("sess", client, "thread-1")
+    monkeypatch.setattr(codex_adapter.tmux, "has_session", lambda _name: True)
+    monkeypatch.setattr(codex_adapter.tmux, "paste_text", lambda _name, _text: None)
+    monkeypatch.setattr(codex_adapter.tmux, "send_keys", lambda _name, _key: None)
     assert await adapter.send_prompt("sess", "oi") == "sent"
     assert await adapter.deliverable("sess") is False
 
@@ -345,27 +355,30 @@ async def test_deliverable_false_during_turn():
 # --- CodexAdapter.interrupt (turn/interrupt) ------------------------------------------------
 
 async def test_interrupt_calls_turn_interrupt():
-    # send_prompt captura o turnId do turno recem-iniciado; interrupt manda turn/interrupt com
-    # threadId+turnId (shape confirmado no schema TurnInterruptParams da 0.141.0).
+    # Interrupt dirige a mesma TUI que o usuario ve no terminal.
     adapter = CodexAdapter()
     client = _FakeClient([])
     adapter.attach("sess", client, "thread-1")
-    await adapter.send_prompt("sess", "oi")
-    assert await adapter.interrupt("sess") is True
-    assert ("turn/interrupt", {"threadId": "thread-1", "turnId": "turn-fake"}) in client.requests
+    with patch.object(codex_adapter.ti.TerminalInput, "interrupt") as interrupt:
+        assert await adapter.interrupt("sess") is True
+    interrupt.assert_called_once_with("sess")
+    assert client.requests == []
 
 
 async def test_interrupt_noop_when_not_attached():
     adapter = CodexAdapter()
-    assert await adapter.interrupt("ghost") is False
+    with patch.object(codex_adapter.tmux, "has_session", return_value=False):
+        assert await adapter.interrupt("ghost") is False
 
 
 async def test_interrupt_noop_when_no_turn_in_flight():
-    # anexada mas sem turno em voo (nunca deu send_prompt) -> nada a interromper, no-op seguro.
+    # Mesmo sem estado RPC em voo, o Esc vai para a TUI (fonte autoritativa).
     adapter = CodexAdapter()
     client = _FakeClient([])
     adapter.attach("sess", client, "thread-1")
-    assert await adapter.interrupt("sess") is False
+    with patch.object(codex_adapter.ti.TerminalInput, "interrupt") as interrupt:
+        assert await adapter.interrupt("sess") is True
+    interrupt.assert_called_once_with("sess")
     assert client.requests == []
 
 
@@ -638,7 +651,7 @@ async def test_current_model_null_when_never_chosen():
     assert adapter.current_model("ghost") == {"model": None, "effort": None}
 
 
-# --- send_prompt inclui model/effort no turn/start (Task C) ---------------------------------
+# --- modelo/effort persistem; envio visivel pertence a TUI ----------------------------------
 
 async def test_send_prompt_includes_model_and_effort_when_set():
     adapter = CodexAdapter()
@@ -646,24 +659,17 @@ async def test_send_prompt_includes_model_and_effort_when_set():
     adapter.attach("sess", client, "thread-1")
     await adapter.set_model("sess", "gpt-5-codex", "high")
     await adapter.send_prompt("sess", "oi")
-    assert client.requests == [(
-        "turn/start",
-        {"threadId": "thread-1", "input": [{"type": "text", "text": "oi", "text_elements": []}],
-         "model": "gpt-5-codex", "effort": "high"},
-    )]
+    assert adapter.current_model("sess") == {"model": "gpt-5-codex", "effort": "high"}
+    assert client.requests == []
 
 
 async def test_send_prompt_omits_model_effort_when_unset():
-    # sem escolha -> turn/start nao carrega model/effort, app-server usa o default da thread
-    # (mesmo shape do teste original test_send_prompt_calls_turn_start -- nao regride).
+    # O envio e submetido pela TUI; nao pode abrir um segundo turn/start pelo cliente do backend.
     adapter = CodexAdapter()
     client = _FakeClient([])
     adapter.attach("sess", client, "thread-1")
     await adapter.send_prompt("sess", "oi")
-    assert client.requests == [(
-        "turn/start",
-        {"threadId": "thread-1", "input": [{"type": "text", "text": "oi", "text_elements": []}]},
-    )]
+    assert client.requests == []
 
 
 async def test_ensure_running_resume_restores_model_effort_from_sidecar():
@@ -679,9 +685,7 @@ async def test_ensure_running_resume_restores_model_effort_from_sidecar():
     assert adapter._sessions["sess"]["model"] == "gpt-5-codex"
     assert adapter._sessions["sess"]["effort"] == "high"
     await adapter.send_prompt("sess", "oi")
-    start_params = next(p for m, p in client.requests if m == "turn/start")
-    assert start_params["model"] == "gpt-5-codex"
-    assert start_params["effort"] == "high"
+    assert client.requests[-1][0] == "thread/resume"
 
 
 # --- default_model (fix-model-display): display cai pro default da thread sem escolha ------
@@ -702,16 +706,12 @@ async def test_current_model_explicit_choice_wins_over_default():
 
 
 async def test_send_prompt_omits_default_model_even_when_present():
-    # NUNCA manda o default no turn/start -- so a escolha explicita (aqui ausente) vai;
-    # sem escolha, omite e deixa o Codex usar o default da thread por conta propria.
+    # A TUI usa o default da thread; o backend nao abre um turno concorrente por JSON-RPC.
     adapter = CodexAdapter()
     client = _FakeClient([])
     adapter.attach("sess", client, "thread-1", default_model="gpt-5.6-sol", default_effort="high")
     await adapter.send_prompt("sess", "oi")
-    assert client.requests == [(
-        "turn/start",
-        {"threadId": "thread-1", "input": [{"type": "text", "text": "oi", "text_elements": []}]},
-    )]
+    assert client.requests == []
 
 
 async def test_status_line_shows_default_model_when_no_explicit_choice():
@@ -765,6 +765,19 @@ def test_ensure_tmux_tui_starts_remote_codex_for_thread():
     assert (name, cwd) == ("cx", "/tmp/proj")
     assert command == (
         "codex resume --remote ws://127.0.0.1:45123 --no-alt-screen thread-42"
+    )
+
+
+def test_ensure_tmux_tui_resumes_with_model_and_effort():
+    with patch.object(codex_adapter.tmux, "has_session", return_value=False), \
+         patch.object(codex_adapter.tmux, "new_session", return_value=True) as new_session:
+        ensure_tmux_tui(
+            "cx", "/tmp/proj", "thread-42", "ws://127.0.0.1:45123",
+            model="gpt-5-codex", effort="high",
+        )
+    assert new_session.call_args.args[2] == (
+        "codex resume --remote ws://127.0.0.1:45123 --no-alt-screen "
+        "--model gpt-5-codex --config 'model_reasoning_effort=\"high\"' thread-42"
     )
 
 

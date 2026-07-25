@@ -235,7 +235,7 @@ def answer_questions(name: str, answers: list[dict]) -> None:
 
 
 class TerminalInput:
-    def send_prompt(self, name: str, text: str) -> str:
+    def send_prompt(self, name: str, text: str, *, wait_ready: bool = True) -> str:
         # Validacao PRE-envio: input ruim nunca toca a TUI nem entra na fila. \n/\t ok; outros controles nao.
         if any(ord(c) < 32 and c not in "\t\n" for c in text):
             raise ValueError("control characters not allowed in prompt")
@@ -250,7 +250,11 @@ class TerminalInput:
                 return "deferred"
             # Não enviar pra um TUI ainda bootando: as teclas seriam engolidas e a msg sumiria (core
             # bug — msg mandada logo após criar a sessão nunca chegava no claude).
-            _wait_input_ready(name)
+            # Claude tem marcadores de boot conhecidos; o Codex usa outro chrome. O adapter Codex
+            # chama com wait_ready=False depois de ensure_running/has_session, evitando esperar 12s
+            # por strings que nunca aparecem sem perder a serializacao/settle deste chokepoint.
+            if wait_ready:
+                _wait_input_ready(name)
             if "\n" in text:
                 tmux.paste_text(name, text)
                 time.sleep(0.05)  # deixa a TUI acomodar o paste antes do Enter submeter

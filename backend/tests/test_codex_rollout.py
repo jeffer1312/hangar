@@ -42,6 +42,26 @@ def test_user_generic_instructions_wrapper_ignored():
     assert parse_rollout_obj(obj) == []
 
 
+def test_user_recommended_plugins_wrapper_ignored():
+    # O host anexa este bloco como role:user antes da mensagem real. Era o vazamento visto no app:
+    # como nao comeca por environment_context, a bolha enorme (incluindo permissoes no fim) aparecia.
+    obj = {"timestamp": "t", "type": "response_item",
+           "payload": {"type": "message", "role": "user",
+                       "content": [{"type": "input_text",
+                                    "text": "<recommended_plugins>\n...\n</recommended_plugins>"
+                                            "<environment_context>...</environment_context>"}]}}
+    assert parse_rollout_obj(obj) == []
+
+
+def test_user_permissions_instructions_with_space_ignored():
+    obj = {"timestamp": "t", "type": "response_item",
+           "payload": {"type": "message", "role": "user",
+                       "content": [{"type": "input_text",
+                                    "text": "<permissions instructions>\n...\n"
+                                            "</permissions instructions>"}]}}
+    assert parse_rollout_obj(obj) == []
+
+
 def test_user_agents_md_injection_ignored():
     # Quando o cwd tem AGENTS.md, o Codex injeta o conteudo dele como role:"user" gigante que COMECA
     # com "# AGENTS.md instructions for <path>" (com o environment_context concatenado no fim) -- nao
