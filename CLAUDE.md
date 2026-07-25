@@ -69,6 +69,9 @@ npm --prefix frontend run check            # svelte-check + tsc — THIS is the 
 
 Sessions must run as `claude --session-id <uuid>` **inside tmux** — `scripts/install-claude-wrapper.sh`
 sets this up. A `claude` without an id, or outside tmux, is invisible to the app or flagged ⚠ no id.
+The same installer also wraps interactive `codex`: it calls the local backend through `scripts/cp-codex`,
+creates a managed Codex app-server/TUI pair, and attaches the caller to that tmux session. Codex
+subcommands/advanced flags remain raw; `command codex` is the explicit bypass.
 
 ## Sessões-irmãs (cp-send) + pareamento
 

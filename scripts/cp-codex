@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""Cria uma sessao Codex gerenciada pelo Cockpit e anexa o terminal ao tmux."""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+
+def _repo() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def _env() -> dict[str, str]:
+    out: dict[str, str] = {}
+    try:
+        for line in (_repo() / "backend" / ".env").read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)
+                out[key.strip()] = value.strip()
+    except OSError:
+        pass
+    return out
+
+
+def _api(method: str, path: str, body: dict | None = None):
+    env = _env()
+    token = os.environ.get("CP_AUTH_TOKEN") or env.get("CP_AUTH_TOKEN")
+    port = os.environ.get("CP_PORT") or env.get("CP_PORT") or "8765"
+    if not token:
+        raise SystemExit(f"cp-codex: CP_AUTH_TOKEN ausente em {_repo() / 'backend' / '.env'}")
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}",
+        data=data,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode(errors="replace")
+        raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
+    except OSError as exc:
+        raise RuntimeError(f"backend inacessivel em 127.0.0.1:{port}: {exc}") from exc
+
+
+def _base_name(cwd: str) -> str:
+    clean = "".join(c if c.isalnum() or c in "_-" else "-" for c in Path(cwd).name)
+    return clean.strip("-") or "codex"
+
+
+def _create(cwd: str, prompt: str | None) -> str:
+    existing = {item["name"] for item in _api("GET", "/api/sessions")}
+    base = _base_name(cwd)
+    for index in range(1, 1000):
+        name = base if index == 1 else f"{base}-{index}"
+        if name in existing:
+            continue
+        try:
+            result = _api("POST", "/api/sessions", {
+                "name": name,
+                "cwd": cwd,
+                "provider": "codex",
+                "initial_prompt": prompt,
+            })
+            return result["name"]
+        except RuntimeError as exc:
+            if "HTTP 409" not in str(exc):
+                raise
+    raise RuntimeError("nao foi possivel escolher um nome de sessao livre")
+
+
+def main() -> int:
+    if len(sys.argv) > 2:
+        print("uso: cp-codex [prompt]", file=sys.stderr)
+        return 2
+    prompt = sys.argv[1] if len(sys.argv) == 2 else None
+    try:
+        name = _create(os.getcwd(), prompt)
+    except RuntimeError as exc:
+        print(f"cp-codex: {exc}", file=sys.stderr)
+        return 1
+    print(f"Codex gerenciado pelo Cockpit: {name} (detach: Ctrl-b d)", file=sys.stderr)
+    in_tmux = bool(os.environ.get("TMUX") and os.environ.get("TMUX_PANE"))
+    if in_tmux:
+        attached = subprocess.run(["tmux", "switch-client", "-t", f"={name}"]).returncode
+        if attached == 0:
+            # O helper continua no pane antigo enquanto o cliente usa a sessao Codex. Quando ela
+            # termina, o tmux volta para outra sessao e este processo conclui a limpeza.
+            while subprocess.run(
+                ["tmux", "has-session", "-t", f"={name}"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ).returncode == 0:
+                time.sleep(0.5)
+    else:
+        attached = subprocess.run(["tmux", "attach-session", "-t", f"={name}"]).returncode
+    # Se o usuario encerrou o Codex, remove o sidecar/app-server. Se apenas deu detach, a sessao
+    # continua viva no tmux e no app.
+    alive = subprocess.run(
+        ["tmux", "has-session", "-t", f"={name}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode == 0
+    if not alive:
+        try:
+            _api("DELETE", f"/api/sessions/{name}")
+        except RuntimeError:
+            pass
+    return attached
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

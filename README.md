@@ -92,7 +92,7 @@ Requirements: `tmux`, `claude` (Claude Code), a current `codex` CLI with
 `app-server --listen` and `--remote` support, Python 3.14 +
 [`uv`](https://docs.astral.sh/uv/), Node 20+.
 
-**0. Install the `claude` wrapper (one-time, recommended):**
+**0. Install the interactive `claude` + `codex` wrappers (one-time, recommended):**
 ```bash
 ./scripts/install-claude-wrapper.sh          # auto-detects fish/bash/zsh; pass `all` for every shell
 ```
@@ -105,6 +105,11 @@ installer also adds the tmux truecolor + window-rename config, and offers to set
 statusline (`scripts/omniroute-statusline.js`) as your Claude `statusLine` — that's the format the
 app parses into the model / context / cost / rate-limit badges (decline to keep your own; pass
 `--no-statusline` to skip). Bypass the wrapper anytime with `command claude`.
+
+Running `codex` normally follows the same rule: the wrapper asks the local backend to create a
+managed Codex thread, attaches your terminal to its tmux session, and the conversation immediately
+appears in the app. `codex "prompt"` is supported; advanced flags and subcommands keep going to the
+official CLI unchanged. Bypass explicitly with `command codex`.
 
 **1. Or start Claude inside tmux manually:**
 ```bash

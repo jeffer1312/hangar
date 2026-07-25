@@ -16,10 +16,14 @@ como PWA e operar o chat. Pra arquitetura/API ver o [README](../README.md).
 
 ## 2. Subir (3 partes)
 
-**a) Claude dentro do tmux** (a sessão que o app vai espelhar):
+**a) Claude ou Codex gerenciado dentro do tmux** (a sessão que o app vai espelhar):
 ```bash
 tmux new -s cc        # rode `claude` dentro dela
 ```
+
+Com o wrapper recomendado instalado (`./scripts/install-claude-wrapper.sh`), basta executar
+`claude` ou `codex` normalmente. O `codex` pede ao backend uma sessão gerenciada e anexa o terminal
+ao tmux dela; a conversa aparece imediatamente no app. `command codex` ignora o wrapper.
 Cores erradas (teal/pink) no tmux? Fix em [tmux-truecolor-setup.md](tmux-truecolor-setup.md).
 Sobreviver a reboot/OOM? `./scripts/tmux-persist-setup.sh` ([doc](tmux-persistence-setup.md)).
 

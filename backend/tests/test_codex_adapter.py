@@ -779,6 +779,16 @@ def test_ensure_tmux_tui_creates_thread_with_matching_permissions():
     )
 
 
+def test_ensure_tmux_tui_forwards_initial_prompt_as_single_argument():
+    with patch.object(codex_adapter.tmux, "has_session", return_value=False), \
+         patch.object(codex_adapter.tmux, "new_session", return_value=True) as new_session:
+        ensure_tmux_tui("cx", "/tmp/proj", None, "ws://127.0.0.1:45123",
+                        initial_prompt="revise docs; sem executar shell")
+    assert new_session.call_args.args[2].endswith(
+        "'revise docs; sem executar shell'"
+    )
+
+
 def test_ensure_tmux_tui_replaces_stale_remote_after_backend_restart():
     with patch.object(codex_adapter.tmux, "has_session", return_value=True), \
          patch.object(codex_adapter.tmux, "kill_session") as kill, \

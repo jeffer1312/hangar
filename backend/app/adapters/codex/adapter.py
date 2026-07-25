@@ -37,7 +37,7 @@ _APPROVAL = "never"
 
 
 def ensure_tmux_tui(name: str, cwd: str, thread_id: str | None, endpoint: str,
-                    *, replace: bool = False) -> None:
+                    *, replace: bool = False, initial_prompt: str | None = None) -> None:
     """Garante uma TUI Codex anexavel no tmux, ligada ao app-server do backend.
 
     ``replace`` e usado no resume lazy apos restart do backend: uma pane antiga aponta para o
@@ -57,6 +57,8 @@ def ensure_tmux_tui(name: str, cwd: str, thread_id: str | None, endpoint: str,
             "codex", "--remote", endpoint, "--no-alt-screen", "-C", cwd,
             "--sandbox", _SANDBOX, "--ask-for-approval", _APPROVAL,
         ]
+        if initial_prompt:
+            argv.append(initial_prompt)
     command = shlex.join(argv)
     if not tmux.new_session(name, cwd, command):
         raise RuntimeError(f"nao foi possivel criar a TUI Codex no tmux: {name}")

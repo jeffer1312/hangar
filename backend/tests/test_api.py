@@ -669,8 +669,20 @@ def test_create_codex_provider_routes_to_create_codex(api_client):
                             json={"name": "cx", "cwd": "/tmp", "provider": "codex"})
     assert r.status_code == 200
     assert r.json()["provider"] == "codex"
-    fake.assert_awaited_once_with("cx", "/tmp")
+    fake.assert_awaited_once_with("cx", "/tmp", None)
     claude_create.assert_not_called()   # nao passa pelo caminho tmux/Claude
+
+
+def test_create_codex_forwards_wrapper_initial_prompt(api_client):
+    from unittest.mock import AsyncMock
+    fake = AsyncMock(return_value=SessionInfo(name="cx", cwd="/tmp", provider="codex"))
+    with patch("app.api.registry.create_codex", fake):
+        r = api_client.post("/api/sessions", headers=_h(), json={
+            "name": "cx", "cwd": "/tmp", "provider": "codex",
+            "initial_prompt": "revise este projeto",
+        })
+    assert r.status_code == 200
+    fake.assert_awaited_once_with("cx", "/tmp", "revise este projeto")
 
 
 def test_create_rejects_unknown_provider(api_client):
