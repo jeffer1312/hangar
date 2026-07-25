@@ -1185,10 +1185,13 @@
       padding-right: 248px;
     }
     .chat-screen.with-context :global(.messages-inner) {
-      max-width: min(780px, 100%);
+      max-width: min(900px, 100%);
       margin-inline: auto;
     }
     .chat-screen.with-context .bottom-dock { right: 248px; }
+    .chat-screen.with-context .bottom-dock :global(.composer-card) {
+      max-width: min(920px, 94vw);
+    }
     .chat-screen.with-context .chat-skeleton,
     .chat-screen.with-context .chat-error { transform: translateX(-124px); }
   }
