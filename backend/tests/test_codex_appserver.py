@@ -6,6 +6,7 @@ import os
 import shutil
 
 import pytest
+from unittest.mock import AsyncMock, patch
 
 from app.adapters.codex.appserver import _READ_LIMIT, AppServerClient
 
@@ -165,6 +166,48 @@ async def test_close_clean_after_limit_overrun_line():
     assert await asyncio.wait_for(req_task, timeout=1) == {"ok": True}  # reader sobreviveu
 
     await asyncio.wait_for(client.close(), timeout=1)  # sem hang
+
+
+async def test_shared_websocket_transport_returns_endpoint_and_handles_request():
+    class _FakeWebSocket:
+        def __init__(self):
+            self.sent = []
+            self.incoming = asyncio.Queue()
+
+        async def send(self, data):
+            self.sent.append(data)
+
+        async def recv(self):
+            return await self.incoming.get()
+
+        async def close(self):
+            pass
+
+    class _FakeProcess:
+        returncode = None
+
+        def terminate(self):
+            self.returncode = 0
+
+        async def wait(self):
+            return self.returncode
+
+    ws, proc = _FakeWebSocket(), _FakeProcess()
+    with patch("app.adapters.codex.appserver.asyncio.create_subprocess_exec",
+               AsyncMock(return_value=proc)) as spawn, \
+         patch("app.adapters.codex.appserver.websockets.connect",
+               AsyncMock(return_value=ws)):
+        client = AppServerClient()
+        endpoint = await client.start_shared("ws://127.0.0.1:45123")
+        assert endpoint == "ws://127.0.0.1:45123"
+        spawn.assert_awaited_once()
+
+        task = asyncio.create_task(client.request("thread/list", {"limit": 1}))
+        await asyncio.sleep(0)
+        sent = json.loads(ws.sent[0])
+        await ws.incoming.put(json.dumps({"id": sent["id"], "result": {"data": []}}))
+        assert await task == {"data": []}
+        await client.close()
 
 
 @pytest.mark.integration

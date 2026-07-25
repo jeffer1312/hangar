@@ -1,5 +1,13 @@
 # Codex `app-server` contract (spike findings)
 
+> **Atualização 2026-07-25 — codex-cli 0.144.6:** o app-server agora aceita
+> `--listen ws://127.0.0.1:PORT` e a TUI aceita `codex --remote WS_URL`. O
+> claude-cockpit usa os dois juntos: backend e TUI tmux são clientes do mesmo
+> app-server. A criação precisa partir da TUI (capturando seu `thread/started`);
+> um `thread/start` programático ainda sem turno não possui rollout retomável.
+> Foi validado ao vivo que turnos iniciados na TUI chegam ao cliente do backend
+> como `turn/started`, `item/agentMessage/delta` e `turn/completed`.
+
 Investigação de fatos reais contra a instalação local de `codex-cli 0.141.0`, feita
 100% em `/tmp` (sandbox read-only, sem tocar no repo). Todas as respostas abaixo são
 output real capturado, não suposição. Objetivo: decidir se dá pra integrar o

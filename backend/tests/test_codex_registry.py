@@ -1,8 +1,7 @@
-"""Task 5: lifecycle da sessao Codex no registry (nao-tmux, sidecar duravel + resume lazy).
+"""Lifecycle da sessao Codex no registry (app-server compartilhado + TUI tmux + resume lazy).
 
-Mocka o AppServerClient (NAO spawna o codex real). Cobre: create_codex (durable sidecar +
-attach), list() incluindo Codex + Claude, nao-regressao do caminho Claude no create(), kill de
-Codex (fecha client + apaga sidecar), e ensure_running pos-restart (dict vazio -> thread/resume)."""
+Mocka o AppServerClient (NAO spawna o codex real). Cobre sidecar, attach, dedup da TUI na listagem,
+kill dos dois processos e ensure_running pos-restart (dict vazio -> thread/resume + nova TUI)."""
 import asyncio
 import json
 
@@ -12,6 +11,7 @@ from unittest.mock import patch
 from app import registry
 from app.registry import SessionRegistry
 from app.adapters.codex import sessions as codex_sessions
+from app.adapters.codex import adapter as codex_adapter
 from app.adapters.codex.adapter import CodexAdapter
 
 
@@ -21,7 +21,9 @@ def _isolate(tmp_path):
     SessionRegistry._jsonl_cache.clear()
     SessionRegistry._fd_locked.clear()
     sdir = tmp_path / "codex-sessions"
-    with patch.object(codex_sessions, "_dir", lambda: sdir):
+    with patch.object(codex_sessions, "_dir", lambda: sdir), \
+         patch.object(registry.tmux, "new_session", return_value=True), \
+         patch.object(registry.tmux, "kill_session"):
         yield
     SessionRegistry._jsonl_cache.clear()
     SessionRegistry._fd_locked.clear()
@@ -40,11 +42,23 @@ class _FakeClient:
     async def start(self):
         self.started = True
 
+    async def start_shared(self):
+        self.started = True
+        return "ws://127.0.0.1:45123"
+
     async def request(self, method, params, timeout=30.0):
         self.requests.append((method, params))
         if method in ("thread/start", "thread/resume"):
             return {"thread": {"id": self._thread_id, "path": self._path}, "model": "gpt-5.6-sol"}
         return {}
+
+    async def notifications(self):
+        yield {
+            "method": "thread/started",
+            "params": {"thread": {
+                "id": self._thread_id, "path": self._path, "cwd": "/tmp/proj",
+            }},
+        }
 
     def terminate(self):
         self.closed = True
@@ -72,28 +86,23 @@ async def test_create_codex_writes_sidecar_and_returns_provider(tmp_path):
     assert saved["cwd"] == "/tmp/proj"
     # client vivo anexado no adapter (memoria efemera)
     assert "mysess" in adapter._sessions
-    # thread/start foi chamado com sandbox workspace-write (Codex pode editar arquivos)
+    # A TUI cria a thread; o backend nao abre uma thread concorrente via JSON-RPC.
     methods = [m for m, _ in fake.requests]
-    assert "initialize" in methods and "thread/start" in methods
-    start_params = next(p for m, p in fake.requests if m == "thread/start")
-    assert start_params["sandbox"] == "workspace-write"
+    assert "initialize" in methods
+    assert "thread/start" not in methods
 
 
-async def test_create_codex_captures_default_model_for_display_only(tmp_path):
-    # fix-model-display: thread/start devolve o modelo default da thread (result.model) -- o
-    # create_codex tem que repassar pro attach() como default_model (display), NUNCA como a
-    # escolha (model=None continua ate o usuario escolher no picker).
+async def test_create_codex_leaves_model_unselected_until_catalog_or_user_choice(tmp_path):
     reg = SessionRegistry(projects_dir=tmp_path)
-    fake = _FakeClient()  # response inclui "model": "gpt-5.6-sol" (ver classe acima)
+    fake = _FakeClient()
     adapter = CodexAdapter()
     with patch.object(registry, "AppServerClient", lambda *a, **k: fake), \
          patch("app.adapters.get_adapter", return_value=adapter), \
          patch.object(registry.tmux, "has_session", return_value=False):
         await reg.create_codex("mysess", "/tmp/proj")
     sess = adapter._sessions["mysess"]
-    assert sess["default_model"] == "gpt-5.6-sol"   # display
-    assert sess["model"] is None                    # NAO e a escolha
-    assert adapter.current_model("mysess") == {"model": "gpt-5.6-sol", "effort": None}
+    assert sess["default_model"] is None
+    assert sess["model"] is None
 
 
 # --- Teste 2: list() inclui Codex (sidecar) E Claude (tmux) ---------------------------------
@@ -113,6 +122,18 @@ def test_list_includes_codex_sidecar_and_tmux(tmp_path):
     assert cx.provider == "codex"
     assert cx.jsonl == "/home/u/.codex/sessions/rollout-a.jsonl"
     assert cx.tracked is True
+
+
+def test_list_does_not_duplicate_codex_tmux_tui_as_claude(tmp_path):
+    codex_sessions.save("cx", "tid-1", "/rollout-a.jsonl", "/tmp/a")
+    reg = SessionRegistry(projects_dir=tmp_path)
+    panes = [{"name": "cx", "cwd": "/tmp/a", "pid": 111}]
+    with patch.object(registry.tmux, "list_panes_active", return_value=panes), \
+         patch.object(registry, "_proc_children_map", return_value={}), \
+         patch.object(SessionRegistry, "resolve_tracked") as resolve:
+        out = reg.list()
+    assert [(s.name, s.provider) for s in out] == [("cx", "codex")]
+    resolve.assert_not_called()
 
 
 # --- Teste 3: create(provider="claude") = nao-regressao (tmux, sem sidecar) -----------------
@@ -142,7 +163,21 @@ def test_kill_codex_closes_client_and_removes_sidecar(tmp_path):
     assert fake.closed is True                      # client vivo terminado
     assert "cx" not in adapter._sessions            # esquecido da memoria
     assert codex_sessions.load("cx") is None        # sidecar duravel apagado
-    kill_tmux.assert_not_called()                    # NAO toca tmux numa sessao Codex
+    kill_tmux.assert_called_once_with("cx")          # encerra tambem a TUI Codex
+
+
+def test_rename_codex_moves_sidecar_and_live_adapter(tmp_path):
+    codex_sessions.save("old", "tid-1", "/rollout-a.jsonl", "/tmp/a")
+    reg = SessionRegistry(projects_dir=tmp_path)
+    adapter = CodexAdapter()
+    fake = _FakeClient()
+    adapter.attach("old", fake, "tid-1")
+    with patch("app.adapters.get_adapter", return_value=adapter):
+        reg.rename("old", "new")
+    assert codex_sessions.load("old") is None
+    assert codex_sessions.load("new")["name"] == "new"
+    assert "old" not in adapter._sessions
+    assert adapter._sessions["new"]["client"] is fake
 
 
 # --- Colisao de nome cross-provider (review Important #1) ------------------------------------
@@ -226,11 +261,12 @@ async def test_ensure_running_concurrent_calls_spawn_once(tmp_path):
     starts = 0
 
     class _SlowFakeClient(_FakeClient):
-        async def start(self):
+        async def start_shared(self):
             nonlocal starts
             starts += 1
             await asyncio.sleep(0)  # forca o interleaving entre as 2 corrotinas
             self.started = True
+            return "ws://127.0.0.1:45123"
 
     with patch("app.adapters.codex.adapter.AppServerClient", lambda *a, **k: _SlowFakeClient()):
         c1, c2 = await asyncio.gather(

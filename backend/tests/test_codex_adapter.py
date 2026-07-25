@@ -7,7 +7,10 @@ import pytest
 from unittest.mock import patch
 
 from app.adapters.codex import sessions as codex_sessions
-from app.adapters.codex.adapter import CodexAdapter, format_status_line, map_state
+from app.adapters.codex import adapter as codex_adapter
+from app.adapters.codex.adapter import (
+    CodexAdapter, ensure_tmux_tui, format_status_line, map_state,
+)
 from app.adapters.codex.preview import CodexPreviewSource
 from app.state import StateEvent
 
@@ -16,7 +19,8 @@ from app.state import StateEvent
 def _isolate_sidecar(tmp_path):
     # Sidecars duraveis redirecionados pra tmp -- mesmo padrao de test_codex_registry.py (evita
     # os testes de model/effort tocarem ~/.claude-pocket/codex-sessions de verdade).
-    with patch.object(codex_sessions, "_dir", lambda: tmp_path / "codex-sessions"):
+    with patch.object(codex_sessions, "_dir", lambda: tmp_path / "codex-sessions"), \
+         patch.object(codex_adapter, "ensure_tmux_tui"):
         yield
 
 
@@ -33,6 +37,9 @@ class _FakeClient:
 
     async def start(self):
         pass  # ensure_running (resume) chama start(); duck-type suficiente pros testes daqui
+
+    async def start_shared(self):
+        return "ws://127.0.0.1:45123"
 
     async def close(self):
         pass
@@ -748,3 +755,34 @@ def test_transcript_stream_creates_rollout_dir(tmp_path):
     assert not rollout.parent.exists()
     CodexAdapter().transcript_stream(str(rollout))   # a chamada sync ja roda o mkdir (antes do return)
     assert rollout.parent.exists()
+
+
+def test_ensure_tmux_tui_starts_remote_codex_for_thread():
+    with patch.object(codex_adapter.tmux, "has_session", return_value=False), \
+         patch.object(codex_adapter.tmux, "new_session", return_value=True) as new_session:
+        ensure_tmux_tui("cx", "/tmp/proj", "thread-42", "ws://127.0.0.1:45123")
+    name, cwd, command = new_session.call_args.args
+    assert (name, cwd) == ("cx", "/tmp/proj")
+    assert command == (
+        "codex resume --remote ws://127.0.0.1:45123 --no-alt-screen thread-42"
+    )
+
+
+def test_ensure_tmux_tui_creates_thread_with_matching_permissions():
+    with patch.object(codex_adapter.tmux, "has_session", return_value=False), \
+         patch.object(codex_adapter.tmux, "new_session", return_value=True) as new_session:
+        ensure_tmux_tui("cx", "/tmp/proj", None, "ws://127.0.0.1:45123")
+    command = new_session.call_args.args[2]
+    assert command == (
+        "codex --remote ws://127.0.0.1:45123 --no-alt-screen -C /tmp/proj "
+        "--sandbox workspace-write --ask-for-approval never"
+    )
+
+
+def test_ensure_tmux_tui_replaces_stale_remote_after_backend_restart():
+    with patch.object(codex_adapter.tmux, "has_session", return_value=True), \
+         patch.object(codex_adapter.tmux, "kill_session") as kill, \
+         patch.object(codex_adapter.tmux, "new_session", return_value=True):
+        ensure_tmux_tui("cx", "/tmp/proj", "thread-42", "ws://127.0.0.1:45123",
+                        replace=True)
+    kill.assert_called_once_with("cx")
