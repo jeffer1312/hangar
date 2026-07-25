@@ -5,7 +5,14 @@
   let { git, onDone }: Props = $props();
 
   // Todos os arquivos alterados marcados por padrao (staged + unstaged + untracked).
-  let sel = $state<Set<string>>(new Set(git.files.map((f) => f.path)));
+  let sel = $state<Set<string>>(new Set());
+  let selectionInitialized = $state(false);
+  $effect(() => {
+    if (!selectionInitialized && git.files.length) {
+      sel = new Set(git.files.map((f) => f.path));
+      selectionInitialized = true;
+    }
+  });
   let message = $state('');
   const toggle = (p: string) => { sel.has(p) ? sel.delete(p) : sel.add(p); sel = new Set(sel); };
   const chosen = $derived(git.files.filter((f) => sel.has(f.path)).map((f) => f.path));

@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
+  import { focusableElements, nextFocusIndex } from '../lib/focusCycle';
 
   // Shell reutilizavel de bottom-sheet: backdrop + painel que sobe de baixo.
   // Fecha por tap no backdrop, Esc ou swipe pra baixo. Conteudo entra via children.
@@ -95,7 +96,42 @@
 
   function onKeydown(e: KeyboardEvent) {
     if (!open) return;
-    if (e.key === 'Escape') onClose();
+    if (e.key === 'Escape') {
+      // A sheet owns Escape while it is open. Prevent the event from reaching
+      // Chat/DesktopShell global handlers, which would otherwise dismiss an
+      // overlay behind this one in the same keypress.
+      e.preventDefault();
+      // This listener is attached to window; stopPropagation alone still
+      // allows sibling window listeners to run. Stop them as well so only the
+      // sheet that owns this fallback handles the key.
+      e.stopImmediatePropagation();
+      onClose();
+    }
+  }
+
+  function onSheetKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      // Handle Escape at the dialog boundary as well as the window fallback.
+      // This is the normal path for focused controls inside the sheet and
+      // guarantees that lower global listeners never see the key.
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+      return;
+    }
+    if (e.key !== 'Tab' || !sheetEl || !window.matchMedia('(min-width: 820px)').matches) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const elements = focusableElements(sheetEl);
+    if (!elements.length) {
+      sheetEl.focus();
+      return;
+    }
+    const activeIndex = elements.indexOf(document.activeElement as HTMLElement);
+    const nextIndex = activeIndex < 0
+      ? (e.shiftKey ? elements.length - 1 : 0)
+      : nextFocusIndex(activeIndex, elements.length, e.shiftKey ? -1 : 1);
+    elements[nextIndex].focus();
   }
 
   // Foco a11y: ao abrir, move o foco pra DENTRO da sheet (a menos que um filho ja tenha focado — ex.
@@ -109,8 +145,8 @@
       requestAnimationFrame(() => {
         if (open && sheetEl && !sheetEl.contains(document.activeElement)) sheetEl.focus();
       });
-    } else if (prevFocus) {
-      prevFocus.focus?.();
+    } else if (prevFocus?.isConnected) {
+      prevFocus.focus();
       prevFocus = null;
     }
   });
@@ -136,6 +172,7 @@
       ontouchstart={onTouchStart}
       ontouchmove={onTouchMove}
       ontouchend={onTouchEnd}
+      onkeydown={onSheetKeydown}
       ontransitionend={() => (snapping = false)}
     >
       {#if resizable}

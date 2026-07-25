@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import type QrScanner from 'qr-scanner';
+  import ModalDialog from './ModalDialog.svelte';
 
   interface Props {
     onScan: (text: string) => void;
@@ -12,6 +13,20 @@
   let scanner: QrScanner | null = null;
   let error = $state('');
   let dead = false;
+  let dialogOpen = $state(true);
+
+  function stopScanner() {
+    scanner?.stop();
+    scanner?.destroy();
+    scanner = null;
+  }
+
+  function closeScanner() {
+    stopScanner();
+    dialogOpen = false;
+    // Let ModalDialog run its focus-restore effect before the parent unmounts us.
+    setTimeout(onClose, 0);
+  }
 
   onMount(async () => {
     if (!videoEl) return;
@@ -21,8 +36,10 @@
     scanner = new Scanner(
       videoEl,
       (result) => {
-        scanner?.stop(); // first hit wins — stop before handing off
-        onScan(result.data);
+        stopScanner(); // first hit wins — stop before handing off
+        dialogOpen = false;
+        // Restore focus only after the camera is stopped and the modal has closed.
+        setTimeout(() => onScan(result.data), 0);
       },
       { preferredCamera: 'environment', highlightScanRegion: true, highlightCodeOutline: true },
     );
@@ -35,13 +52,12 @@
 
   onDestroy(() => {
     dead = true;
-    scanner?.stop();
-    scanner?.destroy();
-    scanner = null;
+    stopScanner();
   });
 </script>
 
-<div class="scanner" role="dialog" aria-label="Escanear QR">
+<ModalDialog open={dialogOpen} ariaLabel="Escanear QR" closeOnBackdrop={false} className="scanner-dialog" onClose={closeScanner}>
+<div class="scanner">
   <div class="scanner-stage">
     <!-- svelte-ignore a11y_media_has_caption -->
     <video bind:this={videoEl} class="scanner-video" playsinline muted></video>
@@ -53,14 +69,14 @@
     <p class="scanner-hint">Aponte para o QR do terminal</p>
   {/if}
 
-  <button class="scanner-close" onclick={onClose}>Cancelar</button>
+  <button class="scanner-close" onclick={closeScanner}>Cancelar</button>
 </div>
+</ModalDialog>
 
 <style>
+  :global(.scanner-dialog) { width: 100%; max-width: 100%; height: 100%; max-height: 100%; padding: 0; border: 0; border-radius: 0; background: #000; }
   .scanner {
-    position: fixed;
-    inset: 0;
-    z-index: 100;
+    height: 100%;
     background: #000;
     display: flex;
     flex-direction: column;
