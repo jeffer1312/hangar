@@ -1,16 +1,17 @@
-"""Cliente JSON-RPC 2.0 pro `codex app-server --stdio`: transporte NDJSON (uma linha JSON
-por mensagem, SEM framing Content-Length do LSP), correlacao request<->response por `id` e
-fila de notifications (mensagens sem `id`). Contrato confirmado contra codex-cli 0.141.0 em
-docs/codex-app-server-contract.md.
+"""Cliente JSON-RPC 2.0 pro ``codex app-server``.
 
-Achado critico do spike: o processo so responde se o stdin ficar aberto durante toda a vida
-da sessao - `cat arquivo | codex app-server --stdio` sai sem responder nada. Por isso o pipe
-de stdin do subprocess nunca e fechado ate `close()`."""
+O transporte default continua sendo NDJSON/stdio (util nos testes e como fallback). Para sessoes
+visiveis no tmux, ``start_shared()`` abre um listener WebSocket somente em 127.0.0.1: o backend e a
+TUI ``codex --remote`` conectam ao MESMO app-server, portanto a TUI fica anexavel sem trocar os
+eventos estruturados por scraping de terminal."""
 import asyncio
 import contextlib
 import json
 import logging
+import socket
 from typing import AsyncIterator
+
+import websockets
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,8 @@ class AppServerClient:
         self._proc: asyncio.subprocess.Process | None = None
         self._reader: asyncio.StreamReader | None = None
         self._writer = None  # asyncio.StreamWriter (real) ou stub de teste com write/drain/close
+        self._ws = None
+        self._endpoint: str | None = None
         self._reader_task: asyncio.Task | None = None
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
@@ -38,6 +41,10 @@ class AppServerClient:
     def closed(self) -> bool:
         return self._closed
 
+    @property
+    def endpoint(self) -> str | None:
+        return self._endpoint
+
     async def start(self) -> None:
         """Spawna `codex app-server --stdio` com stdin/stdout em PIPE e mantem o stdin aberto
         (nunca fechado ate close()) - fechar cedo faz o processo sair sem responder."""
@@ -49,6 +56,49 @@ class AppServerClient:
         )
         self._attach(self._proc.stdout, self._proc.stdin)
 
+    @staticmethod
+    def _free_loopback_endpoint() -> str:
+        # Reserva e solta uma porta loopback. Existe uma janela minima ate o app-server dar bind,
+        # fechada pelo retry abaixo; se outro processo vencer a corrida, o app-server sai e falhamos
+        # sem deixar uma TUI apontando pro servidor errado.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        return f"ws://127.0.0.1:{port}"
+
+    async def start_shared(self, endpoint: str | None = None) -> str:
+        """Spawna app-server WebSocket local e conecta este cliente.
+
+        O endpoint retornado pode ser passado a ``codex --remote`` dentro do tmux. stdout/stderr
+        vao para DEVNULL: no modo WebSocket o protocolo nao passa por eles e pipes sem consumidor
+        poderiam encher durante uma sessao longa.
+        """
+        self._endpoint = endpoint or self._free_loopback_endpoint()
+        self._proc = await asyncio.create_subprocess_exec(
+            self._codex_bin, "app-server", "--listen", self._endpoint,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        last_error: Exception | None = None
+        for _ in range(50):
+            if self._proc.returncode is not None:
+                raise RuntimeError(
+                    f"codex app-server encerrou antes de abrir {self._endpoint}"
+                )
+            try:
+                self._ws = await websockets.connect(
+                    self._endpoint, max_size=_READ_LIMIT, open_timeout=1
+                )
+                self._reader_task = asyncio.create_task(self._read_loop())
+                return self._endpoint
+            except (OSError, TimeoutError) as exc:
+                last_error = exc
+                await asyncio.sleep(0.1)
+        await self.close()
+        raise RuntimeError(
+            f"codex app-server nao abriu {self._endpoint}: {last_error}"
+        )
+
     def _attach(self, reader: asyncio.StreamReader, writer) -> None:
         # seam de teste: quem chama start() usa proc.stdout/stdin reais; os testes injetam
         # um StreamReader alimentado manualmente + um writer fake em memoria.
@@ -57,7 +107,6 @@ class AppServerClient:
         self._reader_task = asyncio.create_task(self._read_loop())
 
     async def _read_loop(self) -> None:
-        assert self._reader is not None
         try:
             while True:
                 # Corpo inteiro do loop protegido: readline() pode levantar LimitOverrunError
@@ -67,7 +116,13 @@ class AppServerClient:
                 # (cancel de close()) DEVE continuar propagando -> por isso except Exception, nao
                 # BaseException.
                 try:
-                    raw = await self._reader.readline()
+                    if self._ws is not None:
+                        raw = await self._ws.recv()
+                        if isinstance(raw, str):
+                            raw = raw.encode()
+                    else:
+                        assert self._reader is not None
+                        raw = await self._reader.readline()
                     if not raw:
                         break  # EOF - processo encerrou ou stream fechado
                     raw = raw.strip()
@@ -94,6 +149,8 @@ class AppServerClient:
                         logger.warning("codex app-server: mensagem sem id e sem method, ignorada: %.200r", raw)
                 except asyncio.CancelledError:
                     raise  # cancel de close() - propaga, nao engole
+                except websockets.ConnectionClosed:
+                    break
                 except Exception:
                     logger.exception("codex app-server: erro processando linha, seguindo")
                     continue
@@ -110,15 +167,18 @@ class AppServerClient:
             self._notifications.put_nowait(None)
 
     async def request(self, method: str, params: dict, timeout: float = 30.0) -> dict:
-        if self._writer is None:
+        if self._writer is None and self._ws is None:
             raise RuntimeError("AppServerClient.start() precisa rodar antes de request()")
         self._next_id += 1
         req_id = self._next_id
         fut = asyncio.get_running_loop().create_future()
         self._pending[req_id] = fut
         line = json.dumps({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params})
-        self._writer.write((line + "\n").encode())
-        await self._writer.drain()
+        if self._ws is not None:
+            await self._ws.send(line)
+        else:
+            self._writer.write((line + "\n").encode())
+            await self._writer.drain()
         try:
             msg = await asyncio.wait_for(fut, timeout=timeout)
         finally:
@@ -149,6 +209,10 @@ class AppServerClient:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._reader_task
             self._reader_task = None
+        if self._ws is not None:
+            with contextlib.suppress(Exception):
+                await self._ws.close()
+            self._ws = None
         if self._writer is not None:
             self._writer.close()
             with contextlib.suppress(Exception):
@@ -159,3 +223,4 @@ class AppServerClient:
                 self._proc.terminate()
             await self._proc.wait()
             self._proc = None
+        self._endpoint = None

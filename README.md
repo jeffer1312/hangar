@@ -62,16 +62,35 @@ The trick is to use the right source for each thing:
    ├ StateMonitor     → tmux capture-pane → live state ───┤
    └ TerminalInput    → tmux send-keys (prompt/select/Esc)┘
    ▼
- tmux sessions, each running `claude` (your normal login)
+ tmux sessions, running `claude` or a Codex TUI connected to its app-server
 ```
 
 - **Chat content** comes from Claude Code's structured **JSONL transcript** (`~/.claude/projects/<cwd>/<uuid>.jsonl`) — robust, no terminal scraping.
 - **Live state** comes from a narrow `tmux capture-pane` read of the status line. States: `working` (mirrors Claude's live label, e.g. `Elucidating…`), `idle`, `awaiting_input` (Claude asked an interactive question — options become tappable buttons), `dead`.
 - **Input** goes to the real session via `tmux send-keys`: prompts, option selection (`(n-1)×Down`+`Enter`), and interrupt (`Esc`).
 
+### Codex sessions
+
+Codex uses a hybrid transport. For each Codex session the backend starts
+`codex app-server --listen ws://127.0.0.1:<port>` and opens a real
+`codex --remote ...` TUI inside tmux. The web UI keeps using the structured
+app-server protocol for messages, streaming state, model selection and
+interrupts; the tmux pane exists so the same conversation can also be attached
+and controlled from a terminal:
+
+```bash
+tmux attach -t <session-name>
+```
+
+The listener is bound to loopback only. On backend restart, the saved thread is
+resumed and its managed Codex tmux pane is recreated against the new local
+endpoint.
+
 ## Run it (dev)
 
-Requirements: `tmux`, `claude` (Claude Code), Python 3.14 + [`uv`](https://docs.astral.sh/uv/), Node 20+.
+Requirements: `tmux`, `claude` (Claude Code), a current `codex` CLI with
+`app-server --listen` and `--remote` support, Python 3.14 +
+[`uv`](https://docs.astral.sh/uv/), Node 20+.
 
 **0. Install the `claude` wrapper (one-time, recommended):**
 ```bash

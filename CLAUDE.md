@@ -13,10 +13,13 @@ LAN/VPN, as a mobile chat. Single-user, LAN/VPN-only by design. Backend: Python 
 The app never scrapes the terminal for chat content — it reads Claude Code's **JSONL transcript** and
 only peeks at the tmux pane for live **state**. Backend pieces (`backend/app/`):
 
-- `registry.py` — SessionRegistry: tmux list/new/kill ↔ maps each session to its `<uuid>.jsonl`.
+- `registry.py` — SessionRegistry: tmux list/new/kill ↔ maps Claude sessions to JSONL and Codex
+  sessions to their durable thread/rollout sidecar.
 - `transcript.py` — tails `~/.claude/projects/<cwd>/<uuid>.jsonl` (the chat content).
 - `state.py` — classifies live state from `tmux capture-pane`: `working` / `idle` / `awaiting_input` / `dead`.
 - `terminal_input.py` + `tmux.py` — input via `tmux send-keys` (prompt / option select via `(n-1)×Down`+`Enter` / `Esc`).
+- `adapters/codex/` — one loopback WebSocket app-server per Codex session; the backend consumes
+  structured JSON-RPC events while a `codex --remote` TUI for the same thread runs inside tmux.
 - `sse.py` — merges the above into the SSE stream. `api.py` — FastAPI routes. `auth.py` — bearer token / `cp_token` cookie.
 - Also: `pqueue.py` (durable input queue), `preview.py` (live in-flight block), `askquestion.py`
   (native AskUserQuestion stepper), `uploads.py`, `git_ops.py`, `commands.py`, `workflows.py`,
@@ -49,7 +52,8 @@ bubbles, sheets, Spinner/Lottie, …), `lib/` (`api.ts` SSE client, `activity.ts
 
 ## Dev commands
 
-Requirements: `tmux`, `claude` (Claude Code), Python 3.14 + [`uv`](https://docs.astral.sh/uv/), Node 20+.
+Requirements: `tmux`, `claude` (Claude Code), a current `codex` CLI with `--remote`,
+Python 3.14 + [`uv`](https://docs.astral.sh/uv/), Node 20+.
 Frontend uses **npm** (has `package-lock.json`).
 
 ```bash

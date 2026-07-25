@@ -1,8 +1,7 @@
-"""Sidecar DURAVEL das sessoes Codex (nao-tmux). Uma sessao Codex nao vive num pane tmux -- vive
-num AppServerClient (stdio) que o backend segura em memoria (efemero). Se o backend reiniciar, o
-processo app-server morre, mas a IDENTIDADE da sessao (name/thread_id/rollout_path/cwd) precisa
-sobreviver pra ela reaparecer na lista e ser retomada sob demanda (resume lazy). Este modulo grava
-essa identidade em disco.
+"""Sidecar DURAVEL das sessoes Codex. Cada sessao tem uma TUI no tmux e um AppServerClient
+WebSocket que o backend segura em memoria (efemero). Se o backend reiniciar, o processo app-server
+morre, mas a IDENTIDADE (name/thread_id/rollout_path/cwd) sobrevive para recriar o servidor, retomar
+a thread e ligar uma nova TUI tmux sob demanda (resume lazy). Este modulo grava essa identidade.
 
 O historico do chat SEMPRE persiste no rollout JSONL do proprio Codex (~/.codex/sessions/...); aqui
 so guardamos o ponteiro pra ele + o thread_id necessario pro thread/resume.
@@ -77,6 +76,19 @@ def delete(name: str) -> None:
         _path(name).unlink(missing_ok=True)
     except OSError:
         pass
+
+
+def rename(old: str, new: str) -> None:
+    """Move o sidecar junto com a sessao tmux, preservando a identidade da thread."""
+    src, dst = _path(old), _path(new)
+    if not src.exists():
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    src.replace(dst)
+    meta = load(new)
+    if meta is not None:
+        save(new, meta["thread_id"], meta["rollout_path"], meta["cwd"],
+             model=meta.get("model"), effort=meta.get("effort"))
 
 
 def list_all() -> list[dict]:

@@ -526,6 +526,11 @@ class SessionRegistry:
         out = []
         sids: dict[str, Optional[str]] = {}
         for p in tmux.list_panes_active():
+            # A TUI Codex agora vive no tmux, mas sua identidade/historico continuam vindo do
+            # sidecar + rollout. Nao a tratar tambem como Claude (duplicaria a sessao e tentaria
+            # resolver ~/.claude/projects).
+            if codex_sessions.exists(p["name"]):
+                continue
             jsonl, tracked = self.resolve_tracked(p["name"], p["cwd"], p["pid"], children)
             link = ThenLink(p["name"]).get()
             pair = PairLink(p["name"]).get()
@@ -538,9 +543,8 @@ class SessionRegistry:
             sids[p["name"]] = self._repl_sid(p["pid"], children)
         # Guarda de colisao: 2+ sessoes no mesmo jsonl -> so a dona mantem (mata a duplicata/cross-wire).
         self._dedupe_collisions(out, sids)
-        # Sessoes Codex: nao vivem em tmux -> vem dos sidecars duraveis (sobrevivem a restart do
-        # backend; o historico esta no rollout). jsonl = rollout_path; tracked=True (identidade
-        # deterministica via thread_id). O client vivo e reaberto sob demanda (ensure_running).
+        # Sessoes Codex: a TUI vive no tmux, mas a identidade vem dos sidecars duraveis (sobrevivem
+        # a restart; o historico esta no rollout). O client vivo e reaberto sob demanda.
         for meta in codex_sessions.list_all():
             out.append(SessionInfo(
                 name=meta["name"], cwd=meta.get("cwd"), jsonl=meta.get("rollout_path"),
@@ -771,9 +775,8 @@ class SessionRegistry:
         return SessionInfo(name=name, cwd=cwd, jsonl=jsonl, provider=provider)
 
     async def create_codex(self, name: str, cwd: str) -> SessionInfo:
-        # Caminho Codex do create (NAO-tmux): spawna o app-server, abre um thread, grava o sidecar
-        # duravel e anexa o client vivo. async porque o AppServerClient precisa viver no loop
-        # principal (o mesmo que serve SSE/send_prompt depois) -- ver nota no create() sync.
+        # Caminho Codex: spawna um app-server WebSocket local, abre um thread e cria uma TUI
+        # `codex --remote` no tmux ligada ao mesmo servidor. O backend conserva o controle JSON-RPC.
         name = re.sub(r"[^A-Za-z0-9_-]", "-", name.strip()).strip("-")
         if not name:
             raise ValueError("nome invalido")
@@ -782,23 +785,34 @@ class SessionRegistry:
             raise ValueError("ja existe uma sessao com esse nome")
         client = AppServerClient()
         try:
-            await client.start()
+            endpoint = await client.start_shared()
             await client.request("initialize", {
                 "clientInfo": codex_adapter._CLIENT_INFO, "capabilities": None})
-            result = await client.request("thread/start", {
-                "cwd": cwd,
-                "sandbox": codex_adapter._SANDBOX,
-                "approvalPolicy": codex_adapter._APPROVAL,
-            })
+            codex_adapter.ensure_tmux_tui(name, cwd, None, endpoint)
+
+            # A TUI cria a thread e publica sua identidade a todos os clientes do app-server.
+            # Isso tambem garante que o rollout ja exista, permitindo `codex resume` no restart.
+            async def _tui_thread() -> dict:
+                async for notification in client.notifications():
+                    if notification.get("method") != "thread/started":
+                        continue
+                    thread = (notification.get("params") or {}).get("thread") or {}
+                    if thread.get("cwd") == cwd:
+                        return thread
+                raise ConnectionError("app-server encerrou antes de a TUI criar a thread")
+
+            thread = await asyncio.wait_for(_tui_thread(), timeout=20)
         except Exception:
             # Falha no handshake: nao deixa o subprocess orfao.
             await client.close()
+            if tmux.has_session(name):
+                tmux.kill_session(name)
             raise
-        thread = result.get("thread") or {}
         thread_id = thread.get("id")
         rollout_path = thread.get("path")
         if not thread_id or not rollout_path:
             await client.close()
+            tmux.kill_session(name)
             raise ValueError("thread/start nao devolveu id/path")
         # save() (mkdir+write_text -> pode dar OSError: disco cheio/permissao) e attach() rodam com o
         # app-server JA spawnado -> qualquer falha aqui tem que fechar o client, senao vira orfao. Se
@@ -808,22 +822,25 @@ class SessionRegistry:
             # Sidecar duravel: sobrevive ao restart do backend (identidade + ponteiro pro rollout).
             codex_sessions.save(name, thread_id, rollout_path, cwd)
             # Client vivo (efemero) anexado no adapter; limpa fila/then herdados de nome reusado.
-            # default_model/effort: thread/start ja devolve o modelo default da thread (ex.
-            # "gpt-5.6-sol") -- passa pro attach so pra DISPLAY (pill/statusline); a sessao nova
-            # ainda nao tem escolha explicita (model=None acima).
+            # A sessao nova ainda nao tem escolha explicita de modelo; o catalogo/picker e os
+            # eventos dos turnos populam o display depois.
             from app.adapters import get_adapter
-            get_adapter("codex").attach(name, client, thread_id,
-                                         default_model=result.get("model"),
-                                         default_effort=result.get("effort"))
+            get_adapter("codex").attach(name, client, thread_id)
         except Exception:
             await client.close()
             codex_sessions.delete(name)  # idempotente; remove sidecar orfao se save ja tinha passado
+            if tmux.has_session(name):
+                tmux.kill_session(name)
             raise
         PromptQueue(name).clear()
         ThenLink(name).clear()
         return SessionInfo(name=name, cwd=cwd, jsonl=rollout_path, provider="codex")
 
     def rename(self, old: str, new: str) -> None:
+        if codex_sessions.exists(old):
+            from app.adapters import get_adapter
+            codex_sessions.rename(old, new)
+            get_adapter("codex").rename(old, new)
         # Cache e keyed por NOME -> ao renomear, move a entrada pro nome novo e esquece o velho. Senao
         # o nome velho apontaria pro jsonl pra sempre (reuso futuro = transcript errado) e o nome novo
         # cairia no fallback newest-by-mtime ate um sinal confiavel reaparecer.
@@ -850,12 +867,11 @@ class SessionRegistry:
         rename_pair(old, new)
 
     def kill(self, name: str) -> None:
-        # Sessao Codex (tem sidecar duravel): fecha o client vivo (SIGTERM sync via adapter -> o read
-        # loop no loop principal ve o EOF), apaga o sidecar (nao reaparece na lista / nao resume) e
-        # limpa fila/then. NAO toca tmux (nao ha pane).
+        # Sessao Codex: fecha app-server e TUI tmux, apaga o sidecar e limpa estado duravel.
         if codex_sessions.exists(name):
             from app.adapters import get_adapter
             get_adapter("codex").close_sync(name)
+            tmux.kill_session(name)
             codex_sessions.delete(name)
             self._forget(name)
             PromptQueue(name).clear()

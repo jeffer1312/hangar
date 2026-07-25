@@ -12,6 +12,7 @@ o sidecar duravel (app.adapters.codex.sessions) guarda thread_id/rollout_path/cw
 reabre o AppServerClient e retoma pelo thread/resume sob demanda."""
 import asyncio
 import logging
+import shlex
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,7 @@ from app.adapters.codex import sessions as codex_sessions
 from app.adapters.codex.appserver import AppServerClient
 from app.adapters.codex.preview import CodexPreviewSource
 from app.adapters.codex.rollout import parse_rollout_line
+from app import tmux
 from app.pqueue import PromptQueue
 from app.state import StateEvent
 from app.transcript import ChatEvent, TranscriptTailer
@@ -32,6 +34,32 @@ _CLIENT_INFO = {"name": "claude-pocket", "title": None, "version": "0.1.0"}
 # Codex pode EDITAR arquivos no cwd da sessao -> workspace-write (nao read-only do spike).
 _SANDBOX = "workspace-write"
 _APPROVAL = "never"
+
+
+def ensure_tmux_tui(name: str, cwd: str, thread_id: str | None, endpoint: str,
+                    *, replace: bool = False) -> None:
+    """Garante uma TUI Codex anexavel no tmux, ligada ao app-server do backend.
+
+    ``replace`` e usado no resume lazy apos restart do backend: uma pane antiga aponta para o
+    endpoint do processo anterior e nao pode ser reaproveitada.
+    """
+    if tmux.has_session(name):
+        if not replace:
+            return
+        tmux.kill_session(name)
+    if thread_id:
+        argv = ["codex", "resume", "--remote", endpoint, "--no-alt-screen", thread_id]
+    else:
+        # Na criacao, a TUI precisa ser a dona do thread/start: um thread aberto pelo cliente JSON-
+        # RPC ainda sem turno nao tem rollout no disco e `codex resume` o rejeita. O backend captura
+        # o thread/started emitido por esta TUI e passa a controlar a mesma thread.
+        argv = [
+            "codex", "--remote", endpoint, "--no-alt-screen", "-C", cwd,
+            "--sandbox", _SANDBOX, "--ask-for-approval", _APPROVAL,
+        ]
+    command = shlex.join(argv)
+    if not tmux.new_session(name, cwd, command):
+        raise RuntimeError(f"nao foi possivel criar a TUI Codex no tmux: {name}")
 
 
 @dataclass
@@ -256,7 +284,7 @@ class CodexAdapter:
                 return None
             client = AppServerClient()
             try:
-                await client.start()
+                endpoint = await client.start_shared()
                 await client.request("initialize", {"clientInfo": _CLIENT_INFO, "capabilities": None})
                 result = await client.request("thread/resume", {
                     "threadId": meta["thread_id"],
@@ -271,6 +299,11 @@ class CodexAdapter:
             # thread/resume devolve {"thread": {"id","path",...}}; reusa o thread_id do sidecar como
             # fonte de verdade (o id nao muda no resume).
             thread_id = (result.get("thread") or {}).get("id") or meta["thread_id"]
+            try:
+                ensure_tmux_tui(name, meta.get("cwd") or ".", thread_id, endpoint, replace=True)
+            except Exception:
+                await client.close()
+                raise
             # model/effort (Task C): repovoa a escolha do sidecar no dict quente, senao o 1o
             # turn/start pos-restart perderia a escolha ate a proxima chamada de set_model.
             # default_model/default_effort: o default da thread tambem vem no thread/resume
@@ -291,6 +324,14 @@ class CodexAdapter:
         term = getattr(sess["client"], "terminate", None)
         if callable(term):
             term()
+
+    def rename(self, old: str, new: str) -> None:
+        sess = self._sessions.pop(old, None)
+        if sess is not None:
+            self._sessions[new] = sess
+        lock = self._locks.pop(old, None)
+        if lock is not None:
+            self._locks[new] = lock
 
     def transcript_stream(self, path: str) -> AsyncIterator[ChatEvent]:
         # Mesma mecanica de tail (backfill do tail + watch de append) do Claude, so trocando o

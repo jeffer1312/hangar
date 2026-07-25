@@ -216,6 +216,7 @@ dependencies = [
     { name = "sse-starlette" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "watchfiles" },
+    { name = "websockets" },
 ]
 
 [package.dev-dependencies]
@@ -235,6 +236,7 @@ requires-dist = [
     { name = "sse-starlette", specifier = ">=3.4.5" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.49.0" },
     { name = "watchfiles", specifier = ">=1.2.0" },
+    { name = "websockets", specifier = ">=16.0" },
 ]
 
 [package.metadata.requires-dev]
