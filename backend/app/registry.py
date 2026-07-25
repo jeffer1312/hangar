@@ -828,7 +828,7 @@ class SessionRegistry:
             # A sessao nova ainda nao tem escolha explicita de modelo; o catalogo/picker e os
             # eventos dos turnos populam o display depois.
             from app.adapters import get_adapter
-            get_adapter("codex").attach(name, client, thread_id)
+            get_adapter("codex").attach(name, client, thread_id, watch_tmux=True)
         except Exception:
             await client.close()
             codex_sessions.delete(name)  # idempotente; remove sidecar orfao se save ja tinha passado

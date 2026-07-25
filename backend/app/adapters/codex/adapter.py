@@ -247,10 +247,53 @@ class CodexAdapter:
         # is None`, ambos spawnar+resume, e o 2o attach() sobrescrever o 1o AppServerClient no dict
         # -- o 1o (subprocess + reader task) ficava orfao, nunca fechado.
         self._locks: dict[str, asyncio.Lock] = {}
+        # Backend-owned watcher: se a TUI tmux morre (inclusive terminal fechado com o helper junto),
+        # remove o sidecar e encerra o app-server. O cleanup nao pode depender do processo wrapper.
+        self._tmux_watchers: dict[str, asyncio.Task] = {}
+
+    def _start_tmux_watcher(self, name: str) -> None:
+        old = self._tmux_watchers.pop(name, None)
+        if old is not None:
+            old.cancel()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # attach() tambem e usado por testes/callers sync sem event loop.
+            return
+        self._tmux_watchers[name] = loop.create_task(
+            self._watch_tmux(name), name=f"codex-tmux-watch-{name}"
+        )
+
+    async def _watch_tmux(self, name: str) -> None:
+        try:
+            # Grace de startup: attach() ocorre logo apos tmux.new_session, mas evita qualquer
+            # falso negativo transitorio no primeiro poll.
+            await asyncio.sleep(1.0)
+            while name in self._sessions and await asyncio.to_thread(tmux.has_session, name):
+                await asyncio.sleep(1.0)
+            sess = self._sessions.pop(name, None)
+            if sess is None:
+                return
+            term = getattr(sess["client"], "terminate", None)
+            if callable(term):
+                term()
+            codex_sessions.delete(name)
+            await asyncio.to_thread(PromptQueue(name).clear)
+            CodexPreviewSource._sources.pop(name, None)
+            _log.info("codex tmux encerrou: cleanup automatico name=%s", name)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("codex tmux watcher falhou name=%s", name)
+        finally:
+            current = self._tmux_watchers.get(name)
+            if current is asyncio.current_task():
+                self._tmux_watchers.pop(name, None)
 
     def attach(self, name: str, client: AppServerClient, thread_id: str,
                model: Optional[str] = None, effort: Optional[str] = None,
-               default_model: Optional[str] = None, default_effort: Optional[str] = None) -> None:
+               default_model: Optional[str] = None, default_effort: Optional[str] = None,
+               *, watch_tmux: bool = False) -> None:
         """Liga uma sessao (por nome) a um AppServerClient + threadId ja vivos. Chamado pelo
         registry.create_codex (spawn novo, sem model/effort ainda -- sessao nova) e por
         ensure_running (resume pos-restart, passando model/effort lidos do sidecar -- Task C:
@@ -265,6 +308,8 @@ class CodexAdapter:
                                  "state": "idle", "in_progress": False,
                                  "model": model, "effort": effort,
                                  "default_model": default_model, "default_effort": default_effort}
+        if watch_tmux:
+            self._start_tmux_watcher(name)
 
     async def ensure_running(self, name: str) -> Optional[AppServerClient]:
         """Garante um AppServerClient VIVO pra sessao Codex `name` (resume LAZY):
@@ -322,7 +367,8 @@ class CodexAdapter:
             # response (mesmo campo `model` do thread/start) -- so pra display, nao sobrescreve a
             # escolha acima.
             self.attach(name, client, thread_id, model=meta.get("model"), effort=meta.get("effort"),
-                        default_model=result.get("model"), default_effort=result.get("effort"))
+                        default_model=result.get("model"), default_effort=result.get("effort"),
+                        watch_tmux=True)
             _log.info("codex ensure_running: resumed thread=%s name=%s", thread_id, name)
             return client
 
@@ -331,6 +377,9 @@ class CodexAdapter:
         SIGTERM best-effort no subprocess e esquece a sessao da memoria; o read loop (loop
         principal) ve o EOF e roda seu finally. NAO apaga o sidecar duravel -- isso e o kill()."""
         sess = self._sessions.pop(name, None)
+        watcher = self._tmux_watchers.pop(name, None)
+        if watcher is not None:
+            watcher.cancel()
         if sess is None:
             return
         term = getattr(sess["client"], "terminate", None)
@@ -338,12 +387,17 @@ class CodexAdapter:
             term()
 
     def rename(self, old: str, new: str) -> None:
+        watcher = self._tmux_watchers.pop(old, None)
+        if watcher is not None:
+            watcher.cancel()
         sess = self._sessions.pop(old, None)
         if sess is not None:
             self._sessions[new] = sess
         lock = self._locks.pop(old, None)
         if lock is not None:
             self._locks[new] = lock
+        if sess is not None:
+            self._start_tmux_watcher(new)
 
     def transcript_stream(self, path: str) -> AsyncIterator[ChatEvent]:
         # Mesma mecanica de tail (backfill do tail + watch de append) do Claude, so trocando o
