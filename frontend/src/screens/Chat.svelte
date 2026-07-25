@@ -1177,10 +1177,16 @@
   /* O painel contextual só entra em desktop largo. A conversa e o composer cedem espaço de verdade
      (não ficam cobertos por overlay); em split ou viewport menor ele nem é montado/é ocultado. */
   @media (min-width: 1280px) {
+    /* O painel lateral ocupa espaço real de leitura. Reservamos essa faixa no próprio scroller,
+       então a coluna continua centrada no espaço restante quando a sidebar abre/fecha, em vez de
+       ficar presa a uma margem direita fixa que desloca o chat em larguras intermediárias. */
+    .chat-screen.with-context :global(.message-list) {
+      box-sizing: border-box;
+      padding-right: 248px;
+    }
     .chat-screen.with-context :global(.messages-inner) {
-      max-width: min(780px, calc(100% - 300px));
-      margin-left: auto;
-      margin-right: 276px;
+      max-width: min(780px, 100%);
+      margin-inline: auto;
     }
     .chat-screen.with-context .bottom-dock { right: 248px; }
     .chat-screen.with-context .chat-skeleton,
