@@ -21,7 +21,12 @@
   }
   let { open, sessionName, onClose }: Props = $props();
 
-  const git = createGitStore(sessionName);
+  // Store real e criado no effect para que a prop reativa nao seja capturada no inicializador.
+  let git = $state(createGitStore(''));
+  $effect(() => {
+    const name = sessionName;
+    if (git.sessionName !== name) git = createGitStore(name);
+  });
 
   let filter = $state('');      // busca que filtra as branches (BranchList so le, o input mora aqui)
   // View ativa: cada uma OCUPA a sheet (push-view). O "voltar" leva de volta a 'list'; o diff/commit

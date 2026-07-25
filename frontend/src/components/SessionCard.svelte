@@ -71,22 +71,34 @@
   const OPEN = -84;
   let offset = $state(0);
   let startX = 0, startY = 0, startOffset = 0;
-  let dragging = false;
+  let dragging = $state(false);
   let axis: 'x' | 'y' | null = null;
-  let suppressClick = false;
+  let suppressClick = $state(false);
+  let capturedTarget: HTMLElement | null = null;
+  let capturedPointerId: number | null = null;
 
   // ── Renomear por TOQUE LONGO (500ms parado, sem swipe) -> edita o nome inline (espelha o Sidebar) ──
   let editing = $state(false);
   let editValue = $state('');
-  let longPressed = false;
+  let longPressed = $state(false);
   let pressTimer: ReturnType<typeof setTimeout> | undefined;
   function startPress() {
     longPressed = false;
     clearTimeout(pressTimer);
+    pressTimer = undefined;
     if (untracked) return;                       // sessao sem id confiavel nao renomeia
-    pressTimer = setTimeout(() => { longPressed = true; editValue = session.name; editing = true; }, 500);
+    pressTimer = setTimeout(() => {
+      pressTimer = undefined;
+      if (!dragging || axis !== null) return;
+      longPressed = true;
+      editValue = session.name;
+      editing = true;
+    }, 500);
   }
-  function cancelPress() { clearTimeout(pressTimer); }
+  function cancelPress() {
+    clearTimeout(pressTimer);
+    pressTimer = undefined;
+  }
   function saveRename() {
     const nv = editValue.trim();
     editing = false;
@@ -102,7 +114,9 @@
     if (editing || selectMode) return;            // selecionando: sem swipe/rename, so toggle no tap
     startX = e.clientX; startY = e.clientY; startOffset = offset;
     dragging = true; axis = null; suppressClick = false;
-    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    capturedTarget = e.currentTarget as HTMLElement;
+    capturedPointerId = e.pointerId;
+    capturedTarget.setPointerCapture?.(e.pointerId);
     startPress();                                // arma o long-press (cancelado por movimento/soltar)
   }
   function onMove(e: PointerEvent) {
@@ -117,11 +131,27 @@
       offset = Math.max(OPEN, Math.min(0, startOffset + dx));
     }
   }
+  function releasePointerCapture() {
+    if (capturedTarget && capturedPointerId !== null && capturedTarget.hasPointerCapture?.(capturedPointerId)) {
+      capturedTarget.releasePointerCapture?.(capturedPointerId);
+    }
+    capturedTarget = null;
+    capturedPointerId = null;
+  }
   function onUp() {
     cancelPress();
-    if (!dragging) return;
+    releasePointerCapture();
+    if (dragging && axis === 'x') offset = offset < OPEN / 2 ? OPEN : 0; // snap aberto/fechado
     dragging = false;
-    if (axis === 'x') offset = offset < OPEN / 2 ? OPEN : 0; // snap aberto/fechado
+    axis = null;
+  }
+  function onCancel() {
+    cancelPress();
+    releasePointerCapture();
+    if (dragging) offset = startOffset;
+    dragging = false;
+    axis = null;
+    suppressClick = false;
   }
 
   // Tap na linha: toque longo (renomeou) nao navega; se aberto ou acabou de arrastar, fecha o swipe.
@@ -165,7 +195,7 @@
     onpointerdown={onDown}
     onpointermove={onMove}
     onpointerup={onUp}
-    onpointercancel={onUp}
+    onpointercancel={onCancel}
   >
     <span class="lead" aria-hidden="true">
       {#if selectMode}

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import BottomSheet from './BottomSheet.svelte';
+import BottomSheet from './BottomSheet.svelte';
+  import ModalDialog from './ModalDialog.svelte';
   import { getPreview, startPreview, stopPreview } from '../lib/api';
 
   interface Props {
@@ -68,10 +69,8 @@
 </script>
 
 {#if open && expanded && url}
-  <!-- Tela cheia via overlay fixo (NÃO a Fullscreen API: no iOS o fullscreen só vale pra <video>, não
-       pra iframe). É irmão do BottomSheet -> ancora na viewport, e não na sheet (que tem transform e
-       viraria o containing block de um position:fixed). -->
-  <div class="pv-fs" role="dialog" aria-modal="true" aria-label="Preview em tela cheia">
+  <ModalDialog open={true} ariaLabel="Preview em tela cheia" className="pv-fs-dialog" onClose={() => (expanded = false)}>
+    <div class="pv-fs">
     <button class="pv-fs-close" onclick={() => (expanded = false)} aria-label="Reduzir preview">⤢ reduzir</button>
     <iframe
       class="pv-fs-frame"
@@ -79,7 +78,8 @@
       title="preview do projeto (tela cheia)"
       allow="clipboard-read; clipboard-write"
     ></iframe>
-  </div>
+    </div>
+  </ModalDialog>
 {/if}
 
 <BottomSheet {open} {onClose} ariaLabel="Preview">
@@ -174,10 +174,8 @@
   @media (min-width: 820px) { .pv-frame { height: 70vh; } }
 
   /* Tela cheia: overlay fixo cobrindo a viewport (irmão do sheet -> não herda o transform dele). */
-  .pv-fs {
-    position: fixed; inset: 0; z-index: 200;
-    background: var(--bg-base); display: flex; flex-direction: column;
-  }
+  :global(.pv-fs-dialog) { width: 100%; max-width: none; height: 100%; max-height: none; border: 0; border-radius: 0; padding: 0; background: var(--bg-base); }
+  .pv-fs { height: 100%; display: flex; flex-direction: column; }
   .pv-fs-frame { flex: 1; width: 100%; min-height: 0; border: 0; background: #fff; }
   .pv-fs-close {
     position: absolute; top: calc(env(safe-area-inset-top) + var(--space-2)); right: var(--space-3);
