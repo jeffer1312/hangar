@@ -774,7 +774,8 @@ class SessionRegistry:
         self._jsonl_cache[name] = jsonl
         return SessionInfo(name=name, cwd=cwd, jsonl=jsonl, provider=provider)
 
-    async def create_codex(self, name: str, cwd: str) -> SessionInfo:
+    async def create_codex(self, name: str, cwd: str,
+                           initial_prompt: str | None = None) -> SessionInfo:
         # Caminho Codex: spawna um app-server WebSocket local, abre um thread e cria uma TUI
         # `codex --remote` no tmux ligada ao mesmo servidor. O backend conserva o controle JSON-RPC.
         name = re.sub(r"[^A-Za-z0-9_-]", "-", name.strip()).strip("-")
@@ -788,7 +789,9 @@ class SessionRegistry:
             endpoint = await client.start_shared()
             await client.request("initialize", {
                 "clientInfo": codex_adapter._CLIENT_INFO, "capabilities": None})
-            codex_adapter.ensure_tmux_tui(name, cwd, None, endpoint)
+            codex_adapter.ensure_tmux_tui(
+                name, cwd, None, endpoint, initial_prompt=initial_prompt,
+            )
 
             # A TUI cria a thread e publica sua identidade a todos os clientes do app-server.
             # Isso tambem garante que o rollout ja exista, permitindo `codex resume` no restart.

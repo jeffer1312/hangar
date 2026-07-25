@@ -445,6 +445,9 @@ class CreateBody(_StrictBody):
     # Qual Adapter cria a sessao (app.adapters.get_adapter). Default "claude" preserva o
     # comportamento de hoje pros clientes que ainda nao mandam o campo.
     provider: str = "claude"
+    # Wrapper interativo do Codex pode iniciar a TUI ja com um prompt. Nao e argv arbitrario:
+    # evita que um cliente remoto injete flags que afrouxem sandbox/aprovacoes do backend.
+    initial_prompt: str | None = None
 
 
 class PushSubscribeBody(_StrictBody):
@@ -563,7 +566,7 @@ async def create_session(body: CreateBody):
         raise HTTPException(400, "config_dir invalido")
     try:
         if body.provider == "codex":
-            return await registry.create_codex(body.name, body.cwd)
+            return await registry.create_codex(body.name, body.cwd, body.initial_prompt)
         return await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir)
     except ValueError as e:
         raise HTTPException(409, str(e))

@@ -40,11 +40,12 @@ ask() { # ask "pergunta" -> 0/1 (em --yes, sempre sim)
 say "1/7 Checando dependências"
 command -v tmux   >/dev/null || fail "tmux não encontrado — instale com o gerenciador do teu sistema"
 command -v claude >/dev/null || fail "claude (Claude Code) não encontrado — https://code.claude.com"
+command -v codex  >/dev/null || fail "codex CLI não encontrado — https://developers.openai.com/codex/cli"
 command -v uv     >/dev/null || fail "uv não encontrado — https://docs.astral.sh/uv/ (curl -LsSf https://astral.sh/uv/install.sh | sh)"
 command -v npm    >/dev/null || fail "node/npm não encontrados — instale Node 20+"
 node -e 'process.exit(parseInt(process.versions.node) >= 20 ? 0 : 1)' \
   || fail "Node 20+ é necessário (atual: $(node --version))"
-ok "tmux, claude, uv e node $(node --version) presentes"
+ok "tmux, claude, codex, uv e node $(node --version) presentes"
 
 # ── 2. Backend ───────────────────────────────────────────────────────────────
 say "2/7 Backend (uv sync)"
@@ -66,11 +67,9 @@ say "3/7 Frontend (npm ci + build)"
 (cd frontend && npm ci --silent && npm run build --silent)
 ok "frontend buildado em frontend/dist/"
 
-# ── 4. Wrapper do claude (recomendado) ───────────────────────────────────────
-# Faz todo `claude` abrir dentro do tmux com --session-id próprio — é o que
-# permite o app rastrear cada sessão com segurança (sem ele: "⚠ no id").
-say "4/7 Wrapper do claude"
-if [ "$WRAPPER" = 1 ] && ask "Instalar o wrapper do claude (recomendado)?"; then
+# ── 4. Wrappers interativos (recomendado) ────────────────────────────────────
+say "4/7 Wrappers do Claude e Codex"
+if [ "$WRAPPER" = 1 ] && ask "Instalar os wrappers do Claude e Codex (recomendado)?"; then
   ./scripts/install-claude-wrapper.sh
 else
   echo "  pulado — instale depois com ./scripts/install-claude-wrapper.sh"
@@ -115,5 +114,5 @@ cat <<'EOF'
   • No celular: abra a URL mostrada no QR do backend e cole o token
     (backend/.env). Guia completo com Tailscale + instalar como PWA:
     docs/USAGE.md
-  • Abra sessões com `claude` normal (o wrapper cuida do tmux/session-id).
+  • Abra sessões com `claude` ou `codex` normal (os wrappers cuidam do Cockpit/tmux).
 EOF

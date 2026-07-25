@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the claude-pocket `claude` wrapper into your shell (+ optional tmux config + statusline).
+# Install the claude-cockpit interactive `claude` and `codex` wrappers.
 #
 # The wrapper makes every interactive `claude` trackable by the app: it injects a unique
 # --session-id (so two claudes in the same folder never leak/overwrite each other) and launches
@@ -73,19 +73,31 @@ ensure_block() {
 }
 
 install_posix() {  # $1 = rc file
-  ensure_block "$1" "source \"$SHELL_DIR/claude.posix.sh\""
+  ensure_block "$1" "source \"$SHELL_DIR/claude.posix.sh\"
+source \"$SHELL_DIR/codex.posix.sh\""
 }
 
 install_fish() {
-  local dst="$HOME/.config/fish/functions/claude.fish"
-  mkdir -p "$(dirname "$dst")"
-  if [ -e "$dst" ] && ! cmp -s "$SHELL_DIR/claude.fish" "$dst"; then
-    cp "$dst" "$dst.bak"
-    echo "  backed up existing $dst -> $dst.bak"
-  fi
-  cp "$SHELL_DIR/claude.fish" "$dst"
-  echo "  installed fish function -> $dst"
+  local name dst src
+  for name in claude codex; do
+    src="$SHELL_DIR/$name.fish"
+    dst="$HOME/.config/fish/functions/$name.fish"
+    mkdir -p "$(dirname "$dst")"
+    if [ -e "$dst" ] && ! cmp -s "$src" "$dst"; then
+      cp "$dst" "$dst.bak"
+      echo "  backed up existing $dst -> $dst.bak"
+    fi
+    cp "$src" "$dst"
+    echo "  installed fish function -> $dst"
+  done
 }
+
+# Helper chamado pelos wrappers de shell. Symlink absoluto preserva a descoberta do backend/.env
+# mesmo quando executado de qualquer cwd e atualiza automaticamente depois de git pull.
+mkdir -p "$HOME/.local/bin"
+chmod +x "$SCRIPT_DIR/cp-codex"
+ln -sfn "$SCRIPT_DIR/cp-codex" "$HOME/.local/bin/cp-codex"
+echo "  installed Codex helper -> $HOME/.local/bin/cp-codex"
 
 # Point Claude Code's statusLine at scripts/omniroute-statusline.js so the app parses it reliably.
 install_statusline() {
@@ -175,4 +187,5 @@ fi
 echo
 echo "Done. Open a NEW terminal (or reload your rc) so the wrapper loads, then run:"
 echo "  claude        # creates a tmux session named after the folder, with a --session-id"
-echo "Bypass the wrapper anytime with:  command claude ..."
+echo "  codex         # creates a Cockpit-managed Codex session and attaches its tmux"
+echo "Bypass a wrapper anytime with:  command claude ... / command codex ..."
