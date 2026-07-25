@@ -23,6 +23,7 @@ from app.adapters.codex.appserver import AppServerClient
 from app.adapters.codex.preview import CodexPreviewSource
 from app.adapters.codex.rollout import parse_rollout_line
 from app import tmux
+from app import terminal_input as ti
 from app.pqueue import PromptQueue
 from app.state import StateEvent
 from app.transcript import ChatEvent, TranscriptTailer
@@ -37,7 +38,8 @@ _APPROVAL = "never"
 
 
 def ensure_tmux_tui(name: str, cwd: str, thread_id: str | None, endpoint: str,
-                    *, replace: bool = False, initial_prompt: str | None = None) -> None:
+                    *, replace: bool = False, initial_prompt: str | None = None,
+                    model: str | None = None, effort: str | None = None) -> None:
     """Garante uma TUI Codex anexavel no tmux, ligada ao app-server do backend.
 
     ``replace`` e usado no resume lazy apos restart do backend: uma pane antiga aponta para o
@@ -48,7 +50,12 @@ def ensure_tmux_tui(name: str, cwd: str, thread_id: str | None, endpoint: str,
             return
         tmux.kill_session(name)
     if thread_id:
-        argv = ["codex", "resume", "--remote", endpoint, "--no-alt-screen", thread_id]
+        argv = ["codex", "resume", "--remote", endpoint, "--no-alt-screen"]
+        if model:
+            argv += ["--model", model]
+        if effort:
+            argv += ["--config", f'model_reasoning_effort="{effort}"']
+        argv.append(thread_id)
     else:
         # Na criacao, a TUI precisa ser a dona do thread/start: um thread aberto pelo cliente JSON-
         # RPC ainda sem turno nao tem rollout no disco e `codex resume` o rejeita. O backend captura
@@ -302,7 +309,10 @@ class CodexAdapter:
             # fonte de verdade (o id nao muda no resume).
             thread_id = (result.get("thread") or {}).get("id") or meta["thread_id"]
             try:
-                ensure_tmux_tui(name, meta.get("cwd") or ".", thread_id, endpoint, replace=True)
+                ensure_tmux_tui(
+                    name, meta.get("cwd") or ".", thread_id, endpoint, replace=True,
+                    model=meta.get("model"), effort=meta.get("effort"),
+                )
             except Exception:
                 await client.close()
                 raise
@@ -396,9 +406,24 @@ class CodexAdapter:
                 sess["state"] = "idle"
                 sess["in_progress"] = False
                 sess["turn_id"] = None
+                # Uma escolha feita enquanto o turno estava rodando nao pode matar a TUI no meio
+                # da resposta. Reabre agora, ja idle, com as flags persistidas; o proximo prompt
+                # digitado pelo app/terminal usa a escolha e continua visivel nos dois lugares.
+                if sess.pop("tui_config_dirty", False):
+                    meta = codex_sessions.load(name) or {}
+                    endpoint = getattr(client, "endpoint", None)
+                    if endpoint:
+                        try:
+                            await asyncio.to_thread(
+                                ensure_tmux_tui, name, meta.get("cwd") or ".",
+                                sess["thread_id"], endpoint, replace=True,
+                                model=sess.get("model"), effort=sess.get("effort"),
+                            )
+                        except Exception:
+                            _log.exception("codex: falha ao aplicar modelo na TUI name=%s", name)
                 # drain-on-complete (P2): turno terminou -> entrega a fila pendente (msgs enviadas
-                # via /input enquanto o Codex trabalhava). Reusa adapter.drain (claim-1-envia-1 via
-                # turn/start). ACOPLADO ao SSE ativo -- este generator so roda com um consumidor
+                # via /input enquanto o Codex trabalhava). Reusa adapter.drain (claim-1-envia-1 pela
+                # TUI). ACOPLADO ao SSE ativo -- este generator so roda com um consumidor
                 # aberto; sem celular conectado nao ha drain-on-complete (mesma limitacao do preview,
                 # ver ponytail acima). Best-effort: falha aqui nunca derruba o state stream.
                 try:
@@ -447,45 +472,30 @@ class CodexAdapter:
         if client is None or not await self.deliverable(name):
             return "deferred"
         sess = self._sessions[name]
-        params = {
-            "threadId": sess["thread_id"],
-            "input": [{"type": "text", "text": text, "text_elements": []}],
-        }
-        # model/effort (Task C): so inclui quando ha escolha guardada -- omitido, o app-server usa
-        # o default da thread. O schema documenta "override... AND subsequent turns": basta mandar
-        # aqui de novo em CADA turn/start (nao ha metodo "set model" separado).
-        if sess.get("model"):
-            params["model"] = sess["model"]
-        if sess.get("effort"):
-            params["effort"] = sess["effort"]
-        result = await client.request("turn/start", params)
-        # guarda o turnId do turno recem-iniciado (turn/interrupt exige threadId+turnId; ver schema
-        # TurnInterruptParams). turn/start devolve {"turn": {"id", ...}}.
-        turn_id = (result.get("turn") or {}).get("id")
-        if turn_id:
-            sess["turn_id"] = turn_id
+        # A TUI e a dona visivel da conversa. Iniciar o turno por JSON-RPC grava o rollout e atualiza
+        # o app, mas a TUI remota nao renderiza um turno iniciado por OUTRO cliente -- por isso as
+        # mensagens enviadas pelo celular "sumiam" do terminal. Digitar no pane, como o caminho
+        # Claude ja faz, mantem terminal + rollout + app como uma unica conversa; o app-server
+        # continua observando o turn/started e todos os deltas estruturados.
+        result = await asyncio.to_thread(
+            ti.TerminalInput().send_prompt, name, text, wait_ready=False,
+        )
+        if result != "sent":
+            return result
         # Marca in_progress AQUI (nao so esperar o turn/started chegar no loop de notifications):
         # o drain roda dentro desse mesmo loop, entao um turn/started concorrente pode nao ser
         # processado a tempo -- sem isto, deliverable() ficaria True e o drain mandaria todas as
-        # entradas pendentes como turn/start back-to-back (ver test_drain_stops_after_first_delivery).
+        # entradas pendentes back-to-back (ver test_drain_stops_after_first_delivery).
         sess["in_progress"] = True
         return "sent"
 
     async def interrupt(self, name: str) -> bool:
-        """Interrompe o turno em curso via app-server turn/interrupt (exige threadId+turnId, shape
-        confirmado no schema TurnInterruptParams da 0.141.0). No-op seguro (retorna False, nunca
-        levanta) se a sessao nao tem client vivo ou nao ha turno em voo -- o endpoint /interrupt
-        trata isso como ok pro Codex (nao quebra)."""
-        sess = self._sessions.get(name)
-        if sess is None:
-            return False
-        turn_id = sess.get("turn_id")
-        if not turn_id:
+        """Interrompe a propria TUI Codex no tmux, igual ao caminho Claude. Assim um interrupt
+        enviado pelo celular aparece e produz exatamente o mesmo estado visto no terminal."""
+        if not await asyncio.to_thread(tmux.has_session, name):
             return False
         try:
-            await sess["client"].request("turn/interrupt", {
-                "threadId": sess["thread_id"], "turnId": turn_id,
-            })
+            await asyncio.to_thread(ti.TerminalInput().interrupt, name)
         except Exception:
             _log.exception("codex interrupt falhou name=%s", name)
             return False
@@ -500,7 +510,7 @@ class CodexAdapter:
         return not sess["in_progress"]
 
     async def drain(self, name: str, path: str) -> int:
-        """Entrega a fila duravel (PromptQueue keyed por nome) via send_prompt (turn/start). Sem
+        """Entrega a fila duravel (PromptQueue keyed por nome) via send_prompt (TUI no tmux). Sem
         tty/overlay como no Claude: claim-1-envia-1, para no primeiro `deferred` (turno em curso).
         Retorna quantas entregou. `path` (rollout) mantido por assinatura do Protocol; nao usado.
 
@@ -593,20 +603,30 @@ class CodexAdapter:
 
     async def set_model(self, name: str, model: Optional[str], effort: Optional[str]) -> None:
         """Grava a escolha de modelo/effort da sessao (Task C): dict quente (se anexada) + sidecar
-        duravel (sobrevive ao restart). NAO manda nada pro app-server agora -- vale a partir do
-        PROXIMO turn/start (send_prompt inclui a escolha nos params; ver descoberta-chave no
-        brief: turn/start "override... AND subsequent turns", sem metodo "set model" separado)."""
+        duravel (sobrevive ao restart). O envio de prompts pertence a TUI para que a conversa fique
+        visivel no tmux; estes campos seguem sendo a escolha persistida/exibida da sessao."""
         sess = self._sessions.get(name)
         if sess is not None:
             sess["model"] = model
             sess["effort"] = effort
         codex_sessions.update_model(name, model, effort)
+        if sess is None:
+            return
+        if sess.get("in_progress"):
+            sess["tui_config_dirty"] = True
+            return
+        meta = codex_sessions.load(name) or {}
+        endpoint = getattr(sess["client"], "endpoint", None)
+        if endpoint:
+            await asyncio.to_thread(
+                ensure_tmux_tui, name, meta.get("cwd") or ".", sess["thread_id"], endpoint,
+                replace=True, model=model, effort=effort,
+            )
 
     def current_model(self, name: str) -> dict:
         """Modelo/effort pra DISPLAY (pill do front): a escolha explicita do usuario tem
         prioridade; sem escolha, cai pro default da thread (dict quente, populado no attach) --
-        so entao {model: None, effort: None} pra sessao nunca vista. NUNCA usado pro turn/start
-        (isso e sess["model"]/sess["effort"] puros, lidos direto em send_prompt)."""
+        so entao {model: None, effort: None} pra sessao nunca vista."""
         sess = self._sessions.get(name)
         if sess is not None and (sess.get("model") or sess.get("effort")
                                   or sess.get("default_model") or sess.get("default_effort")):

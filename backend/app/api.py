@@ -961,9 +961,9 @@ def _provider_of(name: str) -> str:
 
 
 async def _send_one_codex(name: str, text: str) -> dict:
-    """Envio de prompt pra sessao Codex — versao MINIMA conversavel (sem tmux/overlay/slash/DIAG do
-    caminho Claude). Registra na fila duravel (aparece como user_msg em ordem e persiste no reload; o
-    merge dedup-a contra o rollout do Codex) e entrega via app-server turn/start SE a sessao esta idle;
+    """Envio de prompt pra sessao Codex pela TUI no tmux. Registra na fila duravel
+    (aparece como user_msg em ordem e persiste no reload; o
+    merge dedup-a contra o rollout do Codex) e entrega pela TUI no tmux SE a sessao esta idle;
     senao deixa pendente pro drain-on-complete entregar quando o turno terminar. Codex nao tem
     slash-commands do Claude -> envia o texto como esta. Nunca levanta (mesmo contrato do _send_one pro
     broadcast: devolve ok/error por sessao).
@@ -979,7 +979,7 @@ async def _send_one_codex(name: str, text: str) -> dict:
         # fila abaixo segura o prompt e o drain-on-complete tenta de novo no proximo idle.
         _log.exception("codex deliverable falhou name=%s", name)
         deliverable = False
-    # Enfileira sempre como pendente; so marca entregue apos o turn/start REALMENTE iniciar o turno.
+    # Enfileira sempre como pendente; so marca entregue apos a TUI REALMENTE receber o prompt.
     try:
         entry = await asyncio.to_thread(PromptQueue(name).append, text, delivered=False)
     except OSError as e:
@@ -989,7 +989,7 @@ async def _send_one_codex(name: str, text: str) -> dict:
         if not deliverable:
             _log.exception("fila indisponivel e prompt NAO entregue name=%s", name)
             return {"ok": False, "error": f"fila indisponivel e prompt nao foi entregue: {e}"}
-        # Entregavel: o turn/start abaixo ainda leva o texto, entao a msg CHEGA. Perder o registro so
+        # Entregavel: a TUI abaixo ainda leva o texto, entao a msg CHEGA. Perder o registro so
         # desliga a rede de seguranca (o drain-on-complete nao acha o que reconferir) — nao e motivo
         # pra falhar o envio, mas nao pode passar calado.
         _log.exception("append na fila falhou (prompt sera entregue) name=%s", name)
@@ -1012,8 +1012,8 @@ async def _send_one_codex(name: str, text: str) -> dict:
     elif entry is None:
         # "deferred" (corrida idle->working entre o deliverable e o send) + sidecar morto: o texto NAO
         # foi digitado E nao ha entrada pendente pro drain-on-complete drenar -- a msg nao esta em lugar
-        # NENHUM. Aqui morre a suposicao do append la em cima ("entregavel -> o turn/start leva o
-        # texto"): o deferred e exatamente o caso em que nao levou. Ultimo ponto onde o 200 "na fila"
+        # NENHUM. Aqui morre a suposicao do append la em cima ("entregavel -> a TUI leva o texto"):
+        # o deferred e exatamente o caso em que nao levou. Ultimo ponto onde o 200 "na fila"
         # ainda seria a mentira do eeba30a.
         _log.error("prompt deferido sem entrada na fila — NAO foi entregue name=%s", name)
         return {"ok": False, "error": "fila indisponivel e o turno nao aceitou o prompt: nao foi entregue"}
@@ -1371,8 +1371,7 @@ def select(name: str, body: SelectBody):
 
 @app.post("/api/sessions/{name}/interrupt", dependencies=[Depends(require_auth)])
 async def interrupt(name: str, clear: bool = False):
-    # Codex: interrompe o turno via app-server turn/interrupt (no-op seguro se nao ha turno em voo).
-    # O `clear` (2o Esc do Claude) nao se aplica ao Codex — nao ha input de TUI pra limpar.
+    # Codex: interrompe a propria TUI pelo tmux, mantendo celular e terminal no mesmo controlador.
     if _provider_of(name) == "codex":
         await get_adapter("codex").interrupt(name)
         return {"ok": True}
@@ -1429,7 +1428,7 @@ async def codex_models(name: str):
 
 @app.post("/api/sessions/{name}/model", dependencies=[Depends(require_auth)])
 async def set_codex_model(name: str, body: CodexModelBody):
-    # Grava a escolha (dict + sidecar); vale a partir do PROXIMO turn/start, ver CodexAdapter.set_model.
+    # Grava a escolha e reabre/configura a TUI; se ha turno em voo, aplica ao terminar.
     if _provider_of(name) != "codex":
         raise HTTPException(400, "model so existe pra sessoes Codex")
     await get_adapter("codex").set_model(name, body.model, body.effort)
