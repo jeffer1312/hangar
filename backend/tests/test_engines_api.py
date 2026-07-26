@@ -138,3 +138,26 @@ def test_modelos_recusa_base_url_insegura(cli):
                  json={"base_url": "http://exemplo.com", "api_key": "sk-x"}, headers=AUTH)
     assert r.status_code == 400
     assert "https" in r.json()["detail"]
+
+
+def test_modelos_recusa_nome_junto_com_base_url_de_terceiro(cli, monkeypatch):
+    # O achado da review: sem esta recusa, {"nome":"kimi","base_url":"https://attacker.example"}
+    # mandava a api_key REAL do kimi (salva no disco) no header Authorization para o host do
+    # atacante — exfiltração de segredo, não o SSRF cego já aceito no modelo de ameaça do app.
+    cli.put("/api/engines/kimi", json=_kimi(), headers=AUTH)
+    vistos = {}
+    monkeypatch.setattr("app.engine_probe.listar_modelos",
+                         lambda base_url, api_key: vistos.update(base_url=base_url, api_key=api_key) or [])
+    r = cli.post("/api/engines/modelos",
+                 json={"nome": "kimi", "base_url": "https://attacker.example"}, headers=AUTH)
+    assert r.status_code == 400
+    assert "nome" in r.json()["detail"]
+    assert vistos == {}  # o provedor nunca foi chamado — nem com o host certo, nem com o errado
+
+
+def test_modelos_recusa_nome_junto_com_api_key_de_terceiro(cli):
+    cli.put("/api/engines/kimi", json=_kimi(), headers=AUTH)
+    r = cli.post("/api/engines/modelos",
+                 json={"nome": "kimi", "api_key": "sk-outra-coisa"}, headers=AUTH)
+    assert r.status_code == 400
+    assert "nome" in r.json()["detail"]

@@ -1581,7 +1581,9 @@ async def delete_engine(nome: str):
 
 class EngineProbeBody(_StrictBody):
     # `nome` de um motor já salvo (reusa a key do disco, que o cliente não tem inteira) OU
-    # base_url+api_key de um motor sendo criado.
+    # base_url+api_key de um motor sendo criado. Os dois modos são MUTUAMENTE EXCLUSIVOS — ver
+    # o guard em engine_modelos: misturar `nome` com um `base_url` do cliente mandaria a api_key
+    # REAL do motor salvo, no header Authorization, para qualquer host que o cliente escolher.
     nome: str | None = None
     base_url: str | None = None
     api_key: str | None = None
@@ -1590,16 +1592,24 @@ class EngineProbeBody(_StrictBody):
 @app.post("/api/engines/modelos", dependencies=[Depends(require_auth)])
 async def engine_modelos(body: EngineProbeBody):
     """Modelos que a key pode usar, direto do provedor. É também o 'Testar' da tela: 200 = key boa,
-    502 = a mensagem do provedor (401, host errado, endpoint ausente)."""
-    base_url, api_key = body.base_url, body.api_key
+    502 = a mensagem do provedor (401, host errado, endpoint ausente).
+
+    `nome` e `base_url`/`api_key` não se combinam: com `nome`, SÓ o base_url e a key salvos valem
+    — um base_url do cliente junto seria exfiltração da key real para host arbitrário, não SSRF
+    comum (o app já aceita SSRF cego por trás do token; isto seria mais forte, key sai de propósito).
+    Recusa em vez de ignorar em silêncio: um ignore silencioso deixaria o cliente achando que testou
+    o host que mandou."""
     if body.nome:
+        if body.base_url or body.api_key:
+            raise HTTPException(400, "nome já usa o motor salvo; não envie base_url/api_key junto")
         salvo = engines.listar().get(body.nome)
         if not salvo:
             raise HTTPException(404, "motor nao encontrado")
-        base_url = base_url or salvo["base_url"]
-        api_key = api_key or salvo["api_key"]
-    if not base_url or not api_key:
-        raise HTTPException(400, "informe nome de um motor salvo, ou base_url + api_key")
+        base_url, api_key = salvo["base_url"], salvo["api_key"]
+    else:
+        base_url, api_key = body.base_url, body.api_key
+        if not base_url or not api_key:
+            raise HTTPException(400, "informe nome de um motor salvo, ou base_url + api_key")
     try:
         # Mesma guarda do salvar: a key vai no header, http para host público a expõe na rede.
         base_url = engines.validar_base_url(base_url)
