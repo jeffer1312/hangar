@@ -30,6 +30,15 @@ function claude
 
     set -l id (uuidgen)
 
+    # Motor de modelo (claude-engine setou CP_ENGINE): o env é aplicado DENTRO do pane pelo
+    # `cp-engine --exec`, não por `tmux -e`. Dois motivos: (1) tmux não herda o env de quem chama, e
+    # (2) `-e ANTHROPIC_AUTH_TOKEN=…` deixaria a key visível em /proc/<pid>/cmdline para qualquer
+    # usuário da máquina. Depois do exec, o cmdline é o do claude — sem segredo.
+    set -l pre
+    if set -q CP_ENGINE; and test -n "$CP_ENGINE"
+        set pre cp-engine --exec $CP_ENGINE --
+    end
+
     # TMUX herdado pode estar MORTO (ex: kitty single-instance cujo mestre nasceu dentro de um pane
     # que já fechou -> todo terminal novo herda TMUX/TMUX_PANE stale). Sem esta guarda, o wrapper
     # achava que "já está em tmux", só injetava o id e o claude abria CRU (invisível no app).
@@ -41,7 +50,15 @@ function claude
     end
 
     if set -q TMUX; or contains -- -p $argv; or contains -- --print $argv; or not isatty stdin
-        COLORTERM=truecolor CLAUDE_CODE_TMUX_TRUECOLOR=1 command claude --session-id $id $argv
+        # `command` só faz sentido quando o QUEM roda é este próprio shell: bypassa a função `claude`
+        # para não recursar nela mesma. Com $pre setado, quem executa é o cp-engine (um processo
+        # separado, achado no PATH) — o execvpe dele nunca vê função de shell, então "command" viraria
+        # só uma string a mais no argv (e um alvo inexistente pro execvpe procurar).
+        if test (count $pre) -eq 0
+            COLORTERM=truecolor CLAUDE_CODE_TMUX_TRUECOLOR=1 command claude --session-id $id $argv
+        else
+            COLORTERM=truecolor CLAUDE_CODE_TMUX_TRUECOLOR=1 $pre claude --session-id $id $argv
+        end
         return
     end
 
@@ -73,5 +90,5 @@ function claude
     end
     $run tmux new-session -s $name -c "$PWD" \
         -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 \
-        claude --session-id $id $argv
+        $pre claude --session-id $id $argv
 end

@@ -32,6 +32,16 @@ claude() {
     local id
     id=$(uuidgen 2>/dev/null) || id=$(cat /proc/sys/kernel/random/uuid)
 
+    # Motor de modelo (CP_ENGINE, setado por claude-engine): env aplicado DENTRO do pane por
+    # `cp-engine --exec`, não por `tmux -e` — tmux não herda o env do caller, e `-e TOKEN=…` deixaria
+    # a key em /proc/<pid>/cmdline, legível por qualquer usuário. Array em vez de string para não
+    # depender de word-splitting (zsh não faz em variável não-quotada).
+    local -a pre
+    pre=()
+    if [ -n "${CP_ENGINE:-}" ]; then
+        pre=(cp-engine --exec "$CP_ENGINE" --)
+    fi
+
     # only inject the id (no tmux) when: already in tmux, print mode, or stdin not a tty
     local print=0
     for a in "$@"; do case "$a" in -p|--print) print=1 ;; esac; done
@@ -45,7 +55,15 @@ claude() {
     fi
 
     if [ -n "${TMUX:-}" ] || [ "$print" = 1 ] || [ ! -t 0 ]; then
-        COLORTERM=truecolor CLAUDE_CODE_TMUX_TRUECOLOR=1 command claude --session-id "$id" "$@"
+        # `command` só faz sentido quando o QUEM roda é este próprio shell: bypassa a função `claude`
+        # para não recursar nela mesma. Com $pre setado, quem executa é o cp-engine (um processo
+        # separado, achado no PATH) — o execvpe dele nunca vê função de shell, então "command" viraria
+        # só uma string a mais no argv (e um alvo inexistente pro execvpe procurar).
+        if [ ${#pre[@]} -eq 0 ]; then
+            COLORTERM=truecolor CLAUDE_CODE_TMUX_TRUECOLOR=1 command claude --session-id "$id" "$@"
+        else
+            COLORTERM=truecolor CLAUDE_CODE_TMUX_TRUECOLOR=1 "${pre[@]}" claude --session-id "$id" "$@"
+        fi
         return
     fi
 
@@ -74,9 +92,11 @@ claude() {
     # duplicated call: zsh doesn't word-split an unquoted prefix var, so no $run trick here
     if command -v systemd-run >/dev/null 2>&1 && [ -n "${XDG_RUNTIME_DIR:-}" ]; then
         systemd-run --user --scope --collect -q -- tmux new-session -s "$name" -c "$PWD" \
-            -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 claude --session-id "$id" "$@"
+            -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 \
+            "${pre[@]}" claude --session-id "$id" "$@"
     else
         tmux new-session -s "$name" -c "$PWD" \
-            -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 claude --session-id "$id" "$@"
+            -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 \
+            "${pre[@]}" claude --session-id "$id" "$@"
     fi
 }

@@ -202,6 +202,95 @@ def test_env_de_rejeita_json_envenenado_em_multiplos_campos():
         eng.env_de("kimi")
 
 
+def _cli(*args, cfg=None):
+    env = {**os.environ, "CP_ENGINES_FILE": str(cfg or eng.caminho())}
+    return subprocess.run([sys.executable, str(CLI), *args],
+                          capture_output=True, text=True, env=env)
+
+
+def test_cli_env_imprime_chave_igual_valor():
+    # É este formato que o claude-engine consome. O monkeypatch de eng.caminho não vale no
+    # subprocess, então o filho recebe CP_ENGINES_FILE — que é o que caminho() lê de verdade.
+    eng.salvar("kimi", _kimi())
+    r = _cli("--env", "kimi")
+    assert r.returncode == 0, r.stderr
+    linhas = dict(l.split("=", 1) for l in r.stdout.strip().splitlines())
+    assert linhas["ANTHROPIC_MODEL"] == "k3"
+    assert linhas["CP_ENGINE"] == "kimi"
+    assert "ANTHROPIC_API_KEY" not in linhas
+
+
+def test_cli_env_de_motor_inexistente_sai_com_erro():
+    # Sair 0 com stdout vazio abriria a sessão na conta Anthropic achando que é o motor pedido.
+    r = _cli("--env", "fantasma")
+    assert r.returncode != 0
+    assert "fantasma" in r.stderr
+
+
+def test_cli_list_uma_linha_por_motor():
+    eng.salvar("kimi", _kimi())
+    r = _cli("--list")
+    assert r.returncode == 0
+    assert r.stdout.strip().split("\t")[:1] == ["kimi"]
+
+
+def test_cli_exec_aplica_o_env_no_processo_filho():
+    # O CORAÇÃO da feature: o env entra no processo que substitui o cp-engine, não em linha de comando.
+    eng.salvar("kimi", _kimi())
+    r = _cli("--exec", "kimi", "--", sys.executable, "-c",
+             "import os;print(os.environ['ANTHROPIC_MODEL'], os.environ['CP_ENGINE'])")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "k3 kimi"
+
+
+def test_cli_exec_nao_deixa_o_segredo_no_cmdline():
+    # /proc/<pid>/cmdline é legível por qualquer usuário da máquina. Depois do execvpe o cmdline é o
+    # do comando alvo; a key só existe no environ.
+    #
+    # A key é lida de os.environ DENTRO do processo filho (não escrita como literal no código -c):
+    # embutir "sk-kimi" no source o transformaria em argv do próprio comando -c, e o teste passaria
+    # sempre (falso negativo) por casar consigo mesmo, não por checar o vazamento de verdade.
+    eng.salvar("kimi", _kimi())
+    r = _cli("--exec", "kimi", "--", sys.executable, "-c",
+             "import pathlib,os;"
+             "segredo=os.environ['ANTHROPIC_AUTH_TOKEN'].encode();"
+             "print(pathlib.Path(f'/proc/{os.getpid()}/cmdline').read_bytes().count(segredo))")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "0"
+
+
+def test_cli_exec_de_motor_inexistente_nao_roda_o_comando():
+    r = _cli("--exec", "fantasma", "--", sys.executable, "-c", "print('RODOU')")
+    assert r.returncode != 0
+    assert "RODOU" not in r.stdout
+    assert "fantasma" in r.stderr
+
+
+def test_cli_env_de_motor_envenenado_sai_com_erro_e_nome_do_campo():
+    # engines.json é hand-editável; env_de agora levanta ValueError (não só KeyError) pra valor com
+    # \n/\r/\0. cp-engine tem que morrer igual nos dois casos — traceback aqui vazaria pro usuário
+    # errado (o wrapper de shell) em vez de uma mensagem clara.
+    d = _kimi()
+    eng.salvar("kimi", d)
+    payload = {"kimi": {**d, "api_key": "sk-x\nPATH=/tmp/evil"}}
+    eng.caminho().write_text(json.dumps(payload), encoding="utf-8")
+    r = _cli("--env", "kimi")
+    assert r.returncode != 0
+    assert "api_key" in r.stderr
+    assert "Traceback" not in r.stderr
+
+
+def test_cli_exec_de_motor_envenenado_nao_roda_o_comando():
+    d = _kimi()
+    eng.salvar("kimi", d)
+    payload = {"kimi": {**d, "api_key": "sk-x\nPATH=/tmp/evil"}}
+    eng.caminho().write_text(json.dumps(payload), encoding="utf-8")
+    r = _cli("--exec", "kimi", "--", sys.executable, "-c", "print('RODOU')")
+    assert r.returncode != 0
+    assert "RODOU" not in r.stdout
+    assert "api_key" in r.stderr
+
+
 def test_modulo_e_stdlib_pura():
     # O cp-engine importa este módulo com o python3 do SISTEMA (sem venv). Um import de app.config
     # puxaria pydantic e quebraria o terminal, deixando só o app funcionando — falha assimétrica,
