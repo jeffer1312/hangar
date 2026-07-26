@@ -117,8 +117,6 @@ export interface StateEvent {
   loop_status?: LoopState['status'] | null;
   loop_iter?: number | null;
   loop_max?: number | null;
-  // Motor de modelo desta sessão. null/undefined = conta Anthropic.
-  engine?: string | null;
 }
 
 export interface CommandInfo {

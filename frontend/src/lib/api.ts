@@ -400,10 +400,18 @@ export function getArchiveFolder(project: string): Promise<ArchiveEntry[]> {
 
 // "Retomar conversa": sobe uma sessao tmux NOVA no cwd original com `claude --resume <uuid>`,
 // continuando esta conversa morta. Devolve a SessionInfo da sessao nova (o front navega pro chat dela).
-export function resumeArchivedConversation(project: string, sessionId: string): Promise<SessionInfo> {
+// engine: o pane original morreu, entao nao ha /proc pra descobrir que motor rodava -- quem retoma
+// escolhe de novo (ou nenhum -> volta na conta Anthropic, igual hoje). Body vazio quando omitido:
+// o backend aceita `ResumeArchivedBody = ResumeArchivedBody()` como default, entao chamadores antigos
+// continuam funcionando sem mandar nada.
+export function resumeArchivedConversation(
+  project: string,
+  sessionId: string,
+  engine?: string | null,
+): Promise<SessionInfo> {
   return apiFetch<SessionInfo>(
     `/api/archive/${encodeURIComponent(project)}/${encodeURIComponent(sessionId)}/resume`,
-    { method: 'POST' },
+    { method: 'POST', body: JSON.stringify({ engine: engine ?? null }) },
   );
 }
 

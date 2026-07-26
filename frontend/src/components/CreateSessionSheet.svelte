@@ -61,11 +61,16 @@
   let motores = $state<Record<string, Motor>>({});
   // Guard de corrida: trocas rapidas de servidor deixam fetches em voo; so a resposta do ULTIMO
   // pedido pode escrever (senao a lista de um servidor antigo aterrissava por cima da atual).
+  // Motores tambem sao POR SERVIDOR (cada um tem seu proprio ~/.claude/engines.json) -- por isso
+  // entram no MESMO seq/guard que os configs, e nao num effect a parte: sem isto, trocar o
+  // servidor-alvo depois de abrir o sheet recarregava configs mas deixava a lista de motores do
+  // servidor ANTERIOR na tela (create() ia pro servidor novo com um motor que pode nem existir la).
   let cfgSeq = 0;
   function loadConfigs() {
     const seq = ++cfgSeq;
     configs = [];
     selectedConfig = null;
+    motores = {};
     listClaudeConfigs()
       .then((cs) => {
         if (seq !== cfgSeq) return;
@@ -73,6 +78,10 @@
         selectedConfig = cs.find((c) => c.active)?.path ?? cs[0]?.path ?? null;
       })
       .catch(() => {});
+    // Best-effort: falha aqui NAO pode travar a criação de sessão, so tira o seletor da tela.
+    getEngines()
+      .then((r) => { if (seq === cfgSeq) motores = r.motores; })
+      .catch(() => { if (seq === cfgSeq) motores = {}; });
   }
 
   // Escape hatch: digitar o caminho na mao.
@@ -101,11 +110,8 @@
       engine = '';
       const cur = getActiveId();
       const target = servers.find((s) => s.id === cur) ? cur! : servers[0]?.id ?? '';
-      if (target) pickTarget(target);      // pickTarget ja carrega os configs do alvo
+      if (target) pickTarget(target);      // pickTarget ja carrega configs E motores do alvo
       else loadConfigs();                  // sem lista de servidores: carrega do ativo mesmo
-      // Motores configurados (Task 4). Falha aqui NAO pode travar a criação de sessão: sem
-      // motores, o seletor simplesmente não aparece e tudo segue como antes.
-      getEngines().then((r) => (motores = r.motores)).catch(() => (motores = {}));
     });
   });
 
