@@ -1,6 +1,5 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
-  import EnginesSheet from './EnginesSheet.svelte';
   import { getConfig, patchConfig, type CampoConfig } from '../lib/api';
 
   // Configuração do servidor pelo app. Até aqui tudo vinha só de env/.env: pra mudar a chave da
@@ -12,8 +11,13 @@
   interface Props {
     open: boolean;
     onClose: () => void;
+    // EnginesSheet mora fora daqui de propósito (ver AccountMenu): duas BottomSheet abertas ao
+    // mesmo tempo dobravam o backdrop e faziam o Escape fechar a sheet ERRADA (o onkeydown de cada
+    // BottomSheet vai pro window; a desta sheet registra primeiro e vencia a corrida). Quem abre é
+    // o dono do ConfigSheet, fechando este antes.
+    onOpenMotores: () => void;
   }
-  let { open, onClose }: Props = $props();
+  let { open, onClose, onOpenMotores }: Props = $props();
 
   interface Campo {
     chave: string;
@@ -54,7 +58,6 @@
   let salvando = $state(false);
   let erro = $state('');
   let salvo = $state(false);
-  let motoresOpen = $state(false);
 
   // Recarrega toda vez que abre: outro dispositivo (ou o .env) pode ter mudado no meio.
   $effect(() => {
@@ -189,7 +192,7 @@
 
       <!-- Motores são uma LISTA de registros com segredo cada um: não cabem no layout de
            linha-por-setting desta sheet. Vão numa sheet própria, alcançada daqui. -->
-      <button class="atalho" onclick={() => (motoresOpen = true)}>
+      <button class="atalho" onclick={onOpenMotores}>
         <span class="txt">
           <span class="rot">Motores de modelo</span>
           <span class="ajuda">
@@ -226,10 +229,6 @@
     </div>
   {/if}
 </BottomSheet>
-
-{#if motoresOpen}
-  <EnginesSheet open={motoresOpen} onClose={() => (motoresOpen = false)} />
-{/if}
 
 <style>
   .cfg { padding: var(--space-2) var(--space-4) var(--space-4); }

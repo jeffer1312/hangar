@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+  import ConfirmDialog from './ConfirmDialog.svelte';
   import {
     getEngines, putEngine, deleteEngine, engineModelos,
     type Motor, type ModeloProvedor,
@@ -140,7 +141,18 @@
       };
       if (form.api_key.trim()) corpo.api_key = form.api_key.trim();
       if (form.context_window) corpo.context_window = Number(form.context_window);
-      if (modeloAtual && typeof modeloAtual.vision === 'boolean') corpo.vision = modeloAtual.vision;
+
+      // O PUT é substituição TOTAL do registro (backend/app/engines.py salvar()/_normalizar()):
+      // omitir um campo aqui não é "deixar como estava", é apagá-lo no disco. `modeloAtual` só
+      // existe depois de um Testar NESTA sessão do form — editar só o rótulo/janela e salvar sem
+      // retestar não pode perder vision/tool_search calado. Precedência: valor recém-testado >
+      // valor já salvo pro motor > omitir (motor novo, nunca testado).
+      const salvo = motores[form.nome];
+      const vision = typeof modeloAtual?.vision === 'boolean' ? modeloAtual.vision : salvo?.vision;
+      if (typeof vision === 'boolean') corpo.vision = vision;
+      // Nada na UI seta tool_search hoje; isto só preserva o que o motor já tinha gravado.
+      if (typeof salvo?.tool_search === 'boolean') corpo.tool_search = salvo.tool_search;
+
       motores = (await putEngine(form.nome.trim(), corpo)).motores;
       form = null;
     } catch (e) {
@@ -150,8 +162,23 @@
     }
   }
 
-  async function remover(nome: string) {
-    if (!confirm(`Remover o motor "${nome}"? Sessões abertas nele continuam rodando.`)) return;
+  // Confirmação de remoção: sheet temática, não o confirm() nativo do navegador (quebra o tema
+  // escuro). ConfirmDialog (não ConfirmSheet) de propósito — EnginesSheet já É um BottomSheet
+  // aberto, e ConfirmSheet também embrulha um BottomSheet, cujo <svelte:window onkeydown> de Escape
+  // registraria um SEGUNDO handler global disputando com o desta sheet (a mesma race de foco que
+  // motivou tirar o EnginesSheet de dentro do ConfigSheet). ConfirmDialog trata Escape só no próprio
+  // elemento do diálogo — é o padrão que o LoopSheet já usa pro mesmo caso (confirm dentro de sheet
+  // aberta).
+  let confirmRemoverNome = $state<string | null>(null);
+
+  function remover(nome: string) {
+    confirmRemoverNome = nome;
+  }
+
+  async function removerConfirmado() {
+    const nome = confirmRemoverNome;
+    confirmRemoverNome = null;
+    if (!nome) return;
     erro = '';
     try {
       await deleteEngine(nome);
@@ -300,6 +327,17 @@
     {/if}
   </div>
 </BottomSheet>
+
+{#if confirmRemoverNome}
+  <ConfirmDialog title={`Remover o motor "${confirmRemoverNome}"?`} aria="Remover motor"
+    onClose={() => (confirmRemoverNome = null)}
+    actions={[
+      { label: 'Cancelar', onClick: () => (confirmRemoverNome = null) },
+      { label: 'Remover', kind: 'danger', onClick: removerConfirmado },
+    ]}>
+    <p class="ajuda">Sessões abertas nele continuam rodando.</p>
+  </ConfirmDialog>
+{/if}
 
 <style>
   .mot { padding: var(--space-2) var(--space-4) var(--space-4); }
