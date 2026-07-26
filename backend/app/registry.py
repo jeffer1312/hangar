@@ -261,6 +261,25 @@ def _config_dir_of(pid: int) -> Optional[Path]:
     return None
 
 
+def _proc_environ_path(pid: int) -> str:
+    # Indireção só para o teste poder apontar para um arquivo de mentira.
+    return f"/proc/{pid}/environ"
+
+
+def _engine_of(pid: int) -> Optional[str]:
+    # Motor de modelo do processo claude (CP_ENGINE, injetado por engines.env_de via cp-engine
+    # --exec). None = conta Anthropic. Mesmo truque do _config_dir_of: o env do processo VIVO é o
+    # registro autoritativo — sidecar em disco pode divergir do que está rodando no pane.
+    try:
+        with open(_proc_environ_path(pid), "rb") as fh:
+            for kv in fh.read().split(b"\x00"):
+                if kv.startswith(b"CP_ENGINE="):
+                    return kv.split(b"=", 1)[1].decode("utf-8", "replace") or None
+    except OSError:
+        return None
+    return None
+
+
 # Cadencia do cache de statusline da lista (list_with_state): TTL por sessao + teto de capturas de
 # pane por chamada (o custo real e o fork do tmux).
 _STATUS_TTL = 20.0
@@ -542,12 +561,17 @@ class SessionRegistry:
             jsonl, tracked = self.resolve_tracked(p["name"], p["cwd"], p["pid"], children)
             link = ThenLink(p["name"]).get()
             pair = PairLink(p["name"]).get()
-            out.append(SessionInfo(name=p["name"], cwd=p["cwd"], jsonl=jsonl, tracked=tracked,
-                                   branch=self._branch_of(p["cwd"]),
-                                   then_target=link.get("target") if link else None,
-                                   pair_peers=pair.get("peers") if pair else None,
-                                   pair_gid=pair.get("gid") if pair else None,
-                                   pair_task=pair.get("task") if pair else None))
+            info = SessionInfo(name=p["name"], cwd=p["cwd"], jsonl=jsonl, tracked=tracked,
+                               branch=self._branch_of(p["cwd"]),
+                               then_target=link.get("target") if link else None,
+                               pair_peers=pair.get("peers") if pair else None,
+                               pair_gid=pair.get("gid") if pair else None,
+                               pair_task=pair.get("task") if pair else None)
+            # Motor da sessão, do mesmo pid que já resolve o config_dir. É uma leitura de
+            # /proc/<pid>/environ por sessão (a mesma ordem de custo do _config_dir_of ao lado) —
+            # não é de graça, mas é local e sem rede. Feature em tick do SSE tem que ser barata.
+            info.engine = _engine_of(p["pid"]) if p.get("pid") else None
+            out.append(info)
             sids[p["name"]] = self._repl_sid(p["pid"], children)
         # Guarda de colisao: 2+ sessoes no mesmo jsonl -> so a dona mantem (mata a duplicata/cross-wire).
         self._dedupe_collisions(out, sids)
@@ -725,12 +749,19 @@ class SessionRegistry:
         return infos
 
     def create(self, name: str, cwd: str, config_dir: str | None = None,
-               resume_session_id: str | None = None, provider: str = "claude") -> SessionInfo:
+               resume_session_id: str | None = None, provider: str = "claude",
+               engine: str | None = None) -> SessionInfo:
         # Nome tmux nao aceita "."/":"/espaco -> sanitiza igual ao rename. Varias sessoes na MESMA
         # pasta sao permitidas: cada uma tem nome unico + --session-id proprio -> jsonl proprio.
         name = sanitize_session_name(name)
         if not name:
             raise ValueError("nome invalido")
+        # Motor de modelo: valida ANTES de criar o pane. Motor inexistente com env vazio faria a
+        # sessão subir na conta Anthropic ACHANDO que é o motor pedido — falha silenciosa.
+        if engine:
+            from app import engines
+            if engine not in engines.listar():
+                raise ValueError(f"motor '{engine}' nao existe")
         # Codex nao e tmux: o caminho async (spawn do app-server, thread/start) roda no loop
         # principal via create_codex(); o create() sync spawnaria o AppServerClient num loop
         # descartavel (asyncio.run) que morre ao retornar -> orfanaria o subprocess/reader task.
@@ -761,6 +792,12 @@ class SessionRegistry:
             # importa registry, mas evita qualquer ciclo se um adapter futuro vier a importar daqui).
             from app.adapters import get_adapter
             cmd = " ".join(get_adapter(provider).spawn_command(cwd, sid))
+        if engine:
+            # `cp-engine --exec` aplica o env DENTRO do pane (os.execvpe). Não usamos `tmux -e` porque
+            # a key ficaria em /proc/<pid>/cmdline, legível por qualquer usuário da máquina. Depois do
+            # exec o cmdline é o do claude, então a resolução de transcript por --session-id/--resume
+            # continua funcionando.
+            cmd = f"cp-engine --exec {engine} -- {cmd}"
         base = (Path(config_dir) / "projects") if config_dir else self.projects_dir
         jsonl = str(base / sanitize_cwd(cwd) / f"{sid}.jsonl")
         # Pré-confia a pasta no .claude.json: sem isto, uma sessão criada pelo app numa pasta NOVA
@@ -780,7 +817,7 @@ class SessionRegistry:
         # Fixa o jsonl FRESCO no cache na hora: resolve() devolve este uuid mesmo antes do claude
         # escrever o arquivo, evitando o fallback newest-by-mtime pescar um jsonl ja existente da pasta.
         self._jsonl_cache[name] = jsonl
-        return SessionInfo(name=name, cwd=cwd, jsonl=jsonl, provider=provider)
+        return SessionInfo(name=name, cwd=cwd, jsonl=jsonl, provider=provider, engine=engine)
 
     async def create_codex(self, name: str, cwd: str,
                            initial_prompt: str | None = None) -> SessionInfo:
@@ -980,16 +1017,28 @@ class SessionRegistry:
             raise ValueError("sessao nao encontrada")
         cwd = pane["cwd"]
         cdir = _config_dir_of(pane["pid"]) if pane.get("pid") else None
+        # Motor da sessão que está morrendo. Sem reaplicar, uma sessão Kimi ressuscita na conta
+        # Anthropic continuando um transcript de Kimi — calado. Tem que ler ANTES do kill_session: o
+        # /proc do pane some com ele.
+        motor = _engine_of(pane["pid"]) if pane.get("pid") else None
+        if motor:
+            from app import engines
+            if motor not in engines.listar():
+                # Motor apagado no app depois de a sessão nascer: melhor voltar na conta Anthropic (o
+                # badge mostra isso) do que recusar o resume e deixar a sessão inacessível.
+                motor = None
         proj = ((cdir / "projects") if cdir else self.projects_dir) / sanitize_cwd(cwd)
         jsonl = proj / f"{session_id}.jsonl"
         if not jsonl.exists():
             raise ValueError("transcript nao encontrado")
         tmux.kill_session(name)
         self._forget(name)
-        if not tmux.new_session(name, cwd, f"claude --resume {session_id}",
-                                str(cdir) if cdir else None):
+        cmd = f"claude --resume {session_id}"
+        if motor:
+            cmd = f"cp-engine --exec {motor} -- {cmd}"
+        if not tmux.new_session(name, cwd, cmd, str(cdir) if cdir else None):
             raise ValueError("falha ao relançar a sessao")
         # Fixa o transcript resumido no cache: resolve() ja o devolveria (o --resume esta no cmdline),
         # mas semear evita a janela onde o pane ainda esta subindo e cairia no fallback por mtime.
         self._jsonl_cache[name] = str(jsonl)
-        return SessionInfo(name=name, cwd=cwd, jsonl=str(jsonl), tracked=True)
+        return SessionInfo(name=name, cwd=cwd, jsonl=str(jsonl), tracked=True, engine=motor)

@@ -215,9 +215,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     }
   }
 
-  async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: 'claude' | 'codex') {
+  async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: 'claude' | 'codex',
+                              engine?: string | null) {
     // O CreateSessionSheet já posicionou o servidor-alvo como ativo (selectServer).
-    await createSession(name, cwd, configDir, provider);
+    await createSession(name, cwd, configDir, provider, engine);
     activeId = getActiveId(); // I2: sync local state after sheet's selectServer
     onSelect(name);
     // SSE stream emitirá a sessão nova automaticamente
@@ -896,8 +897,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                     <!-- Branch git atual (paridade com o mobile), linha propria pra nao competir com o cwd. -->
                     <span class="branch" title="branch git atual">⎇ {s.branch}</span>
                   {/if}
-                  {#if s.limited || s.then_target || s.pair_peers?.length || s.loop_status}
-                    <!-- Chips informativos (⏳/🔗/🤝/↻) na COLUNA DE TEXTO, nao ao lado do state-chip:
+                  {#if s.limited || s.then_target || s.pair_peers?.length || s.loop_status || s.engine}
+                    <!-- Chips informativos (⏳/🔗/🤝/↻/⚙) na COLUNA DE TEXTO, nao ao lado do state-chip:
                          inline eles cobriam o cwd em sidebar estreita (mesmo fix do SessionCard mobile). -->
                     <span class="badges-line">
                       {#if s.limited}
@@ -917,6 +918,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                         {#if lb}
                           <span class="chain-chip" style="color: {LOOP_TONE_COLOR[lb.tone]}; background: color-mix(in srgb, {LOOP_TONE_COLOR[lb.tone]} 14%, transparent);" title="Loop runner">{lb.label}</span>
                         {/if}
+                      {/if}
+                      {#if s.engine}
+                        <!-- Sem isto nada na lista distingue uma sessão de motor de uma da conta Anthropic.
+                             NÃO mostramos custo aqui: o preço que o Claude Code calcula é tabela Anthropic
+                             e mentiria pra um motor de outro provedor. -->
+                        <span class="engine-chip" title={`Motor: ${s.engine}`}>⚙&nbsp;{s.engine}</span>
                       {/if}
                     </span>
                   {/if}
@@ -1536,6 +1543,13 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     padding: 2px 7px; border-radius: var(--radius-full); white-space: nowrap;
     max-width: 96px; overflow: hidden; text-overflow: ellipsis;
     color: var(--accent); background: var(--accent-dim);
+  }
+  /* Motor de modelo (Task 5): sessao rodando fora da conta Anthropic. */
+  .engine-chip {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
+    color: var(--accent); background: var(--accent-dim);
+    padding: 1px 6px; border-radius: var(--radius-full);
+    flex-shrink: 0;
   }
   .lead { width: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
   /* Rail recolhido: iniciais precisam de mais espaco que o icone de 18px. */

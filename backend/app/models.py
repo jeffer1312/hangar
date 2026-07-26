@@ -12,6 +12,9 @@ class SessionInfo(BaseModel):
     # Qual Adapter dirige esta sessao (app.adapters.get_adapter). "claude" cobre TODA sessao de hoje
     # (o unico provider registrado); futuros providers (ex: "codex") setam no create().
     provider: str = "claude"
+    # Motor de modelo desta sessao (nome no engines.json). None = conta Anthropic. Lido do
+    # /proc/<pid>/environ (CP_ENGINE) — ver registry._engine_of.
+    engine: Optional[str] = None
     state: State = "idle"
     last_activity: Optional[float] = None
     # Vinculo nome<->transcript e confiavel? True = resolvido por --session-id/fd/cache (determinismo).

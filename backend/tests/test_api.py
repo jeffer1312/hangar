@@ -649,7 +649,7 @@ def test_create_default_provider_routes_to_claude_create(api_client):
         r = api_client.post("/api/sessions", headers=_h(), json={"name": "x", "cwd": "/tmp"})
     assert r.status_code == 200
     assert r.json()["provider"] == "claude"
-    cr.assert_called_once_with("x", "/tmp", None)
+    cr.assert_called_once_with("x", "/tmp", None, engine=None)
 
 
 def test_create_explicit_claude_provider_routes_to_claude_create(api_client):
@@ -658,7 +658,7 @@ def test_create_explicit_claude_provider_routes_to_claude_create(api_client):
         r = api_client.post("/api/sessions", headers=_h(),
                             json={"name": "x", "cwd": "/tmp", "provider": "claude"})
     assert r.status_code == 200
-    cr.assert_called_once_with("x", "/tmp", None)
+    cr.assert_called_once_with("x", "/tmp", None, engine=None)
 
 
 def test_create_codex_provider_routes_to_create_codex(api_client):
@@ -1047,7 +1047,7 @@ def test_resume_archived_route_derives_name_from_cwd(api_client):
         r = api_client.post(f"/api/archive/-home-u-my-proj/{_SID}/resume", headers=_h())
     assert r.status_code == 200
     assert r.json()["name"] == "my-proj"
-    create.assert_called_once_with("my-proj", "/home/u/my-proj", resume_session_id=_SID)
+    create.assert_called_once_with("my-proj", "/home/u/my-proj", resume_session_id=_SID, engine=None)
 
 
 def test_resume_archived_route_suffixes_on_name_collision(api_client):
@@ -1058,7 +1058,7 @@ def test_resume_archived_route_suffixes_on_name_collision(api_client):
                return_value=SessionInfo(name="my-proj-2", cwd="/home/u/my-proj")) as create:
         r = api_client.post(f"/api/archive/-home-u-my-proj/{_SID}/resume", headers=_h())
     assert r.status_code == 200
-    create.assert_called_once_with("my-proj-2", "/home/u/my-proj", resume_session_id=_SID)
+    create.assert_called_once_with("my-proj-2", "/home/u/my-proj", resume_session_id=_SID, engine=None)
 
 
 def test_resume_archived_route_422_when_cwd_missing(api_client):
