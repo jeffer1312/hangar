@@ -184,9 +184,26 @@ def test_pane_scrollback_devolve_historico_quando_existe():
         assert t.pane_scrollback("sess") == 1873
 
 
-def test_pane_scrollback_saida_ilegivel_e_zero():
-    # tmux mudo / sessao sumindo no meio -> 0 (sem historico), nunca excecao no caminho da UI.
+def test_pane_scrollback_falha_de_tmux_e_zero_MAS_logada(caplog):
+    # 0 = "sem historico" E tmux quebrado davam a MESMA resposta: a UI so escondia o botao e a falha
+    # real (tmux ausente, travado no timeout, sessao zumbi) sumia. Segue devolvendo 0 pra UI nao
+    # explodir, mas TEM que aparecer no log.
     from unittest.mock import patch
     from app import tmux as t
-    with patch.object(t, "_run", return_value=SimpleNamespace(stdout="", returncode=1)):
+    with caplog.at_level("WARNING"), \
+         patch.object(t, "_run",
+                      return_value=SimpleNamespace(stdout="", stderr="no server running", returncode=1)):
         assert t.pane_scrollback("sess") == 0
+    assert "no server running" in caplog.text
+
+
+def test_capture_pane_falha_de_tmux_e_logada(caplog):
+    # stdout vazio numa falha e indistinguivel de pane genuinamente vazio -> o /pane devolvia 200
+    # com texto "" e ninguem sabia que o tmux falhou.
+    from unittest.mock import patch
+    from app import tmux as t
+    with caplog.at_level("WARNING"), \
+         patch.object(t, "_run",
+                      return_value=SimpleNamespace(stdout="", stderr="session not found", returncode=1)):
+        assert t.capture_pane("sess") == ""
+    assert "session not found" in caplog.text
