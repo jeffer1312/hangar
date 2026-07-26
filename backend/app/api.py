@@ -857,17 +857,35 @@ async def sessions_events():
 
 
 @app.get("/api/sessions/{name}/events", dependencies=[Depends(require_auth)])
-async def events(name: str):
+async def events(name: str, request: Request):
     # handler async -> registry.list() (subprocess tmux) vai pro threadpool pra nao bloquear o loop.
     sessions = await asyncio.to_thread(registry.list)
     info = next((s for s in sessions if s.name == name), None)
     if not info or not info.jsonl:
         raise HTTPException(404, "session or transcript not found")
+    # Retomada exata: o id que emitimos no transcript e "<stem-do-jsonl>:<offset-em-bytes>". Chega
+    # por header (Last-Event-ID, que o browser reenvia sozinho quando o MESMO EventSource reconecta)
+    # ou por query param (o app fecha e recria o EventSource no proprio retry, e objeto novo nunca
+    # manda o header -> sem o param a retomada nunca dispararia no uso real).
+    #
+    # O STEM e obrigatorio e tem que bater com o transcript ATUAL: apos um /clear o jsonl e outro
+    # arquivo, e honrar um offset do arquivo antigo daria seek no meio do novo, pulando calado todo
+    # o inicio da conversa. Nao bateu (ou lixo) -> None, e o tail cai no backfill normal.
+    raw = request.query_params.get("last_event_id") or request.headers.get("last-event-id")
+    start_offset = None
+    if raw:
+        stem, _, off = raw.rpartition(":")
+        if stem and stem == Path(info.jsonl).stem:
+            try:
+                start_offset = int(off)
+            except ValueError:
+                start_offset = None
     # provider da sessao (SessionInfo.provider, ja marcado por registry.list() -- tmux -> "claude",
     # sidecar Codex -> "codex") -> merged_events escolhe o Adapter certo (tail do jsonl, monitor de
     # estado, fonte do preview). Sem isto TODA sessao caia no default "claude" do merged_events e o
     # SSE do Codex nunca ligava (chat vazio, sem estado ao vivo).
-    return EventSourceResponse(merged_events(name, info.jsonl, provider=info.provider))
+    return EventSourceResponse(
+        merged_events(name, info.jsonl, provider=info.provider, start_offset=start_offset))
 
 
 # Pool DEDICADO ao caminho de ENVIO (nucleo sagrado). Separado do executor default do asyncio, que a

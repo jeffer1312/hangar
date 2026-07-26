@@ -1,5 +1,5 @@
 from typing import Literal, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 ChatKind = Literal["user_msg", "assistant_msg", "tool_use", "tool_result"]
 State = Literal["working", "idle", "awaiting_input", "dead"]
@@ -71,6 +71,11 @@ class ChatEvent(BaseModel):
     # Nº de imagens base64 anexadas a uma msg do user via TERMINAL (paste na TUI do Claude). O front
     # busca cada uma sob demanda em /transcript-image/{id}/{idx} (lazy; base64 não vai no payload).
     image_count: Optional[int] = None
+    # Offset em BYTES logo após a linha do transcript que gerou este evento. Vira o `id:` do SSE ->
+    # numa reconexão o browser devolve o último via Last-Event-ID e o tail retoma EXATAMENTE dali,
+    # em vez de reenviar as últimas 200 linhas e torcer pra cobrir o buraco. Interno (o front não
+    # lê este campo): exclude=True mantém o payload igual ao de hoje.
+    offset: Optional[int] = Field(default=None, exclude=True)
 
 
 class StateEvent(BaseModel):

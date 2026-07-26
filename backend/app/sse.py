@@ -13,6 +13,43 @@ from app.registry import SessionRegistry
 from app.askquestion import read_pending_askq
 
 
+# O front deriva o uso de contexto do 2º par do segmento 💬 (`<in>/<out> <usado>/<janela>`) e, com
+# só um par, mostra "medição indisponível" — corretamente, porque ler in/out como contexto daria
+# 100% falso. O que faltava era saber POR QUE o par some: o statusline é produzido pelo script do
+# usuário a partir do payload do Claude Code, que às vezes não traz context_window. Este log grava o
+# statusline CRU nesses momentos, pra a causa sair de medição e não de chute.
+_CTX_PAIR_RE = re.compile(r"([\d.,]+)\s*[kKmM]?\s*/\s*([\d.,]+)\s*[kKmM]?")
+
+
+def context_pairs(status_line: str | None) -> int:
+    """Quantos pares numéricos há no segmento 💬 do statusline (>=2 => há métrica de contexto)."""
+    if not status_line:
+        return 0
+    seg = re.search(r"💬([^│]*)", status_line)
+    return len(_CTX_PAIR_RE.findall(seg.group(1))) if seg else 0
+
+
+def preview_is_committed(preview: str, committed: str) -> bool:
+    """O texto do preview já é o bloco que caiu no .jsonl? (regra PURA, testável isolada do stream.)
+
+    DOIS casos, não um:
+      1. preview ⊆ commitado — no gap entre blocos o pane ainda mostra o bloco já gravado.
+      2. commitado é PREFIXO do preview — o extract_assistant_text não cortou o chrome (verbo de
+         status do Claude Code fora do _TOOL_VERBS, ex. "Making 1 scratchpad edit…") e ele grudou
+         no fim da prosa já gravada.
+
+    O caso 2 faltava: sem ele a bolha DUPLICAVA e ficava piscando (o preview repetia a mensagem
+    anterior + a linha de status). Ele é o que sobrevive ao vocabulário do TUI mudar de novo — a
+    lista de verbos é calibração best-effort, esta regra não depende dela.
+
+    Piso de 16 chars: um trecho curto casa por acidente com qualquer coisa.
+    """
+    n = _norm(preview)
+    if len(n) < 16 or not committed:
+        return False
+    return n in committed or n.startswith(committed)
+
+
 def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
     """Retorna o evento SSE ask_question p/ o AskUserQuestion MULTI-pergunta (tabbed), ou None.
     Dispara em awaiting_input + sidecar do hook com >=2 perguntas cujas opcoes batem com o menu atual."""
@@ -254,7 +291,8 @@ async def list_events(ping_secs: float = 8.0):
         _list_refresher.release()
 
 
-async def merged_events(name: str, jsonl: str, provider: str = "claude"):
+async def merged_events(name: str, jsonl: str, provider: str = "claude",
+                        start_offset: int | None = None):
     # provider: default "claude" preserva o comportamento de hoje pros callers que ainda nao passam
     # (api.py so passa quando uma tarefa futura ligar o seletor de provider no endpoint).
     adapter = get_adapter(provider)
@@ -284,8 +322,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude"):
     committed = {"text": ""}
 
     def _already_committed(text: str) -> bool:
-        n = _norm(text)
-        return len(n) >= 16 and bool(committed["text"]) and n in committed["text"]
+        return preview_is_committed(text, committed["text"])
 
     async def pump(kind, agen):
         try:
@@ -315,18 +352,29 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude"):
             preview_slot["pending"] = True
             queue.put_nowait(("preview", None))
 
-    async def tail_pump(path: str):
+    async def tail_pump(path: str, start_offset: int | None = None):
         # Transcript do .jsonl (msgs canonicas). Alem de emitir, RASTREIA a ultima msg de assistente
         # em `committed` -> fonte de verdade pra suprimir preview duplicado. E quando um bloco commita
         # que e exatamente o que o preview mostra, LIMPA o preview na hora (sem esperar o broker mudar).
         # Recebe o path (em vez de fechar sobre um tailer fixo) pra poder ser recriado no rebind do /clear.
         try:
-            async for ev in adapter.transcript_stream(path):
+            async for ev in adapter.transcript_stream(path, start_offset):
                 if ev.kind == "assistant_msg" and ev.text:
                     committed["text"] = _norm(ev.text)
                     if _already_committed(preview_slot["text"]):
                         _enqueue_preview("")
-                await queue.put(("message", ev.model_dump_json()))
+                # 3o item da tupla = `id:` do SSE (None nos demais eventos). So o transcript ganha
+                # id: e o unico stream com posicao retomavel. state/preview/ping NAO podem ter id --
+                # o browser guarda o ULTIMO id visto, entao um ping carimbado sobrescreveria a
+                # posicao real do transcript e a retomada pularia mensagens.
+                #
+                # O id carrega o STEM do jsonl junto com o offset ("<uuid>:<byte>"). Offset puro era
+                # inseguro: apos um /clear o transcript e OUTRO arquivo, e um offset antigo que por
+                # acaso coubesse no tamanho do novo passava na validacao, dava seek no meio dele e
+                # PULAVA calado todo o inicio da conversa nova (parse_line engole a linha parcial).
+                # Com o stem, id de outro transcript simplesmente nao e honrado.
+                ev_id = f"{Path(path).stem}:{ev.offset}" if ev.offset is not None else None
+                await queue.put(("message", ev.model_dump_json(), ev_id))
         except asyncio.CancelledError:
             raise  # rebind do watcher cancela este task de proposito -> nao reportar como erro
         except Exception as exc:  # surface, never swallow
@@ -378,7 +426,9 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude"):
                                  # drain (recovery de restart/reconexao com pendencia)
     drain_tasks: set = set()     # drains fire-and-forget; NAO entram em `tasks` (nao cancelar no disconnect)
 
-    tail_task = asyncio.create_task(tail_pump(jsonl))
+    # start_offset so vale pro tail INICIAL (veio do Last-Event-ID desta conexao). O rebind do
+    # /clear abaixo recria sem ele: o transcript e outro arquivo, o offset antigo nao significa nada.
+    tail_task = asyncio.create_task(tail_pump(jsonl, start_offset))
     tasks = [
         tail_task,
         # Fila duravel: user_msg sinteticos (id "queued-") pras msgs enfileiradas. O front faz o
@@ -389,10 +439,24 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude"):
         asyncio.create_task(preview_pump()),
         asyncio.create_task(jsonl_watcher()),
     ]
+    # NUCLEO (conexao): instrumentacao do CICLO DE VIDA do stream. O sintoma relatado é "a conversa
+    # para e só volta fechando/abrindo o app", e o log de acesso do uvicorn só mostra a conexão
+    # FECHANDO — sem duração, sem motivo, sem quanto foi entregue. Sem isso a causa (queda de rede
+    # do celular / iOS suspendendo / erro num pump / cancelamento) é indistinguível e vira chute.
+    _t0 = time.monotonic()
+    _sent = {"message": 0, "state": 0, "preview": 0, "ping": 0, "other": 0}
+    _why = "cliente desconectou"
+    _last_ctx_warn = {"sl": None}
+    _log.info("sse: abriu name=%s provider=%s jsonl=%s", name, provider, Path(jsonl).name if jsonl else None)
     try:
         while True:
-            event, data = await queue.get()
+            # Só o tail_pump enfileira o 3o item (o offset -> `id:` do SSE); os demais produtores
+            # continuam mandando pares. Desempacota tolerante em vez de tocar em todos eles.
+            item = await queue.get()
+            event, data = item[0], item[1]
+            ev_id = item[2] if len(item) > 2 else None
             if event == "__error__":
+                _why = f"erro no pump: {type(data).__name__}: {data}"
                 raise data
             if event == "__reset__":
                 # Troca de transcript (ex: /clear). Re-binda o tailer no jsonl novo, zera o estado de
@@ -419,6 +483,13 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude"):
                 # Quando awaiting_input + overlay (rodape de abas = AskUserQuestion estruturado),
                 # emite ask_question UMA VEZ por prompt; reseta ao sair do estado.
                 parsed_state = json.loads(data)
+                # Diagnostico do "medição indisponível": loga o statusline CRU quando o segmento 💬
+                # nao tem os 2 pares. Uma vez por statusline DISTINTO (nao a cada tick) pra nao virar
+                # firehose — um StateEvent sai a cada 0.75s.
+                _sl = parsed_state.get("status_line")
+                if _sl and context_pairs(_sl) < 2 and _sl != _last_ctx_warn["sl"]:
+                    _last_ctx_warn["sl"] = _sl
+                    _log.info("sse: sem métrica de contexto name=%s statusline=%r", name, _sl)
                 if parsed_state.get("state") != "awaiting_input":
                     ask_q_emitted = False
                 elif not ask_q_emitted:
@@ -441,8 +512,22 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude"):
                     drain_tasks.add(dt)
                     dt.add_done_callback(drain_tasks.discard)
                 prev_deliverable = deliverable_now
-            yield {"event": event, "data": data}
+            _sent[event if event in _sent else "other"] += 1
+            out = {"event": event, "data": data}
+            if ev_id is not None:
+                out["id"] = str(ev_id)
+            yield out
+    except asyncio.CancelledError:
+        # Fechamento NORMAL: o cliente sumiu e o starlette cancela o gerador. Distinguir isso de
+        # um erro é o ponto — os dois terminavam o stream do mesmo jeito silencioso.
+        _why = "cancelado (cliente sumiu / servidor encerrando)"
+        raise
     finally:
+        _log.info(
+            "sse: fechou name=%s dur=%.1fs motivo=%s enviados=msg:%d state:%d preview:%d ping:%d",
+            name, time.monotonic() - _t0, _why,
+            _sent["message"], _sent["state"], _sent["preview"], _sent["ping"],
+        )
         # So cancela e retorna (NAO await): um pump preso num asyncio.to_thread (tmux) nao e
         # cancelavel -> aguardar o gather aqui travava o aclose() do gerador, segurava a conexao
         # meio-aberta e, em rajada de reconexao do mobile, ia acumulando ate exaurir o threadpool

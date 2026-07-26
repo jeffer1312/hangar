@@ -27,7 +27,7 @@ class _StubAdapterRaises:
     # do Adapter Protocol).
     provider = "claude"
 
-    def transcript_stream(self, path):
+    def transcript_stream(self, path, start_offset=None):
         return _raising_agen()
 
     def state_monitor(self, name, sid_get):
@@ -54,7 +54,7 @@ async def _one_chat_event():
 class _StubAdapterOne:
     provider = "claude"
 
-    def transcript_stream(self, path):
+    def transcript_stream(self, path, start_offset=None):
         return _one_chat_event()
 
     def state_monitor(self, name, sid_get):
@@ -93,7 +93,7 @@ class _StubAdapterSeq:
     def __init__(self):
         self.drain_calls = []
 
-    def transcript_stream(self, path):
+    def transcript_stream(self, path, start_offset=None):
         return _one_chat_event()
 
     def state_monitor(self, name, sid_get):
@@ -109,7 +109,7 @@ class _StubAdapterCodex:
     # PreviewBroker (poll de pane, que nem existe pro Codex).
     provider = "codex"
 
-    def transcript_stream(self, path):
+    def transcript_stream(self, path, start_offset=None):
         return _empty_agen()
 
     def state_monitor(self, name, sid_get):
@@ -142,3 +142,30 @@ async def test_drain_fires_once_on_overlay_to_idle(monkeypatch):
                 await asyncio.sleep(0.05)   # deixa o drain (task fire-and-forget) rodar
                 break
     assert stub.drain_calls == [("cc", "j")]  # exatamente 1 drain, no jsonl corrente
+
+
+# --- diagnostico do "medição indisponível" --------------------------------------------------
+
+def test_context_pairs_conta_os_dois_pares():
+    from app.sse import context_pairs
+    # statusline REAL capturado do pane (Opus5, janela de 1M)
+    sl = "🤖 Opus5 (high✦) │ 📁 claude-cockpit [main] │ 💬 156k/2 160k/1M"
+    assert context_pairs(sl) == 2
+
+
+def test_context_pairs_um_par_so_e_sem_metrica():
+    # Pós-/clear (ou payload do Claude Code sem context_window): só o par in/out. Lê-lo como
+    # contexto daria 100% falso -> o front mostra "medição indisponível" de propósito.
+    assert __import__("app.sse", fromlist=["x"]).context_pairs("🤖 Opus5 │ 💬 156k/2") == 1
+
+
+def test_context_pairs_sem_segmento():
+    from app.sse import context_pairs
+    assert context_pairs("🤖 Opus5 │ 💵 $4.61") == 0
+    assert context_pairs(None) == 0
+
+
+def test_context_pairs_nao_vaza_para_o_proximo_segmento():
+    from app.sse import context_pairs
+    # o '│' delimita: o par de outro segmento não pode contar como contexto.
+    assert context_pairs("💬 156k/2 │ ⚡5h:11% ↺3h17m │ 📅7d:2/3") == 1

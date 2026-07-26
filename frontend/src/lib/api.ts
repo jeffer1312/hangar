@@ -708,16 +708,24 @@ export async function setModelEffort(name: string, body: ModelEffortBody): Promi
  * In production (same-origin), the auth cookie is sent automatically.
  * In dev, appends ?token= as fallback.
  */
-export function openEventStream(name: string): EventSource {
+// `lastEventId`: posição de retomada do transcript ("<stem-do-jsonl>:<offset>"), enviada como QUERY
+// PARAM de propósito. O header `Last-Event-ID` só é reenviado quando o MESMO objeto EventSource se
+// reconecta sozinho — e este app nunca deixa isso acontecer: o `onerror` fecha o es e o `connectSSE`
+// cria um novo (para o auto-retry nativo não virar uma 2ª máquina de retry em paralelo), e o
+// watchdog de 25s faz o mesmo. Objeto novo nasce sem memória de id, então sem este param a retomada
+// exata jamais dispararia no uso real, e toda queda voltaria a custar o backfill cego de 200 linhas.
+export function openEventStream(name: string, lastEventId?: string | null): EventSource {
   const base = getBaseUrl();
   const token = getToken();
   const path = `/api/sessions/${encodeURIComponent(name)}/events`;
 
   // Use ?token param only in dev (different origin) or when no cookie is set
   const isSameOrigin = !base || base === window.location.origin;
-  const url = isSameOrigin
-    ? `${base}${path}`
-    : `${base}${path}?token=${encodeURIComponent(token ?? '')}`;
+  const params = new URLSearchParams();
+  if (!isSameOrigin) params.set('token', token ?? '');
+  if (lastEventId) params.set('last_event_id', lastEventId);
+  const qs = params.toString();
+  const url = `${base}${path}${qs ? `?${qs}` : ''}`;
 
   return new EventSource(url, { withCredentials: isSameOrigin });
 }

@@ -71,3 +71,50 @@ async def test_follow_backfills_only_tail(tmp_path, monkeypatch):
 
     await asyncio.wait_for(consume(), timeout=5)
     assert got == ["u2", "u3"]             # u1 (fora do tail) NAO veio no backfill
+
+
+# --- retomada exata via Last-Event-ID (offset por evento) -----------------------------------
+# A janela de backfill (200 linhas) cobre so ~2 min de trabalho pesado — medido nesta sessao:
+# mediana 44 linhas/min, pico 133. Uma queda de celular mais longa perdia o miolo do buraco.
+# Cada evento agora carrega o offset da SUA linha, que vira o `id:` do SSE.
+
+def test_read_from_marca_offset_do_inicio_da_linha(tmp_path):
+    p = tmp_path / "t.jsonl"
+    linhas = [_user("a", "um"), _user("b", "dois"), _user("c", "tres")]
+    p.write_text("\n".join(linhas) + "\n", encoding="utf-8")
+    evs, _ = TranscriptTailer(p)._read_from(0)
+    assert [e.id for e in evs] == ["a", "b", "c"]
+    # offset do INICIO da linha (nao do fim): retomar dali RELE a linha inteira, entao eventos
+    # irmaos da mesma linha nunca somem — o front descarta o duplicado por id.
+    esperado, acc = [], 0
+    for ln in linhas:
+        esperado.append(acc)
+        acc += len(ln.encode()) + 1
+    assert [e.offset for e in evs] == esperado
+
+
+def test_read_from_offset_retoma_exatamente_dali(tmp_path):
+    p = tmp_path / "t.jsonl"
+    p.write_text("\n".join([_user("a", "um"), _user("b", "dois"), _user("c", "tres")]) + "\n",
+                 encoding="utf-8")
+    tailer = TranscriptTailer(p)
+    evs, _ = tailer._read_from(0)
+    # retoma no offset do 2o evento -> reentrega b e c, nada de a
+    evs2, _ = tailer._read_from(evs[1].offset)
+    assert [e.id for e in evs2] == ["b", "c"]
+
+
+async def test_follow_ignora_offset_alem_do_fim(tmp_path, monkeypatch):
+    # Transcript trocado/truncado sob o cliente: o offset antigo nao significa mais nada. Tem que
+    # cair no backfill do tail, NAO retomar num ponto errado nem reler o arquivo inteiro.
+    p = tmp_path / "t.jsonl"
+    p.write_text(_user("a", "um") + "\n", encoding="utf-8")
+    vistos = []
+
+    async def consume(offset):
+        async for ev in TranscriptTailer(p).follow(offset):
+            vistos.append(ev.id)
+            break
+
+    await asyncio.wait_for(consume(10_000_000), timeout=5)
+    assert vistos == ["a"]
