@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { State } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
-  import { stateColors, stateLabels } from '../lib/format';
+  import { stateColors, stateLabels, ctxWindow } from '../lib/format';
 
   interface Props {
     state: State;
@@ -32,7 +32,7 @@
     {#if status?.ctxPct != null}
       <div class="metric-row">
         <span>{Math.round(status.ctxPct)}%</span>
-        {#if status.ctxTotal}<span>de {Math.round(status.ctxTotal / 1000)}k tokens</span>{/if}
+        {#if status.ctxTotal}<span>de {ctxWindow(status.ctxTotal)} tokens</span>{/if}
       </div>
       <div class="progress" aria-label={`${Math.round(status.ctxPct)}% do contexto usado`}>
         <span style:width={`${status.ctxPct}%`}></span>
