@@ -159,8 +159,11 @@ settings = Settings()
 
 def automations_enabled() -> bool:
     """Kill-switch mestre: True = automacoes desatendidas (encadeamento de sessao, auto-resume) podem
-    disparar. Cada feature ainda mantem seu proprio flag por cima (ex: auto_resume exige ESTE + CP_AUTO_RESUME)."""
-    return settings.automations
+    disparar. Cada feature ainda mantem seu proprio flag por cima (ex: auto_resume exige ESTE + CP_AUTO_RESUME).
+
+    Import local: o runtime_config importa ESTE modulo, entao um import no topo fecharia o ciclo."""
+    from app import runtime_config
+    return bool(runtime_config.get("automations"))
 
 
 def resolve_scan_roots(s: "Settings") -> list[Path]:

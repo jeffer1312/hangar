@@ -27,6 +27,9 @@
     // Play do runner detectado (npm/etc): abre o RunSheet. runRunning "respira" o botao (verde)
     // quando ha um processo rodando (sinal de que ha algo pra observar/parar).
     onOpenRun?: () => void;
+    // Galeria de anexos da sessao. No CELULAR ela mora no "⋯" (barra estreita); no desktop, que
+    // tem folga, vira botao inline — mesma logica do Rodar/Atividade.
+    onOpenAttachments?: () => void;
     runRunning?: boolean;
     // Turno ativo (Claude trabalhando) -> barra fina varre o rodape da navbar (sinal "rodando").
     working?: boolean;
@@ -50,7 +53,7 @@
     loopColor?: string;
     onLoopTap?: () => void;
   }
-  let { title = 'claude cockpit', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, limited = false, limitReset = null, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, onOpenRun, runRunning = false, working = false, subtitle = null, subtitleHot = null, crumbs = null, stateLabel, stateColor, providerLabel = null, onProviderTap, loopLabel = null, loopColor, onLoopTap }: Props = $props();
+  let { title = 'claude cockpit', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, limited = false, limitReset = null, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, onOpenRun, onOpenAttachments, runRunning = false, working = false, subtitle = null, subtitleHot = null, crumbs = null, stateLabel, stateColor, providerLabel = null, onProviderTap, loopLabel = null, loopColor, onLoopTap }: Props = $props();
 
   // Sinal do "⋯": no celular Rodar/Atividade moram dentro do menu, entao o estado deles precisa
   // aparecer no botao — senao voce so descobre que algo esta rodando abrindo o menu.
@@ -156,6 +159,13 @@
             {:else}
               <path d="M8 5v14l11-7z" />
             {/if}
+          </svg>
+        </button>
+      {/if}
+      {#if onOpenAttachments}
+        <button class="nav-btn" onclick={onOpenAttachments} aria-label="Anexos da sessão">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L16 6"/>
           </svg>
         </button>
       {/if}

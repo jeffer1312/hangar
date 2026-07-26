@@ -80,3 +80,49 @@ def test_resolve_upload_missing_file_is_404(tmp_path):
     with pytest.raises(UploadError) as e:
         resolve_upload(str(tmp_path), "1234-abcdef.png")
     assert e.value.status == 404
+
+
+# ── list_uploads: galeria de anexos ────────────────────────────────────────────────────────────
+import os  # noqa: E402
+import time  # noqa: E402
+
+from app.uploads import list_uploads  # noqa: E402
+
+
+def _envelhecer(path: str, dias: float) -> None:
+    """Recua o mtime do arquivo em `dias` — a expiração é calculada a partir dele."""
+    t = time.time() - dias * 86400
+    os.utime(path, (t, t))
+
+
+def test_list_uploads_missing_dir_is_empty(tmp_path):
+    assert list_uploads(str(tmp_path), 30) == []
+
+
+def test_list_uploads_newest_first(tmp_path):
+    velho = save_upload(str(tmp_path), PNG, "velho.png")
+    novo = save_upload(str(tmp_path), PNG, "novo.png")
+    _envelhecer(velho, 5)
+    nomes = [f["filename"] for f in list_uploads(str(tmp_path), 30)]
+    assert nomes == [Path(novo).name, Path(velho).name]
+
+
+def test_list_uploads_expiry_counts_down_from_mtime(tmp_path):
+    p = save_upload(str(tmp_path), PNG, "foto.png")
+    _envelhecer(p, 10)
+    (item,) = list_uploads(str(tmp_path), 30)
+    assert item["size"] == len(PNG)
+    assert item["expires_in_days"] == pytest.approx(20, abs=0.01)
+
+
+def test_list_uploads_expiry_can_be_negative(tmp_path):
+    # O prune só roda no upload -> anexo vencido continua listado; o número tem que dizer isso.
+    _envelhecer(save_upload(str(tmp_path), PNG, "foto.png"), 40)
+    (item,) = list_uploads(str(tmp_path), 30)
+    assert item["expires_in_days"] < 0
+
+
+def test_list_uploads_retention_zero_never_expires(tmp_path):
+    save_upload(str(tmp_path), PNG, "foto.png")
+    (item,) = list_uploads(str(tmp_path), 0)
+    assert item["expires_in_days"] is None

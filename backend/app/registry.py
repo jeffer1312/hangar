@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 from app import tmux
 from app.config import settings
+from app import runtime_config
 from app.names import sanitize_session_name
 from app.git_ops import git_summary, branch_of
 from app.models import SessionInfo
@@ -702,7 +703,7 @@ class SessionRegistry:
             info.stalled = (
                 info.state == "working"
                 and info.last_activity is not None
-                and (now - info.last_activity) > settings.stall_seconds
+                and (now - info.last_activity) > runtime_config.get("stall_seconds")
             )
         # Estado de git por sessão — SÓ aqui (payload do /api/sessions), nunca em list(): git_summary
         # forka `git status` e list() é o caminho leve chamado por kill()/resume/SSE. E como

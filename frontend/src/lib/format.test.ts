@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, fmtWhen, groupSelectedByServer, initials, nextAwaiting,
   projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent, resetsIn,
-  clusterByPair, sortSessions, bubblesFromTail, ctxWindow,
+  clusterByPair, sortSessions, bubblesFromTail, ctxWindow, fileKind, fmtBytes,
 } from './format';
 import type { ChatEvent, State } from './types';
 
@@ -450,5 +450,28 @@ describe('ctxWindow', () => {
     // arredondava para "1000k" — exatamente o defeito que esta funcao existe pra evitar.
     expect(ctxWindow(999_700)).toBe('1M');
     expect(ctxWindow(999_499)).toBe('999k');
+  });
+});
+
+describe('fileKind', () => {
+  it('deriva o tipo da extensao, ignorando caixa', () => {
+    expect(fileKind('1234-ab.PNG')).toBe('image');
+    expect(fileKind('clip.mp4')).toBe('video');
+    expect(fileKind('doc.pdf')).toBe('pdf');
+  });
+
+  it('extensao sem preview -> null (chip generico na galeria)', () => {
+    expect(fileKind('pacote.zip')).toBeNull();
+    expect(fileKind('Makefile')).toBeNull();
+  });
+});
+
+describe('fmtBytes', () => {
+  it('usa unidade binaria e so mostra decimal a partir de MB', () => {
+    expect(fmtBytes(512)).toBe('512 B');
+    expect(fmtBytes(2048)).toBe('2 KB');
+    expect(fmtBytes(1024 * 1024 * 1.5)).toBe('1.5 MB');
+    expect(fmtBytes(1024 * 1024)).toBe('1 MB');   // sem "1.0 MB"
+    expect(fmtBytes(3 * 1024 ** 3)).toBe('3 GB');
   });
 });

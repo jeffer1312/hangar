@@ -73,6 +73,41 @@ def prune_old(cwd: str, days: int) -> int:
     return n
 
 
+def list_uploads(cwd: str, retention_days: int) -> list[dict]:
+    """Anexos da sessão (mais recente primeiro) pra galeria: filename, size, mtime, expires_in_days.
+
+    A expiração vem daqui e não da UI porque quem sabe o prazo é o servidor (`upload_retention_days`);
+    o front só desenha o número. retention_days <= 0 = não expira -> None.
+
+    O valor PODE ser <= 0: o prune só roda no upload, então um anexo vencido continua listado até
+    alguém enviar o próximo. Mentir "0.1 dia" esconderia justamente o arquivo prestes a sumir.
+    Erro de arquivo individual pula o item — a galeria inteira não pode cair por um stat quebrado.
+    """
+    base = Path(os.path.realpath(cwd)) / UPLOAD_SUBDIR
+    if not base.is_dir():
+        return []
+    agora = time.time()
+    out: list[dict] = []
+    for f in base.iterdir():
+        try:
+            st = f.stat()
+            if not f.is_file():
+                continue
+        except OSError:
+            continue
+        out.append({
+            "filename": f.name,
+            "size": st.st_size,
+            "mtime": st.st_mtime,
+            "expires_in_days": (
+                None if retention_days <= 0
+                else retention_days - (agora - st.st_mtime) / 86400
+            ),
+        })
+    out.sort(key=lambda d: d["mtime"], reverse=True)
+    return out
+
+
 def resolve_upload(cwd: str, filename: str) -> str:
     """Resolve <cwd>/.claude-pocket-uploads/<filename> com seguranca, pra servir o arquivo.
     Rejeita filename com separador/.. (400) e arquivo inexistente (404)."""

@@ -10,12 +10,13 @@
     onRun: () => void;
     runRunning?: boolean;
     onActivity?: () => void;      // ausente = sessao sem atividade pra mostrar
+    onAttachments: () => void;
     activityRunning?: boolean;
     activityBadge?: number;
   }
   let {
     open, onClose, onRun, runRunning = false,
-    onActivity, activityRunning = false, activityBadge = 0,
+    onActivity, activityRunning = false, activityBadge = 0, onAttachments,
   }: Props = $props();
 
   function pick(fn: () => void) {
@@ -57,6 +58,19 @@
            depende disso: sem o guard, um contador aceso num item cinza dizendo "Nada rodando agora"
            seria uma contradicao sem explicacao pro usuario. -->
       {#if activityBadge > 0 && onActivity}<span class="pill">{activityBadge}</span>{/if}
+      <span class="chev" aria-hidden="true">›</span>
+    </button>
+
+    <button class="item" onclick={() => pick(onAttachments)}>
+      <span class="ico" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L16 6"/>
+        </svg>
+      </span>
+      <span class="txt">
+        <span class="label">Anexos</span>
+        <span class="sub">Fotos, vídeos e arquivos desta sessão</span>
+      </span>
       <span class="chev" aria-hidden="true">›</span>
     </button>
   </div>
