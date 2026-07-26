@@ -50,9 +50,21 @@ claude() {
     fi
 
     # outside tmux + interactive: tmux session named after the folder basename, unique.
-    local base name i
-    base=$(basename "$PWD" | tr -c 'A-Za-z0-9_-' '-')
-    base=${base%-}; base=${base#-}
+    local base name i ascii
+    base=$(basename "$PWD")
+    # Acento vira o ASCII equivalente ANTES do filtro — mesma regra do backend (app/names.py).
+    # Sem isto "Área de Trabalho" perdia a 1a letra: o tr trabalha em BYTES, o "Á" (2 bytes) virava
+    # "--", e o strip de UM traco so deixava "-rea-de-Trabalho" (nome de sessao tmux comecando com
+    # "-" e pedir encrenca). iconv ausente ou sem //TRANSLIT (BSD/macOS) -> segue com o nome cru,
+    # degradando pro comportamento antigo em vez de falhar.
+    if command -v iconv >/dev/null 2>&1; then
+        ascii=$(printf '%s' "$base" | iconv -f UTF-8 -t ASCII//TRANSLIT 2>/dev/null) \
+            && [ -n "$ascii" ] && base=$ascii
+    fi
+    base=$(printf '%s' "$base" | tr -c 'A-Za-z0-9_-' '-')
+    # TODOS os traços das pontas (o ${base%-}/${base#-} tirava so um).
+    while [ "${base#-}" != "$base" ]; do base=${base#-}; done
+    while [ "${base%-}" != "$base" ]; do base=${base%-}; done
     [ -n "$base" ] || base=session
     name=$base; i=2
     while tmux has-session -t "=$name" 2>/dev/null; do
