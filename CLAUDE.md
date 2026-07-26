@@ -79,11 +79,20 @@ subcommands/advanced flags remain raw; `command codex` is the explicit bypass.
 ## Sessões-irmãs (cp-send) + pareamento
 
 Sessões Claude da MESMA máquina se falam via `scripts/cp-send` (`--list`, `<sessao> "msg"`,
-`--pair <sessao> "tarefa"`, `--unpair`, `--new <nome> [cwd]`) — tudo sobre a API local do backend
-(`/input`, `/pair`, fila durável). Pareamento = vínculo simétrico (`app/pair.py`, sidecars em
-`<config>/.claude-pocket-pair/`) + prompt de protocolo injetado nas duas sessões; a UI mostra chip
-🤝 (Composer), badges nas listas, PairSheet (conversa do par + contrato compartilhado `<a>__<b>.md`
-+ split view desktop).
+`--pair <sessao> "tarefa"`, `--unpair`, `--new <nome> [cwd] [--engine <motor>]`) — tudo sobre a API
+local do backend (`/input`, `/pair`, fila durável). Pareamento = vínculo simétrico (`app/pair.py`,
+sidecars em `<config>/.claude-pocket-pair/`) + prompt de protocolo injetado nas duas sessões; a UI
+mostra chip 🤝 (Composer), badges nas listas, PairSheet (conversa do par + contrato compartilhado
+`<a>__<b>.md` + split view desktop).
+
+**Par noutro modelo:** `--engine <motor>` faz a sessão nova nascer num motor de
+`~/.claude/engines.json` (ver "Model engines" nas convenções). Vale pra parear uma sessão Claude com
+uma Kimi/GPT no mesmo trabalho: o par continua no MESMO `~/.claude` — skills, hooks, contrato
+compartilhado, PairSheet, tudo igual —, só o motor difere, e o consumo vai pra conta do provedor.
+O flag só repassa `engine` pro `POST /api/sessions`, então motor inexistente volta `400 motor
+invalido` e a sessão **não** nasce (nunca uma sessão que parece estar no motor e não está). O texto
+do protocolo que as sessões leem vive no heredoc de `scripts/install-cp-send.sh` — editar o
+`~/.claude/CLAUDE.md` direto é perdido no próximo sync.
 
 Skills do repo em `skills/` (symlinkadas em `~/.claude/skills/` pelo installer):
 `orquestrar` — esta sessão vira líder de um grupo multi-repo (cria/pareia sessões via
