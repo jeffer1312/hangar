@@ -534,23 +534,26 @@
     <!-- "Precisa de você" (feature #6): fila fixa no topo com as sessoes AGUARDANDO de TODOS os
          servidores. Responder aqui (picker inline) nao abre o chat; nativo AskUserQuestion abre. -->
     <AttentionFeed {sessions} onOpenChat={openSession} />
-    {#if sessions.length > 0 && multiServer}
-      <!-- Toggle Servidor|Projeto (feature #3): so aparece com >=2 servidores (paridade com o desktop
-           via effectiveGroupBy) — com 1 servidor "por servidor" seria 1 grupo so, entao o toggle vira
-           ruido e some. -->
-      <div class="group-toggle" role="radiogroup" aria-label="Agrupar por">
-        <button type="button" class:active={groupBy === 'server'} role="radio" aria-checked={groupBy === 'server'} onclick={() => setGroupBy('server')}>Servidor</button>
-        <button type="button" class:active={groupBy === 'project'} role="radio" aria-checked={groupBy === 'project'} onclick={() => setGroupBy('project')}>Projeto</button>
-      </div>
-    {/if}
-    {#if serverErrors.length > 0}
-      <!-- Uma linha-resumo (N chips só enchiam a tela do celular — pedido do usuário). -->
-      <div class="server-warn" role="status">
-        <span class="server-warn-item">
-          ⚠ {serverErrors.length === 1
+    {#if (sessions.length > 0 && multiServer) || serverErrors.length > 0}
+      <!-- UMA faixa de chrome só: toggle à esquerda, aviso de servidor offline à direita. Empilhados
+           (duas faixas) eles comiam ~1/3 da tela do celular antes da primeira sessão aparecer. -->
+      <div class="top-strip">
+        {#if sessions.length > 0 && multiServer}
+          <!-- Toggle Servidor|Projeto (feature #3): so aparece com >=2 servidores (paridade com o desktop
+               via effectiveGroupBy) — com 1 servidor "por servidor" seria 1 grupo so, entao o toggle vira
+               ruido e some. -->
+          <div class="group-toggle" role="radiogroup" aria-label="Agrupar por">
+            <button type="button" class:active={groupBy === 'server'} role="radio" aria-checked={groupBy === 'server'} onclick={() => setGroupBy('server')}>Servidor</button>
+            <button type="button" class:active={groupBy === 'project'} role="radio" aria-checked={groupBy === 'project'} onclick={() => setGroupBy('project')}>Projeto</button>
+          </div>
+        {/if}
+        {#if serverErrors.length > 0}
+          {@const warn = serverErrors.length === 1
             ? `${serverErrors[0].label} offline`
             : `${serverErrors.length} servidores offline (${serverErrors.map((e) => e.label).join(', ')})`}
-        </span>
+          <!-- Uma linha-resumo (N chips só enchiam a tela do celular — pedido do usuário). -->
+          <span class="server-warn-item" role="status" title={warn}>⚠ {warn}</span>
+        {/if}
       </div>
     {/if}
     {#if loading && sessions.length === 0}
@@ -1108,20 +1111,28 @@
     -webkit-overflow-scrolling: touch;
   }
 
-  .server-warn {
+  /* Faixa única de chrome acima da lista: toggle à esquerda, aviso de offline à direita. */
+  .top-strip {
     display: flex;
-    flex-wrap: wrap;
+    align-items: center;
     gap: var(--space-2);
+    min-width: 0;
     margin: 0 var(--space-4) var(--space-3);
   }
   .server-warn-item {
+    min-width: 0;
     font-size: var(--text-xs);
     color: var(--warning);
     background: rgba(224, 162, 59, 0.1);
     border: 1px solid rgba(224, 162, 59, 0.25);
     border-radius: var(--radius-full);
     padding: 3px 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
+  /* Empurrado pra direita SO quando divide a faixa com o toggle; sozinho, alinha à esquerda. */
+  .group-toggle + .server-warn-item { margin-left: auto; }
 
   .filter-input {
     display: block;
@@ -1152,8 +1163,8 @@
      esquerda, mesma linguagem do toggle do Sidebar desktop. */
   .group-toggle {
     display: inline-flex;
+    flex-shrink: 0;
     gap: 2px;
-    margin: 0 var(--space-4) var(--space-3);
     padding: 2px;
     height: 28px;
     background: var(--bg-surface);
