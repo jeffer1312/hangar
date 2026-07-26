@@ -4,6 +4,7 @@ import json
 import os
 import re
 from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator, Optional
 from watchfiles import awatch
@@ -175,6 +176,8 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
     if etype == "assistant" and isinstance(content, list):
         # Um evento POR BLOCO, na ordem do content (thinking etc. ignorados). Antes o 1o tool_use
         # vencia e um bloco text na mesma entrada sumia do chat.
+        cache_read, ttl = _cache_info(msg)
+        ts = _ts(obj)
         out = []
         for it in content:
             if not isinstance(it, dict):
@@ -183,13 +186,60 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
                 out.append(ChatEvent(
                     kind="tool_use", id=_sub_id(uid, len(out)),
                     tool_name=it.get("name"), tool_use_id=it.get("id"),
-                    tool_input=it.get("input") or {},
+                    tool_input=it.get("input") or {}, ts=ts,
                 ))
             elif it.get("type") == "text":
                 out.append(ChatEvent(kind="assistant_msg", id=_sub_id(uid, len(out)),
-                                     text=it.get("text", "")))
+                                     text=it.get("text", ""), ts=ts,
+                                     cache_read=cache_read, cache_ttl_s=ttl))
         return out
     return []
+
+
+def _ts(obj: dict) -> Optional[float]:
+    """Epoch (segundos) do `timestamp` ISO da entrada. O campo `ts` do ChatEvent existia desde
+    sempre e NUNCA era preenchido — por isso a hora nao aparecia em bubble nenhuma."""
+    raw = obj.get("timestamp")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    # Sem fuso no texto, .timestamp() assume o fuso LOCAL do processo -> epoch deslocado (3h aqui),
+    # calado. O transcript escreve UTC; assumimos UTC em vez de herdar o fuso da maquina.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _cache_info(msg: dict) -> tuple[Optional[int], Optional[int]]:
+    """(tokens lidos do cache, TTL em segundos) do usage do turno.
+
+    O TTL vem MEDIDO, nao suposto: `usage.cache_creation` separa `ephemeral_1h_input_tokens` de
+    `ephemeral_5m_input_tokens`, entao da pra dizer qual janela a sessao esta usando. Sem esse
+    detalhe (formato antigo), devolve None em vez de chutar 5min — melhor nao mostrar prazo do que
+    mostrar um prazo errado."""
+    usage = msg.get("usage")
+    if not isinstance(usage, dict):
+        return None, None
+    read = usage.get("cache_read_input_tokens")
+    read = int(read) if isinstance(read, (int, float)) else None
+    creation = usage.get("cache_creation")
+    ttl: Optional[int] = None
+    if isinstance(creation, dict):
+        # int() sem guarda de tipo levantava aqui com qualquer valor nao-numerico, e a excecao subia
+        # ate derrubar a SSE. Como o backfill relê as ultimas linhas a cada reconexao, UMA linha
+        # estranha viraria loop de queda pra aquela sessao.
+        if _tok(creation.get("ephemeral_1h_input_tokens")) > 0:
+            ttl = 3600
+        elif _tok(creation.get("ephemeral_5m_input_tokens")) > 0:
+            ttl = 300
+    return read, ttl
+
+
+def _tok(v: object) -> int:
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0
 
 
 def path_in_transcript(jsonl: str | Path, needle: str) -> bool:

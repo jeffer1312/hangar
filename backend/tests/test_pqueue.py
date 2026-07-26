@@ -322,3 +322,81 @@ def test_reconcile_confirma_msg_com_imagem_prefixo_image_n(tmp_path):
     requeued = q.reconcile_delivered(pqueue.committed_user_lines(str(j)), 0.0, now=1000.0)
     assert requeued == []                       # texto TA no transcript -> nao redigitar
     assert q.load()[0]["confirmed"] is True
+
+
+def test_assistant_event_carrega_ts_e_janela_de_cache():
+    """O turno do assistente leva a hora e a janela de cache MEDIDA (não suposta).
+
+    O `usage.cache_creation` separa `ephemeral_1h_input_tokens` de `ephemeral_5m_input_tokens` —
+    é de lá que sai o TTL. Sem esse detalhe, `cache_ttl_s` fica None: não mostrar prazo é melhor
+    do que mostrar um prazo errado.
+    """
+    from app.transcript import parse_obj
+
+    def linha(cache_creation):
+        return {
+            "type": "assistant",
+            "uuid": "u1",
+            "timestamp": "2026-07-26T11:02:15.023Z",
+            "message": {
+                "content": [{"type": "text", "text": "oi"}],
+                "usage": {"cache_read_input_tokens": 471558, "cache_creation": cache_creation},
+            },
+        }
+
+    (ev,) = parse_obj(linha({"ephemeral_1h_input_tokens": 190, "ephemeral_5m_input_tokens": 0}))
+    assert ev.kind == "assistant_msg"
+    assert ev.ts == pytest.approx(1785063735.023, abs=1)   # ISO -> epoch
+    assert ev.cache_read == 471558
+    assert ev.cache_ttl_s == 3600
+
+    (cinco,) = parse_obj(linha({"ephemeral_1h_input_tokens": 0, "ephemeral_5m_input_tokens": 190}))
+    assert cinco.cache_ttl_s == 300
+
+    # Formato sem a quebra por TTL -> sem prazo, mas o resto continua vindo.
+    (sem,) = parse_obj(linha(None))
+    assert sem.cache_ttl_s is None
+    assert sem.cache_read == 471558
+    assert sem.ts is not None
+
+
+def test_cache_info_nao_derruba_o_parse_com_valor_estranho():
+    """Valor não-numérico em `cache_creation` não pode levantar.
+
+    A exceção subia por parse_obj → tail → SSE e derrubava a conexão. Pior: o backfill relê as
+    últimas linhas a cada reconexão, então UMA linha estranha viraria queda em loop pra sessão.
+    """
+    from app.transcript import parse_obj
+
+    obj = {
+        "type": "assistant",
+        "uuid": "u1",
+        "timestamp": "2026-07-26T11:02:15.023Z",
+        "message": {
+            "content": [{"type": "text", "text": "oi"}],
+            "usage": {
+                "cache_read_input_tokens": "nao-numero",
+                "cache_creation": {"ephemeral_1h_input_tokens": "corrompido"},
+            },
+        },
+    }
+    (ev,) = parse_obj(obj)          # não levanta
+    assert ev.cache_ttl_s is None   # sem TTL confiável -> sem prazo
+    assert ev.cache_read is None
+    assert ev.ts is not None        # o resto do evento continua útil
+
+
+def test_timestamp_sem_fuso_e_lido_como_utc():
+    """Sem sufixo de fuso, `.timestamp()` assumiria o fuso LOCAL do processo e devolveria um epoch
+    deslocado, calado. O transcript escreve UTC."""
+    from app.transcript import parse_obj
+
+    def ev_de(ts_raw):
+        (ev,) = parse_obj({
+            "type": "assistant", "uuid": "u1", "timestamp": ts_raw,
+            "message": {"content": [{"type": "text", "text": "oi"}]},
+        })
+        return ev
+
+    assert ev_de("2026-07-26T11:02:15.023").ts == ev_de("2026-07-26T11:02:15.023Z").ts
+    assert ev_de("nao-e-data").ts is None

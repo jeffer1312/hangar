@@ -60,6 +60,30 @@
   }: Props = $props();
 
   let events = $state<ChatEvent[]>([]);
+
+  // Cache de prompt: o ULTIMO turno do assistente manda. Usar a cache renova o prazo, entao a
+  // conta corre da hora do turno mais recente, e o TTL vem MEDIDO do transcript (1h ou 5min) —
+  // sem os dois campos o Composer nao mostra prazo nenhum, em vez de inventar um.
+  const lastCache = $derived.by(() => {
+    // Duas buscas distintas de proposito. A ANCORA e o ultimo turno que tocou a cache (leu ou
+    // gravou), porque usar renova o prazo. O TTL so aparece no turno que GRAVA — um turno que
+    // apenas le vem sem ele. Exigir os dois no mesmo evento ancorava a conta num turno de escrita
+    // antigo e subestimava o tempo restante (ate mostrar "expirou" com a cache recem-renovada).
+    let ts: number | null = null;
+    let read = 0;
+    let ttl: number | null = null;
+    for (let i = events.length - 1; i >= 0; i--) {
+      const e = events[i];
+      if (e.kind !== 'assistant_msg') continue;
+      if (ts === null && e.ts && ((e.cache_read ?? 0) > 0 || e.cache_ttl_s)) {
+        ts = e.ts;
+        read = e.cache_read ?? 0;
+      }
+      if (ttl === null && e.cache_ttl_s) ttl = e.cache_ttl_s;
+      if (ts !== null && ttl !== null) break;
+    }
+    return ts !== null && ttl !== null ? { ts, ttl, read } : null;
+  });
   // Índice id->posição em `events`. O SSE re-emite o transcript INTEIRO a cada (re)conexão; sem isto
   // o dedup fazia findIndex O(n) por evento = O(n²) por reconexão -> em conversa longa (n grande), no
   // celular (reconecta a cada background/foreground), congelava a main thread. Map = lookup O(1).
@@ -982,10 +1006,10 @@
         bind:inputText={composerText}
         sessionState={currentState}
         status={status}
+        {lastCache}
         onSend={handleSend}
         onCommand={handleCommand}
         onInterrupt={handleInterrupt}
-        onExpandUsage={() => (usageOpen = true)}
         onOpenGit={() => (gitOpen = true)}
         onOpenPreview={() => (previewOpen = true)}
         provider={sessionProvider}
