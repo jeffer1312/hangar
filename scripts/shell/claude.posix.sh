@@ -101,8 +101,13 @@ claude() {
         name="$base-$i"; i=$((i + 1))
     done
 
-    # duplicated call: zsh doesn't word-split an unquoted prefix var, so no $run trick here
-    if command -v systemd-run >/dev/null 2>&1 && [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+    # duplicated call: zsh doesn't word-split an unquoted prefix var, so no $run trick here.
+    # O `command -v` diz que o BINARIO existe, nao que ele FUNCIONA: o gerenciador systemd do usuario
+    # pode recusar criar scope transiente ("Failed to start transient scope unit"), e ai o `claude`
+    # nao abre. Medido nesta maquina: 5/5 falhas com binario e gerenciador na mesma versao. O probe
+    # (um fork) transforma "nao abre" em "abre sem scope proprio".
+    if command -v systemd-run >/dev/null 2>&1 && [ -n "${XDG_RUNTIME_DIR:-}" ] \
+       && systemd-run --user --scope --collect -q -- true >/dev/null 2>&1; then
         systemd-run --user --scope --collect -q -- tmux new-session -s "$name" -c "$PWD" \
             -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 \
             "${pre[@]}" claude --session-id "$id" "$@"
