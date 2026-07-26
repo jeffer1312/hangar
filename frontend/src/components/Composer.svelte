@@ -20,6 +20,8 @@
   import IconInterrupt from './icons/IconInterrupt.svelte';
   import IconAttach from './icons/IconAttach.svelte';
   import IconMic from './icons/IconMic.svelte';
+  import IconMonitor from './icons/IconMonitor.svelte';
+  import IconFolder from './icons/IconFolder.svelte';
   import ContextRing from './ContextRing.svelte';
   import ModelEffortSheet from './ModelEffortSheet.svelte';
   import CodexModelSheet from './CodexModelSheet.svelte';
@@ -677,7 +679,7 @@
           </button>
         {/if}
         <button class="slash-btn" onclick={onOpenPreview} aria-label="Preview de projeto rodando">
-          <span class="slash-glyph" aria-hidden="true">🖥</span>
+          <IconMonitor size={17} />
         </button>
         {#if onOpenPair}
           {@const pairLabel = pairPeers?.length === 1 ? pairPeers[0]
@@ -707,7 +709,7 @@
         {/if}
         {#if status?.repo}
           <button class="repo-chip" title="Git: trocar branch / status / pull" onclick={onOpenGit}>
-            <span class="repo-glyph" aria-hidden="true">📁</span>
+            <IconFolder size={13} />
             <span class="repo-name">{status.repo}</span>
             {#if status.branch}
               <span class="repo-sep" aria-hidden="true">·</span>
@@ -1135,6 +1137,9 @@
     padding: 0;
     cursor: pointer;
   }
+  /* O icone da pasta virou componente, entao nao herda mais o flex-shrink do .repo-glyph: sem
+     isto, nome de repo longo espremia o SVG em vez de truncar o texto. */
+  .repo-chip :global(svg) { flex-shrink: 0; }
   .repo-glyph { font-size: 11px; flex-shrink: 0; }
   .repo-name {
     color: var(--text-secondary);
