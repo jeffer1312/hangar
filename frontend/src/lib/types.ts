@@ -89,6 +89,10 @@ export interface ChatEvent {
   result?: string | null;
   is_error?: boolean | null;
   ts?: number | null;
+  // Cache de prompt (só em assistant_msg): tokens lidos do cache + janela de expiração em segundos.
+  // O TTL vem medido do usage do transcript (1h ou 5min), não suposto.
+  cache_read?: number | null;
+  cache_ttl_s?: number | null;
   image_count?: number | null;   // imagens coladas no terminal -> busca lazy em /transcript-image
 }
 

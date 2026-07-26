@@ -68,6 +68,12 @@ class ChatEvent(BaseModel):
     result: Optional[str] = None
     is_error: Optional[bool] = None
     ts: Optional[float] = None
+    # Cache de prompt (só em assistant_msg): quantos tokens o turno LEU do cache e qual a janela
+    # de expiração em segundos. O TTL não é chute — o usage do transcript separa
+    # `ephemeral_1h_input_tokens` de `ephemeral_5m_input_tokens`, então dá pra dizer quanto tempo
+    # ainda vale em vez de supor. Usar a cache renova o prazo, então a conta corre do ÚLTIMO turno.
+    cache_read: Optional[int] = None
+    cache_ttl_s: Optional[int] = None
     # Nº de imagens base64 anexadas a uma msg do user via TERMINAL (paste na TUI do Claude). O front
     # busca cada uma sob demanda em /transcript-image/{id}/{idx} (lazy; base64 não vai no payload).
     image_count: Optional[int] = None

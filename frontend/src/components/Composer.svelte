@@ -37,7 +37,8 @@
     onSend: (text: string) => Promise<void> | void;
     onCommand: (cmd: string) => void;
     onInterrupt: () => void;
-    onExpandUsage: () => void;
+    // Cache de prompt do ultimo turno: { ts, ttl, read }. null = sem dado medido -> sem chip.
+    lastCache?: { ts: number; ttl: number; read: number } | null;
     onOpenGit: () => void;
     onOpenPreview: () => void;
     // Grupo de trabalho: chip 🤝 na fileira de cima (1 par = nome; N = "grupo (N)"); tap abre o PairSheet.
@@ -54,12 +55,43 @@
     provider?: 'claude' | 'codex';
   }
   let {
-    sessionName, sessionState, status, onSend, onCommand, onInterrupt, onExpandUsage, onOpenGit,
+    sessionName, sessionState, status, lastCache = null, onSend, onCommand, onInterrupt, onOpenGit,
     onOpenPreview, pairPeers = null, pairedState = null, onOpenPair,
     sendToPair = false, onToggleSendToPair,
     inputText = $bindable(''),
     provider = 'claude',
   }: Props = $props();
+
+  // ── Prazo do cache de prompt ───────────────────────────────────────────────
+  // O cache do Claude expira num prazo fixo a partir do ultimo turno (usar renova). Saber se ele
+  // ainda vale muda a decisao de mandar agora ou nao, entao o prazo mora no composer, onde a
+  // decisao acontece. O TTL vem MEDIDO do transcript — sem ele, nao mostramos nada.
+  let agora = $state(Date.now());
+  $effect(() => {
+    // 20s: o chip mostra minutos, entao nao precisa de mais resolucao que isso.
+    const id = setInterval(() => (agora = Date.now()), 20_000);
+    return () => clearInterval(id);
+  });
+  // `ts` e do servidor e `agora` e do aparelho: com o relogio do celular adiantado/atrasado a conta
+  // desanda. Nao da pra corrigir sem uma referencia de hora do servidor, mas da pra impedir o
+  // absurdo — o que resta nunca pode ser MAIOR que a propria janela.
+  const cacheLeftS = $derived(
+    lastCache
+      ? Math.min(lastCache.ttl, Math.round(lastCache.ts + lastCache.ttl - agora / 1000))
+      : 0,
+  );
+  const cacheAtivo = $derived(!!lastCache && cacheLeftS > 0);
+  // Ultimo quinto do prazo. Fixo em 300s, a janela CURTA (5min) nascia ja em ambar e nunca
+  // mostrava o estado tranquilo.
+  const cacheAcabando = $derived(
+    cacheAtivo && !!lastCache && cacheLeftS <= Math.max(60, lastCache.ttl * 0.2),
+  );
+  const cacheLabel = $derived.by(() => {
+    if (!cacheAtivo) return 'expirou';
+    const m = Math.ceil(cacheLeftS / 60);
+    return m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}` : `${m}min`;
+  });
+
   const isCodex = $derived(provider === 'codex');
 
   // ── Slash commands: busca uma vez por sessao (com cache) ────────────────────
@@ -684,10 +716,18 @@
           </button>
         {/if}
       </div>
-      {#if typeof status?.costUsd === 'number'}
-        <button class="cost-chip" onclick={onExpandUsage} aria-label="Custo e uso">
-          ${status.costUsd.toFixed(2)}
-        </button>
+      {#if lastCache}
+        <!-- Prazo do cache. Nao e botao: nao ha o que fazer com ele alem de saber. -->
+        <span
+          class="cache-chip"
+          class:acabando={cacheAcabando}
+          class:frio={!cacheAtivo}
+          title={cacheAtivo
+            ? `Cache de prompt vale por mais ${cacheLabel} (janela de ${lastCache.ttl >= 3600 ? '1 hora' : '5 minutos'}, contando do último turno)`
+            : 'Cache de prompt expirou — o próximo turno reprocessa o contexto inteiro'}
+        >
+          <span class="cache-glyph" aria-hidden="true"></span>{cacheLabel}
+        </span>
       {/if}
     </div>
 
@@ -1037,6 +1077,30 @@
   }
 
   /* Linha fina no topo do card: slash a esquerda, custo a direita (fora do control-row). */
+  /* Prazo do cache: mono e discreto, no tom do resto da faixa. So muda de cor no fim do prazo —
+     e informacao de fundo, nao alarme. */
+  .cache-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .cache-glyph {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--success);
+  }
+  .cache-chip.acabando { color: var(--warning); }
+  .cache-chip.acabando .cache-glyph { background: var(--warning); }
+  .cache-chip.frio .cache-glyph { background: var(--text-muted); opacity: 0.5; }
+
   .composer-top {
     display: flex;
     align-items: center;
@@ -1090,21 +1154,6 @@
   }
   .repo-dirty { color: var(--warning); margin-left: 1px; }
 
-  .cost-chip {
-    display: inline-flex;
-    align-items: center;
-    height: 28px;
-    min-height: 0;
-    padding: 0 var(--space-2);
-    background: var(--bg-hover);
-    border-radius: var(--radius-md);
-    font-family: var(--font-mono);
-    font-size: var(--text-xs);
-    font-variant-numeric: tabular-nums;
-    color: var(--text-secondary);
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
 
   .send-btn {
     width: 44px;
