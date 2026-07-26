@@ -13,6 +13,38 @@
   let busy = $state(false);
   let err = $state<string | null>(null);
 
+  // Quanto scrollback pedir. SÓ adianta quando o tmux tem histórico de verdade — num TUI de tela
+  // alternada (Claude Code) `alternate_on=1` zera o history_size e pedir mais nunca traz nada. A TUI
+  // do Codex sobe com --no-alt-screen, então ali existe. `scrollback` (do backend) diz qual é o caso.
+  const LINES_STEP = 400;
+  const LINES_MAX = 5000;
+  let paneLines = $state(200);
+  let loadingMore = $state(false);
+  let scrollback = $state(0);
+  const canLoadMore = $derived(scrollback > 0 && paneLines < LINES_MAX);
+
+  // Rolar pra cima era IMPOSSÍVEL na prática: o poll de 450ms trocava o conteúdo inteiro embaixo do
+  // dedo. O scroll (overflow:auto) sempre existiu — o que faltava era o texto parar de se mexer.
+  // Longe do fim => congela a atualização e mostra um aviso; o usuário lê em paz e volta quando quer.
+  const BOTTOM_SLOP = 24;   // px de folga: "quase no fim" conta como fim
+  let atBottom = $state(true);
+  let pending = $state(false);   // houve mudança no pane enquanto estava congelado
+
+  function onScroll() {
+    if (!paneEl) return;
+    const dist = paneEl.scrollHeight - paneEl.scrollTop - paneEl.clientHeight;
+    const now = dist <= BOTTOM_SLOP;
+    if (now && !atBottom) pending = false;   // voltou pro fim: nada mais atrasado
+    atBottom = now;
+  }
+
+  function toBottom() {
+    if (!paneEl) return;
+    paneEl.scrollTop = paneEl.scrollHeight;
+    atBottom = true;
+    pending = false;
+  }
+
   // Poll do pane CRU enquanto aberto. O overlay so-TUI nao gera evento no .jsonl/SSE, entao a unica
   // fonte viva e o capture-pane. ~450ms = responsivo sem martelar o backend (1 subprocess por poll).
   $effect(() => {
@@ -20,8 +52,16 @@
     let alive = true;
     async function tick() {
       try {
-        const t = await getPane(sessionName);
-        if (alive) { text = t; err = null; }
+        const p = await getPane(sessionName, paneLines);
+        if (!alive) return;
+        err = null;
+        scrollback = p.scrollback;
+        const t = p.text;
+        if (t === text) return;                 // diff-gate: sem mudança, sem re-render
+        if (!atBottom) { pending = true; return; }  // lendo o histórico: não puxa o tapete
+        text = t;
+        // Colado no fim = acompanha a saída nova, como um terminal de verdade.
+        requestAnimationFrame(() => { if (atBottom) toBottom(); });
       } catch (e) {
         if (alive) err = e instanceof Error ? e.message : 'erro';
       }
@@ -31,13 +71,34 @@
     return () => { alive = false; clearInterval(id); };
   });
 
+  async function loadMore() {
+    if (loadingMore || paneLines >= LINES_MAX) return;
+    loadingMore = true;
+    const before = paneEl?.scrollHeight ?? 0;
+    try {
+      paneLines = Math.min(paneLines + LINES_STEP, LINES_MAX);
+      text = (await getPane(sessionName, paneLines)).text;
+      // Ancora no conteúdo que o usuário já estava lendo: sem isto, as linhas antigas entram por
+      // cima e a posição salta pro topo do histórico novo.
+      requestAnimationFrame(() => {
+        if (paneEl) paneEl.scrollTop += paneEl.scrollHeight - before;
+      });
+    } catch (e) {
+      err = e instanceof Error ? e.message : 'erro';
+    } finally {
+      loadingMore = false;
+    }
+  }
+
   async function press(key: NavKey) {
     if (busy) return;
     busy = true;
     try {
       await sendKey(sessionName, key);
-      // Refresh imediato pra feedback instantaneo (nao espera o proximo tick do poll).
-      text = await getPane(sessionName);
+      // Refresh imediato pra feedback instantaneo (nao espera o proximo tick do poll). Apertar
+      // tecla e acao deliberada -> volta pro fim, que e onde o efeito dela aparece.
+      text = (await getPane(sessionName, paneLines)).text;
+      requestAnimationFrame(toBottom);
     } catch (e) {
       err = e instanceof Error ? e.message : 'erro';
     } finally {
@@ -61,7 +122,8 @@
   async function sendInput(payload: { text?: string; key?: string }) {
     try {
       await sendTermInput(sessionName, payload);
-      text = await getPane(sessionName);   // refresh imediato
+      text = (await getPane(sessionName, paneLines)).text;   // refresh imediato
+      requestAnimationFrame(toBottom);
     } catch (e) {
       err = e instanceof Error ? e.message : 'erro';
     }
@@ -106,6 +168,7 @@
       class="tm-screen"
       class:interactive
       bind:this={paneEl}
+      onscroll={onScroll}
       tabindex={interactive ? 0 : undefined}
       role="textbox"
       aria-readonly={!interactive}
@@ -115,8 +178,19 @@
       {#if err}
         <p class="tm-err">{err}</p>
       {/if}
+      {#if canLoadMore}
+        <button class="tm-more" onclick={loadMore} disabled={loadingMore}>
+          {loadingMore ? 'carregando…' : `↑ carregar mais histórico (${paneLines} linhas)`}
+        </button>
+      {/if}
       <pre class="tm-pane">{lines.join('\n')}</pre>
     </div>
+
+    {#if !atBottom}
+      <button class="tm-frozen" onclick={toBottom}>
+        {pending ? '⏸ pausado — há saída nova' : '⏸ pausado'} · ↓ voltar ao fim
+      </button>
+    {/if}
 
     {#if paneUrl}
       <a class="tm-link" href={paneUrl} target="_blank" rel="noopener noreferrer">↗ Abrir link no navegador</a>
@@ -126,6 +200,11 @@
       <span class="tm-keys-hint">resgate</span>
       <button class="tm-key" onclick={() => press('Escape')}>Esc</button>
       <button class="tm-key" onclick={() => press('Tab')}>⇥</button>
+      <!-- Rolar o PRÓPRIO TUI. Num app de tela alternada (Claude Code) o tmux não guarda scrollback,
+           então rolar o espelho só percorre as ~45 linhas da tela; quem sobe no histórico é o TUI.
+           Medido: PageUp muda o conteúdo do pane. Já estavam na allowlist do backend, faltava botão. -->
+      <button class="tm-key" onclick={() => press('PageUp')} title="rolar o terminal para cima">⇞</button>
+      <button class="tm-key" onclick={() => press('PageDown')} title="rolar o terminal para baixo">⇟</button>
       <div class="tm-arrows">
         <button class="tm-key" onclick={() => press('Left')}>←</button>
         <button class="tm-key" onclick={() => press('Up')}>↑</button>
@@ -210,6 +289,39 @@
     -webkit-tap-highlight-color: transparent;
   }
   .tm-link:active { background: var(--bg-hover); }
+
+  /* Botao de carregar scrollback: fica no TOPO do conteudo, alcance natural de quem rolou pra cima. */
+  .tm-more {
+    display: block;
+    width: 100%;
+    padding: var(--space-2);
+    border: 0;
+    border-bottom: 1px solid var(--border-subtle);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    font-family: var(--font-mono);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .tm-more:active { background: var(--bg-hover); }
+  .tm-more:disabled { opacity: 0.6; }
+
+  /* Aviso de congelado: o pane parou de atualizar porque o usuario esta lendo o historico. Sem
+     isto o congelamento pareceria a tela travada. Toque volta pro fim e retoma. */
+  .tm-frozen {
+    flex-shrink: 0;
+    margin: 0 var(--space-3) var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-md, 8px);
+    background: var(--accent-soft, rgba(124, 147, 255, 0.16));
+    color: var(--accent);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
 
   .tm-keys {
     flex-shrink: 0;

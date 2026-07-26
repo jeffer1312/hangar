@@ -4,6 +4,7 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
+from types import SimpleNamespace
 
 from app import tmux
 
@@ -162,3 +163,30 @@ def test_new_session_execs_command_so_claude_owns_tty(monkeypatch):
     with patch.object(tmux, "RUN", lambda args, **k: (captured.update(args=args) or _CP())):
         tmux.new_session("s", "/tmp", "claude --session-id x")
     assert captured["args"][-1] == "exec claude --session-id x"
+
+
+# --- scrollback real vs tela alternada ------------------------------------------------------
+# Claude Code roda em tela alternada, onde o tmux NAO acumula historico: pedir mais linhas nunca
+# traz nada e a UI nao pode oferecer "carregar mais historico". A TUI do Codex sobe com
+# --no-alt-screen, entao la o scrollback existe. O formato do display resolve os dois num comando so.
+
+def test_pane_scrollback_zero_em_tela_alternada():
+    from unittest.mock import patch
+    from app import tmux as t
+    with patch.object(t, "_run", return_value=SimpleNamespace(stdout="0\n", returncode=0)):
+        assert t.pane_scrollback("sess") == 0
+
+
+def test_pane_scrollback_devolve_historico_quando_existe():
+    from unittest.mock import patch
+    from app import tmux as t
+    with patch.object(t, "_run", return_value=SimpleNamespace(stdout="1873\n", returncode=0)):
+        assert t.pane_scrollback("sess") == 1873
+
+
+def test_pane_scrollback_saida_ilegivel_e_zero():
+    # tmux mudo / sessao sumindo no meio -> 0 (sem historico), nunca excecao no caminho da UI.
+    from unittest.mock import patch
+    from app import tmux as t
+    with patch.object(t, "_run", return_value=SimpleNamespace(stdout="", returncode=1)):
+        assert t.pane_scrollback("sess") == 0

@@ -1454,13 +1454,20 @@ async def set_codex_model(name: str, body: CodexModelBody):
 
 
 @app.get("/api/sessions/{name}/pane", dependencies=[Depends(require_auth)])
-def pane(name: str):
+def pane(name: str, lines: int = 200):
     # Pane CRU (texto ja composto pelo tmux: sem ANSI/cursor-move). O espelho do pane (TerminalMirror)
     # le isto pra mostrar overlays so-TUI (/status, /config, /help, pickers) que nao caem no .jsonl.
+    # `lines` = quanto SCROLLBACK trazer acima da tela visivel (capture-pane -S). O espelho pede mais
+    # quando o usuario rola pro topo; clampeado pra uma janela absurda nao virar payload gigante a
+    # cada poll de 450ms.
     from app import tmux
     if not tmux.has_session(name):
         raise HTTPException(404, "sessao nao encontrada")
-    return {"text": tmux.capture_pane(name)}
+    # `scrollback` diz se pedir mais linhas ADIANTA. Num TUI de tela alternada (Claude Code) vale 0:
+    # o tmux nao guarda historico ali, e quem quer subir tem que rolar o PROPRIO TUI (PageUp), nao o
+    # tmux. Sem esse dado a UI ofereceria "carregar mais historico" que nunca traria nada.
+    return {"text": tmux.capture_pane(name, lines=max(50, min(lines, 5000))),
+            "scrollback": tmux.pane_scrollback(name)}
 
 
 @app.post("/api/sessions/{name}/keys", dependencies=[Depends(require_auth)])

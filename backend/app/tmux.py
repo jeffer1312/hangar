@@ -150,6 +150,21 @@ def paste_text(name: str, text: str) -> None:
     _run(["tmux", "paste-buffer", "-t", _pane_target(name), "-b", buf, "-p", "-d"])
 
 
+def pane_scrollback(name: str) -> int:
+    """Linhas de scrollback que o tmux REALMENTE tem pra este pane (0 = nenhuma).
+
+    Um TUI de tela cheia (Claude Code) roda na TELA ALTERNADA, e nela o tmux nao acumula historico:
+    `alternate_on=1` -> `history_size=0`, e `capture-pane -S -N` nunca devolve mais que a tela
+    visivel por mais linhas que se peca. A TUI do Codex sobe com `--no-alt-screen`, entao ali o
+    scrollback existe de verdade. Quem desenha a UI precisa saber a diferenca pra nao oferecer
+    "carregar mais historico" onde nao ha historico nenhum.
+    """
+    cp = _run(["tmux", "display", "-p", "-t", _pane_target(name),
+               "#{?alternate_on,0,#{history_size}}"])
+    out = cp.stdout.strip()
+    return int(out) if out.isdigit() else 0
+
+
 def capture_pane(name: str, lines: int = 200) -> str:
     cp = _run(["tmux", "capture-pane", "-p", "-t", _pane_target(name), "-S", f"-{lines}"])
     return cp.stdout
