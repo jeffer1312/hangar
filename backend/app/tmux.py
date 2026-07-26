@@ -1,5 +1,6 @@
 import os
 import shutil
+import logging
 import subprocess
 
 RUN = subprocess.run
@@ -31,6 +32,9 @@ def _wayland_display() -> str | None:
     except OSError:
         return None
     return socks[0] if socks else None
+
+
+_log = logging.getLogger("claude_pocket.tmux")
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess:
@@ -161,12 +165,23 @@ def pane_scrollback(name: str) -> int:
     """
     cp = _run(["tmux", "display", "-p", "-t", _pane_target(name),
                "#{?alternate_on,0,#{history_size}}"])
+    if cp.returncode != 0:
+        # 0 aqui significaria "nao ha historico" — e tmux QUEBRADO (ausente, sem permissao, travado
+        # no timeout, sessao zumbi) daria a MESMA resposta, escondendo a falha atras de uma UI que
+        # so some com o botao. Ainda devolve 0 (a UI nao pode explodir), mas nao em silencio.
+        _log.warning("tmux display falhou pra %r: %s", name, (cp.stderr or "").strip()[:200])
+        return 0
     out = cp.stdout.strip()
     return int(out) if out.isdigit() else 0
 
 
 def capture_pane(name: str, lines: int = 200) -> str:
     cp = _run(["tmux", "capture-pane", "-p", "-t", _pane_target(name), "-S", f"-{lines}"])
+    if cp.returncode != 0:
+        # stdout vazio numa falha e indistinguivel de um pane genuinamente vazio -> o /pane devolvia
+        # 200 com texto "" e ninguem ficava sabendo que o tmux tinha falhado. Devolve "" (o caller
+        # degrada), mas registra.
+        _log.warning("tmux capture-pane falhou pra %r: %s", name, (cp.stderr or "").strip()[:200])
     return cp.stdout
 
 

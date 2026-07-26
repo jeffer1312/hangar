@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { getPane, sendKey, sendTermInput, type NavKey } from '../lib/api';
   import ModalDialog from './ModalDialog.svelte';
 
@@ -52,7 +53,12 @@
     let alive = true;
     async function tick() {
       try {
-        const p = await getPane(sessionName, paneLines);
+        // untrack: os ARGUMENTOS são avaliados antes do primeiro await, ou seja, dentro da janela em
+        // que o Svelte rastreia leituras do efeito — `paneLines` virava dependência e todo loadMore
+        // recriava o efeito, disparando um tick extra. Como nessa hora atBottom é falso, ele caía no
+        // branch de congelado e acendia "⏸ há saída nova" sem ter saída nova. Só `open`/`sessionName`
+        // devem reiniciar o poll.
+        const p = await getPane(sessionName, untrack(() => paneLines));
         if (!alive) return;
         err = null;
         scrollback = p.scrollback;
@@ -75,9 +81,13 @@
     if (loadingMore || paneLines >= LINES_MAX) return;
     loadingMore = true;
     const before = paneEl?.scrollHeight ?? 0;
+    const next = Math.min(paneLines + LINES_STEP, LINES_MAX);
     try {
-      paneLines = Math.min(paneLines + LINES_STEP, LINES_MAX);
-      text = (await getPane(sessionName, paneLines)).text;
+      // Só avança DEPOIS do sucesso: incrementar antes deixava o rótulo do botão dizendo "600
+      // linhas" com 200 na tela, e o clique seguinte pulava o patamar que tinha falhado.
+      const p = await getPane(sessionName, next);
+      paneLines = next;
+      text = p.text;
       // Ancora no conteúdo que o usuário já estava lendo: sem isto, as linhas antigas entram por
       // cima e a posição salta pro topo do histórico novo.
       requestAnimationFrame(() => {
@@ -119,11 +129,21 @@
     Delete: 'Delete', Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
   };
 
+  // NÃO engole o erro: quem chama precisa saber se o envio falhou. Engolir aqui fazia o
+  // `await sendInput(...)` resolver sempre, e o chamador limpava o campo de texto como se tivesse
+  // dado certo — o usuário perdia o que digitou, no celular, sem aviso.
   async function sendInput(payload: { text?: string; key?: string }) {
+    await sendTermInput(sessionName, payload);
+    text = (await getPane(sessionName, paneLines)).text;   // refresh imediato
+    requestAnimationFrame(toBottom);
+  }
+
+  // sendInput agora propaga -> o caminho do teclado do desktop trata aqui (antes o try/catch
+  // morava dentro do sendInput). Sem isto viraria unhandled rejection a cada tecla com erro.
+  async function sendInputSafe(payload: { text?: string; key?: string }) {
     try {
-      await sendTermInput(sessionName, payload);
-      text = (await getPane(sessionName, paneLines)).text;   // refresh imediato
-      requestAnimationFrame(toBottom);
+      await sendInput(payload);
+      err = null;
     } catch (e) {
       err = e instanceof Error ? e.message : 'erro';
     }
@@ -133,13 +153,13 @@
     // stopPropagation: nao deixa o Esc/atalhos do Chat (fechar overlay, Cmd+K) roubarem a tecla.
     if (e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
       e.preventDefault(); e.stopPropagation();
-      await sendInput({ key: 'C-' + e.key.toLowerCase() });   // Ctrl+C, Ctrl+R, Ctrl+D...
+      await sendInputSafe({ key: 'C-' + e.key.toLowerCase() });   // Ctrl+C, Ctrl+R, Ctrl+D...
       return;
     }
     if (e.altKey || e.metaKey) return;   // atalhos do SO/navegador passam
     const named = NAMED[e.key];
-    if (named) { e.preventDefault(); e.stopPropagation(); await sendInput({ key: named }); return; }
-    if (e.key.length === 1) { e.preventDefault(); e.stopPropagation(); await sendInput({ text: e.key }); }
+    if (named) { e.preventDefault(); e.stopPropagation(); await sendInputSafe({ key: named }); return; }
+    if (e.key.length === 1) { e.preventDefault(); e.stopPropagation(); await sendInputSafe({ text: e.key }); }
   }
 
   // ── Teclado no MOBILE ───────────────────────────────────────────────────────
@@ -156,13 +176,23 @@
   const FONT_MIN = 8, FONT_MAX = 18, FONT_KEY = 'cp_mirror_font';
   let fontPx = $state(
     (() => {
-      const v = Number(typeof localStorage !== 'undefined' ? localStorage.getItem(FONT_KEY) : NaN);
-      return Number.isFinite(v) && v >= FONT_MIN && v <= FONT_MAX ? v : 11;
+      // try/catch na LEITURA também: com cookies bloqueados no Safari o próprio acesso à
+      // propriedade `localStorage` lança SecurityError — `typeof localStorage` já estoura, antes de
+      // qualquer comparação — e derrubaria a inicialização do componente inteiro, não só a
+      // persistência. Não é o modo privado do Chrome/Firefox, onde só o setItem falha.
+      try {
+        const v = Number(localStorage?.getItem(FONT_KEY));
+        if (Number.isFinite(v) && v >= FONT_MIN && v <= FONT_MAX) return v;
+      } catch { /* storage bloqueado: cai no default */ }
+      return 11;
     })(),
   );
   function bumpFont(d: number) {
     fontPx = Math.min(FONT_MAX, Math.max(FONT_MIN, fontPx + d));
-    try { localStorage.setItem(FONT_KEY, String(fontPx)); } catch { /* modo privado */ }
+    // ponytail: preferência não persistida é perda aceitável (modo privado/quota); só não
+    // pode ser 100% muda.
+    try { localStorage.setItem(FONT_KEY, String(fontPx)); }
+    catch (e) { console.warn('cp: tamanho de fonte do espelho não persistiu', e); }
   }
 
   async function submitDraft(withEnter: boolean) {
@@ -171,7 +201,10 @@
     sending = true;
     try {
       await sendInput(withEnter ? { text: value, key: 'Enter' } : { text: value });
-      draft = '';
+      draft = '';               // SÓ no sucesso: falhou, o texto continua no campo pra reenviar
+      err = null;
+    } catch (e) {
+      err = e instanceof Error ? e.message : 'erro ao enviar';
     } finally {
       sending = false;
     }
@@ -219,9 +252,6 @@
       aria-label={interactive ? 'Terminal interativo — digite' : undefined}
       onkeydown={interactive ? onTermKey : undefined}
     >
-      {#if err}
-        <p class="tm-err">{err}</p>
-      {/if}
       {#if canLoadMore}
         <button class="tm-more" onclick={loadMore} disabled={loadingMore}>
           {loadingMore ? 'carregando…' : `↑ carregar mais histórico (${paneLines} linhas)`}
@@ -230,7 +260,12 @@
       <pre class="tm-pane" style:font-size={`${fontPx}px`}>{lines.join('\n')}</pre>
     </div>
 
-    {#if !atBottom}
+    <!-- Único elemento garantidamente visível fora do scroll. O <p class="tm-err"> fica DENTRO do
+         container rolável, no topo do conteúdo — com histórico carregado ele sai da tela, e um
+         backend caído ficava indistinguível de "pausei porque você pediu". Erro vence a pausa. -->
+    {#if err}
+      <p class="tm-frozen tm-frozen-err">⚠ {err}</p>
+    {:else if !atBottom}
       <button class="tm-frozen" onclick={toBottom}>
         {pending ? '⏸ pausado — há saída nova' : '⏸ pausado'} · ↓ voltar ao fim
       </button>
@@ -253,7 +288,8 @@
           enterkeyhint="send"
         />
         <!-- Enviar SEM Enter: num picker/filtro o Enter submeteria antes da hora. -->
-        <button class="tm-key" type="button" disabled={!draft || sending}
+        <button class="tm-key" type="button" aria-label="Enviar sem pressionar Enter"
+                disabled={!draft || sending}
                 onclick={() => submitDraft(false)} title="enviar sem Enter">↵̸</button>
         <button class="tm-key tm-enter" type="submit" disabled={!draft || sending}
                 title="enviar e pressionar Enter">envia ⏎</button>
@@ -263,19 +299,19 @@
     <nav class="tm-keys" aria-label="Teclas de resgate">
       <span class="tm-keys-hint">resgate</span>
       <button class="tm-key" onclick={() => press('Escape')}>Esc</button>
-      <button class="tm-key" onclick={() => press('Tab')}>⇥</button>
+      <button aria-label="Tab" class="tm-key" onclick={() => press('Tab')}>⇥</button>
       <!-- Rolar o PRÓPRIO TUI. Num app de tela alternada (Claude Code) o tmux não guarda scrollback,
            então rolar o espelho só percorre as ~45 linhas da tela; quem sobe no histórico é o TUI.
            Medido: PageUp muda o conteúdo do pane. Já estavam na allowlist do backend, faltava botão. -->
-      <button class="tm-key" onclick={() => press('PageUp')} title="rolar o terminal para cima">⇞</button>
-      <button class="tm-key" onclick={() => press('PageDown')} title="rolar o terminal para baixo">⇟</button>
+      <button aria-label="Rolar o terminal para cima" class="tm-key" onclick={() => press('PageUp')} title="rolar o terminal para cima">⇞</button>
+      <button aria-label="Rolar o terminal para baixo" class="tm-key" onclick={() => press('PageDown')} title="rolar o terminal para baixo">⇟</button>
       <div class="tm-arrows">
-        <button class="tm-key" onclick={() => press('Left')}>←</button>
-        <button class="tm-key" onclick={() => press('Up')}>↑</button>
-        <button class="tm-key" onclick={() => press('Down')}>↓</button>
-        <button class="tm-key" onclick={() => press('Right')}>→</button>
+        <button aria-label="Seta para a esquerda" class="tm-key" onclick={() => press('Left')}>←</button>
+        <button aria-label="Seta para cima" class="tm-key" onclick={() => press('Up')}>↑</button>
+        <button aria-label="Seta para baixo" class="tm-key" onclick={() => press('Down')}>↓</button>
+        <button aria-label="Seta para a direita" class="tm-key" onclick={() => press('Right')}>→</button>
       </div>
-      <button class="tm-key tm-enter" onclick={() => press('Enter')}>⏎</button>
+      <button aria-label="Enter" class="tm-key tm-enter" onclick={() => press('Enter')}>⏎</button>
     </nav>
   </div>
 </ModalDialog>
@@ -342,7 +378,12 @@
   .tm-screen.interactive { outline: none; cursor: text; }
   .tm-screen.interactive:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
   .tm-live { color: var(--accent); font-weight: 600; }
-  .tm-err { color: var(--danger, #f87171); font-size: var(--text-xs); padding: var(--space-2) var(--space-3); margin: 0; }
+  .tm-frozen-err {
+    border-color: var(--danger, #f87171);
+    background: color-mix(in srgb, var(--danger, #f87171) 16%, transparent);
+    color: var(--danger, #f87171);
+    text-align: center;
+  }
   .tm-pane {
     margin: 0;
     /* Respiro tipo emulador de terminal: o texto não encosta na borda da tela. */
