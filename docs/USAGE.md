@@ -150,6 +150,69 @@ chat largo. O fluxo mobile fica intacto abaixo de 820px.
   primeiro push).
 - **Histórico:** tocar/clicar num commit mostra os arquivos alterados e o diff de cada um.
 
+### Motores de modelo (Kimi, gateway próprio, …)
+
+Dá para abrir uma sessão que roda em outro provedor de modelo sem criar perfil novo e sem
+desconectar sua conta Anthropic. A sessão continua no **mesmo** `~/.claude`: skills, hooks,
+`CLAUDE.md`, plugins, statusline e histórico, tudo igual — só muda um punhado de variáveis de
+ambiente no processo daquela sessão.
+
+**Configurar:** menu da conta → **Configurações** → **Motores de modelo** → Adicionar. Preencha o
+endereço e a chave e toque em **Testar e listar modelos**: os ids e a janela de contexto vêm do seu
+provedor, com a sua chave — nada de tabela chumbada que envelhece. O mesmo botão serve de checagem
+de conectividade/chave: chave errada volta com a mensagem do próprio provedor, não um "não
+respondeu" genérico.
+
+- O endereço vai **sem o `/v1`** no fim (o Claude Code monta o caminho).
+- **Kimi Code** é `https://api.kimi.com/coding` — e **não** é a mesma coisa que a plataforma aberta
+  da Moonshot: chave de uma dá `Invalid Authentication` na outra. Os ids de modelo também são
+  próprios da Kimi Code (`k3`, `k3-256k`, `kimi-for-coding`, `kimi-for-coding-highspeed`) — não
+  `kimi-k3`.
+- A janela de contexto depende da sua **faixa de assinatura**: o mesmo `k3` já reportou 262144 num
+  plano Moderato onde a documentação da Kimi fala em "até 1M". É por isso que o valor vem do
+  provedor a cada teste, e não de uma tabela na documentação. **Depois de cadastrar um motor novo,
+  confira a janela real com `/context` na sessão** — errar essa variável custa capacidade de
+  contexto em silêncio (ver adiante).
+
+**Abrir pelo celular:** na criação de sessão, escolha o motor no seletor **Motor**. Sessão de motor
+aparece na lista com o chip `⚙ <nome>`. **Retomar uma conversa do Arquivo também oferece o
+seletor de motor** — o app não tem como saber qual motor gerou aquele transcript originalmente (o
+processo que rodava morreu, e o transcript grava o nome do modelo, não qual motor serviu ele), então
+a escolha é sempre sua, de novo, a cada resume.
+
+**Abrir pelo terminal:**
+
+```bash
+claude-engine            # lista os motores configurados
+claude-engine kimi       # abre uma sessão no motor "kimi"
+claude                   # continua na sua conta Anthropic, como sempre
+```
+
+(`cp-engine --env` existe, mas é só diagnóstico interno — ele imprime a chave em texto puro no
+stdout. Use `claude-engine`.)
+
+**O que muda numa sessão de motor:**
+
+- O cabeçalho mostra `<modelo> · API Usage Billing`: o consumo vai para a conta do provedor, não
+  para a sua assinatura Anthropic.
+- **O valor em `💵` não aparece**, de propósito: o preço que o Claude Code calcula é tabela Anthropic
+  e não corresponde ao seu provedor (a statusline também para de gravar o sidecar de custo). Veja o
+  consumo no painel dele. As barras `⚡5h`/`📅7d` também somem — são um dado que só a Anthropic manda.
+  O esforço (`(high✦)` etc.) continua aparecendo normalmente: não é fingido, e em provedores como o
+  Kimi o "pensando" por trás dele é real — só que alguns gateways ignoram o esforço pedido no request
+  e escolhem pelo sufixo do id do modelo, então nem todo provedor obedece o que você pede ali.
+- Connectors MCP vindos do claude.ai ficam desativados (o Claude Code avisa). MCP local funciona.
+- Todo o seu harness vai em cada turno (num teste real, 81k tokens de input num prompt de uma linha).
+  Em provedor cobrado por token, isso pesa por turno.
+- Cuidado com `/model` + Enter: numa sessão de motor isso **não muda nada visível** e troca o tier
+  default das suas sessões da conta Anthropic. Aperte `s` no seletor para valer só na sessão atual.
+- Um hook ou skill que rode `claude` dentro de uma sessão de motor herda o motor, e é cobrado nele.
+- Editar um motor não afeta sessões já abertas: elas seguem no valor antigo até serem retomadas.
+
+**Gateway só-OpenAI** (OpenAI ou Gemini direto): rode um proxy tradutor (LiteLLM ou
+`anthropic-proxy`) em `127.0.0.1` e cadastre o motor apontando para o proxy. OmniRoute e Kimi Code
+**não** precisam disso — falam a Messages API nativamente.
+
 ## 5. Sessões-irmãs, pareamento e orquestração (cp-send)
 
 Sessões Claude da mesma máquina conversam entre si pelo backend via `scripts/cp-send`:
@@ -229,6 +292,7 @@ CP_AUTH_TOKEN=$(openssl rand -hex 24) CP_SYNC=1 CP_SYNC_BOOTSTRAP=$(openssl rand
 | App "congelou" no último estado | conexão SSE morreu calada (mobile/background). O watchdog reconecta; senão recarregue (pull-to-refresh). |
 | Não vejo código novo após mudar | PWA com service worker servindo JS velho → **hard reload** / limpar dados do site / re-adicionar o PWA. |
 | Backend reiniciar | precisa do cwd=`backend` (`python -m app.main` acha `app`). Sem `--reload` (trava SSE no SIGTERM). |
+| Pane de sessão de motor morre na hora, sem chat nenhum | `cp-engine` não está no PATH do **servidor tmux** (a sessão nasce via `cp-engine --exec`). Garanta que o PATH usado pelo tmux enxerga `cp-engine` (mesmo instalado pelo `install-claude-wrapper.sh`). |
 
 ## 8. Segurança (resumo)
 

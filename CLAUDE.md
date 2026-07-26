@@ -158,6 +158,30 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   branch≠main, kill-switch `automations_enabled`, anti-estagnação (mesma cauda 2×). Loop ativo
   **suprime o chain** da sessão. Campos `loop_status/loop_iter/loop_max` fluem no `/api/sessions`
   e no `sig` do SSE (badge 🔁 nas 2 views). Spec/decisões: docs/superpowers/specs/2026-07-22-*.md.
+- **Model engines** (`app/engines.py` + `app/engine_probe.py` + `components/EnginesSheet.svelte`):
+  a session can run on a non-Anthropic provider — only env vars change inside that session's process,
+  `~/.claude` (skills, hooks, transcript) stays the SAME. Single source of truth at
+  `~/.claude/engines.json` (0600). Four invariants: (1) `engines.py` is **stdlib-only** — an
+  `app.config` import there would pull in pydantic and break `scripts/cp-engine`, which the shell
+  calls with the system `python3`; (2) it's `ANTHROPIC_AUTH_TOKEN`, **never** `ANTHROPIC_API_KEY`
+  (that one writes `customApiKeyResponses` into the global `~/.claude.json`); (3) the env is applied
+  by `cp-engine --exec <engine> -- claude …` (`os.execvpe` inside the pane) and **never** via
+  `tmux -e`, because the key would land in `/proc/<pid>/cmdline`, world-readable — tmux doesn't
+  inherit the caller's env, so there's no "just export it" path; (4) the context-window var is
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` — `CLAUDE_CODE_AUTO_COMPACT_WINDOW` measured inert on both
+  providers tested, and without the right var Claude Code still compacts at ~167k on a 500k model.
+  A live session's engine is read back from `/proc/<pid>/environ` (`CP_ENGINE`), same trick as
+  `CLAUDE_CONFIG_DIR` — it's what keeps both resumes (`registry.resume` and the Archive one in
+  `api.py`) from silently switching engines mid-conversation; Archive resume, unlike a live resume,
+  has no process left to read, so it always re-asks. Models and context window come from
+  `GET {base_url}/v1/models` — no static catalog, because the value varies by the user's
+  subscription tier. The statusline only hides `💵`/cost-sidecar writes on an engine session — the
+  effort chip (`(high✦)`) is untouched, it's not faked.
+- **Session creation's systemd-scope probe.** Creating a session wraps `tmux` in
+  `systemd-run --user --scope` so the tmux server doesn't inherit the backend's cgroup, but the wrap
+  is now gated on a probe: a systemd user manager that refuses transient scopes was making **every**
+  session creation fail (app and terminal both). Failing the probe, sessions are created without the
+  scope and the backend logs a warning (commit `23da052`).
 
 ## tmux + Claude Code truecolor
 

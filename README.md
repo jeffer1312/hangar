@@ -185,12 +185,21 @@ All routes require `Authorization: Bearer <token>` (SSE uses a `cp_token` cookie
 | Method | Route | Purpose |
 |---|---|---|
 | GET | `/api/sessions` | list tmux sessions + state |
-| POST | `/api/sessions` | create a session (`{name, cwd}`) |
+| POST | `/api/sessions` | create a session (`{name, cwd, engine?}`) — `engine` runs it on a non-Anthropic provider (see Engines below) |
 | DELETE | `/api/sessions/{name}` | kill a session |
 | POST | `/api/sessions/{name}/rename` | rename a session |
 | POST | `/api/sessions/{name}/resume` | relaunch an untracked session with `--resume` (continues the conversation) |
 | GET | `/api/claude-configs` | list available `CLAUDE_CONFIG_DIR` options |
 | GET | `/api/costs` | usage/cost report (per account, day/week/month) |
+
+**Engines** (alternative model providers, `~/.claude/engines.json`)
+
+| Method | Route | Purpose |
+|---|---|---|
+| GET | `/api/engines` | configured engines (key masked) |
+| PUT | `/api/engines/{nome}` | create/update an engine; empty key preserves the current one |
+| DELETE | `/api/engines/{nome}` | remove an engine |
+| POST | `/api/engines/modelos` | models the key can use, straight from the provider (this is the "Test" button) |
 
 **Transcript & stream**
 
@@ -251,6 +260,7 @@ All routes require `Authorization: Bearer <token>` (SSE uses a `cp_token` cookie
 | GET | `/api/archive/{project}` | conversations of one folder (preview, date, live badge) |
 | GET | `/api/archive/{project}/{session_id}/history` | read-only transcript of a dead conversation |
 | GET | `/api/archive/{project}/{session_id}/transcript-image/{uuid}/{idx}` | image inside an archived transcript |
+| POST | `/api/archive/{project}/{session_id}/resume` | resume a dead conversation in a new tmux session (`{engine?}`) — the original engine, if any, isn't recorded, so this is always a fresh choice |
 
 **Push**
 
