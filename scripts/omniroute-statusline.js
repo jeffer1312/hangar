@@ -174,6 +174,51 @@ process.stdin.on('end', () => {
       tokens = ' \x1b[97m💬 ' + fmtTok(totalIn) + '/' + fmtTok(totalOut) + '\x1b[0m\x1b[36m' + ctxUsage + '\x1b[0m';
     }
 
+    // Cache do provedor (só em motor). Um turno relido do cache custa ~10% do preço de input novo,
+    // então o que interessa saber é se o ÚLTIMO turno acertou o cache ou pagou re-prefill inteiro.
+    // Não dá pra mostrar contagem regressiva de expiração: a statusline não redesenha com a sessão
+    // parada (o relógio congela), então um cronômetro ficaria mentindo até o próximo turno. O que
+    // aparece é fato consumado — taxa de acerto do último turno e o intervalo que o antecedeu.
+    let cacheChip = '';
+    if (engine && data.transcript_path) try {
+      const fd = fs.openSync(data.transcript_path, 'r');
+      let buf;
+      try {
+        const { size } = fs.fstatSync(fd);
+        const len = Math.min(size, 262144);         // só a cauda: transcript de sessão longa é enorme
+        buf = Buffer.alloc(len);
+        fs.readSync(fd, buf, 0, len, size - len);
+      } finally { fs.closeSync(fd); }
+      const turnos = [];                            // [{id, ts, in, read, novo}], do fim pro começo
+      const linhas = buf.toString('utf8').split('\n');
+      for (let k = linhas.length - 1; k >= 0 && turnos.length < 2; k--) {
+        if (!linhas[k].startsWith('{')) continue;
+        let d; try { d = JSON.parse(linhas[k]); } catch { continue; }
+        const u = d.message?.usage;
+        // Turno sintético (hook barrou a continuação) tem usage todo zerado e id próprio: passaria
+        // pelo dedup e entraria como turno de verdade, encurtando o intervalo medido — 52min viram
+        // 12min sem nada indicar erro. Fora daqui, na coleta, senão contamina `anterior` também.
+        if (!u || !(u.cache_read_input_tokens || u.input_tokens || u.cache_creation_input_tokens)) continue;
+        const id = d.message?.id || d.uuid;
+        if (turnos.some(t => t.id === id)) continue;  // o transcript repete o mesmo turno 2-4x
+        turnos.push({ id, ts: Date.parse(d.timestamp),
+                      read: u.cache_read_input_tokens || 0,
+                      novo: (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) });
+      }
+      const [ultimo, anterior] = turnos;
+      if (ultimo && ultimo.read + ultimo.novo > 0) {
+        const pct = Math.round(ultimo.read / (ultimo.read + ultimo.novo) * 100);
+        // Verde: pagou 10%. Vermelho: re-prefill — contexto inteiro cobrado como input novo.
+        cacheChip = ' ' + (pct >= 80 ? '\x1b[32m' : pct >= 40 ? '\x1b[33m' : '\x1b[91m') + '♻' + pct + '%';
+        const gap = anterior && Number.isFinite(ultimo.ts) && Number.isFinite(anterior.ts)
+          ? Math.round((ultimo.ts - anterior.ts) / 60000) : 0;
+        if (gap >= 5) cacheChip += ' ⏳' + (gap >= 60
+          ? Math.floor(gap / 60) + 'h' + (gap % 60 ? (gap % 60) + 'm' : '')
+          : gap + 'm');
+        cacheChip += '\x1b[0m';
+      }
+    } catch {}
+
     // Rate limits nativos
     let quotaAviso = '';  // '⚠' quando a ultima leitura de quota falhou: o valor exibido e velho
     let rateLimit = '';
@@ -316,7 +361,7 @@ process.stdin.on('end', () => {
     const segs = [
       '\x1b[1;35m🤖 ' + model + effortSuffix + '\x1b[0m',
       '\x1b[97m📁 ' + dir + '\x1b[0m' + gitBranch,
-      tmuxSess, kctx, tokens, cost, rateLimit, sevenDay, clock
+      tmuxSess, kctx, tokens, cacheChip, cost, rateLimit, sevenDay, clock
     ].map(s => s.trim()).filter(Boolean);
 
     const sep = ' │ ';
