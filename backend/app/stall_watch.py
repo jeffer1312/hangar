@@ -24,6 +24,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from app.config import settings, automations_enabled
+from app import runtime_config
 from app import push
 
 _log = logging.getLogger("claude_pocket.stall_watch")
@@ -125,7 +126,7 @@ async def _tick(list_fn) -> None:
     for name in _seen_live.keys() - now_live.keys():
         if name in _notified_dead:
             continue
-        if settings.notify_dead:
+        if runtime_config.get("notify_dead"):
             push.notify_dead(name)
         sid = _seen_live.get(name)
         if sid:

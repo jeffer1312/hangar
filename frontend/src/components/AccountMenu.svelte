@@ -1,6 +1,7 @@
 <script lang="ts">
   import { enablePush, pushSupported } from '../lib/push';
   import { getPushSettings, setQuietHours } from '../lib/api';
+  import ConfigSheet from './ConfigSheet.svelte';
   import { serverColor, parseServerPairing } from '../lib/auth';
   import { vaultPush } from '../lib/vaultPush.svelte';
   import type { Server } from '../lib/auth';
@@ -70,6 +71,8 @@
   let qhStart = $state('');
   let qhEnd = $state('');
   let qhMsg = $state('');
+  // Sheet de configurações do servidor (chave da Groq, retenção, notificações).
+  let configOpen = $state(false);
   async function loadQuietHours() {
     try {
       const p = await getPushSettings();
@@ -281,6 +284,14 @@
     {/if}
 
     <div class="am-sep"></div>
+    <!-- Config do SERVIDOR (chave da Groq, retenção de anexos, notificações). Fica aqui junto do
+         resto de conta/servidor, que é onde o usuário já procura ajuste. -->
+    <button class="am-item" role="menuitem" onclick={() => { configOpen = true; onClose?.(); }}>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.63.68 1.1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Configurações
+    </button>
+
+    <div class="am-sep"></div>
     <button class="am-item" role="menuitem" onclick={reconnect}>
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
       Reconectar
@@ -431,3 +442,13 @@
     .am-card { animation: none; }
   }
 </style>
+
+<!-- Portal pro <body>: no celular o AccountMenu vive DENTRO do drawer, que desliza com translateX.
+     Um position:fixed descendente de elemento transformado passa a se posicionar contra ELE — a
+     sheet renderizava fora da tela (x=-296) e parecia que nao abria. Mesmo motivo do portal do
+     ImageBubble/ModalDialog. -->
+{#if configOpen}
+  <div use:portal>
+    <ConfigSheet open={configOpen} onClose={() => (configOpen = false)} />
+  </div>
+{/if}

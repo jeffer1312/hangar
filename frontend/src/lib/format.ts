@@ -200,6 +200,26 @@ const _REL_RE = new RegExp(`(?<![\\w/~.:-])((?:[\\w.-]+/)+[\\w.-]+\\.(${_EXTS}))
 
 export interface FileRef { path: string; name: string; kind: FileKind; url?: string; }
 
+// Tipo de um arquivo pelo NOME (sem passar pelo parser de prosa acima) — a galeria de anexos já
+// recebe a lista pronta do backend e só precisa saber o que dá pra desenhar. null = extensão sem
+// preview (zip, txt, ...): quem chama mostra um chip genérico. Mesma tabela EXT_KIND do chat, pra
+// um .webp não ser imagem numa tela e "arquivo" na outra.
+export function fileKind(filename: string): FileKind | null {
+  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
+  return EXT_KIND[ext] ?? null;
+}
+
+// Tamanho legível em unidades binárias (o que o backend mede: st_size). 1 casa só a partir de MB —
+// "1.2 KB" é ruído; abaixo de 1 KB mostra os bytes crus.
+export function fmtBytes(n: number): string {
+  if (n < 1024) return `${Math.round(n)} B`;
+  const kb = n / 1024;
+  if (kb < 1024) return `${Math.round(kb)} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb.toFixed(1).replace(/\.0$/, '')} MB`;
+  return `${(mb / 1024).toFixed(1).replace(/\.0$/, '')} GB`;
+}
+
 export function parseFilePaths(text: string): FileRef[] {
   const out: FileRef[] = [];
   const seen = new Set<string>();

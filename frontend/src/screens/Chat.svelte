@@ -13,6 +13,7 @@
   import AskQuestionSheet from '../components/AskQuestionSheet.svelte';
   import RunSheet from '../components/RunSheet.svelte';
   import MoreSheet from '../components/MoreSheet.svelte';
+  import AttachmentsSheet from '../components/AttachmentsSheet.svelte';
   import CodexLimitsSheet from '../components/CodexLimitsSheet.svelte';
   import ForwardSheet from '../components/ForwardSheet.svelte';
   import PairSheet from '../components/PairSheet.svelte';
@@ -141,6 +142,8 @@
   let activityOpen = $state(false);
   // Menu "⋯" do celular: Rodar/Atividade saíram da NavBar pra sobrar largura pro nome da sessão.
   let moreOpen = $state(false);
+  // Galeria de anexos: "⋯" no celular, botao inline no desktop.
+  let anexosOpen = $state(false);
   let limitsOpen = $state(false);  // Task B: sheet de limites de uso Codex (badge da NavBar)
   let askPayload = $state<AskQuestionPayload | null>(null);
   let askOpen = $state(false);
@@ -232,9 +235,9 @@
   }
 
   const anyOverlayOpen = () =>
-    switcherOpen || createOpen || usageOpen || gitOpen || runOpen || previewOpen || activityOpen || limitsOpen || mirrorOpen || askOpen || moreOpen;
+    switcherOpen || createOpen || usageOpen || gitOpen || runOpen || previewOpen || activityOpen || limitsOpen || mirrorOpen || askOpen || moreOpen || anexosOpen;
   function closeOverlays() {
-    switcherOpen = createOpen = usageOpen = gitOpen = runOpen = previewOpen = activityOpen = limitsOpen = moreOpen = false;
+    switcherOpen = createOpen = usageOpen = gitOpen = runOpen = previewOpen = activityOpen = limitsOpen = moreOpen = anexosOpen = false;
     if (mirrorOpen) closeMirror();
     askOpen = false;
   }
@@ -909,7 +912,7 @@
 >
   <div class="sr-only" role="status">{stateAnnounce}</div>
   <div class="navbar-mount" bind:this={navEl}>
-    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} working={currentState === 'working'} providerLabel={isCodex ? 'Codex' : null} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
+    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={isCodex ? 'Codex' : null} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
 
     {#if loopSheetOpen}
       <LoopSheet open={true} sessionName={sessionName} onClose={() => (loopSheetOpen = false)} />
@@ -1065,7 +1068,9 @@
   <MoreSheet open={moreOpen} onClose={() => (moreOpen = false)}
              onRun={() => (runOpen = true)} {runRunning}
              onActivity={hasActivity ? () => (activityOpen = true) : undefined}
+             onAttachments={() => (anexosOpen = true)}
              {activityRunning} {activityBadge} />
+  <AttachmentsSheet open={anexosOpen} {sessionName} onClose={() => (anexosOpen = false)} />
 
   <CodexLimitsSheet open={limitsOpen} {sessionName} onClose={() => (limitsOpen = false)} />
 

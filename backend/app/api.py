@@ -29,10 +29,11 @@ from app.terminal_input import TerminalInput, drain
 from app.adapters import get_adapter
 from app.adapters.codex import sessions as codex_sessions
 from app.sse import merged_events
-from app.uploads import save_upload, resolve_upload, prune_old, UploadError, MAX_BYTES
+from app.uploads import save_upload, resolve_upload, prune_old, list_uploads, UploadError, MAX_BYTES
 from app.video import is_video, extract_frames, extract_audio
 from app.transcribe import transcribe, TranscribeError
 from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base, settings, automations_enabled
+from app import runtime_config
 from app.costs import report as costs_report
 from app.git_ops import (
     list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit, push as push_branch, GitError, branch_of,
@@ -381,14 +382,14 @@ def _on_hook_transition(session_id: str, state: str) -> None:
             _working_started[session_id] = m[1]
     elif state == "idle":
         started = _working_started.pop(session_id, None)
-        if started is not None and settings.notify_finished:
+        if started is not None and runtime_config.get("notify_finished"):
             m = hook_state.get_state(session_id)
             elapsed = (m[1] if m else time.time()) - started
-            if elapsed >= settings.finish_min_seconds:
+            if elapsed >= runtime_config.get("finish_min_seconds"):
                 _notify_async(session_id, push.notify_finished)
     elif state == "dead":
         _working_started.pop(session_id, None)
-        if settings.notify_dead:
+        if runtime_config.get("notify_dead"):
             _notify_async(session_id, push.notify_dead)
 
     if state == "awaiting_input":
@@ -1495,6 +1496,38 @@ def term_input(name: str, body: TermInputBody):
     return {"ok": True}
 
 
+@app.get("/api/config", dependencies=[Depends(require_auth)])
+def get_config():
+    """Config editavel pelo app + o que e so-leitura (exige reiniciar o servico).
+
+    Segredo NUNCA volta inteiro: `estado()` devolve mascarado (gsk_••••1234) — da pra conferir QUAL
+    chave esta la sem conseguir copia-la de volta."""
+    return {
+        "campos": runtime_config.estado(),
+        "somente_leitura": {
+            "port": settings.port,
+            "lan_bind_ip": settings.lan_bind_ip,
+            "server_id": settings.server_id,
+            "public_url": settings.public_url,
+            "scan_roots": settings.scan_roots,
+        },
+    }
+
+
+@app.patch("/api/config", dependencies=[Depends(require_auth)])
+async def patch_config(request: Request):
+    """Grava overrides. Campo desconhecido e ignorado (o cliente nao inventa setting); tipo errado
+    volta 400 com a mensagem, em vez de gravar lixo que so quebraria depois."""
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "corpo deve ser um objeto")
+    try:
+        await asyncio.to_thread(runtime_config.aplicar, body)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"campos": runtime_config.estado()}
+
+
 @app.post("/api/sessions/{name}/upload", dependencies=[Depends(require_auth)])
 async def upload(name: str, request: Request):
     # Resolve o cwd da sessao (registry.list() ja traz cwd via tmux #{pane_current_path}).
@@ -1521,7 +1554,7 @@ async def upload(name: str, request: Request):
     # Higiene: varre anexos velhos DESTA sessao. Barato (um listdir) e sem agendador pra manter.
     # Falhar aqui nao pode custar o upload que acabou de dar certo.
     try:
-        await asyncio.to_thread(prune_old, info.cwd, settings.upload_retention_days)
+        await asyncio.to_thread(prune_old, info.cwd, runtime_config.get("upload_retention_days"))
     except Exception:
         _log.exception("prune de uploads falhou (upload seguiu)")
 
@@ -1584,6 +1617,17 @@ def serve_upload(name: str, filename: str):
     except UploadError as e:
         raise HTTPException(e.status, e.detail)
     return FileResponse(path)
+
+
+@app.get("/api/sessions/{name}/uploads", dependencies=[Depends(require_auth)])
+def list_session_uploads(name: str):
+    # Galeria de anexos: a retencao vive no servidor, entao o prazo sai daqui pronto (o front so
+    # desenha). Le do runtime_config, nao do env cru — senao a galeria mostraria um prazo e o
+    # prune usaria outro.
+    info = next((s for s in registry.list() if s.name == name), None)
+    if info is None or not info.cwd:
+        raise HTTPException(404, "sessao nao encontrada")
+    return {"files": list_uploads(info.cwd, runtime_config.get("upload_retention_days"))}
 
 
 class CheckoutBody(_StrictBody):
@@ -1796,11 +1840,15 @@ def open_editor(name: str):
     # nao input do cliente) + arg unico validado -> sem shell, sem injecao. GUI precisa do DISPLAY/
     # WAYLAND_DISPLAY do backend (sessao grafica); sob systemd headless pode nao abrir -> 500.
     cwd = _session_cwd(name)
+    binario = runtime_config.get("editor")
+    # Rastro: com o editor editavel pelo app, um exec silencioso seria o caminho menos auditavel do
+    # backend (o fluxo normal de comando fica gravado no transcript; este nao ficava em lugar nenhum).
+    _log.info("OPEN-EDITOR name=%s bin=%r cwd=%r", name, binario, cwd)
     try:
-        subprocess.Popen([settings.editor, cwd],
+        subprocess.Popen([binario, cwd],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as e:
-        raise HTTPException(500, f"editor '{settings.editor}' falhou: {e}")
+        raise HTTPException(500, f"editor '{binario}' falhou: {e}")
     return {"ok": True}
 
 

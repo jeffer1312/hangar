@@ -19,6 +19,7 @@ import type {
   SessionLimits,
   CodexModelsResponse,
   LoopState,
+  UploadFile,
 } from './types';
 
 // URL da idx-ésima imagem (colada no terminal) de uma msg do transcript. `?token` porque <img> não
@@ -503,6 +504,32 @@ export async function broadcast(names: string[], text: string): Promise<Record<s
  * salva e devolve o path; o app depois manda a legenda + path pelo /input. O filename vai no header
  * X-Filename (percent-encoded) so pra extensao; o nome final e gerado pelo servidor. 401 -> self-heal.
  */
+// Lista os anexos JA enviados pra sessao (galeria). Sem timeout curto de propósito: roda sob
+// interação do usuário (abrir a sheet), não em poll — falhar rápido aqui só viraria erro à toa.
+export function listUploads(name: string): Promise<{ files: UploadFile[] }> {
+  return apiFetch<{ files: UploadFile[] }>(`/api/sessions/${encodeURIComponent(name)}/uploads`);
+}
+
+// ── Configuração do servidor ────────────────────────────────────────────────
+// O segredo (chave da Groq) volta MASCARADO — dá pra conferir qual chave está lá, não pra copiar.
+export interface CampoConfig {
+  valor: string | number | boolean | null;
+  definido: boolean;
+  origem: 'app' | 'env';
+}
+export interface ConfigServidor {
+  campos: Record<string, CampoConfig>;
+  somente_leitura: Record<string, string | number>;
+}
+
+export function getConfig(): Promise<ConfigServidor> {
+  return apiFetch('/api/config');
+}
+
+export function patchConfig(mudancas: Record<string, unknown>): Promise<{ campos: Record<string, CampoConfig> }> {
+  return apiFetch('/api/config', { method: 'PATCH', body: JSON.stringify(mudancas) });
+}
+
 export async function uploadFile(
   name: string,
   file: File,

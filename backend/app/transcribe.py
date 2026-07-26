@@ -4,6 +4,7 @@ import urllib.error
 import urllib.request
 
 from app.config import settings
+from app import runtime_config
 from app.uploads import _safe_ext
 
 # Transcricao de audio via Groq (whisper-large-v3-turbo). Groq aceita webm/mp4/m4a/mp3/wav/ogg
@@ -41,7 +42,7 @@ def build_multipart(filename: str, content: bytes) -> tuple[bytes, str]:
 def transcribe(content: bytes, filename: str | None) -> str:
     """Transcreve os bytes de audio via Groq e devolve o texto em UMA linha (send-keys rejeita '\\n').
     Levanta TranscribeError(status, detail): 503 sem chave, 502 falha/erro da Groq."""
-    api_key = settings.groq_api_key.strip()
+    api_key = (runtime_config.get("groq_api_key") or "").strip()
     if not api_key:
         raise TranscribeError(503, "GROQ_API_KEY (ou CP_GROQ_API_KEY) nao configurada no backend")
     # Nome enviado a Groq: FIXO no servidor, so a extensao sanitizada (_safe_ext) — nunca o nome cru do
