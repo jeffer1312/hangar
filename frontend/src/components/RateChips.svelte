@@ -14,29 +14,84 @@
   }
   let { status, onExpand, limited = false, limitReset = null }: Props = $props();
 
-  // Saturacao da janela: verde calmo -> ambar -> vermelho.
-  function pctClass(pct: number | undefined): string {
-    if (typeof pct !== 'number' || !isFinite(pct)) return '';
+  // ── Mostrador duplo ────────────────────────────────────────────────────────
+  // Dois aneis concentricos + os dois numeros empilhados no miolo. Antes eram duas pilulas com
+  // emoji (⚡37% 📅7%) que custavam 106px da navbar e deixavam o nome da sessao em "clau…"; o
+  // mostrador custa 48px. O buraco do meio e onde sobra espaco pro texto: 11px e 9px, contra os
+  // 7px que sobrariam no vao ENTRE os aneis.
+  //
+  // Quem fica em qual anel nao e arbitrario: a janela de 5h vai por FORA porque e a que anda (enche
+  // na sessao, zera no reset) e a circunferencia maior faz o mesmo % virar um arco bem mais longo.
+  // A de 7 dias vai por dentro, mais fina e apagada -- e informacao de ambiente.
+  const R_5H = 20;
+  const R_7D = 13.5;
+  const C_5H = 2 * Math.PI * R_5H;
+  const C_7D = 2 * Math.PI * R_7D;
+
+  // Mesmos limiares do ContextRing (70 / 90) — um vocabulario so de medidor no app inteiro.
+  function tone(pct: number | undefined): 'ok' | 'warn' | 'hot' {
+    if (typeof pct !== 'number' || !isFinite(pct)) return 'ok';
     if (pct >= 90) return 'hot';
-    if (pct >= 70) return 'warm';
-    return 'cool';
+    if (pct >= 70) return 'warn';
+    return 'ok';
+  }
+  function known(pct: number | undefined): boolean {
+    return typeof pct === 'number' && isFinite(pct);
+  }
+  function clamp(pct: number | undefined): number {
+    return known(pct) ? Math.min(100, Math.max(0, pct as number)) : 0;
+  }
+  // stroke-dashoffset: quanto FALTA pra fechar a volta.
+  function offset(pct: number | undefined, circumference: number): number {
+    return circumference * (1 - clamp(pct) / 100);
+  }
+  function label(pct: number | undefined): string {
+    return known(pct) ? String(Math.round(clamp(pct))) : '—';
   }
 
-  const has = $derived(
-    typeof status?.fiveHourPct === 'number' || typeof status?.weeklyPct === 'number' || limited
+  const five = $derived(status?.fiveHourPct);
+  const week = $derived(status?.weeklyPct);
+  const hasDial = $derived(known(five) || known(week));
+
+  // Texto pro leitor de tela: o desenho e aria-hidden, entao o rotulo carrega os dois numeros.
+  const a11y = $derived(
+    `Uso: 5 horas ${known(five) ? Math.round(clamp(five)) + '%' : 'sem dado'}` +
+    `, 7 dias ${known(week) ? Math.round(clamp(week)) + '%' : 'sem dado'}`,
   );
 </script>
 
-{#if has}
+{#if hasDial || limited}
   <div class="rate-chips">
-    {#if status && typeof status.fiveHourPct === 'number'}
-      <button class="rchip {pctClass(status.fiveHourPct)}" onclick={onExpand} aria-label="Janela de 5 horas">
-        <span aria-hidden="true">⚡</span>{status.fiveHourPct}%
-      </button>
-    {/if}
-    {#if status && typeof status.weeklyPct === 'number'}
-      <button class="rchip {pctClass(status.weeklyPct)}" onclick={onExpand} aria-label="Janela de 7 dias">
-        <span aria-hidden="true">📅</span>{status.weeklyPct}%
+    {#if hasDial}
+      <button class="dial tone-5-{tone(five)} tone-7-{tone(week)}" onclick={onExpand} aria-label={a11y} title={a11y}>
+        <svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true">
+          <!-- Fora: janela de 5 horas -->
+          <circle cx="22" cy="22" r={R_5H} class="track track-5h" />
+          {#if known(five)}
+            <circle
+              cx="22" cy="22" r={R_5H}
+              class="arc arc-5h"
+              stroke-dasharray={C_5H}
+              stroke-dashoffset={offset(five, C_5H)}
+              transform="rotate(-90 22 22)"
+            />
+          {/if}
+          <!-- Dentro: janela de 7 dias -->
+          <circle cx="22" cy="22" r={R_7D} class="track track-7d" />
+          {#if known(week)}
+            <circle
+              cx="22" cy="22" r={R_7D}
+              class="arc arc-7d"
+              stroke-dasharray={C_7D}
+              stroke-dashoffset={offset(week, C_7D)}
+              transform="rotate(-90 22 22)"
+            />
+          {/if}
+          <!-- Numeros empilhados na MESMA ordem dos aneis (de fora pra dentro = de cima pra baixo).
+               Sem "%": o anel ja diz que e percentual, e o espaco e curto. -->
+          <text x="22" y="19" class="num num-5h" text-anchor="middle" dominant-baseline="middle">{label(five)}</text>
+          <text x="22" y="29" class="num num-7d" text-anchor="middle" dominant-baseline="middle">{label(week)}</text>
+        </svg>
       </button>
     {/if}
     {#if limited}
@@ -57,6 +112,58 @@
     flex-shrink: 0;
   }
 
+  /* Alvo de toque de 44px sem inflar o desenho (que tem 44 de altura no proprio svg). */
+  .dial {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    min-width: 48px;
+    height: 44px;
+    min-height: 44px;
+    padding: 0;
+    flex-shrink: 0;
+    border-radius: var(--radius-sm);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .dial:active { background: var(--bg-hover); }
+  .dial svg { display: block; }
+
+  .track { fill: none; stroke: var(--border-default); }
+  .track-5h { stroke-width: 3.5; }
+  .track-7d { stroke-width: 2.5; }
+
+  .arc {
+    fill: none;
+    stroke-linecap: round;   /* garante uma marca visivel mesmo em 1-2% */
+    transition: stroke-dashoffset 600ms var(--ease-out), stroke 300ms ease;
+  }
+  /* Repouso = neutro. O indigo (--accent) fica reservado pro que e clicavel; um medidor calmo nao
+     precisa gritar. Quem sobe de tom e so o anel que passou do limiar. */
+  .arc-5h { stroke-width: 3.5; stroke: var(--text-secondary); }
+  .arc-7d { stroke-width: 2.5; stroke: var(--text-muted); opacity: 0.8; }
+
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    /* Mesma duracao do `stroke` do arco: numero e anel cruzam o limiar juntos, nao em tempos
+       diferentes (um saltando e o outro derretendo). */
+    transition: fill 300ms ease;
+  }
+  .num-5h { font-size: 11px; font-weight: 700; fill: var(--text-primary); }
+  .num-7d { font-size: 9px; font-weight: 600; fill: var(--text-muted); }
+
+  /* Cada anel tem a propria rampa: o 5h pode estar no vermelho com o 7d tranquilo, e vice-versa.
+     So o arco que apertou muda de cor — junto com o numero dele. */
+  .tone-5-warn .arc-5h { stroke: var(--warning); }
+  .tone-5-warn .num-5h { fill: var(--warning); }
+  .tone-5-hot .arc-5h { stroke: var(--error); }
+  .tone-5-hot .num-5h { fill: var(--error); }
+  .tone-7-warn .arc-7d { stroke: var(--warning); opacity: 1; }
+  .tone-7-warn .num-7d { fill: var(--warning); }
+  .tone-7-hot .arc-7d { stroke: var(--error); opacity: 1; }
+  .tone-7-hot .num-7d { fill: var(--error); }
+
   .rchip {
     display: inline-flex;
     align-items: center;
@@ -73,8 +180,5 @@
     color: var(--text-secondary);
     white-space: nowrap;
   }
-
-  .rchip.cool { color: var(--success); }
   .rchip.warm { color: var(--warning); }
-  .rchip.hot  { color: var(--error); }
 </style>

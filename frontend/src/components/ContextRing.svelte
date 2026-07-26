@@ -66,7 +66,9 @@
     font-weight: 600;
     fill: var(--text-secondary);
   }
-  .tone-ok .arc { stroke: var(--accent); }
+  /* Repouso = neutro, igual ao mostrador de quota do NavBar (RateChips): um vocabulario so de
+     medidor. O indigo fica reservado pro que e clicavel. */
+  .tone-ok .arc { stroke: var(--text-secondary); }
   .tone-warn .arc { stroke: var(--warning); }
   .tone-error .arc { stroke: var(--error); }
   .tone-warn .ring-text { fill: var(--warning); }
