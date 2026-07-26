@@ -19,7 +19,7 @@ from app.auth import require_auth
 from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
 from app.model_picker import PickerError
-from app.registry import SessionRegistry
+from app.registry import SessionRegistry, sanitize_session_name
 from app.models import (SessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody, RunInfo,
                         ProjectStatus)
 from app.pqueue import PromptQueue, _transcript_start_ts, committed_user_lines
@@ -587,7 +587,7 @@ def rename_session(name: str, body: RenameBody):
     from app import tmux
     # tmux nao aceita espaco/./: no nome -> sanitiza. O transcript NAO depende do nome (resolve por
     # /proc), entao renomear nao quebra o historico. Migra so o sidecar da fila (keyed por nome).
-    new = re.sub(r"[^A-Za-z0-9_-]", "-", body.new.strip()).strip("-")
+    new = sanitize_session_name(body.new)
     if not new:
         raise HTTPException(400, "nome invalido")
     if not tmux.has_session(name):
@@ -1856,7 +1856,7 @@ def resume_archived(project: str, session_id: str):
         raise HTTPException(404, "transcript not found")
     if not cwd:
         raise HTTPException(422, "cwd not found in transcript")
-    base = re.sub(r"[^A-Za-z0-9_-]", "-", Path(cwd).name).strip("-") or "sessao"
+    base = sanitize_session_name(Path(cwd).name) or "sessao"
     name, i = base, 2
     while tmux.has_session(name):
         name = f"{base}-{i}"
