@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 from fastapi import FastAPI, Depends
 from fastapi.testclient import TestClient
 from app.auth import require_auth
@@ -717,15 +718,50 @@ def test_events_route_passes_session_provider_to_merged_events():
     import asyncio
     info = SessionInfo(name="cx", cwd="/tmp", jsonl="/r/cx.jsonl", provider="codex")
 
-    async def _fake_merged_events(name, jsonl, provider="claude"):
+    async def _fake_merged_events(name, jsonl, provider="claude", start_offset=None):
         return
         yield  # pragma: no cover -- nunca alcancado; so torna isto um async generator
 
+    req = SimpleNamespace(query_params={}, headers={})
     with patch("app.api.registry.list", return_value=[info]), \
          patch("app.api.merged_events", side_effect=_fake_merged_events) as me:
-        resp = asyncio.run(api_mod.events("cx"))
+        resp = asyncio.run(api_mod.events("cx", req))
     assert resp is not None
-    me.assert_called_once_with("cx", "/r/cx.jsonl", provider="codex")
+    me.assert_called_once_with("cx", "/r/cx.jsonl", provider="codex", start_offset=None)
+
+
+def test_events_route_forwards_last_event_id_as_offset():
+    # O browser reenvia o Last-Event-ID sozinho na reconexao do EventSource -> vira o offset de
+    # retomada do tail. Sem isso a reconexao so tinha o backfill de 200 linhas (~2 min de trabalho
+    # pesado) e o miolo de uma queda mais longa se perdia.
+    import asyncio
+    info = SessionInfo(name="cx", cwd="/tmp", jsonl="/r/cx.jsonl", provider="claude")
+
+    async def _fake(name, jsonl, provider="claude", start_offset=None):
+        return
+        yield  # pragma: no cover
+
+    def _req(qs=None, hdr=None):
+        return SimpleNamespace(query_params=qs or {}, headers=hdr or {})
+
+    def _run(req):
+        with patch("app.api.registry.list", return_value=[info]), \
+             patch("app.api.merged_events", side_effect=_fake) as me:
+            asyncio.run(api_mod.events("cx", req))
+        return me.call_args.kwargs["start_offset"]
+
+    # O app fecha e recria o EventSource no proprio retry, e objeto novo nunca manda o header ->
+    # o caminho REAL e o query param. Header segue aceito (cliente que use retry nativo).
+    assert _run(_req(qs={"last_event_id": "cx:4096"})) == 4096
+    assert _run(_req(hdr={"last-event-id": "cx:4096"})) == 4096
+
+    # STEM DE OUTRO TRANSCRIPT (pos-/clear): honrar isso daria seek no meio do arquivo novo e
+    # PULARIA calado o inicio da conversa -> tem que cair no backfill.
+    assert _run(_req(qs={"last_event_id": "outro-uuid:4096"})) is None
+    # id sem stem / lixo / vazio -> backfill, nunca derruba a conexao.
+    assert _run(_req(qs={"last_event_id": "4096"})) is None
+    assert _run(_req(qs={"last_event_id": "cx:abc"})) is None
+    assert _run(_req()) is None
 
 
 def test_history_route_passes_session_provider_to_merged_history(api_client):

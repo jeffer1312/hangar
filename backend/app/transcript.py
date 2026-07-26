@@ -273,8 +273,21 @@ class TranscriptTailer:
                     # dela e nao avanca pos: a versao COMPLETA e relida no proximo evento do watcher.
                     fh.seek(start)
                     break
-                evs.extend(self._parse_line(line.decode("utf-8", "replace")))
+                parsed = self._parse_line(line.decode("utf-8", "replace"))
+                for ev in parsed:
+                    # Offset do INICIO da linha, nao do fim: uma linha pode render VARIOS eventos e
+                    # eles compartilham o id. Se o cliente recebeu so o 1o e reconectou, retomar
+                    # pelo fim PULARIA os irmaos. Pelo inicio a linha e relida inteira e o front
+                    # descarta o que ja tem (dedup por ev.id) -- sobreposicao barata, perda zero.
+                    ev.offset = start
+                evs.extend(parsed)
             return evs, fh.tell()
+
+    def _size(self) -> int:
+        try:
+            return self.path.stat().st_size
+        except OSError:
+            return 0
 
     def _tail_offset(self, max_lines: int) -> int:
         # Offset do inicio da (max_lines)-esima linha a partir do fim -> o follow() faz backfill so do
@@ -298,11 +311,23 @@ class TranscriptTailer:
         # do fim (com EXATAMENTE max_lines linhas, starts[0] == 0 = backfill completo, como antes).
         return starts[0] if len(starts) == max_lines else 0
 
-    async def follow(self) -> AsyncIterator[ChatEvent]:
-        # Backfill so do TAIL (ultimas _BACKFILL_LINES linhas), nao o arquivo inteiro. _tail_offset
-        # devolve 0 quando ha poucas linhas -> sessao curta mantem o backfill completo. A leitura roda
-        # no threadpool (nao bloqueia o loop); custo <= o _read_from(0) de antes (varredura sem parse).
-        pos = await asyncio.to_thread(self._tail_offset, _BACKFILL_LINES)
+    async def follow(self, start_offset: int | None = None) -> AsyncIterator[ChatEvent]:
+        """Backfill + watch de append. `start_offset` (do Last-Event-ID) retoma EXATAMENTE dali.
+
+        Sem ele, backfill so do TAIL (ultimas _BACKFILL_LINES linhas). Essa janela cobre ~2 min de
+        trabalho pesado (medido: mediana 44 linhas/min, pico 133) -- uma queda de celular mais longa
+        que isso perdia o miolo do buraco. Com o offset o resume e exato e barato (nao reenvia 200
+        linhas a cada reconexao). Offset invalido (arquivo trocado/truncado) cai no tail de sempre.
+        """
+        if start_offset is not None:
+            size = await asyncio.to_thread(self._size)
+            # Alem do EOF = transcript trocado ou truncado sob o cliente -> o offset nao significa
+            # mais nada. Volta pro tail em vez de retomar no lugar errado (ou reler o arquivo todo).
+            pos = start_offset if 0 <= start_offset <= size else None
+        else:
+            pos = None
+        if pos is None:
+            pos = await asyncio.to_thread(self._tail_offset, _BACKFILL_LINES)
         # backfill inicial + cada append: a leitura de arquivo roda no threadpool (nao bloqueia o loop).
         evs, pos = await asyncio.to_thread(self._read_from, pos)
         for ev in evs:

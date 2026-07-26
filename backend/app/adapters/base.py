@@ -11,7 +11,8 @@ from app.state import StateEvent
 class Adapter(Protocol):
     provider: str
 
-    def transcript_stream(self, path: str) -> AsyncIterator[ChatEvent]: ...
+    # start_offset: retomada exata via Last-Event-ID do SSE (None = backfill do tail).
+    def transcript_stream(self, path: str, start_offset: int | None = None) -> AsyncIterator[ChatEvent]: ...
 
     def state_monitor(self, name: str, sid_get: Callable[[], str]) -> AsyncIterator[StateEvent]: ...
 

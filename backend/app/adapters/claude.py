@@ -19,8 +19,8 @@ _SANITIZE_RE = re.compile(r"[^A-Za-z0-9]")
 class ClaudeAdapter:
     provider = "claude"
 
-    def transcript_stream(self, path: str) -> AsyncIterator[ChatEvent]:
-        return TranscriptTailer(path).follow()
+    def transcript_stream(self, path: str, start_offset: int | None = None) -> AsyncIterator[ChatEvent]:
+        return TranscriptTailer(path).follow(start_offset)
 
     def state_monitor(self, name: str, sid_get: Callable[[], str]) -> AsyncIterator[StateEvent]:
         return StateMonitor(name, sid_get=sid_get).stream()

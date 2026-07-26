@@ -27,7 +27,8 @@ def _norm(s: str) -> str:
 # (Read/Wrote/Found) que apareceria em prosa.
 _TOOL_VERBS = (
     "Running|Reading|Writing|Editing|Searching|Listing|Fetching|Updating|Creating|Deleting|"
-    "Crawling|Downloading|Globbing|Grepping|Waiting|Loading|Compiling|Building|Installing|Ran"
+    "Crawling|Downloading|Globbing|Grepping|Waiting|Loading|Compiling|Building|Installing|Ran|"
+    "Making"
 )
 _TOOL_BLOCK_RE = re.compile(rf"^([A-Z][\w-]*\(|({_TOOL_VERBS})\b)")
 

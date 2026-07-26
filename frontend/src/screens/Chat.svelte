@@ -75,6 +75,8 @@
   let error = $state('');
   let es: EventSource | null = null;
   let watchdog: ReturnType<typeof setTimeout> | undefined;     // liveness: reconecta se a conexao morrer calada
+  // Última posição recebida do transcript; reenviada no reconnect pra retomar exatamente dali.
+  let lastEventId: string | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let screenEl: HTMLElement | undefined = $state();
   let pending = $state<{ id: string; text: string; solid?: boolean }[]>([]);
@@ -425,11 +427,15 @@
     clearTimeout(reconnectTimer);
     if (es) { es.close(); es = null; }
 
-    es = openEventStream(sessionName);
+    es = openEventStream(sessionName, lastEventId);
     armWatchdog();
 
     es.addEventListener('message', (e: MessageEvent) => {
       noteAlive();
+      // Guarda a posição de retomada. Só o transcript carrega id ("<stem>:<offset>"); state/preview/
+      // ping vêm sem, de propósito — o último id visto tem que ser sempre o do transcript, senão a
+      // retomada apontaria pro lugar errado e pularia mensagens.
+      if (e.lastEventId) lastEventId = e.lastEventId;
       try {
         const ev = JSON.parse(e.data) as ChatEvent;
         // Dedup cruzado fila<->transcript: a fila duravel emite user_msg sintetico (id "queued-").
@@ -528,6 +534,7 @@
     // bolhas antigas (ids diferentes) -> zera tudo e recarrega o history do jsonl novo (vem limpo).
     es.addEventListener('reset', () => {
       noteAlive();
+      lastEventId = null;   // transcript trocado (/clear): id do arquivo antigo não vale mais
       events = [];
       idIndex.clear();
       reseedDerived();          // zera activity/asstCount junto (loadHistory re-semeia com o novo)
