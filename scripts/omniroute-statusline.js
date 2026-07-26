@@ -15,10 +15,15 @@ process.stdin.on('end', () => {
   try {
     const data = JSON.parse(input);
 
+    // Sessão rodando em motor de terceiro (engines.json, via cp-engine --exec). O que o Claude Code
+    // calcula com PREÇO da Anthropic deixa de valer aqui — e no Kimi Code, que é assinatura de valor
+    // fixo, qualquer valor em dólar é ficção. Número errado é pior que número nenhum.
+    const engine = process.env.CP_ENGINE || '';
+
     // Expoe o custo REAL da sessao (Claude Code passa cost.total_cost_usd aqui) num arquivo temp que
     // o cost-tracker do ecc le como fonte autoritativa -> ele mostra ~$30 real em vez da estimativa
     // por soma de tokens (que infla em sessao longa). Contrato: {ts:<unix s>, cost_usd} valido <=300s.
-    try {
+    if (!engine) try {
       const sid = data.session_id;
       const costUsd = data.cost?.total_cost_usd;
       if (sid && typeof costUsd === 'number') {
@@ -174,10 +179,11 @@ process.stdin.on('end', () => {
       effortSuffix = ' (thinking)';
     }
 
-    // Custo da sessão (built-in do Claude Code; só aparece quando preenchido)
+    // Custo da sessão (built-in do Claude Code). Em motor NÃO aparece: vem da tabela de preço da
+    // Anthropic e não corresponde ao provedor. Consultar o painel dele.
     let cost = '';
     const usd = data.cost?.total_cost_usd;
-    if (usd != null) {
+    if (!engine && usd != null) {
       cost = ' \x1b[32m💵 $' + usd.toFixed(2) + '\x1b[0m';
     }
 
