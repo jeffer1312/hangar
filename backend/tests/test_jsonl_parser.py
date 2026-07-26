@@ -208,3 +208,35 @@ async def test_tailer_yields_existing_then_new(tmp_path):
 
     await asyncio.wait_for(asyncio.gather(consume(), append()), timeout=5)
     assert [e.id for e in got] == ["u1", "a1"]
+
+
+# --- fim de agente ENFILEIRADO -------------------------------------------------------------
+# Agente de background que termina com o assistente NO MEIO de um turno nao vira mensagem de user:
+# o harness grava uma entrada `queue-operation`/enqueue, sem `message` e sem `uuid`. Ela morria no
+# early-return de `message` e o painel de Atividade ficava com o agente "RODANDO AGORA" pra sempre.
+
+_QUEUED = json.dumps({
+    "type": "queue-operation",
+    "operation": "enqueue",
+    "sessionId": "s1",
+    "content": "<task-notification>\n<task-id>a4e4f68c8a3c46749</task-id>\n"
+               "<status>completed</status>\n</task-notification>",
+})
+
+
+def test_task_notification_enfileirada_vira_tool_result_sintetico():
+    evs = parse_line(_QUEUED)
+    assert len(evs) == 1
+    assert evs[0].kind == "tool_result"
+    assert evs[0].tool_use_id == "task:a4e4f68c8a3c46749"   # e o que o fold do painel casa
+
+
+def test_queue_operation_sem_task_notification_e_ignorada():
+    # Enfileiramento de prompt normal do usuario NAO pode virar evento de chat.
+    ev = json.dumps({"type": "queue-operation", "operation": "enqueue",
+                     "sessionId": "s1", "content": "roda os testes"})
+    assert parse_line(ev) == []
+
+
+def test_queue_operation_sem_content_nao_explode():
+    assert parse_line(json.dumps({"type": "queue-operation", "operation": "enqueue"})) == []
