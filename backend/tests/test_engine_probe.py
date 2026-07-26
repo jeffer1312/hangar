@@ -87,6 +87,68 @@ def test_buscar_caminho_feliz_com_bytes_invalidos_nao_estoura_unicodedecodeerror
         engine_probe._buscar("https://x.y", "sk-x")
 
 
+# ---------------------------------------------------------------------------
+# Fix wave (pré-push), item 2: `-> dict[str, Any]` é só o type hint. Um provedor que devolve um
+# array ou escalar no topo satisfaz a assinatura e não o runtime — listar_modelos() chamaria
+# `.get("data")` num objeto que não tem `.get`, e isso é um 500 com traceback, não o 502 com a
+# mensagem do provedor que este módulo promete em todo outro caminho malformado.
+# ---------------------------------------------------------------------------
+
+def test_resposta_top_level_lista_estoura_runtimeerror_nao_attributeerror(monkeypatch):
+    corpo = json.dumps([1, 2, 3]).encode()
+
+    class _Resposta:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return corpo
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: _Resposta())
+    with pytest.raises(RuntimeError, match="inesperado"):
+        engine_probe._buscar("https://x.y", "sk-x")
+
+
+def test_resposta_top_level_escalar_estoura_runtimeerror_nao_attributeerror(monkeypatch):
+    corpo = json.dumps("oops").encode()
+
+    class _Resposta:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return corpo
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: _Resposta())
+    with pytest.raises(RuntimeError, match="inesperado"):
+        engine_probe._buscar("https://x.y", "sk-x")
+
+
+# ---------------------------------------------------------------------------
+# Fix wave (pré-push), item 3: a key vai pro header Authorization sem checar \r/\n. urllib recusa
+# o header ("Invalid header value b'Bearer sk-x\r\n...'") mas a mensagem ECOA a key crua, e isso
+# vira traceback no log do uvicorn/journal (POST /api/engines/modelos só pega RuntimeError e
+# relança pra logar). Validar ANTES de montar o Request barra o vazamento na origem.
+# ---------------------------------------------------------------------------
+
+def test_buscar_recusa_key_com_crlf_antes_de_montar_o_request():
+    with pytest.raises(ValueError) as exc:
+        engine_probe._buscar("https://x.y", "sk-secreta\r\nX-Evil: 1")
+    assert "sk-secreta" not in str(exc.value)
+
+
+def test_buscar_recusa_base_url_com_crlf_antes_de_montar_o_request():
+    with pytest.raises(ValueError) as exc:
+        engine_probe._buscar("https://x.y\r\nEvil: 1", "sk-x")
+    assert "sk-x" not in str(exc.value)
+
+
 def test_buscar_caminho_feliz_monta_o_header_e_le_o_json(monkeypatch):
     corpo = json.dumps({"data": [{"id": "k3"}]}).encode()
 

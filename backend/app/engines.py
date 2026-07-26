@@ -16,6 +16,7 @@ quebraria o terminal, deixando só o app funcionando. Há teste que trava isso.
 """
 import ipaddress
 import json
+import logging
 import os
 import re
 import tempfile
@@ -23,6 +24,8 @@ import threading
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+
+_log = logging.getLogger(__name__)
 
 # Campos aceitos. Qualquer outro é descartado: o cliente não inventa campo (mesma regra do
 # runtime_config.EDITAVEIS). Não há campo de "esforço": medido que o provedor pode ignorar o pedido
@@ -53,21 +56,59 @@ def caminho() -> Path:
     return Path(os.environ.get("CP_ENGINES_FILE") or (Path.home() / ".claude" / "engines.json"))
 
 
+def _estado() -> tuple[dict[str, Any], bool]:
+    """Lê o arquivo bruto. Devolve (dict, corrompido).
+
+    Ausente é o estado NORMAL — ninguém configurou motor ainda — e fica calado (corrompido=False):
+    logar aqui incomodaria em todo boot/tick do SSE de quem nunca usou a feature. Presente mas
+    ilegível (JSON quebrado, ou não é um objeto) é ANORMAL: é o achado do review — um typo no
+    hand-edit quebra o arquivo, listar() volta {} igual a "nunca configurou nada", o usuário re-adiciona
+    um motor achando que é a primeira vez, e a gravação por cima apaga os outros motores e suas
+    keys, calado. Loga aqui pra não repetir; quem grava (salvar/remover) usa o corrompido=True pra
+    recusar a escrita.
+    """
+    p = caminho()
+    try:
+        texto = p.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}, False
+    except OSError as e:
+        _log.warning("engines.json (%s) não pôde ser lido: %s — tratando como vazio nesta leitura, "
+                     "mas recusando sobrescrever até alguém corrigir ou mover o arquivo.", p, e)
+        return {}, True
+    try:
+        d = json.loads(texto)
+    except ValueError as e:  # inclui json.JSONDecodeError
+        _log.warning("engines.json (%s) existe mas não é JSON válido (%s) — tratando como vazio "
+                     "nesta leitura, mas recusando sobrescrever até alguém corrigir ou mover o "
+                     "arquivo.", p, e)
+        return {}, True
+    if not isinstance(d, dict):
+        _log.warning("engines.json (%s) não é um objeto JSON — tratando como vazio nesta leitura, "
+                     "mas recusando sobrescrever até alguém corrigir ou mover o arquivo.", p)
+        return {}, True
+    return d, False
+
+
 def listar() -> dict[str, dict[str, Any]]:
     """Motores gravados, com a api_key INTEIRA. Quem devolve ao cliente mascara na borda HTTP."""
-    try:
-        with open(caminho(), encoding="utf-8") as fh:
-            d = json.load(fh)
-    except (OSError, json.JSONDecodeError):
-        # Ausente/corrompido não derruba backend nem terminal: sem motor, vale o de hoje (Anthropic).
-        return {}
-    if not isinstance(d, dict):
-        return {}
+    d, _corrompido = _estado()
     # O nome vira parte de um `$SHELL -c` (registry.py monta `cp-engine --exec {nome} -- ...`).
     # salvar() já barra nome fora do padrão, mas o arquivo é hand-editável (0600, mas ainda assim);
     # pular o registro corrupto em vez de derrubar a lista inteira — um motor ruim não pode tirar
     # os outros do ar.
     return {nome: v for nome, v in d.items() if isinstance(nome, str) and _NOME_OK.match(nome)}
+
+
+def arquivo_corrompido() -> bool:
+    """True quando engines.json existe mas não pôde ser lido como JSON de motores.
+
+    listar() devolve {} tanto pra isto quanto pra "nunca configurou nada" (de propósito — não pode
+    derrubar sessão nem o tick do SSE por um hand-edit ruim). A API usa este sinal à parte pra tela
+    parar de dizer "nenhum motor ainda" quando na verdade há um arquivo quebrado escondendo motores
+    reais (o item 1 do review).
+    """
+    return _estado()[1]
 
 
 def _host_local(host: str) -> bool:
@@ -129,11 +170,25 @@ def _normalizar(nome: str, dados: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _atual_ou_recusa() -> dict[str, dict[str, Any]]:
+    # Chamado só de dentro do _LOCK por salvar()/remover(). Corrompido = recusa a escrita: perder
+    # esta gravação é recuperável (usuário tenta de novo depois de corrigir o arquivo); perder o
+    # arquivo inteiro sobrescrito com {} + um registro novo não é (o achado do item 1 do review).
+    d, corrompido = _estado()
+    if corrompido:
+        raise ValueError(
+            f"engines.json ({caminho()}) existe mas está corrompido (JSON inválido); corrija-o à "
+            "mão ou mova-o antes de salvar/remover — gravar por cima agora apagaria os outros "
+            "motores e as keys deles."
+        )
+    return {nome: v for nome, v in d.items() if isinstance(nome, str) and _NOME_OK.match(nome)}
+
+
 def salvar(nome: str, dados: dict[str, Any]) -> dict[str, Any]:
     """Grava um motor. Campo desconhecido é descartado; inválido levanta ValueError."""
     registro = _normalizar(nome, dados)
     with _LOCK:
-        atual = listar()
+        atual = _atual_ou_recusa()
         atual[nome] = registro
         _gravar(atual)
     return registro
@@ -141,7 +196,7 @@ def salvar(nome: str, dados: dict[str, Any]) -> dict[str, Any]:
 
 def remover(nome: str) -> bool:
     with _LOCK:
-        atual = listar()
+        atual = _atual_ou_recusa()
         if nome not in atual:
             return False
         del atual[nome]

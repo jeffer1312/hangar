@@ -3,6 +3,8 @@
 Essa segunda parte já mordeu uma vez no ConfigSheet (commit 22ae599): o cliente recebe a chave
 MASCARADA, e se o PUT tratar essa máscara como valor novo, a key real morre sem volta.
 """
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch
@@ -192,6 +194,30 @@ def test_create_sessao_com_motor_valido_repassa_a_keyword(cli):
         r = cli.post("/api/sessions", json={"name": "x", "cwd": "/tmp", "engine": "kimi"}, headers=AUTH)
     assert r.status_code == 200
     cr.assert_called_once_with("x", "/tmp", None, engine="kimi")
+
+
+# ---------------------------------------------------------------------------
+# Fix wave (pré-push), item 3: a key nunca pode chegar no corpo de um erro nem no log do servidor.
+# Reproduz os DOIS caminhos que o security reviewer achou: chave colada com CRLF (probe ad-hoc) e
+# chave SALVA hand-editada com CRLF (via {"nome": ...}, que lê do disco sem a revalidação do env_de).
+# ---------------------------------------------------------------------------
+
+def test_modelos_recusa_key_com_crlf_sem_ecoar_a_chave(cli):
+    r = cli.post("/api/engines/modelos",
+                 json={"base_url": "https://api.kimi.com/coding", "api_key": "sk-secreta\r\nX-Evil: 1"},
+                 headers=AUTH)
+    assert r.status_code == 400
+    assert "sk-secreta" not in r.text
+
+
+def test_modelos_recusa_key_salva_com_crlf_hand_editada(cli):
+    cli.put("/api/engines/kimi", json=_kimi(), headers=AUTH)
+    bruto = json.loads(eng.caminho().read_text(encoding="utf-8"))
+    bruto["kimi"]["api_key"] = "sk-kimi-abcdefgh1234\r\nX-Evil: 1"
+    eng.caminho().write_text(json.dumps(bruto), encoding="utf-8")
+    r = cli.post("/api/engines/modelos", json={"nome": "kimi"}, headers=AUTH)
+    assert r.status_code == 400
+    assert "sk-kimi-abcdefgh1234" not in r.text
 
 
 _SID = "11111111-1111-1111-1111-111111111111"

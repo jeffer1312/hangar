@@ -34,6 +34,10 @@
   // resume segue sem motor (nao pode travar o resume).
   let engine = $state('');
   let motores = $state<Record<string, Motor>>({});
+  // Guard de corrida (mesmo padrao do cfgSeq em CreateSessionSheet): Archive navega multi-servidor,
+  // e dois toques rapidos em conversas de servidores DIFERENTES deixam getEngines() em voo -- sem
+  // isto a resposta do servidor ERRADO aterrissa por cima da certa e oferece motores de outro host.
+  let motorSeq = 0;
 
   // Servidor DE ONDE navegar o arquivo: apiFetch usa o servidor ATIVO, entao sem um seletor o arquivo
   // so mostrava o servidor ativo e nao dava pra saber/escolher de qual servidor abrir (multi-servidor).
@@ -96,8 +100,11 @@
     resumeError = '';
     engine = '';
     motores = {};
+    const seq = ++motorSeq;
     // Best-effort: sem isto o seletor de motor nao aparece, mas retomar continua funcionando.
-    getEngines().then((r) => (motores = r.motores)).catch(() => (motores = {}));
+    getEngines()
+      .then((r) => { if (seq === motorSeq) motores = r.motores; })
+      .catch(() => { if (seq === motorSeq) motores = {}; });
     try {
       events = await getArchiveHistory(e.project, e.session_id);
     } catch {

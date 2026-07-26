@@ -8,6 +8,7 @@ que é o motor pedido).
 """
 import ast
 import json
+import logging
 import os
 import pathlib
 import subprocess
@@ -226,6 +227,54 @@ def test_env_de_rejeita_context_window_envenenado_hand_editado():
     eng.caminho().write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError):
         eng.env_de("kimi")
+
+
+# ---------------------------------------------------------------------------
+# Fix wave (pré-push), item 1: arquivo corrompido não pode virar "nenhum motor configurado" calado.
+# O bug real: hand-edit typo quebra o JSON, listar() some com kimi+omniroute, sheet mostra "nenhum
+# motor ainda", usuário re-adiciona "kimi" achando que é a primeira vez, e salvar() (que chamava
+# listar() -> {}) sobrescrevia o disco só com o kimi novo — omniroute e a key dele, perdidos pra
+# sempre, sem log e sem aviso.
+# ---------------------------------------------------------------------------
+
+def test_arquivo_corrompido_loga_o_aviso(caplog):
+    eng.caminho().write_text("{lixo", encoding="utf-8")
+    with caplog.at_level(logging.WARNING, logger="app.engines"):
+        assert eng.listar() == {}
+    assert any("engines.json" in r.getMessage() for r in caplog.records)
+
+
+def test_arquivo_ausente_fica_quieto(caplog):
+    # Ausente é o estado NORMAL (ninguém configurou nada ainda) — não pode logar warning a cada
+    # boot/tick do SSE só porque o usuário nunca cadastrou um motor.
+    with caplog.at_level(logging.WARNING, logger="app.engines"):
+        assert eng.listar() == {}
+    assert caplog.records == []
+
+
+def test_arquivo_corrompido_reporta_true_so_quando_ilegivel():
+    assert eng.arquivo_corrompido() is False
+    eng.caminho().write_text("{lixo", encoding="utf-8")
+    assert eng.arquivo_corrompido() is True
+
+
+def test_salvar_recusa_gravar_por_cima_de_arquivo_corrompido():
+    bruto = "{lixo"
+    eng.caminho().write_text(bruto, encoding="utf-8")
+    with pytest.raises(ValueError, match="corrompido"):
+        eng.salvar("kimi", _kimi())
+    # O ponto inteiro do fix: perder a GRAVAÇÃO é recuperável (o usuário tenta de novo depois de
+    # corrigir o arquivo); perder o ARQUIVO (sobrescrito com {"kimi": ...} só) não é. Bytes no disco
+    # têm que continuar exatamente os mesmos de antes da chamada.
+    assert eng.caminho().read_text(encoding="utf-8") == bruto
+
+
+def test_remover_recusa_gravar_por_cima_de_arquivo_corrompido():
+    bruto = "{lixo"
+    eng.caminho().write_text(bruto, encoding="utf-8")
+    with pytest.raises(ValueError, match="corrompido"):
+        eng.remover("kimi")
+    assert eng.caminho().read_text(encoding="utf-8") == bruto
 
 
 def test_listar_pula_nome_invalido_sem_derrubar_os_outros():
