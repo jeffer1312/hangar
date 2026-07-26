@@ -20,24 +20,34 @@
 #
 # Escape hatch: `command claude ...` runs the raw binary, bypassing this wrapper.
 function claude
+    # Motor de modelo (claude-engine setou CP_ENGINE): o env é aplicado DENTRO do pane pelo
+    # `cp-engine --exec`, não por `tmux -e`. Dois motivos: (1) tmux não herda o env de quem chama, e
+    # (2) `-e ANTHROPIC_AUTH_TOKEN=…` deixaria a key visível em /proc/<pid>/cmdline para qualquer
+    # usuário da máquina. Depois do exec, o cmdline é o do claude — sem segredo. Construído ANTES do
+    # scan de flags abaixo porque -c/--resume/--session-id saem por um early return e também
+    # precisam do prefixo — senão o motor é silenciosamente ignorado e a sessão sobe na conta
+    # Anthropic.
+    set -l pre
+    if set -q CP_ENGINE; and test -n "$CP_ENGINE"
+        set pre cp-engine --exec $CP_ENGINE --
+    end
+
     for a in $argv
         switch $a
             case --session-id '--session-id=*' --resume '--resume=*' -c --continue
-                command claude $argv
+                # mesmo bypass de `command` do caminho "só injeta o id" abaixo: sem motor, chama o
+                # binário direto (evita recursão na função); com motor, quem executa é o cp-engine
+                # (processo à parte achado no PATH) — `command` não existiria pra ele executar.
+                if test (count $pre) -eq 0
+                    command claude $argv
+                else
+                    $pre claude $argv
+                end
                 return
         end
     end
 
     set -l id (uuidgen)
-
-    # Motor de modelo (claude-engine setou CP_ENGINE): o env é aplicado DENTRO do pane pelo
-    # `cp-engine --exec`, não por `tmux -e`. Dois motivos: (1) tmux não herda o env de quem chama, e
-    # (2) `-e ANTHROPIC_AUTH_TOKEN=…` deixaria a key visível em /proc/<pid>/cmdline para qualquer
-    # usuário da máquina. Depois do exec, o cmdline é o do claude — sem segredo.
-    set -l pre
-    if set -q CP_ENGINE; and test -n "$CP_ENGINE"
-        set pre cp-engine --exec $CP_ENGINE --
-    end
 
     # TMUX herdado pode estar MORTO (ex: kitty single-instance cujo mestre nasceu dentro de um pane
     # que já fechou -> todo terminal novo herda TMUX/TMUX_PANE stale). Sem esta guarda, o wrapper
