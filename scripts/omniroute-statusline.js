@@ -6,6 +6,81 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 
+// ─── Quota das sessões de motor ──────────────────────────────────────────────
+// O Claude Code só preenche `rate_limits` falando com a Anthropic; num motor ele vem vazio e os
+// chips ⚡5h/📅7d somem. Cada provedor expõe a própria quota, mas por HTTP — e a statusline roda a
+// cada render, então NUNCA pode esperar rede aqui. Contrato: o render lê um cache e desenha; se o
+// cache estiver velho, dispara este mesmo script destacado (`--refresh-usage`) e segue com o que tem.
+const USAGE_TTL_S = 60;
+const usageCache = eng => path.join(os.tmpdir(), `cp-engine-usage-${eng.replace(/[^\w.-]/g, '_')}.json`);
+
+// {limit,used,resetTime} do provedor -> {pct, reset} que os chips já sabem desenhar.
+const janela = (lim, used, resetTime) => {
+  const l = Number(lim), u = Number(used), r = Date.parse(resetTime);
+  if (!(l > 0) || !Number.isFinite(u)) return null;
+  return { pct: (u / l) * 100, reset: Number.isFinite(r) ? Math.floor(r / 1000) : null };
+};
+
+async function refreshUsage(name) {
+  const eng = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'engines.json'), 'utf8'))[name];
+  if (!eng?.base_url || !eng?.api_key) return;
+  const base = eng.base_url.replace(/\/+$/, '');
+  const h = { Authorization: 'Bearer ' + eng.api_key, Accept: 'application/json' };
+  let erro = null;
+  // Timeout obrigatório: o refresher roda destacado com stdio ignorado, então um provedor que não
+  // responde deixaria um node órfão pendurado pra sempre — um novo a cada ciclo de TTL.
+  const get = async p => {
+    const r = await fetch(base + p, { headers: h, signal: AbortSignal.timeout(8000) });
+    return r.ok ? r.json() : null;
+  };
+  let janelas = null;
+
+  // Kimi Code: GET /v1/usages -> `usage` (semanal) + `limits[]` (a de duration 300min = 5h).
+  try {
+    const j = await get('/v1/usages');
+    if (j?.usage) janelas = [
+      ...(j.limits || []).map(w => janela(w.detail?.limit, w.detail?.used, w.detail?.resetTime)),
+      janela(j.usage.limit, j.usage.used, j.usage.resetTime),
+    ];
+  } catch (e) { erro = [erro, String(e)].filter(Boolean).join(' | '); }
+
+  // OmniRoute: a quota é a do provedor UPSTREAM, então precisa da connection que atende esta key.
+  // Descoberta sem id chumbado: `keyPrefix` casa a nossa chave em /api/keys, e o call-log mais
+  // recente dessa key aponta a connection viva.
+  // Sem casar a NOSSA key não dá pra seguir: pegar o call-log de qualquer key mostraria a quota de
+  // outra conta como se fosse desta sessão — mentira pior do que chip nenhum.
+  if (!janelas) try {
+    const keys = (await get('/api/keys'))?.keys || [];
+    const eu = keys.find(k => k.keyPrefix && eng.api_key.startsWith(k.keyPrefix));
+    const logs = eu ? (await get('/api/usage/call-logs?limit=50')) || [] : [];
+    // Ordem do array e detalhe de implementacao da API: ordena pelo timestamp do proprio log, senao
+    // uma mudanca de paginacao la resolveria uma connection velha sem erro nenhum aqui.
+    const log = logs
+      .filter(l => l.connectionId && l.apiKeyId === eu.id)
+      .sort((a, b) => Date.parse(b.timestamp || 0) - Date.parse(a.timestamp || 0))[0];
+    if (log) {
+      const q = (await get('/api/usage/' + log.connectionId))?.quotas || {};
+      janelas = Object.values(q).filter(x => x && !x.unlimited).map(x => janela(x.total, x.used, x.resetAt));
+    }
+  } catch (e) { erro = [erro, String(e)].filter(Boolean).join(' | '); }
+
+  // Grava sempre: a falha fica NO cache (campo `erro`), senão não dá pra distinguir no disco
+  // "dentro do TTL" de "quebrado faz uma semana". Falha transitória não derruba a quota boa.
+  janelas = (janelas || []).filter(Boolean);
+  let anterior = null;
+  try { anterior = JSON.parse(fs.readFileSync(usageCache(name), 'utf8')); } catch {}
+  fs.writeFileSync(usageCache(name), JSON.stringify({
+    ts: Math.floor(Date.now() / 1000),
+    janelas: janelas.length ? janelas : (Array.isArray(anterior?.janelas) ? anterior.janelas : []),
+    ...(erro && !janelas.length ? { erro } : {}),
+  }));
+}
+
+if (process.argv[2] === '--refresh-usage' && process.argv[3]) {
+  refreshUsage(process.argv[3]).catch(() => {}).finally(() => process.exit(0));
+  return;
+}
+
 const stdinTimeout = setTimeout(() => process.exit(0), 3000);
 let input = '';
 process.stdin.setEncoding('utf8');
@@ -100,12 +175,51 @@ process.stdin.on('end', () => {
     }
 
     // Rate limits nativos
+    let quotaAviso = '';  // '⚠' quando a ultima leitura de quota falhou: o valor exibido e velho
     let rateLimit = '';
     let sevenDay = '';
-    const fh = fiveHourPct;
-    const sd = sevenDayPct;
-    const fhReset = fiveHourResets;
-    const sdReset = sevenDayResets;
+    let fh = fiveHourPct;
+    let sd = sevenDayPct;
+    let fhReset = fiveHourResets;
+    let sdReset = sevenDayResets;
+
+    // Motor: os nativos vêm vazios (só a Anthropic os manda). Preenche com a quota do provedor,
+    // cacheada pelo --refresh-usage. Cada janela vira o chip pela DISTÂNCIA do reset — ⚡ pra curta,
+    // 📅 pra longa — porque nem todo provedor tem exatamente 5h/7d (o Kimi tem; o OmniRoute reporta
+    // só a do upstream). Cache vazio = sem chip: melhor faltar do que inventar número.
+    // O try de fora isola o chip como todo recurso opcional deste arquivo já faz (git, tmux,
+    // kubectl): cache num formato inesperado derruba a quota, nunca a statusline inteira.
+    if (engine) try {
+      const agora = Math.floor(Date.now() / 1000);
+      let cache = null;
+      try { cache = JSON.parse(fs.readFileSync(usageCache(engine), 'utf8')); } catch {}
+      const janelas = Array.isArray(cache?.janelas) ? cache.janelas : [];
+      if (!cache || !(agora - cache.ts <= USAGE_TTL_S)) {
+        // Carimba SEMPRE (sem isto cada render, ~300ms, subiria um refresher novo), mas o carimbo
+        // leva junto a falha do spawn: senao um spawn barrado (EMFILE, sandbox) congelaria o chip
+        // pra sempre parecendo fresco, e o `erro` do refresher nunca chegaria a ser escrito.
+        let erroSpawn = null;
+        if (!process.env.CP_STATUSLINE_NO_REFRESH) {
+          try {
+            require('child_process')
+              .spawn(process.execPath, [__filename, '--refresh-usage', engine],
+                     { detached: true, stdio: 'ignore' })
+              .unref();
+          } catch (e) { erroSpawn = 'spawn: ' + e; }
+        }
+        try {
+          fs.writeFileSync(usageCache(engine), JSON.stringify(
+            { ts: agora, janelas, ...(erroSpawn ? { erro: erroSpawn } : {}) }));
+        } catch {}
+      }
+      if (cache?.erro) quotaAviso = '⚠';
+      for (const j of janelas) {
+        if (typeof j?.pct !== 'number') continue;
+        const curta = j.reset == null || j.reset - agora < 86400;
+        if (curta && fh == null) { fh = j.pct; fhReset = j.reset; }
+        else if (!curta && sd == null) { sd = j.pct; sdReset = j.reset; }
+      }
+    } catch {}
 
     if (fh != null) {
       let resetStr = '';
@@ -116,7 +230,7 @@ process.stdin.on('end', () => {
         else if (m > 0) { resetStr = ' ↺' + m + 'm'; }
       }
       const c = fh < 50 ? '\x1b[32m' : fh < 75 ? '\x1b[33m' : '\x1b[91m';
-      rateLimit = ' ' + c + '⚡5h:' + Math.round(fh) + '%' + resetStr + '\x1b[0m';
+      rateLimit = ' ' + c + '⚡5h:' + Math.round(fh) + '%' + quotaAviso + resetStr + '\x1b[0m';
     }
     if (sd != null) {
       let resetStr = '';
@@ -131,7 +245,7 @@ process.stdin.on('end', () => {
         resetStr = ' ↺' + dias[d.getDay()] + ' ' + d.getHours() + 'h·' + left;
       }
       const c = sd < 50 ? '\x1b[32m' : sd < 75 ? '\x1b[33m' : '\x1b[91m';
-      sevenDay = ' ' + c + '📅7d:' + Math.round(sd) + '%' + resetStr + '\x1b[0m';
+      sevenDay = ' ' + c + '📅7d:' + Math.round(sd) + '%' + quotaAviso + resetStr + '\x1b[0m';
     }
 
     // Nome da sessão tmux (= endereço da sessão no cp-send / claude-pocket)
