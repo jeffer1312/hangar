@@ -10,8 +10,9 @@ Local: ~/.claude-pocket/codex-sessions/<name>.json (mesma familia de ~/.claude-p
 sync-vault). Global por usuario (sessao Codex nao pertence a um config-dir do Claude). Um arquivo
 por sessao, keyed pelo NOME sanitizado da sessao."""
 import json
-import re
 from pathlib import Path
+
+from app.names import sanitize_session_name
 
 
 def _dir() -> Path:
@@ -20,8 +21,10 @@ def _dir() -> Path:
 
 
 def _sanitize(name: str) -> str:
-    # Mesma regra de nome do registry.create (nome vai virar basename de arquivo).
-    return re.sub(r"[^A-Za-z0-9_-]", "-", name)
+    # MESMA funcao do registry (app.names), nao uma copia da regra: a copia daqui nao recebeu a
+    # correcao de acentuacao e teria trazido o bug de volta so no lado Codex no dia em que alguem
+    # chamasse codex_sessions.* com um nome cru, sem passar pelo registry antes.
+    return sanitize_session_name(name)
 
 
 def _path(name: str) -> Path:
