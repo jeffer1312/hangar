@@ -530,6 +530,49 @@ export function patchConfig(mudancas: Record<string, unknown>): Promise<{ campos
   return apiFetch('/api/config', { method: 'PATCH', body: JSON.stringify(mudancas) });
 }
 
+// ── Motores de modelo ───────────────────────────────────────────────────────
+export interface Motor {
+  label?: string;
+  base_url: string;
+  model: string;
+  context_window?: number;
+  vision?: boolean | null;
+  tool_search?: boolean;
+  // Sempre mascarada (sk-k••••••••1234). A chave inteira nunca volta do servidor.
+  api_key: string;
+  api_key_definida: boolean;
+}
+export interface ModeloProvedor {
+  id: string;
+  context_length: number | null;
+  vision: boolean | null;
+}
+
+export function getEngines(): Promise<{ motores: Record<string, Motor> }> {
+  return apiFetch('/api/engines');
+}
+
+export function putEngine(nome: string, dados: Record<string, unknown>): Promise<{ motores: Record<string, Motor> }> {
+  return apiFetch(`/api/engines/${encodeURIComponent(nome)}`, {
+    method: 'PUT',
+    body: JSON.stringify(dados),
+  });
+}
+
+export function deleteEngine(nome: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/engines/${encodeURIComponent(nome)}`, { method: 'DELETE' });
+}
+
+// Modelos que a key pode usar, direto do provedor. Também é o "Testar": erro aqui traz a mensagem
+// do provedor (401, host errado), em vez de deixar o usuário sem pista.
+// `nome` OU `base_url`+`api_key` — nunca os dois (o servidor rejeita com 400, pra key salva nunca
+// viajar pra um endereço que o cliente digitou).
+export function engineModelos(
+  corpo: { nome: string } | { base_url: string; api_key: string },
+): Promise<{ modelos: ModeloProvedor[] }> {
+  return apiFetch('/api/engines/modelos', { method: 'POST', body: JSON.stringify(corpo) });
+}
+
 export async function uploadFile(
   name: string,
   file: File,

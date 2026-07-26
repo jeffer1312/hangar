@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+  import EnginesSheet from './EnginesSheet.svelte';
   import { getConfig, patchConfig, type CampoConfig } from '../lib/api';
 
   // Configuração do servidor pelo app. Até aqui tudo vinha só de env/.env: pra mudar a chave da
@@ -53,6 +54,7 @@
   let salvando = $state(false);
   let erro = $state('');
   let salvo = $state(false);
+  let motoresOpen = $state(false);
 
   // Recarrega toda vez que abre: outro dispositivo (ou o .env) pode ter mudado no meio.
   $effect(() => {
@@ -185,6 +187,18 @@
         {/each}
       </div>
 
+      <!-- Motores são uma LISTA de registros com segredo cada um: não cabem no layout de
+           linha-por-setting desta sheet. Vão numa sheet própria, alcançada daqui. -->
+      <button class="atalho" onclick={() => (motoresOpen = true)}>
+        <span class="txt">
+          <span class="rot">Motores de modelo</span>
+          <span class="ajuda">
+            Rodar uma sessão em Kimi, num gateway próprio ou noutro modelo — sem mexer na sua conta.
+          </span>
+        </span>
+        <span class="seta" aria-hidden="true">›</span>
+      </button>
+
       <div class="somente-leitura">
         <h3>Só pelo servidor</h3>
         <p class="ajuda">
@@ -213,12 +227,23 @@
   {/if}
 </BottomSheet>
 
+{#if motoresOpen}
+  <EnginesSheet open={motoresOpen} onClose={() => (motoresOpen = false)} />
+{/if}
+
 <style>
   .cfg { padding: var(--space-2) var(--space-4) var(--space-4); }
   .cfg-head h2 { margin: 0; font-size: var(--text-lg); font-weight: 600; color: var(--text-primary); }
   .cfg-head .sub { margin: 2px 0 var(--space-4); font-size: var(--text-xs); color: var(--text-muted); }
 
   .lista { display: flex; flex-direction: column; }
+  .atalho {
+    display: flex; align-items: center; justify-content: space-between; gap: var(--space-4);
+    width: 100%; padding: var(--space-3) 0;
+    background: none; text-align: left;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .atalho .seta { font-size: var(--text-lg); color: var(--text-muted); flex-shrink: 0; }
   .linha {
     display: flex;
     flex-direction: column;
