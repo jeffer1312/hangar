@@ -664,9 +664,14 @@ export type NavKey =
   | 'Enter' | 'Escape' | 'Tab' | 'BTab'
   | 'PageUp' | 'PageDown' | 'Space';
 
-export async function getPane(name: string): Promise<string> {
-  const res = await apiFetch<{ text: string }>(`/api/sessions/${encodeURIComponent(name)}/pane`);
-  return res.text;
+// `lines` = quanto scrollback trazer acima da tela visível (o espelho pede mais ao rolar pro topo).
+// `scrollback` na resposta = quantas linhas o tmux REALMENTE tem; vale 0 num TUI de tela alternada
+// (Claude Code), onde pedir mais nunca traz nada e subir é papel do PageUp do próprio TUI.
+export async function getPane(name: string, lines?: number): Promise<{ text: string; scrollback: number }> {
+  const qs = lines ? `?lines=${lines}` : '';
+  const res = await apiFetch<{ text: string; scrollback?: number }>(
+    `/api/sessions/${encodeURIComponent(name)}/pane${qs}`);
+  return { text: res.text, scrollback: res.scrollback ?? 0 };
 }
 
 export async function sendKey(name: string, key: NavKey): Promise<void> {
