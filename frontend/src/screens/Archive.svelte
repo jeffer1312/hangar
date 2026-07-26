@@ -3,7 +3,7 @@
   import MessageList from '../components/MessageList.svelte';
   import {
     getArchive, getArchiveFolder, getArchiveHistory, archiveImageUrl, resumeArchivedConversation,
-    type ArchiveFolder, type ArchiveEntry,
+    getEngines, type ArchiveFolder, type ArchiveEntry, type Motor,
   } from '../lib/api';
   import type { ChatEvent } from '../lib/types';
   import { selectServer, listServers, getActiveId, serverColor } from '../lib/auth';
@@ -28,6 +28,12 @@
   let loadingChat = $state(false);
   let resuming = $state(false);
   let resumeError = $state('');
+  // Motor pro resume (Task 5, item 1 do review): o pane original morreu, entao o app NAO sabe qual
+  // motor rodava a conversa -- so o nome do modelo fica no transcript, nao qual dos motores do
+  // usuario o produziu. '' = conta Anthropic (default de hoje). Falha ao listar -> sem seletor,
+  // resume segue sem motor (nao pode travar o resume).
+  let engine = $state('');
+  let motores = $state<Record<string, Motor>>({});
 
   // Servidor DE ONDE navegar o arquivo: apiFetch usa o servidor ATIVO, entao sem um seletor o arquivo
   // so mostrava o servidor ativo e nao dava pra saber/escolher de qual servidor abrir (multi-servidor).
@@ -88,6 +94,10 @@
     loadingChat = true;
     events = [];
     resumeError = '';
+    engine = '';
+    motores = {};
+    // Best-effort: sem isto o seletor de motor nao aparece, mas retomar continua funcionando.
+    getEngines().then((r) => (motores = r.motores)).catch(() => (motores = {}));
     try {
       events = await getArchiveHistory(e.project, e.session_id);
     } catch {
@@ -106,7 +116,7 @@
     resuming = true;
     resumeError = '';
     try {
-      const info = await resumeArchivedConversation(selected.project, selected.session_id);
+      const info = await resumeArchivedConversation(selected.project, selected.session_id, engine || null);
       if (deepLink) selectServer(deepLink.serverId);
       // Rota server-aware (#/chat/<server>/<nome>): homônimas em servidores diferentes.
       const sid = getActiveId();
@@ -137,6 +147,20 @@
   <div class="archive-screen" style="--nav-h: 0px">
     <NavBar title={sel.preview || sel.session_id.slice(0, 8)} showBack={true} onBack={() => (selected = null)} />
     <div class="resume-bar">
+      {#if Object.keys(motores).length}
+        <label class="engine-pick">
+          <span class="engine-pick-label">Motor</span>
+          <select bind:value={engine}>
+            <option value="">Claude (sua conta)</option>
+            {#each Object.entries(motores) as [nome, m] (nome)}
+              <option value={nome}>{m.label ?? nome} · {m.model}</option>
+            {/each}
+          </select>
+        </label>
+        <!-- O app nao sabe qual motor rodava esta conversa (o pane original morreu, sem /proc pra
+             ler) -- so o nome do modelo fica gravado no transcript. Escolha e sua, nao memoria. -->
+        <p class="engine-pick-hint">A escolha é sua — o app não sabe qual motor rodava esta conversa.</p>
+      {/if}
       <button class="resume-btn" onclick={resumeConversation} disabled={resuming}>
         {resuming ? 'Retomando…' : 'Retomar conversa'}
       </button>
@@ -338,5 +362,32 @@
   }
   .resume-btn:hover:not(:disabled) { background: var(--accent); color: #fff; }
   .resume-btn:disabled { opacity: 0.6; cursor: default; }
+
+  .engine-pick {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+  }
+  .engine-pick-label {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    font-weight: 500;
+  }
+  .engine-pick select {
+    height: 44px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 16px;
+    padding: 0 var(--space-3);
+  }
+  .engine-pick-hint {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    margin: 0 0 var(--space-3);
+  }
   .resume-err { color: var(--error); font-size: var(--text-xs); margin: var(--space-2) 0 0; }
 </style>

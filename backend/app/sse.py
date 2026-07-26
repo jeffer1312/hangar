@@ -163,12 +163,15 @@ def _list_sig(infos) -> str:
     # Dedup IGNORA last_activity: e o mtime do jsonl (float sub-segundo) que muda a CADA escrita de uma
     # sessao ativa -> sem isto a lista inteira re-emitia a cada poll sem nada visivel mudar = flicker.
     # Re-emite so em mudanca de membership/state/cwd/tracked/jsonl/question/stalled/limited/
-    # limit_reset/then_target/status_line-reduzida/presenca-de-label/loop.
+    # limit_reset/then_target/status_line-reduzida/presenca-de-label/loop/engine. Sem o engine aqui,
+    # resumir um pane cujo motor sumiu do engines.json (kimi -> None) nao reemite a lista e o chip
+    # ⚙ kimi fica preso, calado.
     return json.dumps(
         [(i.name, i.cwd, i.state, i.tracked, i.jsonl, i.question, i.stalled, i.limited,
           i.limit_reset, i.then_target, _status_sig(getattr(i, "status_line", None)),
           bool(getattr(i, "label", None)),
-          getattr(i, "loop_status", None), getattr(i, "loop_iter", None))
+          getattr(i, "loop_status", None), getattr(i, "loop_iter", None),
+          getattr(i, "engine", None))
          for i in infos],
         ensure_ascii=False,
     )
