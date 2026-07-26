@@ -114,15 +114,34 @@ if [[ "$1" == "--pair" ]]; then
 fi
 
 if [[ "$1" == "--new" ]]; then
-    name="${2:?uso: cp-send --new <nome> [cwd]}"
+    shift
+    name="${1:?uso: cp-send --new <nome> [cwd] [--engine <motor>]}"
+    shift
     if [[ "$name" == *::* ]]; then
         echo "erro: '::' é reservado pro endereço servidor::sessao — escolha outro nome" >&2
         exit 2
     fi
-    cwd="${3:-$HOME}"
-    body=$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1], "cwd": sys.argv[2]}))' "$name" "$cwd")
+    # --engine: a sessão nova nasce num MOTOR de modelo (~/.claude/engines.json) em vez da conta
+    # Anthropic. Serve pra parear com uma sessão rodando noutro modelo — o par continua no mesmo
+    # ~/.claude (skills, hooks, contrato compartilhado), só o motor difere. Aceita o flag em
+    # qualquer ordem: `--new nome --engine kimi` sem cwd é o uso mais comum.
+    cwd=""; engine=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --engine) engine="${2:?uso: --engine <motor>}"; shift 2 ;;
+            *) if [[ -z "$cwd" ]]; then cwd="$1"; shift
+               else echo "erro: argumento inesperado '$1'" >&2; exit 2; fi ;;
+        esac
+    done
+    cwd="${cwd:-$HOME}"
+    # engine vazio -> null: o backend trata como "conta Anthropic", o comportamento de sempre. Motor
+    # que não existe volta 400 do backend (a api() mostra o detalhe) em vez de abrir uma sessão que
+    # parece estar no motor e não está.
+    body=$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1], "cwd": sys.argv[2],
+                                                          "engine": sys.argv[3] or None}))' \
+           "$name" "$cwd" "$engine")
     api POST /api/sessions "$body" >/dev/null
-    echo "sessão criada: $name ($cwd) — fala com ela via: cp-send $name \"msg\""
+    echo "sessão criada: $name ($cwd)${engine:+ [motor: $engine]} — fala com ela via: cp-send $name \"msg\""
     exit 0
 fi
 
