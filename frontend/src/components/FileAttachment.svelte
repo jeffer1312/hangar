@@ -1,6 +1,7 @@
 <script lang="ts">
   import ModalDialog from './ModalDialog.svelte';
   import { fileUrl } from '../lib/api';
+  import { zoomable } from '../lib/zoomable';
   import type { FileRef } from '../lib/format';
 
   interface Props {
@@ -73,7 +74,8 @@
     {#if cur.kind === 'image'}
       <div class="media-modal">
         <button bind:this={imageClose} class="media-close" type="button" onclick={() => (open = null)} aria-label="Fechar visualização">✕</button>
-        <img class="full-media" src={url(cur)} alt={cur.name} />
+        <!-- Mesmo gesto do ImageBubble: pinch / duplo-toque / arrastar. -->
+        <img class="full-media" src={url(cur)} alt={cur.name} use:zoomable />
       </div>
     {:else if cur.kind === 'video'}
       <div class="media-modal">

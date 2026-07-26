@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { zoomable } from '../lib/zoomable';
+
   interface Props {
     caption: string;
     srcs: string[];
@@ -7,6 +9,8 @@
 
   // Imagem aberta no lightbox (null = fechado). Clique na miniatura abre o original em tela cheia.
   let lightbox = $state<string | null>(null);
+  // Gesto de zoom em curso: segura o "fechar no toque" enquanto o dedo esta na imagem.
+  let gesto = $state(false);
 
   // Move o no pro <body> pra escapar do transform + overflow do .chat-screen — senao o overlay
   // position:fixed fica relativo ao container transformado e some atras do composer/topbar.
@@ -28,10 +32,26 @@
   {#if caption}<p class="image-caption">{caption}</p>{/if}
 </div>
 
+<!-- Escape fecha: o overlay do ImageBubble e um <button> solto (o FileAttachment herda isso do
+     ModalDialog). Sem isso, quem usa teclado nao tem saida — e num gesto travado, ninguem tem. -->
+<svelte:window onkeydown={(e) => { if (lightbox && e.key === 'Escape') lightbox = null; }} />
+
 {#if lightbox}
   <!-- Overlay tela cheia com o original; toque em qualquer lugar fecha. Portal pro body. -->
-  <button use:portal class="lightbox" onclick={() => (lightbox = null)} aria-label="Fechar imagem">
-    <img class="lightbox-img" src={lightbox} alt="imagem original" />
+  <button
+    use:portal
+    class="lightbox"
+    onclick={() => { if (!gesto) lightbox = null; }}
+    aria-label="Fechar imagem"
+  >
+    <!-- Pinch, duplo-toque e arrastar. `gesto` segura o fechar: sem isso, terminar um arrasto
+         fechava a imagem no clique que o browser dispara logo atrás. -->
+    <img
+      class="lightbox-img"
+      src={lightbox}
+      alt="imagem original"
+      use:zoomable={{ onGesture: (a) => (gesto = a) }}
+    />
   </button>
 {/if}
 
