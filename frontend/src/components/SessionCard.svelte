@@ -80,6 +80,10 @@
   let offset = $state(0);
   let startX = 0, startY = 0, startOffset = 0;
   let dragging = $state(false);
+  // OPEN depende do cwd, que vem do poll do tmux (pode aparecer/sumir a qualquer tick). Com a trilha
+  // aberta, isso deixava offset num valor que nao e 0 nem OPEN — e ai o inert congelava justo os
+  // botoes visiveis (toque nao fazia nada, calado). Divergiu fora do arrasto: fecha.
+  $effect(() => { if (!dragging && offset !== 0 && offset !== OPEN) offset = 0; });
   let axis: 'x' | 'y' | null = null;
   let suppressClick = $state(false);
   let capturedTarget: HTMLElement | null = null;
