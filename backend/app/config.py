@@ -147,6 +147,11 @@ class Settings(BaseSettings):
     # do .env, com prefixo) OU GROQ_API_KEY (convencao do Groq/OpenAI SDK, ex: no Environment do systemd).
     # Vazio = transcricao desligada (o endpoint /transcribe responde 503). Ver docs/USAGE.md.
     groq_api_key: str = Field("", validation_alias=AliasChoices("CP_GROQ_API_KEY", "GROQ_API_KEY"))
+    # Dias que um anexo fica em <cwd>/.claude-pocket-uploads/. A pasta nunca era limpa e cresce pra
+    # sempre dentro do projeto (video sobe ate 100 MiB por arquivo). 0 = nunca apagar.
+    # Anexo apagado que ainda aparece numa conversa antiga vira o chip "não carregou" — visível,
+    # não some calado.
+    upload_retention_days: int = Field(30, validation_alias=AliasChoices("CP_UPLOAD_RETENTION_DAYS",))
 
 
 settings = Settings()

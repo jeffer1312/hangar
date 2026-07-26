@@ -49,6 +49,30 @@ def save_upload(cwd: str, content: bytes, filename: str | None) -> str:
     return real_dest
 
 
+def prune_old(cwd: str, days: int) -> int:
+    """Apaga anexos com mais de `days` dias e devolve quantos saíram. days <= 0 = não limpa.
+
+    A pasta nunca era varrida e só crescia dentro do projeto. Roda no upload (barato: um listdir)
+    em vez de num job separado — sem agendador pra manter. Erro de arquivo individual não derruba a
+    varredura nem o upload; a limpeza é higiene, não pode custar o anexo do usuário.
+    """
+    if days <= 0:
+        return 0
+    base = Path(os.path.realpath(cwd)) / UPLOAD_SUBDIR
+    if not base.is_dir():
+        return 0
+    corte = time.time() - days * 86400
+    n = 0
+    for f in base.iterdir():
+        try:
+            if f.is_file() and f.stat().st_mtime < corte:
+                f.unlink()
+                n += 1
+        except OSError:
+            continue
+    return n
+
+
 def resolve_upload(cwd: str, filename: str) -> str:
     """Resolve <cwd>/.claude-pocket-uploads/<filename> com seguranca, pra servir o arquivo.
     Rejeita filename com separador/.. (400) e arquivo inexistente (404)."""
