@@ -545,6 +545,7 @@ export interface Motor {
   label?: string;
   base_url: string;
   model: string;
+  subagent_model?: string;
   context_window?: number;
   vision?: boolean | null;
   tool_search?: boolean;

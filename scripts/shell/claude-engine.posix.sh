@@ -6,7 +6,15 @@
 claude-engine() {
     if [ "$#" -eq 0 ]; then
         local lista
-        lista=$(cp-engine --list)
+        # Sem `local` na mesma linha da atribuição: `local lista=$(cmd)` mascara o exit code do
+        # cmd com o do próprio `local` (sempre 0). Separado assim, `$?`/`!` é de verdade o de
+        # cp-engine — distingue "não instalado" (comando não encontrado) de "zero motor configurado"
+        # (--list sempre sai 0), senão as duas caem na MESMA mensagem, que manda o usuário pro app
+        # justamente no caso em que o app não vai adiantar nada.
+        if ! lista=$(cp-engine --list 2>/dev/null); then
+            echo "claude-engine: cp-engine não pôde ser executado — rode ./scripts/install-claude-wrapper.sh" >&2
+            return 1
+        fi
         if [ -z "$lista" ]; then
             echo "Nenhum motor configurado. Configure no app (Configurações -> Motores de modelo)."
             return 1

@@ -65,6 +65,9 @@ cd backend && uv run pytest -v             # backend test suite
 npm --prefix frontend run dev              # Vite dev server
 npm --prefix frontend run build            # production build — does NOT typecheck
 npm --prefix frontend run check            # svelte-check + tsc — THIS is the type gate
+
+./scripts/test-wrappers.sh                 # claude-engine (bash/zsh/fish) against a fake `claude`, no tmux
+./scripts/test-statusline.sh               # statusline.js contract (engine sessions suppress cost), needs node
 ```
 
 Sessions must run as `claude --session-id <uuid>` **inside tmux** — `scripts/install-claude-wrapper.sh`
@@ -89,7 +92,10 @@ cp-send, escreve o contrato do grupo, distribui escopo, monitora e consolida).
 **Instalar/atualizar numa máquina** (após `git pull`):
 
 ```bash
-./scripts/install-cp-send.sh    # symlink ~/.local/bin/cp-send + skills/* + bloco "Sessões-irmãs" no ~/.claude/CLAUDE.md (idempotente)
+./scripts/install-cp-send.sh          # symlink ~/.local/bin/cp-send + skills/* + bloco "Sessões-irmãs" no ~/.claude/CLAUDE.md (idempotente)
+./scripts/install-claude-wrapper.sh   # symlink ~/.local/bin/cp-engine + wrapper claude-engine — sem isto,
+                                       # motor configurado pelo celular abre um pane que morre na hora
+                                       # (tmux new-session ainda retorna 0, o app reporta sucesso calado)
 systemctl --user restart claude-cockpit-backend.service   # API de pareamento/preview
 npm --prefix frontend run build                          # só se o front for servido estático (vite dev pega via HMR)
 ```

@@ -32,6 +32,7 @@ _CAMPOS: dict[str, type] = {
     "base_url": str,
     "api_key": str,
     "model": str,
+    "subagent_model": str,   # -> CLAUDE_CODE_SUBAGENT_MODEL; vazio = mesmo modelo principal
     "context_window": int,   # -> CLAUDE_CODE_MAX_CONTEXT_TOKENS
     "vision": bool,          # informativo; vem do /v1/models do provedor
     "tool_search": bool,     # ver env_de
@@ -57,10 +58,16 @@ def listar() -> dict[str, dict[str, Any]]:
     try:
         with open(caminho(), encoding="utf-8") as fh:
             d = json.load(fh)
-        return d if isinstance(d, dict) else {}
     except (OSError, json.JSONDecodeError):
         # Ausente/corrompido não derruba backend nem terminal: sem motor, vale o de hoje (Anthropic).
         return {}
+    if not isinstance(d, dict):
+        return {}
+    # O nome vira parte de um `$SHELL -c` (registry.py monta `cp-engine --exec {nome} -- ...`).
+    # salvar() já barra nome fora do padrão, mas o arquivo é hand-editável (0600, mas ainda assim);
+    # pular o registro corrupto em vez de derrubar a lista inteira — um motor ruim não pode tirar
+    # os outros do ar.
+    return {nome: v for nome, v in d.items() if isinstance(nome, str) and _NOME_OK.match(nome)}
 
 
 def _host_local(host: str) -> bool:
@@ -177,7 +184,7 @@ def env_de(nome: str) -> dict[str, str]:
     # Valida shell-safety: uma linha por variável é o contrato com o shell. Rejeita se o JSON
     # contém um valor que já violou a invariante (hand-edited file, corrupted write recovered by
     # another tool, etc). Reutiliza _PROIBIDO_NO_VALOR para uma única fonte de verdade.
-    for campo in ("api_key", "model", "base_url"):
+    for campo in ("api_key", "model", "base_url", "subagent_model"):
         valor = e.get(campo, "")
         if isinstance(valor, str) and any(c in valor for c in _PROIBIDO_NO_VALOR):
             raise ValueError(f"{campo}: contém caractere proibido (quebra de linha ou nulo)")
@@ -194,13 +201,18 @@ def env_de(nome: str) -> dict[str, str]:
         "ANTHROPIC_DEFAULT_SONNET_MODEL": modelo,
         "ANTHROPIC_DEFAULT_HAIKU_MODEL": modelo,
         "ANTHROPIC_DEFAULT_FABLE_MODEL": modelo,
-        "CLAUDE_CODE_SUBAGENT_MODEL": modelo,
+        # Subagentes fazem muita busca mecânica; um modelo mais barato aí é dinheiro de verdade.
+        # Vazio (campo ausente) cai no mesmo modelo principal — nunca uma env var vazia.
+        "CLAUDE_CODE_SUBAGENT_MODEL": e.get("subagent_model") or modelo,
     }
     if e.get("context_window"):
         # MAX_CONTEXT_TOKENS, nao AUTO_COMPACT_WINDOW: medido nos dois provedores, a segunda nao move
         # a janela (o /context seguia em 200k) e a primeira move. Sem isto, um modelo de 256k/500k
         # compacta em ~167k — capacidade jogada fora, calado.
-        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(e["context_window"])
+        # int(...) normaliza: hand-edited JSON pode trazer um valor não-numérico (o contrato do
+        # campo é int); isso falha alto aqui em vez de vazar uma linha extra no `cp-engine --env`
+        # (mesma classe de ataque que _PROIBIDO_NO_VALOR cobre para os campos string).
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(int(e["context_window"]))
     if e.get("tool_search") is not True:
         # Default desligado por FAIL-SAFE, não por medição: a doc da Moonshot diz que o endpoint do
         # Kimi ainda não suporta Tool Search, e um erro no meio do turno é pior que uma ferramenta a

@@ -43,4 +43,6 @@ if [ ! -f "${TMPDIR:-/tmp}/harness-cost-t1.json" ]; then
   echo "FALHOU: sidecar de custo deixou de ser escrito na sessao normal"; falhou=1
 fi
 
+rm -f "${TMPDIR:-/tmp}/harness-cost-t1.json"  # limpa o sidecar que os testes acima escrevem de propósito
+
 [ "$falhou" = 0 ] && echo "statusline OK" || exit 1

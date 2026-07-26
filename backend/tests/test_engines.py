@@ -79,6 +79,20 @@ def test_sem_janela_nao_inventa_a_var():
     assert "CLAUDE_CODE_MAX_CONTEXT_TOKENS" not in eng.env_de("kimi")
 
 
+def test_subagent_model_sobrescreve_a_var_dos_subagentes():
+    d = _kimi()
+    d["subagent_model"] = "k3-fast"
+    eng.salvar("kimi", d)
+    assert eng.env_de("kimi")["CLAUDE_CODE_SUBAGENT_MODEL"] == "k3-fast"
+
+
+def test_sem_subagent_model_cai_no_modelo_principal():
+    # Campo ausente = "mesmo que o principal", nunca uma env var vazia (subagent/background
+    # falhariam sem mensagem clara — mesma razão dos outros 5 ANTHROPIC_DEFAULT_*_MODEL).
+    eng.salvar("kimi", _kimi())
+    assert eng.env_de("kimi")["CLAUDE_CODE_SUBAGENT_MODEL"] == "k3"
+
+
 def test_motor_desconhecido_estoura_em_vez_de_env_vazio():
     with pytest.raises(KeyError):
         eng.env_de("nao-existe")
@@ -200,6 +214,29 @@ def test_env_de_rejeita_json_envenenado_em_multiplos_campos():
     eng.caminho().write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match="base_url.*proibido"):
         eng.env_de("kimi")
+
+
+def test_env_de_rejeita_context_window_envenenado_hand_editado():
+    # context_window é int por contrato (salvar() barra qualquer outra coisa), mas o arquivo é
+    # hand-editável: escrever uma string com \n faz `cp-engine --env` emitir uma linha extra (medido
+    # ao vivo). str(int(...)) tem que estourar em vez de deixar passar.
+    d = _kimi()
+    eng.salvar("kimi", d)
+    payload = {"kimi": {**d, "context_window": "1\nPATH=/tmp/evil"}}
+    eng.caminho().write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError):
+        eng.env_de("kimi")
+
+
+def test_listar_pula_nome_invalido_sem_derrubar_os_outros():
+    # registry.py interpola o nome num `$SHELL -c` (cp-engine --exec {nome} -- ...). salvar() já
+    # barra nome fora do padrão, mas o JSON é hand-editável; um registro corrupto não pode tirar os
+    # outros motores do ar.
+    eng.salvar("kimi", _kimi())
+    bruto = json.loads(eng.caminho().read_text(encoding="utf-8"))
+    bruto["x; touch /tmp/PWNED"] = _kimi()
+    eng.caminho().write_text(json.dumps(bruto), encoding="utf-8")
+    assert set(eng.listar()) == {"kimi"}
 
 
 def _cli(*args, cfg=None):
