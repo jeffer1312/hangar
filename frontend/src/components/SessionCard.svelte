@@ -26,10 +26,6 @@
   }: Props = $props();
 
 
-  // Frame parado da "pensando": f0 = anel cheio e simetrico (os frames do meio do loop ficam ralos e
-  // parecem bug). Mesmo frame em todos os estados parados; o que muda entre eles e a COR (tint).
-  const STATIC_FRAME = 0;
-
   // Fundo translucido do chip de status, por estado.
   const stateChipBg: Record<State, string> = {
     working: 'var(--accent-dim)',
@@ -48,6 +44,15 @@
     return i < 0 ? { prefix: '', base: p } : { prefix: p.slice(0, i + 1), base: p.slice(i + 1) };
   });
 
+  // Celular e estreito: o cwd so entra quando ACRESCENTA algo. Quando o basename ja e o nome da
+  // sessao ("claude-cockpit" + "/home/jeff…/claude-cockpit"), a linha inteira e redundante e so
+  // roubava largura do nome/branch.
+  const showCwd = $derived(!!session.cwd && cwdParts.base.toLowerCase() !== session.name.toLowerCase());
+
+  // Chip de estado so quando o estado PEDE atencao. "pronto" repetido em toda linha e ruido: o
+  // ponto colorido do lead ja diz que esta parada.
+  const showStateChip = $derived(session.state !== 'idle');
+
   // Sessao sem vinculo confiavel (claude manual sem --session-id): NAO da pra abrir o chat com
   // seguranca. Marca "sem id" e bloqueia o clique (delete continua valendo).
   const untracked = $derived(session.tracked === false);
@@ -65,10 +70,13 @@
 
   const loopChip = $derived(loopBadge(session.loop_status, session.loop_iter, session.loop_max));
 
-  // ── Swipe-to-delete ────────────────────────────────────────────────────────
-  // Arrasta a linha pra esquerda revelando "Excluir". touch-action:pan-y deixa o scroll vertical
-  // pro navegador e o horizontal pra gente. Distingue tap / swipe-x / scroll-y por eixo dominante.
-  const OPEN = -84;
+  // ── Swipe-to-actions ───────────────────────────────────────────────────────
+  // Arrasta a linha pra esquerda revelando Git / Loop / Excluir. touch-action:pan-y deixa o scroll
+  // vertical pro navegador e o horizontal pra gente. Distingue tap / swipe-x / scroll-y por eixo
+  // dominante. Git e Loop moraram na row-right ate aqui: 2 botoes de 40px + chip + chevron comiam
+  // quase metade da largura e o cwd/nome viviam truncados no iPhone. Sao acoes raras -> swipe.
+  const ACTION_W = 64;
+  const OPEN = $derived(session.cwd ? -3 * ACTION_W : -ACTION_W);
   let offset = $state(0);
   let startX = 0, startY = 0, startOffset = 0;
   let dragging = $state(false);
@@ -163,17 +171,40 @@
   }
 </script>
 
-<div class="swipe-wrap" class:open={offset === OPEN}>
+<div class="swipe-wrap">
   <!-- inert enquanto fechado: fica ATRAS da row (z-order) e, sem isto, seguia focavel por Tab e na
-       arvore de a11y — Enter deletava sem feedback visivel, e AT-click por coordenada caia na row. -->
-  <button class="del-action" onclick={onDelete} aria-label="Excluir sessão {session.name}" inert={offset !== OPEN}>
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <polyline points="3 6 5 6 21 6"/>
-      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-      <path d="M10 11v6M14 11v6"/>
-    </svg>
-    <span>Excluir</span>
-  </button>
+       arvore de a11y — Enter deletava sem feedback visivel, e AT-click por coordenada caia na row.
+       Teclado/leitor de tela usam os botoes .kbd-only da row-right (o swipe e pointer-only). -->
+  <div class="swipe-actions" inert={offset !== OPEN}>
+    {#if session.cwd}
+      <button class="act git" onclick={() => { offset = 0; onGit?.(); }} aria-label="Git de {session.name}">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <line x1="6" y1="3" x2="6" y2="15"/>
+          <circle cx="18" cy="6" r="3"/>
+          <circle cx="6" cy="18" r="3"/>
+          <path d="M18 9a9 9 0 0 1-9 9"/>
+        </svg>
+        <span>Git</span>
+      </button>
+      <button class="act loop" onclick={() => { offset = 0; onLoop?.(); }} aria-label="Loop de {session.name}">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="m17 2 4 4-4 4"/>
+          <path d="M3 11v-1a4 4 0 0 1 4-4h14"/>
+          <path d="m7 22-4-4 4-4"/>
+          <path d="M21 13v1a4 4 0 0 1-4 4H3"/>
+        </svg>
+        <span>Loop</span>
+      </button>
+    {/if}
+    <button class="act del" onclick={onDelete} aria-label="Excluir sessão {session.name}">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polyline points="3 6 5 6 21 6"/>
+        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+        <path d="M10 11v6M14 11v6"/>
+      </svg>
+      <span>Excluir</span>
+    </button>
+  </div>
 
   <div
     class="session-row"
@@ -205,8 +236,9 @@
         <!-- Working -> "pensando" animando, cores originais. -->
         <Lottie data={pensando as any} size={20} loop autoplay />
       {:else}
-        <!-- Outros estados -> mesmo icone PARADO em f0 (anel cheio), cores ORIGINAIS. -->
-        <Lottie data={pensando as any} size={20} loop={false} autoplay={false} frame={STATIC_FRAME} />
+        <!-- Parada -> ponto na COR do estado. O icone parado era igual em todos os estados: numa
+             lista sem nada animando as linhas ficavam indistinguiveis. -->
+        <span class="state-dot" style="background: {stateColors[session.state]};"></span>
       {/if}
     </span>
 
@@ -236,19 +268,21 @@
       {:else if session.state === 'working' && session.label}
         <span class="status-sub working" title={session.label}>{session.label}</span>
       {/if}
-      <span class="meta-line">
-        {#if serverBadge}
-          <span class="srv" style="color: {serverBadge.color};">{serverBadge.label}</span>
-          {#if session.cwd}<span class="meta-sep">·</span>{/if}
-        {/if}
-        {#if session.cwd}
-          <span class="cwd" title={session.cwd}><span class="cwd-prefix">{cwdParts.prefix}</span><span class="cwd-base">{cwdParts.base}</span></span>
-        {/if}
-      </span>
-      {#if session.branch}
-        <!-- Branch numa linha própria: no celular ela concorria com o cwd e ficava truncada. -->
+      <!-- UMA meta-line só (antes eram duas: cwd e branch). Ordem = importancia: a branch e o que
+           muda, entao vem primeiro e nunca some; o cwd fecha a linha e trunca primeiro. -->
+      {#if serverBadge || session.branch || showCwd}
         <span class="meta-line">
-          <span class="branch" title="branch git atual">⎇ {session.branch}</span>
+          {#if serverBadge}
+            <span class="srv" style="color: {serverBadge.color};">{serverBadge.label}</span>
+            {#if session.branch || showCwd}<span class="meta-sep">·</span>{/if}
+          {/if}
+          {#if session.branch}
+            <span class="branch" title="branch git atual">⎇ {session.branch}</span>
+            {#if showCwd}<span class="meta-sep">·</span>{/if}
+          {/if}
+          {#if showCwd}
+            <span class="cwd" title={session.cwd}><span class="cwd-prefix">{cwdParts.prefix}</span><span class="cwd-base">{cwdParts.base}</span></span>
+          {/if}
         </span>
       {/if}
       {#if session.pair_peers?.length || limited || loopChip}
@@ -283,24 +317,32 @@
     </div>
 
     <div class="row-right">
-      <span
-        class="state-chip"
-        class:stalled
-        style="color: {stateColors[session.state]}; background: {stateChipBg[session.state]};"
-        title={stalled ? 'Pode estar travada — sem atividade há um tempo' : undefined}
-      >
-        {stateLabels[session.state]}
-      </span>
-      <!-- Git da sessao: abre o gerenciador (GitSheet) no repo do cwd, sem abrir o chat. So aparece
-           quando ha cwd (repo) — paridade com o menu de contexto do desktop. stopPropagation pra nao
-           disparar swipe/navegacao da linha. -->
+      <!-- Chip so quando o estado pede atencao (idle = ponto colorido no lead, sem pilula "pronto"
+           repetida em toda linha). -->
+      {#if showStateChip}
+        <span
+          class="state-chip"
+          class:stalled
+          style="color: {stateColors[session.state]}; background: {stateChipBg[session.state]};"
+          title={stalled ? 'Pode estar travada — sem atividade há um tempo' : undefined}
+        >
+          {stateLabels[session.state]}
+        </span>
+      {:else}
+        <!-- Sem chip, o estado so existia como COR (o .lead e aria-hidden) — leitor de tela ficava
+             sem saber que a sessao esta pronta. Texto so pra AT (SC 1.4.1). -->
+        <span class="sr-only">{stateLabels[session.state]}</span>
+      {/if}
+      <!-- Caminho por TECLADO/leitor de tela pras acoes do swipe (git / loop / excluir), que e
+           pointer-only. Escondidos visualmente, sempre focaveis e anunciados; reaparecem como botao
+           de 40px no foco de teclado (:focus-visible). -->
       {#if session.cwd}
         <button
-          class="git-btn"
+          class="kbd-only"
+          inert={offset === OPEN}
           onpointerdown={(e) => e.stopPropagation()}
           onclick={(e) => { e.stopPropagation(); onGit?.(); }}
           aria-label="Git de {session.name}"
-          title="Gerenciador git"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <line x1="6" y1="3" x2="6" y2="15"/>
@@ -309,13 +351,12 @@
             <path d="M18 9a9 9 0 0 1-9 9"/>
           </svg>
         </button>
-        <!-- Loop runner da sessao: mesma mecânica do git-btn. -->
         <button
-          class="git-btn"
+          class="kbd-only"
+          inert={offset === OPEN}
           onpointerdown={(e) => e.stopPropagation()}
           onclick={(e) => { e.stopPropagation(); onLoop?.(); }}
           aria-label="Loop de {session.name}"
-          title="Loop runner"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="m17 2 4 4-4 4"/>
@@ -325,11 +366,9 @@
           </svg>
         </button>
       {/if}
-      <!-- Caminho de exclusao por TECLADO/leitor de tela: o swipe-to-delete e pointer-only e deixava
-           o usuario de teclado/SR sem como excluir no mobile. Escondido visualmente (mouse/touch usam
-           swipe), mas sempre focavel e anunciado; reaparece no foco de teclado (:focus-visible). -->
       <button
-        class="del-kbd"
+        class="kbd-only del"
+        inert={offset === OPEN}
         onpointerdown={(e) => e.stopPropagation()}
         onclick={(e) => { e.stopPropagation(); onDelete(); }}
         aria-label="Excluir sessão {session.name}"
@@ -340,7 +379,15 @@
           <path d="M10 11v6M14 11v6"/>
         </svg>
       </button>
-      <span class="chev" aria-hidden="true">›</span>
+      <!-- Alternativa por TOQUE SIMPLES pras acoes do swipe (WCAG 2.2 SC 2.5.7, Dragging Movements):
+           quem nao completa um arrasto abre a trilha no tap. O swipe continua igual. -->
+      <button
+        class="chev"
+        onpointerdown={(e) => e.stopPropagation()}
+        onclick={(e) => { e.stopPropagation(); offset = offset === OPEN ? 0 : OPEN; }}
+        aria-label="Ações de {session.name}"
+        aria-expanded={offset === OPEN}
+      >›</button>
     </div>
   </div>
 </div>
@@ -353,23 +400,30 @@
     border-bottom: 1px solid var(--border-subtle);
   }
 
-  .del-action {
+  /* Trilha de acoes revelada pelo swipe: Git | Loop | Excluir. */
+  .swipe-actions {
     position: absolute;
     right: 0;
     top: 0;
     bottom: 0;
-    width: 84px;
+    display: flex;
+  }
+  .swipe-actions .act {
+    width: 64px;
+    min-width: 64px;
+    height: 100%;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     gap: 2px;
-    background: var(--error);
-    color: #fff;
     font-size: 12px;
     font-weight: 600;
     border-radius: 0;
   }
+  .swipe-actions .git { background: var(--bg-elevated); color: var(--text-secondary); }
+  .swipe-actions .loop { background: var(--accent-dim); color: var(--accent); }
+  .swipe-actions .del { background: var(--error); color: #fff; }
 
   .session-row {
     position: relative;
@@ -444,6 +498,13 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+  }
+  /* Estado parado: ponto na cor do estado (verde pronto / âmbar aguardando / vermelho encerrado). */
+  .state-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
   }
   /* Checkbox do modo seleção (feature #9): so decorativo (o toque na row inteira alterna). */
   .select-check {
@@ -530,6 +591,9 @@
   .cwd {
     display: flex;
     min-width: 0;
+    /* Dividindo a meta-line com a branch, o cwd cede primeiro (shrink maior) — a branch e o que
+       muda e o que o usuario procura. */
+    flex-shrink: 4;
     font-family: var(--font-mono);
   }
   .cwd-prefix {
@@ -620,30 +684,32 @@
   /* Escondido do layout (mouse/touch usam swipe) mas SEMPRE na arvore de a11y (SR anuncia "Excluir
      sessao X"). No foco de teclado (:focus-visible) vira um botao 40px visivel na row-right. Sobrescreve
      o min-height/min-width 44px global do <button> pra sumir de fato quando fechado. */
-  .del-kbd {
+  .kbd-only {
     position: absolute;
     width: 1px; height: 1px; min-width: 0; min-height: 0;
     padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%);
     color: var(--text-muted); border-radius: var(--radius-sm);
   }
-  .del-kbd:focus-visible {
+  .kbd-only:focus-visible {
     position: static;
     width: 40px; height: 40px; min-width: 40px; min-height: 40px;
     margin: 0; overflow: visible; clip-path: none;
-    color: var(--error);
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--accent);
     outline: 2px solid var(--accent); outline-offset: -2px;
   }
-  /* Botao git dedicado na row-right: area de toque 40px, cinza ate ser tocado. */
-  .git-btn {
-    width: 40px; height: 40px; min-width: 40px; min-height: 40px;
+  .kbd-only.del:focus-visible { color: var(--error); }
+  /* Vira botao (abre a trilha no tap): tamanho explicito pra sobrescrever o min 44px global do
+     <button>, que esticaria a row. 32x40 continua acima do minimo de alvo (SC 2.5.8, 24x24). */
+  .chev {
+    width: 32px; height: 40px; min-width: 32px; min-height: 40px;
     flex-shrink: 0;
     display: inline-flex; align-items: center; justify-content: center;
-    color: var(--text-muted); border-radius: var(--radius-sm);
-  }
-  .git-btn:active { color: var(--accent); background: var(--bg-hover); }
-  .chev {
+    padding: 0;
     color: var(--text-muted);
     font-size: var(--text-lg);
     line-height: 1;
+    border-radius: var(--radius-sm);
   }
+  .chev:active { color: var(--text-secondary); background: var(--bg-hover); }
 </style>
