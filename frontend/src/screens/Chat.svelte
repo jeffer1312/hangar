@@ -189,8 +189,9 @@
     createOpen = true;
   }
 
-  async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: 'claude' | 'codex') {
-    await createSession(name, cwd, configDir, provider);
+  async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: 'claude' | 'codex',
+                              engine?: string | null) {
+    await createSession(name, cwd, configDir, provider, engine);
     onNavigateToChat(name);
   }
 

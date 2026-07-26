@@ -373,9 +373,14 @@
   </header>
   <!-- Linha de contexto do card: branch/par + infos da statusline (custo, tempo de sessão) — a
        "parte de cima" das infos compartilhadas do turno. Só aparece quando há o que mostrar. -->
-  {#if session.branch || session.pair_peers?.length || meta?.costUsd != null || meta?.sessionTime || loopChip}
+  {#if session.branch || session.pair_peers?.length || meta?.costUsd != null || meta?.sessionTime || loopChip || session.engine}
     <div class="bc-sub">
       {#if session.branch}<span class="bc-branch">⎇ {session.branch}</span>{/if}
+      {#if session.engine}
+        <!-- Sem isto nada no card distingue uma sessão de motor de uma da conta Anthropic. NÃO
+             mostramos custo aqui: o preço que o Claude Code calcula é tabela Anthropic e mentiria. -->
+        <span class="engine-chip" title={`Motor: ${session.engine}`}>⚙ {session.engine}</span>
+      {/if}
       {#if loopChip}
         <!-- Loop runner (Task 11): mesmo formato do bc-chip, cor por tone (LOOP_TONE_COLOR). -->
         <span
@@ -597,6 +602,13 @@
   .bc-chip {
     max-width: 11em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     padding: 1px 8px; border-radius: var(--radius-full);
+  }
+  /* Motor de modelo (Task 5): sessao rodando fora da conta Anthropic. */
+  .engine-chip {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
+    color: var(--accent); background: var(--accent-dim);
+    padding: 1px 6px; border-radius: var(--radius-full);
+    flex-shrink: 0;
   }
   .bc-chip-btn {
     border: 0; font: inherit; font-size: var(--text-xs); cursor: pointer;

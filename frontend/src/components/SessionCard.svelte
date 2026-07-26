@@ -289,9 +289,9 @@
           {/if}
         </span>
       {/if}
-      {#if session.pair_peers?.length || limited || loopChip}
-        <!-- Chips informativos (🤝 grupo, ⏳ rate-limit, 🔁 loop) moram AQUI, no fluxo da coluna de
-             texto — na row-right eles esmagavam o nome e o cwd vazava por baixo (visto no iPhone). -->
+      {#if session.pair_peers?.length || limited || loopChip || session.engine}
+        <!-- Chips informativos (🤝 grupo, ⏳ rate-limit, 🔁 loop, ⚙ motor) moram AQUI, no fluxo da
+             coluna de texto — na row-right eles esmagavam o nome e o cwd vazava por baixo (visto no iPhone). -->
         <span class="badges-line">
           {#if session.pair_peers?.length}
             <span class="paired-chip" title={`Grupo com ${session.pair_peers.join(', ')}`}>🤝&nbsp;{session.pair_peers.length === 1 ? session.pair_peers[0] : session.pair_peers.length + 1}</span>
@@ -308,6 +308,11 @@
               style="color: {LOOP_TONE_COLOR[loopChip.tone]}; background: color-mix(in srgb, {LOOP_TONE_COLOR[loopChip.tone]} 14%, transparent);"
               title="Loop runner"
             >{loopChip.label}</span>
+          {/if}
+          {#if session.engine}
+            <!-- Sem isto nada na lista distingue uma sessão de motor de uma da conta Anthropic. NÃO
+                 mostramos custo aqui: o preço que o Claude Code calcula é tabela Anthropic e mentiria. -->
+            <span class="engine-chip" title={`Motor: ${session.engine}`}>⚙&nbsp;{session.engine}</span>
           {/if}
         </span>
       {/if}
@@ -671,6 +676,14 @@
     text-overflow: ellipsis;
     color: var(--accent);
     background: var(--accent-dim);
+  }
+
+  /* Motor de modelo (Task 5): sessao rodando fora da conta Anthropic. */
+  .engine-chip {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
+    color: var(--accent); background: var(--accent-dim);
+    padding: 1px 6px; border-radius: var(--radius-full);
+    flex-shrink: 0;
   }
 
   .limited-chip {

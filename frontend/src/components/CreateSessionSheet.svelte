@@ -2,7 +2,7 @@
   import { untrack } from 'svelte';
   import BottomSheet from './BottomSheet.svelte';
   import FolderScanner from './FolderScanner.svelte';
-  import { getSessions, listClaudeConfigs } from '../lib/api';
+  import { getSessions, listClaudeConfigs, getEngines, type Motor } from '../lib/api';
   import { basename } from '../lib/format';
   import { selectServer, getActiveId, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
@@ -12,7 +12,8 @@
     open: boolean;
     servers: Server[];
     onClose: () => void;
-    onCreate: (name: string, cwd?: string, configDir?: string | null, provider?: 'claude' | 'codex') => Promise<void>;
+    onCreate: (name: string, cwd?: string, configDir?: string | null, provider?: 'claude' | 'codex',
+               engine?: string | null) => Promise<void>;
     onOpenSession: (name: string) => void;
   }
   let { open, servers, onClose, onCreate, onOpenSession }: Props = $props();
@@ -55,6 +56,9 @@
   // Config dirs do Claude (ex: ~/.claude, ~/.claude-work). Picker so aparece quando ha mais de um.
   let configs = $state<ConfigDirInfo[]>([]);
   let selectedConfig = $state<string | null>(null);
+  // Motor de modelo (Task 5): '' = conta Anthropic (o padrão de sempre). Só faz sentido com provider claude.
+  let engine = $state('');
+  let motores = $state<Record<string, Motor>>({});
   // Guard de corrida: trocas rapidas de servidor deixam fetches em voo; so a resposta do ULTIMO
   // pedido pode escrever (senao a lista de um servidor antigo aterrissava por cima da atual).
   let cfgSeq = 0;
@@ -94,10 +98,14 @@
       manualOpen = false;
       manualPath = '';
       provider = 'claude';
+      engine = '';
       const cur = getActiveId();
       const target = servers.find((s) => s.id === cur) ? cur! : servers[0]?.id ?? '';
       if (target) pickTarget(target);      // pickTarget ja carrega os configs do alvo
       else loadConfigs();                  // sem lista de servidores: carrega do ativo mesmo
+      // Motores configurados (Task 4). Falha aqui NAO pode travar a criação de sessão: sem
+      // motores, o seletor simplesmente não aparece e tudo segue como antes.
+      getEngines().then((r) => (motores = r.motores)).catch(() => (motores = {}));
     });
   });
 
@@ -139,7 +147,8 @@
     loading = true;
     error = '';
     try {
-      await onCreate(name.trim(), picked, provider === 'claude' ? selectedConfig : null, provider);
+      await onCreate(name.trim(), picked, provider === 'claude' ? selectedConfig : null, provider,
+                     provider === 'claude' ? (engine || null) : null);
       onClose();
     } catch (err) {
       error = err instanceof Error ? err.message : 'Erro ao criar sessão';
@@ -258,6 +267,18 @@
           <select id="cfg-pick" class="field-input" bind:value={selectedConfig}>
             {#each configs as c (c.path)}
               <option value={c.path}>{c.label}{c.active ? ' (atual)' : ''}</option>
+            {/each}
+          </select>
+        </div>
+      {/if}
+
+      {#if provider === 'claude' && Object.keys(motores).length}
+        <div class="field">
+          <label class="field-label" for="engine-pick">Motor</label>
+          <select id="engine-pick" class="field-input" bind:value={engine}>
+            <option value="">Claude (sua conta)</option>
+            {#each Object.entries(motores) as [nome, m] (nome)}
+              <option value={nome}>{m.label ?? nome} · {m.model}</option>
             {/each}
           </select>
         </div>
