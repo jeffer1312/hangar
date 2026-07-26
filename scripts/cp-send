@@ -121,6 +121,14 @@ if [[ "$1" == "--new" ]]; then
         echo "erro: '::' é reservado pro endereço servidor::sessao — escolha outro nome" >&2
         exit 2
     fi
+    # Nome começando com '-' = o nome foi esquecido e uma FLAG virou nome. Sem esta guarda,
+    # `cp-send --new --engine kimi` criava uma sessão chamada "--engine", com cwd "kimi" e o motor
+    # DESCARTADO calado — na conta Anthropic, parecendo que atendeu o pedido.
+    if [[ "$name" == -* ]]; then
+        echo "erro: nome de sessão não pode começar com '-' (esqueceu o nome?)" >&2
+        echo "uso: cp-send --new <nome> [cwd] [--engine <motor>]" >&2
+        exit 2
+    fi
     # --engine: a sessão nova nasce num MOTOR de modelo (~/.claude/engines.json) em vez da conta
     # Anthropic. Serve pra parear com uma sessão rodando noutro modelo — o par continua no mesmo
     # ~/.claude (skills, hooks, contrato compartilhado), só o motor difere. Aceita o flag em
@@ -128,7 +136,12 @@ if [[ "$1" == "--new" ]]; then
     cwd=""; engine=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --engine) engine="${2:?uso: --engine <motor>}"; shift 2 ;;
+            --engine)
+                [[ -n "$engine" ]] && { echo "erro: --engine informado duas vezes" >&2; exit 2; }
+                engine="${2:?uso: --engine <motor>}"; shift 2 ;;
+            # Token com '-' na frente que não é --engine é opção errada (--engines, -engine). Aceitar
+            # como cwd fazia o erro aparecer no token SEGUINTE, apontando o inocente.
+            -*) echo "erro: opção desconhecida '$1'" >&2; exit 2 ;;
             *) if [[ -z "$cwd" ]]; then cwd="$1"; shift
                else echo "erro: argumento inesperado '$1'" >&2; exit 2; fi ;;
         esac
