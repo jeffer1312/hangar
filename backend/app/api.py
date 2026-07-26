@@ -34,6 +34,7 @@ from app.video import is_video, extract_frames, extract_audio
 from app.transcribe import transcribe, TranscribeError
 from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base, settings, automations_enabled
 from app import runtime_config
+from app import engine_probe, engines
 from app.costs import report as costs_report
 from app.git_ops import (
     list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit, push as push_branch, GitError, branch_of,
@@ -1526,6 +1527,89 @@ async def patch_config(request: Request):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"campos": runtime_config.estado()}
+
+
+def _motores_para_cliente() -> dict[str, dict]:
+    """Motores com a api_key MASCARADA: dá para conferir QUAL chave está lá sem copiá-la de volta
+    (mesma regra do groq_api_key no runtime_config)."""
+    out = {}
+    for nome, e in engines.listar().items():
+        visivel = dict(e)
+        chave = visivel.pop("api_key", "")
+        visivel["api_key"] = runtime_config.mascarar(chave)
+        visivel["api_key_definida"] = bool(chave)
+        out[nome] = visivel
+    return out
+
+
+@app.get("/api/engines", dependencies=[Depends(require_auth)])
+def get_engines():
+    return {"motores": _motores_para_cliente()}
+
+
+@app.put("/api/engines/{nome}", dependencies=[Depends(require_auth)])
+async def put_engine(nome: str, request: Request):
+    """Cria/atualiza um motor.
+
+    api_key ausente, vazia, ou IGUAL à máscara que o cliente recebeu = preserva a atual. Sem isso,
+    salvar o formulário só para trocar o modelo apagava a chave, sem volta — o bug pago em 22ae599."""
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "corpo deve ser um objeto")
+    atual = engines.listar().get(nome, {})
+    chave_atual = atual.get("api_key", "")
+    enviada = body.get("api_key")
+    if chave_atual and (
+        not isinstance(enviada, str)
+        or not enviada.strip()
+        or enviada.strip() == runtime_config.mascarar(chave_atual)
+    ):
+        body["api_key"] = chave_atual
+    try:
+        await asyncio.to_thread(engines.salvar, nome, body)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"motores": _motores_para_cliente()}
+
+
+@app.delete("/api/engines/{nome}", dependencies=[Depends(require_auth)])
+async def delete_engine(nome: str):
+    if not await asyncio.to_thread(engines.remover, nome):
+        raise HTTPException(404, "motor nao encontrado")
+    return {"ok": True}
+
+
+class EngineProbeBody(_StrictBody):
+    # `nome` de um motor já salvo (reusa a key do disco, que o cliente não tem inteira) OU
+    # base_url+api_key de um motor sendo criado.
+    nome: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+
+
+@app.post("/api/engines/modelos", dependencies=[Depends(require_auth)])
+async def engine_modelos(body: EngineProbeBody):
+    """Modelos que a key pode usar, direto do provedor. É também o 'Testar' da tela: 200 = key boa,
+    502 = a mensagem do provedor (401, host errado, endpoint ausente)."""
+    base_url, api_key = body.base_url, body.api_key
+    if body.nome:
+        salvo = engines.listar().get(body.nome)
+        if not salvo:
+            raise HTTPException(404, "motor nao encontrado")
+        base_url = base_url or salvo["base_url"]
+        api_key = api_key or salvo["api_key"]
+    if not base_url or not api_key:
+        raise HTTPException(400, "informe nome de um motor salvo, ou base_url + api_key")
+    try:
+        # Mesma guarda do salvar: a key vai no header, http para host público a expõe na rede.
+        base_url = engines.validar_base_url(base_url)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    try:
+        modelos = await asyncio.to_thread(engine_probe.listar_modelos, base_url, api_key)
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+    return {"modelos": modelos}
 
 
 @app.post("/api/sessions/{name}/upload", dependencies=[Depends(require_auth)])
