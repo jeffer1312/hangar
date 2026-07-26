@@ -29,7 +29,8 @@ from app.terminal_input import TerminalInput, drain
 from app.adapters import get_adapter
 from app.adapters.codex import sessions as codex_sessions
 from app.sse import merged_events
-from app.uploads import save_upload, resolve_upload, UploadError, MAX_BYTES
+from app.uploads import save_upload, resolve_upload, prune_old, UploadError, MAX_BYTES
+from app.video import is_video, extract_frames, extract_audio
 from app.transcribe import transcribe, TranscribeError
 from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base, settings, automations_enabled
 from app.costs import report as costs_report
@@ -1516,7 +1517,34 @@ async def upload(name: str, request: Request):
         path = await asyncio.to_thread(save_upload, info.cwd, data, filename)
     except UploadError as e:
         raise HTTPException(e.status, e.detail)
-    return {"path": path}
+
+    # Higiene: varre anexos velhos DESTA sessao. Barato (um listdir) e sem agendador pra manter.
+    # Falhar aqui nao pode custar o upload que acabou de dar certo.
+    try:
+        await asyncio.to_thread(prune_old, info.cwd, settings.upload_retention_days)
+    except Exception:
+        _log.exception("prune de uploads falhou (upload seguiu)")
+
+    # Video: o Read nao abre mp4, entao o anexo virava um caminho morto pro modelo. Extrai quadros
+    # ao longo da duracao + transcreve o audio -> vira coisa legivel. Best-effort: sem ffmpeg/sem
+    # audio/sem chave da Groq, devolve o que conseguiu e o upload segue igual.
+    frames: list[str] = []
+    fala = ""
+    if is_video(path):
+        try:
+            frames = await asyncio.to_thread(extract_frames, path)
+        except Exception:
+            _log.exception("extracao de quadros falhou (upload seguiu)")
+        try:
+            audio = await asyncio.to_thread(extract_audio, path)
+            if audio:
+                bytes_audio = await asyncio.to_thread(Path(audio).read_bytes)
+                fala = await asyncio.to_thread(transcribe, bytes_audio, "audio.m4a")
+        except TranscribeError as e:
+            _log.info("video sem transcricao: %s", e.detail)
+        except Exception:
+            _log.exception("transcricao do video falhou (upload seguiu)")
+    return {"path": path, "frames": frames, "transcript": fala.strip()}
 
 
 @app.post("/api/sessions/{name}/transcribe", dependencies=[Depends(require_auth)])

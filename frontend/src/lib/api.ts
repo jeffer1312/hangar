@@ -503,7 +503,10 @@ export async function broadcast(names: string[], text: string): Promise<Record<s
  * salva e devolve o path; o app depois manda a legenda + path pelo /input. O filename vai no header
  * X-Filename (percent-encoded) so pra extensao; o nome final e gerado pelo servidor. 401 -> self-heal.
  */
-export async function uploadFile(name: string, file: File): Promise<{ path: string }> {
+export async function uploadFile(
+  name: string,
+  file: File,
+): Promise<{ path: string; frames?: string[]; transcript?: string }> {
   const base = getBaseUrl();
   const res = await fetch(`${base}/api/sessions/${encodeURIComponent(name)}/upload`, {
     method: 'POST',

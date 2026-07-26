@@ -22,6 +22,7 @@
   import IconMic from './icons/IconMic.svelte';
   import IconMonitor from './icons/IconMonitor.svelte';
   import IconFolder from './icons/IconFolder.svelte';
+  import { prepareImage } from '../lib/imagePrep';
   import ContextRing from './ContextRing.svelte';
   import ModelEffortSheet from './ModelEffortSheet.svelte';
   import CodexModelSheet from './CodexModelSheet.svelte';
@@ -611,8 +612,15 @@
         // send-keys). Cada path nao tem espaco (nome gerado). Marca imagem x arquivo pelo tipo.
         const parts: string[] = [];
         for (const a of attachments) {
-          const { path } = await uploadFile(sessionName, a.file);
+          // Encolhe foto/converte HEIC antes de subir. Falhou? prepareImage devolve o original.
+          const arquivo = a.isImage ? await prepareImage(a.file) : a.file;
+          const { path, frames, transcript } = await uploadFile(sessionName, arquivo);
           parts.push((a.isImage ? '📎 imagem: ' : '📎 arquivo: ') + path);
+          // Video: o backend extraiu quadros ao longo da duracao e transcreveu a fala. Os quadros
+          // entram como imagens (o Read abre; a lista tambem vira miniatura no chat) e a fala vai
+          // como texto — sem isso o mp4 era um caminho que o modelo nao consegue abrir.
+          for (const q of frames ?? []) parts.push('📎 imagem: ' + q);
+          if (transcript) parts.push(`fala do vídeo: "${transcript}"`);
         }
         const attachPart = parts.join(' ');
         const msg = (caption ? caption + ' — ' : '') + attachPart;
