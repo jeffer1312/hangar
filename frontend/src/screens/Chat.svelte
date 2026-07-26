@@ -914,11 +914,13 @@
   <div class="sr-only" role="status">{stateAnnounce}</div>
   <div class="navbar-mount" bind:this={navEl}>
     <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={isCodex ? 'Codex' : null} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
-
-    {#if loopSheetOpen}
-      <LoopSheet open={true} sessionName={sessionName} onClose={() => (loopSheetOpen = false)} />
-    {/if}
   </div>
+
+  <!-- LoopSheet FORA do .navbar-mount: no desktop largo o mount fica display:none (a info migra
+       pro painel de contexto) e um filho dele sumiria junto. -->
+  {#if loopSheetOpen}
+    <LoopSheet open={true} sessionName={sessionName} onClose={() => (loopSheetOpen = false)} />
+  {/if}
 
   {#if desktop && showContextPanel}
     <DesktopSessionContext
@@ -928,6 +930,23 @@
       {pairPeers}
       {serverLabel}
       provider={sessionProvider}
+      {sessionName}
+      onOpenTerminal={openMirror}
+      terminalAlert={tuiOverlay && !mirrorOpen}
+      onOpenRun={() => (runOpen = true)}
+      {runRunning}
+      onOpenAttachments={() => (anexosOpen = true)}
+      onOpenActivity={hasActivity ? () => (activityOpen = true) : undefined}
+      {activityBadge}
+      {activityRunning}
+      onExpandUsage={() => (usageOpen = true)}
+      limited={stateEvent?.limited ?? false}
+      limitReset={stateEvent?.limit_reset ?? null}
+      working={currentState === 'working'}
+      loopLabel={loopChip?.label ?? null}
+      loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']}
+      onLoopTap={() => (loopSheetOpen = true)}
+      onProviderTap={isCodex ? () => (limitsOpen = true) : undefined}
     />
   {/if}
 
@@ -1119,6 +1138,14 @@
   }
   .navbar-mount > :global(.navbar) {
     pointer-events: auto;
+  }
+
+  /* Desktop LARGO com painel de contexto: a NavBar some — info (estado/repo/modelo/limites) e
+     acoes (terminal/rodar/anexos/atividade) ja migram pro DesktopSessionContext. Mesma breakpoint
+     do painel (1280px): ele so existe la, entao nunca fica um sem o outro. A altura medida cai
+     pra 0 via ResizeObserver e a lista sobe junto (--nav-h). */
+  @media (min-width: 1280px) {
+    .chat-screen.with-context .navbar-mount { display: none; }
   }
 
   .chat-error {
