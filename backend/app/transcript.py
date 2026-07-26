@@ -94,6 +94,26 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
     com text + tool_use juntos) — devolver so o 1o engolia os demais silenciosamente."""
     etype = obj.get("type")
     uid = obj.get("uuid", "")
+
+    # Fim de agente ENFILEIRADO. Quando o agente de background termina com o assistente no meio de um
+    # turno, o harness NAO grava a <task-notification> como mensagem de user: grava uma entrada
+    # `queue-operation`/enqueue, que nao tem `message` nem `uuid` — e morria no early-return logo
+    # abaixo. Resultado: o painel de Atividade nunca recebia o sinal de termino e o agente ficava
+    # "RODANDO AGORA" pra sempre (observado ao vivo: 2 de 6 agentes travados, os 2 que terminaram
+    # enquanto o turno corria; os 4 que chegaram entre turnos vieram como user e fechavam certo).
+    # Mesmo tool_result sintetico do caminho normal — `resulted` no fold e um Set, entao a entrega
+    # posterior da mesma notificacao (quando vier) so repete, sem efeito.
+    if etype == "queue-operation":
+        queued = obj.get("content")
+        if isinstance(queued, str) and queued.lstrip().startswith("<task-notification>"):
+            m = _TASK_NOTIF_RE.search(queued)
+            if m:
+                tid = m.group(1).strip()
+                # id proprio: a entrada nao tem uuid, e o front deduplica por id.
+                return [ChatEvent(kind="tool_result", id=f"queued-task:{tid}",
+                                  tool_use_id=f"task:{tid}", result="task-notification")]
+        return []
+
     msg = obj.get("message")
     if not isinstance(msg, dict):
         return []
