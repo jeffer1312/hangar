@@ -70,6 +70,55 @@ out=$(printf '%s' "$PAYLOAD" | env -u CP_ENGINE node omniroute-statusline.js)
 checa "sessao normal ignora quota de motor" nao '⚡5h' "$out"
 rm -f "$CACHE"
 
+# ── Chip de cache (só em motor) ──────────────────────────────────────────────
+TR="${TMPDIR:-/tmp}/cp-test-transcript.jsonl"
+com_transcript() {  # $1 = payload extra com transcript_path
+  printf '%s' "$1" | env CP_ENGINE=$MOTOR CP_STATUSLINE_NO_REFRESH=1 node omniroute-statusline.js
+}
+PT=$(printf '{"session_id":"t2","model":{"display_name":"k3"},"workspace":{"current_dir":"/tmp"},"transcript_path":"%s","context_window":{"remaining_percentage":50,"total_input_tokens":94000,"total_output_tokens":5,"context_window_size":262144}}' "$TR")
+
+# Turno que acertou o cache, 12 min depois do anterior: taxa alta + marca de intervalo.
+{ printf '{"timestamp":"2026-07-26T10:00:00Z","message":{"id":"m1","usage":{"input_tokens":900,"cache_read_input_tokens":120000,"output_tokens":10}}}\n'
+  printf '{"timestamp":"2026-07-26T10:12:00Z","message":{"id":"m2","usage":{"input_tokens":1000,"cache_read_input_tokens":130000,"output_tokens":10}}}\n'
+  printf '{"timestamp":"2026-07-26T10:12:00Z","message":{"id":"m2","usage":{"input_tokens":1000,"cache_read_input_tokens":130000,"output_tokens":10}}}\n'
+} > "$TR"
+out=$(com_transcript "$PT")
+checa "cache alto vira taxa"        tem '♻99%' "$out"
+checa "intervalo longo vira ampulheta" tem '⏳12m' "$out"
+
+# Turno sintético (usage zerado) no meio não pode encurtar o intervalo: 52min tem que continuar 52min.
+{ printf '{"timestamp":"2026-07-26T09:00:00Z","message":{"id":"m1","usage":{"input_tokens":900,"cache_read_input_tokens":50000,"output_tokens":10}}}\n'
+  printf '{"timestamp":"2026-07-26T09:40:00Z","message":{"id":"ms","model":"<synthetic>","usage":{"input_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":0}}}\n'
+  printf '{"timestamp":"2026-07-26T09:52:00Z","message":{"id":"m2","usage":{"input_tokens":1000,"cache_read_input_tokens":190000,"output_tokens":10}}}\n'
+} > "$TR"
+out=$(com_transcript "$PT")
+checa "turno sintetico nao encurta o intervalo" tem '⏳52m' "$out"
+checa "turno sintetico nao vira o intervalo"    nao '⏳12m' "$out"
+
+# Intervalo de horas: o resto precisa vir com unidade ('1h5m', nunca '1h5').
+{ printf '{"timestamp":"2026-07-26T10:00:00Z","message":{"id":"m1","usage":{"input_tokens":900,"cache_read_input_tokens":120000,"output_tokens":10}}}\n'
+  printf '{"timestamp":"2026-07-26T11:05:00Z","message":{"id":"m2","usage":{"input_tokens":1000,"cache_read_input_tokens":130000,"output_tokens":10}}}\n'
+} > "$TR"
+out=$(com_transcript "$PT")
+checa "intervalo em horas leva o resto" tem '⏳1h5m' "$out"
+
+# Re-prefill: contexto inteiro cobrado como input novo -> taxa no chão, sem ampulheta (turno colado).
+{ printf '{"timestamp":"2026-07-26T10:00:00Z","message":{"id":"m1","usage":{"input_tokens":900,"cache_read_input_tokens":120000,"output_tokens":10}}}\n'
+  printf '{"timestamp":"2026-07-26T10:01:00Z","message":{"id":"m2","usage":{"input_tokens":131000,"cache_read_input_tokens":0,"output_tokens":10}}}\n'
+} > "$TR"
+out=$(com_transcript "$PT")
+checa "re-prefill aparece como 0%" tem '♻0%' "$out"
+checa "turno colado nao marca intervalo" nao '⏳' "$out"
+
+# Sessão normal não ganha o chip, e transcript inexistente não quebra nada.
+out=$(printf '%s' "$PT" | env -u CP_ENGINE node omniroute-statusline.js)
+checa "sessao normal nao tem chip de cache" nao '♻' "$out"
+rm -f "$TR"
+out=$(com_transcript "$PT")
+checa "transcript sumido nao quebra"  tem '262k' "$out"
+checa "transcript sumido nao inventa" nao '♻'    "$out"
+rm -f "${TMPDIR:-/tmp}/harness-cost-t2.json"
+
 # O sidecar de custo não pode ser escrito em sessão de motor.
 rm -f "${TMPDIR:-/tmp}/harness-cost-t1.json"
 motor >/dev/null
