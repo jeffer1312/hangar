@@ -53,6 +53,11 @@
   const week = $derived(status?.weeklyPct);
   const hasDial = $derived(known(five) || known(week));
 
+  // 100% e o unico valor de 3 digitos: com o rotulo na frente o par estoura os 24,5px uteis do
+  // miolo (medido: 26,7px), entao numero e rotulo encolhem juntos SO nesse caso.
+  const wide5 = $derived(Math.round(clamp(five)) >= 100);
+  const wide7 = $derived(Math.round(clamp(week)) >= 100);
+
   // Texto pro leitor de tela: o desenho e aria-hidden, entao o rotulo carrega os dois numeros.
   const a11y = $derived(
     `Uso: 5 horas ${known(five) ? Math.round(clamp(five)) + '%' : 'sem dado'}` +
@@ -87,10 +92,16 @@
               transform="rotate(-90 22 22)"
             />
           {/if}
-          <!-- Numeros empilhados na MESMA ordem dos aneis (de fora pra dentro = de cima pra baixo).
-               Sem "%": o anel ja diz que e percentual, e o espaco e curto. -->
-          <text x="22" y="19" class="num num-5h" text-anchor="middle" dominant-baseline="middle">{label(five)}</text>
-          <text x="22" y="29" class="num num-7d" text-anchor="middle" dominant-baseline="middle">{label(week)}</text>
+          <!-- Numeros empilhados na MESMA ordem dos aneis (de fora pra dentro = de cima pra baixo),
+               cada um com o rotulo da janela num corpo bem menor: sem ele "4" em cima e "9"
+               embaixo nao dizem quem e quem. O rotulo leva a LETRA ("5h", nao "5") de proposito:
+               so o digito colava no valor e virava outro numero — 5h em 4% renderizava "54", que
+               se le como 54%. A letra quebra a sequencia de digitos. Sem "%": o anel ja diz que e
+               percentual, e o buraco do meio tem 24,5px de largura pra gastar. -->
+          <text x="22" y="19" class="num num-5h" class:wide={wide5} text-anchor="middle" dominant-baseline="middle"
+          ><tspan class="cap">5h</tspan><tspan dx={wide5 ? 1 : 1.5}>{label(five)}</tspan></text>
+          <text x="22" y="29" class="num num-7d" class:wide={wide7} text-anchor="middle" dominant-baseline="middle"
+          ><tspan class="cap">7d</tspan><tspan dx={wide7 ? 1 : 1.5}>{label(week)}</tspan></text>
         </svg>
       </button>
     {/if}
@@ -152,6 +163,18 @@
   }
   .num-5h { font-size: 11px; font-weight: 700; fill: var(--text-primary); }
   .num-7d { font-size: 9px; font-weight: 600; fill: var(--text-muted); }
+  /* 100%: numero E rotulo encolhem, senao o par estoura os 24,5px do miolo (medido: 26,7px). */
+  .num-5h.wide { font-size: 8.5px; }
+  .num-7d.wide { font-size: 7.5px; }
+  .wide .cap { font-size: 5.5px; }
+  /* Rotulo da janela: o menor corpo do desenho, so pra desambiguar. Nao acompanha a cor do alerta
+     (quem grita e o numero e o arco) — se acompanhasse, viraria mais ruido vermelho. */
+  .cap {
+    font-size: 6.5px;
+    font-weight: 700;
+    fill: var(--text-muted);
+    opacity: 0.85;
+  }
 
   /* Cada anel tem a propria rampa: o 5h pode estar no vermelho com o 7d tranquilo, e vice-versa.
      So o arco que apertou muda de cor — junto com o numero dele. */
