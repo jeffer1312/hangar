@@ -95,7 +95,13 @@ function claude
     end
 
     set -l run
-    if command -q systemd-run; and set -q XDG_RUNTIME_DIR
+    # `command -q systemd-run` diz que o BINARIO existe, nao que ele FUNCIONA: o gerenciador systemd
+    # do usuario pode recusar criar scope transiente ("Failed to start transient scope unit"), e ai
+    # o `claude` simplesmente nao abre. Medido nesta maquina: 5/5 falhas com binario e gerenciador na
+    # mesma versao. O probe custa um fork e transforma "nao abre" em "abre sem scope proprio".
+    # As tres condicoes ficam na MESMA linha logica: em fish, um `and` em linha nova encerra a
+    # condicao do if e vira o primeiro comando do corpo — o probe seria ignorado, calado.
+    if command -q systemd-run; and set -q XDG_RUNTIME_DIR; and systemd-run --user --scope --collect -q -- true >/dev/null 2>&1
         set run systemd-run --user --scope --collect -q --
     end
     $run tmux new-session -s $name -c "$PWD" \

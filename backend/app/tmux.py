@@ -6,6 +6,34 @@ import subprocess
 RUN = subprocess.run
 
 
+_SCOPE = ["systemd-run", "--user", "--scope", "--collect", "-q", "--"]
+
+# Cache do probe abaixo: None = ainda nao testado. Por processo — se o systemd voltar ao normal,
+# um restart do backend re-testa. Nao vale re-testar a cada sessao: o gerenciador raramente muda
+# de estado e o probe custa um fork.
+_scope_usavel: bool | None = None
+
+
+def _scope_probe() -> bool:
+    # `systemd-run` pode ESTAR instalado e ainda assim falhar: o gerenciador systemd do usuario
+    # recusa criar scope transiente ("Failed to start transient scope unit: Unit run-pN.scope not
+    # found") e o comando sai 1 sem rodar nada. Aconteceu nesta maquina, 5/5 tentativas, com o
+    # binario e o gerenciador na mesma versao — logo NAO da pra inferir do `which`.
+    # Sem este probe, toda criacao de sessao morre com "falha ao criar sessao no tmux": o app fica
+    # sem abrir sessao por causa de um detalhe de cgroup que e OPCIONAL.
+    global _scope_usavel
+    if _scope_usavel is None:
+        _scope_usavel = _run([*_SCOPE, "true"]).returncode == 0
+        if not _scope_usavel:
+            # Falha aparece, nao some: sem o scope, uma sessao que TENHA de iniciar o servidor tmux
+            # nasce no cgroup do backend, e ai um `systemctl restart` do backend derruba as sessoes.
+            # Com o servidor tmux ja de pe (caso normal) o pane herda o cgroup DELE e nada muda.
+            _log.warning("systemd-run --user --scope indisponivel; criando sessoes sem scope "
+                         "proprio. Se o servidor tmux precisar ser iniciado por aqui, um restart "
+                         "do backend pode derrubar as sessoes.")
+    return _scope_usavel
+
+
 def _scope_prefix() -> list[str]:
     # Spawn the tmux SERVER in its OWN transient systemd scope so it does NOT inherit the
     # backend service's cgroup. Without this, `systemctl restart claude-pocket-backend`
@@ -13,7 +41,7 @@ def _scope_prefix() -> list[str]:
     # one driving this app). ponytail: gated on systemd-run + a user runtime dir; on non-systemd
     # hosts returns [] and spawns plainly, where the cgroup teardown problem doesn't exist.
     if os.name == "posix" and os.environ.get("XDG_RUNTIME_DIR") and shutil.which("systemd-run"):
-        return ["systemd-run", "--user", "--scope", "--collect", "-q", "--"]
+        return _SCOPE if _scope_probe() else []
     return []
 
 

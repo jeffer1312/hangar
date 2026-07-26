@@ -119,9 +119,13 @@ def test_scope_prefix_empty_without_runtime_dir(monkeypatch):
 
 
 def test_scope_prefix_wraps_when_systemd_available(monkeypatch):
-    # Com runtime dir + systemd-run -> tmux nasce em scope proprio (fora do cgroup do backend).
+    # Com runtime dir + systemd-run QUE FUNCIONA -> tmux nasce em scope proprio (fora do cgroup do
+    # backend). O probe entrou depois deste teste: "systemd-run instalado" deixou de bastar, porque o
+    # gerenciador do usuario pode recusar o scope e ai o wrap fazia toda criacao de sessao falhar.
     monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
     monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/systemd-run")
+    monkeypatch.setattr(tmux, "_scope_usavel", None)
+    monkeypatch.setattr(tmux, "RUN", lambda args, **k: subprocess.CompletedProcess(args, 0))
     assert tmux._scope_prefix()[:3] == ["systemd-run", "--user", "--scope"]
 
 
@@ -207,3 +211,57 @@ def test_capture_pane_falha_de_tmux_e_logada(caplog):
                       return_value=SimpleNamespace(stdout="", stderr="session not found", returncode=1)):
         assert t.capture_pane("sess") == ""
     assert "session not found" in caplog.text
+
+
+def test_scope_prefix_sem_scope_quando_systemd_run_falha(monkeypatch):
+    # systemd-run pode ESTAR instalado e ainda assim recusar criar scope transiente ("Failed to start
+    # transient scope unit"). Sem este gate, TODA criacao de sessao morria com "falha ao criar sessao
+    # no tmux" — o app parava de abrir sessao por causa de um detalhe de cgroup que e opcional.
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+    monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/systemd-run")
+    monkeypatch.setattr(tmux, "_scope_usavel", None)
+    monkeypatch.setattr(tmux, "RUN", lambda args, **k: subprocess.CompletedProcess(args, 1))
+    assert tmux._scope_prefix() == []
+
+
+def test_scope_prefix_usa_scope_quando_systemd_run_funciona(monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+    monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/systemd-run")
+    monkeypatch.setattr(tmux, "_scope_usavel", None)
+    monkeypatch.setattr(tmux, "RUN", lambda args, **k: subprocess.CompletedProcess(args, 0))
+    assert tmux._scope_prefix() == ["systemd-run", "--user", "--scope", "--collect", "-q", "--"]
+
+
+def test_scope_probe_roda_uma_vez_so(monkeypatch):
+    # O probe custa um fork; repetir a cada sessao seria desperdicio num estado que quase nunca muda.
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+    monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/systemd-run")
+    monkeypatch.setattr(tmux, "_scope_usavel", None)
+    chamadas = []
+    monkeypatch.setattr(tmux, "RUN",
+                        lambda args, **k: (chamadas.append(args) or subprocess.CompletedProcess(args, 0)))
+    tmux._scope_prefix()
+    tmux._scope_prefix()
+    tmux._scope_prefix()
+    assert len(chamadas) == 1
+
+
+def test_new_session_sem_systemd_run_quebrado_ainda_cria(monkeypatch):
+    # O caminho completo: systemd-run recusando, new_session tem de montar o comando do tmux SEM o
+    # prefixo em vez de falhar.
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+    monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/systemd-run")
+    monkeypatch.setattr(tmux, "_scope_usavel", None)
+    vistos = []
+
+    def _fake(args, **k):
+        vistos.append(args)
+        # o probe (…-- true) falha; o tmux de verdade passa
+        codigo = 1 if args[-1] == "true" else 0
+        return subprocess.CompletedProcess(args, codigo, stdout="", stderr="")
+
+    monkeypatch.setattr(tmux, "RUN", _fake)
+    assert tmux.new_session("s", "/tmp", "claude --session-id x") is True
+    cmd = vistos[-1]
+    assert cmd[0] == "tmux"
+    assert "systemd-run" not in cmd
