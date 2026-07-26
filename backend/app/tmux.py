@@ -23,6 +23,10 @@ def _scope_probe() -> bool:
     # sem abrir sessao por causa de um detalhe de cgroup que e OPCIONAL.
     global _scope_usavel
     if _scope_usavel is None:
+        # ponytail: check-then-act sem lock. Duas POST /api/sessions concorrentes no frio (backend
+        # recem-subido) podem rodar o probe as duas — mas o probe é idempotente (mesmo comando,
+        # mesmo resultado booleano), então o pior caso é um fork() de sobra, nunca um valor
+        # inconsistente. Lock só entra se esse fork extra virar custo medido.
         _scope_usavel = _run([*_SCOPE, "true"]).returncode == 0
         if not _scope_usavel:
             # Falha aparece, nao some: sem o scope, uma sessao que TENHA de iniciar o servidor tmux

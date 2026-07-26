@@ -559,7 +559,13 @@ export interface ModeloProvedor {
   vision: boolean | null;
 }
 
-export function getEngines(): Promise<{ motores: Record<string, Motor> }> {
+export function getEngines(): Promise<{
+  motores: Record<string, Motor>;
+  // true quando engines.json existe mas não pôde ser lido (hand-edit quebrado, etc): a tela
+  // precisa distinguir isto de "nenhum motor configurado" — as duas batem em `motores: {}`.
+  arquivo_corrompido: boolean;
+  arquivo_caminho: string;
+}> {
   return apiFetch('/api/engines');
 }
 

@@ -575,7 +575,7 @@ async def create_session(body: CreateBody):
     if body.engine is not None:
         if body.provider != "claude":
             raise HTTPException(400, "motor so vale para provider claude")
-        if body.engine not in engines.listar():
+        if body.engine not in await asyncio.to_thread(engines.listar):
             raise HTTPException(400, "motor invalido")
     try:
         if body.provider == "codex":
@@ -1559,7 +1559,16 @@ def _motores_para_cliente() -> dict[str, dict]:
 
 @app.get("/api/engines", dependencies=[Depends(require_auth)])
 def get_engines():
-    return {"motores": _motores_para_cliente()}
+    # arquivo_corrompido: distingue "ninguém configurou motor" de "engines.json existe mas não
+    # pôde ser lido" — as duas batem em {} no listar() de propósito (não pode derrubar sessão nem
+    # o tick do SSE por um hand-edit ruim), mas a tela precisa saber a diferença (item 1 do
+    # review): sem isto o usuário vê "nenhum motor ainda" com um arquivo quebrado escondendo
+    # motores reais, re-adiciona um, e a próxima gravação apaga os outros.
+    return {
+        "motores": _motores_para_cliente(),
+        "arquivo_corrompido": engines.arquivo_corrompido(),
+        "arquivo_caminho": str(engines.caminho()),
+    }
 
 
 @app.put("/api/engines/{nome}", dependencies=[Depends(require_auth)])
@@ -1571,7 +1580,8 @@ async def put_engine(nome: str, request: Request):
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(400, "corpo deve ser um objeto")
-    atual = engines.listar().get(nome, {})
+    # I/O de disco no threadpool, igual ao resto deste handler (ver comentário acima de create_session).
+    atual = (await asyncio.to_thread(engines.listar)).get(nome, {})
     chave_atual = atual.get("api_key", "")
     enviada = body.get("api_key")
     if chave_atual and (
@@ -1584,13 +1594,18 @@ async def put_engine(nome: str, request: Request):
         await asyncio.to_thread(engines.salvar, nome, body)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return {"motores": _motores_para_cliente()}
+    return {"motores": await asyncio.to_thread(_motores_para_cliente)}
 
 
 @app.delete("/api/engines/{nome}", dependencies=[Depends(require_auth)])
 async def delete_engine(nome: str):
-    if not await asyncio.to_thread(engines.remover, nome):
-        raise HTTPException(404, "motor nao encontrado")
+    try:
+        if not await asyncio.to_thread(engines.remover, nome):
+            raise HTTPException(404, "motor nao encontrado")
+    except ValueError as e:
+        # engines.json corrompido: remover() recusa escrever por cima (item 1 do review) em vez de
+        # apagar os outros motores. Vira 400 com a mensagem em vez de 500 cru.
+        raise HTTPException(400, str(e))
     return {"ok": True}
 
 
@@ -1617,7 +1632,8 @@ async def engine_modelos(body: EngineProbeBody):
     if body.nome:
         if body.base_url or body.api_key:
             raise HTTPException(400, "nome já usa o motor salvo; não envie base_url/api_key junto")
-        salvo = engines.listar().get(body.nome)
+        # I/O de disco no threadpool, igual ao resto deste handler (ver comentário acima de create_session).
+        salvo = (await asyncio.to_thread(engines.listar)).get(body.nome)
         if not salvo:
             raise HTTPException(404, "motor nao encontrado")
         base_url, api_key = salvo["base_url"], salvo["api_key"]
@@ -1634,6 +1650,11 @@ async def engine_modelos(body: EngineProbeBody):
         modelos = await asyncio.to_thread(engine_probe.listar_modelos, base_url, api_key)
     except RuntimeError as e:
         raise HTTPException(502, str(e))
+    except ValueError as e:
+        # \r/\n na key ou no base_url (item 3 do review): engine_probe recusa ANTES de montar o
+        # Request — sem isto o urllib levantaria com a key crua na mensagem, e a rota abaixo relança
+        # RuntimeError pro uvicorn logar (traceback com a key no journal). 400 sem ecoar o valor.
+        raise HTTPException(400, str(e))
     return {"modelos": modelos}
 
 

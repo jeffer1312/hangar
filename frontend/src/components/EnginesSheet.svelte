@@ -27,6 +27,12 @@
   let carregando = $state(false);
   let erro = $state('');
   let salvando = $state(false);
+  // engines.json existe mas não pôde ser lido: bate em `motores: {}` igual a "nunca configurou
+  // nada" (o backend não pode derrubar sessão/SSE por um hand-edit ruim), mas a tela TEM que dizer
+  // a diferença — senão o usuário vê "nenhum motor ainda", re-adiciona um, e a próxima gravação
+  // apaga os outros motores que estavam escondidos atrás do arquivo quebrado.
+  let arquivoCorrompido = $state(false);
+  let arquivoCaminho = $state('');
 
   let form = $state<null | {
     nome: string;
@@ -56,7 +62,10 @@
     carregando = true;
     erro = '';
     try {
-      motores = (await getEngines()).motores;
+      const r = await getEngines();
+      motores = r.motores;
+      arquivoCorrompido = r.arquivo_corrompido;
+      arquivoCaminho = r.arquivo_caminho;
     } catch (e) {
       erro = e instanceof Error ? e.message : 'Falha ao carregar';
     } finally {
@@ -325,7 +334,17 @@
         </div>
       </div>
     {:else}
-      {#if !Object.keys(motores).length}
+      {#if arquivoCorrompido}
+        <!-- Não é "nenhum motor configurado": o arquivo existe mas está com erro de formato, e
+             pode estar escondendo motores reais (com as keys deles) atrás do erro de leitura.
+             Adicionar um motor agora falha ao salvar de propósito (o backend recusa sobrescrever
+             um arquivo que não conseguiu ler) — melhor isso do que apagar o que já está lá. -->
+        <p class="aviso erro">
+          Não consegui ler <code>{arquivoCaminho}</code> — o arquivo existe mas está com erro de
+          formato (JSON inválido). Se você já tinha motores configurados, eles continuam no
+          arquivo: corrija-o à mão (ou restaure um backup) antes de adicionar um novo.
+        </p>
+      {:else if !Object.keys(motores).length}
         <p class="aviso">
           Nenhum motor ainda. Adicione um e ele aparece no seletor ao criar sessão, e no terminal como
           <code>claude-engine &lt;nome&gt;</code>.

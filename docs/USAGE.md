@@ -296,6 +296,7 @@ CP_AUTH_TOKEN=$(openssl rand -hex 24) CP_SYNC=1 CP_SYNC_BOOTSTRAP=$(openssl rand
 | Não vejo código novo após mudar | PWA com service worker servindo JS velho → **hard reload** / limpar dados do site / re-adicionar o PWA. |
 | Backend reiniciar | precisa do cwd=`backend` (`python -m app.main` acha `app`). Sem `--reload` (trava SSE no SIGTERM). |
 | Pane de sessão de motor morre na hora, sem chat nenhum | `cp-engine` não está no PATH do **servidor tmux** (a sessão nasce via `cp-engine --exec`). Garanta que o PATH usado pelo tmux enxerga `cp-engine` (mesmo instalado pelo `install-claude-wrapper.sh`). |
+| Tela de Motores de modelo diz que não conseguiu ler o arquivo | `~/.claude/engines.json` foi editado à mão e ficou com JSON inválido — corrija-o (ou restaure um backup) antes de adicionar um motor novo; o app se recusa a gravar por cima de um arquivo que não conseguiu ler, pra não apagar os motores que já estavam lá. |
 
 ## 8. Segurança (resumo)
 
