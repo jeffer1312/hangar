@@ -23,7 +23,6 @@ from app.adapters.codex.appserver import AppServerClient
 from app.adapters.codex.preview import CodexPreviewSource
 from app.adapters.codex.rollout import parse_rollout_line
 from app import tmux
-from app import terminal_input as ti
 from app.pqueue import PromptQueue
 from app.state import StateEvent
 from app.transcript import ChatEvent, TranscriptTailer
@@ -236,6 +235,16 @@ def format_status_line(
 
 class CodexAdapter:
     provider = "codex"
+    # Backoff inicial/teto do retry de assinatura (_subscribe_when_ready). Atributo de classe pra
+    # o teste encurtar sem precisar remendar asyncio.sleep global (que viraria busy-loop).
+    SUBSCRIBE_RETRY_BASE = 1.0
+    SUBSCRIBE_RETRY_MAX = 10.0
+    # Tentativas ate gritar no log. ~10 cobre folgado o tempo do 1o turno gravar o rollout (caso
+    # esperado); passar disso e sinal de erro permanente, nao de sessao ociosa.
+    SUBSCRIBE_WARN_AFTER = 10
+    # Teto pra considerar morto um turno de sessao NAO assinada (sem turn/completed pra
+    # limpar). Generoso: so existe pra impedir bloqueio permanente, nao pra paralelizar.
+    UNSUBSCRIBED_TURN_TTL = 300.0
 
     def __init__(self) -> None:
         # nome da sessao tmux -> {"client": AppServerClient, "thread_id": str, "state": str,
@@ -250,6 +259,8 @@ class CodexAdapter:
         # Backend-owned watcher: se a TUI tmux morre (inclusive terminal fechado com o helper junto),
         # remove o sidecar e encerra o app-server. O cleanup nao pode depender do processo wrapper.
         self._tmux_watchers: dict[str, asyncio.Task] = {}
+        # Task de assinatura da thread (thread/resume com retry) — ver _subscribe_when_ready.
+        self._subscribers: dict[str, asyncio.Task] = {}
 
     def _start_tmux_watcher(self, name: str) -> None:
         old = self._tmux_watchers.pop(name, None)
@@ -274,6 +285,9 @@ class CodexAdapter:
             sess = self._sessions.pop(name, None)
             if sess is None:
                 return
+            sub = self._subscribers.pop(name, None)
+            if sub is not None:
+                sub.cancel()
             term = getattr(sess["client"], "terminate", None)
             if callable(term):
                 term()
@@ -290,10 +304,82 @@ class CodexAdapter:
             if current is asyncio.current_task():
                 self._tmux_watchers.pop(name, None)
 
+    def start_subscription(self, name: str, cwd: str) -> None:
+        """Assina a thread criada pela TUI, em background (ver _subscribe_when_ready)."""
+        old = self._subscribers.pop(name, None)
+        if old is not None:
+            old.cancel()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # callers sync/testes sem event loop
+        self._subscribers[name] = loop.create_task(
+            self._subscribe_when_ready(name, cwd), name=f"codex-subscribe-{name}"
+        )
+
+    async def _subscribe_when_ready(self, name: str, cwd: str) -> None:
+        """Chama `thread/resume` ate colar — e o que torna o backend ASSINANTE da thread.
+
+        POR QUE RETENTAR (medido contra codex-cli 0.144.6): as notifications do app-server sao
+        POR ASSINATURA, nao broadcast. Um cliente que nao deu thread/start nem thread/resume so
+        recebe eventos globais (thread/status/changed, app/list/updated) -- nada de turn/started,
+        turn/completed, item/agentMessage/delta ou thread/tokenUsage/updated. Era essa surdez que
+        travava tudo: estado congelado, sem preview, sem statusline, e o drain-on-complete (que
+        mora no turn/completed) nunca disparando -> msg do celular presa pra sempre na fila.
+
+        E por que nao da pra assinar na hora: enquanto a thread nao tem NENHUM turno, o rollout
+        ainda nao existe em disco e o app-server responde `no rollout found for thread id`. Logo
+        a assinatura so e possivel depois do 1o turno -- daí o retry. O 1o turno nao perde conteudo
+        no app: o chat vem do tail do rollout, que e completo independente de assinatura.
+        """
+        delay = self.SUBSCRIBE_RETRY_BASE
+        attempts = 0
+        while name in self._sessions:
+            sess = self._sessions.get(name)
+            if sess is None:
+                return
+            if sess.get("subscribed"):
+                return
+            try:
+                result = await sess["client"].request("thread/resume", {
+                    "threadId": sess["thread_id"],
+                    "cwd": cwd,
+                    "sandbox": _SANDBOX,
+                    "approvalPolicy": _APPROVAL,
+                })
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # "no rollout found" ate o 1o turno e ESPERADO; qualquer outro erro (thread invalida,
+                # app-server recusando) e permanente e ficava indistinguivel — retry mudo pra sempre.
+                # Agora: debug a cada tentativa, e UM warning quando passa do orcamento, pra a sessao
+                # surda aparecer no log em vez de so "o chat parou".
+                attempts += 1
+                sess["subscribe_error"] = str(exc)
+                _log.debug("codex assinatura falhou (tentativa %d) name=%s: %s", attempts, name, exc)
+                if attempts == self.SUBSCRIBE_WARN_AFTER:
+                    _log.warning(
+                        "codex NAO assinou apos %d tentativas name=%s: %s — sessao segue sem "
+                        "turn/*, preview nem statusline; envio continua funcionando",
+                        attempts, name, exc,
+                    )
+                await asyncio.sleep(delay)
+                delay = min(delay * 1.5, self.SUBSCRIBE_RETRY_MAX)
+                continue
+            sess["subscribed"] = True
+            sess.pop("subscribe_error", None)
+            # O resume tambem devolve o default da THREAD -> alimenta o display (pill/statusline).
+            # `or` e nao setdefault: o attach() ja criou as chaves com None, entao setdefault nunca
+            # sobrescreveria e o 🤖 sumia da statusline (visto na verificacao ao vivo).
+            sess["default_model"] = sess.get("default_model") or result.get("model")
+            sess["default_effort"] = sess.get("default_effort") or result.get("effort")
+            _log.info("codex assinado: thread=%s name=%s", sess["thread_id"], name)
+            return
+
     def attach(self, name: str, client: AppServerClient, thread_id: str,
                model: Optional[str] = None, effort: Optional[str] = None,
                default_model: Optional[str] = None, default_effort: Optional[str] = None,
-               *, watch_tmux: bool = False) -> None:
+               *, watch_tmux: bool = False, subscribed: bool = False) -> None:
         """Liga uma sessao (por nome) a um AppServerClient + threadId ja vivos. Chamado pelo
         registry.create_codex (spawn novo, sem model/effort ainda -- sessao nova) e por
         ensure_running (resume pos-restart, passando model/effort lidos do sidecar -- Task C:
@@ -303,11 +389,15 @@ class CodexAdapter:
         default_effort = o default da THREAD (devolvido por thread/start/thread/resume) -- so pra
         DISPLAY (pill/statusline) quando nao ha escolha; nunca mandado pro app-server. Efemero
         (nao vai pro sidecar): re-populado a cada attach (create ou resume), suficiente porque
-        list_models()/state_monitor sempre chamam ensure_running antes de ler o display."""
+        list_models()/state_monitor sempre chamam ensure_running antes de ler o display.
+
+        subscribed=True quando quem chama JA fez o thread/resume (caminho ensure_running); o
+        create_codex passa False e dispara start_subscription, que retenta ate o rollout existir."""
         self._sessions[name] = {"client": client, "thread_id": thread_id,
                                  "state": "idle", "in_progress": False,
                                  "model": model, "effort": effort,
-                                 "default_model": default_model, "default_effort": default_effort}
+                                 "default_model": default_model, "default_effort": default_effort,
+                                 "subscribed": subscribed}
         if watch_tmux:
             self._start_tmux_watcher(name)
 
@@ -366,9 +456,11 @@ class CodexAdapter:
             # default_model/default_effort: o default da thread tambem vem no thread/resume
             # response (mesmo campo `model` do thread/start) -- so pra display, nao sobrescreve a
             # escolha acima.
+            # subscribed=True: o thread/resume acima JA assinou esta thread (pos-restart o rollout
+            # existe, entao ele cola de primeira) -> nao precisa da task de retry.
             self.attach(name, client, thread_id, model=meta.get("model"), effort=meta.get("effort"),
                         default_model=result.get("model"), default_effort=result.get("effort"),
-                        watch_tmux=True)
+                        watch_tmux=True, subscribed=True)
             _log.info("codex ensure_running: resumed thread=%s name=%s", thread_id, name)
             return client
 
@@ -380,6 +472,9 @@ class CodexAdapter:
         watcher = self._tmux_watchers.pop(name, None)
         if watcher is not None:
             watcher.cancel()
+        sub = self._subscribers.pop(name, None)
+        if sub is not None:
+            sub.cancel()
         if sess is None:
             return
         term = getattr(sess["client"], "terminate", None)
@@ -390,6 +485,9 @@ class CodexAdapter:
         watcher = self._tmux_watchers.pop(old, None)
         if watcher is not None:
             watcher.cancel()
+        sub = self._subscribers.pop(old, None)
+        if sub is not None:
+            sub.cancel()
         sess = self._sessions.pop(old, None)
         if sess is not None:
             self._sessions[new] = sess
@@ -398,8 +496,16 @@ class CodexAdapter:
             self._locks[new] = lock
         if sess is not None:
             self._start_tmux_watcher(new)
+            # RE-ARMA a assinatura sob o nome novo. Cancelar acima e parar por aí deixava a sessao
+            # SURDA pra sempre: renomear antes do 1o turno terminar (janela normal — o retry roda de
+            # 1s a 10s ate o rollout existir) migrava `subscribed: False` pro nome novo com a task
+            # morta, e nenhum outro caminho reassina (ensure_running so atua sem client vivo, e aqui
+            # o client continua vivo). Ja assinada -> _subscribe_when_ready retorna de imediato.
+            if not sess.get("subscribed"):
+                meta = codex_sessions.load(new) or {}
+                self.start_subscription(new, meta.get("cwd") or ".")
 
-    def transcript_stream(self, path: str) -> AsyncIterator[ChatEvent]:
+    def transcript_stream(self, path: str, start_offset: int | None = None) -> AsyncIterator[ChatEvent]:
         # Mesma mecanica de tail (backfill do tail + watch de append) do Claude, so trocando o
         # parser pro shape do rollout do Codex (snake_case, envelope {type, payload}).
         # Garante o dir do rollout (~/.codex/sessions/YYYY/MM/DD/): na 1a sessao Codex do dia o
@@ -407,7 +513,7 @@ class CodexAdapter:
         # transcript.follow() levantaria FileNotFoundError e derrubaria o SSE inteiro (chat nao
         # carrega/atualiza). mkdir idempotente fecha essa janela; o Codex grava ali de todo jeito.
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        return TranscriptTailer(path, parse_line=parse_rollout_line).follow()
+        return TranscriptTailer(path, parse_line=parse_rollout_line).follow(start_offset)
 
     def state_monitor(self, name: str, sid_get: Callable[[], str]) -> AsyncIterator[StateEvent]:
         return self._state_stream(name)
@@ -460,21 +566,6 @@ class CodexAdapter:
                 sess["state"] = "idle"
                 sess["in_progress"] = False
                 sess["turn_id"] = None
-                # Uma escolha feita enquanto o turno estava rodando nao pode matar a TUI no meio
-                # da resposta. Reabre agora, ja idle, com as flags persistidas; o proximo prompt
-                # digitado pelo app/terminal usa a escolha e continua visivel nos dois lugares.
-                if sess.pop("tui_config_dirty", False):
-                    meta = codex_sessions.load(name) or {}
-                    endpoint = getattr(client, "endpoint", None)
-                    if endpoint:
-                        try:
-                            await asyncio.to_thread(
-                                ensure_tmux_tui, name, meta.get("cwd") or ".",
-                                sess["thread_id"], endpoint, replace=True,
-                                model=sess.get("model"), effort=sess.get("effort"),
-                            )
-                        except Exception:
-                            _log.exception("codex: falha ao aplicar modelo na TUI name=%s", name)
                 # drain-on-complete (P2): turno terminou -> entrega a fila pendente (msgs enviadas
                 # via /input enquanto o Codex trabalhava). Reusa adapter.drain (claim-1-envia-1 pela
                 # TUI). ACOPLADO ao SSE ativo -- este generator so roda com um consumidor
@@ -486,7 +577,13 @@ class CodexAdapter:
                     _log.exception("codex drain-on-complete falhou name=%s", name)
             if mapped.state is not None:
                 sess["state"] = mapped.state
+                was = sess["in_progress"]
                 sess["in_progress"] = mapped.state == "working"
+                # Carimba QUANDO o turno comecou. O TTL de deliverable() mede a partir daqui; sem
+                # isto um in_progress vindo do stream (nao do send_prompt) ficava com marco 0 e
+                # expirava de imediato, liberando envio no meio de um turno vivo.
+                if sess["in_progress"] and not was:
+                    sess["in_progress_since"] = time.monotonic()
             # Task D: acumula tokenUsage/rateLimits por sessao (snapshot mais recente de cada) --
             # sao notifications esparsas, nao vem toda hora, entao guarda no dict quente pra
             # sobreviver ate o proximo StateEvent emitido (mesmo que seja por outro motivo, tipo
@@ -522,36 +619,62 @@ class CodexAdapter:
             yield StateEvent(session=name, state="dead")
 
     async def send_prompt(self, name: str, text: str) -> str:
+        """Envia o prompt como `turn/start` no app-server — NAO digitando no pane do tmux.
+
+        MEDIDO (probe contra codex-cli 0.144.6, docs/codex-app-server-contract.md): a TUI
+        `codex --remote` RENDERIZA um turno iniciado por outro cliente do mesmo app-server. O
+        commit que passou a digitar no tmux partiu do diagnostico inverso -- o que faltava nao era
+        a TUI mostrar, era o BACKEND ENXERGAR (sem `thread/resume` ele nao recebe turn/*). Com a
+        assinatura no lugar (_subscribe), `turn/start` deixa terminal + celular + rollout como uma
+        conversa so, e o caminho Claude (terminal_input) volta a nao ser tocado por Codex nenhum.
+
+        model/effort vao no PROPRIO turno (TurnStartParams aceita os dois, "for this turn and
+        subsequent turns") -> a escolha do usuario aplica sem matar/recriar a TUI.
+        """
         client = await self.ensure_running(name)
         if client is None or not await self.deliverable(name):
             return "deferred"
         sess = self._sessions[name]
-        # A TUI e a dona visivel da conversa. Iniciar o turno por JSON-RPC grava o rollout e atualiza
-        # o app, mas a TUI remota nao renderiza um turno iniciado por OUTRO cliente -- por isso as
-        # mensagens enviadas pelo celular "sumiam" do terminal. Digitar no pane, como o caminho
-        # Claude ja faz, mantem terminal + rollout + app como uma unica conversa; o app-server
-        # continua observando o turn/started e todos os deltas estruturados.
-        result = await asyncio.to_thread(
-            ti.TerminalInput().send_prompt, name, text, wait_ready=False,
-        )
-        if result != "sent":
-            return result
+        params: dict = {"threadId": sess["thread_id"],
+                        "input": [{"type": "text", "text": text}]}
+        if sess.get("model"):
+            params["model"] = sess["model"]
+        if sess.get("effort"):
+            params["effort"] = sess["effort"]
+        try:
+            await client.request("turn/start", params)
+        except Exception:
+            # app-server morto/timeout: NAO engolir -- o caller (api/_send_one_codex, drain) trata
+            # "deferred" reenfileirando, entao a msg nao se perde silenciosamente.
+            _log.exception("codex turn/start falhou name=%s", name)
+            return "deferred"
         # Marca in_progress AQUI (nao so esperar o turn/started chegar no loop de notifications):
         # o drain roda dentro desse mesmo loop, entao um turn/started concorrente pode nao ser
         # processado a tempo -- sem isto, deliverable() ficaria True e o drain mandaria todas as
         # entradas pendentes back-to-back (ver test_drain_stops_after_first_delivery).
+        #
         sess["in_progress"] = True
+        sess["in_progress_since"] = time.monotonic()
         return "sent"
 
     async def interrupt(self, name: str) -> bool:
-        """Interrompe a propria TUI Codex no tmux, igual ao caminho Claude. Assim um interrupt
-        enviado pelo celular aparece e produz exatamente o mesmo estado visto no terminal."""
-        if not await asyncio.to_thread(tmux.has_session, name):
+        """Interrompe o turno em voo via `turn/interrupt` (threadId+turnId).
+
+        Pelo app-server, nao por Escape no pane: o interrupt vale igual venha do celular ou do
+        terminal, e nao depende de heuristica de TUI. Sem turno em voo (turn_id None) e no-op
+        seguro -- mandar interrupt de turno morto nao ajuda ninguem.
+        """
+        sess = self._sessions.get(name)
+        if sess is None:
+            return False
+        turn_id = sess.get("turn_id")
+        if not turn_id:
             return False
         try:
-            await asyncio.to_thread(ti.TerminalInput().interrupt, name)
+            await sess["client"].request("turn/interrupt",
+                                          {"threadId": sess["thread_id"], "turnId": turn_id})
         except Exception:
-            _log.exception("codex interrupt falhou name=%s", name)
+            _log.exception("codex turn/interrupt falhou name=%s", name)
             return False
         return True
 
@@ -561,7 +684,21 @@ class CodexAdapter:
         sess = self._sessions.get(name)
         if sess is None:
             return True
-        return not sess["in_progress"]
+        if not sess["in_progress"]:
+            return True
+        # Quem LIMPA in_progress e o turn/completed -- e ele so chega pra quem assinou a thread.
+        # Numa sessao que nunca assinou, in_progress ficaria True pra sempre: deliverable() eterno
+        # False, todo envio virando "deferred" e a fila crescendo calada. Expira por TEMPO, com log,
+        # em vez de bloquear pra sempre. Nao vale pra sessao assinada: la o turn/completed manda.
+        if not sess.get("subscribed"):
+            since = sess.get("in_progress_since") or 0.0
+            if time.monotonic() - since > self.UNSUBSCRIBED_TURN_TTL:
+                _log.warning("codex: turno sem confirmacao ha %.0fs numa sessao NAO assinada "
+                             "name=%s — liberando envio (sem rastreio de turno)",
+                             self.UNSUBSCRIBED_TURN_TTL, name)
+                sess["in_progress"] = False
+                return True
+        return False
 
     async def drain(self, name: str, path: str) -> int:
         """Entrega a fila duravel (PromptQueue keyed por nome) via send_prompt (TUI no tmux). Sem
@@ -656,26 +793,20 @@ class CodexAdapter:
         ]
 
     async def set_model(self, name: str, model: Optional[str], effort: Optional[str]) -> None:
-        """Grava a escolha de modelo/effort da sessao (Task C): dict quente (se anexada) + sidecar
-        duravel (sobrevive ao restart). O envio de prompts pertence a TUI para que a conversa fique
-        visivel no tmux; estes campos seguem sendo a escolha persistida/exibida da sessao."""
+        """Grava a escolha de modelo/effort da sessao: dict quente (se anexada) + sidecar duravel
+        (sobrevive ao restart). Vale a partir do PROXIMO turno.
+
+        NAO reabre a TUI. TurnStartParams aceita `model` e `effort` ("for this turn and subsequent
+        turns"), entao send_prompt ja carrega a escolha e ela vale pra thread inteira -- terminal
+        incluso, que compartilha a thread. A versao anterior matava e recriava a pane pra aplicar
+        a flag, o que (a) piscava a TUI no meio da conversa e (b) abria uma janela em que o watcher
+        de tmux via a sessao sumida e destruia a sessao inteira (sidecar + fila + app-server).
+        """
         sess = self._sessions.get(name)
         if sess is not None:
             sess["model"] = model
             sess["effort"] = effort
         codex_sessions.update_model(name, model, effort)
-        if sess is None:
-            return
-        if sess.get("in_progress"):
-            sess["tui_config_dirty"] = True
-            return
-        meta = codex_sessions.load(name) or {}
-        endpoint = getattr(sess["client"], "endpoint", None)
-        if endpoint:
-            await asyncio.to_thread(
-                ensure_tmux_tui, name, meta.get("cwd") or ".", sess["thread_id"], endpoint,
-                replace=True, model=model, effort=effort,
-            )
 
     def current_model(self, name: str) -> dict:
         """Modelo/effort pra DISPLAY (pill do front): a escolha explicita do usuario tem

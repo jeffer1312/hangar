@@ -530,6 +530,11 @@ class SessionRegistry:
             # sidecar + rollout. Nao a tratar tambem como Claude (duplicaria a sessao e tentaria
             # resolver ~/.claude/projects).
             if codex_sessions.exists(p["name"]):
+                # O filtro e por NOME. Se um sidecar ficar ORFAO (crash antes do cleanup) e alguem
+                # criar uma sessao Claude com o mesmo nome, ela sumiria da lista SEM explicacao --
+                # o usuario perderia acesso a uma sessao viva. Nao da pra distinguir aqui sem custo,
+                # entao pelo menos NAO e silencioso: o log diz qual nome foi filtrado e por que.
+                _log.debug("list: pane %r filtrado por sidecar Codex de mesmo nome", p["name"])
                 continue
             jsonl, tracked = self.resolve_tracked(p["name"], p["cwd"], p["pid"], children)
             link = ThenLink(p["name"]).get()
@@ -828,7 +833,14 @@ class SessionRegistry:
             # A sessao nova ainda nao tem escolha explicita de modelo; o catalogo/picker e os
             # eventos dos turnos populam o display depois.
             from app.adapters import get_adapter
-            get_adapter("codex").attach(name, client, thread_id, watch_tmux=True)
+            adapter = get_adapter("codex")
+            adapter.attach(name, client, thread_id, watch_tmux=True)
+            # ASSINA a thread que a TUI criou. Sem isto o backend so recebe eventos globais do
+            # app-server -- nada de turn/*, item/* ou tokenUsage -- e a sessao fica "viva mas
+            # surda": estado congelado, sem preview/statusline e com a fila do celular presa (o
+            # drain-on-complete mora no turn/completed). Em background porque thread/resume so
+            # e aceito depois que o 1o turno grava o rollout; ver _subscribe_when_ready.
+            adapter.start_subscription(name, cwd)
         except Exception:
             await client.close()
             codex_sessions.delete(name)  # idempotente; remove sidecar orfao se save ja tinha passado

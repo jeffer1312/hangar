@@ -308,32 +308,31 @@ async def test_send_prompt_deferred_when_not_attached():
     assert await adapter.send_prompt("ghost", "oi") == "deferred"
 
 
-async def test_send_prompt_types_into_tmux(monkeypatch):
+async def test_send_prompt_uses_turn_start_not_tmux(monkeypatch):
+    # O prompt vai por turn/start no app-server, NAO digitado no pane. Medido (probe contra
+    # codex-cli 0.144.6): a TUI `codex --remote` renderiza turno iniciado por outro cliente, entao
+    # o terminal continua vendo a msg do celular sem o backend encostar no terminal_input (que e
+    # do caminho Claude).
     adapter = CodexAdapter()
     client = _FakeClient([])
     adapter.attach("sess", client, "thread-1")
-    calls = []
-    monkeypatch.setattr(codex_adapter.tmux, "has_session", lambda _name: True)
-    monkeypatch.setattr(codex_adapter.tmux, "paste_text",
-                        lambda name, text: calls.append(("paste", name, text)))
+    typed = []
     monkeypatch.setattr(codex_adapter.tmux, "send_keys",
-                        lambda name, key: calls.append(("key", name, key)))
-    result = await adapter.send_prompt("sess", "oi")
-    assert result == "sent"
-    assert calls == [("paste", "sess", "oi"), ("key", "sess", "Enter")]
-    assert client.requests == []
+                        lambda name, key: typed.append((name, key)))
+    assert await adapter.send_prompt("sess", "oi") == "sent"
+    assert client.requests == [
+        ("turn/start", {"threadId": "thread-1", "input": [{"type": "text", "text": "oi"}]}),
+    ]
+    assert typed == []   # nada digitado no tmux
 
 
-async def test_send_prompt_marks_in_progress_on_sent(monkeypatch):
-    # Fix 2: send_prompt tem que setar in_progress=True ao entregar -- senao deliverable() continua
+async def test_send_prompt_marks_in_progress_on_sent():
+    # send_prompt tem que setar in_progress=True ao entregar -- senao deliverable() continua
     # True logo em seguida e um drain com varias entradas pendentes as manda todas como turn/start
     # concorrentes (o turn/started do 1o envio so seria processado depois, no loop de notifications).
     adapter = CodexAdapter()
     client = _FakeClient([])
     adapter.attach("sess", client, "thread-1")
-    monkeypatch.setattr(codex_adapter.tmux, "has_session", lambda _name: True)
-    monkeypatch.setattr(codex_adapter.tmux, "paste_text", lambda _name, _text: None)
-    monkeypatch.setattr(codex_adapter.tmux, "send_keys", lambda _name, _key: None)
     assert await adapter.send_prompt("sess", "oi") == "sent"
     assert await adapter.deliverable("sess") is False
 
@@ -355,30 +354,29 @@ async def test_deliverable_false_during_turn():
 # --- CodexAdapter.interrupt (turn/interrupt) ------------------------------------------------
 
 async def test_interrupt_calls_turn_interrupt():
-    # Interrupt dirige a mesma TUI que o usuario ve no terminal.
+    # Interrupt vai pelo app-server (threadId+turnId), nao por Escape no pane: vale igual venha
+    # do celular ou do terminal, e nao depende de heuristica de TUI.
     adapter = CodexAdapter()
-    client = _FakeClient([])
+    client = _FakeClient([{"method": "turn/started",
+                           "params": {"turn": {"id": "turn-9"}}}])
     adapter.attach("sess", client, "thread-1")
-    with patch.object(codex_adapter.ti.TerminalInput, "interrupt") as interrupt:
-        assert await adapter.interrupt("sess") is True
-    interrupt.assert_called_once_with("sess")
-    assert client.requests == []
+    async for _ in adapter.state_monitor("sess", lambda: "sess"):
+        pass   # consome o turn/started -> guarda o turn_id em voo
+    assert await adapter.interrupt("sess") is True
+    assert ("turn/interrupt", {"threadId": "thread-1", "turnId": "turn-9"}) in client.requests
 
 
 async def test_interrupt_noop_when_not_attached():
     adapter = CodexAdapter()
-    with patch.object(codex_adapter.tmux, "has_session", return_value=False):
-        assert await adapter.interrupt("ghost") is False
+    assert await adapter.interrupt("ghost") is False
 
 
 async def test_interrupt_noop_when_no_turn_in_flight():
-    # Mesmo sem estado RPC em voo, o Esc vai para a TUI (fonte autoritativa).
+    # Sem turno em voo nao ha o que interromper: no-op seguro, sem mandar RPC de turno morto.
     adapter = CodexAdapter()
     client = _FakeClient([])
     adapter.attach("sess", client, "thread-1")
-    with patch.object(codex_adapter.ti.TerminalInput, "interrupt") as interrupt:
-        assert await adapter.interrupt("sess") is True
-    interrupt.assert_called_once_with("sess")
+    assert await adapter.interrupt("sess") is False
     assert client.requests == []
 
 
@@ -651,25 +649,45 @@ async def test_current_model_null_when_never_chosen():
     assert adapter.current_model("ghost") == {"model": None, "effort": None}
 
 
-# --- modelo/effort persistem; envio visivel pertence a TUI ----------------------------------
+# --- modelo/effort viajam no proprio turn/start ---------------------------------------------
 
 async def test_send_prompt_includes_model_and_effort_when_set():
+    # TurnStartParams aceita model/effort ("for this turn and subsequent turns") -> a escolha
+    # aplica SEM matar/recriar a TUI (era isso que piscava a pane e abria a janela em que o
+    # watcher de tmux destruia a sessao inteira).
     adapter = CodexAdapter()
     client = _FakeClient([])
     adapter.attach("sess", client, "thread-1")
     await adapter.set_model("sess", "gpt-5-codex", "high")
     await adapter.send_prompt("sess", "oi")
     assert adapter.current_model("sess") == {"model": "gpt-5-codex", "effort": "high"}
-    assert client.requests == []
+    assert client.requests == [("turn/start", {
+        "threadId": "thread-1", "input": [{"type": "text", "text": "oi"}],
+        "model": "gpt-5-codex", "effort": "high",
+    })]
+
+
+async def test_set_model_does_not_restart_tui(monkeypatch):
+    # Guard da corrida: set_model NAO pode chamar ensure_tmux_tui (kill_session + new_session).
+    # Entre o kill e o new, o watcher de 1s via a sessao sumida e apagava sidecar + fila + app-server.
+    adapter = CodexAdapter()
+    adapter.attach("sess", _FakeClient([]), "thread-1")
+    called = []
+    monkeypatch.setattr(codex_adapter, "ensure_tmux_tui",
+                        lambda *a, **k: called.append(a))
+    await adapter.set_model("sess", "gpt-5-codex", "high")
+    assert called == []
 
 
 async def test_send_prompt_omits_model_effort_when_unset():
-    # O envio e submetido pela TUI; nao pode abrir um segundo turn/start pelo cliente do backend.
+    # Sem escolha explicita, nao manda os campos -> a thread usa o proprio default.
     adapter = CodexAdapter()
     client = _FakeClient([])
     adapter.attach("sess", client, "thread-1")
     await adapter.send_prompt("sess", "oi")
-    assert client.requests == []
+    assert client.requests == [
+        ("turn/start", {"threadId": "thread-1", "input": [{"type": "text", "text": "oi"}]}),
+    ]
 
 
 async def test_ensure_running_resume_restores_model_effort_from_sidecar():
@@ -685,7 +703,10 @@ async def test_ensure_running_resume_restores_model_effort_from_sidecar():
     assert adapter._sessions["sess"]["model"] == "gpt-5-codex"
     assert adapter._sessions["sess"]["effort"] == "high"
     await adapter.send_prompt("sess", "oi")
-    assert client.requests[-1][0] == "thread/resume"
+    assert client.requests[-1] == ("turn/start", {
+        "threadId": "thread-1", "input": [{"type": "text", "text": "oi"}],
+        "model": "gpt-5-codex", "effort": "high",
+    })
 
 
 # --- default_model (fix-model-display): display cai pro default da thread sem escolha ------
@@ -706,12 +727,15 @@ async def test_current_model_explicit_choice_wins_over_default():
 
 
 async def test_send_prompt_omits_default_model_even_when_present():
-    # A TUI usa o default da thread; o backend nao abre um turno concorrente por JSON-RPC.
+    # default_model e so DISPLAY (o default que a propria thread ja usa). Mandar de volta no
+    # turn/start seria transformar exibicao em escolha explicita -> so a escolha do usuario viaja.
     adapter = CodexAdapter()
     client = _FakeClient([])
     adapter.attach("sess", client, "thread-1", default_model="gpt-5.6-sol", default_effort="high")
     await adapter.send_prompt("sess", "oi")
-    assert client.requests == []
+    assert client.requests == [
+        ("turn/start", {"threadId": "thread-1", "input": [{"type": "text", "text": "oi"}]}),
+    ]
 
 
 async def test_status_line_shows_default_model_when_no_explicit_choice():
@@ -809,3 +833,139 @@ def test_ensure_tmux_tui_replaces_stale_remote_after_backend_restart():
         ensure_tmux_tui("cx", "/tmp/proj", "thread-42", "ws://127.0.0.1:45123",
                         replace=True)
     kill.assert_called_once_with("cx")
+
+
+# --- assinatura da thread (thread/resume com retry) -----------------------------------------
+# As notifications do app-server sao POR ASSINATURA, nao broadcast (MEDIDO contra codex-cli
+# 0.144.6): sem thread/resume o backend so recebe eventos globais -- nada de turn/*, item/* ou
+# tokenUsage. Era essa surdez que congelava o estado, matava o preview e prendia a fila do
+# celular (o drain-on-complete mora no turn/completed). E ela nao pode ser feita na criacao:
+# enquanto a thread nao tem turno o rollout nao existe e o app-server responde "no rollout found
+# for thread id" -- daí o retry.
+import asyncio
+
+
+class _ResumeFailsThenWorks(_FakeClient):
+    def __init__(self, failures: int):
+        super().__init__([])
+        self.left = failures
+
+    async def request(self, method: str, params: dict, timeout: float = 30.0) -> dict:
+        if method == "thread/resume" and self.left > 0:
+            self.left -= 1
+            raise RuntimeError("no rollout found for thread id")
+        return await super().request(method, params, timeout)
+
+
+def _fast_subscribe(adapter):
+    adapter.SUBSCRIBE_RETRY_BASE = 0.01
+    adapter.SUBSCRIBE_RETRY_MAX = 0.01
+    return adapter
+
+
+async def test_subscription_retries_until_rollout_exists():
+    adapter = _fast_subscribe(CodexAdapter())
+    client = _ResumeFailsThenWorks(failures=3)
+    adapter.attach("sess", client, "thread-1")
+    assert adapter._sessions["sess"]["subscribed"] is False
+    adapter.start_subscription("sess", "/tmp/proj")
+    await asyncio.wait_for(adapter._subscribers["sess"], timeout=5)
+    assert adapter._sessions["sess"]["subscribed"] is True
+    assert client.left == 0                      # retentou ate o rollout existir
+    assert ("thread/resume", {
+        "threadId": "thread-1", "cwd": "/tmp/proj",
+        "sandbox": codex_adapter._SANDBOX, "approvalPolicy": codex_adapter._APPROVAL,
+    }) in client.requests
+
+
+async def test_subscription_stops_when_session_dies():
+    # Sessao morre no meio do retry -> a task TERMINA, nao martela o app-server pra sempre.
+    adapter = _fast_subscribe(CodexAdapter())
+    adapter.attach("sess", _ResumeFailsThenWorks(failures=10**6), "thread-1")
+    adapter.start_subscription("sess", "/tmp/proj")
+    await asyncio.sleep(0.05)
+    adapter._sessions.pop("sess")
+    await asyncio.wait_for(adapter._subscribers["sess"], timeout=5)
+
+
+async def test_close_sync_cancels_subscription():
+    adapter = _fast_subscribe(CodexAdapter())
+    adapter.attach("sess", _ResumeFailsThenWorks(failures=10**6), "thread-1")
+    adapter.start_subscription("sess", "/tmp/proj")
+    task = adapter._subscribers["sess"]
+    adapter.close_sync("sess")
+    assert "sess" not in adapter._subscribers
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+async def test_ensure_running_marks_subscribed_without_retry_task():
+    # Pos-restart o rollout ja existe -> o thread/resume do ensure_running cola de primeira e a
+    # sessao ja nasce assinada; nao faz sentido armar a task de retry.
+    codex_sessions.save("sess", "thread-1", "/rollout.jsonl", "/tmp/proj")
+    adapter = CodexAdapter()
+    client = _FakeClient([])
+    with patch("app.adapters.codex.adapter.AppServerClient", lambda *a, **k: client):
+        await adapter.ensure_running("sess")
+    assert adapter._sessions["sess"]["subscribed"] is True
+    assert "sess" not in adapter._subscribers
+
+
+async def test_subscription_populates_default_model_for_display():
+    # O thread/resume devolve o default da THREAD; ele alimenta o 🤖 do pill/statusline. Com
+    # setdefault isto NAO funcionava (attach ja cria a chave com None) e o modelo sumia da
+    # statusline -- pego na verificacao ao vivo, nao no teste.
+    class _ResumeWithModel(_FakeClient):
+        async def request(self, method, params, timeout=30.0):
+            await super().request(method, params, timeout)
+            if method == "thread/resume":
+                return {"model": "gpt-5.6-sol", "effort": "medium"}
+            return {}
+
+    adapter = _fast_subscribe(CodexAdapter())
+    adapter.attach("sess", _ResumeWithModel([]), "thread-1")
+    adapter.start_subscription("sess", "/tmp/proj")
+    await asyncio.wait_for(adapter._subscribers["sess"], timeout=5)
+    assert adapter.current_model("sess") == {"model": "gpt-5.6-sol", "effort": "medium"}
+
+
+async def test_rename_rearma_assinatura_pendente():
+    # rename() cancelava a task de assinatura e NAO re-armava: renomear antes do 1o turno deixava
+    # a sessao surda pra sempre (sem turn/*, sem preview, fila do celular presa) — nenhum outro
+    # caminho reassina, porque ensure_running so atua quando NAO ha client vivo.
+    codex_sessions.save("novo", "thread-1", "/rollout.jsonl", "/tmp/proj")
+    adapter = _fast_subscribe(CodexAdapter())
+    client = _ResumeFailsThenWorks(failures=1)
+    adapter.attach("velho", client, "thread-1")
+    adapter.start_subscription("velho", "/tmp/proj")
+    adapter.rename("velho", "novo")
+    assert "novo" in adapter._subscribers
+    await asyncio.wait_for(adapter._subscribers["novo"], timeout=5)
+    assert adapter._sessions["novo"]["subscribed"] is True
+
+
+async def test_rename_nao_reassina_sessao_ja_assinada():
+    adapter = _fast_subscribe(CodexAdapter())
+    adapter.attach("velho", _FakeClient([]), "thread-1", subscribed=True)
+    adapter.rename("velho", "novo")
+    assert "novo" not in adapter._subscribers
+
+
+async def test_deliverable_libera_turno_preso_em_sessao_nao_assinada():
+    # Sem assinatura nao chega turn/completed -> in_progress nunca seria limpo e TODO envio virava
+    # "deferred" pra sempre, em silencio. Expira por tempo (com log) em vez de bloquear.
+    adapter = CodexAdapter()
+    adapter.attach("sess", _FakeClient([]), "thread-1")   # subscribed=False
+    assert await adapter.send_prompt("sess", "oi") == "sent"
+    assert await adapter.deliverable("sess") is False      # turno recem-comecado: segura
+    adapter._sessions["sess"]["in_progress_since"] -= adapter.UNSUBSCRIBED_TURN_TTL + 1
+    assert await adapter.deliverable("sess") is True       # velho demais: libera
+
+
+async def test_deliverable_nao_expira_turno_em_sessao_assinada():
+    # Sessao assinada tem turn/completed pra limpar -> o TTL nao pode furar um turno vivo e longo.
+    adapter = CodexAdapter()
+    adapter.attach("sess", _FakeClient([]), "thread-1", subscribed=True)
+    await adapter.send_prompt("sess", "oi")
+    adapter._sessions["sess"]["in_progress_since"] -= adapter.UNSUBSCRIBED_TURN_TTL * 10
+    assert await adapter.deliverable("sess") is False

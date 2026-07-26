@@ -60,6 +60,31 @@ def _base_name(cwd: str) -> str:
     return clean.strip("-") or "codex"
 
 
+def _resume_target(cwd: str) -> str | None:
+    """Sessao Codex JA existente deste cwd, se houver — pra ANEXAR em vez de criar outra.
+
+    Sem isto, todo `codex` no mesmo diretorio criava uma sessao nova (repo, repo-2, repo-3...):
+    a conversa comecada no celular era inalcancavel do terminal, que era exatamente o oposto da
+    proposta ("o app e uma extensao do terminal").
+
+    Escolhe por ATIVIDADE, nao pela ordem da lista: ela vem de `sorted(glob("*.json"))` no backend,
+    ou seja, alfabetica pelo nome do arquivo -- com dois digitos de sufixo "repo-9" > "repo-10",
+    entao pegar a ultima anexava numa sessao arbitraria e dizia "retomando" com confianca. Havendo
+    mais de uma candidata, avisa quais ficaram de fora em vez de escolher em silencio.
+    """
+    sessions = [s for s in _api("GET", "/api/sessions")
+                if s.get("provider") == "codex" and s.get("cwd") == cwd]
+    if not sessions:
+        return None
+    sessions.sort(key=lambda s: (s.get("last_activity") or 0, s.get("name") or ""))
+    escolhida = sessions[-1]
+    if len(sessions) > 1:
+        outras = ", ".join(s["name"] for s in sessions[:-1])
+        print(f"cp-codex: {len(sessions)} sessoes Codex neste diretorio; retomando a mais recente "
+              f"({escolhida['name']}). Outras: {outras}", file=sys.stderr)
+    return escolhida["name"]
+
+
 def _create(cwd: str, prompt: str | None) -> str:
     existing = {item["name"] for item in _api("GET", "/api/sessions")}
     base = _base_name(cwd)
@@ -86,12 +111,23 @@ def main() -> int:
         print("uso: cp-codex [prompt]", file=sys.stderr)
         return 2
     prompt = sys.argv[1] if len(sys.argv) == 2 else None
+    cwd = os.getcwd()
     try:
-        name = _create(os.getcwd(), prompt)
+        # ANEXAR vence CRIAR: `codex` no mesmo diretorio volta pra conversa que ja existe (a
+        # mesma que o celular esta vendo), com todo o historico. Criar so quando nao ha nenhuma.
+        # `codex "prompt"` num cwd com sessao viva tambem anexa — o prompt vai pela sessao
+        # existente (via /input), em vez de abrir uma thread paralela.
+        name = _resume_target(cwd)
+        resumed = name is not None
+        if resumed and prompt:
+            _api("POST", f"/api/sessions/{name}/input", {"text": prompt})
+        if not resumed:
+            name = _create(cwd, prompt)
     except RuntimeError as exc:
         print(f"cp-codex: {exc}", file=sys.stderr)
         return 1
-    print(f"Codex gerenciado pelo Cockpit: {name} (detach: Ctrl-b d)", file=sys.stderr)
+    verbo = "retomando" if resumed else "gerenciado pelo Cockpit"
+    print(f"Codex {verbo}: {name} (detach: Ctrl-b d)", file=sys.stderr)
     in_tmux = bool(os.environ.get("TMUX") and os.environ.get("TMUX_PANE"))
     if in_tmux:
         attached = subprocess.run(["tmux", "switch-client", "-t", f"={name}"]).returncode
