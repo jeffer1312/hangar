@@ -2,6 +2,7 @@
   import { enablePush, pushSupported } from '../lib/push';
   import { getPushSettings, setQuietHours } from '../lib/api';
   import ConfigSheet from './ConfigSheet.svelte';
+  import EnginesSheet from './EnginesSheet.svelte';
   import { serverColor, parseServerPairing } from '../lib/auth';
   import { vaultPush } from '../lib/vaultPush.svelte';
   import type { Server } from '../lib/auth';
@@ -73,6 +74,9 @@
   let qhMsg = $state('');
   // Sheet de configurações do servidor (chave da Groq, retenção, notificações).
   let configOpen = $state(false);
+  // Motores de modelo: irmã do ConfigSheet, não filha (ver comentário no onOpenMotores do
+  // ConfigSheet) — as duas nunca ficam open=true ao mesmo tempo.
+  let motoresOpen = $state(false);
   async function loadQuietHours() {
     try {
       const p = await getPushSettings();
@@ -449,6 +453,13 @@
      ImageBubble/ModalDialog. -->
 {#if configOpen}
   <div use:portal>
-    <ConfigSheet open={configOpen} onClose={() => (configOpen = false)} />
+    <ConfigSheet open={configOpen} onClose={() => (configOpen = false)}
+      onOpenMotores={() => { configOpen = false; motoresOpen = true; }} />
+  </div>
+{/if}
+
+{#if motoresOpen}
+  <div use:portal>
+    <EnginesSheet open={motoresOpen} onClose={() => (motoresOpen = false)} />
   </div>
 {/if}
