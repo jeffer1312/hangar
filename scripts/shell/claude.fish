@@ -45,7 +45,16 @@ function claude
         return
     end
 
-    set -l base (string replace -ra '[^A-Za-z0-9_-]' '-' (basename "$PWD"))
+    # Mesma regra do backend (app/names.py): acento -> ASCII equivalente ANTES do filtro, senao
+    # "Área de Trabalho" vira "-rea-de-Trabalho" (a 1a letra some e sobra traco na frente — nome de
+    # sessao tmux comecando com "-" e pedir encrenca). Sem iconv, segue com o nome cru.
+    set -l base (basename "$PWD")
+    if command -v iconv >/dev/null 2>&1
+        set -l ascii (printf '%s' "$base" | iconv -f UTF-8 -t ASCII//TRANSLIT 2>/dev/null)
+        test -n "$ascii"; and set base $ascii
+    end
+    set base (string replace -ra '[^A-Za-z0-9_-]' '-' -- $base)
+    set base (string replace -ra '^-+|-+$' '' -- $base)
     test -n "$base"; or set base session
     set -l name $base
     set -l i 2
