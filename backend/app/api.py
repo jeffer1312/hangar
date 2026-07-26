@@ -452,6 +452,8 @@ class CreateBody(_StrictBody):
     # Wrapper interativo do Codex pode iniciar a TUI ja com um prompt. Nao e argv arbitrario:
     # evita que um cliente remoto injete flags que afrouxem sandbox/aprovacoes do backend.
     initial_prompt: str | None = None
+    # Motor de modelo (nome no engines.json). None = conta Anthropic, comportamento de hoje.
+    engine: str | None = None
 
 
 class PushSubscribeBody(_StrictBody):
@@ -568,10 +570,18 @@ async def create_session(body: CreateBody):
         raise HTTPException(400, "provider invalido")
     if body.config_dir is not None and body.config_dir not in {c.path for c in list_config_dirs()}:
         raise HTTPException(400, "config_dir invalido")
+    # Mesma guarda do config_dir. Codex nao usa spawn_command/tmux desse jeito, entao motor + codex e
+    # pedido incoerente — 400, nao "ignora e segue".
+    if body.engine is not None:
+        if body.provider != "claude":
+            raise HTTPException(400, "motor so vale para provider claude")
+        if body.engine not in engines.listar():
+            raise HTTPException(400, "motor invalido")
     try:
         if body.provider == "codex":
             return await registry.create_codex(body.name, body.cwd, body.initial_prompt)
-        return await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir)
+        return await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir,
+                                       engine=body.engine)
     except ValueError as e:
         raise HTTPException(409, str(e))
 
@@ -1515,6 +1525,11 @@ def get_config():
     }
 
 
+# POST **e** PATCH: PATCH era o unico metodo desse tipo no app inteiro (os outros 51 pedidos sao
+# POST/PUT/DELETE) e o proxy na frente do backend nao deixava passar — o preflight respondia 204 e o
+# pedido de verdade morria em erro de CORS. O cliente usa POST; o PATCH fica valendo pra quem chamar
+# a API na mao.
+@app.post("/api/config", dependencies=[Depends(require_auth)])
 @app.patch("/api/config", dependencies=[Depends(require_auth)])
 async def patch_config(request: Request):
     """Grava overrides. Campo desconhecido e ignorado (o cliente nao inventa setting); tipo errado
@@ -2010,9 +2025,16 @@ def archive_image(project: str, session_id: str, uuid: str, idx: int):
     return Response(content=raw, media_type=media, headers={"Cache-Control": "max-age=31536000, immutable"})
 
 
+class ResumeArchivedBody(_StrictBody):
+    # Motor de modelo pro resume do Arquivo. O pane que rodava a sessao original ja morreu -> nao ha
+    # /proc pra descobrir o motor de entao (ver registry._engine_of); quem retoma escolhe de novo.
+    # Sem escolha, volta na conta Anthropic (comportamento de hoje).
+    engine: str | None = None
+
+
 @app.post("/api/archive/{project}/{session_id}/resume", dependencies=[Depends(require_auth)],
           response_model=SessionInfo)
-def resume_archived(project: str, session_id: str):
+def resume_archived(project: str, session_id: str, body: ResumeArchivedBody = ResumeArchivedBody()):
     # "Retomar conversa" do Arquivo: sobe uma sessao tmux NOVA no cwd original com `claude --resume
     # <uuid>` -- reusa registry.create (nome/config_dir/spawn tmux ja tratados), so troca o comando pro
     # uuid EXISTENTE (nao um novo transcript). Nome derivado do basename do cwd, igual ao
@@ -2027,13 +2049,15 @@ def resume_archived(project: str, session_id: str):
         raise HTTPException(404, "transcript not found")
     if not cwd:
         raise HTTPException(422, "cwd not found in transcript")
+    if body.engine is not None and body.engine not in engines.listar():
+        raise HTTPException(400, "motor invalido")
     base = sanitize_session_name(Path(cwd).name) or "sessao"
     name, i = base, 2
     while tmux.has_session(name):
         name = f"{base}-{i}"
         i += 1
     try:
-        return registry.create(name, cwd, resume_session_id=session_id)
+        return registry.create(name, cwd, resume_session_id=session_id, engine=body.engine)
     except ValueError as e:
         raise HTTPException(409, str(e))
 

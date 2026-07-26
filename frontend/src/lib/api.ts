@@ -232,10 +232,11 @@ export function createSession(
   cwd?: string,
   configDir?: string | null,
   provider: 'claude' | 'codex' = 'claude',
+  engine?: string | null,
 ): Promise<SessionInfo> {
   return apiFetch<SessionInfo>('/api/sessions', {
     method: 'POST',
-    body: JSON.stringify({ name, cwd, config_dir: configDir ?? null, provider }),
+    body: JSON.stringify({ name, cwd, config_dir: configDir ?? null, provider, engine: engine ?? null }),
   });
 }
 
@@ -527,7 +528,8 @@ export function getConfig(): Promise<ConfigServidor> {
 }
 
 export function patchConfig(mudancas: Record<string, unknown>): Promise<{ campos: Record<string, CampoConfig> }> {
-  return apiFetch('/api/config', { method: 'PATCH', body: JSON.stringify(mudancas) });
+  // POST, nao PATCH: o proxy na frente do backend barra PATCH (era o unico do app).
+  return apiFetch('/api/config', { method: 'POST', body: JSON.stringify(mudancas) });
 }
 
 // ── Motores de modelo ───────────────────────────────────────────────────────
