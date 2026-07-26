@@ -51,6 +51,10 @@
     onLoopTap?: () => void;
   }
   let { title = 'claude cockpit', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, limited = false, limitReset = null, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, onOpenRun, runRunning = false, working = false, subtitle = null, subtitleHot = null, crumbs = null, stateLabel, stateColor, providerLabel = null, onProviderTap, loopLabel = null, loopColor, onLoopTap }: Props = $props();
+
+  // Sinal do "⋯": no celular Rodar/Atividade moram dentro do menu, entao o estado deles precisa
+  // aparecer no botao — senao voce so descobre que algo esta rodando abrindo o menu.
+  const menuDot = $derived(runRunning || activityRunning || activityBadge > 0);
 </script>
 
 <nav class="navbar">
@@ -169,15 +173,20 @@
       {/if}
       {#if (status && onExpandUsage) || limited}
         <RateChips {status} onExpand={onExpandUsage} {limited} {limitReset} />
-      {:else if onMenu}
-        <button class="nav-btn menu-btn" onclick={onMenu} aria-label="Menu">
+      {/if}
+      <!-- Mostrador e menu CONVIVEM (antes o menu era um `else` do mostrador, entao nunca aparecia
+           numa sessao com statusline). No celular o "⋯" guarda Rodar/Atividade; o ponto acende
+           quando algo esta rodando la dentro, pra o sinal nao se perder junto com os botoes. -->
+      {#if onMenu}
+        <button class="nav-btn menu-btn" onclick={onMenu} aria-label="Mais ações">
           <svg width="20" height="5" viewBox="0 0 20 5" fill="currentColor" aria-hidden="true">
             <circle cx="2.5" cy="2.5" r="2.5"/>
             <circle cx="10" cy="2.5" r="2.5"/>
             <circle cx="17.5" cy="2.5" r="2.5"/>
           </svg>
+          {#if menuDot}<span class="menu-dot" aria-hidden="true"></span>{/if}
         </button>
-      {:else}
+      {:else if !((status && onExpandUsage) || limited)}
         <div class="nav-spacer"></div>
       {/if}
     </div>
@@ -316,7 +325,10 @@
     align-items: center;
     justify-content: center;
     gap: var(--space-2);
-    padding: 0 var(--space-3);
+    /* Padding minimo: cada 8px aqui sai do NOME da sessao, que e a informacao mais disputada da
+       barra (ela chegava a "clau…" no iPhone). O alvo de toque continua sendo os 36px de altura
+       mais a largura do chip inteiro. */
+    padding: 0 var(--space-1);
     border-radius: var(--radius-md);
     transition: background 160ms var(--ease-out);
   }
@@ -399,6 +411,23 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .activity-btn.running svg { animation: none; }
+  }
+
+  /* Ponto do "⋯": mesma familia do .activity-badge, sem numero (o numero exato mora na sheet). */
+  .menu-btn { position: relative; }
+  .menu-dot {
+    position: absolute;
+    animation: dot-in 160ms var(--ease-out);
+    top: 7px;
+    right: 7px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+
+  @keyframes dot-in {
+    from { opacity: 0; transform: scale(0.6); }
   }
 
   .activity-badge {
