@@ -19,7 +19,8 @@ from app.auth import require_auth
 from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
 from app.model_picker import PickerError
-from app.registry import SessionRegistry, sanitize_session_name
+from app.registry import SessionRegistry
+from app.names import sanitize_session_name
 from app.models import (SessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody, RunInfo,
                         ProjectStatus)
 from app.pqueue import PromptQueue, _transcript_start_ts, committed_user_lines
