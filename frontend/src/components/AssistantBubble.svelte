@@ -99,17 +99,19 @@
     display: flex; align-items: center; gap: var(--space-1);
     margin-top: var(--space-1);
   }
+  /* No celular estes sao o principal jeito de tirar codigo da conversa: 28px a 50% de opacidade
+     era alvo curto e quase invisivel. No mouse eles seguem escondidos ate o hover (regra abaixo). */
   .msg-copy, .msg-fwd {
-    width: 28px; height: 28px; padding: 0;
+    width: 34px; height: 34px; padding: 0;
     display: flex; align-items: center; justify-content: center;
     border: none; border-radius: var(--radius-sm);
-    background: transparent; color: var(--text-muted);
-    opacity: 0.5; transition: opacity 120ms var(--ease-out), background 120ms var(--ease-out);
+    background: transparent; color: var(--text-secondary);
+    opacity: 0.75; transition: opacity 120ms var(--ease-out), background 120ms var(--ease-out);
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
   }
-  .msg-copy::before { content: '⧉'; font-size: 14px; line-height: 1; }
-  .msg-fwd::before { content: '↗'; font-size: 14px; line-height: 1; }
+  .msg-copy::before { content: '⧉'; font-size: 16px; line-height: 1; }
+  .msg-fwd::before { content: '↗'; font-size: 16px; line-height: 1; }
   .msg-copy.copied { color: var(--accent); opacity: 1; }
   .msg-copy.copied::before { content: '✓'; }
 
@@ -145,6 +147,11 @@
     padding: 2px 5px;
     border-radius: 4px;
     color: var(--text-primary);
+    /* Quebrando de linha, o fundo/padding/raio sao UMA caixa cortada ao meio: o 1o pedaco fica sem
+       padding a direita e o 2o sem padding a esquerda (duas pilulas serradas). `clone` repete a
+       decoracao inteira em cada pedaco. */
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
   }
 
   .prose :global(pre) {
