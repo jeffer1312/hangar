@@ -21,26 +21,38 @@
 #
 # Escape hatch: `command claude ...` runs the raw binary, bypassing this wrapper.
 claude() {
-    local a
-    # respect flags that manage their own session (injecting --session-id alongside them errors)
-    for a in "$@"; do
-        case "$a" in
-            --session-id|--session-id=*|--resume|--resume=*|-c|--continue) command claude "$@"; return ;;
-        esac
-    done
-
-    local id
-    id=$(uuidgen 2>/dev/null) || id=$(cat /proc/sys/kernel/random/uuid)
-
     # Motor de modelo (CP_ENGINE, setado por claude-engine): env aplicado DENTRO do pane por
     # `cp-engine --exec`, não por `tmux -e` — tmux não herda o env do caller, e `-e TOKEN=…` deixaria
     # a key em /proc/<pid>/cmdline, legível por qualquer usuário. Array em vez de string para não
-    # depender de word-splitting (zsh não faz em variável não-quotada).
+    # depender de word-splitting (zsh não faz em variável não-quotada). Construído ANTES do scan de
+    # flags abaixo porque -c/--resume/--session-id saem por um early return e também precisam do
+    # prefixo — senão o motor é silenciosamente ignorado e a sessão sobe na conta Anthropic.
     local -a pre
     pre=()
     if [ -n "${CP_ENGINE:-}" ]; then
         pre=(cp-engine --exec "$CP_ENGINE" --)
     fi
+
+    local a
+    # respect flags that manage their own session (injecting --session-id alongside them errors)
+    for a in "$@"; do
+        case "$a" in
+            --session-id|--session-id=*|--resume|--resume=*|-c|--continue)
+                # mesmo bypass de `command` do caminho "só injeta o id" abaixo: sem motor, chama o
+                # binário direto (evita recursão na função); com motor, quem executa é o cp-engine
+                # (processo à parte achado no PATH) — `command` não existiria pra ele executar.
+                if [ ${#pre[@]} -eq 0 ]; then
+                    command claude "$@"
+                else
+                    "${pre[@]}" claude "$@"
+                fi
+                return
+                ;;
+        esac
+    done
+
+    local id
+    id=$(uuidgen 2>/dev/null) || id=$(cat /proc/sys/kernel/random/uuid)
 
     # only inject the id (no tmux) when: already in tmux, print mode, or stdin not a tty
     local print=0
