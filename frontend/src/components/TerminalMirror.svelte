@@ -142,6 +142,41 @@
     if (e.key.length === 1) { e.preventDefault(); e.stopPropagation(); await sendInput({ text: e.key }); }
   }
 
+  // ── Teclado no MOBILE ───────────────────────────────────────────────────────
+  // O desktop captura o teclado direto no pane; o celular não tem como, então precisava de um campo
+  // real pra o teclado do sistema aparecer. Um POST por tecla seria conversa demais em rede móvel —
+  // e o /term-input já aceita texto E tecla no MESMO corpo (manda o texto, depois a tecla), então
+  // "digitar e enviar" é uma requisição só, sem corrida entre as duas partes.
+  let draft = $state('');
+  let sending = $state(false);
+
+  // ── Tamanho da fonte ────────────────────────────────────────────────────────
+  // 10px fixo era ilegível no celular; num pane de 200 colunas o tamanho é o único controle real
+  // de quanto cabe na tela. Persistido: reajustar isso a cada abertura seria atrito puro.
+  const FONT_MIN = 8, FONT_MAX = 18, FONT_KEY = 'cp_mirror_font';
+  let fontPx = $state(
+    (() => {
+      const v = Number(typeof localStorage !== 'undefined' ? localStorage.getItem(FONT_KEY) : NaN);
+      return Number.isFinite(v) && v >= FONT_MIN && v <= FONT_MAX ? v : 11;
+    })(),
+  );
+  function bumpFont(d: number) {
+    fontPx = Math.min(FONT_MAX, Math.max(FONT_MIN, fontPx + d));
+    try { localStorage.setItem(FONT_KEY, String(fontPx)); } catch { /* modo privado */ }
+  }
+
+  async function submitDraft(withEnter: boolean) {
+    const value = draft;
+    if (!value || sending) return;
+    sending = true;
+    try {
+      await sendInput(withEnter ? { text: value, key: 'Enter' } : { text: value });
+      draft = '';
+    } finally {
+      sending = false;
+    }
+  }
+
   // Foca o pane ao abrir no desktop -> digita direto sem clicar.
   $effect(() => { if (open && interactive) setTimeout(() => paneEl?.focus(), 60); });
 
@@ -161,7 +196,16 @@
       <button class="tm-back" onclick={onClose} aria-label="Voltar ao chat">
         <span class="tm-back-arrow">←</span> Voltar ao chat
       </button>
-      <span class="tm-title">⌨ {sessionName}{#if interactive} · <span class="tm-live">interativo</span>{/if}</span>
+      <div class="tm-head-right">
+        <div class="tm-font" role="group" aria-label="Tamanho da fonte">
+          <button class="tm-fontbtn" onclick={() => bumpFont(-1)} disabled={fontPx <= FONT_MIN}
+                  aria-label="Diminuir fonte">A−</button>
+          <span class="tm-fontval">{fontPx}</span>
+          <button class="tm-fontbtn" onclick={() => bumpFont(1)} disabled={fontPx >= FONT_MAX}
+                  aria-label="Aumentar fonte">A+</button>
+        </div>
+        <span class="tm-title">{sessionName}{#if interactive} · <span class="tm-live">interativo</span>{/if}</span>
+      </div>
     </header>
 
     <div
@@ -183,7 +227,7 @@
           {loadingMore ? 'carregando…' : `↑ carregar mais histórico (${paneLines} linhas)`}
         </button>
       {/if}
-      <pre class="tm-pane">{lines.join('\n')}</pre>
+      <pre class="tm-pane" style:font-size={`${fontPx}px`}>{lines.join('\n')}</pre>
     </div>
 
     {#if !atBottom}
@@ -194,6 +238,26 @@
 
     {#if paneUrl}
       <a class="tm-link" href={paneUrl} target="_blank" rel="noopener noreferrer">↗ Abrir link no navegador</a>
+    {/if}
+
+    {#if !interactive}
+      <form class="tm-compose" onsubmit={(e) => { e.preventDefault(); submitDraft(true); }}>
+        <input
+          class="tm-input"
+          bind:value={draft}
+          placeholder="digitar no terminal…"
+          aria-label="Texto para o terminal"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+          enterkeyhint="send"
+        />
+        <!-- Enviar SEM Enter: num picker/filtro o Enter submeteria antes da hora. -->
+        <button class="tm-key" type="button" disabled={!draft || sending}
+                onclick={() => submitDraft(false)} title="enviar sem Enter">↵̸</button>
+        <button class="tm-key tm-enter" type="submit" disabled={!draft || sending}
+                title="enviar e pressionar Enter">envia ⏎</button>
+      </form>
     {/if}
 
     <nav class="tm-keys" aria-label="Teclas de resgate">
@@ -235,7 +299,21 @@
     border-bottom: 1px solid var(--border-subtle);
     padding-top: max(var(--space-2), env(safe-area-inset-top));
   }
-  .tm-title { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); }
+  .tm-title { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
+  .tm-head-right { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+  .tm-font { display: flex; align-items: center; gap: var(--space-1); }
+  .tm-fontbtn {
+    min-width: 30px; height: 28px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md, 8px);
+    background: var(--bg-surface, rgba(255, 255, 255, 0.06));
+    color: var(--text-secondary);
+    font-size: var(--text-xs); font-family: var(--font-mono);
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }
+  .tm-fontbtn:disabled { opacity: 0.4; }
+  .tm-fontval { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); min-width: 14px; text-align: center; }
   /* "Voltar ao chat" = saida SEGURA e obvia (so esconde o espelho, nao mexe na TUI). Destacado em
      accent pra nao confundir com a tecla Esc da barra (que SIM fecha o overlay na TUI). */
   .tm-back {
@@ -252,7 +330,14 @@
   .tm-back:active { background: var(--bg-hover); }
   .tm-back-arrow { font-size: var(--text-base); line-height: 1; }
 
-  .tm-screen { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; }
+  /* Superfície do terminal: um tom abaixo do chrome do app, como a janela de um emulador. Sem
+     backdrop-filter/transform aqui — no iOS eles promovem camada e pintam preto no scroll. */
+  .tm-screen {
+    flex: 1;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+    background: var(--bg-surface);
+  }
   /* Interativo (desktop): focavel -> anel accent discreto, sinaliza que o teclado vai pro tmux. */
   .tm-screen.interactive { outline: none; cursor: text; }
   .tm-screen.interactive:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
@@ -260,15 +345,18 @@
   .tm-err { color: var(--danger, #f87171); font-size: var(--text-xs); padding: var(--space-2) var(--space-3); margin: 0; }
   .tm-pane {
     margin: 0;
-    padding: var(--space-2);
+    /* Respiro tipo emulador de terminal: o texto não encosta na borda da tela. */
+    padding: var(--space-3) var(--space-3) var(--space-4);
     font-family: var(--font-mono);
-    /* pequeno o bastante pra caber ~80 cols num celular; o overflow-x cobre o resto. */
-    font-size: 10px;
-    line-height: 1.35;
+    /* font-size vem inline (controle A−/A+, persistido) — o pane tem 200 colunas e o tamanho é o
+       único controle real de quanto cabe. line-height mais folgado: o TUI usa moldura de caixa
+       (│ ╭ ╰) e apertado demais elas se tocam e viram borrão. */
+    line-height: 1.45;
     color: var(--text-primary);
     white-space: pre;            /* sem reflow: preserva o layout do TUI */
     min-width: max-content;      /* deixa rolar horizontal em vez de quebrar */
     tab-size: 2;
+    font-variant-ligatures: none;  /* ligadura em -> / != desalinha a grade de colunas */
   }
 
   /* Botao tocavel quando ha URL no pane (link OAuth do login). Largo e obvio — vs a URL crua 10px. */
@@ -322,6 +410,31 @@
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
   }
+
+  /* Campo de digitação (mobile). Acima da barra de teclas pra o teclado do sistema não cobrir os
+     dois; ambos flex-shrink:0 pra o pane ceder altura, nunca eles. */
+  .tm-compose {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-top: 1px solid var(--border-subtle);
+  }
+  .tm-input {
+    flex: 1;
+    min-width: 0;
+    height: 40px;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md, 8px);
+    background: var(--bg-surface, rgba(255, 255, 255, 0.06));
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 16px;   /* < 16px faz o iOS dar zoom no foco */
+  }
+  .tm-input:focus { outline: none; border-color: var(--accent); }
+  .tm-compose .tm-key:disabled { opacity: 0.45; }
 
   .tm-keys {
     flex-shrink: 0;
