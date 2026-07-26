@@ -40,12 +40,20 @@ ask() { # ask "pergunta" -> 0/1 (em --yes, sempre sim)
 say "1/7 Checando dependências"
 command -v tmux   >/dev/null || fail "tmux não encontrado — instale com o gerenciador do teu sistema"
 command -v claude >/dev/null || fail "claude (Claude Code) não encontrado — https://code.claude.com"
-command -v codex  >/dev/null || fail "codex CLI não encontrado — https://developers.openai.com/codex/cli"
 command -v uv     >/dev/null || fail "uv não encontrado — https://docs.astral.sh/uv/ (curl -LsSf https://astral.sh/uv/install.sh | sh)"
 command -v npm    >/dev/null || fail "node/npm não encontrados — instale Node 20+"
 node -e 'process.exit(parseInt(process.versions.node) >= 20 ? 0 : 1)' \
   || fail "Node 20+ é necessário (atual: $(node --version))"
-ok "tmux, claude, codex, uv e node $(node --version) presentes"
+# Codex é OPCIONAL: o app é primariamente um cockpit de Claude Code. Exigir o binário aqui
+# travava a instalação inteira de quem só usa Claude. Sem ele, tudo funciona menos as sessões
+# Codex (e o wrapper do `codex` simplesmente não tem o que embrulhar).
+if command -v codex >/dev/null; then
+  ok "tmux, claude, codex, uv e node $(node --version) presentes"
+else
+  ok "tmux, claude, uv e node $(node --version) presentes"
+  echo "  codex CLI não encontrado — sessões Codex ficam indisponíveis (o resto funciona)."
+  echo "  Para habilitar depois: https://developers.openai.com/codex/cli"
+fi
 
 # ── 2. Backend ───────────────────────────────────────────────────────────────
 say "2/7 Backend (uv sync)"
