@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""CLI de motores de modelo, para o wrapper de shell e para o backend chamarem.
+
+Por que existe: a derivação motor->env tem que morar num lugar SÓ. O backend importa app.engines
+direto; o shell não pode (não tem venv), então chama este script com o python3 do sistema.
+Reimplementar o parse em fish e em bash seriam três verdades divergindo.
+
+Por que `--exec` e não `tmux -e`: a key iria para a linha de comando, e /proc/<pid>/cmdline é legível
+por qualquer usuário da máquina (o systemd-run --scope ainda joga argv no journal). Com execvpe o
+ambiente é aplicado DENTRO do processo e, depois do exec, o cmdline é o do comando alvo.
+
+  cp-engine --list                       -> nome<TAB>label<TAB>modelo
+  cp-engine --env <motor>                -> CHAVE=VALOR por linha (diagnóstico)
+  cp-engine --exec <motor> -- <cmd> ...  -> executa cmd com o env do motor (substitui este processo)
+"""
+import os
+import sys
+from pathlib import Path
+
+# app.engines é stdlib pura (garantido por teste): importável sem instalar o backend.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
+
+from app import engines  # noqa: E402
+
+
+def _env_ou_morre(nome: str) -> dict[str, str]:
+    try:
+        return engines.env_de(nome)
+    except (KeyError, ValueError) as e:
+        # KeyError: motor não existe no registro. ValueError: existe, mas engines.json foi
+        # hand-editado com um valor que viola o contrato de shell (\n/\r/\0 — ver env_de). Os dois
+        # casos morrem igual: traceback aqui vazaria pro usuário errado (o wrapper de shell).
+        if isinstance(e, ValueError):
+            print(f"cp-engine: motor '{nome}' inválido: {e}", file=sys.stderr)
+        else:
+            disponiveis = ", ".join(sorted(engines.listar())) or "nenhum"
+            print(f"cp-engine: motor '{nome}' não existe (configurados: {disponiveis})", file=sys.stderr)
+        raise SystemExit(1)
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) == 2 and argv[1] == "--list":
+        for nome, e in sorted(engines.listar().items()):
+            print(f"{nome}\t{e.get('label', nome)}\t{e.get('model', '')}")
+        return 0
+
+    if len(argv) == 3 and argv[1] == "--env":
+        for chave, valor in _env_ou_morre(argv[2]).items():
+            print(f"{chave}={valor}")
+        return 0
+
+    if len(argv) >= 5 and argv[1] == "--exec" and argv[3] == "--":
+        env = _env_ou_morre(argv[2])
+        cmd = argv[4:]
+        # execvpe substitui este processo: o pane do tmux passa a ser o próprio claude (dono do tty),
+        # que é o que faz o send-keys do app chegar nele. Um wrapper que ficasse no meio quebraria isso.
+        os.execvpe(cmd[0], cmd, {**os.environ, **env})
+        return 127  # inalcançável; execvpe só retorna levantando OSError
+
+    print(__doc__, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv))
+    except OSError as e:
+        print(f"cp-engine: falha ao executar: {e}", file=sys.stderr)
+        sys.exit(126)

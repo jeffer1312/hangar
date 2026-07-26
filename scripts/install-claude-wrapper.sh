@@ -74,12 +74,13 @@ ensure_block() {
 
 install_posix() {  # $1 = rc file
   ensure_block "$1" "source \"$SHELL_DIR/claude.posix.sh\"
-source \"$SHELL_DIR/codex.posix.sh\""
+source \"$SHELL_DIR/codex.posix.sh\"
+source \"$SHELL_DIR/claude-engine.posix.sh\""
 }
 
 install_fish() {
   local name dst src
-  for name in claude codex; do
+  for name in claude codex claude-engine; do
     src="$SHELL_DIR/$name.fish"
     dst="$HOME/.config/fish/functions/$name.fish"
     mkdir -p "$(dirname "$dst")"
@@ -98,6 +99,9 @@ mkdir -p "$HOME/.local/bin"
 chmod +x "$SCRIPT_DIR/cp-codex"
 ln -sfn "$SCRIPT_DIR/cp-codex" "$HOME/.local/bin/cp-codex"
 echo "  installed Codex helper -> $HOME/.local/bin/cp-codex"
+chmod +x "$SCRIPT_DIR/cp-engine"
+ln -sfn "$SCRIPT_DIR/cp-engine" "$HOME/.local/bin/cp-engine"
+echo "  installed engine helper -> $HOME/.local/bin/cp-engine"
 
 # Point Claude Code's statusLine at scripts/omniroute-statusline.js so the app parses it reliably.
 install_statusline() {
