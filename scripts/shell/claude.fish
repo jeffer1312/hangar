@@ -51,7 +51,11 @@ function claude
     set -l base (basename "$PWD")
     if command -v iconv >/dev/null 2>&1
         set -l ascii (printf '%s' "$base" | iconv -f UTF-8 -t ASCII//TRANSLIT 2>/dev/null)
-        test -n "$ascii"; and set base $ascii
+        # Checar o STATUS, nao so "veio algo": num basename com byte UTF-8 invalido (pasta vinda de
+        # samba/zip com codepage errada) o iconv imprime o prefixo que ja converteu, falha no byte
+        # ruim e sai 1. So testar `-n` aceitava esse pedaco truncado e o nome perdia tudo depois do
+        # byte — "bad-<0xff>-name" virava "bad", calado. O posix ja acertava por encadear com &&.
+        test $status -eq 0; and test -n "$ascii"; and set base $ascii
     end
     set base (string replace -ra '[^A-Za-z0-9_-]' '-' -- $base)
     set base (string replace -ra '^-+|-+$' '' -- $base)
