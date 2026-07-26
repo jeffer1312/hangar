@@ -7,6 +7,7 @@ motor desconhecido estoura em vez de devolver env vazio (a sessão subiria na co
 que é o motor pedido).
 """
 import ast
+import json
 import os
 import pathlib
 import subprocess
@@ -88,7 +89,10 @@ def test_valor_com_quebra_de_linha_e_recusado():
     # exportaria uma variável arbitrária (ex: PATH) no shell que vai rodar o claude.
     for campo, valor in (("api_key", "sk-x\nPATH=/tmp/evil"),
                          ("model", "k3\nHOME=/tmp"),
-                         ("base_url", "https://a.b\nX=1")):
+                         ("base_url", "https://a.b\nX=1"),
+                         ("api_key", "sk-x\rRETURN"),
+                         ("model", "k3\x00NULL"),
+                         ("base_url", "https://a.b\r\nCRLF")):
         d = _kimi()
         d[campo] = valor
         with pytest.raises(ValueError, match="linha"):
@@ -163,6 +167,39 @@ def test_gravar_nao_perde_o_motor_do_vizinho():
     d["base_url"] = "https://ai.omniwise.com.br"
     eng.salvar("omniroute", d)
     assert set(eng.listar()) == {"kimi", "omniroute"}
+
+
+def test_env_de_rejeita_json_envenenado_com_newline():
+    # engines.json pode ser hand-editado ou corrompido; env_de não deve emitir valores com
+    # caractere proibido. Contratos de shell-safety são enforçados na leitura, não só na escrita.
+    d = _kimi()
+    eng.salvar("kimi", d)
+    # Simula hand-editing: escreve JSON com newline na api_key, bypassing salvar
+    payload = {"kimi": d}
+    payload["kimi"]["api_key"] = "sk-x\nPATH=/tmp/evil"
+    eng.caminho().write_text(json.dumps(payload), encoding="utf-8")
+    # env_de deve rejeitar com ValueError, não retornar env perigosa
+    with pytest.raises(ValueError, match="api_key"):
+        eng.env_de("kimi")
+
+
+def test_env_de_rejeita_json_envenenado_em_multiplos_campos():
+    # Cobre outros campos e caracteres: carriage return, null byte.
+    d = _kimi()
+    # Escreve JSON poisonado diretamente para test_env_de_rejeita_json_envenenado_mostra_campo_e_mensagem
+    eng.salvar("kimi", d)
+    payload = {"kimi": d}
+    # Test 1: model com null byte
+    payload["kimi"]["model"] = "k3\x00EVIL"
+    eng.caminho().write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="model.*proibido"):
+        eng.env_de("kimi")
+    # Test 2: base_url com carriage return
+    payload["kimi"] = _kimi()
+    payload["kimi"]["base_url"] = "https://a.b\rINJECT"
+    eng.caminho().write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="base_url.*proibido"):
+        eng.env_de("kimi")
 
 
 def test_modulo_e_stdlib_pura():

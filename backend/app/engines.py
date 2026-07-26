@@ -167,8 +167,21 @@ def env_de(nome: str) -> dict[str, str]:
 
     KeyError no motor inexistente de propósito: env vazio faria a sessão subir na conta Anthropic
     ACHANDO que é o motor escolhido — o pior tipo de falha, a silenciosa.
+
+    ValueError se qualquer valor contém caractere proibido (\\n, \\r, \\x00): contrato com o shell
+    que `cp-engine --env` exporta (uma linha por variável). Se engines.json foi hand-editado ou
+    corrompido, rejeitamos em vez de silenciar.
     """
     e = listar()[nome]
+
+    # Valida shell-safety: uma linha por variável é o contrato com o shell. Rejeita se o JSON
+    # contém um valor que já violou a invariante (hand-edited file, corrupted write recovered by
+    # another tool, etc). Reutiliza _PROIBIDO_NO_VALOR para uma única fonte de verdade.
+    for campo in ("api_key", "model", "base_url"):
+        valor = e.get(campo, "")
+        if isinstance(valor, str) and any(c in valor for c in _PROIBIDO_NO_VALOR):
+            raise ValueError(f"{campo}: contém caractere proibido (quebra de linha ou nulo)")
+
     modelo = e["model"]
     env = {
         # Marca lida do /proc/<pid>/environ para descobrir o motor de uma sessão viva (Task 5).
