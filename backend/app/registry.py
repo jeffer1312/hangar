@@ -5,6 +5,7 @@ import os
 import re
 import threading
 import time
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -26,6 +27,21 @@ from app.hook_state import hook_state
 _UNSET = object()
 
 _log = logging.getLogger("claude_pocket.registry")
+
+
+def sanitize_session_name(name: str) -> str:
+    """Nome seguro pra alvo do tmux E pra basename de arquivo (sidecar Codex, fila, pareamento).
+
+    O NFKD + descarte dos acentos vem ANTES do filtro. Sem isso, letra acentuada virava "-" e o
+    `.strip("-")` do fim comia o traco junto com ela: "Area de trabalho" (com A acentuado) saia como
+    "rea-de-trabalho" -- a primeira letra sumia. Agora a acentuacao e rebaixada pro equivalente ASCII
+    ("A"), entao o nome preserva o sentido.
+
+    Nome inteiro fora do ASCII (ex: so ideogramas) ainda resulta em "": os chamadores ja tratam isso
+    como nome invalido, que e melhor que inventar um nome que o usuario nao escreveu.
+    """
+    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    return re.sub(r"[^A-Za-z0-9_-]", "-", ascii_name.strip()).strip("-")
 
 # Idade minima de um marcador awaiting_input pra que um pane raspado SEM menu o rebaixe pra idle
 # (hook_state.demote_awaiting). O grace cobre a janela Notification->menu renderizado: raspar nesse
@@ -725,7 +741,7 @@ class SessionRegistry:
                resume_session_id: str | None = None, provider: str = "claude") -> SessionInfo:
         # Nome tmux nao aceita "."/":"/espaco -> sanitiza igual ao rename. Varias sessoes na MESMA
         # pasta sao permitidas: cada uma tem nome unico + --session-id proprio -> jsonl proprio.
-        name = re.sub(r"[^A-Za-z0-9_-]", "-", name.strip()).strip("-")
+        name = sanitize_session_name(name)
         if not name:
             raise ValueError("nome invalido")
         # Codex nao e tmux: o caminho async (spawn do app-server, thread/start) roda no loop
@@ -783,7 +799,7 @@ class SessionRegistry:
                            initial_prompt: str | None = None) -> SessionInfo:
         # Caminho Codex: spawna um app-server WebSocket local, abre um thread e cria uma TUI
         # `codex --remote` no tmux ligada ao mesmo servidor. O backend conserva o controle JSON-RPC.
-        name = re.sub(r"[^A-Za-z0-9_-]", "-", name.strip()).strip("-")
+        name = sanitize_session_name(name)
         if not name:
             raise ValueError("nome invalido")
         # Unicidade contra sessoes tmux (Claude) E sidecars Codex existentes.

@@ -829,3 +829,38 @@ def test_label_cache_preenche_working_e_nunca_idle(monkeypatch):
     assert by["w"].label == "Hyperspacing…"                 # working herda a barrinha do cache
     assert getattr(by["i"], "label", None) is None          # idle nunca ganha label
     assert "i" not in SessionRegistry._label_cache          # e a entrada fantasma morre no marker
+
+
+# --- sanitizacao de nome de sessao ----------------------------------------------------------
+# O filtro trocava caractere acentuado por "-" e o .strip("-") do fim comia esse traco junto com a
+# letra: "Área de trabalho" virava "rea-de-trabalho" (visto ao vivo). NFKD antes do filtro rebaixa
+# o acento pro ASCII equivalente, preservando o sentido do nome.
+
+def test_sanitize_preserva_primeira_letra_acentuada():
+    from app.registry import sanitize_session_name
+    assert sanitize_session_name("Área de trabalho") == "Area-de-trabalho"
+
+
+def test_sanitize_rebaixa_acentos_no_meio():
+    from app.registry import sanitize_session_name
+    assert sanitize_session_name("São Paulo") == "Sao-Paulo"
+    assert sanitize_session_name("ação rápida") == "acao-rapida"
+
+
+def test_sanitize_nao_mexe_em_nome_ja_ascii():
+    # Sessoes/sidecars/filas EXISTENTES sao keyed por nomes ja sanitizados: a mudanca nao pode
+    # reescrever nenhum deles, senao o sidecar antigo ficaria orfao.
+    from app.registry import sanitize_session_name
+    for n in ("claude-cockpit", "repo-2", "rea-de-trabalho", "a_b-C9"):
+        assert sanitize_session_name(n) == n
+
+
+def test_sanitize_caracteres_proibidos_do_tmux():
+    from app.registry import sanitize_session_name
+    assert sanitize_session_name("Área/de:trabalho.v2") == "Area-de-trabalho-v2"
+
+
+def test_sanitize_nome_todo_fora_do_ascii_fica_vazio():
+    # Melhor devolver "" (os chamadores rejeitam como nome invalido) do que inventar um nome.
+    from app.registry import sanitize_session_name
+    assert sanitize_session_name("会话") == ""
