@@ -11,7 +11,15 @@
 # Configurar: app -> Configurações -> Motores de modelo (ou ~/.claude/engines.json).
 function claude-engine
     if test (count $argv) -eq 0
-        set -l lista (cp-engine --list)
+        # $status depois de `set -l x (cmd)` é o exit code de cmd, não do `set` — distingue
+        # "não instalado" (comando não encontrado) de "zero motor configurado" (--list sempre sai
+        # 0), senão as duas mensagens ficam iguais e mandam o usuário pro app justamente no caso em
+        # que o app não vai adiantar nada.
+        set -l lista (cp-engine --list 2>/dev/null)
+        if test $status -ne 0
+            echo "claude-engine: cp-engine não pôde ser executado — rode ./scripts/install-claude-wrapper.sh" >&2
+            return 1
+        end
         if test -z "$lista"
             echo "Nenhum motor configurado. Configure no app (Configurações -> Motores de modelo)."
             return 1

@@ -67,6 +67,26 @@ def test_buscar_traduz_url_error_em_nao_foi_possivel_falar(monkeypatch):
         engine_probe._buscar("https://x.y", "sk-x")
 
 
+def test_buscar_caminho_feliz_com_bytes_invalidos_nao_estoura_unicodedecodeerror(monkeypatch):
+    # UnicodeDecodeError é ValueError, não URLError/OSError/TimeoutError: sem errors="replace" ela
+    # escapa do except e vira 500 com traceback em vez do 502 com a mensagem do provedor.
+    corpo = b'{"data": [{"id": "k3"}]}\xff'
+
+    class _Resposta:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return corpo
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: _Resposta())
+    with pytest.raises(RuntimeError, match="não-JSON"):
+        engine_probe._buscar("https://x.y", "sk-x")
+
+
 def test_buscar_caminho_feliz_monta_o_header_e_le_o_json(monkeypatch):
     corpo = json.dumps({"data": [{"id": "k3"}]}).encode()
 

@@ -168,6 +168,9 @@ respondeu" genérico.
   da Moonshot: chave de uma dá `Invalid Authentication` na outra. Os ids de modelo também são
   próprios da Kimi Code (`k3`, `k3-256k`, `kimi-for-coding`, `kimi-for-coding-highspeed`) — não
   `kimi-k3`.
+- **Modelo dos subagentes** é opcional: em branco, subagentes rodam no mesmo modelo principal. Como
+  eles fazem muita busca mecânica, apontar um modelo mais barato aqui é economia real sem tocar o
+  modelo da sessão.
 - A janela de contexto depende da sua **faixa de assinatura**: o mesmo `k3` já reportou 262144 num
   plano Moderato onde a documentação da Kimi fala em "até 1M". É por isso que o valor vem do
   provedor a cada teste, e não de uma tabela na documentação. **Depois de cadastrar um motor novo,

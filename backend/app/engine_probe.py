@@ -29,7 +29,10 @@ def _buscar(base_url: str, api_key: str) -> dict[str, Any]:
         headers={"Authorization": f"Bearer {api_key}"})
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
-            corpo = r.read().decode()
+            # errors="replace": um provedor pode responder bytes fora de utf-8 válido; deixar
+            # UnicodeDecodeError escapar vira 500 com traceback (foge do except abaixo, que só
+            # pega URLError/OSError/TimeoutError) em vez do 502 com a mensagem do provedor.
+            corpo = r.read().decode(errors="replace")
     except urllib.error.HTTPError as e:
         # !2xx: a mensagem do provedor ("Invalid Authentication") é a informação útil; engolir isso
         # deixaria o usuário com "não respondeu" e nenhuma pista. O corpo do erro vem de e.read()

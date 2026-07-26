@@ -37,6 +37,7 @@
     api_key: string;
     api_key_definida: boolean;
     model: string;
+    subagent_model: string;
     context_window: string;
     existente: boolean;
   }>(null);
@@ -66,7 +67,7 @@
   function novo() {
     form = {
       nome: '', label: '', base_url: '', base_url_original: '', api_key: '', api_key_definida: false,
-      model: '', context_window: '', existente: false,
+      model: '', subagent_model: '', context_window: '', existente: false,
     };
     modelos = []; erroBusca = ''; okBusca = '';
   }
@@ -83,6 +84,7 @@
       api_key: '',
       api_key_definida: m.api_key_definida,
       model: m.model,
+      subagent_model: m.subagent_model ?? '',
       context_window: m.context_window ? String(m.context_window) : '',
       existente: true,
     };
@@ -124,8 +126,10 @@
     form.model = id;
     const m = modelos.find((x) => x.id === id);
     // A janela vem do provedor: errar aqui custa capacidade real (em branco o Claude Code assume
-    // 200k e compacta cedo, mesmo num modelo de 500k).
-    if (m?.context_length) form.context_window = String(m.context_length);
+    // 200k e compacta cedo, mesmo num modelo de 500k). Modelo sem context_length limpa o campo —
+    // deixar o número do modelo ANTERIOR salvo faria a var passar da janela real do modelo novo, e
+    // o provedor erra no meio do turno em vez do Claude Code compactar.
+    form.context_window = m?.context_length ? String(m.context_length) : '';
   }
 
   const modeloAtual = $derived(form ? modelos.find((m) => m.id === form!.model) : undefined);
@@ -140,6 +144,7 @@
         model: form.model.trim(),
       };
       if (form.api_key.trim()) corpo.api_key = form.api_key.trim();
+      if (form.subagent_model.trim()) corpo.subagent_model = form.subagent_model.trim();
       if (form.context_window) corpo.context_window = Number(form.context_window);
 
       // O PUT é substituição TOTAL do registro (backend/app/engines.py salvar()/_normalizar()):
@@ -276,6 +281,26 @@
                  ANTES de abrir a sessão, não quando a foto for ignorada. -->
             <span class="ajuda erro">Este modelo não enxerga imagem: anexar foto não vai funcionar.</span>
           {/if}
+        </label>
+
+        <label class="campo">
+          <span class="rot">Modelo dos subagentes</span>
+          {#if modelos.length}
+            <select value={form.subagent_model}
+                    onchange={(e) => (form!.subagent_model = e.currentTarget.value)}>
+              <option value="">mesmo que o principal</option>
+              {#each modelos as m (m.id)}
+                <option value={m.id}>{m.id}</option>
+              {/each}
+            </select>
+          {:else}
+            <input type="text" placeholder="vazio = mesmo que o principal" autocapitalize="off" spellcheck={false}
+                   value={form.subagent_model} oninput={(e) => (form!.subagent_model = e.currentTarget.value)} />
+          {/if}
+          <span class="ajuda">
+            Subagentes fazem busca mecânica repetitiva; um modelo mais barato aqui é economia real,
+            sem tocar no modelo principal da sessão.
+          </span>
         </label>
 
         <label class="campo">
