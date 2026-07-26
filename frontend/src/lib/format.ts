@@ -331,6 +331,18 @@ export function pairColor(gid: string): string {
   return `oklch(var(--pair-l, 0.72) 0.14 ${h % 360})`;
 }
 
+// Janela de contexto legível: 1e6 -> "1M", 1.5e6 -> "1.5M", 200000 -> "200k".
+// Separado do abbrevNum porque este quer INTEIRO quando exato ("1M", não "1.0M") e usa 'k'
+// minúsculo, casando o que a própria statusline do terminal mostra.
+// O corte olha o valor JÁ ARREDONDADO, não o bruto: com o teste em `n >= 1e6`, um total de
+// 999_700 caía no ramo k e virava "1000k" — o exato defeito que esta função existe pra evitar.
+export function ctxWindow(n: number): string {
+  const k = Math.round(n / 1000);
+  if (k < 1000) return `${k}k`;
+  // `.replace(/\.0$/, '')` como o abbrevNum abaixo: 1e6 e 999_700 viram "1M", não "1.0M".
+  return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+}
+
 // Abrevia contagem grande: 3668662 -> "3.7M", 1.5e9 -> "1.5B", 999 -> "999".
 export function abbrevNum(n: number): string {
   for (const [div, suf] of [[1e9, 'B'], [1e6, 'M'], [1e3, 'K']] as const) {

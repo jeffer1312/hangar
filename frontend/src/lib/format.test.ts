@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, fmtWhen, groupSelectedByServer, initials, nextAwaiting,
   projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent, resetsIn,
-  clusterByPair, sortSessions, bubblesFromTail,
+  clusterByPair, sortSessions, bubblesFromTail, ctxWindow,
 } from './format';
 import type { ChatEvent, State } from './types';
 
@@ -428,5 +428,27 @@ describe('bubblesFromTail', () => {
 
   it('cauda vazia -> vazio', () => {
     expect(bubblesFromTail([])).toEqual([]);
+  });
+});
+
+describe('ctxWindow', () => {
+  it('mostra M inteiro quando exato (a janela do Opus5 aparecia como "1000k")', () => {
+    expect(ctxWindow(1_000_000)).toBe('1M');
+  });
+
+  it('mostra decimal quando nao e M redondo', () => {
+    expect(ctxWindow(1_500_000)).toBe('1.5M');
+  });
+
+  it('mantem k abaixo de 1M', () => {
+    expect(ctxWindow(200_000)).toBe('200k');
+    expect(ctxWindow(258_400)).toBe('258k');
+  });
+
+  it('nao regride para "1000k" logo abaixo de 1M', () => {
+    // O corte tem que olhar o valor JA ARREDONDADO: testando o bruto em >= 1e6, 999_700
+    // arredondava para "1000k" — exatamente o defeito que esta funcao existe pra evitar.
+    expect(ctxWindow(999_700)).toBe('1M');
+    expect(ctxWindow(999_499)).toBe('999k');
   });
 });
