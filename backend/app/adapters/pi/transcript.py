@@ -11,7 +11,7 @@ import json
 import re
 from typing import Optional
 
-from app.models import ChatEvent
+from app.models import ChatEvent, scrub_surrogates
 
 # Blocos que nao viram bolha de chat. `thinking` fica de fora igual no Claude: e rascunho interno,
 # nao resposta.
@@ -25,7 +25,10 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;:?]*[ -/]*[@-~]")
 
 
 def _clean(text: str) -> str:
-    return _ANSI_RE.sub("", text)
+    # scrub_surrogates aqui e nao so na rede do ChatEvent porque ESTE e o ponto onde o texto do Pi
+    # entra normalizado: o Pi trunca por unidade UTF-16 e parte emoji ao meio ("...\ud83d...
+    # [truncated]" num toolResult), sobrando um surrogate solto que nao da pra serializar em JSON.
+    return scrub_surrogates(_ANSI_RE.sub("", text))
 
 
 def _sub_id(node_id: str, k: int) -> str:

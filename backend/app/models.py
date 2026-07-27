@@ -1,8 +1,30 @@
-from typing import Literal, Optional
-from pydantic import BaseModel, Field
+import re
+from typing import Any, Literal, Optional
+from pydantic import BaseModel, Field, model_validator
 
 ChatKind = Literal["user_msg", "assistant_msg", "tool_use", "tool_result"]
 State = Literal["working", "idle", "awaiting_input", "dead"]
+
+# Surrogate SOLTO (sem par) num str vindo de json.loads. O json aceita "\ud83d" sozinho e o Python
+# monta o str, mas serializar de volta pra JSON estoura
+# `UnicodeEncodeError: surrogates not allowed` -> 500 no /history inteiro e o pump do SSE morre.
+# Acontece de verdade: o Pi trunca texto longo por UNIDADE UTF-16 e parte um emoji ao meio ao
+# gravar o proprio JSONL. json.loads ja junta um par bem-formado num codepoint unico, entao todo
+# surrogate que sobra aqui e lixo — troca por U+FFFD (o replacement char), que MOSTRA que faltou
+# algo em vez de sumir e deslocar o texto.
+_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
+
+
+def scrub_surrogates(v: Any) -> Any:
+    """Troca surrogate solto por U+FFFD, recursivo em dict/list. Texto bem-formado sai IDENTICO
+    (mesmo objeto): o search e um scan em C e so paga a substituicao quando ha o que consertar."""
+    if isinstance(v, str):
+        return _SURROGATE_RE.sub("�", v) if _SURROGATE_RE.search(v) else v
+    if isinstance(v, dict):
+        return {scrub_surrogates(k): scrub_surrogates(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [scrub_surrogates(x) for x in v]
+    return v
 
 
 class SessionInfo(BaseModel):
@@ -85,6 +107,16 @@ class ChatEvent(BaseModel):
     # em vez de reenviar as últimas 200 linhas e torcer pra cobrir o buraco. Interno (o front não
     # lê este campo): exclude=True mantém o payload igual ao de hoje.
     offset: Optional[int] = Field(default=None, exclude=True)
+
+    # Rede de seguranca na FRONTEIRA do contrato com o front: qualquer provider (Claude, Codex, Pi
+    # ou o proximo) que grave um surrogate solto no transcript passaria direto pro
+    # model_dump_json/JSONResponse e derrubaria o endpoint e o stream da sessao inteira — um emoji
+    # cortado ao meio em UMA linha tornava a sessao impossivel de abrir. Cobre tambem o que o
+    # parser nao normaliza (tool_input, id, tool_use_id). Nao muda nada em texto bem-formado.
+    @model_validator(mode="before")
+    @classmethod
+    def _no_lone_surrogates(cls, data: Any) -> Any:
+        return scrub_surrogates(data) if isinstance(data, dict) else data
 
 
 class StateEvent(BaseModel):
