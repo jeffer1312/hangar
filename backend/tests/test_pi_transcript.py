@@ -193,3 +193,42 @@ def test_merged_history_uses_the_pi_parser(tmp_path):
     ev = merged_history("sessao-inexistente", str(f), provider="pi")
     assert [e.kind for e in ev] == ["user_msg"]
     assert ev[0].text == "oi"
+
+
+# --- surrogate solto (o Pi trunca por unidade UTF-16 e parte emoji ao meio) -------------------
+# Shape REAL medido no transcript do usuario (linha 77, um toolResult): o texto termina em
+# "... \ud83d... [truncated]". Reproduzido aqui SINTETICO de proposito — o transcript de origem e
+# conversa real e este repo e publico.
+
+def test_lone_surrogate_becomes_replacement_char_and_the_event_serialises():
+    # ANTES: parse dava um str com surrogate solto e model_dump_json estourava
+    # PydanticSerializationError/UnicodeEncodeError -> /history 500 e o pump do SSE morria.
+    line = json.dumps(_msg("toolResult", [{"type": "text", "text": "cauda \ud83d... [truncated]"}],
+                           toolCallId="c1"))
+    ev = pt.parse_line(line)[0]
+    assert ev.result == "cauda �... [truncated]"
+    assert not any("\ud800" <= c <= "\udfff" for c in ev.result)
+    assert json.loads(ev.model_dump_json())["result"] == "cauda �... [truncated]"
+
+
+def test_lone_surrogate_in_assistant_text_also_serialises():
+    line = json.dumps(_msg("assistant", [{"type": "text", "text": "meio \udc4d fim"}]))
+    ev = pt.parse_line(line)[0]
+    assert ev.text == "meio � fim"
+    ev.model_dump_json().encode("utf-8")   # o passo que crashava
+
+
+def test_clean_is_where_the_scrub_happens():
+    # Rede do ChatEvent a parte: o parser do Pi normaliza o texto do Pi (ANSI + surrogate) na fonte.
+    assert pt._clean("a\ud83db") == "a�b"
+    assert pt._clean("\x1b[0m ok 😀") == " ok 😀"
+
+
+def test_wellformed_emoji_survives_untouched():
+    # Par bem-formado escrito em \u no JSON (json.loads junta num codepoint so), bandeira
+    # (2 regional indicators) e familia com ZWJ: nada disso pode virar U+FFFD.
+    texto = "\\ud83d\\ude00 \\ud83c\\udde7\\ud83c\\uddf7 \\ud83d\\udc68\\u200d\\ud83d\\udc69\\u200d\\ud83d\\udc67\\u200d\\ud83d\\udc66"
+    line = '{"type":"message","id":"n1","message":{"role":"user","content":[{"type":"text","text":"%s"}]}}' % texto
+    ev = pt.parse_line(line)[0]
+    assert ev.text == "😀 🇧🇷 👨‍👩‍👧‍👦"
+    assert json.loads(ev.model_dump_json())["text"] == ev.text
