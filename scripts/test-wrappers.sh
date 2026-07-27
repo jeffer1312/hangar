@@ -30,6 +30,17 @@ cat >"$TMP/bin/claude" <<'FAKE'
 FAKE
 chmod +x "$TMP/bin/claude"
 
+# Fake "pi": mesma ideia do fake claude acima, mas so precisa registar ARGV + CP_PI_SESSION (o pi
+# wrapper nao tem o indireto de motor).
+cat >"$TMP/bin/pi" <<'FAKE'
+#!/usr/bin/env bash
+{
+    printf 'ARGV:'; printf ' %q' "$@"; printf '\n'
+    printf 'ENV_CP_PI_SESSION=%s\n' "${CP_PI_SESSION:-}"
+} > "$CP_TEST_OUT"
+FAKE
+chmod +x "$TMP/bin/pi"
+
 # Motor de teste isolado — NUNCA o ~/.claude/engines.json real.
 CP_ENGINES_FILE="$TMP/engines.json"
 cat >"$CP_ENGINES_FILE" <<'JSON'
@@ -51,6 +62,27 @@ check() {
             fail=1
         fi
     done
+}
+
+# $1=descrição  $2=arquivo de saída — confere que o --session-id do ARGV é o MESMO uuid exportado em
+# CP_PI_SESSION (o ponto inteiro do wrapper: pi reescreve o próprio argv, então o backend só acha o
+# id lendo a env var — ver registry.py:_pi_sid_of).
+check_pi_injected() {
+    local desc="$1" out="$2" argv_line sid_line sid_argv sid_env
+    if ! [ -f "$out" ]; then
+        echo "FAIL: $desc — sem arquivo de saída"
+        fail=1
+        return
+    fi
+    argv_line=$(grep '^ARGV:' "$out")
+    sid_line=$(grep '^ENV_CP_PI_SESSION=' "$out")
+    sid_argv=$(printf '%s' "$argv_line" | sed -n 's/.*--session-id \([^ ]*\).*/\1/p')
+    sid_env="${sid_line#ENV_CP_PI_SESSION=}"
+    if [ -z "$sid_argv" ] || [ -z "$sid_env" ] || [ "$sid_argv" != "$sid_env" ]; then
+        echo "FAIL: $desc — --session-id do ARGV ('$sid_argv') difere de CP_PI_SESSION ('$sid_env')"
+        sed 's/^/    /' "$out"
+        fail=1
+    fi
 }
 
 # A secret só pode existir no ENV (é assim que o motor funciona); no ARGV é o vazamento que a task
@@ -93,6 +125,29 @@ fish_case() {
     printf '%s' "$out"
 }
 
+# $1=binário do shell (bash/zsh)  resto=args do `pi`. Sem CP_ENGINE — o wrapper pi não tem esse
+# indireto. env -i por consistência com posix_case.
+posix_case_pi() {
+    local sh="$1" out="$TMP/out.$RANDOM.$RANDOM"
+    shift
+    env -i PATH="$PATH_WITH_FAKES" HOME="$HOME" CP_TEST_OUT="$out" \
+        "$sh" -c '
+            source "'"$REPO"'/scripts/shell/pi.posix.sh"
+            pi "$@"
+        ' _ "$@" </dev/null || true
+    printf '%s' "$out"
+}
+
+fish_case_pi() {
+    local out="$TMP/out.$RANDOM.$RANDOM"
+    env -i PATH="$PATH_WITH_FAKES" HOME="$HOME" CP_TEST_OUT="$out" \
+        fish --no-config -c '
+            source "'"$REPO"'/scripts/shell/pi.fish"
+            pi $argv
+        ' -- "$@" </dev/null || true
+    printf '%s' "$out"
+}
+
 for SH in bash zsh; do
     echo "== $SH =="
 
@@ -110,6 +165,20 @@ for SH in bash zsh; do
     out=$(posix_case "$SH" probe --resume abc)
     check "$SH motor + --resume (regressão)" "$out" 'ENV_BASE_URL=https://a.b' 'ENV_MODEL=m1' 'ENV_CP_ENGINE=probe'
     check_argv_sem_segredo "$SH motor + --resume" "$out"
+
+    out=$(posix_case_pi "$SH")
+    check_pi_injected "$SH pi bare (injeta --session-id + CP_PI_SESSION)" "$out"
+
+    out=$(posix_case_pi "$SH" --resume abc)
+    check "$SH pi --resume (passthrough, sem injeção)" "$out" 'ARGV: --resume abc' 'ENV_CP_PI_SESSION='
+
+    out="$TMP/out.$RANDOM.$RANDOM"
+    env -i PATH="$PATH_WITH_FAKES" HOME="$HOME" CP_TEST_OUT="$out" \
+        "$SH" -c '
+            source "'"$REPO"'/scripts/shell/pi.posix.sh"
+            command pi --raw
+        ' </dev/null || true
+    check "$SH command pi (bypass, sem injeção)" "$out" 'ARGV: --raw' 'ENV_CP_PI_SESSION='
 done
 
 if command -v fish >/dev/null 2>&1; then
@@ -129,6 +198,20 @@ if command -v fish >/dev/null 2>&1; then
     out=$(fish_case probe --resume abc)
     check "fish motor + --resume (regressão)" "$out" 'ENV_BASE_URL=https://a.b' 'ENV_MODEL=m1' 'ENV_CP_ENGINE=probe'
     check_argv_sem_segredo "fish motor + --resume" "$out"
+
+    out=$(fish_case_pi)
+    check_pi_injected "fish pi bare (injeta --session-id + CP_PI_SESSION)" "$out"
+
+    out=$(fish_case_pi --resume abc)
+    check "fish pi --resume (passthrough, sem injeção)" "$out" 'ARGV: --resume abc' 'ENV_CP_PI_SESSION='
+
+    out="$TMP/out.$RANDOM.$RANDOM"
+    env -i PATH="$PATH_WITH_FAKES" HOME="$HOME" CP_TEST_OUT="$out" \
+        fish --no-config -c '
+            source "'"$REPO"'/scripts/shell/pi.fish"
+            command pi --raw
+        ' </dev/null || true
+    check "fish command pi (bypass, sem injeção)" "$out" 'ARGV: --raw' 'ENV_CP_PI_SESSION='
 else
     echo "== fish: não encontrado no PATH, pulando =="
 fi
