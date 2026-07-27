@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, fmtWhen, groupSelectedByServer, initials, nextAwaiting,
   projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent, resetsIn,
-  clusterByPair, sortSessions, bubblesFromTail, ctxWindow, fileKind, fmtBytes, providerName,
+  clusterByPair, sortSessions, bubblesFromTail, ctxWindow, fileKind, fmtBytes, providerName, providerTag,
   summarizeText, summarizeToolInput, summarizeToolResult, toolPhase, toolGroupLabel, toolGroupCounts,
 } from './format';
 import type { ChatEvent, State } from './types';
@@ -492,6 +492,23 @@ describe('providerName', () => {
   it('falls back to Claude when the field is absent (backend default)', () => {
     expect(providerName(undefined)).toBe('Claude');
     expect(providerName(null)).toBe('Claude');
+  });
+});
+
+describe('providerTag', () => {
+  it('marca só as sessões que NÃO são Claude', () => {
+    expect(providerTag('pi')).toBe('Pi');
+    expect(providerTag('codex')).toBe('Codex');
+  });
+
+  it('não marca Claude (maioria das linhas — chip em todas seria ruído)', () => {
+    expect(providerTag('claude')).toBeNull();
+    expect(providerTag(undefined)).toBeNull();
+    expect(providerTag(null)).toBeNull();
+  });
+
+  it('provider desconhecido não vira um chip "Claude" mentiroso', () => {
+    expect(providerTag('gemini' as any)).toBeNull();
   });
 });
 
