@@ -280,6 +280,80 @@ def _engine_of(pid: int) -> Optional[str]:
     return None
 
 
+# Executavel do agente -> provider. Casa o BASENAME do argv[0], nunca a linha inteira: `pip`,
+# `pipx`, `mpirun` e um caminho contendo "/pi/" nao sao o agente Pi.
+_EXEC_PROVIDER = {"pi": "pi", "claude": "claude"}
+
+
+def provider_of_pane(pid, children: Optional[dict[int, list[int]]] = None) -> str:
+    """Qual agente roda neste pane, lido do /proc dos descendentes.
+
+    NAO ha campo de comando no pane: tmux.list_panes_active() devolve so name/pid/cwd/pane_id, entao
+    o caminho e o mesmo do _repl_sid — descer os descendentes e ler o cmdline.
+
+    Default "claude" preserva o comportamento anterior a esta funcao existir: pane nao reconhecido
+    segue tratado como Claude, em vez de sumir da lista.
+    """
+    if pid is None:
+        return "claude"
+    for p in _descendant_pids(pid, children):
+        cmd = _cmdline(p)
+        if "daemon" in cmd or "--bg-" in cmd or "--agent" in cmd:
+            continue        # mesma exclusao do _repl_sid: subprocesso nao e o REPL dono
+        argv0 = cmd.strip().split()[:1]   # o pi reescreve o argv -> "pi" + NUL virado espaco
+        if not argv0:
+            continue
+        prov = _EXEC_PROVIDER.get(os.path.basename(argv0[0]))
+        if prov:
+            return prov
+    return "claude"
+
+
+def _pi_sid_of(pid: int) -> Optional[str]:
+    # CP_PI_SESSION: o uuid que o wrapper do pi injetou. Mesmo truque do _engine_of — o env do
+    # processo VIVO e o registro autoritativo. Existe porque o `--session-id` some do cmdline: o pi
+    # sobrescreve o proprio argv (medido na Task 0).
+    try:
+        with open(_proc_environ_path(pid), "rb") as fh:
+            for kv in fh.read().split(b"\x00"):
+                if kv.startswith(b"CP_PI_SESSION="):
+                    return kv.split(b"=", 1)[1].decode("utf-8", "replace") or None
+    except OSError:
+        return None
+    return None
+
+
+def _pi_transcript_of_id(cwd: str, sid: str) -> Optional[str]:
+    # Indireção pro adapter (Task 1), que sabe o slug e o glob <timestamp>_<uuid>.jsonl. Import local
+    # pelo mesmo motivo do get_adapter em create(): evita qualquer ciclo se um adapter futuro vier a
+    # importar daqui.
+    from app.adapters import get_adapter
+    return get_adapter("pi").transcript_path(cwd, sid) or None
+
+
+def pi_session_file(pane_id: str, pid: Optional[int] = None,
+                    cwd: str = "") -> Optional[str]:
+    """Transcript de um pane Pi: bilhete da extensao primeiro, env do wrapper depois.
+
+    Nenhum dos dois presente -> None, e a sessao entra na lista SEM transcript. Chutar o arquivo
+    mais novo do cwd (o que resolve_jsonl faz pro Claude) faria a sessao Pi abrir mostrando a
+    conversa de outro agente.
+    """
+    base = (_config_dir_of(pid) if pid else None) or Path.home() / ".claude"
+    ticket = Path(base) / ".claude-pocket-pi" / f"{pane_id.lstrip('%')}.json"
+    try:
+        f = json.loads(ticket.read_text()).get("file")
+        # Sem checar os.path.exists: o bilhete e escrito pela PROPRIA extensao Pi (Task 3) pro path
+        # que ela vai usar — nao e um chute por mtime/glob, entao vale mesmo antes do 1o turno
+        # materializar o arquivo (mesma tolerancia que o Claude ja tem pro --session-id recem-criado).
+        if f:
+            return f
+    except (OSError, ValueError):
+        pass
+    sid = _pi_sid_of(pid) if pid else None
+    return _pi_transcript_of_id(cwd, sid) if sid else None
+
+
 # Cadencia do cache de statusline da lista (list_with_state): TTL por sessao + teto de capturas de
 # pane por chamada (o custo real e o fork do tmux).
 _STATUS_TTL = 20.0
@@ -558,7 +632,16 @@ class SessionRegistry:
                 # entao pelo menos NAO e silencioso: o log diz qual nome foi filtrado e por que.
                 _log.debug("list: pane %r filtrado por sidecar Codex de mesmo nome", p["name"])
                 continue
-            jsonl, tracked = self.resolve_tracked(p["name"], p["cwd"], p["pid"], children)
+            # Pi anda no MESMO caminho tmux que o Claude (pane real, mtime real) — so a resolucao do
+            # jsonl muda: o --session-id nao sobrevive no cmdline (Task 0, fato 7) e resolve_tracked
+            # cairia no fallback newest-by-mtime, que pegaria o transcript do CLAUDE do mesmo cwd (a
+            # regressao mais cara desta task). Resolve pelo bilhete da extensao / env do wrapper.
+            prov = provider_of_pane(p["pid"], children)
+            if prov == "pi":
+                jsonl = pi_session_file(p.get("pane_id", ""), p["pid"], p["cwd"])
+                tracked = True  # identidade do pane e deterministica (sidecar/env), nunca um chute
+            else:
+                jsonl, tracked = self.resolve_tracked(p["name"], p["cwd"], p["pid"], children)
             link = ThenLink(p["name"]).get()
             pair = PairLink(p["name"]).get()
             info = SessionInfo(name=p["name"], cwd=p["cwd"], jsonl=jsonl, tracked=tracked,
@@ -567,6 +650,8 @@ class SessionRegistry:
                                pair_peers=pair.get("peers") if pair else None,
                                pair_gid=pair.get("gid") if pair else None,
                                pair_task=pair.get("task") if pair else None)
+            if prov == "pi":
+                info.provider = "pi"
             # Motor da sessão, do mesmo pid que já resolve o config_dir. É uma leitura de
             # /proc/<pid>/environ por sessão (a mesma ordem de custo do _config_dir_of ao lado) —
             # não é de graça, mas é local e sem rede. Feature em tick do SSE tem que ser barata.

@@ -104,21 +104,23 @@ def list_sessions() -> list[dict]:
 
 
 def list_panes_active() -> list[dict]:
-    # UMA chamada traz nome + pane_pid + cwd da pane ATIVA de TODAS as sessoes. Substitui o
-    # list_sessions() + um pane_pid() por sessao (S+1 forks -> 1) no caminho da listagem.
+    # UMA chamada traz nome + pane_pid + cwd + pane_id da pane ATIVA de TODAS as sessoes. Substitui o
+    # list_sessions() + um pane_pid() por sessao (S+1 forks -> 1) no caminho da listagem. pane_id
+    # (ex: "%9") identifica o bilhete da extensao Pi (Task 3), que e por-pane, nao por-sessao.
     cp = _run(["tmux", "list-panes", "-a", "-F",
-               "#{session_name}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}"])
+               "#{session_name}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_id}"])
     if cp.returncode != 0:
         return []
     out: dict[str, dict] = {}
     for line in cp.stdout.splitlines():
         parts = line.split("\t")
-        if len(parts) != 4:
+        if len(parts) != 5:
             continue
-        name, active, pid, cwd = parts
+        name, active, pid, cwd, pane_id = parts
         if active != "1" or name in out:
             continue
-        out[name] = {"name": name, "pid": int(pid) if pid.isdigit() else None, "cwd": cwd}
+        out[name] = {"name": name, "pid": int(pid) if pid.isdigit() else None, "cwd": cwd,
+                     "pane_id": pane_id}
     return list(out.values())
 
 
