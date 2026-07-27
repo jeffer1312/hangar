@@ -166,6 +166,17 @@ TMUXCONF
   tmux source-file "$HOME/.tmux.conf" 2>/dev/null && echo "  reloaded ~/.tmux.conf" || true
 fi
 
+# --- extensao de estado do Pi ------------------------------------------------------------------
+# Sem ela a sessao Pi aparece no app sempre "ociosa": o estado vem do marcador, nao do pane.
+PI_EXT_DIR="$HOME/.pi/agent/extensions"
+if command -v pi >/dev/null 2>&1; then
+  mkdir -p "$PI_EXT_DIR"
+  ln -sfn "$SCRIPT_DIR/pi/cp-state.ts" "$PI_EXT_DIR/cp-state.ts"
+  echo "  linked cp-state.ts into $PI_EXT_DIR"
+else
+  echo "  pi nao encontrado — pulando a extensao de estado (instale o pi e rode de novo)"
+fi
+
 # Statusline: ask if undecided and interactive; default yes otherwise.
 if [ -z "$DO_STATUS" ]; then
   if [ -t 0 ]; then
