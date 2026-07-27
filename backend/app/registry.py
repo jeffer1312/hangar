@@ -680,7 +680,15 @@ class SessionRegistry:
             prov = provider_of_pane(p["pid"], children)
             if prov == "pi":
                 jsonl = pi_session_file(p.get("pane_id", ""), p["pid"], p["cwd"])
-                tracked = True  # identidade do pane e deterministica (sidecar/env), nunca um chute
+                # tracked segue o TRANSCRITO, nao o provider. O bilhete/env sao deterministicos
+                # (nunca um chute como o newest-by-mtime do Claude), mas quando NENHUM dos dois
+                # resolve um arquivo nao ha vinculo nenhum: /events e /history exigem info.jsonl e
+                # devolvem 404. Com o True fixo a lista mostrava um card clicavel que abria um chat
+                # quebrado e, por ser "tracked", sem nenhuma das afordancias de sessao sem id. Com
+                # False as duas views cinzam a linha e explicam. E temporario por construcao: no 1o
+                # turno o Pi escreve o transcript, o bilhete passa a resolver e a proxima varredura
+                # devolve tracked=True sozinha (list() e polled).
+                tracked = jsonl is not None
             else:
                 jsonl, tracked = self.resolve_tracked(p["name"], p["cwd"], p["pid"], children)
             link = ThenLink(p["name"]).get()
@@ -1109,6 +1117,22 @@ class SessionRegistry:
             pass
         return ""
 
+    @staticmethod
+    def _refuse_non_claude_resume(pane: dict) -> None:
+        # O resume e Claude-only de ponta a ponta: os candidatos saem de ~/.claude/projects e o
+        # relance e `claude --resume <uuid>` DEPOIS de matar o pane. Numa sessao Pi sem transcript
+        # (que agora aparece como "sem id" e por isso ganha o botao de retomar), isso ofereceria
+        # conversas do CLAUDE daquele cwd e, se o usuario escolhesse uma, mataria a sessao Pi viva
+        # pra subir um claude no lugar dela. Recusa com uma frase que diz o que FAZER.
+        # ponytail: recusar e o piso. Retomar de verdade exige varrer ~/.pi/agent/sessions e
+        # relancar com `pi --session <id>` exportando CP_PI_SESSION — o upgrade, quando alguem
+        # topar com isto de verdade.
+        prov = provider_of_pane(pane.get("pid"))
+        if prov != "claude":
+            raise ValueError(
+                f"retomar so vale pra sessao Claude (esta e {prov}); "
+                "feche o pane e abra de novo pelo wrapper `pi`")
+
     def resume_candidates(self, name: str) -> tuple[str, bool, list[dict]]:
         # (cwd, ambiguo, candidatos). ambiguo = ha OUTRA sessao tmux no mesmo cwd -> o "mais recente por
         # mtime" pode ser de outra sessao (a UI pede confirmacao). candidatos = ate 6 jsonls recentes do
@@ -1116,6 +1140,7 @@ class SessionRegistry:
         pane = self._pane_of(name)
         if pane is None:
             raise ValueError("sessao nao encontrada")
+        self._refuse_non_claude_resume(pane)
         cwd = pane["cwd"]
         cdir = _config_dir_of(pane["pid"]) if pane.get("pid") else None
         proj = ((cdir / "projects") if cdir else self.projects_dir) / sanitize_cwd(cwd)
@@ -1141,6 +1166,9 @@ class SessionRegistry:
         pane = self._pane_of(name)
         if pane is None:
             raise ValueError("sessao nao encontrada")
+        # Tambem AQUI, e nao so no resume_candidates: com session_id vindo do corpo o endpoint pula
+        # a listagem de candidatos e cai direto no relance (que mata o pane).
+        self._refuse_non_claude_resume(pane)
         cwd = pane["cwd"]
         cdir = _config_dir_of(pane["pid"]) if pane.get("pid") else None
         # Motor da sessão que está morrendo. Sem reaplicar, uma sessão Kimi ressuscita na conta

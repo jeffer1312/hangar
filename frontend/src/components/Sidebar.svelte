@@ -13,7 +13,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import SessionSwitcherSheet from './SessionSwitcherSheet.svelte';
   import HoverPreview from './HoverPreview.svelte';
   import type { SessionInfo, State, ResumeCandidate } from '../lib/types';
-  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, type GroupBy } from '../lib/format';
+  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, untrackedReason, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import Lottie from './Lottie.svelte';
@@ -851,7 +851,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
               class="sess-main"
               class:untracked={s.tracked === false}
               aria-pressed={selectMode ? selected.has(selKey) : undefined}
-              title={!expanded ? s.name : (s.tracked === false ? 'claude aberto sem --session-id: transcript nao rastreavel' : 'Toque longo pra renomear')}
+              title={!expanded ? s.name : (s.tracked === false ? untrackedReason(s.provider) : 'Toque longo pra renomear')}
               onpointerdown={() => { if (!selectMode) pressStart(rowKey); }}
               onpointerup={pressEnd}
               onpointerleave={pressEnd}
@@ -882,7 +882,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                 <span class="row-info">
                   <span class="name-row">
                     <span class="sess-name">{s.name}</span>
-                    {#if s.tracked === false}<span class="sess-badge" title="sem --session-id: nao rastreavel">sem id</span>{/if}
+                    {#if s.tracked === false}<span class="sess-badge" title={untrackedReason(s.provider)}>sem id</span>{/if}
                   </span>
                   {#if s.state === 'awaiting_input' && s.question}
                     <span class="status-sub asking" title={s.question}>{s.question}</span>
@@ -938,8 +938,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
             </button>
             {#if expanded && !selectMode}
               <!-- Retomar (paridade com o SessionCard do mobile): unica acao possivel numa linha "sem
-                   id" -> visivel sempre (nao escondida no hover), tingida de accent. Reusa resumeSession. -->
-              {#if s.tracked === false}
+                   id" -> visivel sempre (nao escondida no hover), tingida de accent. Reusa resumeSession.
+                   Fora do Pi: o resume varre ~/.claude/projects e relanca `claude --resume` DEPOIS de
+                   matar o pane -> num pane Pi ofereceria a conversa do agente errado e mataria a
+                   sessao viva. Ali o title da linha ja diz o que fazer (untrackedReason). -->
+              {#if s.tracked === false && s.provider !== 'pi'}
                 <button
                   class="sess-resume"
                   onclick={(e) => handleResume(s.name, s.serverId, undefined, e)}

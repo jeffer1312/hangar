@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { SessionInfo, State } from '../lib/types';
-  import { stateLabels, stateColors } from '../lib/format';
+  import { stateLabels, stateColors, untrackedReason } from '../lib/format';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import Lottie from './Lottie.svelte';
   import pensando from '../lib/lottie/pensando.json';
@@ -264,7 +264,7 @@
           <span class="session-name">{title}</span>
         {/if}
         {#if untracked}
-          <span class="untracked-badge" title="claude aberto sem --session-id: nao da pra rastrear o transcript com seguranca">⚠ sem id</span>
+          <span class="untracked-badge" title={untrackedReason(session.provider)}>⚠ sem id</span>
         {/if}
       </span>
       {#if session.state === 'awaiting_input' && session.question}
@@ -316,7 +316,12 @@
           {/if}
         </span>
       {/if}
-      {#if untracked}
+      <!-- Retomar e Claude-only de ponta a ponta (candidatos de ~/.claude/projects + relance com
+           `claude --resume`): numa sessao Pi o botao so poderia errar, entao mostramos a razao no
+           lugar dele. O backend recusa igual, pra um cliente velho nao matar o pane. -->
+      {#if untracked && session.provider === 'pi'}
+        <span class="untracked-hint">{untrackedReason(session.provider)}</span>
+      {:else if untracked}
         <button
           class="resume-btn"
           onpointerdown={(e) => e.stopPropagation()}
@@ -479,6 +484,14 @@
   .session-row.untracked .meta-line,
   .session-row.untracked .lead {
     opacity: 0.55;
+  }
+  /* Sem botao de retomar (Pi): a razao vira texto, mesma faixa da linha. */
+  .untracked-hint {
+    align-self: flex-start;
+    margin-top: 3px;
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    line-height: 1.35;
   }
   .resume-btn {
     align-self: flex-start;
