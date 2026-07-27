@@ -59,9 +59,26 @@ def test_session_file_comes_from_the_pane_sidecar(monkeypatch, tmp_path):
     # na mao: o argv nao tem o id (Task 0, fato 7) e sem wrapper nao ha CP_PI_SESSION.
     cfg = tmp_path / "cfg"
     (cfg / ".claude-pocket-pi").mkdir(parents=True)
-    (cfg / ".claude-pocket-pi" / "123.json").write_text(json.dumps({"file": "/s/2026_x.jsonl"}))
+    alvo = tmp_path / "2026_x.jsonl"
+    alvo.write_text("")
+    (cfg / ".claude-pocket-pi" / "123.json").write_text(json.dumps({"file": str(alvo)}))
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
-    assert registry.pi_session_file("%123", pid=7) == "/s/2026_x.jsonl"
+    assert registry.pi_session_file("%123", pid=7) == str(alvo)
+
+
+def test_session_file_ignores_a_stale_sidecar(monkeypatch, tmp_path):
+    # cp-state.ts NUNCA apaga o bilhete quando o pane fecha, e o tmux reusa %pane_id apos um restart
+    # do servidor (ex: reboot) -> um bilhete ORFAO apontando pra um .jsonl ja deletado/renomeado nao
+    # pode ser devolvido como se fosse o transcript deste pane (a MESMA classe de bug que o Step 6
+    # ja cobre pro fallback newest-by-mtime, so que chegando por um bilhete velho em vez do mtime).
+    cfg = tmp_path / "cfg"
+    (cfg / ".claude-pocket-pi").mkdir(parents=True)
+    (cfg / ".claude-pocket-pi" / "123.json").write_text(
+        json.dumps({"file": str(tmp_path / "sumiu.jsonl")}))
+    monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
+    # env tambem sem nada, senao o fallback mascararia o bilhete ignorado com um resultado valido.
+    monkeypatch.setattr(registry, "_proc_environ_path", lambda pid: str(tmp_path / "nao-existe"))
+    assert registry.pi_session_file("%123", pid=7, cwd="/w") is None
 
 
 def test_session_file_falls_back_to_the_wrapper_env(monkeypatch, tmp_path):
@@ -108,3 +125,24 @@ def test_pi_pane_does_not_inherit_a_claude_transcript(monkeypatch, tmp_path):
     assert len(pi) == 1, "sessao Pi nao pode aparecer duplicada"
     assert pi[0].provider == "pi"
     assert "claude-projects" not in (pi[0].jsonl or ""), "Pi herdou o transcript do Claude"
+
+
+def test_pi_pane_without_a_known_transcript_stays_tracked(monkeypatch, tmp_path):
+    # jsonl=None pra um pane Pi e "ainda sem 1o turno", nao um chute ambiguo (a identidade do pane
+    # e deterministica: bilhete/env, nunca newest-by-mtime) -> tracked continua True, senao a UI
+    # desliga o card (SessionCard.svelte: untracked) e a sessao recem-criada fica inclicavel antes
+    # do 1o turno. Mesmo precedente do Codex (sempre tracked=True, independente do rollout_path).
+    projetos = tmp_path / "claude-projects"
+    monkeypatch.setattr(registry.settings, "projects_dir", str(projetos))
+
+    monkeypatch.setattr(registry.tmux, "list_panes_active",
+                        lambda: [{"name": "s-pi", "pid": 99, "cwd": "/w", "pane_id": "%9"}])
+    monkeypatch.setattr(registry, "_descendant_pids", lambda pid, children=None: [11])
+    monkeypatch.setattr(registry, "_cmdline", lambda p: "pi" + " " * 80)
+    monkeypatch.setattr(registry, "pi_session_file", lambda *a, **k: None)
+
+    infos = registry.SessionRegistry().list()
+    pi = [i for i in infos if i.name == "s-pi"]
+    assert len(pi) == 1
+    assert pi[0].jsonl is None
+    assert pi[0].tracked is True

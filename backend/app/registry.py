@@ -343,10 +343,12 @@ def pi_session_file(pane_id: str, pid: Optional[int] = None,
     ticket = Path(base) / ".claude-pocket-pi" / f"{pane_id.lstrip('%')}.json"
     try:
         f = json.loads(ticket.read_text()).get("file")
-        # Sem checar os.path.exists: o bilhete e escrito pela PROPRIA extensao Pi (Task 3) pro path
-        # que ela vai usar — nao e um chute por mtime/glob, entao vale mesmo antes do 1o turno
-        # materializar o arquivo (mesma tolerancia que o Claude ja tem pro --session-id recem-criado).
-        if f:
+        # os.path.exists: o cp-state.ts NUNCA apaga o bilhete quando o pane fecha, e o tmux reusa
+        # %pane_id apos um restart do servidor (ex: reboot da maquina) -> um bilhete ORFAO de uma
+        # sessao morta, apontando pra um .jsonl ja deletado/renomeado, seria devolvido como se fosse
+        # o transcript deste pane. list() e polled: um False aqui apenas adia pro proximo poll, que
+        # se autocorrige assim que o Pi escrever o 1o turno e o arquivo existir de verdade.
+        if f and os.path.exists(f):
             return f
     except (OSError, ValueError):
         pass
