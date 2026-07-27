@@ -17,12 +17,12 @@ def test_transcript_path_globs_past_the_timestamp_prefix(tmp_path, monkeypatch):
     monkeypatch.setenv("PI_CODING_AGENT_SESSION_DIR", str(tmp_path))
     d = tmp_path / pi_sessions.cwd_slug("/w")
     d.mkdir(parents=True)
-    alvo = d / "2026-07-27T13-48-54-772Z_019fa3d5-f074-707b-92a8-1ca7f1d99ec9.jsonl"
-    alvo.write_text("")
+    target = d / "2026-07-27T13-48-54-772Z_019fa3d5-f074-707b-92a8-1ca7f1d99ec9.jsonl"
+    target.write_text("")
     (d / "2026-07-27T10-00-00-000Z_00000000-0000-0000-0000-000000000000.jsonl").write_text("")
 
     got = pi_sessions.transcript_path("/w", "019fa3d5-f074-707b-92a8-1ca7f1d99ec9")
-    assert got == str(alvo)
+    assert got == str(target)
 
 
 def test_transcript_path_empty_when_session_not_created_yet(tmp_path, monkeypatch):
@@ -38,11 +38,11 @@ def test_transcript_path_picks_newest_on_duplicate_id(tmp_path, monkeypatch):
     monkeypatch.setenv("PI_CODING_AGENT_SESSION_DIR", str(tmp_path))
     d = tmp_path / pi_sessions.cwd_slug("/w")
     d.mkdir(parents=True)
-    velho = d / "2026-07-01T00-00-00-000Z_abc.jsonl"
-    novo = d / "2026-07-27T00-00-00-000Z_abc.jsonl"
-    velho.write_text("")
-    novo.write_text("")
+    old = d / "2026-07-01T00-00-00-000Z_abc.jsonl"
+    new = d / "2026-07-27T00-00-00-000Z_abc.jsonl"
+    old.write_text("")
+    new.write_text("")
     import os
-    os.utime(velho, (1, 1))
-    os.utime(novo, (time.time(), time.time()))
-    assert pi_sessions.transcript_path("/w", "abc") == str(novo)
+    os.utime(old, (1, 1))
+    os.utime(new, (time.time(), time.time()))
+    assert pi_sessions.transcript_path("/w", "abc") == str(new)

@@ -44,12 +44,18 @@ def _entry_event(entry: dict) -> ChatEvent:
 def _ts_of_obj(obj: dict) -> float:
     # Epoch (s) do campo `timestamp` (ISO 8601 com Z) de uma entrada do transcript; 0.0 se ausente.
     t = obj.get("timestamp")
-    if not isinstance(t, str):
-        return 0.0
-    try:
-        return datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return 0.0
+    if isinstance(t, str):
+        try:
+            return datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return 0.0
+    # Pi: sem `timestamp` ISO no topo, o numero (epoch ms) mora dentro de `message`.
+    msg = obj.get("message")
+    if isinstance(msg, dict):
+        raw = msg.get("timestamp")
+        if isinstance(raw, (int, float)):
+            return raw / 1000.0
+    return 0.0
 
 
 def _ts_of_line(line: str) -> float:
@@ -375,10 +381,11 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
     por texto sozinho engolia repeticao: o 2o "ok" enfileirado sumia por causa do 1o ja commitado.
     Entradas sem timestamp herdam o ts anterior (carry-forward) pra manter a ordem do arquivo.
 
-    provider: qual parser usar pra `jsonl` -- Claude e Codex tem shapes diferentes (ver
-    app.adapters.codex.rollout). _ts_of_obj fica igual pros dois: ambos gravam `timestamp` ISO
-    no topo da linha. Import local do parser do Codex evita ciclo (app.adapters importa
-    app.pqueue no boot, pra PromptQueue).
+    provider: qual parser usar pra `jsonl` -- Claude, Codex e Pi tem shapes diferentes (ver
+    app.adapters.codex.rollout e app.adapters.pi.transcript). _ts_of_obj cai pro `timestamp`
+    (epoch ms) dentro de `message` quando nao ha ISO no topo da linha -- o caso do Pi. Import
+    local dos parsers de Codex/Pi evita ciclo (app.adapters importa app.pqueue no boot, pra
+    PromptQueue).
 
     limit: quando dado, parseia so a CAUDA do arquivo (tail-read reverso, janela que cresce ate
     render >= limit eventos) em vez do jsonl inteiro -- e o que torna o burst de /history do board
@@ -388,6 +395,8 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
     pratica o reconcile marca `confirmed` e a entrada nem chega aqui."""
     if provider == "codex":
         from app.adapters.codex.rollout import parse_rollout_obj as _parse
+    elif provider == "pi":
+        from app.adapters.pi.transcript import parse_obj as _parse
     else:
         _parse = parse_obj
     items: list[tuple[float, int, ChatEvent]] = []
