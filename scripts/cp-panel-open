@@ -6,11 +6,15 @@ quando não existe nenhuma: `tmux attach` num alvo já attachado cria um SEGUNDO
 tmux encolhe a sessão pro menor cliente — o terminal que já estava aberto ficaria espremido.
 
 Detecção primária por PID: `tmux list-clients` dá o pid do cliente attachado; subindo a
-ancestralidade (/proc) chega no processo do terminal, que é o pid da janela no
-`hyprctl clients`. Determinístico — título NÃO serve como chave primária aqui: o
-set-titles-string deste rice é `#{b:pane_current_path}`, então duas sessões no mesmo repo
-têm o MESMO título (era o bug: clicar em claude-cockpit-2 com ela já aberta abria um segundo
-attach em vez de focar). Título fica só como fallback (terminal fora do hyprctl, edge cases).
+ancestralidade (/proc) chega no processo do terminal, que é o pid da janela no `hyprctl clients`.
+
+Isso resolve sozinho quando o terminal roda um processo por janela (foot, alacritty, kitty sem
+`-1`). Em terminal SINGLE-INSTANCE (`kitty -1`) todas as janelas dividem UM pid, o pid deixa de
+ser chave, e aí o desempate é pelo TÍTULO — que só serve porque o `set-titles-string` gerenciado
+(ver install-claude-wrapper.sh) é `#S`, o nome da sessão, único por construção. Com o formato
+antigo `#{b:pane_current_path}` duas sessões no mesmo repo tinham o mesmo título e não havia
+desempate possível; esse caso ainda existe se o rice trocar o formato, e então a função recusa
+escolher em vez de chutar (abrir attach duplicado é visível; focar a janela errada é calado).
 """
 import json
 import os
@@ -43,6 +47,50 @@ def ppid_of(pid: int) -> int:
         return 0
 
 
+def expected_title(name: str) -> str | None:
+    """Título que o terminal desta sessão deve estar exibindo, expandido pelo PRÓPRIO tmux.
+
+    Lê o `set-titles-string` configurado em vez de repetir o formato aqui: o rice pode trocá-lo
+    (hoje é `#{b:pane_current_path}`) e uma cópia aqui viraria mentira silenciosa no dia da troca.
+    """
+    try:
+        fmt = subprocess.run(["tmux", "show-options", "-gv", "set-titles-string"],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+        if not fmt:
+            return None
+        out = subprocess.run(["tmux", "display-message", "-p", "-t", name, fmt],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+        return out or None
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"cp-panel-open: não consegui expandir o título da sessão ({e})", file=sys.stderr)
+        return None
+
+
+def pick_by_title(clients: list[dict], addrs: list[str], name: str) -> str | None:
+    """Desempata entre janelas do MESMO processo usando o título.
+
+    Só é chamado quando um pid é dono de várias janelas — terminal em single-instance (`kitty -1`),
+    onde todas as janelas compartilham um pid e o mapa pid->janela deixa de ser chave. Empate que
+    o título não resolve (duas sessões no mesmo repo, com o formato de cwd) devolve None de
+    propósito: abrir um attach duplicado é chato mas visível; focar a janela errada é silencioso.
+    """
+    alvo = expected_title(name)
+    if not alvo:
+        # Sintoma igual ao empate lá embaixo (abre terminal em vez de focar), mas por outra causa —
+        # sem esta linha o primeiro deploy, antes de reaplicar o bloco do installer no ~/.tmux.conf,
+        # falha idêntico a "não deu pra escolher" e sem pista de que a config é que não está lá.
+        print(f"cp-panel-open: sem título esperado para {name!r} — set-titles-string ausente/vazio "
+              f"(reaplique o bloco do install-claude-wrapper.sh) ou o tmux falhou", file=sys.stderr)
+        return None
+    candidatos = [c for c in clients if c.get("address") in addrs and c.get("title") == alvo]
+    if len(candidatos) == 1:
+        return candidatos[0]["address"]
+    print(f"cp-panel-open: {len(addrs)} janelas no mesmo processo e o título "
+          f"{alvo!r} casa com {len(candidatos)} delas — não dá pra escolher sem chutar",
+          file=sys.stderr)
+    return None
+
+
 def tmux_client_pids(name: str) -> list[int]:
     """Pids dos clientes attachados na sessão (vazio se sessão não existe/sem cliente)."""
     try:
@@ -59,7 +107,13 @@ def tmux_client_pids(name: str) -> list[int]:
 def find_window(name: str) -> str | None:
     """Endereço da janela com a sessão attachada. Pid do cliente tmux > título. None se não há."""
     clients = hypr_clients()
-    by_pid = {c.get("pid"): c["address"] for c in clients if c.get("address")}
+    # LISTA por pid, não uma janela só: com `kitty -1` (single-instance) TODAS as janelas do kitty
+    # compartilham um pid, e o dict de valor único ficava com a última do hyprctl — então clicar em
+    # qualquer sessão focava sempre a mesma janela, calado. Um pid dono de N janelas não é chave.
+    by_pid: dict[int, list[str]] = {}
+    for c in clients:
+        if c.get("address"):
+            by_pid.setdefault(c.get("pid"), []).append(c["address"])
     cpids = tmux_client_pids(name)
     for cpid in cpids:
         pid = cpid
@@ -67,8 +121,12 @@ def find_window(name: str) -> str | None:
             pid = ppid_of(pid)
             if pid <= 1:
                 break
-            if pid in by_pid:
-                return by_pid[pid]
+            addrs = by_pid.get(pid)
+            if not addrs:
+                continue
+            if len(addrs) == 1:
+                return addrs[0]     # um processo por janela (foot, alacritty, kitty sem -1)
+            return pick_by_title(clients, addrs, name)
     # Sem cliente attachado = não há janela a focar. NÃO cai no título: com o set-titles-string
     # de cwd, o título casaria a janela de OUTRA sessão do mesmo repo (foco errado silencioso).
     if not cpids:
