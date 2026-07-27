@@ -172,6 +172,30 @@ for SH in bash zsh; do
     out=$(posix_case_pi "$SH" --resume abc)
     check "$SH pi --resume (passthrough, sem injeção)" "$out" 'ARGV: --resume abc' 'ENV_CP_PI_SESSION='
 
+    # Fix round 1: -c/-r são os short flags REAIS do pi (confirmado em `pi --help`) — mesma classe de
+    # bug que o scan do wrapper claude já cobria pro -c dele. --session/--fork/--no-session são as
+    # outras três flags que também gerenciam a própria sessão.
+    out=$(posix_case_pi "$SH" -c)
+    check "$SH pi -c (passthrough, sem injeção)" "$out" 'ARGV: -c' 'ENV_CP_PI_SESSION='
+
+    out=$(posix_case_pi "$SH" -r)
+    check "$SH pi -r (passthrough, sem injeção)" "$out" 'ARGV: -r' 'ENV_CP_PI_SESSION='
+
+    out=$(posix_case_pi "$SH" --continue)
+    check "$SH pi --continue (passthrough, sem injeção)" "$out" 'ARGV: --continue' 'ENV_CP_PI_SESSION='
+
+    out=$(posix_case_pi "$SH" --session-id existing-uuid-test)
+    check "$SH pi --session-id (passthrough, sem injeção)" "$out" 'ARGV: --session-id existing-uuid-test' 'ENV_CP_PI_SESSION='
+
+    out=$(posix_case_pi "$SH" --session foo)
+    check "$SH pi --session (passthrough, sem injeção)" "$out" 'ARGV: --session foo' 'ENV_CP_PI_SESSION='
+
+    out=$(posix_case_pi "$SH" --fork bar)
+    check "$SH pi --fork (passthrough, sem injeção)" "$out" 'ARGV: --fork bar' 'ENV_CP_PI_SESSION='
+
+    out=$(posix_case_pi "$SH" --no-session)
+    check "$SH pi --no-session (passthrough, sem injeção)" "$out" 'ARGV: --no-session' 'ENV_CP_PI_SESSION='
+
     out="$TMP/out.$RANDOM.$RANDOM"
     env -i PATH="$PATH_WITH_FAKES" HOME="$HOME" CP_TEST_OUT="$out" \
         "$SH" -c '
@@ -204,6 +228,27 @@ if command -v fish >/dev/null 2>&1; then
 
     out=$(fish_case_pi --resume abc)
     check "fish pi --resume (passthrough, sem injeção)" "$out" 'ARGV: --resume abc' 'ENV_CP_PI_SESSION='
+
+    out=$(fish_case_pi -c)
+    check "fish pi -c (passthrough, sem injeção)" "$out" 'ARGV: -c' 'ENV_CP_PI_SESSION='
+
+    out=$(fish_case_pi -r)
+    check "fish pi -r (passthrough, sem injeção)" "$out" 'ARGV: -r' 'ENV_CP_PI_SESSION='
+
+    out=$(fish_case_pi --continue)
+    check "fish pi --continue (passthrough, sem injeção)" "$out" 'ARGV: --continue' 'ENV_CP_PI_SESSION='
+
+    out=$(fish_case_pi --session-id existing-uuid-test)
+    check "fish pi --session-id (passthrough, sem injeção)" "$out" 'ARGV: --session-id existing-uuid-test' 'ENV_CP_PI_SESSION='
+
+    out=$(fish_case_pi --session foo)
+    check "fish pi --session (passthrough, sem injeção)" "$out" 'ARGV: --session foo' 'ENV_CP_PI_SESSION='
+
+    out=$(fish_case_pi --fork bar)
+    check "fish pi --fork (passthrough, sem injeção)" "$out" 'ARGV: --fork bar' 'ENV_CP_PI_SESSION='
+
+    out=$(fish_case_pi --no-session)
+    check "fish pi --no-session (passthrough, sem injeção)" "$out" 'ARGV: --no-session' 'ENV_CP_PI_SESSION='
 
     out="$TMP/out.$RANDOM.$RANDOM"
     env -i PATH="$PATH_WITH_FAKES" HOME="$HOME" CP_TEST_OUT="$out" \
