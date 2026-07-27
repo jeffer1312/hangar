@@ -356,6 +356,20 @@ def _pi_transcript_of_id(cwd: str, sid: str) -> Optional[str]:
     return get_adapter("pi").transcript_path(cwd, sid) or None
 
 
+# Panes ja avisados sobre bilhete sem frescor. list() e polled (de segundo em segundo), entao um
+# warning por varredura entupiria o journal; um por pane+motivo basta pra um /proc cronicamente
+# ilegivel nao ficar calado pra sempre. ponytail: set simples — o teto e o numero de panes da
+# maquina, nao ha o que expirar.
+_PI_TICKET_WARNED: set[tuple[str, str]] = set()
+
+
+def _warn_bilhete_once(pane_id: str, motivo: str) -> None:
+    if (pane_id, motivo) not in _PI_TICKET_WARNED:
+        _PI_TICKET_WARNED.add((pane_id, motivo))
+        _log.warning("pi: bilhete de %s recusado, frescor indeterminavel (%s); usando CP_PI_SESSION",
+                     pane_id, motivo)
+
+
 def pi_session_file(pane_id: str, pid: Optional[int] = None,
                     cwd: str = "") -> Optional[str]:
     """Transcript de um pane Pi: bilhete da extensao primeiro, env do wrapper depois.
@@ -381,7 +395,16 @@ def pi_session_file(pane_id: str, pid: Optional[int] = None,
         nasceu = _proc_start_time(pid) if pid else None
         # 2s de folga: o ts vem do Date.now() da extensao e o nascimento, do btime+ticks do kernel —
         # granularidades e relogios diferentes, e o bilhete do session_start nasce colado no exec.
-        if nasceu is not None and isinstance(ts, (int, float)) and ts < nasceu - 2:
+        if nasceu is None or not isinstance(ts, (int, float)):
+            # Frescor INDETERMINAVEL: /proc/<pid>/stat ilegivel (pid morto, permissao, kernel sem
+            # /proc) ou bilhete sem `ts` numerico (extensao antiga, escrita parcial). Recusa, igual a
+            # um bilhete velho — deixar passar era o furo silencioso: o guarda simplesmente nao
+            # rodava e o pane reusado abria a conversa da encarnacao ANTERIOR, tracked=True e sem
+            # nenhum rastro. Sem frescor o CP_PI_SESSION e o unico sinal que ainda prova de quem e
+            # o pane (vem do /proc do processo VIVO).
+            _warn_bilhete_once(pane_id, "nascimento" if nasceu is None else "ts")
+            f = None
+        elif ts < nasceu - 2:
             f = None
         # os.path.exists: o cp-state.ts NUNCA apaga o bilhete quando o pane fecha, e o tmux reusa
         # %pane_id apos um restart do servidor (ex: reboot da maquina) -> um bilhete ORFAO de uma

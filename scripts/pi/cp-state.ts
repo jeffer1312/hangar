@@ -29,32 +29,48 @@ function sessionFile(ctx: any): string | null {
 // no Pi o arquivo e <ts>_<uuid>.jsonl, entao gravar por session-id cria um marcador que ninguem le
 // — e o sintoma seria "sessao Pi sempre ociosa", sem erro em lugar nenhum.
 function writeAtomic(target: string, data: unknown): void {
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const tmp = `${target}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data));
+  fs.renameSync(tmp, target);   // atomico: o watcher pode ler no meio da escrita
+}
+
+// Nada aqui pode escapar pro loop de eventos do Pi: marcador e otimizacao, nao correcao, e falhar
+// nunca pode derrubar o turno do usuario. O corpo INTEIRO entra no try, nao so a escrita:
+// `getSessionFile`/`getSessionId` foram lidos de um `ctx: any` (nao ha tipo publico), entao sao o
+// candidato numero 1 a sumir ou lancar num upgrade do Pi — e `?.` protege contra o elo ausente, nao
+// contra a chamada que lanca. Mas calado tambem nao: sem o console.error, uma permissao errada em
+// ~/.claude/.claude-pocket-state (ou disco cheio) quebra o rastreio de TODA sessao Pi pra sempre,
+// indistinguivel de "extensao nao instalada" e sem rastro em lugar nenhum. Os erros de fs do Node ja
+// carregam o caminho que falhou; o rotulo diz qual escrita era.
+function guard(what: string, fn: () => void): void {
   try {
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    const tmp = `${target}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(data));
-    fs.renameSync(tmp, target);   // atomico: o watcher pode ler no meio da escrita
-  } catch {
-    // Marcador e otimizacao, nao correcao: falhar aqui nunca pode derrubar o turno do usuario.
+    fn();
+  } catch (err) {
+    console.error(`[cp-state] ${what} falhou:`, err);
   }
 }
 
 function publishState(state: "working" | "idle", ctx: any): void {
-  const file = sessionFile(ctx);
-  if (!file) return;
-  writeAtomic(path.join(dir, `${path.basename(file, ".jsonl")}.json`),
-              { state, ts: Date.now() / 1000 });
+  guard(`publishState(${state})`, () => {
+    const file = sessionFile(ctx);
+    if (!file) return;
+    writeAtomic(path.join(dir, `${path.basename(file, ".jsonl")}.json`),
+                { state, ts: Date.now() / 1000 });
+  });
 }
 
 // Bilhete pane -> arquivo de sessao. E a UNICA forma de o backend ligar um pane Pi ao transcript
 // dele: o pi reescreve o proprio argv (Task 0, fato 7), entao o `--session-id` some do
 // /proc/<pid>/cmdline e nao ha o que casar. `TMUX_PANE` (ex `%123`) o pi HERDA — medido.
 function publishPane(ctx: any): void {
-  const pane = process.env.TMUX_PANE;
-  const file = sessionFile(ctx);
-  if (!pane || !file) return;      // fora do tmux nao ha o que ligar
-  writeAtomic(path.join(paneDir, `${pane.replace("%", "")}.json`),
-              { file, id: ctx?.sessionManager?.getSessionId?.() ?? null, ts: Date.now() / 1000 });
+  guard("publishPane", () => {
+    const pane = process.env.TMUX_PANE;
+    const file = sessionFile(ctx);
+    if (!pane || !file) return;      // fora do tmux nao ha o que ligar
+    writeAtomic(path.join(paneDir, `${pane.replace("%", "")}.json`),
+                { file, id: ctx?.sessionManager?.getSessionId?.() ?? null, ts: Date.now() / 1000 });
+  });
 }
 
 export default function (pi: ExtensionAPI) {
