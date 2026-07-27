@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ChatEvent } from '../lib/types';
-  import { parseFilePaths, summarizeToolInput, summarizeToolResult } from '../lib/format';
+  import { parseFilePaths, summarizeToolInput, summarizeToolResult, toolPhase } from '../lib/format';
   import FileAttachment from './FileAttachment.svelte';
 
   interface Props {
@@ -22,32 +22,24 @@
       : []
   );
 
-  const phase = $derived<'pending' | 'done' | 'error'>(
-    result === null
-      ? 'pending'
-      : result.is_error
-      ? 'error'
-      : 'done'
-  );
-
-  const verb = $derived(
-    phase === 'pending' ? 'Executando' : phase === 'error' ? 'Falhou' : 'Executou'
-  );
+  const phase = $derived(toolPhase(result));
 
   const summary = $derived(summarizeToolInput(event.tool_name, event.tool_input));
 
-  // Tamanho do que voltou ("40 linhas") na propria linha colapsada — sem isso so da pra saber
-  // expandindo. Erro mostra a 1a linha do erro no lugar da contagem.
-  const resultInfo = $derived(summarizeToolResult(result));
+  // Desfecho na 2a linha ("Pronto (38 linhas)" / "320 linhas carregadas" / 1a linha do erro).
+  // Enquanto roda nao ha resultado -> a linha mostra o proprio estado.
+  const outcome = $derived(summarizeToolResult(result, event.tool_name) || 'Executando…');
 
-  // Bash com run_in_background retorna NA HORA (vira shell destacado) -> "Executou" engana. Marca
+  // Bash com run_in_background retorna NA HORA (vira shell destacado) -> "Pronto" engana. Marca
   // como background; a saida viva chega depois pelos cards de BashOutput (o agente puxa via bash_id).
   const isBackground = $derived(
     event.tool_name === 'Bash' && (event.tool_input as Record<string, unknown> | null)?.['run_in_background'] === true
   );
-  const label = $derived(isBackground && phase !== 'error' ? 'Rodando em background' : verb);
 </script>
 
+<!-- Bloco de DUAS linhas (layout do Pi): "● Bash <arg>" / "└ Pronto (38 linhas) • toque para ver".
+     A linha 2 nao usa o caractere └: o corner e desenhado em CSS (border), que alinha na bolinha em
+     qualquer fonte/tamanho e nunca cai num glifo de fallback torto. -->
 <div
   class="tool-row"
   class:noanim={!animate}
@@ -58,19 +50,23 @@
   onclick={() => (expanded = !expanded)}
   onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expanded = !expanded; } }}
 >
-  <div class="row-line">
-    {#if phase === 'pending'}
-      <span class="row-spin" aria-label="Executando…">⟳</span>
+  <div class="tr-call">
+    <span class="tr-dot" class:pending={phase === 'pending'} data-phase={phase} aria-hidden="true"></span>
+    <span class="tr-name">{event.tool_name ?? 'Tool'}</span>
+    {#if isBackground}<span class="tr-badge">background</span>{/if}
+    {#if summary}<span class="tr-arg" class:open={expanded}>{summary}</span>{/if}
+  </div>
+
+  <div class="tr-out">
+    <span class="tr-elbow" aria-hidden="true"></span>
+    <span class="tr-outcome">{outcome}</span>
+    {#if result?.result}
+      <span class="tr-hint">
+        <span class="sep" aria-hidden="true">•</span>
+        <span class="coarse">{expanded ? 'toque para ocultar' : 'toque para ver'}</span><span
+              class="fine">{expanded ? 'clique para ocultar' : 'clique para ver'}</span>
+      </span>
     {/if}
-    <!-- Separador como EXPRESSAO ({' · '}): espaco literal na 1a posicao de um {#if} e comido pelo
-         compilador, e a linha saia "Bash· cmd: …". -->
-    <span class="row-label">
-      {label} <span class="row-tool">{event.tool_name ?? 'Tool'}</span>{#if isBackground}<span class="row-badge">background</span>{/if}{#if summary}{' · '}{summary}{/if}
-    </span>
-    <!-- Fora do .row-label de proposito: no celular a linha e estreita e o argumento come a largura
-         toda — dentro do label, o "40 linhas" morria no ellipsis justo onde ele mais serve. -->
-    {#if resultInfo}<span class="row-count">{resultInfo}</span>{/if}
-    <span class="row-chevron" class:open={expanded} aria-hidden="true">›</span>
   </div>
 
   {#if expanded && result?.result}
@@ -83,91 +79,124 @@
 {#if fileRefs.length}<FileAttachment {sessionName} refs={fileRefs} />{/if}
 
 <style>
-  /* Linha muda colapsada (estilo Claude iOS): "Executou <tool> · <summary> ›". Tap expande. */
   .tool-row {
     padding: var(--space-1) 0;
     margin-bottom: var(--space-1);
     cursor: pointer;
-    min-height: 32px;
     animation: bubble-in 180ms ease-out both;
   }
 
   /* Historico remontado (paginacao/janela): entra parado. */
   .tool-row.noanim { animation: none; }
 
-  .row-line {
+  /* Linha 1: bolinha + nome + argumento. */
+  .tr-call {
     display: flex;
-    align-items: center;
-    gap: var(--space-2);
+    align-items: baseline;
+    gap: 6px;
     min-width: 0;
+    font-size: var(--text-xs);
+    line-height: 1.5;
   }
 
-  .row-spin {
+  /* A bolinha carrega o mesmo vocabulario de estado do resto do app: accent = rodando,
+     success = concluiu, error = falhou. */
+  .tr-dot {
     flex-shrink: 0;
-    color: var(--text-muted);
-    display: inline-block;
-    animation: spin 0.8s linear infinite;
-    font-size: var(--text-xs);
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    align-self: center;
+    background: var(--success);
+  }
+  .tr-dot[data-phase='pending'] { background: var(--accent); }
+  .tr-dot[data-phase='error']   { background: var(--error); }
+  /* Pulso no lugar do antigo spinner ⟳ (mesma informacao, sem roubar largura da linha). */
+  .tr-dot.pending { animation: pulse-scale 1.2s ease-in-out infinite; }
+
+  .tr-name {
+    flex-shrink: 0;
+    font-weight: 600;
+    color: var(--text-secondary);
   }
 
-  .row-label {
-    flex: 1;
+  .tr-arg {
     min-width: 0;
-    font-size: var(--text-xs);
+    font-family: var(--font-mono);
     color: var(--text-muted);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* Expandido, o argumento cortado no "…" aparece inteiro (o comando longo e metade do porque). */
+  .tr-arg.open { white-space: pre-wrap; overflow: visible; word-break: break-all; }
 
-  .row-tool {
-    font-family: var(--font-mono);
-    color: var(--text-secondary);
-  }
-
-  .row-badge {
+  .tr-badge {
     flex-shrink: 0;
     font-size: 9px;
     font-weight: 600;
     letter-spacing: 0.03em;
     text-transform: uppercase;
     padding: 1px 6px;
-    margin-left: 4px;
     border-radius: var(--radius-full);
     color: var(--accent);
     background: var(--accent-dim);
   }
 
-  /* Tamanho do resultado ("40 linhas") / 1a linha do erro: nunca encolhe abaixo do proprio texto,
-     mas nao passa de metade da linha (erro comprido nao pode zerar o argumento). */
-  .row-count {
-    flex-shrink: 0;
-    max-width: 50%;
+  /* Linha 2: corner + desfecho + dica. */
+  .tr-out {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
     font-size: var(--text-xs);
+    line-height: 1.5;
     color: var(--text-muted);
+  }
+
+  /* O "└" desenhado: sobe ate a bolinha da linha de cima e vira pra direita. */
+  .tr-elbow {
+    flex-shrink: 0;
+    width: 6px;
+    height: 8px;
+    margin-right: 2px;
+    align-self: flex-start;
+    border-left: 1px solid var(--border-default);
+    border-bottom: 1px solid var(--border-default);
+    border-bottom-left-radius: 3px;
+  }
+
+  .tr-outcome {
+    min-width: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  .tool-row--error .row-label,
-  .tool-row--error .row-count {
-    color: var(--error);
-  }
-
-  .row-chevron {
-    flex-shrink: 0;
+  /* Dica de expandir: some primeiro quando a linha aperta (o desfecho vale mais). */
+  .tr-hint {
+    flex-shrink: 1000;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
     color: var(--text-muted);
-    font-size: var(--text-base);
-    transition: transform 180ms var(--ease-out);
+    opacity: 0.7;
+  }
+  .tr-hint .sep { margin-right: 4px; }
+  /* "toque" com dedo, "clique" com mouse — o app nao tem atalho de teclado pra isto, entao a dica
+     nao inventa um. */
+  .fine { display: inline; }
+  .coarse { display: none; }
+  @media (pointer: coarse) {
+    .fine { display: none; }
+    .coarse { display: inline; }
   }
 
-  .row-chevron.open {
-    transform: rotate(90deg);
-  }
+  .tool-row--error .tr-outcome { color: var(--error); }
 
   .row-result {
     margin-top: var(--space-2);
+    margin-left: 14px;
     max-height: 240px;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
