@@ -496,6 +496,12 @@ describe('providerName', () => {
 });
 
 describe('summarizeText', () => {
+  it('não parte emoji no meio ao truncar', () => {
+    // slice() corta por unidade UTF-16 e deixava meio emoji órfão antes do "…".
+    expect(summarizeText('😀abc', 2)).toBe('😀…');
+    expect(Array.from(summarizeText('a😀b😀c😀d', 4)).length).toBe(4);
+  });
+
   it('deixa passar o que cabe no limite', () => {
     expect(summarizeText('abc', 5)).toBe('abc');
     expect(summarizeText('abcde', 5)).toBe('abcde');   // fronteira: == max fica inteiro
