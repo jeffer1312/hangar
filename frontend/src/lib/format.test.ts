@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, fmtWhen, groupSelectedByServer, initials, nextAwaiting,
   projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent, resetsIn,
-  clusterByPair, sortSessions, bubblesFromTail, ctxWindow, fileKind, fmtBytes,
+  clusterByPair, sortSessions, bubblesFromTail, ctxWindow, fileKind, fmtBytes, providerName,
 } from './format';
 import type { ChatEvent, State } from './types';
 
@@ -473,5 +473,23 @@ describe('fmtBytes', () => {
     expect(fmtBytes(1024 * 1024 * 1.5)).toBe('1.5 MB');
     expect(fmtBytes(1024 * 1024)).toBe('1 MB');   // sem "1.0 MB"
     expect(fmtBytes(3 * 1024 ** 3)).toBe('3 GB');
+  });
+});
+
+describe('providerName', () => {
+  // Regressão: o desktop escrevia `provider === 'codex' ? 'Codex' : 'Claude'`, então uma sessão Pi
+  // era rotulada "Claude" no painel de contexto.
+  it('names the third provider instead of falling back to Claude', () => {
+    expect(providerName('pi')).toBe('Pi');
+  });
+
+  it('keeps Claude and Codex byte-identical', () => {
+    expect(providerName('claude')).toBe('Claude');
+    expect(providerName('codex')).toBe('Codex');
+  });
+
+  it('falls back to Claude when the field is absent (backend default)', () => {
+    expect(providerName(undefined)).toBe('Claude');
+    expect(providerName(null)).toBe('Claude');
   });
 });
