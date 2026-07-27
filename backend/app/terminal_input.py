@@ -4,6 +4,7 @@ import time
 
 from app import model_picker as mp
 from app import tmux
+from app.models import scrub_surrogates
 from app.pqueue import PromptQueue, _transcript_start_ts
 from app.state import classify, is_overlay
 from app.tmux import send_keys
@@ -247,6 +248,11 @@ def answer_questions(name: str, answers: list[dict]) -> None:
 
 class TerminalInput:
     def send_prompt(self, name: str, text: str, provider: str = "claude") -> str:
+        # Surrogate solto (meio emoji cortado pelo browser) tambem nao chega no tmux: o argv do
+        # subprocess e encodado em utf-8 e estouraria UnicodeEncodeError — um ValueError, que o
+        # caller ja traduz pra 400 "control characters". A msg era recusada com erro trocado e
+        # nunca entrava na fila. Troca por U+FFFD como no resto do app (ver app.models).
+        text = scrub_surrogates(text)
         # Validacao PRE-envio: input ruim nunca toca a TUI nem entra na fila. \n/\t ok; outros controles nao.
         if any(ord(c) < 32 and c not in "\t\n" for c in text):
             raise ValueError("control characters not allowed in prompt")

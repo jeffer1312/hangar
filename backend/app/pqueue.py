@@ -12,7 +12,7 @@ from typing import AsyncIterator
 from watchfiles import awatch
 
 from app.config import settings
-from app.models import ChatEvent
+from app.models import ChatEvent, dumps_safe, scrub_surrogates
 from app.transcript import parse_obj
 
 # Limite de entradas mantidas no sidecar (poda no append pra nao crescer sem fim).
@@ -178,9 +178,9 @@ class PromptQueue:
     def _write_atomic(self, rows: list[dict]) -> None:
         # Escrita atomica (tmp + replace) pra um reader nunca pegar o arquivo pela metade.
         tmp = self.path.with_suffix(".jsonl.tmp")
-        tmp.write_text(
-            "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8"
-        )
+        # dumps_safe (nao json.dumps): surrogate solto no texto do usuario passa pelo json.dumps e
+        # so estoura no encode do write_text -> o POST /input inteiro virava 500 e a msg sumia.
+        tmp.write_text("".join(dumps_safe(r) + "\n" for r in rows), encoding="utf-8")
         tmp.replace(self.path)
 
     def append(self, text: str, delivered: bool = False, ts: float | None = None) -> dict:
@@ -192,7 +192,10 @@ class PromptQueue:
         # default time.time() cairia DEPOIS do commit e o dedup ts-aware do merged_history leria o
         # proprio commit como "anterior, de outra msg igual" -> msg duplicada no historico. Quem tem
         # send antes do append passa o ts capturado ANTES do send (ver api._send_one).
-        entry = {"id": uuid.uuid4().hex, "text": text,
+        # scrub AQUI tambem (nao so no _write_atomic): a entrada devolvida ao caller tem que ser a
+        # MESMA que foi pro disco, senao o reconcile/dedup compararia o texto cru contra o transcript
+        # (que ja recebeu o U+FFFD) e nunca casaria.
+        entry = {"id": uuid.uuid4().hex, "text": scrub_surrogates(text),
                  "ts": time.time() if ts is None else ts, "delivered": delivered}
         # ponytail: lock global serializa o read-modify-write; 2 POSTs /input concorrentes (handlers
         # sync no threadpool) senao liam as mesmas rows e um sobrescrevia o outro (entrada perdida).

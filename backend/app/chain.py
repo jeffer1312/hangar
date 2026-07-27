@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from app.config import settings
+from app.models import dumps_safe
 from app.pqueue import _sanitize
 
 
@@ -31,8 +32,7 @@ class ThenLink:
     def set(self, target: str, text: str) -> None:
         # Escrita atomica (tmp + replace), mesmo padrao do PromptQueue._write_atomic.
         tmp = self.path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps({"target": target, "text": text}, ensure_ascii=False),
-                        encoding="utf-8")
+        tmp.write_text(dumps_safe({"target": target, "text": text}), encoding="utf-8")
         tmp.replace(self.path)
 
     def clear(self) -> None:

@@ -126,6 +126,24 @@ def test_input_control_char_400_without_queue(api_client):
     ap.assert_not_called()   # validado no send_prompt ANTES de enfileirar
 
 
+def test_input_com_surrogate_solto_e_aceito_e_vai_pro_sidecar(api_client, tmp_path, monkeypatch):
+    # Corpo JSON PERFEITAMENTE VÁLIDO com meio emoji escapado — é o que o browser manda quando
+    # fatia uma string (UTF-16) no meio de um par antes do JSON.stringify. O json.loads monta o
+    # str, o send_keys/write_text estouravam UnicodeEncodeError e a msg do usuário sumia (500 no
+    # /input, ou 400 "control characters" vindo do subprocess do tmux). `content=` cru porque nem o
+    # httpx consegue serializar um surrogate solto — o corpo já vem escapado, como na rede.
+    from app import pqueue
+    monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
+    with patch("app.api.terminal.send_prompt", return_value="sent"), \
+         patch("app.api.threading.Timer"):    # não deixa o Timer de 8.5s segurar o exit
+        r = api_client.post("/api/sessions/cc/input", content=rb'{"text": "corte \ud83d"}',
+                            headers={**_h(), "Content-Type": "application/json"})
+    assert r.status_code == 200 and r.json()["delivered"] is True
+    q = pqueue.PromptQueue("cc")
+    assert "\ud83d" not in q.path.read_text(encoding="utf-8")   # o arquivo lê de volta
+    assert q.load()[0]["text"] == "corte �"
+
+
 def test_broadcast_invokes_send_once_per_name(api_client):
     # POST /api/broadcast pra N nomes precisa rodar a MESMA sequencia do /input (send_prompt +
     # PromptQueue.append) uma vez por nome — nao um mecanismo de entrega novo.

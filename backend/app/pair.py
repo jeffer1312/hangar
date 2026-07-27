@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 
 from app.config import settings
+from app.models import dumps_safe
 from app.pqueue import _sanitize
 
 # Lock global das operações de GRUPO (N sidecars): join/leave/rename concorrentes sem isto podiam
@@ -57,8 +58,7 @@ class PairLink:
     def set(self, peers: list[str], task: str = "", gid: str = "") -> None:
         # Escrita atômica (tmp + replace), mesmo padrão do PromptQueue._write_atomic.
         tmp = self.path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps({"peers": peers, "task": task, "gid": gid}, ensure_ascii=False),
-                       encoding="utf-8")
+        tmp.write_text(dumps_safe({"peers": peers, "task": task, "gid": gid}), encoding="utf-8")
         tmp.replace(self.path)
 
     def clear(self) -> None:

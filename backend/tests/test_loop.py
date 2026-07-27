@@ -290,3 +290,10 @@ def test_decorate_loop_no_sidecar(tmp_path, monkeypatch):
     i = Info()
     _decorate_loop(i)
     assert i.loop_status is None and i.loop_iter is None
+
+
+def test_set_com_surrogate_solto_no_goal_grava_e_le_de_volta(tmp_path, monkeypatch):
+    # `goal`/`check_cmd` vêm do usuário: meio emoji ali estourava no write_text do sidecar.
+    _patch_dir(tmp_path, monkeypatch)
+    LoopLink("s").set(new_loop("passar \ud83d", "pytest -x", 10, True))
+    assert LoopLink("s").get()["goal"] == "passar �"

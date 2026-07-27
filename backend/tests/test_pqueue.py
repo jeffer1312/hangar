@@ -436,3 +436,32 @@ def test_is_video_cobre_as_extensoes_servidas_pelo_app():
         assert is_video(f"/tmp/A.{ext.upper()}"), ext
     for ext in ("png", "jpg", "mp3", "pdf", ""):
         assert not is_video(f"/tmp/a.{ext}"), ext
+
+
+# ---------------------------------------------------------------------------
+# Surrogate solto no texto do usuário (meio emoji) — lado da ESCRITA
+# ---------------------------------------------------------------------------
+
+def test_append_com_surrogate_solto_grava_e_le_de_volta():
+    # O browser fatia string por UNIDADE UTF-16: cortar um emoji ao meio antes do JSON.stringify
+    # manda "\ud83d" sozinho. json.dumps aceita, mas o write_text estourava
+    # UnicodeEncodeError -> POST /input virava 500 e a mensagem sumia sem rastro.
+    q = PromptQueue("s")
+    entry = q.append("corte \ud83d", delivered=True, ts=1.0)
+    assert entry["text"] == "corte �"          # a entrada devolvida = a que foi pro disco
+    raw = q.path.read_text(encoding="utf-8")        # <- este era o passo que levantava
+    assert "\ud83d" not in raw
+    assert PromptQueue("s").load()[0]["text"] == "corte �"
+
+
+def test_append_preserva_emoji_bem_formado_byte_a_byte():
+    # Bandeira (par de regional indicators), família (ZWJ) e emoji simples continuam CRUS no
+    # arquivo (ensure_ascii=False preservado) e idênticos na volta.
+    textos = ["bandeira 🇧🇷", "família 👨‍👩‍👧‍👦", "ok ✅"]
+    q = PromptQueue("s")
+    for t in textos:
+        q.append(t)
+    assert [e["text"] for e in PromptQueue("s").load()] == textos
+    raw = q.path.read_bytes()
+    for t in textos:
+        assert t.encode("utf-8") in raw

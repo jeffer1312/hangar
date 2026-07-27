@@ -175,3 +175,8 @@ def test_join_rejects_cross_pairing_a_local_group_member():
     with pytest.raises(pair.PairMixError):
         pair.join_group("a", ["srv::x"])       # 'a' num grupo local não pode cross-parear
     assert _peers("a") == ["b"] and _peers("b") == ["a"]
+
+def test_set_com_surrogate_solto_na_task_grava_e_le_de_volta():
+    # `task` é rótulo digitado pelo usuário: meio emoji ali estourava no write_text do sidecar.
+    PairLink("a").set(["b"], task="TICKET-0000 \ud83d", gid="g1")
+    assert PairLink("a").get()["task"] == "TICKET-0000 �"

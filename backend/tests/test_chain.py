@@ -48,3 +48,9 @@ def test_rename_moves_link_and_drops_old():
 def test_rename_without_link_is_noop():
     ThenLink("sem-vinculo").rename("destino")
     assert ThenLink("destino").get() is None
+
+
+def test_set_com_surrogate_solto_grava_e_le_de_volta():
+    # Mesmo buraco do pqueue: texto do usuário com meio emoji estourava no write_text.
+    ThenLink("a").set("b", "roda \ud83d")
+    assert ThenLink("a").get() == {"target": "b", "text": "roda �"}
