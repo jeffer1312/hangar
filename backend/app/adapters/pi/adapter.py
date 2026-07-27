@@ -26,7 +26,11 @@ class PiAdapter:
         # Mesmo StateMonitor: a ancora de hook (HookState) ja cobre working/idle pelo marcador que
         # a extensao cp-state.ts escreve. O fallback de raspar o pane continua ligado como rede,
         # mas nao e o caminho normal — o Pi nao tem prompt de permissao pra detectar.
-        return StateMonitor(name, sid_get=sid_get).stream()
+        # hook_grace=None: o loader do Pi e braille (⠋⠙⠹...), fora de SPINNER_GLYPHS, entao o
+        # contador de polls-sem-spinner sobe durante o turno e a grace do Claude descartava o
+        # marcador working NO MEIO da conversa (chat mostrando "ocioso" com o agente trabalhando).
+        # A lista ja trata o marcador assim (registry.py:719, sem grace).
+        return StateMonitor(name, sid_get=sid_get, hook_grace=None).stream()
 
     async def drain(self, name: str, path: str) -> int:
         return await asyncio.to_thread(ti.drain, name, path)

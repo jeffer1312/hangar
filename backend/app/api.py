@@ -332,7 +332,8 @@ def _confirm_and_drain(name: str) -> None:
             threading.Timer(_CONFIRM_GRACE + 0.5, _confirm_and_drain, args=(name,)).start()
             return
         requeued = q.reconcile_delivered(
-            committed_user_lines(info.jsonl), _transcript_start_ts(info.jsonl), time.time(),
+            committed_user_lines(info.jsonl, info.provider), _transcript_start_ts(info.jsonl),
+            time.time(),
             grace=_CONFIRM_GRACE,
         )
         if requeued:

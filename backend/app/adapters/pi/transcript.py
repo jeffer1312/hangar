@@ -8,6 +8,7 @@ transformaria cada mudanca de formato de um provider em risco de regressao no ou
 `ChatEvent` e contrato com o front: aqui so muda a FONTE, nunca o shape.
 """
 import json
+import re
 from typing import Optional
 
 from app.models import ChatEvent
@@ -15,6 +16,16 @@ from app.models import ChatEvent
 # Blocos que nao viram bolha de chat. `thinking` fica de fora igual no Claude: e rascunho interno,
 # nao resposta.
 _DROPPED_BLOCK_TYPES = {"thinking"}
+
+# O Pi grava o texto JA COLORIDO no JSONL: toda resposta final termina com
+# "\x1b[38;2;136;136;136m✻ Turn took 2s\x1b[0m", e alguns resultados de tool tambem vem com cor.
+# A bolha do app nao interpreta terminal — sem tirar, o usuario le "[38;2;136;136;136m✻ Turn took".
+# Pega a sequencia CSI inteira (SGR e vizinhas), nao so o `m`.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;:?]*[ -/]*[@-~]")
+
+
+def _clean(text: str) -> str:
+    return _ANSI_RE.sub("", text)
 
 
 def _sub_id(node_id: str, k: int) -> str:
@@ -28,7 +39,7 @@ def _result_text(content: list) -> str:
         if not isinstance(b, dict):
             continue
         if b.get("type") == "text":
-            parts.append(b.get("text") or "")
+            parts.append(_clean(b.get("text") or ""))
         elif b.get("type") == "image":
             # `data` e base64 inteiro: inline mandaria megabytes pelo SSE a cada evento.
             parts.append(f"[imagem {b.get('mimeType') or 'desconhecida'}]")
@@ -64,7 +75,7 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
         for k, b in enumerate(content):
             if isinstance(b, dict) and b.get("type") == "text" and (b.get("text") or "").strip():
                 out.append(ChatEvent(kind="user_msg", id=_sub_id(node_id, k),
-                                     text=b["text"], ts=ts))
+                                     text=_clean(b["text"]), ts=ts))
         return out
 
     if role == "assistant":
@@ -79,7 +90,7 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
                 continue
             if t == "text" and (b.get("text") or "").strip():
                 out.append(ChatEvent(kind="assistant_msg", id=_sub_id(node_id, k),
-                                     text=b["text"], cache_read=cache_read, ts=ts))
+                                     text=_clean(b["text"]), cache_read=cache_read, ts=ts))
             elif t == "toolCall":
                 args = b.get("arguments")
                 out.append(ChatEvent(kind="tool_use", id=_sub_id(node_id, k),

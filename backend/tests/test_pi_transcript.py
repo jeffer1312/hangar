@@ -116,6 +116,71 @@ def test_parses_the_format_guard_fixture_without_raising():
     assert not orphans, f"tool_result sem tool_use correspondente: {orphans[:3]}"
 
 
+def test_sgr_escapes_are_stripped_from_assistant_text():
+    # O Pi imprime "✻ Turn took Ns" colorido DENTRO do texto da resposta (medido: 100% dos turnos
+    # com resposta final carregam \x1b[38;2;...m). A bolha do app renderiza o escape como texto
+    # literal ("[38;2;136;136;136m✻ Turn took 2s").
+    obj = _msg("assistant", [{"type": "text", "text":
+                              "pong\n\n\x1b[38;2;136;136;136m✻ Turn took 2s\x1b[0m"}])
+    ev = pt.parse_obj(obj)
+    assert ev[0].text == "pong\n\n✻ Turn took 2s"
+    assert "\x1b" not in ev[0].text
+
+
+def test_sgr_escapes_are_stripped_from_tool_results():
+    obj = {"type": "message", "id": "n5", "message": {
+        "role": "toolResult", "toolCallId": "c", "toolName": "bash", "isError": False,
+        "content": [{"type": "text", "text": "\x1b[1;32mok\x1b[0m"}]}}
+    assert pt.parse_obj(obj)[0].result == "ok"
+
+
+def test_fixture_carries_ansi_and_the_parser_cleans_it():
+    # A fixture era escrita a mao SEM escape nenhum — e por isso o parser passou meses copiando
+    # \x1b[..m verbatim sem nenhum teste reclamar. Agora a fixture tem escape e o guarda de formato
+    # cobre a limpeza.
+    import pathlib
+    fx = pathlib.Path(__file__).parent / "fixtures" / "pi_session.jsonl"
+    raw = fx.read_text(encoding="utf-8")
+    assert "\\u001b[" in raw, "a fixture precisa conter escape ANSI cru, senao nao pina nada"
+    for line in raw.splitlines():
+        for e in pt.parse_line(line):
+            assert "\x1b" not in (e.text or ""), e.id
+            assert "\x1b" not in (e.result or ""), e.id
+
+
+def test_committed_user_lines_reads_pi_user_messages(tmp_path, monkeypatch):
+    # FINDING 1: o oraculo de confirmacao de entrega so entendia o shape do Claude (`type: user` no
+    # TOPO da linha). Pro Pi ele devolvia set() vazio -> o reconcile concluia "a TUI engoliu" e o
+    # drain REDIGITAVA o mesmo prompt (evidencia no disco: pi-e2e.jsonl com attempts: 2 e o par
+    # user/assistant duplicado no transcript).
+    from app import pqueue
+    monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
+    texto = "reply with exactly the word: pong"
+    f = tmp_path / "2026-01-01T00-00-00-000Z_sid.jsonl"
+    f.write_text(json.dumps({"type": "message", "id": "n1", "message": {
+        "role": "user", "timestamp": 100_000, "content": [{"type": "text", "text": texto}]}}) + "\n",
+        encoding="utf-8")
+
+    committed = pqueue.committed_user_lines(str(f), provider="pi")
+    assert texto in committed
+
+    q = pqueue.PromptQueue("pi-e2e")
+    q.path.write_text(json.dumps({"id": "e1", "text": texto, "ts": 100.0, "delivered": True}) + "\n",
+                      encoding="utf-8")
+    assert q.reconcile_delivered(committed, min_ts=0.0, now=1000.0) == []   # nada de reentrega
+    assert q.load()[0]["confirmed"] is True
+
+
+def test_committed_user_lines_keeps_the_claude_shape(tmp_path):
+    # O ramo novo nao pode mexer no provider mais usado do app.
+    from app import pqueue
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "oi"}}) + "\n",
+                 encoding="utf-8")
+    assert "oi" in pqueue.committed_user_lines(str(j))
+    assert "oi" in pqueue.committed_user_lines(str(j), provider="claude")
+
+
 def test_merged_history_uses_the_pi_parser(tmp_path):
     # Sem o dispatch, merged_history usa o parser do Claude e devolve [] pra toda linha do Pi:
     # o chat retomado abre vazio e so popula com o que chegar ao vivo.

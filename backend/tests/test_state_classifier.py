@@ -222,6 +222,49 @@ async def test_monitor_carries_loop_fields(tmp_path, monkeypatch):
     assert first.loop_status == "running" and first.loop_iter == 3 and first.loop_max == 7
 
 
+async def _run_until(mon, polls: int, pane: str):
+    """Roda o monitor por `polls` capturas e devolve os eventos emitidos (o stream so emite na
+    mudanca). Encerra estourando do proprio capture_pane — deterministico, sem sleep."""
+    n = {"i": 0}
+
+    def frame(*a, **k):
+        n["i"] += 1
+        if n["i"] > polls:
+            raise RuntimeError("fim do teste")
+        return pane
+
+    seen = []
+    with patch.object(state_mod.tmux, "has_session", return_value=True), \
+         patch.object(state_mod.tmux, "capture_pane", side_effect=frame), \
+         patch.object(state_mod.hook_state, "get_state", return_value=("working", 1.0)):
+        with pytest.raises(RuntimeError):
+            async for ev in mon.stream():
+                seen.append((ev.state, ev.label))
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_hook_working_marker_expires_for_claude():
+    # Comportamento de HOJE, travado: marcador "working" preso (claude morto mid-turn) deixa de ser
+    # honrado apos HOOK_WORKING_GRACE polls sem spinner -> o pane volta a mandar.
+    mon = StateMonitor("cc", poll=0.001, sid_get=lambda: "sid")
+    seen = await _run_until(mon, polls=StateMonitor.HOOK_WORKING_GRACE + 3, pane="❯ \n")
+    assert seen[0] == ("working", None)
+    assert ("idle", None) in seen
+
+
+@pytest.mark.asyncio
+async def test_hook_working_marker_never_expires_without_a_readable_spinner():
+    # FINDING 2: SPINNER_GLYPHS sao os do Claude; o loader do Pi e braille (⠋⠙⠹…), entao o contador
+    # `no_spinner` sobe DURANTE o turno e o marcador working era descartado no meio da conversa
+    # (chat mostrando "ocioso" com o agente trabalhando). Sem spinner legivel o marcador e a UNICA
+    # verdade — mesma politica que a lista ja usa (registry.py:719, sem grace nenhuma).
+    mon = StateMonitor("pi", poll=0.001, sid_get=lambda: "sid", hook_grace=None)
+    seen = await _run_until(mon, polls=StateMonitor.HOOK_WORKING_GRACE + 8,
+                            pane="⠙ pensando\n❯ \n")
+    assert seen == [("working", None)], f"caiu pra idle no meio do turno: {seen}"
+
+
 def test_is_overlay_true_with_nav_footer():
     pane = "alguma conversa\n● resposta\n────────\n  Esc to cancel · Enter to select\n"
     assert state_mod.is_overlay(pane) is True

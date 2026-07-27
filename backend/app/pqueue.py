@@ -96,13 +96,19 @@ def _strip_attach(text: str) -> str:
 _IMG_PREFIX = re.compile(r"^(?:\[Image #\d+\])+\s*")
 
 
-def committed_user_lines(jsonl: str) -> set[str]:
+def committed_user_lines(jsonl: str, provider: str = "claude") -> set[str]:
     """Textos que ATERRISSARAM no transcript (inteiros + por linha), pra confirmar entregas.
     Fontes CRUAS, sem o filtro de meta do parser: (a) entradas `user` — mensagem entregue MID-TURN
     e injetada depois vem embrulhada em meta que o parse_obj descartaria; (b) `queue-operation`
     enqueue — a fila INTERNA do Claude Code registra o texto NO MOMENTO da digitacao, antes de
     virar entrada user. Sem (b), mensagem enfileirada durante um turno longo parecia 'engolida'
-    e era REDIGITADA em loop (o bug das mensagens fantasma repetidas)."""
+    e era REDIGITADA em loop (o bug das mensagens fantasma repetidas).
+
+    provider: o shape do transcript, igual ao merged_history. O Pi poe o role DENTRO de `message`
+    (`{"type":"message","message":{"role":"user",...}}`), entao as regras cruas acima nao casam
+    NADA e o oraculo devolvia set() vazio -> toda entrega era lida como engolida e o drain
+    redigitava o mesmo prompt (double-send medido: pi-e2e.jsonl com attempts: 2). Pi nao tem fila
+    interna com `queue-operation`, entao o parser proprio ja basta."""
     out: set[str] = set()
 
     def add(t: str) -> None:
@@ -123,12 +129,22 @@ def committed_user_lines(jsonl: str) -> set[str]:
             for ln in variant.split("\n"):
                 out.add(ln.strip())
 
+    # Import local pelo mesmo motivo do merged_history: app.adapters importa app.pqueue no boot.
+    pi_parse = None
+    if provider == "pi":
+        from app.adapters.pi.transcript import parse_obj as pi_parse
+
     try:
         with open(jsonl, encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 try:
                     obj = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
+                    continue
+                if pi_parse is not None:
+                    for ev in pi_parse(obj):
+                        if ev.kind == "user_msg" and ev.text:
+                            add(ev.text)
                     continue
                 etype = obj.get("type")
                 if etype == "queue-operation":

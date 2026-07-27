@@ -209,9 +209,18 @@ class StateMonitor:
     HOOK_WORKING_GRACE = 8
 
     def __init__(self, name: str, poll: float = 0.75,
-                 sid_get: Optional[Callable[[], Optional[str]]] = None):
+                 sid_get: Optional[Callable[[], Optional[str]]] = None,
+                 hook_grace: Optional[int] = HOOK_WORKING_GRACE):
         self.name = name
         self.poll = poll
+        # hook_grace: apos quantos polls SEM SPINNER o marcador "working" deixa de valer. None =
+        # nunca expira. SPINNER_GLYPHS sao os do Claude; num pane cujo loader o classify nao le (o
+        # do Pi e braille, ⠋⠙⠹...), `no_spinner` sobe durante o turno inteiro e a grace derrubava o
+        # estado pra idle NO MEIO da conversa. Sem spinner legivel o marcador e a unica verdade —
+        # e a mesma politica da lista (registry.py:719, que honra o marcador sem grace nenhuma).
+        # ponytail: o preco de None e marcador "working" preso se o agente morrer mid-turn sem
+        # emitir o evento de fim; upgrade = ensinar o classify a ler o spinner desse provider.
+        self.hook_grace = hook_grace
         # sid_get: session-id VIVO da sessao (muda no /clear) -> ancora o estado nos marcadores dos
         # hooks (deterministicos) em vez de depender so da leitura visual do pane. None = so pane.
         self.sid_get = sid_get
@@ -261,7 +270,7 @@ class StateMonitor:
                     if m[0] == "idle" and state == "working":
                         state, label = "idle", None
                     elif m[0] == "working" and state == "idle" \
-                            and no_spinner < self.HOOK_WORKING_GRACE:
+                            and (self.hook_grace is None or no_spinner < self.hook_grace):
                         state = "working"
 
             status = status_line(pane)
