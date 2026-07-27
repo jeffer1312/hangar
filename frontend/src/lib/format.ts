@@ -394,7 +394,9 @@ export function ctxWindow(n: number): string {
 export function summarizeText(text: string, max = 60): string {
   const oneLine = text.replace(/\s+/g, ' ').trim();
   if (oneLine.length <= max) return oneLine;
-  return oneLine.slice(0, Math.max(0, max - 1)) + '…';
+  // Corta por CARACTERE, nao por unidade UTF-16: slice() parte emoji no meio (sao 2 unidades) e
+  // deixa meia metade orfa antes do "…". Array.from itera por code point.
+  return Array.from(oneLine).slice(0, Math.max(0, max - 1)).join('') + '…';
 }
 
 const TOOL_MAX = 72;        // valor único
