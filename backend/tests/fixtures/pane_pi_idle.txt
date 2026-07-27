@@ -1,0 +1,30 @@
+   ◉ leia <arquivo> ou read <arquivo> — ler conteúdo de arquivos
+   ◉ edite <arquivo> ou edit <arquivo> — alterar código
+   ◉ escreva <arquivo> ou write <arquivo> — criar novos arquivos
+   ◉ grep <padrão> / find <padrão> — buscar no projeto
+
+   Execução
+   ◉ execute <comando> ou bash <comando> — rodar comandos no terminal
+   ◉ npm run, python, git, etc. funcionam diretamente
+
+   Pesquisa
+   ◉ web_search <pergunta> ou pesquise <pergunta> — buscar na web
+   ◉ fetch_content <url> — extrair conteúdo de páginas
+   ◉ source_check <afirmação> — verificar uma afirmação com fontes
+
+   Subagentes e skills
+   ◉ skill <nome> ou mencione uma tarefa qualificada para ativar uma skill especializada (ex: UI, segurança, produto)
+   ◉ subagent <agente> <tarefa> — delegar trabalho para agentes especializados
+
+   Outros
+   ◉ /clear — limpar contexto da conversa
+   ◉ /help — mostrar esta ajuda
+
+   Como posso te ajudar agora?
+
+   ✻ Turn took 13s (Total time 13s · 1 turn)
+
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+🤖 kimi-for-coding (high) │ 📁 pisandbox │ 📟 cp-probe-pi │ 💬 sessão 135in/470out · cache 12k · total 13k ctx 13k/26...

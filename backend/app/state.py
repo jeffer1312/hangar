@@ -13,18 +13,28 @@ _OPTION_RE = re.compile(r"^\s*❯?\s*\d+\.\s+(.*\S)\s*$")
 _BOX_SPLIT_RE = re.compile(r"[│╭╮╰╯]")
 _CURSOR_RE = re.compile(r"^\s*❯\s*\d+\.\s", re.M)
 _RULE_RE = re.compile(r"^[\s─]*─{10,}[\s─]*$")  # a horizontal rule (the input box border)
+# Rodape da caixa ARREDONDADA do composer (`╰───╯`), que e como o Pi desenha o input — ele nunca
+# imprime a regua reta do Claude. Sem esta ancora um pane do Pi nao casava nada e o fallback
+# devolvia as 2 ultimas linhas nao-vazias, isto e, a borda da caixa (ou conversa) no lugar do chip
+# de modelo/contexto/custo. Claude/Codex ficam intactos: o banner de boas-vindas do Claude tambem
+# tem `╰───╯`, mas vem ANTES da regua do input, e a ancora e sempre a MAIS BAIXA das duas.
+# ponytail: desenho da caixa e calibration knob, igual ao _LOGIN_RE abaixo — se o Pi trocar a
+# moldura, ajustar AQUI.
+_BOX_BOTTOM_RE = re.compile(r"^\s*╰[─\s]*╯\s*$")
 
 
 def status_line(pane_text: str) -> Optional[str]:
     """The raw bottom chrome — the user's custom statusline + the mode line — returned
     verbatim so the web shows exactly what the terminal shows (each user has their own).
 
-    It lives below the input box, i.e. after the last horizontal rule in the pane.
+    It lives below the input box, i.e. after the last horizontal rule (Claude) or the last
+    rounded composer box (Pi). No chrome below it -> None: an agent without a statusline
+    extension shows NOTHING, never a slice of the conversation.
     """
     lines = pane_text.splitlines()
     last_rule = -1
     for i, ln in enumerate(lines):
-        if _RULE_RE.match(ln):
+        if _RULE_RE.match(ln) or _BOX_BOTTOM_RE.match(ln):
             last_rule = i
     if last_rule >= 0:
         chrome = [ln.rstrip() for ln in lines[last_rule + 1:] if ln.strip()]
