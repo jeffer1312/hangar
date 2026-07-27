@@ -384,6 +384,103 @@ export function ctxWindow(n: number): string {
   return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
 }
 
+// ── Linha colapsada de uma tool call (ToolCard/ToolGroup) ───────────────────
+// Regras copiadas do pi-claude-code-ui (extensions/index.ts: summarizeText/getToolArgSummary/
+// summarizeOpenAiToolCall): argumento saliente por ferramenta, cortado em 72 chars; quando o input
+// carrega VÁRIOS valores, o primeiro cai pra 48 e sobra espaço pro contador "(+N …)".
+
+// Corta pra UMA linha com no máximo `max` chars — o "…" conta como um deles (a linha do chat é
+// nowrap + ellipsis, então o orçamento tem que ser exato pra não haver dois cortes seguidos).
+export function summarizeText(text: string, max = 60): string {
+  const oneLine = text.replace(/\s+/g, ' ').trim();
+  if (oneLine.length <= max) return oneLine;
+  return oneLine.slice(0, Math.max(0, max - 1)) + '…';
+}
+
+const TOOL_MAX = 72;        // valor único
+const TOOL_MAX_FIRST = 48;  // primeiro de vários (o resto vira "(+N …)")
+
+// Chaves cujo valor é uma LISTA + o plural pt-BR do contador.
+const MULTI_KEYS: Record<string, string> = {
+  queries: 'consultas',
+  urls: 'urls',
+  paths: 'arquivos',
+  file_paths: 'arquivos',
+};
+// Ordem de preferência do fallback genérico: a chave saliente vem primeiro, não a 1ª do objeto
+// (a ordem do JSON do transcript não é contrato).
+const PREFERRED_KEYS = ['file_path', 'path', 'command', 'query', 'url', 'pattern', 'name', 'description', 'prompt'];
+
+function strList(v: unknown): string[] {
+  return Array.isArray(v) ? v.map((x) => String(x)).filter(Boolean) : [];
+}
+
+// Um valor -> 72 chars. Vários -> 1º em 48 + "(+N <noun>)".
+function summarizeValues(values: string[], noun: string): string {
+  if (!values.length) return '';
+  if (values.length === 1) return summarizeText(values[0], TOOL_MAX);
+  return `${summarizeText(values[0], TOOL_MAX_FIRST)} (+${values.length - 1} ${noun})`;
+}
+
+export function summarizeToolInput(
+  toolName: string | null | undefined,
+  input: Record<string, unknown> | null | undefined,
+): string {
+  if (!input) return '';
+  const name = toolName ?? '';
+  const one = (k: string) => {
+    const v = input[k];
+    return v === null || v === undefined ? '' : String(v);
+  };
+
+  if (name === 'Write' || name === 'Read' || name === 'Edit') {
+    const p = summarizeText(one('file_path') || one('path'), TOOL_MAX);
+    return p ? `path: ${p}` : '';
+  }
+  if (name === 'Bash') {
+    const cmd = summarizeText(one('command'), TOOL_MAX);
+    return cmd ? `cmd: ${cmd}` : '';
+  }
+  if (name === 'Grep' || name === 'Glob') {
+    // O argumento saliente e o PADRAO, nunca o diretorio (o pacote faz `"pattern" in path`); sem
+    // este ramo o fallback preferiria `path` e a linha esconderia o que foi procurado.
+    const pat = summarizeText(one('pattern'), TOOL_MAX);
+    const p = one('path');
+    return pat ? `pattern: ${pat}${p ? ` em ${p}` : ''}` : '';
+  }
+  if (name === 'WebSearch') {
+    // A tool do Claude Code manda `query` (uma só); `queries` é a forma do pacote/outros provedores.
+    const q = one('query')
+      ? summarizeText(one('query'), TOOL_MAX)
+      : summarizeValues(strList(input['queries']), MULTI_KEYS.queries);
+    return q ? `query: ${q}` : '';
+  }
+  if (name === 'WebFetch') {
+    const u = one('url') ? summarizeText(one('url'), TOOL_MAX) : summarizeValues(strList(input['urls']), MULTI_KEYS.urls);
+    return u ? `url: ${u}` : '';
+  }
+
+  const keys = Object.keys(input);
+  const key = PREFERRED_KEYS.find((k) => keys.includes(k) && (one(k) || strList(input[k]).length)) ?? keys[0];
+  if (!key) return '';
+  const list = strList(input[key]);
+  const value = list.length ? summarizeValues(list, MULTI_KEYS[key] ?? 'itens') : summarizeText(one(key), TOOL_MAX);
+  return value ? `${key}: ${value}` : '';
+}
+
+// Tamanho do resultado, pra dar pra ver sem expandir se a tool voltou 1 linha ou 200 ("N line(s)
+// returned" do pacote). Erro mostra a PRIMEIRA LINHA do erro no lugar da contagem — é a informação
+// que importa quando falhou. Sem resultado (ainda rodando, ou vazio) -> string vazia.
+export function summarizeToolResult(
+  result: { result?: string | null; is_error?: boolean | null } | null | undefined,
+): string {
+  const raw = (result?.result ?? '').trim();
+  if (!raw) return '';
+  const lines = raw.split('\n');
+  if (result?.is_error) return summarizeText(lines[0], TOOL_MAX);
+  return lines.length === 1 ? '1 linha' : `${lines.length} linhas`;
+}
+
 // Abrevia contagem grande: 3668662 -> "3.7M", 1.5e9 -> "1.5B", 999 -> "999".
 export function abbrevNum(n: number): string {
   for (const [div, suf] of [[1e9, 'B'], [1e6, 'M'], [1e3, 'K']] as const) {

@@ -3,6 +3,7 @@ import {
   abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, fmtWhen, groupSelectedByServer, initials, nextAwaiting,
   projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent, resetsIn,
   clusterByPair, sortSessions, bubblesFromTail, ctxWindow, fileKind, fmtBytes, providerName,
+  summarizeText, summarizeToolInput, summarizeToolResult,
 } from './format';
 import type { ChatEvent, State } from './types';
 
@@ -491,5 +492,86 @@ describe('providerName', () => {
   it('falls back to Claude when the field is absent (backend default)', () => {
     expect(providerName(undefined)).toBe('Claude');
     expect(providerName(null)).toBe('Claude');
+  });
+});
+
+describe('summarizeText', () => {
+  it('deixa passar o que cabe no limite', () => {
+    expect(summarizeText('abc', 5)).toBe('abc');
+    expect(summarizeText('abcde', 5)).toBe('abcde');   // fronteira: == max fica inteiro
+  });
+
+  it('corta em max chars CONTANDO o reticencia', () => {
+    expect(summarizeText('abcdef', 5)).toBe('abcd…');
+    expect(summarizeText('abcdef', 5)).toHaveLength(5);
+  });
+
+  it('achata quebra de linha num espaco (a linha do chat e nowrap)', () => {
+    expect(summarizeText('foo\n  bar\tbaz  ')).toBe('foo bar baz');
+  });
+});
+
+describe('summarizeToolInput', () => {
+  it('mantem os resumos que ja existiam', () => {
+    expect(summarizeToolInput('Read', { file_path: '/tmp/x.ts' })).toBe('path: /tmp/x.ts');
+    expect(summarizeToolInput('Write', { path: '/tmp/y.ts' })).toBe('path: /tmp/y.ts');
+    expect(summarizeToolInput('Bash', { command: 'npm test' })).toBe('cmd: npm test');
+    expect(summarizeToolInput('WebSearch', { query: 'svelte 5 runes' })).toBe('query: svelte 5 runes');
+    expect(summarizeToolInput('WebFetch', { url: 'https://x.dev' })).toBe('url: https://x.dev');
+    expect(summarizeToolInput('Grep', { pattern: 'foo' })).toBe('pattern: foo');
+  });
+
+  it('Grep/Glob mostram o padrao (nao o diretorio), com o onde depois', () => {
+    expect(summarizeToolInput('Grep', { pattern: 'foo', path: '/tmp' })).toBe('pattern: foo em /tmp');
+    expect(summarizeToolInput('Glob', { pattern: '**/*.ts' })).toBe('pattern: **/*.ts');
+  });
+
+  it('corta valor unico em 72 chars', () => {
+    const cmd = 'x'.repeat(200);
+    const out = summarizeToolInput('Bash', { command: cmd });
+    expect(out).toBe(`cmd: ${'x'.repeat(71)}…`);
+    expect(out.slice('cmd: '.length)).toHaveLength(72);
+  });
+
+  it('varias queries: 1a em 48 + contador mudo', () => {
+    expect(summarizeToolInput('WebSearch', { queries: ['a', 'b', 'c'] })).toBe('query: a (+2 consultas)');
+    const long = 'y'.repeat(100);
+    expect(summarizeToolInput('WebSearch', { queries: [long, 'b'] })).toBe(`query: ${'y'.repeat(47)}… (+1 consultas)`);
+  });
+
+  it('uma query so na lista usa o limite cheio de 72', () => {
+    const long = 'z'.repeat(100);
+    expect(summarizeToolInput('WebSearch', { queries: [long] })).toBe(`query: ${'z'.repeat(71)}…`);
+  });
+
+  it('escolhe a chave saliente, nao a 1a do objeto', () => {
+    expect(summarizeToolInput('Task', { subagent_type: 'x', description: 'mapear a UI' })).toBe('description: mapear a UI');
+  });
+
+  it('sem input / sem valor -> sem resumo', () => {
+    expect(summarizeToolInput('Bash', null)).toBe('');
+    expect(summarizeToolInput('Bash', {})).toBe('');
+    expect(summarizeToolInput('Read', { file_path: '' })).toBe('');
+  });
+});
+
+describe('summarizeToolResult', () => {
+  it('conta as linhas, com singular', () => {
+    expect(summarizeToolResult({ result: 'so uma' })).toBe('1 linha');
+    expect(summarizeToolResult({ result: Array.from({ length: 40 }, (_, i) => `l${i}`).join('\n') })).toBe('40 linhas');
+  });
+
+  it('erro mostra a PRIMEIRA LINHA do erro no lugar da contagem', () => {
+    expect(summarizeToolResult({ result: 'File does not exist.\nstack\nstack', is_error: true }))
+      .toBe('File does not exist.');
+  });
+
+  it('erro longo tambem respeita o limite de 72', () => {
+    expect(summarizeToolResult({ result: 'e'.repeat(100), is_error: true })).toBe(`${'e'.repeat(71)}…`);
+  });
+
+  it('ainda rodando / resultado vazio -> nada na linha', () => {
+    expect(summarizeToolResult(null)).toBe('');
+    expect(summarizeToolResult({ result: '   \n ' })).toBe('');
   });
 });

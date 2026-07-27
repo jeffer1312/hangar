@@ -34,6 +34,12 @@
   });
 </script>
 
+<!-- Uma ferramenta so nao e grupo: "Executou 1 ferramenta ›" esconderia a query atras de um tap a
+     mais. Desenha a linha do ToolCard direto (a regra de agrupar vive no MessageList, mas o guarda
+     fica aqui pra valer pra qualquer chamador). -->
+{#if tools.length === 1}
+  <ToolCard event={tools[0]} result={resultOf(tools[0])} {sessionName} {animate} />
+{:else}
 <div class="tg" class:noanim={!animate}>
   <div
     class="tg-head"
@@ -60,6 +66,7 @@
     </div>
   {/if}
 </div>
+{/if}
 
 <style>
   .tg { margin-bottom: var(--space-1); animation: bubble-in 180ms ease-out both; }
