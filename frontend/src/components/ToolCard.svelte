@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ChatEvent } from '../lib/types';
-  import { parseFilePaths } from '../lib/format';
+  import { parseFilePaths, summarizeToolInput, summarizeToolResult } from '../lib/format';
   import FileAttachment from './FileAttachment.svelte';
 
   interface Props {
@@ -34,29 +34,11 @@
     phase === 'pending' ? 'Executando' : phase === 'error' ? 'Falhou' : 'Executou'
   );
 
-  function summarizeInput(toolName: string | null | undefined, input: Record<string, unknown> | null | undefined): string {
-    if (!input) return '';
-    const name = toolName ?? '';
-    if (['Write', 'Read', 'Edit'].includes(name)) {
-      const p = (input['file_path'] ?? input['path']) as string | undefined;
-      return p ? `path: ${p}` : '';
-    }
-    if (name === 'Bash') {
-      const cmd = (input['command'] as string | undefined) ?? '';
-      return `cmd: ${cmd.slice(0, 60)}${cmd.length > 60 ? '…' : ''}`;
-    }
-    if (name === 'WebSearch') {
-      return `query: ${input['query'] ?? ''}`;
-    }
-    if (name === 'WebFetch') {
-      return `url: ${input['url'] ?? ''}`;
-    }
-    const keys = Object.keys(input);
-    if (!keys.length) return '';
-    return `${keys[0]}: ${String(input[keys[0]]).slice(0, 60)}`;
-  }
+  const summary = $derived(summarizeToolInput(event.tool_name, event.tool_input));
 
-  const summary = $derived(summarizeInput(event.tool_name, event.tool_input));
+  // Tamanho do que voltou ("40 linhas") na propria linha colapsada — sem isso so da pra saber
+  // expandindo. Erro mostra a 1a linha do erro no lugar da contagem.
+  const resultInfo = $derived(summarizeToolResult(result));
 
   // Bash com run_in_background retorna NA HORA (vira shell destacado) -> "Executou" engana. Marca
   // como background; a saida viva chega depois pelos cards de BashOutput (o agente puxa via bash_id).
@@ -80,9 +62,14 @@
     {#if phase === 'pending'}
       <span class="row-spin" aria-label="Executando…">⟳</span>
     {/if}
+    <!-- Separador como EXPRESSAO ({' · '}): espaco literal na 1a posicao de um {#if} e comido pelo
+         compilador, e a linha saia "Bash· cmd: …". -->
     <span class="row-label">
-      {label} <span class="row-tool">{event.tool_name ?? 'Tool'}</span>{#if isBackground}<span class="row-badge">background</span>{/if}{#if summary} · {summary}{/if}
+      {label} <span class="row-tool">{event.tool_name ?? 'Tool'}</span>{#if isBackground}<span class="row-badge">background</span>{/if}{#if summary}{' · '}{summary}{/if}
     </span>
+    <!-- Fora do .row-label de proposito: no celular a linha e estreita e o argumento come a largura
+         toda — dentro do label, o "40 linhas" morria no ellipsis justo onde ele mais serve. -->
+    {#if resultInfo}<span class="row-count">{resultInfo}</span>{/if}
     <span class="row-chevron" class:open={expanded} aria-hidden="true">›</span>
   </div>
 
@@ -151,7 +138,20 @@
     background: var(--accent-dim);
   }
 
-  .tool-row--error .row-label {
+  /* Tamanho do resultado ("40 linhas") / 1a linha do erro: nunca encolhe abaixo do proprio texto,
+     mas nao passa de metade da linha (erro comprido nao pode zerar o argumento). */
+  .row-count {
+    flex-shrink: 0;
+    max-width: 50%;
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .tool-row--error .row-label,
+  .tool-row--error .row-count {
     color: var(--error);
   }
 
