@@ -27,6 +27,23 @@ def test_list_sessions_empty_when_no_server():
         assert tmux.list_sessions() == []
 
 
+def test_list_panes_active_parses_pane_id():
+    # #{pane_id} e o 5o campo (Task 5 do adapter Pi: bilhete da extensao e por-pane). Uma linha com o
+    # formato ANTIGO de 4 campos tem de ser rejeitada, senao um tmux desatualizado alimentaria pid/cwd
+    # errados no lugar do pane_id.
+    fake = MagicMock(stdout="cc\t1\t123\t/home/u/p\t%9\n", returncode=0)
+    with patch.object(tmux, "RUN", return_value=fake):
+        assert tmux.list_panes_active() == [
+            {"name": "cc", "pid": 123, "cwd": "/home/u/p", "pane_id": "%9"},
+        ]
+
+
+def test_list_panes_active_rejects_the_old_four_field_format():
+    fake = MagicMock(stdout="cc\t1\t123\t/home/u/p\n", returncode=0)
+    with patch.object(tmux, "RUN", return_value=fake):
+        assert tmux.list_panes_active() == []
+
+
 def test_send_keys_literal_uses_dashdash():
     with patch.object(tmux, "RUN", return_value=MagicMock(returncode=0)) as run:
         tmux.send_keys("cc", "echo hi", literal=True)
