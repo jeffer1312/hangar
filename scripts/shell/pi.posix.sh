@@ -15,6 +15,12 @@
 #    "continue previous session" short flag) — injecting --session-id alongside any of these either
 #    errors or silently overrides what the user asked for (e.g. `pi -c` would start a FRESH random
 #    session instead of continuing the last one).
+#  - not an interactive session at all -> raw, exactly like the codex wrapper leaves its subcommands
+#    alone. Two shapes: (a) the FIRST argument is one of pi's subcommands (install/remove/uninstall/
+#    update/list/config) — matched on the first argument only, so `pi "remove the dead code"` stays an
+#    interactive launch with an initial prompt; (b) a flag that makes pi print and exit anywhere in the
+#    args (-p/--print, --mode, --list-models, --export, --help/-h, --version/-v). Wrapping these was
+#    the bug: `pi remove npm:foo` opened the TUI and never removed anything.
 #  - already in tmux ($TMUX) / stdin not a tty (pipe/script) -> only inject the id + export the var.
 #  - outside tmux + interactive -> create a tmux session named after the folder BASENAME (suffix
 #     -2/-3 if it already exists) and run pi (with the id) inside it. Quitting pi ends the command,
@@ -32,10 +38,23 @@
 # Escape hatch: `command pi ...` runs the raw binary, bypassing this wrapper.
 pi() {
     local a
-    # respect flags that manage their own session (injecting --session-id alongside them errors)
+    # subcomando: só vale como PRIMEIRO argumento (`pi remove x` é subcomando; `pi "remove x"` é prompt).
+    case "${1:-}" in
+        install|remove|uninstall|update|list|config)
+            command pi "$@"
+            return
+            ;;
+    esac
+
     for a in "$@"; do
         case "$a" in
+            # flags que gerenciam a própria sessão (injetar --session-id junto erra ou sobrescreve)
             --session-id|--session-id=*|--resume|--resume=*|-r|--continue|-c|--session|--session=*|--fork|--fork=*|--no-session)
+                command pi "$@"
+                return
+                ;;
+            # usos não interativos: o pi imprime e sai, não tem TUI pra envolver em tmux
+            -p|--print|--mode|--mode=*|--list-models|--list-models=*|--export|--export=*|--help|-h|--version|-v)
                 command pi "$@"
                 return
                 ;;
