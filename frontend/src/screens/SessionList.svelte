@@ -19,7 +19,7 @@
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
   import { getSessions, createSession, deleteSession, renameSession, resumeSession, broadcast } from '../lib/api';
   import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, renameServer, updateServer, serverColor } from '../lib/auth';
-  import type { AggSession, ResumeCandidate } from '../lib/types';
+  import type { AggSession, ResumeCandidate, Provider } from '../lib/types';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, sortSessions, clusterByPair } from '../lib/format';
   import { updateBadge } from '../lib/badge';
@@ -310,7 +310,7 @@
 
   // O sheet de criar já posicionou o servidor-alvo como ativo (selectServer), então createSession
   // cai no servidor certo. O stream SSE emitirá um evento sessions com a sessão nova.
-  async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: 'claude' | 'codex',
+  async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: Provider,
                               engine?: string | null) {
     await createSession(name, cwd, configDir, provider, engine);
   }

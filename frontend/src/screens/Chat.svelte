@@ -36,7 +36,7 @@
   import { parseStatusLine } from '../lib/statusline';
   import { listServers, getActiveId } from '../lib/auth';
   import { createActivityFolder } from '../lib/activity';
-  import type { ChatEvent, StateEvent, State, SessionInfo, AskQuestionPayload, AnswerItem } from '../lib/types';
+  import type { ChatEvent, StateEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider } from '../lib/types';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
   import { stateLabels, stateColors, countAwaiting, nextAwaiting, providerName } from '../lib/format';
 
@@ -189,7 +189,7 @@
     createOpen = true;
   }
 
-  async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: 'claude' | 'codex',
+  async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: Provider,
                               engine?: string | null) {
     await createSession(name, cwd, configDir, provider, engine);
     onNavigateToChat(name);

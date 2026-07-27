@@ -3,23 +3,26 @@
   import BottomSheet from './BottomSheet.svelte';
   import FolderScanner from './FolderScanner.svelte';
   import { getSessions, listClaudeConfigs, getEngines, type Motor } from '../lib/api';
-  import { basename } from '../lib/format';
+  import { basename, providerName } from '../lib/format';
   import { selectServer, getActiveId, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
-  import type { SessionInfo, ConfigDirInfo } from '../lib/types';
+  import type { SessionInfo, ConfigDirInfo, Provider } from '../lib/types';
 
   interface Props {
     open: boolean;
     servers: Server[];
     onClose: () => void;
-    onCreate: (name: string, cwd?: string, configDir?: string | null, provider?: 'claude' | 'codex',
+    onCreate: (name: string, cwd?: string, configDir?: string | null, provider?: Provider,
                engine?: string | null) => Promise<void>;
     onOpenSession: (name: string) => void;
   }
   let { open, servers, onClose, onCreate, onOpenSession }: Props = $props();
 
-  // Provider da sessao nova: Claude (padrao, tmux) ou Codex (app-server, sem tmux/config_dir).
-  let provider = $state<'claude' | 'codex'>('claude');
+  // Provider da sessao nova: Claude (padrao, tmux), Codex (app-server, sem tmux/config_dir) ou Pi
+  // (pane tmux como o Claude, mas sem config_dir e sem motor — o backend recusa motor fora do Claude
+  // com 400, entao os dois pickers abaixo seguem Claude-only).
+  const PROVIDERS: Provider[] = ['claude', 'codex', 'pi'];
+  let provider = $state<Provider>('claude');
 
   // Servidor-alvo da nova sessão. Como o scanner/dedupe/criação leem o servidor ATIVO, escolher
   // aqui = selectServer(id): todas as chamadas seguintes do sheet caem nesse backend.
@@ -252,18 +255,15 @@
       <div class="field">
         <span class="field-label">Provider</span>
         <div class="provider-toggle" role="group" aria-label="Provider da sessão">
-          <button
-            type="button"
-            class="provider-btn"
-            class:on={provider === 'claude'}
-            onclick={() => (provider = 'claude')}
-          >Claude</button>
-          <button
-            type="button"
-            class="provider-btn"
-            class:on={provider === 'codex'}
-            onclick={() => (provider = 'codex')}
-          >Codex</button>
+          {#each PROVIDERS as p (p)}
+            <button
+              type="button"
+              class="provider-btn"
+              class:on={provider === p}
+              aria-pressed={provider === p}
+              onclick={() => (provider = p)}
+            >{providerName(p)}</button>
+          {/each}
         </div>
       </div>
 
@@ -348,7 +348,7 @@
     width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
   }
 
-  /* Toggle Claude/Codex (mesmo visual dos chips de servidor). */
+  /* Toggle de provider (mesmo visual dos chips de servidor). */
   .provider-toggle {
     display: flex;
     gap: var(--space-2);
