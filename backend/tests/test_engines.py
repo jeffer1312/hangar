@@ -391,3 +391,96 @@ def test_modulo_e_stdlib_pura():
         if isinstance(n, ast.Import) for a in n.names
     }
     assert not (importados & {"app", "pydantic", "fastapi", "httpx", "httpx2"})
+
+
+def test_bundled_skills_desligadas_por_padrao_no_motor():
+    """Skill empacotada injeta a árvore inteira num turno — medido: a `claude-api` (64 arquivos, sem
+    SKILL.md na raiz) colou 847.630 chars / 206.553 tokens numa sessão gpt-5.6-sol, levando a janela
+    de 12% a 67% e matando a sessão no turno seguinte. Motor não tem a poda server-side da Anthropic,
+    então o default é desligado; quem quiser liga explicitamente."""
+    eng.salvar("kimi", _kimi())
+    assert eng.env_de("kimi")["CLAUDE_CODE_DISABLE_BUNDLED_SKILLS"] == "1"
+
+
+def test_bundled_skills_ligadas_nao_exportam_a_var():
+    dados = _kimi() | {"bundled_skills": True}
+    eng.salvar("kimi", dados)
+    assert "CLAUDE_CODE_DISABLE_BUNDLED_SKILLS" not in eng.env_de("kimi")
+
+
+def test_betas_experimentais_desligados_por_padrao_no_motor():
+    """`400 Extra inputs are not permitted` citando context_management é o sintoma documentado de um
+    upstream de terceiro recusando os campos beta que o CC manda sozinho."""
+    eng.salvar("kimi", _kimi())
+    assert eng.env_de("kimi")["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] == "1"
+
+
+def test_prompt_caching_fica_ligado_sem_pedido_explicito():
+    """Default LIGADO: cache é economia e já degrada calado em gateway. Só sai com false explícito."""
+    eng.salvar("kimi", _kimi())
+    assert "DISABLE_PROMPT_CACHING" not in eng.env_de("kimi")
+    eng.salvar("kimi", _kimi() | {"prompt_caching": False})
+    assert eng.env_de("kimi")["DISABLE_PROMPT_CACHING"] == "1"
+
+
+def test_adaptive_thinking_fica_ligado_sem_pedido_explicito():
+    """Desligar thinking REBAIXA o modelo em alguns provedores (doc da Kimi: K3 -> K2.6), então isto
+    nunca pode sair de um default — só de escolha explícita."""
+    eng.salvar("kimi", _kimi())
+    assert "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING" not in eng.env_de("kimi")
+    eng.salvar("kimi", _kimi() | {"adaptive_thinking": False})
+    assert eng.env_de("kimi")["CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING"] == "1"
+
+
+def test_opt_ins_so_saem_quando_marcados():
+    eng.salvar("kimi", _kimi())
+    env = eng.env_de("kimi")
+    assert "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY" not in env
+    assert "CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING" not in env
+    eng.salvar("kimi", _kimi() | {"gateway_model_discovery": True,
+                                  "fine_grained_tool_streaming": True})
+    env = eng.env_de("kimi")
+    assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
+    assert env["CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING"] == "1"
+
+
+def test_janelas_numericas_so_saem_com_valor():
+    eng.salvar("kimi", _kimi())
+    env = eng.env_de("kimi")
+    assert "CLAUDE_CODE_AUTO_COMPACT_WINDOW" not in env
+    assert "CLAUDE_CODE_MAX_OUTPUT_TOKENS" not in env
+    eng.salvar("kimi", _kimi() | {"auto_compact_window": 150000, "max_output_tokens": 16000})
+    env = eng.env_de("kimi")
+    assert env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "150000"
+    assert env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "16000"
+
+
+def test_tool_search_nao_e_efetivo_sem_os_betas():
+    """Dependência documentada: DISABLE_EXPERIMENTAL_BETAS mantém tool search off e ENABLE_TOOL_SEARCH
+    não sobrepõe. O env reflete o pedido; quem avisa o usuário é a UI (toggle desabilitado)."""
+    eng.salvar("kimi", _kimi() | {"tool_search": True})
+    env = eng.env_de("kimi")
+    assert "ENABLE_TOOL_SEARCH" not in env                       # tool_search=true não emite a var
+    assert env["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] == "1"  # ...mas os betas seguem off
+
+
+@pytest.mark.parametrize("campo", ["context_window", "auto_compact_window", "max_output_tokens"])
+def test_env_de_rejeita_inteiro_negativo_hand_editado(campo, tmp_path, monkeypatch):
+    """engines.json é hand-editável e `_normalizar` só roda no SAVE. Um negativo no disco virava
+    `CLAUDE_CODE_MAX_CONTEXT_TOKENS=-1000` — o Claude Code não valida, então a sessão subia com uma
+    janela absurda e a falha aparecia longe da causa. Recusa aqui, como já se faz com string
+    envenenada."""
+    eng.salvar("kimi", _kimi())
+    bruto = json.loads((tmp_path / "engines.json").read_text())
+    bruto["kimi"][campo] = -1000
+    (tmp_path / "engines.json").write_text(json.dumps(bruto))
+    with pytest.raises(ValueError, match="maior que zero"):
+        eng.env_de("kimi")
+
+
+@pytest.mark.parametrize("campo", ["auto_compact_window", "max_output_tokens"])
+def test_salvar_rejeita_janela_nao_positiva(campo):
+    with pytest.raises(ValueError, match="maior que zero"):
+        eng.salvar("kimi", _kimi() | {campo: 0})
+    with pytest.raises(ValueError, match="esperado número"):
+        eng.salvar("kimi", _kimi() | {campo: "abc"})

@@ -38,7 +38,18 @@ _CAMPOS: dict[str, type] = {
     "subagent_model": str,   # -> CLAUDE_CODE_SUBAGENT_MODEL; vazio = mesmo modelo principal
     "context_window": int,   # -> CLAUDE_CODE_MAX_CONTEXT_TOKENS
     "vision": bool,          # informativo; vem do /v1/models do provedor
-    "tool_search": bool,     # ver env_de
+    # Capacidades do harness. TODAS são positivas ("true = ligado") mesmo quando a env var do Claude
+    # Code é negativa (DISABLE_*): misturar as duas polaridades num formulário faz o usuário marcar
+    # uma caixa pra desligar algo. env_de() faz a tradução; a UI só mostra capacidade.
+    "tool_search": bool,                  # ver env_de
+    "bundled_skills": bool,               # ver env_de
+    "experimental_betas": bool,           # ver env_de
+    "prompt_caching": bool,               # ver env_de
+    "adaptive_thinking": bool,            # ver env_de
+    "gateway_model_discovery": bool,      # ver env_de
+    "fine_grained_tool_streaming": bool,  # ver env_de
+    "auto_compact_window": int,           # -> CLAUDE_CODE_AUTO_COMPACT_WINDOW
+    "max_output_tokens": int,             # -> CLAUDE_CODE_MAX_OUTPUT_TOKENS
 }
 _OBRIGATORIOS = ("base_url", "api_key", "model")
 
@@ -224,6 +235,24 @@ def _gravar(tudo: dict[str, Any]) -> None:
         raise
 
 
+def _inteiro_positivo(campo: str, valor: Any) -> int:
+    """Normaliza um campo int na hora de virar env var, ou estoura.
+
+    `_normalizar` já rejeita não-numérico e `<= 0` no SAVE, mas o engines.json é hand-editável: um
+    valor negativo lá passava direto e virava `CLAUDE_CODE_MAX_CONTEXT_TOKENS=-1000` — o Claude Code
+    não valida isso, então a sessão subia com uma janela absurda e a falha aparecia longe da causa.
+    Falhar aqui é a mesma escolha que _PROIBIDO_NO_VALOR faz para os campos string: recusar o
+    arquivo envenenado em vez de exportar um valor que ninguém mais confere.
+    """
+    try:
+        n = int(valor)
+    except (TypeError, ValueError):
+        raise ValueError(f"{campo}: esperado número") from None
+    if n <= 0:
+        raise ValueError(f"{campo}: deve ser maior que zero")
+    return n
+
+
 def env_de(nome: str) -> dict[str, str]:
     """Variáveis de ambiente que fazem uma sessão rodar neste motor.
 
@@ -264,13 +293,54 @@ def env_de(nome: str) -> dict[str, str]:
         # MAX_CONTEXT_TOKENS, nao AUTO_COMPACT_WINDOW: medido nos dois provedores, a segunda nao move
         # a janela (o /context seguia em 200k) e a primeira move. Sem isto, um modelo de 256k/500k
         # compacta em ~167k — capacidade jogada fora, calado.
-        # int(...) normaliza: hand-edited JSON pode trazer um valor não-numérico (o contrato do
-        # campo é int); isso falha alto aqui em vez de vazar uma linha extra no `cp-engine --env`
-        # (mesma classe de ataque que _PROIBIDO_NO_VALOR cobre para os campos string).
-        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(int(e["context_window"]))
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(_inteiro_positivo("context_window", e["context_window"]))
+    if e.get("bundled_skills") is not True:
+        # Default desligado por MEDIÇÃO: a skill empacotada `claude-api` não tem SKILL.md na raiz, e
+        # invocá-la injeta os 64 arquivos dela de uma vez — medido em 847.630 chars / 206.553 tokens
+        # num único turno (12% -> 67% da janela numa sessão gpt-5.6-sol de 372k). O gatilho dela é
+        # amplo ("o prompt cita Claude/Anthropic em qualquer forma"), então um "qual modelo você é?"
+        # basta. Na conta Anthropic isso passa (janela maior + poda server-side via
+        # context_management, que nenhum provedor de terceiro implementa); num motor, mata a sessão.
+        # Só as BUNDLED caem: plugin e ~/.claude/skills/ seguem intactas.
+        env["CLAUDE_CODE_DISABLE_BUNDLED_SKILLS"] = "1"
     if e.get("tool_search") is not True:
         # Default desligado por FAIL-SAFE, não por medição: a doc da Moonshot diz que o endpoint do
         # Kimi ainda não suporta Tool Search, e um erro no meio do turno é pior que uma ferramenta a
         # menos. Provedor que suportar liga com "tool_search": true.
+        # Confirmado pela doc depois: o próprio Claude Code já desliga tool search quando
+        # ANTHROPIC_BASE_URL aponta pra host não-first-party, "since most proxies do not forward
+        # tool_reference blocks". Manter explícito não custa e vale pro gateway que se anuncia
+        # first-party.
         env["ENABLE_TOOL_SEARCH"] = "false"
+    if e.get("experimental_betas") is not True:
+        # Default desligado: campos beta que o CC manda sozinho (context_management, campos beta de
+        # tool) fazem o upstream de terceiro devolver `400 Extra inputs are not permitted`. A doc do
+        # gateway lista essa var como a remediação do lado do cliente.
+        # ATENÇÃO à dependência: com isto ligado, tool search fica off e ENABLE_TOOL_SEARCH NÃO
+        # consegue sobrepor — por isso a UI desabilita aquele toggle quando este está desmarcado.
+        # NÃO cobre `output_config`/effort: a doc não lista remediação de cliente pra esse campo.
+        env["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"
+    if e.get("prompt_caching") is False:
+        # Default LIGADO (só desliga com false explícito): cache é economia, e num gateway ele já
+        # degrada sozinho e calado — "if the gateway rejects the cache breakpoint, Claude Code
+        # retries without it and leaves that block uncached for the rest of the conversation".
+        # Desligar de propósito só faz sentido em provedor que cobra o cache mais caro que o miss.
+        env["DISABLE_PROMPT_CACHING"] = "1"
+    if e.get("adaptive_thinking") is False:
+        # Default LIGADO. Desligar thinking é destrutivo em alguns provedores: a doc da Kimi diz que
+        # "disabling thinking routes both K3 and K2.7 Code to K2.6" — ou seja, rebaixa o modelo
+        # calado. Só marque false se o upstream devolver 400 citando `thinking`/`adaptive`.
+        env["CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING"] = "1"
+    if e.get("gateway_model_discovery") is True:
+        # Opt-in: consulta /v1/models do gateway e popula o picker /model. Fora por padrão porque é
+        # uma chamada extra a um endpoint que nem todo gateway expõe.
+        env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
+    if e.get("fine_grained_tool_streaming") is True:
+        # Opt-in: o CC desliga por padrão atrás de base URL custom.
+        env["CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING"] = "1"
+    for campo, var in (("auto_compact_window", "CLAUDE_CODE_AUTO_COMPACT_WINDOW"),
+                       ("max_output_tokens", "CLAUDE_CODE_MAX_OUTPUT_TOKENS")):
+        if e.get(campo):
+            # Sem valor = não inventa a var (o CC usa o default dele).
+            env[var] = str(_inteiro_positivo(campo, e[campo]))
     return env
