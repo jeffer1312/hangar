@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Install the claude-cockpit interactive `claude` and `codex` wrappers.
+# Install the claude-cockpit interactive `claude`, `codex` and `pi` wrappers.
 #
-# The wrapper makes every interactive `claude` trackable by the app: it injects a unique
-# --session-id (so two claudes in the same folder never leak/overwrite each other) and launches
-# claude inside a tmux session named after the folder (the app only lists tmux sessions). See
-# scripts/shell/claude.fish and scripts/shell/claude.posix.sh.
+# The wrapper makes every interactive `claude`/`pi` trackable by the app: it injects a unique
+# --session-id (so two claudes/pis in the same folder never leak/overwrite each other) and launches
+# it inside a tmux session named after the folder (the app only lists tmux sessions). See
+# scripts/shell/claude.fish + claude.posix.sh, and their pi.fish / pi.posix.sh twins.
 #
 # It also (opt-in) sets the claude-pocket statusline as your Claude Code statusLine, so the app can
 # parse model / context / cost / rate-limit reliably (the parser expects that format). See
@@ -75,12 +75,13 @@ ensure_block() {
 install_posix() {  # $1 = rc file
   ensure_block "$1" "source \"$SHELL_DIR/claude.posix.sh\"
 source \"$SHELL_DIR/codex.posix.sh\"
-source \"$SHELL_DIR/claude-engine.posix.sh\""
+source \"$SHELL_DIR/claude-engine.posix.sh\"
+source \"$SHELL_DIR/pi.posix.sh\""
 }
 
 install_fish() {
   local name dst src
-  for name in claude codex claude-engine; do
+  for name in claude codex claude-engine pi; do
     src="$SHELL_DIR/$name.fish"
     dst="$HOME/.config/fish/functions/$name.fish"
     mkdir -p "$(dirname "$dst")"
@@ -208,4 +209,5 @@ echo
 echo "Done. Open a NEW terminal (or reload your rc) so the wrapper loads, then run:"
 echo "  claude        # creates a tmux session named after the folder, with a --session-id"
 echo "  codex         # creates a Cockpit-managed Codex session and attaches its tmux"
+echo "  pi            # creates a tmux session named after the folder, with a --session-id"
 echo "Bypass a wrapper anytime with:  command claude ... / command codex ..."
