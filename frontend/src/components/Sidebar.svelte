@@ -13,7 +13,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import SessionSwitcherSheet from './SessionSwitcherSheet.svelte';
   import HoverPreview from './HoverPreview.svelte';
   import type { SessionInfo, State, ResumeCandidate, Provider } from '../lib/types';
-  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, untrackedReason, type GroupBy } from '../lib/format';
+  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, untrackedReason, providerTag, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import Lottie from './Lottie.svelte';
@@ -829,6 +829,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         {@const s = item.session}
         {@const rowKey = `${s.serverId}::${s.name}`}
         {@const selKey = `${s.serverId}:${s.name}`}
+        {@const provTag = providerTag(s.provider)}
         <!-- role=presentation: a row e so o wrapper flex — a semantica toda vive no .sess-main
              (button) e nos botoes irmaos. O hover aqui e decoracao redundante (a resposta ja esta no
              chat), entao nao pede equivalente de teclado. -->
@@ -851,7 +852,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
               class="sess-main"
               class:untracked={s.tracked === false}
               aria-pressed={selectMode ? selected.has(selKey) : undefined}
-              title={!expanded ? s.name : (s.tracked === false ? untrackedReason(s.provider) : 'Toque longo pra renomear')}
+              title={!expanded
+                ? (provTag ? `${s.name} · sessão ${provTag}` : s.name)
+                : (s.tracked === false ? untrackedReason(s.provider) : 'Toque longo pra renomear')}
               onpointerdown={() => { if (!selectMode) pressStart(rowKey); }}
               onpointerup={pressEnd}
               onpointerleave={pressEnd}
@@ -877,6 +880,13 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                 {:else}
                   <Lottie data={pensando as any} size={18} loop={false} autoplay={false} frame={STATIC_FRAME} />
                 {/if}
+                {#if !expanded && !selectMode && provTag}
+                  <!-- Rail recolhido: não cabe chip na linha (não há linha), então o rótulo vira uma
+                       etiqueta colada na base do avatar/spinner. Absoluta, pra não mudar a altura da
+                       row nem empurrar as iniciais. O nome do provider também entra no title da row,
+                       que é o único texto que o leitor de tela alcança aqui. -->
+                  <span class="prov-rail">{provTag}</span>
+                {/if}
               </span>
               {#if expanded}
                 <span class="row-info">
@@ -897,10 +907,15 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                     <!-- Branch git atual (paridade com o mobile), linha propria pra nao competir com o cwd. -->
                     <span class="branch" title="branch git atual">⎇ {s.branch}</span>
                   {/if}
-                  {#if s.limited || s.then_target || s.pair_peers?.length || s.loop_status || s.engine}
+                  {#if provTag || s.limited || s.then_target || s.pair_peers?.length || s.loop_status || s.engine}
                     <!-- Chips informativos (⏳/🔗/🤝/↻/⚙) na COLUNA DE TEXTO, nao ao lado do state-chip:
                          inline eles cobriam o cwd em sidebar estreita (mesmo fix do SessionCard mobile). -->
                     <span class="badges-line">
+                      {#if provTag}
+                        <!-- Identidade, não estado: primeiro chip e em tinta neutra, pra não competir
+                             com o estado, o "sem id" (âmbar) nem o motor (accent). -->
+                        <span class="prov-chip" title={`Sessão ${provTag}`}><span class="sr-only">Sessão&nbsp;</span>{provTag}</span>
+                      {/if}
                       {#if s.limited}
                         <span
                           class="limited-chip"
@@ -1548,6 +1563,22 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     color: var(--accent); background: var(--accent-dim);
   }
   /* Motor de modelo (Task 5): sessao rodando fora da conta Anthropic. */
+  /* Provider da sessão (Codex/Pi) — só o que NÃO é Claude ganha chip. Tinta neutra de propósito:
+     é rótulo de identidade, não estado; accent já é "motor" e âmbar já é "sem id". */
+  .prov-chip {
+    flex-shrink: 0; font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
+    color: var(--text-muted); background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    padding: 1px 6px; border-radius: var(--radius-full); white-space: nowrap;
+  }
+  /* Mesma etiqueta no rail de 56px: colada na base do avatar, absoluta (não mexe na altura da row). */
+  .prov-rail {
+    position: absolute; left: 50%; bottom: -7px; transform: translateX(-50%);
+    font-size: 9px; font-weight: 700; letter-spacing: 0.02em; line-height: 1.3;
+    color: var(--text-secondary); background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    padding: 0 4px; border-radius: var(--radius-full); white-space: nowrap;
+  }
   .engine-chip {
     font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
     color: var(--accent); background: var(--accent-dim);
@@ -1556,7 +1587,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
   .lead { width: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
   /* Rail recolhido: iniciais precisam de mais espaco que o icone de 18px. */
-  .sidebar.collapsed .lead { width: auto; }
+  .sidebar.collapsed .lead { width: auto; position: relative; }
   .initials {
     width: 30px; height: 30px; border-radius: 8px;
     display: flex; align-items: center; justify-content: center;

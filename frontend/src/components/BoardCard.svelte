@@ -5,7 +5,7 @@
     getHistoryTailCached, getHistoryTailForServer, sendInputForServer, selectOptionForServer,
     uploadFileForServer, transcribeFileForServer,
   } from '../lib/api';
-  import { relativeTime, bubblesFromTail, stateLabels, pairColor, parsePeerMessage } from '../lib/format';
+  import { relativeTime, bubblesFromTail, stateLabels, pairColor, parsePeerMessage, providerTag } from '../lib/format';
   import { parseStatusLine } from '../lib/statusline';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import type { Server } from '../lib/auth';
@@ -350,6 +350,8 @@
   const meta = $derived(parseStatusLine(session.status_line));
 
   const loopChip = $derived(loopBadge(session.loop_status, session.loop_iter, session.loop_max));
+  // Provider do card — só as não-Claude ganham chip (ver providerTag em lib/format).
+  const provTag = $derived(providerTag(session.provider));
 </script>
 
 <article class="bcard" class:attention={session.state === 'awaiting_input'} class:fill>
@@ -373,8 +375,13 @@
   </header>
   <!-- Linha de contexto do card: branch/par + infos da statusline (custo, tempo de sessão) — a
        "parte de cima" das infos compartilhadas do turno. Só aparece quando há o que mostrar. -->
-  {#if session.branch || session.pair_peers?.length || meta?.costUsd != null || meta?.sessionTime || loopChip || session.engine}
+  {#if provTag || session.branch || session.pair_peers?.length || meta?.costUsd != null || meta?.sessionTime || loopChip || session.engine}
     <div class="bc-sub">
+      {#if provTag}
+        <!-- Identidade da sessão, não estado: primeiro chip, tinta neutra — o card já usa cor pro
+             servidor, pro estado e pro grupo pareado. -->
+        <span class="prov-chip" title={`Sessão ${provTag}`}><span class="sr-only">Sessão&nbsp;</span>{provTag}</span>
+      {/if}
       {#if session.branch}<span class="bc-branch">⎇ {session.branch}</span>{/if}
       {#if session.engine}
         <!-- Sem isto nada no card distingue uma sessão de motor de uma da conta Anthropic. NÃO
@@ -602,6 +609,14 @@
   .bc-chip {
     max-width: 11em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     padding: 1px 8px; border-radius: var(--radius-full);
+  }
+  /* Provider da sessão (Codex/Pi): rótulo neutro, mesma caixa do engine-chip sem a tinta accent. */
+  .prov-chip {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
+    color: var(--text-muted); background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    padding: 1px 6px; border-radius: var(--radius-full);
+    white-space: nowrap; flex-shrink: 0;
   }
   /* Motor de modelo (Task 5): sessao rodando fora da conta Anthropic. */
   .engine-chip {

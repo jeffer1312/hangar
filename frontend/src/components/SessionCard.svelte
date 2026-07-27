@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { SessionInfo, State } from '../lib/types';
-  import { stateLabels, stateColors, untrackedReason } from '../lib/format';
+  import { stateLabels, stateColors, untrackedReason, providerTag } from '../lib/format';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import Lottie from './Lottie.svelte';
   import pensando from '../lib/lottie/pensando.json';
@@ -69,6 +69,8 @@
   const limited = $derived(session.limited === true);
 
   const loopChip = $derived(loopBadge(session.loop_status, session.loop_iter, session.loop_max));
+  // Provider da linha — só as não-Claude ganham chip (ver providerTag em lib/format).
+  const provTag = $derived(providerTag(session.provider));
 
   // ── Swipe-to-actions ───────────────────────────────────────────────────────
   // Arrasta a linha pra esquerda revelando Git / Loop / Excluir. touch-action:pan-y deixa o scroll
@@ -289,10 +291,16 @@
           {/if}
         </span>
       {/if}
-      {#if session.pair_peers?.length || limited || loopChip || session.engine}
+      {#if provTag || session.pair_peers?.length || limited || loopChip || session.engine}
         <!-- Chips informativos (🤝 grupo, ⏳ rate-limit, 🔁 loop, ⚙ motor) moram AQUI, no fluxo da
              coluna de texto — na row-right eles esmagavam o nome e o cwd vazava por baixo (visto no iPhone). -->
         <span class="badges-line">
+          {#if provTag}
+            <!-- Identidade, não estado: vem primeiro e em tinta neutra (nada de accent/warning, que
+                 já falam "motor" e "erro" nesta mesma linha). "Sessão Pi" pro leitor de tela, senão
+                 sairia um "Pi" solto entre os outros chips. -->
+            <span class="prov-chip" title={`Sessão ${provTag}`}><span class="sr-only">Sessão&nbsp;</span>{provTag}</span>
+          {/if}
           {#if session.pair_peers?.length}
             <span class="paired-chip" title={`Grupo com ${session.pair_peers.join(', ')}`}>🤝&nbsp;{session.pair_peers.length === 1 ? session.pair_peers[0] : session.pair_peers.length + 1}</span>
           {/if}
@@ -697,6 +705,16 @@
     color: var(--accent); background: var(--accent-dim);
     padding: 1px 6px; border-radius: var(--radius-full);
     flex-shrink: 0;
+  }
+
+  /* Provider da sessão (Codex/Pi). Mesma caixa do engine-chip, tinta NEUTRA: é rótulo de identidade,
+     não alarme nem destaque — não pode competir com o estado, o ⚠ sem id ou o motor. */
+  .prov-chip {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
+    color: var(--text-muted); background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    padding: 1px 6px; border-radius: var(--radius-full);
+    white-space: nowrap; flex-shrink: 0;
   }
 
   .limited-chip {

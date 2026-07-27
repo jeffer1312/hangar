@@ -35,6 +35,16 @@ export function providerName(p: SessionInfo['provider'] | null | undefined): str
   return PROVIDER_NAMES[p ?? 'claude'] ?? 'Claude';
 }
 
+// Marcador de provider PRA LISTA (mobile, sidebar, board/canvas): devolve o rótulo só quando a
+// sessão NÃO é Claude, senão null. Claude é a esmagadora maioria das linhas — marcar todas seria
+// ruído sem informação, e o que o olho procura é a exceção. Passa pelo providerName de propósito:
+// provider desconhecido cai em "Claude" lá e vira null aqui, ou seja, linha sem chip em vez de uma
+// linha rotulada "Claude" mentindo sobre o que ela roda.
+export function providerTag(p: SessionInfo['provider'] | null | undefined): string | null {
+  const name = providerName(p);
+  return name === PROVIDER_NAMES.claude ? null : name;
+}
+
 // Por que a linha está "sem id" — a causa (e a saída) mudam por provider, e as duas views mostram
 // a mesma frase. Claude: aberto sem --session-id, o vínculo com o transcript seria um chute. Pi: o
 // pane não resolve transcript nenhum — normal antes do 1º turno (a sessão só escreve o arquivo
