@@ -294,7 +294,7 @@
   }
   .mascara-nota { font-family: var(--font-ui); color: var(--success); font-size: 11px; }
 
-  .switch { width: 44px; height: 26px; accent-color: var(--accent); flex-shrink: 0; }
+  /* `.switch` é global (app.css) — vocabulário único de liga/desliga do app. */
 
   .somente-leitura { margin-top: var(--space-5); }
   .somente-leitura h3 {
