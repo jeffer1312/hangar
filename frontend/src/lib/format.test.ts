@@ -3,7 +3,7 @@ import {
   abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, fmtWhen, groupSelectedByServer, initials, nextAwaiting,
   projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent, resetsIn,
   clusterByPair, sortSessions, bubblesFromTail, ctxWindow, fileKind, fmtBytes, providerName,
-  summarizeText, summarizeToolInput, summarizeToolResult,
+  summarizeText, summarizeToolInput, summarizeToolResult, toolPhase, toolGroupLabel, toolGroupCounts,
 } from './format';
 import type { ChatEvent, State } from './types';
 
@@ -512,40 +512,43 @@ describe('summarizeText', () => {
 });
 
 describe('summarizeToolInput', () => {
-  it('mantem os resumos que ja existiam', () => {
-    expect(summarizeToolInput('Read', { file_path: '/tmp/x.ts' })).toBe('path: /tmp/x.ts');
-    expect(summarizeToolInput('Write', { path: '/tmp/y.ts' })).toBe('path: /tmp/y.ts');
-    expect(summarizeToolInput('Bash', { command: 'npm test' })).toBe('cmd: npm test');
-    expect(summarizeToolInput('WebSearch', { query: 'svelte 5 runes' })).toBe('query: svelte 5 runes');
-    expect(summarizeToolInput('WebFetch', { url: 'https://x.dev' })).toBe('url: https://x.dev');
-    expect(summarizeToolInput('Grep', { pattern: 'foo' })).toBe('pattern: foo');
+  it('mostra o VALOR cru, sem prefixo de chave', () => {
+    expect(summarizeToolInput('Read', { file_path: '/tmp/x.ts' })).toBe('/tmp/x.ts');
+    expect(summarizeToolInput('Write', { path: '/tmp/y.ts' })).toBe('/tmp/y.ts');
+    expect(summarizeToolInput('Bash', { command: 'npm test' })).toBe('npm test');
+    expect(summarizeToolInput('WebSearch', { query: 'svelte 5 runes' })).toBe('svelte 5 runes');
+    expect(summarizeToolInput('WebFetch', { url: 'https://x.dev' })).toBe('https://x.dev');
   });
 
-  it('Grep/Glob mostram o padrao (nao o diretorio), com o onde depois', () => {
-    expect(summarizeToolInput('Grep', { pattern: 'foo', path: '/tmp' })).toBe('pattern: foo em /tmp');
-    expect(summarizeToolInput('Glob', { pattern: '**/*.ts' })).toBe('pattern: **/*.ts');
+  it('Read anexa o recorte lido entre parenteses', () => {
+    expect(summarizeToolInput('Read', { file_path: '/a.ts', limit: 500 })).toBe('/a.ts (limit=500)');
+    expect(summarizeToolInput('Read', { file_path: '/a.ts', offset: 10, limit: 20 })).toBe('/a.ts (offset=10, limit=20)');
+    expect(summarizeToolInput('Read', { file_path: '/a.ts', offset: 0 })).toBe('/a.ts');   // 0 nao e recorte
+  });
+
+  it('Grep/Glob mostram o padrao entre aspas (nao o diretorio), com o onde depois', () => {
+    expect(summarizeToolInput('Grep', { pattern: 'foo', path: '/tmp' })).toBe('"foo" em /tmp');
+    expect(summarizeToolInput('Glob', { pattern: '**/*.ts' })).toBe('"**/*.ts"');
   });
 
   it('corta valor unico em 72 chars', () => {
-    const cmd = 'x'.repeat(200);
-    const out = summarizeToolInput('Bash', { command: cmd });
-    expect(out).toBe(`cmd: ${'x'.repeat(71)}…`);
-    expect(out.slice('cmd: '.length)).toHaveLength(72);
+    const out = summarizeToolInput('Bash', { command: 'x'.repeat(200) });
+    expect(out).toBe(`${'x'.repeat(71)}\u2026`);
+    expect(out).toHaveLength(72);
   });
 
   it('varias queries: 1a em 48 + contador mudo', () => {
-    expect(summarizeToolInput('WebSearch', { queries: ['a', 'b', 'c'] })).toBe('query: a (+2 consultas)');
+    expect(summarizeToolInput('WebSearch', { queries: ['a', 'b', 'c'] })).toBe('a (+2 consultas)');
     const long = 'y'.repeat(100);
-    expect(summarizeToolInput('WebSearch', { queries: [long, 'b'] })).toBe(`query: ${'y'.repeat(47)}… (+1 consultas)`);
+    expect(summarizeToolInput('WebSearch', { queries: [long, 'b'] })).toBe(`${'y'.repeat(47)}\u2026 (+1 consultas)`);
   });
 
   it('uma query so na lista usa o limite cheio de 72', () => {
-    const long = 'z'.repeat(100);
-    expect(summarizeToolInput('WebSearch', { queries: [long] })).toBe(`query: ${'z'.repeat(71)}…`);
+    expect(summarizeToolInput('WebSearch', { queries: ['z'.repeat(100)] })).toBe(`${'z'.repeat(71)}\u2026`);
   });
 
   it('escolhe a chave saliente, nao a 1a do objeto', () => {
-    expect(summarizeToolInput('Task', { subagent_type: 'x', description: 'mapear a UI' })).toBe('description: mapear a UI');
+    expect(summarizeToolInput('Task', { subagent_type: 'x', description: 'mapear a UI' })).toBe('mapear a UI');
   });
 
   it('sem input / sem valor -> sem resumo', () => {
@@ -555,23 +558,75 @@ describe('summarizeToolInput', () => {
   });
 });
 
+describe('toolPhase', () => {
+  it('sem tool_result ainda -> rodando', () => {
+    expect(toolPhase(null)).toBe('pending');
+    expect(toolPhase(undefined)).toBe('pending');
+  });
+  it('resultado normal -> concluido; is_error -> erro', () => {
+    expect(toolPhase({})).toBe('done');
+    expect(toolPhase({ is_error: false })).toBe('done');
+    expect(toolPhase({ is_error: true })).toBe('error');
+  });
+});
+
 describe('summarizeToolResult', () => {
-  it('conta as linhas, com singular', () => {
-    expect(summarizeToolResult({ result: 'so uma' })).toBe('1 linha');
-    expect(summarizeToolResult({ result: Array.from({ length: 40 }, (_, i) => `l${i}`).join('\n') })).toBe('40 linhas');
+  it('a frase muda por ferramenta (mesmo vocabulario do pacote)', () => {
+    const tres = 'a\nb\nc';
+    expect(summarizeToolResult({ result: tres }, 'Bash')).toBe('Pronto (3 linhas)');
+    expect(summarizeToolResult({ result: tres }, 'Read')).toBe('3 linhas carregadas');
+    expect(summarizeToolResult({ result: tres }, 'Grep')).toBe('3 linhas retornadas');
+    expect(summarizeToolResult({ result: tres })).toBe('3 linhas retornadas');
+  });
+
+  it('singular em cada frase', () => {
+    expect(summarizeToolResult({ result: 'so uma' }, 'Bash')).toBe('Pronto (1 linha)');
+    expect(summarizeToolResult({ result: 'so uma' }, 'Read')).toBe('1 linha carregada');
+    expect(summarizeToolResult({ result: 'so uma' })).toBe('1 linha retornada');
   });
 
   it('erro mostra a PRIMEIRA LINHA do erro no lugar da contagem', () => {
-    expect(summarizeToolResult({ result: 'File does not exist.\nstack\nstack', is_error: true }))
+    expect(summarizeToolResult({ result: 'File does not exist.\nstack\nstack', is_error: true }, 'Read'))
       .toBe('File does not exist.');
   });
 
   it('erro longo tambem respeita o limite de 72', () => {
-    expect(summarizeToolResult({ result: 'e'.repeat(100), is_error: true })).toBe(`${'e'.repeat(71)}…`);
+    expect(summarizeToolResult({ result: 'e'.repeat(100), is_error: true })).toBe(`${'e'.repeat(71)}\u2026`);
   });
 
-  it('ainda rodando / resultado vazio -> nada na linha', () => {
+  it('erro sem texto ainda diz que falhou', () => {
+    expect(summarizeToolResult({ result: '  ', is_error: true })).toBe('Falhou');
+  });
+
+  it('resultado vazio (comando mudo) -> Pronto; ainda rodando -> nada', () => {
+    expect(summarizeToolResult({ result: '   \n ' }, 'Bash')).toBe('Pronto');
     expect(summarizeToolResult(null)).toBe('');
-    expect(summarizeToolResult({ result: '   \n ' })).toBe('');
+    expect(summarizeToolResult(undefined)).toBe('');
+  });
+});
+
+describe('toolGroupLabel', () => {
+  it('todas do mesmo tipo -> o nome delas', () => {
+    expect(toolGroupLabel(['Read', 'Read', 'Read'])).toBe('Read');
+  });
+  it('misturadas -> rotulo generico', () => {
+    expect(toolGroupLabel(['Read', 'Bash'])).toBe('Ferramentas');
+  });
+  it('sem nome -> nao quebra', () => {
+    expect(toolGroupLabel([null, null])).toBe('Tool');
+    expect(toolGroupLabel([null, 'Read'])).toBe('Ferramentas');
+  });
+});
+
+describe('toolGroupCounts', () => {
+  it('so concluidas', () => {
+    expect(toolGroupCounts(['done', 'done', 'done'])).toBe('3 concluídos');
+    expect(toolGroupCounts(['done'])).toBe('1 concluído');
+  });
+  it('mistura na ordem rodando -> ok -> erro', () => {
+    expect(toolGroupCounts(['done', 'error', 'pending', 'done'])).toBe('1 rodando • 2 concluídos • 1 com erro');
+  });
+  it('lista vazia -> nada', () => {
+    expect(toolGroupCounts([])).toBe('');
   });
 });

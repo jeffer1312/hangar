@@ -422,6 +422,9 @@ function summarizeValues(values: string[], noun: string): string {
   return `${summarizeText(values[0], TOOL_MAX_FIRST)} (+${values.length - 1} ${noun})`;
 }
 
+// Argumento saliente da tool pra LINHA 1 do bloco ("● Read .claude/settings.json (limit=1000)"):
+// o VALOR cru, sem prefixo "chave:" — o nome da ferramenta ao lado já diz o que ele é, e o prefixo
+// só roubava largura do que importa no celular.
 export function summarizeToolInput(
   toolName: string | null | undefined,
   input: Record<string, unknown> | null | undefined,
@@ -433,52 +436,89 @@ export function summarizeToolInput(
     return v === null || v === undefined ? '' : String(v);
   };
 
-  if (name === 'Write' || name === 'Read' || name === 'Edit') {
+  if (name === 'Read') {
+    // offset/limit entre parênteses depois do caminho (mesma forma do pacote): são o recorte lido,
+    // e sem eles duas leituras do MESMO arquivo ficavam indistinguíveis na árvore do grupo.
     const p = summarizeText(one('file_path') || one('path'), TOOL_MAX);
-    return p ? `path: ${p}` : '';
+    if (!p) return '';
+    // Testa o valor CRU, não a string: `offset: 0` é "sem recorte" e String(0) === '0' é truthy —
+    // com o teste na string, todo Read do topo do arquivo ganhava um "(offset=0)" mudo.
+    const parts = (['offset', 'limit'] as const)
+      .filter((k) => input[k])
+      .map((k) => `${k}=${one(k)}`);
+    return parts.length ? `${p} (${parts.join(', ')})` : p;
   }
-  if (name === 'Bash') {
-    const cmd = summarizeText(one('command'), TOOL_MAX);
-    return cmd ? `cmd: ${cmd}` : '';
-  }
+  if (name === 'Write' || name === 'Edit') return summarizeText(one('file_path') || one('path'), TOOL_MAX);
+  if (name === 'Bash') return summarizeText(one('command'), TOOL_MAX);
   if (name === 'Grep' || name === 'Glob') {
     // O argumento saliente e o PADRAO, nunca o diretorio (o pacote faz `"pattern" in path`); sem
     // este ramo o fallback preferiria `path` e a linha esconderia o que foi procurado.
     const pat = summarizeText(one('pattern'), TOOL_MAX);
     const p = one('path');
-    return pat ? `pattern: ${pat}${p ? ` em ${p}` : ''}` : '';
+    return pat ? `"${pat}"${p ? ` em ${p}` : ''}` : '';
   }
   if (name === 'WebSearch') {
     // A tool do Claude Code manda `query` (uma só); `queries` é a forma do pacote/outros provedores.
-    const q = one('query')
+    return one('query')
       ? summarizeText(one('query'), TOOL_MAX)
       : summarizeValues(strList(input['queries']), MULTI_KEYS.queries);
-    return q ? `query: ${q}` : '';
   }
   if (name === 'WebFetch') {
-    const u = one('url') ? summarizeText(one('url'), TOOL_MAX) : summarizeValues(strList(input['urls']), MULTI_KEYS.urls);
-    return u ? `url: ${u}` : '';
+    return one('url') ? summarizeText(one('url'), TOOL_MAX) : summarizeValues(strList(input['urls']), MULTI_KEYS.urls);
   }
 
   const keys = Object.keys(input);
   const key = PREFERRED_KEYS.find((k) => keys.includes(k) && (one(k) || strList(input[k]).length)) ?? keys[0];
   if (!key) return '';
   const list = strList(input[key]);
-  const value = list.length ? summarizeValues(list, MULTI_KEYS[key] ?? 'itens') : summarizeText(one(key), TOOL_MAX);
-  return value ? `${key}: ${value}` : '';
+  return list.length ? summarizeValues(list, MULTI_KEYS[key] ?? 'itens') : summarizeText(one(key), TOOL_MAX);
 }
 
-// Tamanho do resultado, pra dar pra ver sem expandir se a tool voltou 1 linha ou 200 ("N line(s)
-// returned" do pacote). Erro mostra a PRIMEIRA LINHA do erro no lugar da contagem — é a informação
-// que importa quando falhou. Sem resultado (ainda rodando, ou vazio) -> string vazia.
+// Fase de UMA tool call, do jeito que as duas views desenham (bolinha + cor): sem tool_result ainda
+// = rodando. Mora aqui porque ToolCard e ToolGroup precisam da MESMA regra (o grupo agrega as fases
+// dos filhos) e a versão duplicada já tinha divergido.
+export type ToolPhase = 'pending' | 'done' | 'error';
+
+export function toolPhase(result: { is_error?: boolean | null } | null | undefined): ToolPhase {
+  if (result === null || result === undefined) return 'pending';
+  return result.is_error ? 'error' : 'done';
+}
+
+// Desfecho da tool na LINHA 2 do bloco ("└ Pronto (38 linhas)"). A frase muda POR FERRAMENTA, como
+// no pacote: bash diz "Done (N lines)", read diz "N lines loaded", o resto "N lines returned".
+// Erro mostra a PRIMEIRA LINHA do erro — é a informação que importa quando falhou. Resultado vazio
+// (comando mudo) -> só "Pronto". Sem resultado (ainda rodando) -> string vazia.
 export function summarizeToolResult(
   result: { result?: string | null; is_error?: boolean | null } | null | undefined,
+  toolName?: string | null,
 ): string {
-  const raw = (result?.result ?? '').trim();
-  if (!raw) return '';
-  const lines = raw.split('\n');
-  if (result?.is_error) return summarizeText(lines[0], TOOL_MAX);
-  return lines.length === 1 ? '1 linha' : `${lines.length} linhas`;
+  if (result === null || result === undefined) return '';
+  const raw = (result.result ?? '').trim();
+  if (result.is_error) return raw ? summarizeText(raw.split('\n')[0], TOOL_MAX) : 'Falhou';
+  if (!raw) return 'Pronto';
+  const n = raw.split('\n').length;
+  const linhas = n === 1 ? '1 linha' : `${n} linhas`;
+  if (toolName === 'Bash' || toolName === 'BashOutput') return `Pronto (${linhas})`;
+  if (toolName === 'Read') return n === 1 ? '1 linha carregada' : `${n} linhas carregadas`;
+  return n === 1 ? '1 linha retornada' : `${n} linhas retornadas`;
+}
+
+// Rótulo do cabeçalho de um burst: todas do MESMO tipo -> o nome dela ("Read"), misturadas ->
+// rótulo genérico. É o que dá sentido a esconder o nome em cada filho da árvore.
+export function toolGroupLabel(names: (string | null | undefined)[]): string {
+  const first = names[0] ?? 'Tool';
+  return names.every((n) => (n ?? 'Tool') === first) ? first : 'Ferramentas';
+}
+
+// Contagem por fase no cabeçalho do grupo ("2 rodando • 3 concluídos"), na ordem rodando → ok → erro.
+export function toolGroupCounts(phases: ToolPhase[]): string {
+  const n = { pending: 0, done: 0, error: 0 };
+  for (const p of phases) n[p]++;
+  const parts: string[] = [];
+  if (n.pending) parts.push(`${n.pending} rodando`);
+  if (n.done) parts.push(`${n.done} ${n.done === 1 ? 'concluído' : 'concluídos'}`);
+  if (n.error) parts.push(`${n.error} com erro`);
+  return parts.join(' • ');
 }
 
 // Abrevia contagem grande: 3668662 -> "3.7M", 1.5e9 -> "1.5B", 999 -> "999".
