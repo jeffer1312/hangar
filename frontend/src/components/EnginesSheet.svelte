@@ -2,9 +2,13 @@
   import BottomSheet from './BottomSheet.svelte';
   import ConfirmDialog from './ConfirmDialog.svelte';
   import {
-    getEngines, putEngine, deleteEngine, engineModelos,
+    getEngines, getEnginesForServer,
+    putEngine, putEngineForServer,
+    deleteEngine, deleteEngineForServer,
+    engineModelos, engineModelosForServer,
     type Motor, type ModeloProvedor,
   } from '../lib/api';
+  import type { Server } from '../lib/auth';
 
   // Motores de modelo: rodar uma sessão em Kimi, num gateway próprio, ou em qualquer endpoint que
   // fale a Messages API — sem perder skills, hooks nem histórico, e sem tocar a conta Anthropic.
@@ -15,8 +19,9 @@
   interface Props {
     open: boolean;
     onClose: () => void;
+    targetServer?: Server | null;
   }
-  let { open, onClose }: Props = $props();
+  let { open, onClose, targetServer = null }: Props = $props();
 
   const DICAS: { label: string; base_url: string }[] = [
     { label: 'Kimi Code', base_url: 'https://api.kimi.com/coding' },
@@ -34,6 +39,21 @@
   let arquivoCorrompido = $state(false);
   let arquivoCaminho = $state('');
 
+  // Defaults do bloco Avançado, espelhando engines.env_de: ligado = capacidade ativa. Os dois que
+  // nascem LIGADOS (cache e raciocínio) são os que causam dano se desligados sem motivo — desligar
+  // thinking rebaixa o modelo em alguns provedores.
+  const PADRAO_AVANCADO = {
+    bundled_skills: false,
+    experimental_betas: false,
+    prompt_caching: true,
+    adaptive_thinking: true,
+    tool_search: false,
+    gateway_model_discovery: false,
+    fine_grained_tool_streaming: false,
+    auto_compact_window: '',
+    max_output_tokens: '',
+  };
+
   let form = $state<null | {
     nome: string;
     label: string;
@@ -45,6 +65,16 @@
     model: string;
     subagent_model: string;
     context_window: string;
+    // Avançado. Todos POSITIVOS ("marcado = ligado") — o backend traduz pras env vars DISABLE_*.
+    bundled_skills: boolean;
+    experimental_betas: boolean;
+    prompt_caching: boolean;
+    adaptive_thinking: boolean;
+    tool_search: boolean;
+    gateway_model_discovery: boolean;
+    fine_grained_tool_streaming: boolean;
+    auto_compact_window: string;
+    max_output_tokens: string;
     existente: boolean;
   }>(null);
 
@@ -62,7 +92,7 @@
     carregando = true;
     erro = '';
     try {
-      const r = await getEngines();
+      const r = targetServer ? await getEnginesForServer(targetServer) : await getEngines();
       motores = r.motores;
       arquivoCorrompido = r.arquivo_corrompido;
       arquivoCaminho = r.arquivo_caminho;
@@ -76,7 +106,8 @@
   function novo() {
     form = {
       nome: '', label: '', base_url: '', base_url_original: '', api_key: '', api_key_definida: false,
-      model: '', subagent_model: '', context_window: '', existente: false,
+      model: '', subagent_model: '', context_window: '',
+      ...PADRAO_AVANCADO, existente: false,
     };
     modelos = []; erroBusca = ''; okBusca = '';
   }
@@ -95,6 +126,17 @@
       model: m.model,
       subagent_model: m.subagent_model ?? '',
       context_window: m.context_window ? String(m.context_window) : '',
+      // Espelha o default do backend: os que nascem LIGADOS saem só com `false` explícito
+      // (`!== false`), os que nascem desligados exigem `=== true`.
+      bundled_skills: m.bundled_skills === true,
+      experimental_betas: m.experimental_betas === true,
+      prompt_caching: m.prompt_caching !== false,
+      adaptive_thinking: m.adaptive_thinking !== false,
+      tool_search: m.tool_search === true,
+      gateway_model_discovery: m.gateway_model_discovery === true,
+      fine_grained_tool_streaming: m.fine_grained_tool_streaming === true,
+      auto_compact_window: m.auto_compact_window ? String(m.auto_compact_window) : '',
+      max_output_tokens: m.max_output_tokens ? String(m.max_output_tokens) : '',
       existente: true,
     };
     modelos = []; erroBusca = ''; okBusca = '';
@@ -118,7 +160,9 @@
       const corpo = chave
         ? { base_url: form.base_url.trim(), api_key: chave }
         : { nome: form.nome };
-      const r = await engineModelos(corpo);
+      const r = targetServer
+        ? await engineModelosForServer(targetServer, corpo)
+        : await engineModelos(corpo);
       modelos = r.modelos;
       okBusca = `${r.modelos.length} modelo(s) — conexão e chave OK`;
       const atual = modelos.find((m) => m.id === form!.model) ?? modelos[0];
@@ -164,10 +208,20 @@
       const salvo = motores[form.nome];
       const vision = typeof modeloAtual?.vision === 'boolean' ? modeloAtual.vision : salvo?.vision;
       if (typeof vision === 'boolean') corpo.vision = vision;
-      // Nada na UI seta tool_search hoje; isto só preserva o que o motor já tinha gravado.
-      if (typeof salvo?.tool_search === 'boolean') corpo.tool_search = salvo.tool_search;
+      // Avançado: a UI seta TODOS, então vão sempre no corpo — não dependem de preservar o disco.
+      corpo.bundled_skills = form.bundled_skills;
+      corpo.experimental_betas = form.experimental_betas;
+      corpo.prompt_caching = form.prompt_caching;
+      corpo.adaptive_thinking = form.adaptive_thinking;
+      corpo.tool_search = form.tool_search;
+      corpo.gateway_model_discovery = form.gateway_model_discovery;
+      corpo.fine_grained_tool_streaming = form.fine_grained_tool_streaming;
+      if (form.auto_compact_window) corpo.auto_compact_window = Number(form.auto_compact_window);
+      if (form.max_output_tokens) corpo.max_output_tokens = Number(form.max_output_tokens);
 
-      motores = (await putEngine(form.nome.trim(), corpo)).motores;
+      motores = targetServer
+        ? (await putEngineForServer(targetServer, form.nome.trim(), corpo)).motores
+        : (await putEngine(form.nome.trim(), corpo)).motores;
       form = null;
     } catch (e) {
       erro = e instanceof Error ? e.message : 'Falha ao salvar';
@@ -195,7 +249,8 @@
     if (!nome) return;
     erro = '';
     try {
-      await deleteEngine(nome);
+      if (targetServer) await deleteEngineForServer(targetServer, nome);
+      else await deleteEngine(nome);
       const { [nome]: _fora, ...resto } = motores;
       motores = resto;
     } catch (e) {
@@ -323,6 +378,130 @@
           </span>
         </label>
 
+        <details class="avancado">
+          <summary>Avançado — recursos do harness</summary>
+          <p class="ajuda topo">
+            O Claude Code manda recursos que só a API da Anthropic entende. Num provedor de
+            terceiro eles são recusados ou ignorados. Marcado = ligado.
+          </p>
+
+          <label class="campo">
+            <span class="rot">
+              <input type="checkbox" checked={form.bundled_skills}
+                     onchange={(e) => (form!.bundled_skills = e.currentTarget.checked)} />
+              Skills empacotadas
+            </span>
+            <span class="ajuda">
+              Uma invocação da <code>claude-api</code> injeta 206k tokens de uma vez (medido: 12% →
+              67% da janela num modelo de 372k). Suas skills de plugin e de
+              <code>~/.claude/skills</code> não são afetadas.
+            </span>
+          </label>
+
+          <label class="campo">
+            <span class="rot">
+              <input type="checkbox" checked={form.experimental_betas}
+                     onchange={(e) => (form!.experimental_betas = e.currentTarget.checked)} />
+              Recursos beta
+            </span>
+            <span class="ajuda">
+              Campos beta que o Claude Code envia sozinho (<code>context_management</code> e os
+              campos beta de tool). Ligado num upstream que não os aceita dá
+              <code>400 Extra inputs are not permitted</code>.
+            </span>
+          </label>
+
+          <label class="campo">
+            <span class="rot">
+              <input type="checkbox" checked={form.prompt_caching}
+                     onchange={(e) => (form!.prompt_caching = e.currentTarget.checked)} />
+              Prompt caching
+            </span>
+            <span class="ajuda">
+              Deixe ligado. Num gateway o cache já degrada sozinho e calado — se o breakpoint for
+              recusado, aquele bloco fica sem cache pelo resto da conversa, sem erro. Desligar só
+              faz sentido em provedor que cobra o cache mais caro que o miss.
+            </span>
+          </label>
+
+          <label class="campo">
+            <span class="rot">
+              <input type="checkbox" checked={form.adaptive_thinking}
+                     onchange={(e) => (form!.adaptive_thinking = e.currentTarget.checked)} />
+              Raciocínio adaptativo
+            </span>
+            <span class="ajuda">
+              Deixe ligado. Desligar é destrutivo em alguns provedores — a doc da Kimi diz que sem
+              thinking o K3 e o K2.7 caem para K2.6, calado. Só desmarque se o upstream devolver
+              <code>400</code> citando <code>thinking</code> ou <code>adaptive</code>.
+            </span>
+          </label>
+
+          <label class="campo" class:inerte={!form.experimental_betas}>
+            <span class="rot">
+              <input type="checkbox" checked={form.tool_search} disabled={!form.experimental_betas}
+                     onchange={(e) => (form!.tool_search = e.currentTarget.checked)} />
+              Tool search
+            </span>
+            <span class="ajuda">
+              {#if !form.experimental_betas}
+                Sem os recursos beta esta opção não tem efeito — o desligamento dos betas mantém o
+                tool search off e esta caixa não sobrepõe.
+              {:else}
+                Carrega as definições de tool sob demanda em vez de todas por turno (50 tools ≈
+                10–20k tokens). O Claude Code já desliga sozinho quando a URL não é da Anthropic,
+                porque a maioria dos proxies não repassa os blocos <code>tool_reference</code>.
+              {/if}
+            </span>
+          </label>
+
+          <label class="campo">
+            <span class="rot">
+              <input type="checkbox" checked={form.gateway_model_discovery}
+                     onchange={(e) => (form!.gateway_model_discovery = e.currentTarget.checked)} />
+              Descoberta de modelos
+            </span>
+            <span class="ajuda">
+              Consulta o <code>/v1/models</code> do provedor e popula o seletor <code>/model</code>
+              dentro da sessão. Nem todo gateway expõe esse endpoint.
+            </span>
+          </label>
+
+          <label class="campo">
+            <span class="rot">
+              <input type="checkbox" checked={form.fine_grained_tool_streaming}
+                     onchange={(e) => (form!.fine_grained_tool_streaming = e.currentTarget.checked)} />
+              Streaming fino de tool
+            </span>
+            <span class="ajuda">
+              O Claude Code desliga por padrão atrás de URL customizada. Ligue se o provedor
+              suportar streaming parcial dos argumentos de tool.
+            </span>
+          </label>
+
+          <label class="campo">
+            <span class="rot">Disparar compactação em</span>
+            <input type="number" inputmode="numeric" min="1" placeholder="tokens (em branco = padrão)"
+                   value={form.auto_compact_window}
+                   oninput={(e) => (form!.auto_compact_window = e.currentTarget.value)} />
+            <span class="ajuda">
+              Use quando o provedor impõe uma janela menor que a do modelo e reescreve a mensagem de
+              erro: o Claude Code não reconhece, não compacta sozinho, e a sessão trava em
+              <code>exceeds the context window</code>. Deixe abaixo do limite real do provedor.
+            </span>
+          </label>
+
+          <label class="campo">
+            <span class="rot">Teto de saída</span>
+            <input type="number" inputmode="numeric" min="1" placeholder="tokens (em branco = padrão)"
+                   value={form.max_output_tokens}
+                   oninput={(e) => (form!.max_output_tokens = e.currentTarget.value)} />
+            <span class="ajuda">
+              Par do campo acima. Mantenha abaixo do limite de saída do modelo no provedor.
+            </span>
+          </label>
+        </details>
+
         {#if erro}<p class="aviso erro">{erro}</p>{/if}
 
         <div class="acoes">
@@ -410,6 +589,23 @@
   .rot { font-size: var(--text-base); font-weight: 600; color: var(--text-primary); }
   .ajuda { font-size: var(--text-xs); color: var(--text-muted); line-height: 1.45; }
   .ajuda.erro { color: var(--error); }
+
+  /* Avançado: recolhido por padrão — são 9 controles que a maioria nunca toca. <details> nativo em
+     vez de estado próprio; o toggle já vem acessível e some com prefers-reduced-motion sem regra. */
+  .avancado {
+    border: 1px solid var(--border); border-radius: var(--radius-md);
+    padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-4);
+  }
+  .avancado > summary {
+    cursor: pointer; font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary);
+    /* Sem gap quando fechado: o `gap` do flex vale só entre filhos visíveis, e o summary é o único. */
+    margin: calc(var(--space-4) * -1) 0;
+  }
+  .avancado[open] > summary { margin-bottom: 0; }
+  .avancado .ajuda.topo { margin: 0; }
+  .avancado .rot { display: flex; align-items: center; gap: var(--space-2); font-weight: 500; }
+  /* Toggle sem efeito por dependência (betas off): esmaece mas segue legível — a ajuda explica. */
+  .avancado .campo.inerte .rot { opacity: 0.55; }
   .def { font-size: 11px; color: var(--success); }
   .ok { font-size: var(--text-xs); color: var(--success); }
   .dicas { display: flex; flex-wrap: wrap; gap: var(--space-2); }

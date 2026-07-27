@@ -1,6 +1,6 @@
 <script lang="ts">
   import { enablePush, pushSupported } from '../lib/push';
-  import { getPushSettings, setQuietHours } from '../lib/api';
+  import { getPushSettings, getPushSettingsForServer, setQuietHours, setQuietHoursForServer } from '../lib/api';
   import ConfigSheet from './ConfigSheet.svelte';
   import EnginesSheet from './EnginesSheet.svelte';
   import { serverColor, parseServerPairing } from '../lib/auth';
@@ -72,29 +72,58 @@
   let qhStart = $state('');
   let qhEnd = $state('');
   let qhMsg = $state('');
+  // Servidor-alvo das ações de config. No mobile a lista é AGREGADA (sem "ativo"), então sem isto
+  // "Horas silenciosas"/"Configurações" batiam no servidor globalmente ativo — podia ser OUTRA
+  // máquina. Resolve do array VIVO: um snapshot congelado devolveria o token de quando o drawer
+  // abriu, e trocar o token na mesma linha passaria a mandar o antigo. Sumiu de `servers` -> null,
+  // e a UI desabilita em vez de cair no primeiro da lista.
+  const activeServer = $derived(servers.find((s) => s.id === activeId) ?? null);
+
   // Sheet de configurações do servidor (chave da Groq, retenção, notificações).
   let configOpen = $state(false);
   // Motores de modelo: irmã do ConfigSheet, não filha (ver comentário no onOpenMotores do
   // ConfigSheet) — as duas nunca ficam open=true ao mesmo tempo.
   let motoresOpen = $state(false);
   async function loadQuietHours() {
+    // Alvo explícito (drawer) que sumiu de `servers`: NÃO cai nas funções globais — leria a janela
+    // de outra máquina e mostraria como se fosse desta.
+    if (embedded && !activeServer) { qhStart = ''; qhEnd = ''; qhMsg = 'Servidor indisponível'; return; }
+    qhMsg = '';
     try {
-      const p = await getPushSettings();
+      const p = embedded && activeServer ? await getPushSettingsForServer(activeServer) : await getPushSettings();
       qhStart = p.quiet_hours?.start ?? '';
       qhEnd = p.quiet_hours?.end ?? '';
-    } catch { /* offline/sem rota: campos ficam vazios, tenta salvar de novo depois */ }
-    qhMsg = '';
+    } catch (e) {
+      // Global segue best-effort (offline/rota ausente -> campos vazios, salvar depois resolve).
+      // Por-servidor NÃO: `apiFetchForServer` não faz o self-heal de 401 de propósito (não pode
+      // derrubar a credencial de outra máquina), então token morto ficaria como "campos vazios"
+      // pra sempre — indistinguível de "nunca configurei" — e ninguém iria trocar o token.
+      if (embedded) qhMsg = e instanceof Error ? e.message : 'não foi possível carregar';
+    }
   }
   async function saveQuietHours() {
     try {
-      await setQuietHours(qhStart || null, qhEnd || null);
+      if (embedded) {
+        if (!activeServer) throw new Error('Servidor indisponível');
+        await setQuietHoursForServer(activeServer, qhStart || null, qhEnd || null);
+      } else {
+        await setQuietHours(qhStart || null, qhEnd || null);
+      }
       qhMsg = qhStart && qhEnd ? `silenciado ${qhStart}–${qhEnd}` : 'desligado';
     } catch (e) {
       qhMsg = e instanceof Error ? e.message : 'erro ao salvar';
     }
   }
+  // Alvo sumiu com a sheet JÁ ABERTA (o × removeu o servidor sem fechar o drawer): fecha as duas.
+  // Sem isto, `targetServer` vira null e ConfigSheet/EnginesSheet caem nas funções GLOBAIS —
+  // editando/apagando config e motores (que guardam api_key) de outra máquina, calado. O item de
+  // menu desabilitado cobre a abertura; este efeito cobre quem já estava dentro.
+  $effect(() => {
+    if (embedded && !activeServer) { configOpen = false; motoresOpen = false; }
+  });
+
   // Recarrega a janela de silêncio toda vez que o menu abre (pode ter mudado no servidor).
-  $effect(() => { if (open && pushSupported()) void loadQuietHours(); });
+  $effect(() => { if (open && pushSupported() && (!embedded || activeServer)) void loadQuietHours(); });
 
   // Rename inline de servidor: id em edição + valor do input. O pai persiste (renameServer + reagrega).
   let editingId = $state<string | null>(null);
@@ -290,7 +319,12 @@
     <div class="am-sep"></div>
     <!-- Config do SERVIDOR (chave da Groq, retenção de anexos, notificações). Fica aqui junto do
          resto de conta/servidor, que é onde o usuário já procura ajuste. -->
-    <button class="am-item" role="menuitem" onclick={() => { configOpen = true; onClose?.(); }}>
+    <!-- No drawer (embedded) a sheet SEMPRE opera num servidor explícito. Se o snapshot sumiu de
+         `servers` (removido pelo × aqui mesmo, sem fechar o drawer), abrir cairia nas funções
+         globais e editaria OUTRA máquina calado — então o item desabilita em vez de abrir. -->
+    <button class="am-item" role="menuitem" disabled={embedded && !activeServer}
+            title={embedded && !activeServer ? 'Servidor indisponível' : undefined}
+            onclick={() => { configOpen = true; onClose?.(); }}>
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.63.68 1.1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       Configurações
     </button>
@@ -454,12 +488,17 @@
 {#if configOpen}
   <div use:portal>
     <ConfigSheet open={configOpen} onClose={() => (configOpen = false)}
+      targetServer={embedded ? activeServer : null}
       onOpenMotores={() => { configOpen = false; motoresOpen = true; }} />
   </div>
 {/if}
 
 {#if motoresOpen}
   <div use:portal>
-    <EnginesSheet open={motoresOpen} onClose={() => (motoresOpen = false)} />
+    <!-- MESMO alvo do ConfigSheet: motor guarda a api_key do provedor, então editar/apagar no
+         servidor errado é pior que config. Sem esta prop a sheet caía nas funções globais e mexia
+         no servidor globalmente ativo — que no mobile (lista agregada) pode ser outra máquina. -->
+    <EnginesSheet open={motoresOpen} onClose={() => (motoresOpen = false)}
+      targetServer={embedded ? activeServer : null} />
   </div>
 {/if}

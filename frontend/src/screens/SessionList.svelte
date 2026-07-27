@@ -432,8 +432,16 @@
 
   // Abre o drawer recarregando a lista de servidores (pode ter mudado desde a última abertura) — o
   // AccountMenu embedded vive lá dentro.
+  // Servidor que "Horas silenciosas" e "Configurações" do drawer vão editar. Só o ID: congelar o
+  // objeto prenderia base/token/label no que valia ao ABRIR — trocar o token na mesma linha e usar
+  // Configurações em seguida mandaria o token velho. Com o id, `servers.find` resolve ao vivo.
+  // Snapshot (e não `getActiveId()` a cada uso) porque a lista é agregada: sem fixar, mexer na
+  // config editaria o servidor globalmente ativo, que pode ser OUTRA máquina — o bug que isto fecha.
+  let settingsServerId = $state<string | null>(null);
+
   function openDrawer() {
     sessionsStore.refreshServers();
+    settingsServerId = getActiveId();
     drawerOpen = true;
   }
 
@@ -649,7 +657,22 @@
             </div>
           {/each}
         {:else}
-          {#each visibleSessions as session (session.serverId + ':' + session.name)}
+          <!-- Lista plana (1 servidor, ou agrupamento desligado) TAMBEM passa por clusterByPair: o
+               cabecalho do par e a borda .pair-member moravam so no ramo agrupado, e o toggle
+               "Agrupar por" so aparece com 2+ servidores — entao quem usa um servidor so perdia o
+               agrupamento de pareamento inteiro, que e justamente a feature de quem pareia sessoes
+               no mesmo repo. Sobrava so o chip dentro do card. -->
+          {#each clusterByPair(visibleSessions) as item (item.kind === 'header' ? `ph:${item.gid}` : `${item.session.serverId}:${item.session.name}`)}
+            {#if item.kind === 'header'}
+              <button class="pair-head" onclick={() => toggleGroup(`pair:${item.gid}`)}
+                      aria-expanded={!collapsed.has(`pair:${item.gid}`)}>
+                <span class="pair-chev" class:collapsed={collapsed.has(`pair:${item.gid}`)} aria-hidden="true">▾</span>
+                <span class="pair-label">🤝&nbsp;{item.label}</span>
+                <span class="pair-count">{item.count}</span>
+              </button>
+            {:else if !item.gid || !collapsed.has(`pair:${item.gid}`)}
+              {@const session = item.session}
+              <div class="pair-wrap" class:pair-member={!!item.gid}>
             <SessionCard
               {session}
               serverBadge={null}
@@ -663,6 +686,8 @@
               selected={selected.has(`${session.serverId}:${session.name}`)}
               onToggleSelect={() => toggleSelected(`${session.serverId}:${session.name}`)}
             />
+              </div>
+            {/if}
           {/each}
         {/if}
       {/if}
@@ -758,6 +783,7 @@
         {accountName}
         {accountSub}
         {servers}
+        activeId={settingsServerId}
         {onRenameServer}
         {onUpdateServerToken}
         onRemoveServer={dropServer}
