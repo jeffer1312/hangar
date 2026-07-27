@@ -902,6 +902,18 @@ class SessionRegistry:
         # Por isso o create() sync e Claude-only e recusa Codex alto (Task 6 fia o endpoint async).
         if provider == "codex":
             raise ValueError("sessoes Codex sao criadas via create_codex (async)")
+        # Pi anda no MESMO caminho tmux do Claude, mas duas coisas daqui pra baixo sao Claude puro e
+        # recusam alto em vez de "quase funcionar":
+        #  - motor: o `cp-engine --exec` so exporta ANTHROPIC_* / CLAUDE_CODE_*, que o pi ignora ->
+        #    a sessao subiria na conta do proprio pi PARECENDO estar no motor pedido.
+        #  - resume: o branch abaixo monta `claude --resume <uuid>` LITERAL -> aceitar aqui spawnaria
+        #    um Claude com cara de sessao Pi, lendo o transcript do agente errado. O equivalente no Pi
+        #    seria `pi --session <id>` (o wrapper ja respeita esse flag); enquanto nao existir, 400.
+        if provider == "pi":
+            if engine:
+                raise ValueError("motor so vale para provider claude")
+            if resume_session_id is not None:
+                raise ValueError("resume de sessao pi ainda nao e suportado")
         # Unicidade contra tmux (Claude) E sidecars Codex: sem o segundo check, um nome de sessao
         # Codex reusado aqui geraria DOIS SessionInfo com o mesmo name no list() (front keyed por
         # nome) e o kill(name) cairia no branch Codex (checado 1o) -> fecharia o client Codex sem
@@ -933,11 +945,19 @@ class SessionRegistry:
             # continua funcionando.
             cmd = f"cp-engine --exec {engine} -- {cmd}"
         base = (Path(config_dir) / "projects") if config_dir else self.projects_dir
-        jsonl = str(base / sanitize_cwd(cwd) / f"{sid}.jsonl")
+        # Pi tem layout PROPRIO (~/.pi/agent/sessions/<slug>/<ts>_<uuid>.jsonl) e o arquivo so nasce
+        # quando a TUI grava o 1o turno -> nao ha path pra pre-semear. jsonl=None e cache INTOCADO
+        # (ver o final do metodo): o _jsonl_cache e de CLASSE, compartilhado com o sse, e um path do
+        # layout do Claude ali seria um arquivo que nunca existe, devolvido por resolve() pra sempre.
+        # Quem liga o pane ao transcript e o bilhete que a extensao escreve (ver pi_session_file).
+        jsonl = None if provider == "pi" else str(base / sanitize_cwd(cwd) / f"{sid}.jsonl")
         # Pré-confia a pasta no .claude.json: sem isto, uma sessão criada pelo app numa pasta NOVA
         # nasce presa no "trust this folder?" do Claude Code (invisível/ininteragível pelo chat até
         # aceitar na TUI). Só é o 1º acesso à pasta — depois o próprio Claude Code grava. Best-effort.
-        _pretrust_cwd(cwd, config_dir)
+        # Pi não lê o .claude.json e tem o próprio fluxo de confiança -> escrever ali só sujaria a
+        # lista de pastas confiadas do Claude com pasta que ele talvez nunca abra.
+        if provider != "pi":
+            _pretrust_cwd(cwd, config_dir)
         if not tmux.new_session(name, cwd, cmd, config_dir):
             raise ValueError("falha ao criar sessao no tmux")
         # Sessao NOVA = sid novo = transcript fresco. A fila duravel e keyed pelo NOME (sobrevive ao
@@ -950,7 +970,9 @@ class SessionRegistry:
         ThenLink(name).clear()
         # Fixa o jsonl FRESCO no cache na hora: resolve() devolve este uuid mesmo antes do claude
         # escrever o arquivo, evitando o fallback newest-by-mtime pescar um jsonl ja existente da pasta.
-        self._jsonl_cache[name] = jsonl
+        # Pi (jsonl=None) nao entra no cache — nao ha path a fixar, e a resolucao dele nem passa por aqui.
+        if jsonl is not None:
+            self._jsonl_cache[name] = jsonl
         return SessionInfo(name=name, cwd=cwd, jsonl=jsonl, provider=provider, engine=engine)
 
     async def create_codex(self, name: str, cwd: str,

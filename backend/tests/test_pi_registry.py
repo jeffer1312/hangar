@@ -243,3 +243,82 @@ def test_resume_refuses_a_pi_pane_instead_of_killing_it(monkeypatch, tmp_path):
             chamada()
         assert "pi" in str(exc.value)
     assert mortes == [], "o pane Pi nao pode ser morto pelo caminho de resume do Claude"
+
+
+# ---------------------------------------------------------------------------
+# create(provider="pi"): mesmo caminho tmux do Claude, transcript NAO pre-semeado.
+# ---------------------------------------------------------------------------
+_UUID_PI = "22222222-2222-2222-2222-222222222222"
+
+
+def _create_pi(tmp_path, monkeypatch, **kw):
+    from unittest.mock import patch
+    reg = registry.SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "has_session", return_value=False), \
+         patch.object(registry.tmux, "new_session", return_value=True) as ns, \
+         patch.object(registry, "_pretrust_cwd") as pt:
+        info = reg.create("s-pi", "/home/u/p", provider="pi", **kw)
+    return info, ns, pt
+
+
+def test_create_pi_does_not_seed_a_claude_transcript_path(tmp_path, monkeypatch):
+    # O jsonl do Pi e <ts>_<uuid>.jsonl em ~/.pi/agent/sessions/<slug>/ e so nasce no 1o turno.
+    # Um path do layout do Claude aqui e um arquivo que NUNCA existe — e como o _jsonl_cache e de
+    # CLASSE (api.registry + sse._registry), ele ficaria grudado nesse fantasma.
+    registry.SessionRegistry._jsonl_cache.pop("s-pi", None)
+    info, ns, _ = _create_pi(tmp_path, monkeypatch)
+    assert info.provider == "pi"
+    assert info.jsonl is None
+    assert "s-pi" not in registry.SessionRegistry._jsonl_cache
+    # spawn_command do PiAdapter, agora alcancavel: `pi --session-id <uuid>` (o `exec` vem do tmux.py)
+    assert ns.call_args[0][2].startswith("pi --session-id ")
+
+
+def test_create_pi_skips_the_claude_trust_list(tmp_path, monkeypatch):
+    # _pretrust_cwd escreve hasTrustDialogAccepted no .claude.json, que o pi nem le.
+    _, _, pt = _create_pi(tmp_path, monkeypatch)
+    pt.assert_not_called()
+
+
+def test_create_claude_still_seeds_the_same_path(tmp_path, monkeypatch):
+    # Nao-regressao do caminho de TODO usuario de hoje: byte a byte o mesmo jsonl no cache.
+    from unittest.mock import patch
+    reg = registry.SessionRegistry(projects_dir=tmp_path)
+    registry.SessionRegistry._jsonl_cache.pop("cc", None)
+    with patch.object(registry.tmux, "has_session", return_value=False), \
+         patch.object(registry.tmux, "new_session", return_value=True) as ns, \
+         patch.object(registry, "_pretrust_cwd") as pt, \
+         patch.object(registry.uuid, "uuid4", return_value=_UUID_PI):
+        info = reg.create("cc", "/home/u/p")
+    esperado = str(tmp_path / registry.sanitize_cwd("/home/u/p") / f"{_UUID_PI}.jsonl")
+    assert info.jsonl == esperado
+    assert registry.SessionRegistry._jsonl_cache["cc"] == esperado
+    assert ns.call_args[0][2] == f"claude --session-id {_UUID_PI}"
+    pt.assert_called_once_with("/home/u/p", None)
+
+
+def test_create_pi_refuses_resume_instead_of_spawning_claude(tmp_path, monkeypatch):
+    # O branch de resume monta `claude --resume <uuid>` LITERAL: aceitar aqui subiria um CLAUDE
+    # lendo o transcript de outro agente, com cara de sessao Pi.
+    from unittest.mock import patch
+    reg = registry.SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "has_session", return_value=False), \
+         patch.object(registry.tmux, "new_session", return_value=True) as ns:
+        with pytest.raises(ValueError) as exc:
+            reg.create("s-pi", "/home/u/p", provider="pi", resume_session_id=_UUID_PI)
+    assert "resume" in str(exc.value)
+    ns.assert_not_called()
+
+
+def test_create_pi_refuses_an_engine(tmp_path, monkeypatch):
+    # `cp-engine --exec` so exporta ANTHROPIC_*/CLAUDE_CODE_*, que o pi ignora -> a sessao subiria
+    # na conta do proprio pi PARECENDO estar no motor pedido.
+    from unittest.mock import patch
+    reg = registry.SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "has_session", return_value=False), \
+         patch.object(registry.tmux, "new_session", return_value=True) as ns, \
+         patch("app.engines.listar", return_value={"kimi": {}}):
+        with pytest.raises(ValueError) as exc:
+            reg.create("s-pi", "/home/u/p", provider="pi", engine="kimi")
+    assert "motor" in str(exc.value)
+    ns.assert_not_called()

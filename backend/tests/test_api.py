@@ -649,7 +649,7 @@ def test_create_default_provider_routes_to_claude_create(api_client):
         r = api_client.post("/api/sessions", headers=_h(), json={"name": "x", "cwd": "/tmp"})
     assert r.status_code == 200
     assert r.json()["provider"] == "claude"
-    cr.assert_called_once_with("x", "/tmp", None, engine=None)
+    cr.assert_called_once_with("x", "/tmp", None, provider="claude", engine=None)
 
 
 def test_create_explicit_claude_provider_routes_to_claude_create(api_client):
@@ -658,7 +658,7 @@ def test_create_explicit_claude_provider_routes_to_claude_create(api_client):
         r = api_client.post("/api/sessions", headers=_h(),
                             json={"name": "x", "cwd": "/tmp", "provider": "claude"})
     assert r.status_code == 200
-    cr.assert_called_once_with("x", "/tmp", None, engine=None)
+    cr.assert_called_once_with("x", "/tmp", None, provider="claude", engine=None)
 
 
 def test_create_codex_provider_routes_to_create_codex(api_client):
@@ -684,6 +684,28 @@ def test_create_codex_forwards_wrapper_initial_prompt(api_client):
         })
     assert r.status_code == 200
     fake.assert_awaited_once_with("cx", "/tmp", "revise este projeto")
+
+
+def test_create_pi_provider_routes_to_claude_create_with_provider(api_client):
+    # Pi usa o MESMO registry.create (pane tmux); o provider TEM que chegar la, senao o create
+    # spawnaria claude e pre-semearia um transcript do layout errado.
+    with patch("app.api.registry.create",
+              return_value=SessionInfo(name="p", cwd="/tmp", provider="pi", jsonl=None)) as cr:
+        r = api_client.post("/api/sessions", headers=_h(),
+                            json={"name": "p", "cwd": "/tmp", "provider": "pi"})
+    assert r.status_code == 200
+    assert r.json()["provider"] == "pi"
+    assert r.json()["jsonl"] is None
+    cr.assert_called_once_with("p", "/tmp", None, provider="pi", engine=None)
+
+
+def test_create_pi_with_engine_is_refused(api_client):
+    # Motor so faz sentido no Claude: o env do cp-engine e Anthropic-only.
+    with patch("app.api.registry.create") as cr:
+        r = api_client.post("/api/sessions", headers=_h(),
+                            json={"name": "p", "cwd": "/tmp", "provider": "pi", "engine": "kimi"})
+    assert r.status_code == 400
+    cr.assert_not_called()
 
 
 def test_create_rejects_unknown_provider(api_client):

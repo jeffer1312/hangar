@@ -12,6 +12,7 @@
 #                                  responda um [grupo:] com --group (evita loop); responda 1:1.
 #   cp-send --new <nome> [cwd]     cria sessão Claude nova (tmux gerenciado pelo app: --session-id,
 #                                  truecolor, visível no pocket). cwd default = home.
+#                                  --provider pi cria uma sessão do agente Pi em vez do Claude.
 #
 # Remetente é detectado pelo nome da sessão tmux atual e prefixado como "[de: X]",
 # pra sessão destino saber a origem e pra onde responder.
@@ -115,7 +116,7 @@ fi
 
 if [[ "$1" == "--new" ]]; then
     shift
-    name="${1:?uso: cp-send --new <nome> [cwd] [--engine <motor>]}"
+    name="${1:?uso: cp-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|pi>]}"
     shift
     if [[ "$name" == *::* ]]; then
         echo "erro: '::' é reservado pro endereço servidor::sessao — escolha outro nome" >&2
@@ -126,21 +127,27 @@ if [[ "$1" == "--new" ]]; then
     # DESCARTADO calado — na conta Anthropic, parecendo que atendeu o pedido.
     if [[ "$name" == -* ]]; then
         echo "erro: nome de sessão não pode começar com '-' (esqueceu o nome?)" >&2
-        echo "uso: cp-send --new <nome> [cwd] [--engine <motor>]" >&2
+        echo "uso: cp-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|pi>]" >&2
         exit 2
     fi
     # --engine: a sessão nova nasce num MOTOR de modelo (~/.claude/engines.json) em vez da conta
     # Anthropic. Serve pra parear com uma sessão rodando noutro modelo — o par continua no mesmo
     # ~/.claude (skills, hooks, contrato compartilhado), só o motor difere. Aceita o flag em
     # qualquer ordem: `--new nome --engine kimi` sem cwd é o uso mais comum.
-    cwd=""; engine=""
+    # --provider: qual AGENTE roda na sessão nova (claude, o default, ou pi). Mesma forma do
+    # --engine: repassa cru pro backend, que recusa com 400 o que não conhece — não duplica aqui a
+    # lista de providers válidos.
+    cwd=""; engine=""; provider=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --engine)
                 [[ -n "$engine" ]] && { echo "erro: --engine informado duas vezes" >&2; exit 2; }
                 engine="${2:?uso: --engine <motor>}"; shift 2 ;;
-            # Token com '-' na frente que não é --engine é opção errada (--engines, -engine). Aceitar
-            # como cwd fazia o erro aparecer no token SEGUINTE, apontando o inocente.
+            --provider)
+                [[ -n "$provider" ]] && { echo "erro: --provider informado duas vezes" >&2; exit 2; }
+                provider="${2:?uso: --provider <claude|pi>}"; shift 2 ;;
+            # Token com '-' na frente que não é --engine/--provider é opção errada (--engines,
+            # -engine). Aceitar como cwd fazia o erro aparecer no token SEGUINTE, apontando o inocente.
             -*) echo "erro: opção desconhecida '$1'" >&2; exit 2 ;;
             *) if [[ -z "$cwd" ]]; then cwd="$1"; shift
                else echo "erro: argumento inesperado '$1'" >&2; exit 2; fi ;;
@@ -151,10 +158,11 @@ if [[ "$1" == "--new" ]]; then
     # que não existe volta 400 do backend (a api() mostra o detalhe) em vez de abrir uma sessão que
     # parece estar no motor e não está.
     body=$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1], "cwd": sys.argv[2],
-                                                          "engine": sys.argv[3] or None}))' \
-           "$name" "$cwd" "$engine")
+                                                          "engine": sys.argv[3] or None,
+                                                          "provider": sys.argv[4] or "claude"}))' \
+           "$name" "$cwd" "$engine" "$provider")
     api POST /api/sessions "$body" >/dev/null
-    echo "sessão criada: $name ($cwd)${engine:+ [motor: $engine]} — fala com ela via: cp-send $name \"msg\""
+    echo "sessão criada: $name ($cwd)${provider:+ [$provider]}${engine:+ [motor: $engine]} — fala com ela via: cp-send $name \"msg\""
     exit 0
 fi
 

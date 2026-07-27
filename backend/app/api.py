@@ -567,7 +567,9 @@ async def create_session(body: CreateBody):
     # sessoes; vai pro threadpool via asyncio.to_thread, igual aos outros handlers async deste
     # arquivo que chamam registry.list()/save_upload (menor risco de regressao: comportamento e
     # exceções do create() Claude ficam IDENTICOS, so a chamada muda de sync p/ thread).
-    if body.provider not in ("claude", "codex"):
+    # Pi entra pelo MESMO registry.create do Claude (pane tmux + spawn_command do PiAdapter); o que
+    # muda la dentro e so o transcript, que nao e pre-semeado (layout proprio, arquivo so no 1o turno).
+    if body.provider not in ("claude", "codex", "pi"):
         raise HTTPException(400, "provider invalido")
     if body.config_dir is not None and body.config_dir not in {c.path for c in list_config_dirs()}:
         raise HTTPException(400, "config_dir invalido")
@@ -582,7 +584,7 @@ async def create_session(body: CreateBody):
         if body.provider == "codex":
             return await registry.create_codex(body.name, body.cwd, body.initial_prompt)
         return await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir,
-                                       engine=body.engine)
+                                       provider=body.provider, engine=body.engine)
     except ValueError as e:
         raise HTTPException(409, str(e))
 
