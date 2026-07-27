@@ -288,3 +288,47 @@ def test_status_line_is_the_chrome_below_the_input_box():
     assert "💬 43k/606" in sl and "💵 $0.47" in sl
     assert "the answer" not in sl   # conversation excluded
     assert "✻ Worked" not in sl     # spinner / completed marker excluded
+
+
+# --- Pi: a ancora e a caixa arredondada do composer, nao a regua reta do Claude ----------------
+# pane_pi_idle.txt e um `tmux capture-pane -p` REAL de uma sessao Pi ociosa (Pi 0.82.1). Sem a
+# ancora da caixa, o fallback devolvia as 2 ultimas linhas nao-vazias -> a borda `╰───╯` colada no
+# chip, ou conversa pura quando o usuario nao tem extensao de statusline.
+
+def _pane_pi() -> str:
+    return (Path(__file__).parent / "fixtures" / "pane_pi_idle.txt").read_text(encoding="utf-8")
+
+
+def test_status_line_pi_is_the_row_below_the_composer_box():
+    sl = state_mod.status_line(_pane_pi())
+    assert sl is not None
+    assert sl.startswith("🤖 kimi-for-coding (high)") and "💬 sessão 135in/470out" in sl
+    assert "╰" not in sl and "╭" not in sl      # borda da caixa fora
+    assert "Como posso te ajudar" not in sl     # conversa fora
+
+
+def test_status_line_pi_sem_extensao_de_statusline_e_none():
+    # MESMO pane sem a ultima linha: e exatamente o que ve quem nao instalou a extensao de
+    # statusline. Nada abaixo da caixa -> nada. Devolver conversa seria pior que devolver vazio.
+    pane = "\n".join(_pane_pi().splitlines()[:-1]) + "\n"
+    assert state_mod.status_line(pane) is None
+
+
+def test_status_line_claude_fixtures_byte_identical():
+    # Trava de nao-regressao: a ancora nova NAO pode mover um byte do que o Claude ja devolvia.
+    # Valores conferidos contra a implementacao anterior (so a regua reta) nestes mesmos arquivos.
+    fx = Path(__file__).parent / "fixtures"
+    esperado = {
+        "pane_idle.txt": (
+            "  Opus 4.8 (1M context) ~high 📁 claude-pocket master ⊙6m ↑0↓0 │  🧠4.9G\n"
+            "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents"
+        ),
+        "pane_thinking.txt": (
+            "  Opus 4.8 (1M context) ~high 📁 claude-pocket master ⊙6m ↑0↓0 │  🧠4.9G\n"
+            "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents"
+        ),
+    }
+    for nome, valor in esperado.items():
+        assert state_mod.status_line((fx / nome).read_text(encoding="utf-8")) == valor, nome
+    # O banner de boas-vindas do Claude TEM `╰───╯` (linha 12 do pane_idle) — a asserção acima já
+    # prova que ele nao vira ancora: a regua do input, mais abaixo, continua ganhando.
