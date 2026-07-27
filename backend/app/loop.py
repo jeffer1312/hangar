@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from app.config import settings
+from app.models import dumps_safe
 from app.pqueue import _sanitize
 
 ACTIVE = {"running", "paused_awaiting", "done_claimed"}
@@ -57,7 +58,7 @@ class LoopLink:
 
     def set(self, data: dict) -> None:
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        tmp.write_text(dumps_safe(data), encoding="utf-8")
         tmp.replace(self.path)
 
     def update(self, **fields) -> dict | None:

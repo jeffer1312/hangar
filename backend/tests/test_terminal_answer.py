@@ -207,3 +207,18 @@ def test_review_substring_not_false_positive():
         with pytest.raises(ti.DriveError):  # "A" nao e token exato de "Apply" -> mismatch
             ti.answer_questions("s", [{"kind": "option", "indices": [0], "multi": False, "labels": ["A"]}])
     assert "Escape" not in keys  # inerte: fallback e do caller
+
+
+def test_send_prompt_troca_surrogate_solto_antes_do_tmux():
+    # Meio emoji no argv do `tmux send-keys` estoura UnicodeEncodeError (subprocess encoda em
+    # utf-8) — e como é um ValueError, o caller traduzia pra 400 "control characters" e a msg do
+    # usuário morria ali, antes até de entrar na fila. Vira U+FFFD e segue.
+    ready = "❯ \n⏵⏵ bypass permissions on (shift+tab to cycle)"
+    keys = []
+    with patch.object(ti.tmux, "has_session", return_value=True), \
+         patch.object(ti, "_capture", lambda name: ready), \
+         patch.object(ti.time, "sleep", lambda *_: None), \
+         patch.object(ti, "send_keys", lambda name, k, **kw: keys.append(k)):
+        assert ti.TerminalInput().send_prompt("s", "corte \ud83d") == "sent"
+    assert keys == ["corte �", "Enter"]
+    keys[0].encode("utf-8")   # o que o subprocess faria com o argv

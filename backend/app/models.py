@@ -1,3 +1,4 @@
+import json
 import re
 from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, model_validator
@@ -16,8 +17,11 @@ _SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
 
 
 def scrub_surrogates(v: Any) -> Any:
-    """Troca surrogate solto por U+FFFD, recursivo em dict/list. Texto bem-formado sai IDENTICO
-    (mesmo objeto): o search e um scan em C e so paga a substituicao quando ha o que consertar."""
+    """Troca surrogate solto por U+FFFD, recursivo em dict/list. STRING bem-formada sai IDENTICA
+    (o mesmo objeto): o search e um scan em C e so paga a substituicao quando ha o que consertar.
+    dict/list, ao contrario, sao SEMPRE remontados — o conteudo sai igual, a identidade nao. E de
+    proposito: a alternativa (comparar item a item pra talvez devolver o original) percorre a mesma
+    estrutura e ainda alocaria a copia pra comparar. Ninguem depende da identidade do container."""
     if isinstance(v, str):
         return _SURROGATE_RE.sub("�", v) if _SURROGATE_RE.search(v) else v
     if isinstance(v, dict):
@@ -25,6 +29,16 @@ def scrub_surrogates(v: Any) -> Any:
     if isinstance(v, list):
         return [scrub_surrogates(x) for x in v]
     return v
+
+
+def dumps_safe(obj: Any) -> str:
+    """json.dumps de algo que veio do CLIENTE, ja sem surrogate solto — o unico jeito seguro de
+    serializar texto digitado pelo usuario pra um arquivo. json.dumps ACEITA "\\ud83d" sozinho e
+    devolve um str feliz; quem estoura e o `.encode("utf-8")` logo depois (write_text) com
+    `UnicodeEncodeError: surrogates not allowed`. Meio emoji e trivial de produzir: o browser fatia
+    string por UNIDADE UTF-16, entao um corte no meio do par ja chega assim no POST. Sem isto, o
+    write do sidecar (fila, chain, loop, pair) virava 500 e a mensagem do usuario sumia."""
+    return json.dumps(scrub_surrogates(obj), ensure_ascii=False)
 
 
 class SessionInfo(BaseModel):
