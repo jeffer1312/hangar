@@ -484,3 +484,34 @@ def test_salvar_rejeita_janela_nao_positiva(campo):
         eng.salvar("kimi", _kimi() | {campo: 0})
     with pytest.raises(ValueError, match="esperado número"):
         eng.salvar("kimi", _kimi() | {campo: "abc"})
+
+
+@pytest.mark.parametrize("campo", ["bundled_skills", "tool_search", "experimental_betas",
+                                   "prompt_caching", "adaptive_thinking",
+                                   "gateway_model_discovery", "fine_grained_tool_streaming"])
+def test_env_de_rejeita_booleano_envenenado_hand_editado(campo, tmp_path, monkeypatch):
+    """`1 is not True` é verdadeiro em Python. Um `"tool_search": 1` hand-editado — natural pra quem
+    viu a convenção "1"/"0" das env vars ao lado — caía no ramo DESLIGADO, o oposto do pedido, calado.
+    Recusa o arquivo em vez de adivinhar."""
+    eng.salvar("kimi", _kimi())
+    bruto = json.loads((tmp_path / "engines.json").read_text())
+    bruto["kimi"][campo] = 1
+    (tmp_path / "engines.json").write_text(json.dumps(bruto))
+    with pytest.raises(ValueError, match="esperado true/false"):
+        eng.env_de("kimi")
+
+
+def test_avisa_no_log_quando_tool_search_fica_inerte(caplog):
+    """A UI desabilita o toggle, mas não é o único cliente da API. Sem o log, `tool_search: true`
+    aparece ligado no GET e ninguém descobre que está inerte."""
+    eng.salvar("kimi", _kimi() | {"tool_search": True})
+    with caplog.at_level(logging.WARNING):
+        eng.env_de("kimi")
+    assert any("não tem efeito" in r.getMessage() for r in caplog.records), caplog.text
+
+
+def test_sem_aviso_quando_a_combinacao_e_coerente(caplog):
+    eng.salvar("kimi", _kimi() | {"tool_search": True, "experimental_betas": True})
+    with caplog.at_level(logging.WARNING):
+        eng.env_de("kimi")
+    assert "não tem efeito" not in caplog.text

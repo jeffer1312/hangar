@@ -235,6 +235,23 @@ def _gravar(tudo: dict[str, Any]) -> None:
         raise
 
 
+def _booleano(campo: str, valor: Any) -> bool | None:
+    """Lê um campo bool do disco, ou estoura. None = ausente (cai no default de quem chama).
+
+    Os testes de identidade (`is True` / `is False`) são o que dá o default correto para o campo
+    AUSENTE, mas contra um arquivo hand-editado eles falham calados: `1 is not True` é verdadeiro,
+    então `"tool_search": 1` — escrito por quem viu a convenção "1"/"0" das env vars ao lado — cai no
+    ramo DESLIGADO, o oposto do pedido. Sem erro, sem log, e o efeito aparece turnos depois (um 400
+    do provedor, ou uma skill estourando a janela). Mesma escolha do _inteiro_positivo: recusar o
+    arquivo envenenado em vez de adivinhar a intenção.
+    """
+    if valor is None:
+        return None
+    if not isinstance(valor, bool):
+        raise ValueError(f"{campo}: esperado true/false (recebido {type(valor).__name__})")
+    return valor
+
+
 def _inteiro_positivo(campo: str, valor: Any) -> int:
     """Normaliza um campo int na hora de virar env var, ou estoura.
 
@@ -294,7 +311,7 @@ def env_de(nome: str) -> dict[str, str]:
         # a janela (o /context seguia em 200k) e a primeira move. Sem isto, um modelo de 256k/500k
         # compacta em ~167k — capacidade jogada fora, calado.
         env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(_inteiro_positivo("context_window", e["context_window"]))
-    if e.get("bundled_skills") is not True:
+    if _booleano("bundled_skills", e.get("bundled_skills")) is not True:
         # Default desligado por MEDIÇÃO: a skill empacotada `claude-api` não tem SKILL.md na raiz, e
         # invocá-la injeta os 64 arquivos dela de uma vez — medido em 847.630 chars / 206.553 tokens
         # num único turno (12% -> 67% da janela numa sessão gpt-5.6-sol de 372k). O gatilho dela é
@@ -303,7 +320,7 @@ def env_de(nome: str) -> dict[str, str]:
         # context_management, que nenhum provedor de terceiro implementa); num motor, mata a sessão.
         # Só as BUNDLED caem: plugin e ~/.claude/skills/ seguem intactas.
         env["CLAUDE_CODE_DISABLE_BUNDLED_SKILLS"] = "1"
-    if e.get("tool_search") is not True:
+    if _booleano("tool_search", e.get("tool_search")) is not True:
         # Default desligado por FAIL-SAFE, não por medição: a doc da Moonshot diz que o endpoint do
         # Kimi ainda não suporta Tool Search, e um erro no meio do turno é pior que uma ferramenta a
         # menos. Provedor que suportar liga com "tool_search": true.
@@ -312,7 +329,7 @@ def env_de(nome: str) -> dict[str, str]:
         # tool_reference blocks". Manter explícito não custa e vale pro gateway que se anuncia
         # first-party.
         env["ENABLE_TOOL_SEARCH"] = "false"
-    if e.get("experimental_betas") is not True:
+    if _booleano("experimental_betas", e.get("experimental_betas")) is not True:
         # Default desligado: campos beta que o CC manda sozinho (context_management, campos beta de
         # tool) fazem o upstream de terceiro devolver `400 Extra inputs are not permitted`. A doc do
         # gateway lista essa var como a remediação do lado do cliente.
@@ -320,22 +337,29 @@ def env_de(nome: str) -> dict[str, str]:
         # consegue sobrepor — por isso a UI desabilita aquele toggle quando este está desmarcado.
         # NÃO cobre `output_config`/effort: a doc não lista remediação de cliente pra esse campo.
         env["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"
-    if e.get("prompt_caching") is False:
+        if _booleano("tool_search", e.get("tool_search")) is True:
+            # A UI desabilita o toggle e explica, mas ela não é o único cliente: curl, um PWA velho
+            # em cache ou uma automação salvam essa combinação e recebem 200. Sem esta linha, o
+            # `GET /api/engines` mostra "tool_search: true" e ninguém descobre que está inerte.
+            _log.warning("motor %r: tool_search=true não tem efeito com experimental_betas=false — "
+                         "DISABLE_EXPERIMENTAL_BETAS mantém o tool search desligado e "
+                         "ENABLE_TOOL_SEARCH não sobrepõe.", nome)
+    if _booleano("prompt_caching", e.get("prompt_caching")) is False:
         # Default LIGADO (só desliga com false explícito): cache é economia, e num gateway ele já
         # degrada sozinho e calado — "if the gateway rejects the cache breakpoint, Claude Code
         # retries without it and leaves that block uncached for the rest of the conversation".
         # Desligar de propósito só faz sentido em provedor que cobra o cache mais caro que o miss.
         env["DISABLE_PROMPT_CACHING"] = "1"
-    if e.get("adaptive_thinking") is False:
+    if _booleano("adaptive_thinking", e.get("adaptive_thinking")) is False:
         # Default LIGADO. Desligar thinking é destrutivo em alguns provedores: a doc da Kimi diz que
         # "disabling thinking routes both K3 and K2.7 Code to K2.6" — ou seja, rebaixa o modelo
         # calado. Só marque false se o upstream devolver 400 citando `thinking`/`adaptive`.
         env["CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING"] = "1"
-    if e.get("gateway_model_discovery") is True:
+    if _booleano("gateway_model_discovery", e.get("gateway_model_discovery")) is True:
         # Opt-in: consulta /v1/models do gateway e popula o picker /model. Fora por padrão porque é
         # uma chamada extra a um endpoint que nem todo gateway expõe.
         env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
-    if e.get("fine_grained_tool_streaming") is True:
+    if _booleano("fine_grained_tool_streaming", e.get("fine_grained_tool_streaming")) is True:
         # Opt-in: o CC desliga por padrão atrás de base URL custom.
         env["CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING"] = "1"
     for campo, var in (("auto_compact_window", "CLAUDE_CODE_AUTO_COMPACT_WINDOW"),
