@@ -8,7 +8,12 @@
 #     is invisible to the app.
 #
 # Rules:
-#  - already passed --session-id/--resume/--continue -> respected, untouched.
+#  - already passed a flag that manages its own session state -> respected, untouched. Per
+#    `pi --help`: --session-id, --resume/-r, --continue/-c, --session (path|id), --fork (path|id),
+#    --no-session. Same class of bug as the claude wrapper guards against (-c there is Claude's own
+#    "continue previous session" short flag) — injecting --session-id alongside any of these either
+#    errors or silently overrides what the user asked for (e.g. `pi -c` would start a FRESH random
+#    session instead of continuing the last one).
 #  - already in tmux ($TMUX) / stdin not a tty (pipe/script) -> only inject the id + export the var.
 #  - outside tmux + interactive -> create a tmux session named after the folder BASENAME (suffix
 #     -2/-3 if it already exists) and run pi (with the id) inside it. Quitting pi ends the command,
@@ -26,7 +31,7 @@
 function pi
     for a in $argv
         switch $a
-            case --session-id '--session-id=*' --resume '--resume=*' --continue
+            case --session-id '--session-id=*' --resume '--resume=*' -r --continue -c --session '--session=*' --fork '--fork=*' --no-session
                 command pi $argv
                 return
         end
