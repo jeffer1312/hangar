@@ -1,6 +1,7 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
-  import { getConfig, patchConfig, type CampoConfig } from '../lib/api';
+  import { getConfig, getConfigForServer, patchConfig, patchConfigForServer, type CampoConfig } from '../lib/api';
+  import type { Server } from '../lib/auth';
 
   // Configuração do servidor pelo app. Até aqui tudo vinha só de env/.env: pra mudar a chave da
   // transcrição ou a retenção de anexos era preciso editar arquivo no servidor e reiniciar o
@@ -11,13 +12,17 @@
   interface Props {
     open: boolean;
     onClose: () => void;
+    // Servidor a configurar. null = o ativo global (desktop, que TEM um ativo). No mobile a lista é
+    // agregada e não há "ativo": sem isto, editar a config pelo drawer batia no servidor globalmente
+    // ativo, que pode ser OUTRA máquina — dá pra trocar a chave do servidor errado sem perceber.
+    targetServer?: Server | null;
     // EnginesSheet mora fora daqui de propósito (ver AccountMenu): duas BottomSheet abertas ao
     // mesmo tempo dobravam o backdrop e faziam o Escape fechar a sheet ERRADA (o onkeydown de cada
     // BottomSheet vai pro window; a desta sheet registra primeiro e vencia a corrida). Quem abre é
     // o dono do ConfigSheet, fechando este antes.
     onOpenMotores: () => void;
   }
-  let { open, onClose, onOpenMotores }: Props = $props();
+  let { open, onClose, targetServer = null, onOpenMotores }: Props = $props();
 
   interface Campo {
     chave: string;
@@ -69,7 +74,7 @@
     carregando = true;
     erro = '';
     try {
-      const c = await getConfig();
+      const c = targetServer ? await getConfigForServer(targetServer) : await getConfig();
       campos = c.campos;
       leitura = c.somente_leitura;
       rascunho = {};
@@ -94,7 +99,7 @@
     erro = '';
     salvo = false;
     try {
-      const r = await patchConfig(rascunho);
+      const r = targetServer ? await patchConfigForServer(targetServer, rascunho) : await patchConfig(rascunho);
       campos = r.campos;
       rascunho = {};
       salvo = true;

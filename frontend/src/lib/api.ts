@@ -91,6 +91,22 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// Configurações abertas a partir da visão agregada precisam continuar no servidor capturado, sem
+// trocar o servidor global. Um 401 aqui é erro local da sheet: nunca remove a credencial ativa,
+// que pode pertencer a outra máquina.
+async function apiFetchForServer<T>(s: Server, path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${s.baseUrl}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${s.token}`,
+      ...(init?.headers ?? {}),
+    },
+  });
+  if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
+  return res.json() as Promise<T>;
+}
+
 export function getSessions(): Promise<SessionInfo[]> {
   // Timeout curto: este alimenta polls (ex. nav do Chat a cada 5s) — socket pendurado (tailscale
   // pra nó morto nao recusa) empilhava um fetch por tick até esgotar as 6 conexões do host.
@@ -265,12 +281,20 @@ export function getPushSettings(): Promise<{ muted: string[]; quiet_hours: { sta
   return apiFetch('/api/push/settings');
 }
 
+export function getPushSettingsForServer(s: Server): Promise<{ muted: string[]; quiet_hours: { start: string; end: string } | null }> {
+  return apiFetchForServer(s, '/api/push/settings');
+}
+
 export function setSessionMute(session: string, muted: boolean): Promise<{ ok: boolean }> {
   return apiFetch('/api/push/mute', { method: 'POST', body: JSON.stringify({ session, muted }) });
 }
 
 export function setQuietHours(start: string | null, end: string | null): Promise<{ ok: boolean }> {
   return apiFetch('/api/push/quiet-hours', { method: 'POST', body: JSON.stringify({ start, end }) });
+}
+
+export function setQuietHoursForServer(s: Server, start: string | null, end: string | null): Promise<{ ok: boolean }> {
+  return apiFetchForServer(s, '/api/push/quiet-hours', { method: 'POST', body: JSON.stringify({ start, end }) });
 }
 
 export async function deleteSession(name: string): Promise<void> {
@@ -535,9 +559,17 @@ export function getConfig(): Promise<ConfigServidor> {
   return apiFetch('/api/config');
 }
 
+export function getConfigForServer(s: Server): Promise<ConfigServidor> {
+  return apiFetchForServer(s, '/api/config');
+}
+
 export function patchConfig(mudancas: Record<string, unknown>): Promise<{ campos: Record<string, CampoConfig> }> {
   // POST, nao PATCH: o proxy na frente do backend barra PATCH (era o unico do app).
   return apiFetch('/api/config', { method: 'POST', body: JSON.stringify(mudancas) });
+}
+
+export function patchConfigForServer(s: Server, mudancas: Record<string, unknown>): Promise<{ campos: Record<string, CampoConfig> }> {
+  return apiFetchForServer(s, '/api/config', { method: 'POST', body: JSON.stringify(mudancas) });
 }
 
 // ── Motores de modelo ───────────────────────────────────────────────────────
@@ -548,7 +580,17 @@ export interface Motor {
   subagent_model?: string;
   context_window?: number;
   vision?: boolean | null;
+  // Capacidades do harness. Sempre positivas ("true = ligado"); o backend traduz pras env vars
+  // negativas (DISABLE_*) em engines.env_de.
   tool_search?: boolean;
+  bundled_skills?: boolean;
+  experimental_betas?: boolean;
+  prompt_caching?: boolean;
+  adaptive_thinking?: boolean;
+  gateway_model_discovery?: boolean;
+  fine_grained_tool_streaming?: boolean;
+  auto_compact_window?: number;
+  max_output_tokens?: number;
   // Sempre mascarada (sk-k••••••••1234). A chave inteira nunca volta do servidor.
   api_key: string;
   api_key_definida: boolean;
@@ -559,14 +601,20 @@ export interface ModeloProvedor {
   vision: boolean | null;
 }
 
-export function getEngines(): Promise<{
+export interface EnginesResponse {
   motores: Record<string, Motor>;
   // true quando engines.json existe mas não pôde ser lido (hand-edit quebrado, etc): a tela
   // precisa distinguir isto de "nenhum motor configurado" — as duas batem em `motores: {}`.
   arquivo_corrompido: boolean;
   arquivo_caminho: string;
-}> {
+}
+
+export function getEngines(): Promise<EnginesResponse> {
   return apiFetch('/api/engines');
+}
+
+export function getEnginesForServer(s: Server): Promise<EnginesResponse> {
+  return apiFetchForServer(s, '/api/engines');
 }
 
 export function putEngine(nome: string, dados: Record<string, unknown>): Promise<{ motores: Record<string, Motor> }> {
@@ -576,18 +624,33 @@ export function putEngine(nome: string, dados: Record<string, unknown>): Promise
   });
 }
 
+export function putEngineForServer(s: Server, nome: string, dados: Record<string, unknown>): Promise<{ motores: Record<string, Motor> }> {
+  return apiFetchForServer(s, `/api/engines/${encodeURIComponent(nome)}`, {
+    method: 'PUT',
+    body: JSON.stringify(dados),
+  });
+}
+
 export function deleteEngine(nome: string): Promise<{ ok: boolean }> {
   return apiFetch(`/api/engines/${encodeURIComponent(nome)}`, { method: 'DELETE' });
+}
+
+export function deleteEngineForServer(s: Server, nome: string): Promise<{ ok: boolean }> {
+  return apiFetchForServer(s, `/api/engines/${encodeURIComponent(nome)}`, { method: 'DELETE' });
 }
 
 // Modelos que a key pode usar, direto do provedor. Também é o "Testar": erro aqui traz a mensagem
 // do provedor (401, host errado), em vez de deixar o usuário sem pista.
 // `nome` OU `base_url`+`api_key` — nunca os dois (o servidor rejeita com 400, pra key salva nunca
 // viajar pra um endereço que o cliente digitou).
-export function engineModelos(
-  corpo: { nome: string } | { base_url: string; api_key: string },
-): Promise<{ modelos: ModeloProvedor[] }> {
+type EngineModelosBody = { nome: string } | { base_url: string; api_key: string };
+
+export function engineModelos(corpo: EngineModelosBody): Promise<{ modelos: ModeloProvedor[] }> {
   return apiFetch('/api/engines/modelos', { method: 'POST', body: JSON.stringify(corpo) });
+}
+
+export function engineModelosForServer(s: Server, corpo: EngineModelosBody): Promise<{ modelos: ModeloProvedor[] }> {
+  return apiFetchForServer(s, '/api/engines/modelos', { method: 'POST', body: JSON.stringify(corpo) });
 }
 
 export async function uploadFile(
