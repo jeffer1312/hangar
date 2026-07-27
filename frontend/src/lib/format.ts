@@ -23,7 +23,18 @@ export function resetsIn(ts: number | null | undefined): string {
 
 // Vocabulário único de estado (label pt-BR + cor) — compartilhado por SessionCard, Sidebar e
 // SessionSwitcherSheet pra mesma sessão nunca aparecer com nomes/cores divergentes.
-import type { State, ChatEvent } from './types';
+import type { State, ChatEvent, SessionInfo } from './types';
+
+// Nome humano do provider da sessão. Existe porque cada tela escrevia o próprio ternário
+// (`provider === 'codex' ? 'Codex' : 'Claude'`) e, quando o Pi entrou como terceiro provider, toda
+// sessão Pi aparecia rotulada como "Claude". Um lugar só -> um provider novo não volta a mentir.
+// Ausente/desconhecido -> "Claude", que é o default do backend (SessionInfo.provider).
+const PROVIDER_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex', pi: 'Pi' };
+
+export function providerName(p: SessionInfo['provider'] | null | undefined): string {
+  return PROVIDER_NAMES[p ?? 'claude'] ?? 'Claude';
+}
+
 export const stateLabels: Record<State, string> = {
   working: 'em execução',
   idle: 'pronto',

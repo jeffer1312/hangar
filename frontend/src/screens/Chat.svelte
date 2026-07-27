@@ -38,7 +38,7 @@
   import { createActivityFolder } from '../lib/activity';
   import type { ChatEvent, StateEvent, State, SessionInfo, AskQuestionPayload, AnswerItem } from '../lib/types';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
-  import { stateLabels, stateColors, countAwaiting, nextAwaiting } from '../lib/format';
+  import { stateLabels, stateColors, countAwaiting, nextAwaiting, providerName } from '../lib/format';
 
   interface Props {
     sessionName: string;
@@ -278,6 +278,11 @@
   // "claude" e o caso comum e some do header; so "codex" ganha badge + esconde controles Claude-only.
   const sessionProvider = $derived(allSessions.find((s) => s.name === sessionName)?.provider);
   const isCodex = $derived(sessionProvider === 'codex');
+  // Badge do provider na NavBar (mobile): so aparece quando NAO e Claude — antes so o Codex tinha
+  // rotulo e uma sessao Pi ficava sem badge nenhum, indistinguivel de uma Claude no celular.
+  // O TAP continua so do Codex: a sheet de limites de uso e da API do Codex, o Pi nao tem.
+  const providerBadge = $derived(
+    sessionProvider && sessionProvider !== 'claude' ? providerName(sessionProvider) : null);
   // Espelho do pane (overlays so-TUI: /status, /config, /help, pickers). MANUAL: o usuario abre pelo
   // botao da NavBar ou pela pilula de aviso — NUNCA toma a tela sozinho (auto-takeover assustava +
   // prendia). tuiOverlay = ha um overlay aberto que SO da pra interagir pela TUI (sem opcoes nativas;
@@ -913,7 +918,7 @@
 >
   <div class="sr-only" role="status">{stateAnnounce}</div>
   <div class="navbar-mount" bind:this={navEl}>
-    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={isCodex ? 'Codex' : null} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
+    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
   </div>
 
   <!-- LoopSheet FORA do .navbar-mount: no desktop largo o mount fica display:none (a info migra

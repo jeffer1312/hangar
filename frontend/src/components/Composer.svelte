@@ -55,7 +55,7 @@
     // Provider da sessao (Chat.svelte, via allSessions). undefined/"claude" = comportamento de
     // sempre; "codex" esconde o picker de /model e o autocomplete de slash-commands (Claude-only —
     // o Codex nao tem nem um nem outro).
-    provider?: 'claude' | 'codex';
+    provider?: 'claude' | 'codex' | 'pi';
   }
   let {
     sessionName, sessionState, status, lastCache = null, onSend, onCommand, onInterrupt, onOpenGit,

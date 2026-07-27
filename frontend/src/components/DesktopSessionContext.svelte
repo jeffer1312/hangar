@@ -2,7 +2,7 @@
   import RateChips from './RateChips.svelte';
   import type { State } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
-  import { stateColors, stateLabels, ctxWindow } from '../lib/format';
+  import { stateColors, stateLabels, ctxWindow, providerName } from '../lib/format';
 
   interface Props {
     state: State;
@@ -10,7 +10,7 @@
     status?: StatusFields | null;
     pairPeers?: string[] | null;
     serverLabel?: string;
-    provider?: 'claude' | 'codex';
+    provider?: 'claude' | 'codex' | 'pi';
     // Nome da sessao aberta: com a NavBar escondida (>=1280px) ele some da tela — e no overlay
     // do board/canvas nem a lista lateral esta a vista. Vai no header do painel.
     sessionName?: string;
@@ -167,10 +167,10 @@
     <span class="section-label">Execução</span>
     {#if onProviderTap}
       <button type="button" class="provider-tap" onclick={onProviderTap} aria-label="Limites de uso do provider">
-        {provider === 'codex' ? 'Codex' : 'Claude'}
+        {providerName(provider)}
       </button>
     {:else}
-      <strong>{provider === 'codex' ? 'Codex' : 'Claude'}</strong>
+      <strong>{providerName(provider)}</strong>
     {/if}
     {#if status?.model}<p>{status.model}{status.effort ? ` · ${status.effort}` : ''}</p>{/if}
     {#if serverLabel}<p>{serverLabel}</p>{/if}
