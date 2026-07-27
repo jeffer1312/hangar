@@ -2,8 +2,9 @@
 instanciar TranscriptTailer/StateMonitor/terminal_input direto."""
 from app.adapters.claude import ClaudeAdapter
 from app.adapters.codex.adapter import CodexAdapter
+from app.adapters.pi.adapter import PiAdapter
 
-PROVIDERS = {"claude": ClaudeAdapter(), "codex": CodexAdapter()}
+PROVIDERS = {"claude": ClaudeAdapter(), "codex": CodexAdapter(), "pi": PiAdapter()}
 
 
 def get_adapter(provider: str):
