@@ -59,7 +59,7 @@ def test_drain_sends_pending_and_marks_delivered(tmp_queue, monkeypatch):
     PromptQueue("cc").append("dois", delivered=False)
     sent = []
     monkeypatch.setattr(terminal_input.TerminalInput, "send_prompt",
-                        lambda self, name, text: sent.append(text) or "sent")
+                        lambda self, name, text, provider="claude": sent.append(text) or "sent")
     assert terminal_input.drain("cc", "/no/such.jsonl") == 2
     assert sent == ["um", "dois"]
     assert all(e["delivered"] for e in PromptQueue("cc").load())
@@ -68,14 +68,14 @@ def test_drain_sends_pending_and_marks_delivered(tmp_queue, monkeypatch):
 def test_drain_noop_and_reverts_when_overlay(tmp_queue, monkeypatch):
     PromptQueue("cc").append("um", delivered=False)
     monkeypatch.setattr(terminal_input.TerminalInput, "send_prompt",
-                        lambda self, name, text: "deferred")
+                        lambda self, name, text, provider="claude": "deferred")
     assert terminal_input.drain("cc", "/no/such.jsonl") == 0
     assert PromptQueue("cc").load()[0]["delivered"] is False   # revertida (nao perdida)
 
 
 def test_drain_does_not_revert_on_send_failure(tmp_queue, monkeypatch):
     PromptQueue("cc").append("um", delivered=False)
-    def boom(self, name, text):
+    def boom(self, name, text, provider="claude"):
         raise RuntimeError("tty caiu no meio")
     monkeypatch.setattr(terminal_input.TerminalInput, "send_prompt", boom)
     assert terminal_input.drain("cc", "/no/such.jsonl") == 0
@@ -87,7 +87,7 @@ def test_drain_cheap_check_skips_capture_when_nothing_pending(tmp_queue, monkeyp
     PromptQueue("cc").append("ja entregue", delivered=True)
     called = []
     monkeypatch.setattr(terminal_input.TerminalInput, "send_prompt",
-                        lambda self, name, text: called.append(text) or "sent")
+                        lambda self, name, text, provider="claude": called.append(text) or "sent")
     assert terminal_input.drain("cc", "/no/such.jsonl") == 0
     assert called == []   # nem chamou send_prompt (e nem capture_pane)
 
@@ -98,7 +98,7 @@ def test_drain_skips_entries_before_start_ts(tmp_queue, tmp_path, monkeypatch):
     j.write_text('{"timestamp":"2999-01-01T00:00:00Z"}\n', encoding="utf-8")  # start_ts > ts da entrada
     sent = []
     monkeypatch.setattr(terminal_input.TerminalInput, "send_prompt",
-                        lambda self, name, text: sent.append(text) or "sent")
+                        lambda self, name, text, provider="claude": sent.append(text) or "sent")
     assert terminal_input.drain("cc", str(j)) == 0 and sent == []
 
 

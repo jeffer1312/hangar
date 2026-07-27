@@ -32,11 +32,14 @@ class PiAdapter:
         # A lista ja trata o marcador assim (registry.py:719, sem grace).
         return StateMonitor(name, sid_get=sid_get, hook_grace=None).stream()
 
+    # provider="pi" nos dois: o gate de "TUI pronta" (_wait_input_ready) casa marcas do RODAPE do
+    # Claude, que o pane do Pi nunca imprime -> sem o argumento, cada envio esperava os 12s inteiros
+    # de timeout (segurando o _send_lock) antes de digitar.
     async def drain(self, name: str, path: str) -> int:
-        return await asyncio.to_thread(ti.drain, name, path)
+        return await asyncio.to_thread(ti.drain, name, path, "pi")
 
     async def send_prompt(self, name: str, text: str) -> str:
-        return await asyncio.to_thread(ti.TerminalInput().send_prompt, name, text)
+        return await asyncio.to_thread(ti.TerminalInput().send_prompt, name, text, "pi")
 
     async def deliverable(self, name: str) -> bool:
         return await asyncio.to_thread(ti.deliverable, name)

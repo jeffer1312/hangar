@@ -308,7 +308,7 @@ def _drain_session(name: str) -> None:
     try:
         info = next((s for s in registry.list() if s.name == name), None)
         if info and info.jsonl:
-            drain(name, info.jsonl)
+            drain(name, info.jsonl, info.provider)
     except Exception:
         pass
 
@@ -338,7 +338,7 @@ def _confirm_and_drain(name: str) -> None:
         )
         if requeued:
             _log.info("REQUEUE name=%s n=%d (TUI engoliu o send; re-drenando)", name, len(requeued))
-            drain(name, info.jsonl)
+            drain(name, info.jsonl, info.provider)
     except Exception:
         pass
 
@@ -416,7 +416,7 @@ def _on_hook_transition(session_id: str, state: str) -> None:
             info = next((s for s in registry.list()
                          if s.jsonl and Path(s.jsonl).stem == session_id), None)
             if info and info.jsonl:
-                sent = drain(info.name, info.jsonl)
+                sent = drain(info.name, info.jsonl, info.provider)
                 # Confirmacao em TODO idle (nao so pos-drain): Timers pendentes morrem no restart
                 # do backend — sem isto, entrada entregue ficava sem confirmar indefinidamente.
                 if sent or state == "idle":
@@ -677,10 +677,11 @@ def _loop_ctx(name: str) -> "loop_mod.TickCtx | None":
         loop_mod._end(loop_mod.LoopLink(name), name, "failed", "sessão morta", push.notify_loop)
         return None
     jsonl = info.jsonl
+    provider = info.provider
 
     def deliver(prompt: str) -> bool:
         PromptQueue(name).append(prompt, delivered=False)
-        drain(name, jsonl)
+        drain(name, jsonl, provider)
         return True
 
     return loop_mod.TickCtx(
@@ -721,7 +722,7 @@ def loop_create(name: str, body: LoopCreate):
         d["goal_entry_id"] = entry["id"]
         link.set(d)
     if info.jsonl:
-        drain(name, info.jsonl)   # entrega ja se a sessao estiver entregavel; senao o drain server-side entrega depois
+        drain(name, info.jsonl, info.provider)   # entrega ja se a sessao estiver entregavel; senao o drain server-side entrega depois
     return {"loop": link.get()}
 
 
@@ -927,7 +928,7 @@ def _send_one(name: str, text: str) -> dict:
     # NAO muda — so o valor gravado, que e o unico dado que o dedup le.
     t0 = time.time()
     try:
-        result = terminal.send_prompt(name, text)
+        result = terminal.send_prompt(name, text, _pane_provider(name))
         # DIAG: correlaciona o send com o jsonl pra onde ESTE nome resolve AGORA -> pega o cross-wire
         # (msg indo pro transcript/terminal errado). Best-effort, nunca quebra o envio.
         try:
@@ -991,6 +992,21 @@ def _provider_of(name: str) -> str:
     senao "claude". Default "claude" preserva 100% o caminho tmux de hoje pra qualquer nome que nao seja
     de uma sessao Codex conhecida (regra de ouro: Claude identico, tudo Codex e ramo condicional)."""
     return "codex" if codex_sessions.exists(name) else "claude"
+
+
+def _pane_provider(name: str) -> str:
+    """Provider do pane tmux (claude/pi), lido do /proc como na lista. O _provider_of acima so
+    distingue Codex (sidecar) — pra QUEM DIGITA na TUI isso nao basta: o gate de "TUI pronta" do
+    terminal_input casa marcas do rodape do Claude, que o Pi nao imprime, e sem saber o provider
+    todo envio a uma sessao Pi queimava os 12s de timeout antes de digitar. Custo: um
+    `tmux list-panes` + leitura de /proc por envio. Erro/pane sumido -> "claude" (comportamento de
+    hoje, marcas do Claude)."""
+    from app import registry as registry_mod
+    from app import tmux
+    try:
+        return registry_mod.provider_of_pane(tmux.pane_pid(name))
+    except Exception:
+        return "claude"
 
 
 async def _send_one_codex(name: str, text: str) -> dict:

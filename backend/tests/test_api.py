@@ -81,7 +81,7 @@ def test_input_eager_send_marks_delivered(api_client):
          patch("app.pqueue.PromptQueue.append") as ap:
         r = api_client.post("/api/sessions/cc/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 200
-    sp.assert_called_once_with("cc", "oi")
+    sp.assert_called_once_with("cc", "oi", "claude")
     # ts=ANY: o _send_one carimba o instante do ENVIO (capturado antes do send_prompt) — o valor e
     # relogio, o que importa aqui e o delivered.
     ap.assert_called_once_with("oi", delivered=True, ts=ANY)
@@ -143,7 +143,7 @@ def test_broadcast_invokes_send_once_per_name(api_client):
 
 
 def test_broadcast_reports_per_name_failure_without_aborting_others(api_client):
-    def fake_send(name, text):
+    def fake_send(name, text, provider="claude"):
         if name == "bad":
             raise ValueError("control characters not allowed")
         return "sent"
@@ -310,7 +310,7 @@ def test_input_claude_untouched_by_codex_path(api_client):
          patch("app.pqueue.PromptQueue.append"):
         r = api_client.post("/api/sessions/cc/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 200
-    term_sp.assert_called_once_with("cc", "oi")
+    term_sp.assert_called_once_with("cc", "oi", "claude")
     fake.send_prompt.assert_not_awaited()
 
 
@@ -1179,7 +1179,7 @@ def test_loop_create_ok(api_client, loop_dir):
     with patch("app.api.registry.list", return_value=[_info()]), \
          patch("app.api.automations_enabled", return_value=True), \
          patch("app.api.branch_of", return_value="TICKET-0000"), \
-         patch("app.api.drain", side_effect=lambda n, j: calls.append((n, j)) or 1):
+         patch("app.api.drain", side_effect=lambda n, j, p="claude": calls.append((n, j)) or 1):
         r = api_client.post("/api/sessions/cc/loop",
                             json={"goal": "criar ok.txt", "check_cmd": "test -f ok.txt"}, headers=_h())
     assert r.status_code == 200

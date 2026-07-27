@@ -23,6 +23,75 @@ def test_wait_input_ready_times_out_then_false():
         assert ti._wait_input_ready("s", timeout=0.0) is False
 
 
+# Panes REAIS capturados de uma sessao Pi (`tmux capture-pane -p`): o boot nao tem UMA moldura; o
+# TUI pronto desenha a caixa do composer. Sem provider="pi" o pane nunca casa as marcas do rodape do
+# Claude e TODO envio esperava os 12s inteiros de timeout antes de digitar.
+_PI_BOOT = " Warning: tmux extended-keys is off. Modified Enter keys may not work.\n"
+_PI_IDLE = (
+    " Reloaded keybindings, extensions, skills, prompts, themes, and context files\n"
+    "\n"
+    "╭" + "─" * 97 + "╮\n"
+    "\n"
+    "╰" + "─" * 97 + "╯\n"
+)
+
+
+def test_wait_input_ready_pi_pronto_retorna_na_primeira_leitura():
+    with patch.object(ti, "_capture", lambda name: _PI_IDLE), \
+         patch.object(ti.time, "sleep", lambda *_: None):
+        assert ti._wait_input_ready("s", timeout=0.0, provider="pi") is True
+
+
+def test_wait_input_ready_pi_bootando_nao_diz_pronto():
+    # Sem a caixa do composer o TUI ainda nao aceita teclas -> a msg seria engolida.
+    with patch.object(ti, "_capture", lambda name: _PI_BOOT), \
+         patch.object(ti.time, "sleep", lambda *_: None):
+        assert ti._wait_input_ready("s", timeout=0.0, provider="pi") is False
+
+
+def test_wait_input_ready_claude_inalterado():
+    # O default NAO pode mudar: rodape presente -> pronto; ausente -> espera e devolve False.
+    with patch.object(ti, "_capture", lambda name: "algo\n? for shortcuts"), \
+         patch.object(ti.time, "sleep", lambda *_: None):
+        assert ti._wait_input_ready("s", timeout=0.0) is True
+    with patch.object(ti, "_capture", lambda name: _PI_IDLE), \
+         patch.object(ti.time, "sleep", lambda *_: None):
+        assert ti._wait_input_ready("s", timeout=0.0) is False
+
+
+def test_send_prompt_leva_o_provider_ate_o_gate():
+    # Trava contra alguem DERRUBAR o argumento no meio do caminho: o gate roda de verdade (nao e
+    # mockado fora), so espiamos com que provider ele foi chamado.
+    real = ti._wait_input_ready
+    seen = {}
+
+    def spy(name, timeout=12.0, provider="claude"):
+        seen["provider"] = provider
+        return real(name, timeout=0.0, provider=provider)
+
+    with patch.object(ti.tmux, "has_session", return_value=True), \
+         patch.object(ti, "_capture", lambda name: _PI_IDLE), \
+         patch.object(ti, "_wait_input_ready", spy), \
+         patch.object(ti.time, "sleep", lambda *_: None), \
+         patch.object(ti, "send_keys", lambda name, k, **kw: None):
+        assert ti.TerminalInput().send_prompt("s", "oi", "pi") == "sent"
+    assert seen["provider"] == "pi"
+
+
+def test_drain_leva_o_provider_ate_o_send_prompt(tmp_path, monkeypatch):
+    # O caminho da FILA (drain) e o segundo ponto de entrada: sem repassar, a msg enfileirada de uma
+    # sessao Pi pagava os 12s mesmo com o /input corrigido.
+    from app import pqueue
+    monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
+    pqueue.PromptQueue("s").append("oi", delivered=False)
+    seen = []
+    with patch.object(ti.TerminalInput, "send_prompt",
+                      lambda self, name, text, provider="claude": seen.append(provider) or "sent"), \
+         patch.object(ti, "_transcript_start_ts", lambda j: 0.0):
+        assert ti.drain("s", "/nao/existe.jsonl", "pi") == 1
+    assert seen == ["pi"]
+
+
 def test_single_question_no_review_submits_without_escape():
     # Pergunta UNICA: o Enter da selecao ja submete; NAO ha tela de "Submit answers". O passo final
     # nao pode mandar Escape (interromperia o Claude que ja recebeu a resposta -> bug "aceitou mas

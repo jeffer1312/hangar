@@ -130,7 +130,7 @@ def test_merged_history_dedup_ts_race(tmp_path, monkeypatch):
                              "message": {"role": "user", "content": "inicio"}}) + "\n",
                  encoding="utf-8")
 
-    def fake_send_prompt(name, text):
+    def fake_send_prompt(name, text, provider="claude"):
         # Espelha o Claude Code: o Enter do send_keys ja grava a entrada `user` no transcript.
         with open(j, "a", encoding="utf-8") as fh:
             fh.write(json.dumps({
