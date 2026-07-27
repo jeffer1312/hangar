@@ -83,6 +83,48 @@
   let erroBusca = $state('');
   let okBusca = $state('');
 
+  // Breakpoint desktop (mesmo corte do resto do app). Acima dele a sheet doca larga: o Avançado são
+  // 9 controles e num painel de 365px eles viram corredor de texto.
+  let isDesktop = $state(false);
+  $effect(() => {
+    const mq = window.matchMedia('(min-width: 820px)');
+    const on = () => (isDesktop = mq.matches); on();
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  });
+
+  // Veredito específico do provedor. O formulário já conhece base_url/model, então dá pra dizer
+  // "obrigatório AQUI" em vez de texto genérico — hoje só o caso documentado da Moonshot, onde
+  // desligar o thinking rebaixa K3/K2.7 para K2.6 sem avisar. Não inventar regra pra provedor que
+  // não tem doc: no resto, o veredito genérico continua valendo.
+  const ehMoonshot = $derived(
+    !!form && /moonshot|kimi/i.test(`${form.base_url} ${form.model}`),
+  );
+
+  // `/v1/models` respondeu no teste => o provedor expõe o endpoint que a descoberta consulta.
+  // Sinal real medido no clique do usuário, melhor que "nem todo gateway expõe esse endpoint".
+  const descobertaComprovada = $derived(modelos.length > 0);
+
+  // Acordeão do "por quê?": um motivo aberto por vez (null = todos fechados).
+  let porQue = $state<string | null>(null);
+
+  // Acesso por chave pro snippet de linha: as 9 linhas viram 9 chamadas em vez de 9 blocos iguais.
+  // Os tipos são a trava, não decoração — sem `as` em lugar nenhum, então errar a chave numa das 9
+  // chamadas é erro de COMPILAÇÃO. Com cast, um typo passava no check e só aparecia rodando: o
+  // toggle nascia sempre desligado e a escrita criava um campo fantasma que ia junto no salvar().
+  type ChaveLiga = 'bundled_skills' | 'experimental_betas' | 'prompt_caching' | 'adaptive_thinking'
+    | 'tool_search' | 'gateway_model_discovery' | 'fine_grained_tool_streaming';
+  type ChaveNum = 'auto_compact_window' | 'max_output_tokens';
+  // A própria chave decide o controle — não há parâmetro `tipo` pra discordar dela.
+  const CHAVES_LIGA = ['bundled_skills', 'experimental_betas', 'prompt_caching', 'adaptive_thinking',
+    'tool_search', 'gateway_model_discovery', 'fine_grained_tool_streaming'] as const;
+  const ehLiga = (k: ChaveLiga | ChaveNum): k is ChaveLiga =>
+    (CHAVES_LIGA as readonly string[]).includes(k);
+  const ligado = (k: ChaveLiga) => !!form && form[k];
+  const setLigado = (k: ChaveLiga, v: boolean) => { if (form) form[k] = v; };
+  const numero = (k: ChaveNum) => (form ? form[k] : '');
+  const setNumero = (k: ChaveNum, v: string) => { if (form) form[k] = v; };
+
   $effect(() => {
     if (!open) return;
     carregar();
@@ -109,7 +151,7 @@
       model: '', subagent_model: '', context_window: '',
       ...PADRAO_AVANCADO, existente: false,
     };
-    modelos = []; erroBusca = ''; okBusca = '';
+    modelos = []; erroBusca = ''; okBusca = ''; porQue = null;
   }
 
   function editar(nome: string) {
@@ -139,7 +181,7 @@
       max_output_tokens: m.max_output_tokens ? String(m.max_output_tokens) : '',
       existente: true,
     };
-    modelos = []; erroBusca = ''; okBusca = '';
+    modelos = []; erroBusca = ''; okBusca = ''; porQue = null;
   }
 
   // Motor salvo, key vazia, mas o endereço no formulário já não é o que está no disco: testar
@@ -259,7 +301,7 @@
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel="Motores de modelo">
+<BottomSheet {open} {onClose} ariaLabel="Motores de modelo" wide={isDesktop} centered={isDesktop}>
   <div class="mot">
     <header class="mot-head">
       <h2>Motores de modelo</h2>
@@ -381,125 +423,109 @@
         <details class="avancado">
           <summary>Avançado — recursos do harness</summary>
           <p class="ajuda topo">
-            O Claude Code manda recursos que só a API da Anthropic entende. Num provedor de
-            terceiro eles são recusados ou ignorados. Marcado = ligado.
+            O Claude Code manda recursos que só a API da Anthropic entende; num provedor de terceiro
+            eles são recusados ou ignorados. Cada linha já traz o veredito: abra "por quê?" só se
+            quiser o motivo.
           </p>
 
-          <label class="campo">
-            <span class="rot">
-              <input type="checkbox" checked={form.bundled_skills}
-                     onchange={(e) => (form!.bundled_skills = e.currentTarget.checked)} />
-              Skills empacotadas
-            </span>
-            <span class="ajuda">
-              Uma invocação da <code>claude-api</code> injeta 206k tokens de uma vez (medido: 12% →
-              67% da janela num modelo de 372k). Suas skills de plugin e de
-              <code>~/.claude/skills</code> não são afetadas.
-            </span>
-          </label>
-
-          <label class="campo">
-            <span class="rot">
-              <input type="checkbox" checked={form.experimental_betas}
-                     onchange={(e) => (form!.experimental_betas = e.currentTarget.checked)} />
-              Recursos beta
-            </span>
-            <span class="ajuda">
-              Campos beta que o Claude Code envia sozinho (<code>context_management</code> e os
-              campos beta de tool). Ligado num upstream que não os aceita dá
-              <code>400 Extra inputs are not permitted</code>.
-            </span>
-          </label>
-
-          <label class="campo">
-            <span class="rot">
-              <input type="checkbox" checked={form.prompt_caching}
-                     onchange={(e) => (form!.prompt_caching = e.currentTarget.checked)} />
-              Prompt caching
-            </span>
-            <span class="ajuda">
-              Deixe ligado. Num gateway o cache já degrada sozinho e calado — se o breakpoint for
-              recusado, aquele bloco fica sem cache pelo resto da conversa, sem erro. Desligar só
-              faz sentido em provedor que cobra o cache mais caro que o miss.
-            </span>
-          </label>
-
-          <label class="campo">
-            <span class="rot">
-              <input type="checkbox" checked={form.adaptive_thinking}
-                     onchange={(e) => (form!.adaptive_thinking = e.currentTarget.checked)} />
-              Raciocínio adaptativo
-            </span>
-            <span class="ajuda">
-              Deixe ligado. Desligar é destrutivo em alguns provedores — a doc da Kimi diz que sem
-              thinking o K3 e o K2.7 caem para K2.6, calado. Só desmarque se o upstream devolver
-              <code>400</code> citando <code>thinking</code> ou <code>adaptive</code>.
-            </span>
-          </label>
-
-          <label class="campo" class:inerte={!form.experimental_betas}>
-            <span class="rot">
-              <input type="checkbox" checked={form.tool_search} disabled={!form.experimental_betas}
-                     onchange={(e) => (form!.tool_search = e.currentTarget.checked)} />
-              Tool search
-            </span>
-            <span class="ajuda">
-              {#if !form.experimental_betas}
-                Sem os recursos beta esta opção não tem efeito — o desligamento dos betas mantém o
-                tool search off e esta caixa não sobrepõe.
+          <!-- Uma linha por recurso, no MESMO vocabulário do ConfigSheet (rótulo à esquerda,
+               controle à direita, separador entre linhas). O motivo é um acordeão: só um aberto por
+               vez, senão nove parágrafos abertos viram de novo a parede de texto que isto resolve. -->
+          {#snippet linha(chave: ChaveLiga | ChaveNum, rot: string, vered: string, tom: string,
+                          motivo: import('svelte').Snippet, morto = false)}
+            <div class="linha" class:morta={morto}>
+              <div class="txt">
+                <span class="rot">{rot}</span>
+                <span class="meta">
+                  <span class="vered {tom}">{vered}</span>
+                  <button type="button" class="pq" aria-expanded={porQue === chave}
+                          onclick={() => (porQue = porQue === chave ? null : chave)}>
+                    por quê?<span class="chev" class:aberta={porQue === chave} aria-hidden="true">▾</span>
+                  </button>
+                </span>
+              </div>
+              {#if ehLiga(chave)}
+                <input class="switch" type="checkbox" disabled={morto}
+                       checked={ligado(chave)} aria-label={rot}
+                       onchange={(e) => setLigado(chave, e.currentTarget.checked)} />
               {:else}
-                Carrega as definições de tool sob demanda em vez de todas por turno (50 tools ≈
-                10–20k tokens). O Claude Code já desliga sozinho quando a URL não é da Anthropic,
-                porque a maioria dos proxies não repassa os blocos <code>tool_reference</code>.
+                <input class="num" type="number" inputmode="numeric" min="1" placeholder="padrão"
+                       aria-label={rot} value={numero(chave)}
+                       oninput={(e) => setNumero(chave, e.currentTarget.value)} />
               {/if}
-            </span>
-          </label>
+            </div>
+            {#if porQue === chave}
+              <p class="motivo">{@render motivo()}</p>
+            {/if}
+          {/snippet}
 
-          <label class="campo">
-            <span class="rot">
-              <input type="checkbox" checked={form.gateway_model_discovery}
-                     onchange={(e) => (form!.gateway_model_discovery = e.currentTarget.checked)} />
-              Descoberta de modelos
-            </span>
-            <span class="ajuda">
-              Consulta o <code>/v1/models</code> do provedor e popula o seletor <code>/model</code>
-              dentro da sessão. Nem todo gateway expõe esse endpoint.
-            </span>
-          </label>
+          {#snippet mSkills()}
+            Uma invocação da <code>claude-api</code> injeta 206k tokens de uma vez (medido: 12% → 67%
+            da janela num modelo de 372k). Suas skills de plugin e de <code>~/.claude/skills</code>
+            não são afetadas.
+          {/snippet}
+          {#snippet mBetas()}
+            Campos beta que o Claude Code envia sozinho (<code>context_management</code> e os campos
+            beta de tool). Ligado num upstream que não os aceita dá
+            <code>400 Extra inputs are not permitted</code>.
+          {/snippet}
+          {#snippet mCache()}
+            Num gateway o cache já degrada sozinho e calado: se o breakpoint for recusado, aquele
+            bloco fica sem cache pelo resto da conversa, sem erro. Desligar só faz sentido em
+            provedor que cobra o cache mais caro que o miss.
+          {/snippet}
+          {#snippet mThinking()}
+            Desligar é destrutivo em alguns provedores: a doc da Moonshot diz que sem thinking o K3 e
+            o K2.7 caem para K2.6, calado.
+            {#if ehMoonshot}Este endereço é Moonshot/Kimi, então a regra vale aqui.{/if}
+            Só desmarque se o upstream devolver <code>400</code> citando <code>thinking</code> ou
+            <code>adaptive</code>.
+          {/snippet}
+          {#snippet mToolSearch()}
+            {#if !form?.experimental_betas}
+              O desligamento dos betas mantém o tool search off e este controle não sobrepõe. Ligue
+              os betas antes, se o provedor os aceitar.
+            {:else}
+              Carrega as definições de tool sob demanda em vez de todas por turno (50 tools ≈ 10–20k
+              tokens). O Claude Code já desliga sozinho quando a URL não é da Anthropic, porque a
+              maioria dos proxies não repassa os blocos <code>tool_reference</code>.
+            {/if}
+          {/snippet}
+          {#snippet mDescoberta()}
+            Consulta o <code>/v1/models</code> do provedor e popula o seletor <code>/model</code>
+            dentro da sessão. É o mesmo endpoint que o botão "Testar" aqui em cima chama: se ele
+            trouxe modelos, a descoberta funciona.
+          {/snippet}
+          {#snippet mStreaming()}
+            O Claude Code desliga por padrão atrás de URL customizada. Ligue se o provedor suportar
+            streaming parcial dos argumentos de tool.
+          {/snippet}
+          {#snippet mCompactar()}
+            Preencha quando o provedor impõe uma janela menor que a do modelo e reescreve a mensagem
+            de erro: o Claude Code não reconhece, não compacta sozinho, e a sessão trava em
+            <code>exceeds the context window</code>. Deixe abaixo do limite real do provedor.
+          {/snippet}
+          {#snippet mSaida()}
+            Par do campo acima. Mantenha abaixo do limite de saída do modelo no provedor.
+          {/snippet}
 
-          <label class="campo">
-            <span class="rot">
-              <input type="checkbox" checked={form.fine_grained_tool_streaming}
-                     onchange={(e) => (form!.fine_grained_tool_streaming = e.currentTarget.checked)} />
-              Streaming fino de tool
-            </span>
-            <span class="ajuda">
-              O Claude Code desliga por padrão atrás de URL customizada. Ligue se o provedor
-              suportar streaming parcial dos argumentos de tool.
-            </span>
-          </label>
-
-          <label class="campo">
-            <span class="rot">Disparar compactação em</span>
-            <input type="number" inputmode="numeric" min="1" placeholder="tokens (em branco = padrão)"
-                   value={form.auto_compact_window}
-                   oninput={(e) => (form!.auto_compact_window = e.currentTarget.value)} />
-            <span class="ajuda">
-              Use quando o provedor impõe uma janela menor que a do modelo e reescreve a mensagem de
-              erro: o Claude Code não reconhece, não compacta sozinho, e a sessão trava em
-              <code>exceeds the context window</code>. Deixe abaixo do limite real do provedor.
-            </span>
-          </label>
-
-          <label class="campo">
-            <span class="rot">Teto de saída</span>
-            <input type="number" inputmode="numeric" min="1" placeholder="tokens (em branco = padrão)"
-                   value={form.max_output_tokens}
-                   oninput={(e) => (form!.max_output_tokens = e.currentTarget.value)} />
-            <span class="ajuda">
-              Par do campo acima. Mantenha abaixo do limite de saída do modelo no provedor.
-            </span>
-          </label>
+          <div class="grade">
+            {@render linha('bundled_skills', 'Skills empacotadas', 'Recomendado: desligado', '', mSkills)}
+            {@render linha('experimental_betas', 'Recursos beta', 'Recomendado: desligado', '', mBetas)}
+            {@render linha('prompt_caching', 'Prompt caching', 'Recomendado: ligado', 'sim', mCache)}
+            {@render linha('adaptive_thinking', 'Raciocínio adaptativo',
+              ehMoonshot ? 'Obrigatório neste provedor' : 'Recomendado: ligado',
+              ehMoonshot ? 'forte' : 'sim', mThinking)}
+            {@render linha('tool_search', 'Tool search',
+              form.experimental_betas ? 'Recomendado: desligado' : 'Sem efeito: betas desligados',
+              '', mToolSearch, !form.experimental_betas)}
+            {@render linha('gateway_model_discovery', 'Descoberta de modelos',
+              descobertaComprovada ? `Recomendado: ligado (${modelos.length} modelos)` : 'Teste o provedor antes',
+              descobertaComprovada ? 'sim' : '', mDescoberta)}
+            {@render linha('fine_grained_tool_streaming', 'Streaming fino de tool', 'Recomendado: desligado', '', mStreaming)}
+            {@render linha('auto_compact_window', 'Disparar compactação em', 'Recomendado: em branco', '', mCompactar)}
+            {@render linha('max_output_tokens', 'Teto de saída', 'Recomendado: em branco', '', mSaida)}
+          </div>
         </details>
 
         {#if erro}<p class="aviso erro">{erro}</p>{/if}
@@ -593,19 +619,70 @@
   /* Avançado: recolhido por padrão — são 9 controles que a maioria nunca toca. <details> nativo em
      vez de estado próprio; o toggle já vem acessível e some com prefers-reduced-motion sem regra. */
   .avancado {
-    border: 1px solid var(--border); border-radius: var(--radius-md);
-    padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-4);
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+    padding: var(--space-3) var(--space-4);
+    display: flex; flex-direction: column; gap: var(--space-3);
   }
   .avancado > summary {
     cursor: pointer; font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary);
     /* Sem gap quando fechado: o `gap` do flex vale só entre filhos visíveis, e o summary é o único. */
-    margin: calc(var(--space-4) * -1) 0;
+    margin: calc(var(--space-3) * -1) 0;
   }
   .avancado[open] > summary { margin-bottom: 0; }
-  .avancado .ajuda.topo { margin: 0; }
-  .avancado .rot { display: flex; align-items: center; gap: var(--space-2); font-weight: 500; }
-  /* Toggle sem efeito por dependência (betas off): esmaece mas segue legível — a ajuda explica. */
-  .avancado .campo.inerte .rot { opacity: 0.55; }
+  .avancado .ajuda.topo { margin: 0; max-width: 68ch; }
+
+  /* Linha de recurso: MESMO vocabulário do ConfigSheet (rótulo à esquerda, controle à direita,
+     separador entre linhas). Nada de card por item — nove cards viram ruído, e o separador já
+     agrupa. Grid de 3 faixas pra o motivo expandido nascer alinhado sob o texto, não sob o
+     controle. */
+  .grade { display: grid; grid-template-columns: 1fr; }
+  .linha {
+    display: flex; align-items: center; justify-content: space-between; gap: var(--space-4);
+    padding: var(--space-3) 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+  .linha:first-of-type { border-top: none; }
+  /* Recurso inerte por dependência (tool search sem os betas): esmaece, mas o veredito continua
+     legível — ele é justamente quem explica por que o controle está morto. */
+  .linha.morta .rot { color: var(--text-muted); }
+
+  .txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .avancado .rot { font-size: var(--text-sm); font-weight: 600; color: var(--text-primary); }
+  .meta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); font-size: 11px; }
+  .vered { color: var(--text-muted); }
+  .vered.sim { color: var(--success); }
+  .vered.forte { color: var(--warning); font-weight: 600; }
+
+  /* "por quê?" é um botão de verdade, não texto solto: cor de link, sublinhado no hover e uma seta
+     que gira. Sem afordância ninguém percebe que abre. */
+  .pq {
+    display: inline-flex; align-items: center; gap: 3px;
+    padding: 4px 0; background: none; border: none; cursor: pointer;
+    font-size: 11px; color: var(--accent);
+  }
+  .pq:hover { text-decoration: underline; }
+  .pq .chev { font-size: 8px; transition: transform 160ms var(--ease-out); }
+  .pq .chev.aberta { transform: rotate(180deg); }
+  .motivo {
+    margin: 0 0 var(--space-3);
+    font-size: var(--text-xs); color: var(--text-secondary); line-height: 1.5; max-width: 62ch;
+  }
+
+  /* `.switch` é global (app.css) — vocabulário único de liga/desliga do app. */
+  .avancado input.num { width: 132px; flex-shrink: 0; }
+
+  /* Desktop: o modal é largo, então as 9 linhas viram duas colunas de lista. `column` (multicol)
+     em vez de grid porque o motivo expandido tem altura variável — no grid ele abriria um buraco
+     na coluna vizinha, que foi exatamente o que ficou feio na primeira versão. */
+  @media (min-width: 820px) {
+    .grade { display: block; columns: 2; column-gap: var(--space-7); }
+    /* break-inside evita a linha ser cortada ao meio na virada de coluna. */
+    .linha, .motivo { break-inside: avoid; }
+    /* Na multicol, :first-of-type só acerta a primeira do documento; a primeira da 2a coluna
+       ficaria com um separador solto no topo. Borda embaixo resolve nas duas colunas. */
+    .linha { border-top: none; border-bottom: 1px solid var(--border-subtle); }
+  }
+
   .def { font-size: 11px; color: var(--success); }
   .ok { font-size: var(--text-xs); color: var(--success); }
   .dicas { display: flex; flex-wrap: wrap; gap: var(--space-2); }
@@ -630,7 +707,17 @@
   input:focus, select:focus { border-color: var(--accent); }
   input:disabled { opacity: 0.6; }
 
-  .acoes { display: flex; justify-content: flex-end; gap: var(--space-3); }
+  /* Ações grudam no rodapé: o formulário de motor é alto (com o Avançado aberto passa de duas telas)
+     e Salvar/Cancelar sumiam lá embaixo. Fundo sólido + borda pra o conteúdo não passar por baixo. */
+  .acoes {
+    display: flex; justify-content: flex-end; gap: var(--space-3);
+    position: sticky; bottom: calc(env(safe-area-inset-bottom) * -1 - var(--space-5));
+    margin: 0 calc(var(--space-4) * -1) calc(var(--space-4) * -1);
+    padding: var(--space-3) var(--space-4);
+    padding-bottom: calc(env(safe-area-inset-bottom) + var(--space-3));
+    background: var(--bg-elevated);
+    border-top: 1px solid var(--border-subtle);
+  }
   .aviso { font-size: var(--text-sm); color: var(--text-muted); margin: var(--space-3) 0; }
   .aviso.erro { color: var(--error); }
   .btn {

@@ -10,9 +10,10 @@
     ariaLabel?: string;
     resizable?: boolean;   // opt-in: so o GitSheet usa. Habilita drag-resize no dock desktop (>=820px).
     wide?: boolean;        // opt-in: dock desktop usa largura fixa min(1100px, 92vw) em vez de --sheet-w.
+    centered?: boolean;    // opt-in: no desktop vira MODAL centrado em vez de painel docado a direita.
     children: Snippet;
   }
-  let { open, onClose, ariaLabel = 'Painel', resizable = false, wide = false, children }: Props = $props();
+  let { open, onClose, ariaLabel = 'Painel', resizable = false, wide = false, centered = false, children }: Props = $props();
 
   // ── Redimensionar (SO no dock desktop >=820px): arrasta a borda ESQUERDA do painel direito.
   // Largura persistida em localStorage; aplicada via --sheet-w (a media query desktop consome a var,
@@ -157,13 +158,14 @@
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="backdrop" onpointerdown={onBackdropPointerDown} onclick={onBackdropClick}>
+  <div class="backdrop" class:centered onpointerdown={onBackdropPointerDown} onclick={onBackdropClick}>
     <div
       bind:this={sheetEl}
       class="sheet"
       class:snapping
       class:resizing
       class:wide
+      class:centered
       role="dialog"
       aria-modal="true"
       aria-label={ariaLabel}
@@ -222,6 +224,14 @@
     overscroll-behavior: contain;
   }
 
+  /* O painel leva .focus() programatico ao abrir (a11y: anuncia o dialog e prende o Tab dentro).
+     Sem isto o Chrome desenha o anel `auto` em volta do painel INTEIRO — a borda branca grossa que
+     aparecia no modal centrado (no dock lateral ela ficava colada na borda da tela e passava
+     despercebida). :focus-visible NAO resolve: o Chrome casa nele em foco programatico de
+     tabindex=-1. Tirar o anel do contorno e o que o <dialog> nativo faz; quem navega por teclado
+     ainda ve o anel dos controles DE DENTRO, que e onde o Tab para. */
+  .sheet:focus { outline: none; }
+
   /* Snap-back apos um swipe curto (entra so durante o retorno). */
   .sheet.snapping {
     transition: transform 200ms var(--ease-out);
@@ -269,6 +279,21 @@
     .resize-handle:hover { background: var(--accent-dim); }
     .sheet.wide { width: min(1100px, 92vw); max-width: 92vw; }
     .sheet.wide .resize-handle { display: none; }  /* largura fixa no modo largo */
+
+    /* `centered`: em vez de docar na direita, vira MODAL centrado. Opt-in porque a maioria dos
+       sheets é painel de acompanhamento (fica aberto do lado do chat); um formulário que exige
+       decisão antes de voltar — como o de motores — cabe melhor no meio, longe da borda. */
+    .backdrop.centered { align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.55); }
+    .sheet.centered {
+      height: auto; max-height: calc(100dvh - var(--space-8));
+      border: 1px solid var(--border-default); border-radius: var(--radius-lg);
+      animation: modal-in 220ms var(--ease-out) both;
+    }
+    .sheet.centered .resize-handle { display: none; }
+  }
+  @keyframes modal-in {
+    from { transform: scale(0.97); opacity: 0; }
+    to   { transform: scale(1);    opacity: 1; }
   }
   @keyframes slide-in-right {
     from { transform: translateX(100%); opacity: 0; }
