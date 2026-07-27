@@ -25,15 +25,26 @@ def _capture(name: str) -> str:
 # (logo + carregamento) elas ainda não aparecem.
 _READY_MARKERS = ("bypass permissions", "? for shortcuts", "for shortcuts")
 
+# Por PROVIDER. O Pi não imprime rodapé nenhum: a prova de "TUI viva" é a CAIXA do composer
+# (╭───╮ … ╰───╯), a única moldura da tela. Medido no boot real (pane capturado a cada 0.25s): os
+# ~3.75s de carregamento não têm UM caractere de moldura; a caixa aparece junto com o TUI pronto.
+# Sem isto, um pane de Pi nunca casava as marcas do Claude e TODO envio queimava os 12s de timeout
+# (com o _send_lock na mão) antes de digitar. Provider desconhecido cai no _READY_MARKERS do
+# Claude = comportamento idêntico ao de hoje.
+# ponytail: string de moldura é calibration knob, igual ao _LOGIN_RE do state.py — se o Pi trocar o
+# desenho do composer, ajustar AQUI.
+_READY_MARKERS_BY_PROVIDER = {"pi": ("╰─",)}
 
-def _wait_input_ready(name: str, timeout: float = 12.0) -> bool:
-    """Espera o TUI do Claude ficar interativo antes de enviar. BUG: msg mandada logo após criar a
-    sessão (claude ainda bootando, TUI não aceita teclas) era ENGOLIDA -> sumia (ficava só na fila
-    como bubble fantasma, claude nunca recebia). Sessão já pronta -> retorna na 1ª leitura (sem
+
+def _wait_input_ready(name: str, timeout: float = 12.0, provider: str = "claude") -> bool:
+    """Espera o TUI ficar interativo antes de enviar. BUG: msg mandada logo após criar a
+    sessão (agente ainda bootando, TUI não aceita teclas) era ENGOLIDA -> sumia (ficava só na fila
+    como bubble fantasma, o agente nunca recebia). Sessão já pronta -> retorna na 1ª leitura (sem
     latência). Timeout -> retorna False e envia mesmo assim (não piora o caso de hoje)."""
+    markers = _READY_MARKERS_BY_PROVIDER.get(provider, _READY_MARKERS)
     deadline = time.monotonic() + timeout
     while True:
-        if any(m in _capture(name) for m in _READY_MARKERS):
+        if any(m in _capture(name) for m in markers):
             return True
         if time.monotonic() >= deadline:
             return False
@@ -64,7 +75,7 @@ def _send_lock(name: str) -> threading.Lock:
     return _send_locks.setdefault(name, threading.Lock())
 
 
-def drain(name: str, jsonl: str) -> int:
+def drain(name: str, jsonl: str, provider: str = "claude") -> int:
     """Entrega ao tty as entradas pendentes (delivered=False) quando o pane volta a aceitar texto.
     Retorna quantas entregou. claim-1-envia-1: um crash entre o claim e o envio deixa NO MAXIMO 1
     entrada 'stranded', nao o lote, e recheca o overlay (via send_prompt) a cada iteracao."""
@@ -85,7 +96,7 @@ def drain(name: str, jsonl: str) -> int:
             return sent
         entry = claimed[0]
         try:
-            result = ti.send_prompt(name, entry["text"])
+            result = ti.send_prompt(name, entry["text"], provider)
         except Exception:
             # Falha POS-gate (tty caiu no meio): pode ter emitido tecla -> at-most-once, NAO reverte.
             # ponytail: stranded-mas-visivel (a bubble queued- segue aparecendo, display ignora delivered);
@@ -235,7 +246,7 @@ def answer_questions(name: str, answers: list[dict]) -> None:
 
 
 class TerminalInput:
-    def send_prompt(self, name: str, text: str) -> str:
+    def send_prompt(self, name: str, text: str, provider: str = "claude") -> str:
         # Validacao PRE-envio: input ruim nunca toca a TUI nem entra na fila. \n/\t ok; outros controles nao.
         if any(ord(c) < 32 and c not in "\t\n" for c in text):
             raise ValueError("control characters not allowed in prompt")
@@ -250,7 +261,7 @@ class TerminalInput:
                 return "deferred"
             # Não enviar pra um TUI ainda bootando: as teclas seriam engolidas e a msg sumiria (core
             # bug — msg mandada logo após criar a sessão nunca chegava no claude).
-            _wait_input_ready(name)
+            _wait_input_ready(name, provider=provider)
             if "\n" in text:
                 tmux.paste_text(name, text)
                 time.sleep(0.05)  # deixa a TUI acomodar o paste antes do Enter submeter
