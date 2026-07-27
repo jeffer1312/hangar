@@ -266,6 +266,31 @@ def _proc_environ_path(pid: int) -> str:
     return f"/proc/{pid}/environ"
 
 
+def _proc_stat_path(pid: int) -> str:
+    # Indireção só para o teste poder apontar para um arquivo de mentira (igual _proc_environ_path).
+    return f"/proc/{pid}/stat"
+
+
+def _proc_start_time(pid: int) -> Optional[float]:
+    # Instante (epoch, em segundos) em que o processo nasceu: campo 22 do /proc/<pid>/stat
+    # (starttime, em ticks desde o boot) + o btime do /proc/stat. None = não deu pra ler (pid morto,
+    # permissão, kernel sem /proc) -> quem chama decide, aqui só degrada como os vizinhos.
+    try:
+        with open(_proc_stat_path(pid)) as fh:
+            raw = fh.read()
+        # O comm (campo 2) vem entre parênteses e pode conter espaço E parêntese ("(pi (2))"), então
+        # contar campo por espaço a partir do início erra. O último ')' é o único delimitador
+        # confiável: depois dele o campo 22 é o 20º token.
+        ticks = float(raw[raw.rindex(")") + 1:].split()[19])
+        with open("/proc/stat") as fh:
+            for line in fh:
+                if line.startswith("btime "):
+                    return float(line.split()[1]) + ticks / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
 def _engine_of(pid: int) -> Optional[str]:
     # Motor de modelo do processo claude (CP_ENGINE, injetado por engines.env_de via cp-engine
     # --exec). None = conta Anthropic. Mesmo truque do _config_dir_of: o env do processo VIVO é o
@@ -344,13 +369,19 @@ def pi_session_file(pane_id: str, pid: Optional[int] = None,
     sid = _pi_sid_of(pid) if pid else None
     try:
         data = json.loads(ticket.read_text())
-        f, ticket_sid = data.get("file"), data.get("id")
-        # Bilhete de OUTRA sessao: o tmux reusa %pane_id apos um restart do servidor e o .jsonl da
-        # sessao anterior continua no disco, entao o exists() abaixo nao pega nada — o pane novo
-        # abriria a conversa do pane velho (pra sempre, se a extensao nao carregar e nunca
-        # reescrever o bilhete). Os dois ids conhecidos e diferentes = rejeita. Um lado desconhecido
-        # -> confia no bilhete, que e quem carrega o caminho exato.
-        if sid and ticket_sid and sid != ticket_sid:
+        f, ts = data.get("file"), data.get("ts")
+        # Bilhete de OUTRA encarnacao do pane: o tmux reusa %pane_id apos um restart do servidor e o
+        # .jsonl da sessao anterior continua no disco, entao o exists() abaixo nao pega nada — o pane
+        # novo abriria a conversa do pane velho. O criterio e FRESCOR, nunca "os ids divergem": a
+        # extensao reescreve o bilhete a cada agent_start justamente porque /tree, /fork e troca de
+        # sessao mudam o arquivo com a sessao ja rodando, enquanto o CP_PI_SESSION fica congelado no
+        # /proc desde o exec. Depois de um fork a divergencia e o comportamento CORRETO; rejeitar por
+        # ela devolveria a conversa anterior pelo resto da vida do pane. Bilhete escrito ANTES de o
+        # processo deste pane nascer e que e de outra sessao.
+        nasceu = _proc_start_time(pid) if pid else None
+        # 2s de folga: o ts vem do Date.now() da extensao e o nascimento, do btime+ticks do kernel —
+        # granularidades e relogios diferentes, e o bilhete do session_start nasce colado no exec.
+        if nasceu is not None and isinstance(ts, (int, float)) and ts < nasceu - 2:
             f = None
         # os.path.exists: o cp-state.ts NUNCA apaga o bilhete quando o pane fecha, e o tmux reusa
         # %pane_id apos um restart do servidor (ex: reboot da maquina) -> um bilhete ORFAO de uma

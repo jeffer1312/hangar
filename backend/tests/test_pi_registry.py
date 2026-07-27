@@ -1,4 +1,5 @@
 import json
+import os
 
 from app import registry
 
@@ -81,18 +82,39 @@ def test_session_file_ignores_a_stale_sidecar(monkeypatch, tmp_path):
     assert registry.pi_session_file("%123", pid=7, cwd="/w") is None
 
 
-def test_session_file_rejects_a_sidecar_of_another_session(monkeypatch, tmp_path):
-    # FINDING 4: o exists() so pega bilhete apontando pra arquivo APAGADO. Depois de um restart do
-    # servidor tmux o %pane_id e reusado e o .jsonl da sessao ANTERIOR continua no disco -> o pane
-    # novo abria a conversa do pane velho ate a extensao reescrever o bilhete (e pra sempre se a
-    # extensao nao carregar). Os dois ids conhecidos e diferentes = bilhete de outra sessao.
+def _fake_proc_start(monkeypatch, tmp_path, nasceu: float):
+    # /proc/<pid>/stat de mentira com o processo nascendo em `nasceu` (epoch). O comm leva espaco E
+    # parentese de proposito: e o caso que quebra qualquer contagem de campo feita da esquerda.
+    with open("/proc/stat") as fh:
+        btime = next(float(l.split()[1]) for l in fh if l.startswith("btime "))
+    ticks = (nasceu - btime) * os.sysconf("SC_CLK_TCK")
+    stat = tmp_path / "stat"
+    stat.write_text(f"7 (pi (fork) x) S " + "0 " * 18 + f"{ticks:.0f} 0 0\n")
+    monkeypatch.setattr(registry, "_proc_stat_path", lambda pid: str(stat))
+
+
+def test_proc_start_time_survives_a_comm_with_spaces_and_parens(monkeypatch, tmp_path):
+    # Sem o rindex(")") o campo 22 sai errado por alguns tokens e o frescor do bilhete vira ruido.
+    _fake_proc_start(monkeypatch, tmp_path, 1_700_000_000.0)
+    assert abs(registry._proc_start_time(7) - 1_700_000_000.0) < 1
+    monkeypatch.setattr(registry, "_proc_stat_path", lambda pid: str(tmp_path / "nao-existe"))
+    assert registry._proc_start_time(7) is None      # degrada como os vizinhos de /proc
+
+
+def test_session_file_rejects_a_sidecar_older_than_the_pane_process(monkeypatch, tmp_path):
+    # Caso que o guarda original existia pra pegar: apos um restart do servidor tmux o %pane_id e
+    # reusado e o .jsonl da sessao ANTERIOR continua no disco, entao o exists() deixa passar. O
+    # bilhete foi escrito ANTES de o processo deste pane nascer -> e de outra encarnacao, cai no env.
+    # id null e o caso que NENHUM guarda por divergencia de id pegava (publishPane escreve
+    # `getSessionId() ?? null`) e o mais comum num bilhete velho.
     cfg = tmp_path / "cfg"
     (cfg / ".claude-pocket-pi").mkdir(parents=True)
     velho = tmp_path / "2026-07-01T00-00-00-000Z_aaa.jsonl"
-    velho.write_text("")            # ainda existe no disco: o guarda de hoje deixa passar
+    velho.write_text("")
     (cfg / ".claude-pocket-pi" / "9.json").write_text(
-        json.dumps({"file": str(velho), "id": "aaa"}))
+        json.dumps({"file": str(velho), "id": None, "ts": 1_700_000_000.0}))
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
+    _fake_proc_start(monkeypatch, tmp_path, 1_700_000_600.0)     # pane nasceu 10min DEPOIS
     env = tmp_path / "environ"
     env.write_bytes(b"CP_PI_SESSION=bbb\x00")
     monkeypatch.setattr(registry, "_proc_environ_path", lambda pid: str(env))
@@ -101,19 +123,22 @@ def test_session_file_rejects_a_sidecar_of_another_session(monkeypatch, tmp_path
     assert registry.pi_session_file("%9", pid=7, cwd="/w") == "/s/2026_bbb.jsonl"
 
 
-def test_session_file_trusts_the_sidecar_when_the_ids_agree(monkeypatch, tmp_path):
-    # Ids iguais (ou um dos lados desconhecido) -> comportamento de hoje: o bilhete manda, porque
-    # so ele carrega o caminho exato.
+def test_session_file_trusts_a_fresh_sidecar_even_with_another_id(monkeypatch, tmp_path):
+    # Pos-/fork (ou /tree, ou troca de sessao): a extensao reescreve o bilhete no agent_start com a
+    # sessao NOVA, e o CP_PI_SESSION segue congelado na original desde o exec. Divergir e o correto
+    # — quem manda e o bilhete, que foi escrito depois de o processo nascer.
     cfg = tmp_path / "cfg"
     (cfg / ".claude-pocket-pi").mkdir(parents=True)
-    alvo = tmp_path / "2026-07-27T00-00-00-000Z_aaa.jsonl"
+    alvo = tmp_path / "2026-07-27T00-00-00-000Z_bbb.jsonl"
     alvo.write_text("")
     (cfg / ".claude-pocket-pi" / "9.json").write_text(
-        json.dumps({"file": str(alvo), "id": "aaa"}))
+        json.dumps({"file": str(alvo), "id": "bbb", "ts": 1_700_000_600.0}))
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
+    _fake_proc_start(monkeypatch, tmp_path, 1_700_000_000.0)     # pane nasceu ANTES do bilhete
     env = tmp_path / "environ"
     env.write_bytes(b"CP_PI_SESSION=aaa\x00")
     monkeypatch.setattr(registry, "_proc_environ_path", lambda pid: str(env))
+    monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: f"/s/2026_{s}.jsonl")
     assert registry.pi_session_file("%9", pid=7, cwd="/w") == str(alvo)
 
 
