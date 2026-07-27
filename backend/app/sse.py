@@ -309,8 +309,9 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
     # deltas, o TUI do Claude nao) -> continua no PreviewBroker (poll do pane). Codex nao tem pane
     # -> CodexPreviewSource, alimentado por push do CodexAdapter.state_monitor. Mesma interface
     # publica (get/subscribe) -> o resto do pump (preview_pump/_enqueue_preview/_already_committed)
-    # fica IGUAL pras duas fontes.
-    broker = CodexPreviewSource.get(name) if provider == "codex" else PreviewBroker.get(name)
+    # fica IGUAL pras duas fontes. Pi tambem e pane -> mesmo PreviewBroker, mas o provider VAI
+    # JUNTO: o chrome que fecha o bloco em voo e outro (caixa do composer), ver preview.py.
+    broker = CodexPreviewSource.get(name) if provider == "codex" else PreviewBroker.get(name, provider)
     # Inicio da sessao atual: poda entradas de fila pre-/clear no live SSE (mesma regra do history).
     start_ts = _transcript_start_ts(jsonl)
     queue: asyncio.Queue = asyncio.Queue()

@@ -6,6 +6,8 @@ Cobre as duas metades do conserto:
   - preview_is_committed suprime também quando o commitado é PREFIXO do preview (o caso que
     escapava quando o verbo de status é desconhecido)
 """
+from pathlib import Path
+
 from app.preview import extract_assistant_text, _norm
 from app.sse import preview_is_committed
 
@@ -42,3 +44,37 @@ def test_nao_suprime_bloco_novo_de_verdade():
 def test_nao_suprime_trecho_curto():
     # piso de 16 chars: fragmento curto casaria por acidente.
     assert not preview_is_committed("ok", _norm(PROSE))
+
+
+# --- Pi: o chrome que fecha o bloco em voo e a CAIXA do composer, nao a regua do Claude ---------
+# pane_pi_working.txt e um `tmux capture-pane -p` REAL, tirado DURANTE um turno (Pi 0.82.1 +
+# kimi-for-coding): o `● Tem sim, algumas formas:` esta a meio caminho de ser escrito. Sem a parada
+# na caixa, o preview do celular vinha com a borda `╭───╮`/`╰───╯` e a statusline (🤖 modelo …)
+# coladas no fim da prosa a CADA frame.
+
+def _pane_pi_working() -> str:
+    return (Path(__file__).parent / "fixtures" / "pane_pi_working.txt").read_text(encoding="utf-8")
+
+
+def test_preview_pi_para_na_caixa_do_composer():
+    txt = extract_assistant_text(_pane_pi_working(), "pi")
+    assert txt.startswith("Tem sim, algumas formas:")
+    assert txt.rstrip().endswith("Copiar uma mensagem antiga específica:")
+    assert "╭" not in txt and "╰" not in txt      # borda da caixa fora
+    assert "kimi-for-coding" not in txt           # statusline fora
+
+
+def test_preview_pi_sem_provider_ainda_traz_o_chrome():
+    # Trava o motivo do parametro existir: o MESMO pane lido como "claude" (o default) devolve o
+    # texto com a caixa e a statusline grudadas — que era o bug.
+    txt = extract_assistant_text(_pane_pi_working())
+    assert "╭" in txt and "kimi-for-coding" in txt
+
+
+def test_preview_claude_byte_identico_em_todos_os_panes():
+    # Nao-regressao: o provider novo NAO pode mover um byte do que o Claude/Codex ja extraiam.
+    # Compara o default contra a lista VAZIA de paradas extras em todo fixture de pane do repo.
+    fx = Path(__file__).parent / "fixtures"
+    for f in sorted(fx.glob("pane_*.txt")):
+        pane = f.read_text(encoding="utf-8")
+        assert extract_assistant_text(pane) == extract_assistant_text(pane, "provider-inexistente"), f.name
