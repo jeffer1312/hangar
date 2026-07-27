@@ -35,6 +35,16 @@ export function providerName(p: SessionInfo['provider'] | null | undefined): str
   return PROVIDER_NAMES[p ?? 'claude'] ?? 'Claude';
 }
 
+// Por que a linha está "sem id" — a causa (e a saída) mudam por provider, e as duas views mostram
+// a mesma frase. Claude: aberto sem --session-id, o vínculo com o transcript seria um chute. Pi: o
+// pane não resolve transcript nenhum — normal antes do 1º turno (a sessão só escreve o arquivo
+// então), definitivo se a extensão cp-state não carregou naquele pane.
+export function untrackedReason(p: SessionInfo['provider'] | null | undefined): string {
+  return p === 'pi'
+    ? 'sessão Pi sem transcript: aparece depois do 1º turno — se não aparecer, feche o pane e abra de novo pelo `pi`'
+    : 'claude aberto sem --session-id: não dá pra rastrear o transcript com segurança';
+}
+
 export const stateLabels: Record<State, string> = {
   working: 'em execução',
   idle: 'pronto',

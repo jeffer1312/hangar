@@ -1,6 +1,8 @@
 import json
 import os
 
+import pytest
+
 from app import registry
 
 
@@ -188,22 +190,56 @@ def test_pi_pane_does_not_inherit_a_claude_transcript(monkeypatch, tmp_path):
     assert "claude-projects" not in (pi[0].jsonl or ""), "Pi herdou o transcript do Claude"
 
 
-def test_pi_pane_without_a_known_transcript_stays_tracked(monkeypatch, tmp_path):
-    # jsonl=None pra um pane Pi e "ainda sem 1o turno", nao um chute ambiguo (a identidade do pane
-    # e deterministica: bilhete/env, nunca newest-by-mtime) -> tracked continua True, senao a UI
-    # desliga o card (SessionCard.svelte: untracked) e a sessao recem-criada fica inclicavel antes
-    # do 1o turno. Mesmo precedente do Codex (sempre tracked=True, independente do rollout_path).
+def _pane_pi_sem_transcript(monkeypatch, tmp_path):
     projetos = tmp_path / "claude-projects"
     monkeypatch.setattr(registry.settings, "projects_dir", str(projetos))
-
     monkeypatch.setattr(registry.tmux, "list_panes_active",
                         lambda: [{"name": "s-pi", "pid": 99, "cwd": "/w", "pane_id": "%9"}])
     monkeypatch.setattr(registry, "_descendant_pids", lambda pid, children=None: [11])
     monkeypatch.setattr(registry, "_cmdline", lambda p: "pi" + " " * 80)
     monkeypatch.setattr(registry, "pi_session_file", lambda *a, **k: None)
 
+
+def test_pi_pane_without_a_known_transcript_is_untracked(monkeypatch, tmp_path):
+    # REVERTE o tracked=True fixo (4ac802b). O argumento de la era "senao a sessao recem-criada
+    # fica inclicavel antes do 1o turno" — mas clicavel ela nunca foi util: /events (api.py:880) e
+    # /history (api.py:815) exigem `info.jsonl` e devolvem 404 sem ele. tracked=True so escondia o
+    # motivo: card clicavel, chat que nao carrega, e nenhuma das afordancias de "sem id" nas duas
+    # views. Com False a linha diz o que houve (Sidebar/SessionCard: untrackedReason) e o usuario
+    # pode matar/reabrir. Some sozinho: no 1o turno o Pi escreve o transcript e a varredura
+    # seguinte devolve tracked=True.
+    _pane_pi_sem_transcript(monkeypatch, tmp_path)
+
     infos = registry.SessionRegistry().list()
     pi = [i for i in infos if i.name == "s-pi"]
     assert len(pi) == 1
     assert pi[0].jsonl is None
+    assert pi[0].tracked is False
+
+
+def test_pi_pane_with_a_transcript_is_tracked(monkeypatch, tmp_path):
+    # A outra metade: resolvido o transcript, a sessao volta a ser uma sessao normal (chat abre).
+    _pane_pi_sem_transcript(monkeypatch, tmp_path)
+    monkeypatch.setattr(registry, "pi_session_file", lambda *a, **k: "/s/2026_aaa.jsonl")
+
+    pi = [i for i in registry.SessionRegistry().list() if i.name == "s-pi"]
+    assert pi[0].jsonl == "/s/2026_aaa.jsonl"
     assert pi[0].tracked is True
+
+
+def test_resume_refuses_a_pi_pane_instead_of_killing_it(monkeypatch, tmp_path):
+    # O botao "Retomar conversa" so aparece numa linha untracked — que agora inclui a sessao Pi sem
+    # transcript. O resume e Claude-only ponta a ponta: candidatos de ~/.claude/projects e relance
+    # com `claude --resume <uuid>` DEPOIS de tmux.kill_session. Num pane Pi isso ofereceria a
+    # conversa do agente ERRADO e mataria a sessao viva pra subir um claude no lugar.
+    _pane_pi_sem_transcript(monkeypatch, tmp_path)
+    mortes = []
+    monkeypatch.setattr(registry.tmux, "kill_session", lambda n: mortes.append(n))
+
+    reg = registry.SessionRegistry()
+    for chamada in (lambda: reg.resume_candidates("s-pi"),
+                    lambda: reg.resume("s-pi", "11111111-1111-1111-1111-111111111111")):
+        with pytest.raises(ValueError) as exc:
+            chamada()
+        assert "pi" in str(exc.value)
+    assert mortes == [], "o pane Pi nao pode ser morto pelo caminho de resume do Claude"
