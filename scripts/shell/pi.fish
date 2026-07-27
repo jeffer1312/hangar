@@ -56,7 +56,13 @@ function pi
         end
     end
 
-    set -l id (uuidgen)
+    # Substituição que falha deixa a variável como LISTA VAZIA no fish (não como string vazia): sem o
+    # fallback — o mesmo do pi.posix.sh — uma máquina sem uuidgen fazia `pi --session-id $id $argv`
+    # colapsar pra `pi --session-id <primeiro argumento do usuário>`, comendo o argumento e exportando
+    # CP_PI_SESSION vazio. As aspas em "$id" abaixo fecham o resto do buraco: mesmo que os dois jeitos
+    # falhem, o pi recebe um --session-id vazio (erro visível) em vez de engolir o argv do usuário.
+    set -l id (uuidgen 2>/dev/null)
+    test -n "$id"; or set id (cat /proc/sys/kernel/random/uuid 2>/dev/null)
 
     # TMUX herdado pode estar MORTO (mesmo caso do wrapper claude). Valida o pane; stale -> limpa.
     if set -q TMUX
@@ -67,7 +73,7 @@ function pi
 
     if set -q TMUX; or not isatty stdin
         set -x CP_PI_SESSION $id
-        command pi --session-id $id $argv
+        command pi --session-id "$id" $argv
         return
     end
 
@@ -94,5 +100,5 @@ function pi
     # `sh -c` exporta CP_PI_SESSION DENTRO do próprio pane antes do exec pi — ver o comentário de
     # cabeçalho pra o porquê. $0 vira "_" (placeholder), $1 o uuid, o resto ($@) os args originais.
     $run tmux new-session -s $name -c "$PWD" \
-        sh -c 'export CP_PI_SESSION="$1"; shift; exec pi --session-id "$CP_PI_SESSION" "$@"' _ $id $argv
+        sh -c 'export CP_PI_SESSION="$1"; shift; exec pi --session-id "$CP_PI_SESSION" "$@"' _ "$id" $argv
 end

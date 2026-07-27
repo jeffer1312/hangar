@@ -294,6 +294,26 @@ if command -v fish >/dev/null 2>&1; then
     out=$(fish_case_pi 'remove the dead code')
     check_pi_injected "fish pi \"remove the dead code\" (prompt, não subcomando)" "$out"
 
+    # Sem uuidgen: no fish a substituição que falha deixa $id como LISTA VAZIA, então
+    # `pi --session-id $id oi` colapsava pra `pi --session-id oi` — a flag comia o argumento do
+    # usuário e CP_PI_SESSION saía vazio (o posix já tinha o fallback /proc; o fish, não).
+    # Sombreia em vez de tirar do PATH: /usr/bin também tem bash/cat, não dá pra remover.
+    mkdir -p "$TMP/sem-uuidgen"
+    printf '#!/bin/sh\nexit 127\n' > "$TMP/sem-uuidgen/uuidgen"
+    chmod +x "$TMP/sem-uuidgen/uuidgen"
+    out="$TMP/out.$RANDOM.$RANDOM"
+    env -i PATH="$TMP/sem-uuidgen:$PATH_WITH_FAKES" HOME="$HOME" CP_TEST_OUT="$out" \
+        fish --no-config -c '
+            source "'"$REPO"'/scripts/shell/pi.fish"
+            pi $argv
+        ' -- oi </dev/null || true
+    check_pi_injected "fish pi sem uuidgen (fallback /proc)" "$out"
+    if ! grep -qE '^ARGV: --session-id [0-9a-fA-F-]+ oi$' "$out"; then
+        echo "FAIL: fish pi sem uuidgen — o argumento do usuário não sobreviveu ao --session-id"
+        [ -f "$out" ] && sed 's/^/    /' "$out"
+        fail=1
+    fi
+
     out="$TMP/out.$RANDOM.$RANDOM"
     env -i PATH="$PATH_WITH_FAKES" HOME="$HOME" CP_TEST_OUT="$out" \
         fish --no-config -c '

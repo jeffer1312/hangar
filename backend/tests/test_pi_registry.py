@@ -64,8 +64,12 @@ def test_session_file_comes_from_the_pane_sidecar(monkeypatch, tmp_path):
     (cfg / ".claude-pocket-pi").mkdir(parents=True)
     alvo = tmp_path / "2026_x.jsonl"
     alvo.write_text("")
-    (cfg / ".claude-pocket-pi" / "123.json").write_text(json.dumps({"file": str(alvo)}))
+    # `ts` posterior ao nascimento do pane: o bilhete so vale quando da pra PROVAR que e desta
+    # encarnacao do pane (ver test_session_file_refuses_a_sidecar_when_the_pane_birth_is_unknown).
+    (cfg / ".claude-pocket-pi" / "123.json").write_text(
+        json.dumps({"file": str(alvo), "ts": 1_700_000_600.0}))
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
+    _fake_proc_start(monkeypatch, tmp_path, 1_700_000_000.0)
     assert registry.pi_session_file("%123", pid=7) == str(alvo)
 
 
@@ -142,6 +146,52 @@ def test_session_file_trusts_a_fresh_sidecar_even_with_another_id(monkeypatch, t
     monkeypatch.setattr(registry, "_proc_environ_path", lambda pid: str(env))
     monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: f"/s/2026_{s}.jsonl")
     assert registry.pi_session_file("%9", pid=7, cwd="/w") == str(alvo)
+
+
+def _bilhete_e_env(monkeypatch, tmp_path, dados: dict):
+    # Bilhete apontando pra um .jsonl que EXISTE (senao o exists() rejeitaria por outro motivo) +
+    # CP_PI_SESSION apontando pra outra sessao: e o env que tem que ganhar quando o frescor do
+    # bilhete nao da pra estabelecer.
+    cfg = tmp_path / "cfg"
+    (cfg / ".claude-pocket-pi").mkdir(parents=True)
+    velho = tmp_path / "2026-07-01T00-00-00-000Z_aaa.jsonl"
+    velho.write_text("")
+    (cfg / ".claude-pocket-pi" / "9.json").write_text(json.dumps({"file": str(velho), **dados}))
+    monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
+    env = tmp_path / "environ"
+    env.write_bytes(b"CP_PI_SESSION=bbb\x00")
+    monkeypatch.setattr(registry, "_proc_environ_path", lambda pid: str(env))
+    monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: f"/s/2026_{s}.jsonl")
+    return velho
+
+
+def test_session_file_refuses_a_sidecar_when_the_pane_birth_is_unknown(monkeypatch, tmp_path, caplog):
+    # /proc/<pid>/stat ilegivel (pid morto, permissao, kernel sem /proc) -> _proc_start_time devolve
+    # None e o frescor do bilhete e INDETERMINAVEL. Antes o guarda simplesmente nao rodava e o
+    # bilhete era aceito — exatamente a falha que ele existe pra impedir: pane_id reusado apos
+    # restart do tmux, .jsonl da sessao anterior ainda no disco (o exists() nao salva), e o pane
+    # novo abrindo a conversa VELHA, tracked=True, sem log nenhum.
+    registry._PI_TICKET_WARNED.clear()
+    _bilhete_e_env(monkeypatch, tmp_path, {"id": None, "ts": 1_700_000_000.0})
+    monkeypatch.setattr(registry, "_proc_stat_path", lambda pid: str(tmp_path / "nao-existe"))
+    assert registry._proc_start_time(7) is None
+
+    with caplog.at_level("WARNING", logger="claude_pocket.registry"):
+        assert registry.pi_session_file("%9", pid=7, cwd="/w") == "/s/2026_bbb.jsonl"
+        assert registry.pi_session_file("%9", pid=7, cwd="/w") == "/s/2026_bbb.jsonl"
+    # Uma vez, nao a cada poll: list() roda de segundo em segundo e um warning por varredura
+    # entupiria o journal ate ninguem mais ler nenhum.
+    assert len([r for r in caplog.records if "bilhete" in r.getMessage()]) == 1
+
+
+def test_session_file_refuses_a_sidecar_without_a_timestamp(monkeypatch, tmp_path):
+    # Bilhete sem `ts` numerico (build antiga da extensao, escrita parcial): mesma indeterminacao,
+    # mesma decisao — cai no env em vez de confiar num bilhete que pode ser de outra encarnacao.
+    registry._PI_TICKET_WARNED.clear()
+    _bilhete_e_env(monkeypatch, tmp_path, {"id": "aaa"})
+    _fake_proc_start(monkeypatch, tmp_path, 1_700_000_000.0)
+
+    assert registry.pi_session_file("%9", pid=7, cwd="/w") == "/s/2026_bbb.jsonl"
 
 
 def test_session_file_falls_back_to_the_wrapper_env(monkeypatch, tmp_path):
