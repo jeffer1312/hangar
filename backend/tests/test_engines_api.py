@@ -193,7 +193,7 @@ def test_create_sessao_com_motor_valido_repassa_a_keyword(cli):
               return_value=SessionInfo(name="x", cwd="/tmp", engine="kimi")) as cr:
         r = cli.post("/api/sessions", json={"name": "x", "cwd": "/tmp", "engine": "kimi"}, headers=AUTH)
     assert r.status_code == 200
-    cr.assert_called_once_with("x", "/tmp", None, engine="kimi")
+    cr.assert_called_once_with("x", "/tmp", None, provider="claude", engine="kimi")
 
 
 # ---------------------------------------------------------------------------
