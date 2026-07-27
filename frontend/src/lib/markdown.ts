@@ -60,13 +60,18 @@ export function renderMarkdown(input: string): string {
     const line = lines[i];
 
     // ── Fenced code block ──────────────────────────────────────────────
-    if (line.startsWith('```')) {
+    // Ate 3 espacos de indentacao contam como cerca (CommonMark). O Pi indenta a cerca quando ela
+    // esta dentro de um item de lista; sem isto o bloco inteiro saia como texto cru com os ``` a
+    // mostra. A indentacao da abertura e removida das linhas do codigo, senao o bloco vem torto.
+    const fence = /^ {0,3}```/.exec(line);
+    if (fence) {
       parabreak = false;
-      const lang = line.slice(3).trim();
+      const indent = fence[0].length - 3;
+      const lang = line.slice(fence[0].length).trim();
       const code: string[] = [];
       i++;
-      while (i < lines.length && !lines[i].startsWith('```')) {
-        code.push(lines[i]);
+      while (i < lines.length && !/^ {0,3}```/.test(lines[i])) {
+        code.push(lines[i].slice(0, indent).trim() === '' ? lines[i].slice(indent) : lines[i]);
         i++;
       }
       i++; // pula o ``` de fechamento (se houver)
