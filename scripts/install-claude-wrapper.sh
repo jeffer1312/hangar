@@ -150,12 +150,17 @@ set-environment -g CLAUDE_CODE_TMUX_TRUECOLOR 1
 # Clipboard de imagem (wl-paste) dentro do Claude Code: sessao criada por um client anexado
 # herda o WAYLAND_DISPLAY dele mesmo quando o server tmux nasceu sem a var (ex: via backend).
 set -ga update-environment "WAYLAND_DISPLAY"
-# Window/title name = basename of the pane's cwd (not 0/1/2 nor the command name).
+# Window name (inside tmux) = basename of the pane's cwd (not 0/1/2 nor the command name).
 set -g allow-rename off
 set -g automatic-rename on
 set -g automatic-rename-format '#{b:pane_current_path}'
+# Terminal/WM title = SESSION NAME, not the cwd basename. Two sessions in the same repo get
+# distinct names (the wrapper appends -2, -3) but share a cwd basename, so a cwd title made them
+# indistinguishable to the window manager. cp-panel-open needs that title to pick the right window
+# whenever the terminal runs single-instance (`kitty -1`), where every window shares one pid and
+# the pid->window map stops being a key. Session names are unique by construction; cwd is not.
 set -g set-titles on
-set -g set-titles-string '#{b:pane_current_path}'
+set -g set-titles-string '#S'
 TMUXCONF
 )"
   tmux source-file "$HOME/.tmux.conf" 2>/dev/null && echo "  reloaded ~/.tmux.conf" || true
