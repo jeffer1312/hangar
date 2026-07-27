@@ -1571,9 +1571,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     border: 1px solid var(--border-subtle);
     padding: 1px 6px; border-radius: var(--radius-full); white-space: nowrap;
   }
-  /* Mesma etiqueta no rail de 56px: colada na base do avatar, absoluta (não mexe na altura da row). */
+  /* Mesma etiqueta no rail de 56px: colada na base do avatar, absoluta (não mexe na altura da row).
+     bottom: -3px e não -7px: com densidade compacta a row cai pra 34px e o avatar de 30px quase a
+     preenche — a -7px a etiqueta passava da row e encostava no avatar de baixo. */
   .prov-rail {
-    position: absolute; left: 50%; bottom: -7px; transform: translateX(-50%);
+    position: absolute; left: 50%; bottom: -3px; transform: translateX(-50%);
     font-size: 9px; font-weight: 700; letter-spacing: 0.02em; line-height: 1.3;
     color: var(--text-secondary); background: var(--bg-elevated);
     border: 1px solid var(--border-subtle);
