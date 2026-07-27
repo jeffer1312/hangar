@@ -32,14 +32,29 @@ _TOOL_VERBS = (
 )
 _TOOL_BLOCK_RE = re.compile(rf"^([A-Z][\w-]*\(|({_TOOL_VERBS})\b)")
 
+# Chrome de FIM DE BLOCO que só o Pi desenha: a caixa arredondada do composer (╭───╮ … ╰───╯), que
+# fica logo abaixo da resposta em voo. Nenhuma das paradas do Claude casa nela (a régua reta é outro
+# desenho), então o preview do Pi vinha com a borda da caixa E a statusline (🤖 modelo … 💵 custo)
+# coladas no fim do texto — capturas reais em .superpowers/sdd/2026-07-27-pi-adapter/.
+# Por PROVIDER, e não por forma, porque AQUI o chamador sabe (sse.merged_events já ramifica por
+# provider pra escolher a fonte do preview): assim a extração do Claude/Codex fica byte-idêntica,
+# sem a chance de uma prosa dele que desenhe um box virar preview truncado.
+# ponytail: desenho da caixa é calibration knob, igual ao _BOX_BOTTOM_RE do state.py.
+_PI_BOX_RE = re.compile(r"^\s*[╭╰][─\s]*[╮╯]\s*$")
+_STOPS_BY_PROVIDER = {"pi": (_PI_BOX_RE,)}
 
-def extract_assistant_text(pane: str) -> str:
+
+def extract_assistant_text(pane: str, provider: str = "claude") -> str:
     """Texto do ÚLTIMO bloco de PROSA do assistente (●) do pane, VERBATIM (sem reflow — núcleo seguro).
 
     Acha o último ● que NÃO é tool-call (início do bloco em voo; blocos anteriores já caíram no
     .jsonl), tira o "● " da 1ª linha e segue até o primeiro chrome: régua (────), próximo boundary
-    (●/⎿/spinner) ou prompt ❯. Sem juntar continuação — o markdown bonito vem no snap final do .jsonl.
+    (●/⎿/spinner), prompt ❯ ou o chrome extra do provider. Sem juntar continuação — o markdown
+    bonito vem no snap final do .jsonl.
+
+    provider desconhecido = "claude" = comportamento idêntico ao de sempre.
     """
+    stops = _STOPS_BY_PROVIDER.get(provider, ())
     lines = pane.splitlines()
     start = -1
     for i, ln in enumerate(lines):
@@ -60,6 +75,8 @@ def extract_assistant_text(pane: str) -> str:
         s = ln.lstrip()
         if _RULE_RE.match(ln) or _is_boundary(ln) or _USER_PROMPT_RE.match(ln) or _TOOL_BLOCK_RE.match(s):
             break
+        if any(r.match(ln) for r in stops):
+            break
         out.append(ln.rstrip())
 
     while out and not out[-1].strip():
@@ -75,8 +92,9 @@ class PreviewBroker:
 
     _brokers: dict[str, "PreviewBroker"] = {}
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, provider: str = "claude"):
         self.name = name
+        self.provider = provider
         self.text = ""
         self.version = 0
         self._cond = asyncio.Condition()
@@ -84,10 +102,14 @@ class PreviewBroker:
         self._subs = 0
 
     @classmethod
-    def get(cls, name: str) -> "PreviewBroker":
+    def get(cls, name: str, provider: str = "claude") -> "PreviewBroker":
+        # provider: um broker por SESSAO, e toda conexao da mesma sessao traz o mesmo provider —
+        # so o primeiro a chegar o fixa. Nao reatribuimos num broker vivo pra nao trocar a leitura
+        # debaixo de um subscriber; o broker morre com o ultimo subscriber e o proximo renasce
+        # com o provider atual.
         b = cls._brokers.get(name)
         if b is None:
-            b = cls(name)
+            b = cls(name, provider)
             cls._brokers[name] = b
         return b
 
@@ -103,7 +125,7 @@ class PreviewBroker:
             except Exception:
                 pane = ""
             working = _live_spinner(pane) is not None
-            text = extract_assistant_text(pane)
+            text = extract_assistant_text(pane, self.provider)
             if text != self.text:
                 async with self._cond:
                     self.text = text

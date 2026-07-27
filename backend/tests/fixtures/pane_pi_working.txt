@@ -1,0 +1,45 @@
+
+   Na teoria são complementares, mas na prática dois pacotes que mexem na interface do pi podem sim
+   pisar um no outro. A documentação pode estar otimista.
+
+   A única forma de ter certeza é testar. Se você acha que são concorrentes, acho justo remover os
+   dois e instalar de um em um:
+
+   ╭· bash ······················································································ ╮
+   │   pi remove npm:pi-claude-code-tui                                                           │
+   │   pi remove npm:pi-claude-code-ui                                                            │
+   ╰······························································································╯
+
+   Reinicia o pi. Aí instala só um deles:
+
+   ╭· bash ······················································································ ╮
+   │   pi install npm:pi-claude-code-tui                                                          │
+   ╰······························································································╯
+
+   Testa. Se ainda não resolver, remove e instala só o outro:
+
+   ╭· bash ······················································································ ╮
+   │   pi remove npm:pi-claude-code-tui                                                           │
+   │   pi install npm:pi-claude-code-ui                                                           │
+   ╰······························································································╯
+
+   Quer fazer esse teste? Posso te acompanhar nos comandos.
+
+   ✻ Turn took 17s (Total time 18m 5s · 10 turns)
+
+›  eu nao consigo copiar do conteudo do pi?
+
+   Thought for 3s
+
+ ● Tem sim, algumas formas:
+
+   Copiar a última resposta do assistente:
+   ◉ Comando: /copy
+   ◉ Atalho: Ctrl+X
+
+   Copiar uma mensagem antiga específica:
+
+╭─────────────────────────────────────────────────────────────────────────────────────────────────╮
+
+╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
+🤖 kimi-for-coding (high) │ 📁 jefferson │ 📟 jefferson-2 │ 💬 sessão 44kin/16kout · cache 1.1M ...
