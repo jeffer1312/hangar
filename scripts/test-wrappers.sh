@@ -196,6 +196,30 @@ for SH in bash zsh; do
     out=$(posix_case_pi "$SH" --no-session)
     check "$SH pi --no-session (passthrough, sem injeção)" "$out" 'ARGV: --no-session' 'ENV_CP_PI_SESSION='
 
+    # Fix round 2 (bug real do usuário): `pi remove npm:pi-claude-code-tui` abria a TUI e não removia
+    # nada. Subcomando e uso não interativo têm que chegar CRUS no binário — sem --session-id, sem
+    # CP_PI_SESSION, sem tmux. Precedente: os subcomandos do wrapper codex.
+    for sub in install remove uninstall update list config; do
+        out=$(posix_case_pi "$SH" "$sub" npm:foo)
+        check "$SH pi $sub (subcomando cru)" "$out" "ARGV: $sub npm:foo" 'ENV_CP_PI_SESSION='
+    done
+
+    for flag in -p --print --list-models --help -h --version -v; do
+        out=$(posix_case_pi "$SH" "$flag")
+        check "$SH pi $flag (não interativo, cru)" "$out" "ARGV: $flag" 'ENV_CP_PI_SESSION='
+    done
+
+    out=$(posix_case_pi "$SH" --mode json -p oi)
+    check "$SH pi --mode json (cru)" "$out" 'ARGV: --mode json -p oi' 'ENV_CP_PI_SESSION='
+
+    out=$(posix_case_pi "$SH" --export out.html)
+    check "$SH pi --export (cru)" "$out" 'ARGV: --export out.html' 'ENV_CP_PI_SESSION='
+
+    # A distinção que mordeu o usuário: subcomando SÓ como primeiro argumento. Uma mensagem que por
+    # acaso começa com a palavra "remove" continua sendo lançamento interativo com prompt inicial.
+    out=$(posix_case_pi "$SH" 'remove the dead code')
+    check_pi_injected "$SH pi \"remove the dead code\" (prompt, não subcomando)" "$out"
+
     out="$TMP/out.$RANDOM.$RANDOM"
     env -i PATH="$PATH_WITH_FAKES" HOME="$HOME" CP_TEST_OUT="$out" \
         "$SH" -c '
@@ -249,6 +273,26 @@ if command -v fish >/dev/null 2>&1; then
 
     out=$(fish_case_pi --no-session)
     check "fish pi --no-session (passthrough, sem injeção)" "$out" 'ARGV: --no-session' 'ENV_CP_PI_SESSION='
+
+    # Mesmos casos do bloco posix — os dois shells têm que tomar SEMPRE o mesmo ramo.
+    for sub in install remove uninstall update list config; do
+        out=$(fish_case_pi "$sub" npm:foo)
+        check "fish pi $sub (subcomando cru)" "$out" "ARGV: $sub npm:foo" 'ENV_CP_PI_SESSION='
+    done
+
+    for flag in -p --print --list-models --help -h --version -v; do
+        out=$(fish_case_pi "$flag")
+        check "fish pi $flag (não interativo, cru)" "$out" "ARGV: $flag" 'ENV_CP_PI_SESSION='
+    done
+
+    out=$(fish_case_pi --mode json -p oi)
+    check "fish pi --mode json (cru)" "$out" 'ARGV: --mode json -p oi' 'ENV_CP_PI_SESSION='
+
+    out=$(fish_case_pi --export out.html)
+    check "fish pi --export (cru)" "$out" 'ARGV: --export out.html' 'ENV_CP_PI_SESSION='
+
+    out=$(fish_case_pi 'remove the dead code')
+    check_pi_injected "fish pi \"remove the dead code\" (prompt, não subcomando)" "$out"
 
     out="$TMP/out.$RANDOM.$RANDOM"
     env -i PATH="$PATH_WITH_FAKES" HOME="$HOME" CP_TEST_OUT="$out" \
