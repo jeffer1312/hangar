@@ -81,6 +81,42 @@ def test_session_file_ignores_a_stale_sidecar(monkeypatch, tmp_path):
     assert registry.pi_session_file("%123", pid=7, cwd="/w") is None
 
 
+def test_session_file_rejects_a_sidecar_of_another_session(monkeypatch, tmp_path):
+    # FINDING 4: o exists() so pega bilhete apontando pra arquivo APAGADO. Depois de um restart do
+    # servidor tmux o %pane_id e reusado e o .jsonl da sessao ANTERIOR continua no disco -> o pane
+    # novo abria a conversa do pane velho ate a extensao reescrever o bilhete (e pra sempre se a
+    # extensao nao carregar). Os dois ids conhecidos e diferentes = bilhete de outra sessao.
+    cfg = tmp_path / "cfg"
+    (cfg / ".claude-pocket-pi").mkdir(parents=True)
+    velho = tmp_path / "2026-07-01T00-00-00-000Z_aaa.jsonl"
+    velho.write_text("")            # ainda existe no disco: o guarda de hoje deixa passar
+    (cfg / ".claude-pocket-pi" / "9.json").write_text(
+        json.dumps({"file": str(velho), "id": "aaa"}))
+    monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
+    env = tmp_path / "environ"
+    env.write_bytes(b"CP_PI_SESSION=bbb\x00")
+    monkeypatch.setattr(registry, "_proc_environ_path", lambda pid: str(env))
+    monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: f"/s/2026_{s}.jsonl")
+
+    assert registry.pi_session_file("%9", pid=7, cwd="/w") == "/s/2026_bbb.jsonl"
+
+
+def test_session_file_trusts_the_sidecar_when_the_ids_agree(monkeypatch, tmp_path):
+    # Ids iguais (ou um dos lados desconhecido) -> comportamento de hoje: o bilhete manda, porque
+    # so ele carrega o caminho exato.
+    cfg = tmp_path / "cfg"
+    (cfg / ".claude-pocket-pi").mkdir(parents=True)
+    alvo = tmp_path / "2026-07-27T00-00-00-000Z_aaa.jsonl"
+    alvo.write_text("")
+    (cfg / ".claude-pocket-pi" / "9.json").write_text(
+        json.dumps({"file": str(alvo), "id": "aaa"}))
+    monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
+    env = tmp_path / "environ"
+    env.write_bytes(b"CP_PI_SESSION=aaa\x00")
+    monkeypatch.setattr(registry, "_proc_environ_path", lambda pid: str(env))
+    assert registry.pi_session_file("%9", pid=7, cwd="/w") == str(alvo)
+
+
 def test_session_file_falls_back_to_the_wrapper_env(monkeypatch, tmp_path):
     # Sem bilhete (extensao nao carregou) o wrapper ainda salva: CP_PI_SESSION no /proc/<pid>/environ,
     # mesmo truque do _engine_of. O id vira caminho pelo adapter, que resolve o glob <ts>_<uuid>.

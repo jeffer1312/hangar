@@ -341,8 +341,17 @@ def pi_session_file(pane_id: str, pid: Optional[int] = None,
     """
     base = (_config_dir_of(pid) if pid else None) or Path.home() / ".claude"
     ticket = Path(base) / ".claude-pocket-pi" / f"{pane_id.lstrip('%')}.json"
+    sid = _pi_sid_of(pid) if pid else None
     try:
-        f = json.loads(ticket.read_text()).get("file")
+        data = json.loads(ticket.read_text())
+        f, ticket_sid = data.get("file"), data.get("id")
+        # Bilhete de OUTRA sessao: o tmux reusa %pane_id apos um restart do servidor e o .jsonl da
+        # sessao anterior continua no disco, entao o exists() abaixo nao pega nada — o pane novo
+        # abriria a conversa do pane velho (pra sempre, se a extensao nao carregar e nunca
+        # reescrever o bilhete). Os dois ids conhecidos e diferentes = rejeita. Um lado desconhecido
+        # -> confia no bilhete, que e quem carrega o caminho exato.
+        if sid and ticket_sid and sid != ticket_sid:
+            f = None
         # os.path.exists: o cp-state.ts NUNCA apaga o bilhete quando o pane fecha, e o tmux reusa
         # %pane_id apos um restart do servidor (ex: reboot da maquina) -> um bilhete ORFAO de uma
         # sessao morta, apontando pra um .jsonl ja deletado/renomeado, seria devolvido como se fosse
@@ -352,7 +361,6 @@ def pi_session_file(pane_id: str, pid: Optional[int] = None,
             return f
     except (OSError, ValueError):
         pass
-    sid = _pi_sid_of(pid) if pid else None
     return _pi_transcript_of_id(cwd, sid) if sid else None
 
 
