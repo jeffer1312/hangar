@@ -9,7 +9,7 @@ const store = new Map<string, string>();
 (globalThis as any).document = { cookie: '' };
 (globalThis as any).window = { location: { origin: 'https://app.test' } };
 
-const { getConfigForServer, patchConfigForServer } = await import('./api');
+const { getConfigForServer, patchConfigForServer, createSession } = await import('./api');
 const { listServers, getActiveId } = await import('./auth');
 const server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
 
@@ -49,5 +49,24 @@ describe('explicit server settings API', () => {
     expect(reload).not.toHaveBeenCalled();
     expect(listServers()).toEqual([outra]);   // a credencial da outra máquina segue intacta
     expect(getActiveId()).toBe(outra.id);
+  });
+});
+
+describe('createSession', () => {
+  // O backend so aceita provider em ("claude", "codex", "pi") e devolve 400 se vier `engine` com
+  // provider != claude. O sheet manda engine/config_dir nulos fora do Claude — aqui garantimos que o
+  // provider viaja LITERAL (a versao anterior tipava 'claude' | 'codex' e uma sessao Pi nem compilava).
+  it('manda o provider escolhido no corpo, sem motor', async () => {
+    store.set('cp_servers', JSON.stringify([server]));
+    store.set('cp_active', server.id);
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ name: 'x', state: 'idle' }), { status: 200 }),
+    );
+
+    await createSession('x', '/home/eu/proj', null, 'pi', null);
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(fetchMock.mock.calls[0][0]).toBe('https://a.test/api/sessions');
+    expect(body).toMatchObject({ name: 'x', cwd: '/home/eu/proj', provider: 'pi', config_dir: null, engine: null });
   });
 });

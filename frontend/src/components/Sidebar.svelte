@@ -12,7 +12,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import AccountMenu from './AccountMenu.svelte';
   import SessionSwitcherSheet from './SessionSwitcherSheet.svelte';
   import HoverPreview from './HoverPreview.svelte';
-  import type { SessionInfo, State, ResumeCandidate } from '../lib/types';
+  import type { SessionInfo, State, ResumeCandidate, Provider } from '../lib/types';
   import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, untrackedReason, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
@@ -215,7 +215,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     }
   }
 
-  async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: 'claude' | 'codex',
+  async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: Provider,
                               engine?: string | null) {
     // O CreateSessionSheet já posicionou o servidor-alvo como ativo (selectServer).
     await createSession(name, cwd, configDir, provider, engine);

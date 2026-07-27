@@ -2,6 +2,7 @@ import { getBaseUrl, getToken, dropActiveServer } from './auth';
 import type { Server } from './auth';
 import type {
   SessionInfo,
+  Provider,
   ChatEvent,
   CommandInfo,
   ConfigDirInfo,
@@ -247,7 +248,7 @@ export function createSession(
   name: string,
   cwd?: string,
   configDir?: string | null,
-  provider: 'claude' | 'codex' = 'claude',
+  provider: Provider = 'claude',
   engine?: string | null,
 ): Promise<SessionInfo> {
   return apiFetch<SessionInfo>('/api/sessions', {

@@ -20,15 +20,19 @@ export interface LoopState {
   ended_reason: string | null;
 }
 
+// Qual Adapter dirige a sessao (app.adapters.get_adapter no backend). "claude" e o default;
+// "codex" identifica as criadas via registry.create_codex; "pi" as detectadas pelo processo do
+// pane (registry.provider_of_pane). O front usa isto pra esconder controles Claude-only (picker
+// de /model, slash-commands) e pra rotular a sessao (lib/format.providerName).
+// Tipo nomeado porque a mesma uniao viaja pela cadeia de criacao (CreateSessionSheet -> handleCreate
+// das duas views -> api.createSession): quando o Pi entrou, as copias literais ficaram pra tras.
+export type Provider = 'claude' | 'codex' | 'pi';
+
 export interface SessionInfo {
   name: string;
   cwd?: string;
   jsonl?: string | null;
-  // Qual Adapter dirige a sessao (app.adapters.get_adapter no backend). "claude" e o default;
-  // "codex" identifica as criadas via registry.create_codex; "pi" as detectadas pelo processo do
-  // pane (registry.provider_of_pane). O front usa isto pra esconder controles Claude-only (picker
-  // de /model, slash-commands) e pra rotular a sessao (lib/format.providerName).
-  provider?: 'claude' | 'codex' | 'pi';
+  provider?: Provider;
   state: State;
   last_activity?: number | null;
   // Vínculo nome<->transcript confiável? false = claude manual sem --session-id (chute mtime) ->
