@@ -23,10 +23,12 @@ def test_wait_input_ready_times_out_then_false():
         assert ti._wait_input_ready("s", timeout=0.0) is False
 
 
-# Panes REAIS capturados de uma sessao Pi (`tmux capture-pane -p`): o boot nao tem UMA moldura; o
-# TUI pronto desenha a caixa do composer. Sem provider="pi" o pane nunca casa as marcas do rodape do
-# Claude e TODO envio esperava os 12s inteiros de timeout antes de digitar.
+# Panes de sessao Pi (`tmux capture-pane -p`, pi 0.82.1, capturados de uma sessao descartavel — o
+# repositorio e publico, nada de conversa do usuario aqui). O boot nao tem UMA moldura; o TUI pronto
+# desenha o chrome do composer. Sem provider="pi" o pane nunca casa as marcas do rodape do Claude e
+# TODO envio esperava os 12s inteiros de timeout antes de digitar.
 _PI_BOOT = " Warning: tmux extended-keys is off. Modified Enter keys may not work.\n"
+# Variante CAIXA (pi antigo / outro tema): o que o marcador `╰─` original media.
 _PI_IDLE = (
     " Reloaded keybindings, extensions, skills, prompts, themes, and context files\n"
     "\n"
@@ -34,12 +36,50 @@ _PI_IDLE = (
     "\n"
     "╰" + "─" * 97 + "╯\n"
 )
+# Variante REGUA — o desenho de HOJE, tanto no pi puro (`--no-extensions`) quanto com o pacote
+# `pi-claude-code-ui`: duas reguas e a statusline, ZERO `╰─`. Foi este pane que fez cada mensagem
+# custar 12s.
+_PI_IDLE_RULES = (
+    " ✻ Turn took 11s (Total time 3h 43m 36s · 12 turns)\n"
+    "\n"
+    "─" * 100 + "\n"
+    "\n"
+    "─" * 100 + "\n"
+    "🤖 cline-pass/glm-5.2 (xhigh) │ 📁 piprobe │ 📟 cp-pi-probe │ 💬 sessão 0in/0out · ctx 0/1M\n"
+)
 
 
 def test_wait_input_ready_pi_pronto_retorna_na_primeira_leitura():
     with patch.object(ti, "_capture", lambda name: _PI_IDLE), \
          patch.object(ti.time, "sleep", lambda *_: None):
         assert ti._wait_input_ready("s", timeout=0.0, provider="pi") is True
+
+
+def test_wait_input_ready_pi_composer_de_reguas_e_pronto():
+    # Regressao do bug dos 12s: a UI atual do Pi desenha reguas, nao caixa. Se um dia mudar de novo,
+    # e ESTE teste que quebra — em vez de o app so ficar lento e calado.
+    with patch.object(ti, "_capture", lambda name: _PI_IDLE_RULES), \
+         patch.object(ti.time, "sleep", lambda *_: None):
+        assert ti._wait_input_ready("s", timeout=0.0, provider="pi") is True
+
+
+def test_wait_input_ready_pi_timeout_avisa_uma_vez(caplog):
+    # Marcador que para de casar nao pode ser silencioso: e assim que 12s por mensagem passam batido.
+    ti._READY_TIMEOUT_WARNED.clear()
+    with patch.object(ti, "_capture", lambda name: _PI_BOOT), \
+         patch.object(ti.time, "sleep", lambda *_: None), \
+         caplog.at_level("WARNING", logger="claude_pocket.terminal_input"):
+        assert ti._wait_input_ready("s", timeout=0.0, provider="pi") is False
+        assert ti._wait_input_ready("s", timeout=0.0, provider="pi") is False
+    assert len(caplog.records) == 1
+    assert "pi" in caplog.records[0].getMessage()
+    ti._READY_TIMEOUT_WARNED.clear()
+
+
+def test_wait_input_ready_timeout_do_pi_e_menor_que_o_do_claude():
+    # A espera so compra seguranca no boot (~4.3s medidos ate o composer); no estouro a gente envia
+    # mesmo assim, entao teto menor = pior caso menor no dia em que o marcador desandar de novo.
+    assert ti._TIMEOUTS_BY_PROVIDER["pi"] < ti._DEFAULT_TIMEOUT
 
 
 def test_wait_input_ready_pi_bootando_nao_diz_pronto():
