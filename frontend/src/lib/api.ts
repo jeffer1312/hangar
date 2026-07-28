@@ -10,6 +10,7 @@ import type {
   FsScanResult,
   FsScanError,
   WorkflowSummary,
+  SubagentRun,
   WorkflowDetail,
   WorkflowAgentDetail,
   AnswerItem,
@@ -366,6 +367,16 @@ export function getWorkflow(name: string, runId: string): Promise<WorkflowDetail
 
 export function getWorkflowAgent(name: string, runId: string, agentId: string): Promise<WorkflowAgentDetail> {
   return apiFetch<WorkflowAgentDetail>(`/api/sessions/${encodeURIComponent(name)}/workflows/${encodeURIComponent(runId)}/agents/${encodeURIComponent(agentId)}`);
+}
+
+// Subagentes soltos (tool Agent) da sessão: o transcript PRÓPRIO de cada um, que o jsonl do pai
+// não carrega. É o que permite ver as ferramentas que ele está chamando enquanto roda.
+export function getSubagents(name: string): Promise<SubagentRun[]> {
+  return apiFetch<SubagentRun[]>(`/api/sessions/${encodeURIComponent(name)}/subagents`);
+}
+export function getSubagent(name: string, agentId: string, events = 0): Promise<SubagentRun> {
+  const q = events ? `?events=${events}` : '';
+  return apiFetch<SubagentRun>(`/api/sessions/${encodeURIComponent(name)}/subagents/${encodeURIComponent(agentId)}${q}`);
 }
 
 // Raízes liberadas do scanner (chips no topo do FolderScanner).

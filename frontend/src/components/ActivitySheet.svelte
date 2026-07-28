@@ -1,8 +1,11 @@
 <script lang="ts">
-  import { getWorkflows, getWorkflow, getWorkflowAgent } from '../lib/api';
+  import { getWorkflows, getWorkflow, getWorkflowAgent, getSubagents, getSubagent } from '../lib/api';
   import ModalDialog from './ModalDialog.svelte';
+  import { renderMarkdown } from '../lib/markdown';
+  import MessageList from './MessageList.svelte';
+  import { onDestroy } from 'svelte';
   import type { Activity, TaskStatus } from '../lib/activity';
-  import type { WorkflowSummary, WorkflowDetail, WorkflowAgentDetail } from '../lib/types';
+  import type { WorkflowSummary, WorkflowDetail, WorkflowAgentDetail, SubagentRun } from '../lib/types';
 
   interface Props {
     open: boolean;
@@ -13,7 +16,7 @@
   let { open, activity, sessionName, onClose }: Props = $props();
 
   // 3 níveis: lista geral -> detalhe do workflow (fases+agentes) -> detalhe do agente (prompt+result).
-  let level = $state<'list' | 'workflow' | 'agent'>('list');
+  let level = $state<'list' | 'workflow' | 'agent' | 'subagent'>('list');
   let runId = $state<string | null>(null);
   let workflows = $state<WorkflowSummary[]>([]);
   let detail = $state<WorkflowDetail | null>(null);
@@ -27,9 +30,15 @@
       runId = null;
       detail = null;
       agentDetail = null;
+      stopSubPoll();
+      subDetail = null;
       return;
     }
     getWorkflows(sessionName).then((w) => (workflows = w)).catch(() => {});
+    subError = '';
+    getSubagents(sessionName)
+      .then((s) => (subs = s))
+      .catch(() => (subError = 'não consegui ler os subagentes desta sessão'));
   });
 
   async function openWorkflow(rid: string) {
@@ -61,6 +70,12 @@
   }
 
   function back() {
+    if (level === 'subagent') {
+      stopSubPoll();
+      subDetail = null;
+      level = 'list';
+      return;
+    }
     if (level === 'agent') {
       level = 'workflow';
       agentDetail = null;
@@ -72,6 +87,87 @@
   }
 
   const runningAgents = $derived(activity.agents.filter((a) => a.kind === 'agent' && a.running));
+
+  // ── Subagente ao vivo ─────────────────────────────────────────────────────
+  // O transcript PROPRIO do subagente (<session-dir>/subagents/agent-<id>.jsonl) nao entra no jsonl
+  // do pai: o pai so tem o pedido e, no fim, o resultado. O backend le esse arquivo e devolve as
+  // ultimas ferramentas chamadas — que e o "o que ele esta fazendo agora" de verdade.
+  let subs = $state<SubagentRun[]>([]);
+  let subDetail = $state<SubagentRun | null>(null);
+  let subTimer: ReturnType<typeof setInterval> | null = null;
+  // Falha de rede NAO pode virar "nao ha nada": sem isto, a lista de subagentes ficava vazia e a
+  // linha do agente simplesmente nao abria nada no clique — indistinguivel de bug de toque.
+  let subError = $state('');
+  let subFails = 0;
+
+  // O pai conhece o agente pelo tool_use_id; o arquivo, pelo agentId. A chave que os dois lados
+  // compartilham e o PROMPT — casa pelo comeco normalizado. Sem match (agente antigo, arquivo ainda
+  // nao criado) a linha simplesmente nao abre nada.
+  // 60 caracteres nao bastam: varios subagentes da mesma tarefa comecam igual ("Pesquise na web
+  // (fontes oficiais: docs, GitHub..."), e o match pegava sempre o primeiro da lista. Compara o
+  // prompt INTEIRO normalizado; so se nao houver igual cai pra um prefixo longo, e nesse caso vence
+  // o de escrita mais recente (a lista ja vem ordenada por mtime).
+  const norm = (t: string) => t.replace(/\s+/g, ' ').trim().toLowerCase();
+  function matchSub(prompt: string | undefined): SubagentRun | null {
+    if (!prompt) return null;
+    const full = norm(prompt);
+    const exact = subs.find((s) => s.prompt && norm(s.prompt) === full);
+    if (exact) return exact;
+    const head = full.slice(0, 400);
+    return subs.find((s) => s.prompt && norm(s.prompt).startsWith(head)) ?? null;
+  }
+
+  async function openSubagent(prompt: string | undefined, title: string) {
+    if (subs.length === 0) {
+      try {
+        subs = await getSubagents(sessionName);
+        subError = '';
+      } catch {
+        subError = 'não consegui ler os subagentes desta sessão';
+        return;   // clique que nao faz nada e pior que erro: some sem explicar
+      }
+    }
+    const m = matchSub(prompt);
+    if (!m) return;
+    subTitle = title;
+    subDetail = m;
+    level = 'subagent';
+    const tick = async () => {
+      try {
+        subDetail = await getSubagent(sessionName, m.agentId, 200);
+        subFails = 0;
+        subError = '';
+      } catch {
+        // Uma falha isolada e normal (o arquivo some quando o agente termina) -> mantem o ultimo
+        // estado. Tres seguidas nao sao "sumiu": e erro de verdade, e a tela precisa parar de
+        // fingir que esta ao vivo.
+        if (++subFails >= 3) {
+          stopSubPoll();
+          subError = 'atualização ao vivo parou (erro ao ler o subagente)';
+        }
+      }
+    };
+    tick();
+    subTimer = setInterval(tick, 2500);
+  }
+  let subTitle = $state('');
+  // A MessageList so ancora no fim quando ela mesma controla o scroll da tela; aqui ela vive numa
+  // caixa dentro do modal, entao a primeira pintura ficava no TOPO — no prompt, nao no que o agente
+  // acabou de fazer. Empurra pro fim a cada atualizacao.
+  let subChatEl = $state<HTMLElement | null>(null);
+  $effect(() => {
+    if (!subDetail?.events?.length || !subChatEl) return;
+    const el = subChatEl.querySelector('.message-list');
+    if (el) requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+  });
+  function stopSubPoll() {
+    if (subTimer) { clearInterval(subTimer); subTimer = null; }
+    subFails = 0;
+  }
+  // O componente e DESTRUIDO junto com o Chat a cada troca de sessao/par ({#key} no DesktopShell e
+  // no PairChatModal). Sem isto o poll de 2,5s sobrevivia a morte da tela e seguia batendo no
+  // backend de uma sessao que nem esta aberta.
+  onDestroy(stopSubPoll);
 
   function mark(status: TaskStatus): string {
     if (status === 'completed') return '✓';
@@ -148,6 +244,7 @@
   // Título do header do modal por nível.
   const headerTitle = $derived(
     level === 'list' ? 'Atividade'
+    : level === 'subagent' ? (subTitle || 'Subagente')
     : level === 'workflow' ? (detail?.name ?? 'Workflow')
     : (agentDetail?.label ?? 'Agente')
   );
@@ -197,10 +294,27 @@
               <div class="section">
                 <span class="section-label">Rodando agora</span>
                 {#each runningAgents as a (a.id)}
-                  <div class="agent-row">
+                  {@const sub = matchSub(a.prompt)}
+                  <svelte:element this={sub ? 'button' : 'div'} class="agent-row" class:openable={!!sub}
+                                  role={sub ? 'button' : undefined} tabindex={sub ? 0 : undefined}
+                                  onclick={sub ? () => openSubagent(a.prompt, a.description) : undefined}>
                     <span class="ring-spin" aria-hidden="true"></span>
-                    <span class="agent-desc">{a.description}</span>
-                  </div>
+                    <span class="agent-body">
+                      <span class="agent-head">
+                        <span class="agent-desc">{a.description}</span>
+                        {#if a.subagentType}<span class="agent-tag">{a.subagentType}</span>{/if}
+                        {#if a.model}<span class="agent-tag muted">{a.model}</span>{/if}
+                      </span>
+                      {#if sub}
+                        <!-- O que ele esta tocando AGORA (ultima tool do transcript dele). O prompt
+                             inteiro nao vive mais aqui: virava parede de texto na lista. -->
+                        <span class="agent-now">
+                          {sub.toolCalls} chamadas{#if sub.recent.length} · {sub.recent[sub.recent.length - 1].name}{/if}
+                        </span>
+                      {/if}
+                    </span>
+                    {#if sub}<span class="agent-arrow" aria-hidden="true">›</span>{/if}
+                  </svelte:element>
                 {/each}
               </div>
             {/if}
@@ -217,8 +331,52 @@
               </div>
             {/if}
 
+            {#if subError}<p class="activity-error">⚠ {subError}</p>{/if}
             {#if workflows.length === 0 && activity.tasks.length === 0 && runningAgents.length === 0}
               <p class="activity-empty">Nada rolando agora. Tarefas, agentes e workflows que o Claude criar nesta sessão aparecem aqui, ao vivo.</p>
+            {/if}
+          </div>
+        {:else if level === 'subagent'}
+          <!-- Subagente ao vivo: o transcript dele, lido pelo backend a cada 2,5s. -->
+          <div class="activity">
+            {#if !subDetail}
+              <p class="activity-empty">Sem transcript pra esse agente ainda.</p>
+            {:else}
+              <!-- MESMO renderizador do chat: o arquivo do subagente e um jsonl no formato de
+                   sempre, entao o backend converte com a `parse_line` do transcript e a UI reusa a
+                   lista de mensagens (bolhas, cartoes de tool, markdown) em vez de um segundo jeito
+                   de desenhar a mesma conversa. -->
+              {#if subDetail.events?.length}
+                <div class="sub-chat" bind:this={subChatEl}>
+                  <MessageList
+                    events={subDetail.events}
+                    stateEvent={null}
+                    pending={[]}
+                    sessionName={sessionName}
+                    dockH={0}
+                    onSelectOption={() => {}}
+                    onCancel={() => {}}
+                  />
+                </div>
+              {:else if subDetail.toolCalls > 0}
+                <!-- Ele JA chamou ferramentas, mas o transcript nao veio: e falha de leitura, nao
+                     agente parado. Dizer "ainda pensando" aqui seria mentir sobre o estado dele. -->
+                <p class="activity-empty">Não consegui ler o transcript dele agora.</p>
+              {:else}
+                <p class="activity-empty">Ainda pensando — nenhuma ferramenta chamada.</p>
+              {/if}
+              {#if subError}<p class="activity-error">⚠ {subError}</p>{/if}
+
+              {#if subDetail.tools.length > 0}
+                <div class="section sub-foot">
+                  <span class="section-label">Ferramentas · {subDetail.toolCalls} chamadas</span>
+                  <div class="sub-tools">
+                    {#each subDetail.tools as t (t.name)}
+                      <span class="agent-tag">{t.name} <b>{t.count}</b></span>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
             {/if}
           </div>
         {:else if level === 'workflow'}
@@ -319,25 +477,35 @@
 <style>
   /* ── Modal responsivo: mobile = full-screen; desktop (≥720px) = card central largo ── */
   :global(.activity-dialog) { width: 100%; max-width: 100%; height: 100%; max-height: 100%; padding: 0; border: 0; border-radius: 0; }
+  /* O .modal e o CORPO do dialog, nao um painel proprio: sem fundo (o vidro do ModalDialog ja
+     pinta), sem altura de tela e sem largura propria — senao sobra uma faixa vazia do lado e o
+     dialog cresce pra tela toda com duas linhas de conteudo. */
   .modal {
     display: flex;
     flex-direction: column;
     width: 100%;
-    height: 100dvh;
-    max-height: 100dvh;
-    background: var(--bg-elevated);
+    max-height: inherit;
+    background: transparent;
     animation: slide-up 220ms var(--ease-out) both;
   }
   /* Desktop (>=820px, mesmo corte do DesktopShell): DOCA como painel lateral direito, igual aos
      demais sheets (Git/Custo/Sessões) — era o único overlay que abria como modal central. Um pouco
      mais largo que os 420px dos outros: o detalhe de workflow tem duas colunas (fases + agentes). */
   @media (min-width: 820px) {
-    :global(.activity-dialog) { width: min(520px, 92vw); max-width: 92vw; height: 100%; max-height: 100%; border: 0; border-radius: 0; padding: 0; }
+    :global(.activity-dialog) {
+      width: min(520px, 92vw); max-width: 92vw; padding: 0;
+      /* Card no desktop: o `border: 0; border-radius: 0` da regra mobile passou a valer de verdade
+         depois que o ModalDialog baixou a specificity da caixa pra `:where` — antes ele era
+         ignorado e o modal herdava o raio do dialog por acidente. */
+      border: 1px solid var(--glass-border); border-radius: var(--radius-xl);
+      /* Altura do CONTEUDO. Com height:100% o modal virava uma caixa de tela inteira com duas
+         linhas de texto e 800px de vazio embaixo — foi o que o print mostrou. O teto continua
+         existindo pra lista longa (workflows + tarefas) rolar por dentro. */
+      height: auto; max-height: min(760px, calc(100dvh - var(--space-8)));
+    }
     .modal {
-      width: min(520px, 92vw);
-      height: 100%;
-      max-height: none;
-      border-left: 1px solid var(--border-default);
+      width: 100%;
+      border-left: 0;
       animation: slide-in-right 300ms var(--ease-out) both;
     }
   }
@@ -367,6 +535,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .modal-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: var(--radius-sm); }
   .modal-icon-btn {
     width: 32px;
     height: 32px;
@@ -429,8 +598,35 @@
   }
   .row-chevron { color: var(--text-muted); flex-shrink: 0; }
 
-  .agent-row { display: flex; align-items: center; gap: var(--space-2); }
-  .agent-desc { font-size: var(--text-sm); color: var(--text-primary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agent-row { display: flex; align-items: flex-start; gap: var(--space-2); }
+  .agent-row .ring-spin { margin-top: 3px; flex-shrink: 0; }
+  .agent-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .agent-head { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
+  .agent-desc { font-size: var(--text-sm); color: var(--text-primary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Tipo do subagente e modelo: etiquetas, nao titulo — quem manda na linha e a descricao. */
+  .agent-tag {
+    flex-shrink: 0; padding: 1px 6px; border-radius: var(--radius-full);
+    background: var(--bg-elevated); color: var(--text-secondary);
+    font-family: var(--font-mono); font-size: 10px; white-space: nowrap;
+  }
+  .agent-tag.muted { color: var(--text-muted); }
+  .agent-row.openable { width: 100%; padding: var(--space-1) var(--space-2); margin-inline: calc(var(--space-2) * -1); border-radius: var(--radius-md); text-align: left; cursor: pointer; }
+  .agent-row.openable:hover { background: var(--bg-hover); }
+  .agent-now { color: var(--text-muted); font-family: var(--font-mono); font-size: 10px; }
+  .agent-arrow { flex-shrink: 0; color: var(--text-muted); font-size: var(--text-base); line-height: 1; }
+
+  /* A lista de mensagens e a do chat: precisa de uma caixa com altura pra rolar dentro do modal. */
+  .activity-error { margin: var(--space-2) 0 0; color: var(--warning); font-size: var(--text-xs); }
+
+  .sub-chat { position: relative; height: min(60vh, 560px); margin: 0 calc(var(--space-5) * -1); }
+  .sub-foot { padding-top: var(--space-3); border-top: 1px solid var(--border-subtle); }
+
+  .sub-tools { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+  .sub-text { color: var(--text-secondary); font-size: var(--text-xs); line-height: 1.5; max-height: 40vh; overflow-y: auto; }
+  .sub-text :global(p) { margin: 0 0 var(--space-2); }
+  .sub-text :global(code) { padding: 0 3px; border-radius: 3px; background: var(--bg-elevated); font-family: var(--font-mono); font-size: 10px; }
+  .sub-text :global(a) { color: var(--accent); }
+
 
   .task-row { display: flex; align-items: baseline; gap: var(--space-2); }
   .task-mark { font-size: var(--text-sm); color: var(--text-muted); flex-shrink: 0; width: 1.1em; text-align: center; }

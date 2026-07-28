@@ -40,6 +40,11 @@
   --glass-highlight: rgba(255,255,255,0.16);
   --glass-specular:  rgba(255,255,255,0.30);  /* brilho de borda (rim) — o que "vende" o glass */
   --glass-shadow:    rgba(0,0,0,0.42);       /* halo do card flutuante (forte no dark) */
+  /* Vidro de PAINEL (modal, sheet, sidebar, painel de contexto). Diferente do --glass-bg (0.46),
+     que e de chrome fino (navbar/composer) onde o blur SEMPRE pega: num overlay grande o engine
+     as vezes descarta o backdrop-filter (backdrop root quebrado por transform/animacao do pai) e
+     o 0.46 vira "sem fundo" — o texto de tras atravessa. Este valor segura a leitura sozinho. */
+  --glass-panel:     rgba(26,24,29,0.86);
 
   /* Semantic */
   --success:  #34c759;
@@ -97,6 +102,7 @@
   --glass-highlight: rgba(255,255,255,0.85);
   --glass-specular:  rgba(255,255,255,0.95);  /* rim claro */
   --glass-shadow:    rgba(60,50,45,0.13);    /* sombra leve no claro (a 0.42 do dark vira faixa preta) */
+  --glass-panel:     rgba(255,253,250,0.90);
 
   /* Semantica no claro: os neon do dark (#34c759 etc.) caem a ~1.7:1 sobre paper — escurecidos
      pra >=4.5:1 ate no pior fundo (--bg-hover #e9e3da). */

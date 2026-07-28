@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import Sidebar from './Sidebar.svelte';
-  import WorkspaceNav from './WorkspaceNav.svelte';
   import WorkspaceCommandPalette from './WorkspaceCommandPalette.svelte';
   import WorkspaceAttentionStrip from './WorkspaceAttentionStrip.svelte';
   import Chat from '../screens/Chat.svelte';
@@ -186,12 +185,10 @@
   <Sidebar {currentSession} onSelect={onNavigateToChat} {onCompare} {onLogout}
            boardActive={view === 'board'}
            canvasActive={view === 'canvas'}
-           onWorkspaceActionsChange={handleSidebarActionsChange} />
+           onWorkspaceActionsChange={handleSidebarActionsChange}
+           {view} onSelectView={selectView} onOpenCommand={() => (commandOpen = true)} />
 
   <main class="desktop-main" class:split={splitSessions.length > 0} class:has-attention={hasAttention}>
-    <div class="workspace-nav-layer">
-      <WorkspaceNav {view} onSelect={selectView} onOpenCommand={() => (commandOpen = true)} />
-    </div>
     {#if hasAttention}
       <div class="workspace-attention-layer">
         <WorkspaceAttentionStrip {rows} onOpenSession={openSession} />
@@ -293,17 +290,10 @@
     position: relative;
     overflow: hidden;
   }
-  .workspace-nav-layer {
-    position: absolute;
-    top: 4px;
-    left: 50%;
-    z-index: 40;
-    transform: translateX(-50%);
-    pointer-events: none;
-  }
   .workspace-attention-layer {
     position: absolute;
-    top: 54px;
+    /* Subiu junto com a saida do seletor de view (que ocupava a faixa de 4-48px). */
+    top: 8px;
     left: 0;
     right: 0;
     z-index: 39;
@@ -314,9 +304,11 @@
   .workspace-view {
     height: 100%;
     box-sizing: border-box;
-    padding-top: 56px;
+    /* Sem o seletor flutuante, so sobra a folga do topo; com a fila "Precisa de voce" no ar,
+       o quadro/canvas ainda desce pra nao ficar por baixo dela. */
+    padding-top: 8px;
   }
-  .desktop-main.has-attention .workspace-view { padding-top: 108px; }
+  .desktop-main.has-attention .workspace-view { padding-top: 60px; }
   /* Split: dois chats lado a lado, divisor sutil. Cada pane é um contexto próprio (NavBar/composer). */
   .desktop-main.split { display: flex; }
   .pane { height: 100%; position: relative; overflow: hidden; }

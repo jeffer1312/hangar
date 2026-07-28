@@ -183,7 +183,10 @@ def leave(name: str) -> list[str]:
     """`name` sai do grupo. Devolve os ex-companheiros (pra notificação). Grupo restante de 1
     também é dissolvido (grupo de 1 não existe). Idempotente. Escrita parcial (ex: OSError no
     2º companheiro) restaura o estado anterior e propaga — sem isto sobrava companheiro-fantasma
-    apontando pra quem já saiu."""
+    apontando pra quem já saiu.
+
+    Grupo dissolvido de vez (ninguém mais dentro) leva junto o arquivo de CONTRATO — senão o
+    grupo-<gid>.md fica órfão no disco pra sempre, sem nenhum sidecar apontando pra ele."""
     with _LOCK:
         link = PairLink(name).get()
         if not link:
@@ -203,6 +206,13 @@ def leave(name: str) -> list[str]:
         except OSError:
             _restore_locked(snap)
             raise
+        # Fora do try: apagar contrato é faxina, best-effort — falha aqui não pode desfazer um
+        # unpair que já deu certo (restore ressuscitaria o par).
+        if len(peers) == 1 and link.get("gid"):
+            try:
+                (_pair_dir() / f"grupo-{link['gid']}.md").unlink(missing_ok=True)
+            except OSError:
+                pass
         return peers
 
 
@@ -225,7 +235,8 @@ def rename_pair(old: str, new: str) -> None:
 def contract_path_for(name: str) -> Path | None:
     """Arquivo de CONTRATO do grupo de `name` (markdown, keyed pelo gid — estável quando membro
     entra/sai). Todos os membros derivam o mesmo path; editam via fs; o app exibe no PairSheet.
-    NÃO é apagado no leave (registro do que foi combinado). None = sem grupo."""
+    Sobrevive a membro que sai sozinho; some junto com o grupo quando o último sai (ver leave()).
+    None = sem grupo."""
     link = PairLink(name).get()
     if not link or not link.get("gid"):
         return None

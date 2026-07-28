@@ -18,6 +18,13 @@ export interface AgentRun {
   kind: 'agent' | 'workflow';
   description: string;
   running: boolean; // Agent é bloqueante: sem tool_result = ainda rodando
+  // O que o subagente foi mandado FAZER. A linha "Rodando agora" mostrava só o `description` (3-5
+  // palavras) e não dava pra saber o que ele está tocando. O tool_use já traz tudo isto no input —
+  // era só não jogar fora. O transcript PRÓPRIO do subagente não vem no jsonl do pai, então isto é
+  // o teto do que dá pra mostrar sem backend novo.
+  subagentType?: string;
+  model?: string;
+  prompt?: string;
 }
 
 export interface Activity {
@@ -55,7 +62,7 @@ export function createActivityFolder(): ActivityFolder {
   let order: string[] = [];
   let todoWrite: TaskItem[] | null = null;
   let createSeq = 0;
-  let agents: { id: string; kind: 'agent' | 'workflow'; description: string }[] = [];
+  let agents: Omit<AgentRun, 'running'>[] = [];
   // Agent em BACKGROUND: o tool_result chega NA HORA ("Async agent launched...") com o agentId no
   // texto — o agente segue rodando e o fim real chega como <task-notification> numa user_msg.
   // Sem tratar isso, todo agent background aparecia como terminado (painel dizia "Nada rolando"
@@ -153,6 +160,9 @@ export function createActivityFolder(): ActivityFolder {
             id: e.tool_use_id,
             kind: 'agent',
             description: String(input.description ?? input.subagent_type ?? 'Agente'),
+            subagentType: typeof input.subagent_type === 'string' ? input.subagent_type : undefined,
+            model: typeof input.model === 'string' ? input.model : undefined,
+            prompt: typeof input.prompt === 'string' ? input.prompt : undefined,
           });
         }
         break;

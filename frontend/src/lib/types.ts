@@ -160,6 +160,22 @@ export interface WorkflowAgent {
   resultPreview: string | null;
 }
 
+// Subagente solto (tool Agent), lido do transcript dele em <session-dir>/subagents/.
+export interface SubagentRun {
+  agentId: string;
+  agentType: string | null;
+  prompt: string | null;
+  startedAt: string;
+  updatedAt: string;
+  mtime: number;
+  toolCalls: number;
+  tools: { name: string; count: number }[];
+  recent: { name: string; target: string }[];
+  lastText: string;
+  // Transcript do subagente nos MESMOS ChatEvent do chat (so com ?events=N).
+  events?: ChatEvent[];
+}
+
 export interface WorkflowAgentDetail {
   agentId: string;
   label: string;

@@ -869,6 +869,31 @@ async def workflow_agent_detail(name: str, run_id: str, agent_id: str):
     return a
 
 
+@app.get("/api/sessions/{name}/subagents", dependencies=[Depends(require_auth)])
+async def subagents_list(name: str):
+    # Subagentes soltos (tool Agent). O transcript de cada um mora em <session-dir>/subagents/ —
+    # e é a ÚNICA fonte do que ele está chamando enquanto roda; o jsonl do pai só tem o pedido.
+    info = await _cached_info(name)
+    if not info or not info.jsonl:
+        raise HTTPException(404, "session or transcript not found")
+    from app.subagents import list_subagents
+    return await asyncio.to_thread(list_subagents, info.jsonl)
+
+
+@app.get("/api/sessions/{name}/subagents/{agent_id}", dependencies=[Depends(require_auth)])
+async def subagent_detail(name: str, agent_id: str, events: int = 0):
+    info = await _cached_info(name)
+    if not info or not info.jsonl:
+        raise HTTPException(404, "session or transcript not found")
+    from app.subagents import get_subagent
+    # events=N -> devolve tambem o transcript do subagente nos MESMOS ChatEvent do chat, pra a UI
+    # reusar a lista de mensagens em vez de desenhar um formato proprio.
+    a = await asyncio.to_thread(get_subagent, info.jsonl, agent_id, 40, events)
+    if a is None:
+        raise HTTPException(404, "subagent not found")
+    return a
+
+
 @app.get("/api/sessions/events", dependencies=[Depends(require_auth)])
 async def sessions_events():
     from app.sse import list_events

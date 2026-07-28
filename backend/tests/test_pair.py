@@ -124,6 +124,17 @@ def test_merge_appends_loser_contract(tmp_path):
     assert not pc.exists()
 
 
+def test_contract_dies_with_the_group_but_survives_membro_solto(tmp_path):
+    pair.join("a", "b")
+    pair.join("a", "c")
+    contrato = pair.contract_path_for("a")
+    contrato.write_text("contrato ABC", encoding="utf-8")
+    pair.leave("a")               # grupo continua (b + c) -> contrato fica
+    assert contrato.exists()
+    pair.leave("b")               # último a sair dissolve -> contrato some (nada mais aponta pra ele)
+    assert not contrato.exists()
+
+
 def test_contract_path_stable_and_none_without_group(tmp_path):
     assert pair.contract_path_for("solta") is None
     pair.join("a", "b")

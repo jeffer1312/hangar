@@ -46,8 +46,40 @@ function _cells(line: string): string[] {
   return s.split('|').map((c) => c.trim());
 }
 
-export function renderMarkdown(input: string): string {
-  const lines = input.split('\n');
+// `joinWrapped`: markdown vindo de ARQUIVO (.md no disco) costuma vir com quebra dura de linha em
+// ~90 colunas; aqui cada linha vira um <p>, o que e certo pro chat (onde a quebra e intencional) e
+// errado pro arquivo — o paragrafo sai picado no meio da frase. Com a opcao ligada, linhas
+// consecutivas de texto sao juntadas, como manda o CommonMark. Blocos (lista, heading, cerca,
+// tabela, citacao, regra) nunca sao juntados.
+export interface MarkdownOptions { joinWrapped?: boolean }
+
+function joinSoftWraps(input: string): string {
+  const src = input.split('\n');
+  const out: string[] = [];
+  let fence = false;
+  // Abre um bloco NOVO (não pode ser colado no anterior).
+  const opensBlock = (t: string) =>
+    t.trim() === '' ||
+    /^ {0,3}(#{1,6}\s|[-*+]\s|\d+[.)]\s|>|\||---|\*\*\*|___|```)/.test(t);
+  // Aceita continuação: parágrafo comum E item de lista (a "lazy continuation" do CommonMark —
+  // sem isto, a 2ª linha de um item virava parágrafo solto e a lista quebrava, reiniciando a
+  // numeração no item seguinte. Foi o que despencou o contrato do grupo na tela).
+  const acceptsMore = (t: string) =>
+    t.trim() !== '' && !/^ {0,3}(#{1,6}\s|>|\||---|\*\*\*|___|```)/.test(t);
+  for (const line of src) {
+    if (/^ {0,3}```/.test(line)) fence = !fence;
+    const prev = out[out.length - 1];
+    if (!fence && out.length && prev !== undefined && acceptsMore(prev) && !opensBlock(line)) {
+      out[out.length - 1] = prev.replace(/\s+$/, '') + ' ' + line.trim();
+    } else {
+      out.push(line);
+    }
+  }
+  return out.join('\n');
+}
+
+export function renderMarkdown(input: string, opts: MarkdownOptions = {}): string {
+  const lines = (opts.joinWrapped ? joinSoftWraps(input) : input).split('\n');
   const out: string[] = [];
   let i = 0;
   // Linha em branco = quebra de PARAGRAFO: marca o proximo <p> com class="para" (respiro maior no
