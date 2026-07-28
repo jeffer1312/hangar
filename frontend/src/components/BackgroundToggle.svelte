@@ -22,9 +22,17 @@
       await setBgImage(f);      // encolhe (lib/imagePrep) e guarda no proprio dispositivo
       temImagem = true;
       pref = 'image';
-    } catch {
-      // Cota do localStorage estourada e o caso real aqui — silenciar deixaria a tela sem explicacao.
-      erro = 'não coube no armazenamento do navegador; tente uma imagem menor';
+    } catch (e) {
+      // Tres causas distintas caem aqui e a mensagem precisa dizer QUAL: cota do localStorage,
+      // arquivo que o navegador nao decodifica (HEIC sem suporte, PNG corrompido) e canvas
+      // indisponivel. Culpar sempre a cota mandava o usuario diminuir uma imagem que o problema
+      // nunca foi o tamanho. O erro cru vai pro console: sem isso nao ha o que investigar depois.
+      console.error('[fundo] falha ao aplicar a imagem:', e);
+      const cota = (e instanceof DOMException && /quota/i.test(e.name))
+        || (e instanceof Error && /grande demais/.test(e.message));
+      erro = cota
+        ? 'não coube no armazenamento do navegador; tente uma imagem menor'
+        : 'não consegui ler essa imagem (formato não suportado neste navegador?)';
     }
   }
 
