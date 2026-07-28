@@ -25,10 +25,14 @@ def _norm(s: str) -> str:
 # "pulando" entre texto e indicador de ferramenta (o tool aparece como ToolCard quando cai no .jsonl).
 # So GERUNDIOS/Ran (= status de tool, raro em prosa) + "Word(" (tool call). Evito passado ambiguo
 # (Read/Wrote/Found) que apareceria em prosa.
+# "Calling" e o verbo das ferramentas MCP ("Calling chrome-devtools…"): sem ele na lista, a linha de
+# status entrava no preview como se fosse prosa, e como ela aparece e some a cada chamada o bloco
+# crescia e encolhia — o "pulo" que o usuario via, diferente do recuo que o guarda de monotonicidade
+# do Chat.svelte ja cobria.
 _TOOL_VERBS = (
     "Running|Reading|Writing|Editing|Searching|Listing|Fetching|Updating|Creating|Deleting|"
     "Crawling|Downloading|Globbing|Grepping|Waiting|Loading|Compiling|Building|Installing|Ran|"
-    "Making"
+    "Making|Calling"
 )
 _TOOL_BLOCK_RE = re.compile(rf"^([A-Z][\w-]*\(|({_TOOL_VERBS})\b)")
 

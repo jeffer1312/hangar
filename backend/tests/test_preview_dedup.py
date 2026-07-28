@@ -78,3 +78,23 @@ def test_preview_claude_byte_identico_em_todos_os_panes():
     for f in sorted(fx.glob("pane_*.txt")):
         pane = f.read_text(encoding="utf-8")
         assert extract_assistant_text(pane) == extract_assistant_text(pane, "provider-inexistente"), f.name
+
+
+def test_status_de_ferramenta_mcp_nao_entra_no_preview():
+    """"Calling <servidor>…" é chrome de tool MCP, não prosa do assistente.
+
+    Sem ele na lista de verbos, a linha entrava no bloco em voo e — como aparece e some a cada
+    chamada — o preview crescia e encolhia sozinho: o "pulo" que o usuário via na tela.
+    """
+    from app.preview import extract_assistant_text
+
+    pane = "\n".join([
+        "● Resposta do assistente em voo,",
+        "  segunda linha da mesma prosa.",
+        "Calling chrome-devtools…",
+        "✻ Pondering… (22s · ↓ 678 tokens)",
+    ])
+    out = extract_assistant_text(pane)
+    assert "segunda linha" in out
+    assert "Calling" not in out
+    assert "Pondering" not in out
