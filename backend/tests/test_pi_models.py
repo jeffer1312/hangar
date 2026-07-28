@@ -47,6 +47,46 @@ def test_read_catalog_missing_file_is_none(tmp_path):
     assert pm.read_catalog("/x/nunca-existiu.jsonl", tmp_path) is None
 
 
+# ── read-back: o pedido PEGOU? ───────────────────────────────────────────────
+_AFTER = {"current": {"provider": "clinepass", "id": "cline-pass/glm-5.2", "name": "GLM"},
+          "thinking": "high", "levels": ["off", "low", "medium", "high"], "models": [], "ts": 2.0}
+
+
+def test_confirms_modelo_exige_igualdade():
+    assert pm.confirms(_AFTER, "clinepass", "cline-pass/glm-5.2", None) is True
+    # O `/cp-model` recusa sem levantar nada (sem chave pro provedor): o sidecar fica no modelo
+    # VELHO e o app declarava sucesso em cima do no-op.
+    assert pm.confirms(_AFTER, "kimi-coding", "k3", None) is False
+    assert pm.confirms({**_AFTER, "current": None}, "clinepass", "cline-pass/glm-5.2", None) is False
+
+
+def test_confirms_nivel_aceita_o_clamp_mas_nao_o_ignorado():
+    # xhigh NAO esta nos levels do modelo -> o Pi clampa e cair em `high` e o certo.
+    assert pm.confirms(_AFTER, None, None, "xhigh") is True
+    # medium ESTA nos levels: se nao ficou medium, nao aplicou.
+    assert pm.confirms(_AFTER, None, None, "medium") is False
+    assert pm.confirms(_AFTER, None, None, "high") is True
+
+
+def test_read_back_sonda_ate_confirmar(tmp_path):
+    # Settle fixo curto lia o catalogo ANTERIOR e reportava "trocou" sobre dado velho.
+    before = {"current": {"provider": "kimi-coding", "id": "k3"}, "models": [], "ts": 1.0}
+    with patch.object(pm, "read_catalog", side_effect=[before, before, _AFTER]), \
+         patch.object(pm.time, "sleep", lambda *_: None):
+        got = pm.read_back("/x/a.jsonl", tmp_path, "clinepass", "cline-pass/glm-5.2", None,
+                           deadline=5.0)
+    assert got is _AFTER
+
+
+def test_read_back_devolve_a_ultima_leitura_no_prazo(tmp_path):
+    before = {"current": {"provider": "kimi-coding", "id": "k3"}, "models": [], "ts": 1.0}
+    with patch.object(pm, "read_catalog", return_value=before), \
+         patch.object(pm.time, "sleep", lambda *_: None):
+        got = pm.read_back("/x/a.jsonl", tmp_path, "clinepass", "cline-pass/glm-5.2", None,
+                           deadline=0.0)
+    assert got is before   # quem chama e que decide entre "recusou" e "nao deu pra confirmar"
+
+
 # ── comandos que vao virar tecla ─────────────────────────────────────────────
 def test_model_command_uses_space_not_slash():
     # O id ja contem barra: "clinepass/cline-pass/glm-5.2" seria ambiguo do outro lado.

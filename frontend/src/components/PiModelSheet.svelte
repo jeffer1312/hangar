@@ -77,7 +77,15 @@
       // Read-back: o Pi clampa o nivel pro que o modelo suporta.
       levels = res.levels;
       selectedEffort = res.thinking;
-      onApplied(res.current?.name || res.current?.id || selected?.name || '', res.thinking);
+      if (!res.current) {
+        // 200 sem modelo no read-back: nao da pra AFIRMAR que a troca pegou. Cair pro `selected`
+        // aqui (como era) pintava o pill com o que foi PEDIDO e fechava a folha — o oposto do que o
+        // comentario acima promete. Deixa a folha aberta com o estado nao confirmado.
+        err = 'Não deu pra confirmar a troca — confira o modelo no terminal da sessão.';
+        applying = false;
+        return;
+      }
+      onApplied(res.current.name || res.current.id, res.thinking);
     } catch (e) {
       err = e instanceof Error ? e.message : 'Falha ao aplicar';
       applying = false;
