@@ -951,6 +951,11 @@
        colar na borda da tela. max() = só a folga do indicator quando há, senão o space-2 mínimo. */
     padding: var(--space-2) var(--space-3) var(--composer-pb, max(var(--space-2), env(safe-area-inset-bottom)));
   }
+  /* Desktop: nao ha home indicator pra desviar, entao o piso de 8px deixava o card colado na borda
+     da janela. Mais respiro embaixo — o dock flutua, e o que separa ele do fim da tela e esta folga. */
+  @media (min-width: 820px) {
+    .composer { padding-bottom: var(--composer-pb, var(--space-5)); }
+  }
 
   /* Card unico que reune status, textarea e controles. */
   .composer-card {

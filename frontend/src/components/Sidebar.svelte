@@ -1395,8 +1395,13 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     background: var(--glass-bg);
     backdrop-filter: url(#liquid-glass) blur(20px) saturate(180%);
   }
-  /* Vidro da sidebar: mesmo leaf do composer. Fica no ::before e nao no elemento pra o
-     backdrop-filter (Chromium) nao virar containing block dos popovers da lista. */
+  /* Vidro da sidebar: mesmo leaf do composer. O ::before carrega a COR; o `backdrop-filter` do
+     liquid fica no ELEMENTO (regra acima) — medido no browser: `getComputedStyle(.sidebar)` traz
+     `url(#liquid-glass) blur(20px)` e o ::before vem `none`. Consequência: no Chromium com
+     data-liquid a sidebar É containing block de `position: fixed`, então tudo que ela abre e
+     precisa cobrir a janela sai daqui por portal — BottomSheet.svelte e ModalDialog.svelte já
+     fazem isso. Sem o portal, a sheet de Aparência nascia com 309px (a largura da sidebar) e
+     encolhia junto quando o mouse saía. */
   .sidebar::before {
     content: "";
     position: absolute;

@@ -280,13 +280,20 @@
     /* A navbar tem um fade visual abaixo da altura medida; começa depois dele para o título do
        painel não ficar sob o scrim (o conteúdo do chat pode rolar ali, um header fixo não).
        >=1280px a navbar some (Chat esconde) e o painel sobe pro topo. */
-    top: calc(var(--nav-h, 56px) + var(--navbar-fade, 24px));
-    right: 0;
-    bottom: 0;
+    top: calc(var(--nav-h, 56px) + var(--navbar-fade, 24px) + var(--ctx-gap));
+    right: var(--ctx-gap);
+    bottom: var(--ctx-gap);
     z-index: 17;
-    width: var(--ctx-w, 248px);
+    /* CAIXA SOLTA, não parede colada na borda (mesma ideia do painel do Gemini no Gmail): folga em
+       volta, cantos redondos e sombra, pra ler como uma seção à parte em vez de "o chat encolheu".
+       A faixa reservada pelo Chat (`--ctx-w`, Chat.svelte:1287) continua a MESMA: a folga sai de
+       dentro dela, então a coluna de mensagens não precisa saber que o painel virou card. */
+    --ctx-gap: var(--space-3);
+    width: calc(var(--ctx-w, 248px) - var(--ctx-gap));
     overflow: hidden;
-    border-left: 1px solid var(--border-default);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-xl);
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34);
     background: transparent;   /* o fundo vai pro leaf ::before (vidro) */
   }
 
@@ -298,6 +305,7 @@
     inset: 0;
     z-index: -1;
     pointer-events: none;
+    border-radius: inherit;   /* sem isto o vidro vaza os cantos do card */
     background: var(--glass-bg-solid);
   }
   /* Mesmo motivo do BottomSheet: o filtro vai no ELEMENTO. Num pseudo dentro de um ancestral
@@ -311,6 +319,15 @@
     background: var(--glass-panel);
   }
 
+  /* Aparência → Painéis → "Colados": volta o painel de ponta a ponta, como era antes do card. */
+  :global(html[data-panels='edge']) .session-context {
+    --ctx-gap: 0px;
+    border: 0;
+    border-left: 1px solid var(--border-default);
+    border-radius: 0;
+    box-shadow: none;
+  }
+
   header, .ctx-actions { flex: 0 0 auto; }
   .ctx-scroll {
     flex: 1;
@@ -322,7 +339,7 @@
   @media (min-width: 1280px) {
     /* Sem navbar, --nav-h carrega so o topInset (ex: faixa de atencao, 52px) — o painel comeca
        abaixo dela, nunca embaixo. */
-    .session-context { top: var(--nav-h, 0px); }
+    .session-context { top: calc(var(--nav-h, 0px) + var(--ctx-gap)); }
   }
 
   header {

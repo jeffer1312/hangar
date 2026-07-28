@@ -16,9 +16,26 @@
     defaultWidth?: number;
     wide?: boolean;        // opt-in: dock desktop usa largura fixa min(1100px, 92vw) em vez de --sheet-w.
     centered?: boolean;    // opt-in: no desktop vira MODAL centrado em vez de painel docado a direita.
+    // opt-in: no DESKTOP o painel deixa de ser modal — igual às "Configurações rápidas" do Gmail.
+    // Sem véu escuro, o app atrás continua clicável e um clique fora NÃO fecha; sai pelo × ou Esc.
+    // No celular não muda nada (lá a sheet cobre a tela e o toque fora é o jeito natural de sair).
+    persistent?: boolean;
     children: Snippet;
   }
-  let { open, onClose, ariaLabel = 'Painel', resizable = false, widthKey = 'cp_gitsheet_w', defaultWidth = 460, wide = false, centered = false, children }: Props = $props();
+  let { open, onClose, ariaLabel = 'Painel', resizable = false, widthKey = 'cp_gitsheet_w', defaultWidth = 460, wide = false, centered = false, persistent = false, children }: Props = $props();
+
+  // `persistent` só vale no dock desktop: abaixo de 820px a sheet volta a ser modal.
+  const dock = () => typeof window !== 'undefined' && window.matchMedia('(min-width: 820px)').matches;
+  let naoModal = $state(false);
+  $effect(() => {
+    if (!open) return;
+    naoModal = persistent && dock();
+    if (!persistent) return;
+    const mq = window.matchMedia('(min-width: 820px)');
+    const sync = () => (naoModal = mq.matches);
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  });
 
   // ── Redimensionar (SO no dock desktop >=820px): arrasta a borda ESQUERDA do painel direito.
   // Largura persistida em localStorage; aplicada via --sheet-w (a media query desktop consome a var,
@@ -105,7 +122,7 @@
   function onBackdropClick(e: MouseEvent) {
     const close = pressOnBackdrop && e.target === e.currentTarget;
     pressOnBackdrop = false;
-    if (close) onClose();
+    if (close && !naoModal) onClose();   // painel não-modal: clique fora é do app, não fecha nada
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -133,7 +150,9 @@
       onClose();
       return;
     }
-    if (e.key !== 'Tab' || !sheetEl || !window.matchMedia('(min-width: 820px)').matches) return;
+    // Painel não-modal não PRENDE o Tab: o resto do app continua acessível pelo teclado, como
+    // continua pelo mouse. Prender aqui seria dizer "isto é modal" só pra quem usa teclado.
+    if (e.key !== 'Tab' || !sheetEl || naoModal || !window.matchMedia('(min-width: 820px)').matches) return;
     e.preventDefault();
     e.stopPropagation();
     const elements = focusableElements(sheetEl);
@@ -146,6 +165,16 @@
       ? (e.shiftKey ? elements.length - 1 : 0)
       : nextFocusIndex(activeIndex, elements.length, e.shiftKey ? -1 : 1);
     elements[nextIndex].focus();
+  }
+
+  // O painel sai do lugar onde foi declarado e vai pro <body>. Motivo medido: a sheet de Aparência
+  // é aberta pelo AccountMenu, que mora DENTRO da .sidebar — e a sidebar tem `backdrop-filter`
+  // (vidro), que cria containing block pra `position: fixed`. O `.backdrop` (fixed inset:0) ficava
+  // preso na largura da sidebar: 309px em vez dos 1524 da janela, e ao tirar o mouse a sidebar
+  // recolhia levando a sheet junto. Mesma action do ModalDialog (ModalDialog.svelte:35).
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return { destroy() { node.remove(); } };
   }
 
   // Foco a11y: ao abrir, move o foco pra DENTRO da sheet (a menos que um filho ja tenha focado — ex.
@@ -171,7 +200,8 @@
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="backdrop" class:centered onpointerdown={onBackdropPointerDown} onclick={onBackdropClick}>
+  <div use:portal class="backdrop" class:centered class:naomodal={naoModal}
+       onpointerdown={onBackdropPointerDown} onclick={onBackdropClick}>
     <div
       bind:this={sheetEl}
       class="sheet"
@@ -179,8 +209,9 @@
       class:resizing
       class:wide
       class:centered
+      class:naomodal={naoModal}
       role="dialog"
-      aria-modal="true"
+      aria-modal={naoModal ? 'false' : 'true'}
       aria-label={ariaLabel}
       tabindex="-1"
       style={sheetStyle || undefined}
@@ -202,6 +233,10 @@
           aria-label="Redimensionar painel"
           aria-orientation="vertical"
         ></div>
+      {/if}
+      {#if naoModal}
+        <!-- Sem véu e sem clique-fora, o × é a ÚNICA saída visível (o Esc segue valendo). -->
+        <button class="sheet-close" onclick={onClose} aria-label="Fechar painel" title="Fechar (Esc)">×</button>
       {/if}
       <div class="drag-handle" aria-hidden="true"></div>
       {@render children()}
@@ -299,6 +334,17 @@
   /* Handle de resize: escondido por padrao (mobile = sheet de baixo, largura 100%). */
   .resize-handle { display: none; }
 
+  /* × do painel não-modal. Só existe nesse modo (nos outros, o clique fora fecha). */
+  .sheet-close {
+    position: absolute; top: 10px; right: 12px; z-index: 7;
+    width: 30px; height: 30px;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+    background: var(--bg-elevated); color: var(--text-secondary);
+    font-size: 17px; line-height: 1; cursor: pointer;
+  }
+  .sheet-close:hover { color: var(--text-primary); background: var(--bg-hover); }
+
   @media (min-width: 820px) {
     .backdrop { align-items: stretch; justify-content: flex-end; background: rgba(0, 0, 0, 0.4); }
     .sheet {
@@ -321,6 +367,41 @@
       cursor: col-resize; touch-action: none; z-index: 6;
     }
     .resize-handle:hover { background: var(--accent-dim); }
+    /* Painel não-modal (Gmail "Configurações rápidas"): o véu some e PARA de capturar clique, então
+       o app atrás continua clicável; o painel volta a capturar. Sombra no lugar do véu pra ele não
+       encostar chapado no conteúdo. */
+    .backdrop.naomodal { background: none; pointer-events: none; }
+    :global(html[data-liquid]) .backdrop.naomodal { background: none; backdrop-filter: none; }
+    /* Peça FLUTUANTE, não parede colada na borda: o painel do Gmail tem folga em volta, cantos
+       redondos e deixa o fundo aparecer ao redor. Sem isso ele lê como "o app encolheu". */
+    .sheet.naomodal {
+      pointer-events: auto;
+      height: auto;
+      align-self: stretch;
+      margin: var(--space-3);
+      max-height: calc(100% - var(--space-6));
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-xl);
+      box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42);
+    }
+    /* Sem véu atrás, a translucidez do liquid (70%) deixava o painel de contexto aparecer por
+       dentro deste — dava pra ler "LIMITES / 5 horas" sob "Fundo". Então SEM papel de parede o
+       material aqui é opaco. COM papel de parede, não: aí a transparência é o ponto do app inteiro,
+       e o painel volta pro mesmo `--glass-panel` do resto, que já obedece ao slider Transparência
+       (app.css:228). */
+    .sheet.naomodal::before,
+    :global(html[data-liquid]) .sheet.naomodal::before { background: var(--bg-elevated); }
+    :global(html[data-bg='image']) .sheet.naomodal::before,
+    :global(html[data-liquid][data-bg='image']) .sheet.naomodal::before { background: var(--glass-panel); }
+    /* Aparência → Painéis → "Colados": o painel volta a ser parede de ponta a ponta. */
+    :global(html[data-panels='edge']) .sheet.naomodal {
+      height: 100%;
+      margin: 0;
+      max-height: none;
+      border: 0;
+      border-left: 1px solid var(--border-default);
+      border-radius: 0;
+    }
     .sheet.wide { width: min(1100px, 92vw); max-width: 92vw; }
     .sheet.wide .resize-handle { display: none; }  /* largura fixa no modo largo */
 

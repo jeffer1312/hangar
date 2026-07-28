@@ -108,8 +108,21 @@ function isSameOrigin(baseUrl: string): boolean {
 
 function syncCookie(token: string | null): void {
   // Cookie same-origin pro SSE (EventSource não manda Authorization). Cross-origin usa ?token.
-  if (token) document.cookie = `cp_token=${token}; path=/; SameSite=Lax`;
+  // Max-Age de 1 ano DE PROPÓSITO: sem ele o cookie é de sessão e morre quando o navegador fecha.
+  // O token continua no localStorage, então as chamadas REST (que mandam Authorization) seguem
+  // funcionando e o app PARECE são — só o SSE volta 401, e a lista de sessões fica vazia.
+  if (token) document.cookie = `cp_token=${token}; path=/; SameSite=Lax; Max-Age=31536000`;
   else document.cookie = 'cp_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+}
+
+// Cookie é por HOST (localhost e 127.0.0.1 são hosts diferentes) e morria ao fechar o navegador.
+// Como só addServer/selectServer o escreviam, bastava abrir o app pela outra URL — ou reabrir o
+// navegador — pra ficar com token no localStorage e sem cookie: REST 200, SSE 401, tela sem
+// sessões. Reescrever no boot resolve os dois casos e é idempotente.
+export function ensureCookie(): void {
+  if (typeof document === 'undefined') return;
+  const s = activeServer();
+  if (s && isSameOrigin(s.baseUrl)) syncCookie(s.token);
 }
 
 // Migração single-server -> multi (uma vez). baseUrl vazio vira o origin atual (absoluto) pra

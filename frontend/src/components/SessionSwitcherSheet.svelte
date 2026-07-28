@@ -1,6 +1,7 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
+  import BackgroundToggle from './BackgroundToggle.svelte';
   import { relativeTime, stateLabels, stateColors } from '../lib/format';
   import { listServers, selectServer, serverColor, getActiveId } from '../lib/auth';
   import { searchTranscriptsForServer, askHistoryForServer, type SearchHit } from '../lib/api';
@@ -330,6 +331,10 @@
   <div class="theme-row">
     <span class="theme-label">Tema</span>
     <ThemeToggle />
+  </div>
+  <div class="theme-row">
+    <span class="theme-label">Fundo</span>
+    <BackgroundToggle />
   </div>
 </BottomSheet>
 
