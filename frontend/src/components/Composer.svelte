@@ -26,10 +26,11 @@
   import ContextRing from './ContextRing.svelte';
   import ModelEffortSheet from './ModelEffortSheet.svelte';
   import CodexModelSheet from './CodexModelSheet.svelte';
+  import PiModelSheet from './PiModelSheet.svelte';
   import SlashSuggest from './SlashSuggest.svelte';
   import CommandSheet from './CommandSheet.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
-  import { getCommands, setModelEffort, uploadFile, transcribeFile, getCodexModels, type ModelEffortBody } from '../lib/api';
+  import { getCommands, setModelEffort, uploadFile, transcribeFile, getCodexModels, getPiModels, type ModelEffortBody } from '../lib/api';
   import type { State } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
 
@@ -96,6 +97,7 @@
   });
 
   const isCodex = $derived(provider === 'codex');
+  const isPi = $derived(provider === 'pi');
 
   // ── Slash commands: busca uma vez por sessao (com cache) ────────────────────
   // Comeca vazio; o $effect popula na hora a partir do cache (sincrono) ou da rede.
@@ -210,6 +212,31 @@
   function handleCodexModelApplied(model: string, effort: string | null) {
     codexModel = model;
     codexEffort = effort;
+  }
+
+  // ── Pill de modelo do Pi: mesmo desenho do de Codex, terceira fonte ──────────────────────────
+  // O `/model` do Pi e uma lista com busca de ~300 modelos e o nivel de raciocinio mora dentro do
+  // /settings — nada disso e dirigivel por send-keys como o picker do Claude. Quem responde e o
+  // sidecar da extensao (GET /pi/models); ver backend/app/pi_models.py. Falha (extensao velha ->
+  // 409) deixa o pill com o rotulo da statusline, sem quebrar o composer.
+  let piSheetOpen = $state(false);
+  let piModel = $state<string | null>(null);
+  let piEffort = $state<string | null>(null);
+
+  $effect(() => {
+    if (!isPi) return;
+    const sn = sessionName;
+    getPiModels(sn)
+      .then((res) => {
+        piModel = res.current?.name ?? res.current?.id ?? null;
+        piEffort = res.thinking;
+      })
+      .catch(() => {});
+  });
+
+  function handlePiModelApplied(model: string, effort: string | null) {
+    piModel = model || piModel;
+    piEffort = effort;
   }
 
   const pillModel = $derived(chosenModel ?? status?.model ?? null);
@@ -803,7 +830,19 @@
 
     <div class="control-row">
       <div class="control-left">
-        {#if !isCodex}
+        {#if isPi}
+          <button
+            class="model-pill"
+            onclick={() => (piSheetOpen = true)}
+            aria-label="Modelo e nível de raciocínio do Pi"
+          >
+            <span class="pill-label">
+              <span class="pill-model">{piModel ?? status?.model ?? 'Modelo'}</span>
+              {#if piEffort}<span class="pill-effort">· {piEffort}</span>{/if}
+            </span>
+            <ContextRing pct={status?.ctxPct ?? null} />
+          </button>
+        {:else if !isCodex}
           <button
             class="model-pill"
             onclick={() => (sheetOpen = true)}
@@ -876,6 +915,13 @@
     {sessionName}
     onApplied={handleCodexModelApplied}
     onClose={() => (codexSheetOpen = false)}
+  />
+
+  <PiModelSheet
+    open={piSheetOpen}
+    {sessionName}
+    onApplied={handlePiModelApplied}
+    onClose={() => (piSheetOpen = false)}
   />
 
   <CommandSheet
