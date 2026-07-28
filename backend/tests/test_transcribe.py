@@ -1,7 +1,16 @@
 import pytest
 
+from app import runtime_config
 from app.config import settings
 from app.transcribe import build_multipart, transcribe, TranscribeError
+
+
+def _sem_chave(monkeypatch):
+    """Chave ausente de verdade: a `transcribe()` lê do runtime_config (arquivo editável pela UI),
+    não mais de `settings` — mockar só o settings deixava a chave REAL do usuário valendo, e o
+    teste do caminho "sem chave" ia bater na Groq de verdade (voltava 502 da API, não 503)."""
+    monkeypatch.setattr(settings, "groq_api_key", "")
+    monkeypatch.setattr(runtime_config, "get", lambda campo: "" if campo == "groq_api_key" else getattr(settings, campo, None))
 
 
 def test_build_multipart_has_model_format_and_file():
@@ -17,7 +26,7 @@ def test_build_multipart_has_model_format_and_file():
 
 
 def test_transcribe_sem_chave_levanta_503(monkeypatch):
-    monkeypatch.setattr(settings, "groq_api_key", "")
+    _sem_chave(monkeypatch)
     with pytest.raises(TranscribeError) as ei:
         transcribe(b"audio", "a.webm")
     assert ei.value.status == 503
@@ -27,6 +36,7 @@ def test_transcribe_ignora_filename_do_cliente(monkeypatch):
     # Filename malicioso (aspas + CRLF tentando injetar um campo 'model') NAO pode vazar pro multipart:
     # o nome enviado a Groq e fixo no servidor (audio.<ext sanitizada>).
     monkeypatch.setattr(settings, "groq_api_key", "k")
+    monkeypatch.setattr(runtime_config, "get", lambda campo: "k" if campo == "groq_api_key" else getattr(settings, campo, None))
     captured = {}
 
     class FakeResp:

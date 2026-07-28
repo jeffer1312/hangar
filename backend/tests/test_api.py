@@ -1038,6 +1038,10 @@ def test_transcribe_route_sem_chave_da_503(api_client, monkeypatch, tmp_path):
     info = SessionInfo(name="cc", cwd=str(tmp_path))
     monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
     monkeypatch.setattr(settings, "groq_api_key", "")
+    # A chave vem do runtime_config (arquivo editável pela UI), não de settings: sem mockar aqui,
+    # a rota usava a chave REAL da máquina e chamava a Groq de verdade — 502, não 503.
+    from app import runtime_config
+    monkeypatch.setattr(runtime_config, "get", lambda campo: "" if campo == "groq_api_key" else getattr(settings, campo, None))
     r = api_client.post(
         "/api/sessions/cc/transcribe",
         content=b"audio",
