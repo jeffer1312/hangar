@@ -1,0 +1,46 @@
+{
+  "current": {
+    "provider": "kimi-coding",
+    "id": "k3",
+    "name": "Kimi K3"
+  },
+  "thinking": "low",
+  "levels": [
+    "low",
+    "high",
+    "max"
+  ],
+  "models": [
+    {
+      "provider": "kimi-coding",
+      "id": "k3",
+      "name": "Kimi K3",
+      "reasoning": true
+    },
+    {
+      "provider": "kimi-coding",
+      "id": "k3-256k",
+      "name": "Kimi K3-256K",
+      "reasoning": true
+    },
+    {
+      "provider": "kimi-coding",
+      "id": "kimi-for-coding",
+      "name": "Kimi K2.7 Code",
+      "reasoning": true
+    },
+    {
+      "provider": "kimi-coding",
+      "id": "kimi-for-coding-highspeed",
+      "name": "Kimi For Coding HighSpeed",
+      "reasoning": true
+    },
+    {
+      "provider": "clinepass",
+      "id": "cline-pass/glm-5.2",
+      "name": "GLM-5.2 (ClinePass)",
+      "reasoning": true
+    }
+  ],
+  "ts": 1785203739.733
+}

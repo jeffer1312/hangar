@@ -73,11 +73,102 @@ function publishPane(ctx: any): void {
   });
 }
 
+// ── modelo + nivel de raciocinio pelo celular ──────────────────────────────────────────────────
+// O `/model` do Pi NAO e dirigivel por send-keys como o do Claude: e uma lista com CAMPO DE BUSCA
+// de 301 modelos (`(1/301)` no rodape, so 10 visiveis), entao nem da pra enumerar do pane nem
+// navegar contando Down. E o nivel de raciocinio esta enterrado em `/settings` -> "Thinking level"
+// (submenu), com o conjunto de niveis variando por modelo. Aqui a extensao pergunta pro proprio Pi:
+// o catalogo vai pra um sidecar que o backend le, e a troca entra pela API (`pi.setModel` /
+// `pi.setThinkingLevel`) via dois comandos que o app dispara. Zero raspagem de TUI.
+const modelDir = path.join(paneDir, "models");
+
+// Ordem canonica (@earendil-works/pi-ai/dist/models.js:391, EXTENDED_THINKING_LEVELS).
+const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+// Copia de getSupportedThinkingLevels (pi-ai/dist/models.js:392): quais niveis ESTE modelo aceita.
+// Copiado em vez de importado de proposito — a extensao roda por symlink de fora do node_modules
+// do pi, entao um `import "@earendil-works/pi-ai/compat"` aqui depende de resolucao que nao
+// controlamos; sao 6 linhas e o formato esta congelado no .d.ts publico (ThinkingLevelMap).
+// ponytail: calibration knob — se o Pi mudar a regra, e AQUI que ajusta.
+function supportedLevels(model: any): string[] {
+  if (!model) return [...LEVELS];
+  if (!model.reasoning) return ["off"];
+  return LEVELS.filter((level) => {
+    const mapped = model.thinkingLevelMap?.[level];
+    if (mapped === null) return false;                       // explicitamente sem suporte
+    if (level === "xhigh" || level === "max") return mapped !== undefined;  // so se mapeado
+    return true;
+  });
+}
+
+// Sidecar do catalogo, chaveado pelo stem do arquivo de sessao (mesma chave do marcador de estado —
+// o backend ja resolve nome da sessao -> .jsonl). Nao entra no bilhete do pane porque aquele e
+// reescrito a cada agent_start e o catalogo tem ~300 entradas: seria um write de dezenas de KB por
+// turno pra um dado que so muda quando o usuario troca de modelo.
+function publishModels(pi: ExtensionAPI, ctx: any): void {
+  guard("publishModels", () => {
+    const file = sessionFile(ctx);
+    if (!file) return;
+    const model = ctx?.model;
+    const all = ctx?.modelRegistry?.getAvailable?.() ?? [];   // so provedores com auth configurada
+    writeAtomic(path.join(modelDir, `${path.basename(file, ".jsonl")}.json`), {
+      current: model ? { provider: model.provider, id: model.id, name: model.name } : null,
+      thinking: pi.getThinkingLevel?.() ?? ctx?.thinkingLevel ?? null,
+      levels: supportedLevels(model),
+      models: all.map((m: any) => ({
+        provider: m.provider, id: m.id, name: m.name, reasoning: !!m.reasoning,
+      })),
+      ts: Date.now() / 1000,
+    });
+  });
+}
+
 export default function (pi: ExtensionAPI) {
   // Handlers recebem (event, ctx) — types.d.ts:845. Sem o ctx nao ha arquivo de sessao.
-  pi.on("session_start", async (_e: any, ctx: any) => { publishPane(ctx); });
+  pi.on("session_start", async (_e: any, ctx: any) => { publishPane(ctx); publishModels(pi, ctx); });
   pi.on("agent_start", async (_e: any, ctx: any) => { publishPane(ctx); publishState("working", ctx); });
   pi.on("agent_settled", async (_e: any, ctx: any) => { publishState("idle", ctx); });
+  // Republica tambem quando a troca vem do TUI (usuario no teclado, Ctrl+P, /model, /settings) —
+  // senao o app mostraria o modelo velho ate a proxima sessao.
+  pi.on("model_select", async (_e: any, ctx: any) => { publishModels(pi, ctx); });
+  pi.on("thinking_level_select", async (_e: any, ctx: any) => { publishModels(pi, ctx); });
+
+  // Argumento separado por ESPACO (`<provider> <id>`) e nao por "/": o id do modelo ja contem
+  // barra (ex `cline-pass/glm-5.2` no provedor `clinepass`), entao "provider/id" seria ambiguo.
+  // Nem provider nem id tem espaco.
+  pi.registerCommand("cp-model", {
+    description: "claude-cockpit: troca o modelo (<provider> <id>)",
+    handler: async (args: string, ctx: any) => {
+      const [provider, ...rest] = args.trim().split(/\s+/);
+      const id = rest.join(" ");
+      const model = provider && id ? ctx?.modelRegistry?.find?.(provider, id) : undefined;
+      if (!model) {
+        ctx?.ui?.notify?.(`[cp] modelo desconhecido: ${args.trim()}`, "error");
+        return;
+      }
+      // setModel devolve false quando o provedor nao tem chave — falha visivel, nunca calada.
+      const ok = await pi.setModel(model);
+      ctx?.ui?.notify?.(ok ? `[cp] modelo: ${provider}/${id}` : `[cp] sem chave pra ${provider}`,
+                        ok ? "info" : "error");
+      publishModels(pi, ctx);   // rede: model_select nao dispara quando o modelo ja era esse
+    },
+  });
+
+  pi.registerCommand("cp-think", {
+    description: "claude-cockpit: nivel de raciocinio (off|minimal|low|medium|high|xhigh|max)",
+    handler: async (args: string, ctx: any) => {
+      const level = args.trim().toLowerCase();
+      if (!(LEVELS as readonly string[]).includes(level)) {
+        ctx?.ui?.notify?.(`[cp] nivel desconhecido: ${level}`, "error");
+        return;
+      }
+      // O Pi CLAMPA pro que o modelo suporta (agent-session.js:1277) — pedir xhigh num modelo que
+      // so vai ate high aterrissa em high, sem erro. Por isso o app le o sidecar de volta.
+      pi.setThinkingLevel(level as any);
+      ctx?.ui?.notify?.(`[cp] raciocinio: ${pi.getThinkingLevel?.() ?? level}`, "info");
+      publishModels(pi, ctx);
+    },
+  });
 }
 
 // publishPane roda tambem no agent_start de proposito: /tree, /fork e troca de sessao mudam o

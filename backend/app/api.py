@@ -19,6 +19,7 @@ from app.auth import require_auth
 from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
 from app.model_picker import PickerError
+from app import pi_models
 from app.registry import SessionRegistry
 from app.names import sanitize_session_name
 from app.models import (SessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody, RunInfo,
@@ -2246,6 +2247,82 @@ def model_effort(name: str, body: ModelEffortBody):
         raise HTTPException(e.status, e.detail)
     except ValueError as e:
         raise HTTPException(422, str(e))
+
+
+# ── Modelo + raciocinio de uma sessao Pi ────────────────────────────────────────────────────────
+# Rotas separadas das do Claude (/model-effort, picker do TUI) e das do Codex (/models, app-server)
+# porque o mecanismo e um terceiro: a extensao cp-state.ts publica o catalogo num sidecar e expoe
+# dois comandos que aplicam a troca pela API do Pi. Ver app/pi_models.py pro porque de nao raspar
+# o TUI aqui.
+
+class PiModelBody(_StrictBody):
+    provider: str | None = None
+    model: str | None = None
+    effort: str | None = None
+
+
+def _pi_config_dir(name: str) -> Path | None:
+    """CLAUDE_CONFIG_DIR do processo do pane (o sidecar mora la dentro). None -> ~/.claude.
+    Usa o mesmo `_config_dir_of` do registry (privado do pacote) que ja resolve o transcript do Pi:
+    duas leituras diferentes do /proc dariam respostas diferentes pra mesma sessao."""
+    from app import registry as registry_mod
+    from app import tmux
+    try:
+        pid = tmux.pane_pid(name)
+        return registry_mod._config_dir_of(pid) if pid else None
+    except Exception:
+        return None
+
+
+async def _pi_catalog(name: str) -> tuple[dict, str]:
+    info = await _cached_info(name)
+    if not info or not info.jsonl:
+        raise HTTPException(404, "sessao ou transcript nao encontrado")
+    if info.provider != "pi":
+        raise HTTPException(400, "esta rota so existe pra sessoes Pi")
+    cat = await asyncio.to_thread(pi_models.read_catalog, info.jsonl, _pi_config_dir(name))
+    if cat is None:
+        # Falha ALTA: sem o sidecar nao ha catalogo real, e inventar um faria o app oferecer
+        # modelos que o `/cp-model` nao encontraria. Instrucao junto porque a causa e sempre a
+        # mesma (extensao velha/ausente) e o conserto e um comando.
+        raise HTTPException(409, "catalogo do Pi indisponivel — rode ./scripts/install-claude-wrapper.sh "
+                                 "e reinicie a sessao (extensao cp-state.ts desatualizada)")
+    return cat, info.jsonl
+
+
+@app.get("/api/sessions/{name}/pi/models", dependencies=[Depends(require_auth)])
+async def pi_models_list(name: str):
+    cat, _ = await _pi_catalog(name)
+    return {"models": cat.get("models", []), "current": cat.get("current"),
+            "thinking": cat.get("thinking"), "levels": cat.get("levels", [])}
+
+
+@app.post("/api/sessions/{name}/pi/model", dependencies=[Depends(require_auth)])
+async def pi_model_set(name: str, body: PiModelBody):
+    cat, jsonl = await _pi_catalog(name)
+    cmds: list[str] = []
+    try:
+        if body.model:
+            if not body.provider:
+                raise pi_models.PiModelError(422, "provider obrigatorio junto com model")
+            pi_models.check_known(cat, body.provider, body.model)
+            cmds.append(pi_models.model_command(body.provider, body.model))
+        if body.effort:
+            cmds.append(pi_models.think_command(body.effort))
+    except pi_models.PiModelError as e:
+        raise HTTPException(e.status, e.detail)
+    if not cmds:
+        raise HTTPException(422, "informe model (com provider) e/ou effort")
+    try:
+        await asyncio.to_thread(terminal.send_pi_commands, name, cmds)
+    except terminal_input.DriveError as e:
+        raise HTTPException(409, str(e))
+    # Re-le o sidecar: o Pi CLAMPA o nivel pro que o modelo suporta, entao o que voltamos e o que
+    # FICOU, nao o que foi pedido. Sidecar sumido no meio -> devolve o catalogo de antes (o envio
+    # ja aconteceu; mentir "falhou" seria pior).
+    after = await asyncio.to_thread(pi_models.read_catalog, jsonl, _pi_config_dir(name)) or cat
+    return {"ok": True, "current": after.get("current"), "thinking": after.get("thinking"),
+            "levels": after.get("levels", [])}
 
 
 @app.get("/api/fs/roots", dependencies=[Depends(require_auth)])
