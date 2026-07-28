@@ -13,7 +13,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import SessionSwitcherSheet from './SessionSwitcherSheet.svelte';
   import HoverPreview from './HoverPreview.svelte';
   import type { SessionInfo, State, ResumeCandidate, Provider } from '../lib/types';
-  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, untrackedReason, providerTag, type GroupBy } from '../lib/format';
+  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, untrackedReason, providerName, providerTag, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import Lottie from './Lottie.svelte';
@@ -25,6 +25,21 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     awaiting_input: 'rgba(255,159,10,0.14)', dead: 'rgba(255,69,58,0.12)',
   };
   const STATIC_FRAME = 0; // f0 = anel cheio e simétrico (frames do meio ficam ralos)
+  const DEFAULT_BRANCHES = new Set(['main', 'master']);
+
+  function showBranch(branch: string | null | undefined): branch is string {
+    return !!branch && !DEFAULT_BRANCHES.has(branch);
+  }
+
+  // Linha secundária da sidebar: só o sinal acionável. O detalhe longo do spinner (modelo,
+  // tokens, tempo) continua no tooltip, mas não vira texto permanente na lista.
+  function sidebarStatus(s: SessRow): string | null {
+    if (s.state === 'awaiting_input') return s.question ?? null;
+    if (s.state !== 'working') return null;
+    const label = (s.label ?? '').trim();
+    if (!label) return null;
+    return label.replace(/\s+\([^)]*\)\s*$/, '');
+  }
 
   // cwd -> prefixo truncável + basename que nunca encolhe (mesma lógica do SessionCard).
   function cwdParts(cwd: string | undefined) {
@@ -127,6 +142,13 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     try { localStorage.setItem('cp_sidebar_w', String(width)); } catch { /* storage cheio/off */ }
   }
   const servers = $derived(sessionsStore.servers);
+  const groupMode = $derived(effectiveGroupBy(groupBy, servers.length));
+  // Agrupando por projeto, o cwd já está no header do grupo; mostrar o caminho em cada row é
+  // redundância. Ele volta a aparecer quando o agrupamento é por servidor.
+  const showCwd = $derived(groupMode === 'server');
+  // Chip de provider é exceção, não identidade default: se tudo na lista é Pi/Claude, o chip vira
+  // ruído repetido. Ele só entra quando há providers diferentes convivendo na mesma lista.
+  const showProviderTags = $derived(new Set(sessionsStore.rows.map((s) => providerName(s.provider))).size > 1);
   let activeId = $state(getActiveId());
   let scanning = $state(false);
   let showCreate = $state(false);
@@ -829,7 +851,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         {@const s = item.session}
         {@const rowKey = `${s.serverId}::${s.name}`}
         {@const selKey = `${s.serverId}:${s.name}`}
-        {@const provTag = providerTag(s.provider)}
+        {@const provTag = showProviderTags ? providerTag(s.provider) : null}
+        {@const sub = sidebarStatus(s)}
         <!-- role=presentation: a row e so o wrapper flex — a semantica toda vive no .sess-main
              (button) e nos botoes irmaos. O hover aqui e decoracao redundante (a resposta ja esta no
              chat), entao nao pede equivalente de teclado. -->
@@ -894,17 +917,21 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                     <span class="sess-name">{s.name}</span>
                     {#if s.tracked === false}<span class="sess-badge" title={untrackedReason(s.provider)}>sem id</span>{/if}
                   </span>
-                  {#if s.state === 'awaiting_input' && s.question}
-                    <span class="status-sub asking" title={s.question}>{s.question}</span>
-                  {:else if s.state === 'working' && s.label}
-                    <span class="status-sub working" title={s.label}>{s.label}</span>
+                  {#if sub}
+                    <span
+                      class="status-sub"
+                      class:asking={s.state === 'awaiting_input'}
+                      class:working={s.state === 'working'}
+                      title={s.state === 'awaiting_input' ? s.question : s.label}
+                    >{sub}</span>
                   {/if}
-                  {#if s.cwd}
+                  {#if showCwd && s.cwd}
                     {@const cp = cwdParts(s.cwd)}
-                    <span class="cwd" title={s.cwd}><span class="cwd-prefix">{cp.prefix}</span><span class="cwd-base">{cp.base}</span></span>
-                  {/if}
-                  {#if s.branch}
-                    <!-- Branch git atual (paridade com o mobile), linha propria pra nao competir com o cwd. -->
+                    <span class="cwd" title={showBranch(s.branch) ? `${s.cwd} · branch ${s.branch}` : s.cwd}>
+                      <span class="cwd-prefix">{cp.prefix}</span><span class="cwd-base">{cp.base}</span>
+                      {#if showBranch(s.branch)}<span class="branch-inline">⎇ {s.branch}</span>{/if}
+                    </span>
+                  {:else if showBranch(s.branch)}
                     <span class="branch" title="branch git atual">⎇ {s.branch}</span>
                   {/if}
                   {#if provTag || s.limited || s.then_target || s.pair_peers?.length || s.loop_status || s.engine}
@@ -1296,10 +1323,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     /* Glass desktop: fundo quase opaco SEM blur (mesma linha do composer/navbar — consistência +
        zero custo de backdrop-filter). Sheen no topo + brilho de borda mantêm a cara de vidro. */
     background: var(--glass-bg-solid);
-    border-right: 1px solid var(--glass-border);
-    box-shadow:
-      inset 0 1px 1px var(--glass-specular),   /* rim no topo */
-      inset -1px 0 0 var(--glass-highlight);    /* luz na borda direita */
+    /* Costura com o chat em 1px sutil. O glass tinha border-right + um highlight interno de 1px;
+       em crop/zoom aquilo virava uma "barra" de 3px na borda da sidebar. */
+    border-right: 1px solid var(--border-subtle);
+    box-shadow: inset 0 1px 1px var(--glass-specular);   /* rim no topo */
     padding: var(--space-3);
     gap: var(--space-2);
     transition: width 160ms var(--ease-out);
@@ -1476,13 +1503,25 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     color: var(--text-muted); font-size: var(--text-xs); border-radius: var(--radius-sm);
   }
   .grp-broadcast:hover { color: var(--accent); background: var(--bg-hover); }
+  /* Broadcast por grupo é ação secundária: some até o hover/foco pra não repetir um aviãozinho em
+     todo header. Continua alcançável por teclado via focus-within. */
+  @media (hover: hover) {
+    .grp-broadcast { opacity: 0; }
+    .grp-head-row:hover .grp-broadcast,
+    .grp-head-row:focus-within .grp-broadcast { opacity: 1; }
+  }
   /* Checkbox do modo seleção: so decorativo (o toque na row inteira alterna). */
   .select-check { width: 16px; height: 16px; accent-color: var(--accent); pointer-events: none; }
   .sess-row { display: flex; align-items: center; border-radius: var(--radius-md); }
   /* hover SÓ em dispositivo com mouse. No touch (tablet), o :hover fazia o 1º toque virar "hover" e
      o 2º o clique -> precisava de 2 toques pra abrir a sessão. hover:hover isola isso. */
   @media (hover: hover) { .sess-row:hover { background: var(--bg-hover); } }
-  .sess-row.active { background: var(--bg-elevated); }
+  .sess-row.active {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+  .sess-row.active .sess-name { color: var(--text-primary); font-weight: 650; }
+  .sess-row.active .branch,
+  .sess-row.active .branch-inline { color: var(--accent); }
   /* Sessão aguardando resposta: realce âmbar — o olho acha sem ler chip por chip. Realce é EXCEÇÃO
      (só awaiting): a barra carrega o sinal e o tint fica no mínimo, pra não virar fundo colorido.
      Só na sidebar EXPANDIDA: no rail de 56px a barra descentralizaria as iniciais (que já vêm
@@ -1503,14 +1542,14 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     .sidebar:not(.collapsed) .sess-row.awaiting:hover { background: color-mix(in srgb, var(--warning) 12%, transparent); }
   }
   .sess-main {
-    flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-2); min-height: 46px;
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-2); min-height: 48px;
     padding: 0 var(--space-2); text-align: left; justify-content: flex-start; color: var(--text-secondary);
     border-radius: var(--radius-md);
   }
   /* Modo compacto: só lead+nome+chips — cabe o dobro de sessões. Saem as 3 linhas secundárias
      (subtítulo de estado, cwd e branch). A altura mora na .sess-main (a .sess-row não tem
      min-height), então é ela que encolhe; os chips de estado/🤝 ficam, são o sinal da linha. */
-  .sess-list.compact .sess-main { min-height: 34px; }
+  .sess-list.compact .sess-main { min-height: 36px; }
   .sess-list.compact .status-sub,
   .sess-list.compact .cwd,
   .sess-list.compact .branch { display: none; }
@@ -1534,12 +1573,17 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     flex: 0 1 auto; min-width: 3ch; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; color: var(--text-secondary);
   }
-  .badges-line { display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap; min-width: 0; margin-top: 2px; }
-  /* Branch git da linha (paridade com o mobile): mono, accent, truncada. */
-  .branch {
-    min-width: 0; font-family: var(--font-mono); font-size: 10px; color: var(--accent);
+  .badges-line {
+    display: flex; align-items: center; gap: var(--space-1); flex-wrap: nowrap;
+    min-width: 0; margin-top: 2px; overflow: hidden;
+  }
+  /* Branch git da linha: agora inline no cwd pra nao gastar uma linha inteira de metadado. */
+  .branch,
+  .branch-inline {
+    min-width: 0; font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+  .branch-inline { flex-shrink: 0; margin-left: var(--space-1); }
   .state-chip {
     flex-shrink: 0; font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
     padding: 2px 7px; border-radius: var(--radius-full); white-space: nowrap;
@@ -1550,14 +1594,15 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
   /* Rate-limit radar (feature #8): chip proprio, mesma familia visual do stalled (âmbar, calmo). */
   .limited-chip {
-    flex-shrink: 0; font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
     padding: 2px 7px; border-radius: var(--radius-full); white-space: nowrap;
     color: var(--warning); background: rgba(255, 159, 10, 0.12);
     font-variant-numeric: tabular-nums;
   }
   /* Feature #12: indicador do vinculo 'then' — mesmo formato do limited-chip, cor neutra (accent). */
   .chain-chip {
-    flex-shrink: 0; font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+    flex: 0 1 auto; min-width: 0; font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
     padding: 2px 7px; border-radius: var(--radius-full); white-space: nowrap;
     max-width: 96px; overflow: hidden; text-overflow: ellipsis;
     color: var(--accent); background: var(--accent-dim);
@@ -1566,7 +1611,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   /* Provider da sessão (Codex/Pi) — só o que NÃO é Claude ganha chip. Tinta neutra de propósito:
      é rótulo de identidade, não estado; accent já é "motor" e âmbar já é "sem id". */
   .prov-chip {
-    flex-shrink: 0; font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
+    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
     color: var(--text-muted); background: var(--bg-elevated);
     border: 1px solid var(--border-subtle);
     padding: 1px 6px; border-radius: var(--radius-full); white-space: nowrap;
@@ -1582,10 +1628,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     padding: 0 4px; border-radius: var(--radius-full); white-space: nowrap;
   }
   .engine-chip {
+    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
     font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
     color: var(--accent); background: var(--accent-dim);
     padding: 1px 6px; border-radius: var(--radius-full);
-    flex-shrink: 0;
   }
   .lead { width: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
   /* Rail recolhido: iniciais precisam de mais espaco que o icone de 18px. */

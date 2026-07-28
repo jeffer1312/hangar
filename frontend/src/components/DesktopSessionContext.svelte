@@ -63,42 +63,48 @@
 <aside class="session-context" aria-label="Contexto da sessão">
   {#if working}<div class="ctx-sweep" aria-hidden="true"></div>{/if}
   <header>
-    <span class="header-title">Contexto da sessão</span>
-    {#if sessionName}<span class="header-session">{sessionName}</span>{/if}
+    <div class="ctx-heading">
+      <span class="header-kicker">Contexto da sessão</span>
+      {#if sessionName}<strong class="header-session" title={sessionName}>{sessionName}</strong>{/if}
+    </div>
+    <span class="state-chip header-state" style="color: {stateColors[state]}">{stateLabels[state]}</span>
   </header>
 
   {#if hasActions}
     <div class="ctx-actions">
       {#if onOpenTerminal}
-        <button class="ctx-btn terminal-btn" class:alert={terminalAlert} onclick={onOpenTerminal} aria-label="Terminal (espelho da TUI)">
+        <button class="ctx-action terminal-btn" class:alert={terminalAlert} onclick={onOpenTerminal} aria-label="Terminal (espelho da TUI)">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <rect x="2.5" y="4" width="19" height="16" rx="2"/>
             <path d="M6.5 9l3 3-3 3"/>
             <line x1="12.5" y1="15" x2="17" y2="15"/>
           </svg>
+          <span>Terminal</span>
         </button>
       {/if}
       {#if onOpenRun}
-        <button class="ctx-btn run-btn" class:running={runRunning} onclick={onOpenRun}
+        <button class="ctx-action run-btn" class:running={runRunning} onclick={onOpenRun}
                 aria-label={runRunning ? 'Rodando (abrir)' : 'Rodar projeto'}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             {#if runRunning}
               <rect x="6" y="6" width="12" height="12" rx="2" />
             {:else}
               <path d="M8 5v14l11-7z" />
             {/if}
           </svg>
+          <span>{runRunning ? 'Rodando' : 'Rodar'}</span>
         </button>
       {/if}
       {#if onOpenAttachments}
-        <button class="ctx-btn" onclick={onOpenAttachments} aria-label="Anexos da sessão">
+        <button class="ctx-action" onclick={onOpenAttachments} aria-label="Anexos da sessão">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L16 6"/>
           </svg>
+          <span>Anexos</span>
         </button>
       {/if}
       {#if onOpenActivity}
-        <button class="ctx-btn activity-btn" class:running={activityRunning} onclick={onOpenActivity} aria-label="Atividade">
+        <button class="ctx-action activity-btn" class:running={activityRunning} onclick={onOpenActivity} aria-label="Atividade">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <polyline points="3 5 4.5 6.5 7 4"/>
             <polyline points="3 11.5 4.5 13 7 10.5"/>
@@ -106,6 +112,7 @@
             <line x1="10" y1="12" x2="20" y2="12"/>
             <line x1="10" y1="18.5" x2="20" y2="18.5"/>
           </svg>
+          <span>Atividade</span>
           {#if activityBadge > 0}<span class="activity-badge">{activityBadge}</span>{/if}
         </button>
       {/if}
@@ -187,10 +194,10 @@
     right: 0;
     bottom: 0;
     z-index: 17;
-    width: 248px;
+    width: var(--ctx-w, 248px);
     overflow-y: auto;
-    border-left: 1px solid var(--border-subtle);
-    background: color-mix(in srgb, var(--bg-base) 96%, var(--bg-surface));
+    border-left: 1px solid var(--border-default);
+    background: var(--bg-surface);
   }
 
   @media (min-width: 1280px) {
@@ -200,52 +207,87 @@
   }
 
   header {
-    min-height: 48px;
+    min-height: 64px;
     display: flex;
     align-items: center;
-    gap: var(--space-2);
-    padding: 0 var(--space-4);
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-4);
     border-bottom: 1px solid var(--border-subtle);
-    color: var(--text-primary);
-    font-size: var(--text-sm);
-    font-weight: 650;
+    background: color-mix(in srgb, var(--bg-elevated) 52%, transparent);
   }
 
-  .header-title { flex-shrink: 0; }
+  .ctx-heading {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
 
-  /* Nome da sessao: dim, mono como o crumb irmao da NavBar, trunca sem empurrar o titulo. */
+  .header-kicker {
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+
+  /* Nome da sessao vira o titulo real do painel: no desktop largo a NavBar some e ele some junto. */
   .header-session {
     min-width: 0;
     overflow: hidden;
-    color: var(--text-muted);
+    color: var(--text-primary);
     font-family: var(--font-mono);
-    font-size: var(--text-xs);
-    font-weight: 500;
+    font-size: var(--text-sm);
+    font-weight: 650;
+    line-height: 1.25;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  /* Faixa de acoes (ex-botoes da NavBar). Alvos de 40px: painel tem 248px, 4x44 nao cabiam com
-     folga; o desktop nao tem o requisito de toque do celular. */
+  .header-state { flex-shrink: 0; }
+
+  /* Faixa de acoes (ex-botoes da NavBar): icones sozinhos pediam memorizacao. Em 264px o par
+     icone+rotulo cabe em duas colunas sem virar grade de cards. */
   .ctx-actions {
-    display: flex;
-    align-items: center;
-    gap: var(--space-1);
-    padding: var(--space-1) var(--space-3);
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
     border-bottom: 1px solid var(--border-subtle);
   }
 
-  .ctx-btn {
-    min-width: 40px;
-    min-height: 40px;
+  .ctx-action {
+    position: relative;
+    min-width: 0;
+    min-height: 44px;
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    color: var(--accent);
+    justify-content: flex-start;
+    gap: var(--space-2);
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
-    transition: background 180ms ease-out;
+    background: var(--bg-base);
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    transition: background 180ms var(--ease-out), border-color 180ms var(--ease-out), color 180ms var(--ease-out);
   }
-  .ctx-btn:active { background: var(--bg-hover); }
+  .ctx-action:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-default);
+    color: var(--text-primary);
+  }
+  .ctx-action:active { background: var(--bg-hover); }
+  .ctx-action svg { flex-shrink: 0; }
+  .ctx-action span:not(.activity-badge) {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   .terminal-btn { color: var(--text-secondary); }
   .terminal-btn.alert { color: var(--accent); }
@@ -271,8 +313,8 @@
 
   .activity-badge {
     position: absolute;
-    top: 4px;
-    right: 2px;
+    top: 5px;
+    right: 5px;
     min-width: 16px;
     height: 16px;
     padding: 0 4px;
@@ -353,7 +395,7 @@
     border-radius: var(--radius-sm);
   }
 
-  strong {
+  section strong {
     display: block;
     overflow: hidden;
     color: var(--text-secondary);
