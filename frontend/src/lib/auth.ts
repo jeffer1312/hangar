@@ -121,8 +121,18 @@ function syncCookie(token: string | null): void {
 // sessões. Reescrever no boot resolve os dois casos e é idempotente.
 export function ensureCookie(): void {
   if (typeof document === 'undefined') return;
-  const s = activeServer();
-  if (s && isSameOrigin(s.baseUrl)) syncCookie(s.token);
+  cookieDaOrigem();
+}
+
+// O cookie é do servidor da PRÓPRIA ORIGEM — não do ativo. São coisas diferentes: o app fala com
+// vários backends ao mesmo tempo, o remoto autentica o SSE por `?token=` na URL e só o da origem
+// depende do cookie. Amarrar o cookie ao ATIVO fazia duas bobagens: com um remoto ativo, gravava a
+// chave de OUTRA máquina no cookie desta origem (e agora, com Max-Age de um ano, ela ficaria lá);
+// e trocar pro remoto apagava o cookie de que o stream do servidor local ainda precisava.
+// Nenhum servidor na origem → limpa, em vez de deixar sobra de um ativo anterior.
+function cookieDaOrigem(): void {
+  const s = readServers().find((x) => isSameOrigin(x.baseUrl));
+  syncCookie(s ? s.token : null);
 }
 
 // Migração single-server -> multi (uma vez). baseUrl vazio vira o origin atual (absoluto) pra
@@ -188,7 +198,7 @@ export function addServer(
   }
   writeServers(list);
   localStorage.setItem(ACTIVE_KEY, id);
-  syncCookie(token);
+  cookieDaOrigem();
   notifyChanged();
   return { id, existed };
 }
@@ -224,7 +234,7 @@ export function updateServer(id: string, patch: { token?: string; baseUrl?: stri
   // (withCredentials) e o cross-origin por ?token= na URL. So com "ativo", trocar o token do
   // servidor que HOSPEDA o PWA enquanto outro esta ativo atualizava o storage, e o reconnect
   // reabria o SSE dele com o cookie VELHO — justo o servidor que esta feature existe pra consertar.
-  if (localStorage.getItem(ACTIVE_KEY) === id || isSameOrigin(baseUrl)) syncCookie(token);
+  cookieDaOrigem();
   notifyChanged();
   return true;
 }
@@ -254,7 +264,7 @@ export function selectServer(id: string): boolean {
   const s = readServers().find((x) => x.id === id);
   if (!s) return false;
   localStorage.setItem(ACTIVE_KEY, id);
-  syncCookie(s.token);
+  cookieDaOrigem();
   return true;
 }
 
@@ -265,7 +275,7 @@ export function removeServer(id: string, notify = true): void {
     const next = list[0];
     if (next) {
       localStorage.setItem(ACTIVE_KEY, next.id);
-      syncCookie(next.token);
+      cookieDaOrigem();
     } else {
       localStorage.removeItem(ACTIVE_KEY);
       syncCookie(null);

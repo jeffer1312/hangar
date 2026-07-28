@@ -16,9 +16,17 @@ const SCRIM_KEY = 'cp_bg_scrim';  // 0..100 — quanto da imagem passa (100 = im
 // Transparência do papel de parede. O terminal faz isso pelo compositor; aqui o equivalente é o
 // quanto do scrim escuro fica entre a foto e o texto. Guardado por dispositivo, como a imagem.
 // 0 = fundo praticamente opaco (a imagem some) · 100 = imagem crua (texto compete com ela).
+// `Number(null)` é 0, não NaN: ler uma chave que NUNCA foi escrita devolvia 0 e passava direto pelo
+// teste de faixa, então o padrão documentado (45 / 92 / 60) nunca valia — o app abria com o slider
+// no chão e o modo Texto inerte até alguém arrastar. Ausência tem que virar NaN antes da conversão.
+function lerNumero(chave: string, padrao: number): number {
+  const cru = typeof localStorage !== 'undefined' ? localStorage.getItem(chave) : null;
+  const v = cru === null || cru === '' ? NaN : Number(cru);
+  return Number.isFinite(v) && v >= 0 && v <= 100 ? v : padrao;
+}
+
 export function getBgScrim(): number {
-  const v = Number(typeof localStorage !== 'undefined' ? localStorage.getItem(SCRIM_KEY) : NaN);
-  return Number.isFinite(v) && v >= 0 && v <= 100 ? v : 45;
+  return lerNumero(SCRIM_KEY, 45);
 }
 
 export function setBgScrim(v: number): void {
@@ -162,8 +170,7 @@ export function setReadMode(m: ReadMode): void {
 const READ_ALPHA_KEY = 'cp_read_alpha';
 
 export function getReadAlpha(): number {
-  const v = Number(typeof localStorage !== 'undefined' ? localStorage.getItem(READ_ALPHA_KEY) : NaN);
-  return Number.isFinite(v) && v >= 0 && v <= 100 ? v : 92;
+  return lerNumero(READ_ALPHA_KEY, 92);
 }
 
 export function setReadAlpha(v: number): void {
@@ -177,8 +184,7 @@ export function setReadAlpha(v: number): void {
 const TEXT_BOOST_KEY = 'cp_text_boost';
 
 export function getTextBoost(): number {
-  const v = Number(typeof localStorage !== 'undefined' ? localStorage.getItem(TEXT_BOOST_KEY) : NaN);
-  return Number.isFinite(v) && v >= 0 && v <= 100 ? v : 60;
+  return lerNumero(TEXT_BOOST_KEY, 60);
 }
 
 export function setTextBoost(v: number): void {
