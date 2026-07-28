@@ -187,7 +187,12 @@ class TrayItem(dbus.service.Object):
 
     @dbus.service.method(dbus.PROPERTIES_IFACE, in_signature="s", out_signature="a{sv}")
     def GetAll(self, interface: str):
-        return self._props() if interface == SNI_IFACE else {}
+        # As MESMAS props opcionais do Get, senão as duas rotas do Properties contam histórias
+        # diferentes sobre o item: quem enumera não veria IconThemePath/WindowId, quem pergunta uma
+        # a uma receberia vazio. O que o item publica de verdade (_props) vence o padrão vazio.
+        if interface != SNI_IFACE:
+            return {}
+        return {**SNI_EMPTY_PROPS, **self._props()}
 
 
 def single_instance() -> socket.socket | None:
