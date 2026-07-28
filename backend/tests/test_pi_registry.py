@@ -372,3 +372,17 @@ def test_create_pi_refuses_an_engine(tmp_path, monkeypatch):
             reg.create("s-pi", "/home/u/p", provider="pi", engine="kimi")
     assert "motor" in str(exc.value)
     ns.assert_not_called()
+
+
+def test_session_file_accepts_a_fresh_ticket_before_the_file_exists(monkeypatch, tmp_path):
+    # Sessao Pi recem-criada PELO APP: a extensao publica o bilhete no session_start, mas o Pi so
+    # escreve o .jsonl no 1o turno. Exigir que o arquivo ja exista deixava a sessao "sem id" e
+    # inclicavel no celular — e mandar a 1a mensagem era exatamente o que nao dava pra fazer.
+    cfg = tmp_path / "cfg"
+    (cfg / ".claude-pocket-pi").mkdir(parents=True)
+    alvo = tmp_path / "2026-07-27T23-00-00-000Z_ainda-nao-existe.jsonl"   # NAO criado de proposito
+    (cfg / ".claude-pocket-pi" / "300.json").write_text(
+        json.dumps({"file": str(alvo), "id": "x", "ts": 2_000_000_000}))
+    monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
+    monkeypatch.setattr(registry, "_proc_start_time", lambda pid: 1_999_999_000)  # bilhete e mais novo
+    assert registry.pi_session_file("%300", pid=7, cwd="/w") == str(alvo)

@@ -406,12 +406,15 @@ def pi_session_file(pane_id: str, pid: Optional[int] = None,
             f = None
         elif ts < nasceu - 2:
             f = None
-        # os.path.exists: o cp-state.ts NUNCA apaga o bilhete quando o pane fecha, e o tmux reusa
-        # %pane_id apos um restart do servidor (ex: reboot da maquina) -> um bilhete ORFAO de uma
-        # sessao morta, apontando pra um .jsonl ja deletado/renomeado, seria devolvido como se fosse
-        # o transcript deste pane. list() e polled: um False aqui apenas adia pro proximo poll, que
-        # se autocorrige assim que o Pi escrever o 1o turno e o arquivo existir de verdade.
-        if f and os.path.exists(f):
+        # Bilhete FRESCO vale mesmo com o arquivo ainda inexistente: o Pi so escreve o .jsonl no 1o
+        # turno, e a extensao publica o bilhete la no session_start. Exigir exists() aqui deixava
+        # TODA sessao Pi recem-criada pelo app como "sem id" — sem transcript e inclicavel — ate
+        # alguem digitar a primeira mensagem no terminal, que e justamente o que nao da pra fazer
+        # pelo celular. O caso que o exists() guardava (bilhete orfao de uma encarnacao anterior do
+        # pane, apontando pra .jsonl deletado) ja e coberto pelo teste de frescor acima, que e mais
+        # forte: compara o bilhete com o nascimento DESTE processo. Mesmo contrato do Claude, cujo
+        # create() tambem fixa um caminho que so passa a existir depois.
+        if f:
             return f
     except (OSError, ValueError):
         pass
