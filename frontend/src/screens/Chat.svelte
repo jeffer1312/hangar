@@ -17,6 +17,10 @@
   import CodexLimitsSheet from '../components/CodexLimitsSheet.svelte';
   import ForwardSheet from '../components/ForwardSheet.svelte';
   import PairSheet from '../components/PairSheet.svelte';
+  // Ciclo de import de propósito (PairChatModal importa este Chat): é o mesmo Chat montado por
+  // dentro. Só o render é recursivo — o modal só existe com `peerChat` preenchido, e ele nunca
+  // abre outro modal (o PairSheet de lá abre o dele, mas o `peerChat` é por instância).
+  import PairChatModal from '../components/PairChatModal.svelte';
   import LoopSheet from '../components/LoopSheet.svelte';
   import DesktopSessionContext from '../components/DesktopSessionContext.svelte';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
@@ -53,11 +57,14 @@
     showContextPanel?: boolean;
     publishWorkspaceActions?: boolean;
     onWorkspaceActionsChange?: (actions: WorkspaceAction[]) => void;
+    // Este Chat já está DENTRO do modal do par. Corta a recursão: sem isso o par de lá é esta
+    // mesma sessão, e abrir "o par num modal" empilhava modal sobre modal (3+ SSE abertos).
+    nested?: boolean;
   }
   let {
     sessionName, onBack, onNavigateToChat, desktop = false, onOpenSplit,
     topInset = 0, onOpenWorkspacePalette, showContextPanel = false,
-    publishWorkspaceActions = false, onWorkspaceActionsChange,
+    publishWorkspaceActions = false, onWorkspaceActionsChange, nested = false,
   }: Props = $props();
 
   let events = $state<ChatEvent[]>([]);
@@ -160,6 +167,9 @@
   let forwardText = $state<string | null>(null);
   // Pareamento ("trabalhando juntas"): sheet + par atual derivado da lista já carregada.
   let pairOpen = $state(false);
+  // Membro do grupo aberto no modal (null = fechado). É string, não lista, de propósito: um modal
+  // por vez mantém o teto em 2 SSE (este chat + o do par) e o navegador corta em ~6 por host.
+  let peerChat = $state<string | null>(null);
   // Grupo de trabalho: os OUTROS membros (null = sem grupo). Estado vivo só quando o grupo tem 1
   // par (bolinha de 1 sessão faz sentido; de N vira ruído).
   const pairPeers = $derived(allSessions.find((s) => s.name === sessionName)?.pair_peers ?? null);
@@ -644,6 +654,10 @@
   $effect(() => {
     const vv = window.visualViewport;
     if (!vv || !screenEl) return;
+    // Dentro do modal do par a tela NÃO é a viewport: o `fit` fixava height=vv.height (900px medidos)
+    // num modal de 858 e a última linha do composer ficava cortada. Lá quem manda é a altura do
+    // modal (CSS 100%), e o teclado é problema do modal, como já é em qualquer sheet.
+    if (nested) return;
     function fit() {
       if (!screenEl || !vv) return;
       // Ignora valores transientes (a animacao do teclado reporta alturas minusculas por 1 frame).
@@ -952,6 +966,9 @@
       loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']}
       onLoopTap={() => (loopSheetOpen = true)}
       onProviderTap={isCodex ? () => (limitsOpen = true) : undefined}
+      onOpenPair={pairPeers?.length ? () => (pairOpen = true) : undefined}
+      onOpenPeerChat={nested ? undefined : (peer) => (peerChat = peer)}
+      onOpenGit={() => (gitOpen = true)}
     />
   {/if}
 
@@ -1083,7 +1100,15 @@
     onOpenSplit={onOpenSplit
       ? (peer) => { pairOpen = false; onOpenSplit?.(peer); }
       : undefined}
+    onOpenPeerChat={nested ? undefined : (peer) => { pairOpen = false; peerChat = peer; }}
   />
+
+  <!-- Sessão do par por cima desta, inteira (transcript + composer). Mora aqui, no Chat, porque é o
+       arquivo que as DUAS views usam — sai de graça no celular e no desktop. -->
+  {#if !nested}
+    <PairChatModal name={peerChat} {desktop} onClose={() => (peerChat = null)}
+                   onNavigateToChat={onNavigateToChat} />
+  {/if}
 
   <UsageSheet open={usageOpen} {status} onClose={() => (usageOpen = false)} />
 

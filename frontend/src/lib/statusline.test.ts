@@ -15,6 +15,21 @@ describe('parseStatusLine — uso de contexto', () => {
     expect(s?.ctxPct).toBeUndefined();
     expect(s?.ctxUsed).toBeUndefined();
   });
+
+  it('separa os tokens do TURNO (1º par) do par de contexto', () => {
+    const s = parseStatusLine('💬 271k/590 270k/1M')!;
+    expect(s.turnIn).toBe(271_000);
+    expect(s.turnOut).toBe(590);
+    expect(s.ctxUsed).toBe(270_000);
+  });
+
+  it('com um par só, ele é do turno e NÃO vira contexto nem turno duplicado', () => {
+    // O par único já é lido como "sem contexto"; ele também não pode virar turno inventado a
+    // partir de uma leitura de janela.
+    const s = parseStatusLine('💬 20k/1k')!;
+    expect(s.turnIn).toBeUndefined();
+    expect(s.turnOut).toBeUndefined();
+  });
 });
 
 describe('parseStatusLine — statusline do Pi', () => {

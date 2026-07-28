@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
+  import { untrack } from 'svelte';
   import { focusableElements, nextFocusIndex } from '../lib/focusCycle';
 
   // Shell reutilizavel de bottom-sheet: backdrop + painel que sobe de baixo.
@@ -8,19 +9,31 @@
     open: boolean;
     onClose: () => void;
     ariaLabel?: string;
-    resizable?: boolean;   // opt-in: so o GitSheet usa. Habilita drag-resize no dock desktop (>=820px).
+    resizable?: boolean;   // opt-in: Git e Par. Habilita drag-resize no dock desktop (>=820px).
+    // Chave da largura persistida + largura inicial. Sem isto todo sheet redimensionavel dividia a
+    // MESMA largura: arrastar o painel do par mexia no do git, que nao tem nada a ver.
+    widthKey?: string;
+    defaultWidth?: number;
     wide?: boolean;        // opt-in: dock desktop usa largura fixa min(1100px, 92vw) em vez de --sheet-w.
     centered?: boolean;    // opt-in: no desktop vira MODAL centrado em vez de painel docado a direita.
     children: Snippet;
   }
-  let { open, onClose, ariaLabel = 'Painel', resizable = false, wide = false, centered = false, children }: Props = $props();
+  let { open, onClose, ariaLabel = 'Painel', resizable = false, widthKey = 'cp_gitsheet_w', defaultWidth = 460, wide = false, centered = false, children }: Props = $props();
 
   // ── Redimensionar (SO no dock desktop >=820px): arrasta a borda ESQUERDA do painel direito.
   // Largura persistida em localStorage; aplicada via --sheet-w (a media query desktop consome a var,
   // o mobile ignora -> sheet de baixo continua 100%). Mesma mecanica do resize da Sidebar.
-  const WMIN = 360, WMAX = 720;
+  // WMAX subiu de 720: o painel do par carrega o contrato do grupo, que e um documento inteiro.
+  const WMIN = 360, WMAX = 980;
   const clampW = (w: number) => Math.max(WMIN, Math.min(WMAX, w));
-  let width = $state(clampW(Number(localStorage.getItem('cp_gitsheet_w')) || 460));
+  // Leitura ÚNICA na montagem, de propósito (o aviso do compilador é sobre isso): a largura vira
+  // estado local editável pelo arrasto; reagir à prop depois sobrescreveria o que o usuário puxou.
+  let width = $state(0);
+  // Leitura ÚNICA na montagem: a largura vira estado local editável pelo arrasto, então reagir à
+  // prop depois sobrescreveria o que o usuário puxou. `untrack` diz isso ao compilador.
+  $effect.pre(() => {
+    if (width === 0) width = clampW(Number(localStorage.getItem(untrack(() => widthKey))) || untrack(() => defaultWidth));
+  });
   let resizing = $state(false);
   function resizeStart(e: PointerEvent) {
     resizing = true;
@@ -33,7 +46,7 @@
   function resizeEnd() {
     if (!resizing) return;
     resizing = false;
-    try { localStorage.setItem('cp_gitsheet_w', String(width)); } catch { /* storage off/cheio */ }
+    try { localStorage.setItem(widthKey, String(width)); } catch { /* storage off/cheio */ }
   }
 
   // ── Swipe-to-dismiss: o painel acompanha o dedo; solto abaixo do limiar, volta ──
@@ -197,6 +210,13 @@
 {/if}
 
 <style>
+  /* Mesmo motivo do ModalDialog: o blur vai no dimmer, senao o filtro do painel so borra a cor
+     chapada do proprio backdrop e a tela de tras continua nitida. */
+  :global(html[data-liquid]) .backdrop {
+    background: rgba(0, 0, 0, 0.34);
+    backdrop-filter: blur(16px) saturate(150%);
+  }
+
   .backdrop {
     position: fixed;
     inset: 0;
@@ -208,9 +228,12 @@
   }
 
   .sheet {
+    position: relative;   /* ancora a camada de vidro (::before) tambem no mobile */
     width: 100%;
     max-width: 600px;
-    background: var(--bg-elevated);
+    /* Vidro: o fundo sai do elemento e vai pro leaf ::before, mesma mecanica do composer/navbar —
+       o painel passa a pertencer ao mesmo material do resto do chrome. */
+    background: transparent;
     border-radius: 20px 20px 0 0;
     padding: var(--space-4) var(--space-5);
     padding-bottom: calc(env(safe-area-inset-bottom) + var(--space-5));
@@ -222,6 +245,27 @@
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
+  }
+
+  /* Camada de vidro do painel: leaf sem conteudo, colada na caixa. WebKit/iOS fica no fundo quase
+     opaco (sem backdrop-filter, que reproduz o bug do retangulo preto no scroll). */
+  .sheet::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background: var(--glass-bg-solid);
+  }
+  /* Chromium (data-liquid): translucido de verdade, com blur.
+     O backdrop-filter fica no ELEMENTO, nao no ::before: o painel anima com `transform`
+     (slide-in-right, fill `both`), e um elemento transformado vira o backdrop ROOT dos proprios
+     filhos — o pseudo passava a "borrar" o interior vazio do painel, ou seja, nada. Resultado: o
+     painel ficava translucido SEM blur e o conteudo de tras aparecia cru (foi o que apareceu no
+     "Uso & limites"). No elemento, o backdrop e o que esta atras dele de verdade. */
+  :global(html[data-liquid]) .sheet::before {
+    background: var(--glass-panel);
   }
 
   /* O painel leva .focus() programatico ao abrir (a11y: anuncia o dialog e prende o Tab dentro).

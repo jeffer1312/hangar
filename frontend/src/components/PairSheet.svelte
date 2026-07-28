@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+  import { renderMarkdown } from '../lib/markdown';
   import { getSessions, pairSession, unpairSession, getHistory, getPairContract } from '../lib/api';
   import { stateLabels, stateColors, parsePeerMessage, relativeTime, encodeCompareIds } from '../lib/format';
   import { getActiveId } from '../lib/auth';
@@ -12,8 +13,9 @@
     onClose: () => void;
     onChanged: () => void;            // grupo mudou -> pai recarrega a lista (badge/chip)
     onOpenSplit?: (peer: string) => void; // desktop: abre o chat do membro lado a lado (split view)
+    onOpenPeerChat?: (peer: string) => void; // abre o chat do membro num MODAL (as duas views)
   }
-  let { open, sessionName, pairPeers, onClose, onChanged, onOpenSplit }: Props = $props();
+  let { open, sessionName, pairPeers, onClose, onChanged, onOpenSplit, onOpenPeerChat }: Props = $props();
 
   const peers = $derived(pairPeers ?? []);
   // Chave PRIMITIVA: a prop pairPeers é um array novo por referência a cada poll de 5s do pai —
@@ -167,9 +169,14 @@
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel="Parear sessões">
+<!-- `resizable`: o painel do par carrega o contrato do grupo (um documento), a lista de membros e a
+     conversa — nos 420px padrao o markdown saia com ~40 caracteres por linha. Fica arrastavel pela
+     borda esquerda, como o GitSheet, e a largura persiste. -->
+<BottomSheet {open} {onClose} resizable widthKey="cp_pairsheet_w" defaultWidth={760} ariaLabel="Parear sessões">
   <div class="pair">
     {#if peers.length}
+      <!-- Tudo que ROLA fica aqui; o rodape com "Sair do grupo" fica preso embaixo. -->
+      <div class="pair-scroll">
       <h2 class="title">🤝 Grupo de trabalho ({peers.length + 1})</h2>
       <p class="hint">
         Os membros trabalham juntos: trocam contrato, avisos e dúvidas via cp-send por conta
@@ -184,9 +191,26 @@
             {#if st}<span class="dot" style="background: {stateColors[st as keyof typeof stateColors]};" aria-hidden="true"></span>{/if}
             <span class="row-main"><span class="row-name">{p}</span></span>
             {#if st}<span class="row-paired">{stateLabels[st as keyof typeof stateLabels]}</span>{/if}
+            {#if onOpenPeerChat}
+              <!-- Ícones em vez de glifos: `⤢` (expandir) e `⫽` (paralelas) não diziam o que fazem.
+                   Aqui: um balão de conversa = abrir a conversa dele; duas colunas = lado a lado. -->
+              <button class="split-btn" onclick={() => onOpenPeerChat?.(p)}
+                      title={`Abrir a conversa de ${p}`} aria-label={`Abrir a sessão ${p} num modal`}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M20 15a2 2 0 0 1-2 2H8l-4 3V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z"/>
+                </svg>
+              </button>
+            {/if}
             {#if onOpenSplit}
               <button class="split-btn" onclick={() => onOpenSplit?.(p)}
-                      title={`Abrir ${p} lado a lado`} aria-label={`Abrir ${p} lado a lado`}>⫽</button>
+                      title={`Abrir ${p} lado a lado`} aria-label={`Abrir ${p} lado a lado`}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="3" y="4.5" width="8" height="15" rx="1.5"/>
+                  <rect x="13" y="4.5" width="8" height="15" rx="1.5"/>
+                </svg>
+              </button>
             {/if}
           </div>
         {/each}
@@ -232,7 +256,10 @@
         <!-- Contrato compartilhado: as sessões escrevem no arquivo; aqui só leitura. -->
         <div class="contract">
           <h3 class="feed-title">Contrato compartilhado</h3>
-          <pre class="contract-body">{contract.content}</pre>
+          <!-- Markdown RENDERIZADO, nao texto cru: o contrato e .md e ler "**Tarefa:**" com os
+               asteriscos e pior em tudo. Regra do projeto (CLAUDE.md): todo .md exibido no app passa
+               pelo renderMarkdown. -->
+          <div class="contract-body md">{@html renderMarkdown(contract.content, { joinWrapped: true })}</div>
           <span class="contract-path" title={contract.path}>{contract.path}</span>
         </div>
       {/if}
@@ -256,11 +283,15 @@
           {/each}
         {/if}
       </div>
+      </div><!-- /pair-scroll -->
 
-      {#if error}<p class="error">{error}</p>{/if}
-      <button class="danger-btn" onclick={doLeave} disabled={busy}>
-        {busy ? 'Saindo…' : 'Sair do grupo'}
-      </button>
+      <!-- Rodape FIXO: "Sair do grupo" e destrutivo e nao pode fugir com o scroll do contrato. -->
+      <div class="pair-foot">
+        {#if error}<p class="error">{error}</p>{/if}
+        <button class="danger-btn" onclick={doLeave} disabled={busy}>
+          {busy ? 'Saindo…' : 'Sair do grupo'}
+        </button>
+      </div>
     {:else}
       <h2 class="title">Parear com sessão</h2>
       <p class="hint">
@@ -399,20 +430,43 @@
     border-top: 1px solid var(--border-subtle);
     padding-top: var(--space-3);
   }
+  /* Painel em coluna: cabecalho+conteudo rolam, rodape fica. `min-height: 0` e o que permite o
+     filho encolher dentro do flex (sem ele o scroller cresce e empurra o rodape pra fora). */
+  .pair { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .pair-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+  .pair-foot {
+    flex-shrink: 0;
+    padding-top: var(--space-3);
+    margin-top: var(--space-2);
+    border-top: 1px solid var(--border-subtle);
+    background: transparent;
+  }
+
   .contract-body {
-    font-family: var(--font-mono);
     font-size: var(--text-xs);
-    line-height: 1.5;
+    line-height: 1.55;
     color: var(--text-secondary);
     background: var(--bg-surface);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
-    padding: var(--space-3);
-    white-space: pre-wrap;
+    padding: var(--space-3) var(--space-4);
     word-break: break-word;
-    max-height: 30vh;
-    overflow-y: auto;
+    /* SEM teto de altura: o contrato inteiro corre no scroll do proprio painel. Com max-height
+       virava caixa-dentro-de-caixa — duas barras de rolagem competindo e o fim do documento
+       escondido atras da segunda. */
   }
+  /* Tipografia do markdown do contrato. */
+  .contract-body :global(h1) { margin: 0 0 var(--space-2); font-size: var(--text-sm); color: var(--text-primary); }
+  .contract-body :global(h2) { margin: var(--space-3) 0 var(--space-1); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
+  .contract-body :global(h3) { margin: var(--space-2) 0 var(--space-1); font-size: var(--text-xs); color: var(--text-secondary); }
+  .contract-body :global(p) { margin: 0 0 var(--space-2); }
+  .contract-body :global(strong) { color: var(--text-primary); font-weight: 650; }
+  .contract-body :global(ul), .contract-body :global(ol) { margin: 0 0 var(--space-2); padding-left: 1.2em; }
+  .contract-body :global(li) { margin: 2px 0; }
+  .contract-body :global(code) { padding: 0 4px; border-radius: 3px; background: var(--bg-elevated); font-family: var(--font-mono); font-size: 11px; color: var(--text-primary); }
+  .contract-body :global(pre) { margin: 0 0 var(--space-2); padding: var(--space-2); overflow-x: auto; border-radius: var(--radius-sm); background: var(--bg-base); }
+  .contract-body :global(a) { color: var(--accent); }
+  .contract-body :global(hr) { margin: var(--space-3) 0; border: 0; border-top: 1px solid var(--border-subtle); }
   .contract-path {
     font-size: var(--text-xs); color: var(--text-muted);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;

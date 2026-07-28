@@ -149,15 +149,16 @@ export function projectLabel(cwd: string | null | undefined): string {
   return cwd ? basename(cwd) : 'sem projeto';
 }
 
-// Modo de agrupamento da lista de sessões (toggle Servidor|Projeto, feature #3).
-export type GroupBy = 'server' | 'project';
+// Modo de agrupamento da lista de sessões (toggle Nenhum|Servidor|Projeto, feature #3).
+export type GroupBy = 'none' | 'server' | 'project';
 
-// Modo EFETIVO dada a preferência do usuário e o nº de servidores. Com <2 servidores, agrupar "por
-// servidor" produz 1 único grupo gigante (nada pra separar) e o toggle Servidor|Projeto fica sem
-// sentido -> força "por projeto", que ainda organiza a lista por repositório. A preferência crua
-// fica intacta (volta a valer assim que houver >=2 servidores). Pura/testável.
+// Modo EFETIVO dada a preferência do usuário e o nº de servidores. Só uma regra: agrupar "por
+// servidor" com <2 servidores produz 1 grupo gigante sem nada pra separar -> cai pra lista lisa,
+// que é o mesmo conteúdo sem um cabeçalho inútil. "Nenhum" e "projeto" valem sempre, com qualquer
+// número de servidores: a lista lisa é escolha legítima, não um caso degenerado. Pura/testável.
 export function effectiveGroupBy(pref: GroupBy, serverCount: number): GroupBy {
-  return serverCount >= 2 ? pref : 'project';
+  if (pref === 'server' && serverCount < 2) return 'none';
+  return pref;
 }
 
 // Cluster de pareamento DENTRO de um grupo (servidor/projeto): sessões do mesmo grupo (pair_gid)

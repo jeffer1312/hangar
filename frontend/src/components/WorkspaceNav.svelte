@@ -9,10 +9,12 @@
 
   let { view, onSelect, onOpenCommand }: Props = $props();
 
-  const items: { id: WorkspaceView; label: string; short: string }[] = [
-    { id: 'chat', label: 'Conversa', short: 'Chat' },
-    { id: 'board', label: 'Quadro', short: 'Quadro' },
-    { id: 'canvas', label: 'Canvas', short: 'Canvas' },
+  // Rotulos CURTOS de proposito: a coluna tem 248px por padrao, e "Conversa" + "Quadro" + "Canvas"
+  // + o botao de busca nao cabem sem cortar palavra no meio. O nome longo vive no title.
+  const items: { id: WorkspaceView; label: string; title: string }[] = [
+    { id: 'chat', label: 'Chat', title: 'Conversa' },
+    { id: 'board', label: 'Quadro', title: 'Quadro' },
+    { id: 'canvas', label: 'Canvas', title: 'Canvas' },
   ];
 </script>
 
@@ -23,11 +25,10 @@
         type="button"
         class:active={view === item.id}
         aria-current={view === item.id ? 'page' : undefined}
+        title={item.title}
+        aria-label={item.title}
         onclick={() => onSelect(item.id)}
-      >
-        <span class="full-label">{item.label}</span>
-        <span class="short-label">{item.short}</span>
-      </button>
+      >{item.label}</button>
     {/each}
   </nav>
 
@@ -43,7 +44,6 @@
       <circle cx="11" cy="11" r="7"></circle>
       <path d="m20 20-3.2-3.2"></path>
     </svg>
-    <kbd>⌘K</kbd>
   </button>
 </div>
 
@@ -52,29 +52,36 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    pointer-events: auto;
+    width: 100%;
+    min-width: 0;
   }
 
   .workspace-nav {
     display: flex;
+    flex: 1;
+    min-width: 0;
     align-items: center;
     gap: 2px;
     padding: 3px;
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
     background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
   }
 
   .workspace-nav button {
-    min-width: 76px;
-    height: 34px;
-    padding: 0 var(--space-3);
+    flex: 1;
+    min-width: 0;      /* vence o min-width global de 44px: 3 botoes em 248px */
+    height: 30px;
+    min-height: 0;
+    padding: 0 var(--space-1);
+    overflow: hidden;
     border-radius: calc(var(--radius-lg) - 3px);
     color: var(--text-secondary);
     font-family: inherit;
-    font-size: var(--text-sm);
+    font-size: var(--text-xs);
     font-weight: 560;
+    white-space: nowrap;
+    text-overflow: ellipsis;
     transition: color 140ms var(--ease-out), background 140ms var(--ease-out);
   }
 
@@ -86,22 +93,21 @@
   .workspace-nav button.active {
     color: var(--text-primary);
     background: var(--bg-surface);
-    box-shadow: inset 0 0 0 1px var(--border-default), 0 1px 4px rgba(0, 0, 0, 0.22);
+    box-shadow: inset 0 0 0 1px var(--border-default);
   }
 
+  /* So o icone: o atalho fica no title, o texto "⌘K" custaria a largura de um dos tres botoes. */
   .command-button {
-    height: 40px;
-    min-width: 72px;
-    padding: 0 var(--space-2) 0 var(--space-3);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--space-2);
+    flex-shrink: 0;
+    width: 34px;
+    min-width: 34px;
+    height: 34px;
+    min-height: 0;
+    padding: 0;
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
     background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
     color: var(--text-secondary);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   }
 
   .command-button:hover {
@@ -109,23 +115,4 @@
     background: var(--bg-hover);
   }
 
-  kbd {
-    padding: 1px 5px;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-sm);
-    color: var(--text-muted);
-    font-family: var(--font-mono);
-    font-size: 10px;
-    line-height: 16px;
-  }
-
-  .short-label { display: none; }
-
-  @media (max-width: 1120px) {
-    .workspace-nav button { min-width: 60px; padding-inline: var(--space-2); }
-    .full-label { display: none; }
-    .short-label { display: inline; }
-    .command-button { min-width: 40px; width: 40px; padding: 0; }
-    .command-button kbd { display: none; }
-  }
 </style>

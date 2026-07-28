@@ -18,7 +18,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import Lottie from './Lottie.svelte';
   import pensando from '../lib/lottie/pensando.json';
-  import type { WorkspaceAction } from '../lib/workspaceCommands';
+  import type { WorkspaceAction, WorkspaceView } from '../lib/workspaceCommands';
+  import WorkspaceNav from './WorkspaceNav.svelte';
 
   const stateChipBg: Record<State, string> = {
     working: 'var(--accent-dim)', idle: 'rgba(52,199,89,0.12)',
@@ -58,10 +59,16 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     boardActive: boolean;      // quadro aberto -> destaca o toggle e recolhe a sidebar pro rail
     canvasActive: boolean;     // canvas aberto -> mesmo tratamento do quadro (destaca + recolhe)
     onWorkspaceActionsChange?: (actions: WorkspaceAction[]) => void;
+    // Seletor de view (Conversa/Quadro/Canvas) + ⌘K: morava flutuando no topo da .desktop-main e
+    // pousava em cima do texto do chat (a conversa nao tem o padding-top que board/canvas tem).
+    // Aqui dentro ele fica no chrome, junto do resto da navegacao.
+    view: WorkspaceView;
+    onSelectView: (view: WorkspaceView) => void;
+    onOpenCommand: () => void;
   }
   let {
     currentSession, onSelect, onCompare, onLogout, boardActive, canvasActive,
-    onWorkspaceActionsChange,
+    onWorkspaceActionsChange, view, onSelectView, onOpenCommand,
   }: Props = $props();
 
   // Grupo generico: por SERVIDOR (hoje) ou por PROJETO (cwd) — mesmo shape nos dois modos. Cada
@@ -70,7 +77,18 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // template nao precisar saber em qual modo esta).
   interface SessRow extends SessionInfo { serverId: string }
   interface Group { id: string; label: string; color: string | null; error: string | null; sessions: SessRow[] }
-  let collapsed = $state(false);   // pin: recolhido persistente (botao) — trilho de iniciais
+  // Pin do trilho: recolhido/expandido sobrevive ao reload — desfixar e achar a sidebar cheia de
+  // volta no F5 apagava a escolha toda vez. Persiste so o que o USUARIO clica: o auto-recolher do
+  // quadro/canvas e temporario (restaurado ao sair) e nao pode virar preferencia gravada.
+  const PIN_KEY = 'cp_sidebar_collapsed';
+  function loadPin(): boolean {
+    try { return localStorage.getItem(PIN_KEY) === '1'; } catch { return false; }
+  }
+  function togglePin() {
+    collapsed = !collapsed;
+    try { localStorage.setItem(PIN_KEY, collapsed ? '1' : '0'); } catch { /* modo privado */ }
+  }
+  let collapsed = $state(loadPin());   // pin: recolhido persistente (botao) — trilho de iniciais
   let hovering = $state(false);    // hover sobre a sidebar recolhida -> expande temporario
   let filterText = $state('');     // filtro por nome/cwd/servidor (aparece quando a lista fica longa)
 
@@ -107,7 +125,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // Toggle "Servidor | Projeto" (feature #3), persistido — mesmo padrao de cp_sidebar_w. Guarda a
   // PREFERENCIA crua; o modo efetivo (effectiveGroupBy) força "projeto" quando ha <2 servidores.
   const GROUP_BY_KEY = 'cp_group_by';
-  let groupBy = $state<GroupBy>(localStorage.getItem(GROUP_BY_KEY) === 'project' ? 'project' : 'server');
+  let groupBy = $state<GroupBy>((() => {
+    const v = localStorage.getItem(GROUP_BY_KEY);
+    return v === 'project' || v === 'none' || v === 'server' ? v : 'server';
+  })());
   function setGroupBy(mode: GroupBy) {
     groupBy = mode;
     try { localStorage.setItem(GROUP_BY_KEY, mode); } catch { /* storage cheio/off */ }
@@ -181,8 +202,13 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // Agrupamento é POLÍTICA do Sidebar (servidor|projeto); o dado agregado/deduplicado vem do store.
   const groups = $derived.by<Group[]>(() => {
     if (servers.length === 0) return [];
-    // Modo efetivo: com <2 servidores, "por servidor" viraria 1 grupo gigante -> força "por projeto".
+    // Modo efetivo: "por servidor" com 1 servidor so cai pra lista lisa (1 grupo gigante nao separa nada).
     const mode = effectiveGroupBy(groupBy, servers.length);
+    if (mode === 'none') {
+      // Lista lisa: um grupo unico e SEM cabecalho (o template pula o header quando o label e vazio).
+      // Ordena tudo junto, entao a sessao que pede atencao sobe, venha de que projeto vier.
+      return [{ id: '*', label: '', color: null, error: null, sessions: sortSessions([...sessionsStore.rows]) }];
+    }
     if (mode === 'project') {
       // Modo projeto: junta sessoes de TODOS os servidores pela chave do cwd. Servidor offline so
       // perde as sessoes dele (sem banner por grupo — nao ha "1 servidor" pra apontar o erro).
@@ -748,11 +774,13 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
 </script>
 
-<aside class="sidebar" class:collapsed={!expanded} class:resizing
+<!-- `floating` segue o PIN (collapsed), nao o `expanded`: assim passar o mouse so alarga o dock,
+     em vez de ele virar coluna colada na borda e voltar quando o mouse sai. -->
+<aside class="sidebar" class:collapsed={!expanded} class:floating={collapsed} class:resizing
   style:width={expanded ? width + 'px' : undefined}
   onmouseenter={() => (hovering = true)} onmouseleave={() => (hovering = false)}>
   <div class="side-top">
-    <button class="icon-btn" onclick={() => (collapsed = !collapsed)} aria-label={collapsed ? 'Expandir' : 'Recolher'}>
+    <button class="icon-btn" onclick={togglePin} aria-label={collapsed ? 'Expandir' : 'Recolher'}>
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
         <rect x="3" y="4" width="18" height="16" rx="2"/>
         <line x1="9" y1="4" x2="9" y2="20"/>
@@ -780,6 +808,14 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     </button>
   </div>
 
+  {#if expanded}
+    <!-- Só na sidebar aberta: no rail de 56px nao ha largura pro seletor, e passar o mouse ja
+         expande a sidebar — o atalho existe sem precisar de uma versao encolhida dele. -->
+    <div class="side-views">
+      <WorkspaceNav {view} onSelect={onSelectView} {onOpenCommand} />
+    </div>
+  {/if}
+
   <nav class="sess-list" class:compact aria-label="Sessões">
     {#if expanded}
       <!-- A fila "Precisa de você" migrou para o chrome global do DesktopShell: continua visível
@@ -805,7 +841,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     {/if}
     {#each renderGroups as g (g.id)}
       {@const awaiting = countAwaiting(g.sessions)}
-      {#if expanded}
+      {#if expanded && g.label}
+        <!-- Sem label = modo "Nenhum": lista lisa, sem cabecalho nem chevron. -->
         <div class="grp-head-row">
           <!-- Header colapsavel (paridade com o mobile): chevron + label + contagem + aguardando. -->
           <button
@@ -892,12 +929,20 @@ import ConfirmDialog from './ConfirmDialog.svelte';
               <span class="lead" aria-hidden="true">
                 {#if selectMode}
                   <input type="checkbox" class="select-check" checked={selected.has(selKey)} tabindex="-1" aria-hidden="true" />
-                {:else if !expanded && s.state !== 'working'}
-                  <!-- Rail recolhido: iniciais tingidas pelo estado (identifica sem o nome). -->
-                  <span class="initials" style="color: {stateColors[s.state]}; border-color: {stateColors[s.state]}; background: {stateChipBg[s.state]};">{initials(s.name)}</span>
-                {:else if !expanded && s.stalled}
-                  <!-- Working travada no rail recolhido: iniciais com anel âmbar (sem o spinner, que sumiria o aviso). -->
-                  <span class="initials stalled" title="Pode estar travada" style="color: {stateColors[s.state]}; border-color: {stateColors[s.state]}; background: {stateChipBg[s.state]};">{initials(s.name)}</span>
+                {:else if !expanded}
+                  <!-- Rail recolhido: SEMPRE iniciais, tingidas pelo estado — é o único texto que
+                       identifica a sessão sem o nome. Trabalhando trocava as iniciais pelo spinner,
+                       e aí a coluna virava bolinhas anônimas justo nas sessões ocupadas; agora o
+                       "trabalhando" é um anel pulsando em volta das mesmas iniciais, no mesmo
+                       vocabulário do anel âmbar da travada (que continua tendo prioridade: um aviso
+                       não pode virar animação de rotina). -->
+                  <span
+                    class="initials"
+                    class:stalled={s.stalled}
+                    class:busy={s.state === 'working' && !s.stalled}
+                    title={s.stalled ? 'Pode estar travada' : undefined}
+                    style="color: {stateColors[s.state]}; border-color: {stateColors[s.state]}; background: {stateChipBg[s.state]};"
+                  >{initials(s.name)}</span>
                 {:else if s.state === 'working'}
                   <Lottie data={pensando as any} size={18} loop autoplay />
                 {:else}
@@ -1161,14 +1206,17 @@ import ConfirmDialog from './ConfirmDialog.svelte';
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M3 6h18"/><path d="M3 12h18"/><path d="M3 18h18"/></svg>
       {compact ? 'Densidade normal' : 'Densidade compacta'}
     </button>
-    {#if servers.length >= 2}
-      <div class="ctx-sep"></div>
-      <div class="kebab-group-label">Agrupar por</div>
-      <div class="group-toggle" role="radiogroup" aria-label="Agrupar por">
+    <div class="ctx-sep"></div>
+    <div class="kebab-group-label">Agrupar por</div>
+    <!-- Sempre visivel: agrupar era imposto ("projeto" fixo com 1 servidor) e nao havia como pedir a
+         lista lisa. "Servidor" so entra com 2+ servidores, onde separa alguma coisa. -->
+    <div class="group-toggle" role="radiogroup" aria-label="Agrupar por">
+      <button type="button" class:active={groupBy === 'none'} role="radio" aria-checked={groupBy === 'none'} onclick={() => setGroupBy('none')}>Nenhum</button>
+      {#if servers.length >= 2}
         <button type="button" class:active={groupBy === 'server'} role="radio" aria-checked={groupBy === 'server'} onclick={() => setGroupBy('server')}>Servidor</button>
-        <button type="button" class:active={groupBy === 'project'} role="radio" aria-checked={groupBy === 'project'} onclick={() => setGroupBy('project')}>Projeto</button>
-      </div>
-    {/if}
+      {/if}
+      <button type="button" class:active={groupBy === 'project'} role="radio" aria-checked={groupBy === 'project'} onclick={() => setGroupBy('project')}>Projeto</button>
+    </div>
   </div>
 {/if}
 
@@ -1322,7 +1370,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     flex-direction: column;
     /* Glass desktop: fundo quase opaco SEM blur (mesma linha do composer/navbar — consistência +
        zero custo de backdrop-filter). Sheen no topo + brilho de borda mantêm a cara de vidro. */
-    background: var(--glass-bg-solid);
+    background: transparent;   /* o fundo mora no leaf ::before (vidro) */
     /* Costura com o chat em 1px sutil. O glass tinha border-right + um highlight interno de 1px;
        em crop/zoom aquilo virava uma "barra" de 3px na borda da sidebar. */
     border-right: 1px solid var(--border-subtle);
@@ -1347,7 +1395,69 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     background: var(--glass-bg);
     backdrop-filter: url(#liquid-glass) blur(20px) saturate(180%);
   }
+  /* Vidro da sidebar: mesmo leaf do composer. Fica no ::before e nao no elemento pra o
+     backdrop-filter (Chromium) nao virar containing block dos popovers da lista. */
+  .sidebar::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background: var(--glass-bg-solid);
+  }
+  :global(html[data-liquid]) .sidebar::before {
+    background: var(--glass-panel);
+  }
+
   .sidebar.collapsed { width: 56px; padding: var(--space-3) var(--space-2); }
+
+  /* Dock flutuante: com o pin recolhido a sidebar deixa de ser uma parede de ponta a ponta e vira
+     uma peca com a ALTURA DO CONTEUDO, centralizada na esquerda. Segue no fluxo do flex do shell
+     (o chat nao passa por baixo dela); quem faz a altura encolher e o `align-self: center` — sem
+     ele o item de flex estica pra altura toda. Muitas sessoes: o teto de max-height entra e a
+     lista rola por dentro, entao o dock nunca encosta nas bordas. */
+  .sidebar.floating {
+    align-self: center;
+    height: auto;
+    max-height: calc(100% - var(--space-8));
+    margin-left: var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xl);
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34), inset 0 1px 1px var(--glass-specular);
+  }
+  /* A lista so rola quando bate no teto: com 2 sessoes o dock e curto e sem barra. */
+  .sidebar.floating .sess-list { flex: 0 1 auto; }
+
+  /* ── Vocabulario do trilho ────────────────────────────────────────────────
+     Um item, uma medida: 36px de lado pra TUDO que e acao (recolher, ⋯, sessao, nova sessao) e o
+     mesmo raio. Antes conviviam 36px de icone, 48px de linha de sessao e 36px de botao redondo, com
+     tres raios — a coluna parecia desalinhada mesmo com todos os itens centralizados. O circulo
+     fica reservado ao avatar da conta: circulo = pessoa, quadrado arredondado = acao. */
+  .sidebar.collapsed .sess-main { min-height: 36px; }
+  /* Sessao ABERTA no trilho: anel accent na moldura da linha. O realce era um fundo accent a 10%
+     atras de um quadrado que cobre a linha toda — invisivel. O anel vai por dentro (inset) pra nao
+     estourar os 40px uteis do dock, e nao disputa com o box-shadow das iniciais (travada/ocupada). */
+  .sidebar.collapsed .sess-row.active {
+    background: var(--accent-dim);
+    box-shadow: inset 0 0 0 2px var(--accent);
+  }
+  .sidebar.collapsed .sess-list { gap: var(--space-1); }
+  /* 36px em TODAS as caixas visiveis do trilho. Com iniciais/avatar a 32 e os botoes a 36, a coluna
+     lia como desalinhada: os itens estavam centrados, mas com larguras diferentes. */
+  .sidebar.collapsed .initials { width: 36px; height: 36px; border-radius: var(--radius-md); }
+  .sidebar.collapsed .side-foot.rail .cta-new {
+    height: 36px;
+    border-radius: var(--radius-md);
+  }
+  /* Rodape do dock: mesma distancia entre itens que o resto do trilho, e a regua encostada nas
+     bordas internas do dock em vez de uma linha curta boiando no meio. */
+  .sidebar.floating .side-foot.rail {
+    gap: var(--space-1);
+    margin: var(--space-1) calc(var(--space-2) * -1) 0;
+    padding: var(--space-2) var(--space-2) 0;
+  }
+  .sidebar.floating .side-foot.rail .acct-avatar { width: 36px; height: 36px; }
 
   /* ── Polish: foco de teclado + transições de estado ──────────────────────
      Foco visível (dev-tool: anel accent), inset pra nao ser cortado pelo overflow da sidebar/lista.
@@ -1369,6 +1479,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
 
   .side-top { display: flex; align-items: center; gap: var(--space-2); min-height: 36px; }
+  /* Linha propria sob o header: o seletor de view separa "onde estou" da lista de sessoes. */
+  .side-views { display: flex; margin-top: var(--space-2); }
   .icon-btn {
     width: 36px; height: 36px; flex-shrink: 0; border-radius: var(--radius-md);
     color: var(--text-secondary); display: inline-flex; align-items: center; justify-content: center;
@@ -1463,8 +1575,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
   .pair-head-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   @media (hover: hover) { .pair-head:hover { background: var(--bg-hover); } }
-  /* Linha de MEMBRO do cluster: faixa accent na borda esquerda liga as sessões do grupo. */
-  .sess-row.pair-member { border-left: 2px solid var(--accent-dim); margin-left: var(--space-2); }
+  /* Linha de MEMBRO do cluster: o recuo liga as sessões do grupo. Escopo `:not(.collapsed)` porque
+     no trilho de 56px o `margin-left` empurrava as iniciais 10px pra direita — as sessões pareadas
+     saíam do eixo dos outros itens do dock, e o agrupamento nem se lê lá (não há sub-header). */
+  .sidebar:not(.collapsed) .sess-row.pair-member { margin-left: var(--space-2); }
   .grp-chevron {
     flex-shrink: 0; font-size: 9px; color: var(--text-muted);
     transition: transform 160ms var(--ease-out);
@@ -1646,6 +1760,16 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .initials.stalled {
     box-shadow: inset 0 0 0 1px var(--warning);
   }
+  /* Trabalhando: halo pulsando POR FORA (box-shadow, não transform — o quadrado tem 30px fixos e
+     escalar mexeria na altura da row). A regra global de prefers-reduced-motion no app.css
+     neutraliza o loop; sem ela sobra o halo parado, que ainda diferencia. */
+  .initials.busy {
+    animation: rail-busy 1.6s var(--ease-out) infinite;
+  }
+  @keyframes rail-busy {
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); }
+    50%      { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 0%, transparent); }
+  }
   .sidebar.collapsed .sess-row { justify-content: center; }
   .sidebar.collapsed .sess-main { justify-content: center; padding: 0; }
   .sess-row.active .sess-main { color: var(--text-primary); }
@@ -1678,6 +1802,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     .sess-git, .sess-del { display: none; }
     .sess-row:hover .sess-git, .sess-row:focus-within .sess-git,
     .sess-row:hover .sess-del, .sess-row:focus-within .sess-del { display: inline-flex; }
+    /* Os 3 botoes entram NA linha e quem cede largura e o `.row-info` (flex:1, min-width:0) — o
+       nome era espremido ate zero e a pilha de estado ainda sobrepunha o icone de git. No hover o
+       chip de estado sai: ele e o item redundante ali (o spinner/subtitulo ja dizem o estado), o
+       nome nao. */
+    .sess-row:hover .state-chip, .sess-row:focus-within .state-chip { display: none; }
   }
   /* TOUCH (tablet/celular na sidebar): 3 botoes inline esmagavam o nome -> some git/loop/x,
      fica SO o kebab (abre o menu de contexto completo). Desktop com mouse: kebab nao existe,
@@ -1754,7 +1883,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     width: 30px; height: 30px; flex-shrink: 0; border-radius: 50%;
     display: grid; place-items: center;
     background: linear-gradient(135deg, var(--accent), #a06de0);
-    color: #fff; font-size: var(--text-xs); font-weight: 700;
+    color: var(--bg-base); font-size: var(--text-xs); font-weight: 700;
   }
   .acct-who { min-width: 0; display: flex; flex-direction: column; }
   .acct-name { font-size: var(--text-sm); font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1762,7 +1891,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .cta-new {
     display: flex; align-items: center; gap: var(--space-1); flex-shrink: 0;
     height: 36px; padding: 0 var(--space-3);
-    background: var(--accent); color: #fff; font-size: var(--text-sm); font-weight: 600;
+    background: var(--accent); color: var(--bg-base); font-size: var(--text-sm); font-weight: 600;
     border-radius: var(--radius-full); white-space: nowrap;
   }
   .cta-new svg { flex-shrink: 0; }

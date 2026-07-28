@@ -148,16 +148,56 @@
     z-index: 1100;
   }
 
+  /* O BLUR mora aqui, no dimmer — nao no painel. O backdrop-filter do painel so alcanca o que esta
+     pintado atras dele, e atras dele estava justamente esta camada chapada: borrar uma cor solida
+     nao muda nada, e a pagina continuava nitida atraves da transparencia. Borrando o overlay
+     inteiro, o que fica atras do modal e de fato desfocado. */
+  :global(html[data-liquid]) .modal-backdrop {
+    background: rgba(4, 6, 10, 0.34);
+    backdrop-filter: blur(16px) saturate(150%);
+  }
+
+  /* Foco programatico ao abrir (a11y) desenhava o anel `auto` do Chrome em volta do dialog e do
+     botao fechar — a moldura branca grossa dos prints. O container nao precisa de anel: ele nao e
+     um alvo de teclado, so o ponto de partida do Tab. */
+  .modal-dialog:focus { outline: none; }
+
+  /* MATERIAL do dialog (vidro, sombra, animação): specificity normal, ninguém sobrescreve. */
   .modal-dialog {
-    width: min(560px, 100%);
-    max-height: calc(100dvh - var(--space-8));
+    position: relative;   /* ancora a camada de vidro */
     overflow: auto;
     overscroll-behavior: contain;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-xl);
-    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.48);
+    background: transparent;   /* o fundo vai pro leaf ::before */
+    box-shadow: 0 24px 80px var(--glass-shadow), inset 0 1px 1px var(--glass-specular);
     animation: modal-in 160ms var(--ease-out) both;
+  }
+
+  /* CAIXA (tamanho, borda, raio) em `:where()` = specificity ZERO. O consumidor passa `className`
+     e estiliza com `:global(.x-dialog)`, que é UMA classe (0,1,0) — perdia pro `.modal-dialog` daqui,
+     que o Svelte escopa com a classe de hash (0,2,0). Resultado: TODO modal com className ficava
+     nos 560px e nos cantos de 24px, ignorando o próprio CSS. Media: terminal e QR pediam tela
+     cheia e abriam como card de 560px; a Atividade pedia 520px e abria 560, deixando faixa vazia.
+     Com `:where` o padrão vale só enquanto ninguém disser o contrário. */
+  :where(.modal-dialog) {
+    width: min(560px, 100%);
+    max-height: calc(100dvh - var(--space-8));
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-xl);
+  }
+
+  /* Mesmo material do composer/navbar/sidebar: solido no WebKit (o backdrop-filter reproduz o bug
+     do retangulo preto), refracao real so no Chromium com data-liquid. */
+  .modal-dialog::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background: var(--glass-bg-solid);
+  }
+  :global(html[data-liquid]) .modal-dialog::before {
+    background: var(--glass-panel);
   }
 
   @keyframes modal-in {

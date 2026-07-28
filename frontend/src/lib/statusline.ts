@@ -13,6 +13,8 @@ export interface StatusFields {
   ctxUsed?: number;      // tokens in context
   ctxTotal?: number;     // model window
   ctxPct?: number;       // 0..100, clamped
+  turnIn?: number;       // tokens do TURNO: entrada (1º par do 💬)
+  turnOut?: number;      // tokens do TURNO: saída
   costUsd?: number;
   fiveHourPct?: number;
   fiveHourReset?: string;
@@ -68,6 +70,15 @@ export function parseStatusLine(raw: string | null | undefined): StatusFields | 
     // caminho de sempre.
     const rotulado = ctxSeg[1].match(/\bctx\s*([\d.,]+)\s*([kKmM])?\s*\/\s*([\d.,]+)\s*([kKmM])?/u);
     const last = rotulado ?? (pairs.length >= 2 ? pairs[pairs.length - 1] : null);
+    // Par do TURNO (in/out): sempre o PRIMEIRO par, e so quando ele nao e o par de contexto — com
+    // rotulo "ctx" o par solto e o do turno; sem rotulo, o do turno so existe se houver >=2 pares.
+    const turn = rotulado ? (pairs[0] ?? null) : (pairs.length >= 2 ? pairs[0] : null);
+    if (turn && turn !== last) {
+      const tin = toNumber(turn[1], turn[2]);
+      const tout = toNumber(turn[3], turn[4]);
+      if (isFinite(tin)) out.turnIn = tin;
+      if (isFinite(tout)) out.turnOut = tout;
+    }
     if (last) {
       const used = toNumber(last[1], last[2]);
       const total = toNumber(last[3], last[4]);

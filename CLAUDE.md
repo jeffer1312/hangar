@@ -163,6 +163,12 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
 - **Restarting the backend.** No `--reload` (it holds SSE + watchfiles). `pkill -f app.main` can match your
   own shell; SIGTERM can hang on an open SSE connection. Kill `-9` the pid bound to the port and relaunch
   detached (`setsid`).
+- **Markdown NUNCA aparece cru.** Todo conteúdo `.md` exibido no app passa por `lib/markdown.ts`
+  (`renderMarkdown`) com tipografia própria — contrato do par (`PairSheet`), prompt/transcript de
+  subagente (`ActivitySheet`), plano, README, qualquer arquivo lido do disco. Um `<pre>` com
+  `**Tarefa:**` e `##` à mostra é sempre bug, não estilo. Vale também pro que vem de fora do
+  transcript: se o texto é markdown, renderize.
+
 - **CSS animations.** Shared tokens/keyframes live in `app.css` (`--ease-out`, `--spring`, …); a global
   `prefers-reduced-motion` rule neutralizes loops, so new keyframes don't each need their own guard.
 - **Loop runner** (`app/loop.py` + `components/LoopSheet.svelte`): loop autônomo por sessão —

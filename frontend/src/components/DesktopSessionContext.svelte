@@ -37,6 +37,16 @@
     onLoopTap?: () => void;
     // Codex: tocar o provider abre os limites de uso (na NavBar era o badge tappavel).
     onProviderTap?: () => void;
+    // Grupo pareado -> PairSheet (conversa do par, contrato compartilhado, split). A secao dizia
+    // "2 sessoes pareadas" e parava ali; a tela do par ja existia, so nao tinha porta aqui.
+    onOpenPair?: () => void;
+    // Repositorio -> GitSheet do cwd. Mesmo caso: dado sem porta.
+    onOpenGit?: () => void;
+    // Abre a sessao do MEMBRO num modal (PairChatModal). So com UM par: com 2+ nao da pra escolher
+    // por quem clicou, entao a secao segue abrindo a PairSheet, que tem o botao por membro.
+    // `undefined` quando o Chat esta `nested` (dentro de um modal) — a guarda que evita modal
+    // dentro de modal, e com ela SSE empilhado.
+    onOpenPeerChat?: (peer: string) => void;
   }
 
   let {
@@ -49,25 +59,54 @@
     onExpandUsage = undefined, limited = false, limitReset = null,
     working = false,
     loopLabel = null, loopColor = undefined, onLoopTap = undefined,
-    onProviderTap = undefined,
+    onProviderTap = undefined, onOpenPair = undefined, onOpenGit = undefined,
+    onOpenPeerChat = undefined,
   }: Props = $props();
 
   const hasActions = $derived(onOpenTerminal || onOpenRun || onOpenAttachments || onOpenActivity);
+  // Atalho da secao Grupo: com UM par, tocar abre a sessao dele direto no modal. Com 2+ membros a
+  // secao continua abrindo a PairSheet — la existe o botao por membro, e escolher por quem clicou
+  // seria adivinhacao.
+  const soloPeer = $derived(pairPeers?.length === 1 ? pairPeers[0] : null);
+  // Atalho direto pro modal SO quando ha um par; a PairSheet (contrato, conversa do grupo, lado a
+  // lado, sair) nunca perde a porta — vira um segundo botao "grupo" na mesma secao.
+  const openPeer = $derived(soloPeer && onOpenPeerChat ? () => onOpenPeerChat(soloPeer) : null);
+  const openGroup = $derived(openPeer ?? onOpenPair);
   // RateChips se auto-esconde quando nao tem dial nem banner; a SECAO precisa do mesmo guarda,
   // senao sobra um rotulo "Limites" orfao. isFinite como o known() do RateChips: uma statusline
   // custom que escreva NaN/Infinity nao abre a secao pra um corpo vazio.
   const _known = (pct: number | undefined) => typeof pct === 'number' && isFinite(pct);
   const hasRate = $derived(limited || _known(status?.fiveHourPct) || _known(status?.weeklyPct));
+
+  // Mesmos limiares do resto do app (RateChips, ContextRing): 70 ambar, 90 vermelho. Um vocabulario
+  // so de medidor — a barra de contexto era a unica que ficava accent ate os 100%.
+  const ctxTone = $derived.by(() => {
+    const p = status?.ctxPct;
+    if (typeof p !== 'number' || !isFinite(p)) return 'ok';
+    return p >= 90 ? 'hot' : p >= 70 ? 'warn' : 'ok';
+  });
+  // Abaixo de 1k o ctxWindow arredondaria "590" pra "1k" (ele pensa em janelas de modelo, nao em
+  // contagens pequenas do turno).
+  function tokenShort(n: number): string {
+    return n < 1000 ? String(Math.round(n)) : ctxWindow(n);
+  }
 </script>
 
 <aside class="session-context" aria-label="Contexto da sessão">
   {#if working}<div class="ctx-sweep" aria-hidden="true"></div>{/if}
   <header>
     <div class="ctx-heading">
-      <span class="header-kicker">Contexto da sessão</span>
+      <!-- Sem kicker: "Contexto da sessão" repetia o que o painel inteiro e (e ja esta no
+           aria-label do <aside>). O nome da sessao e o titulo real. -->
       {#if sessionName}<strong class="header-session" title={sessionName}>{sessionName}</strong>{/if}
+      {#if stateDetail}<p class="header-detail">{stateDetail}</p>{/if}
     </div>
-    <span class="state-chip header-state" style="color: {stateColors[state]}">{stateLabels[state]}</span>
+    <div class="header-right">
+      <span class="state-chip header-state" style="color: {stateColors[state]}">{stateLabels[state]}</span>
+      {#if loopLabel}
+        <button type="button" class="loop-chip" style="color: {loopColor};" onclick={onLoopTap} aria-label="Loop da sessão: {loopLabel}">{loopLabel}</button>
+      {/if}
+    </div>
   </header>
 
   {#if hasActions}
@@ -119,58 +158,93 @@
     </div>
   {/if}
 
-  <section>
-    <span class="section-label">Estado</span>
-    <span class="state-chip" style="color: {stateColors[state]}">{stateLabels[state]}</span>
-    {#if loopLabel}
-      <button type="button" class="loop-chip" style="color: {loopColor};" onclick={onLoopTap} aria-label="Loop da sessão: {loopLabel}">{loopLabel}</button>
-    {/if}
-    {#if stateDetail}<p>{stateDetail}</p>{/if}
-  </section>
+  <!-- A secao "Estado" saiu: repetia o chip do header a 60px de distancia, mesma palavra e mesma
+       cor. O detalhe e o chip do loop subiram pro header, que ja era o lugar do estado. -->
 
-  <section>
+  <div class="ctx-scroll">
+  <section class="sec-metric">
     <span class="section-label">Contexto</span>
     {#if status?.ctxPct != null}
+      <!-- Mesma forma das barras de Limites: qualificador a esquerda, leitura a direita. Antes o
+           Contexto punha o numero a esquerda e os Limites a direita — dois medidores irmaos com a
+           coluna de leitura em lados opostos. -->
       <div class="metric-row">
-        <span>{Math.round(status.ctxPct)}%</span>
-        {#if status.ctxTotal}<span>de {ctxWindow(status.ctxTotal)} tokens</span>{/if}
+        <span>
+          {#if status.ctxUsed != null && status.ctxTotal}{ctxWindow(status.ctxUsed)} de {ctxWindow(status.ctxTotal)}{:else}{status.ctxTotal ? ctxWindow(status.ctxTotal) + ' tokens' : 'janela'}{/if}
+        </span>
+        <strong>{Math.round(status.ctxPct)}%</strong>
       </div>
-      <div class="progress" aria-label={`${Math.round(status.ctxPct)}% do contexto usado`}>
+      <div class="progress tone-{ctxTone}" aria-label={`${Math.round(status.ctxPct)}% do contexto usado`}>
         <span style:width={`${status.ctxPct}%`}></span>
       </div>
+      {#if status.turnIn != null || status.turnOut != null}
+        <!-- Tokens do ULTIMO turno: o dado ja vinha na statusline crua (💬 271k/590) e so a barra
+             de percentual chegava aqui. E o que responde "por que o contexto pulou". -->
+        <p class="turn-tokens">
+          último turno: {ctxWindow(status.turnIn ?? 0)} entrada · {status.turnOut != null ? tokenShort(status.turnOut) : '—'} saída
+        </p>
+      {/if}
     {:else}
       <p>medição indisponível</p>
     {/if}
   </section>
 
   {#if hasRate}
-    <section>
+    <section class="sec-metric">
       <span class="section-label">Limites</span>
-      <RateChips {status} onExpand={onExpandUsage} {limited} {limitReset} />
+      <RateChips {status} onExpand={onExpandUsage} {limited} {limitReset} variant="bars" />
     </section>
   {/if}
 
-  <section>
+  <section class="sec-break">
     <span class="section-label">Grupo</span>
     {#if pairPeers?.length}
-      <strong>🤝 {pairPeers.join(' · ')}</strong>
-      <p>{pairPeers.length + 1} sessões pareadas</p>
+      {#if openGroup}
+        <button type="button" class="sec-open" onclick={openGroup}
+                aria-label={soloPeer && onOpenPeerChat ? `Abrir a sessão ${soloPeer} num modal` : `Abrir o par: ${pairPeers.join(', ')}`}>
+          <span class="sec-open-body">
+            <strong>🤝 {pairPeers.join(' · ')}</strong>
+            <p>{soloPeer && onOpenPeerChat ? 'abrir a conversa dele' : `${pairPeers.length + 1} sessões pareadas`}</p>
+          </span>
+          <span class="sec-open-arrow" aria-hidden="true">›</span>
+        </button>
+        {#if openPeer && onOpenPair}
+          <!-- O atalho abre a conversa do par; o grupo em si (contrato, conversa, lado a lado, sair)
+               continua a um toque daqui. -->
+          <button type="button" class="sec-side" onclick={onOpenPair} aria-label="Abrir o grupo pareado">
+            ver grupo
+          </button>
+        {/if}
+      {:else}
+        <strong>🤝 {pairPeers.join(' · ')}</strong>
+        <p>{pairPeers.length + 1} sessões pareadas</p>
+      {/if}
     {:else}
       <p>sessão independente</p>
     {/if}
   </section>
 
-  <section>
+  <section class="sec-break">
     <span class="section-label">Repositório</span>
     {#if status?.repo}
-      <strong class="mono">{status.repo}</strong>
-      <p class="mono">{status.branch ?? 'sem branch'}{status.dirty ? ' · alterações locais' : ''}</p>
+      {#if onOpenGit}
+        <button type="button" class="sec-open" onclick={onOpenGit} aria-label="Abrir o git de {status.repo}">
+          <span class="sec-open-body">
+            <strong class="mono">{status.repo}</strong>
+            <p class="mono">{status.branch ?? 'sem branch'}{status.dirty ? ' · alterações locais' : ''}</p>
+          </span>
+          <span class="sec-open-arrow" aria-hidden="true">›</span>
+        </button>
+      {:else}
+        <strong class="mono">{status.repo}</strong>
+        <p class="mono">{status.branch ?? 'sem branch'}{status.dirty ? ' · alterações locais' : ''}</p>
+      {/if}
     {:else}
       <p>não detectado</p>
     {/if}
   </section>
 
-  <section>
+  <section class="sec-break">
     <span class="section-label">Execução</span>
     {#if onProviderTap}
       <button type="button" class="provider-tap" onclick={onProviderTap} aria-label="Limites de uso do provider">
@@ -182,10 +256,15 @@
     {#if status?.model}<p>{status.model}{status.effort ? ` · ${status.effort}` : ''}</p>{/if}
     {#if serverLabel}<p>{serverLabel}</p>{/if}
   </section>
+  </div>
 </aside>
 
 <style>
   .session-context {
+    /* Coluna: header + acoes ficam PRESOS no topo e so o corpo rola. Antes o painel inteiro era o
+       scroller, entao o nome da sessao e o botao Terminal subiam junto com as metricas. */
+    display: flex;
+    flex-direction: column;
     position: absolute;
     /* A navbar tem um fade visual abaixo da altura medida; começa depois dele para o título do
        painel não ficar sob o scrim (o conteúdo do chat pode rolar ali, um header fixo não).
@@ -195,9 +274,38 @@
     bottom: 0;
     z-index: 17;
     width: var(--ctx-w, 248px);
-    overflow-y: auto;
+    overflow: hidden;
     border-left: 1px solid var(--border-default);
-    background: var(--bg-surface);
+    background: transparent;   /* o fundo vai pro leaf ::before (vidro) */
+  }
+
+  /* Vidro do painel — mesmo material do composer/navbar/sidebar. Leaf ::before pra o
+     backdrop-filter do Chromium nao virar containing block do conteudo. */
+  .session-context::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background: var(--glass-bg-solid);
+  }
+  /* Mesmo motivo do BottomSheet: o filtro vai no ELEMENTO. Num pseudo dentro de um ancestral
+     transformado o backdrop root muda e o blur nao pega nada — sobra so a transparencia, com o
+     texto do chat atravessando o painel. O painel nao tem filho `position: fixed`, entao virar
+     containing block aqui nao quebra nada. */
+  :global(html[data-liquid]) .session-context {
+    backdrop-filter: blur(20px) saturate(170%);
+  }
+  :global(html[data-liquid]) .session-context::before {
+    background: var(--glass-panel);
+  }
+
+  header, .ctx-actions { flex: 0 0 auto; }
+  .ctx-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   @media (min-width: 1280px) {
@@ -224,13 +332,22 @@
     gap: 2px;
   }
 
-  .header-kicker {
+  .header-right {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  /* Detalhe do estado ("Coalescing… 44s"): vive sob o nome, no lugar de onde o chip esta. */
+  .header-detail {
+    margin: 2px 0 0;
+    overflow: hidden;
     color: var(--text-muted);
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    line-height: 1.2;
-    text-transform: uppercase;
+    font-size: var(--text-xs);
+    line-height: 1.3;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   /* Nome da sessao vira o titulo real do painel: no desktop largo a NavBar some e ele some junto. */
@@ -257,6 +374,10 @@
     padding: var(--space-3) var(--space-4);
     border-bottom: 1px solid var(--border-subtle);
   }
+  /* Numero IMPAR de acoes (o botao Atividade so existe as vezes): o ultimo ficava pendurado numa
+     coluna com um buraco do lado. Ele passa a ocupar a linha inteira, entao a faixa fecha em bloco
+     em vez de terminar num degrau. */
+  .ctx-action:last-child:nth-child(odd) { grid-column: 1 / -1; }
 
   .ctx-action {
     position: relative;
@@ -320,7 +441,7 @@
     padding: 0 4px;
     border-radius: var(--radius-full);
     background: var(--accent);
-    color: #fff;
+    color: var(--bg-base);   /* nunca #fff: o neutro do tema ja e quente e tem contraste no indigo */
     font-size: 10px;
     font-weight: 600;
     line-height: 16px;
@@ -344,13 +465,19 @@
     100% { background-position: 160% 0; }
   }
 
+  /* Ritmo: seis secoes com o MESMO padding e uma hairline cada viravam uma escada monotona. As
+     medidas (contexto, limites) andam juntas e sem regua entre elas; a regua so aparece onde o
+     assunto muda de fato — medidas | grupo | ambiente. */
   section {
     margin: 0 var(--space-4);
-    padding: var(--space-4) 0;
-    border-bottom: 1px solid var(--border-subtle);
+    padding: var(--space-4) 0 var(--space-3);
   }
 
-  section:last-child { border-bottom: 0; }
+  .sec-metric + .sec-metric { padding-top: var(--space-3); }
+  .sec-break {
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--border-subtle);
+  }
 
   .section-label {
     display: block;
@@ -414,15 +541,62 @@
 
   .mono { font-family: var(--font-mono); }
 
-  .metric-row {
+  /* Secao que ABRE alguma coisa: o conteudo fica igual ao das secoes mudas (mesma tipografia, mesmo
+     alinhamento) e o que muda e o alvo inteiro ficar clicavel, com um chevron discreto na direita.
+     Sem caixa nem borda: virariam cards aninhados dentro do painel. */
+  .sec-open {
     display: flex;
+    min-height: 0;
+    align-items: center;
     justify-content: space-between;
     gap: var(--space-2);
-    color: var(--text-secondary);
+    /* Sangra os --space-2 laterais pra fora da secao: o texto continua alinhado com o rotulo, e o
+       realce do hover cobre a largura util do painel em vez de uma faixa recuada. */
+    margin: calc(var(--space-1) * -1) calc(var(--space-2) * -1);
+    padding: var(--space-1) var(--space-2);
+    width: calc(100% + var(--space-4));
+    border-radius: var(--radius-md);
+    text-align: left;
+    transition: background 160ms var(--ease-out);
+  }
+  .sec-open:hover { background: var(--bg-hover); }
+  .sec-open:hover .sec-open-arrow { color: var(--text-secondary); transform: translateX(2px); }
+  .sec-open-body { min-width: 0; }
+  /* Acao secundaria da secao: peso de link, nao de botao — quem manda na linha e o atalho acima. */
+  .sec-side {
+    min-height: 0;
+    min-width: 0;
+    margin-top: var(--space-1);
+    padding: 2px 0;
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    text-decoration-color: var(--border-default);
+  }
+  .sec-side:hover { color: var(--text-secondary); }
+  .sec-open-arrow {
+    flex-shrink: 0;
+    color: var(--text-muted);
+    font-size: var(--text-base);
+    line-height: 1;
+    transition: color 160ms var(--ease-out), transform 160ms var(--ease-out);
+  }
+
+  .metric-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+    color: var(--text-muted);
     font-size: var(--text-xs);
   }
 
-  .metric-row span:last-child { color: var(--text-muted); }
+  .metric-row strong {
+    display: inline;
+    color: var(--text-primary);
+    font-weight: 650;
+  }
 
   .progress {
     height: 4px;
@@ -437,6 +611,18 @@
     height: 100%;
     border-radius: inherit;
     background: var(--accent);
+    transition: width 400ms var(--ease-out), background 300ms ease;
+  }
+  .progress.tone-warn span { background: var(--warning); }
+  .progress.tone-hot span { background: var(--error); }
+
+  .turn-tokens {
+    margin-top: var(--space-2);
+    overflow: hidden;
+    color: var(--text-muted);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   @media (max-width: 1279px) {

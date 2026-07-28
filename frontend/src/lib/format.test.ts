@@ -202,12 +202,14 @@ describe('effectiveGroupBy', () => {
     expect(effectiveGroupBy('server', 2)).toBe('server');
     expect(effectiveGroupBy('project', 3)).toBe('project');
   });
-  it('forces project with a single server (server grouping would be one giant group)', () => {
-    expect(effectiveGroupBy('server', 1)).toBe('project');
-    expect(effectiveGroupBy('project', 1)).toBe('project');
+  it('falls back to a flat list when "server" has nothing to separate', () => {
+    expect(effectiveGroupBy('server', 1)).toBe('none');
+    expect(effectiveGroupBy('server', 0)).toBe('none');
   });
-  it('forces project with zero servers too', () => {
-    expect(effectiveGroupBy('server', 0)).toBe('project');
+  it('never overrides "project" or "none" — both are valid with any server count', () => {
+    expect(effectiveGroupBy('project', 1)).toBe('project');
+    expect(effectiveGroupBy('none', 1)).toBe('none');
+    expect(effectiveGroupBy('none', 3)).toBe('none');
   });
 });
 

@@ -11,8 +11,13 @@
     // reset ("3pm"/"15:30"), ou null/undefined se nao deu pra ler.
     limited?: boolean;
     limitReset?: string | null;
+    // Duas leituras do MESMO dado. 'dial' e o mostrador de 48px que a NavBar precisa (largura e o
+    // recurso escasso la). 'bars' e pro painel do desktop, que tem 248px de coluna e ja mostra o
+    // contexto em barra logo acima: la o anel comprimia 5h e 7d em dois arcos de ~40px que so se
+    // leem de perto, enquanto sobra largura pra duas barras rotuladas.
+    variant?: 'dial' | 'bars';
   }
-  let { status, onExpand, limited = false, limitReset = null }: Props = $props();
+  let { status, onExpand, limited = false, limitReset = null, variant = 'dial' }: Props = $props();
 
   // ── Mostrador duplo ────────────────────────────────────────────────────────
   // Dois aneis concentricos + os dois numeros empilhados no miolo. Antes eram duas pilulas com
@@ -66,8 +71,29 @@
 </script>
 
 {#if hasDial || limited}
-  <div class="rate-chips">
-    {#if hasDial}
+  <div class="rate-chips" class:as-bars={variant === 'bars'}>
+    {#if hasDial && variant === 'bars'}
+      <!-- Uma barra por janela, no mesmo desenho da barra de Contexto do painel (rotulo + valor
+           em cima, trilho de 4px embaixo). Janela sem dado nao vira barra vazia: some. -->
+      <button class="bars" onclick={onExpand} aria-label={a11y} title={a11y}>
+        {#if known(five)}
+          <span class="bar-row tone-{tone(five)}">
+            <span class="bar-head"><span class="bar-cap">5 horas</span><span class="bar-pct">{label(five)}%</span></span>
+            <span class="bar"><span style:width={`${clamp(five)}%`}></span></span>
+            <!-- Quando zera: a statusline crua ja traz ("↺1h20m", "↺sab 18h·4d7h") e o painel tem
+                 largura pra isso — sem ele a barra diz o quanto foi, nunca ate quando dura. -->
+            {#if status?.fiveHourReset}<span class="bar-reset">reseta {status.fiveHourReset}</span>{/if}
+          </span>
+        {/if}
+        {#if known(week)}
+          <span class="bar-row tone-{tone(week)}">
+            <span class="bar-head"><span class="bar-cap">7 dias</span><span class="bar-pct">{label(week)}%</span></span>
+            <span class="bar"><span style:width={`${clamp(week)}%`}></span></span>
+            {#if status?.weeklyReset}<span class="bar-reset">reseta {status.weeklyReset}</span>{/if}
+          </span>
+        {/if}
+      </button>
+    {:else if hasDial}
       <button class="dial tone-5-{tone(five)} tone-7-{tone(week)}" onclick={onExpand} aria-label={a11y} title={a11y}>
         <svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true">
           <!-- Fora: janela de 5 horas -->
@@ -122,6 +148,73 @@
     gap: var(--space-1);
     flex-shrink: 0;
   }
+  /* No painel a secao e uma coluna: as barras ocupam a largura toda e o banner de limite cai
+     embaixo, nao ao lado. */
+  .rate-chips.as-bars {
+    display: block;
+    width: 100%;
+  }
+
+  .bars {
+    display: flex;
+    flex-direction: column;
+    /* O `button` global e inline-flex com align-items/justify-content center: sem sobrescrever,
+       cada linha encolhe pro tamanho do texto e a barra fica com meia largura, centralizada. */
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: var(--space-2);
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    text-align: left;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .bar-row { display: block; width: 100%; }
+  .bar-head {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-2);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
+  }
+  /* Qualificador calmo a esquerda, leitura forte a direita — a coluna de numeros alinha com a do
+     Contexto logo acima, entao o olho desce so um eixo. */
+  .bar-cap { color: var(--text-muted); }
+  .bar-pct { color: var(--text-primary); font-weight: 650; }
+  .bar {
+    display: block;
+    height: 4px;
+    margin-top: 6px;
+    overflow: hidden;
+    border-radius: var(--radius-full);
+    background: var(--bg-elevated);
+  }
+  .bar > span {
+    display: block;
+    height: 100%;
+    min-width: 2px;   /* 1% ainda deixa marca, mesmo papel do stroke-linecap do anel */
+    border-radius: inherit;
+    background: var(--accent);
+    transition: width 600ms var(--ease-out), background 300ms ease;
+  }
+  .bar-reset {
+    display: block;
+    margin-top: 3px;
+    overflow: hidden;
+    color: var(--text-muted);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Mesmos limiares do anel (70/90), cada janela com a propria rampa. */
+  .bar-row.tone-warn .bar > span { background: var(--warning); }
+  .bar-row.tone-warn .bar-pct { color: var(--warning); }
+  .bar-row.tone-hot .bar > span { background: var(--error); }
+  .bar-row.tone-hot .bar-pct { color: var(--error); }
+  .bars + .rchip { margin-top: var(--space-2); }
 
   /* Alvo de toque de 44px sem inflar o desenho (que tem 44 de altura no proprio svg). */
   .dial {
