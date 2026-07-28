@@ -30,6 +30,22 @@ POLL_SECONDS = 10
 ICON_IDLE = "utilities-terminal"
 ICON_ATTENTION = "dialog-information"
 
+# Props OPCIONAIS do SNI que este item não usa (só publica ícone por nome, sem pixmap embutido).
+# Host que pergunta por elas leva vazio, não exceção: o Quickshell relê IconPixmap a cada ciclo e
+# cada erro custava 2 WARN — ~17k linhas/dia que encheram /run/user/1000 (tmpfs em RAM) até 100%,
+# e aí NENHUMA unidade transiente do systemd sobe mais (`systemd-run` falha com "Unit … not found",
+# derrubando o wrapper do claude). Vazio é resposta legítima: a spec do SNI manda o host cair pro
+# IconName quando não há pixmap. Prop fora desta lista continua levantando erro — mascarar tudo
+# esconderia bug de verdade.
+SNI_EMPTY_PROPS = {
+    "IconPixmap": dbus.Array([], signature="(iiay)"),
+    "AttentionIconPixmap": dbus.Array([], signature="(iiay)"),
+    "OverlayIconPixmap": dbus.Array([], signature="(iiay)"),
+    "IconThemePath": dbus.String(""),
+    "AttentionMovieName": dbus.String(""),
+    "WindowId": dbus.Int32(0),
+}
+
 
 def panel_ipc(*args: str) -> None:
     subprocess.Popen(["qs", "-c", "claude-pocket", "ipc", "call", "panel", *args],
@@ -162,10 +178,12 @@ class TrayItem(dbus.service.Object):
 
     @dbus.service.method(dbus.PROPERTIES_IFACE, in_signature="ss", out_signature="v")
     def Get(self, interface: str, prop: str):
-        try:
-            return self._props()[prop]
-        except KeyError:
-            raise dbus.exceptions.DBusException(f"No such property {prop}")
+        props = self._props()
+        if prop in props:
+            return props[prop]
+        if prop in SNI_EMPTY_PROPS:
+            return SNI_EMPTY_PROPS[prop]
+        raise dbus.exceptions.DBusException(f"No such property {prop}")
 
     @dbus.service.method(dbus.PROPERTIES_IFACE, in_signature="s", out_signature="a{sv}")
     def GetAll(self, interface: str):
