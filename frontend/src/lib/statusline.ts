@@ -61,7 +61,13 @@ export function parseStatusLine(raw: string | null | undefined): StatusFields | 
   const ctxSeg = raw.match(/💬([^│]*)/u);
   if (ctxSeg) {
     const pairs = [...ctxSeg[1].matchAll(/([\d.,]+)\s*([kKmM])?\s*\/\s*([\d.,]+)\s*([kKmM])?/g)];
-    const last = pairs.length >= 2 ? pairs[pairs.length - 1] : null;
+    // Marcador EXPLICITO "ctx 97k/1M": e como a statusline do Pi escreve o contexto, e la o par do
+    // turno vem grudado em letras ("251kin/10kout"), entao ele nao vira par e a regra dos >=2 abaixo
+    // descartava o unico par que existia — sessao Pi ficava sem anel de contexto. Com o rotulo na
+    // frente nao ha ambiguidade nenhuma, entao ele vence. A linha do Claude nao traz "ctx", cai no
+    // caminho de sempre.
+    const rotulado = ctxSeg[1].match(/\bctx\s*([\d.,]+)\s*([kKmM])?\s*\/\s*([\d.,]+)\s*([kKmM])?/u);
+    const last = rotulado ?? (pairs.length >= 2 ? pairs[pairs.length - 1] : null);
     if (last) {
       const used = toNumber(last[1], last[2]);
       const total = toNumber(last[3], last[4]);
