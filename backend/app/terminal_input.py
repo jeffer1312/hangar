@@ -1,3 +1,4 @@
+import logging
 import re
 import threading
 import time
@@ -8,6 +9,8 @@ from app.models import scrub_surrogates
 from app.pqueue import PromptQueue, _transcript_start_ts
 from app.state import classify, is_overlay
 from app.tmux import send_keys
+
+_log = logging.getLogger("claude_pocket.terminal_input")
 
 # Tempos de acomodacao do TUI entre toque e leitura do pane (o picker redesenha em overlay).
 _SETTLE = 0.3  # apos uma tecla de navegacao
@@ -26,28 +29,55 @@ def _capture(name: str) -> str:
 # (logo + carregamento) elas ainda não aparecem.
 _READY_MARKERS = ("bypass permissions", "? for shortcuts", "for shortcuts")
 
-# Por PROVIDER. O Pi não imprime rodapé nenhum: a prova de "TUI viva" é a CAIXA do composer
-# (╭───╮ … ╰───╯), a única moldura da tela. Medido no boot real (pane capturado a cada 0.25s): os
-# ~3.75s de carregamento não têm UM caractere de moldura; a caixa aparece junto com o TUI pronto.
-# Sem isto, um pane de Pi nunca casava as marcas do Claude e TODO envio queimava os 12s de timeout
-# (com o _send_lock na mão) antes de digitar. Provider desconhecido cai no _READY_MARKERS do
-# Claude = comportamento idêntico ao de hoje.
-# ponytail: string de moldura é calibration knob, igual ao _LOGIN_RE do state.py — se o Pi trocar o
-# desenho do composer, ajustar AQUI.
-_READY_MARKERS_BY_PROVIDER = {"pi": ("╰─",)}
+# Por PROVIDER. O Pi não imprime rodapé nenhum: a prova de "TUI viva" é o CHROME do composer —
+# qualquer caractere de moldura na tela. NÃO é uma moldura específica: medido no pi 0.82.1, o mesmo
+# composer é desenhado de três jeitos diferentes (caixa `╭──╮ … ╰──╯` em versões antigas; DUAS
+# réguas `────` no pi puro `--no-extensions`; as mesmas réguas + statusline com o pacote
+# `pi-claude-code-ui` que o usuário usa). Casar UM desenho (`╰─`) foi o bug: com a UI atual o pane
+# não tem nenhum `╰─`, então TODO envio queimava os 12s de timeout com o _send_lock na mão.
+# Por que qualquer moldura serve como prova: no interactive-mode.js do Pi o editor entra na tela
+# (`addChild(editorContainer)` + `setFocus` + `setupKeyHandlers` + `ui.start()`) ANTES do header e
+# do `renderInitialMessages()` — nada é desenhado antes de as teclas serem aceitas. E o boot (que
+# baixa `fd`/`rg`) não imprime uma moldura sequer: medido em dois boots reais capturados a cada
+# 0.1–0.25s, o primeiro caractere de moldura aparece em 4.2s / 4.5s, junto com o composer.
+# ponytail: o conjunto de glifos é calibration knob, igual ao _LOGIN_RE do state.py.
+_READY_MARKERS_BY_PROVIDER = {"pi": ("─", "━", "═", "╰", "│")}
+
+# Timeout por provider. O Pi ficou mais curto de propósito: o boot medido até o composer é ~4.3s,
+# então 8s é ~2× de folga, e no estouro a gente ENVIA mesmo assim — ou seja, a espera só compra
+# segurança durante o boot e todo o resto é latência pura no dia em que o marcador desandar de novo.
+_TIMEOUTS_BY_PROVIDER = {"pi": 8.0}
+_DEFAULT_TIMEOUT = 12.0
+
+# Um aviso por (sessão, provider): marcador que para de casar não pode ser silencioso — foi assim
+# que os 12s por mensagem chegaram em produção. Mesma forma do _warn_bilhete_once do registry.
+_READY_TIMEOUT_WARNED: set[tuple[str, str]] = set()
 
 
-def _wait_input_ready(name: str, timeout: float = 12.0, provider: str = "claude") -> bool:
+def _warn_ready_timeout_once(name: str, provider: str, timeout: float) -> None:
+    if (name, provider) not in _READY_TIMEOUT_WARNED:
+        _READY_TIMEOUT_WARNED.add((name, provider))
+        _log.warning(
+            "%s: pane de %s nao casou nenhuma marca de TUI pronta em %.1fs — enviando assim mesmo. "
+            "Se a sessao esta VIVA e respondendo, o marcador desandou (o TUI mudou de desenho) e "
+            "cada mensagem paga esse tempo: ver _READY_MARKERS_BY_PROVIDER em terminal_input.py",
+            name, provider, timeout)
+
+
+def _wait_input_ready(name: str, timeout: float | None = None, provider: str = "claude") -> bool:
     """Espera o TUI ficar interativo antes de enviar. BUG: msg mandada logo após criar a
     sessão (agente ainda bootando, TUI não aceita teclas) era ENGOLIDA -> sumia (ficava só na fila
     como bubble fantasma, o agente nunca recebia). Sessão já pronta -> retorna na 1ª leitura (sem
-    latência). Timeout -> retorna False e envia mesmo assim (não piora o caso de hoje)."""
+    latência). Timeout -> loga UMA vez, retorna False e envia mesmo assim (não piora o caso de hoje)."""
     markers = _READY_MARKERS_BY_PROVIDER.get(provider, _READY_MARKERS)
+    if timeout is None:
+        timeout = _TIMEOUTS_BY_PROVIDER.get(provider, _DEFAULT_TIMEOUT)
     deadline = time.monotonic() + timeout
     while True:
         if any(m in _capture(name) for m in markers):
             return True
         if time.monotonic() >= deadline:
+            _warn_ready_timeout_once(name, provider, timeout)
             return False
         time.sleep(0.2)
 
