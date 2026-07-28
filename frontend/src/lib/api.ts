@@ -19,6 +19,7 @@ import type {
   RunInfo,
   SessionLimits,
   CodexModelsResponse,
+  PiModelsResponse,
   LoopState,
   UploadFile,
 } from './types';
@@ -967,6 +968,25 @@ export function setCodexModel(name: string, model: string, effort?: string | nul
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/model`, {
     method: 'POST',
     body: JSON.stringify({ model, effort: effort ?? undefined }),
+  });
+}
+
+// ── Modelo + nivel de raciocinio de uma sessao Pi ─────────────────────────────────────────────
+// 409 = extensao cp-state.ts ausente/desatualizada no Pi (o backend manda a instrucao no detail).
+
+export function getPiModels(name: string): Promise<PiModelsResponse> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/pi/models`);
+}
+
+// Aplica na sessao viva (digita /cp-model e/ou /cp-think). A resposta e o READ-BACK: o Pi clampa o
+// nivel pro que o modelo suporta, entao quem manda no rotulo e o que voltou, nao o que foi pedido.
+export function setPiModel(
+  name: string,
+  body: { provider?: string; model?: string; effort?: string | null },
+): Promise<{ ok: boolean; current: PiModelsResponse['current']; thinking: string | null; levels: string[] }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/pi/model`, {
+    method: 'POST',
+    body: JSON.stringify(body),
   });
 }
 
