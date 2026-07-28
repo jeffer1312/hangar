@@ -457,5 +457,27 @@ class TerminalInput:
             raise mp.PickerError(409, f"expected session-only switch, got: {result}")
         return {"ok": True, "scope": scope, "result": result}
 
+    def send_pi_commands(self, name: str, commands: list[str]) -> None:
+        """Digita comandos da extensao do Pi (`/cp-model …`, `/cp-think …`) no pane, em ordem.
+
+        Nao ha picker a dirigir aqui: o Pi aplica a troca pela API de extensao (ver `pi_models`),
+        entao isto e so o mesmo maquinario de ENVIO do send_prompt — mesmo lock por sessao (dois
+        toques simultaneos nao intercalam teclas no tty), mesmo gate de overlay e mesma espera de
+        TUI pronta com o marcador do Pi.
+
+        UM Enter por comando (medido: os nossos comandos nao registram completions de argumento,
+        entao o menu de autocomplete fecha no espaco e nao engole o Enter — ao contrario do
+        `/model` NATIVO do Pi, que tem completions e reescreve o argumento).
+        """
+        with _send_lock(name):
+            if not deliverable(name):
+                raise DriveError("pane com overlay aberto ou sessao morta — nada foi digitado")
+            _wait_input_ready(name, provider="pi")
+            for cmd in commands:
+                send_keys(name, cmd, literal=True)
+                time.sleep(_SLASH_SETTLE)
+                send_keys(name, "Enter")
+                time.sleep(_OPEN_SETTLE)
+
     def _abort(self, name: str) -> None:
         send_keys(name, "Escape")

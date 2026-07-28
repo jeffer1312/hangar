@@ -1489,3 +1489,86 @@ def test_group_message_uses_send_thread(api_client, monkeypatch):
     r = api_client.post("/api/sessions/lider/group-message", json={"text": "marco"}, headers=_h())
     assert r.status_code == 200
     assert "_send_one" in calls
+
+
+# ---------------------------------------------------------------------------
+# Modelo + nivel de raciocinio do Pi — GET/POST /pi/model(s)
+# ---------------------------------------------------------------------------
+
+_PI_CAT = {
+    "current": {"provider": "kimi-coding", "id": "k3", "name": "Kimi K3"},
+    "thinking": "low",
+    "levels": ["low", "high", "max"],
+    "models": [{"provider": "kimi-coding", "id": "k3", "name": "Kimi K3", "reasoning": True}],
+}
+
+
+def _pi_info():
+    return SessionInfo(name="pp", cwd="/p", jsonl="/p/ts_uuid.jsonl", provider="pi")
+
+
+def test_pi_models_returns_catalog(api_client):
+    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
+         patch("app.api.pi_models.read_catalog", return_value=_PI_CAT), \
+         patch("app.api._pi_config_dir", return_value=None):
+        r = api_client.get("/api/sessions/pp/pi/models", headers=_h())
+    assert r.status_code == 200
+    assert r.json()["levels"] == ["low", "high", "max"]
+    assert r.json()["current"]["id"] == "k3"
+
+
+def test_pi_models_claude_session_rejected_with_400(api_client):
+    with patch("app.api._cached_info", AsyncMock(return_value=SessionInfo(
+            name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude"))):
+        r = api_client.get("/api/sessions/cc/pi/models", headers=_h())
+    assert r.status_code == 400
+
+
+def test_pi_models_missing_sidecar_is_409_not_empty_list(api_client):
+    # Extensao ausente/velha: falha ALTA com instrucao — nunca um catalogo vazio que parece "sem modelos".
+    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
+         patch("app.api.pi_models.read_catalog", return_value=None), \
+         patch("app.api._pi_config_dir", return_value=None):
+        r = api_client.get("/api/sessions/pp/pi/models", headers=_h())
+    assert r.status_code == 409
+    assert "install-claude-wrapper" in r.json()["detail"]
+
+
+def test_pi_model_set_sends_both_commands_and_reports_readback(api_client):
+    after = {**_PI_CAT, "current": {"provider": "clinepass", "id": "cline-pass/glm-5.2"},
+             "thinking": "high", "levels": ["off", "low", "medium", "high", "xhigh"]}
+    cat = {**_PI_CAT, "models": _PI_CAT["models"] + [
+        {"provider": "clinepass", "id": "cline-pass/glm-5.2", "name": "GLM", "reasoning": True}]}
+    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
+         patch("app.api.pi_models.read_catalog", side_effect=[cat, after]), \
+         patch("app.api._pi_config_dir", return_value=None), \
+         patch("app.api.terminal.send_pi_commands") as send:
+        r = api_client.post("/api/sessions/pp/pi/model", headers=_h(),
+                            json={"provider": "clinepass", "model": "cline-pass/glm-5.2",
+                                  "effort": "xhigh"})
+    assert r.status_code == 200
+    send.assert_called_once_with(
+        "pp", ["/cp-model clinepass cline-pass/glm-5.2", "/cp-think xhigh"])
+    # O Pi clampa: pedimos xhigh, o readback e quem manda no que a UI mostra.
+    assert r.json()["thinking"] == "high"
+
+
+def test_pi_model_set_rejects_model_outside_catalog(api_client):
+    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
+         patch("app.api.pi_models.read_catalog", return_value=_PI_CAT), \
+         patch("app.api._pi_config_dir", return_value=None), \
+         patch("app.api.terminal.send_pi_commands") as send:
+        r = api_client.post("/api/sessions/pp/pi/model", headers=_h(),
+                            json={"provider": "kimi-coding", "model": "k9"})
+    assert r.status_code == 422
+    send.assert_not_called()
+
+
+def test_pi_model_set_requires_something_to_change(api_client):
+    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
+         patch("app.api.pi_models.read_catalog", return_value=_PI_CAT), \
+         patch("app.api._pi_config_dir", return_value=None), \
+         patch("app.api.terminal.send_pi_commands") as send:
+        r = api_client.post("/api/sessions/pp/pi/model", headers=_h(), json={})
+    assert r.status_code == 422
+    send.assert_not_called()

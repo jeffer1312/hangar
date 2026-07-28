@@ -219,7 +219,9 @@ All routes require `Authorization: Bearer <token>` (SSE uses a `cp_token` cookie
 | POST | `/api/sessions/{name}/answer` | answer a native AskUserQuestion |
 | POST | `/api/sessions/{name}/interrupt` | send `Esc` |
 | POST | `/api/sessions/{name}/keys` | send raw key(s) |
-| POST | `/api/sessions/{name}/model-effort` | set model / reasoning effort |
+| POST | `/api/sessions/{name}/model-effort` | set model / reasoning effort (Claude — drives the `/model` picker) |
+| GET | `/api/sessions/{name}/pi/models` | Pi only: model catalog + current model / thinking level |
+| POST | `/api/sessions/{name}/pi/model` | Pi only: set model (`{provider, model}`) and/or `{effort}`; returns the read-back |
 
 **Loop runner** (autonomous goal→check→re-prompt loop per session)
 

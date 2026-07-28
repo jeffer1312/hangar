@@ -192,6 +192,21 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   `GET {base_url}/v1/models` — no static catalog, because the value varies by the user's
   subscription tier. The statusline only hides `💵`/cost-sidecar writes on an engine session — the
   effort chip (`(high✦)`) is untouched, it's not faked.
+- **Pi model + thinking level** (`app/pi_models.py` + `scripts/pi/cp-state.ts` + `components/PiModelSheet.svelte`):
+  the third mechanism, next to Claude's TUI picker and Codex's app-server, and it does **not** scrape
+  the pane. Measured on pi 0.82.1: `/model` is a fuzzy-**search** list of ~300 entries (footer
+  `(1/301)`, 10 rows visible) — not enumerable from the pane and not navigable by counting `Down`;
+  and there is no `/thinking` command (it lives inside `/settings` → "Thinking level", a submenu).
+  So the Pi extension we already ship publishes a catalog sidecar
+  (`<config>/.claude-pocket-pi/models/<jsonl-stem>.json`, same key as the state marker) and registers
+  `/cp-model <provider> <id>` + `/cp-think <level>`, which the backend types with `send-keys` and Pi
+  applies through `pi.setModel()` / `pi.setThinkingLevel()`. Two invariants: (1) the thinking levels
+  are **per model** (glm-5.2 → off/low/medium/high/xhigh; k3 → low/high/max), so they come from the
+  session, never from a constant — the static `LEVELS` tuple only rejects garbage before typing;
+  (2) Pi **clamps** the level to what the model supports (`agent-session.js:1277`), so the endpoint
+  re-reads the sidecar and returns what *stuck*, not what was asked (asking `max` on glm-5.2 lands on
+  `xhigh`). Missing sidecar → 409 telling the user to re-run `install-claude-wrapper.sh`, never an
+  empty list that reads as "no models".
 - **Session creation's systemd-scope probe.** Creating a session wraps `tmux` in
   `systemd-run --user --scope` so the tmux server doesn't inherit the backend's cgroup, but the wrap
   is now gated on a probe: a systemd user manager that refuses transient scopes was making **every**
