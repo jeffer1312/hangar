@@ -25,16 +25,20 @@ def _norm(s: str) -> str:
 # "pulando" entre texto e indicador de ferramenta (o tool aparece como ToolCard quando cai no .jsonl).
 # So GERUNDIOS/Ran (= status de tool, raro em prosa) + "Word(" (tool call). Evito passado ambiguo
 # (Read/Wrote/Found) que apareceria em prosa.
-# "Calling" e o verbo das ferramentas MCP ("Calling chrome-devtools…"): sem ele na lista, a linha de
-# status entrava no preview como se fosse prosa, e como ela aparece e some a cada chamada o bloco
-# crescia e encolhia — o "pulo" que o usuario via, diferente do recuo que o guarda de monotonicidade
-# do Chat.svelte ja cobria.
 _TOOL_VERBS = (
     "Running|Reading|Writing|Editing|Searching|Listing|Fetching|Updating|Creating|Deleting|"
     "Crawling|Downloading|Globbing|Grepping|Waiting|Loading|Compiling|Building|Installing|Ran|"
-    "Making|Calling"
+    "Making"
 )
 _TOOL_BLOCK_RE = re.compile(rf"^([A-Z][\w-]*\(|({_TOOL_VERBS})\b)")
+
+# Status das ferramentas MCP: "Calling chrome-devtools…". Sem cortar aqui, a linha entrava no preview
+# como prosa e — porque aparece e some a cada chamada — o bloco crescia e encolhia sozinho (o "pulo"
+# na tela). Fora da lista de verbos DE PROPOSITO: la o verbo casa solto no comeco da linha, e
+# "Calling" e inicio de frase comum em ingles ("Calling this an edge case, ..."). Como a lista tambem
+# decide qual ● e tool-call, um falso positivo ali DESCARTA o bloco e o preview fica VAZIO — pior que
+# vir sujo. Exigir as reticencias no fim amarra a regra a forma real do status.
+_MCP_CALL_RE = re.compile(r"^Calling\b[^\n]*(…|\.\.\.)\s*$")
 
 # Chrome de FIM DE BLOCO que só o Pi desenha: a caixa arredondada do composer (╭───╮ … ╰───╯), que
 # fica logo abaixo da resposta em voo. Nenhuma das paradas do Claude casa nela (a régua reta é outro
@@ -63,7 +67,8 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
     start = -1
     for i, ln in enumerate(lines):
         s = ln.lstrip()
-        if s[:1] == _ASSISTANT_GLYPH and not _TOOL_BLOCK_RE.match(s[1:].lstrip()):
+        corpo = s[1:].lstrip()
+        if s[:1] == _ASSISTANT_GLYPH and not _TOOL_BLOCK_RE.match(corpo) and not _MCP_CALL_RE.match(corpo):
             start = i
     if start < 0:
         return ""
@@ -77,7 +82,8 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
         # tb a linha de status de tool ("Running/Ran N shell command") que renderiza 1 frame SEM o
         # ● antes de virar bloco — senão grudava no fim da prosa e piscava.
         s = ln.lstrip()
-        if _RULE_RE.match(ln) or _is_boundary(ln) or _USER_PROMPT_RE.match(ln) or _TOOL_BLOCK_RE.match(s):
+        if (_RULE_RE.match(ln) or _is_boundary(ln) or _USER_PROMPT_RE.match(ln)
+                or _TOOL_BLOCK_RE.match(s) or _MCP_CALL_RE.match(s)):
             break
         if any(r.match(ln) for r in stops):
             break

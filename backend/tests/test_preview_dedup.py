@@ -98,3 +98,21 @@ def test_status_de_ferramenta_mcp_nao_entra_no_preview():
     assert "segunda linha" in out
     assert "Calling" not in out
     assert "Pondering" not in out
+
+
+def test_prosa_comecando_com_calling_nao_e_confundida_com_tool():
+    """"Calling" solto é início de frase comum — não pode descartar o bloco.
+
+    A lista de verbos decide TAMBÉM qual ● é tool-call: um falso positivo ali faz a função não achar
+    bloco nenhum e devolver "" — preview vazio, que é pior que preview sujo.
+    """
+    from app.preview import extract_assistant_text
+
+    pane = "\n".join([
+        "● Calling this an edge case would be generous:",
+        "  o arquivo não tem gráfico nem pivô.",
+        "✻ Pondering… (3s)",
+    ])
+    out = extract_assistant_text(pane)
+    assert "edge case" in out
+    assert "não tem gráfico" in out
