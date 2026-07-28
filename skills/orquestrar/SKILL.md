@@ -1,6 +1,7 @@
 ---
 name: orquestrar
-description: Orquestra uma tarefa que atravessa VARIOS repos usando sessoes Claude pareadas do claude-pocket - esta sessao vira a LIDER, cria/pareia uma sessao visivel por repo (cp-send --new/--pair), escreve o contrato compartilhado do grupo, distribui o escopo, monitora os reportes e consolida o painel final pro usuario. Use quando o usuario pedir "orquestra", "coordena", "distribui essa tarefa/PM entre os repos", "abre uma sessao pra cada repo", ou quando uma PM multi-repo precisar de trabalho paralelo em mais de um repo. NAO use para: tarefa de um repo so (sessao normal), exploracao read-only multi-repo (subagent Explore resolve), ou mandar um recado avulso (cp-send direto).
+description: |
+  Orquestra uma tarefa que atravessa VARIOS repos usando sessoes Claude pareadas do claude-pocket - esta sessao vira a LIDER, cria/pareia uma sessao visivel por repo (cp-send --new/--pair), escreve o contrato compartilhado do grupo, distribui o escopo, monitora os reportes e consolida o painel final pro usuario. Use quando o usuario pedir "orquestra", "coordena", "distribui essa tarefa/PM entre os repos", "abre uma sessao pra cada repo", ou quando uma PM multi-repo precisar de trabalho paralelo em mais de um repo. NAO use para: tarefa de um repo so (sessao normal), exploracao read-only multi-repo (subagent Explore resolve), ou mandar um recado avulso (cp-send direto).
 ---
 
 # orquestrar — sessão líder de um grupo de trabalho multi-repo
