@@ -18,12 +18,21 @@
   --border-strong:  rgba(255,248,244,0.22);
 
   /* Text */
-  --text-primary:   #eee8e9;
+  /* 12,0:1 sobre o --bg-base (era #eee8e9, 15,9:1). Perto do maximo possivel (21:1) o texto claro
+     "sangra" nas bordas em fundo escuro — halation — e o olho fica reajustando o foco: e o que
+     cansa em sessao longa, nao a cor do fundo. Continua bem acima do AAA (7:1). */
+  --text-primary:   #d2cbcd;
   --text-secondary: #a0989b;
   /* muted: clareado de #665d60 (3.0:1 sobre --bg-base, abaixo do AA 4.5:1 pra texto pequeno —
      timestamps/labels usam text-xs) pra ~5.3:1 na base e ~4.6:1 no elevated, mantendo o tom. */
   --text-muted:     #8d8489;
   --text-inverse:   #100e11;
+  /* Cópia da cor de texto pra quem precisa MISTURAR a partir dela (o modo Texto sobre foto clareia
+     em direção ao branco). Existe porque redefinir --text-primary usando --text-primary seria
+     circular. Tem que acompanhar as duas de cima — e a versão clara, mais abaixo. */
+  --text-primary-base:   #d2cbcd;
+  --text-secondary-base: #a0989b;
+  --text-muted-base:     #8d8489;
 
   /* Accent (índigo) */
   --accent:         #7c87e8;
@@ -83,6 +92,9 @@
   /* Text */
   --text-primary:   #221d1b;
   --text-secondary: #5f564f;
+  --text-primary-base:   #221d1b;
+  --text-secondary-base: #5f564f;
+  --text-muted-base:     #6f6660;
   /* muted: escurecido de #9c9085 (2.9:1 sobre o paper, abaixo do AA) pra ~5.2:1, mesmo tom. */
   --text-muted:     #6f6660;
   --text-inverse:   #fffdfa;
@@ -183,8 +195,98 @@ body {
   line-height: 1.55;
   color: var(--text-primary);
   background: var(--bg-base);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Fundo opcional (lib/background.ts) ────────────────────────────────────
+   `data-bg` no <html>: sem ele, tudo fica exatamente como era (chapado). O gradiente vai no <html>
+   e o grão numa camada fixa atrás do conteúdo — grão em cima do gradiente é o que impede o banding
+   que gradiente escuro produz em tela de 8 bits. A camada é `position: fixed` de propósito: não
+   acompanha o scroll (textura que rola vira ruído em movimento) e não entra no repaint da lista.
+   Imagem SVG estática, não filtro: custo zero de runtime. */
+html[data-bg="texture"], html[data-bg="aurora"] { background: linear-gradient(180deg, #0f0d12 0%, #141019 100%); }
+/* Quem pinta --bg-base por cima do fundo tem que ficar transparente, senao a textura fica atras de
+   um retangulo opaco e nao aparece: o app tem 3 camadas assim empilhadas (o #app, a tela do chat e
+   o scroller da lista). `:where` pra nao competir com nada que esses componentes definam depois. */
+html[data-bg] body,
+html[data-bg] body #app,
+html[data-bg] body .desktop-shell,
+html[data-bg] body .chat-screen,
+html[data-bg] body .message-list {
+  background: transparent;
+}
+
+html[data-bg="texture"] body::before, html[data-bg="aurora"] body::before, html[data-bg="image"] body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='.6'/%3E%3C/svg%3E");
+}
+
+/* Papel de parede (data-bg="image"): a imagem cobre a tela numa camada FIXA atrás de tudo, com um
+   scrim escuro por cima dela. O scrim não é enfeite — sem ele o texto do chat disputa com a foto e
+   fica ilegível; é o mesmo papel do fundo translúcido do terminal, que também escurece o wallpaper.
+   A imagem vem por `--cp-wallpaper` (lib/background.ts). O grão da regra acima entra por cima e
+   disfarça o banding do JPEG reduzido. */
+html[data-bg="image"] {
+  background: var(--bg-base);
+  /* Com papel de parede, os painéis de vidro seguem o mesmo slider: opacos demais eles viram parede
+     e a foto só aparece no meio da tela. `--cp-panel-alpha` vem do lib/background.ts. */
+  --glass-panel: rgba(26, 24, 29, var(--cp-panel-alpha, 0.70));
+}
+html[data-theme="light"][data-bg="image"] { --glass-panel: rgba(255, 253, 250, var(--cp-panel-alpha, 0.78)); }
+html[data-bg="image"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -3;
+  pointer-events: none;
+  /* 78-86% apagava wallpaper escuro por completo — o usuario escolhia a imagem e a tela nao mudava.
+     Com 48-62% a foto aparece e o texto ainda ganha do fundo. `--cp-scrim` fica exposto pra ajustar
+     sem recompilar (DevTools ou uma opcao futura). */
+  background-image:
+    linear-gradient(
+      rgba(16, 14, 17, var(--cp-scrim-topo, 0.48)),
+      rgba(16, 14, 17, var(--cp-scrim-base, 0.62))
+    ),
+    var(--cp-wallpaper, none);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+html[data-theme="light"][data-bg="image"] body::after {
+  background-image:
+    linear-gradient(
+      rgba(250, 247, 243, var(--cp-scrim-topo, 0.62)),
+      rgba(250, 247, 243, var(--cp-scrim-base, 0.74))
+    ),
+    var(--cp-wallpaper, none);
+}
+
+/* `aurora` = a mesma textura + uma luz fria no alto à esquerda. Fica atrás de tudo e não anima. */
+html[data-bg="aurora"] body::after {
+  content: "";
+  position: fixed;
+  left: -10%;
+  top: -25%;
+  width: 70%;
+  height: 85%;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 14%, transparent), transparent 72%);
+}
+
+/* Tema claro: o mesmo desenho pede outra faixa (o gradiente escuro viraria uma mancha suja) e menos
+   grão, que em fundo claro aparece muito mais. */
+html[data-theme="light"][data-bg="texture"], html[data-theme="light"][data-bg="aurora"] {
+  background: linear-gradient(180deg, #fbf8f4 0%, #f3eff2 100%);
+}
+html[data-theme="light"][data-bg="texture"] body::before,
+html[data-theme="light"][data-bg="aurora"] body::before { opacity: 0.02; }
+html[data-theme="light"][data-bg="aurora"] body::after {
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 9%, transparent), transparent 72%);
 }
 
 #app {

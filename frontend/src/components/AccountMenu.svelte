@@ -1,5 +1,6 @@
 <script lang="ts">
   import { enablePush, pushSupported } from '../lib/push';
+  import AppearanceSheet from './AppearanceSheet.svelte';
   import { getPushSettings, getPushSettingsForServer, setQuietHours, setQuietHoursForServer } from '../lib/api';
   import ConfigSheet from './ConfigSheet.svelte';
   import EnginesSheet from './EnginesSheet.svelte';
@@ -213,6 +214,9 @@
   });
 
   // Ações que disparam UI/fluxo do pai fecham o menu antes (o pai abre seu sheet/confirm/reload).
+  // A sheet vive FORA do menu (o menu fecha ao abrir): renderizada no fim do componente, sobrevive.
+  let aparenciaOpen = $state(false);
+
   function addServer() { onClose(); onAddServer(); }
   function reconnect() { onClose(); onReconnect(); }
   function logout() { onClose(); onLogout(); }
@@ -294,6 +298,14 @@
       Adicionar servidor
     </button>
 
+    <div class="am-sep"></div>
+    <!-- Aparencia virou sheet propria: tema + fundo + transparencia + imagem nao cabiam aqui sem
+         empurrar servidores e notificacoes pra fora da tela. -->
+    <button class="am-item" role="menuitem" onclick={() => { aparenciaOpen = true; onClose?.(); }}>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor" stroke="none"/></svg>
+      Aparência
+    </button>
+
     {#if pushSupported()}
       <div class="am-sep"></div>
       <button class="am-item" role="menuitem" onclick={handleEnablePush} disabled={pushBusy}>
@@ -365,6 +377,8 @@
   </div>
 {/if}
 
+<AppearanceSheet open={aparenciaOpen} onClose={() => (aparenciaOpen = false)} />
+
 <style>
   /* Backdrop full-screen: captura o clique-fora pra fechar. */
   .am-backdrop { position: fixed; inset: 0; z-index: 60; }
@@ -407,6 +421,7 @@
   .am-sub { font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   .am-sep { height: 1px; background: var(--border-subtle); margin: var(--space-1) 0; }
+
 
   .am-section {
     font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;

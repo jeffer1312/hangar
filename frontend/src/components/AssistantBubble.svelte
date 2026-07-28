@@ -202,9 +202,24 @@
 
   .prose :global(ul) { list-style: disc; margin: var(--space-2) 0; padding-left: 1.4em; }
   .prose :global(ol) { list-style: decimal; margin: var(--space-2) 0; padding-left: 1.5em; }
-  .prose :global(li) { line-height: 1.5; margin: 2px 0; }
+  .prose :global(li) { line-height: 1.6; margin: 2px 0; }
 
   .prose :global(a) { color: var(--accent); text-decoration: underline; }
+
+  /* ── Leitura em linha longa ─────────────────────────────────────────────
+     SEM cap de medida: largura cheia e decisao registrada no DESIGN.md, e no uso real (texto
+     tecnico intercalado com codigo e saida de comando) a coluna estreita custa mais do que ajuda —
+     ainda deixava um vao morto a direita da prosa enquanto o codigo ao lado usava tudo.
+     O que a linha longa realmente cobra e o RETORNO de linha: o olho volta da direita e erra o
+     comeco da linha de baixo. Isso se paga com entrelinha, que nao custa espaco horizontal. 17px
+     tambem reduz a contagem por linha sozinho (103 -> ~97 na mesma coluna) e aumenta a letra. */
+  /* Desktop: a coluna e larga, entao a linha e longa — e linha longa se paga com ENTRELINHA, que
+     nao custa espaco horizontal. 17px ainda reduz a contagem por linha sozinho (103 -> ~97 na mesma
+     largura) e aumenta a letra. No celular nada disso vale: a linha ja e curta por falta de espaco
+     e 16px e o tamanho certo pra tela pequena. */
+  @media (min-width: 820px) {
+    .prose { font-size: 17px; line-height: 1.7; }
+  }
 
   .prose :global(blockquote) {
     border-left: 3px solid var(--border-default); padding-left: var(--space-3);

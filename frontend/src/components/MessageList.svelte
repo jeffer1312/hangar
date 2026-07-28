@@ -328,7 +328,59 @@
      bloco (pre/.md-table tem overflow-x:auto), entao o cap nao os espreme. min(,94vw) da margem
      lateral em telas menores. */
   @media (min-width: 820px) {
-    .messages-inner { max-width: min(920px, 94vw); }
+    /* A largura vive numa variável porque quem manda nela é de fora: os degraus por tamanho de tela
+       (abaixo), o teto maior quando o painel de contexto está aberto (Chat.svelte) e a escolha do
+       usuário em Aparência → Largura. Sem a variável, cada um desses seria uma briga de
+       especificidade entre arquivos. */
+    .messages-inner { --read-w: 920px; max-width: min(var(--read-w), 94vw); }
+    /* Respiro lateral do TEXTO, não da coluna. Quando a coluna bate no teto e sobra tela, a margem
+       vem do `margin: 0 auto`; mas com o painel de contexto aberto o teto sobe pra 1200px
+       (Chat.svelte:1289) e a coluna passa a ocupar 100% do espaço — aí os 16px de padding eram tudo
+       o que separava a primeira letra do trilho. Medido em 1514px de janela: sobravam ~25px. */
+    .messages-inner { padding-inline: var(--space-6); }
+  }
+  @media (min-width: 1280px) {
+    .messages-inner { padding-inline: var(--space-8); }
+  }
+  /* Tela grande tem espaço sobrando: a coluna cresce em degraus em vez de ficar presa nos 920 e
+     deixar duas faixas vazias. Não vira largura livre de propósito — linha muito longa faz o olho
+     perder a volta —, mas 1080/1200 ainda é confortável no tamanho de fonte daqui. */
+  @media (min-width: 1600px) { .messages-inner { max-width: min(1080px, 82vw); } }
+  @media (min-width: 1900px) { .messages-inner { max-width: min(1200px, 76vw); } }
+
+  /* Leitura SÓLIDA (Aparência → Leitura; `auto` liga sozinho quando o fundo é uma imagem): a coluna
+     da conversa vira uma folha quase opaca e a foto passa a viver no cromo e nas margens, em vez de
+     ficar atrás do texto. Sem isto, quanto mais legível o texto, menos sobra da imagem — é o que o
+     mock .claude/mock-fundo-imagem-completo.html compara lado a lado. */
+  /* TEXTO: sem superfície nenhuma — a foto continua aparecendo entre as mensagens, e o que muda é
+     o texto: contraste cheio e uma sombra curta que o segura mesmo sobre as partes claras da
+     imagem. É o padrão do 'auto' porque a conversa é a página, e um retângulo do tamanho da tela
+     lê como outro site colado por cima. */
+  :global(html[data-read='text']) .messages-inner {
+    /* Os tokens de texto do app são de propósito MAIS ESCUROS que branco (app.css:24 — branco puro
+       sobre fundo escuro sangra nas bordas e cansa em sessão longa). Sobre uma FOTO a conta muda:
+       ali o fundo é claro em pedaços e o texto precisa voltar pro branco. `--cp-text-boost` (0..100,
+       slider "Contraste") diz quanto dessa volta acontece — 0 mantém o conforto, 100 é branco puro.
+       Redefinir o token aqui alcança os filhos que usam var(--text-primary) por conta própria; só
+       trocar `color` pegava apenas o texto que herda. */
+    --text-primary: color-mix(in srgb, #fff calc(var(--cp-text-boost, 60) * 1%), var(--text-primary-base));
+    --text-secondary: color-mix(in srgb, #fff calc(var(--cp-text-boost, 60) * 0.7%), var(--text-secondary-base));
+    /* muted é onde estão as linhas de ferramenta e os horários — o texto mais fraco da tela, e o
+       primeiro a sumir sobre a parte clara da foto. Sobe junto, num passo menor. */
+    --text-muted: color-mix(in srgb, #fff calc(var(--cp-text-boost, 60) * 0.55%), var(--text-muted-base));
+    color: var(--text-primary);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, calc(var(--cp-read-alpha, 92) * 0.009)),
+                 0 0 12px rgba(0, 0, 0, calc(var(--cp-read-alpha, 92) * 0.006));
+  }
+  /* FOLHA: o oposto — card explícito atrás da conversa inteira, com moldura e sombra.
+     --cp-read-alpha (0..100) vem do slider: 100 tapa a foto, 0 some com a folha. */
+  :global(html[data-read='solid']) .messages-inner {
+    background: color-mix(in srgb, var(--bg-elevated) calc(var(--cp-read-alpha, 92) * 1%), transparent);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: var(--space-4);
+    margin-block: var(--space-2);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
   }
 
   /* Bubble enfileirado: ainda nao processado pelo Claude — atenuado ate solidificar. Precisa ser
