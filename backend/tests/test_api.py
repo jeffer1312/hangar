@@ -1535,9 +1535,10 @@ def test_pi_models_missing_sidecar_is_409_not_empty_list(api_client):
 
 
 def test_pi_model_set_sends_both_commands_and_reports_readback(api_client):
+    # `xhigh` FORA dos levels do modelo novo: e o caso real do clamp (o Pi aterrissa em high).
     after = {**_PI_CAT, "current": {"provider": "clinepass", "id": "cline-pass/glm-5.2"},
-             "thinking": "high", "levels": ["off", "low", "medium", "high", "xhigh"]}
-    cat = {**_PI_CAT, "models": _PI_CAT["models"] + [
+             "thinking": "high", "levels": ["off", "low", "medium", "high"], "ts": 2.0}
+    cat = {**_PI_CAT, "ts": 1.0, "models": _PI_CAT["models"] + [
         {"provider": "clinepass", "id": "cline-pass/glm-5.2", "name": "GLM", "reasoning": True}]}
     with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
          patch("app.api.pi_models.read_catalog", side_effect=[cat, after]), \
@@ -1551,6 +1552,40 @@ def test_pi_model_set_sends_both_commands_and_reports_readback(api_client):
         "pp", ["/cp-model clinepass cline-pass/glm-5.2", "/cp-think xhigh"])
     # O Pi clampa: pedimos xhigh, o readback e quem manda no que a UI mostra.
     assert r.json()["thinking"] == "high"
+
+
+def test_pi_model_set_recusado_pelo_pi_vira_409(api_client):
+    # `/cp-model` sem chave pro provedor: setModel devolve false, o Pi notifica DENTRO do TUI e
+    # republica o catalogo com o modelo VELHO. Antes disto o app fechava a folha dizendo ok=True.
+    cat = {**_PI_CAT, "ts": 1.0, "models": _PI_CAT["models"] + [
+        {"provider": "clinepass", "id": "cline-pass/glm-5.2", "name": "GLM", "reasoning": True}]}
+    after = {**cat, "ts": 2.0}                     # ts novo (processou), modelo o mesmo (recusou)
+    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
+         patch("app.api.pi_models.read_catalog", return_value=cat), \
+         patch("app.api.pi_models.read_back", return_value=after), \
+         patch("app.api._pi_config_dir", return_value=None), \
+         patch("app.api.terminal.send_pi_commands"):
+        r = api_client.post("/api/sessions/pp/pi/model", headers=_h(),
+                            json={"provider": "clinepass", "model": "cline-pass/glm-5.2"})
+    assert r.status_code == 409
+    assert "recusou" in r.json()["detail"]
+    assert "kimi-coding/k3" in r.json()["detail"]   # diz onde a sessao FICOU
+
+
+def test_pi_model_set_sem_republicacao_diz_que_nao_confirmou(api_client):
+    # Sidecar parado no MESMO ts: o comando pode nem ter chegado — nao da pra chamar de recusa.
+    cat = {**_PI_CAT, "ts": 1.0, "models": _PI_CAT["models"] + [
+        {"provider": "clinepass", "id": "cline-pass/glm-5.2", "name": "GLM", "reasoning": True}]}
+    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
+         patch("app.api.pi_models.read_catalog", return_value=cat), \
+         patch("app.api.pi_models.read_back", return_value=cat), \
+         patch("app.api._pi_config_dir", return_value=None), \
+         patch("app.api.terminal.send_pi_commands"):
+        r = api_client.post("/api/sessions/pp/pi/model", headers=_h(),
+                            json={"provider": "clinepass", "model": "cline-pass/glm-5.2"})
+    assert r.status_code == 409
+    d = r.json()["detail"]
+    assert "nao da pra confirmar" in d and "recusou" not in d
 
 
 def test_pi_model_set_rejects_model_outside_catalog(api_client):

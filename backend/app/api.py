@@ -2271,6 +2271,11 @@ def _pi_config_dir(name: str) -> Path | None:
         pid = tmux.pane_pid(name)
         return registry_mod._config_dir_of(pid) if pid else None
     except Exception:
+        # Cair no ~/.claude CALADO transformava um bug de resolucao (pane sem pid, /proc ilegivel)
+        # num 409 mentiroso "extensao desatualizada": o sidecar existe, so estavamos procurando na
+        # pasta errada. Nao propaga — o default ainda e o certo pra maioria das sessoes.
+        _log.warning("pi: nao consegui resolver o config dir de %s; usando ~/.claude", name,
+                     exc_info=True)
         return None
 
 
@@ -2317,12 +2322,27 @@ async def pi_model_set(name: str, body: PiModelBody):
         await asyncio.to_thread(terminal.send_pi_commands, name, cmds)
     except terminal_input.DriveError as e:
         raise HTTPException(409, str(e))
-    # Re-le o sidecar: o Pi CLAMPA o nivel pro que o modelo suporta, entao o que voltamos e o que
-    # FICOU, nao o que foi pedido. Sidecar sumido no meio -> devolve o catalogo de antes (o envio
-    # ja aconteceu; mentir "falhou" seria pior).
-    after = await asyncio.to_thread(pi_models.read_catalog, jsonl, _pi_config_dir(name)) or cat
-    return {"ok": True, "current": after.get("current"), "thinking": after.get("thinking"),
-            "levels": after.get("levels", [])}
+    # Re-le o sidecar ATE ele confirmar (ou estourar 2s): o Pi CLAMPA o nivel pro que o modelo
+    # suporta, entao o que voltamos e o que FICOU, nao o que foi pedido — e o `/cp-model` pode
+    # RECUSAR sem levantar nada (sem chave pro provedor: notifica no TUI e o sidecar segue no modelo
+    # velho). Devolver ok=True sem comparar era declarar sucesso sobre um no-op, com a folha
+    # fechando calada.
+    after = await asyncio.to_thread(pi_models.read_back, jsonl, _pi_config_dir(name),
+                                    body.provider, body.model, body.effort)
+    if after is not None and pi_models.confirms(after, body.provider, body.model, body.effort):
+        return {"ok": True, "current": after.get("current"), "thinking": after.get("thinking"),
+                "levels": after.get("levels", [])}
+    # Nao confirmou. As duas causas pedem acoes diferentes do usuario, entao nao viram a mesma frase:
+    # sidecar ilegivel ou parado no MESMO `ts` = o Pi nem republicou o catalogo (comando pode nao ter
+    # chegado) -> indeterminado; `ts` novo com o modelo velho = o Pi processou e RECUSOU.
+    if after is None or after.get("ts") == cat.get("ts"):
+        raise HTTPException(409, "comandos digitados, mas o Pi nao republicou o catalogo — nao da "
+                                 "pra confirmar a troca; veja o modelo no proprio terminal")
+    cur = after.get("current") or {}
+    raise HTTPException(409, f"o Pi recusou a troca — segue em "
+                             f"{cur.get('provider')}/{cur.get('id')} (raciocinio "
+                             f"{after.get('thinking')}). Causa mais comum: sem chave configurada "
+                             f"pro provedor pedido (o Pi avisa dentro do TUI)")
 
 
 @app.get("/api/fs/roots", dependencies=[Depends(require_auth)])

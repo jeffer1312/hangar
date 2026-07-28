@@ -18,6 +18,7 @@ suporta (agent-session.js:1277), entao "pedi xhigh" nao prova "ficou xhigh".
 """
 
 import json
+import time
 from pathlib import Path
 
 # Ordem canonica dos niveis (@earendil-works/pi-ai models.js:391, EXTENDED_THINKING_LEVELS).
@@ -79,6 +80,49 @@ def think_command(level: str) -> str:
     if lv not in LEVELS:
         raise PiModelError(422, f"nivel desconhecido: {level!r}")
     return f"/cp-think {lv}"
+
+
+def confirms(catalog: dict, provider: str | None, model_id: str | None,
+             level: str | None) -> bool:
+    """O catalogo relido PROVA que o pedido pegou?
+
+    Modelo: igualdade seca (provider+id). O `/cp-model` do Pi pode RECUSAR sem levantar nada — sem
+    chave pro provedor, `setModel` devolve false, ele notifica dentro do TUI e o sidecar continua
+    com o modelo VELHO (cp-state.ts republica o catalogo de qualquer jeito).
+
+    Nivel: so exigimos igualdade quando o nivel pedido esta entre os `levels` do modelo que ficou.
+    Fora deles o Pi CLAMPA (agent-session.js:1277) e cair em outro nivel e o comportamento CERTO —
+    exigir igualdade ali transformaria um clamp legitimo em erro.
+    """
+    if model_id:
+        cur = catalog.get("current")
+        if not isinstance(cur, dict) or cur.get("provider") != provider or cur.get("id") != model_id:
+            return False
+    if level:
+        lv = level.strip().lower()
+        if lv in (catalog.get("levels") or []) and catalog.get("thinking") != lv:
+            return False
+    return True
+
+
+def read_back(jsonl: str, config_dir: Path | None, provider: str | None = None,
+              model_id: str | None = None, level: str | None = None,
+              deadline: float = 2.0, interval: float = 0.15) -> dict | None:
+    """Relê o sidecar ATÉ ele confirmar o pedido (ou estourar o prazo) e devolve o que leu.
+
+    Sondagem em vez de um sleep fixo maior: o `/cp-model` é assíncrono do outro lado (`await
+    pi.setModel`) e um settle fixo que fique curto lê o catálogo ANTERIOR e reporta "trocou" sobre
+    dado velho. Estourar o prazo não é erro aqui — devolve a última leitura e quem chama decide,
+    com `confirms()`, entre "o Pi recusou" e "não deu pra confirmar".
+    """
+    end = time.monotonic() + deadline
+    while True:
+        cat = read_catalog(jsonl, config_dir)
+        if cat is not None and confirms(cat, provider, model_id, level):
+            return cat
+        if time.monotonic() >= end:
+            return cat
+        time.sleep(interval)
 
 
 def check_known(catalog: dict, provider: str, model_id: str) -> None:
