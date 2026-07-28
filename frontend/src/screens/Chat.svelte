@@ -966,7 +966,7 @@
       loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']}
       onLoopTap={() => (loopSheetOpen = true)}
       onProviderTap={isCodex ? () => (limitsOpen = true) : undefined}
-      onOpenPair={pairPeers?.length ? () => (pairOpen = true) : undefined}
+      onOpenPair={() => (pairOpen = true)}
       onOpenPeerChat={nested ? undefined : (peer) => (peerChat = peer)}
       onOpenGit={() => (gitOpen = true)}
     />

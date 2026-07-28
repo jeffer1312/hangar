@@ -219,6 +219,17 @@
         <strong>🤝 {pairPeers.join(' · ')}</strong>
         <p>{pairPeers.length + 1} sessões pareadas</p>
       {/if}
+    {:else if onOpenPair}
+      <!-- Sem par, a secao era so a frase "sessao independente" — e justamente aqui que se pensa em
+           parear. Mesmo alvo clicavel das outras secoes, abrindo a PairSheet no modo "Parear com
+           sessao". -->
+      <button type="button" class="sec-open" onclick={onOpenPair} aria-label="Parear com outra sessão">
+        <span class="sec-open-body">
+          <strong>sessão independente</strong>
+          <p>parear com outra sessão</p>
+        </span>
+        <span class="sec-open-arrow" aria-hidden="true">›</span>
+      </button>
     {:else}
       <p>sessão independente</p>
     {/if}
