@@ -174,13 +174,15 @@ describe('updateServer', () => {
     expect(s.baseUrl).toBe('http://casa:8765');
   });
 
-  it('re-sincroniza o cookie quando o servidor é o ATIVO', () => {
-    // Sem isto o storage tinha o token novo e as requisições seguiam mandando o antigo — 401
-    // logo depois de "salvou". É o bug que o comentário do syncCookie no updateServer descreve.
-    const { b } = reset();          // addServer deixa o ÚLTIMO como ativo
+  it('editar o ATIVO remoto não põe a chave dele no cookie desta origem', () => {
+    // O cookie é do servidor DA ORIGEM, não do ativo: o remoto autentica o SSE por ?token= na URL.
+    // Antes valia "ativo OU same-origin", e editar o remoto ativo gravava o token de OUTRA máquina
+    // como cookie de primeira parte aqui — que agora, com Max-Age de um ano, ficaria guardado.
+    const { b } = reset();          // addServer deixa o ÚLTIMO (vps, remoto) como ativo
     cookieJar = '';
     updateServer(b, { token: 'tok-vps-novo' });
-    expect(cookieJar).toContain('tok-vps-novo');
+    expect(cookieJar).not.toContain('tok-vps-novo');
+    expect(cookieJar).toContain('tok-casa');   // segue o da origem, que é quem precisa do cookie
   });
 
   it('campo vazio mantém o valor atual em vez de apagar', () => {
@@ -229,6 +231,8 @@ describe('updateServer', () => {
 
     cookieJar = '';
     updateServer(vps.id, { token: 'tok-vps-novo' });
-    expect(cookieJar).toBe('');
+    // O cookie é reescrito (idempotente) com o token DA ORIGEM; o do remoto nunca entra aqui.
+    expect(cookieJar).not.toContain('tok-vps-novo');
+    expect(cookieJar).toContain('tok-casa');
   });
 });
