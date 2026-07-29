@@ -587,8 +587,13 @@ if (-not $bash) {
         # acha o backend. Substituimos a copia por um lancador que chama o script NO REPO com
         # caminho absoluto: dentro dele, $0 volta a ser o do repo e a busca acerta.
         $cpSendSh = Join-Path $binUsuario 'cp-send'
+        # PATH aqui TAMBEM, nao so no cp-send.cmd: quem chama por este caminho e o Git Bash
+        # (a ferramenta Bash de uma sessao Claude no Windows usa ele), e sem a precedencia o
+        # python3 volta a ser o atalho da Microsoft Store. Os dois pontos de entrada precisam
+        # da mesma garantia - consertar so um deles foi o que deixou o bug de pe.
         $corpoCp = "#!/bin/sh`n" +
                    "# Gerado por claude-cockpit/install.ps1 - ver comentario no instalador.`n" +
+                   "PATH='$binMsys':`$PATH; export PATH`n" +
                    "exec '$rota/scripts/cp-send' `"`$@`"`n"
         if (-not (Test-Path $cpSendSh) -or (Get-Content $cpSendSh -Raw) -ne $corpoCp) {
             Set-Content -Path $cpSendSh -Encoding ASCII -NoNewline -Value $corpoCp
