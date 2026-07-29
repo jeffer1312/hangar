@@ -299,6 +299,19 @@ else
   nota "pulado — depois: ./scripts/install-cp-send.sh"
 fi
 
+# Sessões sobrevivendo a reboot: TPM + resurrect + continuum + um timer systemd que salva.
+# Fica DEPOIS dos serviços de propósito — é o único passo aqui que clona repositório de
+# terceiro (os plugins do tmux), então merece pergunta própria mesmo com --yes já dito.
+if [ -d "$HOME/.tmux/plugins/tmux-resurrect" ]; then
+  ./scripts/tmux-persist-setup.sh >/dev/null && ok "persistência de sessões atualizada"
+elif [ "$UPDATE" = 1 ]; then
+  :   # não instala coisa nova num --update; isso é decisão, não atualização
+else
+  nota "Opcional: fazer as sessões voltarem depois de um reboot/OOM, com a conversa junto."
+  nota "Clona 3 plugins de tmux de terceiros (tpm, resurrect, continuum) no teu ~/.tmux."
+  ask "Instalar a persistência de sessões?" && ./scripts/tmux-persist-setup.sh
+fi
+
 # Painel flutuante + tray. Só Hyprland com Quickshell (testado no rice end-4/dots-hyprland).
 if ! { command -v qs >/dev/null && pgrep -x Hyprland >/dev/null; }; then
   nota "painel do desktop: pulado (requer Hyprland + Quickshell)"
