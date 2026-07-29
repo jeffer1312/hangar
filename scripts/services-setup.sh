@@ -72,8 +72,23 @@ esac
 
 mkdir -p "$SD_DIR"
 
-log "Writing $BACK"
-cat > "$SD_DIR/$BACK" <<EOF
+# Escreve a unit e diz se ela MUDOU. Re-rodar o script e o jeito de aplicar uma atualizacao
+# (o caminho do node e o WorkingDirectory ficam cravados dentro da unit, entao `git pull`
+# sozinho nao muda nada), mas reiniciar o backend sem necessidade derruba as conexoes SSE do
+# celular. Reinicia so o que de fato mudou.
+MUDOU=()
+escreve_unit() { # escreve_unit <nome> <conteudo>
+  local nome=$1 conteudo=$2 destino="$SD_DIR/$1"
+  if [[ -f "$destino" ]] && [[ "$(cat "$destino")" == "$conteudo" ]]; then
+    log "$nome sem mudanca"
+  else
+    printf '%s' "$conteudo" > "$destino"
+    MUDOU+=("$nome")
+    log "Writing $nome"
+  fi
+}
+
+escreve_unit "$BACK" "$(cat <<EOF
 [Unit]
 Description=claude-cockpit backend (FastAPI/uvicorn)
 After=network.target
@@ -90,6 +105,7 @@ RestartSec=2
 [Install]
 WantedBy=default.target
 EOF
+)"
 
 if [[ "$BACKEND_ONLY" == 1 ]]; then
   # Nao basta nao habilitar: escrever a unit deixaria um arquivo morto no disco, que aparece no
@@ -99,8 +115,7 @@ if [[ "$BACKEND_ONLY" == 1 ]]; then
   rm -f "$SD_DIR/$FRONT"
   log "Skipping $FRONT (--backend-only)"
 else
-log "Writing $FRONT"
-cat > "$SD_DIR/$FRONT" <<EOF
+escreve_unit "$FRONT" "$(cat <<EOF
 [Unit]
 Description=claude-cockpit frontend (Vite dev, HMR)
 After=network.target
@@ -115,9 +130,14 @@ RestartSec=2
 [Install]
 WantedBy=default.target
 EOF
+)"
 fi
 
 systemctl --user daemon-reload
+if [[ ${#MUDOU[@]} -gt 0 ]]; then
+  systemctl --user restart "${MUDOU[@]}"
+  log "Reiniciado (unit mudou): ${MUDOU[*]}"
+fi
 if [[ "$BACKEND_ONLY" == 1 ]]; then
   systemctl --user enable --now "$BACK"
   log "Done. Backend up (frontend NAO instalado: --backend-only)."

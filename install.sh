@@ -4,6 +4,7 @@
 #   ./install.sh              # interativo
 #   ./install.sh --yes        # aceita tudo (não pergunta nada)
 #   ./install.sh --check      # só diz o que falta e sai, sem instalar nada
+#   ./install.sh --update        # re-aplica só o que um `git pull` não atualiza sozinho
 #   ./install.sh --no-frontend   # só o backend (o PWA já roda noutro lugar)
 #   ./install.sh --no-wrapper --no-services --no-cp-send --no-panel   # pula partes
 #
@@ -13,11 +14,17 @@ set -euo pipefail
 cd "$(dirname "$0")"
 REPO=$(pwd)
 
-YES=0; CHECK=0; WRAPPER=1; SERVICES=1; CPSEND=1; PANEL=1; FRONTEND=1
+YES=0; CHECK=0; UPDATE=0; WRAPPER=1; SERVICES=1; CPSEND=1; PANEL=1; FRONTEND=1
 for arg in "$@"; do
   case "$arg" in
     --yes|-y)      YES=1 ;;
     --check)       CHECK=1 ;;
+    # --update: modo do hook post-merge. Re-aplica o que o `git pull` NÃO atualiza (units com
+    # caminho cravado, o bloco de protocolo no ~/.claude/CLAUDE.md, deps do backend, build do
+    # front) e NÃO toca em nada que peça senha ou decisão: sem instalar dependência, sem token,
+    # sem firewall, sem Tailscale. Um hook que para pedindo sudo no meio de um pull é pior que
+    # hook nenhum.
+    --update)      UPDATE=1; YES=1 ;;
     --no-wrapper)  WRAPPER=0 ;;
     --no-services) SERVICES=0 ;;
     --no-cp-send)  CPSEND=0 ;;
@@ -41,6 +48,11 @@ ask() { # ask "pergunta" -> 0/1 (em --yes, sempre sim)
 }
 
 PENDENTE=()
+
+# "Primeira vez" = nada nosso instalado ainda. Medido ANTES dos passos, senão o passo 5 instala
+# o wrapper e o passo seguinte já acharia que sempre existiu.
+PRIMEIRA_VEZ=0
+[ -e "$HOME/.local/bin/cp-engine" ] || systemctl --user cat claude-cockpit-backend.service >/dev/null 2>&1 || PRIMEIRA_VEZ=1
 
 # Gerenciador de pacotes do sistema, pro único dep que precisa de root (tmux).
 detecta_pkg() {
@@ -67,6 +79,7 @@ precisa_home() { # precisa_home <rótulo> <cmd> <comando de instalação> <pra q
   if [ "$CHECK" = 1 ]; then falta "$rotulo — $porque"; nota "$instalacao"; PENDENTE+=("$rotulo"); return 1; fi
   echo "  .. $rotulo não encontrado ($porque)"
   nota "$instalacao"
+  if [ "$UPDATE" = 1 ]; then erro "$rotulo faltando (--update não instala dependência)"; PENDENTE+=("$rotulo"); return 1; fi
   if ask "Instalar agora? (vai pro teu \$HOME, sem sudo)"; then
     eval "$instalacao" >/dev/null 2>&1 || true
     # O instalador põe em ~/.local/bin, que pode não estar no PATH DESTE shell.
@@ -87,6 +100,7 @@ precisa_root() { # precisa_root <rótulo> <cmd> <pacote> <pra quê>
   if [ "$CHECK" = 1 ]; then falta "$rotulo — $porque"; nota "$PKG $pacote"; PENDENTE+=("$rotulo"); return 1; fi
   echo "  .. $rotulo não encontrado ($porque)"
   nota "$PKG $pacote     <- precisa de senha de administrador"
+  if [ "$UPDATE" = 1 ]; then erro "$rotulo faltando (--update não instala dependência)"; PENDENTE+=("$rotulo"); return 1; fi
   if ask "Rodar esse comando?"; then
     eval "$PKG $pacote" && { ok "$rotulo instalado"; return 0; }
   fi
@@ -94,6 +108,7 @@ precisa_root() { # precisa_root <rótulo> <cmd> <pacote> <pra quê>
 }
 
 # ── 1/8 Dependências ─────────────────────────────────────────────────────────
+[ "$UPDATE" = 1 ] && say "Modo --update: só o que um git pull não atualiza sozinho" || true
 say "1/8 Dependências"
 precisa_root "tmux"        tmux   tmux 'sem ele não existe sessão' || true
 precisa_home "Claude Code" claude 'curl -fsSL https://claude.ai/install.sh | bash' 'é o que o app pilota' || true
@@ -186,9 +201,12 @@ fi
 say "5/8 Wrappers do claude e do codex"
 # Já instalado -> nem pergunta. Re-rodar o install.sh depois de um `git pull` deve pegar só o
 # que falta, sem obrigar a responder S/n pro que já está de pé.
+# Já instalado -> RE-RODA sem perguntar, em vez de pular. "Instalado" não é "atualizado": os
+# sub-scripts geram conteúdo (blocos de rc, units, o texto do protocolo no ~/.claude/CLAUDE.md)
+# que um `git pull` sozinho não atualiza. Eles são idempotentes, então re-rodar é barato; o que
+# não pode voltar é perguntar S/n pro que já está de pé.
 if [ -e "$HOME/.local/bin/cp-engine" ]; then
-  ok "wrappers já instalados"
-  nota "atualizar (após um git pull): ./scripts/install-claude-wrapper.sh"
+  ./scripts/install-claude-wrapper.sh >/dev/null && ok "wrappers atualizados"
 elif [ "$WRAPPER" = 1 ] && ask "Instalar (recomendado)?"; then
   ./scripts/install-claude-wrapper.sh
 else
@@ -198,6 +216,9 @@ fi
 
 # ── 6/8 Acesso pelo celular ──────────────────────────────────────────────────
 say "6/8 Acesso pelo celular"
+if [ "$UPDATE" = 1 ]; then
+  ok "pulado no --update (firewall e Tailscale pedem senha; nada aqui muda com git pull)"
+else
 echo "  Duas formas, e elas não competem:"
 echo "    LAN       — celular no mesmo Wi-Fi. Precisa liberar as portas no firewall."
 echo "    Tailscale — VPN pessoal. Funciona de QUALQUER lugar sem expor nada pra internet."
@@ -251,14 +272,20 @@ else
   fi
 fi
 
+fi
+
 # ── 7/8 Rodar sozinho + sessões-irmãs + painel ───────────────────────────────
 say "7/8 Serviços, cp-send e painel"
 if ! command -v systemctl >/dev/null; then
   nota "serviços: sem systemd nesta máquina — rode backend e frontend na mão"
 elif systemctl --user list-unit-files claude-cockpit-backend.service >/dev/null 2>&1 &&
      systemctl --user cat claude-cockpit-backend.service >/dev/null 2>&1; then
-  ok "serviços já instalados ($(systemctl --user is-active claude-cockpit-backend.service 2>/dev/null))"
-  nota "atualizar as units (após um git pull): ./scripts/services-setup.sh"
+  # O caminho do node e o WorkingDirectory ficam CRAVADOS dentro da unit — git pull não os
+  # muda. O próprio services-setup.sh só reinicia o que mudou de verdade, então re-rodar aqui
+  # não derruba a conexão SSE do celular à toa.
+  if [ "$FRONTEND" = 0 ]; then ./scripts/services-setup.sh --backend-only >/dev/null
+  else ./scripts/services-setup.sh >/dev/null; fi
+  ok "serviços atualizados ($(systemctl --user is-active claude-cockpit-backend.service 2>/dev/null))"
 elif [ "$SERVICES" = 1 ] && ask "Rodar backend+frontend como serviços de usuário (sobrevivem a fechar o terminal)?"; then
   if [ "$FRONTEND" = 0 ]; then ./scripts/services-setup.sh --backend-only
   else ./scripts/services-setup.sh; fi
@@ -268,8 +295,9 @@ else
 fi
 
 if [ -e "$HOME/.local/bin/cp-send" ]; then
-  ok "cp-send + skills já instalados"
-  nota "atualizar (após um git pull): ./scripts/install-cp-send.sh"
+  # O binário é symlink (atualiza sozinho), mas o bloco "Sessões-irmãs" do ~/.claude/CLAUDE.md
+  # sai de um heredoc deste script: sem re-rodar, as sessões novas leem o protocolo VELHO.
+  ./scripts/install-cp-send.sh >/dev/null && ok "cp-send + skills atualizados"
 elif [ "$CPSEND" = 1 ] && ask "Instalar cp-send + skills (sessões conversam entre si e se pareiam)?"; then
   ./scripts/install-cp-send.sh
 else
@@ -284,9 +312,55 @@ if ! { command -v qs >/dev/null && pgrep -x Hyprland >/dev/null; }; then
 # num painel instalado e vivo.
 elif [ -e "$HOME/.local/bin/cp-panel-open" ]; then
   ok "painel + tray já instalados"
-  nota "atualizar (após um git pull): ./scripts/install-cp-panel.sh"
+  # Único passo que NÃO re-roda sozinho: o painel é a única coisa aqui que está VISIVELMENTE
+  # em execução no teu desktop, e a forma como ele sobe pode divergir da que o script gera
+  # (medido: rodando sob flock, sem unit systemd). Re-instalar por conta própria mudaria algo
+  # que funciona, sem pedir. Os arquivos são symlink, então QML e scripts já vêm do git pull.
+  nota "atualizar de propósito (muda como o painel sobe): ./scripts/install-cp-panel.sh"
 elif [ "$PANEL" = 1 ] && ask "Instalar painel flutuante + tray (SUPER+SHIFT+U)?"; then
   ./scripts/install-cp-panel.sh
+fi
+
+# ── Atualizar sozinho no próximo git pull (opcional) ─────────────────────────
+# Hook post-merge: roda depois de todo `git pull` bem-sucedido. A escolha de atualizar continua
+# sendo tua — o pull é que dispara, e o pull você deu. Sem isto, um pull te deixa com código
+# novo e units/protocolo velhos, e nada avisa.
+HOOK=".git/hooks/post-merge"
+if [ "$UPDATE" = 1 ]; then
+  :   # o próprio hook está rodando; não se re-instala no meio da própria execução
+elif [ ! -d .git ]; then
+  nota "sem .git (cópia sem histórico?) — hook de atualização indisponível"
+elif [ -f "$HOOK" ] && grep -q 'install.sh --update' "$HOOK"; then
+  ok "hook de atualização já instalado"
+  nota "remover: rm $HOOK"
+elif [ -f "$HOOK" ]; then
+  falta "já existe um $HOOK que não é nosso — não vou mexer nele"
+  nota "pra somar, acrescente a linha:  ./install.sh --update"
+elif [ "$PRIMEIRA_VEZ" = 1 ]; then
+  # Primeira instalação: não pergunta. Quem está chegando agora ainda não sabe se vai continuar
+  # usando, e um hook que passa a rodar sozinho no repo dele é decisão pra depois — a oferta
+  # aparece na PRÓXIMA vez que ele rodar o install, quando já houver instalação de antes.
+  nota "quiser que o próximo 'git pull' já se atualize sozinho, rode o install.sh de novo"
+  nota "depois de usar um pouco: a opção aparece lá."
+elif ask "Rodar a atualização sozinho a cada 'git pull'?"; then
+  cat > "$HOOK" <<'GANCHO'
+#!/usr/bin/env bash
+# Instalado por claude-cockpit/install.sh. Roda após todo `git pull` bem-sucedido.
+# Re-aplica só o que o pull não atualiza sozinho (units, protocolo, deps, build do front).
+# Nada aqui pede senha. Pra desligar: rm .git/hooks/post-merge
+cd "$(git rev-parse --show-toplevel)" || exit 0
+printf '\n\033[36m==>\033[0m claude-cockpit: aplicando a atualização (post-merge)\n'
+# Git hook roda no bash do Git for Windows também, e lá quem atualiza é o install.ps1.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) powershell -ExecutionPolicy Bypass -File install.ps1 -Update ;;
+  *)                    ./install.sh --update ;;
+esac || printf '\033[31mX\033[0m  a atualização falhou — rode o instalador na mão\n'
+GANCHO
+  chmod +x "$HOOK"
+  ok "hook instalado — o próximo 'git pull' já se atualiza sozinho"
+  nota "desligar depois: rm $HOOK"
+else
+  nota "pulado — depois de um git pull, rode ./install.sh --update na mão"
 fi
 
 # ── 8/8 Checagem de fumaça ───────────────────────────────────────────────────
