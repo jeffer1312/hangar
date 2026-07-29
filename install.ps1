@@ -288,14 +288,36 @@ if ($LASTEXITCODE -ne 0) { Erro 'leitura de processo via psutil falhou'; Pop-Loc
 Ok 'leitura de processo (psutil) funcionando'
 Pop-Location
 
+# Sobra de rodada anterior: o kill pode demorar, entao limpa antes de contar de novo.
+tmux list-sessions -F '#{session_name}' 2>$null | Where-Object { $_ -like 'cp-fumaca-*' } |
+    ForEach-Object { tmux kill-session -t "=$_" 2>&1 | Out-Null }
+
 $sessao = "cp-fumaca-$PID"
 tmux new-session -d -s $sessao -c $env:TEMP 'cmd' 2>&1 | Out-Null
-if ($LASTEXITCODE -eq 0) {
-    tmux kill-session -t "=$sessao" 2>&1 | Out-Null
-    Ok 'o multiplexador cria e mata sessao'
-} else {
+if ($LASTEXITCODE -ne 0) {
     Erro 'o psmux nao criou uma sessao de teste - o app nao vai abrir sessao'
     exit 1
+}
+Ok 'o multiplexador cria sessao'
+
+# Matar e testado SEPARADO de criar, porque medido no psmux 3.3.7 eles falham separado: o
+# kill-session responde "session still present after 5s" com um `cmd` interativo no pane, enquanto
+# a criacao funciona. Isso importa alem do instalador - o botao de apagar sessao do app chama
+# exatamente este comando, e sessao que nao morre vira zumbi na lista.
+tmux kill-session -t "=$sessao" 2>&1 | Out-Null
+$morreu = $false
+foreach ($i in 1..15) {
+    tmux has-session -t "=$sessao" 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { $morreu = $true; break }
+    Start-Sleep -Seconds 1
+}
+if ($morreu) {
+    Ok 'o multiplexador mata sessao'
+} else {
+    # NAO aborta: tudo o que o app precisa pra FUNCIONAR ja passou. Mas tem que aparecer, porque
+    # o sintoma no uso e sessao apagada que reaparece na lista.
+    Falta "a sessao de teste '$sessao' nao morreu em 15s - apagar sessao pelo app pode deixar zumbi"
+    Nota "limpar na mao:  tmux kill-session -t '=$sessao'"
 }
 
 # -- Fim ---------------------------------------------------------------------
