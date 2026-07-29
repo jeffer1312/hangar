@@ -176,8 +176,14 @@ Nota 'Fora de casa, use Tailscale. NUNCA abra porta pra internet publica: o app 
 Nota 'claude como VOCE, entao um host exposto e execucao remota na sua maquina.'
 
 # Firewall: precisa de admin. Sem admin nao adianta tentar — a regra falha e o usuario fica
-# achando que liberou.
-if (Pergunte '  Liberar as portas 8765 e 5173 no firewall pra rede LOCAL?') {
+# achando que liberou. Ja liberado -> nem pergunta: re-rodar o instalador depois de um git pull
+# deve pegar so o que falta, nao repetir pergunta do que ja esta de pe.
+$regras = @(8765, 5173) | ForEach-Object {
+    Get-NetFirewallRule -DisplayName "claude-cockpit $_" -ErrorAction SilentlyContinue
+}
+if ($regras.Count -eq 2) {
+    Ok 'portas 8765 e 5173 ja liberadas no firewall'
+} elseif (Pergunte '  Liberar as portas 8765 e 5173 no firewall pra rede LOCAL?') {
     if (EhAdmin) {
         foreach ($p in 8765, 5173) {
             $nome = "claude-cockpit $p"

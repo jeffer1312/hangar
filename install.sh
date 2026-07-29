@@ -154,15 +154,28 @@ nota "É esse token que você digita no celular na primeira conexão."
 
 # ── 4/8 Frontend ─────────────────────────────────────────────────────────────
 say "4/8 Frontend"
-(cd frontend && npm ci --silent && npm run build --silent)
-ok "buildado em frontend/dist/"
+# Só rebuilda se houver motivo: dist ausente, ou alguma fonte/lockfile mais novo que ele. Num
+# re-run logo após um `git pull` sem mudança de front, isso economiza o `npm ci` inteiro.
+DIST=frontend/dist/index.html
+if [ -f "$DIST" ] && [ -z "$(find frontend/src frontend/package-lock.json frontend/index.html \
+                              frontend/vite.config.* -newer "$DIST" -print -quit 2>/dev/null)" ]; then
+  ok "frontend já buildado e atualizado (nada mudou desde o último build)"
+else
+  (cd frontend && npm ci --silent && npm run build --silent)
+  ok "buildado em frontend/dist/"
+fi
 
 # ── 5/8 Wrappers do claude e do codex ────────────────────────────────────────
 # Sem eles um `claude` que VOCÊ abre no terminal é invisível pro app: sem --session-id o backend
 # não sabe qual transcript é daquela sessão, e fora do tmux não há pane pra ler estado nem
 # receber input. Sessão criada PELO app funciona de qualquer jeito; isto é a outra direção.
 say "5/8 Wrappers do claude e do codex"
-if [ "$WRAPPER" = 1 ] && ask "Instalar (recomendado)?"; then
+# Já instalado -> nem pergunta. Re-rodar o install.sh depois de um `git pull` deve pegar só o
+# que falta, sem obrigar a responder S/n pro que já está de pé.
+if [ -e "$HOME/.local/bin/cp-engine" ]; then
+  ok "wrappers já instalados"
+  nota "atualizar (após um git pull): ./scripts/install-claude-wrapper.sh"
+elif [ "$WRAPPER" = 1 ] && ask "Instalar (recomendado)?"; then
   ./scripts/install-claude-wrapper.sh
 else
   nota "pulado — sessão aberta no terminal não vai aparecer no app"
@@ -177,9 +190,24 @@ echo "    Tailscale — VPN pessoal. Funciona de QUALQUER lugar sem expor nada p
 nota "Fora de casa, use Tailscale. NUNCA abra porta pra internet pública: o app roda o"
 nota "claude como VOCÊ, então um host exposto é execução remota na sua máquina."
 
+porta_liberada() { # 0 = já tem regra pra esta porta
+  if command -v ufw >/dev/null; then
+    sudo -n ufw status 2>/dev/null | grep -q "^$1" && return 0
+  fi
+  if command -v firewall-cmd >/dev/null; then
+    firewall-cmd --list-ports 2>/dev/null | grep -q "$1/tcp" && return 0
+  fi
+  return 1
+}
 if command -v ufw >/dev/null || command -v firewall-cmd >/dev/null; then
-  if ask "Liberar as portas 8765 e 5173 no firewall? (pede sudo)"; then
-    sudo ./scripts/lan-setup.sh 8765 && sudo ./scripts/lan-setup.sh 5173 && ok "portas liberadas"
+  if porta_liberada 8765 && porta_liberada 5173; then
+    ok "portas 8765 e 5173 já liberadas no firewall"
+  else
+    nota "Liberar precisa de senha de administrador. Por fora seria:"
+    nota "    sudo ./scripts/lan-setup.sh 8765 && sudo ./scripts/lan-setup.sh 5173"
+    if ask "Liberar as portas 8765 e 5173 agora (vai pedir a senha)?"; then
+      sudo ./scripts/lan-setup.sh 8765 && sudo ./scripts/lan-setup.sh 5173 && ok "portas liberadas"
+    fi
   fi
 else
   nota "sem ufw/firewalld — provavelmente não há firewall bloqueando (padrão de Arch/CachyOS)"
@@ -187,33 +215,59 @@ fi
 
 if command -v tailscale >/dev/null; then
   ok "Tailscale já instalado"
-  nota "Depois do 'tailscale up', ponha o nome .ts.net em CP_PUBLIC_URL no backend/.env"
-  nota "pra o QR sair com o endereço certo em vez do IP da LAN."
-elif ask "Instalar o Tailscale? (VPN pessoal — acesso de fora de casa)"; then
-  curl -fsSL https://tailscale.com/install.sh | sh && ok "Tailscale instalado"
-  nota "Falta logar: rode 'sudo tailscale up' e instale o Tailscale também no celular."
+  if tailscale status >/dev/null 2>&1; then
+    ok "e já está conectado ao teu tailnet"
+    nota "Ponha o nome .ts.net em CP_PUBLIC_URL no backend/.env pra o QR sair com ele"
+    nota "em vez do IP da LAN."
+  else
+    falta "instalado mas NÃO logado — rode: sudo tailscale up"
+  fi
+else
+  echo "  O Tailscale põe teu PC e teu celular na mesma rede privada, de qualquer lugar do"
+  echo "  mundo, sem abrir nenhuma porta pra internet. É como usar o app fora de casa."
+  nota "A instalação é do sistema, então ela PEDE SUA SENHA de administrador."
+  nota "Prefere fazer por fora? Rode isto e depois chame o install.sh de novo:"
+  nota "    curl -fsSL https://tailscale.com/install.sh | sh"
+  if ask "Instalar agora (vai pedir a senha)?"; then
+    curl -fsSL https://tailscale.com/install.sh | sh && ok "Tailscale instalado"
+    nota "Falta logar: rode 'sudo tailscale up' e instale o Tailscale também no celular."
+  else
+    nota "pulado — o app segue funcionando na LAN (mesmo Wi-Fi)"
+  fi
 fi
 
 # ── 7/8 Rodar sozinho + sessões-irmãs + painel ───────────────────────────────
 say "7/8 Serviços, cp-send e painel"
-if [ "$SERVICES" = 1 ] && command -v systemctl >/dev/null && ask "Rodar backend+frontend como serviços de usuário (sobrevivem a fechar o terminal)?"; then
+if ! command -v systemctl >/dev/null; then
+  nota "serviços: sem systemd nesta máquina — rode backend e frontend na mão"
+elif systemctl --user list-unit-files claude-cockpit-backend.service >/dev/null 2>&1 &&
+     systemctl --user cat claude-cockpit-backend.service >/dev/null 2>&1; then
+  ok "serviços já instalados ($(systemctl --user is-active claude-cockpit-backend.service 2>/dev/null))"
+  nota "atualizar as units (após um git pull): ./scripts/services-setup.sh"
+elif [ "$SERVICES" = 1 ] && ask "Rodar backend+frontend como serviços de usuário (sobrevivem a fechar o terminal)?"; then
   ./scripts/services-setup.sh
   nota "Pra sobreviver a logout/reboot também: loginctl enable-linger \$USER"
 else
   nota "pulado — rodando na mão, fechar o terminal derruba o backend"
 fi
 
-if [ "$CPSEND" = 1 ] && ask "Instalar cp-send + skills (sessões conversam entre si e se pareiam)?"; then
+if [ -e "$HOME/.local/bin/cp-send" ]; then
+  ok "cp-send + skills já instalados"
+  nota "atualizar (após um git pull): ./scripts/install-cp-send.sh"
+elif [ "$CPSEND" = 1 ] && ask "Instalar cp-send + skills (sessões conversam entre si e se pareiam)?"; then
   ./scripts/install-cp-send.sh
 else
   nota "pulado — depois: ./scripts/install-cp-send.sh"
 fi
 
 # Painel flutuante + tray. Só Hyprland com Quickshell (testado no rice end-4/dots-hyprland).
-if [ "$PANEL" = 1 ] && command -v qs >/dev/null && pgrep -x Hyprland >/dev/null; then
-  ask "Instalar painel flutuante + tray (SUPER+SHIFT+U)?" && ./scripts/install-cp-panel.sh
-else
+if ! { command -v qs >/dev/null && pgrep -x Hyprland >/dev/null; }; then
   nota "painel do desktop: pulado (requer Hyprland + Quickshell)"
+elif systemctl --user cat cp-panel.service >/dev/null 2>&1; then
+  ok "painel + tray já instalados"
+  nota "atualizar (após um git pull): ./scripts/install-cp-panel.sh"
+elif [ "$PANEL" = 1 ] && ask "Instalar painel flutuante + tray (SUPER+SHIFT+U)?"; then
+  ./scripts/install-cp-panel.sh
 fi
 
 # ── 8/8 Checagem de fumaça ───────────────────────────────────────────────────
