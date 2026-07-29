@@ -225,6 +225,46 @@ $marca
     Nota 'pulado - sessao aberta no terminal nao vai aparecer no app'
 }
 
+# -- 5b/8 Config do multiplexador -------------------------------------------
+# O psmux foi instalado POR NOS. O usuario pediu Claude Code, nao um multiplexador - entao a
+# barra de status dele aparecendo no rodape e ruido que nos criamos, e a tela deixa de parecer o
+# Claude Code que a pessoa conhece. Escondemos.
+#
+# So a barra: as linhas de truecolor do ~/.tmux.conf do Linux NAO entram aqui, porque o ConPTY
+# ja e 24-bit nativo - la elas existem pra desfazer o downgrade pra 256 que o tmux faz no Unix.
+#
+# Bloco marcado, mesma convencao do install-claude-wrapper.sh: reescreve o que e nosso e preserva
+# o resto do arquivo, entao rodar de novo nao duplica e nao apaga config de ninguem.
+Titulo '5b/8 Config do multiplexador'
+$confTmux = Join-Path $HOME '.tmux.conf'
+$ini = '# >>> claude-pocket >>>'
+$fim = '# <<< claude-pocket <<<'
+$corpo = @(
+    $ini,
+    '# Esconde a barra de status: o multiplexador e detalhe de implementacao do claude-cockpit,',
+    '# nao algo que voce pediu. Comente esta linha se quiser a barra de volta.',
+    'set -g status off',
+    $fim
+)
+$atual = @()
+if (Test-Path $confTmux) { $atual = @(Get-Content $confTmux) }
+$temIni = $atual -contains $ini
+if ($temIni) {
+    $antes = $atual[0..([array]::IndexOf($atual, $ini) - 1)]
+    $depoisIdx = [array]::IndexOf($atual, $fim) + 1
+    $depois = if ($depoisIdx -lt $atual.Count) { $atual[$depoisIdx..($atual.Count - 1)] } else { @() }
+    $novo = @($antes) + $corpo + @($depois)
+} else {
+    $novo = @($atual) + $corpo
+}
+if (($atual -join "`n") -ne ($novo -join "`n")) {
+    Set-Content -Path $confTmux -Value $novo -Encoding UTF8
+    Ok "barra de status desligada em $confTmux"
+    Nota 'Vale nas sessoes NOVAS - a config e lida na criacao da sessao.'
+} else {
+    Ok 'config do multiplexador ja aplicada'
+}
+
 # -- 6/8 Acesso pelo celular -------------------------------------------------
 Titulo '6/8 Acesso pelo celular'
 if ($Update) {
