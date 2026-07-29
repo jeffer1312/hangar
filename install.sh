@@ -49,11 +49,6 @@ ask() { # ask "pergunta" -> 0/1 (em --yes, sempre sim)
 
 PENDENTE=()
 
-# "Primeira vez" = nada nosso instalado ainda. Medido ANTES dos passos, senão o passo 5 instala
-# o wrapper e o passo seguinte já acharia que sempre existiu.
-PRIMEIRA_VEZ=0
-[ -e "$HOME/.local/bin/cp-engine" ] || systemctl --user cat claude-cockpit-backend.service >/dev/null 2>&1 || PRIMEIRA_VEZ=1
-
 # Gerenciador de pacotes do sistema, pro único dep que precisa de root (tmux).
 detecta_pkg() {
   for p in pacman apt-get dnf zypper apk brew; do
@@ -336,13 +331,11 @@ elif [ -f "$HOOK" ] && grep -q 'install.sh --update' "$HOOK"; then
 elif [ -f "$HOOK" ]; then
   falta "já existe um $HOOK que não é nosso — não vou mexer nele"
   nota "pra somar, acrescente a linha:  ./install.sh --update"
-elif [ "$PRIMEIRA_VEZ" = 1 ]; then
-  # Primeira instalação: não pergunta. Quem está chegando agora ainda não sabe se vai continuar
-  # usando, e um hook que passa a rodar sozinho no repo dele é decisão pra depois — a oferta
-  # aparece na PRÓXIMA vez que ele rodar o install, quando já houver instalação de antes.
-  nota "quiser que o próximo 'git pull' já se atualize sozinho, rode o install.sh de novo"
-  nota "depois de usar um pouco: a opção aparece lá."
-elif ask "Rodar a atualização sozinho a cada 'git pull'?"; then
+else
+  echo "  Daqui pra frente, um 'git pull' traz código novo — mas as units do systemd e o texto"
+  echo "  do protocolo guardam cópia própria e ficariam velhos. Este hook re-aplica isso sozinho."
+  nota "Ele só roda no pull, que é você quem dá. Nada nele pede senha. Desligar: rm $HOOK"
+  if ask "Deixar o próximo 'git pull' já se atualizar sozinho?"; then
   cat > "$HOOK" <<'GANCHO'
 #!/usr/bin/env bash
 # Instalado por claude-cockpit/install.sh. Roda após todo `git pull` bem-sucedido.
@@ -357,10 +350,10 @@ case "$(uname -s)" in
 esac || printf '\033[31mX\033[0m  a atualização falhou — rode o instalador na mão\n'
 GANCHO
   chmod +x "$HOOK"
-  ok "hook instalado — o próximo 'git pull' já se atualiza sozinho"
-  nota "desligar depois: rm $HOOK"
-else
-  nota "pulado — depois de um git pull, rode ./install.sh --update na mão"
+    ok "hook instalado — o próximo 'git pull' já se atualiza sozinho"
+  else
+    nota "pulado — depois de um git pull, rode ./install.sh --update na mão"
+  fi
 fi
 
 # ── 8/8 Checagem de fumaça ───────────────────────────────────────────────────
