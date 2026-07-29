@@ -409,10 +409,64 @@ if (Tem 'tailscale') {
 # Equivalente possivel dos servicos systemd do Linux. Nao e servico do Windows (isso exigiria
 # admin e rodaria fora da sua sessao, sem acesso ao seu ~\.claude): e tarefa agendada no logon.
 Titulo '7/8 Subir junto com o Windows'
+# Porta do backend: o Pare-Servico abaixo precisa saber QUEM segurar pra derrubar. Vem do .env
+# (mesma fonte que o backend usa); 8765 e o default do config.py.
+$portaBack = 8765
+if (Test-Path $envFile) {
+    $l = Select-String -Path $envFile -Pattern '^CP_PORT=(\d+)' -ErrorAction SilentlyContinue |
+         Select-Object -First 1
+    if ($l) { $portaBack = [int]$l.Matches[0].Groups[1].Value }
+}
+
 $tarefas = @(
-    @{ Nome = 'claude-cockpit-backend';  Exe = 'uv';  Args = 'run python -m app.main'; Dir = "$raiz\backend" },
-    @{ Nome = 'claude-cockpit-frontend'; Exe = 'npm'; Args = 'run dev';                Dir = "$raiz\frontend" }
+    @{ Nome = 'claude-cockpit-backend';  Exe = 'uv';  Args = 'run python -m app.main'; Dir = "$raiz\backend"
+       Porta = $portaBack; Padrao = 'app\.main' },
+    @{ Nome = 'claude-cockpit-frontend'; Exe = 'npm'; Args = 'run dev';                Dir = "$raiz\frontend"
+       Porta = 5173;       Padrao = [regex]::Escape("$raiz\frontend") }
 )
+
+# Derruba a instancia VELHA antes de subir a nova.
+#
+# Sem isto o `-Update` saia dizendo "ok" com o processo ANTIGO ainda no ar, servindo codigo
+# antigo. O encadeamento: o .vbs roda `Run(..., 0, False)` - nao espera -, entao a TAREFA
+# termina na largada e fica `State=Ready` mesmo com o servidor vivo e desgarrado. Nesse estado
+# o `Start-ScheduledTask` nao e ignorado (a tarefa nao esta rodando): ele sobe uma SEGUNDA
+# instancia, que colide na porta e morre, enquanto a velha sobrevive. Medido nesta maquina: um
+# -Update deixou o backend servindo codigo de 26 minutos antes, e as correcoes ja no disco
+# pareciam nao ter efeito - so valeram depois de matar os processos na mao.
+# Vale so pro BACKEND na pratica: o frontend roda `npm run dev` (Vite com HMR) e ja pega
+# .svelte/.ts na hora; o backend nao, porque CP_RELOAD e off por padrao (config.py).
+function Pare-Servico {
+    param([string]$Nome, [int]$Porta, [string]$Padrao)
+    $alvos = @()
+    # Por PORTA e o criterio mais preciso: quem esta segurando o socket e exatamente quem
+    # impediria a instancia nova de subir.
+    if ($Porta -gt 0) {
+        $alvos += (Get-NetTCPConnection -State Listen -LocalPort $Porta -ErrorAction SilentlyContinue |
+                   Select-Object -ExpandProperty OwningProcess)
+    }
+    # Por PADRAO pega o que ja largou a porta mas continua vivo (meio-termo de um crash).
+    if ($Padrao) {
+        $alvos += (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                   Where-Object { $_.CommandLine -and $_.CommandLine -match $Padrao } |
+                   Select-Object -ExpandProperty ProcessId)
+    }
+    # $PID: nunca matar o proprio instalador.
+    $alvos = @($alvos | Where-Object { $_ -and $_ -ne $PID } | Select-Object -Unique)
+    if ($alvos.Count -eq 0) { return 0 }
+    # Filhos junto: o backend nasce `uv -> python`, e matar so o pai deixaria o filho segurando
+    # a porta - a instancia nova colidiria do mesmo jeito.
+    $todos = @()
+    foreach ($a in $alvos) {
+        $todos += (Get-CimInstance Win32_Process -Filter "ParentProcessId=$a" -ErrorAction SilentlyContinue |
+                   Select-Object -ExpandProperty ProcessId)
+        $todos += $a
+    }
+    $todos = @($todos | Where-Object { $_ -and $_ -ne $PID } | Select-Object -Unique)
+    foreach ($p in $todos) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Milliseconds 800
+    return $todos.Count
+}
 # Ja registrado -> RE-REGISTRA sem perguntar, em vez de pular. A tarefa guarda o caminho do
 # executavel e o diretorio DENTRO dela; um `git pull` que mova o repo, ou um uv que mude de
 # lugar, deixa a tarefa apontando pro nada - e "ja registrada" esconderia isso. Register-...
@@ -459,6 +513,8 @@ if ($jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu l
             # proximo login e a pessoa abre o navegador numa porta morta logo apos instalar.
             # O equivalente no Linux (`systemctl --user enable --now`) liga na hora - o `--now`
             # e justamente esta metade, e ela tinha ficado de fora aqui.
+            $mortos = Pare-Servico -Nome $t.Nome -Porta $t.Porta -Padrao $t.Padrao
+            if ($mortos -gt 0) { Nota "  instancia anterior derrubada ($mortos processo(s)) antes de subir" }
             Start-ScheduledTask -TaskName $t.Nome -ErrorAction SilentlyContinue
             Ok "tarefa $($t.Nome) registrada e iniciada"
         }

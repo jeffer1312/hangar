@@ -1,0 +1,247 @@
+<#
+.SYNOPSIS
+  Deixa um PC Windows com a mesma config de psmux/tmux da maquina de referencia
+  (scroll do mouse funcionando dentro do Claude Code, cores corretas, barra escondida).
+
+.DESCRIPTION
+  Instala o psmux (winget) se faltar e escreve o bloco gerenciado no ~/.tmux.conf a partir
+  de docs/tmux.conf.windows.example.
+
+  IDEMPOTENTE DE VERDADE: SUBSTITUI o conteudo entre os marcadores em vez de dar append.
+  O instalador antigo so anexava, entao cada execucao acrescentava outro bloco identico -
+  na maquina de referencia acumulou 15 blocos (14 deles com `set -g status off`).
+  Inofensivo, mas o arquivo crescia pra sempre. Aqui o bloco antigo e removido antes de
+  escrever o novo, e o que estiver FORA dos marcadores (config sua) nunca e tocado.
+
+  Detalhes do formato, aprendidos no arquivo real desta maquina: ele vem com BOM UTF-8 e
+  quebras CRLF. Por isso o regex aceita `\r?\n?` no fim, e por isso NAO se conta bloco com
+  padrao ancorado em `^` - o BOM gruda na 1a linha e o `^#` deixa de casar nela (foi assim
+  que uma contagem manual deu 14 em vez de 15).
+
+.PARAMETER Apply
+  Sem isto o script so MOSTRA o que faria (dry-run). Nada e escrito.
+
+.PARAMETER SkipInstall
+  Nao tenta instalar o psmux pelo winget; so mexe no ~/.tmux.conf.
+
+.EXAMPLE
+  .\scripts\setup-windows-tmux.ps1              # dry-run: mostra o diff
+  .\scripts\setup-windows-tmux.ps1 -Apply       # aplica
+#>
+[CmdletBinding()]
+param(
+    [switch]$Apply,
+    [switch]$SkipInstall
+)
+
+$ErrorActionPreference = 'Stop'
+
+$BeginMark = '# >>> claude-pocket windows-tmux >>>'
+$EndMark   = '# <<< claude-pocket windows-tmux <<<'
+$Example   = Join-Path (Split-Path -Parent $PSScriptRoot) 'docs\tmux.conf.windows.example'
+
+# PRECEDENCIA (docs/configuration.md do psmux): ele le o PRIMEIRO arquivo que existir, nesta
+# ordem - e para. NAO faz merge. Escrever cego no ~/.tmux.conf era um bug: numa maquina que
+# tenha ~/.psmux.conf, o .tmux.conf inteiro e IGNORADO e a config parece nao ter efeito.
+$Candidatos = @(
+    (Join-Path $HOME '.psmux.conf'),
+    (Join-Path $HOME '.psmuxrc'),
+    (Join-Path $HOME '.tmux.conf'),
+    (Join-Path $HOME '.config\psmux\psmux.conf')
+)
+# PSMUX_CONFIG_FILE / -f vencem tudo. Se estiver setado, e nele que temos de escrever.
+$Conf = if ($env:PSMUX_CONFIG_FILE) {
+    Write-Host "==> PSMUX_CONFIG_FILE aponta pra: $($env:PSMUX_CONFIG_FILE)" -ForegroundColor Cyan
+    $env:PSMUX_CONFIG_FILE
+} else {
+    # O que o psmux JA le hoje; se nenhum existe, cria o .tmux.conf (o mais familiar).
+    $achado = $Candidatos | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($achado) { $achado } else { Join-Path $HOME '.tmux.conf' }
+}
+
+# Arquivo de menor precedencia que exista alem do escolhido = config morta que confunde.
+$Sombra = $Candidatos | Where-Object { (Test-Path $_) -and ($_ -ne $Conf) }
+
+function Write-Step { param([string]$Msg) Write-Host "==> $Msg" -ForegroundColor Cyan }
+function Write-Warn { param([string]$Msg) Write-Host "!!  $Msg" -ForegroundColor Yellow }
+function Write-Bad  { param([string]$Msg) Write-Host "XX  $Msg" -ForegroundColor Red }
+function Write-Good { param([string]$Msg) Write-Host "ok  $Msg" -ForegroundColor Green }
+
+# ---------------------------------------------------------------------------------------
+# Diagnostico do AMBIENTE. Escrever a config nao adianta se o `tmux` que roda nem for o
+# psmux, ou se o terminal nao mandar evento de roda. Numa maquina "ja instalada" e
+# EXATAMENTE aqui que mora a causa: a config fica certa e o scroll continua morto, o que
+# faz parecer que a instalacao funcionou quando nao funcionou.
+# ---------------------------------------------------------------------------------------
+function Test-Ambiente {
+    $problemas = @()
+
+    # 1. QUEM responde por `tmux`. Este e o item numero 1: um tmux de MSYS2/Cygwin/Git-for-
+    # Windows antes no PATH atende primeiro, e nele `mouse` nasce OFF (no psmux nasce ON).
+    $tmuxCmd = Get-Command tmux -ErrorAction SilentlyContinue
+    if (-not $tmuxCmd) {
+        $problemas += 'tmux nao esta no PATH'
+        Write-Bad 'tmux: nao encontrado no PATH'
+    } else {
+        # `tmux -V` do psmux imprime DUAS linhas ("tmux 3.3.7" + "psmux 3.3.7 (hash)").
+        $ver = (& tmux -V 2>&1 | Out-String).Trim()
+        if ($ver -match 'psmux') {
+            Write-Good "tmux -> psmux  ($($tmuxCmd.Source))"
+            Write-Host  "    $($ver -replace '\r?\n', ' | ')"
+        } else {
+            Write-Bad "tmux NAO e o psmux: $($tmuxCmd.Source)"
+            Write-Host "    versao reportada: $ver"
+            Write-Host "    Um tmux de MSYS2/Cygwin/Git-for-Windows esta antes no PATH. Nele o"
+            Write-Host "    mouse nasce OFF e o scroll no Claude Code nao funciona."
+            Write-Host "    Conserto: ponha o diretorio do psmux ANTES no PATH do usuario, ex.:"
+            Write-Host '      $p = "$env:LOCALAPPDATA\Microsoft\WinGet\Links"'
+            Write-Host '      [Environment]::SetEnvironmentVariable("Path", "$p;" + [Environment]::GetEnvironmentVariable("Path","User"), "User")'
+            Write-Host "    (abra um terminal NOVO depois). NAO faco isso automatico: mexer no PATH"
+            Write-Host "    do usuario pode quebrar outras ferramentas que dependem daquele tmux."
+            $problemas += 'tmux resolve pra um binario que nao e o psmux'
+        }
+    }
+
+    # 2. Emulador. O conhost (janela crua) nao manda os mesmos eventos de roda do WT.
+    if ($env:WT_SESSION) {
+        Write-Good 'terminal: Windows Terminal'
+    } else {
+        Write-Warn 'terminal: NAO parece Windows Terminal (WT_SESSION vazio)'
+        Write-Host "    No conhost.exe os eventos de roda nao chegam iguais. Rode no Windows Terminal."
+        $problemas += 'terminal pode nao ser o Windows Terminal'
+    }
+
+    # 3. Config morta: arquivo de MAIOR precedencia que o escolhido nunca deveria existir
+    # sem a gente saber - e a explicacao classica de "editei e nao mudou nada".
+    foreach ($s in $Sombra) {
+        Write-Warn "config ignorada pelo psmux (perde na precedencia): $s"
+    }
+
+    return $problemas
+}
+
+if (-not (Test-Path $Example)) { throw "referencia nao encontrada: $Example" }
+
+Write-Step 'Diagnostico do ambiente'
+$problemasAntes = Test-Ambiente
+Write-Host ''
+
+# --- 1. psmux -------------------------------------------------------------------------
+if (-not $SkipInstall) {
+    $psmux = Get-Command psmux -ErrorAction SilentlyContinue
+    if ($psmux) {
+        Write-Step "psmux ja instalado: $($psmux.Source)"
+        # JA INSTALADO: reportar se ha upgrade, mas NUNCA atualizar sozinho. Trocar o binario
+        # do psmux com sessoes VIVAS derruba o servidor e leva junto as sessoes do claude-pocket
+        # (incl. a que esta rodando este script). Atualizacao e decisao do usuario, com as
+        # sessoes fechadas.
+        $linha = winget list --id marlocarlo.psmux 2>$null | Where-Object { $_ -match 'marlocarlo\.psmux' }
+        if ($linha -and ($linha -match '\d+\.\d+\.\d+\s+\d+\.\d+\.\d+')) {
+            Write-Warn "ha versao mais nova disponivel: $($linha.Trim())"
+            Write-Host  '    Atualize com as sessoes FECHADAS:  winget upgrade --id marlocarlo.psmux'
+        }
+    } elseif ($Apply) {
+        Write-Step 'Instalando psmux (winget marlocarlo.psmux)'
+        winget install --id marlocarlo.psmux --accept-package-agreements --accept-source-agreements
+    } else {
+        Write-Step '[dry-run] instalaria psmux via winget (marlocarlo.psmux)'
+    }
+}
+
+# --- 2. bloco gerenciado no ~/.tmux.conf ----------------------------------------------
+# Le como UMA string (nao array): o -replace com (?s) precisa enxergar o arquivo inteiro
+# pra casar um bloco multi-linha. -Raw tambem preserva o arquivo byte a byte fora do bloco.
+$atual = if (Test-Path $Conf) { Get-Content $Conf -Raw -Encoding UTF8 } else { '' }
+
+$corpo = Get-Content $Example -Raw -Encoding UTF8
+$bloco = "$BeginMark`n$corpo`n$EndMark"
+
+# Remove TODAS as ocorrencias do bloco (o append antigo pode ter deixado varias) - e por isso
+# que o regex nao e ancorado e roda em modo singleline. [regex]::Escape: os marcadores tem
+# caracteres que valem regex (>, <, -).
+$padrao = '(?s)' + [regex]::Escape($BeginMark) + '.*?' + [regex]::Escape($EndMark) + '\r?\n?'
+$antes  = ([regex]::Matches($atual, $padrao)).Count
+$limpo  = [regex]::Replace($atual, $padrao, '')
+
+# Tambem tira o bloco LEGADO do instalador antigo (marcador generico `claude-pocket`), que e
+# quem duplicou. Sem isto, um `set -g status off` velho continuaria valendo junto do novo.
+$padraoLegado = '(?s)# >>> claude-pocket >>>.*?# <<< claude-pocket <<<\r?\n?'
+$legado = ([regex]::Matches($limpo, $padraoLegado)).Count
+$limpo  = [regex]::Replace($limpo, $padraoLegado, '')
+
+if ($limpo -and -not $limpo.EndsWith("`n")) { $limpo += "`n" }
+$novo = if ($limpo.Trim()) { "$limpo`n$bloco`n" } else { "$bloco`n" }
+
+Write-Step "Alvo: $Conf"
+Write-Host "    (escolhido pela precedencia do psmux: .psmux.conf > .psmuxrc > .tmux.conf > .config\psmux\psmux.conf)"
+foreach ($s in $Sombra) {
+    Write-Warn "existe tambem $s - o psmux IGNORA esse arquivo (perde pra $([System.IO.Path]::GetFileName($Conf))). Nada sera escrito nele."
+}
+Write-Host "    blocos gerenciados encontrados : $antes"
+Write-Host "    blocos LEGADOS encontrados     : $legado"
+if ($legado -gt 1) { Write-Warn "$legado blocos legados duplicados - serao colapsados em 1 (bug do append antigo)" }
+
+if ($novo -eq $atual) {
+    Write-Step 'Nada a fazer: ja esta atualizado.'
+    exit 0
+}
+
+if (-not $Apply) {
+    Write-Step '[dry-run] escreveria o bloco abaixo. Rode com -Apply pra valer.'
+    Write-Host ($bloco -split "`n" | Select-Object -First 12 | Out-String)
+    Write-Host '    [...]'
+    exit 0
+}
+
+if (Test-Path $Conf) {
+    $bak = "$Conf.bak"
+    Copy-Item $Conf $bak -Force
+    Write-Step "Backup: $bak"
+}
+
+# UTF8 sem BOM: o psmux le o conf como texto; um BOM no inicio vira lixo na 1a diretiva.
+[System.IO.File]::WriteAllText($Conf, $novo, (New-Object System.Text.UTF8Encoding $false))
+Write-Step 'Escrito.'
+
+# --- 3. aplicar na hora, se houver servidor de pe -------------------------------------
+if (Get-Command tmux -ErrorAction SilentlyContinue) {
+    # `2>$null` e o try/catch: sem servidor rodando o source-file sai != 0, e isso NAO e erro
+    # (o conf vale no proximo start). $ErrorActionPreference='Stop' transformaria em excecao.
+    try { tmux source-file $Conf 2>$null | Out-Null } catch { }
+    Write-Step 'Config recarregada nas sessoes vivas (se havia servidor de pe).'
+}
+
+Write-Host ''
+# --- 4. VERIFICACAO: o que o servidor REALMENTE ficou ----------------------------------
+# Escrever o arquivo nao prova nada - a config pode nao ter sido lida (precedencia), o
+# servidor pode estar velho, o binario pode ser outro. Aqui a gente le de volta do servidor
+# vivo. Sem isto o script sairia dizendo "Pronto" com o scroll ainda morto.
+Write-Step 'Verificacao (lendo do servidor, nao do arquivo)'
+$esperado = @{ 'mouse' = 'on'; 'cursor-blink' = 'off'; 'automatic-rename' = 'off'; 'status' = 'off' }
+$falhou = @()
+if (Get-Command tmux -ErrorAction SilentlyContinue) {
+    foreach ($k in $esperado.Keys) {
+        $lido = (& tmux show -g $k 2>$null | Out-String).Trim()
+        $val  = ($lido -split '\s+')[-1]
+        if ($val -eq $esperado[$k]) { Write-Good "$k = $val" }
+        else { Write-Bad "$k = '$val' (esperado '$($esperado[$k])')"; $falhou += $k }
+    }
+    if ($falhou.Count -gt 0) {
+        Write-Warn 'Opcoes acima nao pegaram. Causas em ordem: (1) o servidor psmux ja estava'
+        Write-Host '    de pe e le a config no START - feche TODAS as sessoes e abra de novo;'
+        Write-Host '    (2) existe config de maior precedencia sobrescrevendo (avisos acima);'
+        Write-Host '    (3) o `tmux` nao e o psmux (ver diagnostico no inicio).'
+    }
+} else {
+    Write-Warn 'tmux nao encontrado - nada a verificar.'
+}
+
+Write-Host ''
+if ($problemasAntes.Count -gt 0) {
+    Write-Bad "A config foi escrita, MAS o ambiente tem $($problemasAntes.Count) problema(s) que ela NAO conserta:"
+    foreach ($p in $problemasAntes) { Write-Host "    - $p" }
+    Write-Host '    Sem resolver isso, o scroll continua sem funcionar mesmo com a config certa.'
+} else {
+    Write-Step 'Pronto. Ambiente e config conferidos.'
+}
+Write-Host '    Teste final: abra o Claude Code numa sessao NOVA e role a roda do mouse.'
