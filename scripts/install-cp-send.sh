@@ -20,8 +20,24 @@ mkdir -p "$HOME/.claude/skills"
 for skill in "$REPO"/skills/*/; do
     [ -d "$skill" ] || continue
     name=$(basename "$skill")
-    ln -sfn "${skill%/}" "$HOME/.claude/skills/$name"
-    echo "ok: ~/.claude/skills/$name -> ${skill%/}"
+    dst="$HOME/.claude/skills/$name"
+    # Destino que e DIRETORIO de verdade (nao symlink) tem que sair antes: o `ln` trata diretorio
+    # como "ponha o link dentro" e criaria .../orquestrar/orquestrar. Isso acontece de verdade no
+    # Git Bash do Windows, onde `ln -s` COPIA em vez de linkar — a primeira instalacao deixa uma
+    # copia e a segunda falha com "cannot overwrite directory". No Linux o caminho normal e
+    # symlink e este ramo nem roda.
+    if [ -d "$dst" ] && [ ! -L "$dst" ]; then
+        rm -rf "$dst"
+        echo "  (removida copia anterior de $name — sera relinkada)"
+    fi
+    if ln -sfn "${skill%/}" "$dst" 2>/dev/null; then
+        echo "ok: ~/.claude/skills/$name -> ${skill%/}"
+    else
+        # Sem symlink (MSYS sem privilegio, FS que nao suporta): copia, e DIZ que copiou — quem
+        # ler isso precisa saber que um `git pull` nao vai atualizar essa skill sozinho.
+        cp -r "${skill%/}" "$dst"
+        echo "ok: ~/.claude/skills/$name (COPIA — symlink indisponivel; re-rode apos git pull)"
+    fi
 done
 
 MD="$HOME/.claude/CLAUDE.md"
