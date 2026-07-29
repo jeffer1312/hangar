@@ -367,7 +367,12 @@ if ($jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu l
                         -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
             Register-ScheduledTask -TaskName $t.Nome -Action $acao -Trigger $gatilho `
                 -Settings $cfg -Force | Out-Null
-            Ok "tarefa $($t.Nome) registrada"
+            # Registrar NAO inicia: o gatilho e "no logon", entao sem isto nada sobe ate o
+            # proximo login e a pessoa abre o navegador numa porta morta logo apos instalar.
+            # O equivalente no Linux (`systemctl --user enable --now`) liga na hora - o `--now`
+            # e justamente esta metade, e ela tinha ficado de fora aqui.
+            Start-ScheduledTask -TaskName $t.Nome -ErrorAction SilentlyContinue
+            Ok "tarefa $($t.Nome) registrada e iniciada"
         }
         Nota 'Remover depois: Unregister-ScheduledTask -TaskName claude-cockpit-backend'
     } catch {
@@ -427,6 +432,10 @@ if ($morreu) {
 # -- Fim ---------------------------------------------------------------------
 Titulo 'Pronto'
 Write-Host @"
+  O backend fica em http://127.0.0.1:8765 e o PWA em http://localhost:5173.
+  O dev server do vite escuta SO em 127.0.0.1 (vite.config.ts) - do celular se chega
+  pelo Tailscale, nao pelo IP da LAN direto.
+
   Rodar na mao (se voce pulou o passo 7):
       cd backend  ; `$env:CP_LAN_BIND_IP='auto' ; uv run python -m app.main
       cd frontend ; npm run dev
