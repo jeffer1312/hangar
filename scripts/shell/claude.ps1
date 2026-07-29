@@ -1,15 +1,15 @@
-# Wrapper do `claude` pro PowerShell — equivalente do scripts/shell/claude.posix.sh.
+﻿# Wrapper do `claude` pro PowerShell - equivalente do scripts/shell/claude.posix.sh.
 #
 # Sem ele, um `claude` aberto por voce no terminal e INVISIVEL pro app: sem --session-id o
 # backend nao sabe qual transcript .jsonl e daquela sessao, e fora do multiplexador nao ha pane
 # pra ler estado nem receber input. Com ele, `claude` na pasta do projeto abre uma sessao no
-# psmux, nomeada pela pasta, com id proprio — igual ao Linux.
+# psmux, nomeada pela pasta, com id proprio - igual ao Linux.
 #
 # Instalado pelo install.ps1, que adiciona um bloco marcado no $PROFILE chamando este arquivo.
 # Compativel com Windows PowerShell 5.1 (nada de operador ternario nem API de .NET Core).
 
 function claude {
-    # Motor de modelo (Kimi, gateway proprio): mesma regra do wrapper POSIX — quando CP_ENGINE
+    # Motor de modelo (Kimi, gateway proprio): mesma regra do wrapper POSIX - quando CP_ENGINE
     # esta setado quem executa e o cp-engine, que aplica o env e da exec no claude.
     # -CommandType Application: pega o BINARIO e nunca esta funcao (senao recursao infinita).
     # Por tipo, nao por sufixo: o instalador nativo poe claude.exe, o npm poe claude.cmd.
@@ -20,7 +20,7 @@ function claude {
     $pre = @()
     if ($env:CP_ENGINE) { $pre = @('cp-engine', '--exec', $env:CP_ENGINE, '--') }
 
-    # Ja veio com id/retomada explicita? Nao inventa outro — repassa como esta. Injetar um
+    # Ja veio com id/retomada explicita? Nao inventa outro - repassa como esta. Injetar um
     # --session-id por cima de um --resume abriria uma conversa NOVA no lugar da pedida.
     foreach ($a in $args) {
         if ($a -match '^(--session-id|--resume)(=|$)' -or $a -eq '-c' -or $a -eq '--continue') {
@@ -33,7 +33,7 @@ function claude {
     $id = [guid]::NewGuid().ToString()
 
     # So injeta o id (sem criar sessao) quando: ja estamos dentro do multiplexador, modo -p, ou
-    # a entrada nao e um terminal (pipe/redirecionamento) — nesses casos criar sessao atrapalha.
+    # a entrada nao e um terminal (pipe/redirecionamento) - nesses casos criar sessao atrapalha.
     $modoPrint = $false
     foreach ($a in $args) { if ($a -eq '-p' -or $a -eq '--print') { $modoPrint = $true } }
 
@@ -55,7 +55,7 @@ function claude {
     # Fora do multiplexador e interativo: cria sessao com o nome da pasta, unico.
     $base = Split-Path -Leaf (Get-Location).Path
     # Acento vira o ASCII equivalente ANTES do filtro (mesma regra do backend, app/names.py):
-    # sem isto "Área de Trabalho" perderia a primeira letra. FormD separa a letra do acento e o
+    # sem isto "?rea de Trabalho" perderia a primeira letra. FormD separa a letra do acento e o
     # filtro seguinte descarta a marca, que e o que o iconv //TRANSLIT faz no Linux.
     $base = -join ($base.Normalize([Text.NormalizationForm]::FormD).ToCharArray() | Where-Object {
         [Globalization.CharUnicodeInfo]::GetUnicodeCategory($_) -ne 'NonSpacingMark'
@@ -66,7 +66,7 @@ function claude {
     $nome = $base; $i = 2
     while ($true) {
         # `=$nome`: match EXATO. Sem o '=', o alvo do tmux cai em match por PREFIXO e "proj-2"
-        # viva responderia "existe" pra "proj" — o loop nunca acharia um nome livre.
+        # viva responderia "existe" pra "proj" - o loop nunca acharia um nome livre.
         tmux has-session -t "=$nome" 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) { break }
         $nome = "$base-$i"; $i++

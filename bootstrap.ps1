@@ -1,4 +1,4 @@
-# claude-cockpit — clonar e instalar numa linha so, no Windows.
+﻿# claude-cockpit - clonar e instalar numa linha so, no Windows.
 #
 #   irm https://raw.githubusercontent.com/jeffer1312/claude-cockpit/main/bootstrap.ps1 | iex
 #
@@ -8,7 +8,7 @@
 #   irm https://.../bootstrap.ps1 | iex
 #
 # Nao ha `param()` aqui de proposito: sob `irm | iex` o iex recebe so o TEXTO do script, entao
-# nao existe argumento pra receber — e o script tambem nao sabe o proprio caminho
+# nao existe argumento pra receber - e o script tambem nao sabe o proprio caminho
 # ($MyInvocation.MyCommand.Path vem vazio), entao nada aqui depende dele.
 #
 # Escrito pra Windows PowerShell 5.1 (o que vem no Windows), igual ao install.ps1: nada de
@@ -16,7 +16,7 @@
 #
 # Instale num disco LOCAL. Numa pasta compartilhada por rede (`\\servidor\...`) o `uv sync` e o
 # `npm ci` recriariam `backend\.venv` e `frontend\node_modules` por cima dos da maquina de
-# origem — e esses sao dela, nao seus: o venv aponta pro Python daquela maquina e o node_modules
+# origem - e esses sao dela, nao seus: o venv aponta pro Python daquela maquina e o node_modules
 # traz o binario nativo dela. Instalar de uma segunda maquina quebra a instalacao da primeira.
 
 $ErrorActionPreference = 'Stop'
@@ -59,7 +59,7 @@ function Clona {
     Ok 'clonado'
 }
 
-Titulo 'claude-cockpit — instalacao em uma linha'
+Titulo 'claude-cockpit - instalacao em uma linha'
 
 Atualiza-Path
 if (Tem 'git') {
@@ -68,30 +68,30 @@ if (Tem 'git') {
     # Aqui o git nao e opcional como no install.ps1 (la ele so alimenta o painel de branch):
     # sem git nao ha como clonar, e nao ha o que instalar depois.
     if (-not (Tem 'winget')) {
-        Erro 'sem git e sem winget — instale o "App Installer" pela Microsoft Store, ou o Git'
-        Nota 'https://git-scm.com/download/win — e rode esta linha de novo'
+        Erro 'sem git e sem winget - instale o "App Installer" pela Microsoft Store, ou o Git'
+        Nota 'https://git-scm.com/download/win - e rode esta linha de novo'
         exit 1
     }
     Write-Host '  .. instalando Git (Git.Git)'
     winget install --id Git.Git --exact --silent `
         --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
     Atualiza-Path
-    if (-not (Tem 'git')) { Erro 'o Git nao instalou — instale na mao e rode de novo'; exit 1 }
+    if (-not (Tem 'git')) { Erro 'o Git nao instalou - instale na mao e rode de novo'; exit 1 }
     Ok 'Git instalado'
 }
 
 if (-not (Test-Path $destino)) {
     Clona
 } elseif (EhEsteRepo $destino) {
-    Ok "$destino ja e este repositorio — atualizando em vez de clonar"
+    Ok "$destino ja e este repositorio - atualizando em vez de clonar"
     & git -C $destino pull --ff-only origin $ramo
     if ($LASTEXITCODE -ne 0) {
-        Erro "git pull falhou em $destino (mudanca local pendente?) — resolva na mao e rode de novo"
+        Erro "git pull falhou em $destino (mudanca local pendente?) - resolva na mao e rode de novo"
         exit 1
     }
     Ok 'atualizado'
 } elseif (Get-ChildItem -Force -LiteralPath $destino -ErrorAction SilentlyContinue) {
-    Erro "$destino ja existe e NAO e o claude-cockpit — nao vou mexer no que e seu"
+    Erro "$destino ja existe e NAO e o claude-cockpit - nao vou mexer no que e seu"
     Nota 'outro destino: $env:CP_DESTINO = "D:\claude-cockpit" e rode de novo'
     exit 1
 } else {
