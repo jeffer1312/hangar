@@ -35,7 +35,46 @@ def _write_marker(base: str, subdir: str, key: str, payload: dict) -> None:
     os.replace(tmp, os.path.join(d, key + ".json"))  # escrita atomica (leitor nunca pega parcial)
 
 
+def _boot_claude_sem_proc(start_pid: int) -> tuple[str | None, int | None]:
+    # Mesma subida de arvore do _boot_claude, mas via psutil — pra host SEM /proc (Windows). Sem isto
+    # o walk abria "/proc/<pid>/cmdline", levava OSError no 1o salto e devolvia (None, None): TODO
+    # marcador saia com "pid": null, o registry perdia o unico jeito deterministico de casar
+    # marcador<->pane (ancestralidade) e caia no jsonl do --session-id — que numa sessao RETOMADA
+    # nunca nasce. Resultado medido nesta maquina: as duas sessoes apontadas pra <uuid>.jsonl
+    # inexistente -> committed_user_lines() lia arquivo que nao existe, devolvia set() vazio, o
+    # reconcile concluia "a TUI engoliu" pra TUDO e redigitava cada mensagem ate max_attempts
+    # (o anuncio de pareamento chegando 3x em cada sessao).
+    # Import local: no Linux este ramo nunca roda e o psutil nem esta instalado (mesma divisao do
+    # app/procinfo.py). Falha em silencio como o resto do hook — nunca trava o prompt.
+    try:
+        import psutil
+    except Exception:
+        return None, None
+    try:
+        proc = psutil.Process(start_pid)
+    except Exception:
+        return None, None
+    for _ in range(12):
+        try:
+            cl = " ".join(proc.cmdline())
+        except Exception:
+            return None, None
+        if "claude" in cl:
+            m = _SID_RE.search(cl)
+            return (m.group(1) if m else None), proc.pid
+        try:
+            proc = proc.parent()
+        except Exception:
+            return None, None
+        if proc is None:
+            return None, None
+    return None, None
+
+
 def _boot_claude(start_pid: int) -> tuple[str | None, int | None]:
+    # Ramifica por CAPACIDADE (existe /proc?), nao por nome de sistema — mesma regra do app/procinfo.py.
+    if not os.path.isdir("/proc"):
+        return _boot_claude_sem_proc(start_pid)
     # Sobe a arvore /proc a partir do hook ate achar o processo claude: devolve (boot_id, pid).
     # boot_id = --session-id/--resume do cmdline (None em sessao BARE, sem flag); pid = o pid do
     # REPL claude em si — e a chave que permite ao backend casar marcador<->pane por ancestralidade

@@ -27,7 +27,16 @@ def _capture(name: str) -> str:
 
 # Marcas do rodapé do Claude Code quando o input já está VIVO (TUI interativo). Durante o BOOT
 # (logo + carregamento) elas ainda não aparecem.
-_READY_MARKERS = ("bypass permissions", "? for shortcuts", "for shortcuts")
+# "mode on" cobre o rodape ATUAL (medido no claude v2.1.218: `⏵⏵ auto mode on (shift+tab to cycle)
+# · ← for agents`, e `⏸ manual mode on · ← for agents` no outro modo) — nenhuma das marcas antigas
+# aparece nele, entao TODO envio queimava os 12s de timeout com o _send_lock na mao. Mesmo estrago
+# que o `╰─` do Pi documentado abaixo. As antigas ficam: sao versoes/telas anteriores, e marca a mais
+# so ajuda. "mode on" e nao "shift+tab to cycle" porque o segundo so existe no modo auto; "mode on"
+# esta nos dois. Nao casa no BOOT (o rodape de modo so e desenhado com o input ja vivo).
+# CUIDADO ao medir isto: `_capture` le a tela INTEIRA, entao discutir os marcadores no chat faz eles
+# casarem com o TEXTO DA CONVERSA — foi o que aconteceu aqui (`for shortcuts` "casava" porque a frase
+# estava na tela). Pra aferir de verdade, olhe SO as ultimas linhas do pane.
+_READY_MARKERS = ("bypass permissions", "? for shortcuts", "for shortcuts", "mode on")
 
 # Por PROVIDER. O Pi não imprime rodapé nenhum: a prova de "TUI viva" é o CHROME do composer —
 # qualquer caractere de moldura na tela. NÃO é uma moldura específica: medido no pi 0.82.1, o mesmo

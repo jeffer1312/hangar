@@ -2,6 +2,7 @@ import os
 import shutil
 import logging
 import subprocess
+import time
 
 RUN = subprocess.run
 
@@ -143,10 +144,24 @@ def new_session(name: str, cwd: str, command: str, config_dir: str | None = None
     # Retorna False quando o tmux recusa (ex: nome duplicado) -> o caller NAO pode mapear a sessao
     # nova pra um jsonl, senao reusaria a sessao existente de mesmo nome (= "sessao nova foi pra 0").
     cfg = config_dir or os.environ.get("CLAUDE_CONFIG_DIR")
+    # CP_SESSION_NAME: identidade CARIMBADA no nascimento — "quem sou eu" pra tudo que roda dentro do
+    # pane (o cp-send usa pra assinar recado, parear e desparear). Antes o cp-send perguntava
+    # `tmux display-message -p '#S'`, que NAO e propriedade de quem chama: e a "sessao corrente",
+    # resolvida pelo CLIENTE anexado — estado global do servidor. Com um unico cliente anexado (medido
+    # nesta maquina: `list-clients` devolvia so `/dev/pts/9067: jeffer1312`), TODA sessao que
+    # perguntava recebia o mesmo nome, o da sessao do cliente. Resultado: a sessao B rodava
+    # `cp-send --unpair` pra sair do grupo, se identificava como A e o backend desparava A — o
+    # `--unpair` de uma sessao desfazia o vinculo da OUTRA, e o grupo de 2 se dissolvia inteiro
+    # (aconteceu 2x seguidas, sem ninguem pedir). Ancorar em `$TMUX_PANE` NAO resolve no Windows: o
+    # psmux numera pane id por sessao, entao `%1` existe nas duas e o alvo fica ambiguo (o tmux real
+    # numera por servidor, e por isso o bug nao aparece no Linux). O env herdado do pane e imune as
+    # duas coisas. Fica obsoleto se a sessao for renomeada (rename_session abaixo) -> quem le valida
+    # contra o list-sessions e cai no fallback.
     args = _scope_prefix() + [
         "tmux", "new-session", "-d", "-s", name, "-c", cwd, "-x", "200", "-y", "50",
         "-e", "COLORTERM=truecolor",
         "-e", "CLAUDE_CODE_TMUX_TRUECOLOR=1",
+        "-e", f"CP_SESSION_NAME={name}",
     ]
     wl = _wayland_display()
     if wl:
@@ -174,13 +189,45 @@ def rename_session(old: str, new: str) -> bool:
     return _run(["tmux", "rename-session", "-t", old, new]).returncode == 0
 
 
+# No Windows a TUI do Claude Code entra em "modo paste" quando UM `send-keys -l` entrega mais que
+# ~1120 chars de uma vez (medido, psmux 3.3.7 + claude v2.1.218: 1120 chega inteiro, 1140 ja perde
+# o INICIO no submit) — o Enter envia so a CAUDA e o comeco some. Foi o corte do prompt de
+# pareamento: 1220 chars -> so os ~300 finais, SEM o "[de: claude-pocket]" do inicio, e a sessao
+# obedeceu o pedaco achando que era o usuario. O send-keys/psmux entregam 100% (o buffer do input
+# fica integro, medido via Home ate 1600 chars); quem corta e a TUI no SUBMIT. Fatiar em pedacos
+# abaixo do cliff, com pausa entre eles, faz a TUI ver DIGITACAO normal (nunca vira paste) e o texto
+# inteiro submete num Enter so — medido: pedaco 1024 + pausa 0.3s recupera 100% do inicio.
+# SO no Windows (os.name == "nt"), por decisao do dono do repo: no Linux o bug NAO acontece (prompts
+# ate 1083 chars entram inteiros numa chamada) e mexer no caminho que funciona so arriscaria quebra-lo
+# -> o ramo posix fica BYTE-IDENTICO a hoje. Mesma pegada de os.name que o new_session ja usa.
+# O teto NAO e o ponto onde a TUI corta (~1120) e sim onde ela COLAPSA o burst em paste: medido
+# nesta maquina, 700 chars entram como digitacao normal e 900 ja viram "paste again to expand". Um
+# pedaco colapsado e DESCARTADO no submit (o Enter manda so o que foi digitado depois), entao um
+# chunk de 1024 — abaixo do cliff, mas ACIMA do colapso — perdia o 1o pedaco inteiro e entregava so
+# a cauda: foi o que aconteceu com o anuncio de pareamento (1340 chars -> so os 330 finais, 4x
+# seguidas porque o reconcile via entrega parcial e redigitava). 512 fica com folga sob os 700
+# medidos; 1340 chars viram 3 chamadas (~0.6s a mais), custo irrelevante perto de perder o inicio.
+_WIN_CHUNK = 512         # < limiar de colapso de paste (medido: 700 ok, 900 colapsa)
+_WIN_CHUNK_PAUSE = 0.3   # pausa entre pedacos (medida: recupera 100% do inicio)
+
+
+def _send_literal(target: str, text: str) -> None:
+    # Linux (qualquer tamanho) e Windows dentro do teto: UMA chamada, comportamento de sempre.
+    # Windows acima do teto: fatia com pausa pra nao disparar o modo paste da TUI que come o comeco.
+    if os.name != "nt" or len(text) <= _WIN_CHUNK:
+        _run(["tmux", "send-keys", "-t", target, "-l", "--", text])
+        return
+    for i in range(0, len(text), _WIN_CHUNK):
+        _run(["tmux", "send-keys", "-t", target, "-l", "--", text[i:i + _WIN_CHUNK]])
+        if i + _WIN_CHUNK < len(text):
+            time.sleep(_WIN_CHUNK_PAUSE)
+
+
 def send_keys(name: str, keys: str, literal: bool = False) -> None:
-    args = ["tmux", "send-keys", "-t", _pane_target(name)]
     if literal:
-        args += ["-l", "--", keys]
+        _send_literal(_pane_target(name), keys)
     else:
-        args += [keys]
-    _run(args)
+        _run(["tmux", "send-keys", "-t", _pane_target(name), keys])
 
 
 def paste_text(name: str, text: str) -> None:
@@ -214,7 +261,8 @@ def _paste_linha_a_linha(name: str, text: str) -> None:
         if i:
             _run(["tmux", "send-keys", "-t", alvo, "C-j"])
         if linha:
-            _run(["tmux", "send-keys", "-t", alvo, "-l", "--", linha])
+            # via _send_literal: uma LINHA comprida cai no mesmo teto do Windows (fatia com pausa).
+            _send_literal(alvo, linha)
 
 
 def pane_scrollback(name: str) -> int:
