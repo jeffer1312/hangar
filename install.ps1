@@ -300,6 +300,51 @@ if (($atual -join "`n") -ne ($novo -join "`n")) {
     Ok 'config do multiplexador ja aplicada'
 }
 
+# -- 5c/8 Statusline ---------------------------------------------------------
+# O app le modelo, contexto, custo e limite de taxa da statusline do Claude Code - o parser
+# espera ESTE formato (scripts/omniroute-statusline.js). Sem isso o painel do app mostra
+# "medicao indisponivel" no lugar do contexto, e foi assim que a falta apareceu no teste.
+# O instalador do Linux ja fazia; o do Windows tinha ficado sem.
+Titulo '5c/8 Statusline do Claude Code'
+$slJs = "$raiz\scripts\omniroute-statusline.js"
+$settingsClaude = Join-Path $HOME '.claude\settings.json'
+if (-not (Test-Path $slJs)) {
+    Falta 'omniroute-statusline.js nao encontrado - pulando'
+} elseif (-not (Tem 'node')) {
+    Falta 'node nao encontrado - a statusline precisa dele'
+} else {
+    $nodeExe = (Get-Command node).Source
+    $cmdSl = "`"$nodeExe`" `"$slJs`""
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $settingsClaude) | Out-Null
+    $cfg = @{}
+    if (Test-Path $settingsClaude) {
+        try {
+            # -AsHashtable: sem isto o ConvertFrom-Json devolve PSCustomObject e reescrever uma
+            # chave vira ginastica; e o resto do settings do usuario TEM que voltar intacto.
+            $cfg = Get-Content $settingsClaude -Raw | ConvertFrom-Json -AsHashtable
+        } catch {
+            Falta 'settings.json do Claude ilegivel - nao vou reescrever por cima'
+            $cfg = $null
+        }
+    }
+    if ($null -ne $cfg) {
+        $atual = $null
+        if ($cfg.ContainsKey('statusLine')) { $atual = $cfg['statusLine']['command'] }
+        if ($atual -eq $cmdSl) {
+            Ok 'statusline ja configurada'
+        } else {
+            if ($atual) { Copy-Item $settingsClaude "$settingsClaude.bak" -Force }
+            $cfg['statusLine'] = @{ type = 'command'; command = $cmdSl }
+            $cfg | ConvertTo-Json -Depth 20 | Set-Content -Path $settingsClaude -Encoding UTF8
+            Ok 'statusline configurada no ~/.claude/settings.json'
+            Nota 'Vale nas sessoes NOVAS do Claude Code.'
+            # Mesmo aviso do Linux: o caminho do node fica CRAVADO no settings. Trocar de versao
+            # de node quebra a statusline em silencio - o app volta a dizer "medicao indisponivel".
+            Nota 'Se voce trocar a versao do node, rode este instalador de novo.'
+        }
+    }
+}
+
 # -- 6/8 Acesso pelo celular -------------------------------------------------
 Titulo '6/8 Acesso pelo celular'
 if ($Update) {
