@@ -413,6 +413,68 @@ if ($jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu l
     Nota 'pulado - rodando na mao, fechar o terminal derruba o backend'
 }
 
+# -- 7b/8 cp-send + skills ---------------------------------------------------
+# O cp-send e bash falando com o backend por HTTP - nada nele exige unix. Faltavam tres coisas
+# no Windows, e sao estas que este passo resolve:
+#   1. um `python3` que exista (o instalador do Python cria python.exe e py.exe, e o cp-send
+#      chama python3 dez vezes pra ler JSON);
+#   2. um lancador que o PowerShell enxergue, ja que o script nao tem extensao;
+#   3. rodar o proprio install-cp-send.sh - e ele quem cria o link, as skills e o bloco de
+#      protocolo no ~/.claude/CLAUDE.md. Duplicar esse texto aqui daria duas fontes da verdade,
+#      e a que diverge silenciosamente e sempre a copia.
+Titulo '7b/8 cp-send (recado e pareamento entre sessoes)'
+$bash = $null
+if (Tem 'git') {
+    # O git fica em ...\cmd\git.exe; o bash mora em ...\bin\bash.exe do mesmo Git for Windows.
+    $gitDir = Split-Path -Parent (Split-Path -Parent (Get-Command git).Source)
+    $cand = Join-Path $gitDir 'bin\bash.exe'
+    if (Test-Path $cand) { $bash = $cand }
+}
+if (-not $bash) {
+    Falta 'bash do Git for Windows nao encontrado - cp-send fica de fora'
+    Nota 'instale o Git e rode este instalador de novo'
+} else {
+    $binUsuario = Join-Path $HOME '.local\bin'
+    New-Item -ItemType Directory -Force -Path $binUsuario | Out-Null
+
+    # (1) shim de python3 SEM extensao: quem vai executa-lo e o bash, e ele le o shebang.
+    # Um python3.cmd nao serviria - o bash nao roda .cmd por conta propria.
+    $shim = Join-Path $binUsuario 'python3'
+    if (-not (Test-Path $shim)) {
+        Set-Content -Path $shim -Encoding ASCII -NoNewline `
+            -Value "#!/bin/sh`nexec python `"`$@`"`n"
+        Ok 'atalho python3 criado (o cp-send chama python3, o Windows so tem python)'
+    } else { Ok 'atalho python3 ja existe' }
+
+    # (2) lancador pro PowerShell: o script nao tem extensao, entao o Windows nao o executa
+    # sozinho. O .cmd entrega tudo pro bash e repassa os argumentos.
+    $lancador = Join-Path $binUsuario 'cp-send.cmd'
+    $conteudo = "@echo off`r`n`"$bash`" `"$raiz\scripts\cp-send`" %*`r`n"
+    if (-not (Test-Path $lancador) -or (Get-Content $lancador -Raw) -ne $conteudo) {
+        Set-Content -Path $lancador -Value $conteudo -Encoding ASCII -NoNewline
+        Ok "lancador cp-send.cmd criado em $binUsuario"
+    } else { Ok 'lancador cp-send.cmd ja atualizado' }
+
+    # (3) PATH do usuario, pra `cp-send` funcionar de qualquer terminal (e pro bash achar o shim).
+    $pathUsuario = [Environment]::GetEnvironmentVariable('Path', 'User')
+    if ($pathUsuario -notlike "*$binUsuario*") {
+        [Environment]::SetEnvironmentVariable('Path', "$pathUsuario;$binUsuario", 'User')
+        Atualiza-Path
+        Ok "$binUsuario adicionado ao PATH do usuario"
+        Nota 'Vale nos terminais NOVOS.'
+    } else { Ok 'PATH do usuario ja tem o diretorio' }
+
+    # (4) o instalador de verdade, rodado pelo bash: link, skills e o bloco do CLAUDE.md.
+    $rc = Nativo $bash '-lc' "cd '$($raiz -replace '\\','/')' && ./scripts/install-cp-send.sh"
+    if ($rc -eq 0) {
+        Ok 'cp-send + skills instalados'
+        Nota 'teste:  cp-send --list'
+    } else {
+        Falta 'install-cp-send.sh falhou - veja a saida acima'
+        Nota "rodar na mao:  & '$bash' -lc './scripts/install-cp-send.sh'"
+    }
+}
+
 # -- 8/8 Checagem de fumaca --------------------------------------------------
 # Ate aqui foi tudo instalacao. Este passo separa "instalou" de "funciona": ate pouco tempo o
 # backend nem IMPORTAVA no Windows (um `import fcntl` no topo do projects.py) e um instalador
@@ -474,11 +536,8 @@ Write-Host @"
   Guia completo (Tailscale, instalar como PWA, cada tela): docs\USAGE.md
 
   O que este Windows ainda NAO tem:
-  - cp-send (recado e pareamento entre sessoes) e as skills do repo. Ele NAO e impossivel
-    aqui: e bash falando com o backend por HTTP, e o Git for Windows (instalado acima) ja
-    traz bash, curl, grep e realpath. Falta um atalho `python3` (o instalador do Python cria
-    python.exe e py.exe, nao python3.exe, e o cp-send chama python3 pra ler JSON) e um
-    lancador que o PowerShell enxergue. Em andamento.
+  - wrappers do `codex` e do `pi`, e a extensao cp-state.ts do Pi. Sessao Codex ou Pi aberta
+    por voce no terminal nao aparece; criada pelo app, funciona.
   - wrappers do `codex` e do `pi`, e a extensao cp-state.ts do Pi: idem. Sessao Codex ou Pi
     aberta por voce no terminal nao aparece; criada pelo app, funciona.
   - resurrect/continuum (sessoes sobreviverem a reboot): sao plugins de tmux em bash, e o
