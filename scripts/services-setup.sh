@@ -21,9 +21,21 @@ SD_DIR="$HOME/.config/systemd/user"
 BACK="claude-cockpit-backend.service"
 FRONT="claude-cockpit-frontend.service"
 
-# Stable node/npm dir (fnm's `default` alias — survives shell exit, unlike the
-# ephemeral fnm_multishells PATH). uvicorn is launched via the system `uv`.
+# Diretório do npm que a unit systemd vai usar. A unit nasce sem o teu PATH de shell, então
+# precisa de um caminho ABSOLUTO e ESTÁVEL.
+#   1º) o alias `default` do fnm, se existir: sobrevive ao fim do shell, ao contrário do
+#       fnm_multishells, que é por-shell e some;
+#   2º) senão, o diretório real do NODE (não do npm!), que cobre node de distro, nvm, asdf,
+#       homebrew — e contém node E npm lado a lado.
+# Antes só existia (1), cravado: quem instalou node pelo gerenciador da distro não conseguia
+# usar os serviços — falhava alto, mas falhava, e não era culpa da máquina dele.
+# Resolver pelo NPM seria a escolha óbvia e está errada: `readlink -f $(command -v npm)` cai em
+# .../lib/node_modules/npm/bin, que tem npm mas NÃO tem node — a unit nasceria com um PATH que
+# roda `npm run dev` e quebra no primeiro spawn de node. Medido nesta máquina.
 NODE_BIN="$HOME/.local/share/fnm/aliases/default/bin"
+if [[ ! -x "$NODE_BIN/npm" ]] && command -v node >/dev/null; then
+  NODE_BIN="$(dirname "$(readlink -f "$(command -v node)")")"
+fi
 UV_BIN="$(command -v uv || true)"
 
 log() { printf '\033[36m==>\033[0m %s\n' "$*"; }
@@ -47,7 +59,7 @@ case "${1:-}" in
 esac
 
 [[ -n "$UV_BIN" ]] || { echo "uv not found in PATH" >&2; exit 1; }
-[[ -x "$NODE_BIN/npm" ]] || { echo "npm not found at $NODE_BIN (is fnm 'default' set? run: fnm default <ver>)" >&2; exit 1; }
+[[ -x "$NODE_BIN/npm" ]] || { echo "npm nao encontrado em $NODE_BIN — instale Node 20+ (ou, se usa fnm, rode: fnm default <ver>)" >&2; exit 1; }
 [[ -d "$REPO/frontend/node_modules" ]] || log "WARNING: frontend/node_modules missing — run 'npm install' in frontend first"
 
 mkdir -p "$SD_DIR"
