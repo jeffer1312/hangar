@@ -174,11 +174,33 @@ Nota 'E esse token que voce digita no celular na primeira conexao.'
 
 # -- 4/8 Frontend ------------------------------------------------------------
 Titulo '4/8 Frontend'
-Push-Location "$raiz\frontend"
-npm ci --silent
-npm run build --silent
-Pop-Location
-Ok 'buildado em frontend\dist\'
+# So rebuilda quando ha motivo: dist ausente, node_modules ausente, ou alguma fonte/lockfile/config
+# mais nova que o dist. Num re-run logo apos um `git pull` que nao mexeu no front, isso pula o
+# `npm ci` inteiro - que e o passo mais demorado da instalacao no Windows, milhares de arquivinhos.
+# Mesma regra do install.sh do Linux, que ja fazia isso.
+$dist = "$raiz\frontend\dist\index.html"
+$modulos = "$raiz\frontend\node_modules"
+$precisa = -not (Test-Path $dist) -or -not (Test-Path $modulos)
+if (-not $precisa) {
+    $carimbo = (Get-Item $dist).LastWriteTimeUtc
+    $fontes = @()
+    $fontes += Get-ChildItem "$raiz\frontend\src" -Recurse -File -ErrorAction SilentlyContinue
+    foreach ($f in 'package-lock.json', 'package.json', 'index.html', 'vite.config.ts', 'vite.config.js') {
+        $fontes += Get-ChildItem "$raiz\frontend\$f" -File -ErrorAction SilentlyContinue
+    }
+    # -gt e nao -ge: arquivo com o MESMO carimbo do dist nao conta como mais novo (o build acabou
+    # de escrever, e no Windows a granularidade do NTFS pode empatar).
+    $precisa = [bool]($fontes | Where-Object { $_.LastWriteTimeUtc -gt $carimbo } | Select-Object -First 1)
+}
+if ($precisa) {
+    Push-Location "$raiz\frontend"
+    npm ci --silent
+    npm run build --silent
+    Pop-Location
+    Ok 'buildado em frontend\dist\'
+} else {
+    Ok 'frontend ja buildado e atualizado (nada mudou desde o ultimo build)'
+}
 
 # -- 5/8 Wrapper do claude ---------------------------------------------------
 # Sem ele um `claude` que VOCE abre no terminal e invisivel pro app: nao tem --session-id (o
