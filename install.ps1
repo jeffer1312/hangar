@@ -437,9 +437,19 @@ if ($jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu l
             # ("nao e possivel localizar um parametro posicional"). Codificado nao ha o que escapar.
             $interno = "& '$exe' $($t.Args) *>&1 | Out-File -FilePath '$log' -Encoding utf8"
             $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($interno))
-            $acao = New-ScheduledTaskAction -Execute 'powershell.exe' `
-                -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand $b64" `
-                -WorkingDirectory $t.Dir
+
+            # Por que um .vbs e nao `powershell -WindowStyle Hidden` direto: esse parametro nao
+            # impede a janela de EXISTIR - o console e criado e so depois escondido, e lancado pelo
+            # Agendador ele fica na barra de tarefas. Medido: duas janelas abertas e paradas.
+            # O wscript nao tem console proprio, e o Run(..., 0, False) inicia ja oculto e nao
+            # espera. Alternativa seria rodar a tarefa "esteja o usuario logado ou nao", mas ai ela
+            # cai na sessao 0 e o servidor do multiplexador nasceria fora da sessao do usuario.
+            $vbs = Join-Path (Split-Path -Parent $log) "$($t.Nome).vbs"
+            $linhaVbs = 'CreateObject("WScript.Shell").Run "powershell -NoProfile ' +
+                        "-ExecutionPolicy Bypass -EncodedCommand $b64" + '", 0, False'
+            Set-Content -Path $vbs -Value $linhaVbs -Encoding ASCII
+            $acao = New-ScheduledTaskAction -Execute 'wscript.exe' `
+                -Argument "`"$vbs`"" -WorkingDirectory $t.Dir
             $gatilho = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
             $cfg = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
                         -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
