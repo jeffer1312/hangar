@@ -45,6 +45,28 @@ function Atualiza-Path {
                 [Environment]::GetEnvironmentVariable('Path', 'User')
 }
 
+function Nativo {
+    <#
+      Roda um programa NATIVO e devolve o exit code, engolindo a saida.
+
+      Existe por causa de uma armadilha do PowerShell: com $ErrorActionPreference = 'Stop' (linha
+      do topo), QUALQUER linha que o programa escreva no stderr vira erro TERMINANTE quando se usa
+      `2>&1`. Nao e preciso o programa falhar - basta ele avisar. Medido: o psmux escreve
+      "session still present after 5s" no stderr, e o instalador inteiro morria com
+      NativeCommandError, apontando pra linha do ForEach-Object em vez de pro aviso.
+      Vale igual pra winget, npm e uv: qualquer aviso deles derrubaria a instalacao no meio.
+
+      Dentro daqui o preference volta pra 'Continue' so enquanto o programa roda, e o que decide
+      sucesso e o $LASTEXITCODE - que e o contrato certo pra programa nativo.
+    #>
+    $anterior = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $args[0] @($args[1..($args.Count - 1)]) 2>&1 | Out-Null
+        return $LASTEXITCODE
+    } finally { $ErrorActionPreference = $anterior }
+}
+
 function Tem($cmd) { return [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
 
 function EhAdmin {
@@ -58,8 +80,8 @@ function Instale($rotulo, $cmd, $id, $porque) {
     if ($SoChecar) { Falta "$rotulo - $porque"; $script:pendencias += $rotulo; return $false }
     if ($Update) { Erro "$rotulo faltando (-Update nao instala dependencia)"; $script:pendencias += $rotulo; return $false }
     Write-Host "  .. instalando $rotulo ($id)"
-    winget install --id $id --exact --silent `
-        --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
+    Nativo winget install --id $id --exact --silent `
+        --accept-package-agreements --accept-source-agreements | Out-Null
     Atualiza-Path
     if (Tem $cmd) { Ok "$rotulo instalado"; return $true }
     Erro "$rotulo nao instalou - procure o id com: winget search $cmd"
@@ -279,22 +301,22 @@ if ($jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu l
 # sem esta checagem teria reportado sucesso do mesmo jeito.
 Titulo '8/8 Checagem de fumaca'
 Push-Location "$raiz\backend"
-uv run python -c "from app import api, registry, procinfo, projects" 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) { Erro 'o backend nao importa neste Windows'; Pop-Location; exit 1 }
+$rc = Nativo uv run python -c "from app import api, registry, procinfo, projects"
+if ($rc -ne 0) { Erro 'o backend nao importa neste Windows'; Pop-Location; exit 1 }
 Ok 'o backend importa'
 
-uv run python -c "from app import procinfo; assert not procinfo._TEM_PROC; import psutil; assert psutil.Process().cwd()" 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) { Erro 'leitura de processo via psutil falhou'; Pop-Location; exit 1 }
+$rc = Nativo uv run python -c "from app import procinfo; assert not procinfo._TEM_PROC; import psutil; assert psutil.Process().cwd()"
+if ($rc -ne 0) { Erro 'leitura de processo via psutil falhou'; Pop-Location; exit 1 }
 Ok 'leitura de processo (psutil) funcionando'
 Pop-Location
 
 # Sobra de rodada anterior: o kill pode demorar, entao limpa antes de contar de novo.
-tmux list-sessions -F '#{session_name}' 2>$null | Where-Object { $_ -like 'cp-fumaca-*' } |
-    ForEach-Object { tmux kill-session -t "=$_" 2>&1 | Out-Null }
+$antigas = & tmux list-sessions -F '#{session_name}' 2>$null | Where-Object { $_ -like 'cp-fumaca-*' }
+foreach ($velha in $antigas) { Nativo tmux kill-session -t "=$velha" | Out-Null }
 
 $sessao = "cp-fumaca-$PID"
-tmux new-session -d -s $sessao -c $env:TEMP 'cmd' 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) {
+$rc = Nativo tmux new-session -d -s $sessao -c $env:TEMP 'cmd'
+if ($rc -ne 0) {
     Erro 'o psmux nao criou uma sessao de teste - o app nao vai abrir sessao'
     exit 1
 }
@@ -304,11 +326,10 @@ Ok 'o multiplexador cria sessao'
 # kill-session responde "session still present after 5s" com um `cmd` interativo no pane, enquanto
 # a criacao funciona. Isso importa alem do instalador - o botao de apagar sessao do app chama
 # exatamente este comando, e sessao que nao morre vira zumbi na lista.
-tmux kill-session -t "=$sessao" 2>&1 | Out-Null
+Nativo tmux kill-session -t "=$sessao" | Out-Null
 $morreu = $false
 foreach ($i in 1..15) {
-    tmux has-session -t "=$sessao" 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { $morreu = $true; break }
+    if ((Nativo tmux has-session -t "=$sessao") -ne 0) { $morreu = $true; break }
     Start-Sleep -Seconds 1
 }
 if ($morreu) {
