@@ -345,11 +345,15 @@ export function openEditor(name: string): Promise<{ ok: boolean }> {
   });
 }
 
-export function getHistory(name: string): Promise<ChatEvent[]> {
+// Histórico da sessão ATIVA. Com `limit` é a MESMA rota do tail dos cards do board
+// (getHistoryTailForServer): o backend faz tail-read, parseando só o fim do jsonl em vez do
+// arquivo inteiro. O Chat abre com a cauda e busca o resto (sem limit) em segundo plano.
+export function getHistory(name: string, limit?: number): Promise<ChatEvent[]> {
   // Teto largo (transcript grande em link lento existe), mas TETO: o resume do iOS chamava isto
   // sem timeout e um socket pendurado deixava o fetch em voo por minutos, sobrescrevendo estado
   // novo com foto velha quando enfim resolvia.
-  return apiFetch<ChatEvent[]>(`/api/sessions/${encodeURIComponent(name)}/history`, { signal: AbortSignal.timeout(45_000) });
+  const q = limit ? `?limit=${limit}` : '';
+  return apiFetch<ChatEvent[]>(`/api/sessions/${encodeURIComponent(name)}/history${q}`, { signal: AbortSignal.timeout(45_000) });
 }
 
 export function getCommands(name: string): Promise<CommandInfo[]> {

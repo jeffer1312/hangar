@@ -109,6 +109,26 @@
   // svelte-ignore state_referenced_locally
   const histIds = new Set(events.map((e) => e.id));
 
+  // O Chat carrega em dois tempos: a cauda pinta a tela e o historico antigo entra depois, POR
+  // CIMA de `events` (prepend). `windowEnd` e indice ABSOLUTO -> sem corrigir aqui, a fatia visivel
+  // escorregaria pra outro trecho da conversa e o usuario perderia o ponto de leitura. Somar o
+  // tamanho do prepend mantem a MESMA fatia montada: nada remonta e o scrollTop nao se mexe.
+  // $effect.pre (e nao $effect) porque roda ANTES do DOM: a fatia errada nunca chega a ser montada.
+  // Os que entraram sao historico -> vao pro histIds, senao apareceriam com animacao de mensagem
+  // nova quando a paginacao pra cima os revelasse.
+  // svelte-ignore state_referenced_locally
+  let headId: string | undefined = events[0]?.id;
+  $effect.pre(() => {
+    const first = events[0]?.id;
+    if (first === headId) return;
+    const grew = headId === undefined ? -1 : events.findIndex((e) => e.id === headId);
+    if (grew > 0) {
+      for (let i = 0; i < grew; i++) histIds.add(events[i].id);
+      windowEnd += grew;
+    }
+    headId = first;
+  });
+
   // Renderiza so tool_use (tool_result vira card) e SO dentro da janela [windowEnd-WINDOW, windowEnd].
   // Fatiamos o array CRU por indice ANTES de filtrar -> windowEnd/length sao indices crus; filtrar a
   // fatia mantem o {#each} keyed (ev.id) valido. toolResults (acima) segue sobre o array INTEIRO, entao
