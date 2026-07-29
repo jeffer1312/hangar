@@ -8,6 +8,7 @@ continuando um transcript de Kimi, calado.
 import pytest
 
 from app import engines as eng
+from app import procinfo
 from app import registry as reg
 
 
@@ -68,14 +69,14 @@ def test_engine_of_le_o_cp_engine_do_proc(tmp_path, monkeypatch):
     # em disco pode divergir do que está de fato rodando no pane.
     environ = tmp_path / "environ"
     environ.write_bytes(b"PATH=/usr/bin\x00CP_ENGINE=kimi\x00HOME=/home/x\x00")
-    monkeypatch.setattr(reg, "_proc_environ_path", lambda pid: str(environ))
+    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(environ))
     assert reg._engine_of(1234) == "kimi"
 
 
 def test_engine_of_sem_a_marca_e_none(tmp_path, monkeypatch):
     environ = tmp_path / "environ"
     environ.write_bytes(b"PATH=/usr/bin\x00")
-    monkeypatch.setattr(reg, "_proc_environ_path", lambda pid: str(environ))
+    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(environ))
     assert reg._engine_of(1234) is None
 
 
