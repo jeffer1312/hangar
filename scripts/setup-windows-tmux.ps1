@@ -169,8 +169,16 @@ $padraoLegado = '(?s)# >>> claude-pocket >>>.*?# <<< claude-pocket <<<\r?\n?'
 $legado = ([regex]::Matches($limpo, $padraoLegado)).Count
 $limpo  = [regex]::Replace($limpo, $padraoLegado, '')
 
-if ($limpo -and -not $limpo.EndsWith("`n")) { $limpo += "`n" }
-$novo = if ($limpo.Trim()) { "$limpo`n$bloco`n" } else { "$bloco`n" }
+# NORMALIZA a cauda antes de concatenar. Antes era `$limpo += "\n"` seguido de "$limpo`n$bloco" —
+# duas fontes de newline pro mesmo ponto de junção. Depois de arrancar o bloco, `$limpo` JA termina
+# em \n (o regex consome o \r?\n final), e a interpolacao somava outro: o arquivo crescia 1 byte a
+# cada execucao, `$novo -eq $atual` NUNCA dava true e o script se achava desatualizado pra sempre.
+# Isso arrastava um estrago pior no backup logo abaixo (ver o Copy-Item). MEDIDO antes do fix:
+# run1 7412b, run2 7413b, run3 7414b, run4 7415b — +1 byte por run.
+# TrimEnd em vez de checar o ultimo char: a cauda pode ter \r\n, varios \n ou espaco, e o objetivo e
+# uma saida DETERMINISTICA (mesma entrada logica -> mesmos bytes), nao preservar o que veio.
+$limpo = $limpo.TrimEnd("`r", "`n", " ", "`t")
+$novo = if ($limpo) { "$limpo`n`n$bloco`n" } else { "$bloco`n" }
 
 Write-Step "Alvo: $Conf"
 Write-Host "    (escolhido pela precedencia do psmux: .psmux.conf > .psmuxrc > .tmux.conf > .config\psmux\psmux.conf)"
@@ -194,9 +202,20 @@ if (-not $Apply) {
 }
 
 if (Test-Path $Conf) {
+    # NAO sobrescreve um .bak que ja existe. O `-Force` de antes destruia o unico backup do usuario:
+    # a partir do 2o -Apply o .bak passava a conter a versao JA modificada por nos, e o arquivo
+    # original sumia de vez. MEDIDO antes do fix: run1 bak=33b (original), run2 bak=7412b (a nossa
+    # saida do run1). Somado a nao-idempotencia acima, bastavam DOIS -Apply.
+    # O .bak e o unico registro do que existia ANTES de nos - vale mais que um backup recente. Quem
+    # quiser um snapshot do estado atual copia na mao; quem rodar o instalador duas vezes nao pode
+    # perder o original por isso.
     $bak = "$Conf.bak"
-    Copy-Item $Conf $bak -Force
-    Write-Step "Backup: $bak"
+    if (Test-Path $bak) {
+        Write-Step "Backup ja existe (preservado, e o estado PRE-instalador): $bak"
+    } else {
+        Copy-Item $Conf $bak
+        Write-Step "Backup: $bak"
+    }
 }
 
 # UTF8 sem BOM: o psmux le o conf como texto; um BOM no inicio vira lixo na 1a diretiva.
