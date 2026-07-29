@@ -300,6 +300,8 @@ Write-Host @"
   O que este Windows NAO tem, e nao e esquecimento:
   - cp-send (recado e pareamento entre sessoes) e as skills do repo: sao shell script,
     rodam so no Linux/macOS.
-  - wrapper do `codex`: idem. Sessao Codex, so pelo app.
-  - resurrect/continuum (sessoes sobreviverem a reboot): sao plugins de tmux em bash.
+  - wrappers do `codex` e do `pi`, e a extensao cp-state.ts do Pi: idem. Sessao Codex ou Pi
+    aberta por voce no terminal nao aparece; criada pelo app, funciona.
+  - resurrect/continuum (sessoes sobreviverem a reboot): sao plugins de tmux em bash, e o
+    psmux nao roda plugin de tmux. Fechou o Windows, as sessoes se foram.
 "@
