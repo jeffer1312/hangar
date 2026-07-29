@@ -271,33 +271,31 @@ $marca
 # Bloco marcado, mesma convencao do install-claude-wrapper.sh: reescreve o que e nosso e preserva
 # o resto do arquivo, entao rodar de novo nao duplica e nao apaga config de ninguem.
 Titulo '5b/8 Config do multiplexador'
-$confTmux = Join-Path $HOME '.tmux.conf'
-$ini = '# >>> claude-pocket >>>'
-$fim = '# <<< claude-pocket <<<'
-$corpo = @(
-    $ini,
-    '# Esconde a barra de status: o multiplexador e detalhe de implementacao do claude-cockpit,',
-    '# nao algo que voce pediu. Comente esta linha se quiser a barra de volta.',
-    'set -g status off',
-    $fim
-)
-$atual = @()
-if (Test-Path $confTmux) { $atual = @(Get-Content $confTmux) }
-$temIni = $atual -contains $ini
-if ($temIni) {
-    $antes = $atual[0..([array]::IndexOf($atual, $ini) - 1)]
-    $depoisIdx = [array]::IndexOf($atual, $fim) + 1
-    $depois = if ($depoisIdx -lt $atual.Count) { $atual[$depoisIdx..($atual.Count - 1)] } else { @() }
-    $novo = @($antes) + $corpo + @($depois)
+# Delegado pro scripts/setup-windows-tmux.ps1 - este trecho ESCREVIA o bloco aqui mesmo, e os dois
+# brigavam pelo mesmo marcador: o script novo apagava o bloco legado e o -Update seguinte reescrevia.
+# Alem disso o codigo daqui era o AUTOR das duplicatas (15 blocos na maquina de referencia): ele
+# procurava o marcador com `$atual -contains $ini`, match EXATO de linha, e gravava com
+# `Set-Content -Encoding UTF8`, que no PS 5.1 poe BOM. O BOM gruda na 1a linha, o -contains passa a
+# falhar nela e o ramo de substituicao vira ramo de APPEND - mais um bloco a cada execucao.
+# O script delegado nao tem nenhum dos dois problemas: substitui entre marcadores, grava UTF8 SEM
+# BOM, respeita a precedencia do psmux (.psmux.conf > .psmuxrc > .tmux.conf > .config\psmux\) em vez
+# de escrever cego no ~/.tmux.conf, e ainda diagnostica o ambiente (tmux e mesmo o psmux? e Windows
+# Terminal?) e confere o resultado lendo do servidor. Ele tambem colapsa os blocos legados que este
+# trecho deixou pra tras. Ver docs/tmux.conf.windows.example.
+$setupTmux = "$raiz\scripts\setup-windows-tmux.ps1"
+if (-not (Test-Path $setupTmux)) {
+    Falta "setup-windows-tmux.ps1 nao encontrado - config do multiplexador nao aplicada"
 } else {
-    $novo = @($atual) + $corpo
-}
-if (($atual -join "`n") -ne ($novo -join "`n")) {
-    Set-Content -Path $confTmux -Value $novo -Encoding UTF8
-    Ok "barra de status desligada em $confTmux"
-    Nota 'Vale nas sessoes NOVAS - a config e lida na criacao da sessao.'
-} else {
-    Ok 'config do multiplexador ja aplicada'
+    # -SkipInstall: o psmux ja foi garantido no passo de dependencias la em cima.
+    & $setupTmux -Apply -SkipInstall
+    if ($LASTEXITCODE -eq 0) {
+        Ok 'config do multiplexador aplicada (scroll do mouse, cores, barra escondida)'
+        Nota 'Vale nas sessoes NOVAS - a config e lida na criacao da sessao.'
+    } else {
+        # O script sai != 0 quando o AMBIENTE tem problema que a config nao conserta (tmux que nao e
+        # o psmux, terminal que nao e o WT). Nao aborta a instalacao: o resto do app funciona.
+        Falta 'config do multiplexador aplicada COM RESSALVAS - veja o diagnostico acima'
+    }
 }
 
 # -- 5c/8 Statusline ---------------------------------------------------------
@@ -409,20 +407,31 @@ if (Tem 'tailscale') {
 # Equivalente possivel dos servicos systemd do Linux. Nao e servico do Windows (isso exigiria
 # admin e rodaria fora da sua sessao, sem acesso ao seu ~\.claude): e tarefa agendada no logon.
 Titulo '7/8 Subir junto com o Windows'
-# Porta do backend: o Pare-Servico abaixo precisa saber QUEM segurar pra derrubar. Vem do .env
-# (mesma fonte que o backend usa); 8765 e o default do config.py.
-$portaBack = 8765
-if (Test-Path $envFile) {
-    $l = Select-String -Path $envFile -Pattern '^CP_PORT=(\d+)' -ErrorAction SilentlyContinue |
-         Select-Object -First 1
-    if ($l) { $portaBack = [int]$l.Matches[0].Groups[1].Value }
+# Portas: o Pare-Servico abaixo precisa saber QUEM segurar pra derrubar, e matar por porta ERRADA
+# derruba processo alheio. As duas saem do .env (mesma fonte que o backend usa), com o default do
+# config.py como piso. A do FRONT estava cravada em 5173 enquanto a do back era lida do arquivo -
+# incoerencia que custava caro: quem tivesse outro Vite em 5173 via o processo dele morrer.
+function Porta-Do-Env {
+    param([string]$Chave, [int]$Default)
+    if (Test-Path $envFile) {
+        $l = Select-String -Path $envFile -Pattern "^$Chave=(\d+)" -ErrorAction SilentlyContinue |
+             Select-Object -First 1
+        if ($l) { return [int]$l.Matches[0].Groups[1].Value }
+    }
+    return $Default
 }
+$portaBack  = Porta-Do-Env 'CP_PORT'       8765
+$portaFront = Porta-Do-Env 'CP_FRONT_PORT' 5173
 
 $tarefas = @(
+    # Padrao ANCORADO no caminho deste checkout. 'app\.main' cru casava com QUALQUER processo cuja
+    # linha de comando contivesse app.main - e este repo tem worktrees em .claude/worktrees/ com
+    # checkout completo, entao o instalador do checkout principal matava o backend de uma worktree
+    # rodando em outra porta. O ramo do frontend ja fazia certo; o do backend nao.
     @{ Nome = 'claude-cockpit-backend';  Exe = 'uv';  Args = 'run python -m app.main'; Dir = "$raiz\backend"
-       Porta = $portaBack; Padrao = 'app\.main' },
+       Porta = $portaBack;  Padrao = [regex]::Escape("$raiz\backend") },
     @{ Nome = 'claude-cockpit-frontend'; Exe = 'npm'; Args = 'run dev';                Dir = "$raiz\frontend"
-       Porta = 5173;       Padrao = [regex]::Escape("$raiz\frontend") }
+       Porta = $portaFront; Padrao = [regex]::Escape("$raiz\frontend") }
 )
 
 # Derruba a instancia VELHA antes de subir a nova.
@@ -454,18 +463,41 @@ function Pare-Servico {
     # $PID: nunca matar o proprio instalador.
     $alvos = @($alvos | Where-Object { $_ -and $_ -ne $PID } | Select-Object -Unique)
     if ($alvos.Count -eq 0) { return 0 }
-    # Filhos junto: o backend nasce `uv -> python`, e matar so o pai deixaria o filho segurando
-    # a porta - a instancia nova colidiria do mesmo jeito.
-    $todos = @()
-    foreach ($a in $alvos) {
-        $todos += (Get-CimInstance Win32_Process -Filter "ParentProcessId=$a" -ErrorAction SilentlyContinue |
-                   Select-Object -ExpandProperty ProcessId)
-        $todos += $a
+    # Descendentes RECURSIVOS, nao um nivel so. O backend nasce `uv -> python -> python` e quem
+    # segura a porta e o NETO: parar so o pai (ou pai+filhos) deixava a porta presa e a instancia
+    # nova colidia igual. Varredura unica da tabela de processos + BFS, em vez de um Get-CimInstance
+    # por nivel.
+    $mapa = @{}
+    foreach ($p in (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
+        if (-not $mapa.ContainsKey([int]$p.ParentProcessId)) { $mapa[[int]$p.ParentProcessId] = @() }
+        $mapa[[int]$p.ParentProcessId] += [int]$p.ProcessId
     }
-    $todos = @($todos | Where-Object { $_ -and $_ -ne $PID } | Select-Object -Unique)
-    foreach ($p in $todos) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
+    $todos = New-Object System.Collections.Generic.HashSet[int]
+    $fila = New-Object System.Collections.Generic.Queue[int]
+    foreach ($a in $alvos) { [void]$fila.Enqueue([int]$a) }
+    while ($fila.Count -gt 0) {
+        $cur = $fila.Dequeue()
+        if ($cur -eq $PID -or -not $todos.Add($cur)) { continue }
+        foreach ($f in ($mapa[$cur] | Where-Object { $_ })) { [void]$fila.Enqueue([int]$f) }
+    }
+    # Conta o que MORREU, nao o que foi tentado. Com -ErrorAction SilentlyContinue o Stop-Process
+    # engole "acesso negado" em silencio, e o contador antigo ($todos.Count) reportava sucesso pra
+    # kill que nao aconteceu - a mensagem "instancia anterior derrubada" saia mesmo com o processo
+    # velho vivo, que e exatamente o bug que este helper existe pra evitar.
+    $mortos = 0
+    foreach ($p in $todos) {
+        Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
+        if (-not (Get-Process -Id $p -ErrorAction SilentlyContinue)) { $mortos++ }
+    }
     Start-Sleep -Milliseconds 800
-    return $todos.Count
+    # A porta ficou LIVRE? E o que realmente importa - processo morto com a porta ainda presa
+    # (outro dono) faz a instancia nova falhar do mesmo jeito. -State Listen e obrigatorio: sem ele
+    # um socket em TIME_WAIT do processo recem-morto ainda conta como ocupada.
+    if ($Porta -gt 0) {
+        $preso = Get-NetTCPConnection -State Listen -LocalPort $Porta -ErrorAction SilentlyContinue
+        if ($preso) { Falta "porta $Porta continua ocupada (pid $($preso.OwningProcess -join ', ')) apos parar $Nome" }
+    }
+    return $mortos
 }
 # Ja registrado -> RE-REGISTRA sem perguntar, em vez de pular. A tarefa guarda o caminho do
 # executavel e o diretorio DENTRO dela; um `git pull` que mova o repo, ou um uv que mude de
@@ -520,13 +552,17 @@ if ($jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu l
         }
         # Iniciar nao e subir: a tarefa ja morreu na largada por bug de codificacao, e o instalador
     # dizia "iniciada" e seguia. Confere a porta antes de afirmar qualquer coisa.
+    # -State Listen e $portaBack, nao 8765 cravado. Sem o -State Listen um socket em TIME_WAIT do
+    # processo que o Pare-Servico acabou de matar ja contava como "subiu", e o instalador declarava
+    # sucesso apontando pro cadaver - o bug original (instancia velha) de volta, agora com uma
+    # mensagem verde na frente afirmando o contrario.
     $subiu = $false
     foreach ($i in 1..15) {
-        if (Get-NetTCPConnection -LocalPort 8765 -ErrorAction SilentlyContinue) { $subiu = $true; break }
+        if (Get-NetTCPConnection -State Listen -LocalPort $portaBack -ErrorAction SilentlyContinue) { $subiu = $true; break }
         Start-Sleep -Seconds 1
     }
     if ($subiu) {
-        Ok 'backend respondendo em 127.0.0.1:8765'
+        Ok "backend respondendo em 127.0.0.1:$portaBack"
     } else {
         Falta 'o backend NAO subiu em 15s - o app nao vai conectar'
         Nota "veja o porque:  Get-Content `"$env:LOCALAPPDATA\claude-cockpit\claude-cockpit-backend.log`" -Tail 30"
