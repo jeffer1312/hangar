@@ -510,13 +510,18 @@ if (-not $bash) {
     } else { Ok 'PATH do usuario ja tem o diretorio' }
 
     # (4) o instalador de verdade, rodado pelo bash: link, skills e o bloco do CLAUDE.md.
-    $rc = Nativo $bash '-lc' "cd '$($raiz -replace '\\','/')' && ./scripts/install-cp-send.sh"
-    if ($rc -eq 0) {
+    # A saida NAO passa pelo Nativo aqui: ele engole tudo, e num passo que pode falhar por dez
+    # motivos diferentes (link, permissao, caminho) a saida E o diagnostico. Medido: falhou uma
+    # vez e a mensagem util tinha sido descartada, sobrando so "falhou".
+    $rota = ($raiz -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
+    $saida = & $bash '-lc' "cd '$rota' && ./scripts/install-cp-send.sh" 2>&1
+    if ($LASTEXITCODE -eq 0) {
         Ok 'cp-send + skills instalados'
-        Nota 'teste:  cp-send --list'
+        Nota 'teste (em terminal NOVO):  cp-send --list'
     } else {
-        Falta 'install-cp-send.sh falhou - veja a saida acima'
-        Nota "rodar na mao:  & '$bash' -lc './scripts/install-cp-send.sh'"
+        Falta 'install-cp-send.sh falhou:'
+        $saida | Select-Object -Last 12 | ForEach-Object { Nota "  $_" }
+        Nota "rodar na mao:  & '$bash' -lc 'cd $rota && ./scripts/install-cp-send.sh'"
     }
 }
 
