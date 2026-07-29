@@ -57,12 +57,96 @@ def test_idempotent(tmp_path):
     assert len(ours) == 1  # sem duplicar
 
 
+def _ours(data, event, script):
+    """Entradas NOSSAS (as que referenciam `script`) sob hooks[event]."""
+    return [
+        h
+        for b in data.get("hooks", {}).get(event, [])
+        for h in b.get("hooks", [])
+        if hook_installer._refers_to(h.get("command"), script)
+    ]
+
+
+def test_old_format_entry_is_replaced_not_appended(tmp_path):
+    # Regressao real: o command mudou de 'python3 X' pra '"venv/py" "X"'. A igualdade
+    # exata nao reconhecia a entrada antiga e ACRESCENTAVA uma segunda.
+    sp = _settings(tmp_path)
+    old = f"python3 {hook_installer.HOOK}"
+    sp.write_text(json.dumps({"hooks": {"PreToolUse": [
+        {"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": old}]}
+    ]}}), encoding="utf-8")
+    assert hook_installer._ensure_settings_file(sp) is True
+    data = json.loads(sp.read_text(encoding="utf-8"))
+    ours = _ours(data, "PreToolUse", hook_installer.HOOK)
+    assert len(ours) == 1
+    assert ours[0]["command"] == hook_installer._COMMAND
+
+
+def test_duplicated_old_and_new_collapse_to_one(tmp_path):
+    # Estado ja materializado na maquina do usuario: as duas versoes convivendo.
+    sp = _settings(tmp_path)
+    old = f"python3 {hook_installer.HOOK}"
+    sp.write_text(json.dumps({"hooks": {"PreToolUse": [
+        {"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": old}]},
+        {"matcher": "AskUserQuestion",
+         "hooks": [{"type": "command", "command": hook_installer._COMMAND}]},
+    ]}}), encoding="utf-8")
+    assert hook_installer._ensure_settings_file(sp) is True
+    data = json.loads(sp.read_text(encoding="utf-8"))
+    ours = _ours(data, "PreToolUse", hook_installer.HOOK)
+    assert len(ours) == 1
+    assert ours[0]["command"] == hook_installer._COMMAND
+    assert len(data["hooks"]["PreToolUse"]) == 1  # bloco que ficou vazio sumiu
+    assert hook_installer._ensure_settings_file(sp) is False  # ja curado
+
+
+def test_collapse_keeps_third_party_hooks_in_same_event(tmp_path):
+    sp = _settings(tmp_path)
+    old = f"python3 {hook_installer.HOOK}"
+    sp.write_text(json.dumps({"hooks": {"PreToolUse": [
+        {"hooks": [{"type": "command", "command": "/home/x/.claude/hooks/ecc-review.sh"}]},
+        {"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": old}]},
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": "rtk hook claude"}]},
+        {"matcher": "AskUserQuestion",
+         "hooks": [{"type": "command", "command": hook_installer._COMMAND}]},
+    ]}}), encoding="utf-8")
+    assert hook_installer._ensure_settings_file(sp) is True
+    pre = json.loads(sp.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+    cmds = [h["command"] for b in pre for h in b["hooks"]]
+    assert cmds == [
+        "/home/x/.claude/hooks/ecc-review.sh",
+        hook_installer._COMMAND,
+        "rtk hook claude",
+    ]  # ordem e conteudo dos terceiros intactos
+
+
+def test_same_script_name_in_another_checkout_is_a_different_hook(tmp_path):
+    # Outro checkout do repo = outro arquivo = outro hook. Nao pode ser adotado nem sumir.
+    sp = _settings(tmp_path)
+    alheio = "python3 /outro/checkout/backend/hooks/askq_capture.py"
+    sp.write_text(json.dumps({"hooks": {"PreToolUse": [
+        {"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": alheio}]}
+    ]}}), encoding="utf-8")
+    assert hook_installer._ensure_settings_file(sp) is True
+    cmds = [h["command"] for b in json.loads(sp.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+            for h in b["hooks"]]
+    assert cmds == [alheio, hook_installer._COMMAND]
+
+
 def test_invalid_json_left_untouched(tmp_path):
     sp = _settings(tmp_path)
     sp.write_text("{not valid json", encoding="utf-8")
     changed = hook_installer._ensure_settings_file(sp)
     assert changed is False
     assert sp.read_text(encoding="utf-8") == "{not valid json"  # nao sobrescrito
+
+
+def test_empty_file_gets_block(tmp_path):
+    sp = _settings(tmp_path)
+    sp.write_text("", encoding="utf-8")
+    assert hook_installer._ensure_settings_file(sp) is True
+    data = json.loads(sp.read_text(encoding="utf-8"))
+    assert len(_ours(data, "PreToolUse", hook_installer.HOOK)) == 1
 
 
 def test_ensure_installed_targets_config_dirs(tmp_path, monkeypatch):

@@ -1,4 +1,5 @@
 import json
+import shlex
 import sys
 from pathlib import Path
 
@@ -15,14 +16,33 @@ _COMMAND = f'"{sys.executable}" "{HOOK}"'
 _MATCHER = "AskUserQuestion"
 
 
-def _ensure_settings_file(settings_path: Path) -> bool:
-    """Garante o bloco PreToolUse/AskUserQuestion num unico settings.json, PRESERVANDO
-    todo o resto: outros hooks do usuario (GateGuard, caveman, ponytail, matcher 'Bash'…)
-    e qualquer outra chave (model, env, permissions…). So acrescenta; nunca reescreve o
-    que ja existe. Retorna True se gravou (mudou), False se nada mudou.
+def _script_of(command: str) -> str:
+    """Caminho do script dentro de um command nosso ('"py" "X"' -> 'X'). E o ultimo token."""
+    return _tokens(command)[-1]
 
-    Bulletproof: um settings.json quebrado/estranho a mao e PULADO (retorna False), nunca
-    sobrescrito — perder a config do usuario seria pior que nao instalar o hook."""
+
+def _tokens(command: str) -> list[str]:
+    try:
+        return shlex.split(command) or [command]
+    except ValueError:  # aspas desbalanceadas a mao
+        return command.split() or [command]
+
+
+def _refers_to(command: object, script: str) -> bool:
+    """True se este hook e NOSSO: o command referencia o arquivo `script`, nao importa o
+    formato ('python3 X', '"/venv/bin/python3" "X"', com ou sem aspas).
+
+    Comparar a string INTEIRA foi o que duplicou os hooks quando o formato do command
+    mudou — a entrada antiga deixou de ser reconhecida e uma nova foi acrescentada.
+    Casa pelo caminho: outro checkout do repo aponta pra outro arquivo, logo e outro hook."""
+    if not isinstance(command, str):
+        return False
+    return any(t.strip("\"'") == script for t in _tokens(command))
+
+
+def _load_settings(settings_path: Path) -> dict | None:
+    """Le o settings.json. None = arquivo quebrado/estranho a mao -> nao mexer nele.
+    Perder a config do usuario seria pior que nao instalar o hook."""
     data: dict = {}
     if settings_path.exists():
         raw = settings_path.read_text(encoding="utf-8").strip()
@@ -30,35 +50,80 @@ def _ensure_settings_file(settings_path: Path) -> bool:
             try:
                 data = json.loads(raw)
             except (json.JSONDecodeError, ValueError):
-                return False  # JSON invalido editado a mao -> NAO clobbra
+                return None  # JSON invalido editado a mao -> NAO clobbra
         if not isinstance(data, dict):
-            return False  # raiz nao-objeto -> arquivo estranho, nao mexe
+            return None  # raiz nao-objeto
+    hooks = data.get("hooks")
+    if hooks is not None and not isinstance(hooks, dict):
+        return None  # 'hooks' nao e objeto
+    return data
 
-    existing_hooks = data.get("hooks")
-    if existing_hooks is not None and not isinstance(existing_hooks, dict):
-        return False  # 'hooks' nao e objeto -> nao mexe
-    pre = (existing_hooks or {}).get("PreToolUse")
-    if pre is not None and not isinstance(pre, list):
-        return False  # 'PreToolUse' nao e lista -> nao mexe
 
-    # Idempotencia: se qualquer bloco PreToolUse ja tem o nosso command, nada a fazer.
-    for block in pre or []:
+def _sync_hook(data: dict, event: str, command: str, matcher: str | None = None) -> bool:
+    """Deixa EXATAMENTE UMA entrada nossa sob hooks[event], com o command atual.
+    Formato antigo e substituido no lugar; duplicatas colapsam na primeira ocorrencia
+    (o installer roda a cada subida do backend, entao ele cura a bagunca que criou).
+    Hooks de terceiros ficam intactos, na mesma ordem. Retorna True se mudou algo."""
+    script = _script_of(command)
+    hooks = data.setdefault("hooks", {})
+    ev_list = hooks.setdefault(event, [])
+    if not isinstance(ev_list, list):
+        return False  # lista do evento estranha -> nao mexe
+
+    changed = False
+    kept = False
+    empties: list[int] = []
+    for block in ev_list:
         if not isinstance(block, dict):
             continue
-        for h in block.get("hooks") or []:
-            if isinstance(h, dict) and h.get("command") == _COMMAND:
-                return False  # ja instalado
+        entries = block.get("hooks")
+        if not isinstance(entries, list):
+            continue
+        surviving = []
+        for h in entries:
+            if isinstance(h, dict) and _refers_to(h.get("command"), script):
+                if kept:
+                    changed = True  # duplicata nossa -> descarta
+                    continue
+                kept = True
+                if h.get("command") != command:
+                    h["command"] = command  # formato antigo -> atual, no lugar
+                    changed = True
+                h.setdefault("type", "command")
+            surviving.append(h)
+        if len(surviving) != len(entries):
+            if surviving:
+                block["hooks"] = surviving
+            else:
+                empties.append(id(block))  # bloco que era so nosso duplicado
+    if empties:
+        ev_list = [b for b in ev_list if id(b) not in empties]
+        hooks[event] = ev_list
+    if not kept:
+        block: dict = {"hooks": [{"type": "command", "command": command}]}
+        if matcher is not None:
+            block["matcher"] = matcher
+        ev_list.append(block)
+        changed = True
+    return changed
 
-    # Navega/cria so o necessario e acrescenta o nosso bloco, preservando o resto.
-    hooks = data.setdefault("hooks", {})
-    pre_list = hooks.setdefault("PreToolUse", [])
-    pre_list.append({
-        "matcher": _MATCHER,
-        "hooks": [{"type": "command", "command": _COMMAND}],
-    })
+
+def _write(settings_path: Path, data: dict) -> None:
     settings_path.write_text(
         json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
+
+
+def _ensure_settings_file(settings_path: Path) -> bool:
+    """Garante o bloco PreToolUse/AskUserQuestion num unico settings.json, PRESERVANDO
+    todo o resto: outros hooks do usuario (GateGuard, caveman, ponytail, matcher 'Bash'…)
+    e qualquer outra chave (model, env, permissions…). Retorna True se gravou (mudou)."""
+    data = _load_settings(settings_path)
+    if data is None:
+        return False
+    if not _sync_hook(data, "PreToolUse", _COMMAND, matcher=_MATCHER):
+        return False
+    _write(settings_path, data)
     return True
 
 
@@ -70,33 +135,14 @@ _STATE_EVENTS = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification"
 
 
 def _ensure_event_hook(settings_path: Path, event: str, command: str) -> bool:
-    """Acrescenta {command} sob settings['hooks'][event], idempotente, preservando todo o resto.
+    """Garante UMA entrada {command} sob settings['hooks'][event], preservando todo o resto.
     Mesma blindagem do _ensure_settings_file: settings.json quebrado/estranho e PULADO (False)."""
-    data: dict = {}
-    if settings_path.exists():
-        raw = settings_path.read_text(encoding="utf-8").strip()
-        if raw:
-            try:
-                data = json.loads(raw)
-            except (json.JSONDecodeError, ValueError):
-                return False
-        if not isinstance(data, dict):
-            return False
-    existing_hooks = data.get("hooks")
-    if existing_hooks is not None and not isinstance(existing_hooks, dict):
+    data = _load_settings(settings_path)
+    if data is None:
         return False
-    ev_list = (existing_hooks or {}).get(event)
-    if ev_list is not None and not isinstance(ev_list, list):
+    if not _sync_hook(data, event, command):
         return False
-    for block in ev_list or []:
-        if not isinstance(block, dict):
-            continue
-        for h in block.get("hooks") or []:
-            if isinstance(h, dict) and h.get("command") == command:
-                return False  # ja instalado
-    hooks = data.setdefault("hooks", {})
-    hooks.setdefault(event, []).append({"hooks": [{"type": "command", "command": command}]})
-    settings_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    _write(settings_path, data)
     return True
 
 

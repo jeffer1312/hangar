@@ -345,15 +345,30 @@ export function openEditor(name: string): Promise<{ ok: boolean }> {
   });
 }
 
+// Cancelamento NÃO é falha. O Chat aborta o /history em voo quando a carga perde a validade (troca
+// de sessão, /clear, volta do background, unmount) — o rejeito que vem daí não pode virar pílula de
+// erro na tela. `TimeoutError` (o teto de 45s abaixo) fica de FORA de propósito: aquilo é falha de
+// verdade e o usuário precisa ver.
+export function isAbortError(e: unknown): boolean {
+  return e instanceof Error && e.name === 'AbortError';
+}
+
 // Histórico da sessão ATIVA. Com `limit` é a MESMA rota do tail dos cards do board
 // (getHistoryTailForServer): o backend faz tail-read, parseando só o fim do jsonl em vez do
 // arquivo inteiro. O Chat abre com a cauda e busca o resto (sem limit) em segundo plano.
-export function getHistory(name: string, limit?: number): Promise<ChatEvent[]> {
+// `signal` cancela de verdade: sem ele o fetch do histórico COMPLETO (medido: 1596 eventos num
+// jsonl de 136MB) seguia baixando depois de já ter sido descartado — banda e parse à toa no
+// celular, e vários em paralelo quando o usuário pula de sessão em sessão.
+export function getHistory(name: string, limit?: number, signal?: AbortSignal): Promise<ChatEvent[]> {
   // Teto largo (transcript grande em link lento existe), mas TETO: o resume do iOS chamava isto
   // sem timeout e um socket pendurado deixava o fetch em voo por minutos, sobrescrevendo estado
   // novo com foto velha quando enfim resolvia.
-  const q = limit ? `?limit=${limit}` : '';
-  return apiFetch<ChatEvent[]>(`/api/sessions/${encodeURIComponent(name)}/history${q}`, { signal: AbortSignal.timeout(45_000) });
+  const cap = AbortSignal.timeout(45_000);
+  // `!== undefined` e não truthy: limit=0 é um pedido explícito de zero, não um pedido do arquivo inteiro.
+  const q = limit !== undefined ? `?limit=${limit}` : '';
+  return apiFetch<ChatEvent[]>(`/api/sessions/${encodeURIComponent(name)}/history${q}`, {
+    signal: signal ? AbortSignal.any([signal, cap]) : cap,
+  });
 }
 
 export function getCommands(name: string): Promise<CommandInfo[]> {

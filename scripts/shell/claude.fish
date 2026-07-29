@@ -101,10 +101,19 @@ function claude
     # mesma versao. O probe custa um fork e transforma "nao abre" em "abre sem scope proprio".
     # As tres condicoes ficam na MESMA linha logica: em fish, um `and` em linha nova encerra a
     # condicao do if e vira o primeiro comando do corpo — o probe seria ignorado, calado.
+    # NAO usar `$run tmux ...` com $run possivelmente vazio: em fish, variavel vazia na posicao
+    # de COMANDO e erro fatal ("O comando expandido estava vazio"), ao contrario de bash/zsh, onde
+    # ela some e o comando seguinte roda. Como o probe acima FALHA nesta maquina (5/5, e o
+    # comentario acima ja dizia isso), o caminho vazio e o NORMAL aqui, nao a excecao — o `claude`
+    # simplesmente parava de abrir. Por isso a chamada e duplicada nos dois ramos, igual ao
+    # claude.posix.sh, que documenta a mesma escolha.
     if command -q systemd-run; and set -q XDG_RUNTIME_DIR; and systemd-run --user --scope --collect -q -- true >/dev/null 2>&1
-        set run systemd-run --user --scope --collect -q --
+        systemd-run --user --scope --collect -q -- tmux new-session -s $name -c "$PWD" \
+            -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 \
+            $pre claude --session-id $id $argv
+    else
+        tmux new-session -s $name -c "$PWD" \
+            -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 \
+            $pre claude --session-id $id $argv
     end
-    $run tmux new-session -s $name -c "$PWD" \
-        -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 \
-        $pre claude --session-id $id $argv
 end

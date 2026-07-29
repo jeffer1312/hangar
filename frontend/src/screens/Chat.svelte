@@ -36,8 +36,9 @@
     getWorkflows,
     answerQuestions,
     getRunners,
+    isAbortError,
   } from '../lib/api';
-  import { appendTail, prependOlder } from '../lib/history';
+  import { appendTail, hasSeam, prependOlder } from '../lib/history';
   import { parseStatusLine } from '../lib/statusline';
   import { listServers, getActiveId } from '../lib/auth';
   import { createActivityFolder } from '../lib/activity';
@@ -448,15 +449,30 @@
   // Uma geração por carga: troca de sessão, /clear, resume ou destroy invalidam o que está em voo,
   // pra resposta velha nunca cair na sessão errada (padrão que já existia como `visGen`).
   let histGen = 0;
-  // Só a carga de FUNDO falhou: a cauda está na tela e o chat funciona, mas o histórico antigo não
-  // veio. A falha aparece (pílula acima do composer, com retry) em vez de sumir calada.
-  let histTailOnly = $state(false);
+  // ...e a geração nova ABORTA o fetch da anterior. O guard de geração já descartava a resposta
+  // velha, mas o download seguia até o fim: pular de sessão em sessão no switcher (cada uma é um
+  // Chat NOVO por {#key}), abrir o PairChatModal/split (outro Chat, outra carga de fundo) ou dar
+  // /clear no meio deixava vários /history completos disputando a rede — no celular, justamente o
+  // caso que a carga em dois tempos existe pra resolver.
+  let histAbort: AbortController | null = null;
+  function newHistLoad(): AbortSignal {
+    histGen++;
+    histAbort?.abort();
+    histAbort = new AbortController();
+    return histAbort.signal;
+  }
+  // A carga de FUNDO não completou. 'failed' = erro de rede/backend, e tocar tenta de novo.
+  // 'unjoinable' = o histórico veio de OUTRO transcript (nenhum id em comum, /clear no meio do
+  // voo): a conversa fica truncada na cauda e o usuário precisa saber — mas repetir a busca daria
+  // o mesmo resultado, então esta não convida a tentar. Sumir calada é que não pode.
+  let histGap = $state<'' | 'failed' | 'unjoinable'>('');
 
   async function loadHistory() {
-    const g = ++histGen;
-    histTailOnly = false;
+    const signal = newHistLoad();
+    const g = histGen;
+    histGap = '';
     try {
-      const tail = await getHistory(sessionName, TAIL_FIRST);
+      const tail = await getHistory(sessionName, TAIL_FIRST, signal);
       if (g !== histGen) return;   // outra carga assumiu no meio do voo: esta resposta é velha
       events = tail;
       rebuildIndex();
@@ -465,7 +481,7 @@
       // Veio menos que o pedido = o transcript inteiro coube na cauda; não há o que buscar.
       if (tail.length >= TAIL_FIRST) loadOlderInBackground(g);
     } catch (err) {
-      if (g !== histGen) return;
+      if (isAbortError(err) || g !== histGen) return;   // cancelado ≠ falhou: nada na tela
       error = err instanceof Error ? err.message : 'Erro ao carregar histórico';
     } finally {
       if (g === histGen) loading = false;
@@ -473,23 +489,29 @@
   }
 
   // Fase 2: o histórico ANTERIOR à cauda, em segundo plano. Não devolve promise de propósito —
-  // ninguém espera por ela, a tela já está utilizável.
+  // ninguém espera por ela, a tela já está utilizável. Anda junto com a carga da geração `g`: usa o
+  // MESMO controller (não cria um novo), então quem invalida a geração aborta as duas fases.
   function loadOlderInBackground(g: number) {
-    getHistory(sessionName)
+    getHistory(sessionName, undefined, histAbort?.signal)
       .then((full) => {
         if (g !== histGen || !alive) return;   // resposta velha/pós-destroy: NÃO aplica
         // prependOlder só ACRESCENTA o que é mais antigo que a nossa primeira bolha: o que o SSE
         // entregou durante o fetch fica intacto, e nada que o dedup removeu volta.
         const merged = prependOlder(full, events);
-        if (!merged) return;
+        if (!merged) {
+          // null tem dois motivos e só um é problema: sem ponto de costura a conversa segue
+          // truncada (avisa); "já temos desde o começo" é o caso feliz (silêncio).
+          histGap = hasSeam(full, events) ? '' : 'unjoinable';
+          return;
+        }
         events = merged;
         rebuildIndex();
         reseedDerived();
-        histTailOnly = false;
+        histGap = '';
       })
-      .catch(() => {
-        if (g !== histGen || !alive) return;
-        histTailOnly = true;
+      .catch((err) => {
+        if (isAbortError(err) || g !== histGen || !alive) return;   // cancelado ≠ falhou
+        histGap = 'failed';
       });
   }
 
@@ -662,11 +684,12 @@
     clearTimeout(watchdog);
     clearTimeout(reconnectTimer);
     sseRetryDelay = SSE_RETRY_MIN;   // rede provavelmente voltou: reconexao rapida de novo
-    const g = ++histGen;
+    const signal = newHistLoad();   // aborta a carga de fundo que ficou pendurada no background
+    const g = histGen;
     try {
       // So a CAUDA: o buraco do background e no FIM da conversa, e o historico antigo ja esta em
       // memoria — re-baixar o jsonl inteiro a cada volta pro foreground era o custo que sobrava.
-      const fresh = await getHistory(sessionName, TAIL_FIRST);
+      const fresh = await getHistory(sessionName, TAIL_FIRST, signal);
       if (g !== histGen || !alive) return;   // resposta velha/pos-destroy: NAO sobrescreve nem conecta
       const head = events[0]?.id;
       events = appendTail(fresh, events);
@@ -694,6 +717,7 @@
   onDestroy(() => {
     alive = false;   // connectSSE/onVisible em voo viram no-op — sem EventSource fantasma
     histGen++;
+    histAbort?.abort();   // e o /history em voo para de baixar (nao so de ser aplicado)
     es?.close();
     clearTimeout(watchdog);
     clearTimeout(reconnectTimer);
@@ -1070,12 +1094,19 @@
     />
   {/if}
 
-  {#if histTailOnly && !loading && !error}
+  {#if histGap && !loading && !error}
     <!-- A cauda carregou, o histórico antigo não. O chat segue utilizável; a falha aparece aqui
-         (em vez de rolar pra cima e achar que a conversa começa no meio) e o toque tenta de novo. -->
-    <button class="hist-pill" style:bottom={`${dockH + 10}px`} onclick={() => loadOlderInBackground(histGen)}>
-      Histórico antigo não carregou — tocar pra tentar
-    </button>
+         (em vez de rolar pra cima e achar que a conversa começa no meio). Falha de rede convida a
+         tocar; transcript trocado NÃO — buscar de novo daria o mesmo, então é só o aviso. -->
+    {#if histGap === 'failed'}
+      <button class="hist-pill" style:bottom={`${dockH + 10}px`} onclick={() => loadOlderInBackground(histGen)}>
+        Histórico antigo não carregou — tocar pra tentar
+      </button>
+    {:else}
+      <div class="hist-pill" style:bottom={`${dockH + 10}px`}>
+        Sem o histórico anterior — o transcript mudou
+      </div>
+    {/if}
   {/if}
 
   {#if tuiOverlay && !mirrorOpen}
