@@ -37,6 +37,7 @@
     answerQuestions,
     getRunners,
   } from '../lib/api';
+  import { appendTail, prependOlder } from '../lib/history';
   import { parseStatusLine } from '../lib/statusline';
   import { listServers, getActiveId } from '../lib/auth';
   import { createActivityFolder } from '../lib/activity';
@@ -433,16 +434,63 @@
   // mais comum) -> copy propria + saida. O resto mostra a mensagem crua.
   const errorInfo = $derived({ notFound: /(^|\D)404(\D|$)/.test(error) || /not found/i.test(error) });
 
+  // Carga em DOIS TEMPOS. O /history sem limite lê o jsonl inteiro (medido: 1596 eventos, ~542ms
+  // num transcript de 136MB) só pro MessageList montar as últimas 120 linhas — e pagava isso ao
+  // ABRIR a conversa e a cada volta do segundo plano (no iPhone, o tempo todo). Agora a cauda vem
+  // primeiro (a tela pinta com ela) e o histórico antigo chega em segundo plano, de modo que rolar
+  // pra cima continua revelando páginas EM MEMÓRIA, sem chamada nova ao backend (invariante do
+  // CLAUDE.md).
+  // 400 e não 120: (a) o MessageList janela em WINDOW=120 eventos CRUS e filtra tool_result, então
+  // 120 crus podem virar meia dúzia de bolhas numa sessão de ferramentas; 400 dão ~2 páginas de
+  // PAGE=100 pra rolar antes de a carga de fundo chegar; (b) 400 > _BACKFILL_LINES=200 do SSE, o
+  // que faz a mesma cauda servir pra fechar o buraco do resume (onVisible) sem re-baixar tudo.
+  const TAIL_FIRST = 400;
+  // Uma geração por carga: troca de sessão, /clear, resume ou destroy invalidam o que está em voo,
+  // pra resposta velha nunca cair na sessão errada (padrão que já existia como `visGen`).
+  let histGen = 0;
+  // Só a carga de FUNDO falhou: a cauda está na tela e o chat funciona, mas o histórico antigo não
+  // veio. A falha aparece (pílula acima do composer, com retry) em vez de sumir calada.
+  let histTailOnly = $state(false);
+
   async function loadHistory() {
+    const g = ++histGen;
+    histTailOnly = false;
     try {
-      events = await getHistory(sessionName);
+      const tail = await getHistory(sessionName, TAIL_FIRST);
+      if (g !== histGen) return;   // outra carga assumiu no meio do voo: esta resposta é velha
+      events = tail;
       rebuildIndex();
       reseedDerived();
+      error = '';
+      // Veio menos que o pedido = o transcript inteiro coube na cauda; não há o que buscar.
+      if (tail.length >= TAIL_FIRST) loadOlderInBackground(g);
     } catch (err) {
+      if (g !== histGen) return;
       error = err instanceof Error ? err.message : 'Erro ao carregar histórico';
     } finally {
-      loading = false;
+      if (g === histGen) loading = false;
     }
+  }
+
+  // Fase 2: o histórico ANTERIOR à cauda, em segundo plano. Não devolve promise de propósito —
+  // ninguém espera por ela, a tela já está utilizável.
+  function loadOlderInBackground(g: number) {
+    getHistory(sessionName)
+      .then((full) => {
+        if (g !== histGen || !alive) return;   // resposta velha/pós-destroy: NÃO aplica
+        // prependOlder só ACRESCENTA o que é mais antigo que a nossa primeira bolha: o que o SSE
+        // entregou durante o fetch fica intacto, e nada que o dedup removeu volta.
+        const merged = prependOlder(full, events);
+        if (!merged) return;
+        events = merged;
+        rebuildIndex();
+        reseedDerived();
+        histTailOnly = false;
+      })
+      .catch(() => {
+        if (g !== histGen || !alive) return;
+        histTailOnly = true;
+      });
   }
 
   // Watchdog de liveness: o backend manda um evento 'ping' a cada 10s. 25s sem NADA (msg/state/ping)
@@ -607,7 +655,6 @@
   // tail do SSE so faz a ponte ate a subscricao (dedup por id, sem reordenar). Falha aqui NAO trava a
   // tela (o connectSSE/onerror re-sincroniza) -> ignora e segue. Reconexoes de blip (watchdog/onerror)
   // continuam SO com o tail-K: cobrem poucos segundos sem re-shippar o arquivo inteiro.
-  let visGen = 0;   // descarta getHistory velho: um resume novo (ou destroy) invalida o anterior
   async function onVisible() {
     if (document.visibilityState !== 'visible') return;
     // Segura watchdog/retry DURANTE o re-seed: no wake do iOS o watchdog vencido disparava um
@@ -615,15 +662,21 @@
     clearTimeout(watchdog);
     clearTimeout(reconnectTimer);
     sseRetryDelay = SSE_RETRY_MIN;   // rede provavelmente voltou: reconexao rapida de novo
-    const g = ++visGen;
+    const g = ++histGen;
     try {
-      const fresh = await getHistory(sessionName);
-      if (g !== visGen || !alive) return;   // resposta velha/pos-destroy: NAO sobrescreve nem conecta
-      events = fresh;
+      // So a CAUDA: o buraco do background e no FIM da conversa, e o historico antigo ja esta em
+      // memoria — re-baixar o jsonl inteiro a cada volta pro foreground era o custo que sobrava.
+      const fresh = await getHistory(sessionName, TAIL_FIRST);
+      if (g !== histGen || !alive) return;   // resposta velha/pos-destroy: NAO sobrescreve nem conecta
+      const head = events[0]?.id;
+      events = appendTail(fresh, events);
       rebuildIndex();
       reseedDerived();
+      // Sem sobreposicao a appendTail re-ancorou na cauda (background longo demais): o historico
+      // antigo saiu da lista e volta em segundo plano, como na abertura.
+      if (events[0]?.id !== head) loadOlderInBackground(g);
     } catch { /* offline momentaneo: o connectSSE/onerror cuida do re-sync */ }
-    if (g !== visGen || !alive) return;
+    if (g !== histGen || !alive) return;
     connectSSE();
   }
 
@@ -640,7 +693,7 @@
 
   onDestroy(() => {
     alive = false;   // connectSSE/onVisible em voo viram no-op — sem EventSource fantasma
-    visGen++;
+    histGen++;
     es?.close();
     clearTimeout(watchdog);
     clearTimeout(reconnectTimer);
@@ -1017,6 +1070,14 @@
     />
   {/if}
 
+  {#if histTailOnly && !loading && !error}
+    <!-- A cauda carregou, o histórico antigo não. O chat segue utilizável; a falha aparece aqui
+         (em vez de rolar pra cima e achar que a conversa começa no meio) e o toque tenta de novo. -->
+    <button class="hist-pill" style:bottom={`${dockH + 10}px`} onclick={() => loadOlderInBackground(histGen)}>
+      Histórico antigo não carregou — tocar pra tentar
+    </button>
+  {/if}
+
   {#if tuiOverlay && !mirrorOpen}
     <!-- Aviso DESTACADO: ha um painel que SO da pra interagir pela TUI. Pulsa pra chamar atencao;
          tocar abre o espelho. Nao toma a tela (so um banner acima do dock). -->
@@ -1369,6 +1430,28 @@
     -webkit-tap-highlight-color: transparent;
   }
   .awaiting-pill:active { opacity: 0.85; }
+
+  /* Aviso de carga de fundo falhada: mesma familia do awaiting-pill (acima do dock), a ESQUERDA
+     pra nao brigar com ele (direita) nem com o tui-pill (centro). Discreto de proposito — nao e
+     bloqueio, e informacao: falta historico antigo. */
+  .hist-pill {
+    position: absolute;
+    left: var(--space-4);
+    z-index: 21;
+    max-width: calc(100% - var(--space-8));
+    padding: var(--space-2) var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full, 999px);
+    background: var(--bg-elevated, var(--bg-base));
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .hist-pill:active { background: var(--bg-hover); }
 
   /* Dead state footer */
   .dead-footer {
