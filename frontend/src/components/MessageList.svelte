@@ -399,6 +399,19 @@
     text-shadow: 0 1px 3px rgba(0, 0, 0, calc(var(--cp-read-alpha, 92) * 0.009)),
                  0 0 12px rgba(0, 0, 0, calc(var(--cp-read-alpha, 92) * 0.006));
   }
+  /* No tema CLARO o reforço vai pro outro lado. A regra acima empurra o texto pro BRANCO e põe
+     sombra preta: certo sobre foto num app escuro, suicida num app claro, onde --text-primary-base
+     já é #221d1b (app.css:104). Misturar 60% de branco nele dá cinza claro, e sobre a parte clara da
+     foto a conversa some — foi o que apareceu no print. Aqui o alvo é o PRETO e o halo é branco,
+     mesma conta e mesmo slider, espelhados. */
+  :global(html[data-theme='light'][data-read='text']) .messages-inner {
+    --text-primary: color-mix(in srgb, #000 calc(var(--cp-text-boost, 60) * 1%), var(--text-primary-base));
+    --text-secondary: color-mix(in srgb, #000 calc(var(--cp-text-boost, 60) * 0.7%), var(--text-secondary-base));
+    --text-muted: color-mix(in srgb, #000 calc(var(--cp-text-boost, 60) * 0.55%), var(--text-muted-base));
+    text-shadow: 0 1px 3px rgba(255, 255, 255, calc(var(--cp-read-alpha, 92) * 0.009)),
+                 0 0 12px rgba(255, 255, 255, calc(var(--cp-read-alpha, 92) * 0.006));
+  }
+
   /* FOLHA: o oposto — card explícito atrás da conversa inteira, com moldura e sombra.
      --cp-read-alpha (0..100) vem do slider: 100 tapa a foto, 0 some com a folha. */
   :global(html[data-read='solid']) .messages-inner {
