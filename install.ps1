@@ -489,19 +489,34 @@ if (-not $bash) {
 
     # (1) shim de python3 SEM extensao: quem vai executa-lo e o bash, e ele le o shebang.
     # Um python3.cmd nao serviria - o bash nao roda .cmd por conta propria.
-    # `py -3` primeiro, NAO `python`: num Windows tipico o `python` do PATH e o atalho da
-    # Microsoft Store, que so imprime "Python nao foi encontrado" e sai - foi exatamente o que
-    # aconteceu aqui. O `py` (Python Launcher) vem com o instalador do python.org, que e o que o
-    # winget instala, e resolve a versao 3 sem ambiguidade. O `python` fica so de reserva.
-    $shim = Join-Path $binUsuario 'python3'
-    $corpoShim = "#!/bin/sh`n" +
-                 "# Gerado por claude-cockpit/install.ps1 - o cp-send chama python3.`n" +
-                 "if command -v py >/dev/null 2>&1; then exec py -3 `"`$@`"; fi`n" +
-                 "exec python `"`$@`"`n"
-    if (-not (Test-Path $shim) -or (Get-Content $shim -Raw) -ne $corpoShim) {
-        Set-Content -Path $shim -Encoding ASCII -NoNewline -Value $corpoShim
-        Ok 'atalho python3 criado (usa py -3; o `python` do PATH costuma ser o stub da Store)'
-    } else { Ok 'atalho python3 ja atualizado' }
+    # O caminho do Python vai CRAVADO no atalho, resolvido aqui pelo PowerShell - nos mesmos
+    # instalamos ele no passo 1, entao o local e conhecido e nao ha por que procurar duas vezes.
+    # Procurar de novo la dentro nao funciona: `bash -lc` e login shell e reconstroi o PATH, entao
+    # o que o PowerShell acha o shell do atalho nao acha. Medido: caiu no `python` e pegou o stub
+    # da Microsoft Store ("Python nao foi encontrado"), que e o que ha no PATH de um Windows tipico.
+    $pyExe = $null
+    foreach ($cand in 'py', 'python') {
+        $c = Get-Command $cand -CommandType Application -ErrorAction SilentlyContinue |
+             Select-Object -First 1
+        # WindowsApps = atalho da Store, que nao executa nada. Pular explicitamente.
+        if ($c -and $c.Source -notlike '*WindowsApps*') { $pyExe = $c.Source; break }
+    }
+    if (-not $pyExe) {
+        Falta 'nenhum Python real encontrado (so o atalho da Store) - cp-send ficaria sem JSON'
+        Nota 'instale com:  winget install --id Python.Python.3.13'
+    } else {
+        # C:\Windows\py.exe -> /c/Windows/py.exe, que e a forma que o bash do MSYS executa.
+        $pyMsys = ($pyExe -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
+        $arg = if ((Split-Path -Leaf $pyExe) -ieq 'py.exe') { ' -3' } else { '' }
+        $shim = Join-Path $binUsuario 'python3'
+        $corpoShim = "#!/bin/sh`n" +
+                     "# Gerado por claude-cockpit/install.ps1 - o cp-send chama python3.`n" +
+                     "exec '$pyMsys'$arg `"`$@`"`n"
+        if (-not (Test-Path $shim) -or (Get-Content $shim -Raw) -ne $corpoShim) {
+            Set-Content -Path $shim -Encoding ASCII -NoNewline -Value $corpoShim
+            Ok "atalho python3 -> $pyExe$arg"
+        } else { Ok 'atalho python3 ja atualizado' }
+    }
 
     # (2) lancador pro PowerShell: o script nao tem extensao, entao o Windows nao o executa
     # sozinho. O .cmd entrega tudo pro bash e repassa os argumentos.
