@@ -558,6 +558,19 @@ if (-not $bash) {
         $saida = & $bash '-lc' "export PATH='$binMsys':`$PATH; cd '$rota' && ./scripts/install-cp-send.sh" 2>&1
     } finally { $ErrorActionPreference = $anterior }
     if ($LASTEXITCODE -eq 0) {
+        # O `ln -s` do Git Bash COPIA em vez de linkar, e o cp-send se localiza pelo proprio
+        # caminho: `dirname $(realpath $0)/../backend/.env`. Com a copia em ~/.local/bin, ele
+        # procura o .env em ~/.local/backend/ - que nao existe, e o --list falha dizendo que nao
+        # acha o backend. Substituimos a copia por um lancador que chama o script NO REPO com
+        # caminho absoluto: dentro dele, $0 volta a ser o do repo e a busca acerta.
+        $cpSendSh = Join-Path $binUsuario 'cp-send'
+        $corpoCp = "#!/bin/sh`n" +
+                   "# Gerado por claude-cockpit/install.ps1 - ver comentario no instalador.`n" +
+                   "exec '$rota/scripts/cp-send' `"`$@`"`n"
+        if (-not (Test-Path $cpSendSh) -or (Get-Content $cpSendSh -Raw) -ne $corpoCp) {
+            Set-Content -Path $cpSendSh -Encoding ASCII -NoNewline -Value $corpoCp
+            Ok 'cp-send do ~/.local/bin aponta pro script do repo'
+        }
         Ok 'cp-send + skills instalados'
         Nota 'teste (em terminal NOVO):  cp-send --list'
     } else {
