@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import re
@@ -117,6 +118,30 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
                 # id proprio: a entrada nao tem uuid, e o front deduplica por id.
                 return [ChatEvent(kind="tool_result", id=f"queued-task:{tid}",
                                   tool_use_id=f"task:{tid}", result="task-notification")]
+            return []
+        # Msg de usuario digitada ENQUANTO o agente trabalha: o harness enfileira (`enqueue`) e, ao
+        # consumi-la DENTRO do turno em andamento, grava `remove` — nunca vira uma entrada type='user'.
+        # Sem isto ela some do chat (aparece so no terminal, que conhece a fila direto). Renderiza no
+        # `remove` (o consumo mid-turn): e o par EXATO das invisiveis. As que viram turno de verdade
+        # saem por `dequeue` -> ja tem seu type='user' e NAO passam por aqui, entao nao duplica. id
+        # pelo timestamp (a entrada nao tem uuid) pro front deduplicar por id. Mesma filtragem de meta
+        # do caminho user normal (comando/skill/system-reminder/imagem sintetica nao viram bubble).
+        if obj.get("operation") == "remove" and isinstance(queued, str):
+            if _is_command_meta(queued):
+                return []
+            cleaned = _strip_meta_blocks(queued)
+            if not cleaned or _IMAGE_SOURCE_RE.match(cleaned):
+                return []
+            cleaned = _IMAGE_MARKER_RE.sub("", cleaned).strip()   # tira "[Image #N]" da legenda
+            if not cleaned:
+                return []
+            # id = timestamp + hash do conteudo. So o timestamp NAO basta: duas msgs consumidas no
+            # MESMO instante (medido: "no caso..." e "so pra..." removidas as 17:16:37) colidiriam e o
+            # front, que deduplica por id, esconderia uma. Hash estavel (nao o hash() randomizado do
+            # processo) pra o mesmo remove reparseado manter o id e nao duplicar na reconexao do SSE.
+            digest = hashlib.md5(queued.encode("utf-8", "replace")).hexdigest()[:8]
+            return [ChatEvent(kind="user_msg",
+                              id=f"queued:{obj.get('timestamp', '')}:{digest}", text=cleaned)]
         return []
 
     msg = obj.get("message")

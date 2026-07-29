@@ -102,7 +102,26 @@ for s in sessions:
     exit 0
 fi
 
-me() { tmux display-message -p '#S' 2>/dev/null || echo "cli"; }
+# Quem sou eu. Ordem: carimbo do nascimento (CP_SESSION_NAME, posto pelo new_session no tmux.py) ->
+# só então a "sessão corrente" do tmux.
+#
+# `display-message -p '#S'` NÃO é propriedade de quem chama: é a sessão do CLIENTE anexado, estado
+# global do servidor. Com um único cliente anexado (medido: `list-clients` devolvia só
+# `/dev/pts/9067: jeffer1312`), TODA sessão que perguntava recebia o mesmo nome. A sessão B rodava
+# `cp-send --unpair`, se identificava como A, e o backend desparava A -> o --unpair de uma desfazia o
+# vínculo da OUTRA e o grupo de 2 se dissolvia (2x seguidas, sem ninguém pedir). Também assinava
+# recado com o nome errado. O env vem do pane, então é imune ao cliente anexado.
+#
+# O carimbo só vale se a sessão AINDA se chamar assim: `rename-session` (tmux.py) não reescreve env
+# de processo já rodando, e um nome obsoleto endereçaria outra sessão — pior que o bug original.
+# has-session com `=` força match EXATO (sem ele o tmux cai em prefix match e `jeffer1312` casaria
+# com `jeffer1312-2`); obsoleto -> cai no fallback.
+me() {
+    if [[ -n "${CP_SESSION_NAME:-}" ]] && tmux has-session -t "=$CP_SESSION_NAME" 2>/dev/null; then
+        echo "$CP_SESSION_NAME"; return
+    fi
+    tmux display-message -p '#S' 2>/dev/null || echo "cli"
+}
 
 if [[ "$1" == "--pair" ]]; then
     peer="${2:?uso: cp-send --pair <sessao|servidor::sessao> [tarefa...]}"; shift 2

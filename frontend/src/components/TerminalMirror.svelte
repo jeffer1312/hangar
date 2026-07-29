@@ -48,9 +48,22 @@
 
   // Poll do pane CRU enquanto aberto. O overlay so-TUI nao gera evento no .jsonl/SSE, entao a unica
   // fonte viva e o capture-pane. ~450ms = responsivo sem martelar o backend (1 subprocess por poll).
+  //
+  // Auto-agendado (setTimeout no `finally`), NAO setInterval: o intervalo dispara a cada 450ms mesmo
+  // com o tick anterior ainda em voo (`tick` e async — o timer nao espera a promise). No Linux cada
+  // poll custa ~10-30ms e nunca sobrepoe; no WINDOWS o /api/pane custa ~350ms (3 spawns de psmux.exe:
+  // has_session + capture_pane + pane_scrollback, ~110ms cada, contra um socket unix instantaneo la),
+  // e sob carga passa dos 450ms -> cada tick novo entrava ANTES do anterior sair e a fila crescia sem
+  // limite: requisicao de 350ms de trabalho levando 13s (~97% so de espera), threadpool sync do
+  // FastAPI ocupado -> ate o /api/sessions (~150ms) saia em 2-3s. Pior: estourado o timeout=5 do
+  // tmux.py, o capture_pane devolve "" e o endpoint responde 200 com texto VAZIO — o pane simplesmente
+  // ficava em branco, sem erro nenhum. Agendando so depois que o tick termina, o poll vira adaptativo
+  // (450ms no Linux, ~800ms no Windows) e o empilhamento fica impossivel por construcao. Mesmo padrao
+  // do `navInFlight` no Chat.svelte, que ja fazia isso pro poll de sessoes.
   $effect(() => {
     if (!open) return;
     let alive = true;
+    let id: ReturnType<typeof setTimeout> | undefined;
     async function tick() {
       try {
         // untrack: os ARGUMENTOS são avaliados antes do primeiro await, ou seja, dentro da janela em
@@ -70,11 +83,14 @@
         requestAnimationFrame(() => { if (atBottom) toBottom(); });
       } catch (e) {
         if (alive) err = e instanceof Error ? e.message : 'erro';
+      } finally {
+        // `finally` e nao o fim do try: os tres `return` antecipados acima (desmontado, diff-gate,
+        // congelado) tambem passam por aqui — sem isso qualquer um deles mataria o poll pra sempre.
+        if (alive) id = setTimeout(tick, 450);
       }
     }
     tick();
-    const id = setInterval(tick, 450);
-    return () => { alive = false; clearInterval(id); };
+    return () => { alive = false; clearTimeout(id); };
   });
 
   async function loadMore() {

@@ -231,8 +231,9 @@ def test_task_notification_enfileirada_vira_tool_result_sintetico():
     assert evs[0].tool_use_id == "task:a4e4f68c8a3c46749"   # e o que o fold do painel casa
 
 
-def test_queue_operation_sem_task_notification_e_ignorada():
-    # Enfileiramento de prompt normal do usuario NAO pode virar evento de chat.
+def test_queue_operation_enqueue_nao_renderiza():
+    # enqueue NAO vira bubble: a msg sai no `remove` (consumo mid-turn), pra nao duplicar a que
+    # eventualmente vira turno real via `dequeue`. Ver test_queued_removed_message_vira_user_bubble.
     ev = json.dumps({"type": "queue-operation", "operation": "enqueue",
                      "sessionId": "s1", "content": "roda os testes"})
     assert parse_line(ev) == []
@@ -240,3 +241,42 @@ def test_queue_operation_sem_task_notification_e_ignorada():
 
 def test_queue_operation_sem_content_nao_explode():
     assert parse_line(json.dumps({"type": "queue-operation", "operation": "enqueue"})) == []
+
+
+# --- msg de usuario digitada DURANTE o turno do agente (mid-turn) ---------------------------
+# Enfileirada (`enqueue`) e consumida dentro do turno (`remove`) -> nunca vira type='user', entao
+# some do chat (aparecia so no terminal). Renderiza no `remove`; enqueue/dequeue nao.
+
+def test_queued_removed_message_vira_user_bubble():
+    ev = json.dumps({"type": "queue-operation", "operation": "remove", "sessionId": "s1",
+                     "timestamp": "2026-07-29T17:16:37", "content": "no caso pode abrir com haiku"})
+    [got] = parse_line(ev)
+    assert got.kind == "user_msg"
+    assert got.text == "no caso pode abrir com haiku"
+    assert got.id.startswith("queued:2026-07-29T17:16:37:")   # ts + hash do conteudo
+
+
+def test_queued_removed_ids_diferem_no_mesmo_timestamp():
+    # Duas msgs consumidas no MESMO instante precisam de ids DISTINTOS, senao o front (deduplica por
+    # id) esconde uma. Observado real: "no caso..." e "so pra..." ambas removidas as 17:16:37.
+    ts = "2026-07-29T17:16:37"
+    [a] = parse_line(json.dumps({"type": "queue-operation", "operation": "remove",
+                                 "timestamp": ts, "content": "no caso pode abrir"}))
+    [b] = parse_line(json.dumps({"type": "queue-operation", "operation": "remove",
+                                 "timestamp": ts, "content": "so pra conversa crescer"}))
+    assert a.id != b.id and a.text != b.text
+
+
+def test_queued_dequeue_nao_renderiza_para_nao_duplicar_turno_real():
+    # dequeue = virou turno de verdade (tem seu type='user'); renderizar aqui duplicaria a bubble.
+    ev = json.dumps({"type": "queue-operation", "operation": "dequeue", "sessionId": "s1",
+                     "timestamp": "2026-07-29T16:57:13", "content": "qual o modelo de tmux"})
+    assert parse_line(ev) == []
+
+
+def test_queued_removed_meta_nao_vira_bubble():
+    # Conteudo de tooling (comando/skill/system-reminder) consumido da fila continua fora do chat.
+    ev = json.dumps({"type": "queue-operation", "operation": "remove", "sessionId": "s1",
+                     "timestamp": "2026-07-29T17:00:00",
+                     "content": "<command-name>/tui</command-name>"})
+    assert parse_line(ev) == []

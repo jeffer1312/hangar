@@ -282,3 +282,49 @@ def test_new_session_sem_systemd_run_quebrado_ainda_cria(monkeypatch):
     cmd = vistos[-1]
     assert cmd[0] == "tmux"
     assert "systemd-run" not in cmd
+
+
+# --- fatiamento de literal grande no Windows (corte do inicio pela TUI no submit) -----------------
+# No Windows a TUI do Claude Code come o COMECO de um send-keys -l acima de ~1120 chars (entra em
+# modo paste e o Enter envia so a cauda). Foi o corte do prompt de pareamento (1220 -> so ~300
+# finais, sem o "[de: claude-pocket]"). O send_keys fatia em pedacos <= _WIN_CHUNK com pausa, SO no
+# Windows. Estes testes travam as duas garantias: Windows fatia byte-exato; Linux fica intocado.
+
+def _captura_run(monkeypatch):
+    chamadas = []
+    monkeypatch.setattr(tmux, "RUN", lambda args, **k: (chamadas.append(list(args)) or _CP()))
+    return chamadas
+
+
+def test_send_literal_curto_uma_chamada_so(monkeypatch):
+    # Dentro do teto -> UMA chamada, identico ao de sempre (mesmo no Windows).
+    monkeypatch.setattr(tmux.os, "name", "nt")
+    chamadas = _captura_run(monkeypatch)
+    tmux.send_keys("cc", "x" * 500, literal=True)
+    assert chamadas == [["tmux", "send-keys", "-t", "=cc:", "-l", "--", "x" * 500]]
+
+
+def test_send_literal_windows_fatia_e_e_byte_exato(monkeypatch):
+    # > teto no Windows -> fatia. A CONCATENACAO dos pedacos tem de ser byte-exata (nada perdido,
+    # nada duplicado, ordem preservada) e o INICIO (o que sumia) vai no primeiro pedaco.
+    monkeypatch.setattr(tmux.os, "name", "nt")
+    monkeypatch.setattr(tmux.time, "sleep", lambda *_a, **_k: None)   # sem pausa real no teste
+    chamadas = _captura_run(monkeypatch)
+    texto = "".join(f"{i:04d}|" for i in range(1, 400))   # 1995 chars, marcado por posicao
+    tmux.send_keys("cc", texto, literal=True)
+    assert len(chamadas) > 1                                            # de fato fatiou
+    assert all(c[:6] == ["tmux", "send-keys", "-t", "=cc:", "-l", "--"] for c in chamadas)
+    pedacos = [c[6] for c in chamadas]
+    assert all(len(p) <= tmux._WIN_CHUNK for p in pedacos)             # nenhum pedaco estoura o teto
+    assert "".join(pedacos) == texto                                   # byte-exato
+    assert pedacos[0].startswith("0001|")                              # o comeco vai primeiro
+
+
+def test_send_literal_posix_nunca_fatia(monkeypatch):
+    # Decisao do dono do repo: no Linux o bug nao existe -> texto grande vai numa chamada SO, sem
+    # pausa. O ramo posix fica byte-identico a hoje, risco zero.
+    monkeypatch.setattr(tmux.os, "name", "posix")
+    chamadas = _captura_run(monkeypatch)
+    texto = "z" * 5000
+    tmux.send_keys("cc", texto, literal=True)
+    assert chamadas == [["tmux", "send-keys", "-t", "=cc:", "-l", "--", texto]]
