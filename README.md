@@ -35,10 +35,42 @@ You leave `claude` running in a `tmux` session on your machine. claude-cockpit e
 
 ## Quickstart
 
+Recommended — one line, clones and installs:
+
+```bash
+# Linux/macOS
+curl -fsSL https://raw.githubusercontent.com/jeffer1312/claude-cockpit/main/bootstrap.sh | bash
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/jeffer1312/claude-cockpit/main/bootstrap.ps1 | iex
+```
+
+It lands in `~/claude-cockpit` (`$HOME\claude-cockpit` on Windows) and then runs the installer
+for you. Another folder, or extra `install.sh` flags, go after `-s --` — under `curl | bash` that
+separator is what keeps bash from eating them:
+
+```bash
+curl -fsSL …/bootstrap.sh | bash -s -- ~/apps/claude-cockpit --no-frontend
+```
+
+On Windows set `$env:CP_DESTINO = 'D:\claude-cockpit'` before the `irm` line (under `irm | iex`
+the script receives text, not arguments). Re-running is safe: if the folder is already this repo
+it does a `git pull` instead of cloning, and if it's something else it stops instead of touching it.
+
+Alternative — clone by hand and read before you run, same result:
+
 ```bash
 git clone https://github.com/jeffer1312/claude-cockpit && cd claude-cockpit
 ./install.sh        # checa deps, instala backend+frontend, gera token, oferece wrapper + serviços
 ```
+
+Install on a **local disk, never on a network share**: `uv sync` and `npm ci` recreate
+`backend/.venv` and `frontend/node_modules` inside the folder, and on a share mounted from another
+machine those two are *that* machine's — measured, the venv points at `/usr/bin/python3.14` and
+`node_modules` carries `@esbuild/linux-x64` — so installing from a second machine breaks the first
+machine's install.
 
 Then open the URL from the backend's startup QR on your phone and paste the token from
 `backend/.env`. Details (Tailscale, PWA install): [docs/USAGE.md](docs/USAGE.md).
