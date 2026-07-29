@@ -361,7 +361,18 @@ if ($jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu l
             # -Exe pelo caminho completo: a tarefa nasce com o PATH do sistema, nao com o do
             # seu shell - `uv` instalado em ~\.local\bin nao seria encontrado.
             $exe = (Get-Command $t.Exe).Source
-            $acao = New-ScheduledTaskAction -Execute $exe -Argument $t.Args -WorkingDirectory $t.Dir
+            # Rodar o programa DIRETO abre uma janela de console e ela fica na tela pra sempre -
+            # todo processo de console no Windows abre uma. Passando por um powershell oculto, a
+            # janela some e os filhos herdam o console escondido.
+            # A saida NAO pode simplesmente sumir junto: e nela que sai o QR de pareamento e
+            # qualquer erro de subida. Vai pra arquivo, um por servico, sobrescrito a cada start
+            # (nao cresce sem limite; o que interessa e sempre a execucao atual).
+            $log = Join-Path $env:LOCALAPPDATA "claude-cockpit\$($t.Nome).log"
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $log) | Out-Null
+            $interno = "& '$exe' $($t.Args) *>&1 | Out-File -FilePath '$log' -Encoding utf8"
+            $acao = New-ScheduledTaskAction -Execute 'powershell.exe' `
+                -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"$interno\"" `
+                -WorkingDirectory $t.Dir
             $gatilho = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
             $cfg = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
                         -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
@@ -374,7 +385,9 @@ if ($jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu l
             Start-ScheduledTask -TaskName $t.Nome -ErrorAction SilentlyContinue
             Ok "tarefa $($t.Nome) registrada e iniciada"
         }
-        Nota 'Remover depois: Unregister-ScheduledTask -TaskName claude-cockpit-backend'
+        Nota 'Log (inclui o QR de pareamento):'
+    Nota "  $env:LOCALAPPDATA\claude-cockpit\claude-cockpit-backend.log"
+    Nota 'Remover depois: Unregister-ScheduledTask -TaskName claude-cockpit-backend'
     } catch {
         Falta "nao deu pra registrar as tarefas: $_"
         Nota 'Sem isso, o backend so roda enquanto o terminal estiver aberto.'
