@@ -149,7 +149,11 @@
 :root {
   /* Typography */
   --font-ui:   -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
-  --font-mono: "SF Mono", ui-monospace, "Cascadia Code", "Fira Code", monospace;
+  /* A família do terminal vem PRIMEIRO e por nome: `monospace` puro entrega o que o fontconfig disser
+     (Noto Sans Mono nesta máquina), não a fonte que o kitty usa — nenhuma API web lê config de
+     terminal. Onde JetBrains não existe (iPhone), cai no ui-monospace/SF Mono sozinho. Removi
+     "Cascadia Code" e "Fira Code": nenhuma das duas se resolve aqui. */
+  --font-mono: "JetBrainsMono Nerd Font", "JetBrains Mono", ui-monospace, "SF Mono", monospace;
 
   --text-xs:   0.75rem;
   --text-sm:   0.875rem;
@@ -204,6 +208,13 @@ body {
   line-height: 1.55;
   color: var(--text-primary);
   background: var(--bg-base);
+}
+
+/* Fonte monoespaçada no app inteiro (Aparência → Fonte). Redefinir o TOKEN, e não `font-family` do
+   body, é o que alcança quem usa var(--font-ui) por conta própria (bolhas, sidebar, painéis) — trocar
+   só o body pegava apenas quem herda. Sem `data-font`, nada muda. */
+html[data-font='mono'] {
+  --font-ui: var(--font-mono);
 }
 
 /* ── Fundo opcional (lib/background.ts) ────────────────────────────────────

@@ -181,6 +181,22 @@
   .prose :global(.copy-btn.copied) { color: var(--accent); opacity: 1; }
   .prose :global(.copy-btn.copied)::before { content: '✓'; }
 
+  /* Com foto de fundo, o bloco de código era a ÚNICA superfície chapada no meio da conversa: todo o
+     resto (painéis, composer, vidro) anda com o slider Transparência, e ele ficava sólido, lendo como
+     recorte colado por cima da foto. No terminal esse bloco nem existe — é só texto indentado. Aqui a
+     caixa vale (delimita o que é comando), então ela fica, mas participando do véu como os painéis.
+     `--cp-panel-alpha` já é a alfa que o slider governa (lib/background.ts:47).
+     `:not(pre) > code` e não `code` solto: o fence gera <pre><code>, e a regra `pre code` logo abaixo
+     zera o fundo do code de dentro de propósito (senão são DUAS caixas empilhadas). Com `code` solto
+     esta regra tem especificidade maior, ganhava daquela e o fundo voltava — e como o code é `inline`,
+     ele pinta a largura do TEXTO de cada linha, não do bloco: faixas mais opacas linha a linha, só no
+     modo com foto. Medido: code a 0,84 sobre pre a 0,84, 689px contra 830px. */
+  :global(html[data-bg='image']) .prose :global(pre),
+  :global(html[data-bg='image']) .prose :global(:not(pre) > code),
+  :global(html[data-bg='image']) .prose :global(.copy-btn) {
+    background: color-mix(in srgb, var(--bg-elevated) calc(var(--cp-panel-alpha, 0.87) * 100%), transparent);
+  }
+
   .prose :global(pre code) {
     font-family: var(--font-mono);
     font-size: var(--text-sm);
