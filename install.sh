@@ -4,6 +4,7 @@
 #   ./install.sh              # interativo
 #   ./install.sh --yes        # aceita tudo (não pergunta nada)
 #   ./install.sh --check      # só diz o que falta e sai, sem instalar nada
+#   ./install.sh --no-frontend   # só o backend (o PWA já roda noutro lugar)
 #   ./install.sh --no-wrapper --no-services --no-cp-send --no-panel   # pula partes
 #
 # Os sub-scripts (services-setup.sh, lan-setup.sh, install-cp-send.sh, ...) continuam
@@ -12,7 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 REPO=$(pwd)
 
-YES=0; CHECK=0; WRAPPER=1; SERVICES=1; CPSEND=1; PANEL=1
+YES=0; CHECK=0; WRAPPER=1; SERVICES=1; CPSEND=1; PANEL=1; FRONTEND=1
 for arg in "$@"; do
   case "$arg" in
     --yes|-y)      YES=1 ;;
@@ -21,6 +22,7 @@ for arg in "$@"; do
     --no-services) SERVICES=0 ;;
     --no-cp-send)  CPSEND=0 ;;
     --no-panel)    PANEL=0 ;;
+    --no-frontend) FRONTEND=0 ;;
     *) echo "flag desconhecida: $arg"; exit 1 ;;
   esac
 done
@@ -96,7 +98,9 @@ say "1/8 Dependências"
 precisa_root "tmux"        tmux   tmux 'sem ele não existe sessão' || true
 precisa_home "Claude Code" claude 'curl -fsSL https://claude.ai/install.sh | bash' 'é o que o app pilota' || true
 precisa_home "uv"          uv     'curl -LsSf https://astral.sh/uv/install.sh | sh' 'gerencia o venv do backend' || true
-if ! command -v npm >/dev/null; then
+if [ "$FRONTEND" = 0 ]; then
+  ok "Node: dispensado (--no-frontend)"
+elif ! command -v npm >/dev/null; then
   precisa_home "Node 20+" node \
     'curl -fsSL https://fnm.vercel.app/install | bash && "$HOME/.local/share/fnm/fnm" install 22 && "$HOME/.local/share/fnm/fnm" default 22' \
     'o frontend é Svelte' || true
@@ -154,6 +158,15 @@ nota "É esse token que você digita no celular na primeira conexão."
 
 # ── 4/8 Frontend ─────────────────────────────────────────────────────────────
 say "4/8 Frontend"
+if [ "$FRONTEND" = 0 ]; then
+  ok "pulado (--no-frontend)"
+  nota "UM frontend atende VÁRIOS backends: ele guarda a lista de servidores no próprio"
+  nota "navegador (chave cp_servers) e você adiciona cada máquina pelo menu de conta."
+  nota "Então dá pra ter o PWA numa VPS e só o backend em cada máquina de trabalho —"
+  nota "menos porta aberta e nenhum processo node de graça por aqui."
+  nota "Pra ligar este backend ao front que você já usa: abra o PWA, adicione o servidor"
+  nota "com a URL que o backend imprime no QR, e cole o token de backend/.env."
+else
 # Só rebuilda se houver motivo: dist ausente, ou alguma fonte/lockfile mais novo que ele. Num
 # re-run logo após um `git pull` sem mudança de front, isso economiza o `npm ci` inteiro.
 DIST=frontend/dist/index.html
@@ -163,6 +176,7 @@ if [ -f "$DIST" ] && [ -z "$(find frontend/src frontend/package-lock.json fronte
 else
   (cd frontend && npm ci --silent && npm run build --silent)
   ok "buildado em frontend/dist/"
+fi
 fi
 
 # ── 5/8 Wrappers do claude e do codex ────────────────────────────────────────
@@ -200,7 +214,8 @@ porta_liberada() { # 0 = já tem regra pra esta porta
   return 1
 }
 if command -v ufw >/dev/null || command -v firewall-cmd >/dev/null; then
-  if porta_liberada 8765 && porta_liberada 5173; then
+  if [ "$FRONTEND" = 0 ]; then PORTAS=(8765); else PORTAS=(8765 5173); fi
+  if porta_liberada "${PORTAS[0]}" && { [ ${#PORTAS[@]} = 1 ] || porta_liberada 5173; }; then
     ok "portas 8765 e 5173 já liberadas no firewall"
   else
     nota "Liberar precisa de senha de administrador. Por fora seria:"
@@ -245,7 +260,8 @@ elif systemctl --user list-unit-files claude-cockpit-backend.service >/dev/null 
   ok "serviços já instalados ($(systemctl --user is-active claude-cockpit-backend.service 2>/dev/null))"
   nota "atualizar as units (após um git pull): ./scripts/services-setup.sh"
 elif [ "$SERVICES" = 1 ] && ask "Rodar backend+frontend como serviços de usuário (sobrevivem a fechar o terminal)?"; then
-  ./scripts/services-setup.sh
+  if [ "$FRONTEND" = 0 ]; then ./scripts/services-setup.sh --backend-only
+  else ./scripts/services-setup.sh; fi
   nota "Pra sobreviver a logout/reboot também: loginctl enable-linger \$USER"
 else
   nota "pulado — rodando na mão, fechar o terminal derruba o backend"
@@ -263,7 +279,10 @@ fi
 # Painel flutuante + tray. Só Hyprland com Quickshell (testado no rice end-4/dots-hyprland).
 if ! { command -v qs >/dev/null && pgrep -x Hyprland >/dev/null; }; then
   nota "painel do desktop: pulado (requer Hyprland + Quickshell)"
-elif systemctl --user cat cp-panel.service >/dev/null 2>&1; then
+# Detecta pelo SYMLINK, nao pela unit systemd: medido nesta maquina, o painel roda sob `flock`
+# direto (`qs -n -c claude-pocket`) e nao existe cp-panel.service — checar a unit dava "ausente"
+# num painel instalado e vivo.
+elif [ -e "$HOME/.local/bin/cp-panel-open" ]; then
   ok "painel + tray já instalados"
   nota "atualizar (após um git pull): ./scripts/install-cp-panel.sh"
 elif [ "$PANEL" = 1 ] && ask "Instalar painel flutuante + tray (SUPER+SHIFT+U)?"; then
@@ -297,4 +316,11 @@ cat <<EOF
 
   No celular: abra a URL do QR que o backend imprime e digite o token de backend/.env.
   Guia completo (Tailscale, instalar como PWA, cada tela): docs/USAGE.md
+
+  Mais de uma máquina? UM frontend atende VÁRIOS backends: ele guarda a lista de
+  servidores no próprio navegador e você adiciona cada máquina pelo menu de conta.
+  Dá pra deixar o PWA num lugar só (uma VPS, por exemplo) e nas outras rodar apenas
+  o backend, com ./install.sh --no-frontend. O front é leve (~94 MB contra ~149 MB do
+  backend, medido), então instalá-lo por padrão não custa caro — a flag existe pra
+  quem já tem o PWA noutro lugar, não porque ele pese.
 EOF
