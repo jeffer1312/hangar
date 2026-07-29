@@ -1,0 +1,103 @@
+# Reference ~/.tmux.conf for Claude Code + claude-pocket on WINDOWS (psmux).
+#
+# Por que um arquivo separado do tmux.conf.example: aquele assume tmux no Linux (TPM +
+# systemd timer pra persistencia, `exec` no spawn). Aqui o multiplexador e o psmux
+# (multiplexador NATIVO de Windows, em Rust, sobre ConPTY — sem WSL/Cygwin), instalado por
+# `winget install marlocarlo.psmux`. Ele fala a linguagem do tmux e LE este arquivo, mas os
+# DEFAULTS dele nao sao os do tmux, e e justamente ai que mora a pegadinha do scroll.
+#
+# EXTRAIDO de uma maquina onde o scroll funciona (medido 2026-07-29):
+#   psmux 3.3.7 (05cc5d4) · Windows Terminal · TERM=xterm-256color · COLORTERM=truecolor
+#
+# ---------------------------------------------------------------------------------------
+# POR QUE O SCROLL FUNCIONA NUMA MAQUINA E NA OUTRA NAO
+# ---------------------------------------------------------------------------------------
+# O Claude Code roda em TELA ALTERNADA (medido: `alternate_on=1`, e por isso `history_size`
+# fica 0 — nesse modo o multiplexador NAO acumula scrollback; quem rola e a propria TUI).
+# Pra roda do mouse chegar na TUI, o psmux precisa estar com o mouse LIGADO; ai ele repassa
+# os eventos pro app em foco em vez de sequestra-los pro copy-mode dele.
+#
+# A pegadinha: no psmux 3.3.7 `mouse` ja nasce ON — no tmux real nasce OFF. Ou seja, na
+# maquina que funciona isso vinha do DEFAULT, nao do conf (o ~/.tmux.conf de la so tinha
+# `status off`). Copiar aquele conf pro outro PC portanto NAO consertava nada.
+# Este arquivo FIXA as opcoes explicitamente pra nao depender de default nenhum.
+#
+# Se o scroll continuar morto depois disto, cheque nesta ordem:
+#   1. `tmux -V`            -> tem que ser psmux (nao um tmux de MSYS/Cygwin/WSL no PATH)
+#   2. `tmux show -g mouse` -> tem que dizer `mouse on`
+#   3. o EMULADOR: Windows Terminal repassa a roda; conhost.exe (janela crua do cmd) nao
+#      manda os mesmos eventos. Rode dentro do Windows Terminal.
+#   4. um `set -g mouse off` sobrando em outro ~/.tmux.conf da maquina
+
+# --- SCROLL / MOUSE (o que faz a roda funcionar dentro do Claude) ----------------------
+set -g mouse on                   # sem isto a roda nao chega na TUI. E o item principal.
+set -g scroll-enter-copy-mode on  # roda em pane NAO-alternado entra no historico
+set -g mouse-selection on         # arrastar seleciona (copiar do pane)
+set -g history-limit 2000         # so vale fora da tela alternada (na alternada e sempre 0)
+
+# --- CURSOR (o "pisca-pisca" que parece bug de renderizacao) ---------------------------
+# O psmux tem cursor PROPRIO. A doc oficial diz `cursor-blink` default `off`, mas MEDIDO no
+# psmux 3.3.7 desta maquina (`tmux show -g cursor-blink`) vinha `on`, sem nenhuma config
+# pedindo isso — ou seja, o default real do binario diverge da doc. Por isso vale FIXAR.
+# Quem pisca o cursor e o app que fala DECSCUSR com o terminal: o Windows Terminal NAO tem
+# opcao pra desligar blink (microsoft/terminal#1379, aberta), entao a unica alavanca e aqui.
+set -g cursor-blink off
+# set -g cursor-style block   # descomente se preferir bloco em vez da barra vertical
+# ATENCAO: mudar isto com `set -g` numa sessao JA ABERTA pode nao repintar o cursor atual.
+# Confirme abrindo uma sessao NOVA. Se continuar piscando numa sessao nova, o cursor nao e
+# do psmux e sim desenhado pela propria TUI do Claude Code — nenhuma config daqui resolve.
+
+# --- "COMO SE O PSMUX NAO ESTIVESSE LA" ------------------------------------------------
+# O multiplexador so existe pro claude-pocket conseguir ENVIAR teclas na sessao; o usuario
+# nao deveria perceber que ele esta rodando. Opcoes abaixo conferidas na doc oficial
+# (docs/configuration.md do repo psmux/psmux) e no dump real desta maquina.
+set -g status off              # sem barra de status (ja acima; repetido aqui de proposito)
+set -g automatic-rename off    # o psmux tira SNAPSHOT da arvore de processos a cada ~1.5s
+                               # pra renomear a janela (veja ~/.psmux.conf/autorename.log).
+                               # Trabalho periodico que repinta o pane sem motivo aparente.
+set -g set-titles off          # nao reescreve o titulo da janela do Windows Terminal
+set -g allow-set-title off     # nem deixa o app de dentro reescrever
+set -g escape-time 10          # DEFAULT 500 (!). E o atraso pra decidir se o ESC e tecla
+                               # solta ou inicio de sequencia: com 500ms o ESC no Claude
+                               # Code responde meio segundo depois, e "parece travado".
+                               # 10ms e o valor que a comunidade tmux usa faz anos.
+set -g bold-is-bright on       # default; faz negrito render igual ao shell puro
+
+# Opcionais - mudam COMPORTAMENTO, entao ficam comentados. Descomente com criterio:
+# set -g mouse-selection off   # desliga a selecao-por-arrasto PROPRIA do psmux (deixa a do
+#                              # terminal aparecer). Mais "nativo", mas muda como se copia.
+# set -g env-shim off          # o psmux injeta uma funcao `env` estilo Unix nos panes
+#                              # PowerShell. Desligar deixa o shell 100% intacto, MAS quebra
+#                              # quem depender desse `env`.
+# set -g paste-detection off   # detecta Ctrl+V vindo do console host. Relacionado ao bug de
+#                              # colapso de paste da TUI (ver _WIN_CHUNK em backend/app/
+#                              # tmux.py); mexer aqui pode afetar paste de verdade.
+
+# NAO desligue estes - sao o que faz o Claude Code funcionar no psmux (default `on` ambos):
+#   claude-code-fix-tty              (patch do TTY do Node pro Claude Code)
+#   claude-code-force-interactive    (CLAUDE_CODE_FORCE_INTERACTIVE=1)
+
+# --- CORES corretas do Claude Code (mesma logica do tmux.conf.example) -----------------
+# TERM NAO pode comecar com "tmux"/"screen", senao o Claude pinta o fundo teal de fallback.
+set -g default-terminal "xterm-256color"
+set -ga terminal-overrides ",xterm-256color:Tc"
+set -ga terminal-features ",xterm-256color:RGB"
+# O multiplexador nao propaga COLORTERM sozinho; sem isto o Claude comeca em 256 cores.
+set-environment -g COLORTERM truecolor
+set-environment -g CLAUDE_CODE_TMUX_TRUECOLOR 1
+# NOTA: o backend do claude-pocket ja injeta as duas vars nas sessoes que ELE cria
+# (`new_session` em backend/app/tmux.py, via `-e`); as linhas acima cobrem sessao feita na mao.
+
+# --- Convencao do claude-pocket --------------------------------------------------------
+# O multiplexador e detalhe de implementacao do app, nao algo que o usuario pediu.
+# Comente se quiser a barra de volta.
+set -g status off
+
+# --- NAO use no Windows ----------------------------------------------------------------
+# TPM / tmux-resurrect / tmux-continuum e o timer do systemd (ver tmux.conf.example e
+# scripts/tmux-persist-setup.sh): tudo aquilo depende de systemd --user e de plugins shell
+# POSIX. No Windows nao roda. Persistencia aqui e o proprio psmux mantendo o servidor vivo.
+#
+# `automatic-rename`: deixado no default. Ele faz um snapshot da arvore de processos a cada
+# ~1.5s (visivel em ~/.psmux/autorename.log). Se o pane piscar, e candidato a investigar:
+#   set -g automatic-rename off
