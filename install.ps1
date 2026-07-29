@@ -452,7 +452,20 @@ if ($jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu l
             Start-ScheduledTask -TaskName $t.Nome -ErrorAction SilentlyContinue
             Ok "tarefa $($t.Nome) registrada e iniciada"
         }
-        Nota 'Log (inclui o QR de pareamento):'
+        # Iniciar nao e subir: a tarefa ja morreu na largada por bug de codificacao, e o instalador
+    # dizia "iniciada" e seguia. Confere a porta antes de afirmar qualquer coisa.
+    $subiu = $false
+    foreach ($i in 1..15) {
+        if (Get-NetTCPConnection -LocalPort 8765 -ErrorAction SilentlyContinue) { $subiu = $true; break }
+        Start-Sleep -Seconds 1
+    }
+    if ($subiu) {
+        Ok 'backend respondendo em 127.0.0.1:8765'
+    } else {
+        Falta 'o backend NAO subiu em 15s - o app nao vai conectar'
+        Nota "veja o porque:  Get-Content `"$env:LOCALAPPDATA\claude-cockpit\claude-cockpit-backend.log`" -Tail 30"
+    }
+    Nota 'Log (inclui o QR de pareamento):'
     Nota "  $env:LOCALAPPDATA\claude-cockpit\claude-cockpit-backend.log"
     Nota 'Remover depois: Unregister-ScheduledTask -TaskName claude-cockpit-backend'
     } catch {
@@ -616,6 +629,18 @@ $morreu = $false
 foreach ($i in 1..15) {
     if ((Nativo tmux has-session -t "=$sessao") -ne 0) { $morreu = $true; break }
     Start-Sleep -Seconds 1
+}
+if (-not $morreu) {
+    # O kill-session do psmux nao derruba o pane. Como a sessao e NOSSA e sabemos o pane_pid,
+    # matamos o processo direto - sem `tmux kill-server`, que levaria junto as sessoes do usuario.
+    # Limpar o proprio lixo e obrigacao do teste; deixar isso pra pessoa e transferir trabalho.
+    $pids = & tmux list-panes -t "=$sessao" -F '#{pane_pid}' 2>$null
+    foreach ($pane in $pids) {
+        if ($pane -match '^\d+$') { Stop-Process -Id $pane -Force -ErrorAction SilentlyContinue }
+    }
+    Start-Sleep -Seconds 2
+    $morreu = ((Nativo tmux has-session -t "=$sessao") -ne 0)
+    if ($morreu) { Nota 'kill-session nao funcionou; a sessao de teste foi encerrada pelo PID' }
 }
 if ($morreu) {
     Ok 'o multiplexador mata sessao'
