@@ -44,13 +44,18 @@ for arg in "$@"; do
 done
 
 if [ -z "$TARGET" ]; then
-  case "$(basename "${SHELL:-}")" in
-    fish) TARGET=fish ;;
-    bash) TARGET=bash ;;
-    zsh)  TARGET=zsh ;;
-    *) echo "Could not detect shell from \$SHELL. Pass one: fish | bash | zsh | all" >&2; exit 2 ;;
-  esac
-  echo "Detected shell: $TARGET (override with an arg)"
+  # Instala pra TODO shell presente na maquina, em vez de adivinhar um pelo $SHELL.
+  #
+  # O $SHELL e o do PROCESSO que chamou, nao o shell que a pessoa usa: rodar o instalador de
+  # dentro de outro script (o install.sh faz isso), de um editor, de um cron ou de um agente
+  # herda o shell errado. Medido nesta maquina: usuario de fish, instalador chamado de um
+  # processo zsh -> so o zsh foi atualizado, e o wrapper fish ficou meses com codigo velho
+  # enquanto o instalador dizia "Done" toda vez. O modo de falha e o pior possivel: silencioso,
+  # e reinstalar nao conserta, porque reinstalar repete a mesma adivinhacao.
+  #
+  # Instalar pros tres nao custa nada (sao arquivos separados) e nao cria rc de shell que a
+  # pessoa nao tem: cada ramo so age se o shell existir OU se o rc dele ja existir.
+  TARGET=auto
 fi
 
 # Insert/replace the managed block between markers. $1=file  $2=payload
@@ -132,11 +137,28 @@ install_statusline() {
   esac
 }
 
+instalados=""
 case "$TARGET" in
-  fish) install_fish ;;
-  bash) install_posix "$HOME/.bashrc" ;;
-  zsh)  install_posix "$HOME/.zshrc" ;;
-  all)  install_fish; install_posix "$HOME/.bashrc"; install_posix "$HOME/.zshrc" ;;
+  fish) install_fish; instalados="fish" ;;
+  bash) install_posix "$HOME/.bashrc"; instalados="bash" ;;
+  zsh)  install_posix "$HOME/.zshrc"; instalados="zsh" ;;
+  all)  install_fish; install_posix "$HOME/.bashrc"; install_posix "$HOME/.zshrc"
+        instalados="fish bash zsh" ;;
+  auto)
+    if command -v fish >/dev/null || [ -d "$HOME/.config/fish" ]; then
+      install_fish; instalados="$instalados fish"
+    fi
+    if command -v bash >/dev/null || [ -f "$HOME/.bashrc" ]; then
+      install_posix "$HOME/.bashrc"; instalados="$instalados bash"
+    fi
+    if command -v zsh >/dev/null || [ -f "$HOME/.zshrc" ]; then
+      install_posix "$HOME/.zshrc"; instalados="$instalados zsh"
+    fi
+    if [ -z "$instalados" ]; then
+      echo "Nenhum shell suportado encontrado (fish/bash/zsh). Passe um explicitamente." >&2
+      exit 2
+    fi
+    echo "Shells atualizados:$instalados (passe fish|bash|zsh pra restringir)" ;;
 esac
 
 if [ "$DO_TMUX" = 1 ]; then

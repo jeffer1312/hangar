@@ -9,7 +9,7 @@ const store = new Map<string, string>();
 (globalThis as any).document = { cookie: '' };
 (globalThis as any).window = { location: { origin: 'https://app.test' } };
 
-const { getConfigForServer, patchConfigForServer, createSession } = await import('./api');
+const { getConfigForServer, patchConfigForServer, createSession, getHistory, isAbortError } = await import('./api');
 const { listServers, getActiveId } = await import('./auth');
 const server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
 
@@ -49,6 +49,52 @@ describe('explicit server settings API', () => {
     expect(reload).not.toHaveBeenCalled();
     expect(listServers()).toEqual([outra]);   // a credencial da outra máquina segue intacta
     expect(getActiveId()).toBe(outra.id);
+  });
+});
+
+describe('getHistory', () => {
+  // fetch que respeita o signal, como o do browser: só termina quando a resposta chega OU quando o
+  // signal aborta — é o que permite provar que o download PARA, e não só que a resposta é ignorada.
+  function fetchQueRespeitaOSignal() {
+    return vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) =>
+      new Promise((_resolve, reject) => {
+        const s = (init as RequestInit).signal!;
+        s.addEventListener('abort', () => reject(s.reason));
+      }),
+    );
+  }
+
+  beforeEach(() => {
+    store.set('cp_servers', JSON.stringify([server]));
+    store.set('cp_active', server.id);
+  });
+
+  it('abortar cancela o fetch de verdade e NÃO vira erro de tela', async () => {
+    const fetchMock = fetchQueRespeitaOSignal();
+    const ctl = new AbortController();
+
+    const p = getHistory('sessao', undefined, ctl.signal);
+    ctl.abort();
+    const err = await p.catch((e) => e);
+
+    // 1. o fetch recebeu um signal que de fato abortou -> a requisição para na rede
+    const passado = (fetchMock.mock.calls[0][1] as RequestInit).signal!;
+    expect(passado.aborted).toBe(true);
+    // 2. o rejeito é cancelamento, não falha -> o Chat retorna sem pintar pílula de erro
+    expect(isAbortError(err)).toBe(true);
+    // 3. falha de verdade continua sendo falha (inclusive o timeout de 45s, que é TimeoutError)
+    expect(isAbortError(new Error('500: boom'))).toBe(false);
+    expect(isAbortError(new DOMException('demorou', 'TimeoutError'))).toBe(false);
+  });
+
+  it('limit=0 pede zero eventos, não o arquivo inteiro', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('[]', { status: 200 }),
+    );
+
+    await getHistory('sessao', 0);
+
+    expect(fetchMock.mock.calls[0][0]).toBe('https://a.test/api/sessions/sessao/history?limit=0');
   });
 });
 

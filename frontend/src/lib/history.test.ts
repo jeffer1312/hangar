@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatEvent } from './types';
-import { appendTail, prependOlder } from './history';
+import { appendTail, hasSeam, prependOlder } from './history';
 
 const ev = (id: string): ChatEvent => ({ kind: 'user_msg', id, text: id });
 const ids = (evs: ChatEvent[] | null) => (evs ?? []).map((e) => e.id);
@@ -31,6 +31,18 @@ describe('prependOlder', () => {
     expect(prependOlder(['x', 'y'].map(ev), ['a'].map(ev))).toBeNull();
     expect(ids(prependOlder(['x'].map(ev), []))).toEqual(['x']);
     expect(prependOlder([], [])).toBeNull();
+  });
+});
+
+describe('hasSeam', () => {
+  // Separa os DOIS nulls do prependOlder: só o sem-costura vira aviso na tela.
+  it('so acusa quando nao ha id em comum (transcript trocado)', () => {
+    const cur = ['c', 'd'].map(ev);
+    expect(hasSeam(['a', 'b', 'c', 'd'].map(ev), cur)).toBe(true);   // da pra costurar
+    expect(hasSeam(['c', 'd'].map(ev), cur)).toBe(true);             // ja temos desde o comeco
+    expect(hasSeam(['x', 'y'].map(ev), cur)).toBe(false);            // outro transcript
+    expect(hasSeam([], cur)).toBe(true);                             // nada veio: nao e buraco
+    expect(hasSeam(['a'].map(ev), [])).toBe(true);                   // tela vazia: prependOlder resolve
   });
 });
 

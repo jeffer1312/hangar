@@ -166,7 +166,11 @@ elif [ "$TEM_TTY" = 0 ]; then
   # quem rodou precisa saber que existe um token e onde ele está.
   TOKEN=$(gera_token)
   printf 'CP_AUTH_TOKEN=%s\n' "$TOKEN" >> backend/.env
-  falta "sem terminal para perguntar — token ALEATÓRIO gerado: $TOKEN"
+  # NÃO ecoar o valor: sem tty isto roda em provisionamento automatizado (CI, Ansible, ssh
+  # não-interativo) e o stdout vira log. Pior aqui do que em qualquer projeto: o próprio app lê
+  # `tmux capture-pane`, então uma instalação dentro de um pane monitorado gravaria o token no
+  # histórico da ferramenta que ele protege. O PowerShell já não imprimia — era assimetria.
+  falta "sem terminal para perguntar — token ALEATÓRIO gerado (valor em backend/.env)"
   nota "está em backend/.env; é ele que você digita no celular. Pra trocar, edite o arquivo."
 else
   echo "  Você vai DIGITAR este token no celular, então escolha algo que lembre."

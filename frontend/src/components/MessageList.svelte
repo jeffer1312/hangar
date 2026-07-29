@@ -125,6 +125,13 @@
     if (grew > 0) {
       for (let i = 0; i < grew; i++) histIds.add(events[i].id);
       windowEnd += grew;
+    } else if (windowEnd > events.length) {
+      // O topo antigo SUMIU da lista (findIndex = -1): o appendTail re-ancorou tudo na cauda nova
+      // depois de um background longo, ou o transcript trocou. windowEnd e ABSOLUTO -> ficaria
+      // apontando pra alem do fim do array. O slice clampa, mas por um frame a fatia sai errada,
+      // e depender do effect de auto-scroll (nextWindowEnd) consertar no ciclo seguinte e depender
+      // de um effect que nem sabe deste. Clampa aqui, com a MESMA regra dele.
+      windowEnd = events.length;
     }
     headId = first;
   });

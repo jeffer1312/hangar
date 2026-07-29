@@ -93,12 +93,19 @@ function pi
         set i (math $i + 1)
     end
 
-    set -l run
-    if command -q systemd-run; and set -q XDG_RUNTIME_DIR; and systemd-run --user --scope --collect -q -- true >/dev/null 2>&1
-        set run systemd-run --user --scope --collect -q --
-    end
+    # NAO usar `$run tmux ...` com $run possivelmente vazio: em fish, variavel vazia na posicao
+    # de COMANDO e erro fatal ("O comando expandido estava vazio"), ao contrario de bash/zsh, onde
+    # ela some e o comando seguinte roda. Como o probe acima FALHA nesta maquina (5/5, e o
+    # comentario acima ja dizia isso), o caminho vazio e o NORMAL aqui, nao a excecao — o `claude`
+    # simplesmente parava de abrir. Por isso a chamada e duplicada nos dois ramos, igual ao
+    # claude.posix.sh, que documenta a mesma escolha.
     # `sh -c` exporta CP_PI_SESSION DENTRO do próprio pane antes do exec pi — ver o comentário de
     # cabeçalho pra o porquê. $0 vira "_" (placeholder), $1 o uuid, o resto ($@) os args originais.
-    $run tmux new-session -s $name -c "$PWD" \
-        sh -c 'export CP_PI_SESSION="$1"; shift; exec pi --session-id "$CP_PI_SESSION" "$@"' _ "$id" $argv
+    if command -q systemd-run; and set -q XDG_RUNTIME_DIR; and systemd-run --user --scope --collect -q -- true >/dev/null 2>&1
+        systemd-run --user --scope --collect -q -- tmux new-session -s $name -c "$PWD" \
+            sh -c 'export CP_PI_SESSION="$1"; shift; exec pi --session-id "$CP_PI_SESSION" "$@"' _ "$id" $argv
+    else
+        tmux new-session -s $name -c "$PWD" \
+            sh -c 'export CP_PI_SESSION="$1"; shift; exec pi --session-id "$CP_PI_SESSION" "$@"' _ "$id" $argv
+    end
 end
