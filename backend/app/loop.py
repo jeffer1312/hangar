@@ -202,7 +202,7 @@ def _run_check(cmd: str, cwd: str) -> tuple[int, str]:
     """Check determinístico real. argv (nunca shell=True); timeout 600s; cauda 8KB."""
     try:
         p = subprocess.run(shlex.split(cmd), cwd=cwd, capture_output=True,
-                           text=True, timeout=600)
+                           text=True, encoding="utf-8", errors="replace", timeout=600)
     except (ValueError, OSError) as e:
         # ValueError = shlex.split com aspas desbalanceadas (ANTES do subprocess); OSError cobre
         # FileNotFoundError (comando inexistente) e afins. Sem capturar, a thread do tick morreria
@@ -255,7 +255,7 @@ def _claude_p(prompt: str) -> str:
     try:
         p = subprocess.run(
             ["claude", "-p", "--model", "sonnet", "--disallowedTools", *_REFINE_DISALLOWED],
-            input=prompt, cwd=tempfile.gettempdir(), capture_output=True, text=True,
+            input=prompt, cwd=tempfile.gettempdir(), capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=_REFINE_TIMEOUT,
         )
     except FileNotFoundError:

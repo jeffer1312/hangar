@@ -60,7 +60,22 @@ def test_children_map_acha_este_processo_sob_o_pai(via_psutil):
     assert os.getpid() in mapa.get(os.getppid(), [])
 
 
-def test_open_jsonl_acha_o_transcript_aberto(via_psutil, tmp_path):
+def test_open_jsonl_desiste_de_proposito_fora_do_linux(via_psutil, tmp_path):
+    # A UNICA das sete que NAO tem versao portatil: fora do Linux devolve None SEMPRE, mesmo com o
+    # transcript aberto bem debaixo do nariz. `psutil.open_files()` no Windows enumera a tabela de
+    # handles do sistema inteiro e a propria doc avisa que pode levar SEGUNDOS — isto roda por
+    # descendente, por sessao, num poll de 1,5s, e pararia o backend. O sinal perdido e barato: o
+    # claude nao segura o fd em idle, e a resolucao autoritativa vem do --session-id do cmdline.
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    alvo = projects / "2026_abc.jsonl"
+    alvo.write_text("{}\n")
+    with open(alvo):   # aberto de verdade — o lado /proc acharia; o portatil nem procura
+        assert procinfo._open_jsonl(os.getpid(), projects) is None
+
+
+def test_open_jsonl_acha_o_transcript_aberto_no_proc(tmp_path):
+    # Cobertura do caminho /proc, que NAO mudou (sem a fixture: _TEM_PROC real).
     projects = tmp_path / "projects"
     projects.mkdir()
     alvo = projects / "2026_abc.jsonl"
@@ -69,8 +84,8 @@ def test_open_jsonl_acha_o_transcript_aberto(via_psutil, tmp_path):
         assert procinfo._open_jsonl(os.getpid(), projects) == str(alvo)
 
 
-def test_open_jsonl_ignora_jsonl_fora_do_projects_dir(via_psutil, tmp_path):
-    # Mesma armadilha que o lado /proc ja cobre: dir IRMAO de mesmo prefixo nao pode casar.
+def test_open_jsonl_ignora_jsonl_fora_do_projects_dir(tmp_path):
+    # Armadilha do lado /proc: dir IRMAO de mesmo prefixo nao pode casar.
     projects = tmp_path / "projects"
     projects.mkdir()
     (tmp_path / "projects-outro").mkdir()

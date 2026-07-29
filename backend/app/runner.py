@@ -124,7 +124,8 @@ SOCK = "cppkt-run"  # socket tmux dedicado -> nao aparece na lista de sessoes do
 
 def _sock(args: list[str]) -> subprocess.CompletedProcess:
     try:
-        return RUN(["tmux", "-L", SOCK, *args], capture_output=True, text=True, timeout=5)
+        return RUN(["tmux", "-L", SOCK, *args], capture_output=True, text=True,
+                   encoding="utf-8", errors="replace", timeout=5)
     except (subprocess.TimeoutExpired, OSError) as e:
         return subprocess.CompletedProcess(args, 1, "", str(e))
 
@@ -151,7 +152,8 @@ def start_run(cwd: str, command: str) -> RunInfo:
         f"exec {shell} -lc {shlex.quote(command)}",
     ]
     try:
-        RUN(spawn, capture_output=True, text=True, timeout=5)
+        RUN(spawn, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=5)
     except (subprocess.TimeoutExpired, OSError):
         pass
     remember(cwd, command)

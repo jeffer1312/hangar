@@ -73,7 +73,8 @@ def _run(args: list[str]) -> subprocess.CompletedProcess:
     # timeout: tmux travado nao pode prender o event loop / worker do threadpool pra sempre. Estouro ->
     # trata como falha (returncode=1), igual ao tmux recusar; os callers ja checam returncode != 0.
     try:
-        return RUN(args, capture_output=True, text=True, timeout=5)
+        return RUN(args, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                   timeout=5)
     except (subprocess.TimeoutExpired, OSError) as e:
         # OSError = tmux ausente (FileNotFoundError) / sem permissao; timeout = travado. Trata como
         # falha (returncode=1) em vez de 500 com traceback — os callers ja checam returncode != 0.
@@ -158,7 +159,10 @@ def new_session(name: str, cwd: str, command: str, config_dir: str | None = None
     # `exec`: o tmux SEMPRE roda o comando via `$SHELL -c` (fish aqui). Sem exec, o fish fica como
     # dono do tty/grupo de foreground e o `send-keys` (input do app) NAO chega no claude -> ele
     # renderiza mas nunca le o teclado. Com exec o fish vira o claude (dono do tty) -> input chega.
-    args.append(f"exec {command}")
+    # SO no POSIX: o psmux (Windows) roda o comando direto no ConPTY, sem shell no meio, e o
+    # `exec` viraria um argumento que nenhum shell do Windows conhece — o pane nasce e morre na
+    # hora, com o new-session ainda devolvendo 0, ou seja, o app reportaria sessao criada.
+    args.append(f"exec {command}" if os.name == "posix" else command)
     return _run(args).returncode == 0
 
 

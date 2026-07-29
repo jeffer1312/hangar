@@ -95,7 +95,8 @@ def search(q: str, live_names: dict[str, str], limit: int = _MAX_HITS) -> list[S
         "-e", q, "--", str(base),
     ]
     try:
-        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                                encoding="utf-8", errors="replace")
     except (OSError, ValueError):
         return []
     hits: list[SearchHit] = []

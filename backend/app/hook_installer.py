@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 
 from app.config import list_config_dirs, _backend_config_base
@@ -6,7 +7,11 @@ from app.config import list_config_dirs, _backend_config_base
 # Caminho absoluto do script de captura (resolvido uma vez). O command vai literal pro
 # settings.json do Claude, entao precisa ser absoluto — o hook roda com cwd arbitrario.
 HOOK = str((Path(__file__).parent.parent / "hooks" / "askq_capture.py").resolve())
-_COMMAND = f"python3 {HOOK}"
+# `python3` nao existe no Windows (la o binario e python.exe; `python3` e um alias da Microsoft
+# Store que ABRE A LOJA em vez de rodar o hook). sys.executable ainda garante o Python do venv do
+# backend em vez de torcer pelo que estiver no PATH quando o Claude dispara o hook. Aspas nos dois
+# porque qualquer um dos caminhos pode ter espaco (C:\Program Files\..., "Application Support").
+_COMMAND = f'"{sys.executable}" "{HOOK}"'
 _MATCHER = "AskUserQuestion"
 
 
@@ -58,7 +63,7 @@ def _ensure_settings_file(settings_path: Path) -> bool:
 
 
 STATE_HOOK = str((Path(__file__).parent.parent / "hooks" / "state_hook.py").resolve())
-_STATE_COMMAND = f"python3 {STATE_HOOK}"
+_STATE_COMMAND = f'"{sys.executable}" "{STATE_HOOK}"'  # mesma razao do _COMMAND acima
 # SessionStart inclui o caso de abrir ja com --resume/clear (fixa o transcript ativo na hora); os
 # demais eventos cobrem o /resume feito DENTRO da sessao (marca no 1o prompt/tool depois dele).
 _STATE_EVENTS = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "SessionStart"]

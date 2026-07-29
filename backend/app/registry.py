@@ -227,6 +227,11 @@ def _pi_sid_of(pid: int) -> Optional[str]:
     # CP_PI_SESSION: o uuid que o wrapper do pi injetou. Mesmo truque do _engine_of — o env do
     # processo VIVO e o registro autoritativo. Existe porque o `--session-id` some do cmdline: o pi
     # sobrescreve o proprio argv (medido na Task 0).
+    if not procinfo._TEM_PROC:
+        # Escapou do procinfo quando ele foi extraido: sem /proc isto abria um caminho de arquivo
+        # inexistente e caia no `except OSError: return None`, perdendo o fallback CP_PI_SESSION —
+        # a sessao Pi entrava na lista sem transcript, em silencio.
+        return procinfo._env_psutil(pid).get("CP_PI_SESSION") or None
     try:
         with open(procinfo._proc_environ_path(pid), "rb") as fh:
             for kv in fh.read().split(b"\x00"):
