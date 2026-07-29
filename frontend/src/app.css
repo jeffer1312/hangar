@@ -49,10 +49,16 @@
   --glass-highlight: rgba(255,255,255,0.16);
   --glass-specular:  rgba(255,255,255,0.30);  /* brilho de borda (rim) — o que "vende" o glass */
   --glass-shadow:    rgba(0,0,0,0.42);       /* halo do card flutuante (forte no dark) */
-  /* Vidro de PAINEL (modal, sheet, sidebar, painel de contexto). Diferente do --glass-bg (0.46),
-     que e de chrome fino (navbar/composer) onde o blur SEMPRE pega: num overlay grande o engine
-     as vezes descarta o backdrop-filter (backdrop root quebrado por transform/animacao do pai) e
-     o 0.46 vira "sem fundo" — o texto de tras atravessa. Este valor segura a leitura sozinho. */
+  /* Vidro de PAINEL (modal, sheet — e sidebar/painel de contexto FORA do liquid). Diferente do
+     --glass-bg (0.46), que e de chrome fino (navbar/composer) onde o blur SEMPRE pega: num overlay
+     grande o engine as vezes descarta o backdrop-filter (backdrop root quebrado por
+     transform/animacao do pai) e o 0.46 vira "sem fundo" — o texto de tras atravessa. Este valor
+     segura a leitura sozinho.
+     EXCECAO, por decisao de aparencia: com html[data-liquid] (Chromium) a sidebar e o painel de
+     contexto usam --glass-bg, pra serem o MESMO material do composer em vez de duas paredes ao lado
+     dele. Abrem mao da rede de seguranca: se um ancestral do shell ganhar transform/opacity e o
+     Chromium descartar o filtro, esses dois ficam em 0.46. Hoje nenhum ancestral tem — se um for
+     introduzido, o sintoma aparece la, nao aqui. */
   --glass-panel:     rgba(26,24,29,0.86);
 
   /* Semantic */

@@ -313,10 +313,14 @@
      texto do chat atravessando o painel. O painel nao tem filho `position: fixed`, entao virar
      containing block aqui nao quebra nada. */
   :global(html[data-liquid]) .session-context {
-    backdrop-filter: blur(20px) saturate(170%);
+    /* `url(#liquid-glass)` junto: sem ele o painel tinha só blur, e ao lado do composer (que refrata)
+       parecia outro material. O filtro continua no ELEMENTO pelo motivo do bloco acima. */
+    backdrop-filter: url(#liquid-glass) blur(20px) saturate(170%);
   }
+  /* Mesmo vidro do composer sob liquid (Sidebar.svelte tem a mesma regra e o porquê): com o filtro
+     no elemento e o Chromium honrando, `--glass-panel` só empilhava um 2o fundo e matava a refração. */
   :global(html[data-liquid]) .session-context::before {
-    background: var(--glass-panel);
+    background: var(--glass-bg);
   }
 
   /* Aparência → Painéis → "Colados": volta o painel de ponta a ponta, como era antes do card. */
