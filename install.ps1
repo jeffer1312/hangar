@@ -3,10 +3,17 @@
 #   powershell -ExecutionPolicy Bypass -File install.ps1            # interativo
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Sim       # aceita tudo
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -SoChecar  # so diz o que falta
+#   powershell -ExecutionPolicy Bypass -File install.ps1 -Update    # re-aplica o que o git pull nao atualiza
 #
 # Espelha o install.sh do Linux. Escrito pra Windows PowerShell 5.1 (o que vem no Windows):
 # nada de operador ternario nem API de .NET Core, senao quebra em quem nao instalou o PS 7.
-param([switch]$Sim, [switch]$SoChecar)
+# -Update: modo do hook post-merge (.git/hooks/post-merge, instalado pelo install.sh). Re-aplica
+# o que o `git pull` NAO atualiza sozinho — deps do backend, build do front, wrapper, tarefa
+# agendada — e nao toca em nada que peca decisao ou elevacao: sem instalar dependencia, sem
+# token, sem firewall, sem Tailscale. Um hook que trava pedindo confirmacao no meio de um pull
+# e pior que hook nenhum.
+param([switch]$Sim, [switch]$SoChecar, [switch]$Update)
+if ($Update) { $Sim = $true }
 
 $ErrorActionPreference = 'Stop'
 $raiz = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -43,6 +50,7 @@ function EhAdmin {
 function Instale($rotulo, $cmd, $id, $porque) {
     if (Tem $cmd) { Ok $rotulo; return $true }
     if ($SoChecar) { Falta "$rotulo — $porque"; $script:pendencias += $rotulo; return $false }
+    if ($Update) { Erro "$rotulo faltando (-Update nao instala dependencia)"; $script:pendencias += $rotulo; return $false }
     Write-Host "  .. instalando $rotulo ($id)"
     winget install --id $id --exact --silent `
         --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
@@ -98,8 +106,9 @@ Nota 'psutil entra aqui: no Windows nao ha /proc pra ler informacao de processo'
 Pop-Location
 
 # ── 3/8 Token de acesso ─────────────────────────────────────────────────────
-# O backend RECUSA subir fora do loopback com token fraco: sem isso, qualquer um na rede
-# controlaria o teu Claude. Por isso o token e gerado, nao pedido.
+# Perguntado, nao gerado: voce DIGITA isto no celular, e 48 caracteres hex e castigo. Enter em
+# branco ainda gera um aleatorio. O piso de 8 e daqui — o backend so recusa o literal
+# 'change-me', entao uma senha de 4 digitos passaria batido sem esta checagem.
 Titulo '3/8 Token de acesso'
 $envFile = "$raiz\backend\.env"
 $temToken = (Test-Path $envFile) -and (Select-String -Path $envFile -Pattern '^CP_AUTH_TOKEN=' -Quiet)
@@ -169,6 +178,9 @@ $marca
 
 # ── 6/8 Acesso pelo celular ─────────────────────────────────────────────────
 Titulo '6/8 Acesso pelo celular'
+if ($Update) {
+    Ok 'pulado no -Update (firewall e Tailscale pedem elevacao; nada aqui muda com git pull)'
+} else {
 Write-Host '  Duas formas, e elas nao competem:'
 Write-Host '    LAN      — celular no mesmo Wi-Fi. Precisa liberar as portas no firewall.'
 Write-Host '    Tailscale — VPN pessoal. Funciona de QUALQUER lugar sem expor nada pra internet.'
@@ -212,6 +224,8 @@ if (Tem 'tailscale') {
     Nota 'Depois ponha o nome .ts.net em CP_PUBLIC_URL no backend\.env.'
 }
 
+}
+
 # ── 7/8 Subir sozinho no logon ──────────────────────────────────────────────
 # Equivalente possivel dos servicos systemd do Linux. Nao e servico do Windows (isso exigiria
 # admin e rodaria fora da sua sessao, sem acesso ao seu ~\.claude): e tarefa agendada no logon.
@@ -220,10 +234,12 @@ $tarefas = @(
     @{ Nome = 'claude-cockpit-backend';  Exe = 'uv';  Args = 'run python -m app.main'; Dir = "$raiz\backend" },
     @{ Nome = 'claude-cockpit-frontend'; Exe = 'npm'; Args = 'run dev';                Dir = "$raiz\frontend" }
 )
+# Ja registrado -> RE-REGISTRA sem perguntar, em vez de pular. A tarefa guarda o caminho do
+# executavel e o diretorio DENTRO dela; um `git pull` que mova o repo, ou um uv que mude de
+# lugar, deixa a tarefa apontando pro nada — e "ja registrada" esconderia isso. Register-...
+# -Force sobrescreve.
 $jaAgendado = Get-ScheduledTask -TaskName $tarefas[0].Nome -ErrorAction SilentlyContinue
-if ($jaAgendado) {
-    Ok 'tarefas ja registradas'
-} elseif (Pergunte '  Registrar backend e frontend pra subir no seu logon?') {
+if ($jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu logon?')) {
     try {
         foreach ($t in $tarefas) {
             # -Exe pelo caminho completo: a tarefa nasce com o PATH do sistema, nao com o do
