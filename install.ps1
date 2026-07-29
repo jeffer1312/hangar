@@ -486,6 +486,8 @@ if (-not $bash) {
 } else {
     $binUsuario = Join-Path $HOME '.local\bin'
     New-Item -ItemType Directory -Force -Path $binUsuario | Out-Null
+    # Forma /c/... do mesmo diretorio, pra usar dentro do bash.
+    $binMsys = ($binUsuario -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
 
     # (1) shim de python3 SEM extensao: quem vai executa-lo e o bash, e ele le o shebang.
     # Um python3.cmd nao serviria - o bash nao roda .cmd por conta propria.
@@ -521,7 +523,13 @@ if (-not $bash) {
     # (2) lancador pro PowerShell: o script nao tem extensao, entao o Windows nao o executa
     # sozinho. O .cmd entrega tudo pro bash e repassa os argumentos.
     $lancador = Join-Path $binUsuario 'cp-send.cmd'
-    $conteudo = "@echo off`r`n`"$bash`" `"$raiz\scripts\cp-send`" %*`r`n"
+    # PATH com o nosso bin NA FRENTE: o Windows tem um python3.exe proprio no atalho da
+    # Microsoft Store (%LOCALAPPDATA%\Microsoft\WindowsApps), que vem antes no PATH e responde
+    # "Python nao foi encontrado". Sem a precedencia, o atalho que acabamos de escrever nunca e
+    # alcancado - medido, o install-cp-send.sh falhava mesmo com o atalho correto no lugar.
+    $conteudo = "@echo off`r`n" +
+                "set `"PATH=%USERPROFILE%\.local\bin;%PATH%`"`r`n" +
+                "`"$bash`" `"$raiz\scripts\cp-send`" %*`r`n"
     if (-not (Test-Path $lancador) -or (Get-Content $lancador -Raw) -ne $conteudo) {
         Set-Content -Path $lancador -Value $conteudo -Encoding ASCII -NoNewline
         Ok "lancador cp-send.cmd criado em $binUsuario"
@@ -547,7 +555,7 @@ if (-not $bash) {
     $anterior = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $saida = & $bash '-lc' "cd '$rota' && ./scripts/install-cp-send.sh" 2>&1
+        $saida = & $bash '-lc' "export PATH='$binMsys':`$PATH; cd '$rota' && ./scripts/install-cp-send.sh" 2>&1
     } finally { $ErrorActionPreference = $anterior }
     if ($LASTEXITCODE -eq 0) {
         Ok 'cp-send + skills instalados'
