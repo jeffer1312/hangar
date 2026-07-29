@@ -18,7 +18,10 @@ class Adapter(Protocol):
 
     async def drain(self, name: str, path: str) -> int: ...
 
-    async def send_prompt(self, name: str, text: str) -> str: ...  # "sent" | "deferred"
+    # "partial" = digitou mas o Enter NAO submeteu (texto parcial no composer): quem chama nao pode
+    # afirmar entrega nem gravar delivered. So o caminho de pane produz isso; o Codex (app-server)
+    # nunca devolve.
+    async def send_prompt(self, name: str, text: str) -> str: ...  # "sent" | "deferred" | "partial"
 
     async def deliverable(self, name: str) -> bool: ...
 

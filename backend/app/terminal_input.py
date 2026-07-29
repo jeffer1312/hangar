@@ -32,6 +32,32 @@ _SUBMIT_SETTLE = 0.2  # entre o texto livre e o Enter: claude detecta input rapi
 # ponytail: constante, nao malha fechada. Se escapar em maquina lenta, o upgrade e esperar o ECO
 # do fim do texto no pane antes do Enter (mesma ideia ja anotada no ramo de uma linha).
 _MULTILINE_SUBMIT_SETTLE = 0.5
+# Conferencia de que o input limpou depois do Enter. INSISTE com prazo em vez de tirar UMA foto: o
+# argumento de "foto unica basta porque redraw incompleto mostra MENOS texto" tem furo — se a captura
+# correr ANTES de qualquer redraw, a tela e a VELHA, com o texto inteiro no composer, indistinguivel
+# de "nao submeteu". Isso seria falso positivo, o pior erro possivel aqui: o remetente ve erro,
+# reenvia, e o reenvio digita em cima do residuo.
+# Insistindo, o caminho que DEU CERTO sai na primeira leitura limpa (~0.15s) e so quem realmente nao
+# submeteu paga o orcamento inteiro antes de ser acusado.
+# O teto de 1.0s tem folga de ~3x sobre o pico medido de ingestao multi-linha (0.29s, os numeros estao
+# em _MULTILINE_SUBMIT_SETTLE acima). Nao e medicao do redraw pos-Enter — essa falta, e o par no
+# Windows vai medir; ate lá o prazo cobre o pior caso conhecido do vizinho.
+# ponytail: constante com folga, nao malha fechada. Se aparecer maquina lenta o suficiente pra estourar
+# 1.0s, o upgrade e ler o transcript (fonte de verdade) em vez da tela — o que o _confirm_and_drain
+# ja faz 8s depois; esta checagem existe pra ANTECIPAR o sinal, nao pra substituir aquele.
+_SUBMIT_CHECK_INTERVALO = 0.15
+_SUBMIT_CHECK_PRAZO = 1.0
+
+
+def _submeteu(name: str, texto: str) -> bool:
+    """True = o composer limpou (submeteu). False = a cauda do texto continua lá depois do prazo."""
+    fim = time.monotonic() + _SUBMIT_CHECK_PRAZO
+    while True:
+        time.sleep(_SUBMIT_CHECK_INTERVALO)
+        if not _composer_residuo(_capture(name), texto, name):
+            return True
+        if time.monotonic() >= fim:
+            return False
 
 
 def _capture(name: str) -> str:
@@ -99,6 +125,18 @@ _DEFAULT_TIMEOUT = 12.0
 # Um aviso por (sessão, provider): marcador que para de casar não pode ser silencioso — foi assim
 # que os 12s por mensagem chegaram em produção. Mesma forma do _warn_bilhete_once do registry.
 _READY_TIMEOUT_WARNED: set[tuple[str, str]] = set()
+# Idem pro composer ilegivel: checagem que morre calada e o mesmo estrago do marcador que para de casar.
+_COMPOSER_WARNED: set[str] = set()
+
+
+def _warn_composer_ilegivel_once(name: str) -> None:
+    if name and name not in _COMPOSER_WARNED:
+        _COMPOSER_WARNED.add(name)
+        _log.warning(
+            "%s: nao achei a regiao do composer no pane (menos de 2 reguas) — a conferencia de "
+            "'o Enter submeteu?' fica INERTE nesta sessao e o envio volta a afirmar entrega sem checar. "
+            "Se o TUI mudou de desenho, medir e ajustar: ver _composer_residuo em terminal_input.py",
+            name)
 
 
 def _warn_ready_timeout_once(name: str, provider: str, timeout: float) -> None:
@@ -109,6 +147,71 @@ def _warn_ready_timeout_once(name: str, provider: str, timeout: float) -> None:
             "Se a sessao esta VIVA e respondendo, o marcador desandou (o TUI mudou de desenho) e "
             "cada mensagem paga esse tempo: ver _READY_MARKERS_BY_PROVIDER em terminal_input.py",
             name, provider, timeout)
+
+
+# Quanto do FIM do texto enviado a gente procura no composer pra decidir "nao submeteu". Cauda e nao
+# comeco: no caso medido a submissao parcial deixa justamente o FIM sobrando (o Enter levou o comeco),
+# e o comeco tambem aparece no ECO da conversa logo acima do composer, o que daria falso positivo.
+_RESIDUO_CAUDA = 40
+# Minimo de caracteres (sem espaco) pra a cauda valer como prova. Ver _composer_residuo.
+_RESIDUO_MIN = 12
+# A regua de BAIXO do composer tem de estar nas ultimas N linhas da tela, e as duas reguas a no maximo
+# M linhas uma da outra. Sem isso o par pode cair na divisoria do banner + regua de cima do composer.
+_COMPOSER_FUNDO = 8
+_COMPOSER_ALTURA = 15
+
+
+def _sem_espaco(s: str) -> str:
+    return re.sub(r"\s+", "", s)
+
+
+def _composer_residuo(pane: str, texto: str, nome_sessao: str = "") -> bool:
+    """True = a cauda do texto que a gente digitou AINDA esta no composer, ou seja o Enter nao submeteu.
+
+    Le a ultima linha de prompt do pane (a que comeca com ❯) e o que vem depois dela. Compara com a
+    CAUDA do texto enviado, nao com o texto todo: assim uma digitacao do usuario no composer nao vira
+    falso positivo, e o eco da mensagem ja submetida (que fica na conversa, acima do composer) nao
+    conta. Pane ilegivel / sem linha de prompt -> False, nunca inventa falha: o custo de um falso
+    negativo e o comportamento de hoje, o de um falso positivo e recusar envio que deu certo.
+    ponytail: depende do glifo ❯ do composer, igual o _READY_MARKERS depende do ⏵⏵; se um provider
+    desenhar outro prompt, o upgrade e a mesma coisa — medir e acrescentar.
+    """
+    cauda = texto.strip().split("\n")[-1].strip()[-_RESIDUO_CAUDA:]
+    # Cauda curta nao acusa: "ok" ou "sim" como ultima linha casaria por coincidencia com o que o
+    # usuario estiver digitando ao vivo no composer, e o preco de um falso positivo e o remetente
+    # reenviar em cima do residuo. Sem cauda longa o bastante, degrada pro comportamento de hoje.
+    if len(_sem_espaco(cauda)) < _RESIDUO_MIN:
+        return False
+    linhas = pane.split("\n")
+    # Regiao do composer = entre as DUAS ULTIMAS reguas. Nao basta procurar a ultima linha que comeca
+    # com ❯: no Claude Code o ECO da mensagem JA SUBMETIDA tambem comeca com ❯, e num redraw incompleto
+    # (composer novo ainda nao desenhado) o eco seria a ultima — falso "nao submeteu" num envio que deu
+    # certo, que e o pior erro possivel aqui (o usuario reenvia e a mensagem duplica). As reguas sao
+    # estruturais: o eco fica ACIMA delas, sempre.
+    reguas = [i for i, l in enumerate(linhas) if l.count("─") >= 20]
+    # Duas travas contra pegar a regiao ERRADA, achadas com o fixture pane_idle.txt do repo: ele tem
+    # reguas nas linhas 1, 4, 11, 45 e 47 de 51 — a 45/47 e o composer, as de cima sao divisoria do
+    # banner de boas-vindas. Confiar em "as duas ultimas" quebra num redraw que ainda nao desenhou a
+    # regua de BAIXO do composer: o par vira [11, 45] e a "regiao do composer" passa a ser a conversa
+    # inteira, onde esta o ECO da propria mensagem submetida -> falso "nao submeteu" num envio que deu
+    # certo. Logo: a regua de baixo tem de estar no FIM da tela e as duas tem de estar PERTO uma da
+    # outra. Fora disso, ilegivel (nao arrisca).
+    if len(reguas) >= 2 and (
+            len(linhas) - reguas[-1] > _COMPOSER_FUNDO or reguas[-1] - reguas[-2] > _COMPOSER_ALTURA):
+        reguas = []
+    if len(reguas) < 2:
+        # Nao sei ler: devolve False (degrada pro comportamento de antes desta checagem existir, nunca
+        # inventa falha) mas AVISA uma vez por sessao. Sem o aviso, um provider que mude o desenho
+        # deixaria a checagem inerte PARA SEMPRE e ninguem descobriria — e exatamente o que aconteceu
+        # com o marcador de TUI (`╰─` do Pi, "mode on" do Claude), que por isso ganhou o
+        # _warn_ready_timeout_once. Mesmo remedio aqui.
+        _warn_composer_ilegivel_once(nome_sessao)
+        return False
+    composer = "\n".join(linhas[reguas[-2]:reguas[-1] + 1])
+    # Compara SEM espaco em branco: o wrap de exibicao quebra a linha no meio da cauda (recado longo de
+    # um paragrafo so passa de 200 colunas e quebra), e ai um `cauda in composer` cru falhava justamente
+    # na classe de mensagem que motivou o conserto.
+    return _sem_espaco(cauda) in _sem_espaco(composer)
 
 
 def _wait_input_ready(name: str, timeout: float | None = None, provider: str = "claude") -> bool:
@@ -363,6 +466,16 @@ class TerminalInput:
                 # submetia o texto pela metade.
                 time.sleep(_MULTILINE_SUBMIT_SETTLE)
                 send_keys(name, "Enter")
+                # CONFERE em vez de confiar no settle. Caso real medido: tres recados longos
+                # cross-server sairam com delivered=True e NUNCA viraram entrada no transcript do
+                # destino — ficaram com attempts=2 na fila (requeue duas vezes e desistencia), e o
+                # dono do outro lado so os achou lendo o sidecar. Um settle maior reduz a chance e nao
+                # detecta nada: o Enter correndo a ingestao devolve "sent" do mesmo jeito.
+                if not _submeteu(name, text):
+                    _log.error("envio PARCIAL name=%s: multi-linha nao submeteu (a cauda do texto "
+                               "continua no composer apos %.1fs) — nao afirmando entrega",
+                               name, _SUBMIT_CHECK_PRAZO)
+                    return "partial"
             elif text.lstrip().startswith("/"):
                 # Slash command: ao digitar "/..." o Claude Code abre um menu de autocomplete. Sem dar
                 # tempo do menu renderizar, o Enter corre com o redraw e e ENGOLIDO pelo menu (o comando
@@ -397,6 +510,14 @@ class TerminalInput:
                 # reenviar Enter se o input nao limpou.
                 time.sleep(_SUBMIT_SETTLE)
                 send_keys(name, "Enter")
+                # Mesma conferencia do ramo multi-linha: e o upgrade que o comentario acima ja anotava
+                # ("capturar o pane e reenviar Enter se o input nao limpou"). Aqui em vez de reenviar
+                # Enter as cegas a gente REPORTA — reenviar podia submeter texto que o usuario digitou
+                # no composer no meio do caminho.
+                if not _submeteu(name, text):
+                    _log.error("envio PARCIAL name=%s: uma linha nao submeteu (texto continua no "
+                               "composer apos %.1fs) — nao afirmando entrega", name, _SUBMIT_CHECK_PRAZO)
+                    return "partial"
             return "sent"
 
     # Teclas de navegacao liberadas pro espelho do pane (TerminalMirror dirige overlays so-TUI:
