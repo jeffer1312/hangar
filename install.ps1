@@ -316,25 +316,30 @@ if (-not (Test-Path $slJs)) {
     $nodeExe = (Get-Command node).Source
     $cmdSl = "`"$nodeExe`" `"$slJs`""
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $settingsClaude) | Out-Null
-    $cfg = @{}
+    # NADA de `ConvertFrom-Json -AsHashtable`: esse parametro so existe no PowerShell 6+, e no
+    # 5.1 que vem no Windows a chamada levanta - o catch abaixo transformava isso em "settings
+    # ilegivel" e o passo se pulava sozinho, num arquivo que estava perfeitamente legivel.
+    # PSCustomObject entao, com Add-Member -Force pra sobrescrever a chave.
+    $cfg = $null
     if (Test-Path $settingsClaude) {
         try {
-            # -AsHashtable: sem isto o ConvertFrom-Json devolve PSCustomObject e reescrever uma
-            # chave vira ginastica; e o resto do settings do usuario TEM que voltar intacto.
-            $cfg = Get-Content $settingsClaude -Raw | ConvertFrom-Json -AsHashtable
+            $bruto = Get-Content $settingsClaude -Raw
+            if ($bruto.Trim()) { $cfg = $bruto | ConvertFrom-Json }
         } catch {
             Falta 'settings.json do Claude ilegivel - nao vou reescrever por cima'
-            $cfg = $null
+            $cfg = 'ERRO'
         }
     }
-    if ($null -ne $cfg) {
+    if ($null -eq $cfg) { $cfg = New-Object psobject }
+    if ($cfg -ne 'ERRO') {
         $atual = $null
-        if ($cfg.ContainsKey('statusLine')) { $atual = $cfg['statusLine']['command'] }
+        if ($cfg.PSObject.Properties.Name -contains 'statusLine') { $atual = $cfg.statusLine.command }
         if ($atual -eq $cmdSl) {
             Ok 'statusline ja configurada'
         } else {
             if ($atual) { Copy-Item $settingsClaude "$settingsClaude.bak" -Force }
-            $cfg['statusLine'] = @{ type = 'command'; command = $cmdSl }
+            $valor = New-Object psobject -Property @{ type = 'command'; command = $cmdSl }
+            $cfg | Add-Member -NotePropertyName 'statusLine' -NotePropertyValue $valor -Force
             $cfg | ConvertTo-Json -Depth 20 | Set-Content -Path $settingsClaude -Encoding UTF8
             Ok 'statusline configurada no ~/.claude/settings.json'
             Nota 'Vale nas sessoes NOVAS do Claude Code.'
