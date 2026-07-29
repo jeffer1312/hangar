@@ -3,6 +3,22 @@
 Captured from live testing (phone, real session). Deferred by the user to the polish
 phase — not blockers. Newest first.
 
+## Unify the Linux install the way Windows got unified (2026-07-29)
+
+`install.ps1` does the whole job in one command: dependencies, token, frontend build, the `claude`
+wrapper, firewall, an offer of Tailscale with an explanation of what it buys, autostart at logon,
+and a smoke check that the backend actually imports and the multiplexer actually creates a session.
+
+Linux is still spread out: `install.sh` covers deps/backend/frontend/token and then *offers* the
+other installers, while `lan-setup.sh` (firewall, needs root), `services-setup.sh` (systemd user
+units), `install-cp-send.sh`, `install-claude-wrapper.sh` and `tmux-persist-setup.sh` each stand
+alone, and Tailscale is only prose in `docs/USAGE.md`. Someone who is not the author has to read
+several files to end up with a working setup.
+
+Bring `install.sh` up to the same bar — same order, same explanations, same final smoke check,
+and let the user pick a memorable token instead of only generating one (it gets typed on a phone).
+Keep every sub-script runnable on its own; the point is that the top-level one should be enough.
+
 ## Stability under load — never measured (2026-07-29)
 
 Performance **was** measured and is a non-issue at this scale; stability under load was not, and

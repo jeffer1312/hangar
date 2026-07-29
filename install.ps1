@@ -1,140 +1,283 @@
-# claude-cockpit — instalacao no Windows, em um comando.
+# claude-cockpit — instalacao completa no Windows.
 #
-#   powershell -ExecutionPolicy Bypass -File install.ps1
-#   powershell -ExecutionPolicy Bypass -File install.ps1 -Sim        # nao interativo
-#   powershell -ExecutionPolicy Bypass -File install.ps1 -SoChecar   # so diz o que falta
+#   powershell -ExecutionPolicy Bypass -File install.ps1            # interativo
+#   powershell -ExecutionPolicy Bypass -File install.ps1 -Sim       # aceita tudo
+#   powershell -ExecutionPolicy Bypass -File install.ps1 -SoChecar  # so diz o que falta
 #
-# Espelha o install.sh do Linux. Diferencas que sao do sistema, nao de escolha:
-#   - o multiplexador e o psmux (tmux nativo de Windows, ConPTY); nao existe tmux aqui;
-#   - nao ha systemd: os servicos ficam como tarefa do usuario, ou voce roda na mao;
-#   - os wrappers de `claude`/`codex` sao .sh e nao rodam aqui — sessao aberta no terminal
-#     ainda NAO aparece no app. O app cria e dirige as proprias sessoes normalmente.
+# Espelha o install.sh do Linux. Escrito pra Windows PowerShell 5.1 (o que vem no Windows):
+# nada de operador ternario nem API de .NET Core, senao quebra em quem nao instalou o PS 7.
 param([switch]$Sim, [switch]$SoChecar)
 
 $ErrorActionPreference = 'Stop'
 $raiz = Split-Path -Parent $MyInvocation.MyCommand.Path
+$pendencias = @()
 
 function Titulo($m) { Write-Host "`n$m" -ForegroundColor Cyan }
 function Ok($m)     { Write-Host "  ok  $m" -ForegroundColor Green }
+function Nota($m)   { Write-Host "      $m" -ForegroundColor DarkGray }
 function Falta($m)  { Write-Host "  --  $m" -ForegroundColor Yellow }
 function Erro($m)   { Write-Host "  X   $m" -ForegroundColor Red }
+
+function Pergunte($texto) {
+    if ($Sim) { return $true }
+    $r = Read-Host "$texto [S/n]"
+    return ($r -eq '' -or $r -match '^[SsYy]')
+}
 
 function Atualiza-Path {
     # winget grava o PATH no registro, mas o PowerShell JA ABERTO segue com o antigo -> o
     # programa recem-instalado "nao existe". Reler os dois escopos evita mandar fechar o terminal
-    # no meio da instalacao, que e onde a maioria dos roteiros de Windows perde o usuario.
+    # no meio da instalacao, que e onde roteiro de Windows costuma perder o usuario.
     $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
                 [Environment]::GetEnvironmentVariable('Path', 'User')
 }
 
-function Tem($cmd) { [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
+function Tem($cmd) { return [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
 
-$pendencias = @()
+function EhAdmin {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    return ([Security.Principal.WindowsPrincipal]$id).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator)
+}
 
-function Precisa($rotulo, $cmd, $id, $porque) {
-    if (Tem $cmd) { Ok "$rotulo"; return $true }
-    if ($SoChecar) { Falta "$rotulo — $porque (winget install --id $id)"; $script:pendencias += $rotulo; return $false }
-    Titulo "instalando $rotulo ($id)"
+function Instale($rotulo, $cmd, $id, $porque) {
+    if (Tem $cmd) { Ok $rotulo; return $true }
+    if ($SoChecar) { Falta "$rotulo — $porque"; $script:pendencias += $rotulo; return $false }
+    Write-Host "  .. instalando $rotulo ($id)"
     winget install --id $id --exact --silent `
         --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
     Atualiza-Path
     if (Tem $cmd) { Ok "$rotulo instalado"; return $true }
-    Erro "$rotulo nao instalou. Procure o id com:  winget search $cmd"
+    Erro "$rotulo nao instalou — procure o id com: winget search $cmd"
     $script:pendencias += $rotulo
     return $false
 }
 
 Atualiza-Path
 if (-not (Tem 'winget')) {
-    Erro 'winget nao encontrado. Instale o "App Installer" pela Microsoft Store.'
+    Erro 'winget nao encontrado. Instale o "App Installer" pela Microsoft Store e rode de novo.'
     exit 1
 }
 
-# ── 1. Dependencias ─────────────────────────────────────────────────────────
-Titulo "1/5 Dependencias"
-Precisa 'psmux (multiplexador)' 'psmux'  'marlocarlo.psmux'      'sem ele nao ha sessao'   | Out-Null
-Precisa 'Claude Code'           'claude' 'Anthropic.ClaudeCode'  'e o que o app pilota'    | Out-Null
-Precisa 'Python'                'py'     'Python.Python.3.13'    'o backend e Python'      | Out-Null
-Precisa 'Node 20+'              'node'   'OpenJS.NodeJS.LTS'     'o frontend e Svelte'     | Out-Null
-Precisa 'uv'                    'uv'     'astral-sh.uv'          'gerencia o venv do backend' | Out-Null
+# ── 1/8 Dependencias obrigatorias ───────────────────────────────────────────
+Titulo '1/8 Dependencias'
+Instale 'psmux (multiplexador)' 'psmux'  'marlocarlo.psmux'     'sem ele nao existe sessao' | Out-Null
+Instale 'Claude Code'           'claude' 'Anthropic.ClaudeCode' 'e o que o app pilota'      | Out-Null
+Instale 'Python'                'py'     'Python.Python.3.13'   'o backend e Python'        | Out-Null
+Instale 'Node 20+'              'node'   'OpenJS.NodeJS.LTS'    'o frontend e Svelte'       | Out-Null
+Instale 'uv'                    'uv'     'astral-sh.uv'         'gerencia o venv do backend' | Out-Null
 
-# O backend chama o multiplexador por `tmux`. O psmux publica esse alias; se um dia parar de
-# publicar, isso vira um erro claro aqui em vez de "falha ao criar sessao" no app.
+# O backend chama o multiplexador por `tmux`. O psmux publica esse alias; se um dia parar,
+# isso vira erro claro AQUI em vez de "falha ao criar sessao" dentro do app.
 if ((Tem 'psmux') -and -not (Tem 'tmux')) {
     Erro 'psmux instalado mas sem o alias `tmux` — o backend chama por esse nome'
     $pendencias += 'alias tmux'
 }
 
+# Git e OPCIONAL: sem ele o app roda, so perde o chip de branch e a aba de git.
+if (-not (Tem 'git')) {
+    Falta 'git ausente — o painel de git e o chip de branch ficam vazios (o resto funciona)'
+    if (-not $SoChecar -and (Pergunte '      Instalar o Git agora?')) {
+        Instale 'Git' 'git' 'Git.Git' 'painel de git' | Out-Null
+    }
+} else { Ok 'git' }
+
 if ($SoChecar) {
-    Titulo (($pendencias.Count -eq 0) ? "Nada faltando." : "Faltam: $($pendencias -join ', ')")
-    exit ($pendencias.Count -eq 0 ? 0 : 1)
+    if ($pendencias.Count -eq 0) { Titulo 'Nada faltando.'; exit 0 }
+    Titulo "Faltam: $($pendencias -join ', ')"
+    exit 1
 }
 if ($pendencias.Count -gt 0) { Erro "faltam: $($pendencias -join ', ')"; exit 1 }
 
-# ── 2. Backend ──────────────────────────────────────────────────────────────
-Titulo "2/5 Backend (uv sync)"
+# ── 2/8 Backend ─────────────────────────────────────────────────────────────
+Titulo '2/8 Backend'
 Push-Location "$raiz\backend"
 uv sync --quiet
-Ok "dependencias instaladas (psutil entra aqui — no Windows nao ha /proc)"
-
-# Token: mesmo criterio do install.sh. O backend recusa 'change-me' fora do loopback.
-$envFile = "$raiz\backend\.env"
-if ((Test-Path $envFile) -and (Select-String -Path $envFile -Pattern '^CP_AUTH_TOKEN=' -Quiet)) {
-    Ok "backend/.env ja tem CP_AUTH_TOKEN (mantido)"
-} else {
-    $bytes = [byte[]]::new(24)
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-    $token = -join ($bytes | ForEach-Object { $_.ToString('x2') })
-    Add-Content -Path $envFile -Value "CP_AUTH_TOKEN=$token"
-    Ok "CP_AUTH_TOKEN gerado em backend\.env"
-}
+Ok 'dependencias instaladas'
+Nota 'psutil entra aqui: no Windows nao ha /proc pra ler informacao de processo'
 Pop-Location
 
-# ── 3. Frontend ─────────────────────────────────────────────────────────────
-Titulo "3/5 Frontend (npm ci + build)"
+# ── 3/8 Token de acesso ─────────────────────────────────────────────────────
+# O backend RECUSA subir fora do loopback com token fraco: sem isso, qualquer um na rede
+# controlaria o teu Claude. Por isso o token e gerado, nao pedido.
+Titulo '3/8 Token de acesso'
+$envFile = "$raiz\backend\.env"
+$temToken = (Test-Path $envFile) -and (Select-String -Path $envFile -Pattern '^CP_AUTH_TOKEN=' -Quiet)
+function Token-Aleatorio {
+    # RNGCryptoServiceProvider, nao RandomNumberGenerator::Fill: o segundo e .NET Core e nao
+    # existe no PowerShell 5.1 que vem no Windows.
+    $bytes = New-Object byte[] 24
+    (New-Object System.Security.Cryptography.RNGCryptoServiceProvider).GetBytes($bytes)
+    return (-join ($bytes | ForEach-Object { $_.ToString('x2') }))
+}
+
+if ($temToken) {
+    Ok 'backend\.env ja tem CP_AUTH_TOKEN (mantido)'
+} elseif ($Sim) {
+    Add-Content -Path $envFile -Value "CP_AUTH_TOKEN=$(Token-Aleatorio)"
+    Ok 'CP_AUTH_TOKEN aleatorio gerado (modo -Sim nao pergunta)'
+} else {
+    Write-Host '  Voce vai DIGITAR este token no celular, entao escolha algo que lembre.'
+    Write-Host '  Enter em branco = gera um aleatorio de 48 caracteres (seguro, chato de digitar).'
+    Nota 'No Tailscale a rede ja e fechada e o token e a segunda tranca. No Wi-Fi de casa ele'
+    Nota 'e a UNICA: quem estiver na rede e acertar a senha roda comando como voce. Nada de "1234".'
+    while ($true) {
+        $token = Read-Host '  Token'
+        if (-not $token) { $token = Token-Aleatorio; Ok 'aleatorio gerado'; break }
+        # O backend recusa subir fora do loopback com 'change-me'; o piso de 8 e daqui, pra
+        # senha curta nao passar batido so porque o backend so barra aquele valor literal.
+        if ($token.Length -lt 8) { Erro 'curto demais — no minimo 8 caracteres'; continue }
+        if ($token -eq 'change-me') { Erro 'esse valor o backend recusa de proposito'; continue }
+        break
+    }
+    Add-Content -Path $envFile -Value "CP_AUTH_TOKEN=$token"
+    Ok 'CP_AUTH_TOKEN gravado em backend\.env'
+}
+Nota 'E esse token que voce digita no celular na primeira conexao.'
+
+# ── 4/8 Frontend ────────────────────────────────────────────────────────────
+Titulo '4/8 Frontend'
 Push-Location "$raiz\frontend"
 npm ci --silent
 npm run build --silent
 Pop-Location
-Ok "frontend buildado em frontend\dist\"
+Ok 'buildado em frontend\dist\'
 
-# ── 4. Fumaca: o backend SOBE mesmo? ────────────────────────────────────────
-# Ate agora tudo foi instalacao. Este passo e o que separa "instalou" de "funciona": ate pouco
-# tempo atras o backend nem importava no Windows (um `import fcntl` no topo do projects.py) e o
-# instalador teria dito sucesso do mesmo jeito.
-Titulo "4/5 Checagem de fumaca"
+# ── 5/8 Wrapper do claude ───────────────────────────────────────────────────
+# Sem ele um `claude` que VOCE abre no terminal e invisivel pro app: nao tem --session-id (o
+# backend nao sabe qual transcript e daquela sessao) e nao vive num pane (nao ha estado nem
+# input). Sessao criada PELO app funciona de qualquer jeito; isto e sobre a outra direcao.
+Titulo '5/8 Wrapper do claude (sessao aberta por voce aparece no app)'
+$marca = '# >>> claude-cockpit >>>'
+$perfil = $PROFILE.CurrentUserAllHosts
+$jaTem = (Test-Path $perfil) -and (Select-String -Path $perfil -Pattern ([regex]::Escape($marca)) -Quiet)
+if ($jaTem) {
+    Ok 'bloco ja presente no seu $PROFILE'
+} elseif (Pergunte '  Instalar (recomendado)?') {
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $perfil) | Out-Null
+    Add-Content -Path $perfil -Value @"
+
+$marca
+. "$raiz\scripts\shell\claude.ps1"
+# <<< claude-cockpit <<<
+"@
+    Ok "bloco adicionado em $perfil"
+    Nota 'Vale nos terminais NOVOS — este aqui ainda esta com o perfil antigo.'
+} else {
+    Nota 'pulado — sessao aberta no terminal nao vai aparecer no app'
+}
+
+# ── 6/8 Acesso pelo celular ─────────────────────────────────────────────────
+Titulo '6/8 Acesso pelo celular'
+Write-Host '  Duas formas, e elas nao competem:'
+Write-Host '    LAN      — celular no mesmo Wi-Fi. Precisa liberar as portas no firewall.'
+Write-Host '    Tailscale — VPN pessoal. Funciona de QUALQUER lugar sem expor nada pra internet.'
+Nota 'Fora de casa, use Tailscale. NUNCA abra porta pra internet publica: o app roda o'
+Nota 'claude como VOCE, entao um host exposto e execucao remota na sua maquina.'
+
+# Firewall: precisa de admin. Sem admin nao adianta tentar — a regra falha e o usuario fica
+# achando que liberou.
+if (Pergunte '  Liberar as portas 8765 e 5173 no firewall pra rede LOCAL?') {
+    if (EhAdmin) {
+        foreach ($p in 8765, 5173) {
+            $nome = "claude-cockpit $p"
+            Get-NetFirewallRule -DisplayName $nome -ErrorAction SilentlyContinue |
+                Remove-NetFirewallRule -ErrorAction SilentlyContinue
+            # Profile Private: rede de casa. Em rede Publica (cafe, aeroporto) segue fechado,
+            # que e o comportamento que se quer sem precisar lembrar de desligar nada.
+            New-NetFirewallRule -DisplayName $nome -Direction Inbound -Action Allow `
+                -Protocol TCP -LocalPort $p -Profile Private | Out-Null
+        }
+        Ok 'portas liberadas (perfil Private apenas)'
+    } else {
+        Falta 'sem privilegio de administrador — abra um PowerShell como admin e rode:'
+        Nota 'New-NetFirewallRule -DisplayName "claude-cockpit 8765" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8765 -Profile Private'
+        Nota 'New-NetFirewallRule -DisplayName "claude-cockpit 5173" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 5173 -Profile Private'
+    }
+}
+
+if (Tem 'tailscale') {
+    Ok 'Tailscale ja instalado'
+    Nota 'Depois do `tailscale up`, ponha o nome .ts.net em CP_PUBLIC_URL no backend\.env'
+    Nota 'pra o QR sair com o endereco certo em vez do IP da LAN.'
+} elseif (Pergunte '  Instalar o Tailscale? (VPN pessoal — acesso de fora de casa)') {
+    Instale 'Tailscale' 'tailscale' 'tailscale.tailscale' 'acesso remoto' | Out-Null
+    Nota 'Falta logar: rode `tailscale up` e instale o Tailscale tambem no celular.'
+    Nota 'Depois ponha o nome .ts.net em CP_PUBLIC_URL no backend\.env.'
+}
+
+# ── 7/8 Subir sozinho no logon ──────────────────────────────────────────────
+# Equivalente possivel dos servicos systemd do Linux. Nao e servico do Windows (isso exigiria
+# admin e rodaria fora da sua sessao, sem acesso ao seu ~\.claude): e tarefa agendada no logon.
+Titulo '7/8 Subir junto com o Windows'
+$tarefas = @(
+    @{ Nome = 'claude-cockpit-backend';  Exe = 'uv';  Args = 'run python -m app.main'; Dir = "$raiz\backend" },
+    @{ Nome = 'claude-cockpit-frontend'; Exe = 'npm'; Args = 'run dev';                Dir = "$raiz\frontend" }
+)
+$jaAgendado = Get-ScheduledTask -TaskName $tarefas[0].Nome -ErrorAction SilentlyContinue
+if ($jaAgendado) {
+    Ok 'tarefas ja registradas'
+} elseif (Pergunte '  Registrar backend e frontend pra subir no seu logon?') {
+    try {
+        foreach ($t in $tarefas) {
+            # -Exe pelo caminho completo: a tarefa nasce com o PATH do sistema, nao com o do
+            # seu shell — `uv` instalado em ~\.local\bin nao seria encontrado.
+            $exe = (Get-Command $t.Exe).Source
+            $acao = New-ScheduledTaskAction -Execute $exe -Argument $t.Args -WorkingDirectory $t.Dir
+            $gatilho = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+            $cfg = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
+                        -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
+            Register-ScheduledTask -TaskName $t.Nome -Action $acao -Trigger $gatilho `
+                -Settings $cfg -Force | Out-Null
+            Ok "tarefa $($t.Nome) registrada"
+        }
+        Nota 'Remover depois: Unregister-ScheduledTask -TaskName claude-cockpit-backend'
+    } catch {
+        Falta "nao deu pra registrar as tarefas: $_"
+        Nota 'Sem isso, o backend so roda enquanto o terminal estiver aberto.'
+    }
+} else {
+    Nota 'pulado — rodando na mao, fechar o terminal derruba o backend'
+}
+
+# ── 8/8 Checagem de fumaca ──────────────────────────────────────────────────
+# Ate aqui foi tudo instalacao. Este passo separa "instalou" de "funciona": ate pouco tempo o
+# backend nem IMPORTAVA no Windows (um `import fcntl` no topo do projects.py) e um instalador
+# sem esta checagem teria reportado sucesso do mesmo jeito.
+Titulo '8/8 Checagem de fumaca'
 Push-Location "$raiz\backend"
-uv run python -c "from app import api, registry, procinfo, projects; import sys; sys.stdout.write('import ok')" | Out-Null
-if ($LASTEXITCODE -ne 0) { Erro "o backend nao importa neste Windows"; Pop-Location; exit 1 }
-Ok "o backend importa"
-uv run python -c "from app import procinfo; assert not procinfo._TEM_PROC; import psutil; assert psutil.Process().cwd()" | Out-Null
-if ($LASTEXITCODE -ne 0) { Erro "a leitura de processo via psutil falhou"; Pop-Location; exit 1 }
-Ok "leitura de processo (psutil) funcionando"
+uv run python -c "from app import api, registry, procinfo, projects" 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) { Erro 'o backend nao importa neste Windows'; Pop-Location; exit 1 }
+Ok 'o backend importa'
+
+uv run python -c "from app import procinfo; assert not procinfo._TEM_PROC; import psutil; assert psutil.Process().cwd()" 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) { Erro 'leitura de processo via psutil falhou'; Pop-Location; exit 1 }
+Ok 'leitura de processo (psutil) funcionando'
 Pop-Location
 
 $sessao = "cp-fumaca-$PID"
-tmux new-session -d -s $sessao -c $env:TEMP "cmd" 2>&1 | Out-Null
+tmux new-session -d -s $sessao -c $env:TEMP 'cmd' 2>&1 | Out-Null
 if ($LASTEXITCODE -eq 0) {
-    tmux kill-session -t $sessao 2>&1 | Out-Null
-    Ok "o multiplexador cria e mata sessao"
+    tmux kill-session -t "=$sessao" 2>&1 | Out-Null
+    Ok 'o multiplexador cria e mata sessao'
 } else {
-    Erro "o psmux nao criou uma sessao de teste — o app nao vai conseguir abrir sessao"
+    Erro 'o psmux nao criou uma sessao de teste — o app nao vai abrir sessao'
     exit 1
 }
 
-# ── 5. Como rodar ───────────────────────────────────────────────────────────
-Titulo "5/5 Pronto"
-@"
-  - Subir o backend:
-      cd backend ; `$env:CP_LAN_BIND_IP='auto' ; uv run python -m app.main
-  - Subir o frontend (ou sirva frontend\dist\):
+# ── Fim ─────────────────────────────────────────────────────────────────────
+Titulo 'Pronto'
+Write-Host @"
+  Rodar na mao (se voce pulou o passo 7):
+      cd backend  ; `$env:CP_LAN_BIND_IP='auto' ; uv run python -m app.main
       cd frontend ; npm run dev
-  - No celular: abra a URL do QR que o backend imprime e cole o token de backend\.env.
-    Guia completo (Tailscale, instalar como PWA): docs\USAGE.md
 
-  O que este Windows NAO tem, e e de propósito:
-  - servico persistente: nao ha systemd. Rodando na mao, fechar o terminal derruba o backend.
-  - `claude` aberto por voce no terminal NAO aparece no app: os wrappers que injetam o
-    --session-id sao shell script. Sessao criada PELO app funciona normalmente.
-  - deteccao de dev server por porta: funciona; no macOS e que ela degrada, nao aqui.
-"@ | Write-Host
+  No celular: abra a URL do QR que o backend imprime e cole o token de backend\.env.
+  Guia completo (Tailscale, instalar como PWA, cada tela): docs\USAGE.md
+
+  O que este Windows NAO tem, e nao e esquecimento:
+  - cp-send (recado e pareamento entre sessoes) e as skills do repo: sao shell script,
+    rodam so no Linux/macOS.
+  - wrapper do `codex`: idem. Sessao Codex, so pelo app.
+  - resurrect/continuum (sessoes sobreviverem a reboot): sao plugins de tmux em bash.
+"@
