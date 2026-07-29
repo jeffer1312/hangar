@@ -6,7 +6,8 @@
 # so Vite HMR / fast-refresh stays fully live — edits reload in the browser as usual.
 #
 # Usage:
-#   ./scripts/services-setup.sh              # install + start (idempotent)
+#   ./scripts/services-setup.sh                 # install + start (idempotent)
+#   ./scripts/services-setup.sh --backend-only  # so o backend (frontend roda noutro lugar)
 #   ./scripts/services-setup.sh --status     # show status + recent logs
 #   ./scripts/services-setup.sh --logs       # tail both services live
 #   ./scripts/services-setup.sh --restart    # restart both
@@ -40,6 +41,13 @@ UV_BIN="$(command -v uv || true)"
 
 log() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 
+# --backend-only: nao instala o servico do frontend. Caso real: o PWA roda numa VPS e cada
+# maquina so expoe o backend — UM frontend atende varios servidores (ele guarda a lista em
+# cp_servers e o usuario adiciona cada backend pela UI). Subir vite aqui seria porta aberta e
+# processo node de graca.
+BACKEND_ONLY=0
+if [[ "${1:-}" == "--backend-only" ]]; then BACKEND_ONLY=1; shift; fi
+
 case "${1:-}" in
   --uninstall)
     systemctl --user disable --now "$BACK" "$FRONT" 2>/dev/null || true
@@ -59,7 +67,7 @@ case "${1:-}" in
 esac
 
 [[ -n "$UV_BIN" ]] || { echo "uv not found in PATH" >&2; exit 1; }
-[[ -x "$NODE_BIN/npm" ]] || { echo "npm nao encontrado em $NODE_BIN — instale Node 20+ (ou, se usa fnm, rode: fnm default <ver>)" >&2; exit 1; }
+[[ "$BACKEND_ONLY" == 1 ]] || [[ -x "$NODE_BIN/npm" ]] || { echo "npm nao encontrado em $NODE_BIN — instale Node 20+ (ou, se usa fnm, rode: fnm default <ver>)" >&2; exit 1; }
 [[ -d "$REPO/frontend/node_modules" ]] || log "WARNING: frontend/node_modules missing — run 'npm install' in frontend first"
 
 mkdir -p "$SD_DIR"
@@ -83,6 +91,14 @@ RestartSec=2
 WantedBy=default.target
 EOF
 
+if [[ "$BACKEND_ONLY" == 1 ]]; then
+  # Nao basta nao habilitar: escrever a unit deixaria um arquivo morto no disco, que aparece no
+  # `systemctl --user list-unit-files` e confunde quem for diagnosticar depois. Remove uma que
+  # tenha sobrado de uma instalacao anterior COM frontend.
+  systemctl --user disable --now "$FRONT" 2>/dev/null || true
+  rm -f "$SD_DIR/$FRONT"
+  log "Skipping $FRONT (--backend-only)"
+else
 log "Writing $FRONT"
 cat > "$SD_DIR/$FRONT" <<EOF
 [Unit]
@@ -99,11 +115,17 @@ RestartSec=2
 [Install]
 WantedBy=default.target
 EOF
+fi
 
 systemctl --user daemon-reload
-systemctl --user enable --now "$BACK" "$FRONT"
-
-log "Done. Both services up."
+if [[ "$BACKEND_ONLY" == 1 ]]; then
+  systemctl --user enable --now "$BACK"
+  log "Done. Backend up (frontend NAO instalado: --backend-only)."
+  echo "  Aponte um frontend ja existente para este backend — veja a URL no QR que ele imprime."
+else
+  systemctl --user enable --now "$BACK" "$FRONT"
+  log "Done. Both services up."
+fi
 echo
 echo "  • Status:   ./scripts/services-setup.sh --status"
 echo "  • Logs:     ./scripts/services-setup.sh --logs"
