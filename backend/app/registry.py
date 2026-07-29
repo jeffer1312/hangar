@@ -560,6 +560,26 @@ class SessionRegistry:
                 continue
             base = os.path.basename(jsonl).removesuffix(".jsonl")
             owner = next((i for i in group if sids.get(i.name) == base), None)
+            if owner is None:
+                # Desempate por TRACKED. O teste acima (sid do cmdline == nome do arquivo) so acerta
+                # quando o claude escreve no proprio boot_id — e numa sessao RESUMIDA ele nunca faz
+                # isso: o cmdline congela no boot_id e o transcript vai pro uuid resumido. E o mesmo
+                # fato que o _active_marker_jsonl ja documenta ("o <boot_id>.jsonl do cmdline NUNCA
+                # nasce"), so que ali ele e tratado e aqui nao era -> owner=None e o `for` abaixo
+                # rebaixava TODAS, inclusive quem tinha vinculo deterministico.
+                # MEDIDO nesta maquina: grupo [jeffer1312 (sid=dea09039, jsonl=bdabe8c1, tracked),
+                # probepaste (bare, sem sid, mesmo jsonl por chute de mtime)] -> nenhuma dona pelo
+                # sid, as duas rebaixadas, e a sessao ATIVA ficava "sem id" na UI (o chat desligava).
+                # Alternava entre as sessoes porque o newest-by-mtime que a bare reivindica e sempre
+                # o transcript de quem acabou de escrever.
+                # tracked=True so vem de sinal DETERMINISTICO (marcador do hook casado por pid da
+                # arvore, fd aberto, ou cache semeado por um deles) — prova de propriedade mais forte
+                # que o chute newest-by-mtime de uma sessao bare. Exige UNICO: com 2+ tracked no mesmo
+                # jsonl nao ha dona obvia (duas resumiram o mesmo transcript), e com 0 tampouco —
+                # nos dois casos segue rebaixando todas, como antes.
+                tracked = [i for i in group if i.tracked]
+                if len(tracked) == 1:
+                    owner = tracked[0]
             for info in group:
                 if info is owner:
                     continue

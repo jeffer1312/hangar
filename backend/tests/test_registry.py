@@ -728,6 +728,33 @@ def test_dedupe_collision_no_owner_demotes_all():
     assert a.jsonl is None and b.jsonl is None
 
 
+def test_dedupe_collision_unico_tracked_vence_sem_dona_por_sid():
+    # Sessao RESUMIDA: o cmdline congela no boot_id e o claude escreve no uuid resumido, entao o teste
+    # `sid == basename` NUNCA acha dona (o proprio _active_marker_jsonl documenta que o <boot_id>.jsonl
+    # nao nasce). Antes disso, owner=None rebaixava TODAS - inclusive a que tinha vinculo
+    # DETERMINISTICO - e a sessao ficava "sem id" na UI, com o chat desligado.
+    # Cenario medido em maquina real: uma sessao com marcador do hook casado por pid (tracked=True) e
+    # uma sessao BARE que reivindicou o mesmo jsonl pelo chute newest-by-mtime (tracked=False).
+    from app.models import SessionInfo
+    reg = SessionRegistry()
+    dona = SessionInfo(name="A", cwd="/c", jsonl="/p/Z.jsonl", tracked=True)
+    bare = SessionInfo(name="B", cwd="/c", jsonl="/p/Z.jsonl", tracked=False)
+    reg._dedupe_collisions([dona, bare], {"A": "boot-id-fantasma", "B": None})
+    assert dona.jsonl == "/p/Z.jsonl" and dona.tracked is True
+    assert bare.jsonl is None and bare.tracked is False
+
+
+def test_dedupe_collision_zero_tracked_ainda_rebaixa_todas():
+    # O desempate por tracked exige UM unico: com nenhuma tracked (duas bare chutando por mtime) nao ha
+    # prova de propriedade nenhuma -> segue rebaixando as duas, como antes.
+    from app.models import SessionInfo
+    reg = SessionRegistry()
+    a = SessionInfo(name="A", cwd="/c", jsonl="/p/Z.jsonl", tracked=False)
+    b = SessionInfo(name="B", cwd="/c", jsonl="/p/Z.jsonl", tracked=False)
+    reg._dedupe_collisions([a, b], {"A": None, "B": None})
+    assert a.jsonl is None and b.jsonl is None
+
+
 # --- resume de sessao "sem id": relança com --resume -> passa a rastrear, continuando a conversa ---
 
 def test_resume_respawns_with_resume_flag(tmp_path):
