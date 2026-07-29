@@ -9,6 +9,7 @@ import pytest
 from unittest.mock import patch
 
 from app import registry
+from app import procinfo
 from app.registry import SessionRegistry
 from app.adapters.codex import sessions as codex_sessions
 from app.adapters.codex import adapter as codex_adapter
@@ -112,7 +113,7 @@ def test_list_includes_codex_sidecar_and_tmux(tmp_path):
     reg = SessionRegistry(projects_dir=tmp_path)
     tmux_panes = [{"name": "claudesess", "cwd": "/tmp/c", "pid": 111}]
     with patch.object(registry.tmux, "list_panes_active", return_value=tmux_panes), \
-         patch.object(registry, "_proc_children_map", return_value={}), \
+         patch.object(procinfo, "_proc_children_map", return_value={}), \
          patch.object(SessionRegistry, "resolve_tracked", return_value=("/x/claude.jsonl", True)), \
          patch.object(SessionRegistry, "_repl_sid", return_value=None):
         out = reg.list()
@@ -129,7 +130,7 @@ def test_list_does_not_duplicate_codex_tmux_tui_as_claude(tmp_path):
     reg = SessionRegistry(projects_dir=tmp_path)
     panes = [{"name": "cx", "cwd": "/tmp/a", "pid": 111}]
     with patch.object(registry.tmux, "list_panes_active", return_value=panes), \
-         patch.object(registry, "_proc_children_map", return_value={}), \
+         patch.object(procinfo, "_proc_children_map", return_value={}), \
          patch.object(SessionRegistry, "resolve_tracked") as resolve:
         out = reg.list()
     assert [(s.name, s.provider) for s in out] == [("cx", "codex")]

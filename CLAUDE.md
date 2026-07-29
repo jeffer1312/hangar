@@ -213,6 +213,31 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   re-reads the sidecar and returns what *stuck*, not what was asked (asking `max` on glm-5.2 lands on
   `xhigh`). Missing sidecar → 409 telling the user to re-run `install-claude-wrapper.sh`, never an
   empty list that reads as "no models".
+- **Process info lives in `app/procinfo.py` — the only OS-bound layer.** Nine functions
+  (`_proc_children_map`, `_descendant_pids`, `_open_jsonl`, `_cmdline`, `_config_dir_of`,
+  `_proc_start_time`, `_engine_of`, + the two `_proc_*_path` test seams) hold **every** `/proc`
+  read in the backend; `registry.py` imports them and no longer knows what OS it's on. Four rules:
+  (1) the implementation is chosen **once, at import, by capability** (`Path("/proc").is_dir()`),
+  never by OS name — "is it unix?" says YES for macOS, which has no `/proc` and would silently read
+  nothing; (2) **Linux does not move to psutil** — `open_files()` is orders of magnitude slower than
+  listing `/proc/<pid>/fd` and these run per poll, per session; (3) both implementations live in
+  **one module**, not three — with `procinfo.py` importing from a `procinfo_proc.py`, a monkeypatch on
+  `procinfo._proc_stat_path` wouldn't reach the caller inside it and the test would pass by *accident*
+  reading real `/proc`; (4) `psutil` is a **platform-conditional** dependency
+  (`sys_platform != 'linux'`), so a Linux install doesn't download it — but it's an unconditional
+  *dev* dependency, because `tests/test_procinfo.py` forces `_TEM_PROC = False` on Linux to exercise
+  the Windows/macOS path against real processes. Without that, code that only runs off-Linux would
+  never be tested by anyone developing on Linux.
+- **Windows runs on psmux, not tmux** (`marlocarlo.psmux` — native ConPTY multiplexer that publishes a
+  `tmux` alias, so `tmux.py` calls it unchanged). Measured on psmux 3.3.7: `new-session -e`, exact
+  `=NAME:` targets, `-F` formats incl. `#{?alternate_on,...}`, `capture-pane -S` with Unicode intact,
+  named keys and the option picker all work. **`paste-buffer` does not** — hence the `paste_text`
+  fallback, which branches on the **return code**, not on the OS: a multiplexer that lacks it says so,
+  and on Linux the fast path returns 0 and never reaches plan B. Plan B is one `send-keys -l` per line
+  with `C-j` between; a `\n` *inside* the argument makes psmux swallow everything after it, and `\r`
+  as a separator glues the lines together (both measured). Probe: `scripts/test-psmux.py` (+ `.ps1`).
+  Install: `install.ps1`. Not there on Windows: systemd services and the `claude`/`codex` shell
+  wrappers, so a session you open in the terminal is invisible to the app — app-created ones are fine.
 - **Session creation's systemd-scope probe.** Creating a session wraps `tmux` in
   `systemd-run --user --scope` so the tmux server doesn't inherit the backend's cgroup, but the wrap
   is now gated on a probe: a systemd user manager that refuses transient scopes was making **every**

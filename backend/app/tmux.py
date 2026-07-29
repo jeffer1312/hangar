@@ -185,7 +185,32 @@ def paste_text(name: str, text: str) -> None:
     # nomeado (não suja os paste-buffers do usuário) e `-d` apaga depois. Quem submete e o Enter (caller).
     buf = "cp-prompt"
     _run(["tmux", "set-buffer", "-b", buf, "--", text])
-    _run(["tmux", "paste-buffer", "-t", _pane_target(name), "-b", buf, "-p", "-d"])
+    cp = _run(["tmux", "paste-buffer", "-t", _pane_target(name), "-b", buf, "-p", "-d"])
+    if cp.returncode == 0:
+        return
+    _paste_linha_a_linha(name, text)
+
+
+def _paste_linha_a_linha(name: str, text: str) -> None:
+    """Plano B do multi-linha: uma chamada por linha, com C-j entre elas.
+
+    Multiplexador sem `paste-buffer` (medido no psmux 3.3.7, o tmux nativo de Windows). Duas coisas
+    aprendidas no teste, as duas contra-intuitivas:
+      1. o bracketed paste na mao (`send-keys -l` com ESC[200~/201~) NAO resolve — o psmux aceita a
+         sequencia mas engole tudo depois do primeiro \n do argumento;
+      2. trocar o separador por \r tambem nao: as linhas chegam GRUDADAS numa so.
+    O que funciona e nunca ter \n dentro do argumento: C-j (0x0A) vai como TECLA NOMEADA, que a TUI
+    insere como quebra sem submeter.
+
+    Custa 2N-1 chamadas pra N linhas, contra 2 do paste-buffer — por isso e plano B e nao padrao.
+    NAO roda no Linux: la o paste-buffer devolve 0 e o caller sai antes de chegar aqui.
+    """
+    alvo = _pane_target(name)
+    for i, linha in enumerate(text.split("\n")):
+        if i:
+            _run(["tmux", "send-keys", "-t", alvo, "C-j"])
+        if linha:
+            _run(["tmux", "send-keys", "-t", alvo, "-l", "--", linha])
 
 
 def pane_scrollback(name: str) -> int:

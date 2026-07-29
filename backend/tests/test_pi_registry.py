@@ -4,6 +4,7 @@ import os
 import pytest
 
 from app import registry
+from app import procinfo
 
 
 def _pane(monkeypatch, cmd: str):
@@ -84,7 +85,7 @@ def test_session_file_ignores_a_stale_sidecar(monkeypatch, tmp_path):
         json.dumps({"file": str(tmp_path / "sumiu.jsonl")}))
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
     # env tambem sem nada, senao o fallback mascararia o bilhete ignorado com um resultado valido.
-    monkeypatch.setattr(registry, "_proc_environ_path", lambda pid: str(tmp_path / "nao-existe"))
+    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(tmp_path / "nao-existe"))
     assert registry.pi_session_file("%123", pid=7, cwd="/w") is None
 
 
@@ -96,14 +97,14 @@ def _fake_proc_start(monkeypatch, tmp_path, nasceu: float):
     ticks = (nasceu - btime) * os.sysconf("SC_CLK_TCK")
     stat = tmp_path / "stat"
     stat.write_text(f"7 (pi (fork) x) S " + "0 " * 18 + f"{ticks:.0f} 0 0\n")
-    monkeypatch.setattr(registry, "_proc_stat_path", lambda pid: str(stat))
+    monkeypatch.setattr(procinfo, "_proc_stat_path", lambda pid: str(stat))
 
 
 def test_proc_start_time_survives_a_comm_with_spaces_and_parens(monkeypatch, tmp_path):
     # Sem o rindex(")") o campo 22 sai errado por alguns tokens e o frescor do bilhete vira ruido.
     _fake_proc_start(monkeypatch, tmp_path, 1_700_000_000.0)
     assert abs(registry._proc_start_time(7) - 1_700_000_000.0) < 1
-    monkeypatch.setattr(registry, "_proc_stat_path", lambda pid: str(tmp_path / "nao-existe"))
+    monkeypatch.setattr(procinfo, "_proc_stat_path", lambda pid: str(tmp_path / "nao-existe"))
     assert registry._proc_start_time(7) is None      # degrada como os vizinhos de /proc
 
 
@@ -123,7 +124,7 @@ def test_session_file_rejects_a_sidecar_older_than_the_pane_process(monkeypatch,
     _fake_proc_start(monkeypatch, tmp_path, 1_700_000_600.0)     # pane nasceu 10min DEPOIS
     env = tmp_path / "environ"
     env.write_bytes(b"CP_PI_SESSION=bbb\x00")
-    monkeypatch.setattr(registry, "_proc_environ_path", lambda pid: str(env))
+    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(env))
     monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: f"/s/2026_{s}.jsonl")
 
     assert registry.pi_session_file("%9", pid=7, cwd="/w") == "/s/2026_bbb.jsonl"
@@ -143,7 +144,7 @@ def test_session_file_trusts_a_fresh_sidecar_even_with_another_id(monkeypatch, t
     _fake_proc_start(monkeypatch, tmp_path, 1_700_000_000.0)     # pane nasceu ANTES do bilhete
     env = tmp_path / "environ"
     env.write_bytes(b"CP_PI_SESSION=aaa\x00")
-    monkeypatch.setattr(registry, "_proc_environ_path", lambda pid: str(env))
+    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(env))
     monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: f"/s/2026_{s}.jsonl")
     assert registry.pi_session_file("%9", pid=7, cwd="/w") == str(alvo)
 
@@ -160,7 +161,7 @@ def _bilhete_e_env(monkeypatch, tmp_path, dados: dict):
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
     env = tmp_path / "environ"
     env.write_bytes(b"CP_PI_SESSION=bbb\x00")
-    monkeypatch.setattr(registry, "_proc_environ_path", lambda pid: str(env))
+    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(env))
     monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: f"/s/2026_{s}.jsonl")
     return velho
 
@@ -173,7 +174,7 @@ def test_session_file_refuses_a_sidecar_when_the_pane_birth_is_unknown(monkeypat
     # novo abrindo a conversa VELHA, tracked=True, sem log nenhum.
     registry._PI_TICKET_WARNED.clear()
     _bilhete_e_env(monkeypatch, tmp_path, {"id": None, "ts": 1_700_000_000.0})
-    monkeypatch.setattr(registry, "_proc_stat_path", lambda pid: str(tmp_path / "nao-existe"))
+    monkeypatch.setattr(procinfo, "_proc_stat_path", lambda pid: str(tmp_path / "nao-existe"))
     assert registry._proc_start_time(7) is None
 
     with caplog.at_level("WARNING", logger="claude_pocket.registry"):
@@ -203,7 +204,7 @@ def test_session_file_falls_back_to_the_wrapper_env(monkeypatch, tmp_path):
     env = tmp_path / "environ"
     sid = "019fa3d5-f074-707b-92a8-1ca7f1d99ec9"
     env.write_bytes(b"PATH=/bin\x00CP_PI_SESSION=" + sid.encode() + b"\x00")
-    monkeypatch.setattr(registry, "_proc_environ_path", lambda pid: str(env))
+    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(env))
     monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: f"/s/2026_{s}.jsonl")
     assert registry.pi_session_file("%123", pid=7, cwd="/w") == f"/s/2026_{sid}.jsonl"
 
@@ -214,7 +215,7 @@ def test_session_file_is_none_when_nothing_knows(monkeypatch, tmp_path):
     cfg = tmp_path / "cfg"
     cfg.mkdir()
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
-    monkeypatch.setattr(registry, "_proc_environ_path", lambda pid: str(tmp_path / "nao-existe"))
+    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(tmp_path / "nao-existe"))
     assert registry.pi_session_file("%123", pid=7, cwd="/w") is None
 
 

@@ -23,6 +23,16 @@ from app.adapters.codex.appserver import AppServerClient
 from app.askquestion import clear_pending_askq
 from app.state import classify, _live_spinner, rate_limit_reset, status_line as _pane_status
 from app.hook_state import hook_state
+# As funcoes de /proc vivem no procinfo.py — e o unico ponto do backend preso ao Linux.
+# Importadas por NOME (nao `procinfo._cmdline(...)`) de proposito: os testes fazem
+# monkeypatch delas neste modulo, e o binding local preserva isso.
+from app import procinfo
+from app.procinfo import (_proc_children_map, _descendant_pids, _open_jsonl, _cmdline,
+                         _config_dir_of, _proc_start_time, _engine_of)
+# _proc_environ_path/_proc_stat_path saem de proposito da lista acima: existem SO como ponto de
+# injecao de teste e sao chamadas de dois lados (aqui e de dentro do procinfo). Importadas por
+# nome, cada lado ganharia um binding proprio e um monkeypatch alcancaria so um deles — o outro
+# leria o /proc real e o teste passaria por acidente. Qualificadas pelo modulo, ha UM alvo.
 
 # Sentinela: distingue "pid nao informado" (resolve sozinho via tmux) de "pid=None" (sem pane).
 _UNSET = object()
@@ -82,61 +92,6 @@ def _pretrust_cwd(cwd: str, config_dir: str | None) -> None:
         except Exception as e:
             _log.warning("pretrust falhou pra %s: %r", cwd, e)
 
-
-def _proc_children_map() -> dict[int, list[int]]:
-    # Mapa ppid->filhos varrendo o /proc/*/stat UMA vez. Caro (le o stat de todo processo da maquina);
-    # por isso a listagem constroi UM mapa e reusa pra todas as sessoes (em vez de re-varrer por sessao).
-    children: dict[int, list[int]] = {}
-    try:
-        entries = os.listdir("/proc")
-    except OSError:
-        return children
-    for entry in entries:
-        if not entry.isdigit():
-            continue
-        try:
-            # ppid = 4o campo do stat; usar rsplit(')') pra nao quebrar com espaco/parenteses no comm.
-            with open(f"/proc/{entry}/stat", encoding="utf-8", errors="replace") as fh:
-                after = fh.read().rsplit(")", 1)[-1].split()
-            ppid = int(after[1])
-        except (OSError, ValueError, IndexError):
-            continue
-        children.setdefault(ppid, []).append(int(entry))
-    return children
-
-
-def _descendant_pids(root: int, children: Optional[dict[int, list[int]]] = None) -> list[int]:
-    # root + todos os descendentes. O claude pode ser filho do shell do pane (sessao manual) ou o
-    # proprio pane (app-criada com `claude` como comando). children: mapa pre-construido reusavel; se
-    # None, constroi sob demanda (caminho single-session do SSE).
-    if children is None:
-        children = _proc_children_map()
-    out, stack = [], [root]
-    while stack:
-        p = stack.pop()
-        out.append(p)
-        stack.extend(children.get(p, []))
-    return out
-
-
-def _open_jsonl(pid: int, projects_dir: Path) -> Optional[str]:
-    # 1o fd aberto apontando pra um *.jsonl dentro do projects_dir (= o transcript ativo do claude).
-    # NOTA: o claude NAO segura esse fd em idle (abre/escreve/fecha) -> quase sempre None. Mantido so
-    # como sinal extra confiavel QUANDO presente; a resolucao real vem do --session-id do cmdline.
-    fddir = f"/proc/{pid}/fd"
-    try:
-        fds = os.listdir(fddir)
-    except OSError:
-        return None
-    base = str(projects_dir)
-    for fd in fds:
-        try:
-            target = os.readlink(f"{fddir}/{fd}")
-        except OSError:
-            continue
-        if target.endswith(".jsonl") and target.startswith(base + os.sep):
-            return target
-    return None
 
 
 def _newest_after_clear(projdir: Path, sid_jsonl: str, exclude: set[str]) -> str:
@@ -238,72 +193,6 @@ def _jsonl_mtime(jsonl: Optional[str]) -> Optional[float]:
         return None
 
 
-def _cmdline(pid: int) -> str:
-    # cmdline crua do processo (args separados por NUL -> espaco).
-    try:
-        with open(f"/proc/{pid}/cmdline", "rb") as fh:
-            return fh.read().replace(b"\x00", b" ").decode(errors="replace")
-    except OSError:
-        return ""
-
-
-def _config_dir_of(pid: int) -> Optional[Path]:
-    # CLAUDE_CONFIG_DIR do processo claude (setado pelo alias/picker). None se ausente -> fallback.
-    try:
-        with open(f"/proc/{pid}/environ", "rb") as fh:
-            for kv in fh.read().split(b"\x00"):
-                if kv.startswith(b"CLAUDE_CONFIG_DIR="):
-                    # surrogateescape = round-trip fiel dos bytes POSIX (a camada de fs do Python usa o
-                    # mesmo) -> o Path ainda casa no disco mesmo com path nao-UTF-8. "replace" corromperia.
-                    return Path(kv.split(b"=", 1)[1].decode("utf-8", "surrogateescape"))
-    except OSError:
-        return None
-    return None
-
-
-def _proc_environ_path(pid: int) -> str:
-    # Indireção só para o teste poder apontar para um arquivo de mentira.
-    return f"/proc/{pid}/environ"
-
-
-def _proc_stat_path(pid: int) -> str:
-    # Indireção só para o teste poder apontar para um arquivo de mentira (igual _proc_environ_path).
-    return f"/proc/{pid}/stat"
-
-
-def _proc_start_time(pid: int) -> Optional[float]:
-    # Instante (epoch, em segundos) em que o processo nasceu: campo 22 do /proc/<pid>/stat
-    # (starttime, em ticks desde o boot) + o btime do /proc/stat. None = não deu pra ler (pid morto,
-    # permissão, kernel sem /proc) -> quem chama decide, aqui só degrada como os vizinhos.
-    try:
-        with open(_proc_stat_path(pid)) as fh:
-            raw = fh.read()
-        # O comm (campo 2) vem entre parênteses e pode conter espaço E parêntese ("(pi (2))"), então
-        # contar campo por espaço a partir do início erra. O último ')' é o único delimitador
-        # confiável: depois dele o campo 22 é o 20º token.
-        ticks = float(raw[raw.rindex(")") + 1:].split()[19])
-        with open("/proc/stat") as fh:
-            for line in fh:
-                if line.startswith("btime "):
-                    return float(line.split()[1]) + ticks / os.sysconf("SC_CLK_TCK")
-    except (OSError, ValueError, IndexError):
-        return None
-    return None
-
-
-def _engine_of(pid: int) -> Optional[str]:
-    # Motor de modelo do processo claude (CP_ENGINE, injetado por engines.env_de via cp-engine
-    # --exec). None = conta Anthropic. Mesmo truque do _config_dir_of: o env do processo VIVO é o
-    # registro autoritativo — sidecar em disco pode divergir do que está rodando no pane.
-    try:
-        with open(_proc_environ_path(pid), "rb") as fh:
-            for kv in fh.read().split(b"\x00"):
-                if kv.startswith(b"CP_ENGINE="):
-                    return kv.split(b"=", 1)[1].decode("utf-8", "replace") or None
-    except OSError:
-        return None
-    return None
-
 
 # Executavel do agente -> provider. Casa o BASENAME do argv[0], nunca a linha inteira: `pip`,
 # `pipx`, `mpirun` e um caminho contendo "/pi/" nao sao o agente Pi.
@@ -339,7 +228,7 @@ def _pi_sid_of(pid: int) -> Optional[str]:
     # processo VIVO e o registro autoritativo. Existe porque o `--session-id` some do cmdline: o pi
     # sobrescreve o proprio argv (medido na Task 0).
     try:
-        with open(_proc_environ_path(pid), "rb") as fh:
+        with open(procinfo._proc_environ_path(pid), "rb") as fh:
             for kv in fh.read().split(b"\x00"):
                 if kv.startswith(b"CP_PI_SESSION="):
                     return kv.split(b"=", 1)[1].decode("utf-8", "replace") or None

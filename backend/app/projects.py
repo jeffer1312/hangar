@@ -9,7 +9,6 @@ Estados: stopped (sem sessao tmux) / starting (pane vivo, porta configurada aind
 running (pane vivo e porta aberta, ou sem porta configurada) / failed (pane morto via
 remain-on-exit — o log final fica capturavel ate o proximo play/stop).
 """
-import fcntl
 import json
 import os
 import subprocess
@@ -18,6 +17,30 @@ from pathlib import Path
 
 from app import runner
 from app.models import ProjectStatus, RunInfo
+from app.procinfo import _TEM_PROC
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
+
+
+def _trava_exclusiva(fh) -> None:
+    """Lock EXCLUSIVO e BLOQUEANTE no arquivo aberto. Solto ao fechar, nos dois sistemas.
+
+    Import no topo do modulo era `import fcntl` puro — POSIX only. Como o api.py importa este
+    modulo, isso derrubava o backend inteiro na SUBIDA no Windows, com ImportError: nao era
+    degradacao de funcionalidade, era o servidor nao nascer.
+
+    LK_LOCK trava 1 byte e, se outro processo ja segura, tenta por ~10s e ai levanta OSError —
+    barulhento de proposito. O caso que este lock existe pra impedir (import disparando varios
+    POST concorrentes, o ultimo a gravar apagando as entries dos outros) falha em SILENCIO; um
+    erro alto e melhor que a corrupcao calada.
+    """
+    if os.name == "nt":
+        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+    else:
+        fcntl.flock(fh, fcntl.LOCK_EX)
 
 _CONFIG = Path(__file__).resolve().parent.parent / "projects.json"
 _STOP_TIMEOUT = 30
@@ -61,7 +84,7 @@ def _mutate(fn) -> None:
     lock_path = _CONFIG.with_name(_CONFIG.name + ".lock")
     lock = open(lock_path, "w")
     with lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        _trava_exclusiva(lock)
         for stale in _CONFIG.parent.glob(_CONFIG.name + ".*.tmp"):
             stale.unlink(missing_ok=True)
         data = _load()      # FileNotFound -> {}; JSON inválido -> ProjectError(500)
@@ -125,8 +148,18 @@ def _entry(name: str) -> dict:
     return cfg
 
 
+# Dono da porta que NAO deu pra identificar — diferente de "o dono e outro projeto". Comeca com
+# '<', que nenhum cwd real comeca, entao nunca colide com um caminho. Existe porque os dois casos
+# tinham virado o mesmo None, e um pane VIVO com o servidor no ar ficava "starting" pra sempre.
+# Acontece no macOS, onde psutil.net_connections() exige root.
+DONO_INDETERMINADO = "<indeterminado>"
+
+
 def _port_info(ports: set[int]) -> dict[int, tuple[bool, str | None]]:
-    """porta -> (escutando?, cwd realpath do processo dono do LISTEN — None se nao resolvivel).
+    """porta -> (escutando?, cwd realpath do processo dono do LISTEN).
+
+    Dono None = ninguem escuta ou nao ha o que atribuir; DONO_INDETERMINADO = alguem escuta mas
+    o sistema nao deixou ver quem.
 
     O dono importa: porta 3000 aberta e QUALQUER front — sem conferir o cwd de quem segura a
     porta, todo projeto configurado com a mesma porta apareceria "rodando" junto. Uma varredura
@@ -135,6 +168,8 @@ def _port_info(ports: set[int]) -> dict[int, tuple[bool, str | None]]:
     out: dict[int, tuple[bool, str | None]] = {p: (False, None) for p in ports}
     if not ports:
         return out
+    if not _TEM_PROC:
+        return _port_info_psutil(ports, out)
     want = {f"{p:04X}": p for p in ports}
     inodes: dict[str, int] = {}  # socket:[ino] -> porta
     for path in ("/proc/net/tcp", "/proc/net/tcp6"):
@@ -177,9 +212,47 @@ def _port_info(ports: set[int]) -> dict[int, tuple[bool, str | None]]:
     return out
 
 
+def _port_info_psutil(ports: set[int], out: dict[int, tuple[bool, str | None]]
+                      ) -> dict[int, tuple[bool, str | None]]:
+    """Mesma resposta do caminho /proc, via psutil — Windows e macOS.
+
+    Windows NAO precisa de elevacao aqui: net_connections() enxerga os processos do proprio
+    usuario, e os dev servers sao dele. macOS precisa de root, e a saida NAO e pedir isso: o
+    backend segura o CP_AUTH_TOKEN e cria sessoes, subir tudo como root por causa de "que porta
+    esta aberta" e trocar um incomodo por um risco. Sem permissao, cai no probe de socket, que
+    responde SE alguem escuta sem dizer QUEM — e o dono vira DONO_INDETERMINADO.
+    """
+    import psutil   # so fora do Linux; no Linux nem esta instalado (marcador no pyproject)
+    try:
+        for c in psutil.net_connections(kind="inet"):
+            if c.status != psutil.CONN_LISTEN or not c.laddr or c.laddr.port not in ports:
+                continue
+            dono: str | None = DONO_INDETERMINADO
+            if c.pid:
+                try:
+                    dono = psutil.Process(c.pid).cwd()
+                except psutil.Error:
+                    pass          # processo morreu entre a varredura e agora, ou sem permissao
+            out[c.laddr.port] = (True, dono)
+    except psutil.Error:
+        # macOS sem root: nem a varredura sai. Sobra saber se ALGUEM escuta.
+        for p in ports:
+            out[p] = (_alguem_escuta(p), DONO_INDETERMINADO if _alguem_escuta(p) else None)
+    return out
+
+
+def _alguem_escuta(port: int) -> bool:
+    # Sem privilegio nenhum: se o connect completa, tem alguem aceitando. Loopback so — a
+    # pergunta e sobre dev server local, e varrer outra interface seria varredura de rede.
+    import socket
+    with socket.socket() as s:
+        s.settimeout(0.15)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
 def _owns(owner: str | None, cwd: str) -> bool:
     """Dono da porta e ESTE projeto? cwd igual ou subpasta (PSS sobe de deploy/)."""
-    if not owner:
+    if not owner or owner == DONO_INDETERMINADO:
         return False
     root = os.path.realpath(cwd)
     return owner == root or owner.startswith(root + os.sep)
@@ -203,6 +276,12 @@ def _status(name: str, cfg: dict, runs: dict[str, RunInfo],
         state = "external" if mine else "stopped"
     elif info.exited:
         state = "failed"
+    elif port and not mine and listening and owner == DONO_INDETERMINADO:
+        # Porta de pe, dono NAO identificavel (macOS sem root) e um pane NOSSO vivo neste cwd.
+        # Aqui "starting" seria mentira definida — o servidor esta servindo. Atribuir ao pane e
+        # o palpite muito mais provavel: fomos nos que subimos algo neste cwd e a porta abriu.
+        # Nao vale pro caso SEM pane, que segue "stopped": ali nao ha nada nosso pra creditar.
+        state = "running"
     elif port and not mine:
         # Pane vivo mas a porta ainda nao e dele (fechada, ou aberta por OUTRO projeto —
         # nesse caso o dev server vai morrer de EADDRINUSE e o card vira "failed" com log).

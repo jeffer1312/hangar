@@ -13,6 +13,11 @@ dependencies = [
     "uvicorn[standard]>=0.49.0",
     "watchfiles>=1.2.0",
     "websockets>=16.0",
+    # Leitura de processo (cmdline/environ/fds/filhos/nascimento) onde NAO ha /proc: Windows e
+    # macOS. O marcador mantem o Linux exatamente como era — `uv sync` la nem baixa este pacote,
+    # que e extensao C. Ver app/procinfo.py: no Linux o caminho continua sendo /proc direto,
+    # porque psutil.open_files() e bem mais lento e esses caminhos rodam por poll.
+    "psutil>=5.9.0 ; sys_platform != 'linux'",
 ]
 
 [dependency-groups]
@@ -20,6 +25,10 @@ dev = [
     "httpx2>=2.5.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    # Sem marcador AQUI de proposito: no Linux o psutil nao entra em producao, mas os testes
+    # precisam dele pra exercitar o caminho de Windows/macOS nesta maquina. Sem isso o codigo
+    # que so roda fora do Linux nunca seria testado por ninguem que desenvolve no Linux.
+    "psutil>=5.9.0",
 ]
 
 [tool.pytest.ini_options]
