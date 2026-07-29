@@ -1,4 +1,10 @@
-# claude-cockpit — instalacao completa no Windows.
+﻿# claude-cockpit - instalacao completa no Windows.
+# ATENCAO: este arquivo PRECISA ser gravado em UTF-8 COM BOM.
+# O Windows PowerShell 5.1 (o que vem no Windows) le script sem BOM como cp1252, e ai um
+# travessao U+2014 (E2 80 94) vira 'a-E2-80-94' -> o byte 0x94 e a ASPA CURVA U+201D, que o
+# PowerShell aceita como DELIMITADOR DE STRING. A primeira ocorrencia abre uma string que
+# nunca fecha, engole o resto do arquivo e o erro sai como 'MissingEndCurlyBrace' numa funcao
+# qualquer, dezenas de linhas antes. Medido: install.ps1 nao parseava no PS 5.1.
 #
 #   powershell -ExecutionPolicy Bypass -File install.ps1            # interativo
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Sim       # aceita tudo
@@ -8,8 +14,8 @@
 # Espelha o install.sh do Linux. Escrito pra Windows PowerShell 5.1 (o que vem no Windows):
 # nada de operador ternario nem API de .NET Core, senao quebra em quem nao instalou o PS 7.
 # -Update: modo do hook post-merge (.git/hooks/post-merge, instalado pelo install.sh). Re-aplica
-# o que o `git pull` NAO atualiza sozinho — deps do backend, build do front, wrapper, tarefa
-# agendada — e nao toca em nada que peca decisao ou elevacao: sem instalar dependencia, sem
+# o que o `git pull` NAO atualiza sozinho - deps do backend, build do front, wrapper, tarefa
+# agendada - e nao toca em nada que peca decisao ou elevacao: sem instalar dependencia, sem
 # token, sem firewall, sem Tailscale. Um hook que trava pedindo confirmacao no meio de um pull
 # e pior que hook nenhum.
 param([switch]$Sim, [switch]$SoChecar, [switch]$Update)
@@ -49,14 +55,14 @@ function EhAdmin {
 
 function Instale($rotulo, $cmd, $id, $porque) {
     if (Tem $cmd) { Ok $rotulo; return $true }
-    if ($SoChecar) { Falta "$rotulo — $porque"; $script:pendencias += $rotulo; return $false }
+    if ($SoChecar) { Falta "$rotulo - $porque"; $script:pendencias += $rotulo; return $false }
     if ($Update) { Erro "$rotulo faltando (-Update nao instala dependencia)"; $script:pendencias += $rotulo; return $false }
     Write-Host "  .. instalando $rotulo ($id)"
     winget install --id $id --exact --silent `
         --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
     Atualiza-Path
     if (Tem $cmd) { Ok "$rotulo instalado"; return $true }
-    Erro "$rotulo nao instalou — procure o id com: winget search $cmd"
+    Erro "$rotulo nao instalou - procure o id com: winget search $cmd"
     $script:pendencias += $rotulo
     return $false
 }
@@ -67,7 +73,7 @@ if (-not (Tem 'winget')) {
     exit 1
 }
 
-# ── 1/8 Dependencias obrigatorias ───────────────────────────────────────────
+# -- 1/8 Dependencias obrigatorias -------------------------------------------
 Titulo '1/8 Dependencias'
 Instale 'psmux (multiplexador)' 'psmux'  'marlocarlo.psmux'     'sem ele nao existe sessao' | Out-Null
 Instale 'Claude Code'           'claude' 'Anthropic.ClaudeCode' 'e o que o app pilota'      | Out-Null
@@ -78,13 +84,13 @@ Instale 'uv'                    'uv'     'astral-sh.uv'         'gerencia o venv
 # O backend chama o multiplexador por `tmux`. O psmux publica esse alias; se um dia parar,
 # isso vira erro claro AQUI em vez de "falha ao criar sessao" dentro do app.
 if ((Tem 'psmux') -and -not (Tem 'tmux')) {
-    Erro 'psmux instalado mas sem o alias `tmux` — o backend chama por esse nome'
+    Erro 'psmux instalado mas sem o alias `tmux` - o backend chama por esse nome'
     $pendencias += 'alias tmux'
 }
 
 # Git e OPCIONAL: sem ele o app roda, so perde o chip de branch e a aba de git.
 if (-not (Tem 'git')) {
-    Falta 'git ausente — o painel de git e o chip de branch ficam vazios (o resto funciona)'
+    Falta 'git ausente - o painel de git e o chip de branch ficam vazios (o resto funciona)'
     if (-not $SoChecar -and (Pergunte '      Instalar o Git agora?')) {
         Instale 'Git' 'git' 'Git.Git' 'painel de git' | Out-Null
     }
@@ -97,7 +103,7 @@ if ($SoChecar) {
 }
 if ($pendencias.Count -gt 0) { Erro "faltam: $($pendencias -join ', ')"; exit 1 }
 
-# ── 2/8 Backend ─────────────────────────────────────────────────────────────
+# -- 2/8 Backend -------------------------------------------------------------
 Titulo '2/8 Backend'
 Push-Location "$raiz\backend"
 uv sync --quiet
@@ -105,9 +111,9 @@ Ok 'dependencias instaladas'
 Nota 'psutil entra aqui: no Windows nao ha /proc pra ler informacao de processo'
 Pop-Location
 
-# ── 3/8 Token de acesso ─────────────────────────────────────────────────────
+# -- 3/8 Token de acesso -----------------------------------------------------
 # Perguntado, nao gerado: voce DIGITA isto no celular, e 48 caracteres hex e castigo. Enter em
-# branco ainda gera um aleatorio. O piso de 8 e daqui — o backend so recusa o literal
+# branco ainda gera um aleatorio. O piso de 8 e daqui - o backend so recusa o literal
 # 'change-me', entao uma senha de 4 digitos passaria batido sem esta checagem.
 Titulo '3/8 Token de acesso'
 $envFile = "$raiz\backend\.env"
@@ -135,7 +141,7 @@ if ($temToken) {
         if (-not $token) { $token = Token-Aleatorio; Ok 'aleatorio gerado'; break }
         # O backend recusa subir fora do loopback com 'change-me'; o piso de 8 e daqui, pra
         # senha curta nao passar batido so porque o backend so barra aquele valor literal.
-        if ($token.Length -lt 8) { Erro 'curto demais — no minimo 8 caracteres'; continue }
+        if ($token.Length -lt 8) { Erro 'curto demais - no minimo 8 caracteres'; continue }
         if ($token -eq 'change-me') { Erro 'esse valor o backend recusa de proposito'; continue }
         break
     }
@@ -144,7 +150,7 @@ if ($temToken) {
 }
 Nota 'E esse token que voce digita no celular na primeira conexao.'
 
-# ── 4/8 Frontend ────────────────────────────────────────────────────────────
+# -- 4/8 Frontend ------------------------------------------------------------
 Titulo '4/8 Frontend'
 Push-Location "$raiz\frontend"
 npm ci --silent
@@ -152,7 +158,7 @@ npm run build --silent
 Pop-Location
 Ok 'buildado em frontend\dist\'
 
-# ── 5/8 Wrapper do claude ───────────────────────────────────────────────────
+# -- 5/8 Wrapper do claude ---------------------------------------------------
 # Sem ele um `claude` que VOCE abre no terminal e invisivel pro app: nao tem --session-id (o
 # backend nao sabe qual transcript e daquela sessao) e nao vive num pane (nao ha estado nem
 # input). Sessao criada PELO app funciona de qualquer jeito; isto e sobre a outra direcao.
@@ -171,23 +177,23 @@ $marca
 # <<< claude-cockpit <<<
 "@
     Ok "bloco adicionado em $perfil"
-    Nota 'Vale nos terminais NOVOS — este aqui ainda esta com o perfil antigo.'
+    Nota 'Vale nos terminais NOVOS - este aqui ainda esta com o perfil antigo.'
 } else {
-    Nota 'pulado — sessao aberta no terminal nao vai aparecer no app'
+    Nota 'pulado - sessao aberta no terminal nao vai aparecer no app'
 }
 
-# ── 6/8 Acesso pelo celular ─────────────────────────────────────────────────
+# -- 6/8 Acesso pelo celular -------------------------------------------------
 Titulo '6/8 Acesso pelo celular'
 if ($Update) {
     Ok 'pulado no -Update (firewall e Tailscale pedem elevacao; nada aqui muda com git pull)'
 } else {
 Write-Host '  Duas formas, e elas nao competem:'
-Write-Host '    LAN      — celular no mesmo Wi-Fi. Precisa liberar as portas no firewall.'
-Write-Host '    Tailscale — VPN pessoal. Funciona de QUALQUER lugar sem expor nada pra internet.'
+Write-Host '    LAN      - celular no mesmo Wi-Fi. Precisa liberar as portas no firewall.'
+Write-Host '    Tailscale - VPN pessoal. Funciona de QUALQUER lugar sem expor nada pra internet.'
 Nota 'Fora de casa, use Tailscale. NUNCA abra porta pra internet publica: o app roda o'
 Nota 'claude como VOCE, entao um host exposto e execucao remota na sua maquina.'
 
-# Firewall: precisa de admin. Sem admin nao adianta tentar — a regra falha e o usuario fica
+# Firewall: precisa de admin. Sem admin nao adianta tentar - a regra falha e o usuario fica
 # achando que liberou. Ja liberado -> nem pergunta: re-rodar o instalador depois de um git pull
 # deve pegar so o que falta, nao repetir pergunta do que ja esta de pe.
 $regras = @(8765, 5173) | ForEach-Object {
@@ -208,7 +214,7 @@ if ($regras.Count -eq 2) {
         }
         Ok 'portas liberadas (perfil Private apenas)'
     } else {
-        Falta 'sem privilegio de administrador — abra um PowerShell como admin e rode:'
+        Falta 'sem privilegio de administrador - abra um PowerShell como admin e rode:'
         Nota 'New-NetFirewallRule -DisplayName "claude-cockpit 8765" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8765 -Profile Private'
         Nota 'New-NetFirewallRule -DisplayName "claude-cockpit 5173" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 5173 -Profile Private'
     }
@@ -218,7 +224,7 @@ if (Tem 'tailscale') {
     Ok 'Tailscale ja instalado'
     Nota 'Depois do `tailscale up`, ponha o nome .ts.net em CP_PUBLIC_URL no backend\.env'
     Nota 'pra o QR sair com o endereco certo em vez do IP da LAN.'
-} elseif (Pergunte '  Instalar o Tailscale? (VPN pessoal — acesso de fora de casa)') {
+} elseif (Pergunte '  Instalar o Tailscale? (VPN pessoal - acesso de fora de casa)') {
     Instale 'Tailscale' 'tailscale' 'tailscale.tailscale' 'acesso remoto' | Out-Null
     Nota 'Falta logar: rode `tailscale up` e instale o Tailscale tambem no celular.'
     Nota 'Depois ponha o nome .ts.net em CP_PUBLIC_URL no backend\.env.'
@@ -226,7 +232,7 @@ if (Tem 'tailscale') {
 
 }
 
-# ── 7/8 Subir sozinho no logon ──────────────────────────────────────────────
+# -- 7/8 Subir sozinho no logon ----------------------------------------------
 # Equivalente possivel dos servicos systemd do Linux. Nao e servico do Windows (isso exigiria
 # admin e rodaria fora da sua sessao, sem acesso ao seu ~\.claude): e tarefa agendada no logon.
 Titulo '7/8 Subir junto com o Windows'
@@ -236,14 +242,14 @@ $tarefas = @(
 )
 # Ja registrado -> RE-REGISTRA sem perguntar, em vez de pular. A tarefa guarda o caminho do
 # executavel e o diretorio DENTRO dela; um `git pull` que mova o repo, ou um uv que mude de
-# lugar, deixa a tarefa apontando pro nada — e "ja registrada" esconderia isso. Register-...
+# lugar, deixa a tarefa apontando pro nada - e "ja registrada" esconderia isso. Register-...
 # -Force sobrescreve.
 $jaAgendado = Get-ScheduledTask -TaskName $tarefas[0].Nome -ErrorAction SilentlyContinue
 if ($jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu logon?')) {
     try {
         foreach ($t in $tarefas) {
             # -Exe pelo caminho completo: a tarefa nasce com o PATH do sistema, nao com o do
-            # seu shell — `uv` instalado em ~\.local\bin nao seria encontrado.
+            # seu shell - `uv` instalado em ~\.local\bin nao seria encontrado.
             $exe = (Get-Command $t.Exe).Source
             $acao = New-ScheduledTaskAction -Execute $exe -Argument $t.Args -WorkingDirectory $t.Dir
             $gatilho = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
@@ -259,10 +265,10 @@ if ($jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu l
         Nota 'Sem isso, o backend so roda enquanto o terminal estiver aberto.'
     }
 } else {
-    Nota 'pulado — rodando na mao, fechar o terminal derruba o backend'
+    Nota 'pulado - rodando na mao, fechar o terminal derruba o backend'
 }
 
-# ── 8/8 Checagem de fumaca ──────────────────────────────────────────────────
+# -- 8/8 Checagem de fumaca --------------------------------------------------
 # Ate aqui foi tudo instalacao. Este passo separa "instalou" de "funciona": ate pouco tempo o
 # backend nem IMPORTAVA no Windows (um `import fcntl` no topo do projects.py) e um instalador
 # sem esta checagem teria reportado sucesso do mesmo jeito.
@@ -283,11 +289,11 @@ if ($LASTEXITCODE -eq 0) {
     tmux kill-session -t "=$sessao" 2>&1 | Out-Null
     Ok 'o multiplexador cria e mata sessao'
 } else {
-    Erro 'o psmux nao criou uma sessao de teste — o app nao vai abrir sessao'
+    Erro 'o psmux nao criou uma sessao de teste - o app nao vai abrir sessao'
     exit 1
 }
 
-# ── Fim ─────────────────────────────────────────────────────────────────────
+# -- Fim ---------------------------------------------------------------------
 Titulo 'Pronto'
 Write-Host @"
   Rodar na mao (se voce pulou o passo 7):
