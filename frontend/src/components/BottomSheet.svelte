@@ -302,6 +302,15 @@
   :global(html[data-liquid]) .sheet::before {
     background: var(--glass-panel);
   }
+  /* O filtro que o comentario acima manda por no ELEMENTO nao estava em lugar nenhum: o unico
+     backdrop-filter do arquivo vive no `.backdrop` (o scrim), e o dock lateral desliga esse scrim
+     (`.backdrop.naomodal`, mais abaixo). Sem scrim e sem filtro proprio, a sheet dockada era so
+     alpha: no tema claro, branco a ~0.70 sobre texto ESCURO deixa a conversa legivel atraves do
+     painel. Com o filtro aqui o que esta atras vira borrao, que e o que o modal centrado ja tinha
+     de graca pelo scrim. */
+  :global(html[data-liquid]) .sheet {
+    backdrop-filter: blur(20px) saturate(170%);
+  }
 
   /* O painel leva .focus() programatico ao abrir (a11y: anuncia o dialog e prende o Tab dentro).
      Sem isto o Chrome desenha o anel `auto` em volta do painel INTEIRO — a borda branca grossa que
