@@ -41,16 +41,40 @@ def _capture(name: str) -> str:
 
 # Marcas do rodapé do Claude Code quando o input já está VIVO (TUI interativo). Durante o BOOT
 # (logo + carregamento) elas ainda não aparecem.
-# "mode on" cobre o rodape ATUAL (medido no claude v2.1.218: `⏵⏵ auto mode on (shift+tab to cycle)
-# · ← for agents`, e `⏸ manual mode on · ← for agents` no outro modo) — nenhuma das marcas antigas
-# aparece nele, entao TODO envio queimava os 12s de timeout com o _send_lock na mao. Mesmo estrago
-# que o `╰─` do Pi documentado abaixo. As antigas ficam: sao versoes/telas anteriores, e marca a mais
-# so ajuda. "mode on" e nao "shift+tab to cycle" porque o segundo so existe no modo auto; "mode on"
-# esta nos dois. Nao casa no BOOT (o rodape de modo so e desenhado com o input ja vivo).
-# CUIDADO ao medir isto: `_capture` le a tela INTEIRA, entao discutir os marcadores no chat faz eles
-# casarem com o TEXTO DA CONVERSA — foi o que aconteceu aqui (`for shortcuts` "casava" porque a frase
-# estava na tela). Pra aferir de verdade, olhe SO as ultimas linhas do pane.
-_READY_MARKERS = ("bypass permissions", "? for shortcuts", "for shortcuts", "mode on")
+# O rodape ATUAL (medido no claude v2.1.218) e `⏵⏵ auto mode on (shift+tab to cycle) · ← for agents`,
+# `⏸ manual mode on · ← for agents` ou `⏵⏵ bypass permissions on (...)` — nenhuma das marcas antigas
+# aparece nos dois primeiros, entao TODO envio queimava os 12s de timeout com o _send_lock na mao
+# (mesmo estrago que o `╰─` do Pi documentado abaixo).
+# O marcador e o GLIFO de modo, nao a frase "mode on": `_capture` le a tela INTEIRA, e "mode on" e
+# frase de duas palavras comuns — uma conversa citando "auto mode on", um `git show` deste commit ou
+# prosa com "debug mode on" ja casava, e o gate liberava com a TUI ainda bootando (mensagem engolida,
+# exatamente o bug que ele existe pra evitar). O proprio comentario anterior avisava dessa armadilha
+# ("discutir os marcadores no chat faz eles casarem com o texto da conversa") e caiu nela. `⏵⏵`/`⏸`
+# cobrem os MESMOS rodapes e nao aparecem em prosa.
+# As marcas antigas ficam pra versoes/telas anteriores. Se um dia o glifo mudar, o gate estoura o
+# timeout e AVISA uma vez (_warn_ready_timeout_once) em vez de ficar lento e calado.
+_READY_MARKERS = ("⏵⏵", "⏸", "bypass permissions", "? for shortcuts", "for shortcuts")
+
+# Quantas linhas do FIM do pane valem como "rodape" pra procurar marcador. O aviso acima ("cuidado ao
+# medir, o _capture le a tela inteira") virou codigo: casar no pane TODO deixa o gate refem do texto
+# da CONVERSA. "mode on" e frase de duas palavras comuns — um chat que cite `auto mode on`, um
+# `git show` deste commit, ou prosa com "debug mode on" ja casa. E o caso quebrado nao e teorico: numa
+# sessao reatachada/respawnada o pane ainda mostra a tela anterior por instantes, com a TUI ainda NAO
+# aceitando teclas -> o gate libera cedo e a mensagem e engolida, que e exatamente o bug que ele
+# existe pra evitar. O rodape do Claude Code mora sempre nas ultimas linhas (regua + 2-3 de statusline
+# + a linha de modo), e o composer do Pi tambem — entao a cauda serve pros dois providers, e nos
+# marcadores do Pi (glifos de moldura `─`/`│`) o ganho e ainda maior: qualquer tabela no meio da
+# conversa casava.
+# 12 linhas: a statusline do usuario ocupa 3 e o composer do Pi ~3, entao sobra folga de 2x.
+# ponytail: janela fixa; upgrade = casar por ancora de rodape (regua + statusline) se algum provider
+# passar a desenhar rodape alto.
+_READY_TAIL_LINES = 12
+
+
+def _pane_tail(pane: str, lines: int = _READY_TAIL_LINES) -> str:
+    # rstrip("\n") primeiro: pane com linhas em branco no fim (comum apos redraw) empurraria o rodape
+    # pra fora da janela e o gate voltaria a esperar os 12s inteiros.
+    return "\n".join(pane.rstrip("\n").split("\n")[-lines:])
 
 # Por PROVIDER. O Pi não imprime rodapé nenhum: a prova de "TUI viva" é o CHROME do composer —
 # qualquer caractere de moldura na tela. NÃO é uma moldura específica: medido no pi 0.82.1, o mesmo
@@ -97,7 +121,8 @@ def _wait_input_ready(name: str, timeout: float | None = None, provider: str = "
         timeout = _TIMEOUTS_BY_PROVIDER.get(provider, _DEFAULT_TIMEOUT)
     deadline = time.monotonic() + timeout
     while True:
-        if any(m in _capture(name) for m in markers):
+        # Só o rodapé (ver _READY_TAIL_LINES): no pane inteiro o marcador casa com o texto da conversa.
+        if any(m in _pane_tail(_capture(name)) for m in markers):
             return True
         if time.monotonic() >= deadline:
             _warn_ready_timeout_once(name, provider, timeout)
@@ -155,6 +180,16 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
             # Falha POS-gate (tty caiu no meio): pode ter emitido tecla -> at-most-once, NAO reverte.
             # ponytail: stranded-mas-visivel (a bubble queued- segue aparecendo, display ignora delivered);
             # upgrade: render distinto / re-drain confirmado-por-transcript se virar reclamacao real.
+            return sent
+        if result == "partial":
+            # Texto ficou pela metade no composer e o Enter NAO foi enviado (fatiamento do Windows).
+            # NAO reverte pra delivered=False: o drain reentraria e digitaria o texto inteiro EM CIMA do
+            # residuo (nada limpa a linha entre tentativas) — concatenacao, pior que a perda. Fica
+            # delivered=True e PARA, com log de erro: a bubble segue visivel no app (o display ignora
+            # delivered) e o residuo esta a vista no terminal, entao o usuario ve as duas metades e
+            # decide. Silencio aqui era o furo do `except Exception` cego acima.
+            _log.error("drain name=%s: envio PARCIAL da entrada %s — parado, sem retry automatico "
+                       "(texto pela metade no composer)", name, entry.get("id"))
             return sent
         if result == "deferred":
             # send_prompt NAO tocou a TUI (overlay reabriu entre claim e envio): reverte (provadamente
@@ -340,7 +375,21 @@ class TerminalInput:
                 time.sleep(_SLASH_SETTLE)
                 send_keys(name, "Enter")
             else:
-                send_keys(name, text, literal=True)
+                # `is False` e nao `not ...`: o UNICO produtor de False e o tmux._send_literal quando o
+                # fatiamento para no meio. Qualquer outro retorno (True, ou None de um dublê/wrapper que
+                # nao repassa) segue o caminho de sempre — o sinal aqui e "provadamente parcial", nao
+                # "nao deu True", senao um None inocente cancelaria o Enter de um envio que deu certo.
+                if send_keys(name, text, literal=True) is False:
+                    # Envio parou no meio (só acontece no fatiamento do Windows — ver tmux._send_literal).
+                    # NÃO manda Enter: submeter texto com buraco faria a sessão agir sobre um pedido que
+                    # o usuário nunca escreveu. Devolve "partial" pro caller reportar em vez de afirmar
+                    # entrega. O texto parcial FICA visível no composer — nada aqui limpa a linha, e
+                    # limpar às cegas exigiria saber qual tecla zera o composer em cada TUI.
+                    # ponytail: sem limpeza automática; upgrade = medir a tecla de limpar (C-u/Esc) por
+                    # provider e zerar antes de devolver, pra um retry não digitar em cima do resíduo.
+                    _log.error("envio PARCIAL name=%s: texto ficou pela metade no input, Enter NAO enviado",
+                               name)
+                    return "partial"
                 # Settle ANTES do Enter: sem isto o Enter corria a ingestao do texto e o claude (que
                 # detecta input rapido como paste) tratava o Enter como parte do conteudo -> o texto
                 # ficava no input SEM submeter (usuario tinha que reenviar). Espelha o gap multiline.

@@ -901,3 +901,42 @@ def test_sidecar_codex_usa_a_mesma_regra_de_nome():
     from app.names import sanitize_session_name
     for n in ("Área de trabalho", "São Paulo", "claude-cockpit", "repo-2"):
         assert codex_sessions._sanitize(n) == sanitize_session_name(n)
+
+
+def test_kill_que_nao_mata_levanta_e_nao_apaga_estado_duravel(tmp_path, monkeypatch):
+    # Sessao sobrevive ao kill -> KillFailed, e NADA de estado duravel some. Antes o retorno do tmux
+    # era descartado: a fila era limpa, o pareamento desfeito e a rota respondia {"ok": true}, com a
+    # sessao reaparecendo na varredura seguinte sem fila e sem par.
+    from app import registry as reg
+    r = reg.SessionRegistry()
+    limpou = []
+    monkeypatch.setattr(reg.codex_sessions, "exists", lambda n: False)
+    monkeypatch.setattr(r, "list", lambda: [])
+    monkeypatch.setattr(reg.tmux, "kill_session", lambda n: False)   # sobreviveu
+    monkeypatch.setattr(r, "_forget", lambda n: limpou.append(("forget", n)))
+    monkeypatch.setattr(reg.SessionRegistry, "_clear_pair",
+                        staticmethod(lambda n: limpou.append(("pair", n))))
+    monkeypatch.setattr(reg, "PromptQueue", lambda n: type(
+        "Q", (), {"clear": lambda self: limpou.append(("fila", n))})())
+    with pytest.raises(reg.KillFailed):
+        r.kill("zz")
+    assert limpou == []          # nem cache, nem fila, nem pareamento
+
+
+def test_kill_que_mata_de_fato_limpa_tudo(tmp_path, monkeypatch):
+    # O par do teste acima: sessao saiu -> limpeza duravel roda igual a antes (sem regressao).
+    from app import registry as reg
+    r = reg.SessionRegistry()
+    limpou = []
+    monkeypatch.setattr(reg.codex_sessions, "exists", lambda n: False)
+    monkeypatch.setattr(r, "list", lambda: [])
+    monkeypatch.setattr(reg.tmux, "kill_session", lambda n: True)
+    monkeypatch.setattr(r, "_forget", lambda n: limpou.append(("forget", n)))
+    monkeypatch.setattr(reg.SessionRegistry, "_clear_pair",
+                        staticmethod(lambda n: limpou.append(("pair", n))))
+    monkeypatch.setattr(reg, "ThenLink", lambda n: type(
+        "T", (), {"clear": lambda self: limpou.append(("then", n))})())
+    monkeypatch.setattr(reg, "PromptQueue", lambda n: type(
+        "Q", (), {"clear": lambda self: limpou.append(("fila", n))})())
+    r.kill("zz")
+    assert [k for k, _ in limpou] == ["forget", "fila", "then", "pair"]

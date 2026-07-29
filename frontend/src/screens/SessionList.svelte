@@ -43,6 +43,17 @@
       .map((b) => ({ label: b.server.label, error: b.error! })),
   );
   let error = $state('');
+  // Mensagem de AÇÃO (excluir/renomear), separada do `error` acima: aquele substitui a lista inteira
+  // (estado de "não consegui carregar"), e uma falha de exclusão não pode apagar a lista da tela.
+  // Mesma forma do flash() da Sidebar, pra as duas views falharem igual.
+  let actionMsg = $state('');
+  let actionTimer: ReturnType<typeof setTimeout> | undefined;
+  const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+  function showActionMsg(msg: string) {
+    actionMsg = msg;
+    clearTimeout(actionTimer);
+    actionTimer = setTimeout(() => { actionMsg = ''; }, 4000);
+  }
   let showCreateSheet = $state(false);
   let drawerOpen = $state(false);    // menu lateral (hamburger): navegação + conta
   let searchOpen = $state(false);    // "Buscar conversas" (switcher em modo só-busca)
@@ -340,13 +351,17 @@
     const s = confirmDel;
     confirmDel = null;
     selectServer(s.serverId);
-    // Exclusão otimista via store: some na hora. Falhou -> desmarca e a linha REAPARECE — esse
-    // rollback visual é o feedback do mobile (não há canal de toast aqui).
+    // Exclusão otimista via store: some na hora. Falhou -> desmarca, a linha REAPARECE e agora TAMBÉM
+    // diz por quê: até o backend passar a conferir se a sessão morreu de verdade, o kill nunca falhava
+    // e este catch era código morto. Agora o DELETE responde 500 quando a sessão sobrevive (é o caso do
+    // psmux no Windows), e só o rollback visual deixava o usuário achando que o toque não pegou. O
+    // desktop já mostrava a mensagem (Sidebar, flash()); faltava paridade aqui.
     sessionsStore.markDeleting(s.serverId, s.name);
     try {
       await deleteSession(s.name);
-    } catch {
+    } catch (e) {
       sessionsStore.unmarkDeleting(s.serverId, s.name);
+      showActionMsg(`excluir ${s.name}: ${errMsg(e)}`);
     }
     // No sucesso o SSE re-emite a lista sem a sessão e a faxina do store limpa a marca.
   }
@@ -543,6 +558,11 @@
     <!-- "Precisa de você" (feature #6): fila fixa no topo com as sessoes AGUARDANDO de TODOS os
          servidores. Responder aqui (picker inline) nao abre o chat; nativo AskUserQuestion abre. -->
     <AttentionFeed {sessions} onOpenChat={openSession} />
+    {#if actionMsg}
+      <!-- Falha de ação (ex: excluir sessão que não morreu). Fora da top-strip de propósito: ela só
+           existe com 2+ servidores ou servidor offline, e este aviso tem de aparecer sempre. -->
+      <p class="action-msg" role="alert">{actionMsg}</p>
+    {/if}
     {#if (sessions.length > 0 && multiServer) || serverErrors.length > 0}
       <!-- UMA faixa de chrome só: toggle à esquerda, aviso de servidor offline à direita. Empilhados
            (duas faixas) eles comiam ~1/3 da tela do celular antes da primeira sessão aparecer. -->
@@ -1414,6 +1434,17 @@
     border: 1px solid rgba(255, 69, 58, 0.2);
     border-radius: var(--radius-sm);
     padding: var(--space-3);
+  }
+  /* Aviso de falha de ação acima da lista: mesmas cores do .error-msg (uma linguagem só de erro),
+     margem lateral pra não colar nas bordas do celular. */
+  .action-msg {
+    margin: var(--space-2) var(--space-3) 0;
+    font-size: var(--text-sm);
+    color: var(--error);
+    background: rgba(255, 69, 58, 0.08);
+    border: 1px solid rgba(255, 69, 58, 0.2);
+    border-radius: var(--radius-sm);
+    padding: var(--space-2) var(--space-3);
   }
   .add-primary {
     height: 52px;

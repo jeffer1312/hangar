@@ -74,8 +74,12 @@ function claude {
 
     # Sem `exec` e sem systemd-run, ao contrario do POSIX: nao ha shell intermediario dentro do
     # pane do psmux (ele roda o comando direto no ConPTY) e nao ha cgroup de servico pra escapar.
+    # CP_SESSION_NAME: mesmo carimbo que o backend poe em new_session (app/tmux.py). Sem ele o
+    # cp-send de dentro da sessao cai no `display-message -p '#S'`, que devolve a sessao do CLIENTE
+    # anexado e nao a de quem chama -> o --unpair de uma sessao desfazia o vinculo da OUTRA.
     $cmd = @('tmux', 'new-session', '-s', $nome, '-c', (Get-Location).Path,
-             '-e', 'COLORTERM=truecolor', '-e', 'CLAUDE_CODE_TMUX_TRUECOLOR=1') +
+             '-e', 'COLORTERM=truecolor', '-e', 'CLAUDE_CODE_TMUX_TRUECOLOR=1',
+             '-e', "CP_SESSION_NAME=$nome") +
            $pre + @('claude', '--session-id', $id) + $args
     $r = @($cmd[1..($cmd.Count - 1)])
     & $cmd[0] @r

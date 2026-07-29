@@ -107,6 +107,7 @@ pi() {
     fi
     # `sh -c` exporta CP_PI_SESSION DENTRO do próprio pane antes do exec pi — ver o comentário de
     # cabeçalho pra o porquê. $0 vira "_" (placeholder), $1 o uuid, o resto ($@) os args originais.
-    "${run[@]}" tmux new-session -s "$name" -c "$PWD" \
+    # CP_SESSION_NAME: carimbo de identidade pro cp-send de dentro do pane (ver claude.posix.sh).
+    "${run[@]}" tmux new-session -s "$name" -c "$PWD" -e "CP_SESSION_NAME=$name" \
         sh -c 'export CP_PI_SESSION="$1"; shift; exec pi --session-id "$CP_PI_SESSION" "$@"' _ "$id" "$@"
 }

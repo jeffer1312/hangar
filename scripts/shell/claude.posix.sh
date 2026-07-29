@@ -106,14 +106,21 @@ claude() {
     # pode recusar criar scope transiente ("Failed to start transient scope unit"), e ai o `claude`
     # nao abre. Medido nesta maquina: 5/5 falhas com binario e gerenciador na mesma versao. O probe
     # (um fork) transforma "nao abre" em "abre sem scope proprio".
+    # CP_SESSION_NAME: mesmo carimbo de identidade que o backend poe em new_session (app/tmux.py).
+    # Sem ele o cp-send de dentro desta sessao cai no `tmux display-message -p '#S'`, que devolve a
+    # sessao do CLIENTE anexado e nao a de quem chama — o `--unpair` de uma sessao desfazia o vinculo
+    # da OUTRA. Sessao aberta no terminal e criada AQUI, nao pelo backend, entao o carimbo tem que
+    # sair daqui tambem, senao o bug fica vivo justamente no caminho mais usado.
     if command -v systemd-run >/dev/null 2>&1 && [ -n "${XDG_RUNTIME_DIR:-}" ] \
        && systemd-run --user --scope --collect -q -- true >/dev/null 2>&1; then
         systemd-run --user --scope --collect -q -- tmux new-session -s "$name" -c "$PWD" \
             -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 \
+            -e "CP_SESSION_NAME=$name" \
             "${pre[@]}" claude --session-id "$id" "$@"
     else
         tmux new-session -s "$name" -c "$PWD" \
             -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 \
+            -e "CP_SESSION_NAME=$name" \
             "${pre[@]}" claude --session-id "$id" "$@"
     fi
 }

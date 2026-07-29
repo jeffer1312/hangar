@@ -321,6 +321,15 @@ _STATUS_TTL = 20.0
 _STATUS_BUDGET = 2
 
 
+class KillFailed(Exception):
+    """A sessao continuou de pe depois do kill. Existe pra a rota DELETE reportar em vez de responder
+    {"ok": true} e a UI sumir com um card de sessao que segue viva (ver SessionRegistry.kill)."""
+
+    def __init__(self, name: str):
+        super().__init__(f"a sessao '{name}' continua de pe depois do kill-session")
+        self.name = name
+
+
 class SessionRegistry:
     # Cache name -> ultimo jsonl resolvido por sinal CONFIAVEL (cmdline --session-id / fd). De classe
     # (compartilhado entre instancias: api.registry e sse._registry). Estabiliza a resolucao quando o
@@ -1018,11 +1027,17 @@ class SessionRegistry:
         rename_pair(old, new)
 
     def kill(self, name: str) -> None:
-        # Sessao Codex: fecha app-server e TUI tmux, apaga o sidecar e limpa estado duravel.
+        # Levanta KillFailed quando a sessao SOBREVIVE. Antes o retorno do tmux era descartado e a
+        # limpeza duravel (cache, fila, then, pareamento) rodava do mesmo jeito: o card sumia da UI, o
+        # pareamento se desfazia, a rota respondia {"ok": true} — e a sessao reaparecia na varredura
+        # seguinte, sem fila e sem par, parecendo um bug sem relacao com o "encerrar" de minutos antes.
+        # Pesa mais no Windows, onde o kill-session do psmux nao derruba a sessao (medido).
         if codex_sessions.exists(name):
+            # Sessao Codex: fecha app-server e TUI tmux, apaga o sidecar e limpa estado duravel.
             from app.adapters import get_adapter
             get_adapter("codex").close_sync(name)
-            tmux.kill_session(name)
+            if not tmux.kill_session(name):
+                raise KillFailed(name)
             codex_sessions.delete(name)
             self._forget(name)
             PromptQueue(name).clear()
@@ -1038,7 +1053,8 @@ class SessionRegistry:
                 clear_pending_askq(jsonl)
         except Exception:
             pass
-        tmux.kill_session(name)
+        if not tmux.kill_session(name):
+            raise KillFailed(name)
         self._forget(name)  # cache invalido: nome pode ser reusado por outra sessao depois
         # Sessao morta nao deixa fila pra tras: senao acumula orfaos e uma futura sessao de mesmo
         # nome herdaria essas entradas como bubble-fantasma (mesmo motivo do clear no create()).
