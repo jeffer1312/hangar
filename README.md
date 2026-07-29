@@ -63,7 +63,14 @@ Alternative — clone by hand and read before you run, same result:
 
 ```bash
 git clone https://github.com/jeffer1312/claude-cockpit && cd claude-cockpit
-./install.sh        # checa deps, instala backend+frontend, gera token, oferece wrapper + serviços
+./install.sh        # checa deps, instala backend+frontend, pede o token, oferece wrapper + serviços
+./install.sh --check   # só lista o que falta, sem instalar nada
+```
+
+```powershell
+git clone https://github.com/jeffer1312/claude-cockpit; cd claude-cockpit
+powershell -ExecutionPolicy Bypass -File install.ps1
+powershell -ExecutionPolicy Bypass -File install.ps1 -SoChecar   # só lista o que falta
 ```
 
 Install on a **local disk, never on a network share**: `uv sync` and `npm ci` recreate
