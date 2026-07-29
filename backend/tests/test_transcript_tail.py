@@ -43,6 +43,90 @@ def test_tail_offset_missing_file_is_zero(tmp_path):
     assert TranscriptTailer(tmp_path / "nope.jsonl")._tail_offset(5) == 0
 
 
+# --- tail-read reverso: mesmo resultado da varredura ingenua ---------------------------------
+# _tail_offset le do FIM pra tras (janela que cresce) em vez de varrer o arquivo do comeco. Estes
+# testes travam as duas coisas que a otimizacao poderia quebrar: o offset tem que ser IDENTICO ao
+# da varredura ingenua e tem que cair EXATAMENTE numa fronteira de linha (offset no meio de uma
+# linha entrega JSON cortado pro _read_from).
+
+def _naive_tail_offset(path, max_lines: int) -> int:
+    """Varredura do comeco (o algoritmo antigo), como referencia."""
+    try:
+        starts: list[int] = []
+        with open(path, "rb") as fh:
+            while True:
+                start = fh.tell()
+                line = fh.readline()
+                if not line:
+                    break
+                if not line.endswith(b"\n"):
+                    break                      # ultima linha incompleta: nao conta
+                starts.append(start)
+        return starts[-max_lines] if len(starts) >= max_lines else 0
+    except OSError:
+        return 0
+
+
+def _assert_matches_naive(f, max_lines: int):
+    got = TranscriptTailer(f)._tail_offset(max_lines)
+    assert got == _naive_tail_offset(f, max_lines)
+    blob = f.read_bytes() if f.exists() else b""
+    # fronteira de linha: ou o inicio do arquivo, ou logo depois de um \n.
+    assert got == 0 or blob[got - 1:got] == b"\n"
+    return got
+
+
+@pytest.fixture(params=[None, 16, 4096], ids=["window-real", "window-16b", "window-4k"])
+def janela(request, monkeypatch):
+    # Janela minuscula forca varias rodadas de crescimento nos mesmos dados (linha > janela).
+    if request.param is not None:
+        monkeypatch.setattr("app.transcript._TAIL_WINDOW", request.param)
+
+
+@pytest.mark.parametrize("max_lines", [1, 2, 3, 5, 200])
+def test_tail_offset_igual_a_varredura_ingenua(tmp_path, janela, max_lines):
+    f = tmp_path / "s.jsonl"
+    f.write_text("".join(_user(f"u{i}", "x" * (i % 7 + 1)) for i in range(20)))
+    pos = _assert_matches_naive(f, max_lines)
+    evs, _ = TranscriptTailer(f)._read_from(pos)
+    assert len(evs) == min(max_lines, 20)      # mesma quantidade de backfill de sempre
+
+
+def test_tail_offset_arquivo_vazio(tmp_path, janela):
+    f = tmp_path / "s.jsonl"
+    f.write_bytes(b"")
+    assert _assert_matches_naive(f, 3) == 0
+
+
+def test_tail_offset_sem_newline_final(tmp_path, janela):
+    # Ultima linha ainda sendo escrita: nao pode contar nem deslocar o tail.
+    f = tmp_path / "s.jsonl"
+    f.write_text(_user("u1", "a") + _user("u2", "b") + _user("u3", "c") + '{"type":"user"')
+    for max_lines in (1, 2, 3, 9):
+        pos = _assert_matches_naive(f, max_lines)
+        evs, _ = TranscriptTailer(f)._read_from(pos)
+        assert [e.id for e in evs] == ["u1", "u2", "u3"][max(0, 3 - max_lines):]
+
+
+def test_tail_offset_linha_maior_que_a_janela(tmp_path, janela):
+    # Transcript real tem linha gigante (base64 de imagem colada): a janela precisa crescer ate
+    # caber, sem loop infinito e sem devolver offset no meio dela.
+    f = tmp_path / "s.jsonl"
+    f.write_text(_user("u1", "a") + _user("big", "Q" * 400_000) + _user("u3", "c"))
+    pos = _assert_matches_naive(f, 2)
+    evs, _ = TranscriptTailer(f)._read_from(pos)
+    assert [e.id for e in evs] == ["big", "u3"]
+
+
+def test_guard_reprova_offset_fora_de_fronteira(tmp_path, monkeypatch):
+    # O guard acima so vale se reprovar de fato um offset no meio de uma linha.
+    f = tmp_path / "s.jsonl"
+    f.write_text(_user("u1", "a") + _user("u2", "b"))
+    monkeypatch.setattr(TranscriptTailer, "_tail_offset", lambda self, n: 3)
+    with pytest.raises(AssertionError):
+        _assert_matches_naive(f, 1)
+
+
 def test_read_from_restarts_after_shrink(tmp_path):
     # Arquivo REESCRITO menor (truncamento): o offset antigo cairia alem do EOF e, quando o arquivo
     # voltasse a crescer, a leitura retomaria no meio de linha nova = lixo/eventos perdidos. O guard

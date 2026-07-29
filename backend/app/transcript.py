@@ -3,7 +3,6 @@ import base64
 import json
 import os
 import re
-from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator, Optional
@@ -15,6 +14,11 @@ from app.models import ChatEvent
 # (background/foreground, watchdog). 200 e a maneta de calibracao: cobre o gap de uma reconexao normal
 # (poucos segundos) com folga; sessao com <= 200 linhas mantem o backfill completo (offset 0).
 _BACKFILL_LINES = 200
+
+# Janela inicial do tail-read reverso do _tail_offset: 256KB cobre as 200 linhas do backfill na
+# esmagadora maioria dos transcripts; quando nao cobre (linha gigante com base64 de imagem colada),
+# ela quadruplica ate juntar as linhas ou alcancar o inicio do arquivo.
+_TAIL_WINDOW = 256 * 1024
 
 # Imagem colada no TERMINAL (TUI do Claude). O Claude grava 2 coisas: a msg do user com um bloco
 # `image` (base64) + um marcador "[Image #N]" no texto; E uma entrada user SINTETICA cujo texto é só
@@ -361,25 +365,32 @@ class TranscriptTailer:
 
     def _tail_offset(self, max_lines: int) -> int:
         # Offset do inicio da (max_lines)-esima linha a partir do fim -> o follow() faz backfill so do
-        # tail. Conta LINHAS completas (terminadas em \n) sem parsear JSON, em binario (sem decodar o
-        # arquivo inteiro) e com deque(maxlen) (nao acumula o offset de TODAS as linhas).
-        # <= max_lines linhas, ou arquivo ausente -> 0 (backfill do inicio = comportamento antigo).
-        # ponytail: varre o arquivo pra frente sem parse; reverse-seek so se o disco virar gargalo.
-        if not self.path.exists():
+        # tail. Le do FIM pra tras (mesmo desenho do _tail_offset do pqueue): varrer pra frente
+        # custava o arquivo inteiro -- 136MB lidos pra pular pros ultimos ~500KB, em todo connect de
+        # SSE sem Last-Event-ID. <= max_lines linhas, arquivo vazio ou ausente -> 0 (backfill do
+        # inicio = comportamento antigo).
+        #
+        # Conta so `\n`: a linha completa k comeca depois do k-esimo `\n`, entao o inicio da
+        # max_lines-esima a partir do fim fica logo apos o (max_lines+1)-esimo `\n` contado de tras
+        # pra frente. Cauda sem `\n` (append em voo) nao entra na conta nem desloca nada, igual antes.
+        try:
+            with self.path.open("rb") as fh:
+                size = fh.seek(0, os.SEEK_END)
+                window = _TAIL_WINDOW
+                while True:
+                    start = max(0, size - window)
+                    fh.seek(start)
+                    buf = fh.read(size - start)
+                    if buf.count(b"\n") > max_lines:
+                        idx = len(buf)
+                        for _ in range(max_lines + 1):
+                            idx = buf.rindex(b"\n", 0, idx)
+                        return start + idx + 1
+                    if start == 0:
+                        return 0     # arquivo inteiro na janela e ainda nao deu max_lines linhas
+                    window *= 4      # janela curta (ou uma linha gigante, base64 de imagem): cresce
+        except OSError:
             return 0
-        starts: deque[int] = deque(maxlen=max_lines)
-        with self.path.open("rb") as fh:
-            while True:
-                start = fh.tell()
-                line = fh.readline()
-                if not line:
-                    break
-                if not line.endswith(b"\n"):
-                    break  # ultima linha incompleta (append em voo): ignora, nao registra o start
-                starts.append(start)
-        # deque cheio = havia >= max_lines linhas; starts[0] e o inicio da max_lines-esima a partir
-        # do fim (com EXATAMENTE max_lines linhas, starts[0] == 0 = backfill completo, como antes).
-        return starts[0] if len(starts) == max_lines else 0
 
     async def follow(self, start_offset: int | None = None) -> AsyncIterator[ChatEvent]:
         """Backfill + watch de append. `start_offset` (do Last-Event-ID) retoma EXATAMENTE dali.
