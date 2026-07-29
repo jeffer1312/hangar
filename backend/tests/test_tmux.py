@@ -328,3 +328,66 @@ def test_send_literal_posix_nunca_fatia(monkeypatch):
     texto = "z" * 5000
     tmux.send_keys("cc", texto, literal=True)
     assert chamadas == [["tmux", "send-keys", "-t", "=cc:", "-l", "--", texto]]
+
+
+class _CPFalha:
+    returncode = 1
+    stdout = ""
+    stderr = "psmux: session not found"
+
+
+def test_send_literal_para_no_primeiro_pedaco_que_falha(monkeypatch, caplog):
+    # O laco ignorava o returncode de cada pedaco: se o 3o de 4 falhasse, ele seguia mandando o 4o e o
+    # pane recebia 1+2+4 — texto do usuario com um buraco no meio, e o app dizendo "enviado". E a MESMA
+    # classe do bug que o fatiamento existe pra evitar, auto-infligida. Agora para no 1o erro, devolve
+    # False e LOGA qual pedaco morreu. Bool e nao excecao de proposito: os outros call sites de
+    # send_keys(literal=True) (answer_questions, send_text, drain) nao tratariam uma excecao — viraria
+    # 500 cru nas rotas /answer e /term-input, e o `except Exception` cego do drain a engoliria.
+    monkeypatch.setattr(tmux.os, "name", "nt")
+    monkeypatch.setattr(tmux.time, "sleep", lambda *_a, **_k: None)
+    chamadas = []
+
+    def run_falhando_no_3(args, **k):
+        chamadas.append(list(args))
+        return _CPFalha() if len(chamadas) == 3 else _CP()
+
+    monkeypatch.setattr(tmux, "RUN", run_falhando_no_3)
+    texto = "".join(f"{i:04d}|" for i in range(1, 400))   # 1995 chars -> 4 pedacos de 512
+    with caplog.at_level("ERROR"):
+        assert tmux.send_keys("cc", texto, literal=True) is False
+    assert len(chamadas) == 3                     # PAROU: o 4o pedaco nunca foi mandado
+    msg = " ".join(r.getMessage() for r in caplog.records)
+    assert "3/4" in msg                           # diz QUAL pedaco falhou
+    assert "1024 de 1995 chars" in msg            # e quanto ja esta no input do pane
+
+
+def test_send_literal_ok_devolve_true(monkeypatch):
+    # O par: fatiou tudo sem erro -> True, pra send_prompt seguir pro Enter.
+    monkeypatch.setattr(tmux.os, "name", "nt")
+    monkeypatch.setattr(tmux.time, "sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr(tmux, "RUN", lambda args, **k: _CP())
+    assert tmux.send_keys("cc", "z" * 2000, literal=True) is True
+
+
+def test_send_literal_uma_chamada_que_falha_loga_e_devolve_false(monkeypatch, caplog):
+    # Chamada UNICA (Linux, ou Windows dentro do teto): falhar significa que NADA entrou, nao ha meia
+    # mensagem no input -> mantem o comportamento historico de degradar, mas registra. Sem o log,
+    # `send_prompt` devolvendo "sent" e indistinguivel de entrega de verdade.
+    monkeypatch.setattr(tmux.os, "name", "posix")
+    monkeypatch.setattr(tmux, "RUN", lambda args, **k: _CPFalha())
+    with caplog.at_level("WARNING"):
+        assert tmux.send_keys("cc", "oi", literal=True) is False   # nao levanta, devolve False
+    assert any("send-keys -l falhou" in r.getMessage() for r in caplog.records)
+
+
+def test_kill_session_devolve_se_a_sessao_saiu(monkeypatch):
+    # O contrato e "a sessao SAIU?", nao "o comando deu 0" — o kill-session do psmux devolve 0 com a
+    # sessao ainda de pe (medido), e no caso do prefix match o comando falha porque ela JA estava
+    # morta, que e sucesso pra quem chama.
+    monkeypatch.setattr(tmux, "RUN", lambda args, **k: _CP())
+    monkeypatch.setattr(tmux, "has_session", lambda n: False)
+    assert tmux.kill_session("cc") is True          # saiu (ou nem existia): sucesso
+
+    monkeypatch.setattr(tmux, "RUN", lambda args, **k: _CP())   # rc=0, mentindo
+    monkeypatch.setattr(tmux, "has_session", lambda n: True)
+    assert tmux.kill_session("cc") is False         # sobreviveu: NAO e sucesso

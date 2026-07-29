@@ -262,3 +262,91 @@ def test_send_prompt_troca_surrogate_solto_antes_do_tmux():
         assert ti.TerminalInput().send_prompt("s", "corte \ud83d") == "sent"
     assert keys == ["corte �", "Enter"]
     keys[0].encode("utf-8")   # o que o subprocess faria com o argv
+
+
+# Rodape REAL do claude v2.1.218 (medido no pane desta maquina): regua + 3 linhas de statusline + a
+# linha de modo. E o pane que o gate tem que aprovar.
+_CLAUDE_RODAPE = (
+    "─" * 100 + "\n"
+    "  🤖 Opus5 (high✦) │ 📁 claude-cockpit [main*] │ 📟 cc-2 │ ⎈ k8s-dev\n"
+    "  💬 236k/600 240k/1M │ 💵 $22.83 │ ⚡5h:20% ↺57m │ 🕐 09:32 ⏱ 14h46m\n"
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 2 agents\n"
+)
+
+
+def test_ready_ignora_frase_mode_on_no_texto_da_conversa():
+    # "mode on" era marcador, e e frase comum: prosa citando "auto mode on"/"debug mode on" fazia o
+    # gate liberar com a TUI ainda bootando -> mensagem engolida, o proprio bug que ele existe pra
+    # evitar. Agora o marcador do Claude e o GLIFO de modo, que nao aparece em prosa.
+    pane = (
+        "  o rodape novo diz auto mode on, e no outro modo manual mode on\n"
+        "  (ligamos o debug mode on ali tambem)\n"
+        + "\n" * 20      # boot: nenhum rodape desenhado ainda
+    )
+    with patch.object(ti, "_capture", lambda name: pane), \
+         patch.object(ti.time, "sleep", lambda *_: None):
+        assert ti._wait_input_ready("s", timeout=0.0) is False
+
+
+def test_ready_casa_nos_dois_glifos_de_modo():
+    # Os dois rodapes medidos no claude v2.1.218. Se o glifo mudar, e ESTE teste que quebra.
+    for rodape in ("⏵⏵ auto mode on (shift+tab to cycle) · ← for agents",
+                   "⏸ manual mode on · ← for agents"):
+        with patch.object(ti, "_capture", lambda name, r=rodape: "conversa\n" * 30 + r), \
+             patch.object(ti.time, "sleep", lambda *_: None):
+            assert ti._wait_input_ready("s", timeout=0.0) is True, rodape
+
+
+def test_ready_casa_no_rodape_de_verdade():
+    # O par do teste acima: mesma conversa citando os marcadores, mas AGORA com o rodape real no fim.
+    pane = "  citando `auto mode on` no meio da conversa\n" + "\n" * 30 + _CLAUDE_RODAPE
+    with patch.object(ti, "_capture", lambda name: pane), \
+         patch.object(ti.time, "sleep", lambda *_: None):
+        assert ti._wait_input_ready("s", timeout=0.0) is True
+
+
+def test_ready_rodape_com_linhas_em_branco_no_fim():
+    # Redraw deixa linhas vazias depois do rodape; sem o rstrip elas empurrariam o rodape pra fora da
+    # janela da cauda e cada envio voltaria a queimar os 12s de timeout, calado.
+    with patch.object(ti, "_capture", lambda name: _CLAUDE_RODAPE + "\n" * 6), \
+         patch.object(ti.time, "sleep", lambda *_: None):
+        assert ti._wait_input_ready("s", timeout=0.0) is True
+
+
+def test_send_prompt_partial_nao_manda_enter():
+    # Envio literal que para no meio -> "partial", e o Enter NAO vai: submeter texto com buraco faria a
+    # sessao agir sobre um pedido que o usuario nunca escreveu (foi o estrago original do truncamento).
+    keys = []
+
+    def falso_send_keys(name, k, **kw):
+        keys.append(k)
+        return not kw.get("literal")     # literal falha; tecla nomeada (Enter) daria True
+
+    with patch.object(ti.tmux, "has_session", return_value=True), \
+         patch.object(ti, "_capture", lambda name: _CLAUDE_RODAPE), \
+         patch.object(ti.time, "sleep", lambda *_: None), \
+         patch.object(ti, "send_keys", falso_send_keys):
+        assert ti.TerminalInput().send_prompt("s", "oi") == "partial"
+    assert keys == ["oi"]                # digitou (parcial) e PAROU: nenhum "Enter"
+
+
+def test_drain_partial_nao_redigita_em_cima_do_residuo(tmp_path, monkeypatch, caplog):
+    # O furo do `except Exception` cego: entrega parcial ficava sem log nenhum e o reconcile depois
+    # requeava, fazendo o drain digitar o texto INTEIRO em cima do residuo cortado que ficou no
+    # composer (nada limpa a linha). Agora para no primeiro parcial, com log de erro.
+    from app.pqueue import PromptQueue
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    q = PromptQueue("s")
+    q.append("mensagem longa", delivered=False)
+    envios = []
+
+    def send_prompt_parcial(self, name, text, provider="claude"):
+        envios.append(text)
+        return "partial"
+
+    with patch.object(ti.TerminalInput, "send_prompt", send_prompt_parcial), \
+         patch.object(ti, "_transcript_start_ts", lambda j: 0.0), \
+         caplog.at_level("ERROR"):
+        assert ti.drain("s", "/tmp/x.jsonl") == 0     # nao conta como entregue
+    assert envios == ["mensagem longa"]               # UMA tentativa, sem repetir
+    assert any("PARCIAL" in r.getMessage() for r in caplog.records)

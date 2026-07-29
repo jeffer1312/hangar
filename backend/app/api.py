@@ -21,7 +21,7 @@ from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
 from app.model_picker import PickerError
 from app import pi_models
-from app.registry import SessionRegistry
+from app.registry import KillFailed, SessionRegistry
 from app.names import sanitize_session_name
 from app.models import (SessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody, RunInfo,
                         ProjectStatus)
@@ -599,7 +599,13 @@ async def create_session(body: CreateBody):
 
 @app.delete("/api/sessions/{name}", dependencies=[Depends(require_auth)])
 def kill_session(name: str):
-    registry.kill(name)
+    # 500 quando a sessao SOBREVIVE ao kill — mesmo padrao do /rename logo abaixo, que ja confere e
+    # responde 404/500. Antes era {"ok": true} incondicional: o card sumia da UI e a sessao reaparecia
+    # na varredura seguinte, sem fila e sem pareamento (ver SessionRegistry.kill).
+    try:
+        registry.kill(name)
+    except KillFailed as e:
+        raise HTTPException(500, str(e))
     return {"ok": True}
 
 
@@ -978,6 +984,14 @@ def _send_one(name: str, text: str) -> dict:
         # send_prompt rejeita control chars (ex: '\n'). Sem isto virava 500 -> a msg sumia sem
         # feedback. Agora vira 400 limpo (o frontend mostra). (Multi-linha de verdade: backlog.)
         return {"ok": False, "error": str(e)}
+    if result == "partial":
+        # Entrega PARCIAL no fatiamento do Windows: parte do texto ficou no composer e o Enter NAO foi
+        # enviado (ver terminal_input.send_prompt). Reporta erro em vez de seguir pro caminho de
+        # sucesso, que gravaria a entrada na fila como delivered e afirmaria entrega de uma mensagem
+        # cortada. Sem entrada na fila, o drain nao reentra digitando em cima do residuo.
+        return {"ok": False,
+                "error": "envio incompleto: parte do texto ficou no composer da sessao e nada foi "
+                         "submetido. Confira o terminal antes de reenviar."}
     stripped = text.lstrip()
     if stripped.startswith("/"):
         # Slash-commands NAO entram na fila — sao meta, nao viram bubble. Excecao /clear: ele reinicia

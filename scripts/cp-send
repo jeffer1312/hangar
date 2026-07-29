@@ -116,11 +116,23 @@ fi
 # de processo já rodando, e um nome obsoleto endereçaria outra sessão — pior que o bug original.
 # has-session com `=` força match EXATO (sem ele o tmux cai em prefix match e `jeffer1312` casaria
 # com `jeffer1312-2`); obsoleto -> cai no fallback.
+# O fallback é o bug original, então ele AVISA quando é usado de dentro do tmux ($TMUX setado): é o
+# único jeito de o dono saber que aquela sessão está no modo ambíguo (aberta por wrapper antigo, ou
+# renomeada) antes de um --unpair desfazer o vínculo errado. Fora do tmux não avisa: ali "cli" é o
+# esperado, não uma degradação. E `display-message` pode sair 0 imprimindo VAZIO (servidor sem
+# cliente anexado); vazio viraria a URL /api/sessions//pair, então cai em "cli" também.
 me() {
     if [[ -n "${CP_SESSION_NAME:-}" ]] && tmux has-session -t "=$CP_SESSION_NAME" 2>/dev/null; then
         echo "$CP_SESSION_NAME"; return
     fi
-    tmux display-message -p '#S' 2>/dev/null || echo "cli"
+    local atual
+    atual=$(tmux display-message -p '#S' 2>/dev/null) || atual=""
+    if [[ -n "${TMUX:-}" ]]; then
+        echo "aviso: sessão sem CP_SESSION_NAME válido (wrapper antigo ou sessão renomeada) —" \
+             "identidade caiu no 'cliente anexado' e pode sair errada ('${atual:-cli}')." \
+             "Reabra a sessão pelo wrapper atualizado pra corrigir." >&2
+    fi
+    echo "${atual:-cli}"
 }
 
 if [[ "$1" == "--pair" ]]; then

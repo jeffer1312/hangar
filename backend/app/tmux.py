@@ -181,7 +181,9 @@ def new_session(name: str, cwd: str, command: str, config_dir: str | None = None
     return _run(args).returncode == 0
 
 
-def kill_session(name: str) -> None:
+def kill_session(name: str) -> bool:
+    """True = a sessao NAO existe mais depois desta chamada (inclui "ja nao existia"). False = ela
+    sobreviveu, e quem chama NAO pode reportar sucesso nem apagar estado duravel dela."""
     # `=` (match EXATO) so no POSIX. Era o unico alvo de sessao do modulo SEM o `=`: has_session e
     # _pane_target ja o usam justamente porque o tmux resolve target-session em exact -> fnmatch ->
     # PREFIX, e o app fabrica nomes que colidem por prefixo (`<base>`, `<base>-2`, ...). Sem ele,
@@ -198,6 +200,12 @@ def kill_session(name: str) -> None:
     #     nada (rc=0). Ou seja, no Windows nao ha prefix match a se defender.
     alvo = f"={name}" if os.name == "posix" else name
     _run(["tmux", "kill-session", "-t", alvo])
+    # Devolve "a sessao SAIU?", nao "o comando deu 0" — sao coisas diferentes e a que importa e a
+    # primeira. Dois casos reais em que o rc engana: (1) no psmux o kill-session devolve 0 e a sessao
+    # continua de pe (medido; o instalador contorna matando por PID); (2) no caso quebrado descrito
+    # acima o comando falha mas a sessao ja estava morta — e "morta" e exatamente o que o caller quer.
+    # Idempotente de proposito: apagar sessao que nao existe e sucesso.
+    return not has_session(name)
 
 
 def rename_session(old: str, new: str) -> bool:
@@ -226,23 +234,49 @@ _WIN_CHUNK = 512         # < limiar de colapso de paste (medido: 700 ok, 900 col
 _WIN_CHUNK_PAUSE = 0.3   # pausa entre pedacos (medida: recupera 100% do inicio)
 
 
-def _send_literal(target: str, text: str) -> None:
+def _send_literal(target: str, text: str) -> bool:
+    """False = o envio parou no meio e parte do texto ficou no input do pane.
+
+    Devolve em vez de LEVANTAR de propósito. Uma exceção aqui atravessaria todos os call sites de
+    `send_keys(literal=True)` — `answer_questions` (resposta de texto livre num AskUserQuestion),
+    `send_text` (espelho do terminal) e o `drain` — e nenhum deles a trataria: as rotas /answer e
+    /term-input só capturam ValueError (viraria 500 cru, e no picker o texto parcial ficaria digitado
+    sem Escape de limpeza), e o `drain` tem um `except Exception` cego que NÃO loga e deixa a entrada
+    como delivered=True (o `claim_undelivered` marca antes do envio). Ou seja: a exceção trocava um
+    silêncio por outro pior. Bool não escapa por acidente — quem não confere segue como sempre.
+    """
     # Linux (qualquer tamanho) e Windows dentro do teto: UMA chamada, comportamento de sempre.
     # Windows acima do teto: fatia com pausa pra nao disparar o modo paste da TUI que come o comeco.
     if os.name != "nt" or len(text) <= _WIN_CHUNK:
-        _run(["tmux", "send-keys", "-t", target, "-l", "--", text])
-        return
-    for i in range(0, len(text), _WIN_CHUNK):
-        _run(["tmux", "send-keys", "-t", target, "-l", "--", text[i:i + _WIN_CHUNK]])
+        cp = _run(["tmux", "send-keys", "-t", target, "-l", "--", text])
+        if cp.returncode != 0:
+            # Uma chamada so: falhou = NADA entrou (nao ha meia mensagem no input). Registra e devolve
+            # False — sem log isso seria indistinguivel de entrega, porque `send_prompt` diria "sent".
+            _log.warning("tmux send-keys -l falhou pra %r: %s",
+                         target, (cp.stderr or "").strip()[:200])
+            return False
+        return True
+    total = (len(text) + _WIN_CHUNK - 1) // _WIN_CHUNK
+    for n, i in enumerate(range(0, len(text), _WIN_CHUNK), start=1):
+        cp = _run(["tmux", "send-keys", "-t", target, "-l", "--", text[i:i + _WIN_CHUNK]])
+        if cp.returncode != 0:
+            # PARA no primeiro erro: seguir mandando os pedacos seguintes entregaria 1+2+4+5 e o Enter
+            # submeteria texto com um buraco no meio — a sessao trataria isso como pedido do usuario,
+            # que e exatamente o estrago que o fatiamento existe pra evitar.
+            _log.error("send-keys falhou no pedaco %d/%d de %r (%d de %d chars ja no input): %s",
+                       n, total, target, i, len(text), (cp.stderr or "").strip()[:200])
+            return False
         if i + _WIN_CHUNK < len(text):
             time.sleep(_WIN_CHUNK_PAUSE)
+    return True
 
 
-def send_keys(name: str, keys: str, literal: bool = False) -> None:
+def send_keys(name: str, keys: str, literal: bool = False) -> bool:
+    """False só no caso de envio literal que parou no meio (ver _send_literal). Quem ignora o retorno
+    fica com o comportamento de antes."""
     if literal:
-        _send_literal(_pane_target(name), keys)
-    else:
-        _run(["tmux", "send-keys", "-t", _pane_target(name), keys])
+        return _send_literal(_pane_target(name), keys)
+    return _run(["tmux", "send-keys", "-t", _pane_target(name), keys]).returncode == 0
 
 
 def paste_text(name: str, text: str) -> None:

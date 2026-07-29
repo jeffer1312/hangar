@@ -325,6 +325,27 @@ else
     echo "== fish: não encontrado no PATH, pulando =="
 fi
 
+echo "== carimbo de identidade (CP_SESSION_NAME) =="
+# Por que ESTATICO e nao comportamental: o ramo que cria sessao so roda com stdin em TTY
+# (`[ ! -t 0 ]` manda pro bypass), entao exercita-lo exigiria pty + fake tmux — e o que se quer
+# travar aqui e mais simples: que nenhum `new-session` fique SEM o carimbo. Sem ele o cp-send de
+# dentro do pane cai no `display-message -p '#S'` (sessao do CLIENTE anexado) e o --unpair de uma
+# sessao desfaz o vinculo da OUTRA — aconteceu 2x. O backend ja carimba em app/tmux.py; estes
+# wrappers criam sessao POR CONTA, entao precisam carimbar tambem.
+# ponytail: contagem por arquivo, nao casamento linha-a-linha; upgrade = pty + fake tmux se algum
+# dia um wrapper passar a montar o comando em pedacos e a contagem deixar de bater.
+for w in claude.posix.sh claude.fish claude.ps1 pi.posix.sh pi.fish; do
+    f="$REPO/scripts/shell/$w"
+    # `^[^#]*` descarta MENÇÃO em comentário: os wrappers do pi citam "tmux new-session" no cabeçalho
+    # pra explicar por que o export vai dentro do `sh -c`, e contar isso dava falso positivo.
+    n_new=$(grep -c '^[^#]*new-session' "$f" || true)
+    n_cp=$(grep -c '^[^#]*CP_SESSION_NAME=' "$f" || true)
+    if [ "$n_new" -gt 0 ] && [ "$n_cp" -lt "$n_new" ]; then
+        echo "FAIL: $w tem $n_new new-session e só $n_cp CP_SESSION_NAME= — sessão nasceria sem identidade"
+        fail=1
+    fi
+done
+
 if [ "$fail" = 0 ]; then
     echo "PASS: todos os wrappers"
 else

@@ -107,13 +107,20 @@ function claude
     # comentario acima ja dizia isso), o caminho vazio e o NORMAL aqui, nao a excecao — o `claude`
     # simplesmente parava de abrir. Por isso a chamada e duplicada nos dois ramos, igual ao
     # claude.posix.sh, que documenta a mesma escolha.
+    # CP_SESSION_NAME: mesmo carimbo de identidade que o backend poe em new_session (app/tmux.py).
+    # Sem ele o cp-send de dentro desta sessao cai no `tmux display-message -p '#S'`, que devolve a
+    # sessao do CLIENTE anexado e nao a de quem chama — o `--unpair` de uma sessao desfazia o vinculo
+    # da OUTRA. Sessao aberta no terminal e criada AQUI, nao pelo backend, entao o carimbo tem que
+    # sair daqui tambem, senao o bug fica vivo justamente no caminho mais usado.
     if command -q systemd-run; and set -q XDG_RUNTIME_DIR; and systemd-run --user --scope --collect -q -- true >/dev/null 2>&1
         systemd-run --user --scope --collect -q -- tmux new-session -s $name -c "$PWD" \
             -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 \
+            -e "CP_SESSION_NAME=$name" \
             $pre claude --session-id $id $argv
     else
         tmux new-session -s $name -c "$PWD" \
             -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 \
+            -e "CP_SESSION_NAME=$name" \
             $pre claude --session-id $id $argv
     end
 end
