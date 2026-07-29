@@ -1416,8 +1416,14 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   /* Com liquid (Chromium) o vidro é o MESMO do composer: `--glass-bg`, não `--glass-panel`. O 0.86/
      0.70 do panel é rede de segurança pra quando o engine descarta o backdrop-filter (app.css:52) —
      aqui o filtro está no elemento e o Chromium não descarta, então a rede só empilhava um segundo
-     fundo por cima do primeiro e virava parede. Fora do liquid (WebKit, sem filtro) o panel fica. */
+     fundo por cima do primeiro e virava parede. Fora do liquid (WebKit, sem filtro) o panel fica.
+     SÓ NO ESCURO: no claro o vidro é branco a 0.52 sobre texto ESCURO, e 0.52 de branco não apaga
+     tinta escura — o chat atravessava a sidebar inteira (medido). No escuro é tinta clara sobre
+     vidro escuro, que some. Por isso o claro fica no --glass-panel (0.90/0.695 com foto de fundo). */
   :global(html[data-liquid]) .sidebar::before {
+    background: var(--glass-panel);
+  }
+  :global(html[data-liquid][data-theme='dark']) .sidebar::before {
     background: var(--glass-bg);
   }
 
