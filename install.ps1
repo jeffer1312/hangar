@@ -174,32 +174,45 @@ Nota 'E esse token que voce digita no celular na primeira conexao.'
 
 # -- 4/8 Frontend ------------------------------------------------------------
 Titulo '4/8 Frontend'
-# So rebuilda quando ha motivo: dist ausente, node_modules ausente, ou alguma fonte/lockfile/config
-# mais nova que o dist. Num re-run logo apos um `git pull` que nao mexeu no front, isso pula o
-# `npm ci` inteiro - que e o passo mais demorado da instalacao no Windows, milhares de arquivinhos.
-# Mesma regra do install.sh do Linux, que ja fazia isso.
+# So rebuilda quando ha motivo. NAO por data de modificacao: no Windows o git reescreve
+# arquivos no checkout (conversao de fim de linha), entao um `git pull` que nem tocou no front
+# deixa fontes com carimbo mais novo que o dist e o build roda a toa - medido, rebuildava toda vez.
+# A marca e o estado do GIT: commit atual + o que estiver sujo em frontend/. Isso muda quando o
+# conteudo muda, e so quando ele muda.
 $dist = "$raiz\frontend\dist\index.html"
 $modulos = "$raiz\frontend\node_modules"
-$precisa = -not (Test-Path $dist) -or -not (Test-Path $modulos)
-if (-not $precisa) {
-    $carimbo = (Get-Item $dist).LastWriteTimeUtc
-    $fontes = @()
-    $fontes += Get-ChildItem "$raiz\frontend\src" -Recurse -File -ErrorAction SilentlyContinue
-    foreach ($f in 'package-lock.json', 'package.json', 'index.html', 'vite.config.ts', 'vite.config.js') {
-        $fontes += Get-ChildItem "$raiz\frontend\$f" -File -ErrorAction SilentlyContinue
-    }
-    # -gt e nao -ge: arquivo com o MESMO carimbo do dist nao conta como mais novo (o build acabou
-    # de escrever, e no Windows a granularidade do NTFS pode empatar).
-    $precisa = [bool]($fontes | Where-Object { $_.LastWriteTimeUtc -gt $carimbo } | Select-Object -First 1)
+$marcaArq = "$raiz\frontend\dist\.cp-build-stamp"
+
+$marca = $null
+if (Tem 'git') {
+    $commit = (& git -C $raiz rev-parse HEAD 2>$null)
+    $sujo = (& git -C $raiz status --porcelain -- frontend 2>$null) -join "`n"
+    if ($commit) { $marca = "$commit`n$sujo" }
 }
+
+$precisa = $true
+if ((Test-Path $dist) -and (Test-Path $modulos)) {
+    if ($marca -and (Test-Path $marcaArq)) {
+        # -Raw: sem isto o Get-Content devolve array de linhas e a comparacao com a string falha
+        # sempre - o build rodaria toda vez de novo, so que por outro motivo.
+        $precisa = ((Get-Content $marcaArq -Raw) -ne $marca)
+    } elseif (-not $marca) {
+        # Sem git nao da pra saber o que mudou; rebuildar e a escolha segura.
+        $precisa = $true
+    }
+}
+
 if ($precisa) {
     Push-Location "$raiz\frontend"
     npm ci --silent
     npm run build --silent
     Pop-Location
+    # A marca so e gravada DEPOIS do build dar certo: build que falhou nao pode marcar
+    # "atualizado" e fazer a proxima rodada pular um dist quebrado.
+    if ($marca) { Set-Content -Path $marcaArq -Value $marca -NoNewline -Encoding UTF8 }
     Ok 'buildado em frontend\dist\'
 } else {
-    Ok 'frontend ja buildado e atualizado (nada mudou desde o ultimo build)'
+    Ok 'frontend ja buildado e atualizado (nada mudou no git desde o ultimo build)'
 }
 
 # -- 5/8 Wrapper do claude ---------------------------------------------------
@@ -369,9 +382,13 @@ if ($jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu l
             # (nao cresce sem limite; o que interessa e sempre a execucao atual).
             $log = Join-Path $env:LOCALAPPDATA "claude-cockpit\$($t.Nome).log"
             New-Item -ItemType Directory -Force -Path (Split-Path -Parent $log) | Out-Null
+            # -EncodedCommand (base64 UTF-16LE) em vez de -Command com aspas: o PowerShell NAO
+            # escapa com barra invertida, e a string aninhada quebrava o New-ScheduledTaskAction
+            # ("nao e possivel localizar um parametro posicional"). Codificado nao ha o que escapar.
             $interno = "& '$exe' $($t.Args) *>&1 | Out-File -FilePath '$log' -Encoding utf8"
+            $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($interno))
             $acao = New-ScheduledTaskAction -Execute 'powershell.exe' `
-                -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"$interno\"" `
+                -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand $b64" `
                 -WorkingDirectory $t.Dir
             $gatilho = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
             $cfg = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
