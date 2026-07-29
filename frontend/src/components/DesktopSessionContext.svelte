@@ -318,8 +318,12 @@
     backdrop-filter: url(#liquid-glass) blur(20px) saturate(170%);
   }
   /* Mesmo vidro do composer sob liquid (Sidebar.svelte tem a mesma regra e o porquê): com o filtro
-     no elemento e o Chromium honrando, `--glass-panel` só empilhava um 2o fundo e matava a refração. */
+     no elemento e o Chromium honrando, `--glass-panel` só empilhava um 2o fundo e matava a refração.
+     Escuro só — no claro 0.52 de branco não cobre texto escuro e o chat atravessa o painel. */
   :global(html[data-liquid]) .session-context::before {
+    background: var(--glass-panel);
+  }
+  :global(html[data-liquid][data-theme='dark']) .session-context::before {
     background: var(--glass-bg);
   }
 

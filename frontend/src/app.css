@@ -54,11 +54,14 @@
      grande o engine as vezes descarta o backdrop-filter (backdrop root quebrado por
      transform/animacao do pai) e o 0.46 vira "sem fundo" — o texto de tras atravessa. Este valor
      segura a leitura sozinho.
-     EXCECAO, por decisao de aparencia: com html[data-liquid] (Chromium) a sidebar e o painel de
+     EXCECAO, por decisao de aparencia: com html[data-liquid] E tema ESCURO a sidebar e o painel de
      contexto usam --glass-bg, pra serem o MESMO material do composer em vez de duas paredes ao lado
      dele. Abrem mao da rede de seguranca: se um ancestral do shell ganhar transform/opacity e o
      Chromium descartar o filtro, esses dois ficam em 0.46. Hoje nenhum ancestral tem — se um for
-     introduzido, o sintoma aparece la, nao aqui. */
+     introduzido, o sintoma aparece la, nao aqui.
+     No tema CLARO a excecao NAO vale, e nao e simetria por gosto: o vidro claro e branco a 0.52
+     sobre texto ESCURO, e branco translucido nao apaga tinta escura — o chat atravessava a sidebar
+     e o painel inteiros. No escuro e o contrario (tinta clara sobre vidro escuro) e 0.46 basta. */
   --glass-panel:     rgba(26,24,29,0.86);
 
   /* Semantic */
