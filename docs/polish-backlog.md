@@ -3,6 +3,31 @@
 Captured from live testing (phone, real session). Deferred by the user to the polish
 phase — not blockers. Newest first.
 
+## Stability under load — never measured (2026-07-29)
+
+Performance **was** measured and is a non-issue at this scale; stability under load was not, and
+that's the open question. Numbers from the machine that runs this daily (483 processes, 4 live
+sessions), so nobody has to re-measure the cheap part:
+
+| Path | Cost | Note |
+|---|---|---|
+| `procinfo._proc_children_map()` | 4.9 ms | reads `stat` of every process — grows with the machine, not with sessions |
+| `tmux list-panes -a` | 2.1 ms | one fork for all sessions |
+| `capture_pane`, per session | 2.0 ms | one fork **each** → 8 ms at 4 sessions, ~40 ms at 20 |
+| `_open_jsonl` over 9 descendants | 0.30 ms | returned **nothing**, exactly as its own comment predicts |
+
+A poll cycle is ~15 ms. Both heavy paths are linear (processes, sessions), so they only matter on
+a busy host or with many sessions — not here.
+
+What's actually untested is what a soak run would show, and none of it is visible in a 15 ms
+timing: SSE connections left open for hours (the 25s watchdog reconnecting on a half-open socket),
+file descriptors and `asyncio.to_thread` workers over a long run, the `capture_pane` burst
+described at `registry.py:787`, and what happens when sessions are created and killed repeatedly
+while the phone is subscribed.
+
+Worth doing as a real experiment (N sessions, SSE open, forced reconnects, watch RSS/fd count over
+hours) rather than by reading more code. Deferred deliberately — nothing observed is broken.
+
 ## Structural debt in the session list (2026-07-16)
 
 > **Items 1–3 DONE (2026-07-17).** All three extractions shipped in full. Real numbers below.
