@@ -1336,21 +1336,17 @@
     z-index: 20;
   }
 
-  /* O painel contextual só entra em desktop largo. A conversa e o composer cedem espaço de verdade
-     (não ficam cobertos por overlay); em split ou viewport menor ele nem é montado/é ocultado. */
+  /* O painel contextual é um card FLUTUANTE (position:absolute, DesktopSessionContext.svelte:279),
+     então quem abre espaço pra ele é aqui — e a reserva tem que valer na MESMA faixa em que ele
+     existe: 1280px (abaixo disso ele é display:none, DesktopSessionContext.svelte:656). Enquanto a
+     reserva morava dentro do `@media (min-width: 1900px)`, todo monitor entre 1280 e 1899 montava o
+     painel sem reservar nada: o dock ia de ponta a ponta e, com z 20 contra os 17 do painel, passava
+     POR CIMA dele, comendo o rodapé (LIMITES/REPOSITÓRIO). */
   @media (min-width: 1280px) {
     /* O painel lateral ocupa espaço real de leitura. Reservamos essa faixa no próprio scroller,
        então a coluna continua centrada no espaço restante quando a sidebar abre/fecha, em vez de
        ficar presa a uma margem direita fixa que desloca o chat em larguras intermediárias. */
     .chat-screen.with-context { --ctx-w: 264px; }
-    /* A faixa do painel também cresce com a tela: em 264px fixos o "último turno: 420k entrada" e o
-       nome da sessão quebravam em duas linhas numa tela que tinha espaço de sobra. */
-  }
-  @media (min-width: 1600px) {
-    .chat-screen.with-context { --ctx-w: 300px; }
-  }
-  @media (min-width: 1900px) {
-    .chat-screen.with-context { --ctx-w: 340px; }
     .chat-screen.with-context :global(.message-list) {
       box-sizing: border-box;
       padding-right: var(--ctx-w);
@@ -1359,20 +1355,29 @@
       max-width: min(1200px, 100%);
       margin-inline: auto;
     }
-  }
-  /* Com o painel aberto o teto também sobe por degraus: numa Full HD o 1200 fixo deixava ~225px de
-     vazio de cada lado do texto. Medido em 1920: 1440 usa o espaço e ainda sobra respiro. */
-  @media (min-width: 1600px) {
-    .chat-screen.with-context :global(.messages-inner) { max-width: min(1320px, 100%); }
-  }
-  @media (min-width: 1900px) {
-    .chat-screen.with-context :global(.messages-inner) { max-width: min(1440px, 100%); }
     .chat-screen.with-context .bottom-dock { right: var(--ctx-w); }
     .chat-screen.with-context .bottom-dock :global(.composer-card) {
       max-width: min(1220px, 94vw);
     }
     .chat-screen.with-context .chat-skeleton,
     .chat-screen.with-context .chat-error { transform: translateX(calc(var(--ctx-w) / -2)); }
+  }
+
+  /* A faixa do painel cresce com a tela: em 264px fixos o "último turno: 420k entrada" e o nome da
+     sessão quebravam em duas linhas numa tela que tinha espaço de sobra. */
+  @media (min-width: 1600px) {
+    .chat-screen.with-context { --ctx-w: 300px; }
+  }
+  @media (min-width: 1900px) {
+    .chat-screen.with-context { --ctx-w: 340px; }
+  }
+  /* Com o painel aberto o teto do texto também sobe por degraus: numa Full HD o 1200 fixo deixava
+     ~225px de vazio de cada lado. Medido em 1920: 1440 usa o espaço e ainda sobra respiro. */
+  @media (min-width: 1600px) {
+    .chat-screen.with-context :global(.messages-inner) { max-width: min(1320px, 100%); }
+  }
+  @media (min-width: 1900px) {
+    .chat-screen.with-context :global(.messages-inner) { max-width: min(1440px, 100%); }
   }
 
   /* Aviso flutuante "interação só pela TUI": acima do dock (bottom = altura do dock + gap, via JS).
