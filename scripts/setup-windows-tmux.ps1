@@ -67,6 +67,32 @@ function Write-Warn { param([string]$Msg) Write-Host "!!  $Msg" -ForegroundColor
 function Write-Bad  { param([string]$Msg) Write-Host "XX  $Msg" -ForegroundColor Red }
 function Write-Good { param([string]$Msg) Write-Host "ok  $Msg" -ForegroundColor Green }
 
+# UNICO ponto de chamada a executavel externo. Com $ErrorActionPreference='Stop' (topo do arquivo),
+# um nativo que escreva UMA linha em stderr faz o PS 5.1 embrulhar cada linha num ErrorRecord
+# (NativeCommandError) e ABORTAR o script - mesmo com `2>$null`, e mesmo com exit code 0.
+# Isso ja aconteceu de verdade aqui: rodando o instalador com o servidor tmux fora do ar, o script
+# morreu na leitura de verificacao com "tmux.exe : psmux: no server running on session 'jeffer1312'".
+# O pior e ONDE isso caia: dentro do diagnostico que existe justamente pra detectar um tmux errado,
+# ou seja a checagem se autodestruia no unico cenario em que era necessaria.
+# 'Continue' em vez de try/catch por chamada: o try/catch pegaria a excecao mas ainda perderia a
+# saida ja emitida, e teria de ser repetido em todo lugar. Aqui stderr vira TEXTO normal, que e o
+# que a gente quer ler. $global:UltimoExit guarda o codigo pra quem precisa decidir por ele.
+function Invoke-Nativo {
+    param([Parameter(Mandatory)][scriptblock]$Bloco)
+    $antes = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $saida = & $Bloco 2>&1 | Out-String
+        $global:UltimoExit = $LASTEXITCODE
+        return $saida.Trim()
+    } catch {
+        $global:UltimoExit = -1
+        return "$_"
+    } finally {
+        $ErrorActionPreference = $antes
+    }
+}
+
 # ---------------------------------------------------------------------------------------
 # Diagnostico do AMBIENTE. Escrever a config nao adianta se o `tmux` que roda nem for o
 # psmux, ou se o terminal nao mandar evento de roda. Numa maquina "ja instalada" e
@@ -84,7 +110,7 @@ function Test-Ambiente {
         Write-Bad 'tmux: nao encontrado no PATH'
     } else {
         # `tmux -V` do psmux imprime DUAS linhas ("tmux 3.3.7" + "psmux 3.3.7 (hash)").
-        $ver = (& tmux -V 2>&1 | Out-String).Trim()
+        $ver = Invoke-Nativo { tmux -V }
         if ($ver -match 'psmux') {
             Write-Good "tmux -> psmux  ($($tmuxCmd.Source))"
             Write-Host  "    $($ver -replace '\r?\n', ' | ')"
@@ -135,7 +161,8 @@ if (-not $SkipInstall) {
         # do psmux com sessoes VIVAS derruba o servidor e leva junto as sessoes do claude-pocket
         # (incl. a que esta rodando este script). Atualizacao e decisao do usuario, com as
         # sessoes fechadas.
-        $linha = winget list --id marlocarlo.psmux 2>$null | Where-Object { $_ -match 'marlocarlo\.psmux' }
+        $linha = (Invoke-Nativo { winget list --id marlocarlo.psmux }) -split "`r?`n" |
+                 Where-Object { $_ -match 'marlocarlo\.psmux' } | Select-Object -First 1
         if ($linha -and ($linha -match '\d+\.\d+\.\d+\s+\d+\.\d+\.\d+')) {
             Write-Warn "ha versao mais nova disponivel: $($linha.Trim())"
             Write-Host  '    Atualize com as sessoes FECHADAS:  winget upgrade --id marlocarlo.psmux'
@@ -189,19 +216,23 @@ Write-Host "    blocos gerenciados encontrados : $antes"
 Write-Host "    blocos LEGADOS encontrados     : $legado"
 if ($legado -gt 1) { Write-Warn "$legado blocos legados duplicados - serao colapsados em 1 (bug do append antigo)" }
 
+# `$escrever` em vez de `exit 0`: os dois desvios abaixo (nada a fazer / dry-run) SAIAM do script
+# antes da verificacao e do relatorio de ambiente. Um PC com o arquivo ja certo mas com `tmux`
+# resolvendo pro MSYS2 recebia "nada a fazer" em verde e terminava com o scroll morto - exatamente
+# o "sairia dizendo pronto" que o diagnostico foi criado pra eliminar. Agora o fluxo e sempre o
+# mesmo ate o fim; so a ESCRITA e condicional.
+$escrever = $true
 if ($novo -eq $atual) {
-    Write-Step 'Nada a fazer: ja esta atualizado.'
-    exit 0
-}
-
-if (-not $Apply) {
+    Write-Step 'Config ja esta atualizada (nada a escrever).'
+    $escrever = $false
+} elseif (-not $Apply) {
     Write-Step '[dry-run] escreveria o bloco abaixo. Rode com -Apply pra valer.'
     Write-Host ($bloco -split "`n" | Select-Object -First 12 | Out-String)
     Write-Host '    [...]'
-    exit 0
+    $escrever = $false
 }
 
-if (Test-Path $Conf) {
+if ($escrever -and (Test-Path $Conf)) {
     # NAO sobrescreve um .bak que ja existe. O `-Force` de antes destruia o unico backup do usuario:
     # a partir do 2o -Apply o .bak passava a conter a versao JA modificada por nos, e o arquivo
     # original sumia de vez. MEDIDO antes do fix: run1 bak=33b (original), run2 bak=7412b (a nossa
@@ -218,15 +249,19 @@ if (Test-Path $Conf) {
     }
 }
 
-# UTF8 sem BOM: o psmux le o conf como texto; um BOM no inicio vira lixo na 1a diretiva.
-[System.IO.File]::WriteAllText($Conf, $novo, (New-Object System.Text.UTF8Encoding $false))
-Write-Step 'Escrito.'
+if ($escrever) {
+    # UTF8 sem BOM: o psmux le o conf como texto; um BOM no inicio vira lixo na 1a diretiva. E foi
+    # BOM que criou as 15 duplicatas no install.ps1 (Set-Content -Encoding UTF8 poe BOM no PS 5.1,
+    # o BOM gruda na 1a linha e o match do marcador passa a falhar nela).
+    [System.IO.File]::WriteAllText($Conf, $novo, (New-Object System.Text.UTF8Encoding $false))
+    Write-Step 'Escrito.'
+}
 
 # --- 3. aplicar na hora, se houver servidor de pe -------------------------------------
-if (Get-Command tmux -ErrorAction SilentlyContinue) {
-    # `2>$null` e o try/catch: sem servidor rodando o source-file sai != 0, e isso NAO e erro
-    # (o conf vale no proximo start). $ErrorActionPreference='Stop' transformaria em excecao.
-    try { tmux source-file $Conf 2>$null | Out-Null } catch { }
+if ($escrever -and (Get-Command tmux -ErrorAction SilentlyContinue)) {
+    # Sem servidor rodando o source-file sai != 0, e isso NAO e erro (o conf vale no proximo start).
+    # Via Invoke-Nativo: o stderr do psmux ("no server running") viraria NativeCommandError.
+    Invoke-Nativo { tmux source-file $Conf } | Out-Null
     Write-Step 'Config recarregada nas sessoes vivas (se havia servidor de pe).'
 }
 
@@ -240,7 +275,7 @@ $esperado = @{ 'mouse' = 'on'; 'cursor-blink' = 'off'; 'automatic-rename' = 'off
 $falhou = @()
 if (Get-Command tmux -ErrorAction SilentlyContinue) {
     foreach ($k in $esperado.Keys) {
-        $lido = (& tmux show -g $k 2>$null | Out-String).Trim()
+        $lido = Invoke-Nativo { tmux show -g $k }
         $val  = ($lido -split '\s+')[-1]
         if ($val -eq $esperado[$k]) { Write-Good "$k = $val" }
         else { Write-Bad "$k = '$val' (esperado '$($esperado[$k])')"; $falhou += $k }
