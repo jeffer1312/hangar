@@ -6,7 +6,8 @@
   import {
     getReadMode, setReadMode, getPanelStyle, setPanelStyle,
     getReadAlpha, setReadAlpha, getTextBoost, setTextBoost,
-    type ReadMode, type PanelStyle,
+    getFontPref, setFontPref,
+    type ReadMode, type PanelStyle, type FontPref,
   } from '../lib/background';
 
   interface Props {
@@ -19,12 +20,17 @@
   let paineis = $state<PanelStyle>(getPanelStyle());
   let solidez = $state(getReadAlpha());
   let contraste = $state(getTextBoost());
+  let fonte = $state<FontPref>(getFontPref());
 
   const opcoesLeitura: { v: ReadMode; label: string; aria: string }[] = [
     { v: 'auto', label: 'Automática', aria: 'Reforça o texto só quando o fundo é uma imagem' },
     { v: 'glass', label: 'Nenhum', aria: 'Nada muda na conversa' },
     { v: 'text', label: 'Texto', aria: 'Sem caixa: só o texto ganha contraste e sombra' },
     { v: 'solid', label: 'Folha', aria: 'A conversa inteira numa folha opaca' },
+  ];
+  const opcoesFonte: { v: FontPref; label: string; aria: string }[] = [
+    { v: 'system', label: 'Sistema', aria: 'A fonte de interface do sistema' },
+    { v: 'mono', label: 'Monoespaçada', aria: 'A fonte de largura fixa, como no terminal' },
   ];
   const opcoesPaineis: { v: PanelStyle; label: string; aria: string }[] = [
     { v: 'card', label: 'Caixa solta', aria: 'Painéis flutuando, com folga e cantos redondos' },
@@ -88,6 +94,19 @@
         <em>{contraste}</em>
       </label>
     {/if}
+  </div>
+
+  <!-- Fonte: nenhuma API web lê a fonte do terminal, então a escolha é aqui. 'Monoespaçada' usa
+       `--font-mono`, que nomeia JetBrains e cai no ui-monospace de quem não tiver. Sem seletor de
+       TAMANHO de propósito: o app é todo em `rem`, então o tamanho padrão do navegador já escala
+       tudo, e um slider próprio brigaria com essa config. -->
+  <div class="ap-row">
+    <div class="ap-label">
+      <strong>Fonte</strong>
+      <span>a do sistema ou a de largura fixa, como no terminal</span>
+    </div>
+    <SegmentedPicker value={fonte} options={opcoesFonte} ariaLabel="Fonte"
+                     onPick={(v) => { fonte = v; setFontPref(v); }} />
   </div>
 
   <div class="ap-row">

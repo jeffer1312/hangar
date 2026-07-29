@@ -17,7 +17,7 @@ const SCRIM_KEY = 'cp_bg_scrim';  // 0..100 — quanto da imagem passa (100 = im
 // quanto do scrim escuro fica entre a foto e o texto. Guardado por dispositivo, como a imagem.
 // 0 = fundo praticamente opaco (a imagem some) · 100 = imagem crua (texto compete com ela).
 // `Number(null)` é 0, não NaN: ler uma chave que NUNCA foi escrita devolvia 0 e passava direto pelo
-// teste de faixa, então o padrão documentado (45 / 92 / 60) nunca valia — o app abria com o slider
+// teste de faixa, então o padrão documentado (11 / 92 / 10) nunca valia — o app abria com o slider
 // no chão e o modo Texto inerte até alguém arrastar. Ausência tem que virar NaN antes da conversão.
 function lerNumero(chave: string, padrao: number): number {
   const cru = typeof localStorage !== 'undefined' ? localStorage.getItem(chave) : null;
@@ -25,8 +25,10 @@ function lerNumero(chave: string, padrao: number): number {
   return Number.isFinite(v) && v >= 0 && v <= 100 ? v : padrao;
 }
 
+// 11 = véu 0,901, o mesmo `background_opacity 0.90` do kitty. O padrão anterior (45) deixava a foto
+// atravessando o texto e obrigava a compensar nos outros dois sliders.
 export function getBgScrim(): number {
-  return lerNumero(SCRIM_KEY, 45);
+  return lerNumero(SCRIM_KEY, 11);
 }
 
 export function setBgScrim(v: number): void {
@@ -37,10 +39,13 @@ export function setBgScrim(v: number): void {
 
 function aplicarScrim(t = getBgScrim()): void {
   if (typeof document === 'undefined') return;
-  // t alto = mais imagem = menos véu. A base é sempre um pouco mais escura que o topo: o composer
-  // e a última mensagem ficam embaixo, e é lá que a leitura sofre primeiro.
-  const base = 0.88 - (t / 100) * 0.78;
-  const topo = Math.max(0, base - 0.14);
+  // t alto = mais imagem = menos véu. UNIFORME e chegando a tapar: é o que o compositor do terminal
+  // faz (kitty background_opacity), e era o que faltava — parando em 0,88 sobrava foto atravessando o
+  // texto no slider no fim, e o gradiente topo/base fazia a mesma linha ler diferente em cima e
+  // embaixo. O degrade existia pra proteger o composer da parte clara da foto; ele tem vidro próprio
+  // (--glass-bg-solid), então não depende disso.
+  const base = 1 - (t / 100) * 0.90;
+  const topo = base;
   // Os PAINÉIS acompanham: com wallpaper, vidro a 0,86 vira parede opaca do lado direito e mata a
   // sensação que a foto dá. Anda junto do slider, mas numa faixa mais conservadora — é sobre eles
   // que o texto de leitura fica.
@@ -183,8 +188,10 @@ export function setReadAlpha(v: number): void {
 // um resolve fundo claro na foto, o outro resolve contorno. 60 é o meio-termo medido.
 const TEXT_BOOST_KEY = 'cp_text_boost';
 
+// 10 leva #d2cbcd (12,0:1) a ~12,6:1 — o contraste medido do terminal do usuário (#E8D3DE sobre
+// #171B20 = 12,7:1). 60 era chute; com o véu do fundo no ponto certo, quase nada de branco é preciso.
 export function getTextBoost(): number {
-  return lerNumero(TEXT_BOOST_KEY, 60);
+  return lerNumero(TEXT_BOOST_KEY, 10);
 }
 
 export function setTextBoost(v: number): void {
@@ -234,10 +241,37 @@ function aplicarPaineis(): void {
   else delete document.documentElement.dataset.panels;
 }
 
-// Chamado no boot junto com applyBg: sem isto as duas escolhas só valeriam depois de mexer nelas.
+// FONTE da conversa. 'system' = a sans do sistema (`system-ui`, o de sempre) · 'mono' = a
+// monoespaçada, que é o que faz o chat ler como o terminal. Não há como o navegador LER a fonte do
+// terminal (nenhuma API expõe config do kitty, e `fc-match monospace` responde outra coisa), então a
+// escolha é do usuário: `--font-mono` nomeia a família e cai no ui-monospace de quem não a tiver.
+export type FontPref = 'system' | 'mono';
+const FONT_KEY = 'cp_font';
+
+export function getFontPref(): FontPref {
+  const v = typeof localStorage !== 'undefined' ? localStorage.getItem(FONT_KEY) : null;
+  return v === 'mono' ? 'mono' : 'system';
+}
+
+export function setFontPref(f: FontPref): void {
+  try {
+    if (f === 'system') localStorage.removeItem(FONT_KEY);
+    else localStorage.setItem(FONT_KEY, f);
+  } catch { /* modo privado */ }
+  aplicarFonte();
+}
+
+function aplicarFonte(): void {
+  if (typeof document === 'undefined') return;
+  if (getFontPref() === 'mono') document.documentElement.dataset.font = 'mono';
+  else delete document.documentElement.dataset.font;
+}
+
+// Chamado no boot junto com applyBg: sem isto as escolhas só valeriam depois de mexer nelas.
 export function applyAppearance(): void {
   aplicarLeitura();
   aplicarPaineis();
+  aplicarFonte();
 }
 
 export function setBgPref(pref: BgPref): void {
