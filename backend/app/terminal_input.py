@@ -18,6 +18,20 @@ _OPEN_SETTLE = 0.7  # apos abrir o picker / confirmar (precisa redesenhar/commit
 _NAV_GAP = 0.12  # entre toques Up/Down em rajada
 _SLASH_SETTLE = 0.3  # apos digitar "/cmd": deixa o menu de autocomplete renderizar antes do Enter
 _SUBMIT_SETTLE = 0.2  # entre o texto livre e o Enter: claude detecta input rapido como paste e engole o Enter
+# Idem pro MULTILINHA, que estava em 0.05 - MENOR que o do caminho de uma linha, embora seja o
+# caminho LENTO (paste_text faz 2N-1 chamadas de tmux no Windows, nao 2). Resultado: o Enter
+# corria a ingestao e submetia so o comeco; foi assim que um recado de 2 KB entre sessoes chegou
+# cortado na primeira linha. MEDIDO na TUI real (claude v2.1.218 + psmux 3.3.7), tempo entre o
+# paste_text retornar e o fim do texto aparecer no pane:
+#     575 chars/6 linhas 0.13s | 1151/12 0.29s | 2303/24 0.16s | 3839/40 0.08s
+# Nao escala com o tamanho (o envio ja e espacado, a TUI acompanha) - o pico medido e 0.29s, e o
+# MINIMO ja era 0.08s, ou seja 0.05 perdia em 4/4 dos casos. 0.5 da ~1.7x de folga sobre o pico,
+# e e ruido perto dos 0.4-2.9s que o proprio envio custa.
+# CUIDADO ao re-medir: a caixa de input ROLA. Com 24 linhas as 4 primeiras nao aparecem no
+# capture-pane, o que parece perda de dados e nao e - confira pelo fim do texto, nunca pelo comeco.
+# ponytail: constante, nao malha fechada. Se escapar em maquina lenta, o upgrade e esperar o ECO
+# do fim do texto no pane antes do Enter (mesma ideia ja anotada no ramo de uma linha).
+_MULTILINE_SUBMIT_SETTLE = 0.5
 
 
 def _capture(name: str) -> str:
@@ -309,7 +323,10 @@ class TerminalInput:
             _wait_input_ready(name, provider=provider)
             if "\n" in text:
                 tmux.paste_text(name, text)
-                time.sleep(0.05)  # deixa a TUI acomodar o paste antes do Enter submeter
+                # Settle ANTES do Enter, como no ramo de uma linha. Ver _MULTILINE_SUBMIT_SETTLE:
+                # os 0.05 antigos eram menores que a ingestao MINIMA medida (0.08s) e o Enter
+                # submetia o texto pela metade.
+                time.sleep(_MULTILINE_SUBMIT_SETTLE)
                 send_keys(name, "Enter")
             elif text.lstrip().startswith("/"):
                 # Slash command: ao digitar "/..." o Claude Code abre um menu de autocomplete. Sem dar
