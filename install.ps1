@@ -489,12 +489,19 @@ if (-not $bash) {
 
     # (1) shim de python3 SEM extensao: quem vai executa-lo e o bash, e ele le o shebang.
     # Um python3.cmd nao serviria - o bash nao roda .cmd por conta propria.
+    # `py -3` primeiro, NAO `python`: num Windows tipico o `python` do PATH e o atalho da
+    # Microsoft Store, que so imprime "Python nao foi encontrado" e sai - foi exatamente o que
+    # aconteceu aqui. O `py` (Python Launcher) vem com o instalador do python.org, que e o que o
+    # winget instala, e resolve a versao 3 sem ambiguidade. O `python` fica so de reserva.
     $shim = Join-Path $binUsuario 'python3'
-    if (-not (Test-Path $shim)) {
-        Set-Content -Path $shim -Encoding ASCII -NoNewline `
-            -Value "#!/bin/sh`nexec python `"`$@`"`n"
-        Ok 'atalho python3 criado (o cp-send chama python3, o Windows so tem python)'
-    } else { Ok 'atalho python3 ja existe' }
+    $corpoShim = "#!/bin/sh`n" +
+                 "# Gerado por claude-cockpit/install.ps1 - o cp-send chama python3.`n" +
+                 "if command -v py >/dev/null 2>&1; then exec py -3 `"`$@`"; fi`n" +
+                 "exec python `"`$@`"`n"
+    if (-not (Test-Path $shim) -or (Get-Content $shim -Raw) -ne $corpoShim) {
+        Set-Content -Path $shim -Encoding ASCII -NoNewline -Value $corpoShim
+        Ok 'atalho python3 criado (usa py -3; o `python` do PATH costuma ser o stub da Store)'
+    } else { Ok 'atalho python3 ja atualizado' }
 
     # (2) lancador pro PowerShell: o script nao tem extensao, entao o Windows nao o executa
     # sozinho. O .cmd entrega tudo pro bash e repassa os argumentos.
@@ -519,7 +526,14 @@ if (-not $bash) {
     # motivos diferentes (link, permissao, caminho) a saida E o diagnostico. Medido: falhou uma
     # vez e a mensagem util tinha sido descartada, sobrando so "falhou".
     $rota = ($raiz -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
-    $saida = & $bash '-lc' "cd '$rota' && ./scripts/install-cp-send.sh" 2>&1
+    # ErrorActionPreference volta pra Continue AQUI: com 'Stop', qualquer linha de stderr do
+    # script vira excecao terminante (mesma armadilha que a funcao Nativo existe pra evitar) -
+    # e este passo QUER a stderr, e ela e o diagnostico.
+    $anterior = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $saida = & $bash '-lc' "cd '$rota' && ./scripts/install-cp-send.sh" 2>&1
+    } finally { $ErrorActionPreference = $anterior }
     if ($LASTEXITCODE -eq 0) {
         Ok 'cp-send + skills instalados'
         Nota 'teste (em terminal NOVO):  cp-send --list'
