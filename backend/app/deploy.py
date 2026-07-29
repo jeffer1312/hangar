@@ -65,7 +65,8 @@ async def github_webhook(request: Request):
     try:
         subprocess.run(
             ["systemctl", "--user", "start", "--no-block", DEPLOY_UNIT],
-            check=True, capture_output=True, text=True, timeout=10,
+            check=True, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=10,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         stderr = getattr(e, "stderr", "") or str(e)

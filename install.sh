@@ -201,7 +201,9 @@ say "5/8 Wrappers do claude e do codex"
 # que um `git pull` sozinho não atualiza. Eles são idempotentes, então re-rodar é barato; o que
 # não pode voltar é perguntar S/n pro que já está de pé.
 if [ -e "$HOME/.local/bin/cp-engine" ]; then
-  ./scripts/install-claude-wrapper.sh >/dev/null && ok "wrappers atualizados"
+  ./scripts/install-claude-wrapper.sh >/dev/null && ok "wrappers atualizados" || erro "wrappers do claude/codex falharam ao atualizar"
+elif [ "$UPDATE" = 1 ]; then
+  :   # não instala coisa nova num --update; isso é decisão, não atualização
 elif [ "$WRAPPER" = 1 ] && ask "Instalar (recomendado)?"; then
   ./scripts/install-claude-wrapper.sh
 else
@@ -237,7 +239,7 @@ if command -v ufw >/dev/null || command -v firewall-cmd >/dev/null; then
     nota "Liberar precisa de senha de administrador. Por fora seria:"
     nota "    sudo ./scripts/lan-setup.sh 8765 && sudo ./scripts/lan-setup.sh 5173"
     if ask "Liberar as portas 8765 e 5173 agora (vai pedir a senha)?"; then
-      sudo ./scripts/lan-setup.sh 8765 && sudo ./scripts/lan-setup.sh 5173 && ok "portas liberadas"
+      sudo ./scripts/lan-setup.sh 8765 && sudo ./scripts/lan-setup.sh 5173 && ok "portas liberadas" || erro "liberar portas no firewall falhou"
     fi
   fi
 else
@@ -260,7 +262,7 @@ else
   nota "Prefere fazer por fora? Rode isto e depois chame o install.sh de novo:"
   nota "    curl -fsSL https://tailscale.com/install.sh | sh"
   if ask "Instalar agora (vai pedir a senha)?"; then
-    curl -fsSL https://tailscale.com/install.sh | sh && ok "Tailscale instalado"
+    curl -fsSL https://tailscale.com/install.sh | sh && ok "Tailscale instalado" || erro "instalação do Tailscale falhou"
     nota "Falta logar: rode 'sudo tailscale up' e instale o Tailscale também no celular."
   else
     nota "pulado — o app segue funcionando na LAN (mesmo Wi-Fi)"
@@ -281,6 +283,8 @@ elif systemctl --user list-unit-files claude-cockpit-backend.service >/dev/null 
   if [ "$FRONTEND" = 0 ]; then ./scripts/services-setup.sh --backend-only >/dev/null
   else ./scripts/services-setup.sh >/dev/null; fi
   ok "serviços atualizados ($(systemctl --user is-active claude-cockpit-backend.service 2>/dev/null))"
+elif [ "$UPDATE" = 1 ]; then
+  :   # não instala coisa nova num --update; isso é decisão, não atualização
 elif [ "$SERVICES" = 1 ] && ask "Rodar backend+frontend como serviços de usuário (sobrevivem a fechar o terminal)?"; then
   if [ "$FRONTEND" = 0 ]; then ./scripts/services-setup.sh --backend-only
   else ./scripts/services-setup.sh; fi
@@ -292,7 +296,9 @@ fi
 if [ -e "$HOME/.local/bin/cp-send" ]; then
   # O binário é symlink (atualiza sozinho), mas o bloco "Sessões-irmãs" do ~/.claude/CLAUDE.md
   # sai de um heredoc deste script: sem re-rodar, as sessões novas leem o protocolo VELHO.
-  ./scripts/install-cp-send.sh >/dev/null && ok "cp-send + skills atualizados"
+  ./scripts/install-cp-send.sh >/dev/null && ok "cp-send + skills atualizados" || erro "cp-send + skills falharam ao atualizar"
+elif [ "$UPDATE" = 1 ]; then
+  :   # não instala coisa nova num --update; isso é decisão, não atualização
 elif [ "$CPSEND" = 1 ] && ask "Instalar cp-send + skills (sessões conversam entre si e se pareiam)?"; then
   ./scripts/install-cp-send.sh
 else
@@ -303,7 +309,7 @@ fi
 # Fica DEPOIS dos serviços de propósito — é o único passo aqui que clona repositório de
 # terceiro (os plugins do tmux), então merece pergunta própria mesmo com --yes já dito.
 if [ -d "$HOME/.tmux/plugins/tmux-resurrect" ]; then
-  ./scripts/tmux-persist-setup.sh >/dev/null && ok "persistência de sessões atualizada"
+  ./scripts/tmux-persist-setup.sh >/dev/null && ok "persistência de sessões atualizada" || erro "persistência de sessões falhou ao atualizar"
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
 else
@@ -325,6 +331,8 @@ elif [ -e "$HOME/.local/bin/cp-panel-open" ]; then
   # (medido: rodando sob flock, sem unit systemd). Re-instalar por conta própria mudaria algo
   # que funciona, sem pedir. Os arquivos são symlink, então QML e scripts já vêm do git pull.
   nota "atualizar de propósito (muda como o painel sobe): ./scripts/install-cp-panel.sh"
+elif [ "$UPDATE" = 1 ]; then
+  :   # não instala coisa nova num --update; isso é decisão, não atualização
 elif [ "$PANEL" = 1 ] && ask "Instalar painel flutuante + tray (SUPER+SHIFT+U)?"; then
   ./scripts/install-cp-panel.sh
 fi

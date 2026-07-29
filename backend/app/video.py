@@ -37,7 +37,8 @@ def duration_s(path: str) -> float:
         out = subprocess.run(
             [probe, "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", path],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=30,
         )
         return float((out.stdout or "0").strip() or 0)
     except (subprocess.SubprocessError, ValueError, OSError):

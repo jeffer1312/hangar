@@ -76,7 +76,14 @@ def _descendant_pids(root: int, children: Optional[dict[int, list[int]]] = None)
 
 def _open_jsonl(pid: int, projects_dir: Path) -> Optional[str]:
     if not _TEM_PROC:
-        return _open_jsonl_psutil(pid, projects_dir)
+        # Fora do Linux este sinal NAO vale o preco. `psutil.open_files()` no Windows enumera a
+        # tabela de handles do sistema inteiro (NtQuerySystemInformation) — a propria doc do
+        # psutil avisa que pode levar SEGUNDOS —, e isto roda por descendente, por sessao, a cada
+        # list() (registry.py:431), num ciclo de 1,5s. O backend pararia.
+        # O que se perde e pouco: o comentario abaixo ja registra que o claude nao segura o fd em
+        # idle, e a medicao confirmou (9 descendentes, resultado None). A resolucao autoritativa
+        # vem do --session-id do cmdline, que funciona igual nas duas plataformas.
+        return None
     # 1o fd aberto apontando pra um *.jsonl dentro do projects_dir (= o transcript ativo do claude).
     # NOTA: o claude NAO segura esse fd em idle (abre/escreve/fecha) -> quase sempre None. Mantido so
     # como sinal extra confiavel QUANDO presente; a resolucao real vem do --session-id do cmdline.
@@ -191,18 +198,6 @@ def _children_map_psutil() -> dict[int, list[int]]:
     except psutil.Error:
         return children
     return children
-
-
-def _open_jsonl_psutil(pid: int, projects_dir: Path) -> Optional[str]:
-    base = str(projects_dir)
-    try:
-        abertos = psutil.Process(pid).open_files()
-    except psutil.Error:
-        return None
-    for f in abertos:
-        if f.path.endswith(".jsonl") and f.path.startswith(base + os.sep):
-            return f.path
-    return None
 
 
 def _cmdline_psutil(pid: int) -> str:

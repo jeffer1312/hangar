@@ -22,7 +22,8 @@ def _run(*args: str) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(
             ["tailscale", *args],
-            capture_output=True, text=True, timeout=_TIMEOUT,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=_TIMEOUT,
         )
     except FileNotFoundError:
         raise TunnelError(500, "tailscale nao encontrado")

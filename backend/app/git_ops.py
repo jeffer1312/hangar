@@ -45,7 +45,8 @@ def _run(cwd: str, *args: str, timeout: float | None = None) -> subprocess.Compl
     try:
         return subprocess.run(
             ["git", "-C", cwd, *args],
-            capture_output=True, text=True, timeout=timeout or _TIMEOUT,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout or _TIMEOUT,
             # LC_ALL=C: a saida do git aqui e LIDA POR CODIGO (ex: detectar "not a git
             # repository" pra esconder o menu de git em vez de reportar erro). Numa maquina com
             # catalogo NLS do git instalado, a mensagem sairia traduzida e a checagem quebraria

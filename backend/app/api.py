@@ -1,3 +1,4 @@
+import anyio.to_thread
 import asyncio
 import logging
 import mimetypes
@@ -114,7 +115,13 @@ class _BodySizeLimitMiddleware:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    _state_dirs = list({Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()})
+    # Uma vez na subida, nunca por request. O Starlette roda cada rota `def` (sao 65 aqui) num
+    # anyio.to_thread, cujo limiter default e de 40 tokens — e cada conexao de chat ainda segura
+    # DOIS deles PERMANENTEMENTE, num awatch parado (transcript.py:408 e pqueue.py:366). Com ~20
+    # abas os 40 acabam e a API inteira congela, sem erro e sem log. Watcher parado nao gasta CPU,
+    # so o slot, entao subir o teto e barato.
+    anyio.to_thread.current_default_thread_limiter().total_tokens = 200
+    _state_dirs =list({Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()})
     hook_state.on_awaiting = _on_awaiting  # transicao -> awaiting_input dispara web push
     hook_state.on_transition = _on_hook_transition  # drain server-side + confirmacao de entrega
     task = asyncio.create_task(hook_state.watch(_state_dirs))
