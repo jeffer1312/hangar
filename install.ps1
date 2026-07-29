@@ -434,9 +434,12 @@ Write-Host @"
   No celular: abra a URL do QR que o backend imprime e cole o token de backend\.env.
   Guia completo (Tailscale, instalar como PWA, cada tela): docs\USAGE.md
 
-  O que este Windows NAO tem, e nao e esquecimento:
-  - cp-send (recado e pareamento entre sessoes) e as skills do repo: sao shell script,
-    rodam so no Linux/macOS.
+  O que este Windows ainda NAO tem:
+  - cp-send (recado e pareamento entre sessoes) e as skills do repo. Ele NAO e impossivel
+    aqui: e bash falando com o backend por HTTP, e o Git for Windows (instalado acima) ja
+    traz bash, curl, grep e realpath. Falta um atalho `python3` (o instalador do Python cria
+    python.exe e py.exe, nao python3.exe, e o cp-send chama python3 pra ler JSON) e um
+    lancador que o PowerShell enxergue. Em andamento.
   - wrappers do `codex` e do `pi`, e a extensao cp-state.ts do Pi: idem. Sessao Codex ou Pi
     aberta por voce no terminal nao aparece; criada pelo app, funciona.
   - resurrect/continuum (sessoes sobreviverem a reboot): sao plugins de tmux em bash, e o
