@@ -1,4 +1,5 @@
 import io
+import sys
 from pathlib import Path
 
 import uvicorn
@@ -24,16 +25,43 @@ def startup_guard(settings) -> None:
               "Set CP_AUTH_TOKEN before exposing this on your LAN.")
 
 
+def _saida_utf8() -> None:
+    """Garante que stdout/stderr aguentem qualquer caractere, em qualquer plataforma.
+
+    O QR de pareamento e desenhado com blocos (U+2588 e vizinhos). Quando a saida vai pra ARQUIVO
+    em vez de console, o Python no Windows usa a codepage local (cp1252), que nao tem esses
+    caracteres — e o `print` levanta UnicodeEncodeError. Medido: o backend morria na SUBIDA, antes
+    de abrir a porta, sempre que rodava como tarefa agendada (que redireciona a saida pra log).
+    No console interativo passava, porque ali a codepage costuma ser UTF-8: o bug so aparecia
+    exatamente onde ninguem estava olhando.
+
+    `errors="replace"` alem do encoding: um caractere inesperado num log NUNCA pode derrubar o
+    servidor. Perder um glifo e aceitavel; perder o backend nao.
+    """
+    for fluxo in (sys.stdout, sys.stderr):
+        try:
+            fluxo.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass   # fluxo sem reconfigure (redirecionado pra objeto custom) — segue como estiver
+
+
 def print_pairing(settings) -> None:
     """Print a scannable QR (PWA URL + token) so a phone pairs without typing anything."""
     url = pairing_url(settings)
-    qr = qrcode.QRCode(border=1)
-    qr.add_data(url)
-    qr.make(fit=True)
-    buf = io.StringIO()
-    qr.print_ascii(out=buf, invert=True)
-    print(buf.getvalue(), flush=True)
-    print(f"  Scan to pair, or open: {url}\n", flush=True)
+    # QR so faz sentido em TERMINAL: ele existe pra ser apontado com a camera do celular. Rodando
+    # como servico (systemd, tarefa agendada) a saida vai pra arquivo, onde o desenho e ruido puro
+    # — e era justamente ali que ele derrubava o backend por codificacao. A URL com o token, essa
+    # sim, e util no log: e o que se copia pra parear na mao.
+    if sys.stdout.isatty():
+        qr = qrcode.QRCode(border=1)
+        qr.add_data(url)
+        qr.make(fit=True)
+        buf = io.StringIO()
+        qr.print_ascii(out=buf, invert=True)
+        print(buf.getvalue(), flush=True)
+        print(f"  Scan to pair, or open: {url}\n", flush=True)
+    else:
+        print(f"  Pareamento (abra no celular): {url}\n", flush=True)
 
 
 def _setup_diag_logging() -> None:
@@ -52,6 +80,7 @@ def _setup_diag_logging() -> None:
 
 def main():
     bind = resolve_bind_ip(settings)
+    _saida_utf8()   # antes de qualquer print: o QR abaixo quebra em cp1252
     startup_guard(settings)
     _setup_diag_logging()
     # Instala (idempotente, fail-soft) os hooks de estado e de AskUserQuestion.
