@@ -225,9 +225,14 @@ if (Tem 'tailscale') {
     Nota 'Depois do `tailscale up`, ponha o nome .ts.net em CP_PUBLIC_URL no backend\.env'
     Nota 'pra o QR sair com o endereco certo em vez do IP da LAN.'
 } elseif (Pergunte '  Instalar o Tailscale? (VPN pessoal - acesso de fora de casa)') {
-    Instale 'Tailscale' 'tailscale' 'tailscale.tailscale' 'acesso remoto' | Out-Null
-    Nota 'Falta logar: rode `tailscale up` e instale o Tailscale tambem no celular.'
-    Nota 'Depois ponha o nome .ts.net em CP_PUBLIC_URL no backend\.env.'
+    # Id com MAIUSCULAS: o `--exact` do winget diferencia caixa, e 'tailscale.tailscale' nao casa
+    # nada. Medido: os outros seis ids do instalador estavam certos, so este errado.
+    if (Instale 'Tailscale' 'tailscale' 'Tailscale.Tailscale' 'acesso remoto') {
+        # Estas instrucoes so fazem sentido se a instalacao DEU CERTO. Antes elas saiam mesmo apos
+        # a falha, mandando o usuario rodar `tailscale up` de um programa que nao existia.
+        Nota 'Falta logar: rode `tailscale up` e instale o Tailscale tambem no celular.'
+        Nota 'Depois ponha o nome .ts.net em CP_PUBLIC_URL no backend\.env.'
+    }
 }
 
 }
