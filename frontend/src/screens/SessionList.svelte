@@ -560,8 +560,10 @@
     <AttentionFeed {sessions} onOpenChat={openSession} />
     {#if actionMsg}
       <!-- Falha de ação (ex: excluir sessão que não morreu). Fora da top-strip de propósito: ela só
-           existe com 2+ servidores ou servidor offline, e este aviso tem de aparecer sempre. -->
-      <p class="action-msg" role="alert">{actionMsg}</p>
+           existe com 2+ servidores ou servidor offline, e este aviso tem de aparecer sempre.
+           role="status" e não "alert": é o mesmo papel que o toast do desktop usa pra ESTA falha
+           (Sidebar, flash → menu-toast), e as duas views têm de anunciar igual. -->
+      <p class="action-msg" role="status">{actionMsg}</p>
     {/if}
     {#if (sessions.length > 0 && multiServer) || serverErrors.length > 0}
       <!-- UMA faixa de chrome só: toggle à esquerda, aviso de servidor offline à direita. Empilhados
@@ -1436,8 +1438,15 @@
     padding: var(--space-3);
   }
   /* Aviso de falha de ação acima da lista: mesmas cores do .error-msg (uma linguagem só de erro),
-     margem lateral pra não colar nas bordas do celular. */
+     margem lateral pra não colar nas bordas do celular.
+     sticky e não estático: o elemento vive DENTRO do container que rola, então rolado pra baixo ele
+     apareceria fora da tela e a falha passaria batido — o toast do desktop é fixed e sempre aparece.
+     sticky resolve sem tirar do fluxo (fixed aqui é risco: ancestral com filtro/transform vira
+     containing block, e é o tipo de coisa que no WebKit repinta preto durante o scroll). */
   .action-msg {
+    position: sticky;
+    top: 0;
+    z-index: 3;
     margin: var(--space-2) var(--space-3) 0;
     font-size: var(--text-sm);
     color: var(--error);
