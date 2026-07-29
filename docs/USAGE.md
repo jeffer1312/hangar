@@ -14,6 +14,20 @@ como PWA e operar o chat. Pra arquitetura/API ver o [README](../README.md).
 - `tmux`, `claude` (Claude Code), Python 3.14 + [`uv`](https://docs.astral.sh/uv/), Node 20+.
 - Celular na **mesma rede** do PC (Wi-Fi) **ou** ambos no **mesmo tailnet** (Tailscale).
 
+**No Windows** é um comando só, e ele instala tudo (multiplexador, Claude Code, Python, Node,
+`uv`), pede o token, libera o firewall, oferece Tailscale e registra o backend pra subir no
+logon — terminando com uma checagem que prova que o backend sobe de verdade:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1
+powershell -ExecutionPolicy Bypass -File install.ps1 -SoChecar   # só diz o que falta
+```
+
+Lá o multiplexador é o [psmux](https://github.com/psmux/psmux) (tmux nativo de Windows, sobre
+ConPTY) — não existe `tmux` no Windows, e o WSL não é necessário. Três coisas **não** vão junto,
+porque são shell script: `cp-send` (recado/pareamento entre sessões), o wrapper do `codex`, e os
+plugins de persistência entre reboots. Sessão do Codex, só criada pelo app.
+
 ## 2. Subir (3 partes)
 
 **a) Claude ou Codex gerenciado dentro do tmux** (a sessão que o app vai espelhar):
