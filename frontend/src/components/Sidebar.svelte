@@ -1392,7 +1392,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   /* Chromium (data-liquid): refracao SVG real (liquid). No desktop a sidebar fica AO LADO do chat
      (nada atras pra refratar) -> efeito sutil; mais visivel quando ha conteudo atras. */
   :global(html[data-liquid]) .sidebar {
-    background: var(--glass-bg);
+    /* Fundo NÃO vai aqui: ele já mora no ::before (regra abaixo). Com os dois, o mesmo 0.46 pintava
+       duas vezes (~0.71 efetivo) e a sidebar ficava parede ao lado do composer, que só tem o leaf. */
+    background: transparent;
     backdrop-filter: url(#liquid-glass) blur(20px) saturate(180%);
   }
   /* Vidro da sidebar: mesmo leaf do composer. O ::before carrega a COR; o `backdrop-filter` do
@@ -1411,11 +1413,29 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     pointer-events: none;
     background: var(--glass-bg-solid);
   }
+  /* Com liquid (Chromium) o vidro é o MESMO do composer: `--glass-bg`, não `--glass-panel`. O 0.86/
+     0.70 do panel é rede de segurança pra quando o engine descarta o backdrop-filter (app.css:52) —
+     aqui o filtro está no elemento e o Chromium não descarta, então a rede só empilhava um segundo
+     fundo por cima do primeiro e virava parede. Fora do liquid (WebKit, sem filtro) o panel fica. */
   :global(html[data-liquid]) .sidebar::before {
-    background: var(--glass-panel);
+    background: var(--glass-bg);
   }
 
   .sidebar.collapsed { width: 56px; padding: var(--space-3) var(--space-2); }
+
+  /* Aparência → Painéis → "Soltos" (o padrão): a sidebar deixa de ser parede colada e vira card,
+     mesmo tratamento do painel de contexto (DesktopSessionContext.svelte:287) e do dock recolhido
+     logo abaixo. `height: auto` + as margens: o flex do shell estica o item pra altura do container
+     MENOS as margens — com `height: 100%` ele vazaria 2×space-3 pra fora da tela.
+     `:not(.floating)` porque o dock recolhido já é card por conta própria, com altura de conteúdo.
+     Em "Colados" a regra não casa e volta a parede de ponta a ponta, como era antes. */
+  :global(html:not([data-panels='edge'])) .sidebar:not(.floating) {
+    height: auto;
+    margin: var(--space-3) 0 var(--space-3) var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xl);
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34), inset 0 1px 1px var(--glass-specular);
+  }
 
   /* Dock flutuante: com o pin recolhido a sidebar deixa de ser uma parede de ponta a ponta e vira
      uma peca com a ALTURA DO CONTEUDO, centralizada na esquerda. Segue no fluxo do flex do shell
