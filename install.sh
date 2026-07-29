@@ -41,9 +41,21 @@ falta(){ printf '  \033[33m--\033[0m  %s\n' "$*"; }
 erro() { printf '  \033[31mX\033[0m   %s\n' "$*"; }
 fail() { erro "$*"; exit 1; }
 
-ask() { # ask "pergunta" -> 0/1 (em --yes, sempre sim)
+# Toda pergunta lê do TERMINAL, nunca do stdin do script. Sob `curl … | bash` (e sob o
+# bootstrap.sh) o stdin é o cano do curl: um `read` normal recebia EOF na hora, devolvia string
+# vazia — e vazio aqui vale como "sim". O instalador aceitaria firewall, serviços, Tailscale e
+# cp-send sem ninguém ter respondido nada. Sem terminal (CI, cron), a resposta é NÃO.
+if { exec 3</dev/tty; } 2>/dev/null; then TEM_TTY=1; else TEM_TTY=0; fi
+
+ask() { # ask "pergunta" -> 0/1 (em --yes, sempre sim; sem terminal, sempre não)
   [ "$YES" = 1 ] && return 0
-  read -r -p "  $1 [S/n] " r
+  if [ "$TEM_TTY" = 0 ]; then
+    printf '  \033[2m%s [S/n] -> sem terminal para responder, assumindo NÃO\033[0m\n' "$1"
+    return 1
+  fi
+  local r=''
+  printf '  %s [S/n] ' "$1"
+  read -r r <&3 || r=''
   [ -z "$r" ] || [[ "$r" =~ ^[SsYy] ]]
 }
 
@@ -148,13 +160,22 @@ if [ -f backend/.env ] && grep -q '^CP_AUTH_TOKEN=' backend/.env; then
 elif [ "$YES" = 1 ]; then
   printf 'CP_AUTH_TOKEN=%s\n' "$(gera_token)" >> backend/.env
   ok "token aleatório gerado (--yes não pergunta)"
+elif [ "$TEM_TTY" = 0 ]; then
+  # Sem terminal não dá pra perguntar, mas token é a ÚNICA tranca do app: gerar um aleatório é
+  # o lado seguro (o inseguro seria seguir sem token). O que não pode é fazer isso calado —
+  # quem rodou precisa saber que existe um token e onde ele está.
+  TOKEN=$(gera_token)
+  printf 'CP_AUTH_TOKEN=%s\n' "$TOKEN" >> backend/.env
+  falta "sem terminal para perguntar — token ALEATÓRIO gerado: $TOKEN"
+  nota "está em backend/.env; é ele que você digita no celular. Pra trocar, edite o arquivo."
 else
   echo "  Você vai DIGITAR este token no celular, então escolha algo que lembre."
   echo "  Enter em branco = gera um aleatório de 48 caracteres (seguro, chato de digitar)."
   nota "Com Tailscale a rede já é fechada e o token é a segunda tranca. No Wi-Fi de casa ele"
   nota "é a ÚNICA: quem estiver na rede e acertar a senha roda comando como você."
   while :; do
-    read -r -p "  Token: " TOKEN
+    printf '  Token: '
+    read -r TOKEN <&3 || TOKEN=''
     [ -z "$TOKEN" ] && { TOKEN=$(gera_token); ok "aleatório gerado"; break; }
     # O backend só recusa o literal 'change-me'; o piso de 8 é daqui, pra senha curta não passar.
     [ ${#TOKEN} -lt 8 ] && { erro "curto demais — no mínimo 8 caracteres"; continue; }

@@ -14,14 +14,49 @@ como PWA e operar o chat. Pra arquitetura/API ver o [README](../README.md).
 - `tmux`, `claude` (Claude Code), Python 3.14 + [`uv`](https://docs.astral.sh/uv/), Node 20+.
 - Celular na **mesma rede** do PC (Wi-Fi) **ou** ambos no **mesmo tailnet** (Tailscale).
 
-**No Windows** é um comando só, e ele instala tudo (multiplexador, Claude Code, Python, Node,
-`uv`), pede o token, libera o firewall, oferece Tailscale e registra o backend pra subir no
-logon — terminando com uma checagem que prova que o backend sobe de verdade:
+**Instalar é uma linha só** — ela clona o repositório em `~/claude-cockpit` e chama o instalador:
+
+```bash
+# Linux/macOS
+curl -fsSL https://raw.githubusercontent.com/jeffer1312/claude-cockpit/main/bootstrap.sh | bash
+```
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File install.ps1
-powershell -ExecutionPolicy Bypass -File install.ps1 -SoChecar   # só diz o que falta
+# Windows
+irm https://raw.githubusercontent.com/jeffer1312/claude-cockpit/main/bootstrap.ps1 | iex
 ```
+
+Outra pasta de destino, ou flags do `install.sh`, vão **depois de `-s --`** (sob `curl | bash` é
+esse separador que impede o próprio bash de comê-las):
+
+```bash
+curl -fsSL …/bootstrap.sh | bash -s -- ~/apps/claude-cockpit --no-frontend
+curl -fsSL …/bootstrap.sh | bash -s -- --check      # só confere dependências e sai
+```
+
+No Windows, defina `$env:CP_DESTINO = 'D:\claude-cockpit'` **antes** da linha do `irm` — sob
+`irm | iex` o script chega como texto e não recebe argumento nenhum. Rodar de novo é seguro: se a
+pasta já for este repositório ele faz `git pull` em vez de clonar; se for outra coisa, ele **para**
+em vez de mexer no que é seu.
+
+Prefere ver o que está rodando antes? Clone na mão — dá no mesmo:
+
+```bash
+git clone https://github.com/jeffer1312/claude-cockpit && cd claude-cockpit
+./install.sh                                       # ou --check pra só listar o que falta
+powershell -ExecutionPolicy Bypass -File install.ps1   # Windows
+powershell -ExecutionPolicy Bypass -File install.ps1 -SoChecar
+```
+
+Instale num **disco local, nunca numa pasta compartilhada por rede** (`\\servidor\...`, Samba/NFS
+montado): o `uv sync` e o `npm ci` recriam `backend/.venv` e `frontend/node_modules` dentro da
+pasta, e numa share esses dois são da máquina de ORIGEM — medido, o venv aponta pra
+`/usr/bin/python3.14` dela e o `node_modules` traz o binário `@esbuild/linux-x64` dela. Instalar a
+partir de uma segunda máquina quebra a instalação da primeira.
+
+**No Windows** o instalador põe tudo de pé (multiplexador, Claude Code, Python, Node, `uv`), pede
+o token, libera o firewall, oferece Tailscale e registra o backend pra subir no logon — terminando
+com uma checagem que prova que o backend sobe de verdade.
 
 Lá o multiplexador é o [psmux](https://github.com/psmux/psmux) (tmux nativo de Windows, sobre
 ConPTY) — não existe `tmux` no Windows, e o WSL não é necessário. Três coisas **não** vão junto,
