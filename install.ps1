@@ -191,6 +191,26 @@ $jaTem = (Test-Path $perfil) -and (Select-String -Path $perfil -Pattern ([regex]
 if ($jaTem) {
     Ok 'bloco ja presente no seu $PROFILE'
 } elseif (Pergunte '  Instalar (recomendado)?') {
+    # O Windows vem com ExecutionPolicy = Restricted, que recusa carregar QUALQUER perfil. Escrever
+    # o bloco assim mesmo nao so deixaria o wrapper sem carregar: todo terminal novo passaria a
+    # cuspir um PSSecurityException por causa de um arquivo que nos criamos. Medido nesta maquina.
+    # RemoteSigned no escopo CurrentUser nao precisa de admin e e o que qualquer ferramenta de
+    # PowerShell pede: script local roda, script baixado da internet so assinado.
+    # `return` aqui encerraria o SCRIPT (nao estamos numa funcao) e pularia os passos 6, 7 e 8.
+    $podeEscrever = $true
+    if ((Get-ExecutionPolicy) -eq 'Restricted') {
+        Nota 'O Windows esta com ExecutionPolicy=Restricted: nenhum perfil carrega.'
+        Nota 'Sem mudar isso, o wrapper nao funciona E todo terminal novo mostra erro.'
+        if (Pergunte '  Liberar script local pro seu usuario (RemoteSigned, sem admin)?') {
+            Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
+            Ok 'ExecutionPolicy do usuario = RemoteSigned'
+        } else {
+            $podeEscrever = $false
+            Falta 'wrapper NAO instalado - assim ele so criaria erro em todo terminal novo'
+            Nota 'pra fazer depois:  Set-ExecutionPolicy -Scope CurrentUser RemoteSigned'
+        }
+    }
+    if ($podeEscrever) {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $perfil) | Out-Null
     Add-Content -Path $perfil -Value @"
 
@@ -200,6 +220,7 @@ $marca
 "@
     Ok "bloco adicionado em $perfil"
     Nota 'Vale nos terminais NOVOS - este aqui ainda esta com o perfil antigo.'
+    }
 } else {
     Nota 'pulado - sessao aberta no terminal nao vai aparecer no app'
 }
