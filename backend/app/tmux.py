@@ -182,7 +182,22 @@ def new_session(name: str, cwd: str, command: str, config_dir: str | None = None
 
 
 def kill_session(name: str) -> None:
-    _run(["tmux", "kill-session", "-t", name])
+    # `=` (match EXATO) so no POSIX. Era o unico alvo de sessao do modulo SEM o `=`: has_session e
+    # _pane_target ja o usam justamente porque o tmux resolve target-session em exact -> fnmatch ->
+    # PREFIX, e o app fabrica nomes que colidem por prefixo (`<base>`, `<base>-2`, ...). Sem ele,
+    # kill_session("pocket") com "pocket" ja morta derruba "pocket-2" — matar a sessao ERRADA custa
+    # o trabalho de quem estava nela.
+    # O comportamento CORRETO nao muda: `=nome` e `nome` resolvem igual sempre que a sessao existe.
+    # A diferenca aparece so no caso quebrado (nome ausente + irma por prefixo): antes matava a irma,
+    # agora nao mata nada.
+    # No WINDOWS fica o nome cru, medido no psmux 3.3.7:
+    #   - `-t "=nome"` FALHA (rc=1, "kill-session: session 'nome' still present after 5s") e ainda
+    #     bloqueia 5s antes de desistir — o psmux nao interpreta o `=` aqui, so em has-session/
+    #     display/send-keys. 5s e o teto do _run: viraria timeout.
+    #   - o nome cru ja e exato la: com SO "zz-alvo-2" viva, `kill-session -t zz-alvo` nao derrubou
+    #     nada (rc=0). Ou seja, no Windows nao ha prefix match a se defender.
+    alvo = f"={name}" if os.name == "posix" else name
+    _run(["tmux", "kill-session", "-t", alvo])
 
 
 def rename_session(old: str, new: str) -> bool:
