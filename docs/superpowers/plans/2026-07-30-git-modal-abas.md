@@ -1,52 +1,55 @@
 # Git como modal com abas (layout empilhado do TortoiseGit) — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) ou superpowers:executing-plans. Steps usam checkbox (`- [ ]`) pra rastreio.
 
 **Goal:** Substituir o painel git de 3 colunas por um modal único com abas (Mudanças / Histórico / Branches), layout empilhado no desktop e drill-down no celular, com as ações de repositório saindo das barras pro menu de contexto.
 
-**Architecture:** Um componente `Git.svelte` escolhe o invólucro (`ModalDialog` no desktop, `BottomSheet` no celular) e monta `GitTabs.svelte`, que é o ÚNICO dono da navegação. A navegação em si é um módulo puro testável (`lib/gitTabs.ts`). `GitPanel.svelte` e `GitSheet.svelte` deixam de existir. Backend muda só num ponto: `_LOG_FMT` ganha `%b` pro painel da mensagem completa.
+**Architecture:** `GitTabs.svelte` é o único dono da navegação, e a navegação em si é um módulo puro testável (`lib/gitTabs.ts`). O invólucro é o `BottomSheet` que **já existe**, com `wide`+`centered` — no desktop ele já vira modal centrado `min(1100px, 92vw)` (é o que o `EnginesSheet.svelte:304` faz). As oito tasks primeiras só CRIAM arquivos; a nona troca os três pontos de montagem e apaga os cinco componentes velhos de uma vez.
 
 **Tech Stack:** Svelte 5 (runes) + TypeScript, vitest pros módulos puros de `lib/`; Python 3.14 + FastAPI + pytest no backend.
 
-**Spec:** [`../specs/2026-07-30-git-modal-abas-design.md`](../specs/2026-07-30-git-modal-abas-design.md) — ler antes de começar. Ele registra POR QUE cada decisão ficou assim, incluindo as que foram revertidas.
+**Spec:** [`../specs/2026-07-30-git-modal-abas-design.md`](../specs/2026-07-30-git-modal-abas-design.md) — ler antes de começar.
 
 ## Global Constraints
 
 - **Duas views SEMPRE.** Toda mudança de UI entra no desktop E no celular, e a verificação manual testa as duas. A única diferença deliberada é empilhado (desktop) vs drill-down (mobile).
-- **UI em pt-BR**; identificadores em inglês; comentários em pt-BR. Match de indentação/estilo do arquivo vizinho. **NUNCA rodar formatter** (sem prettier, sem `biome --write`).
-- **Falha aparece, não some.** Erro do git chega ao usuário com o texto do git. Uma faixa única de saída/erro no modal — componentes filhos param de imprimir por conta própria.
-- **Backend git:** argv list sempre, shell string nunca. Rotas FastAPI de git são `def` (threadpool), com `Depends(require_auth)`.
-- **iOS:** não introduzir `backdrop-filter`/`transform`/`translateZ` em folha de vidro fora do `html[data-liquid]` — é a regra do retângulo preto do CLAUDE.md.
-- **Gate de tipos:** `npm --prefix frontend run check` (o `build` NÃO checa tipos). Gate de testes do front: `npm --prefix frontend run test`. Backend: `cd backend && uv run pytest -q`.
+- **UI em pt-BR**; identificadores em inglês; comentários em pt-BR. Match de indentação/estilo do arquivo vizinho. **NUNCA rodar formatter.**
+- **Falha aparece, não some.** Erro do git chega ao usuário com o texto do git. Uma faixa única de saída/erro no modal.
+- **Nenhum commit pode deixar o git do app pior do que estava.** As tasks 1-8 só acrescentam arquivos; a 9 troca tudo de uma vez. Se uma task intermediária for interrompida, o app segue funcionando como hoje.
+- **Backend git:** argv list sempre, shell string nunca. Rotas `def` com `Depends(require_auth)`.
+- **Gates:** `npm --prefix frontend run check` (o `build` NÃO checa tipos), `npm --prefix frontend run test`, `cd backend && uv run pytest -q`.
 - **Commits frequentes**, conventional commits, stage por path explícito — **nunca `git add -A`**.
-- **Não criar nem trocar de branch.** O trabalho é na branch atual.
+- **Não criar nem trocar de branch.**
 
 ## O que já existe (não recriar)
 
-`CommitList`, `CommitMenu`, `DiffView`, `BranchList`, `LogSearch`, `GitToolbar` — reaproveitados como estão. `gitStore.svelte.ts` com todo o estado e ações. As 18 rotas git. `ModalDialog.svelte` (já faz portal pro body e focus-trap com restore) e `BottomSheet.svelte`. `lib/focusCycle.ts` pra Tab trap. O long-press de `Sidebar.svelte:302-313` como referência de mecânica.
+`CommitList`, `CommitMenu`, `DiffView`, `BranchList`, `LogSearch` — reaproveitados como estão.
+`gitStore.svelte.ts`. As 18 rotas git. **`BottomSheet` com `wide`+`centered` já é modal centrado no
+desktop** (`BottomSheet.svelte:17-18`, regras em `:414-426`; precedente vivo no
+`EnginesSheet.svelte:304`) — **não** usar `ModalDialog`, não inventar tokens de z-index: a folha
+segue em z 100 e o 110/120 do `CommitMenu` continua correto.
+
+`ChangedFiles`, `CommitDetail`, `GitToolbar`, `GitPanel`, `GitSheet` **morrem na Task 9** — não estão
+na lista de reaproveitados.
 
 ## Non-goals
 
-Escolher qual branch logar; paginação além dos 50 commits; ahead/behind no cabeçalho; divisórias arrastáveis; unificar o menu de contexto do modal com o da linha da sidebar; unificar `Sidebar`/`SessionList`.
+Escolher qual branch logar; paginação além dos 50 commits; ahead/behind no cabeçalho; divisórias
+arrastáveis; unificar o menu de contexto do modal com o da linha da sidebar; `ModalDialog`.
 
 ---
 
 ### Task 1: Backend — mensagem completa do commit (`%b`)
 
-O painel do meio do empilhado mostra a mensagem COMPLETA. Hoje só existe o assunto (`%s`).
-
 **Files:**
-- Modify: `backend/app/git_ops.py` (`_LOG_FMT` e o parse em `git_log`)
-- Modify: `frontend/src/lib/api.ts` (interface `GitCommit`)
-- Test: `backend/tests/test_git_ops.py` (acrescentar ao fim)
+- Modify: `backend/app/git_ops.py` (`_LOG_FMT` linha 216; parse em `git_log` linhas 236-253)
+- Modify: `frontend/src/lib/api.ts` (`GitCommit`, linhas 861-873)
+- Test: `backend/tests/test_git_ops.py` (fim do arquivo)
 
 **Interfaces:**
-- Consumes: `_LOG_FMT`, `git_log` (existentes)
-- Produces: cada dict de `git_log` ganha a chave `body: str` (corpo da mensagem sem o assunto, `''` quando não há corpo); `GitCommit` no front ganha `body: string`
+- Produces: cada dict de `git_log` ganha `body: str` (`''` quando não há corpo); `GitCommit` ganha `body: string`
 
-- [ ] **Step 1: Escrever o teste que falha**
-
-Acrescentar ao fim de `backend/tests/test_git_ops.py`:
+- [ ] **Step 1: Escrever os testes que falham**
 
 ```python
 def test_git_log_traz_corpo_da_mensagem(tmp_path):
@@ -60,8 +63,19 @@ def test_git_log_traz_corpo_da_mensagem(tmp_path):
 
 
 def test_git_log_corpo_vazio_vira_string_vazia(tmp_path):
-    d, _ = _repo_with_file(tmp_path)          # "add tracked" nao tem corpo
+    d, _ = _repo_with_file(tmp_path)
     assert git_ops.git_log(d)[0]["body"] == ""
+
+
+def test_git_log_corpo_com_separador_nao_trunca(tmp_path):
+    # O corpo e texto livre: se contiver o proprio \x1f, um split sem maxsplit cortaria a mensagem
+    # calada. Com maxsplit=8 o resto inteiro cai em f[8].
+    d, _ = _repo_with_file(tmp_path)
+    (tmp_path / "sep.txt").write_text("S\n")
+    git_ops._run(d, "add", "sep.txt")
+    git_ops._run(d, "commit", "-q", "-m", "assunto", "-m", "antes\x1fdepois")
+    body = git_ops.git_log(d)[0]["body"]
+    assert "antes" in body and "depois" in body
 ```
 
 - [ ] **Step 2: Rodar e ver falhar**
@@ -71,47 +85,42 @@ Expected: FAIL com `KeyError: 'body'`
 
 - [ ] **Step 3: Implementar**
 
-Em `backend/app/git_ops.py`, achar `_LOG_FMT` (perto da linha 210) e acrescentar `%b` como último
-campo, ANTES do separador de registro. O formato usa `\x1f` entre campos e `\x1e` entre registros —
-manter exatamente esse esquema e só somar um campo no fim.
-
-O corpo pode conter `\n`, e é o ÚLTIMO campo, então o `split("\x1f")` continua funcionando: use
-`maxsplit` ou pegue o resto. No parse de `git_log`, onde hoje há:
+`_LOG_FMT` hoje é (`git_ops.py:216`):
 
 ```python
-        f = rec.split("\x1f")
-        if len(f) < 8:
-            continue
-        full, short, parents, refs, author, ts, rel, subject = f[:8]
+_LOG_FMT = "%H%x1f%h%x1f%P%x1f%D%x1f%an%x1f%at%x1f%ar%x1f%s%x1e"
 ```
 
-passa a ser:
+São 8 campos, separador `\x1f`, registro `\x1e`. O `%b` entra como **9º**, antes do `%x1e`:
 
 ```python
-        f = rec.split("\x1f")
+_LOG_FMT = "%H%x1f%h%x1f%P%x1f%D%x1f%an%x1f%at%x1f%ar%x1f%s%x1f%b%x1e"
+```
+
+No parse (`git_ops.py:240-243`), trocar por:
+
+```python
+        # maxsplit=8: o corpo (%b) e texto livre e pode conter o proprio \x1f — sem o limite, um
+        # commit com esse byte no corpo sairia truncado calado.
+        f = rec.split("\x1f", 8)
         if len(f) < 9:
             continue
         full, short, parents, refs, author, ts, rel, subject = f[:8]
-        # O corpo (%b) e o ULTIMO campo de proposito: ele pode ter \n dentro, e como nao ha mais
-        # nenhum \x1f depois dele, o split nao se perde.
         body = f[8].strip("\n")
 ```
 
 e o dict ganha `"body": body,` junto de `"subject"`.
 
-Em `frontend/src/lib/api.ts`, na interface `GitCommit`, acrescentar depois de `subject`:
+Em `frontend/src/lib/api.ts`, na interface `GitCommit`, depois de `subject`:
 
 ```typescript
   body: string;       // corpo da mensagem (%b), sem o assunto; '' quando o commit nao tem corpo
 ```
 
-- [ ] **Step 4: Rodar e ver passar** (suíte git inteira + self-check + gate do front)
+- [ ] **Step 4: Rodar e ver passar**
 
-Run: `cd backend && uv run pytest tests/test_git_ops.py -q && cd backend && uv run python app/git_ops.py`
-Expected: PASS + `git_ops self-check OK`
-
-Run: `npm --prefix frontend run check`
-Expected: 0 erros
+Run: `cd backend && uv run pytest tests/test_git_ops.py -q && cd backend && uv run python app/git_ops.py && npm --prefix frontend run check`
+Expected: PASS + `git_ops self-check OK` + 0 erros de tipo
 
 - [ ] **Step 5: Commit**
 
@@ -122,81 +131,16 @@ git commit -m "feat(git): git_log traz o corpo da mensagem do commit"
 
 ---
 
-### Task 2: Camadas de z-index
-
-O `CommitMenu` usa 110/120 **porque** a `BottomSheet` é 100. O backdrop do `ModalDialog` é **1000** —
-dentro dele o menu renderizaria atrás. Números soltos por componente viram variáveis.
-
-**Files:**
-- Modify: `frontend/src/app.css` (bloco de tokens)
-- Modify: `frontend/src/components/git/CommitMenu.svelte` (CSS)
-
-**Interfaces:**
-- Produces: `--z-overlay-back` e `--z-overlay-card` em `app.css`
-
-- [ ] **Step 1: Declarar as camadas**
-
-Em `frontend/src/app.css`, junto dos outros tokens, acrescentar:
-
-```css
-  /* Camadas de sobreposicao. O que existe hoje no projeto, do maior pro menor: 1100
-     (ModalDialog.svelte:148), 1000 (ModalDialog.svelte:139, AttachmentsSheet.svelte:211,
-     ImageBubble.svelte:110), 120/110 (CommitMenu), 100 (BottomSheet.svelte:259). Um overlay que
-     precisa ficar acima dos DOIS involucros nao pode chutar olhando so pra um deles — por isso
-     1200/1220, acima do maior que ja existe, e nao 1100 (que EMPATA com o ModalDialog). */
-  --z-overlay-back: 1200;
-  --z-overlay-card: 1220;
-```
-
-- [ ] **Step 2: Usar no CommitMenu**
-
-Em `frontend/src/components/git/CommitMenu.svelte`, trocar os literais no CSS:
-
-```css
-  .cm-back { position: fixed; inset: 0; z-index: var(--z-overlay-back); background: color-mix(in srgb, var(--bg-base) 60%, transparent); }
-  .cm { position: fixed; z-index: var(--z-overlay-card); /* …resto igual… */ }
-```
-
-e atualizar o comentário que explica o porquê, citando as duas referências (folha 100, modal 1000).
-
-- [ ] **Step 3: Gate**
-
-Run: `npm --prefix frontend run check`
-Expected: 0 erros
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add frontend/src/app.css frontend/src/components/git/CommitMenu.svelte
-git commit -m "refactor(git): camadas de sobreposicao viram tokens, acima da folha e do modal"
-```
-
----
-
-### Task 3: `lib/gitTabs.ts` — a navegação como módulo puro
-
-A profundidade máxima é 3 (Histórico) / 2 (Mudanças) / 1 (Branches). É um nível por aba, não uma
-pilha. Módulo puro porque é a única parte testável sem navegador — e é onde mora o bug do
-`_list_sig` (identificar por índice em vez de id).
+### Task 2: `lib/gitTabs.ts` — a navegação como módulo puro
 
 **Files:**
 - Create: `frontend/src/lib/gitTabs.ts`
 - Test: `frontend/src/lib/gitTabs.test.ts`
 
 **Interfaces:**
-- Produces:
-  - `type GitTabId = 'changes' | 'history' | 'branches'`
-  - `const GIT_TABS: readonly { id: GitTabId; label: string; maxLevel: number }[]`
-  - `interface GitNav { tab: GitTabId; levels: Record<GitTabId, number> }`
-  - `initialNav(): GitNav`
-  - `selectTab(nav: GitNav, tab: GitTabId): GitNav`
-  - `pushLevel(nav: GitNav): GitNav`
-  - `popLevel(nav: GitNav): GitNav`
-  - `currentLevel(nav: GitNav): number`
+- Produces: `GitTabId`, `GIT_TABS`, `GitNav`, `initialNav()`, `selectTab(nav, tab)`, `pushLevel(nav)`, `popLevel(nav)`, `currentLevel(nav)`
 
 - [ ] **Step 1: Escrever os testes que falham**
-
-Criar `frontend/src/lib/gitTabs.test.ts`:
 
 ```typescript
 import { describe, it, expect } from 'vitest';
@@ -213,36 +157,41 @@ describe('gitTabs', () => {
     let n = initialNav();
     n = pushLevel(n);                    // changes -> 1
     n = selectTab(n, 'history');
-    expect(currentLevel(n)).toBe(0);     // history ainda no 0
+    expect(currentLevel(n)).toBe(0);
     n = pushLevel(n); n = pushLevel(n);  // history -> 2
     n = selectTab(n, 'changes');
-    expect(currentLevel(n)).toBe(1);     // changes lembra onde estava
+    expect(currentLevel(n)).toBe(1);
     n = selectTab(n, 'history');
     expect(currentLevel(n)).toBe(2);
   });
 
-  it('não passa do teto de cada aba', () => {
-    // branches é lista e ponto: teto 1. history vai ate o diff: teto 3.
-    let b = selectTab(initialNav(), 'branches');
-    for (let i = 0; i < 5; i++) b = pushLevel(b);
-    expect(currentLevel(b)).toBe(GIT_TABS.find((t) => t.id === 'branches')!.maxLevel);
+  it('para no teto de cada aba — valores cravados', () => {
+    // Cravado de proposito: comparar com GIT_TABS.maxLevel passaria com qualquer numero.
+    let c = initialNav();
+    for (let i = 0; i < 9; i++) c = pushLevel(c);
+    expect(currentLevel(c)).toBe(1);                       // changes: lista -> diff
 
     let h = selectTab(initialNav(), 'history');
     for (let i = 0; i < 9; i++) h = pushLevel(h);
-    expect(currentLevel(h)).toBe(GIT_TABS.find((t) => t.id === 'history')!.maxLevel);
+    expect(currentLevel(h)).toBe(2);                       // history: lista -> commit -> diff
+
+    let b = selectTab(initialNav(), 'branches');
+    for (let i = 0; i < 9; i++) b = pushLevel(b);
+    expect(currentLevel(b)).toBe(0);                       // branches: so a lista
   });
 
   it('não desce abaixo de zero', () => {
-    let n = popLevel(popLevel(initialNav()));
-    expect(currentLevel(n)).toBe(0);
+    expect(currentLevel(popLevel(popLevel(initialNav())))).toBe(0);
   });
 
-  it('é identificada por id, nunca por índice', () => {
-    // Uma aba que some/aparece nao pode trocar a aba ativa debaixo do usuario: a selecao guarda o
-    // id, entao mudar a ORDEM ou o TAMANHO da lista de abas nao muda quem esta ativo.
+  it('a aba ativa sobrevive a mudar a ordem das abas', () => {
+    // O ponto do teste: a selecao guarda o ID. Se guardasse indice, mexer na lista de abas trocaria
+    // a aba ativa debaixo do usuario (a mesma classe de bug do plan_name no _list_sig).
     const n = selectTab(initialNav(), 'branches');
+    const ordemInvertida = [...GIT_TABS].reverse();
+    const aindaExiste = ordemInvertida.some((t) => t.id === n.tab);
+    expect(aindaExiste).toBe(true);
     expect(n.tab).toBe('branches');
-    expect(typeof n.tab).toBe('string');
   });
 
   it('não muta a entrada', () => {
@@ -257,27 +206,25 @@ describe('gitTabs', () => {
 - [ ] **Step 2: Rodar e ver falhar**
 
 Run: `npm --prefix frontend run test -- gitTabs`
-Expected: FAIL — o módulo não existe
+Expected: FAIL — módulo não existe
 
 - [ ] **Step 3: Implementar**
-
-Criar `frontend/src/lib/gitTabs.ts`:
 
 ```typescript
 // Navegacao do modal de git: qual aba esta ativa e em que nivel cada uma parou.
 //
-// Nivel, nao pilha: a profundidade maxima e 3 (Historico -> commit -> diff), 2 (Mudancas -> diff) e
-// 1 (Branches). Uma pilha de navegacao seria maior que o problema.
+// Nivel, nao pilha: a profundidade maxima e 2 (Historico -> commit -> diff), 1 (Mudancas -> diff) e
+// 0 (Branches). Uma pilha de navegacao seria maior que o problema.
 //
-// A aba ativa e guardada por ID, nunca por indice: uma faixa/aba que aparece e some trocaria a aba
-// debaixo do usuario se a selecao fosse posicional (mesma classe do plan_name no _list_sig).
+// A aba ativa e guardada por ID, nunca por indice: mexer na lista de abas nao pode trocar a aba
+// ativa debaixo do usuario (mesma classe do plan_name no _list_sig).
 
 export type GitTabId = 'changes' | 'history' | 'branches';
 
 export const GIT_TABS = [
-  { id: 'changes',  label: 'Mudanças',  maxLevel: 1 },   // lista -> diff do arquivo
-  { id: 'history',  label: 'Histórico', maxLevel: 2 },   // lista -> commit -> diff
-  { id: 'branches', label: 'Branches',  maxLevel: 0 },   // so a lista
+  { id: 'changes',  label: 'Mudanças',  maxLevel: 1 },
+  { id: 'history',  label: 'Histórico', maxLevel: 2 },
+  { id: 'branches', label: 'Branches',  maxLevel: 0 },
 ] as const satisfies readonly { id: GitTabId; label: string; maxLevel: number }[];
 
 export interface GitNav {
@@ -309,13 +256,10 @@ export function popLevel(nav: GitNav): GitNav {
 }
 ```
 
-Atenção ao teto: os testes do Step 1 usam `maxLevel` do próprio `GIT_TABS`, então os números acima
-(1 / 2 / 0) são a fonte da verdade — nível 0 é a lista.
-
 - [ ] **Step 4: Rodar e ver passar**
 
 Run: `npm --prefix frontend run test -- gitTabs && npm --prefix frontend run check`
-Expected: 6 testes passando, 0 erros de tipo
+Expected: 6 testes passando, 0 erros
 
 - [ ] **Step 5: Commit**
 
@@ -326,589 +270,591 @@ git commit -m "feat(git): modulo puro da navegacao por abas do modal"
 
 ---
 
-### Task 4: A casca — `Git.svelte` + `GitTabs.svelte`, e a morte do `GitPanel`/`GitSheet`
+### Task 3: Mover as quatro funções de diff pro `gitStore`
 
-Esta é a task estrutural. No fim dela o modal já abre nas duas views com as três abas montando os
-componentes que já existem; o refino de cada aba vem depois.
+Hoje `openDiff`, `openCommitFileDiff`, `openCommitFullDiff` e `openCommitWorktreeDiff` existem
+**duplicadas**: `GitSheet.svelte:77-180` e `GitPanel.svelte:33-130` (≈130 linhas cada cópia). Elas
+carregam o Shiki por import dinâmico, tratam `truncated`, mexem em `git.busy` e desfazem o estado no
+erro. Se os dois donos morrem sem substituto escrito, esse comportamento se perde.
 
 **Files:**
-- Create: `frontend/src/components/git/GitTabs.svelte`
-- Create: `frontend/src/components/Git.svelte`
-- Delete: `frontend/src/components/GitPanel.svelte`
-- Delete: `frontend/src/components/GitSheet.svelte`
-- Modify: `frontend/src/screens/Chat.svelte` (montagem, linha ~1268)
-- Modify: `frontend/src/components/Sidebar.svelte` (montagem, linha ~1304)
-- Modify: `frontend/src/screens/SessionList.svelte` (montagem, linha ~957)
+- Modify: `frontend/src/lib/gitStore.svelte.ts`
 
 **Interfaces:**
-- Consumes: `lib/gitTabs.ts` (Task 3), `GitStore`, `ModalDialog`, `BottomSheet`
-- Produces:
-  - `Git.svelte` props: `{ open: boolean; sessionName: string; desktop: boolean; onClose: () => void }`
-  - `GitTabs.svelte` props: `{ git: GitStore; desktop: boolean }`
+- Produces, no store: estado `diffPath`, `diffRows`, `diffLoading`, `diffSha`, `diffTruncated`; e os métodos `openFileDiff(path)`, `openCommitFileDiff(sha, path)`, `openCommitFullDiff(c)`, `openCommitWorktreeDiff(c)`, `closeDiff()`
 
-**`Git.svelte` recebe `sessionName`, não o store — e é ele quem CRIA o store.** Os três call sites
-passam `sessionName` hoje (`Chat.svelte:1268`, `Sidebar.svelte:1304`, `SessionList.svelte:957`), e
-quem instancia é o `GitSheet.svelte:19-31`, num `$effect` que **recria o store ao trocar de sessão**.
-Essa responsabilidade migra inteira pro `Git.svelte` — se ela sumir, trocar de sessão com o modal
-aberto mostra o git da sessão anterior.
+- [ ] **Step 1: Ler as quatro funções antes de mover**
 
-- [ ] **Step 1: Ler os três pontos de montagem antes de mexer**
+Run: `sed -n '77,182p' frontend/src/components/GitSheet.svelte`
 
-Run: `grep -n "GitSheet" frontend/src/screens/Chat.svelte frontend/src/components/Sidebar.svelte frontend/src/screens/SessionList.svelte`
+As quatro têm a MESMA forma: zera estado → `diffLoading = true` → `git.busy = …` → fetch → `import('../lib/highlight')` → `highlightDiff(diff, titulo)` → no erro limpa `diffPath`/`diffSha` e grava `git.error` → `finally` desliga `diffLoading` e `git.busy`. Preservar isso; a diferença entre elas é só o client chamado e o título.
 
-Anotar, pra cada um: como o `open` é controlado, que store de git é passado, e o que o `onClose`
-faz. O `Sidebar` tem um `closeGitSheet` que restaura o servidor ativo — **esse comportamento não
-pode se perder**.
+- [ ] **Step 2: Mover pro store**
 
-- [ ] **Step 2: `GitTabs.svelte`**
+Acrescentar ao `createGitStore`, seguindo o estilo do arquivo (funções `async`, `cleanErr` no catch):
 
-```svelte
-<script lang="ts">
-  import { GIT_TABS, initialNav, selectTab, type GitTabId, type GitNav } from '../../lib/gitTabs';
-  import type { GitStore } from '../../lib/gitStore.svelte';
-  import BranchList from './BranchList.svelte';
-  import ChangedFiles from './ChangedFiles.svelte';
-  import CommitList from './CommitList.svelte';
-  import LogSearch from './LogSearch.svelte';
+```typescript
+  // Estado do diff aberto. Vivia duplicado no GitSheet e no GitPanel; com o modal de abas ha um
+  // dono so, e as abas passam a ser burras.
+  let diffPath = $state('');
+  let diffRows = $state<DiffRow[]>([]);
+  let diffLoading = $state(false);
+  let diffSha = $state('');          // '' = diff da working tree
+  let diffTruncated = $state(false); // backend cortou em 200KB
 
-  interface Props { git: GitStore; desktop: boolean }
-  let { git, desktop }: Props = $props();
-
-  let nav = $state<GitNav>(initialNav());
-
-  // Contagem no rotulo da aba: so quando ha o que contar (0 nao vira badge).
-  const contagem = (id: GitTabId) =>
-    id === 'changes' ? git.files.length
-    : id === 'branches' ? git.branches.length
-    : 0;
-</script>
-
-<div class="gt">
-  <div class="gt-tabs" role="tablist" aria-label="Seções do git">
-    {#each GIT_TABS as t (t.id)}
-      <button class="gt-tab" class:sel={nav.tab === t.id} role="tab"
-        aria-selected={nav.tab === t.id}
-        onclick={() => (nav = selectTab(nav, t.id))}>
-        {t.label}{#if contagem(t.id)}<span class="gt-count">{contagem(t.id)}</span>{/if}
-      </button>
-    {/each}
-  </div>
-
-  <div class="gt-body">
-    {#if nav.tab === 'changes'}
-      <ChangedFiles {git} onOpenDiff={() => {}} onCommit={() => {}} />
-    {:else if nav.tab === 'history'}
-      <LogSearch {git} />
-      <CommitList commits={git.commits} wtCount={0} noGraph={!!git.logQuery}
-        onSelect={() => {}} onMenu={() => {}} />
-    {:else}
-      <BranchList {git} filter="" />
-    {/if}
-  </div>
-</div>
-
-<style>
-  .gt { display: flex; flex-direction: column; gap: var(--space-3); height: 100%; min-height: 0; }
-  /* pan-x proprio: a BottomSheet declara touch-action: pan-y (BottomSheet.svelte:276) e sem isto a
-     fileira de abas nao rola no dedo dentro dela. */
-  .gt-tabs {
-    display: flex; gap: var(--space-1); overflow-x: auto; touch-action: pan-x;
-    border-bottom: 1px solid var(--border-subtle); flex-shrink: 0;
+  function closeDiff() {
+    diffPath = ''; diffSha = ''; diffRows = []; diffTruncated = false;
   }
-  .gt-tab {
-    display: flex; align-items: center; gap: var(--space-1); flex-shrink: 0;
-    padding: var(--space-2) var(--space-3); border: 0; background: transparent;
-    color: var(--text-muted); font-size: var(--text-sm); cursor: pointer;
-    border-bottom: 2px solid transparent;
+
+  // Helper unico das quatro entradas: muda so o titulo e o fetch.
+  async function _abrirDiff(titulo: string, sha: string, buscar: () => Promise<{ diff: string; truncated?: boolean }>) {
+    if (busy) return false;
+    diffSha = sha; diffPath = titulo; diffRows = []; diffTruncated = false;
+    diffLoading = true; busy = sha || titulo; error = '';
+    try {
+      const r = await buscar();
+      diffTruncated = !!r.truncated;
+      const { highlightDiff } = await import('./highlight');
+      diffRows = await highlightDiff(r.diff, titulo);
+      return true;
+    } catch (e) {
+      error = cleanErr(e);
+      closeDiff();
+      return false;
+    } finally {
+      diffLoading = false; busy = '';
+    }
   }
-  .gt-tab.sel { color: var(--text-primary); border-bottom-color: var(--accent); }
-  .gt-count {
-    padding: 0 6px; border-radius: 999px; background: var(--bg-elevated);
-    font-size: var(--text-xs); font-family: var(--font-mono);
-  }
-  .gt-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: var(--space-2); }
-</style>
+
+  const openFileDiff = (path: string) =>
+    _abrirDiff(path, '', () => getFileDiff(sessionName, path));
+  const openCommitFileDiff = (sha: string, path: string) =>
+    _abrirDiff(path, sha, () => getCommitFileDiff(sessionName, sha, path));
+  const openCommitFullDiff = (c: GitCommit) =>
+    _abrirDiff(`commit ${c.short}`, c.hash, () => getCommitDiff(sessionName, c.hash));
+  const openCommitWorktreeDiff = (c: GitCommit) =>
+    _abrirDiff(`commit ${c.short} ↔ working tree`, c.hash, () => getCommitDiffVsWorktree(sessionName, c.hash));
 ```
 
-Os callbacks vazios (`() => {}`) são **temporários desta task** — as Tasks 5 a 7 os preenchem. O
-`nav` já existe pra elas usarem.
+Expor os cinco métodos e os cinco getters no `return` do store. Importar `getFileDiff`,
+`getCommitFileDiff`, `getCommitDiff`, `getCommitDiffVsWorktree` e `type DiffRow`.
 
-- [ ] **Step 3: `Git.svelte` — o invólucro**
+O retorno `boolean` é o que as abas usam pra decidir se descem de nível: falhou, não desce.
 
-```svelte
-<script lang="ts">
-  import ModalDialog from './ModalDialog.svelte';
-  import BottomSheet from './BottomSheet.svelte';
-  import GitTabs from './git/GitTabs.svelte';
-  import { createGitStore } from '../lib/gitStore.svelte';
+- [ ] **Step 3: Gate**
 
-  // `desktop` vem por PROP, nao de um matchMedia proprio: o GitSheet antigo era a terceira copia da
-  // mesma media query (App.svelte:158-167, BottomSheet.svelte:28), a primeira pintura saia mobile e
-  // trocava depois — e com dois involucros diferentes isso passaria a DESMONTAR o modal ao
-  // atravessar 820px, perdendo aba e nivel.
-  interface Props { open: boolean; sessionName: string; desktop: boolean; onClose: () => void }
-  let { open, sessionName, desktop, onClose }: Props = $props();
+Run: `npm --prefix frontend run check && npm --prefix frontend run test`
+Expected: 0 erros, testes passando
 
-  // Dono do store (era do GitSheet.svelte:19-31). Recria ao TROCAR de sessao — sem isto, abrir o
-  // modal numa sessao e trocar pra outra mostraria o git da anterior. Copiar a forma exata do
-  // GitSheet antes de apaga-lo.
-  let git = $state(createGitStore(sessionName));
-  $effect(() => { git = createGitStore(sessionName); });
-  $effect(() => { if (open) git.load(); });
-</script>
+Os dois componentes velhos continuam com as cópias deles e seguem funcionando — **nada quebra
+nesta task**. As cópias morrem junto com os arquivos, na Task 9.
 
-{#if desktop}
-  <!-- className + regra :global porque o ModalDialog nao tem prop de largura: o padrao e
-       min(560px,100%) com height auto, e um empilhado de tres paineis precisa de altura explicita
-       (mesmo recurso que o PairChatModal usa). -->
-  <ModalDialog {open} {onClose} ariaLabel="Git" className="git-modal">
-    <GitTabs {git} desktop={true} />
-  </ModalDialog>
-{:else}
-  <!-- Sem `wide` nem `resizable`: eram do dock de desktop do GitSheet antigo (`wide={isDesktop}`,
-       `resizable={!isDesktop}`), e o desktop agora é o ModalDialog. No celular a folha é a folha. -->
-  <BottomSheet {open} {onClose} ariaLabel="Git">
-    <GitTabs {git} desktop={false} />
-  </BottomSheet>
-{/if}
-
-<style>
-  /* Mesmo padrão do PairChatModal.svelte:42-47, inclusive o teto de altura e a tela cheia no
-     celular — sem eles o modal estoura a viewport em janela baixa. */
-  :global(.git-modal) {
-    width: min(1100px, 100%); height: min(760px, 100%);
-    max-height: calc(100dvh - var(--space-8)); overflow: hidden;
-  }
-  @media (max-width: 819px) {
-    :global(.git-modal) { width: 100%; height: 100%; max-height: 100dvh; }
-  }
-</style>
-```
-
-`className` existe mesmo (`ModalDialog.svelte:6-28`), e a classe cai no elemento em `:123`
-(`class="modal-dialog {className}"`), com `:175-177` documentando o truque de especificidade zero
-que deixa o consumidor sobrepor. Ler o `PairChatModal.svelte:42-51` e seguir a forma dele.
-
-- [ ] **Step 4: Trocar os três pontos de montagem**
-
-Em cada um dos três arquivos, trocar `<GitSheet …>` por `<Git …>`, mantendo o `sessionName` que já
-passam e acrescentando `desktop`. Levantado, não suposto:
-
-- **`Chat.svelte:1268`** → `desktop={desktop}`. O `Chat` já tem a prop `desktop?: boolean`
-  (`:54`, default `false` em `:68`); quem passa `true` é o `DesktopShell.svelte:218,235,253`, e o
-  ramo mobile do `App.svelte:409-414` monta sem passar. Dentro do `Chat` o booleano é confiável.
-- **`SessionList.svelte:957`** → `desktop={false}` fixo. A tela **não tem** prop de desktop
-  (`:27-32` só traz `onNavigateToChat`, `onCompare`, `onLogout`) e é mobile-only por construção: o
-  `App.svelte:398-403` só a renderiza no ramo que vem **depois** do `{:else if isDesktop}`. Não
-  inventar prop nova.
-- **`Sidebar.svelte:1304`** → `desktop={true}`. A sidebar é desktop-only (comentado em `:1324`).
-
-**Preservar o `closeGitSheet`** de `Sidebar.svelte:451-454` (restaura o servidor ativo via
-`selectServer`) e o gêmeo em `SessionList.svelte:390`, ligando-os no `onClose`.
-
-**Preservar o `closeGitSheet` do `Sidebar`** (restaura o servidor ativo ao fechar) ligando-o no
-`onClose`.
-
-- [ ] **Step 5: Apagar os dois arquivos**
+- [ ] **Step 4: Commit**
 
 ```bash
-git rm frontend/src/components/GitPanel.svelte frontend/src/components/GitSheet.svelte
-```
-
-- [ ] **Step 6: Gate + varredura de referências órfãs**
-
-Run: `npm --prefix frontend run check`
-Expected: 0 erros
-
-Run: `grep -rn "GitSheet\|GitPanel" frontend/src/`
-Expected: nenhuma referência de código. Comentários que citem os nomes (ex.: `PairSheet.svelte:174`,
-`CommitMenu.svelte`) devem ser corrigidos, não deixados mentindo.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add frontend/src/components/Git.svelte frontend/src/components/git/GitTabs.svelte frontend/src/screens/Chat.svelte frontend/src/components/Sidebar.svelte frontend/src/screens/SessionList.svelte
-git commit -m "feat(git): modal unico com abas substitui o painel e a folha de git"
+git add frontend/src/lib/gitStore.svelte.ts
+git commit -m "refactor(git): estado do diff vira dono unico no gitStore"
 ```
 
 ---
 
-### Task 5: Aba Mudanças — uma lista só, com checkbox e descartar
+### Task 4: `GitChangesTab.svelte` — uma lista só, com checkbox e descartar
 
 Hoje `ChangedFiles` e `CommitBox` renderizam **cada um** a lista de arquivos alterados: um com ⟲
-descartar, outro com checkbox. Numa aba só, isso viraria duas listas do mesmo.
+descartar (`ChangedFiles.svelte:26-48`), outro com checkbox (`CommitBox.svelte:65-78`). Numa aba só,
+viraria duas listas do mesmo.
 
 **Files:**
-- Create: `frontend/src/components/git/ChangesTab.svelte`
-- Delete: `frontend/src/components/git/ChangedFiles.svelte`
-- Modify: `frontend/src/components/git/CommitBox.svelte` (perde a própria lista)
-- Modify: `frontend/src/components/git/GitTabs.svelte` (monta a aba nova)
+- Create: `frontend/src/components/git/GitChangesTab.svelte`
 
 **Interfaces:**
-- Consumes: `GitStore`, `CommitBox`, `DiffView`, `lib/gitTabs`
-- Produces: `ChangesTab.svelte` props `{ git: GitStore; desktop: boolean; level: number; onPush: () => void; onPop: () => void }`
+- Consumes: `GitStore` (com os métodos de diff da Task 3), `CommitBox`, `DiffView`
+- Produces: props `{ git: GitStore; desktop: boolean; level: number; onPush: () => void; onPop: () => void }`
 
 - [ ] **Step 1: Ler os dois componentes que se fundem**
 
-Run: `cat frontend/src/components/git/ChangedFiles.svelte && sed -n '60,110p' frontend/src/components/git/CommitBox.svelte`
+Run: `cat frontend/src/components/git/ChangedFiles.svelte && sed -n '1,110p' frontend/src/components/git/CommitBox.svelte`
 
-Anotar as duas affordances por linha: o ⟲ com confirm em 2 passos (`confirmDiscard`) do
-`ChangedFiles`, e o checkbox de seleção do `CommitBox`. **A lista fundida tem as duas.**
+Anotar, pra migrar sem perder:
+- o confirm em 2 passos do descartar (`confirmDiscard`, `ChangedFiles.svelte:13,43-48`)
+- **a seleção padrão**: `CommitBox.svelte:9-16` marca TODOS por padrão e usa `selectionInitialized`
+  pra que um desmarque manual não seja refeito no próximo `refresh()`. Sem isso, ou nasce nada
+  marcado, ou a seleção do usuário é sobrescrita a cada poll.
+- os botões `todos`/`nenhum` (`CommitBox.svelte:65-68`)
 
-- [ ] **Step 2: `ChangesTab.svelte`**
+- [ ] **Step 2: Escrever o componente**
 
-Uma lista de arquivos onde cada linha tem: checkbox de seleção, código do status (`M`, `??`, …),
-caminho (clicável → abre o diff), e o ⟲ descartar com confirm em 2 passos. Abaixo da lista, o
-`CommitBox` **sem lista própria** (mensagem, recentes, amend, branch nova, botões).
+A aba é dona de `sel: Set<string>`, `selectionInitialized`, `toggle`, `todos`/`nenhum` — migrados
+literalmente do `CommitBox`. Cada linha tem: checkbox, código do status, caminho (clicável → chama
+`git.openFileDiff(path)` e, se voltar `true`, `onPush()`), e o ⟲ descartar com confirm em 2 passos.
 
-Estados obrigatórios:
+Vazio obrigatório — hoje `ChangedFiles.svelte:26` (`{#if git.dirty && git.files.length}`) não
+renderiza NADA com repo limpo, e a aba nasceria em branco:
 
 ```svelte
   {#if !git.files.length}
     <p class="git-muted">nada alterado — a working tree está limpa</p>
   {:else}
-    <!-- lista + CommitBox -->
+    <!-- … -->
   {/if}
 ```
 
-O vazio é obrigatório porque hoje `ChangedFiles.svelte:26` (`{#if git.dirty && git.files.length}`)
-não renderiza NADA com repo limpo — a aba nasceria em branco, sem uma palavra.
+Desktop (`desktop === true`): lista, diff do arquivo, `CommitBox` — três painéis em `flex` com
+proporção fixa e `overflow: auto` cada.
+Mobile: `level === 0` mostra lista + `CommitBox`; `level === 1` mostra `DiffView` com voltar
+(`onPop()` + `git.closeDiff()`).
 
-Desktop (`desktop === true`): lista em cima, diff do arquivo selecionado no meio, `CommitBox`
-embaixo, em `flex` com proporção fixa e `overflow: auto` por painel.
-Mobile: `level === 0` mostra lista + `CommitBox`; clicar num arquivo chama `onPush()` e `level === 1`
-mostra o diff com voltar.
+O `CommitBox` é montado **com a lista dele escondida** — a Task 9 remove o bloco de lá; até lá, esta
+aba passa `chosen` por prop e o `CommitBox` ainda tem a própria lista. Pra não duplicar visualmente
+antes da hora, **esta task monta o `CommitBox` só a partir da Task 9**; até lá renderiza a lista, o
+diff, e um `<textarea>` + botão que chamam `git.doCommit(msg, chosen)` diretamente.
 
-- [ ] **Step 3: `CommitBox` perde a lista**
+> Simplificação deliberada: a aba nasce com um commit box mínimo (mensagem + confirmar) e ganha o
+> `CommitBox` completo (recentes, amend, branch nova) na Task 9, quando o componente perde a lista
+> própria. Isso mantém a regra de "nenhuma task intermediária piora o app" — o `CommitBox` velho
+> segue intacto e em uso pelo `GitSheet` até lá.
 
-Remover do `CommitBox.svelte` o bloco `.cb-files` (a lista com checkbox) e os botões `todos`/`nenhum`
-— eles migram pro `ChangesTab`, que passa a ser dono da seleção. O `CommitBox` recebe os paths
-selecionados por prop:
+- [ ] **Step 3: Gate**
 
-```typescript
-  interface Props { git: GitStore; chosen: string[]; onDone?: () => void }
-```
+Run: `npm --prefix frontend run check`
+Expected: 0 erros
 
-e usa `chosen` onde hoje usa o `chosen` derivado da própria seleção. O resto (mensagem, recentes,
-amend, branch nova, `canCommit`, `doCommit`) fica **idêntico** — é código que acabou de ser
-entregue e revisado.
-
-- [ ] **Step 4: Montar no `GitTabs` e apagar o `ChangedFiles`**
+- [ ] **Step 4: Commit**
 
 ```bash
-git rm frontend/src/components/git/ChangedFiles.svelte
-```
-
-No `GitTabs.svelte`, o ramo `changes` passa a montar `<ChangesTab {git} {desktop} level={currentLevel(nav)} onPush={() => (nav = pushLevel(nav))} onPop={() => (nav = popLevel(nav))} />`.
-
-- [ ] **Step 5: Gate**
-
-Run: `npm --prefix frontend run check && grep -rn "ChangedFiles" frontend/src/`
-Expected: 0 erros de tipo, nenhuma referência órfã
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add frontend/src/components/git/ChangesTab.svelte frontend/src/components/git/CommitBox.svelte frontend/src/components/git/GitTabs.svelte
+git add frontend/src/components/git/GitChangesTab.svelte
 git commit -m "feat(git): aba Mudancas com uma lista so (checkbox + descartar)"
 ```
 
 ---
 
-### Task 6: Aba Histórico — empilhado, com o `CommitDetail` partido
+### Task 5: `GitHistoryTab.svelte` + a mensagem e os arquivos em painéis próprios
 
-`CommitDetail.svelte:22-45` é hoje mensagem + metadados + lista de arquivos num componente só. O
-empilhado quer mensagem num painel e arquivos noutro.
+`CommitDetail.svelte:22-45` é mensagem + metadados + lista de arquivos num componente só, com
+`max-height: 52vh` (`:49`) e `68vh` no desktop (`:53`). O empilhado quer dois painéis, e sem
+`max-height` próprio — quem limita altura passa a ser o empilhado.
 
 **Files:**
-- Create: `frontend/src/components/git/HistoryTab.svelte`
+- Create: `frontend/src/components/git/GitHistoryTab.svelte`
 - Create: `frontend/src/components/git/CommitMessage.svelte`
 - Create: `frontend/src/components/git/CommitFiles.svelte`
-- Delete: `frontend/src/components/git/CommitDetail.svelte`
-- Modify: `frontend/src/components/git/GitTabs.svelte`
 
 **Interfaces:**
-- Consumes: `CommitList`, `CommitMenu`, `LogSearch`, `DiffView`, `GitCommit.body` (Task 1)
+- Consumes: `CommitList`, `CommitMenu`, `LogSearch`, `DiffView`, `commit.body` (Task 1), métodos de diff (Task 3)
 - Produces:
-  - `CommitMessage.svelte` props `{ commit: GitCommit }` — assunto, corpo (`commit.body`), autor, data
-  - `CommitFiles.svelte` props `{ commit: GitCommit; sessionName: string; onOpenFile: (p: string) => void }`
-  - `HistoryTab.svelte` props `{ git: GitStore; desktop: boolean; level: number; onPush: () => void; onPop: () => void }`
+  - `CommitMessage.svelte` props `{ commit: GitCommit }`
+  - `CommitFiles.svelte` props `{ commit: GitCommit; sessionName: string; onOpenFile: (p: string) => void; onMenu?: (c: GitCommit) => void }`
+  - `GitHistoryTab.svelte` props `{ git: GitStore; desktop: boolean; level: number; onPush: () => void; onPop: () => void }`
 
 - [ ] **Step 1: Ler o `CommitDetail` antes de partir**
 
 Run: `cat frontend/src/components/git/CommitDetail.svelte`
 
-Ele busca os arquivos do commit (`getCommitFiles`) e tem `max-height` próprio (`:48-53`) que precisa
-sair — quem controla altura agora é o empilhado.
+Ele busca os arquivos sozinho (`getCommitFiles` num `$effect`, `:15-19`). Esse fetch vai pro
+`CommitFiles`.
 
-- [ ] **Step 2: `CommitMessage.svelte`**
+- [ ] **Step 2: `CommitMessage.svelte` e `CommitFiles.svelte`**
 
-Assunto em destaque, corpo em `white-space: pre-wrap` (é `commit.body`, que a Task 1 trouxe), autor
-e data. Sem `max-height`: o painel do empilhado é quem limita.
+`CommitMessage`: assunto em destaque, `commit.body` em `white-space: pre-wrap` (vazio some, não
+deixa espaço morto), autor e data. **Sem `max-height`.**
 
-Vazio: commit sem corpo mostra só o assunto e os metadados — nada de espaço morto.
+`CommitFiles`: o `$effect` com `getCommitFiles` copiado do `CommitDetail`, a lista com `onOpenFile`,
+e o botão `⋯ ações` sob `{#if onMenu}` — prop **opcional** de propósito (outro plano reusa isto sem
+menu). **Sem `max-height`.**
 
-- [ ] **Step 3: `CommitFiles.svelte`**
+- [ ] **Step 3: `GitHistoryTab.svelte`**
 
-A lista de arquivos do commit, com o mesmo fetch (`getCommitFiles`) e o mesmo `onOpenFile` que o
-`CommitDetail` tinha. Mantém o botão `⋯ ações` (prop `onMenu?` OPCIONAL — outro plano reusa isto sem
-menu).
+**Carrega o log ao entrar.** Hoje quem chama `git.openLog()` é o `GitSheet.svelte:73` — e **só no
+desktop** (`if (isDesktop)`) — mais o botão `log` da `GitToolbar`. Os dois morrem na Task 9, e o
+`RepoMenu` não terá `log`. Sem isto a aba nasce vazia nas duas views:
 
-- [ ] **Step 4: `HistoryTab.svelte`**
+```svelte
+  // Carrega na primeira vez que a aba aparece. Sem isto o log fica vazio: git.load() so faz
+  // refresh() (branches + arquivos), quem preenche `commits` e openLog().
+  let carregou = false;
+  $effect(() => { if (!carregou) { carregou = true; git.openLog(); } });
+```
 
 Desktop, empilhado com proporção fixa e `overflow: auto` por painel:
 1. `<LogSearch {git} />` — **dentro da aba**, porque a busca só vale aqui
-2. `<CommitList … />`
+2. `<CommitList commits={git.commits} wtCount={0} noGraph={!!git.logQuery} … />`
 3. `<CommitMessage commit={selecionado} />`
 4. `<CommitFiles commit={selecionado} … />`
 
-Sem commit selecionado, os painéis 3 e 4 mostram "selecione um commit" — uma vez só, não dois.
-Log vazio: "sem commits ainda".
+Sem commit selecionado: "selecione um commit" **uma vez só**, não em dois painéis. Log vazio: "sem
+commits ainda".
 
-Mobile: `level 0` = busca + lista; `level 1` = mensagem + arquivos do commit; `level 2` = diff.
-`onPush`/`onPop` do `gitTabs`.
+> `wtCount={0}`: a linha sintética "Working tree changes" sai do log — ela agora é a aba Mudanças, e
+> repetir a mesma porta em dois lugares é o tipo de duplicação que motivou este redesenho.
 
-O diff (de arquivo ou do commit inteiro, vindo do `CommitMenu`) **ocupa a janela** nas duas views.
+Mobile: `level 0` = busca + lista; `level 1` = `CommitMessage` + `CommitFiles`; `level 2` = diff.
 
-- [ ] **Step 5: Apagar o `CommitDetail` e montar no `GitTabs`**
+O `CommitMenu` é montado aqui (`menuCommit` é estado desta aba), com `onShowDiff` e
+`onShowWorktreeDiff` ligados nos métodos do store (Task 3).
 
-```bash
-git rm frontend/src/components/git/CommitDetail.svelte
-```
+- [ ] **Step 4: Gate**
 
-- [ ] **Step 6: Gate**
+Run: `npm --prefix frontend run check`
+Expected: 0 erros
 
-Run: `npm --prefix frontend run check && grep -rn "CommitDetail" frontend/src/`
-Expected: 0 erros, nenhuma referência órfã
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add frontend/src/components/git/HistoryTab.svelte frontend/src/components/git/CommitMessage.svelte frontend/src/components/git/CommitFiles.svelte frontend/src/components/git/GitTabs.svelte
+git add frontend/src/components/git/GitHistoryTab.svelte frontend/src/components/git/CommitMessage.svelte frontend/src/components/git/CommitFiles.svelte
 git commit -m "feat(git): aba Historico empilhada, com mensagem e arquivos em paineis proprios"
 ```
 
 ---
 
-### Task 7: Aba Branches (com filtro nas duas views) + faixa de conflito + faixa única de saída
-
-Três coisas pequenas que fecham a casca.
+### Task 6: `GitBranchesTab.svelte` + `GitStatusBar.svelte`
 
 **Files:**
-- Create: `frontend/src/components/git/BranchesTab.svelte`
+- Create: `frontend/src/components/git/GitBranchesTab.svelte`
 - Create: `frontend/src/components/git/GitStatusBar.svelte`
-- Modify: `frontend/src/components/git/GitTabs.svelte`
-- Modify: `frontend/src/components/git/CommitBox.svelte` (para de imprimir erro)
-- Modify: `frontend/src/components/git/CommitMenu.svelte` (para de imprimir erro)
 
 **Interfaces:**
 - Produces:
-  - `BranchesTab.svelte` props `{ git: GitStore }` — `BranchList` + campo de filtro
-  - `GitStatusBar.svelte` props `{ git: GitStore }` — faixa de conflito + faixa de saída/erro
+  - `GitBranchesTab.svelte` props `{ git: GitStore }`
+  - `GitStatusBar.svelte` props `{ git: GitStore; menuAberto: boolean }`
 
-- [ ] **Step 1: `BranchesTab.svelte`**
+- [ ] **Step 1: `GitBranchesTab.svelte`**
 
-`BranchList` mais o **campo de filtro por nome**. Hoje ele só existe no mobile
-(`GitSheet.svelte:265-274`), e ainda por cima **condicionado** a
-`{#if git.branches.length > 6 || git.remotes.length}` (`:264`) — o desktop passava `filter=""` e
-nunca teve filtro. Na aba dedicada ele fica **incondicional**: a aba existe pra isso, e um campo que
-aparece e some conforme a contagem de branches é mais confuso que um campo sempre lá.
+`BranchList` mais o campo de filtro. Hoje o filtro só existe no mobile
+(`GitSheet.svelte:265-274`) e ainda **condicionado** a
+`{#if git.branches.length > 6 || git.remotes.length}` (`:264`); o desktop passava `filter=""`. Na aba
+dedicada ele é **incondicional**.
 
-`BranchList` exige `filter: string` (prop obrigatória, sem default — `BranchList.svelte:6-10`), então
-a aba é quem guarda o estado do filtro e passa pra ele.
+`BranchList` exige `filter: string` (obrigatória, sem default — `BranchList.svelte:6-10`), então a
+aba guarda o estado e passa.
 
-Vazio: "nenhuma branch" (não deve acontecer num repo com commits, mas repo sem commit nenhum chega
-aqui).
+Vazio: **não** escrever texto novo — `BranchList.svelte:29` já tem "nenhuma branch local" e a
+variante com filtro. Dois textos concorrentes é pior que um.
 
 - [ ] **Step 2: `GitStatusBar.svelte`**
 
-Duas faixas, nesta ordem, acima das abas:
+Vai no **rodapé** do modal (o spec desenha ali, e é onde o `<pre>` de saída mora hoje):
 
 ```svelte
+<script lang="ts">
+  import type { GitStore } from '../../lib/gitStore.svelte';
+  interface Props { git: GitStore; menuAberto: boolean }
+  let { git, menuAberto }: Props = $props();
+
+  // Confirm em 2 passos, e o reset SO no sucesso: um abort que o git recusou nao pode voltar o
+  // botao pro estado inicial, senao o proximo conflito ja aparece em "confirmar" (regra que hoje
+  // vive em GitToolbar.svelte:12-17).
+  let confirmar = $state(false);
+  async function doAbort() {
+    if (await git.abortOp()) confirmar = false;
+  }
+</script>
+
 {#if git.pendingAbort}
   <div class="gsb-conflito" role="status">
     <span>⚠ {git.pendingAbort === 'revert-abort' ? 'revert' : 'cherry-pick'} em conflito</span>
     {#if confirmar}
-      <button class="git-mini danger" disabled={!!git.busy} onclick={() => git.abortOp()}>confirmar abort</button>
+      <button class="git-mini danger" disabled={!!git.busy} onclick={doAbort}>confirmar abort</button>
       <button class="git-mini" onclick={() => (confirmar = false)}>não</button>
     {:else}
       <button class="git-mini danger" onclick={() => (confirmar = true)}>abortar…</button>
     {/if}
   </div>
 {/if}
-{#if git.error}<p class="gsb-erro">{git.error}</p>{/if}
+{#if git.error && !menuAberto}<p class="gsb-erro">{git.error}</p>{/if}
 {#if git.output}<pre class="gsb-saida">{git.output}</pre>{/if}
 ```
 
-A faixa de conflito é **fixa no cabeçalho, visível de qualquer aba** — não é uma aba que nasce e
-some (isso trocaria a aba debaixo do usuário). O estado vem do repo (`sequencer` no `GET
-/git/files`), então sobrevive a fechar e reabrir.
+`.gsb-saida` leva `max-height: 200px; overflow: auto` — igual ao `<pre>` de hoje
+(`GitSheet.svelte:343`). Sem teto, um `git status` de repo sujo empurra o conteúdo pra fora da tela.
 
-- [ ] **Step 3: Tirar os donos duplicados do erro**
+O `menuAberto` existe porque o `CommitMenu` fica por cima: com ele aberto, quem mostra o erro é o
+menu (é o padrão `{#if git.error && !menuCommit}` que hoje vive em `GitPanel.svelte:163` e
+`GitSheet.svelte:288`).
 
-Remover `{#if git.error}<p class="git-error">…` de `CommitBox.svelte` e de `CommitMenu.svelte`. A
-partir daqui a `GitStatusBar` é a **única** que imprime `git.error` e `git.output`.
+- [ ] **Step 3: Gate**
 
-Exceção deliberada: o `CommitMenu` fica por cima do modal, então um erro impresso só na faixa
-ficaria escondido atrás dele. Manter no `CommitMenu` **apenas** enquanto ele estiver aberto, e a
-`GitStatusBar` esconder o erro nesse caso — mesmo padrão do `{#if git.error && !menuCommit}` que
-existe hoje em `GitPanel.svelte:163` e `GitSheet.svelte:288`. Passar `menuAberto` por prop.
+Run: `npm --prefix frontend run check`
+Expected: 0 erros
 
-(O comentário do `CommitMenu.svelte:165-167` cita esses dois pontos como `GitSheet:206` /
-`GitPanel:102` — já está desatualizado no repo. Corrigir de passagem, já que o componente muda
-nesta task.)
-
-- [ ] **Step 4: Montar no `GitTabs`**
-
-`<GitStatusBar {git} menuAberto={!!menuCommit} />` acima da fileira de abas; ramo `branches` monta
-`<BranchesTab {git} />`.
-
-- [ ] **Step 5: Gate**
-
-Run: `npm --prefix frontend run check && npm --prefix frontend run test`
-Expected: 0 erros, testes passando
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add frontend/src/components/git/BranchesTab.svelte frontend/src/components/git/GitStatusBar.svelte frontend/src/components/git/GitTabs.svelte frontend/src/components/git/CommitBox.svelte frontend/src/components/git/CommitMenu.svelte
-git commit -m "feat(git): aba Branches com filtro, faixa de conflito e dona unica da saida"
+git add frontend/src/components/git/GitBranchesTab.svelte frontend/src/components/git/GitStatusBar.svelte
+git commit -m "feat(git): aba Branches com filtro e faixa de conflito/saida"
 ```
 
 ---
 
-### Task 8: Ações de repositório saem da barra pro menu de contexto
+### Task 7: `RepoMenu.svelte` — as ações de repositório
 
 **Files:**
 - Create: `frontend/src/components/git/RepoMenu.svelte`
-- Modify: `frontend/src/components/git/GitTabs.svelte` (botão `⋯` no cabeçalho)
-- Modify: `frontend/src/components/Composer.svelte` (botão direito / toque longo no chip do repo)
-- Delete: `frontend/src/components/git/GitToolbar.svelte`
 
 **Interfaces:**
-- Produces: `RepoMenu.svelte` props `{ git: GitStore; x?: number; y?: number; onClose: () => void }` — `status`, `fetch`, `pull`, `push`, `stash`, `stash-pop`
+- Produces: props `{ git: GitStore; onClose: () => void; soltoNaTela?: boolean }`
 
-- [ ] **Step 1: `RepoMenu.svelte`**
+- [ ] **Step 1: Ler o vocabulário do menu que já existe**
 
-Os seis itens, cada um chamando `git.runAction(<ação>)`. Mesmo vocabulário visual do
-`SessionContextMenu.svelte` (ler antes) e as mesmas camadas da Task 2.
+Run: `cat frontend/src/components/SessionContextMenu.svelte`
 
-- [ ] **Step 2: Gatilhos**
+Seguir a forma dele (backdrop, posicionamento, fechar no Esc).
 
-- **Botão `⋯` no cabeçalho do `GitTabs`** — porta visível, funciona nas duas views.
-- **Botão direito no chip do repo** (`Composer.svelte:745`): `oncontextmenu`, seguindo
-  `Sidebar.svelte:939`.
-- **Toque longo no chip**: mecânica de `Sidebar.svelte:302-313` (timer 500ms no `onpointerdown`,
-  cancelado por movimento) **com a guarda `longPressed`** que suprime o clique seguinte — sem ela o
-  toque longo abre o menu E o modal ao soltar.
+- [ ] **Step 2: Escrever o componente**
 
-**Não** pôr toque longo na linha do commit: lá o gesto concorre com selecionar e copiar o hash, que
-é exatamente por que ele saiu das bolhas de mensagem (`UserBubble.svelte:22`). Lá continua o `⋯`.
+Seis itens. **Atenção ao `push`:** `GitAction` (`api.ts:771`) e `_ACTIONS`
+(`git_ops.py:189-201`) **não têm `push`** — a toolbar de hoje usa `git.doPush()`
+(`GitToolbar.svelte:25`). Os outros cinco vão por `git.runAction(...)`:
 
-- [ ] **Step 3: Apagar a `GitToolbar`**
+| Item | Chamada |
+|---|---|
+| status | `git.runAction('status')` |
+| log | `git.openLog()` |
+| fetch | `git.runAction('fetch')` |
+| pull | `git.runAction('pull')` |
+| push | `git.doPush()` ← **não** `runAction` |
+| stash | `git.runAction('stash')` |
+| pop | `git.runAction('stash-pop')` |
+
+`soltoNaTela` existe porque o menu abre em dois contextos: **dentro** do modal (a saída aparece na
+`GitStatusBar`) e **a partir do chip do repo com o modal fechado** (aí não há faixa nenhuma). Com
+`soltoNaTela`, o próprio menu mostra `git.output`/`git.error` depois da ação, em vez de a falha
+sumir.
+
+- [ ] **Step 3: Gate**
+
+Run: `npm --prefix frontend run check`
+Expected: 0 erros
+
+- [ ] **Step 4: Commit**
 
 ```bash
-git rm frontend/src/components/git/GitToolbar.svelte
-```
-
-- [ ] **Step 4: Gate**
-
-Run: `npm --prefix frontend run check && grep -rn "GitToolbar" frontend/src/`
-Expected: 0 erros, nenhuma referência órfã
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add frontend/src/components/git/RepoMenu.svelte frontend/src/components/git/GitTabs.svelte frontend/src/components/Composer.svelte
-git commit -m "feat(git): acoes de repositorio no menu de contexto, no lugar da barra"
+git add frontend/src/components/git/RepoMenu.svelte
+git commit -m "feat(git): menu de contexto das acoes de repositorio"
 ```
 
 ---
 
-### Task 9: Estado "não é um repositório" + gate final + docs
+### Task 8: `GitTabs.svelte` — cabeçalho, abas e corpo
 
 **Files:**
-- Modify: `frontend/src/components/git/GitTabs.svelte`
-- Modify: `docs/USAGE.md` (seção `### Git`)
+- Create: `frontend/src/components/git/GitTabs.svelte`
 
-- [ ] **Step 1: Pasta que não é repo git**
+**Interfaces:**
+- Consumes: tudo das Tasks 2 e 4-7
+- Produces: props `{ git: GitStore; desktop: boolean; onClose: () => void }`
 
-Hoje `list_branches` estoura `GitError(409)` com o stderr cru do git, que apareceria nas quatro
-abas. Antes de renderizar a fileira de abas:
+- [ ] **Step 1: O cabeçalho — porque não vem de graça**
+
+Nem o `BottomSheet` nem o `ModalDialog` desenham chrome: o `×` da folha só existe no modo
+`persistent` (`BottomSheet.svelte:237-240`). Sem cabeçalho próprio, o modal sai só por Esc/backdrop
+e **nunca diz de que repositório é** — que importa porque ele abre pela linha da sidebar, sem abrir
+o chat.
+
+O cabeçalho tem: nome do repo · branch atual · `⋯` (abre o `RepoMenu`) · `✕` (chama `onClose`).
+
+- [ ] **Step 2: Abas e corpo**
 
 ```svelte
-  {#if naoEhRepo}
+<script lang="ts">
+  import { GIT_TABS, initialNav, selectTab, pushLevel, popLevel, currentLevel, type GitNav } from '../../lib/gitTabs';
+  import GitChangesTab from './GitChangesTab.svelte';
+  import GitHistoryTab from './GitHistoryTab.svelte';
+  import GitBranchesTab from './GitBranchesTab.svelte';
+  import GitStatusBar from './GitStatusBar.svelte';
+  import RepoMenu from './RepoMenu.svelte';
+  import type { GitStore } from '../../lib/gitStore.svelte';
+
+  interface Props { git: GitStore; desktop: boolean; onClose: () => void }
+  let { git, desktop, onClose }: Props = $props();
+
+  let nav = $state<GitNav>(initialNav());
+  let repoMenu = $state(false);
+  let menuAberto = $state(false);   // CommitMenu aberto na aba Historico -> a faixa cala o erro
+
+  // Contagem no rotulo: `branches` conta locais + remotas porque o BranchList mostra as duas
+  // (BranchList.svelte) — contar so as locais daria um numero que nao bate com a lista.
+  const contagem = (id: string) =>
+    id === 'changes' ? git.files.length
+    : id === 'branches' ? git.branches.length + git.remotes.length
+    : 0;
+</script>
+```
+
+Corpo: `{#if nav.tab === 'changes'}` → `GitChangesTab` com
+`level={currentLevel(nav)} onPush={() => (nav = pushLevel(nav))} onPop={() => (nav = popLevel(nav))}`;
+idem pras outras duas. `GitStatusBar` no **rodapé**, com `{menuAberto}`.
+
+Pasta que não é repo git — antes de qualquer aba:
+
+```svelte
+  {#if git.error && /not a git repository/i.test(git.error)}
     <p class="git-muted">esta pasta não é um repositório git</p>
   {:else}
-    <!-- faixas + abas + corpo -->
+    <!-- cabecalho + abas + corpo + faixa -->
   {/if}
 ```
 
-Detectar pelo erro do `load()` (o texto do git contém `not a git repository` — o `_run` força
-`LC_ALL=C`, então a mensagem não vem traduzida). **Não** exibir o stderr cru.
+O `_run` força `LC_ALL=C` (`git_ops.py:54`), então a mensagem do git não vem traduzida e o teste de
+texto é estável. **Não** exibir o stderr cru.
 
-- [ ] **Step 2: Suíte completa**
+CSS das abas: `overflow-x: auto` e **`touch-action: pan-x` próprio** — o `BottomSheet` declara
+`touch-action: pan-y` (`:276`) e sem isso a fileira não rola no dedo.
+
+- [ ] **Step 3: Gate**
+
+Run: `npm --prefix frontend run check`
+Expected: 0 erros
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add frontend/src/components/git/GitTabs.svelte
+git commit -m "feat(git): GitTabs com cabecalho, abas e faixa de estado"
+```
+
+---
+
+### Task 9: A troca — montar o novo e apagar os cinco velhos
+
+**A única task destrutiva.** Tudo que ela monta já existe e já passou pelo gate.
+
+**Files:**
+- Create: `frontend/src/components/Git.svelte`
+- Modify: `frontend/src/components/git/CommitBox.svelte` (perde a lista própria)
+- Modify: `frontend/src/screens/Chat.svelte:1268`, `frontend/src/components/Sidebar.svelte:1304`, `frontend/src/screens/SessionList.svelte:957`
+- Modify: `frontend/src/components/git/GitChangesTab.svelte` (passa a montar o `CommitBox`)
+- Delete: `GitPanel.svelte`, `GitSheet.svelte`, `git/ChangedFiles.svelte`, `git/CommitDetail.svelte`, `git/GitToolbar.svelte`
+- Modify: `docs/USAGE.md`
+
+- [ ] **Step 1: `Git.svelte`**
+
+```svelte
+<script lang="ts">
+  import BottomSheet from './BottomSheet.svelte';
+  import GitTabs from './git/GitTabs.svelte';
+  import { createGitStore } from '../lib/gitStore.svelte';
+
+  // `desktop` por PROP, nao matchMedia proprio: o GitSheet era a terceira copia da mesma media
+  // query (App.svelte:158-167, BottomSheet.svelte:28) e a primeira pintura saia mobile.
+  interface Props { open: boolean; sessionName: string; desktop: boolean; onClose: () => void }
+  let { open, sessionName, desktop, onClose }: Props = $props();
+
+  // Dono do store — era do GitSheet.svelte:27-31, COM o guard que evita recriar a cada render.
+  // Sem ele, trocar de sessao com o modal aberto mostraria o git da anterior.
+  let git = $state(createGitStore(sessionName));
+  $effect(() => { if (git.sessionName !== sessionName) git = createGitStore(sessionName); });
+  $effect(() => { if (open) git.load(); });
+</script>
+
+<!-- `wide` + `centered` = no desktop a folha JA vira modal centrado min(1100px, 92vw)
+     (BottomSheet.svelte:17-18, regras em :414-426). Mesmo par que o EnginesSheet.svelte:304 usa.
+     Nao usar ModalDialog: a folha fica em z 100, e o 110/120 do CommitMenu segue correto. -->
+<BottomSheet {open} {onClose} ariaLabel="Git" wide={desktop} centered={desktop}>
+  <GitTabs {git} {desktop} {onClose} />
+</BottomSheet>
+```
+
+- [ ] **Step 2: `CommitBox` perde a lista, e a aba Mudanças o adota**
+
+Remover do `CommitBox.svelte` o bloco `.cb-sel-row` (`:65-68`) e `.cb-files` (`:69-78`), e o
+`git.error` de `:102` (a faixa é a dona agora). A prop vira:
+
+```typescript
+  interface Props { git: GitStore; chosen: string[]; onDone?: () => void }
+```
+
+usando `chosen` onde hoje usa o `$derived` interno (`:23`). **Todo o resto fica idêntico** —
+mensagens recentes (`MSG_KEY` segue em `git.sessionName`), amend, branch nova, `canCommit`,
+`doCommit`. É código entregue e revisado; não reescrever.
+
+No `GitChangesTab`, trocar o commit box mínimo da Task 4 pelo `<CommitBox {git} chosen={chosen} />`.
+
+- [ ] **Step 3: Trocar os três pontos de montagem**
+
+Levantado, não suposto:
+
+- **`Chat.svelte:1268`** → `<Git open={gitOpen} {sessionName} desktop={desktop} onClose={() => (gitOpen = false)} />`. O `Chat` já tem `desktop?: boolean` (`:54`, default `false` em `:68`); quem passa `true` é o `DesktopShell.svelte:218,235,253`.
+- **`SessionList.svelte:957`** → `desktop={false}` fixo. A tela **não tem** prop de desktop (`:27-32`) e é mobile-only por construção (`App.svelte:398-403` só a renderiza depois do ramo `isDesktop`).
+- **`Sidebar.svelte:1304`** → `desktop={true}` (desktop-only, comentado em `:1324`).
+
+**Preservar o `closeGitSheet`** (`Sidebar.svelte:451-454`, restaura o servidor via `selectServer`) e
+o gêmeo em `SessionList.svelte:390`, ligados no `onClose`.
+
+- [ ] **Step 4: Apagar os cinco**
+
+```bash
+git rm frontend/src/components/GitPanel.svelte frontend/src/components/GitSheet.svelte frontend/src/components/git/ChangedFiles.svelte frontend/src/components/git/CommitDetail.svelte frontend/src/components/git/GitToolbar.svelte
+```
+
+- [ ] **Step 5: Varredura de referências órfãs**
+
+Run: `grep -rn "from '.*GitSheet.svelte'\|from '.*GitPanel.svelte'\|from '.*ChangedFiles.svelte'\|from '.*CommitDetail.svelte'\|from '.*GitToolbar.svelte'" frontend/src/`
+Expected: nenhum resultado
+
+Grep por nome puro casa também `closeGitSheet`/`gitSheet` (variáveis legítimas em `Sidebar.svelte:439-451,644,1287` e `SessionList.svelte:380-390`) — **essas ficam**, é só o nome.
+
+Corrigir os comentários que passam a mentir: `PairSheet.svelte:174`, `LoopSheet.svelte:18`,
+`SessionContextMenu.svelte:18`, `DesktopSessionContext.svelte:50`, `CommitMenu.svelte:165-167` (que
+já cita linhas erradas hoje: `GitSheet:206`/`GitPanel:102`, quando o real é `:288`/`:163`),
+`DiffView.svelte:19-20`, `BranchList.svelte:4`, `gitStore.svelte.ts:1`.
+
+- [ ] **Step 6: Gates completos**
 
 Run: `cd backend && uv run pytest -q`
-Expected: mesma contagem de antes do plano, 0 falhas
+Expected: 1200 passed (1197 de hoje + 3 da Task 1), 1 skipped
 
 Run: `npm --prefix frontend run test && npm --prefix frontend run check && npm --prefix frontend run build`
-Expected: testes passando, 0 erros de tipo, build ok
+Expected: 259+6 testes passando, 0 erros de tipo, build ok
 
-- [ ] **Step 3: Verificação manual — mobile E desktop** 🙋 verificação manual
+- [ ] **Step 7: Verificação manual — mobile E desktop** 🙋 verificação manual
 
 Num repo de brinquedo (com commits que dá pra perder), nas DUAS views:
 
-1. Abrir o modal: as três abas aparecem; a contagem no rótulo bate.
-2. Trocar de aba e voltar: cada aba lembra o nível onde estava.
-3. **Mudanças:** uma lista só, com checkbox E descartar na mesma linha; commitar funciona; repo
-   limpo mostra "nada alterado" em vez de tela em branco.
-4. **Histórico:** empilhado no desktop (lista / mensagem / arquivos), drill-down no celular; a
-   mensagem completa do commit aparece (corpo, não só assunto); buscar filtra e o grafo some;
-   trocar de aba e voltar preserva a busca.
-5. **Branches:** o filtro por nome funciona **no desktop também** (hoje só existe no mobile).
-6. O `⋯` de um commit abre o menu **por cima** do modal, não atrás.
-7. Cherry-pick que conflita → faixa de conflito no cabeçalho, visível de qualquer aba; fechar e
-   reabrir o modal mantém a faixa.
-8. Erro do git aparece **uma vez**, na faixa — não duplicado.
-9. Botão direito no chip do repo (desktop) e toque longo (celular) abrem o menu de ações; o toque
-   longo **não** abre o modal junto ao soltar.
-10. Abrir o modal numa sessão cujo cwd não é repo git: "esta pasta não é um repositório git", sem
-    stderr cru.
-11. Atravessar 820px com o modal aberto: não perde aba nem nível.
+1. Abrir pelo chip do repo, pelo botão da linha da sidebar e pelo `MoreSheet` — os três abrem, e o cabeçalho diz de que repo é.
+2. Desktop: é modal **centrado**, não painel colado na direita. Celular: folha subindo de baixo.
+3. Trocar de aba e voltar: cada aba lembra o nível onde estava.
+4. **Mudanças:** uma lista só, com checkbox E descartar na mesma linha; commitar funciona com amend e branch nova; repo limpo mostra "nada alterado".
+5. **Histórico:** carrega sozinha ao entrar, **inclusive no celular** (hoje o log só carregava no desktop); empilhado no desktop, drill-down no celular; a mensagem completa aparece (corpo, não só assunto); buscar filtra, grafo some, e a busca sobrevive à troca de aba.
+6. **Branches:** filtro por nome funciona **no desktop também**, e aparece sempre (hoje só no celular e só com mais de 6 branches).
+7. O `⋯` de um commit abre o menu **por cima** do modal.
+8. Cherry-pick que conflita → faixa no rodapé, visível de qualquer aba; fechar e reabrir mantém.
+9. Erro do git aparece **uma vez**.
+10. `⋯` do cabeçalho: `pull` e `push` funcionam (push é `doPush`, não `runAction`).
+11. Botão direito no chip do repo **com o modal fechado** → menu solto; um `pull` que falha mostra o erro no próprio menu.
+12. Trocar de sessão com o modal aberto → mostra o git da sessão nova.
+13. Sessão cujo cwd não é repo git: "esta pasta não é um repositório git", sem stderr cru.
+14. Atravessar 820px com o modal aberto: não perde aba nem nível.
 
-- [ ] **Step 4: Docs**
+- [ ] **Step 8: Docs**
 
-Em `docs/USAGE.md`, na seção `### Git`, reescrever a descrição do painel: agora é um modal com abas,
-com o que cada aba faz, onde ficam as ações de repositório (botão direito / toque longo / `⋯`) e
-como a faixa de conflito aparece.
+`docs/USAGE.md`, seção `### Git`: reescrever pro modal com abas. E conferir
+`docs/future-features.md:71-86` e `docs/git-manager-research.md`, que descrevem a `GitSheet` — se
+citarem a estrutura antiga, corrigir.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add frontend/src/components/git/GitTabs.svelte docs/USAGE.md
-git commit -m "feat(git): estado de pasta sem repositorio + docs do modal com abas"
+git add frontend/src/components/Git.svelte frontend/src/components/git/CommitBox.svelte frontend/src/components/git/GitChangesTab.svelte frontend/src/screens/Chat.svelte frontend/src/components/Sidebar.svelte frontend/src/screens/SessionList.svelte docs/USAGE.md
+git commit -m "feat(git): modal com abas substitui o painel e a folha de git"
 ```
 
 ---
 
 ## Notas de verificação (self-review do plano)
 
-- **Cobertura do spec:** modal com abas (T4), empilhado no desktop e drill-down no mobile (T5, T6),
-  conflito como faixa (T7), ações no menu de contexto (T8), filtro de branches nas duas views (T7),
-  busca dentro da aba (T6), estados vazios (T5, T6, T7) e não-repo (T9), `%b` no backend (T1),
-  z-index (T2), `desktop` por prop e morte do `GitPanel`/`GitSheet` (T4). Cada item tem task e
-  verificação.
+- **Cobertura do spec:** modal com abas (T8, T9), empilhado/drill-down (T4, T5), conflito como faixa
+  (T6), ações no menu de contexto (T7), filtro de branches nas duas views (T6), busca dentro da aba
+  (T5), estados vazios (T4, T5, T6) e não-repo (T8), `%b` (T1), `desktop` por prop e morte dos cinco
+  componentes (T9).
+- **Ordem:** as tasks 1-8 **só criam arquivos**. Nenhuma delas mexe no que está no ar — o `GitSheet`
+  velho segue montado e funcionando até a T9. Isso responde ao achado de que a versão anterior deste
+  plano deixava quatro commits com o git manco (sem commit, sem revert, sem toolbar, sem erro na
+  tela).
 - **Consistência de tipos:** `GitTabId`/`GitNav`/`initialNav`/`selectTab`/`pushLevel`/`popLevel`/
-  `currentLevel` definidos na T3 e consumidos com os mesmos nomes em T4-T7. `Git.svelte` recebe
-  `{open, git, desktop, onClose}` na T4 e é montado com essas props nos três call sites.
-  `CommitBox` muda de assinatura na T5 (`chosen: string[]`) e nada depois volta a passar a lista
-  antiga. `commit.body` nasce na T1 e é consumido na T6.
-- **Riscos declarados:** a T4 é a única com risco de regressão ampla (deleta dois componentes e
-  mexe em três telas). Por isso ela termina com uma varredura de referências órfãs, e o refino das
-  abas vem depois — se algo quebrar, quebra com a casca ainda simples.
-- **O que fica pra depois:** divisórias arrastáveis (proporção fixa nesta entrega), seletor de
-  branch no log, paginação além de 50 commits, ahead/behind no cabeçalho.
+  `currentLevel` na T2, consumidos com os mesmos nomes na T8. Os métodos de diff nascem na T3 e são
+  consumidos em T4/T5. `Git.svelte` recebe `{open, sessionName, desktop, onClose}` — casa com o que
+  os três call sites já passam. `CommitBox` só muda de assinatura na T9, junto de quem o monta.
+- **O que fica pra depois:** divisórias arrastáveis, seletor de branch no log, paginação, ahead/behind.
 
 ## Loop-readiness
 
