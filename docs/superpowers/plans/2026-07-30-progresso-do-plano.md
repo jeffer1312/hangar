@@ -1507,7 +1507,7 @@ git commit -m "feat(plan): plan panel on desktop context and mobile activity she
 - Modify: `README.md` (tabela de API)
 - Create: `docs/superpowers/specs/2026-07-30-regra-para-o-claude-md-global.md`
 
-- [ ] **Step 1: Bloco no `CLAUDE.md` do repo**
+- [x] **Step 1: Bloco no `CLAUDE.md` do repo**
 
 Bullet em "Conventions & gotchas", no estilo dos vizinhos, cobrindo: a fonte de verdade é o `.md` do
 plano (`app/planprog.py`); o strip de fences existe porque planos mostram steps de exemplo dentro de
@@ -1517,9 +1517,9 @@ segmentada não pode ser derivada de `task_idx/task_total`; `_plans_dir` para no
 um worktree não mostrar o plano do checkout principal; e a regra de marcar `- [x]` ao fim de cada
 step.
 
-- [ ] **Step 2: Rota nova na tabela de API do `README.md`**
+- [x] **Step 2: Rota nova na tabela de API do `README.md`**
 
-- [ ] **Step 3: [adv] Texto pronto pro `~/.claude/CLAUDE.md`, sem editá-lo**
+- [x] **Step 3: [adv] Texto pronto pro `~/.claude/CLAUDE.md`, sem editá-lo**
 
 O global é config do usuário, fora do repo — não é para o executor alterar sozinho. Salvar em
 `docs/superpowers/specs/2026-07-30-regra-para-o-claude-md-global.md`:
@@ -1531,7 +1531,7 @@ O global é config do usuário, fora do repo — não é para o executor alterar
 Sem "no mesmo commit": `docs/superpowers/` é gitignored e metade dos planos é untracked — a regra
 seria impossível de cumprir e falharia em silêncio.
 
-- [ ] **Step 4: Gate final completo**
+- [x] **Step 4: Gate final completo**
 
 Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest -q 2>&1 | tail -2`
 Expected: baseline do Step 0 da Task 1 **+ 27** testes novos (17 + 7 + 3), zero falha.
