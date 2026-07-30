@@ -627,7 +627,7 @@ git commit -m "feat(plan): parse plan progress from superpowers plan files"
 
 **[adv] Fora de escopo:** `StateEvent` **não** recebe `plan_*` (Decisão 3).
 
-- [ ] **Step 1: Escrever os testes que falham**
+- [x] **Step 1: Escrever os testes que falham**
 
 Criar `backend/tests/test_planprog_wire.py`:
 
@@ -698,12 +698,12 @@ def test_sig_estavel_sem_plano():
     assert _list_sig([SessionInfo(name="s")]) == _list_sig([SessionInfo(name="s")])
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest tests/test_planprog_wire.py -q`
 Expected: FAIL — `ImportError: cannot import name '_decorate_plan' from 'app.registry'`
 
-- [ ] **Step 3: Campos em `models.py`**
+- [x] **Step 3: Campos em `models.py`**
 
 Em `SessionInfo`, logo após `loop_max` (linha 97):
 
@@ -723,7 +723,7 @@ Em `SessionInfo`, logo após `loop_max` (linha 97):
     plan_tasks: Optional[list[tuple[int, int]]] = None
 ```
 
-- [ ] **Step 4: `_decorate_plan` em `registry.py`**
+- [x] **Step 4: `_decorate_plan` em `registry.py`**
 
 Import no topo: `from app.planprog import plan_progress`.
 
@@ -761,7 +761,7 @@ Dentro de `_decorate_git` (a função definida em `:821`), no mesmo laço, depoi
 
 **Não** adicionar no laço de `_decorate_loop` (`:830`) — esse roda na corrotina.
 
-- [ ] **Step 5: `_list_sig` (sse.py)**
+- [x] **Step 5: `_list_sig` (sse.py)**
 
 Na tupla, após `getattr(i, "engine", None)`:
 
@@ -773,7 +773,7 @@ Na tupla, após `getattr(i, "engine", None)`:
 E somar ao comentário acima da função: `Sem o plan_name aqui, trocar do plano A pro B com o mesmo
 9/17 nao re-emite e o chip fica preso no plano errado — mesmo bug do engine.`
 
-- [ ] **Step 6: Rodar e ver passar**
+- [x] **Step 6: Rodar e ver passar**
 
 Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest tests/test_planprog_wire.py -q`
 Expected: PASS (7 testes)
@@ -781,7 +781,7 @@ Expected: PASS (7 testes)
 Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest -q 2>&1 | tail -2`
 Expected: número da Task 1 **+ 7**, zero falha nova.
 
-- [ ] **Step 7: Verificação de ponta (o dado sai mesmo pela API)**
+- [x] **Step 7: Verificação de ponta (o dado sai mesmo pela API)**
 
 ```bash
 cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && \
@@ -796,7 +796,7 @@ Expected: a sessão que roda neste worktree aparece com `progresso-do-plano <n> 
 sem plano mostram `None None None`.
 Matar o backend pelo pid (`kill <pid>`), **nunca** `pkill -f app.main` — casaria a própria shell.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add backend/app/models.py backend/app/registry.py backend/app/sse.py backend/tests/test_planprog_wire.py
