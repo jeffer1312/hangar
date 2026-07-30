@@ -508,6 +508,18 @@ def diff_vs_worktree(cwd: str, sha: str) -> dict:
     return {"sha": sha, "diff": diff, "truncated": truncated}
 
 
+def sequencer_state(cwd: str) -> str | None:
+    """Detecta um revert/cherry-pick em andamento (sequencer que conflitou e aguarda --abort/
+    --continue). `--git-path` em vez de montar `cwd/.git/<marker>` na mao: `.git` pode ser um
+    ARQUIVO (worktree), e o caminho real do marcador mora noutro lugar nesse caso. O caminho que o
+    git devolve e RELATIVO a `cwd` (medido: `.git/CHERRY_PICK_HEAD`, nao absoluto) -> precisa do join."""
+    for marker, label in (("CHERRY_PICK_HEAD", "cherry-pick"), ("REVERT_HEAD", "revert")):
+        p = _run(cwd, "rev-parse", "--git-path", marker)
+        if p.returncode == 0 and os.path.exists(os.path.join(cwd, p.stdout.strip())):
+            return label
+    return None
+
+
 def branches_containing(cwd: str, sha: str) -> dict:
     """Branches locais e remotas que contem o commit — o "Shows branches this commit is on".
     Usa o refname COMPLETO, nao o :short: um branch local chamado 'origin' e o ref simbolico
@@ -658,6 +670,7 @@ if __name__ == "__main__":
                 assert e.status == 400, e.status
 
         assert git_action(d, "status")["ok"] is True
+        assert sequencer_state(d) is None, "repo limpo nao deveria ter sequencer"
         try:
             git_action(d, "rm -rf")
             raise AssertionError("acao invalida deveria falhar")

@@ -27,6 +27,7 @@
   let diffRows = $state<DiffRow[]>([]);
   let diffLoading = $state(false);
   let diffSha = $state('');  // sha do commit dono do diffPath aberto ('' = diff da working tree)
+  let diffTruncated = $state(false);   // diff do commit inteiro/vs-worktree cortado em 200KB pelo backend
   let menuCommit = $state<GitCommit | null>(null);   // commit com o menu de contexto aberto
 
   async function openWtDiff(path: string) {   // diff de arquivo na working tree
@@ -35,6 +36,7 @@
     diffSha = '';
     diffPath = path;
     diffRows = [];
+    diffTruncated = false;
     diffLoading = true;
     git.busy = path;
     git.error = '';
@@ -57,6 +59,7 @@
     diffSha = sha;
     diffPath = path;
     diffRows = [];
+    diffTruncated = false;
     diffLoading = true;
     git.busy = path;
     git.error = '';
@@ -81,11 +84,13 @@
     diffSha = c.hash;
     diffPath = `commit ${c.short}`;
     diffRows = [];
+    diffTruncated = false;
     diffLoading = true;
     git.busy = c.hash;
     git.error = '';
     try {
-      const { diff } = await getCommitDiff(git.sessionName, c.hash);
+      const { diff, truncated } = await getCommitDiff(git.sessionName, c.hash);
+      diffTruncated = truncated;
       const { highlightDiff } = await import('../lib/highlight');
       diffRows = await highlightDiff(diff, diffPath);
     } catch (e) {
@@ -105,11 +110,13 @@
     diffSha = c.hash;
     diffPath = `commit ${c.short} ↔ working tree`;
     diffRows = [];
+    diffTruncated = false;
     diffLoading = true;
     git.busy = c.hash;
     git.error = '';
     try {
-      const { diff } = await getCommitDiffVsWorktree(git.sessionName, c.hash);
+      const { diff, truncated } = await getCommitDiffVsWorktree(git.sessionName, c.hash);
+      diffTruncated = truncated;
       const { highlightDiff } = await import('../lib/highlight');
       diffRows = await highlightDiff(diff, diffPath);
     } catch (e) {
@@ -144,9 +151,9 @@
         {@const sha = selected.hash}
         <CommitDetail commit={selected} sessionName={git.sessionName} onOpenFile={(p) => openCommitDiff(sha, p)}
           onMenu={(c) => (menuCommit = c)} />
-        {#if diffPath && diffSha}<DiffView path={diffPath} rows={diffRows} loading={diffLoading} />{/if}
+        {#if diffPath && diffSha}<DiffView path={diffPath} rows={diffRows} loading={diffLoading} truncated={diffTruncated} />{/if}
       {:else if diffPath}
-        <DiffView path={diffPath} rows={diffRows} loading={diffLoading} />
+        <DiffView path={diffPath} rows={diffRows} loading={diffLoading} truncated={diffTruncated} />
       {:else}
         <p class="git-muted">selecione um commit</p>
       {/if}

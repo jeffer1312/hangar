@@ -784,7 +784,10 @@ export interface ChangedFile {
   staged: boolean;
 }
 
-export function getChangedFiles(name: string): Promise<{ files: ChangedFile[] }> {
+// `sequencer`: revert/cherry-pick em andamento (conflito ainda nao resolvido/abortado), lido do
+// DISCO (CHERRY_PICK_HEAD/REVERT_HEAD) — nao de memoria de sessao. E o que permite o botao de
+// abort sobreviver a um reload/reabertura da sheet enquanto o repo continua em conflito.
+export function getChangedFiles(name: string): Promise<{ files: ChangedFile[]; sequencer: 'revert' | 'cherry-pick' | null }> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/files`);
 }
 
@@ -805,7 +808,9 @@ export function getCommitFileDiff(name: string, sha: string, path: string): Prom
 }
 
 // Diff unificado do commit INTEIRO (todos os arquivos) — a "Show changes as unified diff" do Tortoise.
-export function getCommitDiff(name: string, sha: string): Promise<{ sha: string; diff: string }> {
+// `truncated`: o backend capa em 200KB (_DIFF_MAX em git_ops.py) — precisa chegar na UI, senao um
+// diff cortado parece completo e uma decisao (ex. reset --hard) seria tomada em cima de metade dele.
+export function getCommitDiff(name: string, sha: string): Promise<{ sha: string; diff: string; truncated: boolean }> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/commit/${encodeURIComponent(sha)}/diff-full`);
 }
 
@@ -841,8 +846,9 @@ export function gitCreateTag(name: string, opts: { name: string; sha?: string; m
   });
 }
 
-// Commit vs o DISCO agora — o "Compare with working tree" do Tortoise.
-export function getCommitDiffVsWorktree(name: string, sha: string): Promise<{ sha: string; diff: string }> {
+// Commit vs o DISCO agora — o "Compare with working tree" do Tortoise. Mesmo teto/`truncated` do
+// getCommitDiff (git_ops.py:_cap aplica aos dois).
+export function getCommitDiffVsWorktree(name: string, sha: string): Promise<{ sha: string; diff: string; truncated: boolean }> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/commit/${encodeURIComponent(sha)}/diff-worktree`);
 }
 
@@ -866,7 +872,7 @@ export interface GitCommit {
   passthrough?: number[];  // colunas de outras lanes que cruzam esta linha sem dot (vertical cheia)
 }
 
-export function getGitLog(name: string, q?: string): Promise<{ commits: GitCommit[]; filtered?: boolean }> {
+export function getGitLog(name: string, q?: string): Promise<{ commits: GitCommit[] }> {
   const qs = q ? `?q=${encodeURIComponent(q)}` : '';
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/log${qs}`);
 }

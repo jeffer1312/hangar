@@ -5,8 +5,9 @@
     path: string;
     rows: DiffRow[];
     loading: boolean;
+    truncated?: boolean;   // diff do commit inteiro/vs-worktree capado em 200KB pelo backend (_DIFF_MAX)
   }
-  let { path, rows, loading }: Props = $props();
+  let { path, rows, loading, truncated = false }: Props = $props();
 
   // +N / -M do diff aberto (contado do proprio rows; GitLens/TortoiseGit mostram no topo).
   const diffStat = $derived({
@@ -26,7 +27,14 @@
 </div>
 {#if loading}
   <p class="git-muted">carregando diff…</p>
+{:else if !rows.length}
+  <!-- "git diff HEAD" legitimamente vazio (ex: comparar o topo com a working tree limpa) e nao pode
+       parecer carga falhada — a caixa em branco era indistinguivel de um erro engolido. -->
+  <p class="git-muted">sem diferenças</p>
 {:else}
+  {#if truncated}
+    <p class="git-warn">diff cortado em 200 KB — abra o commit no terminal pra ver o resto</p>
+  {/if}
   <pre class="git-diff">{#each rows as row, i (i)}<span
       class:add={row.kind === 'add'}
       class:del={row.kind === 'del'}
@@ -48,6 +56,11 @@
   .git-diff-stat .stat-add { color: var(--success); }
   .git-diff-stat .stat-del { color: var(--error); }
   .git-muted { margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
+  .git-warn {
+    margin: 0 0 var(--space-2); padding: var(--space-2); border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--warning) 12%, transparent); font-size: var(--text-xs);
+    color: var(--warning);
+  }
 
   .git-diff {
     margin: 0; padding: var(--space-2); border-radius: var(--radius-md);

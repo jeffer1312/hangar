@@ -40,7 +40,7 @@ from app import runtime_config
 from app import engine_probe, engines
 from app.costs import report as costs_report
 from app.git_ops import (
-    list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit_diff, revert_commit, cherry_pick, reset_to, create_branch_at, create_tag, diff_vs_worktree, branches_containing, commit, last_commit_message, push as push_branch, GitError, branch_of,
+    list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit_diff, revert_commit, cherry_pick, reset_to, create_branch_at, create_tag, diff_vs_worktree, branches_containing, commit, last_commit_message, push as push_branch, sequencer_state, GitError, branch_of,
 )
 from app import loop as loop_mod
 from app.transcript import last_assistant_text
@@ -1916,7 +1916,10 @@ def git(name: str, body: GitActionBody):
 @app.get("/api/sessions/{name}/git/files", dependencies=[Depends(require_auth)])
 def git_files(name: str):
     try:
-        return {"files": changed_files(_session_cwd(name))}
+        cwd = _session_cwd(name)
+        # sequencer: revert/cherry-pick em andamento (conflito) — o front deriva o botao de abort
+        # DAQUI, nao de memoria de sessao (ver gitStore.svelte.ts:pendingAbort).
+        return {"files": changed_files(cwd), "sequencer": sequencer_state(cwd)}
     except GitError as e:
         raise HTTPException(e.status, e.detail)
 
