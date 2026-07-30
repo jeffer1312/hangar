@@ -171,7 +171,7 @@
 
 <!-- `resizable`: o painel do par carrega o contrato do grupo (um documento), a lista de membros e a
      conversa — nos 420px padrao o markdown saia com ~40 caracteres por linha. Fica arrastavel pela
-     borda esquerda, como o GitSheet, e a largura persiste. -->
+     borda esquerda e a largura persiste. -->
 <BottomSheet {open} {onClose} resizable widthKey="cp_pairsheet_w" defaultWidth={760} ariaLabel="Parear sessões">
   <div class="pair">
     {#if peers.length}

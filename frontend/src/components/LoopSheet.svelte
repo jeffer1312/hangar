@@ -15,7 +15,7 @@
   }
   let { open, sessionName, onClose }: Props = $props();
 
-  // Sem prop serverId (padrao do GitSheet): o chamador ja fez selectServer(serverId) antes de
+  // Sem prop serverId (mesmo padrao do modal de git): o chamador ja fez selectServer(serverId) antes de
   // montar e restaura o ativo no fechar -> aqui mira SEMPRE o servidor ATIVO.
   function activeServer(): Server | null {
     return listServers().find((s) => s.id === getActiveId()) ?? null;

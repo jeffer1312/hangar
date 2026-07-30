@@ -6,7 +6,7 @@
 
   // Confirm em 2 passos, e o reset SO no sucesso: um abort que o git recusou nao pode voltar o
   // botao pro estado inicial, senao o proximo conflito ja aparece em "confirmar" (regra que hoje
-  // vive em GitToolbar.svelte:12-17).
+  // vinha da GitToolbar, apagada).
   let confirmar = $state(false);
   async function doAbort() {
     if (await git.abortOp()) confirmar = false;
@@ -25,7 +25,7 @@
   </div>
 {/if}
 <!-- Com o CommitMenu aberto quem mostra o erro e o proprio menu (ele fica por cima): repetir aqui
-     poria a mesma frase duas vezes na tela. Mesmo padrao de GitPanel.svelte:163 e GitSheet.svelte:288. -->
+     poria a mesma frase duas vezes na tela. Mesmo padrao que a folha e o painel antigos usavam. -->
 {#if git.error && !menuAberto}<p class="gsb-erro">{git.error}</p>{/if}
 {#if git.output}<pre class="gsb-saida">{git.output}</pre>{/if}
 
@@ -42,7 +42,7 @@
     margin: 0; font-size: var(--text-sm); color: var(--error);
     white-space: pre-wrap; word-break: break-word; flex-shrink: 0;
   }
-  /* Teto de 200px igual ao <pre> de hoje (GitSheet.svelte:343): sem ele um `git status` de repo
+  /* Teto de 200px, herdado do <pre> da folha antiga: sem ele um `git status` de repo
      sujo empurra o conteudo do modal pra fora da tela. */
   .gsb-saida {
     margin: 0; padding: var(--space-2); border-radius: var(--radius-md);

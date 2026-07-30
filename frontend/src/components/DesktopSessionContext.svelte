@@ -47,7 +47,7 @@
     // Grupo pareado -> PairSheet (conversa do par, contrato compartilhado, split). A secao dizia
     // "2 sessoes pareadas" e parava ali; a tela do par ja existia, so nao tinha porta aqui.
     onOpenPair?: () => void;
-    // Repositorio -> GitSheet do cwd. Mesmo caso: dado sem porta.
+    // Repositorio -> modal de git do cwd. Mesmo caso: dado sem porta.
     onOpenGit?: () => void;
     // Abre a sessao do MEMBRO num modal (PairChatModal). So com UM par: com 2+ nao da pra escolher
     // por quem clicou, entao a secao segue abrindo a PairSheet, que tem o botao por membro.

@@ -72,12 +72,14 @@
 </div>
 
 <style>
+  /* Sem max-height proprio: quem limita altura e o painel do empilhado que hospeda a lista. Com o
+     teto de 52vh/68vh que havia aqui, eram dois `overflow: auto` aninhados pro mesmo conteudo e a
+     lista nunca usava o espaco que o painel dava. */
   .git-scroll {
-    overflow-y: auto; max-height: 52vh; min-height: 0;
+    overflow-y: auto; min-height: 0;
     overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
     display: flex; flex-direction: column; gap: var(--space-1);
   }
-  @media (min-width: 820px) { .git-scroll { max-height: 68vh; } }
   .git-muted { margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
 
   /* ── log: uma linha por commit (sem wrap; assunto com ellipsis) ── */

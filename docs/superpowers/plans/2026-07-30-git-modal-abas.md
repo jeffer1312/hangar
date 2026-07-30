@@ -731,7 +731,7 @@ git commit -m "feat(git): GitTabs com cabecalho, abas e faixa de estado"
   usam o componente e dependem do teto.
 - Modify: `docs/USAGE.md`
 
-- [ ] **Step 1: `Git.svelte`**
+- [x] **Step 1: `Git.svelte`**
 
 ```svelte
 <script lang="ts">
@@ -759,7 +759,7 @@ git commit -m "feat(git): GitTabs com cabecalho, abas e faixa de estado"
 </BottomSheet>
 ```
 
-- [ ] **Step 2: `CommitBox` perde a lista, e a aba Mudanças o adota**
+- [x] **Step 2: `CommitBox` perde a lista, e a aba Mudanças o adota**
 
 Remover do `CommitBox.svelte` o bloco `.cb-sel-row` (`:65-68`) e `.cb-files` (`:69-78`), e o
 `git.error` de `:102` (a faixa é a dona agora). A prop vira:
@@ -774,7 +774,7 @@ mensagens recentes (`MSG_KEY` segue em `git.sessionName`), amend, branch nova, `
 
 No `GitChangesTab`, trocar o commit box mínimo da Task 4 pelo `<CommitBox {git} chosen={chosen} />`.
 
-- [ ] **Step 3: Trocar os três pontos de montagem**
+- [x] **Step 3: Trocar os três pontos de montagem**
 
 Levantado, não suposto:
 
@@ -785,13 +785,13 @@ Levantado, não suposto:
 **Preservar o `closeGitSheet`** (`Sidebar.svelte:451-454`, restaura o servidor via `selectServer`) e
 o gêmeo em `SessionList.svelte:390`, ligados no `onClose`.
 
-- [ ] **Step 4: Apagar os cinco**
+- [x] **Step 4: Apagar os cinco**
 
 ```bash
 git rm frontend/src/components/GitPanel.svelte frontend/src/components/GitSheet.svelte frontend/src/components/git/ChangedFiles.svelte frontend/src/components/git/CommitDetail.svelte frontend/src/components/git/GitToolbar.svelte
 ```
 
-- [ ] **Step 5: Varredura de referências órfãs**
+- [x] **Step 5: Varredura de referências órfãs**
 
 Run: `grep -rn "from '.*GitSheet.svelte'\|from '.*GitPanel.svelte'\|from '.*ChangedFiles.svelte'\|from '.*CommitDetail.svelte'\|from '.*GitToolbar.svelte'" frontend/src/`
 Expected: nenhum resultado
@@ -803,7 +803,7 @@ Corrigir os comentários que passam a mentir: `PairSheet.svelte:174`, `LoopSheet
 já cita linhas erradas hoje: `GitSheet:206`/`GitPanel:102`, quando o real é `:288`/`:163`),
 `DiffView.svelte:19-20`, `BranchList.svelte:4`, `gitStore.svelte.ts:1`.
 
-- [ ] **Step 6: Gates completos**
+- [x] **Step 6: Gates completos**
 
 Run: `cd backend && uv run pytest -q`
 Expected: 1200 passed (1197 de hoje + 3 da Task 1), 1 skipped
@@ -830,13 +830,13 @@ Num repo de brinquedo (com commits que dá pra perder), nas DUAS views:
 13. Sessão cujo cwd não é repo git: "esta pasta não é um repositório git", sem stderr cru.
 14. Atravessar 820px com o modal aberto: não perde aba nem nível.
 
-- [ ] **Step 8: Docs**
+- [x] **Step 8: Docs**
 
 `docs/USAGE.md`, seção `### Git`: reescrever pro modal com abas. E conferir
 `docs/future-features.md:71-86` e `docs/git-manager-research.md`, que descrevem a `GitSheet` — se
 citarem a estrutura antiga, corrigir.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add frontend/src/components/Git.svelte frontend/src/components/git/CommitBox.svelte frontend/src/components/git/GitChangesTab.svelte frontend/src/screens/Chat.svelte frontend/src/components/Sidebar.svelte frontend/src/screens/SessionList.svelte docs/USAGE.md

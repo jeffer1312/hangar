@@ -15,7 +15,7 @@
     onClose: () => void;
     onRename: () => void;                   // Sidebar seta editing
     onDelete: () => void;                   // Sidebar abre confirmDel
-    onGit: () => void;                      // Sidebar abre GitSheet (mira/restaura servidor)
+    onGit: () => void;                      // Sidebar abre o modal de git (mira/restaura servidor)
     onLoop: () => void;                     // Sidebar abre LoopSheet (mira/restaura servidor)
     onPickBranch: (branch: string, dirty: boolean) => void; // Sidebar: dirty->confirm, senao checkout
     onFlash: (msg: string) => void;         // toast do Sidebar

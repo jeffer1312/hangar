@@ -164,7 +164,7 @@
   {/if}
   {#if git.error}<p class="git-error">{git.error}</p>{/if}
 </div>
-<!-- O GitSheet/GitPanel tambem imprimem git.error no rodape (GitSheet:206, GitPanel:102). Com o menu
+<!-- A GitStatusBar tambem imprime git.error no rodape do modal (GitStatusBar.svelte:29). Com o menu
      aberto o mesmo texto apareceria duas vezes: os dois callers passam a esconder o rodape enquanto
      `menuCommit` existe ({#if git.error && !menuCommit}), porque o menu fica por cima. -->
 
