@@ -95,6 +95,19 @@ class SessionInfo(BaseModel):
     loop_status: Optional[str] = None
     loop_iter: Optional[int] = None
     loop_max: Optional[int] = None
+    # Progresso do plano do superpowers que esta sessao esta executando (app.planprog), decorado em
+    # list_with_state DENTRO do to_thread do git. Sem plano -> tudo None (sem barra nem chip).
+    # plan_task e ORDINAL (existe "### Task 0" nos planos), nao o N do heading.
+    plan_name: Optional[str] = None
+    plan_task: Optional[int] = None
+    plan_task_total: Optional[int] = None
+    plan_done: Optional[int] = None
+    plan_total: Optional[int] = None
+    plan_complete: Optional[bool] = None
+    # (done, total) por Task — a barra segmentada precisa disto. Derivar segmento de
+    # plan_task/plan_task_total mentiria toda vez que uma Task anterior ficasse com step pendente
+    # (acontece sempre que se pula um step de verificacao manual). Sao 3-8 pares.
+    plan_tasks: Optional[list[tuple[int, int]]] = None
 
 
 class ChatEvent(BaseModel):
