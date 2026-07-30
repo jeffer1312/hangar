@@ -14,7 +14,11 @@
     autocapitalize="off" autocorrect="off" spellcheck="false" />
   <button type="submit" class="git-mini" disabled={!!git.busy}>buscar</button>
   {#if git.logQuery}
-    <button type="button" class="git-mini" onclick={() => git.searchLog('')}>limpar</button>
+    <!-- disabled junto com o "buscar": searchLog ignora chamada com o git ocupado (guarda contra
+         resposta de busca velha chegar por ultimo), entao um "limpar" clicado durante uma busca em
+         voo seria descartado calado — o botao some do alcance em vez de mentir. -->
+    <button type="button" class="git-mini" disabled={!!git.busy}
+      onclick={() => git.searchLog('')}>limpar</button>
   {/if}
 </form>
 {#if git.logQuery}

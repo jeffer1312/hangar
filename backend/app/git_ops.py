@@ -463,7 +463,10 @@ def reset_to(cwd: str, sha: str, mode: str) -> dict:
         raise GitError(400, "modo invalido")
     p = _run(cwd, "reset", f"--{mode}", sha)
     if p.returncode != 0:
-        raise GitError(409, (p.stderr or "reset falhou").strip())
+        # stdout JUNTO do stderr: um reset recusado lista no stdout os arquivos que seriam
+        # sobrescritos — e e essa lista que o usuario precisa pra decidir. Mesma juncao do
+        # revert_commit/cherry_pick.
+        raise GitError(409, (p.stdout + p.stderr).strip() or "reset falhou")
     return {"ok": True, "output": (p.stdout + p.stderr).strip()}
 
 
