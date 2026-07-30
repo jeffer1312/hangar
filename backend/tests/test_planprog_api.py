@@ -28,12 +28,16 @@ def test_plan_404_sem_plano(api_client):
          patch("app.api.plan_progress", return_value=None):
         r = api_client.get("/api/sessions/s/plan", headers=_H)
     assert r.status_code == 404
+    # so status_code==404 tambem passa pra rota inexistente (404 generico do FastAPI) - o corpo
+    # e o que prova que foi ESTA rota, com plan_progress==None, que respondeu.
+    assert r.json()["detail"] == "sem plano ativo"
 
 
 def test_plan_404_sem_sessao(api_client):
     with patch("app.api.registry.list", return_value=[]):
         r = api_client.get("/api/sessions/s/plan", headers=_H)
     assert r.status_code == 404
+    assert r.json()["detail"] == "sessao nao encontrada"
 
 
 def test_plan_devolve_detalhe_e_markdown(api_client, tmp_path):
