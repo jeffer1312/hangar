@@ -521,9 +521,9 @@ def branches_containing(cwd: str, sha: str) -> dict:
         name = line.strip()
         if not name or name.startswith("("):      # "(HEAD detached at ...)" nao e branch
             continue
+        if name in remotes:      # origin/HEAD simbolico: refname:short colapsa pro nome do remote,
+            continue             # sem barra (medido: NAO vem como 'origin/HEAD', so 'origin')
         if "/" in name and name.split("/", 1)[0] in remotes:
-            if name.endswith("/HEAD"):            # 'origin/HEAD' e ref simbolico, nao branch
-                continue                          # (list_branches:159-163 filtra igual)
             remote.append(name)
         else:
             local.append(name)

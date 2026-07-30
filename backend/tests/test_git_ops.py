@@ -399,6 +399,25 @@ def test_branches_containing_sha_invalido(tmp_path):
     assert e.value.status == 400
 
 
+def test_branches_containing_ignora_origin_head_simbolico(tmp_path):
+    # git branch -a --format='%(refname:short)' renderiza o origin/HEAD simbolico como o nome NU
+    # do remote ('origin', sem '/HEAD') -- reproduzido contra este proprio repo antes do fix.
+    d = _repo(tmp_path)                                   # main + feature no mesmo commit
+    base = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
+    (tmp_path / "remote").mkdir()
+    rd = str(tmp_path / "remote")
+    git_ops._run(rd, "init", "-q", "-b", "main")
+    git_ops._run(rd, "config", "receive.denyCurrentBranch", "ignore")   # aceita push na branch atual
+    git_ops._run(d, "remote", "add", "origin", rd)
+    assert git_ops._run(d, "push", "origin", "main").returncode == 0
+    assert git_ops._run(d, "fetch", "origin").returncode == 0
+    git_ops._run(d, "remote", "set-head", "origin", "main")             # cria o origin/HEAD simbolico
+    result = git_ops.branches_containing(d, base)
+    assert "origin" not in result["local"]              # nao pode virar branch local falsa
+    assert "origin/main" in result["remote"]
+    assert set(result["local"]) == {"main", "feature"}
+
+
 def test_git_log_grep(tmp_path):
     d, _ = _repo_with_file(tmp_path)                     # commits: "init", "add tracked"
     (tmp_path / "y.txt").write_text("Y\n")
