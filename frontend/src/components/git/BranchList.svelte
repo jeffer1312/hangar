@@ -52,7 +52,9 @@
 
   .git-branches { display: flex; flex-direction: column; gap: 2px; }
   .git-branch {
-    display: flex; align-items: center; gap: var(--space-2); width: 100%;
+    /* justify-content: o `button` global e inline-flex CENTRADO. Na folha estreita o nome enchia a
+       linha e ninguem via; na aba larga do modal, cada branch nascia centralizada num x diferente. */
+    display: flex; align-items: center; justify-content: flex-start; gap: var(--space-2); width: 100%;
     padding: var(--space-2); border-radius: var(--radius-md);
     border: 1px solid transparent; background: transparent;
     color: var(--text-secondary); font-size: var(--text-sm); text-align: left; cursor: pointer;
