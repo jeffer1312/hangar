@@ -4,8 +4,11 @@ import {
   getBranches, checkoutBranch, gitAction, getGitLog, getChangedFiles,
   commitFiles, gitPush, discardFile,
   gitRevert, gitCherryPick, gitReset, gitCreateBranch, gitCreateTag,
+  getFileDiff, getCommitFileDiff, getCommitDiff, getCommitDiffVsWorktree,
   type GitAction, type ChangedFile, type GitCommit, type GitResetMode,
 } from './api';
+// `import type` some na compilacao: o Shiki continua entrando so pelo import() dinamico la embaixo.
+import type { DiffRow } from './highlight';
 
 // Mensagem de erro legivel: tira o prefixo "409: "/"400: " do status HTTP. Export nomeado —
 // CommitMenu precisa do MESMO tratamento (getCommitBranches) sem duplicar a regex.
@@ -173,6 +176,55 @@ export function createGitStore(sessionName: string) {
     try { const r = await gitPush(sessionName); output = r.output || 'push ok'; return true; }
     catch (e) { error = cleanErr(e); return false; } finally { busy = ''; }
   }
+  // ── Diff aberto ────────────────────────────────────────────────────────────
+  // Vivia duplicado no GitSheet e no GitPanel (≈130 linhas em cada). Com o modal de abas ha um dono
+  // so, e as abas ficam burras: chamam, olham o boolean e decidem se descem de nivel.
+  let diffPath = $state('');
+  let diffRows = $state<DiffRow[]>([]);
+  let diffLoading = $state(false);
+  let diffSha = $state('');          // '' = diff da working tree
+  let diffTruncated = $state(false); // backend cortou em 200KB
+
+  function closeDiff() {
+    diffPath = ''; diffSha = ''; diffRows = []; diffTruncated = false;
+  }
+
+  // Helper unico das quatro entradas: muda so o titulo, a chave de `busy` e o fetch.
+  // `chave` e explicita de proposito: no diff de UM arquivo dentro de um commit as duas coisas
+  // existem (sha e path) e o valor certo e o PATH — e o que as versoes antigas gravavam, e o que uma
+  // lista destacando "este arquivo esta carregando" compara (mesmo padrao do BranchList).
+  async function _abrirDiff(titulo: string, sha: string, chave: string, buscar: () => Promise<{ diff: string; truncated?: boolean }>) {
+    if (busy) return false;
+    diffSha = sha; diffPath = titulo; diffRows = []; diffTruncated = false;
+    diffLoading = true; busy = chave; error = '';
+    try {
+      const r = await buscar();
+      diffTruncated = !!r.truncated;
+      const { highlightDiff } = await import('./highlight');   // Shiki carrega on-demand
+      diffRows = await highlightDiff(r.diff, titulo);
+      return true;
+    } catch (e) {
+      error = cleanErr(e);
+      closeDiff();   // sem diff pra mostrar: quem chamou nao desce de nivel
+      return false;
+    } finally {
+      diffLoading = false; busy = '';
+    }
+  }
+
+  const openFileDiff = (path: string) =>
+    _abrirDiff(path, '', path, () => getFileDiff(sessionName, path));
+  // Diff de um arquivo DENTRO de um commit historico.
+  const openCommitFileDiff = (sha: string, path: string) =>
+    _abrirDiff(path, sha, path, () => getCommitFileDiff(sessionName, sha, path));
+  // Commit INTEIRO. Titulo sintetico: o highlightDiff usa o path so pra detectar linguagem (sem
+  // extensao = texto plano, que e o certo pra um diff multi-arquivo).
+  const openCommitFullDiff = (c: GitCommit) =>
+    _abrirDiff(`commit ${c.short}`, c.hash, c.hash, () => getCommitDiff(sessionName, c.hash));
+  // Commit vs o disco agora. Titulo diferente pro usuario saber qual dos dois diffs esta vendo.
+  const openCommitWorktreeDiff = (c: GitCommit) =>
+    _abrirDiff(`commit ${c.short} ↔ working tree`, c.hash, c.hash, () => getCommitDiffVsWorktree(sessionName, c.hash));
+
   async function discard(path: string) {
     if (busy) return false;
     busy = path; error = '';
@@ -191,8 +243,12 @@ export function createGitStore(sessionName: string) {
     get output() { return output; },
     get pendingAbort() { return pendingAbort; },
     get logQuery() { return logQuery; },
+    get diffPath() { return diffPath; }, get diffRows() { return diffRows; },
+    get diffLoading() { return diffLoading; }, get diffSha() { return diffSha; },
+    get diffTruncated() { return diffTruncated; },
     load, refresh, pick, runAction, openLog, doCommit, doPush, discard,
     revert, cherryPick, resetTo, createBranch, createTag, abortOp, searchLog,
+    openFileDiff, openCommitFileDiff, openCommitFullDiff, openCommitWorktreeDiff, closeDiff,
   };
 }
 
