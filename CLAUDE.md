@@ -171,6 +171,24 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   errado no código, o lugar dele é um controle, não um número fixo.
   Verificação: ligue um papel de parede e olhe a tela. Qualquer retângulo que não deixe a foto
   atravessar, enquanto o painel em volta deixa, é bug — não estilo.
+- **Config e opção moram em MODAL, não em painel docado.** Decisão de desenho de 2026-07-30, vale
+  daqui pra frente. No desktop, a **única** coisa que fica docada à direita do chat é o
+  `DesktopSessionContext` — o painel de contexto **daquela sessão** (estado, plano, grupo, repo).
+  Ele é dado do que está aberto na tela, então acompanha a conversa. Todo o resto — Aparência,
+  Configurações do servidor, Motores, Git, e o que for adicionado — abre como **modal centrado**:
+  `BottomSheet` com `wide={isDesktop} centered={isDesktop}` (o mesmo par que `EnginesSheet.svelte` e
+  `Git.svelte` já usam; no celular continua folha subindo de baixo).
+  O porquê é medido, não gosto: no dock de ~530px, rótulo + descrição à esquerda e um segmentado à
+  direita brigam pela linha, e como o rótulo tem `min-width: 0` ele cede tudo — a descrição quebrava
+  em **uma palavra por linha**. Tela de configuração é rótulo-e-controle repetido dezenas de vezes;
+  ela precisa de largura, e largura é o que o dock não tem.
+  Ao mexer em qualquer tela dessas, use **container query** (`container-type: inline-size` no
+  wrapper + `@container`), nunca media query: quem aperta a linha é a largura do PAINEL, não a da
+  janela — num monitor de 1440px o dock tem 530px e uma media query de 560px nunca dispara ali.
+  **Direção acordada com o usuário, ainda não implementada:** juntar todas as configs num modal
+  único de "Configurações" com abas (Aparência · Geral · o que vier), em vez de uma folha por
+  assunto. Quem for fazer: o `lib/gitTabs.ts` + `GitTabs.svelte` já são o precedente de navegação
+  por abas dentro de um modal, incluindo nível por aba no celular.
 - **The message list is windowed.** `MessageList.svelte` mounts only the last `WINDOW=120` events; scroll-to-top
   reveals older pages (in-memory, no backend call). Don't render the whole transcript at once.
 - **Queue/pending dedup.** Messages sent while Claude is `working` echo as `pending` / `queued-` bubbles and
