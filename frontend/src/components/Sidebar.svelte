@@ -408,21 +408,28 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   let menuMsg = $state('');   // banner efemero pro resultado do git pull / erro do editor
   let flashTimer: ReturnType<typeof setTimeout> | undefined;
 
+  // "Manter aberta" mandando de fato. A preferencia NAO vale no quadro/canvas: essas visoes
+  // recolhem de proposito pra dar largura as colunas, e o efeito de overviewActive ja mexe no pin —
+  // sem esta excecao a barra ficaria aberta por cima delas.
+  const fixaAberta = $derived(sidebarPrefs.alwaysOpen && !overviewActive);
+
   // Largura efetiva: preferencia "manter aberta", OU pin aberto, OU hover, OU overlay preso a uma
   // linha (menu/rename) ativo -> nao recolhe por baixo dele. Rail de iniciais so quando nada disso
   // vale. (Apos menu/editing existirem.)
-  // A preferencia NAO vale no quadro/canvas: essas visoes recolhem de proposito pra dar largura as
-  // colunas, e o efeito de overviewActive ja mexe no pin — sem esta excecao a barra ficaria aberta
-  // por cima delas.
   const expanded = $derived(
-    (sidebarPrefs.alwaysOpen && !overviewActive) || !collapsed || hovering || menu !== null || editing !== null,
+    fixaAberta || !collapsed || hovering || menu !== null || editing !== null,
   );
+
+  // Barra ABERTA DE FORMA PERSISTENTE — nao por hover. E a condicao do handle de redimensionar:
+  // arrastar a borda de uma barra que so esta larga porque o mouse esta em cima nao faz sentido
+  // (ela encolhe assim que o ponteiro sai), mas arrastar a que fica aberta faz.
+  const larguraAjustavel = $derived(!collapsed || fixaAberta);
 
   // Altura: com a preferencia ligada quem manda e a escolha do usuario ('content' = dock com altura
   // de conteudo, o formato que antes so aparecia no hover). Com ela desligada, comportamento de
   // sempre — o dock segue o pin.
   const floating = $derived(
-    sidebarPrefs.alwaysOpen && !overviewActive ? sidebarPrefs.height === 'content' : collapsed,
+    fixaAberta ? sidebarPrefs.height === 'content' : collapsed,
   );
 
   function openMenu(e: MouseEvent, s: SessionInfo, serverId: string) {
@@ -801,7 +808,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
          nada na tela, mas gravava `collapsed` novo no localStorage do mesmo jeito: desligar a
          preferencia depois fazia a barra voltar obedecendo um estado que mudou sem o usuario ver.
          O botao some enquanto essa preferencia manda (fora do quadro/canvas, que ja tem excecao propria). -->
-    {#if !(sidebarPrefs.alwaysOpen && !overviewActive)}
+    {#if !fixaAberta}
       <button class="icon-btn" onclick={togglePin} aria-label={collapsed ? 'Expandir' : 'Recolher'}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <rect x="3" y="4" width="18" height="16" rx="2"/>
@@ -1200,8 +1207,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     </button>
   </div>
 
-  {#if !collapsed}
-    <!-- Drag na borda direita pra redimensionar (so pin aberto). -->
+  {#if larguraAjustavel}
+    <!-- Drag na borda direita pra redimensionar. Segue `larguraAjustavel`, NAO `!collapsed`: com
+         "manter aberta" a barra fica larga com o pin ainda recolhido, e a condicao antiga fazia o
+         handle sumir justamente na configuracao em que ela vive aberta. -->
     <div class="resize-handle" onpointerdown={resizeStart} onpointermove={resizeMove}
       onpointerup={resizeEnd} onpointercancel={resizeEnd}
       role="separator" aria-label="Redimensionar barra lateral" aria-orientation="vertical"></div>
