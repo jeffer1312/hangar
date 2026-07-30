@@ -209,6 +209,15 @@ A barra lateral tem dois ajustes em **Aparência** (menu da conta), só no deskt
 - **Push:** botão **Commit & Push** sobe a branch atual (usa o upstream, ou cria com `-u origin` no
   primeiro push).
 - **Histórico:** tocar/clicar num commit mostra os arquivos alterados e o diff de cada um.
+- **Ações por commit:** o botão **⋯** (na lista de commits ou no detalhe) abre o menu do commit:
+  diff completo num único texto, comparar o commit com a working tree, copiar hash/mensagem/detalhes
+  completos, ver as branches que contêm aquele commit, criar branch ou tag naquele ponto,
+  cherry-pick, revert (cria um commit novo desfazendo) e reset até ali (soft/mixed/hard — o hard
+  pede confirmação dupla). Se um cherry-pick/revert der conflito, o erro do git aparece e um botão
+  **abort** surge na barra de ações para desistir da operação.
+- **Buscar no log:** o campo acima da lista filtra os commits pelo texto da mensagem (`git log
+  --grep`, ignora maiúsculas). Enquanto o filtro está ativo o grafo fica oculto — os commits do meio
+  saem da lista e as linhas do grafo não teriam onde ligar. **limpar** volta a lista completa.
 
 ### Motores de modelo (Kimi, gateway próprio, …)
 
