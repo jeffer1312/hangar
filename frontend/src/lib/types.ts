@@ -76,6 +76,18 @@ export interface SessionInfo {
   engine?: string | null;
 }
 
+// Detalhe do plano (GET /api/sessions/{name}/plan, Task 5): granularidade de Task/Step que o
+// SessionInfo.plan_* não carrega (aquele é o resumo pra chip/barra na lista). 404 = sem plano ativo.
+export interface PlanStep { title: string; done: boolean; manual: boolean }
+export interface PlanTask { title: string; done: number; total: number; steps: PlanStep[] }
+export interface PlanDetail {
+  name: string; path: string;
+  task: number; task_total: number;
+  done: number; total: number; complete: boolean;
+  tasks: PlanTask[];
+  markdown: string;
+}
+
 // Sessão marcada com o servidor de origem (visão agregada multi-servidor).
 export interface AggSession extends SessionInfo {
   serverId: string;

@@ -1316,7 +1316,7 @@ git commit -m "feat(plan): plan detail endpoint with raw markdown"
 - Modify: `DesktopSessionContext.svelte` (props novas + seção "Plano" antes de `:165`)
 - Modify: `ActivitySheet.svelte` (prop `showPlan`), `Chat.svelte` (`:1221` e o painel)
 
-- [ ] **Step 1: `PlanDetail` em `types.ts`**
+- [x] **Step 1: `PlanDetail` em `types.ts`**
 
 ```ts
 export interface PlanStep { title: string; done: boolean; manual: boolean }
@@ -1330,7 +1330,7 @@ export interface PlanDetail {
 }
 ```
 
-- [ ] **Step 2: Client em `lib/api.ts`**
+- [x] **Step 2: Client em `lib/api.ts`**
 
 Seguir o par que o arquivo já usa (`getX(name)` + `getXForServer(s, name)` — ver `getConfigForServer`
 em `:594` e o vizinho `getX` correspondente, e copiar a forma exata de montar URL/headers):
@@ -1349,7 +1349,7 @@ export const getPlan = (name: string) => getPlanForServer(currentServer(), name)
 
 `currentServer()` é o nome **presumido** — usar o helper que os outros `getX` do arquivo usam.
 
-- [ ] **Step 3: `PlanPanel.svelte`**
+- [x] **Step 3: `PlanPanel.svelte`**
 
 ```svelte
 <script lang="ts">
@@ -1416,7 +1416,7 @@ CSS: seguir a tipografia do `DesktopSessionContext` (`.section-label`, `--text-m
 `.md` com `max-height: 50vh; overflow: auto`. `✓` em `--success`, `◐` em `--accent`, `○` em
 `--text-muted`.
 
-- [ ] **Step 4: Desktop — props novas no `DesktopSessionContext`**
+- [x] **Step 4: Desktop — props novas no `DesktopSessionContext`**
 
 O componente **não recebe `session` hoje** (só escalares como `sessionName`). Adicionar:
 
@@ -1437,7 +1437,7 @@ E a seção, **antes** da `<section class="sec-metric">` do Contexto (`:165`):
   {/if}
 ```
 
-- [ ] **Step 5: `Chat.svelte` — de onde vem a `session` e o detalhe**
+- [x] **Step 5: `Chat.svelte` — de onde vem a `session` e o detalhe**
 
 O `Chat` já mantém a lista agregada no desktop (ver o bloco em torno de `Chat.svelte:227-260`, que
 tem `if (!desktop) return`). Usar **essa** lista:
@@ -1465,7 +1465,7 @@ servidor daquele card, não `getPlan`.
 
 Passar ao painel: `session={planSession} {planDetail} {planLoading}`.
 
-- [ ] **Step 6: Mobile — `PlanPanel` no topo da `ActivitySheet`**
+- [x] **Step 6: Mobile — `PlanPanel` no topo da `ActivitySheet`**
 
 Prop nova `showPlan = false` na `ActivitySheet` (+ `session`, `planDetail`, `planLoading`), e o
 `PlanPanel` no topo só quando `showPlan && session?.plan_name`.
@@ -1476,7 +1476,7 @@ No `Chat.svelte:1221`: `showPlan={!desktop}` — a prop de viewport do `Chat` ch
 **Por quê a prop:** a `ActivitySheet` é montada pelo `Chat`, que roda nas **duas** views — sem o
 gate, o painel apareceria duplicado no desktop (uma vez no `DesktopSessionContext`, outra na sheet).
 
-- [ ] **Step 7: Gate de tipos + verificação manual (mobile E desktop)**
+- [x] **Step 7: Gate de tipos + verificação manual (mobile E desktop)**
 
 Run: `npm --prefix /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/frontend run check`
 Expected: `0 ERRORS 0 WARNINGS`
@@ -1491,7 +1491,7 @@ Manual:
 
 Prints em `.claude/plan-panel-desktop.png` e `.claude/plan-panel-mobile.png`.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add frontend/src/components/PlanPanel.svelte frontend/src/components/DesktopSessionContext.svelte frontend/src/components/ActivitySheet.svelte frontend/src/screens/Chat.svelte frontend/src/lib/api.ts frontend/src/lib/types.ts

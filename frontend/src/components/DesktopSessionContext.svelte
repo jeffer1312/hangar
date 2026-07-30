@@ -1,6 +1,7 @@
 <script lang="ts">
   import RateChips from './RateChips.svelte';
-  import type { State } from '../lib/types';
+  import PlanPanel from './PlanPanel.svelte';
+  import type { State, SessionInfo, PlanDetail } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
   import { stateColors, stateLabels, ctxWindow, providerName } from '../lib/format';
 
@@ -14,6 +15,11 @@
     // Nome da sessao aberta: com a NavBar escondida (>=1280px) ele some da tela — e no overlay
     // do board/canvas nem a lista lateral esta a vista. Vai no header do painel.
     sessionName?: string;
+    // Progresso do plano (Task 5b): a SessionInfo completa (o PlanPanel/PlanBar leem plan_* dela)
+    // + o detalhe de Task/Step, buscado à parte pelo Chat.
+    session?: SessionInfo | null;
+    planDetail?: PlanDetail | null;
+    planLoading?: boolean;
     // ── Acoes da NavBar ──────────────────────────────────────────────────────
     // No desktop LARGO (>=1280px, mesma breakpoint deste painel) o Chat esconde a NavBar — a
     // informacao dela ja vivia toda aqui — e as ACOES migram pra faixa sob o header. Todas
@@ -61,6 +67,7 @@
     loopLabel = null, loopColor = undefined, onLoopTap = undefined,
     onProviderTap = undefined, onOpenPair = undefined, onOpenGit = undefined,
     onOpenPeerChat = undefined,
+    session = null, planDetail = null, planLoading = false,
   }: Props = $props();
 
   const hasActions = $derived(onOpenTerminal || onOpenRun || onOpenAttachments || onOpenActivity);
@@ -162,6 +169,15 @@
        cor. O detalhe e o chip do loop subiram pro header, que ja era o lugar do estado. -->
 
   <div class="ctx-scroll">
+  {#if session?.plan_name}
+    <!-- Só quando ha plano ativo nesta sessao (Task 5b) — sem gate a secao apareceria vazia pra
+         toda sessao sem superpowers rodando. -->
+    <section class="sec-metric">
+      <span class="section-label">Plano</span>
+      <PlanPanel {session} detail={planDetail ?? null} loading={planLoading ?? false} />
+    </section>
+  {/if}
+
   <section class="sec-metric">
     <span class="section-label">Contexto</span>
     {#if status?.ctxPct != null}

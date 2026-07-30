@@ -37,12 +37,13 @@
     answerQuestions,
     getRunners,
     isAbortError,
+    getPlan,
   } from '../lib/api';
   import { appendTail, hasSeam, prependOlder } from '../lib/history';
   import { parseStatusLine } from '../lib/statusline';
   import { listServers, getActiveId } from '../lib/auth';
   import { createActivityFolder } from '../lib/activity';
-  import type { ChatEvent, StateEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider } from '../lib/types';
+  import type { ChatEvent, StateEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail } from '../lib/types';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
   import { stateLabels, stateColors, countAwaiting, nextAwaiting, providerName } from '../lib/format';
 
@@ -165,6 +166,24 @@
     return () => mq.removeEventListener('change', on);
   });
   let allSessions = $state<SessionInfo[]>([]);
+  // Detalhe do plano (Task 5b): NÃO usa o sessionsStore (mesmo motivo do loopChip acima — reter o
+  // store aqui abria 1 stream de lista por servidor no celular). `allSessions` já é populada por
+  // getSessions() (loadSessionsForNav, a cada 5s nas DUAS views) — reusa ela pra achar plan_name.
+  const planSession = $derived(allSessions.find((s) => s.name === sessionName) ?? null);
+  let planDetail = $state<PlanDetail | null>(null);
+  let planLoading = $state(false);
+  // Busca o detalhe só quando o plano MUDA de nome — o progresso (done/total) já chega pronto na
+  // lista a cada poll; refazer o /plan a cada tick seria trabalho redundante pro backend reler o
+  // markdown do disco.
+  $effect(() => {
+    const n = planSession?.plan_name ?? null;
+    if (!n) { planDetail = null; return; }
+    planLoading = true;
+    getPlan(sessionName)
+      .then((d) => { planDetail = d; })
+      .catch(() => { planDetail = null; })
+      .finally(() => { planLoading = false; });
+  });
   // Bolha sendo encaminhada pra outra sessao (long-press/hover ↗); null = sheet fechado.
   let forwardText = $state<string | null>(null);
   // Pareamento ("trabalhando juntas"): sheet + par atual derivado da lista já carregada.
@@ -1046,6 +1065,9 @@
       onOpenPair={() => (pairOpen = true)}
       onOpenPeerChat={nested ? undefined : (peer) => (peerChat = peer)}
       onOpenGit={() => (gitOpen = true)}
+      session={planSession}
+      {planDetail}
+      {planLoading}
     />
   {/if}
 
@@ -1218,7 +1240,8 @@
 
   <PreviewSheet open={previewOpen} onClose={() => (previewOpen = false)} />
 
-  <ActivitySheet open={activityOpen} {activity} {sessionName} onClose={() => (activityOpen = false)} />
+  <ActivitySheet open={activityOpen} {activity} {sessionName} onClose={() => (activityOpen = false)}
+    showPlan={!desktop} session={planSession} {planDetail} {planLoading} />
 
   <TerminalMirror open={mirrorOpen} {sessionName} onClose={closeMirror} />
 
