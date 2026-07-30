@@ -19,11 +19,15 @@
     level: number;
     onPush: () => void;
     onPop: () => void;
+    // A faixa de estado do rodape cala o erro enquanto o CommitMenu esta aberto (o menu fica por
+    // cima e mostra o erro ele mesmo). Quem sabe do menu e esta aba, entao ela avisa.
+    onMenuOpen?: (aberto: boolean) => void;
   }
-  let { git, desktop, level, onPush, onPop }: Props = $props();
+  let { git, desktop, level, onPush, onPop, onMenuOpen }: Props = $props();
 
   let selecionado = $state<GitCommit | null>(null);
   let menuCommit = $state<GitCommit | null>(null);
+  $effect(() => { onMenuOpen?.(!!menuCommit); });
 
   // Carrega na primeira vez que a aba aparece. Sem isto o log fica vazio: git.load() so faz
   // refresh() (branches + arquivos), quem preenche `commits` e openLog(). Quem chamava openLog
