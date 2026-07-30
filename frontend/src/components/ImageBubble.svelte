@@ -57,7 +57,7 @@
 
 <style>
   .image-bubble {
-    align-self: flex-end;
+    align-self: flex-start;     /* mesma margem da resposta, igual ao UserBubble */
     max-width: 80%;
     display: flex;
     flex-direction: column;
@@ -65,7 +65,7 @@
     margin: var(--space-1) 0 var(--space-3);
     padding: var(--space-2);
     background: var(--accent-dim);
-    border-radius: 18px 18px 4px 18px;
+    border-radius: 18px 18px 18px 4px;
     animation: bubble-in 200ms var(--ease-out);
   }
 
@@ -74,7 +74,7 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-1);
-    justify-content: flex-end;
+    justify-content: flex-start;
   }
   .thumb-btn {
     padding: 0;

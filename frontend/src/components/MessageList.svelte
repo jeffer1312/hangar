@@ -424,13 +424,13 @@
   }
 
   /* Bubble enfileirado: ainda nao processado pelo Claude — atenuado ate solidificar. Precisa ser
-     flex-column align-end pra que UserBubble/ImageBubble (que dependem de flex-end no pai) fiquem
-     a DIREITA como msg do usuario — senao o wrapper block cola tudo na esquerda (cara de assistente). */
+     flex-column pra que UserBubble/ImageBubble (que alinham pelo pai flex) fiquem na mesma margem
+     esquerda da resposta — senao o wrapper block muda o comportamento do align-self da imagem. */
   .pending-bubble {
     display: flex;
     flex-direction: column;
     /* align-items default (stretch): o UserBubble (.bubble-wrap) ocupa a largura e alinha o balao
-       a direita sozinho; a ImageBubble usa align-self:flex-end. flex-end aqui encolheria o
+       sozinho; a ImageBubble usa align-self. NAO trocar por flex-start/flex-end aqui: encolheria o
        bubble-wrap pro min-content -> palavra curta ("sim") quebrava letra a letra. */
     opacity: 0.5;
     transform: scale(0.97);
@@ -442,13 +442,13 @@
     transform: none;
   }
 
-  /* Msg da fila durável (evento sintetico "queued-"): alinha a direita (como user) e atenua
-     enquanto na fila. Acende sozinha quando o Claude fica idle (transition). */
+  /* Msg da fila durável (evento sintetico "queued-"): mesma margem das demais, atenuada enquanto
+     esta na fila. Acende sozinha quando o Claude fica idle (transition). */
   .queued-row {
     display: flex;
     flex-direction: column;
     /* stretch (default): bubble de texto ocupa a largura e alinha sozinho; imagem usa align-self.
-       flex-end encolhia o bubble pro min-content -> "sim" quebrava letra a letra. */
+       flex-start/flex-end encolhem o bubble pro min-content -> "sim" quebrava letra a letra. */
     transition: opacity 240ms var(--ease-out), transform 360ms var(--spring);
   }
   .queued-row.dim {
