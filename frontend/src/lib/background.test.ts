@@ -8,7 +8,7 @@ const store = new Map<string, string>();
   removeItem: (k: string) => store.delete(k),
 };
 
-const { getBgScrim, getReadAlpha, getTextBoost, getFontPref, setFontPref } = await import('./background');
+const { getBgScrim, getReadAlpha, getTextBoost, getFontPref, setFontPref, getSurfaceSolid, setSurfaceSolid } = await import('./background');
 
 // Fonte: 'system' é o padrão e NÃO grava chave (mesma convenção do tema/painéis — só o desvio do
 // padrão persiste). Lixo na chave cai em 'system' em vez de deixar o app numa fonte que não existe.
@@ -55,5 +55,29 @@ describe('padrões quando a chave nunca foi escrita', () => {
     expect(getBgScrim()).toBe(11);
     expect(getReadAlpha()).toBe(92);
     expect(getTextBoost()).toBe(10);
+  });
+});
+
+// Solidez das caixas: mesmo contrato dos outros sliders (padrão quando a chave não existe, 0 vale 0,
+// lixo cai no padrão) mais o clamp na escrita — o valor vira alfa de cor, e alfa fora de 0..1
+// pintaria caixa nenhuma ou caixa opaca sem ninguém entender de onde veio.
+describe('solidez das caixas', () => {
+  it('padrão 12, 0 vale 0, lixo cai no padrão', () => {
+    store.clear();
+    expect(getSurfaceSolid()).toBe(12);
+    store.set('cp_surface_solid', '0');
+    expect(getSurfaceSolid()).toBe(0);
+    store.set('cp_surface_solid', 'abc');
+    expect(getSurfaceSolid()).toBe(12);
+  });
+
+  it('escrita prende na faixa 0..100 e arredonda', () => {
+    store.clear();
+    setSurfaceSolid(-30);
+    expect(getSurfaceSolid()).toBe(0);
+    setSurfaceSolid(999);
+    expect(getSurfaceSolid()).toBe(100);
+    setSurfaceSolid(41.6);
+    expect(getSurfaceSolid()).toBe(42);
   });
 });

@@ -12,6 +12,7 @@ export type BgPref = 'flat' | 'texture' | 'aurora' | 'image';
 const KEY = 'cp_bg';
 const IMG_KEY = 'cp_bg_image';   // data URL da imagem escolhida (já encolhida)
 const SCRIM_KEY = 'cp_bg_scrim';  // 0..100 — quanto da imagem passa (100 = imagem crua)
+const SOLID_KEY = 'cp_surface_solid';  // 0..100 — quanto as caixas de dentro do painel sao mais opacas que ele
 
 // Transparência do papel de parede. O terminal faz isso pelo compositor; aqui o equivalente é o
 // quanto do scrim escuro fica entre a foto e o texto. Guardado por dispositivo, como a imagem.
@@ -37,6 +38,21 @@ export function setBgScrim(v: number): void {
   aplicarScrim(n);
 }
 
+// Solidez das CAIXAS de dentro dos painéis (chip, campo, card, bloco de saída) — quanto elas ficam
+// mais opacas que o painel que as hospeda. 0 = a caixa some no vidro, indistinguível do painel;
+// 100 = caixa sólida por cima dele. Existe como controle, e não como constante no CSS, porque o
+// ponto certo depende da FOTO de quem usa: sobre uma imagem clara e cheia de detalhe as caixas
+// precisam de mais corpo pra o texto se ler; sobre uma escura e lisa, menos.
+export function getSurfaceSolid(): number {
+  return lerNumero(SOLID_KEY, 12);
+}
+
+export function setSurfaceSolid(v: number): void {
+  const n = Math.max(0, Math.min(100, Math.round(v)));
+  try { localStorage.setItem(SOLID_KEY, String(n)); } catch { /* modo privado */ }
+  aplicarScrim();
+}
+
 function aplicarScrim(t = getBgScrim()): void {
   if (typeof document === 'undefined') return;
   // t alto = mais imagem = menos véu. UNIFORME e chegando a tapar: é o que o compositor do terminal
@@ -50,10 +66,16 @@ function aplicarScrim(t = getBgScrim()): void {
   // sensação que a foto dá. Anda junto do slider, mas numa faixa mais conservadora — é sobre eles
   // que o texto de leitura fica.
   const painel = 0.92 - (t / 100) * 0.50;
+  // As caixas DE DENTRO dos painéis (tokens --surface-* do app.css) partem da alfa do painel e
+  // ganham o degrau do slider Solidez. Sem degrau nenhum elas somem no vidro e a tela vira uma
+  // superfície só; com degrau demais voltam a ser recorte chapado — é o mesmo dilema do véu, uma
+  // camada acima, e por isso tem controle próprio em vez de um número fixo aqui.
+  const caixa = Math.min(1, painel + getSurfaceSolid() / 100);
   const raiz = document.documentElement;
   raiz.style.setProperty('--cp-scrim-topo', topo.toFixed(3));
   raiz.style.setProperty('--cp-scrim-base', base.toFixed(3));
   raiz.style.setProperty('--cp-panel-alpha', painel.toFixed(3));
+  raiz.style.setProperty('--cp-surface-alpha', caixa.toFixed(3));
 }
 
 // Papel de parede: o navegador não enxerga o wallpaper do sistema (é o que o terminal faz por ser
@@ -142,6 +164,7 @@ export function applyBg(pref: BgPref = getBgPref()): void {
     raiz.style.removeProperty('--cp-scrim-topo');
     raiz.style.removeProperty('--cp-scrim-base');
     raiz.style.removeProperty('--cp-panel-alpha');
+    raiz.style.removeProperty('--cp-surface-alpha');
   }
 }
 

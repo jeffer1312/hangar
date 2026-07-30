@@ -165,6 +165,10 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
      exatamente `--bg-elevated`/`--bg-base`; com papel de parede entram no mesmo véu sozinhos.
   3. `--bg-elevated`/`--bg-base` crus só para **realce de estado** (`:hover`, `.sel`, linha atual),
      que é tinta por cima da linha, não superfície.
+  Quanto as caixas ficam mais opacas que o painel **não é constante no CSS**: é o slider *Solidez
+  das caixas* (Aparência → Fundo, ao lado de Transparência), que escreve `--cp-surface-alpha`
+  (`lib/background.ts`). O ponto certo depende da foto de quem usa — se um valor desses te parecer
+  errado no código, o lugar dele é um controle, não um número fixo.
   Verificação: ligue um papel de parede e olhe a tela. Qualquer retângulo que não deixe a foto
   atravessar, enquanto o painel em volta deixa, é bug — não estilo.
 - **The message list is windowed.** `MessageList.svelte` mounts only the last `WINDOW=120` events; scroll-to-top

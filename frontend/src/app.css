@@ -268,11 +268,13 @@ html[data-bg="image"] {
   --glass-panel: rgba(26, 24, 29, var(--cp-panel-alpha, 0.70));
   /* As superficies DE DENTRO dos paineis entram no mesmo veu, senao cada chip, campo e bloco de
      saida vira um retangulo chapado boiando sobre a foto. Mesma conta do bloco de codigo do
-     AssistantBubble, agora como token pra qualquer componente usar. O inset fica um degrau mais
-     opaco que o raised: e onde se LE e se ESCREVE texto, e ali o contraste ganha da foto. */
-  --surface-raised: color-mix(in srgb, var(--bg-elevated) calc(var(--cp-panel-alpha, 0.87) * 100%), transparent);
-  --surface-inset:  color-mix(in srgb, var(--bg-base) calc(min(1, var(--cp-panel-alpha, 0.87) + 0.12) * 100%), transparent);
-  --surface-card:   color-mix(in srgb, var(--bg-surface) calc(var(--cp-panel-alpha, 0.87) * 100%), transparent);
+     AssistantBubble, agora como token pra qualquer componente usar.
+     `--cp-surface-alpha` = alfa do painel + o slider "Solidez das caixas" (lib/background.ts). O
+     ponto certo depende da FOTO de quem usa, entao e controle na tela de aparencia, nao numero
+     fixo aqui: sobre imagem clara e detalhada as caixas precisam de corpo pra o texto se ler. */
+  --surface-raised: color-mix(in srgb, var(--bg-elevated) calc(var(--cp-surface-alpha, 0.87) * 100%), transparent);
+  --surface-inset:  color-mix(in srgb, var(--bg-base) calc(var(--cp-surface-alpha, 0.87) * 100%), transparent);
+  --surface-card:   color-mix(in srgb, var(--bg-surface) calc(var(--cp-surface-alpha, 0.87) * 100%), transparent);
 }
 html[data-theme="light"][data-bg="image"] { --glass-panel: rgba(255, 253, 250, var(--cp-panel-alpha, 0.78)); }
 html[data-bg="image"] body::after {
