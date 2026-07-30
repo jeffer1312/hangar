@@ -1038,7 +1038,7 @@ git commit -m "feat(plan): plan chip on sidebar, session card and board card"
 - Create: `frontend/src/components/PlanBar.svelte`
 - Modify: `Sidebar.svelte` (dentro de `.row-info`, e o ramo do rail recolhido em `:951-958`), `SessionCard.svelte`, `BoardCard.svelte`
 
-- [ ] **Step 1: Criar `frontend/src/components/PlanBar.svelte`**
+- [x] **Step 1: Criar `frontend/src/components/PlanBar.svelte`**
 
 ```svelte
 <script lang="ts">
@@ -1126,7 +1126,7 @@ git commit -m "feat(plan): plan chip on sidebar, session card and board card"
 </style>
 ```
 
-- [ ] **Step 2: Plugar nos três cards**
+- [x] **Step 2: Plugar nos três cards**
 
 Import em cada um: `import PlanBar from './PlanBar.svelte';`
 
@@ -1146,12 +1146,13 @@ Import em cada um: `import PlanBar from './PlanBar.svelte';`
   **Antes:** confirmar que o elemento da row tem `position: relative` no CSS; se não tiver,
   adicionar (a barra é absoluta).
 
-- [ ] **Step 3: Gate de tipos**
+- [x] **Step 3: Gate de tipos**
 
 Run: `npm --prefix /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/frontend run check`
 Expected: `0 ERRORS 0 WARNINGS`
 
-- [ ] **Step 4: Verificação manual (mobile E desktop)**
+- [x] **Step 4: Verificação manual (mobile E desktop)** — item 6 (plano 100% concluído) não testado
+  ao vivo, ver relatório.
 
 1. Desktop: barra segmentada na sidebar; contar os segmentos = número de Tasks do plano (6, neste).
 2. Recolher a sidebar: barra **única** na base da row, sem rótulo, sem empurrar as iniciais nem
@@ -1164,7 +1165,7 @@ Expected: `0 ERRORS 0 WARNINGS`
 Salvar print de cada view em `.claude/plan-bar-<view>.png` e citar os caminhos no relatório (o
 usuário lê pelo celular).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/components/PlanBar.svelte frontend/src/components/Sidebar.svelte frontend/src/components/SessionCard.svelte frontend/src/components/BoardCard.svelte

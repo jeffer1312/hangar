@@ -9,6 +9,7 @@
   import { parseStatusLine } from '../lib/statusline';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import { planBadge } from '../lib/plan';
+  import PlanBar from './PlanBar.svelte';
   import type { Server } from '../lib/auth';
   import type { ChatEvent } from '../lib/types';
   import type { BoardRow, PendingMsg } from '../screens/Board.svelte';
@@ -424,6 +425,7 @@
       {#if meta?.sessionTime}<span title="tempo de sessão">⏱ {meta.sessionTime}</span>{/if}
     </div>
   {/if}
+  <PlanBar {session} />
 
   <div class="bc-body" class:masked={bodyOverflows} bind:this={bodyEl} onscroll={onBodyScroll} onwheel={onBodyWheel}>
     <!-- "carregando…" só quando NÃO há o que mostrar: o card remonta a cada troca de coluna e os ecos

@@ -17,6 +17,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import { updateBadge } from '../lib/badge';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import { planBadge } from '../lib/plan';
+  import PlanBar from './PlanBar.svelte';
   import Lottie from './Lottie.svelte';
   import pensando from '../lib/lottie/pensando.json';
   import type { WorkspaceAction, WorkspaceView } from '../lib/workspaceCommands';
@@ -957,6 +958,17 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   <span class="prov-rail">{provTag}</span>
                 {/if}
               </span>
+              {#if !expanded && !selectMode && !provTag}
+                <!-- Rail recolhido: barra única na base da row, irmã de .lead (não dentro dele —
+                     .lead é a coluna das iniciais, gated em provTag). .sess-main precisa de
+                     position:relative pra ancorar o position:absolute do compact (ver CSS).
+                     ponytail: gate em !provTag — geometria do .prov-rail (badge do provider, também
+                     absoluto e centralizado na base do avatar) ocupa a MESMA faixa de ~13px que a
+                     barra usaria; os 36-40px do trilho não têm altura pra empilhar os dois sem
+                     colidir. Mutuamente exclusivo por ora (raro ter Pi/Codex + plano ativo); se
+                     precisar dos dois ao mesmo tempo, mover um dos dois pro topo do avatar. -->
+                <PlanBar session={s} compact />
+              {/if}
               {#if expanded}
                 <span class="row-info">
                   <span class="name-row">
@@ -1021,6 +1033,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                       {/if}
                     </span>
                   {/if}
+                  <PlanBar session={s} />
                 </span>
                 <span
                   class="state-chip"
@@ -1823,7 +1836,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     50%      { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 0%, transparent); }
   }
   .sidebar.collapsed .sess-row { justify-content: center; }
-  .sidebar.collapsed .sess-main { justify-content: center; padding: 0; }
+  /* position:relative pra ancorar a PlanBar compact (position:absolute) — sem isto ela flutua em
+     relação ao body inteiro em vez de ficar na base desta linha. */
+  .sidebar.collapsed .sess-main { justify-content: center; padding: 0; position: relative; }
   .sess-row.active .sess-main { color: var(--text-primary); }
   .sess-name { flex: 1; min-width: 0; font-size: var(--text-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sess-main.untracked { opacity: 0.45; cursor: default; }

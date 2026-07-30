@@ -3,6 +3,7 @@
   import { stateLabels, stateColors, untrackedReason, providerTag } from '../lib/format';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import { planBadge } from '../lib/plan';
+  import PlanBar from './PlanBar.svelte';
   import Lottie from './Lottie.svelte';
   import pensando from '../lib/lottie/pensando.json';
 
@@ -329,6 +330,7 @@
           {/if}
         </span>
       {/if}
+      <PlanBar {session} />
       <!-- Retomar e Claude-only de ponta a ponta (candidatos de ~/.claude/projects + relance com
            `claude --resume`): numa sessao Pi o botao so poderia errar, entao mostramos a razao no
            lugar dele. O backend recusa igual, pra um cliente velho nao matar o pane. -->
