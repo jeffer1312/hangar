@@ -707,6 +707,63 @@ if (-not $bash) {
     }
 }
 
+# -- 7c/8 Atualizar sozinho no proximo git pull ------------------------------
+# Hook post-merge: roda depois de todo `git pull` bem-sucedido e re-aplica o que o pull NAO atualiza
+# sozinho (wrapper, build do front, tarefa agendada, config do multiplexador). No Linux quem instala
+# e o install.sh (bloco HOOK la); no Windows NINGUEM instalava -- o -Update existia e era documentado
+# (ver o cabecalho deste arquivo), mas o gatilho nunca era criado, entao TODO pull deixava codigo novo
+# com wrapper/front/tarefa velhos e nada avisava: so aplicava quem lembrasse de rodar `-Update` na mao.
+# Medido nesta maquina: .git/hooks tinha so os .sample. O CORPO do hook ja era cross-platform (ele
+# ramifica por `uname -s` e chama ESTE script no MINGW), entao faltava apenas a INSTALACAO.
+# ponytail: o corpo vive em scripts/post-merge.hook, FONTE UNICA pros dois instaladores -- inline nos
+# dois arquivos, as copias divergiriam, que e a familia de bug mais caro deste projeto.
+Titulo '7c/8 Atualizar sozinho no proximo git pull'
+$hookAlvo = "$raiz\.git\hooks\post-merge"
+$hookFonte = "$raiz\scripts\post-merge.hook"
+$hookMarca = 'claude-cockpit-post-merge-hook'
+if ($Update) {
+    # O proprio hook pode ser quem esta chamando: nao se reinstala no meio da propria execucao.
+    Nota 'pulado no -Update (o hook pode ser o proprio chamador)'
+} elseif (-not (Test-Path "$raiz\.git")) {
+    Falta 'sem .git (copia sem historico?) - hook de atualizacao indisponivel'
+} elseif (-not (Test-Path $hookFonte)) {
+    Falta 'scripts\post-merge.hook nao encontrado - hook nao instalado'
+} elseif ((Test-Path $hookAlvo) -and (Select-String -Path $hookAlvo -Pattern $hookMarca -Quiet)) {
+    Ok 'hook de atualizacao ja instalado'
+    Nota "desligar:  del `"$hookAlvo`""
+} elseif (Test-Path $hookAlvo) {
+    # Hook de terceiro (do usuario ou de outra ferramenta): nunca sobrescrever.
+    Falta 'ja existe um .git\hooks\post-merge que nao e nosso - nao vou mexer nele'
+    Nota 'pra somar, acrescente a linha:  powershell -ExecutionPolicy Bypass -File install.ps1 -Update'
+} else {
+    Nota 'Ele so roda no pull, que e voce quem da. Nada nele pede senha.'
+    if (Pergunte "Deixar o proximo 'git pull' ja se atualizar sozinho?") {
+        # LF e SEM BOM, obrigatorio: o bash do Git le o shebang literalmente, entao CRLF vira
+        # "#!/usr/bin/env bash\r" -> "bad interpreter", e um BOM antes do #! quebra igual. Set-Content
+        # e Out-File do PS 5.1 produzem CRLF (e utf8 COM BOM), por isso a escrita vai pelo .NET.
+        # O .gitattributes ja forca LF no arquivo do repo; a normalizacao aqui cobre checkout antigo.
+        $hookTexto = ([System.IO.File]::ReadAllText($hookFonte)) -replace "`r`n", "`n"
+        New-Item -ItemType Directory -Force -Path (Split-Path $hookAlvo) | Out-Null
+        [System.IO.File]::WriteAllText($hookAlvo, $hookTexto, (New-Object System.Text.UTF8Encoding($false)))
+        # Confere o RESULTADO em vez de confiar na escrita: hook com CRLF/BOM falha CALADO no pull
+        # (o git nem reclama), e reportar "instalei" sem verificar e o erro que este projeto pagou
+        # caro em outros caminhos. Deu ruim -> remove, pra nao deixar hook quebrado no lugar.
+        $hb = [System.IO.File]::ReadAllBytes($hookAlvo)
+        $temBom = ($hb.Length -ge 3 -and $hb[0] -eq 0xEF -and $hb[1] -eq 0xBB -and $hb[2] -eq 0xBF)
+        $temCr = ($hb -contains 0x0D)
+        if ($temBom -or $temCr) {
+            Erro "hook gravado com $(if ($temBom) { 'BOM' } else { 'CRLF' }) - o bash do Git recusaria; removido"
+            Remove-Item $hookAlvo -Force
+            $script:pendencias += 'hook post-merge'
+        } else {
+            Ok "hook instalado - o proximo 'git pull' ja se atualiza sozinho"
+            Nota "desligar:  del `"$hookAlvo`""
+        }
+    } else {
+        Nota 'pulado - depois de um git pull, rode:  powershell -ExecutionPolicy Bypass -File install.ps1 -Update'
+    }
+}
+
 # -- 8/8 Checagem de fumaca --------------------------------------------------
 # Ate aqui foi tudo instalacao. Este passo separa "instalou" de "funciona": ate pouco tempo o
 # backend nem IMPORTAVA no Windows (um `import fcntl` no topo do projects.py) e um instalador

@@ -382,21 +382,17 @@ else
   echo "  do protocolo guardam cópia própria e ficariam velhos. Este hook re-aplica isso sozinho."
   nota "Ele só roda no pull, que é você quem dá. Nada nele pede senha. Desligar: rm $HOOK"
   if ask "Deixar o próximo 'git pull' já se atualizar sozinho?"; then
-  cat > "$HOOK" <<'GANCHO'
-#!/usr/bin/env bash
-# Instalado por claude-cockpit/install.sh. Roda após todo `git pull` bem-sucedido.
-# Re-aplica só o que o pull não atualiza sozinho (units, protocolo, deps, build do front).
-# Nada aqui pede senha. Pra desligar: rm .git/hooks/post-merge
-cd "$(git rev-parse --show-toplevel)" || exit 0
-printf '\n\033[36m==>\033[0m claude-cockpit: aplicando a atualização (post-merge)\n'
-# Git hook roda no bash do Git for Windows também, e lá quem atualiza é o install.ps1.
-case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) powershell -ExecutionPolicy Bypass -File install.ps1 -Update ;;
-  *)                    ./install.sh --update ;;
-esac || printf '\033[31mX\033[0m  a atualização falhou — rode o instalador na mão\n'
-GANCHO
-  chmod +x "$HOOK"
-    ok "hook instalado — o próximo 'git pull' já se atualiza sozinho"
+  # Corpo vem de scripts/post-merge.hook, FONTE ÚNICA compartilhada com o install.ps1 (que passou a
+  # instalar o mesmo hook no Windows, onde ninguém o instalava). Era um heredoc aqui; com dois
+  # instaladores, duas cópias inline divergiriam — e divergência de cópia duplicada é a família de
+  # bug mais caro deste projeto.
+    if [ -f scripts/post-merge.hook ]; then
+      cp scripts/post-merge.hook "$HOOK"
+      chmod +x "$HOOK"
+      ok "hook instalado — o próximo 'git pull' já se atualiza sozinho"
+    else
+      falta "scripts/post-merge.hook não encontrado — hook não instalado"
+    fi
   else
     nota "pulado — depois de um git pull, rode ./install.sh --update na mão"
   fi
