@@ -356,9 +356,11 @@ def test_send_literal_texto_que_comeca_com_hifen_usa_placeholder(monkeypatch):
     tmux.send_keys("cc", "-flag curta", literal=True)
     literais = [c[6] for c in chamadas if c[4:6] == ["-l", "--"]]
     assert literais == ["x-flag curta"]                       # placeholder na frente
-    # Home+DC sao os ULTIMOS passos: feitos antes, o cursor volta a 0 e o resto entra no INICIO.
-    assert [c[4] for c in chamadas if c[4:5] and c[4] in ("Home", "DC")] == ["Home", "DC"]
-    assert chamadas[-2][4] == "Home" and chamadas[-1][4] == "DC"
+    # Home+DC sao os ULTIMOS ENVIOS: feitos antes, o cursor volta a 0 e o resto entra no INICIO.
+    # (Depois deles vem so a captura de verificacao, que nao digita nada.)
+    envios = [c for c in chamadas if c[1] == "send-keys"]
+    assert [c[4] for c in envios[-2:]] == ["Home", "DC"]
+    assert chamadas[-1][1] == "capture-pane"   # confere se o 'x' saiu (rc do send-keys mente)
 
 
 def test_send_literal_sem_hifen_nao_usa_placeholder(monkeypatch):

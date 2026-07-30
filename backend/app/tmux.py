@@ -318,14 +318,28 @@ def _send_literal(target: str, text: str) -> bool:
             time.sleep(_WIN_CHUNK_PAUSE)
 
     if placeholder:
-        # Home + DC: cursor pro inicio e apaga o 'x'. Falha aqui deixaria um 'x' espurio na frente da
-        # mensagem — melhor reportar do que submeter texto adulterado.
+        # Home + DC: cursor pro inicio e apaga o 'x'.
+        #
+        # LIMITE MEDIDO, e ele importa: isto so funciona em pane cuja TUI honre Home/DC. Na TUI do
+        # Claude Code (Ink) funciona — verificado, o composer fica byte-exato e sem residuo. Num pane
+        # de SHELL nao: no PowerShell/PSReadLine as duas teclas voltam rc=0 e NAO apagam nada, e o
+        # texto fica com um 'x' na frente. O `send_text` do espelho do terminal pode mirar um shell,
+        # entao esse caso existe de verdade.
+        # Ainda assim vale a troca: sem o placeholder o texto seria descartado INTEIRO e em silencio;
+        # com ele, no pior caso, chega com um 'x' visivel na frente. Corrupcao visivel > perda muda.
+        # O rc nao serve de gate (volta 0 mesmo sem apagar), entao a checagem e por CAPTURA.
         for tecla in ("Home", "DC"):
             cp = _run(["tmux", "send-keys", "-t", target, tecla])
             if cp.returncode != 0:
                 _log.error("send-keys %s falhou pra %r ao remover o placeholder: %s",
                            tecla, target, (cp.stderr or "").strip()[:200])
                 return False
+        # So no caminho do placeholder (texto comecando com '-', raro) -> a captura extra nao pesa no
+        # caminho comum. Nao devolve False: o texto ESTA no input, e um requeue duplicaria a mensagem.
+        cap = _run(["tmux", "capture-pane", "-p", "-t", target])
+        if cap.returncode == 0 and ("x" + text[:24]) in cap.stdout:
+            _log.warning("placeholder 'x' NAO foi removido em %r (a TUI ignora Home/DC — pane de "
+                         "shell?): a mensagem entrou com um 'x' na frente", target)
     return True
 
 
