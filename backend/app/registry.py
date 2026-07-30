@@ -46,6 +46,11 @@ _log = logging.getLogger("claude_pocket.registry")
 # vao nao pode matar um awaiting real que ainda nem apareceu na tela.
 _AWAITING_DEMOTE_GRACE_S = 10.0
 
+# Teto de pares (done, total) por sessao em plan_tasks. O front so segmenta a barra com <= 8 Tasks
+# (PlanBar.svelte), acima disso desenha barra unica e ignora a lista. 9 e nao 8 DE PROPOSITO: cortar
+# em 8 exatos faria o front achar que o plano TEM 8 Tasks e segmentar um plano de 30.
+_MAX_PLAN_TASK_SEGMENTS = 9
+
 
 def _decorate_loop(info) -> None:
     """Decora loop_status/iter/max de UMA sessao a partir do sidecar (app.loop). Sem loop -> tudo None
@@ -75,11 +80,9 @@ def _decorate_plan(info) -> None:
     info.plan_done = p.done
     info.plan_total = p.total
     info.plan_complete = p.complete
-    # Teto de 9 pares: o front so segmenta a barra com <= 8 Tasks (PlanBar.svelte), acima disso
-    # desenha barra unica e ignora a lista. Sem o corte, um plano de 30 Tasks manda 30 pares por
-    # sessao em TODO /api/sessions e em toda re-emissao do SSE, de graca. 9 e nao 8 de proposito:
-    # cortar em 8 exatos faria o front achar que o plano TEM 8 Tasks e segmentar um plano de 30.
-    info.plan_tasks = [(t.done, t.total) for t in p.tasks[:9]]
+    # Sem o corte, um plano de 30 Tasks manda 30 pares por sessao em TODO /api/sessions e em toda
+    # re-emissao do SSE, de graca. Ver _MAX_PLAN_TASK_SEGMENTS acima pro porque de 9 e nao 8.
+    info.plan_tasks = [(t.done, t.total) for t in p.tasks[:_MAX_PLAN_TASK_SEGMENTS]]
 
 
 def sanitize_cwd(cwd: str) -> str:

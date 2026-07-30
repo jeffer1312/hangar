@@ -132,6 +132,12 @@ def parse_plan(path: str) -> PlanProgress | None:
     heads = [(m.start(), m.group(1).strip()) for m in _TASK_RE.finditer(raw)]
     if not heads:
         heads = [(0, "Task 1")]
+    elif heads[0][0] > 0 and any(s[0] < heads[0][0] for s in steps):
+        # Steps antes da 1a Task (ex.: checklist solto no topo) entram no done/total geral pelo
+        # scan do documento inteiro (linha 125); sem esta Task implicita eles somem da lista de
+        # Tasks e sum(t.done/total) nunca bate com r.done/r.total (o que alimenta a barra
+        # segmentada plan_tasks).
+        heads = [(0, "(sem Task)")] + heads
 
     tasks: list[TaskProgress] = []
     for i, (pos, title) in enumerate(heads):
@@ -177,10 +183,11 @@ def _discover(root: str) -> str | None:
                 if now_wall - st.st_mtime > _MAX_AGE_S:
                     continue
                 got = _load(e.path, st.st_mtime_ns)
-            except OSError:
+            except OSError as e:
                 # UM arquivo ilegivel nao pode matar a feature do repo inteiro: sem este continue,
                 # a excecao subiria ao except de plan_progress e devolveria None pra TODAS as
                 # sessoes daquele repo, a cada poll, pra sempre.
+                _log.warning("plano ilegivel path=%s", e.filename or e, exc_info=True)
                 continue
             if got is not None:
                 cands.append((st.st_mtime, e.path, got))

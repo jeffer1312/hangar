@@ -214,7 +214,7 @@
       .catch((e) => {
         // 404 (sem plano) o getPlan já devolve como null; aqui é falha de verdade — 500, rede,
         // token vencido. Não pode virar "sem detalhe" mudo: loga e o painel diz que não deu.
-        console.warn('/plan falhou', e);
+        console.error('/plan falhou', e);
         if (planKey !== key) return;
         planDetail = null;
         planDetailKey = null;
