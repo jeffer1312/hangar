@@ -1023,7 +1023,7 @@ Manual, com o backend do worktree rodando (Task 2 Step 7) e `npm --prefix …/fr
 4. Marcar um step à mão no plano → em ≤5 s o chip anda **nas três** sem recarregar.
 5. Sessão em repo sem plano: nenhum chip novo.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add frontend/src/lib/plan.ts frontend/src/lib/plan.test.ts frontend/src/lib/types.ts frontend/src/components/Sidebar.svelte frontend/src/components/SessionCard.svelte frontend/src/components/BoardCard.svelte
