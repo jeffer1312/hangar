@@ -232,6 +232,17 @@
       var(--bg-base) calc(100% - var(--navbar-fade)),
       transparent 100%);
   }
+  /* Com papel de parede a barra e a UNICA faixa que nao deixa a foto passar: o gradiente acima usa
+     `--bg-base` OPACO. Aqui ele vira o mesmo vidro do composer, que ja anda com o slider Solidez.
+     Continua sem backdrop-filter — no WebKit isso e proibido (bug do retangulo preto no scroll), e
+     nao e o filtro que faz a foto aparecer, e a alfa. Vem ANTES da regra do liquid de proposito:
+     no Chromium o liquid ainda ganha (mesma especificidade, ordem decide) e mantem a refracao. */
+  :global(html[data-bg='image']) .navbar::before {
+    background: linear-gradient(to bottom,
+      var(--glass-bg-solid) 0%,
+      var(--glass-bg-solid) calc(100% - var(--navbar-fade)),
+      transparent 100%);
+  }
   /* Chromium (data-liquid): refracao SVG real. O blur fica — Chromium não tem o bug do WebKit. */
   :global(html[data-liquid]) .navbar::before {
     background: var(--glass-bg);
