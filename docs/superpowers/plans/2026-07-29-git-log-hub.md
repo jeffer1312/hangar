@@ -1327,7 +1327,7 @@ centro), `onMenu` no `<CommitDetail>` (zona direita); e como último filho da `.
 
 (Importar `CommitMenu` de `./git/CommitMenu.svelte` e `getCommitDiffVsWorktree` de `../lib/api`.)
 
-- [x] **Step 8: Gate de tipos + verificação manual (mobile E desktop)**
+- [ ] **Step 8: Gate de tipos + verificação manual (mobile E desktop)**
 
 Run: `npm --prefix frontend run check`
 Expected: 0 erros
