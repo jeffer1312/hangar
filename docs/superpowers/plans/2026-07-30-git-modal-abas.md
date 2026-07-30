@@ -724,6 +724,11 @@ git commit -m "feat(git): GitTabs com cabecalho, abas e faixa de estado"
 - Modify: `frontend/src/screens/Chat.svelte:1268`, `frontend/src/components/Sidebar.svelte:1304`, `frontend/src/screens/SessionList.svelte:957`
 - Modify: `frontend/src/components/git/GitChangesTab.svelte` (passa a montar o `CommitBox`)
 - Delete: `GitPanel.svelte`, `GitSheet.svelte`, `git/ChangedFiles.svelte`, `git/CommitDetail.svelte`, `git/GitToolbar.svelte`
+- Modify: `frontend/src/components/git/CommitList.svelte` (tirar o `max-height: 52vh/68vh` do
+  `.git-scroll`, `:76-80`) — o spec manda os `max-height` internos saírem, mas nenhuma task tirava
+  este. Dentro do painel do empilhado ele vira scroll aninhado: a lista se limita a 68vh mesmo
+  quando o painel flex dá mais espaço. Sai só aqui porque até a Task 9 o `GitSheet`/`GitPanel` ainda
+  usam o componente e dependem do teto.
 - Modify: `docs/USAGE.md`
 
 - [ ] **Step 1: `Git.svelte`**

@@ -22,10 +22,15 @@
     // A faixa de estado do rodape cala o erro enquanto o CommitMenu esta aberto (o menu fica por
     // cima e mostra o erro ele mesmo). Quem sabe do menu e esta aba, entao ela avisa.
     onMenuOpen?: (aberto: boolean) => void;
+    // O commit escolhido mora FORA desta aba, junto do nivel, porque o corpo do modal troca de aba
+    // com `{#if}` — o componente e destruido e recriado. Estado local voltaria a null e o nivel
+    // sobreviveria: apertar "voltar" cairia na lista com o nivel dizendo "commit", e a partir dai
+    // cada escolha empurraria um nivel a mais do que devia.
+    selecionado: GitCommit | null;
+    onSelecionar: (c: GitCommit | null) => void;
   }
-  let { git, desktop, level, onPush, onPop, onMenuOpen }: Props = $props();
+  let { git, desktop, level, onPush, onPop, onMenuOpen, selecionado, onSelecionar }: Props = $props();
 
-  let selecionado = $state<GitCommit | null>(null);
   let menuCommit = $state<GitCommit | null>(null);
   $effect(() => { onMenuOpen?.(!!menuCommit); });
 
@@ -40,24 +45,28 @@
   const diffAberto = $derived(!!git.diffPath);
 
   function escolher(c: GitCommit | null) {
-    selecionado = c;
+    onSelecionar(c);
     if (!desktop && c) onPush();   // no celular, escolher o commit E descer de nivel
   }
   async function abrirArquivo(path: string) {
     if (!selecionado) return;
     if (await git.openCommitFileDiff(selecionado.hash, path)) onPush();
   }
-  async function abrirDiffDoCommit(c: GitCommit) {
+  // O ⋯ da lista abre o diff SEM passar pelo painel do commit. No celular isso pula um degrau: sem
+  // o push extra o nivel para em 1 com o diff na tela, e o "‹ commit" devolveria pra lista — um
+  // rotulo mentindo sobre o destino.
+  async function abrirDiffDeCommit(c: GitCommit, buscar: () => Promise<boolean>) {
     menuCommit = null;
-    if (await git.openCommitFullDiff(c)) { selecionado = c; onPush(); }
+    if (!(await buscar())) return;
+    onSelecionar(c);
+    if (!desktop && level === 0) onPush();
+    onPush();
   }
-  async function abrirDiffVsWorktree(c: GitCommit) {
-    menuCommit = null;
-    if (await git.openCommitWorktreeDiff(c)) { selecionado = c; onPush(); }
-  }
+  const abrirDiffDoCommit = (c: GitCommit) => abrirDiffDeCommit(c, () => git.openCommitFullDiff(c));
+  const abrirDiffVsWorktree = (c: GitCommit) => abrirDiffDeCommit(c, () => git.openCommitWorktreeDiff(c));
   function voltar() {
     if (diffAberto) git.closeDiff();
-    else selecionado = null;
+    else onSelecionar(null);
     onPop();
   }
 </script>
