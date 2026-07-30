@@ -1611,3 +1611,33 @@ def test_pi_model_set_requires_something_to_change(api_client):
         r = api_client.post("/api/sessions/pp/pi/model", headers=_h(), json={})
     assert r.status_code == 422
     send.assert_not_called()
+
+
+def test_plan_pin_rejeita_stem_com_travessia(api_client, tmp_path):
+    # Sem a guarda de separador, o proprio os.path.isfile do endpoint responde se existe um .md
+    # FORA da pasta de planos (404 vs 200) — e o stem com barra ainda ia parar no arquivo de pin,
+    # onde o read_pin depois descarta calado.
+    fora = tmp_path / "segredo.md"
+    fora.write_text("x", encoding="utf-8")
+    planos = tmp_path / "docs" / "superpowers" / "plans"
+    planos.mkdir(parents=True)
+    with patch("app.api._session_cwd", return_value=str(tmp_path)), \
+         patch("app.api._plans_dir", return_value=str(planos)), \
+         patch("app.api.write_pin") as wp:
+        r = api_client.post("/api/sessions/cc/plan-pin", headers=_h(),
+                            json={"stem": "../../../segredo"})
+    assert r.status_code == 400
+    wp.assert_not_called()
+
+
+def test_plan_pin_aceita_plano_da_propria_raiz(api_client, tmp_path):
+    planos = tmp_path / "docs" / "superpowers" / "plans"
+    planos.mkdir(parents=True)
+    (planos / "2026-07-30-x.md").write_text("# x", encoding="utf-8")
+    with patch("app.api._session_cwd", return_value=str(tmp_path)), \
+         patch("app.api._plans_dir", return_value=str(planos)), \
+         patch("app.api.write_pin") as wp:
+        r = api_client.post("/api/sessions/cc/plan-pin", headers=_h(),
+                            json={"stem": "2026-07-30-x"})
+    assert r.status_code == 200
+    wp.assert_called_once_with(str(planos), "2026-07-30-x")

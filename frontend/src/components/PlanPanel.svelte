@@ -25,19 +25,33 @@
   let pinned = $state<string | null>(null);
   let pickerErr = $state('');
 
+  // Mesma guarda do planDetail no Chat.svelte: trocar de sessão rápido deixa a requisição anterior
+  // no ar, e a resposta atrasada sobrescreveria a lista com os planos da sessão errada. Vale pro
+  // `trocar` também — dois cliques seguidos no select chegam fora de ordem.
+  let vez = 0;
+  const erro = (e: unknown) => (e instanceof Error ? e.message.replace(/^\d+:\s*/, '') : 'falhou');
+
   $effect(() => {
     const nome = session.name;   // recarrega ao trocar de sessão
+    const minha = ++vez;
     (async () => {
-      try { const r = await getPlans(nome); plans = r.plans; pinned = r.pinned; }
-      catch (e) { pickerErr = e instanceof Error ? e.message.replace(/^\d+:\s*/, '') : 'falhou'; }
+      try {
+        const r = await getPlans(nome);
+        if (minha !== vez) return;   // chegou tarde: já tem requisição mais nova no ar, descarta
+        plans = r.plans;
+        pinned = r.pinned;
+      } catch (e) { if (minha === vez) pickerErr = erro(e); }
     })();
   });
 
   async function trocar(stem: string) {
     const alvo = stem || null;   // '' = a opção "automático"
     pickerErr = '';
-    try { pinned = (await setPlanPin(session.name, alvo)).pinned; }
-    catch (e) { pickerErr = e instanceof Error ? e.message.replace(/^\d+:\s*/, '') : 'falhou'; }
+    const minha = ++vez;
+    try {
+      const r = await setPlanPin(session.name, alvo);
+      if (minha === vez) pinned = r.pinned;
+    } catch (e) { if (minha === vez) pickerErr = erro(e); }
   }
 </script>
 
