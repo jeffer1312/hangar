@@ -446,14 +446,14 @@ git commit -m "feat(git): aba Mudancas com uma lista so (checkbox + descartar)"
   - `CommitFiles.svelte` props `{ commit: GitCommit; sessionName: string; onOpenFile: (p: string) => void; onMenu?: (c: GitCommit) => void }`
   - `GitHistoryTab.svelte` props `{ git: GitStore; desktop: boolean; level: number; onPush: () => void; onPop: () => void }`
 
-- [ ] **Step 1: Ler o `CommitDetail` antes de partir**
+- [x] **Step 1: Ler o `CommitDetail` antes de partir**
 
 Run: `cat frontend/src/components/git/CommitDetail.svelte`
 
 Ele busca os arquivos sozinho (`getCommitFiles` num `$effect`, `:15-19`). Esse fetch vai pro
 `CommitFiles`.
 
-- [ ] **Step 2: `CommitMessage.svelte` e `CommitFiles.svelte`**
+- [x] **Step 2: `CommitMessage.svelte` e `CommitFiles.svelte`**
 
 `CommitMessage`: assunto em destaque, `commit.body` em `white-space: pre-wrap` (vazio some, não
 deixa espaço morto), autor e data. **Sem `max-height`.**
@@ -462,7 +462,7 @@ deixa espaço morto), autor e data. **Sem `max-height`.**
 e o botão `⋯ ações` sob `{#if onMenu}` — prop **opcional** de propósito (outro plano reusa isto sem
 menu). **Sem `max-height`.**
 
-- [ ] **Step 3: `GitHistoryTab.svelte`**
+- [x] **Step 3: `GitHistoryTab.svelte`**
 
 **Carrega o log ao entrar.** Hoje quem chama `git.openLog()` é o `GitSheet.svelte:73` — e **só no
 desktop** (`if (isDesktop)`) — mais o botão `log` da `GitToolbar`. Os dois morrem na Task 9, e o
@@ -492,12 +492,12 @@ Mobile: `level 0` = busca + lista; `level 1` = `CommitMessage` + `CommitFiles`; 
 O `CommitMenu` é montado aqui (`menuCommit` é estado desta aba), com `onShowDiff` e
 `onShowWorktreeDiff` ligados nos métodos do store (Task 3).
 
-- [ ] **Step 4: Gate**
+- [x] **Step 4: Gate**
 
 Run: `npm --prefix frontend run check`
 Expected: 0 erros
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/components/git/GitHistoryTab.svelte frontend/src/components/git/CommitMessage.svelte frontend/src/components/git/CommitFiles.svelte
