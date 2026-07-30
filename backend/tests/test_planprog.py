@@ -67,6 +67,23 @@ def test_parcial_e_ignora_fence(tmp_path):
     assert r.tasks[1].steps[0].manual is False
 
 
+def test_step_orfao_antes_da_1a_task_vira_task_implicita(tmp_path):
+    """Step marcado antes do primeiro '### Task' contava no done/total geral mas sumia da lista de
+    Tasks — a soma dos pares (plan_tasks) nao batia com r.done/r.total (a barra segmentada)."""
+    body = (
+        "- [x] **Step 1: orfao**\n\n"
+        "### Task 1: X\n\n- [x] **Step 1: A**\n- [ ] **Step 2: B**\n"
+    )
+    _write(tmp_path, "2026-07-29-com-orfao.md", body)
+    r = plan_progress(str(tmp_path))
+    assert r is not None
+    assert (r.done, r.total) == (2, 3)
+    assert sum(t.done for t in r.tasks) == r.done
+    assert sum(t.total for t in r.tasks) == r.total
+    assert r.tasks[0].title == "(sem Task)"
+    assert (r.tasks[0].done, r.tasks[0].total) == (1, 1)
+
+
 def test_so_fence_marcado_nao_elege(tmp_path):
     """O caso que envenenava o proprio plano: exemplo de step marcado dentro de bloco de codigo."""
     body = (

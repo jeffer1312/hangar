@@ -168,6 +168,10 @@ def _list_sig(infos) -> str:
     # ⚙ kimi fica preso, calado.
     # Sem o plan_name aqui, trocar do plano A pro B com o mesmo 9/17 nao re-emite e o chip fica
     # preso no plano errado — mesmo bug do engine.
+    # plan_tasks/plan_task/plan_task_total/plan_complete tambem entram: um step desmarcado na
+    # Task 1 e outro marcado na Task 2 no mesmo write pode deixar done/total liquidos (e plan_name)
+    # identicos e ainda assim mudar a distribuicao por Task — sem isto a barra segmentada e a
+    # Task atual ficam com o snapshot velho ate outra coisa qualquer mudar a sig.
     return json.dumps(
         [(i.name, i.cwd, i.state, i.tracked, i.jsonl, i.question, i.stalled, i.limited,
           i.limit_reset, i.then_target, _status_sig(getattr(i, "status_line", None)),
@@ -175,7 +179,10 @@ def _list_sig(infos) -> str:
           getattr(i, "loop_status", None), getattr(i, "loop_iter", None),
           getattr(i, "engine", None),
           getattr(i, "plan_name", None), getattr(i, "plan_done", None),
-          getattr(i, "plan_total", None))
+          getattr(i, "plan_total", None),
+          getattr(i, "plan_task", None), getattr(i, "plan_task_total", None),
+          getattr(i, "plan_complete", None),
+          tuple(map(tuple, getattr(i, "plan_tasks", None) or [])))
          for i in infos],
         ensure_ascii=False,
     )
