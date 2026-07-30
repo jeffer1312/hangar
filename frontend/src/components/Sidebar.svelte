@@ -629,7 +629,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // Servidores offline SAEM da lista (pedido do usuário: 4 headers "offline" só enchiam) e viram
   // UMA linha-resumo no fim, expansível — sumir total esconderia a queda e a chance de reconectar.
   let showOffline = $state(false);
-  const onlineGroups = $derived(filteredGroups.filter((g) => !g.error));
+  // Servidor ONLINE e sem sessão nenhuma também sai: o cabeçalho sozinho gasta uma linha da barra
+  // pra dizer que não há nada. Não esconde nada acionável — o "+ Nova" recebe a lista COMPLETA de
+  // servidores (`servers`, não `renderGroups`) e deixa escolher o alvo, então dá pra criar sessão
+  // num servidor que não aparece aqui.
+  const onlineGroups = $derived(filteredGroups.filter((g) => !g.error && g.sessions.length > 0));
   const offlineGroups = $derived(filteredGroups.filter((g) => g.error));
   const renderGroups = $derived(showOffline ? [...onlineGroups, ...offlineGroups] : onlineGroups);
 
@@ -850,6 +854,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
       {#if filterEmpty}
         <p class="filter-empty">Nenhuma sessão corresponde ao filtro.</p>
       {/if}
+    {/if}
+    <!-- Servidor online e vazio nao aparece mais; com TODOS vazios a lista ficaria em branco, sem
+         dizer o porque. (Nao vale quando o filtro esta ativo — ai quem fala e o filter-empty.) -->
+    {#if expanded && !filterText.trim() && renderGroups.length === 0 && offlineGroups.length === 0}
+      <p class="filter-empty">Nenhuma sessão aberta. Crie uma em <strong>+ Nova</strong>.</p>
     {/if}
     {#each renderGroups as g (g.id)}
       {@const awaiting = countAwaiting(g.sessions)}
