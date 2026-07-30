@@ -212,11 +212,31 @@ if ($precisa) {
     # dist servido era de 21h antes, sem as mudancas de aparencia que ja estavam no repo.
     # Nativo() em vez de chamada crua: com ErrorActionPreference='Stop', um aviso qualquer do npm no
     # stderr derrubaria o instalador inteiro (ver o docstring dele).
+    # Chamada LITERAL, e NAO pelo Nativo: no Windows `npm` resolve PRIMEIRO pro shim npm.ps1
+    # (ExternalScript, antes do npm.cmd), e o Nativo passa argumento por SPLATTING
+    # (`@($args[1..])`) -- o npm.ps1 monta o $NPM_ARGS dele indexando $args e estoura
+    # IndexOutOfRangeException na linha 47 dele. Medido: foi exatamente assim que este passo
+    # ABORTOU a instalacao inteira. O Nativo existe pra programa NATIVO; npm no Windows nao e um.
+    # O preference vira 'Continue' so aqui, pelo mesmo motivo do Nativo: um aviso do npm no stderr
+    # nao pode virar erro terminante. A saida do npm fica VISIVEL de proposito -- foi ela que
+    # denunciou o "'vite' nao e reconhecido" que este conserto passou a tratar.
     $tBuild = Get-Date
+    $eapAnterior = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     Push-Location "$raiz\frontend"
-    $rcCi = Nativo npm ci --silent
-    $rcBuild = if ($rcCi -eq 0) { Nativo npm run build --silent } else { -1 }
-    Pop-Location
+    try {
+        npm ci --silent
+        $rcCi = $LASTEXITCODE
+        if ($rcCi -eq 0) {
+            npm run build --silent
+            $rcBuild = $LASTEXITCODE
+        } else {
+            $rcBuild = -1
+        }
+    } finally {
+        Pop-Location
+        $ErrorActionPreference = $eapAnterior
+    }
     # EVIDENCIA POSITIVA, nao ausencia de erro: exit 0 e necessario mas nao basta (build pode sair 0
     # sem escrever nada). Exige que o index.html do dist tenha nascido DEPOIS do inicio do build.
     $distNovo = (Test-Path $dist) -and ((Get-Item $dist).LastWriteTime -ge $tBuild)
