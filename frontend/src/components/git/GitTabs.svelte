@@ -9,6 +9,7 @@
   import GitBranchesTab from './GitBranchesTab.svelte';
   import GitStatusBar from './GitStatusBar.svelte';
   import RepoMenu from './RepoMenu.svelte';
+  import type { GitCommit } from '../../lib/api';
   import type { GitStore } from '../../lib/gitStore.svelte';
 
   interface Props { git: GitStore; desktop: boolean; onClose: () => void }
@@ -17,6 +18,9 @@
   let nav = $state<GitNav>(initialNav());
   let repoMenu = $state(false);
   let menuAberto = $state(false);   // CommitMenu aberto na aba Historico -> a faixa cala o erro
+  // O commit escolhido mora aqui pelo mesmo motivo que o nivel: trocar de aba destroi o componente
+  // da aba, e uma selecao que morresse deixaria o nivel apontando pra uma tela que nao existe mais.
+  let commitSel = $state<GitCommit | null>(null);
 
   // Contagem no rotulo: `branches` conta locais + remotas porque o BranchList mostra as duas —
   // contar so as locais daria um numero que nao bate com a lista.
@@ -68,7 +72,8 @@
       {:else if nav.tab === 'history'}
         <GitHistoryTab {git} {desktop} level={currentLevel(nav)}
           onPush={() => (nav = pushLevel(nav))} onPop={() => (nav = popLevel(nav))}
-          onMenuOpen={(aberto) => (menuAberto = aberto)} />
+          onMenuOpen={(aberto) => (menuAberto = aberto)}
+          selecionado={commitSel} onSelecionar={(c) => (commitSel = c)} />
       {:else}
         <GitBranchesTab {git} />
       {/if}
