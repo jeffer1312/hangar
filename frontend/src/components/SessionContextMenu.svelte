@@ -200,7 +200,7 @@
   .ctx-menu {
     position: fixed; z-index: 41; min-width: 168px; padding: 4px;
     display: flex; flex-direction: column;
-    background: var(--bg-elevated); border: 1px solid var(--border-default);
+    background: var(--surface-raised); border: 1px solid var(--border-default);
     border-radius: var(--radius-md); box-shadow: 0 8px 28px rgba(0,0,0,0.4);
   }
   .ctx-menu button {
@@ -224,7 +224,7 @@
   .ctx-chain-form { display: flex; gap: 4px; padding: 4px 6px; }
   .ctx-chain-input {
     flex: 1; min-width: 0; height: 28px; padding: 0 8px; font-size: var(--text-sm);
-    color: var(--text-primary); background: var(--bg-base); border: 1px solid var(--border-default);
+    color: var(--text-primary); background: var(--surface-inset); border: 1px solid var(--border-default);
     border-radius: var(--radius-sm);
   }
   .ctx-chain-save {

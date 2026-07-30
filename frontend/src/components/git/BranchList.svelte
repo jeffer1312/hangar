@@ -60,7 +60,7 @@
     color: var(--text-secondary); font-size: var(--text-sm); text-align: left; cursor: pointer;
   }
   .git-branch:disabled { cursor: default; }
-  .git-branch.current { color: var(--text-primary); background: var(--bg-elevated); }
+  .git-branch.current { color: var(--text-primary); background: var(--surface-raised); }
   @media (hover: hover) { .git-branch:hover { background: var(--bg-hover); } }
   .git-remote .git-dot { color: var(--text-muted); }   /* remota nao e a atual -> dot apagado */
   .git-dot { font-size: 10px; color: var(--accent); flex-shrink: 0; }

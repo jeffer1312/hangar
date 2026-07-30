@@ -393,7 +393,7 @@
     max-width: min(320px, calc(100vw - var(--space-6)));
     max-height: min(70vh, 560px);
     overflow-y: auto;
-    background: var(--bg-elevated);
+    background: var(--surface-raised);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-lg);
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
@@ -451,7 +451,7 @@
   .am-srv-del:hover { color: var(--error); background: var(--bg-hover); }
   .am-srv-edit {
     flex: 1; min-width: 0; height: 32px; padding: 0 var(--space-2);
-    background: var(--bg-base); border: 1px solid var(--accent); border-radius: var(--radius-sm);
+    background: var(--surface-inset); border: 1px solid var(--accent); border-radius: var(--radius-sm);
     color: var(--text-primary); font-family: var(--font-ui); font-size: 16px; outline: none;
   }
 
@@ -480,7 +480,7 @@
   .am-quiet-row { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); color: var(--text-secondary); }
   .am-quiet-row input[type='time'] {
     min-width: 0; flex: 1;
-    background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+    background: var(--surface-inset); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
     color: var(--text-primary); font-size: var(--text-sm); padding: 4px 6px;
   }
   .am-quiet-save {

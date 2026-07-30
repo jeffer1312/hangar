@@ -24,7 +24,7 @@
     align-self: stretch;
     max-width: 600px;
     margin: var(--space-2) 0;
-    background: var(--bg-elevated);
+    background: var(--surface-raised);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-lg);
     padding: var(--space-4) var(--space-5);

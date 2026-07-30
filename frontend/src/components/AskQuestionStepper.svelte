@@ -267,7 +267,7 @@
     width: 100%;
     min-height: 52px;
     padding: var(--space-3);
-    background: var(--bg-surface);
+    background: var(--surface-card);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-md);
     text-align: left;
@@ -331,7 +331,7 @@
     display: block;
     margin-top: var(--space-2);
     padding: var(--space-2) var(--space-3);
-    background: var(--bg-elevated);
+    background: var(--surface-raised);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
     font-family: var(--font-mono);
@@ -374,7 +374,7 @@
   /* Campo de texto */
   .field-input {
     height: 44px;
-    background: var(--bg-surface);
+    background: var(--surface-card);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-md);
     color: var(--text-primary);
@@ -408,7 +408,7 @@
     flex-direction: column;
     gap: 2px;
     padding: var(--space-3);
-    background: var(--bg-surface);
+    background: var(--surface-card);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
   }

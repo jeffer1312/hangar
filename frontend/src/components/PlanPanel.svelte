@@ -205,7 +205,7 @@
     padding: var(--space-3);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
-    background: var(--bg-surface);
+    background: var(--surface-card);
     color: var(--text-secondary);
     font-size: var(--text-xs);
     line-height: 1.55;
@@ -220,8 +220,8 @@
   .md :global(strong) { color: var(--text-primary); font-weight: 650; }
   .md :global(ul), .md :global(ol) { margin: 0 0 var(--space-2); padding-left: 1.2em; }
   .md :global(li) { margin: 2px 0; }
-  .md :global(code) { padding: 0 4px; border-radius: 3px; background: var(--bg-elevated); font-family: var(--font-mono); font-size: 11px; color: var(--text-primary); }
-  .md :global(pre) { margin: 0 0 var(--space-2); padding: var(--space-2); overflow-x: auto; border-radius: var(--radius-sm); background: var(--bg-base); }
+  .md :global(code) { padding: 0 4px; border-radius: 3px; background: var(--surface-raised); font-family: var(--font-mono); font-size: 11px; color: var(--text-primary); }
+  .md :global(pre) { margin: 0 0 var(--space-2); padding: var(--space-2); overflow-x: auto; border-radius: var(--radius-sm); background: var(--surface-inset); }
   .md :global(a) { color: var(--accent); }
   .md :global(hr) { margin: var(--space-3) 0; border: 0; border-top: 1px solid var(--border-subtle); }
 </style>

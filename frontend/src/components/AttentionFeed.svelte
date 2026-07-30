@@ -136,7 +136,7 @@
     border-radius: var(--radius-md);
   }
   .attn-item.open {
-    background: var(--bg-surface);
+    background: var(--surface-card);
   }
   .attn-main {
     display: flex;

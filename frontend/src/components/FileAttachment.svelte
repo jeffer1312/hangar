@@ -118,7 +118,7 @@
 
   .att-chip {
     display: inline-flex; align-items: center; gap: var(--space-2); max-width: 100%; min-width: 0; height: 38px;
-    padding: 0 var(--space-3); background: var(--bg-elevated); border: 1px solid var(--border-subtle);
+    padding: 0 var(--space-3); background: var(--surface-raised); border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md); color: var(--text-primary); font-size: var(--text-sm);
   }
   .att-chip:active { background: var(--bg-hover); }
@@ -130,7 +130,7 @@
      (mostra o nome pra debug), sem virar quadrado preto nem sumir calado. */
   .att-broken {
     display: inline-flex; align-items: center; gap: var(--space-1); max-width: 100%; min-width: 0;
-    height: 30px; padding: 0 var(--space-2); background: var(--bg-elevated);
+    height: 30px; padding: 0 var(--space-2); background: var(--surface-raised);
     border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
     color: var(--text-muted); font-size: var(--text-xs); font-family: var(--font-mono);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -160,7 +160,7 @@
 
   .doc-modal {
     width: 100%; height: 100%; display: flex; flex-direction: column;
-    background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); overflow: hidden;
+    background: var(--surface-inset); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); overflow: hidden;
   }
   .doc-bar { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border-subtle); }
   .doc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); color: var(--text-secondary); font-family: var(--font-mono); }

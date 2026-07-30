@@ -177,7 +177,7 @@
   .git-file-tag[data-t="del"] { color: var(--error); }
   .git-mini {
     flex-shrink: 0; padding: var(--space-1) var(--space-2); border-radius: var(--radius-md);
-    border: 1px solid var(--border-default); background: var(--bg-elevated);
+    border: 1px solid var(--border-default); background: var(--surface-raised);
     color: var(--text-muted); font-size: var(--text-xs); cursor: pointer;
   }
   .git-mini:disabled { opacity: 0.5; cursor: default; }

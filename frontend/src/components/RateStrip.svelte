@@ -59,7 +59,7 @@
   .rs-chip {
     display: inline-flex; align-items: center; gap: 6px;
     font-size: var(--text-xs); color: var(--text-secondary);
-    background: var(--bg-surface); border: 1px solid var(--border-subtle);
+    background: var(--surface-card); border: 1px solid var(--border-subtle);
     border-radius: var(--radius-full); padding: 3px 10px;
   }
   .rs-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }

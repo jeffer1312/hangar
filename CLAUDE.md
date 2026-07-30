@@ -150,6 +150,23 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   solid bg and **no** `backdrop-filter` / `transform` / `translateZ` on WebKit — those promote a layer that
   renders pure black during momentum scroll. Don't reintroduce them. Liquid-glass blur is Chromium-only
   (`html[data-liquid]`).
+- **Transparência é padrão do app, não enfeite de uma tela.** O app tem papel de parede
+  (`html[data-bg="image"]`) e um slider **Transparência** que move `--cp-panel-alpha`
+  (`lib/background.ts`, `aplicarScrim`). Todo painel de vidro — `BottomSheet`, `ModalDialog`,
+  `Sidebar`, `DesktopSessionContext` — já anda com esse slider via `--glass-panel`. Quem quebra é
+  **superfície DENTRO do painel**: um `background: var(--bg-elevated)` ou `var(--bg-base)` cru não
+  acompanha o véu, e o controle vira retângulo chapado boiando sobre a foto enquanto o painel atrás
+  dele é translúcido. Ao escrever CSS de qualquer componente, nesta ordem:
+  1. **`transparent`** — o certo por padrão. Quem carrega o material é o contêiner; a textarea do
+     `Composer.svelte` é o precedente (`background: transparent` por cima do vidro).
+  2. Precisa mesmo de superfície própria (campo de texto, chip, menu flutuante, bloco de saída)?
+     Use os tokens de `app.css`: **`--surface-raised`** (chip, botão pequeno, menu) e
+     **`--surface-inset`** (campo de texto, área de entrada). Sem papel de parede eles são
+     exatamente `--bg-elevated`/`--bg-base`; com papel de parede entram no mesmo véu sozinhos.
+  3. `--bg-elevated`/`--bg-base` crus só para **realce de estado** (`:hover`, `.sel`, linha atual),
+     que é tinta por cima da linha, não superfície.
+  Verificação: ligue um papel de parede e olhe a tela. Qualquer retângulo que não deixe a foto
+  atravessar, enquanto o painel em volta deixa, é bug — não estilo.
 - **The message list is windowed.** `MessageList.svelte` mounts only the last `WINDOW=120` events; scroll-to-top
   reveals older pages (in-memory, no backend call). Don't render the whole transcript at once.
 - **Queue/pending dedup.** Messages sent while Claude is `working` echo as `pending` / `queued-` bubbles and

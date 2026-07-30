@@ -81,21 +81,21 @@
 <style>
   .cb { display: flex; flex-direction: column; gap: var(--space-3); }
   .cb-msg { width: 100%; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md);
-    border: 1px solid var(--border-default); background: var(--bg-base); color: var(--text-primary);
+    border: 1px solid var(--border-default); background: var(--surface-inset); color: var(--text-primary);
     font-family: var(--font-mono); font-size: var(--text-sm); resize: vertical; }
   .cb-recent { width: 100%; padding: var(--space-2); border-radius: var(--radius-md);
-    border: 1px solid var(--border-default); background: var(--bg-base); color: var(--text-secondary);
+    border: 1px solid var(--border-default); background: var(--surface-inset); color: var(--text-secondary);
     font-size: var(--text-sm); }
   .cb-opts { display: flex; flex-direction: column; gap: var(--space-1); }
   .cb-opt { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm);
     color: var(--text-secondary); cursor: pointer; }
   .cb-branch { width: 100%; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md);
-    border: 1px solid var(--border-default); background: var(--bg-base); color: var(--text-primary);
+    border: 1px solid var(--border-default); background: var(--surface-inset); color: var(--text-primary);
     font-family: var(--font-mono); font-size: var(--text-sm); }
   .cb-hint { margin: calc(-1 * var(--space-2)) 0 0; font-size: var(--text-xs); color: var(--text-muted); }
   .cb-actions { display: flex; gap: var(--space-2); }
   .cb-btn { flex: 1; padding: var(--space-2); border-radius: var(--radius-md); border: 1px solid var(--border-default);
-    background: var(--bg-elevated); color: var(--text-secondary); font-size: var(--text-sm); cursor: pointer; }
+    background: var(--surface-raised); color: var(--text-secondary); font-size: var(--text-sm); cursor: pointer; }
   .cb-btn.primary { background: var(--accent); color: var(--bg-base); border-color: var(--accent); }
   .cb-btn:disabled { opacity: 0.5; cursor: default; }
 </style>

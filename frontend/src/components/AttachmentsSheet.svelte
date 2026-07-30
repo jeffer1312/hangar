@@ -146,7 +146,7 @@
     padding: 2px 8px;
     border-radius: var(--radius-full);
     color: var(--text-secondary);
-    background: var(--bg-elevated);
+    background: var(--surface-raised);
   }
   .atts-msg {
     font-size: var(--text-sm);
@@ -174,7 +174,7 @@
     width: 100%;
     padding: 0;
     border: none;
-    background: var(--bg-elevated);
+    background: var(--surface-raised);
     border-radius: var(--radius-md);
     overflow: hidden;
     line-height: 0;

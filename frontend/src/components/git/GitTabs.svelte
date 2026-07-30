@@ -128,7 +128,7 @@
   .gt-tab.sel { background: var(--accent-dim); color: var(--accent); }
   .gt-count {
     padding: 0 6px; border-radius: var(--radius-full);
-    background: var(--bg-elevated); color: var(--text-muted);
+    background: var(--surface-raised); color: var(--text-muted);
     font-family: var(--font-mono); font-size: 10px;
   }
   .gt-tab.sel .gt-count { color: var(--accent); }

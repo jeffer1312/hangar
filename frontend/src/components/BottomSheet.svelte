@@ -349,7 +349,7 @@
     width: 30px; height: 30px;
     display: flex; align-items: center; justify-content: center;
     border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
-    background: var(--bg-elevated); color: var(--text-secondary);
+    background: var(--surface-raised); color: var(--text-secondary);
     font-size: 17px; line-height: 1; cursor: pointer;
   }
   .sheet-close:hover { color: var(--text-primary); background: var(--bg-hover); }
@@ -399,7 +399,7 @@
        e o painel volta pro mesmo `--glass-panel` do resto, que já obedece ao slider Transparência
        (app.css:228). */
     .sheet.naomodal::before,
-    :global(html[data-liquid]) .sheet.naomodal::before { background: var(--bg-elevated); }
+    :global(html[data-liquid]) .sheet.naomodal::before { background: var(--surface-raised); }
     :global(html[data-bg='image']) .sheet.naomodal::before,
     :global(html[data-liquid][data-bg='image']) .sheet.naomodal::before { background: var(--glass-panel); }
     /* Aparência → Painéis → "Colados": o painel volta a ser parede de ponta a ponta. */
