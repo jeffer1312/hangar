@@ -65,7 +65,7 @@ Stage por hunk ("commit só parte do arquivo" do Tortoise via restore-after-comm
   - `GitCommitBody` ganha `amend: bool = False`, `new_branch: str | None = None` e **perde** o `min_length=1` de `paths`
   - Nova rota: `GET /api/sessions/{name}/git/last-message`
 
-- [ ] **Step 1: Escrever os testes que falham**
+- [x] **Step 1: Escrever os testes que falham**
 
 Acrescentar ao fim de `backend/tests/test_git_ops.py` (seguindo o estilo do arquivo: helpers de módulo, `git_ops.` prefixado, `tmp_path`):
 
@@ -133,12 +133,12 @@ def test_last_commit_message(tmp_path):
     assert git_ops.last_commit_message(d)["message"] == "assunto\n\ncorpo da mensagem"
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `cd backend && uv run pytest tests/test_git_ops.py -k "amend or new_branch or last_commit or paths_vazio" -v`
 Expected: FAIL (`TypeError: commit() got an unexpected keyword argument 'amend'` / `AttributeError: module 'app.git_ops' has no attribute 'last_commit_message'`)
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Em `backend/app/git_ops.py`, logo antes de `def commit` (linha ~394):
 
@@ -261,12 +261,12 @@ def git_last_message(name: str):
         raise HTTPException(e.status, e.detail)
 ```
 
-- [ ] **Step 4: Rodar e ver passar** (+ suíte inteira do git e self-check)
+- [x] **Step 4: Rodar e ver passar** (+ suíte inteira do git e self-check)
 
 Run: `cd backend && uv run pytest tests/test_git_ops.py -v && uv run python app/git_ops.py`
 Expected: PASS em tudo (inclusive os testes antigos — a assinatura nova é retrocompatível) + `git_ops self-check OK`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/app/git_ops.py backend/app/api.py backend/tests/test_git_ops.py
@@ -289,7 +289,7 @@ git commit -m "feat(git): commit com amend (--amend --only) e new-branch + last_
   - `getLastCommitMessage(name): Promise<{ message: string }>` em `api.ts`
   - `doCommit(message, paths, opts?)` no gitStore — mesmo contrato, usado só pelo CommitBox
 
-- [ ] **Step 1: Clients e store**
+- [x] **Step 1: Clients e store**
 
 Em `frontend/src/lib/api.ts`, substituir `commitFiles` e acrescentar `getLastCommitMessage`:
 
@@ -319,7 +319,7 @@ Em `frontend/src/lib/gitStore.svelte.ts`, trocar a assinatura de `doCommit` e a 
   }
 ```
 
-- [ ] **Step 2: CommitBox — reescrita completa**
+- [x] **Step 2: CommitBox — reescrita completa**
 
 Substituir `frontend/src/components/git/CommitBox.svelte` por:
 
@@ -464,12 +464,12 @@ Substituir `frontend/src/components/git/CommitBox.svelte` por:
 </style>
 ```
 
-- [ ] **Step 3: Gate de tipos**
+- [x] **Step 3: Gate de tipos**
 
 Run: `npm --prefix frontend run check`
 Expected: 0 erros
 
-- [ ] **Step 4: Verificação manual (mobile E desktop)**
+- [x] **Step 4: Verificação manual (mobile E desktop)**
 
 Abrir o painel git de uma sessão com mudanças, num repo de brinquedo:
 1. Marcar/desmarcar "todos"/"nenhum"; commitar normal → mensagem entra nas recentes; reusar uma recente pelo select.
@@ -477,7 +477,7 @@ Abrir o painel git de uma sessão com mudanças, num repo de brinquedo:
 3. Branch nova: commitar com nome de branch → badge da sessão muda pra branch nova; nome inválido/existente mostra o 400 do git.
 4. Repetir 1-3 no desktop (≥820px, CommitBox na zona direita do GitPanel).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/lib/api.ts frontend/src/lib/gitStore.svelte.ts frontend/src/components/git/CommitBox.svelte
@@ -491,17 +491,17 @@ git commit -m "feat(git): CommitBox estilo Tortoise — recentes, amend, branch 
 **Files:**
 - Modify: `docs/USAGE.md` (seção `### Git`, linha ~192-201)
 
-- [ ] **Step 1: Suíte completa backend**
+- [x] **Step 1: Suíte completa backend**
 
 Run: `cd backend && uv run pytest -v`
 Expected: PASS (não só a de git — o relaxamento do `GitCommitBody.paths` não pode ter quebrado outra rota)
 
-- [ ] **Step 2: Gate front completo**
+- [x] **Step 2: Gate front completo**
 
 Run: `npm --prefix frontend run check && npm --prefix frontend run build`
 Expected: 0 erros + build ok
 
-- [ ] **Step 3: Docs**
+- [x] **Step 3: Docs**
 
 Em `docs/USAGE.md`, na seção `### Git`, atualizar o bullet de Commit:
 
@@ -514,7 +514,7 @@ Em `docs/USAGE.md`, na seção `### Git`, atualizar o bullet de Commit:
   `--force`). Também dá pra **commitar numa branch nova**, criada a partir da atual.
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/USAGE.md
