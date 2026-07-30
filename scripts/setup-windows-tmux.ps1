@@ -299,3 +299,15 @@ if ($problemasAntes.Count -gt 0) {
     Write-Step 'Pronto. Ambiente e config conferidos.'
 }
 Write-Host '    Teste final: abra o Claude Code numa sessao NOVA e role a roda do mouse.'
+
+# EXIT EXPLICITO. Ao trocar os `exit 0` pela flag $escrever (pra nada-a-fazer e dry-run nao pularem
+# a verificacao), o script ficou SEM nenhum exit - e quem chama passou a ler LIXO: o $LASTEXITCODE
+# que sobrasse do ultimo executavel nativo rodado aqui dentro, na pratica o ultimo `tmux show -g`.
+# O install.ps1 decide por esse valor (`if ($LASTEXITCODE -eq 0)`), entao o ramo "aplicada COM
+# RESSALVAS" nunca disparava por merito proprio. O $global:UltimoExit do Invoke-Nativo tambem nao
+# resolvia: ninguem le, e nao atravessa o limite de processo/escopo de quem invoca o script.
+# Contrato daqui pra frente, o que o install.ps1 ja espera: 0 = ambiente e config OK; 1 = a config
+# foi escrita mas ALGO nao esta bom (ambiente que a config nao conserta, ou opcao que nao pegou no
+# servidor). Nao ha ramo de "erro fatal" separado: falha dura ja aborta via throw.
+if ($problemasAntes.Count -gt 0 -or $falhou.Count -gt 0) { exit 1 }
+exit 0

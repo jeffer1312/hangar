@@ -420,8 +420,15 @@ function Porta-Do-Env {
     }
     return $Default
 }
-$portaBack  = Porta-Do-Env 'CP_PORT'       8765
-$portaFront = Porta-Do-Env 'CP_FRONT_PORT' 5173
+$portaBack  = Porta-Do-Env 'CP_PORT' 8765
+# O FRONT nao sai do .env. Tentei ler CP_FRONT_PORT por simetria com o backend e estava ERRADO:
+# `front_port` (config.py:95) e "where the PWA is served ... used for QR pairing" - ele monta a URL
+# do QR (config.py:215), NAO configura o Vite. O dev server sobe sempre em 5173 (vite.config.ts:
+# server sem `port`, logo o default; e preview.port fixo em 5173 com strictPort). Quem puser
+# CP_FRONT_PORT=8080 (ex: atras de um Caddy) faria o instalador mirar a 8080 e passar longe do Vite
+# real - ou seja, nao derrubaria a instancia velha, que e a razao de existir do Pare-Servico.
+# A fonte da verdade e o vite.config.ts; se ele mudar, muda aqui junto.
+$portaFront = 5173
 
 $tarefas = @(
     # Padrao ANCORADO no caminho deste checkout. 'app\.main' cru casava com QUALQUER processo cuja
