@@ -867,6 +867,7 @@ export interface GitCommit {
   ts: number;         // author date, unix epoch (ordenação estável)
   rel: string;        // data relativa pronta ("2 hours ago")
   subject: string;
+  body: string;       // corpo da mensagem (%b), sem o assunto; '' quando o commit nao tem corpo
   col?: number;       // coluna (lane) do commit no grafo — preenchida por assign_lanes no backend
   edges?: { to_col: number; curved: boolean }[];  // arestas descendo pros parents (merge = curva)
   passthrough?: number[];  // colunas de outras lanes que cruzam esta linha sem dot (vertical cheia)
