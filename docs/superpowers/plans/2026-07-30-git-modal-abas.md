@@ -371,7 +371,7 @@ viraria duas listas do mesmo.
 - Consumes: `GitStore` (com os métodos de diff da Task 3), `CommitBox`, `DiffView`
 - Produces: props `{ git: GitStore; desktop: boolean; level: number; onPush: () => void; onPop: () => void }`
 
-- [ ] **Step 1: Ler os dois componentes que se fundem**
+- [x] **Step 1: Ler os dois componentes que se fundem**
 
 Run: `cat frontend/src/components/git/ChangedFiles.svelte && sed -n '1,110p' frontend/src/components/git/CommitBox.svelte`
 
@@ -382,7 +382,7 @@ Anotar, pra migrar sem perder:
   marcado, ou a seleção do usuário é sobrescrita a cada poll.
 - os botões `todos`/`nenhum` (`CommitBox.svelte:65-68`)
 
-- [ ] **Step 2: Escrever o componente**
+- [x] **Step 2: Escrever o componente**
 
 A aba é dona de `sel: Set<string>`, `selectionInitialized`, `toggle`, `todos`/`nenhum` — migrados
 literalmente do `CommitBox`. Cada linha tem: checkbox, código do status, caminho (clicável → chama
@@ -414,12 +414,12 @@ diff, e um `<textarea>` + botão que chamam `git.doCommit(msg, chosen)` diretame
 > própria. Isso mantém a regra de "nenhuma task intermediária piora o app" — o `CommitBox` velho
 > segue intacto e em uso pelo `GitSheet` até lá.
 
-- [ ] **Step 3: Gate**
+- [x] **Step 3: Gate**
 
 Run: `npm --prefix frontend run check`
 Expected: 0 erros
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add frontend/src/components/git/GitChangesTab.svelte
