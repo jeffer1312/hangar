@@ -49,7 +49,7 @@ arrastáveis; unificar o menu de contexto do modal com o da linha da sidebar; `M
 **Interfaces:**
 - Produces: cada dict de `git_log` ganha `body: str` (`''` quando não há corpo); `GitCommit` ganha `body: string`
 
-- [ ] **Step 1: Escrever os testes que falham**
+- [x] **Step 1: Escrever os testes que falham**
 
 ```python
 def test_git_log_traz_corpo_da_mensagem(tmp_path):
@@ -78,12 +78,12 @@ def test_git_log_corpo_com_separador_nao_trunca(tmp_path):
     assert "antes" in body and "depois" in body
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `cd backend && uv run pytest tests/test_git_ops.py -k "corpo" -v`
 Expected: FAIL com `KeyError: 'body'`
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 `_LOG_FMT` hoje é (`git_ops.py:216`):
 
@@ -117,12 +117,12 @@ Em `frontend/src/lib/api.ts`, na interface `GitCommit`, depois de `subject`:
   body: string;       // corpo da mensagem (%b), sem o assunto; '' quando o commit nao tem corpo
 ```
 
-- [ ] **Step 4: Rodar e ver passar**
+- [x] **Step 4: Rodar e ver passar**
 
 Run: `cd backend && uv run pytest tests/test_git_ops.py -q && cd backend && uv run python app/git_ops.py && npm --prefix frontend run check`
 Expected: PASS + `git_ops self-check OK` + 0 erros de tipo
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/app/git_ops.py backend/tests/test_git_ops.py frontend/src/lib/api.ts
@@ -140,7 +140,7 @@ git commit -m "feat(git): git_log traz o corpo da mensagem do commit"
 **Interfaces:**
 - Produces: `GitTabId`, `GIT_TABS`, `GitNav`, `initialNav()`, `selectTab(nav, tab)`, `pushLevel(nav)`, `popLevel(nav)`, `currentLevel(nav)`
 
-- [ ] **Step 1: Escrever os testes que falham**
+- [x] **Step 1: Escrever os testes que falham**
 
 ```typescript
 import { describe, it, expect } from 'vitest';
@@ -203,12 +203,12 @@ describe('gitTabs', () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `npm --prefix frontend run test -- gitTabs`
 Expected: FAIL — módulo não existe
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 ```typescript
 // Navegacao do modal de git: qual aba esta ativa e em que nivel cada uma parou.
@@ -256,12 +256,12 @@ export function popLevel(nav: GitNav): GitNav {
 }
 ```
 
-- [ ] **Step 4: Rodar e ver passar**
+- [x] **Step 4: Rodar e ver passar**
 
 Run: `npm --prefix frontend run test -- gitTabs && npm --prefix frontend run check`
 Expected: 6 testes passando, 0 erros
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/lib/gitTabs.ts frontend/src/lib/gitTabs.test.ts
@@ -283,13 +283,13 @@ erro. Se os dois donos morrem sem substituto escrito, esse comportamento se perd
 **Interfaces:**
 - Produces, no store: estado `diffPath`, `diffRows`, `diffLoading`, `diffSha`, `diffTruncated`; e os métodos `openFileDiff(path)`, `openCommitFileDiff(sha, path)`, `openCommitFullDiff(c)`, `openCommitWorktreeDiff(c)`, `closeDiff()`
 
-- [ ] **Step 1: Ler as quatro funções antes de mover**
+- [x] **Step 1: Ler as quatro funções antes de mover**
 
 Run: `sed -n '77,182p' frontend/src/components/GitSheet.svelte`
 
 As quatro têm a MESMA forma: zera estado → `diffLoading = true` → `git.busy = …` → fetch → `import('../lib/highlight')` → `highlightDiff(diff, titulo)` → no erro limpa `diffPath`/`diffSha` e grava `git.error` → `finally` desliga `diffLoading` e `git.busy`. Preservar isso; a diferença entre elas é só o client chamado e o título.
 
-- [ ] **Step 2: Mover pro store**
+- [x] **Step 2: Mover pro store**
 
 Acrescentar ao `createGitStore`, seguindo o estilo do arquivo (funções `async`, `cleanErr` no catch):
 
@@ -307,10 +307,10 @@ Acrescentar ao `createGitStore`, seguindo o estilo do arquivo (funções `async`
   }
 
   // Helper unico das quatro entradas: muda so o titulo e o fetch.
-  async function _abrirDiff(titulo: string, sha: string, buscar: () => Promise<{ diff: string; truncated?: boolean }>) {
+  async function _abrirDiff(titulo: string, sha: string, chave: string, buscar: () => Promise<{ diff: string; truncated?: boolean }>) {
     if (busy) return false;
     diffSha = sha; diffPath = titulo; diffRows = []; diffTruncated = false;
-    diffLoading = true; busy = sha || titulo; error = '';
+    diffLoading = true; busy = chave; error = '';   // chave EXPLICITA: no diff de arquivo dentro de commit o valor certo e o path, nao o sha
     try {
       const r = await buscar();
       diffTruncated = !!r.truncated;
@@ -327,13 +327,13 @@ Acrescentar ao `createGitStore`, seguindo o estilo do arquivo (funções `async`
   }
 
   const openFileDiff = (path: string) =>
-    _abrirDiff(path, '', () => getFileDiff(sessionName, path));
+    _abrirDiff(path, '', path, () => getFileDiff(sessionName, path));
   const openCommitFileDiff = (sha: string, path: string) =>
-    _abrirDiff(path, sha, () => getCommitFileDiff(sessionName, sha, path));
+    _abrirDiff(path, sha, path, () => getCommitFileDiff(sessionName, sha, path));
   const openCommitFullDiff = (c: GitCommit) =>
-    _abrirDiff(`commit ${c.short}`, c.hash, () => getCommitDiff(sessionName, c.hash));
+    _abrirDiff(`commit ${c.short}`, c.hash, c.hash, () => getCommitDiff(sessionName, c.hash));
   const openCommitWorktreeDiff = (c: GitCommit) =>
-    _abrirDiff(`commit ${c.short} ↔ working tree`, c.hash, () => getCommitDiffVsWorktree(sessionName, c.hash));
+    _abrirDiff(`commit ${c.short} ↔ working tree`, c.hash, c.hash, () => getCommitDiffVsWorktree(sessionName, c.hash));
 ```
 
 Expor os cinco métodos e os cinco getters no `return` do store. Importar `getFileDiff`,
@@ -341,7 +341,7 @@ Expor os cinco métodos e os cinco getters no `return` do store. Importar `getFi
 
 O retorno `boolean` é o que as abas usam pra decidir se descem de nível: falhou, não desce.
 
-- [ ] **Step 3: Gate**
+- [x] **Step 3: Gate**
 
 Run: `npm --prefix frontend run check && npm --prefix frontend run test`
 Expected: 0 erros, testes passando
@@ -349,7 +349,7 @@ Expected: 0 erros, testes passando
 Os dois componentes velhos continuam com as cópias deles e seguem funcionando — **nada quebra
 nesta task**. As cópias morrem junto com os arquivos, na Task 9.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add frontend/src/lib/gitStore.svelte.ts
