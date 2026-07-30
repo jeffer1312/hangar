@@ -320,6 +320,63 @@ def test_send_literal_windows_fatia_e_e_byte_exato(monkeypatch):
     assert pedacos[0].startswith("0001|")                              # o comeco vai primeiro
 
 
+# --- psmux nao honra o `--`: pedaco que COMECA com '-' e engolido em silencio (rc=0) -------------
+# Medido no psmux 3.3.7: send-keys -l -- "-X" e "--X" NAO chegam; "xX" e " -X" chegam -> o teste e o
+# PRIMEIRO caractere. Como o rc vem 0 e o stderr vazio, NENHUMA checagem de erro pega: o pedaco some
+# e o Enter submete o resto como se fosse a mensagem inteira. Aconteceu entre duas sessoes reais:
+# recado de 2332 chars chegou com 1820, faltando exatamente 512 alinhados no chunk 2, que comecava
+# com '-' — a sessao destino leu um texto emendado e discutiu tres rodadas em cima dele.
+
+def test_fatiar_win_nenhum_pedaco_comeca_com_hifen():
+    # Fronteira caindo numa corrida de hifens: a fronteira anda PRA FRENTE e engole a corrida.
+    for texto in ("A" * 512 + "-" * 5 + "B" * 200,
+                  "A" * 510 + "-" * 60 + "B" * 200,
+                  ("x" * 100 + "-" * 3) * 12):
+        pedacos = tmux._fatiar_win(texto)
+        assert not any(p.startswith("-") for p in pedacos)
+        assert "".join(pedacos) == texto                      # byte-exato
+        assert all(len(p) <= tmux._WIN_CHUNK_MAX for p in pedacos)
+
+
+def test_fatiar_win_corrida_maior_que_a_folga_aceita_a_fronteira():
+    # Caso degenerado: hifens demais pra caber no teto. Prefere estourar a garantia do '-' a estourar
+    # o teto de colapso (o placeholder do _send_literal cobre o pedaco que sobrar comecando com '-').
+    texto = "A" * 500 + "-" * 400 + "B" * 100
+    pedacos = tmux._fatiar_win(texto)
+    assert "".join(pedacos) == texto
+    assert all(len(p) <= tmux._WIN_CHUNK_MAX for p in pedacos)
+
+
+def test_send_literal_texto_que_comeca_com_hifen_usa_placeholder(monkeypatch):
+    # Texto INTEIRO comecando com '-': nao ha fronteira pra mover (o 1o pedaco comeca no indice 0).
+    # Manda 'x' na frente e apaga no FIM com Home+DC. Vale tambem pro texto CURTO: o bug e
+    # pre-existente ao fatiamento, mensagem de uma chamada so tambem e engolida.
+    monkeypatch.setattr(tmux.os, "name", "nt")
+    chamadas = _captura_run(monkeypatch)
+    tmux.send_keys("cc", "-flag curta", literal=True)
+    literais = [c[6] for c in chamadas if c[4:6] == ["-l", "--"]]
+    assert literais == ["x-flag curta"]                       # placeholder na frente
+    # Home+DC sao os ULTIMOS passos: feitos antes, o cursor volta a 0 e o resto entra no INICIO.
+    assert [c[4] for c in chamadas if c[4:5] and c[4] in ("Home", "DC")] == ["Home", "DC"]
+    assert chamadas[-2][4] == "Home" and chamadas[-1][4] == "DC"
+
+
+def test_send_literal_sem_hifen_nao_usa_placeholder(monkeypatch):
+    # Sem '-' no inicio, nada muda: nem 'x' na frente, nem Home/DC. Protege o caminho comum.
+    monkeypatch.setattr(tmux.os, "name", "nt")
+    chamadas = _captura_run(monkeypatch)
+    tmux.send_keys("cc", "texto normal", literal=True)
+    assert chamadas == [["tmux", "send-keys", "-t", "=cc:", "-l", "--", "texto normal"]]
+
+
+def test_send_literal_posix_ignora_o_hifen(monkeypatch):
+    # O bug e do psmux. No Linux o `--` funciona -> nada de placeholder, byte-identico a sempre.
+    monkeypatch.setattr(tmux.os, "name", "posix")
+    chamadas = _captura_run(monkeypatch)
+    tmux.send_keys("cc", "--flag no linux", literal=True)
+    assert chamadas == [["tmux", "send-keys", "-t", "=cc:", "-l", "--", "--flag no linux"]]
+
+
 def test_send_literal_posix_nunca_fatia(monkeypatch):
     # Decisao do dono do repo: no Linux o bug nao existe -> texto grande vai numa chamada SO, sem
     # pausa. O ramo posix fica byte-identico a hoje, risco zero.
