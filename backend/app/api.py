@@ -1858,7 +1858,11 @@ async def session_plan(name: str):
     """Detalhe do plano ativo da sessao + o markdown cru. O markdown vem JUNTO de proposito: o
     GET /sessions/{name}/file so serve path que aparece no transcript, e um plano descoberto por
     varredura (sessao nova, pos-/clear) nunca aparece la. O arquivo ja foi lido e parseado aqui."""
-    cwd = _session_cwd(name)                      # ja levanta 404 sem sessao/cwd
+    # to_thread e obrigatorio: _session_cwd chama registry.list(), que forka `tmux list-panes` e
+    # varre /proc inteiro. As outras 16 rotas que usam _session_cwd sao `def` sync (o FastAPI as
+    # joga no threadpool sozinho); esta e async, entao I/O direto na corrotina travaria o loop
+    # (mesma classe do incidente 2026-07-23). A HTTPException do 404 propaga pelo to_thread normal.
+    cwd = await asyncio.to_thread(_session_cwd, name)   # ja levanta 404 sem sessao/cwd
     p = await asyncio.to_thread(plan_progress, cwd)
     if p is None:
         raise HTTPException(404, "sem plano ativo")

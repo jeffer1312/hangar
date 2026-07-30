@@ -20,8 +20,9 @@
     session?: SessionInfo | null;
     planDetail?: PlanDetail | null;
     planLoading?: boolean;
+    planError?: boolean;
   }
-  let { open, activity, sessionName, onClose, showPlan = false, session = null, planDetail = null, planLoading = false }: Props = $props();
+  let { open, activity, sessionName, onClose, showPlan = false, session = null, planDetail = null, planLoading = false, planError = false }: Props = $props();
 
   // 3 níveis: lista geral -> detalhe do workflow (fases+agentes) -> detalhe do agente (prompt+result).
   let level = $state<'list' | 'workflow' | 'agent' | 'subagent'>('list');
@@ -280,7 +281,7 @@
             {#if showPlan && session?.plan_name}
               <div class="section">
                 <span class="section-label">Plano</span>
-                <PlanPanel {session} detail={planDetail} loading={planLoading} />
+                <PlanPanel {session} detail={planDetail} loading={planLoading} error={planError} />
               </div>
             {/if}
 
