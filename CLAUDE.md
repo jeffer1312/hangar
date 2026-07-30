@@ -243,6 +243,22 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   is now gated on a probe: a systemd user manager that refuses transient scopes was making **every**
   session creation fail (app and terminal both). Failing the probe, sessions are created without the
   scope and the backend logs a warning (commit `23da052`).
+- **Plan progress** (`app/planprog.py` + `registry._decorate_plan` + `PlanBar`/`PlanPanel.svelte`):
+  the source of truth is the plan's own `.md` under `docs/superpowers/plans/` — no separate state
+  file, `parse_plan` re-reads it and re-counts `- [x] **Step …**` on every discovery. Fenced blocks
+  (` ``` `/`~~~`) are stripped **before** the regex runs, **preserving byte offsets** (chars → spaces,
+  `\n` kept) — plans show example steps inside code fences, and without the strip a freshly-written
+  plan is born "3/47 done" (measured on this very plan: 53 matched vs 48 real). The decoration runs
+  **inside** the git `to_thread` (`registry.py:851`), never in the coroutine — same precedent as the
+  2026-07-23 incident. `_list_sig` (`sse.py`) carries `plan_name` alongside `plan_done`/`plan_total`:
+  switching from plan A to plan B that happens to also read `9/17` wouldn't re-emit the list and the
+  chip would stick on the wrong plan — the same bug class as `engine`. `plan_tasks` (one `(done,total)`
+  per Task) rides the payload too, because the segmented bar can't be derived from
+  `task_idx`/`task_total` alone — it would lie whenever an earlier Task still had a pending step.
+  `_plans_dir` climbs up to 6 levels looking for `docs/superpowers/plans/` but **stops at the first
+  `.git`** — without that, a worktree with no plans of its own would climb into the main checkout and
+  show someone else's plan ("no bar" is a limitation, "wrong bar" is a bug). Executing a superpowers
+  plan: mark `- [ ]` → `- [x]` at the end of each Step — that's what feeds this feature.
 
 ## tmux + Claude Code truecolor
 
