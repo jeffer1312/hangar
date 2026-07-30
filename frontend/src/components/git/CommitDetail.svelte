@@ -5,8 +5,9 @@
     commit: GitCommit;
     sessionName: string;
     onOpenFile: (p: string) => void;
+    onMenu?: (c: GitCommit) => void;   // opcional: reusos sem menu omitem (idem CommitList)
   }
-  let { commit, sessionName, onOpenFile }: Props = $props();
+  let { commit, sessionName, onOpenFile, onMenu }: Props = $props();
 
   let files = $state<ChangedFile[]>([]);
 
@@ -19,7 +20,12 @@
 </script>
 
 <div class="git-scroll git-commit-detail">
-  <p class="git-cd-subject">{commit.subject}</p>
+  <div class="git-cd-head">
+    <p class="git-cd-subject">{commit.subject}</p>
+    {#if onMenu}
+      <button class="git-mini" onclick={() => onMenu(commit)} aria-label="ações do commit">⋯ ações</button>
+    {/if}
+  </div>
   {#if commit.refs}<div class="git-cd-refs">{#each commit.refs.split(', ') as r (r)}<span class="git-c-ref">{r.replace('HEAD -> ', '')}</span>{/each}</div>{/if}
   <dl class="git-cd-meta">
     <dt>hash</dt><dd class="mono">{commit.hash}</dd>
@@ -47,7 +53,14 @@
   @media (min-width: 820px) { .git-scroll { max-height: 68vh; } }
 
   .git-commit-detail { gap: var(--space-3); }
+  .git-cd-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); }
   .git-cd-subject { margin: 0; font-size: var(--text-base); font-weight: 600; color: var(--text-primary); line-height: 1.4; }
+  .git-mini {
+    flex-shrink: 0; padding: var(--space-1) var(--space-2); border-radius: var(--radius-md);
+    border: 1px solid var(--border-default); background: var(--bg-elevated);
+    color: var(--text-muted); font-size: var(--text-xs); cursor: pointer;
+  }
+  .git-mini:disabled { opacity: 0.5; cursor: default; }
   .git-cd-refs { display: flex; flex-wrap: wrap; gap: var(--space-1); margin: 0; }
   .git-c-ref {
     flex: 0 1 auto; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

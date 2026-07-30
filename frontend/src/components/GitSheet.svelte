@@ -5,10 +5,12 @@
   import ChangedFiles from './git/ChangedFiles.svelte';
   import CommitList from './git/CommitList.svelte';
   import CommitDetail from './git/CommitDetail.svelte';
+  import CommitMenu from './git/CommitMenu.svelte';
+  import LogSearch from './git/LogSearch.svelte';
   import DiffView from './git/DiffView.svelte';
   import CommitBox from './git/CommitBox.svelte';
   import GitPanel from './GitPanel.svelte';
-  import { getFileDiff, getCommitFileDiff, type GitCommit } from '../lib/api';
+  import { getFileDiff, getCommitFileDiff, getCommitDiff, getCommitDiffVsWorktree, type GitCommit } from '../lib/api';
   import { createGitStore } from '../lib/gitStore.svelte';
   // Import de TIPO (elidido no build); a lib do Shiki entra via import() dinamico no openDiff -> o
   // core+temas viram um chunk carregado SO ao abrir um diff, sem pesar o bundle inicial do app.
@@ -39,6 +41,8 @@
   let diffSha = $state('');     // sha do commit dono do diff aberto ('' = diff da working tree)
   let logLoading = $state(false);
   let commitSel = $state<GitCommit | null>(null);  // commit aberto no detalhe (view 'commit')
+  let menuCommit = $state<GitCommit | null>(null);   // commit com o menu de contexto aberto
+  let confirmAbort = $state(false);   // confirm de 2 passos pro abort de revert/cherry-pick em conflito
 
   // Breakpoint desktop (mesmo corte do resto do app): acima disso, delega pro GitPanel de 3 zonas.
   let isDesktop = $state(false);
@@ -58,7 +62,7 @@
   // No desktop tambem abre o log de cara: o GitPanel precisa dos commits no centro.
   $effect(() => {
     if (open) {
-      filter = ''; view = 'list'; diffPath = ''; diffSha = '';
+      filter = ''; view = 'list'; diffPath = ''; diffSha = ''; menuCommit = null;
       git.load().then(() => { if (isDesktop) git.openLog(); });
     }
   });
@@ -111,6 +115,57 @@
     }
   }
 
+  // Diff unificado do commit INTEIRO (menu "Ver diff completo"). Título sintético — o highlightDiff
+  // usa o path só pra detectar linguagem (sem extensão = texto plano, ok pra diff multi-arquivo).
+  async function openCommitFullDiff(c: GitCommit) {
+    if (git.busy) return;
+    commitSel = c;
+    diffSha = c.hash;
+    diffPath = `commit ${c.short}`;
+    diffRows = [];
+    diffLoading = true;
+    git.error = '';
+    git.busy = c.hash;
+    view = 'diff';
+    try {
+      const { diff } = await getCommitDiff(sessionName, c.hash);
+      const { highlightDiff } = await import('../lib/highlight');
+      diffRows = await highlightDiff(diff, diffPath);
+    } catch (e) {
+      git.error = cleanErr(e);
+      diffPath = '';
+      view = 'commit';   // falhou -> volta pro detalhe do commit
+    } finally {
+      diffLoading = false;
+      git.busy = '';
+    }
+  }
+
+  // Commit vs o disco agora. Titulo diferente pro usuario saber qual dos dois diffs esta vendo.
+  async function openCommitWorktreeDiff(c: GitCommit) {
+    if (git.busy) return;
+    commitSel = c;
+    diffSha = c.hash;
+    diffPath = `commit ${c.short} ↔ working tree`;
+    diffRows = [];
+    diffLoading = true;
+    git.error = '';
+    git.busy = c.hash;
+    view = 'diff';
+    try {
+      const { diff } = await getCommitDiffVsWorktree(sessionName, c.hash);
+      const { highlightDiff } = await import('../lib/highlight');
+      diffRows = await highlightDiff(diff, diffPath);
+    } catch (e) {
+      git.error = cleanErr(e);
+      diffPath = '';
+      view = 'commit';   // falhou -> volta pro detalhe do commit
+    } finally {
+      diffLoading = false;
+      git.busy = '';
+    }
+  }
+
   // Carrega o log e abre a view dedicada (uma-linha-por-commit). Espelha o openDiff.
   async function openLog() {
     if (git.busy) return;
@@ -147,10 +202,23 @@
         <button class="git-back" onclick={() => (view = 'list')} aria-label="Voltar">‹ voltar</button>
         <span class="git-diff-name">git log</span>
       </div>
+      <LogSearch {git} />
+      {#if git.pendingAbort}
+        <div class="git-actions">
+          {#if confirmAbort}
+            <button class="git-act git-abort" disabled={!!git.busy} onclick={() => git.abortOp()}>confirmar abort</button>
+            <button class="git-act" onclick={() => (confirmAbort = false)}>não</button>
+          {:else}
+            <button class="git-act git-abort" disabled={!!git.busy}
+              onclick={() => (confirmAbort = true)} title="desiste da operação em conflito">abort…</button>
+          {/if}
+        </div>
+      {/if}
       {#if logLoading}
         <p class="git-muted">carregando…</p>
       {:else}
-        <CommitList commits={git.commits} onSelect={selectCommit} wtCount={git.files.length} />
+        <CommitList commits={git.commits} onSelect={selectCommit} onMenu={(c) => (menuCommit = c)}
+          wtCount={git.logQuery ? 0 : git.files.length} noGraph={!!git.logQuery} />
       {/if}
     </div>
   {:else if view === 'commit'}
@@ -161,7 +229,8 @@
         <span class="git-diff-name">commit {commitSel?.short}</span>
       </div>
       {#if commitSel}
-        <CommitDetail commit={commitSel} {sessionName} onOpenFile={openCommitFileDiff} />
+        <CommitDetail commit={commitSel} {sessionName} onOpenFile={openCommitFileDiff}
+          onMenu={(c) => (menuCommit = c)} />
       {/if}
     </div>
   {:else if view === 'commitbox'}
@@ -203,8 +272,12 @@
       {/if}
 
       {#if git.output}<pre class="git-output">{git.output}</pre>{/if}
-      {#if git.error}<p class="git-error">{git.error}</p>{/if}
+      {#if git.error && !menuCommit}<p class="git-error">{git.error}</p>{/if}
     </div>
+  {/if}
+  {#if menuCommit}
+    <CommitMenu commit={menuCommit} {git} onClose={() => (menuCommit = null)}
+      onShowDiff={openCommitFullDiff} onShowWorktreeDiff={openCommitWorktreeDiff} />
   {/if}
 </BottomSheet>
 
@@ -261,4 +334,16 @@
     white-space: pre-wrap; word-break: break-word; flex-shrink: 0;
   }
   .git-muted { margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
+
+  /* Abort do revert/cherry-pick em conflito, ao lado do LogSearch na view log (mesmo padrao do
+     GitToolbar, que cobre a view list/desktop). */
+  .git-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+  .git-act {
+    flex: 1 1 auto; min-width: 4rem; padding: var(--space-2); border-radius: var(--radius-md);
+    border: 1px solid var(--border-default); background: var(--bg-elevated);
+    color: var(--text-secondary); font-size: var(--text-sm); font-family: var(--font-mono);
+    cursor: pointer;
+  }
+  .git-act:disabled { opacity: 0.5; cursor: default; }
+  .git-abort { color: var(--error); border-color: color-mix(in srgb, var(--error) 50%, transparent); }
 </style>
