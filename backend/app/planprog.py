@@ -106,14 +106,19 @@ def _pin_path(root: str) -> str:
     return os.path.join(root, "." + PIN_FILE)
 
 
+def is_safe_stem(v: str) -> bool:
+    """Guarda anti-traversal: o valor vira nome de arquivo. So o stem, sem separador. Vale pra
+    TODA entrada de stem — a do disco (read_pin) e a que vem do cliente (endpoint do pin)."""
+    return bool(v) and "/" not in v and "\\" not in v and v not in (".", "..")
+
+
 def read_pin(root: str) -> str | None:
     """Stem do plano fixado nesta raiz, ou None. NUNCA levanta — pin ilegivel = sem pin."""
     try:
         v = Path(_pin_path(root)).read_text(encoding="utf-8", errors="replace").strip()
     except OSError:
         return None
-    # Guarda anti-traversal: o valor vira nome de arquivo logo abaixo. So o stem, sem separador.
-    return v if v and "/" not in v and "\\" not in v and v not in (".", "..") else None
+    return v if is_safe_stem(v) else None
 
 
 def write_pin(root: str, stem: str | None) -> None:
@@ -285,7 +290,11 @@ def list_plans(cwd: str | None) -> dict | None:
                 stem = e.name[:-3]
                 try:
                     got = _load(e.path, e.stat().st_mtime_ns)
-                except OSError:
+                except OSError as err:
+                    # Mesmo motivo do _discover: um arquivo ilegivel nao derruba a lista inteira.
+                    # Mas some do seletor sem deixar rastro — sem o log e indistinguivel de "nao
+                    # existe", e ninguem investiga o que nunca apareceu.
+                    _log.warning("plano ilegivel path=%s", err.filename or err, exc_info=True)
                     continue
                 itens.append({
                     "stem": stem,

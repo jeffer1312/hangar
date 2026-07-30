@@ -25,7 +25,7 @@ from app.registry import KillFailed, SessionRegistry
 from app.names import sanitize_session_name
 from app.models import (SessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody, RunInfo,
                         ProjectStatus)
-from app.planprog import plan_progress, list_plans, write_pin, _plans_dir, PlanPinError
+from app.planprog import plan_progress, list_plans, write_pin, is_safe_stem, _plans_dir, PlanPinError
 from app.pqueue import PromptQueue, _transcript_start_ts, committed_user_lines
 from app.chain import ThenLink
 from app.terminal_input import TerminalInput, drain
@@ -1915,7 +1915,10 @@ async def session_plan_pin(name: str, body: PlanPinBody):
     if body.stem is not None:
         # So um plano que existe DE VERDADE nesta raiz. Sem isto, o stem viraria nome de arquivo
         # vindo do cliente — e a checagem de traversal do read_pin nao cobriria um nome valido
-        # apontando pra plano de outro repo.
+        # apontando pra plano de outro repo. A guarda de separador vem ANTES do isfile: com um
+        # `../..` o proprio isfile ja responderia se existe .md fora da pasta de planos.
+        if not is_safe_stem(body.stem):
+            raise HTTPException(400, f"nome de plano invalido: {body.stem}")
         alvo = os.path.join(root, body.stem + ".md")
         if not await asyncio.to_thread(os.path.isfile, alvo):
             raise HTTPException(404, f"plano nao encontrado: {body.stem}")
