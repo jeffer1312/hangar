@@ -248,6 +248,7 @@ All routes require `Authorization: Bearer <token>` (SSE uses a `cp_token` cookie
 | GET | `/api/sessions/{name}/events` | **SSE**: `message` / `state` / `preview` / `ask_question` / `ping` / `reset` |
 | GET | `/api/sessions/{name}/transcript-image/{uuid}/{idx}` | image embedded in a transcript message |
 | GET | `/api/sessions/{name}/pane` | raw `tmux capture-pane` (live peek / debug) |
+| GET | `/api/sessions/{name}/plan` | active superpowers plan progress (tasks/steps) + raw markdown |
 
 **Input**
 

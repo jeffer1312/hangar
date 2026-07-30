@@ -1,19 +1,28 @@
 <script lang="ts">
   import { getWorkflows, getWorkflow, getWorkflowAgent, getSubagents, getSubagent } from '../lib/api';
   import ModalDialog from './ModalDialog.svelte';
+  import PlanPanel from './PlanPanel.svelte';
   import { renderMarkdown } from '../lib/markdown';
   import MessageList from './MessageList.svelte';
   import { onDestroy } from 'svelte';
   import type { Activity, TaskStatus } from '../lib/activity';
-  import type { WorkflowSummary, WorkflowDetail, WorkflowAgentDetail, SubagentRun } from '../lib/types';
+  import type { WorkflowSummary, WorkflowDetail, WorkflowAgentDetail, SubagentRun, SessionInfo, PlanDetail } from '../lib/types';
 
   interface Props {
     open: boolean;
     activity: Activity;
     sessionName: string;
     onClose: () => void;
+    // Progresso do plano (Task 5b): só o mobile monta o painel AQUI — no desktop ele já vive no
+    // DesktopSessionContext, e a ActivitySheet é montada nas DUAS views pelo Chat. Sem este gate
+    // explícito o painel apareceria duplicado no desktop.
+    showPlan?: boolean;
+    session?: SessionInfo | null;
+    planDetail?: PlanDetail | null;
+    planLoading?: boolean;
+    planError?: boolean;
   }
-  let { open, activity, sessionName, onClose }: Props = $props();
+  let { open, activity, sessionName, onClose, showPlan = false, session = null, planDetail = null, planLoading = false, planError = false }: Props = $props();
 
   // 3 níveis: lista geral -> detalhe do workflow (fases+agentes) -> detalhe do agente (prompt+result).
   let level = $state<'list' | 'workflow' | 'agent' | 'subagent'>('list');
@@ -269,6 +278,13 @@
       <div class="modal-body">
         {#if level === 'list'}
           <div class="activity">
+            {#if showPlan && session?.plan_name}
+              <div class="section">
+                <span class="section-label">Plano</span>
+                <PlanPanel {session} detail={planDetail} loading={planLoading} error={planError} />
+              </div>
+            {/if}
+
             {#if workflows.length > 0}
               <div class="section">
                 <span class="section-label">Workflows</span>

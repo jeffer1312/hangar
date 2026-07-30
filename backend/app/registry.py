@@ -23,6 +23,7 @@ from app.adapters.codex.appserver import AppServerClient
 from app.askquestion import clear_pending_askq
 from app.state import classify, _live_spinner, rate_limit_reset, status_line as _pane_status
 from app.hook_state import hook_state
+from app.planprog import plan_progress
 # As funcoes de /proc vivem no procinfo.py — e o unico ponto do backend preso ao Linux.
 # Importadas por NOME (nao `procinfo._cmdline(...)`) de proposito: os testes fazem
 # monkeypatch delas neste modulo, e o binding local preserva isso.
@@ -55,6 +56,30 @@ def _decorate_loop(info) -> None:
         info.loop_status = d.get("status")
         info.loop_iter = d.get("iter")
         info.loop_max = d.get("max_iters")
+
+
+def _decorate_plan(info) -> None:
+    """Decora plan_* de UMA sessao a partir do .md do plano (app.planprog). Sem plano -> tudo None.
+    Engole a excecao de proposito: roda no tick da lista, e uma falha aqui nao pode derrubar o SSE
+    (incidente 2026-07-23). Module-level (nao closure) pra ser testavel isolado, igual _decorate_loop."""
+    try:
+        p = plan_progress(info.cwd)
+    except Exception:
+        _log.warning("decorate_plan falhou pra %r", getattr(info, "name", "?"), exc_info=True)
+        return
+    if p is None:
+        return
+    info.plan_name = p.name
+    info.plan_task = p.task_idx
+    info.plan_task_total = p.task_total
+    info.plan_done = p.done
+    info.plan_total = p.total
+    info.plan_complete = p.complete
+    # Teto de 9 pares: o front so segmenta a barra com <= 8 Tasks (PlanBar.svelte), acima disso
+    # desenha barra unica e ignora a lista. Sem o corte, um plano de 30 Tasks manda 30 pares por
+    # sessao em TODO /api/sessions e em toda re-emissao do SSE, de graca. 9 e nao 8 de proposito:
+    # cortar em 8 exatos faria o front achar que o plano TEM 8 Tasks e segmentar um plano de 30.
+    info.plan_tasks = [(t.done, t.total) for t in p.tasks[:9]]
 
 
 def sanitize_cwd(cwd: str) -> str:
@@ -825,6 +850,9 @@ class SessionRegistry:
                     info.git_dirty = summary["dirty"]
                     info.git_ahead = summary["ahead"]
                     info.git_behind = summary["behind"]
+                # Plano vive AQUI dentro, no mesmo to_thread: le markdown do disco, e ler arquivo na
+                # corrotina e a mesma classe de erro que motivou o to_thread do git.
+                _decorate_plan(info)
 
         await asyncio.to_thread(_decorate_git)
         for info in infos:

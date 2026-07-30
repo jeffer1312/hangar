@@ -166,12 +166,16 @@ def _list_sig(infos) -> str:
     # limit_reset/then_target/status_line-reduzida/presenca-de-label/loop/engine. Sem o engine aqui,
     # resumir um pane cujo motor sumiu do engines.json (kimi -> None) nao reemite a lista e o chip
     # ⚙ kimi fica preso, calado.
+    # Sem o plan_name aqui, trocar do plano A pro B com o mesmo 9/17 nao re-emite e o chip fica
+    # preso no plano errado — mesmo bug do engine.
     return json.dumps(
         [(i.name, i.cwd, i.state, i.tracked, i.jsonl, i.question, i.stalled, i.limited,
           i.limit_reset, i.then_target, _status_sig(getattr(i, "status_line", None)),
           bool(getattr(i, "label", None)),
           getattr(i, "loop_status", None), getattr(i, "loop_iter", None),
-          getattr(i, "engine", None))
+          getattr(i, "engine", None),
+          getattr(i, "plan_name", None), getattr(i, "plan_done", None),
+          getattr(i, "plan_total", None))
          for i in infos],
         ensure_ascii=False,
     )

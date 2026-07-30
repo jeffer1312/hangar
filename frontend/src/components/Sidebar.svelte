@@ -16,6 +16,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, untrackedReason, providerName, providerTag, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
+  import { planBadge } from '../lib/plan';
+  import PlanBar from './PlanBar.svelte';
   import Lottie from './Lottie.svelte';
   import pensando from '../lib/lottie/pensando.json';
   import type { WorkspaceAction, WorkspaceView } from '../lib/workspaceCommands';
@@ -956,6 +958,17 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   <span class="prov-rail">{provTag}</span>
                 {/if}
               </span>
+              {#if !expanded && !selectMode && !provTag}
+                <!-- Rail recolhido: barra única na base da row, irmã de .lead (não dentro dele —
+                     .lead é a coluna das iniciais, gated em provTag). .sess-main precisa de
+                     position:relative pra ancorar o position:absolute do compact (ver CSS).
+                     ponytail: gate em !provTag — geometria do .prov-rail (badge do provider, também
+                     absoluto e centralizado na base do avatar) ocupa a MESMA faixa de ~13px que a
+                     barra usaria; os 36-40px do trilho não têm altura pra empilhar os dois sem
+                     colidir. Mutuamente exclusivo por ora (raro ter Pi/Codex + plano ativo); se
+                     precisar dos dois ao mesmo tempo, mover um dos dois pro topo do avatar. -->
+                <PlanBar session={s} compact />
+              {/if}
               {#if expanded}
                 <span class="row-info">
                   <span class="name-row">
@@ -979,7 +992,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   {:else if showBranch(s.branch)}
                     <span class="branch" title="branch git atual">⎇ {s.branch}</span>
                   {/if}
-                  {#if provTag || s.limited || s.then_target || s.pair_peers?.length || s.loop_status || s.engine}
+                  {#if provTag || s.limited || s.then_target || s.pair_peers?.length || s.loop_status || s.engine || s.plan_name}
                     <!-- Chips informativos (⏳/🔗/🤝/↻/⚙) na COLUNA DE TEXTO, nao ao lado do state-chip:
                          inline eles cobriam o cwd em sidebar estreita (mesmo fix do SessionCard mobile). -->
                     <span class="badges-line">
@@ -1006,6 +1019,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                           <span class="chain-chip" style="color: {LOOP_TONE_COLOR[lb.tone]}; background: color-mix(in srgb, {LOOP_TONE_COLOR[lb.tone]} 14%, transparent);" title="Loop runner">{lb.label}</span>
                         {/if}
                       {/if}
+                      {#if s.plan_name}
+                        {@const pb = planBadge(s)}
+                        {#if pb}
+                          <span class="plan-chip" class:plan-chip--done={pb.complete} title={pb.title}>{pb.label}</span>
+                        {/if}
+                      {/if}
                       {#if s.engine}
                         <!-- Sem isto nada na lista distingue uma sessão de motor de uma da conta Anthropic.
                              NÃO mostramos custo aqui: o preço que o Claude Code calcula é tabela Anthropic
@@ -1014,6 +1033,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                       {/if}
                     </span>
                   {/if}
+                  <PlanBar session={s} />
                 </span>
                 <span
                   class="state-chip"
@@ -1752,6 +1772,20 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     max-width: 96px; overflow: hidden; text-overflow: ellipsis;
     color: var(--accent); background: var(--accent-dim);
   }
+  /* Progresso do plano do superpowers (Task 3). */
+  .plan-chip {
+    padding: 1px 6px;
+    border-radius: var(--radius-full);
+    background: var(--accent-dim);
+    color: var(--accent);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .plan-chip--done {
+    background: color-mix(in srgb, var(--success) 14%, transparent);
+    color: var(--success);
+  }
   /* Motor de modelo (Task 5): sessao rodando fora da conta Anthropic. */
   /* Provider da sessão (Codex/Pi) — só o que NÃO é Claude ganha chip. Tinta neutra de propósito:
      é rótulo de identidade, não estado; accent já é "motor" e âmbar já é "sem id". */
@@ -1802,7 +1836,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     50%      { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 0%, transparent); }
   }
   .sidebar.collapsed .sess-row { justify-content: center; }
-  .sidebar.collapsed .sess-main { justify-content: center; padding: 0; }
+  /* position:relative pra ancorar a PlanBar compact (position:absolute) — sem isto ela flutua em
+     relação ao body inteiro em vez de ficar na base desta linha. */
+  .sidebar.collapsed .sess-main { justify-content: center; padding: 0; position: relative; }
   .sess-row.active .sess-main { color: var(--text-primary); }
   .sess-name { flex: 1; min-width: 0; font-size: var(--text-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sess-main.untracked { opacity: 0.45; cursor: default; }
