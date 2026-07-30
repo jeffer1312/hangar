@@ -509,35 +509,26 @@ def diff_vs_worktree(cwd: str, sha: str) -> dict:
 
 
 def branches_containing(cwd: str, sha: str) -> dict:
-    """Branches locais e remotas que contem o commit — o "Shows branches this commit is on"."""
+    """Branches locais e remotas que contem o commit — o "Shows branches this commit is on".
+    Usa o refname COMPLETO, nao o :short: um branch local chamado 'origin' e o ref simbolico
+    origin/HEAD saem com o MESMO texto no :short (medido), e nao havia como distinguir os dois —
+    com refname a classificacao vem do prefixo (refs/heads/ vs refs/remotes/), sem ambiguidade."""
     if not _SHA_RE.match(sha):
         raise GitError(400, "sha invalido")
-    p = _run(cwd, "branch", "-a", "--contains", sha, "--format=%(refname:short)")
+    p = _run(cwd, "branch", "-a", "--contains", sha, "--format=%(refname)")
     if p.returncode != 0:
         raise GitError(409, (p.stderr or "git branch --contains falhou").strip())
-    remotes = _remote_names(cwd)          # UMA vez, fora do laco: era um subprocesso por branch
     local, remote = [], []
     for line in p.stdout.splitlines():
-        name = line.strip()
-        if not name or name.startswith("("):      # "(HEAD detached at ...)" nao e branch
-            continue
-        if name in remotes:      # origin/HEAD simbolico: refname:short colapsa pro nome do remote,
-            continue             # sem barra (medido: NAO vem como 'origin/HEAD', so 'origin')
-        if "/" in name and name.split("/", 1)[0] in remotes:
-            remote.append(name)
-        else:
-            local.append(name)
+        ref = line.strip()
+        if ref.startswith("refs/heads/"):
+            local.append(ref[len("refs/heads/"):])
+        elif ref.startswith("refs/remotes/"):
+            short = ref[len("refs/remotes/"):]
+            if short.endswith("/HEAD"):      # refs/remotes/origin/HEAD: ref simbolico, nao branch
+                continue
+            remote.append(short)
     return {"local": local, "remote": remote}
-
-
-def _remote_names(cwd: str) -> set[str]:
-    """Nomes dos remotes ('origin', ...). Sem isto, uma branch local chamada 'feat/x' seria
-    classificada como remota so por ter barra. Falha do git remote -> GitError, nunca um set vazio
-    calado (que jogaria TODA branch remota pra coluna 'local')."""
-    p = _run(cwd, "remote")
-    if p.returncode != 0:
-        raise GitError(409, (p.stderr or "git remote falhou").strip())
-    return {l.strip() for l in p.stdout.splitlines() if l.strip()}
 
 
 _BRANCH_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
