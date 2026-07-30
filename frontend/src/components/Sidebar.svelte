@@ -797,12 +797,18 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   style:width={expanded ? width + 'px' : undefined}
   onmouseenter={() => (hovering = true)} onmouseleave={() => (hovering = false)}>
   <div class="side-top">
-    <button class="icon-btn" onclick={togglePin} aria-label={collapsed ? 'Expandir' : 'Recolher'}>
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-        <rect x="3" y="4" width="18" height="16" rx="2"/>
-        <line x1="9" y1="4" x2="9" y2="20"/>
-      </svg>
-    </button>
+    <!-- Com "manter aberta" ligada, `expanded` ja e true so pela 1a clausula -- togglePin() nao muda
+         nada na tela, mas gravava `collapsed` novo no localStorage do mesmo jeito: desligar a
+         preferencia depois fazia a barra voltar obedecendo um estado que mudou sem o usuario ver.
+         O botao some enquanto essa preferencia manda (fora do quadro/canvas, que ja tem excecao propria). -->
+    {#if !(sidebarPrefs.alwaysOpen && !overviewActive)}
+      <button class="icon-btn" onclick={togglePin} aria-label={collapsed ? 'Expandir' : 'Recolher'}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="16" rx="2"/>
+          <line x1="9" y1="4" x2="9" y2="20"/>
+        </svg>
+      </button>
+    {/if}
     {#if expanded}<span class="side-brand">claude cockpit</span>{/if}
     {#if expanded}
       <!-- Broadcast (feature #9): entra/sai do modo seleção multipla. -->

@@ -433,7 +433,10 @@ def revert_commit(cwd: str, sha: str) -> dict:
         raise GitError(400, "sha invalido")
     p = _run(cwd, "revert", "--no-edit", sha)
     if p.returncode != 0:
-        raise GitError(409, (p.stderr or p.stdout or "revert falhou").strip())
+        # (stdout + stderr), nao "stderr ou stdout": num conflito o git lista os arquivos
+        # conflitantes no STDOUT, e so pegar um dos dois some com a informacao que o usuario precisa
+        # pra decidir entre abortar e resolver. Mesma juncao ja usada no `output` de sucesso.
+        raise GitError(409, (p.stdout + p.stderr).strip() or "revert falhou")
     return {"ok": True, "output": (p.stdout + p.stderr).strip()}
 
 
@@ -444,7 +447,7 @@ def cherry_pick(cwd: str, sha: str) -> dict:
         raise GitError(400, "sha invalido")
     p = _run(cwd, "cherry-pick", sha)
     if p.returncode != 0:
-        raise GitError(409, (p.stderr or p.stdout or "cherry-pick falhou").strip())
+        raise GitError(409, (p.stdout + p.stderr).strip() or "cherry-pick falhou")
     return {"ok": True, "output": (p.stdout + p.stderr).strip()}
 
 
@@ -466,18 +469,20 @@ def reset_to(cwd: str, sha: str, mode: str) -> dict:
 
 def create_branch_at(cwd: str, name: str, sha: str | None = None, switch_after: bool = False) -> dict:
     """Cria branch em <sha> (ou HEAD). NÃO troca por padrão (Tortoise: 'Create branch from revision'
-    não muda a working tree); switch_after=True faz o switch depois."""
+    não muda a working tree); switch_after=True cria E troca num UNICO comando (`switch -c`), nao
+    branch+switch separados: dois comandos deixavam uma janela de falha parcial -- se o switch
+    recusasse (sha != HEAD + working tree suja), a branch ja tinha sido criada e um retry dava
+    "branch ja existe" em vez de repetir a operacao do zero."""
     _validate_new_ref(cwd, "heads", name)
     if sha is not None and not _SHA_RE.match(sha):
         raise GitError(400, "sha invalido")
-    argv = ["branch", name] + ([sha] if sha else [])
+    if switch_after:
+        argv = ["switch", "-c", name] + ([sha] if sha else [])
+    else:
+        argv = ["branch", name] + ([sha] if sha else [])
     p = _run(cwd, *argv)
     if p.returncode != 0:
         raise GitError(409, (p.stderr or "criar branch falhou").strip())
-    if switch_after:
-        s = _run(cwd, "switch", name)
-        if s.returncode != 0:
-            raise GitError(409, (s.stderr or "switch falhou").strip())
     return {"ok": True, "output": (p.stdout + p.stderr).strip()}
 
 

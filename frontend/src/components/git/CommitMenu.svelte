@@ -27,6 +27,8 @@
   // menu e nao consegue sair dele pro primeiro item. Foca o 1o item no mount e prende o Tab aqui
   // enquanto o menu existe (mesma logica de ciclo do BottomSheet, via focusCycle compartilhado).
   $effect(() => {
+    mode;   // reagir tambem a troca de modo: o item que tinha foco pode sumir do DOM (ex. "Criar
+            // branch aqui…") e sem isto o foco cai no <body> em vez de ir pro campo novo.
     if (menuEl) focusableElements(menuEl)[0]?.focus();
   });
   function onMenuKeydown(e: KeyboardEvent) {
@@ -91,8 +93,8 @@
 <div use:portal bind:this={menuEl} onkeydown={onMenuKeydown} tabindex="-1" class="cm" role="menu" aria-label="ações do commit {commit.short}">
   {#if mode === 'menu'}
     <p class="cm-title">commit {commit.short} — {commit.subject}</p>
-    <button class="cm-item" onclick={() => { onShowDiff(commit); onClose(); }}>Ver diff completo</button>
-    <button class="cm-item" onclick={() => { onShowWorktreeDiff(commit); onClose(); }}>Comparar com a working tree</button>
+    <button class="cm-item" disabled={!!git.busy} onclick={() => { onShowDiff(commit); onClose(); }}>Ver diff completo</button>
+    <button class="cm-item" disabled={!!git.busy} onclick={() => { onShowWorktreeDiff(commit); onClose(); }}>Comparar com a working tree</button>
     <button class="cm-item" onclick={() => copy(commit.hash)}>Copiar hash</button>
     <button class="cm-item" onclick={() => copy(commit.subject)}>Copiar mensagem</button>
     <button class="cm-item" onclick={copyDetails}>Copiar detalhes completos</button>

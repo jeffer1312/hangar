@@ -58,6 +58,11 @@ export function createGitStore(sessionName: string) {
     try {
       const r = await gitAction(sessionName, action);
       output = r.output || (r.ok ? 'ok' : 'sem saída');
+      // git_action NAO levanta em returncode != 0 (git_ops.py) -- so `output` gravava a falha, e o
+      // <pre> dela usa a MESMA cor cinza de um "ok" (ex. um `pull` com conflito/auth expirada/branch
+      // divergida passava despercebido, sem nunca setar `error`). abortOp() so trata o `ok`; aqui e o
+      // dono unico da mensagem de erro pra qualquer acao via runActionResult.
+      if (!r.ok) error = r.output || 'sem saída';
       await refresh();
       return r;
     } catch (e) { error = cleanErr(e); return null; } finally { busy = ''; }
@@ -77,7 +82,14 @@ export function createGitStore(sessionName: string) {
     if (busy) return 'ocupado';
     busy = kind; error = ''; output = '';
     try {
-      const r = await fn(); output = r.output || 'ok'; await openLog(); return 'ok';
+      const r = await fn();
+      output = r.output || 'ok';
+      // openLog FORA do escopo de erro da acao: fn() ja voltou com sucesso (commit de revert/
+      // cherry-pick ja gravado no disco) quando chegamos aqui -- uma falha na releitura (blip de
+      // rede) nao pode rebaixar isto a 'erro', ou o usuario ve "falhou", clica de novo e duplica a
+      // acao (dois reverts, dois cherry-picks).
+      try { await openLog(); } catch { /* acao JA aconteceu; falha de releitura nao a desfaz */ }
+      return 'ok';
     } catch (e) {
       error = cleanErr(e);
       // 409 = o git rodou e recusou (conflito de revert/cherry-pick deixa sequencer em andamento).
@@ -88,19 +100,26 @@ export function createGitStore(sessionName: string) {
       // Sem isto a tela segue mostrando o repo de antes do erro. Try/catch proprio: se o refresh
       // falhar (ex. index.lock transitorio logo apos a operacao), o throw daqui NAO pode substituir
       // o `return` do try acima e vazar pra fora de um onclick sem await (load/doCommit/discard ja
-      // se protegem assim).
+      // se protegem assim). So escreve em `error` se ele ainda estiver vazio -- senao a falha do
+      // refresh (ex. index.lock) sobrescreveria o erro de verdade da acao (ex. conflito de merge).
+      try { await refresh(); } catch (e) { if (!error) error = cleanErr(e); }
+      // busy zera SO DEPOIS do refresh -- mesmo invariante do resto do arquivo (pick/runActionResult/
+      // doCommit/discard). Destravar antes deixaria a UI aceitar um segundo comando destrutivo
+      // (outro cherry-pick, outro reset --hard) enquanto o primeiro ainda recarrega.
       busy = '';
-      try { await refresh(); } catch (e) { error = cleanErr(e); }
     }
   }
   async function revert(sha: string) {
     const r = await _repoOp('revert', () => gitRevert(sessionName, sha));
-    if (r === 'conflito') pendingAbort = 'revert-abort';   // so aqui ha sequencer pra abortar
+    // pendingAbort ja veio do DISCO via refresh() (dentro do _repoOp, `f.sequencer`). Um 409 tambem
+    // acontece com a tree suja e o revert NEM COMECOU (sem REVERT_HEAD) -- so aqui sobrescreve se o
+    // refresh nao tiver detectado sequenciador nenhum, senao criava um botao de abort que o git recusa.
+    if (r === 'conflito' && !pendingAbort) pendingAbort = 'revert-abort';
     return r === 'ok';
   }
   async function cherryPick(sha: string) {
     const r = await _repoOp('cherry-pick', () => gitCherryPick(sessionName, sha));
-    if (r === 'conflito') pendingAbort = 'cherry-pick-abort';
+    if (r === 'conflito' && !pendingAbort) pendingAbort = 'cherry-pick-abort';
     return r === 'ok';
   }
   async function resetTo(sha: string, mode: GitResetMode) {
@@ -118,18 +137,35 @@ export function createGitStore(sessionName: string) {
     if (!pendingAbort || busy) return false;
     const r = await runActionResult(pendingAbort);
     if (r?.ok) { pendingAbort = ''; await openLog(); return true; }
-    if (r && !r.ok) error = r.output || 'abort recusado pelo git';
+    // r && !r.ok: error ja foi setado dentro de runActionResult (dono unico da mensagem, evita
+    // duplicar o mesmo texto duas vezes).
     return false;
   }
   async function searchLog(q: string) {
+    // busy trava o campo (LogSearch ja desabilita o botao em disabled={!!git.busy}), mesma convencao
+    // do resto do arquivo -- sem isto, buscar "abc" e "xyz" rapido demais deixava quem RESPONDESSE
+    // por ultimo vencer, nao quem foi digitado por ultimo. openLog() sozinho (chamado de dentro do
+    // _repoOp, que ja segura `busy` com outro kind) nunca passa por aqui -- sem risco de deadlock.
+    if (busy) return;
+    busy = 'log';
     logQuery = q;
     await openLog();
+    busy = '';
   }
   async function doCommit(message: string, paths: string[], opts?: { amend?: boolean; newBranch?: string }) {
     if (busy) return false;
     busy = 'commit'; error = ''; output = '';
-    try { const r = await commitFiles(sessionName, message, paths, opts); output = r.output || 'commit ok'; await refresh(); await openLog(); return true; }
-    catch (e) { error = cleanErr(e); return false; } finally { busy = ''; }
+    try {
+      const r = await commitFiles(sessionName, message, paths, opts);
+      output = r.output || 'commit ok';
+      // refresh/openLog FORA do escopo de erro do commit: o commit ja foi gravado no disco quando
+      // chegamos aqui -- uma falha na releitura nao pode virar 'erro' e levar o usuario a commitar
+      // de novo (commit duplicado).
+      try { await refresh(); await openLog(); } catch { /* commit JA aconteceu; releitura nao o desfaz */ }
+      return true;
+    }
+    catch (e) { error = cleanErr(e); return false; }
+    finally { busy = ''; }
   }
   async function doPush() {
     if (busy) return false;
