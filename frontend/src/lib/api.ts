@@ -829,11 +829,17 @@ export function discardFile(name: string, path: string): Promise<{ ok: boolean; 
   });
 }
 
-export function commitFiles(name: string, message: string, paths: string[]): Promise<{ ok: boolean; output: string }> {
+export function commitFiles(name: string, message: string, paths: string[],
+                            opts?: { amend?: boolean; newBranch?: string }): Promise<{ ok: boolean; output: string }> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/commit`, {
     method: 'POST',
-    body: JSON.stringify({ message, paths }),
+    body: JSON.stringify({ message, paths, amend: opts?.amend ?? false, new_branch: opts?.newBranch ?? null }),
   });
+}
+
+// Mensagem completa do HEAD (pra pré-preencher o amend). 409 se o repo não tem commit.
+export function getLastCommitMessage(name: string): Promise<{ message: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/last-message`);
 }
 
 export function gitPush(name: string): Promise<{ ok: boolean; output: string }> {

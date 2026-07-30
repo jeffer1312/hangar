@@ -47,10 +47,10 @@ export function createGitStore(sessionName: string) {
     try { commits = (await getGitLog(sessionName)).commits; }
     catch (e) { error = cleanErr(e); }
   }
-  async function doCommit(message: string, paths: string[]) {
+  async function doCommit(message: string, paths: string[], opts?: { amend?: boolean; newBranch?: string }) {
     if (busy) return false;
     busy = 'commit'; error = ''; output = '';
-    try { const r = await commitFiles(sessionName, message, paths); output = r.output || 'commit ok'; await refresh(); await openLog(); return true; }
+    try { const r = await commitFiles(sessionName, message, paths, opts); output = r.output || 'commit ok'; await refresh(); await openLog(); return true; }
     catch (e) { error = cleanErr(e); return false; } finally { busy = ''; }
   }
   async function doPush() {
