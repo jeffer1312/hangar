@@ -40,7 +40,7 @@ from app import runtime_config
 from app import engine_probe, engines
 from app.costs import report as costs_report
 from app.git_ops import (
-    list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit, push as push_branch, GitError, branch_of,
+    list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit, last_commit_message, push as push_branch, GitError, branch_of,
 )
 from app import loop as loop_mod
 from app.transcript import last_assistant_text
@@ -1842,7 +1842,9 @@ class GitPathBody(_StrictBody):
 
 class GitCommitBody(_StrictBody):
     message: str = Field(min_length=1)
-    paths: list[str] = Field(min_length=1)
+    paths: list[str] = []        # sem min_length: amend=True aceita [] (reword); git_ops barra [] sem amend
+    amend: bool = False
+    new_branch: str | None = None
 
 
 def _session_cwd(name: str) -> str:
@@ -1945,7 +1947,15 @@ def git_discard(name: str, body: GitPathBody):
 @app.post("/api/sessions/{name}/git/commit", dependencies=[Depends(require_auth)])
 def git_commit(name: str, body: GitCommitBody):
     try:
-        return commit(_session_cwd(name), body.message, body.paths)
+        return commit(_session_cwd(name), body.message, body.paths, body.amend, body.new_branch)
+    except GitError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.get("/api/sessions/{name}/git/last-message", dependencies=[Depends(require_auth)])
+def git_last_message(name: str):
+    try:
+        return last_commit_message(_session_cwd(name))
     except GitError as e:
         raise HTTPException(e.status, e.detail)
 
