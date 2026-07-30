@@ -1545,7 +1545,7 @@ Expected: `466+ FILES 0 ERRORS 0 WARNINGS`
 Run: `npm --prefix /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/frontend run build`
 Expected: build ok
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add CLAUDE.md README.md docs/superpowers/specs/2026-07-30-regra-para-o-claude-md-global.md
