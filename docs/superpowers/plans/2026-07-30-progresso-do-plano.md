@@ -818,7 +818,7 @@ git commit -m "feat(plan): expose plan progress on sessions API and list signatu
 - Consumes: campos `plan_*` do `SessionInfo` (Task 2).
 - Produces: `planBadge(s) -> PlanBadge | null`, `PlanBadge = {label, pct, title, complete}`.
 
-- [ ] **Step 1: Teste que falha**
+- [x] **Step 1: Teste que falha**
 
 Criar `frontend/src/lib/plan.test.ts`:
 
@@ -864,12 +864,12 @@ describe('planBadge', () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `npm --prefix /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/frontend run test -- plan.test.ts`
 Expected: FAIL — não resolve `./plan`
 
-- [ ] **Step 3: Tipos em `types.ts`**
+- [x] **Step 3: Tipos em `types.ts`**
 
 Em `SessionInfo`, após `loop_max` (`:66`):
 
@@ -885,7 +885,7 @@ Em `SessionInfo`, após `loop_max` (`:66`):
 
 **[adv] Não** adicionar em `StateEvent` — o backend não publica lá (Decisão 3).
 
-- [ ] **Step 4: Implementar `frontend/src/lib/plan.ts`**
+- [x] **Step 4: Implementar `frontend/src/lib/plan.ts`**
 
 ```ts
 // Helpers puros do progresso do plano (app/planprog.py no backend). Espelha lib/loop.ts: o rótulo e
@@ -925,12 +925,12 @@ export function planBadge(s: PlanCarrier | null | undefined): PlanBadge | null {
 }
 ```
 
-- [ ] **Step 5: Rodar e ver passar**
+- [x] **Step 5: Rodar e ver passar**
 
 Run: `npm --prefix /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/frontend run test -- plan.test.ts`
 Expected: PASS (5 testes)
 
-- [ ] **Step 6: Chip no `Sidebar.svelte` (desktop)**
+- [x] **Step 6: Chip no `Sidebar.svelte` (desktop)**
 
 `<script>`: `import { planBadge } from '../lib/plan';`
 
@@ -967,7 +967,7 @@ CSS junto de `.chain-chip` (`:1749`):
   }
 ```
 
-- [ ] **Step 7: Chip no `SessionCard.svelte` (mobile)**
+- [x] **Step 7: Chip no `SessionCard.svelte` (mobile)**
 
 `<script>`, junto do `loopChip` (`:71`): `const planChip = $derived(planBadge(session));`
 
@@ -981,7 +981,7 @@ Condição do `badges-line` (`:294`) — somar `|| planChip`. Dentro, após o ch
 
 Mesmo CSS do Step 6, junto de `.paired-chip` (`:689`).
 
-- [ ] **Step 8: Chip no `BoardCard.svelte`**
+- [x] **Step 8: Chip no `BoardCard.svelte`**
 
 Este arquivo **não tem** `badges-line`: a linha é `.bc-sub` (`:379`) e a classe de chip é `bc-chip`
 (`:609`).
@@ -1010,7 +1010,7 @@ CSS: só as duas cores (o resto vem do `bc-chip`):
   .plan-chip--done { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success); }
 ```
 
-- [ ] **Step 9: Gate de tipos + verificação manual (mobile E desktop)**
+- [x] **Step 9: Gate de tipos + verificação manual (mobile E desktop)**
 
 Run: `npm --prefix /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/frontend run check`
 Expected: `0 ERRORS 0 WARNINGS`
