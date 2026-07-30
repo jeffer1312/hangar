@@ -287,3 +287,81 @@ def test_abort_actions_na_allowlist(tmp_path):
     assert r["ok"] is False and "revert" in r["output"]
     r = git_ops.git_action(d, "cherry-pick-abort")
     assert r["ok"] is False and "cherry-pick" in r["output"]
+
+
+def test_reset_to_soft_mantem_staged(tmp_path):
+    d, f = _repo_with_file(tmp_path)
+    base = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
+    (tmp_path / "b.txt").write_text("B\n")
+    git_ops.commit(d, "c2", ["b.txt"])
+    r = git_ops.reset_to(d, base, "soft")
+    assert r["ok"]
+    assert git_ops._run(d, "rev-parse", "HEAD").stdout.strip() == base
+    st = git_ops._run(d, "status", "--porcelain").stdout
+    assert "A  b.txt" in st                              # soft: b.txt ficou STAGED
+
+
+def test_reset_to_hard_descarta(tmp_path):
+    d, f = _repo_with_file(tmp_path)
+    base = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
+    f.write_text("estragado\n")
+    git_ops.commit(d, "c2", ["tracked.txt"])
+    git_ops.reset_to(d, base, "hard")
+    assert f.read_text() == "linha original\n"
+
+
+@pytest.mark.parametrize("bad_mode", ["--hard; rm", "HARD", ""])
+def test_reset_modo_invalido(tmp_path, bad_mode):
+    d = _repo(tmp_path)
+    sha = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
+    with pytest.raises(GitError) as e:
+        git_ops.reset_to(d, sha, bad_mode)               # fora do enum -> 400 antes do git
+    assert e.value.status == 400
+
+
+def test_reset_sha_invalido(tmp_path):
+    with pytest.raises(GitError) as e:
+        git_ops.reset_to(_repo(tmp_path), "HEAD~1", "soft")
+    assert e.value.status == 400
+
+
+def test_create_branch_at_sem_switch(tmp_path):
+    d = _repo(tmp_path)
+    sha = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
+    r = git_ops.create_branch_at(d, "feat-nova", sha)
+    assert r["ok"]
+    info = git_ops.list_branches(d)
+    assert "feat-nova" in info["branches"] and info["current"] == "main"   # não trocou
+
+
+def test_create_branch_at_com_switch(tmp_path):
+    d = _repo(tmp_path)
+    git_ops.create_branch_at(d, "feat-vai", None, switch_after=True)
+    assert git_ops.list_branches(d)["current"] == "feat-vai"
+
+
+def test_create_branch_nome_invalido_ou_existente(tmp_path):
+    d = _repo(tmp_path)                                  # _repo já cria "feature"
+    for bad in ["feature", "nome com espaço", "-D"]:
+        with pytest.raises(GitError) as e:
+            git_ops.create_branch_at(d, bad, None)
+        assert e.value.status == 400
+
+
+def test_create_tag_anotada_e_leve(tmp_path):
+    d = _repo(tmp_path)
+    sha = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
+    git_ops.create_tag(d, "v1.0", sha, message="release 1")
+    git_ops.create_tag(d, "marcador", sha)
+    out = git_ops._run(d, "tag", "--format=%(refname:short)%09%(objecttype)").stdout
+    assert "v1.0\ttag" in out                            # anotada = objeto tag
+    assert "marcador\tcommit" in out                     # leve = aponta pro commit
+
+
+def test_create_tag_invalida_ou_duplicada(tmp_path):
+    d = _repo(tmp_path)
+    git_ops.create_tag(d, "v1", None)
+    for bad in ["v1", "nome com espaço"]:
+        with pytest.raises(GitError) as e:
+            git_ops.create_tag(d, bad, None)
+        assert e.value.status == 400

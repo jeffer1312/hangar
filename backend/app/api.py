@@ -40,7 +40,7 @@ from app import runtime_config
 from app import engine_probe, engines
 from app.costs import report as costs_report
 from app.git_ops import (
-    list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit_diff, revert_commit, cherry_pick, commit, last_commit_message, push as push_branch, GitError, branch_of,
+    list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit_diff, revert_commit, cherry_pick, reset_to, create_branch_at, create_tag, commit, last_commit_message, push as push_branch, GitError, branch_of,
 )
 from app import loop as loop_mod
 from app.transcript import last_assistant_text
@@ -1981,6 +1981,23 @@ class GitShaBody(_StrictBody):
     sha: str   # validado em git_ops por _SHA_RE (hex 7-40) antes de virar argv
 
 
+class GitResetBody(_StrictBody):
+    sha: str
+    mode: Literal["soft", "mixed", "hard"]   # enum no schema E no git_ops
+
+
+class GitBranchBody(_StrictBody):
+    name: str
+    sha: str | None = None
+    switch_after: bool = False
+
+
+class GitTagBody(_StrictBody):
+    name: str
+    sha: str | None = None
+    message: str | None = None
+
+
 @app.get("/api/sessions/{name}/git/commit/{sha}/diff-full", dependencies=[Depends(require_auth)])
 def git_commit_diff_full(name: str, sha: str):
     try:
@@ -2009,6 +2026,30 @@ def git_cherry_pick(name: str, body: GitShaBody):
 def git_push(name: str):
     try:
         return push_branch(_session_cwd(name))
+    except GitError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.post("/api/sessions/{name}/git/reset", dependencies=[Depends(require_auth)])
+def git_reset(name: str, body: GitResetBody):
+    try:
+        return reset_to(_session_cwd(name), body.sha, body.mode)
+    except GitError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.post("/api/sessions/{name}/git/branch", dependencies=[Depends(require_auth)])
+def git_branch_create(name: str, body: GitBranchBody):
+    try:
+        return create_branch_at(_session_cwd(name), body.name, body.sha, body.switch_after)
+    except GitError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.post("/api/sessions/{name}/git/tag", dependencies=[Depends(require_auth)])
+def git_tag_create(name: str, body: GitTagBody):
+    try:
+        return create_tag(_session_cwd(name), body.name, body.sha, body.message)
     except GitError as e:
         raise HTTPException(e.status, e.detail)
 
