@@ -24,6 +24,16 @@
   }
   let { open, onClose, targetServer = null, onOpenMotores }: Props = $props();
 
+  // Breakpoint desktop, no mesmo idioma do EnginesSheet: reativo, nao um retrato do boot —
+  // atravessar os 820px (girar o tablet, redimensionar a janela) precisa trocar o formato na hora.
+  let isDesktop = $state(false);
+  $effect(() => {
+    const mq = window.matchMedia('(min-width: 820px)');
+    const on = () => (isDesktop = mq.matches); on();
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  });
+
   interface Campo {
     chave: string;
     rotulo: string;
@@ -114,7 +124,9 @@
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel="Configurações do servidor">
+<!-- Modal centrado e largo no desktop, pelo mesmo motivo da Aparencia: aqui sao ~12 ajustes com
+     descricao, e no dock estreito o texto quebrava em palavras soltas ao lado do controle. -->
+<BottomSheet {open} {onClose} ariaLabel="Configurações do servidor" wide={isDesktop} centered={isDesktop}>
   <div class="cfg">
     <header class="cfg-head">
       <h2>Configurações</h2>

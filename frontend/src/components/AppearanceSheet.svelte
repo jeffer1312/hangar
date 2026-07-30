@@ -25,9 +25,15 @@
   let texto = $state<Record<MedidaTexto, number>>({
     size: getMedidaTexto('size'), lh: getMedidaTexto('lh'), width: getMedidaTexto('width'),
   });
-  // A largura da coluna so tem efeito acima de 820px (no celular a coluna e a tela). Mesma media
-  // query do resto do app; sem isto o celular mostraria um slider que nao move nada.
-  const desktop = $state(typeof matchMedia !== 'undefined' && matchMedia('(min-width: 820px)').matches);
+  // Breakpoint desktop, no mesmo idioma do EnginesSheet: reativo, nao um retrato do boot —
+  // atravessar os 820px (girar o tablet, redimensionar a janela) precisa trocar o formato na hora.
+  let isDesktop = $state(false);
+  $effect(() => {
+    const mq = window.matchMedia('(min-width: 820px)');
+    const on = () => (isDesktop = mq.matches); on();
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  });
 
   const medidasTexto: { v: MedidaTexto; label: string; aria: string }[] = [
     { v: 'size', label: 'Tamanho', aria: 'Tamanho do texto da conversa' },
@@ -63,7 +69,12 @@
      do git guardam a largura deles. -->
 <!-- `persistent`: aparência se ajusta OLHANDO o app — igual às "Configurações rápidas" do Gmail, o
      painel fica de lado, sem véu, e um clique no chat não o mata. Sai no × ou no Esc. -->
-<BottomSheet {open} {onClose} ariaLabel="Aparência" persistent resizable widthKey="cp_appearance_w" defaultWidth={560}>
+<!-- No desktop vira MODAL centrado e largo, nao dock estreito: sao 8 secoes de rotulo+controle, e
+     num painel de ~530px a descricao de cada uma disputava a linha com o segmentado e quebrava em
+     palavras soltas. Mesmo par `wide`+`centered` do EnginesSheet e do modal de git. -->
+<BottomSheet {open} {onClose} ariaLabel="Aparência" persistent resizable widthKey="cp_appearance_w" defaultWidth={560}
+             wide={isDesktop} centered={isDesktop}>
+  <div class="ap-sheet">
   <h2 class="sheet-title">Aparência</h2>
 
   <div class="ap-row">
@@ -123,7 +134,7 @@
       <span>tamanho, entrelinha e largura da coluna — 100 é como vem de fábrica</span>
     </div>
     {#each medidasTexto as m (m.v)}
-      {#if m.v !== 'width' || desktop}
+      {#if m.v !== 'width' || isDesktop}
         <label class="ap-slider">
           <span>{m.label}</span>
           <input type="range" min="50" max="150" step="1" value={texto[m.v]}
@@ -168,6 +179,7 @@
     <SegmentedPicker value={sidebarPrefs.height} options={opcoesAltura} ariaLabel="Altura da barra lateral"
                      onPick={(v) => (sidebarPrefs.height = v)} />
   </div>
+  </div>
 </BottomSheet>
 
 <style>
@@ -177,6 +189,11 @@
     font-weight: 600;
     color: var(--text-primary);
   }
+  /* Container query, nao media query: quem aperta a linha e a largura do PAINEL, nao a da janela.
+     No desktop o dock tem ~530px numa tela de 1440 — uma media query de 560px nunca dispararia ali,
+     e era exatamente onde a descricao quebrava em palavras soltas ao lado do segmentado. O painel
+     ainda e redimensionavel, entao o corte tem que seguir a largura de verdade. */
+  .ap-sheet { container-type: inline-size; }
   .ap-row {
     display: flex;
     align-items: flex-start;
@@ -195,10 +212,11 @@
   .ap-label span { color: var(--text-muted); font-size: var(--text-xs); line-height: 1.4; }
   /* Linha com título à esquerda e segmentado à direita, e o slider embaixo ocupando a largura. */
   .ap-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
-  /* Em tela estreita o segmentado de 4 opcoes (Leitura) nao encolhe e espremia o texto ao lado ate
-     UMA PALAVRA POR LINHA — `min-width: 0` no rotulo deixa ele ceder tudo. Empilha antes disso. */
-  @media (max-width: 560px) {
-    .ap-head { flex-direction: column; align-items: stretch; }
+  /* O segmentado nao encolhe e o rotulo tem `min-width: 0`, entao ele cede TUDO: abaixo desta
+     largura a descricao virava uma palavra por linha. Empilha antes de chegar la. Vale pras duas
+     views — no celular a folha e a tela, no desktop e o painel. */
+  @container (max-width: 560px) {
+    .ap-head, .ap-row { flex-direction: column; align-items: stretch; }
   }
   .ap-slider { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
   .ap-slider span { color: var(--text-muted); font-size: var(--text-xs); white-space: nowrap; }
