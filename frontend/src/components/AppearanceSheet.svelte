@@ -124,29 +124,16 @@
   </div>
 
   <!-- Barra lateral: só existe no desktop (no celular a lista é a tela inteira), então a seção some
-       abaixo de 820px em vez de oferecer um ajuste que não muda nada. -->
+       abaixo de 820px em vez de oferecer um ajuste que não muda nada.
+       Abrir e fechar a barra é o botão dela mesma — aqui fica só a altura. -->
   <div class="ap-row ap-row--desktop">
     <div class="ap-label">
-      <strong>Barra lateral aberta</strong>
-      <span>mantém a lista de sessões aberta sem precisar passar o mouse</span>
+      <strong>Altura da barra lateral</strong>
+      <span>de ponta a ponta, ou encolhida até onde as sessões terminam</span>
     </div>
-    <label class="ap-switch">
-      <input type="checkbox" checked={sidebarPrefs.alwaysOpen}
-             onchange={(e) => (sidebarPrefs.alwaysOpen = e.currentTarget.checked)} />
-      <span>manter aberta</span>
-    </label>
+    <SegmentedPicker value={sidebarPrefs.height} options={opcoesAltura} ariaLabel="Altura da barra lateral"
+                     onPick={(v) => (sidebarPrefs.height = v)} />
   </div>
-
-  {#if sidebarPrefs.alwaysOpen}
-    <div class="ap-row ap-row--desktop">
-      <div class="ap-label">
-        <strong>Altura da barra</strong>
-        <span>de ponta a ponta, ou encolhida até onde as sessões terminam</span>
-      </div>
-      <SegmentedPicker value={sidebarPrefs.height} options={opcoesAltura} ariaLabel="Altura da barra"
-                       onPick={(v) => (sidebarPrefs.height = v)} />
-    </div>
-  {/if}
 </BottomSheet>
 
 <style>
@@ -169,10 +156,6 @@
   .ap-row:last-child { border-bottom: 0; }
   /* Ajuste que só tem efeito no desktop (a barra lateral não existe no celular). */
   @media (max-width: 819px) { .ap-row--desktop { display: none; } }
-  .ap-switch {
-    display: flex; align-items: center; gap: var(--space-2);
-    color: var(--text-secondary); font-size: var(--text-sm); cursor: pointer; white-space: nowrap;
-  }
   .ap-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .ap-label strong { color: var(--text-primary); font-size: var(--text-sm); font-weight: 600; }
   .ap-label span { color: var(--text-muted); font-size: var(--text-xs); line-height: 1.4; }
