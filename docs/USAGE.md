@@ -189,6 +189,13 @@ mesmo celular.
 Abrindo a mesma URL num monitor largo, vira **shell de duas colunas**: sidebar de sessões +
 chat largo. O fluxo mobile fica intacto abaixo de 820px.
 
+A barra lateral tem dois ajustes em **Aparência** (menu da conta), só no desktop:
+
+- **Barra lateral aberta** — mantém a lista aberta o tempo todo. Desligada (padrão), ela fica no
+  trilho de iniciais e só abre enquanto o mouse está por cima.
+- **Altura da barra** — aparece quando a de cima está ligada: **altura total** (de ponta a ponta) ou
+  **só o conteúdo** (a barra encolhe até onde as sessões terminam e fica flutuando, centralizada).
+
 ### Git
 - **Painel:** ícone de branch abre a tela git da sessão. No **desktop (≥820px)** o painel vira **3
   zonas** (branches | commits + grafo | detalhe do commit/diff) em vez da lista estreita; no mobile
