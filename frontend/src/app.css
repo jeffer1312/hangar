@@ -275,7 +275,14 @@ html[data-bg="image"] {
   --surface-raised: color-mix(in srgb, var(--bg-elevated) calc(var(--cp-surface-alpha, 0.87) * 100%), transparent);
   --surface-inset:  color-mix(in srgb, var(--bg-base) calc(var(--cp-surface-alpha, 0.87) * 100%), transparent);
   --surface-card:   color-mix(in srgb, var(--bg-surface) calc(var(--cp-surface-alpha, 0.87) * 100%), transparent);
+  /* O CHROME (navbar, composer — e, no WebKit, o vidro dos paineis) tambem entra. Sem isto, no iPhone
+     a conversa fica sobre a foto e so essas duas faixas continuam solidas: e a unica coisa na tela que
+     nao acompanha. Anda com o slider Solidez, nao com um valor fixo, porque aqui o custo e real —
+     sem blur (proibido no WebKit: bug do retangulo preto no scroll) o texto que rola por baixo
+     aparece atraves da faixa. Quem quiser a foto no topo aceita isso; quem nao quiser, sobe o slider. */
+  --glass-bg-solid: rgba(24, 23, 28, var(--cp-surface-alpha, 0.94));
 }
+html[data-theme="light"][data-bg="image"] { --glass-bg-solid: rgba(255, 253, 250, var(--cp-surface-alpha, 0.96)); }
 html[data-theme="light"][data-bg="image"] { --glass-panel: rgba(255, 253, 250, var(--cp-panel-alpha, 0.78)); }
 html[data-bg="image"] body::after {
   content: "";
