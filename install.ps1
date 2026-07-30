@@ -203,14 +203,62 @@ if ((Test-Path $dist) -and (Test-Path $modulos)) {
 }
 
 if ($precisa) {
+    # Exit code de CADA etapa, e nao roda-e-assume: o comentario abaixo prometia que a marca so era
+    # gravada depois do build dar certo, mas nada CONFERIA o resultado - `npm ci` e `npm run build`
+    # iam sem checagem. Medido em producao (post-merge de 30/07 07:37): o npm ci nao populou o
+    # node_modules\.bin, o build morreu com 'vite' nao e reconhecido, e o passo gravou a marca e
+    # imprimiu 'ok buildado' do mesmo jeito. Pior que o falso ok: a marca ENVENENA o cache (fica
+    # igual ao HEAD), entao toda rodada seguinte PULA o build e o dist velho fica pra sempre - o
+    # dist servido era de 21h antes, sem as mudancas de aparencia que ja estavam no repo.
+    # Nativo() em vez de chamada crua: com ErrorActionPreference='Stop', um aviso qualquer do npm no
+    # stderr derrubaria o instalador inteiro (ver o docstring dele).
+    # Chamada LITERAL, e NAO pelo Nativo: no Windows `npm` resolve PRIMEIRO pro shim npm.ps1
+    # (ExternalScript, antes do npm.cmd), e o Nativo passa argumento por SPLATTING
+    # (`@($args[1..])`) -- o npm.ps1 monta o $NPM_ARGS dele indexando $args e estoura
+    # IndexOutOfRangeException na linha 47 dele. Medido: foi exatamente assim que este passo
+    # ABORTOU a instalacao inteira. O Nativo existe pra programa NATIVO; npm no Windows nao e um.
+    # O preference vira 'Continue' so aqui, pelo mesmo motivo do Nativo: um aviso do npm no stderr
+    # nao pode virar erro terminante. A saida do npm fica VISIVEL de proposito -- foi ela que
+    # denunciou o "'vite' nao e reconhecido" que este conserto passou a tratar.
+    $tBuild = Get-Date
+    $eapAnterior = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     Push-Location "$raiz\frontend"
-    npm ci --silent
-    npm run build --silent
-    Pop-Location
-    # A marca so e gravada DEPOIS do build dar certo: build que falhou nao pode marcar
-    # "atualizado" e fazer a proxima rodada pular um dist quebrado.
-    if ($marca) { Set-Content -Path $marcaArq -Value $marca -NoNewline -Encoding UTF8 }
-    Ok 'buildado em frontend\dist\'
+    try {
+        npm ci --silent
+        $rcCi = $LASTEXITCODE
+        if ($rcCi -eq 0) {
+            npm run build --silent
+            $rcBuild = $LASTEXITCODE
+        } else {
+            $rcBuild = -1
+        }
+    } finally {
+        Pop-Location
+        $ErrorActionPreference = $eapAnterior
+    }
+    # EVIDENCIA POSITIVA, nao ausencia de erro: exit 0 e necessario mas nao basta (build pode sair 0
+    # sem escrever nada). Exige que o index.html do dist tenha nascido DEPOIS do inicio do build.
+    $distNovo = (Test-Path $dist) -and ((Get-Item $dist).LastWriteTime -ge $tBuild)
+    if ($rcCi -ne 0) {
+        Erro "npm ci falhou (exit $rcCi) - frontend NAO buildado"
+        Nota 'rodar na mao:  cd frontend ; npm ci ; npm run build'
+        $script:pendencias += 'frontend'
+    } elseif ($rcBuild -ne 0) {
+        Erro "npm run build falhou (exit $rcBuild) - dist NAO atualizado"
+        Nota 'rodar na mao:  cd frontend ; npm run build'
+        $script:pendencias += 'frontend'
+    } elseif (-not $distNovo) {
+        # Saiu 0 mas nao produziu arquivo: o caso que a checagem por exit code sozinha deixa passar.
+        Erro 'npm run build saiu 0 mas o dist\index.html nao foi reescrito - build NAO confiavel'
+        Nota 'conferir na mao:  cd frontend ; npm run build'
+        $script:pendencias += 'frontend'
+    } else {
+        # A marca so e gravada com o build VERIFICADO: marca de build que falhou faz a proxima
+        # rodada pular um dist quebrado, que e exatamente o estrago descrito acima.
+        if ($marca) { Set-Content -Path $marcaArq -Value $marca -NoNewline -Encoding UTF8 }
+        Ok 'buildado em frontend\dist\'
+    }
 } else {
     Ok 'frontend ja buildado e atualizado (nada mudou no git desde o ultimo build)'
 }
@@ -704,6 +752,63 @@ if (-not $bash) {
         Falta 'install-cp-send.sh falhou:'
         $saida | Select-Object -Last 12 | ForEach-Object { Nota "  $_" }
         Nota "rodar na mao:  & '$bash' -lc 'cd $rota && ./scripts/install-cp-send.sh'"
+    }
+}
+
+# -- 7c/8 Atualizar sozinho no proximo git pull ------------------------------
+# Hook post-merge: roda depois de todo `git pull` bem-sucedido e re-aplica o que o pull NAO atualiza
+# sozinho (wrapper, build do front, tarefa agendada, config do multiplexador). No Linux quem instala
+# e o install.sh (bloco HOOK la); no Windows NINGUEM instalava -- o -Update existia e era documentado
+# (ver o cabecalho deste arquivo), mas o gatilho nunca era criado, entao TODO pull deixava codigo novo
+# com wrapper/front/tarefa velhos e nada avisava: so aplicava quem lembrasse de rodar `-Update` na mao.
+# Medido nesta maquina: .git/hooks tinha so os .sample. O CORPO do hook ja era cross-platform (ele
+# ramifica por `uname -s` e chama ESTE script no MINGW), entao faltava apenas a INSTALACAO.
+# ponytail: o corpo vive em scripts/post-merge.hook, FONTE UNICA pros dois instaladores -- inline nos
+# dois arquivos, as copias divergiriam, que e a familia de bug mais caro deste projeto.
+Titulo '7c/8 Atualizar sozinho no proximo git pull'
+$hookAlvo = "$raiz\.git\hooks\post-merge"
+$hookFonte = "$raiz\scripts\post-merge.hook"
+$hookMarca = 'claude-cockpit-post-merge-hook'
+if ($Update) {
+    # O proprio hook pode ser quem esta chamando: nao se reinstala no meio da propria execucao.
+    Nota 'pulado no -Update (o hook pode ser o proprio chamador)'
+} elseif (-not (Test-Path "$raiz\.git")) {
+    Falta 'sem .git (copia sem historico?) - hook de atualizacao indisponivel'
+} elseif (-not (Test-Path $hookFonte)) {
+    Falta 'scripts\post-merge.hook nao encontrado - hook nao instalado'
+} elseif ((Test-Path $hookAlvo) -and (Select-String -Path $hookAlvo -Pattern $hookMarca -Quiet)) {
+    Ok 'hook de atualizacao ja instalado'
+    Nota "desligar:  del `"$hookAlvo`""
+} elseif (Test-Path $hookAlvo) {
+    # Hook de terceiro (do usuario ou de outra ferramenta): nunca sobrescrever.
+    Falta 'ja existe um .git\hooks\post-merge que nao e nosso - nao vou mexer nele'
+    Nota 'pra somar, acrescente a linha:  powershell -ExecutionPolicy Bypass -File install.ps1 -Update'
+} else {
+    Nota 'Ele so roda no pull, que e voce quem da. Nada nele pede senha.'
+    if (Pergunte "Deixar o proximo 'git pull' ja se atualizar sozinho?") {
+        # LF e SEM BOM, obrigatorio: o bash do Git le o shebang literalmente, entao CRLF vira
+        # "#!/usr/bin/env bash\r" -> "bad interpreter", e um BOM antes do #! quebra igual. Set-Content
+        # e Out-File do PS 5.1 produzem CRLF (e utf8 COM BOM), por isso a escrita vai pelo .NET.
+        # O .gitattributes ja forca LF no arquivo do repo; a normalizacao aqui cobre checkout antigo.
+        $hookTexto = ([System.IO.File]::ReadAllText($hookFonte)) -replace "`r`n", "`n"
+        New-Item -ItemType Directory -Force -Path (Split-Path $hookAlvo) | Out-Null
+        [System.IO.File]::WriteAllText($hookAlvo, $hookTexto, (New-Object System.Text.UTF8Encoding($false)))
+        # Confere o RESULTADO em vez de confiar na escrita: hook com CRLF/BOM falha CALADO no pull
+        # (o git nem reclama), e reportar "instalei" sem verificar e o erro que este projeto pagou
+        # caro em outros caminhos. Deu ruim -> remove, pra nao deixar hook quebrado no lugar.
+        $hb = [System.IO.File]::ReadAllBytes($hookAlvo)
+        $temBom = ($hb.Length -ge 3 -and $hb[0] -eq 0xEF -and $hb[1] -eq 0xBB -and $hb[2] -eq 0xBF)
+        $temCr = ($hb -contains 0x0D)
+        if ($temBom -or $temCr) {
+            Erro "hook gravado com $(if ($temBom) { 'BOM' } else { 'CRLF' }) - o bash do Git recusaria; removido"
+            Remove-Item $hookAlvo -Force
+            $script:pendencias += 'hook post-merge'
+        } else {
+            Ok "hook instalado - o proximo 'git pull' ja se atualiza sozinho"
+            Nota "desligar:  del `"$hookAlvo`""
+        }
+    } else {
+        Nota 'pulado - depois de um git pull, rode:  powershell -ExecutionPolicy Bypass -File install.ps1 -Update'
     }
 }
 
