@@ -139,11 +139,13 @@ dentro dele o menu renderizaria atrás. Números soltos por componente viram var
 Em `frontend/src/app.css`, junto dos outros tokens, acrescentar:
 
 ```css
-  /* Camadas de sobreposicao. A BottomSheet e 100 (BottomSheet.svelte:259) e o backdrop do
-     ModalDialog e 1000 (ModalDialog.svelte:139) — um overlay que precisa ficar acima dos DOIS
-     involucros nao pode chutar um numero olhando so pra um deles. */
-  --z-overlay-back: 1100;
-  --z-overlay-card: 1120;
+  /* Camadas de sobreposicao. O que existe hoje no projeto, do maior pro menor: 1100
+     (ModalDialog.svelte:148), 1000 (ModalDialog.svelte:139, AttachmentsSheet.svelte:211,
+     ImageBubble.svelte:110), 120/110 (CommitMenu), 100 (BottomSheet.svelte:259). Um overlay que
+     precisa ficar acima dos DOIS involucros nao pode chutar olhando so pra um deles — por isso
+     1200/1220, acima do maior que ja existe, e nao 1100 (que EMPATA com o ModalDialog). */
+  --z-overlay-back: 1200;
+  --z-overlay-card: 1220;
 ```
 
 - [ ] **Step 2: Usar no CommitMenu**
@@ -341,8 +343,14 @@ componentes que já existem; o refino de cada aba vem depois.
 **Interfaces:**
 - Consumes: `lib/gitTabs.ts` (Task 3), `GitStore`, `ModalDialog`, `BottomSheet`
 - Produces:
-  - `Git.svelte` props: `{ open: boolean; git: GitStore; desktop: boolean; onClose: () => void }`
+  - `Git.svelte` props: `{ open: boolean; sessionName: string; desktop: boolean; onClose: () => void }`
   - `GitTabs.svelte` props: `{ git: GitStore; desktop: boolean }`
+
+**`Git.svelte` recebe `sessionName`, não o store — e é ele quem CRIA o store.** Os três call sites
+passam `sessionName` hoje (`Chat.svelte:1268`, `Sidebar.svelte:1304`, `SessionList.svelte:957`), e
+quem instancia é o `GitSheet.svelte:19-31`, num `$effect` que **recria o store ao trocar de sessão**.
+Essa responsabilidade migra inteira pro `Git.svelte` — se ela sumir, trocar de sessão com o modal
+aberto mostra o git da sessão anterior.
 
 - [ ] **Step 1: Ler os três pontos de montagem antes de mexer**
 
@@ -432,15 +440,20 @@ Os callbacks vazios (`() => {}`) são **temporários desta task** — as Tasks 5
   import ModalDialog from './ModalDialog.svelte';
   import BottomSheet from './BottomSheet.svelte';
   import GitTabs from './git/GitTabs.svelte';
-  import type { GitStore } from '../lib/gitStore.svelte';
+  import { createGitStore } from '../lib/gitStore.svelte';
 
   // `desktop` vem por PROP, nao de um matchMedia proprio: o GitSheet antigo era a terceira copia da
-  // mesma media query (App.svelte:162, BottomSheet.svelte:28), a primeira pintura saia mobile e
+  // mesma media query (App.svelte:158-167, BottomSheet.svelte:28), a primeira pintura saia mobile e
   // trocava depois — e com dois involucros diferentes isso passaria a DESMONTAR o modal ao
   // atravessar 820px, perdendo aba e nivel.
-  interface Props { open: boolean; git: GitStore; desktop: boolean; onClose: () => void }
-  let { open, git, desktop, onClose }: Props = $props();
+  interface Props { open: boolean; sessionName: string; desktop: boolean; onClose: () => void }
+  let { open, sessionName, desktop, onClose }: Props = $props();
 
+  // Dono do store (era do GitSheet.svelte:19-31). Recria ao TROCAR de sessao — sem isto, abrir o
+  // modal numa sessao e trocar pra outra mostraria o git da anterior. Copiar a forma exata do
+  // GitSheet antes de apaga-lo.
+  let git = $state(createGitStore(sessionName));
+  $effect(() => { git = createGitStore(sessionName); });
   $effect(() => { if (open) git.load(); });
 </script>
 
@@ -452,27 +465,46 @@ Os callbacks vazios (`() => {}`) são **temporários desta task** — as Tasks 5
     <GitTabs {git} desktop={true} />
   </ModalDialog>
 {:else}
+  <!-- Sem `wide` nem `resizable`: eram do dock de desktop do GitSheet antigo (`wide={isDesktop}`,
+       `resizable={!isDesktop}`), e o desktop agora é o ModalDialog. No celular a folha é a folha. -->
   <BottomSheet {open} {onClose} ariaLabel="Git">
     <GitTabs {git} desktop={false} />
   </BottomSheet>
 {/if}
 
 <style>
-  :global(.git-modal) { width: min(1100px, 94vw); height: min(760px, 88vh); }
+  /* Mesmo padrão do PairChatModal.svelte:42-47, inclusive o teto de altura e a tela cheia no
+     celular — sem eles o modal estoura a viewport em janela baixa. */
+  :global(.git-modal) {
+    width: min(1100px, 100%); height: min(760px, 100%);
+    max-height: calc(100dvh - var(--space-8)); overflow: hidden;
+  }
+  @media (max-width: 819px) {
+    :global(.git-modal) { width: 100%; height: 100%; max-height: 100dvh; }
+  }
 </style>
 ```
 
-Conferir o nome real da prop de classe do `ModalDialog` antes de usar (`className`, segundo
-`ModalDialog.svelte:6-16`) e como o `PairChatModal.svelte:23` aplica a regra `:global` — seguir o
-mesmo padrão do arquivo, não inventar outro.
+`className` existe mesmo (`ModalDialog.svelte:6-28`), e a classe cai no elemento em `:123`
+(`class="modal-dialog {className}"`), com `:175-177` documentando o truque de especificidade zero
+que deixa o consumidor sobrepor. Ler o `PairChatModal.svelte:42-51` e seguir a forma dele.
 
 - [ ] **Step 4: Trocar os três pontos de montagem**
 
-Em cada um dos três arquivos, trocar `<GitSheet …>` por `<Git …>`, passando `desktop`. Cada tela já
-sabe se está no desktop:
-- `Chat.svelte` e `SessionList.svelte`: usam o mesmo sinal que o `App.svelte` usa pra escolher a
-  shell — procurar como a tela recebe isso hoje e reaproveitar; se não receber, passar do `App`.
-- `Sidebar.svelte` só existe no desktop → `desktop={true}`.
+Em cada um dos três arquivos, trocar `<GitSheet …>` por `<Git …>`, mantendo o `sessionName` que já
+passam e acrescentando `desktop`. Levantado, não suposto:
+
+- **`Chat.svelte:1268`** → `desktop={desktop}`. O `Chat` já tem a prop `desktop?: boolean`
+  (`:54`, default `false` em `:68`); quem passa `true` é o `DesktopShell.svelte:218,235,253`, e o
+  ramo mobile do `App.svelte:409-414` monta sem passar. Dentro do `Chat` o booleano é confiável.
+- **`SessionList.svelte:957`** → `desktop={false}` fixo. A tela **não tem** prop de desktop
+  (`:27-32` só traz `onNavigateToChat`, `onCompare`, `onLogout`) e é mobile-only por construção: o
+  `App.svelte:398-403` só a renderiza no ramo que vem **depois** do `{:else if isDesktop}`. Não
+  inventar prop nova.
+- **`Sidebar.svelte:1304`** → `desktop={true}`. A sidebar é desktop-only (comentado em `:1324`).
+
+**Preservar o `closeGitSheet`** de `Sidebar.svelte:451-454` (restaura o servidor ativo via
+`selectServer`) e o gêmeo em `SessionList.svelte:390`, ligando-os no `onClose`.
 
 **Preservar o `closeGitSheet` do `Sidebar`** (restaura o servidor ativo ao fechar) ligando-o no
 `onClose`.
@@ -676,8 +708,14 @@ Três coisas pequenas que fecham a casca.
 
 - [ ] **Step 1: `BranchesTab.svelte`**
 
-`BranchList` mais o **campo de filtro por nome**, que hoje só existe no mobile
-(`GitSheet.svelte:264-274` — o desktop passava `filter=""`). O filtro é estado local da aba.
+`BranchList` mais o **campo de filtro por nome**. Hoje ele só existe no mobile
+(`GitSheet.svelte:265-274`), e ainda por cima **condicionado** a
+`{#if git.branches.length > 6 || git.remotes.length}` (`:264`) — o desktop passava `filter=""` e
+nunca teve filtro. Na aba dedicada ele fica **incondicional**: a aba existe pra isso, e um campo que
+aparece e some conforme a contagem de branches é mais confuso que um campo sempre lá.
+
+`BranchList` exige `filter: string` (prop obrigatória, sem default — `BranchList.svelte:6-10`), então
+a aba é quem guarda o estado do filtro e passa pra ele.
 
 Vazio: "nenhuma branch" (não deve acontecer num repo com commits, mas repo sem commit nenhum chega
 aqui).
@@ -713,8 +751,12 @@ partir daqui a `GitStatusBar` é a **única** que imprime `git.error` e `git.out
 
 Exceção deliberada: o `CommitMenu` fica por cima do modal, então um erro impresso só na faixa
 ficaria escondido atrás dele. Manter no `CommitMenu` **apenas** enquanto ele estiver aberto, e a
-`GitStatusBar` esconder o erro nesse caso — mesmo padrão do `{#if git.error && !menuCommit}` que o
-`GitPanel` usava. Passar `menuAberto` por prop.
+`GitStatusBar` esconder o erro nesse caso — mesmo padrão do `{#if git.error && !menuCommit}` que
+existe hoje em `GitPanel.svelte:163` e `GitSheet.svelte:288`. Passar `menuAberto` por prop.
+
+(O comentário do `CommitMenu.svelte:165-167` cita esses dois pontos como `GitSheet:206` /
+`GitPanel:102` — já está desatualizado no repo. Corrigir de passagem, já que o componente muda
+nesta task.)
 
 - [ ] **Step 4: Montar no `GitTabs`**
 
