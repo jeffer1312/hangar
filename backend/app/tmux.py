@@ -238,6 +238,9 @@ _WIN_CHUNK_PAUSE = 0.3   # pausa entre pedacos (medida: recupera 100% do inicio)
 _WIN_AVANCO = 180
 # Placeholder da receita do hifen: uma letra qualquer que faca o argumento NAO comecar com "-".
 _PLACEHOLDER = "x"
+# O avanco nao pode empurrar o pedaco ate o colapso de paste (medido: 700 ok, 900 colapsa). Trava de
+# invariante porque as duas constantes moram longe uma da outra e sao faceis de mexer em separado.
+assert _WIN_CHUNK + _WIN_AVANCO < 700
 
 
 def _fronteiras(text: str) -> list[tuple[int, int]]:
@@ -302,10 +305,20 @@ def _send_literal(target: str, text: str) -> bool:
     # Home+DC tem de ser o ULTIMO passo antes do Enter: feito antes, o cursor fica no comeco e o resto
     # do texto entra embaralhado.
     if os.name == "nt" and text.startswith("-"):
-        _run(["tmux", "send-keys", "-t", target, "-l", "--", _PLACEHOLDER])
-        ok = _enviar_pedacos(target, text)
-        _run(["tmux", "send-keys", "-t", target, "Home"])
-        _run(["tmux", "send-keys", "-t", target, "DC"])
+        # O placeholder vai COLADO no texto, no MESMO argumento — mandar "x" numa chamada e o texto
+        # noutra nao resolve nada: o psmux engole por ARGUMENTO, entao o payload (que continua
+        # comecando com hifen) seria engolido igual e so o "x" chegaria. Erro que eu cometi na
+        # primeira versao e que o review pegou.
+        ok = _enviar_pedacos(target, _PLACEHOLDER + text)
+        # Home+DC so DEPOIS do texto todo (antes, o cursor volta pro inicio e o resto entra
+        # embaralhado). rc conferido: se a limpeza falhar, o "x" fica colado na frente da mensagem do
+        # usuario — dano ao CONTEUDO, pior que perder o envio, e nao pode sair calado.
+        limpou = all(_run(["tmux", "send-keys", "-t", target, k]).returncode == 0
+                     for k in ("Home", "DC"))
+        if not limpou:
+            _log.error("nao consegui apagar o placeholder de %r: a mensagem pode ter chegado com um "
+                       "%r colado no inicio", target, _PLACEHOLDER)
+            return False
         return ok
     return _enviar_pedacos(target, text)
 

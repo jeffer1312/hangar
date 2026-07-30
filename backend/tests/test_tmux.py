@@ -425,6 +425,51 @@ def test_fronteiras_avanca_quando_nao_ha_saida_pra_tras():
     assert all(len(p) <= tmux._WIN_CHUNK + tmux._WIN_AVANCO for p in pedacos)   # nunca perto do colapso
 
 
+class _PsmuxFalso:
+    """RUN que imita o psmux MEDIDO: argumento comecando com hifen e ENGOLIDO (rc=0, nada chega).
+
+    O teste antigo so conferia a ORDEM das chamadas com um mock que aceitava tudo — nao reproduzia o
+    proprio bug que a receita existe pra resolver, entao dava falso senso de cobertura. Achado no
+    review: com o placeholder numa chamada SEPARADA, o payload continuava sendo engolido e o teste
+    passava.
+    """
+
+    def __init__(self):
+        self.entregue: list[str] = []
+
+    def __call__(self, args, **k):
+        if args[1] == "send-keys" and "-l" in args:
+            texto = args[-1]
+            if not texto.startswith("-"):        # psmux: comeca com hifen -> some, calado
+                self.entregue.append(texto)
+        return _CP()
+
+
+def test_texto_comecando_com_hifen_chega_inteiro_no_psmux_falso(monkeypatch):
+    # O que importa nao e a ordem das chamadas, e o TEXTO chegar. Com o psmux falso, a versao com o
+    # placeholder em chamada separada entregava so o "x".
+    monkeypatch.setattr(tmux.os, "name", "nt")
+    monkeypatch.setattr(tmux.time, "sleep", lambda *_a, **_k: None)
+    psmux = _PsmuxFalso()
+    monkeypatch.setattr(tmux, "RUN", psmux)
+    texto = "-v ativa o modo verbose e mais um tanto de texto pra ficar realista"
+    tmux.send_keys("cc", texto, literal=True)
+    # o placeholder vai colado: o que chega e "x" + texto, e o Home/DC apaga o "x" no pane
+    assert "".join(psmux.entregue) == tmux._PLACEHOLDER + texto
+
+
+def test_texto_longo_comecando_com_hifen_nao_perde_o_primeiro_pedaco(monkeypatch):
+    # O cenario que o review descreveu como critico: texto longo comecando com hifen perdia ~692 chars
+    # do INICIO e a checagem de cauda nao via, porque a cauda vinha de um pedaco que chegou.
+    monkeypatch.setattr(tmux.os, "name", "nt")
+    monkeypatch.setattr(tmux.time, "sleep", lambda *_a, **_k: None)
+    psmux = _PsmuxFalso()
+    monkeypatch.setattr(tmux, "RUN", psmux)
+    texto = "-" + "".join(f"{i:04d}|" for i in range(1, 400))     # 1996 chars, marcado por posicao
+    tmux.send_keys("cc", texto, literal=True)
+    assert "".join(psmux.entregue) == tmux._PLACEHOLDER + texto   # nada perdido, ordem preservada
+
+
 def test_texto_comecando_com_hifen_usa_placeholder_e_apaga_no_fim(monkeypatch):
     # Sem fronteira pra mover: o pedaco 1 comeca onde comeca. Receita medida e validada no psmux pela
     # sessao-irma — placeholder, texto, e Home+DC como ULTIMO passo (antes disso o cursor voltaria pro
@@ -436,9 +481,9 @@ def test_texto_comecando_com_hifen_usa_placeholder_e_apaga_no_fim(monkeypatch):
     monkeypatch.setattr(tmux, "RUN", lambda args, **k: (chamadas.append(list(args)) or _CP()))
     tmux.send_keys("cc", "-comeca com hifen, curto", literal=True)
     teclas = [c[-1] for c in chamadas]
-    assert teclas[0] == "x"                              # placeholder ANTES
+    assert teclas[0].startswith(tmux._PLACEHOLDER)       # placeholder COLADO no 1o pedaco
     assert teclas[-2:] == ["Home", "DC"]                 # e a limpeza por ULTIMO
-    assert "-comeca com hifen, curto" in teclas          # o texto vai inteiro, sem alteracao
+    assert teclas[0] == tmux._PLACEHOLDER + "-comeca com hifen, curto"
 
 
 def test_texto_normal_nao_usa_placeholder(monkeypatch):
