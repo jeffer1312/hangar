@@ -44,6 +44,12 @@
   let menuCommit = $state<GitCommit | null>(null);   // commit com o menu de contexto aberto
   let confirmAbort = $state(false);   // confirm de 2 passos pro abort de revert/cherry-pick em conflito
 
+  // So reseta o confirm no SUCESSO (mesmo motivo do GitToolbar): sem isto, um SEGUNDO conflito na
+  // mesma sheet aberta reapareceria ja em "confirmar abort", pulando o passo de aviso.
+  async function doAbort() {
+    if (await git.abortOp()) confirmAbort = false;
+  }
+
   // Breakpoint desktop (mesmo corte do resto do app): acima disso, delega pro GitPanel de 3 zonas.
   let isDesktop = $state(false);
   $effect(() => {
@@ -206,7 +212,7 @@
       {#if git.pendingAbort}
         <div class="git-actions">
           {#if confirmAbort}
-            <button class="git-act git-abort" disabled={!!git.busy} onclick={() => git.abortOp()}>confirmar abort</button>
+            <button class="git-act git-abort" disabled={!!git.busy} onclick={doAbort}>confirmar abort</button>
             <button class="git-act" onclick={() => (confirmAbort = false)}>não</button>
           {:else}
             <button class="git-act git-abort" disabled={!!git.busy}
