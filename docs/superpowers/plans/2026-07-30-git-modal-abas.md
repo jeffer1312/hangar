@@ -593,13 +593,13 @@ git commit -m "feat(git): aba Branches com filtro e faixa de conflito/saida"
 **Interfaces:**
 - Produces: props `{ git: GitStore; onClose: () => void; soltoNaTela?: boolean }`
 
-- [ ] **Step 1: Ler o vocabulário do menu que já existe**
+- [x] **Step 1: Ler o vocabulário do menu que já existe**
 
 Run: `cat frontend/src/components/SessionContextMenu.svelte`
 
 Seguir a forma dele (backdrop, posicionamento, fechar no Esc).
 
-- [ ] **Step 2: Escrever o componente**
+- [x] **Step 2: Escrever o componente**
 
 Seis itens. **Atenção ao `push`:** `GitAction` (`api.ts:771`) e `_ACTIONS`
 (`git_ops.py:189-201`) **não têm `push`** — a toolbar de hoje usa `git.doPush()`
@@ -620,12 +620,12 @@ Seis itens. **Atenção ao `push`:** `GitAction` (`api.ts:771`) e `_ACTIONS`
 `soltoNaTela`, o próprio menu mostra `git.output`/`git.error` depois da ação, em vez de a falha
 sumir.
 
-- [ ] **Step 3: Gate**
+- [x] **Step 3: Gate**
 
 Run: `npm --prefix frontend run check`
 Expected: 0 erros
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add frontend/src/components/git/RepoMenu.svelte
