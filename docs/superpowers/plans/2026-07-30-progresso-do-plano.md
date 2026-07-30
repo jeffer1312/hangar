@@ -1188,7 +1188,7 @@ Partida em 5a (backend) e 5b (front).
   `{name, path, task, task_total, done, total, complete, tasks: [{title, done, total, steps: [{title, done, manual}]}], markdown}`.
   404 quando não há sessão/cwd (via `_session_cwd`) ou não há plano ativo.
 
-- [ ] **Step 1: Teste que falha**
+- [x] **Step 1: Teste que falha**
 
 Criar `backend/tests/test_planprog_api.py`. **Usar `api_client` e headers explícitos** — é o padrão
 real de `tests/test_api.py:57`; a fixture `client` é outra coisa (app descartável só com `/ping`).
@@ -1248,7 +1248,7 @@ def test_plan_devolve_detalhe_e_markdown(api_client, tmp_path):
     assert "### Task 1" in j["markdown"]
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest tests/test_planprog_api.py -q`
 Expected: FAIL — 404 de rota inexistente em todos, inclusive no de sucesso.
@@ -1256,7 +1256,7 @@ Expected: FAIL — 404 de rota inexistente em todos, inclusive no de sucesso.
 Se a fixture não autenticar, **abrir `tests/test_api.py:57-72` e copiar o setup real** em vez de
 adivinhar.
 
-- [ ] **Step 3: Rota em `api.py`**
+- [x] **Step 3: Rota em `api.py`**
 
 Import no topo: `from app.planprog import plan_progress`.
 
@@ -1291,7 +1291,7 @@ async def session_plan(name: str):
 
 Conferir que `asyncio` e `Path` já estão importados no `api.py`; se não, importar.
 
-- [ ] **Step 4: Rodar e ver passar**
+- [x] **Step 4: Rodar e ver passar**
 
 Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest tests/test_planprog_api.py -q`
 Expected: PASS (3 testes)
@@ -1299,7 +1299,7 @@ Expected: PASS (3 testes)
 Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest -q 2>&1 | tail -2`
 Expected: número da Task 2 **+ 3**, zero falha nova.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/app/api.py backend/tests/test_planprog_api.py
