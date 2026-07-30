@@ -517,7 +517,7 @@ git commit -m "feat(git): aba Historico empilhada, com mensagem e arquivos em pa
   - `GitBranchesTab.svelte` props `{ git: GitStore }`
   - `GitStatusBar.svelte` props `{ git: GitStore; menuAberto: boolean }`
 
-- [ ] **Step 1: `GitBranchesTab.svelte`**
+- [x] **Step 1: `GitBranchesTab.svelte`**
 
 `BranchList` mais o campo de filtro. Hoje o filtro só existe no mobile
 (`GitSheet.svelte:265-274`) e ainda **condicionado** a
@@ -530,7 +530,7 @@ aba guarda o estado e passa.
 Vazio: **não** escrever texto novo — `BranchList.svelte:29` já tem "nenhuma branch local" e a
 variante com filtro. Dois textos concorrentes é pior que um.
 
-- [ ] **Step 2: `GitStatusBar.svelte`**
+- [x] **Step 2: `GitStatusBar.svelte`**
 
 Vai no **rodapé** do modal (o spec desenha ali, e é onde o `<pre>` de saída mora hoje):
 
@@ -571,12 +571,12 @@ O `menuAberto` existe porque o `CommitMenu` fica por cima: com ele aberto, quem 
 menu (é o padrão `{#if git.error && !menuCommit}` que hoje vive em `GitPanel.svelte:163` e
 `GitSheet.svelte:288`).
 
-- [ ] **Step 3: Gate**
+- [x] **Step 3: Gate**
 
 Run: `npm --prefix frontend run check`
 Expected: 0 erros
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add frontend/src/components/git/GitBranchesTab.svelte frontend/src/components/git/GitStatusBar.svelte
