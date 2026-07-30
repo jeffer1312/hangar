@@ -365,3 +365,62 @@ def test_create_tag_invalida_ou_duplicada(tmp_path):
         with pytest.raises(GitError) as e:
             git_ops.create_tag(d, bad, None)
         assert e.value.status == 400
+
+
+def test_diff_vs_worktree(tmp_path):
+    d, f = _repo_with_file(tmp_path)
+    sha = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
+    f.write_text("linha original\nlinha nova nao commitada\n")
+    diff = git_ops.diff_vs_worktree(d, sha)["diff"]
+    assert "+linha nova nao commitada" in diff       # a mudanca do DISCO vs o commit
+    assert git_ops.commit_diff(d, sha)["diff"] != diff   # difere do diff do commit em si
+
+
+def test_diff_vs_worktree_sha_invalido(tmp_path):
+    with pytest.raises(GitError) as e:
+        git_ops.diff_vs_worktree(_repo(tmp_path), "HEAD")   # nao casa _SHA_RE
+    assert e.value.status == 400
+
+
+def test_branches_containing(tmp_path):
+    d = _repo(tmp_path)                                  # _repo cria "main" + "feature" no mesmo commit
+    base = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
+    git_ops._run(d, "switch", "-q", "-c", "so-nesta")
+    (tmp_path / "z.txt").write_text("Z\n")
+    git_ops.commit(d, "so na nova", ["z.txt"])
+    novo = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
+    assert set(git_ops.branches_containing(d, base)["local"]) == {"main", "feature", "so-nesta"}
+    assert git_ops.branches_containing(d, novo)["local"] == ["so-nesta"]
+
+
+def test_branches_containing_sha_invalido(tmp_path):
+    with pytest.raises(GitError) as e:
+        git_ops.branches_containing(_repo(tmp_path), "--all")
+    assert e.value.status == 400
+
+
+def test_git_log_grep(tmp_path):
+    d, _ = _repo_with_file(tmp_path)                     # commits: "init", "add tracked"
+    (tmp_path / "y.txt").write_text("Y\n")
+    git_ops.commit(d, "agulha no palheiro", ["y.txt"])
+    assuntos = [c["subject"] for c in git_ops.git_log(d, grep="agulha")]
+    assert assuntos == ["agulha no palheiro"]
+    assert git_ops.git_log(d, grep="nao existe nada assim") == []
+    assert len(git_ops.git_log(d)) == 3                  # sem grep, tudo
+
+
+def test_git_log_grep_nao_vira_flag(tmp_path):
+    d, _ = _repo_with_file(tmp_path)
+    # Texto flag-like vai como VALOR de --grep= (nunca argv separado) -> zero resultado, sem erro.
+    assert git_ops.git_log(d, grep="--all") == []
+
+
+def test_git_log_grep_e_literal_nao_regex(tmp_path):
+    d, _ = _repo_with_file(tmp_path)
+    (tmp_path / "w.txt").write_text("W\n")
+    git_ops.commit(d, "corrige c++ (de novo)", ["w.txt"])
+    # Sem -F o git responderia "Invalid regular expression" (409) nestes dois:
+    assert [c["subject"] for c in git_ops.git_log(d, grep="c++")] == ["corrige c++ (de novo)"]
+    assert [c["subject"] for c in git_ops.git_log(d, grep="(de novo)")] == ["corrige c++ (de novo)"]
+    # E o ponto e ponto, nao curinga:
+    assert git_ops.git_log(d, grep="c.+") == []

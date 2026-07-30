@@ -40,7 +40,7 @@ from app import runtime_config
 from app import engine_probe, engines
 from app.costs import report as costs_report
 from app.git_ops import (
-    list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit_diff, revert_commit, cherry_pick, reset_to, create_branch_at, create_tag, commit, last_commit_message, push as push_branch, GitError, branch_of,
+    list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit_diff, revert_commit, cherry_pick, reset_to, create_branch_at, create_tag, diff_vs_worktree, branches_containing, commit, last_commit_message, push as push_branch, GitError, branch_of,
 )
 from app import loop as loop_mod
 from app.transcript import last_assistant_text
@@ -1922,9 +1922,12 @@ def git_files(name: str):
 
 
 @app.get("/api/sessions/{name}/git/log", dependencies=[Depends(require_auth)])
-def git_log_route(name: str):
+def git_log_route(name: str, q: str | None = None):
     try:
-        return {"commits": assign_lanes(git_log(_session_cwd(name)))}
+        commits = git_log(_session_cwd(name), grep=q)
+        # Com busca ativa (q), NAO monta o grafo: --grep tira commits do meio e assign_lanes
+        # desenharia arestas pra parents que sumiram da lista (lane que nunca fecha).
+        return {"commits": commits if q else assign_lanes(commits)}
     except GitError as e:
         raise HTTPException(e.status, e.detail)
 
@@ -2050,6 +2053,22 @@ def git_branch_create(name: str, body: GitBranchBody):
 def git_tag_create(name: str, body: GitTagBody):
     try:
         return create_tag(_session_cwd(name), body.name, body.sha, body.message)
+    except GitError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.get("/api/sessions/{name}/git/commit/{sha}/diff-worktree", dependencies=[Depends(require_auth)])
+def git_commit_diff_worktree(name: str, sha: str):
+    try:
+        return diff_vs_worktree(_session_cwd(name), sha)
+    except GitError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.get("/api/sessions/{name}/git/commit/{sha}/branches", dependencies=[Depends(require_auth)])
+def git_commit_branches(name: str, sha: str):
+    try:
+        return branches_containing(_session_cwd(name), sha)
     except GitError as e:
         raise HTTPException(e.status, e.detail)
 
