@@ -22,6 +22,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import pensando from '../lib/lottie/pensando.json';
   import type { WorkspaceAction, WorkspaceView } from '../lib/workspaceCommands';
   import WorkspaceNav from './WorkspaceNav.svelte';
+  import { sidebarPrefs } from '../lib/sidebarPrefs.svelte';
 
   const stateChipBg: Record<State, string> = {
     working: 'var(--accent-dim)', idle: 'rgba(52,199,89,0.12)',
@@ -407,9 +408,22 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   let menuMsg = $state('');   // banner efemero pro resultado do git pull / erro do editor
   let flashTimer: ReturnType<typeof setTimeout> | undefined;
 
-  // Largura efetiva: pin aberto, OU hover, OU overlay preso a uma linha (menu/rename) ativo -> nao
-  // recolhe por baixo dele. Rail de iniciais so quando nada disso vale. (Apos menu/editing existirem.)
-  const expanded = $derived(!collapsed || hovering || menu !== null || editing !== null);
+  // Largura efetiva: preferencia "manter aberta", OU pin aberto, OU hover, OU overlay preso a uma
+  // linha (menu/rename) ativo -> nao recolhe por baixo dele. Rail de iniciais so quando nada disso
+  // vale. (Apos menu/editing existirem.)
+  // A preferencia NAO vale no quadro/canvas: essas visoes recolhem de proposito pra dar largura as
+  // colunas, e o efeito de overviewActive ja mexe no pin — sem esta excecao a barra ficaria aberta
+  // por cima delas.
+  const expanded = $derived(
+    (sidebarPrefs.alwaysOpen && !overviewActive) || !collapsed || hovering || menu !== null || editing !== null,
+  );
+
+  // Altura: com a preferencia ligada quem manda e a escolha do usuario ('content' = dock com altura
+  // de conteudo, o formato que antes so aparecia no hover). Com ela desligada, comportamento de
+  // sempre — o dock segue o pin.
+  const floating = $derived(
+    sidebarPrefs.alwaysOpen && !overviewActive ? sidebarPrefs.height === 'content' : collapsed,
+  );
 
   function openMenu(e: MouseEvent, s: SessionInfo, serverId: string) {
     e.preventDefault();
@@ -776,9 +790,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
 </script>
 
-<!-- `floating` segue o PIN (collapsed), nao o `expanded`: assim passar o mouse so alarga o dock,
-     em vez de ele virar coluna colada na borda e voltar quando o mouse sai. -->
-<aside class="sidebar" class:collapsed={!expanded} class:floating={collapsed} class:resizing
+<!-- `floating` NAO segue o `expanded`: assim passar o mouse so alarga o dock, em vez de ele virar
+     coluna colada na borda e voltar quando o mouse sai. Sem a preferencia ligada ele segue o PIN
+     (comportamento de sempre); com ela, segue a escolha de altura — ver o $derived la em cima. -->
+<aside class="sidebar" class:collapsed={!expanded} class:floating class:resizing
   style:width={expanded ? width + 'px' : undefined}
   onmouseenter={() => (hovering = true)} onmouseleave={() => (hovering = false)}>
   <div class="side-top">

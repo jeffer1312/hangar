@@ -9,6 +9,7 @@
     getFontPref, setFontPref,
     type ReadMode, type PanelStyle, type FontPref,
   } from '../lib/background';
+  import { sidebarPrefs, type SidebarHeight } from '../lib/sidebarPrefs.svelte';
 
   interface Props {
     open: boolean;
@@ -35,6 +36,10 @@
   const opcoesPaineis: { v: PanelStyle; label: string; aria: string }[] = [
     { v: 'card', label: 'Caixa solta', aria: 'Painéis flutuando, com folga e cantos redondos' },
     { v: 'edge', label: 'Colados', aria: 'Painéis colados na borda da tela, de ponta a ponta' },
+  ];
+  const opcoesAltura: { v: SidebarHeight; label: string; aria: string }[] = [
+    { v: 'full', label: 'Altura total', aria: 'A barra lateral vai de ponta a ponta da tela' },
+    { v: 'content', label: 'Só o conteúdo', aria: 'A barra lateral encolhe até a altura das sessões' },
   ];
 </script>
 
@@ -117,6 +122,31 @@
     <SegmentedPicker value={paineis} options={opcoesPaineis} ariaLabel="Painéis"
                      onPick={(v) => { paineis = v; setPanelStyle(v); }} />
   </div>
+
+  <!-- Barra lateral: só existe no desktop (no celular a lista é a tela inteira), então a seção some
+       abaixo de 820px em vez de oferecer um ajuste que não muda nada. -->
+  <div class="ap-row ap-row--desktop">
+    <div class="ap-label">
+      <strong>Barra lateral aberta</strong>
+      <span>mantém a lista de sessões aberta sem precisar passar o mouse</span>
+    </div>
+    <label class="ap-switch">
+      <input type="checkbox" checked={sidebarPrefs.alwaysOpen}
+             onchange={(e) => (sidebarPrefs.alwaysOpen = e.currentTarget.checked)} />
+      <span>manter aberta</span>
+    </label>
+  </div>
+
+  {#if sidebarPrefs.alwaysOpen}
+    <div class="ap-row ap-row--desktop">
+      <div class="ap-label">
+        <strong>Altura da barra</strong>
+        <span>de ponta a ponta, ou encolhida até onde as sessões terminam</span>
+      </div>
+      <SegmentedPicker value={sidebarPrefs.height} options={opcoesAltura} ariaLabel="Altura da barra"
+                       onPick={(v) => (sidebarPrefs.height = v)} />
+    </div>
+  {/if}
 </BottomSheet>
 
 <style>
@@ -137,6 +167,12 @@
   /* O bloco do fundo tem seletor + slider + links: em coluna ele respira, em linha aperta tudo. */
   .ap-row--stack { flex-direction: column; align-items: stretch; }
   .ap-row:last-child { border-bottom: 0; }
+  /* Ajuste que só tem efeito no desktop (a barra lateral não existe no celular). */
+  @media (max-width: 819px) { .ap-row--desktop { display: none; } }
+  .ap-switch {
+    display: flex; align-items: center; gap: var(--space-2);
+    color: var(--text-secondary); font-size: var(--text-sm); cursor: pointer; white-space: nowrap;
+  }
   .ap-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .ap-label strong { color: var(--text-primary); font-size: var(--text-sm); font-weight: 600; }
   .ap-label span { color: var(--text-muted); font-size: var(--text-xs); line-height: 1.4; }
