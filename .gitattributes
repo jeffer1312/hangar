@@ -1,0 +1,14 @@
+# Fim de linha dos scripts de shell: LF SEMPRE, em qualquer plataforma.
+#
+# Por que isto existe: `core.autocrlf=true` (default de quem instala o Git for Windows) converte
+# arquivo de texto pra CRLF no checkout. Num script rodado por bash isso e fatal e SILENCIOSO — o
+# shebang vira "#!/usr/bin/env bash\r" e o kernel/bash responde "bad interpreter: No such file or
+# directory", apontando pra um arquivo que existe. Medido: ao commitar scripts/post-merge.hook o
+# proprio git avisou "LF will be replaced by CRLF the next time Git touches it".
+#
+# scripts/post-merge.hook e o caso critico: ele e COPIADO pra .git/hooks/post-merge e executado pelo
+# git a cada pull. O install.ps1 normaliza CRLF->LF na escrita, entao o Windows sobrevive mesmo sem
+# esta regra; o install.sh faz `cp` cru e nao sobrevive. A regra cobre os dois caminhos na origem, em
+# vez de depender de cada consumidor lembrar de normalizar.
+*.sh    text eol=lf
+*.hook  text eol=lf
