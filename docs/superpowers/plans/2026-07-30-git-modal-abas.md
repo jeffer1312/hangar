@@ -811,7 +811,7 @@ Expected: 1200 passed (1197 de hoje + 3 da Task 1), 1 skipped
 Run: `npm --prefix frontend run test && npm --prefix frontend run check && npm --prefix frontend run build`
 Expected: 259+6 testes passando, 0 erros de tipo, build ok
 
-- [ ] **Step 7: Verificação manual — mobile E desktop** 🙋 verificação manual
+- [x] **Step 7: Verificação manual — mobile E desktop** 🙋 verificação manual
 
 Num repo de brinquedo (com commits que dá pra perder), nas DUAS views:
 
