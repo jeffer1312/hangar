@@ -232,59 +232,37 @@ def rename_session(old: str, new: str) -> bool:
 # medidos; 1340 chars viram 3 chamadas (~0.6s a mais), custo irrelevante perto de perder o inicio.
 _WIN_CHUNK = 512         # < limiar de colapso de paste (medido: 700 ok, 900 colapsa)
 _WIN_CHUNK_PAUSE = 0.3   # pausa entre pedacos (medida: recupera 100% do inicio)
-# Quanto a fronteira pode avancar ALEM do chunk pra fugir de um hifen. Cabe porque o teto real e o
-# colapso de paste (medido: 700 ok, 900 colapsa), nao os 512 — entao 180 mantem o pedaco em <=692,
-# ainda abaixo do colapso.
-_WIN_AVANCO = 180
-# Placeholder da receita do hifen: uma letra qualquer que faca o argumento NAO comecar com "-".
-_PLACEHOLDER = "x"
-# O avanco nao pode empurrar o pedaco ate o colapso de paste (medido: 700 ok, 900 colapsa). Trava de
-# invariante porque as duas constantes moram longe uma da outra e sao faceis de mexer em separado.
-assert _WIN_CHUNK + _WIN_AVANCO < 700
+# Teto DURO do pedaco. O 512 acima e o alvo; este e ate onde da pra esticar a fronteira sem cair no
+# colapso de paste (medido: 700 entra como digitacao, 900 colapsa). A folga de ~190 chars e o que
+# permite EMPURRAR a fronteira pra frente em vez de pra tras ao fugir de um hifen (ver _fatiar_win).
+_WIN_CHUNK_MAX = 700
 
 
-def _fronteiras(text: str) -> list[tuple[int, int]]:
-    """Corta em pedacos de _WIN_CHUNK, mas NUNCA deixa um pedaco COMECAR com "-".
+def _fatiar_win(text: str) -> list[str]:
+    """Fatia pro psmux garantindo que NENHUM pedaco comece com '-'.
 
-    O psmux nao honra o `--`: argumento que comeca com "-" e engolido em SILENCIO, com rc=0 e stderr
-    vazio (medido pela sessao-irma em 5 casos; "controle x" e " - com espaco antes" chegam, "- direto"
-    e "--algo" somem). O teste e o PRIMEIRO caractere.
-    Prova de que isso atinge o fatiamento: um recado meu de 2332 chars chegou com 1820 — faltando
-    EXATAMENTE 512, o tamanho do chunk, com o buraco alinhado em [512:1024] e o chunk 2 comecando com
-    "- trunca no primeiro". As duas entregas perderam os MESMOS bytes, o que descarta perda aleatoria.
-    E como o rc e 0, NENHUMA checagem nossa pega: nem o returncode por pedaco, nem a evidencia no
-    composer (o pedaco some, o resto chega, e a cauda aparece normalmente).
-    Conserto: puxar a fronteira 1 char pra tras ate o proximo pedaco comecar com outra coisa. O texto
-    entregue continua BYTE-EXATO — muda so onde a divisao cai.
-    Texto que COMECA com "-" na posicao 0 nao tem como ser dividido pra fora do problema; isso e
-    exposicao PRE-EXISTENTE do send-keys (nao do fatiamento) e esta anotada pra medicao do lado
-    Windows: ver se o psmux aceita `send-keys -H` (hex), que nao passa o texto por argv.
-    ponytail: recuo simples de 1 em 1 com teto; em texto que seja uma parede de "-" o teto devolve o
-    corte original (pior caso = comportamento de hoje, nunca pior).
+    O psmux NAO honra o `--`: argumento que comeca com '-' e engolido em SILENCIO, com rc=0 e stderr
+    vazio (medido: '-X' e '--X' nao chegam; 'xX' e ' -X' chegam -> o teste e o PRIMEIRO caractere).
+    Como o rc mente, nenhuma checagem de erro pega: o pedaco some e o Enter submete o resto como se
+    fosse a mensagem inteira. Aconteceu de verdade entre duas sessoes aqui: recado de 2332 chars
+    chegou com 1820, faltando exatamente 512 alinhados no chunk 2, que comecava com '-'.
+
+    A fronteira anda PRA FRENTE (absorve a corrida de hifens no pedaco atual), nunca pra tras:
+    encolher o pedaco atual numa corrida longa converge pra fronteira zero, que e o caso degenerado.
+    Pra frente cabe na folga ate _WIN_CHUNK_MAX, e corrida de hifens em texto real e curta (uma linha
+    '-----' de separador tem dezenas de chars, nao centenas). Estourado o teto, aceita a fronteira no
+    hifen: o pedaco seguinte comecaria com '-' e o CALLER resolve com o placeholder.
     """
-    cortes: list[tuple[int, int]] = []
-    i = 0
-    while i < len(text):
-        fim = min(i + _WIN_CHUNK, len(text))
-        if fim < len(text) and text[fim] == "-":
-            # 1) pra TRAS primeiro: mantem o pedaco <= _WIN_CHUNK, que e o teto seguro conhecido.
-            tras = fim
-            while tras > i + 1 and text[tras] == "-":
-                tras -= 1
-            # 2) nao achou saida perto (regua markdown "-----", lista com varios itens seguidos —
-            #    caso COMUM em conversa tecnica, e por isso o recuo sozinho nao basta): tenta pra
-            #    FRENTE. Cabe porque o teto real nao e 512 e sim o COLAPSO de paste, medido em
-            #    700 ok / 900 colapsa — ~190 chars de folga. Medicao da sessao-irma no Windows.
-            if text[tras] == "-":
-                frente = fim
-                while frente < len(text) and text[frente] == "-" and frente - fim < _WIN_AVANCO:
-                    frente += 1
-                fim = frente if frente < len(text) and text[frente] != "-" else fim
-            else:
-                fim = tras
-        cortes.append((i, fim))
+    pedacos: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        fim = min(i + _WIN_CHUNK, n)
+        # Enquanto o PROXIMO pedaco comecaria com '-', engole o hifen neste aqui.
+        while fim < n and text[fim] == "-" and (fim - i) < _WIN_CHUNK_MAX:
+            fim += 1
+        pedacos.append(text[i:fim])
         i = fim
-    return cortes
+    return pedacos
 
 
 def _send_literal(target: str, text: str) -> bool:
@@ -298,57 +276,70 @@ def _send_literal(target: str, text: str) -> bool:
     como delivered=True (o `claim_undelivered` marca antes do envio). Ou seja: a exceção trocava um
     silêncio por outro pior. Bool não escapa por acidente — quem não confere segue como sempre.
     """
-    # Texto que COMECA com hifen: o psmux engole o argumento inteiro em silencio (rc=0), e isso NAO
-    # depende do fatiamento — mensagem curta de uma chamada so ja se perdia. Como nao ha fronteira pra
-    # mover no pedaco 1, vale a receita medida e validada pela sessao-irma no psmux: digita um
-    # PLACEHOLDER antes, manda o texto, e no fim volta pro inicio (Home) e apaga o placeholder (DC).
-    # Home+DC tem de ser o ULTIMO passo antes do Enter: feito antes, o cursor fica no comeco e o resto
-    # do texto entra embaralhado.
-    if os.name == "nt" and text.startswith("-"):
-        # O placeholder vai COLADO no texto, no MESMO argumento — mandar "x" numa chamada e o texto
-        # noutra nao resolve nada: o psmux engole por ARGUMENTO, entao o payload (que continua
-        # comecando com hifen) seria engolido igual e so o "x" chegaria. Erro que eu cometi na
-        # primeira versao e que o review pegou.
-        ok = _enviar_pedacos(target, _PLACEHOLDER + text)
-        # Home+DC so DEPOIS do texto todo (antes, o cursor volta pro inicio e o resto entra
-        # embaralhado). rc conferido: se a limpeza falhar, o "x" fica colado na frente da mensagem do
-        # usuario — dano ao CONTEUDO, pior que perder o envio, e nao pode sair calado.
-        limpou = all(_run(["tmux", "send-keys", "-t", target, k]).returncode == 0
-                     for k in ("Home", "DC"))
-        if not limpou:
-            _log.error("nao consegui apagar o placeholder de %r: a mensagem pode ter chegado com um "
-                       "%r colado no inicio", target, _PLACEHOLDER)
-            return False
-        return ok
-    return _enviar_pedacos(target, text)
-
-
-def _enviar_pedacos(target: str, text: str) -> bool:
-    """O envio em si, sem a receita do placeholder \u2014 separado pra ela envolver o envio INTEIRO
-    (o Home+DC precisa rodar depois do ultimo pedaco, nao entre eles)."""
-    # Linux (qualquer tamanho) e Windows dentro do teto: UMA chamada, comportamento de sempre.
-    # Windows acima do teto: fatia com pausa pra nao disparar o modo paste da TUI que come o comeco.
-    if os.name != "nt" or len(text) <= _WIN_CHUNK:
+    # POSIX: caminho de sempre, BYTE-IDENTICO. O bug do '-' e do psmux; o tmux real honra o `--`.
+    if os.name != "nt":
         cp = _run(["tmux", "send-keys", "-t", target, "-l", "--", text])
         if cp.returncode != 0:
-            # Uma chamada so: falhou = NADA entrou (nao ha meia mensagem no input). Registra e devolve
-            # False — sem log isso seria indistinguivel de entrega, porque `send_prompt` diria "sent".
             _log.warning("tmux send-keys -l falhou pra %r: %s",
                          target, (cp.stderr or "").strip()[:200])
             return False
         return True
-    total = (len(text) + _WIN_CHUNK - 1) // _WIN_CHUNK
-    for n, (i, fim) in enumerate(_fronteiras(text), start=1):
-        cp = _run(["tmux", "send-keys", "-t", target, "-l", "--", text[i:fim]])
+
+    # WINDOWS. Dois problemas do psmux se somam aqui:
+    #   1. texto acima do teto vira "paste" na TUI e o comeco e descartado no submit -> fatia;
+    #   2. pedaco que COMECA com '-' e engolido em silencio (rc=0) -> ver _fatiar_win.
+    # O (2) NAO e efeito do (1): mensagem CURTA de uma chamada so, comecando com '-', tambem some.
+    # Por isso o placeholder abaixo vale pros dois caminhos, nao so pro fatiado.
+    #
+    # PLACEHOLDER: quando o TEXTO INTEIRO comeca com '-' nao existe fronteira pra mover - o 1o pedaco
+    # comeca no indice 0. Manda-se um 'x' na frente (o argumento deixa de comecar com '-' e passa) e
+    # apaga-se o 'x' no FIM, com Home + DC.
+    # A ORDEM IMPORTA e foi medida: o Home+DC tem que ser o ULTIMO passo antes do Enter. Feito logo
+    # apos o 1o pedaco, o cursor fica na posicao 0 e os pedacos seguintes entram NO INICIO,
+    # embaralhando o texto. O Enter submete com o cursor na posicao 0 sem problema.
+    placeholder = text.startswith("-")
+    envio = ("x" + text) if placeholder else text
+
+    pedacos = _fatiar_win(envio) if len(envio) > _WIN_CHUNK else [envio]
+    total = len(pedacos)
+    entregue = 0
+    for n, pedaco in enumerate(pedacos, start=1):
+        cp = _run(["tmux", "send-keys", "-t", target, "-l", "--", pedaco])
         if cp.returncode != 0:
-            # PARA no primeiro erro: seguir mandando os pedacos seguintes entregaria 1+2+4+5 e o Enter
-            # submeteria texto com um buraco no meio — a sessao trataria isso como pedido do usuario,
-            # que e exatamente o estrago que o fatiamento existe pra evitar.
+            # PARA no primeiro erro: seguir mandando entregaria 1+2+4+5 e o Enter submeteria texto com
+            # um buraco no meio — a sessao trataria isso como pedido do usuario, que e exatamente o
+            # estrago que o fatiamento existe pra evitar. (Com o bug do '-' o rc vinha 0 e isto nao
+            # disparava; por isso a defesa de verdade e o _fatiar_win, nao esta checagem.)
             _log.error("send-keys falhou no pedaco %d/%d de %r (%d de %d chars ja no input): %s",
-                       n, total, target, i, len(text), (cp.stderr or "").strip()[:200])
+                       n, total, target, entregue, len(envio), (cp.stderr or "").strip()[:200])
             return False
-        if fim < len(text):
+        entregue += len(pedaco)
+        if n < total:
             time.sleep(_WIN_CHUNK_PAUSE)
+
+    if placeholder:
+        # Home + DC: cursor pro inicio e apaga o 'x'.
+        #
+        # LIMITE MEDIDO, e ele importa: isto so funciona em pane cuja TUI honre Home/DC. Na TUI do
+        # Claude Code (Ink) funciona — verificado, o composer fica byte-exato e sem residuo. Num pane
+        # de SHELL nao: no PowerShell/PSReadLine as duas teclas voltam rc=0 e NAO apagam nada, e o
+        # texto fica com um 'x' na frente. O `send_text` do espelho do terminal pode mirar um shell,
+        # entao esse caso existe de verdade.
+        # Ainda assim vale a troca: sem o placeholder o texto seria descartado INTEIRO e em silencio;
+        # com ele, no pior caso, chega com um 'x' visivel na frente. Corrupcao visivel > perda muda.
+        # O rc nao serve de gate (volta 0 mesmo sem apagar), entao a checagem e por CAPTURA.
+        for tecla in ("Home", "DC"):
+            cp = _run(["tmux", "send-keys", "-t", target, tecla])
+            if cp.returncode != 0:
+                _log.error("send-keys %s falhou pra %r ao remover o placeholder: %s",
+                           tecla, target, (cp.stderr or "").strip()[:200])
+                return False
+        # So no caminho do placeholder (texto comecando com '-', raro) -> a captura extra nao pesa no
+        # caminho comum. Nao devolve False: o texto ESTA no input, e um requeue duplicaria a mensagem.
+        cap = _run(["tmux", "capture-pane", "-p", "-t", target])
+        if cap.returncode == 0 and ("x" + text[:24]) in cap.stdout:
+            _log.warning("placeholder 'x' NAO foi removido em %r (a TUI ignora Home/DC — pane de "
+                         "shell?): a mensagem entrou com um 'x' na frente", target)
     return True
 
 
@@ -364,20 +355,19 @@ _TRUNCA_BUFFER: bool | None = None   # cache do probe abaixo (uma vez por proces
 
 
 def buffer_trunca_no_newline() -> bool:
-    """O multiplexador guarda `\\n` dentro de um paste-buffer, ou corta na primeira quebra?
+    """O multiplexador guarda `\n` dentro de um paste-buffer, ou corta na primeira quebra?
 
-    MEDIDO no psmux 3.3.7 (Windows): `set-buffer -- "ABC\\nDEF\\nGHI"` devolve rc=0 e grava 3 bytes —
+    MEDIDO no psmux 3.3.7 (Windows): `set-buffer -- "ABC\nDEF\nGHI"` devolve rc=0 e grava 3 bytes —
     so o "ABC". Depois o `paste-buffer` tambem devolve rc=0 ENTREGANDO NADA no composer. Como o
     paste_text so caia no fallback quando o rc era != 0, o caminho que FUNCIONA (linha a linha com
-    C-j) nunca rodava no Windows: o Enter submetia a primeira linha truncada — ou nada —, o
-    reconcile nao achava o texto no transcript e REDIGITAVA, gerando rajadas de 3 entregas da MESMA
-    primeira linha, ~8s entre elas (_CONFIRM_GRACE). Era isso, e nao um injetor externo, que
-    aparecia como frase isolada repetida no pane. Diagnostico da sessao-irma no Windows, 3/3
-    reprodutivel em sessao descartavel.
-    Por CAPACIDADE e nao por nome de SO — mesma regra do _send_literal/procinfo: pergunta ao
-    multiplexador o que ele faz, em vez de assumir pelo sistema. Um tmux que um dia passe a truncar
-    (ou um psmux que conserte) e tratado certo sem ninguem tocar no codigo.
-    Cacheado: o probe custa 3 chamadas e o comportamento nao muda durante a vida do processo.
+    C-j) nunca rodava no Windows: o Enter submetia a primeira linha truncada — ou nada —, o reconcile
+    nao achava o texto no transcript e REDIGITAVA, em rajadas de 3 (attempts=2 + _CONFIRM_GRACE de 8s).
+    Era isso, e nao um injetor externo, que aparecia como a mesma frase isolada chegando sozinha num
+    pane que ninguem estava operando. Diagnostico da sessao-irma, 3/3 reprodutivel.
+    O rc do paste-buffer NAO serve de gate: elas reproduziram rc=0 e rc=1 na mesma rodada mudando so o
+    nome do buffer. A truncagem do set-buffer e o unico fato estavel, e e nela que este probe se apoia.
+    Por CAPACIDADE e nao por nome de SO — mesma regra do procinfo: pergunta ao multiplexador o que ele
+    faz. Cacheado: custa 3 chamadas e o comportamento nao muda na vida do processo.
     """
     global _TRUNCA_BUFFER
     if _TRUNCA_BUFFER is None:
@@ -386,17 +376,13 @@ def buffer_trunca_no_newline() -> bool:
             _run(["tmux", "set-buffer", "-b", buf, "--", amostra])
             lido = _run(["tmux", "show-buffer", "-b", buf]).stdout
             _run(["tmux", "delete-buffer", "-b", buf])
-            # Compara o CONTEUDO, nao o rc: o rc mente nos dois passos. show-buffer costuma devolver
-            # com \n final; o que importa e se o "B" (depois da quebra) sobreviveu.
             _TRUNCA_BUFFER = "B" not in lido
             if _TRUNCA_BUFFER:
                 _log.warning("multiplexador TRUNCA paste-buffer na primeira quebra de linha "
                              "(gravou %r de %r) — multi-linha vai direto pro envio linha a linha",
                              lido, amostra)
         except Exception:
-            # Probe e best-effort: falhou -> assume o comportamento historico (nao trunca). Pior caso
-            # e continuar como antes deste conserto, nunca pior que antes.
-            _TRUNCA_BUFFER = False
+            _TRUNCA_BUFFER = False   # best-effort: falhou -> comportamento historico, nunca pior
     return _TRUNCA_BUFFER
 
 
@@ -404,10 +390,9 @@ def paste_text(name: str, text: str) -> None:
     # Envia texto MULTI-LINHA pro pane via bracketed paste: set-buffer + paste-buffer -p. O `-p` faz a
     # TUI (Ink) receber as quebras como newlines DENTRO do input (não submete cada linha). Buffer
     # nomeado (não suja os paste-buffers do usuário) e `-d` apaga depois. Quem submete e o Enter (caller).
-    #
-    # Multiplexador que TRUNCA o buffer na quebra de linha nem tenta o paste-buffer: ali ele devolve
-    # rc=0 mentindo (entrega truncado ou nada), e confiar no rc foi o que manteve o fallback desligado
-    # no Windows. Ver buffer_trunca_no_newline.
+    # Multiplexador que TRUNCA o buffer na quebra nem tenta o paste-buffer: ali ele devolve rc=0
+    # mentindo (entrega truncado ou nada), e confiar nesse rc foi o que manteve o fallback DESLIGADO
+    # no Windows justamente onde ele era necessario. Ver buffer_trunca_no_newline.
     if buffer_trunca_no_newline():
         _paste_linha_a_linha(name, text)
         return
