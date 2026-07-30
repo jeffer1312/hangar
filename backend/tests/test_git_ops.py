@@ -224,6 +224,35 @@ def test_commit_paths_vazio_sem_amend_segue_falhando(tmp_path):
     assert e.value.status == 400
 
 
+def test_create_branch_at_switch_after_troca(tmp_path):
+    d = _repo(tmp_path)                                 # HEAD = main
+    sha = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
+    r = git_ops.create_branch_at(d, "nova", sha, switch_after=True)
+    assert r["ok"]
+    assert git_ops._run(d, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == "nova"
+
+
+def test_create_branch_at_switch_after_dirty_tree_nao_deixa_branch_orfa(tmp_path):
+    """switch_after=True num commit atras + working tree com mudanca que CONFLITA com o alvo -> o
+    switch e recusado (mesma classe de erro do checkout). Antes disto era `branch` + `switch`
+    separados: o 1o comando ja tinha criado "nova" antes do 2o falhar, deixando uma branch orfa
+    (retry seguinte batia em "branch ja existe"). Com `switch -c` atomico, uma falha nao cria nada."""
+    d = _repo(tmp_path)
+    f = tmp_path / "f.txt"
+    f.write_text("A\n")
+    git_ops._run(d, "add", "f.txt")
+    git_ops._run(d, "commit", "-q", "-m", "add f (A)")
+    sha_a = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
+    f.write_text("B\n")
+    git_ops._run(d, "commit", "-q", "-am", "f -> B")     # HEAD agora tem f.txt = B
+    f.write_text("C\n")                                  # dirty: nao commitado, conflita com sha_a (A)
+    with pytest.raises(GitError) as e:
+        git_ops.create_branch_at(d, "nova", sha_a, switch_after=True)
+    assert e.value.status == 409
+    assert "nova" not in set(git_ops.list_branches(d)["branches"]), "branch orfa nao deveria sobrar"
+    assert git_ops.list_branches(d)["current"] == "main"          # nao saiu do lugar
+
+
 def test_last_commit_message(tmp_path):
     d, _ = _repo_with_file(tmp_path)
     git_ops._run(d, "commit", "-q", "--amend", "-m", "assunto\n\ncorpo da mensagem")

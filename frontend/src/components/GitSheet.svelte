@@ -70,6 +70,7 @@
   $effect(() => {
     if (open) {
       filter = ''; view = 'list'; diffPath = ''; diffSha = ''; menuCommit = null; diffTruncated = false;
+      confirmAbort = false;
       git.load().then(() => { if (isDesktop) git.openLog(); });
     }
   });
