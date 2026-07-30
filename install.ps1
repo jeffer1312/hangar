@@ -203,14 +203,42 @@ if ((Test-Path $dist) -and (Test-Path $modulos)) {
 }
 
 if ($precisa) {
+    # Exit code de CADA etapa, e nao roda-e-assume: o comentario abaixo prometia que a marca so era
+    # gravada depois do build dar certo, mas nada CONFERIA o resultado - `npm ci` e `npm run build`
+    # iam sem checagem. Medido em producao (post-merge de 30/07 07:37): o npm ci nao populou o
+    # node_modules\.bin, o build morreu com 'vite' nao e reconhecido, e o passo gravou a marca e
+    # imprimiu 'ok buildado' do mesmo jeito. Pior que o falso ok: a marca ENVENENA o cache (fica
+    # igual ao HEAD), entao toda rodada seguinte PULA o build e o dist velho fica pra sempre - o
+    # dist servido era de 21h antes, sem as mudancas de aparencia que ja estavam no repo.
+    # Nativo() em vez de chamada crua: com ErrorActionPreference='Stop', um aviso qualquer do npm no
+    # stderr derrubaria o instalador inteiro (ver o docstring dele).
+    $tBuild = Get-Date
     Push-Location "$raiz\frontend"
-    npm ci --silent
-    npm run build --silent
+    $rcCi = Nativo npm ci --silent
+    $rcBuild = if ($rcCi -eq 0) { Nativo npm run build --silent } else { -1 }
     Pop-Location
-    # A marca so e gravada DEPOIS do build dar certo: build que falhou nao pode marcar
-    # "atualizado" e fazer a proxima rodada pular um dist quebrado.
-    if ($marca) { Set-Content -Path $marcaArq -Value $marca -NoNewline -Encoding UTF8 }
-    Ok 'buildado em frontend\dist\'
+    # EVIDENCIA POSITIVA, nao ausencia de erro: exit 0 e necessario mas nao basta (build pode sair 0
+    # sem escrever nada). Exige que o index.html do dist tenha nascido DEPOIS do inicio do build.
+    $distNovo = (Test-Path $dist) -and ((Get-Item $dist).LastWriteTime -ge $tBuild)
+    if ($rcCi -ne 0) {
+        Erro "npm ci falhou (exit $rcCi) - frontend NAO buildado"
+        Nota 'rodar na mao:  cd frontend ; npm ci ; npm run build'
+        $script:pendencias += 'frontend'
+    } elseif ($rcBuild -ne 0) {
+        Erro "npm run build falhou (exit $rcBuild) - dist NAO atualizado"
+        Nota 'rodar na mao:  cd frontend ; npm run build'
+        $script:pendencias += 'frontend'
+    } elseif (-not $distNovo) {
+        # Saiu 0 mas nao produziu arquivo: o caso que a checagem por exit code sozinha deixa passar.
+        Erro 'npm run build saiu 0 mas o dist\index.html nao foi reescrito - build NAO confiavel'
+        Nota 'conferir na mao:  cd frontend ; npm run build'
+        $script:pendencias += 'frontend'
+    } else {
+        # A marca so e gravada com o build VERIFICADO: marca de build que falhou faz a proxima
+        # rodada pular um dist quebrado, que e exatamente o estrago descrito acima.
+        if ($marca) { Set-Content -Path $marcaArq -Value $marca -NoNewline -Encoding UTF8 }
+        Ok 'buildado em frontend\dist\'
+    }
 } else {
     Ok 'frontend ja buildado e atualizado (nada mudou no git desde o ultimo build)'
 }
