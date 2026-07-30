@@ -28,9 +28,9 @@ PLAN_A = """# Plano de teste — Implementation Plan
 Exemplo de codigo que o executor deve colar (NAO sao steps de verdade):
 
 ```python
-# ### Task 9: fantasma
-# - [x] **Step 1: nao conta**
-# - [x] **Step 2: nao conta**
+### Task 9: fantasma
+- [x] **Step 1: nao conta**
+- [x] **Step 2: nao conta**
 ```
 """
 
