@@ -391,19 +391,61 @@ def commit_file_diff(cwd: str, sha: str, path: str) -> dict:
     return {"path": path, "diff": p.stdout}
 
 
-def commit(cwd: str, message: str, paths: list[str]) -> dict:
+_BRANCH_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
+_REF_KIND_LABEL = {"heads": "branch", "tags": "tag"}
+
+
+def _validate_new_ref(cwd: str, kind: str, name: str) -> None:
+    """kind = 'heads' | 'tags'. Rejeita nome invalido pro git (check-ref-format) ou ja existente.
+    O regex previo bara flag-like ('-D', '../') antes do subprocesso; o check-ref-format pega o resto
+    (espaco, '..', '~', '^', ':', barra final...)."""
+    label = _REF_KIND_LABEL[kind]
+    if not _BRANCH_REF_RE.match(name) or ".." in name:
+        raise GitError(400, f"nome de {label} invalido")
+    p = _run(cwd, "check-ref-format", f"refs/{kind}/{name}")
+    if p.returncode != 0:
+        raise GitError(400, f"nome de {label} invalido")
+    lst = _run(cwd, "branch" if kind == "heads" else "tag", "--format=%(refname:short)")
+    if name in {l.strip() for l in lst.stdout.splitlines()}:
+        raise GitError(400, f"{label} ja existe: {name}")
+
+
+def last_commit_message(cwd: str) -> dict:
+    """Mensagem completa (%B) do HEAD — pra pre-preencher o amend. Repo sem commit -> 409."""
+    p = _run(cwd, "log", "-1", "--pretty=%B")
+    if p.returncode != 0:
+        raise GitError(409, "sem commits pra amend")
+    return {"message": p.stdout.rstrip("\n")}
+
+
+def commit(cwd: str, message: str, paths: list[str], amend: bool = False,
+           new_branch: str | None = None) -> dict:
     """Commita SO os paths marcados (checkbox estilo Tortoise). Valida cada path contra a lista real
-    de alterados (anti-traversal/flag-like); mensagem nao pode ser vazia. `git add <paths>` depois
-    `git commit` faz stage+commit apenas desses arquivos, deixando o resto fora do commit. `-m` recebe
-    a mensagem como argv (nunca shell) -> sem injecao."""
+    de alterados (anti-traversal/flag-like); mensagem nao pode ser vazia. `-m` recebe a mensagem como
+    argv (nunca shell) -> sem injecao.
+    amend=True permite paths=[] (so reword) e dobra os paths marcados no commit anterior. Sempre
+    `--amend --only`: sem isso um reword puro (`--amend -m`) dobraria mudancas staged por fora do app
+    (verificado: --only sem paths = reword, index intocado; com paths = dobra so eles).
+    new_branch cria a branch (switch -c) ANTES do commit — se o commit falhar, o usuario fica na
+    branch nova com as mudancas intactas (o erro do git e reportado, falha aparece)."""
     if not message.strip():
         raise GitError(400, "mensagem vazia")
-    if not paths:
+    if not paths and not amend:
         raise GitError(400, "nenhum arquivo selecionado")
+    # TODAS as validacoes (sem efeito colateral) antes do switch/add:
     valid = {f["path"] for f in changed_files(cwd)}
     for p in paths:
         if p not in valid:
             raise GitError(400, f"arquivo nao esta na lista de alterados: {p}")
+    if amend:
+        last_commit_message(cwd)   # falha 409 se nao ha HEAD pra amend
+    if new_branch is not None:
+        _validate_new_ref(cwd, "heads", new_branch)
+    # Efeitos colaterais:
+    if new_branch is not None:
+        s = _run(cwd, "switch", "-c", new_branch)
+        if s.returncode != 0:
+            raise GitError(409, (s.stderr or "criar branch falhou").strip())
     # Renomeados: o git colapsa "R old -> new" e changed_files so expoe `new`. Committar so `new`
     # transformaria o rename num "add" e deixaria a delecao de `old` staged e orfã. Detecta o par pelo
     # status e inclui `old` no pathspec do commit pra manter o rename atômico. (`old` vem do git, nao do
@@ -416,8 +458,14 @@ def commit(cwd: str, message: str, paths: list[str]) -> dict:
     extra = [renames[p] for p in paths if p in renames]
     # `add` primeiro: --only sozinho falha em arquivo untracked ("pathspec did not match").
     # `commit --only -- <paths>` grava SO esses paths, mesmo que outros estejam staged no indice.
-    _run(cwd, "add", "--", *paths)
-    r = _run(cwd, "commit", "--only", "-m", message, "--", *paths, *extra)
+    if paths:
+        _run(cwd, "add", "--", *paths)
+        argv = ["commit", "--only", "-m", message, "--", *paths, *extra]
+        if amend:
+            argv.insert(1, "--amend")
+    else:
+        argv = ["commit", "--amend", "--only", "-m", message]   # reword puro (amend garantido acima)
+    r = _run(cwd, *argv)
     if r.returncode != 0:
         raise GitError(409, (r.stderr or r.stdout or "commit falhou").strip() or "commit falhou")
     return {"ok": True, "output": (r.stdout + r.stderr).strip()}

@@ -165,3 +165,66 @@ def test_run_git_not_found(tmp_path, monkeypatch):
     with pytest.raises(GitError) as e:
         git_ops._run(str(tmp_path), "status")
     assert e.value.status == 500
+
+
+def test_commit_amend_reescreve_e_dobra(tmp_path):
+    d, f = _repo_with_file(tmp_path)          # commits: "init" (vazio) + "add tracked"
+    (tmp_path / "novo.txt").write_text("N\n")
+    r = git_ops.commit(d, "mensagem corrigida", ["novo.txt"], amend=True)
+    assert r["ok"]
+    out = git_ops._run(d, "log", "--pretty=%s").stdout.splitlines()
+    assert out == ["mensagem corrigida", "init"]        # 2 commits, nao 3
+    names = git_ops._run(d, "show", "--name-only", "--format=", "HEAD").stdout.split()
+    assert "tracked.txt" in names and "novo.txt" in names   # dobrou sem perder o original
+
+
+def test_commit_amend_sem_paths_e_so_reword(tmp_path):
+    d, _ = _repo_with_file(tmp_path)
+    # Mudanca staged por FORA do app NAO pode vazar pra dentro de um reword:
+    (tmp_path / "staged.txt").write_text("S\n")
+    git_ops._run(d, "add", "staged.txt")
+    r = git_ops.commit(d, "so renomeia a mensagem", [], amend=True)   # paths vazio SO vale com amend
+    assert r["ok"]
+    assert git_ops._run(d, "log", "-1", "--pretty=%B").stdout.strip() == "so renomeia a mensagem"
+    names = git_ops._run(d, "show", "--name-only", "--format=", "HEAD").stdout.split()
+    assert "staged.txt" not in names                      # --amend --only: staged nao vaza
+    assert "A  staged.txt" in git_ops._run(d, "status", "--porcelain").stdout   # continua staged
+
+
+def test_commit_amend_sem_head_falha(tmp_path):
+    d = str(tmp_path)
+    for args in (["init", "-q", "-b", "main"], ["config", "user.email", "t@t"], ["config", "user.name", "t"]):
+        git_ops._run(d, *args)                          # repo SEM nenhum commit
+    with pytest.raises(GitError) as e:
+        git_ops.commit(d, "m", [], amend=True)
+    assert e.value.status == 409
+
+
+def test_commit_new_branch(tmp_path):
+    d = _repo(tmp_path)
+    (tmp_path / "x.txt").write_text("X\n")
+    r = git_ops.commit(d, "na branch nova", ["x.txt"], new_branch="feat-x")
+    assert r["ok"]
+    assert git_ops._run(d, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == "feat-x"
+
+
+@pytest.mark.parametrize("bad", ["feature", "nome com espaço", "-D", "../x"])
+def test_commit_new_branch_invalida_ou_existente(tmp_path, bad):
+    d = _repo(tmp_path)                                 # _repo ja cria a branch "feature"
+    (tmp_path / "x.txt").write_text("X\n")
+    with pytest.raises(GitError) as e:
+        git_ops.commit(d, "m", ["x.txt"], new_branch=bad)
+    assert e.value.status == 400
+
+
+def test_commit_paths_vazio_sem_amend_segue_falhando(tmp_path):
+    d = _repo(tmp_path)
+    with pytest.raises(GitError) as e:
+        git_ops.commit(d, "m", [])                      # regra antiga intacta
+    assert e.value.status == 400
+
+
+def test_last_commit_message(tmp_path):
+    d, _ = _repo_with_file(tmp_path)
+    git_ops._run(d, "commit", "-q", "--amend", "-m", "assunto\n\ncorpo da mensagem")
+    assert git_ops.last_commit_message(d)["message"] == "assunto\n\ncorpo da mensagem"
