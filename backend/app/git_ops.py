@@ -440,6 +440,54 @@ def cherry_pick(cwd: str, sha: str) -> dict:
     return {"ok": True, "output": (p.stdout + p.stderr).strip()}
 
 
+_RESET_MODES = {"soft", "mixed", "hard"}
+
+
+def reset_to(cwd: str, sha: str, mode: str) -> dict:
+    """git reset --<mode> <sha>. mode vem de ENUM (nunca do usuário como string livre). hard é
+    destrutivo — a UI exige confirm em 2 passos; aqui a única guarda é o enum + sha validado."""
+    if not _SHA_RE.match(sha):
+        raise GitError(400, "sha invalido")
+    if mode not in _RESET_MODES:
+        raise GitError(400, "modo invalido")
+    p = _run(cwd, "reset", f"--{mode}", sha)
+    if p.returncode != 0:
+        raise GitError(409, (p.stderr or "reset falhou").strip())
+    return {"ok": True, "output": (p.stdout + p.stderr).strip()}
+
+
+def create_branch_at(cwd: str, name: str, sha: str | None = None, switch_after: bool = False) -> dict:
+    """Cria branch em <sha> (ou HEAD). NÃO troca por padrão (Tortoise: 'Create branch from revision'
+    não muda a working tree); switch_after=True faz o switch depois."""
+    _validate_new_ref(cwd, "heads", name)
+    if sha is not None and not _SHA_RE.match(sha):
+        raise GitError(400, "sha invalido")
+    argv = ["branch", name] + ([sha] if sha else [])
+    p = _run(cwd, *argv)
+    if p.returncode != 0:
+        raise GitError(409, (p.stderr or "criar branch falhou").strip())
+    if switch_after:
+        s = _run(cwd, "switch", name)
+        if s.returncode != 0:
+            raise GitError(409, (s.stderr or "switch falhou").strip())
+    return {"ok": True, "output": (p.stdout + p.stderr).strip()}
+
+
+def create_tag(cwd: str, name: str, sha: str | None = None, message: str | None = None) -> dict:
+    """Tag anotada (com message) ou leve. Nome validado igual branch (refs/tags/)."""
+    _validate_new_ref(cwd, "tags", name)
+    if sha is not None and not _SHA_RE.match(sha):
+        raise GitError(400, "sha invalido")
+    argv = ["tag"]
+    if message and message.strip():
+        argv += ["-a", "-m", message]
+    argv += [name] + ([sha] if sha else [])
+    p = _run(cwd, *argv)
+    if p.returncode != 0:
+        raise GitError(409, (p.stderr or "criar tag falhou").strip())
+    return {"ok": True, "output": (p.stdout + p.stderr).strip()}
+
+
 _BRANCH_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 _REF_KIND_LABEL = {"heads": "branch", "tags": "tag"}
 
