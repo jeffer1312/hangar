@@ -45,15 +45,22 @@
   <div class="plan-head">
     <!-- select nativo de propósito: funciona igual nas duas views, sem popover nem z-index, e é o
          mesmo padrão do "mensagens recentes" do CommitBox. -->
-    <select class="plan-pick" value={pinned ?? ''} aria-label="Plano exibido"
-      onchange={(e) => trocar(e.currentTarget.value)}>
-      <!-- Sem pin, o nome do plano eleito vai JUNTO: é o rótulo do painel, e some se a opção
-           dissesse só "automático". Com pin, quem aparece é a opção do plano fixado. -->
-      <option value="">automático{session.plan_name ? ` · ${session.plan_name}` : ''}</option>
-      {#each plans as p (p.stem)}
-        <option value={p.stem}>{p.name} · {p.done}/{p.total}{p.complete ? ' ✓' : ''}</option>
-      {/each}
-    </select>
+    <!-- O caret é obrigatório: com `appearance: none` o select fica idêntico ao rótulo de texto que
+         havia antes, e ninguém descobre que ali troca de plano. `▾` (abre lista) contrasta com o
+         `›` do botão ao lado (expande o markdown) — glifos diferentes pra ações diferentes. -->
+    <div class="pick-wrap">
+      <select class="plan-pick" value={pinned ?? ''} aria-label="Trocar o plano exibido"
+        title="Trocar o plano exibido"
+        onchange={(e) => trocar(e.currentTarget.value)}>
+        <!-- Sem pin, o nome do plano eleito vai JUNTO: é o rótulo do painel, e some se a opção
+             dissesse só "automático". Com pin, quem aparece é a opção do plano fixado. -->
+        <option value="">automático{session.plan_name ? ` · ${session.plan_name}` : ''}</option>
+        {#each plans as p (p.stem)}
+          <option value={p.stem}>{p.name} · {p.done}/{p.total}{p.complete ? ' ✓' : ''}</option>
+        {/each}
+      </select>
+      <span class="caret" aria-hidden="true">▾</span>
+    </div>
     <button class="chev-btn" onclick={() => (showMd = !showMd)}
       aria-label={showMd ? 'Esconder o plano inteiro' : 'Ver o plano inteiro'}>
       <span class="chev" class:open={showMd}>›</span>
@@ -102,22 +109,35 @@
   .plan { display: flex; flex-direction: column; gap: var(--space-1); }
 
   .plan-head { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
+
+  .pick-wrap { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
   .plan-pick {
     flex: 1;
     min-width: 0;
-    padding: 0;
-    border: 0;
+    /* espaco a direita pro caret, que fica por cima (o select nativo nao aceita ::after) */
+    padding: 2px 1.1em 2px var(--space-1);
+    margin-left: calc(-1 * var(--space-1));   /* alinha o texto com o resto do painel */
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
     background: transparent;
     color: var(--text-secondary);
     font-family: inherit;
     font-size: var(--text-xs);
     font-weight: 600;
     cursor: pointer;
-    /* Sem seta nativa: o chevron ao lado ja e a affordance, e a seta do SO destoa do painel. */
     appearance: none;
     text-overflow: ellipsis;
   }
-  .plan-pick:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+  /* Vira controle visivel no hover: sem isto ele parece o rotulo estatico que era antes. */
+  @media (hover: hover) {
+    .plan-pick:hover { border-color: var(--border-default); background: var(--bg-hover); }
+  }
+  .plan-pick:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  .caret {
+    position: absolute; right: 4px;
+    color: var(--text-muted); font-size: 10px; line-height: 1;
+    pointer-events: none;   /* o clique tem que chegar no select */
+  }
   .chev-btn { flex-shrink: 0; padding: 0; border: 0; background: transparent; cursor: pointer; }
   .err { color: var(--error); }
   .chev {
