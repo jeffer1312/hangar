@@ -2,6 +2,28 @@ from unittest.mock import patch
 from app import terminal_input as ti
 
 
+# TUI falsa em DUAS FASES, que e o contrato novo do send_prompt: o texto aparece no composer quando e
+# digitado, e some quando o Enter submete. Composer vazio sozinho nao prova nada — foi o furo que fez o
+# app afirmar entrega de mensagem que o multiplexador nunca entregou.
+def _tui_duas_fases(rodape: str = "  ⏵⏵ auto mode on (shift+tab to cycle)"):
+    estado = {"composer": ""}
+
+    def capture(name):
+        return ("  eco da conversa\n" + "─" * 100 + "\n"
+                + f"❯ {estado['composer']}\n" + "─" * 100 + "\n" + rodape + "\n")
+
+    def send_keys(name, k, **kw):
+        if k == "Enter":
+            estado["composer"] = ""      # submeteu
+        elif kw.get("literal"):
+            estado["composer"] = k       # digitou
+        return True
+
+    def paste(name, texto):
+        estado["composer"] = texto       # multi-linha entregue pelo multiplexador
+    return capture, send_keys, paste, estado
+
+
 def test_send_prompt_waits_for_ready_before_sending():
     # Core bug: msg mandada com claude bootando era engolida. Com o gate de entregabilidade, o pane
     # precisa estar VIVO (has_session) + entregavel (sem overlay) + READY (rodape 'bypass permissions')
@@ -11,6 +33,7 @@ def test_send_prompt_waits_for_ready_before_sending():
     keys = []
     with patch.object(ti.tmux, "has_session", return_value=True), \
          patch.object(ti, "_capture", lambda name: ready), \
+         patch.object(ti, "_entrou_no_composer", lambda *_a: True), \
          patch.object(ti.time, "sleep", lambda *_: None), \
          patch.object(ti, "send_keys", lambda name, k, **kw: keys.append(k)):
         assert ti.TerminalInput().send_prompt("s", "oi") == "sent"
@@ -112,6 +135,7 @@ def test_send_prompt_leva_o_provider_ate_o_gate():
     with patch.object(ti.tmux, "has_session", return_value=True), \
          patch.object(ti, "_capture", lambda name: _PI_IDLE), \
          patch.object(ti, "_wait_input_ready", spy), \
+         patch.object(ti, "_entrou_no_composer", lambda *_a: True), \
          patch.object(ti.time, "sleep", lambda *_: None), \
          patch.object(ti, "send_keys", lambda name, k, **kw: None):
         assert ti.TerminalInput().send_prompt("s", "oi", "pi") == "sent"
@@ -257,6 +281,7 @@ def test_send_prompt_troca_surrogate_solto_antes_do_tmux():
     keys = []
     with patch.object(ti.tmux, "has_session", return_value=True), \
          patch.object(ti, "_capture", lambda name: ready), \
+         patch.object(ti, "_entrou_no_composer", lambda *_a: True), \
          patch.object(ti.time, "sleep", lambda *_: None), \
          patch.object(ti, "send_keys", lambda name, k, **kw: keys.append(k)):
         assert ti.TerminalInput().send_prompt("s", "corte \ud83d") == "sent"
@@ -394,14 +419,36 @@ def test_send_prompt_multilinha_que_nao_submete_devolve_partial():
 
 
 def test_send_prompt_multilinha_que_submete_devolve_sent():
-    # O par: composer limpo depois do Enter -> "sent", comportamento de sempre.
-    texto = "primeira linha\nsegunda linha\ncauda"
+    # Caminho feliz COMPLETO: o texto aparece no composer (prova de entrega) e some no Enter (prova de
+    # submissao). Os dois juntos -> "sent".
+    texto = "primeira linha\nsegunda linha\ncauda longa o bastante pra provar"
+    capture, send_keys, paste, _ = _tui_duas_fases()
     with patch.object(ti.tmux, "has_session", return_value=True), \
-         patch.object(ti, "_capture", lambda name: _pane_com_composer("")), \
+         patch.object(ti, "_capture", capture), \
+         patch.object(ti.tmux, "paste_text", paste), \
+         patch.object(ti.time, "sleep", lambda *_: None), \
+         patch.object(ti, "send_keys", send_keys):
+        assert ti.TerminalInput().send_prompt("s", texto) == "sent"
+
+
+def test_send_prompt_multilinha_que_o_multiplexador_nao_entrega():
+    # O caso MEDIDO no psmux: set-buffer/paste-buffer devolvem rc=0 e NADA chega no composer. Sem a
+    # evidencia positiva, o app apertava Enter (submetendo lixo ou nada), via composer vazio e
+    # afirmava entrega -> delivered=True -> o reconcile redigitava. Agora nem aperta Enter.
+    capture, send_keys, paste, _ = _tui_duas_fases()
+    teclas = []
+
+    def send_keys_espiao(name, k, **kw):
+        teclas.append(k)
+        return send_keys(name, k, **kw)
+
+    with patch.object(ti.tmux, "has_session", return_value=True), \
+         patch.object(ti, "_capture", capture), \
          patch.object(ti.tmux, "paste_text", lambda name, t: None), \
          patch.object(ti.time, "sleep", lambda *_: None), \
-         patch.object(ti, "send_keys", lambda name, k, **kw: True):
-        assert ti.TerminalInput().send_prompt("s", texto) == "sent"
+         patch.object(ti, "send_keys", send_keys_espiao):
+        assert ti.TerminalInput().send_prompt("s", "linha um\nlinha dois\ncauda longa") == "partial"
+    assert "Enter" not in teclas
 
 
 def test_composer_residuo_ignora_o_eco_da_mensagem_submetida():

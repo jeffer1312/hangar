@@ -16,8 +16,12 @@ def tmp_queue(tmp_path, monkeypatch):
 
 def test_send_prompt_literal_then_enter():
     # Gate: pane entregavel (sessao viva, sem overlay) + marcador de ready -> envia e devolve "sent".
+    # _entrou_no_composer stubado: o ponto DESTE teste e a ordem digita->Enter, nao a evidencia de
+    # ingestao (essa tem teste proprio em test_terminal_answer.py). Sem o stub o pane falso nunca
+    # mostraria o texto no composer e o envio viraria "partial".
     with patch("app.terminal_input.tmux.has_session", return_value=True), \
          patch("app.terminal_input.tmux.capture_pane", return_value="? for shortcuts\n"), \
+         patch.object(terminal_input, "_entrou_no_composer", lambda *_a: True), \
          patch.object(terminal_input, "send_keys") as sk:
         assert TerminalInput().send_prompt("cc", "corrige o bug") == "sent"
     assert sk.call_args_list == [
