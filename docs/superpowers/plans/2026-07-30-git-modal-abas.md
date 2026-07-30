@@ -643,7 +643,7 @@ git commit -m "feat(git): menu de contexto das acoes de repositorio"
 - Consumes: tudo das Tasks 2 e 4-7
 - Produces: props `{ git: GitStore; desktop: boolean; onClose: () => void }`
 
-- [ ] **Step 1: O cabeçalho — porque não vem de graça**
+- [x] **Step 1: O cabeçalho — porque não vem de graça**
 
 Nem o `BottomSheet` nem o `ModalDialog` desenham chrome: o `×` da folha só existe no modo
 `persistent` (`BottomSheet.svelte:237-240`). Sem cabeçalho próprio, o modal sai só por Esc/backdrop
@@ -652,7 +652,7 @@ o chat.
 
 O cabeçalho tem: nome do repo · branch atual · `⋯` (abre o `RepoMenu`) · `✕` (chama `onClose`).
 
-- [ ] **Step 2: Abas e corpo**
+- [x] **Step 2: Abas e corpo**
 
 ```svelte
 <script lang="ts">
@@ -700,12 +700,12 @@ texto é estável. **Não** exibir o stderr cru.
 CSS das abas: `overflow-x: auto` e **`touch-action: pan-x` próprio** — o `BottomSheet` declara
 `touch-action: pan-y` (`:276`) e sem isso a fileira não rola no dedo.
 
-- [ ] **Step 3: Gate**
+- [x] **Step 3: Gate**
 
 Run: `npm --prefix frontend run check`
 Expected: 0 erros
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add frontend/src/components/git/GitTabs.svelte
