@@ -25,6 +25,7 @@ from app.registry import KillFailed, SessionRegistry
 from app.names import sanitize_session_name
 from app.models import (SessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody, RunInfo,
                         ProjectStatus)
+from app.planprog import plan_progress
 from app.pqueue import PromptQueue, _transcript_start_ts, committed_user_lines
 from app.chain import ThenLink
 from app.terminal_input import TerminalInput, drain
@@ -1850,6 +1851,39 @@ def _session_cwd(name: str) -> str:
     if info is None or not info.cwd:
         raise HTTPException(404, "sessao nao encontrada")
     return info.cwd
+
+
+@app.get("/api/sessions/{name}/plan", dependencies=[Depends(require_auth)])
+async def session_plan(name: str):
+    """Detalhe do plano ativo da sessao + o markdown cru. O markdown vem JUNTO de proposito: o
+    GET /sessions/{name}/file so serve path que aparece no transcript, e um plano descoberto por
+    varredura (sessao nova, pos-/clear) nunca aparece la. O arquivo ja foi lido e parseado aqui."""
+    # to_thread e obrigatorio: _session_cwd chama registry.list(), que forka `tmux list-panes` e
+    # varre /proc inteiro. As outras 16 rotas que usam _session_cwd sao `def` sync (o FastAPI as
+    # joga no threadpool sozinho); esta e async, entao I/O direto na corrotina travaria o loop
+    # (mesma classe do incidente 2026-07-23). A HTTPException do 404 propaga pelo to_thread normal.
+    cwd = await asyncio.to_thread(_session_cwd, name)   # ja levanta 404 sem sessao/cwd
+    p = await asyncio.to_thread(plan_progress, cwd)
+    if p is None:
+        raise HTTPException(404, "sem plano ativo")
+    try:
+        markdown = await asyncio.to_thread(
+            lambda: Path(p.path).read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        # plan_progress vem de cache; o arquivo pode ter sumido/perdido permissao entre a leitura
+        # cacheada e esta segunda leitura. Degrada pra markdown vazio, mas NAO engole em silencio.
+        _log.warning("falha lendo markdown do plano path=%s", p.path, exc_info=True)
+        markdown = ""
+    return {
+        "name": p.name, "path": p.path,
+        "task": p.task_idx, "task_total": p.task_total,
+        "done": p.done, "total": p.total, "complete": p.complete,
+        "tasks": [{"title": t.title, "done": t.done, "total": t.total,
+                   "steps": [{"title": s.title, "done": s.done, "manual": s.manual}
+                             for s in t.steps]}
+                  for t in p.tasks],
+        "markdown": markdown,
+    }
 
 
 @app.get("/api/sessions/{name}/branches", dependencies=[Depends(require_auth)])

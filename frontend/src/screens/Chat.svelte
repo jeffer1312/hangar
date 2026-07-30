@@ -37,12 +37,13 @@
     answerQuestions,
     getRunners,
     isAbortError,
+    getPlan,
   } from '../lib/api';
   import { appendTail, hasSeam, prependOlder } from '../lib/history';
   import { parseStatusLine } from '../lib/statusline';
   import { listServers, getActiveId } from '../lib/auth';
   import { createActivityFolder } from '../lib/activity';
-  import type { ChatEvent, StateEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider } from '../lib/types';
+  import type { ChatEvent, StateEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail } from '../lib/types';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
   import { stateLabels, stateColors, countAwaiting, nextAwaiting, providerName } from '../lib/format';
 
@@ -165,6 +166,62 @@
     return () => mq.removeEventListener('change', on);
   });
   let allSessions = $state<SessionInfo[]>([]);
+  // Detalhe do plano (Task 5b): NÃO usa o sessionsStore (mesmo motivo do loopChip acima — reter o
+  // store aqui abria 1 stream de lista por servidor no celular). `allSessions` já é populada por
+  // getSessions() (loadSessionsForNav, a cada 5s nas DUAS views) — reusa ela pra achar plan_name.
+  const planSession = $derived(allSessions.find((s) => s.name === sessionName) ?? null);
+  let planDetail = $state<PlanDetail | null>(null);
+  let planLoading = $state(false);
+  let planError = $state(false);
+  // Chave do detalhe que está em `planDetail` agora. `let` cru (não $state) de propósito: só serve
+  // pra comparar dentro do efeito — se fosse reativo, o efeito leria e escreveria a mesma coisa.
+  let planDetailKey: string | null = null;
+  // Nome do plano como PRIMITIVO, não o objeto `planSession` — mesmo bug do `pairPeersKey` umas
+  // linhas abaixo: `allSessions` troca de referência a CADA poll de 5s (getSessions), então um
+  // $effect que lê `planSession?.plan_name` direto re-executava em TODO poll, mesmo com o mesmo
+  // plano (medido: 4 fetches em 4 polls idênticos). O /plan devolve o markdown inteiro (66 KB
+  // neste repo) e passa pelo mesmo scan de tmux+/proc do registry que o poll da lista — refazer
+  // isso a cada 5s dobrava a taxa de scan e ~47 MB/h de tráfego à toa no celular via Tailscale.
+  const planName = $derived(planSession?.plan_name ?? null);
+  // Busca só quando o plano MUDA de nome E o painel que o mostra PODE estar visível — os MESMOS
+  // sinais que já decidem a renderização (`desktop && showContextPanel` no DesktopSessionContext;
+  // `activityOpen` na ActivitySheet mobile). Sem isto o fetch rodava até com a sessão em split/
+  // dentro do PairChatModal (nested), onde nenhum dos dois painéis chega a montar.
+  const planPanelVisible = $derived((desktop && showContextPanel) || (!desktop && activityOpen));
+  // Nome + quantos steps já foram marcados. O nome sozinho não bastava: no desktop o
+  // DesktopSessionContext fica montado o tempo todo, então o efeito rodava UMA vez e a lista de ✓
+  // congelava enquanto a barra (que vem do poll da lista) continuava andando. Com o `plan_done`
+  // dentro da chave, o detalhe é refeito quando um step muda — e só aí, não a cada poll de 5s.
+  const planKey = $derived(planName ? `${planName}:${planSession?.plan_done ?? 0}` : null);
+  $effect(() => {
+    const key = planKey;
+    if (!key) { planDetail = null; planDetailKey = null; planError = false; return; }
+    // Plano trocou com o painel fechado: joga o detalhe velho fora ANTES do gate de visibilidade,
+    // senão ao reabrir o painel mostra o nome/barra do plano novo sobre as Tasks do plano velho
+    // (o `{#if loading && !detail}` do PlanPanel não salva — `detail` não está null).
+    if (planDetailKey !== key) { planDetail = null; planDetailKey = null; }
+    else return;                     // já temos o detalhe desta chave: reabrir o painel não refaz
+    if (!planPanelVisible) return;   // plano existe, mas nada o mostra agora: não busca à toa
+    planLoading = true;
+    planError = false;
+    getPlan(sessionName)
+      .then((d) => {
+        if (planKey !== key) return;   // chegou tarde: já tem fetch mais novo no ar, descarta
+        planDetail = d;
+        planDetailKey = key;
+        planLoading = false;
+      })
+      .catch((e) => {
+        // 404 (sem plano) o getPlan já devolve como null; aqui é falha de verdade — 500, rede,
+        // token vencido. Não pode virar "sem detalhe" mudo: loga e o painel diz que não deu.
+        console.warn('/plan falhou', e);
+        if (planKey !== key) return;
+        planDetail = null;
+        planDetailKey = null;
+        planError = true;
+        planLoading = false;
+      });
+  });
   // Bolha sendo encaminhada pra outra sessao (long-press/hover ↗); null = sheet fechado.
   let forwardText = $state<string | null>(null);
   // Pareamento ("trabalhando juntas"): sheet + par atual derivado da lista já carregada.
@@ -1046,6 +1103,10 @@
       onOpenPair={() => (pairOpen = true)}
       onOpenPeerChat={nested ? undefined : (peer) => (peerChat = peer)}
       onOpenGit={() => (gitOpen = true)}
+      session={planSession}
+      {planDetail}
+      {planLoading}
+      {planError}
     />
   {/if}
 
@@ -1209,7 +1270,7 @@
   <RunSheet open={runOpen} {sessionName} onClose={() => (runOpen = false)} onRunningChange={(r) => (runRunning = r)} />
   <MoreSheet open={moreOpen} onClose={() => (moreOpen = false)}
              onRun={() => (runOpen = true)} {runRunning}
-             onActivity={hasActivity ? () => (activityOpen = true) : undefined}
+             onActivity={(hasActivity || !!planName) ? () => (activityOpen = true) : undefined}
              onAttachments={() => (anexosOpen = true)}
              {activityRunning} {activityBadge} />
   <AttachmentsSheet open={anexosOpen} {sessionName} onClose={() => (anexosOpen = false)} />
@@ -1218,7 +1279,8 @@
 
   <PreviewSheet open={previewOpen} onClose={() => (previewOpen = false)} />
 
-  <ActivitySheet open={activityOpen} {activity} {sessionName} onClose={() => (activityOpen = false)} />
+  <ActivitySheet open={activityOpen} {activity} {sessionName} onClose={() => (activityOpen = false)}
+    showPlan={!desktop} session={planSession} {planDetail} {planLoading} {planError} />
 
   <TerminalMirror open={mirrorOpen} {sessionName} onClose={closeMirror} />
 

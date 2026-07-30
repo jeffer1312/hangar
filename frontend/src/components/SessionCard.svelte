@@ -2,6 +2,8 @@
   import type { SessionInfo, State } from '../lib/types';
   import { stateLabels, stateColors, untrackedReason, providerTag } from '../lib/format';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
+  import { planBadge } from '../lib/plan';
+  import PlanBar from './PlanBar.svelte';
   import Lottie from './Lottie.svelte';
   import pensando from '../lib/lottie/pensando.json';
 
@@ -69,6 +71,7 @@
   const limited = $derived(session.limited === true);
 
   const loopChip = $derived(loopBadge(session.loop_status, session.loop_iter, session.loop_max));
+  const planChip = $derived(planBadge(session));
   // Provider da linha — só as não-Claude ganham chip (ver providerTag em lib/format).
   const provTag = $derived(providerTag(session.provider));
 
@@ -291,7 +294,7 @@
           {/if}
         </span>
       {/if}
-      {#if provTag || session.pair_peers?.length || limited || loopChip || session.engine}
+      {#if provTag || session.pair_peers?.length || limited || loopChip || session.engine || planChip}
         <!-- Chips informativos (🤝 grupo, ⏳ rate-limit, 🔁 loop, ⚙ motor) moram AQUI, no fluxo da
              coluna de texto — na row-right eles esmagavam o nome e o cwd vazava por baixo (visto no iPhone). -->
         <span class="badges-line">
@@ -317,6 +320,9 @@
               title="Loop runner"
             >{loopChip.label}</span>
           {/if}
+          {#if planChip}
+            <span class="plan-chip" class:plan-chip--done={planChip.complete} title={planChip.title}>{planChip.label}</span>
+          {/if}
           {#if session.engine}
             <!-- Sem isto nada na lista distingue uma sessão de motor de uma da conta Anthropic. NÃO
                  mostramos custo aqui: o preço que o Claude Code calcula é tabela Anthropic e mentiria. -->
@@ -324,6 +330,7 @@
           {/if}
         </span>
       {/if}
+      <PlanBar {session} />
       <!-- Retomar e Claude-only de ponta a ponta (candidatos de ~/.claude/projects + relance com
            `claude --resume`): numa sessao Pi o botao so poderia errar, entao mostramos a razao no
            lugar dele. O backend recusa igual, pra um cliente velho nao matar o pane. -->
@@ -697,6 +704,21 @@
     text-overflow: ellipsis;
     color: var(--accent);
     background: var(--accent-dim);
+  }
+
+  /* Progresso do plano do superpowers (Task 3). */
+  .plan-chip {
+    padding: 1px 6px;
+    border-radius: var(--radius-full);
+    background: var(--accent-dim);
+    color: var(--accent);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .plan-chip--done {
+    background: color-mix(in srgb, var(--success) 14%, transparent);
+    color: var(--success);
   }
 
   /* Motor de modelo (Task 5): sessao rodando fora da conta Anthropic. */
