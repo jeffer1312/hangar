@@ -597,7 +597,7 @@
   .card {
     display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3);
     padding: var(--space-3);
-    background: var(--bg-elevated);
+    background: var(--surface-raised);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
   }
@@ -687,14 +687,14 @@
   .ok { font-size: var(--text-xs); color: var(--success); }
   .dicas { display: flex; flex-wrap: wrap; gap: var(--space-2); }
   .dica {
-    background: var(--bg-elevated); color: var(--text-secondary);
+    background: var(--surface-raised); color: var(--text-secondary);
     border: 1px solid var(--border-subtle); border-radius: var(--radius-full);
     padding: 2px 10px; font-size: 11px;
   }
 
   input[type='text'], input[type='number'], select {
     height: 40px;
-    background: var(--bg-base);
+    background: var(--surface-inset);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-sm);
     color: var(--text-primary);
@@ -708,7 +708,10 @@
   input:disabled { opacity: 0.6; }
 
   /* Ações grudam no rodapé: o formulário de motor é alto (com o Avançado aberto passa de duas telas)
-     e Salvar/Cancelar sumiam lá embaixo. Fundo sólido + borda pra o conteúdo não passar por baixo. */
+     e Salvar/Cancelar sumiam lá embaixo. Fundo sólido + borda pra o conteúdo não passar por baixo.
+     SÓLIDO de propósito, fora da regra do véu (CLAUDE.md, "Transparência"): é o mesmo caso do
+     composer e da navbar — chrome funcional que separa o que rola do que fica. Com o véu, o texto
+     do formulário atravessaria os botões enquanto rolasse por baixo deles. */
   .acoes {
     display: flex; justify-content: flex-end; gap: var(--space-3);
     position: sticky; bottom: calc(env(safe-area-inset-bottom) * -1 - var(--space-5));
@@ -723,7 +726,7 @@
   .btn {
     height: 40px; padding: 0 var(--space-4);
     border-radius: var(--radius-md);
-    background: var(--bg-elevated); color: var(--text-primary);
+    background: var(--surface-raised); color: var(--text-primary);
     font-size: var(--text-sm); font-weight: 600;
   }
   .btn.primario { background: var(--accent); color: #fff; }

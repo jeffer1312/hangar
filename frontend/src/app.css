@@ -64,6 +64,17 @@
      e o painel inteiros. No escuro e o contrario (tinta clara sobre vidro escuro) e 0.46 basta. */
   --glass-panel:     rgba(26,24,29,0.86);
 
+  /* Superficie DENTRO de um painel de vidro (folha, modal, sidebar, painel de contexto). Um
+     `--bg-elevated`/`--bg-base` cru ali vira retangulo chapado por cima do papel de parede — o
+     painel inteiro anda com o slider Transparencia e o controle nao, e ele le como recorte colado.
+     Sem papel de parede estes tokens SAO as cores de sempre; com papel de parede eles entram no
+     mesmo veu (regra em html[data-bg="image"] la embaixo). Ideal continua sendo `transparent`, como
+     a textarea do Composer: quem carrega o material e o container. Estes dois sao pra quando a
+     superficie precisa existir mesmo — campo de texto, chip, bloco de saida. */
+  --surface-raised:  var(--bg-elevated);   /* chip, botao pequeno, menu flutuante */
+  --surface-inset:   var(--bg-base);       /* campo de texto, area de entrada */
+  --surface-card:    var(--bg-surface);    /* card, caixa de leitura (board, plano, contrato) */
+
   /* Semantic */
   --success:  #34c759;
   --error:    #ff453a;
@@ -255,6 +266,13 @@ html[data-bg="image"] {
   /* Com papel de parede, os painéis de vidro seguem o mesmo slider: opacos demais eles viram parede
      e a foto só aparece no meio da tela. `--cp-panel-alpha` vem do lib/background.ts. */
   --glass-panel: rgba(26, 24, 29, var(--cp-panel-alpha, 0.70));
+  /* As superficies DE DENTRO dos paineis entram no mesmo veu, senao cada chip, campo e bloco de
+     saida vira um retangulo chapado boiando sobre a foto. Mesma conta do bloco de codigo do
+     AssistantBubble, agora como token pra qualquer componente usar. O inset fica um degrau mais
+     opaco que o raised: e onde se LE e se ESCREVE texto, e ali o contraste ganha da foto. */
+  --surface-raised: color-mix(in srgb, var(--bg-elevated) calc(var(--cp-panel-alpha, 0.87) * 100%), transparent);
+  --surface-inset:  color-mix(in srgb, var(--bg-base) calc(min(1, var(--cp-panel-alpha, 0.87) + 0.12) * 100%), transparent);
+  --surface-card:   color-mix(in srgb, var(--bg-surface) calc(var(--cp-panel-alpha, 0.87) * 100%), transparent);
 }
 html[data-theme="light"][data-bg="image"] { --glass-panel: rgba(255, 253, 250, var(--cp-panel-alpha, 0.78)); }
 html[data-bg="image"] body::after {

@@ -552,7 +552,7 @@
        um cai pra ~54px, o header resiste e o .bc-body colapsa pra ~0: cards vazios, sem conversa
        nenhuma. A coluna já tem overflow-y: auto; é ela que deve rolar, não o card encolher. */
     flex-shrink: 0;
-    background: var(--bg-surface);
+    background: var(--surface-card);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
     box-shadow: none;
@@ -623,7 +623,7 @@
   /* Provider da sessão (Codex/Pi): rótulo neutro, mesma caixa do engine-chip sem a tinta accent. */
   .prov-chip {
     font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
-    color: var(--text-muted); background: var(--bg-elevated);
+    color: var(--text-muted); background: var(--surface-raised);
     border: 1px solid var(--border-subtle);
     padding: 1px 6px; border-radius: var(--radius-full);
     white-space: nowrap; flex-shrink: 0;
@@ -711,7 +711,7 @@
     padding: 6px 10px; font-size: var(--text-xs);
   }
   .bc-options { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-  .bc-opt { font-size: var(--text-xs); padding: 3px 10px; border-radius: var(--radius-full); border: 1px solid var(--border-default); background: var(--bg-elevated); color: var(--text-primary); cursor: pointer; }
+  .bc-opt { font-size: var(--text-xs); padding: 3px 10px; border-radius: var(--radius-full); border: 1px solid var(--border-default); background: var(--surface-raised); color: var(--text-primary); cursor: pointer; }
   .bc-opt:hover:not(:disabled) { background: var(--bg-hover); }
   .bc-opt:disabled { opacity: 0.5; cursor: default; }
   /* Input FANTASMA: 15 cards × 15 inputs com borda = 15 alvos competindo. Borda real só no
@@ -744,14 +744,14 @@
   .bc-att {
     display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
     font-family: inherit; font-size: var(--text-xs); color: var(--text-secondary);
-    background: var(--bg-elevated); border: 1px solid var(--border-subtle);
+    background: var(--surface-raised); border: 1px solid var(--border-subtle);
     border-radius: var(--radius-full); padding: 2px 8px; cursor: pointer;
     min-height: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .bc-att:hover { border-color: var(--error); color: var(--text-primary); }
   .bc-foot textarea {
     flex: 1; resize: none; min-height: 28px; max-height: 72px; font: inherit; font-size: 12px;
-    background: var(--bg-elevated); color: var(--text-primary);
+    background: var(--surface-raised); color: var(--text-primary);
     border: 1px solid transparent; border-radius: var(--radius-md); padding: 6px 10px;
     transition: border-color 120ms var(--ease-out);
   }

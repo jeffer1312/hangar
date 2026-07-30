@@ -378,7 +378,7 @@
     width: 30px; height: 30px; flex-shrink: 0;
     display: flex; align-items: center; justify-content: center;
     border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
-    background: var(--bg-elevated); color: var(--text-secondary);
+    background: var(--surface-raised); color: var(--text-secondary);
     font-size: 13px; cursor: pointer;
   }
   .split-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
@@ -388,7 +388,7 @@
   .view-btn {
     flex: 1; height: 40px;
     border: 1px solid var(--border-default); border-radius: var(--radius-md);
-    background: var(--bg-surface); color: var(--text-primary);
+    background: var(--surface-card); color: var(--text-primary);
     font-size: var(--text-sm); cursor: pointer;
   }
   .view-btn:hover { background: var(--bg-hover); }
@@ -404,7 +404,7 @@
 
   .task-input {
     height: 44px;
-    background: var(--bg-surface);
+    background: var(--surface-card);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-md);
     color: var(--text-primary);
@@ -446,7 +446,7 @@
     font-size: var(--text-xs);
     line-height: 1.55;
     color: var(--text-secondary);
-    background: var(--bg-surface);
+    background: var(--surface-card);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
     padding: var(--space-3) var(--space-4);
@@ -463,8 +463,8 @@
   .contract-body :global(strong) { color: var(--text-primary); font-weight: 650; }
   .contract-body :global(ul), .contract-body :global(ol) { margin: 0 0 var(--space-2); padding-left: 1.2em; }
   .contract-body :global(li) { margin: 2px 0; }
-  .contract-body :global(code) { padding: 0 4px; border-radius: 3px; background: var(--bg-elevated); font-family: var(--font-mono); font-size: 11px; color: var(--text-primary); }
-  .contract-body :global(pre) { margin: 0 0 var(--space-2); padding: var(--space-2); overflow-x: auto; border-radius: var(--radius-sm); background: var(--bg-base); }
+  .contract-body :global(code) { padding: 0 4px; border-radius: 3px; background: var(--surface-raised); font-family: var(--font-mono); font-size: 11px; color: var(--text-primary); }
+  .contract-body :global(pre) { margin: 0 0 var(--space-2); padding: var(--space-2); overflow-x: auto; border-radius: var(--radius-sm); background: var(--surface-inset); }
   .contract-body :global(a) { color: var(--accent); }
   .contract-body :global(hr) { margin: var(--space-3) 0; border: 0; border-top: 1px solid var(--border-subtle); }
   .contract-path {
@@ -483,7 +483,7 @@
   .feed-item {
     display: flex; flex-direction: column; gap: 2px;
     padding: var(--space-2) var(--space-3);
-    background: var(--bg-surface);
+    background: var(--surface-card);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
   }

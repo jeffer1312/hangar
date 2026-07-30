@@ -496,7 +496,7 @@
     color: var(--text-muted); font-size: 9px; letter-spacing: 2px; line-height: 1;
     border: 1px solid var(--border-subtle); border-bottom: 0;
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-    background: var(--bg-surface);
+    background: var(--surface-card);
     user-select: none;
   }
   .cv-handle:active { cursor: grabbing; }
@@ -525,7 +525,7 @@
   .cv-btn {
     font-size: var(--text-xs); padding: 3px 12px; min-height: 0; min-width: 0;
     border-radius: var(--radius-full); border: 1px solid var(--border-default);
-    background: var(--bg-surface); color: var(--text-primary); cursor: pointer;
+    background: var(--surface-card); color: var(--text-primary); cursor: pointer;
     transition: background 120ms var(--ease-out);
   }
   .cv-btn:hover { background: var(--bg-hover); }
@@ -539,7 +539,7 @@
     display: inline-flex; align-items: center; gap: 6px;
     font-size: var(--text-xs); padding: 3px 10px; min-height: 0; min-width: 0;
     border-radius: var(--radius-full); border: 1px solid var(--border-subtle);
-    background: var(--bg-surface); color: var(--text-secondary); cursor: pointer;
+    background: var(--surface-card); color: var(--text-secondary); cursor: pointer;
   }
   .cv-chip:hover { background: var(--bg-hover); color: var(--text-primary); }
   .cv-chip-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
@@ -558,7 +558,7 @@
     pointer-events: none;
     display: inline-flex; align-items: center; gap: 2px;
     max-width: 340px;
-    background: var(--bg-elevated);
+    background: var(--surface-raised);
     border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
     border-radius: var(--radius-full);
     padding: 1px 4px 1px 10px;
@@ -578,7 +578,7 @@
   /* Grupo colapsado: card compacto — header expande, linhas abrem o chat do membro. */
   .cv-gcard {
     position: absolute; display: flex; flex-direction: column;
-    background: var(--bg-surface);
+    background: var(--surface-card);
     border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
     border-radius: var(--radius-lg); overflow: hidden;
     padding-bottom: 4px;

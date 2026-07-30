@@ -23,7 +23,7 @@
     pointer-events: none;
     max-width: 380px; max-height: 220px; overflow: hidden;
     /* Mesma receita de elevação dos popovers da sidebar (.ctx-menu): 1 borda hairline + 1 sombra. */
-    background: var(--bg-elevated); border: 1px solid var(--border-default);
+    background: var(--surface-raised); border: 1px solid var(--border-default);
     border-radius: var(--radius-md); padding: var(--space-2) var(--space-3);
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
     animation: hp-in 120ms var(--ease-out);

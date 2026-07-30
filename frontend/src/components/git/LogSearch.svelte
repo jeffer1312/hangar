@@ -29,13 +29,13 @@
   .git-search { display: flex; gap: var(--space-2); }
   .git-search-input {
     flex: 1; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md);
-    border: 1px solid var(--border-default); background: var(--bg-base);
+    border: 1px solid var(--border-default); background: var(--surface-inset);
     color: var(--text-primary); font-size: var(--text-sm); font-family: var(--font-mono);
   }
   .git-search-input::placeholder { color: var(--text-muted); }
   .git-mini {
     flex-shrink: 0; padding: var(--space-1) var(--space-2); border-radius: var(--radius-md);
-    border: 1px solid var(--border-default); background: var(--bg-elevated);
+    border: 1px solid var(--border-default); background: var(--surface-raised);
     color: var(--text-muted); font-size: var(--text-xs); cursor: pointer;
   }
   .git-mini:disabled { opacity: 0.5; cursor: default; }

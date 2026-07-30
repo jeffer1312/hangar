@@ -52,7 +52,7 @@
   .repo-menu {
     position: absolute; z-index: 41; right: 0; top: 100%; min-width: 168px; padding: 4px;
     display: flex; flex-direction: column;
-    background: var(--bg-elevated); border: 1px solid var(--border-default);
+    background: var(--surface-raised); border: 1px solid var(--border-default);
     border-radius: var(--radius-md); box-shadow: 0 8px 28px rgba(0,0,0,0.4);
   }
   .repo-menu button {
@@ -69,7 +69,7 @@
   }
   .rm-saida {
     margin: 4px 6px 0; padding: var(--space-2); border-radius: var(--radius-md);
-    background: var(--bg-base); border: 1px solid var(--border-subtle);
+    background: var(--surface-inset); border: 1px solid var(--border-subtle);
     font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted);
     white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow: auto;
   }

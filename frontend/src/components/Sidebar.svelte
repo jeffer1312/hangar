@@ -1580,7 +1580,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .kebab-menu {
     position: fixed; z-index: 41; min-width: 220px; padding: 4px;
     display: flex; flex-direction: column;
-    background: var(--bg-elevated); border: 1px solid var(--border-default);
+    background: var(--surface-raised); border: 1px solid var(--border-default);
     border-radius: var(--radius-md); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
   }
   .kebab-item {
@@ -1604,18 +1604,18 @@ import ConfirmDialog from './ConfirmDialog.svelte';
      derruba o piso global de 44px dos botoes. So aparece com >=2 servidores. */
   .group-toggle {
     display: inline-flex; align-self: flex-start; gap: 2px; padding: 2px; margin: 0 0 var(--space-2);
-    background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+    background: var(--surface-inset); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
   }
   .group-toggle button {
     min-height: 0; height: 24px; min-width: 0; padding: 0 var(--space-2);
     border-radius: var(--radius-sm); font-size: var(--text-xs); font-weight: 500; color: var(--text-muted);
   }
   @media (hover: hover) { .group-toggle button:hover { color: var(--text-secondary); } }
-  .group-toggle button.active { background: var(--bg-elevated); color: var(--text-primary); font-weight: 600; }
+  .group-toggle button.active { background: var(--surface-raised); color: var(--text-primary); font-weight: 600; }
   /* Filtro (paridade com o mobile) — compacto, alinhado ao conteudo da sidebar. */
   .filter-input {
     width: 100%; height: 32px; margin: 0 0 var(--space-2); padding: 0 var(--space-2);
-    background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+    background: var(--surface-inset); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
     color: var(--text-primary); font-family: var(--font-ui); font-size: var(--text-sm); outline: none;
     transition: border-color 160ms var(--ease-out);
   }
@@ -1660,7 +1660,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   /* Contagem de sessoes do grupo (paridade com o mobile). */
   .grp-count {
     flex-shrink: 0; text-transform: none; letter-spacing: 0; font-weight: 600;
-    color: var(--text-muted); background: var(--bg-base);
+    color: var(--text-muted); background: var(--surface-inset);
     border-radius: var(--radius-full); padding: 0 6px; min-width: 18px; text-align: center;
   }
   /* Badge de aguardando (âmbar) — numero + title "N aguardando". */
@@ -1812,7 +1812,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .prov-chip {
     flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
     font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
-    color: var(--text-muted); background: var(--bg-elevated);
+    color: var(--text-muted); background: var(--surface-raised);
     border: 1px solid var(--border-subtle);
     padding: 1px 6px; border-radius: var(--radius-full); white-space: nowrap;
   }
@@ -1822,7 +1822,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .prov-rail {
     position: absolute; left: 50%; bottom: -3px; transform: translateX(-50%);
     font-size: 9px; font-weight: 700; letter-spacing: 0.02em; line-height: 1.3;
-    color: var(--text-secondary); background: var(--bg-elevated);
+    color: var(--text-secondary); background: var(--surface-raised);
     border: 1px solid var(--border-subtle);
     padding: 0 4px; border-radius: var(--radius-full); white-space: nowrap;
   }
@@ -1864,11 +1864,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .sess-main.untracked { opacity: 0.45; cursor: default; }
   .sess-badge {
     flex-shrink: 0; font-size: 10px; padding: 1px 5px; border-radius: var(--radius-sm);
-    background: var(--bg-elevated); border: 1px solid var(--border-subtle); color: var(--warning); white-space: nowrap;
+    background: var(--surface-raised); border: 1px solid var(--border-subtle); color: var(--warning); white-space: nowrap;
   }
   .sess-edit {
     flex: 1; min-width: 0; height: 38px; padding: 0 var(--space-2);
-    background: var(--bg-base); border: 1px solid var(--accent); border-radius: var(--radius-md);
+    background: var(--surface-inset); border: 1px solid var(--accent); border-radius: var(--radius-md);
     color: var(--text-primary); font-size: var(--text-sm); outline: none;
   }
   .sess-del {
@@ -1940,7 +1940,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .broadcast-input-row { display: flex; gap: var(--space-2); }
   .broadcast-input {
     flex: 1; min-width: 0; height: 34px;
-    background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+    background: var(--surface-inset); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
     color: var(--text-primary); font-size: var(--text-sm); padding: 0 var(--space-2); outline: none;
   }
   .broadcast-input:focus { border-color: var(--accent); }
@@ -1988,7 +1988,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   /* Input do modal "Adicionar servidor" (colar URL de pareamento). */
   .add-srv-input {
     width: 100%; height: 44px; padding: 0 var(--space-3);
-    background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-md);
+    background: var(--surface-inset); border: 1px solid var(--border-default); border-radius: var(--radius-md);
     color: var(--text-primary); font-family: var(--font-ui); font-size: var(--text-sm); outline: none;
   }
   .add-srv-input::placeholder { color: var(--text-muted); }
@@ -2005,7 +2005,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .confirm-hint { font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.5; }
   .confirm-name {
     font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-secondary);
-    padding: var(--space-2) var(--space-3); background: var(--bg-base);
+    padding: var(--space-2) var(--space-3); background: var(--surface-inset);
     border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
     word-break: break-all;
   }
@@ -2019,7 +2019,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .resume-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); max-height: 50vh; overflow-y: auto; }
   .resume-item {
     width: 100%; text-align: left; display: flex; flex-direction: column; gap: 3px;
-    padding: var(--space-3); background: var(--bg-base);
+    padding: var(--space-3); background: var(--surface-inset);
     border: 1px solid var(--border-subtle); border-radius: var(--radius-md); cursor: pointer;
   }
   .resume-item:hover { background: var(--bg-hover); }
@@ -2031,7 +2031,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .menu-toast {
     position: fixed; z-index: 42; left: 50%; bottom: 20px; transform: translateX(-50%);
     max-width: min(520px, 90vw); padding: 8px 14px;
-    background: var(--bg-elevated); border: 1px solid var(--border-default);
+    background: var(--surface-raised); border: 1px solid var(--border-default);
     border-radius: var(--radius-md); box-shadow: 0 6px 20px rgba(0,0,0,0.35);
     color: var(--text-primary); font-size: var(--text-sm); font-family: var(--font-mono);
     white-space: pre-wrap; word-break: break-word; max-height: 40vh; overflow-y: auto;

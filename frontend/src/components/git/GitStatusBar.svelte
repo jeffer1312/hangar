@@ -46,13 +46,13 @@
      sujo empurra o conteudo do modal pra fora da tela. */
   .gsb-saida {
     margin: 0; padding: var(--space-2); border-radius: var(--radius-md);
-    background: var(--bg-elevated); border: 1px solid var(--border-subtle);
+    background: var(--surface-raised); border: 1px solid var(--border-subtle);
     font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted);
     white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow: auto; flex-shrink: 0;
   }
   .git-mini {
     flex-shrink: 0; padding: var(--space-1) var(--space-2); border-radius: var(--radius-md);
-    border: 1px solid var(--border-default); background: var(--bg-elevated);
+    border: 1px solid var(--border-default); background: var(--surface-raised);
     color: var(--text-muted); font-size: var(--text-xs); cursor: pointer;
   }
   .git-mini:disabled { opacity: 0.5; cursor: default; }

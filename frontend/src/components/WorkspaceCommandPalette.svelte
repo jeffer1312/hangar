@@ -175,7 +175,7 @@
     overflow: hidden;
     border: 1px solid var(--border-default);
     border-radius: var(--radius-xl, 16px);
-    background: var(--bg-elevated);
+    background: var(--surface-raised);
     box-shadow: 0 24px 80px rgba(0, 0, 0, 0.48);
     animation: palette-in 160ms var(--ease-out);
   }
@@ -214,7 +214,7 @@
     padding: 1px 5px;
     border: 1px solid var(--border-default);
     border-radius: var(--radius-sm);
-    background: var(--bg-surface);
+    background: var(--surface-card);
     color: var(--text-muted);
     font-family: var(--font-mono);
     font-size: 10px;
@@ -261,7 +261,7 @@
     place-items: center;
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
-    background: var(--bg-surface);
+    background: var(--surface-card);
     color: var(--text-secondary);
     font-size: var(--text-xs);
     font-weight: 700;
@@ -301,7 +301,7 @@
     padding: 2px 7px;
     border-radius: var(--radius-full);
     color: var(--text-muted);
-    background: var(--bg-surface);
+    background: var(--surface-card);
     font-size: 10px;
     font-weight: 650;
   }

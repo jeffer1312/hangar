@@ -175,7 +175,7 @@
     position: fixed; z-index: 120; left: var(--space-3); right: var(--space-3); bottom: var(--space-3);
     display: flex; flex-direction: column; gap: 2px; padding: var(--space-2);
     border-radius: var(--radius-lg); border: 1px solid var(--border-default);
-    background: var(--bg-elevated); box-shadow: 0 8px 30px rgb(0 0 0 / 0.35);
+    background: var(--surface-raised); box-shadow: 0 8px 30px rgb(0 0 0 / 0.35);
     animation: view-in 200ms var(--ease-out) both;
     /* Sem teto o menu (550px medido) some abaixo da dobra num viewport baixo (ex. celular deitado,
        400x480) sem jeito de rolar ate os itens de baixo. */
@@ -200,7 +200,7 @@
   .cm-item.primary { color: var(--accent); }
   .cm-row { display: flex; gap: var(--space-2); }
   .cm-input { width: 100%; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md);
-    border: 1px solid var(--border-default); background: var(--bg-base); color: var(--text-primary);
+    border: 1px solid var(--border-default); background: var(--surface-inset); color: var(--text-primary);
     font-family: var(--font-mono); font-size: var(--text-sm); }
   .cm-warn { margin: 0; padding: var(--space-2); font-size: var(--text-xs); color: var(--error); }
   .cm-muted { margin: 0; padding: var(--space-2); font-size: var(--text-sm); color: var(--text-muted); }

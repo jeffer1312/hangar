@@ -444,7 +444,7 @@
     padding: 0 var(--space-2);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
-    background: var(--bg-base);
+    background: var(--surface-inset);
     color: var(--text-secondary);
     font-size: var(--text-xs);
     font-weight: 600;
@@ -547,7 +547,7 @@
     display: inline-flex;
     padding: 2px 8px;
     border-radius: var(--radius-full);
-    background: var(--bg-elevated);
+    background: var(--surface-raised);
     font-size: var(--text-xs);
     font-weight: 650;
   }
@@ -557,7 +557,7 @@
     margin-left: var(--space-1);
     font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 600;
     padding: 2px 8px; border-radius: var(--radius-full);
-    background: var(--bg-surface); border: 1px solid var(--border-subtle); cursor: pointer;
+    background: var(--surface-card); border: 1px solid var(--border-subtle); cursor: pointer;
   }
   .loop-chip:active { background: var(--bg-hover); }
 
@@ -657,7 +657,7 @@
     margin-top: var(--space-3);
     overflow: hidden;
     border-radius: var(--radius-full);
-    background: var(--bg-elevated);
+    background: var(--surface-raised);
   }
 
   .progress span {

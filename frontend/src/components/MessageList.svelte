@@ -330,7 +330,7 @@
        nao-pintada vira o bg, nao preto). Removido -webkit-overflow-scrolling:touch (legado) E o
        translateZ — o translateZ criava uma CAMADA que renderizava PRETA quando o iOS nao repintava
        a tempo (por isso o preto era puro, ignorando o bg). O guard no fit() (Chat) tira o thrash. */
-    background: var(--bg-base);
+    background: var(--surface-inset);
     /* O dock (composer glass) flutua sobre a lista (overlap). Padding = altura REAL do dock
        (--dock-h, medido via ResizeObserver no Chat) + respiro, pra ultima msg sempre limpar o
        glass mesmo com anexo/multilinha. ResizeObserver nao dispara na animacao do teclado
@@ -468,7 +468,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--bg-elevated);
+    background: var(--surface-raised);
     border: 1px solid var(--border-default);
     color: var(--text-primary);
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);

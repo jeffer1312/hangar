@@ -207,7 +207,7 @@
     margin-top: 6px;
     overflow: hidden;
     border-radius: var(--radius-full);
-    background: var(--bg-elevated);
+    background: var(--surface-raised);
   }
   .bar > span {
     display: block;

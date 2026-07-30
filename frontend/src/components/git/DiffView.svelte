@@ -64,7 +64,7 @@
 
   .git-diff {
     margin: 0; padding: var(--space-2); border-radius: var(--radius-md);
-    background: var(--bg-base); border: 1px solid var(--border-subtle);
+    background: var(--surface-inset); border: 1px solid var(--border-subtle);
     font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.5;
     max-height: 62vh; overflow: auto; white-space: pre;
   }

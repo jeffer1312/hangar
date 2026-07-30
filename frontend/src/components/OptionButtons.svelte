@@ -84,7 +84,7 @@
   .q-code {
     font-family: var(--font-mono);
     font-size: 0.85em;
-    background: var(--bg-elevated);
+    background: var(--surface-raised);
     padding: 2px 6px;
     border-radius: 4px;
     word-break: break-all;
@@ -114,7 +114,7 @@
   .option-btn {
     width: 100%;
     min-height: 52px;
-    background: var(--bg-elevated);
+    background: var(--surface-raised);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-lg);
     display: flex;
