@@ -232,6 +232,37 @@ def rename_session(old: str, new: str) -> bool:
 # medidos; 1340 chars viram 3 chamadas (~0.6s a mais), custo irrelevante perto de perder o inicio.
 _WIN_CHUNK = 512         # < limiar de colapso de paste (medido: 700 ok, 900 colapsa)
 _WIN_CHUNK_PAUSE = 0.3   # pausa entre pedacos (medida: recupera 100% do inicio)
+# Teto DURO do pedaco. O 512 acima e o alvo; este e ate onde da pra esticar a fronteira sem cair no
+# colapso de paste (medido: 700 entra como digitacao, 900 colapsa). A folga de ~190 chars e o que
+# permite EMPURRAR a fronteira pra frente em vez de pra tras ao fugir de um hifen (ver _fatiar_win).
+_WIN_CHUNK_MAX = 700
+
+
+def _fatiar_win(text: str) -> list[str]:
+    """Fatia pro psmux garantindo que NENHUM pedaco comece com '-'.
+
+    O psmux NAO honra o `--`: argumento que comeca com '-' e engolido em SILENCIO, com rc=0 e stderr
+    vazio (medido: '-X' e '--X' nao chegam; 'xX' e ' -X' chegam -> o teste e o PRIMEIRO caractere).
+    Como o rc mente, nenhuma checagem de erro pega: o pedaco some e o Enter submete o resto como se
+    fosse a mensagem inteira. Aconteceu de verdade entre duas sessoes aqui: recado de 2332 chars
+    chegou com 1820, faltando exatamente 512 alinhados no chunk 2, que comecava com '-'.
+
+    A fronteira anda PRA FRENTE (absorve a corrida de hifens no pedaco atual), nunca pra tras:
+    encolher o pedaco atual numa corrida longa converge pra fronteira zero, que e o caso degenerado.
+    Pra frente cabe na folga ate _WIN_CHUNK_MAX, e corrida de hifens em texto real e curta (uma linha
+    '-----' de separador tem dezenas de chars, nao centenas). Estourado o teto, aceita a fronteira no
+    hifen: o pedaco seguinte comecaria com '-' e o CALLER resolve com o placeholder.
+    """
+    pedacos: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        fim = min(i + _WIN_CHUNK, n)
+        # Enquanto o PROXIMO pedaco comecaria com '-', engole o hifen neste aqui.
+        while fim < n and text[fim] == "-" and (fim - i) < _WIN_CHUNK_MAX:
+            fim += 1
+        pedacos.append(text[i:fim])
+        i = fim
+    return pedacos
 
 
 def _send_literal(target: str, text: str) -> bool:
@@ -245,29 +276,56 @@ def _send_literal(target: str, text: str) -> bool:
     como delivered=True (o `claim_undelivered` marca antes do envio). Ou seja: a exceção trocava um
     silêncio por outro pior. Bool não escapa por acidente — quem não confere segue como sempre.
     """
-    # Linux (qualquer tamanho) e Windows dentro do teto: UMA chamada, comportamento de sempre.
-    # Windows acima do teto: fatia com pausa pra nao disparar o modo paste da TUI que come o comeco.
-    if os.name != "nt" or len(text) <= _WIN_CHUNK:
+    # POSIX: caminho de sempre, BYTE-IDENTICO. O bug do '-' e do psmux; o tmux real honra o `--`.
+    if os.name != "nt":
         cp = _run(["tmux", "send-keys", "-t", target, "-l", "--", text])
         if cp.returncode != 0:
-            # Uma chamada so: falhou = NADA entrou (nao ha meia mensagem no input). Registra e devolve
-            # False — sem log isso seria indistinguivel de entrega, porque `send_prompt` diria "sent".
             _log.warning("tmux send-keys -l falhou pra %r: %s",
                          target, (cp.stderr or "").strip()[:200])
             return False
         return True
-    total = (len(text) + _WIN_CHUNK - 1) // _WIN_CHUNK
-    for n, i in enumerate(range(0, len(text), _WIN_CHUNK), start=1):
-        cp = _run(["tmux", "send-keys", "-t", target, "-l", "--", text[i:i + _WIN_CHUNK]])
+
+    # WINDOWS. Dois problemas do psmux se somam aqui:
+    #   1. texto acima do teto vira "paste" na TUI e o comeco e descartado no submit -> fatia;
+    #   2. pedaco que COMECA com '-' e engolido em silencio (rc=0) -> ver _fatiar_win.
+    # O (2) NAO e efeito do (1): mensagem CURTA de uma chamada so, comecando com '-', tambem some.
+    # Por isso o placeholder abaixo vale pros dois caminhos, nao so pro fatiado.
+    #
+    # PLACEHOLDER: quando o TEXTO INTEIRO comeca com '-' nao existe fronteira pra mover - o 1o pedaco
+    # comeca no indice 0. Manda-se um 'x' na frente (o argumento deixa de comecar com '-' e passa) e
+    # apaga-se o 'x' no FIM, com Home + DC.
+    # A ORDEM IMPORTA e foi medida: o Home+DC tem que ser o ULTIMO passo antes do Enter. Feito logo
+    # apos o 1o pedaco, o cursor fica na posicao 0 e os pedacos seguintes entram NO INICIO,
+    # embaralhando o texto. O Enter submete com o cursor na posicao 0 sem problema.
+    placeholder = text.startswith("-")
+    envio = ("x" + text) if placeholder else text
+
+    pedacos = _fatiar_win(envio) if len(envio) > _WIN_CHUNK else [envio]
+    total = len(pedacos)
+    entregue = 0
+    for n, pedaco in enumerate(pedacos, start=1):
+        cp = _run(["tmux", "send-keys", "-t", target, "-l", "--", pedaco])
         if cp.returncode != 0:
-            # PARA no primeiro erro: seguir mandando os pedacos seguintes entregaria 1+2+4+5 e o Enter
-            # submeteria texto com um buraco no meio — a sessao trataria isso como pedido do usuario,
-            # que e exatamente o estrago que o fatiamento existe pra evitar.
+            # PARA no primeiro erro: seguir mandando entregaria 1+2+4+5 e o Enter submeteria texto com
+            # um buraco no meio — a sessao trataria isso como pedido do usuario, que e exatamente o
+            # estrago que o fatiamento existe pra evitar. (Com o bug do '-' o rc vinha 0 e isto nao
+            # disparava; por isso a defesa de verdade e o _fatiar_win, nao esta checagem.)
             _log.error("send-keys falhou no pedaco %d/%d de %r (%d de %d chars ja no input): %s",
-                       n, total, target, i, len(text), (cp.stderr or "").strip()[:200])
+                       n, total, target, entregue, len(envio), (cp.stderr or "").strip()[:200])
             return False
-        if i + _WIN_CHUNK < len(text):
+        entregue += len(pedaco)
+        if n < total:
             time.sleep(_WIN_CHUNK_PAUSE)
+
+    if placeholder:
+        # Home + DC: cursor pro inicio e apaga o 'x'. Falha aqui deixaria um 'x' espurio na frente da
+        # mensagem — melhor reportar do que submeter texto adulterado.
+        for tecla in ("Home", "DC"):
+            cp = _run(["tmux", "send-keys", "-t", target, tecla])
+            if cp.returncode != 0:
+                _log.error("send-keys %s falhou pra %r ao remover o placeholder: %s",
+                           tecla, target, (cp.stderr or "").strip()[:200])
+                return False
     return True
 
 
