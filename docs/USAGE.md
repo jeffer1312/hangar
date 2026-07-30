@@ -193,8 +193,12 @@ chat largo. O fluxo mobile fica intacto abaixo de 820px.
 - **Painel:** ícone de branch abre a tela git da sessão. No **desktop (≥820px)** o painel vira **3
   zonas** (branches | commits + grafo | detalhe do commit/diff) em vez da lista estreita; no mobile
   o fluxo de telas continua o mesmo.
-- **Commit:** em "Working tree changes", marque os arquivos desejados, escreva a mensagem e confirme
-  — só os arquivos marcados entram no commit (funciona igual em mobile e desktop).
+- **Commit:** em "Working tree changes", marque os arquivos desejados (ou **todos**/**nenhum**),
+  escreva a mensagem e confirme — só os arquivos marcados entram no commit (funciona igual em
+  mobile e desktop). O select **mensagens recentes…** reaproveita as últimas 10 mensagens daquela
+  sessão. Dá pra **reescrever o último commit (amend)**: a mensagem vem pré-preenchida e os
+  arquivos marcados dobram nele (com amend, o botão Commit & Push some — push de amend exigiria
+  `--force`). Também dá pra **commitar numa branch nova**, criada a partir da atual.
 - **Push:** botão **Commit & Push** sobe a branch atual (usa o upstream, ou cria com `-u origin` no
   primeiro push).
 - **Histórico:** tocar/clicar num commit mostra os arquivos alterados e o diff de cada um.
