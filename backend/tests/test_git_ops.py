@@ -228,3 +228,62 @@ def test_last_commit_message(tmp_path):
     d, _ = _repo_with_file(tmp_path)
     git_ops._run(d, "commit", "-q", "--amend", "-m", "assunto\n\ncorpo da mensagem")
     assert git_ops.last_commit_message(d)["message"] == "assunto\n\ncorpo da mensagem"
+
+
+def test_commit_diff_inteiro(tmp_path):
+    d, f = _repo_with_file(tmp_path)
+    f.write_text("linha original\nlinha 2\n")
+    (tmp_path / "g.txt").write_text("G\n")
+    git_ops.commit(d, "mexe tracked e add g", ["tracked.txt", "g.txt"])
+    sha = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
+    diff = git_ops.commit_diff(d, sha)["diff"]
+    assert "+linha 2" in diff and "g.txt" in diff          # os DOIS arquivos no mesmo diff
+
+
+def test_commit_diff_sha_invalido(tmp_path):
+    with pytest.raises(GitError) as e:
+        git_ops.commit_diff(_repo(tmp_path), "nope; rm -rf /")
+    assert e.value.status == 400
+
+
+def test_revert_commit(tmp_path):
+    d, f = _repo_with_file(tmp_path)
+    sha = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
+    r = git_ops.revert_commit(d, sha)
+    assert r["ok"]
+    assert not f.exists()                                  # revert desfez o add, commitado
+    assert "Revert" in git_ops._run(d, "log", "-1", "--pretty=%s").stdout
+
+
+def test_revert_sha_invalido(tmp_path):
+    with pytest.raises(GitError) as e:
+        git_ops.revert_commit(_repo(tmp_path), "--no-edit")
+    assert e.value.status == 400
+
+
+def test_cherry_pick(tmp_path):
+    d = _repo(tmp_path)
+    git_ops._run(d, "switch", "-q", "-c", "feat")
+    (tmp_path / "feat.txt").write_text("F\n")
+    git_ops.commit(d, "na feat", ["feat.txt"])
+    sha = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
+    git_ops._run(d, "switch", "-q", "main")
+    r = git_ops.cherry_pick(d, sha)
+    assert r["ok"] and (tmp_path / "feat.txt").exists()
+    assert "na feat" in git_ops._run(d, "log", "-1", "--pretty=%s").stdout
+
+
+def test_cherry_pick_sha_invalido(tmp_path):
+    with pytest.raises(GitError) as e:
+        git_ops.cherry_pick(_repo(tmp_path), "HEAD; echo pwned")
+    assert e.value.status == 400
+
+
+def test_abort_actions_na_allowlist(tmp_path):
+    d, f = _repo_with_file(tmp_path)
+    # Sem sequencer em andamento, o abort FALHA (git diz "no revert in progress") —
+    # o que prova que a ação chegou ao git (e não foi rejeitada pela allowlist).
+    r = git_ops.git_action(d, "revert-abort")
+    assert r["ok"] is False and "revert" in r["output"]
+    r = git_ops.git_action(d, "cherry-pick-abort")
+    assert r["ok"] is False and "cherry-pick" in r["output"]
