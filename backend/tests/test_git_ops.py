@@ -546,3 +546,29 @@ def test_git_log_grep_e_literal_nao_regex(tmp_path):
     assert [c["subject"] for c in git_ops.git_log(d, grep="(de novo)")] == ["corrige c++ (de novo)"]
     # E o ponto e ponto, nao curinga:
     assert git_ops.git_log(d, grep="c.+") == []
+
+
+def test_git_log_traz_corpo_da_mensagem(tmp_path):
+    d, _ = _repo_with_file(tmp_path)
+    (tmp_path / "corpo.txt").write_text("C\n")
+    git_ops._run(d, "add", "corpo.txt")
+    git_ops._run(d, "commit", "-q", "-m", "assunto curto", "-m", "primeira linha do corpo\nsegunda linha")
+    c = git_ops.git_log(d)[0]
+    assert c["subject"] == "assunto curto"
+    assert "primeira linha do corpo" in c["body"] and "segunda linha" in c["body"]
+
+
+def test_git_log_corpo_vazio_vira_string_vazia(tmp_path):
+    d, _ = _repo_with_file(tmp_path)
+    assert git_ops.git_log(d)[0]["body"] == ""
+
+
+def test_git_log_corpo_com_separador_nao_trunca(tmp_path):
+    # O corpo e texto livre: se contiver o proprio \x1f, um split sem maxsplit cortaria a mensagem
+    # calada. Com maxsplit=8 o resto inteiro cai em f[8].
+    d, _ = _repo_with_file(tmp_path)
+    (tmp_path / "sep.txt").write_text("S\n")
+    git_ops._run(d, "add", "sep.txt")
+    git_ops._run(d, "commit", "-q", "-m", "assunto", "-m", "antes\x1fdepois")
+    body = git_ops.git_log(d)[0]["body"]
+    assert "antes" in body and "depois" in body

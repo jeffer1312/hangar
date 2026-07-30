@@ -213,7 +213,7 @@ def git_action(cwd: str, action: str) -> dict:
 # inclui parents (%P) e refs (%D) pra servir a lista, o detalhe-de-commit e o grafo (fase 2) sem
 # trocar de formato depois. %x1f (unit sep) entre campos, %x1e (record sep) entre commits: nenhum dos
 # dois aparece em texto de commit -> split trivial e a prova de espacos/quebras no assunto/autor.
-_LOG_FMT = "%H%x1f%h%x1f%P%x1f%D%x1f%an%x1f%at%x1f%ar%x1f%s%x1e"
+_LOG_FMT = "%H%x1f%h%x1f%P%x1f%D%x1f%an%x1f%at%x1f%ar%x1f%s%x1f%b%x1e"
 
 
 def git_log(cwd: str, n: int = 50, grep: str | None = None) -> list[dict]:
@@ -237,10 +237,13 @@ def git_log(cwd: str, n: int = 50, grep: str | None = None) -> list[dict]:
         rec = rec.strip("\n")
         if not rec:
             continue
-        f = rec.split("\x1f")
-        if len(f) < 8:
+        # maxsplit=8: o corpo (%b) e texto livre e pode conter o proprio \x1f — sem o limite, um
+        # commit com esse byte no corpo sairia truncado calado.
+        f = rec.split("\x1f", 8)
+        if len(f) < 9:
             continue
         full, short, parents, refs, author, ts, rel, subject = f[:8]
+        body = f[8].strip("\n")
         out.append({
             "hash": full,
             "short": short,
@@ -250,6 +253,7 @@ def git_log(cwd: str, n: int = 50, grep: str | None = None) -> list[dict]:
             "ts": int(ts) if ts.isdigit() else 0,
             "rel": rel,
             "subject": subject,
+            "body": body,
         })
     return out
 
