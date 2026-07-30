@@ -617,6 +617,27 @@ export async function getPlan(name: string): Promise<PlanDetail | null> {
   return res.json() as Promise<PlanDetail>;
 }
 
+// Um plano do repo, pro seletor. Inclui os NÃO começados (0/N) e os completos, que a eleição
+// automática descarta — são justamente os que o usuário precisa poder escolher na mão.
+export interface PlanListItem {
+  stem: string;      // nome do arquivo sem .md — é o que o pin grava
+  name: string;      // rótulo já sem o prefixo de data
+  done: number;
+  total: number;
+  complete: boolean;
+}
+
+export function getPlans(name: string): Promise<{ plans: PlanListItem[]; pinned: string | null }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/plans`);
+}
+
+// stem = null solta o pin e devolve o painel pra eleição automática.
+export function setPlanPin(name: string, stem: string | null): Promise<{ pinned: string | null }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/plan-pin`, {
+    method: 'POST', body: JSON.stringify({ stem }),
+  });
+}
+
 // ── Motores de modelo ───────────────────────────────────────────────────────
 export interface Motor {
   label?: string;

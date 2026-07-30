@@ -237,3 +237,118 @@ def test_formato_real_dos_planos_do_repo():
     raw = alvo.read_text(encoding="utf-8")
     assert len(planprog._STEP_RE.findall(raw)) >= 15
     assert len(planprog._TASK_RE.findall(raw)) >= 2
+
+
+# ── Pin manual: o usuario escolhe QUAL plano o painel mostra ──────────────────────────────────────
+
+NAO_COMECADO = """# Plano novo — Implementation Plan
+
+### Task 1: Fazer
+
+- [ ] **Step 1: Um**
+- [ ] **Step 2: Dois**
+"""
+
+COMPLETO = """# Plano pronto — Implementation Plan
+
+### Task 1: Fazer
+
+- [x] **Step 1: Um**
+"""
+
+PENDENTE = """# Plano andando — Implementation Plan
+
+### Task 1: Fazer
+
+- [x] **Step 1: Um**
+- [ ] **Step 2: Dois**
+"""
+
+
+def _tres_planos(tmp_path):
+    """Um plano de cada tipo. O 'pendente' e o unico que a eleicao automatica escolheria."""
+    _write(tmp_path, "2026-07-01-pendente.md", PENDENTE)
+    _write(tmp_path, "2026-07-02-nao-comecado.md", NAO_COMECADO)
+    _write(tmp_path, "2026-07-03-completo.md", COMPLETO)
+    planprog._reset_caches()
+    return planprog._plans_dir(str(tmp_path))
+
+
+def test_sem_pin_a_eleicao_automatica_manda(tmp_path):
+    _tres_planos(tmp_path)
+    r = plan_progress(str(tmp_path))
+    assert r is not None and r.name == "pendente"
+
+
+def test_pin_manda_num_plano_NAO_COMECADO(tmp_path):
+    # O caso que motivou o pin: um plano 0/N nao acende a barra sozinho (regra do _load), mas e
+    # exatamente o que se fixa — fixa-se porque se vai comecar.
+    root = _tres_planos(tmp_path)
+    planprog.write_pin(root, "2026-07-02-nao-comecado")
+    r = plan_progress(str(tmp_path))
+    assert r is not None and r.name == "nao-comecado"
+    assert (r.done, r.total) == (0, 2)
+
+
+def test_pin_em_plano_COMPLETO_devolve_pro_automatico(tmp_path):
+    # Regra escolhida pelo usuario: o pin vale ate o plano fechar. Ficar preso num plano terminado
+    # seria pior que o problema que o pin resolve.
+    root = _tres_planos(tmp_path)
+    planprog.write_pin(root, "2026-07-03-completo")
+    r = plan_progress(str(tmp_path))
+    assert r is not None and r.name == "pendente"
+
+
+def test_pin_apontando_pra_arquivo_que_sumiu_cai_no_automatico(tmp_path):
+    root = _tres_planos(tmp_path)
+    planprog.write_pin(root, "2026-07-09-nunca-existiu")
+    r = plan_progress(str(tmp_path))
+    assert r is not None and r.name == "pendente"
+
+
+def test_soltar_o_pin_volta_pro_automatico(tmp_path):
+    root = _tres_planos(tmp_path)
+    planprog.write_pin(root, "2026-07-02-nao-comecado")
+    assert plan_progress(str(tmp_path)).name == "nao-comecado"
+    planprog.write_pin(root, None)
+    assert planprog.read_pin(root) is None
+    assert plan_progress(str(tmp_path)).name == "pendente"
+
+
+def test_pin_mora_no_git_e_nao_suja_a_pasta_de_planos(tmp_path):
+    # Gravar na pasta de planos apareceria no `git status` de quem versiona os planos. O `.git/`
+    # nunca e rastreado e some junto com o clone — comportamento certo pra preferencia local.
+    root = _tres_planos(tmp_path)
+    planprog.write_pin(root, "2026-07-01-pendente")
+    assert (tmp_path / ".git" / "cp-plan-pin").is_file()
+    assert not any(f.name.endswith("plan-pin") for f in Path(root).iterdir())
+
+
+@pytest.mark.parametrize("veneno", ["../fora", "a/b", "..", ".", ""])
+def test_pin_com_travessia_e_ignorado(tmp_path, veneno):
+    # read_pin e a ultima linha de defesa: o valor vira nome de arquivo. A rota tambem valida, mas
+    # um pin escrito a mao no .git nao passa por ela.
+    root = _tres_planos(tmp_path)
+    (tmp_path / ".git" / "cp-plan-pin").write_text(veneno + "\n", encoding="utf-8")
+    planprog._reset_caches()
+    assert planprog.read_pin(root) is None
+    assert plan_progress(str(tmp_path)).name == "pendente"
+
+
+def test_list_plans_traz_os_tres_inclusive_os_que_a_eleicao_descarta(tmp_path):
+    _tres_planos(tmp_path)
+    r = planprog.list_plans(str(tmp_path))
+    assert r is not None
+    por_nome = {p["name"]: p for p in r["plans"]}
+    assert set(por_nome) == {"pendente", "nao-comecado", "completo"}
+    # O nao-comecado precisa mostrar 0/2, nao 0/0: sem o total, o seletor diria que o plano nao tem
+    # passo nenhum.
+    assert (por_nome["nao-comecado"]["done"], por_nome["nao-comecado"]["total"]) == (0, 2)
+    assert por_nome["completo"]["complete"] is True
+    assert por_nome["pendente"]["complete"] is False
+    assert r["pinned"] is None
+
+
+def test_list_plans_sem_pasta_de_planos(tmp_path):
+    (tmp_path / ".git").mkdir()
+    assert planprog.list_plans(str(tmp_path)) is None
