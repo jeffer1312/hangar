@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { getBgPref, setBgPref, setBgImage, clearBgImage, getBgImage, getBgScrim, setBgScrim, type BgPref } from '../lib/background';
+  import { getBgPref, setBgPref, setBgImage, clearBgImage, getBgImage, getBgScrim, setBgScrim, getSurfaceSolid, setSurfaceSolid, type BgPref } from '../lib/background';
 
   let pref = $state<BgPref>(getBgPref());
   let temImagem = $state(!!getBgImage());
   let erro = $state('');
   let arquivoEl = $state<HTMLInputElement | null>(null);
   let scrim = $state(getBgScrim());
+  let solidez = $state(getSurfaceSolid());
 
   function pick(p: BgPref) {
     // 'image' sem imagem escolhida abre o seletor em vez de virar um modo que nao pinta nada.
@@ -78,6 +79,17 @@
              oninput={(e) => { scrim = +(e.currentTarget as HTMLInputElement).value; setBgScrim(scrim); }}
              aria-label="Transparência do fundo" />
       <em>{scrim}</em>
+    </label>
+    <!-- Solidez: a Transparência acima governa o painel; esta governa as CAIXAS de dentro dele
+         (chip, campo, card, bloco de saída). Duas camadas, dois controles — no 0 as caixas somem no
+         vidro e a tela vira uma superfície só; no 100 voltam a ser recorte chapado sobre a foto. -->
+    <label class="bg-scrim">
+      <span>Solidez das caixas</span>
+      <input type="range" min="0" max="100" step="1"
+             value={solidez}
+             oninput={(e) => { solidez = +(e.currentTarget as HTMLInputElement).value; setSurfaceSolid(solidez); }}
+             aria-label="Solidez das caixas sobre o fundo" />
+      <em>{solidez}</em>
     </label>
   {/if}
   {#if pref === 'image' || temImagem}
