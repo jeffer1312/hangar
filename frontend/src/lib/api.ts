@@ -617,15 +617,6 @@ export async function getPlan(name: string): Promise<PlanDetail | null> {
   return res.json() as Promise<PlanDetail>;
 }
 
-export async function getPlanForServer(s: Server, name: string): Promise<PlanDetail | null> {
-  const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/plan`, {
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
-  });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
-  return res.json() as Promise<PlanDetail>;
-}
-
 // ── Motores de modelo ───────────────────────────────────────────────────────
 export interface Motor {
   label?: string;

@@ -75,7 +75,11 @@ def _decorate_plan(info) -> None:
     info.plan_done = p.done
     info.plan_total = p.total
     info.plan_complete = p.complete
-    info.plan_tasks = [(t.done, t.total) for t in p.tasks]
+    # Teto de 9 pares: o front so segmenta a barra com <= 8 Tasks (PlanBar.svelte), acima disso
+    # desenha barra unica e ignora a lista. Sem o corte, um plano de 30 Tasks manda 30 pares por
+    # sessao em TODO /api/sessions e em toda re-emissao do SSE, de graca. 9 e nao 8 de proposito:
+    # cortar em 8 exatos faria o front achar que o plano TEM 8 Tasks e segmentar um plano de 30.
+    info.plan_tasks = [(t.done, t.total) for t in p.tasks[:9]]
 
 
 def sanitize_cwd(cwd: str) -> str:

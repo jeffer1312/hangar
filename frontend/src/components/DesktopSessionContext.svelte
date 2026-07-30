@@ -20,6 +20,7 @@
     session?: SessionInfo | null;
     planDetail?: PlanDetail | null;
     planLoading?: boolean;
+    planError?: boolean;
     // ── Acoes da NavBar ──────────────────────────────────────────────────────
     // No desktop LARGO (>=1280px, mesma breakpoint deste painel) o Chat esconde a NavBar — a
     // informacao dela ja vivia toda aqui — e as ACOES migram pra faixa sob o header. Todas
@@ -67,7 +68,7 @@
     loopLabel = null, loopColor = undefined, onLoopTap = undefined,
     onProviderTap = undefined, onOpenPair = undefined, onOpenGit = undefined,
     onOpenPeerChat = undefined,
-    session = null, planDetail = null, planLoading = false,
+    session = null, planDetail = null, planLoading = false, planError = false,
   }: Props = $props();
 
   const hasActions = $derived(onOpenTerminal || onOpenRun || onOpenAttachments || onOpenActivity);
@@ -174,7 +175,8 @@
          toda sessao sem superpowers rodando. -->
     <section class="sec-metric">
       <span class="section-label">Plano</span>
-      <PlanPanel {session} detail={planDetail ?? null} loading={planLoading ?? false} />
+      <PlanPanel {session} detail={planDetail ?? null} loading={planLoading ?? false}
+                 error={planError ?? false} />
     </section>
   {/if}
 

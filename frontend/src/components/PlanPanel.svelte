@@ -9,8 +9,10 @@
     session: SessionInfo;
     detail: PlanDetail | null;
     loading?: boolean;
+    // Falha REAL ao ler o plano (500/rede/token). "Sem plano" é 404 e chega como detail=null.
+    error?: boolean;
   }
-  let { session, detail, loading = false }: Props = $props();
+  let { session, detail, loading = false, error = false }: Props = $props();
   let showMd = $state(false);
 
   const current = $derived(detail ? detail.task - 1 : -1);
@@ -54,6 +56,8 @@
       <!-- Markdown NUNCA aparece cru (regra do CLAUDE.md): um <pre> com ** e ## à mostra é bug. -->
       <div class="md">{@html renderMarkdown(detail.markdown)}</div>
     {/if}
+  {:else if error}
+    <p class="muted">não deu pra ler o plano</p>
   {/if}
 </div>
 
