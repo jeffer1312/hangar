@@ -418,6 +418,21 @@ def test_branches_containing_ignora_origin_head_simbolico(tmp_path):
     assert set(result["local"]) == {"main", "feature"}
 
 
+def test_branches_containing_branch_local_com_nome_de_remote(tmp_path):
+    # Um branch LOCAL chamado igual ao remote ('origin') nao pode sumir: no :short os dois saem com
+    # o MESMO texto 'origin' -- e por isso o fix classifica pelo refname completo, nao pelo :short.
+    d = _repo(tmp_path)
+    base = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
+    git_ops._run(d, "branch", "origin")                  # branch LOCAL chamada "origin"
+    (tmp_path / "remote").mkdir()
+    rd = str(tmp_path / "remote")
+    git_ops._run(rd, "init", "-q", "-b", "main")
+    git_ops._run(d, "remote", "add", "origin", rd)       # remote de mesmo nome, sem fetch ainda
+    result = git_ops.branches_containing(d, base)
+    assert set(result["local"]) == {"main", "feature", "origin"}   # a branch local NAO some
+    assert result["remote"] == []
+
+
 def test_git_log_grep(tmp_path):
     d, _ = _repo_with_file(tmp_path)                     # commits: "init", "add tracked"
     (tmp_path / "y.txt").write_text("Y\n")
