@@ -290,11 +290,60 @@ function aplicarFonte(): void {
   else delete document.documentElement.dataset.font;
 }
 
+// ── As tres medidas do texto da conversa ─────────────────────────────────────
+// Tamanho, entrelinha e largura da coluna. Guardadas como ESCALA (100 = o de hoje), nao como valor
+// absoluto: o app ja usa medidas diferentes por tela — 16px/1.6 no celular, 17px/1.7 e coluna de
+// 920px no desktop, cada uma com um porque registrado no CSS. Um valor absoluto obrigaria a escolher
+// UM que serve pros dois e apagaria essa diferenca; a escala respeita o padrao de cada tela e move
+// os dois juntos.
+//
+// A largura so tem efeito no desktop: no celular a coluna ja e a tela inteira, e a linha e curta por
+// falta de espaco, nao por escolha.
+const TEXTO_KEYS = {
+  size: 'cp_text_size',
+  lh: 'cp_text_lh',
+  width: 'cp_text_width',
+} as const;
+
+export type MedidaTexto = keyof typeof TEXTO_KEYS;
+
+// 50..150 em vez de 0..100: aqui 100 e o MEIO (o padrao), nao o maximo — o valor tanto encolhe
+// quanto aumenta. lerNumero limita a 0..100, entao esta faixa tem leitura propria.
+function lerEscala(chave: string): number {
+  const cru = typeof localStorage !== 'undefined' ? localStorage.getItem(chave) : null;
+  const v = cru === null || cru === '' ? NaN : Number(cru);
+  return Number.isFinite(v) && v >= 50 && v <= 150 ? v : 100;
+}
+
+export function getMedidaTexto(m: MedidaTexto): number {
+  return lerEscala(TEXTO_KEYS[m]);
+}
+
+export function setMedidaTexto(m: MedidaTexto, v: number): void {
+  const n = Math.max(50, Math.min(150, Math.round(v)));
+  try {
+    // 100 e o padrao e NAO grava chave — mesma convencao do tema, da fonte e dos paineis: so o
+    // desvio persiste, entao quem nunca abriu isto continua exatamente como estava.
+    if (n === 100) localStorage.removeItem(TEXTO_KEYS[m]);
+    else localStorage.setItem(TEXTO_KEYS[m], String(n));
+  } catch { /* modo privado */ }
+  aplicarTexto();
+}
+
+function aplicarTexto(): void {
+  if (typeof document === 'undefined') return;
+  const raiz = document.documentElement;
+  raiz.style.setProperty('--cp-text-scale', (getMedidaTexto('size') / 100).toFixed(3));
+  raiz.style.setProperty('--cp-lh-scale', (getMedidaTexto('lh') / 100).toFixed(3));
+  raiz.style.setProperty('--cp-width-scale', (getMedidaTexto('width') / 100).toFixed(3));
+}
+
 // Chamado no boot junto com applyBg: sem isto as escolhas só valeriam depois de mexer nelas.
 export function applyAppearance(): void {
   aplicarLeitura();
   aplicarPaineis();
   aplicarFonte();
+  aplicarTexto();
 }
 
 export function setBgPref(pref: BgPref): void {

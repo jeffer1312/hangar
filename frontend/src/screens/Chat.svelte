@@ -1445,7 +1445,10 @@
       padding-right: var(--ctx-w);
     }
     .chat-screen.with-context :global(.messages-inner) {
-      max-width: min(1200px, 100%);
+      /* A escala de largura (Aparencia -> Texto da conversa) entra aqui tambem: sem ela, abrir o
+         painel de contexto ignorava a escolha do usuario e a coluna voltava ao teto cheio — o
+         slider parecia nao funcionar justamente na tela mais larga, que e onde ele mais importa. */
+      max-width: min(calc(1200px * var(--cp-width-scale, 1)), 100%);
       margin-inline: auto;
     }
     .chat-screen.with-context .bottom-dock { right: var(--ctx-w); }

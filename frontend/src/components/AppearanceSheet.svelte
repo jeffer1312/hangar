@@ -6,8 +6,8 @@
   import {
     getReadMode, setReadMode, getPanelStyle, setPanelStyle,
     getReadAlpha, setReadAlpha, getTextBoost, setTextBoost,
-    getFontPref, setFontPref,
-    type ReadMode, type PanelStyle, type FontPref,
+    getFontPref, setFontPref, getMedidaTexto, setMedidaTexto,
+    type ReadMode, type PanelStyle, type FontPref, type MedidaTexto,
   } from '../lib/background';
   import { sidebarPrefs, type SidebarHeight } from '../lib/sidebarPrefs.svelte';
 
@@ -22,6 +22,18 @@
   let solidez = $state(getReadAlpha());
   let contraste = $state(getTextBoost());
   let fonte = $state<FontPref>(getFontPref());
+  let texto = $state<Record<MedidaTexto, number>>({
+    size: getMedidaTexto('size'), lh: getMedidaTexto('lh'), width: getMedidaTexto('width'),
+  });
+  // A largura da coluna so tem efeito acima de 820px (no celular a coluna e a tela). Mesma media
+  // query do resto do app; sem isto o celular mostraria um slider que nao move nada.
+  const desktop = $state(typeof matchMedia !== 'undefined' && matchMedia('(min-width: 820px)').matches);
+
+  const medidasTexto: { v: MedidaTexto; label: string; aria: string }[] = [
+    { v: 'size', label: 'Tamanho', aria: 'Tamanho do texto da conversa' },
+    { v: 'lh', label: 'Entrelinha', aria: 'Espaço entre as linhas da conversa' },
+    { v: 'width', label: 'Largura da coluna', aria: 'Largura da coluna de leitura' },
+  ];
 
   const opcoesLeitura: { v: ReadMode; label: string; aria: string }[] = [
     { v: 'auto', label: 'Automática', aria: 'Reforça o texto só quando o fundo é uma imagem' },
@@ -101,10 +113,32 @@
     {/if}
   </div>
 
+  <!-- As tres medidas que decidem o conforto de leitura, cada uma como escala (100 = o de hoje).
+       A LARGURA so aparece no desktop: no celular a coluna e a tela inteira e o slider nao teria o
+       que mover. Medido nesta conversa: 43 caracteres por linha no celular contra 93 no desktop —
+       a faixa confortavel de leitura e 45 a 75, e e por isso que o mesmo texto cansa mais no monitor. -->
+  <div class="ap-row ap-row--stack">
+    <div class="ap-label">
+      <strong>Texto da conversa</strong>
+      <span>tamanho, entrelinha e largura da coluna — 100 é como vem de fábrica</span>
+    </div>
+    {#each medidasTexto as m (m.v)}
+      {#if m.v !== 'width' || desktop}
+        <label class="ap-slider">
+          <span>{m.label}</span>
+          <input type="range" min="50" max="150" step="1" value={texto[m.v]}
+                 aria-label={m.aria}
+                 oninput={(e) => { const n = +(e.currentTarget as HTMLInputElement).value; texto[m.v] = n; setMedidaTexto(m.v, n); }} />
+          <em>{texto[m.v]}</em>
+        </label>
+      {/if}
+    {/each}
+  </div>
+
   <!-- Fonte: nenhuma API web lê a fonte do terminal, então a escolha é aqui. 'Monoespaçada' usa
-       `--font-mono`, que nomeia JetBrains e cai no ui-monospace de quem não tiver. Sem seletor de
-       TAMANHO de propósito: o app é todo em `rem`, então o tamanho padrão do navegador já escala
-       tudo, e um slider próprio brigaria com essa config. -->
+       `--font-mono`, que nomeia JetBrains e cai no ui-monospace de quem não tiver. O TAMANHO tem
+       controle proprio logo acima (escala sobre o padrao da tela), que convive com o zoom do
+       navegador em vez de brigar com ele. -->
   <div class="ap-row">
     <div class="ap-label">
       <strong>Fonte</strong>
@@ -161,6 +195,11 @@
   .ap-label span { color: var(--text-muted); font-size: var(--text-xs); line-height: 1.4; }
   /* Linha com título à esquerda e segmentado à direita, e o slider embaixo ocupando a largura. */
   .ap-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+  /* Em tela estreita o segmentado de 4 opcoes (Leitura) nao encolhe e espremia o texto ao lado ate
+     UMA PALAVRA POR LINHA — `min-width: 0` no rotulo deixa ele ceder tudo. Empilha antes disso. */
+  @media (max-width: 560px) {
+    .ap-head { flex-direction: column; align-items: stretch; }
+  }
   .ap-slider { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
   .ap-slider span { color: var(--text-muted); font-size: var(--text-xs); white-space: nowrap; }
   .ap-slider input { flex: 1; min-width: 120px; accent-color: var(--accent); }

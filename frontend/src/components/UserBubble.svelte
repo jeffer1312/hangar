@@ -106,8 +106,10 @@
   .peer-chip--link:active { opacity: 0.7; }
 
   .bubble-text {
-    font-size: var(--text-base);
-    line-height: 1.55;
+    /* Acompanha o texto do assistente (Aparencia -> Texto da conversa): a conversa e uma coisa so,
+       e so um dos lados mudar de tamanho fica pior que nao ter o ajuste. */
+    font-size: calc(var(--text-base) * var(--cp-text-scale, 1));
+    line-height: calc(1.55 * var(--cp-lh-scale, 1));
     white-space: pre-wrap;
   }
 

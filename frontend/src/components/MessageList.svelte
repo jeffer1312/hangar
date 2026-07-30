@@ -359,7 +359,9 @@
        (abaixo), o teto maior quando o painel de contexto está aberto (Chat.svelte) e a escolha do
        usuário em Aparência → Largura. Sem a variável, cada um desses seria uma briga de
        especificidade entre arquivos. */
-    .messages-inner { --read-w: 920px; max-width: min(var(--read-w), 94vw); }
+    /* A escala da largura (Aparencia -> Texto da conversa) entra AQUI, no teto, e nao no 94vw: o
+       94vw e margem lateral minima da tela, nao preferencia de leitura. */
+    .messages-inner { --read-w: calc(920px * var(--cp-width-scale, 1)); max-width: min(var(--read-w), 94vw); }
     /* Respiro lateral do TEXTO, não da coluna. Quando a coluna bate no teto e sobra tela, a margem
        vem do `margin: 0 auto`; mas com o painel de contexto aberto o teto sobe pra 1200px
        (Chat.svelte:1289) e a coluna passa a ocupar 100% do espaço — aí os 16px de padding eram tudo
@@ -372,8 +374,8 @@
   /* Tela grande tem espaço sobrando: a coluna cresce em degraus em vez de ficar presa nos 920 e
      deixar duas faixas vazias. Não vira largura livre de propósito — linha muito longa faz o olho
      perder a volta —, mas 1080/1200 ainda é confortável no tamanho de fonte daqui. */
-  @media (min-width: 1600px) { .messages-inner { max-width: min(1080px, 82vw); } }
-  @media (min-width: 1900px) { .messages-inner { max-width: min(1200px, 76vw); } }
+  @media (min-width: 1600px) { .messages-inner { max-width: min(calc(1080px * var(--cp-width-scale, 1)), 82vw); } }
+  @media (min-width: 1900px) { .messages-inner { max-width: min(calc(1200px * var(--cp-width-scale, 1)), 76vw); } }
 
   /* Leitura SÓLIDA (Aparência → Leitura; `auto` liga sozinho quando o fundo é uma imagem): a coluna
      da conversa vira uma folha quase opaca e a foto passa a viver no cromo e nas margens, em vez de

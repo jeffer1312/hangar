@@ -8,7 +8,7 @@ const store = new Map<string, string>();
   removeItem: (k: string) => store.delete(k),
 };
 
-const { getBgScrim, getReadAlpha, getTextBoost, getFontPref, setFontPref, getSurfaceSolid, setSurfaceSolid } = await import('./background');
+const { getBgScrim, getReadAlpha, getTextBoost, getFontPref, setFontPref, getSurfaceSolid, setSurfaceSolid, getMedidaTexto, setMedidaTexto } = await import('./background');
 
 // Fonte: 'system' é o padrão e NÃO grava chave (mesma convenção do tema/painéis — só o desvio do
 // padrão persiste). Lixo na chave cai em 'system' em vez de deixar o app numa fonte que não existe.
@@ -79,5 +79,40 @@ describe('solidez das caixas', () => {
     expect(getSurfaceSolid()).toBe(100);
     setSurfaceSolid(41.6);
     expect(getSurfaceSolid()).toBe(42);
+  });
+});
+
+// As tres medidas do texto são ESCALA, não valor: 100 é o meio da faixa (o padrão de cada tela), e o
+// slider vai de 50 a 150. Os outros sliders do arquivo são 0..100, então a leitura destas é própria —
+// um `lerNumero` compartilhado descartaria 150 como fora da faixa e o slider voltaria sozinho pro
+// meio ao recarregar.
+describe('medidas do texto da conversa', () => {
+  it('padrão é 100 e não grava chave; só o desvio persiste', () => {
+    store.clear();
+    expect(getMedidaTexto('size')).toBe(100);
+    setMedidaTexto('size', 100);
+    expect(store.has('cp_text_size')).toBe(false);
+    setMedidaTexto('size', 130);
+    expect(store.get('cp_text_size')).toBe('130');
+    expect(getMedidaTexto('size')).toBe(130);
+  });
+
+  it('aceita a faixa inteira 50..150 e prende fora dela', () => {
+    store.clear();
+    setMedidaTexto('lh', 150);
+    expect(getMedidaTexto('lh')).toBe(150);
+    setMedidaTexto('lh', 400);
+    expect(getMedidaTexto('lh')).toBe(150);
+    setMedidaTexto('width', 10);
+    expect(getMedidaTexto('width')).toBe(50);
+  });
+
+  it('as três são independentes', () => {
+    store.clear();
+    setMedidaTexto('size', 120);
+    setMedidaTexto('width', 80);
+    expect(getMedidaTexto('size')).toBe(120);
+    expect(getMedidaTexto('lh')).toBe(100);
+    expect(getMedidaTexto('width')).toBe(80);
   });
 });
