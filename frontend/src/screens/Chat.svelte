@@ -172,12 +172,21 @@
   const planSession = $derived(allSessions.find((s) => s.name === sessionName) ?? null);
   let planDetail = $state<PlanDetail | null>(null);
   let planLoading = $state(false);
-  // Busca o detalhe só quando o plano MUDA de nome — o progresso (done/total) já chega pronto na
-  // lista a cada poll; refazer o /plan a cada tick seria trabalho redundante pro backend reler o
-  // markdown do disco.
+  // Nome do plano como PRIMITIVO, não o objeto `planSession` — mesmo bug do `pairPeersKey` umas
+  // linhas abaixo: `allSessions` troca de referência a CADA poll de 5s (getSessions), então um
+  // $effect que lê `planSession?.plan_name` direto re-executava em TODO poll, mesmo com o mesmo
+  // plano (medido: 4 fetches em 4 polls idênticos). O /plan devolve o markdown inteiro (66 KB
+  // neste repo) e passa pelo mesmo scan de tmux+/proc do registry que o poll da lista — refazer
+  // isso a cada 5s dobrava a taxa de scan e ~47 MB/h de tráfego à toa no celular via Tailscale.
+  const planName = $derived(planSession?.plan_name ?? null);
+  // Busca só quando o plano MUDA de nome E o painel que o mostra PODE estar visível — os MESMOS
+  // sinais que já decidem a renderização (`desktop && showContextPanel` no DesktopSessionContext;
+  // `activityOpen` na ActivitySheet mobile). Sem isto o fetch rodava até com a sessão em split/
+  // dentro do PairChatModal (nested), onde nenhum dos dois painéis chega a montar.
+  const planPanelVisible = $derived((desktop && showContextPanel) || (!desktop && activityOpen));
   $effect(() => {
-    const n = planSession?.plan_name ?? null;
-    if (!n) { planDetail = null; return; }
+    if (!planName) { planDetail = null; return; }
+    if (!planPanelVisible) return;   // plano existe, mas nada o mostra agora: não busca à toa
     planLoading = true;
     getPlan(sessionName)
       .then((d) => { planDetail = d; })
@@ -1231,7 +1240,7 @@
   <RunSheet open={runOpen} {sessionName} onClose={() => (runOpen = false)} onRunningChange={(r) => (runRunning = r)} />
   <MoreSheet open={moreOpen} onClose={() => (moreOpen = false)}
              onRun={() => (runOpen = true)} {runRunning}
-             onActivity={hasActivity ? () => (activityOpen = true) : undefined}
+             onActivity={(hasActivity || !!planName) ? () => (activityOpen = true) : undefined}
              onAttachments={() => (anexosOpen = true)}
              {activityRunning} {activityBadge} />
   <AttachmentsSheet open={anexosOpen} {sessionName} onClose={() => (anexosOpen = false)} />
