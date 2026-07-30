@@ -51,10 +51,12 @@
 </div>
 
 <style>
+  /* Mesma margem esquerda da resposta do Claude: quem separa uma da outra e o BALAO, nao o lado da
+     tela — igual ao terminal, onde o prompt do usuario e a resposta comecam na mesma coluna. */
   .bubble-wrap {
     display: flex;
     flex-direction: column;
-    align-items: flex-end;
+    align-items: flex-start;
     animation: bubble-in 220ms var(--ease-out) both;
     margin-bottom: var(--space-3);
   }
@@ -70,7 +72,8 @@
        um balao de ~1100px com linhas ilegiveis. */
     max-width: min(80%, 46rem);
     padding: var(--space-3) var(--space-4);
-    border-radius: 18px 18px 4px 18px;
+    /* Rabinho no canto inferior ESQUERDO agora que o balao mora na esquerda. */
+    border-radius: 18px 18px 18px 4px;
     word-break: break-word;
   }
 

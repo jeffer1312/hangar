@@ -679,13 +679,13 @@
   }
   .bc-more:hover { color: var(--text-primary); background: var(--bg-hover); }
   /* Bolha de usuário MINI — mesma linguagem do chat (UserBubble: --bubble-user, canto reto embaixo
-     à direita, alinhada à direita), em escala de card. Substitui o texto cru muted que não se
-     distinguia da resposta. */
+     à esquerda, na MESMA margem da resposta), em escala de card. Substitui o texto cru muted que
+     não se distinguia da resposta. */
   .bc-user {
-    align-self: flex-end; max-width: 85%;
+    align-self: flex-start; max-width: 85%;
     font-size: 13px; line-height: 1.45; color: var(--text-primary);
     background: var(--bubble-user);
-    padding: 5px 10px; border-radius: 12px 12px 4px 12px;
+    padding: 5px 10px; border-radius: 12px 12px 12px 4px;
     white-space: pre-wrap; word-break: break-word; margin: 0;
   }
   .bc-pending { opacity: 0.55; }
