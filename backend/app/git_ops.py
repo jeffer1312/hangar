@@ -195,6 +195,9 @@ _ACTIONS = {
     "stash-pop": ["stash", "pop"],
     # log: ultimos 30 commits, uma linha cada (hash curto + msg + autor + data relativa).
     "log": ["log", "-n", "30", "--pretty=format:%h  %s  (%an, %ar)"],
+    # Saida de emergencia de revert/cherry-pick que conflitaram (sequencer em andamento).
+    "revert-abort": ["revert", "--abort"],
+    "cherry-pick-abort": ["cherry-pick", "--abort"],
 }
 
 
@@ -389,6 +392,52 @@ def commit_file_diff(cwd: str, sha: str, path: str) -> dict:
     if p.returncode >= 128:
         raise GitError(409, (p.stderr or "git show falhou").strip() or "git show falhou")
     return {"path": path, "diff": p.stdout}
+
+
+# Teto do diff do commit inteiro. O diff POR ARQUIVO e seguro por construcao; o do commit inteiro
+# nao: um commit que toca 500 arquivos vira megabytes que atravessam a rede e ainda passam pelo
+# Shiki num bloco so, travando o celular. 200KB ja mostra qualquer commit humano por completo.
+_DIFF_MAX = 200_000
+
+
+def _cap(diff: str) -> tuple[str, bool]:
+    if len(diff) <= _DIFF_MAX:
+        return diff, False
+    return diff[:_DIFF_MAX], True
+
+
+def commit_diff(cwd: str, sha: str) -> dict:
+    """Unified diff do commit INTEIRO (todos os arquivos) — a "Show changes as unified diff" do
+    Tortoise. Mesmas flags -m --first-parent de commit_files (merge = diff vs o 1o parent)."""
+    if not _SHA_RE.match(sha):
+        raise GitError(400, "sha invalido")
+    p = _run(cwd, "show", "--format=", "-m", "--first-parent", sha)
+    if p.returncode >= 128:
+        raise GitError(409, (p.stderr or "git show falhou").strip() or "git show falhou")
+    diff, truncated = _cap(p.stdout)
+    return {"sha": sha, "diff": diff, "truncated": truncated}
+
+
+def revert_commit(cwd: str, sha: str) -> dict:
+    """git revert --no-edit <sha>: cria um NOVO commit desfazendo <sha>. Conflito -> returncode!=0:
+    o repo fica em revert-in-progress; o stderr vai pro usuário e a saída é a ação 'revert-abort'."""
+    if not _SHA_RE.match(sha):
+        raise GitError(400, "sha invalido")
+    p = _run(cwd, "revert", "--no-edit", sha)
+    if p.returncode != 0:
+        raise GitError(409, (p.stderr or p.stdout or "revert falhou").strip())
+    return {"ok": True, "output": (p.stdout + p.stderr).strip()}
+
+
+def cherry_pick(cwd: str, sha: str) -> dict:
+    """git cherry-pick <sha>: reaplica o commit em cima do HEAD. Mesmo contrato de erro do revert
+    (abort via ação 'cherry-pick-abort')."""
+    if not _SHA_RE.match(sha):
+        raise GitError(400, "sha invalido")
+    p = _run(cwd, "cherry-pick", sha)
+    if p.returncode != 0:
+        raise GitError(409, (p.stderr or p.stdout or "cherry-pick falhou").strip())
+    return {"ok": True, "output": (p.stdout + p.stderr).strip()}
 
 
 _BRANCH_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")

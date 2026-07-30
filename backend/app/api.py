@@ -40,7 +40,7 @@ from app import runtime_config
 from app import engine_probe, engines
 from app.costs import report as costs_report
 from app.git_ops import (
-    list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit, last_commit_message, push as push_branch, GitError, branch_of,
+    list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit_diff, revert_commit, cherry_pick, commit, last_commit_message, push as push_branch, GitError, branch_of,
 )
 from app import loop as loop_mod
 from app.transcript import last_assistant_text
@@ -1833,7 +1833,8 @@ class CheckoutBody(_StrictBody):
 
 class GitActionBody(_StrictBody):
     # allowlist declarativa no schema (alem do git_ops)
-    action: Literal["status", "pull", "fetch", "stash", "stash-pop", "log"]
+    action: Literal["status", "pull", "fetch", "stash", "stash-pop", "log",
+                    "revert-abort", "cherry-pick-abort"]
 
 
 class GitPathBody(_StrictBody):
@@ -1972,6 +1973,34 @@ def git_commit_files(name: str, sha: str):
 def git_commit_diff(name: str, sha: str, path: str):
     try:
         return commit_file_diff(_session_cwd(name), sha, path)
+    except GitError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+class GitShaBody(_StrictBody):
+    sha: str   # validado em git_ops por _SHA_RE (hex 7-40) antes de virar argv
+
+
+@app.get("/api/sessions/{name}/git/commit/{sha}/diff-full", dependencies=[Depends(require_auth)])
+def git_commit_diff_full(name: str, sha: str):
+    try:
+        return commit_diff(_session_cwd(name), sha)
+    except GitError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.post("/api/sessions/{name}/git/revert", dependencies=[Depends(require_auth)])
+def git_revert(name: str, body: GitShaBody):
+    try:
+        return revert_commit(_session_cwd(name), body.sha)
+    except GitError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.post("/api/sessions/{name}/git/cherry-pick", dependencies=[Depends(require_auth)])
+def git_cherry_pick(name: str, body: GitShaBody):
+    try:
+        return cherry_pick(_session_cwd(name), body.sha)
     except GitError as e:
         raise HTTPException(e.status, e.detail)
 
