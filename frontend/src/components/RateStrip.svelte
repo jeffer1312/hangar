@@ -13,7 +13,7 @@
   const chips = $derived(buckets.flatMap((b): Chip[] => {
     for (const s of b.sessions) {
       const st = parseStatusLine(s.status_line);
-      if (st && (st.fiveHourPct != null || st.weeklyPct != null)) {
+      if (st && (st.fiveHourPct != null || st.weeklyPct != null || st.monthlyPct != null)) {
         return [{ id: b.server.id, label: b.server.label, color: s.serverColor, st }];
       }
     }
@@ -38,6 +38,12 @@
           <span class="rs-win {pctClass(c.st.weeklyPct)}"
                 title={c.st.weeklyReset ? `janela de 7 dias — reseta ${c.st.weeklyReset}` : 'janela de 7 dias'}>
             📅{Math.round(c.st.weeklyPct)}%
+          </span>
+        {/if}
+        {#if c.st.monthlyPct != null}
+          <span class="rs-win {pctClass(c.st.monthlyPct)}"
+                title={c.st.monthlyReset ? `janela de 30 dias — reseta ${c.st.monthlyReset}` : 'janela de 30 dias'}>
+            🗓{Math.round(c.st.monthlyPct)}%
           </span>
         {/if}
       </span>

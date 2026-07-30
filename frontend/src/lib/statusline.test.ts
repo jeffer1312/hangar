@@ -52,6 +52,7 @@ describe('parseStatusLine — statusline do Pi', () => {
     expect(f.costUsd).toBe(1.29);
     expect(f.fiveHourPct).toBe(9);
     expect(f.weeklyPct).toBe(4);
+    expect(f.monthlyPct).toBe(2);
     expect(f.sessionTime).toBe('3h4m');
   });
 

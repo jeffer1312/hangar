@@ -17,6 +17,8 @@
       out.push({ label: 'Janela 5h', value: `${s.fiveHourPct}%` + (s.fiveHourReset ? ` · reset ${s.fiveHourReset}` : '') });
     if (typeof s.weeklyPct === 'number')
       out.push({ label: 'Janela 7d', value: `${s.weeklyPct}%` + (s.weeklyReset ? ` · reset ${s.weeklyReset}` : '') });
+    if (typeof s.monthlyPct === 'number')
+      out.push({ label: 'Janela 30d', value: `${s.monthlyPct}%` + (s.monthlyReset ? ` · reset ${s.monthlyReset}` : '') });
     if (typeof s.ctxUsed === 'number')
       out.push({ label: 'Contexto', value: `${s.ctxUsed.toLocaleString('pt-BR')}${s.ctxTotal ? ' / ' + s.ctxTotal.toLocaleString('pt-BR') : ''}${typeof s.ctxPct === 'number' ? ` (${Math.round(s.ctxPct)}%)` : ''}` });
     if (typeof s.costUsd === 'number')

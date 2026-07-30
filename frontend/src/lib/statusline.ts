@@ -20,6 +20,8 @@ export interface StatusFields {
   fiveHourReset?: string;
   weeklyPct?: number;
   weeklyReset?: string;
+  monthlyPct?: number;   // 🗓30d (só sessões clinepass; Kimi não tem janela mensal)
+  monthlyReset?: string;
   sessionTime?: string;  // ⏱ "2h37m"
   repo?: string;         // 📁 nome da pasta do projeto (git)
   branch?: string;       // branch atual (sem o '*' de dirty)
@@ -108,6 +110,13 @@ export function parseStatusLine(raw: string | null | undefined): StatusFields | 
   if (weekly) {
     out.weeklyPct = clampPct(parseInt(weekly[1], 10));
     if (weekly[2]) out.weeklyReset = weekly[2].trim();
+  }
+
+  // 🗓30d:2%  — janela mensal (clinepass). O reset é opcional como nas outras janelas.
+  const monthly = raw.match(/🗓[^│]*?(\d+)\s*%\s*(?:[↺↻]\s*([^│🕐]+))?/u);
+  if (monthly) {
+    out.monthlyPct = clampPct(parseInt(monthly[1], 10));
+    if (monthly[2]) out.monthlyReset = monthly[2].trim();
   }
 
   const sess = raw.match(/⏱\s*([0-9hms:]+)/u);
