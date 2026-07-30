@@ -391,3 +391,59 @@ def test_kill_session_devolve_se_a_sessao_saiu(monkeypatch):
     monkeypatch.setattr(tmux, "RUN", lambda args, **k: _CP())   # rc=0, mentindo
     monkeypatch.setattr(tmux, "has_session", lambda n: True)
     assert tmux.kill_session("cc") is False         # sobreviveu: NAO e sucesso
+
+
+def test_fronteiras_nunca_deixam_pedaco_comecar_com_dash():
+    # O psmux nao honra o `--`: argumento que comeca com "-" e engolido em SILENCIO com rc=0. Medido
+    # na pratica: recado de 2332 chars chegou com 1820, faltando EXATAMENTE 512 (o chunk), com o
+    # buraco em [512:1024] — o chunk 2 comecava com "- trunca no primeiro". Como o rc e 0, nenhuma
+    # checagem nossa pega; a unica saida e nao produzir esse pedaco.
+    texto = "x" * 511 + "-comeca com dash" + "y" * 600
+    pedacos = [texto[i:f] for i, f in tmux._fronteiras(texto)]
+    assert "".join(pedacos) == texto                       # byte-exato: so a divisao muda
+    assert all(len(p) <= tmux._WIN_CHUNK for p in pedacos)
+    assert not any(p.startswith("-") for p in pedacos[1:])  # nenhum pedaco comeca com dash
+
+
+def test_fronteiras_parede_de_dash_devolve_o_corte_original():
+    # Pior caso: nao ha fronteira boa por perto. O teto do recuo devolve o corte de sempre — pior caso
+    # e o comportamento de hoje, nunca pior (e o pedaco perdido ao menos vira 1 so, nao um laco).
+    texto = "a" * 500 + "-" * 200
+    pedacos = [texto[i:f] for i, f in tmux._fronteiras(texto)]
+    assert "".join(pedacos) == texto
+    assert all(len(p) <= tmux._WIN_CHUNK for p in pedacos)
+
+
+def test_fronteiras_avanca_quando_nao_ha_saida_pra_tras():
+    # Regua markdown de 40 hifens em cima da fronteira: recuar nao acha saida (o recuo pararia dentro
+    # da regua), entao avanca. Cabe porque o teto real e o colapso de paste (700 ok / 900 colapsa),
+    # nao os 512 — medicao da sessao-irma no Windows.
+    texto = "x" * 500 + "-" * 40 + "resto do texto aqui" * 20
+    pedacos = [texto[i:f] for i, f in tmux._fronteiras(texto)]
+    assert "".join(pedacos) == texto
+    assert not any(p.startswith("-") for p in pedacos[1:])
+    assert all(len(p) <= tmux._WIN_CHUNK + tmux._WIN_AVANCO for p in pedacos)   # nunca perto do colapso
+
+
+def test_texto_comecando_com_hifen_usa_placeholder_e_apaga_no_fim(monkeypatch):
+    # Sem fronteira pra mover: o pedaco 1 comeca onde comeca. Receita medida e validada no psmux pela
+    # sessao-irma — placeholder, texto, e Home+DC como ULTIMO passo (antes disso o cursor voltaria pro
+    # inicio e o resto entraria embaralhado). Cobre tambem o caso PRE-EXISTENTE ao fatiamento:
+    # mensagem curta de uma chamada so comecando com hifen ja se perdia.
+    monkeypatch.setattr(tmux.os, "name", "nt")
+    monkeypatch.setattr(tmux.time, "sleep", lambda *_a, **_k: None)
+    chamadas = []
+    monkeypatch.setattr(tmux, "RUN", lambda args, **k: (chamadas.append(list(args)) or _CP()))
+    tmux.send_keys("cc", "-comeca com hifen, curto", literal=True)
+    teclas = [c[-1] for c in chamadas]
+    assert teclas[0] == "x"                              # placeholder ANTES
+    assert teclas[-2:] == ["Home", "DC"]                 # e a limpeza por ULTIMO
+    assert "-comeca com hifen, curto" in teclas          # o texto vai inteiro, sem alteracao
+
+
+def test_texto_normal_nao_usa_placeholder(monkeypatch):
+    monkeypatch.setattr(tmux.os, "name", "nt")
+    chamadas = []
+    monkeypatch.setattr(tmux, "RUN", lambda args, **k: (chamadas.append(list(args)) or _CP()))
+    tmux.send_keys("cc", "texto normal", literal=True)
+    assert [c[-1] for c in chamadas] == ["texto normal"]   # uma chamada so, nada de Home/DC

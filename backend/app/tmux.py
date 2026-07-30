@@ -232,6 +232,56 @@ def rename_session(old: str, new: str) -> bool:
 # medidos; 1340 chars viram 3 chamadas (~0.6s a mais), custo irrelevante perto de perder o inicio.
 _WIN_CHUNK = 512         # < limiar de colapso de paste (medido: 700 ok, 900 colapsa)
 _WIN_CHUNK_PAUSE = 0.3   # pausa entre pedacos (medida: recupera 100% do inicio)
+# Quanto a fronteira pode avancar ALEM do chunk pra fugir de um hifen. Cabe porque o teto real e o
+# colapso de paste (medido: 700 ok, 900 colapsa), nao os 512 — entao 180 mantem o pedaco em <=692,
+# ainda abaixo do colapso.
+_WIN_AVANCO = 180
+# Placeholder da receita do hifen: uma letra qualquer que faca o argumento NAO comecar com "-".
+_PLACEHOLDER = "x"
+
+
+def _fronteiras(text: str) -> list[tuple[int, int]]:
+    """Corta em pedacos de _WIN_CHUNK, mas NUNCA deixa um pedaco COMECAR com "-".
+
+    O psmux nao honra o `--`: argumento que comeca com "-" e engolido em SILENCIO, com rc=0 e stderr
+    vazio (medido pela sessao-irma em 5 casos; "controle x" e " - com espaco antes" chegam, "- direto"
+    e "--algo" somem). O teste e o PRIMEIRO caractere.
+    Prova de que isso atinge o fatiamento: um recado meu de 2332 chars chegou com 1820 — faltando
+    EXATAMENTE 512, o tamanho do chunk, com o buraco alinhado em [512:1024] e o chunk 2 comecando com
+    "- trunca no primeiro". As duas entregas perderam os MESMOS bytes, o que descarta perda aleatoria.
+    E como o rc e 0, NENHUMA checagem nossa pega: nem o returncode por pedaco, nem a evidencia no
+    composer (o pedaco some, o resto chega, e a cauda aparece normalmente).
+    Conserto: puxar a fronteira 1 char pra tras ate o proximo pedaco comecar com outra coisa. O texto
+    entregue continua BYTE-EXATO — muda so onde a divisao cai.
+    Texto que COMECA com "-" na posicao 0 nao tem como ser dividido pra fora do problema; isso e
+    exposicao PRE-EXISTENTE do send-keys (nao do fatiamento) e esta anotada pra medicao do lado
+    Windows: ver se o psmux aceita `send-keys -H` (hex), que nao passa o texto por argv.
+    ponytail: recuo simples de 1 em 1 com teto; em texto que seja uma parede de "-" o teto devolve o
+    corte original (pior caso = comportamento de hoje, nunca pior).
+    """
+    cortes: list[tuple[int, int]] = []
+    i = 0
+    while i < len(text):
+        fim = min(i + _WIN_CHUNK, len(text))
+        if fim < len(text) and text[fim] == "-":
+            # 1) pra TRAS primeiro: mantem o pedaco <= _WIN_CHUNK, que e o teto seguro conhecido.
+            tras = fim
+            while tras > i + 1 and text[tras] == "-":
+                tras -= 1
+            # 2) nao achou saida perto (regua markdown "-----", lista com varios itens seguidos —
+            #    caso COMUM em conversa tecnica, e por isso o recuo sozinho nao basta): tenta pra
+            #    FRENTE. Cabe porque o teto real nao e 512 e sim o COLAPSO de paste, medido em
+            #    700 ok / 900 colapsa — ~190 chars de folga. Medicao da sessao-irma no Windows.
+            if text[tras] == "-":
+                frente = fim
+                while frente < len(text) and text[frente] == "-" and frente - fim < _WIN_AVANCO:
+                    frente += 1
+                fim = frente if frente < len(text) and text[frente] != "-" else fim
+            else:
+                fim = tras
+        cortes.append((i, fim))
+        i = fim
+    return cortes
 
 
 def _send_literal(target: str, text: str) -> bool:
@@ -245,6 +295,24 @@ def _send_literal(target: str, text: str) -> bool:
     como delivered=True (o `claim_undelivered` marca antes do envio). Ou seja: a exceção trocava um
     silêncio por outro pior. Bool não escapa por acidente — quem não confere segue como sempre.
     """
+    # Texto que COMECA com hifen: o psmux engole o argumento inteiro em silencio (rc=0), e isso NAO
+    # depende do fatiamento — mensagem curta de uma chamada so ja se perdia. Como nao ha fronteira pra
+    # mover no pedaco 1, vale a receita medida e validada pela sessao-irma no psmux: digita um
+    # PLACEHOLDER antes, manda o texto, e no fim volta pro inicio (Home) e apaga o placeholder (DC).
+    # Home+DC tem de ser o ULTIMO passo antes do Enter: feito antes, o cursor fica no comeco e o resto
+    # do texto entra embaralhado.
+    if os.name == "nt" and text.startswith("-"):
+        _run(["tmux", "send-keys", "-t", target, "-l", "--", _PLACEHOLDER])
+        ok = _enviar_pedacos(target, text)
+        _run(["tmux", "send-keys", "-t", target, "Home"])
+        _run(["tmux", "send-keys", "-t", target, "DC"])
+        return ok
+    return _enviar_pedacos(target, text)
+
+
+def _enviar_pedacos(target: str, text: str) -> bool:
+    """O envio em si, sem a receita do placeholder \u2014 separado pra ela envolver o envio INTEIRO
+    (o Home+DC precisa rodar depois do ultimo pedaco, nao entre eles)."""
     # Linux (qualquer tamanho) e Windows dentro do teto: UMA chamada, comportamento de sempre.
     # Windows acima do teto: fatia com pausa pra nao disparar o modo paste da TUI que come o comeco.
     if os.name != "nt" or len(text) <= _WIN_CHUNK:
@@ -257,8 +325,8 @@ def _send_literal(target: str, text: str) -> bool:
             return False
         return True
     total = (len(text) + _WIN_CHUNK - 1) // _WIN_CHUNK
-    for n, i in enumerate(range(0, len(text), _WIN_CHUNK), start=1):
-        cp = _run(["tmux", "send-keys", "-t", target, "-l", "--", text[i:i + _WIN_CHUNK]])
+    for n, (i, fim) in enumerate(_fronteiras(text), start=1):
+        cp = _run(["tmux", "send-keys", "-t", target, "-l", "--", text[i:fim]])
         if cp.returncode != 0:
             # PARA no primeiro erro: seguir mandando os pedacos seguintes entregaria 1+2+4+5 e o Enter
             # submeteria texto com um buraco no meio — a sessao trataria isso como pedido do usuario,
@@ -266,7 +334,7 @@ def _send_literal(target: str, text: str) -> bool:
             _log.error("send-keys falhou no pedaco %d/%d de %r (%d de %d chars ja no input): %s",
                        n, total, target, i, len(text), (cp.stderr or "").strip()[:200])
             return False
-        if i + _WIN_CHUNK < len(text):
+        if fim < len(text):
             time.sleep(_WIN_CHUNK_PAUSE)
     return True
 
