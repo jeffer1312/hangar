@@ -75,7 +75,7 @@ Rebase interativo, resolução de conflitos com merge tool (conflito de cherry-p
   - Rotas: `GET /git/commit/{sha}/diff-full`, `POST /git/revert`, `POST /git/cherry-pick`
   - `GitActionBody.action` aceita também `"revert-abort" | "cherry-pick-abort"`
 
-- [ ] **Step 1: Escrever os testes que falham**
+- [x] **Step 1: Escrever os testes que falham**
 
 Acrescentar ao fim de `backend/tests/test_git_ops.py`:
 
@@ -139,12 +139,12 @@ def test_abort_actions_na_allowlist(tmp_path):
     assert r["ok"] is False and "cherry-pick" in r["output"]
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `cd backend && uv run pytest tests/test_git_ops.py -k "commit_diff or revert or cherry or abort" -v`
 Expected: FAIL (`AttributeError: module 'app.git_ops' has no attribute 'commit_diff'` etc.)
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Em `backend/app/git_ops.py`, dentro do literal `_ACTIONS` (linha 189-198), após a entrada `"log"`:
 
@@ -246,12 +246,12 @@ def git_cherry_pick(name: str, body: GitShaBody):
         raise HTTPException(e.status, e.detail)
 ```
 
-- [ ] **Step 4: Rodar e ver passar** (+ suíte inteira do git e self-check)
+- [x] **Step 4: Rodar e ver passar** (+ suíte inteira do git e self-check)
 
 Run: `cd backend && uv run pytest tests/test_git_ops.py -v && uv run python app/git_ops.py`
 Expected: PASS + `git_ops self-check OK`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/app/git_ops.py backend/app/api.py backend/tests/test_git_ops.py
@@ -275,7 +275,7 @@ git commit -m "feat(git): diff unificado do commit + revert/cherry-pick com abor
   - `create_tag(cwd: str, name: str, sha: str | None = None, message: str | None = None) -> dict`
   - Rotas: `POST /git/reset`, `POST /git/branch`, `POST /git/tag` — **o plano 5 (branch/tag) consome `create_tag`**
 
-- [ ] **Step 1: Escrever os testes que falham**
+- [x] **Step 1: Escrever os testes que falham**
 
 Acrescentar ao fim de `backend/tests/test_git_ops.py`:
 
@@ -358,12 +358,12 @@ def test_create_tag_invalida_ou_duplicada(tmp_path):
         assert e.value.status == 400
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `cd backend && uv run pytest tests/test_git_ops.py -k "reset or create_branch or create_tag" -v`
 Expected: FAIL (funções não definidas)
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Em `backend/app/git_ops.py`, após `cherry_pick`:
 
@@ -463,12 +463,12 @@ def git_tag_create(name: str, body: GitTagBody):
         raise HTTPException(e.status, e.detail)
 ```
 
-- [ ] **Step 4: Rodar e ver passar** — suíte git inteira + self-check
+- [x] **Step 4: Rodar e ver passar** — suíte git inteira + self-check
 
 Run: `cd backend && uv run pytest tests/test_git_ops.py -v && uv run python app/git_ops.py`
 Expected: PASS + `git_ops self-check OK`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/app/git_ops.py backend/app/api.py backend/tests/test_git_ops.py
@@ -496,7 +496,7 @@ Os 3 itens de backend levantados na leitura da referência do Tortoise (2026-07-
   - Rotas: `GET /git/commit/{sha}/diff-worktree`, `GET /git/commit/{sha}/branches`;
     `GET /git/log` ganha o query param `q`
 
-- [ ] **Step 1: Escrever os testes que falham**
+- [x] **Step 1: Escrever os testes que falham**
 
 Acrescentar ao fim de `backend/tests/test_git_ops.py`:
 
@@ -560,12 +560,12 @@ def test_git_log_grep_e_literal_nao_regex(tmp_path):
     assert git_ops.git_log(d, grep="c.+") == []
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `cd backend && uv run pytest tests/test_git_ops.py -k "worktree or containing or grep" -v`
 Expected: FAIL (`AttributeError: module 'app.git_ops' has no attribute 'diff_vs_worktree'` etc.)
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Em `backend/app/git_ops.py`, após `create_tag`:
 
@@ -674,12 +674,12 @@ def git_commit_branches(name: str, sha: str):
         raise HTTPException(e.status, e.detail)
 ```
 
-- [ ] **Step 4: Rodar e ver passar** — suíte git inteira + self-check
+- [x] **Step 4: Rodar e ver passar** — suíte git inteira + self-check
 
 Run: `cd backend && uv run pytest tests/test_git_ops.py -v && uv run python app/git_ops.py`
 Expected: PASS + `git_ops self-check OK`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/app/git_ops.py backend/app/api.py backend/tests/test_git_ops.py
@@ -711,7 +711,7 @@ git commit -m "feat(git): diff vs working tree, branches que contem o commit e b
   - `CommitList` ganha prop OPCIONAL `onMenu?: (c: GitCommit) => void`; `CommitDetail` ganha `onMenu: (c: GitCommit) => void`
   - `GitToolbar` ganha o campo de busca do log (o "Search log messages" do Tortoise)
 
-- [ ] **Step 1: Clients (api.ts)**
+- [x] **Step 1: Clients (api.ts)**
 
 `GitAction` vira:
 
@@ -782,7 +782,7 @@ export function getGitLog(name: string, q?: string): Promise<{ commits: GitCommi
 
 Importar esses clients no `gitStore.svelte.ts` (junto do import existente de `./api`).
 
-- [ ] **Step 2: Store (gitStore.svelte.ts)**
+- [x] **Step 2: Store (gitStore.svelte.ts)**
 
 Estado novo junto dos demais `let`:
 
@@ -873,7 +873,7 @@ No `return` do store, expor `pendingAbort` (getter), `logQuery`, `revert`, `cher
 
 E atualizar o import de tipos: `type GitResetMode` junto de `./api`.
 
-- [ ] **Step 3: CommitMenu.svelte (novo)**
+- [x] **Step 3: CommitMenu.svelte (novo)**
 
 Overlay backdrop + card, **teleportado pro `<body>` com a action `portal`** — não basta z-index. O
 `.sheet` do `BottomSheet` tem `animation` com transform persistente, `backdrop-filter` (Chromium) e
@@ -1089,7 +1089,7 @@ Confirms inline no padrão `confirmDiscard`:
 </style>
 ```
 
-- [ ] **Step 4: ⋯ no CommitList e no CommitDetail**
+- [x] **Step 4: ⋯ no CommitList e no CommitDetail**
 
 `CommitList.svelte`: prop nova `onMenu?: (c: GitCommit) => void` — OPCIONAL de propósito: o plano 3 (blame/histórico) reusará o `CommitList` na view de histórico de arquivo SEM menu, e prop obrigatória quebraria o typecheck dele. Com `onMenu` presente (os dois callers desta task), o ⋯ aparece; a linha "Working tree changes" NÃO tem ⋯:
 
@@ -1144,7 +1144,7 @@ interface Props {
 
 CSS: `.git-cd-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); }` + réplica `.git-mini`.
 
-- [ ] **Step 5: LogSearch (novo) + abort — nos DOIS lugares certos**
+- [x] **Step 5: LogSearch (novo) + abort — nos DOIS lugares certos**
 
 **Cuidado medido:** no mobile a `<GitToolbar>` só existe no ramo `{:else}` do `GitSheet`
 (`GitSheet.svelte:176-208`, view `list`). Quem está navegando commits está na view `log` — onde a
@@ -1211,7 +1211,7 @@ renderiza com `{#if !noGraph}`. E a linha sintética "Working tree changes" (`Co
 também some na busca: os callers passam `noGraph={!!git.logQuery}` e
 `wtCount={git.logQuery ? 0 : git.files.length}` (ela não é resultado de busca nenhuma).
 
-- [ ] **Step 6: GitSheet (mobile) — menu + diff unificado**
+- [x] **Step 6: GitSheet (mobile) — menu + diff unificado**
 
 State novo (junto dos demais):
 
@@ -1280,7 +1280,7 @@ Wiring: `onMenu={(c) => (menuCommit = c)}` e `noGraph={git.logFiltered}` no `<Co
 
 (Importar `CommitMenu` de `./git/CommitMenu.svelte` e `getCommitDiffVsWorktree` de `../lib/api`.)
 
-- [ ] **Step 7: GitPanel (desktop) — menu + diff unificado**
+- [x] **Step 7: GitPanel (desktop) — menu + diff unificado**
 
 Mesmo state `menuCommit`. O diff unificado entra na zona direita pelo MESMO encadeamento do diff por arquivo (aparece abaixo do CommitDetail, que é o comportamento do diff por arquivo hoje):
 
@@ -1327,7 +1327,7 @@ centro), `onMenu` no `<CommitDetail>` (zona direita); e como último filho da `.
 
 (Importar `CommitMenu` de `./git/CommitMenu.svelte` e `getCommitDiffVsWorktree` de `../lib/api`.)
 
-- [ ] **Step 8: Gate de tipos + verificação manual (mobile E desktop)**
+- [x] **Step 8: Gate de tipos + verificação manual (mobile E desktop)**
 
 Run: `npm --prefix frontend run check`
 Expected: 0 erros
@@ -1357,7 +1357,7 @@ Manual, num repo de brinquedo (com commits que dá pra perder!), mobile E deskto
     o conflito (o `refresh` roda no `finally`).
 13. Erro do menu aparece UMA vez (no menu), não duplicado no rodapé do sheet/painel.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add frontend/src/components/git/CommitMenu.svelte frontend/src/components/git/LogSearch.svelte frontend/src/components/git/CommitList.svelte frontend/src/components/git/CommitDetail.svelte frontend/src/components/git/GitToolbar.svelte frontend/src/components/GitSheet.svelte frontend/src/components/GitPanel.svelte frontend/src/lib/api.ts frontend/src/lib/gitStore.svelte.ts frontend/src/lib/portal.ts
@@ -1371,17 +1371,17 @@ git commit -m "feat(git): menu de contexto por commit + diff unificado (hub esti
 **Files:**
 - Modify: `docs/USAGE.md` (seção `### Git`)
 
-- [ ] **Step 1: Suíte completa backend**
+- [x] **Step 1: Suíte completa backend**
 
 Run: `cd backend && uv run pytest -v`
 Expected: PASS
 
-- [ ] **Step 2: Gate front completo**
+- [x] **Step 2: Gate front completo**
 
 Run: `npm --prefix frontend run check && npm --prefix frontend run build`
 Expected: 0 erros + build ok
 
-- [ ] **Step 3: Docs**
+- [x] **Step 3: Docs**
 
 Em `docs/USAGE.md`, na seção `### Git`, acrescentar após o bullet "Histórico":
 
@@ -1397,7 +1397,7 @@ Em `docs/USAGE.md`, na seção `### Git`, acrescentar após o bullet "Histórico
   saem da lista e as linhas do grafo não teriam onde ligar. **limpar** volta a lista completa.
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/USAGE.md
