@@ -56,23 +56,28 @@
 
   const five = $derived(status?.fiveHourPct);
   const week = $derived(status?.weeklyPct);
+  const month = $derived(status?.monthlyPct);
   const hasDial = $derived(known(five) || known(week));
+  // O painel de barras aceita a 3ª janela (30d) mesmo quando as outras duas faltam; o anel duplo,
+  // não — fica restrito a 5h/7d por desenho.
+  const hasBars = $derived(hasDial || known(month));
 
   // 100% e o unico valor de 3 digitos: com o rotulo na frente o par estoura os 24,5px uteis do
   // miolo (medido: 26,7px), entao numero e rotulo encolhem juntos SO nesse caso.
   const wide5 = $derived(Math.round(clamp(five)) >= 100);
   const wide7 = $derived(Math.round(clamp(week)) >= 100);
 
-  // Texto pro leitor de tela: o desenho e aria-hidden, entao o rotulo carrega os dois numeros.
+  // Texto pro leitor de tela: o desenho e aria-hidden, entao o rotulo carrega os numeros.
   const a11y = $derived(
     `Uso: 5 horas ${known(five) ? Math.round(clamp(five)) + '%' : 'sem dado'}` +
-    `, 7 dias ${known(week) ? Math.round(clamp(week)) + '%' : 'sem dado'}`,
+    `, 7 dias ${known(week) ? Math.round(clamp(week)) + '%' : 'sem dado'}` +
+    (known(month) ? `, 30 dias ${Math.round(clamp(month))}%` : ''),
   );
 </script>
 
-{#if hasDial || limited}
+{#if hasBars || limited}
   <div class="rate-chips" class:as-bars={variant === 'bars'}>
-    {#if hasDial && variant === 'bars'}
+    {#if hasBars && variant === 'bars'}
       <!-- Uma barra por janela, no mesmo desenho da barra de Contexto do painel (rotulo + valor
            em cima, trilho de 4px embaixo). Janela sem dado nao vira barra vazia: some. -->
       <button class="bars" onclick={onExpand} aria-label={a11y} title={a11y}>
@@ -90,6 +95,13 @@
             <span class="bar-head"><span class="bar-cap">7 dias</span><span class="bar-pct">{label(week)}%</span></span>
             <span class="bar"><span style:width={`${clamp(week)}%`}></span></span>
             {#if status?.weeklyReset}<span class="bar-reset">reseta {status.weeklyReset}</span>{/if}
+          </span>
+        {/if}
+        {#if known(month)}
+          <span class="bar-row tone-{tone(month)}">
+            <span class="bar-head"><span class="bar-cap">30 dias</span><span class="bar-pct">{label(month)}%</span></span>
+            <span class="bar"><span style:width={`${clamp(month)}%`}></span></span>
+            {#if status?.monthlyReset}<span class="bar-reset">reseta {status.monthlyReset}</span>{/if}
           </span>
         {/if}
       </button>
@@ -129,6 +141,12 @@
           <text x="22" y="29" class="num num-7d" class:wide={wide7} text-anchor="middle" dominant-baseline="middle"
           ><tspan class="cap">7d</tspan><tspan dx={wide7 ? 1 : 1.5}>{label(week)}</tspan></text>
         </svg>
+      </button>
+    {:else if known(month)}
+      <!-- Sessao clinepass no celular: so tem a janela de 30 dias, e o anel duplo e 5h/7d por
+           desenho. Sem este ramo a barra abriria vazia e o toque que abre a tela de uso sumia. -->
+      <button class="rchip tone-chip-{tone(month)}" onclick={onExpand} aria-label={a11y} title={a11y}>
+        <span aria-hidden="true">🗓</span>{label(month)}%
       </button>
     {/if}
     {#if limited}
@@ -297,4 +315,7 @@
     white-space: nowrap;
   }
   .rchip.warm { color: var(--warning); }
+  /* Mesmos limiares do anel e das barras — 70 ambar, 90 vermelho. */
+  .rchip.tone-chip-warn { color: var(--warning); }
+  .rchip.tone-chip-hot { color: var(--error); }
 </style>

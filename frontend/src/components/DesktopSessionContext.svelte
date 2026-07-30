@@ -84,7 +84,7 @@
   // senao sobra um rotulo "Limites" orfao. isFinite como o known() do RateChips: uma statusline
   // custom que escreva NaN/Infinity nao abre a secao pra um corpo vazio.
   const _known = (pct: number | undefined) => typeof pct === 'number' && isFinite(pct);
-  const hasRate = $derived(limited || _known(status?.fiveHourPct) || _known(status?.weeklyPct));
+  const hasRate = $derived(limited || _known(status?.fiveHourPct) || _known(status?.weeklyPct) || _known(status?.monthlyPct));
 
   // Mesmos limiares do resto do app (RateChips, ContextRing): 70 ambar, 90 vermelho. Um vocabulario
   // so de medidor — a barra de contexto era a unica que ficava accent ate os 100%.
