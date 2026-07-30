@@ -25,7 +25,7 @@ from app.registry import KillFailed, SessionRegistry
 from app.names import sanitize_session_name
 from app.models import (SessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody, RunInfo,
                         ProjectStatus)
-from app.planprog import plan_progress
+from app.planprog import plan_progress, list_plans, write_pin, _plans_dir, PlanPinError
 from app.pqueue import PromptQueue, _transcript_start_ts, committed_user_lines
 from app.chain import ThenLink
 from app.terminal_input import TerminalInput, drain
@@ -1887,6 +1887,43 @@ async def session_plan(name: str):
                   for t in p.tasks],
         "markdown": markdown,
     }
+
+
+@app.get("/api/sessions/{name}/plans", dependencies=[Depends(require_auth)])
+async def session_plans(name: str):
+    """Todos os planos do repo, pro seletor. Inclui os nao-comecados e os completos — que a eleicao
+    automatica descarta, e que sao exatamente os que o usuario precisa poder escolher."""
+    cwd = await asyncio.to_thread(_session_cwd, name)
+    r = await asyncio.to_thread(list_plans, cwd)
+    if r is None:
+        raise HTTPException(404, "repo sem pasta de planos")
+    return r
+
+
+class PlanPinBody(_StrictBody):
+    stem: str | None = None   # None = solta o pin e volta pra eleicao automatica
+
+
+@app.post("/api/sessions/{name}/plan-pin", dependencies=[Depends(require_auth)])
+async def session_plan_pin(name: str, body: PlanPinBody):
+    """Fixa qual plano o painel mostra. Vale ate o plano fechar: em 100% o pin e ignorado e a
+    eleicao automatica volta (ver planprog.plan_progress)."""
+    cwd = await asyncio.to_thread(_session_cwd, name)
+    root = await asyncio.to_thread(_plans_dir, cwd)
+    if root is None:
+        raise HTTPException(404, "repo sem pasta de planos")
+    if body.stem is not None:
+        # So um plano que existe DE VERDADE nesta raiz. Sem isto, o stem viraria nome de arquivo
+        # vindo do cliente — e a checagem de traversal do read_pin nao cobriria um nome valido
+        # apontando pra plano de outro repo.
+        alvo = os.path.join(root, body.stem + ".md")
+        if not await asyncio.to_thread(os.path.isfile, alvo):
+            raise HTTPException(404, f"plano nao encontrado: {body.stem}")
+    try:
+        await asyncio.to_thread(write_pin, root, body.stem)
+    except PlanPinError as e:
+        raise HTTPException(500, f"nao deu pra gravar o pin: {e}")
+    return {"pinned": body.stem}
 
 
 @app.get("/api/sessions/{name}/branches", dependencies=[Depends(require_auth)])

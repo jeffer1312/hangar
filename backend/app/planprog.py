@@ -84,6 +84,57 @@ _DISCOVERY_TTL = 3.0
 _sticky: dict[str, str] = {}
 
 
+# Pin manual: o usuario escolhe QUAL plano o painel mostra, em vez de aceitar o eleito. Guardado por
+# RAIZ DE PLANOS (nao por sessao): duas sessoes no mesmo repo trabalham o mesmo plano, e e assim que
+# o _discover ja e chaveado. Arquivo ao lado dos planos, no repo — segue o repo, nao o navegador.
+PIN_FILE = "cp-plan-pin"
+
+
+def _pin_path(root: str) -> str:
+    """Dentro do `.git/` do repo dono da pasta de planos. Motivo: `.git/` nunca e rastreado, entao o
+    pin nao aparece no `git status` de quem versiona os planos — e some junto com o clone, que e o
+    comportamento certo pra uma preferencia local. `.git` como ARQUIVO (worktree) nao serve de
+    diretorio: nesse caso cai na propria pasta de planos, com ponto na frente."""
+    cur = Path(root)
+    for _ in range(_MAX_PARENTS + 1):
+        g = cur / ".git"
+        if g.is_dir():
+            return str(g / PIN_FILE)
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+    return os.path.join(root, "." + PIN_FILE)
+
+
+def read_pin(root: str) -> str | None:
+    """Stem do plano fixado nesta raiz, ou None. NUNCA levanta — pin ilegivel = sem pin."""
+    try:
+        v = Path(_pin_path(root)).read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    # Guarda anti-traversal: o valor vira nome de arquivo logo abaixo. So o stem, sem separador.
+    return v if v and "/" not in v and "\\" not in v and v not in (".", "..") else None
+
+
+def write_pin(root: str, stem: str | None) -> None:
+    """Fixa (ou solta, com None) o plano da raiz. Solta tambem o sticky, senao o eleito anterior
+    continuaria mandando ate ganhar/perder pendencia por conta propria."""
+    p = _pin_path(root)
+    try:
+        if stem is None:
+            Path(p).unlink(missing_ok=True)
+        else:
+            Path(p).write_text(stem + "\n", encoding="utf-8")
+    except OSError as e:
+        raise PlanPinError(str(e))
+    _discovery_cache.pop(root, None)
+    _sticky.pop(root, None)
+
+
+class PlanPinError(Exception):
+    pass
+
+
 def _reset_caches() -> None:
     """So pra teste."""
     _file_cache.clear()
@@ -112,9 +163,13 @@ def _plans_dir(cwd: str) -> str | None:
     return None
 
 
-def parse_plan(path: str) -> PlanProgress | None:
-    """Parseia UM plano. None se nao tem step nenhum ou nenhum step marcado. Pode levantar OSError
-    (quem chama trata) — so o I/O levanta; markdown nao falha ao parsear."""
+def parse_plan(path: str, require_started: bool = True) -> PlanProgress | None:
+    """Parseia UM plano. None se nao tem step nenhum ou — com require_started — nenhum step marcado.
+    Pode levantar OSError (quem chama trata) — so o I/O levanta; markdown nao falha ao parsear.
+
+    `require_started=False` e pro plano FIXADO na mao: a regra de descartar plano nao-comecado existe
+    pra ele nao acender a barra sozinho, e quando o usuario escolhe explicitamente ela vira estorvo —
+    fixa-se um plano justamente porque se vai comecar ele."""
     # read_bytes de uma vez (nao linha a linha): o Edit trunca e reescreve, e um poll no meio da
     # escrita leria menos steps -> a sig cai e sobe = piscada em todas as views ao mesmo tempo.
     raw = Path(path).read_bytes().decode("utf-8", errors="replace")
@@ -126,8 +181,8 @@ def parse_plan(path: str) -> PlanProgress | None:
     if not steps:
         return None
     done = sum(1 for _, ok, _ in steps if ok)
-    if done == 0:
-        return None   # escrito mas nunca comecado: nao acende barra
+    if done == 0 and require_started:
+        return None   # escrito mas nunca comecado: nao acende barra SOZINHO (pin passa por cima)
 
     heads = [(m.start(), m.group(1).strip()) for m in _TASK_RE.finditer(raw)]
     if not heads:
@@ -160,12 +215,16 @@ def parse_plan(path: str) -> PlanProgress | None:
                         tasks=tuple(tasks))
 
 
-def _load(path: str, mtime_ns: int) -> PlanProgress | None:
-    hit = _file_cache.get(path)
+def _load(path: str, mtime_ns: int, require_started: bool = True) -> PlanProgress | None:
+    # A chave do cache carrega o require_started: o MESMO arquivo tem dois resultados possiveis
+    # (None pela eleicao automatica, PlanProgress pelo pin), e uma chave so faria um envenenar o
+    # outro conforme quem lesse primeiro.
+    key = path if require_started else path + "\x00pin"
+    hit = _file_cache.get(key)
     if hit is not None and hit[0] == mtime_ns:
         return hit[1]
-    got = parse_plan(path)
-    _file_cache[path] = (mtime_ns, got)
+    got = parse_plan(path, require_started)
+    _file_cache[key] = (mtime_ns, got)
     return got
 
 
@@ -207,6 +266,52 @@ def _discover(root: str) -> str | None:
     return chosen
 
 
+def list_plans(cwd: str | None) -> dict | None:
+    """Todos os planos da raiz do repo em `cwd`, pro seletor — inclusive os que NAO acendem a barra
+    (zero step marcado) e os completos, que o _discover descarta. Aqui a lista e pra escolher, e
+    esconder opcao seria justamente o que fez o usuario nao conseguir trocar. None = repo sem pasta
+    de planos. NUNCA levanta."""
+    try:
+        if not cwd:
+            return None
+        root = _plans_dir(cwd)
+        if root is None:
+            return None
+        itens = []
+        with os.scandir(root) as it:
+            for e in it:
+                if not e.name.endswith(".md") or not e.is_file():
+                    continue
+                stem = e.name[:-3]
+                try:
+                    got = _load(e.path, e.stat().st_mtime_ns)
+                except OSError:
+                    continue
+                itens.append({
+                    "stem": stem,
+                    "name": _DATE_PREFIX_RE.sub("", stem),
+                    "done": got.done if got else 0,
+                    "total": got.total if got else _count_steps(e.path),
+                    "complete": bool(got and got.complete),
+                })
+        itens.sort(key=lambda p: p["stem"], reverse=True)   # mais recente primeiro (prefixo de data)
+        return {"plans": itens, "pinned": read_pin(root)}
+    except Exception:
+        _log.warning("list_plans falhou pra cwd=%r", cwd, exc_info=True)
+        return None
+
+
+def _count_steps(path: str) -> int:
+    """Total de steps de um plano que o _load descartou (zero marcado). So pra mostrar '0/28' no
+    seletor em vez de '0/0' — sem isto, plano nao comecado parece nao ter passo nenhum."""
+    try:
+        raw = Path(path).read_bytes().decode("utf-8", errors="replace")
+    except OSError:
+        return 0
+    raw = _FENCE_RE.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), raw)
+    return len(_STEP_RE.findall(raw))
+
+
 def plan_progress(cwd: str | None) -> PlanProgress | None:
     """Progresso do plano ativo do repo em `cwd`, ou None. NUNCA levanta."""
     try:
@@ -215,6 +320,20 @@ def plan_progress(cwd: str | None) -> PlanProgress | None:
         root = _plans_dir(cwd)
         if root is None:
             return None
+        # Pin manual vence a eleicao — MAS so enquanto o plano fixado tiver step pendente. Ao chegar
+        # em 100% ele volta pro automatico sozinho: ficar preso num plano terminado seria pior que o
+        # problema que o pin resolve (planos completos saem da eleicao, entao terminar um devolvia o
+        # painel pro plano velho e pendente que sobrou).
+        pin = read_pin(root)
+        if pin:
+            pinned = os.path.join(root, pin + ".md")
+            try:
+                got = _load(pinned, os.stat(pinned).st_mtime_ns, require_started=False)
+            except OSError:
+                got = None      # pin apontando pra arquivo que sumiu: cai no automatico
+            if got is not None and not got.complete:
+                return got
+
         now = time.monotonic()
         hit = _discovery_cache.get(root)
         if hit is not None and now - hit[0] < _DISCOVERY_TTL:
