@@ -216,9 +216,17 @@ def git_action(cwd: str, action: str) -> dict:
 _LOG_FMT = "%H%x1f%h%x1f%P%x1f%D%x1f%an%x1f%at%x1f%ar%x1f%s%x1e"
 
 
-def git_log(cwd: str, n: int = 50) -> list[dict]:
-    """Ultimos n commits, estruturados. --topo-order (nao por data) pro grafo nao intercalar branches."""
-    p = _run(cwd, "log", "--topo-order", "-n", str(n), f"--pretty=format:{_LOG_FMT}")
+def git_log(cwd: str, n: int = 50, grep: str | None = None) -> list[dict]:
+    """Ultimos n commits, estruturados. --topo-order (nao por data) pro grafo nao intercalar branches.
+    grep filtra por texto da mensagem. Tres cuidados: (1) o texto vai GRUDADO na flag
+    (`--grep=<txt>`), nunca argv separado — assim um texto que comeca com '-' e valor, nao flag;
+    (2) `-F` porque --grep e REGEX por padrao: sem isso, buscar 'c++' ou '(fix)' devolve
+    "Invalid regular expression" na cara do usuario, e um '.' casaria qualquer caractere calado;
+    (3) `-i` pra busca no celular nao depender de maiuscula."""
+    argv = ["log", "--topo-order", "-n", str(n), f"--pretty=format:{_LOG_FMT}"]
+    if grep:
+        argv += [f"--grep={grep}", "-F", "-i"]
+    p = _run(cwd, *argv)
     if p.returncode != 0:
         # repo sem nenhum commit ainda: git log sai !=0 -> lista vazia em vez de erro.
         if "does not have any commits" in p.stderr or "bad default revision" in p.stderr:
@@ -486,6 +494,50 @@ def create_tag(cwd: str, name: str, sha: str | None = None, message: str | None 
     if p.returncode != 0:
         raise GitError(409, (p.stderr or "criar tag falhou").strip())
     return {"ok": True, "output": (p.stdout + p.stderr).strip()}
+
+
+def diff_vs_worktree(cwd: str, sha: str) -> dict:
+    """Unified diff do commit ate o DISCO agora — o "Compare with working tree" do Tortoise.
+    `git diff <sha>` = arvore de trabalho vs aquele commit (inclui o que nao esta staged)."""
+    if not _SHA_RE.match(sha):
+        raise GitError(400, "sha invalido")
+    p = _run(cwd, "diff", sha)
+    if p.returncode >= 128:
+        raise GitError(409, (p.stderr or "git diff falhou").strip() or "git diff falhou")
+    diff, truncated = _cap(p.stdout)      # mesmo teto do commit_diff
+    return {"sha": sha, "diff": diff, "truncated": truncated}
+
+
+def branches_containing(cwd: str, sha: str) -> dict:
+    """Branches locais e remotas que contem o commit — o "Shows branches this commit is on"."""
+    if not _SHA_RE.match(sha):
+        raise GitError(400, "sha invalido")
+    p = _run(cwd, "branch", "-a", "--contains", sha, "--format=%(refname:short)")
+    if p.returncode != 0:
+        raise GitError(409, (p.stderr or "git branch --contains falhou").strip())
+    remotes = _remote_names(cwd)          # UMA vez, fora do laco: era um subprocesso por branch
+    local, remote = [], []
+    for line in p.stdout.splitlines():
+        name = line.strip()
+        if not name or name.startswith("("):      # "(HEAD detached at ...)" nao e branch
+            continue
+        if "/" in name and name.split("/", 1)[0] in remotes:
+            if name.endswith("/HEAD"):            # 'origin/HEAD' e ref simbolico, nao branch
+                continue                          # (list_branches:159-163 filtra igual)
+            remote.append(name)
+        else:
+            local.append(name)
+    return {"local": local, "remote": remote}
+
+
+def _remote_names(cwd: str) -> set[str]:
+    """Nomes dos remotes ('origin', ...). Sem isto, uma branch local chamada 'feat/x' seria
+    classificada como remota so por ter barra. Falha do git remote -> GitError, nunca um set vazio
+    calado (que jogaria TODA branch remota pra coluna 'local')."""
+    p = _run(cwd, "remote")
+    if p.returncode != 0:
+        raise GitError(409, (p.stderr or "git remote falhou").strip())
+    return {l.strip() for l in p.stdout.splitlines() if l.strip()}
 
 
 _BRANCH_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
