@@ -60,7 +60,11 @@ def _entrou_no_composer(name: str, texto: str) -> bool:
     """
     fim = time.monotonic() + _SUBMIT_CHECK_PRAZO
     while True:
-        if _composer_residuo(_capture(name), texto, name):
+        r = _composer_residuo(_capture(name), texto, name)
+        if r is not False:
+            # True = evidencia de que entrou. None = nao da pra provar (cauda curta, pane ilegivel) ->
+            # SEGUE EM FRENTE. Bloquear no "nao sei" faria toda mensagem curta parar de ser enviada, e
+            # e a mesma politica que o _wait_input_ready ja adota: na duvida, envia e avisa.
             return True
         if time.monotonic() >= fim:
             return False
@@ -75,7 +79,9 @@ def _submeteu(name: str, texto: str) -> bool:
     fim = time.monotonic() + _SUBMIT_CHECK_PRAZO
     while True:
         time.sleep(_SUBMIT_CHECK_INTERVALO)
-        if not _composer_residuo(_capture(name), texto, name):
+        # `is not True`: False (limpou) e None (nao sei) valem como submetido — degrada pro
+        # comportamento anterior a esta checagem existir, nunca inventa falha.
+        if _composer_residuo(_capture(name), texto, name) is not True:
             return True
         if time.monotonic() >= fim:
             return False
@@ -186,8 +192,15 @@ def _sem_espaco(s: str) -> str:
     return re.sub(r"\s+", "", s)
 
 
-def _composer_residuo(pane: str, texto: str, nome_sessao: str = "") -> bool:
-    """True = a cauda do texto que a gente digitou AINDA esta no composer, ou seja o Enter nao submeteu.
+def _composer_residuo(pane: str, texto: str, nome_sessao: str = "") -> bool | None:
+    """True = a cauda esta no composer. False = NAO esta. None = NAO DA PRA SABER.
+
+    Tres estados e nao dois: o mesmo "nao sei" precisa cair pra lados OPOSTOS nos dois chamadores.
+    Pro _submeteu (residuo sumiu? entao submeteu) "nao sei" tem de virar "segue em frente"; pro
+    _entrou_no_composer (a cauda apareceu? entao entrou) "nao sei" NAO pode virar "nao entrou", senao
+    o Enter nunca e enviado. Com dois estados isso virou regressao real: cauda curta ("ok", "sim",
+    "pode fazer") devolvia False, o _entrou_no_composer lia como "nao chegou" e TODA mensagem curta
+    parava de ser enviada. Achado no review, com medicao.
 
     Le a ultima linha de prompt do pane (a que comeca com ❯) e o que vem depois dela. Compara com a
     CAUDA do texto enviado, nao com o texto todo: assim uma digitacao do usuario no composer nao vira
@@ -202,7 +215,7 @@ def _composer_residuo(pane: str, texto: str, nome_sessao: str = "") -> bool:
     # usuario estiver digitando ao vivo no composer, e o preco de um falso positivo e o remetente
     # reenviar em cima do residuo. Sem cauda longa o bastante, degrada pro comportamento de hoje.
     if len(_sem_espaco(cauda)) < _RESIDUO_MIN:
-        return False
+        return None      # cauda curta demais pra provar qualquer coisa — nao e "nao esta"
     linhas = pane.split("\n")
     # Regiao do composer = entre as DUAS ULTIMAS reguas. Nao basta procurar a ultima linha que comeca
     # com ❯: no Claude Code o ECO da mensagem JA SUBMETIDA tambem comeca com ❯, e num redraw incompleto
@@ -227,7 +240,7 @@ def _composer_residuo(pane: str, texto: str, nome_sessao: str = "") -> bool:
         # com o marcador de TUI (`╰─` do Pi, "mode on" do Claude), que por isso ganhou o
         # _warn_ready_timeout_once. Mesmo remedio aqui.
         _warn_composer_ilegivel_once(nome_sessao)
-        return False
+        return None      # pane ilegivel: incerteza, nao ausencia
     composer = "\n".join(linhas[reguas[-2]:reguas[-1] + 1])
     # Compara SEM espaco em branco: o wrap de exibicao quebra a linha no meio da cauda (recado longo de
     # um paragrafo so passa de 200 colunas e quebra), e ai um `cauda in composer` cru falhava justamente

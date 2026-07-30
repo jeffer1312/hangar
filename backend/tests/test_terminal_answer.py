@@ -400,10 +400,11 @@ def test_composer_residuo_ignora_digitacao_do_usuario():
                                 "linha um\nlinha final do recado") is False
 
 
-def test_composer_residuo_pane_ilegivel_nunca_inventa_falha():
-    # Sem linha de prompt (pane em overlay/ilegivel) -> False: degrada pro comportamento de hoje.
-    assert ti._composer_residuo("tela sem prompt nenhum\nnada aqui", "qualquer texto") is False
-    assert ti._composer_residuo("", "qualquer texto") is False
+def test_composer_residuo_pane_ilegivel_devolve_none_nao_false():
+    # None e nao False: "nao sei ler" tem de cair pra lados OPOSTOS nos dois chamadores. Como False,
+    # o _entrou_no_composer lia "nao chegou" e nunca mandava Enter.
+    assert ti._composer_residuo("tela sem prompt nenhum\nnada aqui", "qualquer texto longo aqui") is None
+    assert ti._composer_residuo("", "qualquer texto longo aqui") is None
 
 
 def test_send_prompt_multilinha_que_nao_submete_devolve_partial():
@@ -447,8 +448,29 @@ def test_send_prompt_multilinha_que_o_multiplexador_nao_entrega():
          patch.object(ti.tmux, "paste_text", lambda name, t: None), \
          patch.object(ti.time, "sleep", lambda *_: None), \
          patch.object(ti, "send_keys", send_keys_espiao):
-        assert ti.TerminalInput().send_prompt("s", "linha um\nlinha dois\ncauda longa") == "partial"
+        assert ti.TerminalInput().send_prompt(
+            "s", "linha um\nlinha dois\ncauda longa o bastante pra ser prova") == "partial"
     assert "Enter" not in teclas
+
+
+def test_multilinha_com_cauda_curta_nao_da_pra_provar_e_segue():
+    # O outro lado da moeda, explicito pra ninguem "consertar" isso achando que e bug: com cauda curta
+    # a ausencia NAO e demonstravel (o composer vazio nao distingue "nao entrou" de "nada a procurar"),
+    # entao o envio segue em vez de travar. E a mesma politica do _wait_input_ready: na duvida, envia.
+    capture, send_keys, _p, _ = _tui_duas_fases()
+    teclas = []
+
+    def espiao(name, k, **kw):
+        teclas.append(k)
+        return send_keys(name, k, **kw)
+
+    with patch.object(ti.tmux, "has_session", return_value=True), \
+         patch.object(ti, "_capture", capture), \
+         patch.object(ti.tmux, "paste_text", lambda name, t: None), \
+         patch.object(ti.time, "sleep", lambda *_: None), \
+         patch.object(ti, "send_keys", espiao):
+        assert ti.TerminalInput().send_prompt("s", "linha um\nok") == "sent"
+    assert "Enter" in teclas
 
 
 def test_composer_residuo_ignora_o_eco_da_mensagem_submetida():
@@ -468,7 +490,7 @@ def test_composer_residuo_ignora_o_eco_da_mensagem_submetida():
 
 def test_composer_residuo_sem_reguas_nao_arrisca():
     # Pane sem as duas reguas (overlay, TUI de outro desenho) -> False: nunca inventa falha.
-    assert ti._composer_residuo("❯ cauda do recado\nsem reguas aqui", "x\ncauda do recado") is False
+    assert ti._composer_residuo("❯ cauda do recado\nsem reguas aqui", "x\ncauda do recado") is None
 
 
 def test_submeteu_tolera_leitura_stale_na_primeira_tentativa():
@@ -498,8 +520,8 @@ def test_composer_ilegivel_avisa_uma_vez_por_sessao(caplog):
     pane = "tela sem regua nenhuma\nnada aqui"
     with caplog.at_level("WARNING", logger="claude_pocket.terminal_input"):
         # cauda longa o bastante pra passar do _RESIDUO_MIN e chegar na checagem das reguas
-        assert ti._composer_residuo(pane, "x\ncauda longa do recado aqui", "sessao-x") is False
-        assert ti._composer_residuo(pane, "x\ncauda longa do recado aqui", "sessao-x") is False
+        assert ti._composer_residuo(pane, "x\ncauda longa do recado aqui", "sessao-x") is None
+        assert ti._composer_residuo(pane, "x\ncauda longa do recado aqui", "sessao-x") is None
     assert len([r for r in caplog.records if "composer" in r.getMessage()]) == 1
     ti._COMPOSER_WARNED.clear()
 
@@ -531,3 +553,23 @@ def test_composer_residuo_pega_cauda_quebrada_por_wrap():
             + "─" * 100 + "\n"
             "  ⏵⏵ auto mode on\n")
     assert ti._composer_residuo(pane, texto) is True
+
+
+def test_mensagem_curta_continua_sendo_enviada():
+    # REGRESSAO que o review pegou (com medicao): com dois estados, cauda curta devolvia False, o
+    # _entrou_no_composer lia "nao chegou" e o Enter NUNCA saia — "ok", "sim", "pode fazer" e resposta
+    # de picker parariam de ser enviadas. Com None ("nao da pra provar"), segue em frente.
+    for curta in ("ok", "sim", "pode fazer", "2"):
+        capture, send_keys, _paste, _ = _tui_duas_fases()
+        teclas = []
+
+        def espiao(name, k, **kw):
+            teclas.append(k)
+            return send_keys(name, k, **kw)
+
+        with patch.object(ti.tmux, "has_session", return_value=True), \
+             patch.object(ti, "_capture", capture), \
+             patch.object(ti.time, "sleep", lambda *_: None), \
+             patch.object(ti, "send_keys", espiao):
+            assert ti.TerminalInput().send_prompt("s", curta) == "sent", curta
+        assert teclas == [curta, "Enter"], curta
