@@ -768,7 +768,8 @@ export function checkoutBranch(name: string, branch: string): Promise<{ current:
   });
 }
 
-export type GitAction = 'status' | 'pull' | 'fetch' | 'stash' | 'stash-pop' | 'log';
+export type GitAction = 'status' | 'pull' | 'fetch' | 'stash' | 'stash-pop' | 'log'
+  | 'revert-abort' | 'cherry-pick-abort';
 
 export function gitAction(name: string, action: GitAction): Promise<{ ok: boolean; output: string }> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git`, {
@@ -803,6 +804,53 @@ export function getCommitFileDiff(name: string, sha: string, path: string): Prom
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/commit/${encodeURIComponent(sha)}/diff?${q}`);
 }
 
+// Diff unificado do commit INTEIRO (todos os arquivos) — a "Show changes as unified diff" do Tortoise.
+export function getCommitDiff(name: string, sha: string): Promise<{ sha: string; diff: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/commit/${encodeURIComponent(sha)}/diff-full`);
+}
+
+export function gitRevert(name: string, sha: string): Promise<{ ok: boolean; output: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/revert`, {
+    method: 'POST', body: JSON.stringify({ sha }),
+  });
+}
+
+export function gitCherryPick(name: string, sha: string): Promise<{ ok: boolean; output: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/cherry-pick`, {
+    method: 'POST', body: JSON.stringify({ sha }),
+  });
+}
+
+export type GitResetMode = 'soft' | 'mixed' | 'hard';
+
+export function gitReset(name: string, sha: string, mode: GitResetMode): Promise<{ ok: boolean; output: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/reset`, {
+    method: 'POST', body: JSON.stringify({ sha, mode }),
+  });
+}
+
+export function gitCreateBranch(name: string, opts: { name: string; sha?: string; switch_after?: boolean }): Promise<{ ok: boolean; output: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/branch`, {
+    method: 'POST', body: JSON.stringify(opts),
+  });
+}
+
+export function gitCreateTag(name: string, opts: { name: string; sha?: string; message?: string }): Promise<{ ok: boolean; output: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/tag`, {
+    method: 'POST', body: JSON.stringify(opts),
+  });
+}
+
+// Commit vs o DISCO agora — o "Compare with working tree" do Tortoise.
+export function getCommitDiffVsWorktree(name: string, sha: string): Promise<{ sha: string; diff: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/commit/${encodeURIComponent(sha)}/diff-worktree`);
+}
+
+// Branches (locais e remotas) que contêm o commit.
+export function getCommitBranches(name: string, sha: string): Promise<{ local: string[]; remote: string[] }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/commit/${encodeURIComponent(sha)}/branches`);
+}
+
 // Um commit da view de log. Campos superset (parents/refs) pro detalhe-de-commit e o grafo (fase 2).
 export interface GitCommit {
   hash: string;       // hash completo (âncora do grafo + lookup de detalhe)
@@ -818,8 +866,9 @@ export interface GitCommit {
   passthrough?: number[];  // colunas de outras lanes que cruzam esta linha sem dot (vertical cheia)
 }
 
-export function getGitLog(name: string): Promise<{ commits: GitCommit[] }> {
-  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/log`);
+export function getGitLog(name: string, q?: string): Promise<{ commits: GitCommit[]; filtered?: boolean }> {
+  const qs = q ? `?q=${encodeURIComponent(q)}` : '';
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/log${qs}`);
 }
 
 export function discardFile(name: string, path: string): Promise<{ ok: boolean; path: string }> {

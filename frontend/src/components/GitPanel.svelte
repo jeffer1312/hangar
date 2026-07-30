@@ -3,11 +3,13 @@
   import ChangedFiles from './git/ChangedFiles.svelte';
   import CommitList from './git/CommitList.svelte';
   import CommitDetail from './git/CommitDetail.svelte';
+  import CommitMenu from './git/CommitMenu.svelte';
+  import LogSearch from './git/LogSearch.svelte';
   import CommitBox from './git/CommitBox.svelte';
   import DiffView from './git/DiffView.svelte';
   import GitToolbar from './git/GitToolbar.svelte';
   import type { GitCommit } from '../lib/api';
-  import { getFileDiff, getCommitFileDiff } from '../lib/api';
+  import { getFileDiff, getCommitFileDiff, getCommitDiff, getCommitDiffVsWorktree } from '../lib/api';
   import type { DiffRow } from '../lib/highlight';
   import type { GitStore } from '../lib/gitStore.svelte';
 
@@ -25,6 +27,7 @@
   let diffRows = $state<DiffRow[]>([]);
   let diffLoading = $state(false);
   let diffSha = $state('');  // sha do commit dono do diffPath aberto ('' = diff da working tree)
+  let menuCommit = $state<GitCommit | null>(null);   // commit com o menu de contexto aberto
 
   async function openWtDiff(path: string) {   // diff de arquivo na working tree
     if (git.busy) return;
@@ -70,6 +73,54 @@
       git.busy = '';
     }
   }
+
+  // Diff unificado do commit INTEIRO (menu "Ver diff completo") — mesma zona do diff por arquivo.
+  async function openCommitFullDiff(c: GitCommit) {
+    if (git.busy) return;
+    selected = c;
+    diffSha = c.hash;
+    diffPath = `commit ${c.short}`;
+    diffRows = [];
+    diffLoading = true;
+    git.busy = c.hash;
+    git.error = '';
+    try {
+      const { diff } = await getCommitDiff(git.sessionName, c.hash);
+      const { highlightDiff } = await import('../lib/highlight');
+      diffRows = await highlightDiff(diff, diffPath);
+    } catch (e) {
+      git.error = cleanErr(e);
+      diffPath = '';
+      diffSha = '';
+    } finally {
+      diffLoading = false;
+      git.busy = '';
+    }
+  }
+
+  // Commit vs o disco agora. Titulo diferente pro usuario saber qual dos dois diffs esta vendo.
+  async function openCommitWorktreeDiff(c: GitCommit) {
+    if (git.busy) return;
+    selected = c;
+    diffSha = c.hash;
+    diffPath = `commit ${c.short} ↔ working tree`;
+    diffRows = [];
+    diffLoading = true;
+    git.busy = c.hash;
+    git.error = '';
+    try {
+      const { diff } = await getCommitDiffVsWorktree(git.sessionName, c.hash);
+      const { highlightDiff } = await import('../lib/highlight');
+      diffRows = await highlightDiff(diff, diffPath);
+    } catch (e) {
+      git.error = cleanErr(e);
+      diffPath = '';
+      diffSha = '';
+    } finally {
+      diffLoading = false;
+      git.busy = '';
+    }
+  }
 </script>
 
 <div class="gp">
@@ -77,19 +128,22 @@
   <div class="gp-cols">
     <aside class="gp-left">
       <BranchList {git} filter="" />
-      <ChangedFiles {git} onOpenDiff={openWtDiff} onCommit={() => { selected = null; diffPath = ''; }} />
+      <ChangedFiles {git} onOpenDiff={openWtDiff} onCommit={() => { selected = null; diffPath = ''; menuCommit = null; }} />
     </aside>
     <section class="gp-center">
-      <CommitList commits={git.commits} wtCount={git.files.length}
-        selectedHash={selected === null ? '' : selected?.hash}
-        onSelect={(c) => { selected = c; diffPath = ''; diffSha = ''; }} />
+      <LogSearch {git} />
+      <CommitList commits={git.commits} wtCount={git.logQuery ? 0 : git.files.length}
+        selectedHash={selected === null ? '' : selected?.hash} noGraph={!!git.logQuery}
+        onSelect={(c) => { selected = c; diffPath = ''; diffSha = ''; }}
+        onMenu={(c) => (menuCommit = c)} />
     </section>
     <section class="gp-right">
       {#if selected === null}
         <CommitBox {git} />
       {:else if selected}
         {@const sha = selected.hash}
-        <CommitDetail commit={selected} sessionName={git.sessionName} onOpenFile={(p) => openCommitDiff(sha, p)} />
+        <CommitDetail commit={selected} sessionName={git.sessionName} onOpenFile={(p) => openCommitDiff(sha, p)}
+          onMenu={(c) => (menuCommit = c)} />
         {#if diffPath && diffSha}<DiffView path={diffPath} rows={diffRows} loading={diffLoading} />{/if}
       {:else if diffPath}
         <DiffView path={diffPath} rows={diffRows} loading={diffLoading} />
@@ -99,7 +153,11 @@
     </section>
   </div>
   {#if git.output}<pre class="git-output">{git.output}</pre>{/if}
-  {#if git.error}<p class="git-error">{git.error}</p>{/if}
+  {#if git.error && !menuCommit}<p class="git-error">{git.error}</p>{/if}
+  {#if menuCommit}
+    <CommitMenu commit={menuCommit} {git} onClose={() => (menuCommit = null)}
+      onShowDiff={openCommitFullDiff} onShowWorktreeDiff={openCommitWorktreeDiff} />
+  {/if}
 </div>
 
 <style>

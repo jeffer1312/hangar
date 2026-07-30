@@ -6,6 +6,8 @@
     onLog: () => void;
   }
   let { git, onLog }: Props = $props();
+
+  let confirmAbort = $state(false);
 </script>
 
 <div class="git-actions">
@@ -16,6 +18,15 @@
   <button class="git-act" disabled={!!git.busy} onclick={() => git.doPush()} title="envia os commits (git push)">push</button>
   <button class="git-act" disabled={!!git.busy} onclick={() => git.runAction('stash')} title="guarda as mudanças (git stash)">stash</button>
   <button class="git-act" disabled={!!git.busy} onclick={() => git.runAction('stash-pop')} title="reaplica o último stash">pop</button>
+  {#if git.pendingAbort}
+    {#if confirmAbort}
+      <button class="git-act git-abort" disabled={!!git.busy} onclick={() => git.abortOp()}>confirmar abort</button>
+      <button class="git-act" onclick={() => (confirmAbort = false)}>não</button>
+    {:else}
+      <button class="git-act git-abort" disabled={!!git.busy}
+        onclick={() => (confirmAbort = true)} title="desiste da operação em conflito">abort…</button>
+    {/if}
+  {/if}
 </div>
 
 <style>
@@ -27,4 +38,5 @@
     cursor: pointer;
   }
   .git-act:disabled { opacity: 0.5; cursor: default; }
+  .git-abort { color: var(--error); border-color: color-mix(in srgb, var(--error) 50%, transparent); }
 </style>

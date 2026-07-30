@@ -4,10 +4,12 @@
   interface Props {
     commits: GitCommit[];
     onSelect: (c: GitCommit | null) => void;
+    onMenu?: (c: GitCommit) => void;   // opcional: reusos sem menu (ex.: histórico de arquivo) omitem
     selectedHash?: string;
     wtCount?: number;
+    noGraph?: boolean;   // busca no log: sem grafo (a lista tem buracos e as arestas apontariam pro nada)
   }
-  let { commits, onSelect, selectedHash, wtCount = 0 }: Props = $props();
+  let { commits, onSelect, onMenu, selectedHash, wtCount = 0, noGraph = false }: Props = $props();
 
   // ── Grafo de commits: coluna de lanes (dots + linhas) a esquerda de cada commit na view de log.
   // Historico linear -> uma coluna so. Cap de lanes pra nao estourar o sheet estreito.
@@ -32,31 +34,39 @@
   {/if}
   {#each commits as c (c.hash)}
     {@const cx = laneX(c.col ?? 0)}
-    <button class="git-commit" class:sel={selectedHash === c.hash} onclick={() => onSelect(c)} title={c.subject}>
-      <svg class="git-graph" width={graphW} height={GRAPH_H} viewBox="0 0 {graphW} {GRAPH_H}" aria-hidden="true">
-        <!-- lanes de OUTRAS branches que cruzam esta linha (vertical cheia, sem dot) -->
-        {#each c.passthrough ?? [] as pc (pc)}
-          {@const px = laneX(pc)}
-          <line x1={px} y1="0" x2={px} y2={GRAPH_H} stroke={laneColor(pc)} stroke-width="2" />
-        {/each}
-        <!-- lane subindo (conecta ao commit acima na mesma coluna) -->
-        <line x1={cx} y1="0" x2={cx} y2={GRAPH_H / 2} stroke={laneColor(c.col ?? 0)} stroke-width="2" />
-        <!-- arestas descendo pros parents (merge = curva) -->
-        {#each c.edges ?? [] as e, k (k)}
-          {@const tx = laneX(e.to_col)}
-          {#if e.curved && tx !== cx}
-            <path d="M{cx} {GRAPH_H / 2} C {cx} {GRAPH_H - 6}, {tx} {GRAPH_H / 2 + 4}, {tx} {GRAPH_H}" stroke={laneColor(e.to_col)} stroke-width="2" fill="none" />
-          {:else}
-            <line x1={cx} y1={GRAPH_H / 2} x2={tx} y2={GRAPH_H} stroke={laneColor(e.to_col)} stroke-width="2" />
-          {/if}
-        {/each}
-        <circle cx={cx} cy={GRAPH_H / 2} r={GRAPH_R} fill={laneColor(c.col ?? 0)} />
-      </svg>
-      <span class="git-c-hash">{c.short}</span>
-      {#if c.refs}<span class="git-c-ref">{c.refs.split(', ')[0].replace('HEAD -> ', '')}</span>{/if}
-      <span class="git-c-sub">{c.subject}</span>
-      <span class="git-c-when">{c.rel}</span>
-    </button>
+    <div class="git-commit-row">
+      <button class="git-commit" class:sel={selectedHash === c.hash} onclick={() => onSelect(c)} title={c.subject}>
+        {#if !noGraph}
+          <svg class="git-graph" width={graphW} height={GRAPH_H} viewBox="0 0 {graphW} {GRAPH_H}" aria-hidden="true">
+            <!-- lanes de OUTRAS branches que cruzam esta linha (vertical cheia, sem dot) -->
+            {#each c.passthrough ?? [] as pc (pc)}
+              {@const px = laneX(pc)}
+              <line x1={px} y1="0" x2={px} y2={GRAPH_H} stroke={laneColor(pc)} stroke-width="2" />
+            {/each}
+            <!-- lane subindo (conecta ao commit acima na mesma coluna) -->
+            <line x1={cx} y1="0" x2={cx} y2={GRAPH_H / 2} stroke={laneColor(c.col ?? 0)} stroke-width="2" />
+            <!-- arestas descendo pros parents (merge = curva) -->
+            {#each c.edges ?? [] as e, k (k)}
+              {@const tx = laneX(e.to_col)}
+              {#if e.curved && tx !== cx}
+                <path d="M{cx} {GRAPH_H / 2} C {cx} {GRAPH_H - 6}, {tx} {GRAPH_H / 2 + 4}, {tx} {GRAPH_H}" stroke={laneColor(e.to_col)} stroke-width="2" fill="none" />
+              {:else}
+                <line x1={cx} y1={GRAPH_H / 2} x2={tx} y2={GRAPH_H} stroke={laneColor(e.to_col)} stroke-width="2" />
+              {/if}
+            {/each}
+            <circle cx={cx} cy={GRAPH_H / 2} r={GRAPH_R} fill={laneColor(c.col ?? 0)} />
+          </svg>
+        {/if}
+        <span class="git-c-hash">{c.short}</span>
+        {#if c.refs}<span class="git-c-ref">{c.refs.split(', ')[0].replace('HEAD -> ', '')}</span>{/if}
+        <span class="git-c-sub">{c.subject}</span>
+        <span class="git-c-when">{c.rel}</span>
+      </button>
+      {#if onMenu}
+        <button class="git-mini" aria-label="ações do commit" title="ações do commit"
+          onclick={() => onMenu(c)}>⋯</button>
+      {/if}
+    </div>
   {/each}
   {#if !commits.length}<p class="git-muted">sem commits</p>{/if}
 </div>
@@ -72,11 +82,18 @@
 
   /* ── log: uma linha por commit (sem wrap; assunto com ellipsis) ── */
   .git-log { gap: 0; }
+  .git-commit-row { display: flex; align-items: center; gap: var(--space-1); }
   .git-commit {
-    display: flex; align-items: center; gap: var(--space-2); width: 100%;
+    display: flex; align-items: center; gap: var(--space-2); flex: 1; min-width: 0;
     padding: 0 var(--space-2); min-height: 44px; border-radius: var(--radius-md);
     background: transparent; text-align: left; cursor: pointer;
   }
+  .git-mini {
+    flex-shrink: 0; padding: var(--space-1) var(--space-2); border-radius: var(--radius-md);
+    border: 1px solid var(--border-default); background: var(--bg-elevated);
+    color: var(--text-muted); font-size: var(--text-xs); cursor: pointer;
+  }
+  .git-mini:disabled { opacity: 0.5; cursor: default; }
   .git-commit:active { background: var(--bg-elevated); }
   .git-commit.sel { background: var(--bg-elevated); }
   @media (hover: hover) { .git-commit:hover { background: var(--bg-hover); } }
