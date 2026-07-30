@@ -1866,6 +1866,9 @@ async def session_plan(name: str):
         markdown = await asyncio.to_thread(
             lambda: Path(p.path).read_text(encoding="utf-8", errors="replace"))
     except OSError:
+        # plan_progress vem de cache; o arquivo pode ter sumido/perdido permissao entre a leitura
+        # cacheada e esta segunda leitura. Degrada pra markdown vazio, mas NAO engole em silencio.
+        _log.warning("falha lendo markdown do plano path=%s", p.path, exc_info=True)
         markdown = ""
     return {
         "name": p.name, "path": p.path,
