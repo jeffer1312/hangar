@@ -64,6 +64,14 @@ export interface SessionInfo {
   loop_status?: LoopState['status'] | null;
   loop_iter?: number | null;    // iteração atual dentro do loop
   loop_max?: number | null;     // máximo de iterações permitidas
+  // Progresso do plano do superpowers em execução nesta sessão (app/planprog.py). null = sem plano.
+  plan_name?: string | null;        // nome do plano do superpowers em execução
+  plan_task?: number | null;        // Task atual (ordinal, 1-based)
+  plan_task_total?: number | null;
+  plan_done?: number | null;        // steps marcados
+  plan_total?: number | null;
+  plan_complete?: boolean | null;
+  plan_tasks?: [number, number][] | null;   // (done,total) por Task — alimenta a barra segmentada
   // Motor de modelo desta sessão (nome no engines.json). null/undefined = conta Anthropic.
   engine?: string | null;
 }

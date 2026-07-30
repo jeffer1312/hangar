@@ -8,6 +8,7 @@
   import { relativeTime, bubblesFromTail, stateLabels, pairColor, parsePeerMessage, providerTag } from '../lib/format';
   import { parseStatusLine } from '../lib/statusline';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
+  import { planBadge } from '../lib/plan';
   import type { Server } from '../lib/auth';
   import type { ChatEvent } from '../lib/types';
   import type { BoardRow, PendingMsg } from '../screens/Board.svelte';
@@ -350,6 +351,7 @@
   const meta = $derived(parseStatusLine(session.status_line));
 
   const loopChip = $derived(loopBadge(session.loop_status, session.loop_iter, session.loop_max));
+  const planChip = $derived(planBadge(session));
   // Provider do card — só as não-Claude ganham chip (ver providerTag em lib/format).
   const provTag = $derived(providerTag(session.provider));
 </script>
@@ -375,7 +377,7 @@
   </header>
   <!-- Linha de contexto do card: branch/par + infos da statusline (custo, tempo de sessão) — a
        "parte de cima" das infos compartilhadas do turno. Só aparece quando há o que mostrar. -->
-  {#if provTag || session.branch || session.pair_peers?.length || meta?.costUsd != null || meta?.sessionTime || loopChip || session.engine}
+  {#if provTag || session.branch || session.pair_peers?.length || meta?.costUsd != null || meta?.sessionTime || loopChip || session.engine || planChip}
     <div class="bc-sub">
       {#if provTag}
         <!-- Identidade da sessão, não estado: primeiro chip, tinta neutra — o card já usa cor pro
@@ -395,6 +397,9 @@
           style="color: {LOOP_TONE_COLOR[loopChip.tone]}; background: color-mix(in srgb, {LOOP_TONE_COLOR[loopChip.tone]} 16%, transparent);"
           title="Loop runner"
         >{loopChip.label}</span>
+      {/if}
+      {#if planChip}
+        <span class="bc-chip plan-chip" class:plan-chip--done={planChip.complete} title={planChip.title}>{planChip.label}</span>
       {/if}
       {#if session.pair_peers?.length}
         <!-- Mesma chave escopada por servidor que o canvas usa (gid cru colide entre máquinas) —
@@ -610,6 +615,9 @@
     max-width: 11em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     padding: 1px 8px; border-radius: var(--radius-full);
   }
+  /* Progresso do plano do superpowers (Task 3): só as cores — o resto vem do .bc-chip. */
+  .plan-chip { background: var(--accent-dim); color: var(--accent); }
+  .plan-chip--done { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success); }
   /* Provider da sessão (Codex/Pi): rótulo neutro, mesma caixa do engine-chip sem a tinta accent. */
   .prov-chip {
     font-size: 10px; font-weight: 700; letter-spacing: 0.02em;

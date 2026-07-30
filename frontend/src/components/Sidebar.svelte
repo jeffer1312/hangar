@@ -16,6 +16,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, untrackedReason, providerName, providerTag, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
+  import { planBadge } from '../lib/plan';
   import Lottie from './Lottie.svelte';
   import pensando from '../lib/lottie/pensando.json';
   import type { WorkspaceAction, WorkspaceView } from '../lib/workspaceCommands';
@@ -979,7 +980,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   {:else if showBranch(s.branch)}
                     <span class="branch" title="branch git atual">⎇ {s.branch}</span>
                   {/if}
-                  {#if provTag || s.limited || s.then_target || s.pair_peers?.length || s.loop_status || s.engine}
+                  {#if provTag || s.limited || s.then_target || s.pair_peers?.length || s.loop_status || s.engine || s.plan_name}
                     <!-- Chips informativos (⏳/🔗/🤝/↻/⚙) na COLUNA DE TEXTO, nao ao lado do state-chip:
                          inline eles cobriam o cwd em sidebar estreita (mesmo fix do SessionCard mobile). -->
                     <span class="badges-line">
@@ -1004,6 +1005,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                         {@const lb = loopBadge(s.loop_status, s.loop_iter, s.loop_max)}
                         {#if lb}
                           <span class="chain-chip" style="color: {LOOP_TONE_COLOR[lb.tone]}; background: color-mix(in srgb, {LOOP_TONE_COLOR[lb.tone]} 14%, transparent);" title="Loop runner">{lb.label}</span>
+                        {/if}
+                      {/if}
+                      {#if s.plan_name}
+                        {@const pb = planBadge(s)}
+                        {#if pb}
+                          <span class="plan-chip" class:plan-chip--done={pb.complete} title={pb.title}>{pb.label}</span>
                         {/if}
                       {/if}
                       {#if s.engine}
@@ -1751,6 +1758,20 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     padding: 2px 7px; border-radius: var(--radius-full); white-space: nowrap;
     max-width: 96px; overflow: hidden; text-overflow: ellipsis;
     color: var(--accent); background: var(--accent-dim);
+  }
+  /* Progresso do plano do superpowers (Task 3). */
+  .plan-chip {
+    padding: 1px 6px;
+    border-radius: var(--radius-full);
+    background: var(--accent-dim);
+    color: var(--accent);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .plan-chip--done {
+    background: color-mix(in srgb, var(--success) 14%, transparent);
+    color: var(--success);
   }
   /* Motor de modelo (Task 5): sessao rodando fora da conta Anthropic. */
   /* Provider da sessão (Codex/Pi) — só o que NÃO é Claude ganha chip. Tinta neutra de propósito:
