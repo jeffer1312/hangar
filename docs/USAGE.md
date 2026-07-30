@@ -197,27 +197,40 @@ A barra lateral tem dois ajustes em **Aparência** (menu da conta), só no deskt
   **só o conteúdo** (a barra encolhe até onde as sessões terminam e fica flutuando, centralizada).
 
 ### Git
-- **Painel:** ícone de branch abre a tela git da sessão. No **desktop (≥820px)** o painel vira **3
-  zonas** (branches | commits + grafo | detalhe do commit/diff) em vez da lista estreita; no mobile
-  o fluxo de telas continua o mesmo.
-- **Commit:** em "Working tree changes", marque os arquivos desejados (ou **todos**/**nenhum**),
-  escreva a mensagem e confirme — só os arquivos marcados entram no commit (funciona igual em
-  mobile e desktop). O select **mensagens recentes…** reaproveita as últimas 10 mensagens daquela
-  sessão. Dá pra **reescrever o último commit (amend)**: a mensagem vem pré-preenchida e os
-  arquivos marcados dobram nele (com amend, o botão Commit & Push some — push de amend exigiria
-  `--force`). Também dá pra **commitar numa branch nova**, criada a partir da atual.
-- **Push:** botão **Commit & Push** sobe a branch atual (usa o upstream, ou cria com `-u origin` no
-  primeiro push).
-- **Histórico:** tocar/clicar num commit mostra os arquivos alterados e o diff de cada um.
-- **Ações por commit:** o botão **⋯** (na lista de commits ou no detalhe) abre o menu do commit:
+
+O ícone de branch abre o **modal de git** da sessão — o mesmo nas duas views: no desktop ele é um
+modal centrado, no celular uma folha que sobe. O cabeçalho diz de qual repositório é (nome da sessão
+e branch atual), porque o modal também abre pela linha da lista, sem abrir o chat.
+
+Três abas, com a contagem no rótulo:
+
+- **Mudanças** — uma lista só dos arquivos alterados. Cada linha tem o checkbox (entra no commit), o
+  caminho (abre o diff) e o **⟲** (descarta as mudanças daquele arquivo, com confirmação em dois
+  passos). **todos**/**nenhum** marcam tudo ou nada; a sua escolha manual não é refeita pelo poll.
+  Abaixo da lista, a caixa de commit: o select **mensagens recentes…** reaproveita as últimas 10
+  mensagens daquela sessão, **reescrever o último commit (amend)** traz a mensagem preenchida (com
+  amend o botão Commit & Push some — push de amend exigiria `--force`), e dá pra **commitar numa
+  branch nova**, criada a partir da atual. Repo limpo diz que está limpo.
+- **Histórico** — busca, lista de commits com grafo, mensagem completa do commit (assunto **e**
+  corpo) e os arquivos dele. No desktop os painéis convivem empilhados; no celular é drill-down
+  (lista → commit → diff) e o botão voltar sobe um nível. A busca filtra pelo texto da mensagem
+  (`git log --grep`, ignora maiúsculas) e esconde o grafo enquanto está ativa — os commits do meio
+  saem da lista e as linhas não teriam onde ligar.
+- **Branches** — locais e remotas com a atual no topo, e o filtro por nome, que agora existe nas duas
+  views e aparece sempre.
+
+Cada aba lembra em que nível estava: trocar de aba e voltar não perde o lugar.
+
+- **Ações por commit:** o botão **⋯** (na lista ou no painel de arquivos) abre o menu do commit:
   diff completo num único texto, comparar o commit com a working tree, copiar hash/mensagem/detalhes
   completos, ver as branches que contêm aquele commit, criar branch ou tag naquele ponto,
   cherry-pick, revert (cria um commit novo desfazendo) e reset até ali (soft/mixed/hard — o hard
-  pede confirmação dupla). Se um cherry-pick/revert der conflito, o erro do git aparece e um botão
-  **abort** surge na barra de ações para desistir da operação.
-- **Buscar no log:** o campo acima da lista filtra os commits pelo texto da mensagem (`git log
-  --grep`, ignora maiúsculas). Enquanto o filtro está ativo o grafo fica oculto — os commits do meio
-  saem da lista e as linhas do grafo não teriam onde ligar. **limpar** volta a lista completa.
+  pede confirmação dupla).
+- **Ações do repositório:** o **⋯** do cabeçalho traz status, log, fetch, pull, push, stash e pop.
+- **Faixa do rodapé:** mostra o erro do git e a saída do último comando, visível de qualquer aba. Se
+  um cherry-pick/revert der conflito, o aviso e o botão **abortar** ficam ali até você resolver —
+  fechar e reabrir o modal não perde o estado, que é lido do próprio repositório.
+- Sessão cujo diretório não é repositório git diz isso em uma frase, sem despejar a saída do git.
 
 ### Motores de modelo (Kimi, gateway próprio, …)
 

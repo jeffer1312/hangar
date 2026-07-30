@@ -16,8 +16,8 @@
   });
 </script>
 
-<!-- .git-diff-head carrega a mesma costura fina que .git-head:has(.git-back) tinha no GitSheet —
-     o botao "voltar" ficou fora deste componente (GitSheet), entao a borda migrou pra cá pra manter
+<!-- .git-diff-head carrega a mesma costura fina que o cabecalho da folha antiga tinha —
+     o botao "voltar" fica fora deste componente (quem o desenha e a aba), entao a borda migrou pra cá pra manter
      a divisoria exatamente na mesma posicao visual (logo antes do conteudo do diff). -->
 <div class="git-diff-head">
   <span class="git-diff-name">{path}</span>

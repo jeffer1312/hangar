@@ -36,7 +36,7 @@
 
   // Carrega na primeira vez que a aba aparece. Sem isto o log fica vazio: git.load() so faz
   // refresh() (branches + arquivos), quem preenche `commits` e openLog(). Quem chamava openLog
-  // antes era o GitSheet (e SO no desktop) e o botao da GitToolbar — os dois morrem na Task 9.
+  // antes era a folha de git (e SO no desktop) e o botao da toolbar — os dois foram apagados.
   let carregou = false;
   $effect(() => { if (!carregou) { carregou = true; git.openLog(); } });
 

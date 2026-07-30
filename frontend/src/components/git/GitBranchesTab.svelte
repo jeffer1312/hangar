@@ -1,6 +1,6 @@
 <script lang="ts">
   // Aba Branches: a lista mais o campo de filtro. O filtro so existia no celular e ainda
-  // condicionado a "mais de 6 locais ou alguma remota" (GitSheet.svelte:264) — o desktop passava
+  // condicionado a "mais de 6 locais ou alguma remota" — o desktop passava
   // filter="" e ficava sem. Numa aba dedicada ele e incondicional: e a unica coisa que se faz aqui.
   import BranchList from './BranchList.svelte';
   import type { GitStore } from '../../lib/gitStore.svelte';

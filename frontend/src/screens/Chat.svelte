@@ -6,7 +6,7 @@
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
   import UsageSheet from '../components/UsageSheet.svelte';
-  import GitSheet from '../components/GitSheet.svelte';
+  import Git from '../components/Git.svelte';
   import PreviewSheet from '../components/PreviewSheet.svelte';
   import ActivitySheet from '../components/ActivitySheet.svelte';
   import TerminalMirror from '../components/TerminalMirror.svelte';
@@ -1265,7 +1265,7 @@
 
   <UsageSheet open={usageOpen} {status} onClose={() => (usageOpen = false)} />
 
-  <GitSheet open={gitOpen} {sessionName} onClose={() => (gitOpen = false)} />
+  <Git open={gitOpen} {sessionName} {desktop} onClose={() => (gitOpen = false)} />
 
   <RunSheet open={runOpen} {sessionName} onClose={() => (runOpen = false)} onRunningChange={(r) => (runRunning = r)} />
   <MoreSheet open={moreOpen} onClose={() => (moreOpen = false)}

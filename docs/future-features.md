@@ -68,6 +68,11 @@ container flex, `flex-shrink: 0` (ver `23e137d`, os cards nasceram espremidos e 
 
 ## 0. Git manager (EM CONSTRUÇÃO — iniciado 2026-07-03)
 
+> **Nota de 2026-07-30:** a `GitSheet` e o `GitPanel` citados abaixo não existem mais — viraram um
+> modal único com abas (Mudanças / Histórico / Branches), descrito em [`USAGE.md`](USAGE.md#git). O
+> mobile citado como pendente na Fase 1 foi feito, o grafo da Fase 2 também. Leia o que segue como
+> histórico das fases, não como estado atual do código.
+
 Objetivo: transformar a GitSheet num **gerenciador de git** de verdade, aberto pelo **menu de
 contexto** de uma sessão (botão direito) — SEM precisar abrir a conversa. O repo vem da própria
 sessão (`name` + `serverId` já estão no menu). Referência visual do usuário: commit graph estilo

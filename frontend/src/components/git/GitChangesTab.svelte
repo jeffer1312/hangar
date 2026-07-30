@@ -3,6 +3,7 @@
   // descartar) e a lista do CommitBox (com checkbox). Numa aba so, viravam a mesma lista duas vezes.
   // Cada linha carrega as tres acoes: marcar pro commit, abrir o diff, descartar.
   import DiffView from './DiffView.svelte';
+  import CommitBox from './CommitBox.svelte';
   import type { GitStore } from '../../lib/gitStore.svelte';
 
   interface Props {
@@ -30,8 +31,6 @@
   const chosen = $derived(git.files.filter((f) => sel.has(f.path)).map((f) => f.path));
 
   let confirmDiscard = $state('');   // path aguardando confirmacao de descarte
-  let message = $state('');
-  const canCommit = $derived(!!message.trim() && chosen.length > 0 && !git.busy);
 
   // Rotulo curto do status XY do porcelain (M/A/D/R/? -> palavra).
   function fileTag(code: string): string {
@@ -50,15 +49,11 @@
     git.closeDiff();
     onPop();
   }
-  async function commitar() {
-    if (!canCommit) return;
-    if (await git.doCommit(message, chosen)) message = '';
-  }
 </script>
 
 {#snippet lista()}
-  <!-- O aviso de tree suja vinha do ChangedFiles, que morre na Task 9. Ele fala da working tree,
-       entao e aqui que ele mora agora. -->
+  <!-- O aviso de tree suja vinha do ChangedFiles (apagado): ele fala da working tree, entao e
+       aqui que ele mora. -->
   {#if git.dirty && git.files.length}
     <div class="git-warn">working tree suja — troque de branch só depois de commit ou stash</div>
   {/if}
@@ -100,16 +95,8 @@
 {/snippet}
 
 {#snippet caixaDeCommit()}
-  <!-- Caixa minima de proposito: o CommitBox completo (recentes, amend, branch nova) so entra na
-       Task 9, quando ele perde a lista propria. Ate la ele segue intacto e em uso pelo GitSheet —
-       montar os dois agora poria duas listas de arquivos na mesma tela, o que esta aba veio matar. -->
-  <div class="ct-commit">
-    <textarea class="ct-msg" bind:value={message} placeholder="mensagem do commit…" rows="3"
-      autocapitalize="off" spellcheck="false"></textarea>
-    <button class="ct-btn" disabled={!canCommit} onclick={commitar}>
-      Commit{chosen.length ? ` (${chosen.length})` : ''}
-    </button>
-  </div>
+  <!-- O CommitBox perdeu a lista propria e recebe a selecao desta aba: a lista mora num lugar so. -->
+  <CommitBox {git} {chosen} />
 {/snippet}
 
 {#if desktop}
@@ -146,19 +133,6 @@
 
   .ct-sel-row { display: flex; gap: var(--space-2); }
   .ct-check { flex-shrink: 0; margin: 0; }
-
-  .ct-commit { display: flex; flex-direction: column; gap: var(--space-2); }
-  .ct-msg {
-    width: 100%; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md);
-    border: 1px solid var(--border-default); background: var(--bg-base); color: var(--text-primary);
-    font-family: var(--font-mono); font-size: var(--text-sm); resize: vertical;
-  }
-  .ct-btn {
-    padding: var(--space-2) var(--space-3); border-radius: var(--radius-md);
-    border: 1px solid var(--border-default); background: var(--bg-elevated);
-    color: var(--text-primary); font-size: var(--text-sm); cursor: pointer;
-  }
-  .ct-btn:disabled { opacity: 0.5; cursor: default; }
 
   .git-back {
     align-self: flex-start; padding: var(--space-1) var(--space-2); border-radius: var(--radius-md);

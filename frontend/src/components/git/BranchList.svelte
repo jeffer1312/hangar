@@ -1,8 +1,8 @@
 <script lang="ts">
   import type { GitStore } from '../../lib/gitStore.svelte';
 
-  // O input de busca (que escreve em `filter`) fica no GitSheet (header fixo, fora da area que
-  // rola) — aqui so lemos o valor pra filtrar. Ver nota de fidelidade no relatorio da Task 6.
+  // O input de busca (que escreve em `filter`) fica na GitBranchesTab, fora da area que rola —
+  // aqui so lemos o valor pra filtrar.
   interface Props {
     git: GitStore;
     filter: string;

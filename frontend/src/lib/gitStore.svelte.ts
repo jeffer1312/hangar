@@ -1,4 +1,4 @@
-// Estado + ações git compartilhados entre os containers (mobile GitSheet / futuro desktop dock).
+// Estado + ações git do modal de git (Git.svelte -> GitTabs -> as tres abas), nas duas views.
 // .svelte.ts permite runes fora de componente.
 import {
   getBranches, checkoutBranch, gitAction, getGitLog, getChangedFiles,

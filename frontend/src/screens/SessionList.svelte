@@ -12,7 +12,7 @@
   import BottomSheet from '../components/BottomSheet.svelte';
   import ModalDialog from '../components/ModalDialog.svelte';
   import ConfirmSheet from '../components/ConfirmSheet.svelte';
-  import GitSheet from '../components/GitSheet.svelte';
+  import Git from '../components/Git.svelte';
   import LoopSheet from '../components/LoopSheet.svelte';
   import AttentionFeed from '../components/AttentionFeed.svelte';
   import AccountMenu from '../components/AccountMenu.svelte';
@@ -954,7 +954,7 @@
 
   <!-- Gerenciador git aberto pelo botao git do card (repo da sessao, sem abrir o chat). -->
   {#if gitSheet}
-    <GitSheet open={true} sessionName={gitSheet.name} onClose={closeGitSheet} />
+    <Git open={true} sessionName={gitSheet.name} desktop={false} onClose={closeGitSheet} />
   {/if}
 
   <!-- Loop runner aberto pelo botao 🔁 do card (repo da sessao, sem abrir o chat). -->

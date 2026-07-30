@@ -6,7 +6,7 @@
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import SessionContextMenu from './SessionContextMenu.svelte';
   import QrScanner from './QrScanner.svelte';
-  import GitSheet from './GitSheet.svelte';
+  import Git from './Git.svelte';
   import LoopSheet from './LoopSheet.svelte';
 import ConfirmDialog from './ConfirmDialog.svelte';
   import AccountMenu from './AccountMenu.svelte';
@@ -1306,7 +1306,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 
 <!-- Gerenciador git aberto pelo menu de contexto (repo da sessao, sem abrir o chat). -->
 {#if gitSheet}
-  <GitSheet open={true} sessionName={gitSheet.name} onClose={closeGitSheet} />
+  <Git open={true} sessionName={gitSheet.name} desktop={true} onClose={closeGitSheet} />
 {/if}
 
 <!-- Loop runner aberto pelo menu de contexto / botao da linha (repo da sessao, sem abrir o chat). -->

@@ -1,6 +1,11 @@
 # Git Manager — pesquisa de layout (brief + fontes)
 
 > Gerado por workflow multi-agente em 2026-07-03. Alimenta o plano em `docs/superpowers/plans/2026-07-03-git-manager.md`.
+>
+> **Desatualizado a partir de 2026-07-30:** este documento é o registro da pesquisa daquela data e
+> cita `GitSheet.svelte`/`GitPanel.svelte` com números de linha. Os dois foram apagados quando o
+> painel e a folha viraram um modal único com abas (`components/Git.svelte` → `git/GitTabs.svelte` →
+> as três abas). As recomendações de layout seguem valendo; as âncoras de código, não.
 
 # BRIEF DE DESIGN — Git Manager do claude-pocket
 
