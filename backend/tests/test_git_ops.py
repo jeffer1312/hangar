@@ -246,6 +246,24 @@ def test_commit_diff_sha_invalido(tmp_path):
     assert e.value.status == 400
 
 
+def test_commit_diff_truncado_alem_do_teto(tmp_path):
+    d, f = _repo_with_file(tmp_path)
+    f.write_text("x" * (git_ops._DIFF_MAX + 1000))
+    git_ops.commit(d, "arquivo grande", ["tracked.txt"])
+    sha = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
+    result = git_ops.commit_diff(d, sha)
+    assert result["truncated"] is True
+    assert len(result["diff"]) == git_ops._DIFF_MAX
+
+
+def test_commit_diff_nao_trunca_abaixo_do_teto(tmp_path):
+    d, f = _repo_with_file(tmp_path)
+    f.write_text("linha 2\n")
+    git_ops.commit(d, "pequeno", ["tracked.txt"])
+    sha = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
+    assert git_ops.commit_diff(d, sha)["truncated"] is False
+
+
 def test_revert_commit(tmp_path):
     d, f = _repo_with_file(tmp_path)
     sha = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
@@ -287,6 +305,38 @@ def test_abort_actions_na_allowlist(tmp_path):
     assert r["ok"] is False and "revert" in r["output"]
     r = git_ops.git_action(d, "cherry-pick-abort")
     assert r["ok"] is False and "cherry-pick" in r["output"]
+
+
+def test_sequencer_state_repo_limpo(tmp_path):
+    assert git_ops.sequencer_state(_repo(tmp_path)) is None
+
+
+def test_sequencer_state_cherry_pick_em_conflito(tmp_path):
+    d, f = _repo_with_file(tmp_path)          # tracked.txt = "linha original\n"
+    git_ops._run(d, "switch", "-q", "-c", "feat")
+    f.write_text("linha da feat\n")
+    git_ops._run(d, "commit", "-q", "-am", "muda na feat")
+    sha = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
+    git_ops._run(d, "switch", "-q", "main")
+    f.write_text("linha da main\n")
+    git_ops._run(d, "commit", "-q", "-am", "muda na main")
+    p = git_ops._run(d, "cherry-pick", sha)
+    assert p.returncode != 0                  # conflito real -> sequencer fica em andamento
+    assert git_ops.sequencer_state(d) == "cherry-pick"
+    git_ops._run(d, "cherry-pick", "--abort")
+    assert git_ops.sequencer_state(d) is None
+
+
+def test_sequencer_state_revert_em_conflito(tmp_path):
+    d, f = _repo_with_file(tmp_path)
+    add_sha = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
+    f.write_text("linha original\nlinha extra\n")
+    git_ops._run(d, "commit", "-q", "-am", "extra depois do add")
+    p = git_ops._run(d, "revert", "--no-edit", add_sha)
+    assert p.returncode != 0                  # revert do "add" conflita com a edicao seguinte
+    assert git_ops.sequencer_state(d) == "revert"
+    git_ops._run(d, "revert", "--abort")
+    assert git_ops.sequencer_state(d) is None
 
 
 def test_reset_to_soft_mantem_staged(tmp_path):
@@ -380,6 +430,15 @@ def test_diff_vs_worktree_sha_invalido(tmp_path):
     with pytest.raises(GitError) as e:
         git_ops.diff_vs_worktree(_repo(tmp_path), "HEAD")   # nao casa _SHA_RE
     assert e.value.status == 400
+
+
+def test_diff_vs_worktree_truncado_alem_do_teto(tmp_path):
+    d, f = _repo_with_file(tmp_path)
+    sha = git_ops._run(d, "rev-parse", "HEAD").stdout.strip()
+    f.write_text("y" * (git_ops._DIFF_MAX + 1000))          # mudanca NAO commitada, so no disco
+    result = git_ops.diff_vs_worktree(d, sha)
+    assert result["truncated"] is True
+    assert len(result["diff"]) == git_ops._DIFF_MAX
 
 
 def test_branches_containing(tmp_path):

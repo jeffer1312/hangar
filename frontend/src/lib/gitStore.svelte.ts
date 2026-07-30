@@ -34,9 +34,13 @@ export function createGitStore(sessionName: string) {
     const [b, f] = await Promise.all([getBranches(sessionName), getChangedFiles(sessionName)]);
     branches = b.branches; current = b.current; remotes = b.remotes ?? [];
     dirty = b.dirty ?? false; files = f.files;
+    // pendingAbort vem do DISCO (f.sequencer, lido de CHERRY_PICK_HEAD/REVERT_HEAD), nao so de
+    // memoria de sessao -> sobrevive a load() reabrindo a sheet com um conflito ainda em aberto.
+    pendingAbort = f.sequencer === 'revert' ? 'revert-abort'
+      : f.sequencer === 'cherry-pick' ? 'cherry-pick-abort' : '';
   }
   async function load() {
-    loading = true; error = ''; output = ''; pendingAbort = ''; logQuery = '';
+    loading = true; error = ''; output = ''; logQuery = '';
     try { await refresh(); } catch (e) { error = cleanErr(e); } finally { loading = false; }
   }
   async function pick(b: string) {
@@ -81,8 +85,12 @@ export function createGitStore(sessionName: string) {
       return String(e).includes('409') ? 'conflito' : 'erro';
     } finally {
       // refresh SEMPRE: um cherry-pick conflitado muda a lista de arquivos (conflitos aparecem).
-      // Sem isto a tela segue mostrando o repo de antes do erro.
-      busy = ''; await refresh();
+      // Sem isto a tela segue mostrando o repo de antes do erro. Try/catch proprio: se o refresh
+      // falhar (ex. index.lock transitorio logo apos a operacao), o throw daqui NAO pode substituir
+      // o `return` do try acima e vazar pra fora de um onclick sem await (load/doCommit/discard ja
+      // se protegem assim).
+      busy = '';
+      try { await refresh(); } catch (e) { error = cleanErr(e); }
     }
   }
   async function revert(sha: string) {

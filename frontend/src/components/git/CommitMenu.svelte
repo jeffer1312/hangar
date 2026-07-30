@@ -2,10 +2,8 @@
   import type { GitCommit } from '../../lib/api';
   import { getCommitFiles, getCommitBranches } from '../../lib/api';
   import { portal } from '../../lib/portal';
-  // cleanErr hoje e um const LOCAL dentro de createGitStore (gitStore.svelte.ts:21-23), nao um
-  // export. Promove-lo a export nomeado do modulo (mover pra cima do createGitStore e prefixar
-  // `export`) — o uso interno continua igual, nenhum caller muda.
   import { cleanErr, type GitStore } from '../../lib/gitStore.svelte';
+  import { focusableElements, nextFocusIndex } from '../../lib/focusCycle';
 
   interface Props {
     commit: GitCommit;
@@ -21,6 +19,27 @@
   let tagMsg = $state('');          // mensagem opcional da tag (anotada)
   let confirmAct = $state('');      // 'cherry-pick' | 'revert' | 'hard' aguardando confirm
   let contains = $state<{ local: string[]; remote: string[] } | null>(null);   // branches que contem
+  let containsFailed = $state(false);   // getCommitBranches falhou -> "carregando…" pararia de mentir
+  let menuEl = $state<HTMLElement | null>(null);
+
+  // O menu e portalado pro <body>, fora do sheetEl -> o Tab-trap do BottomSheet (que so conhece os
+  // focaveis DENTRO do sheet) nunca alcança estes itens no desktop, e um usuario de teclado abre o
+  // menu e nao consegue sair dele pro primeiro item. Foca o 1o item no mount e prende o Tab aqui
+  // enquanto o menu existe (mesma logica de ciclo do BottomSheet, via focusCycle compartilhado).
+  $effect(() => {
+    if (menuEl) focusableElements(menuEl)[0]?.focus();
+  });
+  function onMenuKeydown(e: KeyboardEvent) {
+    if (e.key !== 'Tab' || !menuEl) return;
+    e.preventDefault();
+    const elements = focusableElements(menuEl);
+    if (!elements.length) return;
+    const activeIndex = elements.indexOf(document.activeElement as HTMLElement);
+    const nextIndex = activeIndex < 0
+      ? (e.shiftKey ? elements.length - 1 : 0)
+      : nextFocusIndex(activeIndex, elements.length, e.shiftKey ? -1 : 1);
+    elements[nextIndex].focus();
+  }
 
   // Fecha so no sucesso: no erro o git.error aparece no pe do menu e ele fica aberto (falha aparece).
   async function run(fn: () => Promise<boolean>) {
@@ -55,9 +74,10 @@
   async function loadBranches() {
     mode = 'branches';
     contains = null;
+    containsFailed = false;
     // cleanErr tira o "409: " da frente; String(e) mostraria o prefixo cru.
     try { contains = await getCommitBranches(git.sessionName, commit.hash); }
-    catch (e) { git.error = cleanErr(e); }
+    catch (e) { git.error = cleanErr(e); containsFailed = true; }
   }
 </script>
 
@@ -68,7 +88,7 @@
   if (e.key === 'Escape') { e.stopImmediatePropagation(); e.preventDefault(); onClose(); }
 }} />
 <div use:portal class="cm-back" onclick={onClose} role="presentation"></div>
-<div use:portal class="cm" role="menu" aria-label="ações do commit {commit.short}">
+<div use:portal bind:this={menuEl} onkeydown={onMenuKeydown} tabindex="-1" class="cm" role="menu" aria-label="ações do commit {commit.short}">
   {#if mode === 'menu'}
     <p class="cm-title">commit {commit.short} — {commit.subject}</p>
     <button class="cm-item" onclick={() => { onShowDiff(commit); onClose(); }}>Ver diff completo</button>
@@ -114,7 +134,9 @@
     </div>
   {:else if mode === 'branches'}
     <p class="cm-title">branches com {commit.short}</p>
-    {#if contains === null}
+    {#if containsFailed}
+      <p class="cm-muted">não deu pra ler as branches</p>
+    {:else if contains === null}
       <p class="cm-muted">carregando…</p>
     {:else if !contains.local.length && !contains.remote.length}
       <p class="cm-muted">nenhuma branch contém este commit</p>
@@ -153,10 +175,16 @@
     border-radius: var(--radius-lg); border: 1px solid var(--border-default);
     background: var(--bg-elevated); box-shadow: 0 8px 30px rgb(0 0 0 / 0.35);
     animation: view-in 200ms var(--ease-out) both;
+    /* Sem teto o menu (550px medido) some abaixo da dobra num viewport baixo (ex. celular deitado,
+       400x480) sem jeito de rolar ate os itens de baixo. */
+    max-height: calc(100dvh - 2 * var(--space-3)); overflow-y: auto;
   }
   @keyframes view-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
   @media (min-width: 820px) {
-    .cm { left: 50%; right: auto; bottom: auto; top: 30%; transform: translateX(-50%);
+    /* Centrado (nao "top: 30%"): com top fixo, um menu alto em viewport baixo comecava ACIMA da
+       tela (medido: -82px em 1280x720 com top:30%=216px + 550px de altura). Centrado vertical, o
+       teto acima garante que ele nunca passa da tela pra cima OU pra baixo. */
+    .cm { left: 50%; right: auto; bottom: auto; top: 50%; transform: translate(-50%, -50%);
       width: 340px; animation: none; }
   }
   .cm-title { margin: 0; padding: var(--space-1) var(--space-2); font-size: var(--text-xs);

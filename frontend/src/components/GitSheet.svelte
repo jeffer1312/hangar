@@ -38,6 +38,7 @@
   let diffPath = $state('');    // arquivo aberto no diff viewer (qual)
   let diffRows = $state<DiffRow[]>([]);   // diff tokenizado (Shiki) pra render
   let diffLoading = $state(false);
+  let diffTruncated = $state(false);   // diff do commit inteiro/vs-worktree cortado em 200KB pelo backend
   let diffSha = $state('');     // sha do commit dono do diff aberto ('' = diff da working tree)
   let logLoading = $state(false);
   let commitSel = $state<GitCommit | null>(null);  // commit aberto no detalhe (view 'commit')
@@ -68,7 +69,7 @@
   // No desktop tambem abre o log de cara: o GitPanel precisa dos commits no centro.
   $effect(() => {
     if (open) {
-      filter = ''; view = 'list'; diffPath = ''; diffSha = ''; menuCommit = null;
+      filter = ''; view = 'list'; diffPath = ''; diffSha = ''; menuCommit = null; diffTruncated = false;
       git.load().then(() => { if (isDesktop) git.openLog(); });
     }
   });
@@ -78,6 +79,7 @@
     diffSha = '';
     diffPath = path;
     diffRows = [];
+    diffTruncated = false;
     diffLoading = true;
     git.error = '';
     git.busy = path;
@@ -103,6 +105,7 @@
     diffSha = sha;
     diffPath = path;
     diffRows = [];
+    diffTruncated = false;
     diffLoading = true;
     git.error = '';
     git.busy = path;
@@ -129,12 +132,14 @@
     diffSha = c.hash;
     diffPath = `commit ${c.short}`;
     diffRows = [];
+    diffTruncated = false;
     diffLoading = true;
     git.error = '';
     git.busy = c.hash;
     view = 'diff';
     try {
-      const { diff } = await getCommitDiff(sessionName, c.hash);
+      const { diff, truncated } = await getCommitDiff(sessionName, c.hash);
+      diffTruncated = truncated;
       const { highlightDiff } = await import('../lib/highlight');
       diffRows = await highlightDiff(diff, diffPath);
     } catch (e) {
@@ -154,12 +159,14 @@
     diffSha = c.hash;
     diffPath = `commit ${c.short} ↔ working tree`;
     diffRows = [];
+    diffTruncated = false;
     diffLoading = true;
     git.error = '';
     git.busy = c.hash;
     view = 'diff';
     try {
-      const { diff } = await getCommitDiffVsWorktree(sessionName, c.hash);
+      const { diff, truncated } = await getCommitDiffVsWorktree(sessionName, c.hash);
+      diffTruncated = truncated;
       const { highlightDiff } = await import('../lib/highlight');
       diffRows = await highlightDiff(diff, diffPath);
     } catch (e) {
@@ -199,7 +206,7 @@
     <!-- Visualizador de diff: ocupa a sheet no lugar da lista (volta pelo botao). -->
     <div class="git">
       <button class="git-back" onclick={() => (view = diffSha ? 'commit' : 'list')} aria-label="Voltar">‹ voltar</button>
-      <DiffView path={diffPath} rows={diffRows} loading={diffLoading} />
+      <DiffView path={diffPath} rows={diffRows} loading={diffLoading} truncated={diffTruncated} />
     </div>
   {:else if view === 'log'}
     <!-- Log dedicado: uma linha por commit (hash + ref + assunto + data). Tap abre o detalhe. -->
