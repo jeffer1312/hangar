@@ -23,6 +23,7 @@ import type {
   PiModelsResponse,
   LoopState,
   UploadFile,
+  PlanDetail,
 } from './types';
 
 // URL da idx-ésima imagem (colada no terminal) de uma msg do transcript. `?token` porque <img> não
@@ -602,6 +603,27 @@ export function patchConfig(mudancas: Record<string, unknown>): Promise<{ campos
 
 export function patchConfigForServer(s: Server, mudancas: Record<string, unknown>): Promise<{ campos: Record<string, CampoConfig> }> {
   return apiFetchForServer(s, '/api/config', { method: 'POST', body: JSON.stringify(mudancas) });
+}
+
+// Detalhe do plano em execução (Task/Step, markdown cru). 404 = sem plano ativo, NÃO é erro — o
+// chamador (PlanPanel) trata null como "nada pra mostrar", não como falha. Por isso um fetch cru
+// em vez de apiFetch/apiFetchForServer: as duas lançam pra qualquer !ok, inclusive 404.
+export async function getPlan(name: string): Promise<PlanDetail | null> {
+  const res = await fetch(`${getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/plan`, {
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
+  return res.json() as Promise<PlanDetail>;
+}
+
+export async function getPlanForServer(s: Server, name: string): Promise<PlanDetail | null> {
+  const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/plan`, {
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
+  return res.json() as Promise<PlanDetail>;
 }
 
 // ── Motores de modelo ───────────────────────────────────────────────────────
