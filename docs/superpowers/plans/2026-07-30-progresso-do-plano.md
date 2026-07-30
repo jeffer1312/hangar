@@ -105,12 +105,12 @@ Repetidas no relatório final. Formato: **decisão** — alternativa descartada.
   - `StepProgress` (frozen): `title, done, manual`
   - `_reset_caches()`, `_invalidate_discovery()` — só pra teste.
 
-- [ ] **Step 0: Anotar o baseline desta task**
+- [x] **Step 0: Anotar o baseline desta task**
 
 Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest -q 2>&1 | tail -2`
 Anotar o número exato (esperado: `1118 passed, 1 skipped`). Esse é o número a comparar no fim.
 
-- [ ] **Step 1: Escrever os testes que falham**
+- [x] **Step 1: Escrever os testes que falham**
 
 Criar `backend/tests/test_planprog.py`. **Atenção:** o `PLAN_A` abaixo contém um bloco cercado por
 crases dentro da string — é de propósito, é o caso do fence (Bloqueante 1 do pass adversarial).
@@ -340,12 +340,12 @@ def test_formato_real_dos_planos_do_repo():
     assert len(planprog._TASK_RE.findall(raw)) >= 2
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest tests/test_planprog.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.planprog'`
 
-- [ ] **Step 3: Implementar `backend/app/planprog.py`**
+- [x] **Step 3: Implementar `backend/app/planprog.py`**
 
 ```python
 """Progresso do plano do superpowers que uma sessao esta executando.
@@ -580,7 +580,7 @@ def plan_progress(cwd: str | None) -> PlanProgress | None:
         return None
 ```
 
-- [ ] **Step 4: Rodar e ver passar**
+- [x] **Step 4: Rodar e ver passar**
 
 Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest tests/test_planprog.py -q`
 Expected: PASS — 17 testes (`test_formato_real_dos_planos_do_repo` pode dar skip fora deste worktree).
@@ -588,7 +588,7 @@ Expected: PASS — 17 testes (`test_formato_real_dos_planos_do_repo` pode dar sk
 Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest -q 2>&1 | tail -2`
 Expected: o número do Step 0 **+ 17**, zero falha nova.
 
-- [ ] **Step 5: Sanity no plano real (dogfooding do parser)**
+- [x] **Step 5: Sanity no plano real (dogfooding do parser)**
 
 ```bash
 cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run python -c "
@@ -601,7 +601,7 @@ Expected: `progresso-do-plano <n> / 48 tasks: 7 atual: <a task em curso>` — o 
 strip de fence (sem ele daria 53, e `done` começaria em 3 sem nada executado). Medido no arquivo
 real antes de começar.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/app/planprog.py backend/tests/test_planprog.py
