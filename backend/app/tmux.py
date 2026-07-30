@@ -279,10 +279,57 @@ def send_keys(name: str, keys: str, literal: bool = False) -> bool:
     return _run(["tmux", "send-keys", "-t", _pane_target(name), keys]).returncode == 0
 
 
+_TRUNCA_BUFFER: bool | None = None   # cache do probe abaixo (uma vez por processo)
+
+
+def buffer_trunca_no_newline() -> bool:
+    """O multiplexador guarda `\\n` dentro de um paste-buffer, ou corta na primeira quebra?
+
+    MEDIDO no psmux 3.3.7 (Windows): `set-buffer -- "ABC\\nDEF\\nGHI"` devolve rc=0 e grava 3 bytes —
+    so o "ABC". Depois o `paste-buffer` tambem devolve rc=0 ENTREGANDO NADA no composer. Como o
+    paste_text so caia no fallback quando o rc era != 0, o caminho que FUNCIONA (linha a linha com
+    C-j) nunca rodava no Windows: o Enter submetia a primeira linha truncada — ou nada —, o
+    reconcile nao achava o texto no transcript e REDIGITAVA, gerando rajadas de 3 entregas da MESMA
+    primeira linha, ~8s entre elas (_CONFIRM_GRACE). Era isso, e nao um injetor externo, que
+    aparecia como frase isolada repetida no pane. Diagnostico da sessao-irma no Windows, 3/3
+    reprodutivel em sessao descartavel.
+    Por CAPACIDADE e nao por nome de SO — mesma regra do _send_literal/procinfo: pergunta ao
+    multiplexador o que ele faz, em vez de assumir pelo sistema. Um tmux que um dia passe a truncar
+    (ou um psmux que conserte) e tratado certo sem ninguem tocar no codigo.
+    Cacheado: o probe custa 3 chamadas e o comportamento nao muda durante a vida do processo.
+    """
+    global _TRUNCA_BUFFER
+    if _TRUNCA_BUFFER is None:
+        buf, amostra = "cp-probe-nl", "A\nB"
+        try:
+            _run(["tmux", "set-buffer", "-b", buf, "--", amostra])
+            lido = _run(["tmux", "show-buffer", "-b", buf]).stdout
+            _run(["tmux", "delete-buffer", "-b", buf])
+            # Compara o CONTEUDO, nao o rc: o rc mente nos dois passos. show-buffer costuma devolver
+            # com \n final; o que importa e se o "B" (depois da quebra) sobreviveu.
+            _TRUNCA_BUFFER = "B" not in lido
+            if _TRUNCA_BUFFER:
+                _log.warning("multiplexador TRUNCA paste-buffer na primeira quebra de linha "
+                             "(gravou %r de %r) — multi-linha vai direto pro envio linha a linha",
+                             lido, amostra)
+        except Exception:
+            # Probe e best-effort: falhou -> assume o comportamento historico (nao trunca). Pior caso
+            # e continuar como antes deste conserto, nunca pior que antes.
+            _TRUNCA_BUFFER = False
+    return _TRUNCA_BUFFER
+
+
 def paste_text(name: str, text: str) -> None:
     # Envia texto MULTI-LINHA pro pane via bracketed paste: set-buffer + paste-buffer -p. O `-p` faz a
     # TUI (Ink) receber as quebras como newlines DENTRO do input (não submete cada linha). Buffer
     # nomeado (não suja os paste-buffers do usuário) e `-d` apaga depois. Quem submete e o Enter (caller).
+    #
+    # Multiplexador que TRUNCA o buffer na quebra de linha nem tenta o paste-buffer: ali ele devolve
+    # rc=0 mentindo (entrega truncado ou nada), e confiar no rc foi o que manteve o fallback desligado
+    # no Windows. Ver buffer_trunca_no_newline.
+    if buffer_trunca_no_newline():
+        _paste_linha_a_linha(name, text)
+        return
     buf = "cp-prompt"
     _run(["tmux", "set-buffer", "-b", buf, "--", text])
     cp = _run(["tmux", "paste-buffer", "-t", _pane_target(name), "-b", buf, "-p", "-d"])

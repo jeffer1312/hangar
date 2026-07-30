@@ -49,8 +49,29 @@ _SUBMIT_CHECK_INTERVALO = 0.15
 _SUBMIT_CHECK_PRAZO = 1.0
 
 
+def _entrou_no_composer(name: str, texto: str) -> bool:
+    """True = a cauda do texto APARECEU no composer, ou seja o multiplexador entregou de fato.
+
+    Evidencia POSITIVA antes do Enter. Sem ela, "composer vazio" e ambiguo: significa tanto "submeteu"
+    quanto "nunca entrou nada" — e o segundo caso e real, medido no psmux, onde set-buffer e
+    paste-buffer devolvem rc=0 sem entregar nada (ver tmux.buffer_trunca_no_newline). Era esse o furo
+    do _submeteu sozinho: ele via composer vazio, concluia entrega, gravava delivered=True, e o
+    reconcile depois redigitava o texto por nao achar no transcript — as rajadas de 3.
+    """
+    fim = time.monotonic() + _SUBMIT_CHECK_PRAZO
+    while True:
+        if _composer_residuo(_capture(name), texto, name):
+            return True
+        if time.monotonic() >= fim:
+            return False
+        time.sleep(_SUBMIT_CHECK_INTERVALO)
+
+
 def _submeteu(name: str, texto: str) -> bool:
-    """True = o composer limpou (submeteu). False = a cauda do texto continua lá depois do prazo."""
+    """True = o composer limpou (submeteu). False = a cauda do texto continua lá depois do prazo.
+
+    So vale como prova DEPOIS do _entrou_no_composer: sozinho, composer vazio nao distingue submissao
+    de nao-entrega."""
     fim = time.monotonic() + _SUBMIT_CHECK_PRAZO
     while True:
         time.sleep(_SUBMIT_CHECK_INTERVALO)
@@ -465,6 +486,13 @@ class TerminalInput:
                 # os 0.05 antigos eram menores que a ingestao MINIMA medida (0.08s) e o Enter
                 # submetia o texto pela metade.
                 time.sleep(_MULTILINE_SUBMIT_SETTLE)
+                if not _entrou_no_composer(name, text):
+                    # NAO aperta Enter: o texto nao chegou no composer, entao o Enter submeteria o que
+                    # estivesse la (a primeira linha truncada, ou nada) como se fosse pedido do usuario.
+                    _log.error("envio PARCIAL name=%s: multi-linha NAO chegou no composer em %.1fs "
+                               "(o multiplexador aceitou e nao entregou) — Enter nao enviado",
+                               name, _SUBMIT_CHECK_PRAZO)
+                    return "partial"
                 send_keys(name, "Enter")
                 # CONFERE em vez de confiar no settle. Caso real medido: tres recados longos
                 # cross-server sairam com delivered=True e NUNCA viraram entrada no transcript do
@@ -509,6 +537,10 @@ class TerminalInput:
                 # ponytail: settle fixo; se ainda escapar em device lento, upgrade = capturar o pane e
                 # reenviar Enter se o input nao limpou.
                 time.sleep(_SUBMIT_SETTLE)
+                if not _entrou_no_composer(name, text):
+                    _log.error("envio PARCIAL name=%s: o texto NAO chegou no composer em %.1fs — "
+                               "Enter nao enviado", name, _SUBMIT_CHECK_PRAZO)
+                    return "partial"
                 send_keys(name, "Enter")
                 # Mesma conferencia do ramo multi-linha: e o upgrade que o comentario acima ja anotava
                 # ("capturar o pane e reenviar Enter se o input nao limpou"). Aqui em vez de reenviar
