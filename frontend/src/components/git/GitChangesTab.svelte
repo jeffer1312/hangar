@@ -102,7 +102,9 @@
 {#if desktop}
   <div class="ct-cols">
     <section class="ct-col ct-col-list">{@render lista()}</section>
-    <section class="ct-col ct-col-diff">
+    <!-- Sem diff aberto a coluna do meio nao reserva largura: guardar 5/11 da tela pra frase
+         "selecione um arquivo" espremia a lista e truncava o nome dos arquivos no meio. -->
+    <section class="ct-col ct-col-diff" class:vazia={!git.diffPath}>
       {#if git.diffPath}
         <DiffView path={git.diffPath} rows={git.diffRows} loading={git.diffLoading} truncated={git.diffTruncated} />
       {:else}
@@ -128,6 +130,7 @@
   .ct-col { min-width: 0; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: var(--space-2); }
   .ct-col-list { flex: 3 1 0; }
   .ct-col-diff { flex: 5 1 0; }
+  .ct-col-diff.vazia { flex: 0 1 auto; }
   .ct-col-commit { flex: 3 1 0; }
   .ct-stack { display: flex; flex-direction: column; gap: var(--space-3); }
 
@@ -157,7 +160,9 @@
   .git-file-row { display: flex; align-items: center; gap: var(--space-2); }
   .git-file-row.danger { background: color-mix(in srgb, var(--error) 12%, transparent); border-radius: var(--radius-md); }
   .git-file {
-    flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-2);
+    /* justify-content: o `button` global e inline-flex CENTRADO; sem sobrescrever, a linha que nao
+       enche a largura centraliza o conteudo e o rotulo MOD/NOVO para num x diferente a cada linha. */
+    flex: 1; min-width: 0; display: flex; align-items: center; justify-content: flex-start; gap: var(--space-2);
     padding: var(--space-2); border-radius: var(--radius-md);
     border: 1px solid transparent; background: transparent;
     color: var(--text-secondary); font-size: var(--text-sm); text-align: left; cursor: pointer;
@@ -182,5 +187,11 @@
      ellipsis no inicio, mantendo o fim do dir + o basename visiveis); o basename nunca encolhe. */
   .git-path { display: flex; min-width: 0; align-items: baseline; font-family: var(--font-mono); }
   .git-path-dir { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; color: var(--text-muted); font-size: var(--text-xs); }
-  .git-path-base { flex: 0 0 auto; white-space: nowrap; color: var(--text-secondary); }
+  /* `flex: 0 1 auto` + min-width 0: numa coluna estreita (a lista e 3/11 do modal no desktop) um
+     basename que nao encolhe passa POR BAIXO do botao de descartar. Ele encolhe por ultimo — o dir
+     ao lado cede primeiro —, mas encolhe. */
+  .git-path-base {
+    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; color: var(--text-secondary);
+  }
 </style>

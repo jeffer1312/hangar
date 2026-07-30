@@ -64,7 +64,9 @@
   .git-mini:disabled { opacity: 0.5; cursor: default; }
   .git-muted { margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
   .git-file {
-    display: flex; align-items: center; gap: var(--space-2); min-width: 0;
+    /* justify-content: o `button` global e inline-flex CENTRADO — sem isto a lista de arquivos do
+       commit aparece centralizada no painel, cada linha comecando num x diferente. */
+    display: flex; align-items: center; justify-content: flex-start; gap: var(--space-2); min-width: 0;
     padding: var(--space-2); border-radius: var(--radius-md);
     border: 1px solid transparent; background: transparent;
     color: var(--text-secondary); font-size: var(--text-sm); text-align: left; cursor: pointer;

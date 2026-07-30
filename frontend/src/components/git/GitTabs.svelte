@@ -32,12 +32,20 @@
   // O _run forca LC_ALL=C (git_ops.py), entao a mensagem do git nao vem traduzida e o teste de texto
   // e estavel. O stderr cru NAO aparece: quem abriu a pasta errada nao precisa da linha do git.
   const naoEhRepo = $derived(!!git.error && /not a git repository/i.test(git.error));
+
+  // O diff aberto e do STORE, um so pro modal inteiro (Task 3). Sem fechar na troca, a aba Historico
+  // herdava o diff aberto na aba Mudancas — trocar de aba mostrava o arquivo da outra, com um
+  // "‹ historico" que nao levava a lugar nenhum. Some o diff E o degrau que ele ocupava.
+  function trocarAba(id: GitTabId) {
+    if (git.diffPath) { git.closeDiff(); nav = popLevel(nav); }
+    nav = selectTab(nav, id);
+  }
 </script>
 
 {#if naoEhRepo}
   <p class="gt-muted gt-vazio">esta pasta não é um repositório git</p>
 {:else}
-  <div class="gt">
+  <div class="gt" class:gt-desktop={desktop}>
     <header class="gt-head">
       <div class="gt-id">
         <span class="gt-repo">{git.sessionName}</span>
@@ -57,7 +65,7 @@
       {#each GIT_TABS as t (t.id)}
         {@const n = contagem(t.id)}
         <button class="gt-tab" class:sel={nav.tab === t.id} role="tab" aria-selected={nav.tab === t.id}
-          onclick={() => (nav = selectTab(nav, t.id))}>
+          onclick={() => trocarAba(t.id)}>
           {t.label}{#if n}<span class="gt-count">{n}</span>{/if}
         </button>
       {/each}
@@ -87,6 +95,10 @@
 
 <style>
   .gt { display: flex; flex-direction: column; gap: var(--space-3); min-height: 0; height: 100%; }
+  /* No desktop a folha `centered` tem `height: auto` — dimensiona pelo conteudo. Sem uma altura
+     propria aqui, os paineis com `flex: N 1 0` das abas colapsam pra ZERO (a aba Historico abria com
+     a lista de commits invisivel), e o modal ainda pulava de tamanho a cada troca de aba. */
+  .gt-desktop { height: min(72vh, 720px); }
   .gt-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); flex-shrink: 0; }
   .gt-id { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
   .gt-repo { font-size: var(--text-base); font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

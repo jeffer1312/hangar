@@ -134,9 +134,11 @@
   .ht-pane { min-height: 0; overflow: auto; }
   .ht-search { flex: 0 0 auto; overflow: visible; }
   .ht-list { flex: 4 1 0; }
-  .ht-msg { flex: 2 1 0; }
+  .ht-msg { flex: 3 1 0; }
   .ht-files { flex: 3 1 0; }
-  .ht-empty { flex: 5 1 0; }
+  /* A frase de vazio nao reserva altura: com `flex: 5` ela tomava mais espaco que a propria lista de
+     commits, que aparecia cortada em cinco linhas com o resto da tela em branco. */
+  .ht-empty { flex: 0 0 auto; }
 
   .git-back {
     align-self: flex-start; padding: var(--space-1) var(--space-2); border-radius: var(--radius-md);
