@@ -127,8 +127,12 @@
        tela grande o texto/tabela/code precisam ocupar o espaco — cap deixava metade direita vazia. */
     max-width: 100%;
     word-break: break-word;
-    font-size: var(--text-base);
-    line-height: 1.6;
+    /* As tres medidas do texto sao ajustaveis em Aparencia -> Texto da conversa. A escala e
+       multiplicada AQUI, sobre o padrao desta tela, em vez de um valor absoluto: o celular e o
+       desktop tem numeros diferentes de proposito (ver a media query abaixo), e um valor unico
+       apagaria essa diferenca. Sem preferencia salva, o fallback 1 devolve exatamente o de antes. */
+    font-size: calc(var(--text-base) * var(--cp-text-scale, 1));
+    line-height: calc(1.6 * var(--cp-lh-scale, 1));
   }
 
   .prose :global(p) { margin: 0; }
@@ -234,7 +238,10 @@
      largura) e aumenta a letra. No celular nada disso vale: a linha ja e curta por falta de espaco
      e 16px e o tamanho certo pra tela pequena. */
   @media (min-width: 820px) {
-    .prose { font-size: 17px; line-height: 1.7; }
+    .prose {
+      font-size: calc(17px * var(--cp-text-scale, 1));
+      line-height: calc(1.7 * var(--cp-lh-scale, 1));
+    }
   }
 
   .prose :global(blockquote) {
