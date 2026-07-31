@@ -49,10 +49,22 @@ function apiCorsPreflight(): PluginOption {
   const preflight = (req: IncomingMessage, res: ServerResponse, next: () => void) => {
     if (req.method === 'OPTIONS' && req.url?.startsWith('/api')) {
       const reqHeaders = req.headers['access-control-request-headers'] ?? 'authorization,content-type';
+      // ECOA o metodo pedido, igual ja se faz com os headers acima. Uma LISTA FIXA aqui ja custou
+      // dois bugs: ela nasceu sem PATCH (o /api/config virou POST pra contornar, e o comentario em
+      // backend/app/api.py culpou "o proxy na frente do backend" — o proxy era ESTE plugin) e sem
+      // PUT, o que derrubava salvar motor, encadear sessao e o sync do cofre com "Failed to fetch"
+      // sempre que o servidor alvo era de outra origem. Lista fixa envelhece calada a cada endpoint
+      // novo; eco nao envelhece.
+      // Ecoar nao afrouxa nada: preflight NAO autoriza — quem decide segue sendo o backend (token +
+      // roteamento, que responde 405 em metodo que nao existe), e allow_credentials e false.
+      const reqMethod = req.headers['access-control-request-method'] ?? 'GET,POST,PUT,PATCH,DELETE,OPTIONS';
       res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+      res.setHeader('Access-Control-Allow-Methods', reqMethod);
       res.setHeader('Access-Control-Allow-Headers', reqHeaders);
-      res.setHeader('Access-Control-Max-Age', '86400');
+      // 600s, o mesmo do backend (CORSMiddleware default). Eram 86400: uma resposta de preflight
+      // ERRADA ficava colada no navegador por horas, entao o conserto no servidor nao aparecia pra
+      // quem ja tinha esbarrado no bug — foi o que aconteceu com o PUT dos motores.
+      res.setHeader('Access-Control-Max-Age', '600');
       res.statusCode = 204;
       res.end();
       return;
