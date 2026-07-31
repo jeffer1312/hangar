@@ -1,3 +1,4 @@
+import threading
 from pathlib import Path
 from unittest.mock import call, patch
 
@@ -327,3 +328,106 @@ def test_set_engine_model_aborts_when_command_opens_picker():
 def test_set_engine_model_rejects_argument_with_space():
     with pytest.raises(ValueError):
         TerminalInput().set_engine_model("cc", "k3 --dangerously")
+
+
+# ── achados do review: confirmacao velha, e lock por sessao ──────────────────
+def test_result_model_extrai_o_token_e_nao_casa_por_prefixo():
+    # `k3` e prefixo de `k3-256k`: substring casaria na linha da troca ANTERIOR.
+    velha = "Set model to k3-256k and saved as your default for new sessions"
+    assert "k3" in velha                      # e por isso que substring nao serve
+    assert mp.result_model(velha) == "k3-256k"
+    assert mp.result_model("Set model to k3 and saved as your default") == "k3"
+    assert mp.result_model("Kept model as k3") is None   # so a linha de troca carrega o id
+    assert mp.result_model(None) is None
+
+
+def test_set_engine_model_ignora_a_confirmacao_da_troca_anterior():
+    # Cenario real: sessao estava em k3-256k, usuario pede k3. A linha velha continua na tela e a
+    # nova demora ~1s. Sem comparar o token, a primeira leitura reportava sucesso na hora — sobre a
+    # mensagem da troca passada, antes de esta acontecer.
+    velha = "❯ \n  ⎿  Set model to k3-256k and saved as your default for new sessions\n"
+    nova = velha + "  ⎿  Set model to k3 and saved as your default for new sessions\n"
+    with patch.object(terminal_input.tmux, "capture_pane",
+                      side_effect=[PANE_IDLE, velha, velha, nova]), \
+         patch.object(terminal_input, "send_keys"), \
+         patch.object(terminal_input.tmux, "has_session", return_value=True), \
+         patch.object(terminal_input.time, "sleep"):
+        out = TerminalInput().set_engine_model("cc", "k3")
+    assert mp.result_model(out["result"]) == "k3"   # a confirmacao aceita e a NOVA
+
+
+def test_drivers_do_model_pegam_o_lock_da_sessao():
+    # Dois toques concorrentes digitavam no MESMO tty: o Esc de um fechava o picker que o outro
+    # estava navegando. O lock por sessao ja existia (send_prompt/send_pi_commands); os drivers do
+    # /model precisam pedir o MESMO — o `_require_drivable` nao cobre isso, ele ve spinner e nao ve
+    # outro driver em voo.
+    ti = TerminalInput()
+    resultado = "❯ \n  ⎿  Set model to k3 and saved as your default for new sessions\n"
+    chamadas = [
+        (lambda: ti.list_model_options("cc"), [PANE_IDLE, PANE_FABLE]),
+        (lambda: ti.set_engine_model("cc", "k3"), [PANE_IDLE, resultado]),
+        (lambda: ti.set_model_effort("cc", model="opus"),
+         [PANE_IDLE, PANE_FABLE, PANE_FABLE,
+          "❯ \n  ⎿  Set model to Opus 5 for this session only with high effort\n"]),
+    ]
+    for chamada, panes in chamadas:
+        pedidos: list[str] = []
+        real = terminal_input._send_lock
+
+        def espiao(nome, _pedidos=pedidos, _real=real):
+            _pedidos.append(nome)
+            return _real(nome)
+
+        with patch.object(terminal_input, "_send_lock", espiao), \
+             patch.object(terminal_input.tmux, "capture_pane", side_effect=panes), \
+             patch.object(terminal_input, "send_keys"), \
+             patch.object(terminal_input.tmux, "has_session", return_value=True), \
+             patch.object(terminal_input.time, "sleep"):
+            chamada()
+        assert pedidos == ["cc"], f"driver nao pediu o lock da sessao (pediu {pedidos})"
+
+
+def test_recusa_antes_de_digitar_e_uma_excecao_distinta():
+    # A rota usa isso pra NAO esperar os ~3.6s da escrita do settings.json quando o terminal ficou
+    # intocado — senao todo "sessao ocupada" demora 3.6s pra virar erro na tela.
+    working = ["✻ Crunched for 24s\n❯ \n", "✻ Crunched for 26s\n❯ \n"]
+    with patch.object(terminal_input.tmux, "capture_pane", side_effect=working), \
+         patch.object(terminal_input, "send_keys"), \
+         patch.object(terminal_input.tmux, "has_session", return_value=True), \
+         patch.object(terminal_input.time, "sleep"):
+        with pytest.raises(TerminalInput.NaoDigitou):
+            TerminalInput().set_engine_model("cc", "k3")
+
+
+def test_abrir_picker_insiste_na_leitura_antes_de_arriscar_um_2o_enter():
+    # O 2o Enter existe pro caso do autocomplete engolir o 1o. Mas se o picker JA abriu e a captura
+    # pegou o redraw pela metade, esse Enter confirma a linha sob o cursor COMO DEFAULT — trocando o
+    # modelo padrao do usuario num caminho que era pra ser so leitura (a folha busca a lista sozinha
+    # ao abrir). Entao: relê primeiro, e so manda o 2o Enter se o picker realmente nao veio.
+    meio_redraw = "❯ \n"                      # captura pegou a tela em transicao
+    panes = [PANE_IDLE, meio_redraw, PANE_FABLE]
+    with patch.object(terminal_input.tmux, "capture_pane", side_effect=panes), \
+         patch.object(terminal_input, "send_keys") as sk, \
+         patch.object(terminal_input.tmux, "has_session", return_value=True), \
+         patch.object(terminal_input.time, "sleep"):
+        out = TerminalInput().list_model_options("cc")
+    keys = [c.args[1] for c in sk.call_args_list]
+    assert keys.count("Enter") == 1           # NENHUM Enter extra
+    assert len(out["models"]) == 5
+
+
+def test_espera_o_picker_INTEIRO_antes_de_ler_a_lista():
+    # Medido numa sessao real: no instante em que o titulo aparece, as linhas ainda estao sendo
+    # pintadas — a leitura devolvia 4 modelos, sem o Haiku (a ultima linha). O rodape vem depois das
+    # linhas, entao ele e a prova de que a lista esta completa.
+    meio = PANE_FABLE.replace("     5. Haiku", "").replace(
+        "   Enter to set as default · s to use this session only · Esc to cancel", "")
+    assert mp.picker_open(meio) and not mp.picker_desenhado(meio)
+    panes = [PANE_IDLE, meio, PANE_FABLE]
+    with patch.object(terminal_input.tmux, "capture_pane", side_effect=panes), \
+         patch.object(terminal_input, "send_keys") as sk, \
+         patch.object(terminal_input.tmux, "has_session", return_value=True), \
+         patch.object(terminal_input.time, "sleep"):
+        out = TerminalInput().list_model_options("cc")
+    assert [m["keyword"] for m in out["models"]] == ["default", "opus", "fable", "sonnet", "haiku"]
+    assert [c.args[1] for c in sk.call_args_list].count("Enter") == 1

@@ -2489,16 +2489,27 @@ class EngineModelBody(_StrictBody):
 _ENGINE_MODELS_TTL = 300.0
 _engine_models_cache: dict[str, tuple[float, list[dict]]] = {}
 
-# Catalogo da conta Anthropic: ler o picker DIRIGE O TERMINAL (abre e fecha um overlay na cara de
-# quem estiver olhando o tmux), entao abrir a folha duas vezes nao pode piscar o picker duas vezes.
-# A chave e o config dir, nao a sessao: a lista vem da CONTA, e a mesma pra todas as sessoes dela.
-_CLAUDE_MODELS_TTL = 600.0
+# Catalogo da conta Anthropic: ler o picker DIRIGE O TERMINAL, e isso deixa RASTRO — o `❯ /model` e
+# o `⎿ Kept model as …` (o Esc de saida) ficam no scrollback do tmux pra sempre. Nao aparece no chat
+# do app (entra no jsonl como `type: system`, que o transcript ignora), mas aparece pra quem estiver
+# com aquele terminal aberto: foi o que pareceu bug quando 5 leituras seguidas empilharam ali.
+# Uma hora, e nao dez minutos, porque a lista muda quando a Anthropic lanca modelo ou o plano do
+# usuario muda — nao de minuto em minuto. A chave e o config dir, nao a sessao: a lista vem da
+# CONTA, e a mesma pra todas as sessoes dela.
+_CLAUDE_MODELS_TTL = 3600.0
 _claude_models_cache: dict[str, tuple[float, dict]] = {}
 
 
-async def _engine_models(nome: str) -> list[dict]:
+async def _engine_models(nome: str, fresco: bool = False) -> list[dict]:
+    """Catalogo do provedor. `fresco=True` ignora o cache.
+
+    Quem VALIDA uma troca pede fresco: o cache existe pra folha abrir rapido, mas a promessa do
+    check ("recusa aqui em vez de deixar a falha aparecer so no proximo turno") nao sobrevive a 5
+    minutos de lista velha — modelo tirado do plano passaria pela validacao e falharia depois. Uma
+    chamada de rede numa acao deliberada do usuario e barata; num tick de tela, nao.
+    """
     hit = _engine_models_cache.get(nome)
-    if hit and time.monotonic() - hit[0] < _ENGINE_MODELS_TTL:
+    if hit and not fresco and time.monotonic() - hit[0] < _ENGINE_MODELS_TTL:
         return hit[1]
     cfg = engines.listar().get(nome)
     if not cfg:
@@ -2556,7 +2567,9 @@ async def engine_model_set(name: str, body: EngineModelBody):
         raise HTTPException(404, "sessao nao encontrada")
     if not info.engine:
         raise HTTPException(400, "esta rota so existe pra sessoes que rodam num motor")
-    modelos = await _engine_models(info.engine)
+    # fresco=True: a validacao promete "recusa aqui em vez de deixar a falha aparecer so no proximo
+    # turno", e essa promessa nao sobrevive ao cache de 5 min (ver _engine_models).
+    modelos = await _engine_models(info.engine, fresco=True)
     if not any(m["id"] == body.model for m in modelos):
         # Recusar aqui em vez de digitar: o CC aceitaria o id, a sessao passaria a mandar request
         # pra um modelo que o provedor nao tem, e a falha apareceria so no proximo turno.
@@ -2564,8 +2577,14 @@ async def engine_model_set(name: str, body: EngineModelBody):
 
     cfg_dir = _session_config_dir(name)  # mesma leitura de /proc que resolve o config dir das outras rotas
     antes = await asyncio.to_thread(default_model.snapshot, cfg_dir)
+    digitou = True
     try:
         res = await asyncio.to_thread(terminal.set_engine_model, name, body.model)
+    except TerminalInput.NaoDigitou as e:
+        # Recusado antes de qualquer tecla (sessao ocupada/morta, menu aberto): o settings.json esta
+        # intocado, entao esperar a escrita aterrissar so faria o erro demorar ~3.6s a aparecer.
+        digitou = False
+        raise HTTPException(e.status, e.detail)
     except PickerError as e:
         raise HTTPException(e.status, e.detail)
     except ValueError as e:
@@ -2574,7 +2593,8 @@ async def engine_model_set(name: str, body: EngineModelBody):
         # No finally de proposito: se o comando foi digitado mas a confirmacao nao pode ser lida, o
         # settings.json PODE ja ter sido reescrito — deixar o default global vazado por causa de um
         # erro de leitura seria a pior combinacao.
-        await asyncio.to_thread(default_model.restore_quando_aterrissar, cfg_dir, antes)
+        if digitou:
+            await asyncio.to_thread(default_model.restore_quando_aterrissar, cfg_dir, antes)
 
     if body.effort:
         # Esforco continua saindo do picker (Left/Right): medido que ele funciona igual em sessao de

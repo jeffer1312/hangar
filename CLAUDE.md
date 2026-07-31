@@ -245,8 +245,15 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     Esc). A lista `['default','opus','sonnet','haiku']` chumbada no front envelheceu: o picker real
     tem 5 linhas com o **Fable** entre Opus e Sonnet, então o app escondia um modelo e ainda dava a
     Sonnet/Haiku o número de linha errado. `MODEL_NUMBERS` sobrou só como fallback pra linha rolada
-    pra fora da viewport. Cache de 10 min por config dir: ler a lista **dirige o terminal**, e
-    abrir a folha duas vezes não pode piscar o picker duas vezes.
+    pra fora da viewport. Cache de **1 hora** por config dir porque ler a lista **dirige o
+    terminal** e isso deixa rastro: `❯ /model` + `⎿ Kept model as …` (o Esc de saída) ficam no
+    scrollback do tmux pra sempre. Não polui o chat do app — entra no jsonl como `type: system`,
+    que o `transcript.py` ignora —, mas quem estiver com aquele terminal aberto vê, e cinco
+    leituras empilhadas ali já pareceram bug. Esperar o **rodapé** (`Esc to cancel`), não só o
+    título, antes de parsear: no instante em que o título aparece as linhas ainda estão sendo
+    pintadas e a leitura devolvia 4 modelos, sem o Haiku. E nunca mandar o 2º Enter sem antes
+    reler: se o picker já abriu, esse Enter **confirma como default** a linha sob o cursor — num
+    caminho que era pra ser só leitura.
   - **Sessão de motor** → o `/v1/models` do provedor (o mesmo `engine_probe` da tela de Motores).
     Ali o picker é inútil: lista os 4 aliases, **todos apontando pro mesmo `ANTHROPIC_MODEL`**
     (`Custom Opus model`, `Custom Fable model`, …) — e `gateway_model_discovery: true` não muda
