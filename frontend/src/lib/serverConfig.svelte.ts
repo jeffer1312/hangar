@@ -68,6 +68,9 @@ export function criarConfigServidor(alvo: () => Server | null) {
       if (chave in rascunho) return rascunho[chave];
       return campos[chave]?.valor ?? '';
     },
+    // Segredo NUNCA mostra o valor vindo do servidor (e a mascara, gsk_XXXX...): so o que foi
+    // digitado nesta sessao. Editar em cima da mascara manda a mascara de volta como override real.
+    rascunhoDe(chave: string): string { return (rascunho[chave] as string) ?? ''; },
     setRascunho(chave: string, valor: ValorCampo) { rascunho[chave] = valor; },
     carregar,
     salvar,
