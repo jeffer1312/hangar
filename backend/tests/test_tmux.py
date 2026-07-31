@@ -560,3 +560,20 @@ def test_texto_normal_nao_usa_placeholder(monkeypatch):
     monkeypatch.setattr(tmux, "RUN", lambda args, **k: (chamadas.append(list(args)) or _CP()))
     tmux.send_keys("cc", "texto normal", literal=True)
     assert [c[-1] for c in chamadas] == ["texto normal"]   # uma chamada so, nada de Home/DC
+
+
+def test_session_created_ok():
+    with patch.object(tmux, "RUN", return_value=MagicMock(returncode=0, stdout="1753970000\n")) as run:
+        assert tmux.session_created("cc") == 1753970000.0
+    assert run.call_args[0][0] == ["tmux", "display-message", "-p", "-t", "=cc", "#{session_created}"]
+
+
+def test_session_created_falha_vira_zero():
+    with patch.object(tmux, "RUN", return_value=MagicMock(returncode=1, stdout="")):
+        assert tmux.session_created("cc") == 0.0
+
+
+def test_session_created_nao_numerico_vira_zero():
+    # psmux/variantes podem imprimir lixo: corte inventado seria pior que sem corte.
+    with patch.object(tmux, "RUN", return_value=MagicMock(returncode=0, stdout="abc\n")):
+        assert tmux.session_created("cc") == 0.0

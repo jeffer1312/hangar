@@ -369,7 +369,10 @@ def send_keys(name: str, keys: str, literal: bool = False) -> bool:
     # engolia o submit: o texto ficava parado no pane e o send virava 400 "envio incompleto"
     # (regressão medida em 31/07, sessão Config-pi, print do dono). CR cru é o encoding legado que
     # toda TUI aceita como Enter, com ou sem extended-keys.
-    if keys == "Enter":
+    # POSIX apenas: no psmux (Windows) o CR literal e engolido dentro de -l (medido — ver
+    # buffer_trunca_no_newline: "as linhas chegam GRUDADAS"), e la extended-keys nem e ligado
+    # (docs/tmux.conf.windows.example), entao o Enter nomeado segue sendo o caminho que funciona.
+    if keys == "Enter" and os.name != "nt":
         return _run(["tmux", "send-keys", "-t", _pane_target(name), "-l", "--", "\r"]).returncode == 0
     return _run(["tmux", "send-keys", "-t", _pane_target(name), keys]).returncode == 0
 

@@ -49,7 +49,7 @@ _SUBMIT_CHECK_INTERVALO = 0.15
 _SUBMIT_CHECK_PRAZO = 1.0
 
 
-def _entrou_no_composer(name: str, texto: str) -> bool:
+def _entrou_no_composer(name: str, texto: str, pastes_antes: set[str] | None = None) -> bool:
     """True = a cauda do texto APARECEU no composer, ou seja o multiplexador entregou de fato.
 
     Evidencia POSITIVA antes do Enter. Sem ela, "composer vazio" e ambiguo: significa tanto "submeteu"
@@ -60,7 +60,7 @@ def _entrou_no_composer(name: str, texto: str) -> bool:
     """
     fim = time.monotonic() + _SUBMIT_CHECK_PRAZO
     while True:
-        r = _composer_residuo(_capture(name), texto, name)
+        r = _composer_residuo(_capture(name), texto, name, pastes_antes)
         if r is not False:
             # True = evidencia de que entrou. None = nao da pra provar (cauda curta, pane ilegivel) ->
             # SEGUE EM FRENTE. Bloquear no "nao sei" faria toda mensagem curta parar de ser enviada, e
@@ -71,7 +71,7 @@ def _entrou_no_composer(name: str, texto: str) -> bool:
         time.sleep(_SUBMIT_CHECK_INTERVALO)
 
 
-def _submeteu(name: str, texto: str) -> bool:
+def _submeteu(name: str, texto: str, pastes_antes: set[str] | None = None) -> bool:
     """True = o composer limpou (submeteu). False = a cauda do texto continua lá depois do prazo.
 
     So vale como prova DEPOIS do _entrou_no_composer: sozinho, composer vazio nao distingue submissao
@@ -81,7 +81,7 @@ def _submeteu(name: str, texto: str) -> bool:
         time.sleep(_SUBMIT_CHECK_INTERVALO)
         # `is not True`: False (limpou) e None (nao sei) valem como submetido — degrada pro
         # comportamento anterior a esta checagem existir, nunca inventa falha.
-        if _composer_residuo(_capture(name), texto, name) is not True:
+        if _composer_residuo(_capture(name), texto, name, pastes_antes) is not True:
             return True
         if time.monotonic() >= fim:
             return False
@@ -154,6 +154,10 @@ _DEFAULT_TIMEOUT = 12.0
 _READY_TIMEOUT_WARNED: set[tuple[str, str]] = set()
 # Idem pro composer ilegivel: checagem que morre calada e o mesmo estrago do marcador que para de casar.
 _COMPOSER_WARNED: set[str] = set()
+# Defer por composer do Pi ocupado: o drain roda em TODO reconnect/idle — com um rascunho parado no
+# composer o mesmo WARNING repetiria pra sempre. Uma vez por sessao; sai do set quando desocupa,
+# pra um NOVO episodio avisar de novo.
+_OCUPADO_WARNED: set[str] = set()
 
 
 def _warn_composer_ilegivel_once(name: str) -> None:
@@ -192,7 +196,33 @@ def _sem_espaco(s: str) -> str:
     return re.sub(r"\s+", "", s)
 
 
-def _composer_residuo(pane: str, texto: str, nome_sessao: str = "") -> bool | None:
+# Numeros dos placeholders de paste ("[Pasted text #N +X lines]") numa regiao do pane. A IDENTIDADE
+# importa: aceitar qualquer placeholder fazia um paste ALHEIO (rascunho do usuario) contar como a
+# nossa entrega — o Enter submetia o texto do usuario como se fosse o prompt do agente (achado
+# CRITICO da review de 31/07). So um numero NOVO em relacao a foto tirada ANTES do nosso paste
+# prova alguma coisa.
+_PASTE_ID_RE = re.compile(r"\[Pasted text #(\d+)")
+
+
+def _paste_ids(regiao: str) -> set[str]:
+    return set(_PASTE_ID_RE.findall(regiao))
+
+
+def _composer_regiao(pane: str, nome_sessao: str = "") -> str | None:
+    """Regiao do composer (entre as duas ultimas reguas) ou None se ilegivel (avisa uma vez)."""
+    linhas = pane.split("\n")
+    reguas = [i for i, l in enumerate(linhas) if l.count("─") >= 20]
+    if len(reguas) >= 2 and (
+            len(linhas) - reguas[-1] > _COMPOSER_FUNDO or reguas[-1] - reguas[-2] > _COMPOSER_ALTURA):
+        reguas = []
+    if len(reguas) < 2:
+        _warn_composer_ilegivel_once(nome_sessao)
+        return None
+    return "\n".join(linhas[reguas[-2]:reguas[-1] + 1])
+
+
+def _composer_residuo(pane: str, texto: str, nome_sessao: str = "",
+                      pastes_antes: set[str] | None = None) -> bool | None:
     """True = a cauda esta no composer. False = NAO esta. None = NAO DA PRA SABER.
 
     Tres estados e nao dois: o mesmo "nao sei" precisa cair pra lados OPOSTOS nos dois chamadores.
@@ -216,39 +246,20 @@ def _composer_residuo(pane: str, texto: str, nome_sessao: str = "") -> bool | No
     # reenviar em cima do residuo. Sem cauda longa o bastante, degrada pro comportamento de hoje.
     if len(_sem_espaco(cauda)) < _RESIDUO_MIN:
         return None      # cauda curta demais pra provar qualquer coisa — nao e "nao esta"
-    linhas = pane.split("\n")
-    # Regiao do composer = entre as DUAS ULTIMAS reguas. Nao basta procurar a ultima linha que comeca
-    # com ❯: no Claude Code o ECO da mensagem JA SUBMETIDA tambem comeca com ❯, e num redraw incompleto
-    # (composer novo ainda nao desenhado) o eco seria a ultima — falso "nao submeteu" num envio que deu
-    # certo, que e o pior erro possivel aqui (o usuario reenvia e a mensagem duplica). As reguas sao
-    # estruturais: o eco fica ACIMA delas, sempre.
-    reguas = [i for i, l in enumerate(linhas) if l.count("─") >= 20]
-    # Duas travas contra pegar a regiao ERRADA, achadas com o fixture pane_idle.txt do repo: ele tem
-    # reguas nas linhas 1, 4, 11, 45 e 47 de 51 — a 45/47 e o composer, as de cima sao divisoria do
-    # banner de boas-vindas. Confiar em "as duas ultimas" quebra num redraw que ainda nao desenhou a
-    # regua de BAIXO do composer: o par vira [11, 45] e a "regiao do composer" passa a ser a conversa
-    # inteira, onde esta o ECO da propria mensagem submetida -> falso "nao submeteu" num envio que deu
-    # certo. Logo: a regua de baixo tem de estar no FIM da tela e as duas tem de estar PERTO uma da
-    # outra. Fora disso, ilegivel (nao arrisca).
-    if len(reguas) >= 2 and (
-            len(linhas) - reguas[-1] > _COMPOSER_FUNDO or reguas[-1] - reguas[-2] > _COMPOSER_ALTURA):
-        reguas = []
-    if len(reguas) < 2:
-        # Nao sei ler: devolve False (degrada pro comportamento de antes desta checagem existir, nunca
-        # inventa falha) mas AVISA uma vez por sessao. Sem o aviso, um provider que mude o desenho
-        # deixaria a checagem inerte PARA SEMPRE e ninguem descobriria — e exatamente o que aconteceu
-        # com o marcador de TUI (`╰─` do Pi, "mode on" do Claude), que por isso ganhou o
-        # _warn_ready_timeout_once. Mesmo remedio aqui.
-        _warn_composer_ilegivel_once(nome_sessao)
+    # Regiao do composer = entre as DUAS ULTIMAS reguas (ver _composer_regiao; as travas contra
+    # pegar a regiao errada e o aviso-uma-vez de pane ilegivel moram la).
+    composer = _composer_regiao(pane, nome_sessao)
+    if composer is None:
         return None      # pane ilegivel: incerteza, nao ausencia
-    composer = "\n".join(linhas[reguas[-2]:reguas[-1] + 1])
     # Paste COLAPSADO: o Claude Code recente troca paste multi-linha por "[Pasted text #N +X lines]"
-    # — o texto real NUNCA aparece na tela, então a busca pela cauda abaixo dava falso "não chegou",
-    # o Enter não era enviado (400 "envio incompleto") e cada retry do app empilhava OUTRO paste no
-    # composer (medido 31/07: mensagem quíntupla entregue de uma vez quando um Enter manual drenou a
-    # pilha). O placeholder é evidência nos DOIS sentidos: pro _entrou_no_composer, entrou; pro
-    # _submeteu, ainda não submeteu (o placeholder some com o Enter).
-    if "[Pasted text #" in composer:
+    # — o texto real NUNCA aparece na tela, entao a busca pela cauda abaixo dava falso "nao chegou",
+    # o Enter nao era enviado (400 'envio incompleto') e cada retry do app empilhava OUTRO paste no
+    # composer (medido 31/07: mensagem quintupla entregue de uma vez quando um Enter manual drenou a
+    # pilha). So conta placeholder de numero NOVO em relacao a foto pre-paste (pastes_antes): um
+    # placeholder alheio (rascunho do usuario) parecer nossa entrega submeteria texto de terceiro.
+    # Evidencia nos DOIS sentidos: pro _entrou_no_composer, entrou; pro _submeteu, ainda nao
+    # submeteu (o placeholder some do composer com o Enter).
+    if pastes_antes is not None and (_paste_ids(composer) - pastes_antes):
         return True
     # Compara SEM espaco em branco: o wrap de exibicao quebra a linha no meio da cauda (recado longo de
     # um paragrafo so passa de 200 colunas e quebra), e ai um `cauda in composer` cru falhava justamente
@@ -335,8 +346,12 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
     # sessao nova. Regra do dono: sessao morreu devendo, a divida nao passa pra proxima.
     start_ts = max(_transcript_start_ts(jsonl), tmux.session_created(name))
     # Orfas de sessao anterior: nunca mais casam nem drenam — remove (senao o cheap-check acima
-    # fica quente pra sempre e o lixo acumula ate o cap).
-    q.prune_before(start_ts)
+    # fica quente pra sempre e o lixo acumula ate o cap). A poda some com a bubble do chat, entao
+    # ela nao pode ser muda: loga quantas cairam e o corte usado.
+    podadas = q.prune_before(start_ts)
+    if podadas:
+        _log.info("poda name=%s: %d entrada(s) de vida anterior descartada(s) (corte=%.0f)",
+                  name, podadas, start_ts)
     ti = TerminalInput()
     sent = 0
     while True:
@@ -530,16 +545,22 @@ class TerminalInput:
             # adia em vez de digitar por cima — deferred reverte pra delivered=False e o proximo
             # drain (idle/reconnect) tenta de novo; a bubble queued- segue visivel no app.
             if provider == "pi" and _composer_ocupado_pi(name):
-                _log.warning("send adiado name=%s: composer do pi ja tem texto — deferred "
-                             "(digitar agora colaria as mensagens)", name)
+                if name not in _OCUPADO_WARNED:
+                    _OCUPADO_WARNED.add(name)
+                    _log.warning("send adiado name=%s: composer do pi ja tem texto — deferred "
+                                 "(digitar agora colaria as mensagens; aviso unico ate desocupar)", name)
                 return "deferred"
+            _OCUPADO_WARNED.discard(name)
             if "\n" in text:
+                # Foto dos placeholders de paste ANTES do nosso: so um numero NOVO conta como
+                # evidencia de entrega (ver _composer_residuo — paste alheio nao pode virar prova).
+                pastes_antes = _paste_ids(_composer_regiao(_capture(name), name) or "")
                 tmux.paste_text(name, text)
                 # Settle ANTES do Enter, como no ramo de uma linha. Ver _MULTILINE_SUBMIT_SETTLE:
                 # os 0.05 antigos eram menores que a ingestao MINIMA medida (0.08s) e o Enter
                 # submetia o texto pela metade.
                 time.sleep(_MULTILINE_SUBMIT_SETTLE)
-                if not _entrou_no_composer(name, text):
+                if not _entrou_no_composer(name, text, pastes_antes):
                     # NAO aperta Enter: o texto nao chegou no composer, entao o Enter submeteria o que
                     # estivesse la (a primeira linha truncada, ou nada) como se fosse pedido do usuario.
                     _log.error("envio PARCIAL name=%s: multi-linha NAO chegou no composer em %.1fs "
@@ -552,7 +573,7 @@ class TerminalInput:
                 # destino — ficaram com attempts=2 na fila (requeue duas vezes e desistencia), e o
                 # dono do outro lado so os achou lendo o sidecar. Um settle maior reduz a chance e nao
                 # detecta nada: o Enter correndo a ingestao devolve "sent" do mesmo jeito.
-                if not _submeteu(name, text):
+                if not _submeteu(name, text, pastes_antes):
                     _log.error("envio PARCIAL name=%s: multi-linha nao submeteu (a cauda do texto "
                                "continua no composer apos %.1fs) — nao afirmando entrega",
                                name, _SUBMIT_CHECK_PRAZO)
@@ -935,6 +956,11 @@ class TerminalInput:
             if not deliverable(name):
                 raise DriveError("pane com overlay aberto ou sessao morta — nada foi digitado")
             _wait_input_ready(name, provider="pi")
+            # Mesma guarda anti-colagem do send_prompt: comando digitado em cima de residuo deixa
+            # de ser comando e vira mensagem pro modelo (pior que a colagem de prompt). Achado da
+            # review de 31/07 — o gate precisa valer em TODO caminho que digita no composer do Pi.
+            if _composer_ocupado_pi(name):
+                raise DriveError("composer do pi ja tem texto — comando nao digitado (residuo/rascunho)")
             for cmd in commands:
                 send_keys(name, cmd, literal=True)
                 time.sleep(_SLASH_SETTLE)
