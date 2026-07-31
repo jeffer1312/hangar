@@ -148,6 +148,14 @@ def _limpar_antigos(base: Path) -> None:
 
 def sintetizar(texto: str, voz: str, provedor: str) -> tuple[str, bool]:
     """Devolve (hash, veio_do_cache). Levanta TtsError."""
+    if provedor not in ("elevenlabs", "local"):
+        raise TtsError(400, f"provedor desconhecido: {provedor}")
+    # Front nunca manda provider=local (nao ha campo pra isso na tela) — o motor local so e
+    # alcancavel resolvendo aqui: sem chave da ElevenLabs mas com comando local configurado, usa ele
+    # em vez de devolver "chave nao configurada" apontando pra tela onde a alternativa ja foi posta.
+    if provedor == "elevenlabs" and not (runtime_config.get("elevenlabs_api_key") or "").strip() \
+            and (runtime_config.get("tts_local_cmd") or "").strip():
+        provedor = "local"
     # Voz resolvida ANTES do hash: "" so seria a voz efetiva por acidente, e um hash preso na string
     # vazia sobrevive a troca de elevenlabs_voice_id, servindo audio da voz antiga do cache calado.
     if provedor != "local":

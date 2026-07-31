@@ -95,6 +95,27 @@ def test_hash_usa_voz_efetiva_nao_a_crua(monkeypatch, tmp_path):
     assert h1 != h2
 
 
+def test_sem_chave_com_comando_local_configurado_cai_pro_local(monkeypatch, tmp_path):
+    # provider=elevenlabs (o unico que o front manda) sem chave, mas com comando local configurado:
+    # antes disto, o motor local era inalcancavel — a tela oferecia o campo e nada usava.
+    monkeypatch.setattr(tts, "_base_cache", lambda: tmp_path)
+    monkeypatch.setattr(tts, "_baixar_local", lambda t: b"WAV")
+    config = {"tts_local_cmd": "minha-voz"}
+    monkeypatch.setattr(tts.runtime_config, "get", lambda campo: config.get(campo, ""))
+
+    h, cache = tts.sintetizar("oi", "voz", "elevenlabs")
+
+    assert cache is False
+    assert (tmp_path / f"{h}.mp3").read_bytes() == b"WAV"
+
+
+def test_provedor_desconhecido_levanta_400(monkeypatch):
+    monkeypatch.setattr(tts.runtime_config, "get", lambda campo: "")
+    with pytest.raises(tts.TtsError) as e:
+        tts.sintetizar("oi", "voz", "outro-provedor")
+    assert e.value.status == 400
+
+
 def test_comando_local_mal_formado_levanta_ttserror(monkeypatch, tmp_path):
     monkeypatch.setattr(tts, "_base_cache", lambda: tmp_path)
     monkeypatch.setattr(tts.runtime_config, "get",
