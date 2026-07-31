@@ -349,6 +349,14 @@ html[data-bg="image"] {
    translucidos); em 100 ficam solidos. O default (12) e um degrau discreto acima do painel. */
 html[data-bg="image"] { --chrome-bg: color-mix(in srgb, rgb(24, 23, 28) calc(var(--cp-surface-alpha, 0.94) * 100%), transparent); }
 html[data-theme="light"][data-bg="image"] { --chrome-bg: color-mix(in srgb, rgb(255, 253, 250) calc(var(--cp-surface-alpha, 0.96) * 100%), transparent); }
+/* Chromium (liquid glass) com papel de parede: o composer e a navbar NAO leem `--chrome-bg` aqui —
+   a regra `html[data-liquid] .composer-card::before` troca o fundo por `--glass-bg` pra a refracao
+   aparecer. Sem esta linha o slider Solidez ficava INERTE no desktop: medido nos dois extremos, o
+   ::before do composer dava rgba(38,36,44,0.46) tanto em 0 quanto em 100, enquanto no iPhone (sem
+   liquid) o mesmo slider funcionava. Faixa propria, e nao `--cp-surface-alpha`: aquela comeca na alfa
+   do painel e o vidro liquido precisa poder ficar bem mais leve que isso pra a refracao existir. */
+html[data-liquid][data-bg="image"] { --glass-bg: color-mix(in srgb, rgb(38, 36, 44) calc((0.22 + 0.70 * var(--cp-solidez, 0.19)) * 100%), transparent); }
+html[data-liquid][data-theme="light"][data-bg="image"] { --glass-bg: color-mix(in srgb, rgb(255, 254, 252) calc((0.28 + 0.68 * var(--cp-solidez, 0.19)) * 100%), transparent); }
 html[data-theme="light"][data-bg="image"] { --glass-panel: rgba(255, 253, 250, var(--cp-panel-alpha, 0.78)); }
 html[data-bg="image"] body::after {
   content: "";

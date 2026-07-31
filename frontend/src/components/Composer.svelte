@@ -1111,7 +1111,11 @@
     padding: 0 var(--space-2);
     flex-shrink: 0;
     border-radius: var(--radius-md);
-    background: var(--bg-hover);
+    /* `--surface-raised`, nao `--bg-hover` cru: o chip fica DENTRO do composer, que e vidro sobre a
+       foto — com cor opaca ele virava um retangulo chapado por cima do vidro e ignorava o slider
+       Solidez (CLAUDE.md, "Transparencia"). O realce de :active abaixo segue em `--bg-*` cru, que e
+       tinta de estado por cima, nao superficie. */
+    background: var(--surface-raised);
     color: var(--text-secondary);
   }
 
