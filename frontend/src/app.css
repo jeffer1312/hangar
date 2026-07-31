@@ -460,7 +460,7 @@ button:active:not(:disabled) {
 /* ── Switch (liga/desliga) ───────────────────────────────────────────── */
 /* Vocabulário único de liga/desliga do app. Mora aqui, e não em cada sheet, porque duas telas com
    o MESMO controle desenhado diferente é o que faz UI parecer amadora — foi assim que o
-   EnginesSheet e o ConfigSheet divergiram. Continua sendo <input type="checkbox">: teclado, leitor
+   motores e a config do servidor divergiram. Continua sendo <input type="checkbox">: teclado, leitor
    de tela e o evento `change` seguem os nativos; só a caixa some (appearance:none) e vira
    trilho + botão. Um checkbox nativo esticado pra 44x26 vira um quadrado deformado. */
 .switch {
