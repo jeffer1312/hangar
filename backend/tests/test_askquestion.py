@@ -95,12 +95,26 @@ def test_ask_question_event_none_when_options_mismatch(tmp_path):
     assert _ask_question_event(_state_json("awaiting_input", options=["Sim", "Nao"]), jsonl) is None
 
 
-def test_ask_question_event_none_for_single_question(tmp_path):
-    # 1 pergunta -> cai no OptionButtons (TUI submete no Enter, sem Review). Gate: nao emite.
+def test_ask_question_event_emits_for_single_question(tmp_path):
+    # Pergunta UNICA tambem abre o stepper. Antes havia um gate `len(questions) < 2 -> None` que a
+    # jogava no OptionButtons; como aquele le o picker do PANE, e o pane so tem rotulo, a descricao
+    # de cada opcao — onde mora a explicacao da escolha — sumia da tela. answer_questions ja trata
+    # pergunta unica (terminal_input.py:463, guard de malha fechada porque ali o Enter ja submete).
     one = [{"header": "Cor", "question": "Escolha", "multiSelect": False,
-            "options": [{"label": "A", "description": ""}]}]
+            "options": [{"label": "A", "description": "op A"}]}]
     jsonl, _ = _layout(tmp_path, questions=one)
-    assert _ask_question_event(_state_json("awaiting_input", options=["A"]), jsonl) is None
+    ev = _ask_question_event(_state_json("awaiting_input", options=["A"]), jsonl)
+    assert ev is not None
+    assert json.loads(ev["data"])["questions"][0]["options"][0]["description"] == "op A"
+
+
+def test_ask_question_event_single_question_still_checks_freshness(tmp_path):
+    # Tirar o gate NAO afrouxa o frescor: sidecar de UMA pergunta sobre outro prompt (menu Sim/Nao,
+    # ex. permissao) continua sem abrir o stepper.
+    one = [{"header": "Cor", "question": "Escolha", "multiSelect": False,
+            "options": [{"label": "A", "description": "op A"}]}]
+    jsonl, _ = _layout(tmp_path, questions=one)
+    assert _ask_question_event(_state_json("awaiting_input", options=["Sim", "Nao"]), jsonl) is None
 
 
 def test_ask_question_event_single_question_with_preview_emits(tmp_path):
