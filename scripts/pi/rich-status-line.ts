@@ -16,7 +16,7 @@
  * Configure via ~/.pi/agent/rich-status-line.json:
  * {
  *   "projectName": "my-web-app",
- *   "ticket": "TICKET-000",
+ *   "ticket": "TICKET-123",
  *   "service": "my-service",
  *   "environment": "k8s-prod",
  *   "environmentColor": "purple",
