@@ -42,8 +42,8 @@ def test_sintetizar_usa_cache_e_nao_chama_o_provedor(monkeypatch, tmp_path):
     monkeypatch.setattr(tts, "_baixar_elevenlabs", lambda t, v: chamadas.append(1) or b"MP3")
     monkeypatch.setattr(tts.runtime_config, "get", lambda campo: "chave" if campo == "elevenlabs_api_key" else "")
 
-    h1, cache1 = tts.sintetizar("oi", "voz", "elevenlabs")
-    h2, cache2 = tts.sintetizar("oi", "voz", "elevenlabs")
+    h1, cache1, _ = tts.sintetizar("oi", "voz", "elevenlabs")
+    h2, cache2, _ = tts.sintetizar("oi", "voz", "elevenlabs")
 
     assert h1 == h2
     assert cache1 is False and cache2 is True
@@ -58,7 +58,7 @@ def test_cache_hit_renova_mtime(monkeypatch, tmp_path):
     monkeypatch.setattr(tts, "_baixar_elevenlabs", lambda t, v: b"MP3")
     monkeypatch.setattr(tts.runtime_config, "get", lambda campo: "chave" if campo == "elevenlabs_api_key" else "")
 
-    h, _ = tts.sintetizar("oi", "voz", "elevenlabs")
+    h, _, _ = tts.sintetizar("oi", "voz", "elevenlabs")
     arquivo = tmp_path / f"{h}.mp3"
     velho = time.time() - 20 * 86400
     os.utime(arquivo, (velho, velho))
@@ -108,10 +108,10 @@ def test_hash_usa_voz_efetiva_nao_a_crua(monkeypatch, tmp_path):
 
     config = {"elevenlabs_api_key": "chave", "elevenlabs_voice_id": "voz_x"}
     monkeypatch.setattr(tts.runtime_config, "get", lambda campo: config.get(campo, ""))
-    h1, _ = tts.sintetizar("oi", "", "elevenlabs")
+    h1, _, _ = tts.sintetizar("oi", "", "elevenlabs")
 
     config["elevenlabs_voice_id"] = "voz_y"
-    h2, _ = tts.sintetizar("oi", "", "elevenlabs")
+    h2, _, _ = tts.sintetizar("oi", "", "elevenlabs")
 
     assert h1 != h2
 
@@ -129,7 +129,7 @@ def test_sintetizar_com_motor_local_devolvendo_wav_grava_wav(monkeypatch, tmp_pa
     monkeypatch.setattr(tts.runtime_config, "get",
                         lambda campo: "minha-voz" if campo == "tts_local_cmd" else "")
 
-    h, cache = tts.sintetizar("oi", "voz", "local")
+    h, cache, _ = tts.sintetizar("oi", "voz", "local")
 
     assert cache is False
     assert (tmp_path / f"{h}.wav").exists()
@@ -145,10 +145,12 @@ def test_sem_chave_com_comando_local_configurado_cai_pro_local(monkeypatch, tmp_
     config = {"tts_local_cmd": "minha-voz"}
     monkeypatch.setattr(tts.runtime_config, "get", lambda campo: config.get(campo, ""))
 
-    h, cache = tts.sintetizar("oi", "voz", "elevenlabs")
+    h, cache, provedor_final = tts.sintetizar("oi", "voz", "elevenlabs")
 
     assert cache is False
     assert (tmp_path / f"{h}.mp3").read_bytes() == b"WAV"
+    # O front precisa saber que quem respondeu foi o motor local, senao troca de voz caladamente.
+    assert provedor_final == "local"
 
 
 def test_provedor_desconhecido_levanta_400(monkeypatch):
@@ -171,6 +173,29 @@ def test_falha_ao_gravar_cache_vira_ttserror_500(monkeypatch, tmp_path):
         tts.sintetizar("oi", "voz", "elevenlabs")
     assert e.value.status == 500
     assert "cache" in e.value.detail.lower()
+
+
+def test_comando_local_com_lixo_levanta_ttserror_e_nao_cacheia(monkeypatch, tmp_path):
+    # Codigo 0, stdout nao-vazio, mas nao e wav nem mp3 (comando mal configurado imprimindo erro
+    # no stdout) -> tem que falhar ANTES de escrever, senao o lixo vira <hash>.mp3 e envenena o
+    # cache por 30 dias (toda tentativa seguinte bateria no arquivo podre). Comando REAL (nao
+    # mock de _baixar_local): a validacao mora dentro dela, mockar a funcao inteira pularia o guard.
+    monkeypatch.setattr(tts, "_base_cache", lambda: tmp_path)
+    monkeypatch.setattr(tts.runtime_config, "get",
+                        lambda campo: "printf erro-de-configuracao" if campo == "tts_local_cmd" else "")
+
+    with pytest.raises(tts.TtsError) as e:
+        tts.sintetizar("oi", "voz", "local")
+    assert e.value.status == 502
+    assert list(tmp_path.glob("*.mp3")) == []
+    assert list(tmp_path.glob("*.wav")) == []
+
+
+def test_formato_de_audio_valido_aceita_wav_id3_e_frame_sync_recusa_lixo():
+    assert tts._formato_de_audio_valido(b"RIFF....WAVEfmt ") is True
+    assert tts._formato_de_audio_valido(b"ID3\x03mp3 bytes") is True
+    assert tts._formato_de_audio_valido(b"\xff\xfbmp3 sem tag id3") is True
+    assert tts._formato_de_audio_valido(b"erro: comando mal configurado") is False
 
 
 def test_comando_local_mal_formado_levanta_ttserror(monkeypatch, tmp_path):

@@ -54,6 +54,17 @@ def extensao_de(audio: bytes) -> str:
     return "wav" if audio[:4] == b"RIFF" else "mp3"
 
 
+def _formato_de_audio_valido(audio: bytes) -> bool:
+    """Wav (RIFF) ou mp3 de verdade (assinatura ID3 ou frame-sync 0xFF 0xEx) — extensao_de sozinha
+    e binaria (nao-RIFF vira "mp3" sempre) e deixaria passar qualquer lixo que um comando local mal
+    configurado escreva na saida com codigo 0 (mensagem de erro no stdout, Opus/FLAC etc)."""
+    if audio[:4] == b"RIFF":
+        return True
+    if audio[:3] == b"ID3":
+        return True
+    return len(audio) >= 2 and audio[0] == 0xFF and (audio[1] & 0xE0) == 0xE0
+
+
 def caminho_do_cache(h: str) -> Path:
     """Caminho do audio em cache. A extensao real pode ser .mp3 OU .wav (motor local) — quem le
     nao pode assumir uma so. Sem arquivo em nenhuma das duas, devolve o caminho .mp3 (nao existe;
@@ -147,6 +158,10 @@ def _baixar_local(texto: str) -> bytes:
         # Codigo 0 e saida vazia: sem isto o cache guardaria um arquivo de 0 byte e o player ficaria
         # mudo pra sempre, sem ninguem saber por que.
         raise TtsError(502, "comando de voz local nao escreveu audio na saida")
+    if not _formato_de_audio_valido(p.stdout):
+        # Codigo 0 com bytes que nao sao audio (erro impresso no stdout, Opus/FLAC): sem isto vira
+        # <hash>.mp3, fica 30 dias em cache, e TODA tentativa seguinte bate no mesmo arquivo podre.
+        raise TtsError(502, "comando de voz local devolveu um formato de audio nao reconhecido (nem wav nem mp3)")
     return p.stdout
 
 
@@ -165,8 +180,10 @@ def _limpar_antigos(base: Path) -> None:
         pass
 
 
-def sintetizar(texto: str, voz: str, provedor: str) -> tuple[str, bool]:
-    """Devolve (hash, veio_do_cache). Levanta TtsError."""
+def sintetizar(texto: str, voz: str, provedor: str) -> tuple[str, bool, str]:
+    """Devolve (hash, veio_do_cache, provedor_final). O 3o campo e o provedor QUE DE FATO respondeu
+    (pode ter virado "local" pelo fallback abaixo) — sem ecoar isso pro chamador, a troca muda a voz
+    ouvida sem nenhum aviso. Levanta TtsError."""
     if provedor not in ("elevenlabs", "local"):
         raise TtsError(400, f"provedor desconhecido: {provedor}")
     # Front nunca manda provider=local (nao ha campo pra isso na tela) — o motor local so e
@@ -193,7 +210,7 @@ def sintetizar(texto: str, voz: str, provedor: str) -> tuple[str, bool]:
             existente.touch()
         except OSError:
             pass
-        return h, True
+        return h, True, provedor
 
     if provedor == "local":
         audio = _baixar_local(texto)
@@ -219,7 +236,7 @@ def sintetizar(texto: str, voz: str, provedor: str) -> tuple[str, bool]:
         except OSError:
             pass
     _limpar_antigos(base)
-    return h, False
+    return h, False, provedor
 
 
 def listar_vozes() -> list[dict]:

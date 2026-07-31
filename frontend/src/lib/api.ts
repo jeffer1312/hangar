@@ -71,7 +71,10 @@ async function errorDetail(res: Response): Promise<string> {
     const j = JSON.parse(text);
     if (j && typeof j.detail === 'string') return j.detail;
   } catch { /* corpo nao-JSON: cai no texto cru abaixo */ }
-  return text || res.statusText;
+  // text e statusText podem os DOIS vir vazios (502 de infra sem corpo JSON, servidor HTTP/2 que
+  // nao popula statusText) — sem este ultimo fallback, quem le `.message` (TtsBar, ServerSettings)
+  // trata string vazia como "sem erro" e desenha a UI de sucesso por cima de uma falha real.
+  return text || res.statusText || `falha ${res.status} sem detalhe do servidor`;
 }
 
 // Trata a resposta compartilhada por apiFetch e uploadFile. Self-heal de token invalido/rotacionado:
@@ -1060,7 +1063,9 @@ export async function setModelEffort(name: string, body: ModelEffortBody): Promi
   });
 }
 
-export interface TtsResposta { url: string; chars: number; cached: boolean }
+// provider: quem RESPONDEU de fato (pode ter virado "local" pelo fallback do backend quando falta
+// a chave da ElevenLabs mas ha comando local configurado) — nao necessariamente o que foi pedido.
+export interface TtsResposta { url: string; chars: number; cached: boolean; provider: string }
 
 // `confirm: true` repete o pedido depois que o usuario aceitou o aviso de custo (409 do backend).
 export async function sintetizarTts(

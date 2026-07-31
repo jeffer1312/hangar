@@ -20,7 +20,7 @@ export function ouvirTexto(texto: string, confirmar: (msg: string) => Promise<bo
   // e sem o tipo declarado o TS nao infere o retorno de uma funcao recursiva.
   const pedir = (confirm: boolean): Promise<void> =>
     sintetizarTts({ text: texto, confirm })
-      .then((r) => { ttsPlayer.playUrl(ttsAudioUrl(r.url)); })
+      .then((r) => { ttsPlayer.playUrl(ttsAudioUrl(r.url), r.provider); })
       .catch((e: Error & { status?: number }) => {
         if (e.status === 409) {
           // Recusar (ou window.confirm suprimido no PWA, que devolve false calado) NAO pode
