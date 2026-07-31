@@ -320,6 +320,15 @@ All routes require `Authorization: Bearer <token>` (SSE uses a `cp_token` cookie
 | GET | `/api/sessions/{name}/workflows/{run_id}` | workflow run detail |
 | GET | `/api/sessions/{name}/workflows/{run_id}/agents/{agent_id}` | workflow agent detail |
 
+**Voice (text-to-speech)**
+
+| Method | Route | Purpose |
+|---|---|---|
+| POST | `/api/tts` | synthesize speech (`{text, voice?, provider?, confirm?}`) — returns `{url, chars, cached}`; 409 above the configurable warn limit until `confirm: true`, 413 past the hard cap |
+| GET | `/api/tts/voices` | ElevenLabs voices available to the configured account key |
+| GET | `/api/tts/saldo` | ElevenLabs account usage (characters used/limit this period) |
+| GET | `/api/tts/audio/{hash}` | fetch a cached synthesized clip (mp3 or wav, detected by content) |
+
 ## Security
 
 A web terminal/agent over the network is arbitrary remote command execution if misconfigured. This tool is **LAN/VPN-only by design**:
