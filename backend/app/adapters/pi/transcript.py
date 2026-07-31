@@ -117,3 +117,84 @@ def parse_line(line: str) -> list[ChatEvent]:
     if not isinstance(obj, dict):
         return []
     return parse_obj(obj)
+
+
+# Contexto que um hook do Claude injetou no turno, via a extensao claude-hooks-adapter.ts (ela roda
+# os hooks do Claude dentro do Pi e devolve o texto pelo `before_agent_start`). O Pi COLA esse texto
+# no inicio da mensagem do usuario — e essa mensagem e o que o app mostra como bolha, entao o
+# "[skill-suggester] ..." aparecia como se o usuario tivesse digitado. No terminal nao aparece.
+# O corte e so de EXIBICAO: o arquivo nao e reescrito e o modelo segue recebendo o contexto.
+_HOOK_CTX_TYPE = "claude-hook-context"
+
+
+class Stream:
+    """Parser com UMA linha de memoria: segura o user_msg ate ver a linha seguinte.
+
+    Existe porque o sinal que identifica o texto do hook chega DEPOIS da mensagem: o Pi grava a
+    mensagem do usuario (com o contexto colado) e so na linha de baixo um
+    `custom_message/claude-hook-context` com o mesmo texto e `parentId` apontando pra ela. Casar por
+    esse par e exato; casar por padrao de texto ("[algo] ...") seria chute e um dia comeria mensagem
+    de verdade. A espera custa nada na pratica: as duas linhas nascem no mesmo milissegundo e o
+    tailer le as duas na mesma passada. Nao chegou a irmã (sessao sem a extensao de hooks) -> o
+    flush solta a mensagem intacta no fim do lote.
+
+    Cada tail/leitura de historico cria a sua — estado de modulo seria compartilhado entre sessoes.
+    """
+
+    def __init__(self) -> None:
+        self._held: list[tuple[float, ChatEvent]] = []
+        self._held_id = ""
+
+    def _release(self) -> list[tuple[float, ChatEvent]]:
+        out, self._held, self._held_id = self._held, [], ""
+        return out
+
+    def feed(self, obj: dict, ts: float = 0.0) -> list[tuple[float, ChatEvent]]:
+        if (obj.get("type") == "custom_message" and obj.get("customType") == _HOOK_CTX_TYPE
+                and self._held and obj.get("parentId") == self._held_id):
+            ctx = _clean(obj.get("content") or "").strip()
+            if ctx:
+                self._held = [(t, ev) for t, ev in self._held if _strip_prefix(ev, ctx)]
+            return self._release()
+        out = self._release()
+        evs = parse_obj(obj)
+        node_id = obj.get("id") or ""
+        if node_id and evs and all(ev.kind == "user_msg" for ev in evs):
+            self._held = [(ts, ev) for ev in evs]
+            self._held_id = node_id
+            return out
+        return out + [(ts, ev) for ev in evs]
+
+    def flush(self) -> list[tuple[float, ChatEvent]]:
+        return self._release()
+
+    def parse_line(self, line: str) -> list[ChatEvent]:
+        """Forma que o TranscriptTailer espera (linha -> eventos), sem o ts."""
+        line = line.strip()
+        if not line:
+            return []
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            return []
+        if not isinstance(obj, dict):
+            return []
+        return [ev for _, ev in self.feed(obj)]
+
+    def flush_events(self) -> list[ChatEvent]:
+        return [ev for _, ev in self.flush()]
+
+    def feed_events(self, obj: dict) -> list[ChatEvent]:
+        """Forma que o merged_history espera (objeto -> eventos). O ts de cada evento ja vem do
+        parser (message.timestamp), entao o caller nao perde a ordem por soltar um evento retido
+        junto com a linha seguinte."""
+        return [ev for _, ev in self.feed(obj)]
+
+
+def _strip_prefix(ev: ChatEvent, ctx: str) -> bool:
+    """Tira o contexto do hook do inicio da bolha. False = nao sobrou nada, o evento inteiro sai."""
+    text = (ev.text or "").strip()
+    if not text.startswith(ctx):
+        return True                      # bloco seguinte da mesma mensagem: nada a cortar
+    ev.text = text[len(ctx):].strip()
+    return bool(ev.text)
