@@ -2,6 +2,8 @@
   import { isAuthenticated, setServers, listServers, mergeServers, onServersChanged, clearCredentials, selectServer, getActiveId, type Server } from './lib/auth';
   import { getVault, decryptList, encryptList, putVault, logout as syncLogout, syncStatus, stashKey, loadKey, clearKey } from './lib/sync';
   import { vaultPush } from './lib/vaultPush.svelte';
+  import { ttsPlayer } from './lib/ttsPlayer.svelte';
+  import { ttsSelection } from './lib/ttsSelection.svelte';
   import { encodeCompareIds, type CompareId } from './lib/format';
   import { peekStep, initialPeek } from './lib/peek';
   import { parseHash, type Route } from './lib/route';
@@ -16,6 +18,7 @@
   import DesktopShell from './components/DesktopShell.svelte';
   import SettingsModal from './components/settings/SettingsModal.svelte';
   import TtsBar from './components/TtsBar.svelte';
+  import TtsSelectionPill from './components/TtsSelectionPill.svelte';
 
   // Deep-link do push (feature #5): a notif abre '/?server=<id>&session=<name>' — o router so olha
   // window.location.hash, entao sem isto os query params eram ignorados e sempre caia na lista.
@@ -83,6 +86,15 @@
   // pushes pro hub ficariam mudos por falta de chave).
   let syncEnabled = $state<boolean | null>(null);
   let syncReady = $state(false);
+
+  // Altura da faixa de TTS (barra ou pill de selecao) publicada na raiz: as pills do Chat.svelte
+  // (hist-pill/tui-pill/awaiting-pill) somam este valor ao dockH pra nao ficar por baixo dela.
+  $effect(() => {
+    document.documentElement.style.setProperty(
+      '--cp-tts-h',
+      ttsPlayer.active || ttsSelection.ativa ? '52px' : '0px',
+    );
+  });
 
   // Desktop: >=820px renderiza o shell de duas colunas (sidebar + chat largo). Mobile (<820px)
   // mantem o fluxo de telas atual, INTOCADO (mesmos componentes, mesmas regras).
@@ -419,6 +431,7 @@
        do Chat o audio morreria em toda troca, e o proprio elemento perderia o destravamento do
        gesto do iOS. -->
   <TtsBar />
+  <TtsSelectionPill />
 
   {#if cfg && telaEfetiva && route.name !== 'login' && route.name !== 'loading'}
     <SettingsModal
