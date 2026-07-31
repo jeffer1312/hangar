@@ -43,8 +43,10 @@ export function setBgScrim(v: number): void {
 // 100 = caixa sólida por cima dele. Existe como controle, e não como constante no CSS, porque o
 // ponto certo depende da FOTO de quem usa: sobre uma imagem clara e cheia de detalhe as caixas
 // precisam de mais corpo pra o texto se ler; sobre uma escura e lisa, menos.
+export const SURFACE_SOLID_PADRAO = 12;
+
 export function getSurfaceSolid(): number {
-  return lerNumero(SOLID_KEY, 12);
+  return lerNumero(SOLID_KEY, SURFACE_SOLID_PADRAO);
 }
 
 export function setSurfaceSolid(v: number): void {
@@ -206,8 +208,11 @@ export function setReadMode(m: ReadMode): void {
 // por cima da foto: quem decide o ponto é quem está olhando, como já é no scrim do fundo.
 const READ_ALPHA_KEY = 'cp_read_alpha';
 
+/** O de fabrica, exportado: quem oferece "voltar ao padrao" precisa DESTE numero, nao de um chute. */
+export const READ_ALPHA_PADRAO = 92;
+
 export function getReadAlpha(): number {
-  return lerNumero(READ_ALPHA_KEY, 92);
+  return lerNumero(READ_ALPHA_KEY, READ_ALPHA_PADRAO);
 }
 
 export function setReadAlpha(v: number): void {
@@ -222,8 +227,10 @@ const TEXT_BOOST_KEY = 'cp_text_boost';
 
 // 10 leva #d2cbcd (12,0:1) a ~12,6:1 — o contraste medido do terminal do usuário (#E8D3DE sobre
 // #171B20 = 12,7:1). 60 era chute; com o véu do fundo no ponto certo, quase nada de branco é preciso.
+export const TEXT_BOOST_PADRAO = 10;
+
 export function getTextBoost(): number {
-  return lerNumero(TEXT_BOOST_KEY, 10);
+  return lerNumero(TEXT_BOOST_KEY, TEXT_BOOST_PADRAO);
 }
 
 export function setTextBoost(v: number): void {

@@ -101,9 +101,25 @@
       const cru = localStorage.getItem(POS_KEY);
       if (!cru) return null;
       const p = JSON.parse(cru);
-      return typeof p?.x === 'number' && typeof p?.y === 'number' ? p : null;
+      if (typeof p?.x !== 'number' || typeof p?.y !== 'number') return null;
+      return dentroDaTela(p);
     } catch { return null; }
   }
+  // Prende na janela ATUAL. A posicao guardada pode ter nascido numa tela maior (monitor externo,
+  // janela maximizada): sem isto a caixinha renderizaria fora da viewport levando junto o cabecalho,
+  // que e o unico lugar com o ✕ — e como ela nao tem backdrop nem fecha no Esc, a saida seria apagar
+  // a chave do localStorage na mao. Vale na leitura E no resize, nao so enquanto se arrasta.
+  function dentroDaTela(p: { x: number; y: number }): { x: number; y: number } {
+    return {
+      x: Math.min(Math.max(0, p.x), Math.max(0, window.innerWidth - 120)),
+      y: Math.min(Math.max(0, p.y), Math.max(0, window.innerHeight - 40)),
+    };
+  }
+  $effect(() => {
+    const on = () => { if (pos) pos = dentroDaTela(pos); };
+    window.addEventListener('resize', on);
+    return () => window.removeEventListener('resize', on);
+  });
   let drag: { dx: number; dy: number } | null = null;
   let caixaEl = $state<HTMLElement | null>(null);
   function dragStart(e: PointerEvent) {
@@ -137,7 +153,9 @@
   <!-- Caixinha: `fixed` no canto, SEM backdrop — o clique fora vai pro app, que e o ponto. Fecha so
        no ✕ (ou voltando pro painel), como pedido. Nao usa BottomSheet: aquele e um dialogo modal com
        veu e trap de foco, o oposto do que se quer aqui. -->
-  <div class="vivo" role="dialog" aria-label="Aparência — ao vivo" bind:this={caixaEl}
+  <!-- `role="region"`, nao `dialog`: dialogo promete semantica modal (foco presto, Esc fecha) e esta
+       caixinha e o oposto de proposito — o app atras segue clicavel e ela so sai no ✕. -->
+  <div class="vivo" role="region" aria-label="Aparência — ao vivo" bind:this={caixaEl}
        style={pos ? `left: ${pos.x}px; top: ${pos.y}px; right: auto; bottom: auto;` : ''}>
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <header class="vivo-head" onpointerdown={dragStart} onpointermove={dragMove}

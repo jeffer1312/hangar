@@ -8,6 +8,7 @@
     getReadAlpha, setReadAlpha, getTextBoost, setTextBoost,
     getFontPref, setFontPref, getMedidaTexto, setMedidaTexto,
     getSurfaceSolid, setSurfaceSolid,
+    READ_ALPHA_PADRAO, TEXT_BOOST_PADRAO, SURFACE_SOLID_PADRAO,
     type ReadMode, type PanelStyle, type FontPref, type MedidaTexto,
   } from '../../lib/background';
   import { sidebarPrefs, type SidebarHeight } from '../../lib/sidebarPrefs.svelte';
@@ -59,25 +60,38 @@
     { v: 'card', label: 'Caixa solta', aria: 'Painéis flutuando, com folga e cantos redondos' },
     { v: 'edge', label: 'Colados', aria: 'Painéis colados na borda da tela, de ponta a ponta' },
   ];
-  // VOLTAR AO PADRAO: so as medidas que a amostra mostra (texto, leitura, contraste, solidez das
-  // caixas). NAO mexe em tema, fonte, papel de parede nem paineis — quem arrasta sliders e se perde
-  // quer desfazer os sliders, nao perder a foto que escolheu. Os valores sao os mesmos defaults dos
-  // getters (100 = de fabrica pras medidas; 'auto' e o modo de leitura inicial).
+  let resetSeq = $state(0);
+  // Espelho da "Solidez das caixas" (o slider vive no BackgroundToggle) so pra o botao saber se ha o
+  // que desfazer. Reler no reset basta: quem edita o valor e o proprio BackgroundToggle, que remonta
+  // junto pelo `{#key resetSeq}`.
+  let caixas = $state(getSurfaceSolid());
+  $effect(() => { resetSeq; caixas = getSurfaceSolid(); });
+
+  // VOLTAR AO PADRAO: so as medidas que a amostra mostra. NAO mexe em tema, fonte, papel de parede
+  // nem paineis — quem arrasta sliders e se perde quer desfazer os sliders, nao perder a foto que
+  // escolheu.
+  //
+  // Os valores vem das CONSTANTES exportadas por lib/background, nunca de numero escrito aqui: a
+  // primeira versao chutou 50 pro contraste e 12 pra solidez da folha, quando os de fabrica sao 10 e
+  // 92. O estrago era silencioso e dobrado — o botao nascia habilitado numa instalacao virgem (92 !=
+  // 12) e, clicado, DERRUBAVA a solidez da folha de 92 pra 12, uma mudanca visual grande que ninguem
+  // pediu.
   const temAjuste = $derived(
     texto.size !== 100 || texto.lh !== 100 || texto.width !== 100 ||
-    contraste !== 50 || solidez !== 12 || leitura !== 'auto',
+    contraste !== TEXT_BOOST_PADRAO || solidez !== READ_ALPHA_PADRAO || leitura !== 'auto' ||
+    caixas !== SURFACE_SOLID_PADRAO,
   );
   function voltarAoPadrao() {
     (['size', 'lh', 'width'] as MedidaTexto[]).forEach((m) => { texto[m] = 100; setMedidaTexto(m, 100); });
-    contraste = 50; setTextBoost(50);
-    solidez = 12; setReadAlpha(12);
+    contraste = TEXT_BOOST_PADRAO; setTextBoost(TEXT_BOOST_PADRAO);
+    solidez = READ_ALPHA_PADRAO; setReadAlpha(READ_ALPHA_PADRAO);
     leitura = 'auto'; setReadMode('auto');
-    caixas = 12; setSurfaceSolid(12);
+    caixas = SURFACE_SOLID_PADRAO; setSurfaceSolid(SURFACE_SOLID_PADRAO);
+    // O slider "Solidez das caixas" vive no BackgroundToggle, que guarda o PROPRIO $state. Sem
+    // remontar, o valor aplicado voltava ao padrao mas o slider de la seguia mostrando o numero
+    // antigo ate reabrir a tela — a tela mentindo sobre o proprio estado.
+    resetSeq += 1;
   }
-
-  // Solidez das CAIXAS (o outro slider, dentro do bloco de Fundo) — precisa estar aqui pro reset
-  // alcancar. O BackgroundToggle guarda o proprio estado; este espelho e so pro botao de padrao.
-  let caixas = $state(getSurfaceSolid());
 
   const opcoesAltura: { v: SidebarHeight; label: string; aria: string }[] = [
     { v: 'full', label: 'Altura total', aria: 'A barra lateral vai de ponta a ponta da tela' },
@@ -119,7 +133,9 @@
       <strong>Fundo</strong>
       <span>textura, luz ou uma imagem sua — guardada só neste dispositivo</span>
     </div>
-    <BackgroundToggle />
+    <!-- `{#key}`: o "Voltar ao padrao" grava a solidez das caixas, mas o slider vive aqui dentro com
+         estado proprio — remontar e o que faz o numero na tela bater com o valor aplicado. -->
+    {#key resetSeq}<BackgroundToggle />{/key}
   </div>
 
   <div class="ap-row ap-row--stack">
