@@ -21,3 +21,10 @@ def test_normaliza_espaco_e_quebra():
 def test_texto_so_de_simbolo_vira_vazio():
     # Quem chama usa isto pra devolver 400 em vez de sintetizar silencio pago.
     assert preparar("✅ → •") == ""
+
+
+def test_quebra_de_bloco_nao_duplica_pontuacao_de_frase_ja_fechada():
+    # Caso real de um plano: titulo e item de lista SEM pontuacao final ganham a pausa (".");
+    # a frase que ja termina em "." NAO pode virar "..".
+    entrada = "Passo 1\nFazer X no arquivo.\nitem um\nitem dois"
+    assert preparar(entrada) == "Passo 1. Fazer X no arquivo. item um. item dois"

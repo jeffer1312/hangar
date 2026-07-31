@@ -27,7 +27,11 @@ def preparar(texto: str) -> str:
     t = t.replace("—", ", ").replace("–", ", ")   # travessao vira pausa
     # \n+ (nao so \n{2,}): o front agora manda UMA quebra por bloco (ver speakable.ts), entao um
     # titulo seguido de um paragrafo ja chega como uma unica \n — sem isso essa pausa era
-    # inalcancavel, porque so quebra DUPLA virava pausa.
+    # inalcancavel, porque so quebra DUPLA virava pausa. Duas etapas, a especifica antes da geral:
+    # quem ja termina em pontuacao de frase (inclui o marcador de codigo omitido) so precisa da
+    # quebra virar espaco — virar ". " tambem duplicaria o ponto ("arquivo.." num plano, onde quase
+    # toda linha ja termina em pontuacao). Titulo/item de lista sem pontuacao final ganham a pausa.
+    t = re.sub(r"([.!?:;…])[ \t]*\n+", r"\1 ", t)
     t = re.sub(r"\n+", ". ", t)
     t = re.sub(r"\s+", " ", t)
     return t.strip()
