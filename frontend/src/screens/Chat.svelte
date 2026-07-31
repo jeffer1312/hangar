@@ -1179,13 +1179,15 @@
   {#if histGap && !loading && !error}
     <!-- A cauda carregou, o histórico antigo não. O chat segue utilizável; a falha aparece aqui
          (em vez de rolar pra cima e achar que a conversa começa no meio). Falha de rede convida a
-         tocar; transcript trocado NÃO — buscar de novo daria o mesmo, então é só o aviso. -->
+         tocar; transcript trocado NÃO — buscar de novo daria o mesmo, então é só o aviso.
+         --cp-tts-h (publicada no App.svelte): soma a altura da barra/pill de TTS quando ela está na
+         tela, senão as três pills daqui ficam por baixo dela. -->
     {#if histGap === 'failed'}
-      <button class="hist-pill" style:bottom={`${dockH + 10}px`} onclick={() => loadOlderInBackground(histGen)}>
+      <button class="hist-pill" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} onclick={() => loadOlderInBackground(histGen)}>
         Histórico antigo não carregou — tocar pra tentar
       </button>
     {:else}
-      <div class="hist-pill" style:bottom={`${dockH + 10}px`}>
+      <div class="hist-pill" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`}>
         Sem o histórico anterior — o transcript mudou
       </div>
     {/if}
@@ -1194,7 +1196,7 @@
   {#if tuiOverlay && !mirrorOpen}
     <!-- Aviso DESTACADO: ha um painel que SO da pra interagir pela TUI. Pulsa pra chamar atencao;
          tocar abre o espelho. Nao toma a tela (so um banner acima do dock). -->
-    <button class="tui-pill" style:bottom={`${dockH + 10}px`} onclick={openMirror} aria-label={needsLogin ? 'Abrir terminal para fazer login' : 'Abrir terminal para interagir'}>
+    <button class="tui-pill" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} onclick={openMirror} aria-label={needsLogin ? 'Abrir terminal para fazer login' : 'Abrir terminal para interagir'}>
       <span class="tui-pill-dot"></span>
       <span class="tui-pill-text">{needsLogin ? 'Sessão precisa de login — toque pra entrar' : 'Interação só pela TUI — toque pra abrir'}</span>
     </button>
@@ -1204,7 +1206,7 @@
     <!-- Triage mobile (feature #4): pula pra proxima sessao aguardando resposta (wrap-around).
          Canto inferior direito (alcance do polegar) pra nao brigar com o tui-pill (centralizado)
          nem cobrir o composer/navbar. Some sozinha quando o contador zera (derived, sem cache). -->
-    <button class="awaiting-pill" style:bottom={`${dockH + 10}px`} onclick={goNextAwaiting} aria-label={`${awaitingCount} sessão${awaitingCount > 1 ? 'ões' : ''} aguardando — ir para a próxima`}>
+    <button class="awaiting-pill" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} onclick={goNextAwaiting} aria-label={`${awaitingCount} sessão${awaitingCount > 1 ? 'ões' : ''} aguardando — ir para a próxima`}>
       {awaitingCount} aguardando →
     </button>
   {/if}
