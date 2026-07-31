@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { chavesUnicas } from '../lib/messageKeys';
   import { tick } from 'svelte';
   import type { ChatEvent, StateEvent, AskQuestionPayload, AnswerItem } from '../lib/types';
   import UserBubble from './UserBubble.svelte';
@@ -172,7 +173,13 @@
       items.push({ type: 'event', id: ev.id, ev });
     }
     flush();
-    return items;
+    // Rede de seguranca do {#each} keyed: no Svelte 5 chave repetida e THROW, e ele derruba a arvore
+    // toda — a conversa abre vazia e a tela trava, com navbar e composer ainda desenhados por cima.
+    // Aconteceu de verdade: duas entradas de fila consumidas no MESMO milissegundo com o MESMO texto
+    // sairam do backend com o mesmo `queued:<ts>:<md5>`. O id do backend precisa ser corrigido, mas a
+    // lista le um arquivo que outro processo escreve: ela tem que ser imune a qualquer transcript.
+    const chaves = chavesUnicas(items.map((i) => i.id));
+    return items.map((i, n) => (chaves[n] === i.id ? i : { ...i, id: chaves[n] }));
   });
 
   // Claude trabalhando? -> msgs da fila durável (id "queued-") ficam atenuadas (= na fila).
