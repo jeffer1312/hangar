@@ -167,7 +167,10 @@
     position: relative;   /* ancora a camada de vidro */
     overflow: auto;
     overscroll-behavior: contain;
-    background: transparent;   /* o fundo vai pro leaf ::before */
+    /* O fundo mora NO ELEMENTO (regra logo abaixo), nao mais so no ::before: o pseudo e absoluto
+       dentro deste proprio scroller e cobria so a altura visivel. Esta linha fica como base do
+       caminho liquid, que devolve `transparent` pra refracao do ::before aparecer. */
+    background: transparent;
     box-shadow: 0 24px 80px var(--glass-shadow), inset 0 1px 1px var(--glass-specular);
     animation: modal-in 160ms var(--ease-out) both;
   }
