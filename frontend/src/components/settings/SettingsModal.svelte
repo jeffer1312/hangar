@@ -4,55 +4,49 @@
   import AppearanceSettings from './AppearanceSettings.svelte';
   import ServerSettings from './ServerSettings.svelte';
   import EnginesSettings from './EnginesSettings.svelte';
+  import type { TelaConfig } from '../../lib/configRoute';
   import type { Server } from '../../lib/auth';
 
   interface Props {
-    open: boolean;
-    onClose: () => void;
-    targetServer?: Server | null;
-    /** Sem servidor alvo (celular, servidor removido): as linhas DE SERVIDOR ficam sem entrada. */
-    semServidor?: boolean;
+    tela: TelaConfig;
+    alvo: Server | null;
+    nomeAlvo: string | null;
+    semServidor: boolean;
+    onIrPara: (t: TelaConfig) => void;
+    onVoltar: () => void;
+    onFechar: () => void;
   }
-  let { open, onClose, targetServer = null, semServidor = false }: Props = $props();
+  let { tela, alvo, nomeAlvo, semServidor, onIrPara, onVoltar, onFechar }: Props = $props();
 
-  type Rota = 'root' | 'aparencia' | 'servidor' | 'motores';
-
-  // Rota por ID, nunca por indice: mexer na lista nao pode abrir outra tela debaixo do usuario.
-  // PAI de cada tela — "voltar" sobe UM nivel. Sem este mapa, sair de Motores (onde se chega DE
-  // Servidor) jogava direto na raiz, dois niveis pra tras.
-  const PAI: Record<Exclude<Rota, 'root'>, Rota> = {
-    aparencia: 'root',
-    servidor: 'root',
-    motores: 'servidor',
-  };
-  const TITULO: Record<Rota, string> = {
+  const TITULO: Record<TelaConfig, string> = {
     root: 'Configurações',
     aparencia: 'Aparência',
-    servidor: 'Configurações do servidor',
+    notificacoes: 'Notificações',
+    anexos: 'Anexos e transcrição',
+    avancado: 'Avançado do servidor',
     motores: 'Motores de modelo',
   };
 
   const LINHAS = [
     { id: 'aparencia', secao: 'App', rotulo: 'Aparência', icone: '🎨',
       descricao: 'tema, fundo, leitura e texto', servidor: false },
-    { id: 'servidor', secao: 'Servidor', rotulo: 'Configurações do servidor', icone: '⚙️',
-      descricao: 'chaves, retenção e automações', servidor: true },
+    { id: 'notificacoes', secao: 'Servidor', rotulo: 'Notificações', icone: '🔔',
+      descricao: 'quando avisar que terminou, caiu ou travou', servidor: true },
+    { id: 'anexos', secao: 'Servidor', rotulo: 'Anexos e transcrição', icone: '📎',
+      descricao: 'chave da Groq e por quanto tempo guardar', servidor: true },
+    { id: 'avancado', secao: 'Servidor', rotulo: 'Avançado do servidor', icone: '🛠️',
+      descricao: 'automações, editor e o que só muda pelo .env', servidor: true },
     { id: 'motores', secao: 'Servidor', rotulo: 'Motores de modelo', icone: '🔌',
       descricao: 'rodar uma sessão em outro provedor', servidor: true },
-  ] as const;
+  ] as const satisfies readonly { id: TelaConfig; secao: string; rotulo: string; icone: string; descricao: string; servidor: boolean }[];
   const SECOES = ['App', 'Servidor'] as const;
 
-  let rota = $state<Rota>('root');
   let tituloEl = $state<HTMLElement | null>(null);
-
-  // Reabrir cai na RAIZ. Guardar a ultima sub-tela parece esperto e nao e: quem abre "Configuracoes"
-  // espera o indice, nao a tela onde parou semana passada.
-  $effect(() => { if (open) rota = 'root'; });
 
   // Trocar de rota destroi a linha que tinha o foco e o activeElement cai no <body>: leitor de tela
   // fica mudo e o Tab recomeca do zero. Mover o foco pro titulo (que muda a cada tela) anuncia a
   // troca e da um ponto de partida.
-  $effect(() => { rota; tituloEl?.focus(); });
+  $effect(() => { tela; tituloEl?.focus(); });
 
   let isDesktop = $state(false);
   $effect(() => {
@@ -66,23 +60,23 @@
   // Esc, no toque no backdrop E no swipe pra baixo. Passar `voltar` como onClose faria o swipe — o
   // gesto mais usado no celular, que e a view deste plano — subir um nivel em vez de sair, e de
   // dentro de uma sub-tela a folha ficaria impossivel de fechar. Entao o BottomSheet recebe o
-  // onClose de verdade, e voltar e SO o botao do cabecalho.
+  // onFechar de verdade, e voltar e SO o botao do cabecalho.
   function botaoEsquerdo() {
-    if (rota === 'root') onClose();
-    else rota = PAI[rota];
+    if (tela === 'root') onFechar();
+    else onVoltar();
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel={TITULO[rota]} wide={isDesktop} centered={isDesktop}>
+<BottomSheet open={true} onClose={onFechar} ariaLabel={TITULO[tela]} wide={isDesktop} centered={isDesktop}>
   <header class="st-head">
     <button class="st-icone" onclick={botaoEsquerdo}
-      aria-label={rota === 'root' ? 'Fechar' : 'Voltar'}>{rota === 'root' ? '✕' : '‹'}</button>
+      aria-label={tela === 'root' ? 'Fechar' : 'Voltar'}>{tela === 'root' ? '✕' : '‹'}</button>
     <!-- tabindex=-1: alvo do foco na troca de tela, sem entrar na ordem do Tab. -->
-    <h2 class="st-titulo" bind:this={tituloEl} tabindex="-1">{TITULO[rota]}</h2>
+    <h2 class="st-titulo" bind:this={tituloEl} tabindex="-1">{TITULO[tela]}</h2>
     <span class="st-icone st-vazio" aria-hidden="true"></span>
   </header>
 
-  {#if rota === 'root'}
+  {#if tela === 'root'}
     {#each SECOES as secao (secao)}
       <p class="st-secao">{secao}</p>
       <div class="st-cartao">
@@ -90,16 +84,16 @@
           <SettingsRow icone={l.icone} rotulo={l.rotulo} descricao={l.descricao}
             desabilitada={l.servidor && semServidor}
             motivo="escolha um servidor na lista pra configurar"
-            onPick={() => (rota = l.id)} />
+            onPick={() => onIrPara(l.id)} />
         {/each}
       </div>
     {/each}
-  {:else if rota === 'aparencia'}
+  {:else if tela === 'aparencia'}
     <AppearanceSettings />
-  {:else if rota === 'servidor'}
-    <ServerSettings {targetServer} onOpenMotores={() => (rota = 'motores')} />
+  {:else if tela === 'motores'}
+    <EnginesSettings targetServer={alvo} />
   {:else}
-    <EnginesSettings {targetServer} />
+    <ServerSettings targetServer={alvo} onOpenMotores={() => onIrPara('motores')} />
   {/if}
 </BottomSheet>
 

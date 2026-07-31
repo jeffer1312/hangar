@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { isAuthenticated, setServers, listServers, mergeServers, onServersChanged, clearCredentials, selectServer, getActiveId } from './lib/auth';
+  import { isAuthenticated, setServers, listServers, mergeServers, onServersChanged, clearCredentials, selectServer, getActiveId, type Server } from './lib/auth';
   import { getVault, decryptList, encryptList, putVault, logout as syncLogout, syncStatus, stashKey, loadKey, clearKey } from './lib/sync';
   import { vaultPush } from './lib/vaultPush.svelte';
   import { encodeCompareIds, type CompareId } from './lib/format';
   import { peekStep, initialPeek } from './lib/peek';
   import { parseHash, type Route } from './lib/route';
+  import { parseConfig, comConfig, TELAS_DE_SERVIDOR, type TelaConfig } from './lib/configRoute';
   import Login from './screens/Login.svelte';
   import SessionList from './screens/SessionList.svelte';
   import Costs from './screens/Costs.svelte';
@@ -12,6 +13,7 @@
   import Chat from './screens/Chat.svelte';
   import Compare from './screens/Compare.svelte';
   import DesktopShell from './components/DesktopShell.svelte';
+  import SettingsModal from './components/settings/SettingsModal.svelte';
 
   // Deep-link do push (feature #5): a notif abre '/?server=<id>&session=<name>' — o router so olha
   // window.location.hash, entao sem isto os query params eram ignorados e sempre caia na lista.
@@ -85,6 +87,47 @@
         ? (syncReady ? parseHash(currentHash) : { name: 'login' })     // sync: exige sessao com chave
         : (authenticated ? parseHash(currentHash) : { name: 'login' }) // sem sync: regra antiga
   );
+
+  // Painel de Configuracoes: segundo eixo do endereco (?config=&srv=, ver lib/configRoute.ts).
+  const cfg = $derived(parseConfig(currentHash));
+
+  // ⚠ listServers() e getActiveId() leem localStorage e NAO sao reativos: sem este contador, remover o
+  // servidor com o painel aberto deixaria `alvoConfig` devolvendo o objeto congelado, e a tela seguiria
+  // lendo e GRAVANDO nele. Pior: removeServer promove list[0] a ativo (auth.ts:271-275), entao remover
+  // o servidor ATIVO muda o destino das funcoes globais enquanto targetConfig continua null.
+  let versaoServidores = $state(0);
+  $effect(() => onServersChanged(() => versaoServidores++));
+
+  // SEMPRE `listServers().find`. NUNCA o caminho de activeServer(): auth.ts:151-155 faz `?? list[0]`,
+  // entao um id desconhecido devolveria O PRIMEIRO SERVIDOR DA LISTA, silenciosamente.
+  const alvoConfig = $derived.by(() => {
+    versaoServidores;                                   // dependencia explicita, ver acima
+    return cfg?.srv ? (listServers().find((s) => s.id === cfg.srv) ?? null) : null;
+  });
+
+  // Alvo que nao resolve (servidor removido, link velho, id re-pareado) NAO abre tela de servidor: cai
+  // na Aparencia, que e do aparelho e vale sempre. `semServidor` sozinho nao cobre isto — ele so apaga
+  // as LINHAS da raiz, e nao ajuda quem ja esta dentro da tela ou chegou por deep-link.
+  const telaEfetiva = $derived(
+    !cfg ? null
+    : (TELAS_DE_SERVIDOR.includes(cfg.tela) && !alvoConfig) ? ('aparencia' as TelaConfig)
+    : cfg.tela,
+  );
+
+  // `targetServer` null significa "e o servidor ativo, use as funcoes globais" — o contrato que
+  // ServerSettings/EnginesSettings ja tem. Manter isso preserva o self-heal de 401 do caminho global
+  // (apiFetchForServer NAO faz self-heal de proposito, AccountMenu.svelte:94-96).
+  const targetConfig = $derived.by(() => {
+    versaoServidores;
+    return alvoConfig && alvoConfig.id !== getActiveId() ? alvoConfig : null;
+  });
+
+  function irParaConfig(tela: TelaConfig) {
+    window.location.hash = comConfig(window.location.hash, tela, cfg?.srv ?? null);
+  }
+  function fecharConfig() {
+    window.location.hash = comConfig(window.location.hash, null);
+  }
 
   // Boot: sonda o hub. Se ligado, tenta restaurar a sessao do sessionStorage (encKey sobrevive ao
   // reload) sem repedir senha; senao cai no login do hub. Sem sync, segue a regra de localStorage.
@@ -324,6 +367,24 @@
         onNavigateToChat={navigateToChat}
       />
     {/key}
+  {/if}
+
+  <!-- Painel de Configuracoes: montado UMA vez, aqui, e nao dentro dos dois AccountMenu
+       (Sidebar.svelte:1177 e SessionList.svelte:800). E isso que o faz sobreviver a travessia dos
+       820px: o App nunca desmonta, o branch isDesktop (:380) desmonta os dois shells.
+       A guarda de rota nao e detalhe: loading/login/costs/archive/compare saem ANTES do branch
+       isDesktop (:364-379), entao sem ela um #/?config=avancado desenharia o painel por cima da tela
+       de boot e dispararia fetch sem credencial. -->
+  {#if cfg && telaEfetiva && route.name !== 'login' && route.name !== 'loading'}
+    <SettingsModal
+      tela={telaEfetiva}
+      alvo={targetConfig}
+      nomeAlvo={alvoConfig?.label ?? null}
+      semServidor={!alvoConfig}
+      onIrPara={irParaConfig}
+      onVoltar={() => history.back()}
+      onFechar={fecharConfig}
+    />
   {/if}
 </div>
 

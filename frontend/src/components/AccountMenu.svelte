@@ -1,9 +1,9 @@
 <script lang="ts">
   import { enablePush, pushSupported } from '../lib/push';
-  import SettingsModal from './settings/SettingsModal.svelte';
   import { getPushSettings, getPushSettingsForServer, setQuietHours, setQuietHoursForServer } from '../lib/api';
-  import { serverColor, parseServerPairing } from '../lib/auth';
+  import { serverColor, parseServerPairing, getActiveId } from '../lib/auth';
   import { vaultPush } from '../lib/vaultPush.svelte';
+  import { comConfig } from '../lib/configRoute';
   import type { Server } from '../lib/auth';
 
   // Menu de CONTA (estilo Claude): tudo que é conta/config vive aqui, fora da navegação. Popover que
@@ -78,8 +78,6 @@
   // e a UI desabilita em vez de cair no primeiro da lista.
   const activeServer = $derived(servers.find((s) => s.id === activeId) ?? null);
 
-  // Modal ÚNICO de configurações: Aparência, config do servidor e Motores viraram sub-telas dele.
-  let configOpen = $state(false);
   async function loadQuietHours() {
     // Alvo explícito (drawer) que sumiu de `servers`: NÃO cai nas funções globais — leria a janela
     // de outra máquina e mostraria como se fosse desta.
@@ -110,18 +108,6 @@
       qhMsg = e instanceof Error ? e.message : 'erro ao salvar';
     }
   }
-  // Alvo sumiu com o modal JÁ ABERTO (o × removeu o servidor sem fechar o drawer): fecha o modal
-  // inteiro. Sem isto, `targetServer` vira null e as telas de servidor caem nas funções GLOBAIS —
-  // editando/apagando config e motores (que guardam api_key) de outra máquina, calado.
-  // Com o modal único isso derruba junto a Aparência, que é preferência do APARELHO e não teria por
-  // que fechar. Fica assim de propósito: a rota vive dentro do SettingsModal, então daqui não dá pra
-  // saber em qual tela o usuário está, e "fechou uma tela de preferência à toa" é barato perto de
-  // "editou o servidor errado calado". Só a ABERTURA fica livre (o item de menu não desabilita mais):
-  // dentro do modal são as duas linhas de servidor que aparecem apagadas, com o motivo visível.
-  $effect(() => {
-    if (embedded && !activeServer) configOpen = false;
-  });
-
   // Recarrega a janela de silêncio toda vez que o menu abre (pode ter mudado no servidor).
   $effect(() => { if (open && pushSupported() && (!embedded || activeServer)) void loadQuietHours(); });
 
@@ -325,8 +311,16 @@
          agora ele também abre a Aparência, que é preferência do APARELHO e não depende de servidor
          nenhum. Quem perde entrada são só as duas linhas DE SERVIDOR, dentro do modal, com o motivo
          escrito na própria linha (`semServidor`). -->
+    <!-- `onClose?.()` NAO e opcional: no celular ele e `drawerOpen = false` (SessionList.svelte:803).
+         Sem ele o drawer fica aberto ATRAS do painel e reaparece quando o painel fecha.
+         Navegar direto do leaf e o precedente do proprio arquivo vizinho: SessionList.svelte:789 e :793
+         fazem `window.location.hash = '#/archive'` e `'#/costs'` na mao, sem prop drilling. -->
     <button class="am-item" role="menuitem"
-            onclick={() => { configOpen = true; onClose?.(); }}>
+            onclick={() => {
+              const alvo = embedded ? (activeServer?.id ?? null) : getActiveId();
+              onClose?.();
+              window.location.hash = comConfig(window.location.hash, 'root', alvo);
+            }}>
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.63.68 1.1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       Configurações
     </button>
@@ -484,16 +478,3 @@
     .am-card { animation: none; }
   }
 </style>
-
-<!-- Sem `<div use:portal>`: o BottomSheet de dentro do modal ja se portala pro <body> sozinho
-     (BottomSheet.svelte:180-183, 208) — o que importa no celular, onde o AccountMenu vive DENTRO do
-     drawer, que desliza com translateX: um position:fixed descendente de elemento transformado se
-     posiciona contra ELE, e a folha renderizava fora da tela.
-     `targetServer` é o alvo EXPLÍCITO no drawer: as telas de servidor mexem em config e em motores
-     (que guardam api_key), e sem esta prop cairiam nas funções globais — que no mobile (lista
-     agregada) podem ser outra máquina. -->
-{#if configOpen}
-  <SettingsModal open={configOpen} onClose={() => (configOpen = false)}
-    targetServer={embedded ? activeServer : null}
-    semServidor={embedded && !activeServer} />
-{/if}
