@@ -72,8 +72,7 @@
 <!-- No desktop vira MODAL centrado e largo, nao dock estreito: sao 8 secoes de rotulo+controle, e
      num painel de ~530px a descricao de cada uma disputava a linha com o segmentado e quebrava em
      palavras soltas. Mesmo par `wide`+`centered` do EnginesSheet e do modal de git. -->
-<BottomSheet {open} {onClose} ariaLabel="Aparência" persistent resizable widthKey="cp_appearance_w" defaultWidth={560}
-             wide={isDesktop} centered={isDesktop}>
+<BottomSheet {open} {onClose} ariaLabel="Aparência" wide={isDesktop} centered={isDesktop}>
   <div class="ap-sheet">
   <h2 class="sheet-title">Aparência</h2>
 

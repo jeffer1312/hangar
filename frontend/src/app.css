@@ -321,7 +321,8 @@ html[data-bg="image"] {
   /* As superficies DE DENTRO dos paineis entram no mesmo veu, senao cada chip, campo e bloco de
      saida vira um retangulo chapado boiando sobre a foto. Mesma conta do bloco de codigo do
      AssistantBubble, agora como token pra qualquer componente usar.
-     `--cp-surface-alpha` = alfa do painel + o slider "Solidez das caixas" (lib/background.ts). O
+     `--cp-surface-alpha` interpola entre a alfa do painel (Solidez 0) e opaco (Solidez 100), pelo
+     slider "Solidez das caixas" (lib/background.ts). O
      ponto certo depende da FOTO de quem usa, entao e controle na tela de aparencia, nao numero
      fixo aqui: sobre imagem clara e detalhada as caixas precisam de corpo pra o texto se ler. */
   --surface-raised: color-mix(in srgb, var(--bg-elevated) calc(var(--cp-surface-alpha, 0.87) * 100%), transparent);
