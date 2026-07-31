@@ -25,6 +25,9 @@ def preparar(texto: str) -> str:
     t = _EMOJI.sub(" ", t)
     t = _BULLET.sub(" ", t)
     t = t.replace("—", ", ").replace("–", ", ")   # travessao vira pausa
-    t = re.sub(r"\n{2,}", ". ", t)
+    # \n+ (nao so \n{2,}): o front agora manda UMA quebra por bloco (ver speakable.ts), entao um
+    # titulo seguido de um paragrafo ja chega como uma unica \n — sem isso essa pausa era
+    # inalcancavel, porque so quebra DUPLA virava pausa.
+    t = re.sub(r"\n+", ". ", t)
     t = re.sub(r"\s+", " ", t)
     return t.strip()

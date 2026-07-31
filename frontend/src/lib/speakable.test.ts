@@ -4,6 +4,7 @@
 // DOM em vez de testa-lo.
 import { describe, it, expect } from 'vitest';
 import { textoFalavel } from './speakable';
+import { renderMarkdown } from './markdown';
 
 function montar(html: string): HTMLElement {
   const d = document.createElement('div');
@@ -36,5 +37,12 @@ describe('textoFalavel', () => {
     const el = montar('<pre><code>segredo</code></pre>');
     textoFalavel(el);
     expect(el.querySelector('pre')?.textContent).toBe('segredo');
+  });
+
+  it('titulo, paragrafo e lista renderizados pelo renderMarkdown de verdade saem falaveis, sem palavras coladas', () => {
+    const html = renderMarkdown('## Passo 1\n\nFazer X no arquivo.\n\n- item um\n- item dois\n');
+    const el = montar(html);
+    // Prova de que o audio sai falavel: nao "Passo 1Fazer X no arquivo.item umitem dois".
+    expect(textoFalavel(el)).toBe('Passo 1\nFazer X no arquivo.\nitem um\nitem dois');
   });
 });

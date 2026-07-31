@@ -33,10 +33,11 @@ describe('falavelDaSelecao', () => {
     expect(t).not.toContain('const x = 1');
   });
 
-  it('selecao cruzando dois paragrafos vira uma string so', () => {
+  it('selecao cruzando dois paragrafos vira uma string so, com quebra entre eles', () => {
     const s = selecionarTudo('<p>um</p><p>dois</p>');
     const t = falavelDaSelecao(s);
-    expect(t).toContain('um');
-    expect(t).toContain('dois');
+    // Igualdade exata, nao toContain: "umdois" tambem conteria 'um' e 'dois', e e exatamente o
+    // bug (palavras coladas) que este teste existe pra pegar.
+    expect(t).toBe('um\ndois');
   });
 });
