@@ -9,12 +9,13 @@
 #     is invisible to the app.
 #
 # Rules:
-#  - already passed a flag that manages its own session state -> respected, untouched. Per
-#    `pi --help`: --session-id, --resume/-r, --continue/-c, --session (path|id), --fork (path|id),
-#    --no-session. Same class of bug as the claude wrapper guards against (-c there is Claude's own
-#    "continue previous session" short flag) — injecting --session-id alongside any of these either
-#    errors or silently overrides what the user asked for (e.g. `pi -c` would start a FRESH random
-#    session instead of continuing the last one).
+#  - already passed a flag that manages its own session state -> no --session-id injection, but
+#    STILL wrapped in tmux when interactive+outside tmux. Per `pi --help`: --session-id,
+#    --resume/-r, --continue/-c, --session (path|id), --fork (path|id), --no-session. Injecting
+#    --session-id alongside any of these either errors or silently overrides what the user asked
+#    for (e.g. `pi -c` would start a FRESH random session instead of continuing the last one).
+#    The tmux wrap keeps resumed sessions visible in the app; state tracking still works because
+#    cp-state.ts publishes the real session file from inside pi (it never depended on the id).
 #  - not an interactive session at all -> raw, exactly like the codex wrapper leaves its subcommands
 #    alone. Two shapes: (a) the FIRST argument is one of pi's subcommands (install/remove/uninstall/
 #    update/list/config) — matched on the first argument only, so `pi "remove the dead code"` stays an
@@ -46,17 +47,28 @@ pi() {
             ;;
     esac
 
+    # usos não interativos primeiro: o pi imprime e sai, não tem TUI pra envolver em tmux.
+    # Ordem indiferente hoje: o loop de resume só marca a flag (não retorna) e este retorna
+    # sempre — `pi -c -p "x"` sai cru nas duas ordens (provado em review, 31/07).
     for a in "$@"; do
         case "$a" in
-            # flags que gerenciam a própria sessão (injetar --session-id junto erra ou sobrescreve)
-            --session-id|--session-id=*|--resume|--resume=*|-r|--continue|-c|--session|--session=*|--fork|--fork=*|--no-session)
-                command pi "$@"
-                return
-                ;;
-            # usos não interativos: o pi imprime e sai, não tem TUI pra envolver em tmux
             -p|--print|--mode|--mode=*|--list-models|--list-models=*|--export|--export=*|--help|-h|--version|-v)
                 command pi "$@"
                 return
+                ;;
+        esac
+    done
+
+    # Flags que gerenciam a própria sessão: NUNCA injetar --session-id (id novo por cima de `pi -c`
+    # abriria sessão FRESCA em vez de continuar). Mas o tmux continua valendo — antes essas flags
+    # passavam cruas e a sessão retomada ficava INVISÍVEL pro app. O rastreio não depende do id
+    # injetado: cp-state.ts publica o arquivo real da sessão por dentro do pi.
+    local own_session=0
+    for a in "$@"; do
+        case "$a" in
+            --session-id|--session-id=*|--resume|--resume=*|-r|--continue|-c|--session|--session=*|--fork|--fork=*|--no-session)
+                own_session=1
+                break
                 ;;
         esac
     done
@@ -75,6 +87,10 @@ pi() {
 
     # só injeta o id (sem tmux novo) quando: já dentro de tmux, ou stdin não é um tty (pipe/script).
     if [ -n "${TMUX:-}" ] || [ ! -t 0 ]; then
+        if [ "$own_session" = 1 ]; then
+            command pi "$@"
+            return
+        fi
         export CP_PI_SESSION="$id"
         command pi --session-id "$id" "$@"
         return
@@ -108,6 +124,11 @@ pi() {
     # `sh -c` exporta CP_PI_SESSION DENTRO do próprio pane antes do exec pi — ver o comentário de
     # cabeçalho pra o porquê. $0 vira "_" (placeholder), $1 o uuid, o resto ($@) os args originais.
     # CP_SESSION_NAME: carimbo de identidade pro cp-send de dentro do pane (ver claude.posix.sh).
-    "${run[@]}" tmux new-session -s "$name" -c "$PWD" -e "CP_SESSION_NAME=$name" \
-        sh -c 'export CP_PI_SESSION="$1"; shift; exec pi --session-id "$CP_PI_SESSION" "$@"' _ "$id" "$@"
+    if [ "$own_session" = 1 ]; then
+        "${run[@]}" tmux new-session -s "$name" -c "$PWD" -e "CP_SESSION_NAME=$name" \
+            sh -c 'exec pi "$@"' _ "$@"
+    else
+        "${run[@]}" tmux new-session -s "$name" -c "$PWD" -e "CP_SESSION_NAME=$name" \
+            sh -c 'export CP_PI_SESSION="$1"; shift; exec pi --session-id "$CP_PI_SESSION" "$@"' _ "$id" "$@"
+    fi
 }
