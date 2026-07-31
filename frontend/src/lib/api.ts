@@ -99,14 +99,30 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 // trocar o servidor global. Um 401 aqui é erro local da sheet: nunca remove a credencial ativa,
 // que pode pertencer a outra máquina.
 async function apiFetchForServer<T>(s: Server, path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${s.baseUrl}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${s.token}`,
-      ...(init?.headers ?? {}),
-    },
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${s.baseUrl}${path}`, {
+      // Prazo por PADRAO. Esta funcao fala com OUTRO servidor, e servidor offline atras de VPN nao
+      // recusa a conexao — o socket fica pendurado e a promessa nunca resolve (o comentario do
+      // getSessions ja registrava isso pro poll). Sem prazo, abrir Configuracoes de um servidor
+      // desligado prendia a folha em "Carregando..." pra sempre, sem erro nenhum na tela.
+      // Antes do spread do `init`: quem precisar de outro prazo (ou de nenhum) passa o proprio sinal.
+      signal: AbortSignal.timeout(8000),
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${s.token}`,
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch (e) {
+    // "signal timed out" (o texto que o navegador poe no TimeoutError) nao diz nada pra quem le a
+    // tela. Abort pedido POR QUEM CHAMOU continua passando cru — quem cancela sabe que cancelou.
+    if (e instanceof DOMException && e.name === 'TimeoutError') {
+      throw new Error(`${s.label} não respondeu em 8s — servidor fora do ar?`);
+    }
+    throw e;
+  }
   if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
   return res.json() as Promise<T>;
 }
