@@ -115,7 +115,7 @@
               autocapitalize="off"
               spellcheck={false}
               placeholder={estado?.definido ? 'colar nova chave para trocar' : 'colar a chave'}
-              value={(store.valorAtual(c.chave) as string) ?? ''}
+              value={store.rascunhoDe(c.chave)}
               oninput={(e) => store.setRascunho(c.chave, e.currentTarget.value)}
             />
           {:else}
