@@ -50,9 +50,15 @@ def preview_is_committed(preview: str, committed: str) -> bool:
     return n in committed or n.startswith(committed)
 
 
+# Linhas que o proprio TUI acrescenta a QUALQUER AskUserQuestion. Nunca vem no payload do hook, entao
+# nao podem contar como "opcao a mais" na checagem de frescor abaixo.
+_TUI_EXTRAS = frozenset({"Type something.", "Chat about this"})
+
+
 def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
-    """Retorna o evento SSE ask_question p/ o AskUserQuestion MULTI-pergunta (tabbed), ou None.
-    Dispara em awaiting_input + sidecar do hook com >=2 perguntas cujas opcoes batem com o menu atual."""
+    """Retorna o evento SSE ask_question que abre o stepper nativo do AskUserQuestion, ou None.
+    Dispara em awaiting_input + sidecar do hook cujas opcoes batem com o menu corrente do pane —
+    qualquer numero de perguntas, inclusive uma."""
     try:
         obj = json.loads(state_json)
     except (json.JSONDecodeError, ValueError):
@@ -87,6 +93,15 @@ def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
         return None
     if not has_preview:
         if not first_opts <= state_opts:
+            return None
+        # Subset sozinho nao basta. Um sidecar STALE cujos rotulos por acaso APARECEM num menu maior
+        # (ex: {Sim, Nao} contra um menu [Cancelar, Sim, Nao]) passava — e como answer_questions
+        # submete POR INDICE, com o menu real em outra ordem o Enter cai na linha errada. Entao
+        # nenhuma opcao REAL do pane pode faltar no sidecar. _TUI_EXTRAS sai da conta porque o TUI a
+        # acrescenta a toda pergunta e ela nunca esta no payload do hook.
+        # Se o Claude Code renomear essas linhas, o casamento passa a reprovar e a sessao degrada pro
+        # OptionButtons — o comportamento antigo, nunca resposta na linha errada.
+        if state_opts - first_opts - _TUI_EXTRAS:
             return None
     else:
         def _match(lbl: str) -> bool:

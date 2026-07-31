@@ -117,6 +117,30 @@ def test_ask_question_event_single_question_still_checks_freshness(tmp_path):
     assert _ask_question_event(_state_json("awaiting_input", options=["Sim", "Nao"]), jsonl) is None
 
 
+def test_ask_question_event_recusa_menu_com_opcao_a_mais(tmp_path):
+    # Sidecar STALE cujos rotulos por acaso APARECEM num menu maior. So o subset nao basta: a
+    # submissao e POR INDICE (terminal_input.py:463), entao com o menu real em outra ordem o Enter
+    # cairia na linha errada — cross-wire de resposta. Qualquer opcao REAL no pane que o sidecar nao
+    # tenha reprova o casamento.
+    one = [{"header": "Confirma", "question": "Vai?", "multiSelect": False,
+            "options": [{"label": "Sim", "description": ""}, {"label": "Nao", "description": ""}]}]
+    jsonl, _ = _layout(tmp_path, questions=one)
+    ev = _ask_question_event(
+        _state_json("awaiting_input", options=["Cancelar", "Sim", "Nao"]), jsonl)
+    assert ev is None
+
+
+def test_ask_question_event_ignora_as_linhas_proprias_do_tui(tmp_path):
+    # O TUI acrescenta "Type something." e "Chat about this" a TODA pergunta. Elas nunca estao no
+    # sidecar e nao podem reprovar o casamento — senao nenhuma pergunta abriria o stepper.
+    one = [{"header": "Cor", "question": "Escolha", "multiSelect": False,
+            "options": [{"label": "A", "description": "d"}, {"label": "B", "description": "d"}]}]
+    jsonl, _ = _layout(tmp_path, questions=one)
+    ev = _ask_question_event(
+        _state_json("awaiting_input", options=["A", "B", "Type something.", "Chat about this"]), jsonl)
+    assert ev is not None
+
+
 def test_ask_question_event_single_question_with_preview_emits(tmp_path):
     # Excecao do gate de 1 pergunta: opcao com `preview` so renderiza no stepper (OptionButtons nao
     # tem o payload) -> emite mesmo com pergunta unica, e o preview vai no data.
