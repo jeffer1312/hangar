@@ -22,7 +22,7 @@
 </script>
 
 <!-- `wide` + `centered` = no desktop a folha JA vira modal centrado min(1100px, 92vw). Mesmo par que
-     o EnginesSheet usa. Nao usar ModalDialog: a folha fica em z 100, e o 110/120 do CommitMenu
+     o modal de Configuracoes usa. Nao usar ModalDialog: a folha fica em z 100, e o 110/120 do CommitMenu
      segue correto. -->
 <BottomSheet {open} {onClose} ariaLabel="Git" wide={desktop} centered={desktop}>
   <GitTabs {git} {desktop} {onClose} />

@@ -414,7 +414,7 @@
           quiser o motivo.
         </p>
 
-        <!-- Uma linha por recurso, no MESMO vocabulário do ConfigSheet (rótulo à esquerda,
+        <!-- Uma linha por recurso, no MESMO vocabulário do ServerSettings (rótulo à esquerda,
              controle à direita, separador entre linhas). O motivo é um acordeão: só um aberto por
              vez, senão nove parágrafos abertos viram de novo a parede de texto que isto resolve. -->
         {#snippet linha(chave: ChaveLiga | ChaveNum, rot: string, vered: string, tom: string,
@@ -616,7 +616,7 @@
   .avancado[open] > summary { margin-bottom: 0; }
   .avancado .ajuda.topo { margin: 0; max-width: 68ch; }
 
-  /* Linha de recurso: MESMO vocabulário do ConfigSheet (rótulo à esquerda, controle à direita,
+  /* Linha de recurso: MESMO vocabulário do ServerSettings (rótulo à esquerda, controle à direita,
      separador entre linhas). Nada de card por item — nove cards viram ruído, e o separador já
      agrupa. Grid de 3 faixas pra o motivo expandido nascer alinhado sob o texto, não sob o
      controle. */

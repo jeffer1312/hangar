@@ -107,7 +107,7 @@
   .bg-scrim { display: flex; align-items: center; gap: var(--space-2); width: 100%; }
   .bg-scrim span { color: var(--text-muted); font-size: var(--text-xs); white-space: nowrap; }
   .bg-scrim input { flex: 1; min-width: 120px; accent-color: var(--accent); }
-  /* Mesmo valor à direita dos sliders de Leitura (AppearanceSheet): sem o número não há como saber
+  /* Mesmo valor à direita dos sliders de Leitura (AppearanceSettings): sem o número não há como saber
      em quanto o fundo está, nem repetir um ponto que ficou bom. */
   .bg-scrim em { color: var(--text-muted); font-size: var(--text-xs); font-style: normal; min-width: 3ch; text-align: right; }
   .bg-img-row { display: flex; gap: var(--space-2); }
