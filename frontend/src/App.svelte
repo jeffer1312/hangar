@@ -140,6 +140,17 @@
     abrirConfig(tela, cfg?.srv ?? null);
   }
 
+  // ‹ (botaoEsquerdo de sub-tela no SettingsModal) e "subir um nivel", nao "voltar no tempo": os dois
+  // coincidem quando a sub-tela foi empilhada por cima da raiz (cpDepth >= 2, history.back sobe pra
+  // ela). Mas um deep-link cai DIRETO na sub-tela (normalizarChegadaDoPainel carimba cpDepth 1) — nao
+  // ha parada da raiz atras dela no historico, entao back() sairia do painel inteiro. Empilha a raiz
+  // por cima (abrirConfig conta como nova parada, cpDepth vira 2) em vez de voltar.
+  function voltarConfig() {
+    const prof = (history.state?.cpDepth as number | undefined) ?? 0;
+    if (prof <= 1) abrirConfig('root', cfg?.srv ?? null);
+    else history.back();
+  }
+
   // Boot: sonda o hub. Se ligado, tenta restaurar a sessao do sessionStorage (encKey sobrevive ao
   // reload) sem repedir senha; senao cai no login do hub. Sem sync, segue a regra de localStorage.
   $effect(() => {
@@ -393,7 +404,7 @@
       nomeAlvo={alvoConfig?.label ?? null}
       semServidor={!alvoConfig}
       onIrPara={irParaConfig}
-      onVoltar={() => history.back()}
+      onVoltar={voltarConfig}
       onFechar={fecharConfig}
     />
   {/if}
