@@ -1,4 +1,6 @@
 import json
+from pathlib import Path
+
 import pytest
 from app import tts
 
@@ -135,6 +137,21 @@ def test_provedor_desconhecido_levanta_400(monkeypatch):
     with pytest.raises(tts.TtsError) as e:
         tts.sintetizar("oi", "voz", "outro-provedor")
     assert e.value.status == 400
+
+
+def test_falha_ao_gravar_cache_vira_ttserror_500(monkeypatch, tmp_path):
+    # Disco cheio/permissao negada na gravacao: o usuario ja pagou a chamada ao provedor e nao
+    # pode levar um 500 sem detail nenhum (a rota so captura TtsError).
+    monkeypatch.setattr(tts, "_base_cache", lambda: tmp_path)
+    monkeypatch.setattr(tts, "_baixar_elevenlabs", lambda t, v: b"MP3")
+    monkeypatch.setattr(tts.runtime_config, "get",
+                        lambda campo: "chave" if campo == "elevenlabs_api_key" else "")
+    monkeypatch.setattr(Path, "write_bytes", lambda self, data: (_ for _ in ()).throw(OSError("disco cheio")))
+
+    with pytest.raises(tts.TtsError) as e:
+        tts.sintetizar("oi", "voz", "elevenlabs")
+    assert e.value.status == 500
+    assert "cache" in e.value.detail.lower()
 
 
 def test_comando_local_mal_formado_levanta_ttserror(monkeypatch, tmp_path):
