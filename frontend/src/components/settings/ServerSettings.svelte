@@ -66,6 +66,7 @@
   let vozErro = $state('');
   let carregandoVozes = $state(false);
   let saldo = $state<{ usados: number | null; limite: number | null } | null>(null);
+  let saldoErro = $state('');
 
   function carregarVozes() {
     vozErro = '';
@@ -74,8 +75,11 @@
       .then((v) => { vozes = v; })
       .catch((e: Error) => { vozErro = e.message; })
       .finally(() => { carregandoVozes = false; });
-    // Saldo e extra, nao pode quebrar a tela: falha aqui fica muda, a voz e o principal.
-    saldoTts().then((s) => { saldo = s; }).catch(() => {});
+    // Saldo e extra, nao pode quebrar a TELA (sem botao de retry, sem bloquear a voz, que e o
+    // principal) — mas a falha ainda tem que aparecer, no mesmo lugar e pelo mesmo motivo que a
+    // das vozes: sumir calada e o que a regra do projeto proibe.
+    saldoErro = '';
+    saldoTts().then((s) => { saldo = s; }).catch((e: Error) => { saldoErro = e.message; });
   }
 </script>
 
@@ -187,6 +191,7 @@
         {#if saldo}
           <p class="sub">Consumo do mês: {saldo.usados ?? '?'} de {saldo.limite ?? '?'} caracteres.</p>
         {/if}
+        {#if saldoErro}<p class="aviso erro">{saldoErro}</p>{/if}
       </div>
     {/if}
 
