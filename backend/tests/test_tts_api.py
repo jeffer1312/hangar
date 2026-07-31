@@ -38,6 +38,14 @@ def test_limite_de_caracteres_e_do_servidor(monkeypatch):
     assert _tts_limite() == 5000
 
 
+def test_teto_duro_vem_do_modelo_em_uso():
+    # Regressao: o teto era 40_000 chumbado (limite do eleven_flash_v2_5), mas MODELO_PADRAO e o
+    # eleven_multilingual_v2, cujo teto real e menor — confirmar um gasto que passasse do teto
+    # antigo ainda seria recusado pela ElevenLabs.
+    from app.api import _TTS_TETO
+    assert _TTS_TETO == tts.TETO_CARACTERES
+
+
 def test_409_confirma_e_passa_pra_200(monkeypatch):
     # Limite de aviso baixo pra nao precisar de texto gigante no teste.
     monkeypatch.setattr(runtime_config, "get", lambda campo: 10)
