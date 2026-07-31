@@ -23,6 +23,10 @@ export function chavesUnicas(ids: readonly string[]): string[] {
     // A primeira ocorrencia mantem o id CRU: no caso normal (sem colisao) a chave continua sendo
     // exatamente o id do evento, e nada que dependa disso muda.
     if (!usados.has(id)) { usados.add(id); return id; }
+    // ponytail: a busca recomeca do 2 a cada repeticao, entao K copias do MESMO id custam O(K²).
+    // O teto real e a janela de render da lista (WINDOW=120 em MessageList) e o caso que motivou
+    // isto tinha DUAS copias. Se algum dia aparecer transcript com centenas de ids identicos, o
+    // upgrade e guardar o ultimo `n` por id num Map em vez de recontar.
     let n = 2;
     let cand = `${id}#${n}`;
     while (usados.has(cand) || brutos.has(cand)) cand = `${id}#${++n}`;
