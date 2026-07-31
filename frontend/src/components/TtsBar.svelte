@@ -8,10 +8,31 @@
     const i = RATES.indexOf(ttsPlayer.rate);
     ttsPlayer.setRate(RATES[(i + 1) % RATES.length]);
   }
+
+  let barEl = $state<HTMLDivElement | null>(null);
+
+  // Mede a propria altura e publica no ttsPlayer (App.svelte compoe --cp-tts-bar-h/--cp-tts-h a
+  // partir dai) — nao e mais um 52px cravado: o erro real da ElevenLabs quebra em 2-3 linhas num
+  // celular estreito e passa longe disso. Mesmo padrao do dockH em Chat.svelte. Some da tela
+  // (ttsPlayer.active vira false) -> barEl volta null -> publica 0, senao a TtsSelectionPill e as
+  // tres pills do Chat.svelte ficariam flutuando alto pra sempre depois do 1o audio.
+  $effect(() => {
+    if (!barEl) { ttsPlayer.setBarH(0); return; }
+    const el = barEl;
+    let raf = 0;
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        ttsPlayer.setBarH(Math.round(el.getBoundingClientRect().height));
+      });
+    });
+    ro.observe(el);
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); ttsPlayer.setBarH(0); };
+  });
 </script>
 
 {#if ttsPlayer.active}
-  <div class="tts-bar" role="region" aria-label="Leitura em voz">
+  <div class="tts-bar" bind:this={barEl} role="region" aria-label="Leitura em voz">
     {#if ttsPlayer.error}
       <span class="tts-err">{ttsPlayer.error}</span>
     {:else if ttsPlayer.loading}
