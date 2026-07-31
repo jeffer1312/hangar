@@ -2,10 +2,28 @@ import { describe, it, expect } from 'vitest';
 
 // Mesmo stub do auth.test.ts: background.ts lê localStorage no load. env=node não tem.
 const store = new Map<string, string>();
+// `falhaAoGravar` simula o Safari em modo privado / cota estourada: setItem levanta. Sem isto o
+// stub nunca falha e o caminho do catch — o mais fácil de escrever errado — fica sem teste.
+let falhaAoGravar = false;
 (globalThis as any).localStorage = {
   getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
-  setItem: (k: string, v: string) => store.set(k, String(v)),
+  setItem: (k: string, v: string) => {
+    if (falhaAoGravar) throw new DOMException('quota', 'QuotaExceededError');
+    store.set(k, String(v));
+  },
   removeItem: (k: string) => store.delete(k),
+};
+
+// O <html> só existe no jsdom; nos testes de node basta um objeto que guarde o que foi setado.
+const varsCss = new Map<string, string>();
+(globalThis as any).document = {
+  documentElement: {
+    style: {
+      setProperty: (k: string, v: string) => varsCss.set(k, v),
+      removeProperty: (k: string) => varsCss.delete(k),
+    },
+    dataset: {},
+  },
 };
 
 const { getBgScrim, getReadAlpha, getTextBoost, getFontPref, setFontPref, getSurfaceSolid, setSurfaceSolid, getMedidaTexto, setMedidaTexto } = await import('./background');
@@ -114,5 +132,26 @@ describe('medidas do texto da conversa', () => {
     expect(getMedidaTexto('size')).toBe(120);
     expect(getMedidaTexto('lh')).toBe(100);
     expect(getMedidaTexto('width')).toBe(80);
+  });
+});
+
+// Gravacao que falha (modo privado) nao pode deixar a TELA no valor velho: o slider ja mostra o
+// numero novo, entao a variavel CSS tem que acompanhar mesmo sem persistir. Sem isto o usuario
+// arrasta, ve o numero mudar, nada acontece na tela e nenhum aviso aparece.
+describe('preferência que não consegue persistir ainda vale nesta sessão', () => {
+  it('solidez aplica a variável CSS mesmo com setItem falhando', () => {
+    store.clear(); varsCss.clear();
+    falhaAoGravar = true;
+    try { setSurfaceSolid(60); } finally { falhaAoGravar = false; }
+    expect(store.has('cp_surface_solid')).toBe(false);          // não persistiu
+    expect(varsCss.get('--cp-surface-alpha')).toBeDefined();     // mas valeu agora
+  });
+
+  it('as medidas do texto aplicam a escala pedida mesmo com setItem falhando', () => {
+    store.clear(); varsCss.clear();
+    falhaAoGravar = true;
+    try { setMedidaTexto('size', 130); } finally { falhaAoGravar = false; }
+    expect(store.has('cp_text_size')).toBe(false);
+    expect(varsCss.get('--cp-text-scale')).toBe('1.300');
   });
 });
