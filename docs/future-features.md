@@ -179,6 +179,38 @@ and a `is_git` badge in the project picker. No way to act on git from the phone.
   run-any-command endpoint is an RCE-class footgun even on LAN; skip it.
 - Open: also surface quick actions (status/pull) as fixed buttons in the same sheet?
 
+## 6. Diff lado a lado (split view) — no chat e no modal de git (pedido 2026-07-31, não construído)
+
+**O pedido, nas palavras dele:** *"esse diff é até bom pra ver no componente do git que a gente tem
+também, é uma forma de diff que eu gosto muito"* — sobre o diff em duas colunas que ele viu no
+terminal do Pi (print: `old` à esquerda, `new` à direita, número de linha nos dois lados, faixa
+hachurada onde um lado não tem correspondente, syntax highlight).
+
+**Dois consumidores, um componente.**
+
+1. **Modal de git** — `components/git/DiffView.svelte` já recebe o diff parseado (`DiffRow[]`, com
+   `kind` = add/del/hunk/meta e os tokens já coloridos pelo Shiki). Hoje ele empilha tudo numa
+   coluna (unificado, `+`/`−`). Falta só a **montagem** em duas colunas: parear remoção com adição
+   e desenhar hachura onde não há par. Aqui o número de linha e o contexto **já vêm do git**.
+
+2. **Card de ferramenta no chat (`Edit`)** — hoje **não existe diff nenhum**: `lib/format.ts:464`
+   resolve `Edit`/`Write` para o caminho do arquivo e nada mais; nenhum componente lê
+   `old_string`/`new_string`. É feature nova.
+
+**Decisões já tomadas com ele:**
+- No chat o diff nasce **oculto** e abre no **clique**, no mesmo padrão que o `ToolCard` já usa pro
+  Bash ("clique para ver"). Ele foi explícito: *"não é mostrar o tempo todo, porque eu posso não
+  querer ver"*.
+- Celular: duas colunas de código não cabem — cair no unificado abaixo de 820px.
+
+**A decisão que ficou em aberto:** no chat, o `Edit` só carrega `old_string`/`new_string` — os
+pedaços, não o arquivo. Ou o diff sai **sem numeração de linha e sem contexto em volta** (barato,
+usa só o que o transcript já tem), ou o **backend lê o arquivo** pra localizar o trecho e completar
+número + contexto (caro, e o arquivo pode ter mudado desde a edição). No git isso não se coloca.
+
+**Observação registrada de passagem:** ele comentou que a saída do **Bash** no card *"não mostra de
+uma forma boa"*. Não foi investigado — assunto separado deste item.
+
 ## Notes
 - These build on the existing infra: SSE stream, transcript parser, send-keys input, the
   HTTPS/secure-context (Tailscale), and the redesigned composer (a natural home for an
