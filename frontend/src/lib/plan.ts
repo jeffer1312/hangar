@@ -8,6 +8,8 @@ export interface PlanBadge {
   pct: number;        // 0..100
   title: string;      // tooltip: plano · Task N/M · done/total steps
   complete: boolean;
+  /** Nome do plano, sozinho — pra quem precisa dele separado do rotulo (ex.: truncar so o nome). */
+  nome: string;
 }
 
 export type PlanCarrier = Pick<SessionInfo,
@@ -25,7 +27,12 @@ export function planBadge(s: PlanCarrier | null | undefined): PlanBadge | null {
   const hasTask = s.plan_task != null && s.plan_task_total != null;
   const task = hasTask ? `Task ${s.plan_task}/${s.plan_task_total}` : `${done}/${total}`;
   return {
-    label: complete ? '📋 concluído' : `📋 ${task}`,
+    // O NOME entra no rotulo, nao so no `title`: no celular nao existe hover, entao o title nunca e
+    // lido e nada na tela dizia QUAL plano estava rodando — so o progresso dele. Com varios planos
+    // no repo (13 aqui), "Task 4/5" sozinho nao identifica nada. O nome vem primeiro porque e o que
+    // se procura; quem corta quando falta espaco e o CSS do chip, e o numero fica preso na ponta.
+    label: complete ? `📋 ${s.plan_name} · concluído` : `📋 ${s.plan_name} · ${task}`,
+    nome: s.plan_name,
     pct,
     // sem task, o rótulo já É done/total — repetir daria "x · 3/10 · 3/10 steps"
     title: hasTask ? `${s.plan_name} · ${task} · ${done}/${total} steps`

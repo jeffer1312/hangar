@@ -1801,6 +1801,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     font-size: 10px;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+    /* O rotulo agora carrega o NOME do plano, que e longo e variavel: sem teto ele empurrava o resto
+       da linha de chips pra fora. Corta o nome com reticencias e mantem a linha inteira. */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 22ch;
   }
   .plan-chip--done {
     background: color-mix(in srgb, var(--success) 14%, transparent);
