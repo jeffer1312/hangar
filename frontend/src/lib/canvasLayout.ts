@@ -11,6 +11,27 @@ export const CARD_H = 380;
 export const GAP = 16;
 export const PAD = 24;
 
+export const MIN_W = 240;
+export const MIN_H = 160;
+
+/** Nova caixa ao arrastar uma borda/canto (`dir` com n/s/e/w). O CSS `resize` nativo só dá o canto
+ *  inferior-direito, então o canvas desenha as 8 alças e chama isto. Puxar a borda oeste/norte move
+ *  x/y junto; clampa no mínimo do card E em x/y >= 0 (senão o card sai do plano rolável). */
+export function resizeBox(box: CardBox, dir: string, dx: number, dy: number): CardBox {
+  let { x, y, w, h } = box;
+  if (dir.includes('e')) w = Math.max(MIN_W, box.w + dx);
+  if (dir.includes('s')) h = Math.max(MIN_H, box.h + dy);
+  if (dir.includes('w')) {
+    w = Math.min(Math.max(MIN_W, box.w - dx), box.x + box.w);
+    x = box.x + box.w - w;
+  }
+  if (dir.includes('n')) {
+    h = Math.min(Math.max(MIN_H, box.h - dy), box.y + box.h);
+    y = box.y + box.h - h;
+  }
+  return { x, y, w, h };
+}
+
 export function placeNew(
   layout: CanvasLayout,
   rows: { key: string; serverId: string; pairGid: string | null }[],
