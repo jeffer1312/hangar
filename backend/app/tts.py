@@ -187,6 +187,12 @@ def sintetizar(texto: str, voz: str, provedor: str) -> tuple[str, bool]:
         raise TtsError(500, f"falha ao preparar a pasta de cache do audio: {e}")
     existente = caminho_do_cache(h)
     if existente.exists() and existente.stat().st_size > 0:
+        # Renova o mtime no HIT: _limpar_antigos apaga pela idade do arquivo, e sem isto um trecho
+        # ouvido toda semana ainda seria apagado no 31o dia (desde a ultima GRAVACAO) e repago.
+        try:
+            existente.touch()
+        except OSError:
+            pass
         return h, True
 
     if provedor == "local":

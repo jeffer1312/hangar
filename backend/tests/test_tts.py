@@ -1,4 +1,6 @@
 import json
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -47,6 +49,23 @@ def test_sintetizar_usa_cache_e_nao_chama_o_provedor(monkeypatch, tmp_path):
     assert cache1 is False and cache2 is True
     assert len(chamadas) == 1
     assert (tmp_path / f"{h1}.mp3").read_bytes() == b"MP3"
+
+
+def test_cache_hit_renova_mtime(monkeypatch, tmp_path):
+    # Sem isto, um trecho ouvido toda semana era apagado no 31o dia (contado da GRAVACAO, nao do
+    # ultimo acesso) por _limpar_antigos e repago do provedor.
+    monkeypatch.setattr(tts, "_base_cache", lambda: tmp_path)
+    monkeypatch.setattr(tts, "_baixar_elevenlabs", lambda t, v: b"MP3")
+    monkeypatch.setattr(tts.runtime_config, "get", lambda campo: "chave" if campo == "elevenlabs_api_key" else "")
+
+    h, _ = tts.sintetizar("oi", "voz", "elevenlabs")
+    arquivo = tmp_path / f"{h}.mp3"
+    velho = time.time() - 20 * 86400
+    os.utime(arquivo, (velho, velho))
+
+    tts.sintetizar("oi", "voz", "elevenlabs")   # cache hit
+
+    assert arquivo.stat().st_mtime > velho
 
 
 def test_cache_nao_deixa_arquivo_truncado(monkeypatch, tmp_path):

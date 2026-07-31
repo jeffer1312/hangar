@@ -469,7 +469,10 @@ class CreateBody(_StrictBody):
 
 
 class TtsBody(_StrictBody):
-    text: str = Field(min_length=1)
+    # max_length: sem teto, um corpo de 100 MB era parseado INTEIRO antes do 413 do preparo/teto
+    # de caracteres poder recusar. 200_000 e bem acima do teto real (_TTS_TETO) — so evita o corpo
+    # gigante, quem recusa por caractere de verdade continua sendo a rota.
+    text: str = Field(min_length=1, max_length=200_000)
     voice: str = ""
     provider: str = "elevenlabs"
     # Confirmacao explicita do usuario pra passar do limite de aviso. Ver _TTS_TETO abaixo: o teto
@@ -2796,7 +2799,7 @@ async def tts_sintetizar(body: TtsBody):
     if not texto:
         raise HTTPException(400, "nao sobrou nada pra falar depois de limpar o texto")
     if len(texto) > _TTS_TETO:
-        raise HTTPException(413, f"texto com {len(texto)} caracteres passa do teto de {_TTS_TETO}")
+        raise HTTPException(413, f"texto com {len(texto)} caracteres passa do teto de {_TTS_TETO} — selecione um trecho menor")
     limite = _tts_limite()
     if len(texto) > limite and not body.confirm:
         # 409, nao 413: nao e "grande demais", e "confirme que voce quer gastar isso". O front pede
