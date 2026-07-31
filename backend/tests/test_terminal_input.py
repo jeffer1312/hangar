@@ -1,6 +1,7 @@
 from unittest.mock import patch, call
 
 import pytest
+import time
 
 from app import pqueue
 from app import terminal_input
@@ -122,3 +123,53 @@ def test_interrupt_sends_escape():
     with patch.object(terminal_input, "send_keys") as sk:
         TerminalInput().interrupt("cc")
     assert sk.call_args_list == [call("cc", "Escape")]
+
+
+# --- _composer_ocupado_pi: guarda anti-colagem (caso real TICKET-0000: aviso de grupo ficou no
+# composer com Enter engolido e o prompt do cockpit foi digitado em cima, virando UMA mensagem) ---
+
+_REGUA = "─" * 60
+
+
+def _pane_pi(composer_lines):
+    corpo = ["pi v0.83.0", "conversa...", ""]
+    return "\n".join(corpo + [_REGUA] + composer_lines + [_REGUA, "🤖 k3 status"])
+
+
+def test_composer_pi_com_residuo_adia():
+    with patch.object(terminal_input, "_capture", return_value=_pane_pi(["texto parado no composer"])):
+        assert terminal_input._composer_ocupado_pi("pi-x") is True
+
+
+def test_composer_pi_vazio_envia():
+    with patch.object(terminal_input, "_capture", return_value=_pane_pi([])):
+        assert terminal_input._composer_ocupado_pi("pi-x") is False
+
+
+def test_composer_pi_ilegivel_nao_bloqueia():
+    # pane sem réguas (redraw/boot): na dúvida envia — mesma política do resto do arquivo
+    with patch.object(terminal_input, "_capture", return_value="pi v0.83.0\nsem reguas aqui"):
+        assert terminal_input._composer_ocupado_pi("pi-x") is False
+
+
+def test_send_prompt_pi_adia_com_residuo(monkeypatch):
+    monkeypatch.setattr(terminal_input, "deliverable", lambda name: True)
+    monkeypatch.setattr(terminal_input, "_wait_input_ready", lambda name, provider="claude": True)
+    with patch.object(terminal_input, "_capture", return_value=_pane_pi(["residuo de enter engolido"])), \
+         patch.object(terminal_input, "send_keys") as sk:
+        assert TerminalInput().send_prompt("pi-x", "mensagem nova", provider="pi") == "deferred"
+    sk.assert_not_called()   # nada digitado por cima do residuo
+
+
+def test_drain_poda_entradas_de_vida_anterior_da_sessao(tmp_queue, tmp_path, monkeypatch):
+    # Sessao morreu devendo (entrada pendente), tmux recriado com o MESMO nome (mesma pasta),
+    # transcript RETOMADO (`pi -c` -> start_ts velho). A entrada da vida anterior NAO entrega.
+    PromptQueue("cc").append("recado pra sessao que morreu", delivered=False)
+    j = tmp_path / "t.jsonl"
+    j.write_text('{"timestamp":"2000-01-01T00:00:00Z"}\n', encoding="utf-8")  # transcript velho
+    monkeypatch.setattr(terminal_input.tmux, "session_created", lambda name: time.time() + 60)
+    sent = []
+    monkeypatch.setattr(terminal_input.TerminalInput, "send_prompt",
+                        lambda self, name, text, provider="claude": sent.append(text) or "sent")
+    assert terminal_input.drain("cc", str(j)) == 0 and sent == []
+    assert all(e.get("delivered") is not False for e in PromptQueue("cc").load())  # podada, nao pendente
