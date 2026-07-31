@@ -2,6 +2,8 @@
   import { renderMarkdown } from '../lib/markdown';
   import { parseFilePaths, parseMediaUrls, splitTodoBlock } from '../lib/format';
   import { copyText } from '../lib/clipboard';
+  import { textoFalavel } from '../lib/speakable';
+  import { ouvirTexto } from '../lib/ouvir';
   import FileAttachment from './FileAttachment.svelte';
 
   interface Props {
@@ -45,6 +47,15 @@
     msgCopied = true;
     setTimeout(() => (msgCopied = false), 1200);
   }
+
+  let proseEl: HTMLDivElement | undefined = $state();
+
+  function ouvirMensagem() {
+    if (!proseEl) return;
+    // Chamada DIRETO do handler do clique: ouvirTexto destrava o elemento de audio de forma
+    // sincrona, e envolver isto num then() quebraria o gesto no iOS.
+    ouvirTexto(textoFalavel(proseEl), (msg) => Promise.resolve(window.confirm(msg)));
+  }
 </script>
 
 <!-- ponytail: sem long-press aqui de proposito — o timer de 500ms roubava o gesto de SELECIONAR
@@ -70,7 +81,7 @@
     {/if}
   {:else}
     <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-    <div class="prose" onclick={onProseClick} role="presentation">{@html html}</div>
+    <div class="prose" bind:this={proseEl} onclick={onProseClick} role="presentation">{@html html}</div>
     {#if fileRefs.length}<FileAttachment {sessionName} refs={fileRefs} />{/if}
     {#if mediaRefs.length}<FileAttachment {sessionName} refs={mediaRefs} />{/if}
     <div class="msg-actions">
@@ -81,6 +92,9 @@
       {#if onForward}
         <button class="msg-fwd" onclick={onForward} aria-label="Encaminhar pra outra sessão" title="Encaminhar pra outra sessão"></button>
       {/if}
+      <!-- Nunca na bolha de preview: aquele texto e full-replace a cada ~150ms (MessageList:274),
+           e o audio sairia de um bloco de DOM que ja nao existe mais. -->
+      <button class="msg-tts" onclick={ouvirMensagem} aria-label="Ouvir mensagem" title="Ouvir mensagem"></button>
     </div>
   {/if}
 </div>
@@ -115,7 +129,7 @@
   }
   /* No celular estes sao o principal jeito de tirar codigo da conversa: 28px a 50% de opacidade
      era alvo curto e quase invisivel. No mouse eles seguem escondidos ate o hover (regra abaixo). */
-  .msg-copy, .msg-fwd {
+  .msg-copy, .msg-fwd, .msg-tts {
     width: 34px; height: 34px; padding: 0;
     display: flex; align-items: center; justify-content: center;
     border: none; border-radius: var(--radius-sm);
@@ -126,13 +140,14 @@
   }
   .msg-copy::before { content: '⧉'; font-size: 16px; line-height: 1; }
   .msg-fwd::before { content: '↗'; font-size: 16px; line-height: 1; }
+  .msg-tts::before { content: '🔊'; font-size: 14px; line-height: 1; }
   .msg-copy.copied { color: var(--accent); opacity: 1; }
   .msg-copy.copied::before { content: '✓'; }
 
   @media (hover: hover) and (pointer: fine) {
-    .msg-copy, .msg-fwd { opacity: 0; }
-    .assistant-msg:hover .msg-copy, .assistant-msg:hover .msg-fwd { opacity: 0.55; }
-    .msg-copy:hover, .msg-fwd:hover { opacity: 1 !important; background: var(--bg-hover); color: var(--text-primary); }
+    .msg-copy, .msg-fwd, .msg-tts { opacity: 0; }
+    .assistant-msg:hover .msg-copy, .assistant-msg:hover .msg-fwd, .assistant-msg:hover .msg-tts { opacity: 0.55; }
+    .msg-copy:hover, .msg-fwd:hover, .msg-tts:hover { opacity: 1 !important; background: var(--bg-hover); color: var(--text-primary); }
   }
 
   .prose {

@@ -47,6 +47,13 @@ export function uploadUrl(name: string, filename: string): string {
   return `${getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/uploads/${encodeURIComponent(filename)}?token=${encodeURIComponent(t)}`;
 }
 
+// URL do mp3 gerado. `?token` porque <audio> nao manda header Authorization e o front vem de outra
+// origem (PWA servido pela VPS, backend no Tailscale) — cookie tambem nao viaja.
+export function ttsAudioUrl(path: string): string {
+  const t = getToken() ?? '';
+  return `${getBaseUrl()}${path}?token=${encodeURIComponent(t)}`;
+}
+
 function authHeaders(): HeadersInit {
   const token = getToken();
   if (!token) return {};
@@ -75,9 +82,11 @@ async function ensureOk(res: Response): Promise<void> {
   if (res.status === 401 && getToken()) {
     dropActiveServer();
     if (typeof window !== 'undefined') window.location.reload();
-    throw new Error('401: sessão expirada — faça login novamente');
+    throw Object.assign(new Error('401: sessão expirada — faça login novamente'), { status: 401 });
   }
-  if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
+  // `status` no proprio erro: sem ele quem chama (ex: ouvir.ts) nao consegue distinguir um 409
+  // (acima do limite de aviso, pede confirmacao) de qualquer outra falha so pela mensagem.
+  if (!res.ok) throw Object.assign(new Error(`${res.status}: ${await errorDetail(res)}`), { status: res.status });
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -1044,6 +1053,26 @@ export async function setModelEffort(name: string, body: ModelEffortBody): Promi
     method: 'POST',
     body: JSON.stringify(body),
   });
+}
+
+export interface TtsResposta { url: string; chars: number; cached: boolean }
+
+// `confirm: true` repete o pedido depois que o usuario aceitou o aviso de custo (409 do backend).
+export async function sintetizarTts(
+  body: { text: string; voice?: string; provider?: string; confirm?: boolean },
+): Promise<TtsResposta> {
+  return apiFetch<TtsResposta>('/api/tts', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export interface TtsVoz { id: string; nome: string }
+
+export async function listarVozesTts(): Promise<TtsVoz[]> {
+  const r = await apiFetch<{ voices: TtsVoz[] }>('/api/tts/voices');
+  return r.voices;
+}
+
+export async function saldoTts(): Promise<{ usados: number | null; limite: number | null }> {
+  return apiFetch('/api/tts/saldo');
 }
 
 /**
