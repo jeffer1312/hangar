@@ -25,12 +25,17 @@
   let { open, onClose, ariaLabel = 'Painel', resizable = false, widthKey = 'cp_gitsheet_w', defaultWidth = 460, wide = false, centered = false, persistent = false, children }: Props = $props();
 
   // `persistent` só vale no dock desktop: abaixo de 820px a sheet volta a ser modal.
+  // `centered` GANHA de `persistent`: quem pede centrado está pedindo MODAL, e o dock é o oposto
+  // disso. Sem esta precedência, passar `wide`+`centered` numa folha que já era `persistent` não
+  // fazia nada — foi o que aconteceu com a Aparência, que continuou docada no desktop mesmo depois
+  // de a decisão de desenho dizer que config mora em modal (CLAUDE.md, "Config e opção moram em
+  // MODAL"). O `persistent` fica: é ele que desenha o × de fechar.
   const dock = () => typeof window !== 'undefined' && window.matchMedia('(min-width: 820px)').matches;
   let naoModal = $state(false);
   $effect(() => {
     if (!open) return;
-    naoModal = persistent && dock();
-    if (!persistent) return;
+    naoModal = persistent && !centered && dock();
+    if (!persistent || centered) return;
     const mq = window.matchMedia('(min-width: 820px)');
     const sync = () => (naoModal = mq.matches);
     mq.addEventListener('change', sync);
