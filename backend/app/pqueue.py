@@ -412,10 +412,16 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
     dimensiona a janela. Trade-off aceito (ponytail): committed_ts enxerga so a janela, entao
     entrada de fila NAO-confirmada cujo commit ficou fora dela reapareceria como pendente -- na
     pratica o reconcile marca `confirmed` e a entrada nem chega aqui."""
+    _pi_stream = None
     if provider == "codex":
         from app.adapters.codex.rollout import parse_rollout_obj as _parse
     elif provider == "pi":
-        from app.adapters.pi.transcript import parse_obj as _parse
+        # Stream (com memoria de uma linha) e nao parse_obj solto: e o que tira o contexto de hook
+        # colado no inicio da mensagem do usuario. Uma instancia por _parse_from — a janela do
+        # tail-read cresce e re-parseia, e um estado carregado da tentativa anterior soltaria
+        # mensagem retida no lugar errado.
+        from app.adapters.pi.transcript import Stream as _pi_stream
+        _parse = parse_obj      # trocado dentro do _parse_from pela instancia da vez
     else:
         _parse = parse_obj
     items: list[tuple[float, int, ChatEvent]] = []
@@ -439,6 +445,22 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
             fh = open(jsonl, encoding="utf-8", errors="replace")
         except OSError:
             return  # sessao nova: jsonl ainda nao existe -> historico vazio (limpo), nao 500
+        stream = _pi_stream() if _pi_stream else None
+        parse = stream.feed_events if stream else _parse
+
+        def _absorve(ts: float, i: int, evs: list[ChatEvent]) -> None:
+            for ev in evs:
+                # ts do proprio evento quando ha (o parser do Pi preenche): um user_msg retido sai
+                # junto com a linha seguinte, e herdar o ts DELA o tiraria de ordem.
+                ets = ev.ts or ts
+                items.append((ets, i, ev))
+                if ev.kind == "user_msg" and ev.text:
+                    t = ev.text.strip()
+                    for ln in (t, *(s.strip() for s in t.split("\n"))):
+                        if ets > committed_ts.get(ln, 0.0):
+                            committed_ts[ln] = ets
+
+        i = 0
         with fh:
             if offset:
                 fh.seek(offset)
@@ -447,7 +469,7 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
                     obj = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
                     continue
-                evs = _parse(obj)
+                evs = parse(obj)
                 if not evs:
                     continue
                 line_ts = _ts_of_obj(obj)
@@ -455,13 +477,9 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
                     start_ts = line_ts
                 ts = line_ts or prev_ts
                 prev_ts = ts
-                for ev in evs:
-                    items.append((ts, i, ev))
-                    if ev.kind == "user_msg" and ev.text:
-                        t = ev.text.strip()
-                        for ln in (t, *(s.strip() for s in t.split("\n"))):
-                            if ts > committed_ts.get(ln, 0.0):
-                                committed_ts[ln] = ts
+                _absorve(ts, i, evs)
+            if stream:
+                _absorve(prev_ts, i + 1, stream.flush_events())
 
     if limit is not None and limit > 0:
         window = _TAIL_WINDOW

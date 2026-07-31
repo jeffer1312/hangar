@@ -8,7 +8,7 @@ import asyncio
 from typing import AsyncIterator, Callable
 
 from app.adapters.pi import sessions as pi_sessions
-from app.adapters.pi.transcript import parse_line
+from app.adapters.pi.transcript import Stream as PiStream
 from app.state import StateEvent, StateMonitor
 from app.transcript import ChatEvent, TranscriptTailer
 from app import terminal_input as ti
@@ -19,8 +19,10 @@ class PiAdapter:
 
     def transcript_stream(self, path: str, start_offset: int | None = None) -> AsyncIterator[ChatEvent]:
         # kwarg e `parse_line=` (transcript.py:313), nao `parse=`. Mesma forma do
-        # adapters/codex/adapter.py:516.
-        return TranscriptTailer(path, parse_line=parse_line).follow(start_offset)
+        # adapters/codex/adapter.py:516. Stream (e nao a funcao solta) porque o parser do Pi guarda
+        # UMA linha de memoria pra tirar o contexto de hook da bolha do usuario — uma instancia por
+        # stream, nunca compartilhada entre sessoes.
+        return TranscriptTailer(path, parse_line=PiStream().parse_line).follow(start_offset)
 
     def state_monitor(self, name: str, sid_get: Callable[[], str]) -> AsyncIterator[StateEvent]:
         # Mesmo StateMonitor: a ancora de hook (HookState) ja cobre working/idle pelo marcador que

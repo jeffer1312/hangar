@@ -232,3 +232,68 @@ def test_wellformed_emoji_survives_untouched():
     ev = pt.parse_line(line)[0]
     assert ev.text == "😀 🇧🇷 👨‍👩‍👧‍👦"
     assert json.loads(ev.model_dump_json())["text"] == ev.text
+
+
+# ── contexto de hook colado na mensagem do usuario ────────────────────────────────────────────
+# Caso REAL (sessao my-web-app, 2026-07-30): a extensao claude-hooks-adapter.ts roda os hooks do
+# Claude dentro do Pi, e o Pi cola o texto devolvido no inicio da mensagem do usuario. A bolha do app
+# mostrava "[skill-suggester] ..." como se o usuario tivesse digitado.
+_CTX = ("[skill-suggester] Prompt casa com skills instaladas que o usuario costuma esquecer:\n"
+        "- polir layout: refactoring-ui")
+_PROMPT = "Ué o layout não parece ter seguido os padrões?"
+
+
+def _hook_ctx(parent="n1", content=_CTX):
+    return {"type": "custom_message", "customType": "claude-hook-context",
+            "content": content, "display": True, "id": "fb15", "parentId": parent}
+
+
+def test_stream_strips_the_hook_context_from_the_user_bubble():
+    s = pt.Stream()
+    # A mensagem NAO sai na hora: a irmã que prova o que é hook chega na linha seguinte.
+    assert s.feed_events(_msg("user", [{"type": "text", "text": f"{_CTX}\n\n{_PROMPT}"}])) == []
+    evs = s.feed_events(_hook_ctx())
+    assert [e.kind for e in evs] == ["user_msg"]
+    assert evs[0].text == _PROMPT
+    assert s.flush_events() == []
+
+
+def test_stream_drops_a_message_that_was_only_hook_context():
+    # Hook injetou contexto num turno sem texto do usuario -> bolha vazia nao vira bolha nenhuma.
+    s = pt.Stream()
+    s.feed_events(_msg("user", [{"type": "text", "text": _CTX}]))
+    assert s.feed_events(_hook_ctx()) == []
+
+
+def test_stream_releases_the_message_untouched_without_a_sibling():
+    # Sessao sem a extensao de hooks (o caso comum): a proxima linha e a resposta do assistente e a
+    # mensagem sai inteira, na frente dela.
+    s = pt.Stream()
+    assert s.feed_events(_msg("user", [{"type": "text", "text": "oi"}])) == []
+    evs = s.feed_events({"type": "message", "id": "n2",
+                         "message": {"role": "assistant", "content": [{"type": "text", "text": "ola"}]}})
+    assert [(e.kind, e.text) for e in evs] == [("user_msg", "oi"), ("assistant_msg", "ola")]
+
+
+def test_stream_flush_releases_the_last_message_of_the_batch():
+    # Usuario mandou e o Pi ainda nao escreveu mais nada: sem o flush do lote a bolha so apareceria
+    # quando o turno terminasse (minutos).
+    s = pt.Stream()
+    assert s.feed_events(_msg("user", [{"type": "text", "text": "oi"}])) == []
+    assert [e.text for e in s.flush_events()] == ["oi"]
+
+
+def test_stream_ignores_a_hook_context_of_another_message():
+    # parentId de outra mensagem (ou irmã atrasada): nao pode comer o prefixo de quem esta retido.
+    s = pt.Stream()
+    s.feed_events(_msg("user", [{"type": "text", "text": f"{_CTX}\n\n{_PROMPT}"}]))
+    evs = s.feed_events(_hook_ctx(parent="OUTRA"))
+    assert evs[0].text == f"{_CTX}\n\n{_PROMPT}"
+
+
+def test_stream_keeps_text_that_only_looks_like_the_context():
+    # Sem irmã, texto que COMECA igual ao de um hook antigo continua intacto — o corte e por par
+    # (parentId + conteudo), nunca por padrao de texto.
+    s = pt.Stream()
+    s.feed_events(_msg("user", [{"type": "text", "text": f"{_CTX} e mais coisa"}]))
+    assert s.flush_events()[0].text == f"{_CTX} e mais coisa"

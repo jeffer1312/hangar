@@ -362,6 +362,7 @@ class TranscriptTailer:
                 # zero (o arquivo pos-truncamento e pequeno; o front deduplica por id).
                 pos = 0
             fh.seek(pos)
+            start = pos
             while True:
                 start = fh.tell()
                 line = fh.readline()
@@ -380,6 +381,15 @@ class TranscriptTailer:
                     # descarta o que ja tem (dedup por ev.id) -- sobreposicao barata, perda zero.
                     ev.offset = start
                 evs.extend(parsed)
+            # Parser com memoria (o do Pi segura o user_msg por uma linha, ver adapters/pi/
+            # transcript.Stream): o que ficou retido sai no fim do LOTE, nao na proxima leitura —
+            # senao a mensagem do usuario so apareceria quando o Pi gravasse a linha seguinte, que
+            # num turno longo demora minutos.
+            owner = getattr(self._parse_line, "__self__", None)
+            held = owner.flush_events() if hasattr(owner, "flush_events") else []
+            for ev in held:
+                ev.offset = start      # inicio da ULTIMA linha lida (a que segurou o release)
+            evs.extend(held)
             return evs, fh.tell()
 
     def _size(self) -> int:
