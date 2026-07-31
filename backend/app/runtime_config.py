@@ -27,11 +27,15 @@ EDITAVEIS: dict[str, type] = {
     "stall_seconds": int,
     "automations": bool,           # kill-switch das automações desatendidas
     "editor": str,
+    "elevenlabs_api_key": str,     # sintese de voz (ouvir a selecao)
+    "elevenlabs_voice_id": str,    # id da voz escolhida na conta
+    "tts_local_cmd": str,          # comando externo opcional: texto no stdin, WAV no stdout
+    "tts_max_chars": int,          # acima disso o app pede confirmacao antes de sintetizar
 }
 
 # Campos que NUNCA voltam inteiros pro cliente: o app devolve mascarado (gsk_••••1234) pra você
 # conferir QUAL chave está lá sem poder copiá-la de volta.
-SEGREDOS = {"groq_api_key"}
+SEGREDOS = {"groq_api_key", "elevenlabs_api_key"}
 
 _ARQUIVO = "runtime-config.json"
 
