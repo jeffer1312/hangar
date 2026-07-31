@@ -87,6 +87,11 @@
              wide={isDesktop} centered={isDesktop} split={isDesktop}>
   {#if isDesktop}
     <div class="st-split">
+      <!-- O ✕ fica FORA da coluna que rola: dentro dela, `position: absolute` rolaria junto com o
+           conteudo (e `sticky` num container com padding brigaria com o topo do formulario).
+           Primeiro no DOM (ele e `position: absolute`, a ordem aqui nao muda onde ele aparece) pra
+           quem navega por teclado chegar nele antes de percorrer a navegacao e o conteudo inteiros. -->
+      <button class="st-fechar" onclick={onFechar} aria-label="Fechar">✕</button>
       <aside class="st-nav">
         {#each SECOES as secao (secao)}
           <p class="st-secao">{secao === 'Servidor' && nomeAlvo ? `Servidor · ${nomeAlvo}` : secao}</p>
@@ -103,9 +108,6 @@
       <section class="st-conteudo">
         {@render corpo()}
       </section>
-      <!-- O ✕ fica FORA da coluna que rola: dentro dela, `position: absolute` rolaria junto com o
-           conteudo (e `sticky` num container com padding brigaria com o topo do formulario). -->
-      <button class="st-fechar" onclick={onFechar} aria-label="Fechar">✕</button>
     </div>
   {:else}
     <header class="st-head">
@@ -187,7 +189,15 @@
     padding: var(--space-3) var(--space-2);
     border-right: 1px solid var(--border-subtle);
   }
-  .st-conteudo { overflow-y: auto; min-height: 0; padding: var(--space-4); }
+  .st-conteudo {
+    overflow-y: auto; min-height: 0; padding: var(--space-4);
+    /* O ✕ (.st-fechar) fica de fora do scroller, no canto superior direito de .st-split — sem
+       reservar o espaço dele aqui em cima, ele flutua por cima do primeiro controle da tela (o
+       segmentado de Tema, na Aparência). 44px é o tamanho REAL do botão: o `width`/`height: 32px`
+       declarado nele perde pro tap-target mínimo global (`button { min-width/height: 44px }` em
+       app.css) — medido no navegador, não os 32px do CSS. */
+    padding-top: calc(var(--space-3) + 44px + var(--space-2));
+  }
   .st-fechar {
     position: absolute; top: var(--space-3); right: var(--space-3); z-index: 1;
     width: 32px; height: 32px; border-radius: var(--radius-full);
