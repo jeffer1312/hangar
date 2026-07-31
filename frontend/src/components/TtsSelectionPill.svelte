@@ -51,13 +51,23 @@
     color: var(--text-primary);
     font-size: 13px;
     cursor: pointer;
-    left: 50%;
-    margin-left: -90px;
     /* --cp-tts-bar-h (publicada no App.svelte): soma a altura da BARRA DO PLAYER quando ela esta
        ativa, senao a pill nasce no mesmo lugar da TtsBar e tapa play/posicao/velocidade — caso
        real: ouvir um trecho e selecionar o proximo enquanto o audio toca. NAO usar --cp-tts-h aqui
        (esse e o TOTAL barra+pill, que empurraria esta pill sozinha quando ela e a unica na tela). */
     bottom: calc(var(--cp-dock-h, 150px) + 10px + var(--cp-tts-bar-h, 0px));
+  }
+  /* Celular (nao .flutuante): a largura do botao varia com o numero de caracteres selecionados
+     (rotulo tem o contador), entao nao da pra cravar um margin-left fixo tipo -90px — isso so
+     centraliza de verdade quando a largura bate com o palpite; medido: desvia ate 24px do centro
+     num celular de 390px. left+right:0 com width:fit-content e margin automatico centraliza
+     qualquer largura sem transform (o WebKit pinta retangulo preto com transform em barra fixa
+     durante a rolagem por inercia, mesmo motivo do TtsBar). */
+  .tts-sel:not(.flutuante) {
+    left: 0;
+    right: 0;
+    width: fit-content;
+    margin: 0 auto;
   }
   .tts-sel.flutuante {
     bottom: auto;
