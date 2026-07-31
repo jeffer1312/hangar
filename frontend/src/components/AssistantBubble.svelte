@@ -1,6 +1,6 @@
 <script lang="ts">
   import { renderMarkdown } from '../lib/markdown';
-  import { parseFilePaths, parseMediaUrls } from '../lib/format';
+  import { parseFilePaths, parseMediaUrls, splitTodoBlock } from '../lib/format';
   import { copyText } from '../lib/clipboard';
   import FileAttachment from './FileAttachment.svelte';
 
@@ -53,7 +53,18 @@
   {#if preview}
     <!-- Preview ao vivo: texto PLANO (markdown so no snap final canonico, pra nao piscar **/code-fence
          meio-aberto) + caret. Mesma casca da bolha real -> swap quase invisivel. -->
-    <div class="prose plain">{text}<span class="caret" aria-hidden="true"></span></div>
+    {@const todo = splitTodoBlock(text)}
+    {#if todo}
+      <!-- Painel de tarefas do TUI: fechado por padrao, so o contador na linha. <details> nativo —
+           sem estado no componente, e o navegador ja lembra do aberto enquanto o no viver. -->
+      <details class="todo-fold">
+        <summary>{todo.head}</summary>
+        <pre class="todo-body">{todo.body}</pre>
+      </details>
+    {/if}
+    {#if !todo || todo.rest}
+      <div class="prose plain">{todo ? todo.rest : text}<span class="caret" aria-hidden="true"></span></div>
+    {/if}
   {:else}
     <!-- eslint-disable-next-line svelte/no-at-html-tags -->
     <div class="prose" onclick={onProseClick} role="presentation">{@html html}</div>
@@ -293,6 +304,27 @@
 
   /* Preview plano: preserva quebras de linha do pane (sem markdown -> sem blocos). */
   .prose.plain { white-space: pre-wrap; }
+
+  /* Painel de tarefas do TUI dentro do preview: uma linha fechada, arvore ao abrir. SEM caixa —
+     nada no fluxo do chat tem superficie propria (bolha do assistente e texto solto, ToolGroup e
+     cabecalho + arvore), entao uma caixa aqui viraria o unico retangulo boiando sobre o papel de
+     parede. Mesmo idioma do .tg-head do ToolGroup: xs, muted, clicavel. */
+  .todo-fold { align-self: stretch; margin-bottom: var(--space-1); }
+  .todo-fold summary {
+    cursor: pointer; list-style: none;
+    padding: var(--space-1) 0; font-size: var(--text-xs); line-height: 1.5; color: var(--text-muted);
+  }
+  .todo-fold summary::-webkit-details-marker { display: none; }
+  .todo-fold summary::before { content: '▸ '; }
+  .todo-fold[open] summary::before { content: '▾ '; }
+  .todo-fold summary:hover { color: var(--text-secondary); }
+  /* A arvore ja vem desenhada em box-drawing pelo TUI (├─/└─) — aqui e so mono + muted pra ela
+     alinhar. Nao e o ::before/::after do ToolGroup: la o galho e CSS porque os filhos sao eventos. */
+  .todo-body {
+    margin: 0; padding: 0 0 var(--space-1); overflow-x: auto;
+    font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.6;
+    color: var(--text-muted);
+  }
 
   /* Caret piscando no fim do preview ao vivo (familia Respiracao "Digitando"). */
   .caret {
