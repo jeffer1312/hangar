@@ -26,7 +26,7 @@ const varsCss = new Map<string, string>();
   },
 };
 
-const { getBgScrim, getReadAlpha, getTextBoost, getFontPref, setFontPref, getSurfaceSolid, setSurfaceSolid, getMedidaTexto, setMedidaTexto } = await import('./background');
+const { getBgScrim, getReadAlpha, getTextBoost, getFontPref, setFontPref, getSurfaceSolid, setSurfaceSolid, setBgScrim, getMedidaTexto, setMedidaTexto } = await import('./background');
 
 // Fonte: 'system' é o padrão e NÃO grava chave (mesma convenção do tema/painéis — só o desvio do
 // padrão persiste). Lixo na chave cai em 'system' em vez de deixar o app numa fonte que não existe.
@@ -153,5 +153,35 @@ describe('preferência que não consegue persistir ainda vale nesta sessão', ()
     try { setMedidaTexto('size', 130); } finally { falhaAoGravar = false; }
     expect(store.has('cp_text_size')).toBe(false);
     expect(varsCss.get('--cp-text-scale')).toBe('1.300');
+  });
+});
+
+// A Solidez SOMAVA no alfa do painel e estourava no teto de 1: com Transparencia 38 o slider ja
+// chegava em opaco na marca 27, e os dois tercos seguintes nao mudavam nada — o usuario percebeu
+// como "nao funciona". Agora interpola, entao o curso inteiro tem efeito.
+describe('solidez usa o curso inteiro do slider', () => {
+  const alfa = () => Number(varsCss.get('--cp-surface-alpha'));
+
+  it('0 = igual ao painel, 100 = opaco, e o meio fica entre os dois', () => {
+    store.clear(); varsCss.clear();
+    setBgScrim(38);                    // painel = 0.92 - 0.38*0.50 = 0.73
+    setSurfaceSolid(0);
+    const noChao = alfa();
+    expect(noChao).toBeCloseTo(0.73, 3);
+    setSurfaceSolid(100);
+    expect(alfa()).toBe(1);
+    setSurfaceSolid(50);
+    const meio = alfa();
+    expect(meio).toBeGreaterThan(noChao);
+    expect(meio).toBeLessThan(1);
+  });
+
+  it('nenhuma marca abaixo de 100 satura — o que matava o slider antes', () => {
+    store.clear(); varsCss.clear();
+    setBgScrim(38);
+    for (const v of [30, 60, 90, 99]) {
+      setSurfaceSolid(v);
+      expect(alfa()).toBeLessThan(1);
+    }
   });
 });

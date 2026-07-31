@@ -69,11 +69,12 @@ function aplicarScrim(t = getBgScrim(), solidez = getSurfaceSolid()): void {
   // sensação que a foto dá. Anda junto do slider, mas numa faixa mais conservadora — é sobre eles
   // que o texto de leitura fica.
   const painel = 0.92 - (t / 100) * 0.50;
-  // As caixas DE DENTRO dos painéis (tokens --surface-* do app.css) partem da alfa do painel e
-  // ganham o degrau do slider Solidez. Sem degrau nenhum elas somem no vidro e a tela vira uma
-  // superfície só; com degrau demais voltam a ser recorte chapado — é o mesmo dilema do véu, uma
-  // camada acima, e por isso tem controle próprio em vez de um número fixo aqui.
-  const caixa = Math.min(1, painel + solidez / 100);
+  // As caixas DE DENTRO dos painéis (tokens --surface-* do app.css) e o cromo (barra e composer)
+  // INTERPOLAM entre "igual ao painel" (0) e "sólido" (100) — não somam. Somar estourava no teto de
+  // 1 e o slider morria no meio do curso: medido com Transparência 38, batia em opaco já na marca 27
+  // e os dois terços seguintes não mudavam nada. Interpolando, o curso inteiro serve e o significado
+  // fica exato: 0 = a caixa some no vidro do painel, 100 = a caixa tapa a foto.
+  const caixa = painel + (1 - painel) * (solidez / 100);
   const raiz = document.documentElement;
   raiz.style.setProperty('--cp-scrim-topo', topo.toFixed(3));
   raiz.style.setProperty('--cp-scrim-base', base.toFixed(3));
