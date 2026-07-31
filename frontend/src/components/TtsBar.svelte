@@ -63,6 +63,6 @@
     padding: 4px 6px;
     font-size: 14px;
   }
-  .tts-err { color: var(--danger); font-size: 13px; flex: 1; }
+  .tts-err { color: var(--error); font-size: 13px; flex: 1; }
   .tts-load { color: var(--text-secondary); font-size: 13px; flex: 1; }
 </style>
