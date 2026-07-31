@@ -10,15 +10,12 @@
   //
   // Nao e o chat de verdade de proposito: montar um MessageList aqui traria SSE, markdown, imagens e
   // o custo de um segundo transcript vivo — pra julgar tamanho e contraste, tres linhas bastam.
-  interface Props {
-    /** Rotulo curto do que esta sendo mexido agora, pra amostra dizer a que veio. */
-    titulo?: string;
-  }
-  let { titulo = 'Prévia' }: Props = $props();
+  // Sem props: o rotulo e fixo e ninguem passou nada diferente. Prop sem consumidor e codigo morto
+  // no commit de nascimento.
 </script>
 
 <div class="amostra" aria-label="Prévia da conversa">
-  <span class="amostra-tag">{titulo}</span>
+  <span class="amostra-tag">Prévia</span>
 
   <div class="linha-user">
     <div class="bolha-user">
