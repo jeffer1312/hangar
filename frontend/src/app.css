@@ -281,6 +281,22 @@ html[data-theme="light"][data-bg="image"] body .session-row {
    linhas viram um bloco so. Sobe pro dobro SO com papel de parede. */
 html[data-bg="image"] body .swipe-wrap { border-bottom-color: rgba(255, 248, 244, 0.16); }
 html[data-theme="light"][data-bg="image"] body .swipe-wrap { border-bottom-color: rgba(50, 40, 35, 0.20); }
+/* Feedback de toque: `.session-row:active` pinta --bg-surface OPACO e vence a regra de cima por
+   especificidade (`:active` conta como classe), entao com papel de parede CADA TOQUE piscava de
+   volta o retangulo que a gente acabou de tirar. Aqui o realce vira tinta translucida — o mesmo
+   sinal, sem tapar a foto. */
+html[data-bg="image"] body .session-row:active { background: rgba(255, 255, 255, 0.10); }
+html[data-theme="light"][data-bg="image"] body .session-row:active { background: rgba(0, 0, 0, 0.07); }
+/* Selos com fundo PROPRIO ja tem contraste garantido: o reforco de leitura acima e pra texto que
+   cai direto na foto. Herdado, ele so acrescenta brilho no selo (pior no .prov-chip, que e opaco) e
+   move a tinta neutra deles junto com um slider que nao era pra alcanca-los. */
+html[data-bg="image"] body .session-row :is(.state-chip, .prov-chip, .paired-chip, .plan-chip,
+  .engine-chip, .limited-chip, .untracked-badge, .loop-chip) {
+  text-shadow: none;
+  --text-primary: var(--text-primary-base);
+  --text-secondary: var(--text-secondary-base);
+  --text-muted: var(--text-muted-base);
+}
 
 html[data-bg="texture"] body::before, html[data-bg="aurora"] body::before, html[data-bg="image"] body::before {
   content: "";
