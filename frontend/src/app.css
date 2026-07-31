@@ -256,6 +256,32 @@ html[data-bg] body .session-row {
   background: transparent;
 }
 
+/* Reforco de leitura da LISTA sobre o papel de parede. O modo Leitura ja faz isto no chat, mas so
+   dentro do `.messages-inner` (MessageList.svelte) — a lista ficou de fora e, desde que a linha
+   parou de pintar fundo, o texto dela caiu direto sobre a foto. Quem sofre primeiro nao e o NOME da
+   sessao (branco forte), e a segunda linha: cwd, branch, "Herding... (31s)". Sao justamente os
+   tokens mais fracos da paleta.
+   Mesma formula do chat, de proposito — os dois sliders de Leitura (Contraste e Forca) mandam nos
+   dois lugares, senao o usuario ajustaria um e o outro ficaria pra tras. */
+html[data-bg="image"] body .session-row {
+  --text-primary: color-mix(in srgb, #fff calc(var(--cp-text-boost, 60) * 1%), var(--text-primary-base));
+  --text-secondary: color-mix(in srgb, #fff calc(var(--cp-text-boost, 60) * 0.7%), var(--text-secondary-base));
+  --text-muted: color-mix(in srgb, #fff calc(var(--cp-text-boost, 60) * 0.55%), var(--text-muted-base));
+  text-shadow: 0 1px 3px rgba(0, 0, 0, calc(var(--cp-read-alpha, 92) * 0.009)),
+               0 0 12px rgba(0, 0, 0, calc(var(--cp-read-alpha, 92) * 0.006));
+}
+html[data-theme="light"][data-bg="image"] body .session-row {
+  --text-primary: color-mix(in srgb, #000 calc(var(--cp-text-boost, 60) * 1%), var(--text-primary-base));
+  --text-secondary: color-mix(in srgb, #000 calc(var(--cp-text-boost, 60) * 0.7%), var(--text-secondary-base));
+  --text-muted: color-mix(in srgb, #000 calc(var(--cp-text-boost, 60) * 0.55%), var(--text-muted-base));
+  text-shadow: 0 1px 3px rgba(255, 255, 255, calc(var(--cp-read-alpha, 92) * 0.009)),
+               0 0 12px rgba(255, 255, 255, calc(var(--cp-read-alpha, 92) * 0.006));
+}
+/* A divisoria entre sessoes e um branco a 7%: sobre fundo chapado ela aparece, sobre foto some e as
+   linhas viram um bloco so. Sobe pro dobro SO com papel de parede. */
+html[data-bg="image"] body .swipe-wrap { border-bottom-color: rgba(255, 248, 244, 0.16); }
+html[data-theme="light"][data-bg="image"] body .swipe-wrap { border-bottom-color: rgba(50, 40, 35, 0.20); }
+
 html[data-bg="texture"] body::before, html[data-bg="aurora"] body::before, html[data-bg="image"] body::before {
   content: "";
   position: fixed;
