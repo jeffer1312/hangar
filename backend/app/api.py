@@ -37,6 +37,8 @@ from app.video import is_video, extract_frames, extract_audio
 from app.transcribe import transcribe, TranscribeError
 from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base, settings, automations_enabled
 from app import runtime_config
+from app import tts
+from app.tts_text import preparar as tts_preparar
 from app import default_model, engine_probe, engines
 from app.costs import report as costs_report
 from app.git_ops import (
@@ -464,6 +466,15 @@ class CreateBody(_StrictBody):
     initial_prompt: str | None = None
     # Motor de modelo (nome no engines.json). None = conta Anthropic, comportamento de hoje.
     engine: str | None = None
+
+
+class TtsBody(_StrictBody):
+    text: str = Field(min_length=1)
+    voice: str = ""
+    provider: str = "elevenlabs"
+    # Confirmacao explicita do usuario pra passar do limite de aviso. Ver _TTS_TETO abaixo: o teto
+    # duro nao e confirmavel, so o limite de aviso.
+    confirm: bool = False
 
 
 class PushSubscribeBody(_StrictBody):
@@ -2759,3 +2770,68 @@ def commands(name: str):
     # + skills globais (lista util mesmo sem cwd casado).
     cwd = next((s.cwd for s in registry.list() if s.name == name), None)
     return list_commands(cwd)
+
+
+_TTS_LIMITE_PADRAO = 5000
+# Teto DURO, que nenhuma confirmacao passa. 40k e o limite por requisicao do modelo mais permissivo
+# da ElevenLabs; acima disso o provedor recusaria de qualquer jeito. Sao dois numeros diferentes de
+# proposito: o limite configuravel e um AVISO de custo (o usuario confirma e passa); este e o que
+# impede um cliente autenticado de mandar megabytes numa requisicao.
+_TTS_TETO = 40_000
+
+
+def _tts_limite() -> int:
+    """Limite de AVISO em caracteres. Configuravel; 0/ausente cai no padrao."""
+    try:
+        v = int(runtime_config.get("tts_max_chars") or 0)
+    except (TypeError, ValueError):
+        v = 0
+    return v if v > 0 else _TTS_LIMITE_PADRAO
+
+
+@app.post("/api/tts", dependencies=[Depends(require_auth)])
+async def tts_sintetizar(body: TtsBody):
+    texto = tts_preparar(body.text)
+    if not texto:
+        raise HTTPException(400, "nao sobrou nada pra falar depois de limpar o texto")
+    if len(texto) > _TTS_TETO:
+        raise HTTPException(413, f"texto com {len(texto)} caracteres passa do teto de {_TTS_TETO}")
+    limite = _tts_limite()
+    if len(texto) > limite and not body.confirm:
+        # 409, nao 413: nao e "grande demais", e "confirme que voce quer gastar isso". O front pede
+        # a confirmacao e repete o POST com confirm=true. Checado AQUI e nao so na tela porque a
+        # tela evita o susto e o servidor e quem guarda a conta.
+        raise HTTPException(409, f"são {len(texto)} caracteres, acima do limite de {limite} — confirme para gerar")
+    try:
+        h, veio_do_cache = await asyncio.to_thread(tts.sintetizar, texto, body.voice, body.provider)
+    except tts.TtsError as e:
+        raise HTTPException(e.status, e.detail)
+    return {"url": f"/api/tts/audio/{h}", "chars": len(texto), "cached": veio_do_cache}
+
+
+@app.get("/api/tts/voices", dependencies=[Depends(require_auth)])
+async def tts_vozes():
+    try:
+        return {"voices": await asyncio.to_thread(tts.listar_vozes)}
+    except tts.TtsError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.get("/api/tts/saldo", dependencies=[Depends(require_auth)])
+async def tts_saldo():
+    try:
+        return await asyncio.to_thread(tts.saldo)
+    except tts.TtsError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+@app.get("/api/tts/audio/{h}", dependencies=[Depends(require_auth)])
+async def tts_audio(h: str):
+    # Hash validado ANTES de tocar no disco: o parametro vem da URL e sem isto viraria path
+    # traversal. Mesmo espirito do guard de resolve_upload.
+    if not re.fullmatch(r"[0-9a-f]{64}", h):
+        raise HTTPException(400, "identificador de audio invalido")
+    caminho = tts.caminho_do_cache(h)
+    if not caminho.exists():
+        raise HTTPException(404, "audio nao esta mais em cache")
+    return FileResponse(caminho, media_type="audio/mpeg")
