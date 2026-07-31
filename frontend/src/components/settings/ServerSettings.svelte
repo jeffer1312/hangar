@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { getConfig, getConfigForServer, patchConfig, patchConfigForServer, type CampoConfig } from '../../lib/api';
-  import type { Server } from '../../lib/auth';
+  import type { ConfigServidorStore } from '../../lib/serverConfig.svelte';
 
   // Configuração do servidor pelo app. Até aqui tudo vinha só de env/.env: pra mudar a chave da
   // transcrição ou a retenção de anexos era preciso editar arquivo no servidor e reiniciar o
@@ -9,15 +8,17 @@
   // O segredo entra mas não sai: o backend devolve mascarado (gsk_••••1234). Dá pra conferir QUAL
   // chave está lá e trocá-la; não dá pra copiar de volta.
   interface Props {
-    // Servidor a configurar. null = o ativo global (desktop, que TEM um ativo). No mobile a lista é
-    // agregada e não há "ativo": sem isto, editar a config pelo drawer batia no servidor globalmente
-    // ativo, que pode ser OUTRA máquina — dá pra trocar a chave do servidor errado sem perceber.
-    targetServer?: Server | null;
-    // Os motores são uma LISTA de registros com segredo cada um e têm tela própria: quem monta esta
-    // aqui é que sabe como chegar lá (trocar de rota no modal único, abrir outra folha…).
-    onOpenMotores: () => void;
+    store: ConfigServidorStore;
+    /** Qual fatia mostrar. O ESTADO e um so, compartilhado pelas tres. */
+    secao: 'notificacoes' | 'anexos' | 'avancado';
   }
-  let { targetServer = null, onOpenMotores }: Props = $props();
+  let { store, secao }: Props = $props();
+
+  const TITULOS: Record<Props['secao'], string> = {
+    notificacoes: 'Notificações',
+    anexos: 'Anexos e transcrição',
+    avancado: 'Avançado do servidor',
+  };
 
   interface Campo {
     chave: string;
@@ -25,24 +26,25 @@
     ajuda: string;
     tipo: 'texto' | 'segredo' | 'numero' | 'liga';
     sufixo?: string;
+    secao: Props['secao'];
   }
 
   const CAMPOS: Campo[] = [
-    { chave: 'groq_api_key', rotulo: 'Chave da Groq', tipo: 'segredo',
+    { chave: 'groq_api_key', rotulo: 'Chave da Groq', tipo: 'segredo', secao: 'anexos',
       ajuda: 'Transcreve áudio gravado e a fala dos vídeos anexados. Vazia = transcrição desligada.' },
-    { chave: 'upload_retention_days', rotulo: 'Guardar anexos por', tipo: 'numero', sufixo: 'dias',
+    { chave: 'upload_retention_days', rotulo: 'Guardar anexos por', tipo: 'numero', sufixo: 'dias', secao: 'anexos',
       ajuda: 'Anexo mais velho que isso é apagado no próximo upload. 0 = nunca apagar.' },
-    { chave: 'automations', rotulo: 'Automações', tipo: 'liga',
+    { chave: 'automations', rotulo: 'Automações', tipo: 'liga', secao: 'avancado',
       ajuda: 'Chave mestra do que roda sem você olhar: encadeamento de sessão e auto-resume.' },
-    { chave: 'notify_finished', rotulo: 'Avisar quando terminar', tipo: 'liga',
+    { chave: 'notify_finished', rotulo: 'Avisar quando terminar', tipo: 'liga', secao: 'notificacoes',
       ajuda: 'Notificação quando um turno longo acaba.' },
-    { chave: 'finish_min_seconds', rotulo: 'Turno curto não avisa', tipo: 'numero', sufixo: 'seg',
+    { chave: 'finish_min_seconds', rotulo: 'Turno curto não avisa', tipo: 'numero', sufixo: 'seg', secao: 'notificacoes',
       ajuda: 'Turno mais rápido que isso não gera notificação.' },
-    { chave: 'notify_dead', rotulo: 'Avisar quando cair', tipo: 'liga',
+    { chave: 'notify_dead', rotulo: 'Avisar quando cair', tipo: 'liga', secao: 'notificacoes',
       ajuda: 'Notificação quando uma sessão morre.' },
-    { chave: 'stall_seconds', rotulo: 'Marcar travada após', tipo: 'numero', sufixo: 'seg',
+    { chave: 'stall_seconds', rotulo: 'Marcar travada após', tipo: 'numero', sufixo: 'seg', secao: 'notificacoes',
       ajuda: 'Sessão "trabalhando" e calada por mais que isso ganha o aviso de travada.' },
-    { chave: 'editor', rotulo: 'Editor', tipo: 'texto',
+    { chave: 'editor', rotulo: 'Editor', tipo: 'texto', secao: 'avancado',
       ajuda: 'Binário que abre a pasta da sessão no desktop (ex: code, subl).' },
   ];
 
@@ -50,80 +52,23 @@
     port: 'Porta', lan_bind_ip: 'IP de bind', server_id: 'ID deste servidor',
     public_url: 'URL pública', scan_roots: 'Raízes do scanner',
   };
-
-  let campos = $state<Record<string, CampoConfig>>({});
-  let leitura = $state<Record<string, string | number>>({});
-  let rascunho = $state<Record<string, string | number | boolean>>({});
-  let carregando = $state(false);
-  let salvando = $state(false);
-  let erro = $state('');
-  let salvo = $state(false);
-
-  // Recarrega na montagem: outro dispositivo (ou o .env) pode ter mudado no meio. Quem mostra esta
-  // tela só a monta quando ela está à vista, então montar É abrir.
-  $effect(() => {
-    carregar();
-  });
-
-  async function carregar() {
-    carregando = true;
-    erro = '';
-    try {
-      const c = targetServer ? await getConfigForServer(targetServer) : await getConfig();
-      campos = c.campos;
-      leitura = c.somente_leitura;
-      rascunho = {};
-    } catch (e) {
-      erro = e instanceof Error ? e.message : 'Falha ao carregar';
-    } finally {
-      carregando = false;
-    }
-  }
-
-  function valorAtual(chave: string): string | number | boolean {
-    if (chave in rascunho) return rascunho[chave];
-    const v = campos[chave]?.valor;
-    return v ?? '';
-  }
-
-  const temMudanca = $derived(Object.keys(rascunho).length > 0);
-
-  async function salvar() {
-    if (!temMudanca) return;
-    salvando = true;
-    erro = '';
-    salvo = false;
-    try {
-      const r = targetServer ? await patchConfigForServer(targetServer, rascunho) : await patchConfig(rascunho);
-      campos = r.campos;
-      rascunho = {};
-      salvo = true;
-      setTimeout(() => (salvo = false), 2500);
-    } catch (e) {
-      // Erro de validação do servidor aparece como veio ("upload_retention_days: esperado número"):
-      // é mais útil que um "falhou" genérico.
-      erro = e instanceof Error ? e.message : 'Falha ao salvar';
-    } finally {
-      salvando = false;
-    }
-  }
 </script>
 
 <div class="cfg">
   <header class="cfg-head">
-    <h2>Configurações</h2>
+    <h2>{TITULOS[secao]}</h2>
     <p class="sub">Valem para este servidor, na hora — sem reiniciar.</p>
   </header>
 
-  {#if carregando}
+  {#if store.carregando}
     <p class="aviso">Carregando…</p>
-  {:else if erro && !Object.keys(campos).length}
-    <p class="aviso erro">{erro}</p>
-    <button class="btn" onclick={carregar}>Tentar de novo</button>
+  {:else if store.erro && !Object.keys(store.campos).length}
+    <p class="aviso erro">{store.erro}</p>
+    <button class="btn" onclick={store.carregar}>Tentar de novo</button>
   {:else}
     <div class="lista">
-      {#each CAMPOS as c (c.chave)}
-        {@const estado = campos[c.chave]}
+      {#each CAMPOS.filter((c) => c.secao === secao) as c (c.chave)}
+        {@const estado = store.campos[c.chave]}
         <div class="linha" class:liga={c.tipo === 'liga'}>
           <div class="txt">
             <label class="rot" for={`cfg-${c.chave}`}>
@@ -138,8 +83,8 @@
               id={`cfg-${c.chave}`}
               class="switch"
               type="checkbox"
-              checked={valorAtual(c.chave) === true}
-              onchange={(e) => (rascunho[c.chave] = e.currentTarget.checked)}
+              checked={store.valorAtual(c.chave) === true}
+              onchange={(e) => store.setRascunho(c.chave, e.currentTarget.checked)}
             />
           {:else if c.tipo === 'numero'}
             <span class="campo-num">
@@ -148,8 +93,8 @@
                 type="number"
                 inputmode="numeric"
                 min="0"
-                value={valorAtual(c.chave)}
-                oninput={(e) => (rascunho[c.chave] = e.currentTarget.value)}
+                value={store.valorAtual(c.chave)}
+                oninput={(e) => store.setRascunho(c.chave, e.currentTarget.value)}
               />
               {#if c.sufixo}<span class="sufixo">{c.sufixo}</span>{/if}
             </span>
@@ -170,8 +115,8 @@
               autocapitalize="off"
               spellcheck={false}
               placeholder={estado?.definido ? 'colar nova chave para trocar' : 'colar a chave'}
-              value={(rascunho[c.chave] as string) ?? ''}
-              oninput={(e) => (rascunho[c.chave] = e.currentTarget.value)}
+              value={(store.valorAtual(c.chave) as string) ?? ''}
+              oninput={(e) => store.setRascunho(c.chave, e.currentTarget.value)}
             />
           {:else}
             <input
@@ -181,49 +126,42 @@
               autocomplete="off"
               autocapitalize="off"
               spellcheck={false}
-              value={valorAtual(c.chave)}
-              oninput={(e) => (rascunho[c.chave] = e.currentTarget.value)}
+              value={store.valorAtual(c.chave)}
+              oninput={(e) => store.setRascunho(c.chave, e.currentTarget.value)}
             />
           {/if}
         </div>
       {/each}
     </div>
 
-    <!-- Motores são uma LISTA de registros com segredo cada um: não cabem no layout de
-         linha-por-setting desta tela. Vão numa tela própria, alcançada daqui. -->
-    <button class="atalho" onclick={onOpenMotores}>
-      <span class="txt">
-        <span class="rot">Motores de modelo</span>
-        <span class="ajuda">
-          Rodar uma sessão em Kimi, num gateway próprio ou noutro modelo — sem mexer na sua conta.
-        </span>
-      </span>
-      <span class="seta" aria-hidden="true">›</span>
-    </button>
-
-    <div class="somente-leitura">
-      <h3>Só pelo servidor</h3>
-      <p class="ajuda">
-        Mudar qualquer uma exige editar o <code>.env</code> e reiniciar o serviço — por isso não
-        são editáveis daqui.
-      </p>
-      {#each Object.entries(leitura) as [k, v] (k)}
-        <div class="ro-linha">
-          <span class="ro-rot">{ROTULO_LEITURA[k] ?? k}</span>
-          <span class="ro-val">{v === '' ? '—' : v}</span>
-        </div>
-      {/each}
-    </div>
+    {#if secao === 'avancado'}
+      <div class="somente-leitura">
+        <h3>Só pelo servidor</h3>
+        <p class="ajuda">
+          Mudar qualquer uma exige editar o <code>.env</code> e reiniciar o serviço — por isso não
+          são editáveis daqui.
+        </p>
+        {#each Object.entries(store.leitura) as [k, v] (k)}
+          <div class="ro-linha">
+            <span class="ro-rot">{ROTULO_LEITURA[k] ?? k}</span>
+            <span class="ro-val">{v === '' ? '—' : v}</span>
+          </div>
+        {/each}
+      </div>
+    {/if}
   {/if}
 
-  {#if erro && Object.keys(campos).length}<p class="aviso erro">{erro}</p>{/if}
+  {#if store.erro && Object.keys(store.campos).length}<p class="aviso erro">{store.erro}</p>{/if}
 </div>
 
-{#if !carregando && Object.keys(campos).length}
+{#if !store.carregando && Object.keys(store.campos).length}
+  <!-- O rascunho e UM so pras tres fatias, entao Salvar grava tudo que foi mexido, inclusive fora
+       desta tela. E o unico significado honesto: com rascunho compartilhado, um Salvar que gravasse so
+       a propria fatia faria o MESMO botao significar coisas diferentes conforme a tela. -->
   <div class="rodape">
-    {#if salvo}<span class="ok">salvo</span>{/if}
-    <button class="btn primario" onclick={salvar} disabled={!temMudanca || salvando}>
-      {salvando ? 'Salvando…' : 'Salvar'}
+    {#if store.salvo}<span class="ok">salvo</span>{/if}
+    <button class="btn primario" onclick={store.salvar} disabled={!store.temMudanca || store.salvando}>
+      {store.salvando ? 'Salvando…' : 'Salvar'}
     </button>
   </div>
 {/if}
@@ -234,13 +172,6 @@
   .cfg-head .sub { margin: 2px 0 var(--space-4); font-size: var(--text-xs); color: var(--text-muted); }
 
   .lista { display: flex; flex-direction: column; }
-  .atalho {
-    display: flex; align-items: center; justify-content: space-between; gap: var(--space-4);
-    width: 100%; padding: var(--space-3) 0;
-    background: none; text-align: left;
-    border-bottom: 1px solid var(--border-subtle);
-  }
-  .atalho .seta { font-size: var(--text-lg); color: var(--text-muted); flex-shrink: 0; }
   .linha {
     display: flex;
     flex-direction: column;
