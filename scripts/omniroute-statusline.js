@@ -385,6 +385,31 @@ process.stdin.on('end', () => {
     }
     if (cur) lines.push(cur);
 
+    // claude-cockpit: publica a linha INTEIRA (sem ANSI, sem quebra) num sidecar que o backend lê
+    // preferindo-a ao pane. O que sai no terminal é limitado pela largura — e quando a quebra cai em
+    // cima do par de contexto, o Claude Code corta com "…" ("💬 769k/238 770k…") e o app fica sem
+    // como medir contexto, exibindo "medição indisponível" só por causa do tamanho da janela.
+    // Chave = session_id, que é o stem do .jsonl (mesma chave dos outros marcadores do cockpit).
+    try {
+      const sid = data.session_id;
+      if (sid) {
+        const sidecarDir = path.join(claudeDir, '.claude-pocket-status');
+        fs.mkdirSync(sidecarDir, { recursive: true });
+        const alvo = path.join(sidecarDir, sid + '.json');
+        // pid no tmp: este script roda a CADA render e ainda faz 4 execFileSync (git×2, tmux,
+        // kubectl) com timeout de 1-2s, entao duas invocacoes da MESMA sessao se sobrepoem na
+        // pratica. Com nome fixo as duas abririam o mesmo caminho em truncate e o rename podia
+        // promover bytes entrelacados — mesmo furo que scripts/cp_panel_common.py ja corrigiu
+        // usando nome unico.
+        const tmp = alvo + '.' + process.pid + '.tmp';
+        fs.writeFileSync(tmp, JSON.stringify({
+          line: segs.join(sep).replace(/\x1b\[[0-9;:?]*[ -/]*[@-~]/g, ''),
+          ts: Math.floor(Date.now() / 1000),
+        }));
+        fs.renameSync(tmp, alvo);   // atômico: o backend pode ler no meio da escrita
+      }
+    } catch {}   // sidecar é conveniência: falhar aqui não pode sujar o statusline
+
     process.stdout.write(lines.join('\n'));
   } catch {}
 });
