@@ -107,6 +107,10 @@
   let drag: { dx: number; dy: number } | null = null;
   let caixaEl = $state<HTMLElement | null>(null);
   function dragStart(e: PointerEvent) {
+    // Os botoes (✕ e voltar-ao-painel) vivem DENTRO da faixa de arrasto. Sem esta saida, o
+    // setPointerCapture + preventDefault abaixo engoliam o clique deles e a caixinha ficava
+    // impossivel de fechar — so o cursor de mover aparecia.
+    if ((e.target as HTMLElement).closest('button')) return;
     if (!caixaEl) return;
     const r = caixaEl.getBoundingClientRect();
     drag = { dx: e.clientX - r.left, dy: e.clientY - r.top };

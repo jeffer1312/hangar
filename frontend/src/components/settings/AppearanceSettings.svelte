@@ -89,7 +89,10 @@
   <!-- Amostra GRUDADA no topo: todo slider daqui muda a conversa, que fica atras deste painel (e no
        celular nao ha "atras" nenhum — o painel e a tela). Sticky pra ela continuar a vista enquanto
        se rola ate os sliders la embaixo. -->
-  <div class="ap-amostra">
+  <!-- Grudado no topo SO quando ha previa: na caixinha do "ao vivo" a previa nao existe (o chat de
+       verdade esta a vista atras), e um botao sozinho preso no topo com fundo translucido virava uma
+       tarja por cima do texto que rolava embaixo. -->
+  <div class="ap-amostra" class:ap-amostra--solta={semPrevia}>
     {#if !semPrevia}<AparenciaAmostra />{/if}
     <div class="ap-acoes">
       {#if podeAoVivo}
@@ -223,6 +226,7 @@
     padding-bottom: var(--space-2);
     background: var(--glass-panel, var(--bg-surface));
   }
+  .ap-amostra--solta { position: static; background: none; padding-bottom: var(--space-3); }
   .ap-acoes { display: flex; gap: var(--space-2); }
   .ap-padrao {
     flex: 1;
