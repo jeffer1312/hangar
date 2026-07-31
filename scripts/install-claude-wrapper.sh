@@ -189,13 +189,25 @@ TMUXCONF
   tmux source-file "$HOME/.tmux.conf" 2>/dev/null && echo "  reloaded ~/.tmux.conf" || true
 fi
 
-# --- extensao de estado do Pi ------------------------------------------------------------------
-# Sem ela a sessao Pi aparece no app sempre "ociosa": o estado vem do marcador, nao do pane.
+# --- extensoes do Pi ----------------------------------------------------------------------------
+# cp-state.ts: sem ela a sessao Pi aparece no app sempre "ociosa" (o estado vem do marcador, nao do
+# pane). rich-status-line.ts: desenha o rodape E publica a linha INTEIRA no sidecar que o app le —
+# o que sai no terminal ja vem cortado na largura da janela (ver "Statusline por sidecar" no
+# CLAUDE.md), entao sem ela a sessao Pi em janela estreita fica sem contexto/cota no app.
 PI_EXT_DIR="$HOME/.pi/agent/extensions"
 if command -v pi >/dev/null 2>&1; then
   mkdir -p "$PI_EXT_DIR"
   ln -sfn "$SCRIPT_DIR/pi/cp-state.ts" "$PI_EXT_DIR/cp-state.ts"
   echo "  linked cp-state.ts into $PI_EXT_DIR"
+  # Arquivo REAL no lugar (extensao propria do usuario, com o mesmo nome) nao vira symlink calado:
+  # sobrescrever apagaria o trabalho dele. Avisa e deixa a decisao com quem sabe o que tem la.
+  if [ -e "$PI_EXT_DIR/rich-status-line.ts" ] && [ ! -L "$PI_EXT_DIR/rich-status-line.ts" ]; then
+    echo "  ⚠ $PI_EXT_DIR/rich-status-line.ts ja existe e nao e symlink — mantido como esta."
+    echo "    (pra usar a do repo: mova a sua e rode de novo)"
+  else
+    ln -sfn "$SCRIPT_DIR/pi/rich-status-line.ts" "$PI_EXT_DIR/rich-status-line.ts"
+    echo "  linked rich-status-line.ts into $PI_EXT_DIR"
+  fi
 else
   echo "  pi nao encontrado — pulando a extensao de estado (instale o pi e rode de novo)"
 fi

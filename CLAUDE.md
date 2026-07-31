@@ -252,6 +252,25 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   re-reads the sidecar and returns what *stuck*, not what was asked (asking `max` on glm-5.2 lands on
   `xhigh`). Missing sidecar → 409 telling the user to re-run `install-claude-wrapper.sh`, never an
   empty list that reads as "no models".
+- **Statusline por sidecar, não pelo pane** (`app/statusline.py` + `scripts/omniroute-statusline.js`
+  + `scripts/pi/rich-status-line.ts`): a linha que o app mostra (modelo, contexto, ⚡5h/📅7d, custo)
+  **não** sai do transcript — quem a calcula é o agente, e o app só via o texto **já renderizado no
+  terminal**, cortado na largura da janela. Medido 2026-07-30 num pane de 99 colunas: o Pi chama
+  `truncateToWidth` e a linha morre em `cache…` (somem contexto, cota e custo); o Claude quebra em
+  várias linhas, mas quando a quebra cai em cima do par de contexto ele vira `💬 769k/238 770k…`.
+  Nos dois casos o painel dizia "medição indisponível" **por causa do tamanho do terminal**.
+  Contrato: quem RENDERIZA publica a linha inteira (sem ANSI) em
+  `<config>/.claude-pocket-status/<stem>.json` = `{"line", "ts"}` — mesma chave dos outros
+  marcadores (o stem do `.jsonl`) — e `statusline.read()` a prefere ao pane, caindo nele quando não
+  há sidecar (sessão sem instrumentação **nunca** pode ficar sem linha nenhuma). Três detalhes que
+  já custaram bug: (1) o tmp do `tmp+rename` leva o **pid**, porque o script do Claude roda a cada
+  render e duas invocações da mesma sessão se sobrepõem (nome fixo → `rename` promovendo bytes
+  entrelaçados, o mesmo furo que `cp_panel_common.py` já corrigiu); (2) `read()` exige **dict** —
+  JSON válido do tipo errado (`null`, lista) não levanta `ValueError` e o `.get()` derrubava a
+  resolução de estado de TODAS as sessões em `list_with_state`; (3) o publicador do Pi vive na
+  extensão porque a linha completa só existe dentro do processo dele — logo, **sessão Pi já aberta
+  só passa a publicar depois de `/reload`** (o Pi carrega extensão na largada), enquanto o lado
+  Claude vale na hora, por ser script executado a cada render.
 - **Process info lives in `app/procinfo.py` — the only OS-bound layer.** Nine functions
   (`_proc_children_map`, `_descendant_pids`, `_open_jsonl`, `_cmdline`, `_config_dir_of`,
   `_proc_start_time`, `_engine_of`, + the two `_proc_*_path` test seams) hold **every** `/proc`
