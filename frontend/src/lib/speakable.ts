@@ -9,6 +9,12 @@
 // achatar em string nao ha como saber onde comecava.
 
 const MARCADOR = ' trecho de código omitido. ';
+// Cartao de ferramenta (ToolCard.svelte, raiz `.tool-row`): saida de Bash/comando, nao prosa. Uma
+// selecao que ATRAVESSA um cartao (comeca na mensagem, passa por cima do card, continua depois) nao
+// e barrada por `dentroDoChat` — o ancora dela e a mensagem, nao o card. Por isso o corte tem que
+// ser aqui, no que foi CLONADO, igual ao <pre>: nao ha como resolver isso olhando so onde a selecao
+// termina.
+const MARCADOR_FERRAMENTA = ' saída de comando omitida. ';
 
 // Elementos de bloco do renderMarkdown (markdown.ts: `out.join('')`, sem separador nenhum entre
 // eles). Sem uma quebra aqui, "## Passo 1" + o paragrafo seguinte viram "Passo 1Fazer X" no
@@ -21,6 +27,9 @@ export function textoFalavel(raiz: HTMLElement): string {
   const copia = raiz.cloneNode(true) as HTMLElement;
   copia.querySelectorAll('pre').forEach((p) => {
     p.replaceWith(document.createTextNode(MARCADOR));
+  });
+  copia.querySelectorAll('.tool-row').forEach((c) => {
+    c.replaceWith(document.createTextNode(MARCADOR_FERRAMENTA));
   });
   // Marca o FIM de cada bloco com \n antes de achatar (ordem importa: <pre> ja virou texto acima,
   // entao um <pre> dentro de <li> ganha a quebra do <li> em volta, no lugar certo).
