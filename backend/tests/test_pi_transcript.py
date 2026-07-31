@@ -297,3 +297,33 @@ def test_stream_keeps_text_that_only_looks_like_the_context():
     s = pt.Stream()
     s.feed_events(_msg("user", [{"type": "text", "text": f"{_CTX} e mais coisa"}]))
     assert s.flush_events()[0].text == f"{_CTX} e mais coisa"
+
+
+def test_queue_entry_right_after_the_session_start_survives_in_pi_history(tmp_path, monkeypatch):
+    # A 1a linha util do Pi e um user_msg, e ele fica RETIDO no parser (sai so na linha seguinte).
+    # Se o relogio da linha for pulado junto, o "inicio da sessao" vira o ts da RESPOSTA — e toda
+    # entrada de fila enfileirada nesse meio (2o prompt mandado enquanto o Pi trabalha) caia na poda
+    # de "anterior ao inicio" e sumia do historico sem erro nenhum.
+    from app import pqueue
+    from app.pqueue import PromptQueue, merged_history
+    monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
+
+    t0 = 1785160179.0
+    f = tmp_path / "2026-01-01T00-00-00-000Z_sid.jsonl"
+    f.write_text(
+        # Shape do Pi: SEM `timestamp` ISO no topo — o relogio mora em `message.timestamp` (ms).
+        # Com o ISO no topo o caso nem acontece, e o teste passava com o bug presente.
+        json.dumps({"type": "message", "id": "n1",
+                    "message": {"role": "user", "timestamp": int(t0 * 1000),
+                                "content": [{"type": "text", "text": "primeiro"}]}}) + "\n"
+        + json.dumps({"type": "message", "id": "n2",
+                      "message": {"role": "assistant", "timestamp": int((t0 + 5) * 1000),
+                                  "content": [{"type": "text", "text": "resposta"}]}}) + "\n",
+        encoding="utf-8")
+
+    PromptQueue("sessao-pi").append("segundo", ts=t0 + 1)   # 2o prompt, 1s apos o inicio
+
+    evs = merged_history("sessao-pi", str(f), provider="pi")
+    textos = [e.text for e in evs]
+    assert "primeiro" in textos and "resposta" in textos
+    assert "segundo" in textos, "entrada de fila do inicio da sessao sumiu do historico"

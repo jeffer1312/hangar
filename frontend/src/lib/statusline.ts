@@ -108,14 +108,17 @@ export function parseStatusLine(raw: string | null | undefined): StatusFields | 
   }
 
   // 📅7d:57% ↺sab 18h·2d1h
-  const weekly = raw.match(/📅[^│]*?(\d+)\s*%\s*(?:[↺↻]\s*([^│🕐]+))?/u);
+  // A classe do reset exclui os emojis das OUTRAS janelas, nao so o `│`: no Pi as janelas vem
+  // separadas por espaco ("📅7d:10% ↻6d19h 🗓30d:2% │ 💵"), entao sem o 🗓 aqui o reset semanal
+  // engolia o segmento mensal inteiro ("6d19h 🗓30d:2%") e ia inteiro pra tela.
+  const weekly = raw.match(/📅[^│]*?(\d+)\s*%\s*(?:[↺↻]\s*([^│🕐🗓⚡]+))?/u);
   if (weekly) {
     out.weeklyPct = clampPct(parseInt(weekly[1], 10));
     if (weekly[2]) out.weeklyReset = weekly[2].trim();
   }
 
   // 🗓30d:2%  — janela mensal (clinepass). O reset é opcional como nas outras janelas.
-  const monthly = raw.match(/🗓[^│]*?(\d+)\s*%\s*(?:[↺↻]\s*([^│🕐]+))?/u);
+  const monthly = raw.match(/🗓[^│]*?(\d+)\s*%\s*(?:[↺↻]\s*([^│🕐⚡📅]+))?/u);
   if (monthly) {
     out.monthlyPct = clampPct(parseInt(monthly[1], 10));
     if (monthly[2]) out.monthlyReset = monthly[2].trim();

@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator, Optional
@@ -386,11 +387,39 @@ class TranscriptTailer:
             # senao a mensagem do usuario so apareceria quando o Pi gravasse a linha seguinte, que
             # num turno longo demora minutos.
             owner = getattr(self._parse_line, "__self__", None)
-            held = owner.flush_events() if hasattr(owner, "flush_events") else []
-            for ev in held:
-                ev.offset = start      # inicio da ULTIMA linha lida (a que segurou o release)
-            evs.extend(held)
+            if hasattr(owner, "flush_events"):
+                evs.extend(self._flush_com_espera(fh, owner, start))
             return evs, fh.tell()
+
+    # Espera curta antes de soltar o que o parser reteve. As duas linhas do par (mensagem do
+    # usuario + o marcador do hook que diz o que nela e do hook) nascem no MESMO milissegundo, mas
+    # nada garante que o watcher acorde depois das duas: se o lote fechar entre elas, a bolha sai
+    # sem o corte e o marcador chega orfao no lote seguinte — volta calada ao bug antigo. Uma
+    # releitura curta fecha essa fresta sem atrasar nada perceptivel, e so roda quando ha algo
+    # retido (Claude/Codex nunca retem). ponytail: 200ms e o knob — medido 1ms entre as duas
+    # escritas do Pi, entao a folga e de duas ordens de grandeza.
+    _ESPERA_PAR_S = 0.2
+
+    def _flush_com_espera(self, fh, owner, start: int) -> list[ChatEvent]:
+        """Releitura curta e depois solta o retido. Devolve (linhas novas + o que sobrou retido)."""
+        if not owner.tem_retido():
+            return owner.flush_events()          # nada preso: sem espera nenhuma
+        time.sleep(self._ESPERA_PAR_S)
+        novos: list[ChatEvent] = []
+        while True:
+            ini = fh.tell()
+            line = fh.readline()
+            if not line or not line.endswith(b"\n"):
+                fh.seek(ini)                     # EOF ou linha pela metade: fica pro proximo ciclo
+                break
+            for ev in self._parse_line(line.decode("utf-8", "replace")):
+                ev.offset = ini
+                novos.append(ev)
+            start = ini
+        held = owner.flush_events()
+        for ev in held:
+            ev.offset = start        # inicio da ULTIMA linha lida (a que segurou o release)
+        return novos + held
 
     def _size(self) -> int:
         try:
