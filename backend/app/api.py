@@ -2773,11 +2773,12 @@ def commands(name: str):
 
 
 _TTS_LIMITE_PADRAO = 5000
-# Teto DURO, que nenhuma confirmacao passa. 40k e o limite por requisicao do modelo mais permissivo
-# da ElevenLabs; acima disso o provedor recusaria de qualquer jeito. Sao dois numeros diferentes de
-# proposito: o limite configuravel e um AVISO de custo (o usuario confirma e passa); este e o que
-# impede um cliente autenticado de mandar megabytes numa requisicao.
-_TTS_TETO = 40_000
+# Teto DURO, que nenhuma confirmacao passa — derivado do MODELO EM USO (tts.TETO_CARACTERES), nao
+# um numero solto aqui: um teto maior que o do modelo deixaria confirmar um gasto que a ElevenLabs
+# ainda ia recusar. Dois numeros diferentes de proposito: o limite configuravel e um AVISO de
+# custo (o usuario confirma e passa); este e o que impede um cliente autenticado de mandar
+# megabytes numa requisicao.
+_TTS_TETO = tts.TETO_CARACTERES
 
 
 def _tts_limite() -> int:

@@ -17,6 +17,10 @@ from app.config import settings
 
 API = "https://api.elevenlabs.io/v1"
 MODELO_PADRAO = "eleven_multilingual_v2"
+# Teto DURO por requisicao, em caracteres — do MODELO EM USO (MODELO_PADRAO), nao do mais
+# permissivo da conta: eleven_flash_v2_5 aceita 40k, mas a gente nao usa esse modelo. Confirmar
+# aqui SE trocar MODELO_PADRAO, senao o servidor aceita texto que a ElevenLabs vai recusar.
+TETO_CARACTERES = 10_000
 VOZ_PADRAO = "ORgG8rwdAiMYRug8RJwR"
 CACHE_SUBDIR = ".claude-pocket-tts"
 TIMEOUT_LOCAL = 180        # segundos: motor local na CPU e lento; abaixo disso corta texto longo
