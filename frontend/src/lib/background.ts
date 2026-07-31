@@ -80,6 +80,11 @@ function aplicarScrim(t = getBgScrim(), solidez = getSurfaceSolid()): void {
   raiz.style.setProperty('--cp-scrim-base', base.toFixed(3));
   raiz.style.setProperty('--cp-panel-alpha', painel.toFixed(3));
   raiz.style.setProperty('--cp-surface-alpha', caixa.toFixed(3));
+  // O valor CRU do slider (0..1), alem da alfa ja interpolada. Quem desenha sobre a FOTO — o vidro
+  // liquido do Chromium — nao pode usar `--cp-surface-alpha`: ela nasce na alfa do painel (~0,73 com
+  // Transparencia 38), entao o curso inteiro do slider cabe em 27% de opacidade e o efeito some. Com
+  // a fracao crua, cada consumidor escolhe a faixa que faz sentido pro material dele.
+  raiz.style.setProperty('--cp-solidez', (solidez / 100).toFixed(3));
 }
 
 // Papel de parede: o navegador não enxerga o wallpaper do sistema (é o que o terminal faz por ser

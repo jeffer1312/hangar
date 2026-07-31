@@ -65,7 +65,10 @@
     padding: 3px;
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
-    background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
+    /* `--surface-raised` em vez de uma alfa fixa de 94%: assim o segmentado entra no veu do papel de
+       parede junto com o resto (CLAUDE.md, "Transparencia") e anda com o slider Solidez, em vez de
+       ficar uma caixa chapada boiando sobre a foto. */
+    background: var(--surface-raised);
   }
 
   .workspace-nav button {
