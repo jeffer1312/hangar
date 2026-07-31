@@ -13,7 +13,10 @@ describe('planBadge', () => {
   it('monta rótulo, pct e title', () => {
     const b = planBadge({ ...base, plan_name: 'git-stash-manager', plan_task: 2,
       plan_task_total: 3, plan_done: 9, plan_total: 17, plan_complete: false })!;
-    expect(b.label).toBe('📋 Task 2/3');
+    // O NOME vai no rotulo, nao so no title: no celular nao ha hover, entao o title nunca e lido e
+    // nada dizia QUAL plano estava rodando.
+    expect(b.label).toBe('📋 git-stash-manager · Task 2/3');
+    expect(b.nome).toBe('git-stash-manager');
     expect(Math.round(b.pct)).toBe(53);
     expect(b.title).toBe('git-stash-manager · Task 2/3 · 9/17 steps');
     expect(b.complete).toBe(false);
@@ -28,12 +31,12 @@ describe('planBadge', () => {
       plan_done: 17, plan_total: 17, plan_complete: true })!;
     expect(b.pct).toBe(100);
     expect(b.complete).toBe(true);
-    expect(b.label).toBe('📋 concluído');
+    expect(b.label).toBe('📋 x · concluído');
   });
 
   it('sem task_total cai no rótulo de steps e não duplica no title', () => {
     const b = planBadge({ ...base, plan_name: 'x', plan_done: 3, plan_total: 10 })!;
-    expect(b.label).toBe('📋 3/10');
+    expect(b.label).toBe('📋 x · 3/10');
     expect(b.title).toBe('x · 3/10 steps');
   });
 });
