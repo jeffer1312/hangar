@@ -22,6 +22,11 @@ let label = $state('');          // trecho do texto, pra pessoa saber o que esta
 let current = $state(0);
 let duration = $state(0);
 let rate = $state(1);
+// Altura MEDIDA da barra (TtsBar.svelte, via ResizeObserver — a barra e quem sabe o proprio
+// tamanho, nao um numero cravado: erro real da ElevenLabs quebra em 2-3 linhas num celular
+// estreito e passa longe dos 52px do estado normal). 52 e so o palpite pro instante antes da
+// 1a medicao (mesmo padrao do dockH em Chat.svelte); App.svelte zera isto quando active for false.
+let barH = $state(52);
 
 function element(): HTMLAudioElement {
   if (el) return el;
@@ -51,6 +56,7 @@ export const ttsPlayer = {
   get current() { return current; },
   get duration() { return duration; },
   get rate() { return rate; },
+  get barH() { return barH; },
 
   /** Chamar SINCRONO dentro do handler do toque, antes de qualquer await. */
   unlock(texto: string) {
@@ -86,6 +92,9 @@ export const ttsPlayer = {
   seek(seconds: number) { element().currentTime = seconds; },
 
   setRate(r: number) { rate = r; element().playbackRate = r; },
+
+  /** Publicado pela TtsBar (dona da medicao). 0 quando ela desmonta. */
+  setBarH(h: number) { barH = h; },
 
   close() {
     const a = element();

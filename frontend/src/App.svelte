@@ -88,7 +88,9 @@
   let syncReady = $state(false);
 
   // Duas variaveis, uma variavel so tentando significar duas coisas foi o bug da rodada anterior:
-  // --cp-tts-bar-h e SO a barra do player (52px com ttsPlayer.active) — quem consome e a
+  // --cp-tts-bar-h e SO a barra do player (ttsPlayer.barH, MEDIDA pela propria TtsBar via
+  // ResizeObserver — nao um 52px cravado: a barra mostra tambem "gerando audio…" e mensagem de erro,
+  // e o erro real da ElevenLabs quebra em 2-3 linhas num celular estreito) — quem consome e a
   // TtsSelectionPill, que precisa subir acima da BARRA, nao da propria pill de selecao (senao ela
   // se empurraria sozinha quando so a selecao esta ativa). --cp-tts-h e o TOTAL ocupado por barra +
   // pill de selecao somadas (cada uma conta so se estiver ativa) — quem consome sao as tres pills do
@@ -96,7 +98,7 @@
   // na tela, incluindo a pill de selecao (tui-pill e a selecao sao as duas centralizadas com
   // z-index parecido — sem isso a selecao cobre o aviso de sessao que precisa de login).
   $effect(() => {
-    const barH = ttsPlayer.active ? 52 : 0;
+    const barH = ttsPlayer.active ? ttsPlayer.barH : 0;
     const selH = ttsSelection.ativa ? 52 : 0;
     const root = document.documentElement.style;
     root.setProperty('--cp-tts-bar-h', `${barH}px`);
