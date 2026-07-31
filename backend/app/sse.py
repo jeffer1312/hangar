@@ -62,13 +62,14 @@ def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
     payload = read_pending_askq(jsonl)
     if payload is None:
         return None
-    # 1 pergunta: o TUI submete direto no Enter da opcao (sem tela de Review) -> cai no OptionButtons
-    # (menu de lista unica, non-goal do spec). So multi-pergunta abre o stepper — EXCETO quando alguma
-    # opcao tem `preview` (codigo/mockup ao lado): o OptionButtons nao tem o payload, so o stepper
-    # renderiza o preview. answer_questions ja trata pergunta unica (Enter da selecao submete).
+    # Pergunta UNICA tambem abre o stepper. Havia aqui um gate `len(questions) < 2 -> None`, com o
+    # argumento de que o TUI submete direto no Enter (sem tela de Review) e o OptionButtons bastava.
+    # O que ele custava: o OptionButtons le o picker do PANE, e o pane so tem ROTULO — a `description`
+    # de cada opcao, que e onde mora a explicacao da escolha, sumia da tela. Como o padrao e perguntar
+    # uma coisa por vez, isso valia pra quase toda pergunta. answer_questions ja trata pergunta unica
+    # (terminal_input.py:463, com guard de malha fechada justamente porque ali o Enter ja submete).
+    # `has_preview` sobrevive porque decide a ESTRATEGIA DE CASAMENTO logo abaixo, nao mais se emite.
     has_preview = any(o.preview for q in payload.questions for o in q.options)
-    if len(payload.questions) < 2 and not has_preview:
-        return None
     # NAO depende de `overlay`: is_overlay e fragil p/ AskUserQuestion — o rodape de navegacao sai das
     # ultimas 8 linhas do pane (linhas em branco no fim) -> overlay=False -> o stepper NUNCA abria e caia
     # no OptionButtons. Freshness pelo SIDECAR x menu atual: o sidecar nao e limpo se respondido pela TUI
