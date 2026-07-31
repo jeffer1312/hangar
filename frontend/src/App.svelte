@@ -6,6 +6,7 @@
   import { peekStep, initialPeek } from './lib/peek';
   import { parseHash, type Route } from './lib/route';
   import { parseConfig, comConfig, TELAS_DE_SERVIDOR, type TelaConfig } from './lib/configRoute';
+  import { abrirConfig, fecharConfig } from './lib/configNav';
   import Login from './screens/Login.svelte';
   import SessionList from './screens/SessionList.svelte';
   import Costs from './screens/Costs.svelte';
@@ -31,6 +32,19 @@
         + (server ? encodeURIComponent(server) + '/' : '')
         + encodeURIComponent(session);
     }
+  })();
+
+  // Chegada com o painel JA no endereco (link colado, reload, PWA reaberto): sem isto, a entrada do
+  // historico que carrega `?config=` e a MESMA de onde o fechar quer voltar — o ✕ "voltava" pra ela e
+  // o painel reabria sozinho. Reescreve a entrada atual pro caminho limpo e empilha o painel por cima.
+  (function normalizarChegadaDoPainel() {
+    const inicial = window.location.hash;
+    if (!parseConfig(inicial)) return;
+    // Terceiro argumento presente AQUI de proposito: e o unico ponto onde queremos MESMO trocar a URL
+    // sem navegar. (Nos outros, ele apagaria o fragmento — ver lib/configNav.ts.)
+    history.replaceState({ cpDepth: 0 }, '', comConfig(inicial, null));
+    window.location.hash = inicial;
+    history.replaceState({ ...history.state, cpDepth: 1 }, '');
   })();
 
   // Aponta o servidor ativo pro dono da rota, SINCRONAMENTE. Tem que rodar ANTES de currentHash
@@ -123,10 +137,7 @@
   });
 
   function irParaConfig(tela: TelaConfig) {
-    window.location.hash = comConfig(window.location.hash, tela, cfg?.srv ?? null);
-  }
-  function fecharConfig() {
-    window.location.hash = comConfig(window.location.hash, null);
+    abrirConfig(tela, cfg?.srv ?? null);
   }
 
   // Boot: sonda o hub. Se ligado, tenta restaurar a sessao do sessionStorage (encKey sobrevive ao
@@ -371,10 +382,10 @@
 
   <!-- Painel de Configuracoes: montado UMA vez, aqui, e nao dentro dos dois AccountMenu
        (Sidebar.svelte:1177 e SessionList.svelte:800). E isso que o faz sobreviver a travessia dos
-       820px: o App nunca desmonta, o branch isDesktop (:380) desmonta os dois shells.
-       A guarda de rota nao e detalhe: loading/login/costs/archive/compare saem ANTES do branch
-       isDesktop (:364-379), entao sem ela um #/?config=avancado desenharia o painel por cima da tela
-       de boot e dispararia fetch sem credencial. -->
+       820px: o App nunca desmonta, o branch `isDesktop` desmonta os dois shells.
+       A guarda de rota nao e detalhe: loading/login/costs/archive/compare — as rotas que saem antes
+       do branch `isDesktop` —, entao sem ela um #/?config=avancado desenharia o painel por cima da
+       tela de boot e dispararia fetch sem credencial. -->
   {#if cfg && telaEfetiva && route.name !== 'login' && route.name !== 'loading'}
     <SettingsModal
       tela={telaEfetiva}
