@@ -169,9 +169,14 @@
           <select
             class="campo-select"
             aria-label="Voz"
-            value={store.valorAtual('elevenlabs_voice_id') || vozes[0]?.id || ''}
+            value={store.valorAtual('elevenlabs_voice_id') || ''}
             onchange={(e) => store.setRascunho('elevenlabs_voice_id', e.currentTarget.value)}
           >
+            <!-- Sem fallback pra vozes[0]: o servidor usa VOZ_PADRAO (tts.py) quando o campo esta
+                 vazio, que NAO e a primeira voz da conta — mostrar a 1a aqui mentia sobre o que
+                 toca. A opcao explicita tambem torna a 1a voz da lista escolhivel: com o fallback,
+                 escolhe-la deixava o value igual ao que ja estava e o onchange nunca disparava. -->
+            <option value="">Padrão do servidor</option>
             {#each vozes as v (v.id)}<option value={v.id}>{v.nome}</option>{/each}
           </select>
         {:else}
