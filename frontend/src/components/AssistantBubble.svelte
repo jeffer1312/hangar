@@ -267,6 +267,23 @@
   .prose :global(th) {
     background: var(--bg-elevated); font-weight: 600; color: var(--text-primary); white-space: nowrap;
   }
+  /* Sobre papel de parede a tabela NAO vira caixa: quem segura a leitura e a GRADE, nao um fundo.
+     Caixa aqui seria o oposto do resto da tela — a conversa inteira e texto direto sobre a foto, e
+     um retangulo so pra tabela le como recorte colado. O cabecalho tambem larga o fundo proprio,
+     senao ele fica sendo a unica caixa da tabela. */
+  :global(html[data-bg='image']) .prose :global(th) {
+    background: transparent;
+  }
+  /* Grade BRANCA, nao a hairline acinzentada de 7%: dentro da caixa, sobre foto, a linha cinza some
+     e as colunas colam uma na outra. Branco a 30% desenha a grade sem virar tabela de planilha. */
+  :global(html[data-bg='image']) .prose :global(th),
+  :global(html[data-bg='image']) .prose :global(td) {
+    border-color: rgba(255, 255, 255, 0.30);
+  }
+  :global(html[data-theme='light'][data-bg='image']) .prose :global(th),
+  :global(html[data-theme='light'][data-bg='image']) .prose :global(td) {
+    border-color: rgba(40, 32, 28, 0.34);
+  }
 
   .ts {
     font-size: var(--text-xs);
