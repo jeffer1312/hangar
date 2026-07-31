@@ -12,6 +12,9 @@ FIX = Path(__file__).parent / "fixtures"
 # na linha 2, esforco xHigh) e cursor sobre Haiku (esforco nao suportado).
 PANE_OPUS = (FIX / "pane_model_picker_opus.txt").read_text()
 PANE_HAIKU = (FIX / "pane_model_picker_haiku.txt").read_text()
+# Pane de chat parado: e o que `_require_drivable` le ANTES de digitar `/model` (a sessao
+# precisa estar livre — com o Claude trabalhando o texto viraria mensagem enfileirada).
+PANE_IDLE = "assistant: pronto\n❯ \n"
 
 
 # ── parse de linhas de modelo ────────────────────────────────────────────────
@@ -106,9 +109,11 @@ def test_set_model_effort_session_navigates_and_presses_s():
     # Alvo: Sonnet (linha 3) a partir do cursor em Opus (linha 2) => Down 1, depois `s`.
     result_pane = "❯ \n  ⎿  Set model to Sonnet 4.6 for this session only with xhigh effort\n"
     panes = [PANE_OPUS, _pane_with_effort("xHigh"), result_pane]
-    with patch.object(terminal_input.tmux, "capture_pane", side_effect=panes), patch.object(
+    with patch.object(terminal_input.tmux, "capture_pane", side_effect=[PANE_IDLE, *panes]), patch.object(
         terminal_input, "send_keys"
-    ) as sk, patch.object(terminal_input.time, "sleep"):
+    ) as sk, patch.object(
+        terminal_input.tmux, "has_session", return_value=True
+    ), patch.object(terminal_input.time, "sleep"):
         out = TerminalInput().set_model_effort("cc", model="sonnet", scope="session")
     keys = [c.args[1] for c in sk.call_args_list]
     assert keys[:2] == ["/model", "Enter"]  # abre o picker
@@ -121,9 +126,11 @@ def test_set_model_effort_default_presses_enter():
     result_pane = "❯ \n  ⎿  Set model to Opus 4.8 and saved as your default for new sessions\n"
     # capturas: abrir, pos-navegacao (opus = 0 passos, mas captura assim mesmo), pos-confirmar
     panes = [PANE_OPUS, PANE_OPUS, result_pane]
-    with patch.object(terminal_input.tmux, "capture_pane", side_effect=panes), patch.object(
+    with patch.object(terminal_input.tmux, "capture_pane", side_effect=[PANE_IDLE, *panes]), patch.object(
         terminal_input, "send_keys"
-    ) as sk, patch.object(terminal_input.time, "sleep"):
+    ) as sk, patch.object(
+        terminal_input.tmux, "has_session", return_value=True
+    ), patch.object(terminal_input.time, "sleep"):
         TerminalInput().set_model_effort("cc", model="opus", scope="default")
     keys = [c.args[1] for c in sk.call_args_list]
     # opus ja e o modelo atual -> sem Down/Up; confirma com Enter (default). 2 Enters: abrir + confirmar.
@@ -138,9 +145,11 @@ def test_set_model_effort_adjusts_effort_with_right():
         _pane_with_effort("Max"),  # apos 1 Right
         "❯ \n  ⎿  Set model to Opus 4.8 for this session only with max effort\n",
     ]
-    with patch.object(terminal_input.tmux, "capture_pane", side_effect=panes), patch.object(
+    with patch.object(terminal_input.tmux, "capture_pane", side_effect=[PANE_IDLE, *panes]), patch.object(
         terminal_input, "send_keys"
-    ) as sk, patch.object(terminal_input.time, "sleep"):
+    ) as sk, patch.object(
+        terminal_input.tmux, "has_session", return_value=True
+    ), patch.object(terminal_input.time, "sleep"):
         TerminalInput().set_model_effort("cc", effort="max", scope="session")
     keys = [c.args[1] for c in sk.call_args_list]
     assert keys.count("Right") == 1
@@ -169,9 +178,11 @@ def test_set_model_effort_reports_pending_confirm_on_dialog():
     # xHigh -> max (1 Right); apos `s`, o follow-up "Change effort level?" aparece -> NAO auto-
     # confirma: retorna pending_confirm pro usuario decidir via OptionButtons. Ultimo toque = `s`.
     panes = [PANE_OPUS, _pane_with_effort("Max"), EFFORT_CONFIRM_PANE]
-    with patch.object(terminal_input.tmux, "capture_pane", side_effect=panes), patch.object(
+    with patch.object(terminal_input.tmux, "capture_pane", side_effect=[PANE_IDLE, *panes]), patch.object(
         terminal_input, "send_keys"
-    ) as sk, patch.object(terminal_input.time, "sleep"):
+    ) as sk, patch.object(
+        terminal_input.tmux, "has_session", return_value=True
+    ), patch.object(terminal_input.time, "sleep"):
         out = TerminalInput().set_model_effort("cc", effort="max", scope="session")
     keys = [c.args[1] for c in sk.call_args_list]
     assert keys[-1] == "s"  # confirmou a sessao; nao tocou no menu de follow-up
@@ -184,18 +195,135 @@ def test_set_model_effort_aborts_when_picker_never_opens():
     not_open = "❯ \nsem picker aqui\n"
     with patch.object(terminal_input.tmux, "capture_pane", return_value=not_open), patch.object(
         terminal_input, "send_keys"
-    ) as sk, patch.object(terminal_input.time, "sleep"):
+    ) as sk, patch.object(
+        terminal_input.tmux, "has_session", return_value=True
+    ), patch.object(terminal_input.time, "sleep"):
         with pytest.raises(mp.PickerError) as ei:
             TerminalInput().set_model_effort("cc", model="sonnet")
     assert ei.value.status == 409
     assert sk.call_args_list[-1] == call("cc", "Escape")  # Esc pra nao deixar preso
 
 
-def test_set_model_effort_rejects_unknown_model():
+def test_set_model_effort_rejects_model_absent_from_picker():
+    # Quem diz o que existe e o PICKER lido ao vivo, nao uma lista chumbada: um nome que nao esta
+    # nas linhas abre o picker, falha na navegacao e sai com Esc (409), sem confirmar nada.
+    panes = [PANE_IDLE, *([PANE_OPUS] * 4)]  # guard le o chat parado; depois o picker aberto
+    with patch.object(terminal_input.tmux, "capture_pane", side_effect=panes), patch.object(
+        terminal_input, "send_keys"
+    ) as sk, patch.object(
+        terminal_input.tmux, "has_session", return_value=True
+    ), patch.object(terminal_input.time, "sleep"):
+        with pytest.raises(mp.PickerError) as ei:
+            TerminalInput().set_model_effort("cc", model="gpt")
+    assert ei.value.status == 409
+    assert sk.call_args_list[-1] == call("cc", "Escape")
+
+
+def test_set_model_effort_rejects_malformed_model():
+    # Formato invalido (vira comparacao de keyword, mas nao e uma palavra) ainda cai antes de tocar
+    # no terminal.
     with pytest.raises(ValueError):
-        TerminalInput().set_model_effort("cc", model="gpt")
+        TerminalInput().set_model_effort("cc", model="opus; rm -rf /")
 
 
 def test_set_model_effort_requires_model_or_effort():
     with pytest.raises(ValueError):
         TerminalInput().set_model_effort("cc")
+
+
+# ── lista de modelos lida do picker (nada chumbado no codigo) ────────────────
+# Pane real capturado em 31/07/2026 (claude 2.1.220, conta Anthropic): 5 linhas, com o Fable no
+# meio. E o fixture que prova o bug que motivou a mudanca — a lista de 4 chumbada no front nao
+# mostrava o Fable e ainda dava a Sonnet/Haiku um numero de linha errado.
+PANE_FABLE = (FIX / "pane_model_picker_fable.txt").read_text()
+
+
+def test_parse_model_rows_reads_fable_and_descriptions():
+    rows = mp.parse_model_rows(PANE_FABLE)
+    assert [r["keyword"] for r in rows] == ["default", "opus", "fable", "sonnet", "haiku"]
+    assert [r["number"] for r in rows] == [1, 2, 3, 4, 5]
+    fable = rows[2]
+    assert fable["name"] == "Fable"
+    assert fable["desc"].startswith("Fable 5 ·")
+    # o rotulo da linha ativa perde o ✔ no `name` (o ✔ vira a flag `active`)
+    assert rows[1]["name"] == "Opus (1M context)" and rows[1]["active"] is True
+    assert rows[0]["name"] == "Default"  # "(recommended)" sai do nome exibido
+
+
+def test_list_model_options_reads_rows_and_closes_with_escape():
+    panes = [PANE_IDLE, PANE_FABLE]
+    with patch.object(terminal_input.tmux, "capture_pane", side_effect=panes), patch.object(
+        terminal_input, "send_keys"
+    ) as sk, patch.object(
+        terminal_input.tmux, "has_session", return_value=True
+    ), patch.object(terminal_input.time, "sleep"):
+        out = TerminalInput().list_model_options("cc")
+    assert [m["keyword"] for m in out["models"]] == ["default", "opus", "fable", "sonnet", "haiku"]
+    assert out["effort"] == "high"
+    keys = [c.args[1] for c in sk.call_args_list]
+    assert keys[:2] == ["/model", "Enter"]
+    assert keys[-1] == "Escape"      # so LE: fecha sem confirmar nada
+    assert "s" not in keys and keys.count("Enter") == 1
+
+
+def test_list_model_options_refuses_while_working():
+    # Com o Claude trabalhando, digitar "/model" nao vira comando: cai no input e o Enter o
+    # ENFILEIRA como mensagem. O que prova "vivo" e a ANIMACAO — o texto do spinner muda entre as
+    # duas capturas.
+    panes = ["✻ Crunched for 24s\n❯ \n", "✻ Crunched for 26s\n❯ \n"]
+    with patch.object(terminal_input.tmux, "capture_pane", side_effect=panes), patch.object(
+        terminal_input, "send_keys"
+    ) as sk, patch.object(
+        terminal_input.tmux, "has_session", return_value=True
+    ), patch.object(terminal_input.time, "sleep"):
+        with pytest.raises(mp.PickerError) as ei:
+            TerminalInput().list_model_options("cc")
+    assert ei.value.status == 409
+    assert sk.call_args_list == []   # nao digitou NADA
+
+
+def test_list_model_options_aceita_marcador_de_turno_congelado():
+    # O bug medido: sessao que ACABOU de terminar fica com "✻ Crunched for 24s" na tela. Uma
+    # captura so nao distingue isso de spinner vivo (esta na docstring do state.classify) e a
+    # troca de modelo era recusada com "esta trabalhando" numa sessao parada.
+    congelado = "✻ Crunched for 24s\n❯ \n"
+    panes = [congelado, congelado, PANE_FABLE]
+    with patch.object(terminal_input.tmux, "capture_pane", side_effect=panes), patch.object(
+        terminal_input, "send_keys"
+    ) as sk, patch.object(
+        terminal_input.tmux, "has_session", return_value=True
+    ), patch.object(terminal_input.time, "sleep"):
+        out = TerminalInput().list_model_options("cc")
+    assert [m["keyword"] for m in out["models"]][:2] == ["default", "opus"]
+    assert [c.args[1] for c in sk.call_args_list][:2] == ["/model", "Enter"]
+
+
+# ── troca de modelo numa sessao de motor: `/model <id>`, sem picker ──────────
+def test_set_engine_model_types_command_and_reads_result():
+    result_pane = "❯ \n  ⎿  Set model to kimi-for-coding and saved as your default for new sessions\n"
+    with patch.object(terminal_input.tmux, "capture_pane", side_effect=[PANE_IDLE, result_pane]), \
+         patch.object(terminal_input, "send_keys") as sk, \
+         patch.object(terminal_input.tmux, "has_session", return_value=True), \
+         patch.object(terminal_input.time, "sleep"):
+        out = TerminalInput().set_engine_model("cc", "kimi-for-coding")
+    keys = [c.args[1] for c in sk.call_args_list]
+    assert keys == ["/model kimi-for-coding", "Enter"]
+    assert out["ok"] is True and "kimi-for-coding" in out["result"]
+
+
+def test_set_engine_model_aborts_when_command_opens_picker():
+    # Argumento nao aceito -> o /model abre o picker interativo. Fecha e falha, em vez de deixar o
+    # overlay preso e reportar sucesso sobre um no-op.
+    with patch.object(terminal_input.tmux, "capture_pane", side_effect=[PANE_IDLE, PANE_FABLE]), \
+         patch.object(terminal_input, "send_keys") as sk, \
+         patch.object(terminal_input.tmux, "has_session", return_value=True), \
+         patch.object(terminal_input.time, "sleep"):
+        with pytest.raises(mp.PickerError) as ei:
+            TerminalInput().set_engine_model("cc", "modelo-que-nao-existe")
+    assert ei.value.status == 409
+    assert sk.call_args_list[-1] == call("cc", "Escape")
+
+
+def test_set_engine_model_rejects_argument_with_space():
+    with pytest.raises(ValueError):
+        TerminalInput().set_engine_model("cc", "k3 --dangerously")

@@ -237,6 +237,30 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   `GET {base_url}/v1/models` — no static catalog, because the value varies by the user's
   subscription tier. The statusline only hides `💵`/cost-sidecar writes on an engine session — the
   effort chip (`(high✦)`) is untouched, it's not faked.
+- **Modelo de uma sessão Claude Code: a lista NUNCA é constante** (`app/model_picker.py` +
+  `terminal_input.list_model_options` / `set_engine_model` + `app/default_model.py` +
+  `components/ModelEffortSheet.svelte`). Duas fontes, escolhidas pelo que a sessão é — medido em
+  31/07/2026, claude 2.1.220:
+  - **Conta Anthropic** → as linhas do próprio picker do `/model`, lidas ao vivo (abre, parseia,
+    Esc). A lista `['default','opus','sonnet','haiku']` chumbada no front envelheceu: o picker real
+    tem 5 linhas com o **Fable** entre Opus e Sonnet, então o app escondia um modelo e ainda dava a
+    Sonnet/Haiku o número de linha errado. `MODEL_NUMBERS` sobrou só como fallback pra linha rolada
+    pra fora da viewport. Cache de 10 min por config dir: ler a lista **dirige o terminal**, e
+    abrir a folha duas vezes não pode piscar o picker duas vezes.
+  - **Sessão de motor** → o `/v1/models` do provedor (o mesmo `engine_probe` da tela de Motores).
+    Ali o picker é inútil: lista os 4 aliases, **todos apontando pro mesmo `ANTHROPIC_MODEL`**
+    (`Custom Opus model`, `Custom Fable model`, …) — e `gateway_model_discovery: true` não muda
+    isso. A troca vai por `/model <id>`, que aceita id arbitrário.
+  Três armadilhas medidas: (1) `/model <id>` grava o id como **default GLOBAL** no
+  `settings.json` ("saved as your default for new sessions") — uma sessão nova da conta Anthropic
+  nasceria pedindo `kimi-for-coding`; `default_model.restore_quando_aterrissar` repõe o valor
+  anterior, e **espera a escrita chegar**, porque o arquivo só muda ~0.8s depois do Enter (repor
+  antes é um no-op e o vazamento aterrissa em seguida); (2) a linha `⎿ Set model to …` da troca
+  ANTERIOR continua na tela, então a confirmação só vale se **mencionar o id pedido** — sem isso a
+  primeira leitura devolvia a resposta da troca passada como se fosse desta; (3) o guard de "posso
+  digitar agora?" usa **duas capturas**, não uma: um pane parado não distingue spinner vivo de
+  marcador de turno concluído (está na docstring do `state.classify`), e uma captura só recusava,
+  com "está trabalhando", uma sessão que tinha acabado de terminar.
 - **Pi model + thinking level** (`app/pi_models.py` + `scripts/pi/cp-state.ts` + `components/PiModelSheet.svelte`):
   the third mechanism, next to Claude's TUI picker and Codex's app-server, and it does **not** scrape
   the pane. Measured on pi 0.82.1: `/model` is a fuzzy-**search** list of ~300 entries (footer

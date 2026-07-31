@@ -1514,7 +1514,7 @@ def _pi_info():
 def test_pi_models_returns_catalog(api_client):
     with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
          patch("app.api.pi_models.read_catalog", return_value=_PI_CAT), \
-         patch("app.api._pi_config_dir", return_value=None):
+         patch("app.api._session_config_dir", return_value=None):
         r = api_client.get("/api/sessions/pp/pi/models", headers=_h())
     assert r.status_code == 200
     assert r.json()["levels"] == ["low", "high", "max"]
@@ -1532,7 +1532,7 @@ def test_pi_models_missing_sidecar_is_409_not_empty_list(api_client):
     # Extensao ausente/velha: falha ALTA com instrucao — nunca um catalogo vazio que parece "sem modelos".
     with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
          patch("app.api.pi_models.read_catalog", return_value=None), \
-         patch("app.api._pi_config_dir", return_value=None):
+         patch("app.api._session_config_dir", return_value=None):
         r = api_client.get("/api/sessions/pp/pi/models", headers=_h())
     assert r.status_code == 409
     assert "install-claude-wrapper" in r.json()["detail"]
@@ -1546,7 +1546,7 @@ def test_pi_model_set_sends_both_commands_and_reports_readback(api_client):
         {"provider": "clinepass", "id": "cline-pass/glm-5.2", "name": "GLM", "reasoning": True}]}
     with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
          patch("app.api.pi_models.read_catalog", side_effect=[cat, after]), \
-         patch("app.api._pi_config_dir", return_value=None), \
+         patch("app.api._session_config_dir", return_value=None), \
          patch("app.api.terminal.send_pi_commands") as send:
         r = api_client.post("/api/sessions/pp/pi/model", headers=_h(),
                             json={"provider": "clinepass", "model": "cline-pass/glm-5.2",
@@ -1567,7 +1567,7 @@ def test_pi_model_set_recusado_pelo_pi_vira_409(api_client):
     with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
          patch("app.api.pi_models.read_catalog", return_value=cat), \
          patch("app.api.pi_models.read_back", return_value=after), \
-         patch("app.api._pi_config_dir", return_value=None), \
+         patch("app.api._session_config_dir", return_value=None), \
          patch("app.api.terminal.send_pi_commands"):
         r = api_client.post("/api/sessions/pp/pi/model", headers=_h(),
                             json={"provider": "clinepass", "model": "cline-pass/glm-5.2"})
@@ -1583,7 +1583,7 @@ def test_pi_model_set_sem_republicacao_diz_que_nao_confirmou(api_client):
     with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
          patch("app.api.pi_models.read_catalog", return_value=cat), \
          patch("app.api.pi_models.read_back", return_value=cat), \
-         patch("app.api._pi_config_dir", return_value=None), \
+         patch("app.api._session_config_dir", return_value=None), \
          patch("app.api.terminal.send_pi_commands"):
         r = api_client.post("/api/sessions/pp/pi/model", headers=_h(),
                             json={"provider": "clinepass", "model": "cline-pass/glm-5.2"})
@@ -1595,7 +1595,7 @@ def test_pi_model_set_sem_republicacao_diz_que_nao_confirmou(api_client):
 def test_pi_model_set_rejects_model_outside_catalog(api_client):
     with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
          patch("app.api.pi_models.read_catalog", return_value=_PI_CAT), \
-         patch("app.api._pi_config_dir", return_value=None), \
+         patch("app.api._session_config_dir", return_value=None), \
          patch("app.api.terminal.send_pi_commands") as send:
         r = api_client.post("/api/sessions/pp/pi/model", headers=_h(),
                             json={"provider": "kimi-coding", "model": "k9"})
@@ -1606,7 +1606,7 @@ def test_pi_model_set_rejects_model_outside_catalog(api_client):
 def test_pi_model_set_requires_something_to_change(api_client):
     with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
          patch("app.api.pi_models.read_catalog", return_value=_PI_CAT), \
-         patch("app.api._pi_config_dir", return_value=None), \
+         patch("app.api._session_config_dir", return_value=None), \
          patch("app.api.terminal.send_pi_commands") as send:
         r = api_client.post("/api/sessions/pp/pi/model", headers=_h(), json={})
     assert r.status_code == 422
@@ -1641,3 +1641,128 @@ def test_plan_pin_aceita_plano_da_propria_raiz(api_client, tmp_path):
                             json={"stem": "2026-07-30-x"})
     assert r.status_code == 200
     wp.assert_called_once_with(str(planos), "2026-07-30-x")
+
+
+# ---------------------------------------------------------------------------
+# Catalogo de modelos da sessao Claude — GET /model/options, POST /engine/model
+# ---------------------------------------------------------------------------
+
+from app import model_picker as mp
+
+_ENGINE_CAT = [
+    {"id": "k3", "context_length": 1048576, "vision": True},
+    {"id": "kimi-for-coding", "context_length": 262144, "vision": True},
+]
+
+
+def _engine_info():
+    return SessionInfo(name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude", engine="kimi")
+
+
+@pytest.fixture
+def api_client_limpo(api_client):
+    # O cache do catalogo e por processo e vive 5 min: sem limpar, um teste leria o do anterior.
+    from app import api as api_mod
+    api_mod._engine_models_cache.clear()
+    api_mod._claude_models_cache.clear()
+    yield api_client
+    api_mod._engine_models_cache.clear()
+    api_mod._claude_models_cache.clear()
+
+
+def test_model_options_engine_vem_do_provedor_nao_do_picker(api_client_limpo):
+    # Numa sessao de motor o picker do CC so lista os 4 aliases (todos o mesmo ANTHROPIC_MODEL):
+    # a lista util e a do /v1/models. O terminal NAO pode ser tocado nesse caminho.
+    with patch("app.api._cached_info", AsyncMock(return_value=_engine_info())), \
+         patch("app.api.engines.listar", return_value={"kimi": {"base_url": "https://x", "api_key": "k"}}), \
+         patch("app.api.engine_probe.listar_modelos", return_value=_ENGINE_CAT) as probe, \
+         patch("app.api.terminal.list_model_options") as picker:
+        r = api_client_limpo.get("/api/sessions/cc/model/options", headers=_h())
+    assert r.status_code == 200
+    body = r.json()
+    assert body["kind"] == "engine" and body["engine"] == "kimi"
+    assert [m["id"] for m in body["models"]] == ["k3", "kimi-for-coding"]
+    picker.assert_not_called()
+    probe.assert_called_once()
+
+
+def test_model_options_conta_anthropic_le_o_picker_ao_vivo(api_client_limpo):
+    # A lista muda com a conta e com a versao do CC (o Fable entrou e a lista chumbada no front nao
+    # soube): ela vem das linhas lidas, nunca de constante.
+    lido = {"effort": "high", "models": [
+        {"keyword": "default", "name": "Default", "desc": "Opus 5 …", "active": False},
+        {"keyword": "fable", "name": "Fable", "desc": "Fable 5 …", "active": True},
+    ]}
+    with patch("app.api._cached_info", AsyncMock(return_value=SessionInfo(
+            name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude"))), \
+         patch("app.api.terminal.list_model_options", return_value=lido):
+        r = api_client_limpo.get("/api/sessions/cc/model/options", headers=_h())
+    assert r.status_code == 200
+    body = r.json()
+    assert body["kind"] == "claude" and body["effort"] == "high"
+    assert [m["id"] for m in body["models"]] == ["default", "fable"]
+    assert body["models"][1]["active"] is True
+
+
+def test_model_options_sessao_ocupada_propaga_409(api_client_limpo):
+    with patch("app.api._cached_info", AsyncMock(return_value=SessionInfo(
+            name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude"))), \
+         patch("app.api.terminal.list_model_options",
+               side_effect=mp.PickerError(409, "a sessao esta trabalhando — espere ela terminar")):
+        r = api_client_limpo.get("/api/sessions/cc/model/options", headers=_h())
+    assert r.status_code == 409
+    assert "trabalhando" in r.json()["detail"]
+
+
+def test_engine_model_set_restaura_o_default_global(api_client_limpo):
+    # O ponto da rota: `/model <id>` grava o id como default GLOBAL. O valor anterior volta pro
+    # settings.json depois — a troca vale na sessao e em lugar nenhum mais.
+    with patch("app.api._cached_info", AsyncMock(return_value=_engine_info())), \
+         patch("app.api.engines.listar", return_value={"kimi": {"base_url": "https://x", "api_key": "k"}}), \
+         patch("app.api.engine_probe.listar_modelos", return_value=_ENGINE_CAT), \
+         patch("app.api._session_config_dir", return_value=None), \
+         patch("app.api.default_model.snapshot", return_value="claude-opus-5"), \
+         patch("app.api.default_model.restore_quando_aterrissar") as restore, \
+         patch("app.api.terminal.set_engine_model",
+               return_value={"ok": True, "result": "Set model to kimi-for-coding"}) as drv:
+        r = api_client_limpo.post("/api/sessions/cc/engine/model", headers=_h(),
+                            json={"model": "kimi-for-coding"})
+    assert r.status_code == 200
+    drv.assert_called_once_with("cc", "kimi-for-coding")
+    restore.assert_called_once_with(None, "claude-opus-5")
+
+
+def test_engine_model_set_restaura_mesmo_quando_o_driver_falha(api_client_limpo):
+    # O comando pode ter sido digitado ANTES da falha de leitura: deixar o default global vazado
+    # por causa de um erro seria a pior combinacao.
+    with patch("app.api._cached_info", AsyncMock(return_value=_engine_info())), \
+         patch("app.api.engines.listar", return_value={"kimi": {"base_url": "https://x", "api_key": "k"}}), \
+         patch("app.api.engine_probe.listar_modelos", return_value=_ENGINE_CAT), \
+         patch("app.api._session_config_dir", return_value=None), \
+         patch("app.api.default_model.snapshot", return_value="claude-opus-5"), \
+         patch("app.api.default_model.restore_quando_aterrissar") as restore, \
+         patch("app.api.terminal.set_engine_model", side_effect=mp.PickerError(409, "sem confirmacao")):
+        r = api_client_limpo.post("/api/sessions/cc/engine/model", headers=_h(),
+                            json={"model": "kimi-for-coding"})
+    assert r.status_code == 409
+    restore.assert_called_once_with(None, "claude-opus-5")
+
+
+def test_engine_model_set_recusa_modelo_fora_do_catalogo(api_client_limpo):
+    # Digitar o id assim mesmo faria a sessao mandar request pra um modelo inexistente e a falha
+    # apareceria so no proximo turno.
+    with patch("app.api._cached_info", AsyncMock(return_value=_engine_info())), \
+         patch("app.api.engines.listar", return_value={"kimi": {"base_url": "https://x", "api_key": "k"}}), \
+         patch("app.api.engine_probe.listar_modelos", return_value=_ENGINE_CAT), \
+         patch("app.api.terminal.set_engine_model") as drv:
+        r = api_client_limpo.post("/api/sessions/cc/engine/model", headers=_h(),
+                            json={"model": "gpt-5.4"})
+    assert r.status_code == 422
+    drv.assert_not_called()
+
+
+def test_engine_model_set_recusa_sessao_sem_motor(api_client):
+    with patch("app.api._cached_info", AsyncMock(return_value=SessionInfo(
+            name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude"))):
+        r = api_client.post("/api/sessions/cc/engine/model", headers=_h(), json={"model": "k3"})
+    assert r.status_code == 400

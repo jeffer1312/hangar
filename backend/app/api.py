@@ -37,7 +37,7 @@ from app.video import is_video, extract_frames, extract_audio
 from app.transcribe import transcribe, TranscribeError
 from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base, settings, automations_enabled
 from app import runtime_config
-from app import engine_probe, engines
+from app import default_model, engine_probe, engines
 from app.costs import report as costs_report
 from app.git_ops import (
     list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit_diff, revert_commit, cherry_pick, reset_to, create_branch_at, create_tag, diff_vs_worktree, branches_containing, commit, last_commit_message, push as push_branch, sequencer_state, GitError, branch_of,
@@ -2471,6 +2471,122 @@ def model_effort(name: str, body: ModelEffortBody):
         raise HTTPException(422, str(e))
 
 
+# ── Catalogo de modelos de uma sessao Claude Code ───────────────────────────────────────────────
+# Duas fontes, escolhidas pelo que a sessao E, porque medimos que so uma funciona em cada caso:
+#   * sessao de MOTOR -> o /v1/models do provedor (o mesmo probe da tela de Motores). O picker do
+#     Claude Code ali lista so os 4 aliases, todos apontando pro mesmo ANTHROPIC_MODEL — inutil.
+#   * sessao da CONTA -> as linhas do proprio picker, lidas ao vivo. A lista muda com a conta e com
+#     a versao do CC (o Fable entrou e a lista chumbada no front nao soube), entao ela nao pode
+#     morar no codigo.
+
+class EngineModelBody(_StrictBody):
+    model: str
+    effort: str | None = None
+
+
+# Catalogo por motor: e uma chamada de REDE ao provedor, e abrir a folha nao pode pagar isso toda
+# vez. TTL curto porque a lista muda com o plano do usuario, nao a cada minuto.
+_ENGINE_MODELS_TTL = 300.0
+_engine_models_cache: dict[str, tuple[float, list[dict]]] = {}
+
+# Catalogo da conta Anthropic: ler o picker DIRIGE O TERMINAL (abre e fecha um overlay na cara de
+# quem estiver olhando o tmux), entao abrir a folha duas vezes nao pode piscar o picker duas vezes.
+# A chave e o config dir, nao a sessao: a lista vem da CONTA, e a mesma pra todas as sessoes dela.
+_CLAUDE_MODELS_TTL = 600.0
+_claude_models_cache: dict[str, tuple[float, dict]] = {}
+
+
+async def _engine_models(nome: str) -> list[dict]:
+    hit = _engine_models_cache.get(nome)
+    if hit and time.monotonic() - hit[0] < _ENGINE_MODELS_TTL:
+        return hit[1]
+    cfg = engines.listar().get(nome)
+    if not cfg:
+        raise HTTPException(409, f"motor {nome!r} nao esta mais no engines.json")
+    try:
+        modelos = await asyncio.to_thread(engine_probe.listar_modelos, cfg["base_url"], cfg["api_key"])
+    except RuntimeError as e:
+        # A mensagem do provedor E a informacao util (key invalida, host fora do ar).
+        raise HTTPException(502, f"o provedor do motor {nome!r} nao respondeu: {e}")
+    _engine_models_cache[nome] = (time.monotonic(), modelos)
+    return modelos
+
+
+@app.get("/api/sessions/{name}/model/options", dependencies=[Depends(require_auth)])
+async def model_options(name: str):
+    """Modelos que ESTA sessao pode escolher. `kind` diz de onde vieram e como aplicar."""
+    info = await _cached_info(name)
+    if not info:
+        raise HTTPException(404, "sessao nao encontrada")
+    if info.provider not in (None, "claude"):
+        raise HTTPException(400, "esta rota so existe pra sessoes Claude Code")
+    if info.engine:
+        modelos = await _engine_models(info.engine)
+        return {"kind": "engine", "engine": info.engine,
+                "models": [{"id": m["id"], "context_length": m.get("context_length"),
+                            "vision": m.get("vision")} for m in modelos]}
+    # Conta Anthropic: le o picker de verdade. Abre e fecha um overlay — nao vai pro scrollback,
+    # nao entra no transcript e nao gasta token.
+    chave = str(_session_config_dir(name) or "~")
+    hit = _claude_models_cache.get(chave)
+    if hit and time.monotonic() - hit[0] < _CLAUDE_MODELS_TTL:
+        return hit[1]
+    try:
+        lido = await asyncio.to_thread(terminal.list_model_options, name)
+    except PickerError as e:
+        raise HTTPException(e.status, e.detail)
+    resp = {"kind": "claude", "engine": None, "effort": lido["effort"],
+            "models": [{"id": r["keyword"], "name": r["name"], "desc": r["desc"],
+                        "active": r["active"]} for r in lido["models"]]}
+    _claude_models_cache[chave] = (time.monotonic(), resp)
+    return resp
+
+
+@app.post("/api/sessions/{name}/engine/model", dependencies=[Depends(require_auth)])
+async def engine_model_set(name: str, body: EngineModelBody):
+    """Troca o modelo (e opcionalmente o esforco) de uma sessao que roda num motor.
+
+    O `/model <id>` do Claude Code aplica na sessao E grava o id como default GLOBAL pra sessoes
+    novas — inclusive as da conta Anthropic, que nao conhecem esse id. Por isso o valor anterior do
+    settings.json e capturado antes e reposto depois: a troca vale onde foi pedida e em lugar nenhum
+    mais. Ver app/default_model.py.
+    """
+    info = await _cached_info(name)
+    if not info:
+        raise HTTPException(404, "sessao nao encontrada")
+    if not info.engine:
+        raise HTTPException(400, "esta rota so existe pra sessoes que rodam num motor")
+    modelos = await _engine_models(info.engine)
+    if not any(m["id"] == body.model for m in modelos):
+        # Recusar aqui em vez de digitar: o CC aceitaria o id, a sessao passaria a mandar request
+        # pra um modelo que o provedor nao tem, e a falha apareceria so no proximo turno.
+        raise HTTPException(422, f"modelo fora do catalogo do motor {info.engine!r}: {body.model}")
+
+    cfg_dir = _session_config_dir(name)  # mesma leitura de /proc que resolve o config dir das outras rotas
+    antes = await asyncio.to_thread(default_model.snapshot, cfg_dir)
+    try:
+        res = await asyncio.to_thread(terminal.set_engine_model, name, body.model)
+    except PickerError as e:
+        raise HTTPException(e.status, e.detail)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    finally:
+        # No finally de proposito: se o comando foi digitado mas a confirmacao nao pode ser lida, o
+        # settings.json PODE ja ter sido reescrito — deixar o default global vazado por causa de um
+        # erro de leitura seria a pior combinacao.
+        await asyncio.to_thread(default_model.restore_quando_aterrissar, cfg_dir, antes)
+
+    if body.effort:
+        # Esforco continua saindo do picker (Left/Right): medido que ele funciona igual em sessao de
+        # motor — o chip `(high✦)` e real, nao maquiagem. Falha aqui nao desfaz o modelo, que ja
+        # pegou; reporta junto pra tela nao dizer que tudo deu certo.
+        try:
+            await asyncio.to_thread(terminal.set_model_effort, name, None, body.effort, "session")
+        except (PickerError, ValueError) as e:
+            return {**res, "model": body.model, "effort_error": str(e)}
+    return {**res, "model": body.model}
+
+
 # ── Modelo + raciocinio de uma sessao Pi ────────────────────────────────────────────────────────
 # Rotas separadas das do Claude (/model-effort, picker do TUI) e das do Codex (/models, app-server)
 # porque o mecanismo e um terceiro: a extensao cp-state.ts publica o catalogo num sidecar e expoe
@@ -2483,8 +2599,9 @@ class PiModelBody(_StrictBody):
     effort: str | None = None
 
 
-def _pi_config_dir(name: str) -> Path | None:
-    """CLAUDE_CONFIG_DIR do processo do pane (o sidecar mora la dentro). None -> ~/.claude.
+def _session_config_dir(name: str) -> Path | None:
+    """CLAUDE_CONFIG_DIR do processo do pane (o sidecar do Pi e o settings.json moram la dentro).
+    None -> ~/.claude.
     Usa o mesmo `_config_dir_of` do registry (privado do pacote) que ja resolve o transcript do Pi:
     duas leituras diferentes do /proc dariam respostas diferentes pra mesma sessao."""
     from app import registry as registry_mod
@@ -2507,7 +2624,7 @@ async def _pi_catalog(name: str) -> tuple[dict, str]:
         raise HTTPException(404, "sessao ou transcript nao encontrado")
     if info.provider != "pi":
         raise HTTPException(400, "esta rota so existe pra sessoes Pi")
-    cat = await asyncio.to_thread(pi_models.read_catalog, info.jsonl, _pi_config_dir(name))
+    cat = await asyncio.to_thread(pi_models.read_catalog, info.jsonl, _session_config_dir(name))
     if cat is None:
         # Falha ALTA: sem o sidecar nao ha catalogo real, e inventar um faria o app oferecer
         # modelos que o `/cp-model` nao encontraria. Instrucao junto porque a causa e sempre a
@@ -2549,7 +2666,7 @@ async def pi_model_set(name: str, body: PiModelBody):
     # RECUSAR sem levantar nada (sem chave pro provedor: notifica no TUI e o sidecar segue no modelo
     # velho). Devolver ok=True sem comparar era declarar sucesso sobre um no-op, com a folha
     # fechando calada.
-    after = await asyncio.to_thread(pi_models.read_back, jsonl, _pi_config_dir(name),
+    after = await asyncio.to_thread(pi_models.read_back, jsonl, _session_config_dir(name),
                                     body.provider, body.model, body.effort)
     if after is not None and pi_models.confirms(after, body.provider, body.model, body.effort):
         return {"ok": True, "current": after.get("current"), "thinking": after.get("thinking"),
