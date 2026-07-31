@@ -1592,10 +1592,12 @@ def get_config():
     }
 
 
-# POST **e** PATCH: PATCH era o unico metodo desse tipo no app inteiro (os outros 51 pedidos sao
-# POST/PUT/DELETE) e o proxy na frente do backend nao deixava passar — o preflight respondia 204 e o
-# pedido de verdade morria em erro de CORS. O cliente usa POST; o PATCH fica valendo pra quem chamar
-# a API na mao.
+# POST **e** PATCH: o PATCH morria em erro de CORS cross-origin e a culpa foi posta no "proxy na
+# frente do backend". ERRADO — o culpado era o plugin apiCorsPreflight do frontend/vite.config.ts,
+# que respondia TODO preflight de /api com uma LISTA FIXA de metodos que nao tinha PATCH (nem PUT,
+# o que so apareceu em 2026-07-31, derrubando salvar motor). Hoje o plugin ECOA o metodo pedido e
+# nao ha mais lista pra envelhecer. O cliente segue no POST porque funciona; o PATCH vale pra quem
+# chamar a API na mao.
 @app.post("/api/config", dependencies=[Depends(require_auth)])
 @app.patch("/api/config", dependencies=[Depends(require_auth)])
 async def patch_config(request: Request):
