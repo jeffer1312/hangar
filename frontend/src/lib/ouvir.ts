@@ -23,10 +23,14 @@ export function ouvirTexto(texto: string, confirmar: (msg: string) => Promise<bo
       .then((r) => { ttsPlayer.playUrl(ttsAudioUrl(r.url)); })
       .catch((e: Error & { status?: number }) => {
         if (e.status === 409) {
-          return confirmar(e.message).then((ok) => {
-            if (ok) return pedir(true);
-            ttsPlayer.close();
-          });
+          // Recusar (ou window.confirm suprimido no PWA, que devolve false calado) NAO pode
+          // fechar a barra em silencio — regra do projeto: falha aparece, nunca some.
+          return confirmar(e.message)
+            .then((ok) => {
+              if (ok) return pedir(true);
+              ttsPlayer.fail(`acima do limite de leitura — ${e.message.replace(/^409:\s*/, '')}`);
+            })
+            .catch(() => ttsPlayer.fail('não deu pra confirmar a leitura'));
         }
         ttsPlayer.fail(e.message);
       });
