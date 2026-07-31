@@ -81,8 +81,32 @@
     if (tela === 'root') onFechar();
     else onVoltar();
   }
+
+  // VER AO VIVO (so desktop, so na Aparencia): o painel grande sai da frente e vira uma caixinha
+  // flutuante no canto, sem veu, com o chat REAL atras — porque todo slider daqui edita justamente o
+  // que o painel esta tapando. A previa embutida resolve o caso comum; isto e pra quando a pessoa
+  // quer ver a conversa de verdade mudando.
+  let aoVivo = $state(false);
+  // Sair da Aparencia (ou ir pro celular) desliga: a caixinha e pequena demais pra tela de motores, e
+  // no celular nao ha "atras" pra revelar.
+  $effect(() => { if (telaAtual !== 'aparencia' || !isDesktop) aoVivo = false; });
 </script>
 
+{#if aoVivo}
+  <!-- Caixinha: `fixed` no canto, SEM backdrop — o clique fora vai pro app, que e o ponto. Fecha so
+       no ✕ (ou voltando pro painel), como pedido. Nao usa BottomSheet: aquele e um dialogo modal com
+       veu e trap de foco, o oposto do que se quer aqui. -->
+  <div class="vivo" role="dialog" aria-label="Aparência — ao vivo">
+    <header class="vivo-head">
+      <h2 class="vivo-titulo">Aparência</h2>
+      <button class="vivo-btn" onclick={() => (aoVivo = false)} title="Voltar ao painel">⤢</button>
+      <button class="vivo-btn" onclick={onFechar} aria-label="Fechar">✕</button>
+    </header>
+    <div class="vivo-corpo">
+      <AppearanceSettings semPrevia />
+    </div>
+  </div>
+{:else}
 <BottomSheet open={true} onClose={onFechar} ariaLabel={TITULO[telaAtual]}
              wide={isDesktop} centered={isDesktop} split={isDesktop}>
   {#if isDesktop}
@@ -125,6 +149,7 @@
     {@render corpo()}
   {/if}
 </BottomSheet>
+{/if}
 
 {#snippet corpo()}
   {#if telaAtual === 'root'}
@@ -140,7 +165,7 @@
       </div>
     {/each}
   {:else if telaAtual === 'aparencia'}
-    <AppearanceSettings />
+    <AppearanceSettings podeAoVivo={isDesktop} onVerAoVivo={() => (aoVivo = true)} />
   {:else if telaAtual === 'motores'}
     <EnginesSettings targetServer={alvo} />
   {:else}
@@ -179,6 +204,56 @@
     overflow: hidden;
   }
   .st-cartao > :global(button + button) { border-top: 1px solid var(--border-subtle); }
+
+  /* ── Ao vivo: caixinha flutuante no canto direito ───────────────────────────────────────────
+     Nao e um dialogo modal: sem backdrop, sem trap de foco, e o app atras continua clicavel. E o
+     ponto da feature — mexer no slider e ver a conversa de verdade mudando. */
+  .vivo {
+    position: fixed;
+    right: var(--space-4);
+    bottom: var(--space-4);
+    z-index: 90;                    /* acima do chat, abaixo dos dialogos de verdade (100+) */
+    display: flex;
+    flex-direction: column;
+    width: min(360px, calc(100vw - var(--space-6)));
+    max-height: min(70vh, 640px);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    /* Fundo PROPRIO e quase opaco, nao `--glass-panel`: esta caixinha pousa em cima da conversa e do
+       painel de contexto, e com a alfa do painel (0,73) o texto de tras atravessava e embaralhava os
+       rotulos dos sliders — medido na tela. Ela e chrome funcional flutuante, mesmo caso do card do
+       menu da conta: precisa de leitura, nao de veu. O desfoque abaixo termina de separar. */
+    background: var(--bg-surface);
+    backdrop-filter: blur(18px) saturate(150%);
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+  }
+  .vivo-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .vivo-titulo {
+    flex: 1;
+    margin: 0;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .vivo-btn {
+    width: 28px; height: 28px; min-height: 0; min-width: 0;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--border-subtle);
+    background: var(--surface-raised);
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+    cursor: pointer;
+  }
+  @media (hover: hover) { .vivo-btn:hover { color: var(--text-primary); background: var(--bg-hover); } }
+  /* O corpo rola sozinho: a caixinha tem altura fixa e a Aparencia inteira nao cabe nela. */
+  .vivo-corpo { overflow-y: auto; padding: var(--space-3) var(--space-4) var(--space-4); min-height: 0; }
 
   /* ⚠ `grid-template-rows: minmax(0, 1fr)` NAO e enfeite: sem ele a linha implicita e `auto`, a
      trilha cresce ate a altura do formulario, o overflow-y da coluna nunca dispara e o
