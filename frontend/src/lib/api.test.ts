@@ -52,6 +52,33 @@ describe('explicit server settings API', () => {
   });
 });
 
+// O sintoma real: com um servidor da malha OFFLINE, abrir Configuracoes dele prendia a folha em
+// "Carregando..." pra sempre. VPN pra no morto nao RECUSA a conexao — o socket fica pendurado e a
+// promessa nunca resolve, entao nem o catch nem o finally da tela rodavam.
+describe('chamada a outro servidor tem prazo', () => {
+  it('manda um signal por padrão', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ campos: {}, somente_leitura: {} }), { status: 200 }),
+    );
+    await getConfigForServer(server);
+    expect(fetchMock.mock.calls[0][1]).toHaveProperty('signal');
+  });
+
+  it('estourar o prazo vira erro legível, com o nome do servidor', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(
+      new DOMException('signal timed out', 'TimeoutError'),
+    );
+    await expect(getConfigForServer(server)).rejects.toThrow(/Servidor A.*não respondeu/);
+  });
+
+  it('quem CANCELA por conta própria recebe o abort cru, não a mensagem de servidor fora do ar', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new DOMException('aborted', 'AbortError'));
+    await expect(getConfigForServer(server)).rejects.toSatisfy(
+      (e: unknown) => e instanceof DOMException && (e as DOMException).name === 'AbortError',
+    );
+  });
+});
+
 describe('getHistory', () => {
   // fetch que respeita o signal, como o do browser: só termina quando a resposta chega OU quando o
   // signal aborta — é o que permite provar que o download PARA, e não só que a resposta é ignorada.
