@@ -172,4 +172,68 @@ def test_drain_poda_entradas_de_vida_anterior_da_sessao(tmp_queue, tmp_path, mon
     monkeypatch.setattr(terminal_input.TerminalInput, "send_prompt",
                         lambda self, name, text, provider="claude": sent.append(text) or "sent")
     assert terminal_input.drain("cc", str(j)) == 0 and sent == []
-    assert all(e.get("delivered") is not False for e in PromptQueue("cc").load())  # podada, nao pendente
+    assert PromptQueue("cc").load() == []  # PODADA de verdade (nao marcada entregue, nao pendente)
+
+
+def test_drain_entrega_entrada_mais_nova_que_o_tmux(tmp_queue, tmp_path, monkeypatch):
+    # A direcao arriscada do max(): entrada enfileirada DEPOIS do nascimento do tmux atual e
+    # mensagem viva — o corte novo nao pode come-la.
+    PromptQueue("cc").append("mensagem viva", delivered=False)
+    j = tmp_path / "t.jsonl"
+    j.write_text('{"timestamp":"2000-01-01T00:00:00Z"}\n', encoding="utf-8")
+    monkeypatch.setattr(terminal_input.tmux, "session_created", lambda name: time.time() - 60)
+    sent = []
+    monkeypatch.setattr(terminal_input.TerminalInput, "send_prompt",
+                        lambda self, name, text, provider="claude": sent.append(text) or "sent")
+    assert terminal_input.drain("cc", str(j)) == 1 and sent == ["mensagem viva"]
+
+
+# --- identidade do placeholder de paste (achado CRITICO da review 31/07) ---
+
+_REGUA_R = "─" * 60
+
+
+def _pane_claude(composer_lines):
+    return "\n".join(["banner", ""] + [_REGUA_R] + composer_lines + [_REGUA_R, "status"])
+
+
+def test_paste_alheio_nao_conta_como_entrega():
+    # Placeholder que JA existia (rascunho do usuario) nao pode virar prova da nossa mensagem —
+    # o Enter submeteria texto de terceiro.
+    pane = _pane_claude(["❯ [Pasted text #1 +12 lines]"])
+    r = terminal_input._composer_residuo(pane, "mensagem longa que nunca foi colada de verdade",
+                                         "cc", pastes_antes={"1"})
+    assert r is not True
+
+
+def test_paste_novo_conta_como_entrega():
+    pane = _pane_claude(["❯ [Pasted text #2 +3 lines]"])
+    r = terminal_input._composer_residuo(pane, "mensagem longa entregue via paste colapsado",
+                                         "cc", pastes_antes={"1"})
+    assert r is True
+
+
+def test_sem_foto_previa_placeholder_nao_conta():
+    # pastes_antes=None (ramo de linha unica / caminhos antigos): placeholder nunca e prova.
+    pane = _pane_claude(["❯ [Pasted text #7 +2 lines]"])
+    r = terminal_input._composer_residuo(pane, "texto longo o bastante pra ter cauda valida", "cc")
+    assert r is not True
+
+
+def test_send_prompt_pi_composer_vazio_envia(monkeypatch):
+    # Regressao-trava: o gate novo do Pi NAO pode bloquear envio com composer vazio — o texto
+    # tem que chegar no send_keys e o resultado ser "sent".
+    monkeypatch.setattr(terminal_input, "deliverable", lambda name: True)
+    monkeypatch.setattr(terminal_input, "_wait_input_ready", lambda name, provider="claude": True)
+    monkeypatch.setattr(terminal_input, "_entrou_no_composer",
+                        lambda name, texto, pastes_antes=None: True)
+    monkeypatch.setattr(terminal_input, "_submeteu",
+                        lambda name, texto, pastes_antes=None: True)
+    monkeypatch.setattr(terminal_input.time, "sleep", lambda s: None)
+    pane_vazio = "\n".join(["conversa", _REGUA_R, _REGUA_R, "status"])
+    teclas = []
+    with patch.object(terminal_input, "_capture", return_value=pane_vazio), \
+         patch.object(terminal_input, "send_keys",
+                      side_effect=lambda name, keys, literal=False: teclas.append(keys) or True):
+        assert TerminalInput().send_prompt("pi-x", "oi tudo bem", provider="pi") == "sent"
+    assert "oi tudo bem" in teclas and "Enter" in teclas

@@ -249,16 +249,19 @@ class PromptQueue:
                 return bool(r.get("delivered"))
         return None
 
-    def prune_before(self, min_ts: float) -> None:
+    def prune_before(self, min_ts: float) -> int:
         # Entradas de sessao ANTERIOR (ts < inicio do transcript atual) nunca mais casam nem drenam
         # — so acumulavam lixo e mantinham o cheap-check do drain quente pra sempre. Remove.
+        # Devolve QUANTAS cairam: a poda apaga a bubble do chat junto, entao sumir calado esconderia
+        # mensagem descartada — quem chama loga (falha aparece, nao some).
         if min_ts <= 0:
-            return
+            return 0
         with _append_lock:
             rows = self.load()
             kept = [r for r in rows if float(r.get("ts") or 0.0) >= min_ts]
             if len(kept) != len(rows):
                 self._write_atomic(kept)
+            return len(rows) - len(kept)
 
     def reconcile_delivered(self, committed: set[str], min_ts: float, now: float,
                             grace: float = 8.0, max_attempts: int = 2) -> list[dict]:
