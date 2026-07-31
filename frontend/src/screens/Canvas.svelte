@@ -7,7 +7,7 @@
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { serverColor } from '../lib/auth';
   import { pairColor } from '../lib/format';
-  import { placeNew, PAD, GAP, CARD_W, CARD_H, type CanvasLayout, type CardBox } from '../lib/canvasLayout';
+  import { placeNew, resizeBox, PAD, GAP, CARD_W, CARD_H, type CanvasLayout, type CardBox } from '../lib/canvasLayout';
 
   interface Props { onOpenSession: (name: string, serverId: string) => void }
   let { onOpenSession }: Props = $props();
@@ -305,18 +305,30 @@
     saveLayout();
   }
 
-  // ── Resize: CSS resize:both nativo no wrapper; o observer captura, empurra vizinhos e persiste. ──
-  function observeSize(node: HTMLElement, key: string) {
-    const ro = new ResizeObserver(() => {
-      const b = layout[key];
-      if (!b) return;
-      const w = node.offsetWidth, h = node.offsetHeight;
-      if (w === b.w && h === b.h) return;
-      layout = resolveCollisions(key, { ...layout, [key]: { ...b, w, h } });
-      saveLayout();   // dispara a cada passo do arrasto de resize; barato (um setItem)
-    });
-    ro.observe(node);
-    return { destroy() { ro.disconnect(); } };
+  // ── Resize por QUALQUER borda/canto: 8 alças finas em volta do card. O `resize: both` do CSS que
+  // havia aqui só oferece o canto inferior-direito — puxar pela esquerda/topo é o pedido. A conta
+  // (clamps, borda oposta parada) mora em canvasLayout.resizeBox, testada. ──
+  const RESIZE_DIRS = ['n', 's', 'e', 'w', 'nw', 'ne', 'sw', 'se'] as const;
+  let rs: { key: string; dir: string; x0: number; y0: number; box: CardBox } | null = null;
+  function resizeStart(e: PointerEvent, key: string, dir: string) {
+    const b = layout[key];
+    if (!b) return;
+    rs = { key, dir, x0: e.clientX, y0: e.clientY, box: { ...b } };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    e.preventDefault();
+    e.stopPropagation();
+  }
+  function resizeMove(e: PointerEvent) {
+    if (!rs) return;
+    if (!layout[rs.key]) { rs = null; return; }   // sessão morreu no meio do arrasto
+    layout = { ...layout, [rs.key]: resizeBox(rs.box, rs.dir, e.clientX - rs.x0, e.clientY - rs.y0) };
+  }
+  function resizeEnd() {
+    if (!rs) return;
+    // Empurra vizinhos só no FIM: durante o arrasto a cascata jogava card pra baixo a cada pixel.
+    layout = resolveCollisions(rs.key, layout);
+    rs = null;
+    saveLayout();
   }
 
   // ── Estado içado por card (mesmo padrão e motivo do Board: o recibo de erro precisa sobreviver ao
@@ -421,7 +433,7 @@
       {@const key = rowKey(row)}
       {@const box = layout[key]}
       {#if box}
-        <div class="cv-card" class:paired={!!row.pair_gid} use:observeSize={key}
+        <div class="cv-card" class:paired={!!row.pair_gid}
              style="left: {box.x}px; top: {box.y}px; width: {box.w}px; height: {box.h}px;{row.pair_gid ? ` --pair-c: ${pairColor(gkeyOf(row)!)};` : ''}">
           <!-- Barra tingida com a COR DO GRUPO (pairColor): membros do mesmo pareamento se
                reconhecem de longe no canvas; sem par, barra neutra de sempre. -->
@@ -451,6 +463,13 @@
               onGatherPair={row.pair_gid ? () => gatherPair(key, gkeyOf(row)!) : null}
             />
           </div>
+          <!-- Alças de resize: faixas de 6px nas 4 bordas + 12px nos cantos. Decorativas (o teclado
+               não redimensiona; posição/tamanho não são conteúdo) -> aria-hidden. -->
+          {#each RESIZE_DIRS as dir (dir)}
+            <div class="cv-rs cv-rs-{dir}" aria-hidden="true"
+                 onpointerdown={(e) => resizeStart(e, key, dir)} onpointermove={resizeMove}
+                 onpointerup={resizeEnd} onpointercancel={resizeEnd}></div>
+          {/each}
         </div>
       {/if}
     {/each}
@@ -485,10 +504,22 @@
   .cv-plane { position: relative; }
   .cv-card {
     position: absolute; display: flex; flex-direction: column;
-    resize: both; overflow: hidden;                      /* resize nativo; observer persiste */
-    min-width: 240px; min-height: 160px;
+    overflow: hidden;
+    min-width: 240px; min-height: 160px;                 /* espelha MIN_W/MIN_H de canvasLayout */
     border-radius: var(--radius-lg);
   }
+  /* Alças de resize: por DENTRO da borda (o card tem overflow: hidden — alça pra fora seria
+     recortada). Sem pintura: só cursor e área de agarre. */
+  .cv-rs { position: absolute; z-index: 2; touch-action: none; }
+  .cv-rs-n, .cv-rs-s { left: 10px; right: 10px; height: 6px; cursor: ns-resize; }
+  .cv-rs-n { top: 0; } .cv-rs-s { bottom: 0; }
+  .cv-rs-w, .cv-rs-e { top: 10px; bottom: 10px; width: 6px; cursor: ew-resize; }
+  .cv-rs-w { left: 0; } .cv-rs-e { right: 0; }
+  .cv-rs-nw, .cv-rs-ne, .cv-rs-sw, .cv-rs-se { width: 12px; height: 12px; }
+  .cv-rs-nw { top: 0; left: 0; cursor: nwse-resize; }
+  .cv-rs-se { bottom: 0; right: 0; cursor: nwse-resize; }
+  .cv-rs-ne { top: 0; right: 0; cursor: nesw-resize; }
+  .cv-rs-sw { bottom: 0; left: 0; cursor: nesw-resize; }
   .cv-handle {
     position: relative;
     flex-shrink: 0; height: 18px; cursor: grab; touch-action: none;
@@ -503,7 +534,7 @@
   /* Ocultar: irmão do handle, ancorado na faixa; aparece no hover do card (descoberta sem poluir
      15 cards com 15 botões). */
   .cv-hide {
-    position: absolute; right: 4px; top: 2px; z-index: 2;
+    position: absolute; right: 4px; top: 2px; z-index: 3;   /* acima das alças de resize */
     width: 16px; height: 14px; padding: 0; line-height: 1;
     display: flex; align-items: center; justify-content: center;
     background: none; border: 0; border-radius: var(--radius-sm);

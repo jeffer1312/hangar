@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { placeNew, CARD_W, CARD_H, GAP, PAD, type CanvasLayout } from './canvasLayout';
+import { placeNew, resizeBox, MIN_W, MIN_H, CARD_W, CARD_H, GAP, PAD, type CanvasLayout } from './canvasLayout';
 
 const row = (key: string, serverId: string, pairGid: string | null = null) => ({ key, serverId, pairGid });
 
@@ -53,5 +53,33 @@ describe('placeNew', () => {
     const out = placeNew(existing, [row('a::n', 'a')], ['a', 'b']);
     expect(out['a::n'].x).toBe(PAD);
     expect(out['a::n'].y).toBe(PAD);
+  });
+});
+
+describe('resizeBox', () => {
+  const b = { x: 100, y: 100, w: 400, h: 300 };
+
+  it('leste/sul só crescem w/h, x/y ficam', () => {
+    expect(resizeBox(b, 'se', 50, 40)).toEqual({ x: 100, y: 100, w: 450, h: 340 });
+  });
+
+  it('oeste/norte movem x/y junto com o tamanho', () => {
+    expect(resizeBox(b, 'nw', 60, 30)).toEqual({ x: 160, y: 130, w: 340, h: 270 });
+  });
+
+  it('clampa no mínimo sem deslocar a borda oposta', () => {
+    const out = resizeBox(b, 'nw', 9999, 9999);
+    expect(out.w).toBe(MIN_W);
+    expect(out.h).toBe(MIN_H);
+    expect(out.x + out.w).toBe(b.x + b.w);   // borda leste parada
+    expect(out.y + out.h).toBe(b.y + b.h);   // borda sul parada
+  });
+
+  it('borda oeste/norte não passa de 0 (card sairia do plano)', () => {
+    const out = resizeBox(b, 'nw', -9999, -9999);
+    expect(out.x).toBe(0);
+    expect(out.y).toBe(0);
+    expect(out.w).toBe(500);   // x0 + w0
+    expect(out.h).toBe(400);
   });
 });

@@ -577,6 +577,22 @@
   /* Canvas: o wrapper dita a altura; o corpo vira o flexível (o teto de 240px é regra da COLUNA). */
   .bcard.fill { height: 100%; display: flex; flex-direction: column; }
   .bcard.fill .bc-body { max-height: none; flex: 1; }
+  /* Respiro proporcional à largura do CARD (container query, não media: no canvas o card é
+     redimensionado à mão e a janela não diz nada sobre ele). Na coluna do board fica em 16px;
+     esticado no canvas, 16px de cada lado num card de 900px deixava o texto colado na borda. */
+  .bcard.fill { container-type: inline-size; }
+  @container (min-width: 520px) {
+    .bc-head { padding: var(--space-3) var(--space-6) var(--space-2); }
+    .bc-sub { padding: 0 var(--space-6) 10px; }
+    .bc-body { padding: 2px var(--space-6) var(--space-5); }
+    .bc-foot { padding: var(--space-3) var(--space-6); }
+  }
+  @container (min-width: 860px) {
+    .bc-head { padding: var(--space-4) var(--space-8) var(--space-2); }
+    .bc-sub { padding: 0 var(--space-8) var(--space-3); }
+    .bc-body { padding: 2px var(--space-8) var(--space-6); gap: var(--space-3); }
+    .bc-foot { padding: var(--space-3) var(--space-8); }
+  }
   .bc-progress {
     position: absolute; top: 0; left: 0; right: 0; height: 2px; overflow: hidden;
     background: transparent;
