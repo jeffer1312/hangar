@@ -151,6 +151,22 @@
     else history.back();
   }
 
+  // Fechar destroi o painel; o gatilho que o abriu pode nao existir mais (no celular ele vai junto
+  // com o drawer), e o foco cai no <body> — leitor de tela mudo e Tab recomecando do zero. O
+  // SettingsModal nao pode devolver isto sozinho: onFechar dispara history.go(), que e assincrono, e
+  // o BottomSheet so restaura foco numa transicao de `open` pra falso (aqui `open` e fixo em `true`,
+  // o componente e DESTRUIDO). Reagir aqui, a `cfg` sumir, e o unico jeito de pegar o momento certo.
+  let painelEstavaAberto = false;
+  $effect(() => {
+    const aberto = !!cfg;
+    if (painelEstavaAberto && !aberto && document.activeElement === document.body) {
+      document
+        .querySelector<HTMLElement>('[aria-label="Menu da conta"], [aria-label="Abrir menu"]')
+        ?.focus();
+    }
+    painelEstavaAberto = aberto;
+  });
+
   // Boot: sonda o hub. Se ligado, tenta restaurar a sessao do sessionStorage (encKey sobrevive ao
   // reload) sem repedir senha; senao cai no login do hub. Sem sync, segue a regra de localStorage.
   $effect(() => {

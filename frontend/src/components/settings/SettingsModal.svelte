@@ -5,7 +5,7 @@
   import ServerSettings from './ServerSettings.svelte';
   import EnginesSettings from './EnginesSettings.svelte';
   import { criarConfigServidor } from '../../lib/serverConfig.svelte';
-  import type { TelaConfig } from '../../lib/configRoute';
+  import { TELAS_DE_SERVIDOR, type TelaConfig } from '../../lib/configRoute';
   import type { Server } from '../../lib/auth';
 
   interface Props {
@@ -116,6 +116,11 @@
       <!-- tabindex=-1: alvo do foco na troca de tela, sem entrar na ordem do Tab. -->
       <h2 class="st-titulo" bind:this={tituloEl} tabindex="-1">{TITULO[tela]}</h2>
       <span class="st-icone st-vazio" aria-hidden="true"></span>
+      {#if TELAS_DE_SERVIDOR.includes(telaAtual) && nomeAlvo}
+        <!-- Sem isto nao da pra saber em que maquina se esta mexendo: o app roda no front de um
+             servidor e a lista e agregada, entao a config aberta pode ser de outra maquina. -->
+        <p class="st-sub">em {nomeAlvo}</p>
+      {/if}
     </header>
     {@render corpo()}
   {/if}
@@ -152,6 +157,7 @@
     margin: 0; text-align: center;
     font-size: var(--text-base); font-weight: 600; color: var(--text-primary);
   }
+  .st-sub { grid-column: 2; margin: 0; text-align: center; font-size: var(--text-xs); color: var(--text-muted); }
   .st-titulo:focus { outline: none; }   /* alvo programatico: o anel aqui so confundiria */
   .st-icone {
     width: 32px; height: 32px; border-radius: var(--radius-full);
