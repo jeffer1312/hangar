@@ -14,7 +14,7 @@ const MARCADOR = ' trecho de código omitido. ';
 // eles). Sem uma quebra aqui, "## Passo 1" + o paragrafo seguinte viram "Passo 1Fazer X" no
 // textContent achatado — o servidor (tts_text.py) so tem como transformar quebra de bloco em
 // pausa se o front mandar a quebra.
-const BLOCOS = 'p,h1,h2,h3,h4,h5,h6,li,blockquote,tr,pre,div';
+const BLOCOS = 'p,h1,h2,h3,h4,h5,h6,li,blockquote,tr,td,th,pre,div';
 
 export function textoFalavel(raiz: HTMLElement): string {
   // Clone: trocar o conteudo do <pre> no no original apagaria o codigo da tela do usuario.

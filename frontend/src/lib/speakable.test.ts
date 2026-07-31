@@ -45,4 +45,12 @@ describe('textoFalavel', () => {
     // Prova de que o audio sai falavel: nao "Passo 1Fazer X no arquivo.item umitem dois".
     expect(textoFalavel(el)).toBe('Passo 1\nFazer X no arquivo.\nitem um\nitem dois');
   });
+
+  it('tabela markdown renderizada com renderMarkdown sai falavel, sem celulas coladas', () => {
+    const html = renderMarkdown('| Nome | Idade |\n|--|--|\n| Joao | 30 |\n');
+    const el = montar(html);
+    // Sem td e th em BLOCOS, tira "NomeIdade\nJoao30" (palavras coladas).
+    // Com td e th, cada celula fica separada por \n.
+    expect(textoFalavel(el)).toBe('Nome\nIdade\nJoao\n30');
+  });
 });
