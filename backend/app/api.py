@@ -2807,10 +2807,13 @@ async def tts_sintetizar(body: TtsBody):
         # tela evita o susto e o servidor e quem guarda a conta.
         raise HTTPException(409, f"são {len(texto)} caracteres, acima do limite de {limite} — confirme para gerar")
     try:
-        h, veio_do_cache = await asyncio.to_thread(tts.sintetizar, texto, body.voice, body.provider)
+        h, veio_do_cache, provedor_final = await asyncio.to_thread(
+            tts.sintetizar, texto, body.voice, body.provider)
     except tts.TtsError as e:
         raise HTTPException(e.status, e.detail)
-    return {"url": f"/api/tts/audio/{h}", "chars": len(texto), "cached": veio_do_cache}
+    # provider ecoa o que RESPONDEU de fato (pode ter virado "local" pelo fallback sem chave) — o
+    # front usa isso pra avisar na barra, em vez de trocar de voz caladamente.
+    return {"url": f"/api/tts/audio/{h}", "chars": len(texto), "cached": veio_do_cache, "provider": provedor_final}
 
 
 @app.get("/api/tts/voices", dependencies=[Depends(require_auth)])

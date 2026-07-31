@@ -22,6 +22,9 @@ let label = $state('');          // trecho do texto, pra pessoa saber o que esta
 let current = $state(0);
 let duration = $state(0);
 let rate = $state(1);
+// true quando o audio que TOCOU veio do motor local (fallback do backend sem chave da ElevenLabs
+// configurada) — a barra acrescenta "(motor local)" sem toast/tela nova, senao a voz troca calada.
+let engineLocal = $state(false);
 // Altura MEDIDA da barra (TtsBar.svelte, via ResizeObserver — a barra e quem sabe o proprio
 // tamanho, nao um numero cravado: erro real da ElevenLabs quebra em 2-3 linhas num celular
 // estreito e passa longe dos 52px do estado normal). 52 e so o palpite pro instante antes da
@@ -57,12 +60,13 @@ export const ttsPlayer = {
   get duration() { return duration; },
   get rate() { return rate; },
   get barH() { return barH; },
+  get engineLocal() { return engineLocal; },
 
   /** Chamar SINCRONO dentro do handler do toque, antes de qualquer await. */
   unlock(texto: string) {
     const a = element();
     active = true; loading = true; error = ''; playing = false;
-    current = 0; duration = 0;
+    current = 0; duration = 0; engineLocal = false;
     label = texto.length > 60 ? texto.slice(0, 60) + '…' : texto;
     a.src = SILENCE;
     // O catch e obrigatorio: navegador que recusa mesmo assim rejeita a promessa, e rejeicao sem
@@ -70,9 +74,9 @@ export const ttsPlayer = {
     a.play().catch(() => {});
   },
 
-  playUrl(url: string) {
+  playUrl(url: string, provider?: string) {
     const a = element();
-    loading = false; error = '';
+    loading = false; error = ''; engineLocal = provider === 'local';
     a.src = url;
     a.playbackRate = rate;
     a.play().catch(() => {
@@ -102,6 +106,6 @@ export const ttsPlayer = {
     a.removeAttribute('src');
     a.load();          // solta o buffer; sem isso o mp3 anterior fica na memoria
     active = false; playing = false; loading = false; error = '';
-    current = 0; duration = 0; label = '';
+    current = 0; duration = 0; label = ''; engineLocal = false;
   },
 };

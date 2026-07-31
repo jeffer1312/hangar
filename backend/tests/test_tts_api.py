@@ -56,10 +56,12 @@ def test_409_confirma_e_passa_pra_200(monkeypatch):
         assert r1.status_code == 409
         fake_sintetizar.assert_not_called()
 
-        fake_sintetizar.return_value = (_HASH_FALSO, False)
+        fake_sintetizar.return_value = (_HASH_FALSO, False, "elevenlabs")
         r2 = client.post("/api/tts", json={"text": texto, "confirm": True}, headers=_AUTH)
     assert r2.status_code == 200
-    assert r2.json() == {"url": f"/api/tts/audio/{_HASH_FALSO}", "chars": 20, "cached": False}
+    assert r2.json() == {
+        "url": f"/api/tts/audio/{_HASH_FALSO}", "chars": 20, "cached": False, "provider": "elevenlabs",
+    }
 
 
 def test_413_recusa_mesmo_com_confirm(monkeypatch):

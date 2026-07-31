@@ -50,6 +50,17 @@ describe('explicit server settings API', () => {
     expect(listServers()).toEqual([outra]);   // a credencial da outra máquina segue intacta
     expect(getActiveId()).toBe(outra.id);
   });
+
+  // 502 de infra (proxy Tailscale) sem corpo JSON e sem statusText (comum atras de HTTP/2): sem o
+  // fallback, `.message` fica '' e telas que testam `if (erro)` (TtsBar, ServerSettings) desenham a
+  // UI de sucesso por cima de uma falha real.
+  it('erro sem corpo e sem statusText ainda produz mensagem não-vazia', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('', { status: 502, statusText: '' }),
+    );
+
+    await expect(getConfigForServer(server)).rejects.toThrow(/502/);
+  });
 });
 
 // O sintoma real: com um servidor da malha OFFLINE, abrir Configuracoes dele prendia a folha em

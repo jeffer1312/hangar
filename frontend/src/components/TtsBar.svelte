@@ -48,6 +48,9 @@
              oninput={(e) => ttsPlayer.seek(Number((e.currentTarget as HTMLInputElement).value))}
              aria-label="Posição" />
       <span class="tts-time">{formatClock(ttsPlayer.current)}/{formatClock(ttsPlayer.duration)}</span>
+      {#if ttsPlayer.engineLocal}
+        <span class="tts-engine">(motor local)</span>
+      {/if}
       <button class="tts-rate" onclick={proximaVelocidade} aria-label="Velocidade">{ttsPlayer.rate}×</button>
     {/if}
     <button class="tts-close" onclick={() => ttsPlayer.close()} aria-label="Fechar">✕</button>
@@ -85,6 +88,7 @@
   }
   .tts-seek { flex: 1; min-width: 0; accent-color: var(--accent); }
   .tts-time { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--text-secondary); }
+  .tts-engine { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
   .tts-play, .tts-rate, .tts-close {
     background: transparent;
     border: 0;
