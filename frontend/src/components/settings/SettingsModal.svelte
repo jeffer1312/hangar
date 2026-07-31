@@ -129,7 +129,7 @@
 {#snippet corpo()}
   {#if telaAtual === 'root'}
     {#each SECOES as secao (secao)}
-      <p class="st-secao">{secao}</p>
+      <p class="st-secao">{secao === 'Servidor' && nomeAlvo ? `Servidor · ${nomeAlvo}` : secao}</p>
       <div class="st-cartao">
         {#each LINHAS.filter((l) => l.secao === secao) as l (l.id)}
           <SettingsRow icone={l.icone} rotulo={l.rotulo} descricao={l.descricao}
