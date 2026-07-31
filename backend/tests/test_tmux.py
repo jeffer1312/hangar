@@ -52,8 +52,17 @@ def test_send_keys_literal_uses_dashdash():
 
 def test_send_keys_named_key():
     with patch.object(tmux, "RUN", return_value=MagicMock(returncode=0)) as run:
+        tmux.send_keys("cc", "Escape")
+    assert run.call_args[0][0] == ["tmux", "send-keys", "-t", "=cc:", "Escape"]
+
+
+def test_send_keys_enter_vira_cr_cru():
+    # Enter NUNCA como nome de tecla: com extended-keys on no tmux (Shift+Enter do Pi), o "Enter"
+    # nomeado sai no protocolo estendido e o composer do Claude Code engole o submit (regressão
+    # 31/07). CR cru é o encoding legado que toda TUI aceita.
+    with patch.object(tmux, "RUN", return_value=MagicMock(returncode=0)) as run:
         tmux.send_keys("cc", "Enter")
-    assert run.call_args[0][0] == ["tmux", "send-keys", "-t", "=cc:", "Enter"]
+    assert run.call_args[0][0] == ["tmux", "send-keys", "-t", "=cc:", "-l", "--", "\r"]
 
 
 def test_capture_pane_returns_stdout():

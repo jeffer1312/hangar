@@ -242,10 +242,39 @@ def _composer_residuo(pane: str, texto: str, nome_sessao: str = "") -> bool | No
         _warn_composer_ilegivel_once(nome_sessao)
         return None      # pane ilegivel: incerteza, nao ausencia
     composer = "\n".join(linhas[reguas[-2]:reguas[-1] + 1])
+    # Paste COLAPSADO: o Claude Code recente troca paste multi-linha por "[Pasted text #N +X lines]"
+    # — o texto real NUNCA aparece na tela, então a busca pela cauda abaixo dava falso "não chegou",
+    # o Enter não era enviado (400 "envio incompleto") e cada retry do app empilhava OUTRO paste no
+    # composer (medido 31/07: mensagem quíntupla entregue de uma vez quando um Enter manual drenou a
+    # pilha). O placeholder é evidência nos DOIS sentidos: pro _entrou_no_composer, entrou; pro
+    # _submeteu, ainda não submeteu (o placeholder some com o Enter).
+    if "[Pasted text #" in composer:
+        return True
     # Compara SEM espaco em branco: o wrap de exibicao quebra a linha no meio da cauda (recado longo de
     # um paragrafo so passa de 200 colunas e quebra), e ai um `cauda in composer` cru falhava justamente
     # na classe de mensagem que motivou o conserto.
     return _sem_espaco(cauda) in _sem_espaco(composer)
+
+
+def _composer_ocupado_pi(name: str) -> bool:
+    """True = já ha texto parado no composer do Pi. Digitar por cima COLARIA as mensagens num
+    submit so — caso real (TICKET-000, 31/07): aviso de grupo ficou no composer com o Enter engolido
+    (tmux extended-keys formato xterm), o prompt do cockpit foi digitado em cima, os dois viraram
+    UMA mensagem, e o reconcile — sem achar o prompt exato no transcript — reentregou (duplicata).
+
+    So pro Pi porque nele a leitura e deterministica (medido): composer = linhas entre as DUAS
+    ULTIMAS reguas; vazio = nenhuma linha entre elas. No Claude Code o composer vazio desenha
+    glifo/placeholder, entao "tem texto" nao distingue rascunho de moldura — la fica o comportamento
+    de hoje. Ilegivel -> False (na duvida envia, mesma politica do resto do arquivo)."""
+    try:
+        linhas = _capture(name).split("\n")
+    except Exception:
+        return False
+    reguas = [i for i, l in enumerate(linhas) if l.count("─") >= 20]
+    if len(reguas) < 2 or len(linhas) - reguas[-1] > _COMPOSER_FUNDO \
+            or reguas[-1] - reguas[-2] > _COMPOSER_ALTURA:
+        return False
+    return any(l.strip() for l in linhas[reguas[-2] + 1:reguas[-1]])
 
 
 def _wait_input_ready(name: str, timeout: float | None = None, provider: str = "claude") -> bool:
@@ -300,7 +329,11 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
     # todo (re)connect dispararia um capture-pane atoa (pressao no threadpool em rajada de mobile).
     if not any(e.get("delivered") is False for e in q.load()):
         return 0
-    start_ts = _transcript_start_ts(jsonl)   # poda entradas de sessao antiga (pre-/clear)
+    # Poda por DUAS idades, vale a mais nova: (a) inicio do transcript (pre-/clear cria transcript
+    # novo); (b) nascimento do tmux atual — sem ele, um resume (`pi -c`) reusa transcript VELHO e
+    # entradas enfileiradas pra vida anterior da sessao (mesmo nome de pasta) eram entregues na
+    # sessao nova. Regra do dono: sessao morreu devendo, a divida nao passa pra proxima.
+    start_ts = max(_transcript_start_ts(jsonl), tmux.session_created(name))
     # Orfas de sessao anterior: nunca mais casam nem drenam — remove (senao o cheap-check acima
     # fica quente pra sempre e o lixo acumula ate o cap).
     q.prune_before(start_ts)
@@ -493,6 +526,13 @@ class TerminalInput:
             # Não enviar pra um TUI ainda bootando: as teclas seriam engolidas e a msg sumiria (core
             # bug — msg mandada logo após criar a sessão nunca chegava no claude).
             _wait_input_ready(name, provider=provider)
+            # Composer do Pi ja com texto (residuo de Enter engolido / rascunho / parcial anterior):
+            # adia em vez de digitar por cima — deferred reverte pra delivered=False e o proximo
+            # drain (idle/reconnect) tenta de novo; a bubble queued- segue visivel no app.
+            if provider == "pi" and _composer_ocupado_pi(name):
+                _log.warning("send adiado name=%s: composer do pi ja tem texto — deferred "
+                             "(digitar agora colaria as mensagens)", name)
+                return "deferred"
             if "\n" in text:
                 tmux.paste_text(name, text)
                 # Settle ANTES do Enter, como no ramo de uma linha. Ver _MULTILINE_SUBMIT_SETTLE:

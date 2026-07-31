@@ -136,6 +136,21 @@ def has_session(name: str) -> bool:
     return _run(["tmux", "has-session", "-t", f"={name}"]).returncode == 0
 
 
+def session_created(name: str) -> float:
+    # Epoch (s) do NASCIMENTO da sessao tmux atual com esse nome. Entrada de fila mais velha que
+    # isto pertence a uma VIDA ANTERIOR da sessao (mesmo nome de pasta, tmux recriado) e nao deve
+    # ser entregue — sessao morreu devendo, a divida morre junto (regra do dono). O ts do transcript
+    # sozinho nao cobre o resume (`pi -c`): transcript velho, tmux novo. 0.0 = nao sei (sessao
+    # sumida/erro) -> sem poda extra, comportamento de hoje.
+    cp = _run(["tmux", "display-message", "-p", "-t", f"={name}", "#{session_created}"])
+    if cp.returncode != 0:
+        return 0.0
+    try:
+        return float(cp.stdout.strip())
+    except ValueError:
+        return 0.0
+
+
 def new_session(name: str, cwd: str, command: str, config_dir: str | None = None) -> bool:
     # -e: cores corretas do Claude Code DENTRO do tmux (o claude e spawnado via `exec`, virando o
     # processo do pane sem shell intermediario). COLORTERM=24-bit + CLAUDE_CODE_TMUX_TRUECOLOR curto-circuita o downgrade pra 256
@@ -348,6 +363,14 @@ def send_keys(name: str, keys: str, literal: bool = False) -> bool:
     fica com o comportamento de antes."""
     if literal:
         return _send_literal(_pane_target(name), keys)
+    # Enter SEMPRE como CR cru (-l), nunca como nome de tecla: com `extended-keys on` no servidor
+    # tmux (necessário pro Shift+Enter do Pi), o send-keys "Enter" pode sair codificado no protocolo
+    # estendido (CSI-u/modifyOtherKeys) pra apps que o negociaram — e o composer do Claude Code
+    # engolia o submit: o texto ficava parado no pane e o send virava 400 "envio incompleto"
+    # (regressão medida em 31/07, sessão Config-pi, print do dono). CR cru é o encoding legado que
+    # toda TUI aceita como Enter, com ou sem extended-keys.
+    if keys == "Enter":
+        return _run(["tmux", "send-keys", "-t", _pane_target(name), "-l", "--", "\r"]).returncode == 0
     return _run(["tmux", "send-keys", "-t", _pane_target(name), keys]).returncode == 0
 
 
