@@ -1,4 +1,5 @@
 import { falavelDaSelecao } from './selectionText';
+import { rafThrottle } from './rafThrottle';
 
 // Estado da selecao corrente, gravado no selectionchange.
 //
@@ -21,14 +22,10 @@ export function iniciarCapturaDeSelecao(): () => void {
   // selectionchange dispara em rajada durante o arraste (dezenas de vezes por segundo). Cada
   // disparo faria falavelDaSelecao -> cloneContents() +, dentro de textoFalavel, um SEGUNDO clone
   // completo + querySelectorAll('pre') + regex na string inteira — caro demais pra rodar sem
-  // throttle. Throttle por rAF: com um quadro ja agendado, disparos novos so voltam (ponytail:
-  // global "1 quadro por vez", sem fila — se precisar de mais precisao, agendar por sessao).
-  // O quadro le a selecao ATUAL quando roda (nao a do disparo que agendou), entao o ULTIMO estado
+  // throttle. rafThrottle (lib/rafThrottle.ts, testado ali) agenda no maximo 1 quadro por vez; o
+  // quadro le a selecao ATUAL quando roda (nao a do disparo que agendou), entao o ULTIMO estado
   // sempre vence — inclusive o disparo do mouseup, que ainda cai dentro do mesmo quadro pendente.
-  let rafId: number | null = null;
-
   const processar = () => {
-    rafId = null;
     const sel = document.getSelection();
     if (!sel || sel.isCollapsed || !dentroDoChat(sel)) { texto = ''; return; }
     const t = falavelDaSelecao(sel);
@@ -39,15 +36,11 @@ export function iniciarCapturaDeSelecao(): () => void {
     y = r.bottom;
   };
 
-  const aoMudar = () => {
-    if (rafId !== null) return;
-    rafId = requestAnimationFrame(processar);
-  };
-
-  document.addEventListener('selectionchange', aoMudar);
+  const { agendar, cancelar } = rafThrottle(processar);
+  document.addEventListener('selectionchange', agendar);
   return () => {
-    document.removeEventListener('selectionchange', aoMudar);
-    if (rafId !== null) cancelAnimationFrame(rafId);
+    document.removeEventListener('selectionchange', agendar);
+    cancelar();
   };
 }
 

@@ -3,6 +3,7 @@
   import { getVault, decryptList, encryptList, putVault, logout as syncLogout, syncStatus, stashKey, loadKey, clearKey } from './lib/sync';
   import { vaultPush } from './lib/vaultPush.svelte';
   import { ttsPlayer } from './lib/ttsPlayer.svelte';
+  import { ttsSelection } from './lib/ttsSelection.svelte';
   import { encodeCompareIds, type CompareId } from './lib/format';
   import { peekStep, initialPeek } from './lib/peek';
   import { parseHash, type Route } from './lib/route';
@@ -86,16 +87,20 @@
   let syncEnabled = $state<boolean | null>(null);
   let syncReady = $state(false);
 
-  // Altura da BARRA DO PLAYER (TtsBar) publicada na raiz: as pills do Chat.svelte
-  // (hist-pill/tui-pill/awaiting-pill) e a TtsSelectionPill somam este valor ao dockH pra nao ficar
-  // por baixo dela. So reflete ttsPlayer.active — NAO ttsSelection.ativa: a pill de selecao e quem
-  // consome esta variavel pra evitar a barra, entao incluir a propria selecao aqui a empurraria sem
-  // motivo quando ela esta sozinha na tela (52+52 sem nada pra evitar).
+  // Duas variaveis, uma variavel so tentando significar duas coisas foi o bug da rodada anterior:
+  // --cp-tts-bar-h e SO a barra do player (52px com ttsPlayer.active) — quem consome e a
+  // TtsSelectionPill, que precisa subir acima da BARRA, nao da propria pill de selecao (senao ela
+  // se empurraria sozinha quando so a selecao esta ativa). --cp-tts-h e o TOTAL ocupado por barra +
+  // pill de selecao somadas (cada uma conta so se estiver ativa) — quem consome sao as tres pills do
+  // Chat.svelte (hist-pill/tui-pill/awaiting-pill), que precisam ficar acima de TUDO que o TTS puser
+  // na tela, incluindo a pill de selecao (tui-pill e a selecao sao as duas centralizadas com
+  // z-index parecido — sem isso a selecao cobre o aviso de sessao que precisa de login).
   $effect(() => {
-    document.documentElement.style.setProperty(
-      '--cp-tts-h',
-      ttsPlayer.active ? '52px' : '0px',
-    );
+    const barH = ttsPlayer.active ? 52 : 0;
+    const selH = ttsSelection.ativa ? 52 : 0;
+    const root = document.documentElement.style;
+    root.setProperty('--cp-tts-bar-h', `${barH}px`);
+    root.setProperty('--cp-tts-h', `${barH + selH}px`);
   });
 
   // Desktop: >=820px renderiza o shell de duas colunas (sidebar + chat largo). Mobile (<820px)
