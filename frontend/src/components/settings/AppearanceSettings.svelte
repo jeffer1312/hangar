@@ -2,10 +2,12 @@
   import ThemeToggle from '../ThemeToggle.svelte';
   import BackgroundToggle from '../BackgroundToggle.svelte';
   import SegmentedPicker from '../SegmentedPicker.svelte';
+  import AparenciaAmostra from './AparenciaAmostra.svelte';
   import {
     getReadMode, setReadMode, getPanelStyle, setPanelStyle,
     getReadAlpha, setReadAlpha, getTextBoost, setTextBoost,
     getFontPref, setFontPref, getMedidaTexto, setMedidaTexto,
+    getSurfaceSolid, setSurfaceSolid,
     type ReadMode, type PanelStyle, type FontPref, type MedidaTexto,
   } from '../../lib/background';
   import { sidebarPrefs, type SidebarHeight } from '../../lib/sidebarPrefs.svelte';
@@ -48,6 +50,26 @@
     { v: 'card', label: 'Caixa solta', aria: 'Painéis flutuando, com folga e cantos redondos' },
     { v: 'edge', label: 'Colados', aria: 'Painéis colados na borda da tela, de ponta a ponta' },
   ];
+  // VOLTAR AO PADRAO: so as medidas que a amostra mostra (texto, leitura, contraste, solidez das
+  // caixas). NAO mexe em tema, fonte, papel de parede nem paineis — quem arrasta sliders e se perde
+  // quer desfazer os sliders, nao perder a foto que escolheu. Os valores sao os mesmos defaults dos
+  // getters (100 = de fabrica pras medidas; 'auto' e o modo de leitura inicial).
+  const temAjuste = $derived(
+    texto.size !== 100 || texto.lh !== 100 || texto.width !== 100 ||
+    contraste !== 50 || solidez !== 12 || leitura !== 'auto',
+  );
+  function voltarAoPadrao() {
+    (['size', 'lh', 'width'] as MedidaTexto[]).forEach((m) => { texto[m] = 100; setMedidaTexto(m, 100); });
+    contraste = 50; setTextBoost(50);
+    solidez = 12; setReadAlpha(12);
+    leitura = 'auto'; setReadMode('auto');
+    caixas = 12; setSurfaceSolid(12);
+  }
+
+  // Solidez das CAIXAS (o outro slider, dentro do bloco de Fundo) — precisa estar aqui pro reset
+  // alcancar. O BackgroundToggle guarda o proprio estado; este espelho e so pro botao de padrao.
+  let caixas = $state(getSurfaceSolid());
+
   const opcoesAltura: { v: SidebarHeight; label: string; aria: string }[] = [
     { v: 'full', label: 'Altura total', aria: 'A barra lateral vai de ponta a ponta da tela' },
     { v: 'content', label: 'Só o conteúdo', aria: 'A barra lateral encolhe até a altura das sessões' },
@@ -55,6 +77,16 @@
 </script>
 
 <div class="ap-sheet">
+  <!-- Amostra GRUDADA no topo: todo slider daqui muda a conversa, que fica atras deste painel (e no
+       celular nao ha "atras" nenhum — o painel e a tela). Sticky pra ela continuar a vista enquanto
+       se rola ate os sliders la embaixo. -->
+  <div class="ap-amostra">
+    <AparenciaAmostra />
+    <button class="ap-padrao" onclick={voltarAoPadrao} disabled={!temAjuste}>
+      Voltar ao padrão
+    </button>
+  </div>
+
   <div class="ap-row">
     <div class="ap-label">
       <strong>Tema</strong>
@@ -165,6 +197,27 @@
      e era exatamente onde a descricao quebrava em palavras soltas ao lado do segmentado. O painel
      ainda e redimensionavel, entao o corte tem que seguir a largura de verdade. */
   .ap-sheet { container-type: inline-size; }
+
+  /* Sticky com o fundo do painel por tras: sem o fundo, o texto dos sliders passaria POR CIMA da
+     amostra ao rolar, e a amostra existe justamente pra ser um pedaco fiel da conversa. */
+  .ap-amostra {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    padding-bottom: var(--space-2);
+    background: var(--glass-panel, var(--bg-surface));
+  }
+  .ap-padrao {
+    width: 100%;
+    height: 34px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+  }
+  .ap-padrao:disabled { opacity: 0.45; cursor: default; }
+  @media (hover: hover) { .ap-padrao:not(:disabled):hover { color: var(--text-primary); background: var(--bg-hover); } }
   .ap-row {
     display: flex;
     align-items: flex-start;
