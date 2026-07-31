@@ -298,6 +298,33 @@ stdout. Use `claude-engine`.)
 `anthropic-proxy`) em `127.0.0.1` e cadastre o motor apontando para o proxy. OmniRoute e Kimi Code
 **não** precisam disso — falam a Messages API nativamente.
 
+### Ouvir em voz alta (TTS)
+
+Qualquer resposta do assistente — ou só um trecho selecionado — pode ser ouvida em voz alta, útil
+pra acompanhar um plano longo sem ficar rolando a tela.
+
+**Ligar:** menu da conta → **Configurações** → **Anexos e transcrição** → cole a **chave da
+ElevenLabs**. Sem chave, o `🔊` fica sem efeito (o servidor recusa com uma mensagem explicando que
+falta configurar). Na mesma tela: **Voz da leitura** (carrega as vozes da sua conta e deixa escolher
+uma, ou "Padrão do servidor"), **confirmar leitura acima de** (quantos caracteres pedem confirmação
+antes de gerar o áudio — custo de verdade, cobrado na sua conta ElevenLabs) e o **consumo do mês**.
+
+**Usar:**
+
+- **Mensagem inteira** — toque no `🔊` no rodapé da bolha do assistente, ao lado de copiar e
+  encaminhar.
+- **Um trecho** — selecione texto dentro de uma bolha: nasce um botão `🔊 Ouvir · N car.` (pill perto
+  da seleção no desktop, barra rente ao composer no celular). Tocar nele lê só o que foi selecionado.
+
+Seleção grande (acima do limite configurado) pede confirmação antes de gastar; acima do teto duro do
+modelo, é recusada mesmo confirmando. O áudio já gerado fica em cache (mesmo texto + mesma voz nunca
+paga duas vezes) e uma barra de player aparece com posição e velocidade.
+
+**Motor local (opcional):** em vez da ElevenLabs, aponte **Comando de voz local** (mesma tela, seção
+Avançado) para um programa que recebe o texto no stdin e devolve áudio (mp3 ou wav) no stdout — Kokoro,
+piper, ou o que você tiver instalado na máquina do servidor. Com a chave da ElevenLabs vazia e o
+comando configurado, a leitura usa o motor local automaticamente.
+
 ## 5. Sessões-irmãs, pareamento e orquestração (cp-send)
 
 Sessões Claude da mesma máquina conversam entre si pelo backend via `scripts/cp-send`:
