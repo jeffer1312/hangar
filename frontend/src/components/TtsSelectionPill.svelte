@@ -28,7 +28,7 @@
   <button
     class="tts-sel"
     class:flutuante={isDesktop}
-    style:left={isDesktop ? `${ttsSelection.x}px` : undefined}
+    style:right={isDesktop ? `calc(100% - ${ttsSelection.x}px)` : undefined}
     style:top={isDesktop ? `${ttsSelection.y + 6}px` : undefined}
     onpointerdown={(e) => e.preventDefault()}
     onclick={ouvir}
@@ -72,6 +72,9 @@
   .tts-sel.flutuante {
     bottom: auto;
     margin-left: 0;
-    transform: translateX(-100%);
+    /* `right` calculado no componente (calc(100% - x)), nao transform: translateX(-100%) — o
+       WebKit pinta retangulo preto em elemento FIXO com transform durante rolagem por inercia
+       (mesmo motivo do TtsBar). isDesktop vem de matchMedia(min-width:820px), que da true tambem
+       num iPad em paisagem, que E WebKit. */
   }
 </style>
