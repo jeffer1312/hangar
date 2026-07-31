@@ -158,6 +158,24 @@ def test_ask_question_event_single_question_with_preview_emits(tmp_path):
     assert opts[0]["preview"].startswith("using System.Reflection;")
 
 
+def test_ask_question_event_preview_emite_com_as_linhas_do_tui_no_pane(tmp_path):
+    # O pane REAL sempre traz "Type something."/"Chat about this" como opcoes numeradas. Como o ramo
+    # de preview compara por CONTAGEM IGUAL, sem tira-las da conta ele reprovava 100% das perguntas
+    # com preview — o oposto do que aquele ramo existe pra fazer. O fixture do teste vizinho nunca
+    # incluiu essas linhas, por isso o bug passou.
+    one = [{"header": "Ordem", "question": "Como deixo?", "multiSelect": False,
+            "options": [{"label": "System no topo (igual aos irmãos)", "description": "d",
+                         "preview": "using System.Reflection;"},
+                        {"label": "Alfabético (obedece .editorconfig)", "description": "d"}]}]
+    jsonl, _ = _layout(tmp_path, questions=one)
+    ev = _ask_question_event(
+        _state_json("awaiting_input",
+                    options=["System no topo (igual aos", "Alfabético (obedece",
+                             "Type something.", "Chat about this"]),
+        jsonl)
+    assert ev is not None
+
+
 def test_ask_question_event_prefix_match_tolerates_truncated_pane(tmp_path):
     # Freshness por prefixo: label do pane truncada por wrap ainda casa; menu de OUTRO prompt nao.
     jsonl, _ = _layout(tmp_path)  # _Q: A/B + X/Y

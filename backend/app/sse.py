@@ -88,11 +88,15 @@ def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
     # deixaria label curta "Yes" casar com "Yes, and bypass permissions" = cross-wire de permissao)
     # + contagem igual de opcoes. Falhou -> degrada pro OptionButtons (= hoje), sem regressao.
     first_opts = {o.label for o in payload.questions[0].options}
-    state_opts = set(obj.get("options") or [])
-    if not first_opts or not state_opts:
+    # As linhas que o TUI acrescenta saem da conta nos DOIS ramos, nao so no de baixo. No ramo COM
+    # preview a comparacao e por CONTAGEM IGUAL, entao mante-las ali reprovava 100% das perguntas com
+    # preview — exatamente o caminho que existe pra nao perder o preview. Bug anterior a este trecho:
+    # o teste do ramo de preview usava um pane fabricado sem as extras e nunca o exercitou.
+    pane_opts = set(obj.get("options") or []) - _TUI_EXTRAS
+    if not first_opts or not pane_opts:
         return None
     if not has_preview:
-        if not first_opts <= state_opts:
+        if not first_opts <= pane_opts:
             return None
         # Subset sozinho nao basta. Um sidecar STALE cujos rotulos por acaso APARECEM num menu maior
         # (ex: {Sim, Nao} contra um menu [Cancelar, Sim, Nao]) passava — e como answer_questions
@@ -101,12 +105,19 @@ def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
         # acrescenta a toda pergunta e ela nunca esta no payload do hook.
         # Se o Claude Code renomear essas linhas, o casamento passa a reprovar e a sessao degrada pro
         # OptionButtons — o comportamento antigo, nunca resposta na linha errada.
-        if state_opts - first_opts - _TUI_EXTRAS:
+        #
+        # O log e o que torna essa degradacao VISIVEL, e o sinal esta na FREQUENCIA: uma linha
+        # ocasional e sidecar velho, que e o esperado; a mesma linha em TODA pergunta significa que
+        # as linhas do TUI mudaram de texto e ninguem mais ve descricao de opcao. Sem isto o unico
+        # sintoma seria "a tela ficou mais pobre", sem ninguem saber por que.
+        # `_log` e definido adiante no modulo; resolve em tempo de chamada.
+        if extras := pane_opts - first_opts:
+            _log.info("askq: opcao no pane fora do sidecar, degrada p/ OptionButtons extras=%s", extras)
             return None
     else:
         def _match(lbl: str) -> bool:
-            return any(s and lbl.startswith(s) for s in state_opts)
-        if len(first_opts) != len(state_opts) or not all(_match(l) for l in first_opts):
+            return any(s and lbl.startswith(s) for s in pane_opts)
+        if len(first_opts) != len(pane_opts) or not all(_match(l) for l in first_opts):
             return None
     return {"event": "ask_question", "data": json.dumps(payload.model_dump(), ensure_ascii=False)}
 
