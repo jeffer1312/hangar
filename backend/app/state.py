@@ -5,6 +5,7 @@ from typing import AsyncIterator, Callable, Optional
 from app import tmux
 from app.hook_state import hook_state
 from app.models import StateEvent
+from app.statusline import read as _sidecar_status
 
 SPINNER_GLYPHS = "✻✽✶✺✢·∗✳✦✧"
 _OPTION_RE = re.compile(r"^\s*❯?\s*\d+\.\s+(.*\S)\s*$")
@@ -283,7 +284,9 @@ class StateMonitor:
                             and (self.hook_grace is None or no_spinner < self.hook_grace):
                         state = "working"
 
-            status = status_line(pane)
+            # Sidecar primeiro: a linha do pane ja vem cortada na largura da janela (ver
+            # app/statusline.py). Sem sidecar, segue o pane.
+            status = _sidecar_status(self.sid_get() if self.sid_get else None) or status_line(pane)
             # Overlay so-TUI aberto: rodape de navegacao presente NO FUNDO do pane. So as ultimas linhas
             # (nao o pane inteiro): o overlay sempre renderiza o rodape no rodape; procurar no pane todo
             # dava FALSO-POSITIVO quando a MESMA frase ("Esc to cancel") aparecia na CONVERSA/scrollback
