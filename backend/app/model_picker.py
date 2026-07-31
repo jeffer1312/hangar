@@ -34,19 +34,21 @@ Tudo aqui e puro (sem IO) pra ser testavel com fixtures de pane capturados de ve
 
 import re
 
-# Ordem canonica dos modelos no picker (numero da linha estavel: Default=1 ... Haiku=4).
-MODEL_ORDER = ["default", "opus", "sonnet", "haiku"]
-
-# Numero de linha conhecido por modelo: fallback quando a linha-alvo esta fora da viewport
-# (a lista rola; o cursor abre sobre o modelo atual, que sempre esta visivel).
-MODEL_NUMBERS = {"default": 1, "opus": 2, "sonnet": 3, "haiku": 4}
+# Fallback de ordem/numero de linha, NAO a verdade. A lista real e lida do picker
+# (parse_model_rows): medido em 31/07/2026 o picker tem 5 linhas — Default, Opus (1M context),
+# Fable, Sonnet, Haiku — ou seja, chumbar 4 aqui ja tinha ficado velho (Fable sumia da tela do app
+# e empurrava Sonnet/Haiku uma linha pra baixo). Serve so pra quando a linha-alvo esta rolada pra
+# fora da viewport, onde nao ha o que parsear.
+MODEL_ORDER = ["default", "opus", "fable", "sonnet", "haiku"]
+MODEL_NUMBERS = {"default": 1, "opus": 2, "fable": 3, "sonnet": 4, "haiku": 5}
 
 # Niveis do /effort do Claude Code, Faster -> Smarter. Usado pra contagem de passos no
 # caso canonico (Opus). Modelos menores expoem um subconjunto (lido ao vivo pelo driver).
 EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max", "ultracode"]
 
-# Linha de modelo: espacos, marcador opcional (❯ cursor / ↑↓ rolagem), "N.", rotulo ate 2+ espacos.
-_ROW_RE = re.compile(r"^\s*([❯↑↓]?)\s*(\d+)\.\s+(.+?)\s{2,}")
+# Linha de modelo: espacos, marcador opcional (❯ cursor / ↑↓ rolagem), "N.", rotulo ate 2+ espacos,
+# e o resto da linha = descricao ("Opus 5 with 1M context · Best for everyday, complex tasks").
+_ROW_RE = re.compile(r"^\s*([❯↑↓]?)\s*(\d+)\.\s+(.+?)\s{2,}(.*)$")
 # Marcador de esforco ajustavel: "<glifo> <Palavra> effort ... to adjust".
 _EFFORT_RE = re.compile(r"^\S\s+(\w+)\s+effort\b")
 # Follow-up CONDICIONAL que o /model dispara ao confirmar uma TROCA de effort que invalida o
@@ -95,19 +97,25 @@ def picker_open(pane: str) -> bool:
 
 
 def parse_model_rows(pane: str) -> list[dict]:
-    """Linhas de modelo do picker: numero, rotulo, keyword (1a palavra), cursor (❯), ativo (✔)."""
+    """Linhas de modelo do picker: numero, rotulo, keyword (1a palavra), descricao, cursor, ativo.
+
+    `name` e o rotulo sem o ✔ e sem o "(recommended)" — e o que a tela mostra. `keyword` continua
+    sendo a 1a palavra em minusculas, que e o que o driver usa pra casar a linha-alvo.
+    """
     rows: list[dict] = []
     for ln in _picker_region(pane):
         m = _ROW_RE.match(ln)
         if not m:
             continue
-        marker, num, label = m.group(1), int(m.group(2)), m.group(3).strip()
+        marker, num, label, desc = m.group(1), int(m.group(2)), m.group(3).strip(), m.group(4).strip()
         parts = label.split()
         keyword = parts[0].lower() if parts else ""
         rows.append(
             {
                 "number": num,
                 "label": label,
+                "name": label.replace("✔", "").replace("(recommended)", "").strip(),
+                "desc": desc,
                 "keyword": keyword,
                 "cursor": marker == "❯",  # ❯
                 "active": "✔" in label,  # ✔

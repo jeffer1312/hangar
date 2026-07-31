@@ -7,7 +7,7 @@ from app import model_picker as mp
 from app import tmux
 from app.models import scrub_surrogates
 from app.pqueue import PromptQueue, _transcript_start_ts
-from app.state import classify, is_overlay
+from app.state import _live_spinner, classify, is_overlay
 from app.tmux import send_keys
 
 _log = logging.getLogger("claude_pocket.terminal_input")
@@ -620,6 +620,124 @@ class TerminalInput:
             time.sleep(_SETTLE)  # deixa o interrupt assentar e o texto voltar pro input antes de limpar
             send_keys(name, "Escape")
 
+    # Intervalo entre as duas capturas que separam spinner VIVO de marcador congelado. Precisa ser
+    # > 1s: o texto do spinner carrega os segundos decorridos ("✻ Crunched for 24s"), entao um
+    # intervalo curto le o mesmo texto duas vezes e chamaria de parada uma sessao trabalhando.
+    _SPIN_GAP = 1.2
+    # Prazo pra linha `⎿ Set model to …` aparecer depois do Enter (medido: passa de 1s).
+    _RESULT_PRAZO = 4.0
+
+    def _require_drivable(self, name: str) -> None:
+        """Recusa digitar `/model` quando a sessao nao pode receber comando AGORA.
+
+        Com o Claude trabalhando, o texto digitado nao vira comando: cai no campo de entrada e o
+        Enter o ENFILEIRA como mensagem — a troca de modelo virava um "/model" mandado pro Claude
+        ler. Overlay aberto (outro menu, /status) navegaria o menu errado. Guard no caminho
+        COMPARTILHADO de abrir o picker, pra valer pros tres drivers (listar, trocar, esforco).
+
+        DUAS capturas, nao uma: um pane parado nao distingue spinner vivo de marcador de turno
+        concluido — os dois renderizam "<glifo> <palavra> for <N>s" (esta na docstring do
+        state.classify). Uma captura so recusava, com "esta trabalhando", uma sessao que tinha
+        acabado de terminar e ficou com o "✻ Crunched for 24s" na tela; medido numa sessao real.
+        Quem decide e a ANIMACAO: o texto mudou entre as duas leituras -> vivo.
+        """
+        if not tmux.has_session(name):
+            raise mp.PickerError(409, "sessao nao esta viva")
+        try:
+            pane = _capture(name)
+        except Exception:
+            return  # pane ilegivel: degrada pro comportamento de hoje em vez de travar a tela
+        if is_overlay(pane):
+            raise mp.PickerError(409, "ha um menu aberto no terminal da sessao")
+        spin = _live_spinner(pane)
+        if spin is None:
+            return
+        time.sleep(self._SPIN_GAP)
+        try:
+            depois = _capture(name)
+        except Exception:
+            return
+        if is_overlay(depois):
+            raise mp.PickerError(409, "ha um menu aberto no terminal da sessao")
+        if _live_spinner(depois) != spin:
+            raise mp.PickerError(409, "a sessao esta trabalhando — espere ela terminar")
+
+    def _open_model_picker(self, name: str) -> str:
+        """Abre o picker do `/model` e devolve o pane com ele aberto.
+
+        Se o autocomplete engolir o 1o Enter, um 2o submete (guardado por picker_open pra nunca
+        mandar Enter num picker ja aberto, o que confirmaria como default). Falhou -> Esc e
+        PickerError, pra nunca deixar o picker preso.
+        """
+        self._require_drivable(name)
+        send_keys(name, "/model", literal=True)
+        time.sleep(_SETTLE)
+        send_keys(name, "Enter")
+        time.sleep(_OPEN_SETTLE)
+        pane = tmux.capture_pane(name)
+        if not mp.picker_open(pane):
+            send_keys(name, "Enter")
+            time.sleep(_OPEN_SETTLE)
+            pane = tmux.capture_pane(name)
+        if not mp.picker_open(pane):
+            self._abort(name)
+            raise mp.PickerError(409, "model picker did not open")
+        return pane
+
+    def list_model_options(self, name: str) -> dict:
+        """Le as linhas do picker do `/model` e o fecha com Esc, sem aplicar nada.
+
+        E a fonte da lista que a tela mostra pra sessao da CONTA ANTHROPIC: chumbar os modelos no
+        front ja tinha ficado velho (o Fable entrou no picker e sumiu da tela do app). O picker e
+        um overlay — nao vai pro scrollback —, entao abrir e fechar nao deixa rastro na conversa
+        nem gasta token.
+        """
+        pane = self._open_model_picker(name)
+        rows = mp.parse_model_rows(pane)
+        effort = mp.parse_current_effort(pane)
+        self._abort(name)
+        return {"models": rows, "effort": effort}
+
+    def set_engine_model(self, name: str, model_id: str) -> dict:
+        """Troca o modelo de uma sessao de MOTOR digitando `/model <id>`.
+
+        Nao da pra usar o picker aqui: numa sessao de motor ele lista so os 4 aliases, todos
+        apontando pro mesmo `ANTHROPIC_MODEL` (medido). O comando com argumento aceita id
+        arbitrario — e, junto, grava o id como default global; quem desfaz isso e o
+        `default_model.restore()` do lado da rota, nao este driver.
+        """
+        alvo = model_id.strip()
+        # Vai virar TECLA no tty: um espaco quebraria o argumento em dois e um caractere de
+        # controle poderia submeter sozinho. Mesma regra do pi_models._clean.
+        if not alvo or any(c.isspace() for c in alvo) or any(ord(c) < 32 for c in alvo):
+            raise ValueError(f"model invalido: {model_id!r}")
+        self._require_drivable(name)
+        send_keys(name, f"/model {alvo}", literal=True)
+        time.sleep(_SETTLE)
+        send_keys(name, "Enter")
+        # SONDA ate a linha de resultado aparecer, em vez de uma foto unica depois de _OPEN_SETTLE:
+        # medido ao vivo, o `⎿ Set model to …` demora mais que 0.7s pra ser desenhado e a foto
+        # unica reportava "sem confirmacao" numa troca que TINHA dado certo. Quem termina rapido
+        # sai na primeira leitura; so quem realmente falhou paga o prazo inteiro.
+        fim = time.monotonic() + self._RESULT_PRAZO
+        while True:
+            time.sleep(_SETTLE)
+            pane = tmux.capture_pane(name)
+            if mp.picker_open(pane):
+                # O argumento nao foi aceito e o `/model` abriu o picker interativo: fecha e falha,
+                # em vez de deixar um overlay preso e reportar sucesso sobre um no-op.
+                self._abort(name)
+                raise mp.PickerError(409, f"o Claude Code nao aceitou `/model {alvo}`")
+            result = mp.parse_result_line(pane)
+            # `alvo in result` e o que separa a confirmacao NOVA da que ja estava na tela: a linha
+            # da troca anterior continua no scrollback, e sem esta checagem a primeira leitura
+            # devolvia "Set model to <modelo-de-antes>" como se fosse a resposta desta troca —
+            # sucesso reportado sobre a mensagem errada. Medido ao vivo.
+            if result and alvo in result:
+                return {"ok": True, "result": result}
+            if time.monotonic() >= fim:
+                raise mp.PickerError(409, f"sem confirmacao do `/model {alvo}` no terminal")
+
     def set_model_effort(
         self,
         name: str,
@@ -639,26 +757,16 @@ class TerminalInput:
         effort_kw = effort.strip().lower() if effort else None
         if model_kw is None and effort_kw is None:
             raise ValueError("must provide model or effort")
-        if model_kw and model_kw not in mp.MODEL_ORDER:
+        # Sem lista chumbada de modelos aqui: quem diz o que existe e o picker lido ao vivo
+        # (model_nav_steps levanta se a keyword nao estiver la). Um `MODEL_ORDER` como gate
+        # rejeitava, com 422, um modelo NOVO que o picker ja oferecia — foi o que escondeu o Fable.
+        if model_kw and (not model_kw.isascii() or not model_kw.isalnum()):
             raise ValueError(f"unknown model {model!r}")
         if effort_kw and effort_kw not in mp.EFFORT_ORDER:
             raise ValueError(f"unknown effort {effort!r}")
 
-        # 1. Abre o picker: "/model" + Enter. Se o autocomplete engolir o 1o Enter, um 2o
-        #    submete (guardado por picker_open pra nunca mandar Enter num picker ja aberto,
-        #    o que confirmaria como default).
-        send_keys(name, "/model", literal=True)
-        time.sleep(_SETTLE)
-        send_keys(name, "Enter")
-        time.sleep(_OPEN_SETTLE)
-        pane = tmux.capture_pane(name)
-        if not mp.picker_open(pane):
-            send_keys(name, "Enter")
-            time.sleep(_OPEN_SETTLE)
-            pane = tmux.capture_pane(name)
-        if not mp.picker_open(pane):
-            self._abort(name)
-            raise mp.PickerError(409, "model picker did not open")
+        # 1. Abre o picker.
+        pane = self._open_model_picker(name)
 
         # 2. Navega o modelo (Up/Down). O cursor abre sobre o modelo atual; calculamos os
         #    passos a partir do pane limpo do open (evita reler o cursor, que pode fantasmar

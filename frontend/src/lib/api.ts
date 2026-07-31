@@ -987,9 +987,50 @@ export async function sendTermInput(name: string, payload: { text?: string; key?
 }
 
 export interface ModelEffortBody {
-  model?: string; // 'default' | 'opus' | 'sonnet' | 'haiku'
+  model?: string; // keyword de uma linha do picker: 'default' | 'opus' | 'fable' | 'sonnet' | …
   effort?: string; // low | medium | high | xhigh | max | ultracode
   scope: 'session' | 'default';
+}
+
+export interface ModelOption {
+  id: string;              // keyword do picker (conta) ou id do provedor (motor)
+  name?: string;           // rotulo exibido (so no picker da conta)
+  desc?: string;           // descricao da linha do picker
+  active?: boolean;
+  context_length?: number | null;  // so no motor
+  vision?: boolean | null;         // so no motor
+}
+
+export interface ModelOptionsResponse {
+  kind: 'claude' | 'engine';
+  engine: string | null;
+  effort?: string | null;
+  models: ModelOption[];
+}
+
+/**
+ * Modelos que ESTA sessao pode escolher. Nada e chumbado no front de proposito: numa sessao da
+ * conta a lista sai do proprio picker do Claude Code (ela muda com a conta e com a versao — o
+ * Fable entrou e a lista fixa daqui nao soube), e numa sessao de MOTOR sai do /v1/models do
+ * provedor (o picker ali so lista os 4 aliases, todos o mesmo modelo).
+ * 409 = sessao ocupada/menu aberto: nao da pra ler o picker agora.
+ */
+export function getModelOptions(name: string): Promise<ModelOptionsResponse> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/model/options`);
+}
+
+/**
+ * Troca o modelo de uma sessao de MOTOR (digita `/model <id>`). O backend repoe o default global
+ * que esse comando grava de lambuja — a troca vale so nesta sessao.
+ */
+export function setEngineModel(
+  name: string,
+  body: { model: string; effort?: string | null },
+): Promise<{ ok: boolean; model: string; result: string | null; effort_error?: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/engine/model`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
 }
 
 /**

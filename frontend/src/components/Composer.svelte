@@ -266,6 +266,14 @@
     });
   }
 
+  // Sessao de MOTOR: o modelo veio do /v1/models do provedor e foi aplicado com `/model <id>`
+  // (o sheet ja chamou o backend). O id do provedor E o rotulo — nada de capitalizar: `k3` nao
+  // vira `K3`, e a statusline mostra exatamente esse texto.
+  function handleEngineModelApplied(model: string, effort: string | null) {
+    chosenModel = model;
+    if (effort) chosenEffort = effort;
+  }
+
   // ── Slash commands: preencher x enviar ──────────────────────────────────────
   // Preenche "/nome " no textarea e devolve o foco (pro usuario digitar o argumento).
   async function fillCommand(name: string) {
@@ -904,9 +912,11 @@
 
   <ModelEffortSheet
     open={sheetOpen}
+    {sessionName}
     currentModel={pillModel}
     currentEffort={pillEffort}
     onApply={handleApply}
+    onApplied={handleEngineModelApplied}
     onClose={() => (sheetOpen = false)}
   />
 
