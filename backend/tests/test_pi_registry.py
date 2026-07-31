@@ -149,6 +149,34 @@ def test_session_file_trusts_a_fresh_sidecar_even_with_another_id(monkeypatch, t
     assert registry.pi_session_file("%9", pid=7, cwd="/w") == str(alvo)
 
 
+def test_session_file_refuses_a_sidecar_pointing_at_a_subagent_run(monkeypatch, tmp_path):
+    # O Pi dispara agent_start TAMBEM pro subagente (Task tool), e o publishPane da extensao
+    # reescreve o bilhete com o transcript DELE. Aceitar trocava a conversa inteira da sessao pela
+    # do subagente no app — medido 2026-07-30 no pane %26 (my-web-app), enquanto o terminal
+    # seguia normal. O bilhete e FRESCO aqui de proposito: o guarda de frescor nao pega este caso.
+    registry._PI_TICKET_WARNED.clear()
+    cfg = tmp_path / "cfg"
+    (cfg / ".claude-pocket-pi").mkdir(parents=True)
+    raiz = tmp_path / "2026-07-30T20-29-24-651Z_18e48e08.jsonl"
+    raiz.write_text("")
+    run = tmp_path / "2026-07-30T20-29-24-651Z_18e48e08" / "44bad0fb" / "run-2"
+    run.mkdir(parents=True)
+    (run / "session.jsonl").write_text("")
+    (cfg / ".claude-pocket-pi" / "9.json").write_text(
+        json.dumps({"file": str(run / "session.jsonl"), "id": "sub", "ts": 1_700_000_600.0}))
+    monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
+    _fake_proc_start(monkeypatch, tmp_path, 1_700_000_000.0)      # pane nasceu ANTES do bilhete
+    env = tmp_path / "environ"
+    env.write_bytes(b"CP_PI_SESSION=18e48e08\x00")
+    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(env))
+    # Este fallback NAO pode ser o que salva: com cwd cheio de espaco/acento ele ja falhou de
+    # verdade. Quem devolve a conversa e o proprio caminho do subagente, que carrega a raiz.
+    monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: "")
+
+    # Volta pra sessao RAIZ (a conversa que o usuario ve no terminal), nunca None.
+    assert registry.pi_session_file("%9", pid=7, cwd="/w") == str(raiz)
+
+
 def _bilhete_e_env(monkeypatch, tmp_path, dados: dict):
     # Bilhete apontando pra um .jsonl que EXISTE (senao o exists() rejeitaria por outro motivo) +
     # CP_PI_SESSION apontando pra outra sessao: e o env que tem que ganhar quando o frescor do
