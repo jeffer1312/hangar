@@ -626,6 +626,16 @@ class TerminalInput:
     _SPIN_GAP = 1.2
     # Prazo pra linha `⎿ Set model to …` aparecer depois do Enter (medido: passa de 1s).
     _RESULT_PRAZO = 4.0
+    # Prazo pro picker aparecer depois do Enter, ANTES de arriscar um segundo Enter.
+    _OPEN_PRAZO = 2.0
+
+    class NaoDigitou(mp.PickerError):
+        """Recusa ANTES de qualquer tecla ir pro tty.
+
+        Existe pra quem chama saber que o terminal ficou intocado: a rota de troca de modelo espera
+        ate 3.6s pela escrita do settings.json aterrissar antes de repor o valor anterior, e pagar
+        essa espera numa requisicao que nem chegou a digitar so faz o erro demorar a aparecer.
+        """
 
     def _require_drivable(self, name: str) -> None:
         """Recusa digitar `/model` quando a sessao nao pode receber comando AGORA.
@@ -642,13 +652,13 @@ class TerminalInput:
         Quem decide e a ANIMACAO: o texto mudou entre as duas leituras -> vivo.
         """
         if not tmux.has_session(name):
-            raise mp.PickerError(409, "sessao nao esta viva")
+            raise self.NaoDigitou(409, "sessao nao esta viva")
         try:
             pane = _capture(name)
         except Exception:
             return  # pane ilegivel: degrada pro comportamento de hoje em vez de travar a tela
         if is_overlay(pane):
-            raise mp.PickerError(409, "ha um menu aberto no terminal da sessao")
+            raise self.NaoDigitou(409, "ha um menu aberto no terminal da sessao")
         spin = _live_spinner(pane)
         if spin is None:
             return
@@ -658,9 +668,9 @@ class TerminalInput:
         except Exception:
             return
         if is_overlay(depois):
-            raise mp.PickerError(409, "ha um menu aberto no terminal da sessao")
+            raise self.NaoDigitou(409, "ha um menu aberto no terminal da sessao")
         if _live_spinner(depois) != spin:
-            raise mp.PickerError(409, "a sessao esta trabalhando — espere ela terminar")
+            raise self.NaoDigitou(409, "a sessao esta trabalhando — espere ela terminar")
 
     def _open_model_picker(self, name: str) -> str:
         """Abre o picker do `/model` e devolve o pane com ele aberto.
@@ -673,16 +683,38 @@ class TerminalInput:
         send_keys(name, "/model", literal=True)
         time.sleep(_SETTLE)
         send_keys(name, "Enter")
-        time.sleep(_OPEN_SETTLE)
-        pane = tmux.capture_pane(name)
-        if not mp.picker_open(pane):
+        pane = self._espera_picker(name)
+        if pane is None:
+            # So agora o 2o Enter. INSISTIR na leitura antes disso nao e capricho: se o picker JA
+            # abriu e a captura pegou o redraw pela metade, esse Enter confirma a linha sob o cursor
+            # COMO DEFAULT — troca o modelo padrao do usuario num caminho que era pra ser somente
+            # leitura (a folha busca a lista sozinha ao abrir). Uma foto unica dava essa chance a
+            # cada abertura; o poll tira o sorteio da jogada.
             send_keys(name, "Enter")
-            time.sleep(_OPEN_SETTLE)
-            pane = tmux.capture_pane(name)
-        if not mp.picker_open(pane):
+            pane = self._espera_picker(name)
+        if pane is None:
             self._abort(name)
             raise mp.PickerError(409, "model picker did not open")
         return pane
+
+    def _espera_picker(self, name: str) -> str | None:
+        """Pane com o picker INTEIRO desenhado, ou None se ele nao apareceu dentro do prazo.
+
+        Espera o rodape, nao so o titulo: no instante em que o titulo aparece as linhas de modelo
+        ainda estao sendo pintadas, e ler ali devolvia a lista incompleta (medido: 4 modelos, sem o
+        Haiku, que e a ultima linha).
+        """
+        fim = time.monotonic() + self._OPEN_PRAZO
+        while True:
+            time.sleep(_SETTLE)
+            pane = tmux.capture_pane(name)
+            if mp.picker_desenhado(pane):
+                return pane
+            if time.monotonic() >= fim:
+                # Titulo na tela mas rodape nao: o picker ABRIU (so nao terminou de pintar). Devolve
+                # assim mesmo — mandar um 2o Enter aqui e o pior desfecho possivel, porque ele
+                # confirmaria a linha sob o cursor como default.
+                return pane if mp.picker_open(pane) else None
 
     def list_model_options(self, name: str) -> dict:
         """Le as linhas do picker do `/model` e o fecha com Esc, sem aplicar nada.
@@ -692,10 +724,11 @@ class TerminalInput:
         um overlay — nao vai pro scrollback —, entao abrir e fechar nao deixa rastro na conversa
         nem gasta token.
         """
-        pane = self._open_model_picker(name)
-        rows = mp.parse_model_rows(pane)
-        effort = mp.parse_current_effort(pane)
-        self._abort(name)
+        with _send_lock(name):
+            pane = self._open_model_picker(name)
+            rows = mp.parse_model_rows(pane)
+            effort = mp.parse_current_effort(pane)
+            self._abort(name)
         return {"models": rows, "effort": effort}
 
     def set_engine_model(self, name: str, model_id: str) -> dict:
@@ -711,32 +744,33 @@ class TerminalInput:
         # controle poderia submeter sozinho. Mesma regra do pi_models._clean.
         if not alvo or any(c.isspace() for c in alvo) or any(ord(c) < 32 for c in alvo):
             raise ValueError(f"model invalido: {model_id!r}")
-        self._require_drivable(name)
-        send_keys(name, f"/model {alvo}", literal=True)
-        time.sleep(_SETTLE)
-        send_keys(name, "Enter")
-        # SONDA ate a linha de resultado aparecer, em vez de uma foto unica depois de _OPEN_SETTLE:
-        # medido ao vivo, o `⎿ Set model to …` demora mais que 0.7s pra ser desenhado e a foto
-        # unica reportava "sem confirmacao" numa troca que TINHA dado certo. Quem termina rapido
-        # sai na primeira leitura; so quem realmente falhou paga o prazo inteiro.
-        fim = time.monotonic() + self._RESULT_PRAZO
-        while True:
+        with _send_lock(name):
+            self._require_drivable(name)
+            send_keys(name, f"/model {alvo}", literal=True)
             time.sleep(_SETTLE)
-            pane = tmux.capture_pane(name)
-            if mp.picker_open(pane):
-                # O argumento nao foi aceito e o `/model` abriu o picker interativo: fecha e falha,
-                # em vez de deixar um overlay preso e reportar sucesso sobre um no-op.
-                self._abort(name)
-                raise mp.PickerError(409, f"o Claude Code nao aceitou `/model {alvo}`")
-            result = mp.parse_result_line(pane)
-            # `alvo in result` e o que separa a confirmacao NOVA da que ja estava na tela: a linha
-            # da troca anterior continua no scrollback, e sem esta checagem a primeira leitura
-            # devolvia "Set model to <modelo-de-antes>" como se fosse a resposta desta troca —
-            # sucesso reportado sobre a mensagem errada. Medido ao vivo.
-            if result and alvo in result:
-                return {"ok": True, "result": result}
-            if time.monotonic() >= fim:
-                raise mp.PickerError(409, f"sem confirmacao do `/model {alvo}` no terminal")
+            send_keys(name, "Enter")
+            # SONDA ate a linha de resultado aparecer, em vez de uma foto unica depois de
+            # _OPEN_SETTLE: medido ao vivo, o `⎿ Set model to …` demora mais que 0.7s pra ser
+            # desenhado e a foto unica reportava "sem confirmacao" numa troca que TINHA dado certo.
+            # Quem termina rapido sai na primeira leitura; so quem falhou paga o prazo inteiro.
+            fim = time.monotonic() + self._RESULT_PRAZO
+            while True:
+                time.sleep(_SETTLE)
+                pane = tmux.capture_pane(name)
+                if mp.picker_open(pane):
+                    # O argumento nao foi aceito e o `/model` abriu o picker interativo: fecha e
+                    # falha, em vez de deixar um overlay preso e reportar sucesso sobre um no-op.
+                    self._abort(name)
+                    raise mp.PickerError(409, f"o Claude Code nao aceitou `/model {alvo}`")
+                # Compara o TOKEN do modelo, nao substring: a linha da troca anterior continua na
+                # tela, e `alvo in result` casava nela quando um id e prefixo do outro — no catalogo
+                # da Kimi, ir de `k3-256k` pra `k3` dava sucesso lendo a confirmacao velha, antes de
+                # a troca acontecer. Medido: a linha nova demora ~1s a aparecer, entao essa leitura
+                # precoce e a regra, nao a exceção.
+                if mp.result_model(mp.parse_result_line(pane)) == alvo:
+                    return {"ok": True, "result": mp.parse_result_line(pane)}
+                if time.monotonic() >= fim:
+                    raise mp.PickerError(409, f"sem confirmacao do `/model {alvo}` no terminal")
 
     def set_model_effort(
         self,
@@ -764,7 +798,16 @@ class TerminalInput:
             raise ValueError(f"unknown model {model!r}")
         if effort_kw and effort_kw not in mp.EFFORT_ORDER:
             raise ValueError(f"unknown effort {effort!r}")
+        # Mesmo lock por sessao do send_prompt/send_pi_commands: duas threads digitando no MESMO
+        # tty intercalam teclas. Sem ele, a folha buscando a lista (`list_model_options`) enquanto
+        # um POST de troca roda dava dois `/model` concorrentes — o `Esc` de um fechava o picker que
+        # o outro estava navegando. O `_require_drivable` nao cobre isso: ele ve spinner, nao ve
+        # outro driver em voo. A validacao acima fica FORA do lock (nao toca no terminal).
+        with _send_lock(name):
+            return self._drive_model_effort(name, model_kw, effort_kw, scope)
 
+    def _drive_model_effort(self, name: str, model_kw: str | None, effort_kw: str | None,
+                            scope: str) -> dict:
         # 1. Abre o picker.
         pane = self._open_model_picker(name)
 

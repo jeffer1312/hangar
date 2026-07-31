@@ -55,8 +55,14 @@ def _ler(path: Path) -> dict | None:
         return {}
     try:
         d = json.loads(bruto)
-    except ValueError:
-        return None  # editado a mao e quebrado -> nao clobbra
+    except ValueError as e:
+        # Loga igual ao ramo do OSError acima: nao mexer no arquivo e a decisao CERTA, mas ela faz o
+        # undo virar no-op — o id do motor fica como default global e ninguem descobre por que uma
+        # sessao nova nasceu pedindo um modelo que a Anthropic nao conhece. Uma linha de log e o
+        # unico rastro que sobra.
+        _log.warning("settings.json (%s) esta com JSON invalido — nao mexido, e o default de modelo "
+                     "pode ter ficado apontando pro motor: %s", path, e)
+        return None
     return d if isinstance(d, dict) else None
 
 

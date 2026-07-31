@@ -71,23 +71,36 @@
     return pref >= 0 ? pref : EFFORT_DEFAULT;
   }
 
+  // Geracao da busca em voo. O componente NAO e recriado entre um fechar e um reabrir da folha (o
+  // BottomSheet so troca o markup), entao fechar durante um GET lento e reabrir dispara um segundo
+  // load com o primeiro ainda pendente — e nada garante a ordem das respostas. Sem este carimbo, a
+  // resposta VELHA aterrissava por cima da nova, trocando a lista por uma que o usuario abandonou.
+  let carga = 0;
+
   async function load() {
+    const minha = ++carga;
     err = null;
     loading = true;
     try {
       const res = await getModelOptions(sessionName);
+      if (minha !== carga) return;   // chegou tarde: outra abertura ja mandou
       kind = res.kind;
       models = res.models;
       selectedModel = matchCurrent(currentModel, res.models);
       effortIdx = effortIndex(currentEffort ?? res.effort);
     } catch (e) {
+      if (minha !== carga) return;
       // Sem lista nao ha troca de modelo — mas o esforco continua aplicavel, entao a folha segue
       // util em vez de virar uma tela de erro. O caso comum e 409 "a sessao esta trabalhando".
       models = [];
+      // selectedModel TEM que cair junto: sem isso a escolha da abertura anterior ficava armada e
+      // invisivel, e o "Aplicar" mandava trocar pra um modelo que a tela nao mostra mais — a
+      // mensagem de erro dizia "nada vai acontecer" e o botao discordava.
+      selectedModel = null;
       err = e instanceof Error ? e.message : 'Falha ao carregar modelos';
       effortIdx = effortIndex(currentEffort);
     } finally {
-      loading = false;
+      if (minha === carga) loading = false;
     }
   }
 

@@ -96,6 +96,17 @@ def picker_open(pane: str) -> bool:
     return bool(_picker_region(pane))
 
 
+def picker_desenhado(pane: str) -> bool:
+    """True so quando o picker esta INTEIRO na tela (o rodape ja foi desenhado).
+
+    `picker_open` casa assim que o titulo aparece, e nesse instante as linhas de modelo ainda estao
+    sendo pintadas: medido numa sessao real, ler ali devolvia 4 modelos em vez de 5 — o Haiku, que e
+    a ultima linha, simplesmente nao existia no pane ainda. O rodape ("Esc to cancel") vem DEPOIS
+    das linhas, entao ele e a prova de que a lista esta completa.
+    """
+    return any("Esc to cancel" in ln for ln in _picker_region(pane))
+
+
 def parse_model_rows(pane: str) -> list[dict]:
     """Linhas de modelo do picker: numero, rotulo, keyword (1a palavra), descricao, cursor, ativo.
 
@@ -175,3 +186,22 @@ def parse_result_line(pane: str) -> str | None:
         if s.startswith("Set model to") or s.startswith("Kept model"):
             return s
     return None
+
+
+# Token logo apos "Set model to": e o id EXATO que o Claude Code aplicou.
+_RESULT_MODEL_RE = re.compile(r"^Set model to\s+(\S+)")
+
+
+def result_model(result_line: str | None) -> str | None:
+    """Id do modelo citado na linha de resultado, ou None.
+
+    Existe porque `alvo in result` NAO serve pra decidir se a confirmacao e desta troca: a linha da
+    troca ANTERIOR continua na tela, e num catalogo real um id e prefixo do outro — trocar de
+    `k3-256k` para `k3` casaria na linha velha ("Set model to k3-256k …" contem "k3") e o app
+    reportaria sucesso antes de a troca acontecer. Comparar o TOKEN inteiro resolve nos dois
+    sentidos.
+    """
+    if not result_line:
+        return None
+    m = _RESULT_MODEL_RE.match(result_line)
+    return m.group(1) if m else None
