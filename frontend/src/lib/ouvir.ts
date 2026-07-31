@@ -28,7 +28,8 @@ export function ouvirTexto(texto: string, confirmar: (msg: string) => Promise<bo
           return confirmar(e.message)
             .then((ok) => {
               if (ok) return pedir(true);
-              ttsPlayer.fail(`acima do limite de leitura — ${e.message.replace(/^409:\s*/, '')}`);
+              // e.message ja vem limpo (ensureOk em api.ts nao embute mais o status no texto).
+              ttsPlayer.fail(`acima do limite de leitura — ${e.message}`);
             })
             .catch(() => ttsPlayer.fail('não deu pra confirmar a leitura'));
         }
