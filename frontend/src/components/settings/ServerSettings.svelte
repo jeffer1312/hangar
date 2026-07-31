@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ConfigServidorStore } from '../../lib/serverConfig.svelte';
+  import { listarVozesTts, saldoTts, type TtsVoz } from '../../lib/api';
 
   // Configuração do servidor pelo app. Até aqui tudo vinha só de env/.env: pra mudar a chave da
   // transcrição ou a retenção de anexos era preciso editar arquivo no servidor e reiniciar o
@@ -46,12 +47,40 @@
       ajuda: 'Sessão "trabalhando" e calada por mais que isso ganha o aviso de travada.' },
     { chave: 'editor', rotulo: 'Editor', tipo: 'texto', secao: 'avancado',
       ajuda: 'Binário que abre a pasta da sessão no desktop (ex: code, subl).' },
+    { chave: 'elevenlabs_api_key', rotulo: 'Chave da ElevenLabs', tipo: 'segredo', secao: 'anexos',
+      ajuda: 'Gera a voz que lê os trechos do chat. Vazia = leitura em voz desligada.' },
+    { chave: 'tts_max_chars', rotulo: 'Confirmar leitura acima de', tipo: 'numero', sufixo: 'car.', secao: 'anexos',
+      ajuda: 'Seleção maior que isso pede confirmação antes de gerar áudio. 0 = usa o padrão de 5000.' },
+    { chave: 'tts_local_cmd', rotulo: 'Comando de voz local', tipo: 'texto', secao: 'avancado',
+      ajuda: 'Opcional. Programa que recebe o texto na entrada e devolve WAV na saída (ex: Kokoro, piper). Vazio = só ElevenLabs.' },
   ];
 
   const ROTULO_LEITURA: Record<string, string> = {
     port: 'Porta', lan_bind_ip: 'IP de bind', server_id: 'ID deste servidor',
     public_url: 'URL pública', scan_roots: 'Raízes do scanner',
   };
+
+  // Vozes e saldo: sob demanda, no botao. As duas chamadas batem no provedor (ElevenLabs) e custam
+  // latencia — abrir a tela de config nao pode disparar rede pra fora so por estar aberta.
+  let vozes = $state<TtsVoz[]>([]);
+  let vozErro = $state('');
+  let carregandoVozes = $state(false);
+  let saldo = $state<{ usados: number | null; limite: number | null } | null>(null);
+
+  function carregarVozes() {
+    vozErro = '';
+    carregandoVozes = true;
+    listarVozesTts()
+      .then((v) => {
+        vozes = v;
+        const atual = store.valorAtual('elevenlabs_voice_id');
+        if (!atual && v[0]) store.setRascunho('elevenlabs_voice_id', v[0].id);
+      })
+      .catch((e: Error) => { vozErro = e.message; })
+      .finally(() => { carregandoVozes = false; });
+    // Saldo e extra, nao pode quebrar a tela: falha aqui fica muda, a voz e o principal.
+    saldoTts().then((s) => { saldo = s; }).catch(() => {});
+  }
 </script>
 
 <div class="cfg">
@@ -133,6 +162,32 @@
         </div>
       {/each}
     </div>
+
+    {#if secao === 'anexos'}
+      <div class="tts-extra">
+        <h3>Voz da leitura</h3>
+        {#if vozErro}
+          <p class="aviso erro">{vozErro}</p>
+          <button class="btn" onclick={carregarVozes} disabled={carregandoVozes}>Tentar de novo</button>
+        {:else if vozes.length}
+          <select
+            class="campo-select"
+            aria-label="Voz"
+            value={store.valorAtual('elevenlabs_voice_id')}
+            onchange={(e) => store.setRascunho('elevenlabs_voice_id', e.currentTarget.value)}
+          >
+            {#each vozes as v (v.id)}<option value={v.id}>{v.nome}</option>{/each}
+          </select>
+        {:else}
+          <button class="btn" onclick={carregarVozes} disabled={carregandoVozes}>
+            {carregandoVozes ? 'Carregando…' : 'Carregar vozes da conta'}
+          </button>
+        {/if}
+        {#if saldo}
+          <p class="sub">Consumo do mês: {saldo.usados ?? '?'} de {saldo.limite ?? '?'} caracteres.</p>
+        {/if}
+      </div>
+    {/if}
 
     {#if secao === 'avancado'}
       <div class="somente-leitura">
@@ -219,6 +274,21 @@
   .mascara-nota { font-family: var(--font-ui); color: var(--success); font-size: 11px; }
 
   /* `.switch` é global (app.css) — vocabulário único de liga/desliga do app. */
+
+  /* container-type pra o select de voz encolher sem depender da largura da JANELA — quem aperta a
+     linha aqui e a largura do PAINEL (dock desktop tem ~530px), nao a viewport. */
+  .tts-extra { container-type: inline-size; margin-top: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--border-subtle); }
+  .tts-extra h3 { margin: 0 0 var(--space-2); font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary); }
+  .campo-select {
+    width: 100%; height: 40px;
+    background: var(--surface-inset);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    padding: 0 var(--space-3);
+  }
+  @container (min-width: 360px) { .campo-select { width: auto; min-width: 220px; } }
 
   .somente-leitura { margin-top: var(--space-5); }
   .somente-leitura h3 {
