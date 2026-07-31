@@ -278,6 +278,18 @@ def _pi_transcript_of_id(cwd: str, sid: str) -> Optional[str]:
     return get_adapter("pi").transcript_path(cwd, sid) or None
 
 
+def _pi_is_subagent(path: str) -> bool:
+    # Import local pelo mesmo motivo do _pi_transcript_of_id. Quem sabe o layout no disco e o
+    # adapter; aqui so se decide o que fazer com a resposta.
+    from app.adapters.pi.sessions import is_subagent_transcript
+    return is_subagent_transcript(path)
+
+
+def _pi_root_transcript(path: str) -> Optional[str]:
+    from app.adapters.pi.sessions import root_transcript
+    return root_transcript(path) or None
+
+
 # Panes ja avisados sobre bilhete sem frescor. list() e polled (de segundo em segundo), entao um
 # warning por varredura entupiria o journal; um por pane+motivo basta pra um /proc cronicamente
 # ilegivel nao ficar calado pra sempre. ponytail: set simples — o teto e o numero de panes da
@@ -288,8 +300,7 @@ _PI_TICKET_WARNED: set[tuple[str, str]] = set()
 def _warn_bilhete_once(pane_id: str, motivo: str) -> None:
     if (pane_id, motivo) not in _PI_TICKET_WARNED:
         _PI_TICKET_WARNED.add((pane_id, motivo))
-        _log.warning("pi: bilhete de %s recusado, frescor indeterminavel (%s); usando CP_PI_SESSION",
-                     pane_id, motivo)
+        _log.warning("pi: bilhete de %s recusado (%s); usando CP_PI_SESSION", pane_id, motivo)
 
 
 def pi_session_file(pane_id: str, pid: Optional[int] = None,
@@ -328,6 +339,18 @@ def pi_session_file(pane_id: str, pid: Optional[int] = None,
             f = None
         elif ts < nasceu - 2:
             f = None
+        elif f and _pi_is_subagent(f):
+            # O Pi dispara `agent_start` TAMBEM pro subagente (Task tool), com um ctx cujo
+            # getSessionFile() aponta pro transcript do subagente — e o publishPane da extensao
+            # reescreve o bilhete com ele. Aceitar isso trocava a conversa inteira da sessao pela do
+            # subagente no app (medido 2026-07-30, sessao my-org-web: bilhete do pane %26 caiu em
+            # `…_18e48e08-…/44bad0fb/run-2/session.jsonl`), enquanto o terminal seguia normal — ele
+            # nao le o bilhete. Tratar aqui e mais forte que consertar so a extensao: pega TODA
+            # sessao Pi ja de pe, sem reinstalar nem reiniciar nada. O caminho do subagente carrega
+            # a raiz dentro dele, entao subimos pra ela em vez de devolver None e deixar a sessao
+            # sem transcript ate o proximo turno do agente principal reescrever o bilhete.
+            _warn_bilhete_once(pane_id, "subagente")
+            f = _pi_root_transcript(f)
         # Bilhete FRESCO vale mesmo com o arquivo ainda inexistente: o Pi so escreve o .jsonl no 1o
         # turno, e a extensao publica o bilhete la no session_start. Exigir exists() aqui deixava
         # TODA sessao Pi recem-criada pelo app como "sem id" — sem transcript e inclicavel — ate
