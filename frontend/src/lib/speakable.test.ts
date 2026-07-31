@@ -39,6 +39,16 @@ describe('textoFalavel', () => {
     expect(el.querySelector('pre')?.textContent).toBe('segredo');
   });
 
+  it('troca cartao de ferramenta (tool-row) pelo marcador, preservando texto antes e depois', () => {
+    // Reproduz o bug relatado: selecao que comeca na mensagem, atravessa um cartao de Bash/SQL, e
+    // continua depois. O cartao vira UM marcador so; nada do que estava dentro dele (caminho, SQL,
+    // GO repetido) pode sobreviver.
+    const el = montar(
+      '<p>antes</p><div class="tool-row">COMMENT ON TABLE foo.bar GO GO GO</div><p>depois</p>'
+    );
+    expect(textoFalavel(el)).toBe('antes\n saída de comando omitida. depois');
+  });
+
   it('titulo, paragrafo e lista renderizados pelo renderMarkdown de verdade saem falaveis, sem palavras coladas', () => {
     const html = renderMarkdown('## Passo 1\n\nFazer X no arquivo.\n\n- item um\n- item dois\n');
     const el = montar(html);
