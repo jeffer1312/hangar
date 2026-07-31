@@ -467,10 +467,9 @@
     gap: var(--space-3);
     padding: var(--space-3) var(--space-4);
     min-height: 60px;
-    /* Superficie de leitura da lista: entra no veu do papel de parede como o resto (CLAUDE.md,
-       "Transparencia"). Sem isto a lista inteira virava uma pilha de retangulos pretos sobre a foto,
-       que era o unico lugar do celular onde ela nao aparecia. */
-    background: var(--surface-inset);
+    /* Com papel de parede esta linha some (regra em app.css, junto do #app/.chat-screen): sobre a
+       foto ela nao pinta nada, e o que separa uma sessao da outra e a divisoria do .swipe-wrap. */
+    background: var(--bg-base);
     cursor: pointer;
     touch-action: pan-y;
     transition: transform 200ms var(--ease-out), background 160ms ease-out;
