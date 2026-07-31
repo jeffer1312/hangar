@@ -53,7 +53,10 @@
     cursor: pointer;
     left: 50%;
     margin-left: -90px;
-    bottom: calc(var(--cp-dock-h, 150px) + 10px);
+    /* --cp-tts-h (publicada no App.svelte): soma a altura da BARRA DO PLAYER quando ela esta ativa,
+       senao a pill nasce no mesmo lugar da TtsBar e tapa play/posicao/velocidade — caso real: ouvir
+       um trecho e selecionar o proximo enquanto o audio toca. */
+    bottom: calc(var(--cp-dock-h, 150px) + 10px + var(--cp-tts-h, 0px));
   }
   .tts-sel.flutuante {
     bottom: auto;

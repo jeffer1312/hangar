@@ -3,7 +3,6 @@
   import { getVault, decryptList, encryptList, putVault, logout as syncLogout, syncStatus, stashKey, loadKey, clearKey } from './lib/sync';
   import { vaultPush } from './lib/vaultPush.svelte';
   import { ttsPlayer } from './lib/ttsPlayer.svelte';
-  import { ttsSelection } from './lib/ttsSelection.svelte';
   import { encodeCompareIds, type CompareId } from './lib/format';
   import { peekStep, initialPeek } from './lib/peek';
   import { parseHash, type Route } from './lib/route';
@@ -87,12 +86,15 @@
   let syncEnabled = $state<boolean | null>(null);
   let syncReady = $state(false);
 
-  // Altura da faixa de TTS (barra ou pill de selecao) publicada na raiz: as pills do Chat.svelte
-  // (hist-pill/tui-pill/awaiting-pill) somam este valor ao dockH pra nao ficar por baixo dela.
+  // Altura da BARRA DO PLAYER (TtsBar) publicada na raiz: as pills do Chat.svelte
+  // (hist-pill/tui-pill/awaiting-pill) e a TtsSelectionPill somam este valor ao dockH pra nao ficar
+  // por baixo dela. So reflete ttsPlayer.active — NAO ttsSelection.ativa: a pill de selecao e quem
+  // consome esta variavel pra evitar a barra, entao incluir a propria selecao aqui a empurraria sem
+  // motivo quando ela esta sozinha na tela (52+52 sem nada pra evitar).
   $effect(() => {
     document.documentElement.style.setProperty(
       '--cp-tts-h',
-      ttsPlayer.active || ttsSelection.ativa ? '52px' : '0px',
+      ttsPlayer.active ? '52px' : '0px',
     );
   });
 
