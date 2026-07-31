@@ -20,9 +20,9 @@ export type Route =
 export function parseHash(hash: string): Route {
   // `.split('?')[0]`: o painel de Configuracoes mora num segundo eixo do endereco
   // (?config=&srv=, ver lib/configRoute.ts). O corte fica AQUI, na primeira linha, e nao nos
-  // chamadores — sao dois (o boot em App.svelte:146 e o $derived de `route` em :173) mais o
-  // applyRouteServer (:135), e um esquecido devolve rota errada calada. Seguro: nome de sessao com
-  // `?` real nunca chega cru, navigateToChat faz encodeURIComponent (:244).
+  // chamadores no App.svelte — sao tres (o boot que le `window.location.hash`, o `$derived` de
+  // `route` e `applyRouteServer`), e um esquecido devolve rota errada calada. Seguro: nome de
+  // sessao com `?` real nunca chega cru, navigateToChat faz encodeURIComponent.
   const path = hash.replace(/^#/, '').split('?')[0];
   // Rota de chat COM servidor: #/chat/<serverId>/<nome>. Sessões homônimas em servidores
   // diferentes precisam de hashes distintos — só o nome fazia o clique "não trocar" (hash igual
