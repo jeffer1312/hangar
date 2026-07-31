@@ -20,9 +20,12 @@
     // Sem véu escuro, o app atrás continua clicável e um clique fora NÃO fecha; sai pelo × ou Esc.
     // No celular não muda nada (lá a sheet cobre a tela e o toque fora é o jeito natural de sair).
     persistent?: boolean;
+    /** Modal de duas colunas: o .sheet PARA de rolar e ganha altura fixa, pra quem rola ser a coluna de
+     *  conteudo la dentro. Sem isto o grid nao tem altura de referencia. So faz sentido com `centered`. */
+    split?: boolean;
     children: Snippet;
   }
-  let { open, onClose, ariaLabel = 'Painel', resizable = false, widthKey = 'cp_gitsheet_w', defaultWidth = 460, wide = false, centered = false, persistent = false, children }: Props = $props();
+  let { open, onClose, ariaLabel = 'Painel', resizable = false, widthKey = 'cp_gitsheet_w', defaultWidth = 460, wide = false, centered = false, persistent = false, split = false, children }: Props = $props();
 
   // `persistent` só vale no dock desktop: abaixo de 820px a sheet volta a ser modal.
   // `centered` GANHA de `persistent`: quem pede centrado está pedindo MODAL, e o dock é o oposto
@@ -214,6 +217,7 @@
       class:resizing
       class:wide
       class:centered
+      class:split
       class:naomodal={naoModal}
       role="dialog"
       aria-modal={naoModal ? 'false' : 'true'}
@@ -453,6 +457,13 @@
       animation: modal-in 220ms var(--ease-out) both;
     }
     .sheet.centered .resize-handle { display: none; }
+
+    .sheet.centered.split {
+      /* Altura DEFINIDA (nao max-height): e ela que da referencia pro grid la dentro. O min() mantem a
+         altura contida — o painel nao encosta nas bordas, que foi o pedido. */
+      height: min(680px, calc(100dvh - var(--space-8)));
+      overflow: hidden;
+    }
   }
   @keyframes modal-in {
     from { transform: scale(0.97); opacity: 0; }

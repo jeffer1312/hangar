@@ -706,6 +706,13 @@
     background: var(--bg-elevated);
     border-top: 1px solid var(--border-subtle);
   }
+  /* Dentro do modal dividido quem rola e a coluna (.st-conteudo, padding --space-4), nao o .sheet
+     (padding --space-5): o `bottom` negativo calibrado pro .sheet pendura a faixa abaixo da borda
+     visivel da coluna e come os botoes. Continua CHROME FUNCIONAL, solido de proposito. */
+  :global(.st-conteudo) .acoes {
+    bottom: calc(var(--space-4) * -1);
+    margin: 0 calc(var(--space-4) * -1) calc(var(--space-4) * -1);
+  }
   .aviso { font-size: var(--text-sm); color: var(--text-muted); margin: var(--space-3) 0; }
   .aviso.erro { color: var(--error); }
   .btn {

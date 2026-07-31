@@ -67,6 +67,11 @@
     return () => mq.removeEventListener('change', on);
   });
 
+  // No desktop a raiz (a lista de linhas) so existe no celular: as duas colunas ja mostram a
+  // navegacao inteira, entao 'root' cai na Aparencia. Resolvido NO RENDER, nunca por navegacao —
+  // um redirect disparado no resize seria um push a mais no historico, que a rota ja acerta sozinha.
+  const telaAtual = $derived(isDesktop && tela === 'root' ? ('aparencia' as TelaConfig) : tela);
+
   // VOLTAR e FECHAR sao coisas diferentes, e o BottomSheet so conhece "fechar": ele chama onClose no
   // Esc, no toque no backdrop E no swipe pra baixo. Passar `voltar` como onClose faria o swipe — o
   // gesto mais usado no celular, que e a view deste plano — subir um nivel em vez de sair, e de
@@ -78,16 +83,44 @@
   }
 </script>
 
-<BottomSheet open={true} onClose={onFechar} ariaLabel={TITULO[tela]} wide={isDesktop} centered={isDesktop}>
-  <header class="st-head">
-    <button class="st-icone" onclick={botaoEsquerdo}
-      aria-label={tela === 'root' ? 'Fechar' : 'Voltar'}>{tela === 'root' ? '✕' : '‹'}</button>
-    <!-- tabindex=-1: alvo do foco na troca de tela, sem entrar na ordem do Tab. -->
-    <h2 class="st-titulo" bind:this={tituloEl} tabindex="-1">{TITULO[tela]}</h2>
-    <span class="st-icone st-vazio" aria-hidden="true"></span>
-  </header>
+<BottomSheet open={true} onClose={onFechar} ariaLabel={TITULO[telaAtual]}
+             wide={isDesktop} centered={isDesktop} split={isDesktop}>
+  {#if isDesktop}
+    <div class="st-split">
+      <aside class="st-nav">
+        {#each SECOES as secao (secao)}
+          <p class="st-secao">{secao === 'Servidor' && nomeAlvo ? `Servidor · ${nomeAlvo}` : secao}</p>
+          {#each LINHAS.filter((l) => l.secao === secao) as l (l.id)}
+            <button class="st-nav-item" class:sel={telaAtual === l.id}
+                    aria-current={telaAtual === l.id ? 'page' : undefined}
+                    disabled={l.servidor && semServidor}
+                    onclick={() => onIrPara(l.id)}>
+              <span class="st-nav-icone" aria-hidden="true">{l.icone}</span>{l.rotulo}
+            </button>
+          {/each}
+        {/each}
+      </aside>
+      <section class="st-conteudo">
+        {@render corpo()}
+      </section>
+      <!-- O ✕ fica FORA da coluna que rola: dentro dela, `position: absolute` rolaria junto com o
+           conteudo (e `sticky` num container com padding brigaria com o topo do formulario). -->
+      <button class="st-fechar" onclick={onFechar} aria-label="Fechar">✕</button>
+    </div>
+  {:else}
+    <header class="st-head">
+      <button class="st-icone" onclick={botaoEsquerdo}
+        aria-label={tela === 'root' ? 'Fechar' : 'Voltar'}>{tela === 'root' ? '✕' : '‹'}</button>
+      <!-- tabindex=-1: alvo do foco na troca de tela, sem entrar na ordem do Tab. -->
+      <h2 class="st-titulo" bind:this={tituloEl} tabindex="-1">{TITULO[tela]}</h2>
+      <span class="st-icone st-vazio" aria-hidden="true"></span>
+    </header>
+    {@render corpo()}
+  {/if}
+</BottomSheet>
 
-  {#if tela === 'root'}
+{#snippet corpo()}
+  {#if telaAtual === 'root'}
     {#each SECOES as secao (secao)}
       <p class="st-secao">{secao}</p>
       <div class="st-cartao">
@@ -99,14 +132,14 @@
         {/each}
       </div>
     {/each}
-  {:else if tela === 'aparencia'}
+  {:else if telaAtual === 'aparencia'}
     <AppearanceSettings />
-  {:else if tela === 'motores'}
+  {:else if telaAtual === 'motores'}
     <EnginesSettings targetServer={alvo} />
   {:else}
-    <ServerSettings {store} secao={tela} />
+    <ServerSettings {store} secao={telaAtual} />
   {/if}
-</BottomSheet>
+{/snippet}
 
 <style>
   .st-head {
@@ -138,4 +171,37 @@
     overflow: hidden;
   }
   .st-cartao > :global(button + button) { border-top: 1px solid var(--border-subtle); }
+
+  /* ⚠ `grid-template-rows: minmax(0, 1fr)` NAO e enfeite: sem ele a linha implicita e `auto`, a
+     trilha cresce ate a altura do formulario, o overflow-y da coluna nunca dispara e o
+     `overflow: hidden` do .sheet.split CORTA o fim do conteudo — inclusive o botao Salvar. */
+  .st-split {
+    display: grid;
+    grid-template-columns: 232px 1fr;
+    grid-template-rows: minmax(0, 1fr);
+    height: 100%;
+    position: relative;
+  }
+  .st-nav {
+    overflow-y: auto; min-height: 0;
+    padding: var(--space-3) var(--space-2);
+    border-right: 1px solid var(--border-subtle);
+  }
+  .st-conteudo { overflow-y: auto; min-height: 0; padding: var(--space-4); }
+  .st-fechar {
+    position: absolute; top: var(--space-3); right: var(--space-3); z-index: 1;
+    width: 32px; height: 32px; border-radius: var(--radius-full);
+    border: 1px solid var(--border-subtle); background: var(--surface-raised);
+    color: var(--text-secondary); font-size: var(--text-base); line-height: 1; cursor: pointer;
+  }
+  .st-nav-item {
+    display: flex; align-items: center; justify-content: flex-start; gap: var(--space-2);
+    width: 100%; padding: var(--space-2) var(--space-3); border: 0; border-radius: var(--radius-md);
+    background: transparent; color: var(--text-primary); font-size: var(--text-sm); text-align: left;
+    cursor: pointer;
+  }
+  @media (hover: hover) { .st-nav-item:not(:disabled):hover { background: var(--bg-hover); } }
+  .st-nav-item.sel { background: var(--bg-elevated); }   /* realce de estado: --bg-* cru e o certo */
+  .st-nav-item:disabled { color: var(--text-muted); cursor: default; }
+  .st-nav-icone { flex-shrink: 0; width: 1.4em; text-align: center; }
 </style>
