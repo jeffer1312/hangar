@@ -708,10 +708,14 @@
   }
   /* Dentro do modal dividido quem rola e a coluna (.st-conteudo, padding --space-4), nao o .sheet
      (padding --space-5): o `bottom` negativo calibrado pro .sheet pendura a faixa abaixo da borda
-     visivel da coluna e come os botoes. Continua CHROME FUNCIONAL, solido de proposito. */
+     visivel da coluna e come os botoes. Continua CHROME FUNCIONAL, solido de proposito.
+     *-2, nao *-1: entre `.acoes` e `.st-conteudo` tem DUAS camadas de padding empilhadas — a deste
+     `.mot` (16px, e o que a regra base acima ja compensa) E a do proprio `.st-conteudo` (mais 16px,
+     que nao existe fora do modo dividido). Medido no navegador: com *-1 sobrava uma faixa de 16px
+     (um `--space-4` inteiro) entre o fim de .acoes e a borda inferior da coluna. */
   :global(.st-conteudo) .acoes {
-    bottom: calc(var(--space-4) * -1);
-    margin: 0 calc(var(--space-4) * -1) calc(var(--space-4) * -1);
+    bottom: calc(var(--space-4) * -2);
+    margin: 0 calc(var(--space-4) * -1) calc(var(--space-4) * -2);
   }
   .aviso { font-size: var(--text-sm); color: var(--text-muted); margin: var(--space-3) 0; }
   .aviso.erro { color: var(--error); }
