@@ -241,12 +241,18 @@ html[data-font='mono'] {
 html[data-bg="texture"], html[data-bg="aurora"] { background: linear-gradient(180deg, #0f0d12 0%, #141019 100%); }
 /* Quem pinta --bg-base por cima do fundo tem que ficar transparente, senao a textura fica atras de
    um retangulo opaco e nao aparece: o app tem 3 camadas assim empilhadas (o #app, a tela do chat e
-   o scroller da lista). `:where` pra nao competir com nada que esses componentes definam depois. */
+   o scroller da lista). `:where` pra nao competir com nada que esses componentes definam depois.
+   A LINHA da lista do celular entrou aqui depois: ela pintava --bg-base e era a unica tela em que o
+   papel de parede sumia atras de uma pilha de retangulos. Nao virou superficie translucida (token
+   --surface-*) de proposito — nao pintar e mais simples do que pintar de leve, e o que separa uma
+   linha da outra ja e a divisoria que elas tem. Quem segura a leitura sobre a foto e o modo Leitura,
+   igual no chat, nao o fundo do card. */
 html[data-bg] body,
 html[data-bg] body #app,
 html[data-bg] body .desktop-shell,
 html[data-bg] body .chat-screen,
-html[data-bg] body .message-list {
+html[data-bg] body .message-list,
+html[data-bg] body .session-row {
   background: transparent;
 }
 
