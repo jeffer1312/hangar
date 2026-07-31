@@ -251,6 +251,15 @@
     background: rgba(0, 0, 0, 0.34);
     backdrop-filter: blur(16px) saturate(150%);
   }
+  /* Papel de parede SEM blur (WebKit/iOS): o painel e 0.94, e ate hoje os 6% que passam caiam sobre
+     conteudo escuro e ninguem via. Com a foto atras, esses 6% viraram imagem clara + texto legivel
+     ATRAVES do modal — foi o que apareceu no iPhone com o modal de git. A saida NAO e deixar o
+     painel opaco (ele perde o material): e apagar o que esta atras, que e o que um scrim de modal
+     deve fazer mesmo. Fora do liquid porque la o blur ja resolve, e fora do `naomodal` porque o dock
+     lateral desliga o scrim de proposito. */
+  :global(html[data-bg='image']:not([data-liquid])) .backdrop:not(.naomodal) {
+    background: rgba(0, 0, 0, 0.88);
+  }
 
   .backdrop {
     position: fixed;
