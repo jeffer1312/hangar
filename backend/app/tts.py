@@ -177,7 +177,10 @@ def sintetizar(texto: str, voz: str, provedor: str) -> tuple[str, bool]:
         voz = _voz_efetiva(voz)
     h = hash_de(texto, voz, provedor)
     base = _base_cache()
-    base.mkdir(parents=True, exist_ok=True)
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise TtsError(500, f"falha ao preparar a pasta de cache do audio: {e}")
     existente = caminho_do_cache(h)
     if existente.exists() and existente.stat().st_size > 0:
         return h, True
@@ -196,6 +199,10 @@ def sintetizar(texto: str, voz: str, provedor: str) -> tuple[str, bool]:
     try:
         tmp.write_bytes(audio)
         tmp.replace(destino)
+    except OSError as e:
+        # Disco cheio/permissao negada aqui: o usuario ja PAGOU a chamada ao provedor (audio
+        # baixado) — sem isto, a rota so captura TtsError e devolve 500 sem detail nenhum.
+        raise TtsError(500, f"falha ao gravar o audio em cache: {e}")
     finally:
         try:
             tmp.unlink(missing_ok=True)
