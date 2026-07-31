@@ -187,6 +187,12 @@
 
   /* Mesmo material do composer/navbar/sidebar: solido no WebKit (o backdrop-filter reproduz o bug
      do retangulo preto), refracao real so no Chromium com data-liquid. */
+  /* Mesmo motivo do BottomSheet: o ::before e absoluto e o proprio dialogo e o scroller, entao
+     `inset: 0` cobre so a altura VISIVEL e rola junto — conteudo mais alto que a tela (o Avancado
+     dos motores, um transcript longo) fica sem vidro na parte de baixo. Fundo no elemento cobre a
+     area rolavel inteira; no liquid ele volta a transparente pra refracao do ::before aparecer. */
+  .modal-dialog { background: var(--glass-bg-solid); }
+  :global(html[data-liquid]) .modal-dialog { background: transparent; }
   .modal-dialog::before {
     content: "";
     position: absolute;

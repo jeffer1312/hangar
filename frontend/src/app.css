@@ -339,9 +339,14 @@ html[data-bg="image"] {
    Sem blur (proibido no WebKit) o texto que rola por baixo aparece um pouco atraves da faixa — isso
    e conhecido e aceito: quem quiser as faixas fechadas sobe o slider Solidez ate 100, que e opaco.
    Ja tentei o contrario (deixar as duas solidas por decisao minha) e estava errado: o dono da tela
-   quer a foto ali. */
-html[data-bg="image"] { --chrome-bg: color-mix(in srgb, rgb(24, 23, 28) calc(var(--cp-surface-alpha, 0.94) * 100%), transparent); }
-html[data-theme="light"][data-bg="image"] { --chrome-bg: color-mix(in srgb, rgb(255, 253, 250) calc(var(--cp-surface-alpha, 0.96) * 100%), transparent); }
+   quer a foto ali.
+   Usa a alfa do PAINEL, nao a das caixas: a barra e o composer sao superficie do tamanho da tela, da
+   mesma familia do vidro de painel — a das caixas soma o degrau da Solidez e chegava em 0,92, que
+   deixa passar 8% da foto e le como SOLIDO (medido nos ajustes do usuario). Com a do painel sao 27%,
+   que aparece de verdade. Quem quiser as faixas fechadas continua tendo o slider: Transparencia no
+   minimo devolve a alfa pra 0,92. */
+html[data-bg="image"] { --chrome-bg: color-mix(in srgb, rgb(24, 23, 28) calc(var(--cp-panel-alpha, 0.94) * 100%), transparent); }
+html[data-theme="light"][data-bg="image"] { --chrome-bg: color-mix(in srgb, rgb(255, 253, 250) calc(var(--cp-panel-alpha, 0.96) * 100%), transparent); }
 html[data-theme="light"][data-bg="image"] { --glass-panel: rgba(255, 253, 250, var(--cp-panel-alpha, 0.78)); }
 html[data-bg="image"] body::after {
   content: "";

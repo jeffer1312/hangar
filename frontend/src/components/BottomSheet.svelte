@@ -298,7 +298,11 @@
      mesma cor. Fundo no ELEMENTO cobre a area rolavel inteira; nao promove camada nenhuma (o bug do
      retangulo preto e do backdrop-filter, nao de background-color), entao a regra do iOS fica de pe.
      O ::before continua pro caminho liquid, que pinta --glass-panel com refracao por cima. */
-  .sheet { background: var(--glass-bg-solid); }
+  /* `:not(.naomodal)`: o dock lateral pinta --glass-panel no ::before, que SEGUE o slider. Um solido
+     por baixo dele somava (0.94 + 0.70 = ~0.98) e travava o painel em opaco, com o slider inerte —
+     era o mesmo erro de escopo que esta linha veio consertar, so que do outro lado. O dock nao rola
+     como a folha (ele tem altura de tela cheia), entao nao precisa do fundo no elemento. */
+  .sheet:not(.naomodal) { background: var(--glass-bg-solid); }
   /* Camada de vidro do painel: leaf sem conteudo, colada na caixa. WebKit/iOS fica no fundo quase
      opaco (sem backdrop-filter, que reproduz o bug do retangulo preto no scroll). */
   .sheet::before {
