@@ -40,7 +40,7 @@
     position: fixed;
     left: 50%;
     transform: none;
-    bottom: calc(var(--cp-dock-h, 64px) + 10px);
+    bottom: calc(var(--cp-dock-h, 150px) + 10px);
     margin-left: min(-50vw + 8px, -320px);
     width: min(calc(100vw - 16px), 640px);
     display: flex;
@@ -51,7 +51,11 @@
     /* superficie propria dentro de painel: acompanha o slider de transparencia */
     background: var(--surface-raised);
     border: 1px solid var(--border-subtle);
-    z-index: 40;
+    /* 39, e nao 40: o backdrop dos menus e sheets vive em 40 (Sidebar.svelte:2005,
+       SessionContextMenu.svelte:199) e o conteudo deles em 41/42. Empatar em 40 deixaria a ordem
+       entre a barra e um menu aberto por conta da posicao no DOM. Abaixo do backdrop tambem e o
+       certo por desenho: player nao pode cobrir modal aberto. Mesma faixa do HoverPreview. */
+    z-index: 39;
   }
   .tts-seek { flex: 1; min-width: 0; accent-color: var(--accent); }
   .tts-time { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--text-secondary); }

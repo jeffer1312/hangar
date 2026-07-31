@@ -861,6 +861,14 @@
     return () => { cancelAnimationFrame(raf); ro.disconnect(); };
   });
 
+  // A altura do dock e medida aqui, mas quem precisa dela tambem vive FORA desta arvore (a barra de
+  // TTS e montada no App.svelte, que sobrevive a remontagem do Chat). Publicar na raiz e o que da
+  // a ela o mesmo valor medido, em vez de um numero fixo que nao acompanha composer multi-linha nem
+  // teclado do celular.
+  $effect(() => {
+    document.documentElement.style.setProperty('--cp-dock-h', `${dockH}px`);
+  });
+
   // Mede a navbar (overlay) -> --nav-h, pra lista clarear a 1a msg e rolar por baixo. Igual ao dock.
   $effect(() => {
     if (!navEl) return;
