@@ -58,7 +58,10 @@
       <!-- Painel de tarefas do TUI: fechado por padrao, so o contador na linha. <details> nativo —
            sem estado no componente, e o navegador ja lembra do aberto enquanto o no viver. -->
       <details class="todo-fold">
-        <summary>{todo.head}</summary>
+        <!-- O caret vive na linha do resumo quando o painel é TUDO que veio no preview: o bloco de
+             prosa abaixo (que normalmente o carrega) não é renderizado nesse caso, e sem ele a
+             bolha ficava sem nenhum sinal de "ainda escrevendo" enquanto o turno durasse. -->
+        <summary>{todo.head}{#if !todo.rest}<span class="caret" aria-hidden="true"></span>{/if}</summary>
         <pre class="todo-body">{todo.body}</pre>
       </details>
     {/if}

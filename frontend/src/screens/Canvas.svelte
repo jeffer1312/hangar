@@ -320,7 +320,13 @@
   }
   function resizeMove(e: PointerEvent) {
     if (!rs) return;
-    if (!layout[rs.key]) { rs = null; return; }   // sessão morreu no meio do arrasto
+    // Botão já solto = gesto que terminou sem passar pelo resizeEnd. Acontece quando o card é
+    // DESMONTADO no meio do arrasto (a sessão morreu): o nó sai do DOM, a captura vira
+    // `lostpointercapture` e o `pointerup` não chega mais nesta alça. Sem isto o `rs` ficava preso e
+    // o próximo HOVER sobre qualquer alça redimensionava o card antigo sozinho — e o tamanho
+    // arrastado nunca chegava ao localStorage.
+    if (e.buttons === 0) { resizeEnd(); return; }
+    if (!layout[rs.key]) { rs = null; return; }   // entrada sumiu do layout: não grava caixa corrompida
     layout = { ...layout, [rs.key]: resizeBox(rs.box, rs.dir, e.clientX - rs.x0, e.clientY - rs.y0) };
   }
   function resizeEnd() {
@@ -509,13 +515,18 @@
     border-radius: var(--radius-lg);
   }
   /* Alças de resize: por DENTRO da borda (o card tem overflow: hidden — alça pra fora seria
-     recortada). Sem pintura: só cursor e área de agarre. */
+     recortada). Sem pintura: só cursor e área de agarre.
+     A borda de CIMA divide espaço com a barra de arrastar (18px), e como as alças têm z-index
+     positivo e a barra não, elas ganham a disputa em qualquer empate — clicar no topo do ⋮⋮
+     redimensionava em vez de mover. Por isso a faixa norte é 4px (não 6) e os cantos de cima são
+     10px: sobra a barra inteira em volta do ⋮⋮, que é centralizado e fica longe dos cantos. */
   .cv-rs { position: absolute; z-index: 2; touch-action: none; }
-  .cv-rs-n, .cv-rs-s { left: 10px; right: 10px; height: 6px; cursor: ns-resize; }
-  .cv-rs-n { top: 0; } .cv-rs-s { bottom: 0; }
-  .cv-rs-w, .cv-rs-e { top: 10px; bottom: 10px; width: 6px; cursor: ew-resize; }
+  .cv-rs-n, .cv-rs-s { left: 12px; right: 12px; cursor: ns-resize; }
+  .cv-rs-n { top: 0; height: 4px; } .cv-rs-s { bottom: 0; height: 6px; }
+  .cv-rs-w, .cv-rs-e { top: 12px; bottom: 12px; width: 6px; cursor: ew-resize; }
   .cv-rs-w { left: 0; } .cv-rs-e { right: 0; }
-  .cv-rs-nw, .cv-rs-ne, .cv-rs-sw, .cv-rs-se { width: 12px; height: 12px; }
+  .cv-rs-nw, .cv-rs-ne { width: 10px; height: 10px; }
+  .cv-rs-sw, .cv-rs-se { width: 12px; height: 12px; }
   .cv-rs-nw { top: 0; left: 0; cursor: nwse-resize; }
   .cv-rs-se { bottom: 0; right: 0; cursor: nwse-resize; }
   .cv-rs-ne { top: 0; right: 0; cursor: nesw-resize; }
