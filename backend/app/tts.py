@@ -43,8 +43,23 @@ def hash_de(texto: str, voz: str, provedor: str) -> str:
     return hashlib.sha256(bruto).hexdigest()
 
 
+def extensao_de(audio: bytes) -> str:
+    """wav ou mp3, pelos 4 primeiros bytes. O comando local pode devolver WAV (e o texto de ajuda
+    da tela promete isso); a ElevenLabs sempre devolve mp3. Detectar pelo conteudo, nao pelo
+    provedor, e o que permite `caminho_do_cache` achar o arquivo certo sem saber de antemao."""
+    return "wav" if audio[:4] == b"RIFF" else "mp3"
+
+
 def caminho_do_cache(h: str) -> Path:
-    return _base_cache() / f"{h}.mp3"
+    """Caminho do audio em cache. A extensao real pode ser .mp3 OU .wav (motor local) — quem le
+    nao pode assumir uma so. Sem arquivo em nenhuma das duas, devolve o caminho .mp3 (nao existe;
+    o chamador trata isso como cache miss)."""
+    base = _base_cache()
+    for ext in ("mp3", "wav"):
+        p = base / f"{h}.{ext}"
+        if p.exists():
+            return p
+    return base / f"{h}.mp3"
 
 
 def corpo_elevenlabs(texto: str, modelo: str) -> bytes:
@@ -163,8 +178,8 @@ def sintetizar(texto: str, voz: str, provedor: str) -> tuple[str, bool]:
     h = hash_de(texto, voz, provedor)
     base = _base_cache()
     base.mkdir(parents=True, exist_ok=True)
-    destino = base / f"{h}.mp3"
-    if destino.exists() and destino.stat().st_size > 0:
+    existente = caminho_do_cache(h)
+    if existente.exists() and existente.stat().st_size > 0:
         return h, True
 
     if provedor == "local":
@@ -173,8 +188,10 @@ def sintetizar(texto: str, voz: str, provedor: str) -> tuple[str, bool]:
         _chave()   # falha cedo, com 503, antes de qualquer trabalho
         audio = _baixar_elevenlabs(texto, voz)
 
-    # tmp+rename com o pid no nome: rede caindo no meio nao deixa mp3 truncado em cache pra sempre, e
-    # dois pedidos simultaneos do mesmo trecho nao entrelacam bytes num nome fixo.
+    # Extensao pelo CONTEUDO (mp3 ou wav — ver extensao_de): o comando local pode devolver WAV.
+    destino = base / f"{h}.{extensao_de(audio)}"
+    # tmp+rename com o pid no nome: rede caindo no meio nao deixa arquivo truncado em cache pra
+    # sempre, e dois pedidos simultaneos do mesmo trecho nao entrelacam bytes num nome fixo.
     tmp = base / f"{h}.{os.getpid()}.tmp"
     try:
         tmp.write_bytes(audio)

@@ -2834,4 +2834,7 @@ async def tts_audio(h: str):
     caminho = tts.caminho_do_cache(h)
     if not caminho.exists():
         raise HTTPException(404, "audio nao esta mais em cache")
-    return FileResponse(caminho, media_type="audio/mpeg")
+    # Extensao real do arquivo em cache, nao suposicao: o motor local pode ter devolvido WAV
+    # (ver tts.extensao_de) — servir isso como audio/mpeg quebra o <audio> no WebKit.
+    media_type = "audio/wav" if caminho.suffix == ".wav" else "audio/mpeg"
+    return FileResponse(caminho, media_type=media_type)

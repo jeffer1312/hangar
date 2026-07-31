@@ -95,6 +95,27 @@ def test_hash_usa_voz_efetiva_nao_a_crua(monkeypatch, tmp_path):
     assert h1 != h2
 
 
+def test_extensao_de_detecta_wav_pelo_conteudo():
+    assert tts.extensao_de(b"RIFF....WAVEfmt ") == "wav"
+    assert tts.extensao_de(b"ID3\x03mp3 bytes") == "mp3"
+
+
+def test_sintetizar_com_motor_local_devolvendo_wav_grava_wav(monkeypatch, tmp_path):
+    # O comando local pode devolver WAV de verdade (nao so o mock generico dos outros testes) —
+    # o cache tem que gravar sob .wav, e caminho_do_cache tem que achar o arquivo depois.
+    monkeypatch.setattr(tts, "_base_cache", lambda: tmp_path)
+    monkeypatch.setattr(tts, "_baixar_local", lambda t: b"RIFF\x00\x00\x00\x00WAVEfmt ")
+    monkeypatch.setattr(tts.runtime_config, "get",
+                        lambda campo: "minha-voz" if campo == "tts_local_cmd" else "")
+
+    h, cache = tts.sintetizar("oi", "voz", "local")
+
+    assert cache is False
+    assert (tmp_path / f"{h}.wav").exists()
+    assert not (tmp_path / f"{h}.mp3").exists()
+    assert tts.caminho_do_cache(h) == tmp_path / f"{h}.wav"
+
+
 def test_sem_chave_com_comando_local_configurado_cai_pro_local(monkeypatch, tmp_path):
     # provider=elevenlabs (o unico que o front manda) sem chave, mas com comando local configurado:
     # antes disto, o motor local era inalcancavel — a tela oferecia o campo e nada usava.

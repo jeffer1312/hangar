@@ -85,6 +85,17 @@ def test_404_hash_bem_formado_sem_cache():
     assert r.status_code == 404
 
 
+def test_serve_wav_com_media_type_certo(tmp_path):
+    # Motor local pode gravar .wav em cache (ver tts.extensao_de) — servir isso como audio/mpeg
+    # quebra o <audio> no WebKit, mesmo o arquivo estando la.
+    (tmp_path / f"{_HASH_FALSO}.wav").write_bytes(b"RIFF....WAVEfmt ")
+    client = _client()
+    with patch("app.tts._base_cache", lambda: tmp_path):
+        r = client.get(f"/api/tts/audio/{_HASH_FALSO}", headers=_AUTH)
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "audio/wav"
+
+
 def test_401_sem_token():
     client = _client()
     r = client.post("/api/tts", json={"text": "oi"})
