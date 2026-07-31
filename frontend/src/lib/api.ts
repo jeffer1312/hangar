@@ -82,11 +82,13 @@ async function ensureOk(res: Response): Promise<void> {
   if (res.status === 401 && getToken()) {
     dropActiveServer();
     if (typeof window !== 'undefined') window.location.reload();
-    throw Object.assign(new Error('401: sessão expirada — faça login novamente'), { status: 401 });
+    throw Object.assign(new Error('sessão expirada — faça login novamente'), { status: 401 });
   }
   // `status` no proprio erro: sem ele quem chama (ex: ouvir.ts) nao consegue distinguir um 409
-  // (acima do limite de aviso, pede confirmacao) de qualquer outra falha so pela mensagem.
-  if (!res.ok) throw Object.assign(new Error(`${res.status}: ${await errorDetail(res)}`), { status: res.status });
+  // (acima do limite de aviso, pede confirmacao) de qualquer outra falha so pela mensagem. A
+  // MENSAGEM fica limpa (sem o "409: " na frente) — quem precisa do numero le `.status`, nao
+  // texto que o usuario acaba vendo cru (ex: window.confirm da confirmacao de custo do TTS).
+  if (!res.ok) throw Object.assign(new Error(await errorDetail(res)), { status: res.status });
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -443,7 +445,10 @@ export async function scanDir(root: string, path?: string): Promise<FsScanResult
     return await apiFetch<FsScanResult>(`/api/fs/scan?${qs.toString()}`);
   } catch (e) {
     if (!(e instanceof Error)) throw e;
-    const status = parseInt(e.message, 10);
+    // `.status`, nao parseInt(e.message): ensureOk (api.ts) parava de embutir o status no TEXTO
+    // da mensagem, entao ler o numero de la quebraria toda vez que o detail do backend comecasse
+    // com digito (ex: "404 arquivos encontrados"). O status ja vem anotado no proprio erro.
+    const status = (e as Error & { status?: number }).status ?? NaN;
     if (status === 401) throw e;
     const map: Record<number, FsScanError> = {
       400: 'invalid_path',
