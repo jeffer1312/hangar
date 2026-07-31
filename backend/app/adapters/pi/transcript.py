@@ -8,10 +8,13 @@ transformaria cada mudanca de formato de um provider em risco de regressao no ou
 `ChatEvent` e contrato com o front: aqui so muda a FONTE, nunca o shape.
 """
 import json
+import logging
 import re
 from typing import Optional
 
 from app.models import ChatEvent, scrub_surrogates
+
+_log = logging.getLogger("claude_pocket.pi_transcript")
 
 # Blocos que nao viram bolha de chat. `thinking` fica de fora igual no Claude: e rascunho interno,
 # nao resposta.
@@ -145,7 +148,17 @@ class Stream:
         self._held: list[tuple[float, ChatEvent]] = []
         self._held_id = ""
 
+    def tem_retido(self) -> bool:
+        """Ha mensagem presa esperando a irmã? O tailer usa isto pra so pagar a espera curta
+        quando ela tem pra que servir (ver TranscriptTailer._flush_com_espera)."""
+        return bool(self._held)
+
     def _release(self) -> list[tuple[float, ChatEvent]]:
+        if self._held and self._held_id:
+            # Soltou sem par: ou a sessao nao tem a extensao de hooks (o caso comum, silencioso de
+            # proposito) ou a irmã se perdeu e o prefixo do hook vai vazar pra bolha. Nao da pra
+            # distinguir os dois aqui; o debug e o unico rastro se o vazamento voltar.
+            _log.debug("pi: user_msg %s solto sem o marcador de hook", self._held_id)
         out, self._held, self._held_id = self._held, [], ""
         return out
 

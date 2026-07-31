@@ -56,7 +56,20 @@ def read(stem: Optional[str]) -> Optional[str]:
         f = base / _SUBDIR / f"{stem}.json"
         try:
             o = json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except OSError:
+            continue                 # sidecar ausente e o caso NORMAL (sessao sem a extensao)
+        except ValueError:
+            # Arquivo existe e nao e JSON: o publisher grava por tmp+rename, entao isto nao devia
+            # acontecer — e um bug de escrita, nao "sessao sem instrumentacao". Sem este debug os
+            # dois casos ficam indistinguiveis de fora (os dois viram statusline do pane).
+            _log.debug("statusline: sidecar ilegivel path=%s", f, exc_info=True)
+            continue
+        if not isinstance(o, dict):
+            # JSON VALIDO do tipo errado (`null`, lista, string) nao levanta ValueError — o .get()
+            # abaixo levantaria AttributeError, que ninguem pega: em registry.list_with_state isso
+            # derruba a resolucao de estado de TODAS as sessoes, e em StateMonitor.stream() mata a
+            # stream daquela sessao. Sidecar e conveniencia; nao pode derrubar nada.
+            _log.debug("statusline: sidecar nao e objeto path=%s tipo=%s", f, type(o).__name__)
             continue
         line, ts = o.get("line"), o.get("ts")
         if not isinstance(line, str) or not line.strip():

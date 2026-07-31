@@ -470,11 +470,19 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
                 except (json.JSONDecodeError, ValueError):
                     continue
                 evs = parse(obj)
+                # ts ANTES do `continue`: com o parser do Pi a 1a linha util e um user_msg que fica
+                # RETIDO (devolve [] nela), e pular o relogio aqui empurrava o start_ts pra linha
+                # seguinte que solta algo — a resposta do assistente, minutos depois. Efeito: toda
+                # entrada de fila enfileirada nesse intervalo caia na poda de "anterior ao inicio da
+                # sessao" e sumia do historico, calada. O start_ts e o INICIO da sessao, entao a 1a
+                # linha com relogio manda, tenha ela virado bolha ou nao.
+                line_ts = _ts_of_obj(obj)
+                if line_ts > 0:
+                    if start_ts == 0.0:
+                        start_ts = line_ts
+                    prev_ts = line_ts
                 if not evs:
                     continue
-                line_ts = _ts_of_obj(obj)
-                if line_ts > 0 and start_ts == 0.0:
-                    start_ts = line_ts
                 ts = line_ts or prev_ts
                 prev_ts = ts
                 _absorve(ts, i, evs)

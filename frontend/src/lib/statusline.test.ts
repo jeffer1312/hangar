@@ -85,3 +85,19 @@ describe('setas de reset das janelas de uso', () => {
     expect(f.weeklyReset).toBe('sab 18h');
   });
 });
+
+describe('janelas de uso separadas so por espaco', () => {
+  // No Pi as tres janelas vem coladas ("⚡5h … 📅7d … 🗓30d …") sem `│` entre elas. A classe do
+  // reset semanal so cortava em │ e 🕐, entao com reset presente ela engolia o segmento mensal:
+  // weeklyReset saia "6d19h 🗓30d:2%" e ia assim pra tela.
+  const TRES = '🤖 k3 │ ⚡5h:51% ↻54m 📅7d:10% ↻6d19h 🗓30d:2% │ 💵 $0.00 │ 🕐 19:04';
+
+  it('cada reset para no proximo emoji de janela', () => {
+    const f = parseStatusLine(TRES)!;
+    expect(f.fiveHourReset).toBe('54m');
+    expect(f.weeklyReset).toBe('6d19h');
+    expect(f.weeklyPct).toBe(10);
+    expect(f.monthlyPct).toBe(2);
+    expect(f.monthlyReset).toBeUndefined();   // 🗓30d:2% nao tem seta
+  });
+});

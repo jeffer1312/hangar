@@ -202,3 +202,70 @@ async def test_follow_ignora_offset_alem_do_fim(tmp_path, monkeypatch):
 
     await asyncio.wait_for(consume(10_000_000), timeout=5)
     assert vistos == ["a"]
+
+
+# ── parser com memoria (Pi): o par mensagem+marcador de hook nao pode ser partido pelo lote ─────
+def _pi_user(node_id: str, text: str) -> str:
+    return json.dumps({"type": "message", "id": node_id,
+                       "message": {"role": "user", "content": [{"type": "text", "text": text}]}}) + "\n"
+
+
+def _pi_hook_ctx(parent: str, content: str) -> str:
+    return json.dumps({"type": "custom_message", "customType": "claude-hook-context",
+                       "content": content, "id": "ctx1", "parentId": parent}) + "\n"
+
+
+def test_pi_stream_flushes_the_held_message_at_the_end_of_the_batch(tmp_path):
+    # Mensagem do usuario e a ULTIMA linha do arquivo (o Pi so escreve a resposta minutos depois):
+    # sem o flush do lote a bolha dele nao apareceria no chat ate o turno terminar.
+    from app.adapters.pi.transcript import Stream
+    f = tmp_path / "s.jsonl"
+    f.write_text(_pi_user("n1", "oi"))
+    evs, _ = TranscriptTailer(f, parse_line=Stream().parse_line)._read_from(0)
+    assert [(e.kind, e.text) for e in evs] == [("user_msg", "oi")]
+
+
+def test_pi_stream_waits_for_the_hook_sibling_written_right_after(tmp_path, monkeypatch):
+    # O caso que a espera curta existe pra cobrir: o watcher acorda ENTRE as duas escritas (elas
+    # nascem com 1ms de diferenca, mas nada garante o lote). Sem a releitura, a bolha saia com o
+    # "[hook] ..." colado e o marcador chegava orfao no ciclo seguinte — o bug que a feature
+    # inteira conserta, voltando calado.
+    from app.adapters.pi.transcript import Stream
+    ctx = "[skill-suggester] usa a skill X"
+    f = tmp_path / "s.jsonl"
+    f.write_text(_pi_user("n1", f"{ctx}\n\nmuda o botao"))
+    t = TranscriptTailer(f, parse_line=Stream().parse_line)
+    # A irmã aparece DURANTE a espera (é o que o sleep do tailer cobre).
+    def _escreve_irma(_s):
+        with open(f, "a", encoding="utf-8") as fh:
+            fh.write(_pi_hook_ctx("n1", ctx))
+    monkeypatch.setattr("app.transcript.time.sleep", _escreve_irma)
+
+    evs, pos = t._read_from(0)
+    assert [(e.kind, e.text) for e in evs] == [("user_msg", "muda o botao")]
+    assert pos == f.stat().st_size      # as DUAS linhas foram consumidas, nada re-lido depois
+
+
+def test_pi_stream_does_not_wait_when_nothing_is_held(tmp_path, monkeypatch):
+    # A espera so pode ser paga quando ha algo retido — senao todo lote de toda sessao Pi
+    # (e o backfill inicial, que le o arquivo inteiro) ficaria mais lento a toa.
+    from app.adapters.pi.transcript import Stream
+    f = tmp_path / "s.jsonl"
+    f.write_text(json.dumps({"type": "message", "id": "n1", "message": {
+        "role": "assistant", "content": [{"type": "text", "text": "ola"}]}}) + "\n")
+    chamou = []
+    monkeypatch.setattr("app.transcript.time.sleep", lambda s: chamou.append(s))
+    evs, _ = TranscriptTailer(f, parse_line=Stream().parse_line)._read_from(0)
+    assert [e.kind for e in evs] == ["assistant_msg"]
+    assert chamou == []
+
+
+def test_claude_tailer_never_pays_the_wait(tmp_path, monkeypatch):
+    # Parser sem memoria (Claude/Codex) nao tem flush_events: o caminho novo nem e tocado.
+    chamou = []
+    monkeypatch.setattr("app.transcript.time.sleep", lambda s: chamou.append(s))
+    f = tmp_path / "c.jsonl"
+    f.write_text(_user("u1", "oi"))
+    evs, _ = TranscriptTailer(f)._read_from(0)
+    assert [e.kind for e in evs] == ["user_msg"]
+    assert chamou == []

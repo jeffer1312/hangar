@@ -49,3 +49,15 @@ def test_broken_json_does_not_raise(monkeypatch, tmp_path):
     d.mkdir(exist_ok=True)
     (d / "meio.json").write_text('{"line": "cor')
     assert statusline.read("meio") is None
+
+
+def test_valid_json_that_is_not_an_object_does_not_raise(monkeypatch, tmp_path):
+    # `null`, lista ou string NAO levantam ValueError no json.loads — o .get() seguinte estouraria
+    # AttributeError, que ninguem pega: em registry.list_with_state derruba a resolucao de estado de
+    # TODAS as sessoes; em StateMonitor.stream() mata a stream daquela sessao.
+    _dirs(monkeypatch, tmp_path)
+    d = tmp_path / ".claude-pocket-status"
+    d.mkdir(exist_ok=True)
+    for nome, conteudo in (("nulo", "null"), ("lista", "[1,2]"), ("texto", '"linha"')):
+        (d / f"{nome}.json").write_text(conteudo)
+        assert statusline.read(nome) is None
