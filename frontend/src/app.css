@@ -335,15 +335,13 @@ html[data-bg="image"] {
      esta atras. Amarrar ele ao slider (tentei) deixou o modal de git no iPhone transparente a ponto
      de dar pra LER a lista de sessoes atraves dele. */
 }
-/* CHROME (navbar e composer) com papel de parede: OPACO, e nao translucido.
-   Tentei os dois: com o conteudo rolando por baixo e SEM blur (proibido no WebKit pelo bug do
-   retangulo preto), 0.925 e 0.94 deixam o texto da conversa atravessar a faixa — medido no aparelho,
-   com foto real. Nao e questao de achar o valor certo: o que a faixa cobre TEM que ser coberto,
-   senao a leitura no topo e no rodape vira sopa.
-   No Chromium (data-liquid) isso nao vale: la o composer usa --glass-bg + blur, e o blur resolve.
-   A foto ja aparece na area de leitura inteira; aqui a leitura ganha. */
-html[data-bg="image"]:not([data-liquid]) { --chrome-bg: rgb(24, 23, 28); }
-html[data-theme="light"][data-bg="image"]:not([data-liquid]) { --chrome-bg: rgb(255, 253, 250); }
+/* CHROME (navbar e composer) com papel de parede: entra no veu, como o resto.
+   Sem blur (proibido no WebKit) o texto que rola por baixo aparece um pouco atraves da faixa — isso
+   e conhecido e aceito: quem quiser as faixas fechadas sobe o slider Solidez ate 100, que e opaco.
+   Ja tentei o contrario (deixar as duas solidas por decisao minha) e estava errado: o dono da tela
+   quer a foto ali. */
+html[data-bg="image"] { --chrome-bg: color-mix(in srgb, rgb(24, 23, 28) calc(var(--cp-surface-alpha, 0.94) * 100%), transparent); }
+html[data-theme="light"][data-bg="image"] { --chrome-bg: color-mix(in srgb, rgb(255, 253, 250) calc(var(--cp-surface-alpha, 0.96) * 100%), transparent); }
 html[data-theme="light"][data-bg="image"] { --glass-panel: rgba(255, 253, 250, var(--cp-panel-alpha, 0.78)); }
 html[data-bg="image"] body::after {
   content: "";

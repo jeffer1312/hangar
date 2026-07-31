@@ -291,6 +291,14 @@
     overscroll-behavior: contain;
   }
 
+  /* O ::before e ABSOLUTO dentro da folha, e a folha e o proprio scroller: `inset: 0` resolve pra
+     altura VISIVEL (medido: 812px de vidro pra 1035px de conteudo), e ele rola junto com o conteudo.
+     Resultado: rolou a folha, o vidro acaba e o que esta atras aparece pela metade de baixo — foi o
+     que apareceu na Aparencia no iPhone. Sobre fundo chapado ninguem via, porque o que vazava era a
+     mesma cor. Fundo no ELEMENTO cobre a area rolavel inteira; nao promove camada nenhuma (o bug do
+     retangulo preto e do backdrop-filter, nao de background-color), entao a regra do iOS fica de pe.
+     O ::before continua pro caminho liquid, que pinta --glass-panel com refracao por cima. */
+  .sheet { background: var(--glass-bg-solid); }
   /* Camada de vidro do painel: leaf sem conteudo, colada na caixa. WebKit/iOS fica no fundo quase
      opaco (sem backdrop-filter, que reproduz o bug do retangulo preto no scroll). */
   .sheet::before {
@@ -319,6 +327,9 @@
      de graca pelo scrim. */
   :global(html[data-liquid]) .sheet {
     backdrop-filter: blur(20px) saturate(170%);
+    /* No liquid quem pinta e o ::before (--glass-panel) + a refracao: fundo solido no elemento
+       taparia os dois. So o WebKit precisa do fundo aqui. */
+    background: transparent;
   }
 
   /* O painel leva .focus() programatico ao abrir (a11y: anuncia o dialog e prende o Tab dentro).
