@@ -232,12 +232,17 @@
       var(--bg-base) calc(100% - var(--navbar-fade)),
       transparent 100%);
   }
-  /* Tentei deixar esta barra translucida com papel de parede, pra foto aparecer nela tambem. Medido
-     no aparelho: NAO da, e nao e questao de achar o valor certo. Sem blur (proibido no WebKit pelo
-     bug do retangulo preto) qualquer alfa abaixo de opaco deixa o texto da conversa passar por baixo
-     do titulo — testado em 0.925 e em 0.94, os dois ilegiveis. O conteudo rola por baixo da barra
-     de proposito (o fade de 24px embaixo e o que costura isso), entao o que ela cobre TEM que ser
-     coberto. A foto ja aparece em toda a area de leitura; aqui a leitura ganha. */
+  /* Com papel de parede a barra entra no veu como o resto (--chrome-bg, app.css), em vez de ficar a
+     unica faixa opaca da tela. Sem blur o texto que rola por baixo aparece um pouco atraves dela —
+     conhecido e aceito; quem quiser a faixa fechada sobe o slider Solidez ate 100. Continua sem
+     backdrop-filter: no WebKit isso e proibido (bug do retangulo preto no scroll). Vem ANTES da
+     regra do liquid de proposito — no Chromium o liquid ainda ganha e mantem a refracao. */
+  :global(html[data-bg='image']) .navbar::before {
+    background: linear-gradient(to bottom,
+      var(--chrome-bg) 0%,
+      var(--chrome-bg) calc(100% - var(--navbar-fade)),
+      transparent 100%);
+  }
   /* Chromium (data-liquid): refracao SVG real. O blur fica — Chromium não tem o bug do WebKit. */
   :global(html[data-liquid]) .navbar::before {
     background: var(--glass-bg);
