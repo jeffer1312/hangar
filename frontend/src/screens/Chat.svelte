@@ -486,6 +486,14 @@
     actFolder.reset(events);
     activity = actFolder.snapshot();
     asstCount = countAssts(events);
+    // Reseed NÃO é "commitou bloco novo": trocar o conjunto de eventos (history em dois tempos,
+    // /clear, resume) mexe no contador sem nenhum turno ter fechado. Sem sincronizar aqui, abrir a
+    // conversa no meio de um turno longo MATAVA a prévia — ela chega antes do /history (o SSE
+    // manda o texto do pane na hora da inscrição, o history é fetch), o reseed disparava o
+    // "committed" do effect abaixo, e o broker só reemite em MUDANÇA do pane: num painel de
+    // tarefas parado, nunca mais. Quem de fato detecta commit é o handler do SSE, que já zera o
+    // preview no mesmo flush do append (swap atômico).
+    _asstSeen = asstCount;
   }
 
   // Classifica o erro de carga: 404 / "not found" = transcript trocado ou backend reiniciou (o caso
@@ -1002,7 +1010,12 @@
     _asstSeen = asstCount;
     if (!pv) return;
     // (a) bloco novo commitou OU (b) saiu de working -> dropa.
-    if (committed || currentState !== 'working') { previewText = ''; return; }
+    // `stateEvent &&` porque "ainda não chegou estado nenhum" NÃO é "saiu de working": currentState
+    // nasce 'idle' por default, e na abertura da conversa o preview chega ANTES do primeiro evento
+    // `state` (o broker publica o texto do pane na inscrição; o state vem no tick seguinte). Sem o
+    // guard, abrir a conversa no meio de um turno longo apagava a prévia na hora — e como o broker
+    // só reemite em MUDANÇA do pane, um bloco parado (um painel de tarefas, p.ex.) não voltava mais.
+    if (committed || (stateEvent && currentState !== 'working')) { previewText = ''; return; }
     // (c) residual coberto por QUALQUER das últimas msgs commitadas (não só a última): entre turnos o
     // pane ainda mostra o bloco anterior como "● tail" e o broker reemite -> dropa se já é bolha.
     const p = _norm(pv);

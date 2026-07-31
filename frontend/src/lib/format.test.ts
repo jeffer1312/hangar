@@ -4,6 +4,7 @@ import {
   projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent, resetsIn,
   clusterByPair, sortSessions, bubblesFromTail, ctxWindow, fileKind, fmtBytes, providerName, providerTag,
   summarizeText, summarizeToolInput, summarizeToolResult, toolPhase, toolGroupLabel, toolGroupCounts,
+  splitTodoBlock,
 } from './format';
 import type { ChatEvent, State } from './types';
 
@@ -653,5 +654,29 @@ describe('toolGroupCounts', () => {
   });
   it('lista vazia -> nada', () => {
     expect(toolGroupCounts([])).toBe('');
+  });
+});
+
+describe('splitTodoBlock', () => {
+  const panel = [
+    'Todos (11/13)',
+    '├─ ✓ Avisar back: revisar DDL',
+    '├─ ◐ Virando o store pro BFF',
+    '└─ +3 more (3 completed)',
+  ].join('\n');
+
+  it('separa cabeçalho, árvore e o resto', () => {
+    const out = splitTodoBlock(`Antes\n\n${panel}\n\nDepois`)!;
+    expect(out.head).toBe('Todos (11/13)');
+    expect(out.body.split('\n')).toHaveLength(3);
+    expect(out.rest).toBe('Antes\n\n\nDepois');
+  });
+
+  it('prosa sem painel não casa', () => {
+    expect(splitTodoBlock('Fechei os Todos (11/13) hoje.')).toBeNull();
+  });
+
+  it('cabeçalho sem árvore não casa (pode ser prosa)', () => {
+    expect(splitTodoBlock('Todos (11/13)\nsegue o baile')).toBeNull();
   });
 });
