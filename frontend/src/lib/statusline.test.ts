@@ -63,3 +63,25 @@ describe('parseStatusLine — statusline do Pi', () => {
     expect(f.ctxTotal).toBe(1000000);
   });
 });
+
+describe('setas de reset das janelas de uso', () => {
+  // Linha REAL da sessão Pi/Kimi (2026-07-30): a seta é ↻, não o ↺ do statusline do Claude.
+  // Só o ↺ era aceito -> a sessão mostrava "5h 51%" sem nenhum horário de volta, com a
+  // porcentagem certa do lado: parecia limite sem reset em vez de campo perdido no parse.
+  const KIMI = '🤖 k3-256k (high) │ 📁 pi │ 💬 sessão 28kin/4kout · cache 453k · total 484k ctx 28k/262k'
+    + ' │ ⚡5h:51% ↻54m 📅7d:10% ↻6d19h │ 💵 $0.00 │ ⏱ 2h32m │ 🕐 19:04';
+
+  it('lê o reset escrito com ↻ (Pi/Kimi)', () => {
+    const f = parseStatusLine(KIMI)!;
+    expect(f.fiveHourPct).toBe(51);
+    expect(f.fiveHourReset).toBe('54m');
+    expect(f.weeklyPct).toBe(10);
+    expect(f.weeklyReset).toBe('6d19h');
+  });
+
+  it('continua lendo o reset escrito com ↺ (Claude)', () => {
+    const f = parseStatusLine('🤖 Opus5 │ ⚡5h:46% ↺34m 📅7d:57% ↺sab 18h │ 💵 $1.00')!;
+    expect(f.fiveHourReset).toBe('34m');
+    expect(f.weeklyReset).toBe('sab 18h');
+  });
+});

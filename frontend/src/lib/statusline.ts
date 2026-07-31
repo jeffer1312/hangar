@@ -98,15 +98,17 @@ export function parseStatusLine(raw: string | null | undefined): StatusFields | 
     if (isFinite(c)) out.costUsd = c;
   }
 
-  // ⚡5h:46% ↺34m
-  const fiveH = raw.match(/⚡[^│]*?(\d+)\s*%\s*(?:↺\s*([^│⚡📅🕐]+))?/u);
+  // ⚡5h:46% ↺34m — a seta vem em DUAS formas: ↺ (statusline do Claude) e ↻ (a do Pi/Kimi, medido
+  // 2026-07-30: "⚡5h:51% ↻54m 📅7d:10% ↻6d19h"). Aceitar so uma deixava toda sessao Pi sem o
+  // horario de volta, com a porcentagem certa do lado — parecia limite sem reset, nao bug.
+  const fiveH = raw.match(/⚡[^│]*?(\d+)\s*%\s*(?:[↺↻]\s*([^│⚡📅🕐]+))?/u);
   if (fiveH) {
     out.fiveHourPct = clampPct(parseInt(fiveH[1], 10));
     if (fiveH[2]) out.fiveHourReset = fiveH[2].trim();
   }
 
   // 📅7d:57% ↺sab 18h·2d1h
-  const weekly = raw.match(/📅[^│]*?(\d+)\s*%\s*(?:↺\s*([^│🕐]+))?/u);
+  const weekly = raw.match(/📅[^│]*?(\d+)\s*%\s*(?:[↺↻]\s*([^│🕐]+))?/u);
   if (weekly) {
     out.weeklyPct = clampPct(parseInt(weekly[1], 10));
     if (weekly[2]) out.weeklyReset = weekly[2].trim();
