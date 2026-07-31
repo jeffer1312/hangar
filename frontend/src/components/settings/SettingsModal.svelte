@@ -90,14 +90,54 @@
   // Sair da Aparencia (ou ir pro celular) desliga: a caixinha e pequena demais pra tela de motores, e
   // no celular nao ha "atras" pra revelar.
   $effect(() => { if (telaAtual !== 'aparencia' || !isDesktop) aoVivo = false; });
+
+  // ── Arrastar a caixinha pelo cabecalho ────────────────────────────────────────────────────────
+  // Mesmo desenho do Canvas (dragStart/dragMove/dragEnd com setPointerCapture): a faixa de arrasto e
+  // so o cabecalho, porque o corpo e cheio de slider — arrastar por ele viraria briga com o controle.
+  const POS_KEY = 'cp_aparencia_vivo_pos';
+  let pos = $state<{ x: number; y: number } | null>(lerPos());
+  function lerPos(): { x: number; y: number } | null {
+    try {
+      const cru = localStorage.getItem(POS_KEY);
+      if (!cru) return null;
+      const p = JSON.parse(cru);
+      return typeof p?.x === 'number' && typeof p?.y === 'number' ? p : null;
+    } catch { return null; }
+  }
+  let drag: { dx: number; dy: number } | null = null;
+  let caixaEl = $state<HTMLElement | null>(null);
+  function dragStart(e: PointerEvent) {
+    if (!caixaEl) return;
+    const r = caixaEl.getBoundingClientRect();
+    drag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }
+  function dragMove(e: PointerEvent) {
+    if (!drag || !caixaEl) return;
+    const r = caixaEl.getBoundingClientRect();
+    // Prende dentro da janela: solto num canto fora da tela, a caixinha so sairia dali por
+    // localStorage na mao. Deixa 40px de cabecalho sempre alcancavel.
+    const x = Math.min(Math.max(0, e.clientX - drag.dx), window.innerWidth - Math.min(r.width, 120));
+    const y = Math.min(Math.max(0, e.clientY - drag.dy), window.innerHeight - 40);
+    pos = { x, y };
+  }
+  function dragEnd() {
+    if (!drag) return;
+    drag = null;
+    try { if (pos) localStorage.setItem(POS_KEY, JSON.stringify(pos)); } catch { /* modo privado */ }
+  }
 </script>
 
 {#if aoVivo}
   <!-- Caixinha: `fixed` no canto, SEM backdrop — o clique fora vai pro app, que e o ponto. Fecha so
        no ✕ (ou voltando pro painel), como pedido. Nao usa BottomSheet: aquele e um dialogo modal com
        veu e trap de foco, o oposto do que se quer aqui. -->
-  <div class="vivo" role="dialog" aria-label="Aparência — ao vivo">
-    <header class="vivo-head">
+  <div class="vivo" role="dialog" aria-label="Aparência — ao vivo" bind:this={caixaEl}
+       style={pos ? `left: ${pos.x}px; top: ${pos.y}px; right: auto; bottom: auto;` : ''}>
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <header class="vivo-head" onpointerdown={dragStart} onpointermove={dragMove}
+            onpointerup={dragEnd} onpointercancel={dragEnd}>
       <h2 class="vivo-titulo">Aparência</h2>
       <button class="vivo-btn" onclick={() => (aoVivo = false)} title="Voltar ao painel">⤢</button>
       <button class="vivo-btn" onclick={onFechar} aria-label="Fechar">✕</button>
@@ -228,13 +268,19 @@
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
     overflow: hidden;
   }
+  /* Faixa de arrasto: `cursor: move` e `touch-action: none` (sem o segundo, o navegador rola a pagina
+     em vez de entregar o pointermove). Os botoes de dentro voltam ao cursor normal. */
   .vivo-head {
     display: flex;
     align-items: center;
     gap: var(--space-2);
     padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
     border-bottom: 1px solid var(--border-subtle);
+    cursor: move;
+    touch-action: none;
+    user-select: none;
   }
+  .vivo-head .vivo-btn { cursor: pointer; }
   .vivo-titulo {
     flex: 1;
     margin: 0;

@@ -1448,7 +1448,7 @@
       /* A escala de largura (Aparencia -> Texto da conversa) entra aqui tambem: sem ela, abrir o
          painel de contexto ignorava a escolha do usuario e a coluna voltava ao teto cheio — o
          slider parecia nao funcionar justamente na tela mais larga, que e onde ele mais importa. */
-      max-width: min(calc(1200px * var(--cp-width-scale, 1)), 100%);
+      max-width: min(calc(min(1200px, 100%) * var(--cp-width-scale, 1)), 100%);
       margin-inline: auto;
     }
     .chat-screen.with-context .bottom-dock { right: var(--ctx-w); }
@@ -1469,11 +1469,15 @@
   }
   /* Com o painel aberto o teto do texto também sobe por degraus: numa Full HD o 1200 fixo deixava
      ~225px de vazio de cada lado. Medido em 1920: 1440 usa o espaço e ainda sobra respiro. */
+  /* Os dois degraus abaixo NASCERAM sem a escala de largura, e sao mais especificos que a regra que a
+     aplica — entao acima de 1600px o slider "Largura da coluna" nao fazia nada: medido em 2200px de
+     janela, 60 e 150 davam os mesmos 1440px. Mesma forma das outras: a escala multiplica o que a
+     coluna teria (o menor entre o degrau e o espaco), limitada ao espaco real. */
   @media (min-width: 1600px) {
-    .chat-screen.with-context :global(.messages-inner) { max-width: min(1320px, 100%); }
+    .chat-screen.with-context :global(.messages-inner) { max-width: min(calc(min(1320px, 100%) * var(--cp-width-scale, 1)), 100%); }
   }
   @media (min-width: 1900px) {
-    .chat-screen.with-context :global(.messages-inner) { max-width: min(1440px, 100%); }
+    .chat-screen.with-context :global(.messages-inner) { max-width: min(calc(min(1440px, 100%) * var(--cp-width-scale, 1)), 100%); }
   }
 
   /* Aviso flutuante "interação só pela TUI": acima do dock (bottom = altura do dock + gap, via JS).
