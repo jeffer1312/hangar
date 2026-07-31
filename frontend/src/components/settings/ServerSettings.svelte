@@ -71,11 +71,7 @@
     vozErro = '';
     carregandoVozes = true;
     listarVozesTts()
-      .then((v) => {
-        vozes = v;
-        const atual = store.valorAtual('elevenlabs_voice_id');
-        if (!atual && v[0]) store.setRascunho('elevenlabs_voice_id', v[0].id);
-      })
+      .then((v) => { vozes = v; })
       .catch((e: Error) => { vozErro = e.message; })
       .finally(() => { carregandoVozes = false; });
     // Saldo e extra, nao pode quebrar a tela: falha aqui fica muda, a voz e o principal.
@@ -173,7 +169,7 @@
           <select
             class="campo-select"
             aria-label="Voz"
-            value={store.valorAtual('elevenlabs_voice_id')}
+            value={store.valorAtual('elevenlabs_voice_id') || vozes[0]?.id || ''}
             onchange={(e) => store.setRascunho('elevenlabs_voice_id', e.currentTarget.value)}
           >
             {#each vozes as v (v.id)}<option value={v.id}>{v.nome}</option>{/each}
