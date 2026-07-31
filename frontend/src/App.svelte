@@ -15,6 +15,7 @@
   import Compare from './screens/Compare.svelte';
   import DesktopShell from './components/DesktopShell.svelte';
   import SettingsModal from './components/settings/SettingsModal.svelte';
+  import TtsBar from './components/TtsBar.svelte';
 
   // Deep-link do push (feature #5): a notif abre '/?server=<id>&session=<name>' — o router so olha
   // window.location.hash, entao sem isto os query params eram ignorados e sempre caia na lista.
@@ -413,6 +414,12 @@
        A guarda de rota nao e detalhe: loading/login/costs/archive/compare — as rotas que saem antes
        do branch `isDesktop` —, entao sem ela um #/?config=avancado desenharia o painel por cima da
        tela de boot e dispararia fetch sem credencial. -->
+  <!-- Player de TTS: montado UMA vez aqui, pelo mesmo motivo do SettingsModal logo abaixo — o App
+       nunca desmonta, enquanto o Chat e remontado a cada troca de sessao pelo {#key} acima. Dentro
+       do Chat o audio morreria em toda troca, e o proprio elemento perderia o destravamento do
+       gesto do iOS. -->
+  <TtsBar />
+
   {#if cfg && telaEfetiva && route.name !== 'login' && route.name !== 'loading'}
     <SettingsModal
       tela={telaEfetiva}
