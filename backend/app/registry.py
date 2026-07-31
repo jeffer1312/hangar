@@ -22,6 +22,7 @@ from app.adapters.codex import adapter as codex_adapter
 from app.adapters.codex.appserver import AppServerClient
 from app.askquestion import clear_pending_askq
 from app.state import classify, _live_spinner, rate_limit_reset, status_line as _pane_status
+from app.statusline import read as _sidecar_status
 from app.hook_state import hook_state
 from app.planprog import plan_progress
 # As funcoes de /proc vivem no procinfo.py — e o unico ponto do backend preso ao Linux.
@@ -848,7 +849,11 @@ class SessionRegistry:
                 self._label_cache.pop(info.name, None)
         for info in infos:
             if getattr(info, "provider", "claude") != "codex":
-                info.status_line = self._status_cache.get(info.name, (0.0, None))[1]
+                # Sidecar antes do pane: a captura traz a linha ja CORTADA na largura da janela
+                # (quem renderiza trunca antes de imprimir, ver app/statusline.py). Ler o arquivo e
+                # muito mais barato que a captura — nao entra no budget de forks acima.
+                info.status_line = (_sidecar_status(_sid(info.jsonl))
+                                    or self._status_cache.get(info.name, (0.0, None))[1])
                 # So preenche o buraco do fast-path: quem foi classificada pelo pane ja tem label
                 # fresco (e idle de verdade fica sem label — o cache so vale se ainda working).
                 # getattr: fakes de teste nao tem o campo.
