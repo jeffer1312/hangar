@@ -4,6 +4,7 @@
   import AppearanceSettings from './AppearanceSettings.svelte';
   import ServerSettings from './ServerSettings.svelte';
   import EnginesSettings from './EnginesSettings.svelte';
+  import { criarConfigServidor } from '../../lib/serverConfig.svelte';
   import type { TelaConfig } from '../../lib/configRoute';
   import type { Server } from '../../lib/auth';
 
@@ -17,6 +18,16 @@
     onFechar: () => void;
   }
   let { tela, alvo, nomeAlvo, semServidor, onIrPara, onVoltar, onFechar }: Props = $props();
+
+  const store = criarConfigServidor(() => alvo);
+
+  // Depender do ID, nao do objeto: `listServers()` faz JSON.parse a cada chamada (auth.ts), entao
+  // `alvo` e um objeto NOVO a cada recomputo — um efeito que dependesse dele recarregaria (e
+  // zeraria o rascunho) a cada troca de tela. O `?? '-'` cobre o caso sem alvo (servidor ativo).
+  $effect(() => {
+    alvo?.id ?? '-';
+    store.carregar();
+  });
 
   const TITULO: Record<TelaConfig, string> = {
     root: 'Configurações',
@@ -93,7 +104,7 @@
   {:else if tela === 'motores'}
     <EnginesSettings targetServer={alvo} />
   {:else}
-    <ServerSettings targetServer={alvo} onOpenMotores={() => onIrPara('motores')} />
+    <ServerSettings {store} secao={tela} />
   {/if}
 </BottomSheet>
 
