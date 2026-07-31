@@ -12,6 +12,15 @@
   } from '../../lib/background';
   import { sidebarPrefs, type SidebarHeight } from '../../lib/sidebarPrefs.svelte';
 
+  interface Props {
+    /** Desktop: oferece o botao "Ver ao vivo", que troca o painel pela caixinha flutuante. */
+    podeAoVivo?: boolean;
+    onVerAoVivo?: () => void;
+    /** Ja estamos DENTRO da caixinha: a previa embutida sai (o chat de verdade esta a vista atras). */
+    semPrevia?: boolean;
+  }
+  let { podeAoVivo = false, onVerAoVivo, semPrevia = false }: Props = $props();
+
   let leitura = $state<ReadMode>(getReadMode());
   let paineis = $state<PanelStyle>(getPanelStyle());
   let solidez = $state(getReadAlpha());
@@ -81,10 +90,17 @@
        celular nao ha "atras" nenhum — o painel e a tela). Sticky pra ela continuar a vista enquanto
        se rola ate os sliders la embaixo. -->
   <div class="ap-amostra">
-    <AparenciaAmostra />
-    <button class="ap-padrao" onclick={voltarAoPadrao} disabled={!temAjuste}>
-      Voltar ao padrão
-    </button>
+    {#if !semPrevia}<AparenciaAmostra />{/if}
+    <div class="ap-acoes">
+      {#if podeAoVivo}
+        <!-- Desktop: a previa embutida e uma amostra; isto revela a conversa DE VERDADE atras,
+             encolhendo o painel numa caixinha no canto. -->
+        <button class="ap-padrao" onclick={onVerAoVivo}>Ver ao vivo</button>
+      {/if}
+      <button class="ap-padrao" onclick={voltarAoPadrao} disabled={!temAjuste}>
+        Voltar ao padrão
+      </button>
+    </div>
   </div>
 
   <div class="ap-row">
@@ -207,7 +223,9 @@
     padding-bottom: var(--space-2);
     background: var(--glass-panel, var(--bg-surface));
   }
+  .ap-acoes { display: flex; gap: var(--space-2); }
   .ap-padrao {
+    flex: 1;
     width: 100%;
     height: 34px;
     border: 1px solid var(--border-subtle);
