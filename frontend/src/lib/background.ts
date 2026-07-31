@@ -50,10 +50,13 @@ export function getSurfaceSolid(): number {
 export function setSurfaceSolid(v: number): void {
   const n = Math.max(0, Math.min(100, Math.round(v)));
   try { localStorage.setItem(SOLID_KEY, String(n)); } catch { /* modo privado */ }
-  aplicarScrim();
+  // `n` vai DIRETO, nao relido do storage (mesma convencao do setBgScrim): a gravacao acima pode
+  // falhar calada (modo privado, cota), e ai a releitura devolveria o valor ANTIGO — o numero do
+  // slider mudava na tela e nada mais mudava, que le como travado.
+  aplicarScrim(undefined, n);
 }
 
-function aplicarScrim(t = getBgScrim()): void {
+function aplicarScrim(t = getBgScrim(), solidez = getSurfaceSolid()): void {
   if (typeof document === 'undefined') return;
   // t alto = mais imagem = menos véu. UNIFORME e chegando a tapar: é o que o compositor do terminal
   // faz (kitty background_opacity), e era o que faltava — parando em 0,88 sobrava foto atravessando o
@@ -70,7 +73,7 @@ function aplicarScrim(t = getBgScrim()): void {
   // ganham o degrau do slider Solidez. Sem degrau nenhum elas somem no vidro e a tela vira uma
   // superfície só; com degrau demais voltam a ser recorte chapado — é o mesmo dilema do véu, uma
   // camada acima, e por isso tem controle próprio em vez de um número fixo aqui.
-  const caixa = Math.min(1, painel + getSurfaceSolid() / 100);
+  const caixa = Math.min(1, painel + solidez / 100);
   const raiz = document.documentElement;
   raiz.style.setProperty('--cp-scrim-topo', topo.toFixed(3));
   raiz.style.setProperty('--cp-scrim-base', base.toFixed(3));
@@ -327,15 +330,18 @@ export function setMedidaTexto(m: MedidaTexto, v: number): void {
     if (n === 100) localStorage.removeItem(TEXTO_KEYS[m]);
     else localStorage.setItem(TEXTO_KEYS[m], String(n));
   } catch { /* modo privado */ }
-  aplicarTexto();
+  // Mesmo motivo do setSurfaceSolid: gravacao que falha calada nao pode deixar a tela no valor
+  // velho enquanto o slider mostra o novo.
+  aplicarTexto({ [m]: n });
 }
 
-function aplicarTexto(): void {
+function aplicarTexto(over?: Partial<Record<MedidaTexto, number>>): void {
   if (typeof document === 'undefined') return;
+  const val = (m: MedidaTexto) => over?.[m] ?? getMedidaTexto(m);
   const raiz = document.documentElement;
-  raiz.style.setProperty('--cp-text-scale', (getMedidaTexto('size') / 100).toFixed(3));
-  raiz.style.setProperty('--cp-lh-scale', (getMedidaTexto('lh') / 100).toFixed(3));
-  raiz.style.setProperty('--cp-width-scale', (getMedidaTexto('width') / 100).toFixed(3));
+  raiz.style.setProperty('--cp-text-scale', (val('size') / 100).toFixed(3));
+  raiz.style.setProperty('--cp-lh-scale', (val('lh') / 100).toFixed(3));
+  raiz.style.setProperty('--cp-width-scale', (val('width') / 100).toFixed(3));
 }
 
 // Chamado no boot junto com applyBg: sem isto as escolhas só valeriam depois de mexer nelas.
