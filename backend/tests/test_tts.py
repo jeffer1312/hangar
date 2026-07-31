@@ -77,3 +77,28 @@ def test_comando_local_com_saida_vazia_levanta_502(monkeypatch, tmp_path):
     with pytest.raises(tts.TtsError) as e:
         tts.sintetizar("oi", "voz", "local")
     assert e.value.status == 502
+
+
+def test_hash_usa_voz_efetiva_nao_a_crua(monkeypatch, tmp_path):
+    # voz="" com elevenlabs_voice_id X e voz="" com elevenlabs_voice_id Y tem que gerar hashes
+    # DIFERENTES — senao trocar a voz configurada continua servindo audio da voz antiga do cache.
+    monkeypatch.setattr(tts, "_base_cache", lambda: tmp_path)
+    monkeypatch.setattr(tts, "_baixar_elevenlabs", lambda t, v: b"MP3")
+
+    config = {"elevenlabs_api_key": "chave", "elevenlabs_voice_id": "voz_x"}
+    monkeypatch.setattr(tts.runtime_config, "get", lambda campo: config.get(campo, ""))
+    h1, _ = tts.sintetizar("oi", "", "elevenlabs")
+
+    config["elevenlabs_voice_id"] = "voz_y"
+    h2, _ = tts.sintetizar("oi", "", "elevenlabs")
+
+    assert h1 != h2
+
+
+def test_comando_local_mal_formado_levanta_ttserror(monkeypatch, tmp_path):
+    monkeypatch.setattr(tts, "_base_cache", lambda: tmp_path)
+    monkeypatch.setattr(tts.runtime_config, "get",
+                        lambda campo: 'echo "aspas desbalanceadas' if campo == "tts_local_cmd" else "")
+    with pytest.raises(tts.TtsError) as e:
+        tts.sintetizar("oi", "voz", "local")
+    assert e.value.status == 503

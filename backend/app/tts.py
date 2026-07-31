@@ -89,8 +89,14 @@ def _pedir(caminho: str, dados: bytes | None = None) -> bytes:
         raise TtsError(502, f"falha ao contatar a ElevenLabs: {e}")
 
 
+def _voz_efetiva(voz: str) -> str:
+    """Resolve a voz de fato usada: explicita > configurada > padrao. UM lugar so — hash_de e
+    _baixar_elevenlabs tem que concordar em qual voz e essa, senao o cache fica preso na voz antiga
+    quando elevenlabs_voice_id muda."""
+    return voz or (runtime_config.get("elevenlabs_voice_id") or "").strip() or VOZ_PADRAO
+
+
 def _baixar_elevenlabs(texto: str, voz: str) -> bytes:
-    voz = voz or (runtime_config.get("elevenlabs_voice_id") or "").strip() or VOZ_PADRAO
     audio = _pedir(f"/text-to-speech/{voz}?output_format=mp3_44100_128",
                    corpo_elevenlabs(texto, MODELO_PADRAO))
     if not audio:
@@ -105,10 +111,14 @@ def _baixar_local(texto: str) -> bytes:
     # shell=False e argv por shlex: o texto vai pelo STDIN, nunca na linha de comando, entao nada do
     # que foi selecionado no chat pode virar argumento.
     try:
-        p = subprocess.run(shlex.split(cmd), input=texto.encode("utf-8"),
+        partes = shlex.split(cmd)
+    except ValueError as e:
+        raise TtsError(503, f"comando de voz local mal formado (tts_local_cmd): {e}")
+    try:
+        p = subprocess.run(partes, input=texto.encode("utf-8"),
                            capture_output=True, timeout=TIMEOUT_LOCAL)
     except FileNotFoundError:
-        raise TtsError(502, f"comando de voz local nao encontrado: {shlex.split(cmd)[0]}")
+        raise TtsError(502, f"comando de voz local nao encontrado: {partes[0]}")
     except subprocess.TimeoutExpired:
         raise TtsError(504, f"comando de voz local passou de {TIMEOUT_LOCAL}s")
     if p.returncode != 0:
@@ -138,6 +148,10 @@ def _limpar_antigos(base: Path) -> None:
 
 def sintetizar(texto: str, voz: str, provedor: str) -> tuple[str, bool]:
     """Devolve (hash, veio_do_cache). Levanta TtsError."""
+    # Voz resolvida ANTES do hash: "" so seria a voz efetiva por acidente, e um hash preso na string
+    # vazia sobrevive a troca de elevenlabs_voice_id, servindo audio da voz antiga do cache calado.
+    if provedor != "local":
+        voz = _voz_efetiva(voz)
     h = hash_de(texto, voz, provedor)
     base = _base_cache()
     base.mkdir(parents=True, exist_ok=True)
