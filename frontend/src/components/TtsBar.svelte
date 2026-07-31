@@ -62,7 +62,12 @@
     left: 50%;
     transform: none;
     bottom: calc(var(--cp-dock-h, 150px) + 10px);
-    margin-left: min(-50vw + 8px, -320px);
+    /* margin-left precisa ser -metade da largura da barra: -50vw+8px no celular (largura ~100vw-16px),
+       -320px no desktop (metade dos 640px do width max). Os dois numeros sao negativos, entao o
+       menor MODULO (mais perto de zero) e quem da a metade certa da largura real — e isso e o
+       maior dos dois, nao o menor: max(-50vw + 8px, -320px). Com min(), no celular a barra pega
+       -320px (a metade do desktop) e sai cortada pela borda esquerda da tela. */
+    margin-left: max(-50vw + 8px, -320px);
     width: min(calc(100vw - 16px), 640px);
     display: flex;
     align-items: center;
