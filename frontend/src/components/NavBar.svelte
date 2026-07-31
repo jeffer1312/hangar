@@ -239,8 +239,8 @@
      no Chromium o liquid ainda ganha (mesma especificidade, ordem decide) e mantem a refracao. */
   :global(html[data-bg='image']) .navbar::before {
     background: linear-gradient(to bottom,
-      var(--glass-bg-solid) 0%,
-      var(--glass-bg-solid) calc(100% - var(--navbar-fade)),
+      var(--chrome-bg) 0%,
+      var(--chrome-bg) calc(100% - var(--navbar-fade)),
       transparent 100%);
   }
   /* Chromium (data-liquid): refracao SVG real. O blur fica — Chromium não tem o bug do WebKit. */

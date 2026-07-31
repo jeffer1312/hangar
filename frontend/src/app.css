@@ -45,6 +45,10 @@
   /* Glass (composer / navbar / sidebar) — translucido + blur por cima do conteudo */
   --glass-bg:        rgba(38,36,44,0.46);    /* frosted iOS: tint neutro limpo (warm embarrava) */
   --glass-bg-solid:  rgba(24,23,28,0.94);    /* fallback durante o scroll (sem blur) */
+  /* Vidro do CHROME fino (navbar, composer). Igual ao --glass-bg-solid por padrao; com papel de
+     parede ele entra no veu do slider Solidez e os PAINEIS nao — sem blur no WebKit, painel
+     translucido vira vidro de verdade e o que esta atras fica legivel atraves dele. */
+  --chrome-bg:       var(--glass-bg-solid);
   --glass-border:    rgba(255,255,255,0.10);
   --glass-highlight: rgba(255,255,255,0.16);
   --glass-specular:  rgba(255,255,255,0.30);  /* brilho de borda (rim) — o que "vende" o glass */
@@ -275,14 +279,20 @@ html[data-bg="image"] {
   --surface-raised: color-mix(in srgb, var(--bg-elevated) calc(var(--cp-surface-alpha, 0.87) * 100%), transparent);
   --surface-inset:  color-mix(in srgb, var(--bg-base) calc(var(--cp-surface-alpha, 0.87) * 100%), transparent);
   --surface-card:   color-mix(in srgb, var(--bg-surface) calc(var(--cp-surface-alpha, 0.87) * 100%), transparent);
-  /* O CHROME (navbar, composer — e, no WebKit, o vidro dos paineis) tambem entra. Sem isto, no iPhone
-     a conversa fica sobre a foto e so essas duas faixas continuam solidas: e a unica coisa na tela que
-     nao acompanha. Anda com o slider Solidez, nao com um valor fixo, porque aqui o custo e real —
-     sem blur (proibido no WebKit: bug do retangulo preto no scroll) o texto que rola por baixo
-     aparece atraves da faixa. Quem quiser a foto no topo aceita isso; quem nao quiser, sobe o slider. */
-  --glass-bg-solid: rgba(24, 23, 28, var(--cp-surface-alpha, 0.94));
+  /* So o CHROME (navbar e composer) entra no veu — NAO os paineis. Sem isto, no iPhone a conversa
+     fica sobre a foto e essas duas faixas continuam solidas: a unica coisa na tela que nao acompanha.
+     Anda com o slider Solidez, e o custo esta comentado no --chrome-bg la em cima.
+     `--glass-bg-solid` fica FORA daqui de proposito: ele e o vidro dos PAINEIS no WebKit (folha,
+     modal, sidebar), onde nao ha blur nenhum e a alfa e a unica coisa que separa o painel do que
+     esta atras. Amarrar ele ao slider (tentei) deixou o modal de git no iPhone transparente a ponto
+     de dar pra LER a lista de sessoes atraves dele. */
+  /* color-mix, NAO `rgba(cor, var(--alfa))`: a segunda forma some inteira se o engine nao resolver
+     a var dentro do rgba legado — declaracao invalida vira fundo TRANSPARENTE, e no iPhone o topo e
+     o composer ficaram sem material nenhum. O color-mix e a mesma construcao dos tokens --surface-*,
+     que ja foi vista funcionando naquele aparelho. */
+  --chrome-bg: color-mix(in srgb, rgb(24, 23, 28) calc(var(--cp-surface-alpha, 0.94) * 100%), transparent);
 }
-html[data-theme="light"][data-bg="image"] { --glass-bg-solid: rgba(255, 253, 250, var(--cp-surface-alpha, 0.96)); }
+html[data-theme="light"][data-bg="image"] { --chrome-bg: color-mix(in srgb, rgb(255, 253, 250) calc(var(--cp-surface-alpha, 0.96) * 100%), transparent); }
 html[data-theme="light"][data-bg="image"] { --glass-panel: rgba(255, 253, 250, var(--cp-panel-alpha, 0.78)); }
 html[data-bg="image"] body::after {
   content: "";

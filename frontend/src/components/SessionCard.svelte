@@ -184,7 +184,10 @@
   <!-- inert enquanto fechado: fica ATRAS da row (z-order) e, sem isto, seguia focavel por Tab e na
        arvore de a11y — Enter deletava sem feedback visivel, e AT-click por coordenada caia na row.
        Teclado/leitor de tela usam os botoes .kbd-only da row-right (o swipe e pointer-only). -->
-  <div class="swipe-actions" inert={offset !== OPEN}>
+  <!-- `hidden` (visibilidade, nao display) quando a linha esta no lugar: a linha agora e
+       TRANSLUCIDA com papel de parede, e a trilha atras dela vazaria pela frente — inclusive a
+       faixa vermelha do Excluir. Sai junto do `inert`, que ja escondia do teclado/leitor. -->
+  <div class="swipe-actions" class:oculta={offset === 0} inert={offset !== OPEN}>
     {#if session.cwd}
       <button class="act git" onclick={() => { offset = 0; onGit?.(); }} aria-label="Git de {session.name}">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -437,6 +440,9 @@
     bottom: 0;
     display: flex;
   }
+  /* opacity, nao display:none: o layout da trilha (3 botoes de 64px) precisa continuar medido pro
+     OPEN bater com a largura real. */
+  .swipe-actions.oculta { opacity: 0; }
   .swipe-actions .act {
     width: 64px;
     min-width: 64px;
@@ -461,7 +467,10 @@
     gap: var(--space-3);
     padding: var(--space-3) var(--space-4);
     min-height: 60px;
-    background: var(--bg-base);
+    /* Superficie de leitura da lista: entra no veu do papel de parede como o resto (CLAUDE.md,
+       "Transparencia"). Sem isto a lista inteira virava uma pilha de retangulos pretos sobre a foto,
+       que era o unico lugar do celular onde ela nao aparecia. */
+    background: var(--surface-inset);
     cursor: pointer;
     touch-action: pan-y;
     transition: transform 200ms var(--ease-out), background 160ms ease-out;

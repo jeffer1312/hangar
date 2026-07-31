@@ -995,7 +995,7 @@
     /* WebKit/iOS: SEM backdrop-filter. Tira o blur(40px) e com ele o bug #89475 (bloco preto no
        streaming/momentum) de vez — sem filtro, nada pra promover/corromper. Fundo quase opaco = o
        look de "vidro" que antes só aparecia no scroll, agora permanente. */
-    background: var(--glass-bg-solid);
+    background: var(--chrome-bg);   /* --chrome-bg = o mesmo valor, mas entra no veu quando ha papel de parede (app.css) */
   }
   /* Chromium (data-liquid): refracao SVG real (liquid glass). O blur fica aqui — Chromium não tem o
      bug do WebKit. Fundo transparente pra refração aparecer. */
