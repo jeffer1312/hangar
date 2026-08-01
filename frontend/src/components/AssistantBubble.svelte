@@ -22,6 +22,15 @@
   // Midia remota (URL http) -> preview inline; nao depende do backend/sessionName.
   const mediaRefs = $derived(preview ? [] : parseMediaUrls(text));
 
+  // Máscara do topo SÓ com transbordo real — mesmo padrão do .bc-body.masked (BoardCard:333). Ligada
+  // sempre, ela apagava a 1ª linha de toda prévia curta, onde não há corte nenhum pra disfarçar.
+  let plainEl = $state<HTMLElement | null>(null);
+  let plainOverflows = $state(false);
+  $effect(() => {
+    void text; // prévia é full-replace ~7×/s -> remede a cada troca
+    plainOverflows = !!plainEl && plainEl.scrollHeight > plainEl.clientHeight + 4;
+  });
+
   function formatTime(ts: number | null | undefined): string {
     if (!ts) return '';
     return new Date(ts * 1000).toLocaleTimeString('pt-BR', {
@@ -64,7 +73,7 @@
 
 <!-- ponytail: sem long-press aqui de proposito — o timer de 500ms roubava o gesto de SELECIONAR
      texto do iOS (segurar abria a sheet de encaminhar). As acoes moram na linha do horario. -->
-<div class="assistant-msg" class:noanim={!animate}>
+<div class="assistant-msg" class:noanim={!animate} class:preview>
   {#if preview}
     <!-- Preview ao vivo: texto PLANO (markdown so no snap final canonico, pra nao piscar **/code-fence
          meio-aberto) + caret. Mesma casca da bolha real -> swap quase invisivel. -->
@@ -85,7 +94,7 @@
            cima, ver o CSS), e num flex container um nó de texto SOLTO vira item anônimo próprio —
            o caret virava um segundo item, numa linha só dele, em vez de piscar colado na última
            palavra. Com um item único, o conteúdo volta a fluir inline lá dentro. -->
-      <div class="prose plain"><span class="live">{todo ? todo.rest : text}<span class="caret" aria-hidden="true"></span></span></div>
+      <div class="prose plain" class:masked={plainOverflows} bind:this={plainEl}><span class="live">{todo ? todo.rest : text}<span class="caret" aria-hidden="true"></span></span></div>
     {/if}
   {:else}
     <!-- eslint-disable-next-line svelte/no-at-html-tags -->
@@ -128,6 +137,11 @@
 
   /* Historico remontado (paginacao pra cima / re-ancorar da janela): entra parado. */
   .assistant-msg.noanim { animation: none; }
+
+  /* A prévia costuma entrar logo abaixo de um ToolGroup, que fecha com 4px (ToolGroup.svelte:81).
+     Em texto plano do terminal — sem parágrafo, sem markdown — esses 4px leem como zero e a prévia
+     fica grudada no card. Só na prévia: entre mensagens normais o margin-bottom já dá o respiro. */
+  .assistant-msg.preview { margin-top: var(--space-2); }
 
   /* Ações da mensagem (copiar / encaminhar) na linha do horário: no toque ficam SEMPRE visíveis
      (é a única forma de encaminhar agora que o long-press saiu); no desktop aparecem no hover. */
@@ -340,8 +354,9 @@
     white-space: pre-wrap;
     display: flex; flex-direction: column; justify-content: flex-end;
     max-height: 10lh; overflow: hidden;
-    mask-image: linear-gradient(to bottom, transparent, black 1.6lh);
   }
+  /* Só quando há corte de verdade (class:masked). Ver o comentário do plainOverflows no script. */
+  .prose.plain.masked { mask-image: linear-gradient(to bottom, transparent, black 1.6lh); }
 
   /* Painel de tarefas do TUI dentro do preview: uma linha fechada, arvore ao abrir. SEM caixa —
      nada no fluxo do chat tem superficie propria (bolha do assistente e texto solto, ToolGroup e
