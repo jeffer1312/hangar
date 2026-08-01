@@ -27,8 +27,8 @@ def carregar():
 
 # Uma janela por sessão, todas no MESMO pid (kitty -1). Títulos = basename do cwd, como o rice faz.
 JANELAS_KITTY1 = [
-    {"pid": 63482, "class": "kitty", "title": "my-service", "address": "0xAAA"},
-    {"pid": 63482, "class": "kitty", "title": "my-org-web", "address": "0xBBB"},
+    {"pid": 63482, "class": "kitty", "title": "servicos-api", "address": "0xAAA"},
+    {"pid": 63482, "class": "kitty", "title": "app-web", "address": "0xBBB"},
     {"pid": 63482, "class": "kitty", "title": "claude-cockpit", "address": "0xCCC"},
     {"pid": 63482, "class": "kitty", "title": "jefferson", "address": "0xDDD"},
 ]
@@ -39,10 +39,10 @@ ARVORE = {2324949: 2324733, 2324733: 63482, 615602: 615093, 615093: 63482,
           900001: 900000, 900000: 71001}
 
 CLIENTES = {"claude-cockpit-2": [2324949], "jefferson": [615602],
-            "my-org-web": [2562331], "my-service": [2606971]}
+            "app-web": [2562331], "servicos-api": [2606971]}
 
 TITULOS = {"claude-cockpit-2": "claude-cockpit", "jefferson": "jefferson",
-           "my-org-web": "my-org-web", "my-service": "my-service"}
+           "app-web": "app-web", "servicos-api": "servicos-api"}
 
 
 def montar(mod, janelas, clientes=None, titulos=None):
@@ -57,7 +57,7 @@ def main() -> int:
 
     # 1. O bug: 4 janelas num pid só, cada sessão tem que achar a SUA.
     montar(mod, JANELAS_KITTY1)
-    esperado = {"my-service": "0xAAA", "my-org-web": "0xBBB",
+    esperado = {"servicos-api": "0xAAA", "app-web": "0xBBB",
                 "claude-cockpit-2": "0xCCC", "jefferson": "0xDDD"}
     for sessao, addr in esperado.items():
         obtido = mod.find_window(sessao)

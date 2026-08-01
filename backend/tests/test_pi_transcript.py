@@ -235,7 +235,7 @@ def test_wellformed_emoji_survives_untouched():
 
 
 # ── contexto de hook colado na mensagem do usuario ────────────────────────────────────────────
-# Caso REAL (sessao my-org-web, 2026-07-30): a extensao claude-hooks-adapter.ts roda os hooks do
+# Caso REAL (numa sessao real, 2026-07-30): a extensao claude-hooks-adapter.ts roda os hooks do
 # Claude dentro do Pi, e o Pi cola o texto devolvido no inicio da mensagem do usuario. A bolha do app
 # mostrava "[skill-suggester] ..." como se o usuario tivesse digitado.
 _CTX = ("[skill-suggester] Prompt casa com skills instaladas que o usuario costuma esquecer:\n"

@@ -4,7 +4,7 @@ Quem desenha a statusline (o script do Claude Code, a extensao rich-status-line 
 texto na largura da janela ANTES de imprimir. Numa janela de 99 colunas a linha morre em
 "💬 sessao 568kin/101kout · cache…": some a janela de contexto, some ⚡5h/📅7d, some o custo. O app
 lia isso do pane e herdava o corte — o anel de contexto ficava "medicao indisponivel" so porque o
-terminal estava estreito (medido 2026-07-30 na sessao my-org-web).
+terminal estava estreito (medido 2026-07-30 numa sessão real).
 
 Contrato: quem RENDERIZA a linha grava a versao inteira em
 `<config>/.claude-pocket-status/<stem>.json` = {"line": str, "ts": epoch}, mesma chave dos outros

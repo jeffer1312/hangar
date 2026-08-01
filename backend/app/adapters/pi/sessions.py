@@ -39,7 +39,7 @@ def cwd_slug(cwd: str) -> str:
 
 
 # Subagente do Pi: o transcript dele NAO fica ao lado do da sessao — vai pra
-# `<stem-da-sessao>/<taskId>/run-<n>/session.jsonl` (medido no Pi 0.82.1, sessao my-org-web:
+# `<stem-da-sessao>/<taskId>/run-<n>/session.jsonl` (medido no Pi 0.82.1, numa sessão real:
 # `2026-07-30T20-29-24-651Z_18e48e08-…/44bad0fb/run-2/session.jsonl` ao lado do
 # `2026-07-30T20-29-24-651Z_18e48e08-….jsonl` da conversa de verdade).
 # Os dois sinais valem OU: se o Pi renomear o arquivo, o diretorio `run-<n>` ainda denuncia; se

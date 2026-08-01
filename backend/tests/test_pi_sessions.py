@@ -15,8 +15,8 @@ def test_cwd_slug_keeps_spaces_accents_and_underscores():
     # Diretorios REAIS em ~/.pi/agent/sessions (Pi 0.82.1): so o separador de caminho vira '-'.
     # Trocar todo nao-alfanumerico devolvia `--home-jefferson--rea-de-trabalho-...--`, que nao
     # existe — e ai transcript_path() nao achava nada e o fallback por CP_PI_SESSION ficava morto.
-    assert (pi_sessions.cwd_slug("/home/jefferson/Área de trabalho/my-org/my-service")
-            == "--home-jefferson-Área de trabalho-my-org-my-service--")
+    assert (pi_sessions.cwd_slug("/home/jefferson/Área de trabalho/repos/servicos-api")
+            == "--home-jefferson-Área de trabalho-repos-servicos-api--")
     assert (pi_sessions.cwd_slug("/tmp/claude-1000/-home-jefferson-Projetos/scratchpad/piprobe")
             == "--tmp-claude-1000--home-jefferson-Projetos-scratchpad-piprobe--")
 
@@ -56,7 +56,7 @@ def test_transcript_path_empty_when_session_not_created_yet(tmp_path, monkeypatc
 
 
 def test_is_subagent_transcript_separates_the_task_runs_from_the_conversation():
-    # Caminhos REAIS medidos na sessao my-org-web (2026-07-30): o subagente grava dentro de um
+    # Caminhos REAIS medidos numa sessao real (2026-07-30): o subagente grava dentro de um
     # diretorio com o stem da sessao, a conversa fica no irmao .jsonl.
     raiz = ("/home/jefferson/.pi/agent/sessions/--home-jefferson-Projetos-x--/"
             "2026-07-30T20-29-24-651Z_18e48e08-4ef3-4c39-bec3-3fcbb5999b46")

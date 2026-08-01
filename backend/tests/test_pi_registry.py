@@ -152,7 +152,7 @@ def test_session_file_trusts_a_fresh_sidecar_even_with_another_id(monkeypatch, t
 def test_session_file_refuses_a_sidecar_pointing_at_a_subagent_run(monkeypatch, tmp_path):
     # O Pi dispara agent_start TAMBEM pro subagente (Task tool), e o publishPane da extensao
     # reescreve o bilhete com o transcript DELE. Aceitar trocava a conversa inteira da sessao pela
-    # do subagente no app — medido 2026-07-30 no pane %26 (my-org-web), enquanto o terminal
+    # do subagente no app — medido 2026-07-30 no pane %26 (sessao real), enquanto o terminal
     # seguia normal. O bilhete e FRESCO aqui de proposito: o guarda de frescor nao pega este caso.
     registry._PI_TICKET_WARNED.clear()
     cfg = tmp_path / "cfg"
