@@ -40,7 +40,10 @@ def _ler_jsonl(path: Path) -> Iterator[dict]:
     linha truncada é rotina. E exigir dict é obrigatório — `null` e lista são JSON válido, não
     levantam ValueError, e um .get() em cima disso já derrubou o app inteiro (ver statusline)."""
     try:
-        f = path.open(errors="replace")
+        # encoding explícito: sem isto o Python usa o locale, e o errors="replace" MASCARA o
+        # estrago (acento/espaço no cwd viram outro caminho, calado). Mesmo padrão de
+        # transcript.py.
+        f = path.open(encoding="utf-8", errors="replace")
     except OSError:
         return
     with f:
