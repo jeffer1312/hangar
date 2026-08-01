@@ -10,6 +10,16 @@ describe('formatação pt-BR', () => {
     expect(tok(12)).toBe('12');
   });
 
+  it('a fronteira de escala não produz "1.000 mil"', () => {
+    // 999.999 com 0 casas arredonda pra "1.000" e o sufixo "mil" tornaria o número ilegível —
+    // exatamente a ambiguidade que este módulo existe pra matar. Sobe de escala.
+    expect(tok(999_999)).toBe('1,0 Mi');
+    expect(tok(999_999_999)).toBe('1,00 Bi');
+    // e não sobe cedo demais:
+    expect(tok(999_400)).toBe('999 mil');
+    expect(tok(999_900_000)).toBe('999,9 Mi');
+  });
+
   it('money compacta acima de mil e money2 nunca', () => {
     expect(money(105_336.79, 'USD', null)).toBe('US$ 105,3 mil');
     expect(money2(105_336.79, 'USD', null)).toBe('US$ 105.336,79');

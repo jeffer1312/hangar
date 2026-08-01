@@ -6,9 +6,13 @@ export type Cur = 'USD' | 'BRL';
 export const dec = (n: number, casas: number) =>
   n.toLocaleString('pt-BR', { minimumFractionDigits: casas, maximumFractionDigits: casas });
 
+// Os cortes olham pro valor DEPOIS do arredondamento da escala, não pro valor cru: 999.999 com
+// 0 casas em "mil" vira "1.000 mil", e num módulo que existe pra o ponto não trocar de
+// significado essa é justamente a leitura ambígua. Daí 999,5 mil (arredonda pra 1.000 com 0
+// casas) e 999,95 Mi (arredonda pra 1.000,0 com 1 casa) subirem de escala.
 export function tok(n: number): string {
-  if (n >= 1e9) return `${dec(n / 1e9, 2)} Bi`;
-  if (n >= 1e6) return `${dec(n / 1e6, 1)} Mi`;
+  if (n >= 999.95e6) return `${dec(n / 1e9, 2)} Bi`;
+  if (n >= 999.5e3) return `${dec(n / 1e6, 1)} Mi`;
   if (n >= 1e3) return `${dec(n / 1e3, 0)} mil`;
   return dec(n, 0);
 }

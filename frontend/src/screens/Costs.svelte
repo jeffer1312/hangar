@@ -27,7 +27,7 @@
     const servers = listServers();
     const results: ServerResult[] = await Promise.all(
       servers.map(async (s) => {
-        try { return { report: await fetchCostsForServer(s) }; }
+        try { return { report: await fetchCostsForServer(s, 'all') }; }
         catch { return { report: null }; }
       }),
     );

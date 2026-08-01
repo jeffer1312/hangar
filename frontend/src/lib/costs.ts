@@ -7,6 +7,7 @@ import type {
 // quebrar em runtime com o `check` verde.
 export interface ServerResult {
   report: Partial<CostReport> | null; // null = servidor falhou/offline
+  label?: string;                     // rótulo da máquina, pro aviso de "não somei este"
 }
 
 export interface MergedReport {
@@ -189,7 +190,8 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
   const semTarifa = new Set<string>();
   const mismatched: string[] = [];
   const anterior = zeroBucket('anterior');
-  let temAnterior = false;
+  let entraram = 0;      // servidores que de fato entraram na soma
+  let comAnterior = 0;   // ...e destes, quantos mandaram a janela anterior
   let partial = false;
   let semCache = 0;
   let equivalente = 0;
@@ -198,10 +200,20 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
   results.forEach((res, i) => {
     const r = res.report;
     if (!r) { partial = true; return; }
+    // A cotação é lida ANTES da recusa: USD/BRL não depende de período nenhum, e se a única
+    // máquina que tem cotação for a desatualizada, a malha inteira perderia o R$ à toa.
+    usdBrl = usdBrl ?? r.usd_brl ?? null;
     // FastAPI ignora query param desconhecido: um backend antigo recebe ?period=7d e devolve
     // TUDO. Somar isso com o recorte dos outros e chamar de "7 dias" é mentira — então ele
-    // entra como parcial DECLARADO, fora da soma.
-    if ((r.applied?.period ?? null) !== period) { partial = true; mismatched.push(`#${i + 1}`); return; }
+    // entra como parcial DECLARADO, fora da soma. O rótulo sai daqui porque `#2` é acoplamento
+    // posicional: basta o chamador filtrar a lista antes e o índice passa a apontar pra máquina
+    // errada, com o tipo `string[]` intacto e ninguém percebendo.
+    if ((r.applied?.period ?? null) !== period) {
+      partial = true;
+      mismatched.push(res.label ?? `#${i + 1}`);
+      return;
+    }
+    entraram += 1;
     somarBucket(totals, r.totals ?? {});
     juntarDim(dims.by_day, r.by_day);
     juntarDim(dims.by_provider, r.by_provider);
@@ -214,14 +226,14 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
       cur.cost += k.cost ?? 0;
       kinds.set(k.kind, cur);
     }
-    for (const t of r.rates ?? []) rates.set(t.model, t);
+    // Chave provider+model: dois provedores podem publicar o MESMO nome de modelo com tarifas
+    // diferentes, e chavear só por `model` fundia os dois — vencia o último servidor da lista,
+    // calado.
+    for (const t of r.rates ?? []) rates.set(`${t.provider}|${t.model}`, t);
     for (const m of r.sem_tarifa ?? []) semTarifa.add(m);
     semCache += r.custo_sem_cache ?? 0;
     equivalente += r.equivalente_cobrado ?? 0;
-    // A janela anterior só existe se ALGUM servidor soube calculá-la (period=all não tem
-    // anterior). Somar zero calado viraria "caiu 100%" na tela.
-    if (r.anterior) { somarBucket(anterior, r.anterior); temAnterior = true; }
-    usdBrl = usdBrl ?? r.usd_brl ?? null;
+    if (r.anterior) { somarBucket(anterior, r.anterior); comAnterior += 1; }
   });
 
   return {
@@ -238,7 +250,11 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
       sem_tarifa: [...semTarifa].sort(),
       custo_sem_cache: semCache,
       equivalente_cobrado: equivalente,
-      anterior: temAnterior ? anterior : null,
+      // Ou TODOS os servidores somados mandaram a janela anterior, ou não há comparação. Um
+      // `anterior` parcial é pior que nenhum: `totals` traz as duas máquinas e `anterior` só
+      // uma, então a tela mostraria uma alta que não existe. "Sem período anterior completo
+      // pra comparar" é a mensagem honesta.
+      anterior: entraram > 0 && comAnterior === entraram ? anterior : null,
       applied: { period },
       usd_brl: usdBrl,
     },
