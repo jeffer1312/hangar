@@ -2,7 +2,9 @@
   import NavBar from '../components/NavBar.svelte';
   import { listServers } from '../lib/auth';
   import { fetchCostsForServer } from '../lib/api';
-  import { mergeAccounts, addBuckets, sortDesc, fillDayGaps, type ServerResult, type MergedReport } from '../lib/costs';
+  // Tela antiga (formato "por conta"), substituída na Task 10 — o alias mantém o portão de tipo
+  // verde sem reescrever nada aqui: `MergedReport` agora é o relatório novo da malha.
+  import { mergeAccounts, addBuckets, sortDesc, fillDayGaps, type ServerResult, type LegacyMergedReport as MergedReport } from '../lib/costs';
   import { abbrevNum } from '../lib/format';
   import type { AccountCost, CostBucket, CostModelBucket } from '../lib/types';
 

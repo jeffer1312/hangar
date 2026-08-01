@@ -163,8 +163,12 @@ export async function fetchSessionsForServer(s: Server): Promise<SessionInfo[]> 
 // Custo de UM servidor (baseUrl+token explicitos), sem mexer no ativo. Igual fetchSessionsForServer:
 // a visao agregada chama todos em paralelo; um servidor lento/offline falha rapido (timeout 4s) e e
 // pulado, sem segurar os demais.
-export async function fetchCostsForServer(s: Server): Promise<CostReport> {
-  const res = await fetch(`${s.baseUrl}/api/costs`, {
+// `period` opcional: sem ele o backend aplica o default dele. Vai como query param e VOLTA no
+// `applied` da resposta — servidor antigo ignora o param calado (FastAPI descarta o que não
+// conhece) e o merge usa esse eco pra recusar somar o relatório dele.
+export async function fetchCostsForServer(s: Server, period?: string): Promise<CostReport> {
+  const q = period ? `?period=${encodeURIComponent(period)}` : '';
+  const res = await fetch(`${s.baseUrl}/api/costs${q}`, {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
     signal: AbortSignal.timeout(4000),
   });

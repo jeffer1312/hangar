@@ -302,10 +302,71 @@ export interface AccountCost {
   by_model: CostModelBucket[];
 }
 
+// ── Custos v2 (dashboard multi-agente: Claude Code + Codex + Pi) ────────────
+// Um corte qualquer (dia, provedor, fonte, projeto, modelo). `key` é o valor da dimensão.
+// O custo vem quebrado por tipo DENTRO do corte: é o que faz a barra do projeto mostrar a FORMA
+// do gasto (projeto de output != projeto de cache) sem precisar clicar.
+export interface DimBucket {
+  key: string;
+  sessions: number;
+  input: number;
+  output: number;
+  cache_write: number;
+  cache_read: number;
+  cost: number;
+  cost_input: number;
+  cost_output: number;
+  cost_cache_write: number;
+  cost_cache_read: number;
+}
+
+export interface KindBucket {
+  kind: string; // "input" | "output" | "cache_write" | "cache_read"
+  tokens: number;
+  cost: number;
+}
+
+export interface RateInfo {
+  model: string;
+  provider: string;
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
+  origin: string; // "override" | "models.dev" | "snapshot"
+  cache_estimado?: boolean;
+}
+
+// Eco dos filtros que o servidor REALMENTE aplicou. FastAPI ignora query param desconhecido: um
+// backend antigo recebe ?period=7d e devolve TUDO. Sem este eco o front somaria "7 dias da
+// máquina A" com "sempre da máquina B" e mostraria como um período só.
+export interface Applied {
+  period: string;
+}
+
+// Formato COMPLETO — o que mergeReports produz e a tela consome. A tolerância a servidor antigo
+// mora na ENTRADA (ServerResult usa Partial<CostReport>), não aqui: deixar tudo opcional nos dois
+// lados obrigaria a tela inteira a `?? 0` num dado que o merge garante existir.
 export interface CostReport {
-  accounts: AccountCost[];
-  // Opcional: servidor da malha em versão antiga não manda cotação.
-  usd_brl?: number | null;
+  totals: DimBucket;
+  by_day: DimBucket[];
+  by_provider: DimBucket[];
+  by_source: DimBucket[];
+  by_project: DimBucket[];
+  by_model: DimBucket[];
+  by_kind: KindBucket[];
+  rates: RateInfo[];
+  sem_tarifa: string[];
+  // Quanto custaria se NENHUM token fosse cache (cache W e R a preço de input cheio).
+  custo_sem_cache: number;
+  // Tokens em "equivalente-input": cada tipo pesado pela PRÓPRIA tarifa. Vem do servidor porque
+  // depende da tarifa de cada modelo, que o front não tem.
+  equivalente_cobrado: number;
+  // Totais da janela imediatamente ANTERIOR, do mesmo tamanho — a régua do "subiu ou desceu".
+  // null quando não dá pra comparar (period=all, ou janela anterior com pouco registro).
+  anterior: DimBucket | null;
+  applied: Applied;
+  usd_brl: number | null;
 }
 
 export interface Runner {
