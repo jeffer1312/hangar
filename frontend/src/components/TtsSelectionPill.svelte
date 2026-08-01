@@ -5,16 +5,9 @@
   import { ttsNarracao } from '../lib/ttsNarracao.svelte';
   import { PRESET_LER, PRESET_CODIGO, PRESET_FALA, presetPadrao } from '../lib/ttsPresets';
 
-  let isDesktop = $state(false);
-
-  onMount(() => {
-    const mq = window.matchMedia('(min-width: 820px)');
-    isDesktop = mq.matches;
-    const aoTrocar = (e: MediaQueryListEvent) => { isDesktop = e.matches; };
-    mq.addEventListener('change', aoTrocar);
-    const parar = iniciarCapturaDeSelecao();
-    return () => { mq.removeEventListener('change', aoTrocar); parar(); };
-  });
+  // Sem matchMedia aqui: o painel e igual nas duas telas desde que passou a ficar colado no
+  // composer. O que sobrou do onMount e so ligar a captura de selecao.
+  onMount(() => iniciarCapturaDeSelecao());
 
   const confirmar = (msg: string) => Promise.resolve(window.confirm(msg));
 
@@ -79,51 +72,11 @@
     efetiva ? textoSel.length + blocosSel.reduce((n, b) => n + b.length, 0) + efetiva.length : 0,
   );
 
-  // Arrastar o painel (so no desktop). Ele nasce colado no fim da selecao e as vezes tapa
-  // justamente o que a pessoa quer ler enquanto decide a instrucao. Posicao vale ate fechar —
-  // reabrir volta a ancorar na selecao nova, que e onde ela esta olhando.
-  //
-  // left/top, nunca transform: elemento fixo com transform pinta retangulo preto no WebKit durante
-  // a rolagem por inercia (mesma regra do TtsBar). Alca propria em vez de arrastar pelo titulo,
-  // que e um botao — senao todo arraste vira clique em "Ouvir".
-  let arrX = $state<number | null>(null);
-  let arrY = $state<number | null>(null);
-
-  // Topo do painel flutuante, PRESO dentro da janela. Ele e ancorado pelo topo na posicao da
-  // selecao; com a selecao perto do rodape e o painel crescendo (o texto adaptado pela Groq e bem
-  // maior que os presets), ele descia pra fora da tela levando os botoes junto — sem alca, sem X,
-  // sem saida. Recalcula sozinho quando a altura medida muda, que e exatamente quando ele cresce.
-  const topoFlutuante = $derived.by(() => {
-    const alturaJanela = typeof window === 'undefined' ? 0 : window.innerHeight;
-    const teto = Math.max(8, alturaJanela - ttsSelection.panelH - 8);
-    return Math.min(ttsSelection.y + 6, teto);
-  });
-
-  function iniciarArraste(e: PointerEvent) {
-    if (!panelEl) return;
-    e.preventDefault();
-    const r = panelEl.getBoundingClientRect();
-    const offX = e.clientX - r.left;
-    const offY = e.clientY - r.top;
-    const mover = (ev: PointerEvent) => {
-      arrX = Math.max(8, Math.min(window.innerWidth - r.width - 8, ev.clientX - offX));
-      arrY = Math.max(8, Math.min(window.innerHeight - r.height - 8, ev.clientY - offY));
-    };
-    const soltar = () => {
-      window.removeEventListener('pointermove', mover);
-      window.removeEventListener('pointerup', soltar);
-    };
-    window.addEventListener('pointermove', mover);
-    window.addEventListener('pointerup', soltar);
-  }
-
   function fechar() {
     ttsNarracao.limpar();
     ttsSelection.limpar();
     engajado = false;
     ttsSelection.setEngajado(false);
-    arrX = null;
-    arrY = null;
   }
 
   /** Toque principal: sem instrucao (ou so "ler como esta"), toca DIRETO — mesmo caminho sincrono
@@ -172,27 +125,15 @@
 </script>
 
 {#if engajado}
-  <!-- Flutua so quando o alvo veio de uma selecao (tem x/y de verdade). O 🔊 da bolha abre a
-       mensagem inteira sem ponto de toque nenhum pra ancorar — nos dois tamanhos de tela ele cai na
-       mesma barra rente ao composer que o celular ja usa pra selecao (bottom calc abaixo). -->
-  {@const flutua = isDesktop && ttsSelection.origem === 'selecao'}
-  {@const movido = isDesktop && arrX !== null && arrY !== null}
-  <div
-    class="tts-sel"
-    class:flutuante={flutua}
-    class:movido
-    style:right={movido ? undefined : (flutua ? `calc(100% - ${ttsSelection.x}px)` : undefined)}
-    style:top={movido ? `${arrY}px` : (flutua ? `${topoFlutuante}px` : undefined)}
-    style:left={movido ? `${arrX}px` : undefined}
-    bind:this={panelEl}
-  >
+  <!-- SEMPRE colado no composer, nas duas telas. Antes ele flutuava no fim da selecao no desktop, e
+       o usuario reprovou: aparecia no meio da leitura e nao combinava com nada. Colado, ele ocupa o
+       mesmo lugar que as pills que o Chat ja usa (hist-pill/tui-pill) e some do caminho do texto.
+       Sem arrastar tambem: era resposta pro problema de ele tapar a leitura, que colado nao existe. -->
+  <div class="tts-sel" class:aberto={expandido || ttsNarracao.carregando || ttsNarracao.erro || ttsNarracao.pendente} bind:this={panelEl}>
     <!-- Cabecalho SEMPRE presente, fora dos ramos de estado. Ele so existia no estado inicial, e o
          resultado foi o usuario preso: o texto revisado pela Groq cresceu, empurrou os botoes pra
-         fora da tela, e nao havia nem alca pra arrastar nem X pra fechar naquele estado. -->
+         fora da tela, e nao havia nem X pra fechar naquele estado. -->
     <div class="tts-sel-top">
-      {#if isDesktop}
-        <span class="tts-sel-alca" onpointerdown={iniciarArraste} role="presentation" title="Arrastar">⠿</span>
-      {/if}
       {#if ttsNarracao.carregando || ttsNarracao.erro || ttsNarracao.pendente}
         <span class="tts-sel-titulo">{ttsNarracao.pendente ? 'Texto adaptado' : 'Leitura em voz'}</span>
       {:else}
@@ -291,52 +232,44 @@
     background: var(--surface-raised);
     color: var(--text-primary);
     font-size: var(--text-sm);
-    width: min(calc(100vw - var(--space-8)), 340px);
-    /* Teto absoluto: mesmo preso pelo topo, o painel nunca passa da janela. O texto adaptado rola
-       dentro dele (.tts-sel-preview), os botoes ficam sempre alcancaveis. */
+    width: fit-content;
+    max-width: min(calc(100vw - var(--space-8)), 420px);
+    /* Teto absoluto: o texto adaptado rola dentro (.tts-sel-preview), os botoes ficam alcancaveis. */
     max-height: calc(100vh - var(--space-4));
     /* --cp-tts-bar-h (publicada no App.svelte): soma a altura da BARRA DO PLAYER quando ela esta
        ativa, senao o painel nasce no mesmo lugar da TtsBar e tapa play/posicao/velocidade. */
     bottom: calc(var(--cp-dock-h, 150px) + 10px + var(--cp-tts-bar-h, 0px));
-  }
-  .tts-sel:not(.flutuante) {
     left: 0;
     right: 0;
     margin: 0 auto;
   }
-  .tts-sel.flutuante {
-    bottom: auto;
-    margin-left: 0;
+  /* Fechado, e UMA PILULA — a mesma forma que o Chat ja usa acima do composer (hist-pill/tui-pill):
+     raio total, contorno de destaque, sombra, uma linha so. A caixa quadrada com botao preenchido
+     dentro nao existe em lugar nenhum deste app, e foi o que o usuario reprovou. */
+  .tts-sel:not(.aberto) {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-full);
+    border-color: var(--accent);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
   }
-  /* Arrastado: manda em left/top e larga as ancoras de baixo e da direita. */
-  .tts-sel.movido { bottom: auto; right: auto; margin: 0; }
   .tts-sel-top { display: flex; align-items: center; gap: var(--space-2); }
-  .tts-sel-alca {
-    cursor: grab;
-    color: var(--text-muted);
-    font-size: var(--text-sm);
-    line-height: 1;
-    touch-action: none;
-    user-select: none;
-  }
-  .tts-sel-alca:active { cursor: grabbing; }
-  /* Botao PREENCHIDO, e nao texto com aparencia de titulo: e ele que de fato toca. Ficou assim
-     depois de o usuario clicar em "Ler como está" (que e so o seletor de modo) esperando ouvir —
-     o preset selecionado tinha preenchimento e virava a coisa mais parecida com botao na caixa. */
+  /* Fechado a propria pilula E o botao — nao ha botao preenchido dentro de caixa, que era o que
+     destoava. Aberto ele vira o titulo da caixa e continua clicavel. */
   .tts-sel-head {
     all: unset;
     cursor: pointer;
     flex: 1;
     min-width: 0;
-    text-align: center;
-    background: var(--accent);
-    color: var(--text-inverse);
-    border-radius: var(--radius-full);
-    padding: var(--space-2) var(--space-3);
     font-size: var(--text-sm);
     font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .tts-sel-head:active { background: var(--accent-press); }
+  .tts-sel-head:active { color: var(--accent); }
   .tts-sel-titulo {
     flex: 1;
     min-width: 0;
