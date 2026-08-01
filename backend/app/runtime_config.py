@@ -31,6 +31,16 @@ EDITAVEIS: dict[str, type] = {
     "elevenlabs_voice_id": str,    # id da voz escolhida na conta
     "tts_local_cmd": str,          # comando externo opcional: texto no stdin, WAV no stdout
     "tts_max_chars": int,          # acima disso o app pede confirmacao antes de sintetizar
+    # Ajustes de naturalidade da ElevenLabs (voice_settings), vindo de deslizantes na tela — o valor
+    # e SEMPRE real (o slider nasce no padrao da ElevenLabs, nunca "vazio"). _coagir so tem tipo int
+    # pra numero — sem float em EDITAVEIS — entao guardam o valor*100: tts_stability=50 -> 0.5 na
+    # requisicao. Campo AUSENTE (usuario nunca tocou o slider) e campo IGUAL ao padrao da ElevenLabs
+    # se comportam igual: tts.py:_ajustes_efetivos so manda a chave quando o valor FOGE do padrao.
+    # tts_speed guarda 70-120 (velocidade 0.7x-1.2x); os outros tres guardam 0-100.
+    "tts_stability": int,          # 0-100 = stability 0..1 (padrao ElevenLabs: 50 = 0.5)
+    "tts_similarity_boost": int,   # 0-100 = similarity_boost 0..1 (padrao ElevenLabs: 75 = 0.75)
+    "tts_style": int,              # 0-100 = style 0..1 (padrao ElevenLabs: 0)
+    "tts_speed": int,              # 70-120 = speed 0.7..1.2 (padrao ElevenLabs: 100 = 1.0x)
 }
 
 # Campos que NUNCA voltam inteiros pro cliente: o app devolve mascarado (gsk_••••1234) pra você
