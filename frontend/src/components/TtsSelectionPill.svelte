@@ -156,7 +156,12 @@
         <button type="button" class="tts-sel-btn" onclick={fechar}>Cancelar</button>
       </div>
     {:else}
-      <button type="button" class="tts-sel-head" onclick={ouvirClique}>{rotulo}</button>
+      <!-- Fechar existe AQUI, no estado normal, e nao so nos ramos de erro/revisao. Sem ele o
+           painel abria e nao saia mais: quem so quis ver o que era ficava com ele preso na tela. -->
+      <div class="tts-sel-top">
+        <button type="button" class="tts-sel-head" onclick={ouvirClique}>{rotulo}</button>
+        <button type="button" class="tts-sel-x" onclick={fechar} aria-label="Fechar">✕</button>
+      </div>
       <div class="tts-sel-row">
         <button type="button" class="tts-sel-btn" class:sel={efetiva === PRESET_LER}
                 onclick={() => { preferirLerLiteral = true; instrucao = ''; }}>Ler como está</button>
@@ -192,14 +197,16 @@
     z-index: 39;
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding: 8px 10px;
-    border-radius: 14px;
+    /* Escala do app (--space-*/--text-*/--radius-*), nao pixel cru: o painel nasceu com 8px/13px/14px
+       chutados e destoava de tudo em volta. */
+    gap: var(--space-2);
+    padding: var(--space-3);
+    border-radius: var(--radius-lg);
     border: 1px solid var(--border-subtle);
     background: var(--surface-raised);
     color: var(--text-primary);
-    font-size: 13px;
-    width: min(calc(100vw - 32px), 340px);
+    font-size: var(--text-sm);
+    width: min(calc(100vw - var(--space-8)), 340px);
     /* --cp-tts-bar-h (publicada no App.svelte): soma a altura da BARRA DO PLAYER quando ela esta
        ativa, senao o painel nasce no mesmo lugar da TtsBar e tapa play/posicao/velocidade. */
     bottom: calc(var(--cp-dock-h, 150px) + 10px + var(--cp-tts-bar-h, 0px));
@@ -213,31 +220,44 @@
     bottom: auto;
     margin-left: 0;
   }
+  .tts-sel-top { display: flex; align-items: center; gap: var(--space-2); }
   .tts-sel-head {
     all: unset;
     cursor: pointer;
-    font-size: 13px;
+    flex: 1;
+    min-width: 0;
+    font-size: var(--text-sm);
     font-weight: 600;
   }
-  .tts-sel-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tts-sel-x {
+    all: unset;
+    cursor: pointer;
+    padding: 0 var(--space-1);
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+  }
+  .tts-sel-x:hover { color: var(--text-primary); }
+  .tts-sel-row { display: flex; gap: var(--space-2); flex-wrap: wrap; }
   .tts-sel-btn {
     border: 1px solid var(--border-subtle);
     background: transparent;
     color: var(--text-primary);
-    border-radius: 999px;
-    padding: 4px 10px;
-    font-size: 12px;
+    border-radius: var(--radius-full);
+    padding: var(--space-1) var(--space-3);
+    font-size: var(--text-xs);
     cursor: pointer;
   }
-  .tts-sel-btn.sel { border-color: var(--accent); color: var(--accent); }
-  .tts-sel-go { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  /* Selecionado = preenchimento, nao so contorno colorido: e como o app marca escolha ativa
+     (option-btn--always usa accent-dim do mesmo jeito). */
+  .tts-sel-btn.sel { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+  .tts-sel-go { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); font-weight: 600; }
   .tts-sel-input {
     background: var(--surface-inset);
     border: 1px solid var(--border-subtle);
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     color: var(--text-primary);
-    padding: 6px 8px;
-    font-size: 13px;
+    padding: var(--space-2);
+    font-size: var(--text-sm);
   }
   .tts-sel-custo { color: var(--text-secondary); font-size: 11px; }
   .tts-sel-preview {
