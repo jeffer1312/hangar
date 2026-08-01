@@ -267,6 +267,36 @@ class RateInfo(BaseModel):
     cache_estimado: bool = False
 
 
+class ComboRow(BaseModel):
+    """Uma linha por combinação que REALMENTE aconteceu.
+
+    Os quatro agrupamentos do CostReport somam ANTES de mandar, e depois de somado não dá pra
+    separar "quanto daquele projeto foi de tal fonte" — como saber o gasto no mercado e o
+    gasto em carne não diz quanta carne veio daquele mercado. Aqui cada linha é uma
+    combinação, então qualquer recorte vira uma soma no cliente.
+
+    É ACRÉSCIMO, não substituição: os `by_*` continuam, e cliente antigo ignora esta chave.
+    Esparso na prática — medido em 01/08/2026: 197 combinações em 30 dias contra 251.100
+    teóricas, 0,08%.
+    """
+    dia: str
+    provider: str
+    source: str
+    project: str
+    model: str
+    subagente: bool = False
+    sessions: int = 0
+    input: int = 0
+    output: int = 0
+    cache_write: int = 0
+    cache_read: int = 0
+    cost: float = 0.0
+    cost_input: float = 0.0
+    cost_output: float = 0.0
+    cost_cache_write: float = 0.0
+    cost_cache_read: float = 0.0
+
+
 class Applied(BaseModel):
     """Eco dos filtros que o servidor REALMENTE aplicou.
 
@@ -302,6 +332,7 @@ class CostReport(BaseModel):
     anterior: Optional[DimBucket] = None
     applied: Optional[Applied] = None
     usd_brl: Optional[float] = None
+    combos: list[ComboRow] = []
 
 
 class Runner(BaseModel):

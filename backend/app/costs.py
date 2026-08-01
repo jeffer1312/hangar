@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 from app import pricing
 from app.costs_sources import LOCAL, UsageRow, coletar, rotulo_de_provedor
-from app.models import Applied, CostReport, DimBucket, KindBucket, RateInfo
+from app.models import Applied, ComboRow, CostReport, DimBucket, KindBucket, RateInfo
 
 TIPOS = ("input", "output", "cache_write", "cache_read")
 PERIODOS = {"7d": 7, "30d": 30, "90d": 90}
@@ -111,9 +111,12 @@ def montar(linhas: list[UsageRow], period: str = "all",
     equivalente = 0.0
     sem_tarifa: set[str] = set()
     rates: dict[str, RateInfo] = {}
+    combos_agg: dict[tuple, dict] = defaultdict(_zero)
     for i, r in enumerate(linhas):
         c = custos[i]
         _somar(total, r, c)
+        _somar(combos_agg[(r.ts.strftime("%Y-%m-%d"), r.provider, r.source, r.project,
+                           pricing.canonizar(r.model), r.subagente)], r, c)
         for t in TIPOS:
             kinds[t]["tokens"] += getattr(r, t)
             if c:
@@ -162,6 +165,9 @@ def montar(linhas: list[UsageRow], period: str = "all",
         anterior=anterior,
         applied=Applied(period=period),
         usd_brl=usd_brl(),
+        combos=[ComboRow(dia=k[0], provider=k[1], source=k[2], project=k[3], model=k[4],
+                         subagente=k[5], **v)
+                for k, v in sorted(combos_agg.items(), key=lambda kv: (kv[0][0], -kv[1]["cost"]))],
     )
 
 

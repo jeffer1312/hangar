@@ -29,7 +29,7 @@ def _linha(**kw):
     base = dict(ts=datetime(2026, 8, 1, 10, tzinfo=costs.LOCAL), source="claude",
                 provider="anthropic:u1", model="claude-opus-5", project="/repo/a",
                 session_id="s1", input=1_000_000, output=1_000_000,
-                cache_write=1_000_000, cache_read=1_000_000)
+                cache_write=1_000_000, cache_read=1_000_000, subagente=False)
     return UsageRow(**{**base, **kw})
 
 
@@ -233,3 +233,50 @@ def test_usd_brl_cacheia_e_nao_rebate_na_rede(monkeypatch):
     n_after_fail = calls["n"]
     assert costs.usd_brl() == 5.4321  # falha cacheada: não tenta de novo já
     assert calls["n"] == n_after_fail
+
+
+def test_combos_somam_igual_ao_total():
+    """A rota é a mesma e o dado é o mesmo: somar os combos tem que dar o total. Divergência
+    aqui é a definição de 'a tela mostra número que o dado não sustenta'. Fixture, não disco:
+    o teste que lia a máquina passava VAZIO em CI e falhava sozinho com sessão viva."""
+    linhas = [
+        _linha(provider="p1", source="claude", project="/a", model="claude-opus-5"),
+        _linha(provider="p2", source="pi", project="/b", model="claude-opus-5", session_id="s2"),
+        _linha(provider="p1", source="claude", project="/a", model="claude-opus-5", session_id="s3"),
+    ]
+    r = costs.montar(linhas, now=datetime(2026, 8, 1, 12, tzinfo=costs.LOCAL))
+    assert abs(sum(c.cost for c in r.combos) - r.totals.cost) < 1e-9
+    for campo in ("input", "output", "cache_write", "cache_read", "sessions"):
+        assert sum(getattr(c, campo) for c in r.combos) == getattr(r.totals, campo)
+
+
+def test_combos_agrupam_a_combinacao_repetida():
+    """Duas linhas na mesma combinação viram UM combo com sessions=2 — senão o detalhamento
+    é só a lista crua e o payload cresce sem motivo."""
+    linhas = [
+        _linha(provider="p", source="claude", project="/a", model="claude-opus-5"),
+        _linha(provider="p", source="claude", project="/a", model="claude-opus-5", session_id="s2"),
+    ]
+    r = costs.montar(linhas, now=datetime(2026, 8, 1, 12, tzinfo=costs.LOCAL))
+    assert len(r.combos) == 1
+    assert r.combos[0].sessions == 2
+
+
+def test_combo_separa_subagente():
+    """13,7% do volume. Sem a dimensão, o usuário não consegue ver quanto os Task custam."""
+    linhas = [
+        _linha(provider="p", source="claude", project="/a", model="claude-opus-5"),
+        _linha(provider="p", source="claude", project="/a", model="claude-opus-5",
+               session_id="s2", subagente=True),
+    ]
+    r = costs.montar(linhas, now=datetime(2026, 8, 1, 12, tzinfo=costs.LOCAL))
+    assert len(r.combos) == 2
+    assert {c.subagente for c in r.combos} == {True, False}
+
+
+def test_combos_nao_quebram_o_que_ja_existia():
+    """O campo é ACRÉSCIMO: os quatro agrupamentos e os escalares continuam iguais."""
+    r = costs.montar([_linha()], now=datetime(2026, 8, 1, 12, tzinfo=costs.LOCAL))
+    assert r.by_provider and r.by_source and r.by_project and r.by_model and r.by_day
+    assert r.equivalente_cobrado > 0
+    assert r.custo_sem_cache > 0
