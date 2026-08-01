@@ -37,14 +37,26 @@
 
   $effect(() => {
     const ativaAgora = ttsSelection.ativa;
-    if (ativaAgora && !prevAtiva) {
+    if (ativaAgora) {
       engajado = true;
       ttsSelection.setEngajado(true);
+      // A foto SEGUE a selecao enquanto ela existe, e so congela quando `ativa` cai — que e o
+      // momento em que o campo de instrucao rouba o foco e colapsa a Selection API.
+      //
+      // Antes isto so rodava na borda de subida, e o resultado era um bug feio no celular: arrastar
+      // pra selecionar dispara `selectionchange` desde o PRIMEIRO caractere, entao a foto guardava
+      // "6 car." e nunca mais crescia — o painel oferecia ler um pedaco minusculo do que a pessoa
+      // tinha marcado. Na fase 1 o rotulo lia a selecao ao vivo e acertava; a foto da fase 2
+      // congelava cedo demais.
       textoSel = ttsSelection.texto;
       blocosSel = ttsSelection.blocos;
-      instrucao = ttsNarracao.ultimaInstrucao;
-      preferirLerLiteral = false;
-      ttsNarracao.limpar();
+      // Ja o estado do PAINEL (instrucao, preset, revisao pendente) so reinicia numa selecao nova,
+      // nunca no meio de um arraste — senao o que a pessoa digitou sumiria a cada movimento.
+      if (!prevAtiva) {
+        instrucao = ttsNarracao.ultimaInstrucao;
+        preferirLerLiteral = false;
+        ttsNarracao.limpar();
+      }
     }
     prevAtiva = ativaAgora;
   });
