@@ -3,7 +3,8 @@
   import { listServers } from '../lib/auth';
   import { fetchCostsForServer } from '../lib/api';
   import {
-    mergeReports, fillDayGaps, tarifasPorModelo, type ServerResult, type MergedReport,
+    mergeReports, fillDayGaps, tarifasPorModelo, custoDesconhecido,
+    type ServerResult, type MergedReport,
   } from '../lib/costs';
   import { dec, tok, money, money2, type Cur } from '../lib/fmt';
   import type { DimBucket } from '../lib/types';
@@ -240,9 +241,11 @@
 
   // `has` = existe preço; `get` = qual preço (null com mais de um provedor). Ver tarifasPorModelo.
   const tarifas = $derived(tarifasPorModelo(report.rates));
-  // Recorte num modelo SEM tarifa: o `cost` que vem do servidor é 0 porque ele pulou a conta, não
-  // porque foi de graça. Todo número em dinheiro deste recorte vira traço.
-  const semTarifa = $derived(selAtivo?.dim === 'model' && !tarifas.has(selAtivo.key));
+  // Recorte sem tarifa: o `cost` que vem do servidor é 0 porque ele pulou a conta, não porque foi
+  // de graça. Todo número em dinheiro deste recorte vira traço. A pergunta é feita ao BALDE, não
+  // à dimensão: perguntar "é um modelo?" deixava passar o provedor, a fonte e o projeto cujos
+  // modelos sejam todos desconhecidos — mesma mentira, um eixo acima.
+  const semTarifa = $derived(custoDesconhecido(foco));
   const mFoco = (n: number) => (semTarifa ? '—' : m(n));
   const m2Foco = (n: number) => (semTarifa ? '—' : m2(n));
 
@@ -273,7 +276,7 @@
       <select aria-labelledby="lbl-prov" value={selAtivo?.dim === 'provider' ? selAtivo.key : ''}
         onchange={(e) => { const v = e.currentTarget.value; sel = v ? { dim: 'provider', key: v } : null; }}>
         <option value="">todos ({report.by_provider.length})</option>
-        {#each report.by_provider as b}<option value={b.key}>{b.key} — {m(b.cost)}</option>{/each}
+        {#each report.by_provider as b}<option value={b.key}>{b.key} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
       </select>
     </span>
 
@@ -282,7 +285,7 @@
       <select aria-labelledby="lbl-fonte" value={selAtivo?.dim === 'source' ? selAtivo.key : ''}
         onchange={(e) => { const v = e.currentTarget.value; sel = v ? { dim: 'source', key: v } : null; }}>
         <option value="">todas ({report.by_source.length})</option>
-        {#each report.by_source as b}<option value={b.key}>{b.key} — {m(b.cost)}</option>{/each}
+        {#each report.by_source as b}<option value={b.key}>{b.key} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
       </select>
     </span>
 
@@ -291,7 +294,7 @@
       <select aria-labelledby="lbl-proj" value={selAtivo?.dim === 'project' ? selAtivo.key : ''}
         onchange={(e) => { const v = e.currentTarget.value; sel = v ? { dim: 'project', key: v } : null; }}>
         <option value="">todos ({report.by_project.length})</option>
-        {#each report.by_project as b}<option value={b.key}>{b.key} — {m(b.cost)}</option>{/each}
+        {#each report.by_project as b}<option value={b.key}>{b.key} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
       </select>
     </span>
 
@@ -323,11 +326,15 @@
            contagem. Cada oração sai por conta própria, com quantos e quais. -->
       ⚠ Total parcial.
       {#if merged.failed.length}
-        {merged.failed.length} servidor{merged.failed.length > 1 ? 'es' : ''} não respondeu
+        {merged.failed.length === 1
+          ? '1 servidor não respondeu'
+          : `${merged.failed.length} servidores não responderam`}
         ({merged.failed.join(', ')}).
       {/if}
       {#if merged.mismatched.length}
-        {merged.mismatched.length} respondeu fora do período pedido e ficou de fora da soma
+        {merged.mismatched.length === 1
+          ? '1 servidor respondeu fora do período pedido e ficou de fora da soma'
+          : `${merged.mismatched.length} servidores responderam fora do período pedido e ficaram de fora da soma`}
         ({merged.mismatched.join(', ')}).
       {/if}
       <button class="retry" onclick={() => load(period)}>Tentar de novo</button>
@@ -455,7 +462,12 @@
         <!-- Sem tarifa, os quatro custos vêm zerados do servidor: a barra 100% seria uma faixa
              vazia que se lê como "nada custou". Some, e a tabela abaixo fica só com o volume. -->
         {#if semTarifa}
-          <p class="hint">Sem tarifa conhecida para <b>{selAtivo?.key}</b> — aqui só o volume é medido.</p>
+          <!-- Sem recorte o traço também é possível (malha inteira sem um modelo com tarifa), e aí
+               `selAtivo` é null — o texto tem que continuar dizendo do que ele fala. -->
+          <p class="hint">
+            Sem tarifa conhecida para <b>{selAtivo ? selAtivo.key : 'nenhum modelo do período'}</b>
+            — aqui só o volume é medido.
+          </p>
         {:else}
           <div class="stack100">
             {#each fatias as f}
@@ -509,7 +521,7 @@
             <div class="row">
               <button aria-pressed={selAtivo?.dim === 'provider' && selAtivo.key === b.key}
                 onclick={() => alternar('provider', b.key)}>
-                <span class="nm">{b.key}</span><span class="vl">{m2(b.cost)}</span>
+                <span class="nm">{b.key}</span><span class="vl">{custoDesconhecido(b) ? '—' : m2(b.cost)}</span>
                 <span class="track" style="width: {Math.max(1.5, (b.cost / picoProvedor) * 100)}%">
                   {#each TIPOS as t}{#if custoDe(b, t.id) > 0}<i style="background: var({t.slot}); flex: {custoDe(b, t.id)}"></i>{/if}{/each}
                 </span>
@@ -529,7 +541,7 @@
             <div class="row">
               <button aria-pressed={selAtivo?.dim === 'source' && selAtivo.key === b.key}
                 onclick={() => alternar('source', b.key)}>
-                <span class="nm">{b.key}</span><span class="vl">{m2(b.cost)}</span>
+                <span class="nm">{b.key}</span><span class="vl">{custoDesconhecido(b) ? '—' : m2(b.cost)}</span>
                 <span class="track" style="width: {Math.max(1.5, (b.cost / picoFonte) * 100)}%">
                   {#each TIPOS as t}{#if custoDe(b, t.id) > 0}<i style="background: var({t.slot}); flex: {custoDe(b, t.id)}"></i>{/if}{/each}
                 </span>
@@ -552,7 +564,7 @@
           <div class="row">
             <button aria-pressed={selAtivo?.dim === 'project' && selAtivo.key === b.key}
               title="clique para recortar" onclick={() => alternar('project', b.key)}>
-              <span class="nm">{b.key}</span><span class="vl">{m2(b.cost)}</span>
+              <span class="nm">{b.key}</span><span class="vl">{custoDesconhecido(b) ? '—' : m2(b.cost)}</span>
               <span class="track" style="width: {Math.max(1.5, (b.cost / picoProjeto) * 100)}%">
                 {#each TIPOS as t}{#if custoDe(b, t.id) > 0}<i style="background: var({t.slot}); flex: {custoDe(b, t.id)}"></i>{/if}{/each}
               </span>

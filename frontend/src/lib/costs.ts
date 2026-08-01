@@ -158,6 +158,16 @@ export function tarifasPorModelo(rates: RateInfo[]): Map<string, RateInfo | null
   return new Map([...porModelo].map(([model, l]) => [model, l.length === 1 ? l[0] : null]));
 }
 
+// "Custo desconhecido", pra QUALQUER corte — provedor, fonte, projeto, modelo ou dia. Volume
+// positivo com custo zero só acontece quando não havia tarifa pra aplicar: o catálogo descarta
+// entrada de preço 0/0 (`app/pricing.py`), então nenhum token com preço conhecido soma 0.
+// A pergunta é a mesma do `tarifasPorModelo`, mas aqui feita ao BALDE, e é assim que ela vale
+// fora do eixo de modelo — um provedor cujos modelos sejam todos desconhecidos vinha mostrando
+// US$ 0,00 como se fosse gasto real.
+export function custoDesconhecido(b: DimBucket): boolean {
+  return b.input + b.output + b.cache_write + b.cache_read > 0 && b.cost === 0;
+}
+
 // Preenche buracos de data na lista de buckets diários (desc) com dias zerados, pra série
 // visual ficar contínua. Só faz sentido no período "dia" — semana/mês ficam como estão.
 export function fillDayGaps(list: CostBucket[]): CostBucket[] {

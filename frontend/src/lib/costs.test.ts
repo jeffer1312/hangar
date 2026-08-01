@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { mergeReports, fillDayGaps, tarifasPorModelo } from './costs';
-import type { CostBucket, CostReport, RateInfo } from './types';
+import { mergeReports, fillDayGaps, tarifasPorModelo, custoDesconhecido } from './costs';
+import type { CostBucket, CostReport, DimBucket, RateInfo } from './types';
 
 function bucket(key: string, cost: number): CostBucket {
   return { key, sessions: 1, input: 0, output: 0, cache_read: 0, cache_write: 0, cost };
@@ -183,6 +183,32 @@ describe('tarifasPorModelo', () => {
   it('modelo sem tarifa nenhuma não entra no mapa — é "não sei", não "de graça"', () => {
     const m = tarifasPorModelo([tarifa('anthropic', 'claude-opus-4', 15)]);
     expect(m.has('claude-sonnet-4')).toBe(false);
+  });
+});
+
+describe('custoDesconhecido', () => {
+  const balde = (p: Partial<DimBucket>): DimBucket => ({
+    key: 'x', sessions: 1, input: 0, output: 0, cache_write: 0, cache_read: 0,
+    cost: 0, cost_input: 0, cost_output: 0, cost_cache_write: 0, cost_cache_read: 0, ...p,
+  });
+
+  it('vale para os QUATRO cortes, porque pergunta ao balde e não à dimensão', () => {
+    // Um provedor, uma fonte ou um projeto cujos modelos sejam todos desconhecidos cai no mesmo
+    // buraco que o modelo sem tarifa: custo 0 com volume positivo. A regra amarrada em
+    // `dim === 'model'` só pegava o quarto caso.
+    for (const key of ['kimi-coding', 'codex', '/home/jefferson/x', 'claude-sonnet-4']) {
+      expect(custoDesconhecido(balde({ key, input: 70, cache_read: 266_000 }))).toBe(true);
+    }
+  });
+
+  it('volume com custo é conhecido', () => {
+    expect(custoDesconhecido(balde({ input: 1000, cost: 0.03 }))).toBe(false);
+  });
+
+  it('balde sem volume nenhum não é "sem tarifa" — é dia parado, e US$ 0,00 ali é verdade', () => {
+    // O gráfico preenche buraco de data com dia zerado; marcá-lo como desconhecido trocaria um
+    // zero honesto por um traço.
+    expect(custoDesconhecido(balde({ sessions: 0 }))).toBe(false);
   });
 });
 
