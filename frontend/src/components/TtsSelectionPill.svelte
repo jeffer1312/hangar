@@ -150,7 +150,7 @@
            (narrar.py). Sem ele, uma consulta travada prende a faixa inteira: nao da pra tocar nada
            nem descartar o pedido. Nao aborta a requisicao em voo — so libera a interface, que e o
            que a pessoa precisa. -->
-      <span class="tts-sel-load">consultando a Groq…</span>
+      <span class="tts-sel-load">consultando o modelo…</span>
     {:else if ttsNarracao.erro}
       <span class="tts-sel-err">{ttsNarracao.erro}</span>
     {:else if ttsNarracao.pendente}
@@ -205,7 +205,7 @@
         onkeydown={(e) => { if (e.key === 'Enter') ouvirClique(); }}
       />
       {#if efetiva}
-        <span class="tts-sel-custo">{charsGroq.toLocaleString('pt-BR')} car. para a Groq</span>
+        <span class="tts-sel-custo">{charsGroq.toLocaleString('pt-BR')} car. para o modelo</span>
       {/if}
     {/if}
   </div>
