@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app import pricing
+from app.adapters.pi import sessions as pi_sessions
 
 LOCAL = timezone(timedelta(hours=-3))
 PROJETO_DESCONHECIDO = "desconhecido"
@@ -191,4 +192,61 @@ def linhas_codex() -> list[UsageRow]:
                 output=_int(ultimo.get("output_tokens")),
                 cache_write=0, cache_read=cr,
             ))
+    return out
+
+
+def raiz_pi() -> Path:
+    return pi_sessions.sessions_root()
+
+
+def linhas_pi() -> list[UsageRow]:
+    """~/.pi/agent/sessions/**/*.jsonl — POR MENSAGEM, soma tudo.
+
+    Glob RECURSIVA de propósito: o subagente do Pi mora em
+    `<sessao>/<taskId>/run-N/session.jsonl` (é o que adapters/pi/sessions.py:41-47 já documenta,
+    acima de `is_subagent_transcript`).
+    Medido em 01/08/2026 num par pai/filho: na janela de 20:52:12–20:58:10 em que o filho
+    registrou 19 eventos de uso, o pai registrou ZERO, e nenhum totalTokens coincide. O uso do
+    subagente NÃO está no pai — somar os dois não duplica, e ignorar o filho perde 18 sessões.
+
+    O `usage.cost` que o Pi já calcula é DESCARTADO: o custo é recalculado com a mesma tabela das
+    outras fontes, senão as três não estão na mesma régua.
+    """
+    raiz = raiz_pi()
+    if not raiz.is_dir():
+        return []
+    out: list[UsageRow] = []
+    for arq in raiz.rglob("*.jsonl"):
+        cwd = modelo = prov = ""
+        ts = None
+        acc = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
+        viu = False
+        for d in _ler_jsonl(arq):
+            t = d.get("type")
+            if t == "session":
+                cwd = d.get("cwd") or cwd
+                ts = _quando(d.get("timestamp")) or ts
+            elif t == "model_change":
+                prov = d.get("provider") or prov
+                modelo = d.get("modelId") or modelo
+            elif t == "message":
+                msg = d.get("message")
+                u = msg.get("usage") if isinstance(msg, dict) else None
+                if isinstance(u, dict):
+                    viu = True
+                    for k in acc:
+                        acc[k] += _int(u.get(k))
+        if not viu or ts is None:
+            continue
+        # session_id pelo caminho RELATIVO, não pelo `arq.stem`: todo subagente se chama
+        # `session.jsonl`, então o stem seria a string "session" para TODOS eles, de todas as
+        # sessões — indistinguíveis. Hoje não corrompe soma (não há dedup entre linhas do Pi),
+        # mas deixaria o campo inútil pra qualquer drill-down.
+        sid = str(arq.relative_to(raiz).with_suffix(""))
+        out.append(UsageRow(
+            ts=ts, source="pi", provider=prov or "?", model=modelo or "?",
+            project=cwd or PROJETO_DESCONHECIDO, session_id=sid,
+            input=acc["input"], output=acc["output"],
+            cache_write=acc["cacheWrite"], cache_read=acc["cacheRead"],
+        ))
     return out
