@@ -276,8 +276,8 @@ class ComboRow(BaseModel):
     combinação, então qualquer recorte vira uma soma no cliente.
 
     É ACRÉSCIMO, não substituição: os `by_*` continuam, e cliente antigo ignora esta chave.
-    Esparso na prática — medido em 01/08/2026: 197 combinações em 30 dias contra 251.100
-    teóricas, 0,08%.
+    Esparso na prática — medido em 01/08/2026 (número cresce toda semana, é foto, não
+    constante): 472 combinações / 237 KB em 30 dias, 607 combinações / 302 KB em `period=all`.
     """
     dia: str
     provider: str
