@@ -1,10 +1,23 @@
-import type { AccountCost, CostBucket, CostModelBucket, CostReport } from './types';
+import type {
+  AccountCost, CostBucket, CostModelBucket, CostReport, DimBucket, KindBucket, RateInfo,
+} from './types';
 
+// `Partial` de propósito: é o que chega DO FIO. Um servidor da malha em versão antiga responde
+// sem os campos novos, e prometer aqui um objeto completo é justamente o que fazia o front
+// quebrar em runtime com o `check` verde.
 export interface ServerResult {
-  report: CostReport | null; // null = servidor falhou/offline
+  report: Partial<CostReport> | null; // null = servidor falhou/offline
 }
 
 export interface MergedReport {
+  report: CostReport;
+  partial: boolean;      // algum servidor não respondeu ou entrou fora da soma
+  mismatched: string[];  // servidores que não ecoaram o período pedido
+}
+
+// Resultado do merge ANTIGO (por conta), ainda consumido por screens/Costs.svelte até a tela
+// nova entrar. Some junto com mergeAccounts.
+export interface LegacyMergedReport {
   accounts: AccountCost[];
   partial: boolean; // algum servidor nao respondeu
   usdBrl: number | null; // primeira cotação não-nula entre os servidores
@@ -76,7 +89,11 @@ export function sortDesc(m: Map<string, CostBucket>): CostBucket[] {
   return [...m.values()].sort((a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0));
 }
 
-export function mergeAccounts(results: ServerResult[]): MergedReport {
+// Assinatura frouxa de propósito: o formato "por conta" não existe mais no backend, então o que
+// chega aqui é qualquer coisa que POSSA ter `accounts`. Sai com a tela antiga (Task 10).
+export function mergeAccounts(
+  results: { report: { accounts?: AccountCost[]; usd_brl?: number | null } | null }[],
+): LegacyMergedReport {
   const byId = new Map<string, Acc>();
   let partial = false;
   let usdBrl: number | null = null;
@@ -84,7 +101,7 @@ export function mergeAccounts(results: ServerResult[]): MergedReport {
   for (const r of results) {
     if (!r.report) { partial = true; continue; }
     usdBrl ??= r.report.usd_brl ?? null;
-    for (const a of r.report.accounts) {
+    for (const a of r.report.accounts ?? []) {
       let acc = byId.get(a.account_id);
       if (!acc) {
         acc = {
@@ -123,6 +140,109 @@ export function mergeAccounts(results: ServerResult[]): MergedReport {
   }));
 
   return { accounts, partial, usdBrl };
+}
+
+// ── Mescla v2: a malha inteira num relatório só ──────────────────────────────
+
+const zeroBucket = (key: string): DimBucket => ({
+  key, sessions: 0, input: 0, output: 0, cache_write: 0, cache_read: 0,
+  cost: 0, cost_input: 0, cost_output: 0, cost_cache_write: 0, cost_cache_read: 0,
+});
+
+// `?? 0` em TODA entrada: servidor da malha em versão antiga não manda os campos novos, e
+// `undefined + n` vira NaN — que se espalha e apaga a coluna inteira, inclusive as linhas dos
+// servidores que mandaram o dado certo. Mesmo motivo do addModels que já existia aqui.
+function somarBucket(alvo: DimBucket, b: Partial<DimBucket>): void {
+  alvo.sessions += b.sessions ?? 0;
+  alvo.input += b.input ?? 0;
+  alvo.output += b.output ?? 0;
+  alvo.cache_write += b.cache_write ?? 0;
+  alvo.cache_read += b.cache_read ?? 0;
+  alvo.cost += b.cost ?? 0;
+  alvo.cost_input += b.cost_input ?? 0;
+  alvo.cost_output += b.cost_output ?? 0;
+  alvo.cost_cache_write += b.cost_cache_write ?? 0;
+  alvo.cost_cache_read += b.cost_cache_read ?? 0;
+}
+
+function juntarDim(destino: Map<string, DimBucket>, lista: DimBucket[] | undefined): void {
+  for (const b of lista ?? []) {
+    if (!b || typeof b.key !== 'string') continue;
+    let alvo = destino.get(b.key);
+    if (!alvo) { alvo = zeroBucket(b.key); destino.set(b.key, alvo); }
+    somarBucket(alvo, b);
+  }
+}
+
+const ordenar = (m: Map<string, DimBucket>) =>
+  [...m.values()].sort((a, b) => b.cost - a.cost || a.key.localeCompare(b.key));
+
+export function mergeReports(results: ServerResult[], period: string): MergedReport {
+  const totals = zeroBucket('totals');
+  const dims = {
+    by_day: new Map<string, DimBucket>(), by_provider: new Map<string, DimBucket>(),
+    by_source: new Map<string, DimBucket>(), by_project: new Map<string, DimBucket>(),
+    by_model: new Map<string, DimBucket>(),
+  };
+  const kinds = new Map<string, KindBucket>();
+  const rates = new Map<string, RateInfo>();
+  const semTarifa = new Set<string>();
+  const mismatched: string[] = [];
+  const anterior = zeroBucket('anterior');
+  let temAnterior = false;
+  let partial = false;
+  let semCache = 0;
+  let equivalente = 0;
+  let usdBrl: number | null = null;
+
+  results.forEach((res, i) => {
+    const r = res.report;
+    if (!r) { partial = true; return; }
+    // FastAPI ignora query param desconhecido: um backend antigo recebe ?period=7d e devolve
+    // TUDO. Somar isso com o recorte dos outros e chamar de "7 dias" é mentira — então ele
+    // entra como parcial DECLARADO, fora da soma.
+    if ((r.applied?.period ?? null) !== period) { partial = true; mismatched.push(`#${i + 1}`); return; }
+    somarBucket(totals, r.totals ?? {});
+    juntarDim(dims.by_day, r.by_day);
+    juntarDim(dims.by_provider, r.by_provider);
+    juntarDim(dims.by_source, r.by_source);
+    juntarDim(dims.by_project, r.by_project);
+    juntarDim(dims.by_model, r.by_model);
+    for (const k of r.by_kind ?? []) {
+      const cur = kinds.get(k.kind) ?? { kind: k.kind, tokens: 0, cost: 0 };
+      cur.tokens += k.tokens ?? 0;
+      cur.cost += k.cost ?? 0;
+      kinds.set(k.kind, cur);
+    }
+    for (const t of r.rates ?? []) rates.set(t.model, t);
+    for (const m of r.sem_tarifa ?? []) semTarifa.add(m);
+    semCache += r.custo_sem_cache ?? 0;
+    equivalente += r.equivalente_cobrado ?? 0;
+    // A janela anterior só existe se ALGUM servidor soube calculá-la (period=all não tem
+    // anterior). Somar zero calado viraria "caiu 100%" na tela.
+    if (r.anterior) { somarBucket(anterior, r.anterior); temAnterior = true; }
+    usdBrl = usdBrl ?? r.usd_brl ?? null;
+  });
+
+  return {
+    partial, mismatched,
+    report: {
+      totals,
+      by_day: [...dims.by_day.values()].sort((a, b) => b.key.localeCompare(a.key)),
+      by_provider: ordenar(dims.by_provider),
+      by_source: ordenar(dims.by_source),
+      by_project: ordenar(dims.by_project),
+      by_model: ordenar(dims.by_model),
+      by_kind: [...kinds.values()],
+      rates: [...rates.values()].sort((a, b) => a.model.localeCompare(b.model)),
+      sem_tarifa: [...semTarifa].sort(),
+      custo_sem_cache: semCache,
+      equivalente_cobrado: equivalente,
+      anterior: temAnterior ? anterior : null,
+      applied: { period },
+      usd_brl: usdBrl,
+    },
+  };
 }
 
 // Preenche buracos de data na lista de buckets diários (desc) com dias zerados, pra série

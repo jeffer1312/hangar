@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeAccounts, fillDayGaps, type ServerResult } from './costs';
+import { mergeAccounts, mergeReports, fillDayGaps } from './costs';
 import type { AccountCost, CostBucket } from './types';
 
 function bucket(key: string, cost: number): CostBucket {
@@ -18,8 +18,8 @@ function acc(id: string, cost: number, days: CostBucket[]): AccountCost {
 
 describe('mergeAccounts', () => {
   it('sums the same account across servers by day key', () => {
-    const a: ServerResult = { report: { accounts: [acc('u1', 5, [bucket('2026-07-01', 5)])] } };
-    const b: ServerResult = { report: { accounts: [acc('u1', 3, [bucket('2026-07-01', 3)])] } };
+    const a = { report: { accounts: [acc('u1', 5, [bucket('2026-07-01', 5)])] } };
+    const b = { report: { accounts: [acc('u1', 3, [bucket('2026-07-01', 3)])] } };
     const merged = mergeAccounts([a, b]);
     expect(merged.accounts).toHaveLength(1);
     expect(merged.accounts[0].totals.cost).toBe(8);
@@ -49,15 +49,15 @@ describe('mergeAccounts', () => {
   });
 
   it('keeps different accounts separate', () => {
-    const a: ServerResult = { report: { accounts: [acc('u1', 5, [])] } };
-    const b: ServerResult = { report: { accounts: [acc('u2', 3, [])] } };
+    const a = { report: { accounts: [acc('u1', 5, [])] } };
+    const b = { report: { accounts: [acc('u2', 3, [])] } };
     const merged = mergeAccounts([a, b]);
     expect(merged.accounts).toHaveLength(2);
   });
 
   it('marks partial when a server failed', () => {
-    const a: ServerResult = { report: { accounts: [acc('u1', 5, [])] } };
-    const failed: ServerResult = { report: null };
+    const a = { report: { accounts: [acc('u1', 5, [])] } };
+    const failed = { report: null };
     const merged = mergeAccounts([a, failed]);
     expect(merged.partial).toBe(true);
     expect(merged.accounts).toHaveLength(1);
@@ -104,13 +104,57 @@ describe('addModels (via mergeAccounts) — tokens por modelo', () => {
 
 describe('usdBrl no merge', () => {
   it('pega a primeira cotação não-nula entre os servidores', () => {
-    const a: ServerResult = { report: { accounts: [acc('u1', 1, [])] } }; // servidor antigo, sem campo
-    const b: ServerResult = { report: { accounts: [acc('u1', 1, [])], usd_brl: 5.5 } };
+    const a = { report: { accounts: [acc('u1', 1, [])] } }; // servidor antigo, sem campo
+    const b = { report: { accounts: [acc('u1', 1, [])], usd_brl: 5.5 } };
     expect(mergeAccounts([a, b]).usdBrl).toBe(5.5);
   });
 
   it('null quando nenhum servidor mandou', () => {
     expect(mergeAccounts([{ report: { accounts: [] } }]).usdBrl).toBeNull();
+  });
+});
+
+const vazio = () => ({
+  totals: { key: 'totals', sessions: 0, input: 0, output: 0, cache_write: 0, cache_read: 0,
+            cost: 0, cost_input: 0, cost_output: 0, cost_cache_write: 0, cost_cache_read: 0 },
+  by_day: [], by_provider: [], by_source: [], by_project: [], by_model: [], by_kind: [],
+  rates: [], sem_tarifa: [], custo_sem_cache: 0, applied: { period: '30d' }, usd_brl: null,
+});
+
+describe('mergeReports', () => {
+  it('soma o mesmo provedor entre máquinas', () => {
+    // A assinatura da Kimi é UMA só, gaste ela do desktop ou da VPS.
+    const a = { ...vazio(), by_provider: [{ ...vazio().totals, key: 'kimi-coding', cost: 10, sessions: 1 }] };
+    const b = { ...vazio(), by_provider: [{ ...vazio().totals, key: 'kimi-coding', cost: 5, sessions: 2 }] };
+    const m = mergeReports([{ report: a }, { report: b }], '30d');
+    expect(m.report.by_provider).toHaveLength(1);
+    expect(m.report.by_provider[0].cost).toBe(15);
+    expect(m.report.by_provider[0].sessions).toBe(3);
+  });
+
+  it('servidor que não ecoou o período vira parcial, nunca somado', () => {
+    // FastAPI ignora query param desconhecido: backend antigo recebe ?period=7d e devolve TUDO.
+    // Somar isso com 7 dias de outra máquina e chamar de "7 dias" é mentira.
+    const novo = { ...vazio(), applied: { period: '7d' } };
+    const velho = { ...vazio(), applied: undefined, totals: { ...vazio().totals, cost: 999 } };
+    const m = mergeReports([{ report: novo }, { report: velho }], '7d');
+    expect(m.partial).toBe(true);
+    expect(m.mismatched).toHaveLength(1);
+    expect(m.report.totals.cost).toBe(0);
+  });
+
+  it('servidor antigo sem os campos novos não vira NaN', () => {
+    const velho = { usd_brl: null } as never;
+    const m = mergeReports([{ report: velho }], 'all');
+    expect(m.report.totals.cost).toBe(0);
+    expect(m.report.by_provider).toEqual([]);
+  });
+
+  it('servidor que falhou marca parcial sem derrubar os outros', () => {
+    const ok = { ...vazio(), totals: { ...vazio().totals, cost: 7 } };
+    const m = mergeReports([{ report: ok }, { report: null }], '30d');
+    expect(m.partial).toBe(true);
+    expect(m.report.totals.cost).toBe(7);
   });
 });
 
