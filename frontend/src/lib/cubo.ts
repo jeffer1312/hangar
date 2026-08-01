@@ -15,6 +15,20 @@ export interface Filtro {
   subagente?: boolean;
 }
 
+// As quatro dimensões que viram um filtro na tela. 'dia' é do eixo do gráfico, não do recorte.
+export type DimFiltro = Exclude<Dim, 'dia'>;
+
+// Escrita no filtro. Com detalhamento os cortes COMBINAM — é a razão de ele existir. Sem ele
+// (servidor da malha em versão antiga) o recorte volta a ser de UMA dimensão, porque aí só existem
+// os totais marginais dos `by_*`: guardar duas dimensões faria a tela mostrar o número de uma
+// debaixo do rótulo das duas ("Recorte: provedor X · projeto Y" com o gasto só do provedor X).
+// O último clique vence, que é como a tela se comportava antes de haver cruzamento.
+export function aplicar(
+  f: Filtro, dim: DimFiltro, valor: string | undefined, cruza: boolean,
+): Filtro {
+  return { ...(cruza ? f : {}), [dim]: valor };
+}
+
 export function filtrar(combos: ComboRow[], f: Filtro): ComboRow[] {
   return combos.filter(
     (c) =>

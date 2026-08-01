@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agruparPor, filtrar, somar } from './cubo';
+import { agruparPor, aplicar, filtrar, somar } from './cubo';
 import type { ComboRow } from './types';
 
 const c = (o: Partial<ComboRow>): ComboRow => ({
@@ -44,6 +44,21 @@ describe('cubo', () => {
     const r = somar(filtrar(dados, { project: '/nao-existe' }));
     expect(r.cost).toBe(0);
     expect(Number.isNaN(r.input)).toBe(false);
+  });
+
+  it('sem detalhamento o recorte é ÚNICO — rótulo e número não podem divergir', () => {
+    // Com dois cortes guardados, a tela sem `combos` mostraria o número de UM (é só o que os
+    // `by_*` sabem responder) debaixo de um rótulo que anuncia os DOIS. O último clique vence,
+    // como a tela fazia antes de existir cruzamento.
+    const f = aplicar(aplicar({}, 'provider', 'anthropic:u', false), 'project', '/web', false);
+    expect(f.provider).toBeFalsy();
+    expect(f.project).toBe('/web');
+  });
+
+  it('com detalhamento os cortes combinam', () => {
+    const f = aplicar(aplicar({}, 'provider', 'anthropic:u', true), 'project', '/web', true);
+    expect(somar(filtrar(dados, f)).cost).toBe(113); // 100 da conversa + 13 do subagente
+    expect(f.provider).toBe('anthropic:u');
   });
 
   it('campo ausente de servidor antigo não vira NaN', () => {

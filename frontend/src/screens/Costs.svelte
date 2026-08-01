@@ -6,7 +6,7 @@
     mergeReports, fillDayGaps, tarifasPorModelo, custoDesconhecido, precoParcial, partirOcultos,
     type ServerResult, type MergedReport,
   } from '../lib/costs';
-  import { agruparPor, filtrar, somar, type Filtro } from '../lib/cubo';
+  import { agruparPor, aplicar, filtrar, somar, type Filtro } from '../lib/cubo';
   import { dec, tok, money, money2, type Cur } from '../lib/fmt';
   import type { ComboRow, DimBucket } from '../lib/types';
 
@@ -169,8 +169,10 @@
   const listaDa = (d: Dim): DimBucket[] =>
     temCombos ? agruparPor(filtrar(base, { ...filtroAtivo, [d]: undefined }), d) : listaCrua(d);
 
-  // Os números do topo saem do CRUZAMENTO. Sem detalhamento, do recorte de uma dimensão só — a
-  // primeira ativa —, exatamente como a tela fazia antes.
+  // Os números do topo saem do CRUZAMENTO. Sem detalhamento sai do balde de UMA dimensão nos
+  // `by_*`, exatamente como a tela fazia antes — e o `aplicar` garante que ali só existe uma
+  // dimensão no filtro, senão este `find` descartaria a segunda em silêncio, com o rótulo do
+  // recorte ainda anunciando as duas.
   const foco = $derived.by(() => {
     if (temCombos) return somar(recorte);
     const d = DIMS.find((x) => filtroAtivo[x]);
@@ -187,11 +189,14 @@
       ? [] : [filtroAtivo.subagente ? 'só subagente' : 'só conversa']),
   ].join(' · '));
 
+  // As duas escritas passam pelo `aplicar`, que é quem sabe se o recorte pode CRUZAR: sem
+  // detalhamento ele volta a ser de uma dimensão só, senão o rótulo diria "provedor X · projeto Y"
+  // enquanto `foco` (que só acha um balde nos `by_*`) mostraria o número de X sozinho.
   function alternar(dim: Dim, key: string) {
-    filtro = { ...filtro, [dim]: filtro[dim] === key ? undefined : key };
+    filtro = aplicar(filtro, dim, filtro[dim] === key ? undefined : key, temCombos);
   }
   function setFiltro(dim: Dim, valor: string) {
-    filtro = { ...filtro, [dim]: valor || undefined };
+    filtro = aplicar(filtro, dim, valor || undefined, temCombos);
   }
   function limpar() {
     filtro = {};
