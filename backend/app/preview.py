@@ -49,6 +49,9 @@ _MCP_CALL_RE = re.compile(r"^Calling\b[^\n]*(…|\.\.\.)\s*$")
 # sem a chance de uma prosa dele que desenhe um box virar preview truncado.
 # ponytail: desenho da caixa é calibration knob, igual ao _BOX_BOTTOM_RE do state.py.
 _PI_BOX_RE = re.compile(r"^\s*[╭╰][─\s]*[╮╯]\s*$")
+# Separador do overlay do /model: `▔` (U+2594), não a régua reta. Medido nas fixtures
+# pane_model_picker_*.txt — nelas o _RULE_RE não casa NADA.
+_OVERLAY_RULE_RE = re.compile(r"^[\s▔]*▔{10,}[\s▔]*$")
 _STOPS_BY_PROVIDER = {"pi": (_PI_BOX_RE,)}
 
 # Bloco de FERRAMENTA do Pi. O _TOOL_BLOCK_RE exige "Nome(" colado, e o Pi escreve de pelo menos
@@ -104,16 +107,24 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
     """
     stops = _STOPS_BY_PROVIDER.get(provider, ())
     lines = pane.splitlines()
-    # A conversa acaba na ÚLTIMA RÉGUA do pane: dali pra baixo é a caixa de digitar, a statusline,
-    # as dicas e — o que motivou este corte — o PAINEL DE SUBAGENTES ("● main" / "◯ general-purpose
-    # Grepping… 1m 34s"). Ele marca a linha do agente principal com o MESMO ● do bloco do assistente
-    # (U+25CF, medido no pane em 01/08/2026), e como a varredura pega o ÚLTIMO ●, o painel ganhava
-    # sempre: numa sessão com subagente rodando a prévia era o painel, nunca o texto.
-    # Corte por posição, e não por vocabulário: qualquer chrome futuro que reuse ● cai fora junto.
-    # Régua ausente (pane muito curto / recém-aberto) -> varre tudo, como antes.
-    fim = max((i for i, ln in enumerate(lines) if _RULE_RE.match(ln)), default=len(lines))
+    # A conversa acaba no ÚLTIMO CHROME DE RODAPÉ: dali pra baixo é a caixa de digitar, a
+    # statusline, as dicas e — o que motivou este corte — o PAINEL DE SUBAGENTES ("● main" /
+    # "◯ general-purpose Grepping… 1m 34s"). Ele marca o agente principal com o MESMO ● do bloco do
+    # assistente (U+25CF, medido no pane em 01/08/2026), e como a varredura pega o ÚLTIMO ●, o
+    # painel ganhava sempre: em sessão com subagente rodando a prévia era ele, nunca o texto.
+    # Corte por POSIÇÃO, não por vocabulário — qualquer chrome futuro que reuse ● cai fora junto.
+    # São TRÊS desenhos porque cada estado do TUI usa o seu, e olhar só a régua reta deixava dois
+    # buracos (achado da review, reproduzido nas fixtures do repo):
+    #   ─  régua do composer do Claude          ▔  separador do overlay do /model
+    #   ╭╮ ╰╯  caixa do composer do Pi (que nunca desenha régua reta — sem isto o corte era no-op
+    #          no caminho dele)
+    # Nenhum deles presente (pane recém-aberto, ou estreito demais pros 10 traços) -> varre tudo,
+    # como antes: prévia suja é melhor que prévia nenhuma.
+    fim = max((i for i, ln in enumerate(lines)
+               if _RULE_RE.match(ln) or _OVERLAY_RULE_RE.match(ln) or _PI_BOX_RE.match(ln)),
+              default=len(lines))
     start = -1
-    for i, ln in enumerate(lines[:fim] if fim < len(lines) else lines):
+    for i, ln in enumerate(lines[:fim]):   # sem régua, fim == len(lines) e a fatia é a lista toda
         s = ln.lstrip()
         corpo = s[1:].lstrip()
         if (s[:1] == _ASSISTANT_GLYPH and not _TOOL_BLOCK_RE.match(corpo)

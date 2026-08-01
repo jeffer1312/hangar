@@ -253,3 +253,32 @@ def test_pane_sem_regua_ainda_varre_tudo():
     # nada, e nao ha rodape pra confundir.
     pane = "● Texto solto sem chrome nenhum\n"
     assert extract_assistant_text(pane) == "Texto solto sem chrome nenhum"
+
+
+def test_overlay_do_model_tambem_corta_o_painel_de_subagentes():
+    # Achado da review: o separador do overlay do /model e `▔` (U+2594), nao a regua reta -- nas
+    # fixtures pane_model_picker_*.txt o _RULE_RE nao casa NADA. Sem reconhecer esse desenho, o
+    # corte caia no fallback "varre tudo" e o painel de subagentes voltava a vencer.
+    fx = Path(__file__).parent / "fixtures"
+    pane = (fx / "pane_model_picker_opus.txt").read_text(encoding="utf-8") + (
+        "\n  ● main\n"
+        "  ◯ general-purpose  Grepping textoFalavel usage sitewide  1m 34s\n"
+    )
+    out = extract_assistant_text(pane)
+    assert not out.startswith("main"), f"painel de subagentes vazou: {out[:60]!r}"
+
+
+def test_caixa_do_composer_do_pi_tambem_corta():
+    # O Pi desenha o composer com caixa arredondada e NUNCA regua reta -- sem incluir esse desenho,
+    # o corte era no-op no caminho dele.
+    pane = (
+        "● Prosa do Pi em voo.\n"
+        "╭──────────────────────────────╮\n"
+        "│ digitar aqui                 │\n"
+        "╰──────────────────────────────╯\n"
+        "  🤖 k3 (high)\n"
+        "\n"
+        "  ● main\n"
+        "  ◯ general-purpose  Grepping  1m 34s\n"
+    )
+    assert extract_assistant_text(pane, "pi") == "Prosa do Pi em voo."
