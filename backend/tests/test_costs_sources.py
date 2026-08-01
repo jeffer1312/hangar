@@ -109,3 +109,46 @@ def test_timestamp_vira_tz_aware(tmp_path):
     ts = cs.linhas_claude(cfg, "c")[0].ts
     assert ts.tzinfo is not None
     assert ts.astimezone(timezone.utc).hour == 10
+
+
+def test_codex_usa_o_ultimo_token_count_e_desconta_o_cache(tmp_path, monkeypatch):
+    # input_tokens do Codex INCLUI o cacheado. E reasoning_output é SUBCONJUNTO do output:
+    # medido, 16242 + 18 = 16260. Somar dobra o output.
+    raiz = tmp_path / "sessions" / "2026" / "07" / "30"
+    _escrever(raiz / "rollout-2026-07-30T15-48-56-abc.jsonl", [
+        {"timestamp": "2026-07-30T18:48:59Z", "type": "session_meta",
+         "payload": {"cwd": "/repo/dois", "model_provider": "openai", "session_id": "abc"}},
+        {"type": "turn_context", "payload": {"model": "gpt-5.6-sol"}},
+        {"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {
+            "input_tokens": 100, "cached_input_tokens": 40, "output_tokens": 5,
+            "reasoning_output_tokens": 3}}}},
+        {"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {
+            "input_tokens": 300, "cached_input_tokens": 200, "output_tokens": 9,
+            "reasoning_output_tokens": 4}}}},
+    ])
+    monkeypatch.setattr(cs, "raiz_codex", lambda: tmp_path / "sessions")
+    r = cs.linhas_codex()[0]
+    assert r.input == 100      # 300 - 200
+    assert r.cache_read == 200
+    assert r.output == 9       # reasoning NÃO somado
+    assert r.cache_write == 0  # cache da OpenAI é automático, não cobrado
+    assert r.source == "codex"
+    assert r.provider == "openai"
+    assert r.project == "/repo/dois"
+    assert r.model == "gpt-5.6-sol"
+
+
+def test_codex_sem_diretorio_devolve_lista_vazia(tmp_path, monkeypatch):
+    # Quem não usa Codex não pode ver "Codex: US$ 0,00" — isso lê como "usei e não gastou".
+    monkeypatch.setattr(cs, "raiz_codex", lambda: tmp_path / "nao-existe")
+    assert cs.linhas_codex() == []
+
+
+def test_codex_rollout_sem_token_count_e_pulado(tmp_path, monkeypatch):
+    raiz = tmp_path / "sessions" / "2026" / "08" / "01"
+    _escrever(raiz / "rollout-x.jsonl", [
+        {"timestamp": "2026-08-01T10:00:00Z", "type": "session_meta",
+         "payload": {"cwd": "/r", "model_provider": "openai"}},
+    ])
+    monkeypatch.setattr(cs, "raiz_codex", lambda: tmp_path / "sessions")
+    assert cs.linhas_codex() == []
