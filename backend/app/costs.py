@@ -1,158 +1,163 @@
+"""Agregação do painel de custos: linhas das três fontes -> cortes por dimensão.
+
+Quem LÊ as fontes é o costs_sources; quem sabe preço é o pricing. Aqui só se soma.
+"""
 from __future__ import annotations
 
 import json
 import logging
 import time
 import urllib.request
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from collections import defaultdict
+from datetime import datetime, timedelta
 
-from app.config import list_config_dirs
-from app.models import AccountCost, Bucket, CostReport, ModelBucket
+from app import pricing
+from app.costs_sources import LOCAL, UsageRow, coletar
+from app.models import Applied, CostReport, DimBucket, KindBucket, RateInfo
 
-LOCAL = timezone(timedelta(hours=-3))  # America/Sao_Paulo (sem horario de verao)
-
-# Preco real por 1M tokens (fonte: skill claude-api). cache write = 1.25x input, read = 0.1x.
-RATES: dict[str, dict[str, float]] = {
-    "opus":   {"i": 5.0,  "o": 25.0, "cw": 6.25,  "cr": 0.50},
-    "sonnet": {"i": 3.0,  "o": 15.0, "cw": 3.75,  "cr": 0.30},
-    "haiku":  {"i": 1.0,  "o": 5.0,  "cw": 1.25,  "cr": 0.10},
-    "fable":  {"i": 10.0, "o": 50.0, "cw": 12.50, "cr": 1.00},
-}
+TIPOS = ("input", "output", "cache_write", "cache_read")
+PERIODOS = {"7d": 7, "30d": 30, "90d": 90}
 
 
-def rates_for(model: str | None) -> dict[str, float]:
-    m = (model or "").lower()
-    for key in ("haiku", "fable", "opus", "sonnet"):
-        if key in m:
-            return RATES[key]
-    return RATES["sonnet"]  # fallback conservador
+# _account_info NÃO mora mais aqui: virou costs_sources.account_info. Este módulo importa
+# costs_sources, então manter a função aqui fecharia um ciclo.
 
 
-def _load(config_dir: Path) -> list[dict]:
-    """Le config_dir/metrics/costs.jsonl, dedup pela ultima linha por session_id
-    (linhas sao snapshots cumulativos), converte timestamp p/ tz local."""
-    src = config_dir / "metrics" / "costs.jsonl"
-    if not src.is_file():
-        return []
-    latest: dict[str, dict] = {}
-    with src.open() as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                d = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            ts = d.get("timestamp")
-            if not ts:
-                continue
-            key = d.get("session_id") or d.get("transcript_path") or ts
-            latest[key] = d  # last line wins (append-only log), no timestamp comparison
-    rows: list[dict] = []
-    for d in latest.values():
-        dt = datetime.fromisoformat(d["timestamp"].replace("Z", "+00:00")).astimezone(LOCAL)
-        rows.append({
-            "dt": dt,
-            "model": d.get("model"),
-            "in": int(d.get("input_tokens", 0) or 0),
-            "out": int(d.get("output_tokens", 0) or 0),
-            "cw": int(d.get("cache_write_tokens", 0) or 0),
-            "cr": int(d.get("cache_read_tokens", 0) or 0),
-        })
-    return rows
+def _custo_da_linha(r: UsageRow) -> dict[str, float] | None:
+    rate = pricing.rate_for(r.model)
+    if rate is None:
+        return None
+    return pricing.custo(rate, r.input, r.output, r.cache_write, r.cache_read)
 
 
-def _cost(row: dict) -> float:
-    r = rates_for(row["model"])
-    return (row["in"] / 1e6 * r["i"] + row["out"] / 1e6 * r["o"]
-            + row["cw"] / 1e6 * r["cw"] + row["cr"] / 1e6 * r["cr"])
+def _somar(b: dict, r: UsageRow, c: dict[str, float] | None) -> None:
+    b["sessions"] += 1
+    b["input"] += r.input
+    b["output"] += r.output
+    b["cache_write"] += r.cache_write
+    b["cache_read"] += r.cache_read
+    if c:
+        for t in TIPOS:
+            b[f"cost_{t}"] += c[t]
+        b["cost"] += sum(c.values())
 
 
-def _bucket(rows: list[dict], keyfn) -> list[dict]:
-    agg: dict[str, dict] = {}
-    for row in rows:
-        k = keyfn(row["dt"])
-        a = agg.setdefault(k, {"sessions": 0, "in": 0, "out": 0, "cr": 0, "cw": 0, "cost": 0.0})
-        a["sessions"] += 1
-        a["in"] += row["in"]
-        a["out"] += row["out"]
-        a["cr"] += row["cr"]
-        a["cw"] += row["cw"]
-        a["cost"] += _cost(row)
-    return [{"key": k, **a} for k, a in sorted(agg.items(), reverse=True)]
+def _zero() -> dict:
+    z = {"sessions": 0, "cost": 0.0}
+    for t in TIPOS:
+        z[t] = 0
+        z[f"cost_{t}"] = 0.0
+    return z
 
 
-def _iso_week(dt: datetime) -> str:
-    y, w, _ = dt.isocalendar()
-    return f"{y}-W{w:02d}"
-
-
-def _to_bucket(d: dict) -> Bucket:
-    return Bucket(key=d["key"], sessions=d["sessions"], input=d["in"],
-                  output=d["out"], cache_read=d["cr"], cache_write=d["cw"],
-                  cost=d["cost"])
-
-
-def _totals(rows: list[dict]) -> Bucket:
-    b = _bucket(rows, lambda _dt: "totals")
-    return _to_bucket(b[0]) if b else Bucket(
-        key="totals", sessions=0, input=0, output=0,
-        cache_read=0, cache_write=0, cost=0.0)
-
-
-def _by_model(rows: list[dict]) -> list[ModelBucket]:
-    agg: dict[str, dict] = {}
-    for row in rows:
-        m = row["model"] or "?"
-        a = agg.setdefault(m, {"sessions": 0, "in": 0, "out": 0, "cr": 0, "cw": 0, "cost": 0.0})
-        a["sessions"] += 1
-        a["in"] += row["in"]
-        a["out"] += row["out"]
-        a["cr"] += row["cr"]
-        a["cw"] += row["cw"]
-        a["cost"] += _cost(row)
-    return [ModelBucket(model=m, sessions=a["sessions"], cost=a["cost"],
-                        input=a["in"], output=a["out"],
-                        cache_read=a["cr"], cache_write=a["cw"])
-            for m, a in sorted(agg.items(), key=lambda kv: -kv[1]["cost"])]
-
-
-def aggregate(rows: list[dict], account_id: str, email: str | None,
-              label: str, now: datetime) -> AccountCost:
-    today = now.strftime("%Y-%m-%d")
-    yest = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-    day = _bucket(rows, lambda d: d.strftime("%Y-%m-%d"))
-    week = _bucket(rows, _iso_week)
-    month = _bucket(rows, lambda d: d.strftime("%Y-%m"))
-    return AccountCost(
-        account_id=account_id,
-        email=email,
-        label=label,
-        totals=_totals(rows),
-        today=sum(b["cost"] for b in day if b["key"] == today),
-        yesterday=sum(b["cost"] for b in day if b["key"] == yest),
-        by_day=[_to_bucket(b) for b in day],
-        by_week=[_to_bucket(b) for b in week],
-        by_month=[_to_bucket(b) for b in month],
-        by_model=_by_model(rows),
+def agrupar(linhas: list[UsageRow], chave, custos: dict[int, dict | None]) -> list[DimBucket]:
+    agg: dict[str, dict] = defaultdict(_zero)
+    for i, r in enumerate(linhas):
+        _somar(agg[chave(r)], r, custos[i])
+    return sorted(
+        (DimBucket(key=k, **v) for k, v in agg.items()),
+        key=lambda b: (-b.cost, b.key),
     )
 
 
-def _account_info(config_dir: Path, fallback_label: str) -> tuple[str, str | None, str]:
-    # .claude.json fica DENTRO do config dir (CLAUDE_CONFIG_DIR custom) ou em ~/.claude.json (default).
-    for f in (config_dir / ".claude.json", Path.home() / ".claude.json"):
-        try:
-            oa = (json.loads(f.read_text()).get("oauthAccount") or {})
-        except (OSError, json.JSONDecodeError, AttributeError, TypeError):
-            # AttributeError/TypeError: .claude.json existe mas root nao e dict (corrompido) -> fallback
+def _totais(linhas: list[UsageRow]) -> dict:
+    b = _zero()
+    for r in linhas:
+        _somar(b, r, _custo_da_linha(r))
+    return b
+
+
+def _janela_anterior(todas: list[UsageRow], dias: int, now: datetime) -> DimBucket | None:
+    """Totais da janela imediatamente anterior, do MESMO tamanho.
+
+    Devolve None quando a janela anterior tem menos de 1/3 dos dias com registro: comparar
+    contra um período quase vazio não é comparação, é divisão pelo vazio (medido: ▲574% porque
+    "30 dias anteriores" tinha 3 dias de dado). Melhor a tela dizer "sem período anterior
+    completo" do que inventar um número.
+    """
+    fim = (now - timedelta(days=dias)).date()
+    ini = (now - timedelta(days=dias * 2 - 1)).date()
+    janela = [r for r in todas if ini <= r.ts.date() <= fim]
+    if not janela:
+        return None
+    cobertos = len({r.ts.date() for r in janela})
+    if cobertos * 3 < dias:
+        return None
+    return DimBucket(key="anterior", **_totais(janela))
+
+
+def montar(linhas: list[UsageRow], period: str = "all",
+           now: datetime | None = None) -> CostReport:
+    """Agrega as linhas já coletadas. O corte do dia é do SERVIDOR, no fuso do servidor — o
+    front nunca recalcula data a partir de new Date()."""
+    now = now or datetime.now(LOCAL)
+    dias = PERIODOS.get(period)
+    # A janela anterior sai da lista COMPLETA e ANTES do corte: depois de filtrar, o dado dela
+    # não existe mais.
+    anterior = _janela_anterior(linhas, dias, now) if dias else None
+    if dias:
+        corte = (now - timedelta(days=dias - 1)).date()
+        linhas = [r for r in linhas if r.ts.date() >= corte]
+
+    # `custos` é indexado pela POSIÇÃO em `linhas` e tem que ser montado DEPOIS do corte:
+    # construir antes desalinharia os índices que o agrupar() usa, em silêncio.
+    custos = {i: _custo_da_linha(r) for i, r in enumerate(linhas)}
+    total = _zero()
+    kinds = {t: {"tokens": 0, "cost": 0.0} for t in TIPOS}
+    sem_cache = 0.0
+    equivalente = 0.0
+    sem_tarifa: set[str] = set()
+    rates: dict[str, RateInfo] = {}
+    for i, r in enumerate(linhas):
+        c = custos[i]
+        _somar(total, r, c)
+        for t in TIPOS:
+            kinds[t]["tokens"] += getattr(r, t)
+            if c:
+                kinds[t]["cost"] += c[t]
+        rate = pricing.rate_for(r.model)
+        if rate is None:
+            # O id CANÔNICO, igual ao by_model: guardar o cru faria duas grafias do mesmo
+            # modelo virarem duas linhas de "sem tarifa".
+            sem_tarifa.add(pricing.canonizar(r.model))
             continue
-        uuid = oa.get("accountUuid")
-        if uuid:
-            email = oa.get("emailAddress")
-            return uuid, email, (email or fallback_label)
-    return fallback_label, None, fallback_label
+        # Preço cheio: os mesmos tokens se NENHUM fosse cache.
+        sem_cache += ((r.input + r.cache_write + r.cache_read) / 1e6 * rate.input
+                      + r.output / 1e6 * rate.output)
+        # Equivalente-input: cada tipo pesado pela própria tarifa. Sem preço de input não há
+        # régua pra converter, e a linha simplesmente não entra (o custo dela já entrou).
+        if rate.input:
+            equivalente += (r.input
+                            + r.output * (rate.output / rate.input)
+                            + r.cache_write * (rate.cache_write / rate.input)
+                            + r.cache_read * (rate.cache_read / rate.input))
+        rates.setdefault(pricing.canonizar(r.model), RateInfo(
+            model=pricing.canonizar(r.model), provider=rate.provider,
+            input=rate.input, output=rate.output, cache_read=rate.cache_read,
+            cache_write=rate.cache_write, origin=rate.origin,
+            cache_estimado=rate.cache_estimado))
+
+    return CostReport(
+        totals=DimBucket(key="totals", **total),
+        by_day=sorted(agrupar(linhas, lambda r: r.ts.strftime("%Y-%m-%d"), custos),
+                      key=lambda b: b.key, reverse=True),
+        by_provider=agrupar(linhas, lambda r: r.provider, custos),
+        by_source=agrupar(linhas, lambda r: r.source, custos),
+        by_project=agrupar(linhas, lambda r: r.project, custos),
+        by_model=agrupar(linhas, lambda r: pricing.canonizar(r.model), custos),
+        by_kind=[KindBucket(kind=t, **kinds[t]) for t in TIPOS],
+        rates=sorted(rates.values(), key=lambda r: r.model),
+        sem_tarifa=sorted(sem_tarifa),
+        custo_sem_cache=sem_cache,
+        equivalente_cobrado=int(equivalente),
+        anterior=anterior,
+        applied=Applied(period=period),
+        usd_brl=usd_brl(),
+    )
+
+
+def report(period: str = "all", now: datetime | None = None) -> CostReport:
+    return montar(coletar(), period=period, now=now)
 
 
 # Cotação USD/BRL: cache em memória de 1h. Falha também "conta" como tentativa (atualiza o
@@ -176,14 +181,3 @@ def usd_brl() -> float | None:
         # timeout de mudança de schema da API (senão os dois falham idênticos pra sempre).
         logging.getLogger(__name__).warning("cotação USD/BRL falhou: %r", e)
     return _rate
-
-
-def report(now: datetime | None = None) -> CostReport:
-    now = now or datetime.now(LOCAL)
-    accounts: list[AccountCost] = []
-    for cfg in list_config_dirs():
-        cdir = Path(cfg.path)
-        rows = _load(cdir)
-        acc_id, email, label = _account_info(cdir, cfg.label)
-        accounts.append(aggregate(rows, acc_id, email, label, now))
-    return CostReport(accounts=accounts, usd_brl=usd_brl())

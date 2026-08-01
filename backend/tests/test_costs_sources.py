@@ -335,3 +335,76 @@ def test_cache_evita_reparse_quando_nada_muda(tmp_path, monkeypatch):
     os.utime(arq, (0, 0))
     cs.coletar()
     assert chamadas == {"claude": 2, "pi": 1}, "só o costs.jsonl mudou -> só o claude releu"
+
+
+# --- Vieram do test_costs.py: o código que eles cobrem mudou de módulo, o risco não mudou -----
+
+
+def test_claude_dedup_de_snapshots_cumulativos_por_session_id(tmp_path):
+    cfg = tmp_path / ".claude"
+    _escrever(cfg / "metrics" / "costs.jsonl", [
+        {"timestamp": "2026-07-01T10:00:00.000Z", "session_id": "s1",
+         "model": "claude-opus-4-8", "input_tokens": 100, "output_tokens": 10,
+         "cache_write_tokens": 0, "cache_read_tokens": 0},
+        {"timestamp": "2026-07-01T10:05:00.000Z", "session_id": "s1",
+         "model": "claude-opus-4-8", "input_tokens": 200, "output_tokens": 20,
+         "cache_write_tokens": 0, "cache_read_tokens": 0},
+    ])
+    linhas = cs.linhas_claude(cfg, "conta-teste")
+    assert len(linhas) == 1                 # 2 snapshots da mesma sessao = 1
+    assert linhas[0].input == 200           # ultima linha vence
+    assert linhas[0].output == 20
+
+
+def test_claude_ultima_linha_vence_com_timestamp_igual(tmp_path):
+    cfg = tmp_path / ".claude"
+    _escrever(cfg / "metrics" / "costs.jsonl", [
+        {"timestamp": "2026-07-01T10:00:00.000Z", "session_id": "s1",
+         "model": "claude-opus-4-8", "input_tokens": 100, "output_tokens": 0,
+         "cache_write_tokens": 0, "cache_read_tokens": 0},
+        {"timestamp": "2026-07-01T10:00:00.000Z", "session_id": "s1",
+         "model": "claude-opus-4-8", "input_tokens": 999, "output_tokens": 0,
+         "cache_write_tokens": 0, "cache_read_tokens": 0},
+    ])
+    linhas = cs.linhas_claude(cfg, "conta-teste")
+    assert len(linhas) == 1
+    assert linhas[0].input == 999  # ultima linha vence mesmo com timestamp igual
+
+
+def test_claude_arquivo_ausente_devolve_vazio(tmp_path):
+    assert cs.linhas_claude(tmp_path, "conta-teste") == []
+
+
+def test_claude_pula_linha_invalida(tmp_path):
+    cfg = tmp_path / ".claude"
+    _escrever(cfg / "metrics" / "costs.jsonl", [
+        "nao-e-json",
+        {"timestamp": "2026-07-01T10:00:00Z", "session_id": "s1", "model": "claude-opus-4-8",
+         "input_tokens": 1, "output_tokens": 0, "cache_write_tokens": 0, "cache_read_tokens": 0},
+    ])
+    assert len(cs.linhas_claude(cfg, "conta-teste")) == 1
+
+
+def test_account_info_reads_oauth(tmp_path):
+    (tmp_path / ".claude.json").write_text(json.dumps(
+        {"oauthAccount": {"accountUuid": "u-9", "emailAddress": "x@y.com"}}))
+    aid, email, label = cs.account_info(tmp_path, "fallback")
+    assert (aid, email, label) == ("u-9", "x@y.com", "x@y.com")
+
+
+def test_account_info_fallback_when_missing(tmp_path, monkeypatch):
+    # config_dir sem .claude.json E HOME isolado (sem ~/.claude.json) -> cai no fallback.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    aid, email, label = cs.account_info(tmp_path / "cfg", "fallback")
+    assert aid == "fallback"
+    assert email is None
+
+
+def test_account_info_fallback_when_json_root_not_dict(tmp_path, monkeypatch):
+    # .claude.json corrompido (root e lista, nao dict) -> nao explode, cai no fallback.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".claude.json").write_text("[1, 2, 3]")
+    aid, email, label = cs.account_info(tmp_path, "fallback")
+    assert aid == "fallback"
+    assert email is None
+    assert label == "fallback"

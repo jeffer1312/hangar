@@ -229,16 +229,6 @@ class AskQuestion(BaseModel):
     questions: list[AskQuestionItem]
 
 
-class Bucket(BaseModel):
-    key: str
-    sessions: int
-    input: int
-    output: int
-    cache_read: int
-    cache_write: int
-    cost: float
-
-
 class ModelBucket(BaseModel):
     model: str
     sessions: int
@@ -253,22 +243,77 @@ class ModelBucket(BaseModel):
     cache_write: int = 0
 
 
-class AccountCost(BaseModel):
-    account_id: str
-    email: Optional[str] = None
-    label: str
-    totals: Bucket
-    today: float
-    yesterday: float
-    by_day: list[Bucket]
-    by_week: list[Bucket]
-    by_month: list[Bucket]
-    by_model: list[ModelBucket]
+class KindBucket(BaseModel):
+    kind: str            # "input" | "output" | "cache_write" | "cache_read"
+    tokens: int = 0
+    cost: float = 0.0
+
+
+class DimBucket(BaseModel):
+    """Um corte qualquer (dia, provedor, fonte, projeto, modelo). `key` é o valor da dimensão."""
+    key: str
+    sessions: int = 0
+    input: int = 0
+    output: int = 0
+    cache_write: int = 0
+    cache_read: int = 0
+    cost: float = 0.0
+    # Custo quebrado por tipo, DENTRO do corte: é o que faz a barra do projeto mostrar a FORMA
+    # do gasto (projeto de output != projeto de cache) sem precisar clicar.
+    cost_input: float = 0.0
+    cost_output: float = 0.0
+    cost_cache_write: float = 0.0
+    cost_cache_read: float = 0.0
+    # Só em by_provider/by_source: quantas fontes/provedores caem aqui (rótulo da tela).
+    label: Optional[str] = None
+
+
+class RateInfo(BaseModel):
+    model: str
+    provider: str
+    input: float
+    output: float
+    cache_read: float
+    cache_write: float
+    origin: str              # "override" | "models.dev" | "snapshot"
+    cache_estimado: bool = False
+
+
+class Applied(BaseModel):
+    """Eco dos filtros que o servidor REALMENTE aplicou.
+
+    FastAPI ignora query param desconhecido: um backend antigo recebe ?period=7d e devolve TUDO.
+    Sem este eco, o front somaria '7 dias da máquina A' com 'sempre da máquina B' e mostraria como
+    um período só. Campo ausente na resposta = servidor antigo = parcial declarado, nunca somado.
+    """
+    period: str = "all"
 
 
 class CostReport(BaseModel):
-    accounts: list[AccountCost]
-    usd_brl: Optional[float] = None  # cotação p/ exibir em R$ no front; None = indisponível
+    totals: DimBucket = DimBucket(key="totals")
+    by_day: list[DimBucket] = []
+    by_provider: list[DimBucket] = []
+    by_source: list[DimBucket] = []
+    by_project: list[DimBucket] = []
+    by_model: list[DimBucket] = []
+    by_kind: list[KindBucket] = []
+    rates: list[RateInfo] = []
+    sem_tarifa: list[str] = []
+    # Quanto custaria se NENHUM token fosse cache (cache W e R a preço de input cheio). É a
+    # métrica de eficiência: medido, o cache responde por 85% de economia.
+    custo_sem_cache: float = 0.0
+    # Tokens em "equivalente-input": cada tipo pesado pela PRÓPRIA tarifa. É o terceiro dos
+    # quatro números do topo — passaram 22 Bi brutos, pesaram como 3,3 Bi, deram 20 mil dólares.
+    # Sai daqui e não do front porque depende da tarifa de cada modelo, que o front não tem.
+    equivalente_cobrado: int = 0
+    # Totais da janela imediatamente ANTERIOR, do mesmo tamanho — a régua do "subiu ou desceu".
+    # None quando não dá pra comparar: `period=all` (não existe anterior) ou janela anterior com
+    # menos de 1/3 dos dias com registro. Medido: o histórico começa em julho, então "30 dias
+    # anteriores" tinha 3 dias de dado e a variação deu ▲574% — não era crescimento, era o vazio
+    # dividindo. O front NUNCA calcula isto: o corte do dia é do servidor, no fuso do servidor.
+    anterior: Optional[DimBucket] = None
+    applied: Optional[Applied] = None
+    usd_brl: Optional[float] = None
 
 
 class Runner(BaseModel):

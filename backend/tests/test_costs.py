@@ -1,171 +1,131 @@
-import json
-from datetime import datetime, timedelta
-from pathlib import Path
+import time
+from datetime import datetime
+
+import pytest
 
 from app import costs
+from app import pricing
+from app.costs_sources import UsageRow
 
 
-def _write_jsonl(path: Path, rows: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+@pytest.fixture(autouse=True)
+def _isolado(tmp_path, monkeypatch):
+    """Tarifa vem do SNAPSHOT do repo, e nada vai à rede.
+
+    Sem o primeiro, um cache de tarifa baixado na máquina (ou um override) muda o custo e o
+    teste passa ou falha conforme o disco de quem roda. Sem o segundo, `montar()` chama
+    `usd_brl()` de verdade e a suíte paga o timeout da API de câmbio.
+    """
+    monkeypatch.setattr(pricing, "_CACHE_DIR", tmp_path / "pricing")
+    pricing.invalidar_cache()
+    monkeypatch.setattr(costs, "_rate", None)
+    monkeypatch.setattr(costs, "_rate_at", time.monotonic())
+    yield
+    pricing.invalidar_cache()
 
 
-def test_rates_for_matches_by_substring():
-    assert costs.rates_for("claude-opus-4-8")["i"] == 5.0
-    assert costs.rates_for("claude-sonnet-5")["o"] == 15.0
-    assert costs.rates_for("claude-haiku-4-5")["i"] == 1.0
-    assert costs.rates_for("claude-fable-5")["o"] == 50.0
-    assert costs.rates_for(None)["i"] == 3.0  # fallback sonnet
+def _linha(**kw):
+    base = dict(ts=datetime(2026, 8, 1, 10, tzinfo=costs.LOCAL), source="claude",
+                provider="anthropic:u1", model="claude-opus-5", project="/repo/a",
+                session_id="s1", input=1_000_000, output=1_000_000,
+                cache_write=1_000_000, cache_read=1_000_000)
+    return UsageRow(**{**base, **kw})
 
 
-def test_load_dedups_cumulative_snapshots_by_session_id(tmp_path):
-    src = tmp_path / "metrics" / "costs.jsonl"
-    _write_jsonl(src, [
-        {"timestamp": "2026-07-01T10:00:00.000Z", "session_id": "s1",
-         "model": "claude-opus-4-8", "input_tokens": 100, "output_tokens": 10,
-         "cache_write_tokens": 0, "cache_read_tokens": 0},
-        {"timestamp": "2026-07-01T10:05:00.000Z", "session_id": "s1",
-         "model": "claude-opus-4-8", "input_tokens": 200, "output_tokens": 20,
-         "cache_write_tokens": 0, "cache_read_tokens": 0},
-    ])
-    rows = costs._load(tmp_path)
-    assert len(rows) == 1                 # 2 snapshots da mesma sessao = 1
-    assert rows[0]["in"] == 200           # ultima linha vence
-    assert rows[0]["out"] == 20
+def test_totais_quebram_o_custo_por_tipo_de_token():
+    r = costs.montar([_linha()], now=datetime(2026, 8, 1, 12, tzinfo=costs.LOCAL))
+    k = {b.kind: b for b in r.by_kind}
+    assert k["input"].cost == 5.0
+    assert k["output"].cost == 25.0
+    assert k["cache_write"].cost == 6.25
+    assert k["cache_read"].cost == 0.5
+    assert r.totals.cost == 36.75
 
 
-def test_load_last_line_wins_on_timestamp_tie(tmp_path):
-    src = tmp_path / "metrics" / "costs.jsonl"
-    _write_jsonl(src, [
-        {"timestamp": "2026-07-01T10:00:00.000Z", "session_id": "s1",
-         "model": "claude-opus-4-8", "input_tokens": 100, "output_tokens": 0,
-         "cache_write_tokens": 0, "cache_read_tokens": 0},
-        {"timestamp": "2026-07-01T10:00:00.000Z", "session_id": "s1",
-         "model": "claude-opus-4-8", "input_tokens": 999, "output_tokens": 0,
-         "cache_write_tokens": 0, "cache_read_tokens": 0},
-    ])
-    rows = costs._load(tmp_path)
-    assert len(rows) == 1
-    assert rows[0]["in"] == 999  # ultima linha vence mesmo com timestamp igual
+def test_modelo_sem_tarifa_nao_soma_e_entra_na_lista_de_sem_tarifa():
+    r = costs.montar([_linha(model="modelo-fantasma-2099")],
+                     now=datetime(2026, 8, 1, 12, tzinfo=costs.LOCAL))
+    assert r.totals.cost == 0.0
+    assert r.totals.input == 1_000_000, "os TOKENS continuam contando; só o custo é desconhecido"
+    assert "modelo-fantasma-2099" in r.sem_tarifa
 
 
-def test_load_missing_file_returns_empty(tmp_path):
-    assert costs._load(tmp_path) == []
+def test_provedor_atravessa_a_fonte():
+    # O caso que motivou o eixo: a mesma assinatura da OpenAI gasta pelo Codex CLI e pelo Pi.
+    linhas = [_linha(source="codex", provider="openai", model="gpt-5.6-sol"),
+              _linha(source="pi", provider="openai", model="gpt-5.6-sol")]
+    r = costs.montar(linhas, now=datetime(2026, 8, 1, 12, tzinfo=costs.LOCAL))
+    prov = {b.key: b for b in r.by_provider}
+    assert len(prov) == 1 and prov["openai"].sessions == 2
+    assert {b.key for b in r.by_source} == {"codex", "pi"}
 
 
-def test_load_skips_invalid_lines(tmp_path):
-    src = tmp_path / "metrics" / "costs.jsonl"
-    src.parent.mkdir(parents=True)
-    src.write_text('nao-e-json\n{"timestamp":"2026-07-01T10:00:00Z","session_id":"s1",'
-                   '"model":"claude-opus-4-8","input_tokens":1,"output_tokens":0,'
-                   '"cache_write_tokens":0,"cache_read_tokens":0}\n')
-    rows = costs._load(tmp_path)
-    assert len(rows) == 1
+def test_period_corta_pela_data_do_servidor():
+    velha = _linha(ts=datetime(2026, 7, 1, 10, tzinfo=costs.LOCAL), session_id="antiga")
+    nova = _linha(ts=datetime(2026, 8, 1, 10, tzinfo=costs.LOCAL))
+    r = costs.montar([velha, nova], period="7d",
+                     now=datetime(2026, 8, 1, 12, tzinfo=costs.LOCAL))
+    assert r.totals.sessions == 1
+    assert r.applied.period == "7d"
 
 
-def test_cost_applies_per_model_rates():
-    # 1M input opus = $5, 1M output opus = $25
-    row = {"dt": None, "model": "claude-opus-4-8",
-           "in": 1_000_000, "out": 1_000_000, "cw": 0, "cr": 0}
-    assert costs._cost(row) == 30.0
+def test_equivalente_cobrado_pesa_cada_tipo_pela_propria_tarifa():
+    # Opus 5: in 5, out 25, cw 6.25, cr 0.5 -> pesos 1, 5, 1.25, 0.1 sobre a régua do input.
+    # 1M de cada = 1M + 5M + 1.25M + 0.1M = 7.35M equivalentes.
+    agora = datetime(2026, 8, 1, 12, tzinfo=costs.LOCAL)
+    r = costs.montar([_linha()], now=agora)
+    assert r.equivalente_cobrado == 7_350_000
+
+    # E o cache lido puxa pra BAIXO: 10M de cache read pesam como 1M de input (tarifa 0,5 contra
+    # 5,0). Com 1M de cada tipo o total sobe, porque o output sozinho pesa 5x — por isso a régua
+    # de "cache é barato" se mede numa carga de cache, não numa mistura.
+    so_cache = costs.montar([_linha(input=0, output=0, cache_write=0, cache_read=10_000_000)],
+                            now=agora)
+    assert so_cache.equivalente_cobrado == 1_000_000
+    assert so_cache.equivalente_cobrado < so_cache.totals.cache_read
 
 
-def test_bucket_sums_and_orders():
-    rows = [
-        {"dt": datetime(2026, 7, 1), "model": "claude-opus-4-8",
-         "in": 1_000_000, "out": 0, "cw": 0, "cr": 0},
-        {"dt": datetime(2026, 6, 30), "model": "claude-opus-4-8",
-         "in": 2_000_000, "out": 0, "cw": 0, "cr": 0},
-    ]
-    out = costs._bucket(rows, lambda d: d.strftime("%Y-%m-%d"))
-    assert [b["key"] for b in out] == ["2026-07-01", "2026-06-30"]  # reverse
-    assert out[0]["cost"] == 5.0
-    assert out[1]["cost"] == 10.0
+def test_janela_anterior_sai_da_lista_completa():
+    now = datetime(2026, 8, 20, 12, tzinfo=costs.LOCAL)
+    atual = [_linha(ts=datetime(2026, 8, 20 - d, 10, tzinfo=costs.LOCAL), session_id=f"a{d}")
+             for d in range(7)]
+    antes = [_linha(ts=datetime(2026, 8, 13 - d, 10, tzinfo=costs.LOCAL), session_id=f"b{d}")
+             for d in range(7)]
+    r = costs.montar(atual + antes, period="7d", now=now)
+    assert r.totals.sessions == 7
+    assert r.anterior is not None and r.anterior.sessions == 7
 
 
-def test_aggregate_today_yesterday_and_totals():
-    now = datetime(2026, 7, 1, 12, 0, tzinfo=costs.LOCAL)
-    y = now - timedelta(days=1)
-    rows = [
-        {"dt": now, "model": "claude-opus-4-8",
-         "in": 1_000_000, "out": 0, "cw": 0, "cr": 0},   # hoje, $5
-        {"dt": y, "model": "claude-opus-4-8",
-         "in": 2_000_000, "out": 0, "cw": 0, "cr": 0},    # ontem, $10
-    ]
-    acc = costs.aggregate(rows, "uuid-1", "a@b.com", "a@b.com", now)
-    assert acc.account_id == "uuid-1"
-    assert acc.email == "a@b.com"
-    assert acc.today == 5.0
-    assert acc.yesterday == 10.0
-    assert acc.totals.cost == 15.0
-    assert acc.totals.sessions == 2
-    # soma dos by_day bate com o total
-    assert sum(b.cost for b in acc.by_day) == acc.totals.cost
-    assert len(acc.by_model) == 1
-    assert acc.by_model[0].model == "claude-opus-4-8"
+def test_janela_anterior_mal_coberta_nao_vira_comparacao():
+    # Foi o ▲574% do mockup: o histórico começava em julho, então "30 dias anteriores" tinha
+    # 3 dias de dado. Isso não é crescimento, é o vazio dividindo.
+    now = datetime(2026, 8, 20, 12, tzinfo=costs.LOCAL)
+    atual = [_linha(ts=datetime(2026, 8, 20, 10, tzinfo=costs.LOCAL))]
+    um_dia_so = [_linha(ts=datetime(2026, 7, 25, 10, tzinfo=costs.LOCAL), session_id="b")]
+    r = costs.montar(atual + um_dia_so, period="30d", now=now)
+    assert r.anterior is None
 
 
-def test_account_info_reads_oauth(tmp_path):
-    (tmp_path / ".claude.json").write_text(json.dumps(
-        {"oauthAccount": {"accountUuid": "u-9", "emailAddress": "x@y.com"}}))
-    aid, email, label = costs._account_info(tmp_path, "fallback")
-    assert (aid, email, label) == ("u-9", "x@y.com", "x@y.com")
+def test_period_all_nao_tem_janela_anterior():
+    r = costs.montar([_linha()], period="all",
+                     now=datetime(2026, 8, 1, 12, tzinfo=costs.LOCAL))
+    assert r.anterior is None
 
 
-def test_account_info_fallback_when_missing(tmp_path, monkeypatch):
-    # config_dir sem .claude.json E HOME isolado (sem ~/.claude.json) -> cai no fallback.
-    monkeypatch.setenv("HOME", str(tmp_path))
-    aid, email, label = costs._account_info(tmp_path / "cfg", "fallback")
-    assert aid == "fallback"
-    assert email is None
+def test_sem_tarifa_usa_o_id_canonico():
+    # Duas grafias do MESMO modelo não podem virar duas linhas de "sem tarifa".
+    linhas = [_linha(model="fantasma-2099", session_id="x"),
+              _linha(model="openrouter/fantasma-2099", session_id="y")]
+    r = costs.montar(linhas, now=datetime(2026, 8, 1, 12, tzinfo=costs.LOCAL))
+    assert r.sem_tarifa == ["fantasma-2099"]
 
 
-def test_account_info_fallback_when_json_root_not_dict(tmp_path, monkeypatch):
-    # .claude.json corrompido (root e lista, nao dict) -> nao explode, cai no fallback.
-    monkeypatch.setenv("HOME", str(tmp_path))
-    (tmp_path / ".claude.json").write_text("[1, 2, 3]")
-    aid, email, label = costs._account_info(tmp_path, "fallback")
-    assert aid == "fallback"
-    assert email is None
-    assert label == "fallback"
-
-
-def test_by_model_sums_tokens_per_model():
-    """by_model passou a carregar tokens, não só sessions/cost. Agregar por modelo é somar linhas
-    de dias diferentes num balde só — errar a chave (ex: reusar o acumulador entre modelos)
-    daria número plausível e errado, do tipo que ninguém confere de cabeça."""
-    rows = [
-        {"dt": datetime(2026, 7, 1), "model": "claude-opus-4-8",
-         "in": 1_000_000, "out": 10, "cw": 100, "cr": 1_000},
-        {"dt": datetime(2026, 6, 30), "model": "claude-opus-4-8",
-         "in": 2_000_000, "out": 20, "cw": 200, "cr": 2_000},
-        {"dt": datetime(2026, 6, 30), "model": "claude-fable-5",
-         "in": 5_000_000, "out": 30, "cw": 300, "cr": 3_000},
-    ]
-    by = {m.model: m for m in costs._by_model(rows)}
-
-    assert by["claude-opus-4-8"].sessions == 2
-    assert by["claude-opus-4-8"].input == 3_000_000     # 1M + 2M, atravessando o mês
-    assert by["claude-opus-4-8"].output == 30
-    assert by["claude-opus-4-8"].cache_write == 300
-    assert by["claude-opus-4-8"].cache_read == 3_000
-    # Modelo vizinho intocado: sem isto, um acumulador compartilhado passaria despercebido.
-    assert by["claude-fable-5"].input == 5_000_000
-    assert by["claude-fable-5"].sessions == 1
-
-
-def test_by_model_tokens_batem_com_o_total():
-    """Invariante: fatiar por modelo não pode criar nem sumir token."""
-    now = datetime(2026, 7, 1, 12, 0, tzinfo=costs.LOCAL)
-    rows = [
-        {"dt": now, "model": "claude-opus-4-8", "in": 7, "out": 11, "cw": 13, "cr": 17},
-        {"dt": now, "model": "claude-fable-5", "in": 19, "out": 23, "cw": 29, "cr": 31},
-    ]
-    acc = costs.aggregate(rows, "uuid-1", None, "l", now)
-    assert sum(m.input for m in acc.by_model) == acc.totals.input
-    assert sum(m.output for m in acc.by_model) == acc.totals.output
-    assert sum(m.cache_write for m in acc.by_model) == acc.totals.cache_write
-    assert sum(m.cache_read for m in acc.by_model) == acc.totals.cache_read
+def test_rates_dizem_de_onde_veio_o_preco():
+    r = costs.montar([_linha()], now=datetime(2026, 8, 1, 12, tzinfo=costs.LOCAL))
+    tarifa = {t.model: t for t in r.rates}["claude-opus-5"]
+    assert tarifa.input == 5.0 and tarifa.output == 25.0
+    assert tarifa.origin in ("snapshot", "models.dev", "override")
+    assert tarifa.cache_estimado is False
 
 
 def test_usd_brl_cacheia_e_nao_rebate_na_rede(monkeypatch):
