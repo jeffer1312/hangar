@@ -119,7 +119,13 @@ def montar(linhas: list[UsageRow], period: str = "all",
         if rate is None:
             # O id CANÔNICO, igual ao by_model: guardar o cru faria duas grafias do mesmo
             # modelo virarem duas linhas de "sem tarifa".
-            sem_tarifa.add(pricing.canonizar(r.model))
+            canon = pricing.canonizar(r.model)
+            # IGNORADOS não são modelo ('<synthetic>', 'unknown', ''): rate_for devolve None pra
+            # eles também, e listá-los como "sem tarifa" põe um traço na tabela sugerindo preço
+            # faltando — que é outra coisa (pricing.py:111). O linhas_claude já os descarta; as
+            # linhas de Codex e Pi não passam por lá.
+            if canon not in pricing.IGNORADOS:
+                sem_tarifa.add(canon)
             continue
         # Preço cheio: os mesmos tokens se NENHUM fosse cache.
         sem_cache += ((r.input + r.cache_write + r.cache_read) / 1e6 * rate.input

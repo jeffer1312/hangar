@@ -40,6 +40,9 @@ def test_totais_quebram_o_custo_por_tipo_de_token():
     assert k["cache_write"].cost == 6.25
     assert k["cache_read"].cost == 0.5
     assert r.totals.cost == 36.75
+    # Preço cheio: os 3M de input+cw+cr a US$5 mais 1M de output a US$25. Errar aqui é fácil
+    # (esquecer o cache_write, ou pesar o cache pela tarifa DE cache em vez da de input).
+    assert r.custo_sem_cache == 40.0
 
 
 def test_modelo_sem_tarifa_nao_soma_e_entra_na_lista_de_sem_tarifa():
@@ -101,9 +104,19 @@ def test_janela_anterior_mal_coberta_nao_vira_comparacao():
     # 3 dias de dado. Isso não é crescimento, é o vazio dividindo.
     now = datetime(2026, 8, 20, 12, tzinfo=costs.LOCAL)
     atual = [_linha(ts=datetime(2026, 8, 20, 10, tzinfo=costs.LOCAL))]
-    um_dia_so = [_linha(ts=datetime(2026, 7, 25, 10, tzinfo=costs.LOCAL), session_id="b")]
+    # 10/07 e não 25/07: com period=30d a janela ATUAL começa em 22/07, então 25/07 cairia
+    # dentro dela, a janela anterior (22/06–21/07) ficaria vazia, e o None viria do `if not
+    # janela` — a regra de cobertura, que é o que este teste existe pra travar, nunca rodaria.
+    um_dia_so = [_linha(ts=datetime(2026, 7, 10, 10, tzinfo=costs.LOCAL), session_id="b")]
     r = costs.montar(atual + um_dia_so, period="30d", now=now)
-    assert r.anterior is None
+    assert r.anterior is None   # cobertos=1, e 1*3 < 30
+
+    # O contrário, senão um _janela_anterior que só sabe dizer None passaria no teste acima:
+    # janela anterior BEM coberta (15 dias com registro, dentro de 22/06–21/07) devolve o bucket.
+    bem = [_linha(ts=datetime(2026, 7, 5 + d, 10, tzinfo=costs.LOCAL), session_id=f"c{d}")
+           for d in range(15)]
+    r2 = costs.montar(atual + bem, period="30d", now=now)
+    assert r2.anterior is not None and r2.anterior.sessions == 15
 
 
 def test_period_all_nao_tem_janela_anterior():
@@ -118,6 +131,47 @@ def test_sem_tarifa_usa_o_id_canonico():
               _linha(model="openrouter/fantasma-2099", session_id="y")]
     r = costs.montar(linhas, now=datetime(2026, 8, 1, 12, tzinfo=costs.LOCAL))
     assert r.sem_tarifa == ["fantasma-2099"]
+
+
+def test_fatiar_por_dimensao_nao_cria_nem_some_token():
+    """Invariante que veio do test_by_model_tokens_batem_com_o_total, agora em cinco dimensões:
+    a soma de cada corte tem que bater com o total. Errar a chave de agrupamento (reusar o
+    acumulador entre chaves, por exemplo) dá número plausível e errado — o modo de falha desta
+    tela. Tokens primos e diferentes por linha: número redondo mascara erro de soma."""
+    now = datetime(2026, 8, 2, 12, tzinfo=costs.LOCAL)
+    linhas = [
+        _linha(model="claude-opus-5", source="claude", provider="anthropic:u1",
+               project="/repo/a", session_id="1", input=7, output=11,
+               cache_write=13, cache_read=17,
+               ts=datetime(2026, 8, 1, 10, tzinfo=costs.LOCAL)),
+        _linha(model="gpt-5.6-sol", source="codex", provider="openai",
+               project="/repo/b", session_id="2", input=19, output=23,
+               cache_write=29, cache_read=31,
+               ts=datetime(2026, 8, 2, 10, tzinfo=costs.LOCAL)),
+        # Sem tarifa de propósito: linha que não soma custo não pode sumir da contagem de tokens.
+        _linha(model="fantasma-2099", source="pi", provider="kimi-coding",
+               project="/repo/c", session_id="3", input=37, output=41,
+               cache_write=43, cache_read=47,
+               ts=datetime(2026, 8, 2, 11, tzinfo=costs.LOCAL)),
+    ]
+    r = costs.montar(linhas, now=now)
+    for nome in ("by_provider", "by_source", "by_project", "by_model", "by_day"):
+        cortes = getattr(r, nome)
+        for campo in ("sessions", "input", "output", "cache_write", "cache_read"):
+            assert sum(getattr(b, campo) for b in cortes) == getattr(r.totals, campo), \
+                f"{nome}.{campo} não bate com o total"
+        assert sum(b.cost for b in cortes) == pytest.approx(r.totals.cost), f"{nome}.cost"
+    # E o mesmo pelo outro eixo: o custo por tipo de token também é uma fatia do mesmo bolo.
+    assert sum(b.cost for b in r.by_kind) == pytest.approx(r.totals.cost)
+
+
+def test_modelo_ignorado_nao_vira_linha_de_sem_tarifa():
+    # '<synthetic>' e 'unknown' não são modelo. rate_for devolve None pra eles igual a um modelo
+    # sem preço, mas listá-los sugere preço faltando. Claude já filtra na origem; Codex e Pi não.
+    r = costs.montar([_linha(model="<synthetic>"), _linha(model="unknown", session_id="b")],
+                     now=datetime(2026, 8, 1, 12, tzinfo=costs.LOCAL))
+    assert r.sem_tarifa == []
+    assert r.totals.sessions == 2, "a linha continua contando token; ela só não vira preço"
 
 
 def test_rates_dizem_de_onde_veio_o_preco():
