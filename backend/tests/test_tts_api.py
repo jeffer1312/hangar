@@ -110,3 +110,64 @@ def test_401_sem_token():
     client = _client()
     r = client.post("/api/tts", json={"text": "oi"})
     assert r.status_code == 401
+
+
+def test_narrar_sem_chamar_a_groq_quando_instrucao_e_padrao():
+    # "ler como esta" e o unico jeito de mandar instrucao vazia (o campo tem min_length=1),
+    # mas passa pelo texto integral igual, sem custo.
+    client = _client()
+    r = client.post(
+        "/api/tts/narrar",
+        json={"text": "texto original", "code_blocks": [], "instruction": "ler como está"},
+        headers=_AUTH,
+    )
+    assert r.status_code == 200
+    assert r.json() == {"text": "texto original", "chars_sent": 0, "used_groq": False}
+
+
+def test_narrar_com_instrucao_chama_a_groq_e_devolve_o_tratado():
+    client = _client()
+    with patch("app.narrar.narrar", return_value="texto tratado pela Groq") as fake_narrar:
+        r = client.post(
+            "/api/tts/narrar",
+            json={"text": "texto sel", "code_blocks": ["const x = 1;"], "instruction": "explica o código"},
+            headers=_AUTH,
+        )
+        fake_narrar.assert_called_once_with("texto sel", ["const x = 1;"], "explica o código")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["text"] == "texto tratado pela Groq"
+    assert body["used_groq"] is True
+    assert body["chars_sent"] == len("texto sel") + len("const x = 1;") + len("explica o código")
+
+
+def test_narrar_erro_da_groq_vira_502():
+    from app.narrar import NarrarError
+    client = _client()
+    with patch("app.narrar.narrar", side_effect=NarrarError(502, "Groq 500: boom")):
+        r = client.post(
+            "/api/tts/narrar",
+            json={"text": "x", "code_blocks": [], "instruction": "explica"},
+            headers=_AUTH,
+        )
+    assert r.status_code == 502
+
+
+def test_narrar_sem_chave_vira_503():
+    from app.narrar import NarrarError
+    client = _client()
+    with patch("app.narrar.narrar", side_effect=NarrarError(503, "sem chave")):
+        r = client.post(
+            "/api/tts/narrar",
+            json={"text": "x", "code_blocks": [], "instruction": "explica"},
+            headers=_AUTH,
+        )
+    assert r.status_code == 503
+
+
+def test_narrar_instrucao_vazia_e_rejeitada_pelo_schema():
+    # min_length=1: o front so chama esta rota quando ha instrucao de verdade (ver ouvirClique) —
+    # instrucao vazia e sempre o caminho direto ouvirTexto->/api/tts, sem passar por aqui.
+    client = _client()
+    r = client.post("/api/tts/narrar", json={"text": "x", "code_blocks": [], "instruction": ""}, headers=_AUTH)
+    assert r.status_code == 422

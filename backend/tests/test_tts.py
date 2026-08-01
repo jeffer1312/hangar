@@ -19,6 +19,21 @@ def test_hash_estavel_para_o_mesmo_conteudo():
     assert tts.hash_de("oi", "v", "elevenlabs") == tts.hash_de("oi", "v", "elevenlabs")
 
 
+def test_hash_sem_instrucao_nao_muda_o_de_hoje():
+    # CRITICO (fase 2, narracao guiada): o caminho SEM instrucao tem que bater byte a byte com o
+    # hash de antes desta fase, senao todo audio ja ouvido perde o cache.
+    assert tts.hash_de("oi", "v", "elevenlabs") == tts.hash_de("oi", "v", "elevenlabs", None, "")
+    assert tts.hash_de("oi", "v", "elevenlabs", {}) == tts.hash_de("oi", "v", "elevenlabs", {}, "")
+
+
+def test_hash_muda_com_instrucao_diferente():
+    # Mesmo texto (ja tratado ou nao) tratado por instrucoes diferentes tem que virar audio diferente.
+    sem = tts.hash_de("oi", "v", "elevenlabs", {}, "")
+    com_a = tts.hash_de("oi", "v", "elevenlabs", {}, "explica o código")
+    com_b = tts.hash_de("oi", "v", "elevenlabs", {}, "resuma")
+    assert len({sem, com_a, com_b}) == 3
+
+
 def test_hash_muda_com_ajuste_de_naturalidade():
     # CRITICO: sem os ajustes na chave do cache, mexer na estabilidade e pedir pra ouvir de novo
     # devolveria o audio ANTIGO, calado — pareceria que o controle nao faz nada.
