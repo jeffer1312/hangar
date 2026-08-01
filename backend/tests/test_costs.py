@@ -4,6 +4,7 @@ from datetime import datetime
 import pytest
 
 from app import costs
+from app import costs_sources
 from app import pricing
 from app.costs_sources import UsageRow
 
@@ -61,6 +62,19 @@ def test_provedor_atravessa_a_fonte():
     prov = {b.key: b for b in r.by_provider}
     assert len(prov) == 1 and prov["openai"].sessions == 2
     assert {b.key for b in r.by_source} == {"codex", "pi"}
+
+
+def test_provedor_de_conta_leva_rotulo_legivel(monkeypatch):
+    """A chave continua sendo o uuid (é ela que soma entre servidores da malha), mas o que a tela
+    LÊ é o e-mail: a linha de topo do 'Por provedor', com 87% do gasto, aparecia como
+    'anthropic:758a9521-e2ef-435b-8738-bc502547c24c'."""
+    monkeypatch.setitem(costs_sources._ROTULOS, "anthropic:u1", "eu@exemplo.com")
+    r = costs.montar([_linha(), _linha(provider="openai", model="gpt-5.6-sol")],
+                     now=datetime(2026, 8, 1, 12, tzinfo=costs.LOCAL))
+    prov = {b.key: b for b in r.by_provider}
+    assert prov["anthropic:u1"].label == "eu@exemplo.com"
+    # Provedor cujo nome já é legível não ganha rótulo: o front cai pra própria chave.
+    assert prov["openai"].label is None
 
 
 def test_period_corta_pela_data_do_servidor():

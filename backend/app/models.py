@@ -229,20 +229,6 @@ class AskQuestion(BaseModel):
     questions: list[AskQuestionItem]
 
 
-class ModelBucket(BaseModel):
-    model: str
-    sessions: int
-    cost: float
-    # Default 0 e não obrigatórios: a UI junta relatórios de VÁRIOS servidores da malha, que nem
-    # sempre estão na mesma versão. Servidor antigo responde sem estes campos — com default, a
-    # linha dele entra com token zerado; sem, a resposta inteira dele viraria erro de validação e
-    # o custo daquela máquina sumiria da soma.
-    input: int = 0
-    output: int = 0
-    cache_read: int = 0
-    cache_write: int = 0
-
-
 class KindBucket(BaseModel):
     kind: str            # "input" | "output" | "cache_write" | "cache_read"
     tokens: int = 0
@@ -252,6 +238,10 @@ class KindBucket(BaseModel):
 class DimBucket(BaseModel):
     """Um corte qualquer (dia, provedor, fonte, projeto, modelo). `key` é o valor da dimensão."""
     key: str
+    # Rótulo legível quando a `key` não serve pra ler — hoje só a conta Anthropic, cuja chave é
+    # 'anthropic:<uuid>' (identidade que não colide na malha) mas cujo nome é o e-mail. O front
+    # exibe `label ?? key`; None é o caso normal, em que a chave já é o nome.
+    label: Optional[str] = None
     sessions: int = 0
     input: int = 0
     output: int = 0

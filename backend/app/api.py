@@ -41,7 +41,7 @@ from app import tts
 from app.tts_text import preparar as tts_preparar
 from app import narrar
 from app import default_model, engine_probe, engines
-from app.costs import report as costs_report, PERIODOS as _COST_PERIODOS
+from app.costs import report as costs_report, usd_brl as _usd_brl, PERIODOS as _COST_PERIODOS
 from app import pricing
 from app.git_ops import (
     list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit_diff, revert_commit, cherry_pick, reset_to, create_branch_at, create_tag, diff_vs_worktree, branches_containing, commit, last_commit_message, push as push_branch, sequencer_state, GitError, branch_of,
@@ -172,6 +172,10 @@ async def _lifespan(app: FastAPI):
 
     await asyncio.to_thread(_boot_resume_loops)
     pricing.atualizar_em_background()  # NUNCA num request: o cliente aborta em 4s
+    # Mesmo motivo, outra rede: usd_brl() tem cache de 1h e timeout de 3s, e é chamado DENTRO do
+    # montar(). Sem aquecer aqui, o primeiro /api/costs depois de todo restart paga a coleta fria
+    # (657ms medidos) MAIS até 3s de câmbio, contra o AbortSignal.timeout(4000) do cliente.
+    threading.Thread(target=_usd_brl, name="usd-brl-warm", daemon=True).start()
     try:
         yield
     finally:

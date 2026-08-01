@@ -22,7 +22,7 @@ export interface MergedReport {
 // ── Mescla v2: a malha inteira num relatório só ──────────────────────────────
 
 const zeroBucket = (key: string): DimBucket => ({
-  key, sessions: 0, input: 0, output: 0, cache_write: 0, cache_read: 0,
+  key, label: null, sessions: 0, input: 0, output: 0, cache_write: 0, cache_read: 0,
   cost: 0, cost_input: 0, cost_output: 0, cost_cache_write: 0, cost_cache_read: 0,
 });
 
@@ -47,6 +47,10 @@ function juntarDim(destino: Map<string, DimBucket>, lista: DimBucket[] | undefin
     if (!b || typeof b.key !== 'string') continue;
     let alvo = destino.get(b.key);
     if (!alvo) { alvo = zeroBucket(b.key); destino.set(b.key, alvo); }
+    // O rótulo é do PRIMEIRO servidor que souber dizer: a chave é a mesma nos dois (é o que
+    // permite somar), e um servidor da malha em versão antiga manda a linha sem `label` — sem
+    // este `??`, a máquina antiga apagaria o nome que a nova já tinha resolvido.
+    alvo.label = alvo.label ?? b.label ?? null;
     somarBucket(alvo, b);
   }
 }
@@ -166,6 +170,30 @@ export function tarifasPorModelo(rates: RateInfo[]): Map<string, RateInfo | null
 // US$ 0,00 como se fosse gasto real.
 export function custoDesconhecido(b: DimBucket): boolean {
   return b.input + b.output + b.cache_write + b.cache_read > 0 && b.cost === 0;
+}
+
+// Preço PARCIAL: um servidor da malha conhece a tarifa deste modelo e outro (snapshot mais velho
+// do catálogo) não. O balde mesclado sai com o volume dos DOIS e o custo de UM: `tarifasPorModelo`
+// responde `has() === true`, `custoDesconhecido()` responde false, e a linha mostra um preço
+// subestimado sem marca nenhuma. Dentro de um servidor só isso é impossível — é bug exclusivo da
+// mescla. O `sem_tarifa` que o servidor atrasado mandou já NOMEIA o modelo; ele só era lido no
+// rodapé, e é essa a informação que faltava chegar na linha.
+export function precoParcial(model: string, temTarifa: boolean, semTarifa: string[]): boolean {
+  return temTarifa && semTarifa.includes(model);
+}
+
+// Recorte de "esconder da lista" — e a razão de ele morar AQUI e não dentro do .svelte é que a
+// garantia que ele tem que dar ("esconder não muda total nenhum") é justamente a candidata
+// número um a *o total não bate*, e dentro do componente ela era intestável.
+// `pico` sai dos VISÍVEIS: manter a régua num projeto escondido deixaria todas as barras da tela
+// curtas por causa de algo que ninguém vê.
+export function partirOcultos(lista: DimBucket[], ocultos: Set<string>): {
+  visiveis: DimBucket[]; escondidos: DimBucket[]; pico: number;
+} {
+  const visiveis: DimBucket[] = [];
+  const escondidos: DimBucket[] = [];
+  for (const b of lista) (ocultos.has(b.key) ? escondidos : visiveis).push(b);
+  return { visiveis, escondidos, pico: Math.max(1, ...visiveis.map((b) => b.cost)) };
 }
 
 // Preenche buracos de data na lista de buckets diários (desc) com dias zerados, pra série

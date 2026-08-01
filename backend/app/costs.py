@@ -12,7 +12,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 from app import pricing
-from app.costs_sources import LOCAL, UsageRow, coletar
+from app.costs_sources import LOCAL, UsageRow, coletar, rotulo_de_provedor
 from app.models import Applied, CostReport, DimBucket, KindBucket, RateInfo
 
 TIPOS = ("input", "output", "cache_write", "cache_read")
@@ -50,12 +50,15 @@ def _zero() -> dict:
     return z
 
 
-def agrupar(linhas: list[UsageRow], chave, custos: dict[int, dict | None]) -> list[DimBucket]:
+def agrupar(linhas: list[UsageRow], chave, custos: dict[int, dict | None],
+            rotulo=None) -> list[DimBucket]:
+    """`rotulo` traduz a CHAVE do corte num nome legível (só o by_provider usa hoje). A chave em
+    si nunca muda: é ela que soma entre servidores da malha — o rótulo é só o que se lê."""
     agg: dict[str, dict] = defaultdict(_zero)
     for i, r in enumerate(linhas):
         _somar(agg[chave(r)], r, custos[i])
     return sorted(
-        (DimBucket(key=k, **v) for k, v in agg.items()),
+        (DimBucket(key=k, label=rotulo(k) if rotulo else None, **v) for k, v in agg.items()),
         key=lambda b: (-b.cost, b.key),
     )
 
@@ -147,7 +150,7 @@ def montar(linhas: list[UsageRow], period: str = "all",
         totals=DimBucket(key="totals", **total),
         by_day=sorted(agrupar(linhas, lambda r: r.ts.strftime("%Y-%m-%d"), custos),
                       key=lambda b: b.key, reverse=True),
-        by_provider=agrupar(linhas, lambda r: r.provider, custos),
+        by_provider=agrupar(linhas, lambda r: r.provider, custos, rotulo_de_provedor),
         by_source=agrupar(linhas, lambda r: r.source, custos),
         by_project=agrupar(linhas, lambda r: r.project, custos),
         by_model=agrupar(linhas, lambda r: pricing.canonizar(r.model), custos),
