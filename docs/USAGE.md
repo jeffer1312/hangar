@@ -162,11 +162,30 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
 ### Enviar
 - **Texto:** digite e envie. **Multi-linha** funciona (Shift+Enter / colar — vai por bracketed paste).
 - **Imagem / arquivo:** 📎 no composer (upload) — ou cole no terminal do Claude que o app mostra o thumbnail.
-- **Áudio:** 🎤 no composer grava pelo microfone (toque grava, toque ⏹ para); ou anexe um arquivo de
-  áudio pelo 📎. No envio o áudio é **transcrito** (Groq / whisper-large-v3-turbo) e vai como texto
-  + o áudio anexado. **Requer a chave da Groq:** `CP_GROQ_API_KEY=<sua-chave>` no `backend/.env`
-  (ou `GROQ_API_KEY` no ambiente do backend) e reinício do backend. Sem chave, o envio de áudio
-  responde 503. Pegue a chave grátis em <https://console.groq.com>.
+- **Áudio (ditado):** 🎤 no composer grava pelo microfone (toque grava, toque ⏹ para); ou anexe um
+  arquivo de áudio pelo 📎. Nos dois casos o áudio é sempre **gravado e transcrito** (Groq /
+  whisper-large-v3-turbo) — o app não usa mais o reconhecimento de fala do navegador (o do Safari,
+  no iPhone), então o texto some do campo enquanto você fala e reaparece de uma vez só ao final, não
+  palavra por palavra. O resultado cai como texto no campo pra você revisar e enviar; o áudio em si
+  não vira anexo. **Requer a chave da Groq** — sem ela não há ditado nenhum (antes o navegador
+  cobria quando faltava): `CP_GROQ_API_KEY=<sua-chave>` no `backend/.env` (ou `GROQ_API_KEY` no
+  ambiente do backend, reiniciando-o), ou a **chave da Groq** em Configurações → Anexos e
+  transcrição. Sem chave, a gravação funciona mas a transcrição responde 503. Pegue a chave grátis
+  em <https://console.groq.com>.
+- **Limpeza do ditado:** o texto gravado pelo microfone passa por um modelo que aplica a correção
+  que você falou em voz alta — dizer "usa o postgres, não, o redis" vira "Usa o Redis." —, tira
+  hesitação ("é... tipo assim...") e pontua. Preserva nome de arquivo, caminho, comando, sigla e
+  número exatamente como foram ditados; não resume nem reescreve o estilo. Não mexe em texto que
+  começa com `/` (senão `/clear` viraria comando quebrado) nem em frase com menos de 5 palavras. Se
+  a limpeza falhar ou sair errada (resumir demais, ou "responder" em vez de limpar), fica o texto
+  cru e aparece um aviso explicando o motivo; o botão **↩ original** ao lado do campo repõe o texto
+  exatamente como saiu da transcrição. Vale só pra gravação pelo microfone — áudio anexado como
+  arquivo não passa por essa limpeza.
+- **Provedor da limpeza e da leitura em voz:** por padrão usa a Groq (`llama-3.3-70b-versatile`).
+  Pra apontar pra outro serviço compatível com a API da OpenAI, preencha em Configurações →
+  Avançado: **Endpoint do LLM**, **Chave do LLM** e **Modelo do LLM**. A chave só é usada quando o
+  endpoint não é o padrão — preencheu o endpoint de outro serviço, a chave dele é obrigatória (a
+  chave da Groq não é reaproveitada pra outro host, de propósito).
 - **Slash commands:** `/` abre a lista (`/clear`, `/compact`, …). `/clear` limpa de verdade (zera a fila).
 - **Modelo/esforço:** toque na pill (ex `Opus4.8·1M·high`) → escolhe modelo + esforço (só na sessão).
 - **Pergunta interativa do Claude** (AskUserQuestion/permissão): as opções viram **botões** —
