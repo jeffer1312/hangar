@@ -51,40 +51,44 @@ _MCP_CALL_RE = re.compile(r"^Calling\b[^\n]*(…|\.\.\.)\s*$")
 _PI_BOX_RE = re.compile(r"^\s*[╭╰][─\s]*[╮╯]\s*$")
 _STOPS_BY_PROVIDER = {"pi": (_PI_BOX_RE,)}
 
-# Bloco de FERRAMENTA do Pi, reconhecido pela ESTRUTURA e não pelo vocabulário: os filhos vêm
-# desenhados em box-drawing na linha logo abaixo — árvore (`├`/`└`), diff (`│`/`▌`) ou
-# resultado (`⎿`). O _TOOL_BLOCK_RE exige "Nome(" colado, e
-# o Pi escreve de pelo menos quatro jeitos diferentes — medidos no pane em 01/08/2026:
-#     ● Bash cd "/home/..."              ● Bash: 2 done • ctrl+o to toggle
-#     ● Write  (81 lines)                ● Multiple Tools: 3 done • bash, chrome_devtools_...
-# Nenhum casava, então o comando entrava na prévia como se fosse prosa: a cada ferramenta o bloco em
+# Bloco de FERRAMENTA do Pi. O _TOOL_BLOCK_RE exige "Nome(" colado, e o Pi escreve de pelo menos
+# cinco jeitos — medidos no pane em 01/08/2026:
+#     ● Bash cd "/home/..."        ● Bash: 2 done • ctrl+o to toggle    ● Write  (81 lines)
+#     ● Edit  (2 edits)            ● Multiple Tools: 3 done • bash, chrome_devtools_navigate_page
+# Nenhum casava, então a chamada entrava na prévia como se fosse prosa: a cada ferramenta o bloco em
 # voo trocava de conteúdo E DE ALTURA, e a conversa pulava debaixo de quem estava lendo no celular.
-# Tentei antes por lista de nomes de ferramenta e virou caça a talharim — a cada forma nova do TUI,
-# outro vazamento. Estrutura cobre as quatro de uma vez e não envelhece com o vocabulário do Pi.
 #
-# O guard dos dois-pontos é o que protege a PROSA: o caso real de um ● seguido de árvore é o
-# assistente apresentando uma ("Estrutura final:" / " └ src/"), e essa frase termina em `:`. Sem ele,
-# essa prosa seria classificada como ferramenta, o bloco seria DESCARTADO e a prévia ficaria VAZIA —
-# pior que vir suja, a mesma armadilha documentada no _MCP_CALL_RE acima. Os quatro cabeçalhos do Pi
-# não terminam em `:`. Coberto por test_prosa_pi_que_termina_em_arvore_continua_sendo_prosa.
-# Só pro Pi, como o resto do chrome por provider: o Claude marca resultado com `⎿`.
-_PI_FILHO_RE = re.compile(r"^\s*[├└│▌⎿]")
-# EXCEÇÃO: o painel de tarefas tem a MESMA forma de uma ferramenta (cabeçalho + filhos em box-
-# drawing), mas é o único bloco desses que o usuário quer ver — pediu pra DOBRAR, não pra sumir.
-# A bolha o renderiza fechado (splitTodoBlock/<details> em AssistantBubble.svelte), então ele
-# ocupa uma linha e não faz a conversa pular. Sem esta exceção a regra estrutural o levaria junto.
-_PI_TODOS_RE = re.compile(r"^Todos \(\d+/\d+\)\s*$")
+# Exige as DUAS coisas — nome de ferramenta no cabeçalho E corpo em box-drawing na linha seguinte
+# (árvore `├└`, diff `│▌`, resultado `⎿`). Só a estrutura NÃO serve, e o caminho até aqui foi:
+#   1. só o `└`  -> "Estrutura final:" / " └ src/" (prosa apresentando árvore) virava ferramenta;
+#   2. só os glifos, com guard de `:` no fim -> "Aqui vai o trecho pra comparar" / "│ codigo"
+#      continuava caindo, porque a frase não precisa terminar em dois-pontos pra introduzir um
+#      trecho. Achado da review, reproduzido no código.
+# Nos dois casos o bloco era DESCARTADO e a prévia ficava VAZIA — pior que vir suja, a mesma
+# armadilha documentada no _MCP_CALL_RE acima. Errar pro lado do vazamento é recuperável (fica um
+# cabeçalho feio por um poll); errar pro lado do descarte apaga o texto que a pessoa está lendo.
+# O painel de tarefas ("Todos (11/13)") também é salvo por isto: tem forma de ferramenta, mas não
+# tem nome de ferramenta — e é o único bloco desses que o usuário quer ver, dobrado pela bolha.
+#
+# A lista é calibration knob: nome novo que o Pi passe a desenhar entra aqui, e o custo de esquecer
+# um é só o vazamento cosmético. Só pro Pi, como o resto do chrome por provider (o Claude marca
+# resultado com `⎿` e nunca chega neste ramo — o `and` curto-circuita antes).
+_PI_CORPO_RE = re.compile(r"^\s*[├└│▌⎿]")
+_PI_TOOL_NAME_RE = re.compile(
+    r"^(Bash|Read|Write|Edit|MultiEdit|Grep|Glob|Task|Agent|Skill|WebFetch|WebSearch|"
+    r"NotebookEdit|TodoWrite|Multiple Tools|Chrome Devtools)[\s:(]"
+)
 
 
 def _pi_bloco_de_tool(lines: list[str], i: int, corpo: str) -> bool:
-    """Bloco `i` é chamada de ferramenta do Pi: filho em box-drawing logo abaixo, e o cabeçalho não é
-    uma frase apresentando a árvore (termina em `:`) nem o painel de tarefas."""
-    if corpo.rstrip().endswith(":") or _PI_TODOS_RE.match(corpo):
+    """Bloco `i` é chamada de ferramenta do Pi: nome de ferramenta no cabeçalho E corpo desenhado em
+    box-drawing na primeira linha não-vazia abaixo."""
+    if not _PI_TOOL_NAME_RE.match(corpo):
         return False
     for ln in lines[i + 1:]:
         if not ln.strip():
             continue
-        return bool(_PI_FILHO_RE.match(ln))
+        return bool(_PI_CORPO_RE.match(ln))
     return False
 
 

@@ -77,7 +77,11 @@
       </details>
     {/if}
     {#if !todo || todo.rest}
-      <div class="prose plain">{todo ? todo.rest : text}<span class="caret" aria-hidden="true"></span></div>
+      <!-- O <span> em volta do texto+caret NÃO é decorativo: o .prose.plain é flex (pro corte por
+           cima, ver o CSS), e num flex container um nó de texto SOLTO vira item anônimo próprio —
+           o caret virava um segundo item, numa linha só dele, em vez de piscar colado na última
+           palavra. Com um item único, o conteúdo volta a fluir inline lá dentro. -->
+      <div class="prose plain"><span class="live">{todo ? todo.rest : text}<span class="caret" aria-hidden="true"></span></span></div>
     {/if}
   {:else}
     <!-- eslint-disable-next-line svelte/no-at-html-tags -->

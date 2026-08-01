@@ -195,3 +195,33 @@ def test_painel_de_tarefas_do_pi_continua_chegando_na_previa():
         "✻ Unfurling… (2m)\n"
     )
     assert extract_assistant_text(pane, "pi").startswith("Todos (11/13)")
+
+
+def test_prosa_pi_que_apresenta_trecho_sem_dois_pontos_sobrevive():
+    # Achado da review (01/08): a versao anterior olhava so a ESTRUTURA e protegia a prosa com um
+    # guard de ":" no fim do cabecalho. Mas uma frase nao precisa terminar em dois-pontos pra
+    # introduzir um trecho -- e ai o bloco era descartado e a previa ficava VAZIA.
+    pane = (
+        "● Aqui vai o trecho pra comparar\n"
+        "│ codigo original\n"
+        "│ codigo novo\n"
+        "\n"
+        "✻ Unfurling… (2s)\n"
+    )
+    out = extract_assistant_text(pane, "pi")
+    assert out, "previa VAZIA: a prosa foi descartada como se fosse ferramenta"
+    assert out.startswith("Aqui vai o trecho pra comparar")
+    assert "codigo original" in out   # o trecho e PARTE do bloco de prosa, nao chrome pra cortar
+
+
+def test_preview_pi_pula_edit_com_diff():
+    # "● Edit  (2 edits)" desenha DIFF (│/▌), nao arvore -- forma medida no pane real.
+    pane = (
+        "● A prosa que deve sobreviver.\n"
+        "\n"
+        "● Edit  (2 edits)\n"
+        " │ ▌57- const [printOpen, setPrintOpen] = React.useState(false)\n"
+        "\n"
+        "✻ Inspecting… (6m)\n"
+    )
+    assert extract_assistant_text(pane, "pi") == "A prosa que deve sobreviver."
