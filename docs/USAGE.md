@@ -181,6 +181,19 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
   cru e aparece um aviso explicando o motivo; o botão **↩ original** ao lado do campo repõe o texto
   exatamente como saiu da transcrição. Vale só pra gravação pelo microfone — áudio anexado como
   arquivo não passa por essa limpeza.
+- **Ditado mãos-livres:** chave em Configurações → Ditado, guardada **só neste aparelho** (não vai
+  pro servidor; se você ligar no celular, o desktop continua sem). Com ela ligada, um toque no 🎤
+  começa a gravar e **2 segundos de silêncio** encerram sozinhos — não precisa tocar em ⏹. Depois da
+  transcrição, uma contagem de **3 segundos** aparece antes do envio; um toque em qualquer lugar da
+  tela cancela e deixa o texto pronto no campo, sem mandar. Só o silêncio dispara o envio automático:
+  parar pelo botão, estourar o teto de 3 minutos de gravação, dar erro na transcrição, a limpeza
+  falhar (fica o aviso e o texto cru) ou já haver um rascunho digitado no campo — nenhum desses
+  envia sozinho, sempre fica o texto pra você revisar e mandar na mão. Depois de um envio automático
+  o microfone **não** volta a gravar sozinho — pra falar de novo, toque nele; foi decisão deliberada
+  pra não ficar transcrevendo (e cobrando) cada silêncio do carro à toa. Também toca um som curto ao
+  enviar e outro mais grave quando não deu pra enviar, pra dar pra saber sem olhar pra tela.
+- **Se estiver ouvindo uma resposta em voz** e você tocar o 🎤, a leitura para sozinha antes da
+  gravação começar — sem isso o microfone captaria a própria voz do app.
 - **Provedor da limpeza e da leitura em voz:** por padrão usa a Groq (`llama-3.3-70b-versatile`).
   Pra apontar pra outro serviço compatível com a API da OpenAI, preencha em Configurações →
   Avançado: **Endpoint do LLM**, **Chave do LLM** e **Modelo do LLM**. Fora do padrão a **Chave do
