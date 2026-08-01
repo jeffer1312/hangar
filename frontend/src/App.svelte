@@ -102,7 +102,11 @@
     // MEDIDO (ttsSelection.panelH, via ResizeObserver na propria TtsSelectionPill), nao cravado:
     // a fase 2 acrescenta presets + campo de instrucao, que crescem o painel bem alem dos 52px
     // de quando era so um botao (mesmo motivo do barH acima).
-    const selH = ttsSelection.ativa ? ttsSelection.panelH : 0;
+    // `engajado`, NAO `ativa`: focar o campo de instrucao colapsa a Selection API da pagina (ativa
+    // vira false no meio da digitacao), mas o painel continua na tela (foto textoSel/blocosSel na
+    // TtsSelectionPill). Com `ativa` aqui, --cp-tts-h caia pra 0 nesse instante e as pills do Chat
+    // (hist/tui/awaiting) desciam pra TRAS do painel aberto.
+    const selH = ttsSelection.engajado ? ttsSelection.panelH : 0;
     const root = document.documentElement.style;
     root.setProperty('--cp-tts-bar-h', `${barH}px`);
     root.setProperty('--cp-tts-h', `${barH + selH}px`);

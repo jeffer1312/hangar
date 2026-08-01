@@ -2,7 +2,8 @@
   import { onMount } from 'svelte';
   import { ttsSelection, iniciarCapturaDeSelecao } from '../lib/ttsSelection.svelte';
   import { ouvirTexto } from '../lib/ouvir';
-  import { ttsNarracao, PRESET_LER, PRESET_CODIGO } from '../lib/ttsNarracao.svelte';
+  import { ttsNarracao } from '../lib/ttsNarracao.svelte';
+  import { PRESET_LER, PRESET_CODIGO } from '../lib/ttsPresets';
 
   let isDesktop = $state(false);
 
@@ -38,6 +39,7 @@
     const ativaAgora = ttsSelection.ativa;
     if (ativaAgora && !prevAtiva) {
       engajado = true;
+      ttsSelection.setEngajado(true);
       textoSel = ttsSelection.texto;
       blocosSel = ttsSelection.blocos;
       instrucao = ttsNarracao.ultimaInstrucao;
@@ -65,6 +67,7 @@
     ttsNarracao.limpar();
     ttsSelection.limpar();
     engajado = false;
+    ttsSelection.setEngajado(false);
   }
 
   /** Toque principal: sem instrucao (ou so "ler como esta"), toca DIRETO — mesmo caminho sincrono
@@ -75,6 +78,7 @@
       const texto = textoSel;
       ttsSelection.limpar();
       engajado = false;
+      ttsSelection.setEngajado(false);
       ouvirTexto(texto, confirmar, '');
       return;
     }
@@ -87,6 +91,7 @@
     ttsNarracao.limpar();
     ttsSelection.limpar();
     engajado = false;
+    ttsSelection.setEngajado(false);
     // Handler SINCRONO ate aqui: e o segundo toque que destrava o audio no iOS.
     ouvirTexto(texto, confirmar, instrucaoUsada);
   }
@@ -119,7 +124,12 @@
     bind:this={panelEl}
   >
     {#if ttsNarracao.carregando}
+      <!-- Cancelar existe aqui porque a espera pela Groq pode chegar aos 60s do timeout do backend
+           (narrar.py). Sem ele, uma consulta travada prende a faixa inteira: nao da pra tocar nada
+           nem descartar o pedido. Nao aborta a requisicao em voo — so libera a interface, que e o
+           que a pessoa precisa. -->
       <span class="tts-sel-load">consultando a Groq…</span>
+      <button type="button" class="tts-sel-btn" onclick={fechar}>Cancelar</button>
     {:else if ttsNarracao.erro}
       <span class="tts-sel-err">{ttsNarracao.erro}</span>
       <button type="button" class="tts-sel-btn" onclick={fechar}>Fechar</button>
