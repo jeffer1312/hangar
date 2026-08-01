@@ -8,8 +8,15 @@ import { sintetizarTts, ttsAudioUrl } from './api';
  * O unlock roda SINCRONO aqui, antes de qualquer await — no WebKit o gesto do usuario expira quando
  * a pilha desenrola, e sintetizar leva segundos. Por isso `ouvirTexto` PRECISA ser chamada direto do
  * handler do toque, nunca de dentro de um then().
+ *
+ * `instrucao` (fase 2): a instrucao que JA tratou este `texto` (via ttsNarracao.pedir/Groq), ou ""
+ * quando foi lido como esta. So repassada pro hash do cache do backend — nao dispara nada aqui.
  */
-export function ouvirTexto(texto: string, confirmar: (msg: string) => Promise<boolean>): void {
+export function ouvirTexto(
+  texto: string,
+  confirmar: (msg: string) => Promise<boolean>,
+  instrucao: string = '',
+): void {
   if (!texto) { ttsPlayer.fail('não há texto pra ler'); return; }
   // Guard de duplo-toque: sem ele, dois toques rapidos no mesmo trecho antes do primeiro terminar
   // pagam credito duas vezes, porque o cache so existe depois da primeira resposta.
@@ -19,7 +26,7 @@ export function ouvirTexto(texto: string, confirmar: (msg: string) => Promise<bo
   // Anotacao de retorno explicita: `pedir` chama a si mesma no braco do 409 (repete com confirm=true),
   // e sem o tipo declarado o TS nao infere o retorno de uma funcao recursiva.
   const pedir = (confirm: boolean): Promise<void> =>
-    sintetizarTts({ text: texto, confirm })
+    sintetizarTts({ text: texto, confirm, instruction: instrucao })
       .then((r) => { ttsPlayer.playUrl(ttsAudioUrl(r.url), r.provider); })
       .catch((e: Error & { status?: number }) => {
         if (e.status === 409) {

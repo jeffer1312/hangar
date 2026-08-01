@@ -22,10 +22,16 @@ const MARCADOR_FERRAMENTA = ' saída de comando omitida. ';
 // pausa se o front mandar a quebra.
 const BLOCOS = 'p,h1,h2,h3,h4,h5,h6,li,blockquote,tr,td,th,pre,div';
 
-export function textoFalavel(raiz: HTMLElement): string {
+// Fase 2 (narracao guiada): extrai TAMBEM o codigo que o marcador descarta, pra Groq poder
+// explicar a logica em vez de so saber que "havia codigo ali". Uma unica implementacao — textoFalavel
+// so devolve o campo .texto dela — pra nao arriscar as duas formas divergirem e quebrar o hash do
+// cache da fase 1 (que depende do .texto byte a byte).
+function extrair(raiz: HTMLElement): { texto: string; blocos: string[] } {
   // Clone: trocar o conteudo do <pre> no no original apagaria o codigo da tela do usuario.
   const copia = raiz.cloneNode(true) as HTMLElement;
+  const blocos: string[] = [];
   copia.querySelectorAll('pre').forEach((p) => {
+    blocos.push(p.textContent ?? '');
     p.replaceWith(document.createTextNode(MARCADOR));
   });
   copia.querySelectorAll('.tool-row').forEach((c) => {
@@ -36,8 +42,18 @@ export function textoFalavel(raiz: HTMLElement): string {
   copia.querySelectorAll(BLOCOS).forEach((b) => {
     b.appendChild(document.createTextNode('\n'));
   });
-  return (copia.textContent ?? '')
+  const texto = (copia.textContent ?? '')
     .replace(/[^\S\n]+/g, ' ')   // colapsa espaco/tab, preserva \n
     .replace(/\n+/g, '\n')
     .trim();
+  return { texto, blocos };
+}
+
+export function textoFalavel(raiz: HTMLElement): string {
+  return extrair(raiz).texto;
+}
+
+/** Igual a textoFalavel, mas devolve tambem os blocos de <pre> que o marcador substituiu. */
+export function textoFalavelComCodigo(raiz: HTMLElement): { texto: string; blocos: string[] } {
+  return extrair(raiz);
 }

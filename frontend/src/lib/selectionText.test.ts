@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from 'vitest';
-import { falavelDaSelecao } from './selectionText';
+import { falavelDaSelecao, falavelDaSelecaoComCodigo } from './selectionText';
 
 function selecionarTudo(html: string): Selection | null {
   document.body.innerHTML = `<div id="alvo">${html}</div>`;
@@ -39,5 +39,18 @@ describe('falavelDaSelecao', () => {
     // Igualdade exata, nao toContain: "umdois" tambem conteria 'um' e 'dois', e e exatamente o
     // bug (palavras coladas) que este teste existe pra pegar.
     expect(t).toBe('um\ndois');
+  });
+});
+
+describe('falavelDaSelecaoComCodigo (fase 2: narracao guiada)', () => {
+  it('devolve vazio sem selecao, sem quebrar', () => {
+    expect(falavelDaSelecaoComCodigo(null)).toEqual({ texto: '', blocos: [] });
+  });
+
+  it('devolve o codigo da selecao separado do texto falavel, sem alterar o texto', () => {
+    const s = selecionarTudo('<p>antes</p><pre>const x = 1;</pre><p>depois</p>');
+    const { texto, blocos } = falavelDaSelecaoComCodigo(s);
+    expect(texto).toBe(falavelDaSelecao(s));
+    expect(blocos).toEqual(['const x = 1;']);
   });
 });

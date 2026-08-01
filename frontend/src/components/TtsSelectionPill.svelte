@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { ttsSelection, iniciarCapturaDeSelecao } from '../lib/ttsSelection.svelte';
   import { ouvirTexto } from '../lib/ouvir';
+  import { ttsNarracao, PRESET_LER, PRESET_CODIGO } from '../lib/ttsNarracao.svelte';
 
   let isDesktop = $state(false);
 
@@ -14,67 +15,211 @@
     return () => { mq.removeEventListener('change', aoTrocar); parar(); };
   });
 
-  const rotulo = $derived(`🔊 Ouvir · ${ttsSelection.texto.length.toLocaleString('pt-BR')} car.`);
+  const confirmar = (msg: string) => Promise.resolve(window.confirm(msg));
 
-  function ouvir() {
-    const texto = ttsSelection.texto;
+  // `engajado` (nao ttsSelection.ativa direto) e quem decide se o painel aparece. Motivo: fase 2
+  // acrescenta um CAMPO DE TEXTO no painel, e tocar nele pra digitar rouba o foco da pagina — o que
+  // colapsa a Selection API e dispara selectionchange (ttsSelection.ativa vira false NO MEIO da
+  // digitacao). Com o painel amarrado a ttsSelection.ativa ele sumiria assim que o usuario tocasse
+  // no proprio campo. `textoSel`/`blocosSel` sao uma FOTO da selecao tirada na transicao
+  // false->true, pelo mesmo motivo: le-los de ttsSelection depois que o campo ganhou foco leria ''.
+  let engajado = $state(false);
+  let textoSel = $state('');
+  let blocosSel = $state<string[]>([]);
+  let instrucao = $state('');
+  // Override explicito do preset "Ler como está". Necessario porque o VALOR desse preset e a
+  // string vazia (mesma coisa que "campo intocado") — sem esta flag, tocar "Ler como está" com uma
+  // selecao que TEM codigo virava um no-op: o campo voltava a '' e o padrao esperto (explicar
+  // codigo, ver `efetiva` abaixo) reassumia na hora, como se o toque nunca tivesse acontecido.
+  let preferirLerLiteral = $state(false);
+  let prevAtiva = false;
+
+  $effect(() => {
+    const ativaAgora = ttsSelection.ativa;
+    if (ativaAgora && !prevAtiva) {
+      engajado = true;
+      textoSel = ttsSelection.texto;
+      blocosSel = ttsSelection.blocos;
+      instrucao = ttsNarracao.ultimaInstrucao;
+      preferirLerLiteral = false;
+      ttsNarracao.limpar();
+    }
+    prevAtiva = ativaAgora;
+  });
+
+  const temCodigoSel = $derived(blocosSel.length > 0);
+  const rotulo = $derived(`🔊 Ouvir · ${textoSel.length.toLocaleString('pt-BR')} car.`);
+  // Instrucao que VAI valer se o usuario tocar "Ouvir" agora: texto livre sempre vence; senao, a
+  // escolha explicita de "ler como esta"; senao o padrao esperto (explicar codigo quando ha bloco
+  // de codigo, ler como esta senao).
+  const efetiva = $derived(
+    instrucao.trim() || (preferirLerLiteral ? PRESET_LER : (temCodigoSel ? PRESET_CODIGO : PRESET_LER)),
+  );
+  // Custo em caracteres que IRIAM pra Groq se a instrucao efetiva nao for "ler como esta" — mostrado
+  // ANTES do toque, junto do rotulo: a Groq e barata, mas nao e gratis.
+  const charsGroq = $derived(
+    efetiva ? textoSel.length + blocosSel.reduce((n, b) => n + b.length, 0) + efetiva.length : 0,
+  );
+
+  function fechar() {
+    ttsNarracao.limpar();
     ttsSelection.limpar();
-    // Chamada DIRETO do handler: ouvirTexto destrava o audio de forma sincrona (gesto do iOS).
-    ouvirTexto(texto, (msg) => Promise.resolve(window.confirm(msg)));
+    engajado = false;
   }
+
+  /** Toque principal: sem instrucao (ou so "ler como esta"), toca DIRETO — mesmo caminho sincrono
+   * da fase 1, unlock do iOS incluido. Com instrucao, pede a revisao da Groq e SO ENTAO mostra o
+   * botao que de fato toca (segundo toque, que e onde o unlock deste caminho acontece). */
+  function ouvirClique() {
+    if (!efetiva) {
+      const texto = textoSel;
+      ttsSelection.limpar();
+      engajado = false;
+      ouvirTexto(texto, confirmar, '');
+      return;
+    }
+    void ttsNarracao.pedir(textoSel, blocosSel, efetiva);
+  }
+
+  function confirmarLeitura() {
+    const texto = ttsNarracao.textoTratado;
+    const instrucaoUsada = ttsNarracao.instrucaoUsada;
+    ttsNarracao.limpar();
+    ttsSelection.limpar();
+    engajado = false;
+    // Handler SINCRONO ate aqui: e o segundo toque que destrava o audio no iOS.
+    ouvirTexto(texto, confirmar, instrucaoUsada);
+  }
+
+  // Mede a propria altura (ttsSelection.setPanelH -> App.svelte compoe --cp-tts-h dai) — mesmo
+  // padrao do ttsPlayer.barH/TtsBar: a fase 1 cravava 52px, e presets + campo + revisao passam
+  // longe disso.
+  let panelEl = $state<HTMLDivElement | null>(null);
+  $effect(() => {
+    if (!panelEl) { ttsSelection.setPanelH(0); return; }
+    const el = panelEl;
+    let raf = 0;
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        ttsSelection.setPanelH(Math.round(el.getBoundingClientRect().height));
+      });
+    });
+    ro.observe(el);
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); ttsSelection.setPanelH(0); };
+  });
 </script>
 
-{#if ttsSelection.ativa}
-  <button
+{#if engajado}
+  <div
     class="tts-sel"
     class:flutuante={isDesktop}
     style:right={isDesktop ? `calc(100% - ${ttsSelection.x}px)` : undefined}
     style:top={isDesktop ? `${ttsSelection.y + 6}px` : undefined}
-    onpointerdown={(e) => e.preventDefault()}
-    onclick={ouvir}
-  >{rotulo}</button>
+    bind:this={panelEl}
+  >
+    {#if ttsNarracao.carregando}
+      <span class="tts-sel-load">consultando a Groq…</span>
+    {:else if ttsNarracao.erro}
+      <span class="tts-sel-err">{ttsNarracao.erro}</span>
+      <button type="button" class="tts-sel-btn" onclick={fechar}>Fechar</button>
+    {:else if ttsNarracao.pendente}
+      <p class="tts-sel-preview">{ttsNarracao.textoTratado}</p>
+      <div class="tts-sel-row">
+        <button type="button" class="tts-sel-btn tts-sel-go" onclick={confirmarLeitura}>🔊 Ouvir</button>
+        <button type="button" class="tts-sel-btn" onclick={fechar}>Cancelar</button>
+      </div>
+    {:else}
+      <button type="button" class="tts-sel-head" onclick={ouvirClique}>{rotulo}</button>
+      <div class="tts-sel-row">
+        <button type="button" class="tts-sel-btn" class:sel={efetiva === PRESET_LER}
+                onclick={() => { preferirLerLiteral = true; instrucao = ''; }}>Ler como está</button>
+        {#if temCodigoSel}
+          <button type="button" class="tts-sel-btn" class:sel={efetiva === PRESET_CODIGO}
+                  onclick={() => { preferirLerLiteral = false; instrucao = PRESET_CODIGO; }}>Explicar o código</button>
+        {/if}
+      </div>
+      <input
+        class="tts-sel-input"
+        type="text"
+        bind:value={instrucao}
+        oninput={() => { preferirLerLiteral = false; }}
+        placeholder="ou digite uma instrução…"
+        onkeydown={(e) => { if (e.key === 'Enter') ouvirClique(); }}
+      />
+      {#if efetiva}
+        <span class="tts-sel-custo">{charsGroq.toLocaleString('pt-BR')} car. para a Groq</span>
+      {/if}
+    {/if}
+  </div>
 {/if}
 
 <style>
   /* Celular: barra rente ao composer — nao disputa espaco com o menu nativo do Safari, que nasce
-     colado na selecao. Desktop: pill flutuante no fim da selecao.
-     onpointerdown preventDefault: sem isso o proprio toque no botao colapsa a selecao antes do
-     click disparar. Sem backdrop-filter/transform em barra fixa: no WebKit pinta retangulo preto
-     na rolagem por inercia (mesmo motivo do TtsBar). */
+     colado na selecao. Desktop: painel flutuante no fim da selecao.
+     Sem backdrop-filter/transform em barra fixa: no WebKit pinta retangulo preto na rolagem por
+     inercia (mesmo motivo do TtsBar). Sem onpointerdown preventDefault: a selecao capturada ja foi
+     fotografada em textoSel/blocosSel na abertura do painel, ninguem aqui le mais o DOM ao vivo. */
   .tts-sel {
     position: fixed;
     z-index: 39;
-    padding: 8px 14px;
-    border-radius: 999px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+    border-radius: 14px;
     border: 1px solid var(--border-subtle);
     background: var(--surface-raised);
     color: var(--text-primary);
     font-size: 13px;
-    cursor: pointer;
+    width: min(calc(100vw - 32px), 340px);
     /* --cp-tts-bar-h (publicada no App.svelte): soma a altura da BARRA DO PLAYER quando ela esta
-       ativa, senao a pill nasce no mesmo lugar da TtsBar e tapa play/posicao/velocidade — caso
-       real: ouvir um trecho e selecionar o proximo enquanto o audio toca. NAO usar --cp-tts-h aqui
-       (esse e o TOTAL barra+pill, que empurraria esta pill sozinha quando ela e a unica na tela). */
+       ativa, senao o painel nasce no mesmo lugar da TtsBar e tapa play/posicao/velocidade. */
     bottom: calc(var(--cp-dock-h, 150px) + 10px + var(--cp-tts-bar-h, 0px));
   }
-  /* Celular (nao .flutuante): a largura do botao varia com o numero de caracteres selecionados
-     (rotulo tem o contador), entao nao da pra cravar um margin-left fixo tipo -90px — isso so
-     centraliza de verdade quando a largura bate com o palpite; medido: desvia ate 24px do centro
-     num celular de 390px. left+right:0 com width:fit-content e margin automatico centraliza
-     qualquer largura sem transform (o WebKit pinta retangulo preto com transform em barra fixa
-     durante a rolagem por inercia, mesmo motivo do TtsBar). */
   .tts-sel:not(.flutuante) {
     left: 0;
     right: 0;
-    width: fit-content;
     margin: 0 auto;
   }
   .tts-sel.flutuante {
     bottom: auto;
     margin-left: 0;
-    /* `right` calculado no componente (calc(100% - x)), nao transform: translateX(-100%) — o
-       WebKit pinta retangulo preto em elemento FIXO com transform durante rolagem por inercia
-       (mesmo motivo do TtsBar). isDesktop vem de matchMedia(min-width:820px), que da true tambem
-       num iPad em paisagem, que E WebKit. */
   }
+  .tts-sel-head {
+    all: unset;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .tts-sel-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tts-sel-btn {
+    border: 1px solid var(--border-subtle);
+    background: transparent;
+    color: var(--text-primary);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .tts-sel-btn.sel { border-color: var(--accent); color: var(--accent); }
+  .tts-sel-go { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .tts-sel-input {
+    background: var(--surface-inset);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    color: var(--text-primary);
+    padding: 6px 8px;
+    font-size: 13px;
+  }
+  .tts-sel-custo { color: var(--text-secondary); font-size: 11px; }
+  .tts-sel-preview {
+    margin: 0;
+    max-height: 30vh;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    font-size: 13px;
+  }
+  .tts-sel-load, .tts-sel-err { color: var(--text-secondary); font-size: 13px; }
+  .tts-sel-err { color: var(--error); }
 </style>

@@ -1068,8 +1068,11 @@ export async function setModelEffort(name: string, body: ModelEffortBody): Promi
 export interface TtsResposta { url: string; chars: number; cached: boolean; provider: string }
 
 // `confirm: true` repete o pedido depois que o usuario aceitou o aviso de custo (409 do backend).
+// `instruction`: fase 2 (narracao guiada) — a instrucao que ja tratou este `text` via /api/tts/narrar
+// (ou "" quando foi lido como esta). So entra na chave do cache do backend, nunca dispara a Groq
+// aqui: quando isto chega, o texto ja esta pronto pra virar audio.
 export async function sintetizarTts(
-  body: { text: string; voice?: string; provider?: string; confirm?: boolean },
+  body: { text: string; voice?: string; provider?: string; confirm?: boolean; instruction?: string },
 ): Promise<TtsResposta> {
   return apiFetch<TtsResposta>('/api/tts', { method: 'POST', body: JSON.stringify(body) });
 }
@@ -1083,6 +1086,17 @@ export async function listarVozesTts(): Promise<TtsVoz[]> {
 
 export async function saldoTts(): Promise<{ usados: number | null; limite: number | null }> {
   return apiFetch('/api/tts/saldo');
+}
+
+// Fase 2 (narracao guiada): pede pra Groq tratar o texto falavel ANTES de virar audio. `used_groq`
+// diz se a chamada de fato saiu (false quando a instrucao e "ler como esta" — o backend nao gasta
+// token nesse caminho, e devolve o texto de volta como veio).
+export interface NarrarResposta { text: string; chars_sent: number; used_groq: boolean }
+
+export async function narrarSelecao(
+  body: { text: string; code_blocks: string[]; instruction: string },
+): Promise<NarrarResposta> {
+  return apiFetch<NarrarResposta>('/api/tts/narrar', { method: 'POST', body: JSON.stringify(body) });
 }
 
 /**

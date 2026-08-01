@@ -99,7 +99,10 @@
   // z-index parecido — sem isso a selecao cobre o aviso de sessao que precisa de login).
   $effect(() => {
     const barH = ttsPlayer.active ? ttsPlayer.barH : 0;
-    const selH = ttsSelection.ativa ? 52 : 0;
+    // MEDIDO (ttsSelection.panelH, via ResizeObserver na propria TtsSelectionPill), nao cravado:
+    // a fase 2 acrescenta presets + campo de instrucao, que crescem o painel bem alem dos 52px
+    // de quando era so um botao (mesmo motivo do barH acima).
+    const selH = ttsSelection.ativa ? ttsSelection.panelH : 0;
     const root = document.documentElement.style;
     root.setProperty('--cp-tts-bar-h', `${barH}px`);
     root.setProperty('--cp-tts-h', `${barH + selH}px`);
