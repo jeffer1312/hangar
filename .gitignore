@@ -59,3 +59,15 @@ docs/handoffs/
 # Certificados TLS locais (Tailscale) — chave privada NUNCA no repo
 *.ts.net.crt
 *.ts.net.key
+
+# Rascunho das sessoes de trabalho: prints de verificacao, mocks e audio que as sessoes geram pra
+# mostrar resultado no celular. Nao sao artefato do projeto e enchiam o `git status` de ruido — com
+# duas sessoes commitando na mesma arvore, ruido no status e o que faz um `git add` errado passar.
+# `settings.json` fica de fora: esse e config do projeto e continua versionado.
+.claude/
+!.claude/settings.json
+
+# Cache de build criado por engano na raiz (o vite/vitest do projeto roda em frontend/, e o
+# frontend/.gitignore ja cobre o de la). Sem esta regra, um `npm`/`vite` rodado da raiz deixa um
+# node_modules aparecendo como nao-rastreado.
+node_modules/
