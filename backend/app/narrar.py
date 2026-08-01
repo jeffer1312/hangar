@@ -1,8 +1,11 @@
 import http.client
 import json
 import logging
+import re
+import unicodedata
 import urllib.error
 import urllib.request
+from collections import Counter
 
 from app import runtime_config
 
@@ -179,6 +182,47 @@ _MIN_PALAVRAS = 5
 _LIMIAR_TEXTO_LONGO = 120
 
 
+def _palavras_normalizadas(texto: str) -> list[str]:
+    """Minusculas, sem acento, sem pontuacao. Sem isto "Você" (o modelo pontuou/capitalizou) e
+    "voce" (como a pessoa falou) contariam como palavras DIFERENTES em _palavras_novas, e toda
+    limpeza legitima que so acrescenta acento/maiuscula/ponto seria rejeitada."""
+    sem_acento = unicodedata.normalize("NFKD", texto.lower())
+    sem_acento = "".join(c for c in sem_acento if not unicodedata.combining(c))
+    return re.findall(r"[a-z0-9]+", sem_acento)
+
+
+def _palavras_novas(cru: str, limpo: str) -> int:
+    """Quantas ocorrencias de palavra aparecem no limpo alem do que ja existia no cru (apos
+    normalizar). Limpeza honesta so apaga, pontua e reordena — nao tem por que introduzir palavra
+    que a pessoa nao falou."""
+    disponiveis = Counter(_palavras_normalizadas(cru))
+    novas = 0
+    for palavra, qtd in Counter(_palavras_normalizadas(limpo)).items():
+        excedente = qtd - disponiveis.get(palavra, 0)
+        if excedente > 0:
+            novas += excedente
+    return novas
+
+
+# As duas travas de tamanho (piso/teto acima) medem TAMANHO; nao pegam TROCA DE SUJEITO — a
+# limpeza que devolve o assistente respondendo a critica em vez de so limpa-la (caso real
+# 2026-08-01: usuario criticou "para de falar de forma dificil", a "limpeza" devolveu "eu nao
+# estou falando de forma dificil"). O texto so encolheu pra 0,73x, dentro do intervalo 0,5-1,5 —
+# passa pelas duas travas de tamanho ileso. O que muda e o SENTIDO, e sentido invertido continua
+# gramatical: o erro nao aparece pra quem le.
+#
+# Medido em 9 audios reais (transcricao e limpeza verdadeiras, contando palavra nova apos a mesma
+# normalizacao de _palavras_normalizadas):
+#   legitimo (7 amostras, textos de 3 a 245 palavras): 0, 0, 0, 0, 0, 1, 1 palavras novas
+#     (as duas de 1 palavra: "pra" -> "para")
+#   defeito (5 execucoes do MESMO audio, a instrucao virando resposta): 9, 45, 46, 46, 88
+# Percentual sozinho NAO separa as duas populacoes: a amostra legitima de 1 palavra nova num
+# texto de 15 palavras da 6,7%, maior que os 4,9% da execucao defeituosa de 9 novas num texto de
+# 182. Quem separa e a contagem ABSOLUTA, com uma folga proporcional pra texto longo.
+_REJEITA_PALAVRAS_NOVAS_MIN = 3
+_REJEITA_PALAVRAS_NOVAS_PROP = 0.02
+
+
 def limpar_ditado(texto: str) -> tuple[str, str | None]:
     """Devolve (texto_final, erro). Erro nao-None significa "ficou o cru, e por isto" — quem chama
     mostra pro usuario. NUNCA levanta: perder o ditado da pessoa por erro de LLM seria pior que
@@ -200,4 +244,8 @@ def limpar_ditado(texto: str) -> tuple[str, str | None]:
         return texto, "a limpeza inflou o texto (resposta em vez de limpeza) — ficou o original"
     if len(cru) > _LIMIAR_TEXTO_LONGO and len(limpo) < 0.5 * len(cru):
         return texto, "a limpeza resumiu em vez de limpar — ficou o original"
+    palavras_limpo = _palavras_normalizadas(limpo)
+    limite = max(_REJEITA_PALAVRAS_NOVAS_MIN, _REJEITA_PALAVRAS_NOVAS_PROP * len(palavras_limpo))
+    if _palavras_novas(cru, limpo) > limite:
+        return texto, "a limpeza mudou o sentido em vez de so limpar — ficou o original"
     return limpo, None
