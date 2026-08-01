@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { mergeAccounts, mergeReports, fillDayGaps } from './costs';
-import type { AccountCost, CostBucket } from './types';
+import type { AccountCost, CostBucket, CostReport } from './types';
 
 function bucket(key: string, cost: number): CostBucket {
   return { key, sessions: 1, input: 0, output: 0, cache_read: 0, cache_write: 0, cost };
@@ -143,11 +143,82 @@ describe('mergeReports', () => {
     expect(m.report.totals.cost).toBe(0);
   });
 
-  it('servidor antigo sem os campos novos não vira NaN', () => {
-    const velho = { usd_brl: null } as never;
-    const m = mergeReports([{ report: velho }], 'all');
-    expect(m.report.totals.cost).toBe(0);
-    expect(m.report.by_provider).toEqual([]);
+  it('servidor sem os campos novos não vira NaN', () => {
+    // O fixture PRECISA ecoar o período: sem `applied` ele cai na recusa e volta antes do
+    // somarBucket, e aí `totals.cost === 0` seria verdade mesmo sem um único `?? 0` — o teste
+    // passaria por acidente, provando nada. Aqui ele ENTRA na soma faltando campo.
+    const semNada = { applied: { period: 'all' }, usd_brl: null };
+    const meioBucket = {
+      applied: { period: 'all' },
+      totals: { key: 'totals', cost: 5 },              // sem os tokens nem os cost_*
+      by_provider: [{ key: 'kimi-coding', cost: 2 }],  // idem
+    } as unknown as Partial<CostReport>;
+
+    const m = mergeReports([{ report: semNada }, { report: meioBucket }], 'all');
+    expect(m.report.totals.cost).toBe(5);
+    expect(m.report.totals.input).toBe(0);
+    expect(Number.isNaN(m.report.totals.input)).toBe(false);
+    expect(Number.isNaN(m.report.totals.cost_cache_read)).toBe(false);
+    expect(m.report.by_provider[0].cache_read).toBe(0);
+  });
+
+  it('rótulo do servidor recusado sai do merge, não do índice', () => {
+    // `#2` é acoplamento posicional: o chamador filtra a lista antes e o índice passa a apontar
+    // pra máquina errada, com o tipo `string[]` intacto.
+    const velho = { ...vazio(), applied: undefined };
+    const m = mergeReports([{ report: velho, label: 'vps' }, { report: vazio() }], '30d');
+    expect(m.mismatched).toEqual(['vps']);
+  });
+
+  it('a cotação do servidor recusado ainda vale', () => {
+    // USD/BRL não depende de período: se a única máquina com cotação for a desatualizada, perder
+    // o R$ da malha inteira é dano colateral gratuito.
+    const velho = { ...vazio(), applied: undefined, usd_brl: 5.4 };
+    const m = mergeReports([{ report: velho }, { report: vazio() }], '30d');
+    expect(m.partial).toBe(true);
+    expect(m.report.usd_brl).toBe(5.4);
+  });
+
+  it('soma equivalente_cobrado entre as máquinas', () => {
+    const a = { ...vazio(), equivalente_cobrado: 3_000_000 };
+    const b = { ...vazio(), equivalente_cobrado: 1_500_000 };
+    expect(mergeReports([{ report: a }, { report: b }], '30d').report.equivalente_cobrado)
+      .toBe(4_500_000);
+  });
+
+  it('rates com o mesmo modelo em provedores diferentes não colidem', () => {
+    const tarifa = (provider: string, input: number) => ({
+      model: 'glm-5.2', provider, input, output: 1, cache_read: 0, cache_write: 0, origin: 'override',
+    });
+    const a = { ...vazio(), rates: [tarifa('zai', 2)] };
+    const b = { ...vazio(), rates: [tarifa('kimi', 9)] };
+    const m = mergeReports([{ report: a }, { report: b }], '30d');
+    expect(m.report.rates).toHaveLength(2);
+    expect(m.report.rates.map((t) => t.provider).sort()).toEqual(['kimi', 'zai']);
+  });
+
+  describe('anterior', () => {
+    const comAnterior = (cost: number, ant: number | null) => ({
+      ...vazio(),
+      totals: { ...vazio().totals, cost },
+      anterior: ant === null ? null : { ...vazio().totals, key: 'anterior', cost: ant },
+    });
+
+    it('soma quando TODOS os servidores somados mandaram o deles', () => {
+      const m = mergeReports([{ report: comAnterior(100, 40) }, { report: comAnterior(100, 60) }], '30d');
+      expect(m.report.anterior?.cost).toBe(100);
+    });
+
+    it('some quando só ALGUNS mandaram — comparação parcial mente pra cima', () => {
+      // totals = 200 (as duas máquinas) contra anterior = 90 (uma só) daria "+122%", que é falso.
+      const m = mergeReports([{ report: comAnterior(100, 90) }, { report: comAnterior(100, null) }], '30d');
+      expect(m.report.totals.cost).toBe(200);
+      expect(m.report.anterior).toBeNull();
+    });
+
+    it('null quando ninguém mandou', () => {
+      expect(mergeReports([{ report: vazio() }], '30d').report.anterior).toBeNull();
+    });
   });
 
   it('servidor que falhou marca parcial sem derrubar os outros', () => {

@@ -163,17 +163,20 @@ export async function fetchSessionsForServer(s: Server): Promise<SessionInfo[]> 
 // Custo de UM servidor (baseUrl+token explicitos), sem mexer no ativo. Igual fetchSessionsForServer:
 // a visao agregada chama todos em paralelo; um servidor lento/offline falha rapido (timeout 4s) e e
 // pulado, sem segurar os demais.
-// `period` opcional: sem ele o backend aplica o default dele. Vai como query param e VOLTA no
-// `applied` da resposta — servidor antigo ignora o param calado (FastAPI descarta o que não
-// conhece) e o merge usa esse eco pra recusar somar o relatório dele.
-export async function fetchCostsForServer(s: Server, period?: string): Promise<CostReport> {
-  const q = period ? `?period=${encodeURIComponent(period)}` : '';
-  const res = await fetch(`${s.baseUrl}/api/costs${q}`, {
+// `period` OBRIGATÓRIO: o servidor ecoa em `applied` o período que aplicou, e o merge recusa
+// somar quem não ecoou o pedido. Deixar o parâmetro opcional é convidar o chamador a esquecê-lo,
+// receber de volta o default do backend e jogar a malha INTEIRA em `mismatched` — a tela diria
+// "todos os servidores desatualizados" quando o bug é do front.
+// Devolve `Partial<CostReport>` porque é isto que chega DO FIO: um servidor da malha em versão
+// antiga responde sem os campos novos, e prometer o objeto completo aqui é como o front
+// quebrava em runtime com o `check` verde.
+export async function fetchCostsForServer(s: Server, period: string): Promise<Partial<CostReport>> {
+  const res = await fetch(`${s.baseUrl}/api/costs?period=${encodeURIComponent(period)}`, {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
     signal: AbortSignal.timeout(4000),
   });
   if (!res.ok) throw new Error(`${res.status}`);
-  return res.json() as Promise<CostReport>;
+  return res.json() as Promise<Partial<CostReport>>;
 }
 
 // Cauda do histórico de UMA sessão de um servidor específico — cards do quadro kanban.
