@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { mergeReports, fillDayGaps, tarifasPorModelo, custoDesconhecido } from './costs';
+import {
+  mergeReports, fillDayGaps, tarifasPorModelo, custoDesconhecido, precoParcial, partirOcultos,
+} from './costs';
 import type { CostBucket, CostReport, DimBucket, RateInfo } from './types';
 
 function bucket(key: string, cost: number): CostBucket {
@@ -22,6 +24,18 @@ describe('mergeReports', () => {
     expect(m.report.by_provider).toHaveLength(1);
     expect(m.report.by_provider[0].cost).toBe(15);
     expect(m.report.by_provider[0].sessions).toBe(3);
+  });
+
+  it('rótulo da conta sobrevive ao servidor que não o manda', () => {
+    // A chave é o uuid (é ela que soma entre máquinas), mas quem se lê é o e-mail. Um servidor
+    // da malha em versão antiga responde sem `label`, e sem o `??` ele apagaria o nome que a
+    // máquina nova já tinha resolvido — a linha de topo voltava a ser o uuid cru.
+    const chave = 'anthropic:758a9521-e2ef';
+    const novo = { ...vazio(), by_provider: [{ ...vazio().totals, key: chave, label: 'eu@x.com', cost: 10 }] };
+    const velho = { ...vazio(), by_provider: [{ ...vazio().totals, key: chave, cost: 4 }] };
+    const m = mergeReports([{ report: velho }, { report: novo }], '30d');
+    expect(m.report.by_provider[0].label).toBe('eu@x.com');
+    expect(m.report.by_provider[0].cost).toBe(14);
   });
 
   it('servidor que não ecoou o período vira parcial, nunca somado', () => {
@@ -209,6 +223,65 @@ describe('custoDesconhecido', () => {
     // O gráfico preenche buraco de data com dia zerado; marcá-lo como desconhecido trocaria um
     // zero honesto por um traço.
     expect(custoDesconhecido(balde({ sessions: 0 }))).toBe(false);
+  });
+});
+
+describe('precoParcial', () => {
+  it('modelo que UM servidor da malha não tarifou sai marcado', () => {
+    // O balde mesclado tem volume dos dois servidores e custo de um só: `tarifas.has()` diz true
+    // (o servidor novo mandou a tarifa) e `custoDesconhecido()` diz false (o custo não é zero).
+    // Sem esta terceira pergunta a linha mostra preço subestimado sem marca nenhuma.
+    expect(precoParcial('kimi-k3', true, ['kimi-k3'])).toBe(true);
+  });
+
+  it('modelo tarifado em toda a malha não é parcial', () => {
+    expect(precoParcial('claude-opus-5', true, ['kimi-k3'])).toBe(false);
+  });
+
+  it('modelo sem tarifa em lugar nenhum não é "parcial" — é "sem tarifa"', () => {
+    // Já tem marca própria e o custo dele é traço; marcar de parcial diria que existe preço.
+    expect(precoParcial('kimi-k3', false, ['kimi-k3'])).toBe(false);
+  });
+});
+
+describe('partirOcultos', () => {
+  const balde = (key: string, cost: number): DimBucket => ({
+    key, sessions: 1, input: 10, output: 2, cache_write: 0, cache_read: 100,
+    cost, cost_input: cost, cost_output: 0, cost_cache_write: 0, cost_cache_read: 0,
+  });
+  const lista = [balde('/repo/a', 90), balde('/repo/b', 30), balde('/repo/c', 5)];
+
+  it('esconder NÃO muda total nenhum', () => {
+    // O candidato número um a "o total não bate": o × da lista tira o projeto da VISTA, nunca da
+    // conta — a soma dos visíveis com os escondidos tem que continuar sendo a lista inteira, e o
+    // `report.totals`, que a tela lê direto do servidor, nem passa por aqui.
+    const soma = (l: DimBucket[]) => l.reduce((t, b) => t + b.cost, 0);
+    const inteiro = soma(lista);
+    for (const ocultos of [new Set<string>(), new Set(['/repo/a']),
+                           new Set(['/repo/a', '/repo/c']),
+                           new Set(['/repo/a', '/repo/b', '/repo/c'])]) {
+      const p = partirOcultos(lista, ocultos);
+      expect(soma(p.visiveis) + soma(p.escondidos)).toBe(inteiro);
+      expect(p.visiveis.length + p.escondidos.length).toBe(lista.length);
+    }
+  });
+
+  it('a régua escala pelos VISÍVEIS', () => {
+    // Com o pico preso num projeto escondido, todas as barras da tela ficariam curtas por causa
+    // de algo que ninguém vê.
+    expect(partirOcultos(lista, new Set()).pico).toBe(90);
+    expect(partirOcultos(lista, new Set(['/repo/a'])).pico).toBe(30);
+  });
+
+  it('esconder tudo não vira divisão por zero', () => {
+    // `Math.max()` de lista vazia é -Infinity, e a largura da barra viraria NaN%.
+    expect(partirOcultos(lista, new Set(['/repo/a', '/repo/b', '/repo/c'])).pico).toBe(1);
+    expect(partirOcultos([], new Set()).pico).toBe(1);
+  });
+
+  it('preserva a ordem que veio do servidor', () => {
+    expect(partirOcultos(lista, new Set(['/repo/b'])).visiveis.map((b) => b.key))
+      .toEqual(['/repo/a', '/repo/c']);
   });
 });
 

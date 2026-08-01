@@ -79,6 +79,24 @@ def test_claude_ignora_synthetic(tmp_path):
     assert cs.linhas_claude(cfg, "conta-x") == []
 
 
+def test_synthetic_no_fim_nao_leva_a_sessao_junto(tmp_path):
+    """O arquivo é CUMULATIVO: cada linha traz o total acumulado da sessão. Se o filtro de
+    IGNORADOS rodasse depois do dedup, o último turno em '<synthetic>' descartaria a SESSÃO
+    INTEIRA — medido no arquivo real: 7 sessões e 197 milhões de tokens de cache lido sumindo
+    calados. O certo é a sessão ficar com o snapshot do turno anterior."""
+    cfg = tmp_path / ".claude"
+    _escrever(cfg / "metrics" / "costs.jsonl", [
+        {"timestamp": "2026-08-01T10:00:00Z", "session_id": "s1", "model": "claude-opus-5",
+         "input_tokens": 40, "output_tokens": 7, "cache_write_tokens": 2, "cache_read_tokens": 900},
+        {"timestamp": "2026-08-01T11:00:00Z", "session_id": "s1", "model": "<synthetic>",
+         "input_tokens": 41, "output_tokens": 7, "cache_write_tokens": 2, "cache_read_tokens": 900},
+    ])
+    linhas = cs.linhas_claude(cfg, "conta-x")
+    assert len(linhas) == 1, "a sessão não pode sumir por causa do modelo da última linha"
+    r = linhas[0]
+    assert (r.model, r.input, r.output, r.cache_read) == ("claude-opus-5", 40, 7, 900)
+
+
 def test_sessao_de_motor_ganha_provedor_do_modelo(tmp_path):
     # CP_ENGINE só existe em /proc de sessão VIVA. Numa linha de ontem, quem entrega o
     # provedor é o modelo: 'k3' só existe na Moonshot.
@@ -209,7 +227,7 @@ def test_pi_soma_as_mensagens_e_inclui_o_subagente(tmp_path, monkeypatch):
     assert (filho.input, filho.output, filho.cache_read) == (7, 1, 50)
     assert filho.session_id != pai.session_id, "todo subagente se chama session.jsonl"
     assert (pai.input, pai.output, pai.cache_read, pai.cache_write) == (30, 5, 300, 5)
-    assert pai.provider == "kimi-coding"
+    assert pai.provider == "moonshotai", "'kimi-coding' é apelido; a chave é o provedor canônico"
     assert pai.project == "/repo/tres"
     assert pai.source == "pi"
 
@@ -225,8 +243,45 @@ def test_pi_usa_o_ultimo_provedor_declarado(tmp_path, monkeypatch):
     ])
     monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "sessions")
     r = cs.linhas_pi()[0]
-    assert r.provider == "openai-codex"
+    assert r.provider == "openai", "'openai-codex' do Pi é a MESMA assinatura do 'openai' do Codex"
     assert r.model == "gpt-5.6-sol"
+
+
+def test_as_tres_fontes_convergem_no_mesmo_provedor(tmp_path, monkeypatch):
+    """Sem normalizar, a mesma assinatura fica partida em várias linhas do painel: OpenAI
+    aparecia como 'openai' (Claude+Codex) e 'openai-codex' (Pi), e a Moonshot como
+    'kimi-coding', 'clinepass' e 'moonshotai' — sempre o mesmo gpt-5.6-sol / k3. A pergunta
+    'quanto minha assinatura da OpenAI rendeu' não tinha resposta na tela."""
+    cfg = tmp_path / ".claude"
+    _escrever(cfg / "metrics" / "costs.jsonl", [
+        {"timestamp": "2026-08-01T10:00:00Z", "session_id": "s", "model": "gpt-5.6-sol",
+         "input_tokens": 1, "output_tokens": 1, "cache_write_tokens": 0, "cache_read_tokens": 0},
+    ])
+    codex = tmp_path / "codex"
+    _escrever(codex / "rollout-a.jsonl",
+              _rollout_codex("/r", "a", {"input_tokens": 1, "output_tokens": 1}))
+    pi = tmp_path / "pi"
+    _escrever(pi / "s.jsonl", [
+        {"type": "session", "timestamp": "2026-08-01T10:00:00Z", "cwd": "/r"},
+        {"type": "model_change", "provider": "openai-codex", "modelId": "gpt-5.6-sol"},
+        {"type": "message", "message": {"usage": {"input": 1, "output": 1}}},
+    ])
+    monkeypatch.setattr(cs, "raiz_codex", lambda: codex)
+    monkeypatch.setattr(cs, "raiz_pi", lambda: pi)
+    provs = {cs.linhas_claude(cfg, "conta-x")[0].provider,
+             cs.linhas_codex()[0].provider, cs.linhas_pi()[0].provider}
+    assert provs == {"openai"}, "as três fontes têm que cair na MESMA linha do painel"
+
+
+def test_conta_anthropic_passa_intacta_pela_normalizacao(tmp_path):
+    """'anthropic:<uuid>' é identidade de CONTA, não apelido de provedor: normalizar não pode
+    encostar nela (duas contas Anthropic viram uma só se a chave for achatada)."""
+    cfg = tmp_path / ".claude"
+    _escrever(cfg / "metrics" / "costs.jsonl", [
+        {"timestamp": "2026-08-01T10:00:00Z", "session_id": "s", "model": "claude-opus-5",
+         "input_tokens": 1, "output_tokens": 1, "cache_write_tokens": 0, "cache_read_tokens": 0},
+    ])
+    assert cs.linhas_claude(cfg, "anthropic:758a9521-e2ef")[0].provider == "anthropic:758a9521-e2ef"
 
 
 def test_pi_ignora_sessao_sem_uso(tmp_path, monkeypatch):

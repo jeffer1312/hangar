@@ -109,6 +109,14 @@ def linhas_claude(config_dir: Path, account_id: str) -> list[UsageRow]:
     for d in _ler_jsonl(src):
         if not d.get("timestamp"):
             continue
+        # O descarte de IGNORADOS mora AQUI, antes do dedup, e não no laço de baixo. O arquivo é
+        # cumulativo por sessão: cada linha carrega o total acumulado. Filtrar depois do
+        # `ultimo[chave] = d` faz o último turno em '<synthetic>' descartar a SESSÃO INTEIRA, não
+        # só aquele turno — medido no arquivo real: 7 sessões, 197.161.138 de cache lido (0,90% do
+        # arquivo) sumindo da conta sem sinal nenhum na tela. Descartando antes, a sessão fica com
+        # o snapshot do turno anterior, que é o que "excluído da coleta" sempre quis dizer.
+        if (d.get("model") or "").strip() in pricing.IGNORADOS:
+            continue
         chave = d.get("session_id") or d.get("transcript_path") or d["timestamp"]
         ultimo[chave] = d
 
@@ -116,8 +124,6 @@ def linhas_claude(config_dir: Path, account_id: str) -> list[UsageRow]:
     out: list[UsageRow] = []
     for d in ultimo.values():
         modelo = (d.get("model") or "").strip()
-        if modelo in pricing.IGNORADOS:
-            continue
         ts = _quando(d.get("timestamp"))
         if ts is None:
             continue
@@ -128,6 +134,7 @@ def linhas_claude(config_dir: Path, account_id: str) -> list[UsageRow]:
         # Modelo da própria Anthropic -> a conta é o provedor. Outro provedor -> é motor.
         if prov is None or prov == "anthropic":
             prov = account_id
+        prov = pricing.canonizar_provedor(prov)
         out.append(UsageRow(
             ts=ts, source="claude", provider=prov, model=modelo,
             project=cache_cwd[tp] or PROJETO_DESCONHECIDO,
@@ -188,7 +195,8 @@ def linhas_codex() -> list[UsageRow]:
                 continue
             cr = _int(ultimo.get("cached_input_tokens"))
             out.append(UsageRow(
-                ts=ts, source="codex", provider=prov or "openai", model=modelo or "?",
+                ts=ts, source="codex",
+                provider=pricing.canonizar_provedor(prov) or "openai", model=modelo or "?",
                 project=cwd or PROJETO_DESCONHECIDO, session_id=sid,
                 input=max(0, _int(ultimo.get("input_tokens")) - cr),
                 output=_int(ultimo.get("output_tokens")),
@@ -246,7 +254,8 @@ def linhas_pi() -> list[UsageRow]:
         # mas deixaria o campo inútil pra qualquer drill-down.
         sid = str(arq.relative_to(raiz).with_suffix(""))
         out.append(UsageRow(
-            ts=ts, source="pi", provider=prov or "?", model=modelo or "?",
+            ts=ts, source="pi", provider=pricing.canonizar_provedor(prov) or "?",
+            model=modelo or "?",
             project=cwd or PROJETO_DESCONHECIDO, session_id=sid,
             input=acc["input"], output=acc["output"],
             cache_write=acc["cacheWrite"], cache_read=acc["cacheRead"],
@@ -296,13 +305,29 @@ def account_info(config_dir: Path, fallback_label: str) -> tuple[str, str | None
     return fallback_label, None, fallback_label
 
 
+# Chave de provedor -> rótulo legível. Preenchido por _config_dirs() e lido pelo costs.py na hora
+# de montar o by_provider. Existe porque a CHAVE tem que continuar sendo o uuid (é o que não
+# colide e o que a malha soma entre servidores), mas o uuid como texto na tela é ilegível: a linha
+# de topo do painel "Por provedor", com 87% do gasto, aparecia como
+# 'anthropic:758a9521-e2ef-435b-8738-bc502547c24c'. Antes da reescrita a tela mostrava o e-mail.
+_ROTULOS: dict[str, str] = {}
+
+
+def rotulo_de_provedor(chave: str) -> str | None:
+    """Rótulo legível de uma chave de provedor, ou None (o front cai pra própria chave)."""
+    return _ROTULOS.get(chave)
+
+
 def _config_dirs() -> list[tuple[str, str]]:
     """(caminho, account_id) de cada config dir do Claude. O prefixo 'anthropic:' evita colisão
     com nome de provedor ('openai', 'kimi-coding', …), que vivem no mesmo espaço de chaves."""
     out = []
     for cfg in list_config_dirs():
-        uuid, _email, _label = account_info(Path(cfg.path), cfg.label)
-        out.append((cfg.path, f"anthropic:{uuid}"))
+        uuid, email, label = account_info(Path(cfg.path), cfg.label)
+        chave = f"anthropic:{uuid}"
+        # O e-mail já foi lido aqui; jogá-lo fora era o que obrigava a tela a exibir o uuid cru.
+        _ROTULOS[chave] = email or label
+        out.append((cfg.path, chave))
     return out
 
 

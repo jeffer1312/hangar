@@ -3,7 +3,7 @@
   import { listServers } from '../lib/auth';
   import { fetchCostsForServer } from '../lib/api';
   import {
-    mergeReports, fillDayGaps, tarifasPorModelo, custoDesconhecido,
+    mergeReports, fillDayGaps, tarifasPorModelo, custoDesconhecido, precoParcial, partirOcultos,
     type ServerResult, type MergedReport,
   } from '../lib/costs';
   import { dec, tok, money, money2, type Cur } from '../lib/fmt';
@@ -113,6 +113,11 @@
   const m2 = (n: number) => money2(n, currency, rate);
   const pct = (n: number, total: number) => (total > 0 ? `${dec((n / total) * 100, 1)}%` : '—');
 
+  // O que se LÊ de um corte. A chave da conta Anthropic é 'anthropic:<uuid>' — identidade que não
+  // colide entre servidores da malha, mas ilegível na tela: a linha de topo do "Por provedor",
+  // com 87% do gasto, aparecia como o uuid cru. O backend manda o e-mail no `label`.
+  const rot = (b: DimBucket) => b.label || b.key;
+
   const listaDa = (d: Dim): DimBucket[] =>
     d === 'provider' ? report.by_provider : d === 'source' ? report.by_source
       : d === 'project' ? report.by_project : report.by_model;
@@ -129,6 +134,10 @@
     if (!s) return report.totals;
     return listaDa(s.dim).find((b) => b.key === s.key) ?? report.totals;
   });
+
+  // O recorte também se lê pelo rótulo: com um provedor de conta selecionado, o aviso dizia
+  // "Recorte: provedor anthropic:758a9521-…".
+  const rotuloSel = $derived(selAtivo ? rot(foco) : '');
 
   function alternar(dim: Dim, key: string) {
     sel = sel && sel.dim === dim && sel.key === key ? null : { dim, key };
@@ -224,14 +233,13 @@
   const economia = $derived(report.custo_sem_cache - report.totals.cost);
   const taxaCache = $derived(brutos(report.totals) > 0 ? report.totals.cache_read / brutos(report.totals) : 0);
 
-  const projetosVisiveis = $derived(report.by_project.filter((b) => !ocultos.has(b.key)));
-  const projetosOcultos = $derived(report.by_project.filter((b) => ocultos.has(b.key)));
-  // O pico escala pelos VISÍVEIS: manter a régua num projeto escondido deixaria todas as barras
-  // da tela curtas por causa de algo que ninguém vê.
-  const picoProjeto = $derived(Math.max(1, ...projetosVisiveis.map((b) => b.cost)));
+  // Partição + régua em lib/costs.ts, com teste: a garantia é "esconder não muda total nenhum".
+  const partido = $derived(partirOcultos(report.by_project, ocultos));
+  const projetosOcultos = $derived(partido.escondidos);
+  const picoProjeto = $derived(partido.pico);
   const TETO_PROJETOS = 12;
-  const projetosNoTeto = $derived(projetosVisiveis.slice(0, TETO_PROJETOS));
-  const projetosRestantes = $derived(projetosVisiveis.slice(TETO_PROJETOS));
+  const projetosNoTeto = $derived(partido.visiveis.slice(0, TETO_PROJETOS));
+  const projetosRestantes = $derived(partido.visiveis.slice(TETO_PROJETOS));
 
   // Pico pelo MAIOR da lista, não pelo primeiro item: presumir que a lista já veio ordenada
   // acopla a barra a uma garantia que mora noutro arquivo (`ordenar`, em lib/costs.ts).
@@ -276,7 +284,7 @@
       <select aria-labelledby="lbl-prov" value={selAtivo?.dim === 'provider' ? selAtivo.key : ''}
         onchange={(e) => { const v = e.currentTarget.value; sel = v ? { dim: 'provider', key: v } : null; }}>
         <option value="">todos ({report.by_provider.length})</option>
-        {#each report.by_provider as b}<option value={b.key}>{b.key} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
+        {#each report.by_provider as b}<option value={b.key}>{rot(b)} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
       </select>
     </span>
 
@@ -343,7 +351,7 @@
 
   {#if selAtivo}
     <p class="recorte">
-      Recorte: <b>{NOME_DIM[selAtivo.dim]} {selAtivo.key}</b> — os números do topo e a quebra por
+      Recorte: <b>{NOME_DIM[selAtivo.dim]} {rotuloSel}</b> — os números do topo e a quebra por
       tipo de token são deste recorte. Os painéis abaixo continuam no período inteiro: o servidor
       manda o total de cada dimensão, não o cruzamento entre elas.
       <button class="retry" onclick={() => (sel = null)}>tirar recorte</button>
@@ -465,7 +473,7 @@
           <!-- Sem recorte o traço também é possível (malha inteira sem um modelo com tarifa), e aí
                `selAtivo` é null — o texto tem que continuar dizendo do que ele fala. -->
           <p class="hint">
-            Sem tarifa conhecida para <b>{selAtivo ? selAtivo.key : 'nenhum modelo do período'}</b>
+            Sem tarifa conhecida para <b>{selAtivo ? rotuloSel : 'nenhum modelo do período'}</b>
             — aqui só o volume é medido.
           </p>
         {:else}
@@ -521,7 +529,7 @@
             <div class="row">
               <button aria-pressed={selAtivo?.dim === 'provider' && selAtivo.key === b.key}
                 onclick={() => alternar('provider', b.key)}>
-                <span class="nm">{b.key}</span><span class="vl">{custoDesconhecido(b) ? '—' : m2(b.cost)}</span>
+                <span class="nm">{rot(b)}</span><span class="vl">{custoDesconhecido(b) ? '—' : m2(b.cost)}</span>
                 <span class="track" style="width: {Math.max(1.5, (b.cost / picoProvedor) * 100)}%">
                   {#each TIPOS as t}{#if custoDe(b, t.id) > 0}<i style="background: var({t.slot}); flex: {custoDe(b, t.id)}"></i>{/if}{/each}
                 </span>
@@ -622,9 +630,14 @@
                    daquele número. -->
               {@const comPreco = tarifas.has(b.key)}
               {@const t = tarifas.get(b.key)}
+              <!-- Um servidor da malha sabe a tarifa e outro (catálogo mais velho) não: a linha
+                   sai com o volume dos DOIS e o custo de UM, e sem marca isso lê como preço
+                   completo. Só acontece na mescla — dentro de um servidor é impossível. -->
+              {@const parcial = precoParcial(b.key, comPreco, report.sem_tarifa)}
               <tr class="click" aria-selected={selAtivo?.dim === 'model' && selAtivo.key === b.key}
                 onclick={() => alternar('model', b.key)}>
-                <td>{b.key}{#if !comPreco}<span class="tag">sem tarifa</span>{/if}</td>
+                <td>{b.key}{#if !comPreco}<span class="tag">sem tarifa</span>{:else if parcial}<span
+                  class="tag" title="um servidor da malha não conhece a tarifa deste modelo — o volume dele conta, o custo não">preço parcial</span>{/if}</td>
                 <td class="n">{tok(b.input)}</td>
                 <td class="n">{tok(b.output)}</td>
                 <td class="n">{tok(b.cache_read)}</td>

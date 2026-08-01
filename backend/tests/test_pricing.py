@@ -124,6 +124,41 @@ def test_slim_descarta_entrada_sem_preco_de_input():
     assert pricing.slim(bruto) == {}
 
 
+def test_slim_descarta_entrada_sem_preco_de_output():
+    """Caso ESPELHO do de cima, e é o que mata a atualização de tarifa: um modelo de embedding
+    (input, sem output) publicado por provedor canônico fazia float(c["output"]) levantar
+    KeyError, o _baixar() engolia com um warning genérico e o catálogo congelava no snapshot
+    pra sempre. Hoje são 0 entradas assim — a guarda é pro dia em que houver uma."""
+    bruto = {"openai": {"models": {"text-embedding-9": {"cost": {"input": 0.02}}}}}
+    assert pricing.slim(bruto) == {}
+    # E não pode derrubar o catálogo INTEIRO junto com a entrada ruim.
+    misto = {"openai": {"models": {
+        "text-embedding-9": {"cost": {"input": 0.02}},
+        "gpt-bom": {"cost": {"input": 1, "output": 2}},
+    }}}
+    assert list(pricing.slim(misto)) == ["gpt-bom", "openai/gpt-bom"]
+
+
+def test_canoniza_apelido_de_provedor():
+    """Cada fonte entrega o próprio vocabulário pro mesmo lugar onde a fatura cai: sem traduzir,
+    a assinatura da OpenAI ficava partida entre 'openai' e 'openai-codex', e a da Moonshot entre
+    'kimi-coding', 'clinepass' e 'moonshotai'."""
+    assert pricing.canonizar_provedor("openai-codex") == "openai"
+    assert pricing.canonizar_provedor("kimi-coding") == "moonshotai"
+    assert pricing.canonizar_provedor("clinepass") == "moonshotai"
+    assert pricing.canonizar_provedor("moonshotai") == "moonshotai"
+
+
+def test_canonizar_provedor_nao_encosta_na_conta_nem_no_gateway():
+    # Conta Anthropic é IDENTIDADE, não apelido: achatar juntaria duas contas numa linha só.
+    conta = "anthropic:758a9521-e2ef-435b-8738-bc502547c24c"
+    assert pricing.canonizar_provedor(conta) == conta
+    # Gateway com modelo misturado fica como está: ali a fatura cai mesmo no gateway, e mapear
+    # pelo modelo de hoje inventaria a origem de amanhã.
+    assert pricing.canonizar_provedor("openrouter") == "openrouter"
+    assert pricing.canonizar_provedor("") == ""
+
+
 def test_download_manda_user_agent_proprio(monkeypatch):
     """O models.dev responde 403 ao UA default do urllib (medido na Task 1). Sem header, a
     atualização de tarifa falha calada e o app fica preso no snapshot pra sempre."""

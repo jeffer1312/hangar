@@ -282,6 +282,10 @@ export interface CostBucket {
 // do gasto (projeto de output != projeto de cache) sem precisar clicar.
 export interface DimBucket {
   key: string;
+  // Rótulo legível quando a `key` não serve pra ler — hoje só a conta Anthropic, cuja chave é
+  // 'anthropic:<uuid>' (identidade que não colide na malha) mas cujo nome é o e-mail. A tela
+  // exibe `label ?? key`; ausente é o caso normal, em que a chave já é o nome.
+  label?: string | null;
   sessions: number;
   input: number;
   output: number;

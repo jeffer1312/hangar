@@ -56,7 +56,11 @@ def slim(bruto: dict) -> dict[str, dict]:
             # são ambos relativos a ele. E a linha seguinte faz float(c["input"]) — com `and`, um
             # {"output": 5} sem input estourava KeyError. Esta é a primeira tarefa a passar dado
             # AO VIVO pro slim(), então a fragilidade sai de teórica.
-            if not c.get("input"):
+            # O `output` leva a MESMA guarda pelo motivo espelhado: um modelo de embedding (input
+            # sem output) faria float(c["output"]) levantar KeyError, o _baixar() engoliria com um
+            # warning genérico e a atualização de tarifa morreria PRA SEMPRE, congelada no
+            # snapshot — exatamente a doença que este módulo existe pra curar.
+            if not c.get("input") or not c.get("output"):
                 continue
             entrada = {
                 "provider": pid,
@@ -111,6 +115,31 @@ _APELIDOS = {
 # Não são modelos: não entram no relatório nem viram "sem tarifa" (traço misterioso sugere
 # preço faltando, que é outra coisa).
 IGNORADOS = frozenset({"<synthetic>", "unknown", "mock-engine-1", ""})
+
+# Apelido de PROVEDOR -> id canônico. Irmão do _APELIDOS acima, e pelo mesmo motivo: cada fonte
+# entrega o próprio vocabulário pro mesmo lugar onde a fatura cai, e sem tradução a assinatura
+# fica partida em três linhas do painel. Medido em 01/08/2026 nesta máquina:
+#   OpenAI  -> 'openai' (Claude 7 sessões + Codex 16) E 'openai-codex' (Pi 9), mesmo gpt-5.6-sol.
+#   Moonshot-> 'kimi-coding' (Pi), 'clinepass' (Pi) e 'moonshotai' (Claude), todos k3/kimi-k3.
+# Gateway com modelo MISTURADO ('openrouter', 'cline') fica de fora de propósito: ali a fatura
+# cai mesmo no gateway, e mapear pelo modelo de hoje inventaria a origem de amanhã.
+_APELIDOS_PROVEDOR = {
+    "openai-codex": "openai",
+    "kimi-coding": "moonshotai",
+    "clinepass": "moonshotai",
+    "cline-pass": "moonshotai",
+    "moonshot": "moonshotai",
+}
+
+
+def canonizar_provedor(provedor: str) -> str:
+    """Apelido de provedor -> id canônico. Desconhecido volta como veio.
+
+    A conta Anthropic ('anthropic:<uuid>') passa intacta sem precisar de exceção: ela não é
+    apelido de nada, é identidade de conta, e simplesmente não casa com nenhuma chave do mapa.
+    """
+    p = (provedor or "").strip()
+    return _APELIDOS_PROVEDOR.get(p, p)
 
 
 _lock = threading.Lock()
