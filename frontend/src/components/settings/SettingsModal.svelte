@@ -2,6 +2,7 @@
   import BottomSheet from '../BottomSheet.svelte';
   import SettingsRow from './SettingsRow.svelte';
   import AppearanceSettings from './AppearanceSettings.svelte';
+  import DictationSettings from './DictationSettings.svelte';
   import ServerSettings from './ServerSettings.svelte';
   import EnginesSettings from './EnginesSettings.svelte';
   import { criarConfigServidor } from '../../lib/serverConfig.svelte';
@@ -32,6 +33,7 @@
   const TITULO: Record<TelaConfig, string> = {
     root: 'Configurações',
     aparencia: 'Aparência',
+    ditado: 'Ditado',
     notificacoes: 'Notificações',
     anexos: 'Anexos e transcrição',
     avancado: 'Avançado do servidor',
@@ -41,6 +43,8 @@
   const LINHAS = [
     { id: 'aparencia', secao: 'App', rotulo: 'Aparência', icone: '🎨',
       descricao: 'tema, fundo, leitura e texto', servidor: false },
+    { id: 'ditado', secao: 'App', rotulo: 'Ditado', icone: '🎤',
+      descricao: 'mãos-livres: parar no silêncio e enviar', servidor: false },
     { id: 'notificacoes', secao: 'Servidor', rotulo: 'Notificações', icone: '🔔',
       descricao: 'quando avisar que terminou, caiu ou travou', servidor: true },
     { id: 'anexos', secao: 'Servidor', rotulo: 'Anexos e transcrição', icone: '📎',
@@ -228,6 +232,8 @@
     {/each}
   {:else if telaAtual === 'aparencia'}
     <AppearanceSettings podeAoVivo={isDesktop} onVerAoVivo={() => (aoVivo = true)} />
+  {:else if telaAtual === 'ditado'}
+    <DictationSettings />
   {:else if telaAtual === 'motores'}
     <EnginesSettings targetServer={alvo} />
   {:else}
