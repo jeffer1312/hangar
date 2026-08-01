@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { mergeReports, fillDayGaps } from './costs';
-import type { CostBucket, CostReport } from './types';
+import { mergeReports, fillDayGaps, tarifasPorModelo } from './costs';
+import type { CostBucket, CostReport, RateInfo } from './types';
 
 function bucket(key: string, cost: number): CostBucket {
   return { key, sessions: 1, input: 0, output: 0, cache_read: 0, cache_write: 0, cost };
@@ -118,6 +118,71 @@ describe('mergeReports', () => {
     const m = mergeReports([{ report: ok }, { report: null }], '30d');
     expect(m.partial).toBe(true);
     expect(m.report.totals.cost).toBe(7);
+  });
+
+  it('caído e fora-de-período são listas separadas, cada um com seu nome', () => {
+    // Acontecendo os dois juntos, uma lista só não dá: o aviso da tela precisa dizer QUAL máquina
+    // caiu e QUAL respondeu o período errado. Antes, com um `mismatched` preenchido, a máquina
+    // caída sumia atrás de um "algum servidor não respondeu" que não nomeava ninguém.
+    const m = mergeReports([
+      { report: null, label: 'vps' },
+      { report: { ...vazio(), applied: undefined }, label: 'notebook' },
+      { report: vazio(), label: 'desktop' },
+    ], '30d');
+    expect(m.failed).toEqual(['vps']);
+    expect(m.mismatched).toEqual(['notebook']);
+    expect(m.partial).toBe(true);
+  });
+
+  it('ordena by_day desc por data e by_model desc por custo', () => {
+    // Ordem é contrato, não estética: o ranking divide pela MAIOR barra e o gráfico lê `by_day`
+    // de trás pra frente pra desenhar o eixo do tempo. `juntarDim` devolve um Map (ordem de
+    // inserção, ou seja, a do primeiro servidor que respondeu), então quem ordena é o merge.
+    const dia = (key: string, cost: number) => ({ ...vazio().totals, key, cost });
+    const a = {
+      ...vazio(),
+      by_day: [dia('2026-07-01', 1), dia('2026-07-03', 5)],
+      by_model: [dia('opus', 2), dia('haiku', 9)],
+    };
+    const b = {
+      ...vazio(),
+      by_day: [dia('2026-07-02', 3)],
+      by_model: [dia('sonnet', 5)],
+    };
+    const m = mergeReports([{ report: a }, { report: b }], '30d');
+    expect(m.report.by_day.map((x) => x.key)).toEqual(['2026-07-03', '2026-07-02', '2026-07-01']);
+    expect(m.report.by_model.map((x) => x.key)).toEqual(['haiku', 'sonnet', 'opus']);
+  });
+
+  it('empate de custo desempata pelo nome, pra ordem não depender do servidor', () => {
+    const emp = (key: string) => ({ ...vazio().totals, key, cost: 4 });
+    const m = mergeReports([{ report: { ...vazio(), by_project: [emp('zeta'), emp('alfa')] } }], '30d');
+    expect(m.report.by_project.map((x) => x.key)).toEqual(['alfa', 'zeta']);
+  });
+});
+
+describe('tarifasPorModelo', () => {
+  const tarifa = (provider: string, model: string, input: number): RateInfo => ({
+    model, provider, input, output: 1, cache_read: 0, cache_write: 0, origin: 'models.dev',
+  });
+
+  it('modelo com uma tarifa só devolve a tarifa', () => {
+    const m = tarifasPorModelo([tarifa('anthropic', 'claude-opus-4', 15)]);
+    expect(m.get('claude-opus-4')?.input).toBe(15);
+  });
+
+  it('mesmo modelo em dois provedores: conhecido, mas SEM tarifa única', () => {
+    // O custo da linha soma os dois provedores; exibir o preço de um ao lado dele seria dizer que
+    // aquele número saiu daquela tarifa. `has` continua true — o custo é real, só o preço é que
+    // não tem resposta única.
+    const m = tarifasPorModelo([tarifa('zai', 'glm-5.2', 2), tarifa('kimi', 'glm-5.2', 9)]);
+    expect(m.has('glm-5.2')).toBe(true);
+    expect(m.get('glm-5.2')).toBeNull();
+  });
+
+  it('modelo sem tarifa nenhuma não entra no mapa — é "não sei", não "de graça"', () => {
+    const m = tarifasPorModelo([tarifa('anthropic', 'claude-opus-4', 15)]);
+    expect(m.has('claude-sonnet-4')).toBe(false);
   });
 });
 

@@ -12,6 +12,11 @@ export interface MergedReport {
   report: CostReport;
   partial: boolean;      // algum servidor não respondeu ou entrou fora da soma
   mismatched: string[];  // servidores que não ecoaram o período pedido
+  // Servidores que não responderam (offline, timeout, erro). Lista separada do `mismatched`
+  // porque as duas causas são diferentes e o aviso da tela precisa dizer QUAL máquina caiu em
+  // qual: com as duas acontecendo juntas, só o `mismatched` era nomeado e a máquina caída
+  // desaparecia atrás de um "algum servidor não respondeu" que não nomeava ninguém.
+  failed: string[];
 }
 
 // ── Mescla v2: a malha inteira num relatório só ──────────────────────────────
@@ -23,7 +28,7 @@ const zeroBucket = (key: string): DimBucket => ({
 
 // `?? 0` em TODA entrada: servidor da malha em versão antiga não manda os campos novos, e
 // `undefined + n` vira NaN — que se espalha e apaga a coluna inteira, inclusive as linhas dos
-// servidores que mandaram o dado certo. Mesmo motivo do addModels que já existia aqui.
+// servidores que mandaram o dado certo.
 function somarBucket(alvo: DimBucket, b: Partial<DimBucket>): void {
   alvo.sessions += b.sessions ?? 0;
   alvo.input += b.input ?? 0;
@@ -60,6 +65,7 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
   const rates = new Map<string, RateInfo>();
   const semTarifa = new Set<string>();
   const mismatched: string[] = [];
+  const failed: string[] = [];
   const anterior = zeroBucket('anterior');
   let entraram = 0;      // servidores que de fato entraram na soma
   let comAnterior = 0;   // ...e destes, quantos mandaram a janela anterior
@@ -70,7 +76,8 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
 
   results.forEach((res, i) => {
     const r = res.report;
-    if (!r) { partial = true; return; }
+    // Mesmo rótulo-em-vez-de-índice do `mismatched` logo abaixo, pelo mesmo motivo.
+    if (!r) { partial = true; failed.push(res.label ?? `#${i + 1}`); return; }
     // A cotação é lida ANTES da recusa: USD/BRL não depende de período nenhum, e se a única
     // máquina que tem cotação for a desatualizada, a malha inteira perderia o R$ à toa.
     usdBrl = usdBrl ?? r.usd_brl ?? null;
@@ -108,7 +115,7 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
   });
 
   return {
-    partial, mismatched,
+    partial, mismatched, failed,
     report: {
       totals,
       by_day: [...dims.by_day.values()].sort((a, b) => b.key.localeCompare(a.key)),
@@ -130,6 +137,25 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
       usd_brl: usdBrl,
     },
   };
+}
+
+// Tarifas indexadas por MODELO, que é como a tela pergunta ("qual o preço de claude-sonnet-4?"),
+// enquanto o fio guarda por `provider|model`, que é como o preço existe. Desfazer essa chave
+// escolhendo o primeiro provedor é o que mostrava a tarifa da Kimi ao lado de um custo que soma
+// Kimi + Z.ai. O Map responde DUAS coisas, e a diferença é o ponto:
+//   `has(modelo)`  — existe preço conhecido? Se NÃO, o `cost` que o backend mandou é 0 porque ele
+//                    pulou a conta (`costs.py` `_custo_da_linha` devolve None), não porque foi de
+//                    graça. Mostrar US$ 0,00 aí afirma "não custou nada", que é uma mentira
+//                    diferente de "não sei o preço" — e é a cara do bug.
+//   `get(modelo)`  — QUAL tarifa exibir; `null` quando há mais de uma, porque aí não existe uma
+//                    tarifa só que descreva aquela linha.
+export function tarifasPorModelo(rates: RateInfo[]): Map<string, RateInfo | null> {
+  const porModelo = new Map<string, RateInfo[]>();
+  for (const t of rates) {
+    const l = porModelo.get(t.model);
+    if (l) l.push(t); else porModelo.set(t.model, [t]);
+  }
+  return new Map([...porModelo].map(([model, l]) => [model, l.length === 1 ? l[0] : null]));
 }
 
 // Preenche buracos de data na lista de buckets diários (desc) com dias zerados, pra série

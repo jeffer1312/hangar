@@ -2,9 +2,11 @@
   import NavBar from '../components/NavBar.svelte';
   import { listServers } from '../lib/auth';
   import { fetchCostsForServer } from '../lib/api';
-  import { mergeReports, fillDayGaps, type ServerResult, type MergedReport } from '../lib/costs';
+  import {
+    mergeReports, fillDayGaps, tarifasPorModelo, type ServerResult, type MergedReport,
+  } from '../lib/costs';
   import { dec, tok, money, money2, type Cur } from '../lib/fmt';
-  import type { DimBucket, RateInfo } from '../lib/types';
+  import type { DimBucket } from '../lib/types';
 
   interface Props { onBack: () => void; }
   let { onBack }: Props = $props();
@@ -13,11 +15,13 @@
   // O backend manda `cost_input`/`cost_output`/`cost_cache_write`/`cost_cache_read` em CADA corte,
   // então a forma do gasto (projeto de output ≠ projeto de cache) aparece sem precisar clicar.
   type Tipo = 'input' | 'output' | 'cache_write' | 'cache_read';
+  // `--chart-N` vem do app.css (bloco escuro + bloco claro), não daqui: cor de tema tem que
+  // trocar junto com o tema, e hex dentro do componente fica de fora dessa troca.
   const TIPOS: { id: Tipo; label: string; slot: string }[] = [
-    { id: 'input', label: 'input', slot: '--s1' },
-    { id: 'output', label: 'output', slot: '--s2' },
-    { id: 'cache_write', label: 'cache escrito', slot: '--s3' },
-    { id: 'cache_read', label: 'cache lido', slot: '--s4' },
+    { id: 'input', label: 'input', slot: '--chart-1' },
+    { id: 'output', label: 'output', slot: '--chart-2' },
+    { id: 'cache_write', label: 'cache escrito', slot: '--chart-3' },
+    { id: 'cache_read', label: 'cache lido', slot: '--chart-4' },
   ];
   const tokensDe = (b: DimBucket, t: Tipo) =>
     t === 'input' ? b.input : t === 'output' ? b.output : t === 'cache_write' ? b.cache_write : b.cache_read;
@@ -45,7 +49,7 @@
     cost: 0, cost_input: 0, cost_output: 0, cost_cache_write: 0, cost_cache_read: 0,
   });
   const relatorioVazio = (): MergedReport => ({
-    partial: false, mismatched: [],
+    partial: false, mismatched: [], failed: [],
     report: {
       totals: vazio(), by_day: [], by_provider: [], by_source: [], by_project: [], by_model: [],
       by_kind: [], rates: [], sem_tarifa: [], custo_sem_cache: 0, equivalente_cobrado: 0,
@@ -181,7 +185,10 @@
       }).filter((s) => s.cost > 0);
       return { dia: d, segs, total: acc };
     });
-    const max = Math.max(1, ...colunas.map((c) => c.total));
+    // `Math.max(0, …) || 1`, não `Math.max(1, …)`: o piso em US$ 1 achatava dias de centavos
+    // contra uma régua de 1 dólar (uma coluna de 3px pra US$ 0,04). O `|| 1` só salva o caso
+    // degenerado de tudo zerado, onde a divisão por `topo` daria NaN.
+    const max = Math.max(0, ...colunas.map((c) => c.total)) || 1;
     const nice = Math.pow(10, Math.floor(Math.log10(max)));
     const passo = max / nice > 5 ? nice * 2 : max / nice > 2 ? nice : nice / 2;
     const topo = Math.ceil(max / passo) * passo;
@@ -225,12 +232,27 @@
   const projetosNoTeto = $derived(projetosVisiveis.slice(0, TETO_PROJETOS));
   const projetosRestantes = $derived(projetosVisiveis.slice(TETO_PROJETOS));
 
+  // Pico pelo MAIOR da lista, não pelo primeiro item: presumir que a lista já veio ordenada
+  // acopla a barra a uma garantia que mora noutro arquivo (`ordenar`, em lib/costs.ts).
+  const picoProvedor = $derived(Math.max(1, ...report.by_provider.map((b) => b.cost)));
+  const picoFonte = $derived(Math.max(1, ...report.by_source.map((b) => b.cost)));
   const picoModelo = $derived(Math.max(1, ...report.by_model.map((b) => b.cost)));
-  const tarifas = $derived.by(() => {
-    const mapa = new Map<string, RateInfo>();
-    for (const t of report.rates) if (!mapa.has(t.model)) mapa.set(t.model, t);
-    return mapa;
-  });
+
+  // `has` = existe preço; `get` = qual preço (null com mais de um provedor). Ver tarifasPorModelo.
+  const tarifas = $derived(tarifasPorModelo(report.rates));
+  // Recorte num modelo SEM tarifa: o `cost` que vem do servidor é 0 porque ele pulou a conta, não
+  // porque foi de graça. Todo número em dinheiro deste recorte vira traço.
+  const semTarifa = $derived(selAtivo?.dim === 'model' && !tarifas.has(selAtivo.key));
+  const mFoco = (n: number) => (semTarifa ? '—' : m(n));
+  const m2Foco = (n: number) => (semTarifa ? '—' : m2(n));
+
+  // Ressalva dos painéis que NÃO obedecem ao recorte. Sem ela, "Gasto por dia" com um recorte
+  // ativo se lê como "gasto por dia DO recorte" — o número está certo e o rótulo engana.
+  const RESSALVA = ' Sempre o período inteiro: o servidor manda o total de cada dimensão, não o cruzamento entre elas.';
+  // O painel de cache segue no período inteiro por OUTRO motivo — `custo_sem_cache` é um escalar
+  // global, não uma dimensão —, então a ressalva dele é a própria. (Espaço na string: Svelte come
+  // o espaço que fica colado no `{#if}`, e "cache.Sempre" saía grudado.)
+  const RESSALVA_CACHE = ' Sempre o período inteiro — o servidor calcula isto no total, não por recorte.';
 
   const vazioNoPeriodo = $derived(!loading && report.totals.sessions === 0);
 </script>
@@ -278,7 +300,10 @@
       <select aria-labelledby="lbl-mod" value={selAtivo?.dim === 'model' ? selAtivo.key : ''}
         onchange={(e) => { const v = e.currentTarget.value; sel = v ? { dim: 'model', key: v } : null; }}>
         <option value="">todos ({report.by_model.length})</option>
-        {#each report.by_model as b}<option value={b.key}>{b.key} — {m(b.cost)}</option>{/each}
+        <!-- Mesma regra da tabela: modelo sem tarifa não vale "US$ 0,00" nem aqui. -->
+        {#each report.by_model as b}
+          <option value={b.key}>{b.key} — {tarifas.has(b.key) ? m(b.cost) : '—'}</option>
+        {/each}
       </select>
     </span>
 
@@ -293,11 +318,17 @@
 
   {#if merged.partial}
     <p class="warn">
+      <!-- As duas causas são independentes e podem acontecer JUNTAS: quando aconteciam, só a
+           segunda era nomeada e o servidor caído sumia num "algum servidor" sem nome nem
+           contagem. Cada oração sai por conta própria, com quantos e quais. -->
       ⚠ Total parcial.
+      {#if merged.failed.length}
+        {merged.failed.length} servidor{merged.failed.length > 1 ? 'es' : ''} não respondeu
+        ({merged.failed.join(', ')}).
+      {/if}
       {#if merged.mismatched.length}
-        {merged.mismatched.join(', ')} respondeu fora do período pedido e ficou de fora da soma.
-      {:else}
-        Algum servidor não respondeu.
+        {merged.mismatched.length} respondeu fora do período pedido e ficou de fora da soma
+        ({merged.mismatched.join(', ')}).
       {/if}
       <button class="retry" onclick={() => load(period)}>Tentar de novo</button>
     </p>
@@ -320,8 +351,14 @@
     <dl class="kpis">
       <div class="kpi">
         <dt>custo no período</dt>
-        <dd class="hero">{m(foco.cost)}</dd>
-        <div class="foot">{m2(foco.cost)} · {foco.sessions} sessões · {m2(foco.cost / diasDoPeriodo)}/dia</div>
+        <!-- Traço, nunca US$ 0,00, quando o recorte é um modelo sem tarifa: o zero que o backend
+             manda ali é "não sei o preço", e como número principal da tela ele afirmaria "não
+             custou nada". -->
+        <dd class="hero" class:tracinho={semTarifa}>{mFoco(foco.cost)}</dd>
+        <div class="foot">
+          {m2Foco(foco.cost)} · {foco.sessions} sessões · {m2Foco(foco.cost / diasDoPeriodo)}/dia
+        </div>
+        {#if semTarifa}<div class="foot">sem tarifa conhecida — só o volume é medido</div>{/if}
         {#if delta}<div class="foot">{delta}</div>{/if}
       </div>
       <div class="kpi">
@@ -353,7 +390,7 @@
 
     <div class="card">
       <h2>Gasto por dia</h2>
-      <p class="hint">Empilhado por tipo de token. Cada coluna é um dia.</p>
+      <p class="hint">Empilhado por tipo de token. Cada coluna é um dia.{#if selAtivo}{RESSALVA}{/if}</p>
       <div class="legend">
         {#each TIPOS as t}
           <button aria-pressed={!tiposOff.has(t.id)}
@@ -415,13 +452,19 @@
       <div class="card">
         <h2>Para onde vai o dólar</h2>
         <p class="hint">O tipo de token que gerou a conta — não o volume bruto.</p>
-        <div class="stack100">
-          {#each fatias as f}
-            {#if f.cost > 0}
-              <i style="background: var({f.slot}); flex: {f.cost}" title="{f.label}: {m2(f.cost)}"></i>
-            {/if}
-          {/each}
-        </div>
+        <!-- Sem tarifa, os quatro custos vêm zerados do servidor: a barra 100% seria uma faixa
+             vazia que se lê como "nada custou". Some, e a tabela abaixo fica só com o volume. -->
+        {#if semTarifa}
+          <p class="hint">Sem tarifa conhecida para <b>{selAtivo?.key}</b> — aqui só o volume é medido.</p>
+        {:else}
+          <div class="stack100">
+            {#each fatias as f}
+              {#if f.cost > 0}
+                <i style="background: var({f.slot}); flex: {f.cost}" title="{f.label}: {m2(f.cost)}"></i>
+              {/if}
+            {/each}
+          </div>
+        {/if}
         <div class="twrap"><table class="breakdown">
           <thead>
             <tr><th></th><th class="n">tokens</th><th class="n">custo</th><th class="n">% da conta</th></tr>
@@ -431,8 +474,8 @@
               <tr>
                 <td class="name"><span class="swatch" style="background: var({f.slot})"></span>{f.label}</td>
                 <td class="n">{tok(f.toks)}</td>
-                <td class="n">{m2(f.cost)}</td>
-                <td class="n dim">{pct(f.cost, foco.cost)}</td>
+                <td class="n">{m2Foco(f.cost)}</td>
+                <td class="n dim">{semTarifa ? '—' : pct(f.cost, foco.cost)}</td>
               </tr>
             {/each}
           </tbody>
@@ -441,10 +484,7 @@
 
       <div class="card">
         <h2>O que o cache economizou</h2>
-        <p class="hint">
-          Os mesmos tokens, se nenhum fosse cache.{#if selAtivo} Sempre o período inteiro — o
-          servidor calcula isto no total, não por recorte.{/if}
-        </p>
+        <p class="hint">Os mesmos tokens, se nenhum fosse cache.{#if selAtivo}{RESSALVA_CACHE}{/if}</p>
         <div class="cmp">
           <div class="cmprow"><span class="dim">pago de verdade</span><b>{m2(report.totals.cost)}</b></div>
           <div class="cmptrack">
@@ -463,14 +503,14 @@
     <div class="cols">
       <div class="card">
         <h2>Por provedor</h2>
-        <p class="hint">Quem cobra a conta. Um provedor atravessa várias fontes.</p>
+        <p class="hint">Quem cobra a conta. Um provedor atravessa várias fontes.{#if selAtivo}{RESSALVA}{/if}</p>
         <div class="rank">
           {#each report.by_provider as b}
             <div class="row">
               <button aria-pressed={selAtivo?.dim === 'provider' && selAtivo.key === b.key}
                 onclick={() => alternar('provider', b.key)}>
                 <span class="nm">{b.key}</span><span class="vl">{m2(b.cost)}</span>
-                <span class="track" style="width: {Math.max(1.5, (b.cost / Math.max(1, report.by_provider[0]?.cost ?? 1)) * 100)}%">
+                <span class="track" style="width: {Math.max(1.5, (b.cost / picoProvedor) * 100)}%">
                   {#each TIPOS as t}{#if custoDe(b, t.id) > 0}<i style="background: var({t.slot}); flex: {custoDe(b, t.id)}"></i>{/if}{/each}
                 </span>
               </button>
@@ -483,14 +523,14 @@
 
       <div class="card">
         <h2>Por fonte</h2>
-        <p class="hint">Qual agente rodou. Uma fonte usa vários provedores.</p>
+        <p class="hint">Qual agente rodou. Uma fonte usa vários provedores.{#if selAtivo}{RESSALVA}{/if}</p>
         <div class="rank">
           {#each report.by_source as b}
             <div class="row">
               <button aria-pressed={selAtivo?.dim === 'source' && selAtivo.key === b.key}
                 onclick={() => alternar('source', b.key)}>
                 <span class="nm">{b.key}</span><span class="vl">{m2(b.cost)}</span>
-                <span class="track" style="width: {Math.max(1.5, (b.cost / Math.max(1, report.by_source[0]?.cost ?? 1)) * 100)}%">
+                <span class="track" style="width: {Math.max(1.5, (b.cost / picoFonte) * 100)}%">
                   {#each TIPOS as t}{#if custoDe(b, t.id) > 0}<i style="background: var({t.slot}); flex: {custoDe(b, t.id)}"></i>{/if}{/each}
                 </span>
               </button>
@@ -504,7 +544,9 @@
 
     <div class="card">
       <h2>Por projeto</h2>
-      <p class="hint">A pasta onde a sessão rodou. Clique para recortar; o × tira da lista sem tirar da conta.</p>
+      <p class="hint">
+        A pasta onde a sessão rodou. Clique para recortar; o × tira da lista sem tirar da conta.{#if selAtivo}{RESSALVA}{/if}
+      </p>
       <div class="rank">
         {#each projetosNoTeto as b}
           <div class="row">
@@ -549,7 +591,7 @@
          1280px, e as duas colunas que importam (% e custo) eram as cortadas. -->
     <div class="card">
       <h2>Por modelo</h2>
-      <p class="hint">Com a tarifa aplicada e de onde ela veio. Clique para recortar.</p>
+      <p class="hint">Com a tarifa aplicada e de onde ela veio. Clique para recortar.{#if selAtivo}{RESSALVA}{/if}</p>
       <div class="twrap">
         <table class="data">
           <thead>
@@ -561,20 +603,30 @@
           </thead>
           <tbody>
             {#each report.by_model as b}
+              <!-- Duas perguntas diferentes: `comPreco` é "existe tarifa?" (manda no custo e no %,
+                   que o backend só calcula quando há preço); `t` é "qual tarifa mostrar?", e vem
+                   null quando o mesmo modelo aparece em mais de um provedor — aí o custo da linha
+                   soma os dois e exibir o preço de um deles ao lado dele seria inventar a origem
+                   daquele número. -->
+              {@const comPreco = tarifas.has(b.key)}
               {@const t = tarifas.get(b.key)}
               <tr class="click" aria-selected={selAtivo?.dim === 'model' && selAtivo.key === b.key}
                 onclick={() => alternar('model', b.key)}>
-                <td>{b.key}{#if !t}<span class="tag">sem tarifa</span>{/if}</td>
+                <td>{b.key}{#if !comPreco}<span class="tag">sem tarifa</span>{/if}</td>
                 <td class="n">{tok(b.input)}</td>
                 <td class="n">{tok(b.output)}</td>
                 <td class="n">{tok(b.cache_read)}</td>
                 <td class="n dim">{t ? `${dec(t.input, 2)}/${dec(t.output, 2)}` : '—'}</td>
                 <td class="n dim">{t ? t.origin : '—'}{#if t?.cache_estimado}<span class="tag">cache estimado</span>{/if}</td>
-                <td class="n dim">{t ? pct(b.cost, report.totals.cost) : '—'}</td>
+                <td class="n dim">{comPreco ? pct(b.cost, report.totals.cost) : '—'}</td>
                 <!-- Sem tarifa mostra TRAÇO, nunca US$ 0,00: zero afirma "não custou nada", que é
                      uma mentira diferente de "não sei o preço". -->
-                <td class="c">{#if t}{m2(b.cost)}{:else}<span class="tracinho">—</span>{/if}</td>
-                <td class="bar"><span class="mini"><i style="width: {Math.max(2, (b.cost / picoModelo) * 100)}%"></i></span></td>
+                <td class="c">{#if comPreco}{m2(b.cost)}{:else}<span class="tracinho">—</span>{/if}</td>
+                <td class="bar">
+                  {#if comPreco}
+                    <span class="mini"><i style="width: {Math.max(2, (b.cost / picoModelo) * 100)}%"></i></span>
+                  {/if}
+                </td>
               </tr>
             {:else}
               <tr><td colspan="9" class="empty">Sem dados no período.</td></tr>
@@ -603,20 +655,10 @@
 </div>
 
 <style>
-  /* Paleta dos slots. Slot 1 é a cor de destaque do app; 2–4 passaram no validador de daltonismo
-     nos dois modos. Escuro é o padrão (igual ao app.css), claro sobrescreve. */
+  /* A paleta (`--chart-1..4`) mora no app.css, nos dois temas — aqui só se referencia. */
   .costs {
-    --s1: var(--accent);
-    --s2: #d95926;
-    --s3: #199e70;
-    --s4: #c98500;
     --grid-line: var(--border-subtle);
     --axis-line: var(--border-default);
-  }
-  :global(html[data-theme='light']) .costs {
-    --s2: #eb6834;
-    --s3: #1baf7a;
-    --s4: #eda100;
   }
 
   /* flex+min-height+overflow: MESMO idioma do Archive. Sem isto a tela não rola — o #app é
@@ -707,7 +749,10 @@
   .kpi dt { font-size: var(--text-xs); color: var(--text-muted); margin-bottom: 6px; }
   .kpi dd { font-size: 30px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.1; }
   .kpi dd.hero { color: var(--accent); font-size: 38px; }
-  .kpi dd.aqua { color: var(--s3); }
+  /* O traço do "não sei o preço" não pode herdar o tamanho e a cor de destaque do número: a 38px
+     em índigo ele lê como barra de carregamento, não como texto. */
+  .kpi dd.hero.tracinho { color: var(--text-muted); font-size: 30px; }
+  .kpi dd.aqua { color: var(--chart-3); }
   .kpi .foot { font-size: var(--text-xs); color: var(--text-secondary); margin-top: 6px; }
   /* `compacta`, não `mini`: a barrinha da tabela por modelo já é `.mini` no mesmo escopo, e a
      colisão trocava o `display: grid` destes cards por `inline-block` — os dois viravam uma
@@ -780,7 +825,7 @@
   .cmprow { display: flex; justify-content: space-between; gap: var(--space-4); font-size: var(--text-sm); }
   .cmprow b { font-variant-numeric: tabular-nums; }
   .cmptrack { height: 12px; border-radius: 6px; background: var(--surface-inset); overflow: hidden; }
-  .cmptrack > i { display: block; height: 100%; background: var(--s1); }
+  .cmptrack > i { display: block; height: 100%; background: var(--chart-1); }
 
   /* ── ranking ── */
   .rank { display: flex; flex-direction: column; gap: 7px; }
