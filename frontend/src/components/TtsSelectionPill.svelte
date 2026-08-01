@@ -234,6 +234,7 @@
     font-size: var(--text-sm);
     width: fit-content;
     max-width: min(calc(100vw - var(--space-8)), 420px);
+    box-sizing: border-box;
     /* Teto absoluto: o texto adaptado rola dentro (.tts-sel-preview), os botoes ficam alcancaveis. */
     max-height: calc(100vh - var(--space-4));
     /* --cp-tts-bar-h (publicada no App.svelte): soma a altura da BARRA DO PLAYER quando ela esta
@@ -254,6 +255,16 @@
     border-radius: var(--radius-full);
     border-color: var(--accent);
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  }
+  /* Aberto, casa com a LARGURA DO COMPOSER — os mesmos numeros de .composer-card
+     (Composer.svelte:975 e :1020). Uma caixa estreita flutuando desalinhada em cima de um composer
+     largo era o que nao "casava"; com a mesma largura os dois viram uma coisa so. */
+  .tts-sel.aberto {
+    width: calc(100% - var(--space-4));
+    max-width: 600px;
+  }
+  @media (min-width: 820px) {
+    .tts-sel.aberto { max-width: min(1400px, 94vw); }
   }
   .tts-sel-top { display: flex; align-items: center; gap: var(--space-2); }
   /* Fechado a propria pilula E o botao — nao ha botao preenchido dentro de caixa, que era o que
