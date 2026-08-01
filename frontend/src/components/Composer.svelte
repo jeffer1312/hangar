@@ -148,6 +148,12 @@
   // ── Gravacao de audio pelo microfone (MediaRecorder) ────────────────────────
   let recording = $state(false);
   let recError = $state('');
+  // Desfazer a limpeza do ditado: guarda o texto cru (raw) devolvido pelo backend junto do texto
+  // ja limpo. `before` e o inputText anterior a esta transcricao, pra remontar a mesma concatenacao
+  // com o cru no lugar do limpo. Some ao enviar, ao editar o campo, ou em ~10s (undoTimer) -- senao
+  // fica pendurado e reaparece no ditado seguinte.
+  let undo = $state<{ before: string; raw: string } | null>(null);
+  let undoTimer: ReturnType<typeof setTimeout> | undefined;
   let mediaRecorder: MediaRecorder | undefined;
   let recChunks: Blob[] = [];
   let recStream: MediaStream | undefined;
@@ -308,6 +314,7 @@
 
   function handleInput() {
     sendError = '';
+    limparUndo();   // editar o campo invalida a oferta de desfazer a limpeza do ditado
     autoGrow();
   }
 
@@ -336,11 +343,13 @@
 
   // ── Anexos: escolher / remover (multiplas imagens) ─────────────────────────
   // Adiciona arquivos de imagem a lista (do picker ou do paste), cada um com preview local.
-  function addFiles(files: Iterable<File>) {
+  // ditado=true so na gravacao pelo mic (toggleRecord) -> so ela pede limpeza do texto; arquivo de
+  // audio anexado (picker/paste) nunca passa por limpeza.
+  function addFiles(files: Iterable<File>, opts?: { ditado?: boolean }) {
     for (const f of files) {
       // audio (gravacao do mic ou arquivo audio/*) NAO vira anexo: transcreve e cai no textarea,
       // como se o usuario tivesse digitado — ele revisa/edita e envia quando quiser.
-      if (f.type.startsWith('audio/')) { transcribeIntoComposer(f); continue; }
+      if (f.type.startsWith('audio/')) { transcribeIntoComposer(f, { ditado: !!opts?.ditado }); continue; }
       const isImage = f.type.startsWith('image/');
       // url so pra preview de imagem; outros tipos viram chip com o nome (sem objectURL pra revogar).
       attachments = [...attachments, { file: f, url: isImage ? URL.createObjectURL(f) : '', isImage }];
@@ -350,27 +359,61 @@
 
   // Transcreve o audio (Groq) e joga o texto no composer, anexando ao que ja houver — o usuario
   // revisa e envia. NAO envia sozinho. Transcricao vazia / falha -> avisa em recError, sem sumir.
-  async function transcribeIntoComposer(file: File) {
+  // ditado=true pede `limpar=1`: a resposta ja vem com o texto limpo (`text`), o cru (`raw`, pro
+  // desfazer) e um `aviso` quando a limpeza nao valeu -- sem corrida, a troca acontece ANTES da
+  // resposta chegar na tela.
+  async function transcribeIntoComposer(file: File, opts?: { ditado?: boolean }) {
     // Uma por vez: transcribing e setado SINCRONO antes de qualquer await, entao um segundo audio
     // (ex: multi-selecao no picker) cai aqui e avisa em vez de correr concorrente e pisar no estado
     // compartilhado (transcribing/recError/inputText) — que sairia fora de ordem.
     if (transcribing) { recError = 'Aguarde a transcrição atual terminar'; return; }
     transcribing = true;
     recError = '';
+    const before = inputText.trim();
     try {
-      const { text } = await transcribeFile(sessionName, file);
+      const { text, raw, aviso } = await transcribeFile(sessionName, file, { limpar: !!opts?.ditado });
       const t = text.trim();
       if (!t) { recError = 'Transcrição vazia — grave de novo'; return; }
-      inputText = inputText.trim() ? `${inputText.trim()} ${t}` : t;
+      inputText = before ? `${before} ${t}` : t;
+      // Oferece desfazer so quando a limpeza de fato mudou o texto (raw ausente/igual -> nada a desfazer).
+      const cru = raw?.trim();
+      if (opts?.ditado && cru && cru !== t) {
+        undo = { before, raw: cru };
+        if (undoTimer) clearTimeout(undoTimer);
+        undoTimer = setTimeout(limparUndo, 10_000);
+      } else {
+        limparUndo();
+      }
+      if (aviso) recError = aviso;
       await tick();
       autoGrow();
       textareaEl?.focus();
     } catch (err) {
       console.error('transcrição falhou', err);
-      recError = err instanceof Error ? err.message : 'Falha na transcrição';
+      const status = (err as { status?: number } | null)?.status;
+      // Sem o ditado ao vivo, ficar sem chave da Groq passa a significar SEM DITADO NENHUM -> avisa
+      // onde resolver, nao so "falhou".
+      recError = status === 503
+        ? 'Configure a chave da Groq em Configurações → Anexos e transcrição'
+        : err instanceof Error ? err.message : 'Falha na transcrição';
     } finally {
       transcribing = false;
     }
+  }
+
+  // Limpa a oferta de desfazer (timeout, edicao do campo, ou envio).
+  function limparUndo() {
+    undo = null;
+    if (undoTimer) { clearTimeout(undoTimer); undoTimer = undefined; }
+  }
+
+  // Troca o texto limpo pelo cru que a Groq devolveu, preservando o que havia antes do ditado.
+  function desfazerLimpeza() {
+    if (!undo) return;
+    const { before, raw } = undo;
+    inputText = before ? `${before} ${raw}` : raw;
+    limparUndo();
+    void tick().then(autoGrow);
   }
 
   // ── Gravar audio: toggle (tap grava, tap para) -> vira um anexo de audio ─────
@@ -435,7 +478,7 @@
         teardownRecording();
       } else if (recChunks.length) {
         const blob = new Blob(recChunks, { type });
-        addFiles([new File([blob], `gravacao-${Date.now()}.${ext}`, { type })]);
+        addFiles([new File([blob], `gravacao-${Date.now()}.${ext}`, { type })], { ditado: true });
         teardownRecording();
       } else {
         recError = 'Gravação vazia, tente de novo';
@@ -495,6 +538,7 @@
   }
 
   onDestroy(teardownRecording);
+  onDestroy(limparUndo);   // troca de sessao desmonta o Composer -> nao deixa o setTimeout solto
 
   function onPickFile(e: Event) {
     const files = (e.target as HTMLInputElement).files;
@@ -539,6 +583,7 @@
     if (!canSend) return;
     const caption = inputText.trim();
     sendError = '';
+    limparUndo();   // enviou -> a oferta de desfazer a limpeza do ditado nao faz mais sentido
     if (attachments.length) {
       uploading = true;
       attachError = '';
@@ -727,6 +772,14 @@
       <div class="rec-hint" role="status" aria-label="Transcrevendo áudio">
         <span class="rec-dot" aria-hidden="true"></span>
         <span class="rec-time">transcrevendo…</span>
+      </div>
+    {/if}
+    {#if undo}
+      <!-- Oferece voltar ao texto cru do ditado (antes da limpeza). Some sozinha (limparUndo): ao
+           enviar, ao editar o campo, ou apos ~10s. -->
+      <div class="rec-hint" role="status">
+        <span class="rec-time">Ditado limpo.</span>
+        <button type="button" class="undo-btn" onclick={desfazerLimpeza}>↩ original</button>
       </div>
     {/if}
     {#if recError}
@@ -1269,6 +1322,17 @@
     background: var(--accent);
     height: calc(8px + var(--h, 0) * 56px);
     transition: height 60ms linear;
+  }
+
+  /* Botao "↩ original" do desfazer da limpeza do ditado: texto discreto, sem fundo proprio
+     (superficie e a do rec-hint/composer, ver regra de transparencia do CLAUDE.md). */
+  .undo-btn {
+    flex-shrink: 0;
+    padding: 0;
+    background: transparent;
+    color: var(--accent);
+    font-size: var(--text-xs);
+    font-weight: 600;
   }
 
   .send-error {
