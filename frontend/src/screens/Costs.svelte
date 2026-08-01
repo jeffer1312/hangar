@@ -133,6 +133,17 @@
   const base = $derived<ComboRow[]>(report.combos ?? []);
   const temCombos = $derived(base.length > 0);
 
+  // `camadasOff` guarda ids de DOIS vocabulários diferentes: fonte (claude/codex/pi) com
+  // detalhamento, tipo de token (input/output/…) sem. Se o modo virar no meio da sessão (troca
+  // de período que muda `temCombos`), ids do vocabulário velho ficavam no Set e a heurística de
+  // reset em "clique" (`s.size === camadas.length`) podia nunca disparar — uma camada sumia do
+  // gráfico até o usuário clicar em "limpar filtros". Zera aqui, na troca de modo em si.
+  let modoAnterior: boolean | null = null;
+  $effect(() => {
+    if (modoAnterior !== null && modoAnterior !== temCombos) camadasOff = new Set();
+    modoAnterior = temCombos;
+  });
+
   const listaCrua = (d: Dim): DimBucket[] =>
     d === 'provider' ? report.by_provider : d === 'source' ? report.by_source
       : d === 'project' ? report.by_project : report.by_model;
@@ -203,7 +214,16 @@
     camadasOff = new Set();
   }
 
-  const sess = (n: number) => `${n} ${n === 1 ? 'sessão' : 'sessões'}`;
+  // "sessão" só é honesto quando a conta exclui subagente: `sessions` é +1 por LINHA de
+  // transcript (backend/app/costs.py:_somar), e desde a fase 2 do transcript direto cada Task
+  // disparada é uma linha própria. Só o filtro "só conversa" (com detalhamento) tira essas
+  // linhas da soma — nos outros dois estados, e em servidor antigo sem detalhamento, o número
+  // inclui subagente mesmo que o cliente não consiga separar a fração.
+  const incluiSubagente = $derived(!(temCombos && filtroAtivo.subagente === false));
+  const sess = (n: number) =>
+    incluiSubagente
+      ? `${n} ${n === 1 ? 'sessão ou subagente' : 'sessões e subagentes'}`
+      : `${n} ${n === 1 ? 'sessão' : 'sessões'}`;
 
   const diasDoPeriodo = $derived(
     PERIODOS.find((p) => p.id === period)!.dias || report.by_day.length || 1,
@@ -807,7 +827,7 @@
 
     <div class="card">
       <p class="note">
-        <b>Fontes:</b> Claude Code (<code>~/.claude/metrics/costs.jsonl</code>) ·
+        <b>Fontes:</b> Claude Code (<code>~/.claude/projects/**/*.jsonl</code>) ·
         Codex (<code>~/.codex/sessions</code>) · Pi (<code>~/.pi/agent/sessions</code>).<br />
         <b>Tarifas</b> do models.dev, aplicadas ao histórico inteiro — não há preço histórico,
         então gasto antigo é recalculado com o preço de hoje.<br />

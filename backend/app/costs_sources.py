@@ -84,8 +84,9 @@ def linhas_claude(config_dir: Path, account_id: str) -> list[UsageRow]:
     """Uso do Claude Code lido do TRANSCRIPT (`<config>/projects/**/*.jsonl`).
 
     Era o `costs.jsonl` do plugin ECC. Trocou por três motivos medidos: o resumo não enxerga
-    subagente (13,7% do volume), o app não pode depender de plugin de terceiro para função
-    própria, e o plugin só cobre a partir de 27/06 enquanto os transcripts vão a 12/06.
+    subagente (medido em 01/08/2026: 15,5% do cache lido — cresce toda semana, é foto, não
+    constante), o app não pode depender de plugin de terceiro para função própria, e o plugin
+    só cobre a partir de 27/06 enquanto os transcripts vão a 12/06.
 
     A raiz vem do `config_dir` RECEBIDO: `coletar()` chama esta função uma vez por diretório
     de configuração, e ignorar o argumento leria a mesma raiz N vezes.
@@ -230,8 +231,8 @@ def linhas_pi() -> list[UsageRow]:
 
 
 # Cache por ARQUIVO, chaveado por (mtime_ns, st_size) — mesmo padrão do planprog.py.
-# Rollout e sessão de Pi fechados nunca mudam e ficam aqui pra sempre; o costs.jsonl é
-# reescrito a cada turno pelo Stop hook, então ele releva sozinho quando muda.
+# Guarda só Codex e Pi (o Claude saiu daqui, foi pro cache em disco de costs_claude_transcript.py).
+# Rollout e sessão de Pi fechados nunca mudam e ficam aqui pra sempre.
 _cache: dict[str, tuple[tuple[int, int], list[UsageRow]]] = {}
 # O endpoint é `def` e roda no threadpool: celular + desktop + peer batendo juntos com cache frio
 # fariam N parses simultâneos do mesmo arquivo. Precedente: engines.py:58.

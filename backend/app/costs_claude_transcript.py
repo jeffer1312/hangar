@@ -1,11 +1,13 @@
 """Uso do Claude Code lido do TRANSCRIPT, não do resumo de plugin nenhum.
 
-Três motivos, medidos em 01/08/2026 nesta máquina:
+Três motivos, medidos em 01/08/2026 nesta máquina (números movem toda semana — são foto, não
+constante; refazer a medição do Step 6 da Task 2 antes de confiar neles de novo):
 
 1. O gasto de SUBAGENTE não está na conta. Numa sessão com 14 subagentes, o `costs.jsonl`
    registra 183.855.995 de cache lido — idêntico ao transcript do pai sozinho —, enquanto os
-   subagentes somam outros 12.809.654 que o plugin nunca viu. No total: 4,15 Bi, 13,7% do
-   volume.
+   subagentes somam outros 12.809.654 que o plugin nunca viu. No total, medido em 01/08/2026:
+   4,80 Bi contra 26,15 Bi de conversa — 15,5% do volume, em 3.160 registros (446 de conversa +
+   2.714 de subagente).
 2. O app dependia de plugin de terceiro (`cost-tracker.js` do ECC) para função própria.
    Codex e Pi já leem o transcript original; o Claude era o único fora do padrão.
 3. O plugin só cobre a partir de 27/06; os transcripts começam em 12/06.
@@ -40,7 +42,7 @@ LOCAL = timezone(timedelta(hours=-3))
 CACHE_VERSAO = 1
 
 # Marcador do subagente. O caminho é `<projeto>/<sessionId>/subagents/agent-*.jsonl`.
-# Medido: 1.908 arquivos assim, contra 469 de conversa.
+# Medido em 01/08/2026: 2.714 arquivos assim, contra 446 de conversa — cresce toda semana.
 _DIR_SUBAGENTE = "subagents"
 
 _CACHE_DIR = Path.home() / ".claude" / ".claude-pocket-custos"
