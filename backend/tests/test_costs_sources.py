@@ -182,6 +182,62 @@ def test_codex_sem_archived_sessions_nao_quebra(tmp_path, monkeypatch):
     assert [r.session_id for r in cs.linhas_codex()] == ["viva"]
 
 
+def test_pi_soma_as_mensagens_e_inclui_o_subagente(tmp_path, monkeypatch):
+    # O Pi acumula POR MENSAGEM (não é snapshot cumulativo): tem que somar.
+    # E o subagente mora em <sessao>/<taskId>/run-N/session.jsonl. Medido: na janela em que o
+    # filho roda, o pai tem ZERO eventos de uso — não há duplicação, tem que somar os dois.
+    raiz = tmp_path / "sessions" / "--repo-tres--"
+    sess = raiz / "2026-07-30T20-29-24-651Z_18e48e08"
+    _escrever(sess.with_suffix(".jsonl"), [
+        {"type": "session", "timestamp": "2026-07-30T20:29:24Z", "cwd": "/repo/tres"},
+        {"type": "model_change", "provider": "kimi-coding", "modelId": "k3-256k"},
+        {"type": "message", "message": {"usage": {"input": 10, "output": 2,
+                                                  "cacheRead": 100, "cacheWrite": 5}}},
+        {"type": "message", "message": {"usage": {"input": 20, "output": 3,
+                                                  "cacheRead": 200, "cacheWrite": 0}}},
+    ])
+    _escrever(sess / "44bad0fb" / "run-0" / "session.jsonl", [
+        {"type": "session", "timestamp": "2026-07-30T20:52:12Z", "cwd": "/repo/tres"},
+        {"type": "model_change", "provider": "kimi-coding", "modelId": "k3"},
+        {"type": "message", "message": {"usage": {"input": 7, "output": 1,
+                                                  "cacheRead": 50, "cacheWrite": 0}}},
+    ])
+    monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "sessions")
+    linhas = sorted(cs.linhas_pi(), key=lambda r: r.input)
+    assert len(linhas) == 2, "o subagente é uma linha própria, não pode sumir"
+    filho, pai = linhas
+    assert (filho.input, filho.output, filho.cache_read) == (7, 1, 50)
+    assert filho.session_id != pai.session_id, "todo subagente se chama session.jsonl"
+    assert (pai.input, pai.output, pai.cache_read, pai.cache_write) == (30, 5, 300, 5)
+    assert pai.provider == "kimi-coding"
+    assert pai.project == "/repo/tres"
+    assert pai.source == "pi"
+
+
+def test_pi_usa_o_ultimo_provedor_declarado(tmp_path, monkeypatch):
+    raiz = tmp_path / "sessions" / "--r--"
+    _escrever(raiz / "s.jsonl", [
+        {"type": "session", "timestamp": "2026-08-01T10:00:00Z", "cwd": "/r"},
+        {"type": "model_change", "provider": "openrouter", "modelId": "openrouter/free"},
+        {"type": "model_change", "provider": "openai-codex", "modelId": "gpt-5.6-sol"},
+        {"type": "message", "message": {"usage": {"input": 1, "output": 1,
+                                                  "cacheRead": 0, "cacheWrite": 0}}},
+    ])
+    monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "sessions")
+    r = cs.linhas_pi()[0]
+    assert r.provider == "openai-codex"
+    assert r.model == "gpt-5.6-sol"
+
+
+def test_pi_ignora_sessao_sem_uso(tmp_path, monkeypatch):
+    raiz = tmp_path / "sessions" / "--r--"
+    _escrever(raiz / "vazia.jsonl", [
+        {"type": "session", "timestamp": "2026-08-01T10:00:00Z", "cwd": "/r"},
+    ])
+    monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "sessions")
+    assert cs.linhas_pi() == []
+
+
 def test_codex_le_modelo_so_do_turn_context(tmp_path, monkeypatch):
     # `model` só é confiável vindo de turn_context; um payload.model de outro tipo de evento
     # não pode vazar pro campo modelo da linha.
