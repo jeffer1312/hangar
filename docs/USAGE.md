@@ -183,10 +183,10 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
   arquivo não passa por essa limpeza.
 - **Provedor da limpeza e da leitura em voz:** por padrão usa a Groq (`llama-3.3-70b-versatile`).
   Pra apontar pra outro serviço compatível com a API da OpenAI, preencha em Configurações →
-  Avançado: **Endpoint do LLM**, **Chave do LLM** e **Modelo do LLM**. Fora do padrão a chave é
-  **obrigatória** (sem fallback pra Groq — a chave da Groq não é reaproveitada pra outro host, de
-  propósito); no endpoint padrão ela é **opcional** e, se preenchida, sobrepõe a chave da Groq
-  configurada em Anexos e transcrição.
+  Avançado: **Endpoint do LLM**, **Chave do LLM** e **Modelo do LLM**. Fora do padrão a **Chave do
+  LLM** é **obrigatória** (sem fallback pra Groq — a chave da Groq não é reaproveitada pra outro
+  host, de propósito). Com o **Endpoint do LLM** vazio (padrão), a **Chave do LLM** não é usada em
+  nada — quem vale é a chave da Groq configurada em Anexos e transcrição.
 - **Slash commands:** `/` abre a lista (`/clear`, `/compact`, …). `/clear` limpa de verdade (zera a fila).
 - **Modelo/esforço:** toque na pill (ex `Opus4.8·1M·high`) → escolhe modelo + esforço (só na sessão).
 - **Pergunta interativa do Claude** (AskUserQuestion/permissão): as opções viram **botões** —

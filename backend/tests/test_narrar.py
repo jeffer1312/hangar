@@ -146,6 +146,28 @@ def test_endpoint_padrao_herda_a_chave_da_groq(monkeypatch):
     assert captured["req"].headers["Authorization"] == "Bearer chave-groq"
 
 
+def test_endpoint_padrao_ignora_llm_api_key_de_outro_provedor(monkeypatch):
+    # CRITICO: o caso que motivou a mudanca. Uma llm_api_key sobrando de configuracao anterior
+    # (endpoint custom) NUNCA pode vazar pra api.groq.com — quem vai no Authorization com endpoint
+    # padrao e sempre a chave da Groq, mesmo com llm_api_key preenchida.
+    _config(monkeypatch, {"llm_api_key": "chave-de-outro-provedor", "groq_api_key": "chave-groq"})
+    captured = {}
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+
+    def fake_urlopen(req, timeout=None):
+        captured["req"] = req
+        return FakeResp()
+
+    monkeypatch.setattr("app.narrar.urllib.request.urlopen", fake_urlopen)
+    narrar.narrar("texto", [], "explica isso")
+    assert captured["req"].headers["Authorization"] == "Bearer chave-groq"
+
+
 def test_base_url_e_modelo_custom_chegam_na_request(monkeypatch):
     _config(monkeypatch, {
         "llm_base_url": "https://outro.provedor/v1",
