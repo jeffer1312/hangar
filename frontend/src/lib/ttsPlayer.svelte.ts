@@ -46,9 +46,23 @@ function element(): HTMLAudioElement {
   a.addEventListener('ended', () => { playing = false; current = 0; });
   // Falha de rede/decodificacao no proprio elemento nao pode ficar muda: a barra some do estado
   // "tocando" e mostra o motivo.
+  //
+  // Mas NEM TODO evento `error` aqui e falha de verdade. O elemento e reusado: o `unlock` bota o WAV
+  // silencioso, o `playUrl` troca pela URL real e o `close` solta a fonte — cada troca aborta o
+  // carregamento anterior, e o navegador dispara `error` referente ao que foi abortado. Tratar isso
+  // como falha pintava "nao consegui tocar" em vermelho e o audio tocava logo em seguida, que e o
+  // jeito mais rapido de ensinar alguem a ignorar as mensagens de erro do app.
+  //
+  // O codigo entra na mensagem de proposito: quando isto reaparecer, a tela diz QUAL foi (2 = rede,
+  // 3 = decodificacao, 4 = formato/fonte nao suportada) em vez de todo mundo adivinhar.
   a.addEventListener('error', () => {
+    const codigo = a.error?.code;
+    // 1 = MEDIA_ERR_ABORTED: carregamento cancelado por troca de fonte nossa, nao e falha.
+    if (codigo === undefined || codigo === 1) return;
+    // Sem fonte nenhuma = close() em curso; tambem nao e falha.
+    if (!a.getAttribute('src')) return;
     loading = false; playing = false;
-    error = 'não consegui tocar o áudio gerado';
+    error = `não consegui tocar o áudio gerado (código ${codigo})`;
   });
   el = a;
   return a;
