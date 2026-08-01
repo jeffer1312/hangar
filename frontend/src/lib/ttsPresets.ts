@@ -11,3 +11,10 @@ export const PRESET_CODIGO = 'Explique a lógica do código em vez de descrevê-
 export function ehInstrucaoDigitada(instrucao: string): boolean {
   return instrucao !== PRESET_LER && instrucao !== PRESET_CODIGO;
 }
+
+/** Preset que vale quando o usuario nao escolheu nada explicitamente (nem digitou, nem tocou "Ler
+ * como está"): alvo com bloco de codigo pede explicacao por padrao, senao le como esta. Vale igual
+ * pra selecao e pra mensagem inteira (🔊 da bolha) — quem chama so sabe dizer se ha codigo. */
+export function presetPadrao(temCodigo: boolean): string {
+  return temCodigo ? PRESET_CODIGO : PRESET_LER;
+}

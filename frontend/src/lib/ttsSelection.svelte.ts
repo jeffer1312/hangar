@@ -1,7 +1,9 @@
 import { falavelDaSelecaoComCodigo } from './selectionText';
 import { rafThrottle } from './rafThrottle';
 
-// Estado da selecao corrente, gravado no selectionchange.
+// Estado do ALVO corrente do painel de narracao guiada (TtsSelectionPill), gravado no selectionchange
+// OU pelo 🔊 da bolha (abrirComTexto) — duas entradas pro mesmo `texto`/`blocos`, o painel nao sabe
+// nem precisa saber qual delas o encheu.
 //
 // Por que gravar antes e nao ler no clique: o pointerdown no botao COLAPSA a selecao (e no iOS leva
 // o menu nativo junto), entao getSelection() dentro do onclick devolve string vazia. Quem le o
@@ -13,6 +15,11 @@ let texto = $state('');
 let blocos = $state<string[]>([]);
 let x = $state(0);
 let y = $state(0);
+// De onde veio o `texto` atual: so a selecao tem coordenada (x/y) pra flutuar o painel perto dela;
+// o 🔊 da bolha abre a MENSAGEM inteira, sem ponto de toque nenhum pra ancorar — o painel vira barra
+// (mesmo layout do celular) nos dois casos. So setado junto do par texto/blocos (nunca no ramo de
+// colapso do selectionchange), mesmo precedente de x/y logo acima.
+let origem = $state<'selecao' | 'bolha'>('selecao');
 // Altura MEDIDA do painel (TtsSelectionPill, via ResizeObserver) — mesmo padrao do ttsPlayer.barH.
 // A fase 1 cravava 52px direto no App.svelte; a fase 2 acrescenta presets + campo livre, que
 // crescem o painel bem alem disso (e o erro da Groq, como o da ElevenLabs, pode quebrar em
@@ -46,6 +53,7 @@ export function iniciarCapturaDeSelecao(): () => void {
     if (!t) { texto = ''; blocos = []; return; }
     texto = t;
     blocos = bs;
+    origem = 'selecao';
     const r = sel.getRangeAt(sel.rangeCount - 1).getBoundingClientRect();
     x = r.right;
     y = r.bottom;
@@ -59,16 +67,26 @@ export function iniciarCapturaDeSelecao(): () => void {
   };
 }
 
+/** Abre o painel com uma mensagem INTEIRA como alvo (🔊 da bolha) — sem selecao nenhuma envolvida.
+ * Mesmo par texto/blocos que a selecao preenche, so que sem coordenada: `origem` fica 'bolha' e o
+ * painel nao tenta flutuar perto de um ponto que nao existe. */
+export function abrirComTexto(texto2: string, blocos2: string[]): void {
+  texto = texto2;
+  blocos = blocos2;
+  origem = 'bolha';
+}
+
 export const ttsSelection = {
   get texto() { return texto; },
   get blocos() { return blocos; },
   get temCodigo() { return blocos.length > 0; },
   get x() { return x; },
   get y() { return y; },
+  get origem() { return origem; },
   get ativa() { return texto.length > 0; },
   get panelH() { return panelH; },
   get engajado() { return engajado; },
-  limpar() { texto = ''; blocos = []; },
+  limpar() { texto = ''; blocos = []; origem = 'selecao'; },
   /** Publicado pela TtsSelectionPill (dona da medicao). 0 quando ela desmonta. */
   setPanelH(h: number) { panelH = h; },
   /** Publicado pela TtsSelectionPill (dona do estado) junto de cada mudanca do seu `engajado`. */
