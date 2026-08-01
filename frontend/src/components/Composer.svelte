@@ -581,7 +581,7 @@
     const ctx = audioCtx;
     if (!ctx || ctx.state === 'closed') return;   // sem contexto destravado: segue sem som
     try {
-      void ctx.resume();
+      void ctx.resume().catch((err) => console.warn('audioCtx.resume falhou', err));
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.frequency.value = freq;
@@ -605,7 +605,15 @@
   // Tela apagada = rAF congelado = detector morto. Segura a tela acesa enquanto o maos-livres grava.
   async function segurarTela() {
     try {
-      wakeLock = await navigator.wakeLock?.request('screen');
+      const lock = await navigator.wakeLock?.request('screen');
+      // Gravacao ja terminou enquanto o request estava em voo (2s de silencio ja e o piso) --
+      // soltarTela() ja rodou com wakeLock ainda undefined (nada pra liberar), e este sentinel
+      // chegaria depois sem ninguem pra soltar neste ciclo. Libera na hora em vez de guardar.
+      if (!recording) {
+        lock?.release().catch(() => {});
+        return;
+      }
+      wakeLock = lock;
     } catch (err) {
       console.warn('wakeLock indisponível', err);   // degrada: o visibilitychange abaixo cobre
     }
@@ -624,7 +632,14 @@
     if (!document.hidden) return;
     if (recording && maosLivres) pararPorMotivo('escondeu');
     // Contagem em andamento com a tela escondida: enviar do bolso nao e o que ela promete.
-    if (contagem !== null) cancelarContagem();
+    if (contagem !== null) {
+      cancelarContagem();
+      // Sem somRecusa() aqui: a tela apagou por um motivo que a gravacao nao escolheu (bloqueio,
+      // ligacao entrando, trocou de app) -- um bipe agora interromperia o que quer que esteja
+      // tocando aí (ou soaria no bolso, sem ninguem pra ouvir). fecharBipes fecha o contexto calado,
+      // sem precisar do delay de 400ms que os outros caminhos usam pra deixar o som terminar.
+      fecharBipes();
+    }
   }
 
   $effect(() => {
@@ -714,6 +729,13 @@
       console.error('MediaRecorder erro', (e as { error?: unknown }).error ?? e);
       recFailed = true;
       recError = 'Falha na gravação';
+      // Maos-livres: audioCtx ainda esta aberto (teardownRecording so fecha quando !maosLivres) --
+      // e o unico caminho de falha do arquivo sem som, entao avisa quem esta dirigindo. Fora do
+      // maos-livres o contexto ja fechou e a pessoa esta com o celular na mao, vendo o erro na tela.
+      if (maosLivres) {
+        somRecusa();
+        setTimeout(fecharBipes, 400);
+      }
       teardownRecording();
     };
     mediaRecorder.start();
