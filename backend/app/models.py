@@ -264,8 +264,6 @@ class DimBucket(BaseModel):
     cost_output: float = 0.0
     cost_cache_write: float = 0.0
     cost_cache_read: float = 0.0
-    # Só em by_provider/by_source: quantas fontes/provedores caem aqui (rótulo da tela).
-    label: Optional[str] = None
 
 
 class RateInfo(BaseModel):
