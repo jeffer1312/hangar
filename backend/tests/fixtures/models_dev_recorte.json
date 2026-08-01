@@ -1212,6 +1212,13 @@
     "structured_output": true,
     "temperature": false,
     "tool_call": true
+   },
+   "kimi-k3": {
+    "cost": {
+     "cache_read": 0.3,
+     "input": 3,
+     "output": 15
+    }
    }
   },
   "name": "Moonshot AI"
