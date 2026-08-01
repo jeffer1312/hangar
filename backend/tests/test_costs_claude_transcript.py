@@ -186,6 +186,18 @@ def test_cache_corrompido_nao_derruba(tmp_path):
         assert len(ct.varrer(tmp_path)) == 1
 
 
+def test_cache_com_bytes_invalidos_nao_derruba(tmp_path):
+    """Achado da revisão: `UnicodeDecodeError` é subclasse de `ValueError`, não de `OSError` —
+    um cache com bytes que não decodificam como UTF-8 (corrupção de disco, edição externa)
+    propagava por `varrer()` até o chamador em vez de virar releitura."""
+    _escrever(tmp_path / "p1" / "a.jsonl", [_turno("claude-opus-5", 4, 0, 0, 0, "2026-07-01T10:00:00Z")])
+    ct.varrer(tmp_path)
+    p = ct._caminho_cache(tmp_path)
+    p.write_bytes(b"\xff\xfe\x00lixo")
+    ct.invalidar_cache()
+    assert len(ct.varrer(tmp_path)) == 1
+
+
 def test_falha_ao_gravar_cache_nao_derruba(tmp_path, monkeypatch):
     """Cache é otimização. Disco cheio ou diretório só-leitura tem que virar log, não 500 —
     regra do projeto: o núcleo nunca quebra por causa de uma feature."""

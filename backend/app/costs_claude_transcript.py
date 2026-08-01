@@ -156,7 +156,7 @@ def _ler_cache(raiz: Path) -> dict[str, tuple[tuple[int, int], dict | None]]:
     bruto = None
     try:
         bruto = json.loads(_caminho_cache(raiz).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         bruto = None
     # Exigir dict: JSON válido do tipo errado (null, lista) não levanta ValueError.
     if not isinstance(bruto, dict) or bruto.get("versao") != CACHE_VERSAO:
