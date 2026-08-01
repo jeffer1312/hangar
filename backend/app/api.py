@@ -42,6 +42,7 @@ from app.tts_text import preparar as tts_preparar
 from app import narrar
 from app import default_model, engine_probe, engines
 from app.costs import report as costs_report
+from app import pricing
 from app.git_ops import (
     list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit_diff, revert_commit, cherry_pick, reset_to, create_branch_at, create_tag, diff_vs_worktree, branches_containing, commit, last_commit_message, push as push_branch, sequencer_state, GitError, branch_of,
 )
@@ -170,6 +171,7 @@ async def _lifespan(app: FastAPI):
             _log.warning("boot-resume de loops falhou", exc_info=True)
 
     await asyncio.to_thread(_boot_resume_loops)
+    pricing.atualizar_em_background()  # NUNCA num request: o cliente aborta em 4s
     try:
         yield
     finally:
@@ -589,8 +591,12 @@ def claude_configs():
 
 
 @app.get("/api/costs", dependencies=[Depends(require_auth)], response_model=CostReport)
-def costs_endpoint():
-    return costs_report()
+def costs_endpoint(period: str = "all"):
+    # Período inválido cai em "all" em vez de 422: um cliente antigo da malha mandando qualquer
+    # coisa não pode derrubar o custo daquela máquina inteira da soma.
+    if period not in ("7d", "30d", "90d", "all"):
+        period = "all"
+    return costs_report(period=period)
 
 
 @app.post("/api/sessions", dependencies=[Depends(require_auth)], response_model=SessionInfo)
