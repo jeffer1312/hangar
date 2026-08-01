@@ -181,19 +181,20 @@ def gravar_override(model: str, tarifa: dict) -> None:
 def canonizar(model: str) -> str:
     """Id do log -> id do models.dev.
 
-    Tenta o id CRU primeiro: há modelo cujo nome contém barra, e desmontar antes de olhar faria
-    ele sumir.
+    O desmonte de prefixo GANHA primeiro, não o id cru: o slim() (Task 1) registra cada modelo
+    sob DUAS chaves — 'mid' e 'provedor/mid' — então o id cru de algo como
+    'anthropic/claude-sonnet-5' já é, por si só, uma chave válida do catálogo. Checar o id cru
+    ANTES de desmontar faria esse caso parar ali, prefixado, e nunca convergir com a forma nua
+    'claude-sonnet-5' que o Claude Code grava — o mesmo modelo viraria duas linhas no painel "Por
+    modelo". Por isso: desmonta tudo primeiro, e só então cai pro id cru — que é o caso do modelo
+    cujo NOME de verdade contém uma barra (não é prefixo de gateway, é a própria chave).
 
     Descasca prefixo em LAÇO, não uma vez só: o Pi empilha gateway + provedor
     ('openrouter/deepseek/deepseek-v4-flash'), e parar no primeiro deixaria
-    'deepseek/deepseek-v4-flash' — forma que EXISTE no catálogo (o slim() registra tanto o id nu
-    quanto 'provedor/id'), então só checar o catálogo depois de esgotar os prefixos garante
-    chegar no id nu de verdade. O laço tem teto porque a lista de prefixos é finita e cada volta
-    encurta a string.
+    'deepseek/deepseek-v4-flash' — forma que EXISTE no catálogo (mesmo mecanismo de chave dupla).
+    O laço tem teto porque a lista de prefixos é finita e cada volta encurta a string.
     """
     m = (model or "").strip()
-    if m in _carregar():
-        return m
     base = m
     mudou = True
     while mudou:
@@ -203,12 +204,12 @@ def canonizar(model: str) -> str:
                 base = base[len(p):]
                 mudou = True
                 break
-    # Checar o catálogo só DEPOIS de esgotar os prefixos, não a cada volta: o slim() (Task 1)
-    # registra tanto 'mid' quanto 'pid/mid', então uma forma intermediária como
-    # 'deepseek/deepseek-v4-flash' já é uma chave válida por si só — checar no meio do laço
-    # devolveria essa forma prefixada e nunca chegaria no id nu.
     if base in _carregar():
         return base
+    # Só cai pro id cru se o desmonte não achou nada: é o caso do modelo cujo nome de verdade
+    # contém barra (não prefixo de gateway) e está registrado assim mesmo no catálogo.
+    if m in _carregar():
+        return m
     return _APELIDOS.get(base, base)
 
 
