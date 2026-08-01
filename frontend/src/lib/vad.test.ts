@@ -55,10 +55,15 @@ describe('regra de silêncio, casos sintéticos', () => {
   });
 
   it('estouro alto no meio da fala NÃO encerra', () => {
-    // Buzina, porta batendo, tosse. Com ataque instantaneo o pico saltaria pra 0,8 e a fala em 0,15
-    // ficaria abaixo de 25% dele por ~3,2s — mais que os 2s de corte. A gravacao terminaria no meio
-    // da frase E, por ter motivo 'silencio', mandaria meia frase sozinha. E o cenario do carro.
-    expect(quandoEncerra([...fala(40), 0.8, ...fala(60)])).toBeNull();
+    // Buzina, porta batendo, tosse. Fala real mais baixa (0,08) de proposito: com fala em 0,15 (como
+    // as outras) este cenario NAO discrimina — medido com ATAQUE_PICO=1 (a trava desligada), o pico
+    // decai de volta abaixo do patamar de silencio em ~1,4s, MENOS que os 2s de corte, e o teste
+    // passava mesmo com a trava quebrada (achado da review, reproduzido). Com fala em 0,08 e um
+    // estouro no teto (RMS 1,0), o patamar de silencio (25% do pico) fica alto o bastante pra o
+    // decaimento atual (0,98) demorar mais de 2s pra descer ate ele — condicao real: encerra falso
+    // em ~4,3s com a trava desligada, nunca encerra com a trava calibrada (ver ATAQUE_PICO).
+    const falaBaixa = (n: number) => Array(n).fill(0.08);
+    expect(quandoEncerra([...falaBaixa(40), 1.0, ...falaBaixa(120)])).toBeNull();
   });
 
   it('silêncio antes de qualquer fala não encerra', () => {

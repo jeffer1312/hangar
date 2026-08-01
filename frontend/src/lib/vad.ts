@@ -39,9 +39,13 @@ export const PISO_ABSOLUTO = 0.01;
  *  a ponto de a fala continua (nivel constante) ou o silencio final serem lidos errado. */
 export const DECAIMENTO_POR_55MS = 0.98;
 
-/** Quanto o pico SOBE em direcao a uma energia maior, por passo. Ataque instantaneo (=1) faz uma
- *  buzina de 0,8 virar a referencia na hora, e a fala normal em 0,15 passa a contar como silencio
- *  por ~3,2s — mais que o corte de 2s. Ataque lento faz o pico ignorar transiente.
+/** Quanto o pico SOBE em direcao a uma energia maior, por passo. Ataque instantaneo (=1) faz um
+ *  estouro (buzina, porta batendo) virar a referencia na hora — testado em vad.test.ts com um pico
+ *  de RMS 1,0 no meio de uma fala real de 0,08: com ataque=1 o pico salta pra 1,0 e, mesmo com o
+ *  decaimento atual (0,98), a fala normal fica abaixo de 25% dele por tempo demais — a regra encerra
+ *  falso ~4,3s depois do estouro (medido). Ataque lento evita isso: com 0,08 o mesmo estouro so
+ *  levanta o pico pra ~0,14 (medido), que fica abaixo do patamar necessario pra a fala real contar
+ *  como silencio, e a regra nunca encerra.
  *  Mantido no ponto de partida (0,08): o grid de calibracao do Step 6 (PISO x DECAIMENTO x ATAQUE
  *  contra os 3 audios reais + os 5 casos sinteticos) achou combinacoes validas com 0,08 assim que
  *  DECAIMENTO_POR_55MS foi ajustado — nao precisou mexer aqui. */
@@ -50,10 +54,14 @@ export const ATAQUE_PICO = 0.08;
 /** Silencio = energia abaixo desta fracao do pico. */
 export const FRACAO_SILENCIO = 0.25;
 
-/** Quanto tempo de silencio continuo encerra. Mantido em 2000ms: com PISO/DECAIMENTO calibrados, os
- *  3 ditados reais (fala real + 3,3s de silencio emendado) encerram 1265ms/1540ms/1485ms depois do
- *  fim da fala (medido no Step 6) — sempre dentro de [SILENCIO_MS, SILENCIO_MS + 400ms). Continua
- *  sendo 0,4s de folga sobre a maior pausa real medida no meio de uma fala (1,6s, caso sintetico). */
+/** Quanto tempo de silencio continuo encerra. Mantido em 2000ms — os 2000ms sao contados a partir de
+ *  onde o RMS cruza o criterio de silencio, e esse ponto NAO e o fim do arquivo real: os proprios
+ *  ditados ja terminam com uma cauda quase-silenciosa (medida no Step 1: 0,8s / 0,5s / 0,6s antes do
+ *  ultimo byte). O cronometro arma dentro dessa cauda, entao o corte medido (Step 6) cai antes dos
+ *  2000ms completos contados desde o FIM DO ARQUIVO: 1265ms/1540ms/1485ms depois do ultimo byte dos
+ *  3 ditados reais — e isso e o comportamento certo (a regra ja estava "quieta" havia 0,5-0,8s antes
+ *  do arquivo acabar). Continua sendo 0,4s de folga sobre a maior pausa real medida no meio de uma
+ *  fala (1,6s, caso sintetico). */
 export const SILENCIO_MS = 2000;
 
 export function novoEstadoVad(): EstadoVad {
