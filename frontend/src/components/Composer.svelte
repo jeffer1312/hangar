@@ -583,6 +583,13 @@
   // deslizante de barras (~18fps). E so feedback visual — se o Web Audio falhar, a gravacao segue.
   function startMeter(stream: MediaStream) {
     try {
+      // Fecha incondicionalmente um contexto que tenha sobrado de uma gravacao anterior — no
+      // mãos-livres, teardownRecording NÃO fecha (o bipe ainda precisa dele) e so quem fecha depois
+      // e fecharBipes(), que so roda quando o envio automatico acontece. Toda gravacao que termina
+      // por outro caminho (botao, teto, escondeu, sem autorizacao de podeEnviarSozinho) deixava esse
+      // contexto aberto; sem fechar aqui, o WebKit acumula um AudioContext por ditado ate o iPhone
+      // recusar criar outro e o bipe sair mudo sem aviso.
+      audioCtx?.close().catch(() => {});
       audioCtx = new AudioContext();
       // iOS: pode iniciar 'suspended' -> waveform ficaria parada. Loga se nao resumir (unica pista).
       void audioCtx.resume().catch((err) => console.warn('audioCtx.resume falhou', err));
@@ -713,6 +720,10 @@
   onDestroy(teardownRecording);
   onDestroy(limparUndo);   // troca de sessao desmonta o Composer -> nao deixa o setTimeout solto
   onDestroy(cancelarContagem);   // troca de sessao desmonta o Composer -> nao deixa o setInterval solto
+  // Fecha o audioCtx incondicionalmente no unmount: teardownRecording() so fecha quando !maosLivres
+  // (o bipe ainda pode precisar dele), entao sem isto uma sessao trocada com mãos-livres ligado
+  // deixava o contexto aberto pra sempre. fecharBipes() e idempotente (audioCtx?.close()).
+  onDestroy(fecharBipes);
 
   function onPickFile(e: Event) {
     const files = (e.target as HTMLInputElement).files;
