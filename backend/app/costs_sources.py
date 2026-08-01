@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -18,6 +19,7 @@ from pathlib import Path
 
 from app import pricing
 from app.adapters.pi import sessions as pi_sessions
+from app.config import list_config_dirs
 
 LOCAL = timezone(timedelta(hours=-3))
 PROJETO_DESCONHECIDO = "desconhecido"
@@ -249,4 +251,90 @@ def linhas_pi() -> list[UsageRow]:
             input=acc["input"], output=acc["output"],
             cache_write=acc["cacheWrite"], cache_read=acc["cacheRead"],
         ))
+    return out
+
+
+# Cache por ARQUIVO, chaveado por (mtime_ns, st_size) — mesmo padrão do planprog.py.
+# Rollout e sessão de Pi fechados nunca mudam e ficam aqui pra sempre; o costs.jsonl é
+# reescrito a cada turno pelo Stop hook, então ele releva sozinho quando muda.
+_cache: dict[str, tuple[tuple[int, int], list[UsageRow]]] = {}
+# O endpoint é `def` e roda no threadpool: celular + desktop + peer batendo juntos com cache frio
+# fariam N parses simultâneos do mesmo arquivo. Precedente: engines.py:58.
+_cache_lock = threading.Lock()
+
+
+def invalidar_cache() -> None:
+    with _cache_lock:
+        _cache.clear()
+
+
+def _assinatura(p: Path) -> tuple[int, int] | None:
+    try:
+        st = p.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def account_info(config_dir: Path, fallback_label: str) -> tuple[str, str | None, str]:
+    """(uuid, email, label) da conta Anthropic. Era costs._account_info e MUDOU DE MÓDULO:
+    ler o config dir é trabalho de leitor de fonte, não de agregador — e deixá-la no costs.py
+    criaria ciclo (costs importa costs_sources; _config_dirs precisaria de costs)."""
+    for f in (config_dir / ".claude.json", Path.home() / ".claude.json"):
+        try:
+            oa = (json.loads(f.read_text()).get("oauthAccount") or {})
+        except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+            # .claude.json existe mas a raiz não é dict (corrompido) -> tenta o próximo
+            continue
+        uuid = oa.get("accountUuid")
+        if uuid:
+            email = oa.get("emailAddress")
+            return uuid, email, (email or fallback_label)
+    return fallback_label, None, fallback_label
+
+
+def _config_dirs() -> list[tuple[str, str]]:
+    """(caminho, account_id) de cada config dir do Claude. O prefixo 'anthropic:' evita colisão
+    com nome de provedor ('openai', 'kimi-coding', …), que vivem no mesmo espaço de chaves."""
+    out = []
+    for cfg in list_config_dirs():
+        uuid, _email, _label = account_info(Path(cfg.path), cfg.label)
+        out.append((cfg.path, f"anthropic:{uuid}"))
+    return out
+
+
+def coletar() -> list[UsageRow]:
+    """Todas as linhas das três fontes. NUNCA vai à rede."""
+    out: list[UsageRow] = []
+    with _cache_lock:
+        for caminho, account_id in _config_dirs():
+            cfg = Path(caminho)
+            arq = cfg / "metrics" / "costs.jsonl"
+            chave = f"claude:{arq}"
+            sig = _assinatura(arq)
+            if sig is None:
+                # Arquivo ausente: a fonte não aparece. "Sem dados" nunca pode virar "zero".
+                _cache.pop(chave, None)
+                continue
+            hit = _cache.get(chave)
+            if hit is None or hit[0] != sig:
+                hit = (sig, linhas_claude(cfg, account_id))
+                _cache[chave] = hit
+            out.extend(hit[1])
+
+        for nome, raiz, leitor in (("codex", raiz_codex(), linhas_codex),
+                                   ("pi", raiz_pi(), linhas_pi)):
+            if not raiz.is_dir():
+                _cache.pop(nome, None)
+                continue
+            # O caro do Codex e do Pi é o walk, e é preciso andar pra descobrir os mtimes — então
+            # a chave é o conjunto de (arquivo, mtime, tamanho), calculado no próprio walk.
+            padrao = "rollout-*.jsonl" if nome == "codex" else "*.jsonl"
+            sig_dir = tuple(sorted(
+                (str(p), *(_assinatura(p) or (0, 0))) for p in raiz.rglob(padrao)))
+            hit = _cache.get(nome)
+            if hit is None or hit[0] != sig_dir:
+                hit = (sig_dir, leitor())
+                _cache[nome] = hit
+            out.extend(hit[1])
     return out
