@@ -19,6 +19,7 @@
   import { novoEstadoVad, passoVad } from '../lib/vad';
   import type { EstadoVad } from '../lib/vad';
   import { lerMaosLivres } from '../lib/maosLivres';
+  import { podeEnviarSozinho } from '../lib/autoEnvio';
   import type { MotivoFim } from '../lib/autoEnvio';
   import IconSend from './icons/IconSend.svelte';
   import IconInterrupt from './icons/IconInterrupt.svelte';
@@ -202,6 +203,62 @@
   const hasInput = $derived(inputText.trim().length > 0 || attachments.length > 0);
   const canSend = $derived(hasInput && !uploading && !sending && !recording && !transcribing);
   const isWorking = $derived(sessionState === 'working');
+
+  // ── Contagem regressiva do maos-livres: 3s antes do envio automatico ────────
+  // Segundos restantes, ou null = sem contagem. $state porque aparece no template (mesmo padrao
+  // de recError/recSeconds).
+  let contagem = $state<number | null>(null);
+  let contagemTimer: ReturnType<typeof setInterval> | undefined;
+
+  function cancelarContagem() {
+    if (contagemTimer) { clearInterval(contagemTimer); contagemTimer = undefined; }
+    contagem = null;
+  }
+
+  function iniciarContagem() {
+    cancelarContagem();
+    contagem = 3;
+    contagemTimer = setInterval(() => {
+      if (contagem === null) return;
+      contagem -= 1;
+      if (contagem > 0) return;
+      cancelarContagem();
+      enviarAutomatico();
+    }, 1000);
+  }
+
+  function enviarAutomatico() {
+    // `submit()` volta CALADO quando canSend e falso (anexo subindo, gravacao reaberta, transcricao
+    // em voo). Quem esta na mesa ve o texto parado; quem dirige, nao. Regra do projeto: falha
+    // aparece, nao some.
+    if (!canSend) {
+      recError = 'Não deu para enviar sozinho — toque em enviar';
+      somRecusa();
+      setTimeout(fecharBipes, 400);
+      return;
+    }
+    recError = '';        // nao deixar aviso velho embaixo de um envio que deu certo
+    somEnvio();
+    setTimeout(fecharBipes, 400);
+    void submit();
+  }
+
+  // Cancelam: toque em qualquer lugar e tecla. FOCO NAO CANCELA — existe um $effect que da focus()
+  // no textarea quando a sessao fica idle, e se foco contasse a contagem se cancelaria sozinha.
+  // Tocar no proprio microfone tambem cancela: o pointerdown no documento roda ANTES do click que
+  // dispara o toggleRecord, entao a contagem morre e a gravacao nova comeca. Nenhuma linha extra.
+  function aoInteragir() {
+    if (contagem !== null) cancelarContagem();
+  }
+
+  $effect(() => {
+    document.addEventListener('pointerdown', aoInteragir);
+    document.addEventListener('keydown', aoInteragir);
+    return () => {
+      document.removeEventListener('pointerdown', aoInteragir);
+      document.removeEventListener('keydown', aoInteragir);
+    };
+  });
 
   // ── Pill de modelo + esforco: abre o ModelEffortSheet (aplica via endpoint dedicado) ──
   // Display otimista: a escolha aparece na hora; o status (read-back real do statusline)
@@ -413,11 +470,16 @@
         limparUndo();
       }
       if (aviso) recError = aviso;
+      if (opts?.ditado && podeEnviarSozinho({
+            motivo: motivoDoFim, texto: t, aviso, rascunhoAntes: before.length > 0 })) {
+        iniciarContagem();
+      }
       await tick();
       autoGrow();
       textareaEl?.focus();
     } catch (err) {
       console.error('transcrição falhou', err);
+      cancelarContagem();   // erro de transcricao nunca inicia contagem
       const status = (err as { status?: number } | null)?.status;
       // Sem o ditado ao vivo, ficar sem chave da Groq passa a significar SEM DITADO NENHUM -> avisa
       // onde resolver, nao so "falhou".
@@ -450,13 +512,44 @@
   function teardownRecording() {
     if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
     if (recTimer) { clearInterval(recTimer); recTimer = undefined; }
-    audioCtx?.close().catch((err) => console.warn('audioCtx.close falhou', err));
-    audioCtx = undefined;
+    // Maos-livres: o contexto foi destravado pelo toque no mic e ainda vai tocar os bipes depois da
+    // gravacao. Fechar aqui deixaria o aviso sonoro mudo no iPhone. Quem fecha e o fecharBipes().
+    if (!maosLivres) {
+      audioCtx?.close().catch((err) => console.warn('audioCtx.close falhou', err));
+      audioCtx = undefined;
+    }
     recStream?.getTracks().forEach((t) => t.stop());
     recStream = undefined;
     mediaRecorder = undefined;
     recording = false;
     soltarTela();
+  }
+
+  // Bipe de confirmacao do maos-livres: reusa o audioCtx destravado pelo toque no mic (um contexto
+  // NOVO criado aqui dentro do setInterval da contagem nasceria suspenso no WebKit e sairia mudo).
+  function bipe(freq: number, ms: number) {
+    const ctx = audioCtx;
+    if (!ctx || ctx.state === 'closed') return;   // sem contexto destravado: segue sem som
+    try {
+      void ctx.resume();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = freq;
+      gain.gain.value = 0.05;                     // discreto: confirmacao, nao alarme
+      osc.connect(gain).connect(ctx.destination);
+      osc.start();
+      setTimeout(() => { try { osc.stop(); } catch { /* ja parado */ } }, ms);
+    } catch (err) {
+      console.warn('bipe falhou', err);
+    }
+  }
+
+  const somEnvio = () => bipe(880, 90);     // agudo curto = foi
+  const somRecusa = () => bipe(220, 220);   // grave longo = nao foi
+
+  function fecharBipes() {
+    audioCtx?.close().catch(() => {});
+    audioCtx = undefined;
   }
 
   // Tela apagada = rAF congelado = detector morto. Segura a tela acesa enquanto o maos-livres grava.
@@ -535,8 +628,6 @@
     mediaRecorder = new MediaRecorder(stream);
     mediaRecorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
     mediaRecorder.onstop = () => {
-      // Task 4: so REGISTRA. O envio automatico entra na Task 5, que REMOVE esta linha.
-      console.info('[ditado] encerrou por', motivoDoFim, 'após', Date.now() - recIniciadoEm, 'ms');
       const type = mediaRecorder?.mimeType || 'audio/webm';
       // Chrome grava webm/opus; iOS Safari grava mp4/aac. A Groq aceita os dois direto.
       const ext = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
@@ -621,6 +712,7 @@
 
   onDestroy(teardownRecording);
   onDestroy(limparUndo);   // troca de sessao desmonta o Composer -> nao deixa o setTimeout solto
+  onDestroy(cancelarContagem);   // troca de sessao desmonta o Composer -> nao deixa o setInterval solto
 
   function onPickFile(e: Event) {
     const files = (e.target as HTMLInputElement).files;
@@ -663,6 +755,7 @@
 
   async function submit() {
     if (!canSend) return;
+    cancelarContagem();   // envio manual torna a contagem sem sentido
     const caption = inputText.trim();
     sendError = '';
     limparUndo();   // enviou -> a oferta de desfazer a limpeza do ditado nao faz mais sentido
@@ -854,6 +947,11 @@
       <div class="rec-hint" role="status" aria-label="Transcrevendo áudio">
         <span class="rec-dot" aria-hidden="true"></span>
         <span class="rec-time">transcrevendo…</span>
+      </div>
+    {/if}
+    {#if contagem !== null}
+      <div class="rec-hint" role="status">
+        <span>Enviando em {contagem}… toque para cancelar</span>
       </div>
     {/if}
     {#if undo}
