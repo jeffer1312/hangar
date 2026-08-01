@@ -251,3 +251,42 @@ def test_codex_le_modelo_so_do_turn_context(tmp_path, monkeypatch):
     ])
     monkeypatch.setattr(cs, "raiz_codex", lambda: raiz)
     assert cs.linhas_codex()[0].model == "?"
+
+
+def test_coletar_junta_as_tres_fontes_e_dedup_e_por_fonte(tmp_path, monkeypatch):
+    # Chave de dedup é (fonte, session_id): um uuid repetido entre fontes não pode se comer.
+    cfg = tmp_path / ".claude"
+    _escrever(cfg / "metrics" / "costs.jsonl", [
+        {"timestamp": "2026-08-01T10:00:00Z", "session_id": "mesmo-id", "model": "claude-opus-5",
+         "input_tokens": 1, "output_tokens": 1, "cache_write_tokens": 0, "cache_read_tokens": 0},
+    ])
+    _escrever(tmp_path / "sessions" / "--r--" / "mesmo-id.jsonl", [
+        {"type": "session", "timestamp": "2026-08-01T10:00:00Z", "cwd": "/r"},
+        {"type": "model_change", "provider": "kimi-coding", "modelId": "k3"},
+        {"type": "message", "message": {"usage": {"input": 2, "output": 2,
+                                                  "cacheRead": 0, "cacheWrite": 0}}},
+    ])
+    monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "sessions")
+    monkeypatch.setattr(cs, "raiz_codex", lambda: tmp_path / "sem-codex")
+    monkeypatch.setattr(cs, "_config_dirs", lambda: [(str(cfg), "conta-x")])
+    cs.invalidar_cache()
+    linhas = cs.coletar()
+    assert {r.source for r in linhas} == {"claude", "pi"}
+    assert len(linhas) == 2
+
+
+def test_cache_relê_quando_o_arquivo_muda(tmp_path, monkeypatch):
+    cfg = tmp_path / ".claude"
+    arq = cfg / "metrics" / "costs.jsonl"
+    linha = {"timestamp": "2026-08-01T10:00:00Z", "session_id": "s", "model": "claude-opus-5",
+             "input_tokens": 1, "output_tokens": 0, "cache_write_tokens": 0,
+             "cache_read_tokens": 0}
+    _escrever(arq, [linha])
+    monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "x")
+    monkeypatch.setattr(cs, "raiz_codex", lambda: tmp_path / "y")
+    monkeypatch.setattr(cs, "_config_dirs", lambda: [(str(cfg), "c")])
+    cs.invalidar_cache()
+    assert len(cs.coletar()) == 1
+    _escrever(arq, [linha, {**linha, "session_id": "s2"}])
+    os.utime(arq, (0, 0))          # mtime diferente -> tem que reler
+    assert len(cs.coletar()) == 2
