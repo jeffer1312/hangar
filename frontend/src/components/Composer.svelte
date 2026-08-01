@@ -16,6 +16,10 @@
 
 <script lang="ts">
   import { tick, onDestroy } from 'svelte';
+  import { novoEstadoVad, passoVad } from '../lib/vad';
+  import type { EstadoVad } from '../lib/vad';
+  import { lerMaosLivres } from '../lib/maosLivres';
+  import type { MotivoFim } from '../lib/autoEnvio';
   import IconSend from './icons/IconSend.svelte';
   import IconInterrupt from './icons/IconInterrupt.svelte';
   import IconAttach from './icons/IconAttach.svelte';
@@ -165,6 +169,27 @@
   let audioCtx: AudioContext | undefined;
   let rafId = 0;
   let recTimer: ReturnType<typeof setInterval> | undefined;
+  // Maos-livres: lido ao INICIAR a gravacao, nao reativo — mudar a chave no meio de um ditado nao
+  // pode trocar o comportamento daquela gravacao.
+  let maosLivres = false;
+  let vadEstado: EstadoVad | undefined;
+  let recIniciadoEm = 0;
+  let motivoDoFim: MotivoFim | null = null;
+  let wakeLock: WakeLockSentinel | undefined;
+  // Acumulador da janela de 55ms (ver Step 3).
+  let somaQuad = 0;
+  let nQuad = 0;
+
+  /** Teto de seguranca: 3 min por RELOGIO DE PAREDE. Nao usar recSeconds — ele vem de setInterval,
+   *  que o navegador limita em aba escondida, exatamente o caso que este teto existe pra cobrir. */
+  const TETO_MS = 3 * 60_000;
+
+  function pararPorMotivo(motivo: MotivoFim) {
+    if (!recording || motivoDoFim) return;   // primeiro motivo vence; nao encerra duas vezes
+    motivoDoFim = motivo;
+    if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
+  }
+
   let waveW = $state(0);   // largura medida da faixa da waveform (bind:clientWidth)
   // densidade adaptativa: ~1 barra a cada 5px (barra ~3px + gap ~2px) -> preenche denso de mobile a
   // desktop, sem numero fixo que fica esparso na tela larga ou apertado na estreita.
@@ -431,7 +456,35 @@
     recStream = undefined;
     mediaRecorder = undefined;
     recording = false;
+    soltarTela();
   }
+
+  // Tela apagada = rAF congelado = detector morto. Segura a tela acesa enquanto o maos-livres grava.
+  async function segurarTela() {
+    try {
+      wakeLock = await navigator.wakeLock?.request('screen');
+    } catch (err) {
+      console.warn('wakeLock indisponível', err);   // degrada: o visibilitychange abaixo cobre
+    }
+  }
+
+  function soltarTela() {
+    wakeLock?.release().catch(() => {});
+    wakeLock = undefined;
+  }
+
+  // Escondeu mesmo com o wake lock (trocou de app, botao de bloqueio): encerra. Continuar gravando
+  // sem detector e pior que parar — viraria 3 min de audio que ninguem pediu.
+  // NAO readquirir o wakeLock ao voltar: o navegador o solta sozinho ao esconder, e aqui a gravacao
+  // ja terminou. Um reacquire brigaria com este pararPorMotivo.
+  function aoEsconder() {
+    if (document.hidden && recording && maosLivres) pararPorMotivo('escondeu');
+  }
+
+  $effect(() => {
+    document.addEventListener('visibilitychange', aoEsconder);
+    return () => document.removeEventListener('visibilitychange', aoEsconder);
+  });
 
   // Medidor de voz: liga um AnalyserNode no stream do mic e empurra o nivel (RMS) numa janela
   // deslizante de barras (~18fps). E so feedback visual — se o Web Audio falhar, a gravacao segue.
@@ -451,11 +504,21 @@
         for (const v of data) { const x = (v - 128) / 128; sum += x * x; }
         // *5: RMS de voz normal fica baixo (~0.05-0.2); sem ganho as barras mal saem do minimo.
         const level = Math.min(1, Math.sqrt(sum / data.length) * 5);
+        // Acumula o quadrado medio de CADA quadro; a decisao sai uma vez por janela de 55ms, que e
+        // a mesma cadencia dos envelopes usados pra calibrar a regra (ver lib/vad.ts).
+        somaQuad += sum / data.length;
+        nQuad++;
         const now = performance.now();
         if (now - last > 55) {   // ~18fps (nao re-renderiza o array a cada frame de tela)
           last = now;
           // cresce da esquerda ate encher a largura (barCount), depois desliza mantendo os ultimos.
           recBars = [...recBars, level].slice(-barCount);
+          if (maosLivres && vadEstado && nQuad) {
+            const rmsJanela = Math.sqrt(somaQuad / nQuad);   // SEM ganho e SEM clamp
+            if (passoVad(vadEstado, rmsJanela, now) === 'encerra') pararPorMotivo('silencio');
+          }
+          somaQuad = 0;
+          nQuad = 0;
         }
         rafId = requestAnimationFrame(loop);
       };
@@ -472,12 +535,19 @@
     mediaRecorder = new MediaRecorder(stream);
     mediaRecorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
     mediaRecorder.onstop = () => {
+      // Task 4: so REGISTRA. O envio automatico entra na Task 5, que REMOVE esta linha.
+      console.info('[ditado] encerrou por', motivoDoFim, 'após', Date.now() - recIniciadoEm, 'ms');
       const type = mediaRecorder?.mimeType || 'audio/webm';
       // Chrome grava webm/opus; iOS Safari grava mp4/aac. A Groq aceita os dois direto.
       const ext = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
       // onerror dispara stop logo depois -> se ja falhou, nao anexa o audio (truncado). Sem chunk
       // nenhum (gravacao rapida demais / driver sem dado) -> avisa, nao some calado.
       if (recFailed) {
+        teardownRecording();
+      } else if (motivoDoFim === 'teto') {
+        // Por regra este audio nunca seria enviado sozinho — transcrever + limpar 3 minutos de
+        // ruido de estrada e uma chamada paga pra terminar em "nao enviei".
+        recError = 'Gravação passou de 3 minutos e foi encerrada — grave de novo';
         teardownRecording();
       } else if (recChunks.length) {
         const blob = new Blob(recChunks, { type });
@@ -499,8 +569,7 @@
 
   async function toggleRecord() {
     if (recording) {
-      // parar: guard de state cobre duplo-toque no stop do gravador.
-      if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
+      pararPorMotivo('botao');
       return;
     }
     if (starting || transcribing) return;   // nao regravar durante o start em voo nem a transcricao
@@ -524,10 +593,20 @@
       return;
     }
     recStream = stream;
+    maosLivres = lerMaosLivres();
+    vadEstado = maosLivres ? novoEstadoVad() : undefined;
+    motivoDoFim = null;
+    recIniciadoEm = Date.now();
+    somaQuad = 0;
+    nQuad = 0;
+    if (maosLivres) void segurarTela();
     recChunks = [];
     try {
       startMediaRecorder(stream);
-      recTimer = setInterval(() => recSeconds++, 1000);
+      recTimer = setInterval(() => {
+        recSeconds++;
+        if (maosLivres && Date.now() - recIniciadoEm >= TETO_MS) pararPorMotivo('teto');
+      }, 1000);
       startMeter(stream);
     } catch (err) {
       console.error('início da gravação falhou', err);
