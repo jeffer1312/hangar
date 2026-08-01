@@ -3,7 +3,7 @@
   import { ttsSelection, iniciarCapturaDeSelecao } from '../lib/ttsSelection.svelte';
   import { ouvirTexto } from '../lib/ouvir';
   import { ttsNarracao } from '../lib/ttsNarracao.svelte';
-  import { PRESET_LER, PRESET_CODIGO } from '../lib/ttsPresets';
+  import { PRESET_LER, PRESET_CODIGO, presetPadrao } from '../lib/ttsPresets';
 
   let isDesktop = $state(false);
 
@@ -67,7 +67,7 @@
   // escolha explicita de "ler como esta"; senao o padrao esperto (explicar codigo quando ha bloco
   // de codigo, ler como esta senao).
   const efetiva = $derived(
-    instrucao.trim() || (preferirLerLiteral ? PRESET_LER : (temCodigoSel ? PRESET_CODIGO : PRESET_LER)),
+    instrucao.trim() || (preferirLerLiteral ? PRESET_LER : presetPadrao(temCodigoSel)),
   );
   // Custo em caracteres que IRIAM pra Groq se a instrucao efetiva nao for "ler como esta" — mostrado
   // ANTES do toque, junto do rotulo: a Groq e barata, mas nao e gratis.
@@ -128,11 +128,15 @@
 </script>
 
 {#if engajado}
+  <!-- Flutua so quando o alvo veio de uma selecao (tem x/y de verdade). O 🔊 da bolha abre a
+       mensagem inteira sem ponto de toque nenhum pra ancorar — nos dois tamanhos de tela ele cai na
+       mesma barra rente ao composer que o celular ja usa pra selecao (bottom calc abaixo). -->
+  {@const flutua = isDesktop && ttsSelection.origem === 'selecao'}
   <div
     class="tts-sel"
-    class:flutuante={isDesktop}
-    style:right={isDesktop ? `calc(100% - ${ttsSelection.x}px)` : undefined}
-    style:top={isDesktop ? `${ttsSelection.y + 6}px` : undefined}
+    class:flutuante={flutua}
+    style:right={flutua ? `calc(100% - ${ttsSelection.x}px)` : undefined}
+    style:top={flutua ? `${ttsSelection.y + 6}px` : undefined}
     bind:this={panelEl}
   >
     {#if ttsNarracao.carregando}
@@ -178,7 +182,8 @@
 
 <style>
   /* Celular: barra rente ao composer — nao disputa espaco com o menu nativo do Safari, que nasce
-     colado na selecao. Desktop: painel flutuante no fim da selecao.
+     colado na selecao. Desktop com selecao: painel flutuante no fim dela. Desktop pelo 🔊 da bolha
+     (origem 'bolha', sem x/y): mesma barra do celular, ver `flutua` no template acima.
      Sem backdrop-filter/transform em barra fixa: no WebKit pinta retangulo preto na rolagem por
      inercia (mesmo motivo do TtsBar). Sem onpointerdown preventDefault: a selecao capturada ja foi
      fotografada em textoSel/blocosSel na abertura do painel, ninguem aqui le mais o DOM ao vivo. */

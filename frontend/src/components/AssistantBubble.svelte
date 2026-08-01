@@ -2,8 +2,8 @@
   import { renderMarkdown } from '../lib/markdown';
   import { parseFilePaths, parseMediaUrls, splitTodoBlock } from '../lib/format';
   import { copyText } from '../lib/clipboard';
-  import { textoFalavel } from '../lib/speakable';
-  import { ouvirTexto } from '../lib/ouvir';
+  import { textoFalavelComCodigo } from '../lib/speakable';
+  import { abrirComTexto } from '../lib/ttsSelection.svelte';
   import FileAttachment from './FileAttachment.svelte';
 
   interface Props {
@@ -50,11 +50,15 @@
 
   let proseEl: HTMLDivElement | undefined = $state();
 
+  // Abre o MESMO painel de narracao guiada da selecao (TtsSelectionPill), com a mensagem inteira
+  // como alvo — antes o 🔊 lia direto, mas isso obrigava quem queria "explicar o codigo" a
+  // selecionar texto no celular pra chegar no painel, e selecionar no celular e ruim. Sincrono ate
+  // aqui (sem await): abrir o painel nao toca audio nenhum, o unlock do iOS acontece dentro dele,
+  // no toque que de fato manda tocar (ver ouvirClique/confirmarLeitura na pill).
   function ouvirMensagem() {
     if (!proseEl) return;
-    // Chamada DIRETO do handler do clique: ouvirTexto destrava o elemento de audio de forma
-    // sincrona, e envolver isto num then() quebraria o gesto no iOS.
-    ouvirTexto(textoFalavel(proseEl), (msg) => Promise.resolve(window.confirm(msg)));
+    const { texto, blocos } = textoFalavelComCodigo(proseEl);
+    abrirComTexto(texto, blocos);
   }
 </script>
 
