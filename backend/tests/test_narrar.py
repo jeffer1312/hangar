@@ -69,6 +69,51 @@ def test_narrar_com_instrucao_chama_a_groq_e_devolve_o_texto(monkeypatch):
     assert b"explica isso" in captured["body"]
 
 
+def test_request_vai_pra_url_certa_e_com_user_agent(monkeypatch):
+    # O Cloudflare da Groq bane o UA padrao do urllib com 403 code 1010. Perder este header da
+    # producao quebrada com a suite verde — por isso ele tem teste proprio ANTES da refatoracao.
+    _com_chave(monkeypatch)
+    captured = {}
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+
+    def fake_urlopen(req, timeout=None):
+        captured["req"] = req
+        return FakeResp()
+
+    monkeypatch.setattr("app.narrar.urllib.request.urlopen", fake_urlopen)
+    narrar("texto", [], "explica isso")
+    req = captured["req"]
+    assert req.full_url.endswith("/chat/completions")
+    assert req.headers["User-agent"] == "claude-pocket/1.0"
+    assert req.headers["Authorization"].startswith("Bearer ")
+
+
+def test_corpo_manda_modelo_e_temperatura(monkeypatch):
+    _com_chave(monkeypatch)
+    captured = {}
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+
+    def fake_urlopen(req, timeout=None):
+        captured["req"] = req
+        return FakeResp()
+
+    monkeypatch.setattr("app.narrar.urllib.request.urlopen", fake_urlopen)
+    narrar("texto", [], "explica isso")
+    corpo = json.loads(captured["req"].data)
+    assert corpo["model"]
+    assert corpo["temperature"] == 0.3
+
+
 def test_resposta_sem_texto_esperado_levanta_502(monkeypatch):
     _com_chave(monkeypatch)
 
