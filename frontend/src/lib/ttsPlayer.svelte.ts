@@ -78,6 +78,26 @@ function element(): HTMLAudioElement {
   return a;
 }
 
+// Controles na tela de bloqueio. So faz sentido porque foi MEDIDO: em 2026-07-31, num iPhone real
+// com o app instalado como PWA, o audio CONTINUOU tocando depois de bloquear a tela. Sem essa
+// medicao o plano proibia publicar isto — promessa nao medida vira item de backlog impossivel.
+//
+// Os handlers sao obrigatorios: sem eles o iOS ate desenha o card, mas os botoes nao fazem nada.
+function publicarNaTelaDeBloqueio() {
+  if (!('mediaSession' in navigator)) return;
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: label || 'Leitura em voz',
+      artist: 'claude-cockpit',
+    });
+    navigator.mediaSession.setActionHandler('play', () => ttsPlayer.toggle());
+    navigator.mediaSession.setActionHandler('pause', () => ttsPlayer.toggle());
+  } catch {
+    // Navegador que expoe mediaSession mas recusa MediaMetadata ou um handler nao pode derrubar a
+    // reproducao — o audio e o que importa, o card da tela de bloqueio e extra.
+  }
+}
+
 export const ttsPlayer = {
   get active() { return active; },
   get playing() { return playing; },
@@ -113,6 +133,7 @@ export const ttsPlayer = {
       // Chegou aqui = o unlock nao segurou (ex: aba em segundo plano). Diz o que fazer.
       error = 'toque em ▶ para tocar';
     });
+    publicarNaTelaDeBloqueio();
   },
 
   fail(msg: string) { loading = false; playing = false; error = msg; },
