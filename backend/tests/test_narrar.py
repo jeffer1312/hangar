@@ -370,3 +370,124 @@ def test_limpar_ditado_com_content_lista_devolve_cru_com_motivo(monkeypatch):
     texto, erro = narrar.limpar_ditado(cru)
     assert texto == cru
     assert erro is not None
+
+
+# --- guarda de sentido: rejeita limpeza que INTRODUZ palavra (a inversao "critica -> resposta") ---
+# Caso real, medido ao vivo em 2026-08-01 (audio 1785615417-f9f5b3.m4a). O usuario criticou o
+# assistente ("para de falar de forma dificil"); a "limpeza" devolveu o assistente se
+# autodefendendo ("eu nao estou falando de forma dificil") — sentido invertido, e as duas travas
+# de tamanho (piso 0.5x, teto 1.5x) nao pegam porque a razao ficou em 0.73x.
+
+_DITADO_RUIM_CRU = (
+    "Novamente, eu não entendi. Para de falar de forma difícil, tipo, explica melhor o que você "
+    "tá querendo exemplificar. E outra coisa, se essa rota nova é mais perigosa de dar erro, não "
+    "é mais fácil só criar uma rota nova e deixar as outras que já funcionam prontas e essa "
+    "informação vem de uma outra rota? e também não entendi a parte de por que que a VPS esse "
+    "pacote estar rodando a VPS é um problema, não entendi direito a VPS com versão antiga os "
+    "dados não vão vir da API do back-end, então meio que não entendi muito bem essa questão aí "
+    "de de pacote antigo e tal, assim, eu entendo que tem mais como eu que pedi pra fazer, eu sei "
+    "como é que ele funciona que tem mais de um back-end rodando em várias máquinas, então cada "
+    "back-end vai ter a sua conta hoje eu não pedi pra fazer nada compartilhado ainda, eu imagino "
+    "que não tá fazendo nada compartilhado tá sendo por back-end, mas se der pra fazer "
+    "compartilhado também, se já estiver fazendo não é um problema mas não entendi porque que "
+    "ficaria desatorizado se essas informações estão no back-end e o front só vai chamar essa "
+    "rota, não entendi muito bem se você puder me explicar melhor e sobre o contexto, sim, assim "
+    "que a gente terminar essa conversa aqui antes de definir o que vai ser feito eu vou querer "
+    "sim fazer o finalizar um plano e depois limpar o contexto pra continuar"
+)
+_DITADO_RUIM_LIMPO = (
+    "Eu não entendi. Para explicar melhor, eu não estou querendo exemplificar nada, apenas "
+    "limpar o texto. Se essa rota nova for mais perigosa e der erro, não é mais fácil criar uma "
+    "rota nova e deixar as outras prontas? A informação vem de outra rota. Eu também não entendi "
+    "a parte de por que a VPS com pacote antigo é um problema, os dados não vão vir da API do "
+    "back-end. Eu entendo que tem mais de um back-end rodando em várias máquinas, cada back-end "
+    "vai ter a sua conta, hoje eu não pedi pra fazer nada compartilhado ainda. Eu imagino que não "
+    "tá fazendo nada compartilhado, tá sendo por back-end. Mas se der pra fazer compartilhado "
+    "também, se já estiver fazendo não é um problema. Eu não entendi porque que ficaria "
+    "desativado se essas informações estão no back-end e o front só vai chamar essa rota. Eu não "
+    "entendi muito bem, se você puder me explicar melhor e sobre o contexto. Sim, assim que a "
+    "gente terminar essa conversa aqui, antes de definir o que vai ser feito, eu vou querer sim "
+    "finalizar um plano e depois limpar o contexto pra continuar."
+)
+
+# Limpeza honesta de verdade (audio 1785615822-81b5eb.m4a) — 1582 caracteres, so tira hesitacao/
+# repeticao e pontua. NAO pode ser rejeitada: se a guarda pegar isso, o usuario perde a feature.
+_DITADO_BOM_CRU = (
+    "Tá, isso aí pode até entrar, mas não foi isso que eu disse, eu disse que a... Ah, mas isso é "
+    "tarefa de outra sessão, entendi. É pelo que eu quis dizer, vou te mandar, mas o que eu quis "
+    "dizer é que a transcrição aqui não foi boa, tipo, eu tava fazendo a transcrição enquanto... "
+    "Eu tô fazendo a transcrição enquanto você tá fazendo isso aí, então a gente tava fazendo "
+    "dois serviços aqui. Esse áudio era pra ser, no caso, né, não esse áudio, mas essa informação "
+    "que o áudio não foi bom, é pra outra sessão que tem do Pi do Cloud, na verdade do Pi não do "
+    "Cloud Pocket o Cloud Cockpit na verdade porque lá eu estou fazendo a parte de transcrição do "
+    "áudio a gente está melhorando a transcrição do Whisper eu estou falando agora eu estou "
+    "mandando um áudio e estou enviando e aí ele melhorou do que a gente já estava usando eu "
+    "estava usando bem diferente ele melhorou bastante agora, só que ele falhou em algumas "
+    "coisas, tipo ele mudou algumas palavras que eu falei palavras não é o problema mudar ele "
+    "mudou meio que o sentido onde eu quis dizer que você estava sendo complexo demais explicando "
+    "coisas demais de forma que não estava sendo clara ele meio que traduziu isso, que converteu "
+    "isso pra eu, falando que eu estava sendo complexo demais manda talvez é mais fácil te enviar "
+    "aqui, porque eu já tinha te enviado manda essa parte que eu estou te falando aqui, pra outra "
+    "sessão que está aberta aí do do Cloud Cockpit você tem o CPCend aí você pode enviar pra ela, "
+    "informando que eu enviei aqui o áudio informando tudo que eu te falei aqui agora pra ela ver "
+    "se ela consegue tentar corrigir"
+)
+_DITADO_BOM_LIMPO = (
+    "Tá, isso aí pode até entrar, mas não foi isso que eu disse, eu disse que a transcrição aqui "
+    "não foi boa. Eu tava fazendo a transcrição enquanto você tá fazendo isso aí, então a gente "
+    "tava fazendo dois serviços aqui. Esse áudio era pra ser, no caso, não esse áudio, mas essa "
+    "informação que o áudio não foi bom, é pra outra sessão que tem do Cloud Cockpit, porque lá "
+    "eu estou fazendo a parte de transcrição do áudio, a gente está melhorando a transcrição do "
+    "Whisper. Eu estou mandando um áudio e estou enviando e aí ele melhorou do que a gente já "
+    "estava usando, eu estava usando bem diferente, ele melhorou bastante agora, só que ele "
+    "falhou em algumas coisas, ele mudou algumas palavras que eu falei, palavras não é o "
+    "problema, mudar, ele mudou meio que o sentido, onde eu quis dizer que você estava sendo "
+    "complexo demais, explicando coisas demais de forma que não estava sendo clara, ele meio que "
+    "traduziu isso, que converteu isso pra eu, falando que eu estava sendo complexo demais. "
+    "Manda, talvez é mais fácil te enviar aqui, porque eu já tinha te enviado, manda essa parte "
+    "que eu estou te falando aqui, pra outra sessão que está aberta aí do Cloud Cockpit, você tem "
+    "o CPCend aí, você pode enviar pra ela, informando que eu enviei aqui o áudio, informando "
+    "tudo que eu te falei aqui agora, pra ela ver se ela consegue tentar corrigir."
+)
+
+
+def test_ditado_ruim_troca_sujeito_e_rejeitado(monkeypatch):
+    # A inversao de sentido (usuario critica -> "limpeza" devolve o assistente se defendendo)
+    # nao muda o tamanho o bastante pra disparar as travas de razao (0.73x, entre 0.5 e 1.5), mas
+    # introduz palavra que ninguem falou — e isso a guarda tem que pegar.
+    monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: _DITADO_RUIM_LIMPO)
+    texto, erro = narrar.limpar_ditado(_DITADO_RUIM_CRU)
+    assert texto == _DITADO_RUIM_CRU
+    assert erro is not None
+    assert "sentido" in erro
+
+
+def test_ditado_bom_honesto_nao_e_rejeitado(monkeypatch):
+    # Guarda que rejeita ditado honesto e PIOR que o defeito original — a pessoa perde a feature.
+    monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: _DITADO_BOM_LIMPO)
+    texto, erro = narrar.limpar_ditado(_DITADO_BOM_CRU)
+    assert erro is None
+    assert texto == " ".join(_DITADO_BOM_LIMPO.split())
+
+
+def test_guarda_ignora_maiuscula_acento_e_pontuacao(monkeypatch):
+    # Sem normalizar, "Você" (limpo) e "voce" (cru) contariam como palavras DIFERENTES e todo
+    # ditado com acentuacao reconstituida pela pontuacao seria rejeitado.
+    cru = "voce falou pra mim que ia rodar o teste amanha de manha bem cedo antes do almoco"
+    limpo = "Você falou pra mim que ia rodar o teste amanhã de manhã bem cedo, antes do almoço."
+    monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: limpo)
+    texto, erro = narrar.limpar_ditado(cru)
+    assert erro is None
+    assert texto == " ".join(limpo.split())
+
+
+def test_guarda_tem_folga_proporcional_em_texto_longo(monkeypatch):
+    # 400 palavras unicas no cru + 5 palavras novas no limpo: acima do piso fixo de 3, mas abaixo
+    # dos 2% de 405 palavras (8,1) — tem que passar por causa da folga proporcional, nao apesar
+    # dela. Prova que o limite nao e "sempre 3".
+    cru = " ".join(f"palavra{i}" for i in range(400))
+    limpo = cru + " novaA novaB novaC novaD novaE"
+    monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: limpo)
+    texto, erro = narrar.limpar_ditado(cru)
+    assert erro is None
+    assert texto == " ".join(limpo.split())
