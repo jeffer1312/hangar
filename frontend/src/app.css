@@ -39,6 +39,16 @@
   --accent-dim:     rgba(124,135,232,0.18);
   --accent-press:   #6e79d6;
 
+  /* Paleta categorica de grafico (slots 1-4). Mora aqui, e nao no componente, porque cor de tema
+     tem que trocar junto com o resto do tema — hex dentro de um .svelte fica de fora do bloco
+     claro e do papel de parede. Slot 1 e a cor de destaque do app; 2-4 passaram no validador de
+     daltonismo nos dois modos. Escuro e o padrao; o bloco claro abaixo sobrescreve 2-4 (o 1
+     acompanha sozinho, porque --accent ja e redefinido la). */
+  --chart-1: var(--accent);
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+  --chart-4: #c98500;
+
   /* Bubble do usuario: cinza neutro (estilo Claude.ai), no lugar do indigo. Texto = --text-primary. */
   --bubble-user:    #2b2a2e;
 
@@ -127,6 +137,12 @@
   --accent:         #5b6ad0;
   --accent-dim:     rgba(91,106,208,0.12);
   --accent-press:   #4d5bc0;
+
+  /* Paleta de grafico no claro: os tons do escuro sobre paper ficam abafados. --chart-1 nao
+     aparece aqui de proposito — ele e var(--accent), que este bloco ja trocou. */
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-4: #eda100;
 
   /* Bubble do usuario: cinza neutro claro (estilo Claude.ai). Texto = --text-primary (escuro). */
   --bubble-user:    #e8e5e0;
