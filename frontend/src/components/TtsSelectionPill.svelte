@@ -33,6 +33,9 @@
   // selecao que TEM codigo virava um no-op: o campo voltava a '' e o padrao esperto (explicar
   // codigo, ver `efetiva` abaixo) reassumia na hora, como se o toque nunca tivesse acontecido.
   let preferirLerLiteral = $state(false);
+  // Selecionar texto — pra copiar, pra reler, pra qualquer coisa — nao pode trazer preset, campo de
+  // instrucao e custo na cara. Nasce so a pilha "Ouvir . N car."; o resto abre no ⌄, sob demanda.
+  let expandido = $state(false);
   let prevAtiva = false;
 
   $effect(() => {
@@ -55,6 +58,7 @@
       if (!prevAtiva) {
         instrucao = ttsNarracao.ultimaInstrucao;
         preferirLerLiteral = false;
+        expandido = false;
         ttsNarracao.limpar();
       }
     }
@@ -193,6 +197,9 @@
         <span class="tts-sel-titulo">{ttsNarracao.pendente ? 'Texto adaptado' : 'Leitura em voz'}</span>
       {:else}
         <button type="button" class="tts-sel-head" onclick={ouvirClique}>{rotulo}</button>
+        <button type="button" class="tts-sel-mais" onclick={() => (expandido = !expandido)}
+                aria-expanded={expandido} aria-label={expandido ? 'Menos opções' : 'Mais opções'}
+        >{expandido ? '⌃' : '⌄'}</button>
       {/if}
       <button type="button" class="tts-sel-x" onclick={fechar} aria-label="Fechar">✕</button>
     </div>
@@ -211,7 +218,7 @@
         <button type="button" class="tts-sel-btn tts-sel-go" onclick={confirmarLeitura}>🔊 Ouvir</button>
         <button type="button" class="tts-sel-btn" onclick={fechar}>Cancelar</button>
       </div>
-    {:else}
+    {:else if expandido}
       <div class="tts-sel-row">
         <!-- Adaptar pra fala e o PADRAO — nasce marcado, e o botao "Ouvir" de cima ja usa ele sem
              ninguem digitar nada. Aparece como atalho mesmo assim pra dar de volta a escolha depois
@@ -337,6 +344,14 @@
     font-weight: 600;
     color: var(--text-secondary);
   }
+  .tts-sel-mais {
+    all: unset;
+    cursor: pointer;
+    padding: 0 var(--space-1);
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+  }
+  .tts-sel-mais:hover { color: var(--text-primary); }
   .tts-sel-x {
     all: unset;
     cursor: pointer;
