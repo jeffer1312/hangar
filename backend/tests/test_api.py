@@ -1050,6 +1050,43 @@ def test_transcribe_route_sem_chave_da_503(api_client, monkeypatch, tmp_path):
     assert r.status_code == 503
 
 
+def test_transcribe_sem_limpar_nao_chama_a_limpeza(api_client, monkeypatch, tmp_path):
+    # Audio ANEXADO (arquivo de dez minutos) passa por esta mesma rota e nao pode pagar limpeza:
+    # sem `limpar=1` na query, `narrar.limpar_ditado` nem e chamada, e a resposta e a de sempre.
+    info = SessionInfo(name="cc", cwd=str(tmp_path))
+    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
+    monkeypatch.setattr(api_mod, "transcribe", lambda data, fn: "ola mundo")
+    monkeypatch.setattr(
+        api_mod.narrar, "limpar_ditado",
+        lambda texto: (_ for _ in ()).throw(AssertionError("nao devia limpar")),
+    )
+    r = api_client.post(
+        "/api/sessions/cc/transcribe",
+        content=b"audio",
+        headers={**_h(), "X-Filename": "a.webm"},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"path": ANY, "text": "ola mundo"}
+
+
+def test_transcribe_com_limpar_devolve_o_cru_junto(api_client, monkeypatch, tmp_path):
+    # `raw` volta pro botao de desfazer do front; `aviso` explica quando a limpeza nao valeu.
+    info = SessionInfo(name="cc", cwd=str(tmp_path))
+    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
+    monkeypatch.setattr(api_mod, "transcribe", lambda data, fn: "ola mundo cru")
+    monkeypatch.setattr(api_mod.narrar, "limpar_ditado", lambda texto: ("Olá, mundo.", "aviso teste"))
+    r = api_client.post(
+        "/api/sessions/cc/transcribe?limpar=1",
+        content=b"audio",
+        headers={**_h(), "X-Filename": "a.webm"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["text"] == "Olá, mundo."
+    assert body["raw"] == "ola mundo cru"
+    assert body["aviso"] == "aviso teste"
+
+
 def test_push_mute_route(api_client, monkeypatch, tmp_path):
     monkeypatch.setattr(api_mod.push, "_file", lambda: tmp_path / "subs.json")
     r = api_client.post("/api/push/mute", json={"session": "s1", "muted": True}, headers=_h())
