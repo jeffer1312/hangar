@@ -121,13 +121,12 @@ IGNORADOS = frozenset({"<synthetic>", "unknown", "mock-engine-1", ""})
 # fica partida em três linhas do painel. Medido em 01/08/2026 nesta máquina:
 #   OpenAI  -> 'openai' (Claude 7 sessões + Codex 16) E 'openai-codex' (Pi 9), mesmo gpt-5.6-sol.
 #   Moonshot-> 'kimi-coding' (Pi), 'clinepass' (Pi) e 'moonshotai' (Claude), todos k3/kimi-k3.
-# Gateway com modelo MISTURADO ('openrouter', 'cline') fica de fora de propósito: ali a fatura
-# cai mesmo no gateway, e mapear pelo modelo de hoje inventaria a origem de amanhã.
+# Cline Pass fica de FORA, como openrouter e cline: é gateway de modelo misturado — o repo
+# documenta `cline-pass/glm-5.2` em app/pi_models.py. Só serviu kimi-k3 aqui até hoje, mas
+# mapear pelo modelo de hoje inventaria a origem de amanhã, e a fatura cai no gateway mesmo.
 _APELIDOS_PROVEDOR = {
     "openai-codex": "openai",
     "kimi-coding": "moonshotai",
-    "clinepass": "moonshotai",
-    "cline-pass": "moonshotai",
     "moonshot": "moonshotai",
 }
 

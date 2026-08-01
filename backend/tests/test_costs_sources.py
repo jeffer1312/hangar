@@ -1,9 +1,8 @@
 import json
-import os
-from datetime import timezone
 
 import pytest
 
+from app import costs_claude_transcript as ct
 from app import costs_sources as cs
 from app import pricing
 
@@ -12,19 +11,38 @@ from app import pricing
 def _pricing_isolado(tmp_path, monkeypatch):
     """Os leitores resolvem PROVEDOR via pricing, então sem isto o teste lê o cache real em
     ~/.claude/.claude-pocket-pricing/ e passa ou falha conforme o estado da máquina — não do
-    código. Mesma fixture do test_pricing.py."""
+    código. Mesma fixture do test_pricing.py.
+
+    `ct._CACHE_DIR` também precisa de isolamento agora que `linhas_claude` delega pro transcript
+    (Task 2): sem isto, cada teste grava um arquivo de cache real em
+    ~/.claude/.claude-pocket-custos/ — lixo que se acumula a cada rodada da suíte."""
     monkeypatch.setattr(pricing, "_CACHE_DIR", tmp_path / "pricing")
+    monkeypatch.setattr(ct, "_CACHE_DIR", tmp_path / "custos")
     # getattr: `cs.invalidar_cache` só nasce na Task 6; até lá o no-op mantém a fixture válida
     # desde a Task 3, sem precisar reescrevê-la depois.
     limpar = lambda: getattr(cs, "invalidar_cache", lambda: None)()  # noqa: E731
-    pricing.invalidar_cache(); limpar()
+    pricing.invalidar_cache(); ct.invalidar_cache(); limpar()
     yield
-    pricing.invalidar_cache(); limpar()
+    pricing.invalidar_cache(); ct.invalidar_cache(); limpar()
 
 
 def _escrever(p, linhas):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("\n".join(json.dumps(x) if isinstance(x, (dict, list)) else x for x in linhas))
+
+
+def _transcript_claude(cfg, sid, model, cwd, i=1, o=0, cw=0, cr=0, ts="2026-08-01T10:00:00Z"):
+    """Escreve um transcript de conversa (não-subagente) mínimo, no formato que
+    costs_claude_transcript.ler_transcript espera."""
+    p = cfg / "projects" / "p" / f"{sid}.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({
+        "type": "assistant", "timestamp": ts, "sessionId": sid, "cwd": cwd,
+        "message": {"model": model, "usage": {
+            "input_tokens": i, "output_tokens": o,
+            "cache_creation_input_tokens": cw, "cache_read_input_tokens": cr}}}),
+        encoding="utf-8")
+    return p
 
 
 def test_ler_jsonl_pula_linha_invalida_e_nao_dict(tmp_path):
@@ -33,100 +51,28 @@ def test_ler_jsonl_pula_linha_invalida_e_nao_dict(tmp_path):
     assert list(cs._ler_jsonl(p)) == [{"a": 1}, {"b": 2}]
 
 
-def test_cwd_sai_de_dentro_do_transcript(tmp_path):
-    # O nome do diretório do Claude não é invertível ('Á' e espaço viram '-', igual à barra).
-    # O cwd real está DENTRO do arquivo.
-    t = tmp_path / "-home-jeff--rea-de-trabalho-x" / "s.jsonl"
-    _escrever(t, [{"type": "last-prompt"}, {"type": "x"},
-                  {"type": "user", "cwd": "/home/jeff/Área de trabalho/x"}])
-    assert cs.cwd_do_transcript(str(t)) == "/home/jeff/Área de trabalho/x"
+# `cwd_do_transcript` foi removida junto com a `linhas_claude` antiga: era usada só por ela
+# (resolvia o cwd a partir de `transcript_path` do costs.jsonl). O novo `linhas_claude` lê o
+# `cwd` que o próprio `costs_claude_transcript.UsoSessao` já entrega — não precisa mais existir.
 
-
-def test_cwd_ausente_vira_string_vazia(tmp_path):
-    t = tmp_path / "s.jsonl"
-    _escrever(t, [{"type": "last-prompt"}])
-    assert cs.cwd_do_transcript(str(t)) == ""
-
-
-def test_claude_pega_a_ultima_linha_por_sessao(tmp_path):
-    # O costs.jsonl é CUMULATIVO: o hook grava um snapshot do total a cada turno.
-    cfg = tmp_path / ".claude"
-    t = cfg / "projects" / "-p" / "s1.jsonl"
-    _escrever(t, [{"type": "user", "cwd": "/repo/um"}])
-    _escrever(cfg / "metrics" / "costs.jsonl", [
-        {"timestamp": "2026-08-01T10:00:00Z", "session_id": "s1", "transcript_path": str(t),
-         "model": "claude-opus-5", "input_tokens": 10, "output_tokens": 1,
-         "cache_write_tokens": 0, "cache_read_tokens": 0},
-        {"timestamp": "2026-08-01T11:00:00Z", "session_id": "s1", "transcript_path": str(t),
-         "model": "claude-opus-5", "input_tokens": 99, "output_tokens": 9,
-         "cache_write_tokens": 2, "cache_read_tokens": 3},
-    ])
-    linhas = cs.linhas_claude(cfg, "conta-x")
-    assert len(linhas) == 1
-    r = linhas[0]
-    assert (r.input, r.output, r.cache_write, r.cache_read) == (99, 9, 2, 3)
-    assert r.source == "claude"
-    assert r.project == "/repo/um"
-    assert r.provider == "conta-x"
-
-
-def test_claude_ignora_synthetic(tmp_path):
-    cfg = tmp_path / ".claude"
-    _escrever(cfg / "metrics" / "costs.jsonl", [
-        {"timestamp": "2026-08-01T10:00:00Z", "session_id": "s", "model": "<synthetic>",
-         "input_tokens": 1, "output_tokens": 1, "cache_write_tokens": 0, "cache_read_tokens": 0},
-    ])
-    assert cs.linhas_claude(cfg, "conta-x") == []
-
-
-def test_synthetic_no_fim_nao_leva_a_sessao_junto(tmp_path):
-    """O arquivo é CUMULATIVO: cada linha traz o total acumulado da sessão. Se o filtro de
-    IGNORADOS rodasse depois do dedup, o último turno em '<synthetic>' descartaria a SESSÃO
-    INTEIRA — medido no arquivo real: 7 sessões e 197 milhões de tokens de cache lido sumindo
-    calados. O certo é a sessão ficar com o snapshot do turno anterior."""
-    cfg = tmp_path / ".claude"
-    _escrever(cfg / "metrics" / "costs.jsonl", [
-        {"timestamp": "2026-08-01T10:00:00Z", "session_id": "s1", "model": "claude-opus-5",
-         "input_tokens": 40, "output_tokens": 7, "cache_write_tokens": 2, "cache_read_tokens": 900},
-        {"timestamp": "2026-08-01T11:00:00Z", "session_id": "s1", "model": "<synthetic>",
-         "input_tokens": 41, "output_tokens": 7, "cache_write_tokens": 2, "cache_read_tokens": 900},
-    ])
-    linhas = cs.linhas_claude(cfg, "conta-x")
-    assert len(linhas) == 1, "a sessão não pode sumir por causa do modelo da última linha"
-    r = linhas[0]
-    assert (r.model, r.input, r.output, r.cache_read) == ("claude-opus-5", 40, 7, 900)
+# As mecânicas de leitura do transcript em si (soma por turno, IGNORADOS pulado inteiro, ts do
+# PRIMEIRO turno, tz-aware, linha inválida) já são cobertas em test_costs_claude_transcript.py
+# (Task 1) — o que fica aqui é só o que é específico do WRAPPER linhas_claude: resolução de
+# provedor, fallback de projeto e o arquivo/raiz ausente.
 
 
 def test_sessao_de_motor_ganha_provedor_do_modelo(tmp_path):
     # CP_ENGINE só existe em /proc de sessão VIVA. Numa linha de ontem, quem entrega o
     # provedor é o modelo: 'k3' só existe na Moonshot.
     cfg = tmp_path / ".claude"
-    _escrever(cfg / "metrics" / "costs.jsonl", [
-        {"timestamp": "2026-08-01T10:00:00Z", "session_id": "s", "model": "k3",
-         "input_tokens": 5, "output_tokens": 1, "cache_write_tokens": 0, "cache_read_tokens": 0},
-    ])
+    _transcript_claude(cfg, "s", "k3", "/r", i=5, o=1)
     assert cs.linhas_claude(cfg, "conta-x")[0].provider == "moonshotai"
 
 
 def test_transcript_sem_cwd_vira_projeto_desconhecido(tmp_path):
     cfg = tmp_path / ".claude"
-    _escrever(cfg / "metrics" / "costs.jsonl", [
-        {"timestamp": "2026-08-01T10:00:00Z", "session_id": "s", "transcript_path": "/nao/existe",
-         "model": "claude-opus-5", "input_tokens": 1, "output_tokens": 1,
-         "cache_write_tokens": 0, "cache_read_tokens": 0},
-    ])
+    _transcript_claude(cfg, "s", "claude-opus-5", "", i=1, o=1)
     assert cs.linhas_claude(cfg, "c")[0].project == cs.PROJETO_DESCONHECIDO
-
-
-def test_timestamp_vira_tz_aware(tmp_path):
-    cfg = tmp_path / ".claude"
-    _escrever(cfg / "metrics" / "costs.jsonl", [
-        {"timestamp": "2026-08-01T10:00:00Z", "session_id": "s", "model": "claude-opus-5",
-         "input_tokens": 1, "output_tokens": 1, "cache_write_tokens": 0, "cache_read_tokens": 0},
-    ])
-    ts = cs.linhas_claude(cfg, "c")[0].ts
-    assert ts.tzinfo is not None
-    assert ts.astimezone(timezone.utc).hour == 10
 
 
 def test_codex_usa_o_ultimo_token_count_e_desconta_o_cache(tmp_path, monkeypatch):
@@ -253,10 +199,7 @@ def test_as_tres_fontes_convergem_no_mesmo_provedor(tmp_path, monkeypatch):
     'kimi-coding', 'clinepass' e 'moonshotai' — sempre o mesmo gpt-5.6-sol / k3. A pergunta
     'quanto minha assinatura da OpenAI rendeu' não tinha resposta na tela."""
     cfg = tmp_path / ".claude"
-    _escrever(cfg / "metrics" / "costs.jsonl", [
-        {"timestamp": "2026-08-01T10:00:00Z", "session_id": "s", "model": "gpt-5.6-sol",
-         "input_tokens": 1, "output_tokens": 1, "cache_write_tokens": 0, "cache_read_tokens": 0},
-    ])
+    _transcript_claude(cfg, "s", "gpt-5.6-sol", "/r", i=1, o=1)
     codex = tmp_path / "codex"
     _escrever(codex / "rollout-a.jsonl",
               _rollout_codex("/r", "a", {"input_tokens": 1, "output_tokens": 1}))
@@ -277,10 +220,7 @@ def test_conta_anthropic_passa_intacta_pela_normalizacao(tmp_path):
     """'anthropic:<uuid>' é identidade de CONTA, não apelido de provedor: normalizar não pode
     encostar nela (duas contas Anthropic viram uma só se a chave for achatada)."""
     cfg = tmp_path / ".claude"
-    _escrever(cfg / "metrics" / "costs.jsonl", [
-        {"timestamp": "2026-08-01T10:00:00Z", "session_id": "s", "model": "claude-opus-5",
-         "input_tokens": 1, "output_tokens": 1, "cache_write_tokens": 0, "cache_read_tokens": 0},
-    ])
+    _transcript_claude(cfg, "s", "claude-opus-5", "/r", i=1, o=1)
     assert cs.linhas_claude(cfg, "anthropic:758a9521-e2ef")[0].provider == "anthropic:758a9521-e2ef"
 
 
@@ -311,10 +251,7 @@ def test_codex_le_modelo_so_do_turn_context(tmp_path, monkeypatch):
 def test_coletar_junta_as_tres_fontes_e_dedup_e_por_fonte(tmp_path, monkeypatch):
     # Chave de dedup é (fonte, session_id): um uuid repetido entre fontes não pode se comer.
     cfg = tmp_path / ".claude"
-    _escrever(cfg / "metrics" / "costs.jsonl", [
-        {"timestamp": "2026-08-01T10:00:00Z", "session_id": "mesmo-id", "model": "claude-opus-5",
-         "input_tokens": 1, "output_tokens": 1, "cache_write_tokens": 0, "cache_read_tokens": 0},
-    ])
+    _transcript_claude(cfg, "mesmo-id", "claude-opus-5", "/r", i=1, o=1)
     _escrever(tmp_path / "sessions" / "--r--" / "mesmo-id.jsonl", [
         {"type": "session", "timestamp": "2026-08-01T10:00:00Z", "cwd": "/r"},
         {"type": "model_change", "provider": "kimi-coding", "modelId": "k3"},
@@ -332,31 +269,23 @@ def test_coletar_junta_as_tres_fontes_e_dedup_e_por_fonte(tmp_path, monkeypatch)
 
 def test_cache_relê_quando_o_arquivo_muda(tmp_path, monkeypatch):
     cfg = tmp_path / ".claude"
-    arq = cfg / "metrics" / "costs.jsonl"
-    linha = {"timestamp": "2026-08-01T10:00:00Z", "session_id": "s", "model": "claude-opus-5",
-             "input_tokens": 1, "output_tokens": 0, "cache_write_tokens": 0,
-             "cache_read_tokens": 0}
-    _escrever(arq, [linha])
+    _transcript_claude(cfg, "s", "claude-opus-5", "/r", i=1, o=0)
     monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "x")
     monkeypatch.setattr(cs, "raiz_codex", lambda: tmp_path / "y")
     monkeypatch.setattr(cs, "_config_dirs", lambda: [(str(cfg), "c")])
     cs.invalidar_cache()
     assert len(cs.coletar()) == 1
-    _escrever(arq, [linha, {**linha, "session_id": "s2"}])
-    os.utime(arq, (0, 0))          # mtime diferente -> tem que reler
+    _transcript_claude(cfg, "s2", "claude-opus-5", "/r", i=1, o=0)
     assert len(cs.coletar()) == 2
 
 
 def test_cache_evita_reparse_quando_nada_muda(tmp_path, monkeypatch):
-    # O teste acima só prova "arquivo mudou -> relê". Isso passaria até sem cache nenhum. O que
-    # falta é o lado que É o valor da tarefa: sem tocar arquivo, o parser roda UMA vez só.
-    # Conta chamada real ao leitor de cada fonte, não só o tamanho do resultado.
+    """O Pi continua com entrada própria em `_cache` (parser roda 1x sem tocar arquivo). O
+    Claude NÃO tem mais entrada nesse cache (Step 4 desta tarefa): `linhas_claude` é chamado a
+    cada `coletar()` — quem evita reler o mesmo transcript é o cache em disco de
+    `costs_claude_transcript` (Task 1), não este módulo."""
     cfg = tmp_path / ".claude"
-    arq = cfg / "metrics" / "costs.jsonl"
-    linha = {"timestamp": "2026-08-01T10:00:00Z", "session_id": "s", "model": "claude-opus-5",
-             "input_tokens": 1, "output_tokens": 0, "cache_write_tokens": 0,
-             "cache_read_tokens": 0}
-    _escrever(arq, [linha])
+    _transcript_claude(cfg, "s", "claude-opus-5", "/r", i=1, o=0)
     _escrever(tmp_path / "sessions" / "--r--" / "s.jsonl", [
         {"type": "session", "timestamp": "2026-08-01T10:00:00Z", "cwd": "/r"},
         {"type": "model_change", "provider": "kimi-coding", "modelId": "k3"},
@@ -384,60 +313,14 @@ def test_cache_evita_reparse_quando_nada_muda(tmp_path, monkeypatch):
 
     cs.coletar()
     cs.coletar()
-    assert chamadas == {"claude": 1, "pi": 1}, "duas coletas sem tocar arquivo -> parser roda 1x"
-
-    _escrever(arq, [linha, {**linha, "session_id": "s2"}])
-    os.utime(arq, (0, 0))
-    cs.coletar()
-    assert chamadas == {"claude": 2, "pi": 1}, "só o costs.jsonl mudou -> só o claude releu"
+    assert chamadas == {"claude": 2, "pi": 1}, "pi cacheia por assinatura; claude roda a cada coletar()"
 
 
 # --- Vieram do test_costs.py: o código que eles cobrem mudou de módulo, o risco não mudou -----
 
 
-def test_claude_dedup_de_snapshots_cumulativos_por_session_id(tmp_path):
-    cfg = tmp_path / ".claude"
-    _escrever(cfg / "metrics" / "costs.jsonl", [
-        {"timestamp": "2026-07-01T10:00:00.000Z", "session_id": "s1",
-         "model": "claude-opus-4-8", "input_tokens": 100, "output_tokens": 10,
-         "cache_write_tokens": 0, "cache_read_tokens": 0},
-        {"timestamp": "2026-07-01T10:05:00.000Z", "session_id": "s1",
-         "model": "claude-opus-4-8", "input_tokens": 200, "output_tokens": 20,
-         "cache_write_tokens": 0, "cache_read_tokens": 0},
-    ])
-    linhas = cs.linhas_claude(cfg, "conta-teste")
-    assert len(linhas) == 1                 # 2 snapshots da mesma sessao = 1
-    assert linhas[0].input == 200           # ultima linha vence
-    assert linhas[0].output == 20
-
-
-def test_claude_ultima_linha_vence_com_timestamp_igual(tmp_path):
-    cfg = tmp_path / ".claude"
-    _escrever(cfg / "metrics" / "costs.jsonl", [
-        {"timestamp": "2026-07-01T10:00:00.000Z", "session_id": "s1",
-         "model": "claude-opus-4-8", "input_tokens": 100, "output_tokens": 0,
-         "cache_write_tokens": 0, "cache_read_tokens": 0},
-        {"timestamp": "2026-07-01T10:00:00.000Z", "session_id": "s1",
-         "model": "claude-opus-4-8", "input_tokens": 999, "output_tokens": 0,
-         "cache_write_tokens": 0, "cache_read_tokens": 0},
-    ])
-    linhas = cs.linhas_claude(cfg, "conta-teste")
-    assert len(linhas) == 1
-    assert linhas[0].input == 999  # ultima linha vence mesmo com timestamp igual
-
-
 def test_claude_arquivo_ausente_devolve_vazio(tmp_path):
     assert cs.linhas_claude(tmp_path, "conta-teste") == []
-
-
-def test_claude_pula_linha_invalida(tmp_path):
-    cfg = tmp_path / ".claude"
-    _escrever(cfg / "metrics" / "costs.jsonl", [
-        "nao-e-json",
-        {"timestamp": "2026-07-01T10:00:00Z", "session_id": "s1", "model": "claude-opus-4-8",
-         "input_tokens": 1, "output_tokens": 0, "cache_write_tokens": 0, "cache_read_tokens": 0},
-    ])
-    assert len(cs.linhas_claude(cfg, "conta-teste")) == 1
 
 
 def test_account_info_reads_oauth(tmp_path):
@@ -463,3 +346,77 @@ def test_account_info_fallback_when_json_root_not_dict(tmp_path, monkeypatch):
     assert aid == "fallback"
     assert email is None
     assert label == "fallback"
+
+
+def test_claude_le_do_transcript_e_nao_do_plugin(tmp_path, monkeypatch):
+    """O costs.jsonl do plugin ECC não pode mais ser a fonte: o app não pode depender de
+    plugin de terceiro, e o resumo não enxerga subagente (medido: numa sessão com 14, o
+    plugin registrou exatamente o pai e ignorou 12,8 M de cache lido dos filhos)."""
+    from app import costs_claude_transcript as ct
+    proj = tmp_path / ".claude" / "projects" / "p"
+    proj.mkdir(parents=True)
+    (proj / "s9.jsonl").write_text(json.dumps({
+        "type": "assistant", "timestamp": "2026-08-01T10:00:00Z", "sessionId": "s9",
+        "cwd": "/repo/novo", "message": {"model": "claude-opus-5", "usage": {
+            "input_tokens": 11, "output_tokens": 2,
+            "cache_creation_input_tokens": 3, "cache_read_input_tokens": 4}}}), encoding="utf-8")
+    _escrever(tmp_path / ".claude" / "metrics" / "costs.jsonl", [])   # plugin vazio de propósito
+    ct.invalidar_cache()
+    linhas = cs.linhas_claude(tmp_path / ".claude", "anthropic:teste")
+    assert len(linhas) == 1
+    r = linhas[0]
+    assert (r.input, r.output, r.cache_write, r.cache_read) == (11, 2, 3, 4)
+    assert r.project == "/repo/novo"        # o cwd vem do próprio transcript
+    assert r.subagente is False
+
+
+def test_subagente_vira_linha_com_a_marca(tmp_path, monkeypatch):
+    """13,7% do volume desta máquina. Tem que aparecer e tem que ser distinguível."""
+    from app import costs_claude_transcript as ct
+    proj = tmp_path / ".claude" / "projects" / "p"
+    (proj / "abc" / "subagents").mkdir(parents=True)
+    def t(i):
+        return json.dumps({"type": "assistant", "timestamp": "2026-08-01T10:00:00Z",
+                           "sessionId": "s1", "cwd": "/r", "message": {
+                               "model": "claude-opus-5", "usage": {
+                                   "input_tokens": i, "output_tokens": 0,
+                                   "cache_creation_input_tokens": 0,
+                                   "cache_read_input_tokens": 0}}})
+    (proj / "abc.jsonl").write_text(t(100), encoding="utf-8")
+    (proj / "abc" / "subagents" / "agent-x.jsonl").write_text(t(7), encoding="utf-8")
+    _escrever(tmp_path / ".claude" / "metrics" / "costs.jsonl", [])
+    ct.invalidar_cache()
+    linhas = sorted(cs.linhas_claude(tmp_path / ".claude", "c"), key=lambda r: r.input)
+    assert [r.subagente for r in linhas] == [True, False]
+    assert linhas[0].session_id != linhas[1].session_id
+
+
+def test_duas_contas_nao_contam_em_dobro(tmp_path, monkeypatch):
+    """`coletar()` chama o leitor uma vez por config dir. Um leitor que ignorasse o argumento
+    leria a MESMA raiz duas vezes e dobraria o gasto, dividido entre contas erradas."""
+    from app import costs_claude_transcript as ct
+    for conta in ("A", "B"):
+        p = tmp_path / conta / "projects" / "p"
+        p.mkdir(parents=True)
+        (p / f"s-{conta}.jsonl").write_text(json.dumps({
+            "type": "assistant", "timestamp": "2026-08-01T10:00:00Z", "sessionId": conta,
+            "cwd": "/r", "message": {"model": "claude-opus-5", "usage": {
+                "input_tokens": 1, "output_tokens": 0,
+                "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}}),
+            encoding="utf-8")
+    ct.invalidar_cache()
+    a = cs.linhas_claude(tmp_path / "A", "conta-a")
+    b = cs.linhas_claude(tmp_path / "B", "conta-b")
+    assert len(a) == 1 and len(b) == 1
+    assert a[0].session_id != b[0].session_id or a[0].provider != b[0].provider
+
+
+def test_provedor_clinepass_nao_vira_moonshot():
+    """Cline Pass é gateway de modelo MISTURADO — o repo documenta cline-pass/glm-5.2 em
+    app/pi_models.py. Mapear pelo modelo de hoje inventaria a origem de amanhã, que é o mesmo
+    motivo de openrouter e cline terem ficado de fora."""
+    from app import pricing
+    assert pricing.canonizar_provedor("clinepass") == "clinepass"
+    assert pricing.canonizar_provedor("cline-pass") == "cline-pass"
+    assert pricing.canonizar_provedor("kimi-coding") == "moonshotai"
+    assert pricing.canonizar_provedor("openai-codex") == "openai"
