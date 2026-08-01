@@ -26,6 +26,11 @@ URL = "https://models.dev/api.json"
 SNAPSHOT = RAIZ / "backend" / "app" / "pricing_data.json"
 FIXTURE = RAIZ / "backend" / "tests" / "fixtures" / "models_dev_recorte.json"
 
+# Modelos citados pelo NOME nos testes de pricing.py. O corte de 6 abaixo é por posição crua do
+# JSON do models.dev — sem isto, reexecutar o script pode apagar um deles em silêncio se ele não
+# estiver entre os 6 primeiros daquele provedor (foi o caso do kimi-k3, medido).
+_ANCORAS = {"anthropic": "claude-opus-5", "moonshotai": "kimi-k3", "openai": "gpt-5.6-sol"}
+
 
 def _recorte(bruto: dict) -> dict:
     """Fixture: um pouco de cada provedor canônico + a armadilha de preço zero de uma revenda."""
@@ -34,7 +39,11 @@ def _recorte(bruto: dict) -> dict:
         p = bruto.get(pid)
         if not isinstance(p, dict):
             continue
-        modelos = dict(list((p.get("models") or {}).items())[:6])
+        todos = p.get("models") or {}
+        modelos = dict(list(todos.items())[:6])
+        ancora = _ANCORAS.get(pid)
+        if ancora and ancora not in modelos and ancora in todos:
+            modelos[ancora] = todos[ancora]
         rec[pid] = {"name": p.get("name", pid), "models": modelos}
     for pid, p in bruto.items():
         if pid in PROVEDORES or not isinstance(p, dict):

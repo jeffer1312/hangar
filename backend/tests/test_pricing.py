@@ -67,6 +67,14 @@ def test_id_cru_que_existe_no_catalogo_ganha_do_desmonte_de_prefixo():
     assert pricing.canonizar("claude-opus-5") == "claude-opus-5"
 
 
+def test_bare_e_prefixado_convergem_na_mesma_linha():
+    """canonizar() é a chave de agrupamento do painel "Por modelo": se a forma nua e a
+    'provedor/nua' não caem no mesmo id, o mesmo modelo vira duas linhas de gasto."""
+    assert pricing.canonizar("claude-sonnet-5") == pricing.canonizar("anthropic/claude-sonnet-5")
+    assert pricing.canonizar("kimi-k3") == pricing.canonizar("moonshotai/kimi-k3")
+    assert pricing.canonizar("deepseek-v4-flash") == pricing.canonizar("deepseek/deepseek-v4-flash")
+
+
 def test_rate_do_snapshot_traz_provedor_e_origem():
     r = pricing.rate_for("k3")
     assert r is not None
