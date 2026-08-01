@@ -1,4 +1,4 @@
-import type { CostBucket, CostReport, DimBucket, KindBucket, RateInfo } from './types';
+import type { ComboRow, CostBucket, CostReport, DimBucket, KindBucket, RateInfo } from './types';
 
 // `Partial` de propósito: é o que chega DO FIO. Um servidor da malha em versão antiga responde
 // sem os campos novos, e prometer aqui um objeto completo é justamente o que fazia o front
@@ -68,6 +68,10 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
   const kinds = new Map<string, KindBucket>();
   const rates = new Map<string, RateInfo>();
   const semTarifa = new Set<string>();
+  // O detalhamento cruzado só se CONCATENA: cada linha já é uma combinação daquela máquina, e as
+  // dimensões que somam entre servidores (dia, fonte, projeto, modelo) somam depois, no cliente,
+  // quando o recorte pedir. Servidor recusado não contribui combo, como não contribui total.
+  const combos: ComboRow[] = [];
   const mismatched: string[] = [];
   const failed: string[] = [];
   const anterior = zeroBucket('anterior');
@@ -113,6 +117,7 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
     // calado.
     for (const t of r.rates ?? []) rates.set(`${t.provider}|${t.model}`, t);
     for (const m of r.sem_tarifa ?? []) semTarifa.add(m);
+    for (const cb of r.combos ?? []) combos.push(cb);
     semCache += r.custo_sem_cache ?? 0;
     equivalente += r.equivalente_cobrado ?? 0;
     if (r.anterior) { somarBucket(anterior, r.anterior); comAnterior += 1; }
@@ -137,6 +142,7 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
       // uma, então a tela mostraria uma alta que não existe. "Sem período anterior completo
       // pra comparar" é a mensagem honesta.
       anterior: entraram > 0 && comAnterior === entraram ? anterior : null,
+      combos,
       applied: { period },
       usd_brl: usdBrl,
     },

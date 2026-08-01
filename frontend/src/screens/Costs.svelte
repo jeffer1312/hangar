@@ -6,8 +6,9 @@
     mergeReports, fillDayGaps, tarifasPorModelo, custoDesconhecido, precoParcial, partirOcultos,
     type ServerResult, type MergedReport,
   } from '../lib/costs';
+  import { agruparPor, filtrar, somar, type Filtro } from '../lib/cubo';
   import { dec, tok, money, money2, type Cur } from '../lib/fmt';
-  import type { DimBucket } from '../lib/types';
+  import type { ComboRow, DimBucket } from '../lib/types';
 
   interface Props { onBack: () => void; }
   let { onBack }: Props = $props();
@@ -41,9 +42,20 @@
     { id: '90d', label: '90 dias', dias: 90 },
     { id: 'all', label: 'tudo', dias: 0 },
   ];
+  const DIMS: Dim[] = ['provider', 'source', 'project', 'model'];
   const NOME_DIM: Record<Dim, string> = {
     provider: 'provedor', source: 'fonte', project: 'projeto', model: 'modelo',
   };
+
+  // ── Empilhamento do gráfico por FONTE ───────────────────────────────────────
+  // Cor por fonte, não por posição na lista: com a paleta seguindo a ordem do ranking, um dia em
+  // que o Codex passasse o Claude trocaria as duas cores no meio da série.
+  const SLOT_FONTE: Record<string, string> = {
+    claude: '--chart-1', codex: '--chart-2', pi: '--chart-3',
+  };
+  // ponytail: fonte fora das três que o backend produz cai no slot 4; duas delas colidiriam na
+  // cor — quando existir uma quarta fonte, o lugar de nomeá-la é este mapa.
+  const corDaFonte = (k: string) => SLOT_FONTE[k] ?? '--chart-4';
 
   const vazio = (): DimBucket => ({
     key: 'totals', sessions: 0, input: 0, output: 0, cache_write: 0, cache_read: 0,
@@ -62,11 +74,14 @@
   let merged = $state<MergedReport>(relatorioVazio());
   let period = $state<Periodo>('30d');
   let currency = $state<Cur>(localStorage.getItem('cp_costs_currency') === 'BRL' ? 'BRL' : 'USD');
-  // Recorte do cliente. UMA dimensão por vez, e não é preguiça de UI: o servidor manda o total de
-  // CADA dimensão (marginais), nunca o cruzamento entre elas — "projeto X E fonte Codex" não é
-  // derivável do que chega no fio, então oferecer o cruzamento seria inventar número.
-  let sel = $state<{ dim: Dim; key: string } | null>(null);
-  let tiposOff = $state<Set<Tipo>>(new Set());
+  // Recorte do cliente, agora CRUZADO: provedor, fonte, projeto, modelo e subagente valem ao mesmo
+  // tempo. Antes era uma dimensão por vez porque o servidor mandava só o total de CADA dimensão
+  // (marginais) e "projeto X E fonte Codex" não era derivável do fio; agora ele manda o
+  // detalhamento (`combos`), e todo recorte vira uma soma.
+  let filtro = $state<Filtro>({});
+  // Camadas desligadas na legenda do gráfico: fonte quando há detalhamento, tipo de token quando
+  // não há. Set de string porque o que a legenda lista muda com o modo.
+  let camadasOff = $state<Set<string>>(new Set());
   let ocultos = $state<Set<string>>(new Set(lerOcultos()));
   let larguraGrafico = $state(0);
   let diaSobHover = $state<number | null>(null);
@@ -113,39 +128,77 @@
   const m2 = (n: number) => money2(n, currency, rate);
   const pct = (n: number, total: number) => (total > 0 ? `${dec((n / total) * 100, 1)}%` : '—');
 
-  // O que se LÊ de um corte. A chave da conta Anthropic é 'anthropic:<uuid>' — identidade que não
-  // colide entre servidores da malha, mas ilegível na tela: a linha de topo do "Por provedor",
-  // com 87% do gasto, aparecia como o uuid cru. O backend manda o e-mail no `label`.
-  const rot = (b: DimBucket) => b.label || b.key;
+  // Detalhamento cruzado. Vazio = servidor antigo da malha (ou período sem dado): a tela cai no
+  // recorte de UMA dimensão a partir dos `by_*`, que é o que ela fazia antes desta fase.
+  const base = $derived<ComboRow[]>(report.combos ?? []);
+  const temCombos = $derived(base.length > 0);
 
-  const listaDa = (d: Dim): DimBucket[] =>
+  const listaCrua = (d: Dim): DimBucket[] =>
     d === 'provider' ? report.by_provider : d === 'source' ? report.by_source
       : d === 'project' ? report.by_project : report.by_model;
 
-  // O recorte só vale se a chave ainda existe no período carregado: trocar de 30d pra 7d pode
+  // O filtro só vale se a chave ainda existe no período carregado: trocar de 30d pra 7d pode
   // apagar o projeto selecionado, e manter o chip apontando pro vazio mostraria zero como se
   // fosse gasto zero.
-  const selAtivo = $derived.by(() => {
-    if (!sel) return null;
-    return listaDa(sel.dim).some((b) => b.key === sel!.key) ? sel : null;
-  });
+  const existe = (d: Dim, v: string) =>
+    temCombos ? base.some((c) => c[d] === v) : listaCrua(d).some((b) => b.key === v);
+  const manter = (d: Dim) => {
+    const v = filtro[d];
+    return v && existe(d, v) ? v : undefined;
+  };
+  const filtroAtivo = $derived.by<Filtro>(() => ({
+    provider: manter('provider'), source: manter('source'),
+    project: manter('project'), model: manter('model'),
+    // Separar subagente exige o detalhamento: os `by_*` já vêm somados com ele dentro.
+    subagente: temCombos ? filtro.subagente : undefined,
+  }));
+  const temFiltro = $derived(Object.values(filtroAtivo).some((v) => v !== undefined));
+  const recorte = $derived(filtrar(base, filtroAtivo));
+
+  // O que se LÊ de um corte. A chave da conta Anthropic é 'anthropic:<uuid>' — identidade que não
+  // colide entre servidores da malha, mas ilegível na tela: a linha de topo do "Por provedor",
+  // com 87% do gasto, aparecia como o uuid cru. O backend manda o e-mail no `label` dos `by_*`;
+  // o detalhamento manda só a chave, então o rótulo se busca neste mapa.
+  const rotulos = $derived(new Map(
+    report.by_provider.filter((b) => b.label).map((b) => [b.key, b.label as string])));
+  const rot = (b: DimBucket) => b.label || rotulos.get(b.key) || b.key;
+
+  // A lista de UMA dimensão, já cruzada com os OUTROS filtros — mas nunca com o dela mesma: com o
+  // próprio filtro aplicado, a lista ficaria só com a opção escolhida e não haveria como trocar de
+  // valor nem ver o que mais existe dentro do recorte.
+  const listaDa = (d: Dim): DimBucket[] =>
+    temCombos ? agruparPor(filtrar(base, { ...filtroAtivo, [d]: undefined }), d) : listaCrua(d);
+
+  // Os números do topo saem do CRUZAMENTO. Sem detalhamento, do recorte de uma dimensão só — a
+  // primeira ativa —, exatamente como a tela fazia antes.
   const foco = $derived.by(() => {
-    const s = selAtivo;
-    if (!s) return report.totals;
-    return listaDa(s.dim).find((b) => b.key === s.key) ?? report.totals;
+    if (temCombos) return somar(recorte);
+    const d = DIMS.find((x) => filtroAtivo[x]);
+    if (!d) return report.totals;
+    return listaCrua(d).find((b) => b.key === filtroAtivo[d]) ?? report.totals;
   });
 
   // O recorte também se lê pelo rótulo: com um provedor de conta selecionado, o aviso dizia
   // "Recorte: provedor anthropic:758a9521-…".
-  const rotuloSel = $derived(selAtivo ? rot(foco) : '');
+  const descricaoFiltro = $derived([
+    ...DIMS.filter((d) => filtroAtivo[d])
+      .map((d) => `${NOME_DIM[d]} ${rotulos.get(filtroAtivo[d] as string) ?? filtroAtivo[d]}`),
+    ...(filtroAtivo.subagente === undefined
+      ? [] : [filtroAtivo.subagente ? 'só subagente' : 'só conversa']),
+  ].join(' · '));
 
   function alternar(dim: Dim, key: string) {
-    sel = sel && sel.dim === dim && sel.key === key ? null : { dim, key };
+    filtro = { ...filtro, [dim]: filtro[dim] === key ? undefined : key };
+  }
+  function setFiltro(dim: Dim, valor: string) {
+    filtro = { ...filtro, [dim]: valor || undefined };
   }
   function limpar() {
-    sel = null;
-    tiposOff = new Set();
+    filtro = {};
+    camadasOff = new Set();
   }
+
+  const sess = (n: number) => `${n} ${n === 1 ? 'sessão' : 'sessões'}`;
 
   const diasDoPeriodo = $derived(
     PERIODOS.find((p) => p.id === period)!.dias || report.by_day.length || 1,
@@ -154,7 +207,7 @@
   // Delta vs. a janela anterior — só sem recorte: `anterior` é o total da malha, e compará-lo
   // com o custo de UM projeto daria uma queda inventada.
   const delta = $derived.by(() => {
-    if (selAtivo || !report.anterior || report.anterior.cost <= 0) return '';
+    if (temFiltro || !report.anterior || report.anterior.cost <= 0) return '';
     const d = ((report.totals.cost - report.anterior.cost) / report.anterior.cost) * 100;
     if (Math.abs(d) < 1) return 'igual ao período anterior';
     const rot = PERIODOS.find((p) => p.id === period)!.label;
@@ -164,17 +217,46 @@
   });
 
   // ── Série do gráfico ────────────────────────────────────────────────────────
+  // Com detalhamento, cada dia é empilhado por FONTE — o cruzamento dia × fonte, que os `by_*`
+  // não carregavam (é por isso que a tela empilhava por tipo de token). Sem detalhamento, o
+  // `by_day` sozinho só responde a quebra por tipo, e é nela que o gráfico cai.
+  const camadas = $derived(
+    temCombos
+      ? agruparPor(recorte, 'source')
+          .map((b) => ({ id: b.key, label: b.key, slot: corDaFonte(b.key) }))
+      : TIPOS.map((t) => ({ id: t.id as string, label: t.label, slot: t.slot })),
+  );
+  const camadasVisiveis = $derived(camadas.filter((c) => !camadasOff.has(c.id)));
+
+  interface DiaSerie { key: string; bucket: DimBucket; custos: Map<string, number> }
   // `fillDayGaps` devolve os buckets originais nos dias com registro e um zero magro nos buracos.
-  // Recupero o DimBucket completo pelo mapa: dia sem sessão é dia de gasto ZERO, não dia
-  // inexistente — sem isso um fim de semana parado some e o eixo mente sobre o ritmo.
-  const serie = $derived.by(() => {
-    const mapa = new Map(report.by_day.map((b) => [b.key, b]));
-    const zeroDia = (key: string): DimBucket => ({ ...vazio(), key });
-    return fillDayGaps(report.by_day)
+  // Recupero o dia completo pelo mapa: dia sem sessão é dia de gasto ZERO, não dia inexistente —
+  // sem isso um fim de semana parado some e o eixo mente sobre o ritmo.
+  const serie = $derived.by<DiaSerie[]>(() => {
+    let dias: DiaSerie[];
+    if (temCombos) {
+      const porDia = new Map<string, ComboRow[]>();
+      for (const c of recorte) {
+        const l = porDia.get(c.dia);
+        if (l) l.push(c); else porDia.set(c.dia, [c]);
+      }
+      dias = [...porDia].map(([key, linhas]) => ({
+        key, bucket: { ...somar(linhas), key },
+        custos: new Map(agruparPor(linhas, 'source').map((b) => [b.key, b.cost])),
+      })).sort((a, b) => b.key.localeCompare(a.key));
+    } else {
+      dias = report.by_day.map((b) => ({
+        key: b.key, bucket: b,
+        custos: new Map<string, number>(TIPOS.map((t) => [t.id as string, custoDe(b, t.id)])),
+      }));
+    }
+    const mapa = new Map(dias.map((d) => [d.key, d]));
+    const zeroDia = (key: string): DiaSerie =>
+      ({ key, bucket: { ...vazio(), key }, custos: new Map() });
+    return fillDayGaps(dias.map((d) => d.bucket))
       .map((b) => mapa.get(b.key) ?? zeroDia(b.key))
-      .reverse(); // by_day vem desc; o eixo do tempo anda pra frente
+      .reverse(); // os dias vêm desc; o eixo do tempo anda pra frente
   });
-  const tiposVisiveis = $derived(TIPOS.filter((t) => !tiposOff.has(t.id)));
   const rotuloDia = (k: string) => `${k.slice(8)}/${k.slice(5, 7)}`;
 
   // Largura MEDIDA do contêiner, nunca um viewBox esticado: com preserveAspectRatio="none" o
@@ -187,9 +269,9 @@
     const padL = W < 480 ? 46 : 56;
     const colunas = dias.map((d) => {
       let acc = 0;
-      const segs = tiposVisiveis.map((t) => {
-        const c = custoDe(d, t.id);
-        const seg = { slot: t.slot, label: t.label, base: acc, cost: c };
+      const segs = camadasVisiveis.map((cam) => {
+        const c = d.custos.get(cam.id) ?? 0;
+        const seg = { slot: cam.slot, label: cam.label, base: acc, cost: c };
         acc += c;
         return seg;
       }).filter((s) => s.cost > 0);
@@ -227,14 +309,27 @@
   });
 
   // ── Painéis ─────────────────────────────────────────────────────────────────
+  // Cada ranking é a SUA dimensão cruzada com os outros filtros — clicar num projeto reescreve o
+  // "Por fonte" com as fontes daquele projeto, que é a pergunta que a fase 1 não respondia.
+  const provedores = $derived(listaDa('provider'));
+  const fontes = $derived(listaDa('source'));
+  const projetos = $derived(listaDa('project'));
+  const modelos = $derived(listaDa('model'));
+
   const fatias = $derived(
     TIPOS.map((t) => ({ ...t, cost: custoDe(foco, t.id), toks: tokensDe(foco, t.id) })),
   );
   const economia = $derived(report.custo_sem_cache - report.totals.cost);
   const taxaCache = $derived(brutos(report.totals) > 0 ? report.totals.cache_read / brutos(report.totals) : 0);
 
+  // Quanto do recorte veio de subagente — o gasto que ficava misturado com a conversa até esta
+  // fase. Só faz sentido com o filtro de subagente em "tudo": ativo, o recorte JÁ é um dos lados.
+  const custoSubagente = $derived(
+    temCombos && filtroAtivo.subagente === undefined
+      ? somar(filtrar(recorte, { subagente: true })).cost : 0);
+
   // Partição + régua em lib/costs.ts, com teste: a garantia é "esconder não muda total nenhum".
-  const partido = $derived(partirOcultos(report.by_project, ocultos));
+  const partido = $derived(partirOcultos(projetos, ocultos));
   const projetosOcultos = $derived(partido.escondidos);
   const picoProjeto = $derived(partido.pico);
   const TETO_PROJETOS = 12;
@@ -243,9 +338,13 @@
 
   // Pico pelo MAIOR da lista, não pelo primeiro item: presumir que a lista já veio ordenada
   // acopla a barra a uma garantia que mora noutro arquivo (`ordenar`, em lib/costs.ts).
-  const picoProvedor = $derived(Math.max(1, ...report.by_provider.map((b) => b.cost)));
-  const picoFonte = $derived(Math.max(1, ...report.by_source.map((b) => b.cost)));
-  const picoModelo = $derived(Math.max(1, ...report.by_model.map((b) => b.cost)));
+  const picoProvedor = $derived(Math.max(1, ...provedores.map((b) => b.cost)));
+  const picoFonte = $derived(Math.max(1, ...fontes.map((b) => b.cost)));
+  const picoModelo = $derived(Math.max(1, ...modelos.map((b) => b.cost)));
+  // "% conta" da tabela por modelo é dentro do RECORTE, não da malha inteira: com um projeto
+  // escolhido, as linhas já são só daquele projeto, e dividir pelo total global daria percentuais
+  // que nunca somam 100 sem nada dizer a respeito.
+  const totalModelos = $derived(modelos.reduce((t, b) => t + b.cost, 0));
 
   // `has` = existe preço; `get` = qual preço (null com mais de um provedor). Ver tarifasPorModelo.
   const tarifas = $derived(tarifasPorModelo(report.rates));
@@ -257,9 +356,12 @@
   const mFoco = (n: number) => (semTarifa ? '—' : m(n));
   const m2Foco = (n: number) => (semTarifa ? '—' : m2(n));
 
-  // Ressalva dos painéis que NÃO obedecem ao recorte. Sem ela, "Gasto por dia" com um recorte
-  // ativo se lê como "gasto por dia DO recorte" — o número está certo e o rótulo engana.
-  const RESSALVA = ' Sempre o período inteiro: o servidor manda o total de cada dimensão, não o cruzamento entre elas.';
+  // Ressalva dos painéis que NÃO obedecem ao recorte. Com detalhamento eles obedecem, e a ressalva
+  // some — ela só sobra pro servidor da malha em versão antiga, onde de fato só existe o total de
+  // cada dimensão. Sem ela ali, "Gasto por dia" com recorte ativo se lê como "gasto por dia DO
+  // recorte": o número está certo e o rótulo engana.
+  const RESSALVA = $derived(temCombos ? ''
+    : ' Sempre o período inteiro: sem o detalhamento do servidor só existe o total de cada dimensão, não o cruzamento entre elas.');
   // O painel de cache segue no período inteiro por OUTRO motivo — `custo_sem_cache` é um escalar
   // global, não uma dimensão —, então a ressalva dele é a própria. (Espaço na string: Svelte come
   // o espaço que fica colado no `{#if}`, e "cache.Sempre" saía grudado.)
@@ -279,44 +381,64 @@
       {/each}
     </span>
 
+    <!-- Cada seletor lista a SUA dimensão cruzada com os outros filtros (listaDa), então o custo ao
+         lado de cada opção já é o do recorte — e a lista continua completa, porque listaDa nunca
+         aplica o filtro da própria dimensão. -->
     <span class="fgroup">
       <span class="flabel" id="lbl-prov">provedor</span>
-      <select aria-labelledby="lbl-prov" value={selAtivo?.dim === 'provider' ? selAtivo.key : ''}
-        onchange={(e) => { const v = e.currentTarget.value; sel = v ? { dim: 'provider', key: v } : null; }}>
-        <option value="">todos ({report.by_provider.length})</option>
-        {#each report.by_provider as b}<option value={b.key}>{rot(b)} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
+      <select aria-labelledby="lbl-prov" value={filtroAtivo.provider ?? ''}
+        onchange={(e) => setFiltro('provider', e.currentTarget.value)}>
+        <option value="">todos ({provedores.length})</option>
+        {#each provedores as b}<option value={b.key}>{rot(b)} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
       </select>
     </span>
 
     <span class="fgroup">
       <span class="flabel" id="lbl-fonte">fonte</span>
-      <select aria-labelledby="lbl-fonte" value={selAtivo?.dim === 'source' ? selAtivo.key : ''}
-        onchange={(e) => { const v = e.currentTarget.value; sel = v ? { dim: 'source', key: v } : null; }}>
-        <option value="">todas ({report.by_source.length})</option>
-        {#each report.by_source as b}<option value={b.key}>{b.key} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
+      <select aria-labelledby="lbl-fonte" value={filtroAtivo.source ?? ''}
+        onchange={(e) => setFiltro('source', e.currentTarget.value)}>
+        <option value="">todas ({fontes.length})</option>
+        {#each fontes as b}<option value={b.key}>{b.key} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
       </select>
     </span>
 
     <span class="fgroup">
       <span class="flabel" id="lbl-proj">projeto</span>
-      <select aria-labelledby="lbl-proj" value={selAtivo?.dim === 'project' ? selAtivo.key : ''}
-        onchange={(e) => { const v = e.currentTarget.value; sel = v ? { dim: 'project', key: v } : null; }}>
-        <option value="">todos ({report.by_project.length})</option>
-        {#each report.by_project as b}<option value={b.key}>{b.key} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
+      <select aria-labelledby="lbl-proj" value={filtroAtivo.project ?? ''}
+        onchange={(e) => setFiltro('project', e.currentTarget.value)}>
+        <option value="">todos ({projetos.length})</option>
+        {#each projetos as b}<option value={b.key}>{b.key} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
       </select>
     </span>
 
     <span class="fgroup">
       <span class="flabel" id="lbl-mod">modelo</span>
-      <select aria-labelledby="lbl-mod" value={selAtivo?.dim === 'model' ? selAtivo.key : ''}
-        onchange={(e) => { const v = e.currentTarget.value; sel = v ? { dim: 'model', key: v } : null; }}>
-        <option value="">todos ({report.by_model.length})</option>
-        <!-- Mesma regra da tabela: modelo sem tarifa não vale "US$ 0,00" nem aqui. -->
-        {#each report.by_model as b}
-          <option value={b.key}>{b.key} — {tarifas.has(b.key) ? m(b.cost) : '—'}</option>
+      <select aria-labelledby="lbl-mod" value={filtroAtivo.model ?? ''}
+        onchange={(e) => setFiltro('model', e.currentTarget.value)}>
+        <option value="">todos ({modelos.length})</option>
+        <!-- Mesma regra da tabela: modelo sem tarifa não vale "US$ 0,00" nem aqui. E o traço
+             sozinho, num rótulo que já tem um travessão separador, saía "claude-sonnet-4 — —". -->
+        {#each modelos as b}
+          <option value={b.key}>{b.key} — {tarifas.has(b.key) ? m(b.cost) : 'sem tarifa'}</option>
         {/each}
       </select>
     </span>
+
+    <!-- Subagente é a única dimensão que não é uma lista: é um recorte de três estados. Só existe
+         com detalhamento — os `by_*` já vêm somados com o subagente dentro. -->
+    {#if temCombos}
+      <span class="fgroup">
+        <span class="flabel">subagente</span>
+        <span class="seg" role="group" aria-label="Subagente">
+          <button aria-pressed={filtroAtivo.subagente === undefined}
+            onclick={() => (filtro = { ...filtro, subagente: undefined })}>tudo</button>
+          <button aria-pressed={filtroAtivo.subagente === false}
+            onclick={() => (filtro = { ...filtro, subagente: false })}>só conversa</button>
+          <button aria-pressed={filtroAtivo.subagente === true}
+            onclick={() => (filtro = { ...filtro, subagente: true })}>só subagente</button>
+        </span>
+      </span>
+    {/if}
 
     <span class="seg" role="group" aria-label="Moeda">
       <button aria-pressed={currency === 'USD'} onclick={() => setCurrency('USD')}>US$</button>
@@ -349,12 +471,18 @@
     </p>
   {/if}
 
-  {#if selAtivo}
+  {#if temFiltro}
     <p class="recorte">
-      Recorte: <b>{NOME_DIM[selAtivo.dim]} {rotuloSel}</b> — os números do topo e a quebra por
-      tipo de token são deste recorte. Os painéis abaixo continuam no período inteiro: o servidor
-      manda o total de cada dimensão, não o cruzamento entre elas.
-      <button class="retry" onclick={() => (sel = null)}>tirar recorte</button>
+      Recorte: <b>{descricaoFiltro}</b> —
+      {#if temCombos}a tela inteira é deste recorte, menos os três números que o servidor só
+        calcula no total do período (equivalente cobrado, economia do cache e a comparação com o
+        período anterior).
+      {:else}os números do topo e a quebra por tipo de token são deste recorte. Os painéis abaixo
+        continuam no período inteiro: sem o detalhamento do servidor só existe o total de cada
+        dimensão, não o cruzamento entre elas.
+      {/if}
+      <!-- Só o recorte: a legenda do gráfico é escolha à parte, e apagá-la aqui surpreende. -->
+      <button class="retry" onclick={() => (filtro = {})}>tirar recorte</button>
     </p>
   {/if}
 
@@ -371,9 +499,15 @@
              custou nada". -->
         <dd class="hero" class:tracinho={semTarifa}>{mFoco(foco.cost)}</dd>
         <div class="foot">
-          {m2Foco(foco.cost)} · {foco.sessions} sessões · {m2Foco(foco.cost / diasDoPeriodo)}/dia
+          {m2Foco(foco.cost)} · {sess(foco.sessions)} · {m2Foco(foco.cost / diasDoPeriodo)}/dia
         </div>
         {#if semTarifa}<div class="foot">sem tarifa conhecida — só o volume é medido</div>{/if}
+        <!-- O gasto de subagente ficava misturado com o da conversa: a fase 1 não tinha como
+             separá-los. Só aparece com o filtro em "tudo" — ativo, o número acima JÁ é um dos
+             dois lados e a fração seria 0% ou 100%. -->
+        {#if custoSubagente > 0 && foco.cost > 0}
+          <div class="foot">{pct(custoSubagente, foco.cost)} veio de subagente</div>
+        {/if}
         {#if delta}<div class="foot">{delta}</div>{/if}
       </div>
       <div class="kpi">
@@ -385,17 +519,17 @@
         <dt>equivalente cobrado</dt>
         <!-- Vem do servidor: depende da tarifa de cada modelo, que o front não tem. Existe só
              pro total do período — dentro de um recorte, traço, nunca o número global. -->
-        <dd>{selAtivo ? '—' : tok(report.equivalente_cobrado)}</dd>
+        <dd>{temFiltro ? '—' : tok(report.equivalente_cobrado)}</dd>
         <div class="foot">
-          {#if selAtivo}só no total do período
+          {#if temFiltro}só no total do período
           {:else}{pct(report.equivalente_cobrado, brutos(report.totals))} do bruto — o resto é cache barato{/if}
         </div>
       </div>
       <div class="kpi">
         <dt>economia do cache</dt>
-        <dd>{selAtivo ? '—' : m(economia)}</dd>
+        <dd>{temFiltro ? '—' : m(economia)}</dd>
         <div class="foot">
-          {#if selAtivo}só no total do período
+          {#if temFiltro}só no total do período
           {:else}{m2(economia)} · {report.custo_sem_cache > 0
             ? dec(100 - (report.totals.cost / report.custo_sem_cache) * 100, 0)
             : 0}% abaixo do preço cheio{/if}
@@ -405,24 +539,28 @@
 
     <div class="card">
       <h2>Gasto por dia</h2>
-      <p class="hint">Empilhado por tipo de token. Cada coluna é um dia.{#if selAtivo}{RESSALVA}{/if}</p>
+      <p class="hint">
+        Empilhado por {temCombos ? 'fonte' : 'tipo de token'}. Cada coluna é um
+        dia.{#if temFiltro}{RESSALVA}{/if}
+      </p>
       <div class="legend">
-        {#each TIPOS as t}
-          <button aria-pressed={!tiposOff.has(t.id)}
+        {#each camadas as c}
+          <button aria-pressed={!camadasOff.has(c.id)}
             onclick={() => {
-              const s = new Set(tiposOff);
-              if (s.has(t.id)) s.delete(t.id); else s.add(t.id);
-              if (s.size === TIPOS.length) s.clear();
-              tiposOff = s;
+              const s = new Set(camadasOff);
+              if (s.has(c.id)) s.delete(c.id); else s.add(c.id);
+              if (s.size === camadas.length) s.clear();
+              camadasOff = s;
             }}>
-            <span class="swatch" style="background: var({t.slot})"></span>{t.label}
+            <span class="swatch" style="background: var({c.slot})"></span>{c.label}
           </button>
         {/each}
       </div>
       <div class="chartbox" bind:clientWidth={larguraGrafico}>
         {#if serie.length}
           <svg viewBox="0 0 {grafico.W} {grafico.H}" width={grafico.W} height={grafico.H}
-            role="img" aria-label="Gasto por dia, empilhado por tipo de token">
+            role="img"
+            aria-label="Gasto por dia, empilhado por {temCombos ? 'fonte' : 'tipo de token'}">
             {#each grafico.linhas as g}
               <line class="grid-line" x1={grafico.padL} x2={grafico.W} y1={grafico.yDe(g)} y2={grafico.yDe(g)} />
               <text x={grafico.padL - 8} y={grafico.yDe(g) + 3} text-anchor="end">{m(g)}</text>
@@ -455,7 +593,7 @@
       <p class="caption">
         {#if diaSobHover !== null && grafico.barras[diaSobHover]}
           {@const b = grafico.barras[diaSobHover]}
-          <b>{rotuloDia(b.dia.key)}</b> · {m2(b.total)} · {b.dia.sessions} sessões
+          <b>{rotuloDia(b.dia.key)}</b> · {m2(b.total)} · {sess(b.dia.bucket.sessions)}
           {#each b.segs as s}<span class="cap-seg"><i class="swatch" style="background: var({s.slot})"></i>{s.label} {m2(s.cost)}</span>{/each}
         {:else}
           passe o mouse ou toque numa coluna para o detalhe do dia
@@ -471,9 +609,10 @@
              vazia que se lê como "nada custou". Some, e a tabela abaixo fica só com o volume. -->
         {#if semTarifa}
           <!-- Sem recorte o traço também é possível (malha inteira sem um modelo com tarifa), e aí
-               `selAtivo` é null — o texto tem que continuar dizendo do que ele fala. -->
+               não há filtro nenhum — o texto tem que continuar dizendo do que ele fala. -->
           <p class="hint">
-            Sem tarifa conhecida para <b>{selAtivo ? rotuloSel : 'nenhum modelo do período'}</b>
+            Sem tarifa conhecida para
+            <b>{temFiltro ? descricaoFiltro : 'nenhum modelo do período'}</b>
             — aqui só o volume é medido.
           </p>
         {:else}
@@ -504,7 +643,7 @@
 
       <div class="card">
         <h2>O que o cache economizou</h2>
-        <p class="hint">Os mesmos tokens, se nenhum fosse cache.{#if selAtivo}{RESSALVA_CACHE}{/if}</p>
+        <p class="hint">Os mesmos tokens, se nenhum fosse cache.{#if temFiltro}{RESSALVA_CACHE}{/if}</p>
         <div class="cmp">
           <div class="cmprow"><span class="dim">pago de verdade</span><b>{m2(report.totals.cost)}</b></div>
           <div class="cmptrack">
@@ -523,11 +662,11 @@
     <div class="cols">
       <div class="card">
         <h2>Por provedor</h2>
-        <p class="hint">Quem cobra a conta. Um provedor atravessa várias fontes.{#if selAtivo}{RESSALVA}{/if}</p>
+        <p class="hint">Quem cobra a conta. Um provedor atravessa várias fontes.{#if temFiltro}{RESSALVA}{/if}</p>
         <div class="rank">
-          {#each report.by_provider as b}
+          {#each provedores as b}
             <div class="row">
-              <button aria-pressed={selAtivo?.dim === 'provider' && selAtivo.key === b.key}
+              <button aria-pressed={filtroAtivo.provider === b.key}
                 onclick={() => alternar('provider', b.key)}>
                 <span class="nm">{rot(b)}</span><span class="vl">{custoDesconhecido(b) ? '—' : m2(b.cost)}</span>
                 <span class="track" style="width: {Math.max(1.5, (b.cost / picoProvedor) * 100)}%">
@@ -543,11 +682,11 @@
 
       <div class="card">
         <h2>Por fonte</h2>
-        <p class="hint">Qual agente rodou. Uma fonte usa vários provedores.{#if selAtivo}{RESSALVA}{/if}</p>
+        <p class="hint">Qual agente rodou. Uma fonte usa vários provedores.{#if temFiltro}{RESSALVA}{/if}</p>
         <div class="rank">
-          {#each report.by_source as b}
+          {#each fontes as b}
             <div class="row">
-              <button aria-pressed={selAtivo?.dim === 'source' && selAtivo.key === b.key}
+              <button aria-pressed={filtroAtivo.source === b.key}
                 onclick={() => alternar('source', b.key)}>
                 <span class="nm">{b.key}</span><span class="vl">{custoDesconhecido(b) ? '—' : m2(b.cost)}</span>
                 <span class="track" style="width: {Math.max(1.5, (b.cost / picoFonte) * 100)}%">
@@ -565,12 +704,12 @@
     <div class="card">
       <h2>Por projeto</h2>
       <p class="hint">
-        A pasta onde a sessão rodou. Clique para recortar; o × tira da lista sem tirar da conta.{#if selAtivo}{RESSALVA}{/if}
+        A pasta onde a sessão rodou. Clique para recortar; o × tira da lista sem tirar da conta.{#if temFiltro}{RESSALVA}{/if}
       </p>
       <div class="rank">
         {#each projetosNoTeto as b}
           <div class="row">
-            <button aria-pressed={selAtivo?.dim === 'project' && selAtivo.key === b.key}
+            <button aria-pressed={filtroAtivo.project === b.key}
               title="clique para recortar" onclick={() => alternar('project', b.key)}>
               <span class="nm">{b.key}</span><span class="vl">{custoDesconhecido(b) ? '—' : m2(b.cost)}</span>
               <span class="track" style="width: {Math.max(1.5, (b.cost / picoProjeto) * 100)}%">
@@ -611,7 +750,7 @@
          1280px, e as duas colunas que importam (% e custo) eram as cortadas. -->
     <div class="card">
       <h2>Por modelo</h2>
-      <p class="hint">Com a tarifa aplicada e de onde ela veio. Clique para recortar.{#if selAtivo}{RESSALVA}{/if}</p>
+      <p class="hint">Com a tarifa aplicada e de onde ela veio. Clique para recortar.{#if temFiltro}{RESSALVA}{/if}</p>
       <div class="twrap">
         <table class="data">
           <thead>
@@ -622,7 +761,7 @@
             </tr>
           </thead>
           <tbody>
-            {#each report.by_model as b}
+            {#each modelos as b}
               <!-- Duas perguntas diferentes: `comPreco` é "existe tarifa?" (manda no custo e no %,
                    que o backend só calcula quando há preço); `t` é "qual tarifa mostrar?", e vem
                    null quando o mesmo modelo aparece em mais de um provedor — aí o custo da linha
@@ -634,7 +773,7 @@
                    sai com o volume dos DOIS e o custo de UM, e sem marca isso lê como preço
                    completo. Só acontece na mescla — dentro de um servidor é impossível. -->
               {@const parcial = precoParcial(b.key, comPreco, report.sem_tarifa)}
-              <tr class="click" aria-selected={selAtivo?.dim === 'model' && selAtivo.key === b.key}
+              <tr class="click" aria-selected={filtroAtivo.model === b.key}
                 onclick={() => alternar('model', b.key)}>
                 <td>{b.key}{#if !comPreco}<span class="tag">sem tarifa</span>{:else if parcial}<span
                   class="tag" title="um servidor da malha não conhece a tarifa deste modelo — o volume dele conta, o custo não">preço parcial</span>{/if}</td>
@@ -643,7 +782,7 @@
                 <td class="n">{tok(b.cache_read)}</td>
                 <td class="n dim">{t ? `${dec(t.input, 2)}/${dec(t.output, 2)}` : '—'}</td>
                 <td class="n dim">{t ? t.origin : '—'}{#if t?.cache_estimado}<span class="tag">cache estimado</span>{/if}</td>
-                <td class="n dim">{comPreco ? pct(b.cost, report.totals.cost) : '—'}</td>
+                <td class="n dim">{comPreco ? pct(b.cost, totalModelos) : '—'}</td>
                 <!-- Sem tarifa mostra TRAÇO, nunca US$ 0,00: zero afirma "não custou nada", que é
                      uma mentira diferente de "não sei o preço". -->
                 <td class="c">{#if comPreco}{m2(b.cost)}{:else}<span class="tracinho">—</span>{/if}</td>
@@ -670,7 +809,8 @@
         {#if currency === 'BRL' && rate}<b>Cotação</b> US$ 1 = R$ {dec(rate, 2)}.<br />{/if}
         Custo de tabela da API, <b>não é fatura</b>: plano de assinatura não cobra por token.
         {#if report.sem_tarifa.length}
-          <br />{report.sem_tarifa.length} modelo(s) sem tarifa conhecida
+          <br />{report.sem_tarifa.length}
+          {report.sem_tarifa.length === 1 ? 'modelo' : 'modelos'} sem tarifa conhecida
           ({report.sem_tarifa.join(', ')}) — aparecem com traço, nunca estimados.
         {/if}
       </p>

@@ -298,6 +298,29 @@ export interface DimBucket {
   cost_cache_read: number;
 }
 
+// Uma linha por combinação que REALMENTE aconteceu (dia × provedor × fonte × projeto × modelo ×
+// subagente). É o que os `by_*` perdem ao somar: depois de somado não dá pra separar "quanto
+// daquele projeto foi de tal fonte". Esparso na prática — o número de combinações que existem é
+// uma fração ínfima do produto das dimensões.
+export interface ComboRow {
+  dia: string;
+  provider: string;
+  source: string;
+  project: string;
+  model: string;
+  subagente: boolean;
+  sessions: number;
+  input: number;
+  output: number;
+  cache_write: number;
+  cache_read: number;
+  cost: number;
+  cost_input: number;
+  cost_output: number;
+  cost_cache_write: number;
+  cost_cache_read: number;
+}
+
 export interface KindBucket {
   kind: string; // "input" | "output" | "cache_write" | "cache_read"
   tokens: number;
@@ -343,6 +366,9 @@ export interface CostReport {
   // Totais da janela imediatamente ANTERIOR, do mesmo tamanho — a régua do "subiu ou desceu".
   // null quando não dá pra comparar (period=all, ou janela anterior com pouco registro).
   anterior: DimBucket | null;
+  // Detalhamento cruzado. OPCIONAL porque servidor da malha em versão antiga não manda: sem ele a
+  // tela cai no recorte de uma dimensão só, a partir dos `by_*`.
+  combos?: ComboRow[];
   applied: Applied;
   usd_brl: number | null;
 }
