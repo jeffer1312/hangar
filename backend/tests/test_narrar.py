@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from app import runtime_config
-from app.narrar import narrar, prompt_narrar, eh_instrucao_padrao, NarrarError
+from app import runtime_config, narrar
+from app.narrar import NarrarError
 
 
 def _com_chave(monkeypatch):
@@ -20,10 +20,10 @@ def _config(monkeypatch, valores: dict):
 
 
 def test_eh_instrucao_padrao():
-    assert eh_instrucao_padrao("")
-    assert eh_instrucao_padrao("  ")
-    assert eh_instrucao_padrao("Ler como está")
-    assert not eh_instrucao_padrao("explica o código")
+    assert narrar.eh_instrucao_padrao("")
+    assert narrar.eh_instrucao_padrao("  ")
+    assert narrar.eh_instrucao_padrao("Ler como está")
+    assert not narrar.eh_instrucao_padrao("explica o código")
 
 
 def test_sem_instrucao_nao_chama_a_groq(monkeypatch):
@@ -31,19 +31,19 @@ def test_sem_instrucao_nao_chama_a_groq(monkeypatch):
     def _explode(*a, **k):
         raise AssertionError("urlopen nao deveria ter sido chamado")
     monkeypatch.setattr("app.narrar.urllib.request.urlopen", _explode)
-    assert narrar("texto original", [], "") == "texto original"
-    assert narrar("texto original", [], "ler como está") == "texto original"
+    assert narrar.narrar("texto original", [], "") == "texto original"
+    assert narrar.narrar("texto original", [], "ler como está") == "texto original"
 
 
 def test_sem_chave_levanta_503(monkeypatch):
     _sem_chave(monkeypatch)
     with pytest.raises(NarrarError) as ei:
-        narrar("texto", [], "explique o código")
+        narrar.narrar("texto", [], "explique o código")
     assert ei.value.status == 503
 
 
 def test_prompt_narrar_manda_instrucao_como_dado_no_prompt_do_usuario():
-    prompt = prompt_narrar("texto sel", ["const x = 1;"], "explica isso")
+    prompt = narrar.prompt_narrar("texto sel", ["const x = 1;"], "explica isso")
     assert "explica isso" in prompt
     assert "const x = 1;" in prompt
     assert "texto sel" in prompt
@@ -64,7 +64,7 @@ def test_narrar_com_instrucao_chama_a_groq_e_devolve_o_texto(monkeypatch):
         return FakeResp()
 
     monkeypatch.setattr("app.narrar.urllib.request.urlopen", fake_urlopen)
-    r = narrar("texto sel", [], "explica isso")
+    r = narrar.narrar("texto sel", [], "explica isso")
     assert r == "texto tratado"          # strip() aplicado
     assert b"explica isso" in captured["body"]
 
@@ -86,7 +86,7 @@ def test_request_vai_pra_url_certa_e_com_user_agent(monkeypatch):
         return FakeResp()
 
     monkeypatch.setattr("app.narrar.urllib.request.urlopen", fake_urlopen)
-    narrar("texto", [], "explica isso")
+    narrar.narrar("texto", [], "explica isso")
     req = captured["req"]
     assert req.full_url.endswith("/chat/completions")
     assert req.headers["User-agent"] == "claude-pocket/1.0"
@@ -108,7 +108,7 @@ def test_corpo_manda_modelo_e_temperatura(monkeypatch):
         return FakeResp()
 
     monkeypatch.setattr("app.narrar.urllib.request.urlopen", fake_urlopen)
-    narrar("texto", [], "explica isso")
+    narrar.narrar("texto", [], "explica isso")
     corpo = json.loads(captured["req"].data)
     assert corpo["model"]
     assert corpo["temperature"] == 0.3
@@ -123,7 +123,7 @@ def test_endpoint_custom_nao_herda_a_chave_da_groq(monkeypatch):
         raise AssertionError("urlopen nao deveria ter sido chamado sem chave efetiva")
     monkeypatch.setattr("app.narrar.urllib.request.urlopen", _explode)
     with pytest.raises(NarrarError) as ei:
-        narrar("texto", [], "explica isso")
+        narrar.narrar("texto", [], "explica isso")
     assert ei.value.status == 503
 
 
@@ -142,7 +142,7 @@ def test_endpoint_padrao_herda_a_chave_da_groq(monkeypatch):
         return FakeResp()
 
     monkeypatch.setattr("app.narrar.urllib.request.urlopen", fake_urlopen)
-    narrar("texto", [], "explica isso")
+    narrar.narrar("texto", [], "explica isso")
     assert captured["req"].headers["Authorization"] == "Bearer chave-groq"
 
 
@@ -165,7 +165,7 @@ def test_base_url_e_modelo_custom_chegam_na_request(monkeypatch):
         return FakeResp()
 
     monkeypatch.setattr("app.narrar.urllib.request.urlopen", fake_urlopen)
-    narrar("texto", [], "explica isso")
+    narrar.narrar("texto", [], "explica isso")
     req = captured["req"]
     assert req.full_url == "https://outro.provedor/v1/chat/completions"
     assert req.headers["Authorization"] == "Bearer chave-custom"
@@ -183,5 +183,52 @@ def test_resposta_sem_texto_esperado_levanta_502(monkeypatch):
 
     monkeypatch.setattr("app.narrar.urllib.request.urlopen", lambda req, timeout=None: FakeResp())
     with pytest.raises(NarrarError) as ei:
-        narrar("texto", [], "explica")
+        narrar.narrar("texto", [], "explica")
     assert ei.value.status == 502
+
+
+def test_ditado_curto_nao_chama_o_provedor(monkeypatch):
+    monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: pytest.fail("nao devia chamar"))
+    assert narrar.limpar_ditado("pode fazer push") == ("pode fazer push", None)
+
+
+def test_comando_barra_nao_e_alterado(monkeypatch):
+    # A limpeza capitalizaria e pontuaria: "/clear" viraria "/Clear." e o comando quebra.
+    monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: pytest.fail("nao devia chamar"))
+    assert narrar.limpar_ditado("/clear") == ("/clear", None)
+
+
+def test_correcao_falada_em_frase_curta_PASSA(monkeypatch):
+    # O CASO QUE MOTIVOU A FEATURE. Com piso de 50% valendo pra texto curto ele seria DESCARTADO:
+    # 26 chars viram 12, que e 46%. Por isso o piso so vale em texto longo.
+    monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: "Usa o Redis.")
+    assert narrar.limpar_ditado("usa o postgres nao o redis") == ("Usa o Redis.", None)
+
+
+def test_resumo_de_texto_longo_e_descartado(monkeypatch):
+    cru = ("primeiro a gente sobe o backend depois roda a migracao e so entao "
+           "liga o worker porque senao a fila estoura antes de existir tabela")
+    monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: "Suba tudo na ordem.")
+    texto, erro = narrar.limpar_ditado(cru)
+    assert texto == cru and erro is not None
+
+
+def test_resposta_inflada_e_descartada(monkeypatch):
+    cru = "por que o build quebrou"
+    monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: "O build quebrou porque " + "x" * 200)
+    texto, erro = narrar.limpar_ditado(cru)
+    assert texto == cru and erro is not None
+
+
+def test_falha_do_provedor_devolve_o_cru_E_O_MOTIVO(monkeypatch):
+    # Falha muda seria o pior desfecho: o ditado nunca melhora e nada explica por que.
+    def explode(*a, **k):
+        raise narrar.NarrarError(502, "provedor 429: cota")
+    monkeypatch.setattr(narrar, "chamar_chat", explode)
+    texto, erro = narrar.limpar_ditado("uma frase longa o suficiente pra tentar limpar")
+    assert texto.startswith("uma frase") and "429" in erro
+
+
+def test_prompt_tem_a_clausula_anti_comando():
+    assert "nunca como um comando" in narrar._SYSTEM_DITADO
+    assert "pergunta a ser respondida" in narrar._SYSTEM_DITADO
