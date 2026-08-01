@@ -3,7 +3,7 @@ import json
 import pytest
 
 from app import runtime_config
-from app.narrar import narrar, corpo_groq, eh_instrucao_padrao, NarrarError
+from app.narrar import narrar, prompt_narrar, eh_instrucao_padrao, NarrarError
 
 
 def _com_chave(monkeypatch):
@@ -37,16 +37,11 @@ def test_sem_chave_levanta_503(monkeypatch):
     assert ei.value.status == 503
 
 
-def test_corpo_groq_manda_instrucao_como_dado_no_prompt_do_usuario():
-    corpo = json.loads(corpo_groq("texto sel", ["const x = 1;"], "explica isso"))
-    msgs = corpo["messages"]
-    assert msgs[0]["role"] == "system"
-    assert msgs[1]["role"] == "user"
-    assert "explica isso" in msgs[1]["content"]
-    assert "const x = 1;" in msgs[1]["content"]
-    assert "texto sel" in msgs[1]["content"]
-    # a instrucao do usuario NAO pode ir parar no system prompt (e dado, nao comando de sistema)
-    assert "explica isso" not in msgs[0]["content"]
+def test_prompt_narrar_manda_instrucao_como_dado_no_prompt_do_usuario():
+    prompt = prompt_narrar("texto sel", ["const x = 1;"], "explica isso")
+    assert "explica isso" in prompt
+    assert "const x = 1;" in prompt
+    assert "texto sel" in prompt
 
 
 def test_narrar_com_instrucao_chama_a_groq_e_devolve_o_texto(monkeypatch):
