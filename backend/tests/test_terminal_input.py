@@ -220,6 +220,85 @@ def test_sem_foto_previa_placeholder_nao_conta():
     assert r is not True
 
 
+# --- ramo de UMA LINHA + paste colapsado (bug medido 01/08: acima de ~800 chars numa linha so, o
+# Claude Code colapsa o texto em "[Pasted text #N ...]" e o texto real nunca e desenhado na tela).
+# O ramo multi-linha ja tira foto dos placeholders ANTES do envio (pastes_antes) e repassa pras duas
+# checagens; o ramo de uma linha nao tirava, entao a evidencia por placeholder ficava DESLIGADA
+# (_composer_residuo so aceita a prova quando pastes_antes != None) e a busca pela cauda visivel
+# falhava sempre -> "envio incompleto", nenhum Enter mandado.
+
+
+def test_send_prompt_uma_linha_paste_colapsado_envia(monkeypatch):
+    # Reproduz o bug ao vivo: texto de 1000 chars numa linha so, o pane devolve um placeholder NOVO
+    # (sem a cauda do texto visivel) depois do envio. Tem que resultar em Enter mandado e "sent" —
+    # hoje (antes do fix) devolve "partial" e nenhum Enter, porque o ramo de uma linha nao passa a
+    # foto pre-envio pras checagens.
+    clock = [1000.0]
+
+    def fake_sleep(s):
+        clock[0] += s
+
+    monkeypatch.setattr(terminal_input.time, "sleep", fake_sleep)
+    monkeypatch.setattr(terminal_input.time, "monotonic", lambda: clock[0])
+
+    texto = "x" * 1000  # 1 linha, > ~800 chars -> Claude Code colapsa em placeholder (medido)
+    estado = {"enviado": False, "enter": False}
+
+    def capture(name):
+        if not estado["enviado"]:
+            composer = []                                    # composer vazio, antes do envio
+        elif not estado["enter"]:
+            composer = ["❯ [Pasted text #1 +0 lines]"]        # colapsou; texto real NAO aparece
+        else:
+            composer = []                                    # Enter limpou o composer
+        return "\n".join(["banner", "", _REGUA_R] + composer + [_REGUA_R, "? for shortcuts"])
+
+    def fake_send_keys(name, keys, literal=False):
+        if literal and keys == texto:
+            estado["enviado"] = True
+        if keys == "Enter":
+            estado["enter"] = True
+        return True
+
+    with patch("app.terminal_input.tmux.has_session", return_value=True), \
+         patch.object(terminal_input, "_capture", side_effect=capture), \
+         patch.object(terminal_input, "send_keys", side_effect=fake_send_keys) as sk:
+        resultado = TerminalInput().send_prompt("cc", texto)
+
+    assert resultado == "sent"
+    assert call("cc", "Enter") in sk.call_args_list
+
+
+def test_send_prompt_uma_linha_placeholder_previo_nao_conta_como_entrega(monkeypatch):
+    # Caso irmao (protecao contra regressao na direcao oposta): placeholder que JA estava no
+    # composer ANTES do envio (rascunho do usuario) nao pode contar como a NOSSA entrega — e a
+    # razao de existir da foto pre-envio (ver comentario de terminal_input.py:198-203: aceitar
+    # placeholder alheio ja chegou a submeter texto de terceiro). Aqui o placeholder previo nunca
+    # some e a cauda nunca aparece -> tem que ficar "partial", sem Enter.
+    clock = [1000.0]
+
+    def fake_sleep(s):
+        clock[0] += s
+
+    monkeypatch.setattr(terminal_input.time, "sleep", fake_sleep)
+    monkeypatch.setattr(terminal_input.time, "monotonic", lambda: clock[0])
+
+    texto = "mensagem curta que nunca aparece no composer simulado"
+
+    def capture(name):
+        # placeholder #1 sempre presente (rascunho previo do usuario) — nao muda com o envio.
+        composer = ["❯ [Pasted text #1 +5 lines]"]
+        return "\n".join(["banner", "", _REGUA_R] + composer + [_REGUA_R, "? for shortcuts"])
+
+    with patch("app.terminal_input.tmux.has_session", return_value=True), \
+         patch.object(terminal_input, "_capture", side_effect=capture), \
+         patch.object(terminal_input, "send_keys", return_value=True) as sk:
+        resultado = TerminalInput().send_prompt("cc", texto)
+
+    assert resultado == "partial"
+    assert call("cc", "Enter") not in sk.call_args_list
+
+
 def test_send_prompt_pi_composer_vazio_envia(monkeypatch):
     # Regressao-trava: o gate novo do Pi NAO pode bloquear envio com composer vazio — o texto
     # tem que chegar no send_keys e o resultado ser "sent".
