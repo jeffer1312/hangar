@@ -116,3 +116,82 @@ def test_prosa_comecando_com_calling_nao_e_confundida_com_tool():
     out = extract_assistant_text(pane)
     assert "edge case" in out
     assert "não tem gráfico" in out
+
+
+PANE_PI_TOOL_DEPOIS_DA_PROSA = """● Fechei o wire e subi o commit; o back valida na sequência.
+
+● Bash cd "/home/jefferson/x" && dotnet run
+ └ pid 326487
+   t+35s: vivo
+
+✻ Unfurling… (7m 11s)
+"""
+
+
+def test_preview_pi_pula_bloco_de_tool_sem_parenteses():
+    # O Pi escreve "● Bash cd ..." SEM parenteses -> _TOOL_BLOCK_RE nao pega. Quem denuncia e a
+    # linha de resultado (`└`) logo abaixo. Sem isto o comando virava a previa e o bloco em voo
+    # trocava de altura a cada ferramenta (a conversa pulava no celular).
+    out = extract_assistant_text(PANE_PI_TOOL_DEPOIS_DA_PROSA, "pi")
+    assert out == "Fechei o wire e subi o commit; o back valida na sequência."
+
+
+def test_prosa_pi_que_termina_em_arvore_continua_sendo_prosa():
+    # Guarda contra o falso positivo: `└` DENTRO do proprio bloco (arvore desenhada na prosa) nao
+    # pode descartar o bloco -- previa vazia e pior que previa suja.
+    pane = "● Estrutura final:\n └ src/\n   └ wire.ts\n\n✻ Unfurling… (1s)\n"
+    assert extract_assistant_text(pane, "pi").startswith("Estrutura final:")
+
+
+def test_preview_claude_ignora_a_regra_do_pi():
+    # `└` na linha seguinte a um ● do Claude e prosa desenhando arvore: o marcador dele e `⎿`.
+    pane = "● Ficou assim:\n └ dist/\n\n✻ Thinking… (2s)\n"
+    assert extract_assistant_text(pane).startswith("Ficou assim:")
+
+
+def test_preview_pi_pula_grupo_de_bash_com_dois_pontos():
+    # Terceira forma medida no pane real (01/08): "● Bash: 2 done • ctrl+o to toggle" com os filhos
+    # em `├`. Dois-pontos no lugar do espaco, `├` no lugar do `└` -- mesma coisa, mesmo tratamento.
+    pane = (
+        "● Segue o resumo do que mudou no wire.\n"
+        "\n"
+        "● Bash: 2 done • ctrl+o to toggle\n"
+        " ├ ● grep -rn \"Adicionar\" src/\n"
+        " └ ● dotnet build\n"
+        "\n"
+        "✻ Unfurling… (2m)\n"
+    )
+    assert extract_assistant_text(pane, "pi") == "Segue o resumo do que mudou no wire."
+
+
+def test_preview_pi_pula_as_quatro_formas_de_cabecalho_de_tool():
+    # As quatro medidas no pane real (01/08/2026). Nenhuma casa com _TOOL_BLOCK_RE ("Nome(" colado);
+    # todas tem filho em box-drawing na linha de baixo -- e e so isso que a regra olha.
+    for cabecalho in (
+        'Bash cd "/home/jefferson/x" && dotnet run',
+        "Bash: 2 done • ctrl+o to toggle",
+        "Write  (81 lines)",
+        "Multiple Tools: 3 done • bash, chrome_devtools_navigate_page",
+    ):
+        pane = (
+            "● A prosa que deve sobreviver.\n"
+            "\n"
+            f"● {cabecalho}\n"
+            " └ pid 326487\n"
+            "\n"
+            "✻ Unfurling… (2m)\n"
+        )
+        assert extract_assistant_text(pane, "pi") == "A prosa que deve sobreviver.", cabecalho
+
+
+def test_painel_de_tarefas_do_pi_continua_chegando_na_previa():
+    # Mesma FORMA de uma ferramenta (cabecalho + filhos em box-drawing), mas e o unico bloco desses
+    # que o usuario quer ver -- a bolha o mostra dobrado. Sem a excecao, a regra estrutural o comia.
+    pane = (
+        "● Todos (11/13)\n"
+        "├─ ✓ Avisar back: revisar DDL\n"
+        "└─ +3 more (3 completed)\n"
+        "\n"
+        "✻ Unfurling… (2m)\n"
+    )
+    assert extract_assistant_text(pane, "pi").startswith("Todos (11/13)")
