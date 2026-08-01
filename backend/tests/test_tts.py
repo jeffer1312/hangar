@@ -19,13 +19,67 @@ def test_hash_estavel_para_o_mesmo_conteudo():
     assert tts.hash_de("oi", "v", "elevenlabs") == tts.hash_de("oi", "v", "elevenlabs")
 
 
-def test_corpo_elevenlabs_manda_normalizacao_explicita():
-    # apply_text_normalization NAO e default do provedor pro que a gente precisa: sem ele, "R$ 1.200"
-    # sai soletrado. Vai explicito pra nao depender do default mudar do outro lado.
+def test_hash_muda_com_ajuste_de_naturalidade():
+    # CRITICO: sem os ajustes na chave do cache, mexer na estabilidade e pedir pra ouvir de novo
+    # devolveria o audio ANTIGO, calado — pareceria que o controle nao faz nada.
+    sem_ajuste = tts.hash_de("oi", "voz1", "elevenlabs", {})
+    com_ajuste = tts.hash_de("oi", "voz1", "elevenlabs", {"stability": 0.3})
+    outro_ajuste = tts.hash_de("oi", "voz1", "elevenlabs", {"stability": 0.9})
+    assert len({sem_ajuste, com_ajuste, outro_ajuste}) == 3
+
+
+def test_ajustes_efetivos_ausente_nao_manda_chave(monkeypatch):
+    # Campo AUSENTE = usuario nunca tocou o slider (runtime_config.get devolve None de verdade —
+    # nao ha attr tts_stability em Settings). Tem que se comportar igual a "no padrao".
+    monkeypatch.setattr(tts.runtime_config, "get", lambda campo: None)
+    assert tts._ajustes_efetivos() == {}
+
+
+def test_ajustes_efetivos_igual_ao_padrao_nao_manda_chave(monkeypatch):
+    # O slider SEMPRE manda um numero real — nunca vazio. Arrastar de volta pro padrao da
+    # ElevenLabs (50/75/0/100) tem que dar no MESMO resultado que nunca ter tocado: sem isso, o
+    # simples gesto de "voltar ao padrao" fixaria voice_settings a toa no provedor.
+    config = {"tts_stability": 50, "tts_similarity_boost": 75, "tts_style": 0, "tts_speed": 100}
+    monkeypatch.setattr(tts.runtime_config, "get", lambda campo: config.get(campo))
+    assert tts._ajustes_efetivos() == {}
+
+
+def test_ajustes_efetivos_converte_inteiro_guardado_em_fracionario(monkeypatch):
+    config = {
+        "tts_stability": 30, "tts_similarity_boost": 90, "tts_style": 20, "tts_speed": 80,
+    }
+    monkeypatch.setattr(tts.runtime_config, "get", lambda campo: config.get(campo))
+    assert tts._ajustes_efetivos() == {
+        "stability": 0.3, "similarity_boost": 0.9, "style": 0.2, "speed": 0.8,
+    }
+
+
+def test_ajustes_efetivos_clampa_fora_da_faixa_da_elevenlabs(monkeypatch):
+    # Numero fora da faixa (ex: chegou de uma chamada de API externa) nao pode virar um pedido que
+    # a ElevenLabs so vai recusar depois de pago — clampa na faixa valida do provedor.
+    config = {"tts_stability": 500, "tts_speed": 5}   # 5.0 e 0.05, ambos fora da faixa
+    monkeypatch.setattr(tts.runtime_config, "get", lambda campo: config.get(campo))
+    ajustes = tts._ajustes_efetivos()
+    assert ajustes["stability"] == 1.0
+    assert ajustes["speed"] == 0.7
+
+
+def test_corpo_elevenlabs_manda_normalizacao_on():
+    # "on" (nao "auto"): e o que faz "R$ 1.200" virar "mil e duzentos reais" de forma CONFIAVEL,
+    # nao so quando o provedor acha que deve normalizar.
     corpo = json.loads(tts.corpo_elevenlabs("R$ 1.200", "eleven_multilingual_v2"))
     assert corpo["text"] == "R$ 1.200"
     assert corpo["model_id"] == "eleven_multilingual_v2"
-    assert corpo["apply_text_normalization"] == "auto"
+    assert corpo["apply_text_normalization"] == "on"
+    assert "voice_settings" not in corpo   # sem ajuste, a chave nem aparece
+
+
+def test_corpo_elevenlabs_manda_voice_settings_so_com_ajuste():
+    sem_ajuste = json.loads(tts.corpo_elevenlabs("oi", "eleven_multilingual_v2", {}))
+    assert "voice_settings" not in sem_ajuste
+
+    com_ajuste = json.loads(tts.corpo_elevenlabs("oi", "eleven_multilingual_v2", {"stability": 0.3}))
+    assert com_ajuste["voice_settings"] == {"stability": 0.3}
 
 
 def test_sintetizar_sem_chave_levanta_503(monkeypatch):
@@ -39,7 +93,7 @@ def test_sintetizar_sem_chave_levanta_503(monkeypatch):
 def test_sintetizar_usa_cache_e_nao_chama_o_provedor(monkeypatch, tmp_path):
     monkeypatch.setattr(tts, "_base_cache", lambda: tmp_path)
     chamadas = []
-    monkeypatch.setattr(tts, "_baixar_elevenlabs", lambda t, v: chamadas.append(1) or b"MP3")
+    monkeypatch.setattr(tts, "_baixar_elevenlabs", lambda t, v, a: chamadas.append(1) or b"MP3")
     monkeypatch.setattr(tts.runtime_config, "get", lambda campo: "chave" if campo == "elevenlabs_api_key" else "")
 
     h1, cache1, _ = tts.sintetizar("oi", "voz", "elevenlabs")
@@ -55,7 +109,7 @@ def test_cache_hit_renova_mtime(monkeypatch, tmp_path):
     # Sem isto, um trecho ouvido toda semana era apagado no 31o dia (contado da GRAVACAO, nao do
     # ultimo acesso) por _limpar_antigos e repago do provedor.
     monkeypatch.setattr(tts, "_base_cache", lambda: tmp_path)
-    monkeypatch.setattr(tts, "_baixar_elevenlabs", lambda t, v: b"MP3")
+    monkeypatch.setattr(tts, "_baixar_elevenlabs", lambda t, v, a: b"MP3")
     monkeypatch.setattr(tts.runtime_config, "get", lambda campo: "chave" if campo == "elevenlabs_api_key" else "")
 
     h, _, _ = tts.sintetizar("oi", "voz", "elevenlabs")
@@ -73,7 +127,7 @@ def test_cache_nao_deixa_arquivo_truncado(monkeypatch, tmp_path):
     monkeypatch.setattr(tts, "_base_cache", lambda: tmp_path)
     monkeypatch.setattr(tts.runtime_config, "get", lambda campo: "chave" if campo == "elevenlabs_api_key" else "")
 
-    def explode(texto, voz):
+    def explode(texto, voz, ajustes):
         raise tts.TtsError(502, "conexao caiu")
     monkeypatch.setattr(tts, "_baixar_elevenlabs", explode)
 
@@ -104,7 +158,7 @@ def test_hash_usa_voz_efetiva_nao_a_crua(monkeypatch, tmp_path):
     # voz="" com elevenlabs_voice_id X e voz="" com elevenlabs_voice_id Y tem que gerar hashes
     # DIFERENTES — senao trocar a voz configurada continua servindo audio da voz antiga do cache.
     monkeypatch.setattr(tts, "_base_cache", lambda: tmp_path)
-    monkeypatch.setattr(tts, "_baixar_elevenlabs", lambda t, v: b"MP3")
+    monkeypatch.setattr(tts, "_baixar_elevenlabs", lambda t, v, a: b"MP3")
 
     config = {"elevenlabs_api_key": "chave", "elevenlabs_voice_id": "voz_x"}
     monkeypatch.setattr(tts.runtime_config, "get", lambda campo: config.get(campo, ""))
@@ -164,7 +218,7 @@ def test_falha_ao_gravar_cache_vira_ttserror_500(monkeypatch, tmp_path):
     # Disco cheio/permissao negada na gravacao: o usuario ja pagou a chamada ao provedor e nao
     # pode levar um 500 sem detail nenhum (a rota so captura TtsError).
     monkeypatch.setattr(tts, "_base_cache", lambda: tmp_path)
-    monkeypatch.setattr(tts, "_baixar_elevenlabs", lambda t, v: b"MP3")
+    monkeypatch.setattr(tts, "_baixar_elevenlabs", lambda t, v, a: b"MP3")
     monkeypatch.setattr(tts.runtime_config, "get",
                         lambda campo: "chave" if campo == "elevenlabs_api_key" else "")
     monkeypatch.setattr(Path, "write_bytes", lambda self, data: (_ for _ in ()).throw(OSError("disco cheio")))

@@ -38,3 +38,17 @@ export function ouvirTexto(texto: string, confirmar: (msg: string) => Promise<bo
 
   void pedir(false);
 }
+
+/**
+ * Toca uma AMOSTRA já cortada (ver `cortarAmostra`) com uma voz explícita — a voz do RASCUNHO
+ * escolhida na tela de Config, não a salva. Sem `confirm`: a amostra é sempre curta (bem abaixo do
+ * limite de aviso), então não há susto de custo pra confirmar.
+ */
+export function ouvirAmostra(texto: string, voz: string): void {
+  if (!texto) { ttsPlayer.fail('não há texto pra ouvir'); return; }
+  if (ttsPlayer.loading) return;
+  ttsPlayer.unlock(texto);
+  sintetizarTts({ text: texto, voice: voz })
+    .then((r) => { ttsPlayer.playUrl(ttsAudioUrl(r.url), r.provider); })
+    .catch((e: Error) => { ttsPlayer.fail(e.message); });
+}

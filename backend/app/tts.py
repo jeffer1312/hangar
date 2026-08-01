@@ -41,9 +41,11 @@ def _base_cache() -> Path:
     return Path(settings.projects_dir).parent / CACHE_SUBDIR
 
 
-def hash_de(texto: str, voz: str, provedor: str) -> str:
-    """Chave do cache. Inclui voz e provedor: o mesmo texto em outra voz e outro audio."""
-    bruto = f"{provedor}\x00{voz}\x00{texto}".encode("utf-8")
+def hash_de(texto: str, voz: str, provedor: str, ajustes: dict[str, float] | None = None) -> str:
+    """Chave do cache. Inclui voz, provedor e os ajustes de naturalidade (stability etc): sem isso,
+    mexer na estabilidade e pedir pra ouvir de novo devolveria o audio ANTIGO do cache, calado."""
+    ajustes_str = json.dumps(ajustes or {}, sort_keys=True)
+    bruto = f"{provedor}\x00{voz}\x00{ajustes_str}\x00{texto}".encode("utf-8")
     return hashlib.sha256(bruto).hexdigest()
 
 
@@ -77,15 +79,21 @@ def caminho_do_cache(h: str) -> Path:
     return base / f"{h}.mp3"
 
 
-def corpo_elevenlabs(texto: str, modelo: str) -> bytes:
+def corpo_elevenlabs(texto: str, modelo: str, ajustes: dict[str, float] | None = None) -> bytes:
     """Corpo JSON da requisicao. Separado da rede pra ser testavel sem tocar no provedor.
-    apply_text_normalization vai EXPLICITO: e ele que verbaliza numero, valor e data. Pegadinha
-    registrada: ele nao vale no eleven_flash_v2_5, entao trocar pro modelo mais barato desliga isso."""
-    return json.dumps({
+    apply_text_normalization vai "on" (nao "auto"): e o que verbaliza numero, valor e data de forma
+    CONFIAVEL ("R$ 1.200" -> "mil e duzentos reais"). Pegadinha registrada: "on" nao vale no
+    eleven_flash_v2_5 — trocar MODELO_PADRAO pro modelo flash desliga isso caladamente.
+    voice_settings so entra no corpo quando ha ajuste fora do padrao (ver _ajustes_efetivos): mandar
+    a chave com os valores padrao da propria ElevenLabs e diferente de nao mandar nada."""
+    corpo: dict = {
         "text": texto,
         "model_id": modelo,
-        "apply_text_normalization": "auto",
-    }, ensure_ascii=False).encode("utf-8")
+        "apply_text_normalization": "on",
+    }
+    if ajustes:
+        corpo["voice_settings"] = ajustes
+    return json.dumps(corpo, ensure_ascii=False).encode("utf-8")
 
 
 def _chave() -> str:
@@ -126,9 +134,45 @@ def _voz_efetiva(voz: str) -> str:
     return voz or (runtime_config.get("elevenlabs_voice_id") or "").strip() or VOZ_PADRAO
 
 
-def _baixar_elevenlabs(texto: str, voz: str) -> bytes:
+# Campo do runtime_config -> (chave no voice_settings da ElevenLabs, padrao da ElevenLabs, faixa
+# valida), tudo em INT*100 (0-100, ou 70-120 pra speed) porque `_coagir` (runtime_config.py) so tem
+# tipo int pra numero — nao ha float em EDITAVEIS. valor efetivo = inteiro guardado / 100.
+_AJUSTES = {
+    "tts_stability": ("stability", 50, 0, 100),
+    "tts_similarity_boost": ("similarity_boost", 75, 0, 100),
+    "tts_style": ("style", 0, 0, 100),
+    "tts_speed": ("speed", 100, 70, 120),
+}
+
+
+def _ajustes_efetivos() -> dict[str, float]:
+    """Ajustes de naturalidade configurados, convertidos pra fracionario. A tela usa deslizante: o
+    valor e SEMPRE real (nasce no padrao da ElevenLabs, nunca "vazio") — entao quem decide se a
+    chave entra no corpo NAO e mais "campo vazio", e sim "valor igual ao padrao da ElevenLabs". Sem
+    isso, deixar o slider no padrao e arrasta-lo de volta pro mesmo lugar mandariam voice_settings
+    fixado a toa no provedor toda vez que alguem tocasse no controle. Campo AUSENTE (usuario nunca
+    tocou o slider) se comporta igual a campo == padrao: os dois nao entram no dict. Resolvido aqui,
+    ANTES do hash (chamado de sintetizar), pelo mesmo motivo que _voz_efetiva: hash e corpo tem que
+    concordar em qual ajuste foi de fato usado."""
+    efetivos: dict[str, float] = {}
+    for campo, (chave_corpo, padrao, minimo, maximo) in _AJUSTES.items():
+        bruto = runtime_config.get(campo)
+        try:
+            n = padrao if bruto is None else int(bruto)
+        except (TypeError, ValueError):
+            n = padrao
+        # Clamp: numero fora da faixa da ElevenLabs (ex: veio de uma chamada de API externa com
+        # numero errado) vira erro 502 da API em vez de silenciosamente aceito — mas nao precisa
+        # pagar a chamada pra descobrir.
+        n = max(minimo, min(maximo, n))
+        if n != padrao:
+            efetivos[chave_corpo] = n / 100.0
+    return efetivos
+
+
+def _baixar_elevenlabs(texto: str, voz: str, ajustes: dict[str, float]) -> bytes:
     audio = _pedir(f"/text-to-speech/{voz}?output_format=mp3_44100_128",
-                   corpo_elevenlabs(texto, MODELO_PADRAO))
+                   corpo_elevenlabs(texto, MODELO_PADRAO, ajustes))
     if not audio:
         raise TtsError(502, "ElevenLabs devolveu audio vazio")
     return audio
@@ -196,7 +240,11 @@ def sintetizar(texto: str, voz: str, provedor: str) -> tuple[str, bool, str]:
     # vazia sobrevive a troca de elevenlabs_voice_id, servindo audio da voz antiga do cache calado.
     if provedor != "local":
         voz = _voz_efetiva(voz)
-    h = hash_de(texto, voz, provedor)
+    # Ajustes so valem pra ElevenLabs (o motor local nao tem esse conceito). Resolvidos ANTES do
+    # hash pelo mesmo motivo da voz: sem isso, trocar a estabilidade e ouvir de novo serve o audio
+    # velho do cache, calado.
+    ajustes = _ajustes_efetivos() if provedor != "local" else {}
+    h = hash_de(texto, voz, provedor, ajustes)
     base = _base_cache()
     try:
         base.mkdir(parents=True, exist_ok=True)
@@ -216,7 +264,7 @@ def sintetizar(texto: str, voz: str, provedor: str) -> tuple[str, bool, str]:
         audio = _baixar_local(texto)
     else:
         _chave()   # falha cedo, com 503, antes de qualquer trabalho
-        audio = _baixar_elevenlabs(texto, voz)
+        audio = _baixar_elevenlabs(texto, voz, ajustes)
 
     # Extensao pelo CONTEUDO (mp3 ou wav — ver extensao_de): o comando local pode devolver WAV.
     destino = base / f"{h}.{extensao_de(audio)}"

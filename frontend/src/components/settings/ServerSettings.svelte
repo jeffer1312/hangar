@@ -1,6 +1,9 @@
 <script lang="ts">
   import type { ConfigServidorStore } from '../../lib/serverConfig.svelte';
   import { listarVozesTts, saldoTts, type TtsVoz } from '../../lib/api';
+  import { ttsPlayer } from '../../lib/ttsPlayer.svelte';
+  import { ouvirAmostra } from '../../lib/ouvir';
+  import { cortarAmostra } from '../../lib/ttsFormat';
 
   // Configuração do servidor pelo app. Até aqui tudo vinha só de env/.env: pra mudar a chave da
   // transcrição ou a retenção de anexos era preciso editar arquivo no servidor e reiniciar o
@@ -80,6 +83,63 @@
     // das vozes: sumir calada e o que a regra do projeto proibe.
     saldoErro = '';
     saldoTts().then((s) => { saldo = s; }).catch((e: Error) => { saldoErro = e.message; });
+  }
+
+  // Amostra (Feature A): o proprio ultimo trecho que o usuario mandou ouvir, cortado em 200
+  // caracteres — comparar vozes com o texto real do usuario diz mais que uma frase fixa.
+  const amostraTexto = $derived(cortarAmostra(ttsPlayer.ultimoTexto));
+
+  function ouvirAmostraDaVoz() {
+    const voz = (store.valorAtual('elevenlabs_voice_id') as string) || '';
+    ouvirAmostra(amostraTexto, voz);
+  }
+
+  // Naturalidade da voz (Feature B): quatro deslizantes que espelham voice_settings da ElevenLabs.
+  // O valor e SEMPRE real — o slider nasce no padrao do proprio provedor, nunca "vazio". Backend
+  // (tts.py:_ajustes_efetivos) so manda a chave quando o valor foge desse padrao.
+  interface AjusteSlider {
+    chave: string;
+    rotulo: string;
+    padrao: number;
+    min: number;
+    max: number;
+    esquerda: string;
+    direita: string;
+    ajuda: string;
+  }
+
+  const AJUSTES_VOZ: AjusteSlider[] = [
+    { chave: 'tts_stability', rotulo: 'Estabilidade', padrao: 50, min: 0, max: 100,
+      esquerda: 'mais emotiva', direita: 'mais constante',
+      ajuda: 'Voz mais constante lê igual do começo ao fim; mais emotiva varia o tom, e às vezes erra.' },
+    { chave: 'tts_similarity_boost', rotulo: 'Aderência à voz original', padrao: 75, min: 0, max: 100,
+      esquerda: 'mais livre', direita: 'mais fiel',
+      ajuda: 'Mais fiel gruda na voz gravada original; mais livre dá margem pro modelo variar.' },
+    { chave: 'tts_style', rotulo: 'Exagero de estilo', padrao: 0, min: 0, max: 100,
+      esquerda: 'neutro', direita: 'marcante',
+      ajuda: 'Acentua o jeito característico da voz — passado do ponto, a fala fica exagerada.' },
+    { chave: 'tts_speed', rotulo: 'Velocidade da fala', padrao: 100, min: 70, max: 120,
+      esquerda: 'mais devagar', direita: 'mais rápido',
+      ajuda: 'Ajusta o ritmo da leitura sem mudar o tom da voz.' },
+  ];
+
+  // Le o rascunho/salvo como numero; sem valor nenhum (nunca tocou o slider) cai no padrao do
+  // PROVEDOR, nao em 0 — e o que faz o slider nascer na posicao certa em vez de encostado na ponta.
+  function ajusteValor(a: AjusteSlider): number {
+    const bruto = store.valorAtual(a.chave);
+    const n = typeof bruto === 'number' ? bruto : parseInt(String(bruto), 10);
+    return Number.isFinite(n) ? n : a.padrao;
+  }
+
+  function ajusteDefinir(a: AjusteSlider, n: number) {
+    store.setRascunho(a.chave, n);
+  }
+
+  // "Voltar ao padrao": grava o proprio numero padrao (nao ha como "apagar" a chave do runtime_config
+  // — aplicar() so soma/sobrescreve). Gravar o padrao e o backend omitir voice_settings quando o
+  // valor == padrao dao no mesmo audio, entao isto e inocuo.
+  function ajusteResetar(a: AjusteSlider) {
+    store.setRascunho(a.chave, a.padrao);
   }
 </script>
 
@@ -188,6 +248,44 @@
             {carregandoVozes ? 'Carregando…' : 'Carregar vozes da conta'}
           </button>
         {/if}
+
+        <div class="naturalidade">
+          {#each AJUSTES_VOZ as a (a.chave)}
+            {@const valor = ajusteValor(a)}
+            <div class="ajuste">
+              <div class="ajuste-cabeca">
+                <span class="ajuste-rot">{a.rotulo} <em>{valor}</em></span>
+                {#if valor !== a.padrao}
+                  <button class="ajuste-reset" onclick={() => ajusteResetar(a)}>voltar ao padrão</button>
+                {/if}
+              </div>
+              <span class="ajuda">{a.ajuda}</span>
+              <div class="ajuste-slider">
+                <span class="ponta">{a.esquerda}</span>
+                <input
+                  type="range"
+                  aria-label={a.rotulo}
+                  min={a.min}
+                  max={a.max}
+                  step="1"
+                  value={valor}
+                  oninput={(e) => ajusteDefinir(a, +e.currentTarget.value)}
+                />
+                <span class="ponta">{a.direita}</span>
+              </div>
+            </div>
+          {/each}
+        </div>
+
+        <div class="amostra">
+          <button class="btn" onclick={ouvirAmostraDaVoz} disabled={!ttsPlayer.ultimoTexto}>
+            🔊 Ouvir amostra desta voz{ttsPlayer.ultimoTexto ? ` · ${amostraTexto.length.toLocaleString('pt-BR')} car.` : ''}
+          </button>
+          {#if !ttsPlayer.ultimoTexto}
+            <span class="ajuda">ouça algum trecho primeiro pra comparar vozes com ele</span>
+          {/if}
+        </div>
+
         {#if saldo}
           <p class="sub">Consumo do mês: {saldo.usados ?? '?'} de {saldo.limite ?? '?'} caracteres.</p>
         {/if}
@@ -254,7 +352,12 @@
     color: var(--accent); background: var(--accent-dim);
     padding: 1px 6px; border-radius: var(--radius-full);
   }
-  .ajuda { font-size: var(--text-xs); color: var(--text-muted); line-height: 1.45; }
+  /* min-width:0 e o que importa aqui, nao so cosmetica: `.ajuda` e um <span>, e um <span> dentro de
+     um flex column (`.txt`, `.ajuste`) tem `min-width:auto` por padrao — o navegador reserva a
+     largura do texto INTEIRO sem quebrar, e a frase corta na borda do painel em vez de quebrar linha.
+     Vale pra toda ajuda do arquivo (o bug ja existia antes dos sliders, so nao tinha aparecido com
+     texto longo o bastante numa tela estreita). */
+  .ajuda { font-size: var(--text-xs); color: var(--text-muted); line-height: 1.45; min-width: 0; }
 
   input[type='text'], input[type='number'] {
     height: 40px;
@@ -295,6 +398,25 @@
     padding: 0 var(--space-3);
   }
   @container (min-width: 360px) { .campo-select { width: auto; min-width: 220px; } }
+
+  .amostra { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); align-items: flex-start; }
+
+  /* Naturalidade da voz: mesmo vocabulario de slider do AppearanceSettings (rotulo + range + valor),
+     com as pontas da escala em palavra em vez de numero, e um "voltar ao padrao" por controle. */
+  .naturalidade { display: flex; flex-direction: column; gap: var(--space-3); margin: var(--space-3) 0; }
+  .ajuste { display: flex; flex-direction: column; gap: 2px; }
+  .ajuste-cabeca { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-2); }
+  .ajuste-rot { font-size: var(--text-sm); font-weight: 600; color: var(--text-primary); }
+  .ajuste-rot em { margin-left: var(--space-2); font-style: normal; color: var(--text-muted); font-size: var(--text-xs); }
+  .ajuste-reset {
+    flex-shrink: 0;
+    font-size: var(--text-xs); color: var(--accent); background: none; border: none; padding: 0;
+  }
+  .ajuste-slider { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-1); }
+  .ajuste-slider input { flex: 1; min-width: 100px; accent-color: var(--accent); }
+  .ajuste-slider .ponta {
+    font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; flex-shrink: 0;
+  }
 
   .somente-leitura { margin-top: var(--space-5); }
   .somente-leitura h3 {

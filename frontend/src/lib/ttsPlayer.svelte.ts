@@ -30,6 +30,10 @@ let engineLocal = $state(false);
 // estreito e passa longe dos 52px do estado normal). 52 e so o palpite pro instante antes da
 // 1a medicao (mesmo padrao do dockH em Chat.svelte); App.svelte zera isto quando active for false.
 let barH = $state(52);
+// Ultimo trecho que o usuario mandou ouvir, POR INTEIRO (label acima e so o recorte de exibicao).
+// Alimenta a amostra de voz da tela de Config: comparar vozes contra o proprio texto do usuario diz
+// mais que uma frase fixa. So em memoria — nao persiste entre recargas (app recem-aberto = vazio).
+let ultimoTexto = $state('');
 
 function element(): HTMLAudioElement {
   if (el) return el;
@@ -61,6 +65,7 @@ export const ttsPlayer = {
   get rate() { return rate; },
   get barH() { return barH; },
   get engineLocal() { return engineLocal; },
+  get ultimoTexto() { return ultimoTexto; },
 
   /** Chamar SINCRONO dentro do handler do toque, antes de qualquer await. */
   unlock(texto: string) {
@@ -68,6 +73,7 @@ export const ttsPlayer = {
     active = true; loading = true; error = ''; playing = false;
     current = 0; duration = 0; engineLocal = false;
     label = texto.length > 60 ? texto.slice(0, 60) + '…' : texto;
+    ultimoTexto = texto;
     a.src = SILENCE;
     // O catch e obrigatorio: navegador que recusa mesmo assim rejeita a promessa, e rejeicao sem
     // catch vira "unhandled promise rejection" no console do usuario.
