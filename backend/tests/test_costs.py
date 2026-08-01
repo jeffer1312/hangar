@@ -248,6 +248,11 @@ def test_combos_somam_igual_ao_total():
     assert abs(sum(c.cost for c in r.combos) - r.totals.cost) < 1e-9
     for campo in ("input", "output", "cache_write", "cache_read", "sessions"):
         assert sum(getattr(c, campo) for c in r.combos) == getattr(r.totals, campo)
+    # Os quatro custos por tipo também: garantidos por construção hoje (mesmo _somar, mesmo
+    # laço), mas uma refatoração que mova o combo pra dentro de um `if` passaria despercebida
+    # sem isto — foi a invariante que a fase 1 perdeu ao apagar um teste.
+    for campo in ("cost_input", "cost_output", "cost_cache_write", "cost_cache_read"):
+        assert abs(sum(getattr(c, campo) for c in r.combos) - getattr(r.totals, campo)) < 1e-9
 
 
 def test_combos_agrupam_a_combinacao_repetida():
