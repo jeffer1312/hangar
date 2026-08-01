@@ -41,11 +41,14 @@ EDITAVEIS: dict[str, type] = {
     "tts_similarity_boost": int,   # 0-100 = similarity_boost 0..1 (padrao ElevenLabs: 75 = 0.75)
     "tts_style": int,              # 0-100 = style 0..1 (padrao ElevenLabs: 0)
     "tts_speed": int,              # 70-120 = speed 0.7..1.2 (padrao ElevenLabs: 100 = 1.0x)
+    "llm_base_url": str,   # endpoint compativel com OpenAI (vazio = Groq)
+    "llm_api_key": str,    # chave do provedor (so usada quando ha base_url proprio)
+    "llm_model": str,      # nome do modelo (vazio = o padrao)
 }
 
 # Campos que NUNCA voltam inteiros pro cliente: o app devolve mascarado (gsk_••••1234) pra você
 # conferir QUAL chave está lá sem poder copiá-la de volta.
-SEGREDOS = {"groq_api_key", "elevenlabs_api_key"}
+SEGREDOS = {"groq_api_key", "elevenlabs_api_key", "llm_api_key"}
 
 _ARQUIVO = "runtime-config.json"
 
@@ -112,6 +115,10 @@ def _coagir(campo: str, valor: Any) -> Any:
         # (code, nvim, subl) e impede apontar pra um binario solto tipo /tmp/qualquer.sh.
         if "/" in texto or "\\" in texto or texto.startswith("-") or ".." in texto:
             raise ValueError("editor: use o nome do binario (ex: code), sem caminho")
+    if campo == "llm_base_url" and texto and not (texto.startswith("http://") or texto.startswith("https://")):
+        # Mesmo argumento do editor: antes so o dono da maquina escolhia o endpoint (env), agora o
+        # celular escreve. Aceita vazio (volta ao padrao) ou uma URL http(s) de verdade.
+        raise ValueError("llm_base_url: use vazio ou uma URL http(s)://")
     return texto
 
 
