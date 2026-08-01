@@ -590,6 +590,14 @@ class TerminalInput:
                 time.sleep(_SLASH_SETTLE)
                 send_keys(name, "Enter")
             else:
+                # Foto dos placeholders de paste ANTES do nosso, igual ao ramo multi-linha (ver
+                # comentario la em cima e _composer_residuo). SEM ela a evidencia por placeholder fica
+                # DESLIGADA (_composer_residuo so aceita quando pastes_antes != None) — medido 01/08:
+                # acima de ~800 chars numa linha so, o Claude Code colapsa o texto em
+                # "[Pasted text #N ...]" e o texto real nunca e desenhado na tela, entao a busca pela
+                # cauda visivel abaixo falhava SEMPRE. Era esse o furo por tras do "envio incompleto"
+                # de ditado por voz (que vira uma linha so de 1000+ chars): o Enter nunca era mandado.
+                pastes_antes = _paste_ids(_composer_regiao(_capture(name), name) or "")
                 # `is False` e nao `not ...`: o UNICO produtor de False e o tmux._send_literal quando o
                 # fatiamento para no meio. Qualquer outro retorno (True, ou None de um dublê/wrapper que
                 # nao repassa) segue o caminho de sempre — o sinal aqui e "provadamente parcial", nao
@@ -611,7 +619,7 @@ class TerminalInput:
                 # ponytail: settle fixo; se ainda escapar em device lento, upgrade = capturar o pane e
                 # reenviar Enter se o input nao limpou.
                 time.sleep(_SUBMIT_SETTLE)
-                if not _entrou_no_composer(name, text):
+                if not _entrou_no_composer(name, text, pastes_antes):
                     _log.error("envio PARCIAL name=%s: o texto NAO chegou no composer em %.1fs — "
                                "Enter nao enviado", name, _SUBMIT_CHECK_PRAZO)
                     return "partial"
@@ -620,7 +628,7 @@ class TerminalInput:
                 # ("capturar o pane e reenviar Enter se o input nao limpou"). Aqui em vez de reenviar
                 # Enter as cegas a gente REPORTA — reenviar podia submeter texto que o usuario digitou
                 # no composer no meio do caminho.
-                if not _submeteu(name, text):
+                if not _submeteu(name, text, pastes_antes):
                     _log.error("envio PARCIAL name=%s: uma linha nao submeteu (texto continua no "
                                "composer apos %.1fs) — nao afirmando entrega", name, _SUBMIT_CHECK_PRAZO)
                     return "partial"
