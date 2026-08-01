@@ -276,32 +276,6 @@ export interface CostBucket {
   cost: number;
 }
 
-export interface CostModelBucket {
-  model: string;
-  sessions: number;
-  cost: number;
-  // Opcionais de propósito: a tela junta relatórios de VÁRIOS servidores da malha, e um que ainda
-  // não subiu esta versão responde sem os tokens. Marcar como obrigatório aqui seria mentir sobre
-  // o que chega no fio — todo uso trata como `?? 0`.
-  input?: number;
-  output?: number;
-  cache_read?: number;
-  cache_write?: number;
-}
-
-export interface AccountCost {
-  account_id: string;
-  email: string | null;
-  label: string;
-  totals: CostBucket;
-  today: number;
-  yesterday: number;
-  by_day: CostBucket[];
-  by_week: CostBucket[];
-  by_month: CostBucket[];
-  by_model: CostModelBucket[];
-}
-
 // ── Custos v2 (dashboard multi-agente: Claude Code + Codex + Pi) ────────────
 // Um corte qualquer (dia, provedor, fonte, projeto, modelo). `key` é o valor da dimensão.
 // O custo vem quebrado por tipo DENTRO do corte: é o que faz a barra do projeto mostrar a FORMA
