@@ -185,10 +185,12 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
   pro servidor; se você ligar no celular, o desktop continua sem). Com ela ligada, um toque no 🎤
   começa a gravar e **2 segundos de silêncio** encerram sozinhos — não precisa tocar em ⏹. Depois da
   transcrição, uma contagem de **3 segundos** aparece antes do envio; um toque em qualquer lugar da
-  tela cancela e deixa o texto pronto no campo, sem mandar. Só o silêncio dispara o envio automático:
-  parar pelo botão, estourar o teto de 3 minutos de gravação, dar erro na transcrição, a limpeza
-  falhar (fica o aviso e o texto cru) ou já haver um rascunho digitado no campo — nenhum desses
-  envia sozinho, sempre fica o texto pra você revisar e mandar na mão. Depois de um envio automático
+  tela ou esconder o app (trocar de app, apagar a tela) cancela e deixa o texto pronto no campo, sem
+  mandar. Só o silêncio dispara o envio automático: parar pelo botão, estourar o teto de 3 minutos de
+  gravação (transcreve normal e avisa que não identificou silêncio — provável barulho de fundo —, mas
+  não manda sozinho), dar erro na transcrição, a limpeza falhar (fica o aviso e o texto cru) ou já
+  haver um rascunho digitado no campo — nenhum desses envia sozinho, sempre fica o texto pra você
+  revisar e mandar na mão. Depois de um envio automático
   o microfone **não** volta a gravar sozinho — pra falar de novo, toque nele; foi decisão deliberada
   pra não ficar transcrevendo (e cobrando) cada silêncio do carro à toa. Também toca um som curto ao
   enviar e outro mais grave quando não deu pra enviar, pra dar pra saber sem olhar pra tela.

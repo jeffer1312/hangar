@@ -210,25 +210,37 @@
   // de recError/recSeconds).
   let contagem = $state<number | null>(null);
   let contagemTimer: ReturnType<typeof setInterval> | undefined;
+  // Prazo por RELOGIO DE PAREDE (mesma decisao do TETO_MS acima, agora aplicada tambem aqui):
+  // guarda o INSTANTE-ALVO do envio, nao um contador de setInterval. Um setInterval cru derrete
+  // em aba escondida (Chrome Android cai pra ~1 tick/min) -- os "3s pra cancelar" virariam ~3min
+  // com o envio acontecendo de celular no bolso.
+  const CONTAGEM_MS = 3_000;
+  let contagemAlvo = 0;
 
   function cancelarContagem() {
     if (contagemTimer) { clearInterval(contagemTimer); contagemTimer = undefined; }
     contagem = null;
+    contagemAlvo = 0;
   }
 
   function iniciarContagem() {
     cancelarContagem();
+    contagemAlvo = Date.now() + CONTAGEM_MS;
     contagem = 3;
+    // Tick so pra REDESENHAR o numero -- quem decide a hora de enviar e o relogio (contagemAlvo),
+    // nao a contagem de ticks. 250ms: exibicao fluida sem depender de precisao do interval.
     contagemTimer = setInterval(() => {
-      if (contagem === null) return;
-      contagem -= 1;
-      if (contagem > 0) return;
-      cancelarContagem();
-      enviarAutomatico();
-    }, 1000);
+      const restanteMs = contagemAlvo - Date.now();
+      if (restanteMs <= 0) {
+        cancelarContagem();
+        enviarAutomatico();
+        return;
+      }
+      contagem = Math.ceil(restanteMs / 1000);
+    }, 250);
   }
 
-  function enviarAutomatico() {
+  async function enviarAutomatico() {
     // `submit()` volta CALADO quando canSend e falso (anexo subindo, gravacao reaberta, transcricao
     // em voo). Quem esta na mesa ve o texto parado; quem dirige, nao. Regra do projeto: falha
     // aparece, nao some.
@@ -239,9 +251,11 @@
       return;
     }
     recError = '';        // nao deixar aviso velho embaixo de um envio que deu certo
-    somEnvio();
+    // O bipe so toca DEPOIS do desfecho: som otimista mentia quando o /input falhava (o erro pintava
+    // na tela, que e exatamente o que quem dirige nao esta olhando -- o bipe e o unico canal dela).
+    const ok = await submit();
+    if (ok) somEnvio(); else somRecusa();
     setTimeout(fecharBipes, 400);
-    void submit();
   }
 
   // Cancelam: toque em qualquer lugar e tecla. FOCO NAO CANCELA — existe um $effect que da focus()
@@ -428,11 +442,14 @@
   // Adiciona arquivos de imagem a lista (do picker ou do paste), cada um com preview local.
   // ditado=true so na gravacao pelo mic (toggleRecord) -> so ela pede limpeza do texto; arquivo de
   // audio anexado (picker/paste) nunca passa por limpeza.
-  function addFiles(files: Iterable<File>, opts?: { ditado?: boolean }) {
+  function addFiles(files: Iterable<File>, opts?: { ditado?: boolean; avisoTeto?: boolean }) {
     for (const f of files) {
       // audio (gravacao do mic ou arquivo audio/*) NAO vira anexo: transcreve e cai no textarea,
       // como se o usuario tivesse digitado — ele revisa/edita e envia quando quiser.
-      if (f.type.startsWith('audio/')) { transcribeIntoComposer(f, { ditado: !!opts?.ditado }); continue; }
+      if (f.type.startsWith('audio/')) {
+        transcribeIntoComposer(f, { ditado: !!opts?.ditado, avisoTeto: !!opts?.avisoTeto });
+        continue;
+      }
       const isImage = f.type.startsWith('image/');
       // url so pra preview de imagem; outros tipos viram chip com o nome (sem objectURL pra revogar).
       attachments = [...attachments, { file: f, url: isImage ? URL.createObjectURL(f) : '', isImage }];
@@ -445,7 +462,7 @@
   // ditado=true pede `limpar=1`: a resposta ja vem com o texto limpo (`text`), o cru (`raw`, pro
   // desfazer) e um `aviso` quando a limpeza nao valeu -- sem corrida, a troca acontece ANTES da
   // resposta chegar na tela.
-  async function transcribeIntoComposer(file: File, opts?: { ditado?: boolean }) {
+  async function transcribeIntoComposer(file: File, opts?: { ditado?: boolean; avisoTeto?: boolean }) {
     // Uma por vez: transcribing e setado SINCRONO antes de qualquer await, entao um segundo audio
     // (ex: multi-selecao no picker) cai aqui e avisa em vez de correr concorrente e pisar no estado
     // compartilhado (transcribing/recError/inputText) — que sairia fora de ordem.
@@ -471,9 +488,22 @@
         limparUndo();
       }
       if (aviso) recError = aviso;
-      if (opts?.ditado && podeEnviarSozinho({
-            motivo: motivoDoFim, texto: t, aviso, rascunhoAntes: before.length > 0 })) {
-        iniciarContagem();
+      // Teto (3min sem detectar silencio): diz o motivo provavel em vez de "grave de novo" -- so
+      // quando nao ha aviso da limpeza pra mostrar (esse e mais grave, tem prioridade).
+      else if (opts?.avisoTeto) {
+        recError = 'Não identifiquei silêncio — muito barulho de fundo? A gravação foi encerrada aos 3 minutos.';
+      }
+      if (opts?.ditado) {
+        if (podeEnviarSozinho({ motivo: motivoDoFim, texto: t, aviso, rascunhoAntes: before.length > 0 })) {
+          iniciarContagem();
+        } else {
+          // Envio automatico suprimido (motivo != silencio, aviso da limpeza ou rascunho ja no
+          // campo) -- o texto some calado pra quem esta olhando a tela, mas quem dirige so tem o
+          // ouvido. audioCtx so segue aberto numa gravacao maos-livres (teardownRecording ja fechou
+          // na hora pro ditado normal), entao o bipe() abaixo e um no-op silencioso fora dela.
+          somRecusa();
+          setTimeout(fecharBipes, 400);
+        }
       }
       await tick();
       autoGrow();
@@ -572,7 +602,10 @@
   // NAO readquirir o wakeLock ao voltar: o navegador o solta sozinho ao esconder, e aqui a gravacao
   // ja terminou. Um reacquire brigaria com este pararPorMotivo.
   function aoEsconder() {
-    if (document.hidden && recording && maosLivres) pararPorMotivo('escondeu');
+    if (!document.hidden) return;
+    if (recording && maosLivres) pararPorMotivo('escondeu');
+    // Contagem em andamento com a tela escondida: enviar do bolso nao e o que ela promete.
+    if (contagem !== null) cancelarContagem();
   }
 
   $effect(() => {
@@ -643,14 +676,15 @@
       // nenhum (gravacao rapida demais / driver sem dado) -> avisa, nao some calado.
       if (recFailed) {
         teardownRecording();
-      } else if (motivoDoFim === 'teto') {
-        // Por regra este audio nunca seria enviado sozinho — transcrever + limpar 3 minutos de
-        // ruido de estrada e uma chamada paga pra terminar em "nao enviei".
-        recError = 'Gravação passou de 3 minutos e foi encerrada — grave de novo';
-        teardownRecording();
       } else if (recChunks.length) {
         const blob = new Blob(recChunks, { type });
-        addFiles([new File([blob], `gravacao-${Date.now()}.${ext}`, { type })], { ditado: true });
+        // Teto de 3min: transcreve normal, como qualquer ditado -- a regra de silencio nao
+        // sobrevive a ruido de fundo constante (piso de RMS medido abaixo de motor de carro), e o
+        // teto e justamente o caminho provavel de quem dita dirigindo. Nao envia sozinho mesmo
+        // assim (podeEnviarSozinho ja barra por motivo != 'silencio'); avisoTeto troca a mensagem
+        // por uma que diga o motivo provavel em vez de jogar a fala fora.
+        addFiles([new File([blob], `gravacao-${Date.now()}.${ext}`, { type })],
+          { ditado: true, avisoTeto: motivoDoFim === 'teto' });
         teardownRecording();
       } else {
         recError = 'Gravação vazia, tente de novo';
@@ -769,8 +803,11 @@
     if (fileInput) fileInput.value = '';
   }
 
-  async function submit() {
-    if (!canSend) return;
+  // Devolve se o envio deu certo -- enviarAutomatico() usa isso pra escolher o bipe (agudo/grave)
+  // SO depois do desfecho real, nunca antes. O botao de enviar (onclick={submit}) ignora o retorno,
+  // igual sempre ignorou.
+  async function submit(): Promise<boolean> {
+    if (!canSend) return false;
     cancelarContagem();   // envio manual torna a contagem sem sentido
     const caption = inputText.trim();
     sendError = '';
@@ -778,6 +815,7 @@
     if (attachments.length) {
       uploading = true;
       attachError = '';
+      let ok = true;
       try {
         // Sobe todos os anexos e junta os paths numa UNICA linha (o backend rejeita '\n' no
         // send-keys). Cada path nao tem espaco (nome gerado). Marca imagem x arquivo pelo tipo.
@@ -802,10 +840,11 @@
       } catch (err) {
         // upload OU envio falhou -> mantem as fotos e o texto, mostra o erro.
         attachError = err instanceof Error ? err.message : 'Falha no envio';
+        ok = false;
       } finally {
         uploading = false;
       }
-      return;
+      return ok;
     }
     // texto puro: limpa a caixa OTIMISTA (no toque) pra tirar a sensacao de lag do round-trip; restaura
     // o texto se o /input falhar (nao perde nada). O settle ~200ms do backend (anti-"Enter engolido")
@@ -813,6 +852,7 @@
     sending = true;
     inputText = '';
     if (textareaEl) textareaEl.style.height = 'auto';
+    let ok = true;
     try {
       await onSend(caption);
     } catch (err) {
@@ -820,9 +860,11 @@
       // na janela do envio em voo).
       if (!inputText.trim()) inputText = caption;
       sendError = err instanceof Error ? err.message : 'Falha no envio';
+      ok = false;
     } finally {
       sending = false;
     }
+    return ok;
   }
 
   // Auto-focus quando ocioso — SO em desktop (ponteiro fino). No iOS, focus() programatico nao abre
