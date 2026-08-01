@@ -75,11 +75,41 @@
     efetiva ? textoSel.length + blocosSel.reduce((n, b) => n + b.length, 0) + efetiva.length : 0,
   );
 
+  // Arrastar o painel (so no desktop). Ele nasce colado no fim da selecao e as vezes tapa
+  // justamente o que a pessoa quer ler enquanto decide a instrucao. Posicao vale ate fechar —
+  // reabrir volta a ancorar na selecao nova, que e onde ela esta olhando.
+  //
+  // left/top, nunca transform: elemento fixo com transform pinta retangulo preto no WebKit durante
+  // a rolagem por inercia (mesma regra do TtsBar). Alca propria em vez de arrastar pelo titulo,
+  // que e um botao — senao todo arraste vira clique em "Ouvir".
+  let arrX = $state<number | null>(null);
+  let arrY = $state<number | null>(null);
+
+  function iniciarArraste(e: PointerEvent) {
+    if (!panelEl) return;
+    e.preventDefault();
+    const r = panelEl.getBoundingClientRect();
+    const offX = e.clientX - r.left;
+    const offY = e.clientY - r.top;
+    const mover = (ev: PointerEvent) => {
+      arrX = Math.max(8, Math.min(window.innerWidth - r.width - 8, ev.clientX - offX));
+      arrY = Math.max(8, Math.min(window.innerHeight - r.height - 8, ev.clientY - offY));
+    };
+    const soltar = () => {
+      window.removeEventListener('pointermove', mover);
+      window.removeEventListener('pointerup', soltar);
+    };
+    window.addEventListener('pointermove', mover);
+    window.addEventListener('pointerup', soltar);
+  }
+
   function fechar() {
     ttsNarracao.limpar();
     ttsSelection.limpar();
     engajado = false;
     ttsSelection.setEngajado(false);
+    arrX = null;
+    arrY = null;
   }
 
   /** Toque principal: sem instrucao (ou so "ler como esta"), toca DIRETO — mesmo caminho sincrono
@@ -132,11 +162,14 @@
        mensagem inteira sem ponto de toque nenhum pra ancorar — nos dois tamanhos de tela ele cai na
        mesma barra rente ao composer que o celular ja usa pra selecao (bottom calc abaixo). -->
   {@const flutua = isDesktop && ttsSelection.origem === 'selecao'}
+  {@const movido = isDesktop && arrX !== null && arrY !== null}
   <div
     class="tts-sel"
     class:flutuante={flutua}
-    style:right={flutua ? `calc(100% - ${ttsSelection.x}px)` : undefined}
-    style:top={flutua ? `${ttsSelection.y + 6}px` : undefined}
+    class:movido
+    style:right={movido ? undefined : (flutua ? `calc(100% - ${ttsSelection.x}px)` : undefined)}
+    style:top={movido ? `${arrY}px` : (flutua ? `${ttsSelection.y + 6}px` : undefined)}
+    style:left={movido ? `${arrX}px` : undefined}
     bind:this={panelEl}
   >
     {#if ttsNarracao.carregando}
@@ -159,15 +192,37 @@
       <!-- Fechar existe AQUI, no estado normal, e nao so nos ramos de erro/revisao. Sem ele o
            painel abria e nao saia mais: quem so quis ver o que era ficava com ele preso na tela. -->
       <div class="tts-sel-top">
+        {#if isDesktop}
+          <span class="tts-sel-alca" onpointerdown={iniciarArraste} role="presentation" title="Arrastar">⠿</span>
+        {/if}
         <button type="button" class="tts-sel-head" onclick={ouvirClique}>{rotulo}</button>
         <button type="button" class="tts-sel-x" onclick={fechar} aria-label="Fechar">✕</button>
       </div>
       <div class="tts-sel-row">
+        <!-- Os presets AGEM no clique, nao so marcam modo. "Ler como está" quer dizer "lê agora,
+             sem LLM" — nao sobra nada pra configurar depois, entao exigir um segundo toque no botao
+             de cima fazia o clique parecer morto. Sincrono ate ouvirTexto: e aqui que o audio
+             destrava no iOS. -->
         <button type="button" class="tts-sel-btn" class:sel={efetiva === PRESET_LER}
-                onclick={() => { preferirLerLiteral = true; instrucao = ''; }}>Ler como está</button>
+                onclick={() => {
+                  preferirLerLiteral = true;
+                  instrucao = '';
+                  const texto = textoSel;
+                  ttsSelection.limpar();
+                  engajado = false;
+                  ttsSelection.setEngajado(false);
+                  ouvirTexto(texto, confirmar, '');
+                }}>Ler como está</button>
         {#if temCodigoSel}
+          <!-- Idem: escolher "explicar o código" JA pede a explicacao. O segundo toque continua
+               existindo depois, no botao Ouvir da tela de revisao, que e onde o unlock acontece
+               neste caminho. -->
           <button type="button" class="tts-sel-btn" class:sel={efetiva === PRESET_CODIGO}
-                  onclick={() => { preferirLerLiteral = false; instrucao = PRESET_CODIGO; }}>Explicar o código</button>
+                  onclick={() => {
+                    preferirLerLiteral = false;
+                    instrucao = PRESET_CODIGO;
+                    void ttsNarracao.pedir(textoSel, blocosSel, PRESET_CODIGO);
+                  }}>Explicar o código</button>
         {/if}
       </div>
       <input
@@ -220,15 +275,35 @@
     bottom: auto;
     margin-left: 0;
   }
+  /* Arrastado: manda em left/top e larga as ancoras de baixo e da direita. */
+  .tts-sel.movido { bottom: auto; right: auto; margin: 0; }
   .tts-sel-top { display: flex; align-items: center; gap: var(--space-2); }
+  .tts-sel-alca {
+    cursor: grab;
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+    line-height: 1;
+    touch-action: none;
+    user-select: none;
+  }
+  .tts-sel-alca:active { cursor: grabbing; }
+  /* Botao PREENCHIDO, e nao texto com aparencia de titulo: e ele que de fato toca. Ficou assim
+     depois de o usuario clicar em "Ler como está" (que e so o seletor de modo) esperando ouvir —
+     o preset selecionado tinha preenchimento e virava a coisa mais parecida com botao na caixa. */
   .tts-sel-head {
     all: unset;
     cursor: pointer;
     flex: 1;
     min-width: 0;
+    text-align: center;
+    background: var(--accent);
+    color: var(--text-inverse);
+    border-radius: var(--radius-full);
+    padding: var(--space-2) var(--space-3);
     font-size: var(--text-sm);
     font-weight: 600;
   }
+  .tts-sel-head:active { background: var(--accent-press); }
   .tts-sel-x {
     all: unset;
     cursor: pointer;
@@ -247,9 +322,10 @@
     font-size: var(--text-xs);
     cursor: pointer;
   }
-  /* Selecionado = preenchimento, nao so contorno colorido: e como o app marca escolha ativa
-     (option-btn--always usa accent-dim do mesmo jeito). */
-  .tts-sel-btn.sel { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+  /* Preset selecionado marca com contorno e cor de texto, SEM preenchimento: preenchimento e do
+     botao que toca (.tts-sel-head). Dois preenchidos na mesma caixa e o que fez o usuario clicar no
+     preset achando que ia ouvir. */
+  .tts-sel-btn.sel { border-color: var(--accent); color: var(--accent); }
   .tts-sel-go { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); font-weight: 600; }
   .tts-sel-input {
     background: var(--surface-inset);
