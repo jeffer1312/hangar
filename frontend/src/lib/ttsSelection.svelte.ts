@@ -18,6 +18,12 @@ let y = $state(0);
 // crescem o painel bem alem disso (e o erro da Groq, como o da ElevenLabs, pode quebrar em
 // varias linhas num celular estreito).
 let panelH = $state(0);
+// Espelha o `engajado` da TtsSelectionPill: quem decide se o painel esta NA TELA, porque focar o
+// campo de instrucao colapsa a Selection API (ativa vira false no meio da digitacao) e o painel
+// continua visivel — ver comentario da propria pill. --cp-tts-h (App.svelte) precisa desta
+// condicao, nao de `ativa`, senao as pills do Chat descem por baixo do painel aberto assim que o
+// usuario toca no campo livre.
+let engajado = $state(false);
 
 function dentroDoChat(sel: Selection): boolean {
   const no = sel.anchorNode;
@@ -61,7 +67,10 @@ export const ttsSelection = {
   get y() { return y; },
   get ativa() { return texto.length > 0; },
   get panelH() { return panelH; },
+  get engajado() { return engajado; },
   limpar() { texto = ''; blocos = []; },
   /** Publicado pela TtsSelectionPill (dona da medicao). 0 quando ela desmonta. */
   setPanelH(h: number) { panelH = h; },
+  /** Publicado pela TtsSelectionPill (dona do estado) junto de cada mudanca do seu `engajado`. */
+  setEngajado(v: boolean) { engajado = v; },
 };

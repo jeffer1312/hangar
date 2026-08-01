@@ -1,12 +1,10 @@
 import { narrarSelecao } from './api';
+import { ehInstrucaoDigitada } from './ttsPresets';
 
 // Narracao guiada (fase 2 do TTS): pede pra Groq tratar o texto falavel de uma selecao ANTES de
 // virar audio, e guarda o resultado pra revisao — requisito explicito do desenho: "LLM falando
 // sobre a selecao, em vez de le-la, tem que ser conferivel de olho". Modulo (nao componente), pelo
 // mesmo motivo do ttsPlayer: sobrevive a remontagem do Chat/pill entre sessoes.
-
-export const PRESET_LER = '';
-export const PRESET_CODIGO = 'Explique a lógica do código em vez de descrevê-lo literalmente.';
 
 let carregando = $state(false);
 let erro = $state('');
@@ -32,7 +30,10 @@ export const ttsNarracao = {
    * pra revisao (ttsNarracao.textoTratado), que so entao pode virar audio.
    */
   async pedir(texto: string, blocos: string[], instrucao: string): Promise<void> {
-    ultimaInstrucao = instrucao;
+    // So digitada persiste (prefill da proxima selecao) — o texto de um preset (ex: "Explicar o
+    // codigo") grudava aqui e reaparecia numa selecao seguinte sem codigo nenhum, gastando Groq a
+    // toa e sem o usuario perceber que a instrucao vinha de um toque antigo.
+    if (ehInstrucaoDigitada(instrucao)) ultimaInstrucao = instrucao;
     if (!instrucao) {
       textoTratado = texto; instrucaoUsada = ''; erro = ''; carregando = false;
       return;
