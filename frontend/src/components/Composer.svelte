@@ -225,6 +225,16 @@
 
   function iniciarContagem() {
     cancelarContagem();
+    // Tela ja escondida ANTES da contagem comecar (a transcricao ficou em voo 1-4s e a tela apagou
+    // nesse meio-tempo -- aoEsconder rodou com contagem ainda null, sem nada pra cancelar). Sem este
+    // guard o alvo de relogio de parede ja nasce vencido e o primeiro tick (<=250ms) manda na hora,
+    // sem a janela de cancelar que a correcao 2 existe pra garantir. Mesma recusa sonora dos outros
+    // motivos de supressao.
+    if (document.hidden) {
+      somRecusa();
+      setTimeout(fecharBipes, 400);
+      return;
+    }
     contagemAlvo = Date.now() + CONTAGEM_MS;
     contagem = 3;
     // Tick so pra REDESENHAR o numero -- quem decide a hora de enviar e o relogio (contagemAlvo),
@@ -472,7 +482,13 @@
     try {
       const { text, raw, aviso } = await transcribeFile(sessionName, file, { limpar: !!opts?.ditado });
       const t = text.trim();
-      if (!t) { recError = 'Transcrição vazia — grave de novo'; return; }
+      if (!t) {
+        recError = 'Transcrição vazia — grave de novo';
+        // Ditado do mic: falou, ouviu a gravacao encerrar sozinha e nada vai acontecer -- mesmo
+        // aviso sonoro dos outros motivos de supressao. So ditado (nao anexo de audio pelo 📎).
+        if (opts?.ditado) { somRecusa(); setTimeout(fecharBipes, 400); }
+        return;
+      }
       // Le inputText SO agora (pos-await, na hora de atribuir): o campo continua digitavel durante
       // "transcrevendo…" (canSend so trava o botao de enviar), entao ler antes do await perderia o
       // que o usuario digitou a mao enquanto esperava o round-trip (mais lento agora, com a limpeza).
@@ -517,6 +533,9 @@
       recError = status === 503
         ? 'Configure a chave da Groq em Configurações → Anexos e transcrição'
         : err instanceof Error ? err.message : 'Falha na transcrição';
+      // Mesmo aviso sonoro do ditado que termina sem texto -- inclui o 503 de chave da Groq
+      // ausente. So ditado (nao anexo de audio pelo 📎, que nunca teve bipe).
+      if (opts?.ditado) { somRecusa(); setTimeout(fecharBipes, 400); }
     } finally {
       transcribing = false;
     }
