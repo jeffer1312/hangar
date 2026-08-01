@@ -38,6 +38,7 @@
   import { getCommands, setModelEffort, uploadFile, transcribeFile, getCodexModels, getPiModels, type ModelEffortBody } from '../lib/api';
   import type { State } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
+  import { ttsPlayer } from '../lib/ttsPlayer.svelte';
 
   interface Props {
     sessionName: string;
@@ -676,6 +677,10 @@
     recFailed = false;
     recBars = [];
     recSeconds = 0;
+
+    // O mic captaria a propria narracao: o detector nunca veria silencio e o whisper transcreveria
+    // o que o app estava lendo em voz alta.
+    if (ttsPlayer.playing) ttsPlayer.toggle();
 
     // Grava pelo mic e transcreve na Groq ao parar; waveform real do audio.
     let stream: MediaStream;
