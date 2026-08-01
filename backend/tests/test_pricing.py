@@ -141,11 +141,11 @@ def test_slim_descarta_entrada_sem_preco_de_output():
 
 def test_canoniza_apelido_de_provedor():
     """Cada fonte entrega o próprio vocabulário pro mesmo lugar onde a fatura cai: sem traduzir,
-    a assinatura da OpenAI ficava partida entre 'openai' e 'openai-codex', e a da Moonshot entre
-    'kimi-coding', 'clinepass' e 'moonshotai'."""
+    a assinatura da OpenAI ficava partida entre 'openai' e 'openai-codex'. 'clinepass' NÃO entra
+    aqui — é gateway de modelo misturado, como openrouter (ver
+    test_canonizar_provedor_nao_encosta_na_conta_nem_no_gateway)."""
     assert pricing.canonizar_provedor("openai-codex") == "openai"
     assert pricing.canonizar_provedor("kimi-coding") == "moonshotai"
-    assert pricing.canonizar_provedor("clinepass") == "moonshotai"
     assert pricing.canonizar_provedor("moonshotai") == "moonshotai"
 
 

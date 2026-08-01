@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from app import pricing
+from app import costs_claude_transcript, pricing
 from app.adapters.pi import sessions as pi_sessions
 from app.config import list_config_dirs
 
@@ -37,6 +37,7 @@ class UsageRow:
     output: int
     cache_write: int
     cache_read: int
+    subagente: bool = False   # transcript de subagente (Task tool), não de conversa
 
 
 def _ler_jsonl(path: Path) -> Iterator[dict]:
@@ -72,24 +73,6 @@ def _quando(iso: str | None) -> datetime | None:
         return None
 
 
-def cwd_do_transcript(path: str) -> str:
-    """O caminho REAL do projeto, lido de dentro do transcript.
-
-    O nome do diretório do Claude (`-home-jefferson--rea-de-trabalho-…`) NÃO é invertível: 'Á' e
-    espaço viraram '-', igual à barra. Desmanglar é adivinhação. O transcript carrega o cwd de
-    verdade — medido: terceira linha, junto com gitBranch.
-    """
-    if not path:
-        return ""
-    for i, d in enumerate(_ler_jsonl(Path(path))):
-        cwd = d.get("cwd")
-        if isinstance(cwd, str) and cwd:
-            return cwd
-        if i > 200:   # cwd aparece nas primeiras linhas; sem o corte, um transcript de 100 MB
-            break     # seria lido inteiro só pra descobrir que não tem
-    return ""
-
-
 def _int(v) -> int:
     try:
         return int(v or 0)
@@ -98,50 +81,33 @@ def _int(v) -> int:
 
 
 def linhas_claude(config_dir: Path, account_id: str) -> list[UsageRow]:
-    """~/.claude/metrics/costs.jsonl — cumulativo por sessão, última linha vence.
+    """Uso do Claude Code lido do TRANSCRIPT (`<config>/projects/**/*.jsonl`).
 
-    O provedor é a conta Anthropic, EXCETO em sessão de motor: ali o modelo entrega
-    ('k3' só existe na Moonshot), e é o único caminho possível, porque CP_ENGINE só existe
-    em processo vivo.
+    Era o `costs.jsonl` do plugin ECC. Trocou por três motivos medidos: o resumo não enxerga
+    subagente (13,7% do volume), o app não pode depender de plugin de terceiro para função
+    própria, e o plugin só cobre a partir de 27/06 enquanto os transcripts vão a 12/06.
+
+    A raiz vem do `config_dir` RECEBIDO: `coletar()` chama esta função uma vez por diretório
+    de configuração, e ignorar o argumento leria a mesma raiz N vezes.
     """
-    src = config_dir / "metrics" / "costs.jsonl"
-    ultimo: dict[str, dict] = {}
-    for d in _ler_jsonl(src):
-        if not d.get("timestamp"):
-            continue
-        # O descarte de IGNORADOS mora AQUI, antes do dedup, e não no laço de baixo. O arquivo é
-        # cumulativo por sessão: cada linha carrega o total acumulado. Filtrar depois do
-        # `ultimo[chave] = d` faz o último turno em '<synthetic>' descartar a SESSÃO INTEIRA, não
-        # só aquele turno — medido no arquivo real: 7 sessões, 197.161.138 de cache lido (0,90% do
-        # arquivo) sumindo da conta sem sinal nenhum na tela. Descartando antes, a sessão fica com
-        # o snapshot do turno anterior, que é o que "excluído da coleta" sempre quis dizer.
-        if (d.get("model") or "").strip() in pricing.IGNORADOS:
-            continue
-        chave = d.get("session_id") or d.get("transcript_path") or d["timestamp"]
-        ultimo[chave] = d
-
-    cache_cwd: dict[str, str] = {}
+    raiz = costs_claude_transcript.raiz_projetos(config_dir)
     out: list[UsageRow] = []
-    for d in ultimo.values():
-        modelo = (d.get("model") or "").strip()
-        ts = _quando(d.get("timestamp"))
-        if ts is None:
+    for u in costs_claude_transcript.varrer(raiz):
+        modelo = (u.model or "").strip()
+        if modelo in pricing.IGNORADOS:
             continue
-        tp = d.get("transcript_path") or ""
-        if tp not in cache_cwd:
-            cache_cwd[tp] = cwd_do_transcript(tp)
-        prov = pricing.provider_for(modelo)
-        # Modelo da própria Anthropic -> a conta é o provedor. Outro provedor -> é motor.
-        if prov is None or prov == "anthropic":
+        prov = pricing.canonizar_provedor(pricing.provider_for(modelo) or "")
+        # Modelo da própria Anthropic (ou sem tarifa) -> a conta é o provedor.
+        # Outro provedor -> é sessão de motor, e o modelo é quem entrega, porque o
+        # CP_ENGINE só existe em processo vivo.
+        if not prov or prov == "anthropic":
             prov = account_id
-        prov = pricing.canonizar_provedor(prov)
         out.append(UsageRow(
-            ts=ts, source="claude", provider=prov, model=modelo,
-            project=cache_cwd[tp] or PROJETO_DESCONHECIDO,
-            session_id=str(d.get("session_id") or ""),
-            input=_int(d.get("input_tokens")), output=_int(d.get("output_tokens")),
-            cache_write=_int(d.get("cache_write_tokens")),
-            cache_read=_int(d.get("cache_read_tokens")),
+            ts=u.ts, source="claude", provider=prov, model=modelo,
+            project=u.cwd or PROJETO_DESCONHECIDO, session_id=u.session_id,
+            input=u.input, output=u.output,
+            cache_write=u.cache_write, cache_read=u.cache_read,
+            subagente=u.subagente,
         ))
     return out
 
@@ -335,20 +301,11 @@ def coletar() -> list[UsageRow]:
     """Todas as linhas das três fontes. NUNCA vai à rede."""
     out: list[UsageRow] = []
     with _cache_lock:
+        # O Claude não tem entrada própria aqui (era `_assinatura` do costs.jsonl): quem
+        # cacheia agora é o costs_claude_transcript, por RAIZ e por ARQUIVO (Task 1) — uma
+        # segunda camada de cache aqui só duplicaria a invalidação sem ganhar nada.
         for caminho, account_id in _config_dirs():
-            cfg = Path(caminho)
-            arq = cfg / "metrics" / "costs.jsonl"
-            chave = f"claude:{arq}"
-            sig = _assinatura(arq)
-            if sig is None:
-                # Arquivo ausente: a fonte não aparece. "Sem dados" nunca pode virar "zero".
-                _cache.pop(chave, None)
-                continue
-            hit = _cache.get(chave)
-            if hit is None or hit[0] != sig:
-                hit = (sig, linhas_claude(cfg, account_id))
-                _cache[chave] = hit
-            out.extend(hit[1])
+            out.extend(linhas_claude(Path(caminho), account_id))
 
         for nome, raiz, leitor in (("codex", raiz_codex(), linhas_codex),
                                    ("pi", raiz_pi(), linhas_pi)):
