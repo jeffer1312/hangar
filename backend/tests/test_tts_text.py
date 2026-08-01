@@ -28,3 +28,18 @@ def test_quebra_de_bloco_nao_duplica_pontuacao_de_frase_ja_fechada():
     # a frase que ja termina em "." NAO pode virar "..".
     entrada = "Passo 1\nFazer X no arquivo.\nitem um\nitem dois"
     assert preparar(entrada) == "Passo 1. Fazer X no arquivo. item um. item dois"
+
+
+def test_hash_de_commit_nao_e_soletrado():
+    # "8f94525..2e70e70" letra a letra e a coisa mais inutil que a voz pode fazer: ninguem decora
+    # hash de ouvido. O resto da frase continua de pe sem ele.
+    assert preparar("No ar: 8f94525..2e70e70. Recarrega e testa.") == "No ar: . Recarrega e testa."
+    assert preparar("commit d47dd19 na main") == "commit na main"
+
+
+def test_hash_nao_come_numero_nem_palavra_hexadecimal():
+    # Dois falsos positivos medidos, e a razao de a regra exigir digito E letra a-f ao mesmo tempo:
+    # so digito pegaria um numero de verdade; so letra pegaria palavra composta de letras hex.
+    assert preparar("o numero 1234567 continua") == "o numero 1234567 continua"
+    assert preparar("ele defaced o cafe e acceded") == "ele defaced o cafe e acceded"
+    assert preparar("a versao 2.1.220 fica") == "a versao 2.1.220 fica"
