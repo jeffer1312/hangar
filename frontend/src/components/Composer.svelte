@@ -369,11 +369,14 @@
     if (transcribing) { recError = 'Aguarde a transcrição atual terminar'; return; }
     transcribing = true;
     recError = '';
-    const before = inputText.trim();
     try {
       const { text, raw, aviso } = await transcribeFile(sessionName, file, { limpar: !!opts?.ditado });
       const t = text.trim();
       if (!t) { recError = 'Transcrição vazia — grave de novo'; return; }
+      // Le inputText SO agora (pos-await, na hora de atribuir): o campo continua digitavel durante
+      // "transcrevendo…" (canSend so trava o botao de enviar), entao ler antes do await perderia o
+      // que o usuario digitou a mao enquanto esperava o round-trip (mais lento agora, com a limpeza).
+      const before = inputText.trim();
       inputText = before ? `${before} ${t}` : t;
       // Oferece desfazer so quando a limpeza de fato mudou o texto (raw ausente/igual -> nada a desfazer).
       const cru = raw?.trim();
