@@ -152,3 +152,46 @@ def test_codex_rollout_sem_token_count_e_pulado(tmp_path, monkeypatch):
     ])
     monkeypatch.setattr(cs, "raiz_codex", lambda: tmp_path / "sessions")
     assert cs.linhas_codex() == []
+
+
+def _rollout_codex(cwd, sid, tokens):
+    return [
+        {"timestamp": "2026-08-01T10:00:00Z", "type": "session_meta",
+         "payload": {"cwd": cwd, "model_provider": "openai", "session_id": sid}},
+        {"type": "turn_context", "payload": {"model": "gpt-5.6-sol"}},
+        {"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": tokens}}},
+    ]
+
+
+def test_codex_le_sessions_e_archived_sessions_sem_duplicar(tmp_path, monkeypatch):
+    # Arquivar MOVE (não copia): sessions/ e archived_sessions/ são diretórios IRMÃOS, e
+    # sem varrer os dois o gasto da thread arquivada some do painel.
+    _escrever(tmp_path / "sessions" / "rollout-viva.jsonl",
+              _rollout_codex("/repo/viva", "viva", {"input_tokens": 10, "output_tokens": 1}))
+    _escrever(tmp_path / "archived_sessions" / "rollout-arquivada.jsonl",
+              _rollout_codex("/repo/arquivada", "arquivada", {"input_tokens": 20, "output_tokens": 2}))
+    monkeypatch.setattr(cs, "raiz_codex", lambda: tmp_path / "sessions")
+    sids = {r.session_id for r in cs.linhas_codex()}
+    assert sids == {"viva", "arquivada"}
+
+
+def test_codex_sem_archived_sessions_nao_quebra(tmp_path, monkeypatch):
+    _escrever(tmp_path / "sessions" / "rollout-viva.jsonl",
+              _rollout_codex("/repo/viva", "viva", {"input_tokens": 10, "output_tokens": 1}))
+    monkeypatch.setattr(cs, "raiz_codex", lambda: tmp_path / "sessions")
+    assert [r.session_id for r in cs.linhas_codex()] == ["viva"]
+
+
+def test_codex_le_modelo_so_do_turn_context(tmp_path, monkeypatch):
+    # `model` só é confiável vindo de turn_context; um payload.model de outro tipo de evento
+    # não pode vazar pro campo modelo da linha.
+    raiz = tmp_path / "sessions"
+    _escrever(raiz / "rollout-x.jsonl", [
+        {"timestamp": "2026-08-01T10:00:00Z", "type": "session_meta",
+         "payload": {"cwd": "/r", "model_provider": "openai", "session_id": "x"}},
+        {"type": "outro_evento", "payload": {"model": "modelo-errado"}},
+        {"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {
+            "input_tokens": 10, "output_tokens": 1}}}},
+    ])
+    monkeypatch.setattr(cs, "raiz_codex", lambda: raiz)
+    assert cs.linhas_codex()[0].model == "?"
