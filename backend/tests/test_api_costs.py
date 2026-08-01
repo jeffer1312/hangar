@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 
 from app.api import app
 from app.config import settings
+from app.costs import PERIODOS
 from app.models import CostReport
 
 
@@ -55,3 +56,13 @@ def test_resposta_ecoa_o_filtro_aplicado(client, h, monkeypatch):
                         lambda period="all": CostReport(applied={"period": period}))
     r = client.get("/api/costs?period=7d", headers=h)
     assert r.json()["applied"]["period"] == "7d"
+
+
+@pytest.mark.parametrize("period", list(PERIODOS))
+def test_todo_periodo_de_costs_py_e_aceito_pela_rota(client, h, monkeypatch, period):
+    # Amarra a lista da rota à fonte única (costs.PERIODOS): período novo lá sem ajuste aqui
+    # tem que quebrar este teste, não cair calado em "all".
+    monkeypatch.setattr("app.api.costs_report",
+                        lambda period="all": CostReport(applied={"period": period}))
+    r = client.get(f"/api/costs?period={period}", headers=h)
+    assert r.json()["applied"]["period"] == period

@@ -41,7 +41,7 @@ from app import tts
 from app.tts_text import preparar as tts_preparar
 from app import narrar
 from app import default_model, engine_probe, engines
-from app.costs import report as costs_report
+from app.costs import report as costs_report, PERIODOS as _COST_PERIODOS
 from app import pricing
 from app.git_ops import (
     list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit_diff, revert_commit, cherry_pick, reset_to, create_branch_at, create_tag, diff_vs_worktree, branches_containing, commit, last_commit_message, push as push_branch, sequencer_state, GitError, branch_of,
@@ -594,7 +594,9 @@ def claude_configs():
 def costs_endpoint(period: str = "all"):
     # Período inválido cai em "all" em vez de 422: um cliente antigo da malha mandando qualquer
     # coisa não pode derrubar o custo daquela máquina inteira da soma.
-    if period not in ("7d", "30d", "90d", "all"):
+    # Lista vem de costs.PERIODOS (fonte única com o montar()); "all" fica de fora do dict porque
+    # não tem número de dias, então entra à parte aqui.
+    if period not in _COST_PERIODOS and period != "all":
         period = "all"
     return costs_report(period=period)
 
