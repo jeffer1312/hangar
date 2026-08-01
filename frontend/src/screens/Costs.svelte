@@ -214,16 +214,17 @@
     camadasOff = new Set();
   }
 
-  // "sessão" só é honesto quando a conta exclui subagente: `sessions` é +1 por LINHA de
-  // transcript (backend/app/costs.py:_somar), e desde a fase 2 do transcript direto cada Task
-  // disparada é uma linha própria. Só o filtro "só conversa" (com detalhamento) tira essas
-  // linhas da soma — nos outros dois estados, e em servidor antigo sem detalhamento, o número
-  // inclui subagente mesmo que o cliente não consiga separar a fração.
-  const incluiSubagente = $derived(!(temCombos && filtroAtivo.subagente === false));
-  const sess = (n: number) =>
-    incluiSubagente
-      ? `${n} ${n === 1 ? 'sessão ou subagente' : 'sessões e subagentes'}`
-      : `${n} ${n === 1 ? 'sessão' : 'sessões'}`;
+  // `sessions` é +1 por LINHA de transcript (backend/app/costs.py:_somar), e desde a fase 2 cada
+  // Task disparada é uma linha própria — a palavra tem que seguir os TRÊS estados do filtro de
+  // subagente, não só "exclui ou não": "só subagente" filtra pra SÓ linha de Task (`filtrar` em
+  // cubo.ts), e "sessões e subagentes" ali afirmaria conversa que não está na conta. Sem
+  // detalhamento (servidor antigo) não existe o filtro, e a soma é sempre mistura.
+  const sess = (n: number) => {
+    const um = n === 1;
+    if (temCombos && filtroAtivo.subagente === false) return `${n} ${um ? 'sessão' : 'sessões'}`;
+    if (temCombos && filtroAtivo.subagente === true) return `${n} ${um ? 'subagente' : 'subagentes'}`;
+    return `${n} ${um ? 'sessão ou subagente' : 'sessões e subagentes'}`;
+  };
 
   const diasDoPeriodo = $derived(
     PERIODOS.find((p) => p.id === period)!.dias || report.by_day.length || 1,
