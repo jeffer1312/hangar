@@ -104,8 +104,16 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
     """
     stops = _STOPS_BY_PROVIDER.get(provider, ())
     lines = pane.splitlines()
+    # A conversa acaba na ÚLTIMA RÉGUA do pane: dali pra baixo é a caixa de digitar, a statusline,
+    # as dicas e — o que motivou este corte — o PAINEL DE SUBAGENTES ("● main" / "◯ general-purpose
+    # Grepping… 1m 34s"). Ele marca a linha do agente principal com o MESMO ● do bloco do assistente
+    # (U+25CF, medido no pane em 01/08/2026), e como a varredura pega o ÚLTIMO ●, o painel ganhava
+    # sempre: numa sessão com subagente rodando a prévia era o painel, nunca o texto.
+    # Corte por posição, e não por vocabulário: qualquer chrome futuro que reuse ● cai fora junto.
+    # Régua ausente (pane muito curto / recém-aberto) -> varre tudo, como antes.
+    fim = max((i for i, ln in enumerate(lines) if _RULE_RE.match(ln)), default=len(lines))
     start = -1
-    for i, ln in enumerate(lines):
+    for i, ln in enumerate(lines[:fim] if fim < len(lines) else lines):
         s = ln.lstrip()
         corpo = s[1:].lstrip()
         if (s[:1] == _ASSISTANT_GLYPH and not _TOOL_BLOCK_RE.match(corpo)

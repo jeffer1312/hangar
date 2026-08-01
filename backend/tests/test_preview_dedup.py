@@ -225,3 +225,31 @@ def test_preview_pi_pula_edit_com_diff():
         "✻ Inspecting… (6m)\n"
     )
     assert extract_assistant_text(pane, "pi") == "A prosa que deve sobreviver."
+
+
+PANE_COM_PAINEL_DE_SUBAGENTES = """● Dinheiro: a cobranca e por caractere do texto que voce manda.
+
+────────────────────────────────────────────────────────────
+❯ Sim, depois faz o streaming
+────────────────────────────────────────────────────────────
+  🤖 Opus5·1M (high✦) │ 📁 claude-cockpit [main*] │ 💵 $10.51
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 2 agents
+
+  ● main
+  ◯ general-purpose  Grepping textoFalavel usage sitewide  1m 34s · ↓ 105.1k tokens
+"""
+
+
+def test_painel_de_subagentes_nao_vira_previa():
+    # O painel de subagentes marca o agente principal com o MESMO ● do bloco do assistente, e fica
+    # no RODAPE -- como a varredura pega o ultimo ●, ele ganhava sempre e a previa virava
+    # "main / ◯ general-purpose ...". O corte na ultima regua resolve por POSICAO.
+    out = extract_assistant_text(PANE_COM_PAINEL_DE_SUBAGENTES)
+    assert out == "Dinheiro: a cobranca e por caractere do texto que voce manda."
+
+
+def test_pane_sem_regua_ainda_varre_tudo():
+    # Fallback: sem regua (pane recem-aberto), o comportamento antigo vale -- previa e melhor que
+    # nada, e nao ha rodape pra confundir.
+    pane = "● Texto solto sem chrome nenhum\n"
+    assert extract_assistant_text(pane) == "Texto solto sem chrome nenhum"
