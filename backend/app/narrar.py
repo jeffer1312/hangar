@@ -59,17 +59,18 @@ def prompt_narrar(texto: str, blocos: list[str], instrucao: str) -> str:
 def _provedor() -> tuple[str, str, str]:
     """(base_url, api_key, modelo) efetivos. Vazio significa "o de sempre".
 
-    A chave da Groq so e herdada quando o endpoint TAMBEM e o da Groq. Sem essa amarra, apontar o
-    endpoint pra outro provedor e esquecer de preencher a chave mandaria um segredo valido pra um
-    host que nao o emitiu — e o usuario so veria "provedor 401".
+    `llm_api_key` so vale com endpoint proprio (base != PADRAO_BASE_URL) — endpoint padrao usa
+    SEMPRE `groq_api_key`, sem fallback pra `llm_api_key`. Sem essa amarra, uma `llm_api_key` de
+    outro provedor sobrando de config anterior mandaria um segredo valido pro host errado (Groq) —
+    e o usuario so veria "provedor 401".
 
     Isso tambem resolve um beco: `llm_api_key` esta em SEGREDOS, e o runtime_config ignora string
     vazia quando ja ha valor (:137-140), entao ela nao pode ser esvaziada pela tela. Presa ao
-    base_url, apagar o endpoint ja devolve o comportamento padrao."""
+    base_url, apagar o endpoint ja devolve o comportamento padrao: a chave de outro provedor para
+    de ser lida, mesmo que continue salva."""
     base = (runtime_config.get("llm_base_url") or "").strip().rstrip("/") or PADRAO_BASE_URL
     if base == PADRAO_BASE_URL:
-        chave = ((runtime_config.get("llm_api_key") or "").strip()
-                 or (runtime_config.get("groq_api_key") or "").strip())
+        chave = (runtime_config.get("groq_api_key") or "").strip()
     else:
         chave = (runtime_config.get("llm_api_key") or "").strip()
     modelo = (runtime_config.get("llm_model") or "").strip() or PADRAO_MODELO
