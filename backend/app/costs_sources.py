@@ -10,6 +10,7 @@ nada — devolve um número plausível e errado.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -131,5 +132,54 @@ def linhas_claude(config_dir: Path, account_id: str) -> list[UsageRow]:
             input=_int(d.get("input_tokens")), output=_int(d.get("output_tokens")),
             cache_write=_int(d.get("cache_write_tokens")),
             cache_read=_int(d.get("cache_read_tokens")),
+        ))
+    return out
+
+
+def raiz_codex() -> Path:
+    return Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex")) / "sessions"
+
+
+def linhas_codex() -> list[UsageRow]:
+    """~/.codex/sessions/**/rollout-*.jsonl — cumulativo, último token_count vence.
+
+    Dois detalhes medidos em 30/07/2026 que só se descobre olhando o arquivo:
+      - `input_tokens` INCLUI o cacheado -> input real = input_tokens - cached_input_tokens
+      - `reasoning_output_tokens` é SUBCONJUNTO de `output_tokens` (16242+18=16260) -> não somar
+    O adapter já registra que este campo é cumulativo (adapters/codex/adapter.py:144); lá isso é
+    problema, aqui é exatamente o que queremos.
+    """
+    raiz = raiz_codex()
+    if not raiz.is_dir():
+        return []
+    out: list[UsageRow] = []
+    for arq in raiz.rglob("rollout-*.jsonl"):
+        cwd = prov = modelo = sid = ""
+        ts = None
+        ultimo: dict | None = None
+        for d in _ler_jsonl(arq):
+            p = d.get("payload")
+            if not isinstance(p, dict):
+                continue
+            if d.get("type") == "session_meta":
+                cwd = p.get("cwd") or cwd
+                prov = p.get("model_provider") or prov
+                sid = p.get("session_id") or sid
+                ts = _quando(d.get("timestamp")) or ts
+            if isinstance(p.get("model"), str):
+                modelo = p["model"]
+            if p.get("type") == "token_count":
+                info = p.get("info")
+                if isinstance(info, dict) and isinstance(info.get("total_token_usage"), dict):
+                    ultimo = info["total_token_usage"]
+        if ultimo is None or ts is None:
+            continue
+        cr = _int(ultimo.get("cached_input_tokens"))
+        out.append(UsageRow(
+            ts=ts, source="codex", provider=prov or "openai", model=modelo or "?",
+            project=cwd or PROJETO_DESCONHECIDO, session_id=sid,
+            input=max(0, _int(ultimo.get("input_tokens")) - cr),
+            output=_int(ultimo.get("output_tokens")),
+            cache_write=0, cache_read=cr,
         ))
     return out
