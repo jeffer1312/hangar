@@ -153,13 +153,7 @@
   let recStream: MediaStream | undefined;
   let recFailed = false;   // marcado no onerror -> onstop nao anexa audio truncado
   let starting = false;    // guarda reentrancia entre o tap e o await getUserMedia resolver
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let recognition: any;    // SpeechRecognition (Web Speech API) quando disponivel -> transcricao ao vivo
-  let liveBase = '';       // inputText antes do ditado (o texto reconhecido e apendado a ele)
-  let liveFinal = '';      // parte ja finalizada do ditado atual
-  let liveInterim = '';    // hipotese atual (nao finalizada); commitada no restart pra nao "apagar"
-  let liveStopping = false; // true = parada intencional/erro fatal -> onend NAO reinicia o ditado
-  // Feedback ao vivo da gravacao: timer (segundos) + waveform (nivel de voz por barra, deslizante).
+  // Feedback da gravacao: timer (segundos) + waveform (nivel de voz por barra, deslizante).
   let recSeconds = $state(0);
   let recBars = $state<number[]>([]);
   let audioCtx: AudioContext | undefined;
@@ -383,7 +377,6 @@
   // Para o stream do mic e zera o estado. Chamado no onstop, no onerror, em falha e no onDestroy
   // (trocar de sessao com gravacao ativa desmonta o Composer -> sem isto o mic ficaria ligado).
   function teardownRecording() {
-    if (recognition) { try { recognition.stop(); } catch { /* ja parado */ } recognition = undefined; }
     if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
     if (recTimer) { clearInterval(recTimer); recTimer = undefined; }
     audioCtx?.close().catch((err) => console.warn('audioCtx.close falhou', err));
@@ -428,7 +421,7 @@
     }
   }
 
-  // Fallback (sem Web Speech): grava webm/mp4 e transcreve na Groq ao parar -> cai no composer.
+  // Grava webm/mp4 e transcreve na Groq ao parar -> cai no composer.
   function startMediaRecorder(stream: MediaStream) {
     mediaRecorder = new MediaRecorder(stream);
     mediaRecorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
@@ -458,82 +451,10 @@
     mediaRecorder.start();
   }
 
-  // Transcricao AO VIVO (Web Speech API): o texto reconhecido cai no textarea enquanto o usuario fala,
-  // apendado ao que ja houver — ele revisa e envia. So quando o navegador suporta (Chrome/Android bem;
-  // iOS Safari em PWA instavel -> por isso o fallback Groq acima).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function startLiveRecognition(SR: any) {
-    recognition = new SR();
-    recognition.lang = 'pt-BR';
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    liveBase = inputText.trim();
-    liveFinal = '';
-    liveInterim = '';
-    liveStopping = false;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    recognition.onresult = (e: any) => {
-      let interim = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const seg = e.results[i][0].transcript;
-        if (e.results[i].isFinal) liveFinal += seg;
-        else interim += seg;
-      }
-      liveInterim = interim;
-      // Enquanto grava, o campo e "controlado" pelo ditado (edicao manual so depois de parar) — como
-      // no dictation de qualquer app. liveBase preserva o que ja havia antes de comecar.
-      inputText = [liveBase, (liveFinal + interim).trim()].filter(Boolean).join(' ');
-      void tick().then(autoGrow);
-    };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    recognition.onerror = (e: any) => {
-      console.warn('SpeechRecognition erro', e?.error);
-      if (e?.error === 'no-speech' || e?.error === 'aborted') return;   // transitorio -> onend decide
-      // erro fatal (audio-capture/network/not-allowed): encerra a UI, nao deixa "gravando" mentiroso.
-      liveStopping = true;
-      recError = e?.error === 'not-allowed' ? 'Sem permissão pro microfone'
-        : e?.error === 'audio-capture' ? 'Microfone indisponível (em uso por outro app?)'
-        : 'Falha no reconhecimento de voz';
-      teardownRecording();
-    };
-    // O navegador encerra 'continuous' sozinho (timeout/silencio). Se o usuario NAO parou e nao houve
-    // erro fatal, reinicia pra manter o ditado vivo; senao a UI ficaria "gravando" sem captar nada.
-    recognition.onend = () => {
-      if (recording && !liveStopping) {
-        // iOS encerra a sessao a cada pausa. Commita o interim pendente ANTES de reiniciar, senao o
-        // trecho nao-finalizado se perde e o texto "apaga e recomeca".
-        if (liveInterim) { liveFinal += liveInterim; liveInterim = ''; }
-        try { recognition?.start(); } catch { teardownRecording(); }
-      }
-    };
-    recognition.start();
-  }
-
-  // Waveform "ouvindo" pro modo ao vivo: no iOS abrir um 2o acesso ao mic (getUserMedia p/ AnalyserNode)
-  // ao lado do SpeechRecognition prende o mic e re-pede permissao. Entao no ditado a barra e SINTETICA
-  // (onda animada, sem audio real), so pra sinalizar atividade. Sem AudioContext, so o rAF.
-  function startFakeMeter() {
-    let last = 0;
-    let phase = 0;
-    const loop = () => {
-      const now = performance.now();
-      if (now - last > 55) {
-        last = now;
-        phase += 0.4;
-        const level = 0.3 + 0.3 * Math.abs(Math.sin(phase)) + 0.2 * Math.abs(Math.sin(phase * 2.7));
-        recBars = [...recBars, Math.min(1, level)].slice(-barCount);
-      }
-      rafId = requestAnimationFrame(loop);
-    };
-    rafId = requestAnimationFrame(loop);
-  }
-
   async function toggleRecord() {
     if (recording) {
-      // parar: modo ao vivo -> encerra o reconhecimento (texto ja esta no campo); modo Groq -> para o
-      // gravador (dispara onstop). Guard de state cobre duplo-toque no stop do gravador.
-      if (recognition) { liveStopping = true; teardownRecording(); }   // teardown ja chama recognition.stop()
-      else if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
+      // parar: guard de state cobre duplo-toque no stop do gravador.
+      if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
       return;
     }
     if (starting || transcribing) return;   // nao regravar durante o start em voo nem a transcricao
@@ -542,29 +463,8 @@
     recFailed = false;
     recBars = [];
     recSeconds = 0;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const SR: any = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
 
-    // MODO AO VIVO (Web Speech): so o reconhecimento acessa o mic -> sem conflito/re-prompt no iOS.
-    // A barra e sintetica (startFakeMeter). Sem getUserMedia aqui.
-    if (SR) {
-      try {
-        startLiveRecognition(SR);
-      } catch (err) {
-        console.error('início do ditado falhou', err);
-        recError = 'Não foi possível iniciar o ditado';
-        teardownRecording();
-        starting = false;
-        return;
-      }
-      recTimer = setInterval(() => recSeconds++, 1000);
-      startFakeMeter();
-      recording = true;
-      starting = false;
-      return;
-    }
-
-    // FALLBACK (sem Web Speech): grava pelo mic e transcreve na Groq ao parar; waveform real do audio.
+    // Grava pelo mic e transcreve na Groq ao parar; waveform real do audio.
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
