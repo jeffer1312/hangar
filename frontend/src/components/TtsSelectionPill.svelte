@@ -3,7 +3,7 @@
   import { ttsSelection, iniciarCapturaDeSelecao } from '../lib/ttsSelection.svelte';
   import { ouvirTexto } from '../lib/ouvir';
   import { ttsNarracao } from '../lib/ttsNarracao.svelte';
-  import { PRESET_LER, PRESET_CODIGO, presetPadrao } from '../lib/ttsPresets';
+  import { PRESET_LER, PRESET_CODIGO, PRESET_FALA, presetPadrao } from '../lib/ttsPresets';
 
   let isDesktop = $state(false);
 
@@ -84,6 +84,16 @@
   // que e um botao — senao todo arraste vira clique em "Ouvir".
   let arrX = $state<number | null>(null);
   let arrY = $state<number | null>(null);
+
+  // Topo do painel flutuante, PRESO dentro da janela. Ele e ancorado pelo topo na posicao da
+  // selecao; com a selecao perto do rodape e o painel crescendo (o texto adaptado pela Groq e bem
+  // maior que os presets), ele descia pra fora da tela levando os botoes junto — sem alca, sem X,
+  // sem saida. Recalcula sozinho quando a altura medida muda, que e exatamente quando ele cresce.
+  const topoFlutuante = $derived.by(() => {
+    const alturaJanela = typeof window === 'undefined' ? 0 : window.innerHeight;
+    const teto = Math.max(8, alturaJanela - ttsSelection.panelH - 8);
+    return Math.min(ttsSelection.y + 6, teto);
+  });
 
   function iniciarArraste(e: PointerEvent) {
     if (!panelEl) return;
@@ -168,20 +178,33 @@
     class:flutuante={flutua}
     class:movido
     style:right={movido ? undefined : (flutua ? `calc(100% - ${ttsSelection.x}px)` : undefined)}
-    style:top={movido ? `${arrY}px` : (flutua ? `${ttsSelection.y + 6}px` : undefined)}
+    style:top={movido ? `${arrY}px` : (flutua ? `${topoFlutuante}px` : undefined)}
     style:left={movido ? `${arrX}px` : undefined}
     bind:this={panelEl}
   >
+    <!-- Cabecalho SEMPRE presente, fora dos ramos de estado. Ele so existia no estado inicial, e o
+         resultado foi o usuario preso: o texto revisado pela Groq cresceu, empurrou os botoes pra
+         fora da tela, e nao havia nem alca pra arrastar nem X pra fechar naquele estado. -->
+    <div class="tts-sel-top">
+      {#if isDesktop}
+        <span class="tts-sel-alca" onpointerdown={iniciarArraste} role="presentation" title="Arrastar">⠿</span>
+      {/if}
+      {#if ttsNarracao.carregando || ttsNarracao.erro || ttsNarracao.pendente}
+        <span class="tts-sel-titulo">{ttsNarracao.pendente ? 'Texto adaptado' : 'Leitura em voz'}</span>
+      {:else}
+        <button type="button" class="tts-sel-head" onclick={ouvirClique}>{rotulo}</button>
+      {/if}
+      <button type="button" class="tts-sel-x" onclick={fechar} aria-label="Fechar">✕</button>
+    </div>
+
     {#if ttsNarracao.carregando}
       <!-- Cancelar existe aqui porque a espera pela Groq pode chegar aos 60s do timeout do backend
            (narrar.py). Sem ele, uma consulta travada prende a faixa inteira: nao da pra tocar nada
            nem descartar o pedido. Nao aborta a requisicao em voo — so libera a interface, que e o
            que a pessoa precisa. -->
       <span class="tts-sel-load">consultando a Groq…</span>
-      <button type="button" class="tts-sel-btn" onclick={fechar}>Cancelar</button>
     {:else if ttsNarracao.erro}
       <span class="tts-sel-err">{ttsNarracao.erro}</span>
-      <button type="button" class="tts-sel-btn" onclick={fechar}>Fechar</button>
     {:else if ttsNarracao.pendente}
       <p class="tts-sel-preview">{ttsNarracao.textoTratado}</p>
       <div class="tts-sel-row">
@@ -189,16 +212,16 @@
         <button type="button" class="tts-sel-btn" onclick={fechar}>Cancelar</button>
       </div>
     {:else}
-      <!-- Fechar existe AQUI, no estado normal, e nao so nos ramos de erro/revisao. Sem ele o
-           painel abria e nao saia mais: quem so quis ver o que era ficava com ele preso na tela. -->
-      <div class="tts-sel-top">
-        {#if isDesktop}
-          <span class="tts-sel-alca" onpointerdown={iniciarArraste} role="presentation" title="Arrastar">⠿</span>
-        {/if}
-        <button type="button" class="tts-sel-head" onclick={ouvirClique}>{rotulo}</button>
-        <button type="button" class="tts-sel-x" onclick={fechar} aria-label="Fechar">✕</button>
-      </div>
       <div class="tts-sel-row">
+        <!-- Adaptar pra fala e o PADRAO — nasce marcado, e o botao "Ouvir" de cima ja usa ele sem
+             ninguem digitar nada. Aparece como atalho mesmo assim pra dar de volta a escolha depois
+             de tocar "Ler como está". -->
+        <button type="button" class="tts-sel-btn" class:sel={efetiva === PRESET_FALA}
+                onclick={() => {
+                  preferirLerLiteral = false;
+                  instrucao = PRESET_FALA;
+                  void ttsNarracao.pedir(textoSel, blocosSel, PRESET_FALA);
+                }}>Adaptar pra fala</button>
         <!-- Os presets AGEM no clique, nao so marcam modo. "Ler como está" quer dizer "lê agora,
              sem LLM" — nao sobra nada pra configurar depois, entao exigir um segundo toque no botao
              de cima fazia o clique parecer morto. Sincrono ate ouvirTexto: e aqui que o audio
@@ -262,6 +285,9 @@
     color: var(--text-primary);
     font-size: var(--text-sm);
     width: min(calc(100vw - var(--space-8)), 340px);
+    /* Teto absoluto: mesmo preso pelo topo, o painel nunca passa da janela. O texto adaptado rola
+       dentro dele (.tts-sel-preview), os botoes ficam sempre alcancaveis. */
+    max-height: calc(100vh - var(--space-4));
     /* --cp-tts-bar-h (publicada no App.svelte): soma a altura da BARRA DO PLAYER quando ela esta
        ativa, senao o painel nasce no mesmo lugar da TtsBar e tapa play/posicao/velocidade. */
     bottom: calc(var(--cp-dock-h, 150px) + 10px + var(--cp-tts-bar-h, 0px));
@@ -304,6 +330,13 @@
     font-weight: 600;
   }
   .tts-sel-head:active { background: var(--accent-press); }
+  .tts-sel-titulo {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
   .tts-sel-x {
     all: unset;
     cursor: pointer;
