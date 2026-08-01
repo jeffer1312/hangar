@@ -321,7 +321,19 @@
   }
 
   /* Preview plano: preserva quebras de linha do pane (sem markdown -> sem blocos). */
-  .prose.plain { white-space: pre-wrap; }
+  /* TETO de altura da prévia ao vivo. Ela é uma cópia do que o terminal desenha AGORA, trocada
+     inteira ~7×/s, e o pane alterna entre uma frase e um painel de 13 itens (que no celular quebra
+     em ~35 linhas). Como a lista fica colada no fim, cada troca empurrava e puxava dezenas de
+     linhas debaixo de quem estava lendo — o "pulo". Com teto, o bloco cresce até 10 linhas e para.
+     O excesso sai por CIMA (justify-content: flex-end): o que interessa na prévia é o FIM, o começo
+     já foi lido, e o texto inteiro chega na bolha canônica quando o turno commita. Máscara no topo
+     pra cortada não parecer texto faltando — mesma ideia do .bc-body.masked do card. */
+  .prose.plain {
+    white-space: pre-wrap;
+    display: flex; flex-direction: column; justify-content: flex-end;
+    max-height: 10lh; overflow: hidden;
+    mask-image: linear-gradient(to bottom, transparent, black 1.6lh);
+  }
 
   /* Painel de tarefas do TUI dentro do preview: uma linha fechada, arvore ao abrir. SEM caixa —
      nada no fluxo do chat tem superficie propria (bolha do assistente e texto solto, ToolGroup e

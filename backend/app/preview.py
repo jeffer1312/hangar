@@ -51,6 +51,42 @@ _MCP_CALL_RE = re.compile(r"^Calling\b[^\n]*(…|\.\.\.)\s*$")
 _PI_BOX_RE = re.compile(r"^\s*[╭╰][─\s]*[╮╯]\s*$")
 _STOPS_BY_PROVIDER = {"pi": (_PI_BOX_RE,)}
 
+# Bloco de FERRAMENTA do Pi, reconhecido pela ESTRUTURA e não pelo vocabulário: os filhos vêm
+# desenhados em box-drawing na linha logo abaixo — árvore (`├`/`└`), diff (`│`/`▌`) ou
+# resultado (`⎿`). O _TOOL_BLOCK_RE exige "Nome(" colado, e
+# o Pi escreve de pelo menos quatro jeitos diferentes — medidos no pane em 01/08/2026:
+#     ● Bash cd "/home/..."              ● Bash: 2 done • ctrl+o to toggle
+#     ● Write  (81 lines)                ● Multiple Tools: 3 done • bash, chrome_devtools_...
+# Nenhum casava, então o comando entrava na prévia como se fosse prosa: a cada ferramenta o bloco em
+# voo trocava de conteúdo E DE ALTURA, e a conversa pulava debaixo de quem estava lendo no celular.
+# Tentei antes por lista de nomes de ferramenta e virou caça a talharim — a cada forma nova do TUI,
+# outro vazamento. Estrutura cobre as quatro de uma vez e não envelhece com o vocabulário do Pi.
+#
+# O guard dos dois-pontos é o que protege a PROSA: o caso real de um ● seguido de árvore é o
+# assistente apresentando uma ("Estrutura final:" / " └ src/"), e essa frase termina em `:`. Sem ele,
+# essa prosa seria classificada como ferramenta, o bloco seria DESCARTADO e a prévia ficaria VAZIA —
+# pior que vir suja, a mesma armadilha documentada no _MCP_CALL_RE acima. Os quatro cabeçalhos do Pi
+# não terminam em `:`. Coberto por test_prosa_pi_que_termina_em_arvore_continua_sendo_prosa.
+# Só pro Pi, como o resto do chrome por provider: o Claude marca resultado com `⎿`.
+_PI_FILHO_RE = re.compile(r"^\s*[├└│▌⎿]")
+# EXCEÇÃO: o painel de tarefas tem a MESMA forma de uma ferramenta (cabeçalho + filhos em box-
+# drawing), mas é o único bloco desses que o usuário quer ver — pediu pra DOBRAR, não pra sumir.
+# A bolha o renderiza fechado (splitTodoBlock/<details> em AssistantBubble.svelte), então ele
+# ocupa uma linha e não faz a conversa pular. Sem esta exceção a regra estrutural o levaria junto.
+_PI_TODOS_RE = re.compile(r"^Todos \(\d+/\d+\)\s*$")
+
+
+def _pi_bloco_de_tool(lines: list[str], i: int, corpo: str) -> bool:
+    """Bloco `i` é chamada de ferramenta do Pi: filho em box-drawing logo abaixo, e o cabeçalho não é
+    uma frase apresentando a árvore (termina em `:`) nem o painel de tarefas."""
+    if corpo.rstrip().endswith(":") or _PI_TODOS_RE.match(corpo):
+        return False
+    for ln in lines[i + 1:]:
+        if not ln.strip():
+            continue
+        return bool(_PI_FILHO_RE.match(ln))
+    return False
+
 
 def extract_assistant_text(pane: str, provider: str = "claude") -> str:
     """Texto do ÚLTIMO bloco de PROSA do assistente (●) do pane, VERBATIM (sem reflow — núcleo seguro).
@@ -68,7 +104,9 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
     for i, ln in enumerate(lines):
         s = ln.lstrip()
         corpo = s[1:].lstrip()
-        if s[:1] == _ASSISTANT_GLYPH and not _TOOL_BLOCK_RE.match(corpo) and not _MCP_CALL_RE.match(corpo):
+        if (s[:1] == _ASSISTANT_GLYPH and not _TOOL_BLOCK_RE.match(corpo)
+                and not _MCP_CALL_RE.match(corpo)
+                and not (provider == "pi" and _pi_bloco_de_tool(lines, i, corpo))):
             start = i
     if start < 0:
         return ""
