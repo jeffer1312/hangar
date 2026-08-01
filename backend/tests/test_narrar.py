@@ -40,6 +40,20 @@ def test_sem_chave_levanta_503(monkeypatch):
     with pytest.raises(NarrarError) as ei:
         narrar.narrar("texto", [], "explique o código")
     assert ei.value.status == 503
+    # Endpoint padrao (sem base_url): a mensagem tem que mandar pro campo que _provedor() realmente
+    # le nesse ramo (chave da Groq), nunca pra Chave do LLM — esse campo nao e lido aqui.
+    assert "chave da Groq" in ei.value.detail
+    assert "Chave do LLM" not in ei.value.detail
+
+
+def test_sem_chave_endpoint_custom_levanta_503(monkeypatch):
+    # Endpoint proprio: agora e a Chave do LLM que falta, nao a da Groq.
+    _config(monkeypatch, {"llm_base_url": "https://outro.provedor/v1"})
+    with pytest.raises(NarrarError) as ei:
+        narrar.narrar("texto", [], "explique o código")
+    assert ei.value.status == 503
+    assert "Chave do LLM" in ei.value.detail
+    assert "chave da Groq" not in ei.value.detail
 
 
 def test_prompt_narrar_manda_instrucao_como_dado_no_prompt_do_usuario():
