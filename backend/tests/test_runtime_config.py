@@ -122,3 +122,19 @@ def test_editor_nao_aceita_caminho():
         with pytest.raises(ValueError):
             rc.aplicar({"editor": ruim})
     assert rc.get("editor") == "nvim"       # nenhuma tentativa ruim passou
+
+
+def test_llm_base_url_recusa_esquema_nao_http():
+    """Mesmo argumento do editor: antes só o dono da máquina escolhia o endpoint (env), agora o
+    celular escreve — só vazio (volta ao padrão) ou http(s):// de verdade."""
+    rc.aplicar({"llm_base_url": "https://x/v1"})
+    with pytest.raises(ValueError):
+        rc.aplicar({"llm_base_url": "ftp://x"})
+    assert rc.get("llm_base_url") == "https://x/v1"     # a tentativa ruim não passou
+
+
+def test_llm_base_url_aceita_http_e_vazio():
+    rc.aplicar({"llm_base_url": "https://x/v1"})
+    assert rc.get("llm_base_url") == "https://x/v1"
+    rc.aplicar({"llm_base_url": ""})
+    assert rc.get("llm_base_url") == ""

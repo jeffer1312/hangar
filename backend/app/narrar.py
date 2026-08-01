@@ -1,9 +1,12 @@
 import http.client
 import json
+import logging
 import urllib.error
 import urllib.request
 
 from app import runtime_config
+
+logger = logging.getLogger(__name__)
 
 # Narracao guiada (fase 2 do TTS): trata o texto falavel de uma selecao ANTES de virar audio, pra
 # ex: "explicar o codigo" em vez de le-lo literalmente. Mesma forma do transcribe.py: urllib da
@@ -12,9 +15,9 @@ from app import runtime_config
 PADRAO_BASE_URL = "https://api.groq.com/openai/v1"
 PADRAO_MODELO = "llama-3.3-70b-versatile"
 
-# Instrucoes que significam "ler como esta" — nao chamam a Groq. "" e o caso comum (usuario nunca
-# tocou o campo); os textos cobrem o preset de mesmo nome vindo do front, se algum dia ele mandar o
-# rotulo em vez de string vazia.
+# Instrucoes que significam "ler como esta" — nao chamam o provedor. "" e o caso comum (usuario
+# nunca tocou o campo); os textos cobrem o preset de mesmo nome vindo do front, se algum dia ele
+# mandar o rotulo em vez de string vazia.
 _PADRAO = {"", "ler como está", "ler como esta"}
 
 _SYSTEM = (
@@ -36,7 +39,7 @@ class NarrarError(Exception):
 
 
 def eh_instrucao_padrao(instrucao: str) -> bool:
-    """'ler como está' (ou vazio): caminho comum, que NAO chama a Groq — nao gasta token nem
+    """'ler como está' (ou vazio): caminho comum, que NAO chama o provedor — nao gasta token nem
     latencia nele."""
     return (instrucao or "").strip().lower() in _PADRAO
 
@@ -123,8 +126,11 @@ def chamar_chat(system: str, prompt: str, *, temperature: float, timeout: int) -
     except json.JSONDecodeError:
         raise NarrarError(502, "resposta do provedor nao e JSON valido")
     try:
+        # AttributeError entra na lista porque `content` pode vir None (modelo so devolveu
+        # tool_calls, ou foi filtrado) ou uma lista de partes (formato de varios proxies
+        # compativeis) — dois payloads reais que nao tem `.strip()`.
         texto_tratado = dados["choices"][0]["message"]["content"].strip()
-    except (KeyError, IndexError, TypeError):
+    except (KeyError, IndexError, TypeError, AttributeError):
         raise NarrarError(502, "resposta do provedor sem o texto esperado")
     if not texto_tratado:
         raise NarrarError(502, "provedor devolveu texto vazio")
@@ -177,6 +183,12 @@ def limpar_ditado(texto: str) -> tuple[str, str | None]:
         limpo = " ".join(chamar_chat(_SYSTEM_DITADO, cru, temperature=0, timeout=8).split())
     except NarrarError as e:
         return texto, e.detail
+    except Exception as e:
+        # Rede final: a docstring promete NUNCA levantar. chamar_chat ja cobre os erros esperados
+        # (rede, provedor, payload sem o texto); isto aqui e so pro que ninguem previu — melhor
+        # devolver o ditado cru com um motivo do que estourar 500 e a pessoa perder os 40s que falou.
+        logger.exception("limpar_ditado: falha inesperada, devolvendo o texto cru")
+        return texto, f"erro inesperado na limpeza: {e}"
     if len(limpo) > 1.5 * len(cru):
         return texto, "a limpeza inflou o texto (resposta em vez de limpeza) — ficou o original"
     if len(cru) > _LIMIAR_TEXTO_LONGO and len(limpo) < 0.5 * len(cru):
