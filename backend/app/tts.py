@@ -41,12 +41,21 @@ def _base_cache() -> Path:
     return Path(settings.projects_dir).parent / CACHE_SUBDIR
 
 
-def hash_de(texto: str, voz: str, provedor: str, ajustes: dict[str, float] | None = None) -> str:
+def hash_de(
+    texto: str, voz: str, provedor: str, ajustes: dict[str, float] | None = None, instrucao: str = "",
+) -> str:
     """Chave do cache. Inclui voz, provedor e os ajustes de naturalidade (stability etc): sem isso,
-    mexer na estabilidade e pedir pra ouvir de novo devolveria o audio ANTIGO do cache, calado."""
+    mexer na estabilidade e pedir pra ouvir de novo devolveria o audio ANTIGO do cache, calado.
+
+    `instrucao` (fase 2, narracao guiada): o mesmo `texto` tratado por instrucoes DIFERENTES (via
+    Groq, em narrar.py) tem que virar audio DIFERENTE. So entra no hash quando nao-vazia — string
+    vazia (o caminho de hoje, sem instrucao) tem que continuar batendo BYTE A BYTE com o hash de
+    antes desta fase, senao todo audio ja ouvido perderia o cache."""
     ajustes_str = json.dumps(ajustes or {}, sort_keys=True)
-    bruto = f"{provedor}\x00{voz}\x00{ajustes_str}\x00{texto}".encode("utf-8")
-    return hashlib.sha256(bruto).hexdigest()
+    bruto = f"{provedor}\x00{voz}\x00{ajustes_str}\x00{texto}"
+    if instrucao:
+        bruto += f"\x00{instrucao}"
+    return hashlib.sha256(bruto.encode("utf-8")).hexdigest()
 
 
 def extensao_de(audio: bytes) -> str:
@@ -224,10 +233,14 @@ def _limpar_antigos(base: Path) -> None:
         pass
 
 
-def sintetizar(texto: str, voz: str, provedor: str) -> tuple[str, bool, str]:
+def sintetizar(texto: str, voz: str, provedor: str, instrucao: str = "") -> tuple[str, bool, str]:
     """Devolve (hash, veio_do_cache, provedor_final). O 3o campo e o provedor QUE DE FATO respondeu
     (pode ter virado "local" pelo fallback abaixo) — sem ecoar isso pro chamador, a troca muda a voz
-    ouvida sem nenhum aviso. Levanta TtsError."""
+    ouvida sem nenhum aviso. Levanta TtsError.
+
+    `instrucao` (fase 2): so entra na chave do cache (ver hash_de) — quando isto chega aqui, `texto`
+    ja e o texto FINAL que vai virar audio (a narracao pela Groq, se houve, ja aconteceu antes,
+    em narrar.py); esta funcao nunca chama a Groq."""
     if provedor not in ("elevenlabs", "local"):
         raise TtsError(400, f"provedor desconhecido: {provedor}")
     # Front nunca manda provider=local (nao ha campo pra isso na tela) — o motor local so e
@@ -244,7 +257,7 @@ def sintetizar(texto: str, voz: str, provedor: str) -> tuple[str, bool, str]:
     # hash pelo mesmo motivo da voz: sem isso, trocar a estabilidade e ouvir de novo serve o audio
     # velho do cache, calado.
     ajustes = _ajustes_efetivos() if provedor != "local" else {}
-    h = hash_de(texto, voz, provedor, ajustes)
+    h = hash_de(texto, voz, provedor, ajustes, instrucao)
     base = _base_cache()
     try:
         base.mkdir(parents=True, exist_ok=True)

@@ -39,6 +39,7 @@ from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base, se
 from app import runtime_config
 from app import tts
 from app.tts_text import preparar as tts_preparar
+from app import narrar
 from app import default_model, engine_probe, engines
 from app.costs import report as costs_report
 from app.git_ops import (
@@ -478,6 +479,16 @@ class TtsBody(_StrictBody):
     # Confirmacao explicita do usuario pra passar do limite de aviso. Ver _TTS_TETO abaixo: o teto
     # duro nao e confirmavel, so o limite de aviso.
     confirm: bool = False
+    # Fase 2 (narracao guiada): instrucao que ja tratou este `text` via POST /api/tts/narrar ("" =
+    # leitura direta, o caminho de hoje). So entra na chave do cache (tts.hash_de) — chega aqui
+    # depois que o texto ja esta pronto pra virar audio, nunca dispara a Groq.
+    instruction: str = ""
+
+
+class NarrarBody(_StrictBody):
+    text: str = Field(min_length=1, max_length=200_000)
+    code_blocks: list[str] = Field(default_factory=list)
+    instruction: str = Field(min_length=1, max_length=2000)
 
 
 class PushSubscribeBody(_StrictBody):
@@ -2808,12 +2819,26 @@ async def tts_sintetizar(body: TtsBody):
         raise HTTPException(409, f"são {len(texto)} caracteres, acima do limite de {limite} — confirme para gerar")
     try:
         h, veio_do_cache, provedor_final = await asyncio.to_thread(
-            tts.sintetizar, texto, body.voice, body.provider)
+            tts.sintetizar, texto, body.voice, body.provider, body.instruction)
     except tts.TtsError as e:
         raise HTTPException(e.status, e.detail)
     # provider ecoa o que RESPONDEU de fato (pode ter virado "local" pelo fallback sem chave) — o
     # front usa isso pra avisar na barra, em vez de trocar de voz caladamente.
     return {"url": f"/api/tts/audio/{h}", "chars": len(texto), "cached": veio_do_cache, "provider": provedor_final}
+
+
+@app.post("/api/tts/narrar", dependencies=[Depends(require_auth)])
+async def tts_narrar(body: NarrarBody):
+    """Fase 2 (narracao guiada): trata o texto falavel de uma selecao pela Groq ANTES de virar
+    audio — o resultado volta pro front pra REVISAO (o usuario confere antes de gastar credito da
+    ElevenLabs), nao sintetiza nada aqui."""
+    try:
+        texto_tratado = await asyncio.to_thread(narrar.narrar, body.text, body.code_blocks, body.instruction)
+    except narrar.NarrarError as e:
+        raise HTTPException(e.status, e.detail)
+    usou_groq = not narrar.eh_instrucao_padrao(body.instruction)
+    chars_sent = (len(body.text) + sum(len(b) for b in body.code_blocks) + len(body.instruction)) if usou_groq else 0
+    return {"text": texto_tratado, "chars_sent": chars_sent, "used_groq": usou_groq}
 
 
 @app.get("/api/tts/voices", dependencies=[Depends(require_auth)])
