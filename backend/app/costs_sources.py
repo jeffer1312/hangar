@@ -148,38 +148,47 @@ def linhas_codex() -> list[UsageRow]:
       - `reasoning_output_tokens` é SUBCONJUNTO de `output_tokens` (16242+18=16260) -> não somar
     O adapter já registra que este campo é cumulativo (adapters/codex/adapter.py:144); lá isso é
     problema, aqui é exatamente o que queremos.
+
+    Thread encerrada é MOVIDA (não copiada) para `archived_sessions/`, diretório IRMÃO de
+    `sessions/` — sem varrer os dois, todo gasto de thread arquivada some do painel. Como é
+    move e não copy, os `session_id` dos dois diretórios não se sobrepõem: ler os dois não
+    duplica nada.
     """
-    raiz = raiz_codex()
-    if not raiz.is_dir():
-        return []
+    viva = raiz_codex()
+    arquivada = viva.parent / "archived_sessions"
     out: list[UsageRow] = []
-    for arq in raiz.rglob("rollout-*.jsonl"):
-        cwd = prov = modelo = sid = ""
-        ts = None
-        ultimo: dict | None = None
-        for d in _ler_jsonl(arq):
-            p = d.get("payload")
-            if not isinstance(p, dict):
-                continue
-            if d.get("type") == "session_meta":
-                cwd = p.get("cwd") or cwd
-                prov = p.get("model_provider") or prov
-                sid = p.get("session_id") or sid
-                ts = _quando(d.get("timestamp")) or ts
-            if isinstance(p.get("model"), str):
-                modelo = p["model"]
-            if p.get("type") == "token_count":
-                info = p.get("info")
-                if isinstance(info, dict) and isinstance(info.get("total_token_usage"), dict):
-                    ultimo = info["total_token_usage"]
-        if ultimo is None or ts is None:
+    for raiz in (viva, arquivada):
+        if not raiz.is_dir():
             continue
-        cr = _int(ultimo.get("cached_input_tokens"))
-        out.append(UsageRow(
-            ts=ts, source="codex", provider=prov or "openai", model=modelo or "?",
-            project=cwd or PROJETO_DESCONHECIDO, session_id=sid,
-            input=max(0, _int(ultimo.get("input_tokens")) - cr),
-            output=_int(ultimo.get("output_tokens")),
-            cache_write=0, cache_read=cr,
-        ))
+        for arq in raiz.rglob("rollout-*.jsonl"):
+            cwd = prov = modelo = sid = ""
+            ts = None
+            ultimo: dict | None = None
+            for d in _ler_jsonl(arq):
+                p = d.get("payload")
+                if not isinstance(p, dict):
+                    continue
+                if d.get("type") == "session_meta":
+                    cwd = p.get("cwd") or cwd
+                    prov = p.get("model_provider") or prov
+                    sid = p.get("session_id") or sid
+                    ts = _quando(d.get("timestamp")) or ts
+                # `model` só é confiável vindo de `turn_context` — não amarrar ao tipo faria
+                # o valor vazar de qualquer evento futuro que ganhe um campo `model` incidental.
+                if d.get("type") == "turn_context" and isinstance(p.get("model"), str):
+                    modelo = p["model"]
+                if p.get("type") == "token_count":
+                    info = p.get("info")
+                    if isinstance(info, dict) and isinstance(info.get("total_token_usage"), dict):
+                        ultimo = info["total_token_usage"]
+            if ultimo is None or ts is None:
+                continue
+            cr = _int(ultimo.get("cached_input_tokens"))
+            out.append(UsageRow(
+                ts=ts, source="codex", provider=prov or "openai", model=modelo or "?",
+                project=cwd or PROJETO_DESCONHECIDO, session_id=sid,
+                input=max(0, _int(ultimo.get("input_tokens")) - cr),
+                output=_int(ultimo.get("output_tokens")),
+                cache_write=0, cache_read=cr,
+            ))
     return out
