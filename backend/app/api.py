@@ -1813,9 +1813,11 @@ async def upload(name: str, request: Request):
 
 
 @app.post("/api/sessions/{name}/transcribe", dependencies=[Depends(require_auth)])
-async def transcribe_audio(name: str, request: Request):
+async def transcribe_audio(name: str, request: Request, limpar: bool = False):
     # Salva o audio (pra anexar o path no chat) E transcreve via Groq num round-trip. Mesmo padrao
     # de upload (raw body + X-Filename). Devolve {path, text} -> o front monta "texto — 📎 audio: path".
+    # `limpar` so o microfone manda: audio ANEXADO (arquivo de ate 10min) nao pode pagar a limpeza.
+    # Desligado (default), a resposta e byte a byte a de sempre -> quem ja consome nao muda.
     sessions = await asyncio.to_thread(registry.list)
     info = next((s for s in sessions if s.name == name), None)
     if info is None:
@@ -1836,7 +1838,10 @@ async def transcribe_audio(name: str, request: Request):
         text = await asyncio.to_thread(transcribe, data, filename)
     except TranscribeError as e:
         raise HTTPException(e.status, e.detail)
-    return {"path": path, "text": text}
+    if not limpar:
+        return {"path": path, "text": text}
+    texto_limpo, aviso = await asyncio.to_thread(narrar.limpar_ditado, text)
+    return {"path": path, "text": texto_limpo, "raw": text, "aviso": aviso}
 
 
 @app.get("/api/sessions/{name}/uploads/{filename}", dependencies=[Depends(require_auth)])
