@@ -784,10 +784,18 @@ export async function uploadFile(
  * Envia os bytes de um audio (gravado no mic ou arquivo) pra sessao. O backend salva o audio E o
  * transcreve via Groq num round-trip, devolvendo { path, text }. O app monta a mensagem
  * "<transcricao> — 📎 audio: <path>". Mesmo esquema de header (X-Filename) do uploadFile.
+ * `limpar: true` (so o ditado pelo mic, nunca arquivo anexado) pede `?limpar=1` — o backend limpa o
+ * texto ANTES de responder (sem corrida/troca na tela) e devolve tambem `raw` (pro desfazer) e
+ * `aviso` (motivo da limpeza nao ter valido, ou null quando valeu).
  */
-export async function transcribeFile(name: string, file: File): Promise<{ path: string; text: string }> {
+export async function transcribeFile(
+  name: string,
+  file: File,
+  opts?: { limpar?: boolean },
+): Promise<{ path: string; text: string; raw?: string; aviso?: string | null }> {
   const base = getBaseUrl();
-  const res = await fetch(`${base}/api/sessions/${encodeURIComponent(name)}/transcribe`, {
+  const qs = opts?.limpar ? '?limpar=1' : '';
+  const res = await fetch(`${base}/api/sessions/${encodeURIComponent(name)}/transcribe${qs}`, {
     method: 'POST',
     headers: {
       ...authHeaders(),
@@ -800,7 +808,7 @@ export async function transcribeFile(name: string, file: File): Promise<{ path: 
     signal: AbortSignal.timeout(120_000),
   });
   await ensureOk(res);
-  return res.json() as Promise<{ path: string; text: string }>;
+  return res.json() as Promise<{ path: string; text: string; raw?: string; aviso?: string | null }>;
 }
 
 export async function selectOption(name: string, option: number): Promise<void> {
