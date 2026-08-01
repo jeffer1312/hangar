@@ -260,6 +260,9 @@ def linhas_pi() -> list[UsageRow]:
 _cache: dict[str, tuple[tuple[int, int], list[UsageRow]]] = {}
 # O endpoint é `def` e roda no threadpool: celular + desktop + peer batendo juntos com cache frio
 # fariam N parses simultâneos do mesmo arquivo. Precedente: engines.py:58.
+# ponytail: a trava cobre o CORPO INTEIRO de coletar() (walk de Codex/Pi + parse das três
+# fontes), não só o parse duplicado -- serializa qualquer coleta concorrente, mesmo com cache
+# quente. Aceitável num app single-user de LAN; trava por fonte se um dia isso virar gargalo medido.
 _cache_lock = threading.Lock()
 
 

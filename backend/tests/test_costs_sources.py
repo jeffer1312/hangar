@@ -290,3 +290,48 @@ def test_cache_relê_quando_o_arquivo_muda(tmp_path, monkeypatch):
     _escrever(arq, [linha, {**linha, "session_id": "s2"}])
     os.utime(arq, (0, 0))          # mtime diferente -> tem que reler
     assert len(cs.coletar()) == 2
+
+
+def test_cache_evita_reparse_quando_nada_muda(tmp_path, monkeypatch):
+    # O teste acima só prova "arquivo mudou -> relê". Isso passaria até sem cache nenhum. O que
+    # falta é o lado que É o valor da tarefa: sem tocar arquivo, o parser roda UMA vez só.
+    # Conta chamada real ao leitor de cada fonte, não só o tamanho do resultado.
+    cfg = tmp_path / ".claude"
+    arq = cfg / "metrics" / "costs.jsonl"
+    linha = {"timestamp": "2026-08-01T10:00:00Z", "session_id": "s", "model": "claude-opus-5",
+             "input_tokens": 1, "output_tokens": 0, "cache_write_tokens": 0,
+             "cache_read_tokens": 0}
+    _escrever(arq, [linha])
+    _escrever(tmp_path / "sessions" / "--r--" / "s.jsonl", [
+        {"type": "session", "timestamp": "2026-08-01T10:00:00Z", "cwd": "/r"},
+        {"type": "model_change", "provider": "kimi-coding", "modelId": "k3"},
+        {"type": "message", "message": {"usage": {"input": 1, "output": 1,
+                                                  "cacheRead": 0, "cacheWrite": 0}}},
+    ])
+    monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "sessions")
+    monkeypatch.setattr(cs, "raiz_codex", lambda: tmp_path / "sem-codex")
+    monkeypatch.setattr(cs, "_config_dirs", lambda: [(str(cfg), "c")])
+    cs.invalidar_cache()   # senão o estado de um teste anterior contamina a contagem
+
+    chamadas = {"claude": 0, "pi": 0}
+    claude_original, pi_original = cs.linhas_claude, cs.linhas_pi
+
+    def claude_contado(*a, **kw):
+        chamadas["claude"] += 1
+        return claude_original(*a, **kw)
+
+    def pi_contado(*a, **kw):
+        chamadas["pi"] += 1
+        return pi_original(*a, **kw)
+
+    monkeypatch.setattr(cs, "linhas_claude", claude_contado)
+    monkeypatch.setattr(cs, "linhas_pi", pi_contado)
+
+    cs.coletar()
+    cs.coletar()
+    assert chamadas == {"claude": 1, "pi": 1}, "duas coletas sem tocar arquivo -> parser roda 1x"
+
+    _escrever(arq, [linha, {**linha, "session_id": "s2"}])
+    os.utime(arq, (0, 0))
+    cs.coletar()
+    assert chamadas == {"claude": 2, "pi": 1}, "só o costs.jsonl mudou -> só o claude releu"
