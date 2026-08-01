@@ -14,6 +14,11 @@ def _sem_chave(monkeypatch):
     monkeypatch.setattr(runtime_config, "get", lambda campo: "")
 
 
+def _config(monkeypatch, valores: dict):
+    """Fake runtime_config.get orientado a dict, pra testar _provedor() sem tocar no arquivo real."""
+    monkeypatch.setattr(runtime_config, "get", lambda campo: valores.get(campo))
+
+
 def test_eh_instrucao_padrao():
     assert eh_instrucao_padrao("")
     assert eh_instrucao_padrao("  ")
@@ -107,6 +112,65 @@ def test_corpo_manda_modelo_e_temperatura(monkeypatch):
     corpo = json.loads(captured["req"].data)
     assert corpo["model"]
     assert corpo["temperature"] == 0.3
+
+
+def test_endpoint_custom_nao_herda_a_chave_da_groq(monkeypatch):
+    # CRITICO: a chave da Groq so pode ir pro endpoint da Groq. Sem essa amarra, um llm_base_url
+    # custom sem llm_api_key preenchida mandaria o segredo da Groq pra um host que nao o emitiu.
+    _config(monkeypatch, {"llm_base_url": "https://outro.provedor/v1", "groq_api_key": "chave-groq"})
+
+    def _explode(*a, **k):
+        raise AssertionError("urlopen nao deveria ter sido chamado sem chave efetiva")
+    monkeypatch.setattr("app.narrar.urllib.request.urlopen", _explode)
+    with pytest.raises(NarrarError) as ei:
+        narrar("texto", [], "explica isso")
+    assert ei.value.status == 503
+
+
+def test_endpoint_padrao_herda_a_chave_da_groq(monkeypatch):
+    _config(monkeypatch, {"groq_api_key": "chave-groq"})
+    captured = {}
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+
+    def fake_urlopen(req, timeout=None):
+        captured["req"] = req
+        return FakeResp()
+
+    monkeypatch.setattr("app.narrar.urllib.request.urlopen", fake_urlopen)
+    narrar("texto", [], "explica isso")
+    assert captured["req"].headers["Authorization"] == "Bearer chave-groq"
+
+
+def test_base_url_e_modelo_custom_chegam_na_request(monkeypatch):
+    _config(monkeypatch, {
+        "llm_base_url": "https://outro.provedor/v1",
+        "llm_api_key": "chave-custom",
+        "llm_model": "modelo-custom",
+    })
+    captured = {}
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+
+    def fake_urlopen(req, timeout=None):
+        captured["req"] = req
+        return FakeResp()
+
+    monkeypatch.setattr("app.narrar.urllib.request.urlopen", fake_urlopen)
+    narrar("texto", [], "explica isso")
+    req = captured["req"]
+    assert req.full_url == "https://outro.provedor/v1/chat/completions"
+    assert req.headers["Authorization"] == "Bearer chave-custom"
+    corpo = json.loads(req.data)
+    assert corpo["model"] == "modelo-custom"
 
 
 def test_resposta_sem_texto_esperado_levanta_502(monkeypatch):

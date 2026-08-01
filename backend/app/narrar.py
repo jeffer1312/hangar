@@ -83,7 +83,13 @@ def chamar_chat(system: str, prompt: str, *, temperature: float, timeout: int) -
     texto esperado."""
     base_url, api_key, modelo = _provedor()
     if not api_key:
-        raise NarrarError(503, "GROQ_API_KEY (ou CP_GROQ_API_KEY) nao configurada no backend")
+        # A mensagem serve os dois provedores possiveis: llm_api_key e o campo certo pra endpoint
+        # custom, GROQ_API_KEY (ou CP_GROQ_API_KEY, ou llm_api_key) e o do endpoint padrao da Groq.
+        raise NarrarError(
+            503,
+            "chave do provedor nao configurada: preencha llm_api_key "
+            "(endpoint padrao da Groq tambem aceita GROQ_API_KEY/CP_GROQ_API_KEY)",
+        )
     corpo = {
         "model": modelo,
         "messages": [
