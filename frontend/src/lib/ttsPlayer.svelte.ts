@@ -8,9 +8,15 @@
 //
 // .svelte.ts porque usa runes fora de componente — mesmo padrao do sessionsStore.
 
-// WAV silencioso de 46 bytes (1 frame, 16-bit mono 44.1k). Serve so pra destravar o elemento.
+// Silencio de 0,05s em mp3 (540 bytes, 44.1k mono, com ID3). Serve so pra destravar o elemento.
+//
+// Era um WAV de 46 bytes — 1 frame so. O iOS NAO decodifica aquilo: o usuario relatou a barra
+// pintando "nao consegui tocar o audio gerado (codigo 3)" e o audio tocando logo em seguida. Codigo
+// 3 e falha de DECODIFICACAO, e vinha do silencio, nao do audio dele. Pior que a mensagem errada:
+// se o silencio nao decodifica, o destravamento do gesto pode nao estar valendo no iPhone, que e a
+// unica razao deste elemento existir. Um mp3 curto e valido o iOS aceita.
 const SILENCE =
-  'data:audio/wav;base64,UklGRiYAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQIAAAAAAA==';
+  'data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjYyLjEyLjEwMgAAAAAAAAAAAAAA//tAwAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAADAAAB7wCTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5PKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysr///////////////////////////////////////////8AAAAATGF2YzYyLjI4AAAAAAAAAAAAAAAAJAKjAAAAAAAAAe/WywFOAAAAAAD/+xDEAAPAAAGkAAAAIAAANIAAAARMQU1FMy4xMDEgKGJldGEgMylVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVf/7EsQpg8AAAaQAAAAgAAA0gAAABFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVf/7EMRTg8AAAaQAAAAgAAA0gAAABFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV';
 
 let el: HTMLAudioElement | null = null;
 
@@ -60,7 +66,11 @@ function element(): HTMLAudioElement {
     // 1 = MEDIA_ERR_ABORTED: carregamento cancelado por troca de fonte nossa, nao e falha.
     if (codigo === undefined || codigo === 1) return;
     // Sem fonte nenhuma = close() em curso; tambem nao e falha.
-    if (!a.getAttribute('src')) return;
+    const fonte = a.getAttribute('src');
+    if (!fonte) return;
+    // Falha NO SILENCIO do destravamento nunca e problema do usuario — ele nem pediu esse som. Foi
+    // exatamente isto que pintou "codigo 3" na tela enquanto o audio de verdade tocava normal.
+    if (fonte === SILENCE) return;
     loading = false; playing = false;
     error = `não consegui tocar o áudio gerado (código ${codigo})`;
   });
