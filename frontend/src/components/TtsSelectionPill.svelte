@@ -197,8 +197,8 @@
     z-index: 39;
     display: flex;
     flex-direction: column;
-    /* Escala do app (--space-*/--text-*/--radius-*), nao pixel cru: o painel nasceu com 8px/13px/14px
-       chutados e destoava de tudo em volta. */
+    /* Escala do app (space, text, radius), nao pixel cru: o painel nasceu com 8px de padding, 13px
+       de fonte e 14px de raio, todos chutados, e destoava de tudo em volta. */
     gap: var(--space-2);
     padding: var(--space-3);
     border-radius: var(--radius-lg);
