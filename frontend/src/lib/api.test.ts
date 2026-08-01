@@ -9,7 +9,7 @@ const store = new Map<string, string>();
 (globalThis as any).document = { cookie: '' };
 (globalThis as any).window = { location: { origin: 'https://app.test' } };
 
-const { getConfigForServer, patchConfigForServer, createSession, getHistory, isAbortError } = await import('./api');
+const { getConfigForServer, patchConfigForServer, createSession, getHistory, isAbortError, transcribeFile } = await import('./api');
 const { listServers, getActiveId } = await import('./auth');
 const server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
 
@@ -152,5 +152,33 @@ describe('createSession', () => {
     const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
     expect(fetchMock.mock.calls[0][0]).toBe('https://a.test/api/sessions');
     expect(body).toMatchObject({ name: 'x', cwd: '/home/eu/proj', provider: 'pi', config_dir: null, engine: null });
+  });
+});
+
+// A corrente toggleRecord -> addFiles({ditado:true}) -> transcribeIntoComposer -> transcribeFile
+// so pode acender `limpar=1` no pedido do mic. Este e o elo mais barato de quebrar (um `{ditado:
+// true}` esquecido no caminho do anexo manda audio de 10min pro LLM) e o unico sem teste algum.
+describe('transcribeFile', () => {
+  beforeEach(() => {
+    store.set('cp_servers', JSON.stringify([server]));
+    store.set('cp_active', server.id);
+  });
+
+  it('so manda ?limpar=1 quando pedido explicitamente', async () => {
+    // Response.json() so le o corpo uma vez — mockResolvedValue reusaria a MESMA Response nas 3
+    // chamadas, então uma nova resposta a cada invocação.
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ path: 'p', text: 't' }), { status: 200 }),
+    );
+    const file = new File(['x'], 'audio.webm');
+
+    await transcribeFile('sessao', file, { limpar: true });
+    expect(fetchMock.mock.calls[0][0]).toBe('https://a.test/api/sessions/sessao/transcribe?limpar=1');
+
+    await transcribeFile('sessao', file);
+    expect(fetchMock.mock.calls[1][0]).toBe('https://a.test/api/sessions/sessao/transcribe');
+
+    await transcribeFile('sessao', file, {});
+    expect(fetchMock.mock.calls[2][0]).toBe('https://a.test/api/sessions/sessao/transcribe');
   });
 });

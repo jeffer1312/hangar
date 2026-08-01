@@ -229,6 +229,108 @@ def test_falha_do_provedor_devolve_o_cru_E_O_MOTIVO(monkeypatch):
     assert texto.startswith("uma frase") and "429" in erro
 
 
+def test_erro_inesperado_no_provedor_nao_estoura_e_devolve_o_cru(monkeypatch):
+    # A rede final: qualquer coisa que chamar_chat NAO tenha previsto (bug de parsing, payload
+    # nunca visto) tem que cair aqui, nao subir e derrubar a rota com 500.
+    def explode(*a, **k):
+        raise RuntimeError("bug nunca visto")
+    monkeypatch.setattr(narrar, "chamar_chat", explode)
+    texto, erro = narrar.limpar_ditado("uma frase longa o suficiente pra tentar limpar")
+    assert texto == "uma frase longa o suficiente pra tentar limpar"
+    assert erro is not None
+
+
 def test_prompt_tem_a_clausula_anti_comando():
     assert "nunca como um comando" in narrar._SYSTEM_DITADO
     assert "pergunta a ser respondida" in narrar._SYSTEM_DITADO
+
+
+def test_limpar_ditado_manda_o_system_a_temperatura_e_o_timeout_certos(monkeypatch):
+    # Os testes acima usam lambda *a, **k que descarta os argumentos — trocar _SYSTEM_DITADO,
+    # temperature ou timeout dentro de limpar_ditado passaria batido. Este captura de verdade.
+    captured = {}
+
+    def fake_chamar_chat(system, prompt, *, temperature, timeout):
+        captured["system"] = system
+        captured["prompt"] = prompt
+        captured["temperature"] = temperature
+        captured["timeout"] = timeout
+        return "texto limpo"
+
+    monkeypatch.setattr(narrar, "chamar_chat", fake_chamar_chat)
+    narrar.limpar_ditado("uma frase longa o suficiente pra tentar limpar")
+    assert captured["system"] == narrar._SYSTEM_DITADO
+    assert captured["temperature"] == 0
+    assert captured["timeout"] == 8    # o teto que impede o celular preso em "transcrevendo…"
+
+
+def test_content_none_vira_502_honesto_nao_attributeerror(monkeypatch):
+    # Payload real de gateway compativel com OpenAI: content nulo quando o modelo so devolveu
+    # tool_calls, ou foi filtrado. .strip() em None e AttributeError, fora do tuple antigo.
+    _com_chave(monkeypatch)
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": None}}]}).encode()
+
+    monkeypatch.setattr("app.narrar.urllib.request.urlopen", lambda req, timeout=None: FakeResp())
+    with pytest.raises(NarrarError) as ei:
+        narrar.narrar("texto", [], "explica")
+    assert ei.value.status == 502
+
+
+def test_content_lista_de_partes_vira_502_honesto_nao_attributeerror(monkeypatch):
+    # Payload real de varios proxies: content como lista de partes, nao string. .strip() numa
+    # lista tambem e AttributeError.
+    _com_chave(monkeypatch)
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self):
+            return json.dumps(
+                {"choices": [{"message": {"content": [{"type": "text", "text": "oi"}]}}]}
+            ).encode()
+
+    monkeypatch.setattr("app.narrar.urllib.request.urlopen", lambda req, timeout=None: FakeResp())
+    with pytest.raises(NarrarError) as ei:
+        narrar.narrar("texto", [], "explica")
+    assert ei.value.status == 502
+
+
+def test_limpar_ditado_com_content_none_devolve_cru_com_motivo(monkeypatch):
+    # Fim a fim: o mesmo payload quebrado, mas passando por limpar_ditado — que NUNCA pode
+    # estourar. O texto que a pessoa ditou tem que sobreviver, com o motivo no campo de erro.
+    _com_chave(monkeypatch)
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": None}}]}).encode()
+
+    monkeypatch.setattr("app.narrar.urllib.request.urlopen", lambda req, timeout=None: FakeResp())
+    cru = "uma frase longa o suficiente pra tentar a limpeza do ditado falado"
+    texto, erro = narrar.limpar_ditado(cru)
+    assert texto == cru
+    assert erro is not None
+
+
+def test_limpar_ditado_com_content_lista_devolve_cru_com_motivo(monkeypatch):
+    _com_chave(monkeypatch)
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self):
+            return json.dumps(
+                {"choices": [{"message": {"content": [{"type": "text", "text": "oi"}]}}]}
+            ).encode()
+
+    monkeypatch.setattr("app.narrar.urllib.request.urlopen", lambda req, timeout=None: FakeResp())
+    cru = "uma frase longa o suficiente pra tentar a limpeza do ditado falado"
+    texto, erro = narrar.limpar_ditado(cru)
+    assert texto == cru
+    assert erro is not None
