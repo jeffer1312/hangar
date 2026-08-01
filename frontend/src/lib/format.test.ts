@@ -31,7 +31,7 @@ describe('initials', () => {
     expect(initials('claude-pocket')).toBe('CP');
   });
   it('splits on non-alphanumeric separators', () => {
-    expect(initials('my-org_web')).toBe('PW');
+    expect(initials('app_web')).toBe('AW');
     expect(initials('foo bar baz')).toBe('FB');
   });
   it('uses first two chars for a single word', () => {

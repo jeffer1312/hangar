@@ -157,7 +157,7 @@ def test_ismeta_user_entry_is_skipped():
     })) == []
     assert parse_line(_line({
         "type": "user", "uuid": "m2", "isMeta": True,
-        "message": {"role": "user", "content": [{"type": "text", "text": "Loop /my-org:iniciar-review-auto"}]},
+        "message": {"role": "user", "content": [{"type": "text", "text": "Loop /acme:iniciar-review-auto"}]},
     })) == []
     # Mesmo texto SEM isMeta e conversa real -> vira bubble.
     [ev] = parse_line(_line({

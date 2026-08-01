@@ -100,7 +100,7 @@ def test_scan_installed_plugins(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(home))
 
     # installPath de um plugin instalado, com um comando e uma skill
-    install = tmp_path / "cache" / "my-org" / "1.0"
+    install = tmp_path / "cache" / "acme" / "1.0"
     (install / "commands").mkdir(parents=True)
     (install / "commands" / "abrir-ticket.md").write_text(
         "---\ndescription: Abre a PM\nargument-hint: <chave>\n---\n\ncorpo\n",
@@ -118,7 +118,7 @@ def test_scan_installed_plugins(monkeypatch, tmp_path):
         json.dumps({
             "version": 2,
             "plugins": {
-                "my-org@my-org-marketplace": [
+                "acme@acme-marketplace": [
                     {"scope": "user", "installPath": str(install)}
                 ]
             },
@@ -127,11 +127,11 @@ def test_scan_installed_plugins(monkeypatch, tmp_path):
     )
 
     by = _by_name(list_commands(None))
-    assert by["my-org:abrir-ticket"].source == "plugin"
-    assert by["my-org:abrir-ticket"].display == "/my-org:abrir-ticket"
-    assert by["my-org:abrir-ticket"].argumentHint == "<chave>"
-    assert by["my-org:kubectl"].source == "plugin"
-    assert by["my-org:kubectl"].description == "Opera k8s"
+    assert by["acme:abrir-ticket"].source == "plugin"
+    assert by["acme:abrir-ticket"].display == "/acme:abrir-ticket"
+    assert by["acme:abrir-ticket"].argumentHint == "<chave>"
+    assert by["acme:kubectl"].source == "plugin"
+    assert by["acme:kubectl"].description == "Opera k8s"
 
 
 def test_missing_dirs_skip(monkeypatch, tmp_path):

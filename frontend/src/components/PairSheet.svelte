@@ -327,7 +327,7 @@
         type="text"
         class="task-input"
         bind:value={task}
-        placeholder="Tarefa (opcional): ex. TICKET-000 — tela X + endpoint"
+        placeholder="Tarefa (opcional): ex. ABC-1234 — tela X + endpoint"
       />
 
       <button class="primary-btn" onclick={doPair} disabled={!picked.length || busy}>

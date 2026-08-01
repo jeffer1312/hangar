@@ -344,7 +344,7 @@ def pi_session_file(pane_id: str, pid: Optional[int] = None,
             # O Pi dispara `agent_start` TAMBEM pro subagente (Task tool), com um ctx cujo
             # getSessionFile() aponta pro transcript do subagente — e o publishPane da extensao
             # reescreve o bilhete com ele. Aceitar isso trocava a conversa inteira da sessao pela do
-            # subagente no app (medido 2026-07-30, sessao my-web-app: bilhete do pane %26 caiu em
+            # subagente no app (medido 2026-07-30, numa sessão real: bilhete do pane %26 caiu em
             # `…_18e48e08-…/44bad0fb/run-2/session.jsonl`), enquanto o terminal seguia normal — ele
             # nao le o bilhete. Tratar aqui e mais forte que consertar so a extensao: pega TODA
             # sessao Pi ja de pe, sem reinstalar nem reiniciar nada. O caminho do subagente carrega

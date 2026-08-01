@@ -125,7 +125,7 @@ def test_interrupt_sends_escape():
     assert sk.call_args_list == [call("cc", "Escape")]
 
 
-# --- _composer_ocupado_pi: guarda anti-colagem (caso real TICKET-000: aviso de grupo ficou no
+# --- _composer_ocupado_pi: guarda anti-colagem (caso real ABC-1234: aviso de grupo ficou no
 # composer com Enter engolido e o prompt do cockpit foi digitado em cima, virando UMA mensagem) ---
 
 _REGUA = "─" * 60

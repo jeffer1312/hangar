@@ -269,7 +269,7 @@ def _composer_residuo(pane: str, texto: str, nome_sessao: str = "",
 
 def _composer_ocupado_pi(name: str) -> bool:
     """True = já ha texto parado no composer do Pi. Digitar por cima COLARIA as mensagens num
-    submit so — caso real (TICKET-000, 31/07): aviso de grupo ficou no composer com o Enter engolido
+    submit so — caso real (ABC-1234, 31/07): aviso de grupo ficou no composer com o Enter engolido
     (tmux extended-keys formato xterm), o prompt do cockpit foi digitado em cima, os dois viraram
     UMA mensagem, e o reconcile — sem achar o prompt exato no transcript — reentregou (duplicata).
 
