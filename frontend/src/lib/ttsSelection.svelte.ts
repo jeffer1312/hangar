@@ -1,4 +1,4 @@
-import { falavelDaSelecao } from './selectionText';
+import { falavelDaSelecaoComCodigo } from './selectionText';
 import { rafThrottle } from './rafThrottle';
 
 // Estado da selecao corrente, gravado no selectionchange.
@@ -8,8 +8,16 @@ import { rafThrottle } from './rafThrottle';
 // botao e este estado, nunca o DOM.
 
 let texto = $state('');
+// Blocos de <pre> da selecao (fase 2: narracao guiada). Populado junto do texto, pelo mesmo motivo:
+// o pointerdown ja colapsou a selecao quando o preset "Explicar o codigo" e escolhido.
+let blocos = $state<string[]>([]);
 let x = $state(0);
 let y = $state(0);
+// Altura MEDIDA do painel (TtsSelectionPill, via ResizeObserver) — mesmo padrao do ttsPlayer.barH.
+// A fase 1 cravava 52px direto no App.svelte; a fase 2 acrescenta presets + campo livre, que
+// crescem o painel bem alem disso (e o erro da Groq, como o da ElevenLabs, pode quebrar em
+// varias linhas num celular estreito).
+let panelH = $state(0);
 
 function dentroDoChat(sel: Selection): boolean {
   const no = sel.anchorNode;
@@ -27,10 +35,11 @@ export function iniciarCapturaDeSelecao(): () => void {
   // sempre vence — inclusive o disparo do mouseup, que ainda cai dentro do mesmo quadro pendente.
   const processar = () => {
     const sel = document.getSelection();
-    if (!sel || sel.isCollapsed || !dentroDoChat(sel)) { texto = ''; return; }
-    const t = falavelDaSelecao(sel);
-    if (!t) { texto = ''; return; }
+    if (!sel || sel.isCollapsed || !dentroDoChat(sel)) { texto = ''; blocos = []; return; }
+    const { texto: t, blocos: bs } = falavelDaSelecaoComCodigo(sel);
+    if (!t) { texto = ''; blocos = []; return; }
     texto = t;
+    blocos = bs;
     const r = sel.getRangeAt(sel.rangeCount - 1).getBoundingClientRect();
     x = r.right;
     y = r.bottom;
@@ -46,8 +55,13 @@ export function iniciarCapturaDeSelecao(): () => void {
 
 export const ttsSelection = {
   get texto() { return texto; },
+  get blocos() { return blocos; },
+  get temCodigo() { return blocos.length > 0; },
   get x() { return x; },
   get y() { return y; },
   get ativa() { return texto.length > 0; },
-  limpar() { texto = ''; },
+  get panelH() { return panelH; },
+  limpar() { texto = ''; blocos = []; },
+  /** Publicado pela TtsSelectionPill (dona da medicao). 0 quando ela desmonta. */
+  setPanelH(h: number) { panelH = h; },
 };

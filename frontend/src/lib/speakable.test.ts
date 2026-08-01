@@ -3,7 +3,7 @@
 // manipula <pre> aninhado com cloneNode/querySelectorAll/replaceWith, e stub manual reimplementaria
 // DOM em vez de testa-lo.
 import { describe, it, expect } from 'vitest';
-import { textoFalavel } from './speakable';
+import { textoFalavel, textoFalavelComCodigo } from './speakable';
 import { renderMarkdown } from './markdown';
 
 function montar(html: string): HTMLElement {
@@ -62,5 +62,29 @@ describe('textoFalavel', () => {
     // Sem td e th em BLOCOS, tira "NomeIdade\nJoao30" (palavras coladas).
     // Com td e th, cada celula fica separada por \n.
     expect(textoFalavel(el)).toBe('Nome\nIdade\nJoao\n30');
+  });
+});
+
+describe('textoFalavelComCodigo (fase 2: narracao guiada)', () => {
+  it('devolve o mesmo texto que textoFalavel, SEM alterar nada — o hash do cache da fase 1 depende disso', () => {
+    const html = '<p>antes</p><pre><code>const x = 1;</code></pre><p>depois</p>';
+    expect(textoFalavelComCodigo(montar(html)).texto).toBe(textoFalavel(montar(html)));
+  });
+
+  it('devolve o codigo que o marcador substituiu', () => {
+    const el = montar('<p>antes</p><pre><code>const x = 1;</code></pre><p>depois</p>');
+    const { blocos } = textoFalavelComCodigo(el);
+    expect(blocos).toEqual(['const x = 1;']);
+  });
+
+  it('um bloco por <pre>, na ordem em que aparecem', () => {
+    const el = montar('<pre>a</pre><p>meio</p><pre>b</pre>');
+    const { blocos } = textoFalavelComCodigo(el);
+    expect(blocos).toEqual(['a', 'b']);
+  });
+
+  it('sem bloco de codigo, blocos vem vazio', () => {
+    const el = montar('<p>so texto</p>');
+    expect(textoFalavelComCodigo(el).blocos).toEqual([]);
   });
 });
