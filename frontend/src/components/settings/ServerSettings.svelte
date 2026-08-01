@@ -284,6 +284,11 @@
           {#if !ttsPlayer.ultimoTexto}
             <span class="ajuda">ouça algum trecho primeiro pra comparar vozes com ele</span>
           {/if}
+          <!-- A falha da amostra PRECISA aparecer aqui, e nao so na TtsBar. Esta tela vive dentro de
+               um modal cujo veu esta em z-index 100; a barra do player fica em 39 de proposito, pra
+               nunca cobrir modal aberto. Sem esta linha, chave invalida ou credito esgotado sao
+               desenhados ATRAS do proprio modal e o toque no botao parece nao ter feito nada. -->
+          {#if ttsPlayer.error}<p class="aviso erro">{ttsPlayer.error}</p>{/if}
         </div>
 
         {#if saldo}
