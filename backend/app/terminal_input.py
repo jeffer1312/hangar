@@ -754,8 +754,17 @@ class TerminalInput:
             # linha viva no instante do append em api.py, e a linha caiu bem nessa janela". Medido:
             # entregar_sync segura o _send_lock por ate PRAZO_ACK+2.0 = 5s (pi_inbox.py), janela de
             # segundos — tempo de sobra pra um drain de reconexao de SSE ou de transicao de hook
-            # entrar. Upgrade: uma trava UNICA cobrindo append->send (mover o append() de api.py pra
-            # dentro deste _send_lock, ou os dois pontos passarem a usar o mesmo lock).
+            # entrar.
+            # CUIDADO no upgrade: so mover o append() de api.py pra dentro deste _send_lock fecha a
+            # corrida entre as DUAS LEITURAS de tem_linha() (o TOCTOU vira leitura unica) mas NAO
+            # fecha a duplicata. A entrada nasce delivered=False no append() e so vira True quando o
+            # set_delivered(...) do fim de _send_one roda DEPOIS que send_prompt() (este metodo)
+            # retorna — tambem fora de qualquer trava. Nesse intervalo (que inclui a espera inteira
+            # por este _send_lock MAIS os ate 5s do entregar_sync) a entrada continua reivindicavel
+            # por claim_undelivered. Upgrade completo precisa das DUAS coisas juntas: o append() E o
+            # set_delivered() final dentro da MESMA trava — ou claim_undelivered passar a
+            # respeitar/disputar o _send_lock. Mover so o append() e necessario, mas sozinho e
+            # insuficiente.
             if provider == "pi" and pane_id and pi_inbox.INBOX.tem_linha(pane_id):
                 r = pi_inbox.INBOX.entregar_sync(pane_id, text, msg_id)
                 if r != "sem-linha":

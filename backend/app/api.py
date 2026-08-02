@@ -1164,9 +1164,15 @@ def _send_one(name: str, text: str) -> dict:
     # original encolhido de "qualquer sessao Pi" pra "sessao com linha viva no instante do append, e
     # a linha caiu bem nessa janela". Medido: entregar_sync segura o _send_lock por ate PRAZO_ACK+2.0
     # = 5s (pi_inbox.py) — janela de segundos, nao de microssegundos, tempo de sobra pra um drain de
-    # reconexao de SSE ou de transicao de hook entrar. Upgrade: uma trava UNICA cobrindo
-    # append->send (mover o append() pra dentro do _send_lock, ou os dois pontos passarem a usar o
-    # mesmo lock).
+    # reconexao de SSE ou de transicao de hook entrar.
+    # CUIDADO no upgrade: so mover o append() pra dentro do _send_lock fecha a corrida entre as DUAS
+    # LEITURAS de tem_linha() (o TOCTOU vira leitura unica) mas NAO fecha a duplicata. A entrada
+    # nasce delivered=False aqui e so vira True quando o set_delivered(...) do fim desta funcao roda
+    # DEPOIS que send_prompt() retorna — tambem fora de qualquer trava. Nesse intervalo (que inclui
+    # a espera inteira pelo _send_lock MAIS os ate 5s do entregar_sync) a entrada continua
+    # reivindicavel por claim_undelivered. Upgrade completo precisa das DUAS coisas juntas: o
+    # append() E o set_delivered() final dentro da MESMA trava — ou claim_undelivered passar a
+    # respeitar/disputar o _send_lock. Mover so o append() e necessario, mas sozinho e insuficiente.
     is_pi = provider == "pi" and pane_id and INBOX.tem_linha(pane_id) and not stripped.startswith("/")
     if is_pi:
         try:
