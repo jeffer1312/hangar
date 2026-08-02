@@ -1,5 +1,7 @@
 import asyncio
 import json
+import os
+import tempfile
 import threading
 
 from app.config import ConfigDirInfo
@@ -151,6 +153,31 @@ def test_endpoint_vai_pra_todos_os_config_dirs(tmp_path, monkeypatch):
     d = json.loads((a / ".claude-pocket-conn.json").read_text(encoding="utf-8"))
     assert d["url"].startswith("ws://127.0.0.1:")
     assert (a / ".claude-pocket-conn.json").stat().st_mode & 0o777 == 0o600, "tem token dentro"
+
+
+def test_endpoint_tmp_nunca_nasce_com_permissao_frouxa(tmp_path, monkeypatch):
+    """mkstemp cria o arquivo JÁ em 0600 (é o open() com O_EXCL que fixa o modo na criação, não
+    um chmod depois) — nunca existe instante com o token num arquivo de modo mais frouxo.
+    Espiona o fd que o mkstemp devolve e confere o modo ANTES de qualquer escrita: é
+    determinístico porque o modo é fixado no ato da criação, não uma corrida a torcer pra
+    flagrar."""
+    from app import pi_inbox
+
+    a = tmp_path / "A"
+    a.mkdir()
+    modos = []
+    mkstemp_original = tempfile.mkstemp
+
+    def espiao(*args, **kwargs):
+        fd, nome = mkstemp_original(*args, **kwargs)
+        modos.append(os.fstat(fd).st_mode & 0o777)
+        return fd, nome
+
+    monkeypatch.setattr(pi_inbox.tempfile, "mkstemp", espiao)
+    monkeypatch.setattr("app.config.list_config_dirs",
+                        lambda: [ConfigDirInfo(path=str(a), label="A", active=True)])
+    pi_inbox.escrever_endpoint()
+    assert modos == [0o600]
 
 
 def test_endpoint_ilegivel_nao_derruba_a_subida(monkeypatch):
