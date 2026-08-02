@@ -299,6 +299,68 @@ def test_send_prompt_uma_linha_placeholder_previo_nao_conta_como_entrega(monkeyp
     assert call("cc", "Enter") not in sk.call_args_list
 
 
+# --- _diag_composer: diagnostico SO-LOG anexado aos casos de "partial"/"deferred" (nao muda
+# nenhum retorno, so acrescenta contexto ao log de erro) ---
+
+
+def test_diag_composer_pane_legivel_traz_regiao_cauda_e_geometria():
+    pane = _pane_claude(["❯ resto da mensagem que ficou pela metade"])
+    diag = terminal_input._diag_composer(pane, "mensagem que ficou pela metade", "cc", {"1"})
+    assert "resto da mensagem que ficou pela metade" in diag  # regiao do composer
+    assert "cauda='mensagem que ficou pela metade'" in diag or "cauda=" in diag
+    assert "reguas=" in diag and "fundo=" in diag and "altura=" in diag
+    assert "pastes(antes=['1']" in diag
+
+
+def test_diag_composer_pane_ilegivel_nao_lanca():
+    # Sem reguas -> _composer_regiao devolve None; o helper tem que descrever a ausencia, nao explodir.
+    diag = terminal_input._diag_composer("tela sem nenhuma regua aqui", "oi", "cc", None)
+    assert "ilegivel" in diag
+
+
+def test_diag_composer_degrada_em_string_quando_algo_exploda(monkeypatch):
+    # Forca uma excecao dentro do helper (ex.: _composer_regiao quebrado) -- tem que devolver uma
+    # string curta em vez de propagar, porque isto roda no meio de um envio ja falho.
+    def boom(pane, nome_sessao=""):
+        raise RuntimeError("kaboom")
+    monkeypatch.setattr(terminal_input, "_composer_regiao", boom)
+    diag = terminal_input._diag_composer(_pane_claude(["❯ oi"]), "oi", "cc", None)
+    assert diag.startswith("diag indisponivel:")
+    assert "kaboom" in diag
+
+
+def test_send_prompt_partial_loga_diagnostico_no_erro(monkeypatch, caplog):
+    # Mesmo cenario de test_send_prompt_uma_linha_placeholder_previo_nao_conta_como_entrega (placeholder
+    # alheio nunca conta, resultado "partial"), so que aqui a prova e o CONTEUDO do log: a linha de
+    # erro tem que trazer o diagnostico (regiao/cauda/geometria), sem mudar o retorno "partial".
+    clock = [1000.0]
+
+    def fake_sleep(s):
+        clock[0] += s
+
+    monkeypatch.setattr(terminal_input.time, "sleep", fake_sleep)
+    monkeypatch.setattr(terminal_input.time, "monotonic", lambda: clock[0])
+
+    texto = "mensagem curta que nunca aparece no composer simulado"
+
+    def capture(name):
+        composer = ["❯ [Pasted text #1 +5 lines]"]
+        return "\n".join(["banner", "", _REGUA_R] + composer + [_REGUA_R, "? for shortcuts"])
+
+    with caplog.at_level("ERROR", logger="claude_pocket.terminal_input"), \
+         patch("app.terminal_input.tmux.has_session", return_value=True), \
+         patch.object(terminal_input, "_capture", side_effect=capture), \
+         patch.object(terminal_input, "send_keys", return_value=True):
+        resultado = TerminalInput().send_prompt("cc", texto)
+
+    assert resultado == "partial"   # comportamento identico ao de antes da instrumentacao
+    [rec] = caplog.records
+    msg = rec.getMessage()
+    assert "envio PARCIAL" in msg
+    assert "diag:" in msg
+    assert "[Pasted text #1" in msg  # regiao do composer chegou no log
+
+
 def test_send_prompt_pi_composer_vazio_envia(monkeypatch):
     # Regressao-trava: o gate novo do Pi NAO pode bloquear envio com composer vazio — o texto
     # tem que chegar no send_keys e o resultado ser "sent".

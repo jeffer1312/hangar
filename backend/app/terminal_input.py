@@ -267,6 +267,48 @@ def _composer_residuo(pane: str, texto: str, nome_sessao: str = "",
     return _sem_espaco(cauda) in _sem_espaco(composer)
 
 
+# Teto de caracteres da regiao despejada na linha de diagnostico — cauda de log serve pra explicar
+# o PROXIMO caso real (ver _diag_composer), nao pra empilhar a tela inteira no journal.
+_DIAG_MAX = 400
+
+
+def _diag_composer(pane: str, texto: str, name: str, pastes_antes: set[str] | None) -> str:
+    """Monta a linha de diagnostico anexada aos logs de envio PARCIAL/deferred.
+
+    So chamada no caminho de FALHA (send_prompt ja decidiu devolver partial/deferred) — nunca no
+    feliz, que custaria uma captura de pane extra por envio bem sucedido. Nao pode lancar: quem
+    chama ja esta lidando com um erro de entrega de verdade, e um erro AQUI dentro nao pode mascarar
+    aquele. Qualquer excecao interna degrada pra uma string curta; o log perde detalhe, nunca a
+    entrega.
+
+    Junta tres evidencias, na mesma ordem que um humano investigaria: (1) a regiao que o detector
+    leu como composer (ou o motivo de nao ter lido), truncada em _DIAG_MAX e com \\n escapado pra
+    nao quebrar a linha do log; (2) a CAUDA procurada — o mesmo recorte que _composer_residuo usa,
+    nunca o texto inteiro; (3) a geometria das reguas (indices, distancia ate o fim, altura entre
+    elas) — e o que diz se _COMPOSER_FUNDO/_COMPOSER_ALTURA descartaram a regiao; (4) os ids de
+    paste vistos antes/depois, pro caso do texto ter colapsado em placeholder.
+    """
+    try:
+        linhas = pane.split("\n")
+        reguas = [i for i, l in enumerate(linhas) if l.count("─") >= 20]
+        if len(reguas) >= 2:
+            geometria = (f"reguas={reguas[-2]},{reguas[-1]} "
+                         f"fundo={len(linhas) - reguas[-1]} altura={reguas[-1] - reguas[-2]}")
+        else:
+            geometria = f"reguas={reguas}"
+        # name="" pra este helper so LER a regiao, nunca repetir o aviso-uma-vez de composer
+        # ilegivel — esse efeito colateral pertence ao caminho principal, ja disparado la se for o caso.
+        regiao = _composer_regiao(pane, "")
+        regiao_txt = ("ilegivel (menos de 2 reguas validas, ou fora de _COMPOSER_FUNDO/_ALTURA)"
+                      if regiao is None else regiao.replace("\n", "\\n")[:_DIAG_MAX])
+        cauda = texto.strip().split("\n")[-1].strip()[-_RESIDUO_CAUDA:]
+        pastes_depois = _paste_ids(regiao or "")
+        return (f"diag: cauda={cauda!r} composer={regiao_txt!r} {geometria} "
+                f"pastes(antes={sorted(pastes_antes or set())} depois={sorted(pastes_depois)})")
+    except Exception as e:
+        return f"diag indisponivel: {e!r}"
+
+
 def _composer_ocupado_pi(name: str) -> bool:
     """True = já ha texto parado no composer do Pi. Digitar por cima COLARIA as mensagens num
     submit so — caso real (ABC-1234, 31/07): aviso de grupo ficou no composer com o Enter engolido
@@ -548,7 +590,8 @@ class TerminalInput:
                 if name not in _OCUPADO_WARNED:
                     _OCUPADO_WARNED.add(name)
                     _log.warning("send adiado name=%s: composer do pi ja tem texto — deferred "
-                                 "(digitar agora colaria as mensagens; aviso unico ate desocupar)", name)
+                                 "(digitar agora colaria as mensagens; aviso unico ate desocupar) — %s",
+                                 name, _diag_composer(_capture(name), text, name, None))
                 return "deferred"
             _OCUPADO_WARNED.discard(name)
             if "\n" in text:
@@ -564,8 +607,8 @@ class TerminalInput:
                     # NAO aperta Enter: o texto nao chegou no composer, entao o Enter submeteria o que
                     # estivesse la (a primeira linha truncada, ou nada) como se fosse pedido do usuario.
                     _log.error("envio PARCIAL name=%s: multi-linha NAO chegou no composer em %.1fs "
-                               "(o multiplexador aceitou e nao entregou) — Enter nao enviado",
-                               name, _SUBMIT_CHECK_PRAZO)
+                               "(o multiplexador aceitou e nao entregou) — Enter nao enviado — %s",
+                               name, _SUBMIT_CHECK_PRAZO, _diag_composer(_capture(name), text, name, pastes_antes))
                     return "partial"
                 send_keys(name, "Enter")
                 # CONFERE em vez de confiar no settle. Caso real medido: tres recados longos
@@ -575,8 +618,8 @@ class TerminalInput:
                 # detecta nada: o Enter correndo a ingestao devolve "sent" do mesmo jeito.
                 if not _submeteu(name, text, pastes_antes):
                     _log.error("envio PARCIAL name=%s: multi-linha nao submeteu (a cauda do texto "
-                               "continua no composer apos %.1fs) — nao afirmando entrega",
-                               name, _SUBMIT_CHECK_PRAZO)
+                               "continua no composer apos %.1fs) — nao afirmando entrega — %s",
+                               name, _SUBMIT_CHECK_PRAZO, _diag_composer(_capture(name), text, name, pastes_antes))
                     return "partial"
             elif text.lstrip().startswith("/"):
                 # Slash command: ao digitar "/..." o Claude Code abre um menu de autocomplete. Sem dar
@@ -621,7 +664,8 @@ class TerminalInput:
                 time.sleep(_SUBMIT_SETTLE)
                 if not _entrou_no_composer(name, text, pastes_antes):
                     _log.error("envio PARCIAL name=%s: o texto NAO chegou no composer em %.1fs — "
-                               "Enter nao enviado", name, _SUBMIT_CHECK_PRAZO)
+                               "Enter nao enviado — %s", name, _SUBMIT_CHECK_PRAZO,
+                               _diag_composer(_capture(name), text, name, pastes_antes))
                     return "partial"
                 send_keys(name, "Enter")
                 # Mesma conferencia do ramo multi-linha: e o upgrade que o comentario acima ja anotava
@@ -630,7 +674,8 @@ class TerminalInput:
                 # no composer no meio do caminho.
                 if not _submeteu(name, text, pastes_antes):
                     _log.error("envio PARCIAL name=%s: uma linha nao submeteu (texto continua no "
-                               "composer apos %.1fs) — nao afirmando entrega", name, _SUBMIT_CHECK_PRAZO)
+                               "composer apos %.1fs) — nao afirmando entrega — %s", name, _SUBMIT_CHECK_PRAZO,
+                               _diag_composer(_capture(name), text, name, pastes_antes))
                     return "partial"
             return "sent"
 
