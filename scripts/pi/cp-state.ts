@@ -8,6 +8,7 @@
 // auto-compactar e seguir rodando, entao marcar idle nele deixaria a sessao "ociosa" enquanto ela
 // ainda trabalha.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { EventEmitter, once } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -137,6 +138,32 @@ let socket: WebSocket | null = null;
 let tentativa = 0;
 let desligando = false;
 
+// Corroboração real de entrega (achado da revisão, confirmado no pacote instalado 0.83.0):
+// `pi.sendUserMessage()` NUNCA lança nem devolve a Promise pro lado da extensão — a ponte interna
+// (agent-session.js:1855-1862) faz `this.sendUserMessage(...).catch(err => runner.emitError(...))`,
+// e a lista pública de eventos (extensions/types.d.ts:855-889) não tem "error" nem "queue_update"
+// pra extensão ouvir esse emitError. Então um try/catch em volta da chamada nunca pega falha de
+// verdade — só protegeria contra um throw síncrono que a API também não dá.
+// O único sinal corroborável hoje: se a sessão estava OCIOSA, sendUserMessage() cai no caminho de
+// prompt() que dispara "agent_start" antes de rodar o turno (agent-session.js:900-916) — dá pra
+// esperar esse evento. Com a sessão OCUPADA (deliverAs="steer" entrando no meio de um turno já
+// rodando), o enfileiramento (_queueSteer, agent-session.js:1013) não emite NADA que a extensão
+// possa ouvir — pra esse caso não existe corroboração possível com a API de hoje, ponto.
+let trabalhando = false;
+const eventosAgente = new EventEmitter();
+
+// `once(emitter, evento, {signal})` é a espera com prazo do próprio node:events — sem isso seria
+// reinventar timeout+listener+cleanup na mão. Resolve `true` se "agent_start" chegou a tempo,
+// `false` no timeout (o `once` já remove o listener sozinho nos dois casos, sem vazar).
+async function aguardarAgentStart(prazoMs: number): Promise<boolean> {
+  try {
+    await once(eventosAgente, "agent_start", { signal: AbortSignal.timeout(prazoMs) });
+    return true;
+  } catch {
+    return false;   // estourou o prazo — sem corroboração (ver "na dúvida, confirma" abaixo)
+  }
+}
+
 function conectar(pi: ExtensionAPI): void {
   guard("conectar", () => {
     if (desligando || socket) return;
@@ -153,20 +180,35 @@ function conectar(pi: ExtensionAPI): void {
     });
 
     ws.addEventListener("message", (ev: any) => {
+      // O parse/ping continua SÍNCRONO dentro do guard (contrato original preservado): se virasse
+      // async aqui, um JSON.parse malformado rejeitaria a Promise que o guard não aguarda, e o
+      // erro sumiria como unhandled rejection em vez do `[cp-state] entregar falhou: ...` de
+      // sempre. Só a entrega em si (que precisa esperar corroboração) vai pra uma IIFE assíncrona
+      // com o PRÓPRIO try/catch — nada escapa sem log.
       guard("entregar", () => {
         const msg = JSON.parse(String(ev.data));
         if (msg.ping) { ws.send(JSON.stringify({ pong: true })); return; }
         if (!msg.id || typeof msg.text !== "string") return;
-        try {
-          // deliverAs SEMPRE: com a sessão streamando o Pi LEVANTA erro se não vier
-          // (agent-session.js:827-840) — recusa em vez de corromper estado, que é o certo.
-          pi.sendUserMessage(msg.text, { deliverAs: msg.deliverAs ?? "steer" });
-          ws.send(JSON.stringify({ id: msg.id, ok: true }));
-        } catch (err) {
-          // Confirmação NEGATIVA é informação: o backend deixa a mensagem na fila e re-tenta.
-          // Ficar calado faria o backend esperar o prazo inteiro à toa.
-          ws.send(JSON.stringify({ id: msg.id, ok: false, erro: String(err) }));
-        }
+        (async () => {
+          try {
+            // deliverAs SEMPRE: com a sessão streamando o Pi LEVANTA erro se não vier
+            // (agent-session.js:827-840) — recusa em vez de corromper estado, que é o certo.
+            const estavaOciosa = !trabalhando;   // snapshot ANTES de chamar — ver bloco acima
+            pi.sendUserMessage(msg.text, { deliverAs: msg.deliverAs ?? "steer" });
+            // Orçamento curto de propósito: o backend desiste da confirmação em PRAZO_ACK=3s
+            // (pi_inbox.py) — esperar demais aqui transforma uma entrega que deu certo em
+            // "deferred" à toa. Só espera quando dá pra corroborar (sessão estava ociosa).
+            if (estavaOciosa) await aguardarAgentStart(1200);
+            // Mesmo sem corroborar (timeout acima, ou sessão ocupada = sem sinal possível),
+            // ainda confirma ok:true: falso NEGATIVO é PIOR aqui — o backend reenvia a mensagem
+            // pra fila e duplica instrução no agente, que é o dano real (decisão do usuário).
+            ws.send(JSON.stringify({ id: msg.id, ok: true }));
+          } catch (err) {
+            // Confirmação NEGATIVA é informação: o backend deixa a mensagem na fila e re-tenta.
+            // Ficar calado faria o backend esperar o prazo inteiro à toa.
+            ws.send(JSON.stringify({ id: msg.id, ok: false, erro: String(err) }));
+          }
+        })();
       });
     });
 
@@ -185,7 +227,19 @@ function conectar(pi: ExtensionAPI): void {
 
 export default function (pi: ExtensionAPI) {
   // Handlers recebem (event, ctx) — types.d.ts:845. Sem o ctx nao ha arquivo de sessao.
-  pi.on("session_start", async (_e: any, ctx: any) => { publishPane(ctx); publishModels(pi, ctx); conectar(pi); });
+  pi.on("session_start", async (_e: any, ctx: any) => {
+    // Achado da revisão, confirmado no pacote instalado (agent-session-runtime.js:102-113,
+    // `teardownCurrent`): "session_shutdown" NÃO é só "o processo vai morrer" — dispara com
+    // reason "resume"/"new"/"fork"/"quit", chamado por switchSession/newSession/fork/
+    // importFromJsonl. Essas trocas reusam a MESMA fábrica de extensão (extensions/loader.js:
+    // 318-324), então `desligando` sobrevivia entre sessões: a shutdown da sessão VELHA travava
+    // `conectar` (e o retry do close) da sessão NOVA pra sempre, sem nenhum log. Resetar aqui, no
+    // início de toda sessão nova dentro do MESMO processo, é o caminho mais simples que cobre
+    // /new, /fork e /resume sem precisar decidir com o `reason` do evento — só "quit" de verdade
+    // não passa por aqui de novo (o processo morre, e o valor não importa mais).
+    desligando = false;
+    publishPane(ctx); publishModels(pi, ctx); conectar(pi);
+  });
 
   // NOVO: fecha de propósito ao morrer. Sem isto, um /reload deixaria o backend achando que ainda
   // tem alguém lendo até o prazo estourar, e a mensagem daquele intervalo esperaria à toa.
@@ -193,8 +247,12 @@ export default function (pi: ExtensionAPI) {
     desligando = true;
     guard("fechar", () => socket?.close());
   });
-  pi.on("agent_start", async (_e: any, ctx: any) => { publishPane(ctx); publishState("working", ctx); });
-  pi.on("agent_settled", async (_e: any, ctx: any) => { publishState("idle", ctx); });
+  pi.on("agent_start", async (_e: any, ctx: any) => {
+    publishPane(ctx); publishState("working", ctx);
+    trabalhando = true;
+    eventosAgente.emit("agent_start");   // corrobora entrega pendente — ver bloco da entrega acima
+  });
+  pi.on("agent_settled", async (_e: any, ctx: any) => { publishState("idle", ctx); trabalhando = false; });
   // Republica tambem quando a troca vem do TUI (usuario no teclado, Ctrl+P, /model, /settings) —
   // senao o app mostraria o modelo velho ate a proxima sessao.
   pi.on("model_select", async (_e: any, ctx: any) => { publishModels(pi, ctx); });
