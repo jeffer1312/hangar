@@ -1135,19 +1135,34 @@ def _send_one(name: str, text: str) -> dict:
     t0 = time.time()
     provider, pane_id = _pane_info(name)
     stripped = text.lstrip()
-    # Pi: cria a entrada da fila ANTES do 1o envio, pra ter um id ESTAVEL pra oferecer como msg_id
-    # (achado ALTA da revisao 02/08/2026 — "Porta A"). A extensao chama sendUserMessage ANTES de
-    # confirmar, entao a PRIMEIRA tentativa (esta aqui) e a que mais importa: sem id nela, um retry
-    # do drain() (apos "deferred" por ACK perdido) nao tem como a extensao reconhecer como a MESMA
-    # mensagem. Claude/Codex-via-tty NAO usam esse id (retry ali e so "digitar de novo", ja
-    # idempotente pelo teclado) — ficam no fluxo de sempre (append DEPOIS do send), sem tocar nada.
+    # Pi COM LINHA: cria a entrada da fila ANTES do 1o envio, pra ter um id ESTAVEL pra oferecer
+    # como msg_id (achado ALTA da revisao 02/08/2026 — "Porta A"). A extensao chama sendUserMessage
+    # ANTES de confirmar, entao a PRIMEIRA tentativa (esta aqui) e a que mais importa: sem id nela,
+    # um retry do drain() (apos "deferred" por ACK perdido) nao tem como a extensao reconhecer como
+    # a MESMA mensagem.
+    #
+    # SO com linha (achado da re-revisao 02/08/2026): pre-criar a entrada TAMBEM pra Pi sem linha
+    # (fallback de teclado) abre uma janela de duplo envio que nao existia antes deste commit. Entre
+    # este append() e o send_prompt() abaixo nao ha trava nenhuma — o _send_lock so e adquirido
+    # DENTRO do send_prompt (terminal_input.py) — e o claim_undelivered do drain() usa so o
+    # _append_lock da fila, que nao tem relacao com aquele. Um drain() concorrente (hook, /input
+    # duplo, _maybe_chain) podia reivindicar essa entrada na janela e digitar o MESMO texto de novo
+    # assim que o send_lock liberasse. E o msg_id nao ajuda em nada nesse caminho: quem digita no
+    # tty nunca le esse valor (ver comentario em terminal_input.send_prompt). Claude/Codex-via-tty
+    # e Pi-sem-linha ficam todos no fluxo de sempre (append DEPOIS do send, delivered ja resolvido)
+    # — e ali NAO ha janela, porque a entrada so nasce depois que o unico send_prompt desta chamada
+    # ja terminou.
     entry = None
-    is_pi = provider == "pi" and not stripped.startswith("/")
+    is_pi = provider == "pi" and pane_id and INBOX.tem_linha(pane_id) and not stripped.startswith("/")
     if is_pi:
         try:
             entry = PromptQueue(name).append(text, delivered=False, ts=t0)
-        except OSError:
-            entry = None  # sem id estavel; pi_inbox cai no uuid4 por tentativa (risco no relatorio)
+        except OSError as e:
+            # Fail-soft, mas NAO calado: sem log aqui, um disco ruim degrada pro uuid4-por-tentativa
+            # de sempre (vulneravel a duplicata) exatamente na hora em que este conserto deveria
+            # entrar em acao — achado da re-revisao 02/08/2026.
+            _log.exception("fila indisponivel antes do envio (Pi com linha) name=%s", name)
+            entry = None
     try:
         result = terminal.send_prompt(
             name, text, provider, pane_id=pane_id,
@@ -1177,7 +1192,9 @@ def _send_one(name: str, text: str) -> dict:
             try:
                 PromptQueue(name).set_delivered(entry["id"], True)
             except OSError:
-                pass
+                # Achado da re-revisao 02/08/2026: falhar calado aqui e o MESMO bug que o comentario
+                # acima descreve (residuo redigitado por cima) voltando sem deixar rastro nenhum.
+                _log.exception("fechar entrada apos 'partial' falhou name=%s", name)
         return {"ok": False,
                 "error": "envio incompleto: parte do texto ficou no composer da sessao e nada foi "
                          "submetido. Confira o terminal antes de reenviar."}
