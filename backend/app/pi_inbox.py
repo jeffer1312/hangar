@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import os
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -159,16 +160,26 @@ def escrever_endpoint() -> list[Path]:
              "token": settings.auth_token, "ts": time.time()}
     for cfg in list_config_dirs():
         alvo = Path(cfg.path) / ".claude-pocket-conn.json"
+        tmp: Path | None = None
         try:
             alvo.parent.mkdir(parents=True, exist_ok=True)
-            # pid no tmp (padrão do pricing.py:203): dois writers não entrelaçam bytes. O chmod vem
-            # ANTES do replace (padrão do projects.py:98) pra nunca existir um instante com o token
-            # legível por outro usuário.
-            tmp = alvo.with_suffix(f".{os.getpid()}.tmp")
-            tmp.write_text(json.dumps(dados), encoding="utf-8")
-            os.chmod(tmp, 0o600)
+            # mkstemp CRIA o arquivo já em 0600 (é o open() com O_EXCL que fixa o modo na
+            # criação — não um chmod depois). A versão anterior fazia write_text() (nasce com o
+            # umask padrão, tipicamente 0644) e só DEPOIS chmod(0600): a janela com o token
+            # legível por outro usuário acontecia na criação, e nenhum chmod posterior desfaz um
+            # instante que já passou. mkstemp também garante nome único sozinho, então dispensa
+            # o pid manual que outros sidecars do projeto (pricing.py:203) usam pra isso.
+            fd, tmp_nome = tempfile.mkstemp(dir=alvo.parent, prefix=alvo.name + ".", suffix=".tmp")
+            tmp = Path(tmp_nome)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(json.dumps(dados))
             tmp.replace(alvo)
             destinos.append(alvo)
         except OSError as e:
             _log.warning("pi_inbox: nao consegui escrever %s: %r", alvo, e)
+            if tmp is not None:
+                # mkstemp não limpa sozinho se algo falhar no meio (só o replace bem-sucedido
+                # "consome" o tmp) — sem isto um erro no meio do caminho deixa lixo .tmp
+                # acumulando no diretório de config do usuário a cada tentativa.
+                tmp.unlink(missing_ok=True)
     return destinos
