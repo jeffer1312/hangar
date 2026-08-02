@@ -1153,11 +1153,25 @@ def _send_one(name: str, text: str) -> dict:
     # — e ali NAO ha janela, porque a entrada so nasce depois que o unico send_prompt desta chamada
     # ja terminou.
     entry = None
+    # ponytail: JANELA RESIDUAL CONHECIDA (nao fechada agora, registrada por decisao do usuario). A
+    # decisao "vai por linha ou por tecla" e tomada DUAS vezes — aqui, FORA de qualquer trava, e de
+    # novo dentro do _send_lock (terminal_input.py, perto de "provider == pi and pane_id and
+    # INBOX.tem_linha"). Entre as duas nao ha trava compartilhada: claim_undelivered (pqueue.py) usa
+    # so o _append_lock da fila, sem relacao com o _send_lock. Se a linha cair ENTRE esta leitura de
+    # tem_linha() e a segunda checagem dentro do lock, quem perde a corrida pelo _send_lock ve
+    # tem_linha=False, cai pro teclado — que NUNCA le msg_id (ver terminal_input.send_prompt). Sai
+    # pela linha de um lado, e redigitado do outro. Nao e regressao deste commit: e o buraco
+    # original encolhido de "qualquer sessao Pi" pra "sessao com linha viva no instante do append, e
+    # a linha caiu bem nessa janela". Medido: entregar_sync segura o _send_lock por ate PRAZO_ACK+2.0
+    # = 5s (pi_inbox.py) — janela de segundos, nao de microssegundos, tempo de sobra pra um drain de
+    # reconexao de SSE ou de transicao de hook entrar. Upgrade: uma trava UNICA cobrindo
+    # append->send (mover o append() pra dentro do _send_lock, ou os dois pontos passarem a usar o
+    # mesmo lock).
     is_pi = provider == "pi" and pane_id and INBOX.tem_linha(pane_id) and not stripped.startswith("/")
     if is_pi:
         try:
             entry = PromptQueue(name).append(text, delivered=False, ts=t0)
-        except OSError as e:
+        except OSError:
             # Fail-soft, mas NAO calado: sem log aqui, um disco ruim degrada pro uuid4-por-tentativa
             # de sempre (vulneravel a duplicata) exatamente na hora em que este conserto deveria
             # entrar em acao — achado da re-revisao 02/08/2026.
