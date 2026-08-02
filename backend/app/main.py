@@ -8,6 +8,7 @@ import qrcode
 from app.config import settings, resolve_bind_ip, pairing_url, list_config_dirs, _backend_config_base
 from app.hook_installer import ensure_askq_hook_installed, ensure_state_hooks_installed
 from app.hook_state import hook_state
+from app.pi_inbox import escrever_endpoint
 
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
@@ -86,6 +87,8 @@ def main():
     # Instala (idempotente, fail-soft) os hooks de estado e de AskUserQuestion.
     ensure_askq_hook_installed()
     ensure_state_hooks_installed()
+    # Endereço pra extensão do Pi ligar de volta (ver pi_inbox.escrever_endpoint).
+    escrever_endpoint()
     _state_dirs = list({Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()})
     hook_state.load_existing(_state_dirs)
     print_pairing(settings)

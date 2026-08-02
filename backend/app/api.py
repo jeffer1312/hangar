@@ -1,9 +1,11 @@
 import anyio.to_thread
 import asyncio
+import json
 import logging
 import mimetypes
 import os
 import re
+import secrets
 import subprocess
 import threading
 import time
@@ -11,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal, Optional
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
@@ -21,6 +23,7 @@ from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
 from app.model_picker import PickerError
 from app import pi_models
+from app.pi_inbox import INBOX
 from app.registry import KillFailed, SessionRegistry
 from app.names import sanitize_session_name
 from app.models import (SessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody, RunInfo,
@@ -176,6 +179,8 @@ async def _lifespan(app: FastAPI):
     # montar(). Sem aquecer aqui, o primeiro /api/costs depois de todo restart paga a coleta fria
     # (657ms medidos) MAIS até 3s de câmbio, contra o AbortSignal.timeout(4000) do cliente.
     threading.Thread(target=_usd_brl, name="usd-brl-warm", daemon=True).start()
+    # A linha vive no loop do servidor, mas o send_prompt roda em thread — ver pi_inbox.entregar_sync.
+    INBOX.ligar_loop(asyncio.get_running_loop())
     try:
         yield
     finally:
@@ -210,6 +215,69 @@ if settings.sync:
 app.include_router(deploy_router)
 registry = SessionRegistry()
 terminal = TerminalInput()
+
+# Teto de mensagem: o _BodySizeLimitMiddleware ignora scope != http de propósito (api.py:83), então
+# a rota WebSocket nasceria sem limite nenhum. 256 KiB cobre com folga qualquer texto de chat.
+_WS_MAX = 256 * 1024
+# Heartbeat DO SERVIDOR, não eco do cliente: socket aberto não prova que tem alguém lendo (extensão
+# com laço travado, notebook suspenso). Sem isto, uma linha zumbi faria toda mensagem pagar o
+# PRAZO_ACK inteiro antes de cair pro fallback — a lentidão que o caminho de tecla não tinha.
+_WS_PING = 20.0
+
+
+# Única rota WebSocket do backend. Quem LIGA é a extensão do Pi; o backend nunca procura ninguém —
+# é isso que faz o custo ser zero pra quem não tem Pi.
+# Auth pela query e não por header: é o mesmo caminho que o SSE já usa (auth.py:86-94), e cliente
+# WebSocket não manda Authorization de forma portável.
+@app.websocket("/api/pi/inbox")
+async def pi_inbox_ws(ws: WebSocket):
+    host = ws.client.host if ws.client else ""
+    if host not in ("127.0.0.1", "::1", "localhost"):
+        # A defesa real é esta. Em loopback o token não protege de quem já está logado na máquina
+        # (o próprio auth.py:42-46 registra isso), mas conexão de FORA não tem o que fazer aqui.
+        await ws.close(code=1008)
+        return
+    if not settings.auth_token or not secrets.compare_digest(
+            ws.query_params.get("token", ""), settings.auth_token):
+        await ws.close(code=1008)
+        return
+    await ws.accept()
+    pane = ""
+    linha = None
+    try:
+        primeira = await asyncio.wait_for(ws.receive_json(), _WS_PING)
+        pane = str(primeira.get("pane") or "")
+        if not pane:
+            await ws.close(code=1008)
+            return
+        linha = INBOX.registrar(pane, ws.send_json)
+        _log.info("pi_inbox: linha aberta pane=%s", pane)
+        while True:
+            try:
+                bruto = await asyncio.wait_for(ws.receive_text(), _WS_PING)
+            except asyncio.TimeoutError:
+                # Silêncio: cobra sinal de vida. Se o socket estiver morto, o send levanta e a
+                # linha cai aqui mesmo, em vez de ficar registrada como viva pra sempre.
+                await ws.send_json({"ping": True})
+                continue
+            if len(bruto) > _WS_MAX:
+                _log.warning("pi_inbox: mensagem de %d bytes pane=%s — fechando", len(bruto), pane)
+                await ws.close(code=1009)
+                return
+            msg = json.loads(bruto)
+            if msg.get("pong") or msg.get("ping"):
+                continue
+            msg_id = str(msg.get("id") or "")
+            if msg_id:
+                INBOX.confirmar(pane, msg_id, bool(msg.get("ok")), msg.get("erro"))
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        _log.warning("pi_inbox: linha caiu pane=%s: %r", pane, e)
+    finally:
+        if linha is not None:
+            INBOX.remover(pane, linha)
+
 
 # Snapshot com TTL de registry.list() pros endpoints request/response QUENTES (history/workflows):
 # o mount do board dispara dezenas de /history de uma vez e cada list() fresco e um scan completo
