@@ -87,18 +87,27 @@ class PiInbox:
         if fut is not None and not fut.done():
             fut.set_result((ok, erro))
 
-    async def entregar(self, pane: str, texto: str) -> str:
+    async def entregar(self, pane: str, texto: str, msg_id: str | None = None) -> str:
         """`sent` | `deferred` | `sem-linha`.
 
         `sem-linha` é o ÚNICO retorno que autoriza o chamador a cair pro caminho de tecla. Depois
         de ter mandado qualquer coisa pela linha, digitar por cima poderia entregar a mesma
         instrução duas vezes — e num canal de agente isso é ação executada duas vezes.
+
+        `msg_id`: identidade ESTÁVEL entre reentregas da MESMA mensagem (achado ALTA da revisão
+        02/08/2026 — "Porta A"). A extensão chama `sendUserMessage` ANTES de confirmar (ver
+        cp-state.ts) — se o ACK atrasar/perder, este método devolve "deferred" mas a instrução JÁ
+        pode ter chegado no agente. Sem um id que sobreviva ao retry, a extensão não tem como saber
+        que é a MESMA tentativa e chamaria `sendUserMessage` de novo. Quem tem uma identidade
+        durável pra oferecer (o id da entrada na `PromptQueue`, ver `terminal_input.drain`/`send_prompt`)
+        passa `msg_id`; sem ele, cai no uuid4 por tentativa de sempre — só serve pra casar pedido e
+        resposta DENTRO desta única chamada, não protege contra retry (risco documentado no relatório).
         """
         linha = self._linhas.get(pane)
         if linha is None:
             return "sem-linha"
         async with linha.lock:
-            msg_id = uuid.uuid4().hex
+            msg_id = msg_id or uuid.uuid4().hex
             fut: asyncio.Future = asyncio.get_running_loop().create_future()
             linha.pendentes[msg_id] = fut
             try:
@@ -126,15 +135,17 @@ class PiInbox:
                 return "deferred"
             return "sent"
 
-    def entregar_sync(self, pane: str, texto: str) -> str:
+    def entregar_sync(self, pane: str, texto: str, msg_id: str | None = None) -> str:
         """Ponte pro mundo síncrono: o `send_prompt` roda em thread (o `_send_executor` do api.py),
-        e a linha vive no loop do servidor. Sem isto, chamar `entregar` de lá não roda."""
+        e a linha vive no loop do servidor. Sem isto, chamar `entregar` de lá não roda.
+        `msg_id`: repassado pra `entregar` sem alteração — ver o docstring de lá (identidade
+        estável entre reentregas)."""
         loop = self._loop
         if loop is None or pane not in self._linhas:
             return "sem-linha"
         fut = None
         try:
-            fut = asyncio.run_coroutine_threadsafe(self.entregar(pane, texto), loop)
+            fut = asyncio.run_coroutine_threadsafe(self.entregar(pane, texto, msg_id), loop)
             # Quem manda no relógio é o `entregar`; este teto só evita travar a thread pra sempre
             # se o loop morrer no meio.
             return fut.result(PRAZO_ACK + 2.0)
@@ -167,16 +178,29 @@ def escrever_endpoint() -> list[Path]:
     """
     from app.config import list_config_dirs, resolve_bind_ip, settings
 
-    # O uvicorn escuta em resolve_bind_ip(settings) (main.py), NAO em 127.0.0.1 fixo — no modo
-    # celular documentado (CP_LAN_BIND_IP=auto) ou com IP fixo de LAN o bind e so naquela interface,
-    # e ws://127.0.0.1 nunca conecta (recusado em silencio, extensao cai sempre pro caminho de tecla).
-    # "0.0.0.0" e o unico caso em que 127.0.0.1 continua certo: bind em toda interface inclui loopback.
-    bind = resolve_bind_ip(settings)
-    host = "127.0.0.1" if bind == "0.0.0.0" else bind
+    try:
+        # O uvicorn escuta em resolve_bind_ip(settings) (main.py), NAO em 127.0.0.1 fixo — no modo
+        # celular documentado (CP_LAN_BIND_IP=auto) ou com IP fixo de LAN o bind e so naquela
+        # interface, e ws://127.0.0.1 nunca conecta (recusado em silencio, extensao cai sempre pro
+        # caminho de tecla). "0.0.0.0" e o unico caso em que 127.0.0.1 continua certo: bind em toda
+        # interface inclui loopback.
+        bind = resolve_bind_ip(settings)
+        host = "127.0.0.1" if bind == "0.0.0.0" else bind
+        cfgs = list_config_dirs()
+        dados = {"url": f"ws://{host}:{settings.port}/api/pi/inbox",
+                 "token": settings.auth_token, "ts": time.time()}
+    except Exception as e:
+        # Achado MEDIA da revisao 02/08/2026: isto roda na SUBIDA (main.py:91), logo depois de dois
+        # hooks explicitamente "idempotente, fail-soft". So o OSError por diretorio (abaixo) era
+        # pego — qualquer excecao de list_config_dirs()/resolve_bind_ip()/json.dumps subia CRUA e
+        # derrubava a subida INTEIRA do backend por causa de um sidecar auxiliar (a linha do Pi e
+        # best-effort, nao o nucleo de conexao). Fail-soft de verdade: loga e devolve vazio, como os
+        # hooks vizinhos (hook_installer.ensure_*_hooks_installed).
+        _log.warning("pi_inbox: nao consegui preparar o endpoint da linha, subindo sem ela: %r", e)
+        return []
+
     destinos: list[Path] = []
-    dados = {"url": f"ws://{host}:{settings.port}/api/pi/inbox",
-             "token": settings.auth_token, "ts": time.time()}
-    for cfg in list_config_dirs():
+    for cfg in cfgs:
         alvo = Path(cfg.path) / ".claude-pocket-conn.json"
         tmp: Path | None = None
         try:
@@ -193,7 +217,9 @@ def escrever_endpoint() -> list[Path]:
                 f.write(json.dumps(dados))
             tmp.replace(alvo)
             destinos.append(alvo)
-        except OSError as e:
+        except Exception as e:
+            # Exception generica (nao só OSError) pelo mesmo motivo do try de cima: um sidecar
+            # auxiliar nao pode derrubar o loop por-diretorio nem a subida.
             _log.warning("pi_inbox: nao consegui escrever %s: %r", alvo, e)
             if tmp is not None:
                 # mkstemp não limpa sozinho se algo falhar no meio (só o replace bem-sucedido

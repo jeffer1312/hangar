@@ -232,6 +232,16 @@ _WS_PING = 20.0
 _WS_PINGS_SEM_RESPOSTA_MAX = 2
 
 
+# Aviso-uma-vez-ate-mudar da recusa de conexao (achado ALTA da revisao 02/08/2026): sem isto, um
+# token girado / bind mudado / firewall no meio faz TODA tentativa de retry da extensao (laco com
+# recuo, cp-state.ts) virar linha de log — e a mesma enxurrada que o retry em si tenta evitar do
+# lado dela. Mesma politica de terminal_input._avisa_deferred/_limpa_deferred: WARNING na 1a recusa
+# por host, calado ate uma conexao daquele host DAR CERTO (o que também reabre o aviso se a falha
+# voltar depois — nao e "avisa uma vez na vida do processo").
+_ws_origem_avisada: set[str] = set()
+_ws_token_avisado: set[str] = set()
+
+
 # Única rota WebSocket do backend. Quem LIGA é a extensão do Pi; o backend nunca procura ninguém —
 # é isso que faz o custo ser zero pra quem não tem Pi.
 # Auth pela query e não por header: é o mesmo caminho que o SSE já usa (auth.py:86-94), e cliente
@@ -249,12 +259,29 @@ async def pi_inbox_ws(ws: WebSocket):
     if host not in ("127.0.0.1", "::1", "localhost", resolve_bind_ip(settings)):
         # A defesa real é esta. Em loopback o token não protege de quem já está logado na máquina
         # (o próprio auth.py:42-46 registra isso), mas conexão de FORA não tem o que fazer aqui.
+        # Achado ALTA da revisao 02/08/2026: ate aqui a recusa era MUDA — nem no terminal do Pi nem
+        # no log do backend sobrava rastro de por que a linha rapida nunca ligava.
+        if host not in _ws_origem_avisada:
+            _ws_origem_avisada.add(host)
+            _log.warning("pi_inbox: origem recusada host=%s (fora do bind aceito) — linha do Pi "
+                         "vai continuar caindo pra tecla (aviso unico ate mudar)", host)
         await ws.close(code=1008)
         return
     if not settings.auth_token or not secrets.compare_digest(
             ws.query_params.get("token", ""), settings.auth_token):
+        # Mesmo achado: inconsistente com auth.py:75, que loga toda virada de bloqueio de token —
+        # aqui nao logava NADA. Token girado / sidecar desatualizado ficava indistinguivel de
+        # "extensao nao instalada".
+        if host not in _ws_token_avisado:
+            _ws_token_avisado.add(host)
+            _log.warning("pi_inbox: token recusado host=%s — linha do Pi vai continuar caindo pra "
+                         "tecla (aviso unico ate acertar)", host)
         await ws.close(code=1008)
         return
+    # Conectou: qualquer recusa ANTERIOR deste host era um estado velho — se voltar a falhar depois,
+    # merece aviso de novo (nao e "avisou uma vez na vida do processo, calado pra sempre").
+    _ws_origem_avisada.discard(host)
+    _ws_token_avisado.discard(host)
     await ws.accept()
     pane = ""
     linha = None
@@ -1106,9 +1133,25 @@ def _send_one(name: str, text: str) -> dict:
     # mantinha pendente (msg em dobro no historico ate o reconcile). A ordem send->append->drain
     # NAO muda — so o valor gravado, que e o unico dado que o dedup le.
     t0 = time.time()
+    provider, pane_id = _pane_info(name)
+    stripped = text.lstrip()
+    # Pi: cria a entrada da fila ANTES do 1o envio, pra ter um id ESTAVEL pra oferecer como msg_id
+    # (achado ALTA da revisao 02/08/2026 — "Porta A"). A extensao chama sendUserMessage ANTES de
+    # confirmar, entao a PRIMEIRA tentativa (esta aqui) e a que mais importa: sem id nela, um retry
+    # do drain() (apos "deferred" por ACK perdido) nao tem como a extensao reconhecer como a MESMA
+    # mensagem. Claude/Codex-via-tty NAO usam esse id (retry ali e so "digitar de novo", ja
+    # idempotente pelo teclado) — ficam no fluxo de sempre (append DEPOIS do send), sem tocar nada.
+    entry = None
+    is_pi = provider == "pi" and not stripped.startswith("/")
+    if is_pi:
+        try:
+            entry = PromptQueue(name).append(text, delivered=False, ts=t0)
+        except OSError:
+            entry = None  # sem id estavel; pi_inbox cai no uuid4 por tentativa (risco no relatorio)
     try:
-        provider, pane_id = _pane_info(name)
-        result = terminal.send_prompt(name, text, provider, pane_id=pane_id)
+        result = terminal.send_prompt(
+            name, text, provider, pane_id=pane_id,
+            **({"msg_id": entry["id"]} if entry is not None else {}))
         # DIAG: correlaciona o send com o jsonl pra onde ESTE nome resolve AGORA -> pega o cross-wire
         # (msg indo pro transcript/terminal errado). Best-effort, nunca quebra o envio.
         try:
@@ -1128,10 +1171,16 @@ def _send_one(name: str, text: str) -> dict:
         # enviado (ver terminal_input.send_prompt). Reporta erro em vez de seguir pro caminho de
         # sucesso, que gravaria a entrada na fila como delivered e afirmaria entrega de uma mensagem
         # cortada. Sem entrada na fila, o drain nao reentra digitando em cima do residuo.
+        if entry is not None:
+            # A entrada do Pi ja existe (criada acima, ANTES de saber o resultado) — sem isto ficaria
+            # delivered=False pra sempre e o proximo drain reentraria digitando em cima do residuo.
+            try:
+                PromptQueue(name).set_delivered(entry["id"], True)
+            except OSError:
+                pass
         return {"ok": False,
                 "error": "envio incompleto: parte do texto ficou no composer da sessao e nada foi "
                          "submetido. Confira o terminal antes de reenviar."}
-    stripped = text.lstrip()
     if stripped.startswith("/"):
         # Slash-commands NAO entram na fila — sao meta, nao viram bubble. Excecao /clear: ele reinicia
         # a sessao do Claude Code (novo session-id/transcript), mas a fila e keyed pelo NOME da sessao
@@ -1144,6 +1193,17 @@ def _send_one(name: str, text: str) -> dict:
                 pass
             # ponytail: o sidecar do AskUserQuestion NAO e limpo aqui — /clear abre um transcript com
             # session_id novo, entao o sidecar antigo vira lixo inofensivo (nao reabre nada).
+    elif entry is not None:
+        # Pi com id estavel: a entrada JA existe (criada antes do send) — so atualiza o delivered,
+        # nunca um segundo append (duplicaria a bubble na fila).
+        try:
+            PromptQueue(name).set_delivered(entry["id"], result == "sent")
+        except OSError:
+            _log.exception("atualizar fila apos envio falhou name=%s", name)
+        if result == "sent":
+            threading.Timer(_CONFIRM_GRACE + 0.5, _confirm_and_drain, args=(name,)).start()
+        else:
+            threading.Thread(target=_drain_session, args=(name,), daemon=True).start()
     else:
         # Registra na fila duravel (sidecar) sempre — aparece como user_msg em ordem e persiste no
         # reload; o merge dedup-a contra o transcript quando o Claude Code grava o prompt. delivered =

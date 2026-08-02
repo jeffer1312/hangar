@@ -542,7 +542,11 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
             # Resolve o pane NA HORA (drain roda em polls, nao no caminho quente do envio, entao
             # pagar mais um `tmux list-panes` aqui nao pesa como pesaria no /input).
             pane_id = next((p["pane_id"] for p in tmux.list_panes_active() if p["name"] == name), None)
-            result = ti.send_prompt(name, entry["text"], provider, pane_id=pane_id)
+            # msg_id=entry["id"]: mesma identidade em TODA reentrega desta entrada (retry apos
+            # "deferred" logo abaixo, ou reenvio pelo reconcile de _confirm_and_drain) — e o que
+            # deixa a extensao do Pi (cp-state.ts) reconhecer um retry e nao chamar sendUserMessage
+            # de novo. Ver pi_inbox.entregar.
+            result = ti.send_prompt(name, entry["text"], provider, pane_id=pane_id, msg_id=entry["id"])
         except Exception:
             # Falha POS-gate (tty caiu no meio): pode ter emitido tecla -> at-most-once, NAO reverte.
             # ponytail: stranded-mas-visivel (a bubble queued- segue aparecendo, display ignora delivered);
@@ -559,8 +563,17 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
                        "(texto pela metade no composer)", name, entry.get("id"))
             return sent
         if result == "deferred":
-            # send_prompt NAO tocou a TUI (overlay reabriu entre claim e envio): reverte (provadamente
-            # pre-envio) e para — espera o proximo idle. Revert pode falhar (disco): nesse caso a entrada
+            # Reverte pra retry e para — espera o proximo idle. No caminho de TECLA isto e
+            # literalmente pre-envio (send_prompt nao tocou a TUI: overlay reabriu entre claim e
+            # envio). No caminho da LINHA do Pi NAO e — pi_inbox.entregar pode devolver "deferred"
+            # DEPOIS de a extensao ja ter chamado sendUserMessage (ACK perdido/timeout, ou reconcile
+            # reenviando um "sent" nao confirmado no transcript — achado ALTA "Porta A"/"Porta B" da
+            # revisao 02/08/2026). Reenviar aqui SERIA duplicar a instrucao no agente se nao fosse
+            # por uma coisa: `msg_id=entry["id"]` (linha acima) mantem o MESMO id em toda reentrega
+            # desta entrada, e a extensao (cp-state.ts) guarda os ids ja entregues — um id repetido
+            # so re-confirma, nunca chama sendUserMessage de novo. E o que torna o revert abaixo
+            # seguro nos DOIS casos, nao so no de tecla.
+            # Revert pode falhar (disco): nesse caso a entrada
             # fica delivered=True (stranded-mas-VISIVEL como bubble queued-) -> nao re-dreva, mas nao some;
             # nunca propaga (drain roda fire-and-forget no to_thread). delivered=True = "send_keys chamado",
             # nao "Claude recebeu" (tmux engole erro de envio) -> a bubble visivel e a unica garantia.
@@ -703,7 +716,11 @@ def answer_questions(name: str, answers: list[dict]) -> None:
 
 class TerminalInput:
     def send_prompt(self, name: str, text: str, provider: str = "claude",
-                    pane_id: str | None = None) -> str:
+                    pane_id: str | None = None, msg_id: str | None = None) -> str:
+        # msg_id: SO importa pro caminho da linha do Pi (repassado a entregar_sync abaixo) — nada
+        # mais neste metodo le esse valor. Quem chama sem id estavel (nenhuma PromptQueue por perto)
+        # simplesmente nao passa; o caminho de tecla (Claude/Codex/Pi sem linha) nunca soube o que e
+        # isso e continua identico. Ver pi_inbox.entregar sobre POR QUE ele existe.
         # Surrogate solto (meio emoji cortado pelo browser) tambem nao chega no tmux: o argv do
         # subprocess e encodado em utf-8 e estouraria UnicodeEncodeError — um ValueError, que o
         # caller ja traduz pra 400 "control characters". A msg era recusada com erro trocado e
@@ -725,7 +742,7 @@ class TerminalInput:
             # "sem-linha" é o ÚNICO retorno que autoriza continuar pra tecla: depois de ter mandado
             # pela linha, digitar por cima entregaria a mesma instrução duas vezes.
             if provider == "pi" and pane_id and pi_inbox.INBOX.tem_linha(pane_id):
-                r = pi_inbox.INBOX.entregar_sync(pane_id, text)
+                r = pi_inbox.INBOX.entregar_sync(pane_id, text, msg_id)
                 if r != "sem-linha":
                     return r
             # Gate de entregabilidade (chokepoint UNICO p/ texto livre — /input e drain passam por

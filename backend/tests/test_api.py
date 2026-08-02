@@ -144,6 +144,69 @@ def test_input_com_surrogate_solto_e_aceito_e_vai_pro_sidecar(api_client, tmp_pa
     assert q.load()[0]["text"] == "corte �"
 
 
+# ---------------------------------------------------------------------------
+# _send_one / Pi: entrada da fila ANTES do envio, com id estavel (achado ALTA da revisao 02/08/2026)
+# ---------------------------------------------------------------------------
+
+def test_input_pi_cria_a_entrada_antes_do_envio_com_id_estavel(api_client, tmp_path, monkeypatch):
+    """Pra Pi, a entrada da fila tem que existir ANTES do 1o send_prompt, com o id passado como
+    msg_id -- e o id que a extensao usa pra reconhecer um retry como o MESMO envio (drain reclama a
+    MESMA entrada depois de um 'deferred'). So UMA entrada na fila (nunca um segundo append)."""
+    from app import pqueue
+    monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
+    monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
+    with patch("app.api.terminal.send_prompt", return_value="sent") as sp:
+        r = api_client.post("/api/sessions/pisess/input", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 200
+    rows = pqueue.PromptQueue("pisess").load()
+    assert len(rows) == 1, "so uma entrada -- append antes, set_delivered depois, nunca um 2o append"
+    entry = rows[0]
+    assert entry["delivered"] is True
+    sp.assert_called_once_with("pisess", "oi", "pi", pane_id="%1", msg_id=entry["id"])
+
+
+def test_input_pi_deferred_mantem_a_entrada_pendente_com_o_mesmo_id(api_client, tmp_path, monkeypatch):
+    """'deferred' (ACK perdido/timeout na linha) -- a entrada fica pendente (delivered=False) pro
+    drain reentregar, com o MESMO id que foi usado na 1a tentativa."""
+    from app import pqueue
+    monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
+    monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
+    with patch("app.api.terminal.send_prompt", return_value="deferred") as sp, \
+         patch("app.api.threading.Thread"):   # nao dispara o drain de verdade neste teste
+        r = api_client.post("/api/sessions/pisess/input", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 200
+    assert r.json()["delivered"] is False
+    rows = pqueue.PromptQueue("pisess").load()
+    assert len(rows) == 1 and rows[0]["delivered"] is False
+    sp.assert_called_once_with("pisess", "oi", "pi", pane_id="%1", msg_id=rows[0]["id"])
+
+
+def test_input_pi_partial_nao_deixa_entrada_orfa_pendente(api_client, tmp_path, monkeypatch):
+    """'partial' (fatiamento do Windows) tem que fechar a entrada criada ANTES do envio -- senao ela
+    fica delivered=False pra sempre e o proximo drain reentraria digitando em cima do residuo."""
+    from app import pqueue
+    monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
+    monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
+    with patch("app.api.terminal.send_prompt", return_value="partial"):
+        r = api_client.post("/api/sessions/pisess/input", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 400
+    rows = pqueue.PromptQueue("pisess").load()
+    assert len(rows) == 1 and rows[0]["delivered"] is True, "fechada, nao fica pendente pro drain"
+
+
+def test_input_pi_slash_command_nao_cria_entrada_antecipada(api_client, tmp_path, monkeypatch):
+    """Slash-command nunca entra na fila (nem pra Pi) -- sem entrada, send_prompt e chamado sem
+    msg_id, exatamente como o caminho de sempre."""
+    from app import pqueue
+    monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
+    monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
+    with patch("app.api.terminal.send_prompt", return_value="sent") as sp:
+        r = api_client.post("/api/sessions/pisess/input", json={"text": "/clear"}, headers=_h())
+    assert r.status_code == 200
+    assert pqueue.PromptQueue("pisess").load() == []
+    sp.assert_called_once_with("pisess", "/clear", "pi", pane_id="%1")
+
+
 def test_broadcast_invokes_send_once_per_name(api_client):
     # POST /api/broadcast pra N nomes precisa rodar a MESMA sequencia do /input (send_prompt +
     # PromptQueue.append) uma vez por nome — nao um mecanismo de entrega novo.

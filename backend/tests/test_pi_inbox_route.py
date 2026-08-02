@@ -92,6 +92,56 @@ def test_conexao_de_outro_ip_da_lan_continua_recusada(monkeypatch):
             pass
 
 
+def test_recusa_por_token_agora_loga(caplog):
+    """Achado ALTA da revisao 02/08/2026: ate aqui a recusa por token era MUDA — nem no terminal do
+    Pi nem no log do backend sobrava rastro de por que a linha rapida nunca ligava."""
+    client = _client()
+    with caplog.at_level("WARNING", logger="claude_pocket"):
+        with pytest.raises(Exception):
+            with client.websocket_connect("/api/pi/inbox"):   # sem ?token=
+                pass
+    assert "token recusado" in caplog.text
+
+
+def test_recusa_por_token_loga_so_uma_vez_ate_acertar(caplog):
+    """Cuidado com enxurrada: o retry da extensao roda em laco com recuo — logar TODA tentativa
+    inundaria o journal. Aviso unico por host, ate uma conexao daquele host dar certo."""
+    client = _client()
+    with caplog.at_level("WARNING", logger="claude_pocket"):
+        for _ in range(3):
+            with pytest.raises(Exception):
+                with client.websocket_connect("/api/pi/inbox"):
+                    pass
+    avisos = [r for r in caplog.records if "token recusado" in r.getMessage()]
+    assert len(avisos) == 1
+
+
+def test_recusa_por_origem_agora_loga(monkeypatch, caplog):
+    """Mesmo achado, pela outra porta: host fora do bind aceito tambem era recusado calado."""
+    from app import api
+    monkeypatch.setattr(api, "resolve_bind_ip", lambda s: "192.168.1.50")
+    client = _client(host="192.168.1.99")
+    with caplog.at_level("WARNING", logger="claude_pocket"):
+        with pytest.raises(Exception):
+            with client.websocket_connect("/api/pi/inbox?token=secret"):
+                pass
+    assert "origem recusada" in caplog.text
+
+
+def test_recusa_para_e_conexao_boa_reabre_o_aviso(caplog):
+    """O aviso nao e 'uma vez na vida do processo': depois de uma conexao BOA daquele host, uma
+    recusa nova (token girou de novo) tem que voltar a logar."""
+    client = _client()
+    with client.websocket_connect("/api/pi/inbox?token=secret") as ws:
+        ws.send_json({"pane": "%1"})
+        ws.send_json({"pong": True})
+    with caplog.at_level("WARNING", logger="claude_pocket"):
+        with pytest.raises(Exception):
+            with client.websocket_connect("/api/pi/inbox"):   # token errado de novo
+                pass
+    assert "token recusado" in caplog.text
+
+
 def test_heartbeat_sem_resposta_derruba_linha_zumbi(monkeypatch):
     """Achado da revisão: send_json sozinho não pega a linha zumbi (buffer do SO absorvendo o
     ping com o outro lado travado) — só o CONTADOR fecha. _WS_PING/_WS_PINGS_SEM_RESPOSTA_MAX
