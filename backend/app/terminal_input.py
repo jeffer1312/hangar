@@ -171,15 +171,45 @@ _COMPOSER_WARNED: set[str] = set()
 # composer o mesmo WARNING repetiria pra sempre. Uma vez por sessao; sai do set quando desocupa,
 # pra um NOVO episodio avisar de novo.
 _OCUPADO_WARNED: set[str] = set()
-# Quantas vezes SEGUIDAS uma sessao pode ficar deferred por composer ocupado antes do log virar ERRO
-# a cada tentativa (em vez do WARNING unico de _OCUPADO_WARNED, que cala depois da primeira vez).
-# Medido 02/08/2026: com o aviso de subagente do Pi contando como "ocupado" (bug hoje corrigido em
-# _composer_ocupado_pi), o usuario so descobria a fila emperrada mexendo no terminal a mao — "adiar
-# pra sempre e pior que avisar" vale tambem pro caso em que o composer FICA ocupado de verdade (um
-# rascunho de longa duracao, por exemplo). Contador por sessao; zera quando desocupa (junto com
-# _OCUPADO_WARNED), pra um NOVO episodio comecar do zero.
-_OCUPADO_DEFER_LIMIT = 5
 _OCUPADO_DEFER_COUNT: dict[str, int] = {}
+# Idem pro deferred de sessao INDISPONIVEL (`not deliverable`: overlay/menu aberto no terminal) —
+# achado da review 02/08/2026: era o UNICO "deferred" do arquivo sem log nenhum. Um overlay preso
+# vira todo envio em adiamento silencioso pra sempre, e o usuario so descobre olhando o terminal.
+_INDISPONIVEL_WARNED: set[str] = set()
+_INDISPONIVEL_DEFER_COUNT: dict[str, int] = {}
+# Quantas vezes SEGUIDAS uma sessao pode ficar deferred (por composer ocupado OU por indisponivel)
+# antes do log virar ERRO, em vez do WARNING unico de praxe (_OCUPADO_WARNED/_INDISPONIVEL_WARNED),
+# que cala depois da primeira vez. Medido 02/08/2026: com o aviso de subagente do Pi contando como
+# "ocupado" (bug hoje corrigido em _composer_ocupado_pi), o usuario so descobria a fila emperrada
+# mexendo no terminal a mao — "adiar pra sempre e pior que avisar" vale tambem pro caso em que o
+# composer FICA ocupado de verdade (um rascunho de longa duracao, por exemplo) ou a sessao fica presa
+# num overlay. Contador por sessao; zera quando desocupa/fica disponivel de novo (ou quando a sessao
+# MORRE — ver _limpa_deferred —, senao os dicts cresceriam pra sempre pra um nome que nunca mais volta).
+_OCUPADO_DEFER_LIMIT = 5
+
+
+def _avisa_deferred(name: str, motivo: str, avisados: set[str], contadores: dict[str, int],
+                     diag: str) -> None:
+    """WARNING uma vez (aviso-uma-vez de praxe, ver _COMPOSER_WARNED/_READY_TIMEOUT_WARNED);
+    acima de _OCUPADO_DEFER_LIMIT tentativas seguidas, ERRO — mas com TREGUA (na virada do limite e
+    depois a cada _OCUPADO_DEFER_LIMIT tentativas, nao em TODA tentativa): sem tregua, uma fila
+    emperrada de verdade inunda o journal a cada drain/reconexao sem nunca entregar (achado da
+    review 02/08/2026) — o resto do arquivo cala de vez apos o primeiro aviso, mas aqui a intencao e
+    o oposto: o ERRO precisa voltar a aparecer de tempos em tempos, nao ficar mudo pra sempre."""
+    n = contadores[name] = contadores.get(name, 0) + 1
+    if n > _OCUPADO_DEFER_LIMIT:
+        if n == _OCUPADO_DEFER_LIMIT + 1 or n % _OCUPADO_DEFER_LIMIT == 0:
+            _log.error("send adiado ha %d tentativas seguidas name=%s: %s — fila pode estar "
+                       "emperrada, confira o terminal — %s", n, name, motivo, diag)
+    elif name not in avisados:
+        avisados.add(name)
+        _log.warning("send adiado name=%s: %s — deferred (aviso unico ate desocupar) — %s",
+                     name, motivo, diag)
+
+
+def _limpa_deferred(name: str, avisados: set[str], contadores: dict[str, int]) -> None:
+    avisados.discard(name)
+    contadores.pop(name, None)
 
 
 def _warn_composer_ilegivel_once(name: str) -> None:
@@ -342,12 +372,17 @@ def _diag_composer(pane: str, texto: str, name: str, pastes_antes: set[str] | No
     aquele. Qualquer excecao interna degrada pra uma string curta; o log perde detalhe, nunca a
     entrega.
 
-    Junta tres evidencias, na mesma ordem que um humano investigaria: (1) a regiao que o detector
-    leu como composer (ou o motivo de nao ter lido), truncada em _DIAG_MAX e com \\n escapado pra
-    nao quebrar a linha do log; (2) a CAUDA procurada — o mesmo recorte que _composer_residuo usa,
-    nunca o texto inteiro; (3) a geometria das reguas (indices, distancia ate o fim, altura entre
-    elas) — e o que diz se _COMPOSER_FUNDO/_COMPOSER_ALTURA descartaram a regiao; (4) os ids de
-    paste vistos antes/depois, pro caso do texto ter colapsado em placeholder.
+    Junta quatro evidencias, na mesma ordem que um humano investigaria: (0) o NOME da sessao, pra
+    correlacionar esta linha com as outras do mesmo envio no journal (achado da review 02/08/2026:
+    o parametro chegava aqui e nunca era lido — o caller ja repete `name=%s` no format string de
+    fora, mas essa repeticao e o que deixa o grep por sessao funcionar sem decorar a ordem dos
+    argumentos); (1) a regiao que o detector leu como composer (ou o motivo de nao ter lido),
+    truncada em _DIAG_MAX e com \\n escapado pra nao quebrar a linha do log; (2) a CAUDA e o
+    COMECO procurados — os mesmos recortes que _composer_residuo usa (ver _RESIDUO_INICIO: sem o
+    comeco aqui, o PROXIMO caso de "nem cauda nem comeco bateram" fica tao mudo quanto o de
+    d49e87a); (3) a geometria das reguas (indices, distancia ate o fim, altura entre elas) — e o
+    que diz se _COMPOSER_FUNDO/_COMPOSER_ALTURA descartaram a regiao; (4) os ids de paste vistos
+    antes/depois, pro caso do texto ter colapsado em placeholder.
     """
     try:
         linhas = pane.split("\n")
@@ -357,15 +392,16 @@ def _diag_composer(pane: str, texto: str, name: str, pastes_antes: set[str] | No
                          f"fundo={len(linhas) - reguas[-1]} altura={reguas[-1] - reguas[-2]}")
         else:
             geometria = f"reguas={reguas}"
-        # name="" pra este helper so LER a regiao, nunca repetir o aviso-uma-vez de composer
+        # nome_sessao="" pra este helper so LER a regiao, nunca repetir o aviso-uma-vez de composer
         # ilegivel — esse efeito colateral pertence ao caminho principal, ja disparado la se for o caso.
         regiao = _composer_regiao(pane, "")
         regiao_txt = ("ilegivel (menos de 2 reguas validas, ou fora de _COMPOSER_FUNDO/_ALTURA)"
                       if regiao is None else regiao.replace("\n", "\\n")[:_DIAG_MAX])
         cauda = texto.strip().split("\n")[-1].strip()[-_RESIDUO_CAUDA:]
+        inicio = texto.strip()[:_RESIDUO_INICIO]
         pastes_depois = _paste_ids(regiao or "")
-        return (f"diag: cauda={cauda!r} composer={regiao_txt!r} {geometria} "
-                f"pastes(antes={sorted(pastes_antes or set())} depois={sorted(pastes_depois)})")
+        return (f"diag: sessao={name!r} cauda={cauda!r} inicio={inicio!r} composer={regiao_txt!r} "
+                f"{geometria} pastes(antes={sorted(pastes_antes or set())} depois={sorted(pastes_depois)})")
     except Exception as e:
         return f"diag indisponivel: {e!r}"
 
@@ -377,16 +413,28 @@ def _diag_composer(pane: str, texto: str, name: str, pastes_antes: set[str] | No
 # mao). Log real:
 #   " Subagent async grouped result intercom delivery was not acknowledged for
 #   '/tmp/pi-subagents-uid-1000/async-subagent-results/a56523ed-40de-4fc7-a352-8fa39f29f908.json'."
-# Exige tambem o caminho `/tmp/pi-subagents-` na mesma linha, nao so a frase, pra nao casar por
-# coincidencia um texto de usuario que cite palavras parecidas.
+#
+# ACHADO DA REVIEW (mesmo dia): a 1a versao usava `[^\n]*`, exigindo a frase inteira numa LINHA
+# FISICA — mas o `capture-pane` devolve linha de TELA, e o aviso tem ~167 chars: num pane estreito
+# (medido em 90 e 99 colunas) ele QUEBRA no meio, `[^\n]*` para de casar na primeira quebra, e
+# _composer_ocupado_pi volta a devolver True (o bug "continua adiando pra sempre" reaberto). A
+# sessao nasce com `-x 200` mas o tmux segue o menor CLIENTE anexado, entao o pane estreito e real
+# em uso, nao teorico. Fix: casa contra o texto com TODO espaco em branco colapsado (a mesma tecnica
+# de _sem_espaco que o resto do arquivo ja usa pra sobreviver ao wrap de exibicao da cauda/comeco) —
+# um wrap NUNCA acrescenta nem apaga caractere, so reposiciona o cursor pra proxima linha da tela,
+# entao remover TODO whitespace (real ou introduzido pela quebra) reconstroi a sequencia de
+# caracteres original em qualquer ponto de corte.
+_AVISO_SUBAGENT_PI_FRASE = _sem_espaco(
+    "Subagent async grouped result intercom delivery was not acknowledged for")
+_AVISO_SUBAGENT_PI_RE = re.compile(
+    re.escape(_AVISO_SUBAGENT_PI_FRASE) + r".*?/tmp/pi-subagents-[^']*'?\.?")
+# Exige tambem o caminho `/tmp/pi-subagents-` alem da frase, pra nao casar por coincidencia um texto
+# de usuario que cite palavras parecidas.
 # ponytail: remendo — reconhece a FRASE especifica do aviso, nao distingue aviso de rascunho em
 # GERAL (uma frase nova de um aviso futuro nao vai casar). O upgrade de verdade seria comparar o
 # conteudo da caixa contra a leitura ANTERIOR: aviso de sistema e ESTATICO (nao muda entre duas
 # capturas), rascunho do usuario digitando MUDA — mas isso pede duas capturas espacadas no tempo, e
 # esta funcao (uma leitura so, sem estado entre chamadas) nao tem isso hoje.
-_AVISO_SUBAGENT_PI_RE = re.compile(
-    r"Subagent async grouped result intercom delivery was not acknowledged for[^\n]*"
-    r"/tmp/pi-subagents-[^\n]*")
 
 
 def _composer_ocupado_pi(name: str) -> bool:
@@ -401,9 +449,10 @@ def _composer_ocupado_pi(name: str) -> bool:
     de hoje. Ilegivel -> False (na duvida envia, mesma politica do resto do arquivo).
 
     Antes de decidir "tem rascunho?", remove o aviso de subagente conhecido (ver
-    _AVISO_SUBAGENT_PI_RE) do texto da caixa: aviso de sistema nao e rascunho do usuario, e contá-lo
-    como ocupado travava o envio indefinidamente (o usuario so via a mensagem sair depois de mexer no
-    terminal a mao)."""
+    _AVISO_SUBAGENT_PI_RE) do texto da caixa, JA SEM ESPACO (sobrevive a quebra de linha do wrap de
+    tela — ver comentario ali): aviso de sistema nao e rascunho do usuario, e contá-lo como ocupado
+    travava o envio indefinidamente (o usuario so via a mensagem sair depois de mexer no terminal a
+    mao)."""
     try:
         linhas = _capture(name).split("\n")
     except Exception:
@@ -413,8 +462,8 @@ def _composer_ocupado_pi(name: str) -> bool:
             or reguas[-1] - reguas[-2] > _COMPOSER_ALTURA:
         return False
     texto_composer = "\n".join(linhas[reguas[-2] + 1:reguas[-1]])
-    sem_aviso = _AVISO_SUBAGENT_PI_RE.sub("", texto_composer)
-    return bool(sem_aviso.strip())
+    sem_aviso = _AVISO_SUBAGENT_PI_RE.sub("", _sem_espaco(texto_composer))
+    return bool(sem_aviso)
 
 
 def _wait_input_ready(name: str, timeout: float | None = None, provider: str = "claude") -> bool:
@@ -666,7 +715,21 @@ class TerminalInput:
             # corromperiam. Sem pane entregavel agora, devolve "deferred" SEM tocar a TUI; o caller
             # enfileira pendente e o drain entrega quando o overlay fechar / a sessao voltar.
             if not deliverable(name):
+                if not tmux.has_session(name):
+                    # Sessao morreu de vez: o nome nunca mais volta, entao os contadores de deferred
+                    # (deste motivo e do composer-ocupado do Pi) so cresceriam pra sempre. Achado da
+                    # review 02/08/2026.
+                    _limpa_deferred(name, _OCUPADO_WARNED, _OCUPADO_DEFER_COUNT)
+                    _limpa_deferred(name, _INDISPONIVEL_WARNED, _INDISPONIVEL_DEFER_COUNT)
+                    return "deferred"
+                # Sessao viva mas indisponivel AGORA (overlay/menu aberto, ou awaiting_input — ver
+                # `deliverable`). Ate a review 02/08/2026 este era o UNICO deferred do arquivo sem
+                # log nenhum: overlay preso virava todo envio em adiamento silencioso pra sempre.
+                _avisa_deferred(name, "sessao indisponivel (overlay/menu aberto no terminal)",
+                                _INDISPONIVEL_WARNED, _INDISPONIVEL_DEFER_COUNT,
+                                _diag_composer(_capture(name), text, name, None))
                 return "deferred"
+            _limpa_deferred(name, _INDISPONIVEL_WARNED, _INDISPONIVEL_DEFER_COUNT)
             # Não enviar pra um TUI ainda bootando: as teclas seriam engolidas e a msg sumiria (core
             # bug — msg mandada logo após criar a sessão nunca chegava no claude).
             _wait_input_ready(name, provider=provider)
@@ -674,28 +737,32 @@ class TerminalInput:
             # adia em vez de digitar por cima — deferred reverte pra delivered=False e o proximo
             # drain (idle/reconnect) tenta de novo; a bubble queued- segue visivel no app.
             if provider == "pi" and _composer_ocupado_pi(name):
-                tentativas = _OCUPADO_DEFER_COUNT[name] = _OCUPADO_DEFER_COUNT.get(name, 0) + 1
-                if tentativas > _OCUPADO_DEFER_LIMIT:
-                    # Acima do limite o log vira ERRO A CADA tentativa, nao mais silencioso: "adiar
-                    # pra sempre e pior que avisar" (ver _OCUPADO_DEFER_LIMIT). O WARNING unico de
-                    # _OCUPADO_WARNED ja disparou uma vez la embaixo; aqui a fila esta emperrada de
-                    # verdade e o usuario precisa saber a cada tentativa, nao so na primeira.
-                    _log.error("send adiado ha %d tentativas seguidas name=%s: composer do pi "
-                               "continua ocupado — fila pode estar emperrada, confira o terminal — %s",
-                               tentativas, name, _diag_composer(_capture(name), text, name, None))
-                elif name not in _OCUPADO_WARNED:
-                    _OCUPADO_WARNED.add(name)
-                    _log.warning("send adiado name=%s: composer do pi ja tem texto — deferred "
-                                 "(digitar agora colaria as mensagens; aviso unico ate desocupar) — %s",
-                                 name, _diag_composer(_capture(name), text, name, None))
+                _avisa_deferred(name, "composer do pi ja tem texto", _OCUPADO_WARNED,
+                                _OCUPADO_DEFER_COUNT, _diag_composer(_capture(name), text, name, None))
                 return "deferred"
-            _OCUPADO_WARNED.discard(name)
-            _OCUPADO_DEFER_COUNT.pop(name, None)
+            _limpa_deferred(name, _OCUPADO_WARNED, _OCUPADO_DEFER_COUNT)
             if "\n" in text:
                 # Foto dos placeholders de paste ANTES do nosso: so um numero NOVO conta como
                 # evidencia de entrega (ver _composer_residuo — paste alheio nao pode virar prova).
                 pastes_antes = _paste_ids(_composer_regiao(_capture(name), name) or "")
-                tmux.paste_text(name, text)
+                # `is False` e nao `not ...` — MESMO raciocinio do ramo de uma linha logo abaixo: o
+                # UNICO produtor de False e uma falha CONFIRMADA (ver tmux.paste_text/
+                # _paste_linha_a_linha/_send_literal); None (dublê de teste que nao repassa sinal)
+                # segue o caminho de sempre.
+                # CRITICO (review 02/08/2026): antes deste conserto o retorno de `paste_text` era
+                # DESCARTADO aqui, e a UNICA prova de entrega passou a ser a leitura da tela — que,
+                # com o comeco valendo como evidencia (_RESIDUO_INICIO), enxerga "entrou" mesmo
+                # quando o paste parou no MEIO (ex.: linha 2 de 3 falhou e as demais nunca foram
+                # digitadas). Resultado: _entrou_no_composer dizia "entrou", o Enter ia, _submeteu via
+                # o composer limpar (o Enter limpou o texto TRUNCADO), e send_prompt devolvia "sent"
+                # CALADO pra um texto pela metade — no fallback do Windows (psmux sempre cai la) e no
+                # POSIX quando o paste-buffer falha e cai no mesmo fallback. Checar o retorno aqui
+                # tira essa decisao das maos da leitura de tela sempre que ha um sinal melhor.
+                if tmux.paste_text(name, text) is False:
+                    _log.error("envio PARCIAL name=%s: multi-linha PAROU no meio da digitacao "
+                               "(falha confirmada em tmux.paste_text) — Enter nao enviado — %s",
+                               name, _diag_composer(_capture(name), text, name, pastes_antes))
+                    return "partial"
                 # Settle ANTES do Enter, como no ramo de uma linha. Ver _MULTILINE_SUBMIT_SETTLE:
                 # os 0.05 antigos eram menores que a ingestao MINIMA medida (0.08s) e o Enter
                 # submetia o texto pela metade.

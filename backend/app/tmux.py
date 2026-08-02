@@ -412,26 +412,40 @@ def buffer_trunca_no_newline() -> bool:
     return _TRUNCA_BUFFER
 
 
-def paste_text(name: str, text: str) -> None:
-    # Envia texto MULTI-LINHA pro pane via bracketed paste: set-buffer + paste-buffer -p. O `-p` faz a
-    # TUI (Ink) receber as quebras como newlines DENTRO do input (não submete cada linha). Buffer
-    # nomeado (não suja os paste-buffers do usuário) e `-d` apaga depois. Quem submete e o Enter (caller).
-    # Multiplexador que TRUNCA o buffer na quebra nem tenta o paste-buffer: ali ele devolve rc=0
-    # mentindo (entrega truncado ou nada), e confiar nesse rc foi o que manteve o fallback DESLIGADO
-    # no Windows justamente onde ele era necessario. Ver buffer_trunca_no_newline.
+def paste_text(name: str, text: str) -> bool:
+    """True = o texto foi entregue por completo ao composer (via paste-buffer OU plano B linha a
+    linha). False = alguma etapa CONFIRMOU falha no meio — quem chama nao pode mandar Enter nem
+    confiar so na leitura da tela pra decidir (achado da review 02/08/2026, CRITICO: antes deste
+    conserto o retorno era descartado nos dois pontos que o produzem — aqui e em
+    `_paste_linha_a_linha` — e o `send_prompt` so tinha a leitura do pane como prova; com a prova
+    por COMECO do texto (ver terminal_input._RESIDUO_INICIO), um envio que parou na linha 2 de 3
+    ainda mostra o comeco no composer, `_entrou_no_composer` lia "entrou", o Enter ia, e o
+    `send_prompt` devolvia "sent" CALADO pra um texto pela metade. Vale no fallback do Windows
+    (psmux sempre cai aqui) e no POSIX quando o paste-buffer falha e cai no mesmo fallback).
+
+    Envia texto MULTI-LINHA pro pane via bracketed paste: set-buffer + paste-buffer -p. O `-p` faz a
+    TUI (Ink) receber as quebras como newlines DENTRO do input (não submete cada linha). Buffer
+    nomeado (não suja os paste-buffers do usuário) e `-d` apaga depois. Quem submete e o Enter (caller).
+    Multiplexador que TRUNCA o buffer na quebra nem tenta o paste-buffer: ali ele devolve rc=0
+    mentindo (entrega truncado ou nada), e confiar nesse rc foi o que manteve o fallback DESLIGADO
+    no Windows justamente onde ele era necessario. Ver buffer_trunca_no_newline.
+    """
     if buffer_trunca_no_newline():
-        _paste_linha_a_linha(name, text)
-        return
+        return _paste_linha_a_linha(name, text)
     buf = "cp-prompt"
     _run(["tmux", "set-buffer", "-b", buf, "--", text])
     cp = _run(["tmux", "paste-buffer", "-t", _pane_target(name), "-b", buf, "-p", "-d"])
     if cp.returncode == 0:
-        return
-    _paste_linha_a_linha(name, text)
+        return True
+    return _paste_linha_a_linha(name, text)
 
 
-def _paste_linha_a_linha(name: str, text: str) -> None:
+def _paste_linha_a_linha(name: str, text: str) -> bool:
     """Plano B do multi-linha: uma chamada por linha, com C-j entre elas.
+
+    True = as N linhas foram digitadas por completo. False = parou no meio — PARA no primeiro erro
+    (linha ou C-j) em vez de seguir tentando as demais: continuar entregaria um texto com um BURACO
+    no meio, que e exatamente o estrago que checar o retorno existe pra evitar (ver `paste_text`).
 
     Multiplexador sem `paste-buffer` (medido no psmux 3.3.7, o tmux nativo de Windows). Duas coisas
     aprendidas no teste, as duas contra-intuitivas:
@@ -447,10 +461,16 @@ def _paste_linha_a_linha(name: str, text: str) -> None:
     alvo = _pane_target(name)
     for i, linha in enumerate(text.split("\n")):
         if i:
-            _run(["tmux", "send-keys", "-t", alvo, "C-j"])
+            cp = _run(["tmux", "send-keys", "-t", alvo, "C-j"])
+            if cp.returncode != 0:
+                _log.error("tmux send-keys C-j falhou pra %r no meio do plano B (linha %d): %s",
+                           alvo, i, (cp.stderr or "").strip()[:200])
+                return False
         if linha:
             # via _send_literal: uma LINHA comprida cai no mesmo teto do Windows (fatia com pausa).
-            _send_literal(alvo, linha)
+            if not _send_literal(alvo, linha):
+                return False
+    return True
 
 
 def pane_scrollback(name: str) -> int:

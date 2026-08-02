@@ -69,6 +69,25 @@ def test_probe_detecta_multiplexador_que_trunca_e_vai_direto_pro_plano_b(monkeyp
     assert [c[-1] for c in chamadas if c[1] == "send-keys"] == ["uma", "C-j", "duas", "C-j", "tres"]
 
 
+def test_falha_confirmada_no_meio_da_2a_linha_devolve_false_e_para(monkeypatch):
+    # Achado CRITICO da review 02/08/2026: o retorno de _send_literal era descartado aqui e em
+    # paste_text -- send_prompt so tinha a leitura da tela como prova, e com ela aceitando o COMECO
+    # como evidencia (terminal_input._RESIDUO_INICIO) um texto que parasse no MEIO ainda parecia
+    # "entregue". Agora a falha CONFIRMADA (rc != 0) tem que propagar: False, e PARAR (nao tentar a
+    # 3a linha, que deixaria um buraco no meio do texto).
+    chamadas = _grava(monkeypatch, falha_paste=True)   # cai no plano B (linha a linha)
+    base_fake = tmux.RUN
+
+    def fake_com_falha_na_segunda(args, **kw):
+        if args[1] == "send-keys" and args[-1] == "duas":
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="deu ruim")
+        return base_fake(args, **kw)
+
+    monkeypatch.setattr(tmux, "RUN", fake_com_falha_na_segunda)
+    ok = tmux.paste_text("s", "uma\nduas\ntres")
+    assert ok is False
+
+
 def test_probe_e_por_capacidade_e_fica_em_cache(monkeypatch):
     # Uma vez por processo: o comportamento do multiplexador nao muda no meio da vida do backend, e o
     # probe custa 3 chamadas. E e por CAPACIDADE, nao por nome de SO — um tmux que passe a truncar
