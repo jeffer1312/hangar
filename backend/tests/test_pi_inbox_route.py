@@ -4,14 +4,14 @@ from app.config import settings
 from app.pi_inbox import INBOX
 
 
-def _client():
+def _client(host="127.0.0.1"):
     """`client=` explícito: o TestClient conecta como host 'testclient' por padrão
     (starlette/testclient.py:392) e cairia na recusa de não-loopback da rota. Mesmo contorno de
     tests/test_auth_backoff.py:21."""
     settings.auth_token = "secret"
     from app.api import app
     from fastapi.testclient import TestClient
-    return TestClient(app, client=("127.0.0.1", 12345))
+    return TestClient(app, client=(host, 12345))
 
 
 def test_conexao_sem_token_e_recusada():
@@ -66,6 +66,30 @@ def test_primeira_mensagem_gigante_fecha_antes_de_registrar():
         ws.send_text("x" * (256 * 1024 + 10))
         with pytest.raises(Exception):
             ws.receive_json()
+
+
+def test_conexao_do_bind_configurado_e_aceita(monkeypatch):
+    """Achado da revisão final: com CP_LAN_BIND_IP=auto/IP fixo de LAN, o uvicorn NÃO escuta em
+    loopback (main.py: resolve_bind_ip) — a extensão (mesma máquina) chega com esse endereço como
+    origem, e recusar isso é a linha do Pi nunca conectar em produção."""
+    from app import api
+    monkeypatch.setattr(api, "resolve_bind_ip", lambda s: "192.168.1.50")
+    client = _client(host="192.168.1.50")
+    with client.websocket_connect("/api/pi/inbox?token=secret") as ws:
+        ws.send_json({"pane": "%50"})
+        ws.send_json({"pong": True})
+        assert INBOX.tem_linha("%50") is True
+
+
+def test_conexao_de_outro_ip_da_lan_continua_recusada(monkeypatch):
+    """Aceitar o bind configurado NÃO pode virar aceitar qualquer host da LAN — só o endereço que o
+    próprio backend subiu (a defesa real contra quem não está na máquina)."""
+    from app import api
+    monkeypatch.setattr(api, "resolve_bind_ip", lambda s: "192.168.1.50")
+    client = _client(host="192.168.1.99")
+    with pytest.raises(Exception):
+        with client.websocket_connect("/api/pi/inbox?token=secret"):
+            pass
 
 
 def test_heartbeat_sem_resposta_derruba_linha_zumbi(monkeypatch):

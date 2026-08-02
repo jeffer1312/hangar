@@ -44,6 +44,29 @@ def test_transcript_stream_actually_parses_pi_lines(tmp_path):
     assert ev.kind == "user_msg" and ev.text == "oi"
 
 
+def test_send_prompt_resolve_o_pane_como_o_drain(monkeypatch):
+    """Achado da revisão final: sem pane_id, `terminal_input.send_prompt` nunca acha a linha do
+    pi_inbox e cai direto pra tecla — mesmo silêncio que esta branch existe pra matar. Hoje é
+    código morto (o único `adapter.send_prompt` vivo é o do Codex), mas se algo passar a rotear
+    Pi por aqui tem que sair correto."""
+    import asyncio
+    from app.adapters.pi import adapter as pi_adapter_mod
+
+    monkeypatch.setattr(pi_adapter_mod.tmux, "list_panes_active",
+                        lambda: [{"name": "outra", "pane_id": "%1"}, {"name": "sess", "pane_id": "%9"}])
+    chamado = {}
+
+    class FakeTerminalInput:
+        def send_prompt(self, name, text, provider, pane_id=None):
+            chamado.update(name=name, text=text, provider=provider, pane_id=pane_id)
+            return "sent"
+
+    monkeypatch.setattr(pi_adapter_mod.ti, "TerminalInput", FakeTerminalInput)
+    resultado = asyncio.run(PiAdapter().send_prompt("sess", "oi"))
+    assert resultado == "sent"
+    assert chamado == {"name": "sess", "text": "oi", "provider": "pi", "pane_id": "%9"}
+
+
 def test_transcript_path_delegates_to_sessions(monkeypatch, tmp_path):
     monkeypatch.setenv("PI_CODING_AGENT_SESSION_DIR", str(tmp_path))
     from app.adapters.pi import sessions as s

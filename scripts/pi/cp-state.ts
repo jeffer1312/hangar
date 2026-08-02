@@ -164,12 +164,21 @@ async function aguardarAgentStart(prazoMs: number): Promise<boolean> {
   }
 }
 
+// Mesmo recuo exponencial do `close` abaixo — reaproveitado, nao um segundo mecanismo. Falta do
+// sidecar tem a MESMA causa (backend fora do ar / ainda subindo) que a linha cair, entao merece o
+// mesmo retry; sem isto, uma sessao Pi aberta ANTES da primeira escrita do arquivo (achado da
+// revisao final) nunca teria outra chance de conectar — nem socket, nem "close", nem log.
+function reagendar(pi: ExtensionAPI): void {
+  tentativa = Math.min(tentativa + 1, 6);
+  setTimeout(() => conectar(pi), Math.min(1000 * 2 ** tentativa, 30000));
+}
+
 function conectar(pi: ExtensionAPI): void {
   guard("conectar", () => {
     if (desligando || socket) return;
     const pane = process.env.TMUX_PANE;
     if (!pane) return;                       // fora do tmux o backend não tem como nos achar
-    if (!fs.existsSync(connFile)) return;    // backend não subiu ou não escreveu ainda
+    if (!fs.existsSync(connFile)) { reagendar(pi); return; }   // backend não subiu ou não escreveu ainda
     const { url, token } = JSON.parse(fs.readFileSync(connFile, "utf8"));
     const ws = new WebSocket(`${url}?token=${encodeURIComponent(token)}`);
     socket = ws;
@@ -217,8 +226,7 @@ function conectar(pi: ExtensionAPI): void {
       if (desligando) return;
       // Recuo exponencial com teto: o backend reinicia (systemd) e isso não pode virar tempestade
       // de reconexão. Sem linha, o backend digita no tmux como sempre fez — nada se perde.
-      tentativa = Math.min(tentativa + 1, 6);
-      setTimeout(() => conectar(pi), Math.min(1000 * 2 ** tentativa, 30000));
+      reagendar(pi);
     });
 
     ws.addEventListener("error", () => { /* o close vem em seguida e cuida do retry */ });
