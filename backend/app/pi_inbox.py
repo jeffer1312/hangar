@@ -132,6 +132,7 @@ class PiInbox:
         loop = self._loop
         if loop is None or pane not in self._linhas:
             return "sem-linha"
+        fut = None
         try:
             fut = asyncio.run_coroutine_threadsafe(self.entregar(pane, texto), loop)
             # Quem manda no relógio é o `entregar`; este teto só evita travar a thread pra sempre
@@ -139,6 +140,12 @@ class PiInbox:
             return fut.result(PRAZO_ACK + 2.0)
         except Exception as e:
             _log.warning("pi_inbox: ponte sync falhou pane=%s: %r", pane, e)
+            # Sem isto a corrotina do `entregar` segue viva no loop e pode terminar DEPOIS de o
+            # chamador já ter decidido "deferred" — a fila reenvia pela mesma linha e a mesma
+            # instrução chega duas vezes ao agente (achado da revisão final). cancel() so tem
+            # efeito se a corrotina ainda não passou do próximo `await` (normalmente o
+            # `linha.envia` em si, se o loop estava tão faminto a ponto de nem ter chegado lá).
+            fut.cancel()
             return "deferred"
 
 
@@ -153,10 +160,16 @@ def escrever_endpoint() -> list[Path]:
     iterando list_config_dirs(). Escrever só no padrão faria a sessão de um worktree nunca achar o
     arquivo e ficar PARA SEMPRE no fallback de tecla, em silêncio.
     """
-    from app.config import list_config_dirs, settings
+    from app.config import list_config_dirs, resolve_bind_ip, settings
 
+    # O uvicorn escuta em resolve_bind_ip(settings) (main.py), NAO em 127.0.0.1 fixo — no modo
+    # celular documentado (CP_LAN_BIND_IP=auto) ou com IP fixo de LAN o bind e so naquela interface,
+    # e ws://127.0.0.1 nunca conecta (recusado em silencio, extensao cai sempre pro caminho de tecla).
+    # "0.0.0.0" e o unico caso em que 127.0.0.1 continua certo: bind em toda interface inclui loopback.
+    bind = resolve_bind_ip(settings)
+    host = "127.0.0.1" if bind == "0.0.0.0" else bind
     destinos: list[Path] = []
-    dados = {"url": f"ws://127.0.0.1:{settings.port}/api/pi/inbox",
+    dados = {"url": f"ws://{host}:{settings.port}/api/pi/inbox",
              "token": settings.auth_token, "ts": time.time()}
     for cfg in list_config_dirs():
         alvo = Path(cfg.path) / ".claude-pocket-conn.json"

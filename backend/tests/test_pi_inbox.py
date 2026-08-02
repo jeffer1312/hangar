@@ -137,6 +137,40 @@ def test_entregar_sync_sem_loop_nao_explode():
     assert inbox.entregar_sync("%1", "oi") == "sem-linha"
 
 
+def test_entregar_sync_cancela_a_corrotina_no_timeout(monkeypatch):
+    """Achado da revisão final: sem o cancel(), a corrotina do `entregar` segue viva no loop e pode
+    confirmar DEPOIS de o chamador já ter decidido `deferred` — a fila reenvia pela mesma linha e a
+    mesma instrução chega duas vezes ao agente. Mocka `run_coroutine_threadsafe` pra não depender de
+    tempo real (o teto de `entregar_sync` é PRAZO_ACK + 2.0, fixo no código)."""
+    import concurrent.futures
+    from app import pi_inbox as pi_inbox_mod
+
+    class FalsoFuturoCruzado:
+        def __init__(self, coro):
+            coro.close()   # nunca agendada de verdade — evita "coroutine was never awaited"
+            self.cancelado = False
+
+        def result(self, timeout):
+            raise concurrent.futures.TimeoutError()
+
+        def cancel(self):
+            self.cancelado = True
+
+    capturado = {}
+
+    def falso_run_coroutine_threadsafe(coro, loop):
+        capturado["fut"] = FalsoFuturoCruzado(coro)
+        return capturado["fut"]
+
+    monkeypatch.setattr(pi_inbox_mod.asyncio, "run_coroutine_threadsafe",
+                        falso_run_coroutine_threadsafe)
+    inbox = PiInbox()
+    inbox.ligar_loop(object())   # so precisa ser != None pro guard de entregar_sync
+    inbox.registrar("%1", lambda payload: None)
+    assert inbox.entregar_sync("%1", "oi") == "deferred"
+    assert capturado["fut"].cancelado is True
+
+
 def test_endpoint_vai_pra_todos_os_config_dirs(tmp_path, monkeypatch):
     """Sessão de worktree com CLAUDE_CONFIG_DIR próprio precisa achar o arquivo — senão fica no
     fallback de tecla pra sempre, calada. Mesmo problema que o hook_installer.py:153 já resolve."""
@@ -178,6 +212,38 @@ def test_endpoint_tmp_nunca_nasce_com_permissao_frouxa(tmp_path, monkeypatch):
                         lambda: [ConfigDirInfo(path=str(a), label="A", active=True)])
     pi_inbox.escrever_endpoint()
     assert modos == [0o600]
+
+
+def test_endpoint_usa_o_bind_real_do_backend(tmp_path, monkeypatch):
+    """Achado da revisão final: o uvicorn escuta em resolve_bind_ip(settings) (main.py), não em
+    127.0.0.1 fixo. Com CP_LAN_BIND_IP=auto (modo celular documentado) ou IP fixo de LAN, o bind
+    NÃO é loopback — apontar o sidecar pra 127.0.0.1 faria a extensão ser recusada em silêncio
+    pra sempre."""
+    from app import pi_inbox
+
+    a = tmp_path / "A"
+    a.mkdir()
+    monkeypatch.setattr("app.config.list_config_dirs",
+                        lambda: [ConfigDirInfo(path=str(a), label="A", active=True)])
+    monkeypatch.setattr("app.config.resolve_bind_ip", lambda s: "192.168.1.50")
+    pi_inbox.escrever_endpoint()
+    d = json.loads((a / ".claude-pocket-conn.json").read_text(encoding="utf-8"))
+    assert d["url"].startswith("ws://192.168.1.50:")
+
+
+def test_endpoint_bind_0000_ainda_aponta_pro_loopback(tmp_path, monkeypatch):
+    """0.0.0.0 escuta em TODA interface, incl. loopback — 127.0.0.1 continua um destino válido (e
+    o único que dá pra usar: um socket cliente não conecta em 0.0.0.0)."""
+    from app import pi_inbox
+
+    a = tmp_path / "A"
+    a.mkdir()
+    monkeypatch.setattr("app.config.list_config_dirs",
+                        lambda: [ConfigDirInfo(path=str(a), label="A", active=True)])
+    monkeypatch.setattr("app.config.resolve_bind_ip", lambda s: "0.0.0.0")
+    pi_inbox.escrever_endpoint()
+    d = json.loads((a / ".claude-pocket-conn.json").read_text(encoding="utf-8"))
+    assert d["url"].startswith("ws://127.0.0.1:")
 
 
 def test_endpoint_ilegivel_nao_derruba_a_subida(monkeypatch):

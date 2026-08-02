@@ -38,7 +38,8 @@ from app.sse import merged_events
 from app.uploads import save_upload, resolve_upload, prune_old, list_uploads, UploadError, MAX_BYTES
 from app.video import is_video, extract_frames, extract_audio
 from app.transcribe import transcribe, TranscribeError
-from app.config import list_config_dirs, ConfigDirInfo, _backend_config_base, settings, automations_enabled
+from app.config import (list_config_dirs, ConfigDirInfo, _backend_config_base, settings,
+                        automations_enabled, resolve_bind_ip)
 from app import runtime_config
 from app import tts
 from app.tts_text import preparar as tts_preparar
@@ -238,7 +239,14 @@ _WS_PINGS_SEM_RESPOSTA_MAX = 2
 @app.websocket("/api/pi/inbox")
 async def pi_inbox_ws(ws: WebSocket):
     host = ws.client.host if ws.client else ""
-    if host not in ("127.0.0.1", "::1", "localhost"):
+    # bind_host: o endereco em que o PROPRIO uvicorn subiu (resolve_bind_ip == main.py). Com
+    # CP_LAN_BIND_IP=auto ou IP fixo de LAN (modo celular documentado), o processo nao escuta em
+    # loopback -- so aceitar 127.0.0.1 fechava a linha do Pi em silencio pra sempre (achado da
+    # revisao final). Aceitar TAMBEM o bind continua seguro: uma conexao TCP com origem igual ao
+    # endereco que o proprio host bindou so acontece self-connect (a mesma maquina falando com uma
+    # interface dela mesma) -- um host remoto na LAN nunca aparece aqui com ESSE endereco de
+    # origem, porque a origem eh o IP DELE, nao o do servidor (TCP nao deixa forjar isso).
+    if host not in ("127.0.0.1", "::1", "localhost", resolve_bind_ip(settings)):
         # A defesa real é esta. Em loopback o token não protege de quem já está logado na máquina
         # (o próprio auth.py:42-46 registra isso), mas conexão de FORA não tem o que fazer aqui.
         await ws.close(code=1008)
