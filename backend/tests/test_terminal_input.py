@@ -312,6 +312,17 @@ def test_diag_composer_pane_legivel_traz_regiao_cauda_e_geometria():
     assert "pastes(antes=['1']" in diag
 
 
+def test_diag_composer_inclui_sessao_e_inicio():
+    # Achados da review 02/08/2026: item MEDIO 3 (o diagnostico so mostrava a cauda, nunca o comeco
+    # que o conserto passou a usar como prova — ver _RESIDUO_INICIO) e item BAIXO 6 (o parametro
+    # `name` chegava e nunca era lido). Os dois resolvidos juntos: o diag agora traz `sessao=` e
+    # `inicio=`.
+    pane = _pane_claude(["❯ resto da mensagem que ficou pela metade"])
+    diag = terminal_input._diag_composer(pane, "mensagem que ficou pela metade", "sessao-x", None)
+    assert "sessao='sessao-x'" in diag
+    assert "inicio=" in diag
+
+
 def test_diag_composer_pane_ilegivel_nao_lanca():
     # Sem reguas -> _composer_regiao devolve None; o helper tem que descrever a ausencia, nao explodir.
     diag = terminal_input._diag_composer("tela sem nenhuma regua aqui", "oi", "cc", None)
@@ -435,6 +446,41 @@ def test_send_prompt_texto_longo_com_comeco_visivel_e_cauda_cortada_envia(monkey
     assert call("cc", "Enter") in sk.call_args_list
 
 
+# --- Achado CRITICO da review 02/08/2026: paste_text tinha o retorno de _send_literal DESCARTADO.
+# Com a prova por comeco (_RESIDUO_INICIO) sozinha, um paste que PARA no meio (ex.: a 2a de 3 linhas
+# falha no fallback do Windows/psmux) ainda mostra o comeco no composer — a leitura da tela, sozinha,
+# diria "entrou", o Enter iria, e send_prompt devolveria "sent" CALADO pra um texto pela metade.
+
+
+def test_send_prompt_multilinha_com_falha_confirmada_no_meio_vira_partial(monkeypatch, caplog):
+    clock = [1000.0]
+
+    def fake_sleep(s):
+        clock[0] += s
+
+    monkeypatch.setattr(terminal_input.time, "sleep", fake_sleep)
+    monkeypatch.setattr(terminal_input.time, "monotonic", lambda: clock[0])
+
+    texto = "primeira linha\nsegunda linha que falha no meio\nterceira linha nunca digitada"
+
+    # Composer mostra so o COMECO — a leitura de tela sozinha diria "entrou" (e e exatamente o
+    # risco que a prova por comeco introduziu, se paste_text nao propagasse a falha).
+    def capture(name):
+        composer = ["❯ primeira linha"]
+        return "\n".join(["banner", "", _REGUA_R] + composer + [_REGUA_R, "? for shortcuts"])
+
+    with caplog.at_level("ERROR", logger="claude_pocket.terminal_input"), \
+         patch("app.terminal_input.tmux.has_session", return_value=True), \
+         patch.object(terminal_input, "_capture", side_effect=capture), \
+         patch.object(terminal_input.tmux, "paste_text", return_value=False), \
+         patch.object(terminal_input, "send_keys", return_value=True) as sk:
+        resultado = TerminalInput().send_prompt("cc", texto)
+
+    assert resultado == "partial"
+    assert call("cc", "Enter") not in sk.call_args_list
+    assert any("PARCIAL" in r.getMessage() and "paste_text" in r.getMessage() for r in caplog.records)
+
+
 def test_send_prompt_mensagem_curta_continua_enviando():
     # Regressao-trava: mensagem curta ("ok") tem cauda E comeco curtos demais pra provar qualquer
     # coisa (_RESIDUO_MIN) -> _composer_residuo devolve None -> segue enviando (politica de sempre:
@@ -509,6 +555,27 @@ def test_send_prompt_pi_envia_apesar_do_aviso_de_subagente(monkeypatch):
     assert call("pi-x", "Deu algum problema?", literal=True) in sk.call_args_list
 
 
+def test_composer_pi_aviso_quebrado_em_duas_linhas_nao_conta_como_ocupado():
+    # Achado da review 02/08/2026: a 1a versao exigia a frase inteira numa LINHA FISICA (`[^\n]*`).
+    # O `capture-pane` devolve linha de TELA, e o aviso (~167 chars) quebra num pane estreito —
+    # medido em 90 e 99 colunas. Quebra no boundary de PALAVRA (sem perder nem repetir caractere).
+    linha1 = "Subagent async grouped result intercom delivery was not acknowledged for"
+    linha2 = "'/tmp/pi-subagents-uid-1000/async-subagent-results/a56523ed-40de-4fc7-a352-8fa39f29f908.json'."
+    with patch.object(terminal_input, "_capture", return_value=_pane_pi([linha1, linha2])):
+        assert terminal_input._composer_ocupado_pi("pi-x") is False
+
+
+def test_composer_pi_aviso_quebrado_em_tres_linhas_nao_conta_como_ocupado():
+    # Variante mais dura: quebra no MEIO da palavra "acknowledged" e no meio de "results" — o caso
+    # que um wrap cru (sem hifenizacao) realmente produz. Sem espaco/quebra nenhum foi
+    # perdido ou duplicado, entao remover TODO whitespace reconstroi a sequencia original.
+    linha1 = "Subagent async grouped result intercom delivery was not ackno"
+    linha2 = "wledged for '/tmp/pi-subagents-uid-1000/async-subagent-resul"
+    linha3 = "ts/a56523ed-40de-4fc7-a352-8fa39f29f908.json'."
+    with patch.object(terminal_input, "_capture", return_value=_pane_pi([linha1, linha2, linha3])):
+        assert terminal_input._composer_ocupado_pi("pi-x") is False
+
+
 def test_composer_pi_rascunho_de_verdade_continua_ocupado():
     # O guarda original nao pode morrer: um rascunho de VERDADE (nao o aviso de sistema conhecido)
     # continua adiando o envio.
@@ -520,15 +587,20 @@ def test_composer_pi_rascunho_de_verdade_continua_ocupado():
 def test_send_prompt_pi_ocupado_alem_do_limite_vira_erro_visivel(monkeypatch, caplog):
     # "Adiar pra sempre e pior que avisar": o aviso original (uma vez, WARNING) calava depois da
     # primeira tentativa enquanto a fila ficava emperrada — o usuario so descobria mexendo no
-    # terminal a mao. Acima de _OCUPADO_DEFER_LIMIT tentativas seguidas, cada uma vira ERRO visivel.
+    # terminal a mao. Acima de _OCUPADO_DEFER_LIMIT tentativas seguidas, vira ERRO visivel (com
+    # TREGUA — ver _avisa_deferred; achado MEDIO da review 02/08/2026: sem tregua isto inundava o
+    # journal a cada tentativa, quebrando o padrao "avisa uma vez e cala" do resto do arquivo).
     monkeypatch.setattr(terminal_input, "deliverable", lambda name: True)
     monkeypatch.setattr(terminal_input, "_wait_input_ready", lambda name, provider="claude": True)
     monkeypatch.setattr(terminal_input.time, "sleep", lambda s: None)
     pane_ocupado = _pane_pi(["rascunho que nunca sai do composer"])
+    total = terminal_input._OCUPADO_DEFER_LIMIT * 2 + 1   # passa por DUAS viradas da tregua
     with caplog.at_level("ERROR", logger="claude_pocket.terminal_input"), \
          patch.object(terminal_input, "_capture", return_value=pane_ocupado), \
          patch.object(terminal_input, "send_keys") as sk:
-        for _ in range(terminal_input._OCUPADO_DEFER_LIMIT + 1):
+        for _ in range(total):
             assert TerminalInput().send_prompt("pi-y", "mensagem", provider="pi") == "deferred"
     sk.assert_not_called()
-    assert any("ocupado" in r.getMessage() for r in caplog.records)
+    erros = [r for r in caplog.records if "composer do pi" in r.getMessage()]
+    assert erros                                     # nao ficou mudo
+    assert len(erros) < total - terminal_input._OCUPADO_DEFER_LIMIT   # e nao virou 1 erro por tentativa
