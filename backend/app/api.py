@@ -223,6 +223,12 @@ _WS_MAX = 256 * 1024
 # com laço travado, notebook suspenso). Sem isto, uma linha zumbi faria toda mensagem pagar o
 # PRAZO_ACK inteiro antes de cair pro fallback — a lentidão que o caminho de tecla não tinha.
 _WS_PING = 20.0
+# Teto de heartbeats SEGUIDOS sem resposta antes de fechar. `send_json` sozinho não pega o zumbi que
+# o comentário acima descreve: com o laço de eventos travado (ou notebook suspenso), o buffer TCP do
+# SO absorve o ping sem erro nenhum — é exatamente esse caso que o heartbeat existe pra cobrir. Dois
+# pings perdidos (~2×_WS_PING) é rápido o bastante pra não atrasar a decisão "linha ou tecla" da
+# Task 4, e generoso o bastante pra não fechar por uma rajada de latência isolada.
+_WS_PINGS_SEM_RESPOSTA_MAX = 2
 
 
 # Única rota WebSocket do backend. Quem LIGA é a extensão do Pi; o backend nunca procura ninguém —
@@ -245,21 +251,39 @@ async def pi_inbox_ws(ws: WebSocket):
     pane = ""
     linha = None
     try:
-        primeira = await asyncio.wait_for(ws.receive_json(), _WS_PING)
+        # Texto cru primeiro, igual ao loop abaixo: receive_json() direto pularia o teto de
+        # tamanho pra ESTA mensagem (achado da revisão — só as do loop passavam pelo len(bruto)).
+        bruto = await asyncio.wait_for(ws.receive_text(), _WS_PING)
+        if len(bruto) > _WS_MAX:
+            _log.warning("pi_inbox: primeira mensagem de %d bytes — fechando", len(bruto))
+            await ws.close(code=1009)
+            return
+        primeira = json.loads(bruto)
         pane = str(primeira.get("pane") or "")
         if not pane:
             await ws.close(code=1008)
             return
         linha = INBOX.registrar(pane, ws.send_json)
         _log.info("pi_inbox: linha aberta pane=%s", pane)
+        pings_sem_resposta = 0
         while True:
             try:
                 bruto = await asyncio.wait_for(ws.receive_text(), _WS_PING)
             except asyncio.TimeoutError:
                 # Silêncio: cobra sinal de vida. Se o socket estiver morto, o send levanta e a
-                # linha cai aqui mesmo, em vez de ficar registrada como viva pra sempre.
+                # linha cai aqui mesmo, em vez de ficar registrada como viva pra sempre. Mas o send
+                # sozinho não pega o zumbi (buffer do SO absorvendo o ping) — daí o contador: sem
+                # NENHUMA resposta por _WS_PINGS_SEM_RESPOSTA_MAX rodadas, fecha por conta própria.
+                pings_sem_resposta += 1
+                if pings_sem_resposta > _WS_PINGS_SEM_RESPOSTA_MAX:
+                    _log.warning("pi_inbox: %d heartbeats sem resposta pane=%s — linha zumbi, "
+                                 "fechando", pings_sem_resposta, pane)
+                    await ws.close(code=1000)
+                    return
                 await ws.send_json({"ping": True})
                 continue
+            # Qualquer mensagem é sinal de vida, não só o pong: zera antes de olhar o conteúdo.
+            pings_sem_resposta = 0
             if len(bruto) > _WS_MAX:
                 _log.warning("pi_inbox: mensagem de %d bytes pane=%s — fechando", len(bruto), pane)
                 await ws.close(code=1009)

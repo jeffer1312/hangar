@@ -56,3 +56,31 @@ def test_mensagem_gigante_fecha_a_linha():
         ws.send_text("x" * (256 * 1024 + 10))
         with pytest.raises(Exception):
             ws.receive_json()
+
+
+def test_primeira_mensagem_gigante_fecha_antes_de_registrar():
+    """Achado da revisão: receive_json() direto na 1ª mensagem pulava o teto de tamanho — só o
+    loop depois do registro passava por len(bruto). O teto tem que valer ANTES do json.loads."""
+    client = _client()
+    with client.websocket_connect("/api/pi/inbox?token=secret") as ws:
+        ws.send_text("x" * (256 * 1024 + 10))
+        with pytest.raises(Exception):
+            ws.receive_json()
+
+
+def test_heartbeat_sem_resposta_derruba_linha_zumbi(monkeypatch):
+    """Achado da revisão: send_json sozinho não pega a linha zumbi (buffer do SO absorvendo o
+    ping com o outro lado travado) — só o CONTADOR fecha. _WS_PING/_WS_PINGS_SEM_RESPOSTA_MAX
+    encolhidos pra não pagar o prazo real em segundos."""
+    from app import api
+    monkeypatch.setattr(api, "_WS_PING", 0.05)
+    monkeypatch.setattr(api, "_WS_PINGS_SEM_RESPOSTA_MAX", 1)
+    client = _client()
+    with pytest.raises(Exception):
+        with client.websocket_connect("/api/pi/inbox?token=secret") as ws:
+            ws.send_json({"pane": "%42"})
+            ws.send_json({"pong": True})  # confirma que o registro aconteceu antes do silêncio
+            assert INBOX.tem_linha("%42") is True
+            for _ in range(20):
+                ws.receive_json()  # dreno os pings até a linha fechar por conta própria
+    assert INBOX.tem_linha("%42") is False
