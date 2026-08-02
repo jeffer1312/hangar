@@ -171,6 +171,25 @@ def test_entregar_sync_cancela_a_corrotina_no_timeout(monkeypatch):
     assert capturado["fut"].cancelado is True
 
 
+def test_entregar_sync_sem_futuro_nao_explode(monkeypatch):
+    """Achado da re-revisão final: se o PRÓPRIO run_coroutine_threadsafe levantar (loop fechou
+    entre o guard de `loop is None` e a chamada — corrida real de restart/shutdown), `fut` nunca
+    chega a existir. Sem o guard `if fut is not None`, o `fut.cancel()` do except estourava
+    AttributeError e escapava de `entregar_sync`, quebrando o contrato "nunca levanta" que o
+    broadcast depende (terminal_input.py/api.py não recapturam Exception genérica)."""
+    from app import pi_inbox as pi_inbox_mod
+
+    def explode(coro, loop):
+        coro.close()   # nunca agendada — evita "coroutine was never awaited"
+        raise RuntimeError("loop fechado")
+
+    monkeypatch.setattr(pi_inbox_mod.asyncio, "run_coroutine_threadsafe", explode)
+    inbox = PiInbox()
+    inbox.ligar_loop(object())
+    inbox.registrar("%1", lambda payload: None)
+    assert inbox.entregar_sync("%1", "oi") == "deferred"
+
+
 def test_endpoint_vai_pra_todos_os_config_dirs(tmp_path, monkeypatch):
     """Sessão de worktree com CLAUDE_CONFIG_DIR próprio precisa achar o arquivo — senão fica no
     fallback de tecla pra sempre, calada. Mesmo problema que o hook_installer.py:153 já resolve."""

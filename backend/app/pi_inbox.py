@@ -145,7 +145,12 @@ class PiInbox:
             # instrução chega duas vezes ao agente (achado da revisão final). cancel() so tem
             # efeito se a corrotina ainda não passou do próximo `await` (normalmente o
             # `linha.envia` em si, se o loop estava tão faminto a ponto de nem ter chegado lá).
-            fut.cancel()
+            # `fut` continua None se o PRÓPRIO run_coroutine_threadsafe levantou (loop fechou entre
+            # o guard da linha 133 e a chamada — corrida real de restart/shutdown, e é pra cobrir
+            # ISSO que este try existe): sem o guard, o cancel() estoura AttributeError e escapa,
+            # quebrando o contrato "nunca levanta" (achado da re-revisão final).
+            if fut is not None:
+                fut.cancel()
             return "deferred"
 
 
