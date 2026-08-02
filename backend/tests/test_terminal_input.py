@@ -63,8 +63,9 @@ def test_drain_sends_pending_and_marks_delivered(tmp_queue, monkeypatch):
     PromptQueue("cc").append("um", delivered=False)
     PromptQueue("cc").append("dois", delivered=False)
     sent = []
-    monkeypatch.setattr(terminal_input.TerminalInput, "send_prompt",
-                        lambda self, name, text, provider="claude", pane_id=None: sent.append(text) or "sent")
+    monkeypatch.setattr(
+        terminal_input.TerminalInput, "send_prompt",
+        lambda self, name, text, provider="claude", pane_id=None, msg_id=None: sent.append(text) or "sent")
     assert terminal_input.drain("cc", "/no/such.jsonl") == 2
     assert sent == ["um", "dois"]
     assert all(e["delivered"] for e in PromptQueue("cc").load())
@@ -72,8 +73,9 @@ def test_drain_sends_pending_and_marks_delivered(tmp_queue, monkeypatch):
 
 def test_drain_noop_and_reverts_when_overlay(tmp_queue, monkeypatch):
     PromptQueue("cc").append("um", delivered=False)
-    monkeypatch.setattr(terminal_input.TerminalInput, "send_prompt",
-                        lambda self, name, text, provider="claude", pane_id=None: "deferred")
+    monkeypatch.setattr(
+        terminal_input.TerminalInput, "send_prompt",
+        lambda self, name, text, provider="claude", pane_id=None, msg_id=None: "deferred")
     assert terminal_input.drain("cc", "/no/such.jsonl") == 0
     assert PromptQueue("cc").load()[0]["delivered"] is False   # revertida (nao perdida)
 
@@ -91,8 +93,9 @@ def test_drain_does_not_revert_on_send_failure(tmp_queue, monkeypatch):
 def test_drain_cheap_check_skips_capture_when_nothing_pending(tmp_queue, monkeypatch):
     PromptQueue("cc").append("ja entregue", delivered=True)
     called = []
-    monkeypatch.setattr(terminal_input.TerminalInput, "send_prompt",
-                        lambda self, name, text, provider="claude", pane_id=None: called.append(text) or "sent")
+    monkeypatch.setattr(
+        terminal_input.TerminalInput, "send_prompt",
+        lambda self, name, text, provider="claude", pane_id=None, msg_id=None: called.append(text) or "sent")
     assert terminal_input.drain("cc", "/no/such.jsonl") == 0
     assert called == []   # nem chamou send_prompt (e nem capture_pane)
 
@@ -183,8 +186,9 @@ def test_drain_entrega_entrada_mais_nova_que_o_tmux(tmp_queue, tmp_path, monkeyp
     j.write_text('{"timestamp":"2000-01-01T00:00:00Z"}\n', encoding="utf-8")
     monkeypatch.setattr(terminal_input.tmux, "session_created", lambda name: time.time() - 60)
     sent = []
-    monkeypatch.setattr(terminal_input.TerminalInput, "send_prompt",
-                        lambda self, name, text, provider="claude", pane_id=None: sent.append(text) or "sent")
+    monkeypatch.setattr(
+        terminal_input.TerminalInput, "send_prompt",
+        lambda self, name, text, provider="claude", pane_id=None, msg_id=None: sent.append(text) or "sent")
     assert terminal_input.drain("cc", str(j)) == 1 and sent == ["mensagem viva"]
 
 
@@ -613,7 +617,7 @@ def test_pi_com_linha_entrega_sem_digitar(monkeypatch):
     teclas = []
     monkeypatch.setattr(terminal_input, "send_keys", lambda *a, **k: teclas.append(a) or True)
     monkeypatch.setattr(pi_inbox.INBOX, "tem_linha", lambda pane: True)
-    monkeypatch.setattr(pi_inbox.INBOX, "entregar_sync", lambda pane, texto: "sent")
+    monkeypatch.setattr(pi_inbox.INBOX, "entregar_sync", lambda pane, texto, msg_id=None: "sent")
 
     r = terminal_input.TerminalInput().send_prompt("s", "oi", provider="pi", pane_id="%1")
     assert r == "sent"
@@ -627,7 +631,7 @@ def test_pi_com_linha_funciona_mesmo_com_overlay(monkeypatch):
 
     monkeypatch.setattr(terminal_input, "deliverable", lambda name: False)
     monkeypatch.setattr(pi_inbox.INBOX, "tem_linha", lambda pane: True)
-    monkeypatch.setattr(pi_inbox.INBOX, "entregar_sync", lambda pane, texto: "sent")
+    monkeypatch.setattr(pi_inbox.INBOX, "entregar_sync", lambda pane, texto, msg_id=None: "sent")
 
     assert terminal_input.TerminalInput().send_prompt(
         "s", "oi", provider="pi", pane_id="%1") == "sent"
@@ -663,7 +667,7 @@ def test_pi_linha_sem_confirmacao_nao_digita(monkeypatch):
     teclas = []
     monkeypatch.setattr(terminal_input, "send_keys", lambda *a, **k: teclas.append(a) or True)
     monkeypatch.setattr(pi_inbox.INBOX, "tem_linha", lambda pane: True)
-    monkeypatch.setattr(pi_inbox.INBOX, "entregar_sync", lambda pane, texto: "deferred")
+    monkeypatch.setattr(pi_inbox.INBOX, "entregar_sync", lambda pane, texto, msg_id=None: "deferred")
 
     r = terminal_input.TerminalInput().send_prompt("s", "oi", provider="pi", pane_id="%1")
     assert r == "deferred"
@@ -685,3 +689,77 @@ def test_claude_nunca_consulta_a_linha(monkeypatch):
     monkeypatch.setattr(terminal_input, "send_keys", lambda *a, **k: True)
 
     assert terminal_input.TerminalInput().send_prompt("s", "oi") == "sent"
+
+
+# --- id estavel entre reentregas pela linha do Pi (achado ALTA da revisao 02/08/2026) ------------
+# A extensao (cp-state.ts) chama sendUserMessage ANTES de confirmar: se o ACK atrasa/perde,
+# pi_inbox.entregar devolve "deferred" mas a instrucao JA pode ter chegado no agente. Sem um id
+# ESTAVEL entre a 1a tentativa (_send_one, via api.py) e o retry (drain, abaixo), a extensao nao tem
+# como reconhecer o retry como a MESMA mensagem e chamaria sendUserMessage de novo. Estes dois testes
+# prova a plumbing do lado do backend (msg_id sobrevive ao round-trip fila -> drain -> send_prompt);
+# a dedupe em si (guardar os ids ja entregues) mora em cp-state.ts, sem harness de teste TS no repo
+# — verificada por leitura + execucao manual da logica extraida (ver relatorio).
+
+def test_porta_a_retry_pela_fila_usa_o_mesmo_msg_id(tmp_queue, monkeypatch):
+    """Timeout de ACK (linha viva, "deferred") -> drain() reclama a MESMA entrada -> a 'extensao'
+    (dublê) recebe o MESMO id nas duas tentativas."""
+    from app import pi_inbox, terminal_input
+    from app.pqueue import PromptQueue
+
+    ids_recebidos = []
+
+    def fake_entregar_sync(pane, texto, msg_id=None):
+        ids_recebidos.append(msg_id)
+        return "deferred"   # ACK nunca chega, nas DUAS tentativas
+
+    monkeypatch.setattr(pi_inbox.INBOX, "tem_linha", lambda pane: True)
+    monkeypatch.setattr(pi_inbox.INBOX, "entregar_sync", fake_entregar_sync)
+    monkeypatch.setattr(terminal_input.tmux, "list_panes_active",
+                        lambda: [{"name": "cc", "pane_id": "%1"}])
+
+    entry = PromptQueue("cc").append("oi", delivered=False)
+
+    # 1a tentativa: o que _send_one faz hoje (api.py cria a entrada e passa o id como msg_id).
+    r1 = terminal_input.TerminalInput().send_prompt(
+        "cc", "oi", provider="pi", pane_id="%1", msg_id=entry["id"])
+    assert r1 == "deferred"
+
+    # 2a tentativa: drain() reclama a MESMA entrada (delivered ainda False) e tenta de novo.
+    assert terminal_input.drain("cc", "/no/such.jsonl", "pi") == 0
+    assert PromptQueue("cc").load()[0]["delivered"] is False   # segue pendente pro proximo drain
+
+    assert len(ids_recebidos) == 2
+    assert ids_recebidos[0] == ids_recebidos[1] == entry["id"], (
+        "as DUAS tentativas tem que carregar o MESMO id -- e o que deixa a extensao reconhecer "
+        "retry e nao repetir sendUserMessage (a dedupe em si mora em cp-state.ts)"
+    )
+
+
+def test_porta_b_reconcile_redrena_com_o_mesmo_msg_id(tmp_queue, monkeypatch):
+    """_confirm_and_drain dispara pra QUALQUER 'sent', inclusive o da linha do Pi: se o texto nao
+    aterrissar no transcript como committed_user_lines espera, reconcile_delivered re-enfileira a
+    MESMA entrada e o drain() a reenvia -- tambem com o id ORIGINAL, senao seria a mesma duplicata
+    da Porta A por outra porta."""
+    from app import pi_inbox, terminal_input
+    from app.pqueue import PromptQueue
+
+    ids_recebidos = []
+
+    def fake_entregar_sync(pane, texto, msg_id=None):
+        ids_recebidos.append(msg_id)
+        return "sent"
+
+    monkeypatch.setattr(pi_inbox.INBOX, "tem_linha", lambda pane: True)
+    monkeypatch.setattr(pi_inbox.INBOX, "entregar_sync", fake_entregar_sync)
+    monkeypatch.setattr(terminal_input.tmux, "list_panes_active",
+                        lambda: [{"name": "cc", "pane_id": "%1"}])
+
+    # Como se _send_one ja tivesse marcado 'sent' (delivered=True) na 1a tentativa.
+    entry = PromptQueue("cc").append("oi", delivered=True, ts=1000.0)
+
+    q = PromptQueue("cc")
+    requeued = q.reconcile_delivered(committed=set(), min_ts=0.0, now=1000.0 + 20, grace=8.0)
+    assert requeued and requeued[0]["id"] == entry["id"], "reconcile preserva o id da entrada"
+
+    assert terminal_input.drain("cc", "/no/such.jsonl", "pi") == 1   # 2a tentativa, agora "sent"
+    assert ids_recebidos == [entry["id"]], "o reenvio do reconcile usa o MESMO id da 1a tentativa"

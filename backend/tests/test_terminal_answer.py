@@ -150,7 +150,7 @@ def test_drain_leva_o_provider_ate_o_send_prompt(tmp_path, monkeypatch):
     pqueue.PromptQueue("s").append("oi", delivered=False)
     seen = []
     with patch.object(ti.TerminalInput, "send_prompt",
-                      lambda self, name, text, provider="claude", pane_id=None:
+                      lambda self, name, text, provider="claude", pane_id=None, msg_id=None:
                       seen.append(provider) or "sent"), \
          patch.object(ti, "_transcript_start_ts", lambda j: 0.0):
         assert ti.drain("s", "/nao/existe.jsonl", "pi") == 1
@@ -366,7 +366,7 @@ def test_drain_partial_nao_redigita_em_cima_do_residuo(tmp_path, monkeypatch, ca
     q.append("mensagem longa", delivered=False)
     envios = []
 
-    def send_prompt_parcial(self, name, text, provider="claude", pane_id=None):
+    def send_prompt_parcial(self, name, text, provider="claude", pane_id=None, msg_id=None):
         envios.append(text)
         return "partial"
 

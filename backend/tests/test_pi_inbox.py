@@ -105,6 +105,52 @@ async def test_duas_mensagens_no_mesmo_pane_nao_se_cruzam():
     assert [x["text"] for x in recebidas] == ["um", "dois"]
 
 
+async def test_entregar_usa_o_msg_id_recebido_em_vez_de_gerar_um_novo():
+    """Id ESTAVEL entre reentregas (achado ALTA da revisao 02/08/2026 — "Porta A"): quem tem uma
+    entrada de fila (retry) passa o proprio id, e a extensao usa ELE pra reconhecer o retry (dedupe
+    em cp-state.ts). Sem isto, cada tentativa gerava um uuid4 novo e a extensao nunca via duas vezes
+    o MESMO id."""
+    inbox = PiInbox()
+    recebidas, envia = _falsa()
+    inbox.registrar("%1", envia)
+    tarefa = asyncio.create_task(_confirmar_quando_chegar(inbox, "%1", recebidas))
+    assert await inbox.entregar("%1", "oi", msg_id="fixo-123") == "sent"
+    await tarefa
+    assert recebidas[0]["id"] == "fixo-123"
+
+
+async def test_entregar_sem_msg_id_ainda_gera_um_uuid_por_tentativa():
+    """Sem id estavel a oferecer (nenhuma PromptQueue por perto — ver risco no relatorio), o
+    comportamento de sempre continua: um uuid4 por chamada, so serve pra casar pedido/resposta
+    DENTRO desta tentativa."""
+    inbox = PiInbox()
+    recebidas, envia = _falsa()
+    inbox.registrar("%1", envia)
+    tarefa = asyncio.create_task(_confirmar_quando_chegar(inbox, "%1", recebidas))
+    assert await inbox.entregar("%1", "oi") == "sent"
+    await tarefa
+    assert recebidas[0]["id"]   # tem algum id (uuid4), so nao e None/vazio
+
+
+def test_entregar_sync_repassa_o_msg_id_estavel():
+    """A ponte sincrona repassa o msg_id sem alterar — mesmo id que chega na extensao."""
+    inbox = PiInbox()
+    resultado = {}
+
+    async def principal():
+        inbox.ligar_loop(asyncio.get_running_loop())
+        recebidas, envia = _falsa()
+        inbox.registrar("%1", envia)
+        tarefa = asyncio.create_task(_confirmar_quando_chegar(inbox, "%1", recebidas))
+        resultado["r"] = await asyncio.to_thread(inbox.entregar_sync, "%1", "oi", "fixo-999")
+        await tarefa
+        resultado["id"] = recebidas[0]["id"]
+
+    asyncio.run(principal())
+    assert resultado["r"] == "sent"
+    assert resultado["id"] == "fixo-999"
+
+
 def test_entregar_sync_atravessa_do_mundo_de_thread():
     """O send_prompt é SÍNCRONO e roda em thread; a linha vive no loop do servidor. Sem esta ponte
     o código nem roda — é o detalhe que trava quem implementa."""
@@ -272,3 +318,20 @@ def test_endpoint_ilegivel_nao_derruba_a_subida(monkeypatch):
     monkeypatch.setattr("app.config.list_config_dirs",
                         lambda: [ConfigDirInfo(path="/proc/nao-da-pra-escrever", label="X", active=True)])
     assert pi_inbox.escrever_endpoint() == []
+
+
+def test_endpoint_falha_generica_antes_do_loop_nao_derruba_a_subida(monkeypatch, caplog):
+    """Achado MEDIA da revisao 02/08/2026: escrever_endpoint roda na SUBIDA (main.py:91), logo depois
+    de dois hooks explicitamente "idempotente, fail-soft". Ate aqui so o OSError por diretorio (loop
+    abaixo) era pego — qualquer excecao de list_config_dirs()/resolve_bind_ip() ANTES do loop subia
+    CRUA e derrubava a subida INTEIRA do backend por causa de um sidecar auxiliar. Fail-soft de
+    verdade: loga e devolve vazio, como os hooks vizinhos."""
+    from app import pi_inbox
+
+    def explode():
+        raise RuntimeError("HOME ausente")
+
+    monkeypatch.setattr("app.config.list_config_dirs", explode)
+    with caplog.at_level("WARNING", logger="app.pi_inbox"):
+        assert pi_inbox.escrever_endpoint() == []
+    assert "nao consegui preparar" in caplog.text

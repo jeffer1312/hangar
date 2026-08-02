@@ -138,6 +138,48 @@ let socket: WebSocket | null = null;
 let tentativa = 0;
 let desligando = false;
 
+// Dedupe por id de mensagem (achado ALTA da revisao 02/08/2026 — "Porta A"/"Porta B"): o backend
+// pode reentregar o MESMO id (retry apos ACK perdido/timeout em pi_inbox.py, ou reenvio pelo
+// reconcile de um "sent" nao confirmado no transcript) sem saber se a tentativa ANTERIOR ja chegou
+// a chamar sendUserMessage — chamar de novo repetiria a instrucao pro agente, que e o dano real.
+// Guarda so os ids JA entregues (chamada bem-sucedida, sem throw sincrono); um id repetido so
+// re-confirma. Set preserva ordem de insercao -> FIFO simples pra limitar memoria (o processo do Pi
+// vive por horas): 500 cobre com folga qualquer sessao interativa (cada retry e raro — ACK perdido
+// ou reconcile, nao trafego normal) e custa <20KB (ids de 32 hex chars).
+const idsEntregues = new Set<string>();
+const IDS_ENTREGUES_MAX = 500;
+
+function foiEntregue(id: string): boolean {
+  return idsEntregues.has(id);
+}
+
+function marcarEntregue(id: string): void {
+  idsEntregues.add(id);
+  if (idsEntregues.size > IDS_ENTREGUES_MAX) {
+    const maisAntigo = idsEntregues.values().next().value;
+    if (maisAntigo !== undefined) idsEntregues.delete(maisAntigo);
+  }
+}
+
+// Log de conectividade da linha (achado ALTA da revisao 02/08/2026): token girado / bind mudado /
+// firewall no meio faziam a extensao voltar calada pro caminho de tecla, sem rastro nem no terminal
+// do Pi nem no log do backend. Muda de estado só quando MUDA de estado — o retry roda em laço com
+// recuo (reagendar abaixo), e logar toda tentativa inundaria o terminal do usuário (mesma politica
+// de "aviso uma vez ate mudar" que terminal_input.py:_avisa_deferred usa do lado do backend).
+// `null` = ainda não sabemos (antes da 1a tentativa desta sessão do Pi).
+let linhaConectada: boolean | null = null;
+
+function avisaConectividade(conectada: boolean, motivo?: string): void {
+  if (linhaConectada === conectada) return;
+  linhaConectada = conectada;
+  if (conectada) {
+    console.error("[cp-state] linha do pocket conectada");
+  } else {
+    console.error(`[cp-state] linha do pocket indisponivel${motivo ? ": " + motivo : ""} — ` +
+                  "caindo pro envio por tecla ate reconectar");
+  }
+}
+
 // Corroboração real de entrega (achado da revisão, confirmado no pacote instalado 0.83.0):
 // `pi.sendUserMessage()` NUNCA lança nem devolve a Promise pro lado da extensão — a ponte interna
 // (agent-session.js:1855-1862) faz `this.sendUserMessage(...).catch(err => runner.emitError(...))`,
@@ -178,13 +220,18 @@ function conectar(pi: ExtensionAPI): void {
     if (desligando || socket) return;
     const pane = process.env.TMUX_PANE;
     if (!pane) return;                       // fora do tmux o backend não tem como nos achar
-    if (!fs.existsSync(connFile)) { reagendar(pi); return; }   // backend não subiu ou não escreveu ainda
+    if (!fs.existsSync(connFile)) {
+      avisaConectividade(false, "sidecar .claude-pocket-conn.json ainda nao existe");
+      reagendar(pi);
+      return;   // backend não subiu ou não escreveu ainda
+    }
     const { url, token } = JSON.parse(fs.readFileSync(connFile, "utf8"));
     const ws = new WebSocket(`${url}?token=${encodeURIComponent(token)}`);
     socket = ws;
 
     ws.addEventListener("open", () => {
       tentativa = 0;
+      avisaConectividade(true);
       ws.send(JSON.stringify({ pane }));
     });
 
@@ -199,11 +246,23 @@ function conectar(pi: ExtensionAPI): void {
         if (msg.ping) { ws.send(JSON.stringify({ pong: true })); return; }
         if (!msg.id || typeof msg.text !== "string") return;
         (async () => {
+          if (foiEntregue(msg.id)) {
+            // Retry do backend pro MESMO id (ACK perdido/timeout, ou reconcile reenviando um
+            // "sent" nao confirmado no transcript — ver pi_inbox.py) — ja chamamos sendUserMessage
+            // pra este id antes. So confirma; repetir a chamada duplicaria a instrucao no agente.
+            ws.send(JSON.stringify({ id: msg.id, ok: true }));
+            return;
+          }
           try {
             // deliverAs SEMPRE: com a sessão streamando o Pi LEVANTA erro se não vier
             // (agent-session.js:827-840) — recusa em vez de corromper estado, que é o certo.
             const estavaOciosa = !trabalhando;   // snapshot ANTES de chamar — ver bloco acima
             pi.sendUserMessage(msg.text, { deliverAs: msg.deliverAs ?? "steer" });
+            // So marca DEPOIS da chamada nao lancar: e o sinal mais forte que a API de hoje da (ver
+            // o comentario grande acima sobre sendUserMessage ser void). Um throw sincrono aqui
+            // significa que a instrucao NAO foi enfileirada no agente — um retry com o mesmo id
+            // precisa poder tentar de novo, entao nao marca `idsEntregues` nesse caminho.
+            marcarEntregue(msg.id);
             // Orçamento curto de propósito: o backend desiste da confirmação em PRAZO_ACK=3s
             // (pi_inbox.py) — esperar demais aqui transforma uma entrega que deu certo em
             // "deferred" à toa. Só espera quando dá pra corroborar (sessão estava ociosa).
@@ -224,12 +283,21 @@ function conectar(pi: ExtensionAPI): void {
     ws.addEventListener("close", () => {
       socket = null;
       if (desligando) return;
+      // avisaConectividade dedupa por estado: se "error" (abaixo) ja rodou pra esta queda, esta
+      // chamada e um no-op silencioso (mesmo estado) — nao duplica o log.
+      avisaConectividade(false, "conexao encerrada");
       // Recuo exponencial com teto: o backend reinicia (systemd) e isso não pode virar tempestade
       // de reconexão. Sem linha, o backend digita no tmux como sempre fez — nada se perde.
       reagendar(pi);
     });
 
-    ws.addEventListener("error", () => { /* o close vem em seguida e cuida do retry */ });
+    // Achado ALTA da revisao 02/08/2026: handler vazio ate aqui — token girado, porta mudada ou
+    // firewall no meio caiam calados pro retry, sem NENHUM rastro (nem terminal do Pi, nem log do
+    // backend). "error" chega ANTES do "close" para uma conexao que falhou, entao loga o motivo
+    // aqui (mais informativo: traz o erro real) e o "close" que segue vira no-op pela dedupe acima.
+    ws.addEventListener("error", (ev: any) => {
+      avisaConectividade(false, String(ev?.error ?? ev?.message ?? ev));
+    });
   });
 }
 
