@@ -149,12 +149,14 @@ def test_input_com_surrogate_solto_e_aceito_e_vai_pro_sidecar(api_client, tmp_pa
 # ---------------------------------------------------------------------------
 
 def test_input_pi_cria_a_entrada_antes_do_envio_com_id_estavel(api_client, tmp_path, monkeypatch):
-    """Pra Pi, a entrada da fila tem que existir ANTES do 1o send_prompt, com o id passado como
-    msg_id -- e o id que a extensao usa pra reconhecer um retry como o MESMO envio (drain reclama a
-    MESMA entrada depois de um 'deferred'). So UMA entrada na fila (nunca um segundo append)."""
+    """Pra Pi COM LINHA, a entrada da fila tem que existir ANTES do 1o send_prompt, com o id passado
+    como msg_id -- e o id que a extensao usa pra reconhecer um retry como o MESMO envio (drain
+    reclama a MESMA entrada depois de um 'deferred'). So UMA entrada na fila (nunca um segundo
+    append)."""
     from app import pqueue
     monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
+    monkeypatch.setattr("app.api.INBOX.tem_linha", lambda pane: True)
     with patch("app.api.terminal.send_prompt", return_value="sent") as sp:
         r = api_client.post("/api/sessions/pisess/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 200
@@ -171,6 +173,7 @@ def test_input_pi_deferred_mantem_a_entrada_pendente_com_o_mesmo_id(api_client, 
     from app import pqueue
     monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
+    monkeypatch.setattr("app.api.INBOX.tem_linha", lambda pane: True)
     with patch("app.api.terminal.send_prompt", return_value="deferred") as sp, \
          patch("app.api.threading.Thread"):   # nao dispara o drain de verdade neste teste
         r = api_client.post("/api/sessions/pisess/input", json={"text": "oi"}, headers=_h())
@@ -187,6 +190,7 @@ def test_input_pi_partial_nao_deixa_entrada_orfa_pendente(api_client, tmp_path, 
     from app import pqueue
     monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
+    monkeypatch.setattr("app.api.INBOX.tem_linha", lambda pane: True)
     with patch("app.api.terminal.send_prompt", return_value="partial"):
         r = api_client.post("/api/sessions/pisess/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 400
@@ -195,16 +199,46 @@ def test_input_pi_partial_nao_deixa_entrada_orfa_pendente(api_client, tmp_path, 
 
 
 def test_input_pi_slash_command_nao_cria_entrada_antecipada(api_client, tmp_path, monkeypatch):
-    """Slash-command nunca entra na fila (nem pra Pi) -- sem entrada, send_prompt e chamado sem
-    msg_id, exatamente como o caminho de sempre."""
+    """Slash-command nunca entra na fila (nem pra Pi COM linha) -- sem entrada, send_prompt e
+    chamado sem msg_id, exatamente como o caminho de sempre."""
     from app import pqueue
     monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
+    monkeypatch.setattr("app.api.INBOX.tem_linha", lambda pane: True)
     with patch("app.api.terminal.send_prompt", return_value="sent") as sp:
         r = api_client.post("/api/sessions/pisess/input", json={"text": "/clear"}, headers=_h())
     assert r.status_code == 200
     assert pqueue.PromptQueue("pisess").load() == []
     sp.assert_called_once_with("pisess", "/clear", "pi", pane_id="%1")
+
+
+def test_input_pi_sem_linha_nao_cria_entrada_antes_do_envio(api_client, tmp_path, monkeypatch):
+    """Achado da re-revisao 02/08/2026 (regressao introduzida por este commit): pre-criar a entrada
+    ANTES do envio so faz sentido com linha viva -- e o UNICO caso em que o msg_id importa. Sem
+    linha, pre-criar abria uma janela de duplo envio pelo TECLADO: o _send_lock so trava DENTRO do
+    send_prompt, e o claim_undelivered do drain() usa so o _append_lock da fila (sem relacao com
+    aquele) -- um drain() concorrente podia reivindicar a MESMA entrada nessa janela e digitar o
+    texto de novo assim que o send_lock liberasse. Prova que, sem linha, a entrada NAO existe no
+    instante em que send_prompt roda (a janela nao e alcancavel)."""
+    from app import pqueue
+    monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
+    monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
+    monkeypatch.setattr("app.api.INBOX.tem_linha", lambda pane: False)   # sem linha -> fallback de tecla
+
+    visto = {}
+
+    def fake_send_prompt(name, text, provider, pane_id=None, **kwargs):
+        visto["rows_durante_o_envio"] = pqueue.PromptQueue(name).load()
+        visto["kwargs"] = kwargs
+        return "sent"
+
+    with patch("app.api.terminal.send_prompt", side_effect=fake_send_prompt):
+        r = api_client.post("/api/sessions/pisess/input", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 200
+    assert visto["rows_durante_o_envio"] == [], "nenhuma entrada pre-criada sem linha viva"
+    assert "msg_id" not in visto["kwargs"], "sem linha nao ha id estavel a oferecer"
+    rows = pqueue.PromptQueue("pisess").load()
+    assert len(rows) == 1 and rows[0]["delivered"] is True   # so DEPOIS do envio, fluxo de sempre
 
 
 def test_broadcast_invokes_send_once_per_name(api_client):
