@@ -378,3 +378,157 @@ def test_send_prompt_pi_composer_vazio_envia(monkeypatch):
                       side_effect=lambda name, keys, literal=False: teclas.append(keys) or True):
         assert TerminalInput().send_prompt("pi-x", "oi tudo bem", provider="pi") == "sent"
     assert "oi tudo bem" in teclas and "Enter" in teclas
+
+
+# --- Conserto 02/08/2026, causa raiz 1 (Claude): o composer CORTA a EXIBICAO de texto longo — so
+# desenha as primeiras linhas, a cauda nunca aparece. Log real (duas ocorrencias seguidas):
+#   cauda='ude-pocket-uploads/1785666473-67f17f.png'
+#   composer='───\n❯ [Image #1]Então aconteceu várias outras vezes aqui, mas imagino que seu oque é
+#   , todas no pi ,\n  As vezes dps de rodar um subagnt ele aparece essa sugestão, não tem nd
+#   digitado aí , seu eu for\n  pelo terminal e escrever vai , mas se tá usando a visualização no
+#   pane talvez não quer enviar,\n  vi'
+# O texto ESTAVA la (da pra ver o comeco) — so a cauda que nunca foi desenhada.
+
+
+def test_send_prompt_texto_longo_com_comeco_visivel_e_cauda_cortada_envia(monkeypatch):
+    # Reproduz a forma do log real: [Image #1] no comeco, texto que o composer so desenha ATE certo
+    # ponto, e a cauda (fim do caminho da imagem colada) nunca aparece na tela. Antes do conserto isto
+    # devolvia "partial" sem mandar Enter; agora o COMECO prova a entrega.
+    clock = [1000.0]
+
+    def fake_sleep(s):
+        clock[0] += s
+
+    monkeypatch.setattr(terminal_input.time, "sleep", fake_sleep)
+    monkeypatch.setattr(terminal_input.time, "monotonic", lambda: clock[0])
+
+    comeco = ("[Image #1]Então aconteceu várias outras vezes aqui, mas imagino que seu oque é , "
+              "todas no pi ,")
+    texto = (comeco + "\nAs vezes dps de rodar um subagnt ele aparece essa sugestão, não tem nd "
+             "digitado aí\npelo terminal e escrever vai, mas se tá usando a visualização no pane\n"
+             ".claude-pocket-uploads/1785666473-67f17f.png")
+
+    estado = {"colado": False, "enter": False}
+
+    def capture(name):
+        if not estado["colado"] or estado["enter"]:
+            composer = []                       # antes de colar, ou depois do Enter: vazio
+        else:
+            composer = ["❯ " + comeco]           # colado: SO o comeco e desenhado (cauda cortada)
+        return "\n".join(["banner", "", _REGUA_R] + composer + [_REGUA_R, "? for shortcuts"])
+
+    def fake_paste(name, t):
+        estado["colado"] = True
+
+    def fake_send_keys(name, keys, literal=False):
+        if keys == "Enter":
+            estado["enter"] = True
+        return True
+
+    with patch("app.terminal_input.tmux.has_session", return_value=True), \
+         patch.object(terminal_input, "_capture", side_effect=capture), \
+         patch.object(terminal_input.tmux, "paste_text", side_effect=fake_paste), \
+         patch.object(terminal_input, "send_keys", side_effect=fake_send_keys) as sk:
+        resultado = TerminalInput().send_prompt("cc", texto)
+
+    assert resultado == "sent"
+    assert call("cc", "Enter") in sk.call_args_list
+
+
+def test_send_prompt_mensagem_curta_continua_enviando():
+    # Regressao-trava: mensagem curta ("ok") tem cauda E comeco curtos demais pra provar qualquer
+    # coisa (_RESIDUO_MIN) -> _composer_residuo devolve None -> segue enviando (politica de sempre:
+    # na duvida, envia). Acrescentar a checagem por comeco NAO pode fazer isto parar de funcionar.
+    with patch("app.terminal_input.tmux.has_session", return_value=True), \
+         patch("app.terminal_input.tmux.capture_pane", return_value="? for shortcuts\n"), \
+         patch.object(terminal_input, "send_keys", return_value=True) as sk:
+        assert TerminalInput().send_prompt("cc", "ok") == "sent"
+    assert call("cc", "Enter") in sk.call_args_list
+
+
+def test_send_prompt_texto_que_nunca_chega_continua_partial(monkeypatch):
+    # A protecao em si: se o texto REALMENTE nao chegou (composer sempre vazio, nem comeco nem cauda
+    # aparecem), o Enter continua NAO sendo enviado. Se este teste cair, o conserto afrouxou a trava.
+    clock = [1000.0]
+
+    def fake_sleep(s):
+        clock[0] += s
+
+    monkeypatch.setattr(terminal_input.time, "sleep", fake_sleep)
+    monkeypatch.setattr(terminal_input.time, "monotonic", lambda: clock[0])
+
+    texto = "mensagem longa o bastante pra ter cauda e comeco validos, mas que nunca chega no pane"
+
+    def capture(name):
+        return "\n".join(["banner", "", _REGUA_R, _REGUA_R, "? for shortcuts"])  # composer sempre vazio
+
+    with patch("app.terminal_input.tmux.has_session", return_value=True), \
+         patch.object(terminal_input, "_capture", side_effect=capture), \
+         patch.object(terminal_input, "send_keys", return_value=True) as sk:
+        resultado = TerminalInput().send_prompt("cc", texto)
+
+    assert resultado == "partial"
+    assert call("cc", "Enter") not in sk.call_args_list
+
+
+def test_comeco_de_rascunho_alheio_nao_vira_prova():
+    # Invariante critico (achado de 31/07, agora valendo tambem pro comeco): o usuario digitando o
+    # PROPRIO rascunho no composer nao pode virar prova de que o NOSSO texto foi entregue.
+    pane = _pane_claude(["❯ isso aqui e um rascunho que o usuario esta digitando agora mesmo"])
+    r = terminal_input._composer_residuo(
+        pane, "mensagem completamente diferente que o agente esta tentando entregar agora", "cc")
+    assert r is not True
+
+
+# --- Conserto 02/08/2026, causa raiz 2 (Pi): o aviso de subagente contava como "rascunho no
+# composer" e adiava o envio PRA SEMPRE (o usuario confirmou: so destravava mexendo no terminal a
+# mao). Log real: " Subagent async grouped result intercom delivery was not acknowledged for
+# '/tmp/pi-subagents-uid-1000/async-subagent-results/a56523ed-40de-4fc7-a352-8fa39f29f908.json'."
+
+_AVISO_SUBAGENT_PI = (
+    "Subagent async grouped result intercom delivery was not acknowledged for "
+    "'/tmp/pi-subagents-uid-1000/async-subagent-results/a56523ed-40de-4fc7-a352-8fa39f29f908.json'.")
+
+
+def test_composer_pi_aviso_de_subagente_nao_conta_como_ocupado():
+    with patch.object(terminal_input, "_capture", return_value=_pane_pi([_AVISO_SUBAGENT_PI])):
+        assert terminal_input._composer_ocupado_pi("pi-x") is False
+
+
+def test_send_prompt_pi_envia_apesar_do_aviso_de_subagente(monkeypatch):
+    monkeypatch.setattr(terminal_input, "deliverable", lambda name: True)
+    monkeypatch.setattr(terminal_input, "_wait_input_ready", lambda name, provider="claude": True)
+    monkeypatch.setattr(terminal_input, "_entrou_no_composer",
+                        lambda name, texto, pastes_antes=None: True)
+    monkeypatch.setattr(terminal_input, "_submeteu",
+                        lambda name, texto, pastes_antes=None: True)
+    monkeypatch.setattr(terminal_input.time, "sleep", lambda s: None)
+    with patch.object(terminal_input, "_capture", return_value=_pane_pi([_AVISO_SUBAGENT_PI])), \
+         patch.object(terminal_input, "send_keys", return_value=True) as sk:
+        assert TerminalInput().send_prompt("pi-x", "Deu algum problema?", provider="pi") == "sent"
+    assert call("pi-x", "Deu algum problema?", literal=True) in sk.call_args_list
+
+
+def test_composer_pi_rascunho_de_verdade_continua_ocupado():
+    # O guarda original nao pode morrer: um rascunho de VERDADE (nao o aviso de sistema conhecido)
+    # continua adiando o envio.
+    with patch.object(terminal_input, "_capture",
+                      return_value=_pane_pi(["preciso lembrar de perguntar sobre o deploy amanha"])):
+        assert terminal_input._composer_ocupado_pi("pi-x") is True
+
+
+def test_send_prompt_pi_ocupado_alem_do_limite_vira_erro_visivel(monkeypatch, caplog):
+    # "Adiar pra sempre e pior que avisar": o aviso original (uma vez, WARNING) calava depois da
+    # primeira tentativa enquanto a fila ficava emperrada — o usuario so descobria mexendo no
+    # terminal a mao. Acima de _OCUPADO_DEFER_LIMIT tentativas seguidas, cada uma vira ERRO visivel.
+    monkeypatch.setattr(terminal_input, "deliverable", lambda name: True)
+    monkeypatch.setattr(terminal_input, "_wait_input_ready", lambda name, provider="claude": True)
+    monkeypatch.setattr(terminal_input.time, "sleep", lambda s: None)
+    pane_ocupado = _pane_pi(["rascunho que nunca sai do composer"])
+    with caplog.at_level("ERROR", logger="claude_pocket.terminal_input"), \
+         patch.object(terminal_input, "_capture", return_value=pane_ocupado), \
+         patch.object(terminal_input, "send_keys") as sk:
+        for _ in range(terminal_input._OCUPADO_DEFER_LIMIT + 1):
+            assert TerminalInput().send_prompt("pi-y", "mensagem", provider="pi") == "deferred"
+    sk.assert_not_called()
+    assert any("ocupado" in r.getMessage() for r in caplog.records)
