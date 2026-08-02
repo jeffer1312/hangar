@@ -1099,7 +1099,8 @@ def _send_one(name: str, text: str) -> dict:
     # NAO muda — so o valor gravado, que e o unico dado que o dedup le.
     t0 = time.time()
     try:
-        result = terminal.send_prompt(name, text, _pane_provider(name))
+        provider, pane_id = _pane_info(name)
+        result = terminal.send_prompt(name, text, provider, pane_id=pane_id)
         # DIAG: correlaciona o send com o jsonl pra onde ESTE nome resolve AGORA -> pega o cross-wire
         # (msg indo pro transcript/terminal errado). Best-effort, nunca quebra o envio.
         try:
@@ -1173,19 +1174,24 @@ def _provider_of(name: str) -> str:
     return "codex" if codex_sessions.exists(name) else "claude"
 
 
-def _pane_provider(name: str) -> str:
-    """Provider do pane tmux (claude/pi), lido do /proc como na lista. O _provider_of acima so
-    distingue Codex (sidecar) — pra QUEM DIGITA na TUI isso nao basta: o gate de "TUI pronta" do
-    terminal_input casa marcas do rodape do Claude, que o Pi nao imprime, e sem saber o provider
-    todo envio a uma sessao Pi queimava os 12s de timeout antes de digitar. Custo: um
-    `tmux list-panes` + leitura de /proc por envio. Erro/pane sumido -> "claude" (comportamento de
-    hoje, marcas do Claude)."""
+def _pane_info(name: str) -> tuple[str, str | None]:
+    """(provider, pane_id) numa leitura só — era `_pane_provider`, que pagava seu próprio
+    `tmux list-panes -t <name>` (via `tmux.pane_pid`); agora usa `list_panes_active()` (a mesma
+    chamada que o bloco de DIAG logo abaixo já faz), e o `pane_id` sai de carona, sem tmux novo no
+    caminho quente. Provider do pane (claude/pi) continua lido do /proc como antes: o gate de "TUI
+    pronta" do terminal_input casa marcas do rodape do Claude, que o Pi nao imprime, e sem saber o
+    provider todo envio a uma sessao Pi queimava os 12s de timeout antes de digitar. Erro/pane
+    sumido -> ("claude", None) — comportamento de hoje, marcas do Claude, sem pane_id (cai pra
+    tecla, igual a antes desta task)."""
     from app import registry as registry_mod
     from app import tmux
     try:
-        return registry_mod.provider_of_pane(tmux.pane_pid(name))
+        p = next((x for x in tmux.list_panes_active() if x["name"] == name), None)
+        if p is None:
+            return "claude", None
+        return registry_mod.provider_of_pane(p["pid"]), p.get("pane_id")
     except Exception:
-        return "claude"
+        return "claude", None
 
 
 async def _send_one_codex(name: str, text: str) -> dict:

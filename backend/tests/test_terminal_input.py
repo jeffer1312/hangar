@@ -64,7 +64,7 @@ def test_drain_sends_pending_and_marks_delivered(tmp_queue, monkeypatch):
     PromptQueue("cc").append("dois", delivered=False)
     sent = []
     monkeypatch.setattr(terminal_input.TerminalInput, "send_prompt",
-                        lambda self, name, text, provider="claude": sent.append(text) or "sent")
+                        lambda self, name, text, provider="claude", pane_id=None: sent.append(text) or "sent")
     assert terminal_input.drain("cc", "/no/such.jsonl") == 2
     assert sent == ["um", "dois"]
     assert all(e["delivered"] for e in PromptQueue("cc").load())
@@ -73,7 +73,7 @@ def test_drain_sends_pending_and_marks_delivered(tmp_queue, monkeypatch):
 def test_drain_noop_and_reverts_when_overlay(tmp_queue, monkeypatch):
     PromptQueue("cc").append("um", delivered=False)
     monkeypatch.setattr(terminal_input.TerminalInput, "send_prompt",
-                        lambda self, name, text, provider="claude": "deferred")
+                        lambda self, name, text, provider="claude", pane_id=None: "deferred")
     assert terminal_input.drain("cc", "/no/such.jsonl") == 0
     assert PromptQueue("cc").load()[0]["delivered"] is False   # revertida (nao perdida)
 
@@ -92,7 +92,7 @@ def test_drain_cheap_check_skips_capture_when_nothing_pending(tmp_queue, monkeyp
     PromptQueue("cc").append("ja entregue", delivered=True)
     called = []
     monkeypatch.setattr(terminal_input.TerminalInput, "send_prompt",
-                        lambda self, name, text, provider="claude": called.append(text) or "sent")
+                        lambda self, name, text, provider="claude", pane_id=None: called.append(text) or "sent")
     assert terminal_input.drain("cc", "/no/such.jsonl") == 0
     assert called == []   # nem chamou send_prompt (e nem capture_pane)
 
@@ -103,7 +103,7 @@ def test_drain_skips_entries_before_start_ts(tmp_queue, tmp_path, monkeypatch):
     j.write_text('{"timestamp":"2999-01-01T00:00:00Z"}\n', encoding="utf-8")  # start_ts > ts da entrada
     sent = []
     monkeypatch.setattr(terminal_input.TerminalInput, "send_prompt",
-                        lambda self, name, text, provider="claude": sent.append(text) or "sent")
+                        lambda self, name, text, provider="claude", pane_id=None: sent.append(text) or "sent")
     assert terminal_input.drain("cc", str(j)) == 0 and sent == []
 
 
@@ -170,7 +170,7 @@ def test_drain_poda_entradas_de_vida_anterior_da_sessao(tmp_queue, tmp_path, mon
     monkeypatch.setattr(terminal_input.tmux, "session_created", lambda name: time.time() + 60)
     sent = []
     monkeypatch.setattr(terminal_input.TerminalInput, "send_prompt",
-                        lambda self, name, text, provider="claude": sent.append(text) or "sent")
+                        lambda self, name, text, provider="claude", pane_id=None: sent.append(text) or "sent")
     assert terminal_input.drain("cc", str(j)) == 0 and sent == []
     assert PromptQueue("cc").load() == []  # PODADA de verdade (nao marcada entregue, nao pendente)
 
@@ -184,7 +184,7 @@ def test_drain_entrega_entrada_mais_nova_que_o_tmux(tmp_queue, tmp_path, monkeyp
     monkeypatch.setattr(terminal_input.tmux, "session_created", lambda name: time.time() - 60)
     sent = []
     monkeypatch.setattr(terminal_input.TerminalInput, "send_prompt",
-                        lambda self, name, text, provider="claude": sent.append(text) or "sent")
+                        lambda self, name, text, provider="claude", pane_id=None: sent.append(text) or "sent")
     assert terminal_input.drain("cc", str(j)) == 1 and sent == ["mensagem viva"]
 
 
@@ -604,3 +604,84 @@ def test_send_prompt_pi_ocupado_alem_do_limite_vira_erro_visivel(monkeypatch, ca
     erros = [r for r in caplog.records if "composer do pi" in r.getMessage()]
     assert erros                                     # nao ficou mudo
     assert len(erros) < total - terminal_input._OCUPADO_DEFER_LIMIT   # e nao virou 1 erro por tentativa
+
+
+def test_pi_com_linha_entrega_sem_digitar(monkeypatch):
+    """O ponto da fase inteira: havendo linha, NENHUMA tecla é mandada."""
+    from app import pi_inbox, terminal_input
+
+    teclas = []
+    monkeypatch.setattr(terminal_input, "send_keys", lambda *a, **k: teclas.append(a) or True)
+    monkeypatch.setattr(pi_inbox.INBOX, "tem_linha", lambda pane: True)
+    monkeypatch.setattr(pi_inbox.INBOX, "entregar_sync", lambda pane, texto: "sent")
+
+    r = terminal_input.TerminalInput().send_prompt("s", "oi", provider="pi", pane_id="%1")
+    assert r == "sent"
+    assert teclas == [], "com linha viva, nada pode ser digitado no tmux"
+
+
+def test_pi_com_linha_funciona_mesmo_com_overlay(monkeypatch):
+    """A linha não digita, então overlay aberto não é motivo pra adiar. Na v1 do plano o gate
+    `deliverable` vinha antes e a sessão com picker nunca tentava a linha."""
+    from app import pi_inbox, terminal_input
+
+    monkeypatch.setattr(terminal_input, "deliverable", lambda name: False)
+    monkeypatch.setattr(pi_inbox.INBOX, "tem_linha", lambda pane: True)
+    monkeypatch.setattr(pi_inbox.INBOX, "entregar_sync", lambda pane, texto: "sent")
+
+    assert terminal_input.TerminalInput().send_prompt(
+        "s", "oi", provider="pi", pane_id="%1") == "sent"
+
+
+def test_pi_sem_linha_cai_na_tecla(monkeypatch):
+    """Sessão Pi antiga (sem a extensão nova) continua funcionando exatamente como hoje."""
+    from app import pi_inbox, terminal_input
+
+    monkeypatch.setattr(pi_inbox.INBOX, "tem_linha", lambda pane: False)
+    chamou = {"v": False}
+
+    def marcar(*a, **k):
+        chamou["v"] = True
+        return False   # composer vazio: segue o fluxo normal de tecla
+
+    monkeypatch.setattr(terminal_input, "_composer_ocupado_pi", marcar)
+    monkeypatch.setattr(terminal_input, "deliverable", lambda name: True)
+    monkeypatch.setattr(terminal_input, "_wait_input_ready", lambda *a, **k: True)
+    monkeypatch.setattr(terminal_input, "_entrou_no_composer", lambda *a, **k: True)
+    monkeypatch.setattr(terminal_input, "_submeteu", lambda *a, **k: True)
+    monkeypatch.setattr(terminal_input, "send_keys", lambda *a, **k: True)
+
+    r = terminal_input.TerminalInput().send_prompt("s", "oi", provider="pi", pane_id="%1")
+    assert r == "sent"
+    assert chamou["v"] is True, "sem linha, o caminho de tecla (com o guarda) tem que rodar"
+
+
+def test_pi_linha_sem_confirmacao_nao_digita(monkeypatch):
+    """A regra da duplicata: tentou pela linha e não confirmou -> deferred, e NENHUMA tecla."""
+    from app import pi_inbox, terminal_input
+
+    teclas = []
+    monkeypatch.setattr(terminal_input, "send_keys", lambda *a, **k: teclas.append(a) or True)
+    monkeypatch.setattr(pi_inbox.INBOX, "tem_linha", lambda pane: True)
+    monkeypatch.setattr(pi_inbox.INBOX, "entregar_sync", lambda pane, texto: "deferred")
+
+    r = terminal_input.TerminalInput().send_prompt("s", "oi", provider="pi", pane_id="%1")
+    assert r == "deferred"
+    assert teclas == []
+
+
+def test_claude_nunca_consulta_a_linha(monkeypatch):
+    """Sessão de Claude não pode nem encostar no caminho novo."""
+    from app import pi_inbox, terminal_input
+
+    def explode(*a, **k):
+        raise AssertionError("o caminho do Pi foi consultado numa sessao Claude")
+
+    monkeypatch.setattr(pi_inbox.INBOX, "tem_linha", explode)
+    monkeypatch.setattr(terminal_input, "deliverable", lambda name: True)
+    monkeypatch.setattr(terminal_input, "_wait_input_ready", lambda *a, **k: True)
+    monkeypatch.setattr(terminal_input, "_entrou_no_composer", lambda *a, **k: True)
+    monkeypatch.setattr(terminal_input, "_submeteu", lambda *a, **k: True)
+    monkeypatch.setattr(terminal_input, "send_keys", lambda *a, **k: True)
+
+    assert terminal_input.TerminalInput().send_prompt("s", "oi") == "sent"
