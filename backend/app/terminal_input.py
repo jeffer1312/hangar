@@ -50,13 +50,18 @@ _SUBMIT_CHECK_PRAZO = 1.0
 
 
 def _entrou_no_composer(name: str, texto: str, pastes_antes: set[str] | None = None) -> bool:
-    """True = a cauda do texto APARECEU no composer, ou seja o multiplexador entregou de fato.
+    """True = a cauda OU o comeco do texto APARECEU no composer, ou seja o multiplexador entregou
+    de fato.
 
     Evidencia POSITIVA antes do Enter. Sem ela, "composer vazio" e ambiguo: significa tanto "submeteu"
     quanto "nunca entrou nada" — e o segundo caso e real, medido no psmux, onde set-buffer e
     paste-buffer devolvem rc=0 sem entregar nada (ver tmux.buffer_trunca_no_newline). Era esse o furo
     do _submeteu sozinho: ele via composer vazio, concluia entrega, gravava delivered=True, e o
     reconcile depois redigitava o texto por nao achar no transcript — as rajadas de 3.
+
+    Precisa do comeco ALEM da cauda (medido 02/08/2026, ver _RESIDUO_INICIO em _composer_residuo):
+    com texto longo o composer do Claude Code so desenha as primeiras linhas, entao a cauda nunca
+    aparece e este gate segurava o Enter mesmo com o texto genuinamente entregue.
     """
     fim = time.monotonic() + _SUBMIT_CHECK_PRAZO
     while True:
@@ -72,10 +77,18 @@ def _entrou_no_composer(name: str, texto: str, pastes_antes: set[str] | None = N
 
 
 def _submeteu(name: str, texto: str, pastes_antes: set[str] | None = None) -> bool:
-    """True = o composer limpou (submeteu). False = a cauda do texto continua lá depois do prazo.
+    """True = o composer limpou (submeteu). False = a cauda OU o comeco do texto continuam lá
+    depois do prazo.
 
     So vale como prova DEPOIS do _entrou_no_composer: sozinho, composer vazio nao distingue submissao
-    de nao-entrega."""
+    de nao-entrega.
+
+    O comeco tambem conta aqui, e nao por acidente: a pergunta desta funcao e "o residuo sumiu?", e
+    "o comeco sumiu" prova submissao tao bem quanto "a cauda sumiu" — o Enter limpa o composer
+    inteiro, entao se um sumiu o outro tambem sumiu. Pro caso que motivou o comeco (texto longo, cauda
+    nunca chega a ser desenhada), o comeco e ate a UNICA evidencia disponivel: sem ele, esta funcao
+    nunca teria como saber "cauda sumiu" (ela nunca esteve visivel) e o texto ficaria preso perguntando
+    pra sempre."""
     fim = time.monotonic() + _SUBMIT_CHECK_PRAZO
     while True:
         time.sleep(_SUBMIT_CHECK_INTERVALO)
@@ -158,6 +171,15 @@ _COMPOSER_WARNED: set[str] = set()
 # composer o mesmo WARNING repetiria pra sempre. Uma vez por sessao; sai do set quando desocupa,
 # pra um NOVO episodio avisar de novo.
 _OCUPADO_WARNED: set[str] = set()
+# Quantas vezes SEGUIDAS uma sessao pode ficar deferred por composer ocupado antes do log virar ERRO
+# a cada tentativa (em vez do WARNING unico de _OCUPADO_WARNED, que cala depois da primeira vez).
+# Medido 02/08/2026: com o aviso de subagente do Pi contando como "ocupado" (bug hoje corrigido em
+# _composer_ocupado_pi), o usuario so descobria a fila emperrada mexendo no terminal a mao — "adiar
+# pra sempre e pior que avisar" vale tambem pro caso em que o composer FICA ocupado de verdade (um
+# rascunho de longa duracao, por exemplo). Contador por sessao; zera quando desocupa (junto com
+# _OCUPADO_WARNED), pra um NOVO episodio comecar do zero.
+_OCUPADO_DEFER_LIMIT = 5
+_OCUPADO_DEFER_COUNT: dict[str, int] = {}
 
 
 def _warn_composer_ilegivel_once(name: str) -> None:
@@ -180,11 +202,29 @@ def _warn_ready_timeout_once(name: str, provider: str, timeout: float) -> None:
             name, provider, timeout)
 
 
-# Quanto do FIM do texto enviado a gente procura no composer pra decidir "nao submeteu". Cauda e nao
-# comeco: no caso medido a submissao parcial deixa justamente o FIM sobrando (o Enter levou o comeco),
-# e o comeco tambem aparece no ECO da conversa logo acima do composer, o que daria falso positivo.
+# Quanto do FIM do texto enviado a gente procura no composer pra decidir "nao submeteu". No caso
+# ORIGINAL (submissao truncada a meio) sobra justamente o FIM, entao a cauda e a prova certa ali.
+# (Ate 02/08/2026 este comentario dizia "e nao o comeco, que aparece no ECO da conversa acima do
+# composer" como razao pra NUNCA olhar o comeco. Isso e verdade so se a comparacao rodar contra o
+# PANE INTEIRO; _composer_residuo, logo abaixo, sempre restringiu a busca a REGIAO do composer —
+# entre as duas ultimas reguas, ver _composer_regiao — e o eco fica ACIMA da primeira regua. Nessa
+# regiao o comeco e prova tao segura quanto a cauda, entao virou evidencia valida — ver
+# _RESIDUO_INICIO logo abaixo.)
 _RESIDUO_CAUDA = 40
-# Minimo de caracteres (sem espaco) pra a cauda valer como prova. Ver _composer_residuo.
+# Quanto do COMECO do texto enviado a gente procura, como evidencia ALTERNATIVA a cauda. Causa raiz
+# medida 02/08/2026 (log real, duas ocorrencias seguidas): o composer do Claude Code CORTA a EXIBICAO
+# de texto longo — desenha as primeiras linhas e o resto (onde mora a cauda) nunca aparece. Pior com
+# imagem anexada, porque o caminho do arquivo colado vai pro FIM do texto e vira a cauda:
+#   cauda='ude-pocket-uploads/1785666473-67f17f.png'
+#   composer='───\n❯ [Image #1]Então aconteceu várias outras vezes aqui, mas imagino que seu oque é ,
+#   todas no pi ,\n  As vezes dps de rodar um subagnt ele aparece essa sugestão, não tem nd digitado
+#   aí , seu eu for\n  pelo terminal e escrever vai , mas se tá usando a visualização no pane talvez
+#   não quer enviar,\n  vi'
+# O texto ESTAVA la (da pra ver o comeco) — so a cauda que nunca foi desenhada, entao
+# _entrou_no_composer via False, o Enter nunca ia, e cada retry do app empilhava OUTRO envio (mensagem
+# triplicada que o usuario relatou). O comeco e exatamente a parte que o composer desenha.
+_RESIDUO_INICIO = 40
+# Minimo de caracteres (sem espaco) pra a cauda OU o comeco valerem como prova. Ver _composer_residuo.
 _RESIDUO_MIN = 12
 # A regua de BAIXO do composer tem de estar nas ultimas N linhas da tela, e as duas reguas a no maximo
 # M linhas uma da outra. Sem isso o par pode cair na divisoria do banner + regua de cima do composer.
@@ -223,29 +263,45 @@ def _composer_regiao(pane: str, nome_sessao: str = "") -> str | None:
 
 def _composer_residuo(pane: str, texto: str, nome_sessao: str = "",
                       pastes_antes: set[str] | None = None) -> bool | None:
-    """True = a cauda esta no composer. False = NAO esta. None = NAO DA PRA SABER.
+    """True = a cauda OU o comeco do texto estao no composer. False = NENHUM esta. None = NAO DA
+    PRA SABER.
 
     Tres estados e nao dois: o mesmo "nao sei" precisa cair pra lados OPOSTOS nos dois chamadores.
     Pro _submeteu (residuo sumiu? entao submeteu) "nao sei" tem de virar "segue em frente"; pro
-    _entrou_no_composer (a cauda apareceu? entao entrou) "nao sei" NAO pode virar "nao entrou", senao
-    o Enter nunca e enviado. Com dois estados isso virou regressao real: cauda curta ("ok", "sim",
+    _entrou_no_composer (a cauda/comeco apareceu? entao entrou) "nao sei" NAO pode virar "nao entrou",
+    senao o Enter nunca e enviado. Com dois estados isso virou regressao real: cauda curta ("ok", "sim",
     "pode fazer") devolvia False, o _entrou_no_composer lia como "nao chegou" e TODA mensagem curta
     parava de ser enviada. Achado no review, com medicao.
 
-    Le a ultima linha de prompt do pane (a que comeca com ❯) e o que vem depois dela. Compara com a
-    CAUDA do texto enviado, nao com o texto todo: assim uma digitacao do usuario no composer nao vira
-    falso positivo, e o eco da mensagem ja submetida (que fica na conversa, acima do composer) nao
-    conta. Pane ilegivel / sem linha de prompt -> False, nunca inventa falha: o custo de um falso
-    negativo e o comportamento de hoje, o de um falso positivo e recusar envio que deu certo.
+    Por que CAUDA e COMECO, nao so um dos dois (medido 02/08/2026, ver _RESIDUO_INICIO): o composer
+    do Claude Code corta a EXIBICAO de texto longo — desenha so as primeiras linhas — entao a cauda
+    fica fora da tela e nunca prova entrega nesse caso. Mas a cauda continua sendo a prova certa pro
+    caso ORIGINAL (envio truncado a meio, onde sobra so o fim); os dois cobrem casos diferentes e um
+    OR entre eles nao enfraquece nenhuma das duas provas — cada uma exige o mesmo minimo de
+    caracteres (_RESIDUO_MIN) e a mesma comparacao exata sem espaco, so muda ONDE no texto ela olha.
+    Pro _submeteu isso tambem e correto (nao so tolerado): "o comeco sumiu" e prova de submissao tao
+    boa quanto "a cauda sumiu" — quando o Enter limpa o composer, os dois vao junto.
+
+    Le a regiao do composer (entre as duas ultimas reguas) e compara com a CAUDA e o COMECO do texto
+    enviado, nao com o texto todo: assim uma digitacao do usuario no composer nao vira falso positivo
+    (precisa casar um trecho INTEIRO e exato do NOSSO texto, nao so ter "alguma coisa" escrito), e o
+    eco da mensagem ja submetida (que fica na conversa, acima do composer) nao conta, porque so a
+    regiao do composer e olhada. Pane ilegivel / sem linha de prompt -> None, nunca inventa falha: o
+    custo de um falso negativo e o comportamento de hoje, o de um falso positivo e recusar envio que
+    deu certo (ou pior, afirmar entrega de rascunho alheio).
     ponytail: depende do glifo ❯ do composer, igual o _READY_MARKERS depende do ⏵⏵; se um provider
     desenhar outro prompt, o upgrade e a mesma coisa — medir e acrescentar.
     """
     cauda = texto.strip().split("\n")[-1].strip()[-_RESIDUO_CAUDA:]
-    # Cauda curta nao acusa: "ok" ou "sim" como ultima linha casaria por coincidencia com o que o
+    inicio = texto.strip()[:_RESIDUO_INICIO]
+    # Trecho curto nao acusa: "ok" ou "sim" como cauda/comeco casaria por coincidencia com o que o
     # usuario estiver digitando ao vivo no composer, e o preco de um falso positivo e o remetente
-    # reenviar em cima do residuo. Sem cauda longa o bastante, degrada pro comportamento de hoje.
-    if len(_sem_espaco(cauda)) < _RESIDUO_MIN:
-        return None      # cauda curta demais pra provar qualquer coisa — nao e "nao esta"
+    # reenviar em cima do residuo (ou pior, o Enter submeter rascunho alheio). Sem NENHUM trecho longo
+    # o bastante, degrada pro comportamento de hoje.
+    cauda_curta = len(_sem_espaco(cauda)) < _RESIDUO_MIN
+    inicio_curto = len(_sem_espaco(inicio)) < _RESIDUO_MIN
+    if cauda_curta and inicio_curto:
+        return None      # nem cauda nem comeco provam algo — nao e "nao esta"
     # Regiao do composer = entre as DUAS ULTIMAS reguas (ver _composer_regiao; as travas contra
     # pegar a regiao errada e o aviso-uma-vez de pane ilegivel moram la).
     composer = _composer_regiao(pane, nome_sessao)
@@ -261,10 +317,15 @@ def _composer_residuo(pane: str, texto: str, nome_sessao: str = "",
     # submeteu (o placeholder some do composer com o Enter).
     if pastes_antes is not None and (_paste_ids(composer) - pastes_antes):
         return True
-    # Compara SEM espaco em branco: o wrap de exibicao quebra a linha no meio da cauda (recado longo de
-    # um paragrafo so passa de 200 colunas e quebra), e ai um `cauda in composer` cru falhava justamente
-    # na classe de mensagem que motivou o conserto.
-    return _sem_espaco(cauda) in _sem_espaco(composer)
+    # Compara SEM espaco em branco: o wrap de exibicao quebra a linha no meio da cauda/comeco (recado
+    # longo de um paragrafo so passa de 200 colunas e quebra), e ai um `trecho in composer` cru falhava
+    # justamente na classe de mensagem que motivou o conserto.
+    composer_sem_espaco = _sem_espaco(composer)
+    if not cauda_curta and _sem_espaco(cauda) in composer_sem_espaco:
+        return True
+    if not inicio_curto and _sem_espaco(inicio) in composer_sem_espaco:
+        return True
+    return False
 
 
 # Teto de caracteres da regiao despejada na linha de diagnostico — cauda de log serve pra explicar
@@ -309,8 +370,27 @@ def _diag_composer(pane: str, texto: str, name: str, pastes_antes: set[str] | No
         return f"diag indisponivel: {e!r}"
 
 
+# Aviso do Pi de subagente async que a caixa de intercomunicacao nao confirmou — texto de SISTEMA,
+# nao rascunho do usuario. Causa raiz medida 02/08/2026: o Pi imprime esse aviso DENTRO da mesma
+# caixa do composer, e o guard antigo ("qualquer linha nao-vazia = ocupado") contava aviso como se
+# fosse rascunho -> deferred pra sempre (o usuario confirmou que so destravava mexendo no terminal a
+# mao). Log real:
+#   " Subagent async grouped result intercom delivery was not acknowledged for
+#   '/tmp/pi-subagents-uid-1000/async-subagent-results/a56523ed-40de-4fc7-a352-8fa39f29f908.json'."
+# Exige tambem o caminho `/tmp/pi-subagents-` na mesma linha, nao so a frase, pra nao casar por
+# coincidencia um texto de usuario que cite palavras parecidas.
+# ponytail: remendo — reconhece a FRASE especifica do aviso, nao distingue aviso de rascunho em
+# GERAL (uma frase nova de um aviso futuro nao vai casar). O upgrade de verdade seria comparar o
+# conteudo da caixa contra a leitura ANTERIOR: aviso de sistema e ESTATICO (nao muda entre duas
+# capturas), rascunho do usuario digitando MUDA — mas isso pede duas capturas espacadas no tempo, e
+# esta funcao (uma leitura so, sem estado entre chamadas) nao tem isso hoje.
+_AVISO_SUBAGENT_PI_RE = re.compile(
+    r"Subagent async grouped result intercom delivery was not acknowledged for[^\n]*"
+    r"/tmp/pi-subagents-[^\n]*")
+
+
 def _composer_ocupado_pi(name: str) -> bool:
-    """True = já ha texto parado no composer do Pi. Digitar por cima COLARIA as mensagens num
+    """True = já ha RASCUNHO parado no composer do Pi. Digitar por cima COLARIA as mensagens num
     submit so — caso real (ABC-1234, 31/07): aviso de grupo ficou no composer com o Enter engolido
     (tmux extended-keys formato xterm), o prompt do cockpit foi digitado em cima, os dois viraram
     UMA mensagem, e o reconcile — sem achar o prompt exato no transcript — reentregou (duplicata).
@@ -318,7 +398,12 @@ def _composer_ocupado_pi(name: str) -> bool:
     So pro Pi porque nele a leitura e deterministica (medido): composer = linhas entre as DUAS
     ULTIMAS reguas; vazio = nenhuma linha entre elas. No Claude Code o composer vazio desenha
     glifo/placeholder, entao "tem texto" nao distingue rascunho de moldura — la fica o comportamento
-    de hoje. Ilegivel -> False (na duvida envia, mesma politica do resto do arquivo)."""
+    de hoje. Ilegivel -> False (na duvida envia, mesma politica do resto do arquivo).
+
+    Antes de decidir "tem rascunho?", remove o aviso de subagente conhecido (ver
+    _AVISO_SUBAGENT_PI_RE) do texto da caixa: aviso de sistema nao e rascunho do usuario, e contá-lo
+    como ocupado travava o envio indefinidamente (o usuario so via a mensagem sair depois de mexer no
+    terminal a mao)."""
     try:
         linhas = _capture(name).split("\n")
     except Exception:
@@ -327,7 +412,9 @@ def _composer_ocupado_pi(name: str) -> bool:
     if len(reguas) < 2 or len(linhas) - reguas[-1] > _COMPOSER_FUNDO \
             or reguas[-1] - reguas[-2] > _COMPOSER_ALTURA:
         return False
-    return any(l.strip() for l in linhas[reguas[-2] + 1:reguas[-1]])
+    texto_composer = "\n".join(linhas[reguas[-2] + 1:reguas[-1]])
+    sem_aviso = _AVISO_SUBAGENT_PI_RE.sub("", texto_composer)
+    return bool(sem_aviso.strip())
 
 
 def _wait_input_ready(name: str, timeout: float | None = None, provider: str = "claude") -> bool:
@@ -587,13 +674,23 @@ class TerminalInput:
             # adia em vez de digitar por cima — deferred reverte pra delivered=False e o proximo
             # drain (idle/reconnect) tenta de novo; a bubble queued- segue visivel no app.
             if provider == "pi" and _composer_ocupado_pi(name):
-                if name not in _OCUPADO_WARNED:
+                tentativas = _OCUPADO_DEFER_COUNT[name] = _OCUPADO_DEFER_COUNT.get(name, 0) + 1
+                if tentativas > _OCUPADO_DEFER_LIMIT:
+                    # Acima do limite o log vira ERRO A CADA tentativa, nao mais silencioso: "adiar
+                    # pra sempre e pior que avisar" (ver _OCUPADO_DEFER_LIMIT). O WARNING unico de
+                    # _OCUPADO_WARNED ja disparou uma vez la embaixo; aqui a fila esta emperrada de
+                    # verdade e o usuario precisa saber a cada tentativa, nao so na primeira.
+                    _log.error("send adiado ha %d tentativas seguidas name=%s: composer do pi "
+                               "continua ocupado — fila pode estar emperrada, confira o terminal — %s",
+                               tentativas, name, _diag_composer(_capture(name), text, name, None))
+                elif name not in _OCUPADO_WARNED:
                     _OCUPADO_WARNED.add(name)
                     _log.warning("send adiado name=%s: composer do pi ja tem texto — deferred "
                                  "(digitar agora colaria as mensagens; aviso unico ate desocupar) — %s",
                                  name, _diag_composer(_capture(name), text, name, None))
                 return "deferred"
             _OCUPADO_WARNED.discard(name)
+            _OCUPADO_DEFER_COUNT.pop(name, None)
             if "\n" in text:
                 # Foto dos placeholders de paste ANTES do nosso: so um numero NOVO conta como
                 # evidencia de entrega (ver _composer_residuo — paste alheio nao pode virar prova).
