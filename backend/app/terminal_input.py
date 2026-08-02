@@ -4,6 +4,7 @@ import threading
 import time
 
 from app import model_picker as mp
+from app import pi_inbox
 from app import tmux
 from app.models import scrub_surrogates
 from app.pqueue import PromptQueue, _transcript_start_ts
@@ -538,7 +539,10 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
             return sent
         entry = claimed[0]
         try:
-            result = ti.send_prompt(name, entry["text"], provider)
+            # Resolve o pane NA HORA (drain roda em polls, nao no caminho quente do envio, entao
+            # pagar mais um `tmux list-panes` aqui nao pesa como pesaria no /input).
+            pane_id = next((p["pane_id"] for p in tmux.list_panes_active() if p["name"] == name), None)
+            result = ti.send_prompt(name, entry["text"], provider, pane_id=pane_id)
         except Exception:
             # Falha POS-gate (tty caiu no meio): pode ter emitido tecla -> at-most-once, NAO reverte.
             # ponytail: stranded-mas-visivel (a bubble queued- segue aparecendo, display ignora delivered);
@@ -698,7 +702,8 @@ def answer_questions(name: str, answers: list[dict]) -> None:
 
 
 class TerminalInput:
-    def send_prompt(self, name: str, text: str, provider: str = "claude") -> str:
+    def send_prompt(self, name: str, text: str, provider: str = "claude",
+                    pane_id: str | None = None) -> str:
         # Surrogate solto (meio emoji cortado pelo browser) tambem nao chega no tmux: o argv do
         # subprocess e encodado em utf-8 e estouraria UnicodeEncodeError — um ValueError, que o
         # caller ja traduz pra 400 "control characters". A msg era recusada com erro trocado e
@@ -710,6 +715,19 @@ class TerminalInput:
         # Serializa por sessao (gate + digitacao + Enter como unidade): sem o lock, envios
         # concorrentes intercalavam teclas no mesmo tty e as mensagens saiam concatenadas.
         with _send_lock(name):
+            # Sessão Pi com a extensão conectada: entrega por chamada de função dentro do processo
+            # do Pi, sem digitar e sem ler a tela — a remoção da causa raiz dos bugs de 01-02/08.
+            #
+            # ANTES do gate `deliverable`: aquele gate existe pra não digitar às cegas num overlay,
+            # e aqui não se digita nada. Depois dele, sessão Pi com picker na tela nunca tentaria a
+            # linha e ficaria adiando — exatamente o bug que isto vem matar.
+            #
+            # "sem-linha" é o ÚNICO retorno que autoriza continuar pra tecla: depois de ter mandado
+            # pela linha, digitar por cima entregaria a mesma instrução duas vezes.
+            if provider == "pi" and pane_id and pi_inbox.INBOX.tem_linha(pane_id):
+                r = pi_inbox.INBOX.entregar_sync(pane_id, text)
+                if r != "sem-linha":
+                    return r
             # Gate de entregabilidade (chokepoint UNICO p/ texto livre — /input e drain passam por
             # aqui): nao digitar as cegas num overlay (AskUserQuestion/picker), as teclas o
             # corromperiam. Sem pane entregavel agora, devolve "deferred" SEM tocar a TUI; o caller
