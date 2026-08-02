@@ -123,9 +123,76 @@ function publishModels(pi: ExtensionAPI, ctx: any): void {
   });
 }
 
+// ── entrega de mensagem vinda do app, sem passar pela TUI ──────────────────────────────────────
+// POR QUE: o backend entregava digitando no tmux e conferindo pela tela. Medido em 02/08/2026, o
+// aviso de subagente do Pi dentro da caixa do composer fazia o guarda adiar pra sempre, e a
+// mensagem só saía quando o usuário apertava Enter no terminal. Aqui o texto entra por
+// `pi.sendUserMessage`, a MESMA fila do Enter do TUI (interactive-mode.js:654 chama o mesmo
+// session.prompt), então o usuário continua digitando no terminal normalmente.
+//
+// A CHAVE é o TMUX_PANE, não o arquivo de sessão: é o que o backend resolve de graça no envio.
+const connFile = path.join(base, ".claude-pocket-conn.json");
+
+let socket: WebSocket | null = null;
+let tentativa = 0;
+let desligando = false;
+
+function conectar(pi: ExtensionAPI): void {
+  guard("conectar", () => {
+    if (desligando || socket) return;
+    const pane = process.env.TMUX_PANE;
+    if (!pane) return;                       // fora do tmux o backend não tem como nos achar
+    if (!fs.existsSync(connFile)) return;    // backend não subiu ou não escreveu ainda
+    const { url, token } = JSON.parse(fs.readFileSync(connFile, "utf8"));
+    const ws = new WebSocket(`${url}?token=${encodeURIComponent(token)}`);
+    socket = ws;
+
+    ws.addEventListener("open", () => {
+      tentativa = 0;
+      ws.send(JSON.stringify({ pane }));
+    });
+
+    ws.addEventListener("message", (ev: any) => {
+      guard("entregar", () => {
+        const msg = JSON.parse(String(ev.data));
+        if (msg.ping) { ws.send(JSON.stringify({ pong: true })); return; }
+        if (!msg.id || typeof msg.text !== "string") return;
+        try {
+          // deliverAs SEMPRE: com a sessão streamando o Pi LEVANTA erro se não vier
+          // (agent-session.js:827-840) — recusa em vez de corromper estado, que é o certo.
+          pi.sendUserMessage(msg.text, { deliverAs: msg.deliverAs ?? "steer" });
+          ws.send(JSON.stringify({ id: msg.id, ok: true }));
+        } catch (err) {
+          // Confirmação NEGATIVA é informação: o backend deixa a mensagem na fila e re-tenta.
+          // Ficar calado faria o backend esperar o prazo inteiro à toa.
+          ws.send(JSON.stringify({ id: msg.id, ok: false, erro: String(err) }));
+        }
+      });
+    });
+
+    ws.addEventListener("close", () => {
+      socket = null;
+      if (desligando) return;
+      // Recuo exponencial com teto: o backend reinicia (systemd) e isso não pode virar tempestade
+      // de reconexão. Sem linha, o backend digita no tmux como sempre fez — nada se perde.
+      tentativa = Math.min(tentativa + 1, 6);
+      setTimeout(() => conectar(pi), Math.min(1000 * 2 ** tentativa, 30000));
+    });
+
+    ws.addEventListener("error", () => { /* o close vem em seguida e cuida do retry */ });
+  });
+}
+
 export default function (pi: ExtensionAPI) {
   // Handlers recebem (event, ctx) — types.d.ts:845. Sem o ctx nao ha arquivo de sessao.
-  pi.on("session_start", async (_e: any, ctx: any) => { publishPane(ctx); publishModels(pi, ctx); });
+  pi.on("session_start", async (_e: any, ctx: any) => { publishPane(ctx); publishModels(pi, ctx); conectar(pi); });
+
+  // NOVO: fecha de propósito ao morrer. Sem isto, um /reload deixaria o backend achando que ainda
+  // tem alguém lendo até o prazo estourar, e a mensagem daquele intervalo esperaria à toa.
+  pi.on("session_shutdown", async () => {
+    desligando = true;
+    guard("fechar", () => socket?.close());
+  });
   pi.on("agent_start", async (_e: any, ctx: any) => { publishPane(ctx); publishState("working", ctx); });
   pi.on("agent_settled", async (_e: any, ctx: any) => { publishState("idle", ctx); });
   // Republica tambem quando a troca vem do TUI (usuario no teclado, Ctrl+P, /model, /settings) —
