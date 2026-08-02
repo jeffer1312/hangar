@@ -741,6 +741,21 @@ class TerminalInput:
             #
             # "sem-linha" é o ÚNICO retorno que autoriza continuar pra tecla: depois de ter mandado
             # pela linha, digitar por cima entregaria a mesma instrução duas vezes.
+            #
+            # ponytail: JANELA RESIDUAL CONHECIDA (registrada, nao fechada agora). Esta e a SEGUNDA
+            # checagem de tem_linha — a primeira roda em api.py (_send_one, decide se pre-cria a
+            # entrada da fila com msg_id) ANTES de disputar o _send_lock acima. As duas nao
+            # compartilham trava (claim_undelivered do drain, em pqueue.py, usa so o _append_lock,
+            # sem relacao com este _send_lock). Se a linha cair ENTRE a checagem de api.py e esta
+            # aqui, quem chega neste ponto ve tem_linha=False mesmo com uma entrada ja criada com
+            # msg_id — e cai pro fluxo de tecla abaixo, que NUNCA le msg_id (comentario no topo do
+            # metodo). Resultado: saiu pela linha de um lado, redigitado do outro. Nao e regressao
+            # deste commit — e o buraco original encolhido de "qualquer sessao Pi" pra "sessao com
+            # linha viva no instante do append em api.py, e a linha caiu bem nessa janela". Medido:
+            # entregar_sync segura o _send_lock por ate PRAZO_ACK+2.0 = 5s (pi_inbox.py), janela de
+            # segundos — tempo de sobra pra um drain de reconexao de SSE ou de transicao de hook
+            # entrar. Upgrade: uma trava UNICA cobrindo append->send (mover o append() de api.py pra
+            # dentro deste _send_lock, ou os dois pontos passarem a usar o mesmo lock).
             if provider == "pi" and pane_id and pi_inbox.INBOX.tem_linha(pane_id):
                 r = pi_inbox.INBOX.entregar_sync(pane_id, text, msg_id)
                 if r != "sem-linha":
