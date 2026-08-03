@@ -46,6 +46,9 @@
   import type { ChatEvent, StateEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail } from '../lib/types';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
   import { stateLabels, stateColors, countAwaiting, nextAwaiting, providerName } from '../lib/format';
+  import { ttsPlayer } from '../lib/ttsPlayer.svelte';
+  import { ouvirTexto } from '../lib/ouvir';
+  import { textoFalavelComCodigo } from '../lib/speakable';
 
   interface Props {
     sessionName: string;
@@ -339,10 +342,59 @@
     if (mod && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
       e.preventDefault(); switchRelative(e.key === 'ArrowDown' ? 1 : -1); return;
     }
+    // e.repeat: segurar o atalho alternaria pause/play em rajada (o loading guard so protege o
+    // inicio). stopImmediatePropagation: com 2 Chats montados (split view do DesktopShell), os dois
+    // onGlobalKey receberiam o MESMO keydown — dois toggle() se anulavam (pause->play no mesmo
+    // evento) e dois ouvirTexto() disparavam juntos. O primeiro Chat montado vence; e
+    // deterministico, embora no split o atalho sempre aja no painel principal.
+    if (mod && e.shiftKey && e.code === 'Space') {
+      if (e.repeat) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      ouvirUltimaRespostaVisivel();
+      return;
+    }
     const el = e.target as HTMLElement | null;
     const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
     if (typing) return;   // "/" foca o composer so quando NAO ja digitando num campo
     if (e.key === '/') { e.preventDefault(); composerRef?.focus(); }
+  }
+
+  // Atalho "ouvir a resposta" (desktop, Ctrl/Cmd+Shift+Espaco): toca a ultima bolha de assistente
+  // VISIVEL na tela — se o usuario rolou pra cima pra reler uma resposta antiga, e ELA que toca,
+  // nao a mais recente do transcript. Sem nenhuma visivel (scroll num trecho so de ferramentas),
+  // cai na ultima do DOM. Ja tocando, o atalho vira pause/continua em vez de empilhar outra leitura.
+  // Toca "como esta" (ouvirTexto direto, sem Groq): textoFalavelComCodigo ja troca <pre> por
+  // "trecho de codigo omitido", entao o atalho nao gasta LLM. Quem quer "explicar o codigo" segue
+  // tendo o botao da bolha, que abre o painel de opcoes.
+  function ouvirUltimaRespostaVisivel() {
+    // Mesmo guard do DesktopShell: sheet/modal aberto por cima -> o atalho nao dispara "por tras".
+    // (O overlay do board usa role="region", nem casa com o seletor — o :not(.board-overlay) e
+    // cinto-e-suspensorios pro dia que ele virar dialog.)
+    if (document.querySelector('[role="dialog"]:not(.board-overlay)')) return;
+    if (ttsPlayer.loading) return;                 // sintese em voo: nem pausa nem comeca outra
+    if (ttsPlayer.active) { ttsPlayer.toggle(); return; }
+    const lista = screenEl?.querySelector('.message-list');
+    const bolhas = lista
+      ? [...lista.querySelectorAll<HTMLElement>('.assistant-msg:not(.preview) .prose')]
+      : [];
+    // O limite inferior desconta o dock (dockH, medido pelo Chat): uma bolha escondida ATRAS do
+    // composer nao conta como visivel — tocar uma mensagem que a pessoa nao consegue ver era o bug.
+    const limiteInf = window.innerHeight - (dockH || 0);
+    const visiveis = bolhas.filter((b) => {
+      const r = b.getBoundingClientRect();
+      return r.bottom > 0 && r.top < limiteInf;
+    });
+    const alvo = visiveis.at(-1) ?? bolhas.at(-1);
+    if (!alvo) {
+      // Chat vazio ou so mensagens tuas: o atalho nao pode morrer em silencio (regra do projeto) —
+      // unlock() monta a barra e o fail() deixa o motivo nela.
+      ttsPlayer.unlock('');
+      ttsPlayer.fail('nenhuma resposta do assistente pra ler');
+      return;
+    }
+    const { texto } = textoFalavelComCodigo(alvo);
+    ouvirTexto(texto, (msg) => Promise.resolve(window.confirm(msg)), '');
   }
 
   const currentState = $derived<State>(stateEvent?.state ?? 'idle');
