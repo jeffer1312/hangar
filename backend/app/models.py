@@ -177,10 +177,15 @@ class StateEvent(BaseModel):
 
 
 class PreviewEvent(BaseModel):
-    # Preview AO VIVO (best-effort) do bloco de assistente em andamento, lido do pane via capture.
+    # Preview AO VIVO (best-effort) do bloco de assistente em andamento.
     # Texto-completo (full-replace), substituído pela mensagem canônica do .jsonl quando o bloco fecha.
     session: str
     text: str
+    # `md`: o texto é markdown CRU (veio do proprio agente — sidecar do Pi, deltas do app-server do
+    # Codex) e a bolha deve RENDERIZAR. False = raspado do pane, ou seja ja pintado pela TUI, e
+    # renderizar de novo estragaria o que ja esta formatado. Sem esta flag o `**negrito**` do Pi
+    # aparecia cru na previa — o front mostra previa em texto plano desde que a unica fonte era o pane.
+    md: bool = False
 
 
 class CommandInfo(BaseModel):

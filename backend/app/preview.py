@@ -272,6 +272,9 @@ class PreviewBroker:
         # sid_get do StateMonitor). None = so pane, que e o caminho de quem nao publica.
         self.stem_get = stem_get
         self.text = ""
+        # Origem do ULTIMO texto: sidecar do agente (markdown cru) x pane (ja pintado pela TUI).
+        # Anda junto com `text` -- quem le os dois no mesmo instante ve o par coerente.
+        self.md = False
         self.version = 0
         self._cond = asyncio.Condition()
         self._task: Optional[asyncio.Task] = None
@@ -318,25 +321,32 @@ class PreviewBroker:
                 _log.debug("preview: leitura do sidecar falhou stem=%s", stem, exc_info=True)
                 doAgente = None
             if doAgente is not None:
-                text = doAgente
+                text, md = doAgente, True
                 working = bool(text)   # cadencia: rapido enquanto ha texto crescendo
             else:
+                md = False
                 try:
                     pane = await asyncio.to_thread(tmux.capture_pane, self.name)
                 except Exception:
                     pane = ""
                 working = _live_spinner(pane) is not None
                 text = extract_assistant_text(pane, self.provider)
-            if text != self.text:
+            if text != self.text or md != self.md:
                 async with self._cond:
                     self.text = text
+                    self.md = md
                     self.version += 1
                     self._cond.notify_all()
             await asyncio.sleep(0.15 if working else 0.75)
 
-    async def subscribe(self) -> AsyncIterator[str]:
-        """Emite o texto mais recente (full-replace) a cada mudança. Coalescido por natureza: um
-        subscriber lento perde frames intermediários e pega só o último (version + slot único)."""
+    async def subscribe(self) -> AsyncIterator[tuple[str, bool]]:
+        """Emite `(texto, md)` mais recente (full-replace) a cada mudança. Coalescido por natureza: um
+        subscriber lento perde frames intermediários e pega só o último (version + slot único).
+
+        O `md` sai JUNTO, sob o mesmo lock que leu o texto — e não relido do broker depois. Ler os
+        dois em momentos diferentes só funciona porque hoje não há `await` de verdade entre eles;
+        qualquer coisa inserida ali no futuro (throttle, log, backpressure) desemparelharia o par
+        calado, e a bolha renderizaria markdown de uma leitura com o texto de outra."""
         async with self._cond:
             self._subs += 1
             if self._task is None:
@@ -347,8 +357,8 @@ class PreviewBroker:
                 async with self._cond:
                     await self._cond.wait_for(lambda: self.version != last)
                     last = self.version
-                    text = self.text
-                yield text
+                    text, md = self.text, self.md
+                yield text, md
         finally:
             # Limpeza SINCRONA (sem await): `async with self._cond` podia ser interrompido por
             # CancelledError no acquire do lock -> _subs nao decrementava e o _loop vazava (polling

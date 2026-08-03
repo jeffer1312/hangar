@@ -22,6 +22,7 @@
     sessionName: string;
     dockH: number;
     preview?: string;
+    previewMd?: boolean;   // o texto da previa e markdown cru -> a bolha renderiza
     onSelectOption: (i: number) => void;
     onCancel: () => void;
     // AskUserQuestion inline (desktop): quando askOpen, renderiza o card no fim da lista.
@@ -43,7 +44,7 @@
   }
 
   let {
-    events, stateEvent, pending, sessionName, dockH, preview = '', onSelectOption, onCancel,
+    events, stateEvent, pending, sessionName, dockH, preview = '', previewMd = false, onSelectOption, onCancel,
     askOpen = false, askPayload = null, askActive = false, onAnswer, onAskClose, imageUrl, swapIds,
     onForward, onOpenSession
   }: Props = $props();
@@ -281,7 +282,7 @@
     {/each}
 
     {#if preview}
-      <AssistantBubble text={preview} ts={undefined} preview />
+      <AssistantBubble text={preview} ts={undefined} preview md={previewMd} />
     {/if}
 
     {#if stateEvent?.state === 'working'}

@@ -131,6 +131,9 @@
   // Preview AO VIVO do bloco de assistente em voo (lido do pane via SSE 'preview'). Texto-completo,
   // full-replace; some quando o assistant_msg canonico (do .jsonl) cobre o texto, ou ao sair de working.
   let previewText = $state('');
+  // Texto da previa e markdown CRU (veio do agente: sidecar do Pi, deltas do Codex) e nao texto ja
+  // pintado pela TUI. Decide se a bolha RENDERIZA -- ver AssistantBubble.
+  let previewMd = $state(false);
   let dockEl: HTMLElement | undefined = $state();
   // Altura real do dock (composer) -> vira padding da lista pra ultima msg sempre limpar o glass.
   let dockH = $state(150);
@@ -702,13 +705,24 @@
     es.addEventListener('preview', (e: MessageEvent) => {
       noteAlive();
       try {
-        const t = (JSON.parse(e.data) as { text?: string }).text ?? '';
+        const ev = JSON.parse(e.data) as { text?: string; md?: boolean };
+        const t = ev.text ?? '';
         // Guard de monotonicidade: frame TRANSITORIO do pane (mid-redraw) as vezes chega como
         // PREFIXO do texto ja mostrado -> ignorar, senao o texto recua e re-cresce (stuttering).
         // Vazio (drop) e conteudo realmente novo passam.
-        if (t && t.length < previewText.length && previewText.startsWith(t)) return;
+        // O guard so vale DENTRO da mesma fonte. Quando `md` vira (a extensao do agente caiu no meio
+        // do turno e a previa voltou pro pane, ou o contrario), o texto novo costuma ser MENOR e
+        // prefixo do anterior — e descartar esse evento congelaria a bolha renderizando markdown de
+        // uma fonte que ja nao existe, sem nenhum sinal. Troca de fonte passa sempre.
+        if (t && !!ev.md === previewMd
+            && t.length < previewText.length && previewText.startsWith(t)) return;
         previewText = t;
-      } catch {}
+        previewMd = !!ev.md;
+      } catch (err) {
+        // Engolir aqui congela a previa (texto E flag) no ultimo frame bom, sem rastro nenhum. O
+        // erro nao pode derrubar o handler do SSE, mas tem que dar pra ver no dev.
+        if (import.meta.env.DEV) console.debug('preview: evento ilegivel', err);
+      }
     });
 
     // Reset de sessao (ex: /clear): o backend trocou de transcript. O dedup-por-id NAO limparia as
@@ -1164,6 +1178,7 @@
       {dockH}
       {swapIds}
       preview={previewText}
+      previewMd={previewMd}
       onSelectOption={handleSelect}
       onCancel={handleInterrupt}
       askOpen={isWide && askOpen}

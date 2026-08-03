@@ -11,11 +11,32 @@
     ts?: number | null;
     sessionName?: string;
     preview?: boolean;
+    md?: boolean;        // previa cujo texto e markdown CRU (veio do agente, nao raspado da tela)
     animate?: boolean;   // false = bubble de HISTORICO remontada (paginacao/janela): sem fade/slide
     onForward?: (() => void) | null; // abre o picker "encaminhar pra sessao" (botao ↗)
   }
-  let { text, ts, sessionName = '', preview = false, animate = true, onForward = null }: Props = $props();
+  let { text, ts, sessionName = '', preview = false, md = false, animate = true, onForward = null }: Props = $props();
 
+  // Previa em texto PLANO era consequencia da FONTE, nao escolha: raspada do pane, ela ja vinha
+  // pintada pela TUI e renderizar de novo estragaria. Quando o proprio agente publica o texto
+  // (sidecar do Pi, deltas do Codex) o que chega e markdown CRU — e sem renderizar o usuario le
+  // `**negrito**` e `##` na tela, contra a regra do app de markdown nunca aparecer cru.
+  // O preco conhecido (e aceito): enquanto o bloco cresce, um `**` ou uma cerca de codigo ainda
+  // aberta renderiza como o marcador literal ate fechar. Some sozinho no token seguinte.
+  const CARET = '<span class="caret" aria-hidden="true"></span>';
+
+  // O caret tem que entrar DENTRO do ultimo bloco. Solto depois de um `</p>`/`</li>` ele vira item
+  // proprio do flex e pisca numa linha vazia abaixo do texto — o mesmo defeito que o ramo de texto
+  // plano ja resolve com o <span class="live"> (comentario no template). Nao casou nenhum
+  // fechamento conhecido (termina em `</pre>`, `</ul>`)? Vai pro fim mesmo: caret desgrudado e feio,
+  // caret nenhum e pior — some o sinal de "ainda escrevendo".
+  // Sem superficie de XSS: `renderMarkdown` ja escapa tudo e o CARET e constante nossa.
+  function comCaret(h: string): string {
+    const m = h.match(/<\/(p|li|h[1-6]|blockquote|td|th)>\s*$/);
+    return m && m.index !== undefined ? h.slice(0, m.index) + CARET + h.slice(m.index) : h + CARET;
+  }
+
+  const previewHtml = $derived(preview && md ? comCaret(renderMarkdown(text)) : '');
   const html = $derived(preview ? '' : renderMarkdown(text));
   // Anexos por caminho citado na minha msg (img/video/html/pdf que eu "mandar").
   const fileRefs = $derived(!preview && sessionName ? parseFilePaths(text) : []);
@@ -77,7 +98,7 @@
   {#if preview}
     <!-- Preview ao vivo: texto PLANO (markdown so no snap final canonico, pra nao piscar **/code-fence
          meio-aberto) + caret. Mesma casca da bolha real -> swap quase invisivel. -->
-    {@const todo = splitTodoBlock(text)}
+    {@const todo = md ? null : splitTodoBlock(text)}
     {#if todo}
       <!-- Painel de tarefas do TUI: fechado por padrao, so o contador na linha. <details> nativo —
            sem estado no componente, e o navegador ja lembra do aberto enquanto o no viver. -->
@@ -89,7 +110,14 @@
         <pre class="todo-body">{todo.body}</pre>
       </details>
     {/if}
-    {#if !todo || todo.rest}
+    {#if md}
+      <!-- `livemd` = o mesmo corte por cima do .plain (teto de 10lh, o fim do texto sempre visivel),
+           SEM o `pre-wrap` — aqui o conteudo ja e HTML com paragrafo proprio, e o pre-wrap dobraria
+           toda quebra. Sem teto, previa longa cresce sem limite e empurra a tela de quem esta lendo:
+           e o "pulo" que o corte do outro ramo existe pra evitar. -->
+      <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+      <div class="prose livemd" class:masked={plainOverflows} bind:this={plainEl}>{@html previewHtml}</div>
+    {:else if !todo || todo.rest}
       <!-- O <span> em volta do texto+caret NÃO é decorativo: o .prose.plain é flex (pro corte por
            cima, ver o CSS), e num flex container um nó de texto SOLTO vira item anônimo próprio —
            o caret virava um segundo item, numa linha só dele, em vez de piscar colado na última
@@ -355,8 +383,13 @@
     display: flex; flex-direction: column; justify-content: flex-end;
     max-height: 10lh; overflow: hidden;
   }
+  .prose.livemd {
+    display: flex; flex-direction: column; justify-content: flex-end;
+    max-height: 10lh; overflow: hidden;
+  }
   /* Só quando há corte de verdade (class:masked). Ver o comentário do plainOverflows no script. */
-  .prose.plain.masked { mask-image: linear-gradient(to bottom, transparent, black 1.6lh); }
+  .prose.plain.masked,
+  .prose.livemd.masked { mask-image: linear-gradient(to bottom, transparent, black 1.6lh); }
 
   /* Painel de tarefas do TUI dentro do preview: uma linha fechada, arvore ao abrir. SEM caixa —
      nada no fluxo do chat tem superficie propria (bolha do assistente e texto solto, ToolGroup e
