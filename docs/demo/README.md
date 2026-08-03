@@ -126,6 +126,7 @@ será mostrado sem depender de uma conta, sessão ou custo reais.
 | `desktop-board` | `docs/img/desktop-board-demo.png` | 3 | Claude, Pi e Codex em estados distintos |
 | `desktop-codex` | `docs/img/desktop-codex-demo.png` | 3 | chat Codex e painel de contexto |
 | `desktop-canvas` | `docs/img/desktop-canvas-demo.png` | 4 | tiles reorganizados e com tamanhos variados |
+| `pi-chat` | `docs/img/desktop-pi-demo.png` | 5 | chat de uma sessão Pi |
 | `pi-model-picker` | `docs/img/desktop-models-demo.png`, `docs/img/desktop-openrouter-free-demo.png` | 5 | GPT/OpenAI, OpenRouter free e nível de raciocínio |
 | `claude-engine` | `docs/img/desktop-engines-demo.png` | 6 | motor alternativo e chave mascarada |
 | `settings` | `docs/img/desktop-settings-demo.png` | 7 | grupos de configurações sem valores sensíveis |

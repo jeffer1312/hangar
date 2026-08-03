@@ -28,6 +28,6 @@ Screenshots and demo video use fictional data.
 
 4/ The backend is designed for trusted LAN/VPN use. The configured CLIs and providers still follow their own network and data policies.
 
-5/ Demo assets: fictional sessions, prompts, models, and costs — no real credentials or account data.
+5/ Demo assets: synthetic sessions, prompts, states, and costs. Model labels are representative public identifiers — no real credentials or account data.
 
 🔗 https://github.com/jeffer1312/claude-cockpit
