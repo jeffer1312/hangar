@@ -170,9 +170,10 @@
        cor. O detalhe e o chip do loop subiram pro header, que ja era o lugar do estado. -->
 
   <div class="ctx-scroll">
-  {#if session?.plan_name}
+  {#if session?.plan_name || session?.plan_hidden}
     <!-- Só quando ha plano ativo nesta sessao (Task 5b) — sem gate a secao apareceria vazia pra
-         toda sessao sem superpowers rodando. -->
+         toda sessao sem superpowers rodando. plan_hidden entra junto: com "nenhum plano" escolhido
+         o plan_name some, e o painel — que e onde fica o seletor pra voltar — sumiria com ele. -->
     <section class="sec-metric">
       <span class="section-label">Plano</span>
       <PlanPanel {session} detail={planDetail ?? null} loading={planLoading ?? false}

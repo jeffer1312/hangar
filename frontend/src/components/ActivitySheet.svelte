@@ -278,7 +278,9 @@
       <div class="modal-body">
         {#if level === 'list'}
           <div class="activity">
-            {#if showPlan && session?.plan_name}
+            <!-- plan_hidden junto: com "nenhum plano" escolhido, o plan_name some e o painel — que
+                 é onde fica o seletor pra voltar ao automático — desmontaria junto. -->
+            {#if showPlan && (session?.plan_name || session?.plan_hidden)}
               <div class="section">
                 <span class="section-label">Plano</span>
                 <PlanPanel {session} detail={planDetail} loading={planLoading} error={planError} />

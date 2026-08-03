@@ -4,6 +4,7 @@
   import PlanBar from './PlanBar.svelte';
   import { renderMarkdown } from '../lib/markdown';
   import { getPlans, setPlanPin, type PlanListItem } from '../lib/api';
+  import { planBadge } from '../lib/plan';
   import type { PlanDetail, SessionInfo } from '../lib/types';
 
   interface Props {
@@ -22,14 +23,21 @@
   // Lista de Tasks fechavel: num plano de 6 Tasks a Task atual sozinha ja passa de 10 linhas, e o
   // painel come a tela mesmo com tudo pronto. Preferencia GLOBAL (nao por sessao): quem fecha quer
   // o painel enxuto sempre, nao naquele plano. localStorage direto — uma chave nao merece store.
+  // try/catch nos DOIS acessos: em modo privado do Safari só TOCAR em `localStorage` já levanta
+  // SecurityError (mesmo motivo documentado no TerminalMirror). Sem a guarda, a leitura derrubava
+  // a montagem do painel inteiro e a escrita quebrava o clique do botão. Falhou = não persiste.
   const CHAVE = 'cp_plan_tasks';
-  let showTasks = $state(localStorage.getItem(CHAVE) !== '0');
+  let showTasks = $state((() => {
+    try { return localStorage.getItem(CHAVE) !== '0'; } catch { return true; }
+  })());
   function alternarTasks() {
     showTasks = !showTasks;
-    localStorage.setItem(CHAVE, showTasks ? '1' : '0');
+    try { localStorage.setItem(CHAVE, showTasks ? '1' : '0'); } catch { /* sem persistência */ }
   }
 
   const current = $derived(detail ? detail.task - 1 : -1);
+  // Mesma regra do planBadge (lib/plan.ts): sem ela o botao da barra fica sem barra dentro.
+  const temBarra = $derived(!!planBadge(session));
 
   // Seletor de plano. Carrega ao montar, NÃO no foco: o `pinned` vem junto da lista, e sem ele o
   // campo mostraria "automático" mesmo com um plano fixado — a etiqueta mentiria até o usuário
@@ -99,13 +107,17 @@
   {#if pickerErr}<p class="muted err">{pickerErr}</p>{/if}
 
   <!-- A barra E o botao de abrir/fechar as Tasks: ela ja resume o progresso, entao e o lugar
-       obvio pra tocar. O chevron a direita e o que revela que ali tem clique. -->
+       obvio pra tocar. O chevron a direita e o que revela que ali tem clique.
+       So quando ha barra pra clicar: com "nenhum plano" escolhido (ou plano ainda sem step
+       contado) o PlanBar nao desenha nada, e o botao virava um chevron boiando sozinho. -->
+  {#if temBarra}
   <button class="bar-btn" onclick={alternarTasks} aria-expanded={showTasks}
     aria-label={showTasks ? 'Esconder as tasks' : 'Mostrar as tasks'}
     title={showTasks ? 'Esconder as tasks' : 'Mostrar as tasks'}>
     <span class="bar-wrap"><PlanBar {session} /></span>
     <span class="chev" class:open={showTasks}>›</span>
   </button>
+  {/if}
 
   {#if !showTasks}
     <!-- nada: o usuario fechou -->
@@ -194,8 +206,6 @@
     text-align: left;
   }
   .bar-wrap { flex: 1; min-width: 0; }
-  .bar-btn .chev { transform: rotate(0deg); }
-  .bar-btn .chev.open { transform: rotate(90deg); }
   .err { color: var(--error); }
   .chev {
     flex-shrink: 0;
