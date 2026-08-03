@@ -248,6 +248,41 @@ def test_painel_de_subagentes_nao_vira_previa():
     assert out == "Dinheiro: a cobranca e por caractere do texto que voce manda."
 
 
+PANE_SUBAGENTE_AO_VIVO = (
+    "   Thought for 2s\n"
+    "\n"
+    " ● Achei — csharp-reviewer (user agent). Rodando no diff do commit:\n"
+    "\n"
+    + "─" * 40 + "\n"
+    " ● Subagent Subagent (1 line)\n"
+    "  └ The code patterns look clean. Now let me verify compilation.\n"
+    + "─" * 40 + "\n"
+    "\n"
+    " Tool output: collapsed\n"
+    + "─" * 40 + "\n"
+)
+
+
+def test_painel_do_subagente_AO_VIVO_nao_vira_previa():
+    # Medido no pane em 03/08/2026: este painel usa o MESMO ● da prosa, fica DENTRO do corte da
+    # ultima regua (o corte por posicao nao alcanca) e o subagente reescreve o `└` a cada frame --
+    # a previa trocava de altura sem parar e a conversa pulava. A previa tem que cair na ultima
+    # PROSA; ela ja esta no .jsonl, entao o preview_is_committed a suprime e nao sobra nada pulando.
+    out = extract_assistant_text(PANE_SUBAGENTE_AO_VIVO)
+    assert out == "Achei — csharp-reviewer (user agent). Rodando no diff do commit:"
+
+
+def test_prosa_comecando_com_subagent_continua_sendo_prosa():
+    # Falso positivo aqui DESCARTA o bloco e a previa fica VAZIA -- pior que vir suja. Por isso o
+    # cabecalho sozinho nao basta: sem o `└` embaixo, e prosa.
+    pane = (
+        " ● Subagent driven development e o proximo passo aqui.\n"
+        "   Vou explicar por que.\n"
+        + "─" * 40 + "\n"
+    )
+    assert extract_assistant_text(pane).startswith("Subagent driven development")
+
+
 def test_pane_sem_regua_ainda_varre_tudo():
     # Fallback: sem regua (pane recem-aberto), o comportamento antigo vale -- previa e melhor que
     # nada, e nao ha rodape pra confundir.

@@ -83,6 +83,32 @@ _PI_TOOL_NAME_RE = re.compile(
 )
 
 
+# PAINEL DO SUBAGENTE AO VIVO do Claude, medido no pane em 03/08/2026:
+#     ● Subagent Subagent (1 line)
+#      └ The code patterns look clean. Now let me verify compilation and run the module tests.
+# Ele usa o MESMO ● da prosa e fica embaixo de tudo, entao a varredura (que pega o ULTIMO ●) elegia
+# ele — e como o subagente reescreve aquela linha a cada frame, a previa trocava de conteudo E DE
+# ALTURA sem parar: a conversa pulava debaixo de quem estava lendo. Nao ha nada a perder escondendo:
+# o ToolCard da chamada, logo acima, ja diz qual subagente esta rodando.
+#
+# Exige as DUAS coisas — "Subagent <algo>" no cabecalho E o `└` na primeira linha nao-vazia abaixo —
+# pelo mesmo motivo do _pi_bloco_de_tool: falso positivo aqui DESCARTA o bloco e a previa fica
+# VAZIA, que e pior que vir suja. Uma prosa que comece com a palavra "Subagent" nao desenha `└`.
+_SUBAGENT_HEAD_RE = re.compile(r"^Subagent\s+\S")
+_SUBAGENT_CORPO_RE = re.compile(r"^\s*└")
+
+
+def _painel_de_subagente(lines: list[str], i: int, corpo: str) -> bool:
+    """Bloco `i` e o painel do subagente ao vivo: cabecalho `Subagent <nome>` E corpo em `└`."""
+    if not _SUBAGENT_HEAD_RE.match(corpo):
+        return False
+    for ln in lines[i + 1:]:
+        if not ln.strip():
+            continue
+        return bool(_SUBAGENT_CORPO_RE.match(ln))
+    return False
+
+
 def _pi_bloco_de_tool(lines: list[str], i: int, corpo: str) -> bool:
     """Bloco `i` é chamada de ferramenta do Pi: nome de ferramenta no cabeçalho E corpo desenhado em
     box-drawing na primeira linha não-vazia abaixo."""
@@ -129,6 +155,7 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
         corpo = s[1:].lstrip()
         if (s[:1] == _ASSISTANT_GLYPH and not _TOOL_BLOCK_RE.match(corpo)
                 and not _MCP_CALL_RE.match(corpo)
+                and not _painel_de_subagente(lines, i, corpo)
                 and not (provider == "pi" and _pi_bloco_de_tool(lines, i, corpo))):
             start = i
     if start < 0:
