@@ -13,7 +13,7 @@
   <a href="docs/demo/claude-cockpit-overview.webm">▶ Watch the 40-second demo</a>
 </p>
 
-> **Screenshots and video use synthetic demo data.** Session names, prompts, states, and costs are synthetic; provider/model labels are representative public identifiers and are not taken from a user's account.
+> **Screenshots and video use synthetic demo data.** Session names, prompts, states, and costs are synthetic; provider/model labels are either synthetic demo labels or representative public identifiers, never data from a user's account.
 
 ## What it does
 

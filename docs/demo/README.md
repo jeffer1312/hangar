@@ -4,9 +4,9 @@ Storyboard público para as capturas de tela e o vídeo de demonstração. Esta 
 será mostrado sem depender de uma conta, sessão ou custo reais.
 
 > **Dados de demonstração:** mensagens, nomes de sessões, perguntas, estados e custos usados nas
-> capturas e no vídeo são sintéticos. Alguns rótulos de provedor/modelo são identificadores públicos
-> representativos; eles não vêm da conta do usuário. Os valores da tela de custos não representam
-> uma cobrança, fatura, conta ou consumo real.
+> capturas e no vídeo são sintéticos. Os rótulos de provedor/modelo são sintéticos ou identificadores
+> públicos representativos; nunca vêm da conta do usuário. Os valores da tela de custos não
+> representam uma cobrança, fatura, conta ou consumo real.
 
 ## Storyboard
 
@@ -63,8 +63,8 @@ será mostrado sem depender de uma conta, sessão ou custo reais.
   modelos demonstrativos visíveis nas capturas GPT/OpenAI e OpenRouter free.
 - **Mensagem para o leitor:** cada sessão Pi pode escolher seu modelo e nível de raciocínio sem
   depender de uma lista fixa no app.
-- **Dados:** contas e seleções de demonstração; os rótulos de modelo são públicos e
-  representativos, sem chaves, tokens ou endpoints privados.
+- **Dados:** contas e seleções de demonstração; os rótulos de modelo são sintéticos ou públicos
+  e representativos, sem chaves, tokens ou endpoints privados.
 
 ### 6. Claude engine — configurar um motor alternativo
 
@@ -99,7 +99,8 @@ será mostrado sem depender de uma conta, sessão ou custo reais.
   estar legível e não pode ser coberto por outro elemento.
 - **Mensagem para o leitor:** o painel explica volume e estimativa sintética de uso; não é uma fatura.
 - **Dados:** valores, datas e projeto de demonstração sintéticos; os rótulos de provedor/modelo
-  são públicos e representativos. Não capturar o painel com custos ou consumo da conta real.
+  são sintéticos ou públicos e representativos. Não capturar o painel com custos ou consumo da
+  conta real.
 
 ### 9. Vídeo — percurso de 30–45 segundos
 
@@ -132,6 +133,7 @@ será mostrado sem depender de uma conta, sessão ou custo reais.
 | `claude-engine` | `docs/img/desktop-engines-demo.png` | 6 | motor alternativo e chave mascarada |
 | `settings` | `docs/img/desktop-settings-demo.png` | 7 | grupos de configurações sem valores sensíveis |
 | `costs-demo` | `docs/img/desktop-costs-demo.png` | 8 | `Demo data` e valores sintéticos |
+| `cost-fixture` | `docs/demo/costs-demo.json` | 8 | fixture revisada usada para a captura local |
 | `demo-video` | `docs/demo/claude-cockpit-overview.webm` | 9 | cenas de chat, board, Pi, modelos e custos em 40 s |
 
 Os arquivos acima são os artefatos públicos atuais. Eles foram revisados para não conter dados

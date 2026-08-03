@@ -14,7 +14,7 @@ From your phone or desktop, you can:
 
 It runs on your own LAN/VPN.
 
-Screenshots and demo video use synthetic sessions, prompts, states, and costs; public provider/model identifiers may appear.
+Screenshots and demo video use synthetic sessions, prompts, states, and costs; synthetic or representative public provider/model identifiers may appear.
 
 🔗 https://github.com/jeffer1312/claude-cockpit
 
@@ -28,6 +28,6 @@ Screenshots and demo video use synthetic sessions, prompts, states, and costs; p
 
 4/ The backend is designed for trusted LAN/VPN use. The configured CLIs and providers still follow their own network and data policies.
 
-5/ Demo assets: synthetic sessions, prompts, states, and costs. Model labels are representative public identifiers — no real credentials or account data.
+5/ Demo assets: synthetic sessions, prompts, states, and costs. Model labels are synthetic or representative public identifiers — no real credentials or account data.
 
 🔗 https://github.com/jeffer1312/claude-cockpit
