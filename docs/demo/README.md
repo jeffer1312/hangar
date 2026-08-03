@@ -98,8 +98,8 @@ será mostrado sem depender de uma conta, sessão ou custo reais.
 - **Captura:** KPIs, gráfico por dia, rankings e filtros com números fictícios; o aviso de demo deve
   estar legível e não pode ser coberto por outro elemento.
 - **Mensagem para o leitor:** o painel explica volume e estimativa sintética de uso; não é uma fatura.
-- **Dados:** valores, datas, projetos, provedores e modelos inventados. Não capturar o painel com
-  custos ou consumo da conta real.
+- **Dados:** valores, datas e projeto de demonstração sintéticos; os rótulos de provedor/modelo
+  são públicos e representativos. Não capturar o painel com custos ou consumo da conta real.
 
 ### 9. Vídeo — percurso de 30–45 segundos
 
@@ -114,8 +114,9 @@ será mostrado sem depender de uma conta, sessão ou custo reais.
   5. **32–40 s — cena 8:** encerrar no painel de custos com `Demo data` e rankings sintéticos.
 - **Captura:** gravação contínua ou cortes com transições simples; os cinco momentos devem ser
   compreensíveis mesmo sem áudio.
-- **Contrato:** o vídeo usa exclusivamente dados fictícios, não inclui Git como destaque e não
-  mostra credenciais, custos reais ou identificadores pessoais.
+- **Contrato:** o vídeo usa sessões, prompts, estados e custos sintéticos; identificadores públicos
+  de provedor/modelo podem aparecer. Não inclui Git como destaque nem mostra credenciais, custos
+  reais ou identificadores pessoais.
 
 ## Lista de capturas
 

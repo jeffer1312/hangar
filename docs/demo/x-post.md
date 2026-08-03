@@ -14,7 +14,7 @@ From your phone or desktop, you can:
 
 It runs on your own LAN/VPN.
 
-Screenshots and demo video use fictional data.
+Screenshots and demo video use synthetic sessions, prompts, states, and costs; public provider/model identifiers may appear.
 
 🔗 https://github.com/jeffer1312/claude-cockpit
 
