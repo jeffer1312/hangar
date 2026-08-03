@@ -1,346 +1,200 @@
 # claude-cockpit
 
-**Mission control for your live [Claude Code](https://code.claude.com) sessions** — from your phone or a desktop board, over your own LAN/VPN, no vendor cloud.
+**A private control panel for live Claude Code, Pi, and Codex sessions** — from your phone or desktop, over your own LAN/VPN.
 
-*Third-party tool for Claude Code. Not affiliated with or endorsed by Anthropic; "Claude" is a trademark of Anthropic, PBC.*
+> Third-party tool. Not affiliated with or endorsed by Anthropic, OpenAI, or the Pi project.
 
 <p align="center">
-  <img src="docs/img/mobile-list.png" width="260" alt="Session list on the phone — needs-you feed, live states, pairing badges" />
-  <img src="docs/img/mobile-chat.png" width="260" alt="Chat on the phone — full markdown, code blocks, model picker, cost" />
+  <img src="docs/img/mobile-chat-demo.png" width="220" alt="Mobile chat with synthetic demo data" />
+  <img src="docs/img/desktop-board-demo.png" width="620" alt="Desktop board with Claude, Pi, and Codex demo sessions" />
 </p>
+
 <p align="center">
-  <img src="docs/img/desktop-board.png" width="800" alt="Board — kanban of live sessions by state, each card a live mini-chat with tappable answers" />
+  <a href="docs/demo/claude-cockpit-overview.webm">▶ Watch the 40-second demo</a>
 </p>
+
+> **Screenshots and video use synthetic demo data.** Names, prompts, models, states, and costs are fictional and are not taken from a real account.
+
+## What it does
+
+claude-cockpit is a self-hosted PWA that lets you keep an eye on agent sessions without having to stay at the terminal.
+
+- **Phone chat:** follow live output, send prompts, answer interactive questions, interrupt work, and keep drafts per session.
+- **Desktop board:** see Claude Code, Pi, and Codex sessions grouped by *needs you*, *working*, and *ready*.
+- **Free-form canvas:** arrange floating session tiles by project, topic, or priority and resize them independently.
+- **Mixed agent workflows:** keep Claude Code, Pi, and Codex conversations visible from the same cockpit.
+- **Live status:** streaming previews, model/context badges, plans, workflows, notifications, uploads, and session history.
+- **Pi controls:** choose a Pi model and thinking level for the active session.
+- **Alternative Claude engines:** run a session through another compatible provider while keeping its skills and history in the same Claude environment.
+- **Pairing:** use `cp-send` to message sibling sessions and coordinate a working group with a shared contract.
+- **Cost view:** inspect usage estimates by day, provider, source, and project. It is an estimate, not an invoice.
+
+## See it in action
+
+### One cockpit for different agents
+
 <p align="center">
-  <img src="docs/img/desktop-canvas.png" width="800" alt="Canvas — free-form draggable session tiles, paired sessions framed as a group" />
+  <img src="docs/img/desktop-board-demo.png" width="760" alt="Board showing a Claude session working and Pi and Codex sessions ready" />
 </p>
+
+The board is the quick triage view: one card is working while the other demo sessions are ready. Open any card to enter the full chat.
+
+### Phone-first follow-up
+
 <p align="center">
-  <img src="docs/img/desktop-chat.png" width="800" alt="Desktop two-column shell — sidebar + wide chat" />
+  <img src="docs/img/mobile-chat-demo.png" width="280" alt="Phone chat showing a prompt, background command, and response" />
+  <img src="docs/img/desktop-canvas-demo.png" width="760" alt="Canvas with demo session tiles in different positions and sizes" />
 </p>
 
-## Highlights
+Use the phone when you only need to answer or redirect a session. Use the canvas when the desktop board is too rigid for the way you think.
 
-- 📱 **Phone-first PWA** — your real terminal sessions as a clean mobile chat: send prompts, answer Claude's interactive questions as tappable buttons, interrupt, upload images/audio (voice → Whisper transcription).
-- 🖥️ **Desktop board & canvas** — kanban of every live session by state (*needs you / working / idle*), each card a live mini-chat; or free-form draggable tiles.
-- 🤝 **Session pairing & orchestration** — sessions on the same machine message each other (`cp-send`), form working groups with a shared contract file, and an `orquestrar` skill turns one session into the lead of a multi-repo task.
-- 📡 **Live everything** — streaming preview while Claude writes, live status labels, model/context/cost badges, git panel (commit & push from the phone), workflows/agents activity tree.
-- 🔒 **Your network only** — a small FastAPI server on your machine talks to your already-running `claude` in tmux; typically served over a Tailscale tailnet with HTTPS. No vendor cloud in the path.
-- ♻️ **Survives reboots** — tmux-resurrect integration relaunches `claude --resume` per session, so conversations come back after a restart.
+### Pi models, engines, and usage
 
-You leave `claude` running in a `tmux` session on your machine. claude-cockpit exposes that **same live session** to a phone: it renders the conversation as chat, shows what Claude is doing right now, and lets you send prompts, answer Claude's interactive questions, and interrupt — all from an iPhone on the couch.
+<p align="center">
+  <img src="docs/img/desktop-pi-demo.png" width="760" alt="Pi session with a Pi-specific composer" />
+</p>
 
-> **Status:** Backend is complete and tested (300+ passing tests, CI on every push). The Svelte PWA frontend is feature-rich — chat with live streaming preview, uploads, git ops, slash commands, workflows, model picker, native AskUserQuestion, permission prompts as tappable cards, durable input queue (send while Claude works), per-session composer drafts, session archive (browse dead conversations), multi-server, web push notifications, and a costs dashboard. Typically run over a Tailscale tailnet (`tailscale serve` → HTTPS). Personal-use, single-user tool.
+<p align="center">
+  <img src="docs/img/desktop-models-demo.png" width="360" alt="Pi model and thinking-level picker with synthetic providers" />
+  <img src="docs/img/desktop-openrouter-free-demo.png" width="260" alt="Pi OpenRouter free-model picker with synthetic model results" />
+  <img src="docs/img/desktop-engines-demo.png" width="520" alt="Alternative model engine settings with placeholder demo values" />
+</p>
 
-> **Using it?** Step-by-step guide — pairing, Tailscale, install as PWA, every feature: **[docs/USAGE.md](docs/USAGE.md)**.
+<p align="center">
+  <img src="docs/img/desktop-costs-demo.png" width="560" alt="Cost dashboard marked Demo data with synthetic rankings" />
+</p>
 
-## Quickstart
+## Common use cases
 
-Recommended — one line, clones and installs:
+- **On-call or remote follow-up:** start a long task at your desk and answer the next question from your phone.
+- **Multiple agents:** compare a Claude Code implementation, a Pi exploration, and a Codex review without switching terminals.
+- **Multi-session coordination:** pair sessions on the same machine, queue prompts while one is busy, and keep the shared contract visible.
+- **A focused desktop:** use the board for state-based triage or the canvas for a spatial workspace.
+- **Provider experiments:** test a Pi model or an alternative Claude engine without displaying saved credentials in the cockpit.
+
+## Install
+
+The installer sets up the backend and frontend dependencies and can install the session wrappers and user services.
+
+### Linux or macOS
 
 ```bash
-# Linux/macOS
 curl -fsSL https://raw.githubusercontent.com/jeffer1312/claude-cockpit/main/bootstrap.sh | bash
 ```
 
+Or clone first if you want to inspect the files:
+
+```bash
+git clone https://github.com/jeffer1312/claude-cockpit
+cd claude-cockpit
+./install.sh
+```
+
+### Windows PowerShell
+
+Python **3.14+**, Node 20+, Git, `uv`, and the current Claude Code CLI are required. The Windows installer uses psmux as the tmux-compatible multiplexer.
+
 ```powershell
-# Windows (PowerShell)
 irm https://raw.githubusercontent.com/jeffer1312/claude-cockpit/main/bootstrap.ps1 | iex
 ```
 
-It lands in `~/claude-cockpit` (`$HOME\claude-cockpit` on Windows) and then runs the installer
-for you. Another folder, or extra `install.sh` flags, go after `-s --` — under `curl | bash` that
-separator is what keeps bash from eating them:
-
-```bash
-curl -fsSL …/bootstrap.sh | bash -s -- ~/apps/claude-cockpit --no-frontend
-```
-
-On Windows set `$env:CP_DESTINO = 'D:\claude-cockpit'` before the `irm` line (under `irm | iex`
-the script receives text, not arguments). Re-running is safe: if the folder is already this repo
-it does a `git pull` instead of cloning, and if it's something else it stops instead of touching it.
-
-Alternative — clone by hand and read before you run, same result:
-
-```bash
-git clone https://github.com/jeffer1312/claude-cockpit && cd claude-cockpit
-./install.sh        # checa deps, instala backend+frontend, pede o token, oferece wrapper + serviços
-./install.sh --check   # só lista o que falta, sem instalar nada
-```
+To choose another local destination:
 
 ```powershell
-git clone https://github.com/jeffer1312/claude-cockpit; cd claude-cockpit
-powershell -ExecutionPolicy Bypass -File install.ps1
-powershell -ExecutionPolicy Bypass -File install.ps1 -SoChecar   # só lista o que falta
+$env:CP_DESTINO = 'D:\claude-cockpit'
+irm https://raw.githubusercontent.com/jeffer1312/claude-cockpit/main/bootstrap.ps1 | iex
 ```
 
-Install on a **local disk, never on a network share**: `uv sync` and `npm ci` recreate
-`backend/.venv` and `frontend/node_modules` inside the folder, and on a share mounted from another
-machine those two are *that* machine's — measured, the venv points at `/usr/bin/python3.14` and
-`node_modules` carries `@esbuild/linux-x64` — so installing from a second machine breaks the first
-machine's install.
+For pairing and PWA installation, see [docs/USAGE.md](docs/USAGE.md).
 
-Then open the URL from the backend's startup QR on your phone and paste the token from
-`backend/.env`. Details (Tailscale, PWA install): [docs/USAGE.md](docs/USAGE.md).
+## Run locally
 
-## Why
+Requirements: `tmux` (or psmux on Windows), Claude Code, a current Codex CLI that supports a local app-server (`app-server --listen` and `--remote`), Python 3.14+, [`uv`](https://docs.astral.sh/uv/), and Node 20+.
 
-The official remote options route through a vendor cloud. claude-cockpit stays entirely on your own network: the phone talks to a small server on your machine, which talks to your already-running `claude`. Nothing leaves your LAN.
-
-## How it works
-
-The trick is to use the right source for each thing:
-
-```
- iPhone (Safari PWA, same LAN/VPN)
-   │  EventSource (SSE)  ◄──── messages + live state ────┐
-   │  fetch POST  ───► input / select / interrupt        │
-   ▼                                                     │
- Python API (FastAPI · uvicorn · Bearer/cookie auth)     │
-   ├ SessionRegistry  → tmux list/new/kill, map → jsonl  │
-   ├ TranscriptTailer → tail ~/.claude/…/<uuid>.jsonl ────┤ merge → SSE
-   ├ StateMonitor     → tmux capture-pane → live state ───┤
-   └ TerminalInput    → tmux send-keys (prompt/select/Esc)┘
-   ▼
- tmux sessions, running `claude` or a Codex TUI connected to its app-server
-```
-
-- **Chat content** comes from Claude Code's structured **JSONL transcript** (`~/.claude/projects/<cwd>/<uuid>.jsonl`) — robust, no terminal scraping.
-- **Live state** comes from a narrow `tmux capture-pane` read of the status line. States: `working` (mirrors Claude's live label, e.g. `Elucidating…`), `idle`, `awaiting_input` (Claude asked an interactive question — options become tappable buttons), `dead`.
-- **Input** goes to the real session via `tmux send-keys`: prompts, option selection (`(n-1)×Down`+`Enter`), and interrupt (`Esc`).
-
-### Codex sessions
-
-Codex uses a hybrid transport. For each Codex session the backend starts
-`codex app-server --listen ws://127.0.0.1:<port>` and opens a real
-`codex --remote ...` TUI inside tmux. The web UI keeps using the structured
-app-server protocol for messages, streaming state, model selection and
-interrupts; the tmux pane exists so the same conversation can also be attached
-and controlled from a terminal:
+Install the wrapper once so sessions receive stable ids and appear reliably in the cockpit:
 
 ```bash
-tmux attach -t <session-name>
+./scripts/install-claude-wrapper.sh
 ```
 
-The listener is bound to loopback only. On backend restart, the saved thread is
-resumed and its managed Codex tmux pane is recreated against the new local
-endpoint.
+Start the backend on loopback:
 
-## Run it (dev)
-
-Requirements: `tmux`, `claude` (Claude Code), a current `codex` CLI with
-`app-server --listen` and `--remote` support, Python 3.14 +
-[`uv`](https://docs.astral.sh/uv/), Node 20+.
-
-**0. Install the interactive `claude` + `codex` wrappers (one-time, recommended):**
-```bash
-./scripts/install-claude-wrapper.sh          # auto-detects fish/bash/zsh; pass `all` for every shell
-```
-This makes the app track sessions reliably. After it, just run `claude` anywhere: it launches inside
-a tmux session named after the folder, with a unique `--session-id`. That id is what binds each
-session to its own transcript — so you can open **many sessions in the same folder** and none of them
-leak into or overwrite another. A `claude` started **without** it (no `--session-id`, or outside
-tmux) is either invisible to the app or shows up flagged **⚠ no id** with its chat disabled. The
-installer also adds the tmux truecolor + window-rename config, and offers to set the claude-cockpit
-statusline (`scripts/omniroute-statusline.js`) as your Claude `statusLine` — that's the format the
-app parses into the model / context / cost / rate-limit badges (decline to keep your own; pass
-`--no-statusline` to skip). Bypass the wrapper anytime with `command claude`.
-
-Running `codex` normally follows the same rule: the wrapper asks the local backend to create a
-managed Codex thread, attaches your terminal to its tmux session, and the conversation immediately
-appears in the app. `codex "prompt"` is supported; advanced flags and subcommands keep going to the
-official CLI unchanged. Bypass explicitly with `command codex`.
-
-**1. Or start Claude inside tmux manually:**
-```bash
-tmux new -s cc          # then run `claude --session-id $(uuidgen)` inside it
-```
-
-> Theme colors look wrong inside tmux (teal / pink / washed-out)? That's a known Claude
-> Code + tmux truecolor issue — see [docs/tmux-truecolor-setup.md](docs/tmux-truecolor-setup.md)
-> for the one-line fix.
->
-> Want the session to survive a reboot / OOM kill? Run `./scripts/tmux-persist-setup.sh`
-> (auto-save + restore via resurrect/continuum) — see
-> [docs/tmux-persistence-setup.md](docs/tmux-persistence-setup.md).
-
-**2. Backend:**
 ```bash
 cd backend
-CP_AUTH_TOKEN=$(openssl rand -hex 24) CP_LAN_BIND_IP=127.0.0.1 uv run python -m app.main
-# binds http://127.0.0.1:8765 (set CP_LAN_BIND_IP to your LAN IP for phone access)
+CP_AUTH_TOKEN="$(openssl rand -hex 24)" \
+CP_LAN_BIND_IP=127.0.0.1 \
+uv run python -m app.main
 ```
 
-**3. Frontend:**
+Start the frontend in another terminal:
+
 ```bash
 cd frontend
 npm install
-npm run dev            # open it, set the API base URL + token on the Login screen
+npm run dev
 ```
 
-Run the backend tests with `cd backend && uv run pytest -v`.
+Open the frontend URL shown by Vite, enter the backend URL and token on the login screen, then start Claude Code, Pi, or Codex through the installed wrappers.
 
-## Sibling sessions, pairing & orchestration (cp-send)
-
-Sessions on the same machine can talk to each other through the backend via
-`scripts/cp-send` — list live sessions, send a prompt to another session (durable
-queue if it's busy), and **pair** N sessions into a working group: the backend
-injects a collaboration protocol into every member and gives the group a shared
-markdown contract, shown in the app's PairSheet. `cp-send --new <name> [cwd]`
-spawns a new app-managed session (proper `--session-id`, visible in the UI).
+Run the backend tests with:
 
 ```bash
-./scripts/install-cp-send.sh   # or say yes at install.sh step 6/6
+cd backend && uv run pytest -v
 ```
 
-The installer symlinks `cp-send` into `~/.local/bin`, adds a "sibling sessions"
-block to your global `~/.claude/CLAUDE.md` (so every Claude session knows the
-tool), and symlinks the repo's `skills/` into `~/.claude/skills/` — including
-**`orquestrar`**, a skill that turns a session into the *lead* of a multi-repo
-task: it creates/pairs one visible session per repo, writes the group contract,
-distributes scope, monitors progress reports and consolidates a final status
-board, while pushes and merges stay with you.
+For the production-style user services and Tailscale setup, use [docs/USAGE.md](docs/USAGE.md).
 
-## Environment Variables
+## How it works
 
-| Var | Default | Purpose |
-|---|---|---|
-| `CP_AUTH_TOKEN` | `change-me` | Bearer token protecting all routes — generate a strong one. Refuses to start with `change-me` on non-loopback. |
-| `CP_LAN_BIND_IP` | `127.0.0.1` | `auto` = detect LAN IP for phone access; fixed IP also works. |
-| `CP_PORT` | `8765` | Backend server port. |
-| `CP_FRONT_PORT` | `5173` | Frontend dev server port (included in startup QR). |
-| `CP_PUBLIC_URL` | — | Override QR base URL (e.g., Tailscale hostname). |
-| `CP_SCAN_ROOTS` | — | Comma-separated paths for "New session" folder picker. |
-| `CP_SYNC` | `false` | Enable cloud-sync hub (`/api/sync/*` routes) and "Criar acesso" registration. |
-| `CP_SYNC_BOOTSTRAP` | — | One-time bootstrap secret for first-run account registration; locks after first use. |
-| `CP_SYNC_DATA` | `~/.claude-cockpit/sync-vault.json` | Path to encrypted server-list vault file. |
-| `CP_SYNC_SESSION_SECRET` | — | HMAC key for session cookies; empty = random per process (logout on restart). |
+```text
+Phone or desktop PWA
+        │  HTTP(S)/SSE + authenticated API
+        ▼
+FastAPI backend
+   ├── Claude Code: JSONL transcript + tmux state/input
+   ├── Pi: JSONL transcript + Pi extension sidecars
+   └── Codex: local app-server events + managed tmux TUI
+        ▼
+Your local agent sessions
+```
 
-## API
+Chat content comes from structured session data rather than scraping the terminal transcript. The terminal multiplexer is used for live state and input, while Codex has a local loopback app-server adapter. The backend is the bridge and does not add a vendor relay; the CLIs and providers you configure may still send data according to their own policies.
 
-All routes require `Authorization: Bearer <token>` (SSE uses a `cp_token` cookie since `EventSource` can't set headers).
+## Security model
 
-**Sessions**
+This is a LAN/VPN-only tool and should be treated like a remote shell:
 
-| Method | Route | Purpose |
-|---|---|---|
-| GET | `/api/sessions` | list tmux sessions + state |
-| POST | `/api/sessions` | create a session (`{name, cwd, engine?}`) — `engine` runs it on a non-Anthropic provider (see Engines below) |
-| DELETE | `/api/sessions/{name}` | kill a session |
-| POST | `/api/sessions/{name}/rename` | rename a session |
-| POST | `/api/sessions/{name}/resume` | relaunch an untracked session with `--resume` (continues the conversation) |
-| GET | `/api/claude-configs` | list available `CLAUDE_CONFIG_DIR` options |
-| GET | `/api/costs` | usage/cost report (per account, day/week/month) |
+- The default bind address is loopback (`127.0.0.1`). Set `CP_LAN_BIND_IP` only to a trusted LAN/VPN address when the phone must connect. Local development uses HTTP; add TLS before using it over a shared network.
+- **Never** expose it through a public interface or router port-forward.
+- Protect the API with a strong `CP_AUTH_TOKEN` and put TLS in front when using it beyond loopback.
+- Run it as your own user: the sessions and tools have the same permissions as the account running the backend.
+- Do not put tokens, cookies, provider keys, or private endpoints in screenshots, issues, or README examples.
 
-**Engines** (alternative model providers, `~/.claude/engines.json`)
+## Useful environment variables
 
-| Method | Route | Purpose |
-|---|---|---|
-| GET | `/api/engines` | configured engines (key masked) |
-| PUT | `/api/engines/{nome}` | create/update an engine; empty key preserves the current one |
-| DELETE | `/api/engines/{nome}` | remove an engine |
-| POST | `/api/engines/modelos` | models the key can use, straight from the provider (this is the "Test" button) |
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CP_AUTH_TOKEN` | `change-me` | Bearer token for API routes; use a strong value. |
+| `CP_LAN_BIND_IP` | `127.0.0.1` | Bind address. Use a trusted LAN/VPN address for phone access. |
+| `CP_PORT` | `8765` | Backend port. |
+| `CP_FRONT_PORT` | `5173` | Frontend URL/QR pairing port; configure the frontend server separately when changing its dev port. |
+| `CP_PUBLIC_URL` | — | LAN/VPN base URL used for pairing links, if needed. |
 
-**Transcript & stream**
+## Pair sibling sessions
 
-| Method | Route | Purpose |
-|---|---|---|
-| GET | `/api/sessions/{name}/history` | full transcript (initial load) |
-| GET | `/api/sessions/{name}/events` | **SSE**: `message` / `state` / `preview` / `ask_question` / `ping` / `reset` |
-| GET | `/api/sessions/{name}/transcript-image/{uuid}/{idx}` | image embedded in a transcript message |
-| GET | `/api/sessions/{name}/pane` | raw `tmux capture-pane` (live peek / debug) |
-| GET | `/api/sessions/{name}/plan` | active superpowers plan progress (tasks/steps) + raw markdown |
+Install `cp-send` to list sessions, send durable prompts, or pair sessions into a working group:
 
-**Input**
+```bash
+./scripts/install-cp-send.sh
+cp-send --list
+cp-send --pair <session-name> "coordinate the demo task"
+```
 
-| Method | Route | Purpose |
-|---|---|---|
-| POST | `/api/sessions/{name}/input` | send a prompt (`{text}`) |
-| POST | `/api/sessions/{name}/select` | answer an interactive menu (`{option}`, 1-based) |
-| POST | `/api/sessions/{name}/answer` | answer a native AskUserQuestion |
-| POST | `/api/sessions/{name}/interrupt` | send `Esc` |
-| POST | `/api/sessions/{name}/keys` | send raw key(s) |
-| POST | `/api/sessions/{name}/model-effort` | set model / reasoning effort (Claude — drives the `/model` picker) |
-| GET | `/api/sessions/{name}/pi/models` | Pi only: model catalog + current model / thinking level |
-| POST | `/api/sessions/{name}/pi/model` | Pi only: set model (`{provider, model}`) and/or `{effort}`; returns the read-back |
+Pairing is local to the machine. The app shows the shared contract and conversation, while each session remains independently controlled.
 
-**Loop runner** (autonomous goal→check→re-prompt loop per session)
+## Documentation and license
 
-| Method | Route | Purpose |
-|---|---|---|
-| POST | `/api/sessions/{name}/loop` | create+start a loop (`{goal, check_cmd?, max_iters?, require_branch?}`) |
-| GET | `/api/sessions/{name}/loop` | loop state + history + suggested check commands |
-| DELETE | `/api/sessions/{name}/loop` | stop the loop |
-| POST | `/api/sessions/{name}/loop/resolve` | confirm/reject a `done_claimed` loop (`{accept}`) |
-
-**Files & uploads**
-
-| Method | Route | Purpose |
-|---|---|---|
-| POST | `/api/sessions/{name}/upload` | upload a file into the session cwd |
-| GET | `/api/sessions/{name}/uploads/{filename}` | fetch an uploaded file |
-| GET | `/api/sessions/{name}/file` | read a file from the session cwd |
-| GET | `/api/fs/roots` | list filesystem roots (new-session picker) |
-| GET | `/api/fs/scan` | scan a dir for subfolders (new-session picker) |
-
-**Git**
-
-| Method | Route | Purpose |
-|---|---|---|
-| GET | `/api/sessions/{name}/branches` | list git branches |
-| POST | `/api/sessions/{name}/checkout` | checkout a branch |
-| POST | `/api/sessions/{name}/git` | run a git op |
-| POST | `/api/sessions/{name}/git/commit` | commit only the selected files (`{message, paths[]}`) |
-| POST | `/api/sessions/{name}/git/push` | push current branch (upstream, or `-u origin` on first push) |
-| GET | `/api/sessions/{name}/git/commit/{sha}/files` | files changed in a commit |
-| GET | `/api/sessions/{name}/git/commit/{sha}/diff?path=` | diff of one file within a commit |
-
-**Archive (dead conversations)**
-
-| Method | Route | Purpose |
-|---|---|---|
-| GET | `/api/archive` | folders (projects) with archived transcripts |
-| GET | `/api/archive/{project}` | conversations of one folder (preview, date, live badge) |
-| GET | `/api/archive/{project}/{session_id}/history` | read-only transcript of a dead conversation |
-| GET | `/api/archive/{project}/{session_id}/transcript-image/{uuid}/{idx}` | image inside an archived transcript |
-| POST | `/api/archive/{project}/{session_id}/resume` | resume a dead conversation in a new tmux session (`{engine?}`) — the original engine, if any, isn't recorded, so this is always a fresh choice |
-
-**Push**
-
-| Method | Route | Purpose |
-|---|---|---|
-| GET | `/api/push/vapid` | server's VAPID public key |
-| POST | `/api/push/subscribe` | register the phone's push subscription |
-
-**Commands & workflows**
-
-| Method | Route | Purpose |
-|---|---|---|
-| GET | `/api/sessions/{name}/commands` | list available slash commands |
-| GET | `/api/sessions/{name}/workflows` | list workflow runs |
-| GET | `/api/sessions/{name}/workflows/{run_id}` | workflow run detail |
-| GET | `/api/sessions/{name}/workflows/{run_id}/agents/{agent_id}` | workflow agent detail |
-
-**Voice (text-to-speech)**
-
-| Method | Route | Purpose |
-|---|---|---|
-| POST | `/api/tts` | synthesize speech (`{text, voice?, provider?, confirm?}`) — returns `{url, chars, cached}`; 409 above the configurable warn limit until `confirm: true`, 413 past the hard cap |
-| GET | `/api/tts/voices` | ElevenLabs voices available to the configured account key |
-| GET | `/api/tts/saldo` | ElevenLabs account usage (characters used/limit this period) |
-| GET | `/api/tts/audio/{hash}` | fetch a cached synthesized clip (mp3 or wav, detected by content) |
-
-## Security
-
-A web terminal/agent over the network is arbitrary remote command execution if misconfigured. This tool is **LAN/VPN-only by design**:
-
-- Bind to your LAN/VPN IP, **never** a public interface; never port-forward it on your router.
-- A bearer token gates every route; put TLS in front (e.g. Caddy) before real use.
-- It runs `claude` (and its tools) as you — treat the token like a shell password.
-
-## Tech
-
-Backend: Python 3.14, FastAPI, `sse-starlette`, `watchfiles`. Frontend: Svelte 5, Vite, TypeScript, PWA. Zero vendor cloud.
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+- [User and setup guide](docs/USAGE.md)
+- [Demo storyboard and sanitization contract](docs/demo/README.md)
+- [Synthetic prompts](docs/demo/prompts.md)
+- [MIT License](LICENSE)
