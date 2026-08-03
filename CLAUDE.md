@@ -302,6 +302,23 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   extensão porque a linha completa só existe dentro do processo dele — logo, **sessão Pi já aberta
   só passa a publicar depois de `/reload`** (o Pi carrega extensão na largada), enquanto o lado
   Claude vale na hora, por ser script executado a cada render.
+- **Prévia ao vivo: sidecar do agente primeiro, pane depois** (`preview.read_sidecar` +
+  `scripts/pi/cp-state.ts`): mesmo contrato da statusline, agora pro texto **em voo**. A extensão do
+  Pi recebe o bloco do assistente token a token (`message_update`) e publica o **último bloco de
+  texto** em `<config>/.claude-pocket-preview/<stem>.json` = `{"text", "ts"}`; `PreviewBroker._loop`
+  o prefere e só cai no `capture-pane` quando não há sidecar. É o que tira a prévia do Pi da
+  adivinhação: todo o `extract_assistant_text` (verbo de ferramenta, caixa do composer, spinner,
+  painel de Todos) existe só pra separar prosa de desenho de TUI, e um quadro do spinner em `*`
+  ASCII — fora de `SPINNER_GLYPHS` — já fez a prévia engolir a linha de status **e o painel de
+  tarefas inteiro** (03/08/2026). Quatro coisas que o desenho decide de propósito: (1) `""` é
+  **resposta** ("não há nada em voo"), `None` é ausência (cai no pane) — tratar os dois igual traria
+  de volta o bloco já commitado como bolha duplicada; (2) publica o **último** bloco, não a soma —
+  mandando a soma, `sse.preview_is_committed` vê o commitado como prefixo da prévia e engole tudo;
+  (3) a extensão coalesce em 150ms e `unref()` o timer, porque `message_update` dispara por token e
+  um timer pendente não pode segurar o processo do Pi vivo; (4) teto de idade de 10min, pro caso da
+  extensão morrer no meio do turno — aí o pane volta a mandar em vez de congelar a última frase.
+  Vale o mesmo aviso da statusline: **sessão Pi já aberta só publica depois de `/reload`**. Claude
+  Code não tem essa API de extensão e segue no pane; Codex nunca raspou pane (app-server).
 - **Process info lives in `app/procinfo.py` — the only OS-bound layer.** Nine functions
   (`_proc_children_map`, `_descendant_pids`, `_open_jsonl`, `_cmdline`, `_config_dir_of`,
   `_proc_start_time`, `_engine_of`, + the two `_proc_*_path` test seams) hold **every** `/proc`

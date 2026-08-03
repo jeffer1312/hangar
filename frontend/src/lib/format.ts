@@ -292,19 +292,26 @@ export function parseMediaUrls(text: string): FileRef[] {
 // Devolve { caption, filenames } ou null. Cada filename e o basename do path (sem espaco,
 // nome gerado), entao da pra separar varias numa linha so pelo proprio marcador.
 export function parseImageMessage(text: string): { caption: string; filenames: string[] } | null {
-  const marker = '📎 imagem: ';
-  const i = text.indexOf(marker);
-  if (i < 0) return null;
-  // Tudo a partir do 1o marcador pode conter N "📎 imagem: <path>".
+  // O separador e uma REGEX, nao a string "📎 imagem: ": o que a fila digita numa linha so volta do
+  // transcript reescrito pelo Claude Code — quebra de linha depois do marcador, prefixo "[Image #N]"
+  // na frente e o path da ULTIMA imagem consumido (ela virou anexo de verdade, entao o marcador fica
+  // sozinho no fim). Com o indexOf da string exata nada disso casava e a bolha real caia no texto
+  // cru: o usuario via os paths escritos no chat em vez das miniaturas (medido em 03/08/2026).
+  const marker = /📎\s*imagem:\s*/g;
+  const first = text.search(marker);
+  if (first < 0) return null;
   const filenames = text
-    .slice(i)
+    .slice(first)
     .split(marker)
     .map((s) => s.trim())
     .filter(Boolean)
     .map((p) => p.split('/').filter(Boolean).pop() ?? '')
     .filter(Boolean);
-  if (!filenames.length) return null;
-  let caption = text.slice(0, i).trim();
+  // `filenames` VAZIO nao e "nao e mensagem de imagem": e o caso mais comum do celular — UMA foto,
+  // que o Claude Code absorve como anexo de verdade e cujo path ele apaga, deixando so o marcador
+  // pendurado. Devolver null aqui jogava a bolha pro texto cru ("legenda — 📎 imagem:"), que e
+  // exatamente o que esta funcao existe pra evitar. Quem precisa das miniaturas checa o tamanho.
+  let caption = text.slice(0, first).replace(/^(?:\[Image #\d+\])+\s*/, '').trim();
   if (caption.endsWith('—')) caption = caption.slice(0, -1).trim();
   return { caption, filenames };
 }
