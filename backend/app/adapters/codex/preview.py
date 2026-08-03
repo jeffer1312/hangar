@@ -14,6 +14,10 @@ class CodexPreviewSource:
 
     _sources: dict[str, "CodexPreviewSource"] = {}
 
+    # Texto vindo dos deltas do app-server: markdown CRU, nunca raspado de tela -> a bolha renderiza.
+    # Mesmo campo que o PreviewBroker publica, pra o pump do SSE ler os dois sem saber a diferenca.
+    md = True
+
     def __init__(self, name: str):
         self.name = name
         self.text = ""
@@ -40,9 +44,10 @@ class CodexPreviewSource:
             self.version += 1
             self._cond.notify_all()
 
-    async def subscribe(self) -> AsyncIterator[str]:
-        """Emite o texto mais recente (full-replace) a cada mudanca. Mesma mecanica do
-        PreviewBroker.subscribe (coalescido por version + slot unico)."""
+    async def subscribe(self) -> AsyncIterator[tuple[str, bool]]:
+        """Emite `(texto, md)` mais recente (full-replace) a cada mudanca. Mesma mecanica (e mesmo
+        contrato de par) do PreviewBroker.subscribe. Aqui o `md` e constante (True), mas emitir o par
+        e o que deixa o pump ler UMA interface so pras duas fontes."""
         async with self._cond:
             self._subs += 1
         last = -1
@@ -52,7 +57,7 @@ class CodexPreviewSource:
                     await self._cond.wait_for(lambda: self.version != last)
                     last = self.version
                     text = self.text
-                yield text
+                yield text, self.md
         finally:
             # Limpeza sincrona (sem await entre as linhas), mesmo motivo do PreviewBroker: um
             # CancelledError no acquire do lock nao pode deixar _subs sem decrementar.

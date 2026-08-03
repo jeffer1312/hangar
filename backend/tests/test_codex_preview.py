@@ -15,8 +15,8 @@ async def test_push_before_subscribe_is_seen_as_current_text():
     name = "push-basic"
     src = CodexPreviewSource.get(name)
     await src.push("ok")
-    text = await asyncio.wait_for(src.subscribe().__anext__(), timeout=1)
-    assert text == "ok"
+    text, md = await asyncio.wait_for(src.subscribe().__anext__(), timeout=1)
+    assert (text, md) == ("ok", True)
 
 
 @pytest.mark.asyncio
@@ -28,8 +28,8 @@ async def test_push_wakes_a_subscriber_already_waiting():
     task = asyncio.create_task(agen.__anext__())
     await asyncio.sleep(0.01)  # deixa o subscriber entrar no wait_for antes do push
     await src.push("ok")
-    text = await asyncio.wait_for(task, timeout=1)
-    assert text == "ok"
+    text, md = await asyncio.wait_for(task, timeout=1)
+    assert (text, md) == ("ok", True)
     await agen.aclose()
 
 
@@ -42,8 +42,8 @@ async def test_two_pushes_coalesce_to_last_for_slow_subscriber():
     await src.push("o")
     await src.push("ok")  # subscriber ainda nao leu nada -> so ve o ultimo (full-replace)
 
-    text = await asyncio.wait_for(agen.__anext__(), timeout=1)
-    assert text == "ok"
+    text, md = await asyncio.wait_for(agen.__anext__(), timeout=1)
+    assert (text, md) == ("ok", True)
     await agen.aclose()
 
 

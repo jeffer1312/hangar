@@ -421,15 +421,16 @@ def test_broker_prefere_o_sidecar_e_nao_le_o_pane(tmp_path, monkeypatch):
         agen = b.subscribe()
         try:
             async def primeiro_nao_vazio():
-                async for t in agen:
+                async for t, md in agen:
                     if t:
-                        return t
+                        return t, md
             return await _aio.wait_for(primeiro_nao_vazio(), 2)
         finally:
             await agen.aclose()
             _prev.PreviewBroker._brokers.pop("sessao-x", None)
 
-    assert _aio.run(roda()) == "veio do agente"
+    # O par (texto, md) sai JUNTO da fonte: md=True marca "markdown cru, a bolha renderiza".
+    assert _aio.run(roda()) == ("veio do agente", True)
     assert chamou == [], "leu o pane mesmo com sidecar publicado"
 
 
@@ -444,15 +445,15 @@ def test_broker_sem_sidecar_continua_no_pane(tmp_path, monkeypatch):
         agen = b.subscribe()
         try:
             async def primeiro_nao_vazio():
-                async for t in agen:
+                async for t, md in agen:
                     if t:
-                        return t
+                        return t, md
             return await _aio.wait_for(primeiro_nao_vazio(), 2)
         finally:
             await agen.aclose()
             _prev.PreviewBroker._brokers.pop("sessao-y", None)
 
-    assert _aio.run(roda()) == "veio do pane"
+    assert _aio.run(roda()) == ("veio do pane", False)   # raspado da TUI: ja pintado, nao renderiza
 
 
 def test_broker_segue_o_stem_da_conexao_mais_recente():
