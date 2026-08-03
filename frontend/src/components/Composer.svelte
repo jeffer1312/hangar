@@ -164,7 +164,12 @@
   let recChunks: Blob[] = [];
   let recStream: MediaStream | undefined;
   let recFailed = false;   // marcado no onerror -> onstop nao anexa audio truncado
-  let starting = false;    // guarda reentrancia entre o tap e o await getUserMedia resolver
+  let starting = $state(false);    // guarda reentrancia entre o tap e o await getUserMedia resolver —
+                                   // $state porque o hint "preparando microfone…" aparece nesse intervalo
+  // Geracao da tentativa de gravacao: cancelar a espera (2o tap) ou uma tentativa nova incrementa —
+  // uma promise de getUserMedia que resolve tarde compara a geracao dela e se descarta (ver toggleRecord).
+  let recGeracao = 0;
+  let destroyed = false;         // onDestroy: um getUserMedia em voo nao pode ligar o mic num componente morto
   // Feedback da gravacao: timer (segundos) + waveform (nivel de voz por barra, deslizante).
   let recSeconds = $state(0);
   let recBars = $state<number[]>([]);
@@ -772,8 +777,14 @@
       pararPorMotivo('botao');
       return;
     }
-    if (starting || transcribing) return;   // nao regravar durante o start em voo nem a transcricao
+    // 2o tap/atalho DURANTE o "preparando…" CANCELA a espera: sem isto, um prompt de permissao
+    // ignorado (a promise do getUserMedia nunca resolve nem rejeita) prendia o hint na tela e o
+    // botao morria — o toque seguinte era engolido calado pelo guard de reentrancia. A promise em
+    // voo nao da pra abortar; a geracao abaixo invalida o que ela resolver depois.
+    if (starting) { recGeracao++; starting = false; return; }
+    if (transcribing) return;   // nao regravar durante a transcricao
     starting = true;
+    const geracao = ++recGeracao;
     recError = '';
     recFailed = false;
     recBars = [];
@@ -788,12 +799,23 @@
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err) {
+      // Reject TARDIO de uma tentativa morta (cancelada ou componente destruido): silencio total —
+      // zerar starting aqui mataria o hint de uma tentativa NOVA em voo, e o recError seria um
+      // erro de algo que o usuario deliberadamente cancelou.
+      if (destroyed || geracao !== recGeracao) return;
       console.error('getUserMedia falhou', err);
       const name = err instanceof DOMException ? err.name : '';
       recError = name === 'NotFoundError' ? 'Nenhum microfone encontrado'
         : name === 'NotReadableError' ? 'Microfone em uso por outro app'
         : 'Sem acesso ao microfone';
       starting = false;
+      return;
+    }
+    // A promise resolveu TARDE: ou o usuario cancelou a espera (2o tap), ou trocou de sessao e
+    // este Composer morreu no meio do await. Sem este guard, a stream abria o mic num componente
+    // destruido/sem UI — gravador e interval vazavam pra sempre, sem ninguem pra chamar stop().
+    if (destroyed || geracao !== recGeracao) {
+      stream.getTracks().forEach((t) => t.stop());
       return;
     }
     recStream = stream;
@@ -824,6 +846,7 @@
   }
 
   onDestroy(teardownRecording);
+  onDestroy(() => { destroyed = true; });   // getUserMedia em voo se descarta ao resolver (toggleRecord)
   onDestroy(limparUndo);   // troca de sessao desmonta o Composer -> nao deixa o setTimeout solto
   onDestroy(cancelarContagem);   // troca de sessao desmonta o Composer -> nao deixa o setInterval solto
   // Fecha o audioCtx incondicionalmente no unmount: teardownRecording() so fecha quando !maosLivres
@@ -1057,6 +1080,16 @@
       aria-label="Mensagem"
     ></textarea>
 
+    {#if starting && !recording}
+      <!-- O getUserMedia leva 300-800ms pra acordar o mic — sem este aviso, quem aperta Ctrl+Espaco
+           e ja sai falando nao ve nada acontecer e perde o comeco da frase. Quando o recorder
+           dispara, este hint vira o de "gravando" (timer + waveform) logo abaixo: o timer e o
+           sinal de "pode falar". -->
+      <div class="rec-hint" role="status" aria-label="Preparando microfone">
+        <span class="rec-dot rec-dot--waiting" aria-hidden="true"></span>
+        <span class="rec-time">preparando microfone…</span>
+      </div>
+    {/if}
     {#if recording}
       <div class="rec-hint" role="status" aria-label="Gravando áudio">
         <span class="rec-dot" aria-hidden="true"></span>
@@ -1140,7 +1173,7 @@
           class="attach-btn mic-btn"
           class:mic-btn--recording={recording}
           onclick={toggleRecord}
-          aria-label={recording ? 'Parar gravação' : 'Gravar áudio'}
+          aria-label={recording ? 'Parar gravação' : starting ? 'Cancelar preparação do microfone' : 'Gravar áudio'}
         >
           {#if recording}<IconInterrupt size={18} />{:else}<IconMic size={20} />{/if}
         </button>
@@ -1603,6 +1636,9 @@
     background: var(--error);
     animation: mic-pulse 1.2s var(--ease-out) infinite;
   }
+  /* "preparando microfone…": ambar em vez do vermelho de gravando — espera, ainda nao e hora de
+     falar. Mesmo pulso, so a cor muda (o vermelho ja significa "no ar" nos outros dois hints). */
+  .rec-dot--waiting { background: var(--warning, #e0a030); }
   .rec-time {
     font-size: var(--text-xs);
     font-variant-numeric: tabular-nums;

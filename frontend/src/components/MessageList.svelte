@@ -338,6 +338,11 @@
 <style>
   .message-list {
     flex: 1;
+    /* flex column + margin-top:auto no inner = conversa CURTA nasce colada em cima do composer e
+       vai subindo (padrao de chat), em vez de nascer no topo com um buraco embaixo. Com conteudo
+       longo o margin auto colapsa pra 0 e o scroll segue igual — so muda o caso "pouca mensagem". */
+    display: flex;
+    flex-direction: column;
     overflow-y: scroll;
     /* GUARDA: no mobile NUNCA pode rolar na horizontal (todo o conteudo desloca). Qualquer elemento
        largo (chip de arquivo, token longo) fica clipado aqui; code-block tem seu proprio overflow-x
@@ -366,7 +371,8 @@
     max-width: 600px;
     width: 100%;
     min-width: 0;       /* permite os filhos encolherem em vez de empurrar a largura */
-    margin: 0 auto;
+    /* auto em cima (a ancora, ver .message-list), auto nas laterais (centraliza a coluna), 0 embaixo. */
+    margin: auto auto 0;
   }
 
   /* Desktop: coluna de leitura fixa (~920px), como Claude/ChatGPT/Gemini (~740-920). Linha curta
@@ -446,7 +452,9 @@
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
     padding: var(--space-4);
-    margin-block: var(--space-2);
+    /* margin-BOTTOM so: margin-block aqui (especificidade maior que a regra base) sobrescrevia o
+       margin-top:auto da ancora e a conversa curta voltava a nascer no topo so neste modo. */
+    margin-bottom: var(--space-2);
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
   }
 
