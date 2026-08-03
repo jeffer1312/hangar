@@ -326,6 +326,20 @@ def _count_steps(path: str) -> int:
     return len(_STEP_RE.findall(raw))
 
 
+def plano_escondido(cwd: str | None) -> bool:
+    """O repo em `cwd` esta com o pin sentinela (PIN_NONE) ligado. NUNCA levanta.
+
+    Existe porque `plan_progress` devolve None tanto pra "nao ha plano" quanto pra "o usuario
+    escondeu" — e a UI PRECISA distinguir: o seletor que desfaz a escolha mora no painel do plano,
+    e o painel so e montado quando ha `plan_name`. Sem este sinal, escolher "nenhum" desmontava o
+    proprio controle de voltar, e a unica saida era apagar `.git/cp-plan-pin` na mao."""
+    try:
+        root = _plans_dir(cwd) if cwd else None
+        return root is not None and read_pin(root) == PIN_NONE
+    except Exception:
+        return False
+
+
 def plan_progress(cwd: str | None) -> PlanProgress | None:
     """Progresso do plano ativo do repo em `cwd`, ou None. NUNCA levanta."""
     try:

@@ -24,7 +24,7 @@ from app.askquestion import clear_pending_askq
 from app.state import classify, _live_spinner, rate_limit_reset, status_line as _pane_status
 from app.statusline import read as _sidecar_status
 from app.hook_state import hook_state
-from app.planprog import plan_progress
+from app.planprog import plan_progress, plano_escondido
 # As funcoes de /proc vivem no procinfo.py — e o unico ponto do backend preso ao Linux.
 # Importadas por NOME (nao `procinfo._cmdline(...)`) de proposito: os testes fazem
 # monkeypatch delas neste modulo, e o binding local preserva isso.
@@ -74,6 +74,9 @@ def _decorate_plan(info) -> None:
         _log.warning("decorate_plan falhou pra %r", getattr(info, "name", "?"), exc_info=True)
         return
     if p is None:
+        # Sem plano tem DOIS motivos: nao existe, ou o usuario escondeu. So o 2o mantem o painel
+        # (e o seletor que desfaz) na tela. Custo: um read do pin, so pra sessao sem plano.
+        info.plan_hidden = plano_escondido(info.cwd) or None
         return
     info.plan_name = p.name
     info.plan_task = p.task_idx

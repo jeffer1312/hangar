@@ -108,6 +108,10 @@ class SessionInfo(BaseModel):
     # plan_task/plan_task_total mentiria toda vez que uma Task anterior ficasse com step pendente
     # (acontece sempre que se pula um step de verificacao manual). Sao 3-8 pares.
     plan_tasks: Optional[list[tuple[int, int]]] = None
+    # O usuario escolheu "nenhum plano" (pin sentinela). Sem plano E sem isto sao estados
+    # diferentes: o seletor que desfaz a escolha mora no painel do plano, que so e montado quando
+    # ha plan_name — este campo e o que o mantem na tela pra dar o caminho de volta.
+    plan_hidden: Optional[bool] = None
 
 
 class ChatEvent(BaseModel):

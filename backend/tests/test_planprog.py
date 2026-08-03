@@ -325,6 +325,20 @@ def test_pin_NONE_apaga_o_plano_e_nao_cai_no_automatico(tmp_path):
     assert plan_progress(str(tmp_path)).name == "pendente"
 
 
+def test_plano_escondido_distingue_sem_plano_de_escondido(tmp_path):
+    # Os dois casos devolvem plan_progress=None; so este sinal separa. Sem ele o painel do plano
+    # desmontava junto com a escolha e levava embora o seletor que a desfaz.
+    root = _tres_planos(tmp_path)
+    assert planprog.plano_escondido(str(tmp_path)) is False
+    planprog.write_pin(root, planprog.PIN_NONE)
+    assert planprog.plano_escondido(str(tmp_path)) is True
+    planprog.write_pin(root, None)
+    assert planprog.plano_escondido(str(tmp_path)) is False
+    # cwd sem pasta de planos nao pode levantar nem virar True
+    assert planprog.plano_escondido(str(tmp_path / "nao-existe")) is False
+    assert planprog.plano_escondido(None) is False
+
+
 def test_pin_mora_no_git_e_nao_suja_a_pasta_de_planos(tmp_path):
     # Gravar na pasta de planos apareceria no `git status` de quem versiona os planos. O `.git/`
     # nunca e rastreado e some junto com o clone — comportamento certo pra preferencia local.

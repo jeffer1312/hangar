@@ -194,7 +194,9 @@ def _list_sig(infos) -> str:
     # resumir um pane cujo motor sumiu do engines.json (kimi -> None) nao reemite a lista e o chip
     # ⚙ kimi fica preso, calado.
     # Sem o plan_name aqui, trocar do plano A pro B com o mesmo 9/17 nao re-emite e o chip fica
-    # preso no plano errado — mesmo bug do engine.
+    # preso no plano errado — mesmo bug do engine. plan_hidden pela MESMA razao: escolher "nenhum"
+    # zera todos os outros campos de plano, mas a lista precisa re-emitir pro painel continuar
+    # montado (com o seletor que desfaz a escolha) em vez de sumir.
     # plan_tasks/plan_task/plan_task_total/plan_complete tambem entram: um step desmarcado na
     # Task 1 e outro marcado na Task 2 no mesmo write pode deixar done/total liquidos (e plan_name)
     # identicos e ainda assim mudar a distribuicao por Task — sem isto a barra segmentada e a
@@ -209,7 +211,8 @@ def _list_sig(infos) -> str:
           getattr(i, "plan_total", None),
           getattr(i, "plan_task", None), getattr(i, "plan_task_total", None),
           getattr(i, "plan_complete", None),
-          tuple(map(tuple, getattr(i, "plan_tasks", None) or [])))
+          tuple(map(tuple, getattr(i, "plan_tasks", None) or [])),
+          getattr(i, "plan_hidden", None))
          for i in infos],
         ensure_ascii=False,
     )

@@ -72,6 +72,9 @@ export interface SessionInfo {
   plan_total?: number | null;
   plan_complete?: boolean | null;
   plan_tasks?: [number, number][] | null;   // (done,total) por Task — alimenta a barra segmentada
+  // true = o usuário escolheu "nenhum plano". Distinto de "não há plano": mantém o painel montado
+  // (é lá que mora o seletor pra desfazer a escolha).
+  plan_hidden?: boolean | null;
   // Motor de modelo desta sessão (nome no engines.json). null/undefined = conta Anthropic.
   engine?: string | null;
 }
