@@ -89,6 +89,11 @@ _sticky: dict[str, str] = {}
 # o _discover ja e chaveado. Arquivo ao lado dos planos, no repo — segue o repo, nao o navegador.
 PIN_FILE = "cp-plan-pin"
 
+# "nao quero plano nenhum" e um pin como os outros, nao um terceiro arquivo: e a mesma pergunta
+# ("qual plano este repo mostra?") com a resposta "nenhum". O `!` nao pode abrir um stem valido do
+# seletor (os planos sao AAAA-MM-DD-*), entao nao ha como um .md real colidir com o sentinela.
+PIN_NONE = "!none"
+
 
 def _pin_path(root: str) -> str:
     """Dentro do `.git/` do repo dono da pasta de planos. Motivo: `.git/` nunca e rastreado, entao o
@@ -334,6 +339,8 @@ def plan_progress(cwd: str | None) -> PlanProgress | None:
         # problema que o pin resolve (planos completos saem da eleicao, entao terminar um devolvia o
         # painel pro plano velho e pendente que sobrou).
         pin = read_pin(root)
+        if pin == PIN_NONE:
+            return None   # painel/chip/barra desligados por escolha: nem a eleicao automatica roda
         if pin:
             pinned = os.path.join(root, pin + ".md")
             try:

@@ -12,9 +12,11 @@
   }
   let { tools, toolResults, sessionName, animate = true }: Props = $props();
 
-  // Colapsado por padrao: o burst vira uma ARVORE — cabecalho com a contagem + uma linha por
-  // chamada (bolinha, argumento). Tap expande e troca a arvore pelos ToolCards completos, cada um
-  // com seu desfecho e sua saida.
+  // Colapsado por padrao: o burst vira UMA linha — cabecalho com a contagem. A arvore de uma linha
+  // por chamada saiu: 22 Bash viravam 22 linhas de scroll, e o argumento que ela mostrava e o mesmo
+  // que o ToolCard ja poe na linha 1. Tap abre os ToolCards completos (cada um com o proprio tap
+  // pra saida). Enquanto o burst roda, a chamada VIVA aparece sob o cabecalho — sem ela o painel
+  // diria "3 concluidos" e esconderia o que esta acontecendo agora.
   let expanded = $state(false);
 
   const resultOf = (t: ChatEvent) => toolResults.get(t.tool_use_id ?? '') ?? null;
@@ -26,6 +28,12 @@
   // Todas do mesmo tipo -> o nome ja esta no cabecalho e some de cada filho (o que a arvore do Pi
   // faz); misturadas -> cada filho carrega o proprio nome, senao a linha vira um path sem dono.
   const mixed = $derived(label === 'Ferramentas');
+
+  // A chamada viva: a ULTIMA pendente (a mais nova), como o "$ …" que o Claude mostra sob o resumo.
+  const running = $derived.by(() => {
+    for (let i = tools.length - 1; i >= 0; i--) if (phases[i] === 'pending') return { t: tools[i], i };
+    return null;
+  });
 </script>
 
 <!-- Uma ferramenta so nao e grupo: "Executou 1 ferramenta ›" esconderia a query atras de um tap a
@@ -61,17 +69,15 @@
         <ToolCard event={t} result={resultOf(t)} {sessionName} animate={false} />
       {/each}
     </div>
-  {:else}
-    <!-- Arvore colapsada: os "├"/"└" sao CSS (tronco + bracinho), nao box-drawing — em fonte de
-         sistema o glifo cai em fallback e desalinha da bolinha. -->
+  {:else if running}
+    <!-- Uma linha so: a chamada em curso. O "└" e CSS (tronco + bracinho), nao box-drawing — em
+         fonte de sistema o glifo cai em fallback e desalinha da bolinha. -->
     <div class="tg-tree">
-      {#each tools as t, i (t.id)}
-        <div class="tg-child" class:last={i === tools.length - 1}>
-          <span class="tg-dot tg-dot--child" class:pending={phases[i] === 'pending'} data-phase={phases[i]} aria-hidden="true"></span>
-          {#if mixed}<span class="tg-cname">{t.tool_name ?? 'Tool'}</span>{/if}
-          <span class="tg-arg">{summarizeToolInput(t.tool_name, t.tool_input)}</span>
-        </div>
-      {/each}
+      <div class="tg-child">
+        <span class="tg-dot tg-dot--child pending" data-phase="pending" aria-hidden="true"></span>
+        {#if mixed}<span class="tg-cname">{running.t.tool_name ?? 'Tool'}</span>{/if}
+        <span class="tg-arg">{summarizeToolInput(running.t.tool_name, running.t.tool_input)}</span>
+      </div>
     </div>
   {/if}
 </div>
@@ -138,31 +144,18 @@
     font-size: var(--text-xs);
     line-height: 1.6;
   }
-  /* Tronco vertical + bracinho na altura da bolinha do filho = "├". No ultimo, o tronco para na
-     metade = "└". */
+  /* Tronco vertical que para na metade e vira pra direita = "└". */
   .tg-child::before {
     content: '';
     position: absolute;
     left: 2px;
     top: 0;
-    bottom: 0;
+    bottom: 50%;
     width: 6px;
     border-left: 1px solid var(--border-default);
-  }
-  .tg-child::after {
-    content: '';
-    position: absolute;
-    left: 2px;
-    top: 50%;
-    width: 6px;
-    border-bottom: 1px solid var(--border-default);
-  }
-  .tg-child.last::before {
-    bottom: 50%;
     border-bottom: 1px solid var(--border-default);
     border-bottom-left-radius: 3px;
   }
-  .tg-child.last::after { display: none; }
 
   .tg-dot--child { width: 5px; height: 5px; }
 

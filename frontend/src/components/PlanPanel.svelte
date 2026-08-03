@@ -16,6 +16,19 @@
   let { session, detail, loading = false, error = false }: Props = $props();
   let showMd = $state(false);
 
+  // Mesmo sentinela do backend (planprog.PIN_NONE): "nenhum" e gravado como pin.
+  const PIN_NONE = '!none';
+
+  // Lista de Tasks fechavel: num plano de 6 Tasks a Task atual sozinha ja passa de 10 linhas, e o
+  // painel come a tela mesmo com tudo pronto. Preferencia GLOBAL (nao por sessao): quem fecha quer
+  // o painel enxuto sempre, nao naquele plano. localStorage direto — uma chave nao merece store.
+  const CHAVE = 'cp_plan_tasks';
+  let showTasks = $state(localStorage.getItem(CHAVE) !== '0');
+  function alternarTasks() {
+    showTasks = !showTasks;
+    localStorage.setItem(CHAVE, showTasks ? '1' : '0');
+  }
+
   const current = $derived(detail ? detail.task - 1 : -1);
 
   // Seletor de plano. Carrega ao montar, NÃO no foco: o `pinned` vem junto da lista, e sem ele o
@@ -69,6 +82,9 @@
         <!-- Sem pin, o nome do plano eleito vai JUNTO: é o rótulo do painel, e some se a opção
              dissesse só "automático". Com pin, quem aparece é a opção do plano fixado. -->
         <option value="">automático{session.plan_name ? ` · ${session.plan_name}` : ''}</option>
+        <!-- "nenhum" e uma escolha de verdade, nao ausencia de escolha: sem esta opcao a eleicao
+             automatica sempre reacende um plano, e nao havia como deixar o painel/chip apagados. -->
+        <option value={PIN_NONE}>nenhum — esconder o plano</option>
         {#each plans as p (p.stem)}
           <option value={p.stem}>{p.name} · {p.done}/{p.total}{p.complete ? ' ✓' : ''}</option>
         {/each}
@@ -82,9 +98,18 @@
   </div>
   {#if pickerErr}<p class="muted err">{pickerErr}</p>{/if}
 
-  <PlanBar {session} />
+  <!-- A barra E o botao de abrir/fechar as Tasks: ela ja resume o progresso, entao e o lugar
+       obvio pra tocar. O chevron a direita e o que revela que ali tem clique. -->
+  <button class="bar-btn" onclick={alternarTasks} aria-expanded={showTasks}
+    aria-label={showTasks ? 'Esconder as tasks' : 'Mostrar as tasks'}
+    title={showTasks ? 'Esconder as tasks' : 'Mostrar as tasks'}>
+    <span class="bar-wrap"><PlanBar {session} /></span>
+    <span class="chev" class:open={showTasks}>›</span>
+  </button>
 
-  {#if loading && !detail}
+  {#if !showTasks}
+    <!-- nada: o usuario fechou -->
+  {:else if loading && !detail}
     <p class="muted">carregando o plano…</p>
   {:else if detail}
     <ul class="tasks">
@@ -109,13 +134,14 @@
         {/if}
       {/each}
     </ul>
-
-    {#if showMd}
-      <!-- Markdown NUNCA aparece cru (regra do CLAUDE.md): um <pre> com ** e ## à mostra é bug. -->
-      <div class="md">{@html renderMarkdown(detail.markdown)}</div>
-    {/if}
   {:else if error}
     <p class="muted">não deu pra ler o plano</p>
+  {/if}
+
+  <!-- Fora do gate das Tasks: fechar a lista nao pode desarmar o `›` do cabecalho, que e outro
+       controle. Markdown NUNCA aparece cru (regra do CLAUDE.md). -->
+  {#if showMd && detail}
+    <div class="md">{@html renderMarkdown(detail.markdown)}</div>
   {/if}
 </div>
 
@@ -153,6 +179,23 @@
     pointer-events: none;   /* o clique tem que chegar no select */
   }
   .chev-btn { flex-shrink: 0; padding: 0; border: 0; background: transparent; cursor: pointer; }
+
+  /* Botao SEM superficie propria: quem carrega o material aqui e o painel (regra da transparencia
+     no CLAUDE.md) — um bg-elevated cru viraria retangulo chapado sobre o papel de parede. */
+  .bar-btn {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    width: 100%;
+    padding: 2px 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    text-align: left;
+  }
+  .bar-wrap { flex: 1; min-width: 0; }
+  .bar-btn .chev { transform: rotate(0deg); }
+  .bar-btn .chev.open { transform: rotate(90deg); }
   .err { color: var(--error); }
   .chev {
     flex-shrink: 0;

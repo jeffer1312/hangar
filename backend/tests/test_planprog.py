@@ -315,6 +315,16 @@ def test_soltar_o_pin_volta_pro_automatico(tmp_path):
     assert plan_progress(str(tmp_path)).name == "pendente"
 
 
+def test_pin_NONE_apaga_o_plano_e_nao_cai_no_automatico(tmp_path):
+    # "nenhum" tem que vencer a eleicao automatica — se caisse nela, o painel reacenderia sozinho
+    # no plano pendente e nao haveria como desligar.
+    root = _tres_planos(tmp_path)
+    planprog.write_pin(root, planprog.PIN_NONE)
+    assert plan_progress(str(tmp_path)) is None
+    planprog.write_pin(root, None)
+    assert plan_progress(str(tmp_path)).name == "pendente"
+
+
 def test_pin_mora_no_git_e_nao_suja_a_pasta_de_planos(tmp_path):
     # Gravar na pasta de planos apareceria no `git status` de quem versiona os planos. O `.git/`
     # nunca e rastreado e some junto com o clone — comportamento certo pra preferencia local.
