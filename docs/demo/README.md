@@ -3,9 +3,10 @@
 Storyboard público para as capturas de tela e o vídeo de demonstração. Esta página descreve o que
 será mostrado sem depender de uma conta, sessão ou custo reais.
 
-> **Dados de demonstração:** todas as mensagens, nomes de sessões, perguntas, modelos, valores,
-> estados e imagens usados nas capturas e no vídeo são fictícios. Os valores da tela de custos são
-> sintéticos e não representam uma cobrança, fatura, conta ou consumo real.
+> **Dados de demonstração:** mensagens, nomes de sessões, perguntas, estados e custos usados nas
+> capturas e no vídeo são sintéticos. Alguns rótulos de provedor/modelo são identificadores públicos
+> representativos; eles não vêm da conta do usuário. Os valores da tela de custos não representam
+> uma cobrança, fatura, conta ou consumo real.
 
 ## Storyboard
 
@@ -23,8 +24,8 @@ será mostrado sem depender de uma conta, sessão ou custo reais.
 
 - **Objetivo:** mostrar que uma pergunta interativa pode ser respondida pelo celular.
 - **Ação:** exibir a pergunta fictícia `Qual estilo de demo você prefere?` com as opções
-  `Conciso` e `Detalhado`; tocar em `Conciso`.
-- **Captura:** o stepper de pergunta nativo antes da escolha e a confirmação da opção escolhida.
+  `Conciso` e `Detalhado`; capturar antes da escolha e depois responder `Conciso` uma vez.
+- **Captura:** o stepper de pergunta nativo antes da escolha, com opções tocáveis visíveis.
 - **Mensagem para o leitor:** opções interativas aparecem como controles tocáveis, em vez de exigir
   a navegação no TUI.
 - **Dados:** pergunta, opções e resposta inventadas; nenhuma escolha real deve aparecer.
@@ -32,8 +33,9 @@ será mostrado sem depender de uma conta, sessão ou custo reais.
 ### 3. Board no desktop — acompanhar sessões diferentes
 
 - **Objetivo:** mostrar a visão agregada das sessões no desktop.
-- **Ação:** abrir o board com três cards fictícios: uma sessão **Claude** trabalhando, uma
-  sessão **Pi** pronta e uma sessão **Codex** pronta.
+- **Ação:** abrir o board com três cards principais: uma sessão **Claude** trabalhando, uma
+  sessão **Pi** pronta e uma sessão **Codex** pronta; um card adicional de provedor pode aparecer
+  como contexto da demonstração.
 - **Captura:** as três colunas por estado, com os nomes Claude, Pi e Codex claramente visíveis e
   mini-conversas curtas nos cards.
 - **Mensagem para o leitor:** uma única visão permite identificar rapidamente qual sessão precisa de
@@ -61,8 +63,8 @@ será mostrado sem depender de uma conta, sessão ou custo reais.
   modelos demonstrativos visíveis nas capturas GPT/OpenAI e OpenRouter free.
 - **Mensagem para o leitor:** cada sessão Pi pode escolher seu modelo e nível de raciocínio sem
   depender de uma lista fixa no app.
-- **Dados:** contas, ids, modelos e seleções fictícios; não usar chaves, tokens ou endpoints
-  privados.
+- **Dados:** contas e seleções de demonstração; os rótulos de modelo são públicos e
+  representativos, sem chaves, tokens ou endpoints privados.
 
 ### 6. Claude engine — configurar um motor alternativo
 
@@ -122,6 +124,7 @@ será mostrado sem depender de uma conta, sessão ou custo reais.
 | `mobile-chat` | `docs/img/mobile-chat-demo.png` | 1 | prompt, resposta e estado de acompanhamento |
 | `ask-question` | `docs/img/mobile-ask-question.png` | 2 | pergunta fictícia e opções tocáveis |
 | `desktop-board` | `docs/img/desktop-board-demo.png` | 3 | Claude, Pi e Codex em estados distintos |
+| `desktop-codex` | `docs/img/desktop-codex-demo.png` | 3 | chat Codex e painel de contexto |
 | `desktop-canvas` | `docs/img/desktop-canvas-demo.png` | 4 | tiles reorganizados e com tamanhos variados |
 | `pi-model-picker` | `docs/img/desktop-models-demo.png`, `docs/img/desktop-openrouter-free-demo.png` | 5 | GPT/OpenAI, OpenRouter free e nível de raciocínio |
 | `claude-engine` | `docs/img/desktop-engines-demo.png` | 6 | motor alternativo e chave mascarada |
@@ -129,8 +132,8 @@ será mostrado sem depender de uma conta, sessão ou custo reais.
 | `costs-demo` | `docs/img/desktop-costs-demo.png` | 8 | `Demo data` e valores sintéticos |
 | `demo-video` | `docs/demo/claude-cockpit-overview.webm` | 9 | cenas de chat, board, Pi, modelos e custos em 40 s |
 
-Os arquivos acima são os artefatos públicos atuais. Eles foram revisados para conter apenas dados
-sintéticos; o vídeo é uma montagem curta das capturas aprovadas.
+Os arquivos acima são os artefatos públicos atuais. Eles foram revisados para não conter dados
+pessoais ou credenciais; o vídeo é uma montagem curta das capturas aprovadas.
 
 ## Contrato de sanitização
 
