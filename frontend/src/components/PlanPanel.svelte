@@ -108,13 +108,16 @@
 
   <!-- A barra E o botao de abrir/fechar as Tasks: ela ja resume o progresso, entao e o lugar
        obvio pra tocar. O chevron a direita e o que revela que ali tem clique.
-       So quando ha barra pra clicar: com "nenhum plano" escolhido (ou plano ainda sem step
-       contado) o PlanBar nao desenha nada, e o botao virava um chevron boiando sozinho. -->
-  {#if temBarra}
+       Com "nenhum plano" escolhido nao ha barra NEM lista — o botao sai da tela inteiro. Mas plano
+       com Task e nenhum step contado tem lista sem barra: ali o botao fica, com rotulo de texto no
+       lugar dela. Gatear so por `temBarra` deixava a lista na tela sem nada que a feche. -->
+  {#if temBarra || detail}
   <button class="bar-btn" onclick={alternarTasks} aria-expanded={showTasks}
     aria-label={showTasks ? 'Esconder as tasks' : 'Mostrar as tasks'}
     title={showTasks ? 'Esconder as tasks' : 'Mostrar as tasks'}>
-    <span class="bar-wrap"><PlanBar {session} /></span>
+    <span class="bar-wrap">
+      {#if temBarra}<PlanBar {session} />{:else}<span class="bar-rot">Tasks</span>{/if}
+    </span>
     <span class="chev" class:open={showTasks}>›</span>
   </button>
   {/if}
@@ -206,6 +209,7 @@
     text-align: left;
   }
   .bar-wrap { flex: 1; min-width: 0; }
+  .bar-rot { font-size: var(--text-xs); color: var(--text-muted); }
   .err { color: var(--error); }
   .chev {
     flex-shrink: 0;

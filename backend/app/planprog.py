@@ -337,6 +337,10 @@ def plano_escondido(cwd: str | None) -> bool:
         root = _plans_dir(cwd) if cwd else None
         return root is not None and read_pin(root) == PIN_NONE
     except Exception:
+        # Loga como as vizinhas: read_pin ja nao propaga, entao chegar aqui e bug de verdade — e o
+        # False silencioso reproduz EXATAMENTE o sintoma que esta funcao existe pra impedir (painel
+        # some e a unica saida vira apagar o pin na mao), sem deixar rastro pra quem for investigar.
+        _log.warning("plano_escondido falhou pra cwd=%r", cwd, exc_info=True)
         return False
 
 
