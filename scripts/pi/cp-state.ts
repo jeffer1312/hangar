@@ -124,6 +124,70 @@ function publishModels(pi: ExtensionAPI, ctx: any): void {
   });
 }
 
+// ── previa AO VIVO do texto do assistente (streaming) ──────────────────────────────────────────
+// POR QUE: o backend lia a previa RASPANDO o pane do tmux (preview.py) — texto ja pintado, cortado
+// pela largura da janela, misturado com o desenho da TUI. Toda regra de la ("isto e prosa ou e
+// cabecalho de ferramenta? spinner? painel de Todos?") e heuristica que quebra quando o Pi muda um
+// traco: em 03/08/2026 um quadro do spinner em `*` ASCII fez a previa engolir a linha de status E o
+// painel de tarefas inteiro. Aqui o texto sai do proprio evento de streaming — sem adivinhacao.
+//
+// Publica o ULTIMO bloco de texto (nao a concatenacao): e a unidade que o transcript grava como um
+// `assistant_msg` (adapters/pi/transcript.py:97), e e ela que a bolha real substitui quando o bloco
+// fecha. Mandando a soma dos blocos, o supressor de "previa ja commitada" (sse.preview_is_committed)
+// veria o commitado como PREFIXO da previa e engoliria tudo — previa nenhuma.
+//
+// O pane continua como plano B do lado do backend: sessao Pi aberta ANTES desta extensao existir
+// (ou sem /reload) nao publica nada, e previa nenhuma seria pior que previa raspada.
+const previewDir = path.join(base, ".claude-pocket-preview");
+
+// Coalescencia: `message_update` dispara por TOKEN. Escrever a cada um seria um write por caractere
+// num arquivo que o backend le a cada 150ms — trabalho jogado fora dos dois lados. Guarda o ultimo
+// texto e grava no maximo a cada PREVIEW_MS (o ultimo sempre vence; full-replace, igual ao slot do
+// SSE). `unref()` porque um timer pendente NAO pode segurar o processo do Pi vivo na saida.
+const PREVIEW_MS = 150;
+let previewTimer: ReturnType<typeof setTimeout> | null = null;
+let previewPendente: { file: string; text: string } | null = null;
+let previewUltimo = "";
+
+function textoEmVoo(message: any): string {
+  if (message?.role !== "assistant") return "";
+  const blocos = Array.isArray(message?.content) ? message.content : [];
+  let ultimo = "";
+  for (const b of blocos) {
+    if (b?.type === "text" && typeof b.text === "string") ultimo = b.text;
+  }
+  return ultimo.trim();
+}
+
+function gravaPreview(file: string, text: string): void {
+  guard("publishPreview", () => {
+    writeAtomic(path.join(previewDir, `${path.basename(file, ".jsonl")}.json`),
+                { text, ts: Date.now() / 1000 });
+  });
+}
+
+function publishPreview(ctx: any, text: string, agora: boolean): void {
+  const file = sessionFile(ctx);
+  if (!file) return;                       // --no-session: nao ha chave pro backend casar
+  if (text === previewUltimo && !agora) return;
+  previewUltimo = text;
+  if (agora) {
+    if (previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
+    previewPendente = null;
+    gravaPreview(file, text);
+    return;
+  }
+  previewPendente = { file, text };
+  if (previewTimer) return;                // ja ha uma escrita agendada: o ultimo texto vence nela
+  previewTimer = setTimeout(() => {
+    previewTimer = null;
+    const p = previewPendente;
+    previewPendente = null;
+    if (p) gravaPreview(p.file, p.text);
+  }, PREVIEW_MS);
+  previewTimer.unref?.();
+}
+
 // ── entrega de mensagem vinda do app, sem passar pela TUI ──────────────────────────────────────
 // POR QUE: o backend entregava digitando no tmux e conferindo pela tela. Medido em 02/08/2026, o
 // aviso de subagente do Pi dentro da caixa do composer fazia o guarda adiar pra sempre, e a
@@ -319,8 +383,13 @@ export default function (pi: ExtensionAPI) {
 
   // NOVO: fecha de propósito ao morrer. Sem isto, um /reload deixaria o backend achando que ainda
   // tem alguém lendo até o prazo estourar, e a mensagem daquele intervalo esperaria à toa.
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (_e: any, ctx: any) => {
     desligando = true;
+    // Zera a previa da sessao que SAI. "session_shutdown" dispara em /new, /fork, /resume e /tree —
+    // inclusive com o turno rodando —, e nesse caminho nem "message_end" nem "agent_settled" chegam:
+    // o sidecar ficaria com o ultimo texto em voo, e retomar essa sessao dentro dos 10min do
+    // _PREVIEW_MAX_AGE mostraria no app um texto "sendo digitado" por uma sessao parada.
+    publishPreview(ctx, "", true);
     guard("fechar", () => socket?.close());
   });
   pi.on("agent_start", async (_e: any, ctx: any) => {
@@ -328,7 +397,19 @@ export default function (pi: ExtensionAPI) {
     trabalhando = true;
     eventosAgente.emit("agent_start");   // corrobora entrega pendente — ver bloco da entrega acima
   });
-  pi.on("agent_settled", async (_e: any, ctx: any) => { publishState("idle", ctx); trabalhando = false; });
+  pi.on("agent_settled", async (_e: any, ctx: any) => {
+    publishState("idle", ctx); trabalhando = false;
+    publishPreview(ctx, "", true);   // turno fechou: nada em voo (rede pro message_end perdido)
+  });
+
+  // Previa ao vivo. `message_update` e o unico que traz o texto parcial; `message_end` fecha o bloco
+  // (a bolha real vem do transcript, entao a previa TEM que zerar aqui — senao o texto ficaria
+  // duplicado por um instante, uma vez na previa e outra na bolha).
+  pi.on("message_update", async (e: any, ctx: any) => { publishPreview(ctx, textoEmVoo(e?.message), false); });
+  pi.on("message_end", async (e: any, ctx: any) => {
+    if (e?.message?.role !== "assistant") return;
+    publishPreview(ctx, "", true);
+  });
   // Republica tambem quando a troca vem do TUI (usuario no teclado, Ctrl+P, /model, /settings) —
   // senao o app mostraria o modelo velho ate a proxima sessao.
   pi.on("model_select", async (_e: any, ctx: any) => { publishModels(pi, ctx); });

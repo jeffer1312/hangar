@@ -352,7 +352,12 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
     # publica (get/subscribe) -> o resto do pump (preview_pump/_enqueue_preview/_already_committed)
     # fica IGUAL pras duas fontes. Pi tambem e pane -> mesmo PreviewBroker, mas o provider VAI
     # JUNTO: o chrome que fecha o bloco em voo e outro (caixa do composer), ver preview.py.
-    broker = CodexPreviewSource.get(name) if provider == "codex" else PreviewBroker.get(name, provider)
+    # stem_get: chave do sidecar de previa (o agente publica o texto em voo por conta propria — hoje
+    # so a extensao do Pi). Fecha sobre `current_jsonl` pelo mesmo motivo do monitor: o /clear troca
+    # o transcript, e um stem congelado leria o marcador da sessao anterior.
+    broker = (CodexPreviewSource.get(name) if provider == "codex"
+              else PreviewBroker.get(name, provider,
+                                     lambda: Path(current_jsonl).stem if current_jsonl else None))
     # Inicio da sessao atual: poda entradas de fila pre-/clear no live SSE (mesma regra do history).
     start_ts = _transcript_start_ts(jsonl)
     queue: asyncio.Queue = asyncio.Queue()

@@ -234,26 +234,36 @@
         {@const ev = item.ev}
         {#if ev.kind === 'user_msg' && (ev.text || ev.image_count)}
         {@const img = ev.text ? parseImageMessage(ev.text) : null}
+        <!-- `img` com filenames VAZIO acontece quando o agente absorveu a unica foto como anexo real
+             (some o path, fica o marcador): ali a legenda limpa ainda serve, mas uma ImageBubble sem
+             nenhuma miniatura nao — por isso os ramos abaixo exigem `imgFotos`, e so o ramo do
+             image_count (que traz a foto do transcript) usa o `img` sozinho. -->
+        {@const imgFotos = img && img.filenames.length ? img : null}
         {@const peer = ev.text ? parsePeerMessage(ev.text) : null}
         {@const shownText = peer ? peer.text : ev.text ?? ''}
         {#if ev.image_count}
-          <!-- Imagem(ns) colada(s) no TERMINAL: thumbnail buscado lazy do .jsonl (base64). -->
-          <ImageBubble caption={ev.text ?? ''} srcs={Array.from({ length: ev.image_count }, (_, i) => imageUrl ? imageUrl(ev.id, i) : transcriptImageUrl(sessionName, ev.id, i))} />
+          <!-- Imagem(ns) colada(s) no TERMINAL: thumbnail buscado lazy do .jsonl (base64). Quando a
+               msg veio do APP (tem "📎 imagem: <path>"), a legenda entra LIMPA e as fotos enviadas
+               entram junto: o Claude Code so absorve a ULTIMA como anexo real e deixa as outras como
+               path escrito — sem isto a bolha que fica no chat mostra os caminhos em texto cru. -->
+          <ImageBubble caption={img ? img.caption : ev.text ?? ''}
+                       srcs={[...(img?.filenames ?? []).map((f) => uploadUrl(sessionName, f)),
+                              ...Array.from({ length: ev.image_count }, (_, i) => imageUrl ? imageUrl(ev.id, i) : transcriptImageUrl(sessionName, ev.id, i))]} />
         {:else if ev.id.startsWith('queued-')}
           <!-- Msg da fila durável: atenuada enquanto o Claude trabalha (= na fila, ainda nao
                processada); acende solida quando ele fica idle (= aceita). Da o sinal de "quando
                foi aceita" que o usuario pediu. -->
           <div class="queued-row" class:dim={working}>
-            {#if img}
-              <ImageBubble caption={img.caption} srcs={img.filenames.map((f) => uploadUrl(sessionName, f))} />
+            {#if imgFotos}
+              <ImageBubble caption={imgFotos.caption} srcs={imgFotos.filenames.map((f) => uploadUrl(sessionName, f))} />
             {:else}
               <UserBubble text={shownText} ts={ev.ts} from={peer?.from} scope={peer?.scope}
                           onForward={onForward ? () => onForward(shownText) : null}
                           onOpenPeer={peer && onOpenSession ? () => onOpenSession(peer.from) : null} />
             {/if}
           </div>
-        {:else if img}
-          <ImageBubble caption={img.caption} srcs={img.filenames.map((f) => uploadUrl(sessionName, f))} />
+        {:else if imgFotos}
+          <ImageBubble caption={imgFotos.caption} srcs={imgFotos.filenames.map((f) => uploadUrl(sessionName, f))} />
         {:else}
           <UserBubble text={shownText} ts={ev.ts} animate={!histIds.has(ev.id)} from={peer?.from} scope={peer?.scope}
                       onForward={onForward ? () => onForward(shownText) : null}
@@ -279,7 +289,8 @@
     {/if}
 
     {#each pending as p (p.id)}
-      {@const pimg = parseImageMessage(p.text)}
+      {@const pimg0 = parseImageMessage(p.text)}
+      {@const pimg = pimg0 && pimg0.filenames.length ? pimg0 : null}
       <div class="pending-bubble" class:solid={p.solid}>
         {#if pimg}
           <ImageBubble caption={pimg.caption} srcs={pimg.filenames.map((f) => uploadUrl(sessionName, f))} />

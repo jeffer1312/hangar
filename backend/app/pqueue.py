@@ -96,6 +96,32 @@ def _strip_attach(text: str) -> str:
 _IMG_PREFIX = re.compile(r"^(?:\[Image #\d+\])+\s*")
 
 
+def _chaves_de_commit(text: str) -> set[str]:
+    """Todas as formas sob as quais `text` (um user_msg JA no transcript) pode ser reconhecido: cru,
+    sem o "[Image #N]", sem o marcador de anexo, e cada uma dessas por LINHA.
+
+    E a MESMA normalizacao do committed_user_lines — aqui ela serve o dedup do merged_history, que
+    comparava so o texto CRU. Com anexo os dois lados nunca sao iguais: a fila guarda
+    "legenda — 📎 imagem: /a.png /b.png", e o Claude Code reescreve o prompt (quebra linha depois do
+    marcador e CONSOME o path da imagem que virou anexo de verdade). Resultado medido em 03/08/2026:
+    a mesma mensagem aparecia DUAS vezes no historico — a bolha da fila (com as miniaturas) e a real
+    — ate o reconcile do idle marcar `confirmed`. Ou seja: duplicada durante o turno inteiro, que e
+    justamente quando a pessoa esta olhando."""
+    out: set[str] = set()
+    t = text.strip()
+    base = _IMG_PREFIX.sub("", t)
+    for variant in (t, base, _strip_attach(t), _strip_attach(base)):
+        variant = variant.strip()
+        if not variant:
+            continue
+        out.add(variant)
+        for ln in variant.split("\n"):
+            ln = ln.strip()
+            if ln:
+                out.add(ln)
+    return out
+
+
 def committed_user_lines(jsonl: str, provider: str = "claude") -> set[str]:
     """Textos que ATERRISSARAM no transcript (inteiros + por linha), pra confirmar entregas.
     Fontes CRUAS, sem o filtro de meta do parser: (a) entradas `user` — mensagem entregue MID-TURN
@@ -458,8 +484,7 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
                 ets = ev.ts or ts
                 items.append((ets, i, ev))
                 if ev.kind == "user_msg" and ev.text:
-                    t = ev.text.strip()
-                    for ln in (t, *(s.strip() for s in t.split("\n"))):
+                    for ln in _chaves_de_commit(ev.text):
                         if ets > committed_ts.get(ln, 0.0):
                             committed_ts[ln] = ets
 
@@ -516,7 +541,11 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
         # write do transcript e sempre >= ele e o commit da propria msg casa. Antes o ts saia do
         # append, que roda DEPOIS do send: caia ~ms apos o commit e a msg duplicava no historico.
         # Commit ANTERIOR ao envio e de outra msg igual -> esta segue pendente (ex: 2o "ok").
-        if committed_ts.get(text, -1.0) >= ts:
+        # A entrada tambem e absorvida pela LEGENDA (texto sem o "📎 imagem: <path>"): com anexo o
+        # transcript nunca guarda o texto identico ao que a fila digitou — ver _chaves_de_commit.
+        cap = _strip_attach(text).strip()
+        if max(committed_ts.get(text, -1.0),
+               committed_ts.get(cap, -1.0) if cap else -1.0) >= ts:
             continue
         # Poda: entrada anterior ao inicio da sessao atual e de uma sessao antiga (ex: pre-/clear, que
         # cria transcript novo). Sem isto, nunca casaria com o transcript novo e viraria fantasma.

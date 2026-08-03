@@ -184,9 +184,10 @@ def test_preview_pi_pula_as_quatro_formas_de_cabecalho_de_tool():
         assert extract_assistant_text(pane, "pi") == "A prosa que deve sobreviver.", cabecalho
 
 
-def test_painel_de_tarefas_do_pi_continua_chegando_na_previa():
-    # Mesma FORMA de uma ferramenta (cabecalho + filhos em box-drawing), mas e o unico bloco desses
-    # que o usuario quer ver -- a bolha o mostra dobrado. Sem a excecao, a regra estrutural o comia.
+def test_painel_de_tarefas_nao_vira_previa():
+    # DECISAO REVERTIDA em 03/08/2026 (antes o painel era o unico bloco desses que aparecia,
+    # dobrado): o usuario NAO quer o "Todos (n/n)" na previa. Ele nao e prosa em voo -- e o mesmo
+    # TodoWrite que vira ToolCard quando o turno fecha.
     pane = (
         "● Todos (11/13)\n"
         "├─ ✓ Avisar back: revisar DDL\n"
@@ -194,7 +195,39 @@ def test_painel_de_tarefas_do_pi_continua_chegando_na_previa():
         "\n"
         "✻ Unfurling… (2m)\n"
     )
-    assert extract_assistant_text(pane, "pi").startswith("Todos (11/13)")
+    assert extract_assistant_text(pane, "pi") == ""
+
+
+# Pane REAL (Pi 0.82.1 + k3, 03/08/2026) do frame que vazava: o spinner esta no quadro ASCII `*`
+# (U+002A) -- fora de SPINNER_GLYPHS -- e por isso nao parava a varredura, que seguia engolindo a
+# linha de status E o painel de Todos inteiro. Um frame em seis do ciclo `✻✽✶✺✢·*`.
+PANE_PI_SPINNER_ASCII = """● Duas respostas — deixa eu confirmar a segunda
+
+   Thinking…
+
+ * Boondoggling… (thinking with high effort · 12s)
+
+○ Todos (3/3)
+├─ ✓ Marcar RESPONSAVEL_FALLBACK com badge onde renderiza
+└─ ✓ Atualizar MOCKS.md com o que a auditoria encontrar
+
+────────────────────────────────────────────────────────────
+"""
+
+
+def test_previa_para_no_spinner_ascii_e_nao_engole_os_todos():
+    out = extract_assistant_text(PANE_PI_SPINNER_ASCII, "pi")
+    assert out.startswith("Duas respostas")
+    assert "Boondoggling" not in out
+    assert "Todos (3/3)" not in out and "RESPONSAVEL_FALLBACK" not in out
+
+
+def test_bullet_de_markdown_com_asterisco_nao_trunca_a_previa():
+    # O corte olha a FORMA da linha (termina em `…` ou `)`), nao so o `*`: uma lista em prosa
+    # continua sendo parte do bloco.
+    pane = "● Ficou assim:\n* primeiro item\n* segundo item\n\n✻ Unfurling… (2s)\n"
+    out = extract_assistant_text(pane, "pi")
+    assert "primeiro item" in out and "segundo item" in out
 
 
 def test_prosa_pi_que_apresenta_trecho_sem_dois_pontos_sobrevive():
@@ -317,3 +350,122 @@ def test_caixa_do_composer_do_pi_tambem_corta():
         "  ◯ general-purpose  Grepping  1m 34s\n"
     )
     assert extract_assistant_text(pane, "pi") == "Prosa do Pi em voo."
+
+
+# ── Previa vinda do AGENTE (sidecar) em vez do pane ────────────────────────────────────────────
+# Contrato: a extensao do Pi publica o bloco em voo em <config>/.claude-pocket-preview/<stem>.json.
+# O pane vira plano B — sessao sem a extensao (ou aberta antes dela) nao pode ficar sem previa.
+
+def _sidecar(tmp_path, monkeypatch, payload, stem="s1"):
+    import json as _json
+    from app import preview as _prev
+    d = tmp_path / ".claude-pocket-preview"
+    d.mkdir(parents=True, exist_ok=True)
+    if payload is not None:
+        (d / f"{stem}.json").write_text(_json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(_prev, "_config_dirs", lambda: [tmp_path])
+    return stem
+
+
+def test_sidecar_devolve_o_texto_publicado(tmp_path, monkeypatch):
+    import time as _t
+    from app.preview import read_sidecar
+    stem = _sidecar(tmp_path, monkeypatch, {"text": "texto em voo", "ts": _t.time()})
+    assert read_sidecar(stem) == "texto em voo"
+
+
+def test_sidecar_vazio_e_resposta_nao_ausencia(tmp_path, monkeypatch):
+    # "" = o agente disse que NAO ha nada em voo (turno fechou). Cair no pane aqui traria de volta o
+    # bloco ja commitado -> bolha duplicada.
+    import time as _t
+    from app.preview import read_sidecar
+    stem = _sidecar(tmp_path, monkeypatch, {"text": "", "ts": _t.time()})
+    assert read_sidecar(stem) == ""
+
+
+def test_sidecar_ausente_ou_velho_cai_no_pane(tmp_path, monkeypatch):
+    import time as _t
+    from app.preview import read_sidecar
+    assert read_sidecar(_sidecar(tmp_path, monkeypatch, None)) is None          # sem arquivo
+    assert read_sidecar(_sidecar(tmp_path, monkeypatch,
+                                 {"text": "antigo", "ts": _t.time() - 10_000})) is None
+    assert read_sidecar(None) is None                                           # sessao sem stem
+
+
+def test_sidecar_de_tipo_errado_nao_derruba_nada(tmp_path, monkeypatch):
+    # JSON valido do tipo errado nao levanta ValueError: sem o guard o .get() explodia dentro do
+    # loop do broker (mesmo acidente que ja derrubou a resolucao de estado pela statusline).
+    from app.preview import read_sidecar
+    d = tmp_path / ".claude-pocket-preview"
+    d.mkdir(parents=True)
+    (d / "s1.json").write_text("null", encoding="utf-8")
+    (d / "s2.json").write_text("{isso nao e json", encoding="utf-8")
+    from app import preview as _prev
+    monkeypatch.setattr(_prev, "_config_dirs", lambda: [tmp_path])
+    assert read_sidecar("s1") is None and read_sidecar("s2") is None
+
+
+def test_broker_prefere_o_sidecar_e_nao_le_o_pane(tmp_path, monkeypatch):
+    # O ganho principal: com o agente publicando, o capture-pane (um subprocess a cada 150ms por
+    # sessao) nem roda.
+    import asyncio as _aio, time as _t
+    from app import preview as _prev
+    stem = _sidecar(tmp_path, monkeypatch, {"text": "veio do agente", "ts": _t.time()})
+    chamou = []
+    monkeypatch.setattr(_prev.tmux, "capture_pane", lambda n: chamou.append(n) or "● veio do pane")
+
+    # subscribe() emite o slot ATUAL de cara (vazio, antes do 1o poll) -- ele nao e resposta, so o
+    # estado inicial. O que interessa e o 1o texto de verdade.
+    async def roda():
+        b = _prev.PreviewBroker("sessao-x", "pi", lambda: stem)
+        agen = b.subscribe()
+        try:
+            async def primeiro_nao_vazio():
+                async for t in agen:
+                    if t:
+                        return t
+            return await _aio.wait_for(primeiro_nao_vazio(), 2)
+        finally:
+            await agen.aclose()
+            _prev.PreviewBroker._brokers.pop("sessao-x", None)
+
+    assert _aio.run(roda()) == "veio do agente"
+    assert chamou == [], "leu o pane mesmo com sidecar publicado"
+
+
+def test_broker_sem_sidecar_continua_no_pane(tmp_path, monkeypatch):
+    import asyncio as _aio
+    from app import preview as _prev
+    _sidecar(tmp_path, monkeypatch, None)
+    monkeypatch.setattr(_prev.tmux, "capture_pane", lambda n: "● veio do pane\n\n✻ Unfurling… (2s)\n")
+
+    async def roda():
+        b = _prev.PreviewBroker("sessao-y", "pi", lambda: "s1")
+        agen = b.subscribe()
+        try:
+            async def primeiro_nao_vazio():
+                async for t in agen:
+                    if t:
+                        return t
+            return await _aio.wait_for(primeiro_nao_vazio(), 2)
+        finally:
+            await agen.aclose()
+            _prev.PreviewBroker._brokers.pop("sessao-y", None)
+
+    assert _aio.run(roda()) == "veio do pane"
+
+
+def test_broker_segue_o_stem_da_conexao_mais_recente():
+    # Achado da review: o broker e singleton por sessao, mas a closure do stem vem da CONEXAO. Se o
+    # 1o subscriber cai e outro segue vivo (celular + desktop), travar no primeiro deixaria o broker
+    # lendo o stem da sessao ANTERIOR depois de um /clear -> previa da sessao nova com texto da velha.
+    from app import preview as _prev
+    try:
+        b1 = _prev.PreviewBroker.get("sessao-z", "pi", lambda: "stem-velho")
+        b2 = _prev.PreviewBroker.get("sessao-z", "pi", lambda: "stem-novo")
+        assert b1 is b2                          # segue UM broker por sessao
+        assert b2.stem_get() == "stem-novo"
+        # Conexao sem stem_get (Claude/Codex) nao pode APAGAR o de quem tem.
+        assert _prev.PreviewBroker.get("sessao-z", "pi").stem_get() == "stem-novo"
+    finally:
+        _prev.PreviewBroker._brokers.pop("sessao-z", None)

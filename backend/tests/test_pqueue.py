@@ -465,3 +465,50 @@ def test_append_preserva_emoji_bem_formado_byte_a_byte():
     raw = q.path.read_bytes()
     for t in textos:
         assert t.encode("utf-8") in raw
+
+
+def test_merged_history_absorve_entrada_com_anexo_pela_legenda(tmp_path):
+    # Bug medido em 03/08/2026: msg COM IMAGEM aparecia DUAS vezes no chat (a bolha da fila, com as
+    # miniaturas, e a real) durante todo o turno. O dedup comparava o texto CRU, e com anexo os dois
+    # lados nunca batem: a fila guarda os paths numa linha so; o Claude Code quebra a linha depois de
+    # cada "📎 imagem:", prefixa "[Image #N]" e CONSOME o path da imagem que virou anexo. So o
+    # reconcile do idle desempatava -- tarde demais, e a pessoa esta olhando durante o turno.
+    import json
+    cap = "olha esse bug ai"
+    fila = f"{cap} — 📎 imagem: /up/a.png 📎 imagem: /up/b.png"
+    # Como o transcript grava: prefixo, quebra de linha e o ultimo path sumido (virou anexo real).
+    real = f"[Image #1]{cap} — 📎 imagem:\n/up/a.png 📎 imagem:"
+    j = tmp_path / "t.jsonl"
+    j.write_text(
+        json.dumps({"type": "user", "uuid": "u0", "timestamp": "2026-01-01T00:00:00Z",
+                    "message": {"role": "user", "content": "inicio"}}) + "\n" +
+        json.dumps({"type": "user", "uuid": "u1", "timestamp": "2026-01-01T00:01:40Z",
+                    "message": {"role": "user", "content": [{"type": "text", "text": real},
+                                                            {"type": "image", "source": {}}]}}) + "\n",
+        encoding="utf-8")
+    tc = pqueue._ts_of_line(j.read_text(encoding="utf-8").splitlines()[1])
+    PromptQueue("s").path.write_text(
+        json.dumps({"id": "e1", "text": fila, "ts": tc - 5, "delivered": True}) + "\n",
+        encoding="utf-8")
+    hist = pqueue.merged_history("s", str(j))
+    assert not any(e.id.startswith("queued-") for e in hist), "bolha da fila duplicando a real"
+    assert sum(1 for e in hist if e.kind == "user_msg" and cap in (e.text or "")) == 1
+
+
+def test_merged_history_nao_absorve_legenda_igual_enviada_depois(tmp_path):
+    # A folga do dedup por legenda tem limite: entrada enfileirada DEPOIS do commit de uma msg de
+    # legenda igual segue pendente (mesma regra ts-aware do texto cru -- senao a 2a foto com a mesma
+    # legenda sumia do chat).
+    import json
+    cap = "olha esse bug ai"
+    j = tmp_path / "t.jsonl"
+    j.write_text(
+        json.dumps({"type": "user", "uuid": "u1", "timestamp": "2026-01-01T00:01:40Z",
+                    "message": {"role": "user", "content": f"{cap} — 📎 imagem:\n/up/a.png"}}) + "\n",
+        encoding="utf-8")
+    tc = pqueue._ts_of_line(j.read_text(encoding="utf-8").splitlines()[0])
+    PromptQueue("s").path.write_text(
+        json.dumps({"id": "e2", "text": f"{cap} — 📎 imagem: /up/z.png", "ts": tc + 5,
+                    "delivered": True}) + "\n",
+        encoding="utf-8")
+    assert any(e.id == "queued-e2" for e in pqueue.merged_history("s", str(j)))

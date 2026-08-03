@@ -4,7 +4,7 @@ import {
   projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent, resetsIn,
   clusterByPair, sortSessions, bubblesFromTail, ctxWindow, fileKind, fmtBytes, providerName, providerTag,
   summarizeText, summarizeToolInput, summarizeToolResult, toolPhase, toolGroupLabel, toolGroupCounts,
-  splitTodoBlock,
+  splitTodoBlock, parseImageMessage,
 } from './format';
 import type { ChatEvent, State } from './types';
 
@@ -678,5 +678,31 @@ describe('splitTodoBlock', () => {
 
   it('cabeçalho sem árvore não casa (pode ser prosa)', () => {
     expect(splitTodoBlock('Todos (11/13)\nsegue o baile')).toBeNull();
+  });
+});
+
+describe('parseImageMessage', () => {
+  const cap = 'olha esse bug ai';
+  it('lê o formato que o app digita (uma linha, N paths)', () => {
+    const out = parseImageMessage(`${cap} — 📎 imagem: /up/a.png 📎 imagem: /up/b.png`)!;
+    expect(out.caption).toBe(cap);
+    expect(out.filenames).toEqual(['a.png', 'b.png']);
+  });
+  it('lê o formato REESCRITO pelo Claude Code (prefixo, quebra de linha, último path consumido)', () => {
+    // Sem isto a bolha que SOBRA no chat (a do transcript) mostrava os caminhos em texto cru --
+    // era a metade feia do par duplicado que o usuário viu em 03/08/2026.
+    const out = parseImageMessage(`[Image #1]${cap} — 📎 imagem:\n/up/a.png 📎 imagem:`)!;
+    expect(out.caption).toBe(cap);
+    expect(out.filenames).toEqual(['a.png']);
+  });
+  it('uma foto só, path consumido pelo agente: legenda limpa e lista vazia', () => {
+    // O caso MAIS comum do celular: uma foto. O Claude Code a absorve como anexo real e apaga o
+    // path, deixando o marcador pendurado. Devolver null aqui jogava a bolha pro texto cru.
+    const out = parseImageMessage(`[Image #1]${cap} — 📎 imagem:`)!;
+    expect(out.caption).toBe(cap);
+    expect(out.filenames).toEqual([]);
+  });
+  it('sem marcador não é mensagem de imagem', () => {
+    expect(parseImageMessage('só texto')).toBeNull();
   });
 });

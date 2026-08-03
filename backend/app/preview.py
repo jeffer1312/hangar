@@ -1,9 +1,18 @@
 import asyncio
+import json
+import logging
 import re
-from typing import AsyncIterator, Optional
+import time
+from typing import AsyncIterator, Callable, Optional
 
 from app import tmux
 from app.state import _RULE_RE, _is_boundary, _live_spinner
+# _dirs: MESMO cache de diretorios de config que a statusline usa, e pelo mesmo motivo (roda por
+# sessao, a cada poll). Reusado em vez de copiado — sao os mesmos diretorios e a mesma chave (o stem
+# do .jsonl); duas copias so dariam a chance de uma envelhecer.
+from app.statusline import _dirs as _config_dirs
+
+_log = logging.getLogger("claude_pocket.preview")
 
 # Preview AO VIVO do bloco de assistente em andamento, lido do pane do tmux (capture-pane -p, texto
 # já composto: sem ANSI, sem cursor-move). É a ÚNICA fonte do texto em voo sem perder o REPL
@@ -77,6 +86,18 @@ _STOPS_BY_PROVIDER = {"pi": (_PI_BOX_RE,)}
 # um é só o vazamento cosmético. Só pro Pi, como o resto do chrome por provider (o Claude marca
 # resultado com `⎿` e nunca chega neste ramo — o `and` curto-circuita antes).
 _PI_CORPO_RE = re.compile(r"^\s*[├└│▌⎿]")
+# CORREÇÃO 03/08/2026 — o painel de tarefas NÃO vai mais pra prévia (o usuário não quer vê-lo lá).
+# Hoje o Pi o desenha com `○` (círculo VAZIO, U+25CB), não com o `●` da prosa, então ele nunca é
+# eleito começo de bloco; a parada abaixo é o que impede de ser ENGOLIDO pelo bloco de cima quando o
+# chrome entre os dois escapa. Aceita os dois glifos (e nenhum) porque o desenho é calibration knob.
+_TODO_PANEL_RE = re.compile(r"^\s*[●○]?\s*Todos \(\d+/\d+\)\s*$")
+# Frame ASCII do spinner. O ciclo medido no pane em 03/08/2026 (Pi 0.82.1) é `✻✽✶✺✢·` MAIS o `*`
+# (U+002A) — e esse último está FORA de SPINNER_GLYPHS, logo _is_boundary não parava nele. Um frame
+# em seis, a prévia engolia a linha de status ("* Boondoggling… (thinking with high effort · 12s)")
+# e, junto com ela, o painel de Todos inteiro que vem logo abaixo: era isso que aparecia no celular.
+# Exige a forma da linha (termina em `…` ou em `)`), não só o glifo, pra um bullet de markdown em
+# prosa ("* item") não truncar o texto no meio.
+_ASCII_SPINNER_RE = re.compile(r"^\*\s+\S[^\n]*(…|\))\s*$")
 _PI_TOOL_NAME_RE = re.compile(
     r"^(Bash|Read|Write|Edit|MultiEdit|Grep|Glob|Task|Agent|Skill|WebFetch|WebSearch|"
     r"NotebookEdit|TodoWrite|Multiple Tools|Chrome Devtools)[\s:(]"
@@ -155,6 +176,7 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
         corpo = s[1:].lstrip()
         if (s[:1] == _ASSISTANT_GLYPH and not _TOOL_BLOCK_RE.match(corpo)
                 and not _MCP_CALL_RE.match(corpo)
+                and not _TODO_PANEL_RE.match(ln)
                 and not _painel_de_subagente(lines, i, corpo)
                 and not (provider == "pi" and _pi_bloco_de_tool(lines, i, corpo))):
             start = i
@@ -171,7 +193,8 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
         # ● antes de virar bloco — senão grudava no fim da prosa e piscava.
         s = ln.lstrip()
         if (_RULE_RE.match(ln) or _is_boundary(ln) or _USER_PROMPT_RE.match(ln)
-                or _TOOL_BLOCK_RE.match(s) or _MCP_CALL_RE.match(s)):
+                or _TOOL_BLOCK_RE.match(s) or _MCP_CALL_RE.match(s)
+                or _TODO_PANEL_RE.match(ln) or _ASCII_SPINNER_RE.match(s)):
             break
         if any(r.match(ln) for r in stops):
             break
@@ -182,6 +205,57 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
     return "\n".join(out)
 
 
+# ── Previa publicada pelo PROPRIO agente (sidecar), preferida ao pane ─────────────────────────────
+# Mesmo contrato da statusline: quem tem o dado exato publica; o pane vira plano B. Aqui o publicador
+# e a extensao do Pi (scripts/pi/cp-state.ts), que recebe o texto do assistente token a token pelo
+# `message_update` — sem largura de janela, sem markdown ja pintado, sem precisar adivinhar o que e
+# desenho da TUI. Todas as regras deste arquivo (verbo de ferramenta, caixa do composer, spinner,
+# painel de Todos) existem so pra essa adivinhacao; pelo sidecar elas nem entram em cena.
+#
+# Tres estados, e a diferenca entre os dois ultimos importa:
+#   None  -> nao ha sidecar (ou envelheceu) -> CAI NO PANE. Sessao aberta antes da extensao existir,
+#            ou sem /reload depois de instalar, nao pode ficar sem previa nenhuma.
+#   ""    -> o agente disse que NAO ha texto em voo (turno fechou). E resposta, nao ausencia: cair
+#            no pane aqui traria de volta o bloco ja commitado como bolha duplicada.
+#   texto -> o bloco em voo, verbatim.
+_PREVIEW_SUBDIR = ".claude-pocket-preview"
+# Teto de idade: o publicador zera a previa no fim do turno, entao um texto parado por MUITO tempo
+# so acontece se a extensao morreu no meio (crash, /reload). Dai em diante o pane volta a mandar, em
+# vez de congelar na tela a ultima frase que ela alcancou a publicar.
+_PREVIEW_MAX_AGE = 600.0
+
+
+def read_sidecar(stem: Optional[str]) -> Optional[str]:
+    """Texto em voo publicado pela sessao `stem`, "" quando nao ha nenhum, None pra cair no pane."""
+    if not stem:
+        return None
+    for base in _config_dirs():
+        f = base / _PREVIEW_SUBDIR / f"{stem}.json"
+        try:
+            o = json.loads(f.read_text(encoding="utf-8"))
+        except OSError:
+            continue                 # ausente e o caso NORMAL (sessao sem a extensao / nao-Pi)
+        except ValueError:
+            _log.debug("preview: sidecar ilegivel path=%s", f, exc_info=True)
+            continue
+        if not isinstance(o, dict):
+            # JSON valido do tipo errado (`null`, lista) nao levanta ValueError e o .get() abaixo
+            # explodiria — o mesmo acidente que ja derrubou a resolucao de estado pela statusline.
+            _log.debug("preview: sidecar nao e objeto path=%s tipo=%s", f, type(o).__name__)
+            continue
+        text, ts = o.get("text"), o.get("ts")
+        if not isinstance(text, str):
+            continue
+        if isinstance(ts, (int, float)) and time.time() - ts > _PREVIEW_MAX_AGE:
+            # Este e o descarte que importa operacionalmente: "a extensao morreu no meio do turno".
+            # Sem o log, quem for entender por que a previa ficou parada ate cair no pane nao tem o
+            # que procurar — os outros dois descartes desta funcao ja logam.
+            _log.debug("preview: sidecar velho descartado path=%s idade=%.0fs", f, time.time() - ts)
+            continue
+        return text
+    return None
+
+
 class PreviewBroker:
     """UM loop de capture por SESSÃO (não por conexão). Faz poll do pane, extrai o texto do bloco em
     voo, guarda o último num slot e acorda os subscribers via Condition. Ref-count: liga no 1º
@@ -190,9 +264,13 @@ class PreviewBroker:
 
     _brokers: dict[str, "PreviewBroker"] = {}
 
-    def __init__(self, name: str, provider: str = "claude"):
+    def __init__(self, name: str, provider: str = "claude",
+                 stem_get: Optional[Callable[[], Optional[str]]] = None):
         self.name = name
         self.provider = provider
+        # stem_get: chave do sidecar (o stem do .jsonl VIVO — acompanha o rebind do /clear, igual ao
+        # sid_get do StateMonitor). None = so pane, que e o caminho de quem nao publica.
+        self.stem_get = stem_get
         self.text = ""
         self.version = 0
         self._cond = asyncio.Condition()
@@ -200,15 +278,25 @@ class PreviewBroker:
         self._subs = 0
 
     @classmethod
-    def get(cls, name: str, provider: str = "claude") -> "PreviewBroker":
+    def get(cls, name: str, provider: str = "claude",
+            stem_get: Optional[Callable[[], Optional[str]]] = None) -> "PreviewBroker":
         # provider: um broker por SESSAO, e toda conexao da mesma sessao traz o mesmo provider —
         # so o primeiro a chegar o fixa. Nao reatribuimos num broker vivo pra nao trocar a leitura
         # debaixo de um subscriber; o broker morre com o ultimo subscriber e o proximo renasce
         # com o provider atual.
+        #
+        # stem_get NAO segue essa politica: o provider nunca muda na vida da sessao, o stem MUDA (e
+        # justamente por causa do /clear que este parametro existe). Como a closure fecha sobre o
+        # `current_jsonl` da CONEXAO, travar a do primeiro subscriber deixa o broker lendo o stem da
+        # sessao anterior quando essa conexao cai e outra segue viva (celular + desktop) — a previa
+        # da sessao nova mostraria texto da velha. Entao a conexao mais recente manda: toda conexao
+        # viva reconverge pro mesmo valor depois do /clear, e uma closure morta nunca fica no lugar.
         b = cls._brokers.get(name)
         if b is None:
-            b = cls(name, provider)
+            b = cls(name, provider, stem_get)
             cls._brokers[name] = b
+        elif stem_get is not None:
+            b.stem_get = stem_get
         return b
 
     async def _loop(self) -> None:
@@ -218,12 +306,27 @@ class PreviewBroker:
         # idle. O spinner serve só pra CADÊNCIA: rápido trabalhando, devagar ocioso. Diff-gate (só
         # notifica em mudança) evita spam.
         while True:
+            # Sidecar primeiro: quando o agente publica, nem chega a rodar o capture-pane (um
+            # subprocess a cada 150ms por sessao — o poll mais caro que o backend tem).
+            stem = self.stem_get() if self.stem_get else None
             try:
-                pane = await asyncio.to_thread(tmux.capture_pane, self.name)
+                doAgente = await asyncio.to_thread(read_sidecar, stem)
             except Exception:
-                pane = ""
-            working = _live_spinner(pane) is not None
-            text = extract_assistant_text(pane, self.provider)
+                # read_sidecar ja trata sozinho o esperado (ausente, ilegivel, tipo errado). O que
+                # cai aqui e bug de verdade, e sem rastro a sessao voltaria pro pane PRA SEMPRE
+                # parecendo "sessao sem extensao" — indistinguivel de fora.
+                _log.debug("preview: leitura do sidecar falhou stem=%s", stem, exc_info=True)
+                doAgente = None
+            if doAgente is not None:
+                text = doAgente
+                working = bool(text)   # cadencia: rapido enquanto ha texto crescendo
+            else:
+                try:
+                    pane = await asyncio.to_thread(tmux.capture_pane, self.name)
+                except Exception:
+                    pane = ""
+                working = _live_spinner(pane) is not None
+                text = extract_assistant_text(pane, self.provider)
             if text != self.text:
                 async with self._cond:
                     self.text = text
