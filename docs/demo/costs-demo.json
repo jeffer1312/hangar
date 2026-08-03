@@ -1,0 +1,17 @@
+{
+  "totals": {"key":"totals","label":"Demo data","sessions":4,"input":4200,"output":1800,"cache_write":300,"cache_read":900,"cost":0.42,"cost_input":0.18,"cost_output":0.16,"cost_cache_write":0.02,"cost_cache_read":0.06},
+  "by_day": [{"key":"2026-08-02","sessions":4,"input":4200,"output":1800,"cache_write":300,"cache_read":900,"cost":0.42,"cost_input":0.18,"cost_output":0.16,"cost_cache_write":0.02,"cost_cache_read":0.06}],
+  "by_provider": [{"key":"demo-openai","label":"Demo OpenAI","sessions":2,"input":2100,"output":800,"cache_write":150,"cache_read":450,"cost":0.20,"cost_input":0.09,"cost_output":0.07,"cost_cache_write":0.01,"cost_cache_read":0.03},{"key":"demo-openrouter","label":"Demo OpenRouter","sessions":2,"input":2100,"output":1000,"cache_write":150,"cache_read":450,"cost":0.22,"cost_input":0.09,"cost_output":0.09,"cost_cache_write":0.01,"cost_cache_read":0.03}],
+  "by_source": [{"key":"pi","sessions":2,"input":2100,"output":900,"cache_write":150,"cache_read":450,"cost":0.21,"cost_input":0.09,"cost_output":0.08,"cost_cache_write":0.01,"cost_cache_read":0.03},{"key":"claude","sessions":1,"input":1200,"output":500,"cache_write":75,"cache_read":225,"cost":0.15,"cost_input":0.06,"cost_output":0.07,"cost_cache_write":0.005,"cost_cache_read":0.015},{"key":"codex","sessions":1,"input":900,"output":400,"cache_write":75,"cache_read":225,"cost":0.06,"cost_input":0.03,"cost_output":0.01,"cost_cache_write":0.005,"cost_cache_read":0.015}],
+  "by_project": [{"key":"demo-project","sessions":4,"input":4200,"output":1800,"cache_write":300,"cache_read":900,"cost":0.42,"cost_input":0.18,"cost_output":0.16,"cost_cache_write":0.02,"cost_cache_read":0.06}],
+  "by_model": [{"key":"gpt-demo","label":"GPT demo","sessions":2,"input":2100,"output":800,"cache_write":150,"cache_read":450,"cost":0.20,"cost_input":0.09,"cost_output":0.07,"cost_cache_write":0.01,"cost_cache_read":0.03},{"key":"openrouter/free-demo","label":"OpenRouter free demo","sessions":2,"input":2100,"output":1000,"cache_write":150,"cache_read":450,"cost":0.22,"cost_input":0.09,"cost_output":0.09,"cost_cache_write":0.01,"cost_cache_read":0.03}],
+  "by_kind": [{"kind":"input","tokens":4200,"cost":0.18},{"kind":"output","tokens":1800,"cost":0.16},{"kind":"cache_write","tokens":300,"cost":0.02},{"kind":"cache_read","tokens":900,"cost":0.06}],
+  "rates": [],
+  "sem_tarifa": [],
+  "custo_sem_cache": 0.58,
+  "equivalente_cobrado": 5700,
+  "anterior": null,
+  "applied": {"period":"30d"},
+  "usd_brl": 5.2,
+  "combos": []
+}
