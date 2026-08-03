@@ -17,7 +17,10 @@ export function ouvirTexto(
   confirmar: (msg: string) => Promise<boolean>,
   instrucao: string = '',
 ): void {
-  if (!texto) { ttsPlayer.fail('não há texto pra ler'); return; }
+  // unlock('') ANTES do fail: fail() so seta error, e a TtsBar so renderiza com active=true — sem
+  // o unlock, "nao ha texto" era um erro INVISIVEL (o atalho Ctrl+Shift+Espaco do Chat chama aqui
+  // direto, sem o painel, e uma bolha que achata pra vazio — so anexo/midia — falhava calada).
+  if (!texto) { ttsPlayer.unlock(''); ttsPlayer.fail('não há texto pra ler'); return; }
   // Guard de duplo-toque: sem ele, dois toques rapidos no mesmo trecho antes do primeiro terminar
   // pagam credito duas vezes, porque o cache so existe depois da primeira resposta.
   if (ttsPlayer.loading) return;

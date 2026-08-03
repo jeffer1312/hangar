@@ -285,6 +285,32 @@
     };
   });
 
+  // Atalho do mic (so desktop): Ctrl+Espaco alterna gravar/parar — o mesmo toggleRecord do botao.
+  // O Chrome NAO reserva Ctrl+Space (diferente de Ctrl+T/W/D, que nem chegam na pagina); quem pode
+  // roubar e o OS: IBus/fcitx no Linux e a troca de input source do macOS usam Ctrl+Space por
+  // padrao, entao quem digita CJK pode nunca ver este atalho. e.repeat ignorado: segurar a tecla
+  // ligaria/desligaria em rajada.
+  // stopImmediatePropagation: com 2 Composers montados (split view), os DOIS recebiam o keydown e
+  // iniciavam gravacao (recording e $state por componente, sem guard global) — dois getUserMedia
+  // por um keystroke. O primeiro Composer montado vence; deterministico.
+  // Sem dialog aberto (mesmo guard do DesktopShell — o overlay do board usa role="region", nem
+  // casa com o seletor; o :not() e cinto-e-suspensorios) pra nao gravar "por tras" de uma tela de
+  // config. O keydown tambem cai no aoInteragir acima, entao apertar durante a contagem do envio
+  // automatico cancela a contagem e comeca a gravar — exatamente o que o toque no 🎤 ja faz.
+  function aoAtalhoMic(e: KeyboardEvent) {
+    if (e.repeat || e.shiftKey || e.altKey || e.metaKey || !e.ctrlKey || e.code !== 'Space') return;
+    if (!window.matchMedia('(min-width: 820px)').matches) return;
+    if (document.querySelector('[role="dialog"]:not(.board-overlay)')) return;
+    e.preventDefault();   // senao o Ctrl+Space solta um espaco no textarea
+    e.stopImmediatePropagation();
+    void toggleRecord();
+  }
+
+  $effect(() => {
+    document.addEventListener('keydown', aoAtalhoMic);
+    return () => document.removeEventListener('keydown', aoAtalhoMic);
+  });
+
   // ── Pill de modelo + esforco: abre o ModelEffortSheet (aplica via endpoint dedicado) ──
   // Display otimista: a escolha aparece na hora; o status (read-back real do statusline)
   // reconcilia o modelo quando confirma. Esforco e write-only (sem read-back confiavel)

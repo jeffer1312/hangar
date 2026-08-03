@@ -5,6 +5,7 @@
   import { textoFalavelComCodigo } from '../lib/speakable';
   import { abrirComTexto } from '../lib/ttsSelection.svelte';
   import FileAttachment from './FileAttachment.svelte';
+  import IconSpeaker from './icons/IconSpeaker.svelte';
 
   interface Props {
     text: string;
@@ -85,6 +86,11 @@
   // selecionar texto no celular pra chegar no painel, e selecionar no celular e ruim. Sincrono ate
   // aqui (sem await): abrir o painel nao toca audio nenhum, o unlock do iOS acontece dentro dele,
   // no toque que de fato manda tocar (ver ouvirClique/confirmarLeitura na pill).
+  // O hint do atalho so aparece no desktop: no celular o botao existe mas Ctrl+Shift+Espaco nao
+  // (onGlobalKey do Chat retorna cedo fora do desktop), e tooltip que anuncia tecla morta engana.
+  const dicaAtalho = typeof window !== 'undefined' && window.matchMedia('(min-width: 820px)').matches
+    ? ' (Ctrl+Shift+Espaço: última resposta visível)' : '';
+
   function ouvirMensagem() {
     if (!proseEl) return;
     const { texto, blocos } = textoFalavelComCodigo(proseEl);
@@ -139,7 +145,7 @@
       {/if}
       <!-- Nunca na bolha de preview: aquele texto e full-replace a cada ~150ms (MessageList:274),
            e o audio sairia de um bloco de DOM que ja nao existe mais. -->
-      <button class="msg-tts" onclick={ouvirMensagem} aria-label="Ouvir mensagem" title="Ouvir mensagem"></button>
+      <button class="msg-tts" onclick={ouvirMensagem} aria-label="Ouvir mensagem" title={`Ouvir mensagem${dicaAtalho}`}><IconSpeaker size={15} /></button>
     </div>
   {/if}
 </div>
@@ -190,7 +196,8 @@
   }
   .msg-copy::before { content: '⧉'; font-size: 16px; line-height: 1; }
   .msg-fwd::before { content: '↗'; font-size: 16px; line-height: 1; }
-  .msg-tts::before { content: '🔊'; font-size: 14px; line-height: 1; }
+  /* msg-tts leva <IconSpeaker> (SVG) no lugar do emoji 🔊 do ::before: o emoji renderiza colorido
+     (azul no Linux/Windows, verde no Android) e destoava dos irmaos ⧉/↗, que sao tinta pura. */
   .msg-copy.copied { color: var(--accent); opacity: 1; }
   .msg-copy.copied::before { content: '✓'; }
 
