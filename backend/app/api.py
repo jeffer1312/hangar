@@ -28,7 +28,7 @@ from app.registry import KillFailed, SessionRegistry
 from app.names import sanitize_session_name
 from app.models import (SessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody, RunInfo,
                         ProjectStatus)
-from app.planprog import plan_progress, list_plans, write_pin, is_safe_stem, _plans_dir, PlanPinError
+from app.planprog import plan_progress, list_plans, write_pin, is_safe_stem, _plans_dir, PlanPinError, PIN_NONE
 from app.pqueue import PromptQueue, _transcript_start_ts, committed_user_lines
 from app.chain import ThenLink
 from app.terminal_input import TerminalInput, drain
@@ -2159,7 +2159,7 @@ async def session_plan_pin(name: str, body: PlanPinBody):
     root = await asyncio.to_thread(_plans_dir, cwd)
     if root is None:
         raise HTTPException(404, "repo sem pasta de planos")
-    if body.stem is not None:
+    if body.stem is not None and body.stem != PIN_NONE:
         # So um plano que existe DE VERDADE nesta raiz. Sem isto, o stem viraria nome de arquivo
         # vindo do cliente — e a checagem de traversal do read_pin nao cobriria um nome valido
         # apontando pra plano de outro repo. A guarda de separador vem ANTES do isfile: com um
