@@ -1,10 +1,13 @@
 // Syntax highlighting viewer-only pro diff viewer, via Shiki fine-grained (engine JS, SEM WASM,
-// SEM CDN — tudo bundlado). Temas reais do VS Code (dark-plus/light-plus) casam com o data-theme.
+// SEM CDN — tudo bundlado). Temas one-dark-pro (escuro) e light-plus (claro) casam com o data-theme.
 // Gotcha central: grammars TextMate sao STATEFUL entre linhas -> tokeniza o BLOB do codigo inteiro
 // (linhas sem os prefixos +/- do diff) de uma vez e recasa linha-a-linha; nunca linha isolada.
 import { createHighlighterCore, type HighlighterCore } from 'shiki/core';
 import { createJavaScriptRegexEngine } from 'shiki/engine/javascript';
-import darkPlus from '@shikijs/themes/dark-plus';
+// one-dark-pro (escolha do usuario, 2026-08-03, comparado ao vivo sobre o papel de parede dele):
+// tokens com matiz bem separado (roxo/verde/laranja) — o dark-plus era azul-clarinho e laranja
+// que sumiam sob o veu. No claro segue light-plus.
+import oneDarkPro from '@shikijs/themes/one-dark-pro';
 import lightPlus from '@shikijs/themes/light-plus';
 
 // Linguagens do proprio repo + as das conversas (Jenkinsfile, SQL, Delphi, C#, Flutter, Docker).
@@ -51,7 +54,7 @@ const failedLangs = new Set<string>();
 function getCore(): Promise<HighlighterCore> {
   if (!corePromise) {
     corePromise = createHighlighterCore({
-      themes: [darkPlus, lightPlus],
+      themes: [oneDarkPro, lightPlus],
       langs: [],
       engine: createJavaScriptRegexEngine(),   // sem WASM -> leve, ok pra mobile/LAN
     });
@@ -131,7 +134,7 @@ export async function highlightDiff(diffText: string, path: string): Promise<Dif
   // So as linhas de codigo, na ordem, como UM blob (estado da grammar preservado entre linhas).
   const codeIdx = rows.map((r, i) => (r.kind === 'add' || r.kind === 'del' || r.kind === 'ctx' ? i : -1)).filter((i) => i >= 0);
   const blob = codeIdx.map((i) => rows[i].tokens[0].content).join('\n');
-  const theme = document.documentElement.dataset.theme === 'light' ? 'light-plus' : 'dark-plus';
+  const theme = document.documentElement.dataset.theme === 'light' ? 'light-plus' : 'one-dark-pro';
   try {
     const { tokens } = core.codeToTokens(blob, { lang, theme });
     codeIdx.forEach((rowI, k) => {
@@ -158,7 +161,7 @@ function escapeAttr(s: string): string {
  * Idempotente (marca data-hl). Segura pra chamar a cada re-render: so trabalha nos novos.
  * data-hl-theme: a cor vira inline style do tema da hora — trocou o tema, re-coloriza. */
 export async function highlightCodeBlocks(root: HTMLElement): Promise<void> {
-  const theme = document.documentElement.dataset.theme === 'light' ? 'light-plus' : 'dark-plus';
+  const theme = document.documentElement.dataset.theme === 'light' ? 'light-plus' : 'one-dark-pro';
   const codes = [...root.querySelectorAll<HTMLElement>('pre code[class^="language-"]')]
     .filter((el) => el.dataset.hl !== '1' || el.dataset.hlTheme !== theme);
   if (!codes.length) return;
@@ -200,7 +203,10 @@ export async function highlightCodeBlocks(root: HTMLElement): Promise<void> {
         .join('\n');
       el.dataset.hlTheme = theme;
     } catch {
-      // tokenizacao falhou neste bloco -> fica plain (data-hl ja marca pra nao re-tentar em loop)
+      // Tokenizacao falhou neste bloco -> fica plain. Marca o tema TAMBEM: sem isto o filtro o
+      // reincluia em toda chamada e um bloco que falha deterministicamente re-tokenizava (e
+      // re-falhava) a cada render, em silencio.
+      el.dataset.hlTheme = theme;
     }
   }
 }

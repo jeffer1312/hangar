@@ -223,12 +223,14 @@ const _EXTS = Object.keys(EXT_KIND).join('|');
 // Caminho ABSOLUTO (/ ou ~/) — lazy ate a 1a extensao conhecida, seguida de fim/espaco/delimitador
 // (pega path COM espaco tipo "/a/WhatsApp Video….mp4"). Lookbehind (?<![\w.~:/]) evita comecar dentro
 // de URL ("https://…") ou logo apos "." (o "/" do "./rel.png" e do REL, nao deste). Global + ci.
-const _PATH_RE = new RegExp(`(?<![\\w.~:/])(~?/[^\\n]*?\\.(${_EXTS}))(?=$|[\\s)\\]"'\`,])`, 'gi');
+// O lookahead inclui `*`: path citado em **negrito** ("**/tmp/x.jpg**") parava de casar e a imagem
+// nunca era servida (bug real de 2026-08-03 — o path existia, o endpoint 200, e nada renderizava).
+const _PATH_RE = new RegExp(`(?<![\\w.~:/*])(~?/[^\\n]*?\\.(${_EXTS}))(?=$|[\\s)\\]"'\`,*])`, 'gi');
 // Caminho RELATIVO com DIRETORIO (./x.png, ../a/x.png, sub/dir/x.png) — jeito comum do Claude citar
 // arquivo que criou no cwd. Exige >=1 segmento "dir/" -> NAO casa nome puro "x.png" (ruido de prosa).
 // O backend resolve contra o cwd da sessao. Lookbehind tira word/`/`/~/./:/- (nao pega pedaco de path
 // absoluto nem de dentro de URL).
-const _REL_RE = new RegExp(`(?<![\\w/~.:-])((?:[\\w.-]+/)+[\\w.-]+\\.(${_EXTS}))(?=$|[\\s)\\]"'\`,:])`, 'gi');
+const _REL_RE = new RegExp(`(?<![\\w/~.:*-])((?:[\\w.-]+/)+[\\w.-]+\\.(${_EXTS}))(?=$|[\\s)\\]"'\`,:*])`, 'gi');
 
 export interface FileRef { path: string; name: string; kind: FileKind; url?: string; }
 
