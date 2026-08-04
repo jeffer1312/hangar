@@ -545,7 +545,7 @@ button:active:not(:disabled) {
   position: relative;
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
+  border-radius: 8px;       /* meio termo entre o --radius-sm (6) e o cardao — Vercel/Geist usa 8 */
   margin: var(--space-2) 0;
   overflow: hidden;          /* o raio da caixa vale pro header e pro pre */
 }
@@ -561,7 +561,11 @@ button:active:not(:disabled) {
   gap: var(--space-1);
   padding: 3px 6px 3px 10px;
   border-bottom: 1px solid var(--border-subtle);
+  /* Superficie propria sutil em vez de so a hairline (Claude desktop): separa o header do codigo
+     mesmo sobre papel de parede, onde a borda --border-subtle some. */
+  background: rgba(255, 255, 255, 0.04);
 }
+html[data-theme='light'] .code-head { background: rgba(0, 0, 0, 0.03); }
 .code-lang {
   flex: 1;
   min-width: 0;
@@ -587,10 +591,12 @@ button:active:not(:disabled) {
 .copy-btn.copied { color: var(--accent); opacity: 1; }
 .copy-btn.copied::before { content: '✓'; }
 
-/* Com papel de parede a caixa entra no mesmo veu dos paineis (slider Transparencia) — e o pre
-   dentro nao pinta de novo, senao sao DUAS camadas de veu empilhadas. */
+/* Com papel de parede a caixa entra no veu — MAIS OPACA que os paineis (0.93 vs --cp-panel-alpha):
+   codigo precisa de contraste mais que de transparencia (medido na comparacao de temas ao vivo).
+   E o pre dentro nao pinta de novo, senao sao DUAS camadas de veu empilhadas. */
 html[data-bg='image'] .code-block {
-  background: color-mix(in srgb, var(--bg-elevated) calc(var(--cp-panel-alpha, 0.87) * 100%), transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 93%, transparent);
+  border-color: var(--border-default);
 }
 html[data-bg='image'] .code-block pre { background: none; }
 
