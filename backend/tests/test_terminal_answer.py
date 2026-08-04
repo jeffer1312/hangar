@@ -644,19 +644,49 @@ def test_pi_answer_sem_picker_aberto_e_driveerror():
     with patch.object(ti, "_capture", lambda name: "pane qualquer sem picker"), \
          patch.object(ti.time, "sleep", lambda *_: None):
         try:
-            ti.answer_question_pi("s", {"kind": "option", "indices": [0]}, _Q)
+            ti.answer_question_pi("s", {"kind": "option", "indices": [0], "labels": ["opcao A"]}, _Q)
             assert False, "devia ter levantado DriveError"
         except ti.DriveError:
             pass
 
 
+def test_pi_answer_capture_morrendo_no_meio_do_drive_nao_submete_as_cegas():
+    # O picker estava legivel na checagem inicial; se o capture passa a devolver "" (falha de tmux),
+    # o drive NAO pode dar Enter as cegas — DriveError e o fallback por texto assume.
+    chamadas = {"n": 0, "enter": False}
+
+    def capture(name):
+        chamadas["n"] += 1
+        return _fake_pi_picker()[0](name) if chamadas["n"] == 1 else ""
+
+    def send_keys(name, k, **kw):
+        if k == "Enter":
+            chamadas["enter"] = True
+        return True
+
+    with patch.object(ti, "_capture", capture), \
+         patch.object(ti, "send_keys", send_keys), \
+         patch.object(ti.time, "sleep", lambda *_: None):
+        try:
+            ti.answer_question_pi("s", {"kind": "option", "indices": [0], "labels": ["opcao A"]}, _Q)
+            assert False, "devia ter levantado DriveError"
+        except ti.DriveError:
+            pass
+    assert chamadas["enter"] is False
+
+
 def test_pi_answer_validacao():
     import pytest
+    opt = {"kind": "option", "indices": [9], "labels": ["x"]}
     with pytest.raises(ValueError):
-        ti.answer_question_pi("s", {"kind": "option", "indices": [9]}, _Q)      # fora do range
+        ti.answer_question_pi("s", opt, _Q)                                     # fora do range
     with pytest.raises(ValueError):
-        ti.answer_question_pi("s", {"kind": "option", "indices": [0, 1]}, _Q)   # multi-select
+        ti.answer_question_pi("s", {"kind": "option", "indices": [0, 1], "labels": ["a", "b"]}, _Q)  # multi
+    with pytest.raises(ValueError):
+        ti.answer_question_pi("s", {"kind": "option", "indices": [0]}, _Q)      # sem labels (fallback vazio)
     with pytest.raises(ValueError):
         ti.answer_question_pi("s", {"kind": "text", "value": "  "}, _Q)         # texto vazio
+    with pytest.raises(ValueError):
+        ti.answer_question_pi("s", {"kind": "text", "value": "a\x07b"}, _Q)    # control char
     with pytest.raises(ValueError):
         ti.answer_question_pi("s", {"kind": "chat"}, _Q)                        # kind sem suporte

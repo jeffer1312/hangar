@@ -57,9 +57,17 @@
     return () => { vivo = false; };
   });
 
-  const gutWidth = $derived(
-    Math.max(2, ...diffs.flatMap((d) => d.rows.map((r) => Math.max(r.left?.num ?? 0, r.right?.num ?? 0)))).toString().length
-  );
+  // Numeros de linha sao monotonicos -> o maior e o da ULTIMA linha de cada edit. Sem spread de
+  // Math.max nem flatMap: num diff gigante (o caso do fallback prefixo/sufixo) o spread estourava
+  // RangeError e derrubava o card (achado do typescript-reviewer 2026-08-04).
+  const gutWidth = $derived.by(() => {
+    let max = 2;
+    for (const d of diffs) {
+      const last = d.rows[d.rows.length - 1];
+      if (last) max = Math.max(max, last.left?.num ?? 0, last.right?.num ?? 0);
+    }
+    return max.toString().length;
+  });
 
   const rowKind = (row: SplitRow, side: 'left' | 'right') => {
     const cell = row[side];
@@ -105,7 +113,7 @@
                 class:add={kind === 'add'}
                 class:del={kind === 'del'}
                 class:void={kind === 'void'}
-              ><span class="gut" style:min-width="{gutWidth}ch">{row[side]?.num ?? ''}</span><span class="code">{#if toks}{#each toks as t, ti (ti)}<span style={t.color ? `color: ${t.color}` : undefined}>{t.content}</span>{/each}{/if}{#if !toks}{row[side]?.text ?? ''}{/if}</span></span>{/each}</pre>
+              ><span class="sr-only">{kind === 'add' ? '+' : kind === 'del' ? '-' : ' '}</span><span class="gut" style:min-width="{gutWidth}ch">{row[side]?.num ?? ''}</span><span class="code">{#if toks}{#each toks as t, ti (ti)}<span style={t.color ? `color: ${t.color}` : undefined}>{t.content}</span>{/each}{/if}{#if !toks}{row[side]?.text ?? ''}{/if}</span></span>{/each}</pre>
         {/each}
       </div>
     {:else}

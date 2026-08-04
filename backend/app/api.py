@@ -2720,11 +2720,14 @@ def answer(name: str, body: AnswerBody):
         except terminal_input.DriveError as e:
             text = _pi_answer_fallback_text(answers[0])
             _log.warning("PI-QUESTION fallback name=%s reason=%s text=%r", name, e, text[:120])
+            if not text:
+                # Sem texto de fallback, NAO manda o Escape: picker aberto = usuario ainda responde
+                # no terminal. Fechar e devolver ok sem entregar nada seria a pior saida (silencio).
+                raise HTTPException(409, f"drive falhou ({e}) e nao ha texto de fallback — responda no terminal")
             terminal.interrupt(name)  # Escape unico: fecha o picker do Pi (sem clear — input vazio)
-            if text:
-                res = _send_one(name, text)
-                if not res["ok"]:
-                    raise HTTPException(409, f"drive falhou e fallback por texto tambem: {res['error']}")
+            res = _send_one(name, text)
+            if not res["ok"]:
+                raise HTTPException(409, f"drive falhou e fallback por texto tambem: {res['error']}")
             fallback = True
         return {"ok": True, "fallback": fallback}
     try:
