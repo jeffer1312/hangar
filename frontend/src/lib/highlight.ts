@@ -159,7 +159,10 @@ export async function highlightCodeLines(lines: string[], path: string): Promise
   let core: HighlighterCore;
   try {
     core = await getCore();
-  } catch {
+  } catch (err) {
+    // Mesma regra do highlightCodeBlocks: falha de infra NAO pode ficar muda (plain pra sempre
+    // sem rastro era o bug).
+    console.warn('[hl] core Shiki falhou', err);
     return null;
   }
   if (!(await ensureLang(core, lang))) return null;
@@ -167,7 +170,8 @@ export async function highlightCodeLines(lines: string[], path: string): Promise
   try {
     const { tokens } = core.codeToTokens(lines.join('\n'), { lang, theme });
     return tokens.map((linha) => linha.map((t) => ({ content: t.content, color: t.color })));
-  } catch {
+  } catch (err) {
+    console.warn('[hl] tokenizacao falhou', err);
     return null;
   }
 }

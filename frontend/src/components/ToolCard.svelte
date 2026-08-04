@@ -90,7 +90,7 @@
     <div class="row-result row-result--diff">
       <EditDiff path={editPath} edits={editEdits} />
     </div>
-  {:else if expanded && isRead && result?.result}
+  {:else if expanded && isRead && phase !== 'error' && result?.result}
     <div class="row-result">
       <ReadView path={editPath} text={result.result} />
     </div>
