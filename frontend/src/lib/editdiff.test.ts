@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeEditDiff, extractEdits, extractEditPath, pairRows } from './editdiff';
+import { computeEditDiff, extractEdits, extractFilePath, pairRows } from './editdiff';
 
 describe('computeEditDiff', () => {
   it('troca simples de 1 linha vira par alterado', () => {
@@ -145,10 +145,10 @@ describe('extractEdits', () => {
     expect(extractEdits('multiedit', { edits: [{ oldText: 'a', newText: 'b' }] })).toHaveLength(1);
   });
 
-  it('extractEditPath: file_path (Claude) ou path (Pi)', () => {
-    expect(extractEditPath({ file_path: '/a.ts' })).toBe('/a.ts');
-    expect(extractEditPath({ path: '/b.ts' })).toBe('/b.ts');
-    expect(extractEditPath({})).toBe('');
-    expect(extractEditPath(null)).toBe('');
+  it('extractFilePath: file_path (Claude) ou path (Pi)', () => {
+    expect(extractFilePath({ file_path: '/a.ts' })).toBe('/a.ts');
+    expect(extractFilePath({ path: '/b.ts' })).toBe('/b.ts');
+    expect(extractFilePath({})).toBe('');
+    expect(extractFilePath(null)).toBe('');
   });
 });

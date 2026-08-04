@@ -1,9 +1,10 @@
 <script lang="ts">
   import type { ChatEvent } from '../lib/types';
   import { parseFilePaths, summarizeToolInput, summarizeToolResult, toolPhase } from '../lib/format';
-  import { extractEdits, extractEditPath } from '../lib/editdiff';
+  import { extractEdits, extractFilePath } from '../lib/editdiff';
   import FileAttachment from './FileAttachment.svelte';
   import EditDiff from './EditDiff.svelte';
+  import ReadView from './ReadView.svelte';
 
   interface Props {
     event: ChatEvent;
@@ -17,7 +18,7 @@
   // Pi, lado a lado) no lugar do resultado cru. Aberto por padrao, recolhe no toque (escolha do
   // usuario 2026-08-04). null = shape desconhecido -> comportamento de sempre (pre com o result).
   const editEdits = $derived(extractEdits(event.tool_name, event.tool_input));
-  const editPath = $derived(extractEditPath(event.tool_input));
+  const editPath = $derived(extractFilePath(event.tool_input));
   // svelte-ignore state_referenced_locally -- o valor inicial E a decisao (aberto por padrao pra
   // Edit/MultiEdit); o componente e recriado por evento (key do each no MessageList), nao reage.
   let expanded = $state(!!extractEdits(event.tool_name, event.tool_input));
@@ -26,14 +27,19 @@
   // path do Read esta citado na conversa -> serve pelo /file (parseFilePaths filtra por extensao
   // conhecida, entao codigo/.md nao vira anexo). Reusa a mesma trava + componente do chat.
   const fileRefs = $derived(
-    event.tool_name === 'Read'
-      ? parseFilePaths(String((event.tool_input as Record<string, unknown> | null)?.['file_path'] ?? ''))
+    (event.tool_name ?? '').toLowerCase() === 'read'
+      ? parseFilePaths(String((event.tool_input as Record<string, unknown> | null)?.['file_path'] ?? (event.tool_input as Record<string, unknown> | null)?.['path'] ?? ''))
       : []
   );
 
   const phase = $derived(toolPhase(result));
   // Erro mostra o TEXTO do erro (o diff esconderia a mensagem que importa).
   const showDiff = $derived(!!editEdits && phase !== 'error');
+  // Read: resultado de codigo com highlight (escolha do usuario 2026-08-04). Imagem lida NAO passa
+  // aqui — o resultado dela e curto ("Read image file...") e o anexo ja vai por FileAttachment.
+  const isRead = $derived(
+    (event.tool_name ?? '').toLowerCase() === 'read' && fileRefs.length === 0
+  );
 
   const summary = $derived(summarizeToolInput(event.tool_name, event.tool_input));
 
@@ -83,6 +89,10 @@
   {#if expanded && showDiff && editEdits}
     <div class="row-result row-result--diff">
       <EditDiff path={editPath} edits={editEdits} />
+    </div>
+  {:else if expanded && isRead && result?.result}
+    <div class="row-result">
+      <ReadView path={editPath} text={result.result} />
     </div>
   {:else if expanded && result?.result}
     <div class="row-result">
