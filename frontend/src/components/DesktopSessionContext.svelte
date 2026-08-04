@@ -375,7 +375,10 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--space-3);
-    padding: var(--space-2) var(--space-4);
+    /* A partir de 1280px com este painel aberto a NavBar some (Chat.svelte) e quem encosta na
+       borda direita da janela é este header — logo é ele que abre a faixa dos controles da
+       janela no PWA em window-controls-overlay. Zero fora desse modo. */
+    padding: var(--space-2) calc(var(--space-4) + var(--cp-wco-right)) var(--space-2) var(--space-4);
     border-bottom: 1px solid var(--border-subtle);
     background: color-mix(in srgb, var(--bg-elevated) 52%, transparent);
   }

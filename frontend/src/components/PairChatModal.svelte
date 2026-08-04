@@ -60,7 +60,9 @@
   /* Mesmo botão do overlay do quadro (DesktopShell .split-close). Fica ACIMA do chat porque o
      header do Chat em desktop não tem "voltar" — sem ele o Esc seria a única saída. */
   .pcm-close {
-    position: absolute; top: 8px; right: 10px; z-index: 20;
+    /* Janela menor que ~1072px: o modal ocupa a largura toda e este × encosta na borda direita,
+       onde ficam os controles da janela no PWA. Soma --cp-wco-right (0 fora do PWA). */
+    position: absolute; top: 8px; right: calc(10px + var(--cp-wco-right)); z-index: 20;
     width: 28px; height: 28px;
     display: flex; align-items: center; justify-content: center;
     border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);

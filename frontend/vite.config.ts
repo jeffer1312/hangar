@@ -131,6 +131,9 @@ export default defineConfig({
         name: 'Claude Cockpit',
         short_name: 'Cockpit',
         display: 'standalone',
+        // Desktop: sem barra de título do navegador — os controles da janela viram overlay
+        // sobre o app. Quem abre espaço pra eles é --cp-wco-right (app.css). Celular ignora.
+        display_override: ['window-controls-overlay'],
         background_color: '#100e11',
         theme_color: '#100e11',
         orientation: 'portrait',

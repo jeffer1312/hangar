@@ -107,6 +107,22 @@
   --pill-dead-fg:     #ff453a;
   --pill-input-bg:    rgba(255,159,10,0.12);
   --pill-input-fg:    #ff9f0a;
+
+  /* Faixa reservada aos controles da janela (⋮ ×) quando o PWA roda em
+     window-controls-overlay. Fora desse modo é zero — ver bloco abaixo. */
+  --cp-wco-right: 0px;
+}
+
+/* PWA instalado com display_override: ["window-controls-overlay"] — o navegador não desenha
+   barra de título; os botões da janela ficam SOBRE o app, no canto superior direito. Quem
+   encosta nessa borda precisa recuar, senão o clique vai pro navegador em vez do app.
+   Um só lugar define a largura; os componentes só somam var(--cp-wco-right) ao padding.
+   Quem encosta na direita, por layout, é: a NavBar do chat (< 1280px ou sem painel docado),
+   o header do painel de contexto (>= 1280px com painel) e o × de fechar overlay/split. */
+@media (display-mode: window-controls-overlay) {
+  :root {
+    --cp-wco-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+  }
 }
 
 :root[data-theme="light"] {

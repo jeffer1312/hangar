@@ -254,7 +254,19 @@
     align-items: center;
     justify-content: space-between;
     height: 48px;
-    padding: 0 var(--space-4);
+    /* --cp-wco-right (app.css) é 0 fora do PWA em window-controls-overlay; lá ele abre a
+       faixa dos botões da janela, que ficam por cima deste canto. */
+    padding: 0 calc(var(--space-4) + var(--cp-wco-right)) 0 var(--space-4);
+  }
+
+  /* Sem barra de título, a janela perde a área de arrastar: devolvemos a barra inteira como
+     alça e liberamos os controles, senão nenhum botão da NavBar recebe clique. */
+  @media (display-mode: window-controls-overlay) {
+    .navbar { -webkit-app-region: drag; }
+    .navbar :global(button),
+    .navbar :global(a),
+    .navbar :global(input),
+    .navbar :global([role='button']) { -webkit-app-region: no-drag; }
   }
 
   .navbar-title {
