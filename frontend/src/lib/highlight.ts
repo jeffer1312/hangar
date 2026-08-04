@@ -148,6 +148,29 @@ export async function highlightDiff(diffText: string, path: string): Promise<Dif
 }
 
 // ── Blocos de codigo da conversa (nao-diff) ─────────────────────────────────
+
+/** Tokeniza uma lista de linhas de codigo (UM blob, estado da grammar preservado) e devolve os
+ * tokens por linha — mesma tecnica do highlightDiff, mas pra quem ja tem as linhas separadas
+ * (o EditDiff side-by-side tokeniza o lado old e o lado new como blobs independentes).
+ * null = sem highlight (lang desconhecida, grammar falhou, acima do teto) -> caller mostra plain. */
+export async function highlightCodeLines(lines: string[], path: string): Promise<DiffToken[][] | null> {
+  const lang = langFromPath(path);
+  if (lang === 'txt' || lines.length > MAX_HL_LINES || !lines.length) return null;
+  let core: HighlighterCore;
+  try {
+    core = await getCore();
+  } catch {
+    return null;
+  }
+  if (!(await ensureLang(core, lang))) return null;
+  const theme = document.documentElement.dataset.theme === 'light' ? 'light-plus' : 'one-dark-pro';
+  try {
+    const { tokens } = core.codeToTokens(lines.join('\n'), { lang, theme });
+    return tokens.map((linha) => linha.map((t) => ({ content: t.content, color: t.color })));
+  } catch {
+    return null;
+  }
+}
 // Os <pre><code class="language-X"> vem do renderMarkdown como TEXTO ESCAPADO, monocromatico.
 // Esta passa coloriza in-place (spans com cor inline do tema VS Code) depois da montagem.
 // Bloco sem lang conhecida / grammar que falhou / bloco gigante -> fica plain, sem erro.
