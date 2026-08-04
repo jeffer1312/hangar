@@ -1,7 +1,9 @@
 <script lang="ts">
   import type { ChatEvent } from '../lib/types';
   import { parseFilePaths, summarizeToolInput, summarizeToolResult, toolPhase } from '../lib/format';
+  import { extractEdits, extractEditPath } from '../lib/editdiff';
   import FileAttachment from './FileAttachment.svelte';
+  import EditDiff from './EditDiff.svelte';
 
   interface Props {
     event: ChatEvent;
@@ -11,7 +13,14 @@
   }
   let { event, result = null, sessionName, animate = true }: Props = $props();
 
-  let expanded = $state(false);
+  // Edit/MultiEdit: o tool_input ja traz old_string/new_string -> da pra mostrar o DIFF (estilo
+  // Pi, lado a lado) no lugar do resultado cru. Aberto por padrao, recolhe no toque (escolha do
+  // usuario 2026-08-04). null = shape desconhecido -> comportamento de sempre (pre com o result).
+  const editEdits = $derived(extractEdits(event.tool_name, event.tool_input));
+  const editPath = $derived(extractEditPath(event.tool_input));
+  // svelte-ignore state_referenced_locally -- o valor inicial E a decisao (aberto por padrao pra
+  // Edit/MultiEdit); o componente e recriado por evento (key do each no MessageList), nao reage.
+  let expanded = $state(!!extractEdits(event.tool_name, event.tool_input));
 
   // Imagem (ou midia/doc) que o Claude LEU: o transcript dropa o bloco image do tool_result, mas o
   // path do Read esta citado na conversa -> serve pelo /file (parseFilePaths filtra por extensao
@@ -23,6 +32,8 @@
   );
 
   const phase = $derived(toolPhase(result));
+  // Erro mostra o TEXTO do erro (o diff esconderia a mensagem que importa).
+  const showDiff = $derived(!!editEdits && phase !== 'error');
 
   const summary = $derived(summarizeToolInput(event.tool_name, event.tool_input));
 
@@ -60,7 +71,7 @@
   <div class="tr-out">
     <span class="tr-elbow" aria-hidden="true"></span>
     <span class="tr-outcome">{outcome}</span>
-    {#if result?.result}
+    {#if result?.result || editEdits}
       <span class="tr-hint">
         <span class="sep" aria-hidden="true">•</span>
         <span class="coarse">{expanded ? 'toque para ocultar' : 'toque para ver'}</span><span
@@ -69,7 +80,11 @@
     {/if}
   </div>
 
-  {#if expanded && result?.result}
+  {#if expanded && showDiff && editEdits}
+    <div class="row-result row-result--diff">
+      <EditDiff path={editPath} edits={editEdits} />
+    </div>
+  {:else if expanded && result?.result}
     <div class="row-result">
       <pre>{result.result}</pre>
     </div>
@@ -211,5 +226,14 @@
     line-height: 1.35;
     white-space: pre-wrap;
     word-break: break-all;
+  }
+
+  /* O diff ja tem a propria moldura/superficie — sem a bordinha lateral do resultado cru, e sem
+     o teto de 240px (o EditDiff tem o proprio scroll interno). */
+  .row-result--diff {
+    border-left: none;
+    padding-left: 0;
+    max-height: none;
+    overflow-y: visible;
   }
 </style>
