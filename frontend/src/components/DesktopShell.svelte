@@ -326,7 +326,9 @@
   }
   @keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
   .split-close {
-    position: absolute; top: 8px; right: 10px; z-index: 20;
+    /* right soma --cp-wco-right (app.css): no PWA em window-controls-overlay este × cairia
+       exatamente embaixo do × da janela. Zero fora desse modo. */
+    position: absolute; top: 8px; right: calc(10px + var(--cp-wco-right)); z-index: 20;
     width: 28px; height: 28px;
     display: flex; align-items: center; justify-content: center;
     border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);

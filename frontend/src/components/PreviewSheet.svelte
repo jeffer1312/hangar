@@ -178,7 +178,11 @@ import BottomSheet from './BottomSheet.svelte';
   .pv-fs { height: 100%; display: flex; flex-direction: column; }
   .pv-fs-frame { flex: 1; width: 100%; min-height: 0; border: 0; background: #fff; }
   .pv-fs-close {
-    position: absolute; top: calc(env(safe-area-inset-top) + var(--space-2)); right: var(--space-3);
+    /* Em tela cheia o diálogo cobre a janela inteira, então este botão encosta na borda direita:
+       soma --cp-wco-right (app.css) pra não cair sob os controles da janela no PWA. É a ÚNICA
+       saída visível do modo tela cheia — encoberto, o clique some sem erro. Zero fora do PWA. */
+    position: absolute; top: calc(env(safe-area-inset-top) + var(--space-2));
+    right: calc(var(--space-3) + var(--cp-wco-right));
     z-index: 1; padding: var(--space-2) var(--space-3); border-radius: var(--radius-full);
     border: 1px solid var(--border-default); background: var(--bg-elevated);
     color: var(--text-primary); font-size: var(--text-sm); cursor: pointer;
