@@ -149,8 +149,8 @@ export function extractEdits(toolName: string | null | undefined, input: unknown
   return null;
 }
 
-/** file_path (Claude) ou path (Pi) — so pra detectar a linguagem do highlight. */
-export function extractEditPath(input: unknown): string {
+/** file_path (Claude) ou path (Pi) do arquivo que a ferramenta toca (Edit, Read) — usado pra detectar a linguagem do highlight. */
+export function extractFilePath(input: unknown): string {
   if (!input || typeof input !== 'object') return '';
   const rec = input as Record<string, unknown>;
   return String(rec.file_path ?? rec.path ?? '');
