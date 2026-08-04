@@ -122,6 +122,64 @@ def parse_line(line: str) -> list[ChatEvent]:
     return parse_obj(obj)
 
 
+# ── Pergunta nativa do Pi (tool `question`) ──────────────────────────────────
+# O Pi nao tem hook de Claude pra capturar o AskUserQuestion (askq_capture.py), mas NAO PRECISA:
+# o toolCall cai no jsonl com os arguments COMPLETOS (texto, header, opcoes com descricao) no
+# instante da pergunta, e o toolResult so chega depois da resposta. Pendente = toolCall 'question'
+# sem toolResult com o mesmo toolCallId DEPOIS dele.
+
+_PENDQ_TAIL_BYTES = 512 * 1024
+
+
+def read_pending_question(jsonl: str) -> dict | None:
+    """Os `arguments` do ultimo toolCall 'question' ainda sem resposta, ou None.
+
+    Le so a CAUDA do jsonl: a pergunta pendente e sempre recente (o Pi inteiro para esperando ela,
+    entao nada alem de 512KB a separa do fim). Malformado/ausente -> None, nunca levanta: quem
+    chama e o /answer, e um None vira 409 legivel pro usuario."""
+    try:
+        with open(jsonl, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - _PENDQ_TAIL_BYTES))
+            tail = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    lines = tail.splitlines()
+    if size > _PENDQ_TAIL_BYTES:
+        lines = lines[1:]     # primeira linha veio cortada pelo seek no meio
+    last_q: tuple[str, dict] | None = None
+    answered: set[str] = set()
+    for line in lines:
+        line = line.strip()
+        if not line or '"question"' not in line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        msg = obj.get("message") if isinstance(obj, dict) else None
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") == "toolResult" and msg.get("toolName") == "question":
+            cid = msg.get("toolCallId")
+            if cid:
+                answered.add(cid)
+            continue
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if (isinstance(b, dict) and b.get("type") == "toolCall" and b.get("name") == "question"
+                    and isinstance(b.get("arguments"), dict) and b.get("id")):
+                last_q = (b["id"], b["arguments"])
+    if last_q is None or last_q[0] in answered:
+        return None
+    return last_q[1]
+
+
 # Contexto que um hook do Claude injetou no turno, via a extensao claude-hooks-adapter.ts (ela roda
 # os hooks do Claude dentro do Pi e devolve o texto pelo `before_agent_start`). O Pi COLA esse texto
 # no inicio da mensagem do usuario — e essa mensagem e o que o app mostra como bolha, entao o

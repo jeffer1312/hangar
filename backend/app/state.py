@@ -8,11 +8,15 @@ from app.models import StateEvent
 from app.statusline import read as _sidecar_status
 
 SPINNER_GLYPHS = "✻✽✶✺✢·∗✳✦✧"
-_OPTION_RE = re.compile(r"^\s*❯?\s*\d+\.\s+(.*\S)\s*$")
+_OPTION_RE = re.compile(r"^\s*[❯>]?\s*\d+\.\s+(.*\S)\s*$")
 # Bordas do box de `preview` do AskUserQuestion (canto ╭/╰ na linha do cursor, │ nas demais):
 # renderiza NA MESMA LINHA da opção -> o label corta na primeira borda.
 _BOX_SPLIT_RE = re.compile(r"[│╭╮╰╯]")
+# Cursor do picker: ❯ e do Claude, ">" e do Pi (ascii). O do Pi so vale com o rodape de navegacao
+# NO FUNDO do pane (ver _menu_block) — sem essa trava, um "> 1. ..." citado em prosa no scrollback
+# viraria menu fantasma.
 _CURSOR_RE = re.compile(r"^\s*❯\s*\d+\.\s", re.M)
+_PI_CURSOR_RE = re.compile(r"^\s*>\s*\d+\.\s", re.M)
 _RULE_RE = re.compile(r"^[\s─]*─{10,}[\s─]*$")  # a horizontal rule (the input box border)
 # Rodape da caixa ARREDONDADA do composer (`╰───╯`), que e como o Pi desenha o input — ele nunca
 # imprime a regua reta do Claude. Sem esta ancora um pane do Pi nao casava nada e o fallback
@@ -130,10 +134,18 @@ def _menu_block(lines: list[str]) -> Optional[tuple[int, int]]:
     paramos no primeiro boundary (bullet/spinner); descendo paramos no rodape de navegacao ou
     no proximo boundary. Sem cursor ❯ N. nao ha menu (uma lista numerada solta nao e widget)."""
     cursor = None
+    pi_cursor = False
     for i, ln in enumerate(lines):
         if _CURSOR_RE.match(ln):
-            cursor = i  # cursor mais ao fundo = o picker vivo
+            cursor, pi_cursor = i, False   # cursor mais ao fundo = o picker vivo
+        elif _PI_CURSOR_RE.match(ln):
+            cursor, pi_cursor = i, True
     if cursor is None:
+        return None
+    # Cursor do Pi ("> N.") so e picker VIVO se o rodape de navegacao estiver nas ultimas linhas do
+    # pane (mesma janela do is_overlay). Uma citacao do picker no scrollback tem o "> 1." mas o
+    # rodape dela subiu junto — sem a trava ela travava o app num menu fantasma.
+    if pi_cursor and not _FOOTER_RE.search("\n".join(lines[-8:])):
         return None
     # Um menu VIVO substitui o composer de input. Se ABAIXO do cursor renderiza o composer vivo (linha
     # de prompt "❯ " vazia ou com rascunho — comeca com ❯ mas NAO e "❯ N." de opcao), entao este "❯ N."

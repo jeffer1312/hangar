@@ -327,3 +327,55 @@ def test_queue_entry_right_after_the_session_start_survives_in_pi_history(tmp_pa
     textos = [e.text for e in evs]
     assert "primeiro" in textos and "resposta" in textos
     assert "segundo" in textos, "entrada de fila do inicio da sessao sumiu do historico"
+
+
+# ── read_pending_question: a pergunta nativa do Pi (tool `question`) esperando resposta ─────────
+
+def _question_call(qid="tool_q1", **args):
+    return {"type": "message", "id": "q_" + qid,
+            "message": {"role": "assistant", "content": [
+                {"type": "toolCall", "id": qid, "name": "question", "arguments": args}]}}
+
+
+def _question_result(qid="tool_q1"):
+    return {"type": "message", "id": "r_" + qid,
+            "message": {"role": "toolResult", "toolCallId": qid, "toolName": "question",
+                        "content": [{"type": "text", "text": "User selected: 1. x"}]}}
+
+
+def test_pending_question_returns_arguments(tmp_path):
+    f = tmp_path / "s.jsonl"
+    args = {"question": "qual?", "header": "h",
+            "options": [{"label": "a", "description": "d"}, {"label": "b", "description": ""}]}
+    f.write_text(json.dumps(_question_call(**args), ensure_ascii=False) + "\n")
+    assert pt.read_pending_question(str(f)) == args
+
+
+def test_answered_question_returns_none(tmp_path):
+    f = tmp_path / "s.jsonl"
+    f.write_text(json.dumps(_question_call()) + "\n" + json.dumps(_question_result()) + "\n")
+    assert pt.read_pending_question(str(f)) is None
+
+
+def test_new_question_after_answered_one_is_the_pending_one(tmp_path):
+    f = tmp_path / "s.jsonl"
+    f.write_text("\n".join([
+        json.dumps(_question_call("tool_q1", question="velha")),
+        json.dumps(_question_result("tool_q1")),
+        json.dumps(_question_call("tool_q2", question="nova")),
+    ]) + "\n")
+    q = pt.read_pending_question(str(f))
+    assert q is not None and q["question"] == "nova"
+
+
+def test_other_tool_calls_are_not_questions(tmp_path):
+    f = tmp_path / "s.jsonl"
+    call = {"type": "message", "id": "b1",
+            "message": {"role": "assistant", "content": [
+                {"type": "toolCall", "id": "t1", "name": "bash", "arguments": {"cmd": "ls"}}]}}
+    f.write_text(json.dumps(call) + "\n")
+    assert pt.read_pending_question(str(f)) is None
+
+
+def test_missing_file_returns_none():
+    assert pt.read_pending_question("/nao/existe/este/arquivo.jsonl") is None

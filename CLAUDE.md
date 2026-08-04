@@ -202,6 +202,16 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
 - **Restarting the backend.** No `--reload` (it holds SSE + watchfiles). `pkill -f app.main` can match your
   own shell; SIGTERM can hang on an open SSE connection. Kill `-9` the pid bound to the port and relaunch
   detached (`setsid`).
+- **Vite HMR servindo componente VAZIO (stub de ~800 bytes).** Medido 2× em 2026-08-04 (vite 8.1.0 +
+  vite-plugin-svelte 7.1.2 + svelte 5.56.4): depois de editar um `.svelte` com a página aberta, o dev
+  server passa a servir o módulo transformado como um stub sem template (`function X(...) { ...; return
+  $.pop(...) }` e mais nada) — o componente monta ZERO nós, SEM erro no console e SEM overlay do Vite.
+  Sintoma na UI: a tela/componente some (ex: o chat inteiro vira papel de parede; cliques em cards não
+  fazem nada porque a rota nunca monta). O `svelte-check` passa — o arquivo está bom, quem corrompeu é o
+  cache de transform do dev server, e ele vale pra TODOS os clientes (não é por-browser). Diagnóstico:
+  `fetch('/src/<modulo>')` na página — stub tem <1KB e não contém o markup. Remédio: `systemctl --user
+  restart claude-cockpit-frontend.service` + reload ignorando cache. Verificação pós-edição de front
+  SEMPRE inclui abrir a tela afetada e conferir que ela montou (não só o `check`/`vitest`).
 - **Markdown NUNCA aparece cru.** Todo conteúdo `.md` exibido no app passa por `lib/markdown.ts`
   (`renderMarkdown`) com tipografia própria — contrato do par (`PairSheet`), prompt/transcript de
   subagente (`ActivitySheet`), plano, README, qualquer arquivo lido do disco. Um `<pre>` com

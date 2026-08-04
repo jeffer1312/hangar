@@ -332,3 +332,44 @@ def test_status_line_claude_fixtures_byte_identical():
         assert state_mod.status_line((fx / nome).read_text(encoding="utf-8")) == valor, nome
     # O banner de boas-vindas do Claude TEM `╰───╯` (linha 12 do pane_idle) — a asserção acima já
     # prova que ele nao vira ancora: a regua do input, mais abaixo, continua ganhando.
+
+
+def test_pi_question_picker_is_awaiting_input():
+    # Picker do Pi (tool `question`): cursor ascii "> N." + rodape de navegacao no FUNDO do pane.
+    # Medido no pi 0.82.1 (a pergunta "Quando mostrar o diff" desta feature).
+    pane = (
+        "● Question No pi o diff do Edit aparece aberto na conversa?\n"
+        + ("─" * 60) + "\n"
+        "\n"
+        "[Quando mostrar o diff]\n"
+        "No pi o diff do Edit aparece aberto na conversa?\n"
+        "\n"
+        "> 1. Sempre aberto na conversa\n"
+        "  2. Só ao expandir (toque/clique)\n"
+        "  3. Aberto por padrão, recolhível\n"
+        "  4. Type something.\n"
+        "↑↓ navigate • Enter to select • Esc to cancel\n"
+        + ("─" * 60) + "\n"
+        " k3 (high) | claude-cockpit | sessão 45k\n"
+    )
+    state, label, question, options = classify(pane)
+    assert state == "awaiting_input"
+    assert question == "No pi o diff do Edit aparece aberto na conversa?"
+    assert options == ["Sempre aberto na conversa", "Só ao expandir (toque/clique)",
+                       "Aberto por padrão, recolhível", "Type something."]
+
+
+def test_pi_cursor_citation_without_live_footer_is_not_a_menu():
+    # "> 1." CITADO em prosa (o rodape da citacao subiu no scrollback) nao e picker vivo — sem a
+    # trava do rodape-no-fundo isto travava a sessao num menu fantasma.
+    pane = (
+        "Veja como o pi desenha:\n"
+        "> 1. Sempre aberto na conversa\n"
+        "  2. Só ao expandir\n"
+        "↑↓ navigate • Enter to select • Esc to cancel\n"
+        + "".join(f"linha de conversa {i} depois da citacao\n" for i in range(12))
+        + "╰" + "─" * 40 + "╯\n"
+        + " k3 (high) | sessao\n"
+    )
+    state, *_ = classify(pane)
+    assert state == "idle"

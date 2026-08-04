@@ -714,6 +714,71 @@ def answer_questions(name: str, answers: list[dict]) -> None:
     # senao: pergunta unica ja submeteu na selecao; nada a confirmar.
 
 
+# ── Picker do Pi (tool `question`) ───────────────────────────────────────────
+# Cursor do picker do Pi: "> 3. label" (ascii, nao o ❯ do Claude). Nao misturar no _CURSOR_ROW
+# do Claude: aquele faz search no pane INTEIRO e um "> N." citado em prosa viraria falso cursor;
+# aqui o match so vale junto com o is_overlay (rodape de navegacao no FUNDO do pane), que e o que
+# separa o picker vivo da citacao no scrollback.
+_PI_CURSOR_ROW = re.compile(r">\s*(\d+)\.")
+
+
+def _pi_cursor_row(screen: str) -> int | None:
+    rows = _PI_CURSOR_ROW.findall(screen)
+    return int(rows[-1]) if rows else None   # mais ao fundo = o picker vivo
+
+
+def answer_question_pi(name: str, answer: dict, question: dict) -> None:
+    """Dirige o picker da tool `question` do Pi: Down/Up em malha fechada (mesmo padrao do
+    answer_questions do Claude) + Enter. kind=text: navega ate o "Type something." (sempre a
+    ultima linha), Enter, digita, Enter. Input invalido -> ValueError (409); drive falhou ->
+    DriveError SEM submeter e SEM Escape (o caller faz Escape + fallback por texto, igual Claude)."""
+    options = question.get("options") if isinstance(question.get("options"), list) else []
+    kind = answer.get("kind")
+    if kind == "option":
+        indices = answer.get("indices") or []
+        if len(indices) > 1:
+            raise ValueError("multi-seleção do Pi ainda não é dirigida pelo app — responda no terminal")
+        if not indices:
+            raise ValueError("sem opcao escolhida")
+        target = int(indices[0]) + 1
+        if not 1 <= target <= len(options):
+            raise ValueError(f"opcao {target} fora do intervalo (1..{len(options)})")
+    elif kind == "text":
+        if not str(answer.get("value") or "").strip():
+            raise ValueError("texto vazio")
+        target = len(options) + 1        # "Type something." e sempre a ultima linha do picker
+    else:
+        raise ValueError(f"kind nao suportado no picker do Pi: {kind!r}")
+
+    screen = _capture(name)
+    if not is_overlay(screen) or _pi_cursor_row(screen) is None:
+        raise DriveError("picker do Pi nao esta aberto no pane")
+
+    def key(k: str) -> None:
+        send_keys(name, k)
+        time.sleep(_SETTLE)
+
+    row = _pi_cursor_row(_capture(name))
+    for _ in range(3):
+        if row is None or row == target:
+            break
+        for _ in range(abs(target - row)):
+            key("Down" if target > row else "Up")
+        row = _pi_cursor_row(_capture(name))
+    if row is not None and row != target:
+        raise DriveError(f"nav drift no picker do Pi — cursor na linha {row}, esperava {target}; nao submetido")
+    key("Enter")
+    if kind == "text":
+        time.sleep(_SETTLE)
+        send_keys(name, str(answer["value"]), literal=True)
+        time.sleep(_SUBMIT_SETTLE)
+        key("Enter")
+    time.sleep(_OPEN_SETTLE)
+    after = _capture(name)
+    if is_overlay(after) and _pi_cursor_row(after) is not None:
+        raise DriveError("picker do Pi ainda aberto apos o Enter — nada foi submetido")
+
+
 class TerminalInput:
     def send_prompt(self, name: str, text: str, provider: str = "claude",
                     pane_id: str | None = None, msg_id: str | None = None) -> str:

@@ -574,3 +574,89 @@ def test_mensagem_curta_continua_sendo_enviada():
              patch.object(ti, "send_keys", espiao):
             assert ti.TerminalInput().send_prompt("s", curta) == "sent", curta
         assert teclas == [curta, "Enter"], curta
+
+
+# ── answer_question_pi: drive do picker da tool `question` do Pi ────────────────────────────────
+
+_Q = {"options": [{"label": "opcao A"}, {"label": "opcao B"}]}
+
+
+def _fake_pi_picker():
+    """Picker do Pi vivo. Cursor comeca na linha 1; Enter numa opcao fecha o picker (rodape some);
+    Enter no "Type something." abre o modo TEXTO (cursor sai da tela, literal entra, Enter fecha)."""
+    estado = {"cursor": 1, "aberto": True, "modo_texto": False, "digitado": ""}
+
+    def capture(name):
+        if not estado["aberto"]:
+            return "conversa normal\n" + ("─" * 60) + "\n status\n"
+        if estado["modo_texto"]:
+            return ("● Question qual?\n\n> " + estado["digitado"] + "\n"
+                    "Enter to submit • Esc to cancel\n" + ("─" * 60) + "\n status\n")
+        linhas = []
+        for i, lbl in enumerate(["opcao A", "opcao B", "Type something."], start=1):
+            marca = "> " if estado["cursor"] == i else "  "
+            linhas.append(f"{marca}{i}. {lbl}")
+        return ("● Question qual?\n\n" + "\n".join(linhas) + "\n"
+                "↑↓ navigate • Enter to select • Esc to cancel\n" + ("─" * 60) + "\n status\n")
+
+    def send_keys(name, k, **kw):
+        if not estado["aberto"]:
+            return True
+        if estado["modo_texto"]:
+            if kw.get("literal"):
+                estado["digitado"] = k
+            elif k == "Enter":
+                estado["aberto"] = False
+            return True
+        if k == "Down":
+            estado["cursor"] = min(3, estado["cursor"] + 1)
+        elif k == "Up":
+            estado["cursor"] = max(1, estado["cursor"] - 1)
+        elif k == "Enter":
+            if estado["cursor"] == 3:
+                estado["modo_texto"] = True     # "Type something." abre o campo de texto
+            else:
+                estado["aberto"] = False
+        return True
+    return capture, send_keys, estado
+
+
+def test_pi_answer_option_navega_e_submete():
+    capture, send_keys, estado = _fake_pi_picker()
+    with patch.object(ti, "_capture", capture), \
+         patch.object(ti, "send_keys", send_keys), \
+         patch.object(ti.time, "sleep", lambda *_: None):
+        ti.answer_question_pi("s", {"kind": "option", "indices": [1], "labels": ["opcao B"]}, _Q)
+    assert estado["aberto"] is False
+
+
+def test_pi_answer_text_vai_pro_type_something():
+    capture, send_keys, estado = _fake_pi_picker()
+    with patch.object(ti, "_capture", capture), \
+         patch.object(ti, "send_keys", send_keys), \
+         patch.object(ti.time, "sleep", lambda *_: None):
+        ti.answer_question_pi("s", {"kind": "text", "value": "resposta livre"}, _Q)
+    assert estado["digitado"] == "resposta livre"
+    assert estado["aberto"] is False
+
+
+def test_pi_answer_sem_picker_aberto_e_driveerror():
+    with patch.object(ti, "_capture", lambda name: "pane qualquer sem picker"), \
+         patch.object(ti.time, "sleep", lambda *_: None):
+        try:
+            ti.answer_question_pi("s", {"kind": "option", "indices": [0]}, _Q)
+            assert False, "devia ter levantado DriveError"
+        except ti.DriveError:
+            pass
+
+
+def test_pi_answer_validacao():
+    import pytest
+    with pytest.raises(ValueError):
+        ti.answer_question_pi("s", {"kind": "option", "indices": [9]}, _Q)      # fora do range
+    with pytest.raises(ValueError):
+        ti.answer_question_pi("s", {"kind": "option", "indices": [0, 1]}, _Q)   # multi-select
+    with pytest.raises(ValueError):
+        ti.answer_question_pi("s", {"kind": "text", "value": "  "}, _Q)         # texto vazio
+    with pytest.raises(ValueError):
+        ti.answer_question_pi("s", {"kind": "chat"}, _Q)                        # kind sem suporte

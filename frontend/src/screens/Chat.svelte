@@ -163,6 +163,11 @@
   let limitsOpen = $state(false);  // Task B: sheet de limites de uso Codex (badge da NavBar)
   let askPayload = $state<AskQuestionPayload | null>(null);
   let askOpen = $state(false);
+  // Pergunta nativa do Pi (tool `question`): qual tool_use_id abriu o sheet e qual o usuario ja
+  // DISPENSOU sem responder (fechou o sheet -> nao reabre; o OptionButtons cru, lido do pane,
+  // fica como fallback). null = nenhuma.
+  let askPiId = $state<string | null>(null);
+  let askPiDismissed = $state<string | null>(null);
   // Viewport largo → pergunta vira card inline no chat (contexto visível); estreito → bottom-sheet.
   let isWide = $state(typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches);
   onMount(() => {
@@ -417,6 +422,57 @@
   const needsLogin = $derived(!!stateEvent?.login && currentState !== 'awaiting_input');
   const tuiOverlay = $derived((!!stateEvent?.overlay || needsLogin) && currentState !== 'awaiting_input');
   let mirrorOpen = $state(false);
+
+  // Pergunta nativa do Pi (tool `question`). O Pi nao tem o hook de AskUserQuestion do Claude, mas
+  // nao precisa: o toolCall cai no transcript com o payload COMPLETO (pergunta, header, opcoes com
+  // descricao) no instante da pergunta. Aqui o app sintetiza o MESMO AskQuestionPayload do Claude e
+  // abre o sheet/card nativo; o /answer do backend ramifica por provider e dirige o picker do Pi.
+  // Pendente = tool_use 'question' sem tool_result com o mesmo id. (2026-08-04)
+  const pendingPiQuestion = $derived.by(() => {
+    if (sessionProvider !== 'pi') return null;
+    const answered = new Set<string>();
+    for (const ev of events) if (ev.kind === 'tool_result' && ev.tool_use_id) answered.add(ev.tool_use_id);
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i];
+      if (ev.kind === 'tool_use' && ev.tool_name === 'question' && ev.tool_use_id && !answered.has(ev.tool_use_id)) return ev;
+    }
+    return null;
+  });
+
+  $effect(() => {
+    const q = pendingPiQuestion;
+    if (!q) {
+      // A resposta aterrissou no transcript (pelo app ou pelo terminal) -> fecha o sheet se foi
+      // uma pergunta do Pi que o abriu.
+      if (askPiId) { askPiId = null; askOpen = false; }
+      return;
+    }
+    if (askOpen || askPiDismissed === q.id) return;
+    const args = (q.tool_input ?? {}) as Record<string, unknown>;
+    const opts = Array.isArray(args.options) ? args.options : [];
+    const options = opts.map((o) => ({
+      label: String((o as Record<string, unknown> | null)?.label ?? ''),
+      description: String((o as Record<string, unknown> | null)?.description ?? ''),
+    })).filter((o) => o.label);
+    if (!options.length || !args.question) return;
+    askPayload = {
+      questions: [{
+        header: String(args.header ?? ''),
+        question: String(args.question),
+        multiSelect: args.multiSelect === true,
+        options,
+      }],
+    };
+    askPiId = q.id;
+    askOpen = true;
+  });
+
+  // Fechar o sheet SEM responder: se era pergunta do Pi, registra a dispensa pra ele nao reabrir
+  // sozinho (o OptionButtons cru segue disponivel como saida).
+  function closeAsk() {
+    if (askPiId) askPiDismissed = askPiId;
+    askOpen = false;
+  }
   function openMirror() { mirrorOpen = true; }
   // "Voltar ao chat" = SO esconde o espelho. NAO manda Escape -> a TUI fica como esta (nao fecha o
   // painel que o usuario queria ler). Sair do overlay de proposito = tecla Esc na barra do espelho.
@@ -1135,8 +1191,13 @@
   async function handleAnswer(answers: AnswerItem[]) {
     try {
       await answerQuestions(sessionName, answers);
+      // Pergunta do Pi respondida com sucesso: o tool_result ainda demora ~1s pra aterrissar no
+      // transcript — sem marcar a dispensa aqui, o sheet REABRIA nessa janela (pergunta ainda
+      // pendente + askOpen false).
+      if (askPiId) { askPiDismissed = askPiId; askPiId = null; }
       askOpen = false;
     } catch {
+      if (askPiId) { askPiDismissed = askPiId; askPiId = null; }
       askOpen = false;
       openMirror();
     }
@@ -1237,7 +1298,7 @@
       askPayload={askPayload}
       askActive={askOpen && askPayload != null}
       onAnswer={handleAnswer}
-      onAskClose={() => (askOpen = false)}
+      onAskClose={closeAsk}
       onForward={(t) => (forwardText = t)}
       onOpenSession={onNavigateToChat}
     />
@@ -1379,7 +1440,7 @@
       open={askOpen}
       payload={askPayload}
       onSubmit={handleAnswer}
-      onClose={() => (askOpen = false)}
+      onClose={closeAsk}
       onFallback={openMirror}
     />
   {/if}

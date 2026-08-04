@@ -2675,6 +2675,20 @@ def _askq_fallback_text(answers: list[dict], jsonl: str | None) -> str:
     return "Respondendo as perguntas (o seletor de opções falhou, vai por texto):\n" + "\n".join(lines)
 
 
+def _pi_answer_fallback_text(a: dict) -> str:
+    """Resposta em TEXTO pro fallback da pergunta do Pi (drive do picker falhou). Mesma filosofia
+    do _askq_fallback_text do Claude: a resposta do usuario NUNCA se perde — vira mensagem normal."""
+    if a.get("kind") == "option":
+        resp = ", ".join(a.get("labels") or [])
+    elif a.get("kind") == "text":
+        resp = a.get("value") or ""
+    else:
+        resp = ""
+    if not resp:
+        return ""
+    return f"Respondendo a pergunta (o seletor de opções falhou, vai por texto): {resp}"
+
+
 @app.post("/api/sessions/{name}/answer", dependencies=[Depends(require_auth)])
 def answer(name: str, body: AnswerBody):
     # Dirige o AskUserQuestion tabbed: reproduz as teclas (nav em malha fechada), confere o Review e
@@ -2684,8 +2698,35 @@ def answer(name: str, body: AnswerBody):
     # entrega). A resposta do usuario NUNCA se perde — pior caso chega como texto, nao como interrupt mudo.
     from app import terminal_input
     answers = [a.model_dump() for a in body.answers]
-    jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
+    info = next((s for s in registry.list() if s.name == name), None)
+    jsonl = info.jsonl if info else None
     fallback = False
+
+    # Pi: a pergunta nativa (tool `question`) mora no proprio transcript — o front sintetiza o
+    # payload do AskUserQuestion a partir do tool_use pendente e posta aqui igual; o drive e outro
+    # (picker ascii do Pi, sem tela de Review). A pergunta some da fila (respondida no terminal)
+    # entre o card abrir e o toque -> 409 legivel, nunca drive as cegas.
+    if getattr(info, "provider", "claude") == "pi":
+        from app.adapters.pi.transcript import read_pending_question
+        q = read_pending_question(jsonl) if jsonl else None
+        if q is None:
+            raise HTTPException(409, "nenhuma pergunta do Pi pendente (ja respondida no terminal?)")
+        if not answers:
+            raise HTTPException(409, "sem resposta")
+        try:
+            terminal_input.answer_question_pi(name, answers[0], q)
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+        except terminal_input.DriveError as e:
+            text = _pi_answer_fallback_text(answers[0])
+            _log.warning("PI-QUESTION fallback name=%s reason=%s text=%r", name, e, text[:120])
+            terminal.interrupt(name)  # Escape unico: fecha o picker do Pi (sem clear — input vazio)
+            if text:
+                res = _send_one(name, text)
+                if not res["ok"]:
+                    raise HTTPException(409, f"drive falhou e fallback por texto tambem: {res['error']}")
+            fallback = True
+        return {"ok": True, "fallback": fallback}
     try:
         terminal_input.answer_questions(name, answers)
     except ValueError as e:
