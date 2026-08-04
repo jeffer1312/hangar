@@ -537,6 +537,63 @@ button:active:not(:disabled) {
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* ── Bloco de código (renderMarkdown): caixa com header (linguagem + copiar + expandir) ──────
+   GLOBAL, nao scoped num componente: o markup vem do renderMarkdown e aparece em qualquer tela
+   (chat, PairSheet, ActivitySheet, plano, hover preview). As acoes (copiar/expandir) sao do
+   listener global de lib/codeActions.svelte.ts; o highlight e de lib/highlight.ts. */
+.code-block {
+  position: relative;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  margin: var(--space-2) 0;
+  overflow: hidden;          /* o raio da caixa vale pro header e pro pre */
+}
+.code-block pre {
+  background: none;
+  border: none;
+  border-radius: 0;
+  margin: 0;
+}
+.code-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 3px 6px 3px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.code-lang {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  text-transform: lowercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.copy-btn, .expand-btn {
+  width: 24px; height: 24px; padding: 0;
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: none; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-secondary);
+  cursor: pointer; opacity: 0.65; transition: opacity 120ms var(--ease-out);
+}
+.copy-btn:hover, .copy-btn:active, .expand-btn:hover, .expand-btn:active { opacity: 1; }
+.copy-btn::before { content: '⧉'; font-size: 14px; line-height: 1; }
+.expand-btn::before { content: '⤢'; font-size: 14px; line-height: 1; }
+.copy-btn.copied { color: var(--accent); opacity: 1; }
+.copy-btn.copied::before { content: '✓'; }
+
+/* Com papel de parede a caixa entra no mesmo veu dos paineis (slider Transparencia) — e o pre
+   dentro nao pinta de novo, senao sao DUAS camadas de veu empilhadas. */
+html[data-bg='image'] .code-block {
+  background: color-mix(in srgb, var(--bg-elevated) calc(var(--cp-panel-alpha, 0.87) * 100%), transparent);
+}
+html[data-bg='image'] .code-block pre { background: none; }
+
 /* ── Reduced Motion ──────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

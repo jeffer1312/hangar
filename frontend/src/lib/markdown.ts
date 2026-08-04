@@ -108,8 +108,11 @@ export function renderMarkdown(input: string, opts: MarkdownOptions = {}): strin
       }
       i++; // pula o ``` de fechamento (se houver)
       const langAttr = lang ? ` class="language-${escapeHtml(lang)}"` : '';
-      // Wrapper + botao copiar (handler delegado no AssistantBubble: le o textContent do <pre>).
-      out.push(`<div class="code-block"><button class="copy-btn" type="button" aria-label="Copiar código"></button><pre><code${langAttr}>${escapeHtml(code.join('\n'))}</code></pre></div>`);
+      // Header estilo app do Claude: nome da linguagem (ou "Código") + copiar + expandir.
+      // Handlers delegados GLOBAIS (lib/codeActions.svelte.ts, listener no document): valem aqui e
+      // em qualquer tela que renderize markdown (PairSheet, ActivitySheet, plano...).
+      const rotulo = lang ? escapeHtml(lang) : 'Código';
+      out.push(`<div class="code-block"><div class="code-head"><span class="code-lang">${rotulo}</span><button class="copy-btn" type="button" aria-label="Copiar código"></button><button class="expand-btn" type="button" aria-label="Expandir código"></button></div><pre><code${langAttr}>${escapeHtml(code.join('\n'))}</code></pre></div>`);
       continue;
     }
 
@@ -127,6 +130,8 @@ export function renderMarkdown(input: string, opts: MarkdownOptions = {}): strin
       const rows = body.map((r) => `<tr>${r.map((c) => `<td>${renderInline(escapeHtml(c))}</td>`).join('')}</tr>`).join('');
       // Wrapper rolavel: a tabela mantem a largura natural e rola DENTRO da propria box (a pagina
       // continua sem scroll horizontal). Sem isto a tabela espremia e o texto quebrava letra a letra.
+      // (Header+caixa estilo code-block foi testado aqui e REPROVADO pelo usuario 2026-08-03: sobre
+      // papel de parede a caixa lia como recorte colado — a tabela fica sem caixa de proposito.)
       out.push(`<div class="md-table"><table><thead><tr>${th}</tr></thead><tbody>${rows}</tbody></table></div>`);
       continue;
     }

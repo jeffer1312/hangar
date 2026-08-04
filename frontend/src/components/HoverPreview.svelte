@@ -40,6 +40,7 @@
     background: var(--bg-hover); padding: 1px 4px; border-radius: 4px;
   }
   .hover-preview :global(pre) { overflow: hidden; background: var(--bg-hover); padding: 6px 8px; border-radius: var(--radius-sm); }
+  .hover-preview :global(.code-block pre) { background: none; border: none; border-radius: 0; margin: 0; }
   .hover-preview :global(pre code) { background: none; padding: 0; }
   /* Só opacidade: transform aqui promoveria camada (e o board já tem a única pulsação do sistema). */
   @keyframes hp-in { from { opacity: 0; } to { opacity: 1; } }

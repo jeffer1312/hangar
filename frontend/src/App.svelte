@@ -19,6 +19,8 @@
   import SettingsModal from './components/settings/SettingsModal.svelte';
   import TtsBar from './components/TtsBar.svelte';
   import TtsSelectionPill from './components/TtsSelectionPill.svelte';
+  import CodeOverlay from './components/CodeOverlay.svelte';
+  import { iniciarCodeActions } from './lib/codeActions.svelte';
 
   // Deep-link do push (feature #5): a notif abre '/?server=<id>&session=<name>' — o router so olha
   // window.location.hash, entao sem isto os query params eram ignorados e sempre caia na lista.
@@ -79,6 +81,10 @@
 
   let currentHash = $state(window.location.hash || '#/');
   let authenticated = $state(isAuthenticated());
+
+  // Acoes dos blocos de codigo (copiar/expandir): UM listener global pra todo {@html} de markdown
+  // do app (o App nunca desmonta — ver comentario do TtsBar no template).
+  $effect(() => iniciarCodeActions());
 
   // Cloud-sync gate. syncEnabled: null enquanto sondamos /sync/status; depois true/false.
   // syncReady: ha encKey (login fresco OU restaurado do sessionStorage). Com sync ligado, o app so
@@ -448,6 +454,7 @@
        gesto do iOS. -->
   <TtsBar />
   <TtsSelectionPill />
+  <CodeOverlay />
 
   {#if cfg && telaEfetiva && route.name !== 'login' && route.name !== 'loading'}
     <SettingsModal

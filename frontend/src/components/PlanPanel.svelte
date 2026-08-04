@@ -279,6 +279,8 @@
   .md :global(li) { margin: 2px 0; }
   .md :global(code) { padding: 0 4px; border-radius: 3px; background: var(--surface-raised); font-family: var(--font-mono); font-size: 11px; color: var(--text-primary); }
   .md :global(pre) { margin: 0 0 var(--space-2); padding: var(--space-2); overflow-x: auto; border-radius: var(--radius-sm); background: var(--surface-inset); }
+  /* Idem PairSheet: o pre dentro do code-block nao repete a caixa (reset global perde pra scoped). */
+  .md :global(.code-block pre) { background: none; border: none; border-radius: 0; margin: 0; }
   .md :global(a) { color: var(--accent); }
   .md :global(hr) { margin: var(--space-3) 0; border: 0; border-top: 1px solid var(--border-subtle); }
 </style>

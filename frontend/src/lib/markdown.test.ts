@@ -23,4 +23,20 @@ describe('renderMarkdown — cercas de código', () => {
     const html = renderMarkdown(md);
     expect(html).toContain('<pre><code class="language-js">const a = 1;</code></pre>');
   });
+
+  it('bloco de código sai com header: linguagem + copiar + expandir', () => {
+    // Contrato do header (estilo app do Claude iOS): o handler global de code-actions depende
+    // dessas classes pra copiar/expandir — se o markup mudar, os botoes morrem em toda tela.
+    const html = renderMarkdown('```yaml\nrule: x\n```\n');
+    expect(html).toContain('<div class="code-block"><div class="code-head">');
+    expect(html).toContain('<span class="code-lang">yaml</span>');
+    expect(html).toContain('<button class="copy-btn"');
+    expect(html).toContain('<button class="expand-btn"');
+  });
+
+  it('cerca sem linguagem usa o rótulo genérico "Código"', () => {
+    const html = renderMarkdown('```\nabc\n```\n');
+    expect(html).toContain('<span class="code-lang">Código</span>');
+    expect(html).toContain('<pre><code>abc</code></pre>');
+  });
 });

@@ -7,7 +7,8 @@ import { createJavaScriptRegexEngine } from 'shiki/engine/javascript';
 import darkPlus from '@shikijs/themes/dark-plus';
 import lightPlus from '@shikijs/themes/light-plus';
 
-// Linguagens do proprio repo. Extensao nova = 1 import a mais aqui.
+// Linguagens do proprio repo + as das conversas (Jenkinsfile, SQL, Delphi, C#, Flutter, Docker).
+// Extensao nova = 1 import a mais aqui. Carregam sob demanda: so pesam se aparecerem na tela.
 const LANG_LOADERS: Record<string, () => Promise<unknown>> = {
   ts: () => import('@shikijs/langs/typescript'),
   tsx: () => import('@shikijs/langs/tsx'),
@@ -16,12 +17,23 @@ const LANG_LOADERS: Record<string, () => Promise<unknown>> = {
   svelte: () => import('@shikijs/langs/svelte'),
   py: () => import('@shikijs/langs/python'),
   sh: () => import('@shikijs/langs/bash'),
+  bash: () => import('@shikijs/langs/bash'),
   json: () => import('@shikijs/langs/json'),
   yaml: () => import('@shikijs/langs/yaml'),
   yml: () => import('@shikijs/langs/yaml'),
   md: () => import('@shikijs/langs/markdown'),
   css: () => import('@shikijs/langs/css'),
   html: () => import('@shikijs/langs/html'),
+  sql: () => import('@shikijs/langs/sql'),
+  groovy: () => import('@shikijs/langs/groovy'),
+  jenkinsfile: () => import('@shikijs/langs/groovy'),
+  dockerfile: () => import('@shikijs/langs/dockerfile'),
+  docker: () => import('@shikijs/langs/dockerfile'),
+  pas: () => import('@shikijs/langs/pascal'),
+  pascal: () => import('@shikijs/langs/pascal'),
+  cs: () => import('@shikijs/langs/csharp'),
+  csharp: () => import('@shikijs/langs/csharp'),
+  dart: () => import('@shikijs/langs/dart'),
 };
 
 function langFromPath(path: string): string {
@@ -32,6 +44,9 @@ function langFromPath(path: string): string {
 // Singleton do core (criacao async carrega engine/temas UMA vez; tokenizar depois e sync).
 let corePromise: Promise<HighlighterCore> | null = null;
 const loadedLangs = new Set<string>();
+// Cache NEGATIVO de grammar: chunk que falhou (LAN/offline) nao re-importa nem repete warn a cada
+// re-render — sem isto, uma mensagem em streaming gerava dezenas de fetches/warns pela mesma lang.
+const failedLangs = new Set<string>();
 
 function getCore(): Promise<HighlighterCore> {
   if (!corePromise) {
@@ -40,6 +55,9 @@ function getCore(): Promise<HighlighterCore> {
       langs: [],
       engine: createJavaScriptRegexEngine(),   // sem WASM -> leve, ok pra mobile/LAN
     });
+    // A promise REJEITADA nao pode ficar cacheada: com ela, todo retry cai na mesma falha pra
+    // sempre (o "tenta de novo no proximo render" virava warn infinito sem chance de recuperar).
+    corePromise.catch(() => { corePromise = null; });
   }
   return corePromise;
 }
@@ -47,6 +65,7 @@ function getCore(): Promise<HighlighterCore> {
 async function ensureLang(core: HighlighterCore, lang: string): Promise<boolean> {
   if (lang === 'txt') return false;
   if (loadedLangs.has(lang)) return true;
+  if (failedLangs.has(lang)) return false;
   const loader = LANG_LOADERS[lang];
   if (!loader) return false;
   try {
@@ -54,8 +73,10 @@ async function ensureLang(core: HighlighterCore, lang: string): Promise<boolean>
     await core.loadLanguage((await loader()) as any);
     loadedLangs.add(lang);
     return true;
-  } catch {
-    return false;   // grammar falhou -> cai no plain text
+  } catch (err) {
+    console.warn(`[hl] grammar '${lang}' indisponível`, err);
+    failedLangs.add(lang);
+    return false;   // grammar falhou -> cai no plain text (sem re-tentar em loop)
   }
 }
 
@@ -121,4 +142,65 @@ export async function highlightDiff(diffText: string, path: string): Promise<Dif
     return baseRows(diffText.split('\n'));   // erro na tokenizacao -> plain
   }
   return rows;
+}
+
+// ── Blocos de codigo da conversa (nao-diff) ─────────────────────────────────
+// Os <pre><code class="language-X"> vem do renderMarkdown como TEXTO ESCAPADO, monocromatico.
+// Esta passa coloriza in-place (spans com cor inline do tema VS Code) depois da montagem.
+// Bloco sem lang conhecida / grammar que falhou / bloco gigante -> fica plain, sem erro.
+const MAX_HL_BLOCK_LINES = 800;
+
+function escapeAttr(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+/** Coloriza todos os `pre code[class^="language-"]` ainda nao tratados sob `root`.
+ * Idempotente (marca data-hl). Segura pra chamar a cada re-render: so trabalha nos novos.
+ * data-hl-theme: a cor vira inline style do tema da hora — trocou o tema, re-coloriza. */
+export async function highlightCodeBlocks(root: HTMLElement): Promise<void> {
+  const theme = document.documentElement.dataset.theme === 'light' ? 'light-plus' : 'dark-plus';
+  const codes = [...root.querySelectorAll<HTMLElement>('pre code[class^="language-"]')]
+    .filter((el) => el.dataset.hl !== '1' || el.dataset.hlTheme !== theme);
+  if (!codes.length) return;
+  // Marca ANTES do await: um segundo render enquanto a grammar carrega nao agenda trabalho dobrado.
+  for (const el of codes) el.dataset.hl = '1';
+
+  let core: HighlighterCore;
+  try {
+    core = await getCore();
+  } catch (err) {
+    // Falha de INFRA (engine nao subiu): desmarca pra re-tentar no proximo render — ficar plain
+    // pra sempre em silencio era o bug.
+    console.warn('[hl] core Shiki falhou', err);
+    for (const el of codes) delete el.dataset.hl;
+    return;
+  }
+
+  for (const el of codes) {
+    const lang = (el.className.match(/language-([\w-]+)/)?.[1] ?? '').toLowerCase();
+    const texto = el.textContent ?? '';
+    // Bloco pulado (sem lang conhecida, vazio, gigante): marca o tema TAMBEM, senao o filtro o
+    // reinclui em toda chamada e o scan (caro no bloco gigante) se repete a cada render.
+    if (!lang || !(lang in LANG_LOADERS) || !texto.trim() || texto.split('\n').length > MAX_HL_BLOCK_LINES) {
+      el.dataset.hlTheme = theme;
+      continue;
+    }
+    if (!(await ensureLang(core, lang))) {
+      // Grammar falhou: o cache negativo (failedLangs) impede re-import/warn em loop; o data-hl
+      // fica desmarcado pra uma re-tentativa valer se o usuario recarregar a pagina.
+      delete el.dataset.hl;
+      continue;
+    }
+    // O element pode ter saido do DOM enquanto a grammar carregava (mensagem re-renderizada).
+    if (!el.isConnected) continue;
+    try {
+      const { tokens } = core.codeToTokens(texto.replace(/\n$/, ''), { lang, theme });
+      el.innerHTML = tokens
+        .map((linha) => linha.map((t) => `<span style="color:${escapeAttr(t.color ?? 'inherit')}">${escapeAttr(t.content)}</span>`).join(''))
+        .join('\n');
+      el.dataset.hlTheme = theme;
+    } catch {
+      // tokenizacao falhou neste bloco -> fica plain (data-hl ja marca pra nao re-tentar em loop)
+    }
+  }
 }
