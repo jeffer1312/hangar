@@ -6,6 +6,7 @@
   import { abrirComTexto } from '../lib/ttsSelection.svelte';
   import FileAttachment from './FileAttachment.svelte';
   import IconSpeaker from './icons/IconSpeaker.svelte';
+  import { highlightCodeBlocks } from '../lib/highlight';
 
   interface Props {
     text: string;
@@ -61,15 +62,18 @@
     });
   }
 
-  // Copiar bloco de codigo: handler delegado (o botao vem do {@html}, sem handler Svelte proprio).
-  function onProseClick(e: MouseEvent) {
-    const btn = (e.target as HTMLElement).closest('.copy-btn');
-    if (!btn) return;
-    const code = btn.parentElement?.querySelector('pre')?.textContent ?? '';
-    copyText(code);
-    btn.classList.add('copied');
-    setTimeout(() => btn.classList.remove('copied'), 1200);
-  }
+  // Copiar/expandir bloco de codigo: NAO tem handler local — os botoes vem do {@html} e quem
+  // responde e o listener GLOBAL de code-actions (lib/codeActions.svelte.ts, montado no App).
+
+  // Syntax highlight dos blocos de codigo: o renderMarkdown e sincrono (devolve texto escapado);
+  // quem coloriza e esta passa, depois da montagem, com o Shiki sob demanda (lib/highlight.ts).
+  // Idempotente — roda a cada versao do html e so trabalha nos blocos novos.
+  $effect(() => {
+    html;   // dependencia: nova versao do markdown renderizado
+    const el = proseEl;
+    if (!el) return;
+    void highlightCodeBlocks(el);
+  });
 
   // Copiar a MENSAGEM inteira (markdown cru). Botao aparece no hover (desktop).
   let msgCopied = $state(false);
@@ -132,7 +136,7 @@
     {/if}
   {:else}
     <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-    <div class="prose" bind:this={proseEl} onclick={onProseClick} role="presentation">{@html html}</div>
+    <div class="prose" bind:this={proseEl}>{@html html}</div>
     {#if fileRefs.length}<FileAttachment {sessionName} refs={fileRefs} />{/if}
     {#if mediaRefs.length}<FileAttachment {sessionName} refs={mediaRefs} />{/if}
     <div class="msg-actions">
@@ -254,22 +258,17 @@
     -webkit-overflow-scrolling: touch;
   }
 
-  /* Bloco de codigo com botao copiar no canto. */
-  .prose :global(.code-block) { position: relative; }
-  .prose :global(.copy-btn) {
-    position: absolute; top: 6px; right: 6px;
-    width: 28px; height: 28px; padding: 0;
-    display: flex; align-items: center; justify-content: center;
-    border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
-    background: var(--bg-elevated); color: var(--text-secondary);
-    cursor: pointer; opacity: 0.65; transition: opacity 120ms var(--ease-out);
+  /* Bloco de codigo: caixa + header (linguagem + copiar + expandir) — o estilo base e GLOBAL
+     (app.css), vale pra toda tela que renderiza markdown. Aqui so o que e especifico da bolha. */
+  /* O reset global `.code-block pre` (app.css) PERDE em especificidade pra `.prose :global(pre)`
+     scoped (0,2,1 > 0,1,1): sem este reset local, o pre dentro da caixa mantinha fundo/borda/margem
+     proprios — borda dentro de borda, deslocado pela margem. Caixa dupla, medida no chat. */
+  .prose :global(.code-block pre) {
+    background: none;
+    border: none;
+    border-radius: 0;
+    margin: 0;
   }
-  .prose :global(.copy-btn:hover), .prose :global(.copy-btn:active) { opacity: 1; }
-  .prose :global(.copy-btn)::before {
-    content: '⧉'; font-size: 15px; line-height: 1;
-  }
-  .prose :global(.copy-btn.copied) { color: var(--accent); opacity: 1; }
-  .prose :global(.copy-btn.copied)::before { content: '✓'; }
 
   /* Com foto de fundo, o bloco de código era a ÚNICA superfície chapada no meio da conversa: todo o
      resto (painéis, composer, vidro) anda com o slider Transparência, e ele ficava sólido, lendo como
@@ -282,10 +281,12 @@
      ele pinta a largura do TEXTO de cada linha, não do bloco: faixas mais opacas linha a linha, só no
      modo com foto. Medido: code a 0,84 sobre pre a 0,84, 689px contra 830px. */
   :global(html[data-bg='image']) .prose :global(pre),
-  :global(html[data-bg='image']) .prose :global(:not(pre) > code),
-  :global(html[data-bg='image']) .prose :global(.copy-btn) {
+  :global(html[data-bg='image']) .prose :global(:not(pre) > code) {
     background: color-mix(in srgb, var(--bg-elevated) calc(var(--cp-panel-alpha, 0.87) * 100%), transparent);
   }
+  /* ...mas o pre DENTRO da caixa nao pinta de novo (senao sao DUAS camadas de veu empilhadas).
+     Mesma regra no app.css pras outras telas; aqui com especificidade maior pra vencer a de cima. */
+  :global(html[data-bg='image']) .prose :global(.code-block pre) { background: none; }
 
   .prose :global(pre code) {
     font-family: var(--font-mono);

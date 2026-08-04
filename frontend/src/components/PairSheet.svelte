@@ -465,6 +465,9 @@
   .contract-body :global(li) { margin: 2px 0; }
   .contract-body :global(code) { padding: 0 4px; border-radius: 3px; background: var(--surface-raised); font-family: var(--font-mono); font-size: 11px; color: var(--text-primary); }
   .contract-body :global(pre) { margin: 0 0 var(--space-2); padding: var(--space-2); overflow-x: auto; border-radius: var(--radius-sm); background: var(--surface-inset); }
+  /* O pre DENTRO do code-block (header novo) perde a caixa propria — o reset global do app.css
+     perde em especificidade pra regra scoped acima, e sem isto virava borda dentro de borda. */
+  .contract-body :global(.code-block pre) { background: none; border: none; border-radius: 0; margin: 0; }
   .contract-body :global(a) { color: var(--accent); }
   .contract-body :global(hr) { margin: var(--space-3) 0; border: 0; border-top: 1px solid var(--border-subtle); }
   .contract-path {

@@ -30,6 +30,9 @@ function extrair(raiz: HTMLElement): { texto: string; blocos: string[] } {
   // Clone: trocar o conteudo do <pre> no no original apagaria o codigo da tela do usuario.
   const copia = raiz.cloneNode(true) as HTMLElement;
   const blocos: string[] = [];
+  // O header dos blocos de codigo (rotulo da linguagem + botoes) e UI, nao conteudo: sem remove-lo,
+  // o TTS lia "yaml"/"Código" em voz alta antes do que interessa.
+  copia.querySelectorAll('.code-head').forEach((h) => h.remove());
   copia.querySelectorAll('pre').forEach((p) => {
     blocos.push(p.textContent ?? '');
     p.replaceWith(document.createTextNode(MARCADOR));
