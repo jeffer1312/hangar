@@ -430,13 +430,16 @@
   // Pendente = tool_use 'question' sem tool_result com o mesmo id. (2026-08-04)
   const pendingPiQuestion = $derived.by(() => {
     if (sessionProvider !== 'pi') return null;
+    // Varredura UNICA: coleciona os resultados e lembra o ultimo tool_use question; pendente =
+    // esse ultimo sem resultado. O(n) por evento novo, loop simples (o fold caro que o projeto
+    // baniu era o deriveActivity; aqui e so Set+ultimo — se pesar, medir antes de otimizar).
     const answered = new Set<string>();
-    for (const ev of events) if (ev.kind === 'tool_result' && ev.tool_use_id) answered.add(ev.tool_use_id);
-    for (let i = events.length - 1; i >= 0; i--) {
-      const ev = events[i];
-      if (ev.kind === 'tool_use' && ev.tool_name === 'question' && ev.tool_use_id && !answered.has(ev.tool_use_id)) return ev;
+    let last: ChatEvent | null = null;
+    for (const ev of events) {
+      if (ev.kind === 'tool_result' && ev.tool_use_id) answered.add(ev.tool_use_id);
+      else if (ev.kind === 'tool_use' && ev.tool_name === 'question' && ev.tool_use_id) last = ev;
     }
-    return null;
+    return last && !answered.has(last.tool_use_id ?? '') ? last : null;
   });
 
   $effect(() => {
@@ -454,7 +457,12 @@
       label: String((o as Record<string, unknown> | null)?.label ?? ''),
       description: String((o as Record<string, unknown> | null)?.description ?? ''),
     })).filter((o) => o.label);
-    if (!options.length || !args.question) return;
+    if (!options.length || !args.question) {
+      // Shape inesperado (o Pi mudou o tool?) — sem o warn o sheet simplesmente parava de abrir um
+      // dia, calado. O OptionButtons cru segue como saida.
+      console.warn('[pi-question] payload inesperado, sheet nao abre', args);
+      return;
+    }
     askPayload = {
       questions: [{
         header: String(args.header ?? ''),

@@ -71,7 +71,7 @@
   <div class="tr-out">
     <span class="tr-elbow" aria-hidden="true"></span>
     <span class="tr-outcome">{outcome}</span>
-    {#if result?.result || editEdits}
+    {#if result?.result || showDiff}
       <span class="tr-hint">
         <span class="sep" aria-hidden="true">•</span>
         <span class="coarse">{expanded ? 'toque para ocultar' : 'toque para ver'}</span><span

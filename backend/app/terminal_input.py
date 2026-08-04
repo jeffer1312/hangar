@@ -719,7 +719,7 @@ def answer_questions(name: str, answers: list[dict]) -> None:
 # do Claude: aquele faz search no pane INTEIRO e um "> N." citado em prosa viraria falso cursor;
 # aqui o match so vale junto com o is_overlay (rodape de navegacao no FUNDO do pane), que e o que
 # separa o picker vivo da citacao no scrollback.
-_PI_CURSOR_ROW = re.compile(r">\s*(\d+)\.")
+_PI_CURSOR_ROW = re.compile(r"^\s*>\s*(\d+)\.", re.M)
 
 
 def _pi_cursor_row(screen: str) -> int | None:
@@ -740,12 +740,20 @@ def answer_question_pi(name: str, answer: dict, question: dict) -> None:
             raise ValueError("multi-seleção do Pi ainda não é dirigida pelo app — responda no terminal")
         if not indices:
             raise ValueError("sem opcao escolhida")
+        # labels alimentam o fallback por texto se o drive falhar — sem eles o fallback entregaria
+        # nada com cara de sucesso (achado do silent-failure-hunter 2026-08-04).
+        if not any(str(l).strip() for l in (answer.get("labels") or [])):
+            raise ValueError("opcao sem label (o fallback por texto ficaria vazio)")
         target = int(indices[0]) + 1
         if not 1 <= target <= len(options):
             raise ValueError(f"opcao {target} fora do intervalo (1..{len(options)})")
     elif kind == "text":
-        if not str(answer.get("value") or "").strip():
+        value = str(answer.get("value") or "")
+        if not value.strip():
             raise ValueError("texto vazio")
+        # Mesma trava do _validate do Claude: control chars nao entram no TUI.
+        if any(ord(c) < 32 and c != "\t" for c in value):
+            raise ValueError("texto com caractere de controle")
         target = len(options) + 1        # "Type something." e sempre a ultima linha do picker
     else:
         raise ValueError(f"kind nao suportado no picker do Pi: {kind!r}")
@@ -758,23 +766,32 @@ def answer_question_pi(name: str, answer: dict, question: dict) -> None:
         send_keys(name, k)
         time.sleep(_SETTLE)
 
-    row = _pi_cursor_row(_capture(name))
+    # Nav em malha fechada. O picker estava legivel na checagem inicial: se o cursor ficar
+    # ILEGIVEL no meio (capture falho devolve ""), NAO se submete as cegas — DriveError e o
+    # fallback por texto assume (um Enter cego podia cair na opcao errada; o Pi nao tem Review).
     for _ in range(3):
-        if row is None or row == target:
+        row = _pi_cursor_row(_capture(name))
+        if row is None:
+            raise DriveError("cursor do picker do Pi ficou ilegivel no meio do drive; nao submetido")
+        if row == target:
             break
         for _ in range(abs(target - row)):
             key("Down" if target > row else "Up")
-        row = _pi_cursor_row(_capture(name))
-    if row is not None and row != target:
-        raise DriveError(f"nav drift no picker do Pi — cursor na linha {row}, esperava {target}; nao submetido")
+    else:
+        raise DriveError(f"nav drift no picker do Pi — nao convergiu pra linha {target}; nao submetido")
     key("Enter")
     if kind == "text":
         time.sleep(_SETTLE)
-        send_keys(name, str(answer["value"]), literal=True)
+        send_keys(name, value, literal=True)
         time.sleep(_SUBMIT_SETTLE)
         key("Enter")
     time.sleep(_OPEN_SETTLE)
     after = _capture(name)
+    if not after.strip():
+        time.sleep(0.5)                # um retry: capture falho bem na hora do Enter nao e veredito
+        after = _capture(name)
+    if not after.strip():
+        raise DriveError("capture vazio apos o Enter — nao da pra confirmar a submissao")
     if is_overlay(after) and _pi_cursor_row(after) is not None:
         raise DriveError("picker do Pi ainda aberto apos o Enter — nada foi submetido")
 
