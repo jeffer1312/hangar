@@ -63,19 +63,27 @@
     z-index: -1;
     /* Foto + o MESMO veu que o `body::after` poe por cima dela (`--cp-scrim-*`, que o slider
        Transparencia move). Sem o veu a amostra mente: mostra a foto crua, o texto parece bem menos
-       legivel do que fica de verdade, e quem olha corrige um problema que nao existe. */
+       legivel do que fica de verdade, e quem olha corrige um problema que nao existe.
+       `--veu-amostra-rgb` e CONSUMIDO com fallback, nao DECLARADO aqui: uma declaracao local em
+       `.amostra` ganharia sempre do que `desktopTheme.ts` escreve no `:root`, e a previa congelaria
+       mostrando uma cor que a tela real nao tem (foi o que aconteceu na rodada anterior). Sem tema
+       Desktop a variavel nao existe em lugar nenhum e o fallback — o literal de hoje — e quem
+       decide a cor, byte a byte. */
     background:
       linear-gradient(
-        rgba(16, 14, 17, var(--cp-scrim-topo, 0.48)),
-        rgba(16, 14, 17, var(--cp-scrim-base, 0.62))
+        rgb(var(--veu-amostra-rgb, 16 14 17) / var(--cp-scrim-topo, 0.48)),
+        rgb(var(--veu-amostra-rgb, 16 14 17) / var(--cp-scrim-base, 0.62))
       ),
       var(--cp-wallpaper, var(--bg-base)) center / cover no-repeat;
   }
+  /* Claro: fallback PROPRIO (255,253,250) — medido, nao bate com --bg-base claro (248,246,242,
+     diff 7,7,8) nem com o --veu-rgb claro de app.css (250,247,243). Ja divergiam um do outro antes
+     desta revisao; ficam divergentes de proposito (nome proprio, --veu-amostra-rgb, so pra isso). */
   :global(html[data-theme="light"]) .amostra::before {
     background:
       linear-gradient(
-        rgba(255, 253, 250, var(--cp-scrim-topo, 0.48)),
-        rgba(255, 253, 250, var(--cp-scrim-base, 0.62))
+        rgb(var(--veu-amostra-rgb, 255 253 250) / var(--cp-scrim-topo, 0.48)),
+        rgb(var(--veu-amostra-rgb, 255 253 250) / var(--cp-scrim-base, 0.62))
       ),
       var(--cp-wallpaper, var(--bg-base)) center / cover no-repeat;
   }
