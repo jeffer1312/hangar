@@ -397,7 +397,12 @@ html[data-theme="light"]:is([data-bg="image"], [data-bg="desktop"]) { --chrome-b
 html[data-liquid]:is([data-bg="image"], [data-bg="desktop"]) { --glass-bg: color-mix(in srgb, rgb(38, 36, 44) calc((0.22 + 0.70 * var(--cp-solidez, 0.19)) * 100%), transparent); }
 html[data-liquid][data-theme="light"]:is([data-bg="image"], [data-bg="desktop"]) { --glass-bg: color-mix(in srgb, rgb(255, 254, 252) calc((0.28 + 0.68 * var(--cp-solidez, 0.19)) * 100%), transparent); }
 html[data-theme="light"]:is([data-bg="image"], [data-bg="desktop"]) { --glass-panel: rgba(255, 253, 250, var(--cp-panel-alpha, 0.78)); }
-html[data-bg="image"] body::after {
+/* Vale tambem pro `desktop`, e a foto NAO volta junto: `applyBg('desktop')` remove
+   `--cp-wallpaper`, entao `var(--cp-wallpaper, none)` la embaixo cai no `none` e a camada nasce so
+   com o gradiente. E ele que faz aqui o que o `background_opacity` do kitty faz: sem esta camada o
+   texto do chat ficava direto sobre a area de trabalho, com fundo nenhum — menos veu do que o
+   proprio slider Transparencia alcanca no extremo (medido em 05/08/2026, na janela aberta). */
+html:is([data-bg="image"], [data-bg="desktop"]) body::after {
   content: "";
   position: fixed;
   /* -20px em vez de 0: o blur do filtro amolece as bordas da foto e mostraria a cor da pagina nas
@@ -424,7 +429,7 @@ html[data-bg="image"] body::after {
      imagem (e o scrim, que e uniforme — entao na pratica so a foto). Off = 0px, sem custo de GPU. */
   filter: blur(var(--cp-backdrop-blur, 0px));
 }
-html[data-theme="light"][data-bg="image"] body::after {
+html[data-theme="light"]:is([data-bg="image"], [data-bg="desktop"]) body::after {
   background-image:
     linear-gradient(
       rgba(250, 247, 243, var(--cp-scrim-topo, 0.62)),
