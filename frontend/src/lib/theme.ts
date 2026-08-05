@@ -2,18 +2,20 @@
 // A escolha persiste em localStorage; o tema resolvido vira data-theme no <html> (a CSS so tem
 // :root [dark] + [data-theme="light"], sem duplicar valores em media query).
 
-export type ThemePref = 'system' | 'light' | 'dark';
+export type ThemePref = 'system' | 'light' | 'dark' | 'desktop';
 
 const KEY = 'cp_theme';
 const mq = typeof window !== 'undefined' ? window.matchMedia('(prefers-color-scheme: light)') : null;
 
 export function getThemePref(): ThemePref {
   const v = typeof localStorage !== 'undefined' ? localStorage.getItem(KEY) : null;
-  return v === 'light' || v === 'dark' ? v : 'system';
+  return v === 'light' || v === 'dark' || v === 'desktop' ? v : 'system';
 }
 
 function resolve(pref: ThemePref): 'light' | 'dark' {
-  if (pref === 'system') return mq?.matches ? 'light' : 'dark';
+  // 'desktop' e resolvido DE NOVO por aplicarPaleta(), com o $darkmode do arquivo. Aqui so evita o
+  // flash: entre o boot e a resposta do backend, vale o que o SO diz.
+  if (pref === 'system' || pref === 'desktop') return mq?.matches ? 'light' : 'dark';
   return pref;
 }
 
@@ -47,3 +49,17 @@ export function setThemePref(pref: ThemePref): void {
 mq?.addEventListener('change', () => {
   if (getThemePref() === 'system') applyTheme('system');
 });
+
+const KEY_TEXTO = 'cp_texto_desktop';
+
+// Cor do texto no tema do desktop. Padrao: seguir o desktop (escolha do usuario). So o DESVIO
+// persiste — mesma convencao da fonte e do desfoque.
+export function getTextoDoDesktop(): boolean {
+  return typeof localStorage !== 'undefined' ? localStorage.getItem(KEY_TEXTO) !== 'app' : true;
+}
+
+export function setTextoDoDesktop(v: boolean): void {
+  if (typeof localStorage === 'undefined') return;
+  if (v) localStorage.removeItem(KEY_TEXTO);
+  else localStorage.setItem(KEY_TEXTO, 'app');
+}

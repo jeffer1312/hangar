@@ -13,6 +13,8 @@
     READ_ALPHA_PADRAO, TEXT_BOOST_PADRAO, SURFACE_SOLID_PADRAO,
     type ReadMode, type PanelStyle, type FontPref, type MedidaTexto, type BackdropBlurPref, type BgPref,
   } from '../../lib/background';
+  import { getThemePref, getTextoDoDesktop, setTextoDoDesktop, type ThemePref } from '../../lib/theme';
+  import { buscarPaleta, aplicarPaleta, paletaEmCache } from '../../lib/desktopTheme';
   import { sidebarPrefs, type SidebarHeight } from '../../lib/sidebarPrefs.svelte';
 
   interface Props {
@@ -79,6 +81,20 @@
   // atualizado pelo callback onEscolha (ver BackgroundToggle) — nao por effect, porque a mudanca so
   // acontece por clique, nunca sozinha.
   let fundo = $state<BgPref>(getBgPref());
+  // `tema` e $state e nao `getThemePref()` direto: aquela funcao le localStorage por chamada comum,
+  // sem sinal reativo, entao o bloco nunca reavaliaria e o controle so apareceria ao reabrir a
+  // folha. Mesmo remedio do `caixas` (linhas 71-76) e do `onEscolha` do BackgroundToggle.
+  let tema = $state(getThemePref());
+  let textoDesktop = $state(getTextoDoDesktop());
+  // Repinta na hora com o que ja se sabe (cache do Fix 3): sem isto, um fetch que devolve null
+  // (backend piscou) gravava a preferencia e deixava as letras na cor antiga ate o proximo foco —
+  // o controle mostrando "App" com o texto ainda no tom do desktop. So vai pra rede se nunca houve
+  // paleta nesta aba.
+  function reaplicar() {
+    const cache = paletaEmCache();
+    if (cache) { aplicarPaleta(cache, textoDesktop); return; }
+    buscarPaleta().then((p) => { if (p) aplicarPaleta(p, textoDesktop); });
+  }
 
   // VOLTAR AO PADRAO: so as medidas que a amostra mostra. NAO mexe em tema, fonte, papel de parede
   // nem paineis — quem arrasta sliders e se perde quer desfazer os sliders, nao perder a foto que
@@ -138,8 +154,26 @@
       <strong>Tema</strong>
       <span>claro, escuro ou o do sistema</span>
     </div>
-    <ThemeToggle />
+    <ThemeToggle onEscolha={(p) => (tema = p)} />
   </div>
+
+  {#if tema === 'desktop'}
+    <div class="ap-row">
+      <div class="ap-label">
+        <strong>Cor do texto</strong>
+        <span>as letras seguem o papel de parede ou ficam nas do app</span>
+      </div>
+      <SegmentedPicker
+        value={textoDesktop ? 'desktop' : 'app'}
+        options={[
+          { v: 'desktop', label: 'Desktop', aria: 'Cor do texto vinda do papel de parede' },
+          { v: 'app', label: 'App', aria: 'Cor do texto padrão do app' },
+        ]}
+        ariaLabel="Cor do texto"
+        onPick={(v) => { textoDesktop = v === 'desktop'; setTextoDoDesktop(textoDesktop); reaplicar(); }}
+      />
+    </div>
+  {/if}
 
   <div class="ap-row ap-row--stack">
     <div class="ap-label">
