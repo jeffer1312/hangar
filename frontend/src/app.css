@@ -12,6 +12,12 @@
   --bg-elevated:  #221d22;
   --bg-hover:     #2a242a;
 
+  /* Cor do veu (body::after, o fundo por tras da conversa com papel de parede). Tripla propria — nao
+     um alias de --bg-base — porque o tema Desktop precisa poder reescrever SO isto (mapear() em
+     desktopTheme.ts, a partir de $background) sem arrastar --bg-base junto nem depender de que os
+     dois valores coincidam. Hoje coincide (#100e11 = 16 14 17); e coincidencia, nao contrato. */
+  --veu-rgb: 16 14 17;
+
   /* Borders */
   --border-subtle:  rgba(255,248,244,0.07);
   --border-default: rgba(255,248,244,0.12);
@@ -53,8 +59,15 @@
   --bubble-user:    #2b2a2e;
 
   /* Glass (composer / navbar / sidebar) — translucido + blur por cima do conteudo */
-  --glass-bg:        rgba(38,36,44,0.46);    /* frosted iOS: tint neutro limpo (warm embarrava) */
-  --glass-bg-solid:  rgba(24,23,28,0.94);    /* fallback durante o scroll (sem blur) */
+  /* Cor e opacidade SEPARADAS. A alfa dos vidros e do slider Transparencia (background.ts,
+     --cp-panel-alpha / --cp-surface-alpha); a COR precisa poder vir de outro lugar sem levar a
+     alfa junto — e o que o tema do desktop sobrescreve. Tripla crua (sem `rgb()`) porque e ela
+     que entra tanto em `rgb(... / alfa)` quanto dentro de `color-mix`. */
+  --glass-panel-rgb: 26 24 29;    /* painel: modal, folha, sidebar, painel de contexto */
+  --glass-rgb:       38 36 44;    /* chrome fino: navbar e composer */
+  --glass-solid-rgb: 24 23 28;    /* fallback opaco do chrome, durante o scroll */
+  --glass-bg:        rgb(var(--glass-rgb) / 0.46);    /* frosted iOS: tint neutro limpo (warm embarrava) */
+  --glass-bg-solid:  rgb(var(--glass-solid-rgb) / 0.94);    /* fallback durante o scroll (sem blur) */
   /* Vidro do CHROME fino (navbar, composer). Igual ao --glass-bg-solid por padrao; com papel de
      parede ele entra no veu do slider Solidez e os PAINEIS nao — sem blur no WebKit, painel
      translucido vira vidro de verdade e o que esta atras fica legivel atraves dele. */
@@ -76,7 +89,7 @@
      No tema CLARO a excecao NAO vale, e nao e simetria por gosto: o vidro claro e branco a 0.52
      sobre texto ESCURO, e branco translucido nao apaga tinta escura — o chat atravessava a sidebar
      e o painel inteiros. No escuro e o contrario (tinta clara sobre vidro escuro) e 0.46 basta. */
-  --glass-panel:     rgba(26,24,29,0.86);
+  --glass-panel:     rgb(var(--glass-panel-rgb) / 0.86);
 
   /* Superficie DENTRO de um painel de vidro (folha, modal, sidebar, painel de contexto). Um
      `--bg-elevated`/`--bg-base` cru ali vira retangulo chapado por cima do papel de parede — o
@@ -134,6 +147,13 @@
   --bg-elevated:  #f0ebe3;
   --bg-hover:     #e9e3da;
 
+  /* Veu no claro: valor PROPRIO, de proposito NAO igual a --bg-base (medido: 250,247,243 aqui contra
+     248,246,242 em --bg-base — 2,1,1 de diferenca por canal). Sao literais que ja divergiam antes
+     desta revisao; vira var(--bg-base) teria mudado a cor de qualquer usuario claro com foto de
+     fundo em ~1%, imperceptivel mas fora do que esta tarefa autoriza mexer. NAO "conserte" isto pra
+     var(--bg-base) — o ponto desta variavel e justamente preservar o literal de hoje bit a bit. */
+  --veu-rgb: 250 247 243;
+
   /* Borders */
   --border-subtle:  rgba(50,40,35,0.08);
   --border-default: rgba(50,40,35,0.14);
@@ -164,13 +184,17 @@
   --bubble-user:    #e8e5e0;
 
   /* Glass claro: translucido sobre paper (mais sutil que no dark) */
-  --glass-bg:        rgba(255,254,252,0.52);
-  --glass-bg-solid:  rgba(255,253,250,0.96);
+  /* Mesma separacao cor/alfa do bloco escuro em :root — triplas proprias, RGB claros. */
+  --glass-panel-rgb: 255 253 250;
+  --glass-rgb:       255 254 252;
+  --glass-solid-rgb: 255 253 250;
+  --glass-bg:        rgb(var(--glass-rgb) / 0.52);
+  --glass-bg-solid:  rgb(var(--glass-solid-rgb) / 0.96);
   --glass-border:    rgba(40,32,28,0.10);
   --glass-highlight: rgba(255,255,255,0.85);
   --glass-specular:  rgba(255,255,255,0.95);  /* rim claro */
   --glass-shadow:    rgba(60,50,45,0.13);    /* sombra leve no claro (a 0.42 do dark vira faixa preta) */
-  --glass-panel:     rgba(255,253,250,0.90);
+  --glass-panel:     rgb(var(--glass-panel-rgb) / 0.90);
 
   /* Semantica no claro: os neon do dark (#34c759 etc.) caem a ~1.7:1 sobre paper — escurecidos
      pra >=4.5:1 ate no pior fundo (--bg-hover #e9e3da). */
@@ -349,7 +373,7 @@ html:is([data-bg="image"], [data-bg="desktop"]) {
   background: var(--bg-base);
   /* Com papel de parede, os painéis de vidro seguem o mesmo slider: opacos demais eles viram parede
      e a foto só aparece no meio da tela. `--cp-panel-alpha` vem do lib/background.ts. */
-  --glass-panel: rgba(26, 24, 29, var(--cp-panel-alpha, 0.70));
+  --glass-panel: rgb(var(--glass-panel-rgb) / var(--cp-panel-alpha, 0.70));
   /* As superficies DE DENTRO dos paineis entram no mesmo veu, senao cada chip, campo e bloco de
      saida vira um retangulo chapado boiando sobre a foto. Mesma conta do bloco de codigo do
      AssistantBubble, agora como token pra qualquer componente usar.
@@ -386,17 +410,17 @@ html[data-bg="desktop"] { background: transparent; }
    como pedir "foto no fundo, faixas fechadas" nem o contrario.
    Consequencia pratica: com Solidez em 0 a barra e o composer ficam iguais ao painel (bem
    translucidos); em 100 ficam solidos. O default (12) e um degrau discreto acima do painel. */
-html:is([data-bg="image"], [data-bg="desktop"]) { --chrome-bg: color-mix(in srgb, rgb(24, 23, 28) calc(var(--cp-surface-alpha, 0.94) * 100%), transparent); }
-html[data-theme="light"]:is([data-bg="image"], [data-bg="desktop"]) { --chrome-bg: color-mix(in srgb, rgb(255, 253, 250) calc(var(--cp-surface-alpha, 0.96) * 100%), transparent); }
+html:is([data-bg="image"], [data-bg="desktop"]) { --chrome-bg: color-mix(in srgb, rgb(var(--glass-solid-rgb)) calc(var(--cp-surface-alpha, 0.94) * 100%), transparent); }
+html[data-theme="light"]:is([data-bg="image"], [data-bg="desktop"]) { --chrome-bg: color-mix(in srgb, rgb(var(--glass-solid-rgb)) calc(var(--cp-surface-alpha, 0.96) * 100%), transparent); }
 /* Chromium (liquid glass) com papel de parede: o composer e a navbar NAO leem `--chrome-bg` aqui —
    a regra `html[data-liquid] .composer-card::before` troca o fundo por `--glass-bg` pra a refracao
    aparecer. Sem esta linha o slider Solidez ficava INERTE no desktop: medido nos dois extremos, o
    ::before do composer dava rgba(38,36,44,0.46) tanto em 0 quanto em 100, enquanto no iPhone (sem
    liquid) o mesmo slider funcionava. Faixa propria, e nao `--cp-surface-alpha`: aquela comeca na alfa
    do painel e o vidro liquido precisa poder ficar bem mais leve que isso pra a refracao existir. */
-html[data-liquid]:is([data-bg="image"], [data-bg="desktop"]) { --glass-bg: color-mix(in srgb, rgb(38, 36, 44) calc((0.22 + 0.70 * var(--cp-solidez, 0.19)) * 100%), transparent); }
-html[data-liquid][data-theme="light"]:is([data-bg="image"], [data-bg="desktop"]) { --glass-bg: color-mix(in srgb, rgb(255, 254, 252) calc((0.28 + 0.68 * var(--cp-solidez, 0.19)) * 100%), transparent); }
-html[data-theme="light"]:is([data-bg="image"], [data-bg="desktop"]) { --glass-panel: rgba(255, 253, 250, var(--cp-panel-alpha, 0.78)); }
+html[data-liquid]:is([data-bg="image"], [data-bg="desktop"]) { --glass-bg: color-mix(in srgb, rgb(var(--glass-rgb)) calc((0.22 + 0.70 * var(--cp-solidez, 0.19)) * 100%), transparent); }
+html[data-liquid][data-theme="light"]:is([data-bg="image"], [data-bg="desktop"]) { --glass-bg: color-mix(in srgb, rgb(var(--glass-rgb)) calc((0.28 + 0.68 * var(--cp-solidez, 0.19)) * 100%), transparent); }
+html[data-theme="light"]:is([data-bg="image"], [data-bg="desktop"]) { --glass-panel: rgb(var(--glass-panel-rgb) / var(--cp-panel-alpha, 0.78)); }
 /* Vale tambem pro `desktop`, e a foto NAO volta junto: `applyBg('desktop')` remove
    `--cp-wallpaper`, entao `var(--cp-wallpaper, none)` la embaixo cai no `none` e a camada nasce so
    com o gradiente. E ele que faz aqui o que o `background_opacity` do kitty faz: sem esta camada o
@@ -414,10 +438,15 @@ html:is([data-bg="image"], [data-bg="desktop"]) body::after {
   /* 78-86% apagava wallpaper escuro por completo — o usuario escolhia a imagem e a tela nao mudava.
      Com 48-62% a foto aparece e o texto ainda ganha do fundo. `--cp-scrim` fica exposto pra ajustar
      sem recompilar (DevTools ou uma opcao futura). */
+  /* Cor do veu: `var(--veu-rgb)`, nao mais um hex chumbado. No modo Desktop `--veu-rgb` e reescrito
+     inline por `desktopTheme.ts` (aplicarPaleta) — sem isto o veu ficava indigo fixo por baixo de
+     caixas/chips ja na cor do papel de parede, ~90% da tela no default de Transparencia. Fora do
+     tema Desktop `--veu-rgb` (definido la em cima) e o MESMO literal que sempre esteve aqui — so
+     mudou de lugar, o pixel calculado nao muda. */
   background-image:
     linear-gradient(
-      rgba(16, 14, 17, var(--cp-scrim-topo, 0.48)),
-      rgba(16, 14, 17, var(--cp-scrim-base, 0.62))
+      rgb(var(--veu-rgb) / var(--cp-scrim-topo, 0.48)),
+      rgb(var(--veu-rgb) / var(--cp-scrim-base, 0.62))
     ),
     var(--cp-wallpaper, none);
   background-size: cover;
@@ -430,10 +459,13 @@ html:is([data-bg="image"], [data-bg="desktop"]) body::after {
   filter: blur(var(--cp-backdrop-blur, 0px));
 }
 html[data-theme="light"]:is([data-bg="image"], [data-bg="desktop"]) body::after {
+  /* Mesmo mecanismo do dark: `--veu-rgb` claro (definido em :root[data-theme="light"]) e o literal
+     de sempre — 250,247,243, o mesmo hex que estava direto aqui. Fora do Desktop o pixel nao muda;
+     no Desktop `mapear()` reescreve so esta tripla, sem depender de bater com --bg-base. */
   background-image:
     linear-gradient(
-      rgba(250, 247, 243, var(--cp-scrim-topo, 0.62)),
-      rgba(250, 247, 243, var(--cp-scrim-base, 0.74))
+      rgb(var(--veu-rgb) / var(--cp-scrim-topo, 0.62)),
+      rgb(var(--veu-rgb) / var(--cp-scrim-base, 0.74))
     ),
     var(--cp-wallpaper, none);
 }
