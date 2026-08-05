@@ -2,8 +2,12 @@
 # Run claude-cockpit back + front as persistent systemd *user* services.
 #
 # They keep running after you close the terminal (and across logout/reboot if
-# `loginctl enable-linger $USER` is set). The frontend runs `vite` (`npm run dev`)
-# so Vite HMR / fast-refresh stays fully live — edits reload in the browser as usual.
+# `loginctl enable-linger $USER` is set). The frontend serves the BUILD (`npm run preview`),
+# not the dev server: o install.sh ja gera o frontend/dist e ninguem o servia — a instalacao
+# produzia um artefato de producao e servia desenvolvimento. O bloco `preview` do vite.config.ts
+# ja estava pronto pra isso (mesma porta 5173, mesmo proxy /api, mesmos allowedHosts do tailnet),
+# entao a origem NAO muda: quem ja usa nao perde localStorage (cp_servers, tema, layout...).
+# Pra mexer no layout com recarga ao vivo: pare o servico e rode `npm run dev` na mao.
 #
 # Usage:
 #   ./scripts/services-setup.sh                 # install + start (idempotent)
@@ -48,6 +52,20 @@ log() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 BACKEND_ONLY=0
 if [[ "${1:-}" == "--backend-only" ]]; then BACKEND_ONLY=1; shift; fi
 
+# Quem serve a interface. Duas formas, e a diferenca NAO e cosmetica:
+#   backend  — o 8765 serve o dist E a API. Um servico so, um endereco so. O servico do front
+#              nem e instalado; quem for mexer no layout roda `npm run dev` na mao.
+#   preview  — servico separado no 5173 servindo o BUILD (`vite preview`), API por proxy.
+# O `dev` deixou de ser opcao de INSTALACAO: o install.sh sempre buildou o dist e ninguem o
+# servia, entao a instalacao produzia artefato de producao e servia servidor de desenvolvimento.
+#
+# Padrao 'backend' vale so pra instalacao NOVA. Quem ja tem a unit do front no disco mantem o
+# que tem: trocar a porta muda a ORIGEM, e origem nova = localStorage vazio (cp_servers com os
+# tokens, tema, layout do canvas). Ninguem perde configuracao por causa de um `git pull`.
+SERVE="${CP_SERVE:-}"
+FRONT_JA_EXISTE=0
+[[ -f "$SD_DIR/$FRONT" ]] && FRONT_JA_EXISTE=1
+
 case "${1:-}" in
   --uninstall)
     systemctl --user disable --now "$BACK" "$FRONT" 2>/dev/null || true
@@ -69,6 +87,24 @@ esac
 [[ -n "$UV_BIN" ]] || { echo "uv not found in PATH" >&2; exit 1; }
 [[ "$BACKEND_ONLY" == 1 ]] || [[ -x "$NODE_BIN/npm" ]] || { echo "npm nao encontrado em $NODE_BIN — instale Node 20+ (ou, se usa fnm, rode: fnm default <ver>)" >&2; exit 1; }
 [[ -d "$REPO/frontend/node_modules" ]] || log "WARNING: frontend/node_modules missing — run 'npm install' in frontend first"
+
+if [[ "$BACKEND_ONLY" == 0 && -z "$SERVE" ]]; then
+  if [[ "$FRONT_JA_EXISTE" == 1 ]]; then
+    # Instalacao existente: NAO pergunta e NAO muda. Mexer aqui trocaria a porta de quem ja usa.
+    SERVE=preview
+    log "Frontend ja instalado — mantendo o servico no 5173 (use CP_SERVE=backend pra trocar)."
+  elif [[ -t 0 ]]; then
+    echo
+    echo "  Quem serve a interface?"
+    echo "    1) o backend, no 8765 — um servico so, um endereco so (recomendado)"
+    echo "    2) servico separado no 5173, servindo o build"
+    read -rp "  [1/2, Enter = 1]: " _r
+    case "${_r:-1}" in 2) SERVE=preview ;; *) SERVE=backend ;; esac
+  else
+    SERVE=backend   # nao-interativo (CI, curl|bash): o padrao da instalacao nova
+  fi
+fi
+[[ "$BACKEND_ONLY" == 1 ]] && SERVE=backend
 
 mkdir -p "$SD_DIR"
 
@@ -107,23 +143,23 @@ WantedBy=default.target
 EOF
 )"
 
-if [[ "$BACKEND_ONLY" == 1 ]]; then
+if [[ "$BACKEND_ONLY" == 1 || "$SERVE" == backend ]]; then
   # Nao basta nao habilitar: escrever a unit deixaria um arquivo morto no disco, que aparece no
   # `systemctl --user list-unit-files` e confunde quem for diagnosticar depois. Remove uma que
   # tenha sobrado de uma instalacao anterior COM frontend.
   systemctl --user disable --now "$FRONT" 2>/dev/null || true
   rm -f "$SD_DIR/$FRONT"
-  log "Skipping $FRONT (--backend-only)"
+  if [[ "$BACKEND_ONLY" == 1 ]]; then log "Skipping $FRONT (--backend-only)"; else log "Skipping $FRONT (o backend serve a interface no 8765)"; fi
 else
 escreve_unit "$FRONT" "$(cat <<EOF
 [Unit]
-Description=claude-cockpit frontend (Vite dev, HMR)
+Description=claude-cockpit frontend (Vite preview, serve o build)
 After=network.target
 
 [Service]
 WorkingDirectory=$REPO/frontend
 Environment=PATH=$NODE_BIN:/usr/local/bin:/usr/bin:/bin
-ExecStart=$NODE_BIN/npm run dev
+ExecStart=$NODE_BIN/npm run preview
 Restart=on-failure
 RestartSec=2
 
@@ -138,10 +174,15 @@ if [[ ${#MUDOU[@]} -gt 0 ]]; then
   systemctl --user restart "${MUDOU[@]}"
   log "Reiniciado (unit mudou): ${MUDOU[*]}"
 fi
-if [[ "$BACKEND_ONLY" == 1 ]]; then
+if [[ "$BACKEND_ONLY" == 1 || "$SERVE" == backend ]]; then
   systemctl --user enable --now "$BACK"
+  if [[ "$SERVE" == backend && "$BACKEND_ONLY" == 0 ]]; then
+    log "Done. Backend up, servindo a interface em http://127.0.0.1:8765/"
+    echo "  Pra desenvolver com recarga ao vivo: npm --prefix frontend run dev (porta 5173)"
+  else
   log "Done. Backend up (frontend NAO instalado: --backend-only)."
   echo "  Aponte um frontend ja existente para este backend — veja a URL no QR que ele imprime."
+  fi
 else
   systemctl --user enable --now "$BACK" "$FRONT"
   log "Done. Both services up."
