@@ -67,6 +67,7 @@ from app import push
 from app import stall_watch
 from app.sync import sync_router
 from app.deploy import deploy_router
+from app import desktop_palette
 
 _log = logging.getLogger("claude_pocket")
 
@@ -726,7 +727,6 @@ def claude_configs():
 def desktop_palette_get():
     # 404 e resposta de negocio, nao erro: e como o front sabe que nao ha rice nesta maquina e
     # esconde a opcao.
-    from app import desktop_palette
     p = desktop_palette.ler()
     if p is None:
         raise HTTPException(status_code=404, detail="sem paleta")

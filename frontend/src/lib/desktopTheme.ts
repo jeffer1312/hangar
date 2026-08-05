@@ -5,6 +5,14 @@ import { getBaseUrl, getToken } from './auth';
 
 export type Paleta = { escuro: boolean; cores: Record<string, string> };
 
+// Todo token que `mapear()` le de `p.cores` — a mesma lista que decide o que valida em
+// `buscarPaleta()`. Um so lugar: se `mapear` passar a ler mais uma chave, o validador segue ela
+// sem precisar lembrar de atualizar duas listas (a outra fonte, `TOKENS`, e do BACKEND).
+const CHAVES_CORES = [
+  'background', 'surfaceContainerLow', 'surfaceContainer', 'surfaceContainerHigh',
+  'primary', 'outlineVariant', 'outline', 'onPrimary', 'onSurface', 'onSurfaceVariant',
+] as const;
+
 // A paleta e da MAQUINA onde o backend roda. Nao basta a pagina ter vindo do localhost: o app troca
 // de SERVIDOR ativo (o mesmo front fala com varias maquinas), e um servidor remoto devolveria 403 —
 // ou, pior, a paleta do papel de parede DELE. Entao o gate compara a origem do pedido com a da
@@ -103,11 +111,14 @@ export function mapear(p: Paleta, textoDoDesktop: boolean): Record<string, strin
 
 export function aplicarPaleta(p: Paleta, textoDoDesktop: boolean): void {
   if (typeof document === 'undefined') return;
+  // Computa ANTES de tocar no DOM: um throw dentro de `mapear` (paleta malformada que passou pela
+  // validacao de `buscarPaleta` por algum outro caminho) nao pode deixar o tema flipado com as
+  // cores do estado anterior — nada parcial pode ficar observavel.
+  const m = mapear(p, textoDoDesktop);
   const raiz = document.documentElement;
   // A VARIANTE vem do arquivo, nao da escolha do app: pedir "Desktop" e "Claro" ao mesmo tempo
   // daria paleta escura com o bloco claro do CSS por cima.
   raiz.dataset.theme = p.escuro ? 'dark' : 'light';
-  const m = mapear(p, textoDoDesktop);
   // Limpa antes de escrever: alternar "cor do texto" de desktop pra app deixaria as chaves de texto
   // presas no valor anterior, porque o mapa novo simplesmente nao as traz.
   for (const k of CHAVES) raiz.style.removeProperty(k);
@@ -140,6 +151,18 @@ export function paletaEmCache(): Paleta | null {
   return ultima;
 }
 
+// Confere a forma antes de confiar no JSON: hoje SO o backend deste repo responde este endpoint,
+// mas o app fala com VARIOS servidores (troca de servidor ativo, malha cp-send) — um deles rodando
+// versao velha, ou qualquer coisa respondendo 200 na mesma rota, e o front nao tem defesa propria
+// nenhuma sem isto. `unknown` -> checagem manual, nao cast: um cast (`as Paleta`) so engana o
+// compilador, nao troca o dado que chegou.
+function paletaValida(v: unknown): v is Paleta {
+  if (typeof v !== 'object' || v === null) return false;
+  const cores = (v as Record<string, unknown>).cores;
+  if (typeof cores !== 'object' || cores === null) return false;
+  return CHAVES_CORES.every((k) => typeof (cores as Record<string, unknown>)[k] === 'string');
+}
+
 export async function buscarPaleta(): Promise<Paleta | null> {
   if (!ehLocal()) return null;
   try {
@@ -147,9 +170,13 @@ export async function buscarPaleta(): Promise<Paleta | null> {
       headers: { Authorization: `Bearer ${getToken() ?? ''}` },
     });
     if (!r.ok) return null;   // 404 = maquina sem rice; 403 = nao e a maquina. Os dois: sem opcao.
-    const p = (await r.json()) as Paleta;
-    ultima = p;
-    return p;
+    const bruto: unknown = await r.json();
+    if (!paletaValida(bruto)) {
+      console.warn('desktopTheme: paleta com formato inesperado, ignorando', bruto);
+      return null;            // mesma resposta de um 404: "sem paleta", nao erro
+    }
+    ultima = bruto;
+    return bruto;
   } catch {
     return null;              // backend fora do ar nao pode impedir o app de abrir
   }

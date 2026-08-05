@@ -89,11 +89,17 @@
   // Repinta na hora com o que ja se sabe (cache do Fix 3): sem isto, um fetch que devolve null
   // (backend piscou) gravava a preferencia e deixava as letras na cor antiga ate o proximo foco —
   // o controle mostrando "App" com o texto ainda no tom do desktop. So vai pra rede se nunca houve
-  // paleta nesta aba.
-  function reaplicar() {
+  // paleta nesta aba. Devolve se REALMENTE repintou: quem chama usa isso pra decidir se persiste a
+  // escolha ou desfaz o segmentado — sem o retorno, o controle mostrava a escolha nova com as letras
+  // na cor velha, porque nada aqui avisava o chamador que o repaint nao aconteceu.
+  function reaplicar(): Promise<boolean> {
     const cache = paletaEmCache();
-    if (cache) { aplicarPaleta(cache, textoDesktop); return; }
-    buscarPaleta().then((p) => { if (p) aplicarPaleta(p, textoDesktop); });
+    if (cache) { aplicarPaleta(cache, textoDesktop); return Promise.resolve(true); }
+    return buscarPaleta().then((p) => {
+      if (!p) return false;
+      aplicarPaleta(p, textoDesktop);
+      return true;
+    });
   }
 
   // VOLTAR AO PADRAO: so as medidas que a amostra mostra. NAO mexe em tema, fonte, papel de parede
@@ -170,7 +176,17 @@
           { v: 'app', label: 'App', aria: 'Cor do texto padrão do app' },
         ]}
         ariaLabel="Cor do texto"
-        onPick={(v) => { textoDesktop = v === 'desktop'; setTextoDoDesktop(textoDesktop); reaplicar(); }}
+        onPick={(v) => {
+          // So persiste (e so deixa a escolha nova visivel) se o repaint realmente aconteceu — senao
+          // o segmentado mostraria "Desktop" com as letras ainda na cor do app (ou vice-versa), o
+          // controle mentindo sobre o que esta na tela.
+          const anterior = textoDesktop;
+          textoDesktop = v === 'desktop';
+          reaplicar().then((ok) => {
+            if (ok) setTextoDoDesktop(textoDesktop);
+            else textoDesktop = anterior;
+          });
+        }}
       />
     </div>
   {/if}
