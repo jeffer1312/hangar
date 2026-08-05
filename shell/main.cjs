@@ -2,9 +2,8 @@
 const { app, BrowserWindow, screen } = require('electron');
 const { ler, gravar } = require('./settings.cjs');
 
-// Legado X11; no Wayland o spike não isolou se faz diferença. MEDIR: abrir sem ele e ver se a
-// transparência continua. Se continuar, apagar esta linha.
-app.commandLine.appendSwitch('enable-transparent-visuals');
+// MEDIDO 05/08/2026 (Hyprland/Wayland, Electron 43.3.0): o switch `enable-transparent-visuals`
+// do spike NAO e necessario — a janela continua transparente sem ele. Linha removida.
 
 const PADRAO = 'http://127.0.0.1:8765';
 
@@ -75,7 +74,12 @@ app.whenReady().then(async () => {
   // Ultimo endereco que CARREGOU de verdade (did-navigate abaixo mantem isto atualizado). `url`
   // acima fica congelada no valor do boot; sem esta variavel a tela de recuperacao reoferecia
   // 127.0.0.1:8765 depois que o usuario ja tinha corrigido pra outro endereco e ele caiu de novo.
-  let urlBoa = url;
+  //
+  // Comeca no PADRAO, NAO em `url`: `url` pode vir de COCKPIT_URL, que ninguem verificou. Medido em
+  // 05/08/2026 — abrir com COCKPIT_URL apontando pra uma porta morta e fechar na tela de
+  // recuperacao gravava a porta morta como "endereco bom", e TODA abertura seguinte caia na tela de
+  // erro. Endereco que nunca carregou nao pode ser o ultimo bom.
+  let urlBoa = PADRAO;
 
   const fundo = opcoesDeFundo();
   const geo = geometriaValida(cfg.janela) || { width: 1280, height: 800 };
@@ -153,7 +157,12 @@ app.whenReady().then(async () => {
     }
   });
 
-  win.loadURL((await paginaResponde(url)) ? url : telaDeUrl(url));
+  // Endereco salvo fora do ar NAO significa perguntar: o caso comum e o backend local, que esta
+  // bem ali no PADRAO. So depois que os dois falham e que faz sentido pedir ajuda pro usuario.
+  let alvo = null;
+  if (await paginaResponde(url)) alvo = url;
+  else if (url !== PADRAO && (await paginaResponde(PADRAO))) alvo = PADRAO;
+  win.loadURL(alvo ? alvo : telaDeUrl(url));
 });
 
 app.on('window-all-closed', () => app.quit());
