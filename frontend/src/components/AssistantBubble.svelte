@@ -280,13 +280,13 @@
      esta regra tem especificidade maior, ganhava daquela e o fundo voltava — e como o code é `inline`,
      ele pinta a largura do TEXTO de cada linha, não do bloco: faixas mais opacas linha a linha, só no
      modo com foto. Medido: code a 0,84 sobre pre a 0,84, 689px contra 830px. */
-  :global(html[data-bg='image']) .prose :global(pre),
-  :global(html[data-bg='image']) .prose :global(:not(pre) > code) {
+  :global(html:is([data-bg='image'], [data-bg='desktop'])) .prose :global(pre),
+  :global(html:is([data-bg='image'], [data-bg='desktop'])) .prose :global(:not(pre) > code) {
     background: color-mix(in srgb, var(--bg-elevated) calc(var(--cp-panel-alpha, 0.87) * 100%), transparent);
   }
   /* ...mas o pre DENTRO da caixa nao pinta de novo (senao sao DUAS camadas de veu empilhadas).
      Mesma regra no app.css pras outras telas; aqui com especificidade maior pra vencer a de cima. */
-  :global(html[data-bg='image']) .prose :global(.code-block pre) { background: none; }
+  :global(html:is([data-bg='image'], [data-bg='desktop'])) .prose :global(.code-block pre) { background: none; }
 
   .prose :global(pre code) {
     font-family: var(--font-mono);
@@ -358,17 +358,17 @@
      Caixa aqui seria o oposto do resto da tela — a conversa inteira e texto direto sobre a foto, e
      um retangulo so pra tabela le como recorte colado. O cabecalho tambem larga o fundo proprio,
      senao ele fica sendo a unica caixa da tabela. */
-  :global(html[data-bg='image']) .prose :global(th) {
+  :global(html:is([data-bg='image'], [data-bg='desktop'])) .prose :global(th) {
     background: transparent;
   }
   /* Grade BRANCA, nao a hairline acinzentada de 7%: dentro da caixa, sobre foto, a linha cinza some
      e as colunas colam uma na outra. Branco a 30% desenha a grade sem virar tabela de planilha. */
-  :global(html[data-bg='image']) .prose :global(th),
-  :global(html[data-bg='image']) .prose :global(td) {
+  :global(html:is([data-bg='image'], [data-bg='desktop'])) .prose :global(th),
+  :global(html:is([data-bg='image'], [data-bg='desktop'])) .prose :global(td) {
     border-color: rgba(255, 255, 255, 0.30);
   }
-  :global(html[data-theme='light'][data-bg='image']) .prose :global(th),
-  :global(html[data-theme='light'][data-bg='image']) .prose :global(td) {
+  :global(html[data-theme='light']:is([data-bg='image'], [data-bg='desktop'])) .prose :global(th),
+  :global(html[data-theme='light']:is([data-bg='image'], [data-bg='desktop'])) .prose :global(td) {
     border-color: rgba(40, 32, 28, 0.34);
   }
 
