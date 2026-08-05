@@ -132,6 +132,17 @@ describe('tema do desktop', () => {
     expect(document.documentElement.dataset.theme).toBe('light');
   });
 
+  // Fix 4 da revisao: `mapear` roda ANTES de tocar no DOM. Uma paleta malformada que jogue dentro
+  // dele (ex: `cores` ausente, TypeError ao ler `c.background`) nao pode deixar o tema flipado com
+  // as cores velhas ainda escritas — nada parcial observavel.
+  it('paleta malformada: mapear() joga e dataset.theme fica intocado', () => {
+    document.documentElement.dataset.theme = 'light';
+    const malformada = { escuro: true } as unknown as Parameters<typeof aplicarPaleta>[0];
+    expect(() => aplicarPaleta(malformada, false)).toThrow();
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(varsCss.get('--bg-base')).toBeUndefined();
+  });
+
   it('preto puro clareia em vez de ficar igual (--accent-press nunca == --accent)', () => {
     const m = mapear({ ...AZUL, cores: { ...AZUL.cores, primary: '#000000' } }, false);
     expect(m['--accent-press']).toMatch(/^#[0-9a-f]{6}$/i);
@@ -190,6 +201,26 @@ describe('buscarPaleta', () => {
   it('resposta ok -> devolve a paleta', async () => {
     fetchImpl = async () => ({ ok: true, json: async () => AZUL });
     expect(await buscarPaleta()).toEqual(AZUL);
+  });
+
+  // Fix 4 da revisao: hoje SO este backend responde a rota, mas o app fala com varios servidores —
+  // 200 com uma chave faltando (versao velha do backend, ou qualquer coisa respondendo na mesma
+  // rota) tem que virar null, a MESMA resposta de um 404, nao um objeto que `mapear` quebra em
+  // cima depois.
+  it('200 com uma chave que mapear() le faltando -> null', async () => {
+    const semPrimary = { ...AZUL, cores: { ...AZUL.cores } };
+    delete (semPrimary.cores as Record<string, string>).primary;
+    fetchImpl = async () => ({ ok: true, json: async () => semPrimary });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await buscarPaleta()).toBeNull();
+    expect(warn).toHaveBeenCalled();   // rastro de dev — sem isto o desenvolvedor nao teria pista
+    warn.mockRestore();
+  });
+
+  it('200 sem "cores" nenhum -> null, nao levanta', async () => {
+    fetchImpl = async () => ({ ok: true, json: async () => ({ escuro: true }) });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await buscarPaleta()).toBeNull();
   });
 
   // Fix 3 da revisao: cache de modulo. Uma falha DEPOIS de um sucesso nao pode apagar o que ja se

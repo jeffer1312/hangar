@@ -1,5 +1,20 @@
 """Paleta Material You que o desktop (quickshell/end-4) gera do papel de parede."""
+import logging
+import os
+
+import pytest
+
 from app import desktop_palette
+
+
+@pytest.fixture(autouse=True)
+def _reset_ultimo_aviso():
+    # `_ultimo_aviso` (dedupe de WARNING entre chamadas, Fix 2 da revisao) e estado de MODULO —
+    # sem reset, o aviso "gasto" por um teste anterior (mesma mensagem) silenciaria o assert de
+    # outro teste. Mesmo padrao dos resets ja em conftest.py (auth backoff, ws warn flags).
+    desktop_palette._ultimo_aviso = None
+    yield
+    desktop_palette._ultimo_aviso = None
 
 
 def test_le_a_variante_ativa_e_todos_os_tokens(paleta_azul):
@@ -78,3 +93,63 @@ def test_bytes_invalidos_nao_levantam(tmp_path, monkeypatch):
     f.write_bytes(b"$darkmode: True;\n$background: #11\xff\xfe1318;\n")
     monkeypatch.setattr(desktop_palette, "_caminho", lambda: f)
     assert desktop_palette.ler() is None
+
+
+def test_bom_no_inicio_nao_perde_a_primeira_declaracao(paleta_azul):
+    # BOM (﻿), nao "arquivo bom" — nome deliberadamente diferente de test_ler_arquivo_bom (essa e
+    # "arquivo BOM" em portugues, ja testa outra coisa: ler do disco sem monkeypatch de conteudo).
+    #
+    # A primeira versao deste teste punha o BOM na frente de `$darkmode: True;` — a PRIMEIRA linha
+    # do fixture, mas nao um token de TOKENS. Perder essa linha so muda "escuro" pro default (que ja
+    # e True) e todo o resto do arquivo continua casando normalmente: o teste passava com ou sem o
+    # strip do BOM, ele nao provava nada. Aqui o token na linha 1 e `$background`, que ESTA em
+    # TOKENS — perder a linha 1 tira um token obrigatorio e `parse()` tem que devolver None.
+    resto = "\n".join(l for l in paleta_azul.splitlines() if not l.startswith("$background:"))
+    texto = "﻿$background: #111318;\n" + resto + "\n"
+    p = desktop_palette.parse(texto)
+    assert p is not None
+    assert p["cores"]["background"] == "#111318"
+
+
+def test_home_sem_env_vira_none_sem_levantar(monkeypatch, caplog):
+    # `_caminho()` (chamada dentro do try de `ler()`) usa Path.home(), que levanta RuntimeError (nao
+    # OSError) quando $HOME nao esta setado e o passwd nao tem home dir — cenario plausivel numa unit
+    # systemd minima ou container. O contrato do modulo e "nunca levanta"; sem o `except
+    # RuntimeError`, isso vazava pra rota HTTP como 500. Monkeypatch em `_caminho`, nao em
+    # `Path.home` de verdade, pra nao vazar pros outros testes do processo.
+    def _sem_home():
+        raise RuntimeError("Could not determine home directory")
+    monkeypatch.setattr(desktop_palette, "_caminho", _sem_home)
+    with caplog.at_level(logging.WARNING, logger="app.desktop_palette"):
+        assert desktop_palette.ler() is None
+    assert "ilegivel" in caplog.text
+
+
+def test_falha_repetida_com_o_mesmo_motivo_avisa_uma_vez_so(monkeypatch, caplog):
+    # Fix 2 da revisao: o front rele o arquivo a cada foco da janela. Numa maquina cujo rice ficou
+    # permanentemente ilegivel, duas chamadas seguidas com o MESMO motivo nao podem virar dois
+    # WARNINGs — so a MUDANCA de estado interessa, senao o log rola pra sempre e ninguem le.
+    def _sem_home():
+        raise RuntimeError("Could not determine home directory")
+    monkeypatch.setattr(desktop_palette, "_caminho", _sem_home)
+    with caplog.at_level(logging.WARNING, logger="app.desktop_palette"):
+        assert desktop_palette.ler() is None
+        assert desktop_palette.ler() is None
+    avisos = [r for r in caplog.records if "ilegivel" in r.message]
+    assert len(avisos) == 1
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignora permissoes de diretorio")
+def test_permissao_negada_loga_diferente_de_arquivo_ausente(tmp_path, monkeypatch, caplog):
+    # O comentario velho tratava "nao existe" e "sem permissao" como o mesmo silencio. Sao
+    # diferentes: o primeiro e a maioria das maquinas (sem rice), o segundo e sempre uma pista.
+    d = tmp_path / "sem-acesso"
+    d.mkdir(mode=0o000)
+    f = d / "material_colors.scss"
+    monkeypatch.setattr(desktop_palette, "_caminho", lambda: f)
+    try:
+        with caplog.at_level(logging.WARNING, logger="app.desktop_palette"):
+            assert desktop_palette.ler() is None
+        assert "ilegivel" in caplog.text
+    finally:
+        d.chmod(0o700)   # senao o tmp_path nao e limpo no teardown
