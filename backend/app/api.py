@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette.sse import EventSourceResponse
-from app.auth import require_auth
+from app.auth import require_auth, require_loopback
 from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
 from app.model_picker import PickerError
@@ -720,6 +720,17 @@ async def list_sessions():
 @app.get("/api/claude-configs", dependencies=[Depends(require_auth)], response_model=list[ConfigDirInfo])
 def claude_configs():
     return list_config_dirs()
+
+
+@app.get("/api/desktop/palette", dependencies=[Depends(require_auth), Depends(require_loopback)])
+def desktop_palette_get():
+    # 404 e resposta de negocio, nao erro: e como o front sabe que nao ha rice nesta maquina e
+    # esconde a opcao.
+    from app import desktop_palette
+    p = desktop_palette.ler()
+    if p is None:
+        raise HTTPException(status_code=404, detail="sem paleta")
+    return p
 
 
 @app.get("/api/costs", dependencies=[Depends(require_auth)], response_model=CostReport)
