@@ -16,6 +16,7 @@ from typing import Literal, Optional
 from fastapi import FastAPI, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette.sse import EventSourceResponse
 from app.auth import require_auth
@@ -3134,3 +3135,19 @@ async def tts_audio(h: str):
     # (ver tts.extensao_de) — servir isso como audio/mpeg quebra o <audio> no WebKit.
     media_type = "audio/wav" if caminho.suffix == ".wav" else "audio/mpeg"
     return FileResponse(caminho, media_type=media_type)
+
+
+# ── Interface (dist do frontend) ────────────────────────────────────────────────────────────────
+# POR ÚLTIMO, depois de TODAS as rotas: o mount na raiz casa qualquer caminho, então registrado
+# antes engoliria /api. Serve o build do Vite — arquivos estáticos comuns; o Vite em si não roda
+# aqui e não precisa. Com isto o 8765 entrega tela E API num endereço só, e o servidor de
+# desenvolvimento deixa de ser infraestrutura: vira ferramenta de quem mexe no layout.
+#
+# Medido em 05/08/2026: o `tailscale serve` publicava só o 5173, então parar o front (um `npm run
+# dev`, que nem servia a tela usada — ela vem da VPS) derrubava a API do celular junto, com 502 em
+# /api/sessions/events e o backend vivo o tempo todo.
+#
+# Ausente = instalação com --no-frontend, ou repo sem build. Sobe igual, só não serve tela.
+_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if _DIST.is_dir():
+    app.mount("/", StaticFiles(directory=_DIST, html=True), name="ui")
