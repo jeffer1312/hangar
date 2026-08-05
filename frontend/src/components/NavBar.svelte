@@ -412,11 +412,11 @@
     flex-shrink: 0;
   }
 
-  .terminal-btn {
-    color: var(--text-secondary);
-  }
-  /* Overlay so-TUI aberto: pulsa em accent pra sinalizar que precisa interagir pela TUI. */
+  /* Padronização Terminal/Rodar: ambos PARTEM do --accent da .nav-btn (mesma variante visual);
+     apenas os ESTADOS colorem — terminal alert e run running. Antes o Terminal era
+     --text-secondary por default e parecia peso diferente do Rodar na mesma fileira. */
   .terminal-btn.alert { color: var(--accent); }
+  .terminal-btn.alert svg { animation: breathe 1.4s ease-in-out infinite; }
   .terminal-btn.alert svg { animation: breathe 1.4s ease-in-out infinite; }
   @media (prefers-reduced-motion: reduce) {
     .terminal-btn.alert svg { animation: none; }

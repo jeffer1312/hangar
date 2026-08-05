@@ -254,25 +254,23 @@
     {/if}
   </section>
 
+  {#if status?.repo}
   <section class="sec-break">
     <span class="section-label">Repositório</span>
-    {#if status?.repo}
-      {#if onOpenGit}
-        <button type="button" class="sec-open" onclick={onOpenGit} aria-label="Abrir o git de {status.repo}">
-          <span class="sec-open-body">
-            <strong class="mono">{status.repo}</strong>
-            <p class="mono">{status.branch ?? 'sem branch'}{status.dirty ? ' · alterações locais' : ''}</p>
-          </span>
-          <span class="sec-open-arrow" aria-hidden="true">›</span>
-        </button>
-      {:else}
-        <strong class="mono">{status.repo}</strong>
-        <p class="mono">{status.branch ?? 'sem branch'}{status.dirty ? ' · alterações locais' : ''}</p>
-      {/if}
+    {#if onOpenGit}
+      <button type="button" class="sec-open" onclick={onOpenGit} aria-label="Abrir o git de {status.repo}">
+        <span class="sec-open-body">
+          <strong class="mono">{status.repo}</strong>
+          <p class="mono">{status.branch ?? 'sem branch'}{status.dirty ? ' · alterações locais' : ''}</p>
+        </span>
+        <span class="sec-open-arrow" aria-hidden="true">›</span>
+      </button>
     {:else}
-      <p>não detectado</p>
+      <strong class="mono">{status.repo}</strong>
+      <p class="mono">{status.branch ?? 'sem branch'}{status.dirty ? ' · alterações locais' : ''}</p>
     {/if}
   </section>
+  {/if}
 
   <section class="sec-break">
     <span class="section-label">Execução</span>

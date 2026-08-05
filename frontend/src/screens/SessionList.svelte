@@ -964,7 +964,11 @@
 </div>
 
 <style>
-  /* Cluster de pareamento (Opção C): sub-header colapsável + faixa accent ligando os membros. */
+  /* Cluster de pareamento (Opção C): sub-header colapsável + faixa accent ligando os membros.
+     O cabeçalho alinha o TEXTO (depois do chevron) com a faixa dos membros abaixo: o texto do
+     pair-head começa em 16px (padding-4) + ~10px (chevron) + gap(8px) ≈ 34px; o membro, em vez
+     de borda colada na esquerda, entra com margin-left para trazer a borda-accent para a coluna
+     do texto do cabeçalho — leitura da faixa como um trilho visual que sai do 🤝. */
   .pair-head {
     display: flex; align-items: center; gap: var(--space-2);
     width: 100%; text-align: left;
@@ -980,7 +984,12 @@
     flex-shrink: 0; font-size: var(--text-xs); color: var(--accent);
     background: var(--accent-dim); border-radius: var(--radius-full); padding: 1px 8px;
   }
-  .pair-wrap.pair-member { border-left: 2px solid var(--accent-dim); }
+  /* Faixa-accent alinhada à coluna do texto do pair-head (~26px: 16 padding + ~10 chevron + 8 gap
+     - 2 da própria borda). margin-left (não padding) porque a borda precisa ficar FORA do card. */
+  .pair-wrap.pair-member {
+    border-left: 2px solid var(--accent-dim);
+    margin-left: calc(var(--space-4) + var(--space-2) - 2px);
+  }
 
   .session-list-screen {
     display: flex;

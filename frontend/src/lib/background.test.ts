@@ -26,10 +26,42 @@ const varsCss = new Map<string, string>();
   },
 };
 
-const { getBgScrim, getReadAlpha, getTextBoost, getFontPref, setFontPref, getSurfaceSolid, setSurfaceSolid, setBgScrim, getMedidaTexto, setMedidaTexto } = await import('./background');
+const { getBgScrim, getReadAlpha, getTextBoost, getFontPref, setFontPref, getSurfaceSolid, setSurfaceSolid, setBgScrim, getMedidaTexto, setMedidaTexto, getBackdropBlur, setBackdropBlur } = await import('./background');
 
 // Fonte: 'system' é o padrão e NÃO grava chave (mesma convenção do tema/painéis — só o desvio do
 // padrão persiste). Lixo na chave cai em 'system' em vez de deixar o app numa fonte que não existe.
+
+// Desfoque do fundo: mesma convenção da fonte/'off' default. 0 = não grava nada; 'light'/'strong'
+// gravam; lixo volta pra 'off'. Efeito PRÁTICO vem do `--cp-backdrop-blur` que vai pro <html> — ele
+// quem o wallpaper ::after depois lê pra aplicar blur(). Se um dia alguém mudar o conjunto de opções
+// sem atualizar o picker da Aparência, este teste quebra ANTES do usuário; é pra isso que ele existe.
+describe('desfoque do fundo', () => {
+  it('padrão é off e não grava nada', () => {
+    store.clear();
+    expect(getBackdropBlur()).toBe('off');
+    expect(store.has('cp_backdrop_blur')).toBe(false);
+  });
+
+  it('cada nível persiste e voltar pra off remove a chave', () => {
+    store.clear();
+    setBackdropBlur('light');
+    expect(store.get('cp_backdrop_blur')).toBe('light');
+    expect(getBackdropBlur()).toBe('light');
+    setBackdropBlur('strong');
+    expect(getBackdropBlur()).toBe('strong');
+    setBackdropBlur('off');
+    expect(store.has('cp_backdrop_blur')).toBe(false);
+    expect(getBackdropBlur()).toBe('off');
+  });
+
+  it('lixo na chave volta pro padrão', () => {
+    store.clear();
+    store.set('cp_backdrop_blur', '99');
+    expect(getBackdropBlur()).toBe('off');
+    store.set('cp_backdrop_blur', 'blur');
+    expect(getBackdropBlur()).toBe('off');
+  });
+});
 describe('escolha de fonte', () => {
   it('padrão é system, mono persiste, lixo volta pro padrão', () => {
     store.clear();

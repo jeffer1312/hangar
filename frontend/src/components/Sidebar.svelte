@@ -1635,11 +1635,14 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
   @media (hover: hover) { .grp-head:hover { color: var(--text-secondary); } }
 
-  /* Sub-header do cluster de pareamento (Opção C): recuado sob o servidor, cor accent, colapsável. */
+  /* Sub-header do cluster de pareamento (Opção C): recuado sob o servidor, cor accent, colapsável.
+     padding-left: var(--space-4) → chevron na coluna x=16px, mesmo eixo da borda-accent dos
+     .pair-member logo abaixo (8px de margin + 3px de border + padding da .sess-main = label em
+     ~19px; o texto do pair-head cai na mesma coluna porque o gap+16px de padding fecham a conta). */
   .pair-head {
     display: flex; align-items: center; gap: var(--space-2);
     width: 100%; text-align: left;
-    padding: 4px var(--space-2) 4px var(--space-4);
+    padding: 4px var(--space-2) 4px calc(var(--space-4) + 3px);
     background: none; border: none; cursor: pointer;
     font-size: var(--text-xs); font-weight: 600; color: var(--accent);
     border-radius: var(--radius-sm);
@@ -1649,7 +1652,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   /* Linha de MEMBRO do cluster: o recuo liga as sessões do grupo. Escopo `:not(.collapsed)` porque
      no trilho de 56px o `margin-left` empurrava as iniciais 10px pra direita — as sessões pareadas
      saíam do eixo dos outros itens do dock, e o agrupamento nem se lê lá (não há sub-header). */
-  .sidebar:not(.collapsed) .sess-row.pair-member { margin-left: var(--space-2); }
+  /* A borda accent do pair-member herda --space-2 de margin, mas a .sess-row recebe também
+     border-left 3px no escopo :not(.collapsed) (awaiting). Somando: borda começa em 8px e label em
+     ~19px — sobrando 3px a menos que o pair-head, que começa a escrever em 19px+ (ver .pair-head).
+     Muover a borda para dentro da .sess-row alinha a faixa com o cabeçalho. */
+  .sidebar:not(.collapsed) .sess-row.pair-member { margin-left: calc(var(--space-2) - 3px); }
   .grp-chevron {
     flex-shrink: 0; font-size: 9px; color: var(--text-muted);
     transition: transform 160ms var(--ease-out);

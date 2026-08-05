@@ -8,8 +8,9 @@
     getReadAlpha, setReadAlpha, getTextBoost, setTextBoost,
     getFontPref, setFontPref, getMedidaTexto, setMedidaTexto,
     getSurfaceSolid, setSurfaceSolid,
+    getBackdropBlur, setBackdropBlur,
     READ_ALPHA_PADRAO, TEXT_BOOST_PADRAO, SURFACE_SOLID_PADRAO,
-    type ReadMode, type PanelStyle, type FontPref, type MedidaTexto,
+    type ReadMode, type PanelStyle, type FontPref, type MedidaTexto, type BackdropBlurPref,
   } from '../../lib/background';
   import { sidebarPrefs, type SidebarHeight } from '../../lib/sidebarPrefs.svelte';
 
@@ -27,6 +28,7 @@
   let solidez = $state(getReadAlpha());
   let contraste = $state(getTextBoost());
   let fonte = $state<FontPref>(getFontPref());
+  let desfoque = $state<BackdropBlurPref>(getBackdropBlur());
   let texto = $state<Record<MedidaTexto, number>>({
     size: getMedidaTexto('size'), lh: getMedidaTexto('lh'), width: getMedidaTexto('width'),
   });
@@ -55,6 +57,11 @@
   const opcoesFonte: { v: FontPref; label: string; aria: string }[] = [
     { v: 'system', label: 'Sistema', aria: 'A fonte de interface do sistema' },
     { v: 'mono', label: 'Monoespaçada', aria: 'A fonte de largura fixa, como no terminal' },
+  ];
+  const opcoesDesfoque: { v: BackdropBlurPref; label: string; aria: string }[] = [
+    { v: 'off', label: 'Nenhum', aria: 'A foto fica nítida atrás da conversa, como sempre foi' },
+    { v: 'light', label: 'Leve', aria: 'Um leve embaçado ajuda texto sobre foto muito detalhada' },
+    { v: 'strong', label: 'Forte', aria: 'A foto vira uma mancha de cor — máximo alívio pra leitura' },
   ];
   const opcoesPaineis: { v: PanelStyle; label: string; aria: string }[] = [
     { v: 'card', label: 'Caixa solta', aria: 'Painéis flutuando, com folga e cantos redondos' },
@@ -136,6 +143,18 @@
     <!-- `{#key}`: o "Voltar ao padrao" grava a solidez das caixas, mas o slider vive aqui dentro com
          estado proprio — remontar e o que faz o numero na tela bater com o valor aplicado. -->
     {#key resetSeq}<BackgroundToggle />{/key}
+  </div>
+
+  <!-- Só faz sentido com foto de fundo — sem imagem não há o que embaçar. Aparecer aqui ensina que
+       a opção existe, e desligada NÃO muda nada no resto da tela: o scrim, a leitura e a solidez
+       das caixas ficam intocados. -->
+  <div class="ap-row">
+    <div class="ap-label">
+      <strong>Desfoque do fundo</strong>
+      <span>quanto a foto atrás da conversa fica embaçada — ajuda o texto a se ler</span>
+    </div>
+    <SegmentedPicker value={desfoque} options={opcoesDesfoque} ariaLabel="Desfoque do fundo"
+                     onPick={(v) => { desfoque = v; setBackdropBlur(v); }} />
   </div>
 
   <div class="ap-row ap-row--stack">
