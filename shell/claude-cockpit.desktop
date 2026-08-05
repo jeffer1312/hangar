@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Claude Cockpit
+Comment=Janela nativa do cockpit, com a área de trabalho aparecendo atrás
+# Chama o binário do Electron direto, e não `npm start`: quem abre pelo lançador do desktop não
+# tem o PATH do shell interativo, então um `npm` instalado por fnm/nvm simplesmente não é achado.
+# __SHELL_DIR__ é trocado pelo caminho real na instalação (ver README).
+Exec=__SHELL_DIR__/node_modules/electron/dist/electron __SHELL_DIR__/main.cjs
+Path=__SHELL_DIR__
+Icon=utilities-terminal
+Terminal=false
+Categories=Development;
+# A janela sempre nasce com classe `electron` (não dá pra mudar) e título `claude-cockpit` — é por
+# isso que a regra do compositor casa pelo título. Ver README.
+StartupWMClass=electron
