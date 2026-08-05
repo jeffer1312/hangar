@@ -266,7 +266,7 @@
      painel opaco (ele perde o material): e apagar o que esta atras, que e o que um scrim de modal
      deve fazer mesmo. Fora do liquid porque la o blur ja resolve, e fora do `naomodal` porque o dock
      lateral desliga o scrim de proposito. */
-  :global(html[data-bg='image']:not([data-liquid])) .backdrop:not(.naomodal) {
+  :global(html:is([data-bg='image'], [data-bg='desktop']):not([data-liquid])) .backdrop:not(.naomodal) {
     background: rgba(0, 0, 0, 0.88);
   }
 
@@ -433,8 +433,8 @@
        (app.css:228). */
     .sheet.naomodal::before,
     :global(html[data-liquid]) .sheet.naomodal::before { background: var(--surface-raised); }
-    :global(html[data-bg='image']) .sheet.naomodal::before,
-    :global(html[data-liquid][data-bg='image']) .sheet.naomodal::before { background: var(--glass-panel); }
+    :global(html:is([data-bg='image'], [data-bg='desktop'])) .sheet.naomodal::before,
+    :global(html[data-liquid]:is([data-bg='image'], [data-bg='desktop'])) .sheet.naomodal::before { background: var(--glass-panel); }
     /* Aparência → Painéis → "Colados": o painel volta a ser parede de ponta a ponta. */
     :global(html[data-panels='edge']) .sheet.naomodal {
       height: 100%;

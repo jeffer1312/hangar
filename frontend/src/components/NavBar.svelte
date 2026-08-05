@@ -237,7 +237,7 @@
      conhecido e aceito; quem quiser a faixa fechada sobe o slider Solidez ate 100. Continua sem
      backdrop-filter: no WebKit isso e proibido (bug do retangulo preto no scroll). Vem ANTES da
      regra do liquid de proposito — no Chromium o liquid ainda ganha e mantem a refracao. */
-  :global(html[data-bg='image']) .navbar::before {
+  :global(html:is([data-bg='image'], [data-bg='desktop'])) .navbar::before {
     background: linear-gradient(to bottom,
       var(--chrome-bg) 0%,
       var(--chrome-bg) calc(100% - var(--navbar-fade)),

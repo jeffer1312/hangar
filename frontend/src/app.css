@@ -295,14 +295,14 @@ html[data-bg] body .session-row {
    tokens mais fracos da paleta.
    Mesma formula do chat, de proposito — os dois sliders de Leitura (Contraste e Forca) mandam nos
    dois lugares, senao o usuario ajustaria um e o outro ficaria pra tras. */
-html[data-bg="image"] body .session-row {
+html:is([data-bg="image"], [data-bg="desktop"]) body .session-row {
   --text-primary: color-mix(in srgb, #fff calc(var(--cp-text-boost, 60) * 1%), var(--text-primary-base));
   --text-secondary: color-mix(in srgb, #fff calc(var(--cp-text-boost, 60) * 0.7%), var(--text-secondary-base));
   --text-muted: color-mix(in srgb, #fff calc(var(--cp-text-boost, 60) * 0.55%), var(--text-muted-base));
   text-shadow: 0 1px 3px rgba(0, 0, 0, calc(var(--cp-read-alpha, 92) * 0.009)),
                0 0 12px rgba(0, 0, 0, calc(var(--cp-read-alpha, 92) * 0.006));
 }
-html[data-theme="light"][data-bg="image"] body .session-row {
+html[data-theme="light"]:is([data-bg="image"], [data-bg="desktop"]) body .session-row {
   --text-primary: color-mix(in srgb, #000 calc(var(--cp-text-boost, 60) * 1%), var(--text-primary-base));
   --text-secondary: color-mix(in srgb, #000 calc(var(--cp-text-boost, 60) * 0.7%), var(--text-secondary-base));
   --text-muted: color-mix(in srgb, #000 calc(var(--cp-text-boost, 60) * 0.55%), var(--text-muted-base));
@@ -311,18 +311,18 @@ html[data-theme="light"][data-bg="image"] body .session-row {
 }
 /* A divisoria entre sessoes e um branco a 7%: sobre fundo chapado ela aparece, sobre foto some e as
    linhas viram um bloco so. Sobe pro dobro SO com papel de parede. */
-html[data-bg="image"] body .swipe-wrap { border-bottom-color: rgba(255, 248, 244, 0.16); }
-html[data-theme="light"][data-bg="image"] body .swipe-wrap { border-bottom-color: rgba(50, 40, 35, 0.20); }
+html:is([data-bg="image"], [data-bg="desktop"]) body .swipe-wrap { border-bottom-color: rgba(255, 248, 244, 0.16); }
+html[data-theme="light"]:is([data-bg="image"], [data-bg="desktop"]) body .swipe-wrap { border-bottom-color: rgba(50, 40, 35, 0.20); }
 /* Feedback de toque: `.session-row:active` pinta --bg-surface OPACO e vence a regra de cima por
    especificidade (`:active` conta como classe), entao com papel de parede CADA TOQUE piscava de
    volta o retangulo que a gente acabou de tirar. Aqui o realce vira tinta translucida — o mesmo
    sinal, sem tapar a foto. */
-html[data-bg="image"] body .session-row:active { background: rgba(255, 255, 255, 0.10); }
-html[data-theme="light"][data-bg="image"] body .session-row:active { background: rgba(0, 0, 0, 0.07); }
+html:is([data-bg="image"], [data-bg="desktop"]) body .session-row:active { background: rgba(255, 255, 255, 0.10); }
+html[data-theme="light"]:is([data-bg="image"], [data-bg="desktop"]) body .session-row:active { background: rgba(0, 0, 0, 0.07); }
 /* Selos com fundo PROPRIO ja tem contraste garantido: o reforco de leitura acima e pra texto que
    cai direto na foto. Herdado, ele so acrescenta brilho no selo (pior no .prov-chip, que e opaco) e
    move a tinta neutra deles junto com um slider que nao era pra alcanca-los. */
-html[data-bg="image"] body .session-row :is(.state-chip, .prov-chip, .paired-chip, .plan-chip,
+html:is([data-bg="image"], [data-bg="desktop"]) body .session-row :is(.state-chip, .prov-chip, .paired-chip, .plan-chip,
   .engine-chip, .limited-chip, .untracked-badge, .loop-chip) {
   text-shadow: none;
   --text-primary: var(--text-primary-base);
@@ -330,7 +330,7 @@ html[data-bg="image"] body .session-row :is(.state-chip, .prov-chip, .paired-chi
   --text-muted: var(--text-muted-base);
 }
 
-html[data-bg="texture"] body::before, html[data-bg="aurora"] body::before, html[data-bg="image"] body::before {
+html[data-bg="texture"] body::before, html[data-bg="aurora"] body::before, html:is([data-bg="image"], [data-bg="desktop"]) body::before {
   content: "";
   position: fixed;
   inset: 0;
@@ -345,7 +345,7 @@ html[data-bg="texture"] body::before, html[data-bg="aurora"] body::before, html[
    fica ilegível; é o mesmo papel do fundo translúcido do terminal, que também escurece o wallpaper.
    A imagem vem por `--cp-wallpaper` (lib/background.ts). O grão da regra acima entra por cima e
    disfarça o banding do JPEG reduzido. */
-html[data-bg="image"] {
+html:is([data-bg="image"], [data-bg="desktop"]) {
   background: var(--bg-base);
   /* Com papel de parede, os painéis de vidro seguem o mesmo slider: opacos demais eles viram parede
      e a foto só aparece no meio da tela. `--cp-panel-alpha` vem do lib/background.ts. */
@@ -368,6 +368,13 @@ html[data-bg="image"] {
      esta atras. Amarrar ele ao slider (tentei) deixou o modal de git no iPhone transparente a ponto
      de dar pra LER a lista de sessoes atraves dele. */
 }
+
+/* O html é o único que ainda pinta no modo desktop: a regra acima (compartilhada com o modo Imagem)
+   define background: var(--bg-base), e ali a foto cobre; aqui, atrás, é a área de trabalho.
+   Mesma especificidade e vem depois, então ganha. O blur NÃO é daqui: é windowrulev2 do
+   compositor (ver shell/README.md). */
+html[data-bg="desktop"] { background: transparent; }
+
 /* CHROME (navbar e composer) com papel de parede: entra no veu, como o resto.
    Sem blur (proibido no WebKit) o texto que rola por baixo aparece um pouco atraves da faixa — isso
    e conhecido e aceito: quem quiser as faixas fechadas sobe o slider Solidez ate 100, que e opaco.
@@ -379,17 +386,17 @@ html[data-bg="image"] {
    como pedir "foto no fundo, faixas fechadas" nem o contrario.
    Consequencia pratica: com Solidez em 0 a barra e o composer ficam iguais ao painel (bem
    translucidos); em 100 ficam solidos. O default (12) e um degrau discreto acima do painel. */
-html[data-bg="image"] { --chrome-bg: color-mix(in srgb, rgb(24, 23, 28) calc(var(--cp-surface-alpha, 0.94) * 100%), transparent); }
-html[data-theme="light"][data-bg="image"] { --chrome-bg: color-mix(in srgb, rgb(255, 253, 250) calc(var(--cp-surface-alpha, 0.96) * 100%), transparent); }
+html:is([data-bg="image"], [data-bg="desktop"]) { --chrome-bg: color-mix(in srgb, rgb(24, 23, 28) calc(var(--cp-surface-alpha, 0.94) * 100%), transparent); }
+html[data-theme="light"]:is([data-bg="image"], [data-bg="desktop"]) { --chrome-bg: color-mix(in srgb, rgb(255, 253, 250) calc(var(--cp-surface-alpha, 0.96) * 100%), transparent); }
 /* Chromium (liquid glass) com papel de parede: o composer e a navbar NAO leem `--chrome-bg` aqui —
    a regra `html[data-liquid] .composer-card::before` troca o fundo por `--glass-bg` pra a refracao
    aparecer. Sem esta linha o slider Solidez ficava INERTE no desktop: medido nos dois extremos, o
    ::before do composer dava rgba(38,36,44,0.46) tanto em 0 quanto em 100, enquanto no iPhone (sem
    liquid) o mesmo slider funcionava. Faixa propria, e nao `--cp-surface-alpha`: aquela comeca na alfa
    do painel e o vidro liquido precisa poder ficar bem mais leve que isso pra a refracao existir. */
-html[data-liquid][data-bg="image"] { --glass-bg: color-mix(in srgb, rgb(38, 36, 44) calc((0.22 + 0.70 * var(--cp-solidez, 0.19)) * 100%), transparent); }
-html[data-liquid][data-theme="light"][data-bg="image"] { --glass-bg: color-mix(in srgb, rgb(255, 254, 252) calc((0.28 + 0.68 * var(--cp-solidez, 0.19)) * 100%), transparent); }
-html[data-theme="light"][data-bg="image"] { --glass-panel: rgba(255, 253, 250, var(--cp-panel-alpha, 0.78)); }
+html[data-liquid]:is([data-bg="image"], [data-bg="desktop"]) { --glass-bg: color-mix(in srgb, rgb(38, 36, 44) calc((0.22 + 0.70 * var(--cp-solidez, 0.19)) * 100%), transparent); }
+html[data-liquid][data-theme="light"]:is([data-bg="image"], [data-bg="desktop"]) { --glass-bg: color-mix(in srgb, rgb(255, 254, 252) calc((0.28 + 0.68 * var(--cp-solidez, 0.19)) * 100%), transparent); }
+html[data-theme="light"]:is([data-bg="image"], [data-bg="desktop"]) { --glass-panel: rgba(255, 253, 250, var(--cp-panel-alpha, 0.78)); }
 html[data-bg="image"] body::after {
   content: "";
   position: fixed;
@@ -618,11 +625,11 @@ html[data-theme='light'] .code-head { background: rgba(0, 0, 0, 0.03); }
 /* Com papel de parede a caixa entra no veu — MAIS OPACA que os paineis (0.93 vs --cp-panel-alpha):
    codigo precisa de contraste mais que de transparencia (medido na comparacao de temas ao vivo).
    E o pre dentro nao pinta de novo, senao sao DUAS camadas de veu empilhadas. */
-html[data-bg='image'] .code-block {
+html:is([data-bg='image'], [data-bg='desktop']) .code-block {
   background: color-mix(in srgb, var(--bg-elevated) 93%, transparent);
   border-color: var(--border-default);
 }
-html[data-bg='image'] .code-block pre { background: none; }
+html:is([data-bg='image'], [data-bg='desktop']) .code-block pre { background: none; }
 
 /* ── Reduced Motion ──────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
