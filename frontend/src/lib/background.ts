@@ -7,7 +7,16 @@
 // eles leem como retângulo escuro em vez de material. E o grão mata o banding que gradiente escuro
 // produz em tela de 8 bits.
 
-export type BgPref = 'flat' | 'texture' | 'aurora' | 'image';
+export type BgPref = 'flat' | 'texture' | 'aurora' | 'image' | 'desktop';
+
+// Marca injetada pelo processo main do shell (shell/main.cjs) via app.userAgentFallback.
+// NÃO usar ?shell= na URL: screens/Login.svelte:111 faz replaceState(pathname + hash) quando a URL
+// traz ?token= (pareamento) e apagaria a query; e a marca é lida uma vez no boot, então qualquer
+// recarga (o ensureOk recarrega no 401) nasceria opaca. User agent sobrevive a reload e redirect.
+export function isShell(): boolean {
+  return typeof navigator !== 'undefined'
+    && navigator.userAgent.includes('claude-cockpit-shell');
+}
 
 const KEY = 'cp_bg';
 const IMG_KEY = 'cp_bg_image';   // data URL da imagem escolhida (já encolhida)
@@ -156,6 +165,9 @@ export function getBgPref(): BgPref {
   // 'image' sem imagem guardada (limpou o storage, trocou de dispositivo) cai pro chapado em vez de
   // deixar a tela num estado que nao existe.
   if (v === 'image') return getBgImage() ? 'image' : 'flat';
+  // 'desktop' só existe dentro do shell: no navegador comum não há desktop atrás da janela, e
+  // deixar a preferência valer pintaria a tela de nada.
+  if (v === 'desktop') return isShell() ? 'desktop' : 'flat';
   return v === 'texture' || v === 'aurora' ? v : 'flat';
 }
 
@@ -169,6 +181,13 @@ export function applyBg(pref: BgPref = getBgPref()): void {
   const img = pref === 'image' ? getBgImage() : null;
   if (img) {
     raiz.style.setProperty('--cp-wallpaper', `url("${img}")`);
+    aplicarScrim();
+  } else if (pref === 'desktop') {
+    // Mesmo caminho da imagem MENOS a foto: quem faz papel de parede aqui é a área de trabalho,
+    // atrás da janela transparente. O scrim continua sendo o que torna painéis e caixas
+    // translúcidos (--cp-panel-alpha / --cp-surface-alpha) — sem ele os tokens ficam nas cores
+    // opacas de app.css:88-89 e cada chip vira um retângulo sólido sobre o desktop.
+    raiz.style.removeProperty('--cp-wallpaper');
     aplicarScrim();
   } else {
     raiz.style.removeProperty('--cp-wallpaper');
@@ -243,7 +262,10 @@ function aplicarLeitura(): void {
   if (typeof document === 'undefined') return;
   const m = getReadMode();
   // 'auto' liga o modo TEXTO (o mais leve) e só quando há foto — sem imagem não há o que resolver.
-  const efetivo = m === 'auto' ? (getBgPref() === 'image' ? 'text' : null) : (m === 'glass' ? null : m);
+  // Desktop conta como fundo ocupado pelo mesmo motivo da foto: atrás do texto tem a área de
+  // trabalho de quem usa, que pode ser tão movimentada quanto uma imagem.
+  const fundoOcupado = getBgPref() === 'image' || getBgPref() === 'desktop';
+  const efetivo = m === 'auto' ? (fundoOcupado ? 'text' : null) : (m === 'glass' ? null : m);
   const raiz = document.documentElement;
   if (efetivo) {
     raiz.dataset.read = efetivo;
