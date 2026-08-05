@@ -393,7 +393,10 @@ html[data-theme="light"][data-bg="image"] { --glass-panel: rgba(255, 253, 250, v
 html[data-bg="image"] body::after {
   content: "";
   position: fixed;
-  inset: 0;
+  /* -20px em vez de 0: o blur do filtro amolece as bordas da foto e mostraria a cor da pagina nas
+     beiradas da tela. Esticando a camada pra fora do viewport, a borda mole cai fora da area
+     visivel. Sem blur (0px) a diferenca e invisivel — so desenha 20px a mais pra cada lado. */
+  inset: -20px;
   z-index: -3;
   pointer-events: none;
   /* 78-86% apagava wallpaper escuro por completo — o usuario escolhia a imagem e a tela nao mudava.
@@ -408,6 +411,11 @@ html[data-bg="image"] body::after {
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
+  /* Desfoque opcional (lib/background.ts: Aparência → "Desfoque do fundo"). `filter`, NAO
+     `backdrop-filter`: backdrop embaça o que esta ATRAS da camada, e atras do wallpaper nao ha
+     nada — foi por isso que a primeira versao nao mudava nada na tela. filter embaça a propria
+     imagem (e o scrim, que e uniforme — entao na pratica so a foto). Off = 0px, sem custo de GPU. */
+  filter: blur(var(--cp-backdrop-blur, 0px));
 }
 html[data-theme="light"][data-bg="image"] body::after {
   background-image:

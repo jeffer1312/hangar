@@ -280,6 +280,41 @@ function aplicarPaineis(): void {
   else delete document.documentElement.dataset.panels;
 }
 
+// DESFOQUE DO FUNDO (wallpaper): quanto o conteúdo ATRÁS da conversa fica embaçado.
+// 'off' = como hoje, 'light' = 4px, 'strong' = 12px. Só tem efeito quando há imagem de fundo.
+// Off é o default e não grava nada — quem nunca abrir isto continua com a tela idêntica.
+// Comparacao com a camada scrim: o scrim DECIDE quanto da foto passa (Transparencia), o blur LIMPA o
+// que passou — os dois se completam. Uma foto com muito detalhe fino fica legivel com scrim fraco +
+// blur alto; uma foto pesada pede scrim forte + blur off.
+export type BackdropBlurPref = 'off' | 'light' | 'strong';
+const BLUR_KEY = 'cp_backdrop_blur';
+// 8px/24px: a primeira versao (4/12) era timida demais — com o scrim por cima, 4px nao mudava o que
+// o olho percebe. O forte (24) aproxima do vidro fosco de terminal sem apagar a foto inteira.
+const BLUR_PX: Record<BackdropBlurPref, string> = { off: '0px', light: '8px', strong: '24px' };
+
+export function getBackdropBlur(): BackdropBlurPref {
+  const v = typeof localStorage !== 'undefined' ? localStorage.getItem(BLUR_KEY) : null;
+  return v === 'light' || v === 'strong' ? v : 'off';
+}
+
+export function setBackdropBlur(v: BackdropBlurPref): void {
+  try {
+    if (v === 'off') localStorage.removeItem(BLUR_KEY);
+    else localStorage.setItem(BLUR_KEY, v);
+  } catch { /* modo privado */ }
+  aplicarBlur();
+}
+
+function aplicarBlur(): void {
+  if (typeof document === 'undefined') return;
+  const raiz = document.documentElement;
+  const v = getBackdropBlur();
+  raiz.style.setProperty('--cp-backdrop-blur', BLUR_PX[v]);
+  // dataset auxiliar pra CSS condicional (ex.: desligar o scrim quando blur alto)
+  if (v !== 'off') raiz.dataset.backdropBlur = v;
+  else delete raiz.dataset.backdropBlur;
+}
+
 // FONTE da conversa. 'system' = a sans do sistema (`system-ui`, o de sempre) · 'mono' = a
 // monoespaçada, que é o que faz o chat ler como o terminal. Não há como o navegador LER a fonte do
 // terminal (nenhuma API expõe config do kitty, e `fc-match monospace` responde outra coisa), então a
@@ -363,6 +398,7 @@ export function applyAppearance(): void {
   aplicarPaineis();
   aplicarFonte();
   aplicarTexto();
+  aplicarBlur();
 }
 
 export function setBgPref(pref: BgPref): void {
