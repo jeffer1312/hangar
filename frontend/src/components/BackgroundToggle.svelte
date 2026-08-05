@@ -1,5 +1,12 @@
 <script lang="ts">
-  import { getBgPref, setBgPref, setBgImage, clearBgImage, getBgImage, getBgScrim, setBgScrim, getSurfaceSolid, setSurfaceSolid, type BgPref } from '../lib/background';
+  import { getBgPref, setBgPref, setBgImage, clearBgImage, getBgImage, getBgScrim, setBgScrim, getSurfaceSolid, setSurfaceSolid, isShell, type BgPref } from '../lib/background';
+
+  interface Props {
+    /** A escolha vive aqui dentro ($state proprio); quem precisa saber QUAL pref esta ativa agora
+        (AppearanceSettings, pra sumir com o desfoque no modo desktop) recebe pelo callback. */
+    onEscolha?: (p: BgPref) => void;
+  }
+  let { onEscolha }: Props = $props();
 
   let pref = $state<BgPref>(getBgPref());
   let temImagem = $state(!!getBgImage());
@@ -13,6 +20,7 @@
     if (p === 'image' && !temImagem) { arquivoEl?.click(); return; }
     pref = p;
     setBgPref(p);
+    onEscolha?.(p);
   }
 
   async function escolher(e: Event) {
@@ -44,11 +52,17 @@
   }
 
   // Mesmo formato do ThemeToggle: segmentado curto, escolha imediata, sem confirmar.
+  // "Desktop" só existe dentro do shell Electron: no navegador não há área de trabalho atrás da
+  // janela, e oferecer a opção deixaria a tela sem fundo nenhum. getBgPref() também derruba
+  // 'desktop' pra 'flat' se a preferência sobreviver num perfil que não é do shell.
   const opts: { v: BgPref; label: string; aria: string }[] = [
     { v: 'flat', label: 'Liso', aria: 'Fundo chapado' },
     { v: 'texture', label: 'Textura', aria: 'Fundo com grão e gradiente' },
     { v: 'aurora', label: 'Luz', aria: 'Fundo com grão, gradiente e uma luz no canto' },
     { v: 'image', label: 'Imagem', aria: 'Usar uma imagem de fundo' },
+    ...(isShell()
+      ? [{ v: 'desktop' as BgPref, label: 'Desktop', aria: 'Deixar a área de trabalho aparecer atrás' }]
+      : []),
   ];
 </script>
 
@@ -69,7 +83,7 @@
   <!-- O navegador nao enxerga o wallpaper do sistema (o terminal so consegue por ser translucido),
        entao a imagem e escolhida aqui e fica guardada neste dispositivo. -->
   <input bind:this={arquivoEl} type="file" accept="image/*" class="bg-file" onchange={escolher} aria-label="Escolher imagem de fundo" />
-  {#if pref === 'image' && temImagem}
+  {#if (pref === 'image' && temImagem) || pref === 'desktop'}
     <!-- Transparência: o equivalente ao que o compositor faz no terminal. Aplica ao arrastar (sem
          confirmar), porque a escolha só se faz olhando. -->
     <label class="bg-scrim">

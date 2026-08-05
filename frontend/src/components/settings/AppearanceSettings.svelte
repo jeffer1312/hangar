@@ -9,8 +9,9 @@
     getFontPref, setFontPref, getMedidaTexto, setMedidaTexto,
     getSurfaceSolid, setSurfaceSolid,
     getBackdropBlur, setBackdropBlur,
+    getBgPref,
     READ_ALPHA_PADRAO, TEXT_BOOST_PADRAO, SURFACE_SOLID_PADRAO,
-    type ReadMode, type PanelStyle, type FontPref, type MedidaTexto, type BackdropBlurPref,
+    type ReadMode, type PanelStyle, type FontPref, type MedidaTexto, type BackdropBlurPref, type BgPref,
   } from '../../lib/background';
   import { sidebarPrefs, type SidebarHeight } from '../../lib/sidebarPrefs.svelte';
 
@@ -73,6 +74,11 @@
   // junto pelo `{#key resetSeq}`.
   let caixas = $state(getSurfaceSolid());
   $effect(() => { resetSeq; caixas = getSurfaceSolid(); });
+  // Mesma ideia pro fundo: getBgPref() le o localStorage, entao um {#if} direto nao rastreia nada e
+  // nunca re-executa quando o BackgroundToggle troca a escolha por dentro. Espelhado em $state e
+  // atualizado pelo callback onEscolha (ver BackgroundToggle) — nao por effect, porque a mudanca so
+  // acontece por clique, nunca sozinha.
+  let fundo = $state<BgPref>(getBgPref());
 
   // VOLTAR AO PADRAO: so as medidas que a amostra mostra. NAO mexe em tema, fonte, papel de parede
   // nem paineis — quem arrasta sliders e se perde quer desfazer os sliders, nao perder a foto que
@@ -142,7 +148,7 @@
     </div>
     <!-- `{#key}`: o "Voltar ao padrao" grava a solidez das caixas, mas o slider vive aqui dentro com
          estado proprio — remontar e o que faz o numero na tela bater com o valor aplicado. -->
-    {#key resetSeq}<BackgroundToggle />{/key}
+    {#key resetSeq}<BackgroundToggle onEscolha={(p) => (fundo = p)} />{/key}
   </div>
 
   <!-- Só faz sentido com foto de fundo — sem imagem não há o que embaçar. Aparecer aqui ensina que
@@ -153,8 +159,12 @@
       <strong>Desfoque do fundo</strong>
       <span>quanto a foto atrás da conversa fica embaçada — ajuda o texto a se ler</span>
     </div>
-    <SegmentedPicker value={desfoque} options={opcoesDesfoque} ariaLabel="Desfoque do fundo"
-                     onPick={(v) => { desfoque = v; setBackdropBlur(v); }} />
+    {#if fundo !== 'desktop'}
+      <SegmentedPicker value={desfoque} options={opcoesDesfoque} ariaLabel="Desfoque do fundo"
+                       onPick={(v) => { desfoque = v; setBackdropBlur(v); }} />
+    {:else}
+      <p class="hint">O desfoque aqui é do seu sistema, não do app — veja shell/README.md.</p>
+    {/if}
   </div>
 
   <div class="ap-row ap-row--stack">
@@ -291,6 +301,7 @@
   .ap-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .ap-label strong { color: var(--text-primary); font-size: var(--text-sm); font-weight: 600; }
   .ap-label span { color: var(--text-muted); font-size: var(--text-xs); line-height: 1.4; }
+  .hint { margin: 0; color: var(--text-muted); font-size: var(--text-xs); line-height: 1.4; }
   /* Linha com título à esquerda e segmentado à direita, e o slider embaixo ocupando a largura. */
   .ap-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
   /* O segmentado nao encolhe e o rotulo tem `min-width: 0`, entao ele cede TUDO: abaixo desta
