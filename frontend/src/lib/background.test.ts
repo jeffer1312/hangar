@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 
 // Mesmo stub do auth.test.ts: background.ts lê localStorage no load. env=node não tem.
 const store = new Map<string, string>();
@@ -26,7 +26,7 @@ const varsCss = new Map<string, string>();
   },
 };
 
-const { getBgScrim, getReadAlpha, getTextBoost, getFontPref, setFontPref, getSurfaceSolid, setSurfaceSolid, setBgScrim, getMedidaTexto, setMedidaTexto, getBackdropBlur, setBackdropBlur } = await import('./background');
+const { getBgScrim, getReadAlpha, getTextBoost, getFontPref, setFontPref, getSurfaceSolid, setSurfaceSolid, setBgScrim, getMedidaTexto, setMedidaTexto, getBackdropBlur, setBackdropBlur, applyBg, applyAppearance, getBgPref, isShell } = await import('./background');
 
 // Fonte: 'system' é o padrão e NÃO grava chave (mesma convenção do tema/painéis — só o desvio do
 // padrão persiste). Lixo na chave cai em 'system' em vez de deixar o app numa fonte que não existe.
@@ -215,5 +215,62 @@ describe('solidez usa o curso inteiro do slider', () => {
       setSurfaceSolid(v);
       expect(alfa()).toBeLessThan(1);
     }
+  });
+});
+
+// `navigator` é global NATIVO no Node >= 21 e módulo ESM roda em strict mode: atribuir por cima
+// levanta TypeError. defineProperty é o caminho que funciona nas duas versões.
+function comUserAgent(ua: string) {
+  Object.defineProperty(globalThis, 'navigator', {
+    value: { userAgent: ua }, configurable: true, writable: true,
+  });
+}
+
+describe("fundo 'desktop' (shell Electron)", () => {
+  beforeEach(() => { varsCss.clear(); comUserAgent('Mozilla/5.0'); });
+
+  it('sem a marca no user agent, isShell é falso e desktop cai pro chapado', () => {
+    store.set('cp_bg', 'desktop');
+    expect(isShell()).toBe(false);
+    // O modo só existe dentro do shell: fora dele a preferência não pode deixar a tela
+    // sem fundo nenhum.
+    expect(getBgPref()).toBe('flat');
+  });
+
+  it('com a marca, desktop se mantém', () => {
+    store.clear();
+    comUserAgent('Mozilla/5.0 claude-cockpit-shell');
+    store.set('cp_bg', 'desktop');
+    expect(isShell()).toBe(true);
+    expect(getBgPref()).toBe('desktop');
+  });
+
+  it('applyBg(desktop) marca o html e NÃO define wallpaper', () => {
+    comUserAgent('Mozilla/5.0 claude-cockpit-shell');
+    applyBg('desktop');
+    const raiz = document.documentElement;
+    expect(raiz.dataset.bg).toBe('desktop');
+    // A foto é justamente o que o desktop substitui.
+    expect(varsCss.get('--cp-wallpaper')).toBeUndefined();
+    // Mas o véu roda: é ele que torna os tokens de superfície translúcidos.
+    expect(varsCss.get('--cp-panel-alpha')).toBeDefined();
+    expect(varsCss.get('--cp-surface-alpha')).toBeDefined();
+  });
+
+  it('no modo desktop o auto liga o reforço de texto', () => {
+    comUserAgent('Mozilla/5.0 claude-cockpit-shell');
+    store.clear();
+    store.set('cp_bg', 'desktop');
+    applyBg('desktop');
+    applyAppearance();
+    expect(document.documentElement.dataset.read).toBe('text');
+  });
+
+  it('sem shell e sem imagem, o auto não liga nada', () => {
+    comUserAgent('Mozilla/5.0');
+    store.clear();
+    applyBg('flat');
+    applyAppearance();
+    expect(document.documentElement.dataset.read).toBeUndefined();
   });
 });
