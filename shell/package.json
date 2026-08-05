@@ -1,0 +1,14 @@
+{
+  "name": "claude-cockpit-shell",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Janela nativa transparente do claude-cockpit",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron main.cjs",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "electron": "43.3.0"
+  }
+}
