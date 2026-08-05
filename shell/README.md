@@ -14,6 +14,20 @@ Ele carrega `http://127.0.0.1:8765` — o backend, que serve a interface. `COCKP
 outro endereço. Endereço fora do ar cai no `http://127.0.0.1:8765` antes de perguntar qualquer
 coisa; só quando os dois falham é que o app pede o endereço. `Ctrl+Shift+U` reabre essa pergunta.
 
+## Atalho no lançador
+
+`npm start` morre junto com o terminal que o abriu. Pra abrir pelo lançador do desktop, instale o
+`.desktop` daqui trocando o marcador pelo caminho real:
+
+```bash
+mkdir -p ~/.local/share/applications
+sed "s|__SHELL_DIR__|$PWD|g" claude-cockpit.desktop > ~/.local/share/applications/claude-cockpit.desktop
+update-desktop-database ~/.local/share/applications
+```
+
+Ele chama o binário do Electron direto, e não `npm`: quem abre pelo lançador não herda o PATH do
+shell interativo, então um `npm` instalado por fnm/nvm não seria encontrado.
+
 Pra deixar a janela viva sem ficar presa a um terminal, um serviço transiente do systemd resolve:
 
 ```bash
