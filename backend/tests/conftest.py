@@ -37,3 +37,39 @@ def _reset_list_snapshot():
     yield
     api._list_snap["infos"] = None
     api._list_snap["t"] = 0.0
+
+
+# Recortes REAIS do material_colors.scss, medidos em 05/08/2026 trocando o papel de parede: um azul
+# e um vermelho. Nao invente valores — a graca e provar que neutro frio vira neutro quente pelo
+# mesmo caminho de codigo.
+PALETA_AZUL = """$darkmode: True;
+$transparent: False;
+$primary_paletteKeyColor: #5A77AB;
+$background: #111318;
+$surface: #111318;
+$surfaceContainerLow: #191C20;
+$surfaceContainer: #1D2024;
+$surfaceContainerHigh: #282A2F;
+$onSurface: #E2E2E9;
+$onSurfaceVariant: #C4C6D0;
+$outline: #8E9099;
+$outlineVariant: #44474E;
+$primary: #AAC7FF;
+$onPrimary: #0A305F;
+"""
+
+PALETA_VERMELHA = (PALETA_AZUL
+                   .replace("#111318", "#1C110D").replace("#191C20", "#251915")
+                   .replace("#1D2024", "#291D18").replace("#282A2F", "#342722")
+                   .replace("#E2E2E9", "#F5DED6").replace("#C4C6D0", "#DFC0B5")
+                   .replace("#8E9099", "#A78B81").replace("#44474E", "#58423A"))
+
+
+@pytest.fixture
+def paleta_azul():
+    return PALETA_AZUL
+
+
+@pytest.fixture
+def paleta_vermelha():
+    return PALETA_VERMELHA
