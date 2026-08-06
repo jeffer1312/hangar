@@ -1,0 +1,28 @@
+COMANDO PRA RODAR O TESTE DO PSMUX
+===================================
+
+Abra um PowerShell e cole a linha abaixo:
+
+powershell -ExecutionPolicy Bypass -File \\host.lan\Data\Projetos\claude-cockpit\scripts\test-psmux.ps1
+
+
+SE O WINGET RECLAMAR DO ID DO PSMUX
+===================================
+
+winget search psmux
+
+Me mande o id que aparecer.
+
+
+O QUE VAI ACONTECER
+===================
+
+1. Instala psmux, Claude Code e Python (pula o que ja existe).
+2. Para e pede pra voce logar no Claude: abra OUTRO terminal, rode
+   claude, faca o login no browser, saia com /exit e volte pra apertar Enter.
+3. Roda o teste. Sai uma linha PASS ou FAIL por checagem.
+4. Grava test-psmux-frames.txt e copia pra raiz da share, que e o
+   $HOME do Linux. Nao precisa copiar nada na mao.
+
+OBS: da pra pular tudo isso dando duplo clique em RODAR-TESTE.cmd,
+na mesma pasta.
