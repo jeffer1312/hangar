@@ -150,17 +150,14 @@
     d === 'provider' ? report.by_provider : d === 'source' ? report.by_source
       : d === 'project' ? report.by_project : report.by_model;
 
-  // O filtro só vale se a chave ainda existe no período carregado — E se sobrevive ao cruzamento
-  // com os OUTROS filtros. Trocar de 30d pra 7d pode apagar o projeto selecionado, e manter o
-  // chip apontando pro vazio mostraria zero como se fosse gasto zero. O mesmo vale pro cruzamento
-  // (medido): projeto A que só existe como subagente some dos combos quando "só conversa" está
-  // ativo, e o `<select value="A">` ficava em branco — valor que não coexiste com os outros
-  // filtros é filtro morto, e o estado tem que soltar. Usa o `filtro` CRU, não o `filtroAtivo`,
-  // pra não fechar ciclo (filtroAtivo deriva deste existe).
+  // O filtro só vale se a chave ainda existe no período carregado: trocar de 30d pra 7d pode
+  // apagar o projeto selecionado, e manter o chip apontando pro vazio mostraria zero como se
+  // fosse gasto zero. Checa em `base` (todos os combos), SEM cruzar com os outros filtros: cruzar
+  // com o `filtro` cru deixava um valor velho de período/subagente envenenar o pick novo em
+  // OUTRA dimensão (revisão 06/08 — trocar de período e escolher um provedor rejeitava o pick
+  // porque ele era cruzado contra o projeto morto que ainda morava no filtro cru).
   const existe = (d: Dim, v: string) =>
-    temCombos
-      ? agruparPor(filtrar(base, { ...filtro, [d]: undefined }), d).some((b) => b.key === v)
-      : listaCrua(d).some((b) => b.key === v);
+    temCombos ? base.some((c) => c[d] === v) : listaCrua(d).some((b) => b.key === v);
   const manter = (d: Dim) => {
     const v = filtro[d];
     return v && existe(d, v) ? v : undefined;
@@ -198,8 +195,19 @@
   // como trocar de modelo/projeto sem "limpar filtros" — o filtro funciona, a navegação é que
   // quebrava (medido na revisão de 06/08). O valor selecionado continua na lista, porque o filtro
   // da própria dimensão não é aplicado ao listá-la.
-  const opcoesDa = (d: Dim): DimBucket[] =>
-    temCombos ? agruparPor(filtrar(base, { ...filtroAtivo, [d]: undefined }), d) : listaCrua(d);
+  const opcoesDa = (d: Dim): DimBucket[] => {
+    if (!temCombos) return listaCrua(d);
+    const cruzado = agruparPor(filtrar(base, { ...filtroAtivo, [d]: undefined }), d);
+    // Valor selecionado que NÃO sobrevive ao cruzamento (subagente/prazo mudou e o valor só
+    // existia no outro modo): anexa um balde zerado pra o `<select value=...>` nunca ficar em
+    // branco — o recorte vazio é sinalizado como "sem dados" no KPI, não como estado sumindo da
+    // UI. Nunca afeta os painéis (eles usam `listaDa`, não `opcoesDa`).
+    const sel = filtroAtivo[d];
+    if (sel && !cruzado.some((b) => b.key === sel) && base.some((c) => c[d] === sel)) {
+      cruzado.push({ ...vazio(), key: sel });
+    }
+    return cruzado;
+  };
   const opcoesProvedor = $derived(opcoesDa('provider'));
   const opcoesFonte = $derived(opcoesDa('source'));
   const opcoesProjeto = $derived(opcoesDa('project'));
@@ -420,12 +428,16 @@
   const tudoGratis = $derived(
     temCombos && recorte.length > 0 && recorte.every((c) => isFree(c.model)));
   const semTarifa = $derived(custoDesconhecido(foco) && !tudoGratis);
+  // Recorte VAZIO com filtro ativo (os filtros não têm sobreposição, ex: projeto só-subagente com
+  // "só conversa" ligado): o balde zerado não é custo zero — é "não há dados". O KPI mostra traço
+  // em vez de US$ 0,00, que leria como gasto real.
+  const recorteVazio = $derived(temCombos && temFiltro && recorte.length === 0);
   // Rodapé: os grátis saem da lista de "sem tarifa conhecida" — o rótulo ali contradiz o "grátis"
   // da linha do modelo. Cada grupo ganha a própria frase.
   const semTarifaFooter = $derived(report.sem_tarifa.filter((m) => !isFree(m)));
   const freeFooter = $derived(report.sem_tarifa.filter((m) => isFree(m)));
-  const mFoco = (n: number) => (semTarifa ? '—' : m(n));
-  const m2Foco = (n: number) => (semTarifa ? '—' : m2(n));
+  const mFoco = (n: number) => (semTarifa || recorteVazio ? '—' : m(n));
+  const m2Foco = (n: number) => (semTarifa || recorteVazio ? '—' : m2(n));
   // Par do painel de cache: com detalhamento o recorte, sem ele os totais do período — o traço
   // segue o MESMO alvo do par (sem detalhamento + filtro, o painel continua período inteiro).
   const semTarifaCache = $derived(temCombos ? semTarifa : custoDesconhecido(report.totals));
@@ -573,15 +585,16 @@
     <dl class="kpis">
       <div class="kpi">
         <dt>custo no período</dt>
-        <!-- Traço, nunca US$ 0,00, quando o recorte é um modelo sem tarifa: o zero que o backend
-             manda ali é "não sei o preço", e como número principal da tela ele afirmaria "não
-             custou nada". -->
-        <dd class="hero" class:tracinho={semTarifa}>{mFoco(foco.cost)}</dd>
+        <!-- Traço, nunca US$ 0,00, quando o recorte é um modelo sem tarifa ou vazio: o zero que o
+             backend manda ali é "não sei o preço"/"não há dados", e como número principal da tela
+             ele afirmaria "não custou nada". -->
+        <dd class="hero" class:tracinho={semTarifa || recorteVazio}>{mFoco(foco.cost)}</dd>
         <div class="foot">
           {m2Foco(foco.cost)} · {sess(foco.sessions)} · {m2Foco(foco.cost / diasDoPeriodo)}/dia
         </div>
         {#if semTarifa}<div class="foot">sem tarifa conhecida — só o volume é medido</div>
-        {:else if tudoGratis}<div class="foot">modelo grátis — nada é cobrado</div>{/if}
+        {:else if tudoGratis}<div class="foot">modelo grátis — nada é cobrado</div>
+        {:else if recorteVazio}<div class="foot">sem dados neste recorte — os filtros não têm sobreposição</div>{/if}
         <!-- O gasto de subagente ficava misturado com o da conversa: a fase 1 não tinha como
              separá-los. Só aparece com o filtro em "tudo" — ativo, o número acima JÁ é um dos
              dois lados e a fração seria 0% ou 100%. -->
@@ -600,9 +613,10 @@
         <!-- Com detalhamento o front recalcula do recorte (tarifas viajam nos rates); sem ele o
              escalar do servidor vale só pro total do período, e dentro de um recorte é traço,
              nunca o número global. -->
-        <dd>{temFiltro && (!temCombos || semTarifa) ? '—' : tok(equivalenteRecorte)}</dd>
+        <dd>{temFiltro && (!temCombos || semTarifa || recorteVazio) ? '—' : tok(equivalenteRecorte)}</dd>
         <div class="foot">
           {#if temFiltro && !temCombos}só no total do período
+          {:else if recorteVazio}sem dados neste recorte
           {:else if semTarifa}só o volume é medido
           {:else if tudoGratis}modelo grátis — nada é cobrado
           {:else}{pct(equivalenteRecorte, brutos(foco))} do bruto — o resto é cache barato{/if}
@@ -613,6 +627,7 @@
         <dd>{temFiltro && !temCombos ? '—' : mFoco(economia)}</dd>
         <div class="foot">
           {#if temFiltro && !temCombos}só no total do período
+          {:else if recorteVazio}sem dados neste recorte
           {:else}{m2Foco(economia)} · {semCache > 0
             ? dec(100 - (foco.cost / semCache) * 100, 0)
             : 0}% abaixo do preço cheio{/if}
@@ -702,6 +717,11 @@
           <!-- Recorte de modelo grátis: custo zero é verdade, não "não sei". A barra 100% seria uma
                faixa vazia (nada foi cobrado) — o texto explica em vez de desenhar o vazio. -->
           <p class="hint">Modelo grátis — nenhum dólar foi gasto.</p>
+        {:else if recorteVazio}
+          <!-- Recorte vazio: sem sobreposição entre os filtros. Mesmo motivo do tudoGratis — a barra
+               100% vazia + a tabela de US$ 0,00 leriam como "nada custou", logo abaixo do KPI que
+               já diz "sem dados neste recorte". -->
+          <p class="hint">Sem dados neste recorte — os filtros não têm sobreposição.</p>
         {:else}
           <div class="stack100">
             {#each fatias as f}
