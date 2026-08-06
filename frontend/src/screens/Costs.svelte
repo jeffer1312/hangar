@@ -1,6 +1,7 @@
 <script lang="ts">
   import NavBar from '../components/NavBar.svelte';
-  import { listServers } from '../lib/auth';
+  import Select from '../components/Select.svelte';
+  import { listServers, onServersChanged, type Server } from '../lib/auth';
   import { fetchCostsForServer } from '../lib/api';
   import {
     mergeReports, fillDayGaps, tarifasPorModelo, custoDesconhecido, precoParcial, partirOcultos,
@@ -10,7 +11,7 @@
   import { agruparPor, aplicar, filtrar, somar, type Filtro } from '../lib/cubo';
   import { dec, tok, money, money2, type Cur } from '../lib/fmt';
   import { projectLabel } from '../lib/format';
-  import type { ComboRow, DimBucket } from '../lib/types';
+  import type { ComboLocal, DimBucket } from '../lib/types';
 
   interface Props { onBack: () => void; }
   let { onBack }: Props = $props();
@@ -67,8 +68,8 @@
     partial: false, mismatched: [], failed: [],
     report: {
       totals: vazio(), by_day: [], by_provider: [], by_source: [], by_project: [], by_model: [],
-      by_kind: [], rates: [], sem_tarifa: [], custo_sem_cache: 0, equivalente_cobrado: 0,
-      anterior: null, applied: { period: 'all' }, usd_brl: null,
+      by_servidor: [], by_kind: [], rates: [], sem_tarifa: [], custo_sem_cache: 0,
+      equivalente_cobrado: 0, anterior: null, combos: [], applied: { period: 'all' }, usd_brl: null,
     },
   });
 
@@ -99,6 +100,41 @@
     localStorage.setItem(OCULTOS_KEY, JSON.stringify([...ocultos]));
   }
 
+  // Guarda os DESMARCADOS, não os marcados: máquina nova cadastrada depois entra por padrão.
+  // Mesma regra do cp_proj_ocultos. Escolha por navegador, de propósito — a lista de servidores
+  // já é do cliente (cp_servers), o backend não sabe que ela existe.
+  const SERVERS_OFF_KEY = 'cp_costs_servers_off';
+  function lerServidoresOff(): string[] {
+    try {
+      const v = JSON.parse(localStorage.getItem(SERVERS_OFF_KEY) || '[]');
+      return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [];
+    } catch { return []; }
+  }
+
+  // `listServers()` lê localStorage e NÃO é reativo: a hidratação do vault chega depois do mount
+  // (App.svelte mantém um contador só por causa disso, e `setServers` nem dispara o aviso). Um
+  // snapshot no init deixaria os chips com a lista velha. Assinar é uma linha.
+  let servidores = $state<Server[]>(listServers());
+  $effect(() => onServersChanged(() => { servidores = listServers(); }));
+
+  let servidoresOff = $state<Set<string>>(new Set(lerServidoresOff()));
+  const marcados = $derived(servidores.filter((s) => !servidoresOff.has(s.id)));
+  // Desmarcar tudo não é estado válido: um relatório vazio seria indistinguível de "sem dados no
+  // período". Cai em todos.
+  const servidoresAtivos = $derived(marcados.length ? marcados : servidores);
+  let mostrarServidores = $state(false);
+
+  function alternarServidor(id: string) {
+    const s = new Set(servidoresOff);
+    if (s.has(id)) s.delete(id); else s.add(id);
+    servidoresOff = s;
+    localStorage.setItem(SERVERS_OFF_KEY, JSON.stringify([...s]));
+  }
+  function todosServidores() {
+    servidoresOff = new Set();
+    localStorage.setItem(SERVERS_OFF_KEY, '[]');
+  }
+
   function setCurrency(c: Cur) {
     currency = c;
     localStorage.setItem('cp_costs_currency', c);
@@ -106,22 +142,24 @@
 
   // Só o PERÍODO vai ao servidor — é o único corte que o backend aplica (`?period=`).
   let geracao = 0;
-  async function load(p: Periodo) {
+  async function load(p: Periodo, alvo: Server[]) {
     const meu = ++geracao;
     loading = true;
-    const servers = listServers();
     const results: ServerResult[] = await Promise.all(
-      servers.map(async (s) => {
-        try { return { report: await fetchCostsForServer(s, p), label: s.label }; }
+      alvo.map(async (s) => {
+        try { return { report: await fetchCostsForServer(s, p), label: s.label, id: s.id }; }
         // `label` também no erro: o aviso de parcial precisa dizer o NOME da máquina.
-        catch { return { report: null, label: s.label }; }
+        catch { return { report: null, label: s.label, id: s.id }; }
       }),
     );
     if (meu !== geracao) return; // resposta de um período que o usuário já trocou
     merged = mergeReports(results, p);
     loading = false;
   }
-  $effect(() => { const p = period; load(p); });
+  // Desmarcar uma máquina recarrega: ela deixa de ser CHAMADA (não paga o timeout de 4s do
+  // lib/api.ts:176) e some do aviso de parcial, que hoje lista 6 máquinas offline como se fosse
+  // notícia. O `geracao` continua correto com duas dependências — é contador monotônico.
+  $effect(() => { const p = period; const alvo = servidoresAtivos; load(p, alvo); });
 
   // ── Derivados ───────────────────────────────────────────────────────────────
   const report = $derived(merged.report);
@@ -132,7 +170,7 @@
 
   // Detalhamento cruzado. Vazio = servidor antigo da malha (ou período sem dado): a tela cai no
   // recorte de UMA dimensão a partir dos `by_*`, que é o que ela fazia antes desta fase.
-  const base = $derived<ComboRow[]>(report.combos ?? []);
+  const base = $derived<ComboLocal[]>(report.combos ?? []);
   const temCombos = $derived(base.length > 0);
 
   // `camadasOff` guarda ids de DOIS vocabulários diferentes: fonte (claude/codex/pi) com
@@ -294,7 +332,7 @@
   const serie = $derived.by<DiaSerie[]>(() => {
     let dias: DiaSerie[];
     if (temCombos) {
-      const porDia = new Map<string, ComboRow[]>();
+      const porDia = new Map<string, ComboLocal[]>();
       for (const c of recorte) {
         const l = porDia.get(c.dia);
         if (l) l.push(c); else porDia.set(c.dia, [c]);
@@ -476,46 +514,52 @@
          valor é via "limpar filtros". -->
     <span class="fgroup">
       <span class="flabel" id="lbl-prov">provedor</span>
-      <select aria-labelledby="lbl-prov" value={filtroAtivo.provider ?? ''}
-        onchange={(e) => setFiltro('provider', e.currentTarget.value)}>
-        <option value="">todos ({opcoesProvedor.length})</option>
-        {#each opcoesProvedor as b}<option value={b.key}>{rot(b)} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
-      </select>
+      <Select ariaLabel="provedor" value={filtroAtivo.provider ?? ''}
+        opcoes={[{ value: '', label: `todos (${opcoesProvedor.length})` },
+                 ...opcoesProvedor.map((b) => ({ value: b.key, label: rot(b), hint: custoDesconhecido(b) ? '—' : m(b.cost) }))]}
+        onchange={(v) => setFiltro('provider', v)} />
     </span>
 
     <span class="fgroup">
       <span class="flabel" id="lbl-fonte">fonte</span>
-      <select aria-labelledby="lbl-fonte" value={filtroAtivo.source ?? ''}
-        onchange={(e) => setFiltro('source', e.currentTarget.value)}>
-        <option value="">todas ({opcoesFonte.length})</option>
-        {#each opcoesFonte as b}<option value={b.key}>{b.key} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
-      </select>
+      <Select ariaLabel="fonte" value={filtroAtivo.source ?? ''}
+        opcoes={[{ value: '', label: `todas (${opcoesFonte.length})` },
+                 ...opcoesFonte.map((b) => ({ value: b.key, label: b.key, hint: custoDesconhecido(b) ? '—' : m(b.cost) }))]}
+        onchange={(v) => setFiltro('source', v)} />
     </span>
 
     <span class="fgroup">
       <span class="flabel" id="lbl-proj">projeto</span>
-      <select aria-labelledby="lbl-proj" value={filtroAtivo.project ?? ''}
-        onchange={(e) => setFiltro('project', e.currentTarget.value)}>
-        <option value="">todos ({opcoesProjeto.length})</option>
-        <!-- title no option: dois projetos com o mesmo basename (raro, mas possível) ficam
-             distinguíveis por hover; no celular não há hover, então o painel e o chip mostram o
-             basename e o estado sempre usa a chave cheia. -->
-        {#each opcoesProjeto as b}<option value={b.key} title={b.key}>{projectLabel(b.key)} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
-      </select>
+      <!-- title: dois projetos com o mesmo basename (raro, mas possível) ficam distinguíveis por
+           hover; no celular não há hover, então o painel e o chip mostram o basename e o estado
+           sempre usa a chave cheia. O filtro por digitação da lista também busca na chave. -->
+      <Select ariaLabel="projeto" value={filtroAtivo.project ?? ''}
+        opcoes={[{ value: '', label: `todos (${opcoesProjeto.length})` },
+                 ...opcoesProjeto.map((b) => ({ value: b.key, label: projectLabel(b.key), title: b.key,
+                                                hint: custoDesconhecido(b) ? '—' : m(b.cost) }))]}
+        onchange={(v) => setFiltro('project', v)} />
     </span>
 
     <span class="fgroup">
       <span class="flabel" id="lbl-mod">modelo</span>
-      <select aria-labelledby="lbl-mod" value={filtroAtivo.model ?? ''}
-        onchange={(e) => setFiltro('model', e.currentTarget.value)}>
-        <option value="">todos ({opcoesModelo.length})</option>
-        <!-- Mesma regra da tabela: modelo sem tarifa não vale "US$ 0,00" nem aqui. E o traço
-             sozinho, num rótulo que já tem um travessão separador, saía "claude-sonnet-4 — —". -->
-        {#each opcoesModelo as b}
-          <option value={b.key}>{b.key} — {tarifas.has(b.key) ? m(b.cost) : isFree(b.key) ? 'grátis' : 'sem tarifa'}</option>
-        {/each}
-      </select>
+      <!-- Mesma regra da tabela: modelo sem tarifa não vale "US$ 0,00" nem aqui. -->
+      <Select ariaLabel="modelo" value={filtroAtivo.model ?? ''}
+        opcoes={[{ value: '', label: `todos (${opcoesModelo.length})` },
+                 ...opcoesModelo.map((b) => ({ value: b.key, label: b.key,
+                   hint: tarifas.has(b.key) ? m(b.cost) : isFree(b.key) ? 'grátis' : 'sem tarifa' }))]}
+        onchange={(v) => setFiltro('model', v)} />
     </span>
+
+    <!-- Só com malha: com uma máquina só, escolher "quais" não é escolha. -->
+    {#if servidores.length > 1}
+      <span class="fgroup">
+        <span class="flabel">servidores</span>
+        <button class="chip" aria-expanded={mostrarServidores}
+          onclick={() => (mostrarServidores = !mostrarServidores)}>
+          {servidoresAtivos.length} de {servidores.length} ▾
+        </button>
+      </span>
+    {/if}
 
     <!-- Subagente é a única dimensão que não é uma lista: é um recorte de três estados. Só existe
          com detalhamento — os `by_*` já vêm somados com o subagente dentro. -->
@@ -542,6 +586,18 @@
     <button class="clear" onclick={limpar}>limpar filtros</button>
   </div>
 
+  {#if mostrarServidores && servidores.length > 1}
+    <div class="chips" role="group" aria-label="Servidores no relatório">
+      {#each servidores as s (s.id)}
+        <button class="chip" aria-pressed={!servidoresOff.has(s.id)}
+          onclick={() => alternarServidor(s.id)}>{s.label}</button>
+      {/each}
+      {#if servidoresOff.size}
+        <button class="chip todos" onclick={todosServidores}>todos</button>
+      {/if}
+    </div>
+  {/if}
+
   {#if merged.partial}
     <p class="warn">
       <!-- As duas causas são independentes e podem acontecer JUNTAS: quando aconteciam, só a
@@ -560,7 +616,7 @@
           : `${merged.mismatched.length} servidores responderam fora do período pedido e ficaram de fora da soma`}
         ({merged.mismatched.join(', ')}).
       {/if}
-      <button class="retry" onclick={() => load(period)}>Tentar de novo</button>
+      <button class="retry" onclick={() => load(period, servidoresAtivos)}>Tentar de novo</button>
     </p>
   {/if}
 
@@ -603,6 +659,12 @@
           <div class="foot">{pct(custoSubagente, foco.cost)} veio de subagente</div>
         {/if}
         {#if delta}<div class="foot">{delta}</div>{/if}
+        <!-- Diferente do × do painel de projetos, que esconde sem tirar da conta: aqui desmarcar
+             TIRA. A linha não é opcional — é a diferença entre "meu gasto" e "parte do meu
+             gasto". -->
+        {#if servidoresAtivos.length < servidores.length}
+          <div class="foot">somando {servidoresAtivos.length} de {servidores.length} máquinas</div>
+        {/if}
       </div>
       <div class="kpi">
         <dt>tokens brutos</dt>
@@ -980,10 +1042,27 @@
   .seg button[aria-pressed='true'] { background: var(--accent); color: #fff; }
   .seg button:hover:not([aria-pressed='true']) { background: var(--bg-hover); }
   .seg button:disabled { opacity: 0.5; cursor: default; }
-  select {
-    background: var(--surface-inset); color: var(--text-primary); font: inherit;
-    font-size: var(--text-xs); border: 1px solid var(--border-default);
-    border-radius: var(--radius-sm); padding: 6px 10px; min-height: 34px; max-width: 190px;
+  .chips { display: flex; flex-wrap: wrap; gap: var(--space-1); margin-bottom: var(--space-2); }
+  /* surface-raised, não bg-elevated: com papel de parede o chip tem que entrar no mesmo véu do
+     painel, senão vira retângulo chapado boiando sobre a foto. */
+  .chip {
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-family: var(--font-mono); font-size: 12px;
+    padding: 5px var(--space-2);
+    cursor: pointer;
+  }
+  .chip[aria-pressed='true'] { color: var(--text-primary); border-color: var(--accent); }
+  .chip:disabled { opacity: 0.45; cursor: default; }
+  .chip.todos { color: var(--accent); }
+  /* :global porque o campo agora é o <button> de dentro do Select.svelte (o nativo abria a lista
+     pra cima e ela era cortada pelo overflow do painel). A barra de filtros é COMPACTA — 4 controles
+     na mesma linha —, então continua sobrescrevendo altura/fonte/largura do padrão do componente. */
+  .fgroup :global(.sel-campo) {
+    font-size: var(--text-xs); height: 34px; max-width: 190px; width: auto;
+    padding: 0 10px;
   }
   /* rótulo e controle andam juntos: soltos, a quebra de linha deixava "modelo" no fim de uma
      linha e o seletor dele no começo da outra. */
