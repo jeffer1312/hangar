@@ -38,6 +38,7 @@ _CAMPOS: dict[str, type] = {
     "subagent_model": str,   # -> CLAUDE_CODE_SUBAGENT_MODEL; vazio = mesmo modelo principal
     "context_window": int,   # -> CLAUDE_CODE_MAX_CONTEXT_TOKENS
     "vision": bool,          # informativo; vem do /v1/models do provedor
+    "auth_via_api_key": bool,  # provedor que só aceita x-api-key (opencode zen); ver env_de
     # Capacidades do harness. TODAS são positivas ("true = ligado") mesmo quando a env var do Claude
     # Code é negativa (DISABLE_*): misturar as duas polaridades num formulário faz o usuário marcar
     # uma caixa pra desligar algo. env_de() faz a tradução; a UI só mostra capacidade.
@@ -306,6 +307,17 @@ def env_de(nome: str) -> dict[str, str]:
         # Vazio (campo ausente) cai no mesmo modelo principal — nunca uma env var vazia.
         "CLAUDE_CODE_SUBAGENT_MODEL": e.get("subagent_model") or modelo,
     }
+    if _booleano("auth_via_api_key", e.get("auth_via_api_key")) is True:
+        # Provedor que lê a key SÓ em `x-api-key` e ignora `Authorization: Bearer`. opencode zen
+        # (opencode.ai/zen/go) é um: medido em 06/08/2026, `Bearer` sozinho devolve o MESMO
+        # "Missing API key." de uma requisição sem credencial, enquanto `x-api-key` errado devolve
+        # "Invalid API key." — prova de que só o segundo header é lido.
+        #
+        # Por que header extra e não ANTHROPIC_API_KEY: essa var dispara o prompt "Do you want to
+        # use this API key?" em sessão INTERATIVA (que é como o app abre), e recusar faz o CLI
+        # descartar a key e voltar pro login OAuth — o cabeçalho vira "Claude Max" e o 401 volta,
+        # agora por outra causa. AUTH_TOKEN nunca pergunta; o header cobre o que falta.
+        env["ANTHROPIC_CUSTOM_HEADERS"] = f"x-api-key: {e['api_key']}"
     if e.get("context_window"):
         # MAX_CONTEXT_TOKENS, nao AUTO_COMPACT_WINDOW: medido nos dois provedores, a segunda nao move
         # a janela (o /context seguia em 200k) e a primeira move. Sem isto, um modelo de 256k/500k

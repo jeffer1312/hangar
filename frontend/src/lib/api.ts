@@ -695,6 +695,9 @@ export interface Motor {
   adaptive_thinking?: boolean;
   gateway_model_discovery?: boolean;
   fine_grained_tool_streaming?: boolean;
+  // Manda a chave também no header `x-api-key` (além do `Authorization: Bearer`). Provedor que só
+  // lê o primeiro devolve `401 Missing API key` sem isto — ver o snippet mAuthHeader na tela.
+  auth_via_api_key?: boolean;
   auto_compact_window?: number;
   max_output_tokens?: number;
   // Sempre mascarada (sk-k••••••••1234). A chave inteira nunca volta do servidor.

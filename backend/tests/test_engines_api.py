@@ -73,6 +73,19 @@ def test_put_sem_key_preserva_a_atual(cli):
     assert salvo["model"] == "kimi-for-coding"
 
 
+def test_put_sem_um_campo_preserva_o_gravado(cli):
+    """PUT parcial não apaga o resto: o bug real era o probe devolver context_length=null para
+    provedor que não informa (opencode), o PUT seguinte vir sem context_window e o motor perder a
+    janela de 1M — voltando a compactar em 200k, calado."""
+    d = _kimi() | {"context_window": 1_000_000, "vision": False}
+    cli.put("/api/engines/kimi", json=d, headers=AUTH)
+    # cliente que só conhece parte do schema: manda o básico, e null onde não sabe
+    cli.put("/api/engines/kimi", json=_kimi() | {"context_window": None}, headers=AUTH)
+    salvo = eng.listar()["kimi"]
+    assert salvo["context_window"] == 1_000_000, "campo omitido/null foi apagado do disco"
+    assert salvo["vision"] is False
+
+
 def test_put_com_a_mascara_de_volta_preserva_a_atual(cli):
     from app.runtime_config import mascarar
     cli.put("/api/engines/kimi", json=_kimi(), headers=AUTH)
