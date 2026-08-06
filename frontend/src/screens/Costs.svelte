@@ -37,7 +37,7 @@
 
   // ── Estado ──────────────────────────────────────────────────────────────────
   type Periodo = '7d' | '30d' | '90d' | 'all';
-  type Dim = 'provider' | 'source' | 'project' | 'model';
+  type Dim = 'provider' | 'source' | 'project' | 'model' | 'servidor';
 
   const PERIODOS: { id: Periodo; label: string; dias: number }[] = [
     { id: '7d', label: '7 dias', dias: 7 },
@@ -45,9 +45,10 @@
     { id: '90d', label: '90 dias', dias: 90 },
     { id: 'all', label: 'tudo', dias: 0 },
   ];
-  const DIMS: Dim[] = ['provider', 'source', 'project', 'model'];
+  const DIMS: Dim[] = ['provider', 'source', 'project', 'model', 'servidor'];
   const NOME_DIM: Record<Dim, string> = {
     provider: 'provedor', source: 'fonte', project: 'projeto', model: 'modelo',
+    servidor: 'máquina',
   };
 
   // ── Empilhamento do gráfico por FONTE ───────────────────────────────────────
@@ -186,7 +187,8 @@
 
   const listaCrua = (d: Dim): DimBucket[] =>
     d === 'provider' ? report.by_provider : d === 'source' ? report.by_source
-      : d === 'project' ? report.by_project : report.by_model;
+      : d === 'project' ? report.by_project : d === 'model' ? report.by_model
+        : report.by_servidor;
 
   // O filtro só vale se a chave ainda existe no período carregado: trocar de 30d pra 7d pode
   // apagar o projeto selecionado, e manter o chip apontando pro vazio mostraria zero como se
@@ -203,6 +205,7 @@
   const filtroAtivo = $derived.by<Filtro>(() => ({
     provider: manter('provider'), source: manter('source'),
     project: manter('project'), model: manter('model'),
+    servidor: manter('servidor'),
     // Separar subagente exige o detalhamento: os `by_*` já vêm somados com ele dentro.
     subagente: temCombos ? filtro.subagente : undefined,
   }));
@@ -218,8 +221,16 @@
   const rot = (b: DimBucket) => b.label || rotulos.get(b.key) || b.key;
   // Nome legível de uma chave no rótulo do recorte: provedor usa o e-mail (rotulos), projeto o
   // basename — o caminho cru de 80 chars no texto do recorte não é "nome amigável" de nada.
+  // O rótulo vem do próprio by_servidor (que o mergeReports preencheu com o Server.label); o
+  // fallback pega o caso da máquina que não respondeu e por isso não virou bucket.
+  const nomeServidor = (id: string) =>
+    report.by_servidor.find((b) => b.key === id)?.label
+    ?? servidores.find((s) => s.id === id)?.label ?? id;
+
   const nomeDa = (d: Dim, key: string) =>
-    d === 'provider' ? (rotulos.get(key) ?? key) : d === 'project' ? projectLabel(key) : key;
+    d === 'provider' ? (rotulos.get(key) ?? key)
+      : d === 'project' ? projectLabel(key)
+        : d === 'servidor' ? nomeServidor(key) : key;
 
   // A lista de UMA dimensão é o RECORTE COMPLETO, incluindo o filtro da própria dimensão:
   // com o modelo X selecionado, a tabela "Por modelo" mostra só o X — decidido 2026-08-06, o
@@ -250,6 +261,9 @@
   const opcoesFonte = $derived(opcoesDa('source'));
   const opcoesProjeto = $derived(opcoesDa('project'));
   const opcoesModelo = $derived(opcoesDa('model'));
+  // Do by_servidor, não do cruzamento: máquina que respondeu SEM detalhamento (versão antiga)
+  // não tem combo nenhum e sumiria da lista — ficando impossível de filtrar.
+  const opcoesServidor = $derived(report.by_servidor);
 
   // Os números do topo saem do CRUZAMENTO. Sem detalhamento sai do balde de UMA dimensão nos
   // `by_*`, exatamente como a tela fazia antes — e o `aplicar` garante que ali só existe uma
@@ -433,6 +447,9 @@
   const picoProvedor = $derived(Math.max(1, ...provedores.map((b) => b.cost)));
   const picoFonte = $derived(Math.max(1, ...fontes.map((b) => b.cost)));
   const picoModelo = $derived(Math.max(1, ...modelos.map((b) => b.cost)));
+  // Pico pelo by_servidor do período inteiro, não pelo cruzamento: o painel "Por máquina" é o
+  // único que não acompanha o recorte (a máquina sem detalhamento não tem combo pra cruzar).
+  const picoServidor = $derived(Math.max(1, ...report.by_servidor.map((b) => b.cost)));
   // "% conta" da tabela por modelo é dentro do RECORTE, não da malha inteira: com um projeto
   // escolhido, as linhas já são só daquele projeto, e dividir pelo total global daria percentuais
   // que nunca somam 100 sem nada dizer a respeito.
@@ -550,7 +567,19 @@
         onchange={(v) => setFiltro('model', v)} />
     </span>
 
-    <!-- Só com malha: com uma máquina só, escolher "quais" não é escolha. -->
+    <!-- Só com malha: com uma máquina só, "quais máquinas" não é escolha. -->
+    {#if servidores.length > 1}
+      <span class="fgroup">
+        <span class="flabel">máquina</span>
+        <Select ariaLabel="máquina" value={filtroAtivo.servidor ?? ''}
+          opcoes={[{ value: '', label: `todas (${opcoesServidor.length})` },
+                   ...opcoesServidor.map((b) => ({ value: b.key, label: nomeServidor(b.key),
+                     hint: custoDesconhecido(b) ? '—' : m(b.cost) }))]}
+          onchange={(v) => setFiltro('servidor', v)} />
+      </span>
+    {/if}
+
+    <!-- Só com malha: com uma máquina só, escolher QUAIS entram no relatório não é escolha. -->
     {#if servidores.length > 1}
       <span class="fgroup">
         <span class="flabel">servidores</span>
@@ -873,6 +902,33 @@
         </div>
       </div>
     </div>
+
+    {#if servidores.length > 1}
+      <div class="card">
+        <h2>Por máquina</h2>
+        <p class="hint">
+          Onde a sessão rodou. Sempre o período inteiro de cada máquina — este corte vem do total
+          que ela respondeu, e é o único que também enxerga máquina sem detalhamento. Clique para
+          recortar o resto da tela.
+        </p>
+        <div class="rank">
+          {#each report.by_servidor as b (b.key)}
+            <div class="row">
+              <button aria-pressed={filtroAtivo.servidor === b.key}
+                onclick={() => alternar('servidor', b.key)}>
+                <span class="nm">{nomeServidor(b.key)}</span>
+                <span class="vl">{custoDesconhecido(b) ? '—' : m2(b.cost)}</span>
+                <span class="track" style="width: {Math.max(1.5, (b.cost / picoServidor) * 100)}%">
+                  {#each TIPOS as t}{#if custoDe(b, t.id) > 0}<i style="background: var({t.slot}); flex: {custoDe(b, t.id)}"></i>{/if}{/each}
+                </span>
+              </button>
+            </div>
+          {:else}
+            <p class="empty">Sem dados no período.</p>
+          {/each}
+        </div>
+      </div>
+    {/if}
 
     <div class="card">
       <h2>Por projeto</h2>
