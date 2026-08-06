@@ -173,6 +173,9 @@ set-environment -g CLAUDE_CODE_TMUX_TRUECOLOR 1
 # Clipboard de imagem (wl-paste) dentro do Claude Code: sessao criada por um client anexado
 # herda o WAYLAND_DISPLAY dele mesmo quando o server tmux nasceu sem a var (ex: via backend).
 set -ga update-environment "WAYLAND_DISPLAY"
+# Fish universal key used by the custom Kimi provider. Keep the existing environment intact while
+# making this variable available when the tmux server was started before the client shell.
+set -ga update-environment "KIMI_API_KEY_2"
 # Window name (inside tmux) = basename of the pane's cwd (not 0/1/2 nor the command name).
 set -g allow-rename off
 set -g automatic-rename on
