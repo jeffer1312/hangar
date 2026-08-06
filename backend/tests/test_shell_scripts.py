@@ -30,3 +30,8 @@ def test_statusline_sh():
     r = subprocess.run([str(REPO / "scripts" / "test-statusline.sh")],
                         cwd=REPO, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_tmux_wrapper_updates_kimi_environment():
+    installer = (REPO / "scripts" / "install-claude-wrapper.sh").read_text()
+    assert 'set -ga update-environment "KIMI_API_KEY_2"' in installer
