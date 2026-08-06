@@ -41,8 +41,11 @@ systemctl --user stop cockpit-shell     # fechar
 
 A transparência é do app; o **desfoque** é do compositor, e o app não mexe na sua configuração.
 
-**Hyprland** — a classe da janela é sempre `electron` (não dá pra mudar), então a regra casa pelo
-título. A sintaxe depende de como sua config está escrita:
+**Hyprland** — a regra casa pelo **título**, que é `claude-cockpit` nos dois modos. A classe muda
+conforme como o app foi aberto (medido em 05/08/2026): rodando por `npm start` ela é `electron`,
+genérica e compartilhada com qualquer outro app Electron da máquina; no AppImage o
+`electron-builder` a define como `claude-cockpit`. Por isso o título é o critério confiável — ele
+vale nos dois. A sintaxe depende de como sua config está escrita:
 
 ```
 # config .conf (Hyprland clássico)
