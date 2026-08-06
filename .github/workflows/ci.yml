@@ -9,6 +9,10 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    # So roda teste/build — nao escreve nada no repo. Declarado explicito pra nao herdar
+    # o padrao do repositorio, que pode ser write.
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: backend
@@ -24,6 +28,10 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
+    # So roda teste/build — nao escreve nada no repo. Declarado explicito pra nao herdar
+    # o padrao do repositorio, que pode ser write.
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: frontend
