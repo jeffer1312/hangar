@@ -39,9 +39,12 @@ def _buscar(base_url: str, api_key: str) -> dict[str, Any]:
     _validar_sem_quebra("base_url", base_url)
     _validar_sem_quebra("api_key", api_key)
     # /v1/models é o dialeto OpenAI, que os dois provedores servem ao lado do /v1/messages Anthropic.
+    # User-Agent explícito: o Cloudflare da opencode (/zen/go) responde 403 "error code: 1010" ao
+    # UA que o urllib manda sozinho ("Python-urllib/3.x"), com chave e URL corretas. O probe
+    # aparecia como "403 error code: 1010" na tela de Motores e o motor parecia inválido.
     req = urllib.request.Request(
         f"{base_url.rstrip('/')}/v1/models",
-        headers={"Authorization": f"Bearer {api_key}"})
+        headers={"Authorization": f"Bearer {api_key}", "User-Agent": "claude-cockpit/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
             # errors="replace": um provedor pode responder bytes fora de utf-8 válido; deixar

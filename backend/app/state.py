@@ -9,9 +9,19 @@ from app.statusline import read as _sidecar_status
 
 SPINNER_GLYPHS = "✻✽✶✺✢·∗✳✦✧"
 _OPTION_RE = re.compile(r"^\s*[❯>]?\s*\d+\.\s+(.*\S)\s*$")
-# Bordas do box de `preview` do AskUserQuestion (canto ╭/╰ na linha do cursor, │ nas demais):
-# renderiza NA MESMA LINHA da opção -> o label corta na primeira borda.
-_BOX_SPLIT_RE = re.compile(r"[│╭╮╰╯]")
+# Bordas do box de `preview` do AskUserQuestion: renderiza NA MESMA LINHA da opção -> o label corta
+# na primeira borda. Cobre os cantos ARREDONDADOS (╭╮╰╯) e os RETOS (┌┐└┘├┤┬┴┼) mais │ e ─: só os
+# arredondados estavam aqui, e o box do preview desenha com os RETOS. Efeito medido: a opção que cai
+# na linha da borda de cima vinha "Escolher dimensão +          ┌────────────" e nunca casava com o
+# label do sidecar ("Escolher dimensão + valores"), então o gate do sse degradava pro OptionButtons —
+# a pergunta perdia descrição E preview no app, e essa opção aparecia VAZIA. Toda pergunta com
+# preview caía nisso, que é justamente a que mais precisa do stepper.
+# `\s{2,}` antes da borda: o box do preview fica numa COLUNA à direita, então há sempre um vão de
+# espaços entre o fim do label e a borda. Sem essa exigência, `─` (que é caractere de box, não o
+# travessão —) cortava um label que o usasse no próprio texto: "Rodar tudo ─ inclusive os lentos"
+# virava "Rodar tudo" e aí o casamento por prefixo aprovava um label ERRADO. `│` e os cantos seguem
+# cortando sozinhos também: o box de `preview` de UMA coluna encosta no label sem o vão.
+_BOX_SPLIT_RE = re.compile(r"\s{2,}[│─╭╮╰╯┌┐└┘├┤┬┴┼]|[│╭╮╰╯┌┐└┘├┤┬┴┼]")
 # Cursor do picker: ❯ e do Claude, ">" e do Pi (ascii). O do Pi so vale com o rodape de navegacao
 # NO FUNDO do pane (ver _menu_block) — sem essa trava, um "> 1. ..." citado em prosa no scrollback
 # viraria menu fantasma.

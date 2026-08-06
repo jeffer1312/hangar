@@ -54,6 +54,51 @@ def test_awaiting_input_option_cut_at_preview_box():
     assert options == ["System no topo (igual aos", "Alfabético (obedece"]
 
 
+def test_awaiting_input_option_cut_at_square_corner_preview_box():
+    """Mesmo corte, mas com os cantos RETOS (┌└─) em vez dos arredondados (╭╰).
+
+    O teste acima só exercitava ╭╮╰╯, e a regex só tinha esses — o box do preview desenhado com
+    canto reto passava batido: a opção que cai na linha da borda de cima vinha
+    "Escolher dimensão +          ┌────────────", nunca casava com o label do sidecar no gate do
+    sse (_ask_question_event), e a pergunta degradava pro OptionButtons — perdia descrição E
+    preview no app, com essa opção aparecendo VAZIA. Print do usuário em 06/08/2026.
+    """
+    pane = (
+        "Como deve ser a seção de comparação de gasto na tela de Custos?\n"
+        "\n"
+        " ❯ 1. Escolher dimensão +          ┌──────────────────────────────\n"
+        "      valores                      │ Comparar por: [provedor ▾]\n"
+        "   2. A vs B com filtro            │ Marcados: [x] conta Anthropic\n"
+        "      completo                     │\n"
+        "   3. Tabela cruzada (fonte ×      │  ┌ conta Anthropic ─┐\n"
+        "      provedor)                    └──────────────────────────────\n"
+    )
+    state, _label, _question, options = classify(pane)
+    assert state == "awaiting_input"
+    assert options == [
+        "Escolher dimensão +",
+        "A vs B com filtro",
+        "Tabela cruzada (fonte ×",
+    ]
+
+
+def test_box_char_inside_the_label_itself_survives():
+    """`─` é caractere de box, mas pode aparecer no PRÓPRIO texto da opção.
+
+    O corte exige 2+ espaços antes da borda (o box do preview mora numa coluna à direita, então há
+    sempre um vão). Sem isso, "Rodar tudo ─ inclusive os lentos" virava "Rodar tudo" e o casamento
+    por prefixo no sse aprovava um label errado — resposta na opção errada, calado.
+    """
+    pane = (
+        "O que rodar?\n"
+        "\n"
+        " ❯ 1. Rodar tudo ─ inclusive os lentos\n"
+        "   2. Sim — e não perguntar de novo\n"
+    )
+    _state, _label, _question, options = classify(pane)
+    assert options == ["Rodar tudo ─ inclusive os lentos", "Sim — e não perguntar de novo"]
+
+
 def test_numbered_list_without_cursor_stays_idle():
     # a plain numbered list (no ❯ cursor on an option) is NOT a widget
     state, *_ = classify("Steps:\n  1. do this\n  2. do that\n❯ \n")
