@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { GitStore } from '../../lib/gitStore.svelte';
   import { getLastCommitMessage } from '../../lib/api';
+  import Select from '../Select.svelte';
 
   // `chosen` vem de fora: a lista de arquivos (com a selecao) e da aba Mudancas, que a desenha uma
   // vez so com checkbox E descartar na mesma linha. Este componente tinha a propria copia da lista.
@@ -54,10 +55,12 @@
 
 <div class="cb">
   {#if recent.length}
-    <select class="cb-recent" value="" onchange={(e) => { const v = e.currentTarget.value; if (v) message = v; e.currentTarget.value = ''; }}>
-      <option value="">mensagens recentes…</option>
-      {#each recent as r (r)}<option value={r}>{r.length > 72 ? r.slice(0, 72) + '…' : r}</option>{/each}
-    </select>
+    <!-- value fixo em '': é um MENU de ação (preenche a caixa), não um campo com estado. Escolher a
+         mesma mensagem duas vezes tem que funcionar, então nada fica selecionado depois. -->
+    <Select class="cb-recent" ariaLabel="Mensagens recentes" value=""
+      opcoes={[{ value: '', label: 'mensagens recentes…' },
+               ...recent.map((r) => ({ value: r, label: r.length > 72 ? r.slice(0, 72) + '…' : r, title: r }))]}
+      onchange={(v) => { if (v) message = v; }} />
   {/if}
   <textarea class="cb-msg" bind:value={message} placeholder="mensagem do commit…" rows="3"
     autocapitalize="off" spellcheck="false"></textarea>
@@ -83,9 +86,10 @@
   .cb-msg { width: 100%; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md);
     border: 1px solid var(--border-default); background: var(--surface-inset); color: var(--text-primary);
     font-family: var(--font-mono); font-size: var(--text-sm); resize: vertical; }
-  .cb-recent { width: 100%; padding: var(--space-2); border-radius: var(--radius-md);
-    border: 1px solid var(--border-default); background: var(--surface-inset); color: var(--text-secondary);
-    font-size: var(--text-sm); }
+  /* :global: o campo é o <button> do Select.svelte. Cor secundária e fonte de UI porque isto é um
+     menu de ação ("mensagens recentes…"), não um valor escolhido. */
+  .cb :global(.cb-recent) { padding: 0 var(--space-2); border-radius: var(--radius-md);
+    color: var(--text-secondary); font-family: var(--font-ui); font-size: var(--text-sm); }
   .cb-opts { display: flex; flex-direction: column; gap: var(--space-1); }
   .cb-opt { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm);
     color: var(--text-secondary); cursor: pointer; }

@@ -119,10 +119,12 @@
     dragY = 0;
   }
 
-  // Fechar por backdrop SO quando o gesto comeca E termina no backdrop. Sem isto, o overlay
-  // nativo do <select> no iOS, ao ser descartado, dispara um click-fantasma que cai no backdrop
-  // e fechava o sheet inteiro antes do usuario chegar no botao. O click sintetico nao vem com um
-  // pointerdown real no backdrop -> pressOnBackdrop fica false -> nao fecha.
+  // Fechar por backdrop SO quando o gesto comeca E termina no backdrop. Nasceu do overlay nativo do
+  // <select> no iOS, que ao ser descartado disparava um click-fantasma no backdrop e fechava o sheet
+  // inteiro antes do usuario chegar no botao. Os combos hoje sao o Select.svelte (nao ha mais overlay
+  // do SO), mas a guarda FICA: vale pro mesmo padrao vindo de qualquer overlay nativo — teclado,
+  // date picker, menu de contexto — e o custo e um booleano.
+  // O click sintetico nao vem com um pointerdown real no backdrop -> pressOnBackdrop false -> nao fecha.
   let pressOnBackdrop = false;
   function onBackdropPointerDown(e: PointerEvent) {
     pressOnBackdrop = e.target === e.currentTarget;

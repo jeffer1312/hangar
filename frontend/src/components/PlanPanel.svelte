@@ -2,6 +2,7 @@
   // Detalhe do plano: barra + Tasks. Só a Task atual abre os steps — "próximo passo" não é campo, é o
   // primeiro ○ da lista. O markdown cru vem do próprio /plan (o /file não serve este arquivo).
   import PlanBar from './PlanBar.svelte';
+  import Select from './Select.svelte';
   import { renderMarkdown } from '../lib/markdown';
   import { getPlans, setPlanPin, type PlanListItem } from '../lib/api';
   import { planBadge } from '../lib/plan';
@@ -78,27 +79,31 @@
 
 <div class="plan">
   <div class="plan-head">
-    <!-- select nativo de propósito: funciona igual nas duas views, sem popover nem z-index, e é o
-         mesmo padrão do "mensagens recentes" do CommitBox. -->
-    <!-- O caret é obrigatório: com `appearance: none` o select fica idêntico ao rótulo de texto que
-         havia antes, e ninguém descobre que ali troca de plano. `▾` (abre lista) contrasta com o
-         `›` do botão ao lado (expande o markdown) — glifos diferentes pra ações diferentes. -->
-    <div class="pick-wrap">
-      <select class="plan-pick" value={pinned ?? ''} aria-label="Trocar o plano exibido"
-        title="Trocar o plano exibido"
-        onchange={(e) => trocar(e.currentTarget.value)}>
-        <!-- Sem pin, o nome do plano eleito vai JUNTO: é o rótulo do painel, e some se a opção
-             dissesse só "automático". Com pin, quem aparece é a opção do plano fixado. -->
-        <option value="">automático{session.plan_name ? ` · ${session.plan_name}` : ''}</option>
-        <!-- "nenhum" e uma escolha de verdade, nao ausencia de escolha: sem esta opcao a eleicao
-             automatica sempre reacende um plano, e nao havia como deixar o painel/chip apagados. -->
-        <option value={PIN_NONE}>nenhum — esconder o plano</option>
-        {#each plans as p (p.stem)}
-          <option value={p.stem}>{p.name} · {p.done}/{p.total}{p.complete ? ' ✓' : ''}</option>
-        {/each}
-      </select>
-      <span class="caret" aria-hidden="true">▾</span>
-    </div>
+    <!-- Era um <select> nativo ("funciona igual nas duas views, sem popover nem z-index"), trocado
+         porque com muitos planos a lista do SO abria pra cima e era cortada pelo painel — ver o
+         cabeçalho do Select.svelte. O caret continua obrigatório (vem do componente): sem ele isto
+         fica idêntico ao rótulo de texto que havia antes e ninguém descobre que ali troca de plano.
+         `▾` (abre lista) contrasta com o `›` do botão ao lado (expande o markdown).
+
+         Sem pin, o nome do plano eleito vai JUNTO na 1a opção: é o rótulo do painel, e some se ela
+         dissesse só "automático". Com pin, quem aparece é a opção do plano fixado.
+         "nenhum" é escolha de verdade, não ausência de escolha: sem ela a eleição automática sempre
+         reacende um plano, e não havia como deixar o painel/chip apagados. -->
+    <Select
+      class="plan-pick"
+      ariaLabel="Trocar o plano exibido"
+      value={pinned ?? ''}
+      opcoes={[
+        { value: '', label: `automático${session.plan_name ? ` · ${session.plan_name}` : ''}` },
+        { value: PIN_NONE, label: 'nenhum — esconder o plano' },
+        ...plans.map((p) => ({
+          value: p.stem,
+          label: p.name,
+          hint: `${p.done}/${p.total}${p.complete ? ' ✓' : ''}`,
+        })),
+      ]}
+      onchange={trocar}
+    />
     <button class="chev-btn" onclick={() => (showMd = !showMd)}
       aria-label={showMd ? 'Esconder o plano inteiro' : 'Ver o plano inteiro'}>
       <span class="chev" class:open={showMd}>›</span>
@@ -165,34 +170,28 @@
 
   .plan-head { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
 
-  .pick-wrap { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
-  .plan-pick {
+  /* :global porque o campo é o <button> dentro do Select.svelte (o nativo, com a lista longa de
+     planos, era cortado pelo painel). Aqui ele não é um campo de formulário: é o RÓTULO do painel,
+     que só vira controle visível no hover — sem isso parece o texto estático que era antes.
+     O caret vem do próprio componente; o :global(.sel-seta) só ajusta o tamanho. */
+  .plan-head :global(.plan-pick) {
     flex: 1;
     min-width: 0;
-    /* espaco a direita pro caret, que fica por cima (o select nativo nao aceita ::after) */
-    padding: 2px 1.1em 2px var(--space-1);
+    height: auto;
+    padding: 2px var(--space-1);
     margin-left: calc(-1 * var(--space-1));   /* alinha o texto com o resto do painel */
-    border: 1px solid transparent;
+    border-color: transparent;
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--text-secondary);
     font-family: inherit;
     font-size: var(--text-xs);
     font-weight: 600;
-    cursor: pointer;
-    appearance: none;
-    text-overflow: ellipsis;
   }
-  /* Vira controle visivel no hover: sem isto ele parece o rotulo estatico que era antes. */
   @media (hover: hover) {
-    .plan-pick:hover { border-color: var(--border-default); background: var(--bg-hover); }
+    .plan-head :global(.plan-pick:hover) { border-color: var(--border-default); background: var(--bg-hover); }
   }
-  .plan-pick:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
-  .caret {
-    position: absolute; right: 4px;
-    color: var(--text-muted); font-size: 10px; line-height: 1;
-    pointer-events: none;   /* o clique tem que chegar no select */
-  }
+  .plan-head :global(.plan-pick .sel-seta) { font-size: 10px; }
   .chev-btn { flex-shrink: 0; padding: 0; border: 0; background: transparent; cursor: pointer; }
 
   /* Botao SEM superficie propria: quem carrega o material aqui e o painel (regra da transparencia
