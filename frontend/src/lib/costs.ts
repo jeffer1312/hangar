@@ -194,6 +194,11 @@ export function precoParcial(model: string, temTarifa: boolean, semTarifa: strin
 // carrega os quatro tipos de token e a tarifa viaja nos `rates` — a mesma aritmética do
 // costs.py, linha a linha. Regra do backend que o cliente espelha: linha sem tarifa não entra
 // (pular é "não sei o preço", não "foi de graça").
+// ponytail: tarifa por MODELO, não por provider|model — o provider da LINHA é o gateway
+// ('opencode-go' servindo deepseek), o do RateInfo é o do catálogo; as chaves nunca casariam.
+// O preço por modelo é o que o backend usa (rate_for(model)). Divergência teórica: o mesmo nome
+// em 2 provedores da malha devolve null (tarifasPorModelo) e a linha sai do recálculo — raro,
+// e o custo dela ainda está no foco; aceito como o traço conservador da tela.
 export function custoSemCacheDe(combos: ComboRow[], tarifas: Map<string, RateInfo | null>): number {
   let soma = 0;
   for (const c of combos) {
