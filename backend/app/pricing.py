@@ -106,11 +106,19 @@ _PREFIXOS = (
     "cline-pass/", "clinepass/", "openrouter/", "zhipuai/", "google/", "cx/",
 )
 # Apelido -> id do models.dev. O log grava o nome do MOTOR, o catálogo conhece o do MODELO.
+# Os três últimos são ids ANTIGOS/alterados que o histórico ainda grava (claude-haiku-4.5 com
+# ponto, claude-sonnet-4 pré-renomeação, deepseek com sufixo de data). Mesma filosofia de "não há
+# preço histórico": o gasto antigo é recalculado com o preço de hoje do modelo equivalente — sem
+# o alias ele sumiria como "sem tarifa" com volume real (medido: 13,7 M de tokens do
+# deepseek-v4-flash-0731 num período de 30 dias).
 _APELIDOS = {
     "k3": "kimi-k3",
     "k3-256k": "kimi-k3",
     "kimi-for-coding": "kimi-k3",
     "gpt-5.6-sol-high": "gpt-5.6-sol",
+    "claude-sonnet-4": "claude-sonnet-4-5",
+    "claude-haiku-4.5": "claude-haiku-4-5-20251001",
+    "deepseek-v4-flash-0731": "deepseek-v4-flash",
 }
 # Não são modelos: não entram no relatório nem viram "sem tarifa" (traço misterioso sugere
 # preço faltando, que é outra coisa).

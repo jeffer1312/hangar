@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   mergeReports, fillDayGaps, tarifasPorModelo, custoDesconhecido, precoParcial, partirOcultos,
-  custoSemCacheDe, equivalenteDe,
+  custoSemCacheDe, equivalenteDe, isFree,
 } from './costs';
 import type { ComboRow } from './types';
 import type { CostBucket, CostReport, DimBucket, RateInfo } from './types';
@@ -225,6 +225,21 @@ describe('custoDesconhecido', () => {
     // O gráfico preenche buraco de data com dia zerado; marcá-lo como desconhecido trocaria um
     // zero honesto por um traço.
     expect(custoDesconhecido(balde({ sessions: 0 }))).toBe(false);
+  });
+});
+
+describe('isFree', () => {
+  it('reconhece tier grátis em qualquer grafia que o log grava', () => {
+    expect(isFree('free')).toBe(true);
+    expect(isFree('kimi-k3-free')).toBe(true);
+    expect(isFree('nvidia/nemotron-nano-12b-v2-vl:free')).toBe(true);
+    expect(isFree('gpt-5.6-luna:free')).toBe(true);
+  });
+
+  it('não confunde com modelo pago', () => {
+    expect(isFree('kimi-k3')).toBe(false);
+    expect(isFree('claude-sonnet-4')).toBe(false);
+    expect(isFree('freestyle')).toBe(false);
   });
 });
 
