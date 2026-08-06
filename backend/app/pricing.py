@@ -319,11 +319,12 @@ def _baixar() -> None:
         _log.warning("tarifas: formato do models.dev não reconhecido: %r", e)
         return
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    payload = {"modelos": {k: {
-        "provider": v.provider, "input": v.input, "output": v.output,
-        "cache_read": None if v.cache_estimado else v.cache_read,
-        "cache_write": None if v.cache_estimado else v.cache_write,
-    } for k, v in cat.items()}}
+    # Formato CRU do slim, igual ao do snapshot: `cache_estimado` é true quando QUALQUER um dos
+    # dois preços falta, e o payload antigo (`None if cache_estimado`) zerava os DOIS — o
+    # cache_read real de quem só não publica cache_write (deepseek, moonshot, google) sumia e
+    # cache lido passava a ser cobrado a preço de input (medido: deepseek 50x, kimi-k3 85%).
+    # O _carregar() já relê este arquivo com _rate(), que trata None -> input e marca estimado.
+    payload = {"modelos": slim(bruto)}
     tmp = destino.with_suffix(f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False))
     tmp.replace(destino)

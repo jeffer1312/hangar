@@ -175,6 +175,38 @@ def test_download_manda_user_agent_proprio(monkeypatch):
     assert "urllib" not in visto["ua"].lower()
 
 
+def test_download_preserva_cache_read_quando_so_cache_write_falta(monkeypatch):
+    """O deepseek publica cache_read mas não cache_write. `cache_estimado` (true com QUALQUER um
+    ausente) fazia o payload gravado zerar os DOIS, e o cache_read real (0.0028) sumia: na
+    releitura, cache lido era cobrado a preço de input (medido: deepseek 50x a mais, kimi-k3 85%
+    do custo inflado). O cache gravado tem que preservar cada campo, não os dois juntos."""
+    bruto = {"deepseek": {"models": {
+        "deepseek-v4-flash": {"cost": {"input": 0.14, "output": 0.28,
+                                       "cache_read": 0.0028, "cache_write": None}},
+    }}}
+
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps(bruto).encode()
+
+    monkeypatch.setattr(pricing.urllib.request, "urlopen", lambda req, timeout=None: Resp())
+    monkeypatch.setattr(pricing, "_ultima_tentativa", 0.0)
+    pricing._baixar()
+
+    m = json.loads((pricing._CACHE_DIR / "models.dev.json").read_text())["modelos"]["deepseek-v4-flash"]
+    assert m["cache_read"] == 0.0028
+    assert m["cache_write"] is None
+    # E a releitura cobra cache lido pelo preço dele, não pelo input:
+    r = pricing.rate_for("deepseek-v4-flash")
+    assert r is not None and r.cache_read == 0.0028 and r.cache_write == 0.14
+
+
 def test_custo_aplica_tarifa_por_tipo_de_token():
     r = pricing.rate_for("claude-opus-5")
     c = pricing.custo(r, entrada=1_000_000, saida=1_000_000, cw=1_000_000, cr=1_000_000)

@@ -4,6 +4,7 @@
   import { fetchCostsForServer } from '../lib/api';
   import {
     mergeReports, fillDayGaps, tarifasPorModelo, custoDesconhecido, precoParcial, partirOcultos,
+    custoSemCacheDe, equivalenteDe,
     type ServerResult, type MergedReport,
   } from '../lib/costs';
   import { agruparPor, aplicar, filtrar, somar, type Filtro } from '../lib/cubo';
@@ -174,11 +175,13 @@
     report.by_provider.filter((b) => b.label).map((b) => [b.key, b.label as string])));
   const rot = (b: DimBucket) => b.label || rotulos.get(b.key) || b.key;
 
-  // A lista de UMA dimensão, já cruzada com os OUTROS filtros — mas nunca com o dela mesma: com o
-  // próprio filtro aplicado, a lista ficaria só com a opção escolhida e não haveria como trocar de
-  // valor nem ver o que mais existe dentro do recorte.
+  // A lista de UMA dimensão é o RECORTE COMPLETO, incluindo o filtro da própria dimensão:
+  // com o modelo X selecionado, a tabela "Por modelo" mostra só o X — decidido 2026-08-06, o
+  // desenho antigo (nunca o próprio filtro) mostrava todos os modelos com custos do período
+  // inteiro, e a tela parecia ignorar o filtro. Trocar de valor exige "limpar filtros", que é
+  // o botão ali em cima.
   const listaDa = (d: Dim): DimBucket[] =>
-    temCombos ? agruparPor(filtrar(base, { ...filtroAtivo, [d]: undefined }), d) : listaCrua(d);
+    temCombos ? agruparPor(filtrar(base, filtroAtivo), d) : listaCrua(d);
 
   // Os números do topo saem do CRUZAMENTO. Sem detalhamento sai do balde de UMA dimensão nos
   // `by_*`, exatamente como a tela fazia antes — e o `aplicar` garante que ali só existe uma
@@ -345,8 +348,6 @@
   const fatias = $derived(
     TIPOS.map((t) => ({ ...t, cost: custoDe(foco, t.id), toks: tokensDe(foco, t.id) })),
   );
-  const economia = $derived(report.custo_sem_cache - report.totals.cost);
-  const taxaCache = $derived(brutos(report.totals) > 0 ? report.totals.cache_read / brutos(report.totals) : 0);
 
   // Quanto do recorte veio de subagente — o gasto que ficava misturado com a conversa até esta
   // fase. Só faz sentido com o filtro de subagente em "tudo": ativo, o recorte JÁ é um dos lados.
@@ -374,6 +375,18 @@
 
   // `has` = existe preço; `get` = qual preço (null com mais de um provedor). Ver tarifasPorModelo.
   const tarifas = $derived(tarifasPorModelo(report.rates));
+
+  // Os dois escalares do servidor (custo_sem_cache/equivalente_cobrado) valem só pro total do
+  // período. Com recorte o cliente recalcula com as tarifas que viajam nos `rates` (mesma
+  // aritmética do costs.py); sem detalhamento (servidor antigo) não existe recorte e os valores
+  // do período inteiro continuam valendo — a ressalva do painel explica.
+  const semCache = $derived(
+    temCombos && temFiltro ? custoSemCacheDe(recorte, tarifas) : report.custo_sem_cache);
+  const equivalenteRecorte = $derived(
+    temCombos && temFiltro ? equivalenteDe(recorte, tarifas) : report.equivalente_cobrado);
+  const economia = $derived(semCache - foco.cost);
+  const fonteCache = $derived(temCombos ? foco : report.totals);
+  const taxaCache = $derived(brutos(fonteCache) > 0 ? fonteCache.cache_read / brutos(fonteCache) : 0);
   // Recorte sem tarifa: o `cost` que vem do servidor é 0 porque ele pulou a conta, não porque foi
   // de graça. Todo número em dinheiro deste recorte vira traço. A pergunta é feita ao BALDE, não
   // à dimensão: perguntar "é um modelo?" deixava passar o provedor, a fonte e o projeto cujos
@@ -388,9 +401,10 @@
   // recorte": o número está certo e o rótulo engana.
   const RESSALVA = $derived(temCombos ? ''
     : ' Sempre o período inteiro: sem o detalhamento do servidor só existe o total de cada dimensão, não o cruzamento entre elas.');
-  // O painel de cache segue no período inteiro por OUTRO motivo — `custo_sem_cache` é um escalar
-  // global, não uma dimensão —, então a ressalva dele é a própria. (Espaço na string: Svelte come
-  // o espaço que fica colado no `{#if}`, e "cache.Sempre" saía grudado.)
+  // Sem detalhamento o painel de cache segue no período inteiro — `custo_sem_cache` é escalar do
+  // servidor e não existe o cruzamento pra recalcular —, então a ressalva dele é a própria. Com
+  // detalhamento o recorte recalcula e ela some. (Espaço na string: Svelte come o espaço que fica
+  // colado no `{#if}`, e "cache.Sempre" saía grudado.)
   const RESSALVA_CACHE = ' Sempre o período inteiro — o servidor calcula isto no total, não por recorte.';
 
   const vazioNoPeriodo = $derived(!loading && report.totals.sessions === 0);
@@ -500,9 +514,8 @@
   {#if temFiltro}
     <p class="recorte">
       Recorte: <b>{descricaoFiltro}</b> —
-      {#if temCombos}a tela inteira é deste recorte, menos os três números que o servidor só
-        calcula no total do período (equivalente cobrado, economia do cache e a comparação com o
-        período anterior).
+      {#if temCombos}a tela inteira é deste recorte, menos a comparação com o período
+        anterior — o servidor só calcula ela no total.
       {:else}os números do topo e a quebra por tipo de token são deste recorte. Os painéis abaixo
         continuam no período inteiro: sem o detalhamento do servidor só existe o total de cada
         dimensão, não o cruzamento entre elas.
@@ -543,21 +556,22 @@
       </div>
       <div class="kpi">
         <dt>equivalente cobrado</dt>
-        <!-- Vem do servidor: depende da tarifa de cada modelo, que o front não tem. Existe só
-             pro total do período — dentro de um recorte, traço, nunca o número global. -->
-        <dd>{temFiltro ? '—' : tok(report.equivalente_cobrado)}</dd>
+        <!-- Com detalhamento o front recalcula do recorte (tarifas viajam nos rates); sem ele o
+             escalar do servidor vale só pro total do período, e dentro de um recorte é traço,
+             nunca o número global. -->
+        <dd>{temFiltro && !temCombos ? '—' : tok(equivalenteRecorte)}</dd>
         <div class="foot">
-          {#if temFiltro}só no total do período
-          {:else}{pct(report.equivalente_cobrado, brutos(report.totals))} do bruto — o resto é cache barato{/if}
+          {#if temFiltro && !temCombos}só no total do período
+          {:else}{pct(equivalenteRecorte, brutos(foco))} do bruto — o resto é cache barato{/if}
         </div>
       </div>
       <div class="kpi">
         <dt>economia do cache</dt>
-        <dd>{temFiltro ? '—' : m(economia)}</dd>
+        <dd>{temFiltro && !temCombos ? '—' : mFoco(economia)}</dd>
         <div class="foot">
-          {#if temFiltro}só no total do período
-          {:else}{m2(economia)} · {report.custo_sem_cache > 0
-            ? dec(100 - (report.totals.cost / report.custo_sem_cache) * 100, 0)
+          {#if temFiltro && !temCombos}só no total do período
+          {:else}{m2Foco(economia)} · {semCache > 0
+            ? dec(100 - (foco.cost / semCache) * 100, 0)
             : 0}% abaixo do preço cheio{/if}
         </div>
       </div>
@@ -669,17 +683,17 @@
 
       <div class="card">
         <h2>O que o cache economizou</h2>
-        <p class="hint">Os mesmos tokens, se nenhum fosse cache.{#if temFiltro}{RESSALVA_CACHE}{/if}</p>
+        <p class="hint">Os mesmos tokens, se nenhum fosse cache.{#if !temCombos && temFiltro}{RESSALVA_CACHE}{/if}</p>
         <div class="cmp">
-          <div class="cmprow"><span class="dim">pago de verdade</span><b>{m2(report.totals.cost)}</b></div>
+          <div class="cmprow"><span class="dim">pago de verdade</span><b>{m2Foco(foco.cost)}</b></div>
           <div class="cmptrack">
-            <i style="width: {report.custo_sem_cache > 0
-              ? Math.max(2, (report.totals.cost / report.custo_sem_cache) * 100) : 0}%"></i>
+            <i style="width: {semCache > 0
+              ? Math.max(2, (foco.cost / semCache) * 100) : 0}%"></i>
           </div>
-          <div class="cmprow"><span class="dim">se nada fosse cache</span><b>{m2(report.custo_sem_cache)}</b></div>
+          <div class="cmprow"><span class="dim">se nada fosse cache</span><b>{m2Foco(semCache)}</b></div>
         </div>
         <dl class="kpis compacta">
-          <div class="kpi"><dt>economizado</dt><dd class="aqua">{m(economia)}</dd></div>
+          <div class="kpi"><dt>economizado</dt><dd class="aqua">{mFoco(economia)}</dd></div>
           <div class="kpi"><dt>do volume é cache lido</dt><dd>{dec(taxaCache * 100, 0)}%</dd></div>
         </dl>
       </div>
