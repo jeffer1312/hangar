@@ -150,11 +150,17 @@
     d === 'provider' ? report.by_provider : d === 'source' ? report.by_source
       : d === 'project' ? report.by_project : report.by_model;
 
-  // O filtro só vale se a chave ainda existe no período carregado: trocar de 30d pra 7d pode
-  // apagar o projeto selecionado, e manter o chip apontando pro vazio mostraria zero como se
-  // fosse gasto zero.
+  // O filtro só vale se a chave ainda existe no período carregado — E se sobrevive ao cruzamento
+  // com os OUTROS filtros. Trocar de 30d pra 7d pode apagar o projeto selecionado, e manter o
+  // chip apontando pro vazio mostraria zero como se fosse gasto zero. O mesmo vale pro cruzamento
+  // (medido): projeto A que só existe como subagente some dos combos quando "só conversa" está
+  // ativo, e o `<select value="A">` ficava em branco — valor que não coexiste com os outros
+  // filtros é filtro morto, e o estado tem que soltar. Usa o `filtro` CRU, não o `filtroAtivo`,
+  // pra não fechar ciclo (filtroAtivo deriva deste existe).
   const existe = (d: Dim, v: string) =>
-    temCombos ? base.some((c) => c[d] === v) : listaCrua(d).some((b) => b.key === v);
+    temCombos
+      ? agruparPor(filtrar(base, { ...filtro, [d]: undefined }), d).some((b) => b.key === v)
+      : listaCrua(d).some((b) => b.key === v);
   const manter = (d: Dim) => {
     const v = filtro[d];
     return v && existe(d, v) ? v : undefined;
@@ -407,7 +413,17 @@
   // de graça. Todo número em dinheiro deste recorte vira traço. A pergunta é feita ao BALDE, não
   // à dimensão: perguntar "é um modelo?" deixava passar o provedor, a fonte e o projeto cujos
   // modelos sejam todos desconhecidos — mesma mentira, um eixo acima.
-  const semTarifa = $derived(custoDesconhecido(foco));
+  // Recorte inteiramente de modelo grátis (`:free`/`-free`): o custo zero NÃO é "não sei o
+  // preço" — é grátis de verdade. O traço do "sem tarifa" só vale quando há volume sem preço
+  // conhecido; no recorte grátis o número certo é US$ 0,00. `tudoGratis` sai dos combos, não do
+  // balde, porque o balde agregado não guarda os ids dos modelos.
+  const tudoGratis = $derived(
+    temCombos && recorte.length > 0 && recorte.every((c) => isFree(c.model)));
+  const semTarifa = $derived(custoDesconhecido(foco) && !tudoGratis);
+  // Rodapé: os grátis saem da lista de "sem tarifa conhecida" — o rótulo ali contradiz o "grátis"
+  // da linha do modelo. Cada grupo ganha a própria frase.
+  const semTarifaFooter = $derived(report.sem_tarifa.filter((m) => !isFree(m)));
+  const freeFooter = $derived(report.sem_tarifa.filter((m) => isFree(m)));
   const mFoco = (n: number) => (semTarifa ? '—' : m(n));
   const m2Foco = (n: number) => (semTarifa ? '—' : m2(n));
   // Par do painel de cache: com detalhamento o recorte, sem ele os totais do período — o traço
@@ -468,7 +484,10 @@
       <select aria-labelledby="lbl-proj" value={filtroAtivo.project ?? ''}
         onchange={(e) => setFiltro('project', e.currentTarget.value)}>
         <option value="">todos ({opcoesProjeto.length})</option>
-        {#each opcoesProjeto as b}<option value={b.key}>{projectLabel(b.key)} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
+        <!-- title no option: dois projetos com o mesmo basename (raro, mas possível) ficam
+             distinguíveis por hover; no celular não há hover, então o painel e o chip mostram o
+             basename e o estado sempre usa a chave cheia. -->
+        {#each opcoesProjeto as b}<option value={b.key} title={b.key}>{projectLabel(b.key)} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
       </select>
     </span>
 
@@ -561,7 +580,8 @@
         <div class="foot">
           {m2Foco(foco.cost)} · {sess(foco.sessions)} · {m2Foco(foco.cost / diasDoPeriodo)}/dia
         </div>
-        {#if semTarifa}<div class="foot">sem tarifa conhecida — só o volume é medido</div>{/if}
+        {#if semTarifa}<div class="foot">sem tarifa conhecida — só o volume é medido</div>
+        {:else if tudoGratis}<div class="foot">modelo grátis — nada é cobrado</div>{/if}
         <!-- O gasto de subagente ficava misturado com o da conversa: a fase 1 não tinha como
              separá-los. Só aparece com o filtro em "tudo" — ativo, o número acima JÁ é um dos
              dois lados e a fração seria 0% ou 100%. -->
@@ -584,6 +604,7 @@
         <div class="foot">
           {#if temFiltro && !temCombos}só no total do período
           {:else if semTarifa}só o volume é medido
+          {:else if tudoGratis}modelo grátis — nada é cobrado
           {:else}{pct(equivalenteRecorte, brutos(foco))} do bruto — o resto é cache barato{/if}
         </div>
       </div>
@@ -677,6 +698,10 @@
             <b>{temFiltro ? descricaoFiltro : 'nenhum modelo do período'}</b>
             — aqui só o volume é medido.
           </p>
+        {:else if tudoGratis}
+          <!-- Recorte de modelo grátis: custo zero é verdade, não "não sei". A barra 100% seria uma
+               faixa vazia (nada foi cobrado) — o texto explica em vez de desenhar o vazio. -->
+          <p class="hint">Modelo grátis — nenhum dólar foi gasto.</p>
         {:else}
           <div class="stack100">
             {#each fatias as f}
@@ -781,7 +806,7 @@
                 {#each TIPOS as t}{#if custoDe(b, t.id) > 0}<i style="background: var({t.slot}); flex: {custoDe(b, t.id)}"></i>{/if}{/each}
               </span>
             </button>
-            <button class="hidebtn" aria-label="tirar {projectLabel(b.key)} da lista"
+            <button class="hidebtn" aria-label="tirar {b.key} da lista"
               title="tirar da lista (o gasto continua contando)"
               onclick={() => { const s = new Set(ocultos); s.add(b.key); ocultos = s; salvarOcultos(); }}>×</button>
           </div>
@@ -867,10 +892,15 @@
         então gasto antigo é recalculado com o preço de hoje.<br />
         {#if currency === 'BRL' && rate}<b>Cotação</b> US$ 1 = R$ {dec(rate, 2)}.<br />{/if}
         Custo de tabela da API, <b>não é fatura</b>: plano de assinatura não cobra por token.
-        {#if report.sem_tarifa.length}
-          <br />{report.sem_tarifa.length}
-          {report.sem_tarifa.length === 1 ? 'modelo' : 'modelos'} sem tarifa conhecida
-          ({report.sem_tarifa.join(', ')}) — aparecem com traço, nunca estimados.
+        {#if freeFooter.length}
+          <br />{freeFooter.length}
+          {freeFooter.length === 1 ? 'modelo' : 'modelos'} grátis
+          ({freeFooter.join(', ')}).
+        {/if}
+        {#if semTarifaFooter.length}
+          <br />{semTarifaFooter.length}
+          {semTarifaFooter.length === 1 ? 'modelo' : 'modelos'} sem tarifa conhecida
+          ({semTarifaFooter.join(', ')}) — aparecem com traço, nunca estimados.
         {/if}
       </p>
     </div>

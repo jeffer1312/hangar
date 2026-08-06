@@ -116,7 +116,10 @@ _APELIDOS = {
     "k3-256k": "kimi-k3",
     "kimi-for-coding": "kimi-k3",
     "gpt-5.6-sol-high": "gpt-5.6-sol",
-    "claude-sonnet-4": "claude-sonnet-4-5",
+    # Alvos DATADOS de propósito: é a forma que o Claude Code grava no campo `model` destes
+    # modelos (medido: 13 mil ocorrências de claude-haiku-4-5-20251001 contra zero da forma nua
+    # `claude-haiku-4-5`). Alias pra forma nua deixaria o volume antigo e o atual em DUAS linhas.
+    "claude-sonnet-4": "claude-sonnet-4-5-20250929",
     "claude-haiku-4.5": "claude-haiku-4-5-20251001",
     "deepseek-v4-flash-0731": "deepseek-v4-flash",
 }

@@ -61,11 +61,17 @@ def test_canoniza_ids_antigos_pra_tarifa_de_hoje():
     # Ids que o histórico ainda grava mas o models.dev renomeou: sem o alias, o volume deles sairia
     # como "sem tarifa" com traço, e o custo real (recalculado com o preço de hoje, como o app já
     # faz com o histórico inteiro) sumiria.
-    assert pricing.canonizar("claude-sonnet-4") == "claude-sonnet-4-5"
+    assert pricing.canonizar("claude-sonnet-4") == "claude-sonnet-4-5-20250929"
     assert pricing.canonizar("claude-haiku-4.5") == "claude-haiku-4-5-20251001"
     assert pricing.canonizar("deepseek-v4-flash-0731") == "deepseek-v4-flash"
-    # E o alias converge com a forma nova: o mesmo modelo não pode virar duas linhas no painel.
-    assert pricing.canonizar("claude-sonnet-4") == pricing.canonizar("claude-sonnet-4-5")
+    # Os alvos são DATADOS de propósito — é a forma que as sessões atuais gravam no campo model
+    # (medido no histórico real). O alias tem que convergir com o que o log grava hoje, senão o
+    # mesmo modelo vira duas linhas no painel. E o invariante que importa de verdade: id antigo
+    # agora TEM tarifa (antes rate_for devolvia None e o volume saía como "sem tarifa").
+    assert pricing.canonizar("claude-haiku-4.5") == pricing.canonizar("claude-haiku-4-5-20251001")
+    assert pricing.rate_for("claude-sonnet-4") is not None
+    assert pricing.rate_for("claude-haiku-4.5") is not None
+    assert pricing.rate_for("deepseek-v4-flash-0731") is not None
 
 
 def test_canoniza_prefixo_de_provedor_do_pi():
