@@ -18,23 +18,30 @@
   "build": {
     "appId": "com.claudecockpit.shell",
     "productName": "Claude Cockpit",
+    "artifactName": "claude-cockpit-${version}-${arch}.${ext}",
     "files": [
       "main.cjs",
       "settings.cjs",
       "package.json"
     ],
     "linux": {
-      "target": ["AppImage"],
+      "target": [
+        "AppImage"
+      ],
       "category": "Development",
       "icon": "build/icon.png",
       "syncDesktopName": true
     },
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "icon": "build/icon.png"
     },
     "mac": {
-      "target": ["dmg"],
+      "target": [
+        "dmg"
+      ],
       "icon": "build/icon.png"
     }
   }
