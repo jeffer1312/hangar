@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import NavBar from '../components/NavBar.svelte';
   import Select from '../components/Select.svelte';
   import { listServers, onServersChanged, type Server } from '../lib/auth';
@@ -162,7 +163,14 @@
   // Desmarcar uma máquina recarrega: ela deixa de ser CHAMADA (não paga o timeout de 4s do
   // lib/api.ts:176) e some do aviso de parcial, que hoje lista 6 máquinas offline como se fosse
   // notícia. O `geracao` continua correto com duas dependências — é contador monotônico.
-  $effect(() => { const p = period; const alvo = servidoresAtivos; load(p, alvo); });
+  //
+  // A dependência do effect é a CHAVE de identidade, não o array: `servidoresAtivos` renasce a
+  // cada onServersChanged (listServers() faz JSON.parse e devolve objetos novos mesmo sem mudança),
+  // e renomear o rótulo de um servidor (renameServer/updateServer → notifyChanged) não pode
+  // refazer o Promise.all das máquinas. Token entra na chave de propósito: consertar uma credencial
+  // TEM que recarregar (a máquina que falhava passa a responder); trocar rótulo, não.
+  const chaveAtivos = $derived(servidoresAtivos.map((s) => `${s.id}|${s.baseUrl}|${s.token}`).join('\n'));
+  $effect(() => { const p = period; chaveAtivos; load(p, untrack(() => servidoresAtivos)); });
 
   // ── Derivados ───────────────────────────────────────────────────────────────
   const report = $derived(merged.report);
@@ -705,7 +713,10 @@
   {#if mostrarServidores && servidores.length > 1}
     <div class="chips" role="group" aria-label="Servidores no relatório">
       {#each servidores as s (s.id)}
+        <!-- A última marcada não desmarca: desmarcar TUDO é estado inválido (cai de volta em
+             'todas'), e a tela não pode dizer "todos" com os 8 chips apagados. -->
         <button class="chip" aria-pressed={!servidoresOff.has(s.id)}
+          disabled={marcados.length === 1 && !servidoresOff.has(s.id)}
           onclick={() => alternarServidor(s.id)}>{s.label}</button>
       {/each}
       {#if servidoresOff.size}
