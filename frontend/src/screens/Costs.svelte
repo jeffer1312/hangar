@@ -9,6 +9,9 @@
     type ServerResult, type MergedReport,
   } from '../lib/costs';
   import { agruparPor, aplicar, filtrar, somar, type Filtro } from '../lib/cubo';
+  import {
+    brutos, contaInflada, serieComparada, totaisComparados, valorDe, type Metrica,
+  } from '../lib/comparar';
   import { dec, tok, money, money2, type Cur } from '../lib/fmt';
   import { projectLabel } from '../lib/format';
   import type { ComboLocal, DimBucket } from '../lib/types';
@@ -33,7 +36,6 @@
   const custoDe = (b: DimBucket, t: Tipo) =>
     t === 'input' ? b.cost_input : t === 'output' ? b.cost_output
       : t === 'cache_write' ? b.cost_cache_write : b.cost_cache_read;
-  const brutos = (b: DimBucket) => b.input + b.output + b.cache_write + b.cache_read;
 
   // ── Estado ──────────────────────────────────────────────────────────────────
   type Periodo = '7d' | '30d' | '90d' | 'all';
@@ -513,6 +515,91 @@
   const RESSALVA_CACHE = ' Sempre o período inteiro — o servidor calcula isto no total, não por recorte.';
 
   const vazioNoPeriodo = $derived(!loading && report.totals.sessions === 0);
+
+  // ── Comparar ────────────────────────────────────────────────────────────────
+  // Sem persistência de propósito: é ferramenta de exploração, e guardar "entidade marcada" no
+  // localStorage traria pra dentro dele o problema de a entidade não existir mais no período.
+  const MAX_COMPARAR = 4;   // são 4 slots de cor no app.css (--chart-1..4)
+  let dimComp = $state<Dim>('provider');
+  let metrica = $state<Metrica>('tokens');
+  let marcadas = $state<string[]>([]);
+
+  // Semanal nos períodos longos: 90 pontos diários no celular viram ruído, e "tokens por semana"
+  // é a pergunta que motivou o painel.
+  const semanal = $derived(period === '90d' || period === 'all');
+
+  // Candidatas: o recorte ativo nas OUTRAS dimensões, nunca na própria — mesma regra do
+  // `opcoesDa` (:199). Sem isto, escolher um provedor no topo deixaria a comparação de
+  // provedores com uma entidade só.
+  const baseComp = $derived(filtrar(base, { ...filtroAtivo, [dimComp]: undefined }));
+  const todasComp = $derived(temCombos ? agruparPor(baseComp, dimComp) : listaCrua(dimComp));
+  // Top 8 por custo MAIS as já marcadas: projeto tem 133 valores, e uma marcada fora do top 8
+  // sumiria do chip enquanto continuava contando no cartão. O resto entra pelo "adicionar…".
+  const candidatas = $derived.by(() => {
+    const top = todasComp.slice(0, 8);
+    return [...top, ...todasComp.filter((b) => marcadas.includes(b.key) && !top.includes(b))];
+  });
+  const restantes = $derived(todasComp.filter((b) => !candidatas.includes(b)));
+
+  // Sem detalhamento (alguma máquina em versão antiga): dá pra mostrar os cartões a partir dos
+  // totais marginais dos `by_*`, mas não existe série no tempo — o cruzamento dia × dimensão é
+  // justamente o que os `by_*` perderam ao somar.
+  const cartoes = $derived(
+    temCombos
+      ? totaisComparados(baseComp, dimComp, marcadas)
+      : marcadas.map((k) => listaCrua(dimComp).find((b) => b.key === k)
+                            ?? { ...vazio(), key: k }));
+  const pontos = $derived(
+    temCombos ? serieComparada(baseComp, dimComp, marcadas, metrica, semanal) : []);
+  const totalComparado = $derived(cartoes.reduce((s, b) => s + valorDe(b, metrica), 0));
+  const corDe = (i: number) => `--chart-${i + 1}`;
+  const valorFmt = (b: DimBucket) => (metrica === 'custo' ? m2(b.cost) : tok(brutos(b)));
+  const rotuloMetrica = (v: number) => (metrica === 'custo' ? m(v) : tok(v));
+
+  // Modelos sem tarifa que estão sendo cobrados da conta Anthropic — o furo de atribuição que
+  // faria a comparação entre contas mentir. Só interessa quando se compara PROVEDOR.
+  const inflando = $derived(
+    dimComp === 'provider' ? contaInflada(baseComp, report.sem_tarifa) : []);
+
+  function alternarComparada(k: string) {
+    if (marcadas.includes(k)) marcadas = marcadas.filter((x) => x !== k);
+    else if (marcadas.length < MAX_COMPARAR) marcadas = [...marcadas, k];
+  }
+  // Trocar de dimensão zera a marcação: chave de provedor não existe na lista de fontes, e as
+  // marcações velhas ficariam invisíveis segurando os slots de cor.
+  function setDimComp(d: Dim) { dimComp = d; marcadas = []; }
+
+  // Linha de leitura: a menor contra a maior, que é a comparação que se faz em voz alta.
+  const leitura = $derived.by(() => {
+    if (cartoes.length < 2) return '';
+    const ord = [...cartoes].sort((a, b) => valorDe(b, metrica) - valorDe(a, metrica));
+    const maior = ord[0], menor = ord[ord.length - 1];
+    const vMaior = valorDe(maior, metrica), vMenor = valorDe(menor, metrica);
+    if (vMaior <= 0) return '';
+    const nm = (b: DimBucket) => nomeDa(dimComp, b.key);
+    return `${nm(menor)}: ${rotuloMetrica(vMenor)} — ${pct(vMenor, vMaior)} do que ${nm(maior)} gastou (${rotuloMetrica(vMaior)})`;
+  });
+
+  // Geometria do gráfico de linhas — barras empilhadas não servem aqui: o ponto é comparar
+  // séries, não somá-las.
+  const grafComp = $derived.by(() => {
+    const W = Math.max(280, larguraGrafico || 640);
+    const H = 180, padT = 8, padB = 22;
+    const padL = W < 480 ? 46 : 56;
+    const plotH = H - padT - padB;
+    const teto = Math.max(1, ...pontos.flatMap((p) => p.valores));
+    const passo = pontos.length > 1 ? (W - padL - 8) / (pontos.length - 1) : 0;
+    // Com um ponto só, a linha ficaria centrada — e um `path` de um ponto não desenha nada
+    // (por isso os círculos no markup).
+    const x = (i: number) => (pontos.length > 1 ? padL + i * passo : (padL + W - 8) / 2);
+    const y = (v: number) => padT + plotH - (v / teto) * plotH;
+    const linhas = marcadas.map((k, s) => ({
+      chave: k, slot: corDe(s),
+      pts: pontos.map((p, i) => ({ cx: x(i), cy: y(p.valores[s] ?? 0) })),
+      d: pontos.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.valores[s] ?? 0).toFixed(1)}`).join(' '),
+    }));
+    return { W, H, padL, padT, plotH, teto, x, yDe: y, linhas };
+  });
 </script>
 
 <NavBar title="Custos" showBack={true} onBack={onBack} />
@@ -1024,6 +1111,126 @@
     </div>
 
     <div class="card">
+      <h2>Comparar</h2>
+      <p class="hint">
+        Duas a {MAX_COMPARAR} entidades da mesma dimensão, lado a lado. Respeita os outros filtros
+        ativos, nunca o da dimensão comparada.
+      </p>
+
+      <div class="cmpctl">
+        <span class="fgroup">
+          <span class="flabel">comparar por</span>
+          <Select ariaLabel="dimensão da comparação" value={dimComp}
+            opcoes={DIMS.filter((d) => d !== 'servidor' || servidores.length > 1)
+                        .map((d) => ({ value: d, label: NOME_DIM[d] }))}
+            onchange={(v) => setDimComp(v as Dim)} />
+        </span>
+        <span class="seg" role="group" aria-label="Métrica">
+          <button aria-pressed={metrica === 'tokens'} onclick={() => (metrica = 'tokens')}>tokens</button>
+          <button aria-pressed={metrica === 'custo'} onclick={() => (metrica = 'custo')}>custo</button>
+        </span>
+      </div>
+
+      <div class="chips" role="group" aria-label="Entidades comparadas">
+        {#each candidatas as b (b.key)}
+          <button class="chip" aria-pressed={marcadas.includes(b.key)}
+            disabled={!marcadas.includes(b.key) && marcadas.length >= MAX_COMPARAR}
+            onclick={() => alternarComparada(b.key)}>{nomeDa(dimComp, b.key)}</button>
+        {/each}
+      </div>
+      <!-- Projeto tem 133 valores: sem esta lista, do 9º em diante nada é comparável e a tela nem
+           diz que existe mais coisa. -->
+      {#if restantes.length}
+        <span class="fgroup">
+          <span class="flabel">adicionar ({restantes.length} fora da lista)</span>
+          <Select ariaLabel="adicionar entidade à comparação" value=""
+            disabled={marcadas.length >= MAX_COMPARAR}
+            opcoes={[{ value: '', label: 'adicionar…' },
+                     ...restantes.map((b) => ({ value: b.key, label: nomeDa(dimComp, b.key),
+                       title: b.key, hint: custoDesconhecido(b) ? '—' : m(b.cost) }))]}
+            onchange={(v) => v && alternarComparada(v)} />
+        </span>
+      {/if}
+
+      {#if marcadas.length < 2}
+        <p class="empty">Marque duas ou mais para comparar.</p>
+      {:else}
+        <div class="cmpcards">
+          {#each cartoes as b, i (b.key)}
+            <div class="cmpcard">
+              <div class="cmpnome">
+                <span class="swatch" style="background: var({corDe(i)})"></span>{nomeDa(dimComp, b.key)}
+              </div>
+              <div class="cmpvalor">{valorFmt(b)}</div>
+              <div class="foot">{metrica === 'custo' ? tok(brutos(b)) : m2(b.cost)}</div>
+              <div class="foot">{sess(b.sessions)}</div>
+              <div class="foot">{pct(valorDe(b, metrica), totalComparado)} do comparado</div>
+              <div class="foot">{rotuloMetrica(valorDe(b, metrica) / diasDoPeriodo)}/dia</div>
+            </div>
+          {/each}
+        </div>
+
+        {#if leitura}<p class="caption">{leitura}</p>{/if}
+
+        {#if !temCombos}
+          <!-- Sem o detalhamento não existe cruzamento dia × dimensão: os cartões acima saem dos
+               totais marginais, e série no tempo não há. -->
+          <p class="hint">
+            Alguma máquina respondeu sem o detalhamento cruzado — os cartões acima são o total de
+            cada entidade no período, sem série no tempo e sem cruzar com os outros filtros.
+          </p>
+        {:else if pontos.length}
+          <div class="chartbox">
+            <svg viewBox="0 0 {grafComp.W} {grafComp.H}" width={grafComp.W} height={grafComp.H}
+              role="img"
+              aria-label="{metrica === 'custo' ? 'Custo' : 'Tokens'} por {semanal ? 'semana' : 'dia'}, uma linha por entidade">
+              {#each [0, grafComp.teto / 2, grafComp.teto] as g}
+                <line class="grid-line" x1={grafComp.padL} x2={grafComp.W}
+                  y1={grafComp.yDe(g)} y2={grafComp.yDe(g)} />
+                <text x={grafComp.padL - 8} y={grafComp.yDe(g) + 3} text-anchor="end">{rotuloMetrica(g)}</text>
+              {/each}
+              {#each grafComp.linhas as l (l.chave)}
+                <path d={l.d} fill="none" stroke="var({l.slot})" stroke-width="2"
+                  stroke-linejoin="round" stroke-linecap="round" />
+                <!-- Círculos além da linha: com um ponto só (período de um dia ativo) o `path`
+                     não desenha nada, e o gráfico ficaria em branco sem explicação. -->
+                {#each l.pts as p}
+                  <circle cx={p.cx} cy={p.cy} r="2.5" fill="var({l.slot})" />
+                {/each}
+              {/each}
+              {#each pontos as p, i}
+                {#if i === 0 || i === pontos.length - 1}
+                  <text x={grafComp.x(i)} y={grafComp.H - 6}
+                    text-anchor={i === 0 ? 'start' : 'end'}>{rotuloDia(p.x)}</text>
+                {/if}
+              {/each}
+            </svg>
+          </div>
+          <p class="caption">
+            {semanal ? 'Cada ponto é uma semana, começando na segunda.' : 'Cada ponto é um dia.'}
+          </p>
+        {/if}
+      {/if}
+
+      <!-- As duas ressalvas moram DENTRO do painel: é aqui que sai a conclusão errada, e no
+           rodapé da tela elas não são lidas na hora de comparar. -->
+      {#if metrica === 'custo'}
+        <p class="hint">
+          Preço de tabela, não fatura: assinatura e cota não são cobradas por token. Para comparar
+          contas, tokens é a régua honesta.
+        </p>
+      {/if}
+      {#if inflando.length}
+        <p class="hint">
+          ⚠ {inflando.join(', ')} {inflando.length === 1 ? 'não tem tarifa conhecida e está'
+            : 'não têm tarifa conhecida e estão'} somando na conta Anthropic: o provedor de uma
+          sessão do Claude Code é deduzido da tarifa do modelo, então modelo fora do catálogo cai
+          na conta padrão. O que este painel mostra para a Anthropic está inflado nesse tanto.
+        </p>
+      {/if}
+    </div>
+
+    <div class="card">
       <p class="note">
         <b>Fontes:</b> Claude Code (<code>~/.claude/projects/**/*.jsonl</code>) ·
         Codex (<code>~/.codex/sessions</code>) · Pi (<code>~/.pi/agent/sessions</code>).<br />
@@ -1301,6 +1508,17 @@
   }
   .mini > i { display: block; height: 100%; background: var(--accent); }
   .bar { width: 66px; }
+
+  /* ── card Comparar ── */
+  .cmpctl { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: end; margin-bottom: var(--space-2); }
+  .cmpcards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--space-2); margin: var(--space-3) 0; }
+  /* surface-raised: acompanha o slider de transparência quando há papel de parede. */
+  .cmpcard { background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3); }
+  .cmpnome { display: flex; align-items: center; gap: var(--space-2); color: var(--text-secondary); font-size: 12px; }
+  .cmpvalor { font-family: var(--font-mono); font-size: 20px; color: var(--text-primary); margin-top: 2px; }
+  /* `.foot` NÃO tem regra própria neste arquivo — só existe como `.kpi .foot` (~:1029). Sem esta
+     regra os quatro rodapés do cartão sairiam sem estilo nenhum. */
+  .cmpcard .foot { color: var(--text-secondary); font-size: 12px; margin-top: 2px; }
 
   .note { font-size: var(--text-xs); color: var(--text-muted); line-height: 1.6; }
   .note b { color: var(--text-secondary); font-weight: 600; }
