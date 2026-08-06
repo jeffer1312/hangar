@@ -519,7 +519,13 @@ $tarefas = @(
     # rodando em outra porta. O ramo do frontend ja fazia certo; o do backend nao.
     @{ Nome = 'claude-cockpit-backend';  Exe = 'uv';  Args = 'run python -m app.main'; Dir = "$raiz\backend"
        Porta = $portaBack;  Padrao = [regex]::Escape("$raiz\backend") },
-    @{ Nome = 'claude-cockpit-frontend'; Exe = 'npm'; Args = 'run dev';                Dir = "$raiz\frontend"
+    # `run preview`, NAO `run dev`: o passo 2 acabou de gerar o frontend\dist e subir o dev
+    # server aqui serviria desenvolvimento numa instalacao de producao - a mesma incoerencia que
+    # o services-setup.sh do Linux ja corrigiu. O bloco `preview` do vite.config.ts usa a MESMA
+    # porta 5173 com o mesmo proxy /api, entao a origem nao muda e ninguem perde localStorage
+    # (cp_servers, tema, layout). Pra mexer no layout com recarga ao vivo: pare a tarefa e rode
+    # `npm run dev` na mao.
+    @{ Nome = 'claude-cockpit-frontend'; Exe = 'npm'; Args = 'run preview';            Dir = "$raiz\frontend"
        Porta = $portaFront; Padrao = [regex]::Escape("$raiz\frontend") }
 )
 
@@ -532,8 +538,9 @@ $tarefas = @(
 # instancia, que colide na porta e morre, enquanto a velha sobrevive. Medido nesta maquina: um
 # -Update deixou o backend servindo codigo de 26 minutos antes, e as correcoes ja no disco
 # pareciam nao ter efeito - so valeram depois de matar os processos na mao.
-# Vale so pro BACKEND na pratica: o frontend roda `npm run dev` (Vite com HMR) e ja pega
-# .svelte/.ts na hora; o backend nao, porque CP_RELOAD e off por padrao (config.py).
+# Vale pros DOIS agora: o frontend serve o build (`npm run preview`), entao mudanca em .svelte
+# so aparece depois de `npm run build` + reinicio da tarefa - nao ha mais HMR pra disfarcar. O
+# backend nunca teve, porque CP_RELOAD e off por padrao (config.py).
 function Pare-Servico {
     param([string]$Nome, [int]$Porta, [string]$Padrao)
     $alvos = @()
