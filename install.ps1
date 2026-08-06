@@ -907,8 +907,10 @@ if ($morreu) {
 # -- Fim ---------------------------------------------------------------------
 Titulo 'Pronto'
 Write-Host @"
-  O backend fica em http://127.0.0.1:8765 e o PWA em http://localhost:5173.
-  O dev server do vite escuta SO em 127.0.0.1 (vite.config.ts) - do celular se chega
+  Abra a interface em http://127.0.0.1:8765 - o proprio backend serve o build que este
+  instalador gerou, entao ali tem tela e API no mesmo endereco.
+  O http://localhost:5173 tambem sobe: e o dev server do vite, com recarga ao vivo, util
+  so pra mexer no layout. Ele escuta SO em 127.0.0.1 (vite.config.ts) - do celular se chega
   pelo Tailscale, nao pelo IP da LAN direto.
 
   Rodar na mao (se voce pulou o passo 7):
@@ -921,8 +923,6 @@ Write-Host @"
   O que este Windows ainda NAO tem:
   - wrappers do `codex` e do `pi`, e a extensao cp-state.ts do Pi. Sessao Codex ou Pi aberta
     por voce no terminal nao aparece; criada pelo app, funciona.
-  - wrappers do `codex` e do `pi`, e a extensao cp-state.ts do Pi: idem. Sessao Codex ou Pi
-    aberta por voce no terminal nao aparece; criada pelo app, funciona.
   - resurrect/continuum (sessoes sobreviverem a reboot): sao plugins de tmux em bash, e o
     psmux nao roda plugin de tmux. Fechou o Windows, as sessoes se foram.
 "@
