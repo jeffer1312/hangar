@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { agruparPor, aplicar, filtrar, somar } from './cubo';
-import type { ComboRow } from './types';
+import type { ComboLocal } from './types';
 
-const c = (o: Partial<ComboRow>): ComboRow => ({
+const c = (o: Partial<ComboLocal>): ComboLocal => ({
   dia: '2026-07-01', provider: 'p', source: 'claude', project: '/r', model: 'm',
+  servidor: 'srv-a',
   subagente: false, sessions: 1, input: 0, output: 0, cache_write: 0, cache_read: 0,
   cost: 0, cost_input: 0, cost_output: 0, cost_cache_write: 0, cost_cache_read: 0, ...o,
 });
@@ -63,9 +64,33 @@ describe('cubo', () => {
 
   it('campo ausente de servidor antigo não vira NaN', () => {
     const parcial = [{ dia: 'd', provider: 'p', source: 's', project: '/x', model: 'm',
-                       cost: 5 } as unknown as ComboRow];
+                       cost: 5 } as unknown as ComboLocal];
     const r = somar(parcial);
     expect(r.cost).toBe(5);
     expect(Number.isNaN(r.input)).toBe(false);
+  });
+
+  it('filtra por servidor', () => {
+    const malha = [
+      c({ servidor: 'srv-a', cost: 10 }),
+      c({ servidor: 'srv-b', cost: 4 }),
+      c({ servidor: 'srv-b', cost: 6, source: 'pi' }),
+    ];
+    expect(somar(filtrar(malha, { servidor: 'srv-b' })).cost).toBe(10);
+  });
+
+  it('cruza servidor com outra dimensão', () => {
+    // é o cruzamento que os by_* nunca responderam: "quanto o Pi gastou NA VPS"
+    const malha = [
+      c({ servidor: 'srv-a', source: 'pi', cost: 3 }),
+      c({ servidor: 'srv-b', source: 'pi', cost: 7 }),
+      c({ servidor: 'srv-b', source: 'claude', cost: 100 }),
+    ];
+    expect(somar(filtrar(malha, { servidor: 'srv-b', source: 'pi' })).cost).toBe(7);
+  });
+
+  it('agrupar por servidor bate com o total', () => {
+    const malha = [c({ servidor: 'srv-a', cost: 10 }), c({ servidor: 'srv-b', cost: 5 })];
+    expect(agruparPor(malha, 'servidor').reduce((t, b) => t + b.cost, 0)).toBe(15);
   });
 });

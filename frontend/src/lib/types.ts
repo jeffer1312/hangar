@@ -324,6 +324,15 @@ export interface ComboRow {
   cost_cache_read: number;
 }
 
+// A MESMA linha, depois de carimbada com a máquina de onde veio. O carimbo é do CLIENTE: nenhum
+// backend manda este campo — `mergeReports` o escreve na hora de juntar as máquinas, porque
+// depois de somado não dá pra separar "quanto disso foi da VPS". Mantido FORA do `ComboRow` de
+// propósito: aquele é o formato do fio, e pôr nele um campo que servidor nenhum manda apagaria a
+// fronteira que o resto deste módulo se esforça pra manter.
+export interface ComboLocal extends ComboRow {
+  servidor: string;
+}
+
 export interface KindBucket {
   kind: string; // "input" | "output" | "cache_write" | "cache_read"
   tokens: number;

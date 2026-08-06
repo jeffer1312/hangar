@@ -175,6 +175,65 @@ describe('mergeReports', () => {
     const m = mergeReports([{ report: { ...vazio(), by_project: [emp('zeta'), emp('alfa')] } }], '30d');
     expect(m.report.by_project.map((x) => x.key)).toEqual(['alfa', 'zeta']);
   });
+
+  // nome próprio: já existe uma fábrica `combo` neste arquivo, noutro describe (~:309).
+  const linhaCombo = (o: Partial<ComboRow>): ComboRow => ({
+    dia: '2026-08-01', provider: 'p', source: 'claude', project: '/r', model: 'm',
+    subagente: false, sessions: 1, input: 0, output: 0, cache_write: 0, cache_read: 0,
+    cost: 0, cost_input: 0, cost_output: 0, cost_cache_write: 0, cost_cache_read: 0, ...o,
+  });
+
+  it('carimba cada combo com a máquina de origem', () => {
+    const a = { ...vazio(), combos: [linhaCombo({ cost: 10 })] };
+    const b = { ...vazio(), combos: [linhaCombo({ cost: 5 })] };
+    const m = mergeReports(
+      [{ report: a, id: 'srv-a', label: 'Casa' }, { report: b, id: 'srv-b', label: 'Vps' }], '30d');
+    expect(m.report.combos.map((c) => c.servidor)).toEqual(['srv-a', 'srv-b']);
+  });
+
+  it('a chave do servidor é o id, não o rótulo', () => {
+    // Dois notebooks chamados "Casa" viravam um balde só; o id vem do lib/auth e não repete.
+    const um = { ...vazio(), totals: { ...vazio().totals, cost: 3 } };
+    const outro = { ...vazio(), totals: { ...vazio().totals, cost: 4 } };
+    const m = mergeReports(
+      [{ report: um, id: 'srv-1', label: 'Casa' }, { report: outro, id: 'srv-2', label: 'Casa' }], '30d');
+    // O by_servidor sai ordenado por custo desc (como os demais cortes do merge), então esta
+    // asserção é sobre QUAL chave, não sobre a ordem — o sort a torna imune à ordenação.
+    expect(m.report.by_servidor.map((b) => b.key).sort()).toEqual(['srv-1', 'srv-2']);
+    expect(m.report.by_servidor.every((b) => b.label === 'Casa')).toBe(true);
+  });
+
+  it('by_servidor sai do totals, não dos combos', () => {
+    // Máquina em versão antiga manda by_*/totals e NENHUM combo. Se o corte por servidor viesse
+    // dos combos, ela apareceria com gasto zero — pior que não aparecer.
+    const antiga = { ...vazio(), totals: { ...vazio().totals, cost: 40, sessions: 3 } };
+    const nova = {
+      ...vazio(), totals: { ...vazio().totals, cost: 10, sessions: 1 },
+      combos: [linhaCombo({ cost: 10 })],
+    };
+    const m = mergeReports(
+      [{ report: antiga, id: 'srv-velho', label: 'Notebook' },
+       { report: nova, id: 'srv-novo', label: 'Casa' }], '30d');
+    const porChave = new Map(m.report.by_servidor.map((b) => [b.key, b]));
+    expect(porChave.get('srv-velho')?.cost).toBe(40);
+    expect(porChave.get('srv-velho')?.label).toBe('Notebook');
+    expect(porChave.get('srv-novo')?.cost).toBe(10);
+  });
+
+  it('servidor recusado pelo período não vira bucket nem carimbo', () => {
+    const fora = { ...vazio(), applied: { period: 'all' }, combos: [linhaCombo({ cost: 999 })] };
+    const dentro = { ...vazio(), combos: [linhaCombo({ cost: 1 })] };
+    const m = mergeReports(
+      [{ report: fora, id: 'srv-x', label: 'X' }, { report: dentro, id: 'srv-y', label: 'Y' }], '30d');
+    expect(m.report.by_servidor.map((b) => b.key)).toEqual(['srv-y']);
+    expect(m.report.combos.every((c) => c.servidor === 'srv-y')).toBe(true);
+  });
+
+  it('sem id, o carimbo cai no rótulo', () => {
+    // Chamador antigo (e os outros testes desta suíte) passam só `label`.
+    const m = mergeReports([{ report: { ...vazio(), combos: [linhaCombo({})] }, label: 'Casa' }], '30d');
+    expect(m.report.combos[0].servidor).toBe('Casa');
+  });
 });
 
 describe('tarifasPorModelo', () => {

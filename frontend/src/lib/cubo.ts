@@ -3,15 +3,16 @@
 // Os quatro agrupamentos do CostReport somam antes de mandar, e depois de somado não dá pra
 // separar "quanto daquele projeto foi de tal fonte". Aqui cada linha é uma combinação que
 // aconteceu, então qualquer recorte vira uma soma — inclusive dois ou três filtros juntos.
-import type { ComboRow, DimBucket } from './types';
+import type { ComboLocal, DimBucket } from './types';
 
-export type Dim = 'dia' | 'provider' | 'source' | 'project' | 'model';
+export type Dim = 'dia' | 'provider' | 'source' | 'project' | 'model' | 'servidor';
 
 export interface Filtro {
   provider?: string;
   source?: string;
   project?: string;
   model?: string;
+  servidor?: string;
   subagente?: boolean;
 }
 
@@ -29,13 +30,14 @@ export function aplicar(
   return { ...(cruza ? f : {}), [dim]: valor };
 }
 
-export function filtrar(combos: ComboRow[], f: Filtro): ComboRow[] {
+export function filtrar(combos: ComboLocal[], f: Filtro): ComboLocal[] {
   return combos.filter(
     (c) =>
       (!f.provider || c.provider === f.provider) &&
       (!f.source || c.source === f.source) &&
       (!f.project || c.project === f.project) &&
       (!f.model || c.model === f.model) &&
+      (!f.servidor || c.servidor === f.servidor) &&
       (f.subagente === undefined || Boolean(c.subagente) === f.subagente),
   );
 }
@@ -48,7 +50,7 @@ const zero = (key: string): DimBucket => ({
 // `?? 0` em toda entrada: servidor antigo da malha pode não mandar um campo, e
 // `undefined + n` vira NaN, que se espalha e apaga a coluna inteira — inclusive as linhas
 // dos servidores que mandaram o dado certo.
-function acumular(alvo: DimBucket, c: ComboRow): void {
+function acumular(alvo: DimBucket, c: ComboLocal): void {
   alvo.sessions += c.sessions ?? 0;
   alvo.input += c.input ?? 0;
   alvo.output += c.output ?? 0;
@@ -61,13 +63,13 @@ function acumular(alvo: DimBucket, c: ComboRow): void {
   alvo.cost_cache_read += c.cost_cache_read ?? 0;
 }
 
-export function somar(combos: ComboRow[]): DimBucket {
+export function somar(combos: ComboLocal[]): DimBucket {
   const t = zero('totals');
   for (const c of combos) acumular(t, c);
   return t;
 }
 
-export function agruparPor(combos: ComboRow[], dim: Dim): DimBucket[] {
+export function agruparPor(combos: ComboLocal[], dim: Dim): DimBucket[] {
   const m = new Map<string, DimBucket>();
   for (const c of combos) {
     const k = c[dim];
