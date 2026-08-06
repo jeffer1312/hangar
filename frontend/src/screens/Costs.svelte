@@ -231,11 +231,12 @@
   const rot = (b: DimBucket) => b.label || rotulos.get(b.key) || b.key;
   // Nome legível de uma chave no rótulo do recorte: provedor usa o e-mail (rotulos), projeto o
   // basename — o caminho cru de 80 chars no texto do recorte não é "nome amigável" de nada.
-  // O rótulo vem do próprio by_servidor (que o mergeReports preencheu com o Server.label); o
-  // fallback pega o caso da máquina que não respondeu e por isso não virou bucket.
+  // Prefere o rótulo VIVO de `servidores`: o load é chaveado por id|baseUrl|token (rename não
+  // refaz o fetch), então o label snapshot do by_servidor ficaria velho até o próximo reload. O
+  // by_servidor é o fallback pro caso da máquina que não respondeu e por isso não virou bucket.
   const nomeServidor = (id: string) =>
-    report.by_servidor.find((b) => b.key === id)?.label
-    ?? servidores.find((s) => s.id === id)?.label ?? id;
+    servidores.find((s) => s.id === id)?.label
+    ?? report.by_servidor.find((b) => b.key === id)?.label ?? id;
 
   const nomeDa = (d: Dim, key: string) =>
     d === 'provider' ? (rotulos.get(key) ?? key)
@@ -557,8 +558,17 @@
       ? totaisComparados(baseComp, dimComp, marcadas)
       : marcadas.map((k) => listaCrua(dimComp).find((b) => b.key === k)
                             ?? { ...vazio(), key: k }));
+  // No custo, entidade sem tarifa não tem o que desenhar: linha em 0 mentiria ("não gastou" vs
+  // "não tem tarifa pra saber") — some da série, o cartão continua com '—'. Em tokens vale tudo.
+  const chavesComSerie = $derived(
+    metrica === 'custo'
+      ? marcadas.filter((k) => {
+          const b = cartoes.find((x) => x.key === k);
+          return b ? !custoDesconhecido(b) : true;
+        })
+      : marcadas);
   const pontos = $derived(
-    temCombos ? serieComparada(baseComp, dimComp, marcadas, metrica, semanal) : []);
+    temCombos ? serieComparada(baseComp, dimComp, chavesComSerie, metrica, semanal) : []);
   const totalComparado = $derived(cartoes.reduce((s, b) => s + valorDe(b, metrica), 0));
   const corDe = (i: number) => `--chart-${i + 1}`;
   // Custo desconhecido mostra traço, não "US$ 0,00" — a mesma regra dos rankings: o zero afirma
@@ -582,8 +592,11 @@
 
   // Linha de leitura: a menor contra a maior, que é a comparação que se faz em voz alta.
   const leitura = $derived.by(() => {
-    if (cartoes.length < 2) return '';
-    const ord = [...cartoes].sort((a, b) => valorDe(b, metrica) - valorDe(a, metrica));
+    // No custo, entidade sem tarifa não entra na frase — "US$ 0,00 — 0,0%" afirmaria gasto zero
+    // onde não há tarifa pra saber.
+    const legiveis = metrica === 'custo' ? cartoes.filter((b) => !custoDesconhecido(b)) : cartoes;
+    if (legiveis.length < 2) return '';
+    const ord = [...legiveis].sort((a, b) => valorDe(b, metrica) - valorDe(a, metrica));
     const maior = ord[0], menor = ord[ord.length - 1];
     const vMaior = valorDe(maior, metrica), vMenor = valorDe(menor, metrica);
     if (vMaior <= 0) return '';
