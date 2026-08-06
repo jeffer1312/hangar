@@ -384,8 +384,11 @@
     temCombos && temFiltro ? custoSemCacheDe(recorte, tarifas) : report.custo_sem_cache);
   const equivalenteRecorte = $derived(
     temCombos && temFiltro ? equivalenteDe(recorte, tarifas) : report.equivalente_cobrado);
-  const economia = $derived(semCache - foco.cost);
+  // `fonteCache` é o alvo do par "pago de verdade × se nada fosse cache": com detalhamento o
+  // recorte, sem ele os totais do período (o escalar do servidor é global — comparar recorte
+  // com período inteiro daria uma "economia" sem sentido, apontado na revisão).
   const fonteCache = $derived(temCombos ? foco : report.totals);
+  const economia = $derived(semCache - fonteCache.cost);
   const taxaCache = $derived(brutos(fonteCache) > 0 ? fonteCache.cache_read / brutos(fonteCache) : 0);
   // Recorte sem tarifa: o `cost` que vem do servidor é 0 porque ele pulou a conta, não porque foi
   // de graça. Todo número em dinheiro deste recorte vira traço. A pergunta é feita ao BALDE, não
@@ -394,6 +397,11 @@
   const semTarifa = $derived(custoDesconhecido(foco));
   const mFoco = (n: number) => (semTarifa ? '—' : m(n));
   const m2Foco = (n: number) => (semTarifa ? '—' : m2(n));
+  // Par do painel de cache: com detalhamento o recorte, sem ele os totais do período — o traço
+  // segue o MESMO alvo do par (sem detalhamento + filtro, o painel continua período inteiro).
+  const semTarifaCache = $derived(temCombos ? semTarifa : custoDesconhecido(report.totals));
+  const mPainel = (n: number) => (semTarifaCache ? '—' : m(n));
+  const m2Painel = (n: number) => (semTarifaCache ? '—' : m2(n));
 
   // Ressalva dos painéis que NÃO obedecem ao recorte. Com detalhamento eles obedecem, e a ressalva
   // some — ela só sobra pro servidor da malha em versão antiga, onde de fato só existe o total de
@@ -421,9 +429,9 @@
       {/each}
     </span>
 
-    <!-- Cada seletor lista a SUA dimensão cruzada com os outros filtros (listaDa), então o custo ao
-         lado de cada opção já é o do recorte — e a lista continua completa, porque listaDa nunca
-         aplica o filtro da própria dimensão. -->
+    <!-- Cada seletor lista a SUA dimensão dentro do RECORTE completo (listaDa aplica até o
+         próprio filtro): com um filtro ativo a lista fica só com o que existe nele, e trocar de
+         valor é via "limpar filtros". -->
     <span class="fgroup">
       <span class="flabel" id="lbl-prov">provedor</span>
       <select aria-labelledby="lbl-prov" value={filtroAtivo.provider ?? ''}
@@ -559,9 +567,10 @@
         <!-- Com detalhamento o front recalcula do recorte (tarifas viajam nos rates); sem ele o
              escalar do servidor vale só pro total do período, e dentro de um recorte é traço,
              nunca o número global. -->
-        <dd>{temFiltro && !temCombos ? '—' : tok(equivalenteRecorte)}</dd>
+        <dd>{temFiltro && (!temCombos || semTarifa) ? '—' : tok(equivalenteRecorte)}</dd>
         <div class="foot">
           {#if temFiltro && !temCombos}só no total do período
+          {:else if semTarifa}só o volume é medido
           {:else}{pct(equivalenteRecorte, brutos(foco))} do bruto — o resto é cache barato{/if}
         </div>
       </div>
@@ -685,15 +694,18 @@
         <h2>O que o cache economizou</h2>
         <p class="hint">Os mesmos tokens, se nenhum fosse cache.{#if !temCombos && temFiltro}{RESSALVA_CACHE}{/if}</p>
         <div class="cmp">
-          <div class="cmprow"><span class="dim">pago de verdade</span><b>{m2Foco(foco.cost)}</b></div>
+          <!-- `fonteCache`: com detalhamento o recorte, sem ele os totais do período — o par
+               precisa vir da MESMA fonte do `semCache`, senão compara recorte com período
+               inteiro. O traço acompanha o mesmo alvo (m2Painel/mPainel). -->
+          <div class="cmprow"><span class="dim">pago de verdade</span><b>{m2Painel(fonteCache.cost)}</b></div>
           <div class="cmptrack">
             <i style="width: {semCache > 0
-              ? Math.max(2, (foco.cost / semCache) * 100) : 0}%"></i>
+              ? Math.max(2, (fonteCache.cost / semCache) * 100) : 0}%"></i>
           </div>
-          <div class="cmprow"><span class="dim">se nada fosse cache</span><b>{m2Foco(semCache)}</b></div>
+          <div class="cmprow"><span class="dim">se nada fosse cache</span><b>{m2Painel(semCache)}</b></div>
         </div>
         <dl class="kpis compacta">
-          <div class="kpi"><dt>economizado</dt><dd class="aqua">{mFoco(economia)}</dd></div>
+          <div class="kpi"><dt>economizado</dt><dd class="aqua">{mPainel(economia)}</dd></div>
           <div class="kpi"><dt>do volume é cache lido</dt><dd>{dec(taxaCache * 100, 0)}%</dd></div>
         </dl>
       </div>
