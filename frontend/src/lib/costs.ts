@@ -188,6 +188,33 @@ export function precoParcial(model: string, temTarifa: boolean, semTarifa: strin
   return temTarifa && semTarifa.includes(model);
 }
 
+// Custo "se nenhum token fosse cache" e o equivalente-input de um RECORTE, calculados no
+// cliente. O servidor manda os dois como escalar do período inteiro (`custo_sem_cache` /
+// `equivalente_cobrado`); dentro de um filtro esses escalares não existem, mas cada combo
+// carrega os quatro tipos de token e a tarifa viaja nos `rates` — a mesma aritmética do
+// costs.py, linha a linha. Regra do backend que o cliente espelha: linha sem tarifa não entra
+// (pular é "não sei o preço", não "foi de graça").
+export function custoSemCacheDe(combos: ComboRow[], tarifas: Map<string, RateInfo | null>): number {
+  let soma = 0;
+  for (const c of combos) {
+    const t = tarifas.get(c.model);
+    if (!t) continue;
+    soma += ((c.input + c.cache_write + c.cache_read) / 1e6 * t.input + c.output / 1e6 * t.output);
+  }
+  return soma;
+}
+
+export function equivalenteDe(combos: ComboRow[], tarifas: Map<string, RateInfo | null>): number {
+  let soma = 0;
+  for (const c of combos) {
+    const t = tarifas.get(c.model);
+    if (!t || !t.input) continue;
+    soma += c.input + c.output * (t.output / t.input)
+      + c.cache_write * (t.cache_write / t.input) + c.cache_read * (t.cache_read / t.input);
+  }
+  return soma;
+}
+
 // Recorte de "esconder da lista" — e a razão de ele morar AQUI e não dentro do .svelte é que a
 // garantia que ele tem que dar ("esconder não muda total nenhum") é justamente a candidata
 // número um a *o total não bate*, e dentro do componente ela era intestável.

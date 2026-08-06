@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   mergeReports, fillDayGaps, tarifasPorModelo, custoDesconhecido, precoParcial, partirOcultos,
+  custoSemCacheDe, equivalenteDe,
 } from './costs';
+import type { ComboRow } from './types';
 import type { CostBucket, CostReport, DimBucket, RateInfo } from './types';
 
 function bucket(key: string, cost: number): CostBucket {
@@ -282,6 +284,38 @@ describe('partirOcultos', () => {
   it('preserva a ordem que veio do servidor', () => {
     expect(partirOcultos(lista, new Set(['/repo/b'])).visiveis.map((b) => b.key))
       .toEqual(['/repo/a', '/repo/c']);
+  });
+});
+
+describe('custoSemCacheDe / equivalenteDe', () => {
+  const combo = (extra: Partial<ComboRow>): ComboRow => ({
+    dia: '2026-08-06', provider: 'deepseek', source: 'pi', project: '/x',
+    model: 'deepseek-v4-flash', subagente: false, sessions: 1,
+    input: 1_000_000, output: 1_000_000, cache_write: 0, cache_read: 1_000_000, ...extra,
+  } as ComboRow);
+  const tarifas = new Map([['deepseek-v4-flash', {
+    model: 'deepseek-v4-flash', provider: 'deepseek', input: 0.14, output: 0.28,
+    cache_read: 0.0028, cache_write: 0.14, origin: 'models.dev',
+  }]]);
+
+  it('espelha a aritmética do costs.py num recorte', () => {
+    // sem cache: (1Mi in + 1Mi cr) * 0.14 + 1Mi out * 0.28 = 0.56
+    expect(custoSemCacheDe([combo({})], tarifas)).toBeCloseTo(0.56);
+    // equivalente-input: 1Mi + 1Mi*(0.28/0.14) + 1Mi*(0.0028/0.14) = 1 + 2 + 0.02 = 3.02Mi
+    expect(equivalenteDe([combo({})], tarifas)).toBeCloseTo(3_020_000);
+  });
+
+  it('linha sem tarifa não entra na conta', () => {
+    const sem = combo({ model: 'kimi-k3-free', cache_write: 500_000 });
+    expect(custoSemCacheDe([sem], new Map())).toBe(0);
+    expect(equivalenteDe([sem], new Map())).toBe(0);
+  });
+
+  it('ignora tarifa sem preço de input (sem régua pra converter)', () => {
+    const semInput = new Map([['x', {
+      model: 'x', provider: 'p', input: 0, output: 2, cache_read: 1, cache_write: 1, origin: 'm',
+    }]]);
+    expect(equivalenteDe([combo({ model: 'x' })], semInput)).toBe(0);
   });
 });
 
