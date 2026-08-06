@@ -1,0 +1,61 @@
+# Release: empacota o shell Electron pras 3 plataformas e anexa numa GitHub Release.
+# So dispara em tag `v*` -- os artefatos tem ~120MB cada e o CI (ci.yml) ja cobre os gates
+# em todo push/PR, entao aqui nao precisa rodar de novo.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  # Cria a Release uma unica vez antes da matriz, senao os 3 jobs de plataforma corririam
+  # pra criar a mesma release ao mesmo tempo.
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Criar release (tolera já existir)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag || \
+            echo "release $GITHUB_REF_NAME já existe, seguindo"
+
+  build:
+    needs: create-release
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            glob: "dist/*.AppImage"
+          - os: windows-latest
+            glob: "dist/*.exe"
+          - os: macos-latest
+            glob: "dist/*.dmg"
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: shell
+        # bash em todo runner, incl. windows-latest (usa o Git Bash já presente na imagem) --
+        # assim o glob de upload é escrito uma vez só, sem branch de shell por plataforma.
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: shell/package-lock.json
+      - run: npm ci
+      # --publish never: quem publica é o gh release upload logo abaixo, não o electron-builder.
+      - run: npm run dist -- --publish never
+      - name: Anexar artefato na release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" ${{ matrix.glob }} --clobber

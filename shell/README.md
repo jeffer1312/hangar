@@ -68,6 +68,38 @@ desligar. Uma receita calibrada pra barra fina costuma ficar pesada demais numa 
 
 **GNOME/KDE** dependem do compositor; sem suporte, a janela fica transparente sem desfoque.
 
+## Empacotar como AppImage
+
+Pra instalar numa máquina Linux que não tem este repositório clonado, gera um AppImage
+autocontido (janela + Electron; o backend Python continua de fora, por decisão do projeto):
+
+```bash
+cd shell && npm install     # primeira vez
+npm run dist                # gera dist/Claude Cockpit-<versão>.AppImage
+```
+
+O ícone vem de `frontend/public/icons/icon-512.png` (copiado pra `shell/build/icon.png` — não é
+gerado nem versionado à parte). `shell/dist/` é saída de build e não deve ser commitado.
+
+**O AppImage continua sendo só a janela.** Rodando numa máquina nova, ele precisa de um cockpit
+(backend `uv run python -m app.main`) alcançável do endereço configurado — local (`COCKPIT_URL`
+ou o padrão `http://127.0.0.1:8765`) ou via Tailscale/LAN. Sem isso ele cai na tela de recuperação
+pedindo o endereço, do mesmo jeito que `npm start` cairia.
+
+## Release (Linux, Windows, macOS)
+
+Empurrar uma tag `v*` (`git tag v0.1.0 && git push origin v0.1.0`) dispara
+`.github/workflows/release.yml`: builda o shell nas 3 plataformas
+(`ubuntu-latest`, `windows-latest`, `macos-latest`) e anexa AppImage, `.exe`
+(NSIS) e `.dmg` na Release do GitHub que corresponde à tag.
+
+**Os binários de Windows e macOS não são assinados** — sem certificado de
+code signing, o SmartScreen do Windows e o Gatekeeper do macOS vão avisar que
+o app é de origem desconhecida antes de deixar abrir. E o comportamento da
+janela nesses dois sistemas (`shell/main.cjs`) foi escrito a partir da
+documentação e **nunca rodou de fato** em Windows ou macOS — só o caminho
+Linux/AppImage foi testado.
+
 ## Fundo
 
 Dentro do shell, a tela de Aparência ganha a opção **Desktop**. Ela usa os mesmos sliders de

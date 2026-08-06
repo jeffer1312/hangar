@@ -4,11 +4,38 @@
   "version": "0.1.0",
   "description": "Janela nativa transparente do claude-cockpit",
   "main": "main.cjs",
+  "author": "Jefferson Felizardo",
+  "desktopName": "claude-cockpit.desktop",
   "scripts": {
     "start": "electron main.cjs",
-    "test": "node --test"
+    "test": "node --test",
+    "dist": "electron-builder"
   },
   "devDependencies": {
-    "electron": "43.3.0"
+    "electron": "43.3.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.claudecockpit.shell",
+    "productName": "Claude Cockpit",
+    "files": [
+      "main.cjs",
+      "settings.cjs",
+      "package.json"
+    ],
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Development",
+      "icon": "build/icon.png",
+      "syncDesktopName": true
+    },
+    "win": {
+      "target": ["nsis"],
+      "icon": "build/icon.png"
+    },
+    "mac": {
+      "target": ["dmg"],
+      "icon": "build/icon.png"
+    }
   }
 }

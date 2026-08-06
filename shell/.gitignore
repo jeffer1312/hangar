@@ -1,0 +1,6 @@
+# Saída do electron-builder (o AppImage tem ~120MB — nunca versionar).
+dist/
+
+# `build/icon.png` NÃO entra aqui de propósito: é cópia do ícone do PWA
+# (frontend/public/icons/icon-512.png) e precisa estar versionado, senão `npm run dist` falha numa
+# máquina recém-clonada.
