@@ -178,12 +178,14 @@ export function custoDesconhecido(b: DimBucket): boolean {
   return b.input + b.output + b.cache_write + b.cache_read > 0 && b.cost === 0;
 }
 
-// Tier GRÁTIS pelo id: `free`, `-free` ou `:free`. Não é "sem tarifa" (preço desconhecido) — é
-// preço zero de verdade, e o rótulo tem que dizer isso, senão um modelo que custou nada parece
-// "não sei o preço". Só muda o RÓTULO: o custo continua traço, porque o zero que o backend manda
-// vem de ele ter pulado a conta (a tarifa dele nem existe no catálogo), não de uma tarifa de 0.
+// Tier GRÁTIS pelo id: `free`, `-free`, `:free` ou `free:thinking` (o Pi gruda o nível de
+// thinking DEPOIS do `:free` — `kimi-k3-free:high` — e a regex que exigia fim-de-string
+// classificava essa variante como "sem tarifa", a mentira exata que esta função existe pra
+// evitar). Não é "sem tarifa" (preço desconhecido) — é preço zero de verdade. Só muda o RÓTULO:
+// o custo continua traço, porque o zero que o backend manda vem de ele ter pulado a conta (a
+// tarifa dele nem existe no catálogo), não de uma tarifa de 0.
 export function isFree(model: string): boolean {
-  return /(^|[\/:-])free$/i.test(model);
+  return /(^|[\/:-])free(?:$|:)/i.test(model);
 }
 
 // Preço PARCIAL: um servidor da malha conhece a tarifa deste modelo e outro (snapshot mais velho

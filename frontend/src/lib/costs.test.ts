@@ -232,8 +232,11 @@ describe('isFree', () => {
   it('reconhece tier grátis em qualquer grafia que o log grava', () => {
     expect(isFree('free')).toBe(true);
     expect(isFree('kimi-k3-free')).toBe(true);
+    expect(isFree('moonshotai/kimi-k3-free')).toBe(true);
     expect(isFree('nvidia/nemotron-nano-12b-v2-vl:free')).toBe(true);
     expect(isFree('gpt-5.6-luna:free')).toBe(true);
+    // o Pi gruda o nível de thinking depois do :free — a regex que exigia fim-de-string perdia
+    expect(isFree('kimi-k3-free:high')).toBe(true);
   });
 
   it('não confunde com modelo pago', () => {
