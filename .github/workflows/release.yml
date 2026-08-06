@@ -33,11 +33,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            glob: "dist/*.AppImage"
+            ext: AppImage
           - os: windows-latest
-            glob: "dist/*.exe"
+            ext: exe
           - os: macos-latest
-            glob: "dist/*.dmg"
+            ext: dmg
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -58,17 +58,26 @@ jobs:
       # Checksum ao lado do binario: os instaladores NAO sao assinados (assinar exige certificado
       # pago no Windows e conta de desenvolvedor no macOS), entao o sha256 e o que permite a quem
       # baixa conferir que o arquivo nao chegou corrompido ou trocado no caminho.
-      # Gerado DE DENTRO do dist/ e com o nome puro: a primeira versao gravava o caminho de build
-      # ("dist/Claude Cockpit-0.1.0.AppImage"), e ai quem baixava o arquivo solto e rodava
+      # `cd dist` DENTRO do run, e nao `working-directory:` no passo: o job ja tem
+      # `working-directory: shell` como padrao, e um caminho no passo resolve de forma ambigua em
+      # cima disso (a primeira tentativa, com `shell/dist`, falhou no runner). Com `cd` nao ha
+      # duvida de onde e relativo a que.
+      #
+      # E o sha256 e gerado com o NOME PURO: a primeira release gravou o caminho de build
+      # ("dist/Claude Cockpit-0.1.0.AppImage"), entao quem baixava o arquivo solto e rodava
       # `sha256sum -c` levava "FALHA na abertura ou na leitura" — o checksum existia e nao servia
       # pra nada. Medido em 05/08/2026 baixando a propria release.
+      #
+      # `shasum -a 256` primeiro porque o macOS nao tem `sha256sum`; o Linux tem os dois.
       - name: Gerar sha256
-        working-directory: shell/dist
         run: |
-          for f in $(basename -a ../${{ matrix.glob }}); do
+          cd dist
+          for f in *.${{ matrix.ext }}; do
             shasum -a 256 "$f" > "$f.sha256" 2>/dev/null || sha256sum "$f" > "$f.sha256"
           done
       - name: Anexar artefato na release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$GITHUB_REF_NAME" ${{ matrix.glob }} ${{ matrix.glob }}.sha256 --clobber
+        run: |
+          gh release upload "$GITHUB_REF_NAME" \
+            dist/*.${{ matrix.ext }} dist/*.${{ matrix.ext }}.sha256 --clobber
