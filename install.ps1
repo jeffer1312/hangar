@@ -89,6 +89,40 @@ function Instale($rotulo, $cmd, $id, $porque) {
     return $false
 }
 
+function Instale-ClaudeCode {
+    # NAO vai por winget. O pacote 'Anthropic.ClaudeCode' de la depende de alguem atualizar o
+    # manifesto da comunidade, e fica pra tras das versoes que a Anthropic publica - o usuario
+    # instalava e ja nascia velho. O instalador oficial baixa do canal de releases deles, confere
+    # o SHA256 do binario e chama `claude.exe install`, que resolve o PATH sozinho.
+    # Conferido em 06/08/2026: claude.ai/install.ps1 redireciona pra
+    # downloads.claude.ai/claude-code-releases/bootstrap.ps1.
+    $rotulo = 'Claude Code'
+    if (Tem 'claude') { Ok $rotulo; return $true }
+    if ($SoChecar) { Falta "$rotulo - e o que o app pilota"; $script:pendencias += $rotulo; return $false }
+    if ($Update)   { Erro "$rotulo faltando (-Update nao instala dependencia)"; $script:pendencias += $rotulo; return $false }
+
+    Write-Host '  .. instalando Claude Code (instalador oficial da Anthropic)'
+    # Em processo FILHO, nao com `iex` aqui dentro: o bootstrap da Anthropic chama `exit 1` nos
+    # caminhos de erro dele (Windows 32 bits, download falho, checksum errado). Avaliado no mesmo
+    # processo, esse `exit` mataria o install.ps1 inteiro no meio, sem explicacao pro usuario.
+    # Com `Nativo` o exit code volta como numero e a decisao continua aqui.
+    $rc = Nativo powershell -NoProfile -ExecutionPolicy Bypass -Command `
+        "irm https://claude.ai/install.ps1 | iex"
+    if ($rc -ne 0) {
+        Erro "Claude Code nao instalou (exit $rc)"
+        Nota 'manual: irm https://claude.ai/install.ps1 | iex'
+        $script:pendencias += $rotulo
+        return $false
+    }
+    Atualiza-Path
+    if (Tem 'claude') { Ok "$rotulo instalado"; return $true }
+    # O instalador escreve o PATH no perfil; sessao ja aberta as vezes nao pega nem com o reload.
+    Erro 'Claude Code instalou mas o comando nao aparece nesta sessao'
+    Nota 'feche e abra o terminal, e rode o install de novo'
+    $script:pendencias += $rotulo
+    return $false
+}
+
 Atualiza-Path
 if (-not (Tem 'winget')) {
     Erro 'winget nao encontrado. Instale o "App Installer" pela Microsoft Store e rode de novo.'
@@ -98,7 +132,7 @@ if (-not (Tem 'winget')) {
 # -- 1/8 Dependencias obrigatorias -------------------------------------------
 Titulo '1/8 Dependencias'
 Instale 'psmux (multiplexador)' 'psmux'  'marlocarlo.psmux'     'sem ele nao existe sessao' | Out-Null
-Instale 'Claude Code'           'claude' 'Anthropic.ClaudeCode' 'e o que o app pilota'      | Out-Null
+Instale-ClaudeCode | Out-Null
 Instale 'Python'                'py'     'Python.Python.3.13'   'o backend e Python'        | Out-Null
 Instale 'Node 20+'              'node'   'OpenJS.NodeJS.LTS'    'o frontend e Svelte'       | Out-Null
 Instale 'uv'                    'uv'     'astral-sh.uv'         'gerencia o venv do backend' | Out-Null
