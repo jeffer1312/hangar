@@ -1,4 +1,6 @@
-import type { ComboRow, CostBucket, CostReport, DimBucket, KindBucket, RateInfo } from './types';
+import type {
+  ComboLocal, ComboRow, CostBucket, CostReport, DimBucket, KindBucket, RateInfo,
+} from './types';
 
 // `Partial` de propósito: é o que chega DO FIO. Um servidor da malha em versão antiga responde
 // sem os campos novos, e prometer aqui um objeto completo é justamente o que fazia o front
@@ -6,10 +8,22 @@ import type { ComboRow, CostBucket, CostReport, DimBucket, KindBucket, RateInfo 
 export interface ServerResult {
   report: Partial<CostReport> | null; // null = servidor falhou/offline
   label?: string;                     // rótulo da máquina, pro aviso de "não somei este"
+  // Id estável da máquina (`Server.id` do lib/auth). É a CHAVE do corte por servidor: o rótulo é
+  // editável e pode repetir entre duas máquinas, e duas "Casa" viravam um balde só.
+  id?: string;
+}
+
+// O relatório mesclado NÃO é um CostReport: ele tem duas coisas que nenhum servidor manda — os
+// combos carimbados com a máquina e o corte por máquina, que só existem depois de juntar. E aqui
+// `combos` é obrigatório (lista vazia quando ninguém mandou), porque a tolerância a servidor
+// antigo mora na ENTRADA, não na saída — mesma razão do comentário em types.ts sobre CostReport.
+export interface RelatorioMesclado extends Omit<CostReport, 'combos'> {
+  combos: ComboLocal[];
+  by_servidor: DimBucket[];
 }
 
 export interface MergedReport {
-  report: CostReport;
+  report: RelatorioMesclado;
   partial: boolean;      // algum servidor não respondeu ou entrou fora da soma
   mismatched: string[];  // servidores que não ecoaram o período pedido
   // Servidores que não responderam (offline, timeout, erro). Lista separada do `mismatched`
@@ -71,7 +85,8 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
   // O detalhamento cruzado só se CONCATENA: cada linha já é uma combinação daquela máquina, e as
   // dimensões que somam entre servidores (dia, fonte, projeto, modelo) somam depois, no cliente,
   // quando o recorte pedir. Servidor recusado não contribui combo, como não contribui total.
-  const combos: ComboRow[] = [];
+  const combos: ComboLocal[] = [];
+  const servidores: DimBucket[] = [];
   const mismatched: string[] = [];
   const failed: string[] = [];
   const anterior = zeroBucket('anterior');
@@ -101,6 +116,13 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
     }
     entraram += 1;
     somarBucket(totals, r.totals ?? {});
+    // Chave = id; rótulo = nome da máquina. O `??` mantém o comportamento do chamador antigo,
+    // que só tinha label.
+    const sid = res.id ?? res.label ?? `#${i + 1}`;
+    const bs = zeroBucket(sid);
+    bs.label = res.label ?? null;
+    somarBucket(bs, r.totals ?? {});
+    servidores.push(bs);
     juntarDim(dims.by_day, r.by_day);
     juntarDim(dims.by_provider, r.by_provider);
     juntarDim(dims.by_source, r.by_source);
@@ -117,7 +139,7 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
     // calado.
     for (const t of r.rates ?? []) rates.set(`${t.provider}|${t.model}`, t);
     for (const m of r.sem_tarifa ?? []) semTarifa.add(m);
-    for (const cb of r.combos ?? []) combos.push(cb);
+    for (const cb of r.combos ?? []) combos.push({ ...cb, servidor: sid });
     semCache += r.custo_sem_cache ?? 0;
     equivalente += r.equivalente_cobrado ?? 0;
     if (r.anterior) { somarBucket(anterior, r.anterior); comAnterior += 1; }
@@ -143,6 +165,7 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
       // pra comparar" é a mensagem honesta.
       anterior: entraram > 0 && comAnterior === entraram ? anterior : null,
       combos,
+      by_servidor: [...servidores].sort((a, b) => b.cost - a.cost || a.key.localeCompare(b.key)),
       applied: { period },
       usd_brl: usdBrl,
     },
