@@ -485,6 +485,15 @@
     outline: none;
     transition: border-color 180ms var(--ease-out);
   }
+  /* O combo de config é o <button> dentro do Select.svelte: CSS escopado não o alcança (o atributo
+     de escopo só cai nos elementos deste template), então a regra acima nunca casava e ele saía com
+     o visual padrão do componente — mono e 40px, quebrando o alinhamento com os campos irmãos. */
+  :global(.sel-campo.field-input) {
+    height: 44px;
+    background: var(--bg-surface);
+    border-radius: var(--radius-md);
+    font-family: var(--font-ui);
+  }
   .field-input::placeholder {
     color: var(--text-muted);
   }

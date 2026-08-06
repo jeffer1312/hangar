@@ -252,3 +252,14 @@ def test_resume_arquivo_com_motor_valido_repassa(cli):
         r = cli.post(f"/api/archive/proj/{_SID}/resume", json={"engine": "kimi"}, headers=AUTH)
     assert r.status_code == 200
     cr.assert_called_once_with("proj", "/home/u/proj", resume_session_id=_SID, engine="kimi")
+
+
+def test_put_com_string_vazia_LIMPA_o_campo(cli):
+    """`""` explícito apaga; ausência herda. Sem essa distinção, limpar um campo opcional na tela
+    virava no-op com HTTP 200 — o usuário escolhia "mesmo que o principal" em subagent_model,
+    salvava, e o modelo antigo voltava sem aviso (achado do silent-failure-hunter)."""
+    cli.put("/api/engines/kimi", json=_kimi() | {"subagent_model": "k3-fast"}, headers=AUTH)
+    assert eng.listar()["kimi"]["subagent_model"] == "k3-fast"
+    # é assim que a tela limpa: manda a chave com string vazia
+    cli.put("/api/engines/kimi", json=_kimi() | {"subagent_model": ""}, headers=AUTH)
+    assert "subagent_model" not in eng.listar()["kimi"], "string vazia deveria APAGAR o campo"

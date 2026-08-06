@@ -39,6 +39,11 @@
   let campoFiltro = $state<HTMLInputElement | null>(null);
   let pos = $state({ top: 0, left: 0, width: 0, maxH: 320, acima: false });
 
+  // Prefixo dos ids dos itens, pro aria-activedescendant apontar o item corrente. $props.id() dá um
+  // valor único por instância — duas telas com Select aberto não colidem.
+  const uid = $props.id();
+  const idLista = `sel-${uid}`;
+
   const rotuloAtual = $derived(opcoes.find((o) => o.value === value)?.label ?? value ?? '');
   const comFiltro = $derived(opcoes.length > filtroAcimaDe);
   const visiveis = $derived(
@@ -101,6 +106,11 @@
       return;
     }
     if (e.key === 'Escape') { e.preventDefault(); fechar(); return; }
+    // Tab FECHA (o <select> nativo fecha o popup do SO antes de mover o foco; aqui não fechava).
+    // Sem isto a lista ficava pairando aberta e desconectada de onde o foco foi: os itens vivem no
+    // fim do <body> (portal), então o Tab saía do widget e nada mais respondia a Escape — quem
+    // navega só por teclado ficava sem como fechar, dependendo de um clique fora.
+    if (e.key === 'Tab') { aberto = false; return; }   // sem fechar(), que devolveria o foco ao botão
     if (e.key === 'Enter') {
       e.preventDefault();
       const o = visiveis[ativo];
@@ -138,8 +148,11 @@
   class:aberto
   {disabled}
   aria-label={ariaLabel}
+  role="combobox"
   aria-haspopup="listbox"
+  aria-controls={idLista}
   aria-expanded={aberto}
+  aria-activedescendant={aberto && visiveis.length ? `${idLista}-${ativo}` : undefined}
   onclick={() => (aberto ? fechar() : abrir())}
   onkeydown={teclado}
 >
@@ -166,16 +179,26 @@
         placeholder="filtrar…"
         autocapitalize="off"
         spellcheck="false"
+        role="combobox"
+        aria-controls={idLista}
+        aria-expanded="true"
+        aria-activedescendant={visiveis.length ? `${idLista}-${ativo}` : undefined}
         bind:value={filtro}
         oninput={() => (ativo = 0)}
         onkeydown={teclado}
       />
     {/if}
-    <div class="sel-itens" bind:this={listaEl}>
+    <div class="sel-itens" id={idLista} bind:this={listaEl}>
       {#each visiveis as o, i (o.value)}
+        <!-- tabindex="-1" + id: padrão ARIA de listbox é UM ponto de foco (o botão/filtro) e o item
+             corrente apontado por aria-activedescendant. Sem o -1 cada item virava parada própria do
+             Tab, e como eles vivem no fim do <body> (portal) o Tab entrava na lista pela ordem física
+             do DOM, longe do campo — os itens não têm handler de teclado, então ali nem Escape valia. -->
         <button
           type="button"
           class="sel-item"
+          id="{idLista}-{i}"
+          tabindex="-1"
           class:atual={o.value === value}
           data-ativo={i === ativo}
           title={o.title}
