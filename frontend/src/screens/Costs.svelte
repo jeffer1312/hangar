@@ -4,11 +4,12 @@
   import { fetchCostsForServer } from '../lib/api';
   import {
     mergeReports, fillDayGaps, tarifasPorModelo, custoDesconhecido, precoParcial, partirOcultos,
-    custoSemCacheDe, equivalenteDe,
+    custoSemCacheDe, equivalenteDe, isFree,
     type ServerResult, type MergedReport,
   } from '../lib/costs';
   import { agruparPor, aplicar, filtrar, somar, type Filtro } from '../lib/cubo';
   import { dec, tok, money, money2, type Cur } from '../lib/fmt';
+  import { projectLabel } from '../lib/format';
   import type { ComboRow, DimBucket } from '../lib/types';
 
   interface Props { onBack: () => void; }
@@ -174,14 +175,29 @@
   const rotulos = $derived(new Map(
     report.by_provider.filter((b) => b.label).map((b) => [b.key, b.label as string])));
   const rot = (b: DimBucket) => b.label || rotulos.get(b.key) || b.key;
+  // Nome legível de uma chave no rótulo do recorte: provedor usa o e-mail (rotulos), projeto o
+  // basename — o caminho cru de 80 chars no texto do recorte não é "nome amigável" de nada.
+  const nomeDa = (d: Dim, key: string) =>
+    d === 'provider' ? (rotulos.get(key) ?? key) : d === 'project' ? projectLabel(key) : key;
 
   // A lista de UMA dimensão é o RECORTE COMPLETO, incluindo o filtro da própria dimensão:
   // com o modelo X selecionado, a tabela "Por modelo" mostra só o X — decidido 2026-08-06, o
   // desenho antigo (nunca o próprio filtro) mostrava todos os modelos com custos do período
-  // inteiro, e a tela parecia ignorar o filtro. Trocar de valor exige "limpar filtros", que é
-  // o botão ali em cima.
+  // inteiro, e a tela parecia ignorar o filtro. Quem usa é o PAINEL da dimensão.
   const listaDa = (d: Dim): DimBucket[] =>
     temCombos ? agruparPor(filtrar(base, filtroAtivo), d) : listaCrua(d);
+
+  // O que cada SELETOR lista: cruzado com os OUTROS filtros, nunca com o próprio. Se o seletor
+  // também filtasse a si mesmo, ao escolher um valor ele encolheria pra 1 opção e não haveria
+  // como trocar de modelo/projeto sem "limpar filtros" — o filtro funciona, a navegação é que
+  // quebrava (medido na revisão de 06/08). O valor selecionado continua na lista, porque o filtro
+  // da própria dimensão não é aplicado ao listá-la.
+  const opcoesDa = (d: Dim): DimBucket[] =>
+    temCombos ? agruparPor(filtrar(base, { ...filtroAtivo, [d]: undefined }), d) : listaCrua(d);
+  const opcoesProvedor = $derived(opcoesDa('provider'));
+  const opcoesFonte = $derived(opcoesDa('source'));
+  const opcoesProjeto = $derived(opcoesDa('project'));
+  const opcoesModelo = $derived(opcoesDa('model'));
 
   // Os números do topo saem do CRUZAMENTO. Sem detalhamento sai do balde de UMA dimensão nos
   // `by_*`, exatamente como a tela fazia antes — e o `aplicar` garante que ali só existe uma
@@ -198,7 +214,7 @@
   // "Recorte: provedor anthropic:758a9521-…".
   const descricaoFiltro = $derived([
     ...DIMS.filter((d) => filtroAtivo[d])
-      .map((d) => `${NOME_DIM[d]} ${rotulos.get(filtroAtivo[d] as string) ?? filtroAtivo[d]}`),
+      .map((d) => `${NOME_DIM[d]} ${nomeDa(d, filtroAtivo[d] as string)}`),
     ...(filtroAtivo.subagente === undefined
       ? [] : [filtroAtivo.subagente ? 'só subagente' : 'só conversa']),
   ].join(' · '));
@@ -359,9 +375,6 @@
   const partido = $derived(partirOcultos(projetos, ocultos));
   const projetosOcultos = $derived(partido.escondidos);
   const picoProjeto = $derived(partido.pico);
-  const TETO_PROJETOS = 12;
-  const projetosNoTeto = $derived(partido.visiveis.slice(0, TETO_PROJETOS));
-  const projetosRestantes = $derived(partido.visiveis.slice(TETO_PROJETOS));
 
   // Pico pelo MAIOR da lista, não pelo primeiro item: presumir que a lista já veio ordenada
   // acopla a barra a uma garantia que mora noutro arquivo (`ordenar`, em lib/costs.ts).
@@ -436,8 +449,8 @@
       <span class="flabel" id="lbl-prov">provedor</span>
       <select aria-labelledby="lbl-prov" value={filtroAtivo.provider ?? ''}
         onchange={(e) => setFiltro('provider', e.currentTarget.value)}>
-        <option value="">todos ({provedores.length})</option>
-        {#each provedores as b}<option value={b.key}>{rot(b)} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
+        <option value="">todos ({opcoesProvedor.length})</option>
+        {#each opcoesProvedor as b}<option value={b.key}>{rot(b)} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
       </select>
     </span>
 
@@ -445,8 +458,8 @@
       <span class="flabel" id="lbl-fonte">fonte</span>
       <select aria-labelledby="lbl-fonte" value={filtroAtivo.source ?? ''}
         onchange={(e) => setFiltro('source', e.currentTarget.value)}>
-        <option value="">todas ({fontes.length})</option>
-        {#each fontes as b}<option value={b.key}>{b.key} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
+        <option value="">todas ({opcoesFonte.length})</option>
+        {#each opcoesFonte as b}<option value={b.key}>{b.key} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
       </select>
     </span>
 
@@ -454,8 +467,8 @@
       <span class="flabel" id="lbl-proj">projeto</span>
       <select aria-labelledby="lbl-proj" value={filtroAtivo.project ?? ''}
         onchange={(e) => setFiltro('project', e.currentTarget.value)}>
-        <option value="">todos ({projetos.length})</option>
-        {#each projetos as b}<option value={b.key}>{b.key} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
+        <option value="">todos ({opcoesProjeto.length})</option>
+        {#each opcoesProjeto as b}<option value={b.key}>{projectLabel(b.key)} — {custoDesconhecido(b) ? '—' : m(b.cost)}</option>{/each}
       </select>
     </span>
 
@@ -463,11 +476,11 @@
       <span class="flabel" id="lbl-mod">modelo</span>
       <select aria-labelledby="lbl-mod" value={filtroAtivo.model ?? ''}
         onchange={(e) => setFiltro('model', e.currentTarget.value)}>
-        <option value="">todos ({modelos.length})</option>
+        <option value="">todos ({opcoesModelo.length})</option>
         <!-- Mesma regra da tabela: modelo sem tarifa não vale "US$ 0,00" nem aqui. E o traço
              sozinho, num rótulo que já tem um travessão separador, saía "claude-sonnet-4 — —". -->
-        {#each modelos as b}
-          <option value={b.key}>{b.key} — {tarifas.has(b.key) ? m(b.cost) : 'sem tarifa'}</option>
+        {#each opcoesModelo as b}
+          <option value={b.key}>{b.key} — {tarifas.has(b.key) ? m(b.cost) : isFree(b.key) ? 'grátis' : 'sem tarifa'}</option>
         {/each}
       </select>
     </span>
@@ -759,28 +772,22 @@
         A pasta onde a sessão rodou. Clique para recortar; o × tira da lista sem tirar da conta.{#if temFiltro}{RESSALVA}{/if}
       </p>
       <div class="rank">
-        {#each projetosNoTeto as b}
+        {#each partido.visiveis as b}
           <div class="row">
             <button aria-pressed={filtroAtivo.project === b.key}
               title="clique para recortar" onclick={() => alternar('project', b.key)}>
-              <span class="nm">{b.key}</span><span class="vl">{custoDesconhecido(b) ? '—' : m2(b.cost)}</span>
+              <span class="nm" title={b.key}>{projectLabel(b.key)}</span><span class="vl">{custoDesconhecido(b) ? '—' : m2(b.cost)}</span>
               <span class="track" style="width: {Math.max(1.5, (b.cost / picoProjeto) * 100)}%">
                 {#each TIPOS as t}{#if custoDe(b, t.id) > 0}<i style="background: var({t.slot}); flex: {custoDe(b, t.id)}"></i>{/if}{/each}
               </span>
             </button>
-            <button class="hidebtn" aria-label="tirar {b.key} da lista"
+            <button class="hidebtn" aria-label="tirar {projectLabel(b.key)} da lista"
               title="tirar da lista (o gasto continua contando)"
               onclick={() => { const s = new Set(ocultos); s.add(b.key); ocultos = s; salvarOcultos(); }}>×</button>
           </div>
         {:else}
           <p class="empty">Sem dados no período.</p>
         {/each}
-        {#if projetosRestantes.length}
-          <p class="note">
-            + {projetosRestantes.length} projetos somando
-            {m2(projetosRestantes.reduce((t, b) => t + b.cost, 0))}
-          </p>
-        {/if}
         {#if projetosOcultos.length}
           <div class="hiddenbar">
             <span>
@@ -788,8 +795,8 @@
               ({m2(projetosOcultos.reduce((t, b) => t + b.cost, 0))}, ainda somando no total):
             </span>
             {#each projetosOcultos as b}
-              <button onclick={() => { const s = new Set(ocultos); s.delete(b.key); ocultos = s; salvarOcultos(); }}>
-                {b.key} ✕
+              <button title={b.key} onclick={() => { const s = new Set(ocultos); s.delete(b.key); ocultos = s; salvarOcultos(); }}>
+                {projectLabel(b.key)} ✕
               </button>
             {/each}
             <button onclick={() => { ocultos = new Set(); salvarOcultos(); }}>mostrar todos</button>
@@ -827,7 +834,7 @@
               {@const parcial = precoParcial(b.key, comPreco, report.sem_tarifa)}
               <tr class="click" aria-selected={filtroAtivo.model === b.key}
                 onclick={() => alternar('model', b.key)}>
-                <td>{b.key}{#if !comPreco}<span class="tag">sem tarifa</span>{:else if parcial}<span
+                <td>{b.key}{#if !comPreco}<span class="tag">{isFree(b.key) ? 'grátis' : 'sem tarifa'}</span>{:else if parcial}<span
                   class="tag" title="um servidor da malha não conhece a tarifa deste modelo — o volume dele conta, o custo não">preço parcial</span>{/if}</td>
                 <td class="n">{tok(b.input)}</td>
                 <td class="n">{tok(b.output)}</td>

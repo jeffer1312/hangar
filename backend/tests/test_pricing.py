@@ -57,6 +57,17 @@ def test_canoniza_apelidos_de_motor():
     assert pricing.canonizar("cx/gpt-5.6-sol-high") == "gpt-5.6-sol"
 
 
+def test_canoniza_ids_antigos_pra_tarifa_de_hoje():
+    # Ids que o histórico ainda grava mas o models.dev renomeou: sem o alias, o volume deles sairia
+    # como "sem tarifa" com traço, e o custo real (recalculado com o preço de hoje, como o app já
+    # faz com o histórico inteiro) sumiria.
+    assert pricing.canonizar("claude-sonnet-4") == "claude-sonnet-4-5"
+    assert pricing.canonizar("claude-haiku-4.5") == "claude-haiku-4-5-20251001"
+    assert pricing.canonizar("deepseek-v4-flash-0731") == "deepseek-v4-flash"
+    # E o alias converge com a forma nova: o mesmo modelo não pode virar duas linhas no painel.
+    assert pricing.canonizar("claude-sonnet-4") == pricing.canonizar("claude-sonnet-4-5")
+
+
 def test_canoniza_prefixo_de_provedor_do_pi():
     assert pricing.canonizar("cline-pass/kimi-k3") == "kimi-k3"
     assert pricing.canonizar("openrouter/deepseek/deepseek-v4-flash") == "deepseek-v4-flash"
