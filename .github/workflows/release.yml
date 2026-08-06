@@ -58,9 +58,14 @@ jobs:
       # Checksum ao lado do binario: os instaladores NAO sao assinados (assinar exige certificado
       # pago no Windows e conta de desenvolvedor no macOS), entao o sha256 e o que permite a quem
       # baixa conferir que o arquivo nao chegou corrompido ou trocado no caminho.
+      # Gerado DE DENTRO do dist/ e com o nome puro: a primeira versao gravava o caminho de build
+      # ("dist/Claude Cockpit-0.1.0.AppImage"), e ai quem baixava o arquivo solto e rodava
+      # `sha256sum -c` levava "FALHA na abertura ou na leitura" — o checksum existia e nao servia
+      # pra nada. Medido em 05/08/2026 baixando a propria release.
       - name: Gerar sha256
+        working-directory: shell/dist
         run: |
-          for f in ${{ matrix.glob }}; do
+          for f in $(basename -a ../${{ matrix.glob }}); do
             shasum -a 256 "$f" > "$f.sha256" 2>/dev/null || sha256sum "$f" > "$f.sha256"
           done
       - name: Anexar artefato na release
