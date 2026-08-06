@@ -440,7 +440,8 @@
   const m2Foco = (n: number) => (semTarifa || recorteVazio ? '—' : m2(n));
   // Par do painel de cache: com detalhamento o recorte, sem ele os totais do período — o traço
   // segue o MESMO alvo do par (sem detalhamento + filtro, o painel continua período inteiro).
-  const semTarifaCache = $derived(temCombos ? semTarifa : custoDesconhecido(report.totals));
+  const semTarifaCache = $derived(
+    temCombos ? (semTarifa || recorteVazio) : custoDesconhecido(report.totals));
   const mPainel = (n: number) => (semTarifaCache ? '—' : m(n));
   const m2Painel = (n: number) => (semTarifaCache ? '—' : m2(n));
 
