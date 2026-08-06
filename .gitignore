@@ -71,3 +71,11 @@ docs/handoffs/
 # frontend/.gitignore ja cobre o de la). Sem esta regra, um `npm`/`vite` rodado da raiz deixa um
 # node_modules aparecendo como nao-rastreado.
 node_modules/
+
+# Worktrees locais do superpowers (git worktree add). Sem isto, o conteudo inteiro da worktree
+# aparece como nao-rastreado no `git status` do repo principal.
+.worktrees/
+
+# Saida dos subagentes do Pi. Nao e fonte, e cresce sozinha: 40 MB medidos em 06/08/2026. Sem esta
+# regra, um `git add -A` distraido leva tudo isso pro repo.
+.pi-subagents/
