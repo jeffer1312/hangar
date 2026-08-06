@@ -11,8 +11,10 @@ import type { ComboLocal, DimBucket } from './types';
 export type Metrica = 'tokens' | 'custo';
 
 // Os quatro tipos somados. Vive aqui porque a mesma soma já estava copiada em três lugares.
+// `?? 0` por campo: servidor antigo pode omitir um tipo de token, e soma crua vira NaN na série
+// — o mesmo cuidado que `acumular`/`somarBucket` têm em todo o resto do módulo.
 export const brutos = (b: { input: number; output: number; cache_write: number; cache_read: number }): number =>
-  b.input + b.output + b.cache_write + b.cache_read;
+  (b.input ?? 0) + (b.output ?? 0) + (b.cache_write ?? 0) + (b.cache_read ?? 0);
 
 export const valorDe = (b: DimBucket, m: Metrica): number =>
   m === 'custo' ? b.cost : brutos(b);
@@ -23,12 +25,14 @@ export const valorDe = (b: DimBucket, m: Metrica): number =>
 // getUTC*/setUTC*, o horário de verão nunca entra na conta.
 export function segundaDe(dia: string): string {
   const d = new Date(`${dia}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return dia; // data malformada degrada, não derruba o painel
   d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); // 0 = segunda
   return d.toISOString().slice(0, 10);
 }
 
 function somaDias(x: string, n: number): string {
   const d = new Date(`${x}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return x; // idem — toISOString de Invalid Date LANÇA
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 }
@@ -52,7 +56,7 @@ export function serieComparada(
     // Zera as OUTRAS entidades no mesmo ponto: sem isto, um dia em que só a Kimi rodou deixaria a
     // linha da Anthropic sem valor ali, e o gráfico pularia o ponto em vez de encostar no chão.
     if (!v) { v = chaves.map(() => 0); acc.set(x, v); }
-    v[i] += m === 'custo' ? c.cost : brutos(c);
+    v[i] += m === 'custo' ? (c.cost ?? 0) : brutos(c);
   }
   if (!acc.size) return [];
   // E os dias em que NINGUÉM rodou: sem eles o eixo espaça por índice e duas datas separadas por

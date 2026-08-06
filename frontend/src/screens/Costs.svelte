@@ -561,7 +561,10 @@
     temCombos ? serieComparada(baseComp, dimComp, marcadas, metrica, semanal) : []);
   const totalComparado = $derived(cartoes.reduce((s, b) => s + valorDe(b, metrica), 0));
   const corDe = (i: number) => `--chart-${i + 1}`;
-  const valorFmt = (b: DimBucket) => (metrica === 'custo' ? m2(b.cost) : tok(brutos(b)));
+  // Custo desconhecido mostra traço, não "US$ 0,00" — a mesma regra dos rankings: o zero afirma
+  // "não gastou nada" quando a verdade é "não tem tarifa pra saber".
+  const valorFmt = (b: DimBucket) =>
+    metrica === 'custo' ? (custoDesconhecido(b) ? '—' : m2(b.cost)) : tok(brutos(b));
   const rotuloMetrica = (v: number) => (metrica === 'custo' ? m(v) : tok(v));
 
   // Modelos sem tarifa que estão sendo cobrados da conta Anthropic — o furo de atribuição que
@@ -1173,10 +1176,10 @@
                 <span class="swatch" style="background: var({corDe(i)})"></span>{nomeDa(dimComp, b.key)}
               </div>
               <div class="cmpvalor">{valorFmt(b)}</div>
-              <div class="foot">{metrica === 'custo' ? tok(brutos(b)) : m2(b.cost)}</div>
+              <div class="foot">{metrica === 'custo' ? tok(brutos(b)) : (custoDesconhecido(b) ? '—' : m2(b.cost))}</div>
               <div class="foot">{sess(b.sessions)}</div>
-              <div class="foot">{pct(valorDe(b, metrica), totalComparado)} do comparado</div>
-              <div class="foot">{rotuloMetrica(valorDe(b, metrica) / diasDoPeriodo)}/dia</div>
+              <div class="foot">{(metrica === 'custo' && custoDesconhecido(b)) ? '—' : pct(valorDe(b, metrica), totalComparado)} do comparado</div>
+              <div class="foot">{(metrica === 'custo' && custoDesconhecido(b)) ? '—' : rotuloMetrica(valorDe(b, metrica) / diasDoPeriodo)}/dia</div>
             </div>
           {/each}
         </div>
