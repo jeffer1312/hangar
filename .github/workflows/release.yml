@@ -55,7 +55,15 @@ jobs:
       - run: npm ci
       # --publish never: quem publica é o gh release upload logo abaixo, não o electron-builder.
       - run: npm run dist -- --publish never
+      # Checksum ao lado do binario: os instaladores NAO sao assinados (assinar exige certificado
+      # pago no Windows e conta de desenvolvedor no macOS), entao o sha256 e o que permite a quem
+      # baixa conferir que o arquivo nao chegou corrompido ou trocado no caminho.
+      - name: Gerar sha256
+        run: |
+          for f in ${{ matrix.glob }}; do
+            shasum -a 256 "$f" > "$f.sha256" 2>/dev/null || sha256sum "$f" > "$f.sha256"
+          done
       - name: Anexar artefato na release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$GITHUB_REF_NAME" ${{ matrix.glob }} --clobber
+        run: gh release upload "$GITHUB_REF_NAME" ${{ matrix.glob }} ${{ matrix.glob }}.sha256 --clobber
