@@ -1,6 +1,7 @@
 <script lang="ts">
   import NavBar from '../components/NavBar.svelte';
   import MessageList from '../components/MessageList.svelte';
+  import Select from '../components/Select.svelte';
   import {
     getArchive, getArchiveFolder, getArchiveHistory, archiveImageUrl, resumeArchivedConversation,
     getEngines, type ArchiveFolder, type ArchiveEntry, type Motor,
@@ -157,12 +158,11 @@
       {#if Object.keys(motores).length}
         <label class="engine-pick">
           <span class="engine-pick-label">Motor</span>
-          <select bind:value={engine}>
-            <option value="">Claude (sua conta)</option>
-            {#each Object.entries(motores) as [nome, m] (nome)}
-              <option value={nome}>{m.label ?? nome} · {m.model}</option>
-            {/each}
-          </select>
+          <Select ariaLabel="Motor" value={engine}
+            opcoes={[{ value: '', label: 'Claude (sua conta)' },
+                     ...Object.entries(motores).map(([nome, m]) => ({
+                       value: nome, label: m.label ?? nome, hint: m.model }))]}
+            onchange={(v) => (engine = v)} />
         </label>
         <!-- O app nao sabe qual motor rodava esta conversa (o pane original morreu, sem /proc pra
              ler) -- so o nome do modelo fica gravado no transcript. Escolha e sua, nao memoria. -->
@@ -381,15 +381,13 @@
     color: var(--text-secondary);
     font-weight: 500;
   }
-  .engine-pick select {
+  /* :global: o campo é o <button> do Select.svelte. Mantém os 44px de alvo de toque desta tela (o
+     padrão do componente é 40) e a fonte de UI em vez da mono. */
+  .engine-pick :global(.sel-campo) {
     height: 44px;
     background: var(--bg-surface);
-    border: 1px solid var(--border-default);
     border-radius: var(--radius-md);
-    color: var(--text-primary);
     font-family: var(--font-ui);
-    font-size: 16px;
-    padding: 0 var(--space-3);
   }
   .engine-pick-hint {
     font-size: var(--text-xs);

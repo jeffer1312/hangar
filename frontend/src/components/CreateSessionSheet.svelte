@@ -1,6 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import BottomSheet from './BottomSheet.svelte';
+  import Select from './Select.svelte';
   import FolderScanner from './FolderScanner.svelte';
   import { getSessions, listClaudeConfigs, getEngines, type Motor } from '../lib/api';
   import { basename, providerName } from '../lib/format';
@@ -270,23 +271,22 @@
       {#if provider === 'claude' && configs.length > 1}
         <div class="field">
           <label class="field-label" for="cfg-pick">Claude config</label>
-          <select id="cfg-pick" class="field-input" bind:value={selectedConfig}>
-            {#each configs as c (c.path)}
-              <option value={c.path}>{c.label}{c.active ? ' (atual)' : ''}</option>
-            {/each}
-          </select>
+          <Select id="cfg-pick" class="field-input" ariaLabel="Configuração"
+            value={selectedConfig ?? ''}
+            opcoes={configs.map((c) => ({
+              value: c.path, label: c.label, hint: c.active ? 'atual' : undefined, title: c.path }))}
+            onchange={(v) => (selectedConfig = v)} />
         </div>
       {/if}
 
       {#if provider === 'claude' && Object.keys(motores).length}
         <div class="field">
           <label class="field-label" for="engine-pick">Motor</label>
-          <select id="engine-pick" class="field-input" bind:value={engine}>
-            <option value="">Claude (sua conta)</option>
-            {#each Object.entries(motores) as [nome, m] (nome)}
-              <option value={nome}>{m.label ?? nome} · {m.model}</option>
-            {/each}
-          </select>
+          <Select id="engine-pick" ariaLabel="Motor" value={engine}
+            opcoes={[{ value: '', label: 'Claude (sua conta)' },
+                     ...Object.entries(motores).map(([nome, m]) => ({
+                       value: nome, label: m.label ?? nome, hint: m.model }))]}
+            onchange={(v) => (engine = v)} />
         </div>
       {/if}
 

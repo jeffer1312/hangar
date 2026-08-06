@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ConfigServidorStore } from '../../lib/serverConfig.svelte';
   import { listarVozesTts, saldoTts, type TtsVoz } from '../../lib/api';
+  import Select from '../Select.svelte';
   import { ttsPlayer } from '../../lib/ttsPlayer.svelte';
   import { ouvirAmostra } from '../../lib/ouvir';
   import { cortarAmostra } from '../../lib/ttsFormat';
@@ -236,19 +237,18 @@
           <p class="aviso erro">{vozErro}</p>
           <button class="btn" onclick={carregarVozes} disabled={carregandoVozes}>Tentar de novo</button>
         {:else if vozes.length}
-          <select
+          <!-- Sem fallback pra vozes[0]: o servidor usa VOZ_PADRAO (tts.py) quando o campo esta
+               vazio, que NAO e a primeira voz da conta — mostrar a 1a aqui mentia sobre o que toca.
+               A opcao explicita tambem torna a 1a voz da lista escolhivel: com o fallback,
+               escolhe-la deixava o value igual ao que ja estava e o onchange nunca disparava. -->
+          <Select
             class="campo-select"
-            aria-label="Voz"
-            value={store.valorAtual('elevenlabs_voice_id') || ''}
-            onchange={(e) => store.setRascunho('elevenlabs_voice_id', e.currentTarget.value)}
-          >
-            <!-- Sem fallback pra vozes[0]: o servidor usa VOZ_PADRAO (tts.py) quando o campo esta
-                 vazio, que NAO e a primeira voz da conta — mostrar a 1a aqui mentia sobre o que
-                 toca. A opcao explicita tambem torna a 1a voz da lista escolhivel: com o fallback,
-                 escolhe-la deixava o value igual ao que ja estava e o onchange nunca disparava. -->
-            <option value="">Padrão do servidor</option>
-            {#each vozes as v (v.id)}<option value={v.id}>{v.nome}</option>{/each}
-          </select>
+            ariaLabel="Voz"
+            value={String(store.valorAtual('elevenlabs_voice_id') ?? '')}
+            opcoes={[{ value: '', label: 'Padrão do servidor' },
+                     ...vozes.map((v) => ({ value: v.id, label: v.nome }))]}
+            onchange={(v) => store.setRascunho('elevenlabs_voice_id', v)}
+          />
         {:else}
           <button class="btn" onclick={carregarVozes} disabled={carregandoVozes}>
             {carregandoVozes ? 'Carregando…' : 'Carregar vozes da conta'}
@@ -399,16 +399,14 @@
      linha aqui e a largura do PAINEL (dock desktop tem ~530px), nao a viewport. */
   .tts-extra { container-type: inline-size; margin-top: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--border-subtle); }
   .tts-extra h3 { margin: 0 0 var(--space-2); font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary); }
-  .campo-select {
-    width: 100%; height: 40px;
-    background: var(--surface-inset);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
+  /* :global: o campo é o <button> do Select.svelte. Fonte de UI (nome de voz não é identificador) e
+     a mesma regra de container: acima de 360px encolhe pra caber ao lado do resto. */
+  .tts-extra :global(.campo-select) {
+    width: 100%;
+    font-family: var(--font-ui);
     font-size: var(--text-sm);
-    padding: 0 var(--space-3);
   }
-  @container (min-width: 360px) { .campo-select { width: auto; min-width: 220px; } }
+  @container (min-width: 360px) { .tts-extra :global(.campo-select) { width: auto; min-width: 220px; } }
 
   .amostra { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); align-items: flex-start; }
 

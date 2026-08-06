@@ -605,6 +605,23 @@ button:active:not(:disabled) {
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* ── Lista aberta do <select> nativo ────────────────────────────────────────────────────────
+   GLOBAL, não scoped: 8 componentes têm <select> e cada um estiliza só o CAMPO FECHADO. A lista
+   aberta é desenhada pelo SO, fora do DOM do componente — CSS scoped do Svelte nunca a alcança
+   (o atributo de escopo não chega no popup), então a regra tem que morar aqui.
+
+   `color-scheme: dark` no :root já deveria bastar, mas o Chromium só o aplica ao popup quando o
+   <option> não tem cor própria herdada de um ancestral estilizado; com o tema aqui o resultado era
+   uma caixa BRANCA de texto claro — ilegível. Declarar background/color no option resolve nos dois
+   temas. `font-family` porque o campo fechado usa mono e a lista voltava pra sans, desalinhando os
+   ids de modelo (deepseek-v4-flash vs deepseek-v4-pro) que é justo o que se compara na hora. */
+option, optgroup {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+option:checked { background: var(--accent); color: #fff; }
+
 /* ── Bloco de código (renderMarkdown): caixa com header (linguagem + copiar + expandir) ──────
    GLOBAL, nao scoped num componente: o markup vem do renderMarkdown e aparece em qualquer tela
    (chat, PairSheet, ActivitySheet, plano, hover preview). As acoes (copiar/expandir) sao do

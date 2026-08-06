@@ -1,5 +1,6 @@
 <script lang="ts">
   import ConfirmDialog from '../ConfirmDialog.svelte';
+  import Select from '../Select.svelte';
   import {
     getEngines, getEnginesForServer,
     putEngine, putEngineForServer,
@@ -47,6 +48,7 @@
     tool_search: false,
     gateway_model_discovery: false,
     fine_grained_tool_streaming: false,
+    auth_via_api_key: false,
     auto_compact_window: '',
     max_output_tokens: '',
   };
@@ -70,6 +72,7 @@
     tool_search: boolean;
     gateway_model_discovery: boolean;
     fine_grained_tool_streaming: boolean;
+    auth_via_api_key: boolean;
     auto_compact_window: string;
     max_output_tokens: string;
     existente: boolean;
@@ -100,11 +103,11 @@
   // chamadas é erro de COMPILAÇÃO. Com cast, um typo passava no check e só aparecia rodando: o
   // toggle nascia sempre desligado e a escrita criava um campo fantasma que ia junto no salvar().
   type ChaveLiga = 'bundled_skills' | 'experimental_betas' | 'prompt_caching' | 'adaptive_thinking'
-    | 'tool_search' | 'gateway_model_discovery' | 'fine_grained_tool_streaming';
+    | 'tool_search' | 'gateway_model_discovery' | 'fine_grained_tool_streaming' | 'auth_via_api_key';
   type ChaveNum = 'auto_compact_window' | 'max_output_tokens';
   // A própria chave decide o controle — não há parâmetro `tipo` pra discordar dela.
   const CHAVES_LIGA = ['bundled_skills', 'experimental_betas', 'prompt_caching', 'adaptive_thinking',
-    'tool_search', 'gateway_model_discovery', 'fine_grained_tool_streaming'] as const;
+    'tool_search', 'gateway_model_discovery', 'fine_grained_tool_streaming', 'auth_via_api_key'] as const;
   const ehLiga = (k: ChaveLiga | ChaveNum): k is ChaveLiga =>
     (CHAVES_LIGA as readonly string[]).includes(k);
   const ligado = (k: ChaveLiga) => !!form && form[k];
@@ -165,6 +168,7 @@
       tool_search: m.tool_search === true,
       gateway_model_discovery: m.gateway_model_discovery === true,
       fine_grained_tool_streaming: m.fine_grained_tool_streaming === true,
+      auth_via_api_key: m.auth_via_api_key === true,
       auto_compact_window: m.auto_compact_window ? String(m.auto_compact_window) : '',
       max_output_tokens: m.max_output_tokens ? String(m.max_output_tokens) : '',
       existente: true,
@@ -246,6 +250,7 @@
       corpo.tool_search = form.tool_search;
       corpo.gateway_model_discovery = form.gateway_model_discovery;
       corpo.fine_grained_tool_streaming = form.fine_grained_tool_streaming;
+      corpo.auth_via_api_key = form.auth_via_api_key;
       if (form.auto_compact_window) corpo.auto_compact_window = Number(form.auto_compact_window);
       if (form.max_output_tokens) corpo.max_output_tokens = Number(form.max_output_tokens);
 
@@ -356,13 +361,16 @@
       <label class="campo">
         <span class="rot">Modelo</span>
         {#if modelos.length}
-          <select value={form.model} onchange={(e) => escolherModelo(e.currentTarget.value)}>
-            {#each modelos as m (m.id)}
-              <option value={m.id}>
-                {m.id}{m.context_length ? ` · ${Math.round(m.context_length / 1000)}k` : ''}
-              </option>
-            {/each}
-          </select>
+          <Select
+            ariaLabel="Modelo"
+            value={form.model}
+            opcoes={modelos.map((m) => ({
+              value: m.id,
+              label: m.id,
+              hint: m.context_length ? `${Math.round(m.context_length / 1000)}k` : undefined,
+            }))}
+            onchange={escolherModelo}
+          />
         {:else}
           <input type="text" placeholder="id do modelo" autocapitalize="off" spellcheck={false}
                  value={form.model} oninput={(e) => (form!.model = e.currentTarget.value)} />
@@ -378,13 +386,13 @@
       <label class="campo">
         <span class="rot">Modelo dos subagentes</span>
         {#if modelos.length}
-          <select value={form.subagent_model}
-                  onchange={(e) => (form!.subagent_model = e.currentTarget.value)}>
-            <option value="">mesmo que o principal</option>
-            {#each modelos as m (m.id)}
-              <option value={m.id}>{m.id}</option>
-            {/each}
-          </select>
+          <Select
+            ariaLabel="Modelo dos subagentes"
+            value={form.subagent_model}
+            opcoes={[{ value: '', label: 'mesmo que o principal' },
+                     ...modelos.map((m) => ({ value: m.id, label: m.id }))]}
+            onchange={(v) => (form!.subagent_model = v)}
+          />
         {:else}
           <input type="text" placeholder="vazio = mesmo que o principal" autocapitalize="off" spellcheck={false}
                  value={form.subagent_model} oninput={(e) => (form!.subagent_model = e.currentTarget.value)} />
@@ -494,6 +502,13 @@
         {#snippet mSaida()}
           Par do campo acima. Mantenha abaixo do limite de saída do modelo no provedor.
         {/snippet}
+        {#snippet mAuthHeader()}
+          Ligue só se o provedor recusar a chave com <code>401 Missing API key</code> mesmo com a
+          chave certa. Alguns provedores (opencode zen, em <code>opencode.ai/zen/go</code>) leem a
+          chave apenas no header <code>x-api-key</code> e ignoram o <code>Authorization: Bearer</code>
+          que vai por padrão — para eles, o Bearer equivale a não mandar credencial. Ligado, a chave
+          vai nos dois headers.
+        {/snippet}
 
         <div class="grade">
           {@render linha('bundled_skills', 'Skills empacotadas', 'Recomendado: desligado', '', mSkills)}
@@ -509,6 +524,8 @@
             descobertaComprovada ? `Recomendado: ligado (${modelos.length} modelos)` : 'Teste o provedor antes',
             descobertaComprovada ? 'sim' : '', mDescoberta)}
           {@render linha('fine_grained_tool_streaming', 'Streaming fino de tool', 'Recomendado: desligado', '', mStreaming)}
+          {@render linha('auth_via_api_key', 'Chave também em x-api-key',
+            'Ligue só se o provedor devolver 401 Missing API key', '', mAuthHeader)}
           {@render linha('auto_compact_window', 'Disparar compactação em', 'Recomendado: em branco', '', mCompactar)}
           {@render linha('max_output_tokens', 'Teto de saída', 'Recomendado: em branco', '', mSaida)}
         </div>
@@ -677,7 +694,9 @@
     padding: 2px 10px; font-size: 11px;
   }
 
-  input[type='text'], input[type='number'], select {
+  /* Os combos desta tela são o Select.svelte (o nativo abria a lista pra cima e o modal a cortava);
+     o estilo aqui vale pros inputs de texto, que precisam casar com o campo dele. */
+  input[type='text'], input[type='number'] {
     height: 40px;
     background: var(--surface-inset);
     border: 1px solid var(--border-default);
@@ -689,7 +708,7 @@
     outline: none;
     min-width: 0;
   }
-  input:focus, select:focus { border-color: var(--accent); }
+  input:focus { border-color: var(--accent); }
   input:disabled { opacity: 0.6; }
 
   /* Ações grudam no rodapé: o formulário de motor é alto (com o Avançado aberto passa de duas telas)
