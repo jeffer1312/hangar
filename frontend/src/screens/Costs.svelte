@@ -617,10 +617,14 @@
     // (por isso os círculos no markup).
     const x = (i: number) => (pontos.length > 1 ? padL + i * passo : (padL + W - 8) / 2);
     const y = (v: number) => padT + plotH - (v / teto) * plotH;
-    const linhas = marcadas.map((k, s) => ({
-      chave: k, slot: corDe(s),
-      pts: pontos.map((p, i) => ({ cx: x(i), cy: y(p.valores[s] ?? 0) })),
-      d: pontos.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.valores[s] ?? 0).toFixed(1)}`).join(' '),
+    // Iterar `chavesComSerie`, não `marcadas`: a série exclui entidade de custo desconhecido, e
+    // `valores[si]` casa com a posição dela no array de pontos. A cor usa a posição na lista ORIGINAL
+    // (marcadas), pra o swatch do cartão continuar casando com a linha da mesma entidade.
+    const indMarcada = new Map(marcadas.map((k, s) => [k, s]));
+    const linhas = chavesComSerie.map((k, si) => ({
+      chave: k, slot: corDe(indMarcada.get(k) ?? si),
+      pts: pontos.map((p, i) => ({ cx: x(i), cy: y(p.valores[si] ?? 0) })),
+      d: pontos.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.valores[si] ?? 0).toFixed(1)}`).join(' '),
     }));
     return { W, H, padL, padT, plotH, teto, x, yDe: y, linhas };
   });
