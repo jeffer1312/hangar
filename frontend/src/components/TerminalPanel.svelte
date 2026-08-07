@@ -178,11 +178,15 @@
   // padrao. `body` ja seta `color: var(--text-primary)` (app.css) e `host` herda -- de graca, sem
   // elemento nem estilo extra. --accent, ao contrario, e hex LITERAL nas duas paletas do app.css (sem
   // var() aninhado), entao ler a custom property direto e seguro ali.
-  function lerTema(el: HTMLElement) {
+  // A chave e `foreground`, NAO `fg`: o xterm ignora chave desconhecida em silencio e cai no branco
+  // padrao dele. Ficou errado por semanas sem ninguem ver porque o objeto entra no `theme` por
+  // ESPALHAMENTO (`{ background: ..., ...lerTema(el) }`), e propriedade vinda de spread escapa da
+  // checagem de excesso do TypeScript -- `svelte-check` passava limpo com o tema nunca sendo aplicado.
+  function lerTema(el: HTMLElement): { foreground: string; cursor: string } {
     const cs = getComputedStyle(el);
-    const fg = cs.color || '#d2cbcd';
-    const cursor = cs.getPropertyValue('--accent').trim() || fg;
-    return { fg, cursor };
+    const foreground = cs.color || '#d2cbcd';
+    const cursor = cs.getPropertyValue('--accent').trim() || foreground;
+    return { foreground, cursor };
   }
 
   // Constroi o Terminal+FitAddon com o mesmo tema/fonte das duas abas -- fatorado so pra nao duplicar
