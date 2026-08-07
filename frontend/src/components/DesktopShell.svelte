@@ -66,6 +66,11 @@
     terminalKey = workspaceSessionKey({ serverId, name: nome });
     terminalOpen = true;
   }
+  // Maximizado o painel cobre o chat mas continua translucido (mesmo veu do encaixado, ver
+  // TerminalPanel.svelte) -- entao o chat/board/canvas por baixo (.desktop-main) precisa ficar
+  // ESCONDIDO, senao o texto dele vaza por baixo do vidro. TerminalPanel avisa por callback porque
+  // quem decide maximizar/desmaximizar (inclusive ao fechar o painel maximizado) e ele, nao aqui.
+  let terminalMaximizado = $state(false);
 
   // Capacidade do painel (Task 6, Step 8): `pty` e POSIX-only, entao um servidor Windows na mistura
   // nao tem o painel -- sem o gate o botao abriria um painel morto. Le do SERVIDOR ATIVO (GET
@@ -271,7 +276,8 @@
            {view} onSelectView={selectView} onOpenCommand={() => (commandOpen = true)} />
 
   <div class="desktop-com-terminal">
-  <main class="desktop-main" class:split={splitSessions.length > 0} class:has-attention={hasAttention}>
+  <main class="desktop-main" class:split={splitSessions.length > 0} class:has-attention={hasAttention}
+        class:tp-max-hide={terminalMaximizado}>
     {#if hasAttention}
       <div class="workspace-attention-layer">
         <WorkspaceAttentionStrip {rows} onOpenSession={openSession} />
@@ -360,7 +366,8 @@
     {/if}
   </main>
   <TerminalPanel sessionName={terminalSession} connKey={terminalKey} open={terminalOpen}
-                 onClose={() => (terminalOpen = false)} />
+                 onClose={() => (terminalOpen = false)}
+                 onMaximizar={(v) => (terminalMaximizado = v)} />
   </div>
 
   <WorkspaceCommandPalette
@@ -398,6 +405,12 @@
     position: relative;
     overflow: hidden;
   }
+  /* Terminal maximizado: esconde o chat/board/canvas por baixo (o painel de contexto da direita
+     vem de graca, e um descendente de .desktop-main via Chat.svelte). `visibility`, NAO
+     `display: none` -- o mesmo criterio do TerminalPanel.svelte nas suas duas abas: display:none
+     zeraria a caixa, e o fit() do xterm (e o proprio layout do chat, que perderia scroll) depende
+     dela continuar existindo. */
+  .desktop-main.tp-max-hide { visibility: hidden; }
   .workspace-attention-layer {
     position: absolute;
     /* Subiu junto com a saida do seletor de view (que ocupava a faixa de 4-48px). */
