@@ -8,6 +8,7 @@
   import Board from '../screens/Board.svelte';
   import Canvas from '../screens/Canvas.svelte';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
+  import { getConfig } from '../lib/api';
   import { getActiveId, selectServer } from '../lib/auth';
   import type { AggSession } from '../lib/types';
   import {
@@ -65,6 +66,23 @@
     terminalKey = workspaceSessionKey({ serverId, name: nome });
     terminalOpen = true;
   }
+
+  // Capacidade do painel (Task 6, Step 8): `pty` e POSIX-only, entao um servidor Windows na mistura
+  // nao tem o painel -- sem o gate o botao abriria um painel morto. Le do SERVIDOR ATIVO (GET
+  // /api/config), e refaz a leitura a cada troca de sessao/servidor (currentKey/overlaySession):
+  // trocar pro servidor Windows nao pode herdar "capaz" do servidor Linux anterior. Default true
+  // (assume capaz) pra nao piscar pro espelho enquanto a resposta ainda nao chegou.
+  let terminalCapaz = $state(true);
+  $effect(() => {
+    void currentKey; void overlaySession;
+    let vivo = true;
+    getConfig()
+      .then((c) => { if (vivo) terminalCapaz = c.somente_leitura.terminal_panel !== false; })
+      // Falha de rede na config nao pode travar o botao: mantem o comportamento anterior (assume
+      // capaz) e deixa o proprio clique do usuario revelar o erro real, se houver.
+      .catch(() => { if (vivo) terminalCapaz = true; });
+    return () => { vivo = false; };
+  });
   const rows = $derived<AggSession[]>(sessionsStore.rows);
   const hasAttention = $derived(rows.some((row) => row.state === 'awaiting_input'));
 
@@ -264,6 +282,7 @@
               onNavigateToChat={onNavigateToChat}
               onOpenTerminalPanel={() => abrirTerminal(overlayName, overlaySession.serverId)}
               terminalPanelOpen={terminalOpen && terminalKey === workspaceSessionKey(overlaySession)}
+              terminalPanelDisponivel={terminalCapaz}
               topInset={hasAttention ? 52 : 0}
               onOpenWorkspacePalette={() => (commandOpen = true)}
               showContextPanel={true}
@@ -285,6 +304,7 @@
             onOpenSplit={openSplit}
             onOpenTerminalPanel={() => abrirTerminal(cur, getActiveId() ?? '')}
             terminalPanelOpen={terminalOpen && terminalKey === workspaceSessionKey({ serverId: getActiveId() ?? '', name: cur })}
+            terminalPanelDisponivel={terminalCapaz}
             topInset={hasAttention ? 52 : 0}
             onOpenWorkspacePalette={() => (commandOpen = true)}
             showContextPanel={splitSessions.length === 0}
@@ -304,6 +324,7 @@
             onNavigateToChat={onNavigateToChat}
             onOpenTerminalPanel={() => abrirTerminal(split, getActiveId() ?? '')}
             terminalPanelOpen={terminalOpen && terminalKey === workspaceSessionKey({ serverId: getActiveId() ?? '', name: split })}
+            terminalPanelDisponivel={terminalCapaz}
             topInset={hasAttention ? 52 : 0}
             onOpenWorkspacePalette={() => (commandOpen = true)}
           />

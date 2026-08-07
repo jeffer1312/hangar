@@ -1,5 +1,6 @@
 <script lang="ts">
   import { TermSocket, termUrl } from '../lib/term';
+  import { openShell } from '../lib/api';
 
   interface Props { sessionName: string; connKey: string; open: boolean; onClose: () => void; }
   let { sessionName, connKey, open, onClose }: Props = $props();
@@ -13,12 +14,46 @@
   let term: any = null;
   let fit: any = null;
   let ro: ResizeObserver | null = null;
-  let mo: MutationObserver | null = null;
+  let mo: MutationObserver | null = null;   // UM so -- cobre as duas abas (attach e shell)
   let alturaArrastada = '';   // altura que "resize: vertical" grava inline (guardada pra repor ao desmaximizar)
+
+  // ── Segunda aba: shell escondido (Task 6, Step 7) ───────────────────────────────────────────────
+  // A sessao tmux e a mesma que o backend cria/reata em POST /shell (separada e ESCONDIDA das tres
+  // views do app -- so o painel e o terminal nativo alcancam). So entra depois do primeiro clique na
+  // aba, pra nao gastar POST+fork de tmux em quem nunca abre o shell.
+  let abaAtiva = $state<'attach' | 'shell'>('attach');
+  let shellVisitada = false;                     // trava contra reclique repetindo o POST /shell
+  let shellNome = $state<string | null>(null);   // "term-<nome>" devolvido pelo backend -- e o ALVO
+  let shellErro = $state<string | null>(null);
+  let shellCarregando = $state(false);
+  let hostShell = $state<HTMLDivElement | null>(null);
+  let caiuShell = $state(false);
+  let geracaoShell = $state(0);
+  let sockShell: TermSocket | null = null;
+  let termShell: any = null;
+  let fitShell: any = null;
+  let roShell: ResizeObserver | null = null;
 
   // Fecha (o X) reseta o maximizado: sem isto o painel reabria maximizado por acidente, herdando
   // estado da vez anterior.
   $effect(() => { if (!open) maximizado = false; });
+
+  // Troca de sessao (outro Chat pediu o painel, MESMO mount) ou fechar o painel: a aba do shell era
+  // de outra sessao (ou de uma rodada anterior) -- esquece, senao o usuario digitaria no shell ERRADO
+  // com o rotulo da sessao nova por cima. Reabrir chama POST /shell de novo, que e idempotente (reata
+  // a MESMA sessao tmux) -- quem preserva a tela e o tmux, nao este estado.
+  $effect(() => {
+    void sessionName; void connKey; void open;
+    abaAtiva = 'attach';
+    shellVisitada = false;
+    shellNome = null;
+    shellErro = null;
+  });
+
+  // UX de troca de aba: joga o foco pro terminal que ficou visivel, senao o usuario precisa clicar
+  // dentro pra digitar depois de trocar. So dispara na troca -- nao precisa ler `term`/`termShell`
+  // como dependencia (nao sao $state; o valor lido AQUI, no disparo, ja e o atual).
+  $effect(() => { (abaAtiva === 'attach' ? term : termShell)?.focus(); });
 
   function toggleMax() {
     if (secEl) {
@@ -52,6 +87,46 @@
     return { fg, cursor };
   }
 
+  // Constroi o Terminal+FitAddon com o mesmo tema/fonte das duas abas -- fatorado so pra nao duplicar
+  // o comentario do 'rgba(0, 0, 0, 0)' (achado caro, ver abaixo) numa segunda copia que pode divergir.
+  function novoTerminal(hostEl: HTMLDivElement, TerminalCls: any, FitAddonCls: any) {
+    // getComputedStyle, nao `var(--font-mono)` cru: o renderer canvas monta
+    // `ctx.font = \`${size}px ${family}\``, onde var() e invalido e ignorado calado -> metrica de
+    // glifo errada e grade desalinhada.
+    const mono = getComputedStyle(hostEl).getPropertyValue('--font-mono').trim() || 'monospace';
+    const t = new TerminalCls({
+      fontFamily: mono, fontSize: 12, convertEol: false,
+      allowTransparency: true,
+      // 'rgba(0, 0, 0, 0)', NAO 'transparent': o parser de cor do xterm 6.0.0 (Color.ts) so casa
+      // hex/rgb()/rgba() -- 'transparent' cai no caminho do canvas e LANCA (alfa != 255 e
+      // rejeitado), o ThemeService ENGOLE a excecao calado e devolve o fallback #000000 opaco por
+      // cima do --surface-inset do .tp-screen (regra de vidro do CLAUDE.md). Medido no pacote
+      // instalado -- nao aparece nenhum erro no console, so o retangulo preto.
+      theme: { background: 'rgba(0, 0, 0, 0)', ...lerTema(hostEl) },
+    });
+    const f = new FitAddonCls();
+    t.loadAddon(f);
+    t.open(hostEl);
+    f.fit();
+    return { term: t, fit: f };
+  }
+
+  // Garante o MutationObserver compartilhado (troca de tema claro/escuro com o painel ABERTO):
+  // qualquer uma das duas abas que montar primeiro o cria; a outra reusa. O fundo acompanha sozinho
+  // (e CSS, --surface-inset por baixo do canvas transparente), mas foreground/cursor sao retrato do
+  // MOUNT -- sem isto, escuro->claro deixava o texto quase-branco sobre fundo claro ate fechar e
+  // reabrir. Cobre as DUAS instancias (Task 6, Step 7): checa cada uma antes de tocar.
+  function garantirObserverDeTema() {
+    if (mo) return;
+    mo = new MutationObserver(() => {
+      if (term && host) term.options.theme = { background: 'rgba(0, 0, 0, 0)', ...lerTema(host) };
+      if (termShell && hostShell) {
+        termShell.options.theme = { background: 'rgba(0, 0, 0, 0)', ...lerTema(hostShell) };
+      }
+    });
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  }
+
   $effect(() => {
     // Os tres lidos AQUI, sincronos: se `sessionName` so fosse lido dentro do callback async (depois
     // do await), o Svelte nao o rastrearia e trocar de sessao no sidebar deixaria o terminal preso
@@ -76,33 +151,10 @@
       await import('@xterm/xterm/css/xterm.css');
       if (!vivo || !host) return;
 
-      // getComputedStyle, nao `var(--font-mono)` cru: o renderer canvas monta
-      // `ctx.font = \`${size}px ${family}\``, onde var() e invalido e ignorado calado -> metrica de
-      // glifo errada e grade desalinhada.
-      const mono = getComputedStyle(host).getPropertyValue('--font-mono').trim() || 'monospace';
+      const r = novoTerminal(host, Terminal, FitAddon);
+      term = r.term; fit = r.fit;
 
-      term = new Terminal({
-        fontFamily: mono, fontSize: 12, convertEol: false,
-        allowTransparency: true,
-        // 'rgba(0, 0, 0, 0)', NAO 'transparent': o parser de cor do xterm 6.0.0 (Color.ts) so casa
-        // hex/rgb()/rgba() -- 'transparent' cai no caminho do canvas e LANCA (alfa != 255 e
-        // rejeitado), o ThemeService ENGOLE a excecao calado e devolve o fallback #000000 opaco por
-        // cima do --surface-inset do .tp-screen (regra de vidro do CLAUDE.md). Medido no pacote
-        // instalado -- nao aparece nenhum erro no console, so o retangulo preto.
-        theme: { background: 'rgba(0, 0, 0, 0)', ...lerTema(host) },
-      });
-      fit = new FitAddon();
-      term.loadAddon(fit);
-      term.open(host);
-      fit.fit();
-
-      // Troca de tema (claro/escuro) com o painel ABERTO: o fundo acompanha sozinho (e CSS, --surface-
-      // inset por baixo do canvas transparente), mas foreground/cursor sao retrato do MOUNT -- sem
-      // isto, escuro->claro deixava o texto quase-branco sobre fundo claro ate fechar e reabrir.
-      mo = new MutationObserver(() => {
-        if (term && host) term.options.theme = { background: 'rgba(0, 0, 0, 0)', ...lerTema(host) };
-      });
-      mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+      garantirObserverDeTema();
 
       const enc = new TextEncoder();
       sock = new TermSocket(termUrl(alvo, term.cols, term.rows), {
@@ -122,16 +174,85 @@
     return () => {
       vivo = false;
       ro?.disconnect(); ro = null;
-      mo?.disconnect(); mo = null;
       sock?.close(); sock = null;
       term?.dispose(); term = null;
+      mo?.disconnect(); mo = null;
+    };
+  });
+
+  // Clique na aba Shell: so dispara o POST na PRIMEIRA vez (shellVisitada trava reclique). Idempotente
+  // no backend (reata a mesma sessao), mas repetir aqui so gastaria rede a toa.
+  async function abrirAbaShell() {
+    abaAtiva = 'shell';
+    if (shellVisitada) return;
+    shellVisitada = true;
+    shellCarregando = true;
+    shellErro = null;
+    const alvo = sessionName;   // captura ANTES do await, mesma cautela do efeito principal
+    try {
+      const r = await openShell(alvo);
+      if (alvo !== sessionName) return;   // sessao trocou enquanto esperava -- descarta resposta velha
+      shellNome = r.shell;
+    } catch (e) {
+      if (alvo !== sessionName) return;
+      // Mensagem do backend (409 = colisao de nome, 404/500 = tmux recusou) -- mostrada como veio,
+      // nao engolida.
+      shellErro = e instanceof Error ? e.message : 'falha ao abrir o shell';
+    } finally {
+      if (alvo === sessionName) shellCarregando = false;
+    }
+  }
+
+  // Mesmo desenho do efeito do attach, mirando `shellNome` (o "term-<nome>" da sessao escondida) em
+  // vez de `sessionName`. So roda depois que `abrirAbaShell` resolve o POST -- e o que faz a aba
+  // shell ser um mount so por rodada (trocar de volta pra "attach" e voltar NAO reexecuta isto,
+  // porque `abaAtiva` nao entra nas dependencias: o socket da aba inativa continua aberto).
+  $effect(() => {
+    const alvo = shellNome;
+    void geracaoShell;
+    if (!open || !alvo || !hostShell) return;
+    let vivo = true;
+    caiuShell = false;
+
+    (async () => {
+      const [{ Terminal }, { FitAddon }] = await Promise.all([
+        import('@xterm/xterm'),
+        import('@xterm/addon-fit'),
+      ]);
+      await import('@xterm/xterm/css/xterm.css');
+      if (!vivo || !hostShell) return;
+
+      const r = novoTerminal(hostShell, Terminal, FitAddon);
+      termShell = r.term; fitShell = r.fit;
+
+      garantirObserverDeTema();
+
+      const enc = new TextEncoder();
+      sockShell = new TermSocket(termUrl(alvo, termShell.cols, termShell.rows), {
+        data: (b) => termShell.write(b),
+        close: () => { if (vivo) caiuShell = true; },
+      });
+      termShell.onData((d: string) => sockShell?.send(enc.encode(d)));
+
+      roShell = new ResizeObserver(() => { fitShell?.fit(); sockShell?.resize(termShell.cols, termShell.rows); });
+      roShell.observe(hostShell);
+    })();
+
+    return () => {
+      vivo = false;
+      roShell?.disconnect(); roShell = null;
+      sockShell?.close(); sockShell = null;
+      termShell?.dispose(); termShell = null;
+      mo?.disconnect(); mo = null;
     };
   });
 </script>
 
 {#if open}
-  <!-- UM mount, DUAS classes: mover o componente entre conteineres re-montaria o xterm.js e
-       derrubaria o socket a cada troca de tamanho. -->
+  <!-- UM mount, DUAS abas (attach + shell) e DOIS tamanhos (normal/max): mover ou remontar
+       qualquer um dos dois derrubaria xterm.js e socket. Trocar de aba so alterna qual `.tp-screen`
+       fica visivel -- visibility, nao display:none, pra manter a caixa (ResizeObserver/fit
+       continuam medindo certo mesmo com a aba escondida). -->
   <!-- svelte-ignore a11y_no_static_element_interactions (onkeydown so pra parar propagacao; quem
        captura teclado de verdade e o textarea do proprio xterm, ja nativamente interativo) -->
   <section class="tp" class:max={maximizado} bind:this={secEl}
@@ -147,14 +268,34 @@
              e.stopPropagation();
            }}>
     <header class="tp-bar">
-      <span class="tp-nome">{sessionName}</span>
-      {#if caiu}
-        <button class="tp-recon" onclick={() => geracao++}>desconectado · reconectar</button>
+      <div class="tp-abas" role="tablist">
+        <button class="tp-aba" class:sel={abaAtiva === 'attach'} role="tab" aria-selected={abaAtiva === 'attach'}
+                onclick={() => (abaAtiva = 'attach')}>{sessionName}</button>
+        <button class="tp-aba" class:sel={abaAtiva === 'shell'} role="tab" aria-selected={abaAtiva === 'shell'}
+                onclick={abrirAbaShell}>Shell</button>
+      </div>
+      {#if (abaAtiva === 'attach' ? caiu : caiuShell)}
+        <button class="tp-recon" onclick={() => (abaAtiva === 'attach' ? geracao++ : geracaoShell++)}>
+          desconectado · reconectar
+        </button>
       {/if}
       <button onclick={toggleMax} aria-label="Maximizar">⤢</button>
       <button onclick={onClose} aria-label="Fechar">✕</button>
     </header>
-    <div class="tp-screen" bind:this={host}></div>
+    <div class="tp-screens">
+      <div class="tp-screen" class:hidden={abaAtiva !== 'attach'} bind:this={host}></div>
+      {#if shellNome}
+        <div class="tp-screen" class:hidden={abaAtiva !== 'shell'} bind:this={hostShell}></div>
+      {:else if shellErro}
+        <div class="tp-screen tp-status" class:hidden={abaAtiva !== 'shell'}>
+          <p class="tp-erro">Shell: {shellErro}</p>
+        </div>
+      {:else if shellCarregando}
+        <div class="tp-screen tp-status" class:hidden={abaAtiva !== 'shell'}>
+          <p class="tp-msg">abrindo shell…</p>
+        </div>
+      {/if}
+    </div>
   </section>
 {/if}
 
@@ -165,6 +306,21 @@
   .tp.max { position: absolute; inset: 0; height: auto; z-index: 40; }
   /* transparent de proposito: quem carrega o material e o conteiner (regra de vidro do CLAUDE.md). */
   .tp-bar { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2); background: transparent; }
-  .tp-nome { flex: 1; font-size: var(--text-xs); color: var(--text-muted); }
-  .tp-screen { flex: 1; min-height: 0; background: var(--surface-inset); }
+  .tp-abas { display: flex; gap: var(--space-1); flex: 1; min-width: 0; }
+  .tp-aba {
+    padding: 2px var(--space-2); border-radius: var(--radius-sm); border: 1px solid transparent;
+    background: transparent; color: var(--text-muted); font-size: var(--text-xs); cursor: pointer;
+    max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .tp-aba:hover { background: var(--bg-hover); }
+  .tp-aba.sel { background: var(--accent-dim); color: var(--accent); }
+  /* Posicionamento relativo: as duas telas se empilham em cima uma da outra (position:absolute) e a
+     visivel e escolhida por `visibility`, nao `display:none` -- display:none zeraria a caixa e o
+     ResizeObserver/fit() da aba escondida mediriam 0x0 na proxima vez que ficasse visivel. */
+  .tp-screens { flex: 1; min-height: 0; position: relative; }
+  .tp-screen { position: absolute; inset: 0; background: var(--surface-inset); }
+  .tp-screen.hidden { visibility: hidden; }
+  .tp-status { display: flex; align-items: center; justify-content: center; }
+  .tp-msg { margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
+  .tp-erro { margin: 0; padding: 0 var(--space-4); font-size: var(--text-sm); color: var(--error); text-align: center; }
 </style>
