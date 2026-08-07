@@ -68,10 +68,15 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     view: WorkspaceView;
     onSelectView: (view: WorkspaceView) => void;
     onOpenCommand: () => void;
+    // Avisa o pai (DesktopShell) sempre que o pin do trilho mudar -- mesmo padrao do onMaximizar do
+    // TerminalPanel (callback opcional + $effect observando o valor). O DesktopShell nao enxerga o
+    // `collapsed` interno, e precisa dele pra so esconder a sidebar com o terminal maximizado quando
+    // ela esta no trilho, nao quando esta fixada aberta.
+    onCollapsedChange?: (v: boolean) => void;
   }
   let {
     currentSession, onSelect, onCompare, onLogout, boardActive, canvasActive,
-    onWorkspaceActionsChange, view, onSelectView, onOpenCommand,
+    onWorkspaceActionsChange, view, onSelectView, onOpenCommand, onCollapsedChange,
   }: Props = $props();
 
   // Grupo generico: por SERVIDOR (hoje) ou por PROJETO (cwd) — mesmo shape nos dois modos. Cada
@@ -108,6 +113,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
       preBoardCollapsed = null;
     }
   });
+
+  // Publica o pin pro pai a cada mudanca de `collapsed` -- roda na montagem (valor inicial lido do
+  // localStorage), no togglePin (botao) e no auto-recolher/restaurar do quadro/canvas acima: os tres
+  // mexem so nesta variavel, entao um efeito so ja cobre os tres sem replicar callback em cada lugar.
+  $effect(() => { onCollapsedChange?.(collapsed); });
 
   // Grupos colapsados por id (servidor ou projeto), persistido — MESMA chave do mobile (SessionList)
   // pra o estado ser compartilhado onde faz sentido. Diferente do `collapsed` (pin do rail).
