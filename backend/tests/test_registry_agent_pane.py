@@ -8,6 +8,7 @@ import logging
 import subprocess
 import uuid
 import pytest
+import app.api as api_mod
 from app import agentpane, registry, tmux
 
 SESS = "cp-test-registry-agentpane"
@@ -126,7 +127,8 @@ def test_list_nao_faz_fork_por_sessao(tmp_path, monkeypatch):
         # `list-panes -a` de list(). Se a correcao tivesse introduzido fork por sessao, o total
         # cresceria com o numero de sessoes/panes (aqui: 2 sessoes, 3 panes).
         assert chamadas_run == [["tmux", "list-panes", "-a", "-F",
-                                 "#{session_name}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_id}"]]
+                                 "#{session_name}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_id}"
+                                 "\t#{@cp_hidden}"]]
         assert chamadas_of == []                # nenhuma chamada por-sessao durante list()
     finally:
         # kill-SESSION (alvo exato), nunca kill-server -- mesma proibicao do test_tmux.py: um `-L`
@@ -135,3 +137,20 @@ def test_list_nao_faz_fork_por_sessao(tmp_path, monkeypatch):
         # nunca ficaria vazio de verdade, mas o padrao errado nao pode ser o que fica pra copiar.
         subprocess.run(["tmux", "-L", sock, "kill-session", "-t", f"={a}"], capture_output=True)
         subprocess.run(["tmux", "-L", sock, "kill-session", "-t", f"={b}"], capture_output=True)
+
+
+def test_pane_info_resolve_pelo_pane_do_agente_com_split(sessao, tmp_path, monkeypatch):
+    # Task 6, Step 6: com um split (o shell escondido, ou qualquer split manual), o pane ATIVO pode
+    # ser o do shell -- api._pane_info tem que devolver o pane do AGENTE (aqui, um Pi), nao o
+    # ativo, reusando a MESMA resolucao que registry.list() ja usa (_agent_pane).
+    agente = tmux.list_panes_of(sessao)[0]
+    _segunda_janela(sessao, str(tmp_path))     # 2o pane, fica ATIVO -- o agente perde o "ativo"
+
+    monkeypatch.setattr(agentpane, "_pane_do_agente", lambda pid, children: pid == agente["pid"])
+    monkeypatch.setattr(registry, "_cmdline",
+                        lambda pid: "pi --whatever" if pid == agente["pid"] else "bash")
+
+    provider, pane_id = api_mod._pane_info(sessao)
+
+    assert provider == "pi"
+    assert pane_id == agente["pane_id"]

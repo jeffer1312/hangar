@@ -240,3 +240,59 @@ def test_mandar_prompt_continua_funcionando_com_painel_aberto(sessao, monkeypatc
     r = c.post(f"/api/sessions/{sessao}/input",
                json={"text": "oi"}, headers={"Authorization": "Bearer secret"})
     assert r.status_code != 409
+
+
+def test_shell_cria_sessao_escondida_que_nao_aparece_na_lista(sessao):
+    c = _client()
+    r = c.post(f"/api/sessions/{sessao}/shell", headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 200
+    nome_shell = r.json()["shell"]
+    # A sessao EXISTE no tmux — o usuario alcanca pelo painel e pelo terminal nativo...
+    assert subprocess.run(["tmux", "has-session", "-t", f"={nome_shell}"],
+                          capture_output=True).returncode == 0
+    # ...e NAO aparece no app. Sem isto ela viraria card nas tres views (lista, board, canvas),
+    # porque registry.py:240 trata pane nao reconhecido como Claude por padrao.
+    from app.registry import SessionRegistry
+    nomes = [i.name for i in SessionRegistry().list()]
+    assert nome_shell not in nomes
+    assert sessao in nomes                     # a sessao do agente continua aparecendo
+    subprocess.run(["tmux", "kill-session", "-t", f"={nome_shell}"], capture_output=True)
+
+
+def test_shell_e_idempotente(sessao):
+    # Reatar em vez de criar outra: o painel reabre depois de recarregar a pagina e encontra o
+    # mesmo shell, com o comando ainda rodando.
+    c = _client()
+    a = c.post(f"/api/sessions/{sessao}/shell", headers={"Authorization": "Bearer secret"}).json()
+    b = c.post(f"/api/sessions/{sessao}/shell", headers={"Authorization": "Bearer secret"}).json()
+    assert a["shell"] == b["shell"]
+    saida = subprocess.run(["tmux", "list-sessions", "-F", "#{session_name}"],
+                           capture_output=True, text=True).stdout.splitlines()
+    assert saida.count(a["shell"]) == 1
+    subprocess.run(["tmux", "kill-session", "-t", f"={a['shell']}"], capture_output=True)
+
+
+def test_sessao_escondida_nao_muda_o_custo_da_listagem(sessao):
+    # A marca e lida no MESMO `list-panes -a` que ja rodava: filtrar nao pode custar fork novo.
+    c = _client()
+    c.post(f"/api/sessions/{sessao}/shell", headers={"Authorization": "Bearer secret"})
+    from app import tmux as tmux_mod
+    from app.registry import SessionRegistry
+    chamadas = []
+    orig = tmux_mod.RUN
+    tmux_mod.RUN = lambda args, **kw: (chamadas.append(args), orig(args, **kw))[1]
+    try:
+        SessionRegistry().list()
+    finally:
+        tmux_mod.RUN = orig
+    assert sum(1 for a in chamadas if "list-panes" in a) == 1
+    subprocess.run(["tmux", "kill-session", "-t", f"=term-{sessao}"], capture_output=True)
+
+
+def test_open_terminal_sem_emulador_devolve_erro_visivel(sessao, monkeypatch):
+    monkeypatch.delenv("CP_TERMINAL", raising=False)   # o codigo checa a env ANTES do PATH
+    monkeypatch.setattr("app.api.shutil.which", lambda _: None)   # so o do api, nao o do tmux.py
+    c = _client()
+    r = c.post(f"/api/sessions/{sessao}/open-terminal", headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 503
+    assert "emulador" in r.json()["detail"].lower()
