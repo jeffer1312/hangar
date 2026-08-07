@@ -63,6 +63,11 @@
     // dos 3 <Chat> e o dono). abrirTerminalReal, no desktop, nao mexe em mirrorOpen -- sem isto a
     // pilula "toque pra abrir" e o pulso do botao continuavam ativos com o painel ja aberto embaixo.
     terminalPanelOpen?: boolean;
+    // Capacidade do SERVIDOR (GET /api/config, `somente_leitura.terminal_panel`): `pty` e POSIX-only,
+    // entao no Windows o painel nao existe. Default true (assume capaz) pra nao piscar pro espelho
+    // enquanto o DesktopShell ainda esta buscando a config -- so vira false quando o servidor confirma
+    // que nao da. O mobile nunca passa isto (o painel real ja e desktop-only por outro motivo).
+    terminalPanelDisponivel?: boolean;
     // Chrome global do DesktopShell: reserva espaço acima da 1ª mensagem e delega Cmd/Ctrl+K à
     // paleta cross-server. O mobile não passa nenhum dos dois e mantém o comportamento anterior.
     topInset?: number;
@@ -76,7 +81,7 @@
   }
   let {
     sessionName, onBack, onNavigateToChat, desktop = false, onOpenSplit, onOpenTerminalPanel,
-    terminalPanelOpen = false,
+    terminalPanelOpen = false, terminalPanelDisponivel = true,
     topInset = 0, onOpenWorkspacePalette, showContextPanel = false,
     publishWorkspaceActions = false, onWorkspaceActionsChange, nested = false,
   }: Props = $props();
@@ -493,10 +498,11 @@
   // "Voltar ao chat" = SO esconde o espelho. NAO manda Escape -> a TUI fica como esta (nao fecha o
   // painel que o usuario queria ler). Sair do overlay de proposito = tecla Esc na barra do espelho.
   function closeMirror() { mirrorOpen = false; }
-  // Painel de verdade no desktop; espelho no celular. NAO reusar isto no onFallback do
-  // AskUserQuestion: o fallback existe pra destravar picker, e o painel bloqueia o /answer (Task 3).
+  // Painel de verdade no desktop; espelho no celular -- e tambem no desktop quando o SERVIDOR nao tem
+  // a capacidade (Windows: `pty` e POSIX-only, o painel abriria morto). NAO reusar isto no onFallback
+  // do AskUserQuestion: o fallback existe pra destravar picker, e o painel bloqueia o /answer (Task 3).
   function abrirTerminalReal() {
-    if (desktop && onOpenTerminalPanel) onOpenTerminalPanel();
+    if (desktop && onOpenTerminalPanel && terminalPanelDisponivel) onOpenTerminalPanel();
     else mirrorOpen = true;
   }
   // Statusline crua -> campos tipados (modelo, contexto, custo, tempo de sessao).

@@ -1995,6 +1995,7 @@ def get_config():
             "server_id": settings.server_id,
             "public_url": settings.public_url,
             "scan_roots": settings.scan_roots,
+            "terminal_panel": os.name == "posix",   # `pty` e POSIX-only; sem ele o painel nao existe
         },
     }
 

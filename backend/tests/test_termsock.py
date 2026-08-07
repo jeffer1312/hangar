@@ -483,3 +483,14 @@ def test_new_hidden_shell_mata_sessao_recem_criada_se_a_marca_falhar(sessao, mon
     assert alvo is None
     assert subprocess.run(["tmux", "has-session", "-t", f"=term-{sessao}"],
                           capture_output=True).returncode != 0
+
+
+def test_config_expoe_capacidade_do_painel_de_terminal():
+    # Step 8: `pty` e POSIX-only -- sem o gate, o botao apareceria no Windows e abriria painel
+    # morto. A chave entra em `somente_leitura` porque o app nunca decide isto sozinho (exige
+    # reiniciar o servico noutro SO).
+    import os
+    c = _client()
+    r = c.get("/api/config", headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 200
+    assert r.json()["somente_leitura"]["terminal_panel"] == (os.name == "posix")

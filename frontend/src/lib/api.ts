@@ -625,7 +625,8 @@ export interface CampoConfig {
 }
 export interface ConfigServidor {
   campos: Record<string, CampoConfig>;
-  somente_leitura: Record<string, string | number>;
+  // `terminal_panel` (Task 6, Step 8) e o unico booleano aqui -- `pty` e POSIX-only.
+  somente_leitura: Record<string, string | number | boolean>;
 }
 
 export function getConfig(): Promise<ConfigServidor> {
@@ -1019,6 +1020,20 @@ export async function sendTermInput(name: string, payload: { text?: string; key?
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+// Cria (ou reata) a sessao de shell escondida do app, no cwd da sessao do agente. Devolve o nome
+// tmux real ("term-<nome>") — e ele, nao `name`, que a aba do shell usa pra conectar. 409 = ja
+// existe uma sessao com esse nome que nao e o nosso shell; a mensagem do backend explica o motivo,
+// e quem chama deve mostra-la (nao engolir).
+export function openShell(name: string): Promise<{ ok: true; shell: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/shell`, { method: 'POST' });
+}
+
+// Abre um emulador de terminal NATIVO (janela do SO) anexado a sessao `name`. 503 = sem emulador no
+// PATH, ou o emulador morreu logo apos abrir — o `detail` do erro e texto pra humano, mostrar direto.
+export function openNativeTerminal(name: string): Promise<{ ok: true }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/open-terminal`, { method: 'POST' });
 }
 
 export interface ModelEffortBody {
