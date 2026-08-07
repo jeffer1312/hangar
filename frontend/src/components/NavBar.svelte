@@ -142,7 +142,7 @@
 
     <div class="nav-right">
       {#if onOpenTerminal}
-        <button class="nav-btn terminal-btn" class:alert={terminalAlert} onclick={onOpenTerminal} aria-label="Terminal (espelho da TUI)">
+        <button class="nav-btn terminal-btn" class:alert={terminalAlert} onclick={onOpenTerminal} aria-label="Terminal">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <rect x="2.5" y="4" width="19" height="16" rx="2"/>
             <path d="M6.5 9l3 3-3 3"/>
