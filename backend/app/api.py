@@ -1714,6 +1714,20 @@ async def unpair_session(name: str):
     return {"ok": True, "warning": ("aviso de saída falhou: " + "; ".join(errs)) if errs else None}
 
 
+def _recusa_se_painel_aberto(name: str) -> None:
+    # Com o painel anexado, a janela do tmux esta no tamanho DELE (~120x20). Quem conta linha no
+    # pane — o seletor de opcao, o stepper do AskUserQuestion (terminal_input.answer_questions /
+    # answer_question_pi) e o model_picker (lista e troca de modelo, que dirige o /model contando
+    # linhas do pane) — leria um pane truncado e escolheria errado.
+    #
+    # O termsock NAO importa `pty` no topo justamente pra este import funcionar no Windows.
+    from app import termsock
+    if name in termsock.clientes_ativos():
+        raise HTTPException(status_code=409,
+                            detail="Terminal aberto nesta sessao. Feche o painel pra responder "
+                                   "por aqui.")
+
+
 @app.post("/api/sessions/{name}/select", dependencies=[Depends(require_auth)])
 def select(name: str, body: SelectBody):
     # Mesma guarda do /input — e aqui ela é a ÚNICA: a cadeia abaixo não sabe falhar. terminal.select
@@ -1722,6 +1736,7 @@ def select(name: str, body: SelectBody):
     # uma opção de sessão morta digitava no vazio e a resposta era {"ok": true} — o catch do card
     # nunca disparava. (O fix de raiz em send_keys/_run é outro diff: interrupt/model_picker/
     # TerminalMirror também passam por lá.)
+    _recusa_se_painel_aberto(name)
     if not _session_exists(name):
         raise HTTPException(404, "sessão não encontrada — opção NÃO enviada")
     terminal.select(name, body.option)
@@ -2733,6 +2748,7 @@ def answer(name: str, body: AnswerBody):
     # FALLBACK automatico: Escape (fecha o picker; o "declined" e intencional aqui) + resposta como
     # texto via _send_one (fila duravel: se o pane ainda estiver em overlay vira deferred e o drain
     # entrega). A resposta do usuario NUNCA se perde — pior caso chega como texto, nao como interrupt mudo.
+    _recusa_se_painel_aberto(name)
     from app import terminal_input
     answers = [a.model_dump() for a in body.answers]
     info = next((s for s in registry.list() if s.name == name), None)
@@ -2791,6 +2807,7 @@ def answer(name: str, body: AnswerBody):
 def model_effort(name: str, body: ModelEffortBody):
     # Dirige o picker interativo do /model pra aplicar modelo/esforco SO na sessao (scope
     # 'session') ou como default ('default'). PickerError -> 409/422; entrada invalida -> 422.
+    _recusa_se_painel_aberto(name)
     try:
         return terminal.set_model_effort(name, body.model, body.effort, body.scope)
     except PickerError as e:
@@ -2854,6 +2871,7 @@ async def _engine_models(nome: str, fresco: bool = False) -> list[dict]:
 @app.get("/api/sessions/{name}/model/options", dependencies=[Depends(require_auth)])
 async def model_options(name: str):
     """Modelos que ESTA sessao pode escolher. `kind` diz de onde vieram e como aplicar."""
+    _recusa_se_painel_aberto(name)
     info = await _cached_info(name)
     if not info:
         raise HTTPException(404, "sessao nao encontrada")
@@ -2890,6 +2908,7 @@ async def engine_model_set(name: str, body: EngineModelBody):
     settings.json e capturado antes e reposto depois: a troca vale onde foi pedida e em lugar nenhum
     mais. Ver app/default_model.py.
     """
+    _recusa_se_painel_aberto(name)
     info = await _cached_info(name)
     if not info:
         raise HTTPException(404, "sessao nao encontrada")
