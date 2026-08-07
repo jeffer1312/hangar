@@ -169,18 +169,26 @@
     splitSessions = []; // trocou a principal (mesmo nome/outro servidor conta) -> fecha o split
   });
 
-  // Nomes das sessoes com um Chat montado agora (os mesmos tres mounts abaixo). Fecha o terminal
-  // sozinho quando a sessao dele sai da tela (navegou pro board/canvas, trocou a principal, fechou
-  // o split) — sem isto o painel ficava aberto falando com uma sessao que ja nao aparece.
-  const sessoesNaTela = $derived(
-    view === 'board' || view === 'canvas'
-      ? (overlaySession ? [overlaySession.name] : [])
-      : currentSession && currentSession !== 'null' && currentSession !== 'undefined'
-        ? [currentSession, ...splitSessions]
-        : [],
-  );
+  // Chaves SERVER-AWARE das sessoes com um Chat montado agora (os mesmos tres mounts abaixo). Fecha
+  // o terminal sozinho quando a chave dele sai da tela (navegou pro board/canvas, trocou a
+  // principal, fechou o split, OU trocou de SERVIDOR com o mesmo nome na tela). Por CHAVE, nao por
+  // nome: comparar so o nome deixava passar batido servidor A "api" -> servidor B "api" -- o Chat
+  // remonta (currentKey muda), mas o nome exibido e o mesmo, entao `sessoesNaTela.includes(nome)`
+  // continuava true e o painel ficava aberto, com o socket preso no servidor VELHO.
+  // `void currentKey` e proposital: currentSession sozinho NAO muda de valor nessa troca (mesma
+  // string "api" nos dois servidores), entao so ler currentKey aqui garante o recalculo na hora certa
+  // -- getActiveId() em si nao e reativo.
+  const sessoesNaTela = $derived.by(() => {
+    if (view === 'board' || view === 'canvas') {
+      return overlaySession ? [workspaceSessionKey(overlaySession)] : [];
+    }
+    void currentKey;
+    if (!currentSession || currentSession === 'null' || currentSession === 'undefined') return [];
+    const serverId = getActiveId() ?? '';
+    return [currentSession, ...splitSessions].map((nome) => workspaceSessionKey({ serverId, name: nome }));
+  });
   $effect(() => {
-    if (terminalOpen && !sessoesNaTela.includes(terminalSession)) terminalOpen = false;
+    if (terminalOpen && !sessoesNaTela.includes(terminalKey)) terminalOpen = false;
   });
 
   // Overlay do quadro: o Chat REAL (mesmo componente do resto do app) por cima do kanban, em vez de
@@ -255,7 +263,7 @@
               onBack={onCloseOverlay}
               onNavigateToChat={onNavigateToChat}
               onOpenTerminalPanel={() => abrirTerminal(overlayName, overlaySession.serverId)}
-              terminalPanelOpen={terminalOpen && terminalSession === overlayName}
+              terminalPanelOpen={terminalOpen && terminalKey === workspaceSessionKey(overlaySession)}
               topInset={hasAttention ? 52 : 0}
               onOpenWorkspacePalette={() => (commandOpen = true)}
               showContextPanel={true}
@@ -276,7 +284,7 @@
             onNavigateToChat={onNavigateToChat}
             onOpenSplit={openSplit}
             onOpenTerminalPanel={() => abrirTerminal(cur, getActiveId() ?? '')}
-            terminalPanelOpen={terminalOpen && terminalSession === cur}
+            terminalPanelOpen={terminalOpen && terminalKey === workspaceSessionKey({ serverId: getActiveId() ?? '', name: cur })}
             topInset={hasAttention ? 52 : 0}
             onOpenWorkspacePalette={() => (commandOpen = true)}
             showContextPanel={splitSessions.length === 0}
@@ -295,7 +303,7 @@
             onBack={() => (splitSessions = splitSessions.filter((s) => s !== split))}
             onNavigateToChat={onNavigateToChat}
             onOpenTerminalPanel={() => abrirTerminal(split, getActiveId() ?? '')}
-            terminalPanelOpen={terminalOpen && terminalSession === split}
+            terminalPanelOpen={terminalOpen && terminalKey === workspaceSessionKey({ serverId: getActiveId() ?? '', name: split })}
             topInset={hasAttention ? 52 : 0}
             onOpenWorkspacePalette={() => (commandOpen = true)}
           />
