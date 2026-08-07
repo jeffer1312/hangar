@@ -1,21 +1,63 @@
+import shutil
 import subprocess
+import uuid
+from unittest.mock import patch
+
 import pytest
 from app import agentpane, tmux
 
-SESS = "cp-test-agentpane"
+# L12 da revisao final: estes testes dirigem um tmux DE VERDADE. Sem o skipif eles quebravam a
+# suite em maquina sem tmux; com nome FIXO, duas copias sob xdist criavam/matavam a MESMA sessao e
+# uma derrubava a outra; e sem socket proprio tudo isso acontecia no servidor tmux do usuario, ao
+# lado das sessoes de trabalho dele. Mesmo remedio do test_tmux.py (has_session contra tmux real).
+pytestmark = pytest.mark.skipif(shutil.which("tmux") is None,
+                                reason="tmux nao instalado no ambiente")
 
 
 @pytest.fixture
 def sessao():
-    subprocess.run(["tmux", "kill-session", "-t", f"={SESS}"], capture_output=True)
-    subprocess.run(["tmux", "new-session", "-d", "-s", SESS, "-x", "200", "-y", "50",
-                    "sleep 600"], check=True)
-    yield SESS
-    subprocess.run(["tmux", "kill-session", "-t", f"={SESS}"], capture_output=True)
+    sock = f"cp-test-{uuid.uuid4().hex[:8]}"
+    nome = f"cp-agentpane-{uuid.uuid4().hex[:6]}"
+
+    def tmux_no_socket(args, **_kw):
+        # Injeta `-L <socket>` logo DEPOIS do "tmux" do argv -- nao em args[1:] como o precedente:
+        # `tmux.new_session` (usado num dos testes) prefixa `systemd-run --user --scope`, entao o
+        # "tmux" nem sempre e o primeiro elemento. Argv sem "tmux" nenhum (o probe de scope, que
+        # roda `systemd-run ... true`) passa direto.
+        if "tmux" not in args:
+            return subprocess.run(args, capture_output=True, text=True, errors="replace")
+        i = args.index("tmux")
+        return subprocess.run([*args[:i + 1], "-L", sock, *args[i + 1:]],
+                              capture_output=True, text=True, errors="replace")
+
+    # Sessao "ancora": segura o servidor tmux DESTE socket de pe. Sem ela, o teste que mata e
+    # recria a sessao derruba a ultima sessao -> o servidor sai -> o proximo `new-session` sobe um
+    # servidor NOVO, com a numeracao de `%N` zerada, e "o pane novo tem id diferente do velho"
+    # deixa de valer por um motivo que nao e o do teste. No servidor compartilhado do usuario as
+    # sessoes dele faziam esse papel por acaso.
+    ancora = f"cp-ancora-{uuid.uuid4().hex[:6]}"
+    subprocess.run(["tmux", "-L", sock, "new-session", "-d", "-s", ancora, "sleep 600"],
+                   check=True, capture_output=True)
+    subprocess.run(["tmux", "-L", sock, "new-session", "-d", "-s", nome, "-x", "200", "-y", "50",
+                    "sleep 600"], check=True, capture_output=True)
+    try:
+        with patch.object(tmux, "RUN", tmux_no_socket):
+            agentpane.invalidate(nome)
+            yield nome
+    finally:
+        agentpane.invalidate(nome)
+        # kill-SESSION, nunca kill-server: um `-L` esquecido num kill-server derruba o servidor
+        # tmux DEFAULT e com ele todas as sessoes do usuario (mesma nota do test_tmux.py). Matar a
+        # ultima sessao ja encerra este servidor sozinho.
+        for alvo in (nome, f"term-{nome}", ancora):
+            subprocess.run(["tmux", "-L", sock, "kill-session", "-t", f"={alvo}"],
+                           capture_output=True)
 
 
 def _segunda_janela(nome):
-    subprocess.run(["tmux", "new-window", "-t", f"={nome}", "sleep 600"], check=True)
+    # Via `tmux._run` (patchado pelo fixture) pra cair no MESMO socket privado -- um subprocess
+    # cru aqui criaria a janela no servidor tmux do usuario, onde a sessao nem existe.
+    assert tmux._run(["tmux", "new-window", "-t", f"={nome}", "sleep 600"]).returncode == 0
 
 
 def test_list_panes_of_traz_todos_os_panes(sessao):
@@ -45,6 +87,22 @@ def test_sem_pane_de_agente_cai_no_alvo_antigo(sessao, monkeypatch):
     agentpane.invalidate(sessao)
     assert agentpane.resolve_target(sessao) is None
     assert tmux._pane_target(sessao) == f"={sessao}:"
+
+
+def test_desempate_com_dois_panes_de_agente_prefere_o_ativo(sessao, monkeypatch):
+    # I2 da revisao final: com 2+ panes de agente na mesma sessao, o agentpane pegava o PRIMEIRO da
+    # varredura e o registry._agent_pane o ATIVO -- o /input resolvia provider e pane_id por um
+    # pane e digitava no outro (e o cache de 60s daqui esticava a discordancia).
+    from app.registry import SessionRegistry
+    monkeypatch.setattr(agentpane, "_pane_do_agente", lambda pid, children: True)
+    _segunda_janela(sessao)      # a janela nova nasce ATIVA
+    agentpane.invalidate(sessao)
+
+    ativo = next(p for p in tmux.list_panes_of(sessao) if p["active"])
+    assert agentpane.resolve_target(sessao) == ativo["pane_id"]
+    # E o outro lado escolhe o MESMO pane -- e disso que o bug dependia.
+    grupo = tmux.list_panes_all()[sessao]
+    assert SessionRegistry._agent_pane(grupo, {})["pane_id"] == ativo["pane_id"]
 
 
 def test_sessao_inexistente_nao_explode():

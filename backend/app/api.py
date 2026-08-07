@@ -369,10 +369,15 @@ def abrir_shell(name: str):
     # Codex tambem, ao custo de 1-2 forks a mais nesta rota de clique unico (nao e o caminho de
     # poll onde fork por sessao e proibido).
     if tmux.has_session(alvo) and not tmux.is_hidden(alvo):
+        # L68 da revisao final: o texto NAO afirma mais que a sessao e de terceiro. Ela pode ser o
+        # shell DESTE painel que ficou sem a marca (um `set-option` que falhou por tmux ocupado/
+        # timeout, ver tmux.new_hidden_shell) -- e como este gate recusa ANTES de chamar aquela
+        # funcao, nada se autocorrige sozinho: quem desempata e o usuario.
         raise HTTPException(status_code=409,
-                            detail=f"ja existe uma sessao chamada {alvo!r} que nao e o shell "
-                                   "deste painel -- renomeie ou feche essa sessao antes de abrir "
-                                   "o shell")
+                            detail=f"ja existe uma sessao tmux chamada {alvo!r} sem a marca do "
+                                   "painel -- pode ser uma sessao sua de mesmo nome, ou o shell "
+                                   "deste painel que perdeu a marca. Encerre ou renomeie essa "
+                                   "sessao antes de abrir o shell")
     # O cwd vem do REGISTRY, nunca da query: um `?cwd=/` viraria shell em qualquer lugar do disco.
     novo = tmux.new_hidden_shell(name, info.cwd or str(Path.home()))
     if novo is None:
@@ -381,8 +386,11 @@ def abrir_shell(name: str):
 
 
 # Emuladores de terminal conhecidos, na ordem de preferencia da sonda quando CP_TERMINAL nao esta
-# setado. Cada valor monta o ARGV completo de attach dado o alvo tmux exato ("=nome" -- NUNCA sem
-# o `=`, senao o tmux cai em prefix-match e abre a sessao errada). `wezterm` nao tem `-e`: e
+# setado. Cada valor monta o ARGV completo de attach dado o alvo tmux exato ("=nome:" -- NUNCA sem
+# o `=`, senao o tmux cai em prefix-match e abre a sessao errada; o `:` final e a mesma grafia do
+# `attach` do termsock, alinhada na revisao final -- medido nesta maquina que as duas formas
+# anexam igual, e uma operacao so nao pode ter duas grafias numa branch inteira sobre esse
+# detalhe). `wezterm` nao tem `-e`: e
 # `start -- comando`. `gnome-terminal -e` esta deprecado e so aceita UM string; `--` e o substituto.
 _EMULADORES = {
     "wezterm": lambda alvo: ["wezterm", "start", "--", "tmux", "attach", "-t", alvo],
@@ -422,7 +430,7 @@ def abrir_terminal_nativo(name: str):
         if nome_bin is None:
             raise HTTPException(status_code=503,
                                 detail="nenhum emulador de terminal encontrado no PATH")
-    args = tmux._scope_prefix() + _EMULADORES[nome_bin](f"={name}")
+    args = tmux._scope_prefix() + _EMULADORES[nome_bin](f"={name}:")
     env = os.environ.copy()
     wl = tmux._wayland_display()
     if wl:
@@ -1436,19 +1444,13 @@ def _pane_info(name: str) -> tuple[str, str | None]:
     falhava (derrubava a linha rapida do Pi), porque o pane_id devolvido era do pane errado.
 
     Erro/pane sumido -> ("claude", None) — comportamento de hoje, marcas do Claude, sem pane_id
-    (cai pra tecla, igual a antes desta task)."""
-    from app import registry as registry_mod
-    from app import tmux
-    from app.procinfo import _proc_children_map
-    try:
-        panes = tmux.list_panes_all().get(name)
-        if not panes:
-            return "claude", None
-        children = _proc_children_map()
-        p = registry_mod.SessionRegistry._agent_pane(panes, children)
-        return registry_mod.provider_of_pane(p["pid"], children), p.get("pane_id")
-    except Exception:
-        return "claude", None
+    (cai pra tecla, igual a antes desta task).
+
+    Revisao final (I1): o corpo mudou de casa pro `agentpane.pane_info` — o drain da fila duravel e
+    o adapter do Pi precisavam da MESMA resolucao e estavam no pane ativo. Esta funcao fica como o
+    nome que as rotas (e os testes) ja conhecem."""
+    from app import agentpane
+    return agentpane.pane_info(name)
 
 
 async def _send_one_codex(name: str, text: str) -> dict:

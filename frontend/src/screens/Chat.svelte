@@ -1196,11 +1196,24 @@
     }
   }
 
+  // Recusa do backend ao responder uma opção. O caso comum é o 409 do painel de terminal aberto
+  // ("Terminal aberto nesta sessao..."): antes o catch só fazia console.error e tocar o botão não
+  // fazia ABSOLUTAMENTE NADA, em silêncio — o backend recusava e a tela ficava igual. `err.message`
+  // já vem limpo (o `detail` do FastAPI, api.ts:errorDetail), então mostra o texto do servidor:
+  // ele explica o motivo E a saída ("Feche o painel pra responder por aqui"). Some sozinho depois
+  // de 8s, ou no toque — não é estado, é aviso.
+  let selectErr = $state('');
+  let selectErrTimer: ReturnType<typeof setTimeout> | undefined;
+
   async function handleSelect(option: number) {
+    clearTimeout(selectErrTimer);
+    selectErr = '';
     try {
       await selectOption(sessionName, option);
     } catch (err) {
       console.error('selectOption error:', err);
+      selectErr = err instanceof Error ? err.message : 'não deu pra enviar a opção';
+      selectErrTimer = setTimeout(() => (selectErr = ''), 8000);
     }
   }
 
@@ -1361,6 +1374,14 @@
     <button class="tui-pill" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} onclick={abrirTerminalReal} aria-label={needsLogin ? 'Abrir terminal para fazer login' : 'Abrir terminal para interagir'}>
       <span class="tui-pill-dot"></span>
       <span class="tui-pill-text">{needsLogin ? 'Sessão precisa de login — toque pra entrar' : 'Interação só pela TUI — toque pra abrir'}</span>
+    </button>
+  {/if}
+
+  {#if selectErr}
+    <!-- Recusa ao responder a opção (409 do painel de terminal, sessão morta, tmux travado). No
+         centro, acima do dock — é sobre o toque que acabou de acontecer, tem que estar no olho. -->
+    <button class="select-err" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} onclick={() => { clearTimeout(selectErrTimer); selectErr = ''; }}>
+      {selectErr}
     </button>
   {/if}
 
@@ -1748,6 +1769,28 @@
     -webkit-tap-highlight-color: transparent;
   }
   .hist-pill:active { background: var(--bg-hover); }
+
+  /* Recusa ao responder uma opção: mesma família das pílulas acima, centrada como o tui-pill (é
+     sobre o toque que acabou de acontecer) e em tom de aviso. `--surface-raised` e não
+     `--bg-elevated` cru: com papel de parede ligado, superfície dentro do app acompanha o véu de
+     transparência em vez de virar retângulo chapado (regra de vidro do CLAUDE.md). */
+  .select-err {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 22;
+    max-width: calc(100% - var(--space-6));
+    padding: var(--space-2) var(--space-4);
+    border: 1px solid var(--warning);
+    border-radius: var(--radius-full, 999px);
+    background: var(--surface-raised);
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    text-align: left;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .select-err:active { background: var(--bg-hover); }
 
   /* Dead state footer */
   .dead-footer {

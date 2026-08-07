@@ -51,6 +51,31 @@ def _pane_do_agente(pid: int, children: dict[int, list[int]]) -> bool:
     return False
 
 
+def pane_info(name: str) -> tuple[str, Optional[str]]:
+    """(provider, pane_id) do pane do AGENTE de `name`. Erro/sessao sumida -> ("claude", None).
+
+    UMA resolucao pra todo caminho de ENVIO -- o /input (api._pane_info), o drain da fila duravel
+    (terminal_input.drain) e o adapter do Pi. Antes os dois ultimos liam `list_panes_active()`, o
+    pane ATIVO: numa sessao Pi com split manual (ou com o shell escondido da Task 6 na frente) eles
+    pegavam o `pane_id` do SHELL, o `INBOX.tem_linha()` falhava e a linha rapida do Pi se perdia --
+    o mesmo bug que a Task 4 matou no /input, deixado vivo nos irmaos (achado I1 da revisao final).
+
+    Sem cache de proposito, ao contrario do `resolve_target`: aqui o pane_id vira BILHETE (a
+    extensao do Pi so aceita o pane certo) e o caminho e de ENVIO, nao de poll -- um valor de 60s
+    atras entregaria a mensagem no lugar errado, que e exatamente o que se esta consertando.
+    """
+    from app import registry as registry_mod   # tardio: registry importa tmux, que importa isto
+    try:
+        panes = tmux.list_panes_all().get(name)
+        if not panes:
+            return "claude", None
+        children = _proc_children_map()
+        p = registry_mod.SessionRegistry._agent_pane(panes, children)
+        return registry_mod.provider_of_pane(p["pid"], children), p.get("pane_id")
+    except Exception:
+        return "claude", None
+
+
 def resolve_target(name: str) -> Optional[str]:
     """`"%3"` = o pane do agente. `None` = nao sei, e o chamador usa o alvo antigo."""
     agora = time.monotonic()
@@ -58,7 +83,13 @@ def resolve_target(name: str) -> Optional[str]:
     if achado and agora - achado[1] < _TTL:
         return achado[0]
 
-    panes = tmux.list_panes_of(name)
+    # Ordena com o pane ATIVO na frente: o desempate tem que ser o MESMO do
+    # registry._agent_pane (achado I2 da revisao final). Com dois panes de agente na mesma sessao,
+    # um pegando "o primeiro da varredura" e o outro "o ativo" resolvia provider/pane_id por um
+    # pane e digitava no outro -- e o cache de 60s daqui, contra o _agent_pane sem cache, ainda
+    # esticava a janela em que os dois discordavam. Ativo primeiro = o comportamento de antes da
+    # Task 1 pra esse caso.
+    panes = sorted(tmux.list_panes_of(name), key=lambda p: not p.get("active"))
     alvo: Optional[str] = None
     if len(panes) == 1:
         # Caso normal (todas as sessoes desta maquina hoje): um pane so, `=nome:` e `%N` apontam pro

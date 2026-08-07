@@ -192,12 +192,18 @@ def test_saida_acima_do_teto_reata_o_reader_depois_de_drenar(sessao, monkeypatch
         subprocess.run(["tmux", "send-keys", "-t", f"={sessao}:", "-l", "echo PASSOU_DO_TETO"],
                         capture_output=True)
         subprocess.run(["tmux", "send-keys", "-t", f"={sessao}:", "Enter"], capture_output=True)
-        visto = False
-        for _ in range(50):
-            if b"PASSOU_DO_TETO" in _receive_bytes_com_teto(ws, segundos=2.0):
-                visto = True
+        # L26 da revisao final: procurar o marcador DENTRO de cada chunk falhava sem bug nenhum --
+        # com `_LEITURA=64` ele cai numa fronteira ("PASSOU_DO" | "_TETO") e nenhuma mensagem
+        # sozinha o contem. Acumula e procura no acumulado; o laco fecha por TEMPO (nao por
+        # numero de mensagens), senao um teto de iteracoes vira flake do outro lado.
+        acumulado = b""
+        limite = time.monotonic() + 15.0
+        while time.monotonic() < limite and b"PASSOU_DO_TETO" not in acumulado:
+            try:
+                acumulado += _receive_bytes_com_teto(ws, segundos=2.0)
+            except Exception:
                 break
-        assert visto
+        assert b"PASSOU_DO_TETO" in acumulado
 
 
 def test_pty_morto_fecha_o_socket(sessao):
@@ -484,6 +490,54 @@ def test_new_hidden_shell_mata_sessao_recem_criada_se_a_marca_falhar(sessao, mon
     assert alvo is None
     assert subprocess.run(["tmux", "has-session", "-t", f"=term-{sessao}"],
                           capture_output=True).returncode != 0
+
+
+def _id_da_sessao(nome):
+    # session_id (`$N`) muda quando a sessao e RECRIADA; o nome, nao. E a unica prova de "e a
+    # mesma sessao" que sobrevive a um kill+new com o mesmo nome.
+    return subprocess.run(["tmux", "display", "-p", "-t", f"={nome}:", "#{session_id}"],
+                          capture_output=True, text=True).stdout.strip()
+
+
+def test_shell_escondido_orfa_nao_reata_no_cwd_errado(sessao, tmp_path):
+    """I3 da revisao final: `term-<nome>` sobrevive quando a sessao do agente morre FORA do app
+    (`exit` no terminal, `tmux kill-session` na mao) -- o `_kill_hidden_shell` so roda pelo kill()
+    daqui. Criar depois outra sessao com o MESMO nome noutro repo e abrir a aba Shell devolvia o
+    shell do repo ANTIGO, rotulado com a sessao nova."""
+    from app import tmux as tmux_mod
+    alvo = tmux_mod.new_hidden_shell(sessao, "/tmp")
+    assert alvo == f"term-{sessao}"
+    primeiro = _id_da_sessao(alvo)
+
+    # Mesmo cwd -> REATA (idempotencia; nao pode matar o shell de ninguem a toa).
+    assert tmux_mod.new_hidden_shell(sessao, "/tmp") == alvo
+    assert _id_da_sessao(alvo) == primeiro
+
+    # cwd diferente (o nome foi reusado por outro repo) -> recria naquele diretorio.
+    assert tmux_mod.new_hidden_shell(sessao, str(tmp_path)) == alvo
+    assert _id_da_sessao(alvo) != primeiro
+    caminho = subprocess.run(["tmux", "display", "-p", "-t", f"={alvo}:", "#{session_path}"],
+                             capture_output=True, text=True).stdout.strip()
+    assert caminho == str(tmp_path)
+    # kill do shell fica pro teardown do fixture `sessao`.
+
+
+def test_rename_leva_o_shell_escondido_junto(sessao):
+    """L71 da revisao final: o shell e keyed por NOME. Sem isto, renomear o agente deixava
+    `term-<velho>` vivo pra sempre -- invisivel no app (marcado @cp_hidden) e fora do alcance do
+    `kill()`, que so procura `term-<novo>`."""
+    from app import tmux as tmux_mod
+    from app.registry import SessionRegistry
+    assert tmux_mod.new_hidden_shell(sessao, "/tmp") == f"term-{sessao}"
+    novo = f"{sessao}-renomeada"
+    try:
+        assert tmux_mod.rename_session(sessao, novo) is True
+        SessionRegistry().rename(sessao, novo)
+        assert not tmux_mod.has_session(f"term-{sessao}")
+    finally:
+        # A sessao mudou de nome -> o teardown do fixture (que mira o nome antigo) nao a alcanca.
+        subprocess.run(["tmux", "kill-session", "-t", f"={novo}"], capture_output=True)
+        subprocess.run(["tmux", "kill-session", "-t", f"=term-{novo}"], capture_output=True)
 
 
 def test_config_expoe_capacidade_do_painel_de_terminal():
