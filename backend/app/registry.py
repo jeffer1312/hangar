@@ -718,15 +718,23 @@ class SessionRegistry:
         out = []
         sids: dict[str, Optional[str]] = {}
         for panes in tmux.list_panes_all().values():
-            p = self._agent_pane(panes, children)
             # Sessao de shell ESCONDIDA (Task 6, botao "+" do painel de terminal): marcada por
-            # opcao de usuario tmux (@cp_hidden), lida de carona no MESMO list-panes acima -- sem
-            # isto ela viraria CARD nas tres views (lista, board, canvas), porque pane nao
-            # reconhecido vira Claude por padrao logo abaixo. list_with_state() reusa esta mesma
-            # lista (nao chama list_panes_all de novo), entao o pulo vale nas duas.
-            if p.get("hidden"):
-                _log.debug("list: sessao %r pulada (marcada @cp_hidden)", p["name"])
+            # opcao de usuario tmux (@cp_hidden), herdada por TODOS os panes/janelas da sessao (
+            # confirmado na revisao), lida de carona no MESMO list-panes acima -- sem isto ela
+            # viraria CARD nas tres views (lista, board, canvas), porque pane nao reconhecido vira
+            # Claude por padrao logo abaixo. list_with_state() reusa esta mesma lista (nao chama
+            # list_panes_all de novo), entao o pulo vale nas duas.
+            #
+            # Checado ANTES do `_agent_pane` (achado da revisao, minor): usuario dividindo o
+            # proprio shell escondido (2+ panes, nenhum "agente") faria `_agent_pane` nao achar
+            # ninguem, logar o warning "nenhum parece do agente" pra sempre (suja
+            # `_SEM_AGENTE_AVISADAS`, que nunca expira) e pagar a descida de /proc por pane -- tudo
+            # sobre uma sessao que o app ignora DE PROPOSITO. Qualquer pane serve pra checar: a
+            # marca e por sessao, todos concordam.
+            if panes[0].get("hidden"):
+                _log.debug("list: sessao %r pulada (marcada @cp_hidden)", panes[0]["name"])
                 continue
+            p = self._agent_pane(panes, children)
             # A TUI Codex agora vive no tmux, mas sua identidade/historico continuam vindo do
             # sidecar + rollout. Nao a tratar tambem como Claude (duplicaria a sessao e tentaria
             # resolver ~/.claude/projects).
@@ -1160,6 +1168,12 @@ class SessionRegistry:
             get_adapter("codex").close_sync(name)
             if not tmux.kill_session(name):
                 raise KillFailed(name)
+            # Task 6, achado da revisao (I2): sessao de shell ESCONDIDA (botao "+" do painel) nao
+            # tem afordancia na UI pra matar -- e escondida por construcao -- entao sobreviveria ao
+            # agente pra sempre. Best-effort: falhar aqui NAO pode derrubar o kill principal, que ja
+            # aconteceu.
+            if not tmux.kill_session(f"term-{name}"):
+                _log.debug("kill: shell escondido de %r nao saiu (pode nao existir)", name)
             codex_sessions.delete(name)
             self._forget(name)
             PromptQueue(name).clear()
@@ -1177,6 +1191,10 @@ class SessionRegistry:
             pass
         if not tmux.kill_session(name):
             raise KillFailed(name)
+        # Task 6, achado da revisao (I2): mesma limpeza best-effort do ramo Codex acima -- a sessao
+        # de shell escondida nao tem afordancia na UI pra matar sozinha.
+        if not tmux.kill_session(f"term-{name}"):
+            _log.debug("kill: shell escondido de %r nao saiu (pode nao existir)", name)
         self._forget(name)  # cache invalido: nome pode ser reusado por outra sessao depois
         # Sessao morta nao deixa fila pra tras: senao acumula orfaos e uma futura sessao de mesmo
         # nome herdaria essas entradas como bubble-fantasma (mesmo motivo do clear no create()).

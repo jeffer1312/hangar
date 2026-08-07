@@ -279,12 +279,14 @@ def new_hidden_shell(name: str, cwd: str) -> str | None:
     # so cria quando de fato NAO existe, e o `_scope_prefix()` so entra nesse caso -- e o mesmo
     # motivo do new_session: se esta for a chamada que inicia o servidor tmux, sem o scope ele nasce
     # no cgroup do backend e um `systemctl --user restart` derruba tudo. ponytail: check-then-act
-    # sem lock -- duas POST /shell concorrentes pro MESMO nome podem colidir (a 2a falha ao criar
-    # sessao duplicada e devolve None); aceitavel, upgrade so se virar reclamacao real.
+    # sem lock -- duas POST /shell concorrentes pro MESMO nome podem colidir; o perdedor da corrida
+    # recebe "duplicate session" (rc!=0), mas a sessao EXISTE de verdade (o vencedor criou) -- por
+    # isso o `has_session` de novo abaixo, achado da revisao (minor): sem ele o perdedor devolvia
+    # None -> 500 pra um shell vivo e saudavel.
     if not has_session(alvo):
         cp = _run([*_scope_prefix(), "tmux", "new-session", "-d", "-s", alvo, "-c", cwd])
         if cp.returncode != 0:
-            return None
+            return alvo if has_session(alvo) else None
     # A marca. Roda SEMPRE, nao so na criacao: sem ela a sessao vira CARD nas tres views do app,
     # porque o registry trata pane nao reconhecido como Claude por padrao -- inclusive quando a
     # sessao ja existia (reatada acima) e sobrou de uma versao anterior sem a marca. Idempotencia
