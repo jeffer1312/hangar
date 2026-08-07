@@ -269,11 +269,13 @@
 <svelte:window onkeydown={onShellKey} />
 
 <div class="desktop-shell">
-  <Sidebar {currentSession} onSelect={onNavigateToChat} {onCompare} {onLogout}
-           boardActive={view === 'board'}
-           canvasActive={view === 'canvas'}
-           onWorkspaceActionsChange={handleSidebarActionsChange}
-           {view} onSelectView={selectView} onOpenCommand={() => (commandOpen = true)} />
+  <div class="sidebar-wrap" class:tp-max-hide={terminalMaximizado}>
+    <Sidebar {currentSession} onSelect={onNavigateToChat} {onCompare} {onLogout}
+             boardActive={view === 'board'}
+             canvasActive={view === 'canvas'}
+             onWorkspaceActionsChange={handleSidebarActionsChange}
+             {view} onSelectView={selectView} onOpenCommand={() => (commandOpen = true)} />
+  </div>
 
   <div class="desktop-com-terminal">
   <main class="desktop-main" class:split={splitSessions.length > 0} class:has-attention={hasAttention}
@@ -411,6 +413,15 @@
      zeraria a caixa, e o fit() do xterm (e o proprio layout do chat, que perderia scroll) depende
      dela continuar existindo. */
   .desktop-main.tp-max-hide { visibility: hidden; }
+  /* Wrapper da Sidebar: so existe pra dar um lugar pra esconder ela quando o terminal maximiza.
+     display:contents por padrao -- nao vira caixa propria, a <aside> do Sidebar continua filha
+     direta do flex de .desktop-shell (largura 270px/56px dela, intocada). Terminal maximizado:
+     display:none aqui, DIFERENTE do visibility:hidden do .desktop-main acima -- ali o espaco
+     precisa continuar reservado (o fit() do xterm depende da caixa existir), aqui nao ha nada
+     dependendo da caixa da Sidebar, entao display:none colapsa a coluna e o terminal ocupa a
+     largura toda. */
+  .sidebar-wrap { display: contents; }
+  .sidebar-wrap.tp-max-hide { display: none; }
   .workspace-attention-layer {
     position: absolute;
     /* Subiu junto com a saida do seletor de view (que ocupava a faixa de 4-48px). */
