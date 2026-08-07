@@ -82,14 +82,28 @@
     void currentKey; void overlaySession;
     const sid = getActiveId();
     if (sid === ultimoServidorConsultado) return;
-    ultimoServidorConsultado = sid;
-    let vivo = true;
+    // A chave so grava dentro do then/catch, NUNCA antes do fetch sair (achado da revisao, Q1): o
+    // efeito reexecuta a cada mudanca de ROTA (`overlaySession` e literal de objeto novo por render
+    // em App.svelte, identidade nova mesmo com o mesmo servidor). Gravar `ultimoServidorConsultado`
+    // aqui, antes do await, fazia uma reexecucao com o MESMO `sid` (ex: navegar pra outra sessao no
+    // mesmo servidor enquanto o fetch anterior ainda voava) cair no guard acima e sair sem pedir de
+    // novo -- a resposta em voo era descartada (o `vivo=false` do cleanup antigo silenciava o
+    // `.then`) e `terminalCapaz` ficava travado no default OU no valor herdado do servidor anterior,
+    // pra sempre. Sem `vivo`/cleanup: compara o servidor ATIVO de novo quando a resposta chega, nao
+    // um booleano de "este efeito ainda e o mais recente".
     getConfig()
-      .then((c) => { if (vivo) terminalCapaz = c.somente_leitura.terminal_panel !== false; })
+      .then((c) => {
+        if (getActiveId() !== sid) return;   // trocou nesse meio-tempo -- resposta velha, descarta
+        ultimoServidorConsultado = sid;
+        terminalCapaz = c.somente_leitura.terminal_panel !== false;
+      })
       // Falha de rede na config nao pode travar o botao: mantem o comportamento anterior (assume
       // capaz) e deixa o proprio clique do usuario revelar o erro real, se houver.
-      .catch(() => { if (vivo) terminalCapaz = true; });
-    return () => { vivo = false; };
+      .catch(() => {
+        if (getActiveId() !== sid) return;
+        ultimoServidorConsultado = sid;
+        terminalCapaz = true;
+      });
   });
   const rows = $derived<AggSession[]>(sessionsStore.rows);
   const hasAttention = $derived(rows.some((row) => row.state === 'awaiting_input'));
