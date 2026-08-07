@@ -111,8 +111,9 @@ async def test_create_codex_leaves_model_unselected_until_catalog_or_user_choice
 def test_list_includes_codex_sidecar_and_tmux(tmp_path):
     codex_sessions.save("cx", "tid-1", "/home/u/.codex/sessions/rollout-a.jsonl", "/tmp/a")
     reg = SessionRegistry(projects_dir=tmp_path)
-    tmux_panes = [{"name": "claudesess", "cwd": "/tmp/c", "pid": 111}]
-    with patch.object(registry.tmux, "list_panes_active", return_value=tmux_panes), \
+    tmux_panes = {"claudesess": [{"name": "claudesess", "cwd": "/tmp/c", "pid": 111,
+                                  "pane_id": "%1", "active": True}]}
+    with patch.object(registry.tmux, "list_panes_all", return_value=tmux_panes), \
          patch.object(procinfo, "_proc_children_map", return_value={}), \
          patch.object(SessionRegistry, "resolve_tracked", return_value=("/x/claude.jsonl", True)), \
          patch.object(SessionRegistry, "_repl_sid", return_value=None):
@@ -128,8 +129,8 @@ def test_list_includes_codex_sidecar_and_tmux(tmp_path):
 def test_list_does_not_duplicate_codex_tmux_tui_as_claude(tmp_path):
     codex_sessions.save("cx", "tid-1", "/rollout-a.jsonl", "/tmp/a")
     reg = SessionRegistry(projects_dir=tmp_path)
-    panes = [{"name": "cx", "cwd": "/tmp/a", "pid": 111}]
-    with patch.object(registry.tmux, "list_panes_active", return_value=panes), \
+    panes = {"cx": [{"name": "cx", "cwd": "/tmp/a", "pid": 111, "pane_id": "%1", "active": True}]}
+    with patch.object(registry.tmux, "list_panes_all", return_value=panes), \
          patch.object(procinfo, "_proc_children_map", return_value={}), \
          patch.object(SessionRegistry, "resolve_tracked") as resolve:
         out = reg.list()
@@ -158,13 +159,20 @@ def test_kill_codex_closes_client_and_removes_sidecar(tmp_path):
     fake = _FakeClient()
     adapter = CodexAdapter()
     adapter.attach("cx", fake, "tid-1")
+    # Task 6 (achado da revisao, rodada 2, Quebra 2): o kill do shell escondido agora e GATEADO
+    # por `tmux.is_hidden` -- so mata "term-cx" se a marca confirmar que e nosso, senao uma sessao
+    # de TERCEIRO chamada "term-cx" seria derrubada junto. `is_hidden` mockado True aqui pra
+    # exercitar o caminho em que o shell E nosso (o caso comum).
     with patch("app.adapters.get_adapter", return_value=adapter), \
-         patch.object(registry.tmux, "kill_session") as kill_tmux:
+         patch.object(registry.tmux, "kill_session") as kill_tmux, \
+         patch.object(registry.tmux, "is_hidden", return_value=True):
         reg.kill("cx")
     assert fake.closed is True                      # client vivo terminado
     assert "cx" not in adapter._sessions            # esquecido da memoria
     assert codex_sessions.load("cx") is None        # sidecar duravel apagado
-    kill_tmux.assert_called_once_with("cx")          # encerra tambem a TUI Codex
+    kill_tmux.assert_any_call("cx")                  # encerra tambem a TUI Codex
+    kill_tmux.assert_any_call("term-cx")             # e o shell escondido do painel de terminal
+    assert kill_tmux.call_count == 2
 
 
 def test_rename_codex_moves_sidecar_and_live_adapter(tmp_path):

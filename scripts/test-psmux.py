@@ -166,6 +166,41 @@ if nossa:
           len(c) == 5 and c[1] in ("0", "1") and c[2].isdigit() and c[4].startswith("%"),
           f"recebido: {c!r}")
 
+# ── 4b. list-panes -a -F com 6 campos (tmux.list_panes_all) ─────────────────
+# O `-F` REAL do app tem um 6o campo: `#{@cp_hidden}`, uma opcao de USUARIO (tmux set-option), nao
+# uma variavel de formato conhecida. E dela que a lista das tres views, o list_with_state, o
+# _pane_info e o _cwd_has_siblings dependem — se o multiplexador RECUSAR o comando por causa da
+# interpolacao (rc != 0), o app fica com ZERO sessao, e nao so sem o painel de terminal. O parse do
+# tmux.py ja aceita 5 campos ou mais (campo vazio / literal cru = "nao escondida"); o que so a
+# sonda mede e se o comando roda.
+print("\n4b. list_panes_all (6 campos, com a opcao de usuario @cp_hidden)")
+run(["set-option", "-t", alvo, "@cp_hidden", "1"])
+cp = run(["list-panes", "-a", "-F",
+          "#{session_name}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_id}"
+          "\t#{@cp_hidden}"])
+campos6 = [l.split("\t") for l in cp.stdout.splitlines() if l.strip()]
+nossa6 = [c for c in campos6 if c and c[0] == SESS]
+check("list-panes -a -F com '#{@cp_hidden}' NAO e recusado", cp.returncode == 0 and bool(nossa6),
+      "rc != 0 aqui = TODA sessao some das tres views do app (nao so o shell escondido): "
+      + (cp.stderr or repr(cp.stdout[:200])))
+if nossa6:
+    c = nossa6[0]
+    check("  os 5 primeiros campos continuam intactos",
+          len(c) >= 5 and c[1] in ("0", "1") and c[2].isdigit() and c[4].startswith("%"),
+          f"recebido: {c!r}")
+    # A marca em si e um EXTRA: sem ela o shell do botao `+` vira card na lista (chato), mas o app
+    # inteiro continua de pe. Por isso e print, nao check.
+    # `c[5] if len(c) > 5 else ...` e NAO um `c[5]` guardado depois: a f-string e avaliada ANTES da
+    # condicao, entao a versao anterior estourava IndexError justo no caso que esta secao existe pra
+    # diagnosticar (multiplexador que devolve 5 campos, sem interpolar a opcao de usuario) -- a
+    # sonda morria sem resumo, sem exit code e sem rodar as secoes seguintes.
+    sexto = c[5] if len(c) > 5 else "(ausente)"
+    print(f"  --  6o campo = {sexto!r} " + ("(marca lida -> shell escondido funciona)"
+                                            if sexto == "1" else
+                                            "(marca NAO lida -> o shell escondido apareceria "
+                                            "como card; o resto do app segue normal)"))
+run(["set-option", "-t", alvo, "-u", "@cp_hidden"])
+
 # ── 5. pane_pid ─────────────────────────────────────────────────────────────
 print("\n5. pane_pid")
 cp = run(["list-panes", "-t", alvo, "-F", "#{pane_pid}"])

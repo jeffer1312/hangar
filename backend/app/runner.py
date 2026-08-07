@@ -10,7 +10,7 @@ from typing import Optional
 
 from app.config import settings
 from app.models import Runner, RunInfo
-from app.tmux import _scope_prefix, _pane_target
+from app.tmux import _scope_prefix
 
 # nome -> peso pra escolher o melhor palpite de "dev" (so um vence).
 _DEV_RANK = {"dev": 5, "start": 4, "serve": 3, "watch": 2, "run": 1}
@@ -193,5 +193,8 @@ def run_status(cwd: str) -> Optional[RunInfo]:
 
 
 def run_pane(cwd: str) -> str:
-    cp = _sock(["capture-pane", "-p", "-t", _pane_target(_slug(cwd)), "-S", "-200"])
+    # Alvo de SESSAO literal: estas sessoes vivem no servidor `-L cppkt-run`, e o _pane_target resolve
+    # pane contra o servidor default. Aqui nao ha janela extra pra desambiguar de qualquer forma.
+    alvo = f"={_slug(cwd)}:"
+    cp = _sock(["capture-pane", "-p", "-t", alvo, "-S", "-200"])
     return cp.stdout

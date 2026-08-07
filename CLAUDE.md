@@ -375,6 +375,66 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   `.git`** — without that, a worktree with no plans of its own would climb into the main checkout and
   show someone else's plan ("no bar" is a limitation, "wrong bar" is a bug). Executing a superpowers
   plan: mark `- [ ]` → `- [x]` at the end of each Step — that's what feeds this feature.
+- **Real terminal in the desktop footer** (`app/termsock.py` + `components/TerminalPanel.svelte`,
+  plus `tmux.new_hidden_shell` and the native-terminal launcher in `api.py`): one PTY per WebSocket
+  running `tmux attach`, consumed by xterm.js. The backend interprets **nothing** here — no ANSI, no
+  state, no scraping; it's a pipe, same choice as `adapters/codex`. Seven invariants, all measured
+  on this machine (tmux 3.7b) while replacing the old `capture-pane` mirror:
+  - **A tmux target needs the colon, and it fails DIFFERENTLY per command.** `={name}` is exact
+    session match; `={name}:` is exact session, active window. Without the `:`, `list-panes -s -t =0`
+    for a numeric name with no such session returns rc=0 **and the panes of the attached session**
+    (a numeric name reads as a *window index*), `display -p '#{window_width}'` comes back **empty**,
+    and `set-option -t "=alvo"` answers **"no such session" with the session alive**. `has-session`
+    is the deliberate exception (it resolves sessions only, never a pane/window). Rule: every
+    pane/window/option target carries `=` **and** `:`; the same operation never gets two spellings
+    (the native-terminal `attach` was aligned to the termsock one in the final review).
+  - **`attach` targets the SESSION, never the pane.** `attach -t %N` moves the active window/pane
+    for **every** client attached to that session — opening the browser panel would drag the owner's
+    native `tmux attach` to the agent's pane. `_pane_target` (send-keys/capture-pane) is the opposite
+    case on purpose.
+  - **One panel per session** (`termsock._ativos`, keyed by name). Two clients with
+    `window-size=latest` fight over the size on every frame; the second connection tears the first
+    down and the first one's socket is **closed** (a silently frozen terminal is worse than a
+    visible disconnect).
+  - **xterm's theme takes `rgba(0, 0, 0, 0)`, never the string `'transparent'`** — xterm 6.0.0's
+    color parser only matches hex/`rgb()`/`rgba()`, the keyword throws inside `ThemeService`, which
+    **swallows** it and falls back to opaque `#000000` over the panel's `--surface-inset`. Nothing
+    in the console; you just lose the wallpaper behind a black rectangle.
+  - **The hidden shell is a tmux user option (`@cp_hidden`), not a name convention.** The `+` tab
+    creates a SEPARATE session `term-<name>` so the panel and the user's native terminal stop
+    fighting over which window is in front; it is filtered out of the three views by the **mark**,
+    read straight from tmux (`is_hidden`), because "missing from `registry.list()`" also happens to
+    a real Codex session of the same name. The mark rides the shared `list-panes -a -F` as a 6th
+    field, and that parse is **defensive** (5 fields or more): a multiplexer that doesn't
+    interpolate a user option must cost you the *mark*, never the whole session list, which feeds
+    the three views, `list_with_state`, `_pane_info` and `_cwd_has_siblings`. Only the psmux probe
+    (`scripts/test-psmux.py`, section 4b) can tell you the command is *refused*, which no parse
+    survives — keep it in sync with the format.
+  - **`term-<name>` is keyed by NAME, so the name has to be kept in sync by hand.** Two different
+    paths, don't mix them up:
+    - *Orphan from another repo* — the shell outlives an agent session killed outside the app, and a
+      later session that reuses the name would reattach the OLD repo's shell under the new label: a
+      command typed in the wrong directory. `new_hidden_shell` compares `#{session_path}` (the birth
+      directory — measured that a `cd` inside the pane moves `pane_current_path` and **not** this
+      one) and kills+recreates on divergence. If that kill **fails**, it returns `None` (→ 500)
+      instead of handing back the old-directory shell.
+    - *Rename* — `registry.rename` **renames** `term-<old>` → `term-<new>`. A rename touches neither
+      the cwd nor what is running in the pane, so there is no wrong-directory risk here; killing
+      would silently take down whatever was running in the Shell tab (a `npm run dev`) with nothing
+      but a `_log.debug`. The kill is only the **fallback** for when `term-<new>` is already taken —
+      leaving the old one alive brings back the orphan this exists to prevent. Both paths gate on
+      the `@cp_hidden` mark (`is_hidden`, exact `={name}:` target), so a third party's `term-<name>`
+      is never renamed or killed.
+  - **POSIX-only imports (`pty`, `fcntl`, `termios`) live INSIDE the functions.** `termsock` is
+    imported by the 409 guard that also runs on Windows; a top-level `import fcntl` there is a
+    `ModuleNotFoundError` that breaks a feature which works today. The panel itself is gated by
+    `config.somente_leitura.terminal_panel` (`os.name == "posix"`), but a gate that turns the
+    *panel* off never protects an import — or a format string — on a shared path.
+  While the panel is attached the window is at ITS size (~120x20), so anything that counts lines in
+  the pane (option picker, AskUserQuestion stepper, `model_picker`) would read a truncated screen:
+  `/select`, `/answer` and friends answer **409**, and the phone UI must **show that text** — the
+  refusal explains the way out ("close the panel"), and a `catch` that only logs turns a tap into
+  nothing at all.
 
 ## tmux + Claude Code truecolor
 

@@ -89,7 +89,14 @@ def _pane_target(name: str) -> str:
     # "sessao 0" -> resolvia o pane ERRADO e vazava conversa/preview entre sessoes. `=NAME:` forca
     # match exato de sessao (`=`) escopado a sessao (`:`, janela/pane ativo). Nomes nao-numericos
     # ja funcionavam; isto cobre os dois casos.
-    return f"={name}:"
+    #
+    # E os dois-pontos finais significam "janela/pane ATIVO": o app fala com o que estiver na frente,
+    # nao com o agente. O agentpane resolve por processo; None = nao sei, vale o comportamento antigo.
+    #
+    # Import TARDIO porque agentpane importa este modulo — em cima seria ciclo. Depois da 1a chamada
+    # e uma busca em dict.
+    from app.agentpane import resolve_target
+    return resolve_target(name) or f"={name}:"
 
 
 def list_sessions() -> list[dict]:
@@ -124,6 +131,90 @@ def list_panes_active() -> list[dict]:
         out[name] = {"name": name, "pid": int(pid) if pid.isdigit() else None, "cwd": cwd,
                      "pane_id": pane_id}
     return list(out.values())
+
+
+def list_panes_all() -> dict[str, list[dict]]:
+    # Task 5.5: MESMA chamada `list-panes -a` do list_panes_active, so que sem descartar os panes
+    # NAO ativos -> quem precisa escolher, por sessao, o pane do AGENTE (nao so o ativo) usa esta,
+    # sem pagar nenhum fork a mais (list_panes_active continua existindo, intocada, pra quem so quer
+    # o ativo). Agrupado por nome de sessao porque e assim que o caller (registry.list()) itera.
+    #
+    # Task 6: `#{@cp_hidden}` a mais no MESMO `-F` -- opcao de usuario por SESSAO (tmux set-option),
+    # nao convencao de nome (colidiria com o filtro por sidecar do Codex, que ja e por nome). Um
+    # campo a mais no format nao custa fork nenhum: e a MESMA chamada de sempre. Sessao sem a
+    # opcao seta devolve string vazia ("" != "1" -> hidden=False), entao toda sessao pre-existente
+    # continua aparecendo normalmente.
+    #
+    # O parse aceita 5 campos OU MAIS (achado da revisao final, C1): esta funcao alimenta as tres
+    # views, o list_with_state, o _pane_info e o _cwd_has_siblings -- se o 6o campo nao vier, o app
+    # nao pode ficar SEM SESSAO NENHUMA por causa de uma opcao de usuario no `-F`. No Windows quem
+    # responde e o psmux, cuja compatibilidade e MEDIDA (scripts/test-psmux.py, secao 4) e nao
+    # inferida: interpolar `#{@opcao}` nao estava na lista ate esta rodada. Multiplexador que
+    # devolve o campo vazio ou o literal cru -> hidden=False, tudo aparece; multiplexador que
+    # RECUSA o comando -> rc != 0 -> {} -> ai nenhum parse salva, e por isso a sonda tambem cobre
+    # o formato de 6 campos.
+    cp = _run(["tmux", "list-panes", "-a", "-F",
+               "#{session_name}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_id}"
+               "\t#{@cp_hidden}"])
+    if cp.returncode != 0:
+        return {}
+    out: dict[str, list[dict]] = {}
+    for line in cp.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 5:
+            continue
+        name, active, pid, cwd, pane_id = parts[:5]
+        hidden = parts[5] if len(parts) > 5 else ""
+        out.setdefault(name, []).append({
+            "name": name, "pid": int(pid) if pid.isdigit() else None, "cwd": cwd,
+            "pane_id": pane_id, "active": active == "1", "hidden": hidden == "1",
+        })
+    return out
+
+
+def list_panes_of(name: str) -> list[dict]:
+    # TODOS os panes de UMA sessao (list_panes_active devolve so o ATIVO, de todas). `-s` = escopo
+    # sessao; `=NAME` = match exato (mesma pegadinha documentada no _pane_target).
+    #
+    # O `:` final NAO e cosmetico aqui: medido nesta maquina, `-s -t =0` (sem ele) para um nome
+    # NUMERICO sem sessao correspondente devolve rc=0 e os panes da sessao ATTACHED do servidor —
+    # nao falha. `-s -t =0:` falha corretamente com "can't find session". `-s` continua devolvendo
+    # TODOS os panes da sessao com o `:` (testado com sessao de 2 janelas); o `:` so fecha a mesma
+    # fresta de nome numerico que o _pane_target ja documenta acima.
+    #
+    # `#{pane_active}` entrou pro desempate do agentpane ficar igual ao do registry._agent_pane
+    # (I2 da revisao final): com 2+ panes de agente, os dois tem que escolher o MESMO. Campo
+    # ausente (multiplexador que nao interpola) -> active=False em todos e a ordem e a da
+    # varredura, exatamente o que era antes.
+    cp = _run(["tmux", "list-panes", "-s", "-t", f"={name}:", "-F",
+               "#{pane_id}\t#{pane_pid}\t#{pane_active}"])
+    if cp.returncode != 0:
+        return []
+    out = []
+    for line in cp.stdout.splitlines():
+        partes = line.split("\t")
+        if len(partes) < 2:
+            continue
+        pane_id, pid = partes[0], partes[1]
+        if pane_id.startswith("%") and pid.isdigit():
+            out.append({"pane_id": pane_id, "pid": int(pid),
+                        "active": len(partes) > 2 and partes[2] == "1"})
+    return out
+
+
+def is_hidden(name: str) -> bool:
+    """A sessao `name` existe e tem a marca @cp_hidden (Task 6)?
+
+    Consulta DIRETA no tmux, nao inferida de `registry.list()` (achado da revisao, rodada 2 do
+    Task 6a): a lista tambem filtra sessao com sidecar Codex de mesmo nome (registry.py, filtro
+    logo abaixo do de hidden) -- um `term-<nome>` que fosse uma sessao Codex de verdade "sumiria"
+    da lista por ESSE motivo, nao por estar marcada, e quem perguntasse "esta na lista?" concluiria
+    (errado) que o nome esta livre. `:` final obrigatorio -- mesma pegadinha do `set-option`/
+    `_pane_target`: sem ele, `show-options -t "=nome"` devolve "no such session" mesmo com a
+    sessao viva nesta versao do tmux.
+    """
+    cp = _run(["tmux", "show-options", "-v", "-t", f"={name}:", "@cp_hidden"])
+    return cp.returncode == 0 and cp.stdout.strip() == "1"
 
 
 def has_session(name: str) -> bool:
@@ -193,7 +284,103 @@ def new_session(name: str, cwd: str, command: str, config_dir: str | None = None
     # `exec` viraria um argumento que nenhum shell do Windows conhece — o pane nasce e morre na
     # hora, com o new-session ainda devolvendo 0, ou seja, o app reportaria sessao criada.
     args.append(f"exec {command}" if os.name == "posix" else command)
-    return _run(args).returncode == 0
+    ok = _run(args).returncode == 0
+    if ok:
+        # Servidor tmux reiniciado zera o contador de `%N`: uma sessao recriada com o MESMO nome
+        # dentro da janela de 60s do cache do agentpane mandaria a mensagem pro pane de OUTRA sessao
+        # (achado 1 da revisao, rodada 1) — a mesma classe de estrago que a Task 1 existe pra evitar.
+        # Import tardio: agentpane importa este modulo (mesmo motivo do _pane_target).
+        from app.agentpane import invalidate
+        invalidate(name)
+    return ok
+
+
+def new_hidden_shell(name: str, cwd: str) -> str | None:
+    """Cria (ou reata) a sessao de shell ESCONDIDA do botao "+" do painel de terminal (Task 6).
+
+    Sessao SEPARADA, nao janela dentro da sessao do agente: sessao separada tem JANELA PROPRIA,
+    entao o painel e o terminal nativo do usuario param de disputar qual janela esta na frente,
+    qual e o tamanho, e qual e o alvo do attach -- o atrito que a versao anterior desta task (uma
+    `new-window` na sessao do agente) tinha.
+
+    Devolve o nome da sessao (criada ou ja existente), ou None se o tmux recusou.
+    """
+    alvo = f"term-{name}"
+    # NAO usa `new-session -A` (reatar): MEDIDO no tmux 3.7b que `-A` numa sessao JA existente falha
+    # com "open terminal failed: not a terminal" quando quem chama nao tem tty controlador (rc=1) --
+    # e o backend, rodando como servico ou via subprocess capturado, nunca tem. Com `-A` o SEGUNDO
+    # POST /shell (idempotencia, o comando ainda rodando ao recarregar a pagina) sempre devolvia
+    # None. `has_session` + `new-session` PLAIN (sem `-A`) evita o caminho de attach por completo:
+    # so cria quando de fato NAO existe, e o `_scope_prefix()` so entra nesse caso -- e o mesmo
+    # motivo do new_session: se esta for a chamada que inicia o servidor tmux, sem o scope ele nasce
+    # no cgroup do backend e um `systemctl --user restart` derruba tudo. ponytail: check-then-act
+    # sem lock -- duas POST /shell concorrentes pro MESMO nome podem colidir; o perdedor da corrida
+    # recebe "duplicate session" (rc!=0), mas a sessao EXISTE de verdade (o vencedor criou) -- por
+    # isso o `has_session` de novo abaixo, achado da revisao (minor): sem ele o perdedor devolvia
+    # None -> 500 pra um shell vivo e saudavel.
+    criou_agora = False
+    # Reatar so vale se for o shell DAQUELE repo (achado I3 da revisao final). `term-<nome>` fica
+    # vivo quando a sessao do agente morre FORA do app (usuario digita `exit`, ou um
+    # `tmux kill-session` na mao) -- o `_kill_hidden_shell` so roda pelo `kill()` daqui. Criar
+    # depois outra sessao com o MESMO nome noutro repo e abrir a aba Shell devolvia o shell do
+    # repo ANTIGO, com o rotulo da sessao nova: silencioso e perigoso (um `rm`/`git` digitado no
+    # diretorio errado). Compara `#{session_path}` -- a pasta de NASCIMENTO da sessao, medido que
+    # nao muda quando o usuario faz `cd` dentro do pane (isso e o `pane_current_path`): um `cd` NAO
+    # pode derrubar o shell de ninguem. Diferente -> mata e recria, que e aceitavel porque a sessao
+    # e do app. Exige a MARCA antes de matar (mesmo cuidado do registry._kill_hidden_shell): um
+    # `term-<nome>` de terceiro nunca pode ser derrubado por este caminho.
+    if has_session(alvo):
+        cp = _run(["tmux", "display", "-p", "-t", f"={alvo}:", "#{session_path}"])
+        antigo = cp.stdout.strip() if cp.returncode == 0 else ""
+        if cp.returncode != 0:
+            # "Conferi e bate" e "nao consegui conferir" nao podem sair iguais (achado da revisao):
+            # com o `display` falhando (tmux ocupado, timeout de 5s do `_run`), `antigo` vira "" e o
+            # bloco de diretorio divergente abaixo nem roda — o shell existente e devolvido como se o
+            # diretorio batesse. Reaproveitar continua sendo o comportamento (matar um shell com
+            # trabalho por causa de uma leitura transiente seria pior), mas agora com registro.
+            _log.warning("nao consegui ler o diretorio do shell escondido %r (rc=%d): reaproveito "
+                         "sem conferir se ele e mesmo de %r", alvo, cp.returncode, cwd)
+        if antigo and os.path.normpath(antigo) != os.path.normpath(cwd) and is_hidden(alvo):
+            _log.info("shell escondido %r era do diretorio %r e agora a sessao e de %r — "
+                      "recriando", alvo, antigo, cwd)
+            # O retorno NAO e descartado (o docstring do kill_session e explicito: False = quem
+            # chama nao pode reportar sucesso). Falhando o kill (tmux travado -> timeout de 5s do
+            # `_run`), o `has_session` abaixo segue True, a criacao e pulada e esta funcao
+            # devolveria o shell do diretorio ANTIGO -- exatamente o `rm`/`git` no lugar errado que
+            # o bloco existe pra impedir, agora com o log dizendo "recriando". Desiste em vez disso:
+            # None vira 500 na rota e o usuario tenta de novo.
+            if not kill_session(alvo):
+                _log.warning("shell escondido %r nao saiu; NAO reaproveito o shell do diretorio "
+                             "antigo %r", alvo, antigo)
+                return None
+    if not has_session(alvo):
+        cp = _run([*_scope_prefix(), "tmux", "new-session", "-d", "-s", alvo, "-c", cwd])
+        if cp.returncode != 0:
+            return alvo if has_session(alvo) else None
+        criou_agora = True
+    # A marca. Roda SEMPRE, nao so na criacao: sem ela a sessao vira CARD nas tres views do app,
+    # porque o registry trata pane nao reconhecido como Claude por padrao -- inclusive quando a
+    # sessao ja existia (reatada acima) e sobrou de uma versao anterior sem a marca. Idempotencia
+    # vale pra marca tambem, nao so pra criacao. O `:` final NAO e cosmetico (mesma pegadinha
+    # documentada em `_pane_target`/`list_panes_of`): MEDIDO que `set-option -t "=alvo"` sem ele
+    # devolve "no such session" nesta versao do tmux, mesmo com a sessao existindo de verdade.
+    #
+    # O rc NAO e mais descartado (achado da revisao, rodada 2): antes, um `set-option` que falhasse
+    # (tmux ocupado, timeout de 5s do `_run`) deixava a sessao viva e VISIVEL -- card nas tres
+    # views. Se a sessao acabou de nascer AGORA, ninguem tinha trabalho rodando nela ainda -- mata
+    # em vez de deixar o fantasma visivel. Se ja existia (reatada), NAO mata: matar um shell com
+    # trabalho de verdade por causa de um `set-option` transiente seria pior que o card fantasma.
+    #
+    # L68 da revisao final: a versao anterior deste comentario prometia que o fantasma "se
+    # autocorrige no proximo POST". NAO se autocorrige -- o gate de /shell (api.abrir_shell)
+    # recusa com 409 ANTES de chamar esta funcao, justamente porque a sessao existe sem a marca.
+    # Quem tira o fantasma da tela e o usuario, encerrando a sessao `term-<nome>`; o texto do 409
+    # diz isso, sem afirmar que a sessao e de terceiro.
+    if _run(["tmux", "set-option", "-t", f"={alvo}:", "@cp_hidden", "1"]).returncode != 0:
+        if criou_agora:
+            kill_session(alvo)
+        return None
+    return alvo
 
 
 def kill_session(name: str) -> bool:
@@ -220,11 +407,27 @@ def kill_session(name: str) -> bool:
     # continua de pe (medido; o instalador contorna matando por PID); (2) no caso quebrado descrito
     # acima o comando falha mas a sessao ja estava morta — e "morta" e exatamente o que o caller quer.
     # Idempotente de proposito: apagar sessao que nao existe e sucesso.
-    return not has_session(name)
+    saiu = not has_session(name)
+    if saiu:
+        # A sessao morreu de verdade -> o pane que o agentpane tinha cacheado pra este nome tambem
+        # morreu. Sem isto, um kill+new_session (resume) na mesma funcao (registry.py, adapter.py)
+        # ficaria ate 60s mandando mensagem pro pane VELHO (achado 1 da revisao, rodada 1). Import
+        # tardio: agentpane importa este modulo (mesmo motivo do _pane_target).
+        from app.agentpane import invalidate
+        invalidate(name)
+    return saiu
 
 
 def rename_session(old: str, new: str) -> bool:
-    return _run(["tmux", "rename-session", "-t", old, new]).returncode == 0
+    ok = _run(["tmux", "rename-session", "-t", old, new]).returncode == 0
+    if ok:
+        # `old` nao existe mais sob esse nome; `new` pode ja ter um cache velho de uma vida anterior
+        # (mesmo nome, sessao diferente) — os dois precisam sumir. Mesma razao do kill_session/
+        # new_session acima. Import tardio: agentpane importa este modulo.
+        from app.agentpane import invalidate
+        invalidate(old)
+        invalidate(new)
+    return ok
 
 
 # No Windows a TUI do Claude Code entra em "modo paste" quando UM `send-keys -l` entrega mais que
@@ -507,10 +710,9 @@ def capture_pane(name: str, lines: int = 200) -> str:
 def pane_pid(name: str) -> int | None:
     # PID do processo raiz do pane (shell ou o proprio claude). Ponto de partida pra achar qual
     # transcript .jsonl o claude da sessao tem aberto (resolucao autoritativa, nao newest-by-mtime).
-    cp = _run(["tmux", "list-panes", "-t", _pane_target(name), "-F", "#{pane_pid}"])
-    if cp.returncode != 0:
-        return None
-    for line in cp.stdout.splitlines():
-        if line.strip().isdigit():
-            return int(line.strip())
-    return None
+    #
+    # `display -p` resolve alvo de PANE exato; `list-panes -t %N` resolveria a JANELA dele e
+    # devolveria o primeiro pane dela (achado do pass adversarial).
+    cp = _run(["tmux", "display", "-p", "-t", _pane_target(name), "#{pane_pid}"])
+    out = cp.stdout.strip()
+    return int(out) if cp.returncode == 0 and out.isdigit() else None

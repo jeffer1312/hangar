@@ -21,6 +21,71 @@ status, and add/remove. Writing is the risky part — `peers.json` holds the tok
 mesh and `scripts/cp_panel_common.py:81` already notes a half-finished write would take the mesh
 down — so the write path has to be atomic (temp file + rename), never a partial rewrite.
 
+## Follow-ups from the real terminal panel (2026-08-07)
+
+Left over from `feat/terminal-real` (WebSocket + PTY + xterm.js panel on the desktop). None of
+these blocked the branch; they are the items a future plan should start from. The measurements are
+here so nobody re-derives them.
+
+### A second send path, through a throwaway PTY
+
+Today every message the app sends goes through `tmux send-keys` — which sends **keystrokes**. The
+terminal panel proved a different path exists: bytes written straight into a PTY master, delivered
+by the kernel's tty layer, indistinguishable from a physical keyboard. That path handles what
+`send-keys` handles badly: bracketed paste (a multi-line block arrives as *one* paste instead of N
+lines the TUI may read as N submissions), image paste, and — the concrete pain that motivated this —
+`cp-send` messages between Claude sessions arriving mangled.
+
+**Do not replace `send-keys`.** It works, it is stateless, and it is the only path on Windows today.
+The shape that pays off is a *throwaway* PTY used only where pasting matters: open, size it to the
+window's current size, write as a bracketed paste, close. Nothing persistent, nothing to supervise.
+The pieces already exist in `app/termsock.py`.
+
+Measured, and it invalidates the obvious objection ("a PTY client would fight for the window size"):
+`man tmux` on `window-size latest` says tmux uses *"the size of the client that had the most recent
+activity"*. An idle PTY never claims the size; one sized to match the window changes nothing when it
+does. The cost is a line of code, not a structural trade-off.
+
+Two things the design must carry from the start:
+- **the `send-keys` fallback is mandatory, not optional** — see the Windows item below;
+- **the choice between paths must be explicit in code** (has a newline / exceeds N bytes), never
+  "sometimes pasting fails".
+
+### Mirror the machine's terminal theme in xterm.js
+
+The panel currently passes three colours to xterm (`foreground`, `background`, `cursor`), read from
+the app's own tokens. The 16 ANSI colours are xterm.js's **defaults**, not the user's. Reading
+`~/.config/kitty/kitty.conf` (`color0`–`color15` plus `font_family`) and passing them through would
+make the embedded terminal identical to the user's kitty. It is a file read and a 16-key map.
+
+### Windows: ConPTY exists, it is the measuring that is missing
+
+Do not write "Windows has no PTY" — it does. **ConPTY** ships since Windows 10 1809, and psmux (the
+multiplexer the app runs on there) is itself a native ConPTY multiplexer. What is missing from the
+stdlib is the Python wrapper (`pywinpty` provides it; it is what Jupyter's terminal uses).
+
+Genuinely unknown, and only answerable on a Windows machine:
+- does psmux have `attach-session`? (the panel depends on it)
+- does `pywinpty` work as the writer for the throwaway-PTY idea above?
+- does bracketed paste survive the trip through psmux? (this is the whole point of the idea)
+
+`scripts/test-psmux.py` is the vehicle — it is how this repo learned `paste-buffer` does not exist
+there — and it covers **neither** `attach` nor paste today. Until measured, the terminal panel stays
+gated off on Windows (`terminal_panel: os.name == "posix"`) and `send-keys` stays the only send path
+there — **for lack of measurement, not because it is impossible**.
+
+### Known limitations shipped on purpose
+
+- **The hidden shell is keyed by name.** `term-<session>` dies with its agent session and follows a
+  rename, but a session killed *outside* the app leaves it orphaned and invisible; reusing the name
+  in another repo then reattaches a shell born in the old directory (`new_hidden_shell` compares
+  `#{session_path}` and recreates on divergence, so this only bites the orphan case).
+- **Attaching the panel resizes the session** to the panel's size while it is open, and the
+  operations that count lines in the pane (option picker, AskUserQuestion stepper, model picker)
+  answer **409** meanwhile. Sending a prompt is deliberately never blocked.
+- **Closing the panel detaches, it does not kill** — anything running in the shell tab survives.
+- Killing a session from the app kills its hidden shell too; this is what stops orphans accumulating.
+
 ## "Adicionar servidor" dialog hides the token field (2026-08-07)
 
 `submitAddServer` (`frontend/src/screens/SessionList.svelte:492-509`) reads two pieces of state,

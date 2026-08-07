@@ -3,10 +3,12 @@
   import Sidebar from './Sidebar.svelte';
   import WorkspaceCommandPalette from './WorkspaceCommandPalette.svelte';
   import WorkspaceAttentionStrip from './WorkspaceAttentionStrip.svelte';
+  import TerminalPanel from './TerminalPanel.svelte';
   import Chat from '../screens/Chat.svelte';
   import Board from '../screens/Board.svelte';
   import Canvas from '../screens/Canvas.svelte';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
+  import { getConfig } from '../lib/api';
   import { getActiveId, selectServer } from '../lib/auth';
   import type { AggSession } from '../lib/types';
   import {
@@ -49,6 +51,69 @@
   let lastSession = $state<WorkspaceSessionRef | null>(null);
   let sidebarActions = $state<WorkspaceAction[]>([]);
   let chatActions = $state<WorkspaceAction[]>([]);
+
+  // Painel de terminal real (xterm.js), faixa no rodape do shell. Um so por vez: o shell nao tem
+  // "pane focado" hoje, entao quem diz QUAL sessao e o proprio Chat que chamou (um dos tres mounts).
+  let terminalOpen = $state(false);
+  let terminalSession = $state('');
+  // Chave SERVER-AWARE (igual currentKey/workspaceSessionKey): dois servidores podem ter uma sessao
+  // homonima. So o nome nao bastava — trocar de servidor com o mesmo nome na tela nao reexecutava o
+  // efeito do TerminalPanel, e o socket ficava falando pro servidor VELHO (termUrl usa o servidor
+  // ATIVO no momento da conexao, e so a troca do servidor nao muda `sessionName`).
+  let terminalKey = $state('');
+  function abrirTerminal(nome: string, serverId: string) {
+    terminalSession = nome;
+    terminalKey = workspaceSessionKey({ serverId, name: nome });
+    terminalOpen = true;
+  }
+  // Maximizado o painel cobre o chat mas continua translucido (mesmo veu do encaixado, ver
+  // TerminalPanel.svelte) -- entao o chat/board/canvas por baixo (.desktop-main) precisa ficar
+  // ESCONDIDO, senao o texto dele vaza por baixo do vidro. TerminalPanel avisa por callback porque
+  // quem decide maximizar/desmaximizar (inclusive ao fechar o painel maximizado) e ele, nao aqui.
+  let terminalMaximizado = $state(false);
+  // Pin do trilho da Sidebar (recolhida = so icones): avisado por ela via onCollapsedChange, mesmo
+  // padrao do onMaximizar acima. So esconde a sidebar com o terminal maximizado quando ela esta NESTE
+  // estado -- fixada aberta continua visivel, dividindo a largura com o painel.
+  let barraRecolhida = $state(false);
+
+  // Capacidade do painel (Task 6, Step 8): `pty` e POSIX-only, entao um servidor Windows na mistura
+  // nao tem o painel -- sem o gate o botao abriria um painel morto. Le do SERVIDOR ATIVO (GET
+  // /api/config). Default true (assume capaz) pra nao piscar pro espelho enquanto a resposta ainda
+  // nao chegou.
+  let terminalCapaz = $state(true);
+  // `getActiveId()` NAO e reativo (le localStorage, mesma ressalva de `sessoesNaTela` acima) -- so
+  // ha como o efeito SABER que precisa recalcular via `currentKey`/`overlaySession` (route-driven).
+  // Mas a decisao de REFAZER O FETCH e pela identidade do SERVIDOR, nao da rota: sem este cache, o
+  // toggle quadro<->canvas (que muda `overlaySession` sem trocar servidor) dispararia GET /api/config
+  // de novo a toa a cada clique.
+  let ultimoServidorConsultado: string | null = null;
+  $effect(() => {
+    void currentKey; void overlaySession;
+    const sid = getActiveId();
+    if (sid === ultimoServidorConsultado) return;
+    // A chave so grava dentro do then/catch, NUNCA antes do fetch sair (achado da revisao, Q1): o
+    // efeito reexecuta a cada mudanca de ROTA (`overlaySession` e literal de objeto novo por render
+    // em App.svelte, identidade nova mesmo com o mesmo servidor). Gravar `ultimoServidorConsultado`
+    // aqui, antes do await, fazia uma reexecucao com o MESMO `sid` (ex: navegar pra outra sessao no
+    // mesmo servidor enquanto o fetch anterior ainda voava) cair no guard acima e sair sem pedir de
+    // novo -- a resposta em voo era descartada (o `vivo=false` do cleanup antigo silenciava o
+    // `.then`) e `terminalCapaz` ficava travado no default OU no valor herdado do servidor anterior,
+    // pra sempre. Sem `vivo`/cleanup: compara o servidor ATIVO de novo quando a resposta chega, nao
+    // um booleano de "este efeito ainda e o mais recente".
+    getConfig()
+      .then((c) => {
+        if (getActiveId() !== sid) return;   // trocou nesse meio-tempo -- resposta velha, descarta
+        ultimoServidorConsultado = sid;
+        terminalCapaz = c.somente_leitura.terminal_panel !== false;
+      })
+      // Falha de rede na config nao pode travar o botao: mantem o comportamento anterior (assume
+      // capaz) e deixa o proprio clique do usuario revelar o erro real, se houver.
+      .catch(() => {
+        if (getActiveId() !== sid) return;
+        ultimoServidorConsultado = sid;
+        terminalCapaz = true;
+      });
+  });
   const rows = $derived<AggSession[]>(sessionsStore.rows);
   const hasAttention = $derived(rows.some((row) => row.state === 'awaiting_input'));
 
@@ -153,6 +218,28 @@
     splitSessions = []; // trocou a principal (mesmo nome/outro servidor conta) -> fecha o split
   });
 
+  // Chaves SERVER-AWARE das sessoes com um Chat montado agora (os mesmos tres mounts abaixo). Fecha
+  // o terminal sozinho quando a chave dele sai da tela (navegou pro board/canvas, trocou a
+  // principal, fechou o split, OU trocou de SERVIDOR com o mesmo nome na tela). Por CHAVE, nao por
+  // nome: comparar so o nome deixava passar batido servidor A "api" -> servidor B "api" -- o Chat
+  // remonta (currentKey muda), mas o nome exibido e o mesmo, entao `sessoesNaTela.includes(nome)`
+  // continuava true e o painel ficava aberto, com o socket preso no servidor VELHO.
+  // `void currentKey` e proposital: currentSession sozinho NAO muda de valor nessa troca (mesma
+  // string "api" nos dois servidores), entao so ler currentKey aqui garante o recalculo na hora certa
+  // -- getActiveId() em si nao e reativo.
+  const sessoesNaTela = $derived.by(() => {
+    if (view === 'board' || view === 'canvas') {
+      return overlaySession ? [workspaceSessionKey(overlaySession)] : [];
+    }
+    void currentKey;
+    if (!currentSession || currentSession === 'null' || currentSession === 'undefined') return [];
+    const serverId = getActiveId() ?? '';
+    return [currentSession, ...splitSessions].map((nome) => workspaceSessionKey({ serverId, name: nome }));
+  });
+  $effect(() => {
+    if (terminalOpen && !sessoesNaTela.includes(terminalKey)) terminalOpen = false;
+  });
+
   // Overlay do quadro: o Chat REAL (mesmo componente do resto do app) por cima do kanban, em vez de
   // navegar pra fora. O quadro fica montado atrás — volta intacto, com o mesmo scroll. Uma instância
   // por vez: o overlay cobre a .desktop-main inteira, então não dá pra clicar noutro card sem fechar.
@@ -172,6 +259,10 @@
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       if (document.querySelector('[role="dialog"]:not(.board-overlay)')) return;
+      // CAPTURA na window roda ANTES do onkeydown (bolha) do TerminalPanel — sem esta guarda, Esc
+      // digitado dentro do xterm (que deve chegar no agente, Task 5/I4) fechava o overlay do board
+      // primeiro, ninguem via a tecla.
+      if ((e.target as HTMLElement | null)?.closest('.tp')) return;
       onCloseOverlay();
     };
     window.addEventListener('keydown', onKey, true);
@@ -182,13 +273,18 @@
 <svelte:window onkeydown={onShellKey} />
 
 <div class="desktop-shell">
-  <Sidebar {currentSession} onSelect={onNavigateToChat} {onCompare} {onLogout}
-           boardActive={view === 'board'}
-           canvasActive={view === 'canvas'}
-           onWorkspaceActionsChange={handleSidebarActionsChange}
-           {view} onSelectView={selectView} onOpenCommand={() => (commandOpen = true)} />
+  <div class="sidebar-wrap" class:tp-max-hide={terminalMaximizado && barraRecolhida}>
+    <Sidebar {currentSession} onSelect={onNavigateToChat} {onCompare} {onLogout}
+             boardActive={view === 'board'}
+             canvasActive={view === 'canvas'}
+             onWorkspaceActionsChange={handleSidebarActionsChange}
+             {view} onSelectView={selectView} onOpenCommand={() => (commandOpen = true)}
+             onCollapsedChange={(v) => (barraRecolhida = v)} />
+  </div>
 
-  <main class="desktop-main" class:split={splitSessions.length > 0} class:has-attention={hasAttention}>
+  <div class="desktop-com-terminal">
+  <main class="desktop-main" class:split={splitSessions.length > 0} class:has-attention={hasAttention}
+        class:tp-max-hide={terminalMaximizado}>
     {#if hasAttention}
       <div class="workspace-attention-layer">
         <WorkspaceAttentionStrip {rows} onOpenSession={openSession} />
@@ -210,14 +306,18 @@
              motivo do currentKey: homônimas em servidores diferentes têm o mesmo nome, e só o nome na
              key deixaria o Chat preso no servidor antigo. -->
         {#key workspaceSessionKey(overlaySession)}
+          {@const overlayName = overlaySession.name}
           <div class="board-overlay" role="region" aria-label="Chat da sessão">
             <button class="split-close" onclick={onCloseOverlay}
                     aria-label="Fechar chat" title="Fechar (Esc)">×</button>
             <Chat
-              sessionName={overlaySession.name}
+              sessionName={overlayName}
               desktop={true}
               onBack={onCloseOverlay}
               onNavigateToChat={onNavigateToChat}
+              onOpenTerminalPanel={() => abrirTerminal(overlayName, overlaySession.serverId)}
+              terminalPanelOpen={terminalOpen && terminalKey === workspaceSessionKey(overlaySession)}
+              terminalPanelDisponivel={terminalCapaz}
               topInset={hasAttention ? 52 : 0}
               onOpenWorkspacePalette={() => (commandOpen = true)}
               showContextPanel={true}
@@ -229,13 +329,17 @@
       {/if}
     {:else if currentSession && currentSession !== 'null' && currentSession !== 'undefined'}
       {#key currentKey ?? currentSession}
+        {@const cur = currentSession}
         <div class="pane">
           <Chat
-            sessionName={currentSession}
+            sessionName={cur}
             desktop={true}
             onBack={() => onNavigateToChat('')}
             onNavigateToChat={onNavigateToChat}
             onOpenSplit={openSplit}
+            onOpenTerminalPanel={() => abrirTerminal(cur, getActiveId() ?? '')}
+            terminalPanelOpen={terminalOpen && terminalKey === workspaceSessionKey({ serverId: getActiveId() ?? '', name: cur })}
+            terminalPanelDisponivel={terminalCapaz}
             topInset={hasAttention ? 52 : 0}
             onOpenWorkspacePalette={() => (commandOpen = true)}
             showContextPanel={splitSessions.length === 0}
@@ -253,6 +357,9 @@
             desktop={true}
             onBack={() => (splitSessions = splitSessions.filter((s) => s !== split))}
             onNavigateToChat={onNavigateToChat}
+            onOpenTerminalPanel={() => abrirTerminal(split, getActiveId() ?? '')}
+            terminalPanelOpen={terminalOpen && terminalKey === workspaceSessionKey({ serverId: getActiveId() ?? '', name: split })}
+            terminalPanelDisponivel={terminalCapaz}
             topInset={hasAttention ? 52 : 0}
             onOpenWorkspacePalette={() => (commandOpen = true)}
           />
@@ -265,6 +372,10 @@
       </div>
     {/if}
   </main>
+  <TerminalPanel sessionName={terminalSession} connKey={terminalKey} open={terminalOpen}
+                 onClose={() => (terminalOpen = false)}
+                 onMaximizar={(v) => (terminalMaximizado = v)} />
+  </div>
 
   <WorkspaceCommandPalette
     open={commandOpen}
@@ -283,6 +394,17 @@
     width: 100%;
     overflow: hidden;
   }
+  /* Coluna AQUI, no wrapper — a .desktop-main segue exatamente como estava (regra abaixo intocada),
+     entao .desktop-main.split continua "display: flex" e os dois chats do split seguem lado a lado.
+     position:relative faz o terminal maximizado (.tp.max { position: absolute; inset: 0 }) cobrir
+     so esta area, nao a Sidebar. */
+  .desktop-com-terminal {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    position: relative;
+  }
   .desktop-main {
     flex: 1;
     min-width: 0;
@@ -290,6 +412,26 @@
     position: relative;
     overflow: hidden;
   }
+  /* Terminal maximizado: esconde o chat/board/canvas por baixo (o painel de contexto da direita
+     vem de graca, e um descendente de .desktop-main via Chat.svelte). `visibility`, NAO
+     `display: none` -- nao e o fit() do xterm (o TerminalPanel mora FORA de .desktop-main, irmao
+     dela dentro de .desktop-com-terminal; maximizado ele ancora em position:absolute/inset:0 nesse
+     irmao, sem depender desta caixa). Quem depende e o CHAT: display:none tiraria a lista de
+     mensagens da arvore de layout e o scroll dela se perderia -- ao desmaximizar, o chat
+     reapareceria voltado pro topo. */
+  .desktop-main.tp-max-hide { visibility: hidden; }
+  /* Wrapper da Sidebar: so existe pra dar um lugar pra esconder ela quando o terminal maximiza.
+     display:contents por padrao -- nao vira caixa propria, a <aside> do Sidebar continua filha
+     direta do flex de .desktop-shell (largura 270px/56px dela, intocada). Terminal maximizado:
+     display:none aqui, DIFERENTE do visibility:hidden do .desktop-main acima -- ali quem depende da
+     caixa existir e o scroll do chat, nao o xterm (ver comentario acima). Aqui a caixa da Sidebar
+     TAMBEM tem algo dependendo dela: o scroll da lista de sessoes some no Chromium quando o wrapper
+     vira display:none (zera o scrollTop) -- aceito de proposito, porque o espaco vazio da coluna
+     incomodaria mais do que achar a lista de volta no topo. So entra `tp-max-hide` com a sidebar
+     TAMBEM no trilho (`barraRecolhida`) -- fixada aberta continua visivel, dividindo a largura com
+     o painel. */
+  .sidebar-wrap { display: contents; }
+  .sidebar-wrap.tp-max-hide { display: none; }
   .workspace-attention-layer {
     position: absolute;
     /* Subiu junto com a saida do seletor de view (que ocupava a faixa de 4-48px). */

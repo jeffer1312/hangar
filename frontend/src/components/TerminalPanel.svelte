@@ -1,0 +1,550 @@
+<script lang="ts">
+  import { TermSocket, termUrl } from '../lib/term';
+  import { openShell, openNativeTerminal } from '../lib/api';
+  // `import type`: some no build (nao vira require), entao NAO desfaz o import dinamico logo abaixo
+  // -- o xterm continua fora do bundle de quem nunca abre o terminal.
+  import type { Terminal } from '@xterm/xterm';
+  import type { FitAddon } from '@xterm/addon-fit';
+
+  interface Props {
+    sessionName: string; connKey: string; open: boolean; onClose: () => void;
+    onMaximizar?: (v: boolean) => void;
+  }
+  let { sessionName, connKey, open, onClose, onMaximizar }: Props = $props();
+
+  let host = $state<HTMLDivElement | null>(null);
+  let secEl = $state<HTMLElement | null>(null);
+  let maximizado = $state(false);
+  let caiu = $state(false);
+  // Motivo da queda, quando existe: o backend fecha com texto legivel ("outra conexao assumiu"), e
+  // a falha de CARREGAMENTO do xterm escreve o dela aqui. Sem isto o rotulo era sempre
+  // "desconectado", indistinguivel de queda de rede.
+  let motivo = $state<string | null>(null);
+  let geracao = $state(0);          // incrementar reconecta de verdade
+  let sock: TermSocket | null = null;
+  let term: Terminal | null = null;
+  let fit: FitAddon | null = null;
+  let ro: ResizeObserver | null = null;
+  let mo: MutationObserver | null = null;   // UM so -- cobre as duas abas (attach e shell)
+  let alturaArrastada = '';   // altura gravada inline pelo drag (guardada pra repor ao desmaximizar)
+
+  // ── Alca de arrastar a borda de CIMA, mesmo desenho do resize-handle da Sidebar.svelte:1204 ──────
+  // Troca o "resize: vertical" nativo do navegador (alca no canto inferior direito, cresce pra baixo
+  // -- inutil numa faixa colada no rodape, crescer pra baixo e crescer pra fora da tela). O painel
+  // fica com a borda de BAIXO fixa (ultimo item da coluna flex do DesktopShell), entao a altura vem
+  // da distancia entre o ponteiro e essa borda inferior -- capturada no pointerdown porque ela nao
+  // muda durante o arrasto.
+  // TMAX tambem limitado pela altura da JANELA, nao so pelo valor fixo: o .desktop-main e flex:1 com
+  // base 0, entao numa janela baixa (~768px) arrastar ate o topo dava a altura toda ao painel e 0px
+  // ao chat -- ele sumia sem estar maximizado, sem pista visual de que ainda existia. A folga de
+  // 120px mantem um pedaco do chat sempre visivel.
+  const TMIN = 120, TMAX = 800;
+  const clampH = (h: number) => Math.max(TMIN, Math.min(TMAX, window.innerHeight - 120, h));
+  let resizing = $state(false);
+  let resizeBottom = 0;
+  function resizeStart(e: PointerEvent) {
+    if (!secEl) return;
+    resizing = true;
+    resizeBottom = secEl.getBoundingClientRect().bottom;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }
+  function resizeMove(e: PointerEvent) {
+    if (resizing && secEl) secEl.style.height = clampH(resizeBottom - e.clientY) + 'px';
+  }
+  function resizeEnd() {
+    resizing = false;
+  }
+
+  // ── Segunda aba: shell escondido (Task 6, Step 7) ───────────────────────────────────────────────
+  // A sessao tmux e a mesma que o backend cria/reata em POST /shell (separada e ESCONDIDA das tres
+  // views do app -- so o painel e o terminal nativo alcancam). So entra depois do primeiro clique na
+  // aba, pra nao gastar POST+fork de tmux em quem nunca abre o shell.
+  let abaAtiva = $state<'attach' | 'shell'>('attach');
+  let shellVisitada = false;                     // trava contra reclique repetindo o POST /shell
+  let shellNome = $state<string | null>(null);   // "term-<nome>" devolvido pelo backend -- e o ALVO
+  let shellErro = $state<string | null>(null);
+  let shellCarregando = $state(false);
+  let hostShell = $state<HTMLDivElement | null>(null);
+  let caiuShell = $state(false);
+  let motivoShell = $state<string | null>(null);
+  let geracaoShell = $state(0);
+  let sockShell: TermSocket | null = null;
+  let termShell: Terminal | null = null;
+  let fitShell: FitAddon | null = null;
+  let roShell: ResizeObserver | null = null;
+
+  // ── Terminal nativo (item da v1, pedido explicito do dono do plano) ────────────────────────────
+  // Aviso do 503 (sem emulador no PATH, ou o emulador morreu logo apos abrir): SOBREVIVE ao fechar
+  // do painel de proposito -- o painel fecha ANTES do POST sair (ver abrirTerminalNativo), entao
+  // qualquer erro so chega DEPOIS que a `<section>` (que so existe com `open`) ja sumiu do DOM. Por
+  // isso este aviso mora FORA do bloco `{#if open}` no template. Sem toast global no app (nao existe
+  // um; `window.alert()` foi descartado -- ver o comentario de EnginesSettings.svelte sobre nao usar
+  // dialogo nativo, quebra o tema), entao e um aviso local mesmo, auto-some.
+  let nativeErro = $state<string | null>(null);
+  let nativeErroTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // Alvo do terminal nativo = a aba ATIVA no momento do clique (attach ou shell), o mesmo tmux
+  // session name que o painel embutido estaria usando ali. Fecha o painel ANTES de pedir a janela:
+  // e a regra que evita dois clientes (o xterm embutido + a janela nativa) com tamanhos diferentes
+  // brigando pelo `window-size=latest` da MESMA sessao tmux (mesmo motivo do comentario em
+  // termsock.py sobre "um painel por sessao").
+  function abrirTerminalNativo() {
+    const alvo = abaAtiva === 'attach' ? sessionName : (shellNome ?? sessionName);
+    onClose();
+    openNativeTerminal(alvo).catch((e) => {
+      clearTimeout(nativeErroTimer);
+      // Mensagem do backend (503 = sem emulador no PATH, ou o emulador morreu logo apos abrir) --
+      // mostrada como veio, nao engolida.
+      nativeErro = e instanceof Error ? e.message : 'falha ao abrir o terminal nativo';
+      nativeErroTimer = setTimeout(() => { nativeErro = null; }, 8000);
+    });
+  }
+
+  // Fecha (o X) reseta o maximizado: sem isto o painel reabria maximizado por acidente, herdando
+  // estado da vez anterior.
+  // resizing tambem zera aqui: ele so volta a false no pointerup/pointercancel da propria alca, e se
+  // a section sair do DOM em pleno arrasto (ex: botao lateral do mouse muda o hash, DesktopShell fecha
+  // o painel) o pointer capture e liberado sem esses eventos -- a marca ficava presa em true pra
+  // sempre (o TerminalPanel nunca desmonta), e so passar o mouse pela faixa da alca redimensionava
+  // de novo, sem botao apertado.
+  $effect(() => { if (!open) { maximizado = false; resizing = false; } });
+
+  // Avisa o pai (DesktopShell) sempre que o maximizado mudar -- inclusive ao FECHAR o painel
+  // maximizado (o effect acima zera `maximizado` nesse caso tambem), senao o chat que o pai
+  // escondeu ficaria escondido pra sempre.
+  $effect(() => { onMaximizar?.(maximizado); });
+
+  // Troca de sessao (outro Chat pediu o painel, MESMO mount) ou fechar o painel: a aba do shell era
+  // de outra sessao (ou de uma rodada anterior) -- esquece, senao o usuario digitaria no shell ERRADO
+  // com o rotulo da sessao nova por cima. Reabrir chama POST /shell de novo, que e idempotente (reata
+  // a MESMA sessao tmux) -- quem preserva a tela e o tmux, nao este estado.
+  $effect(() => {
+    void sessionName; void connKey; void open;
+    abaAtiva = 'attach';
+    shellVisitada = false;
+    shellNome = null;
+    shellErro = null;
+    // Sem isto, trocar de sessao com o POST /shell ainda em voo deixava a sessao NOVA nascendo com
+    // shellCarregando===true pra sempre (o `finally` do abrirAbaShell so zera se `alvo===sessionName`,
+    // e a sessao mudou). Sem consequencia visivel hoje (nada le isto antes do 1o clique), mas e
+    // estado mentindo.
+    shellCarregando = false;
+    // Q3: o aviso do terminal nativo e sobre a SESSAO em que o clique aconteceu -- sem isto, um 503
+    // (ou um 404 "sessao nao existe", que e especifico) ficava flutuando por ate 8s sobre a sessao
+    // NOVA depois de navegar, atribuido a ela por engano.
+    clearTimeout(nativeErroTimer);
+    nativeErro = null;
+  });
+
+  // UX de troca de aba: joga o foco pro terminal que ficou visivel, senao o usuario precisa clicar
+  // dentro pra digitar depois de trocar. So dispara na troca -- nao precisa ler `term`/`termShell`
+  // como dependencia (nao sao $state; o valor lido AQUI, no disparo, ja e o atual). Clique explicito
+  // na aba, sem guarda: e um gesto deliberado, o foco tem que ir junto.
+  $effect(() => { (abaAtiva === 'attach' ? term : termShell)?.focus(); });
+
+  // Guarda do foco TARDIO (achado da revisao, Q2): so usada pelos dois efeitos de montagem abaixo,
+  // cujo `.focus()` roda depois de um POST + import dinamico do xterm -- tempo de sobra pro usuario
+  // clicar em outro lugar no meio (o composer do chat, por exemplo). Sem isto, um Enter digitado la
+  // chegava aqui e executava a frase como comando no shell. So focar se o foco atual ja estiver
+  // DENTRO do painel ou for o `body` (nada de especifico roubado).
+  function podeFocar(): boolean {
+    const ae = document.activeElement;
+    return ae === document.body || (secEl?.contains(ae) ?? false);
+  }
+
+  function toggleMax() {
+    if (secEl) {
+      if (!maximizado) {
+        // Vai maximizar: o arrasto da alca (resizeMove) grava `height` INLINE na section, e inline
+        // vence o `height: auto` de `.tp.max` no cascade -- sem zerar, maximizar depois de arrastar
+        // nao maximizava. Guarda o valor antes de zerar pra poder repor.
+        alturaArrastada = secEl.style.height;
+        secEl.style.height = '';
+      } else {
+        // Volta do maximizado: repoe a altura arrastada -- sem isto, desmaximizar sempre caia nos
+        // 320px do CSS, perdendo o ajuste manual do usuario.
+        secEl.style.height = alturaArrastada;
+      }
+    }
+    maximizado = !maximizado;
+  }
+
+  // Cores do xterm a partir dos tokens do app. `color`, propriedade REAL (nao custom property): o
+  // browser sempre entrega ela RESOLVIDA, mesmo quando --text-primary e um color-mix() com var()
+  // aninhado (app.css:323, o boost de texto sobre papel de parede) -- ler a CUSTOM PROPERTY direto
+  // devolveria a string CRUA com var() por dentro (e assim que a spec de CSS Custom Properties define
+  // o computed value delas: sem substituir var() aninhado), o xterm rejeitava calado e caia no branco
+  // padrao. `body` ja seta `color: var(--text-primary)` (app.css) e `host` herda -- de graca, sem
+  // elemento nem estilo extra. --accent, ao contrario, e hex LITERAL nas duas paletas do app.css (sem
+  // var() aninhado), entao ler a custom property direto e seguro ali.
+  // A chave e `foreground`, NAO `fg`: o xterm ignora chave desconhecida em silencio e cai no branco
+  // padrao dele. Ficou errado por semanas sem ninguem ver porque o objeto entra no `theme` por
+  // ESPALHAMENTO (`{ background: ..., ...lerTema(el) }`), e propriedade vinda de spread escapa da
+  // checagem de excesso do TypeScript -- `svelte-check` passava limpo com o tema nunca sendo aplicado.
+  function lerTema(el: HTMLElement): { foreground: string; cursor: string } {
+    const cs = getComputedStyle(el);
+    const foreground = cs.color || '#d2cbcd';
+    const cursor = cs.getPropertyValue('--accent').trim() || foreground;
+    return { foreground, cursor };
+  }
+
+  // Constroi o Terminal+FitAddon com o mesmo tema/fonte das duas abas -- fatorado so pra nao duplicar
+  // o comentario do 'rgba(0, 0, 0, 0)' (achado caro, ver abaixo) numa segunda copia que pode divergir.
+  function novoTerminal(hostEl: HTMLDivElement, TerminalCls: typeof Terminal,
+                        FitAddonCls: typeof FitAddon) {
+    // getComputedStyle, nao `var(--font-mono)` cru: o renderer canvas monta
+    // `ctx.font = \`${size}px ${family}\``, onde var() e invalido e ignorado calado -> metrica de
+    // glifo errada e grade desalinhada.
+    const mono = getComputedStyle(hostEl).getPropertyValue('--font-mono').trim() || 'monospace';
+    const t = new TerminalCls({
+      fontFamily: mono, fontSize: 12, convertEol: false,
+      allowTransparency: true,
+      // 'rgba(0, 0, 0, 0)', NAO 'transparent': o parser de cor do xterm 6.0.0 (Color.ts) so casa
+      // hex/rgb()/rgba() -- 'transparent' cai no caminho do canvas e LANCA (alfa != 255 e
+      // rejeitado), o ThemeService ENGOLE a excecao calado e devolve o fallback #000000 opaco por
+      // cima do --surface-inset do .tp-screen (regra de vidro do CLAUDE.md). Medido no pacote
+      // instalado -- nao aparece nenhum erro no console, so o retangulo preto.
+      theme: { background: 'rgba(0, 0, 0, 0)', ...lerTema(hostEl) },
+    });
+    const f = new FitAddonCls();
+    t.loadAddon(f);
+    t.open(hostEl);
+    f.fit();
+    return { term: t, fit: f };
+  }
+
+  // Garante o MutationObserver compartilhado (troca de tema claro/escuro com o painel ABERTO):
+  // qualquer uma das duas abas que montar primeiro o cria; a outra reusa. O fundo acompanha sozinho
+  // (e CSS, --surface-inset por baixo do canvas transparente), mas foreground/cursor sao retrato do
+  // MOUNT -- sem isto, escuro->claro deixava o texto quase-branco sobre fundo claro ate fechar e
+  // reabrir. Cobre as DUAS instancias (Task 6, Step 7): checa cada uma antes de tocar.
+  function garantirObserverDeTema() {
+    if (mo) return;
+    mo = new MutationObserver(() => {
+      if (term && host) term.options.theme = { background: 'rgba(0, 0, 0, 0)', ...lerTema(host) };
+      if (termShell && hostShell) {
+        termShell.options.theme = { background: 'rgba(0, 0, 0, 0)', ...lerTema(hostShell) };
+      }
+    });
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  }
+
+  $effect(() => {
+    // Os tres lidos AQUI, sincronos: se `sessionName` so fosse lido dentro do callback async (depois
+    // do await), o Svelte nao o rastrearia e trocar de sessao no sidebar deixaria o terminal preso
+    // na anterior. `geracao` e o que faz o botao de reconectar funcionar.
+    const alvo = sessionName;
+    // connKey (server-aware, "servidor::nome"): so o nome nao bastava — trocar de servidor com uma
+    // sessao homonima na tela nao mudava `sessionName`, e o socket ficava conectado no servidor
+    // VELHO (termUrl usa o servidor ATIVO no instante da conexao, nao um serverId explicito).
+    void connKey;
+    void geracao;
+    if (!open || !host) return;
+    let vivo = true;
+    caiu = false;
+    motivo = null;
+
+    (async () => {
+      // Import DINAMICO: xterm so entra no bundle de quem abre o terminal. E feature desktop-only na
+      // v1 — o PWA do celular nao pode pagar o download.
+      const [{ Terminal }, { FitAddon }] = await Promise.all([
+        import('@xterm/xterm'),
+        import('@xterm/addon-fit'),
+      ]);
+      await import('@xterm/xterm/css/xterm.css');
+      if (!vivo || !host) return;
+
+      const r = novoTerminal(host, Terminal, FitAddon);
+      term = r.term; fit = r.fit;
+      // Copia local NAO-NULA: `term` e `fit` sao reatribuidos (e zerados no cleanup), entao dentro
+      // dos callbacks abaixo eles seriam `Terminal | null` e todo uso pediria `!`.
+      const t = r.term;
+
+      garantirObserverDeTema();
+
+      const enc = new TextEncoder();
+      sock = new TermSocket(termUrl(alvo, t.cols, t.rows), {
+        data: (b) => t.write(b),
+        // `vivo`, nao incondicional: TermSocket.close() dispara onclose ASSINCRONO. Ao trocar de
+        // sessao, o cleanup fecha o socket velho -> o efeito novo zera `caiu` -> DEPOIS chega o
+        // onclose do socket velho -> sem a guarda, `caiu = true` aterrissava na sessao ERRADA (ou
+        // num componente ja destruido, se foi o painel que fechou).
+        close: (m) => { if (vivo) { caiu = true; motivo = m ?? null; } },
+      });
+      t.onData((d: string) => sock?.send(enc.encode(d)));
+
+      ro = new ResizeObserver(() => { r.fit.fit(); sock?.resize(t.cols, t.rows); });
+      ro.observe(host);
+      // I3: o $effect por `abaAtiva` sozinho erra a ESTREIA desta aba -- no primeiro clique em
+      // "Shell", `abaAtiva` muda ANTES do POST /shell sair, `term` ainda e null ali, e quando o
+      // terminal enfim monta (agora) o efeito ja rodou e nao roda de novo. Foca aqui tambem, so se
+      // esta aba seguir sendo a visivel no instante em que o mount terminou -- e so se `podeFocar()`
+      // (Q2): o usuario pode ter clicado no composer do chat nesse meio-tempo.
+      if (abaAtiva === 'attach' && podeFocar()) t.focus();
+    })().catch((e) => {
+      // Falha do import DINAMICO (pedaco 404 depois de um deploy novo com a aba aberta; o dev
+      // server do Vite servindo modulo vazio, documentado 2x no CLAUDE.md) ou do proprio mount.
+      // Sem isto virava rejeicao nao tratada: tela em branco pra sempre, `caiu` nunca setado, nem
+      // o botao de reconectar aparecia. Mesmo padrao do abrirAbaShell — mostra a mensagem, nao
+      // engole.
+      if (!vivo) return;
+      caiu = true;
+      motivo = e instanceof Error ? `falha ao carregar o terminal: ${e.message}`
+                                  : 'falha ao carregar o terminal';
+    });
+
+    return () => {
+      vivo = false;
+      ro?.disconnect(); ro = null;
+      sock?.close(); sock = null;
+      term?.dispose(); term = null;
+      // O observer de tema e COMPARTILHADO pelas duas abas: desconectar aqui com a aba shell ainda
+      // montada deixava o terminal dela sem acompanhar troca de tema ate o proximo mount (achado da
+      // revisao). So desliga quando nao sobra ninguem pra observar.
+      if (!termShell) { mo?.disconnect(); mo = null; }
+    };
+  });
+
+  // Clique na aba Shell: so dispara o POST na PRIMEIRA vez (shellVisitada trava reclique). Idempotente
+  // no backend (reata a mesma sessao), mas repetir aqui so gastaria rede a toa.
+  async function abrirAbaShell() {
+    abaAtiva = 'shell';
+    if (shellVisitada) return;
+    shellVisitada = true;
+    shellCarregando = true;
+    shellErro = null;
+    const alvo = sessionName;   // captura ANTES do await, mesma cautela do efeito principal
+    try {
+      const r = await openShell(alvo);
+      if (alvo !== sessionName) return;   // sessao trocou enquanto esperava -- descarta resposta velha
+      shellNome = r.shell;
+    } catch (e) {
+      if (alvo !== sessionName) return;
+      // Mensagem do backend (409 = colisao de nome, 404/500 = tmux recusou) -- mostrada como veio,
+      // nao engolida.
+      shellErro = e instanceof Error ? e.message : 'falha ao abrir o shell';
+      // Destrava o clique seguinte: um erro TRANSITORIO (409 na janela de corrida com um `tmux
+      // new-session` do proprio usuario, 500 do tmux, rede) nao pode deixar a aba morta ate fechar
+      // e reabrir o painel inteiro -- sem isto o gesto natural (clicar em "Shell" de novo) caia no
+      // guard do topo desta funcao e nao fazia nada.
+      shellVisitada = false;
+    } finally {
+      if (alvo === sessionName) shellCarregando = false;
+    }
+  }
+
+  // Mesmo desenho do efeito do attach, mirando `shellNome` (o "term-<nome>" da sessao escondida) em
+  // vez de `sessionName`. So roda depois que `abrirAbaShell` resolve o POST -- e o que faz a aba
+  // shell ser um mount so por rodada (trocar de volta pra "attach" e voltar NAO reexecuta isto,
+  // porque `abaAtiva` nao entra nas dependencias: o socket da aba inativa continua aberto).
+  $effect(() => {
+    const alvo = shellNome;
+    void geracaoShell;
+    if (!open || !alvo || !hostShell) return;
+    let vivo = true;
+    caiuShell = false;
+    motivoShell = null;
+
+    (async () => {
+      const [{ Terminal }, { FitAddon }] = await Promise.all([
+        import('@xterm/xterm'),
+        import('@xterm/addon-fit'),
+      ]);
+      await import('@xterm/xterm/css/xterm.css');
+      if (!vivo || !hostShell) return;
+
+      const r = novoTerminal(hostShell, Terminal, FitAddon);
+      termShell = r.term; fitShell = r.fit;
+      const t = r.term;                          // mesma copia local nao-nula do efeito do attach
+
+      garantirObserverDeTema();
+
+      const enc = new TextEncoder();
+      sockShell = new TermSocket(termUrl(alvo, t.cols, t.rows), {
+        data: (b) => t.write(b),
+        close: (m) => { if (vivo) { caiuShell = true; motivoShell = m ?? null; } },
+      });
+      t.onData((d: string) => sockShell?.send(enc.encode(d)));
+
+      roShell = new ResizeObserver(() => { r.fit.fit(); sockShell?.resize(t.cols, t.rows); });
+      roShell.observe(hostShell);
+      // Mesmo motivo do efeito do attach acima: a estreia desta aba so foca aqui -- e so com
+      // `podeFocar()` (Q2), pelo mesmo risco (POST /shell + import dinamico do xterm e tempo de
+      // sobra pro usuario ja estar digitando em outro lugar).
+      if (abaAtiva === 'shell' && podeFocar()) t.focus();
+    })().catch((e) => {
+      // Mesmo motivo do efeito do attach: import dinamico que falha nao pode virar tela em branco
+      // muda. Aqui o `shellNome` ja existe (o POST passou), entao quem mostra o aviso e o rotulo do
+      // botao de reconectar, nao o `{:else if shellErro}` do template.
+      if (!vivo) return;
+      caiuShell = true;
+      motivoShell = e instanceof Error ? `falha ao carregar o terminal: ${e.message}`
+                                       : 'falha ao carregar o terminal';
+    });
+
+    return () => {
+      vivo = false;
+      roShell?.disconnect(); roShell = null;
+      sockShell?.close(); sockShell = null;
+      termShell?.dispose(); termShell = null;
+      if (!term) { mo?.disconnect(); mo = null; }   // compartilhado: ver o cleanup do attach
+    };
+  });
+</script>
+
+{#if open}
+  <!-- UM mount, DUAS abas (attach + shell) e DOIS tamanhos (normal/max): mover ou remontar
+       qualquer um dos dois derrubaria xterm.js e socket. Trocar de aba so alterna qual `.tp-screen`
+       fica visivel -- visibility, nao display:none, pra manter a caixa (ResizeObserver/fit
+       continuam medindo certo mesmo com a aba escondida). -->
+  <!-- svelte-ignore a11y_no_static_element_interactions (onkeydown so pra parar propagacao; quem
+       captura teclado de verdade e o textarea do proprio xterm, ja nativamente interativo) -->
+  <section class="tp" class:max={maximizado} bind:this={secEl}
+           onkeydown={(e) => {
+             // BOLHA, nao captura: o xterm registra o keydown no proprio textarea (descendente desta
+             // section) e trata a tecla PRIMEIRO na fase de captura -- se a gente parasse na captura,
+             // o evento nunca chegava nele (digitar/setas/Ctrl+C morriam mudos).
+             // Esc vai pro AGENTE, nao fecha o painel: e a tecla que interrompe o Claude Code na TUI,
+             // e um terminal onde Esc fecha a janela em vez de chegar no Claude perde a razao de
+             // existir (decisao do dono do plano). So o botao X fecha.
+             // stopPropagation em QUALQUER tecla (Esc incluso) so pra nao vazar pros atalhos globais
+             // do Chat (svelte:window onkeydown) enquanto o usuario digita aqui dentro.
+             e.stopPropagation();
+           }}>
+    <!-- Escondida quando maximizado (CSS): inset:0 ja cobre a tela inteira, arrastar a borda de
+         cima nao faz sentido ali -- sem alca, sem pointerdown, sem estado de arrasto pra sujar. -->
+    <div class="tp-resize-handle" onpointerdown={resizeStart} onpointermove={resizeMove}
+         onpointerup={resizeEnd} onpointercancel={resizeEnd}
+         role="separator" aria-label="Redimensionar painel de terminal" aria-orientation="horizontal"></div>
+    <header class="tp-bar">
+      <div class="tp-abas" role="tablist">
+        <button class="tp-aba" class:sel={abaAtiva === 'attach'} role="tab" aria-selected={abaAtiva === 'attach'}
+                onclick={() => (abaAtiva = 'attach')}>{sessionName}</button>
+        <button class="tp-aba" class:sel={abaAtiva === 'shell'} role="tab" aria-selected={abaAtiva === 'shell'}
+                onclick={abrirAbaShell}>Shell</button>
+      </div>
+      {#if (abaAtiva === 'attach' ? caiu : caiuShell)}
+        <!-- Motivo quando o backend (ou a falha de carregamento) deu um; "desconectado" cru quando
+             nao ha — o caso da queda de rede e o do handshake recusado, que o navegador entrega sem
+             reason nenhum. `title` com o texto inteiro porque o rotulo trunca. -->
+        {@const m = abaAtiva === 'attach' ? motivo : motivoShell}
+        <button class="tp-recon" title={m ?? undefined}
+                onclick={() => (abaAtiva === 'attach' ? geracao++ : geracaoShell++)}>
+          {m ?? 'desconectado'} · reconectar
+        </button>
+      {/if}
+      <button onclick={abrirTerminalNativo} aria-label="Abrir terminal nativo"
+              title="Abrir janela do terminal do sistema, já anexada (fecha este painel)">↗</button>
+      <button onclick={toggleMax} aria-label="Maximizar">⤢</button>
+      <button onclick={onClose} aria-label="Fechar">✕</button>
+    </header>
+    <div class="tp-screens">
+      <div class="tp-screen" class:hidden={abaAtiva !== 'attach'} bind:this={host}></div>
+      {#if shellNome}
+        <div class="tp-screen" class:hidden={abaAtiva !== 'shell'} bind:this={hostShell}></div>
+      {:else if shellErro}
+        <div class="tp-screen tp-status" class:hidden={abaAtiva !== 'shell'}>
+          <p class="tp-erro">Shell: {shellErro}</p>
+        </div>
+      {:else if shellCarregando}
+        <div class="tp-screen tp-status" class:hidden={abaAtiva !== 'shell'}>
+          <p class="tp-msg">abrindo shell…</p>
+        </div>
+      {/if}
+    </div>
+  </section>
+{/if}
+
+{#if nativeErro}
+  <!-- FORA do `{#if open}` de proposito: abrirTerminalNativo fecha o painel ANTES do POST sair, entao
+       um erro so chega depois que a `<section>` acima ja sumiu do DOM. -->
+  <div class="tp-native-erro" role="alert">
+    <p>{nativeErro}</p>
+    <button onclick={() => { clearTimeout(nativeErroTimer); nativeErro = null; }} aria-label="Fechar aviso">✕</button>
+  </div>
+{/if}
+
+<style>
+  .tp {
+    position: relative;   /* ancora o tp-resize-handle */
+    display: flex; flex-direction: column; height: 320px;
+    border-top: 1px solid var(--border-subtle); overflow: hidden;
+  }
+  /* z-index 40, nao 5: precisa cobrir o .board-overlay (DesktopShell.svelte, z-index:30) quando o
+     terminal e aberto de dentro do chat-overlay do board/canvas e depois maximizado. */
+  .tp.max { position: absolute; inset: 0; height: auto; z-index: 40; }
+  /* Alca de arrastar a borda de CIMA (mesmo desenho do resize-handle da Sidebar.svelte) -- troca o
+     "resize: vertical" nativo, que so oferece alca no canto inferior direito e cresce pra baixo
+     (inutil aqui: o painel cola no rodape, crescer pra baixo e crescer pra fora da tela). */
+  .tp-resize-handle {
+    position: absolute; top: 0; left: 0; right: 0; height: 6px;
+    cursor: row-resize; z-index: 6; touch-action: none;
+  }
+  @media (hover: hover) {
+    .tp-resize-handle:hover { background: var(--accent-dim); }
+  }
+  .tp.max .tp-resize-handle { display: none; }
+  /* MESMO veu do .tp-screen, nao `transparent`: a barra e o corpo do terminal sao a MESMA superficie,
+     e o usuario le diferenca de material como "isto e outro painel". Com `transparent` a barra
+     mostrava o papel de parede em brilho cheio enquanto o corpo logo abaixo estava sob o veu -- a
+     faixa parecia uma segunda sessao colada em cima. Vale nos dois estados (encaixado e maximizado):
+     maximizado o chat esta escondido atras (onMaximizar -> DesktopShell), entao nao ha texto pra
+     vazar por baixo dos rotulos e o veu continua sendo o certo. */
+  /* padding-top proprio (nao o var(--space-1) do shorthand): a alca de arrasto do topo (position:
+     absolute, height:6px) cobria os 2px de cima dos botoes (abas, ↗, ⤢, ✕), que comecavam em y≈4px --
+     clicar ali comecava um arrasto em vez de acionar o botao. */
+  .tp-bar { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2); padding-top: 6px; background: var(--glass-panel); }
+  .tp-abas { display: flex; gap: var(--space-1); flex: 1; min-width: 0; }
+  .tp-aba {
+    padding: 2px var(--space-2); border-radius: var(--radius-sm); border: 1px solid transparent;
+    background: transparent; color: var(--text-muted); font-size: var(--text-xs); cursor: pointer;
+    max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .tp-aba:hover { background: var(--bg-hover); }
+  /* Botao nativo como os irmaos da barra (↗ ⤢ ✕): so o teto de largura, mesmo par max-width+
+     ellipsis do .tp-aba acima. O rotulo agora carrega o MOTIVO da queda, que pode ser uma frase
+     longa (mensagem de import quebrado) — sem o teto ela espremia as abas ate sumir. */
+  .tp-recon { max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tp-aba.sel { background: var(--accent-dim); color: var(--accent); }
+  /* Posicionamento relativo: as duas telas se empilham em cima uma da outra (position:absolute) e a
+     visivel e escolhida por `visibility`, nao `display:none` -- display:none zeraria a caixa e o
+     ResizeObserver/fit() da aba escondida mediriam 0x0 na proxima vez que ficasse visivel. */
+  .tp-screens { flex: 1; min-height: 0; position: relative; }
+  /* `--glass-panel` (o veu do slider TRANSPARENCIA) e nao `--surface-inset` (o slider "Solidez das
+     caixas"), divergindo de proposito da regra "area de texto usa --surface-inset": o que muda a
+     leitura aqui e o TAMANHO. 87% numa caixinha de campo de texto se le como caixa; numa faixa de
+     320px de largura inteira se le como PAREDE -- com papel de parede ligado, a foto atravessa o
+     chat todo e para no terminal. O fundo do xterm e rgba(0,0,0,0) de proposito (ver CLAUDE.md), e
+     quem pinta e este bloco: seguindo o painel, o terminal entra no mesmo vidro do resto. */
+  /* Maximizado usa o MESMO veu: o chat esta escondido atras (onMaximizar -> DesktopShell esconde
+     .desktop-main com visibility:hidden), entao nao ha texto pra vazar e nao existe motivo pra um
+     fundo diferente. Por isso nao ha regra `.tp.max .tp-screen` -- a de cima ja vale nos dois. */
+  .tp-screen { position: absolute; inset: 0; background: var(--glass-panel); }
+  .tp-screen.hidden { visibility: hidden; }
+  /* A folha da biblioteca (node_modules/@xterm/xterm/css/xterm.css:95) pinta ".xterm-viewport" com
+     "background-color: #000" chapado -- comentario original: "On OS X this is required in order for
+     the scroll bar to appear fully opaque". Por cima do var(--glass-panel) do .tp-screen acima, isso
+     tapa o papel de parede com um retangulo preto (o allowTransparency/theme.background do xterm nao
+     alcanca essa camada -- e CSS da folha, nao o tema do terminal). :global() e obrigatorio: o elemento
+     e criado pelo xterm.js, fora do escopo do Svelte. Conferido o CSS INTEIRO da biblioteca -- e a
+     UNICA camada opaca no caminho (.composition-view tambem e #000, mas fica display:none exceto
+     durante composicao de IME, entao nao cobre a tela normalmente). */
+  .tp-screen :global(.xterm-viewport) { background-color: transparent; }
+  .tp-status { display: flex; align-items: center; justify-content: center; }
+  .tp-msg { margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
+  .tp-erro { margin: 0; padding: 0 var(--space-4); font-size: var(--text-sm); color: var(--error); text-align: center; }
+  /* Flutua fora do painel (que pode estar fechado quando isto aparece) -- superficie propria porque
+     nao ha painel de vidro por baixo pra herdar (regra de vidro: --surface-raised, nao --bg-elevated). */
+  .tp-native-erro {
+    position: fixed; right: var(--space-4); bottom: var(--space-4); z-index: 50;
+    display: flex; align-items: center; gap: var(--space-3); max-width: 360px;
+    padding: var(--space-3) var(--space-3); border-radius: var(--radius-md);
+    border: 1px solid var(--border-subtle); background: var(--surface-raised);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.24);
+  }
+  .tp-native-erro p { margin: 0; font-size: var(--text-sm); color: var(--text-primary); }
+  .tp-native-erro button {
+    flex-shrink: 0; border: none; background: transparent; color: var(--text-muted); cursor: pointer;
+  }
+</style>
