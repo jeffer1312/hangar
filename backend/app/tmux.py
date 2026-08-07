@@ -89,7 +89,14 @@ def _pane_target(name: str) -> str:
     # "sessao 0" -> resolvia o pane ERRADO e vazava conversa/preview entre sessoes. `=NAME:` forca
     # match exato de sessao (`=`) escopado a sessao (`:`, janela/pane ativo). Nomes nao-numericos
     # ja funcionavam; isto cobre os dois casos.
-    return f"={name}:"
+    #
+    # E os dois-pontos finais significam "janela/pane ATIVO": o app fala com o que estiver na frente,
+    # nao com o agente. O agentpane resolve por processo; None = nao sei, vale o comportamento antigo.
+    #
+    # Import TARDIO porque agentpane importa este modulo — em cima seria ciclo. Depois da 1a chamada
+    # e uma busca em dict.
+    from app.agentpane import resolve_target
+    return resolve_target(name) or f"={name}:"
 
 
 def list_sessions() -> list[dict]:
@@ -124,6 +131,26 @@ def list_panes_active() -> list[dict]:
         out[name] = {"name": name, "pid": int(pid) if pid.isdigit() else None, "cwd": cwd,
                      "pane_id": pane_id}
     return list(out.values())
+
+
+def list_panes_of(name: str) -> list[dict]:
+    # TODOS os panes de UMA sessao (list_panes_active devolve so o ATIVO, de todas). `-s` = escopo
+    # sessao; `=NAME` = match exato (mesma pegadinha documentada no _pane_target).
+    #
+    # O `:` final NAO e cosmetico aqui: medido nesta maquina, `-s -t =0` (sem ele) para um nome
+    # NUMERICO sem sessao correspondente devolve rc=0 e os panes da sessao ATTACHED do servidor —
+    # nao falha. `-s -t =0:` falha corretamente com "can't find session". `-s` continua devolvendo
+    # TODOS os panes da sessao com o `:` (testado com sessao de 2 janelas); o `:` so fecha a mesma
+    # fresta de nome numerico que o _pane_target ja documenta acima.
+    cp = _run(["tmux", "list-panes", "-s", "-t", f"={name}:", "-F", "#{pane_id}\t#{pane_pid}"])
+    if cp.returncode != 0:
+        return []
+    out = []
+    for line in cp.stdout.splitlines():
+        pane_id, _, pid = line.partition("\t")
+        if pane_id.startswith("%") and pid.isdigit():
+            out.append({"pane_id": pane_id, "pid": int(pid)})
+    return out
 
 
 def has_session(name: str) -> bool:
@@ -507,10 +534,9 @@ def capture_pane(name: str, lines: int = 200) -> str:
 def pane_pid(name: str) -> int | None:
     # PID do processo raiz do pane (shell ou o proprio claude). Ponto de partida pra achar qual
     # transcript .jsonl o claude da sessao tem aberto (resolucao autoritativa, nao newest-by-mtime).
-    cp = _run(["tmux", "list-panes", "-t", _pane_target(name), "-F", "#{pane_pid}"])
-    if cp.returncode != 0:
-        return None
-    for line in cp.stdout.splitlines():
-        if line.strip().isdigit():
-            return int(line.strip())
-    return None
+    #
+    # `display -p` resolve alvo de PANE exato; `list-panes -t %N` resolveria a JANELA dele e
+    # devolveria o primeiro pane dela (achado do pass adversarial).
+    cp = _run(["tmux", "display", "-p", "-t", _pane_target(name), "#{pane_pid}"])
+    out = cp.stdout.strip()
+    return int(out) if cp.returncode == 0 and out.isdigit() else None

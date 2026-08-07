@@ -23,11 +23,13 @@ def _grava(monkeypatch, falha_paste: bool, trunca: bool = False):
 
 
 def test_linux_usa_paste_buffer_e_nao_cai_no_plano_b(monkeypatch):
-    # A garantia de nao-regressao: onde o paste-buffer funciona, NADA muda — duas chamadas, e
-    # nenhum send-keys. Se este teste comecar a ver send-keys, o Linux regrediu.
+    # A garantia de nao-regressao: onde o paste-buffer funciona, NADA muda — duas chamadas (fora a
+    # resolucao de pane do agentpane, Task 1), e nenhum send-keys. Se este teste comecar a ver
+    # send-keys, o Linux regrediu.
     chamadas = _grava(monkeypatch, falha_paste=False)
     tmux.paste_text("s", "uma\nduas\ntres")
-    verbos = [c[1] for c in chamadas if c[1] not in ("show-buffer", "delete-buffer")][1:]
+    verbos = [c[1] for c in chamadas
+              if c[1] not in ("show-buffer", "delete-buffer", "list-panes")][1:]
     assert verbos == ["set-buffer", "paste-buffer"]   # [1:] tira o set-buffer do probe
 
 
