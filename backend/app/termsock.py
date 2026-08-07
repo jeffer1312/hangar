@@ -358,7 +358,12 @@ async def term_ws(ws: WebSocket, name: str) -> None:
     tarefa_escritor = asyncio.ensure_future(escritor())
     s.tarefa_escritor = tarefa_escritor          # visivel pra quem evict essa Sessao depois
 
+    # Aviso-uma-vez por CONEXAO do quadro de controle invalido: um cliente com bug manda o
+    # frame ruim em rajada, e uma linha por frame seria a enxurrada que o log nao aguenta.
+    avisou_frame_torto = False
+
     async def leitor_do_socket():
+        nonlocal avisou_frame_torto
         while True:
             try:
                 msg = await ws.receive()
@@ -373,7 +378,7 @@ async def term_ws(ws: WebSocket, name: str) -> None:
                     # `int()` — nenhum dos dois estava no `except` la de baixo, entao um unico frame
                     # torto matava a task do leitor e fechava a CONEXAO inteira. `isinstance` +
                     # suppress local: o laco continua, so o frame ruim e descartado.
-                    with contextlib.suppress(ValueError, TypeError, KeyError):
+                    try:
                         ctl = json.loads(t)
                         if isinstance(ctl, dict) and ctl.get("t") == "resize":
                             # Mesmo clamp do connect (:cols/:rows acima) — sem ele, {"cols":99999}
@@ -381,6 +386,16 @@ async def term_ws(ws: WebSocket, name: str) -> None:
                             c = max(20, min(500, int(ctl["cols"])))
                             r = max(5, min(200, int(ctl["rows"])))
                             _winsize(s.master, c, r)
+                    except (ValueError, TypeError, KeyError) as e:
+                        # Descarta o frame MAS deixa rastro: descartar calado trocaria um erro
+                        # barulhento (antes, a task morria e o asyncio logava o traceback) por
+                        # silencio total — um bug de verdade no front mandando cols/rows fora de
+                        # forma sumiria sem nenhuma linha no log. Avisa UMA vez por conexao, mesma
+                        # politica do agentpane: um cliente com bug manda o frame ruim em rajada.
+                        if not avisou_frame_torto:
+                            avisou_frame_torto = True
+                            _log.warning("termsock: %r mandou quadro de controle invalido (%s): %.80r "
+                                         "— descartado, aviso unico nesta conexao", name, e, t)
             except (WebSocketDisconnect, RuntimeError, ValueError, KeyError):
                 # O try vivia em volta do `asyncio.wait` la embaixo, onde nunca pegava nada:
                 # `asyncio.wait` nao propaga excecao de dentro das tasks que espera — o socket
@@ -427,9 +442,17 @@ async def term_ws(ws: WebSocket, name: str) -> None:
         # no log. Vale igual pro leitor: ele tambem pode ter terminado com excecao antes do cancel.
         # `await` numa task cancelada volta na hora (o CancelledError e entregue no ponto de await),
         # e o suppress cobre os dois casos.
+        # E LOGA: recuperar calado trocaria um erro barulhento (o handler default do asyncio ainda
+        # imprimia o traceback, tarde e feio, mas imprimia) por silencio total — um bug de verdade
+        # no escritor ou no leitor sumiria, e o usuario so veria o terminal cair sem nenhuma linha
+        # no log dizendo por que. CancelledError fica de fora: e o encerramento normal, nao falha.
         for tarefa in (tarefa_leitor, tarefa_escritor):
-            with contextlib.suppress(BaseException):
+            try:
                 await tarefa
+            except asyncio.CancelledError:
+                pass
+            except BaseException:
+                _log.exception("termsock: %r — task terminou com excecao", name)
         # So remove reader/writer se ESTA Sessao ainda nao foi desmontada por outro caminho: o
         # `pty.fork()` reusa o MESMO numero de fd, e o caminho de derrubada (acima) ja fez essa
         # remocao e fechou o fd antes de devolver o numero pro SO. Se o handler velho acorda
