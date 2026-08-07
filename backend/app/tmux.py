@@ -182,6 +182,21 @@ def list_panes_of(name: str) -> list[dict]:
     return out
 
 
+def is_hidden(name: str) -> bool:
+    """A sessao `name` existe e tem a marca @cp_hidden (Task 6)?
+
+    Consulta DIRETA no tmux, nao inferida de `registry.list()` (achado da revisao, rodada 2 do
+    Task 6a): a lista tambem filtra sessao com sidecar Codex de mesmo nome (registry.py, filtro
+    logo abaixo do de hidden) -- um `term-<nome>` que fosse uma sessao Codex de verdade "sumiria"
+    da lista por ESSE motivo, nao por estar marcada, e quem perguntasse "esta na lista?" concluiria
+    (errado) que o nome esta livre. `:` final obrigatorio -- mesma pegadinha do `set-option`/
+    `_pane_target`: sem ele, `show-options -t "=nome"` devolve "no such session" mesmo com a
+    sessao viva nesta versao do tmux.
+    """
+    cp = _run(["tmux", "show-options", "-v", "-t", f"={name}:", "@cp_hidden"])
+    return cp.returncode == 0 and cp.stdout.strip() == "1"
+
+
 def has_session(name: str) -> bool:
     # `=NAME`: match EXATO, mesma pegadinha do _pane_target acima. Sem o `=`, o target-session do tmux
     # cai em exact -> fnmatch -> PREFIX match: com "pocket-2" viva, `has_session("pocket")` respondia
@@ -283,17 +298,30 @@ def new_hidden_shell(name: str, cwd: str) -> str | None:
     # recebe "duplicate session" (rc!=0), mas a sessao EXISTE de verdade (o vencedor criou) -- por
     # isso o `has_session` de novo abaixo, achado da revisao (minor): sem ele o perdedor devolvia
     # None -> 500 pra um shell vivo e saudavel.
+    criou_agora = False
     if not has_session(alvo):
         cp = _run([*_scope_prefix(), "tmux", "new-session", "-d", "-s", alvo, "-c", cwd])
         if cp.returncode != 0:
             return alvo if has_session(alvo) else None
+        criou_agora = True
     # A marca. Roda SEMPRE, nao so na criacao: sem ela a sessao vira CARD nas tres views do app,
     # porque o registry trata pane nao reconhecido como Claude por padrao -- inclusive quando a
     # sessao ja existia (reatada acima) e sobrou de uma versao anterior sem a marca. Idempotencia
     # vale pra marca tambem, nao so pra criacao. O `:` final NAO e cosmetico (mesma pegadinha
     # documentada em `_pane_target`/`list_panes_of`): MEDIDO que `set-option -t "=alvo"` sem ele
     # devolve "no such session" nesta versao do tmux, mesmo com a sessao existindo de verdade.
-    _run(["tmux", "set-option", "-t", f"={alvo}:", "@cp_hidden", "1"])
+    #
+    # O rc NAO e mais descartado (achado da revisao, rodada 2): antes, um `set-option` que falhasse
+    # (tmux ocupado, timeout de 5s do `_run`) deixava a sessao viva e VISIVEL -- card nas tres
+    # views, e todo POST seguinte respondia 409 (I1/rodada 2) com um texto que seria mentira (a
+    # sessao nao e de terceiro, e nossa, so a marca falhou). Se a sessao acabou de nascer AGORA,
+    # ninguem tinha trabalho rodando nela ainda -- mata em vez de deixar o fantasma visivel. Se ja
+    # existia (reatada), NAO mata: matar um shell com trabalho de verdade por causa de um
+    # `set-option` transiente seria pior que o card fantasma que se autocorrige no proximo POST.
+    if _run(["tmux", "set-option", "-t", f"={alvo}:", "@cp_hidden", "1"]).returncode != 0:
+        if criou_agora:
+            kill_session(alvo)
+        return None
     return alvo
 
 
