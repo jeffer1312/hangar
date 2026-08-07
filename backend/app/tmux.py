@@ -138,19 +138,26 @@ def list_panes_all() -> dict[str, list[dict]]:
     # NAO ativos -> quem precisa escolher, por sessao, o pane do AGENTE (nao so o ativo) usa esta,
     # sem pagar nenhum fork a mais (list_panes_active continua existindo, intocada, pra quem so quer
     # o ativo). Agrupado por nome de sessao porque e assim que o caller (registry.list()) itera.
+    #
+    # Task 6: `#{@cp_hidden}` a mais no MESMO `-F` -- opcao de usuario por SESSAO (tmux set-option),
+    # nao convencao de nome (colidiria com o filtro por sidecar do Codex, que ja e por nome). Um
+    # campo a mais no format nao custa fork nenhum: e a MESMA chamada de sempre. Sessao sem a
+    # opcao seta devolve string vazia ("" != "1" -> hidden=False), entao toda sessao pre-existente
+    # continua aparecendo normalmente.
     cp = _run(["tmux", "list-panes", "-a", "-F",
-               "#{session_name}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_id}"])
+               "#{session_name}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_id}"
+               "\t#{@cp_hidden}"])
     if cp.returncode != 0:
         return {}
     out: dict[str, list[dict]] = {}
     for line in cp.stdout.splitlines():
         parts = line.split("\t")
-        if len(parts) != 5:
+        if len(parts) != 6:
             continue
-        name, active, pid, cwd, pane_id = parts
+        name, active, pid, cwd, pane_id, hidden = parts
         out.setdefault(name, []).append({
             "name": name, "pid": int(pid) if pid.isdigit() else None, "cwd": cwd,
-            "pane_id": pane_id, "active": active == "1",
+            "pane_id": pane_id, "active": active == "1", "hidden": hidden == "1",
         })
     return out
 
@@ -251,6 +258,41 @@ def new_session(name: str, cwd: str, command: str, config_dir: str | None = None
         from app.agentpane import invalidate
         invalidate(name)
     return ok
+
+
+def new_hidden_shell(name: str, cwd: str) -> str | None:
+    """Cria (ou reata) a sessao de shell ESCONDIDA do botao "+" do painel de terminal (Task 6).
+
+    Sessao SEPARADA, nao janela dentro da sessao do agente: sessao separada tem JANELA PROPRIA,
+    entao o painel e o terminal nativo do usuario param de disputar qual janela esta na frente,
+    qual e o tamanho, e qual e o alvo do attach -- o atrito que a versao anterior desta task (uma
+    `new-window` na sessao do agente) tinha.
+
+    Devolve o nome da sessao (criada ou ja existente), ou None se o tmux recusou.
+    """
+    alvo = f"term-{name}"
+    # NAO usa `new-session -A` (reatar): MEDIDO no tmux 3.7b que `-A` numa sessao JA existente falha
+    # com "open terminal failed: not a terminal" quando quem chama nao tem tty controlador (rc=1) --
+    # e o backend, rodando como servico ou via subprocess capturado, nunca tem. Com `-A` o SEGUNDO
+    # POST /shell (idempotencia, o comando ainda rodando ao recarregar a pagina) sempre devolvia
+    # None. `has_session` + `new-session` PLAIN (sem `-A`) evita o caminho de attach por completo:
+    # so cria quando de fato NAO existe, e o `_scope_prefix()` so entra nesse caso -- e o mesmo
+    # motivo do new_session: se esta for a chamada que inicia o servidor tmux, sem o scope ele nasce
+    # no cgroup do backend e um `systemctl --user restart` derruba tudo. ponytail: check-then-act
+    # sem lock -- duas POST /shell concorrentes pro MESMO nome podem colidir (a 2a falha ao criar
+    # sessao duplicada e devolve None); aceitavel, upgrade so se virar reclamacao real.
+    if not has_session(alvo):
+        cp = _run([*_scope_prefix(), "tmux", "new-session", "-d", "-s", alvo, "-c", cwd])
+        if cp.returncode != 0:
+            return None
+    # A marca. Roda SEMPRE, nao so na criacao: sem ela a sessao vira CARD nas tres views do app,
+    # porque o registry trata pane nao reconhecido como Claude por padrao -- inclusive quando a
+    # sessao ja existia (reatada acima) e sobrou de uma versao anterior sem a marca. Idempotencia
+    # vale pra marca tambem, nao so pra criacao. O `:` final NAO e cosmetico (mesma pegadinha
+    # documentada em `_pane_target`/`list_panes_of`): MEDIDO que `set-option -t "=alvo"` sem ele
+    # devolve "no such session" nesta versao do tmux, mesmo com a sessao existindo de verdade.
+    _run(["tmux", "set-option", "-t", f"={alvo}:", "@cp_hidden", "1"])
+    return alvo
 
 
 def kill_session(name: str) -> bool:

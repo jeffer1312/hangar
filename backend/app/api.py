@@ -6,6 +6,7 @@ import mimetypes
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import threading
 import time
@@ -346,6 +347,79 @@ async def term_ws_route(ws: WebSocket, name: str):
     # LOCAL. Aqui o celular vai precisar entrar de fora na fase 2.
     from app import termsock
     await termsock.term_ws(ws, name)
+
+
+@app.post("/api/sessions/{name}/shell", dependencies=[Depends(require_auth)])
+def abrir_shell(name: str):
+    # Sessao de shell SEPARADA e ESCONDIDA do app (Task 6) -- ver tmux.new_hidden_shell. Sync (nao
+    # async): mesmo padrao das rotas POST vizinhas (select/answer acima), que resolvem a sessao via
+    # `registry.list()` direto e deixam o FastAPI rodar o handler bloqueante no threadpool.
+    from app import tmux
+    info = next((s for s in registry.list() if s.name == name), None)
+    if info is None:
+        raise HTTPException(status_code=404, detail="sessao nao existe")
+    # O cwd vem do REGISTRY, nunca da query: um `?cwd=/` viraria shell em qualquer lugar do disco.
+    alvo = tmux.new_hidden_shell(name, info.cwd or str(Path.home()))
+    if alvo is None:
+        raise HTTPException(status_code=500, detail="tmux recusou criar o shell")
+    return {"ok": True, "shell": alvo}
+
+
+# Emuladores de terminal conhecidos, na ordem de preferencia da sonda quando CP_TERMINAL nao esta
+# setado. Cada valor monta o ARGV completo de attach dado o alvo tmux exato ("=nome" -- NUNCA sem
+# o `=`, senao o tmux cai em prefix-match e abre a sessao errada). `wezterm` nao tem `-e`: e
+# `start -- comando`. `gnome-terminal -e` esta deprecado e so aceita UM string; `--` e o substituto.
+_EMULADORES = {
+    "wezterm": lambda alvo: ["wezterm", "start", "--", "tmux", "attach", "-t", alvo],
+    "kitty": lambda alvo: ["kitty", "tmux", "attach", "-t", alvo],
+    "alacritty": lambda alvo: ["alacritty", "-e", "tmux", "attach", "-t", alvo],
+    "konsole": lambda alvo: ["konsole", "-e", "tmux", "attach", "-t", alvo],
+    "gnome-terminal": lambda alvo: ["gnome-terminal", "--", "tmux", "attach", "-t", alvo],
+    "xterm": lambda alvo: ["xterm", "-e", "tmux", "attach", "-t", alvo],
+}
+_ORDEM_PROBE = ["wezterm", "kitty", "alacritty", "konsole", "gnome-terminal", "xterm"]
+
+
+@app.post("/api/sessions/{name}/open-terminal", dependencies=[Depends(require_auth)])
+def abrir_terminal_nativo(name: str):
+    """Abre um emulador de terminal NATIVO (janela propria do SO) anexado a sessao tmux `name` --
+    tanto a do agente quanto a do shell escondido, o alvo e so um nome de sessao tmux. Diferente do
+    painel embutido (termsock/xterm.js): esta janela nao depende do backend pra existir, entao
+    fechar o painel ou reiniciar o servico NAO a desanexa.
+
+    Checa via `tmux.has_session` (nao `registry.list()`): a sessao de shell escondida (Task 6) NAO
+    aparece no registry por design, mas continua um alvo valido pra este botao.
+    """
+    from app import tmux
+    if not tmux.has_session(name):
+        raise HTTPException(status_code=404, detail="sessao nao existe")
+    nome_bin = os.environ.get("CP_TERMINAL")
+    if nome_bin:
+        # env checada ANTES do PATH: se o usuario apontou um emulador, e ele que vale -- so falha
+        # se esse binario especifico nao existir ou nao for suportado (dicionario fechado; NAO
+        # inventa um `-e` generico pra emulador desconhecido).
+        if nome_bin not in _EMULADORES or shutil.which(nome_bin) is None:
+            raise HTTPException(status_code=503,
+                                detail=f"CP_TERMINAL={nome_bin!r} nao encontrado no PATH ou nao "
+                                       "suportado")
+    else:
+        nome_bin = next((n for n in _ORDEM_PROBE if shutil.which(n)), None)
+        if nome_bin is None:
+            raise HTTPException(status_code=503,
+                                detail="nenhum emulador de terminal encontrado no PATH")
+    args = tmux._scope_prefix() + _EMULADORES[nome_bin](f"={name}")
+    env = os.environ.copy()
+    wl = tmux._wayland_display()
+    if wl:
+        # sem isto o emulador GUI nao acha o compositor quando o backend roda como servico systemd
+        # (env de boot, sem WAYLAND_DISPLAY) -- mesmo problema que o wl-paste do new_session.
+        env["WAYLAND_DISPLAY"] = wl
+    try:
+        subprocess.Popen(args, env=env, start_new_session=True, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        raise HTTPException(status_code=503, detail=f"falha ao abrir o emulador de terminal: {e}")
+    return {"ok": True}
 
 
 # Snapshot com TTL de registry.list() pros endpoints request/response QUENTES (history/workflows):
@@ -1301,20 +1375,32 @@ def _provider_of(name: str) -> str:
 
 def _pane_info(name: str) -> tuple[str, str | None]:
     """(provider, pane_id) numa leitura só — era `_pane_provider`, que pagava seu próprio
-    `tmux list-panes -t <name>` (via `tmux.pane_pid`); agora usa `list_panes_active()` (a mesma
-    chamada que o bloco de DIAG logo abaixo já faz), e o `pane_id` sai de carona, sem tmux novo no
-    caminho quente. Provider do pane (claude/pi) continua lido do /proc como antes: o gate de "TUI
-    pronta" do terminal_input casa marcas do rodape do Claude, que o Pi nao imprime, e sem saber o
-    provider todo envio a uma sessao Pi queimava os 12s de timeout antes de digitar. Erro/pane
-    sumido -> ("claude", None) — comportamento de hoje, marcas do Claude, sem pane_id (cai pra
-    tecla, igual a antes desta task)."""
+    `tmux list-panes -t <name>` (via `tmux.pane_pid`); agora usa `list_panes_all()` (MESMA chamada
+    `list-panes -a` que o antigo `list_panes_active` já fazia — um fork só), e o `pane_id` sai de
+    carona, sem tmux novo no caminho quente. Provider do pane (claude/pi) continua lido do /proc
+    como antes: o gate de "TUI pronta" do terminal_input casa marcas do rodape do Claude, que o Pi
+    nao imprime, e sem saber o provider todo envio a uma sessao Pi queimava os 12s de timeout
+    antes de digitar.
+
+    Task 6: resolve pelo pane do AGENTE (`SessionRegistry._agent_pane`, Task 5.5), nao mais pelo
+    pane ATIVO — reusa a MESMA resolucao que `registry.list()` ja usa, nao uma terceira. Com um
+    split (o shell escondido, ou qualquer split manual), o pane ativo podia ser o do shell: uma
+    sessao Pi virava ("claude", pane_id do shell) neste caminho de ENVIO — o gate esperava as
+    marcas de rodape do Claude e queimava os 12s por mensagem, e `INBOX.tem_linha(pane_id)`
+    falhava (derrubava a linha rapida do Pi), porque o pane_id devolvido era do pane errado.
+
+    Erro/pane sumido -> ("claude", None) — comportamento de hoje, marcas do Claude, sem pane_id
+    (cai pra tecla, igual a antes desta task)."""
     from app import registry as registry_mod
     from app import tmux
+    from app.procinfo import _proc_children_map
     try:
-        p = next((x for x in tmux.list_panes_active() if x["name"] == name), None)
-        if p is None:
+        panes = tmux.list_panes_all().get(name)
+        if not panes:
             return "claude", None
-        return registry_mod.provider_of_pane(p["pid"]), p.get("pane_id")
+        children = _proc_children_map()
+        p = registry_mod.SessionRegistry._agent_pane(panes, children)
+        return registry_mod.provider_of_pane(p["pid"], children), p.get("pane_id")
     except Exception:
         return "claude", None
 

@@ -457,9 +457,13 @@ class SessionRegistry:
         # exatamente o "sem id" que a Task 5.5 conserta, reaparecendo por outra porta. QUALQUER pane da
         # sessao com esse cwd conta (superset seguro: sobre-contar so empurra pro caminho <sid>.jsonl
         # direto, nunca pro mtime ambiguo).
+        # Task 6: a sessao de shell ESCONDIDA nasce com o MESMO cwd do agente (new_hidden_shell usa
+        # info.cwd) e SOBREVIVE reatada entre polls -- sem excluir aqui, abrir o shell uma vez faria
+        # a sessao contar "irmao" pra sempre, e o resolve_tracked perderia _newest_after_clear (o
+        # catch-up do /clear) na sessao pra sempre, mesmo sem NENHUMA outra sessao Claude no cwd.
         try:
             return sum(1 for panes in tmux.list_panes_all().values()
-                       if any(p.get("cwd") == cwd for p in panes)) > 1
+                       if not panes[0].get("hidden") and any(p.get("cwd") == cwd for p in panes)) > 1
         except Exception:
             return False
 
@@ -715,6 +719,14 @@ class SessionRegistry:
         sids: dict[str, Optional[str]] = {}
         for panes in tmux.list_panes_all().values():
             p = self._agent_pane(panes, children)
+            # Sessao de shell ESCONDIDA (Task 6, botao "+" do painel de terminal): marcada por
+            # opcao de usuario tmux (@cp_hidden), lida de carona no MESMO list-panes acima -- sem
+            # isto ela viraria CARD nas tres views (lista, board, canvas), porque pane nao
+            # reconhecido vira Claude por padrao logo abaixo. list_with_state() reusa esta mesma
+            # lista (nao chama list_panes_all de novo), entao o pulo vale nas duas.
+            if p.get("hidden"):
+                _log.debug("list: sessao %r pulada (marcada @cp_hidden)", p["name"])
+                continue
             # A TUI Codex agora vive no tmux, mas sua identidade/historico continuam vindo do
             # sidecar + rollout. Nao a tratar tambem como Claude (duplicaria a sessao e tentaria
             # resolver ~/.claude/projects).
