@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import subprocess
 import time
 import anyio
@@ -489,7 +490,6 @@ def test_config_expoe_capacidade_do_painel_de_terminal():
     # Step 8: `pty` e POSIX-only -- sem o gate, o botao apareceria no Windows e abriria painel
     # morto. A chave entra em `somente_leitura` porque o app nunca decide isto sozinho (exige
     # reiniciar o servico noutro SO).
-    import os
     c = _client()
     r = c.get("/api/config", headers={"Authorization": "Bearer secret"})
     assert r.status_code == 200
