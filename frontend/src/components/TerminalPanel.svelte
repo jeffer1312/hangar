@@ -80,12 +80,28 @@
     // e a sessao mudou). Sem consequencia visivel hoje (nada le isto antes do 1o clique), mas e
     // estado mentindo.
     shellCarregando = false;
+    // Q3: o aviso do terminal nativo e sobre a SESSAO em que o clique aconteceu -- sem isto, um 503
+    // (ou um 404 "sessao nao existe", que e especifico) ficava flutuando por ate 8s sobre a sessao
+    // NOVA depois de navegar, atribuido a ela por engano.
+    clearTimeout(nativeErroTimer);
+    nativeErro = null;
   });
 
   // UX de troca de aba: joga o foco pro terminal que ficou visivel, senao o usuario precisa clicar
   // dentro pra digitar depois de trocar. So dispara na troca -- nao precisa ler `term`/`termShell`
-  // como dependencia (nao sao $state; o valor lido AQUI, no disparo, ja e o atual).
+  // como dependencia (nao sao $state; o valor lido AQUI, no disparo, ja e o atual). Clique explicito
+  // na aba, sem guarda: e um gesto deliberado, o foco tem que ir junto.
   $effect(() => { (abaAtiva === 'attach' ? term : termShell)?.focus(); });
+
+  // Guarda do foco TARDIO (achado da revisao, Q2): so usada pelos dois efeitos de montagem abaixo,
+  // cujo `.focus()` roda depois de um POST + import dinamico do xterm -- tempo de sobra pro usuario
+  // clicar em outro lugar no meio (o composer do chat, por exemplo). Sem isto, um Enter digitado la
+  // chegava aqui e executava a frase como comando no shell. So focar se o foco atual ja estiver
+  // DENTRO do painel ou for o `body` (nada de especifico roubado).
+  function podeFocar(): boolean {
+    const ae = document.activeElement;
+    return ae === document.body || (secEl?.contains(ae) ?? false);
+  }
 
   function toggleMax() {
     if (secEl) {
@@ -204,8 +220,9 @@
       // I3: o $effect por `abaAtiva` sozinho erra a ESTREIA desta aba -- no primeiro clique em
       // "Shell", `abaAtiva` muda ANTES do POST /shell sair, `term` ainda e null ali, e quando o
       // terminal enfim monta (agora) o efeito ja rodou e nao roda de novo. Foca aqui tambem, so se
-      // esta aba seguir sendo a visivel no instante em que o mount terminou.
-      if (abaAtiva === 'attach') term.focus();
+      // esta aba seguir sendo a visivel no instante em que o mount terminou -- e so se `podeFocar()`
+      // (Q2): o usuario pode ter clicado no composer do chat nesse meio-tempo.
+      if (abaAtiva === 'attach' && podeFocar()) term.focus();
     })();
 
     return () => {
@@ -278,8 +295,10 @@
 
       roShell = new ResizeObserver(() => { fitShell?.fit(); sockShell?.resize(termShell.cols, termShell.rows); });
       roShell.observe(hostShell);
-      // Mesmo motivo do efeito do attach acima: a estreia desta aba so foca aqui.
-      if (abaAtiva === 'shell') termShell.focus();
+      // Mesmo motivo do efeito do attach acima: a estreia desta aba so foca aqui -- e so com
+      // `podeFocar()` (Q2), pelo mesmo risco (POST /shell + import dinamico do xterm e tempo de
+      // sobra pro usuario ja estar digitando em outro lugar).
+      if (abaAtiva === 'shell' && podeFocar()) termShell.focus();
     })();
 
     return () => {
