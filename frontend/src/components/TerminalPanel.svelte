@@ -424,6 +424,11 @@
   .tp.max .tp-resize-handle { display: none; }
   /* transparent de proposito: quem carrega o material e o conteiner (regra de vidro do CLAUDE.md). */
   .tp-bar { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2); background: transparent; }
+  /* Maximizado a faixa fica por cima do CHAT, nao do papel de parede -- ver o comentario grande em
+     .tp-screen abaixo (mesma causa, mesmo remedio: --glass-bg-solid em vez do veu). Sem isto os
+     rotulos das abas ("Shell", nome da sessao) ficavam ilegiveis, com texto do chat atravessando
+     por baixo deles. */
+  .tp.max .tp-bar { background: var(--glass-bg-solid); }
   .tp-abas { display: flex; gap: var(--space-1); flex: 1; min-width: 0; }
   .tp-aba {
     padding: 2px var(--space-2); border-radius: var(--radius-sm); border: 1px solid transparent;
@@ -443,6 +448,14 @@
      chat todo e para no terminal. O fundo do xterm e rgba(0,0,0,0) de proposito (ver CLAUDE.md), e
      quem pinta e este bloco: seguindo o painel, o terminal entra no mesmo vidro do resto. */
   .tp-screen { position: absolute; inset: 0; background: var(--glass-panel); }
+  /* Maximizado, atras do painel NAO tem papel de parede -- tem o CHAT, com texto. --glass-panel e o
+     veu do slider Transparencia, pensado pra foto atravessar; sobre texto ele so empilha uma
+     conversa por cima da outra (o azul dos links e o branco das bolhas vazando por tras das letras
+     do terminal). --glass-bg-solid e o mesmo token que BottomSheet.svelte usa pro vidro de painel
+     no WebKit: fixo em ~0.94-0.96 e de proposito FORA do slider (comentario em app.css) -- ja
+     tentou amarrar ele a Transparencia/Solidez uma vez e o modal de git no iPhone ficou transparente
+     a ponto de dar pra ler o que estava atras. Mesmo defeito, mesmo remedio aqui. */
+  .tp.max .tp-screen { background: var(--glass-bg-solid); }
   .tp-screen.hidden { visibility: hidden; }
   /* A folha da biblioteca (node_modules/@xterm/xterm/css/xterm.css:95) pinta ".xterm-viewport" com
      "background-color: #000" chapado -- comentario original: "On OS X this is required in order for
