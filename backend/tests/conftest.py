@@ -26,6 +26,16 @@ def _reset_pi_inbox_ws_warn():
 
 
 @pytest.fixture(autouse=True)
+def _reset_agentpane_cache():
+    # _cache do agentpane e dict de MODULO com TTL de 60s: sem reset, a resolucao de uma sessao de
+    # teste vazaria pro teste seguinte que reusa o mesmo nome (padrao do _reset_list_snapshot).
+    from app import agentpane
+    agentpane.invalidate()
+    yield
+    agentpane.invalidate()
+
+
+@pytest.fixture(autouse=True)
 def _reset_list_snapshot():
     # Endpoints quentes (history/workflows) resolvem a sessao via snapshot com TTL de
     # registry.list() (api._list_snap). Os testes patcham app.api.registry.list POR teste (context
