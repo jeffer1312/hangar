@@ -159,14 +159,17 @@ def test_kill_codex_closes_client_and_removes_sidecar(tmp_path):
     fake = _FakeClient()
     adapter = CodexAdapter()
     adapter.attach("cx", fake, "tid-1")
+    # Task 6 (achado da revisao, rodada 2, Quebra 2): o kill do shell escondido agora e GATEADO
+    # por `tmux.is_hidden` -- so mata "term-cx" se a marca confirmar que e nosso, senao uma sessao
+    # de TERCEIRO chamada "term-cx" seria derrubada junto. `is_hidden` mockado True aqui pra
+    # exercitar o caminho em que o shell E nosso (o caso comum).
     with patch("app.adapters.get_adapter", return_value=adapter), \
-         patch.object(registry.tmux, "kill_session") as kill_tmux:
+         patch.object(registry.tmux, "kill_session") as kill_tmux, \
+         patch.object(registry.tmux, "is_hidden", return_value=True):
         reg.kill("cx")
     assert fake.closed is True                      # client vivo terminado
     assert "cx" not in adapter._sessions            # esquecido da memoria
     assert codex_sessions.load("cx") is None        # sidecar duravel apagado
-    # Task 6 (achado da revisao, I2): kill tambem mata o shell escondido, best-effort -- dois
-    # kill_session agora, nao um so.
     kill_tmux.assert_any_call("cx")                  # encerra tambem a TUI Codex
     kill_tmux.assert_any_call("term-cx")             # e o shell escondido do painel de terminal
     assert kill_tmux.call_count == 2

@@ -8,6 +8,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -355,19 +356,19 @@ def abrir_shell(name: str):
     # async): mesmo padrao das rotas POST vizinhas (select/answer acima), que resolvem a sessao via
     # `registry.list()` direto e deixam o FastAPI rodar o handler bloqueante no threadpool.
     from app import tmux
-    infos = registry.list()
-    info = next((s for s in infos if s.name == name), None)
+    info = next((s for s in registry.list() if s.name == name), None)
     if info is None:
         raise HTTPException(status_code=404, detail="sessao nao existe")
     alvo = f"term-{name}"
-    # Achado da revisao (I1): `sanitize_session_name` aceita hifen, entao "term-<nome>" pode ja
-    # existir como sessao de TERCEIRO (ex: usuario criou "foo" e depois "term-foo" na mao). Sem
-    # esta checagem, `new_hidden_shell` (via `has_session`) pularia a criacao e marcaria essa
-    # sessao ALHEIA como escondida -- ela sumiria da lista/board/canvas e a aba de shell anexaria
-    # no terminal de outra pessoa. `infos` ja veio do `registry.list()` acima (que ja filtra
-    # escondidas): qualquer "term-<nome>" sobrevivendo nele e, por definicao, uma sessao de
-    # verdade, nao o nosso proprio shell -- sem fork novo, mesma lista que ja teriamos usado.
-    if any(s.name == alvo for s in infos):
+    # Achado da revisao (I1, e de novo na rodada 2): `sanitize_session_name` aceita hifen, entao
+    # "term-<nome>" pode ja existir como sessao de TERCEIRO (ex: usuario criou "foo" e depois
+    # "term-foo" na mao). A 1a versao inferia isso de `registry.list()` -- mas a lista TAMBEM
+    # filtra sessao com sidecar Codex de mesmo nome, entao um "term-<nome>" que fosse Codex de
+    # verdade sumia da lista por ESSE motivo, nao por ser nosso, e a inferencia concluia (errado)
+    # que o nome estava livre. Pergunta DIRETA ao tmux (`is_hidden`), nao mais inferida: cobre
+    # Codex tambem, ao custo de 1-2 forks a mais nesta rota de clique unico (nao e o caminho de
+    # poll onde fork por sessao e proibido).
+    if tmux.has_session(alvo) and not tmux.is_hidden(alvo):
         raise HTTPException(status_code=409,
                             detail=f"ja existe uma sessao chamada {alvo!r} que nao e o shell "
                                    "deste painel -- renomeie ou feche essa sessao antes de abrir "
@@ -434,21 +435,36 @@ def abrir_terminal_nativo(name: str):
         # repassar, um host X11 (ou o servico systemd sem env de sessao grafica) faz o emulador
         # executar e morrer com "cannot open display" LOGO apos o exec, onde o Popen nao pega nada.
         env["DISPLAY"] = disp
+    # Arquivo temporario, nao `PIPE` (achado da revisao, rodada 2): a janela que ABRE fica viva
+    # bem alem deste request, e um `PIPE` sem leitor enche os 64KB do buffer do kernel e a
+    # escrita do emulador TRAVA (medido no wezterm, primeiro da sonda, que loga bastante em
+    # stderr) -- mais um fd vazado por clique. Arquivo comum nao tem esse teto.
+    err_file = tempfile.TemporaryFile()
     try:
         p = subprocess.Popen(args, env=env, start_new_session=True, stdin=subprocess.DEVNULL,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                             stdout=subprocess.DEVNULL, stderr=err_file)
     except OSError as e:
+        err_file.close()
         raise HTTPException(status_code=503, detail=f"falha ao abrir o emulador de terminal: {e}")
     # Falha aparece, nao some (achado da revisao): o Popen so levanta se o BINARIO nao existe --
     # sem DISPLAY, com o compositor errado, ou qualquer erro pos-exec, o processo sai sozinho em
     # poucos ms e o `except OSError` acima nunca ve nada, devolvendo "ok" pra uma janela que nunca
-    # abriu. Espera uma fracao de segundo e confere se ja morreu, devolvendo o stderr real.
+    # abriu. Espera uma fracao de segundo e confere se ja morreu.
     time.sleep(0.3)
-    if p.poll() is not None:
-        erro = (p.stderr.read() if p.stderr else b"").decode(errors="replace").strip()
+    morreu = p.poll()
+    # `morreu != 0`, nao so `morreu is not None` (achado da revisao, rodada 2): sair com rc=0 em
+    # poucos ms e COMPORTAMENTO NORMAL de cliente D-Bus/instancia unica -- `gnome-terminal` (na
+    # sonda) abre no `gnome-terminal-server` e sai 0 na hora; `wezterm start` com GUI ja de pe e
+    # `konsole` reusando instancia fazem o mesmo. Tratar qualquer saida como erro devolvia 503 pra
+    # janela que abriu certo.
+    if morreu is not None and morreu != 0:
+        err_file.seek(0)
+        erro = err_file.read().decode(errors="replace").strip()
+        err_file.close()
         raise HTTPException(status_code=503,
                             detail=f"emulador de terminal saiu logo apos abrir: "
-                                   f"{erro or f'codigo {p.returncode}'}")
+                                   f"{erro or f'codigo {morreu}'}")
+    err_file.close()   # nosso handle; o filho, se ainda vivo, segue escrevendo no fd dele
     return {"ok": True}
 
 

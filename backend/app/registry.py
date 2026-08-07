@@ -1156,6 +1156,20 @@ class SessionRegistry:
         # módulo pair (rename_pair): sem ele, um unpair concorrente podia ser ressuscitado.
         rename_pair(old, new)
 
+    @staticmethod
+    def _kill_hidden_shell(name: str) -> None:
+        # Task 6 (achado da revisao, rodada 2): mata `term-<name>` SO se a marca confirmar que a
+        # sessao e NOSSA -- consulta DIRETA ao tmux (`is_hidden`), nao inferida de `self.list()`
+        # (que tambem filtra por sidecar Codex, e "sumir da lista" nao e o mesmo que "estar
+        # marcada"). Sem esta checagem, um "term-<name>" de TERCEIRO (o mesmo cenario alcancavel
+        # que o I1 reconheceu na rota /shell) seria derrubado JUNTO quando o agente `name` fosse
+        # encerrado, com trabalho rodando e sem afordancia nenhuma pro dono perceber -- so um
+        # `_log.debug`. Best-effort: falhar aqui NAO pode derrubar o kill principal, que ja
+        # aconteceu antes desta chamada.
+        alvo = f"term-{name}"
+        if tmux.is_hidden(alvo) and not tmux.kill_session(alvo):
+            _log.debug("kill: shell escondido de %r nao saiu (pode nao existir)", name)
+
     def kill(self, name: str) -> None:
         # Levanta KillFailed quando a sessao SOBREVIVE. Antes o retorno do tmux era descartado e a
         # limpeza duravel (cache, fila, then, pareamento) rodava do mesmo jeito: o card sumia da UI, o
@@ -1168,12 +1182,7 @@ class SessionRegistry:
             get_adapter("codex").close_sync(name)
             if not tmux.kill_session(name):
                 raise KillFailed(name)
-            # Task 6, achado da revisao (I2): sessao de shell ESCONDIDA (botao "+" do painel) nao
-            # tem afordancia na UI pra matar -- e escondida por construcao -- entao sobreviveria ao
-            # agente pra sempre. Best-effort: falhar aqui NAO pode derrubar o kill principal, que ja
-            # aconteceu.
-            if not tmux.kill_session(f"term-{name}"):
-                _log.debug("kill: shell escondido de %r nao saiu (pode nao existir)", name)
+            self._kill_hidden_shell(name)
             codex_sessions.delete(name)
             self._forget(name)
             PromptQueue(name).clear()
@@ -1191,10 +1200,7 @@ class SessionRegistry:
             pass
         if not tmux.kill_session(name):
             raise KillFailed(name)
-        # Task 6, achado da revisao (I2): mesma limpeza best-effort do ramo Codex acima -- a sessao
-        # de shell escondida nao tem afordancia na UI pra matar sozinha.
-        if not tmux.kill_session(f"term-{name}"):
-            _log.debug("kill: shell escondido de %r nao saiu (pode nao existir)", name)
+        self._kill_hidden_shell(name)
         self._forget(name)  # cache invalido: nome pode ser reusado por outra sessao depois
         # Sessao morta nao deixa fila pra tras: senao acumula orfaos e uma futura sessao de mesmo
         # nome herdaria essas entradas como bubble-fantasma (mesmo motivo do clear no create()).

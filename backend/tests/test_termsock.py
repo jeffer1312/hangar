@@ -299,6 +299,31 @@ def test_shell_recusa_sequestrar_sessao_de_terceiro(sessao):
         subprocess.run(["tmux", "kill-session", "-t", f"={alheia}"], capture_output=True)
 
 
+def test_shell_recusa_sequestrar_sessao_codex_de_terceiro(sessao):
+    # Achado da revisao (rodada 2, "o mecanismo"): a 1a versao do I1 inferia colisao perguntando
+    # "esse nome esta em registry.list()?" -- um proxy que amarra a checagem a bookkeeping do
+    # registry que nao tem nada a ver com o /shell (a entrada de uma sessao Codex em list() vem
+    # do SIDECAR, art. 766, nao de reconhecer o pane tmux; um dia em que o sidecar sumir orfao ou
+    # mudar de forma, o proxy vale outra coisa). A pergunta DIRETA ao tmux (has_session + is_hidden)
+    # nao depende de NADA disso -- so importa se a sessao "term-<nome>" existe e e nossa. Este
+    # teste fixa o caso que motivou a troca: colisao com uma sessao que tambem tem sidecar Codex.
+    from app.adapters.codex import sessions as codex_sessions
+    alheia = f"term-{sessao}"
+    subprocess.run(["tmux", "kill-session", "-t", f"={alheia}"], capture_output=True)
+    subprocess.run(["tmux", "new-session", "-d", "-s", alheia, "-x", "80", "-y", "24"], check=True)
+    codex_sessions.save(alheia, "tid-fake", "/tmp/rollout-fake.jsonl", "/tmp")
+    try:
+        c = _client()
+        r = c.post(f"/api/sessions/{sessao}/shell", headers={"Authorization": "Bearer secret"})
+        assert r.status_code == 409
+        # A sessao alheia continua VISIVEL e sem a marca -- nao foi sequestrada.
+        from app import tmux as tmux_mod
+        assert not tmux_mod.is_hidden(alheia)
+    finally:
+        codex_sessions.delete(alheia)
+        subprocess.run(["tmux", "kill-session", "-t", f"={alheia}"], capture_output=True)
+
+
 def test_sessao_escondida_nao_muda_o_custo_da_listagem(monkeypatch, tmp_path):
     # Achado da revisao (I4): a versao original rodava contra o tmux DEFAULT e o ~/.claude/projects
     # de verdade, exigindo exatamente 1 `list-panes` — mas `resolve_tracked` chama
@@ -324,6 +349,14 @@ def test_sessao_escondida_nao_muda_o_custo_da_listagem(monkeypatch, tmp_path):
             # "tmux" nao e necessariamente args[0] — acha o indice de verdade em vez de assumir
             # posicao fixa (achado do proprio teste: assumir args[0]=="tmux" deixava a criacao
             # escapar pro socket DEFAULT do usuario sempre que o probe do systemd-run desse certo).
+            # Achado da revisao (rodada 2, Quebra 3): `_scope_prefix` chama `_scope_probe`, que roda
+            # `_run([*_SCOPE, "true"])` -- SEM nenhum "tmux" no comando -- sempre que o cache de
+            # processo `_scope_usavel` ainda esta `None`. Na suite cheia passava por sorte (algum
+            # teste anterior ja tinha preenchido o cache global); isolado (`-k`, `--lf`, xdist,
+            # ou este teste sozinho), `args.index("tmux")` levantava ValueError. Comandos sem
+            # "tmux" nao sao desta chamada -- passam direto, sem redirecionar pro socket privado.
+            if "tmux" not in args:
+                return orig(args, **kw)
             i = args.index("tmux")
             real = [*args[:i + 1], "-L", sock, *args[i + 1:]]
             return orig(real, **kw)
@@ -377,6 +410,29 @@ def test_open_terminal_detecta_emulador_que_morre_logo_apos_abrir(sessao, monkey
     assert "display" in r.json()["detail"].lower()
 
 
+def test_open_terminal_aceita_emulador_que_sai_0_logo_apos_abrir(sessao, monkeypatch, tmp_path):
+    # Achado da revisao (rodada 2, Quebra 1): sair com rc=0 em poucos ms e comportamento NORMAL de
+    # cliente D-Bus/instancia unica -- `gnome-terminal` (na sonda de verdade) abre no
+    # `gnome-terminal-server` e sai 0 na hora; `wezterm start`/`konsole` com instancia ja de pe
+    # fazem o mesmo. Tratar QUALQUER saida como erro (o teste com `exit 1` acima nao pega isso)
+    # devolvia 503 pra uma janela que abriu certo.
+    script = tmp_path / "fake-term-ok"
+    script.write_text("#!/bin/sh\nexit 0\n")
+    script.chmod(0o755)
+    import app.api as api_mod
+    import app.tmux as tmux_mod
+    monkeypatch.setattr(api_mod, "_EMULADORES", {"fake-term-ok": lambda alvo: [str(script)]})
+    monkeypatch.setattr(api_mod, "_ORDEM_PROBE", ["fake-term-ok"])
+    monkeypatch.setattr(api_mod.shutil, "which",
+                        lambda n: str(script) if n == "fake-term-ok" else None)
+    monkeypatch.setattr(tmux_mod, "_scope_prefix", lambda: [])
+    monkeypatch.delenv("CP_TERMINAL", raising=False)
+    c = _client()
+    r = c.post(f"/api/sessions/{sessao}/open-terminal", headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+
+
 def test_kill_mata_o_shell_escondido_junto(sessao):
     # Achado da revisao (I2): a sessao de shell escondida nao tem afordancia na UI pra matar (e
     # escondida por construcao) -- sem limpar no kill, sobreviveria ao agente pra sempre.
@@ -388,4 +444,42 @@ def test_kill_mata_o_shell_escondido_junto(sessao):
                           capture_output=True).returncode == 0
     SessionRegistry().kill(sessao)
     assert subprocess.run(["tmux", "has-session", "-t", f"={alvo}"],
+                          capture_output=True).returncode != 0
+
+
+def test_kill_nao_mata_sessao_de_terceiro_chamada_term_nome(sessao):
+    # Achado da revisao (rodada 2, Quebra 2): o kill do I2 era incondicional -- existindo uma
+    # sessao de VERDADE chamada "term-<nome>" (o mesmo cenario que o I1 reconheceu como
+    # alcancavel pela UI), encerrar o agente pelo app derrubava ela JUNTO, com trabalho rodando e
+    # so um `_log.debug` como registro. Agora so mata se a marca @cp_hidden confirmar que e nossa.
+    from app.registry import SessionRegistry
+    alheia = f"term-{sessao}"
+    subprocess.run(["tmux", "kill-session", "-t", f"={alheia}"], capture_output=True)
+    subprocess.run(["tmux", "new-session", "-d", "-s", alheia, "-x", "80", "-y", "24"], check=True)
+    try:
+        SessionRegistry().kill(sessao)
+        assert subprocess.run(["tmux", "has-session", "-t", f"={alheia}"],
+                              capture_output=True).returncode == 0
+    finally:
+        subprocess.run(["tmux", "kill-session", "-t", f"={alheia}"], capture_output=True)
+
+
+def test_new_hidden_shell_mata_sessao_recem_criada_se_a_marca_falhar(sessao, monkeypatch):
+    # Achado da revisao (rodada 2, Quebra 5): antes, o retorno do `set-option` era descartado --
+    # se a marca falhasse (tmux ocupado, timeout de 5s do `_run`), sobrava um "term-<nome>" vivo e
+    # VISIVEL (card nas tres views), e todo POST seguinte respondia 409 com um texto mentiroso (a
+    # sessao nao e de terceiro, e nossa, so a marca falhou). Agora honra o rc: se a sessao acabou
+    # de nascer AGORA e a marca falha, mata em vez de deixar o fantasma.
+    from app import tmux as tmux_mod
+    orig = tmux_mod.RUN
+
+    def _falha_set_option(args, **kw):
+        if "set-option" in args:
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="tmux ocupado (fake)")
+        return orig(args, **kw)
+
+    monkeypatch.setattr(tmux_mod, "RUN", _falha_set_option)
+    alvo = tmux_mod.new_hidden_shell(sessao, "/tmp")
+    assert alvo is None
+    assert subprocess.run(["tmux", "has-session", "-t", f"=term-{sessao}"],
                           capture_output=True).returncode != 0
