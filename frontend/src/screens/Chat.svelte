@@ -56,6 +56,9 @@
     onNavigateToChat: (name: string) => void;
     desktop?: boolean;   // montado no DesktopShell -> header sem "voltar"/switcher + atalhos de teclado
     onOpenSplit?: (name: string) => void; // desktop: abre o chat do PAR lado a lado (split view)
+    // Painel de terminal real (xterm.js) na faixa do DesktopShell. So o DesktopShell sabe montar o
+    // painel (e qual dos 3 <Chat> pediu); no celular fica undefined e abrirTerminalReal cai no espelho.
+    onOpenTerminalPanel?: () => void;
     // Chrome global do DesktopShell: reserva espaço acima da 1ª mensagem e delega Cmd/Ctrl+K à
     // paleta cross-server. O mobile não passa nenhum dos dois e mantém o comportamento anterior.
     topInset?: number;
@@ -68,7 +71,7 @@
     nested?: boolean;
   }
   let {
-    sessionName, onBack, onNavigateToChat, desktop = false, onOpenSplit,
+    sessionName, onBack, onNavigateToChat, desktop = false, onOpenSplit, onOpenTerminalPanel,
     topInset = 0, onOpenWorkspacePalette, showContextPanel = false,
     publishWorkspaceActions = false, onWorkspaceActionsChange, nested = false,
   }: Props = $props();
@@ -485,6 +488,12 @@
   // "Voltar ao chat" = SO esconde o espelho. NAO manda Escape -> a TUI fica como esta (nao fecha o
   // painel que o usuario queria ler). Sair do overlay de proposito = tecla Esc na barra do espelho.
   function closeMirror() { mirrorOpen = false; }
+  // Painel de verdade no desktop; espelho no celular. NAO reusar isto no onFallback do
+  // AskUserQuestion: o fallback existe pra destravar picker, e o painel bloqueia o /answer (Task 3).
+  function abrirTerminalReal() {
+    if (desktop && onOpenTerminalPanel) onOpenTerminalPanel();
+    else mirrorOpen = true;
+  }
   // Statusline crua -> campos tipados (modelo, contexto, custo, tempo de sessao).
   const status = $derived(parseStatusLine(stateEvent?.status_line ?? null));
 
@@ -550,7 +559,7 @@
       action('loop', 'Loop', () => (loopSheetOpen = true)),
       action('pair', 'Parear sessão', () => (pairOpen = true)),
       action('run', 'Executar workflow', () => (runOpen = true)),
-      action('terminal', 'Espelho do terminal', openMirror),
+      action('terminal', 'Terminal', abrirTerminalReal),
     ]);
     // Ao trocar a key servidor-aware ou desmontar este Chat, nenhum callback pode sobreviver.
     return () => publish([]);
@@ -1222,7 +1231,7 @@
 >
   <div class="sr-only" role="status">{stateAnnounce}</div>
   <div class="navbar-mount" bind:this={navEl}>
-    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
+    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={abrirTerminalReal} terminalAlert={tuiOverlay && !mirrorOpen} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
   </div>
 
   <!-- LoopSheet FORA do .navbar-mount: no desktop largo o mount fica display:none (a info migra
@@ -1240,7 +1249,7 @@
       {serverLabel}
       provider={sessionProvider}
       {sessionName}
-      onOpenTerminal={openMirror}
+      onOpenTerminal={abrirTerminalReal}
       terminalAlert={tuiOverlay && !mirrorOpen}
       onOpenRun={() => (runOpen = true)}
       {runRunning}
@@ -1332,7 +1341,7 @@
   {#if tuiOverlay && !mirrorOpen}
     <!-- Aviso DESTACADO: ha um painel que SO da pra interagir pela TUI. Pulsa pra chamar atencao;
          tocar abre o espelho. Nao toma a tela (so um banner acima do dock). -->
-    <button class="tui-pill" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} onclick={openMirror} aria-label={needsLogin ? 'Abrir terminal para fazer login' : 'Abrir terminal para interagir'}>
+    <button class="tui-pill" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} onclick={abrirTerminalReal} aria-label={needsLogin ? 'Abrir terminal para fazer login' : 'Abrir terminal para interagir'}>
       <span class="tui-pill-dot"></span>
       <span class="tui-pill-text">{needsLogin ? 'Sessão precisa de login — toque pra entrar' : 'Interação só pela TUI — toque pra abrir'}</span>
     </button>
