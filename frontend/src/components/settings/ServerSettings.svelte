@@ -68,6 +68,7 @@
   const ROTULO_LEITURA: Record<string, string> = {
     port: 'Porta', lan_bind_ip: 'IP de bind', server_id: 'ID deste servidor',
     public_url: 'URL pública', scan_roots: 'Raízes do scanner',
+    terminal_panel: 'Painel de terminal',
   };
 
   // Vozes e saldo: sob demanda, no botao. As duas chamadas batem no provedor (ElevenLabs) e custam
@@ -314,7 +315,7 @@
         {#each Object.entries(store.leitura) as [k, v] (k)}
           <div class="ro-linha">
             <span class="ro-rot">{ROTULO_LEITURA[k] ?? k}</span>
-            <span class="ro-val">{v === '' ? '—' : v}</span>
+            <span class="ro-val">{v === '' ? '—' : typeof v === 'boolean' ? (v ? 'sim' : 'não') : v}</span>
           </div>
         {/each}
       </div>

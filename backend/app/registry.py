@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 from app import tmux
+from app import agentpane
 from app.config import settings
 from app import runtime_config
 from app.names import sanitize_session_name
@@ -404,6 +405,9 @@ class SessionRegistry:
     # Texto do spinner ("Hyperspacing… (1m51s · ↓2.1k tokens)") extraido da MESMA captura do sweep:
     # o fast-path de marcador deixa label=None e o card nunca mostrava a barrinha de "trabalhando".
     _label_cache: dict[str, Optional[str]] = {}
+    # Nomes ja avisados por _agent_pane (Task 5.5): sessao com 2+ panes e nenhum reconhecido como
+    # agente. De classe pela MESMA razao das demais acima (list() roda em ambas instancias).
+    _SEM_AGENTE_AVISADAS: set[str] = set()
 
     def __init__(self, projects_dir: Path | None = None):
         self.projects_dir = Path(projects_dir or settings.projects_dir)
@@ -446,8 +450,20 @@ class SessionRegistry:
         # >1 sessao tmux com este MESMO cwd? Com varias, seguir o jsonl mais novo do cwd (newest-by-mtime)
         # cruza o transcript de uma sessao pra outra -> a resolucao por mtime fica ambigua. ponytail: 1
         # fork tmux por chamada; aceitavel (poucas sessoes). Fail-safe: erro -> trata como sem irmaos.
+        # Task 5.5 (achado I1 da revisao): `#{pane_current_path}` e o cwd VIVO daquele pane -- um `cd`
+        # manual num split muda SO o campo dele. list() agora entrega o cwd do pane do AGENTE; contar
+        # so os panes ATIVOS (list_panes_active) deixava as duas pontas olhando cwds diferentes, e uma
+        # sessao com split "sem irmao" caia no newest-by-mtime que esta guarda existe pra evitar --
+        # exatamente o "sem id" que a Task 5.5 conserta, reaparecendo por outra porta. QUALQUER pane da
+        # sessao com esse cwd conta (superset seguro: sobre-contar so empurra pro caminho <sid>.jsonl
+        # direto, nunca pro mtime ambiguo).
+        # Task 6: a sessao de shell ESCONDIDA nasce com o MESMO cwd do agente (new_hidden_shell usa
+        # info.cwd) e SOBREVIVE reatada entre polls -- sem excluir aqui, abrir o shell uma vez faria
+        # a sessao contar "irmao" pra sempre, e o resolve_tracked perderia _newest_after_clear (o
+        # catch-up do /clear) na sessao pra sempre, mesmo sem NENHUMA outra sessao Claude no cwd.
         try:
-            return sum(1 for p in tmux.list_panes_active() if p.get("cwd") == cwd) > 1
+            return sum(1 for panes in tmux.list_panes_all().values()
+                       if not panes[0].get("hidden") and any(p.get("cwd") == cwd for p in panes)) > 1
         except Exception:
             return False
 
@@ -658,6 +674,41 @@ class SessionRegistry:
         """Delega pro helper publico git_ops.branch_of (mantido pra nao quebrar chamadores)."""
         return branch_of(cwd)
 
+    @staticmethod
+    def _agent_pane(panes: list[dict], children: dict[int, list[int]]) -> dict:
+        """Escolhe, entre os panes de UMA sessao, o que roda o agente (Task 5.5).
+
+        list_panes_active() so trazia o pane ATIVO — e "ativo" e por JANELA, nao por sessao: uma
+        segunda janela/split (o botao `+` da Task 6) fica marcada ativa TAMBEM, e o antigo dedup por
+        nome ficava com a PRIMEIRA da varredura, arbitrario. Com o agente numa janela e o shell na
+        outra em primeiro plano, provider/jsonl/pane_id saiam todos do pane ERRADO (medido: o shell
+        vira "sem id" na lista).
+        Reusa o predicado ESTRITO do agentpane (_pane_do_agente, Task 1) e o MESMO mapa /proc que
+        list() ja construiu pra sessao inteira -> zero fork NOVO (achado menor da revisao: a leitura
+        de /proc nao e zero, e sim proporcional ao numero de panes candidatos da sessao — barata
+        porque o mapa `children` ja esta pronto, mas nao e de graca). Nenhum pane bate -> cai no
+        pane ATIVO, o comportamento de sempre (None = nao sei, nao decide um comportamento novo
+        sozinho).
+        """
+        if len(panes) > 1:
+            # Achado menor da revisao: com 2+ panes do agente na MESMA sessao (caso raro), o ATIVO
+            # ganha o desempate -- preserva o comportamento de antes desta task pra esse caso, em vez
+            # de arbitrario "o primeiro da varredura".
+            for p in sorted(panes, key=lambda p: not p["active"]):
+                if p["pid"] is not None and agentpane._pane_do_agente(p["pid"], children):
+                    return p
+            name = panes[0]["name"]
+            if name not in SessionRegistry._SEM_AGENTE_AVISADAS:
+                # Falha aparece, nao some — mas UMA vez por nome (list() e polled a cada segundo;
+                # logar em TODO poll enquanto a sessao seguir sem agente reconhecido enche o journal
+                # a toa). ponytail: dedup por NOME nunca expira (nem no kill/recria, ao contrario do
+                # agentpane._AVISADAS) — pior caso e uma sessao rara, apos recriada, ficar calada de
+                # novo neste caso; upgrade so se virar reclamacao real.
+                SessionRegistry._SEM_AGENTE_AVISADAS.add(name)
+                _log.warning("list: %r tem %d panes e nenhum parece do agente; "
+                             "caindo no pane ATIVO", name, len(panes))
+        return next((p for p in panes if p["active"]), panes[0])
+
     def list(self) -> list[SessionInfo]:
         # Resolucao de jsonl/tracked de todas as sessoes. Otimizado: UM mapa /proc + UMA chamada tmux
         # (pane_pid em lote) reusados por sessao -> O(P + S·descendentes) em vez de O(S·P). NAO calcula
@@ -666,7 +717,24 @@ class SessionRegistry:
         children = _proc_children_map()
         out = []
         sids: dict[str, Optional[str]] = {}
-        for p in tmux.list_panes_active():
+        for panes in tmux.list_panes_all().values():
+            # Sessao de shell ESCONDIDA (Task 6, botao "+" do painel de terminal): marcada por
+            # opcao de usuario tmux (@cp_hidden), herdada por TODOS os panes/janelas da sessao (
+            # confirmado na revisao), lida de carona no MESMO list-panes acima -- sem isto ela
+            # viraria CARD nas tres views (lista, board, canvas), porque pane nao reconhecido vira
+            # Claude por padrao logo abaixo. list_with_state() reusa esta mesma lista (nao chama
+            # list_panes_all de novo), entao o pulo vale nas duas.
+            #
+            # Checado ANTES do `_agent_pane` (achado da revisao, minor): usuario dividindo o
+            # proprio shell escondido (2+ panes, nenhum "agente") faria `_agent_pane` nao achar
+            # ninguem, logar o warning "nenhum parece do agente" pra sempre (suja
+            # `_SEM_AGENTE_AVISADAS`, que nunca expira) e pagar a descida de /proc por pane -- tudo
+            # sobre uma sessao que o app ignora DE PROPOSITO. Qualquer pane serve pra checar: a
+            # marca e por sessao, todos concordam.
+            if panes[0].get("hidden"):
+                _log.debug("list: sessao %r pulada (marcada @cp_hidden)", panes[0]["name"])
+                continue
+            p = self._agent_pane(panes, children)
             # A TUI Codex agora vive no tmux, mas sua identidade/historico continuam vindo do
             # sidecar + rollout. Nao a tratar tambem como Claude (duplicaria a sessao e tentaria
             # resolver ~/.claude/projects).
@@ -1087,6 +1155,42 @@ class SessionRegistry:
         # senão o par ficaria pareado com um fantasma e o unpair simétrico quebrava. Sob o lock do
         # módulo pair (rename_pair): sem ele, um unpair concorrente podia ser ressuscitado.
         rename_pair(old, new)
+        # L71 da revisao final: o shell escondido e keyed por NOME (`term-<nome>`) e NAO acompanha o
+        # rename sozinho -- ele ficava orfa pra sempre, invisivel no app (marcado @cp_hidden) e fora
+        # do alcance do `kill()`, que so procura `term-<nome NOVO>`. Pior: a aba Shell do nome novo
+        # criaria um shell NOVO e o velho seguiria vivo consumindo o nome, ate colidir com uma
+        # sessao futura.
+        # RENOMEIA, nao mata: `rename-session` nao mexe no cwd nem no que esta rodando no pane -- o
+        # shell continua no mesmo diretorio, que e o diretorio da sessao renomeada. (O perigo de
+        # "shell no diretorio errado" e outro caminho: reatar um `term-<nome>` orfa de OUTRO repo,
+        # tratado no tmux.new_hidden_shell.) Matar em silencio derrubaria um `npm run dev` que
+        # estivesse rodando ali, e o unico registro disso e um `_log.debug`.
+        # Kill so como FALLBACK: renomear falha se `term-<novo>` ja existir (shell de uma vida
+        # anterior daquele nome), e ai deixar o velho vivo traz de volta o orfa que este bloco
+        # existe pra evitar.
+        # A marca e o gate, como no `_kill_hidden_shell`: sem ela, um `term-<velho>` de TERCEIRO
+        # seria sequestrado pelo rename. `is_hidden` mira `={nome}:` (exato), entao o rename so
+        # roda quando a sessao existe de verdade -- sem risco do prefix-match do tmux pegar
+        # `term-<velho>-2`.
+        alvo = f"term-{old}"
+        if tmux.is_hidden(alvo) and not tmux.rename_session(alvo, f"term-{new}"):
+            _log.info("rename: %r nao pode virar %r (nome ja ocupado?) — matando o shell escondido",
+                      alvo, f"term-{new}")
+            self._kill_hidden_shell(old)
+
+    @staticmethod
+    def _kill_hidden_shell(name: str) -> None:
+        # Task 6 (achado da revisao, rodada 2): mata `term-<name>` SO se a marca confirmar que a
+        # sessao e NOSSA -- consulta DIRETA ao tmux (`is_hidden`), nao inferida de `self.list()`
+        # (que tambem filtra por sidecar Codex, e "sumir da lista" nao e o mesmo que "estar
+        # marcada"). Sem esta checagem, um "term-<name>" de TERCEIRO (o mesmo cenario alcancavel
+        # que o I1 reconheceu na rota /shell) seria derrubado JUNTO quando o agente `name` fosse
+        # encerrado, com trabalho rodando e sem afordancia nenhuma pro dono perceber -- so um
+        # `_log.debug`. Best-effort: falhar aqui NAO pode derrubar o kill principal, que ja
+        # aconteceu antes desta chamada.
+        alvo = f"term-{name}"
+        if tmux.is_hidden(alvo) and not tmux.kill_session(alvo):
+            _log.debug("kill: shell escondido de %r nao saiu (pode nao existir)", name)
 
     def kill(self, name: str) -> None:
         # Levanta KillFailed quando a sessao SOBREVIVE. Antes o retorno do tmux era descartado e a
@@ -1100,6 +1204,7 @@ class SessionRegistry:
             get_adapter("codex").close_sync(name)
             if not tmux.kill_session(name):
                 raise KillFailed(name)
+            self._kill_hidden_shell(name)
             codex_sessions.delete(name)
             self._forget(name)
             PromptQueue(name).clear()
@@ -1117,6 +1222,7 @@ class SessionRegistry:
             pass
         if not tmux.kill_session(name):
             raise KillFailed(name)
+        self._kill_hidden_shell(name)
         self._forget(name)  # cache invalido: nome pode ser reusado por outra sessao depois
         # Sessao morta nao deixa fila pra tras: senao acumula orfaos e uma futura sessao de mesmo
         # nome herdaria essas entradas como bubble-fantasma (mesmo motivo do clear no create()).

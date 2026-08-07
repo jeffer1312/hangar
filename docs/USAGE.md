@@ -92,6 +92,7 @@ ou em `backend/.env`):
 | `CP_FRONT_PORT` | `5173` | porta onde o PWA é servido (entra no QR) |
 | `CP_PUBLIC_URL` | — | sobrescreve a URL base do QR (ex: hostname Tailscale) |
 | `CP_SCAN_ROOTS` | — | pastas que o seletor "Nova sessão" pode listar (csv) |
+| `CP_TERMINAL` | — | emulador do botão **terminal nativo** (`wezterm`, `kitty`, `alacritty`, `konsole`, `gnome-terminal`, `xterm`). Vazio = procura nessa ordem no PATH. |
 
 > Guarda de segurança: com `CP_AUTH_TOKEN=change-me` ele **recusa** subir num bind não-loopback.
 
@@ -230,6 +231,34 @@ A barra lateral tem dois ajustes em **Aparência** (menu da conta), só no deskt
   trilho de iniciais e só abre enquanto o mouse está por cima.
 - **Altura da barra** — aparece quando a de cima está ligada: **altura total** (de ponta a ponta) ou
   **só o conteúdo** (a barra encolhe até onde as sessões terminam e fica flutuando, centralizada).
+
+### Terminal de verdade (rodapé, só no desktop)
+
+O ícone de terminal no topo do chat abre um **terminal de verdade** no rodapé — não é mais uma foto
+da tela: é a sessão tmux anexada, com cor, seleção de texto e teclado completo. Arraste o canto pra
+mudar a altura, ou use **⤢** pra maximizar; o **✕** fecha. No celular o mesmo ícone segue
+abrindo o espelho de leitura de sempre (o painel é desktop-only, e no Windows o servidor avisa que
+não tem).
+
+- **Um painel por sessão.** Abrir o painel da mesma sessão noutra aba/navegador derruba o primeiro,
+  que mostra **desconectado · reconectar** em vez de congelar calado. Enquanto o painel está aberto,
+  responder opção/pergunta **pelo chat** é recusado com um aviso na tela ("Terminal aberto nesta
+  sessão. Feche o painel pra responder por aqui") — com o terminal anexado a janela do tmux fica no
+  tamanho dele, e quem conta linhas na tela escolheria a opção errada. Feche o painel e responda.
+- **Aba `+` (shell).** Ao lado da aba do agente, abre um **shell separado** no mesmo diretório da
+  sessão — pra rodar `git`, `ls`, o que for, sem atrapalhar o agente. Ele é uma sessão tmux
+  escondida (`term-<nome>`): não vira card na lista, no board nem no canvas. Encerrar a sessão do
+  agente pelo app encerra o shell junto; **renomear** a sessão renomeia o shell junto — o que estiver
+  rodando nele (um `npm run dev`) continua rodando, no mesmo diretório. Só se o nome de destino já
+  estiver ocupado por um shell antigo é que o seu é encerrado, pra não virar sessão órfã.
+- **Terminal nativo.** O botão de janela abre a MESMA sessão tmux numa janela de verdade do seu
+  sistema (`tmux attach`), e fecha o painel embutido — os dois anexados brigariam pelo tamanho.
+  Fechar o painel não desanexa essa janela. **Reiniciar o serviço do backend, porém, só é inofensivo
+  quando o `systemd-run --user --scope` funciona nesta máquina** — é ele que põe o emulador num cgroup
+  próprio. Quando o systemd do usuário recusa criar scope transiente (acontece; o backend loga
+  `systemd-run --user --scope indisponivel` ao criar a primeira sessão), a janela nasce no cgroup do serviço e
+  um `systemctl --user restart` a derruba junto. Sem emulador conhecido no PATH ele diz isso; pra
+  escolher qual usar, `CP_TERMINAL` (tabela da seção 2).
 
 ### Git
 

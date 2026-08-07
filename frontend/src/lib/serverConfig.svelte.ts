@@ -11,7 +11,7 @@ export type ValorCampo = string | number | boolean;
 
 export function criarConfigServidor(alvo: () => Server | null) {
   let campos = $state<Record<string, CampoConfig>>({});
-  let leitura = $state<Record<string, string | number>>({});
+  let leitura = $state<Record<string, string | number | boolean>>({});
   let rascunho = $state<Record<string, ValorCampo>>({});
   let carregando = $state(false);
   let salvando = $state(false);

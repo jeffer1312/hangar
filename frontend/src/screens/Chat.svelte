@@ -56,6 +56,18 @@
     onNavigateToChat: (name: string) => void;
     desktop?: boolean;   // montado no DesktopShell -> header sem "voltar"/switcher + atalhos de teclado
     onOpenSplit?: (name: string) => void; // desktop: abre o chat do PAR lado a lado (split view)
+    // Painel de terminal real (xterm.js) na faixa do DesktopShell. So o DesktopShell sabe montar o
+    // painel (e qual dos 3 <Chat> pediu); no celular fica undefined e abrirTerminalReal cai no espelho.
+    onOpenTerminalPanel?: () => void;
+    // True quando ESTA sessao ja tem o painel de terminal REAL aberto (o DesktopShell so sabe qual
+    // dos 3 <Chat> e o dono). abrirTerminalReal, no desktop, nao mexe em mirrorOpen -- sem isto a
+    // pilula "toque pra abrir" e o pulso do botao continuavam ativos com o painel ja aberto embaixo.
+    terminalPanelOpen?: boolean;
+    // Capacidade do SERVIDOR (GET /api/config, `somente_leitura.terminal_panel`): `pty` e POSIX-only,
+    // entao no Windows o painel nao existe. Default true (assume capaz) pra nao piscar pro espelho
+    // enquanto o DesktopShell ainda esta buscando a config -- so vira false quando o servidor confirma
+    // que nao da. O mobile nunca passa isto (o painel real ja e desktop-only por outro motivo).
+    terminalPanelDisponivel?: boolean;
     // Chrome global do DesktopShell: reserva espaço acima da 1ª mensagem e delega Cmd/Ctrl+K à
     // paleta cross-server. O mobile não passa nenhum dos dois e mantém o comportamento anterior.
     topInset?: number;
@@ -68,7 +80,8 @@
     nested?: boolean;
   }
   let {
-    sessionName, onBack, onNavigateToChat, desktop = false, onOpenSplit,
+    sessionName, onBack, onNavigateToChat, desktop = false, onOpenSplit, onOpenTerminalPanel,
+    terminalPanelOpen = false, terminalPanelDisponivel = true,
     topInset = 0, onOpenWorkspacePalette, showContextPanel = false,
     publishWorkspaceActions = false, onWorkspaceActionsChange, nested = false,
   }: Props = $props();
@@ -485,6 +498,13 @@
   // "Voltar ao chat" = SO esconde o espelho. NAO manda Escape -> a TUI fica como esta (nao fecha o
   // painel que o usuario queria ler). Sair do overlay de proposito = tecla Esc na barra do espelho.
   function closeMirror() { mirrorOpen = false; }
+  // Painel de verdade no desktop; espelho no celular -- e tambem no desktop quando o SERVIDOR nao tem
+  // a capacidade (Windows: `pty` e POSIX-only, o painel abriria morto). NAO reusar isto no onFallback
+  // do AskUserQuestion: o fallback existe pra destravar picker, e o painel bloqueia o /answer (Task 3).
+  function abrirTerminalReal() {
+    if (desktop && onOpenTerminalPanel && terminalPanelDisponivel) onOpenTerminalPanel();
+    else mirrorOpen = true;
+  }
   // Statusline crua -> campos tipados (modelo, contexto, custo, tempo de sessao).
   const status = $derived(parseStatusLine(stateEvent?.status_line ?? null));
 
@@ -550,7 +570,7 @@
       action('loop', 'Loop', () => (loopSheetOpen = true)),
       action('pair', 'Parear sessão', () => (pairOpen = true)),
       action('run', 'Executar workflow', () => (runOpen = true)),
-      action('terminal', 'Espelho do terminal', openMirror),
+      action('terminal', 'Terminal', abrirTerminalReal),
     ]);
     // Ao trocar a key servidor-aware ou desmontar este Chat, nenhum callback pode sobreviver.
     return () => publish([]);
@@ -929,7 +949,12 @@
     // Dentro do modal do par a tela NÃO é a viewport: o `fit` fixava height=vv.height (900px medidos)
     // num modal de 858 e a última linha do composer ficava cortada. Lá quem manda é a altura do
     // modal (CSS 100%), e o teclado é problema do modal, como já é em qualquer sheet.
-    if (nested) return;
+    // Desktop: nao ha teclado virtual, entao este fit nunca precisou rodar aqui — mas RODAVA, e
+    // gravava screenEl.style.height = vv.height (a viewport INTEIRA), sobrepondo o "height: 100%"
+    // que faz a tela acompanhar a pane (que encolhe quando o TerminalPanel abre no rodape do
+    // DesktopShell). Resultado: o composer ficava atras do painel de terminal, clipado pelo
+    // overflow:hidden da pane. Mesma classe de bug do modal do par, mesmo remedio.
+    if (nested || desktop) return;
     function fit() {
       if (!screenEl || !vv) return;
       // Ignora valores transientes (a animacao do teclado reporta alturas minusculas por 1 frame).
@@ -1171,11 +1196,29 @@
     }
   }
 
+  // Recusa do backend ao responder (opção pelo picker ou pergunta pelo stepper). O caso comum é o
+  // 409 do painel de terminal aberto ("Terminal aberto nesta sessao..."): antes o catch só fazia
+  // console.error e tocar o botão não fazia ABSOLUTAMENTE NADA, em silêncio — o backend recusava e
+  // a tela ficava igual. `err.message` já vem limpo (o `detail` do FastAPI, api.ts:errorDetail),
+  // então mostra o texto do servidor: ele explica o motivo E a saída ("Feche o painel pra responder
+  // por aqui"). Some sozinho depois de 8s, ou no toque — não é estado, é aviso.
+  let avisoErr = $state('');
+  let avisoErrTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function mostrarAviso(err: unknown) {
+    clearTimeout(avisoErrTimer);
+    avisoErr = err instanceof Error ? err.message : 'não deu pra enviar a resposta';
+    avisoErrTimer = setTimeout(() => (avisoErr = ''), 8000);
+  }
+
   async function handleSelect(option: number) {
+    clearTimeout(avisoErrTimer);
+    avisoErr = '';
     try {
       await selectOption(sessionName, option);
     } catch (err) {
       console.error('selectOption error:', err);
+      mostrarAviso(err);
     }
   }
 
@@ -1195,7 +1238,7 @@
     }
   }
 
-  // 409 (mismatch de verificação) ou erro inesperado -> cai no espelho TUI p/ finalizar manual
+  // 409 (mismatch de verificação, ou painel de terminal aberto) ou erro inesperado.
   async function handleAnswer(answers: AnswerItem[]) {
     try {
       await answerQuestions(sessionName, answers);
@@ -1204,10 +1247,18 @@
       // pendente + askOpen false).
       if (askPiId) { askPiDismissed = askPiId; askPiId = null; }
       askOpen = false;
-    } catch {
+    } catch (err) {
       if (askPiId) { askPiDismissed = askPiId; askPiId = null; }
       askOpen = false;
-      openMirror();
+      // O `/answer` TAMBÉM é guardado pelo 409 do painel de terminal (api.py, _recusa_se_painel_
+      // aberto). Antes o catch dispensava a pergunta e abria o espelho calado: o usuário perdia o
+      // stepper e não ficava sabendo por quê. Mostra o texto do servidor — ele explica a saída.
+      mostrarAviso(err);
+      // Espelho só quando NÃO é 409: o 409 é recusa deliberada (nada foi digitado no pane) e o
+      // espelho é um ModalDialog que cobriria justamente o aviso que diz o que fazer. Nos demais
+      // erros o estado é incerto e o espelho continua sendo a saída pra finalizar na mão — como
+      // ele tapa a pílula, o aviso segue lá quando o usuário fechar (dentro dos 8s).
+      if ((err as { status?: number })?.status !== 409) openMirror();
     }
   }
 </script>
@@ -1216,13 +1267,14 @@
 
 <div
   class="chat-screen"
+  class:desktop
   class:with-context={desktop && showContextPanel}
   bind:this={screenEl}
   style:--nav-h={navH + topInset + 'px'}
 >
   <div class="sr-only" role="status">{stateAnnounce}</div>
   <div class="navbar-mount" bind:this={navEl}>
-    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={openMirror} terminalAlert={tuiOverlay && !mirrorOpen} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
+    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? stateLabels[currentState] : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={abrirTerminalReal} terminalAlert={tuiOverlay && !mirrorOpen && !terminalPanelOpen} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
   </div>
 
   <!-- LoopSheet FORA do .navbar-mount: no desktop largo o mount fica display:none (a info migra
@@ -1240,8 +1292,8 @@
       {serverLabel}
       provider={sessionProvider}
       {sessionName}
-      onOpenTerminal={openMirror}
-      terminalAlert={tuiOverlay && !mirrorOpen}
+      onOpenTerminal={abrirTerminalReal}
+      terminalAlert={tuiOverlay && !mirrorOpen && !terminalPanelOpen}
       onOpenRun={() => (runOpen = true)}
       {runRunning}
       onOpenAttachments={() => (anexosOpen = true)}
@@ -1329,12 +1381,21 @@
     {/if}
   {/if}
 
-  {#if tuiOverlay && !mirrorOpen}
+  {#if tuiOverlay && !mirrorOpen && !terminalPanelOpen}
     <!-- Aviso DESTACADO: ha um painel que SO da pra interagir pela TUI. Pulsa pra chamar atencao;
          tocar abre o espelho. Nao toma a tela (so um banner acima do dock). -->
-    <button class="tui-pill" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} onclick={openMirror} aria-label={needsLogin ? 'Abrir terminal para fazer login' : 'Abrir terminal para interagir'}>
+    <button class="tui-pill" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} onclick={abrirTerminalReal} aria-label={needsLogin ? 'Abrir terminal para fazer login' : 'Abrir terminal para interagir'}>
       <span class="tui-pill-dot"></span>
       <span class="tui-pill-text">{needsLogin ? 'Sessão precisa de login — toque pra entrar' : 'Interação só pela TUI — toque pra abrir'}</span>
+    </button>
+  {/if}
+
+  {#if avisoErr}
+    <!-- Recusa ao responder — opção do picker ou pergunta do stepper (409 do painel de terminal,
+         sessão morta, tmux travado). No centro, acima do dock — é sobre o toque que acabou de
+         acontecer, tem que estar no olho. -->
+    <button class="aviso-err" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} onclick={() => { clearTimeout(avisoErrTimer); avisoErr = ''; }}>
+      {avisoErr}
     </button>
   {/if}
 
@@ -1468,6 +1529,12 @@
        que clipariam os sheets. NÃO reintroduzir transform aqui (top relativo = sem layer, sem preto). */
     isolation: isolate;
   }
+
+  /* Desktop: a tela acompanha a PANE (.pane/.board-overlay, ambos height:100% do .desktop-main
+     ou de um wrapper que encolhe com o TerminalPanel aberto no rodape), nao a viewport inteira -
+     100vh vazava por baixo do painel de terminal e escondia o composer atras dele. Sem teclado
+     virtual em desktop, o fit acima (nested || desktop) nem roda pra sobrescrever isto. */
+  .chat-screen.desktop { height: 100%; }
 
   /* Navbar overlay colado no topo (nao descola): a lista rola POR BAIXO via --nav-h. pointer-events
      deixa o fade transparente passar o toque pro conteudo; a navbar reativa. */
@@ -1716,6 +1783,28 @@
     -webkit-tap-highlight-color: transparent;
   }
   .hist-pill:active { background: var(--bg-hover); }
+
+  /* Recusa ao responder (opção ou pergunta): mesma família das pílulas acima, centrada como o tui-pill (é
+     sobre o toque que acabou de acontecer) e em tom de aviso. `--surface-raised` e não
+     `--bg-elevated` cru: com papel de parede ligado, superfície dentro do app acompanha o véu de
+     transparência em vez de virar retângulo chapado (regra de vidro do CLAUDE.md). */
+  .aviso-err {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 22;
+    max-width: calc(100% - var(--space-6));
+    padding: var(--space-2) var(--space-4);
+    border: 1px solid var(--warning);
+    border-radius: var(--radius-full, 999px);
+    background: var(--surface-raised);
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    text-align: left;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .aviso-err:active { background: var(--bg-hover); }
 
   /* Dead state footer */
   .dead-footer {

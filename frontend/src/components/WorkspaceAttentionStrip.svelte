@@ -13,16 +13,25 @@
   const feed = $derived(attentionFeed(rows));
   const first = $derived(feed[0] ?? null);
   let busy = $state(false);
+  // Recusa do backend ao responder daqui. O `catch {}` de antes dizia "o SSE agregado mantém o
+  // estado correto" — e não mantém: a opção segue pendente, a sessão segue em awaiting e o botão
+  // fica morto. Esta é a tira do DESKTOP, justo a view onde o painel de terminal existe, e o caso
+  // comum é o 409 dele, cujo `detail` já explica a saída ("Feche o painel pra responder por aqui").
+  let erro = $state('');
+  let erroTimer: ReturnType<typeof setTimeout> | undefined;
 
   async function pick(option: number) {
     if (!first || busy) return;
     busy = true;
+    clearTimeout(erroTimer);
+    erro = '';
     const prev = getActiveId();
     selectServer(first.serverId);
     try {
       await selectOption(first.name, option);
-    } catch {
-      // O SSE agregado mantém o estado correto; falha de rede não pode virar rejection solta.
+    } catch (e) {
+      erro = e instanceof Error ? e.message : 'não deu pra enviar a opção';
+      erroTimer = setTimeout(() => (erro = ''), 8000);  // aviso, não estado: some sozinho
     } finally {
       if (prev && prev !== first.serverId) selectServer(prev);
       busy = false;
@@ -55,6 +64,13 @@
         +{feed.length - 1}
       </button>
     {/if}
+
+    <!-- Segunda linha (flex-basis: 100% + wrap na section): a tira e uma linha so, e empurrar o
+         aviso pra dentro dela espremeria o nome/pergunta. Por ultimo no DOM pra quebrar depois dos
+         botoes, nao antes deles. -->
+    {#if erro}
+      <p class="strip-err" role="status">{erro}</p>
+    {/if}
   </section>
 {/if}
 
@@ -63,6 +79,7 @@
     width: min(760px, calc(100% - 32px));
     min-height: 42px;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
     padding: 4px;
@@ -151,6 +168,16 @@
 
   .quick-options button:hover, .more:hover {
     background: color-mix(in srgb, var(--warning) 10%, transparent);
+  }
+
+  /* Sem superficie propria (mesmo padrao do .attn-err do AttentionFeed): quem carrega o material e
+     a tira, e um retangulo aqui dentro nao acompanharia o veu de transparencia. */
+  .strip-err {
+    flex-basis: 100%;
+    margin: 0;
+    padding: 0 var(--space-2) 2px;
+    color: var(--warning);
+    font-size: var(--text-xs);
   }
 
   .quick-options button:disabled { opacity: 0.55; }

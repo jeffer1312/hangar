@@ -6,7 +6,9 @@ import mimetypes
 import os
 import re
 import secrets
+import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -338,6 +340,146 @@ async def pi_inbox_ws(ws: WebSocket):
     finally:
         if linha is not None:
             INBOX.remover(pane, linha)
+
+
+@app.websocket("/api/sessions/{name}/term")
+async def term_ws_route(ws: WebSocket, name: str):
+    # Sem a trava de loopback do /api/pi/inbox: aquela existe porque quem liga la e uma extensao
+    # LOCAL. Aqui o celular vai precisar entrar de fora na fase 2.
+    from app import termsock
+    await termsock.term_ws(ws, name)
+
+
+@app.post("/api/sessions/{name}/shell", dependencies=[Depends(require_auth)])
+def abrir_shell(name: str):
+    # Sessao de shell SEPARADA e ESCONDIDA do app (Task 6) -- ver tmux.new_hidden_shell. Sync (nao
+    # async): mesmo padrao das rotas POST vizinhas (select/answer acima), que resolvem a sessao via
+    # `registry.list()` direto e deixam o FastAPI rodar o handler bloqueante no threadpool.
+    from app import tmux
+    info = next((s for s in registry.list() if s.name == name), None)
+    if info is None:
+        raise HTTPException(status_code=404, detail="sessao nao existe")
+    alvo = f"term-{name}"
+    # Achado da revisao (I1, e de novo na rodada 2): `sanitize_session_name` aceita hifen, entao
+    # "term-<nome>" pode ja existir como sessao de TERCEIRO (ex: usuario criou "foo" e depois
+    # "term-foo" na mao). A 1a versao inferia isso de `registry.list()` -- mas a lista TAMBEM
+    # filtra sessao com sidecar Codex de mesmo nome, entao um "term-<nome>" que fosse Codex de
+    # verdade sumia da lista por ESSE motivo, nao por ser nosso, e a inferencia concluia (errado)
+    # que o nome estava livre. Pergunta DIRETA ao tmux (`is_hidden`), nao mais inferida: cobre
+    # Codex tambem, ao custo de 1-2 forks a mais nesta rota de clique unico (nao e o caminho de
+    # poll onde fork por sessao e proibido).
+    if tmux.has_session(alvo) and not tmux.is_hidden(alvo):
+        # L68 da revisao final: o texto NAO afirma mais que a sessao e de terceiro. Ela pode ser o
+        # shell DESTE painel que ficou sem a marca (um `set-option` que falhou por tmux ocupado/
+        # timeout, ver tmux.new_hidden_shell) -- e como este gate recusa ANTES de chamar aquela
+        # funcao, nada se autocorrige sozinho: quem desempata e o usuario.
+        raise HTTPException(status_code=409,
+                            detail=f"ja existe uma sessao tmux chamada {alvo!r} sem a marca do "
+                                   "painel -- pode ser uma sessao sua de mesmo nome, ou o shell "
+                                   "deste painel que perdeu a marca. Encerre ou renomeie essa "
+                                   "sessao antes de abrir o shell")
+    # O cwd vem do REGISTRY, nunca da query: um `?cwd=/` viraria shell em qualquer lugar do disco.
+    novo = tmux.new_hidden_shell(name, info.cwd or str(Path.home()))
+    if novo is None:
+        raise HTTPException(status_code=500, detail="tmux recusou criar o shell")
+    return {"ok": True, "shell": novo}
+
+
+# Emuladores de terminal conhecidos, na ordem de preferencia da sonda quando CP_TERMINAL nao esta
+# setado. Cada valor monta o ARGV completo de attach dado o alvo tmux exato ("=nome:" -- NUNCA sem
+# o `=`, senao o tmux cai em prefix-match e abre a sessao errada; o `:` final e a mesma grafia do
+# `attach` do termsock, alinhada na revisao final -- medido nesta maquina que as duas formas
+# anexam igual, e uma operacao so nao pode ter duas grafias numa branch inteira sobre esse
+# detalhe). `wezterm` nao tem `-e`: e
+# `start -- comando`. `gnome-terminal -e` esta deprecado e so aceita UM string; `--` e o substituto.
+_EMULADORES = {
+    "wezterm": lambda alvo: ["wezterm", "start", "--", "tmux", "attach", "-t", alvo],
+    "kitty": lambda alvo: ["kitty", "tmux", "attach", "-t", alvo],
+    "alacritty": lambda alvo: ["alacritty", "-e", "tmux", "attach", "-t", alvo],
+    "konsole": lambda alvo: ["konsole", "-e", "tmux", "attach", "-t", alvo],
+    "gnome-terminal": lambda alvo: ["gnome-terminal", "--", "tmux", "attach", "-t", alvo],
+    "xterm": lambda alvo: ["xterm", "-e", "tmux", "attach", "-t", alvo],
+}
+_ORDEM_PROBE = ["wezterm", "kitty", "alacritty", "konsole", "gnome-terminal", "xterm"]
+
+
+@app.post("/api/sessions/{name}/open-terminal", dependencies=[Depends(require_auth)])
+def abrir_terminal_nativo(name: str):
+    """Abre um emulador de terminal NATIVO (janela propria do SO) anexado a sessao tmux `name` --
+    tanto a do agente quanto a do shell escondido, o alvo e so um nome de sessao tmux. Diferente do
+    painel embutido (termsock/xterm.js): esta janela nao depende do backend pra existir, entao
+    fechar o painel ou reiniciar o servico NAO a desanexa.
+
+    Checa via `tmux.has_session` (nao `registry.list()`): a sessao de shell escondida (Task 6) NAO
+    aparece no registry por design, mas continua um alvo valido pra este botao.
+    """
+    from app import tmux
+    if not tmux.has_session(name):
+        raise HTTPException(status_code=404, detail="sessao nao existe")
+    nome_bin = os.environ.get("CP_TERMINAL")
+    if nome_bin:
+        # env checada ANTES do PATH: se o usuario apontou um emulador, e ele que vale -- so falha
+        # se esse binario especifico nao existir ou nao for suportado (dicionario fechado; NAO
+        # inventa um `-e` generico pra emulador desconhecido).
+        if nome_bin not in _EMULADORES or shutil.which(nome_bin) is None:
+            raise HTTPException(status_code=503,
+                                detail=f"CP_TERMINAL={nome_bin!r} nao encontrado no PATH ou nao "
+                                       "suportado")
+    else:
+        nome_bin = next((n for n in _ORDEM_PROBE if shutil.which(n)), None)
+        if nome_bin is None:
+            raise HTTPException(status_code=503,
+                                detail="nenhum emulador de terminal encontrado no PATH")
+    args = tmux._scope_prefix() + _EMULADORES[nome_bin](f"={name}:")
+    env = os.environ.copy()
+    wl = tmux._wayland_display()
+    if wl:
+        # sem isto o emulador GUI nao acha o compositor quando o backend roda como servico systemd
+        # (env de boot, sem WAYLAND_DISPLAY) -- mesmo problema que o wl-paste do new_session.
+        env["WAYLAND_DISPLAY"] = wl
+    disp = os.environ.get("DISPLAY")
+    if disp:
+        # Achado da revisao (I5): X11/XWayland precisa de DISPLAY, nao so WAYLAND_DISPLAY -- sem
+        # repassar, um host X11 (ou o servico systemd sem env de sessao grafica) faz o emulador
+        # executar e morrer com "cannot open display" LOGO apos o exec, onde o Popen nao pega nada.
+        env["DISPLAY"] = disp
+    # Arquivo temporario, nao `PIPE` (achado da revisao, rodada 2): a janela que ABRE fica viva
+    # bem alem deste request, e um `PIPE` sem leitor enche os 64KB do buffer do kernel e a
+    # escrita do emulador TRAVA (medido no wezterm, primeiro da sonda, que loga bastante em
+    # stderr) -- mais um fd vazado por clique. Arquivo comum nao tem esse teto.
+    err_file = tempfile.TemporaryFile()
+    try:
+        p = subprocess.Popen(args, env=env, start_new_session=True, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=err_file)
+    except OSError as e:
+        err_file.close()
+        raise HTTPException(status_code=503, detail=f"falha ao abrir o emulador de terminal: {e}")
+    # Falha aparece, nao some (achado da revisao): o Popen so levanta se o BINARIO nao existe --
+    # sem DISPLAY, com o compositor errado, ou qualquer erro pos-exec, o processo sai sozinho em
+    # poucos ms e o `except OSError` acima nunca ve nada, devolvendo "ok" pra uma janela que nunca
+    # abriu. Espera uma fracao de segundo e confere se ja morreu.
+    time.sleep(0.3)
+    morreu = p.poll()
+    # `morreu != 0`, nao so `morreu is not None` (achado da revisao, rodada 2): sair com rc=0 em
+    # poucos ms e COMPORTAMENTO NORMAL de cliente D-Bus/instancia unica -- `gnome-terminal` (na
+    # sonda) abre no `gnome-terminal-server` e sai 0 na hora; `wezterm start` com GUI ja de pe e
+    # `konsole` reusando instancia fazem o mesmo. Tratar qualquer saida como erro devolvia 503 pra
+    # janela que abriu certo.
+    if morreu is not None and morreu != 0:
+        err_file.seek(0)
+        erro = err_file.read().decode(errors="replace").strip()
+        err_file.close()
+        raise HTTPException(status_code=503,
+                            detail=f"emulador de terminal saiu logo apos abrir: "
+                                   f"{erro or f'codigo {morreu}'}")
+    err_file.close()   # nosso handle; o filho, se ainda vivo, segue escrevendo no fd dele
+    # Este `Popen` nunca e colhido explicitamente (sem wait(), sem thread de reaper): a janela vive
+    # muito alem deste request e esperar por ela seria travar a rota. Quem colhe e o proprio
+    # `subprocess`, que varre os filhos ja mortos a cada Popen novo — e o backend chama `tmux` o
+    # tempo todo, entao o zumbi some sozinho em segundos. E uma DEPENDENCIA de detalhe interno do
+    # modulo, nao um contrato: se um dia o backend parar de disparar subprocessos com frequencia,
+    # cada clique aqui deixa um zumbi ate o processo reiniciar.
+    return {"ok": True}
 
 
 # Snapshot com TTL de registry.list() pros endpoints request/response QUENTES (history/workflows):
@@ -1293,22 +1435,28 @@ def _provider_of(name: str) -> str:
 
 def _pane_info(name: str) -> tuple[str, str | None]:
     """(provider, pane_id) numa leitura só — era `_pane_provider`, que pagava seu próprio
-    `tmux list-panes -t <name>` (via `tmux.pane_pid`); agora usa `list_panes_active()` (a mesma
-    chamada que o bloco de DIAG logo abaixo já faz), e o `pane_id` sai de carona, sem tmux novo no
-    caminho quente. Provider do pane (claude/pi) continua lido do /proc como antes: o gate de "TUI
-    pronta" do terminal_input casa marcas do rodape do Claude, que o Pi nao imprime, e sem saber o
-    provider todo envio a uma sessao Pi queimava os 12s de timeout antes de digitar. Erro/pane
-    sumido -> ("claude", None) — comportamento de hoje, marcas do Claude, sem pane_id (cai pra
-    tecla, igual a antes desta task)."""
-    from app import registry as registry_mod
-    from app import tmux
-    try:
-        p = next((x for x in tmux.list_panes_active() if x["name"] == name), None)
-        if p is None:
-            return "claude", None
-        return registry_mod.provider_of_pane(p["pid"]), p.get("pane_id")
-    except Exception:
-        return "claude", None
+    `tmux list-panes -t <name>` (via `tmux.pane_pid`); agora usa `list_panes_all()` (MESMA chamada
+    `list-panes -a` que o antigo `list_panes_active` já fazia — um fork só), e o `pane_id` sai de
+    carona, sem tmux novo no caminho quente. Provider do pane (claude/pi) continua lido do /proc
+    como antes: o gate de "TUI pronta" do terminal_input casa marcas do rodape do Claude, que o Pi
+    nao imprime, e sem saber o provider todo envio a uma sessao Pi queimava os 12s de timeout
+    antes de digitar.
+
+    Task 6: resolve pelo pane do AGENTE (`SessionRegistry._agent_pane`, Task 5.5), nao mais pelo
+    pane ATIVO — reusa a MESMA resolucao que `registry.list()` ja usa, nao uma terceira. Com um
+    split (o shell escondido, ou qualquer split manual), o pane ativo podia ser o do shell: uma
+    sessao Pi virava ("claude", pane_id do shell) neste caminho de ENVIO — o gate esperava as
+    marcas de rodape do Claude e queimava os 12s por mensagem, e `INBOX.tem_linha(pane_id)`
+    falhava (derrubava a linha rapida do Pi), porque o pane_id devolvido era do pane errado.
+
+    Erro/pane sumido -> ("claude", None) — comportamento de hoje, marcas do Claude, sem pane_id
+    (cai pra tecla, igual a antes desta task).
+
+    Revisao final (I1): o corpo mudou de casa pro `agentpane.pane_info` — o drain da fila duravel e
+    o adapter do Pi precisavam da MESMA resolucao e estavam no pane ativo. Esta funcao fica como o
+    nome que as rotas (e os testes) ja conhecem."""
+    from app import agentpane
+    return agentpane.pane_info(name)
 
 
 async def _send_one_codex(name: str, text: str) -> dict:
@@ -1706,6 +1854,20 @@ async def unpair_session(name: str):
     return {"ok": True, "warning": ("aviso de saída falhou: " + "; ".join(errs)) if errs else None}
 
 
+def _recusa_se_painel_aberto(name: str) -> None:
+    # Com o painel anexado, a janela do tmux esta no tamanho DELE (~120x20). Quem conta linha no
+    # pane — o seletor de opcao, o stepper do AskUserQuestion (terminal_input.answer_questions /
+    # answer_question_pi) e o model_picker (lista e troca de modelo, que dirige o /model contando
+    # linhas do pane) — leria um pane truncado e escolheria errado.
+    #
+    # O termsock NAO importa `pty` no topo justamente pra este import funcionar no Windows.
+    from app import termsock
+    if name in termsock.clientes_ativos():
+        raise HTTPException(status_code=409,
+                            detail="Terminal aberto nesta sessao. Feche o painel pra responder "
+                                   "por aqui.")
+
+
 @app.post("/api/sessions/{name}/select", dependencies=[Depends(require_auth)])
 def select(name: str, body: SelectBody):
     # Mesma guarda do /input — e aqui ela é a ÚNICA: a cadeia abaixo não sabe falhar. terminal.select
@@ -1714,6 +1876,7 @@ def select(name: str, body: SelectBody):
     # uma opção de sessão morta digitava no vazio e a resposta era {"ok": true} — o catch do card
     # nunca disparava. (O fix de raiz em send_keys/_run é outro diff: interrupt/model_picker/
     # TerminalMirror também passam por lá.)
+    _recusa_se_painel_aberto(name)
     if not _session_exists(name):
         raise HTTPException(404, "sessão não encontrada — opção NÃO enviada")
     terminal.select(name, body.option)
@@ -1840,6 +2003,7 @@ def get_config():
             "server_id": settings.server_id,
             "public_url": settings.public_url,
             "scan_roots": settings.scan_roots,
+            "terminal_panel": os.name == "posix",   # `pty` e POSIX-only; sem ele o painel nao existe
         },
     }
 
@@ -2725,6 +2889,7 @@ def answer(name: str, body: AnswerBody):
     # FALLBACK automatico: Escape (fecha o picker; o "declined" e intencional aqui) + resposta como
     # texto via _send_one (fila duravel: se o pane ainda estiver em overlay vira deferred e o drain
     # entrega). A resposta do usuario NUNCA se perde — pior caso chega como texto, nao como interrupt mudo.
+    _recusa_se_painel_aberto(name)
     from app import terminal_input
     answers = [a.model_dump() for a in body.answers]
     info = next((s for s in registry.list() if s.name == name), None)
@@ -2783,6 +2948,7 @@ def answer(name: str, body: AnswerBody):
 def model_effort(name: str, body: ModelEffortBody):
     # Dirige o picker interativo do /model pra aplicar modelo/esforco SO na sessao (scope
     # 'session') ou como default ('default'). PickerError -> 409/422; entrada invalida -> 422.
+    _recusa_se_painel_aberto(name)
     try:
         return terminal.set_model_effort(name, body.model, body.effort, body.scope)
     except PickerError as e:
@@ -2852,12 +3018,15 @@ async def model_options(name: str):
     if info.provider not in (None, "claude"):
         raise HTTPException(400, "esta rota so existe pra sessoes Claude Code")
     if info.engine:
+        # Motor: catalogo vem do /v1/models do provedor (HTTP), nao do pane -- nao conta linha,
+        # nao depende do tamanho da janela. A guarda so vale pro ramo abaixo (le o picker).
         modelos = await _engine_models(info.engine)
         return {"kind": "engine", "engine": info.engine,
                 "models": [{"id": m["id"], "context_length": m.get("context_length"),
                             "vision": m.get("vision")} for m in modelos]}
     # Conta Anthropic: le o picker de verdade. Abre e fecha um overlay — nao vai pro scrollback,
     # nao entra no transcript e nao gasta token.
+    _recusa_se_painel_aberto(name)
     chave = str(_session_config_dir(name) or "~")
     hit = _claude_models_cache.get(chave)
     if hit and time.monotonic() - hit[0] < _CLAUDE_MODELS_TTL:
@@ -2882,6 +3051,7 @@ async def engine_model_set(name: str, body: EngineModelBody):
     settings.json e capturado antes e reposto depois: a troca vale onde foi pedida e em lugar nenhum
     mais. Ver app/default_model.py.
     """
+    _recusa_se_painel_aberto(name)
     info = await _cached_info(name)
     if not info:
         raise HTTPException(404, "sessao nao encontrada")

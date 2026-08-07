@@ -44,6 +44,23 @@ def test_list_panes_active_rejects_the_old_four_field_format():
         assert tmux.list_panes_active() == []
 
 
+def test_list_panes_all_tolerates_a_missing_hidden_field():
+    # C1 da revisao final: `#{@cp_hidden}` e opcao de USUARIO no `-F`. Multiplexador que nao a
+    # interpola (psmux) devolve 5 campos ou o literal cru — e daqui saem as tres views, o
+    # list_with_state, o _pane_info e o _cwd_has_siblings. Perder a MARCA e chato (o shell
+    # escondido vira card); perder a SESSAO seria o app vazio.
+    stdout = ("cc\t1\t123\t/home/u/p\t%9\n"                  # 5 campos: sem a opcao
+              "term-cc\t1\t124\t/home/u/p\t%10\t1\n"          # 6 campos: marcada
+              "web\t1\t125\t/home/u/w\t%11\t#{@cp_hidden}\n")  # literal nao interpolado
+    with patch.object(tmux, "RUN", return_value=MagicMock(stdout=stdout, returncode=0)):
+        out = tmux.list_panes_all()
+    assert set(out) == {"cc", "term-cc", "web"}
+    assert out["cc"][0]["hidden"] is False
+    assert out["term-cc"][0]["hidden"] is True
+    assert out["web"][0]["hidden"] is False
+    assert out["cc"][0]["pane_id"] == "%9"       # os 5 primeiros campos seguem no lugar certo
+
+
 def test_send_keys_literal_uses_dashdash():
     with patch.object(tmux, "RUN", return_value=MagicMock(returncode=0)) as run:
         tmux.send_keys("cc", "echo hi", literal=True)
@@ -300,8 +317,17 @@ def test_new_session_sem_systemd_run_quebrado_ainda_cria(monkeypatch):
 # Windows. Estes testes travam as duas garantias: Windows fatia byte-exato; Linux fica intocado.
 
 def _captura_run(monkeypatch):
+    # Filtra o "list-panes" da resolucao de pane do agentpane (Task 1, _pane_target agora delega pra
+    # ela): estes testes exercitam o fatiamento/placeholder do _send_literal, nao a resolucao de
+    # alvo — essa tem cobertura propria em test_agentpane.py.
     chamadas = []
-    monkeypatch.setattr(tmux, "RUN", lambda args, **k: (chamadas.append(list(args)) or _CP()))
+
+    def fake(args, **k):
+        if args[1] != "list-panes":
+            chamadas.append(list(args))
+        return _CP()
+
+    monkeypatch.setattr(tmux, "RUN", fake)
     return chamadas
 
 
@@ -416,6 +442,10 @@ def test_send_literal_para_no_primeiro_pedaco_que_falha(monkeypatch, caplog):
     chamadas = []
 
     def run_falhando_no_3(args, **k):
+        # ignora o list-panes da resolucao de pane do agentpane (Task 1) -> a contagem continua
+        # so sobre os pedacos do send-keys, que e o que este teste mede.
+        if args[1] == "list-panes":
+            return _CP()
         chamadas.append(list(args))
         return _CPFalha() if len(chamadas) == 3 else _CP()
 
@@ -543,7 +573,10 @@ def test_texto_comecando_com_hifen_usa_placeholder_e_apaga_no_fim(monkeypatch):
     monkeypatch.setattr(tmux.os, "name", "nt")
     monkeypatch.setattr(tmux.time, "sleep", lambda *_a, **_k: None)
     chamadas = []
-    monkeypatch.setattr(tmux, "RUN", lambda args, **k: (chamadas.append(list(args)) or _CP()))
+    # filtra o list-panes da resolucao de pane do agentpane (Task 1) -> so sobra o que este teste
+    # quer medir: a sequencia de teclas do proprio _send_literal.
+    monkeypatch.setattr(tmux, "RUN", lambda args, **k: (
+        chamadas.append(list(args)) if args[1] != "list-panes" else None) or _CP())
     tmux.send_keys("cc", "-comeca com hifen, curto", literal=True)
     teclas = [c[-1] for c in chamadas]
     assert teclas[0].startswith("x")                     # placeholder COLADO no 1o pedaco
@@ -557,7 +590,9 @@ def test_texto_comecando_com_hifen_usa_placeholder_e_apaga_no_fim(monkeypatch):
 def test_texto_normal_nao_usa_placeholder(monkeypatch):
     monkeypatch.setattr(tmux.os, "name", "nt")
     chamadas = []
-    monkeypatch.setattr(tmux, "RUN", lambda args, **k: (chamadas.append(list(args)) or _CP()))
+    # filtra o list-panes da resolucao de pane do agentpane (Task 1), mesma razao do teste acima.
+    monkeypatch.setattr(tmux, "RUN", lambda args, **k: (
+        chamadas.append(list(args)) if args[1] != "list-panes" else None) or _CP())
     tmux.send_keys("cc", "texto normal", literal=True)
     assert [c[-1] for c in chamadas] == ["texto normal"]   # uma chamada so, nada de Home/DC
 

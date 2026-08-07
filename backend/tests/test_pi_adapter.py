@@ -52,8 +52,10 @@ def test_send_prompt_resolve_o_pane_como_o_drain(monkeypatch):
     import asyncio
     from app.adapters.pi import adapter as pi_adapter_mod
 
-    monkeypatch.setattr(pi_adapter_mod.tmux, "list_panes_active",
-                        lambda: [{"name": "outra", "pane_id": "%1"}, {"name": "sess", "pane_id": "%9"}])
+    # Pelo pane do AGENTE (`agentpane.pane_info`), nao pelo ATIVO: com split manual o ativo pode
+    # ser o do shell, e o bilhete da extensao do Pi e por PANE (I1 da revisao final).
+    monkeypatch.setattr(pi_adapter_mod.agentpane, "pane_info",
+                        lambda name: ("pi", "%9") if name == "sess" else ("claude", None))
     chamado = {}
 
     class FakeTerminalInput:
