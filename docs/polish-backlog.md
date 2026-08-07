@@ -51,6 +51,36 @@ Two things the design must carry from the start:
 - **the choice between paths must be explicit in code** (has a newline / exceeds N bytes), never
   "sometimes pasting fails".
 
+**Measure before building any of it.** The whole idea rests on one assumption nobody has tested:
+that a bracketed paste written into the PTY master survives the trip through `tmux attach` and
+reaches the agent's TUI *as a paste*. If tmux does not forward the `\e[200~`/`\e[201~` markers to
+the pane, the benefit evaporates and only the image case is left. Settle that first — it is a
+ten-line script, not a project.
+
+The experiment, once that holds. Same payload down both paths (`tmux send-keys` as it is today, and
+a throwaway PTY), then compare what actually **arrived** against what was sent:
+
+| Payload | What it is probing |
+|---|---|
+| one short line | the boring case must not regress |
+| multi-line block | does it arrive as ONE submission or as N lines the TUI submits separately |
+| ~100 KB paste | truncation, ordering, and how long each path takes |
+| text with `\n`, tabs, `%`, quotes, accents, emoji | the escaping the `send-keys -l` fallback already struggles with |
+| an image | only the PTY path can carry it at all |
+| a real `cp-send` message | the concrete pain that motivated this |
+
+Read the result from the agent's own transcript (the `.jsonl`), not from `capture-pane` — the pane
+is a rendering and will lie about what was received.
+
+The order of the criteria decides the design, so fix it up front: **fidelity first** (did it arrive
+intact, and as a single submission), **failure mode second** (which path fails loudly and which
+fails silently), **latency last** — a send is a human-triggered action, and tens of milliseconds do
+not matter next to a mangled paste.
+
+Then write the predicate from the measurements, not from intuition, and keep `send-keys` as the
+fallback for everything the PTY path did not measurably win — plus Windows, unconditionally, until
+the psmux items below are answered.
+
 ### Mirror the machine's terminal theme in xterm.js
 
 The panel currently passes three colours to xterm (`foreground`, `background`, `cursor`), read from
