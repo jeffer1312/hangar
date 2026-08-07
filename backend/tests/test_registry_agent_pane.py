@@ -99,13 +99,14 @@ def test_list_nao_faz_fork_por_sessao(tmp_path, monkeypatch):
     cwd_a, cwd_b = tmp_path / "a", tmp_path / "b"
     cwd_a.mkdir()
     cwd_b.mkdir()
-    subprocess.run(["tmux", "-L", sock, "new-session", "-d", "-s", a, "-c", str(cwd_a),
-                    "-x", "200", "-y", "50", "sleep 600"], check=True)
-    subprocess.run(["tmux", "-L", sock, "split-window", "-t", f"={a}:0", "-c", str(cwd_a),
-                    "sleep 600"], check=True)
-    subprocess.run(["tmux", "-L", sock, "new-session", "-d", "-s", b, "-c", str(cwd_b),
-                    "-x", "200", "-y", "50", "sleep 600"], check=True)
     try:
+        subprocess.run(["tmux", "-L", sock, "new-session", "-d", "-s", a, "-c", str(cwd_a),
+                        "-x", "200", "-y", "50", "sleep 600"], check=True)
+        subprocess.run(["tmux", "-L", sock, "split-window", "-t", f"={a}:0", "-c", str(cwd_a),
+                        "sleep 600"], check=True)
+        subprocess.run(["tmux", "-L", sock, "new-session", "-d", "-s", b, "-c", str(cwd_b),
+                        "-x", "200", "-y", "50", "sleep 600"], check=True)
+
         chamadas_of = []
         monkeypatch.setattr(tmux, "list_panes_of", lambda n: chamadas_of.append(n))
 
@@ -128,4 +129,9 @@ def test_list_nao_faz_fork_por_sessao(tmp_path, monkeypatch):
                                  "#{session_name}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_id}"]]
         assert chamadas_of == []                # nenhuma chamada por-sessao durante list()
     finally:
-        subprocess.run(["tmux", "-L", sock, "kill-server"], capture_output=True)
+        # kill-SESSION (alvo exato), nunca kill-server -- mesma proibicao do test_tmux.py: um `-L`
+        # esquecido num kill-server derruba o servidor tmux DEFAULT (todas as sessoes Claude vivas
+        # do usuario), nao so o socket privado deste teste. Aqui o `sock` e sempre um uuid novo e
+        # nunca ficaria vazio de verdade, mas o padrao errado nao pode ser o que fica pra copiar.
+        subprocess.run(["tmux", "-L", sock, "kill-session", "-t", f"={a}"], capture_output=True)
+        subprocess.run(["tmux", "-L", sock, "kill-session", "-t", f"={b}"], capture_output=True)
