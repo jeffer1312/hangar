@@ -6,6 +6,7 @@ verdade rodando).
 """
 import logging
 import subprocess
+import uuid
 import pytest
 from app import agentpane, registry, tmux
 
@@ -25,7 +26,13 @@ def sessao(tmp_path):
 
 
 def _segunda_janela(nome, cwd):
-    subprocess.run(["tmux", "new-window", "-t", f"={nome}", "-c", cwd, "sleep 600"], check=True)
+    # split-window (NAO new-window): medido que #{pane_active} e por JANELA -- com 2 JANELAS de 1
+    # pane cada, as DUAS saem active=1 (o tmux nunca desmarca a janela 0) e o `list-panes -a` lista a
+    # janela 0 primeiro, entao o pane do agente ganhava por acidente de ordenacao mesmo SEM a
+    # correcao desta task (achado C1 da revisao: o teste passava com o codigo antigo). split-window
+    # cria um 2o PANE na MESMA janela (:0) e so ai o tmux desmarca active no pane original -- o
+    # cenario que reproduz o bug de verdade.
+    subprocess.run(["tmux", "split-window", "-t", f"={nome}:0", "-c", cwd, "sleep 600"], check=True)
 
 
 def test_list_resolve_pelo_pane_do_agente_com_janela_extra(sessao, tmp_path, monkeypatch):
@@ -74,35 +81,51 @@ def test_sem_pane_de_agente_cai_no_ativo_e_loga(sessao, tmp_path, monkeypatch, c
     assert any("nenhum parece do agente" in r.message for r in caplog.records)
 
 
-def test_list_nao_faz_fork_por_sessao(sessao, tmp_path, monkeypatch):
+def test_list_nao_faz_fork_por_sessao(tmp_path, monkeypatch):
     # Brief item 4: a correcao NAO pode acrescentar fork/varredura por sessao. Prova com 2 sessoes
-    # reais (uma delas com pane extra): list() paga UMA chamada tmux pra TODAS (list_panes_all) e
-    # NUNCA o caminho por-sessao (list_panes_of, o que o agentpane.resolve_target usaria).
-    outro_cwd = tmp_path / "outra"
-    outro_cwd.mkdir()
-    outra_sessao = f"{SESS}-2"
-    subprocess.run(["tmux", "kill-session", "-t", f"={outra_sessao}"], capture_output=True)
-    subprocess.run(["tmux", "new-session", "-d", "-s", outra_sessao, "-c", str(outro_cwd),
+    # reais (uma delas com pane extra, via split -- o cenario que reproduz de verdade, achado C1).
+    #
+    # Achado menor 3 da revisao: espiar so list_panes_all/list_panes_of nao mede o que o nome do
+    # teste promete -- _cwd_has_siblings (chamado de dentro de resolve_tracked) TAMBEM e um
+    # `tmux list-panes -a`, que pode rodar por sessao. Espiar tmux.RUN (o ponto baixo por onde TODO
+    # fork do modulo passa, mesmo padrao de test_tmux.py) mede o fork de verdade.
+    #
+    # Socket proprio (-L): sem isto o `reg.list()` enxerga TODAS as sessoes tmux da maquina (as reais
+    # do dev, nao so as deste teste) -- qualquer uma delas com --session-id no cmdline dispara
+    # _cwd_has_siblings por conta propria e o total de forks passa a depender do que mais esta
+    # rodando na maquina, nao do que o teste criou (medido: contaminava o teste com forks alheios).
+    sock = f"cp-test-{uuid.uuid4().hex[:8]}"
+    a, b = f"cp-test-fork-a-{uuid.uuid4().hex[:6]}", f"cp-test-fork-b-{uuid.uuid4().hex[:6]}"
+    cwd_a, cwd_b = tmp_path / "a", tmp_path / "b"
+    cwd_a.mkdir()
+    cwd_b.mkdir()
+    subprocess.run(["tmux", "-L", sock, "new-session", "-d", "-s", a, "-c", str(cwd_a),
+                    "-x", "200", "-y", "50", "sleep 600"], check=True)
+    subprocess.run(["tmux", "-L", sock, "split-window", "-t", f"={a}:0", "-c", str(cwd_a),
+                    "sleep 600"], check=True)
+    subprocess.run(["tmux", "-L", sock, "new-session", "-d", "-s", b, "-c", str(cwd_b),
                     "-x", "200", "-y", "50", "sleep 600"], check=True)
     try:
-        _segunda_janela(sessao, str(tmp_path))
-
         chamadas_of = []
         monkeypatch.setattr(tmux, "list_panes_of", lambda n: chamadas_of.append(n))
 
-        chamadas_all = {"n": 0}
-        original = tmux.list_panes_all
+        chamadas_run = []
 
-        def _contando():
-            chamadas_all["n"] += 1
-            return original()
+        def _espiao(args, **kw):
+            chamadas_run.append(list(args))
+            return subprocess.run(["tmux", "-L", sock, *args[1:]], **kw)
 
-        monkeypatch.setattr(tmux, "list_panes_all", _contando)
+        monkeypatch.setattr(tmux, "RUN", _espiao)
 
         reg = registry.SessionRegistry(projects_dir=tmp_path)
         reg.list()
 
-        assert chamadas_all["n"] == 1          # UMA chamada tmux pra resolver TODAS as sessoes
+        # As duas sessoes sao `sleep` puro (sem --session-id no cmdline) -> resolve_tracked nunca
+        # chega no passo do cmdline e _cwd_has_siblings nunca dispara; o UNICO fork esperado e o
+        # `list-panes -a` de list(). Se a correcao tivesse introduzido fork por sessao, o total
+        # cresceria com o numero de sessoes/panes (aqui: 2 sessoes, 3 panes).
+        assert chamadas_run == [["tmux", "list-panes", "-a", "-F",
+                                 "#{session_name}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_id}"]]
         assert chamadas_of == []                # nenhuma chamada por-sessao durante list()
     finally:
-        subprocess.run(["tmux", "kill-session", "-t", f"={outra_sessao}"], capture_output=True)
+        subprocess.run(["tmux", "-L", sock, "kill-server"], capture_output=True)
