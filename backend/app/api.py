@@ -473,6 +473,12 @@ def abrir_terminal_nativo(name: str):
                             detail=f"emulador de terminal saiu logo apos abrir: "
                                    f"{erro or f'codigo {morreu}'}")
     err_file.close()   # nosso handle; o filho, se ainda vivo, segue escrevendo no fd dele
+    # Este `Popen` nunca e colhido explicitamente (sem wait(), sem thread de reaper): a janela vive
+    # muito alem deste request e esperar por ela seria travar a rota. Quem colhe e o proprio
+    # `subprocess`, que varre os filhos ja mortos a cada Popen novo — e o backend chama `tmux` o
+    # tempo todo, entao o zumbi some sozinho em segundos. E uma DEPENDENCIA de detalhe interno do
+    # modulo, nao um contrato: se um dia o backend parar de disparar subprocessos com frequencia,
+    # cada clique aqui deixa um zumbi ate o processo reiniciar.
     return {"ok": True}
 
 

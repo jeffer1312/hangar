@@ -13,6 +13,7 @@ import contextlib
 import json
 import logging
 import os
+import secrets
 import signal
 import struct
 import threading
@@ -110,6 +111,14 @@ def _abrir_pty(name: str, cols: int, rows: int) -> tuple[int, int, str]:
             except BaseException:                # noqa: BLE001
                 pass
         os._exit(127)
+    # O mestre do `pty.fork()` nasce HERDAVEL: `os.forkpty` nao aplica o PEP 446 que `os.openpty` e
+    # `os.pipe` aplicam. Como o backend e de vida longa e guarda uma Sessao (com o `master` dela) por
+    # conexao viva, abrir um SEGUNDO painel com o primeiro ainda conectado fazia o `tmux attach` novo
+    # -- e tudo que rodasse dentro dele -- herdar um fd de leitura E escrita pro PTY do primeiro:
+    # qualquer coisa na segunda sessao podia ler ou injetar bytes na outra. Reproduzido isolado na
+    # revisao, com dois `pty.fork()` seguidos no mesmo processo. NAO remover "limpando": e a unica
+    # linha que separa os dois terminais.
+    os.set_inheritable(master, False)
     tty = os.ptsname(master)                    # guardado AGORA: depois do close() nao da mais
     _winsize(master, cols, rows)
     os.set_blocking(master, False)
@@ -188,7 +197,11 @@ async def term_ws(ws: WebSocket, name: str) -> None:
     if _blocked(host, agora):
         await ws.close(code=1008)
         return                                   # NAO registra: registrar aqui estende o bloqueio
-    if not settings.auth_token or tok != settings.auth_token:
+    # compare_digest, nao `!=` de string (mesmo cuidado do require_auth, auth.py:104): `!=` sai fora
+    # na primeira letra diferente e vira canal lateral de tempo. Este e o endpoint que abre um shell
+    # completo. `.encode()` tambem evita o TypeError do compare_digest com string nao-ASCII.
+    if not settings.auth_token or not secrets.compare_digest(tok.encode(),
+                                                             settings.auth_token.encode()):
         if host not in _LOOPBACK:                # mesma isencao do require_auth (auth.py:46)
             _record_fail(host, agora)
         await ws.close(code=1008)                # fecha SEM accept: o PTY nunca chega a nascer
@@ -354,18 +367,27 @@ async def term_ws(ws: WebSocket, name: str) -> None:
                 if (b := msg.get("bytes")) is not None:
                     escrever_no_pty(b)
                 elif (t := msg.get("text")) is not None:
-                    ctl = json.loads(t)
-                    if ctl.get("t") == "resize":
-                        # Mesmo clamp do connect (:cols/:rows acima) — sem ele, {"cols":99999} ou
-                        # negativo estoura o struct.pack de _winsize e mata esta task em silencio.
-                        c = max(20, min(500, int(ctl["cols"])))
-                        r = max(5, min(200, int(ctl["rows"])))
-                        _winsize(s.master, c, r)
+                    # Quadro de controle malformado se IGNORA, nao derruba o terminal (achado da
+                    # revisao): JSON valido que nao e OBJETO (`"5"`, `null`, `[1,2]`) levantava
+                    # AttributeError no `.get`, e `cols` com lista/dict levantava TypeError no
+                    # `int()` — nenhum dos dois estava no `except` la de baixo, entao um unico frame
+                    # torto matava a task do leitor e fechava a CONEXAO inteira. `isinstance` +
+                    # suppress local: o laco continua, so o frame ruim e descartado.
+                    with contextlib.suppress(ValueError, TypeError, KeyError):
+                        ctl = json.loads(t)
+                        if isinstance(ctl, dict) and ctl.get("t") == "resize":
+                            # Mesmo clamp do connect (:cols/:rows acima) — sem ele, {"cols":99999}
+                            # ou negativo estoura o struct.pack de _winsize.
+                            c = max(20, min(500, int(ctl["cols"])))
+                            r = max(5, min(200, int(ctl["rows"])))
+                            _winsize(s.master, c, r)
             except (WebSocketDisconnect, RuntimeError, ValueError, KeyError):
                 # O try vivia em volta do `asyncio.wait` la embaixo, onde nunca pegava nada:
-                # `asyncio.wait` nao propaga excecao de dentro das tasks que espera — um resize
-                # sem `cols`, ou texto que nao e JSON, matava esta task em silencio (so "Task
-                # exception was never retrieved" no log) sem fechar o terminal. Achado da revisao.
+                # `asyncio.wait` nao propaga excecao de dentro das tasks que espera — o socket
+                # caindo no meio do `receive()` matava esta task em silencio (so "Task exception was
+                # never retrieved" no log) sem fechar o terminal. Achado da revisao. Aqui sobrou o
+                # que e da CONEXAO (receive num ws morto, `msg` sem "type"); frame de controle torto
+                # morre no `suppress` de cima, sem derrubar o terminal.
                 return
 
     tarefa_leitor = asyncio.ensure_future(leitor_do_socket())
@@ -399,6 +421,15 @@ async def term_ws(ws: WebSocket, name: str) -> None:
             with contextlib.suppress(BaseException):
                 await asyncio.wait_for(tarefa_escritor, timeout=1.0)
         tarefa_escritor.cancel()
+        # Recupera a excecao das DUAS tasks SEMPRE, fora do `if` (achado da revisao): o dreno acima
+        # so roda quando `fim` resolveu, e `cancel()` numa task que JA terminou com excecao e no-op
+        # — nao recupera nada, e a excecao vira "Task exception was never retrieved" com traceback
+        # no log. Vale igual pro leitor: ele tambem pode ter terminado com excecao antes do cancel.
+        # `await` numa task cancelada volta na hora (o CancelledError e entregue no ponto de await),
+        # e o suppress cobre os dois casos.
+        for tarefa in (tarefa_leitor, tarefa_escritor):
+            with contextlib.suppress(BaseException):
+                await tarefa
         # So remove reader/writer se ESTA Sessao ainda nao foi desmontada por outro caminho: o
         # `pty.fork()` reusa o MESMO numero de fd, e o caminho de derrubada (acima) ja fez essa
         # remocao e fechou o fd antes de devolver o numero pro SO. Se o handler velho acorda
