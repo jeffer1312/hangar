@@ -15,7 +15,31 @@
   let fit: any = null;
   let ro: ResizeObserver | null = null;
   let mo: MutationObserver | null = null;   // UM so -- cobre as duas abas (attach e shell)
-  let alturaArrastada = '';   // altura que "resize: vertical" grava inline (guardada pra repor ao desmaximizar)
+  let alturaArrastada = '';   // altura gravada inline pelo drag (guardada pra repor ao desmaximizar)
+
+  // ── Alca de arrastar a borda de CIMA, mesmo desenho do resize-handle da Sidebar.svelte:1204 ──────
+  // Troca o "resize: vertical" nativo do navegador (alca no canto inferior direito, cresce pra baixo
+  // -- inutil numa faixa colada no rodape, crescer pra baixo e crescer pra fora da tela). O painel
+  // fica com a borda de BAIXO fixa (ultimo item da coluna flex do DesktopShell), entao a altura vem
+  // da distancia entre o ponteiro e essa borda inferior -- capturada no pointerdown porque ela nao
+  // muda durante o arrasto.
+  const TMIN = 120, TMAX = 800;
+  const clampH = (h: number) => Math.max(TMIN, Math.min(TMAX, h));
+  let resizing = $state(false);
+  let resizeBottom = 0;
+  function resizeStart(e: PointerEvent) {
+    if (!secEl) return;
+    resizing = true;
+    resizeBottom = secEl.getBoundingClientRect().bottom;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }
+  function resizeMove(e: PointerEvent) {
+    if (resizing && secEl) secEl.style.height = clampH(resizeBottom - e.clientY) + 'px';
+  }
+  function resizeEnd() {
+    resizing = false;
+  }
 
   // ── Segunda aba: shell escondido (Task 6, Step 7) ───────────────────────────────────────────────
   // A sessao tmux e a mesma que o backend cria/reata em POST /shell (separada e ESCONDIDA das tres
@@ -330,6 +354,11 @@
              // do Chat (svelte:window onkeydown) enquanto o usuario digita aqui dentro.
              e.stopPropagation();
            }}>
+    <!-- Escondida quando maximizado (CSS): inset:0 ja cobre a tela inteira, arrastar a borda de
+         cima nao faz sentido ali -- sem alca, sem pointerdown, sem estado de arrasto pra sujar. -->
+    <div class="tp-resize-handle" onpointerdown={resizeStart} onpointermove={resizeMove}
+         onpointerup={resizeEnd} onpointercancel={resizeEnd}
+         role="separator" aria-label="Redimensionar painel de terminal" aria-orientation="horizontal"></div>
     <header class="tp-bar">
       <div class="tp-abas" role="tablist">
         <button class="tp-aba" class:sel={abaAtiva === 'attach'} role="tab" aria-selected={abaAtiva === 'attach'}
@@ -374,10 +403,25 @@
 {/if}
 
 <style>
-  .tp { display: flex; flex-direction: column; height: 320px; border-top: 1px solid var(--border-subtle); resize: vertical; overflow: hidden; }
+  .tp {
+    position: relative;   /* ancora o tp-resize-handle */
+    display: flex; flex-direction: column; height: 320px;
+    border-top: 1px solid var(--border-subtle); overflow: hidden;
+  }
   /* z-index 40, nao 5: precisa cobrir o .board-overlay (DesktopShell.svelte, z-index:30) quando o
      terminal e aberto de dentro do chat-overlay do board/canvas e depois maximizado. */
   .tp.max { position: absolute; inset: 0; height: auto; z-index: 40; }
+  /* Alca de arrastar a borda de CIMA (mesmo desenho do resize-handle da Sidebar.svelte) -- troca o
+     "resize: vertical" nativo, que so oferece alca no canto inferior direito e cresce pra baixo
+     (inutil aqui: o painel cola no rodape, crescer pra baixo e crescer pra fora da tela). */
+  .tp-resize-handle {
+    position: absolute; top: 0; left: 0; right: 0; height: 6px;
+    cursor: row-resize; z-index: 6; touch-action: none;
+  }
+  @media (hover: hover) {
+    .tp-resize-handle:hover { background: var(--accent-dim); }
+  }
+  .tp.max .tp-resize-handle { display: none; }
   /* transparent de proposito: quem carrega o material e o conteiner (regra de vidro do CLAUDE.md). */
   .tp-bar { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2); background: transparent; }
   .tp-abas { display: flex; gap: var(--space-1); flex: 1; min-width: 0; }
@@ -400,6 +444,15 @@
      quem pinta e este bloco: seguindo o painel, o terminal entra no mesmo vidro do resto. */
   .tp-screen { position: absolute; inset: 0; background: var(--glass-panel); }
   .tp-screen.hidden { visibility: hidden; }
+  /* A folha da biblioteca (node_modules/@xterm/xterm/css/xterm.css:95) pinta ".xterm-viewport" com
+     "background-color: #000" chapado -- comentario original: "On OS X this is required in order for
+     the scroll bar to appear fully opaque". Por cima do var(--glass-panel) do .tp-screen acima, isso
+     tapa o papel de parede com um retangulo preto (o allowTransparency/theme.background do xterm nao
+     alcanca essa camada -- e CSS da folha, nao o tema do terminal). :global() e obrigatorio: o elemento
+     e criado pelo xterm.js, fora do escopo do Svelte. Conferido o CSS INTEIRO da biblioteca -- e a
+     UNICA camada opaca no caminho (.composition-view tambem e #000, mas fica display:none exceto
+     durante composicao de IME, entao nao cobre a tela normalmente). */
+  .tp-screen :global(.xterm-viewport) { background-color: transparent; }
   .tp-status { display: flex; align-items: center; justify-content: center; }
   .tp-msg { margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
   .tp-erro { margin: 0; padding: 0 var(--space-4); font-size: var(--text-sm); color: var(--error); text-align: center; }
