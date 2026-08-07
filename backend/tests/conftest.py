@@ -37,7 +37,7 @@ def _reset_agentpane_cache():
 
 @pytest.fixture(autouse=True)
 def _reset_sem_agente_avisadas():
-    # _SEM_AGENTE_AVISADAS (Task 5.5) e dict de CLASSE (SessionRegistry) com dedup de log por nome
+    # _SEM_AGENTE_AVISADAS (Task 5.5) e set de CLASSE (SessionRegistry) com dedup de log por nome
     # que nunca expira: sem reset, um teste que aciona o aviso pra um nome (ex: SESS reusado entre
     # arquivos) envenena o proximo teste que espera o log de novo -- mesmo padrao do
     # _reset_agentpane_cache acima.
