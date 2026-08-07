@@ -450,8 +450,16 @@ class SessionRegistry:
         # >1 sessao tmux com este MESMO cwd? Com varias, seguir o jsonl mais novo do cwd (newest-by-mtime)
         # cruza o transcript de uma sessao pra outra -> a resolucao por mtime fica ambigua. ponytail: 1
         # fork tmux por chamada; aceitavel (poucas sessoes). Fail-safe: erro -> trata como sem irmaos.
+        # Task 5.5 (achado I1 da revisao): `#{pane_current_path}` e o cwd VIVO daquele pane -- um `cd`
+        # manual num split muda SO o campo dele. list() agora entrega o cwd do pane do AGENTE; contar
+        # so os panes ATIVOS (list_panes_active) deixava as duas pontas olhando cwds diferentes, e uma
+        # sessao com split "sem irmao" caia no newest-by-mtime que esta guarda existe pra evitar --
+        # exatamente o "sem id" que a Task 5.5 conserta, reaparecendo por outra porta. QUALQUER pane da
+        # sessao com esse cwd conta (superset seguro: sobre-contar so empurra pro caminho <sid>.jsonl
+        # direto, nunca pro mtime ambiguo).
         try:
-            return sum(1 for p in tmux.list_panes_active() if p.get("cwd") == cwd) > 1
+            return sum(1 for panes in tmux.list_panes_all().values()
+                       if any(p.get("cwd") == cwd for p in panes)) > 1
         except Exception:
             return False
 
@@ -672,12 +680,17 @@ class SessionRegistry:
         outra em primeiro plano, provider/jsonl/pane_id saiam todos do pane ERRADO (medido: o shell
         vira "sem id" na lista).
         Reusa o predicado ESTRITO do agentpane (_pane_do_agente, Task 1) e o MESMO mapa /proc que
-        list() ja construiu pra sessao inteira -> zero fork/varredura de /proc a mais por sessao.
-        Nenhum pane bate -> cai no pane ATIVO, o comportamento de sempre (None = nao sei, nao decide
-        um comportamento novo sozinho).
+        list() ja construiu pra sessao inteira -> zero fork NOVO (achado menor da revisao: a leitura
+        de /proc nao e zero, e sim proporcional ao numero de panes candidatos da sessao — barata
+        porque o mapa `children` ja esta pronto, mas nao e de graca). Nenhum pane bate -> cai no
+        pane ATIVO, o comportamento de sempre (None = nao sei, nao decide um comportamento novo
+        sozinho).
         """
         if len(panes) > 1:
-            for p in panes:
+            # Achado menor da revisao: com 2+ panes do agente na MESMA sessao (caso raro), o ATIVO
+            # ganha o desempate -- preserva o comportamento de antes desta task pra esse caso, em vez
+            # de arbitrario "o primeiro da varredura".
+            for p in sorted(panes, key=lambda p: not p["active"]):
                 if p["pid"] is not None and agentpane._pane_do_agente(p["pid"], children):
                     return p
             name = panes[0]["name"]

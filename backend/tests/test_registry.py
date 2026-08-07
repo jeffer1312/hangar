@@ -19,13 +19,11 @@ def _clear_jsonl_cache():
     SessionRegistry._fd_locked.clear()
     SessionRegistry._status_cache.clear()
     SessionRegistry._label_cache.clear()
-    SessionRegistry._SEM_AGENTE_AVISADAS.clear()
     yield
     SessionRegistry._jsonl_cache.clear()
     SessionRegistry._fd_locked.clear()
     SessionRegistry._status_cache.clear()
     SessionRegistry._label_cache.clear()
-    SessionRegistry._SEM_AGENTE_AVISADAS.clear()
 
 
 def test_sanitize_cwd_matches_claude_scheme():
@@ -219,12 +217,13 @@ def test_resolve_no_cross_contamination_with_siblings(tmp_path):
     os.utime(proj / "5f3a45ba-0000-0000-0000-000000000000.jsonl", (1, 1))  # o meu e mais VELHO
     my_id = "5f3a45ba-0000-0000-0000-000000000000"
     reg = SessionRegistry(projects_dir=tmp_path)
-    panes = [{"name": "cc", "cwd": "/home/u/p"}, {"name": "cc2", "cwd": "/home/u/p"}]  # 2 no cwd
+    panes = {"cc": [{"name": "cc", "cwd": "/home/u/p"}],
+             "cc2": [{"name": "cc2", "cwd": "/home/u/p"}]}  # 2 sessoes no cwd
     with patch.object(registry.tmux, "pane_pid", return_value=1), \
          patch.object(registry, "_descendant_pids", return_value=[1]), \
          patch.object(registry, "_cmdline", return_value=f"claude --session-id {my_id}"), \
          patch.object(registry, "_open_jsonl", return_value=None), \
-         patch.object(registry.tmux, "list_panes_active", return_value=panes):
+         patch.object(registry.tmux, "list_panes_all", return_value=panes):
         j, tracked = reg.resolve_tracked("cc", "/home/u/p")
     assert j.endswith(f"{my_id}.jsonl")  # o MEU id, nao o orfao mais novo
     assert tracked
