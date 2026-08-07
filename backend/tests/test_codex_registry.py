@@ -165,7 +165,11 @@ def test_kill_codex_closes_client_and_removes_sidecar(tmp_path):
     assert fake.closed is True                      # client vivo terminado
     assert "cx" not in adapter._sessions            # esquecido da memoria
     assert codex_sessions.load("cx") is None        # sidecar duravel apagado
-    kill_tmux.assert_called_once_with("cx")          # encerra tambem a TUI Codex
+    # Task 6 (achado da revisao, I2): kill tambem mata o shell escondido, best-effort -- dois
+    # kill_session agora, nao um so.
+    kill_tmux.assert_any_call("cx")                  # encerra tambem a TUI Codex
+    kill_tmux.assert_any_call("term-cx")             # e o shell escondido do painel de terminal
+    assert kill_tmux.call_count == 2
 
 
 def test_rename_codex_moves_sidecar_and_live_adapter(tmp_path):

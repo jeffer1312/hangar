@@ -26,9 +26,15 @@ def _client(host="127.0.0.1"):
 @pytest.fixture
 def sessao():
     subprocess.run(["tmux", "kill-session", "-t", f"={SESS}"], capture_output=True)
+    subprocess.run(["tmux", "kill-session", "-t", f"=term-{SESS}"], capture_output=True)
     subprocess.run(["tmux", "new-session", "-d", "-s", SESS, "-x", "200", "-y", "50"], check=True)
     yield SESS
+    # Achado da revisao (I3): a limpeza do shell escondido tem que estar AQUI (teardown do
+    # fixture, roda sempre), nao no fim do corpo de cada teste -- um assert falhando pulava a
+    # linha e "term-cp-test-termsock" vazava pro servidor tmux DEFAULT do usuario, invisivel no
+    # app (marcada @cp_hidden) e por isso indetectavel sem olhar o tmux na mao.
     subprocess.run(["tmux", "kill-session", "-t", f"={SESS}"], capture_output=True)
+    subprocess.run(["tmux", "kill-session", "-t", f"=term-{SESS}"], capture_output=True)
 
 
 def _tam(nome):
@@ -256,7 +262,8 @@ def test_shell_cria_sessao_escondida_que_nao_aparece_na_lista(sessao):
     nomes = [i.name for i in SessionRegistry().list()]
     assert nome_shell not in nomes
     assert sessao in nomes                     # a sessao do agente continua aparecendo
-    subprocess.run(["tmux", "kill-session", "-t", f"={nome_shell}"], capture_output=True)
+    # kill do shell fica pro teardown do fixture `sessao` (achado da revisao, I3): fazer aqui
+    # some se o assert de cima falhar, e a sessao marcada @cp_hidden vaza invisivel no app.
 
 
 def test_shell_e_idempotente(sessao):
@@ -269,30 +276,116 @@ def test_shell_e_idempotente(sessao):
     saida = subprocess.run(["tmux", "list-sessions", "-F", "#{session_name}"],
                            capture_output=True, text=True).stdout.splitlines()
     assert saida.count(a["shell"]) == 1
-    subprocess.run(["tmux", "kill-session", "-t", f"={a['shell']}"], capture_output=True)
+    # kill do shell fica pro teardown do fixture `sessao` (mesmo motivo do teste acima, I3).
 
 
-def test_sessao_escondida_nao_muda_o_custo_da_listagem(sessao):
-    # A marca e lida no MESMO `list-panes -a` que ja rodava: filtrar nao pode custar fork novo.
-    c = _client()
-    c.post(f"/api/sessions/{sessao}/shell", headers={"Authorization": "Bearer secret"})
+def test_shell_recusa_sequestrar_sessao_de_terceiro(sessao):
+    # Achado da revisao (I1): "term-<nome>" pode ja existir como sessao de TERCEIRO --
+    # `sanitize_session_name` aceita hifen, entao e alcancavel so pela UI (criar "foo", criar
+    # "term-foo", abrir o shell de "foo"). Sem a checagem em `abrir_shell`, o `has_session` dentro
+    # de `new_hidden_shell` pulava a criacao e marcava essa sessao ALHEIA como escondida -- ela
+    # sumia da lista/board/canvas e a aba de shell anexava no terminal de outra sessao.
+    alheia = f"term-{sessao}"
+    subprocess.run(["tmux", "kill-session", "-t", f"={alheia}"], capture_output=True)
+    subprocess.run(["tmux", "new-session", "-d", "-s", alheia, "-x", "80", "-y", "24"], check=True)
+    try:
+        c = _client()
+        r = c.post(f"/api/sessions/{sessao}/shell", headers={"Authorization": "Bearer secret"})
+        assert r.status_code == 409
+        # A sessao alheia continua VISIVEL -- nao foi sequestrada/marcada @cp_hidden.
+        from app.registry import SessionRegistry
+        assert alheia in [i.name for i in SessionRegistry().list()]
+    finally:
+        subprocess.run(["tmux", "kill-session", "-t", f"={alheia}"], capture_output=True)
+
+
+def test_sessao_escondida_nao_muda_o_custo_da_listagem(monkeypatch, tmp_path):
+    # Achado da revisao (I4): a versao original rodava contra o tmux DEFAULT e o ~/.claude/projects
+    # de verdade, exigindo exatamente 1 `list-panes` — mas `resolve_tracked` chama
+    # `_cwd_has_siblings` (um SEGUNDO `list-panes -a`) sempre que uma sessao real do dev resolve
+    # por `--session-id` do cmdline sem marcador de hook nem fd. O teste passava por sorte do
+    # estado da maquina. Mesmo padrao de test_registry_agent_pane.test_list_nao_faz_fork_por_sessao:
+    # socket `-L` privado + sessao `sleep` pura (sem `--session-id` no cmdline, entao
+    # `_cwd_has_siblings` nunca dispara) isola o teste do resto do tmux do usuario.
+    import uuid
     from app import tmux as tmux_mod
     from app.registry import SessionRegistry
-    chamadas = []
-    orig = tmux_mod.RUN
-    tmux_mod.RUN = lambda args, **kw: (chamadas.append(args), orig(args, **kw))[1]
+    sock = f"cp-test-{uuid.uuid4().hex[:8]}"
+    sess = f"cp-test-shell-custo-{uuid.uuid4().hex[:6]}"
+    cwd = tmp_path
+    chamadas: list = []
     try:
-        SessionRegistry().list()
+        subprocess.run(["tmux", "-L", sock, "new-session", "-d", "-s", sess, "-c", str(cwd),
+                        "-x", "200", "-y", "50", "sleep 600"], check=True)
+
+        def _espiao(args, **kw):
+            chamadas.append(args)
+            # `new_hidden_shell` pode prefixar com `_scope_prefix()` (systemd-run ... --), entao
+            # "tmux" nao e necessariamente args[0] — acha o indice de verdade em vez de assumir
+            # posicao fixa (achado do proprio teste: assumir args[0]=="tmux" deixava a criacao
+            # escapar pro socket DEFAULT do usuario sempre que o probe do systemd-run desse certo).
+            i = args.index("tmux")
+            real = [*args[:i + 1], "-L", sock, *args[i + 1:]]
+            return orig(real, **kw)
+
+        orig = tmux_mod.RUN
+        monkeypatch.setattr(tmux_mod, "RUN", _espiao)
+
+        alvo = tmux_mod.new_hidden_shell(sess, str(cwd))
+        assert alvo is not None
+
+        chamadas.clear()
+        SessionRegistry(projects_dir=tmp_path).list()
+
+        assert sum(1 for a in chamadas if "list-panes" in a) == 1
     finally:
-        tmux_mod.RUN = orig
-    assert sum(1 for a in chamadas if "list-panes" in a) == 1
-    subprocess.run(["tmux", "kill-session", "-t", f"=term-{sessao}"], capture_output=True)
+        subprocess.run(["tmux", "-L", sock, "kill-session", "-t", f"={sess}"], capture_output=True)
+        subprocess.run(["tmux", "-L", sock, "kill-session", "-t", f"=term-{sess}"],
+                       capture_output=True)
 
 
 def test_open_terminal_sem_emulador_devolve_erro_visivel(sessao, monkeypatch):
     monkeypatch.delenv("CP_TERMINAL", raising=False)   # o codigo checa a env ANTES do PATH
-    monkeypatch.setattr("app.api.shutil.which", lambda _: None)   # so o do api, nao o do tmux.py
+    # `app.api.shutil` E o modulo `shutil` (nao ha copia por-modulo): este patch e GLOBAL durante
+    # o teste, tambem alcancaria `tmux.py` se o codigo chegasse la. Inocuo aqui porque a rota sai
+    # com 503 antes de tocar em `tmux._scope_prefix`/`_wayland_display`, mas o alcance real do
+    # monkeypatch e o do MODULO, nao o de "so este import".
+    monkeypatch.setattr("app.api.shutil.which", lambda _: None)
     c = _client()
     r = c.post(f"/api/sessions/{sessao}/open-terminal", headers={"Authorization": "Bearer secret"})
     assert r.status_code == 503
     assert "emulador" in r.json()["detail"].lower()
+
+
+def test_open_terminal_detecta_emulador_que_morre_logo_apos_abrir(sessao, monkeypatch, tmp_path):
+    # Achado da revisao (I5): o `Popen` so levanta se o BINARIO nao existe -- um emulador que
+    # executa e morre logo depois (ex: sem DISPLAY/WAYLAND_DISPLAY, "cannot open display") saia
+    # sozinho e a rota devolvia {"ok": true} pra uma janela que nunca abriu de verdade.
+    script = tmp_path / "fake-term"
+    script.write_text("#!/bin/sh\necho 'cannot open display' >&2\nexit 1\n")
+    script.chmod(0o755)
+    import app.api as api_mod
+    import app.tmux as tmux_mod
+    monkeypatch.setattr(api_mod, "_EMULADORES", {"fake-term": lambda alvo: [str(script)]})
+    monkeypatch.setattr(api_mod, "_ORDEM_PROBE", ["fake-term"])
+    monkeypatch.setattr(api_mod.shutil, "which", lambda n: str(script) if n == "fake-term" else None)
+    monkeypatch.setattr(tmux_mod, "_scope_prefix", lambda: [])   # fora do escopo deste teste (I5)
+    monkeypatch.delenv("CP_TERMINAL", raising=False)
+    c = _client()
+    r = c.post(f"/api/sessions/{sessao}/open-terminal", headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 503
+    assert "display" in r.json()["detail"].lower()
+
+
+def test_kill_mata_o_shell_escondido_junto(sessao):
+    # Achado da revisao (I2): a sessao de shell escondida nao tem afordancia na UI pra matar (e
+    # escondida por construcao) -- sem limpar no kill, sobreviveria ao agente pra sempre.
+    from app.registry import SessionRegistry
+    c = _client()
+    r = c.post(f"/api/sessions/{sessao}/shell", headers={"Authorization": "Bearer secret"})
+    alvo = r.json()["shell"]
+    assert subprocess.run(["tmux", "has-session", "-t", f"={alvo}"],
+                          capture_output=True).returncode == 0
+    SessionRegistry().kill(sessao)
+    assert subprocess.run(["tmux", "has-session", "-t", f"={alvo}"],
+                          capture_output=True).returncode != 0

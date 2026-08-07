@@ -355,14 +355,28 @@ def abrir_shell(name: str):
     # async): mesmo padrao das rotas POST vizinhas (select/answer acima), que resolvem a sessao via
     # `registry.list()` direto e deixam o FastAPI rodar o handler bloqueante no threadpool.
     from app import tmux
-    info = next((s for s in registry.list() if s.name == name), None)
+    infos = registry.list()
+    info = next((s for s in infos if s.name == name), None)
     if info is None:
         raise HTTPException(status_code=404, detail="sessao nao existe")
+    alvo = f"term-{name}"
+    # Achado da revisao (I1): `sanitize_session_name` aceita hifen, entao "term-<nome>" pode ja
+    # existir como sessao de TERCEIRO (ex: usuario criou "foo" e depois "term-foo" na mao). Sem
+    # esta checagem, `new_hidden_shell` (via `has_session`) pularia a criacao e marcaria essa
+    # sessao ALHEIA como escondida -- ela sumiria da lista/board/canvas e a aba de shell anexaria
+    # no terminal de outra pessoa. `infos` ja veio do `registry.list()` acima (que ja filtra
+    # escondidas): qualquer "term-<nome>" sobrevivendo nele e, por definicao, uma sessao de
+    # verdade, nao o nosso proprio shell -- sem fork novo, mesma lista que ja teriamos usado.
+    if any(s.name == alvo for s in infos):
+        raise HTTPException(status_code=409,
+                            detail=f"ja existe uma sessao chamada {alvo!r} que nao e o shell "
+                                   "deste painel -- renomeie ou feche essa sessao antes de abrir "
+                                   "o shell")
     # O cwd vem do REGISTRY, nunca da query: um `?cwd=/` viraria shell em qualquer lugar do disco.
-    alvo = tmux.new_hidden_shell(name, info.cwd or str(Path.home()))
-    if alvo is None:
+    novo = tmux.new_hidden_shell(name, info.cwd or str(Path.home()))
+    if novo is None:
         raise HTTPException(status_code=500, detail="tmux recusou criar o shell")
-    return {"ok": True, "shell": alvo}
+    return {"ok": True, "shell": novo}
 
 
 # Emuladores de terminal conhecidos, na ordem de preferencia da sonda quando CP_TERMINAL nao esta
@@ -414,11 +428,27 @@ def abrir_terminal_nativo(name: str):
         # sem isto o emulador GUI nao acha o compositor quando o backend roda como servico systemd
         # (env de boot, sem WAYLAND_DISPLAY) -- mesmo problema que o wl-paste do new_session.
         env["WAYLAND_DISPLAY"] = wl
+    disp = os.environ.get("DISPLAY")
+    if disp:
+        # Achado da revisao (I5): X11/XWayland precisa de DISPLAY, nao so WAYLAND_DISPLAY -- sem
+        # repassar, um host X11 (ou o servico systemd sem env de sessao grafica) faz o emulador
+        # executar e morrer com "cannot open display" LOGO apos o exec, onde o Popen nao pega nada.
+        env["DISPLAY"] = disp
     try:
-        subprocess.Popen(args, env=env, start_new_session=True, stdin=subprocess.DEVNULL,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        p = subprocess.Popen(args, env=env, start_new_session=True, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     except OSError as e:
         raise HTTPException(status_code=503, detail=f"falha ao abrir o emulador de terminal: {e}")
+    # Falha aparece, nao some (achado da revisao): o Popen so levanta se o BINARIO nao existe --
+    # sem DISPLAY, com o compositor errado, ou qualquer erro pos-exec, o processo sai sozinho em
+    # poucos ms e o `except OSError` acima nunca ve nada, devolvendo "ok" pra uma janela que nunca
+    # abriu. Espera uma fracao de segundo e confere se ja morreu, devolvendo o stderr real.
+    time.sleep(0.3)
+    if p.poll() is not None:
+        erro = (p.stderr.read() if p.stderr else b"").decode(errors="replace").strip()
+        raise HTTPException(status_code=503,
+                            detail=f"emulador de terminal saiu logo apos abrir: "
+                                   f"{erro or f'codigo {p.returncode}'}")
     return {"ok": True}
 
 
