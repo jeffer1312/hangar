@@ -220,7 +220,15 @@ def new_session(name: str, cwd: str, command: str, config_dir: str | None = None
     # `exec` viraria um argumento que nenhum shell do Windows conhece — o pane nasce e morre na
     # hora, com o new-session ainda devolvendo 0, ou seja, o app reportaria sessao criada.
     args.append(f"exec {command}" if os.name == "posix" else command)
-    return _run(args).returncode == 0
+    ok = _run(args).returncode == 0
+    if ok:
+        # Servidor tmux reiniciado zera o contador de `%N`: uma sessao recriada com o MESMO nome
+        # dentro da janela de 60s do cache do agentpane mandaria a mensagem pro pane de OUTRA sessao
+        # (achado 1 da revisao, rodada 1) — a mesma classe de estrago que a Task 1 existe pra evitar.
+        # Import tardio: agentpane importa este modulo (mesmo motivo do _pane_target).
+        from app.agentpane import invalidate
+        invalidate(name)
+    return ok
 
 
 def kill_session(name: str) -> bool:
@@ -247,11 +255,27 @@ def kill_session(name: str) -> bool:
     # continua de pe (medido; o instalador contorna matando por PID); (2) no caso quebrado descrito
     # acima o comando falha mas a sessao ja estava morta — e "morta" e exatamente o que o caller quer.
     # Idempotente de proposito: apagar sessao que nao existe e sucesso.
-    return not has_session(name)
+    saiu = not has_session(name)
+    if saiu:
+        # A sessao morreu de verdade -> o pane que o agentpane tinha cacheado pra este nome tambem
+        # morreu. Sem isto, um kill+new_session (resume) na mesma funcao (registry.py, adapter.py)
+        # ficaria ate 60s mandando mensagem pro pane VELHO (achado 1 da revisao, rodada 1). Import
+        # tardio: agentpane importa este modulo (mesmo motivo do _pane_target).
+        from app.agentpane import invalidate
+        invalidate(name)
+    return saiu
 
 
 def rename_session(old: str, new: str) -> bool:
-    return _run(["tmux", "rename-session", "-t", old, new]).returncode == 0
+    ok = _run(["tmux", "rename-session", "-t", old, new]).returncode == 0
+    if ok:
+        # `old` nao existe mais sob esse nome; `new` pode ja ter um cache velho de uma vida anterior
+        # (mesmo nome, sessao diferente) — os dois precisam sumir. Mesma razao do kill_session/
+        # new_session acima. Import tardio: agentpane importa este modulo.
+        from app.agentpane import invalidate
+        invalidate(old)
+        invalidate(new)
+    return ok
 
 
 # No Windows a TUI do Claude Code entra em "modo paste" quando UM `send-keys -l` entrega mais que

@@ -61,9 +61,14 @@ def resolve_target(name: str) -> Optional[str]:
     panes = tmux.list_panes_of(name)
     alvo: Optional[str] = None
     if len(panes) == 1:
-        # Caso normal (todas as sessoes desta maquina hoje): um pane so, nao ha o que decidir e nao
-        # vale descer o /proc.
-        alvo = panes[0]["pane_id"]
+        # Caso normal (todas as sessoes desta maquina hoje): um pane so, `=nome:` e `%N` apontam pro
+        # MESMO lugar -> devolver `%N` aqui nao ganha nada e faz a mudanca valer pra 100% das sessoes
+        # em vez de so as que tem janela extra. O preco: no Windows o app roda sobre psmux, cuja
+        # compatibilidade e MEDIDA (scripts/test-psmux.py) contra alvo `=NOME:` exato — `%N` nao esta
+        # medido ali. Se o psmux nao resolver `%N` do jeito esperado, todo send-keys/capture-pane do
+        # app quebra no caminho NORMAL (1 pane), nao so no caso raro de janela extra. Raio de
+        # explosao, nao desconhecimento (achado 2 da revisao, rodada 1).
+        alvo = None
     elif panes:
         children = _proc_children_map()
         for p in panes:
