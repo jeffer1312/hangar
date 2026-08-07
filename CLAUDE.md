@@ -410,11 +410,21 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     the three views, `list_with_state`, `_pane_info` and `_cwd_has_siblings`. Only the psmux probe
     (`scripts/test-psmux.py`, section 4b) can tell you the command is *refused*, which no parse
     survives — keep it in sync with the format.
-  - **`term-<name>` is keyed by NAME and nothing renames it.** It outlives an agent session killed
-    outside the app, so `new_hidden_shell` compares `#{session_path}` (the birth directory — measured
-    that a `cd` inside the pane moves `pane_current_path` and **not** this one) and recreates on
-    divergence, and `rename()` kills it: reattaching a shell from the previous repo under the new
-    session's label is a command typed in the wrong directory.
+  - **`term-<name>` is keyed by NAME, so the name has to be kept in sync by hand.** Two different
+    paths, don't mix them up:
+    - *Orphan from another repo* — the shell outlives an agent session killed outside the app, and a
+      later session that reuses the name would reattach the OLD repo's shell under the new label: a
+      command typed in the wrong directory. `new_hidden_shell` compares `#{session_path}` (the birth
+      directory — measured that a `cd` inside the pane moves `pane_current_path` and **not** this
+      one) and kills+recreates on divergence. If that kill **fails**, it returns `None` (→ 500)
+      instead of handing back the old-directory shell.
+    - *Rename* — `registry.rename` **renames** `term-<old>` → `term-<new>`. A rename touches neither
+      the cwd nor what is running in the pane, so there is no wrong-directory risk here; killing
+      would silently take down whatever was running in the Shell tab (a `npm run dev`) with nothing
+      but a `_log.debug`. The kill is only the **fallback** for when `term-<new>` is already taken —
+      leaving the old one alive brings back the orphan this exists to prevent. Both paths gate on
+      the `@cp_hidden` mark (`is_hidden`, exact `={name}:` target), so a third party's `term-<name>`
+      is never renamed or killed.
   - **POSIX-only imports (`pty`, `fcntl`, `termios`) live INSIDE the functions.** `termsock` is
     imported by the 409 guard that also runs on Windows; a top-level `import fcntl` there is a
     `ModuleNotFoundError` that breaks a feature which works today. The panel itself is gated by

@@ -335,7 +335,16 @@ def new_hidden_shell(name: str, cwd: str) -> str | None:
         if antigo and os.path.normpath(antigo) != os.path.normpath(cwd) and is_hidden(alvo):
             _log.info("shell escondido %r era do diretorio %r e agora a sessao e de %r — "
                       "recriando", alvo, antigo, cwd)
-            kill_session(alvo)
+            # O retorno NAO e descartado (o docstring do kill_session e explicito: False = quem
+            # chama nao pode reportar sucesso). Falhando o kill (tmux travado -> timeout de 5s do
+            # `_run`), o `has_session` abaixo segue True, a criacao e pulada e esta funcao
+            # devolveria o shell do diretorio ANTIGO -- exatamente o `rm`/`git` no lugar errado que
+            # o bloco existe pra impedir, agora com o log dizendo "recriando". Desiste em vez disso:
+            # None vira 500 na rota e o usuario tenta de novo.
+            if not kill_session(alvo):
+                _log.warning("shell escondido %r nao saiu; NAO reaproveito o shell do diretorio "
+                             "antigo %r", alvo, antigo)
+                return None
     if not has_session(alvo):
         cp = _run([*_scope_prefix(), "tmux", "new-session", "-d", "-s", alvo, "-c", cwd])
         if cp.returncode != 0:

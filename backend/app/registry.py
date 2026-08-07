@@ -1156,13 +1156,27 @@ class SessionRegistry:
         # módulo pair (rename_pair): sem ele, um unpair concorrente podia ser ressuscitado.
         rename_pair(old, new)
         # L71 da revisao final: o shell escondido e keyed por NOME (`term-<nome>`) e NAO acompanha o
-        # rename -- ele ficava orfa pra sempre, invisivel no app (marcado @cp_hidden) e fora do
-        # alcance do `kill()`, que so procura `term-<nome NOVO>`. Pior: a aba Shell do nome novo
+        # rename sozinho -- ele ficava orfa pra sempre, invisivel no app (marcado @cp_hidden) e fora
+        # do alcance do `kill()`, que so procura `term-<nome NOVO>`. Pior: a aba Shell do nome novo
         # criaria um shell NOVO e o velho seguiria vivo consumindo o nome, ate colidir com uma
-        # sessao futura. Mata em vez de renomear: renomear falharia se `term-<novo>` ja existisse e
-        # devolveria o mesmo orfa por outra porta. O preco e perder o que estivesse rodando naquele
-        # shell -- aceitavel porque a sessao e do app e o botao `+` refaz uma na hora.
-        self._kill_hidden_shell(old)
+        # sessao futura.
+        # RENOMEIA, nao mata: `rename-session` nao mexe no cwd nem no que esta rodando no pane -- o
+        # shell continua no mesmo diretorio, que e o diretorio da sessao renomeada. (O perigo de
+        # "shell no diretorio errado" e outro caminho: reatar um `term-<nome>` orfa de OUTRO repo,
+        # tratado no tmux.new_hidden_shell.) Matar em silencio derrubaria um `npm run dev` que
+        # estivesse rodando ali, e o unico registro disso e um `_log.debug`.
+        # Kill so como FALLBACK: renomear falha se `term-<novo>` ja existir (shell de uma vida
+        # anterior daquele nome), e ai deixar o velho vivo traz de volta o orfa que este bloco
+        # existe pra evitar.
+        # A marca e o gate, como no `_kill_hidden_shell`: sem ela, um `term-<velho>` de TERCEIRO
+        # seria sequestrado pelo rename. `is_hidden` mira `={nome}:` (exato), entao o rename so
+        # roda quando a sessao existe de verdade -- sem risco do prefix-match do tmux pegar
+        # `term-<velho>-2`.
+        alvo = f"term-{old}"
+        if tmux.is_hidden(alvo) and not tmux.rename_session(alvo, f"term-{new}"):
+            _log.info("rename: %r nao pode virar %r (nome ja ocupado?) — matando o shell escondido",
+                      alvo, f"term-{new}")
+            self._kill_hidden_shell(old)
 
     @staticmethod
     def _kill_hidden_shell(name: str) -> None:

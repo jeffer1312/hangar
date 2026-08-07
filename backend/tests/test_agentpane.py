@@ -60,6 +60,13 @@ def _segunda_janela(nome):
     assert tmux._run(["tmux", "new-window", "-t", f"={nome}", "sleep 600"]).returncode == 0
 
 
+def _split(nome):
+    # 2o pane na MESMA janela: `pane_active` e por JANELA, entao aqui um pane fica ativo e o outro
+    # nao -- que e a unica forma de exercitar o desempate por ativo. `={nome}:` (com os dois-pontos)
+    # pelo mesmo motivo do list_panes_of: sem eles o tmux le nome numerico como indice de janela.
+    assert tmux._run(["tmux", "split-window", "-t", f"={nome}:", "sleep 600"]).returncode == 0
+
+
 def test_list_panes_of_traz_todos_os_panes(sessao):
     assert len(tmux.list_panes_of(sessao)) == 1
     _segunda_janela(sessao)
@@ -93,12 +100,21 @@ def test_desempate_com_dois_panes_de_agente_prefere_o_ativo(sessao, monkeypatch)
     # I2 da revisao final: com 2+ panes de agente na mesma sessao, o agentpane pegava o PRIMEIRO da
     # varredura e o registry._agent_pane o ATIVO -- o /input resolvia provider e pane_id por um
     # pane e digitava no outro (e o cache de 60s daqui esticava a discordancia).
+    #
+    # SPLIT, nao `new-window` (3a vez que este cenario produz teste cego nesta branch): "ativo" e
+    # por JANELA, entao com duas janelas os DOIS panes voltam `pane_active=1`, a ordenacao vira
+    # no-op e o teste passa com o `sorted` revertido. Falseamento rodado: com o `sorted` fora,
+    # este teste FALHA (agentpane devolve o pane do split, `_agent_pane` devolve o ativo).
     from app.registry import SessionRegistry
     monkeypatch.setattr(agentpane, "_pane_do_agente", lambda pid, children: True)
-    _segunda_janela(sessao)      # a janela nova nasce ATIVA
+    _split(sessao)               # 2o pane na MESMA janela -> so um dos dois fica ativo
     agentpane.invalidate(sessao)
 
-    ativo = next(p for p in tmux.list_panes_of(sessao) if p["active"])
+    panes = tmux.list_panes_of(sessao)
+    assert [p["active"] for p in panes].count(True) == 1, \
+        "o cenario exige exatamente UM pane ativo -- senao o desempate nao e exercido"
+    ativo = next(p for p in panes if p["active"])
+    assert panes[0] is not ativo, "o ativo nao pode ser o 1o da varredura, ou os dois criterios coincidem"
     assert agentpane.resolve_target(sessao) == ativo["pane_id"]
     # E o outro lado escolhe o MESMO pane -- e disso que o bug dependia.
     grupo = tmux.list_panes_all()[sessao]
