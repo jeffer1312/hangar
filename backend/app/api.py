@@ -340,6 +340,14 @@ async def pi_inbox_ws(ws: WebSocket):
             INBOX.remover(pane, linha)
 
 
+@app.websocket("/api/sessions/{name}/term")
+async def term_ws_route(ws: WebSocket, name: str):
+    # Sem a trava de loopback do /api/pi/inbox: aquela existe porque quem liga la e uma extensao
+    # LOCAL. Aqui o celular vai precisar entrar de fora na fase 2.
+    from app import termsock
+    await termsock.term_ws(ws, name)
+
+
 # Snapshot com TTL de registry.list() pros endpoints request/response QUENTES (history/workflows):
 # o mount do board dispara dezenas de /history de uma vez e cada list() fresco e um scan completo
 # de /proc + fork de tmux list-panes. Mesmo padrao do sse._list_snap (la pros loops de SSE; caches
