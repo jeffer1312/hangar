@@ -2871,19 +2871,21 @@ async def _engine_models(nome: str, fresco: bool = False) -> list[dict]:
 @app.get("/api/sessions/{name}/model/options", dependencies=[Depends(require_auth)])
 async def model_options(name: str):
     """Modelos que ESTA sessao pode escolher. `kind` diz de onde vieram e como aplicar."""
-    _recusa_se_painel_aberto(name)
     info = await _cached_info(name)
     if not info:
         raise HTTPException(404, "sessao nao encontrada")
     if info.provider not in (None, "claude"):
         raise HTTPException(400, "esta rota so existe pra sessoes Claude Code")
     if info.engine:
+        # Motor: catalogo vem do /v1/models do provedor (HTTP), nao do pane -- nao conta linha,
+        # nao depende do tamanho da janela. A guarda so vale pro ramo abaixo (le o picker).
         modelos = await _engine_models(info.engine)
         return {"kind": "engine", "engine": info.engine,
                 "models": [{"id": m["id"], "context_length": m.get("context_length"),
                             "vision": m.get("vision")} for m in modelos]}
     # Conta Anthropic: le o picker de verdade. Abre e fecha um overlay — nao vai pro scrollback,
     # nao entra no transcript e nao gasta token.
+    _recusa_se_painel_aberto(name)
     chave = str(_session_config_dir(name) or "~")
     hit = _claude_models_cache.get(chave)
     if hit and time.monotonic() - hit[0] < _CLAUDE_MODELS_TTL:

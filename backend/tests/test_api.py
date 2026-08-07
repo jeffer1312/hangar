@@ -1820,6 +1820,32 @@ def test_model_options_engine_vem_do_provedor_nao_do_picker(api_client_limpo):
     probe.assert_called_once()
 
 
+def test_model_options_engine_ignora_painel_aberto(api_client_limpo, monkeypatch):
+    # O ramo de motor fala com o provedor por HTTP (_engine_models) — nao le o pane, entao o painel
+    # anexado nao pode derrubar esta listagem (achado da revisao da Task 3).
+    from app import termsock
+    monkeypatch.setitem(termsock._ativos, "cc", object())
+    with patch("app.api._cached_info", AsyncMock(return_value=_engine_info())), \
+         patch("app.api.engines.listar", return_value={"kimi": {"base_url": "https://x", "api_key": "k"}}), \
+         patch("app.api.engine_probe.listar_modelos", return_value=_ENGINE_CAT):
+        r = api_client_limpo.get("/api/sessions/cc/model/options", headers=_h())
+    assert r.status_code == 200
+    assert r.json()["kind"] == "engine"
+
+
+def test_model_options_conta_anthropic_recusa_com_painel_aberto(api_client_limpo, monkeypatch):
+    # O ramo da conta Anthropic dirige o picker do /model contando linha do pane -- este SIM tem
+    # que recusar com o painel aberto.
+    from app import termsock
+    monkeypatch.setitem(termsock._ativos, "cc", object())
+    with patch("app.api._cached_info", AsyncMock(return_value=SessionInfo(
+            name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude"))), \
+         patch("app.api.terminal.list_model_options") as picker:
+        r = api_client_limpo.get("/api/sessions/cc/model/options", headers=_h())
+    assert r.status_code == 409
+    picker.assert_not_called()
+
+
 def test_model_options_conta_anthropic_le_o_picker_ao_vivo(api_client_limpo):
     # A lista muda com a conta e com a versao do CC (o Fable entrou e a lista chumbada no front nao
     # soube): ela vem das linhas lidas, nunca de constante.
