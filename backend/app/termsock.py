@@ -370,9 +370,18 @@ async def term_ws(ws: WebSocket, name: str) -> None:
 
     tarefa_leitor = asyncio.ensure_future(leitor_do_socket())
     try:
-        # Esperar os DOIS: so o receive() deixaria o painel congelado pra sempre quando o PTY morre
+        # Esperar os TRES: so o receive() deixaria o painel congelado pra sempre quando o PTY morre
         # (usuario digita `exit`, sessao acaba). Achado do pass — o `fim` era codigo morto.
-        await asyncio.wait({fim, tarefa_leitor}, return_when=asyncio.FIRST_COMPLETED)
+        #
+        # O ESCRITOR entrou no conjunto na revisao final (I5). Ele morrendo por excecao que nao
+        # seja desconexao — com `saida_pausada` True, quando so ele reata o reader — deixava o
+        # reader fora do laco, `fim` sem nunca resolver e o painel MUDO com o socket ABERTO: sem
+        # `onclose` no navegador, nem o botao "desconectado · reconectar" aparecia. Terminar aqui
+        # fecha o socket e devolve ao usuario a unica coisa acionavel, que e reconectar. No caminho
+        # saudavel isto nao muda nada: o escritor so retorna sozinho depois de `fim` resolver e a
+        # fila esvaziar, quando o `wait` ja teria voltado pelo `fim`.
+        await asyncio.wait({fim, tarefa_leitor, tarefa_escritor},
+                           return_when=asyncio.FIRST_COMPLETED)
     finally:
         tarefa_leitor.cancel()
         if fim.done():

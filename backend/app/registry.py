@@ -1155,6 +1155,14 @@ class SessionRegistry:
         # senão o par ficaria pareado com um fantasma e o unpair simétrico quebrava. Sob o lock do
         # módulo pair (rename_pair): sem ele, um unpair concorrente podia ser ressuscitado.
         rename_pair(old, new)
+        # L71 da revisao final: o shell escondido e keyed por NOME (`term-<nome>`) e NAO acompanha o
+        # rename -- ele ficava orfa pra sempre, invisivel no app (marcado @cp_hidden) e fora do
+        # alcance do `kill()`, que so procura `term-<nome NOVO>`. Pior: a aba Shell do nome novo
+        # criaria um shell NOVO e o velho seguiria vivo consumindo o nome, ate colidir com uma
+        # sessao futura. Mata em vez de renomear: renomear falharia se `term-<novo>` ja existisse e
+        # devolveria o mesmo orfa por outra porta. O preco e perder o que estivesse rodando naquele
+        # shell -- aceitavel porque a sessao e do app e o botao `+` refaz uma na hora.
+        self._kill_hidden_shell(old)
 
     @staticmethod
     def _kill_hidden_shell(name: str) -> None:

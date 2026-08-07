@@ -3,6 +3,7 @@ import re
 import threading
 import time
 
+from app import agentpane
 from app import model_picker as mp
 from app import pi_inbox
 from app import tmux
@@ -540,8 +541,12 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
         entry = claimed[0]
         try:
             # Resolve o pane NA HORA (drain roda em polls, nao no caminho quente do envio, entao
-            # pagar mais um `tmux list-panes` aqui nao pesa como pesaria no /input).
-            pane_id = next((p["pane_id"] for p in tmux.list_panes_active() if p["name"] == name), None)
+            # pagar mais um `tmux list-panes` aqui nao pesa como pesaria no /input). Pelo pane do
+            # AGENTE, nao pelo ATIVO (I1 da revisao final): numa sessao Pi com split manual o ativo
+            # podia ser o do shell -> `INBOX.tem_linha(pane_id)` falhava e a linha rapida do Pi se
+            # perdia, o mesmo bug que a Task 4 matou no /input. MESMA resolucao do /input
+            # (api._pane_info delega pra ca), nao uma quarta.
+            pane_id = agentpane.pane_info(name)[1]
             # msg_id=entry["id"]: mesma identidade em TODA reentrega desta entrada (retry apos
             # "deferred" logo abaixo, ou reenvio pelo reconcile de _confirm_and_drain) — e o que
             # deixa a extensao do Pi (cp-state.ts) reconhecer um retry e nao chamar sendUserMessage

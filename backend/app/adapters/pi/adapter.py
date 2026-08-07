@@ -12,17 +12,20 @@ from app.adapters.pi.transcript import Stream as PiStream
 from app.state import StateEvent, StateMonitor
 from app.transcript import ChatEvent, TranscriptTailer
 from app import terminal_input as ti
-from app import tmux
+from app import agentpane
 
 
 def _send_prompt_pi(name: str, text: str) -> str:
     """Roda em thread (mesma regra do resto do adapter): resolve o pane NA HORA, igual ao drain
-    (terminal_input.py:544) -- sem pane_id, `send_prompt` nunca acha a linha do Pi (pi_inbox) e
+    (terminal_input.drain) -- sem pane_id, `send_prompt` nunca acha a linha do Pi (pi_inbox) e
     cai direto pra tecla, o bug que a Task 4 desta branch existe pra matar. Hoje este metodo e
     codigo morto (o unico `adapter.send_prompt` vivo e o do Codex, api.py:1235) -- mas se algo
-    passar a rotear Pi por aqui, tem que sair correto, nao repetir o silencio."""
-    pane_id = next((p["pane_id"] for p in tmux.list_panes_active() if p["name"] == name), None)
-    return ti.TerminalInput().send_prompt(name, text, "pi", pane_id=pane_id)
+    passar a rotear Pi por aqui, tem que sair correto, nao repetir o silencio.
+
+    Pelo pane do AGENTE (`agentpane.pane_info`), nao pelo ATIVO: com um split manual o ativo pode
+    ser o do shell, e o bilhete da extensao do Pi e POR PANE (I1 da revisao final)."""
+    return ti.TerminalInput().send_prompt(name, text, "pi",
+                                          pane_id=agentpane.pane_info(name)[1])
 
 
 class PiAdapter:

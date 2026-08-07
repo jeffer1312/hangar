@@ -144,6 +144,15 @@ def list_panes_all() -> dict[str, list[dict]]:
     # campo a mais no format nao custa fork nenhum: e a MESMA chamada de sempre. Sessao sem a
     # opcao seta devolve string vazia ("" != "1" -> hidden=False), entao toda sessao pre-existente
     # continua aparecendo normalmente.
+    #
+    # O parse aceita 5 campos OU MAIS (achado da revisao final, C1): esta funcao alimenta as tres
+    # views, o list_with_state, o _pane_info e o _cwd_has_siblings -- se o 6o campo nao vier, o app
+    # nao pode ficar SEM SESSAO NENHUMA por causa de uma opcao de usuario no `-F`. No Windows quem
+    # responde e o psmux, cuja compatibilidade e MEDIDA (scripts/test-psmux.py, secao 4) e nao
+    # inferida: interpolar `#{@opcao}` nao estava na lista ate esta rodada. Multiplexador que
+    # devolve o campo vazio ou o literal cru -> hidden=False, tudo aparece; multiplexador que
+    # RECUSA o comando -> rc != 0 -> {} -> ai nenhum parse salva, e por isso a sonda tambem cobre
+    # o formato de 6 campos.
     cp = _run(["tmux", "list-panes", "-a", "-F",
                "#{session_name}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_id}"
                "\t#{@cp_hidden}"])
@@ -152,9 +161,10 @@ def list_panes_all() -> dict[str, list[dict]]:
     out: dict[str, list[dict]] = {}
     for line in cp.stdout.splitlines():
         parts = line.split("\t")
-        if len(parts) != 6:
+        if len(parts) < 5:
             continue
-        name, active, pid, cwd, pane_id, hidden = parts
+        name, active, pid, cwd, pane_id = parts[:5]
+        hidden = parts[5] if len(parts) > 5 else ""
         out.setdefault(name, []).append({
             "name": name, "pid": int(pid) if pid.isdigit() else None, "cwd": cwd,
             "pane_id": pane_id, "active": active == "1", "hidden": hidden == "1",
@@ -171,14 +181,24 @@ def list_panes_of(name: str) -> list[dict]:
     # nao falha. `-s -t =0:` falha corretamente com "can't find session". `-s` continua devolvendo
     # TODOS os panes da sessao com o `:` (testado com sessao de 2 janelas); o `:` so fecha a mesma
     # fresta de nome numerico que o _pane_target ja documenta acima.
-    cp = _run(["tmux", "list-panes", "-s", "-t", f"={name}:", "-F", "#{pane_id}\t#{pane_pid}"])
+    #
+    # `#{pane_active}` entrou pro desempate do agentpane ficar igual ao do registry._agent_pane
+    # (I2 da revisao final): com 2+ panes de agente, os dois tem que escolher o MESMO. Campo
+    # ausente (multiplexador que nao interpola) -> active=False em todos e a ordem e a da
+    # varredura, exatamente o que era antes.
+    cp = _run(["tmux", "list-panes", "-s", "-t", f"={name}:", "-F",
+               "#{pane_id}\t#{pane_pid}\t#{pane_active}"])
     if cp.returncode != 0:
         return []
     out = []
     for line in cp.stdout.splitlines():
-        pane_id, _, pid = line.partition("\t")
+        partes = line.split("\t")
+        if len(partes) < 2:
+            continue
+        pane_id, pid = partes[0], partes[1]
         if pane_id.startswith("%") and pid.isdigit():
-            out.append({"pane_id": pane_id, "pid": int(pid)})
+            out.append({"pane_id": pane_id, "pid": int(pid),
+                        "active": len(partes) > 2 and partes[2] == "1"})
     return out
 
 
@@ -299,6 +319,23 @@ def new_hidden_shell(name: str, cwd: str) -> str | None:
     # isso o `has_session` de novo abaixo, achado da revisao (minor): sem ele o perdedor devolvia
     # None -> 500 pra um shell vivo e saudavel.
     criou_agora = False
+    # Reatar so vale se for o shell DAQUELE repo (achado I3 da revisao final). `term-<nome>` fica
+    # vivo quando a sessao do agente morre FORA do app (usuario digita `exit`, ou um
+    # `tmux kill-session` na mao) -- o `_kill_hidden_shell` so roda pelo `kill()` daqui. Criar
+    # depois outra sessao com o MESMO nome noutro repo e abrir a aba Shell devolvia o shell do
+    # repo ANTIGO, com o rotulo da sessao nova: silencioso e perigoso (um `rm`/`git` digitado no
+    # diretorio errado). Compara `#{session_path}` -- a pasta de NASCIMENTO da sessao, medido que
+    # nao muda quando o usuario faz `cd` dentro do pane (isso e o `pane_current_path`): um `cd` NAO
+    # pode derrubar o shell de ninguem. Diferente -> mata e recria, que e aceitavel porque a sessao
+    # e do app. Exige a MARCA antes de matar (mesmo cuidado do registry._kill_hidden_shell): um
+    # `term-<nome>` de terceiro nunca pode ser derrubado por este caminho.
+    if has_session(alvo):
+        cp = _run(["tmux", "display", "-p", "-t", f"={alvo}:", "#{session_path}"])
+        antigo = cp.stdout.strip() if cp.returncode == 0 else ""
+        if antigo and os.path.normpath(antigo) != os.path.normpath(cwd) and is_hidden(alvo):
+            _log.info("shell escondido %r era do diretorio %r e agora a sessao e de %r — "
+                      "recriando", alvo, antigo, cwd)
+            kill_session(alvo)
     if not has_session(alvo):
         cp = _run([*_scope_prefix(), "tmux", "new-session", "-d", "-s", alvo, "-c", cwd])
         if cp.returncode != 0:
@@ -313,11 +350,15 @@ def new_hidden_shell(name: str, cwd: str) -> str | None:
     #
     # O rc NAO e mais descartado (achado da revisao, rodada 2): antes, um `set-option` que falhasse
     # (tmux ocupado, timeout de 5s do `_run`) deixava a sessao viva e VISIVEL -- card nas tres
-    # views, e todo POST seguinte respondia 409 (I1/rodada 2) com um texto que seria mentira (a
-    # sessao nao e de terceiro, e nossa, so a marca falhou). Se a sessao acabou de nascer AGORA,
-    # ninguem tinha trabalho rodando nela ainda -- mata em vez de deixar o fantasma visivel. Se ja
-    # existia (reatada), NAO mata: matar um shell com trabalho de verdade por causa de um
-    # `set-option` transiente seria pior que o card fantasma que se autocorrige no proximo POST.
+    # views. Se a sessao acabou de nascer AGORA, ninguem tinha trabalho rodando nela ainda -- mata
+    # em vez de deixar o fantasma visivel. Se ja existia (reatada), NAO mata: matar um shell com
+    # trabalho de verdade por causa de um `set-option` transiente seria pior que o card fantasma.
+    #
+    # L68 da revisao final: a versao anterior deste comentario prometia que o fantasma "se
+    # autocorrige no proximo POST". NAO se autocorrige -- o gate de /shell (api.abrir_shell)
+    # recusa com 409 ANTES de chamar esta funcao, justamente porque a sessao existe sem a marca.
+    # Quem tira o fantasma da tela e o usuario, encerrando a sessao `term-<nome>`; o texto do 409
+    # diz isso, sem afirmar que a sessao e de terceiro.
     if _run(["tmux", "set-option", "-t", f"={alvo}:", "@cp_hidden", "1"]).returncode != 0:
         if criou_agora:
             kill_session(alvo)

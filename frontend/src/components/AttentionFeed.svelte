@@ -22,24 +22,35 @@
   const keyOf = (s: AggSession) => `${s.serverId}::${s.name}`;
 
   let expandedKey = $state<string | null>(null); // entry com OptionButtons aberto (só um por vez)
+  // Recusa do backend ao responder daqui. O `catch {}` de antes dizia "SSE de sessions corrige a
+  // lista" — e NÃO corrige: a opção segue pendente, a sessão segue em awaiting e o botão fica
+  // morto. O caso comum é o 409 do painel de terminal aberto naquela sessão, cujo `detail` já
+  // explica a saída ("Feche o painel pra responder por aqui").
+  let erro = $state<{ key: string; msg: string } | null>(null);
 
   function toggle(s: AggSession) {
     if (s.options?.length) {
       const k = keyOf(s);
       expandedKey = expandedKey === k ? null : k; // expande/colapsa inline (sem montar chat)
+      erro = null;
     } else {
       onOpenChat(s); // AskUserQuestion nativo / sem picker parseável -> stepper no chat
     }
   }
 
   async function pick(s: AggSession, option: number) {
+    const k = keyOf(s);
     expandedKey = null;
+    erro = null;
     const prev = getActiveId(); // salva antes de mirar o server dono (api.ts lê o ativo a cada chamada)
     selectServer(s.serverId);
     try {
       await selectOption(s.name, option);
-    } catch {
-      /* SSE de sessions corrige a lista */
+    } catch (e) {
+      // Reabre as opções: a pergunta continua de pé, e fechar o picker junto com o erro deixaria o
+      // usuário sem nada pra tocar depois de ler o aviso.
+      expandedKey = k;
+      erro = { key: k, msg: e instanceof Error ? e.message : 'não deu pra enviar a opção' };
     } finally {
       if (prev && prev !== s.serverId) selectServer(prev); // restaura pra o chat aberto ficar no server dele
     }
@@ -70,6 +81,9 @@
             <span class="attn-caret" aria-hidden="true">›</span>
           {/if}
         </button>
+        {#if erro && erro.key === keyOf(s)}
+          <p class="attn-err" role="status">{erro.msg}</p>
+        {/if}
         {#if open && s.options?.length}
           <OptionButtons
             question={s.question ?? ''}
@@ -198,4 +212,12 @@
     transition: transform 160ms var(--ease-out);
   }
   .attn-caret.open { transform: rotate(180deg); }
+  /* Recusa do backend ao responder. Sem superfície própria (`transparent`): quem carrega o
+     material é o item; o texto é só tinta por cima dele (regra de vidro do CLAUDE.md). */
+  .attn-err {
+    margin: 0;
+    padding: var(--space-1) var(--space-2) var(--space-2);
+    font-size: var(--text-xs);
+    color: var(--warning);
+  }
 </style>

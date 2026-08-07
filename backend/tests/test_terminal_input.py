@@ -714,8 +714,8 @@ def test_porta_a_retry_pela_fila_usa_o_mesmo_msg_id(tmp_queue, monkeypatch):
 
     monkeypatch.setattr(pi_inbox.INBOX, "tem_linha", lambda pane: True)
     monkeypatch.setattr(pi_inbox.INBOX, "entregar_sync", fake_entregar_sync)
-    monkeypatch.setattr(terminal_input.tmux, "list_panes_active",
-                        lambda: [{"name": "cc", "pane_id": "%1"}])
+    # drain resolve pelo pane do AGENTE (I1 da revisao final), nao pelo ATIVO.
+    monkeypatch.setattr(terminal_input.agentpane, "pane_info", lambda name: ("pi", "%1"))
 
     entry = PromptQueue("cc").append("oi", delivered=False)
 
@@ -751,8 +751,8 @@ def test_porta_b_reconcile_redrena_com_o_mesmo_msg_id(tmp_queue, monkeypatch):
 
     monkeypatch.setattr(pi_inbox.INBOX, "tem_linha", lambda pane: True)
     monkeypatch.setattr(pi_inbox.INBOX, "entregar_sync", fake_entregar_sync)
-    monkeypatch.setattr(terminal_input.tmux, "list_panes_active",
-                        lambda: [{"name": "cc", "pane_id": "%1"}])
+    # drain resolve pelo pane do AGENTE (I1 da revisao final), nao pelo ATIVO.
+    monkeypatch.setattr(terminal_input.agentpane, "pane_info", lambda name: ("pi", "%1"))
 
     # Como se _send_one ja tivesse marcado 'sent' (delivered=True) na 1a tentativa.
     entry = PromptQueue("cc").append("oi", delivered=True, ts=1000.0)
