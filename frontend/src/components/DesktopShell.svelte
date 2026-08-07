@@ -414,18 +414,22 @@
   }
   /* Terminal maximizado: esconde o chat/board/canvas por baixo (o painel de contexto da direita
      vem de graca, e um descendente de .desktop-main via Chat.svelte). `visibility`, NAO
-     `display: none` -- o mesmo criterio do TerminalPanel.svelte nas suas duas abas: display:none
-     zeraria a caixa, e o fit() do xterm (e o proprio layout do chat, que perderia scroll) depende
-     dela continuar existindo. */
+     `display: none` -- nao e o fit() do xterm (o TerminalPanel mora FORA de .desktop-main, irmao
+     dela dentro de .desktop-com-terminal; maximizado ele ancora em position:absolute/inset:0 nesse
+     irmao, sem depender desta caixa). Quem depende e o CHAT: display:none tiraria a lista de
+     mensagens da arvore de layout e o scroll dela se perderia -- ao desmaximizar, o chat
+     reapareceria voltado pro topo. */
   .desktop-main.tp-max-hide { visibility: hidden; }
   /* Wrapper da Sidebar: so existe pra dar um lugar pra esconder ela quando o terminal maximiza.
      display:contents por padrao -- nao vira caixa propria, a <aside> do Sidebar continua filha
      direta do flex de .desktop-shell (largura 270px/56px dela, intocada). Terminal maximizado:
-     display:none aqui, DIFERENTE do visibility:hidden do .desktop-main acima -- ali o espaco
-     precisa continuar reservado (o fit() do xterm depende da caixa existir), aqui nao ha nada
-     dependendo da caixa da Sidebar, entao display:none colapsa a coluna e o terminal ocupa a
-     largura toda. So entra `tp-max-hide` com a sidebar TAMBEM no trilho (`barraRecolhida`) --
-     fixada aberta continua visivel, dividindo a largura com o painel. */
+     display:none aqui, DIFERENTE do visibility:hidden do .desktop-main acima -- ali quem depende da
+     caixa existir e o scroll do chat, nao o xterm (ver comentario acima). Aqui a caixa da Sidebar
+     TAMBEM tem algo dependendo dela: o scroll da lista de sessoes some no Chromium quando o wrapper
+     vira display:none (zera o scrollTop) -- aceito de proposito, porque o espaco vazio da coluna
+     incomodaria mais do que achar a lista de volta no topo. So entra `tp-max-hide` com a sidebar
+     TAMBEM no trilho (`barraRecolhida`) -- fixada aberta continua visivel, dividindo a largura com
+     o painel. */
   .sidebar-wrap { display: contents; }
   .sidebar-wrap.tp-max-hide { display: none; }
   .workspace-attention-layer {

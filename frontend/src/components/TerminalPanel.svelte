@@ -26,8 +26,12 @@
   // fica com a borda de BAIXO fixa (ultimo item da coluna flex do DesktopShell), entao a altura vem
   // da distancia entre o ponteiro e essa borda inferior -- capturada no pointerdown porque ela nao
   // muda durante o arrasto.
+  // TMAX tambem limitado pela altura da JANELA, nao so pelo valor fixo: o .desktop-main e flex:1 com
+  // base 0, entao numa janela baixa (~768px) arrastar ate o topo dava a altura toda ao painel e 0px
+  // ao chat -- ele sumia sem estar maximizado, sem pista visual de que ainda existia. A folga de
+  // 120px mantem um pedaco do chat sempre visivel.
   const TMIN = 120, TMAX = 800;
-  const clampH = (h: number) => Math.max(TMIN, Math.min(TMAX, h));
+  const clampH = (h: number) => Math.max(TMIN, Math.min(TMAX, window.innerHeight - 120, h));
   let resizing = $state(false);
   let resizeBottom = 0;
   function resizeStart(e: PointerEvent) {
@@ -90,7 +94,12 @@
 
   // Fecha (o X) reseta o maximizado: sem isto o painel reabria maximizado por acidente, herdando
   // estado da vez anterior.
-  $effect(() => { if (!open) maximizado = false; });
+  // resizing tambem zera aqui: ele so volta a false no pointerup/pointercancel da propria alca, e se
+  // a section sair do DOM em pleno arrasto (ex: botao lateral do mouse muda o hash, DesktopShell fecha
+  // o painel) o pointer capture e liberado sem esses eventos -- a marca ficava presa em true pra
+  // sempre (o TerminalPanel nunca desmonta), e so passar o mouse pela faixa da alca redimensionava
+  // de novo, sem botao apertado.
+  $effect(() => { if (!open) { maximizado = false; resizing = false; } });
 
   // Avisa o pai (DesktopShell) sempre que o maximizado mudar -- inclusive ao FECHAR o painel
   // maximizado (o effect acima zera `maximizado` nesse caso tambem), senao o chat que o pai
@@ -138,9 +147,9 @@
   function toggleMax() {
     if (secEl) {
       if (!maximizado) {
-        // Vai maximizar: `resize: vertical` grava `height` INLINE ao arrastar a borda, e inline vence
-        // o `height: auto` de `.tp.max` no cascade -- sem zerar, maximizar depois de arrastar nao
-        // maximizava. Guarda o valor antes de zerar pra poder repor.
+        // Vai maximizar: o arrasto da alca (resizeMove) grava `height` INLINE na section, e inline
+        // vence o `height: auto` de `.tp.max` no cascade -- sem zerar, maximizar depois de arrastar
+        // nao maximizava. Guarda o valor antes de zerar pra poder repor.
         alturaArrastada = secEl.style.height;
         secEl.style.height = '';
       } else {
@@ -436,7 +445,10 @@
      faixa parecia uma segunda sessao colada em cima. Vale nos dois estados (encaixado e maximizado):
      maximizado o chat esta escondido atras (onMaximizar -> DesktopShell), entao nao ha texto pra
      vazar por baixo dos rotulos e o veu continua sendo o certo. */
-  .tp-bar { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2); background: var(--glass-panel); }
+  /* padding-top proprio (nao o var(--space-1) do shorthand): a alca de arrasto do topo (position:
+     absolute, height:6px) cobria os 2px de cima dos botoes (abas, ↗, ⤢, ✕), que comecavam em y≈4px --
+     clicar ali comecava um arrasto em vez de acionar o botao. */
+  .tp-bar { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2); padding-top: 6px; background: var(--glass-panel); }
   .tp-abas { display: flex; gap: var(--space-1); flex: 1; min-width: 0; }
   .tp-aba {
     padding: 2px var(--space-2); border-radius: var(--radius-sm); border: 1px solid transparent;
