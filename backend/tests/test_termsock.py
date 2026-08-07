@@ -1,6 +1,7 @@
 import json
 import subprocess
 import time
+import anyio
 import pytest
 from fastapi.testclient import TestClient
 
@@ -57,6 +58,20 @@ def _esperar(condicao, timeout=5.0, passo=0.1):
     assert condicao()
 
 
+def _receive_bytes_com_teto(ws, segundos=5.0):
+    """`ws.receive_bytes()` do Starlette bloqueia SEM prazo (portal.call num stream sem timeout).
+    Se o handler nunca fechar o socket (regressao), um `for _ in range(N)` sozinho so limita
+    ITERACOES — cada chamada individual ainda pendura pra sempre, e a suite INTEIRA trava atras
+    dela (achado da revisao). `anyio.fail_after` da o prazo de verdade.
+    """
+    async def _rx():
+        with anyio.fail_after(segundos):
+            msg = await ws._send_rx.receive()
+        ws._raise_on_close(msg)
+        return msg["bytes"]
+    return ws.portal.call(_rx)
+
+
 def test_token_errado_fecha_sem_abrir_pty(sessao):
     c = _client()
     with pytest.raises(Exception):
@@ -102,11 +117,21 @@ def test_segunda_conexao_derruba_a_primeira(sessao):
     with c.websocket_connect(url) as a:
         a.receive_bytes()
         with c.websocket_connect(url) as b:
-            b.receive_bytes()
-            time.sleep(0.8)
+            # B tem que receber bytes DE VERDADE depois de derrubar A — nao so existir. Sem isso
+            # o C3 (reader do fd reusado engolido) passava verde por sorte de numeracao de fd: a
+            # contagem de "1 cliente" abaixo ja era verdade mesmo com o terminal do B mudo,
+            # contanto que o tmux visse 1 attach (achado da revisao).
+            assert len(b.receive_bytes()) > 0
             # `clientes_ativos()` e chaveado por NOME: contar 1 seria verdade mesmo sem derrubar
             # ninguem (achado do pass). Quem prova e o tmux: um cliente anexado, uma linha.
-            assert len(_clientes(sessao).splitlines()) == 1
+            _esperar(lambda: len(_clientes(sessao).splitlines()) == 1)
+            # E A tem que ter sido FECHADO de verdade (I1) — sem aviso, quem foi derrubado ficava
+            # com o terminal congelado pra sempre em vez de ver a desconexao (achado da revisao).
+            # Loop com teto (nao so a proxima chamada): pode ainda sobrar no ar um pedaco legitimo
+            # de tela que o PTY mandou pra A antes do close tomar efeito.
+            with pytest.raises(Exception):
+                for _ in range(10):
+                    _receive_bytes_com_teto(a, segundos=2.0)
 
 
 def test_resize_chega_no_pty(sessao):
@@ -127,7 +152,7 @@ def test_pty_morto_fecha_o_socket(sessao):
         subprocess.run(["tmux", "detach-client", "-s", f"={sessao}"], capture_output=True)
         with pytest.raises(Exception):
             for _ in range(50):
-                ws.receive_bytes()
+                _receive_bytes_com_teto(ws)
 
 
 def test_fechamento_feio_nao_deixa_zumbi_nem_trava_a_listagem(sessao):
