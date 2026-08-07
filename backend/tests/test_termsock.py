@@ -1,9 +1,11 @@
+import asyncio
 import json
 import subprocess
 import time
 import anyio
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocket
 
 from app import termsock
 from app.config import settings
@@ -141,6 +143,54 @@ def test_resize_chega_no_pty(sessao):
         ws.send_text(json.dumps({"t": "resize", "cols": 100, "rows": 30}))
         time.sleep(1.0)
         assert _tam(sessao).startswith("100x30")
+
+
+def test_saida_acima_do_teto_reata_o_reader_depois_de_drenar(sessao, monkeypatch):
+    """Q1 da rodada 2 de revisao: `pausado` recalculado no TOPO do laco do escritor (em vez de
+    marcado por QUEM pausa, o `do_pty`) perdia uma pausa que acontecesse NO MEIO do dreno — dentro
+    do `await ws.send_bytes`, que e exatamente onde o laco de eventos roda callbacks de reader. O
+    reader sumia de vez e o terminal ficava mudo pra sempre (reproduzido em
+    scratchpad/sim_i8.py, achado da revisao). Teto e leitura BEM pequenos pra cruzar o limite em
+    varias leituras curtas (nao numa so), e `send_bytes` propositalmente lento — o mesmo "celular
+    em 4G" do sim_i8 — pra forcar a pausa a cair no meio de um envio. Prova de verdade: nao so que
+    o handler nao caiu, mas que BYTES NOVOS chegam depois do burst.
+    """
+    monkeypatch.setattr(termsock, "_SAIDA_MAX", 200)
+    monkeypatch.setattr(termsock, "_LEITURA", 64)
+    original = WebSocket.send_bytes
+
+    async def _lento(self, data):
+        await asyncio.sleep(0.03)
+        await original(self, data)
+
+    monkeypatch.setattr(WebSocket, "send_bytes", _lento)
+
+    c = _client()
+    with c.websocket_connect(f"/api/sessions/{sessao}/term?token=secret&cols=80&rows=24") as ws:
+        ws.receive_bytes()                       # tela inicial
+        # burst bem maior que o teto de 200B, numa leva so
+        subprocess.run(["tmux", "send-keys", "-t", f"={sessao}:", "-l",
+                         "yes XXXXXXXXXX | head -c 20000"], check=True)
+        subprocess.run(["tmux", "send-keys", "-t", f"={sessao}:", "Enter"], check=True)
+        # drena o que o burst mandou ate a torneira secar (nao ate um numero fixo de mensagens —
+        # com o bug, secava cedo demais e ficava mudo; sem bug, so para quando nao chega mais nada
+        # por 0.5s). Com teto: se o bug voltar, isto NAO trava a suite.
+        limite = time.monotonic() + 8.0
+        while time.monotonic() < limite:
+            try:
+                _receive_bytes_com_teto(ws, segundos=0.5)
+            except Exception:
+                break
+        # PROVA: sessao ainda responde depois do burst — o reader voltou de verdade.
+        subprocess.run(["tmux", "send-keys", "-t", f"={sessao}:", "-l", "echo PASSOU_DO_TETO"],
+                        capture_output=True)
+        subprocess.run(["tmux", "send-keys", "-t", f"={sessao}:", "Enter"], capture_output=True)
+        visto = False
+        for _ in range(50):
+            if b"PASSOU_DO_TETO" in _receive_bytes_com_teto(ws, segundos=2.0):
+                visto = True
+                break
+        assert visto
 
 
 def test_pty_morto_fecha_o_socket(sessao):

@@ -224,6 +224,10 @@ async def term_ws(ws: WebSocket, name: str) -> None:
             loop.remove_reader(anterior.master)
         except (ValueError, OSError):
             pass
+        try:
+            loop.remove_writer(anterior.master)   # simetria do C3: o writer tambem mira este fd
+        except (ValueError, OSError):
+            pass
         # Para a task escritora ANTES de fechar o ws, e ESPERA ela parar: sem isto, o escritor da
         # conexao velha pode estar no meio de um `send_bytes` (bytes que ja tinham sido lidos do
         # pty antes do remove_reader acima) bem na hora que o `close()` roda logo abaixo — o
@@ -254,11 +258,12 @@ async def term_ws(ws: WebSocket, name: str) -> None:
     fim: asyncio.Future = loop.create_future()
     saida: deque[bytes] = deque()
     saida_bytes = 0
+    saida_pausada = False
     tem_saida = asyncio.Event()
     entrada: deque[bytes] = deque()
 
     def do_pty():
-        nonlocal saida_bytes
+        nonlocal saida_bytes, saida_pausada
         try:
             dados = os.read(s.master, _LEITURA)
         except BlockingIOError:
@@ -275,25 +280,30 @@ async def term_ws(ws: WebSocket, name: str) -> None:
         saida_bytes += len(dados)
         tem_saida.set()
         if saida_bytes >= _SAIDA_MAX:
-            # Cliente lento (rede ruim, aba em segundo plano): pausa a LEITURA do pty ate o
-            # escritor esvaziar a fila. O processo escrevendo do outro lado bloqueia no proprio
-            # buffer do kernel enquanto isso — backpressure de verdade, nao so limite de memoria.
+            # Quem PAUSA marca o flag, nao quem drena: `do_pty` pode disparar DE NOVO no MEIO do
+            # `await ws.send_bytes` do escritor — e exatamente onde o laco de eventos roda
+            # callbacks de reader. Se o escritor recalculasse "pausado" so no TOPO do proprio laco
+            # (antes de entrar no `while saida`), uma pausa cruzada durante o dreno nunca seria
+            # vista: o reader some de vez, e como o EOF do pty so o reader percebe, `fim` tambem
+            # nunca resolve — terminal mudo pra sempre. Medido com `sim_i8.py` (achado da
+            # revisao): reader nunca mais registrado, bytes enviados param em definitivo.
+            saida_pausada = True
             loop.remove_reader(s.master)
 
     async def escritor():
         # UMA task escritora, nao uma por leitura: `ensure_future(ws.send_bytes(...))` por leitura
         # embaralha os bytes sob carga (cada send tem await no meio, e a task N pode terminar depois
         # da N+1). Achado do pass.
-        nonlocal saida_bytes
+        nonlocal saida_bytes, saida_pausada
         while True:
             await tem_saida.wait()
             tem_saida.clear()
-            pausado = saida_bytes >= _SAIDA_MAX
             while saida:
                 b = saida.popleft()
                 saida_bytes -= len(b)
                 await ws.send_bytes(b)
-            if pausado and not fim.done():
+            if saida_pausada and not fim.done():
+                saida_pausada = False
                 loop.add_reader(s.master, do_pty)   # reata a leitura: a fila esvaziou
             if fim.done() and not saida:
                 return
@@ -370,19 +380,34 @@ async def term_ws(ws: WebSocket, name: str) -> None:
             # de cancelar — cancelar direto perde a ultima tela (achado da revisao). So faz sentido
             # quando `fim` ja resolveu; se foi o CLIENTE que desconectou, ninguem esta olhando
             # mesmo, e drenar so atrasaria o fechamento a toa.
-            try:
+            # `suppress(BaseException)`, nao so Timeout/Cancelled: `wait_for` RE-LEVANTA o que a
+            # task escritora levantar, e um `ws.send_bytes` num socket que ja caiu pode levantar
+            # RuntimeError ou WebSocketDisconnect — nenhum dos dois estava na tupla. Isto e um
+            # `finally`: uma excecao aqui pulava TODO o resto (cancel do escritor, remove_reader/
+            # writer, del em _ativos, _desmontar, ws.close) e deixava a Sessao fantasma em _ativos
+            # pra sempre (achado da revisao — mesma inconsistencia do `contextlib.suppress` que ja
+            # existe no caminho de derrubada, mesmo remedio).
+            with contextlib.suppress(BaseException):
                 await asyncio.wait_for(tarefa_escritor, timeout=1.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                pass
         tarefa_escritor.cancel()
-        try:
-            loop.remove_reader(s.master)
-        except (ValueError, OSError):
-            pass
-        try:
-            loop.remove_writer(s.master)
-        except (ValueError, OSError):
-            pass
+        # So remove reader/writer se ESTA Sessao ainda nao foi desmontada por outro caminho: o
+        # `pty.fork()` reusa o MESMO numero de fd, e o caminho de derrubada (acima) ja fez essa
+        # remocao e fechou o fd antes de devolver o numero pro SO. Se o handler velho acorda
+        # TARDE (socket morto de celular, que e justamente o caso comum de acordar tarde), essas
+        # duas chamadas desregistrariam os callbacks da conexao NOVA que ja tomou aquele fd —
+        # exatamente o sintoma que o C3 existe pra matar. `desmontada` sem lock aqui: o valor so
+        # vira True bem antes desta leitura (setado no INICIO de `_desmontar`, que ja rodou por
+        # completo do outro lado antes do fd ser reusado), entao nao ha corrida real pra fechar
+        # (achado da revisao). Se ainda nao desmontou, o fd esta aberto e a remocao e segura.
+        if not s.desmontada:
+            try:
+                loop.remove_reader(s.master)
+            except (ValueError, OSError):
+                pass
+            try:
+                loop.remove_writer(s.master)
+            except (ValueError, OSError):
+                pass
         # Identidade, nao nome: um `pop(name)` cru removeria a Sessao NOVA de uma reconexao que ja
         # tomou o lugar desta, e desmontaria a velha duas vezes (achado do pass).
         if _ativos.get(name) is s:
