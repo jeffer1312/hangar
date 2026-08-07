@@ -13,16 +13,43 @@
   let term: any = null;
   let fit: any = null;
   let ro: ResizeObserver | null = null;
+  let mo: MutationObserver | null = null;
+  let alturaArrastada = '';   // altura que "resize: vertical" grava inline (guardada pra repor ao desmaximizar)
 
   // Fecha (o X) reseta o maximizado: sem isto o painel reabria maximizado por acidente, herdando
   // estado da vez anterior.
   $effect(() => { if (!open) maximizado = false; });
 
   function toggleMax() {
+    if (secEl) {
+      if (!maximizado) {
+        // Vai maximizar: `resize: vertical` grava `height` INLINE ao arrastar a borda, e inline vence
+        // o `height: auto` de `.tp.max` no cascade -- sem zerar, maximizar depois de arrastar nao
+        // maximizava. Guarda o valor antes de zerar pra poder repor.
+        alturaArrastada = secEl.style.height;
+        secEl.style.height = '';
+      } else {
+        // Volta do maximizado: repoe a altura arrastada -- sem isto, desmaximizar sempre caia nos
+        // 320px do CSS, perdendo o ajuste manual do usuario.
+        secEl.style.height = alturaArrastada;
+      }
+    }
     maximizado = !maximizado;
-    // `resize: vertical` grava `height` INLINE no elemento ao arrastar a borda; inline vence o
-    // `height: auto` de `.tp.max` no cascade, entao maximizar depois de arrastar nao maximizava.
-    if (maximizado && secEl) secEl.style.height = '';
+  }
+
+  // Cores do xterm a partir dos tokens do app. `color`, propriedade REAL (nao custom property): o
+  // browser sempre entrega ela RESOLVIDA, mesmo quando --text-primary e um color-mix() com var()
+  // aninhado (app.css:323, o boost de texto sobre papel de parede) -- ler a CUSTOM PROPERTY direto
+  // devolveria a string CRUA com var() por dentro (e assim que a spec de CSS Custom Properties define
+  // o computed value delas: sem substituir var() aninhado), o xterm rejeitava calado e caia no branco
+  // padrao. `body` ja seta `color: var(--text-primary)` (app.css) e `host` herda -- de graca, sem
+  // elemento nem estilo extra. --accent, ao contrario, e hex LITERAL nas duas paletas do app.css (sem
+  // var() aninhado), entao ler a custom property direto e seguro ali.
+  function lerTema(el: HTMLElement) {
+    const cs = getComputedStyle(el);
+    const fg = cs.color || '#d2cbcd';
+    const cursor = cs.getPropertyValue('--accent').trim() || fg;
+    return { fg, cursor };
   }
 
   $effect(() => {
@@ -51,24 +78,31 @@
 
       // getComputedStyle, nao `var(--font-mono)` cru: o renderer canvas monta
       // `ctx.font = \`${size}px ${family}\``, onde var() e invalido e ignorado calado -> metrica de
-      // glifo errada e grade desalinhada. Mesma razao pras cores do tema logo abaixo.
-      const cs = getComputedStyle(host);
-      const mono = cs.getPropertyValue('--font-mono').trim() || 'monospace';
-      const fg = cs.getPropertyValue('--text-primary').trim() || '#d2cbcd';
-      const cursor = cs.getPropertyValue('--accent').trim() || fg;
+      // glifo errada e grade desalinhada.
+      const mono = getComputedStyle(host).getPropertyValue('--font-mono').trim() || 'monospace';
 
       term = new Terminal({
         fontFamily: mono, fontSize: 12, convertEol: false,
-        // allowTransparency + background transparente: sem isto o xterm pinta #000 opaco por cima
-        // do --surface-inset do .tp-screen (regra de vidro do CLAUDE.md) — retangulo preto chapado
-        // sobre o papel de parede, e caixa preta crua no tema claro.
         allowTransparency: true,
-        theme: { background: 'transparent', foreground: fg, cursor },
+        // 'rgba(0, 0, 0, 0)', NAO 'transparent': o parser de cor do xterm 6.0.0 (Color.ts) so casa
+        // hex/rgb()/rgba() -- 'transparent' cai no caminho do canvas e LANCA (alfa != 255 e
+        // rejeitado), o ThemeService ENGOLE a excecao calado e devolve o fallback #000000 opaco por
+        // cima do --surface-inset do .tp-screen (regra de vidro do CLAUDE.md). Medido no pacote
+        // instalado -- nao aparece nenhum erro no console, so o retangulo preto.
+        theme: { background: 'rgba(0, 0, 0, 0)', ...lerTema(host) },
       });
       fit = new FitAddon();
       term.loadAddon(fit);
       term.open(host);
       fit.fit();
+
+      // Troca de tema (claro/escuro) com o painel ABERTO: o fundo acompanha sozinho (e CSS, --surface-
+      // inset por baixo do canvas transparente), mas foreground/cursor sao retrato do MOUNT -- sem
+      // isto, escuro->claro deixava o texto quase-branco sobre fundo claro ate fechar e reabrir.
+      mo = new MutationObserver(() => {
+        if (term && host) term.options.theme = { background: 'rgba(0, 0, 0, 0)', ...lerTema(host) };
+      });
+      mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
       const enc = new TextEncoder();
       sock = new TermSocket(termUrl(alvo, term.cols, term.rows), {
@@ -88,6 +122,7 @@
     return () => {
       vivo = false;
       ro?.disconnect(); ro = null;
+      mo?.disconnect(); mo = null;
       sock?.close(); sock = null;
       term?.dispose(); term = null;
     };

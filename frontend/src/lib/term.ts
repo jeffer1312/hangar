@@ -41,7 +41,11 @@ export class TermSocket {
     this.pendente = { cols, rows };
     clearTimeout(this.timer);
     this.timer = setTimeout(() => {
-      if (this.pendente) this.ws.send(JSON.stringify({ t: 'resize', ...this.pendente }));
+      // Mesma guarda do send(): o debounce de 150ms pode vencer DEPOIS da conexao cair (tmux morreu
+      // no meio do timer) -> sem o readyState, InvalidStateError.
+      if (this.pendente && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ t: 'resize', ...this.pendente }));
+      }
       this.pendente = null;
     }, RESIZE_DEBOUNCE_MS);
   }
