@@ -71,6 +71,10 @@
   // ESCONDIDO, senao o texto dele vaza por baixo do vidro. TerminalPanel avisa por callback porque
   // quem decide maximizar/desmaximizar (inclusive ao fechar o painel maximizado) e ele, nao aqui.
   let terminalMaximizado = $state(false);
+  // Pin do trilho da Sidebar (recolhida = so icones): avisado por ela via onCollapsedChange, mesmo
+  // padrao do onMaximizar acima. So esconde a sidebar com o terminal maximizado quando ela esta NESTE
+  // estado -- fixada aberta continua visivel, dividindo a largura com o painel.
+  let barraRecolhida = $state(false);
 
   // Capacidade do painel (Task 6, Step 8): `pty` e POSIX-only, entao um servidor Windows na mistura
   // nao tem o painel -- sem o gate o botao abriria um painel morto. Le do SERVIDOR ATIVO (GET
@@ -269,12 +273,13 @@
 <svelte:window onkeydown={onShellKey} />
 
 <div class="desktop-shell">
-  <div class="sidebar-wrap" class:tp-max-hide={terminalMaximizado}>
+  <div class="sidebar-wrap" class:tp-max-hide={terminalMaximizado && barraRecolhida}>
     <Sidebar {currentSession} onSelect={onNavigateToChat} {onCompare} {onLogout}
              boardActive={view === 'board'}
              canvasActive={view === 'canvas'}
              onWorkspaceActionsChange={handleSidebarActionsChange}
-             {view} onSelectView={selectView} onOpenCommand={() => (commandOpen = true)} />
+             {view} onSelectView={selectView} onOpenCommand={() => (commandOpen = true)}
+             onCollapsedChange={(v) => (barraRecolhida = v)} />
   </div>
 
   <div class="desktop-com-terminal">
@@ -419,7 +424,8 @@
      display:none aqui, DIFERENTE do visibility:hidden do .desktop-main acima -- ali o espaco
      precisa continuar reservado (o fit() do xterm depende da caixa existir), aqui nao ha nada
      dependendo da caixa da Sidebar, entao display:none colapsa a coluna e o terminal ocupa a
-     largura toda. */
+     largura toda. So entra `tp-max-hide` com a sidebar TAMBEM no trilho (`barraRecolhida`) --
+     fixada aberta continua visivel, dividindo a largura com o painel. */
   .sidebar-wrap { display: contents; }
   .sidebar-wrap.tp-max-hide { display: none; }
   .workspace-attention-layer {
