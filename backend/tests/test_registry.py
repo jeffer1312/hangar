@@ -19,11 +19,13 @@ def _clear_jsonl_cache():
     SessionRegistry._fd_locked.clear()
     SessionRegistry._status_cache.clear()
     SessionRegistry._label_cache.clear()
+    SessionRegistry._SEM_AGENTE_AVISADAS.clear()
     yield
     SessionRegistry._jsonl_cache.clear()
     SessionRegistry._fd_locked.clear()
     SessionRegistry._status_cache.clear()
     SessionRegistry._label_cache.clear()
+    SessionRegistry._SEM_AGENTE_AVISADAS.clear()
 
 
 def test_sanitize_cwd_matches_claude_scheme():
@@ -307,8 +309,9 @@ def test_resolve_jsonl_picks_newest(tmp_path):
 
 def test_list_maps_sessions_to_jsonl(tmp_path):
     reg = SessionRegistry(projects_dir=tmp_path)
-    with patch.object(registry.tmux, "list_panes_active",
-                      return_value=[{"name": "cc", "pid": 111, "cwd": "/home/u/p"}]), \
+    with patch.object(registry.tmux, "list_panes_all",
+                      return_value={"cc": [{"name": "cc", "pid": 111, "cwd": "/home/u/p",
+                                            "pane_id": "%1", "active": True}]}), \
          patch.object(reg, "resolve_jsonl", return_value="/x/s.jsonl"):
         out = reg.list()
     assert out[0].name == "cc" and out[0].jsonl == "/x/s.jsonl"

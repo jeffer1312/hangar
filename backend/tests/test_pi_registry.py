@@ -256,8 +256,9 @@ def test_pi_pane_does_not_inherit_a_claude_transcript(monkeypatch, tmp_path):
     (slug / "11111111-1111-1111-1111-111111111111.jsonl").write_text("")
     monkeypatch.setattr(registry.settings, "projects_dir", str(projetos))
 
-    monkeypatch.setattr(registry.tmux, "list_panes_active",
-                        lambda: [{"name": "s-pi", "pid": 99, "cwd": "/w", "pane_id": "%9"}])
+    monkeypatch.setattr(registry.tmux, "list_panes_all",
+                        lambda: {"s-pi": [{"name": "s-pi", "pid": 99, "cwd": "/w", "pane_id": "%9",
+                                           "active": True}]})
     monkeypatch.setattr(registry, "_descendant_pids", lambda pid, children=None: [11])
     monkeypatch.setattr(registry, "_cmdline", lambda p: "pi" + " " * 80)
     monkeypatch.setattr(registry, "pi_session_file", lambda *a, **k: None)
@@ -272,8 +273,13 @@ def test_pi_pane_does_not_inherit_a_claude_transcript(monkeypatch, tmp_path):
 def _pane_pi_sem_transcript(monkeypatch, tmp_path):
     projetos = tmp_path / "claude-projects"
     monkeypatch.setattr(registry.settings, "projects_dir", str(projetos))
+    # list_panes_active continua patchada pro caminho de resume (_pane_of), que a ela ainda serve;
+    # list_panes_all e a nova fonte de list() (Task 5.5).
     monkeypatch.setattr(registry.tmux, "list_panes_active",
                         lambda: [{"name": "s-pi", "pid": 99, "cwd": "/w", "pane_id": "%9"}])
+    monkeypatch.setattr(registry.tmux, "list_panes_all",
+                        lambda: {"s-pi": [{"name": "s-pi", "pid": 99, "cwd": "/w", "pane_id": "%9",
+                                           "active": True}]})
     monkeypatch.setattr(registry, "_descendant_pids", lambda pid, children=None: [11])
     monkeypatch.setattr(registry, "_cmdline", lambda p: "pi" + " " * 80)
     monkeypatch.setattr(registry, "pi_session_file", lambda *a, **k: None)

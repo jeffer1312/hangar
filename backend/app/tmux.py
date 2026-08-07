@@ -133,6 +133,28 @@ def list_panes_active() -> list[dict]:
     return list(out.values())
 
 
+def list_panes_all() -> dict[str, list[dict]]:
+    # Task 5.5: MESMA chamada `list-panes -a` do list_panes_active, so que sem descartar os panes
+    # NAO ativos -> quem precisa escolher, por sessao, o pane do AGENTE (nao so o ativo) usa esta,
+    # sem pagar nenhum fork a mais (list_panes_active continua existindo, intocada, pra quem so quer
+    # o ativo). Agrupado por nome de sessao porque e assim que o caller (registry.list()) itera.
+    cp = _run(["tmux", "list-panes", "-a", "-F",
+               "#{session_name}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_id}"])
+    if cp.returncode != 0:
+        return {}
+    out: dict[str, list[dict]] = {}
+    for line in cp.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 5:
+            continue
+        name, active, pid, cwd, pane_id = parts
+        out.setdefault(name, []).append({
+            "name": name, "pid": int(pid) if pid.isdigit() else None, "cwd": cwd,
+            "pane_id": pane_id, "active": active == "1",
+        })
+    return out
+
+
 def list_panes_of(name: str) -> list[dict]:
     # TODOS os panes de UMA sessao (list_panes_active devolve so o ATIVO, de todas). `-s` = escopo
     # sessao; `=NAME` = match exato (mesma pegadinha documentada no _pane_target).
