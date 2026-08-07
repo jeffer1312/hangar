@@ -24,15 +24,18 @@ _log = logging.getLogger(__name__)
 _TTL = 60.0
 _cache: dict[str, tuple[Optional[str], float]] = {}
 _AVISADAS: set[str] = set()
+_ERROS_AVISADOS: set[str] = set()   # falha inesperada do pane_info; separado do de cima (ver la)
 
 
 def invalidate(name: Optional[str] = None) -> None:
     if name is None:
         _cache.clear()
         _AVISADAS.clear()
+        _ERROS_AVISADOS.clear()
     else:
         _cache.pop(name, None)
         _AVISADAS.discard(name)
+        _ERROS_AVISADOS.discard(name)
 
 
 def _pane_do_agente(pid: int, children: dict[int, list[int]]) -> bool:
@@ -72,7 +75,20 @@ def pane_info(name: str) -> tuple[str, Optional[str]]:
         children = _proc_children_map()
         p = registry_mod.SessionRegistry._agent_pane(panes, children)
         return registry_mod.provider_of_pane(p["pid"], children), p.get("pane_id")
-    except Exception:
+    except Exception as e:                       # noqa: BLE001
+        # "Nao achei pane de agente" e resposta normal e segue silenciosa (e o `if not panes` acima).
+        # Aqui embaixo e OUTRA coisa: AttributeError/KeyError de verdade no _agent_pane, no
+        # provider_of_pane ou no _proc_children_map. O catch-all fundia os dois e devolvia
+        # ("claude", None) calado — e como esta funcao virou a resolucao dos TRES caminhos de envio
+        # (/input, drain da fila, adapter do Pi), o silencio triplicou. Mesma politica de avisar
+        # UMA vez por sessao do `resolve_target` abaixo: com este caminho rodando a cada envio, um
+        # log por chamada viraria enxurrada.
+        # Conjunto PROPRIO, nao o `_AVISADAS` do resolve_target: compartilhar faria um aviso calar o
+        # outro (a sessao que ja avisou "nenhum pane parece do agente" nunca logaria a falha real).
+        if name not in _ERROS_AVISADOS:
+            _ERROS_AVISADOS.add(name)
+            _log.warning("agentpane: falha inesperada ao resolver o pane de %r (%s: %s); alvo volta "
+                         "a ser a janela ativa", name, type(e).__name__, e)
         return "claude", None
 
 

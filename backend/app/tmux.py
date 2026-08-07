@@ -332,6 +332,14 @@ def new_hidden_shell(name: str, cwd: str) -> str | None:
     if has_session(alvo):
         cp = _run(["tmux", "display", "-p", "-t", f"={alvo}:", "#{session_path}"])
         antigo = cp.stdout.strip() if cp.returncode == 0 else ""
+        if cp.returncode != 0:
+            # "Conferi e bate" e "nao consegui conferir" nao podem sair iguais (achado da revisao):
+            # com o `display` falhando (tmux ocupado, timeout de 5s do `_run`), `antigo` vira "" e o
+            # bloco de diretorio divergente abaixo nem roda — o shell existente e devolvido como se o
+            # diretorio batesse. Reaproveitar continua sendo o comportamento (matar um shell com
+            # trabalho por causa de uma leitura transiente seria pior), mas agora com registro.
+            _log.warning("nao consegui ler o diretorio do shell escondido %r (rc=%d): reaproveito "
+                         "sem conferir se ele e mesmo de %r", alvo, cp.returncode, cwd)
         if antigo and os.path.normpath(antigo) != os.path.normpath(cwd) and is_hidden(alvo):
             _log.info("shell escondido %r era do diretorio %r e agora a sessao e de %r — "
                       "recriando", alvo, antigo, cwd)

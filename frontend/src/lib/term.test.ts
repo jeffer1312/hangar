@@ -21,7 +21,9 @@ class FakeWS {
   sent: (string | ArrayBufferLike)[] = [];
   binaryType = '';
   onmessage: ((e: MessageEvent) => void) | null = null;
-  onclose: (() => void) | null = null;
+  // Aceita (ou nao) um CloseEvent: o navegador SEMPRE passa um, mas o `close()` daqui embaixo
+  // chama sem argumento — e e justamente esse caso que a guarda `e?.reason` do term.ts cobre.
+  onclose: ((e?: { reason?: string }) => void) | null = null;
   constructor(public url: string) { FakeWS.ultimo = this; }
   send(d: string | ArrayBufferLike) { this.sent.push(d); }
   close() { this.onclose?.(); }
@@ -54,6 +56,22 @@ describe('TermSocket', () => {
     s.resize(100, 30);
     vi.advanceTimersByTime(RESIZE_DEBOUNCE_MS);
     expect(FakeWS.ultimo.sent).toEqual([JSON.stringify({ t: 'resize', cols: 100, rows: 30 })]);
+  });
+
+  it('repassa o motivo do fechamento mandado pelo backend', () => {
+    let motivo: string | undefined = 'nao chamou';
+    new TermSocket('ws://x', { data: () => {}, close: (m) => { motivo = m; } });
+    FakeWS.ultimo.onclose?.({ reason: 'outra conexao assumiu' });
+    expect(motivo).toBe('outra conexao assumiu');
+  });
+
+  it('fechamento sem motivo chega como undefined (o caso do handshake recusado)', () => {
+    let chamou = false;
+    let motivo: string | undefined = 'nao chamou';
+    const s = new TermSocket('ws://x', { data: () => {}, close: (m) => { chamou = true; motivo = m; } });
+    s.close();
+    expect(chamou).toBe(true);
+    expect(motivo).toBeUndefined();
   });
 
   it('coalesce resizes seguidos num so, com o ultimo valor', () => {

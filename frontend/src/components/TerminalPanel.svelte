@@ -1,6 +1,10 @@
 <script lang="ts">
   import { TermSocket, termUrl } from '../lib/term';
   import { openShell, openNativeTerminal } from '../lib/api';
+  // `import type`: some no build (nao vira require), entao NAO desfaz o import dinamico logo abaixo
+  // -- o xterm continua fora do bundle de quem nunca abre o terminal.
+  import type { Terminal } from '@xterm/xterm';
+  import type { FitAddon } from '@xterm/addon-fit';
 
   interface Props {
     sessionName: string; connKey: string; open: boolean; onClose: () => void;
@@ -12,10 +16,14 @@
   let secEl = $state<HTMLElement | null>(null);
   let maximizado = $state(false);
   let caiu = $state(false);
+  // Motivo da queda, quando existe: o backend fecha com texto legivel ("outra conexao assumiu"), e
+  // a falha de CARREGAMENTO do xterm escreve o dela aqui. Sem isto o rotulo era sempre
+  // "desconectado", indistinguivel de queda de rede.
+  let motivo = $state<string | null>(null);
   let geracao = $state(0);          // incrementar reconecta de verdade
   let sock: TermSocket | null = null;
-  let term: any = null;
-  let fit: any = null;
+  let term: Terminal | null = null;
+  let fit: FitAddon | null = null;
   let ro: ResizeObserver | null = null;
   let mo: MutationObserver | null = null;   // UM so -- cobre as duas abas (attach e shell)
   let alturaArrastada = '';   // altura gravada inline pelo drag (guardada pra repor ao desmaximizar)
@@ -59,10 +67,11 @@
   let shellCarregando = $state(false);
   let hostShell = $state<HTMLDivElement | null>(null);
   let caiuShell = $state(false);
+  let motivoShell = $state<string | null>(null);
   let geracaoShell = $state(0);
   let sockShell: TermSocket | null = null;
-  let termShell: any = null;
-  let fitShell: any = null;
+  let termShell: Terminal | null = null;
+  let fitShell: FitAddon | null = null;
   let roShell: ResizeObserver | null = null;
 
   // ── Terminal nativo (item da v1, pedido explicito do dono do plano) ────────────────────────────
@@ -178,7 +187,8 @@
 
   // Constroi o Terminal+FitAddon com o mesmo tema/fonte das duas abas -- fatorado so pra nao duplicar
   // o comentario do 'rgba(0, 0, 0, 0)' (achado caro, ver abaixo) numa segunda copia que pode divergir.
-  function novoTerminal(hostEl: HTMLDivElement, TerminalCls: any, FitAddonCls: any) {
+  function novoTerminal(hostEl: HTMLDivElement, TerminalCls: typeof Terminal,
+                        FitAddonCls: typeof FitAddon) {
     // getComputedStyle, nao `var(--font-mono)` cru: o renderer canvas monta
     // `ctx.font = \`${size}px ${family}\``, onde var() e invalido e ignorado calado -> metrica de
     // glifo errada e grade desalinhada.
@@ -229,6 +239,7 @@
     if (!open || !host) return;
     let vivo = true;
     caiu = false;
+    motivo = null;
 
     (async () => {
       // Import DINAMICO: xterm so entra no bundle de quem abre o terminal. E feature desktop-only na
@@ -242,36 +253,52 @@
 
       const r = novoTerminal(host, Terminal, FitAddon);
       term = r.term; fit = r.fit;
+      // Copia local NAO-NULA: `term` e `fit` sao reatribuidos (e zerados no cleanup), entao dentro
+      // dos callbacks abaixo eles seriam `Terminal | null` e todo uso pediria `!`.
+      const t = r.term;
 
       garantirObserverDeTema();
 
       const enc = new TextEncoder();
-      sock = new TermSocket(termUrl(alvo, term.cols, term.rows), {
-        data: (b) => term.write(b),
+      sock = new TermSocket(termUrl(alvo, t.cols, t.rows), {
+        data: (b) => t.write(b),
         // `vivo`, nao incondicional: TermSocket.close() dispara onclose ASSINCRONO. Ao trocar de
         // sessao, o cleanup fecha o socket velho -> o efeito novo zera `caiu` -> DEPOIS chega o
         // onclose do socket velho -> sem a guarda, `caiu = true` aterrissava na sessao ERRADA (ou
         // num componente ja destruido, se foi o painel que fechou).
-        close: () => { if (vivo) caiu = true; },
+        close: (m) => { if (vivo) { caiu = true; motivo = m ?? null; } },
       });
-      term.onData((d: string) => sock?.send(enc.encode(d)));
+      t.onData((d: string) => sock?.send(enc.encode(d)));
 
-      ro = new ResizeObserver(() => { fit?.fit(); sock?.resize(term.cols, term.rows); });
+      ro = new ResizeObserver(() => { r.fit.fit(); sock?.resize(t.cols, t.rows); });
       ro.observe(host);
       // I3: o $effect por `abaAtiva` sozinho erra a ESTREIA desta aba -- no primeiro clique em
       // "Shell", `abaAtiva` muda ANTES do POST /shell sair, `term` ainda e null ali, e quando o
       // terminal enfim monta (agora) o efeito ja rodou e nao roda de novo. Foca aqui tambem, so se
       // esta aba seguir sendo a visivel no instante em que o mount terminou -- e so se `podeFocar()`
       // (Q2): o usuario pode ter clicado no composer do chat nesse meio-tempo.
-      if (abaAtiva === 'attach' && podeFocar()) term.focus();
-    })();
+      if (abaAtiva === 'attach' && podeFocar()) t.focus();
+    })().catch((e) => {
+      // Falha do import DINAMICO (pedaco 404 depois de um deploy novo com a aba aberta; o dev
+      // server do Vite servindo modulo vazio, documentado 2x no CLAUDE.md) ou do proprio mount.
+      // Sem isto virava rejeicao nao tratada: tela em branco pra sempre, `caiu` nunca setado, nem
+      // o botao de reconectar aparecia. Mesmo padrao do abrirAbaShell — mostra a mensagem, nao
+      // engole.
+      if (!vivo) return;
+      caiu = true;
+      motivo = e instanceof Error ? `falha ao carregar o terminal: ${e.message}`
+                                  : 'falha ao carregar o terminal';
+    });
 
     return () => {
       vivo = false;
       ro?.disconnect(); ro = null;
       sock?.close(); sock = null;
       term?.dispose(); term = null;
-      mo?.disconnect(); mo = null;
+      // O observer de tema e COMPARTILHADO pelas duas abas: desconectar aqui com a aba shell ainda
+      // montada deixava o terminal dela sem acompanhar troca de tema ate o proximo mount (achado da
+      // revisao). So desliga quando nao sobra ninguem pra observar.
+      if (!termShell) { mo?.disconnect(); mo = null; }
     };
   });
 
@@ -313,6 +340,7 @@
     if (!open || !alvo || !hostShell) return;
     let vivo = true;
     caiuShell = false;
+    motivoShell = null;
 
     (async () => {
       const [{ Terminal }, { FitAddon }] = await Promise.all([
@@ -324,30 +352,39 @@
 
       const r = novoTerminal(hostShell, Terminal, FitAddon);
       termShell = r.term; fitShell = r.fit;
+      const t = r.term;                          // mesma copia local nao-nula do efeito do attach
 
       garantirObserverDeTema();
 
       const enc = new TextEncoder();
-      sockShell = new TermSocket(termUrl(alvo, termShell.cols, termShell.rows), {
-        data: (b) => termShell.write(b),
-        close: () => { if (vivo) caiuShell = true; },
+      sockShell = new TermSocket(termUrl(alvo, t.cols, t.rows), {
+        data: (b) => t.write(b),
+        close: (m) => { if (vivo) { caiuShell = true; motivoShell = m ?? null; } },
       });
-      termShell.onData((d: string) => sockShell?.send(enc.encode(d)));
+      t.onData((d: string) => sockShell?.send(enc.encode(d)));
 
-      roShell = new ResizeObserver(() => { fitShell?.fit(); sockShell?.resize(termShell.cols, termShell.rows); });
+      roShell = new ResizeObserver(() => { r.fit.fit(); sockShell?.resize(t.cols, t.rows); });
       roShell.observe(hostShell);
       // Mesmo motivo do efeito do attach acima: a estreia desta aba so foca aqui -- e so com
       // `podeFocar()` (Q2), pelo mesmo risco (POST /shell + import dinamico do xterm e tempo de
       // sobra pro usuario ja estar digitando em outro lugar).
-      if (abaAtiva === 'shell' && podeFocar()) termShell.focus();
-    })();
+      if (abaAtiva === 'shell' && podeFocar()) t.focus();
+    })().catch((e) => {
+      // Mesmo motivo do efeito do attach: import dinamico que falha nao pode virar tela em branco
+      // muda. Aqui o `shellNome` ja existe (o POST passou), entao quem mostra o aviso e o rotulo do
+      // botao de reconectar, nao o `{:else if shellErro}` do template.
+      if (!vivo) return;
+      caiuShell = true;
+      motivoShell = e instanceof Error ? `falha ao carregar o terminal: ${e.message}`
+                                       : 'falha ao carregar o terminal';
+    });
 
     return () => {
       vivo = false;
       roShell?.disconnect(); roShell = null;
       sockShell?.close(); sockShell = null;
       termShell?.dispose(); termShell = null;
-      mo?.disconnect(); mo = null;
+      if (!term) { mo?.disconnect(); mo = null; }   // compartilhado: ver o cleanup do attach
     };
   });
 </script>
@@ -384,8 +421,13 @@
                 onclick={abrirAbaShell}>Shell</button>
       </div>
       {#if (abaAtiva === 'attach' ? caiu : caiuShell)}
-        <button class="tp-recon" onclick={() => (abaAtiva === 'attach' ? geracao++ : geracaoShell++)}>
-          desconectado · reconectar
+        <!-- Motivo quando o backend (ou a falha de carregamento) deu um; "desconectado" cru quando
+             nao ha — o caso da queda de rede e o do handshake recusado, que o navegador entrega sem
+             reason nenhum. `title` com o texto inteiro porque o rotulo trunca. -->
+        {@const m = abaAtiva === 'attach' ? motivo : motivoShell}
+        <button class="tp-recon" title={m ?? undefined}
+                onclick={() => (abaAtiva === 'attach' ? geracao++ : geracaoShell++)}>
+          {m ?? 'desconectado'} · reconectar
         </button>
       {/if}
       <button onclick={abrirTerminalNativo} aria-label="Abrir terminal nativo"
@@ -456,6 +498,10 @@
     max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .tp-aba:hover { background: var(--bg-hover); }
+  /* Botao nativo como os irmaos da barra (↗ ⤢ ✕): so o teto de largura, mesmo par max-width+
+     ellipsis do .tp-aba acima. O rotulo agora carrega o MOTIVO da queda, que pode ser uma frase
+     longa (mensagem de import quebrado) — sem o teto ela espremia as abas ate sumir. */
+  .tp-recon { max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tp-aba.sel { background: var(--accent-dim); color: var(--accent); }
   /* Posicionamento relativo: as duas telas se empilham em cima uma da outra (position:absolute) e a
      visivel e escolhida por `visibility`, nao `display:none` -- display:none zeraria a caixa e o

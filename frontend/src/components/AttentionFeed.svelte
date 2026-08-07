@@ -27,11 +27,15 @@
   // morto. O caso comum é o 409 do painel de terminal aberto naquela sessão, cujo `detail` já
   // explica a saída ("Feche o painel pra responder por aqui").
   let erro = $state<{ key: string; msg: string } | null>(null);
+  // Some sozinho em 8s, igual ao irmao do desktop (WorkspaceAttentionStrip): e AVISO, não estado —
+  // sem o timer ele ficava na tela até o usuário tocar em outra sessão.
+  let erroTimer: ReturnType<typeof setTimeout> | undefined;
 
   function toggle(s: AggSession) {
     if (s.options?.length) {
       const k = keyOf(s);
       expandedKey = expandedKey === k ? null : k; // expande/colapsa inline (sem montar chat)
+      clearTimeout(erroTimer);
       erro = null;
     } else {
       onOpenChat(s); // AskUserQuestion nativo / sem picker parseável -> stepper no chat
@@ -41,6 +45,7 @@
   async function pick(s: AggSession, option: number) {
     const k = keyOf(s);
     expandedKey = null;
+    clearTimeout(erroTimer);
     erro = null;
     const prev = getActiveId(); // salva antes de mirar o server dono (api.ts lê o ativo a cada chamada)
     selectServer(s.serverId);
@@ -51,6 +56,7 @@
       // usuário sem nada pra tocar depois de ler o aviso.
       expandedKey = k;
       erro = { key: k, msg: e instanceof Error ? e.message : 'não deu pra enviar a opção' };
+      erroTimer = setTimeout(() => (erro = null), 8000);  // aviso, não estado: some sozinho
     } finally {
       if (prev && prev !== s.serverId) selectServer(prev); // restaura pra o chat aberto ficar no server dele
     }

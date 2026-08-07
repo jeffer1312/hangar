@@ -19,7 +19,12 @@ export class TermSocket {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private pendente: { cols: number; rows: number } | null = null;
 
-  constructor(url: string, private on: { data: (b: Uint8Array) => void; close: () => void }) {
+  // `close` recebe o MOTIVO quando o backend manda um: ele fecha com texto legivel em
+  // "outra conexao assumiu" (termsock.py), e sem repassar a UI dizia so "desconectado · reconectar"
+  // — indistinguivel de queda de rede. Ressalva medida: fechamento ANTES do `accept` (sessao que
+  // nao existe, cols/rows invalidos) NAO chega como close frame no navegador, e sim como handshake
+  // recusado (onclose 1006, reason vazio) — por isso o motivo e opcional, nunca garantido.
+  constructor(url: string, private on: { data: (b: Uint8Array) => void; close: (motivo?: string) => void }) {
     this.ws = new WebSocket(url);
     this.ws.binaryType = 'arraybuffer';
     this.ws.onmessage = (e) => {
@@ -27,7 +32,9 @@ export class TermSocket {
       // escapar bytes de controle no meio do fluxo (origem classica de bug de acento e de moldura).
       if (e.data instanceof ArrayBuffer) this.on.data(new Uint8Array(e.data));
     };
-    this.ws.onclose = () => this.on.close();
+    // `e?.reason`: o CloseEvent sempre existe no navegador, mas o duble de teste chama onclose sem
+    // argumento — e um `undefined.reason` aqui derrubaria o handler de fechamento inteiro.
+    this.ws.onclose = (e) => this.on.close(e?.reason || undefined);
   }
 
   // Uint8Array<ArrayBuffer>, nao Uint8Array generico: o lib.dom.d.ts atual distingue ArrayBuffer

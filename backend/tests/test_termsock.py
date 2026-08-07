@@ -152,6 +152,34 @@ def test_resize_chega_no_pty(sessao):
         assert _tam(sessao).startswith("100x30")
 
 
+def test_frame_de_controle_torto_nao_derruba_o_terminal(sessao):
+    """Achado da revisao: JSON valido que nao e OBJETO (`5`, `null`, `[1,2]`) levantava
+    AttributeError no `.get`, e `cols` com lista levantava TypeError no `int()` — nenhum dos dois
+    estava no `except` do leitor, entao UM frame torto matava a task e fechava a CONEXAO inteira.
+    Prova de verdade: depois da rajada de frames tortos, um resize VALIDO ainda chega no pty.
+    """
+    c = _client()
+    with c.websocket_connect(f"/api/sessions/{sessao}/term?token=secret&cols=80&rows=24") as ws:
+        ws.receive_bytes()
+        for torto in ("5", "null", "[1,2]", "isto nao e json",
+                      json.dumps({"t": "resize", "cols": [1], "rows": 30}),
+                      json.dumps({"t": "resize", "rows": 30})):
+            ws.send_text(torto)
+        ws.send_text(json.dumps({"t": "resize", "cols": 100, "rows": 30}))
+        _esperar(lambda: _tam(sessao).startswith("100x30"))
+
+
+def test_master_do_pty_nao_e_herdavel(sessao):
+    """C1: `pty.fork()` (os.forkpty) NAO aplica o PEP 446 que `os.openpty`/`os.pipe` aplicam — o
+    mestre nasce herdavel. Com o backend guardando uma Sessao viva por conexao, o `tmux attach` da
+    conexao SEGUINTE herdava o fd do PTY da anterior: ler e injetar bytes no terminal alheio.
+    """
+    c = _client()
+    with c.websocket_connect(f"/api/sessions/{sessao}/term?token=secret&cols=80&rows=24") as ws:
+        ws.receive_bytes()
+        assert os.get_inheritable(termsock._ativos[sessao].master) is False
+
+
 def test_saida_acima_do_teto_reata_o_reader_depois_de_drenar(sessao, monkeypatch):
     """Q1 da rodada 2 de revisao: `pausado` recalculado no TOPO do laco do escritor (em vez de
     marcado por QUEM pausa, o `do_pty`) perdia uma pausa que acontecesse NO MEIO do dreno — dentro
