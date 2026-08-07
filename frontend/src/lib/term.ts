@@ -32,7 +32,10 @@ export class TermSocket {
 
   // Uint8Array<ArrayBuffer>, nao Uint8Array generico: o lib.dom.d.ts atual distingue ArrayBuffer
   // de SharedArrayBuffer no generico e WebSocket.send so aceita o primeiro.
-  send(b: Uint8Array<ArrayBuffer>) { this.ws.send(b); }
+  // readyState !== OPEN -> no-op: depois que a conexao cai (onclose ja disparou, mas o componente
+  // que consome ainda nao reagiu ao `close` no mesmo tick), cada tecla digitada jogava
+  // InvalidStateError direto no console.
+  send(b: Uint8Array<ArrayBuffer>) { if (this.ws.readyState === WebSocket.OPEN) this.ws.send(b); }
 
   resize(cols: number, rows: number) {
     this.pendente = { cols, rows };

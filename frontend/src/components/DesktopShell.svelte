@@ -55,7 +55,16 @@
   // "pane focado" hoje, entao quem diz QUAL sessao e o proprio Chat que chamou (um dos tres mounts).
   let terminalOpen = $state(false);
   let terminalSession = $state('');
-  function abrirTerminal(nome: string) { terminalSession = nome; terminalOpen = true; }
+  // Chave SERVER-AWARE (igual currentKey/workspaceSessionKey): dois servidores podem ter uma sessao
+  // homonima. So o nome nao bastava — trocar de servidor com o mesmo nome na tela nao reexecutava o
+  // efeito do TerminalPanel, e o socket ficava falando pro servidor VELHO (termUrl usa o servidor
+  // ATIVO no momento da conexao, e so a troca do servidor nao muda `sessionName`).
+  let terminalKey = $state('');
+  function abrirTerminal(nome: string, serverId: string) {
+    terminalSession = nome;
+    terminalKey = workspaceSessionKey({ serverId, name: nome });
+    terminalOpen = true;
+  }
   const rows = $derived<AggSession[]>(sessionsStore.rows);
   const hasAttention = $derived(rows.some((row) => row.state === 'awaiting_input'));
 
@@ -193,6 +202,10 @@
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       if (document.querySelector('[role="dialog"]:not(.board-overlay)')) return;
+      // CAPTURA na window roda ANTES do onkeydown (bolha) do TerminalPanel — sem esta guarda, Esc
+      // digitado dentro do xterm (que deve chegar no agente, Task 5/I4) fechava o overlay do board
+      // primeiro, ninguem via a tecla.
+      if ((e.target as HTMLElement | null)?.closest('.tp')) return;
       onCloseOverlay();
     };
     window.addEventListener('keydown', onKey, true);
@@ -241,7 +254,8 @@
               desktop={true}
               onBack={onCloseOverlay}
               onNavigateToChat={onNavigateToChat}
-              onOpenTerminalPanel={() => abrirTerminal(overlayName)}
+              onOpenTerminalPanel={() => abrirTerminal(overlayName, overlaySession.serverId)}
+              terminalPanelOpen={terminalOpen && terminalSession === overlayName}
               topInset={hasAttention ? 52 : 0}
               onOpenWorkspacePalette={() => (commandOpen = true)}
               showContextPanel={true}
@@ -261,7 +275,8 @@
             onBack={() => onNavigateToChat('')}
             onNavigateToChat={onNavigateToChat}
             onOpenSplit={openSplit}
-            onOpenTerminalPanel={() => abrirTerminal(cur)}
+            onOpenTerminalPanel={() => abrirTerminal(cur, getActiveId() ?? '')}
+            terminalPanelOpen={terminalOpen && terminalSession === cur}
             topInset={hasAttention ? 52 : 0}
             onOpenWorkspacePalette={() => (commandOpen = true)}
             showContextPanel={splitSessions.length === 0}
@@ -279,7 +294,8 @@
             desktop={true}
             onBack={() => (splitSessions = splitSessions.filter((s) => s !== split))}
             onNavigateToChat={onNavigateToChat}
-            onOpenTerminalPanel={() => abrirTerminal(split)}
+            onOpenTerminalPanel={() => abrirTerminal(split, getActiveId() ?? '')}
+            terminalPanelOpen={terminalOpen && terminalSession === split}
             topInset={hasAttention ? 52 : 0}
             onOpenWorkspacePalette={() => (commandOpen = true)}
           />
@@ -292,7 +308,7 @@
       </div>
     {/if}
   </main>
-  <TerminalPanel sessionName={terminalSession} open={terminalOpen}
+  <TerminalPanel sessionName={terminalSession} connKey={terminalKey} open={terminalOpen}
                  onClose={() => (terminalOpen = false)} />
   </div>
 
