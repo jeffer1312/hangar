@@ -3,6 +3,7 @@
   import Sidebar from './Sidebar.svelte';
   import WorkspaceCommandPalette from './WorkspaceCommandPalette.svelte';
   import WorkspaceAttentionStrip from './WorkspaceAttentionStrip.svelte';
+  import TerminalPanel from './TerminalPanel.svelte';
   import Chat from '../screens/Chat.svelte';
   import Board from '../screens/Board.svelte';
   import Canvas from '../screens/Canvas.svelte';
@@ -49,6 +50,12 @@
   let lastSession = $state<WorkspaceSessionRef | null>(null);
   let sidebarActions = $state<WorkspaceAction[]>([]);
   let chatActions = $state<WorkspaceAction[]>([]);
+
+  // Painel de terminal real (xterm.js), faixa no rodape do shell. Um so por vez: o shell nao tem
+  // "pane focado" hoje, entao quem diz QUAL sessao e o proprio Chat que chamou (um dos tres mounts).
+  let terminalOpen = $state(false);
+  let terminalSession = $state('');
+  function abrirTerminal(nome: string) { terminalSession = nome; terminalOpen = true; }
   const rows = $derived<AggSession[]>(sessionsStore.rows);
   const hasAttention = $derived(rows.some((row) => row.state === 'awaiting_input'));
 
@@ -153,6 +160,20 @@
     splitSessions = []; // trocou a principal (mesmo nome/outro servidor conta) -> fecha o split
   });
 
+  // Nomes das sessoes com um Chat montado agora (os mesmos tres mounts abaixo). Fecha o terminal
+  // sozinho quando a sessao dele sai da tela (navegou pro board/canvas, trocou a principal, fechou
+  // o split) — sem isto o painel ficava aberto falando com uma sessao que ja nao aparece.
+  const sessoesNaTela = $derived(
+    view === 'board' || view === 'canvas'
+      ? (overlaySession ? [overlaySession.name] : [])
+      : currentSession && currentSession !== 'null' && currentSession !== 'undefined'
+        ? [currentSession, ...splitSessions]
+        : [],
+  );
+  $effect(() => {
+    if (terminalOpen && !sessoesNaTela.includes(terminalSession)) terminalOpen = false;
+  });
+
   // Overlay do quadro: o Chat REAL (mesmo componente do resto do app) por cima do kanban, em vez de
   // navegar pra fora. O quadro fica montado atrás — volta intacto, com o mesmo scroll. Uma instância
   // por vez: o overlay cobre a .desktop-main inteira, então não dá pra clicar noutro card sem fechar.
@@ -188,6 +209,7 @@
            onWorkspaceActionsChange={handleSidebarActionsChange}
            {view} onSelectView={selectView} onOpenCommand={() => (commandOpen = true)} />
 
+  <div class="desktop-com-terminal">
   <main class="desktop-main" class:split={splitSessions.length > 0} class:has-attention={hasAttention}>
     {#if hasAttention}
       <div class="workspace-attention-layer">
@@ -210,14 +232,16 @@
              motivo do currentKey: homônimas em servidores diferentes têm o mesmo nome, e só o nome na
              key deixaria o Chat preso no servidor antigo. -->
         {#key workspaceSessionKey(overlaySession)}
+          {@const overlayName = overlaySession.name}
           <div class="board-overlay" role="region" aria-label="Chat da sessão">
             <button class="split-close" onclick={onCloseOverlay}
                     aria-label="Fechar chat" title="Fechar (Esc)">×</button>
             <Chat
-              sessionName={overlaySession.name}
+              sessionName={overlayName}
               desktop={true}
               onBack={onCloseOverlay}
               onNavigateToChat={onNavigateToChat}
+              onOpenTerminalPanel={() => abrirTerminal(overlayName)}
               topInset={hasAttention ? 52 : 0}
               onOpenWorkspacePalette={() => (commandOpen = true)}
               showContextPanel={true}
@@ -229,13 +253,15 @@
       {/if}
     {:else if currentSession && currentSession !== 'null' && currentSession !== 'undefined'}
       {#key currentKey ?? currentSession}
+        {@const cur = currentSession}
         <div class="pane">
           <Chat
-            sessionName={currentSession}
+            sessionName={cur}
             desktop={true}
             onBack={() => onNavigateToChat('')}
             onNavigateToChat={onNavigateToChat}
             onOpenSplit={openSplit}
+            onOpenTerminalPanel={() => abrirTerminal(cur)}
             topInset={hasAttention ? 52 : 0}
             onOpenWorkspacePalette={() => (commandOpen = true)}
             showContextPanel={splitSessions.length === 0}
@@ -253,6 +279,7 @@
             desktop={true}
             onBack={() => (splitSessions = splitSessions.filter((s) => s !== split))}
             onNavigateToChat={onNavigateToChat}
+            onOpenTerminalPanel={() => abrirTerminal(split)}
             topInset={hasAttention ? 52 : 0}
             onOpenWorkspacePalette={() => (commandOpen = true)}
           />
@@ -265,6 +292,9 @@
       </div>
     {/if}
   </main>
+  <TerminalPanel sessionName={terminalSession} open={terminalOpen}
+                 onClose={() => (terminalOpen = false)} />
+  </div>
 
   <WorkspaceCommandPalette
     open={commandOpen}
@@ -282,6 +312,17 @@
     height: 100vh;
     width: 100%;
     overflow: hidden;
+  }
+  /* Coluna AQUI, no wrapper — a .desktop-main segue exatamente como estava (regra abaixo intocada),
+     entao .desktop-main.split continua "display: flex" e os dois chats do split seguem lado a lado.
+     position:relative faz o terminal maximizado (.tp.max { position: absolute; inset: 0 }) cobrir
+     so esta area, nao a Sidebar. */
+  .desktop-com-terminal {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    position: relative;
   }
   .desktop-main {
     flex: 1;
