@@ -69,12 +69,20 @@
 
   // Capacidade do painel (Task 6, Step 8): `pty` e POSIX-only, entao um servidor Windows na mistura
   // nao tem o painel -- sem o gate o botao abriria um painel morto. Le do SERVIDOR ATIVO (GET
-  // /api/config), e refaz a leitura a cada troca de sessao/servidor (currentKey/overlaySession):
-  // trocar pro servidor Windows nao pode herdar "capaz" do servidor Linux anterior. Default true
-  // (assume capaz) pra nao piscar pro espelho enquanto a resposta ainda nao chegou.
+  // /api/config). Default true (assume capaz) pra nao piscar pro espelho enquanto a resposta ainda
+  // nao chegou.
   let terminalCapaz = $state(true);
+  // `getActiveId()` NAO e reativo (le localStorage, mesma ressalva de `sessoesNaTela` acima) -- so
+  // ha como o efeito SABER que precisa recalcular via `currentKey`/`overlaySession` (route-driven).
+  // Mas a decisao de REFAZER O FETCH e pela identidade do SERVIDOR, nao da rota: sem este cache, o
+  // toggle quadro<->canvas (que muda `overlaySession` sem trocar servidor) dispararia GET /api/config
+  // de novo a toa a cada clique.
+  let ultimoServidorConsultado: string | null = null;
   $effect(() => {
     void currentKey; void overlaySession;
+    const sid = getActiveId();
+    if (sid === ultimoServidorConsultado) return;
+    ultimoServidorConsultado = sid;
     let vivo = true;
     getConfig()
       .then((c) => { if (vivo) terminalCapaz = c.somente_leitura.terminal_panel !== false; })

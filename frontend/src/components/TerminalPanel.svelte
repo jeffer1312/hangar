@@ -1,6 +1,6 @@
 <script lang="ts">
   import { TermSocket, termUrl } from '../lib/term';
-  import { openShell } from '../lib/api';
+  import { openShell, openNativeTerminal } from '../lib/api';
 
   interface Props { sessionName: string; connKey: string; open: boolean; onClose: () => void; }
   let { sessionName, connKey, open, onClose }: Props = $props();
@@ -34,6 +34,33 @@
   let fitShell: any = null;
   let roShell: ResizeObserver | null = null;
 
+  // ── Terminal nativo (item da v1, pedido explicito do dono do plano) ────────────────────────────
+  // Aviso do 503 (sem emulador no PATH, ou o emulador morreu logo apos abrir): SOBREVIVE ao fechar
+  // do painel de proposito -- o painel fecha ANTES do POST sair (ver abrirTerminalNativo), entao
+  // qualquer erro so chega DEPOIS que a `<section>` (que so existe com `open`) ja sumiu do DOM. Por
+  // isso este aviso mora FORA do bloco `{#if open}` no template. Sem toast global no app (nao existe
+  // um; `window.alert()` foi descartado -- ver o comentario de EnginesSettings.svelte sobre nao usar
+  // dialogo nativo, quebra o tema), entao e um aviso local mesmo, auto-some.
+  let nativeErro = $state<string | null>(null);
+  let nativeErroTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // Alvo do terminal nativo = a aba ATIVA no momento do clique (attach ou shell), o mesmo tmux
+  // session name que o painel embutido estaria usando ali. Fecha o painel ANTES de pedir a janela:
+  // e a regra que evita dois clientes (o xterm embutido + a janela nativa) com tamanhos diferentes
+  // brigando pelo `window-size=latest` da MESMA sessao tmux (mesmo motivo do comentario em
+  // termsock.py sobre "um painel por sessao").
+  function abrirTerminalNativo() {
+    const alvo = abaAtiva === 'attach' ? sessionName : (shellNome ?? sessionName);
+    onClose();
+    openNativeTerminal(alvo).catch((e) => {
+      clearTimeout(nativeErroTimer);
+      // Mensagem do backend (503 = sem emulador no PATH, ou o emulador morreu logo apos abrir) --
+      // mostrada como veio, nao engolida.
+      nativeErro = e instanceof Error ? e.message : 'falha ao abrir o terminal nativo';
+      nativeErroTimer = setTimeout(() => { nativeErro = null; }, 8000);
+    });
+  }
+
   // Fecha (o X) reseta o maximizado: sem isto o painel reabria maximizado por acidente, herdando
   // estado da vez anterior.
   $effect(() => { if (!open) maximizado = false; });
@@ -48,6 +75,11 @@
     shellVisitada = false;
     shellNome = null;
     shellErro = null;
+    // Sem isto, trocar de sessao com o POST /shell ainda em voo deixava a sessao NOVA nascendo com
+    // shellCarregando===true pra sempre (o `finally` do abrirAbaShell so zera se `alvo===sessionName`,
+    // e a sessao mudou). Sem consequencia visivel hoje (nada le isto antes do 1o clique), mas e
+    // estado mentindo.
+    shellCarregando = false;
   });
 
   // UX de troca de aba: joga o foco pro terminal que ficou visivel, senao o usuario precisa clicar
@@ -169,6 +201,11 @@
 
       ro = new ResizeObserver(() => { fit?.fit(); sock?.resize(term.cols, term.rows); });
       ro.observe(host);
+      // I3: o $effect por `abaAtiva` sozinho erra a ESTREIA desta aba -- no primeiro clique em
+      // "Shell", `abaAtiva` muda ANTES do POST /shell sair, `term` ainda e null ali, e quando o
+      // terminal enfim monta (agora) o efeito ja rodou e nao roda de novo. Foca aqui tambem, so se
+      // esta aba seguir sendo a visivel no instante em que o mount terminou.
+      if (abaAtiva === 'attach') term.focus();
     })();
 
     return () => {
@@ -198,6 +235,11 @@
       // Mensagem do backend (409 = colisao de nome, 404/500 = tmux recusou) -- mostrada como veio,
       // nao engolida.
       shellErro = e instanceof Error ? e.message : 'falha ao abrir o shell';
+      // Destrava o clique seguinte: um erro TRANSITORIO (409 na janela de corrida com um `tmux
+      // new-session` do proprio usuario, 500 do tmux, rede) nao pode deixar a aba morta ate fechar
+      // e reabrir o painel inteiro -- sem isto o gesto natural (clicar em "Shell" de novo) caia no
+      // guard do topo desta funcao e nao fazia nada.
+      shellVisitada = false;
     } finally {
       if (alvo === sessionName) shellCarregando = false;
     }
@@ -236,6 +278,8 @@
 
       roShell = new ResizeObserver(() => { fitShell?.fit(); sockShell?.resize(termShell.cols, termShell.rows); });
       roShell.observe(hostShell);
+      // Mesmo motivo do efeito do attach acima: a estreia desta aba so foca aqui.
+      if (abaAtiva === 'shell') termShell.focus();
     })();
 
     return () => {
@@ -279,6 +323,8 @@
           desconectado · reconectar
         </button>
       {/if}
+      <button onclick={abrirTerminalNativo} aria-label="Abrir terminal nativo"
+              title="Abrir janela do terminal do sistema, já anexada (fecha este painel)">↗</button>
       <button onclick={toggleMax} aria-label="Maximizar">⤢</button>
       <button onclick={onClose} aria-label="Fechar">✕</button>
     </header>
@@ -297,6 +343,15 @@
       {/if}
     </div>
   </section>
+{/if}
+
+{#if nativeErro}
+  <!-- FORA do `{#if open}` de proposito: abrirTerminalNativo fecha o painel ANTES do POST sair, entao
+       um erro so chega depois que a `<section>` acima ja sumiu do DOM. -->
+  <div class="tp-native-erro" role="alert">
+    <p>{nativeErro}</p>
+    <button onclick={() => { clearTimeout(nativeErroTimer); nativeErro = null; }} aria-label="Fechar aviso">✕</button>
+  </div>
 {/if}
 
 <style>
@@ -323,4 +378,17 @@
   .tp-status { display: flex; align-items: center; justify-content: center; }
   .tp-msg { margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
   .tp-erro { margin: 0; padding: 0 var(--space-4); font-size: var(--text-sm); color: var(--error); text-align: center; }
+  /* Flutua fora do painel (que pode estar fechado quando isto aparece) -- superficie propria porque
+     nao ha painel de vidro por baixo pra herdar (regra de vidro: --surface-raised, nao --bg-elevated). */
+  .tp-native-erro {
+    position: fixed; right: var(--space-4); bottom: var(--space-4); z-index: 50;
+    display: flex; align-items: center; gap: var(--space-3); max-width: 360px;
+    padding: var(--space-3) var(--space-3); border-radius: var(--radius-md);
+    border: 1px solid var(--border-subtle); background: var(--surface-raised);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.24);
+  }
+  .tp-native-erro p { margin: 0; font-size: var(--text-sm); color: var(--text-primary); }
+  .tp-native-erro button {
+    flex-shrink: 0; border: none; background: transparent; color: var(--text-muted); cursor: pointer;
+  }
 </style>
