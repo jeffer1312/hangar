@@ -430,12 +430,13 @@
     .tp-resize-handle:hover { background: var(--accent-dim); }
   }
   .tp.max .tp-resize-handle { display: none; }
-  /* transparent de proposito: quem carrega o material e o conteiner (regra de vidro do CLAUDE.md). */
-  .tp-bar { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2); background: transparent; }
-  /* Maximizado o chat fica ESCONDIDO atras (DesktopShell.svelte esconde .desktop-main via
-     onMaximizar), entao nao ha texto de chat pra vazar por baixo dos rotulos -- o mesmo veu do
-     encaixado (--glass-panel) fica certo aqui tambem, papel de parede incluso. */
-  .tp.max .tp-bar { background: var(--glass-panel); }
+  /* MESMO veu do .tp-screen, nao `transparent`: a barra e o corpo do terminal sao a MESMA superficie,
+     e o usuario le diferenca de material como "isto e outro painel". Com `transparent` a barra
+     mostrava o papel de parede em brilho cheio enquanto o corpo logo abaixo estava sob o veu -- a
+     faixa parecia uma segunda sessao colada em cima. Vale nos dois estados (encaixado e maximizado):
+     maximizado o chat esta escondido atras (onMaximizar -> DesktopShell), entao nao ha texto pra
+     vazar por baixo dos rotulos e o veu continua sendo o certo. */
+  .tp-bar { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2); background: var(--glass-panel); }
   .tp-abas { display: flex; gap: var(--space-1); flex: 1; min-width: 0; }
   .tp-aba {
     padding: 2px var(--space-2); border-radius: var(--radius-sm); border: 1px solid transparent;
@@ -454,12 +455,10 @@
      320px de largura inteira se le como PAREDE -- com papel de parede ligado, a foto atravessa o
      chat todo e para no terminal. O fundo do xterm e rgba(0,0,0,0) de proposito (ver CLAUDE.md), e
      quem pinta e este bloco: seguindo o painel, o terminal entra no mesmo vidro do resto. */
+  /* Maximizado usa o MESMO veu: o chat esta escondido atras (onMaximizar -> DesktopShell esconde
+     .desktop-main com visibility:hidden), entao nao ha texto pra vazar e nao existe motivo pra um
+     fundo diferente. Por isso nao ha regra `.tp.max .tp-screen` -- a de cima ja vale nos dois. */
   .tp-screen { position: absolute; inset: 0; background: var(--glass-panel); }
-  /* Maximizado o chat esta ESCONDIDO atras (onMaximizar avisa o DesktopShell, que esconde
-     .desktop-main com visibility:hidden), entao nao ha texto de chat pra vazar por baixo -- so
-     falta o papel de parede, e o mesmo veu do encaixado (--glass-panel) deixa ele atravessar aqui
-     tambem. */
-  .tp.max .tp-screen { background: var(--glass-panel); }
   .tp-screen.hidden { visibility: hidden; }
   /* A folha da biblioteca (node_modules/@xterm/xterm/css/xterm.css:95) pinta ".xterm-viewport" com
      "background-color: #000" chapado -- comentario original: "On OS X this is required in order for
