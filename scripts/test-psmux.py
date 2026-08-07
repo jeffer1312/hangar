@@ -190,10 +190,15 @@ if nossa6:
           f"recebido: {c!r}")
     # A marca em si e um EXTRA: sem ela o shell do botao `+` vira card na lista (chato), mas o app
     # inteiro continua de pe. Por isso e print, nao check.
-    print(f"  --  6o campo = {c[5]!r} " + ("(marca lida -> shell escondido funciona)"
-                                           if len(c) > 5 and c[5] == "1" else
-                                           "(marca NAO lida -> o shell escondido apareceria "
-                                           "como card; o resto do app segue normal)"))
+    # `c[5] if len(c) > 5 else ...` e NAO um `c[5]` guardado depois: a f-string e avaliada ANTES da
+    # condicao, entao a versao anterior estourava IndexError justo no caso que esta secao existe pra
+    # diagnosticar (multiplexador que devolve 5 campos, sem interpolar a opcao de usuario) -- a
+    # sonda morria sem resumo, sem exit code e sem rodar as secoes seguintes.
+    sexto = c[5] if len(c) > 5 else "(ausente)"
+    print(f"  --  6o campo = {sexto!r} " + ("(marca lida -> shell escondido funciona)"
+                                            if sexto == "1" else
+                                            "(marca NAO lida -> o shell escondido apareceria "
+                                            "como card; o resto do app segue normal)"))
 run(["set-option", "-t", alvo, "-u", "@cp_hidden"])
 
 # ── 5. pane_pid ─────────────────────────────────────────────────────────────

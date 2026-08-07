@@ -1196,24 +1196,29 @@
     }
   }
 
-  // Recusa do backend ao responder uma opção. O caso comum é o 409 do painel de terminal aberto
-  // ("Terminal aberto nesta sessao..."): antes o catch só fazia console.error e tocar o botão não
-  // fazia ABSOLUTAMENTE NADA, em silêncio — o backend recusava e a tela ficava igual. `err.message`
-  // já vem limpo (o `detail` do FastAPI, api.ts:errorDetail), então mostra o texto do servidor:
-  // ele explica o motivo E a saída ("Feche o painel pra responder por aqui"). Some sozinho depois
-  // de 8s, ou no toque — não é estado, é aviso.
-  let selectErr = $state('');
-  let selectErrTimer: ReturnType<typeof setTimeout> | undefined;
+  // Recusa do backend ao responder (opção pelo picker ou pergunta pelo stepper). O caso comum é o
+  // 409 do painel de terminal aberto ("Terminal aberto nesta sessao..."): antes o catch só fazia
+  // console.error e tocar o botão não fazia ABSOLUTAMENTE NADA, em silêncio — o backend recusava e
+  // a tela ficava igual. `err.message` já vem limpo (o `detail` do FastAPI, api.ts:errorDetail),
+  // então mostra o texto do servidor: ele explica o motivo E a saída ("Feche o painel pra responder
+  // por aqui"). Some sozinho depois de 8s, ou no toque — não é estado, é aviso.
+  let avisoErr = $state('');
+  let avisoErrTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function mostrarAviso(err: unknown) {
+    clearTimeout(avisoErrTimer);
+    avisoErr = err instanceof Error ? err.message : 'não deu pra enviar a resposta';
+    avisoErrTimer = setTimeout(() => (avisoErr = ''), 8000);
+  }
 
   async function handleSelect(option: number) {
-    clearTimeout(selectErrTimer);
-    selectErr = '';
+    clearTimeout(avisoErrTimer);
+    avisoErr = '';
     try {
       await selectOption(sessionName, option);
     } catch (err) {
       console.error('selectOption error:', err);
-      selectErr = err instanceof Error ? err.message : 'não deu pra enviar a opção';
-      selectErrTimer = setTimeout(() => (selectErr = ''), 8000);
+      mostrarAviso(err);
     }
   }
 
@@ -1233,7 +1238,7 @@
     }
   }
 
-  // 409 (mismatch de verificação) ou erro inesperado -> cai no espelho TUI p/ finalizar manual
+  // 409 (mismatch de verificação, ou painel de terminal aberto) ou erro inesperado.
   async function handleAnswer(answers: AnswerItem[]) {
     try {
       await answerQuestions(sessionName, answers);
@@ -1242,10 +1247,18 @@
       // pendente + askOpen false).
       if (askPiId) { askPiDismissed = askPiId; askPiId = null; }
       askOpen = false;
-    } catch {
+    } catch (err) {
       if (askPiId) { askPiDismissed = askPiId; askPiId = null; }
       askOpen = false;
-      openMirror();
+      // O `/answer` TAMBÉM é guardado pelo 409 do painel de terminal (api.py, _recusa_se_painel_
+      // aberto). Antes o catch dispensava a pergunta e abria o espelho calado: o usuário perdia o
+      // stepper e não ficava sabendo por quê. Mostra o texto do servidor — ele explica a saída.
+      mostrarAviso(err);
+      // Espelho só quando NÃO é 409: o 409 é recusa deliberada (nada foi digitado no pane) e o
+      // espelho é um ModalDialog que cobriria justamente o aviso que diz o que fazer. Nos demais
+      // erros o estado é incerto e o espelho continua sendo a saída pra finalizar na mão — como
+      // ele tapa a pílula, o aviso segue lá quando o usuário fechar (dentro dos 8s).
+      if ((err as { status?: number })?.status !== 409) openMirror();
     }
   }
 </script>
@@ -1377,11 +1390,12 @@
     </button>
   {/if}
 
-  {#if selectErr}
-    <!-- Recusa ao responder a opção (409 do painel de terminal, sessão morta, tmux travado). No
-         centro, acima do dock — é sobre o toque que acabou de acontecer, tem que estar no olho. -->
-    <button class="select-err" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} onclick={() => { clearTimeout(selectErrTimer); selectErr = ''; }}>
-      {selectErr}
+  {#if avisoErr}
+    <!-- Recusa ao responder — opção do picker ou pergunta do stepper (409 do painel de terminal,
+         sessão morta, tmux travado). No centro, acima do dock — é sobre o toque que acabou de
+         acontecer, tem que estar no olho. -->
+    <button class="aviso-err" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} onclick={() => { clearTimeout(avisoErrTimer); avisoErr = ''; }}>
+      {avisoErr}
     </button>
   {/if}
 
@@ -1770,11 +1784,11 @@
   }
   .hist-pill:active { background: var(--bg-hover); }
 
-  /* Recusa ao responder uma opção: mesma família das pílulas acima, centrada como o tui-pill (é
+  /* Recusa ao responder (opção ou pergunta): mesma família das pílulas acima, centrada como o tui-pill (é
      sobre o toque que acabou de acontecer) e em tom de aviso. `--surface-raised` e não
      `--bg-elevated` cru: com papel de parede ligado, superfície dentro do app acompanha o véu de
      transparência em vez de virar retângulo chapado (regra de vidro do CLAUDE.md). */
-  .select-err {
+  .aviso-err {
     position: absolute;
     left: 50%;
     transform: translateX(-50%);
@@ -1790,7 +1804,7 @@
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
     -webkit-tap-highlight-color: transparent;
   }
-  .select-err:active { background: var(--bg-hover); }
+  .aviso-err:active { background: var(--bg-hover); }
 
   /* Dead state footer */
   .dead-footer {

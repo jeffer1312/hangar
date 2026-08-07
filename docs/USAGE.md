@@ -247,12 +247,18 @@ não tem).
   tamanho dele, e quem conta linhas na tela escolheria a opção errada. Feche o painel e responda.
 - **Aba `+` (shell).** Ao lado da aba do agente, abre um **shell separado** no mesmo diretório da
   sessão — pra rodar `git`, `ls`, o que for, sem atrapalhar o agente. Ele é uma sessão tmux
-  escondida (`term-<nome>`): não vira card na lista, no board nem no canvas, e é encerrada junto com
-  a sessão do agente (encerrar pelo app, ou renomear a sessão, leva o shell junto).
+  escondida (`term-<nome>`): não vira card na lista, no board nem no canvas. Encerrar a sessão do
+  agente pelo app encerra o shell junto; **renomear** a sessão renomeia o shell junto — o que estiver
+  rodando nele (um `npm run dev`) continua rodando, no mesmo diretório. Só se o nome de destino já
+  estiver ocupado por um shell antigo é que o seu é encerrado, pra não virar sessão órfã.
 - **Terminal nativo.** O botão de janela abre a MESMA sessão tmux numa janela de verdade do seu
-  sistema (`tmux attach`), e fecha o painel embutido — os dois anexados brigariam pelo tamanho. Essa
-  janela não depende do backend: fechar o painel ou reiniciar o serviço não a desanexa. Sem emulador
-  conhecido no PATH ele diz isso; pra escolher qual usar, `CP_TERMINAL` (tabela da seção 2).
+  sistema (`tmux attach`), e fecha o painel embutido — os dois anexados brigariam pelo tamanho.
+  Fechar o painel não desanexa essa janela. **Reiniciar o serviço do backend, porém, só é inofensivo
+  quando o `systemd-run --user --scope` funciona nesta máquina** — é ele que põe o emulador num cgroup
+  próprio. Quando o systemd do usuário recusa criar scope transiente (acontece; o backend loga
+  `systemd-run --user --scope indisponivel` ao criar a primeira sessão), a janela nasce no cgroup do serviço e
+  um `systemctl --user restart` a derruba junto. Sem emulador conhecido no PATH ele diz isso; pra
+  escolher qual usar, `CP_TERMINAL` (tabela da seção 2).
 
 ### Git
 

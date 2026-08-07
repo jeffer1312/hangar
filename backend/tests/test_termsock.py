@@ -525,18 +525,46 @@ def test_shell_escondido_orfa_nao_reata_no_cwd_errado(sessao, tmp_path):
 def test_rename_leva_o_shell_escondido_junto(sessao):
     """L71 da revisao final: o shell e keyed por NOME. Sem isto, renomear o agente deixava
     `term-<velho>` vivo pra sempre -- invisivel no app (marcado @cp_hidden) e fora do alcance do
-    `kill()`, que so procura `term-<novo>`."""
+    `kill()`, que so procura `term-<novo>`. Ramo FELIZ: o shell e RENOMEADO, nao morto -- o que
+    estivesse rodando nele (um `npm run dev`) sobrevive, e o cwd nao muda com o rename."""
     from app import tmux as tmux_mod
     from app.registry import SessionRegistry
     assert tmux_mod.new_hidden_shell(sessao, "/tmp") == f"term-{sessao}"
+    antes = _id_da_sessao(f"term-{sessao}")
     novo = f"{sessao}-renomeada"
     try:
         assert tmux_mod.rename_session(sessao, novo) is True
         SessionRegistry().rename(sessao, novo)
         assert not tmux_mod.has_session(f"term-{sessao}")
+        # MESMA sessao (o `$N` sobrevive ao rename; um kill+recria o mudaria), ainda marcada e no
+        # mesmo diretorio -- e agora alcancavel pelo kill() do nome novo.
+        assert _id_da_sessao(f"term-{novo}") == antes
+        assert tmux_mod.is_hidden(f"term-{novo}")
+        caminho = subprocess.run(["tmux", "display", "-p", "-t", f"=term-{novo}:",
+                                  "#{session_path}"], capture_output=True, text=True).stdout.strip()
+        assert caminho == "/tmp"
     finally:
         # A sessao mudou de nome -> o teardown do fixture (que mira o nome antigo) nao a alcanca.
         subprocess.run(["tmux", "kill-session", "-t", f"={novo}"], capture_output=True)
+        subprocess.run(["tmux", "kill-session", "-t", f"=term-{novo}"], capture_output=True)
+
+
+def test_rename_mata_o_shell_quando_o_nome_novo_ja_esta_ocupado(sessao):
+    """Ramo de FALLBACK do mesmo bloco: `term-<novo>` ja existe (shell de uma vida anterior daquele
+    nome), o `rename-session` falha -- e deixar o velho vivo devolveria o orfa que o bloco existe
+    pra evitar. Entao mata."""
+    from app import tmux as tmux_mod
+    from app.registry import SessionRegistry
+    novo = f"{sessao}-renomeada"
+    assert tmux_mod.new_hidden_shell(sessao, "/tmp") == f"term-{sessao}"
+    ocupante = tmux_mod.new_hidden_shell(novo, "/tmp")   # ocupa `term-<novo>` de proposito
+    assert ocupante == f"term-{novo}"
+    ocupante_id = _id_da_sessao(ocupante)
+    try:
+        SessionRegistry().rename(sessao, novo)
+        assert not tmux_mod.has_session(f"term-{sessao}")   # o velho saiu
+        assert _id_da_sessao(f"term-{novo}") == ocupante_id  # e o ocupante NAO foi tocado
+    finally:
         subprocess.run(["tmux", "kill-session", "-t", f"=term-{novo}"], capture_output=True)
 
 

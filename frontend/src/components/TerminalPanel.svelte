@@ -392,7 +392,13 @@
      visivel e escolhida por `visibility`, nao `display:none` -- display:none zeraria a caixa e o
      ResizeObserver/fit() da aba escondida mediriam 0x0 na proxima vez que ficasse visivel. */
   .tp-screens { flex: 1; min-height: 0; position: relative; }
-  .tp-screen { position: absolute; inset: 0; background: var(--surface-inset); }
+  /* `--glass-panel` (o veu do slider TRANSPARENCIA) e nao `--surface-inset` (o slider "Solidez das
+     caixas"), divergindo de proposito da regra "area de texto usa --surface-inset": o que muda a
+     leitura aqui e o TAMANHO. 87% numa caixinha de campo de texto se le como caixa; numa faixa de
+     320px de largura inteira se le como PAREDE -- com papel de parede ligado, a foto atravessa o
+     chat todo e para no terminal. O fundo do xterm e rgba(0,0,0,0) de proposito (ver CLAUDE.md), e
+     quem pinta e este bloco: seguindo o painel, o terminal entra no mesmo vidro do resto. */
+  .tp-screen { position: absolute; inset: 0; background: var(--glass-panel); }
   .tp-screen.hidden { visibility: hidden; }
   .tp-status { display: flex; align-items: center; justify-content: center; }
   .tp-msg { margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
