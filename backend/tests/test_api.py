@@ -198,6 +198,40 @@ def test_input_pi_partial_nao_deixa_entrada_orfa_pendente(api_client, tmp_path, 
     assert len(rows) == 1 and rows[0]["delivered"] is True, "fechada, nao fica pendente pro drain"
 
 
+def test_input_partial_com_composer_limpo_diz_que_pode_reenviar(api_client, tmp_path, monkeypatch):
+    """A mensagem do 'partial' tem que casar com o que _partial() de fato fez no composer: limpou ->
+    dizer que limpou e que pode reenviar, nunca mandar conferir um terminal que ja esta vazio."""
+    from app import pqueue, terminal_input
+    monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
+
+    def fake_send_prompt(name, text, provider="claude", pane_id=None, msg_id=None):
+        terminal_input._ULTIMA_LIMPEZA.limpou = True   # o que _partial() teria deixado
+        return "partial"
+
+    with patch("app.api.terminal.send_prompt", side_effect=fake_send_prompt):
+        r = api_client.post("/api/sessions/cc/input", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 400
+    assert "limpo" in r.json()["detail"] and "reenviar" in r.json()["detail"]
+    assert not hasattr(terminal_input._ULTIMA_LIMPEZA, "limpou"), "a flag tem que ser apagada apos a leitura"
+
+
+def test_input_partial_sem_composer_limpo_manda_conferir_terminal(api_client, tmp_path, monkeypatch):
+    """Sem confirmacao de limpeza (nao limpou, ou a chamada nem passou por _partial), a mensagem
+    conservadora de sempre continua valendo: o residuo pode estar mesmo a vista."""
+    from app import pqueue, terminal_input
+    monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
+
+    def fake_send_prompt(name, text, provider="claude", pane_id=None, msg_id=None):
+        terminal_input._ULTIMA_LIMPEZA.limpou = False
+        return "partial"
+
+    with patch("app.api.terminal.send_prompt", side_effect=fake_send_prompt):
+        r = api_client.post("/api/sessions/cc/input", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 400
+    assert "Confira o terminal" in r.json()["detail"]
+    assert not hasattr(terminal_input._ULTIMA_LIMPEZA, "limpou")
+
+
 def test_input_pi_slash_command_nao_cria_entrada_antecipada(api_client, tmp_path, monkeypatch):
     """Slash-command nunca entra na fila (nem pra Pi COM linha) -- sem entrada, send_prompt e
     chamado sem msg_id, exatamente como o caminho de sempre."""

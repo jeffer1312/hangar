@@ -558,14 +558,55 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
             # upgrade: render distinto / re-drain confirmado-por-transcript se virar reclamacao real.
             return sent
         if result == "partial":
-            # Texto ficou pela metade no composer e o Enter NAO foi enviado (fatiamento do Windows).
-            # NAO reverte pra delivered=False: o drain reentraria e digitaria o texto inteiro EM CIMA do
-            # residuo (nada limpa a linha entre tentativas) — concatenacao, pior que a perda. Fica
-            # delivered=True e PARA, com log de erro: a bubble segue visivel no app (o display ignora
-            # delivered) e o residuo esta a vista no terminal, entao o usuario ve as duas metades e
-            # decide. Silencio aqui era o furo do `except Exception` cego acima.
-            _log.error("drain name=%s: envio PARCIAL da entrada %s — parado, sem retry automatico "
-                       "(texto pela metade no composer)", name, entry.get("id"))
+            # O texto ficou pela metade no composer e o Enter NAO foi enviado. Ate 07/08/2026 isto
+            # PARAVA sem retry porque nada limpava a linha entre tentativas: reenfileirar digitaria o
+            # texto inteiro EM CIMA do residuo (concatenacao, pior que a perda). Agora `_partial`
+            # limpa e diz se conseguiu (via `_ULTIMA_LIMPEZA`, por THREAD — send_prompt roda nesta
+            # MESMA chamada) — limpeza CONFIRMADA e a unica coisa que autoriza o requeue.
+            limpou = getattr(_ULTIMA_LIMPEZA, "limpou", False)
+            if hasattr(_ULTIMA_LIMPEZA, "limpou"):
+                del _ULTIMA_LIMPEZA.limpou
+            try:
+                tentativas = q.bump_attempts(entry["id"]) if limpou else 0
+                # `1 <= tentativas`, nao so `<= _PARTIAL_MAX_TENTATIVAS`: bump_attempts devolve 0 quando
+                # a entrada sumiu entre o claim e aqui (ex.: um /clear esvaziou a fila no meio do
+                # caminho) — sem o piso, 0 <= 2 passava, set_delivered virava no-op (a entrada nao
+                # existe mais) e o log abaixo afirmava um reenfileiramento que nao aconteceu.
+                if limpou and 1 <= tentativas <= _PARTIAL_MAX_TENTATIVAS:
+                    q.set_delivered(entry["id"], False)
+                    _log.warning("drain name=%s: envio PARCIAL da entrada %s — composer limpo, "
+                                 "reenfileirado (tentativa %d/%d)", name, entry.get("id"),
+                                 tentativas, _PARTIAL_MAX_TENTATIVAS)
+                else:
+                    # Fica delivered=True e PARA — tres motivos possiveis, cada um com o que sobra pro
+                    # usuario ver DIFERENTE (item 5 da revisao final: o comentario antigo cobria so os
+                    # dois primeiros com uma frase so, e a frase era falsa no segundo):
+                    #  - nao limpou: o residuo esta a vista no terminal, o usuario ve as duas metades e decide;
+                    #  - estourou o teto de tentativas: o composer foi limpo TAMBEM desta vez — nao sobra
+                    #    residuo nenhum pra ver, so a bubble no app avisando que parou;
+                    #  - a entrada sumiu da fila entre o claim e aqui (poda/`/clear` concorrente): nao ha
+                    #    mais entrada pra marcar nem residuo NOSSO garantido (o clear pode ter mudado o
+                    #    proprio composer) — so registra, sem afirmar nenhum dos dois casos acima.
+                    if not limpou:
+                        motivo, diag = "composer NAO limpo", "o residuo fica a vista no terminal"
+                    elif tentativas == 0:
+                        motivo, diag = ("entrada sumiu da fila antes do requeue (poda/`/clear` "
+                                        "concorrente)", "sem entrada e sem residuo garantido")
+                    else:
+                        motivo, diag = "teto de tentativas", "composer JA limpo, nao sobra residuo pra ver"
+                    _log.error("drain name=%s: envio PARCIAL da entrada %s — parado, sem retry "
+                               "automatico (%s — %s)", name, entry.get("id"), motivo, diag)
+            except OSError:
+                # Mesma assimetria que o ramo "deferred" logo abaixo ja fecha pro dele: drain roda
+                # fire-and-forget (chamado por tick do loop autonomo, hook de transicao, reconexao de
+                # SSE) e uma excecao daqui subiria pro CALLER — 500 no POST /loop (api.py) ou o tick do
+                # loop quebrando no meio, nenhum dos dois com guarda pra isto. Aqui LOGA em vez de so
+                # `pass`: o vizinho pode calar porque a bubble queued- visivel basta como garantia; aqui
+                # nao ha bubble nenhuma nova pra avisar o usuario, entao o log e a UNICA pista de que o
+                # requeue (ou a desistencia) de um envio parcial nao aconteceu por causa do disco.
+                _log.exception("drain name=%s: falha de disco ao (re)registrar a entrada %s apos "
+                               "envio PARCIAL — nem reenfileirada nem fechada, fica como estava",
+                               name, entry.get("id"))
             return sent
         if result == "deferred":
             # Reverte pra retry e para — espera o proximo idle. No caminho de TECLA isto e
@@ -801,6 +842,84 @@ def answer_question_pi(name: str, answer: dict, question: dict) -> None:
         raise DriveError("picker do Pi ainda aberto apos o Enter — nada foi submetido")
 
 
+# Teto de teclas na limpeza. C-u apaga UMA linha do composer (medido 07/08/2026: um bloco de 4
+# linhas precisou de 6 envios; uma colagem colapsada em "[Pasted text #N]" sai com um so). O teto
+# existe porque nem toda TUI honra C-u — num pane de shell ele volta rc=0 sem apagar nada, e sem
+# teto isto viraria laco infinito no executor de envio.
+_LIMPEZA_MAX_TECLAS = 12
+
+# Teto de requeues de um envio parcial: ate 2 (ou seja ate 3 envios reais: o original + 2 requeues).
+# Mesmo teto efetivo do reconcile (pqueue.reconcile_delivered, max_attempts=2) — os dois permitem
+# exatamente 2 requeues, apesar de comparacoes DIFERENTES. Parcial compara POS-incremento
+# (`bump_attempts` incrementa e devolve o novo valor), reconcile compara PRE-incremento (`attempts
+# >= max_attempts` em pqueue.py:341 antes de somar). A diferenca de contagem cancela a diferenca de
+# comparacao: mesmo teto. Unica divergencia real e o numero gravado POS-desistencia (3 no parcial,
+# 2 no reconcile) — residuo de contabilidade, nao teto.
+#
+# Os dois leem/escrevem o MESMO campo `attempts` da entrada — nao sao contadores independentes.
+# Consequencia real: uma entrada que gastou os 2 requeues do PARCIAL (attempts chegou a 2) e so
+# DEPOIS conseguiu um envio de verdade (delivered=True) nunca mais e reconciliada — reconcile_delivered
+# le `attempts>=2` de cara na primeira checagem, sem ter requeuado nenhuma vez por conta propria,
+# e desiste na hora (confirmed=True) sem re-tentar. Comportamento aceito (quem for mexer nos dois
+# tetos de novo precisa lembrar que estao no MESMO campo).
+_PARTIAL_MAX_TENTATIVAS = 2
+
+# Resultado da ULTIMA limpeza, lido pelo `drain` (mesma chamada, logo apos o send_prompt que
+# devolveu "partial") pra decidir se pode reenfileirar. POR THREAD, nao por sessao: o `_send_lock`
+# que protege a escrita (dentro de send_prompt) e por NOME e e solto assim que send_prompt retorna
+# — ANTES do drain ler este valor. api.py:1314 documenta que POST /input e drain podem correr
+# concorrentes pra MESMA sessao, entao um dict chaveado por nome tinha corrida real: thread A sai de
+# send_prompt com "partial", thread B (outro envio pra mesma sessao) entra, tambem da partial e
+# sobrescreve a chave antes de A ler — A reenfileiraria uma limpeza que nao foi a dela (residuo por
+# baixo do requeue, o mesmo bug que isto existe pra matar). threading.local fecha isso: drain sempre
+# chama send_prompt na MESMA thread, sincronamente, entao so ela ve o que ela mesma escreveu.
+_ULTIMA_LIMPEZA = threading.local()
+
+
+def _limpar_composer(name: str, texto: str, pastes_antes: set[str] | None) -> bool:
+    """Tira do composer o texto que NOS digitamos e nao conseguimos submeter.
+
+    True = havia residuo NOSSO e ele saiu (confirmado por leitura). False = nao havia, nao era
+    nosso, ou nao saiu.
+
+    Existe porque devolver "partial" deixando o texto la faz o reenvio digitar por cima: um Enter
+    depois submete as duas copias grudadas — foi o "ne?e eu testei" de 07/08/2026.
+
+    Duas regras que NAO podem ser afrouxadas:
+      1. so age com `is True` — `_composer_residuo` e TRI-ESTADO e `None` quer dizer "nao da pra
+         saber" (pane ilegivel, ou texto com menos de _RESIDUO_MIN caracteres sem espaco). Tratar
+         None como "esta limpo" devolveria True sem ter limpado, e o requeue reenviaria em cima do
+         residuo — exatamente a concatenacao que isto vem matar;
+      2. so limpa o que e NOSSO — o dono pode ter digitado no terminal na janela em que o envio
+         falhou, e apagar a frase dele e pior que a duplicata.
+
+    Limitacao assumida: mensagem curta (< _RESIDUO_MIN caracteres sem espaco) nunca e reconhecida,
+    entao nunca e limpa. Ali o comportamento continua o de hoje.
+    """
+    if _composer_residuo(_capture(name), texto, name, pastes_antes) is not True:
+        return False
+    for _ in range(_LIMPEZA_MAX_TECLAS):
+        send_keys(name, "C-u")
+        if _composer_residuo(_capture(name), texto, name, pastes_antes) is False:
+            return True                          # False = "olhei e nao esta la". None NAO serve.
+    _log.warning("composer de %r nao limpou apos %d x C-u — o texto parcial ficou la; um reenvio "
+                 "vai digitar por cima", name, _LIMPEZA_MAX_TECLAS)
+    return False
+
+
+def _partial(name: str, motivo: str, texto: str, pastes_antes: set[str] | None = None) -> str:
+    """Unico ponto que devolve "partial": loga com o diagnostico do composer, limpa e registra se a
+    limpeza pegou (o `drain` le isso pra decidir entre reenfileirar e parar).
+
+    Uma funcao so para os seis sites porque o conserto e o mesmo em todos — limpar em cada caller
+    daria seis chances de esquecer um, e foi assim que o residuo sobreviveu ate agora.
+    """
+    _log.error("envio PARCIAL name=%s: %s — %s", name, motivo,
+               _diag_composer(_capture(name), texto, name, pastes_antes))
+    _ULTIMA_LIMPEZA.limpou = _limpar_composer(name, texto, pastes_antes)
+    return "partial"
+
+
 class TerminalInput:
     def send_prompt(self, name: str, text: str, provider: str = "claude",
                     pane_id: str | None = None, msg_id: str | None = None) -> str:
@@ -905,10 +1024,9 @@ class TerminalInput:
                 # POSIX quando o paste-buffer falha e cai no mesmo fallback. Checar o retorno aqui
                 # tira essa decisao das maos da leitura de tela sempre que ha um sinal melhor.
                 if tmux.paste_text(name, text) is False:
-                    _log.error("envio PARCIAL name=%s: multi-linha PAROU no meio da digitacao "
-                               "(falha confirmada em tmux.paste_text) — Enter nao enviado — %s",
-                               name, _diag_composer(_capture(name), text, name, pastes_antes))
-                    return "partial"
+                    return _partial(name, "multi-linha PAROU no meio da digitacao (falha "
+                                    "confirmada em tmux.paste_text) — Enter nao enviado",
+                                    text, pastes_antes)
                 # Settle ANTES do Enter, como no ramo de uma linha. Ver _MULTILINE_SUBMIT_SETTLE:
                 # os 0.05 antigos eram menores que a ingestao MINIMA medida (0.08s) e o Enter
                 # submetia o texto pela metade.
@@ -916,10 +1034,10 @@ class TerminalInput:
                 if not _entrou_no_composer(name, text, pastes_antes):
                     # NAO aperta Enter: o texto nao chegou no composer, entao o Enter submeteria o que
                     # estivesse la (a primeira linha truncada, ou nada) como se fosse pedido do usuario.
-                    _log.error("envio PARCIAL name=%s: multi-linha NAO chegou no composer em %.1fs "
-                               "(o multiplexador aceitou e nao entregou) — Enter nao enviado — %s",
-                               name, _SUBMIT_CHECK_PRAZO, _diag_composer(_capture(name), text, name, pastes_antes))
-                    return "partial"
+                    return _partial(name,
+                                    f"multi-linha NAO chegou no composer em {_SUBMIT_CHECK_PRAZO:.1f}s "
+                                    "(o multiplexador aceitou e nao entregou) — Enter nao enviado",
+                                    text, pastes_antes)
                 send_keys(name, "Enter")
                 # CONFERE em vez de confiar no settle. Caso real medido: tres recados longos
                 # cross-server sairam com delivered=True e NUNCA viraram entrada no transcript do
@@ -927,10 +1045,10 @@ class TerminalInput:
                 # dono do outro lado so os achou lendo o sidecar. Um settle maior reduz a chance e nao
                 # detecta nada: o Enter correndo a ingestao devolve "sent" do mesmo jeito.
                 if not _submeteu(name, text, pastes_antes):
-                    _log.error("envio PARCIAL name=%s: multi-linha nao submeteu (a cauda do texto "
-                               "continua no composer apos %.1fs) — nao afirmando entrega — %s",
-                               name, _SUBMIT_CHECK_PRAZO, _diag_composer(_capture(name), text, name, pastes_antes))
-                    return "partial"
+                    return _partial(name,
+                                    f"multi-linha nao submeteu (a cauda do texto continua no "
+                                    f"composer apos {_SUBMIT_CHECK_PRAZO:.1f}s) — nao afirmando entrega",
+                                    text, pastes_antes)
             elif text.lstrip().startswith("/"):
                 # Slash command: ao digitar "/..." o Claude Code abre um menu de autocomplete. Sem dar
                 # tempo do menu renderizar, o Enter corre com o redraw e e ENGOLIDO pelo menu (o comando
@@ -959,13 +1077,9 @@ class TerminalInput:
                     # Envio parou no meio (só acontece no fatiamento do Windows — ver tmux._send_literal).
                     # NÃO manda Enter: submeter texto com buraco faria a sessão agir sobre um pedido que
                     # o usuário nunca escreveu. Devolve "partial" pro caller reportar em vez de afirmar
-                    # entrega. O texto parcial FICA visível no composer — nada aqui limpa a linha, e
-                    # limpar às cegas exigiria saber qual tecla zera o composer em cada TUI.
-                    # ponytail: sem limpeza automática; upgrade = medir a tecla de limpar (C-u/Esc) por
-                    # provider e zerar antes de devolver, pra um retry não digitar em cima do resíduo.
-                    _log.error("envio PARCIAL name=%s: texto ficou pela metade no input, Enter NAO enviado",
-                               name)
-                    return "partial"
+                    # entrega — via `_partial`, que agora também limpa o composer antes de devolver.
+                    return _partial(name, "texto ficou pela metade no input, Enter NAO enviado",
+                                    text, pastes_antes)
                 # Settle ANTES do Enter: sem isto o Enter corria a ingestao do texto e o claude (que
                 # detecta input rapido como paste) tratava o Enter como parte do conteudo -> o texto
                 # ficava no input SEM submeter (usuario tinha que reenviar). Espelha o gap multiline.
@@ -973,20 +1087,19 @@ class TerminalInput:
                 # reenviar Enter se o input nao limpou.
                 time.sleep(_SUBMIT_SETTLE)
                 if not _entrou_no_composer(name, text, pastes_antes):
-                    _log.error("envio PARCIAL name=%s: o texto NAO chegou no composer em %.1fs — "
-                               "Enter nao enviado — %s", name, _SUBMIT_CHECK_PRAZO,
-                               _diag_composer(_capture(name), text, name, pastes_antes))
-                    return "partial"
+                    return _partial(name,
+                                    f"o texto NAO chegou no composer em {_SUBMIT_CHECK_PRAZO:.1f}s "
+                                    "— Enter nao enviado", text, pastes_antes)
                 send_keys(name, "Enter")
                 # Mesma conferencia do ramo multi-linha: e o upgrade que o comentario acima ja anotava
                 # ("capturar o pane e reenviar Enter se o input nao limpou"). Aqui em vez de reenviar
                 # Enter as cegas a gente REPORTA — reenviar podia submeter texto que o usuario digitou
                 # no composer no meio do caminho.
                 if not _submeteu(name, text, pastes_antes):
-                    _log.error("envio PARCIAL name=%s: uma linha nao submeteu (texto continua no "
-                               "composer apos %.1fs) — nao afirmando entrega — %s", name, _SUBMIT_CHECK_PRAZO,
-                               _diag_composer(_capture(name), text, name, pastes_antes))
-                    return "partial"
+                    return _partial(name,
+                                    f"uma linha nao submeteu (texto continua no composer apos "
+                                    f"{_SUBMIT_CHECK_PRAZO:.1f}s) — nao afirmando entrega",
+                                    text, pastes_antes)
             return "sent"
 
     # Teclas de navegacao liberadas pro espelho do pane (TerminalMirror dirige overlays so-TUI:

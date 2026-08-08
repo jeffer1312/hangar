@@ -265,6 +265,22 @@ class PromptQueue:
                 return
             self._write_atomic(rows)
 
+    def bump_attempts(self, entry_id: str) -> int:
+        """Incrementa `attempts` de UMA entrada e devolve o novo total (0 = entrada nao existe).
+
+        Existe pro requeue do `drain` ter TETO: reverter delivered=False sem contar tentativa deixa
+        uma entrada que falha sempre girando pra sempre no executor de envio. Mesmo campo que o
+        reconcile ja usa (`reconcile_delivered`, max_attempts=2).
+        """
+        with _append_lock:
+            rows = self.load()
+            for r in rows:
+                if str(r.get("id")) == entry_id:
+                    r["attempts"] = int(r.get("attempts") or 0) + 1
+                    self._write_atomic(rows)
+                    return int(r["attempts"])
+        return 0
+
     def entry_delivered(self, entry_id: str) -> bool | None:
         """delivered? de UMA entrada por id. None = entrada nao existe (prunada/sumiu com /clear).
         Ancora do loop runner: so tica depois do goal constar entregue na TUI."""

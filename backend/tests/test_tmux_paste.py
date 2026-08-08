@@ -15,6 +15,10 @@ def _grava(monkeypatch, falha_paste: bool, trunca: bool = False):
         rc = 1 if (falha_paste and "paste-buffer" in args) else 0
         # show-buffer do probe: `trunca` devolve so o que vem ANTES do \n, como o psmux faz.
         out = ("A\n" if trunca else "A\nB\n") if "show-buffer" in args else ""
+        if kw.get("input") is not None:
+            # load-buffer -: sem text=True, RUN devolve SEMPRE bytes e _run decodifica — o espiao
+            # imita isso, senao o `.decode()` real quebraria contra um mock devolvendo str.
+            return subprocess.CompletedProcess(args, rc, stdout=out.encode(), stderr=b"")
         return subprocess.CompletedProcess(args, rc, stdout=out, stderr="")
 
     monkeypatch.setattr(tmux, "RUN", fake)
@@ -30,7 +34,7 @@ def test_linux_usa_paste_buffer_e_nao_cai_no_plano_b(monkeypatch):
     tmux.paste_text("s", "uma\nduas\ntres")
     verbos = [c[1] for c in chamadas
               if c[1] not in ("show-buffer", "delete-buffer", "list-panes")][1:]
-    assert verbos == ["set-buffer", "paste-buffer"]   # [1:] tira o set-buffer do probe
+    assert verbos == ["load-buffer", "paste-buffer"]   # [1:] tira o set-buffer do probe
 
 
 def test_sem_paste_buffer_manda_linha_a_linha_com_cj(monkeypatch):
