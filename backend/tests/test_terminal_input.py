@@ -853,3 +853,45 @@ def test_drain_desiste_no_teto_de_tentativas(tmp_queue):
     with patch.object(TerminalInput, "send_prompt", return_value="partial"):
         terminal_input.drain("cc", "/no/such.jsonl")
     assert q.entry_delivered(e["id"]) is True            # desistiu
+
+
+def test_drain_requeue_partial_end_a_end_sem_tocar_na_flag(tmp_queue, monkeypatch):
+    """Integracao de verdade, sem mockar `_partial`/`_limpar_composer`/`_ULTIMA_LIMPEZA`: um pane
+    falso onde o Enter NAO limpa o composer (send_prompt real conclui "partial"), `_limpar_composer`
+    real limpa via C-u de verdade, e so ENTAO o `drain` real reenfileira. Os tres testes acima provam
+    cada metade isolada (so `_limpar_composer`, ou o `drain` com a flag setada A MAO); nenhum prova
+    que `_partial` REALMENTE grava `_ULTIMA_LIMPEZA.limpou` — foi por isso que a linha sumiu (revisor)
+    com a suite inteira passando. Este teste tem que cair se ela sumir de novo (conferido: falha com a
+    linha removida, passa com ela de volta)."""
+    q = PromptQueue("cc")
+    entry = q.append("mensagem comprida o bastante pra ter cauda e comeco validos no composer")
+
+    composer = {"texto": ""}
+
+    def capture(name):
+        linha = f"❯ {composer['texto']}" if composer["texto"] else "❯ "
+        return _pane_claude([linha])
+
+    def fake_send_keys(name, keys, literal=False):
+        if literal:
+            composer["texto"] = keys           # digitado: aparece no composer
+        elif keys == "C-u":
+            composer["texto"] = ""             # C-u apaga (mesmo comportamento de _limpar_composer)
+        # Enter: propositalmente NAO limpa — é o que faz o Enter "nao submeter" e o send_prompt
+        # real concluir "partial" (o mesmo formato do bug 07/08/2026: Enter engolido).
+        return True
+
+    clock = [1000.0]
+    monkeypatch.setattr(terminal_input.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
+    monkeypatch.setattr(terminal_input.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(terminal_input, "deliverable", lambda name: True)
+    monkeypatch.setattr(terminal_input, "_wait_input_ready", lambda name, provider="claude": True)
+    monkeypatch.setattr(terminal_input.agentpane, "pane_info", lambda name: ("claude", None))
+
+    with patch.object(terminal_input, "_capture", side_effect=capture), \
+         patch.object(terminal_input, "send_keys", side_effect=fake_send_keys):
+        sent = terminal_input.drain("cc", "/no/such.jsonl")
+
+    assert sent == 0
+    assert q.entry_delivered(entry["id"]) is False        # reenfileirada, nao perdida nem travada
+    assert int(q.load()[0]["attempts"]) == 1               # bump_attempts rodou (so roda com limpou=True)

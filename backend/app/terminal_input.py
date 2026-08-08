@@ -566,19 +566,47 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
             limpou = getattr(_ULTIMA_LIMPEZA, "limpou", False)
             if hasattr(_ULTIMA_LIMPEZA, "limpou"):
                 del _ULTIMA_LIMPEZA.limpou
-            tentativas = q.bump_attempts(entry["id"]) if limpou else 0
-            if limpou and tentativas <= _PARTIAL_MAX_TENTATIVAS:
-                q.set_delivered(entry["id"], False)
-                _log.warning("drain name=%s: envio PARCIAL da entrada %s — composer limpo, "
-                             "reenfileirado (tentativa %d/%d)", name, entry.get("id"),
-                             tentativas, _PARTIAL_MAX_TENTATIVAS)
-            else:
-                # Nao limpou (ou estourou o teto): fica delivered=True e PARA. A bubble segue
-                # visivel no app (o display ignora delivered) e o residuo esta a vista no terminal,
-                # entao o usuario ve as duas metades e decide. Silencio aqui seria a perda calada.
-                _log.error("drain name=%s: envio PARCIAL da entrada %s — parado, sem retry "
-                           "automatico (%s)", name, entry.get("id"),
-                           "teto de tentativas" if limpou else "composer NAO limpo")
+            try:
+                tentativas = q.bump_attempts(entry["id"]) if limpou else 0
+                # `1 <= tentativas`, nao so `<= _PARTIAL_MAX_TENTATIVAS`: bump_attempts devolve 0 quando
+                # a entrada sumiu entre o claim e aqui (ex.: um /clear esvaziou a fila no meio do
+                # caminho) — sem o piso, 0 <= 2 passava, set_delivered virava no-op (a entrada nao
+                # existe mais) e o log abaixo afirmava um reenfileiramento que nao aconteceu.
+                if limpou and 1 <= tentativas <= _PARTIAL_MAX_TENTATIVAS:
+                    q.set_delivered(entry["id"], False)
+                    _log.warning("drain name=%s: envio PARCIAL da entrada %s — composer limpo, "
+                                 "reenfileirado (tentativa %d/%d)", name, entry.get("id"),
+                                 tentativas, _PARTIAL_MAX_TENTATIVAS)
+                else:
+                    # Fica delivered=True e PARA — tres motivos possiveis, cada um com o que sobra pro
+                    # usuario ver DIFERENTE (item 5 da revisao final: o comentario antigo cobria so os
+                    # dois primeiros com uma frase so, e a frase era falsa no segundo):
+                    #  - nao limpou: o residuo esta a vista no terminal, o usuario ve as duas metades e decide;
+                    #  - estourou o teto de tentativas: o composer foi limpo TAMBEM desta vez — nao sobra
+                    #    residuo nenhum pra ver, so a bubble no app avisando que parou;
+                    #  - a entrada sumiu da fila entre o claim e aqui (poda/`/clear` concorrente): nao ha
+                    #    mais entrada pra marcar nem residuo NOSSO garantido (o clear pode ter mudado o
+                    #    proprio composer) — so registra, sem afirmar nenhum dos dois casos acima.
+                    if not limpou:
+                        motivo, diag = "composer NAO limpo", "o residuo fica a vista no terminal"
+                    elif tentativas == 0:
+                        motivo, diag = ("entrada sumiu da fila antes do requeue (poda/`/clear` "
+                                        "concorrente)", "sem entrada e sem residuo garantido")
+                    else:
+                        motivo, diag = "teto de tentativas", "composer JA limpo, nao sobra residuo pra ver"
+                    _log.error("drain name=%s: envio PARCIAL da entrada %s — parado, sem retry "
+                               "automatico (%s — %s)", name, entry.get("id"), motivo, diag)
+            except OSError:
+                # Mesma assimetria que o ramo "deferred" logo abaixo ja fecha pro dele: drain roda
+                # fire-and-forget (chamado por tick do loop autonomo, hook de transicao, reconexao de
+                # SSE) e uma excecao daqui subiria pro CALLER — 500 no POST /loop (api.py) ou o tick do
+                # loop quebrando no meio, nenhum dos dois com guarda pra isto. Aqui LOGA em vez de so
+                # `pass`: o vizinho pode calar porque a bubble queued- visivel basta como garantia; aqui
+                # nao ha bubble nenhuma nova pra avisar o usuario, entao o log e a UNICA pista de que o
+                # requeue (ou a desistencia) de um envio parcial nao aconteceu por causa do disco.
+                _log.exception("drain name=%s: falha de disco ao (re)registrar a entrada %s apos "
+                               "envio PARCIAL — nem reenfileirada nem fechada, fica como estava",
+                               name, entry.get("id"))
             return sent
         if result == "deferred":
             # Reverte pra retry e para — espera o proximo idle. No caminho de TECLA isto e
@@ -820,9 +848,19 @@ def answer_question_pi(name: str, answer: dict, question: dict) -> None:
 # teto isto viraria laco infinito no executor de envio.
 _LIMPEZA_MAX_TECLAS = 12
 
-# Teto de requeues de um envio parcial. Mesmo numero do reconcile (pqueue.reconcile_delivered,
-# max_attempts=2) pra fila e reconcile nao discordarem sobre quantas vezes uma entrada pode ser
-# tentada.
+# Teto de requeues de um envio parcial: ate 2 (`1 <= tentativas <= 2`), ou seja ate 3 envios reais
+# (o original + 2 requeues). NAO e "o mesmo numero" do reconcile (pqueue.reconcile_delivered,
+# max_attempts=2, que desiste em `attempts >= 2` — ou seja permite so 2 tentativas TOTAL, uma a
+# menos que aqui) — os dois numeros DIFEREM em 1, achado do item 6 da revisao final (este comentario
+# ja disse o contrario, o que era falso).
+#
+# E os dois leem/escrevem o MESMO campo `attempts` da entrada — nao sao contadores independentes.
+# Consequencia real: uma entrada que gastou os 2 requeues do PARCIAL (attempts chegou a 2) e so
+# DEPOIS conseguiu um envio de verdade (delivered=True) nunca mais e reconciliada — reconcile_delivered
+# le `attempts>=2` como "ja no teto DELE" na primeira checagem, mesmo sem ter requeuado nenhuma vez
+# por conta propria, e desiste na hora (confirmed=True) sem re-tentar. Nao e bug deste commit nem
+# coisa pra consertar aqui (comportamento aceito, so o comentario estava errado) — quem for mexer
+# nos dois tetos de novo precisa lembrar que estao no MESMO campo.
 _PARTIAL_MAX_TENTATIVAS = 2
 
 # Resultado da ULTIMA limpeza, lido pelo `drain` (mesma chamada, logo apos o send_prompt que

@@ -34,6 +34,7 @@ from app.models import (SessionInfo, ChatEvent, CostReport, RunnersResponse, Run
 from app.planprog import plan_progress, list_plans, write_pin, is_safe_stem, _plans_dir, PlanPinError, PIN_NONE
 from app.pqueue import PromptQueue, _transcript_start_ts, committed_user_lines
 from app.chain import ThenLink
+from app import terminal_input
 from app.terminal_input import TerminalInput, drain
 from app.adapters import get_adapter
 from app.adapters.codex import sessions as codex_sessions
@@ -1351,6 +1352,13 @@ def _send_one(name: str, text: str) -> dict:
             # entrar em acao — achado da re-revisao 02/08/2026.
             _log.exception("fila indisponivel antes do envio (Pi com linha) name=%s", name)
             entry = None
+    # Limpa a flag ANTES de chamar send_prompt (nao so depois de ler, mais abaixo): assim a AUSENCIA
+    # dela depois so pode significar "esta chamada nao passou pelo _partial", em vez de herdar o
+    # valor de uma chamada anterior na MESMA thread do pool. `_ULTIMA_LIMPEZA` e threading.local
+    # (ver o comentario ao lado da declaracao em terminal_input.py) e o pool REUSA thread — sem isto,
+    # um "partial" que um dia devolvesse sem passar por `_partial()` leria a sobra de outro envio.
+    if hasattr(terminal_input._ULTIMA_LIMPEZA, "limpou"):
+        del terminal_input._ULTIMA_LIMPEZA.limpou
     try:
         result = terminal.send_prompt(
             name, text, provider, pane_id=pane_id,
@@ -1374,6 +1382,18 @@ def _send_one(name: str, text: str) -> dict:
         # enviado (ver terminal_input.send_prompt). Reporta erro em vez de seguir pro caminho de
         # sucesso, que gravaria a entrada na fila como delivered e afirmaria entrega de uma mensagem
         # cortada. Sem entrada na fila, o drain nao reentra digitando em cima do residuo.
+        #
+        # A mensagem pro usuario depende do que _partial() conseguiu fazer no composer (mesma thread,
+        # lida logo apos o send_prompt acima que a escreveu): o conserto de 07/08/2026 LIMPA o
+        # composer antes de devolver "partial", entao a mensagem antiga ("confira o terminal, o
+        # residuo esta a vista") ficou FALSA no caso comum — quem abre o terminal depois de uma
+        # limpeza confirmada nao acha nada. Le e ja APAGA a flag: e o mesmo apagar que fecha dois
+        # achados menores — o valor nao pode ficar escrito pra sempre, e sem apagar aqui o
+        # threading.local reusado pelo pool vazaria esta leitura pro proximo envio desta thread que
+        # tambem cair em "partial".
+        limpou = getattr(terminal_input._ULTIMA_LIMPEZA, "limpou", False)
+        if hasattr(terminal_input._ULTIMA_LIMPEZA, "limpou"):
+            del terminal_input._ULTIMA_LIMPEZA.limpou
         if entry is not None:
             # A entrada do Pi ja existe (criada acima, ANTES de saber o resultado) — sem isto ficaria
             # delivered=False pra sempre e o proximo drain reentraria digitando em cima do residuo.
@@ -1383,9 +1403,13 @@ def _send_one(name: str, text: str) -> dict:
                 # Achado da re-revisao 02/08/2026: falhar calado aqui e o MESMO bug que o comentario
                 # acima descreve (residuo redigitado por cima) voltando sem deixar rastro nenhum.
                 _log.exception("fechar entrada apos 'partial' falhou name=%s", name)
-        return {"ok": False,
-                "error": "envio incompleto: parte do texto ficou no composer da sessao e nada foi "
-                         "submetido. Confira o terminal antes de reenviar."}
+        if limpou:
+            erro = ("envio incompleto: o composer foi limpo e a mensagem NAO foi enviada — pode "
+                     "reenviar sem risco de duplicar.")
+        else:
+            erro = ("envio incompleto: parte do texto ficou no composer da sessao e nada foi "
+                     "submetido. Confira o terminal antes de reenviar.")
+        return {"ok": False, "error": erro}
     if stripped.startswith("/"):
         # Slash-commands NAO entram na fila — sao meta, nao viram bubble. Excecao /clear: ele reinicia
         # a sessao do Claude Code (novo session-id/transcript), mas a fila e keyed pelo NOME da sessao
