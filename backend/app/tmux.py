@@ -80,12 +80,15 @@ def _run(args: list[str], input: bytes | None = None) -> subprocess.CompletedPro
     # a saida e decodificada aqui — o retorno continua sendo `str` pra todos os chamadores de hoje.
     if input is not None:
         try:
-            cp = subprocess.run(args, capture_output=True, timeout=5, input=input)
-            # bytes de verdade num run real; str num mock de teste que ja devolve texto — os dois
-            # caminhos tem de sair como str, igual ao retorno do modo texto abaixo.
-            out = cp.stdout.decode("utf-8", "replace") if isinstance(cp.stdout, bytes) else (cp.stdout or "")
-            err = cp.stderr.decode("utf-8", "replace") if isinstance(cp.stderr, bytes) else (cp.stderr or "")
-            return subprocess.CompletedProcess(args, cp.returncode, out, err)
+            # RUN, nao subprocess.run direto: RUN e a UNICA costura de mock do modulo (~50 usos em 5
+            # arquivos de teste); um caminho que a furasse seria o unico comando de tmux que um
+            # `patch.object(tmux, "RUN", ...)` nao intercepta, e bateria no tmux de verdade calado.
+            cp = RUN(args, capture_output=True, timeout=5, input=input)
+            # sem text=True, capture_output devolve bytes sempre — decodifica pro retorno continuar
+            # sendo str, igual ao modo texto abaixo.
+            return subprocess.CompletedProcess(
+                args, cp.returncode,
+                cp.stdout.decode("utf-8", "replace"), cp.stderr.decode("utf-8", "replace"))
         except (subprocess.TimeoutExpired, OSError) as e:
             return subprocess.CompletedProcess(args, 1, stdout="", stderr=str(e))
     try:
