@@ -254,6 +254,75 @@ if ($precisa) {
     # O preference vira 'Continue' so aqui, pelo mesmo motivo do Nativo: um aviso do npm no stderr
     # nao pode virar erro terminante. A saida do npm fica VISIVEL de proposito -- foi ela que
     # denunciou o "'vite' nao e reconhecido" que este conserto passou a tratar.
+# Definida ANTES do build de proposito: o passo 2 precisa dela pra derrubar o front ANTES do
+# `npm ci`. Ver o comentario naquele passo.
+function Pare-Servico {
+    param([string]$Nome, [int]$Porta, [string]$Padrao)
+    $alvos = @()
+    # Por PORTA e o criterio mais preciso: quem esta segurando o socket e exatamente quem
+    # impediria a instancia nova de subir.
+    if ($Porta -gt 0) {
+        $alvos += (Get-NetTCPConnection -State Listen -LocalPort $Porta -ErrorAction SilentlyContinue |
+                   Select-Object -ExpandProperty OwningProcess)
+    }
+    # Por PADRAO pega o que ja largou a porta mas continua vivo (meio-termo de um crash).
+    if ($Padrao) {
+        $alvos += (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                   Where-Object { $_.CommandLine -and $_.CommandLine -match $Padrao } |
+                   Select-Object -ExpandProperty ProcessId)
+    }
+    # $PID: nunca matar o proprio instalador.
+    $alvos = @($alvos | Where-Object { $_ -and $_ -ne $PID } | Select-Object -Unique)
+    if ($alvos.Count -eq 0) { return 0 }
+    # Descendentes RECURSIVOS, nao um nivel so. O backend nasce `uv -> python -> python` e quem
+    # segura a porta e o NETO: parar so o pai (ou pai+filhos) deixava a porta presa e a instancia
+    # nova colidia igual. Varredura unica da tabela de processos + BFS, em vez de um Get-CimInstance
+    # por nivel.
+    $mapa = @{}
+    foreach ($p in (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
+        if (-not $mapa.ContainsKey([int]$p.ParentProcessId)) { $mapa[[int]$p.ParentProcessId] = @() }
+        $mapa[[int]$p.ParentProcessId] += [int]$p.ProcessId
+    }
+    $todos = New-Object System.Collections.Generic.HashSet[int]
+    $fila = New-Object System.Collections.Generic.Queue[int]
+    foreach ($a in $alvos) { [void]$fila.Enqueue([int]$a) }
+    while ($fila.Count -gt 0) {
+        $cur = $fila.Dequeue()
+        if ($cur -eq $PID -or -not $todos.Add($cur)) { continue }
+        foreach ($f in ($mapa[$cur] | Where-Object { $_ })) { [void]$fila.Enqueue([int]$f) }
+    }
+    # Conta o que MORREU, nao o que foi tentado. Com -ErrorAction SilentlyContinue o Stop-Process
+    # engole "acesso negado" em silencio, e o contador antigo ($todos.Count) reportava sucesso pra
+    # kill que nao aconteceu - a mensagem "instancia anterior derrubada" saia mesmo com o processo
+    # velho vivo, que e exatamente o bug que este helper existe pra evitar.
+    $mortos = 0
+    foreach ($p in $todos) {
+        Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
+        if (-not (Get-Process -Id $p -ErrorAction SilentlyContinue)) { $mortos++ }
+    }
+    Start-Sleep -Milliseconds 800
+    # A porta ficou LIVRE? E o que realmente importa - processo morto com a porta ainda presa
+    # (outro dono) faz a instancia nova falhar do mesmo jeito. -State Listen e obrigatorio: sem ele
+    # um socket em TIME_WAIT do processo recem-morto ainda conta como ocupada.
+    if ($Porta -gt 0) {
+        $preso = Get-NetTCPConnection -State Listen -LocalPort $Porta -ErrorAction SilentlyContinue
+        if ($preso) { Falta "porta $Porta continua ocupada (pid $($preso.OwningProcess -join ', ')) apos parar $Nome" }
+    }
+    return $mortos
+}
+
+    # DERRUBA O FRONT ANTES DO `npm ci`, e isto nao e zelo: o `npm ci` APAGA o node_modules antes de
+    # reinstalar, e o Windows nao deixa apagar binario nativo mapeado em processo vivo. Medido em
+    # 08/08/2026 nesta maquina: com o Vite de pe, o npm ci apagou quase tudo e morreu em
+    # `EPERM: operation not permitted, unlink ...\@rolldown\binding-win32-x64-msvc\
+    # rolldown-binding.win32-x64-msvc.node` (errno -4048), deixando node_modules pela metade e SEM o
+    # `.bin` inteiro. Ninguem viu na hora, porque o Vite seguiu rodando da imagem ja em memoria; o
+    # estrago so apareceu quando a maquina suspendeu e o processo morreu — dali em diante nada
+    # reergueu o front, e como o `tailscale serve` daquela instalacao publica a raiz no 5173, o
+    # celular passou a ver 502 em TUDO, com o backend vivo o tempo inteiro.
+    # Ou seja: o instalador se auto-sabotava, e o sintoma aparecia horas depois, longe da causa.
+    $mortosFront = Pare-Servico 'frontend (antes do npm ci)' 5173 ([regex]::Escape("$raiz\frontend"))
+    if ($mortosFront -gt 0) { Nota "front derrubado antes do npm ci ($mortosFront processo(s))" }
     $tBuild = Get-Date
     $eapAnterior = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
@@ -541,60 +610,6 @@ $tarefas = @(
 # Vale pros DOIS agora: o frontend serve o build (`npm run preview`), entao mudanca em .svelte
 # so aparece depois de `npm run build` + reinicio da tarefa - nao ha mais HMR pra disfarcar. O
 # backend nunca teve, porque CP_RELOAD e off por padrao (config.py).
-function Pare-Servico {
-    param([string]$Nome, [int]$Porta, [string]$Padrao)
-    $alvos = @()
-    # Por PORTA e o criterio mais preciso: quem esta segurando o socket e exatamente quem
-    # impediria a instancia nova de subir.
-    if ($Porta -gt 0) {
-        $alvos += (Get-NetTCPConnection -State Listen -LocalPort $Porta -ErrorAction SilentlyContinue |
-                   Select-Object -ExpandProperty OwningProcess)
-    }
-    # Por PADRAO pega o que ja largou a porta mas continua vivo (meio-termo de um crash).
-    if ($Padrao) {
-        $alvos += (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-                   Where-Object { $_.CommandLine -and $_.CommandLine -match $Padrao } |
-                   Select-Object -ExpandProperty ProcessId)
-    }
-    # $PID: nunca matar o proprio instalador.
-    $alvos = @($alvos | Where-Object { $_ -and $_ -ne $PID } | Select-Object -Unique)
-    if ($alvos.Count -eq 0) { return 0 }
-    # Descendentes RECURSIVOS, nao um nivel so. O backend nasce `uv -> python -> python` e quem
-    # segura a porta e o NETO: parar so o pai (ou pai+filhos) deixava a porta presa e a instancia
-    # nova colidia igual. Varredura unica da tabela de processos + BFS, em vez de um Get-CimInstance
-    # por nivel.
-    $mapa = @{}
-    foreach ($p in (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
-        if (-not $mapa.ContainsKey([int]$p.ParentProcessId)) { $mapa[[int]$p.ParentProcessId] = @() }
-        $mapa[[int]$p.ParentProcessId] += [int]$p.ProcessId
-    }
-    $todos = New-Object System.Collections.Generic.HashSet[int]
-    $fila = New-Object System.Collections.Generic.Queue[int]
-    foreach ($a in $alvos) { [void]$fila.Enqueue([int]$a) }
-    while ($fila.Count -gt 0) {
-        $cur = $fila.Dequeue()
-        if ($cur -eq $PID -or -not $todos.Add($cur)) { continue }
-        foreach ($f in ($mapa[$cur] | Where-Object { $_ })) { [void]$fila.Enqueue([int]$f) }
-    }
-    # Conta o que MORREU, nao o que foi tentado. Com -ErrorAction SilentlyContinue o Stop-Process
-    # engole "acesso negado" em silencio, e o contador antigo ($todos.Count) reportava sucesso pra
-    # kill que nao aconteceu - a mensagem "instancia anterior derrubada" saia mesmo com o processo
-    # velho vivo, que e exatamente o bug que este helper existe pra evitar.
-    $mortos = 0
-    foreach ($p in $todos) {
-        Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
-        if (-not (Get-Process -Id $p -ErrorAction SilentlyContinue)) { $mortos++ }
-    }
-    Start-Sleep -Milliseconds 800
-    # A porta ficou LIVRE? E o que realmente importa - processo morto com a porta ainda presa
-    # (outro dono) faz a instancia nova falhar do mesmo jeito. -State Listen e obrigatorio: sem ele
-    # um socket em TIME_WAIT do processo recem-morto ainda conta como ocupada.
-    if ($Porta -gt 0) {
-        $preso = Get-NetTCPConnection -State Listen -LocalPort $Porta -ErrorAction SilentlyContinue
-        if ($preso) { Falta "porta $Porta continua ocupada (pid $($preso.OwningProcess -join ', ')) apos parar $Nome" }
-    }
-    return $mortos
-}
 # Ja registrado -> RE-REGISTRA sem perguntar, em vez de pular. A tarefa guarda o caminho do
 # executavel e o diretorio DENTRO dela; um `git pull` que mova o repo, ou um uv que mude de
 # lugar, deixa a tarefa apontando pro nada - e "ja registrada" esconderia isso. Register-...
@@ -912,6 +927,22 @@ if ($morreu) {
 }
 
 # -- Fim ---------------------------------------------------------------------
+# `Pronto` SO quando nada falhou. Antes, um passo com X no meio ainda terminava com 'Pronto' e o
+# texto de boas-vindas abaixo — e quem le a ultima linha acredita nela. Foi assim que o `npm ci`
+# quebrado de 08/08/2026 passou por atualizacao bem-sucedida: o front velho ainda estava no ar
+# servindo da memoria, entao nem a tela desmentia. Falha silenciosa e falha silenciosa em qualquer
+# lugar, inclusive num instalador.
+if ($pendencias.Count -gt 0) {
+    Titulo "NAO terminou: $(($pendencias | Select-Object -Unique) -join ', ')"
+    Write-Host @"
+  Um ou mais passos falharam e estao listados acima com X. O que ja estava no ar continua no ar —
+  e e por isso que isto precisa ser dito alto: a tela pode seguir funcionando servindo o build
+  ANTERIOR, e a instalacao parecer boa por horas, ate a proxima vez que o processo cair.
+
+  Resolva o que esta na lista e rode de novo:  .\install.ps1 -Update
+"@
+    exit 1
+}
 Titulo 'Pronto'
 Write-Host @"
   Abra a interface em http://127.0.0.1:8765 - o proprio backend serve o build que este
