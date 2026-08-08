@@ -41,8 +41,17 @@ _detalhes: list[tuple[str, str]] = []
 _frames: list[tuple[str, str]] = []
 
 
-def run(args: list[str], timeout: int = 10) -> subprocess.CompletedProcess:
+def run(args: list[str], timeout: int = 10,
+        entrada: bytes | None = None) -> subprocess.CompletedProcess:
+    # `entrada` = stdin, pro `load-buffer -` (mesmo caminho do tmux.py:_run). text=True e
+    # input=bytes sao incompativeis, entao aqui a saida vem em bytes e e decodificada — o
+    # retorno continua sendo str pra todos os checks.
     try:
+        if entrada is not None:
+            cp = subprocess.run([BIN, *args], capture_output=True, timeout=timeout, input=entrada)
+            return subprocess.CompletedProcess(
+                args, cp.returncode,
+                cp.stdout.decode("utf-8", "replace"), cp.stderr.decode("utf-8", "replace"))
         return subprocess.run([BIN, *args], capture_output=True, text=True,
                               timeout=timeout, encoding="utf-8", errors="replace")
     except (subprocess.TimeoutExpired, OSError) as e:
@@ -345,6 +354,42 @@ if "linha-um-abc" not in tela:
           and "✻" not in tela.split("linha-sete-pqr")[-1],
           "se submeteu, a 1a linha virou prompt e o claude comecou a responder")
     frame("plano D: uma chamada por linha, C-j entre elas", tela)
+
+# ── 9d. buffers: quem carrega a quebra de linha e quem nao ─────────────────
+# Isto certifica o que o CLAUDE.md passou a afirmar em 08/08/2026, depois de a nota
+# anterior ("paste-buffer nao funciona") ter sido medida ERRADA nesta mesma versao:
+# o paste-buffer FUNCIONA; quem nao carrega \n sao os BUFFERS. Sem esta secao a
+# correcao fica so na prosa, e prosa nao avisa quando o psmux mudar.
+#
+# Nivel de MODULO de proposito (as 9b/9c vivem dentro do `if` do Claude): estas tres
+# medicoes so falam com o multiplexador, nao precisam de TUI nenhum.
+print("\n9d. o que os buffers fazem com a quebra de linha")
+
+_TXT = "buf-um-abc\nbuf-dois-def"
+
+run(["delete-buffer", "-b", "cp0"])
+r_set = run(["set-buffer", "-b", "cp0", "--", _TXT])
+lido = run(["show-buffer", "-b", "cp0"]).stdout
+check("set-buffer TRUNCA na primeira quebra (e devolve rc=0)",
+      r_set.returncode == 0 and "buf-um-abc" in lido and "buf-dois-def" not in lido,
+      f"rc={r_set.returncode} | leu: {lido!r} — se as duas linhas estiverem ai, o psmux "
+      "consertou o set-buffer e o CLAUDE.md precisa ser reescrito")
+
+run(["delete-buffer", "-b", "cp1"])
+r_load = run(["load-buffer", "-b", "cp1", "-"], entrada=_TXT.encode())
+lido = run(["show-buffer", "-b", "cp1"]).stdout
+check("load-buffer ESCAPA a quebra e ninguem desescapa",
+      r_load.returncode == 0 and "\\n" in lido,
+      f"rc={r_load.returncode} | leu: {lido!r} — um \\n literal aqui e o bug do psmux "
+      "(main.rs escapa, connection.rs junta com espaco e nada reverte)")
+
+# E o paste-buffer em si: entrega o que ESTIVER no buffer. Prova o instrumento — a
+# perda ja aconteceu na escrita, antes desta chamada.
+check("paste-buffer entrega o buffer (o comando existe e funciona)",
+      run(["paste-buffer", "-b", "cp0", "-t", alvo]).returncode == 0,
+      "se ISTO falhar, ai sim o paste-buffer nao existe nesta versao")
+run(["delete-buffer", "-b", "cp0"])
+run(["delete-buffer", "-b", "cp1"])
 
 # ── 10. teclas nomeadas (picker de opcao) ──────────────────────────────────
 print("\n10. teclas nomeadas")

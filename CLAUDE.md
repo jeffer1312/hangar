@@ -347,11 +347,19 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
 - **Windows runs on psmux, not tmux** (`marlocarlo.psmux` — native ConPTY multiplexer that publishes a
   `tmux` alias, so `tmux.py` calls it unchanged). Measured on psmux 3.3.7: `new-session -e`, exact
   `=NAME:` targets, `-F` formats incl. `#{?alternate_on,...}`, `capture-pane -S` with Unicode intact,
-  named keys and the option picker all work. **`paste-buffer` does not** — hence the `paste_text`
-  fallback, which branches on the **return code**, not on the OS: a multiplexer that lacks it says so,
-  and on Linux the fast path returns 0 and never reaches plan B. Plan B is one `send-keys -l` per line
+  named keys and the option picker all work. **`paste-buffer` works too** — what cannot carry a
+  newline are the **buffers**: `set-buffer` truncates at the first one and `load-buffer` escapes it
+  with nothing ever unescaping it back, so multi-line arrives cut either way (measured on this same
+  version; an earlier note here claimed `paste-buffer` itself was missing, and that was wrong).
+  That is why Windows sends multi-line **through the clipboard** — `Set-Clipboard` over stdin plus
+  one `M-v` (`tmux.paste_via_clipboard`), under a module-wide lock, because the clipboard belongs to
+  the machine and not to the session. The `paste_text` fallback stays for everything else and
+  branches on the **return code**, not on the OS: a multiplexer that lacks a command says so, and on
+  Linux the fast path returns 0 and never reaches plan B. Plan B is one `send-keys -l` per line
   with `C-j` between; a `\n` *inside* the argument makes psmux swallow everything after it, and `\r`
-  as a separator glues the lines together (both measured). Probe: `scripts/test-psmux.py` (+ `.ps1`).
+  as a separator glues the lines together (both measured) — and it is precisely the path that was
+  measured delivering 309 of 600 lines while returning success, which is why the clipboard exists.
+  Probe: `scripts/test-psmux.py` (+ `.ps1`).
   Install: `install.ps1`. Not there on Windows: systemd services and the `claude`/`codex` shell
   wrappers, so a session you open in the terminal is invisible to the app — app-created ones are fine.
 - **Session creation's systemd-scope probe.** Creating a session wraps `tmux` in

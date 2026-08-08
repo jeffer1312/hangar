@@ -206,13 +206,54 @@ those ids before sending (`_paste_ids` / `pastes_antes`) and requires a *new* on
 is precisely the evidence that was switched off when a probe in this session passed
 `pastes_antes=None` and produced a false negative. Applied here the rule is: snapshot the
 placeholders, write the clipboard, send `M-v`, and **send Enter only if a new placeholder (or the
-text) appeared**. No evidence, no submit — report and fall back to the old path. If Claude Code ever
-starts treating a programmatically-set clipboard differently from a user's Ctrl+C, this fails loudly
-instead of quietly sending nothing, which is the exact failure mode this branch spent its day
-removing.
+text) appeared**. No evidence, no submit. If Claude Code ever starts treating a programmatically-set
+clipboard differently from a user's Ctrl+C, this fails loudly instead of quietly sending nothing,
+which is the exact failure mode this branch spent its day removing.
 
 Two costs to carry into any design: it clobbers whatever the user had copied, and `Alt+V` is a Claude
 Code binding — Pi and Codex panes need their own answer.
+
+### Built on 2026-08-08, and what the five measurements settled
+
+Shipped in `tmux.paste_via_clipboard` + the Windows branch of `send_prompt`. Full numbers in
+[`docs/medicoes-2026-08-08-windows.md`](medicoes-2026-08-08-windows.md); what the code took from them:
+
+- **The scheduled-task backend does reach the clipboard the TUI reads.** This was the go/no-go the
+  section above left open, and it is now confirmed from a session created by the app itself, not
+  inferred from the installer.
+- **`Set-Clipboard` over stdin, not `clip.exe`.** `clip.exe` handles every encoding and even survives
+  a missing BOM, but rewrites every LF as CRLF — the user's message must not change on the way. And
+  **never send a BOM**: it becomes literal content (first character read is U+FEFF), invisible in the
+  terminal and inside what the session receives. Cost is flat in size: ~250 ms for 13.8k, 69k or 278k
+  chars alike, of which ~157 ms is PowerShell's cold start.
+- **The TUI discards `M-v` while it is working** — three false negatives before anyone noticed the
+  spinner. Nothing reports an error, so the strict proof is what catches it.
+- **The proof deadline is 4.0s, three times the measured peak.** Five 600-line pastes showed the
+  placeholder at 676, 665, 955, 1341 and 975 ms; the neighbouring 1.0s would have failed three times
+  out of five, and a fixed 0.5s settle every time. The time **grows with the number of pastes in the
+  same session**, so on timeout the code fails loudly rather than pressing Enter blind.
+- **One `M-v`, never two.** After the first paste the footer reads `paste again to expand`, so a
+  second key expands the block instead of re-pasting it.
+- **Empty text is refused before PowerShell runs**: `Set-Clipboard` binds an empty string as null and
+  returns rc=1, and on any failed write the clipboard still holds the *previous* message — pasting
+  anyway would submit that whole message as if it were this one.
+
+**There is no fallback to the old path**, deliberately, which supersedes the "fall back" line above:
+that path is the one measured at 309 of 600 lines returning success, so falling back would restore
+the exact silent loss. A failure becomes `partial`, which clears the composer and lets the queue
+requeue.
+
+**Two risks accepted, and the first is not the one it looks like.** (1) If the user copies something
+between our `Set-Clipboard` and the `M-v`, nothing can distinguish their content from ours — the
+placeholder proves *something* was pasted, never *what*. The consequence is **injection**, not
+overwriting: whatever they copied becomes a user turn in a session that may be running in bypass. The
+module lock closes this window between our own sessions and cannot close it against the user's hands.
+(2) We clobber whatever they had copied.
+
+**Still open:** Pi and Codex on Windows keep the old path — `Alt+V` is Claude Code's binding and
+nobody has measured theirs. And the `cp-send`/`input` channel toward Windows was caught mutilating
+text in passing (a quote died as `unexpected EOF while looking for matching quote`, and a test string
+arrived stripped of accents and emoji): unrelated to this fix, unmeasured, and its own item.
 
 ## Reading the pane: what a PTY would and would not buy (measured 2026-08-08)
 
