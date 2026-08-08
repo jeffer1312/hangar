@@ -402,6 +402,17 @@
     display: flex;
     flex-direction: column;
     flex: 1;
+    /* min-width: 0 junto do min-height: 0 — item flex nasce com min-width: auto e se RECUSA a
+       encolher abaixo do proprio conteudo. Sem isto, uma linha longa dentro do chat (um bloco de
+       codigo, uma saida de comando) estica esta coluna e empurra o painel de contexto pra FORA da
+       janela; como ela tem overflow: hidden, nao vira nem rolagem — o painel e a borda da sidebar
+       simplesmente somem. Medido 08/08/2026 numa janela de 1524px: esta div e a .desktop-main
+       abaixo dela mediam 1557 comecando em 282, e o .session-context caia em 1575..1827, inteiro
+       fora da tela. O conserto ja existia no filho (.desktop-main, logo abaixo) e no ramo do split
+       (.desktop-main.split .pane) — faltou no pai, que e quem manda.
+       A regra que isto garante: conteudo nunca empurra o layout, ele rola ou e cortado dentro da
+       propria caixa. */
+    min-width: 0;
     min-height: 0;
     position: relative;
   }
