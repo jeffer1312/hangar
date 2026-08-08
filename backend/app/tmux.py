@@ -190,7 +190,14 @@ def paste_via_clipboard(name: str, text: str) -> bool:
         #
         # UMA vez so: depois da primeira colagem o rodape vira "paste again to expand", entao um
         # segundo M-v EXPANDE o bloco em vez de recolar.
-        return send_keys(name, "M-v")
+        if not send_keys(name, "M-v"):
+            # Falha DIFERENTE da de cima, e o log tem que dizer qual: aqui o clipboard JA tem o texto
+            # novo (rc=0 na escrita), so a tecla que nao saiu. Reportar "clipboard nao escrito" nos
+            # dois casos mandaria quem for investigar olhar pro PowerShell quando o problema e o
+            # multiplexador.
+            _log.warning("clipboard escrito pra %r, mas o M-v nao foi enviado — nada colou", name)
+            return False
+        return True
 
 
 def list_sessions() -> list[dict]:
