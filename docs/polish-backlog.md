@@ -39,7 +39,7 @@ Two things measured here that decide the shape of the integration:
   `scripts/install-cp-send.sh`, not backend code.
 - **What breaks is the pair conversation in the UI.** `PairSheet` mines nothing the backend routed:
   it fetches each member's `getHistory` and matches `user_msg` whose text starts with `[de: X]`
-  (`PairSheet.svelte:62` → `parsePeerMessage`, `lib/format.ts:201`). A native message lands in the
+  (`PairSheet.svelte:67` → `parsePeerMessage`, `lib/format.ts:205`). A native message lands in the
   transcript with *its own* sender labeling, so the group timeline would go quiet with no error.
 
 Also worth carrying into any design: a delivered message counts toward usage like a typed prompt,
@@ -115,7 +115,7 @@ messages between Claude sessions arriving mangled.
 **Image paste is NOT one of them, measured 07/08/2026** — this line used to claim it was, written as
 a hypothesis and then read as fact, contradicting a code comment three files away. A bare
 `tmux send-keys C-v` into a Claude Code session puts `[Image #1]` in the composer: the TUI reads the
-machine's clipboard itself through `wl-paste` (which is why `tmux.py:53` propagates
+machine's clipboard itself through `wl-paste` (which is why `tmux.py:292` (`new_session`) propagates
 `WAYLAND_DISPLAY`), so the terminal only ever delivers the **keystroke** — no image bytes cross it on
 any path. The PTY gains nothing here. Separately, the app's own attachments never touch the terminal
 at all: an upload is saved to `<cwd>/.claude-pocket-uploads/` and the prompt carries the **path** as
@@ -164,7 +164,7 @@ for 1 MB (shipped in `docs/superpowers/plans/2026-08-07-envio-por-pty.md`; see
 
 The PTY also carries a targeting problem the terminal panel does not have: `attach` delivers to
 whichever pane the tmux client last touched, but a send has to land on the **agent's** pane
-specifically — `_pane_target` (`tmux.py:85`). On a session with a manual split, a PTY attach could
+specifically — `_pane_target` (`tmux.py:103`). On a session with a manual split, a PTY attach could
 put the text in the owner's own shell instead. The window-size measurement above (item 6) is still
 true and it is what makes an attached PTY *harmless to have open* — it says nothing about whether it
 delivers to the right pane, and it doesn't.
@@ -255,9 +255,9 @@ a busy host or with many sessions — not here.
 
 What's actually untested is what a soak run would show, and none of it is visible in a 15 ms
 timing: SSE connections left open for hours (the 25s watchdog reconnecting on a half-open socket),
-file descriptors and `asyncio.to_thread` workers over a long run, the `capture_pane` burst
-described at `registry.py:787`, and what happens when sessions are created and killed repeatedly
-while the phone is subscribed.
+file descriptors and `asyncio.to_thread` workers over a long run, the `capture_pane` burst described
+at `registry.py:928` (`list_with_state`), and what happens when sessions are created and killed
+repeatedly while the phone is subscribed.
 
 Worth doing as a real experiment (N sessions, SSE open, forced reconnects, watch RSS/fd count over
 hours) rather than by reading more code. Deferred deliberately — nothing observed is broken.

@@ -11,7 +11,7 @@ A versão anterior do plano criava `app/ptysend.py` (~200 linhas) para escrever 
 (o teto de 16 KB) em uma linha — **1,088 MB em 0,32 s**, mais rápido que os 459 ms que o PTY levava
 para 1 MB — sem `fork`, sem cliente anexado, sem dimensionar janela. E o PTY tem um problema que o
 `load-buffer` não tem: `attach` entrega no pane **ativo** do cliente tmux, enquanto o envio mira
-`_pane_target`, o pane do **agente** especificamente (`tmux.py:85`). Numa sessão com split manual, o
+`_pane_target`, o pane do **agente** especificamente (`tmux.py:103`, função `_pane_target`). Numa sessão com split manual, o
 PTY iria mandar o texto pro shell do dono em vez do agente.
 
 **Alternativa se discordar:** construir o `app/ptysend.py` mesmo assim. O plano anterior está no
@@ -63,14 +63,15 @@ pedia — funciona, mas reabre o furo na costura de mock que a revisão fechou.
 Registrados durante a execução, não consertados de propósito — são menores e entram na revisão
 final da branch, não neste plano. Do `.superpowers/sdd/2026-08-07-envio-por-pty/progress.md`:
 
-- **Task 1** — `terminal_input.py:836`: a checagem inicial de tri-estado não tem teste; mutar
-  `is not True` para `is False` passa a suíte inteira.
-- **Task 1** — `terminal_input.py:838-841`: dentro do laço, o `C-u` continua saindo quando a
-  releitura devolve `None`; sair no primeiro `None` seria mais fiel a "nunca limpar às cegas".
+- **Task 1** — `terminal_input.py:860` (`_limpar_composer`, checagem inicial): a checagem inicial de
+  tri-estado não tem teste; mutar `is not True` para `is False` passa a suíte inteira.
+- **Task 1** — `terminal_input.py:862-865` (`_limpar_composer`, laço): dentro do laço, o `C-u`
+  continua saindo quando a releitura devolve `None`; sair no primeiro `None` seria mais fiel a
+  "nunca limpar às cegas".
 - **Task 1** — `_ULTIMA_LIMPEZA` é sidecar global e o comentário promete uma exclusividade que o
-  `_send_lock` (por nome, solto antes da leitura) não garante — `api.py:1314` já documenta `/input`
-  e `drain` concorrentes na mesma sessão. Vira bug real se algo passar a ler esse sidecar fora do
-  lock.
+  `_send_lock` (por nome, solto antes da leitura) não garante — `api.py:1316` (função `_send_one`)
+  já documenta `/input` e `drain` concorrentes na mesma sessão. Vira bug real se algo passar a ler
+  esse sidecar fora do lock.
 - **Task 2** — `terminal_input.py:569-574`: se a entrada some entre o claim e o requeue,
   `bump_attempts` devolve 0 e o ramo do requeue roda mesmo assim — o log chega a afirmar
   "reenfileirado (tentativa 0/2)". Conserto sugerido: `if limpou and 1 <= tentativas <=
