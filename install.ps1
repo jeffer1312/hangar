@@ -263,7 +263,12 @@ function Pare-Servico {
     # pro guard antigo (`so o proprio pid`) que deixou o instalador matar o shell pai — de novo, e
     # agora sem ninguem perceber. Sem saber quem e parente de quem, o certo e nao matar nada.
     if ($paisMapa.Count -eq 0) {
-        Falta "nao consegui enumerar processos (WMI) — NAO vou parar $Nome: sem a arvore de processos, o kill pode derrubar o shell que roda este instalador"
+        # ${Nome} e nao $Nome: dentro de aspas duplas, um cifrao seguido de dois-pontos e lido como
+        # QUALIFICADOR (o mesmo mecanismo de $env:PATH e $script:pendencias), e o espaco depois dos
+        # dois-pontos nao e nome valido -> erro de PARSE, que no PowerShell derruba o arquivo INTEIRO
+        # antes da primeira linha rodar. Ou seja: um `git pull` deixaria o instalador inutilizavel,
+        # sem passo 7, sem registrar nem reiniciar tarefa nenhuma.
+        Falta "nao consegui enumerar processos (WMI) — NAO vou parar ${Nome}: sem a arvore de processos, o kill pode derrubar o shell que roda este instalador"
         return 0
     }
     $linhagem = New-Object System.Collections.Generic.HashSet[int]
