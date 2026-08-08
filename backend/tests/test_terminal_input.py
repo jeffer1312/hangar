@@ -217,6 +217,58 @@ def test_paste_novo_conta_como_entrega():
     assert r is True
 
 
+# --- _limpar_composer: limpar o composer antes de reportar "partial" (07/08/2026) ---
+
+def test_limpar_composer_nao_apaga_texto_alheio():
+    # O dono pode ter digitado no terminal na janela em que o envio falhou. C-u às cegas comeria a
+    # frase dele. Só limpa quando o resíduo é confirmado como NOSSO (is True, não "not falsy").
+    pane = _pane_claude(["❯ frase comprida que o dono digitou no terminal"])
+    with patch("app.terminal_input.tmux.capture_pane", return_value=pane), \
+         patch.object(terminal_input, "send_keys") as sk:
+        assert terminal_input._limpar_composer(
+            "cc", "mensagem comprida nossa que nunca chegou no composer", None) is False
+    assert sk.call_args_list == []
+
+
+def test_limpar_composer_repete_c_u_ate_sumir():
+    # C-u apaga UMA linha (medido: bloco de 4 linhas precisou de 6 envios). Repete com teto e
+    # RECONFERE entre um envio e outro — nunca um número fixo de teclas às cegas.
+    nosso = "mensagem comprida de teste que fica no composer"
+    panes = iter([
+        _pane_claude([f"❯ {nosso}"]),      # leitura inicial: resíduo nosso
+        _pane_claude([f"❯ {nosso}"]),      # ainda lá depois do 1o C-u
+        _pane_claude(["❯ "]),              # limpo depois do 2o
+    ])
+    with patch("app.terminal_input.tmux.capture_pane", side_effect=lambda *_a, **_k: next(panes)), \
+         patch.object(terminal_input, "send_keys") as sk:
+        assert terminal_input._limpar_composer("cc", nosso, None) is True
+    assert sk.call_args_list == [call("cc", "C-u"), call("cc", "C-u")]
+
+
+def test_limpar_composer_desiste_com_teto_e_avisa(caplog):
+    # TUI que ignora C-u (pane de shell): não pode virar laço infinito nem silêncio.
+    nosso = "mensagem comprida de teste que nao sai do composer"
+    with patch("app.terminal_input.tmux.capture_pane", return_value=_pane_claude([f"❯ {nosso}"])), \
+         patch.object(terminal_input, "send_keys") as sk, \
+         caplog.at_level("WARNING", logger="claude_pocket.terminal_input"):
+        assert terminal_input._limpar_composer("cc", nosso, None) is False
+    assert len(sk.call_args_list) == terminal_input._LIMPEZA_MAX_TECLAS
+    assert "nao limpou" in caplog.text
+
+
+def test_limpar_composer_nao_trata_indefinido_como_limpo():
+    # `_composer_residuo` é tri-estado: None = "não dá pra saber" (pane ilegível, texto curto).
+    # Tratar None como sucesso é o falso positivo que o resto do módulo passou meses consertando —
+    # aqui viraria "limpei" sem ter limpado, e o requeue da Task 2 reenviaria por cima do resíduo.
+    nosso = "mensagem comprida de teste para a limpeza"
+    leituras = iter([True, None])          # havia resíduo nosso; depois do C-u não dá pra saber
+    with patch("app.terminal_input.tmux.capture_pane", return_value="pane qualquer"), \
+         patch.object(terminal_input, "_composer_residuo",
+                      side_effect=lambda *_a, **_k: next(leituras, None)), \
+         patch.object(terminal_input, "send_keys"):
+        assert terminal_input._limpar_composer("cc", nosso, None) is False
+
+
 def test_sem_foto_previa_placeholder_nao_conta():
     # pastes_antes=None (ramo de linha unica / caminhos antigos): placeholder nunca e prova.
     pane = _pane_claude(["❯ [Pasted text #7 +2 lines]"])
