@@ -263,6 +263,11 @@ def provider_of_pane(pid, children: Optional[dict[int, list[int]]] = None) -> st
 # apareceria vindo da sessao errada, calado — o comentario anterior afirmava que isso nao acontecia,
 # e o codigo nao fazia o que ele dizia (achado da revisao). Guarda tambem o resultado vazio: sem
 # isso, recado de sessao fora do tmux (um `claude -p` solto) pagaria um fork de tmux por linha.
+# EXCECAO, e ela e real: onde `/proc/<pid>/stat` nao da pra ler (hidepid=2, backend sob outro uid),
+# o start time e None SEMPRE e o cache — inclusive o negativo — nunca vale. Ali o fork por linha
+# volta, e um `GET /history` sem limite (que reparseia o jsonl inteiro) paga um por recado. E o
+# preco de nao arriscar atribuir recado a sessao errada; se doer, o conserto e cachear por
+# (pid, jsonl do remetente), nao afrouxar a chave.
 _NOME_POR_PID: dict[int, tuple[Optional[float], Optional[str]]] = {}
 
 
