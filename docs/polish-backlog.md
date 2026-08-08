@@ -301,6 +301,19 @@ each is worth keeping:
   party. The executable filter needs a field of its own — the existing `Exe` is the program to
   *launch* (`uv`, `npm`), while what holds the socket is `python.exe`/`node.exe`.
 
+Measured afterwards, no process leak: 0 orphans before and after three consecutive `-Update` runs
+(4 processes from this checkout each time, all inside the service tree). Two notes from that
+measurement, both worth more than the result:
+
+- **A dead ppid does not mean orphan here.** The scheduled task runs through `wscript`, which exits
+  and leaves the service alive with a dead ancestor *by design* — that criterion would flag a healthy
+  backend and front as orphans. The right question is whether the process belongs to the tree of
+  whoever is listening on the ports right now.
+- **Editing the same file twice does not force a rebuild.** The build stamp is the commit plus
+  `git status --porcelain` of `frontend/`, so touching `app.css` again yields the same line and the
+  second run skips the build — which would have produced a measurement of three runs where two did
+  nothing.
+
 Two smaller ones came with it: the kill counter asked `Get-Process` on the line right after
 `Stop-Process`, before Windows had torn the process down, so a successful kill counted as zero and the
 note never printed; and a WMI hiccup silently degraded the lineage guard back to "own pid only", which
