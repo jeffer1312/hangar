@@ -154,7 +154,12 @@ def _peer_msg_embrulhado(texto) -> Optional[str]:
     if not m:
         return None
     corpo = m.group(2).strip()
-    if not corpo:
+    if not corpo or "<cross-session-message" in corpo or "</cross-session-message>" in corpo:
+        # "Exatamente UM embrulho" levado ate DENTRO do corpo: com dois embrulhos concatenados, o
+        # fullmatch casa mesmo assim (o corpo nao-guloso engole o fechamento do primeiro e a abertura
+        # do segundo) e sairia uma bolha unica, com as tags cruas no meio, atribuida so ao primeiro
+        # remetente. Nao foi observado — mas o dia em que dois recados forem coalescidos num campo so
+        # e o dia em que isso vira texto podre exibido, em vez de duas mensagens.
         return None
     attrs = dict(_PEER_ATTR_RE.findall(m.group(1)))
     sock = _PEER_SOCK_PID_RE.search(attrs.get("from", ""))
