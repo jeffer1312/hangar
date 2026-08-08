@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 import threading
 import time
@@ -49,6 +50,16 @@ _MULTILINE_SUBMIT_SETTLE = 0.5
 # ja faz 8s depois; esta checagem existe pra ANTECIPAR o sinal, nao pra substituir aquele.
 _SUBMIT_CHECK_INTERVALO = 0.15
 _SUBMIT_CHECK_PRAZO = 1.0
+# Prazo da prova da colagem por clipboard (Windows). NAO herda o _SUBMIT_CHECK_PRAZO (1.0s): aquele
+# saiu do paste-buffer do tmux no Linux, e o comentario dele avisava que a medicao no Windows
+# faltava. Ela existe agora (docs/medicoes-2026-08-08-windows.md): 5 colagens de 600 linhas ate o
+# `[Pasted text #N]` aparecer deram 676, 665, 955, 1341 e 975 ms — 1.0s falharia em 3 das 5, e um
+# settle fixo de 0.5s falharia em TODAS. 4.0s = 3x o pico medido, o mesmo criterio de folga do
+# vizinho.
+# CUIDADO: o tempo CRESCE com o numero de colagens da mesma sessao (as duas primeiras na casa dos
+# 670ms, as ultimas acima de 950). Se estourar numa sessao de vida longa, a saida NAO e mandar Enter
+# assim mesmo — e falhar alto, que e o que _provou_entrega faz devolvendo False.
+_PROVA_PRAZO = 4.0
 
 
 def _entrou_no_composer(name: str, texto: str, pastes_antes: set[str] | None = None) -> bool:
@@ -74,6 +85,29 @@ def _entrou_no_composer(name: str, texto: str, pastes_antes: set[str] | None = N
             # e a mesma politica que o _wait_input_ready ja adota: na duvida, envia e avisa.
             return True
         if time.monotonic() >= fim:
+            return False
+        time.sleep(_SUBMIT_CHECK_INTERVALO)
+
+
+def _provou_entrega(name: str, texto: str, pastes_antes: set[str] | None) -> bool:
+    """Prova ESTRITA de que a colagem chegou: so `is True` conta.
+
+    Diferente de `_entrou_no_composer`, que aceita o indefinido pra nao travar o caminho de sempre.
+    Aqui o indefinido NAO pode liberar o Enter: no caminho do clipboard, "nao sei" pode significar
+    que a tecla nao foi entendida e o composer esta VAZIO — e o Enter submeteria o nada, ou pior, o
+    que ja estivesse la. Medido na winboat: a TUI descarta o Alt+V enquanto esta processando, e nesse
+    caso nada aparece no composer e nenhum comando devolve erro.
+
+    LIMITE ASSUMIDO, e ele importa: isto prova que ALGUMA COISA foi colada, nunca O QUE. Numa
+    mensagem grande a TUI colapsa em `[Pasted text #N]` e o conteudo nunca e desenhado, entao nao ha
+    como comparar. E por isso que o `tmux._CLIP_LOCK` e obrigatorio e fica segurado ate aqui: ele
+    fecha a unica janela em que o conteudo colado poderia ser de outra mensagem.
+    """
+    prazo = time.monotonic() + _PROVA_PRAZO
+    while True:
+        if _composer_residuo(_capture(name), texto, name, pastes_antes) is True:
+            return True
+        if time.monotonic() >= prazo:
             return False
         time.sleep(_SUBMIT_CHECK_INTERVALO)
 
@@ -1010,6 +1044,29 @@ class TerminalInput:
                 # Foto dos placeholders de paste ANTES do nosso: so um numero NOVO conta como
                 # evidencia de entrega (ver _composer_residuo — paste alheio nao pode virar prova).
                 pastes_antes = _paste_ids(_composer_regiao(_capture(name), name) or "")
+                # Windows + Claude: o clipboard e o unico caminho que entrega multi-linha inteiro (o
+                # linha-a-linha mede 309 de 600 e devolve "sent"). Gated em `claude` porque `Alt+V` e
+                # binding DELE — Pi e Codex tem resposta propria (Codex nem passa aqui: usa o
+                # app-server).
+                if os.name == "nt" and provider == "claude":
+                    # O lock e segurado da escrita ATE o fim da prova. Soltar antes reabre a janela em
+                    # que outra sessao sobrescreve o clipboard e o nosso M-v cola o texto dela — com
+                    # um `[Pasted text #N]` novo aparecendo do mesmo jeito, entao a prova nao ve.
+                    with tmux._CLIP_LOCK:
+                        if not tmux.paste_via_clipboard(name, text):
+                            return _partial(name, "clipboard nao escrito — nada foi digitado no "
+                                                  "pane", text, pastes_antes)
+                        if not _provou_entrega(name, text, pastes_antes):
+                            # Sem fallback pro caminho antigo DE PROPOSITO: ele e justamente o que
+                            # perde 291 de 600 linhas afirmando entrega. Aqui vira partial, que limpa
+                            # o composer e deixa a fila reenfileirar.
+                            return _partial(name, "colagem pelo clipboard sem prova no composer — "
+                                                  "Enter NAO enviado", text, pastes_antes)
+                    send_keys(name, "Enter")
+                    if not _submeteu(name, text, pastes_antes):
+                        return _partial(name, "colagem submetida mas a cauda continua no composer",
+                                        text, pastes_antes)
+                    return "sent"
                 # `is False` e nao `not ...` — MESMO raciocinio do ramo de uma linha logo abaixo: o
                 # UNICO produtor de False e uma falha CONFIRMADA (ver tmux.paste_text/
                 # _paste_linha_a_linha/_send_literal); None (dublê de teste que nao repassa sinal)
