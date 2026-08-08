@@ -276,8 +276,35 @@ serving 502 until someone logged in. Note the asymmetry before "fixing" it with 
 the interactive session is what gives the backend the clipboard, i.e. the Windows send path built
 above.
 
-Two things to do, not done yet: stop the front **before** `npm ci`, and make `-Update` refuse to
-print `Pronto` when any step failed.
+**Both fixed and verified on the Windows box** (`641155b`…`cbc4ed9`): the front is stopped before
+`npm ci`, and `-Update` refuses to print `Pronto` when any step failed — it prints what is missing and
+exits 1.
+
+Getting there cost three defects of my own, all found by the pair running it on the real machine, and
+each is worth keeping:
+
+- **A function declared inside an `if`.** PowerShell has no hoisting, so `Pare-Servico` did not exist
+  on the common `-Update` — the one where the pull did not touch `frontend/` — and the call in step 7
+  threw `CommandNotFound` with the backend task registered and never restarted. The `catch` there does
+  not add to `pendencias`, so that run would still have ended in `Pronto`.
+- **`$Nome:` inside a double-quoted string.** A dollar sign followed by a colon reads as a scope
+  qualifier (`$env:PATH`), and PowerShell parses the whole file before running line one — so this took
+  down `install.ps1` entirely. Since `-Update` fires from the post-merge hook, a pull would have left
+  the machine with an installer that cannot run at all, and the hook only prints a warning.
+- **Killing bystanders.** `Pare-Servico` matched any process whose command line merely *mentioned* the
+  checkout path, so a `Start-Sleep` with that path in a comment died. Worse: edit a file under
+  `frontend/` and call the installer in the same command, and the shell's own command line carries the
+  path — the shell was killed, and the installer, being its child, went with it (exit 255 right after
+  `4/8 Frontend`, front already down, `npm ci` never run). Fixed in two layers, because they cover
+  different victims: excluding the installer's whole **ancestor chain** saves the shell that launched
+  it, and requiring the **executable name** (`uv|python`, `node|npm|vite`) saves the unrelated third
+  party. The executable filter needs a field of its own — the existing `Exe` is the program to
+  *launch* (`uv`, `npm`), while what holds the socket is `python.exe`/`node.exe`.
+
+Two smaller ones came with it: the kill counter asked `Get-Process` on the line right after
+`Stop-Process`, before Windows had torn the process down, so a successful kill counted as zero and the
+note never printed; and a WMI hiccup silently degraded the lineage guard back to "own pid only", which
+now refuses to kill anything instead.
 
 **Still open:** Pi and Codex on Windows keep the old path — `Alt+V` is Claude Code's binding and
 nobody has measured theirs. And the `cp-send`/`input` channel toward Windows was caught mutilating
