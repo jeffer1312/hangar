@@ -236,25 +236,11 @@ if ((Test-Path $dist) -and (Test-Path $modulos)) {
     }
 }
 
-if ($precisa) {
-    # Exit code de CADA etapa, e nao roda-e-assume: o comentario abaixo prometia que a marca so era
-    # gravada depois do build dar certo, mas nada CONFERIA o resultado - `npm ci` e `npm run build`
-    # iam sem checagem. Medido em producao (post-merge de 30/07 07:37): o npm ci nao populou o
-    # node_modules\.bin, o build morreu com 'vite' nao e reconhecido, e o passo gravou a marca e
-    # imprimiu 'ok buildado' do mesmo jeito. Pior que o falso ok: a marca ENVENENA o cache (fica
-    # igual ao HEAD), entao toda rodada seguinte PULA o build e o dist velho fica pra sempre - o
-    # dist servido era de 21h antes, sem as mudancas de aparencia que ja estavam no repo.
-    # Nativo() em vez de chamada crua: com ErrorActionPreference='Stop', um aviso qualquer do npm no
-    # stderr derrubaria o instalador inteiro (ver o docstring dele).
-    # Chamada LITERAL, e NAO pelo Nativo: no Windows `npm` resolve PRIMEIRO pro shim npm.ps1
-    # (ExternalScript, antes do npm.cmd), e o Nativo passa argumento por SPLATTING
-    # (`@($args[1..])`) -- o npm.ps1 monta o $NPM_ARGS dele indexando $args e estoura
-    # IndexOutOfRangeException na linha 47 dele. Medido: foi exatamente assim que este passo
-    # ABORTOU a instalacao inteira. O Nativo existe pra programa NATIVO; npm no Windows nao e um.
-    # O preference vira 'Continue' so aqui, pelo mesmo motivo do Nativo: um aviso do npm no stderr
-    # nao pode virar erro terminante. A saida do npm fica VISIVEL de proposito -- foi ela que
-    # denunciou o "'vite' nao e reconhecido" que este conserto passou a tratar.
-# Definida ANTES do build de proposito: o passo 2 precisa dela pra derrubar o front ANTES do
+# Definida no nivel do MODULO, nunca dentro de um `if`: o PowerShell nao tem hoisting, entao uma
+# funcao declarada num ramo que nao executa simplesmente NAO EXISTE. Ela nasceu dentro do
+# `if ($precisa)` do passo do frontend e isso quebrava justamente o caso comum — um `-Update` que
+# nao mexe em frontend/ pula o ramo, e a chamada do passo 7 estourava CommandNotFound no meio do
+# registro das tarefas, com o backend ja registrado e nao reiniciado.
 # `npm ci`. Ver o comentario naquele passo.
 function Pare-Servico {
     param([string]$Nome, [int]$Porta, [string]$Padrao)
@@ -311,6 +297,25 @@ function Pare-Servico {
     return $mortos
 }
 
+if ($precisa) {
+    # Exit code de CADA etapa, e nao roda-e-assume: o comentario abaixo prometia que a marca so era
+    # gravada depois do build dar certo, mas nada CONFERIA o resultado - `npm ci` e `npm run build`
+    # iam sem checagem. Medido em producao (post-merge de 30/07 07:37): o npm ci nao populou o
+    # node_modules\.bin, o build morreu com 'vite' nao e reconhecido, e o passo gravou a marca e
+    # imprimiu 'ok buildado' do mesmo jeito. Pior que o falso ok: a marca ENVENENA o cache (fica
+    # igual ao HEAD), entao toda rodada seguinte PULA o build e o dist velho fica pra sempre - o
+    # dist servido era de 21h antes, sem as mudancas de aparencia que ja estavam no repo.
+    # Nativo() em vez de chamada crua: com ErrorActionPreference='Stop', um aviso qualquer do npm no
+    # stderr derrubaria o instalador inteiro (ver o docstring dele).
+    # Chamada LITERAL, e NAO pelo Nativo: no Windows `npm` resolve PRIMEIRO pro shim npm.ps1
+    # (ExternalScript, antes do npm.cmd), e o Nativo passa argumento por SPLATTING
+    # (`@($args[1..])`) -- o npm.ps1 monta o $NPM_ARGS dele indexando $args e estoura
+    # IndexOutOfRangeException na linha 47 dele. Medido: foi exatamente assim que este passo
+    # ABORTOU a instalacao inteira. O Nativo existe pra programa NATIVO; npm no Windows nao e um.
+    # O preference vira 'Continue' so aqui, pelo mesmo motivo do Nativo: um aviso do npm no stderr
+    # nao pode virar erro terminante. A saida do npm fica VISIVEL de proposito -- foi ela que
+    # denunciou o "'vite' nao e reconhecido" que este conserto passou a tratar.
+
     # DERRUBA O FRONT ANTES DO `npm ci`, e isto nao e zelo: o `npm ci` APAGA o node_modules antes de
     # reinstalar, e o Windows nao deixa apagar binario nativo mapeado em processo vivo. Medido em
     # 08/08/2026 nesta maquina: com o Vite de pe, o npm ci apagou quase tudo e morreu em
@@ -321,7 +326,11 @@ function Pare-Servico {
     # reergueu o front, e como o `tailscale serve` daquela instalacao publica a raiz no 5173, o
     # celular passou a ver 502 em TUDO, com o backend vivo o tempo inteiro.
     # Ou seja: o instalador se auto-sabotava, e o sintoma aparecia horas depois, longe da causa.
-    $mortosFront = Pare-Servico 'frontend (antes do npm ci)' 5173 ([regex]::Escape("$raiz\frontend"))
+    # Por PADRAO, sem a porta, e de proposito: o criterio de porta mata QUEM ESTIVER na 5173, e aqui
+    # a pergunta nao e "quem ocupa a porta" (isso so importa no passo 7, pra instancia nova subir) —
+    # e "quem segura os arquivos DESTE checkout". Passando a porta, um Vite de outro projeto do
+    # usuario morreria num `install.ps1` que ele rodou por outro motivo.
+    $mortosFront = Pare-Servico 'frontend (antes do npm ci)' 0 ([regex]::Escape("$raiz\frontend"))
     if ($mortosFront -gt 0) { Nota "front derrubado antes do npm ci ($mortosFront processo(s))" }
     $tBuild = Get-Date
     $eapAnterior = $ErrorActionPreference
