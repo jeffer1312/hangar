@@ -243,8 +243,22 @@ if ((Test-Path $dist) -and (Test-Path $modulos)) {
 # registro das tarefas, com o backend ja registrado e nao reiniciado.
 # `npm ci`. Ver o comentario naquele passo.
 function Pare-Servico {
-    param([string]$Nome, [int]$Porta, [string]$Padrao)
+    param([string]$Nome, [int]$Porta, [string]$Padrao, [string]$Exe)
     $alvos = @()
+    # ANCESTRAIS do instalador, jamais alvos. Medido em 08/08/2026: quem edita um arquivo do front e
+    # chama o instalador no MESMO comando deixa o caminho do checkout na cmdline do proprio shell —
+    # o casamento por substring pegava esse shell, e como o BFS abaixo desce nos descendentes, matar
+    # o pai levava o instalador junto. Foi exatamente o que aconteceu: exit 255 logo depois de
+    # imprimir '4/8 Frontend', com o front JA derrubado e o `npm ci` nunca executado, deixando a
+    # maquina em 502 ate alguem reerguer a tarefa na mao. O guard `-ne $PID` de antes protegia so o
+    # processo atual, nunca a linhagem dele.
+    $paisMapa = @{}
+    foreach ($p in (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
+        $paisMapa[[int]$p.ProcessId] = [int]$p.ParentProcessId
+    }
+    $linhagem = New-Object System.Collections.Generic.HashSet[int]
+    $cur = $PID
+    while ($cur -and $linhagem.Add($cur)) { $cur = $paisMapa[$cur] }
     # Por PORTA e o criterio mais preciso: quem esta segurando o socket e exatamente quem
     # impediria a instancia nova de subir.
     if ($Porta -gt 0) {
@@ -252,13 +266,20 @@ function Pare-Servico {
                    Select-Object -ExpandProperty OwningProcess)
     }
     # Por PADRAO pega o que ja largou a porta mas continua vivo (meio-termo de um crash).
+    #
+    # `-Exe` estreita isso pro EXECUTAVEL certo, e nao e refinamento: a cmdline so MENCIONAR o
+    # caminho do checkout nao faz de ninguem um servidor. Um `Start-Sleep` com o caminho num
+    # COMENTARIO era morto por este filtro — medido —, e o caso banal e o pior: o terminal de onde
+    # se roda o instalador (quem editou um arquivo do front no mesmo comando), um editor aberto, um
+    # grep. Casando tambem o nome do processo, sobra quem de fato executa o front.
     if ($Padrao) {
         $alvos += (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-                   Where-Object { $_.CommandLine -and $_.CommandLine -match $Padrao } |
+                   Where-Object { $_.CommandLine -and $_.CommandLine -match $Padrao -and
+                                  (-not $Exe -or $_.Name -match $Exe) } |
                    Select-Object -ExpandProperty ProcessId)
     }
-    # $PID: nunca matar o proprio instalador.
-    $alvos = @($alvos | Where-Object { $_ -and $_ -ne $PID } | Select-Object -Unique)
+    # Fora: o proprio instalador e TODA a linhagem dele (ver o comentario da $linhagem acima).
+    $alvos = @($alvos | Where-Object { $_ -and -not $linhagem.Contains([int]$_) } | Select-Object -Unique)
     if ($alvos.Count -eq 0) { return 0 }
     # Descendentes RECURSIVOS, nao um nivel so. O backend nasce `uv -> python -> python` e quem
     # segura a porta e o NETO: parar so o pai (ou pai+filhos) deixava a porta presa e a instancia
@@ -274,19 +295,24 @@ function Pare-Servico {
     foreach ($a in $alvos) { [void]$fila.Enqueue([int]$a) }
     while ($fila.Count -gt 0) {
         $cur = $fila.Dequeue()
-        if ($cur -eq $PID -or -not $todos.Add($cur)) { continue }
+        if ($linhagem.Contains([int]$cur) -or -not $todos.Add($cur)) { continue }
         foreach ($f in ($mapa[$cur] | Where-Object { $_ })) { [void]$fila.Enqueue([int]$f) }
     }
     # Conta o que MORREU, nao o que foi tentado. Com -ErrorAction SilentlyContinue o Stop-Process
     # engole "acesso negado" em silencio, e o contador antigo ($todos.Count) reportava sucesso pra
     # kill que nao aconteceu - a mensagem "instancia anterior derrubada" saia mesmo com o processo
     # velho vivo, que e exatamente o bug que este helper existe pra evitar.
+    # Mata TODOS primeiro, espera, e SO ENTAO conta: o `Stop-Process` volta antes de o Windows ter
+    # derrubado o processo, entao perguntar `Get-Process` na linha seguinte via o processo ainda
+    # vivo e contava 0. Medido 5 de 5 em 08/08/2026: o kill funcionava e o contador dizia que nao,
+    # sumindo com a nota de "front derrubado". O comentario original desta contagem fala em nao
+    # reportar sucesso falso — ela vinha errando pro lado oposto, escondendo sucesso real.
+    foreach ($p in $todos) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Milliseconds 800
     $mortos = 0
     foreach ($p in $todos) {
-        Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
         if (-not (Get-Process -Id $p -ErrorAction SilentlyContinue)) { $mortos++ }
     }
-    Start-Sleep -Milliseconds 800
     # A porta ficou LIVRE? E o que realmente importa - processo morto com a porta ainda presa
     # (outro dono) faz a instancia nova falhar do mesmo jeito. -State Listen e obrigatorio: sem ele
     # um socket em TIME_WAIT do processo recem-morto ainda conta como ocupada.
@@ -330,7 +356,8 @@ if ($precisa) {
     # a pergunta nao e "quem ocupa a porta" (isso so importa no passo 7, pra instancia nova subir) —
     # e "quem segura os arquivos DESTE checkout". Passando a porta, um Vite de outro projeto do
     # usuario morreria num `install.ps1` que ele rodou por outro motivo.
-    $mortosFront = Pare-Servico 'frontend (antes do npm ci)' 0 ([regex]::Escape("$raiz\frontend"))
+    $mortosFront = Pare-Servico -Nome 'frontend (antes do npm ci)' -Porta 0 `
+                                -Padrao ([regex]::Escape("$raiz\frontend")) -Exe 'node|npm|vite'
     if ($mortosFront -gt 0) { Nota "front derrubado antes do npm ci ($mortosFront processo(s))" }
     $tBuild = Get-Date
     $eapAnterior = $ErrorActionPreference
