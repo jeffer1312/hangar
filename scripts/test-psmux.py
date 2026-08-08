@@ -385,9 +385,15 @@ check("load-buffer ESCAPA a quebra e ninguem desescapa",
 
 # E o paste-buffer em si: entrega o que ESTIVER no buffer. Prova o instrumento — a
 # perda ja aconteceu na escrita, antes desta chamada.
+# O rc NAO basta como prova, e este arquivo e o lugar onde isso ja foi medido: o psmux
+# devolve rc=0 sem entregar (9c). Entao confere na TELA, igual as secoes vizinhas.
+r_paste = run(["paste-buffer", "-b", "cp0", "-t", alvo])
+espera(1.0)
+tela = captura()
 check("paste-buffer entrega o buffer (o comando existe e funciona)",
-      run(["paste-buffer", "-b", "cp0", "-t", alvo]).returncode == 0,
-      "se ISTO falhar, ai sim o paste-buffer nao existe nesta versao")
+      r_paste.returncode == 0 and "buf-um-abc" in tela,
+      f"rc={r_paste.returncode} | tela:\n{tela[-400:]} — se ISTO falhar, ai sim o "
+      "paste-buffer nao serve nesta versao e o CLAUDE.md volta atras")
 run(["delete-buffer", "-b", "cp0"])
 run(["delete-buffer", "-b", "cp1"])
 
