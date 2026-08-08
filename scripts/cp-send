@@ -3,6 +3,8 @@
 #
 #   cp-send --list                 lista sessões vivas (nome, estado, cwd) — locais e remotas
 #   cp-send <sessao> <mensagem...> manda prompt pra sessão (fila durável se ocupada)
+#                                  RECUSA (código 3) quando o caminho NATIVO do Claude Code alcança
+#                                  os dois lados — ver "Caminho nativo" abaixo. --tmux força este.
 #   cp-send <servidor>::<sessao> <mensagem...>  idem, pra sessão em OUTRO servidor (peers.json)
 #   cp-send --pair <sessao> [tarefa...]  pareia ESTA sessão com outra (registra no app:
 #                                        badge 🤝 na UI + protocolo injetado nos dois lados)
@@ -22,6 +24,18 @@
 # máquina — vira o endereço de resposta ([de: <id>::<sessao>]) quando o recado cruza servidor.
 # --pair cross-server (servidor::sessao) FUNCIONA (1:1): o backend local resolve peers.json + chama
 # o /pair-remote do outro. ponytail: --group cross-server ainda não existe — só recado 1:1 e --list.
+#
+# CAMINHO NATIVO (Claude Code 2.1.224+): o Claude Code entrega recado entre sessões da mesma máquina
+# por socket, sem digitar no terminal — some a classe de bug do send-keys (texto cortado no teto de
+# 16KB do tmux, \n submetendo linha, reenvio concatenando no composer), e o recado entra no MEIO do
+# turno do destino, entre duas ferramentas, em vez de esperar ele ficar ocioso. Quando esse caminho
+# alcança os DOIS lados, o recado 1:1 local aqui é RECUSADO com a instrução de usar `SendMessage`.
+# A checagem é por FATO nos dois lados, nunca por suposição:
+#   - remetente: $CLAUDE_CODE_MESSAGING_SOCKET, que o Claude Code exporta pro Bash de quem TEM;
+#   - destino:   /api/sessions/<alvo>/peer-address devolve o socket de inbox dele, ou null.
+# Faltando qualquer um dos dois (sessão aberta antes da liberação, Codex, Pi, outra máquina), envia
+# como sempre — recusar ali mandaria o modelo bater numa porta que não existe. --group, --pair,
+# --new e cross-server nunca são recusados: não têm equivalente nativo.
 set -euo pipefail
 
 ENV_FILE="$(dirname "$(realpath "$0")")/../backend/.env"
@@ -212,8 +226,32 @@ if [[ "$1" == "--group" ]]; then
     exit 0
 fi
 
+forcar_tmux=0
+if [[ "${1:-}" == "--tmux" ]]; then forcar_tmux=1; shift; fi
+
 target="$1"; shift
-[[ $# -ge 1 ]] || { echo "uso: cp-send <sessao|servidor::sessao> <mensagem...>" >&2; exit 2; }
+[[ $# -ge 1 ]] || { echo "uso: cp-send [--tmux] <sessao|servidor::sessao> <mensagem...>" >&2; exit 2; }
+
+# Caminho nativo alcança os DOIS lados? Então este envio é o pior dos dois — recusa e diz o certo.
+# Só pro 1:1 LOCAL: cross-server (`::`) cai fora pelo teste do alvo, e --group/--pair/--new nem
+# chegam aqui. Nunca "quase": faltando um dos lados, segue o envio de sempre.
+if [[ $forcar_tmux -eq 0 && -n "${CLAUDE_CODE_MESSAGING_SOCKET:-}" && "$target" != *::* ]]; then
+    uds=$(api GET "/api/sessions/$target/peer-address" 2>/dev/null \
+          | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("uds") or "")
+except Exception: print("")' 2>/dev/null || true)
+    if [[ -n "$uds" ]]; then
+        # stderr + código 3: o modelo PRECISA ver que não entregou. Um aviso no stdout com código 0
+        # seria lido como sucesso e a mensagem sumiria sem ninguém notar.
+        cat >&2 <<EOF
+recusado: '$target' é sessão Claude desta máquina e o caminho nativo alcança os dois lados.
+Use a ferramenta SendMessage (o alvo aparece no ListAgents) — entrega por socket, sem digitar no
+terminal: não corta texto longo, não submete linha por linha, e chega no meio do turno dele.
+Se o ListAgents não listar '$target', repita este comando com --tmux que ele envia do jeito antigo.
+EOF
+        exit 3
+    fi
+fi
 
 sender=$(me)
 sess="$target"

@@ -3,6 +3,82 @@
 Captured from live testing (phone, real session). Deferred by the user to the polish
 phase — not blockers. Newest first.
 
+## Claude Code shipped native cross-session messaging (2026-08-07)
+
+Anthropic released it the same day, in **v2.1.224**: two tools Claude drives itself — `ListAgents`
+to discover reachable sessions, `SendMessage` to deliver text to one by name — plus `/list-agents`
+(alias `/peers`) and a `Peer address` row in `/status`. Delivery is a **per-session unix socket**
+registered in files on disk; the path is exported as `CLAUDE_CODE_MESSAGING_SOCKET` to hooks and
+Bash *before any hook runs*. Docs: <https://code.claude.com/docs/en/cross-session-messaging>.
+
+It overlaps `cp-send`'s core and does that part **better**: no terminal typing at all, so the whole
+bug class measured above (16344-byte tmux ceiling, `\n` submitting a line, 2N−1 calls line-by-line)
+simply does not exist there. It also rate-limits and drops identical repeats, so an A↔B loop stops
+on its own.
+
+**The plan is to route through it when it exists and keep everything else — not to remove what is
+here.** What stays ours, because the native feature has no equivalent:
+
+| | native | `cp-send` |
+|---|---|---|
+| starting an exchange with another machine | no — replies only, via Anthropic servers + Remote Control | yes, direct over the mesh (`peers.json`), no cloud |
+| Codex / Pi sessions | no (Claude Code only) | yes |
+| creating a session (`--new`, `--engine`) | no | yes |
+| pairing + shared contract + PairSheet | no | yes |
+| group broadcast (`--group`) | no | yes |
+| phone UI | no | yes |
+
+Two things measured here that decide the shape of the integration:
+
+- **`cp-send` must NOT write into the peer's socket.** Claude Code only delivers without approval a
+  message it can *verify* came from a child process of **that same session** (a hook or Bash posting
+  to its own socket). A script posting to someone else's socket asserts no permission class, and a
+  session that bypasses permission prompts — which is how these sessions run — **holds it for
+  approval**, in a dialog that expires in 5 minutes. So the native path is the paired Claude using
+  **its own `SendMessage` tool**; that is a change to the protocol text in the heredoc of
+  `scripts/install-cp-send.sh`, not backend code.
+- **What breaks is the pair conversation in the UI.** `PairSheet` mines nothing the backend routed:
+  it fetches each member's `getHistory` and matches `user_msg` whose text starts with `[de: X]`
+  (`PairSheet.svelte:62` → `parsePeerMessage`, `lib/format.ts:201`). A native message lands in the
+  transcript with *its own* sender labeling, so the group timeline would go quiet with no error.
+
+Also worth carrying into any design: a delivered message counts toward usage like a typed prompt,
+and it arrives explicitly labeled *not from the user* — it cannot approve a permission prompt or
+change configuration. That is right for pair traffic and **wrong for the app's main path**: a
+message typed on the phone is the user, and routing it through the peer socket would strip it of
+exactly that. The PTY item above stays the answer for the user's own text.
+
+### Shipped the same day — what is live, and what the measurement showed
+
+The rollout reached this machine hours after the entry above was written, so the two items were
+measured on real traffic and built. See `transcript.py` (`_peer_msg`), `registry.inbox_socket_of` /
+`name_of_pid`, `GET /api/sessions/{name}/peer-address`, and the guard in `scripts/cp-send`.
+
+- **A peer message arrives in two different shapes, and only one of them was obvious.** Target
+  **idle** → `queue-operation enqueue` + `dequeue` + a `type: "user"` entry carrying a structured
+  `origin` (`kind:"peer"`, `from:"uds:.../cc-socks/<pid>.sock"`, `verifiedPeerPid`, `name`,
+  `fromMode`, `body`). Target **mid-turn** → `enqueue` + **`remove`**, and **no `type: user` entry at
+  all**: the harness consumes it between two tool calls, without interrupting the running tool. The
+  `remove` shape carries only the wrapped text, no `origin`. Both paths had to be handled — the
+  second one is not defensive coding, it is what happens whenever a peer writes to a session that is
+  working, which for a paired session is most of the time.
+- **`message.content` is not displayable** — it carries the `<cross-session-message>` wrapper plus a
+  full paragraph instructing the receiver about permission laundering. `origin.body` is the clean
+  text; for the `remove` shape it has to be pulled out of the wrapper.
+- **`origin.name` is the session's TITLE, not its name** ("Revisar novo modo de envio no backlog"
+  where the tmux session is `claude-cockpit`), so it does not match anything the app addresses by.
+  `verifiedPeerPid` → pane → tmux name is what makes the group feed and the badges work.
+- The whole integration is therefore **one branch in the parser** that normalizes a native message
+  into the exact shape `cp-send` already produces (`[de: <session>] body`). Nothing in the front
+  changed.
+- **The routing rule is enforced in code, not only in the protocol text.** `cp-send` refuses a local
+  1:1 (exit 3) only when the native path provably reaches *both* ends — sender has
+  `CLAUDE_CODE_MESSAGING_SOCKET`, target's `/peer-address` returns a socket — and `--tmux` forces the
+  old path. Checking the **fact** rather than the session type is what makes Pi and Codex fall out on
+  their own: measured here, both Pi sessions return no socket while all three Claude ones do. Text in
+  `CLAUDE.md` alone would not have been enough — an already-open session never re-reads it, but it
+  obeys the script immediately.
+
 ## Peers (the cross-machine mesh) have no UI at all (2026-08-07)
 
 `backend/peers.json` is the only way to add, remove, enable or disable a remote machine. There is
@@ -51,35 +127,53 @@ Two things the design must carry from the start:
 - **the choice between paths must be explicit in code** (has a newline / exceeds N bytes), never
   "sometimes pasting fails".
 
-**Measure before building any of it.** The whole idea rests on one assumption nobody has tested:
-that a bracketed paste written into the PTY master survives the trip through `tmux attach` and
-reaches the agent's TUI *as a paste*. If tmux does not forward the `\e[200~`/`\e[201~` markers to
-the pane, the benefit evaporates and only the image case is left. Settle that first — it is a
-ten-line script, not a project.
+#### Measured (2026-08-07, tmux 3.7b, claude 2.1.220, this machine)
 
-The experiment, once that holds. Same payload down both paths (`tmux send-keys` as it is today, and
-a throwaway PTY), then compare what actually **arrived** against what was sent:
+The assumption the whole idea rested on **holds**: a bracketed paste written into the PTY master
+survives `tmux attach` and reaches the pane as a paste. Read from the receiving process's own
+stdin, never from `capture-pane` — the pane is a rendering and lies about what arrived.
 
-| Payload | What it is probing |
-|---|---|
-| one short line | the boring case must not regress |
-| multi-line block | does it arrive as ONE submission or as N lines the TUI submits separately |
-| ~100 KB paste | truncation, ordering, and how long each path takes |
-| text with `\n`, tabs, `%`, quotes, accents, emoji | the escaping the `send-keys -l` fallback already struggles with |
-| an image | only the PTY path can carry it at all |
-| a real `cp-send` message | the concrete pain that motivated this |
+1. **The markers arrive.** `\e[200~`/`\e[201~` reach the process inside the pane intact. tmux only
+   forwards them when the pane app has enabled DECSET 2004 — same precondition `paste-buffer -p`
+   already depends on in production, so the PTY path is never worse on that front.
+2. **On the real Claude TUI**, a 3-line paste through the PTY became **one 3-line composer entry**,
+   not 3 submissions. Verified with no Enter ever sent (so: no API call); the proof is the composer
+   *accumulating* across two consecutive pastes — nothing submitted on its own.
+3. **Fidelity.** The PTY delivers byte-for-byte; `\n` stays `\n`. `paste-buffer -p` **rewrites
+   `\n` → `\r`** inside the paste. Both were accepted by the TUI (tested with each separator), but
+   the difference is real and the PTY path has to pick its separator deliberately — `\r` is the one
+   production has already proven.
+4. **The current path has a hard ceiling of 16344 bytes** — the tmux command-length limit. Above it
+   `set-buffer` and `send-keys -l` return `rc=1` + `command too long`, so it fails **loudly**, and
+   `paste_text` falls back to `_paste_linha_a_linha`: **2N−1 tmux calls** (~2500 subprocesses for a
+   1250-line text). The PTY delivered **1 MB intact**.
+5. **Latency is a non-issue**: open PTY + confirmed attach 26 ms, write-and-arrive 10 ms for a normal
+   message (459 ms for 1 MB), close 3 ms — ~40 ms per send.
+6. **The window-size objection, measured** (with a "native" client already attached,
+   `window-size latest`): a PTY sized to the current window leaves it at 150x45 before, during and
+   after — zero disturbance. Sized *wrong*, the window shrinks to the PTY's size while attached and
+   recovers on detach. So sizing it isn't a nicety, it's what makes the path harmless.
 
-Read the result from the agent's own transcript (the `.jsonl`), not from `capture-pane` — the pane
-is a rendering and will lie about what was received.
+Probe scripts: `probe.py` + `recv.py`, written to the session scratchpad (not committed — they are
+a ten-line receiver plus a driver; re-derive from this list if needed).
 
-The order of the criteria decides the design, so fix it up front: **fidelity first** (did it arrive
-intact, and as a single submission), **failure mode second** (which path fails loudly and which
-fails silently), **latency last** — a send is a human-triggered action, and tens of milliseconds do
-not matter next to a mangled paste.
+Still unmeasured: **the image case** (the one thing only this path can carry), and **all of
+Windows** — none of the above runs there.
 
-Then write the predicate from the measurements, not from intuition, and keep `send-keys` as the
-fallback for everything the PTY path did not measurably win — plus Windows, unconditionally, until
-the psmux items below are answered.
+Write the predicate from these numbers, not from intuition, and keep `send-keys` as the fallback for
+everything the PTY path did not measurably win — plus Windows, unconditionally, until the psmux
+items below are answered.
+
+#### Live keystroke streaming — considered and rejected (2026-08-07)
+
+Typing into the Composer and forwarding each keystroke to the pane as you type is the *opposite* of
+what this item is for. `send-keys` already sends keystrokes, and that is the defect: every `\n` in
+the payload is an Enter the TUI submits on the spot. Streaming keeps that and adds three problems —
+one network round trip per key, half a message stranded in the agent's input if the connection drops
+mid-typing, and edits (backspace, cursor moves, phone autocorrect) that would have to be replayed
+into a line editor that isn't ours. Bracketed paste exists precisely to say "this is a paste, not
+keys" so the newlines land *inside* the field. Whoever wants to watch their typing land live already
+has the terminal panel.
 
 ### Mirror the machine's terminal theme in xterm.js
 

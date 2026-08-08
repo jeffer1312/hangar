@@ -1201,6 +1201,20 @@ async def workflow_agent_detail(name: str, run_id: str, agent_id: str):
     return a
 
 
+@app.get("/api/sessions/{name}/peer-address", dependencies=[Depends(require_auth)])
+async def peer_address(name: str):
+    """Endereço do inbox nativo desta sessão (cross-session messaging), ou `null`.
+
+    Existe pro `cp-send` decidir com FATO se o caminho nativo alcança este alvo, em vez de supor
+    pelo tipo da sessão: quem não tem socket (sessão aberta antes da liberação da Anthropic, Codex,
+    Pi) não aparece no `ListAgents` de ninguém, e mandar o modelo usar `SendMessage` ali seria
+    mandá-lo bater numa porta que não existe. `null` nunca é erro — é a resposta "aqui não tem".
+    """
+    # `registry` aqui é a INSTÂNCIA (SessionRegistry); inbox_socket_of é função de MÓDULO.
+    from app.registry import inbox_socket_of
+    return {"uds": await asyncio.to_thread(inbox_socket_of, name)}
+
+
 @app.get("/api/sessions/{name}/subagents", dependencies=[Depends(require_auth)])
 async def subagents_list(name: str):
     # Subagentes soltos (tool Agent). O transcript de cada um mora em <session-dir>/subagents/ —
@@ -1591,8 +1605,12 @@ def _group_text(me: str, others: list[str], task: str) -> str:
     return (
         f"[de: claude-pocket] GRUPO DE TRABALHO ATIVO: você ('{me}') trabalha junto com {quem}{t}. "
         f"Cada sessão mexe SÓ no próprio repo; quando precisar de algo de outro membro (contrato, "
-        f"endpoint, tipo, dúvida), mande 1:1 por iniciativa própria via Bash: "
-        f'cp-send {exemplo} "sua mensagem" — recados 1:1 chegam como [de: <membro>]. '
+        f"endpoint, tipo, dúvida), mande 1:1 por iniciativa própria. COMO mandar, nesta ordem: "
+        f"se você TEM a ferramenta SendMessage e o membro aparece no seu ListAgents (sessão Claude "
+        f"desta máquina), use SendMessage — a entrega é por socket, sem digitar no terminal, então "
+        f"nada de texto cortado ou colado pela metade. Não tem a ferramenta, ou o membro não está "
+        f"na lista (sessão de outra máquina 'servidor::sessao', Codex, Pi)? Aí é o Bash: "
+        f'cp-send {exemplo} "sua mensagem". Os dois chegam do mesmo jeito, como [de: <membro>]. '
         f'AVISO pro grupo TODO (marco: "terminei minha parte", "contrato atualizado"): '
         f'cp-send --group "sua mensagem" (uma vez, chega como [grupo: <membro>]). '
         f"REGRA ANTI-LOOP: NUNCA responda um [grupo: ...] com --group (vira tempestade). Aviso de "
