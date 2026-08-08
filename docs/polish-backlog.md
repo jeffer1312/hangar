@@ -103,7 +103,7 @@ Left over from `feat/terminal-real` (WebSocket + PTY + xterm.js panel on the des
 these blocked the branch; they are the items a future plan should start from. The measurements are
 here so nobody re-derives them.
 
-### A second send path, through a throwaway PTY
+### A second send path, through a throwaway PTY — closed, not built (2026-08-08)
 
 Today every message the app sends goes through `tmux send-keys` — which sends **keystrokes**. The
 terminal panel proved a different path exists: bytes written straight into a PTY master, delivered
@@ -121,21 +121,6 @@ any path. The PTY gains nothing here. Separately, the app's own attachments neve
 at all: an upload is saved to `<cwd>/.claude-pocket-uploads/` and the prompt carries the **path** as
 text (`Composer.svelte:917`), which is also why a phone attachment works when the phone's clipboard
 is not the machine's.
-
-**Do not replace `send-keys`.** It works, it is stateless, and it is the only path on Windows today.
-The shape that pays off is a *throwaway* PTY used only where pasting matters: open, size it to the
-window's current size, write as a bracketed paste, close. Nothing persistent, nothing to supervise.
-The pieces already exist in `app/termsock.py`.
-
-Measured, and it invalidates the obvious objection ("a PTY client would fight for the window size"):
-`man tmux` on `window-size latest` says tmux uses *"the size of the client that had the most recent
-activity"*. An idle PTY never claims the size; one sized to match the window changes nothing when it
-does. The cost is a line of code, not a structural trade-off.
-
-Two things the design must carry from the start:
-- **the `send-keys` fallback is mandatory, not optional** — see the Windows item below;
-- **the choice between paths must be explicit in code** (has a newline / exceeds N bytes), never
-  "sometimes pasting fails".
 
 #### Measured (2026-08-07, tmux 3.7b, claude 2.1.220, this machine)
 
@@ -170,17 +155,27 @@ a ten-line receiver plus a driver; re-derive from this list if needed).
 7. **Image paste needs the keystroke, not the path** — `send-keys C-v` alone yields `[Image #1]`, so
    this is not a reason to build the PTY path (see the correction above).
 
-What this leaves the PTY path actually worth, once the native cross-session route took the `cp-send`
-half: the 16344-byte ceiling (today a >16 KB paste falls back to 2N−1 tmux calls) and dropping the
-pre-Enter screen read, since the failures that check guards — argument mangling, a lying rc, the
-size cliff — are the ones the PTY removes. The post-Enter check still has to exist, but its right
-oracle is the **transcript**, not the pane.
+#### Verdict (2026-08-08): not worth building
 
-Still unmeasured: **all of Windows** — none of the above runs there.
+`tmux load-buffer -` closes the PTY's one measured win — the 16344-byte ceiling in item 4 above — in
+one line of shell instead of a ~200-line module: **1.088 MB in 0.32s**, faster than the PTY's 459ms
+for 1 MB (shipped in `docs/superpowers/plans/2026-08-07-envio-por-pty.md`; see
+`docs/decisoes-2026-08-08-envio.md` for the full call).
 
-Write the predicate from these numbers, not from intuition, and keep `send-keys` as the fallback for
-everything the PTY path did not measurably win — plus Windows, unconditionally, until the psmux
-items below are answered.
+The PTY also carries a targeting problem the terminal panel does not have: `attach` delivers to
+whichever pane the tmux client last touched, but a send has to land on the **agent's** pane
+specifically — `_pane_target` (`tmux.py:85`). On a session with a manual split, a PTY attach could
+put the text in the owner's own shell instead. The window-size measurement above (item 6) is still
+true and it is what makes an attached PTY *harmless to have open* — it says nothing about whether it
+delivers to the right pane, and it doesn't.
+
+What's left to justify building the PTY path: nothing measured. It stays on record here as a known
+path, not as pending work — reopen only if a problem surfaces that `load-buffer` and `send-keys`
+together can't solve.
+
+What's still genuinely pending, unrelated to the PTY: swapping the post-Enter delivery check (a pane
+read — it lies, see `docs/decisoes-2026-08-08-envio.md`) for reading the transcript instead, and all
+three Windows unknowns in the section below.
 
 #### Live keystroke streaming — considered and rejected (2026-08-07)
 
