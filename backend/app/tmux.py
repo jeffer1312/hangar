@@ -173,6 +173,10 @@ def paste_via_clipboard(name: str, text: str) -> bool:
     with _CLIP_LOCK:
         # Custo medido: ~157ms de cold start do PowerShell + ~95ms de trabalho, e o tempo e PLANO em
         # relacao ao tamanho (13,8k / 69k / 278k chars: todos ~250ms). Nao ha teto por tamanho.
+        # O CONTEUDO tambem foi conferido de volta, codepoint a codepoint, com acento, cedilha e
+        # emoji (par surrogate incluso) e com LF puro que nao vira CRLF nos dois sentidos — a escrita
+        # nao trunca calada. Se um dia aparecer relato de mensagem grande cortada no Windows, e aqui
+        # que se mede primeiro: a prova de entrega ve que ALGO colou, nunca o que.
         cp = _run(_CLIP_CMD, input=text.encode("utf-8"))
         if cp.returncode != 0:
             # Sair AQUI e obrigatorio, nao defensivo: quando a escrita falha o clipboard fica com o
