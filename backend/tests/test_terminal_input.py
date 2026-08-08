@@ -973,3 +973,19 @@ def test_posix_nunca_usa_clipboard(monkeypatch):
          patch.object(terminal_input, "send_keys"):
         assert TerminalInput().send_prompt("cc", "linha 1\nlinha 2") == "sent"
     assert not pvc.called
+
+
+def test_windows_composer_ilegivel_nao_cola(monkeypatch):
+    # Sem enxergar o composer, a foto dos placeholders sai VAZIA — e vazio nao e "nao havia nenhum",
+    # e "nao consegui olhar". Um placeholder que ja estivesse la contaria como nosso e liberaria o
+    # Enter. Neste caminho a prova e o unico gate, entao para antes de escrever o clipboard.
+    monkeypatch.setattr(terminal_input.os, "name", "nt")
+    with patch("app.terminal_input.tmux.has_session", return_value=True), \
+         patch("app.terminal_input.tmux.capture_pane", return_value="pane sem regua nenhuma"), \
+         patch("app.terminal_input.tmux.paste_via_clipboard") as pvc, \
+         patch("app.terminal_input.tmux.paste_text") as pt, \
+         patch.object(terminal_input, "_wait_input_ready", lambda *a, **k: True), \
+         patch.object(terminal_input, "send_keys") as sk:
+        assert TerminalInput().send_prompt("cc", "linha 1\nlinha 2") == "partial"
+    assert not pvc.called and not pt.called
+    assert call("cc", "Enter") not in sk.call_args_list

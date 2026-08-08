@@ -1043,12 +1043,22 @@ class TerminalInput:
             if "\n" in text:
                 # Foto dos placeholders de paste ANTES do nosso: so um numero NOVO conta como
                 # evidencia de entrega (ver _composer_residuo — paste alheio nao pode virar prova).
-                pastes_antes = _paste_ids(_composer_regiao(_capture(name), name) or "")
+                regiao_antes = _composer_regiao(_capture(name), name)
+                pastes_antes = _paste_ids(regiao_antes or "")
                 # Windows + Claude: o clipboard e o unico caminho que entrega multi-linha inteiro (o
                 # linha-a-linha mede 309 de 600 e devolve "sent"). Gated em `claude` porque `Alt+V` e
                 # binding DELE — Pi e Codex tem resposta propria (Codex nem passa aqui: usa o
                 # app-server).
                 if os.name == "nt" and provider == "claude":
+                    # Composer ilegivel na hora da foto: `pastes_antes` sairia como conjunto VAZIO, e
+                    # vazio nao quer dizer "nao havia placeholder", quer dizer "nao consegui olhar".
+                    # Com isso um `[Pasted text #N]` que JA estava la (rascunho do dono) contaria como
+                    # novo e viraria prova da NOSSA entrega — e neste caminho a prova e o unico gate
+                    # antes do Enter, sem fallback nenhum atras. No caminho de sempre isso e tolerado
+                    # porque ha outras evidencias; aqui nao ha.
+                    if regiao_antes is None:
+                        return _partial(name, "composer ilegivel antes de colar — sem foto dos "
+                                              "placeholders nao ha como provar entrega", text, None)
                     # O lock e segurado da escrita ATE o fim da prova. Soltar antes reabre a janela em
                     # que outra sessao sobrescreve o clipboard e o nosso M-v cola o texto dela — com
                     # um `[Pasted text #N]` novo aparecendo do mesmo jeito, entao a prova nao ve.
