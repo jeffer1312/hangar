@@ -186,12 +186,33 @@ neither psmux bug matters. It is the same mechanism already measured for image p
 a bare `send-keys C-v` puts `[Image #1]` in the composer because the TUI reads the system clipboard
 itself.
 
-Before building on it, one thing is unmeasured and it is the one that decides feasibility: our probe
-ran `Set-Clipboard` from an **interactive elevated PowerShell**. The backend is a different process,
-possibly on another window station, and a process that cannot reach the desktop's clipboard would
-fail silently — the paste would deliver whatever was there before. Measure that first. Also: this
-clobbers whatever the user had copied, and `Alt+V` is a Claude Code binding, so Pi and Codex panes
-need their own answer.
+**It survives a locked workstation**, which was the go/no-go — the whole point of this app is driving
+a session from the phone while the machine sits locked, and `send-keys` has no desktop dependency
+while the clipboard does. Measured with the test proving its own premise (`LogonUI.exe` exists only
+while locked, so the script waited for it and recorded the state at both ends):
+`TRANCADA=True | Set OK | leu: MARCADOR-TRANCADO-789 | composer tem o marcador: True | ainda trancada
+no fim: True`. Locking switches the *desktop* inside the same window station; the clipboard belongs
+to the station, so it stays reachable.
+
+**And the backend can reach it**: on Windows it runs as a scheduled task with
+`New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME` and no S4U principal (`install.ps1:635`),
+which means it runs *inside the user's interactive session* — same station, same clipboard. Derived
+from the installer, not assumed; still worth one confirmation from a task-launched process before
+writing code.
+
+**The safety net already exists in the codebase, and it is the part not to skip.** A collapsed paste
+renders as `[Pasted text #N]` with an incrementing `N`, and `terminal_input.py` already photographs
+those ids before sending (`_paste_ids` / `pastes_antes`) and requires a *new* one afterwards — that
+is precisely the evidence that was switched off when a probe in this session passed
+`pastes_antes=None` and produced a false negative. Applied here the rule is: snapshot the
+placeholders, write the clipboard, send `M-v`, and **send Enter only if a new placeholder (or the
+text) appeared**. No evidence, no submit — report and fall back to the old path. If Claude Code ever
+starts treating a programmatically-set clipboard differently from a user's Ctrl+C, this fails loudly
+instead of quietly sending nothing, which is the exact failure mode this branch spent its day
+removing.
+
+Two costs to carry into any design: it clobbers whatever the user had copied, and `Alt+V` is a Claude
+Code binding — Pi and Codex panes need their own answer.
 
 ## Reading the pane: what a PTY would and would not buy (measured 2026-08-08)
 
