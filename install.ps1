@@ -646,8 +646,12 @@ $tarefas = @(
     # linha de comando contivesse app.main - e este repo tem worktrees em .claude/worktrees/ com
     # checkout completo, entao o instalador do checkout principal matava o backend de uma worktree
     # rodando em outra porta. O ramo do frontend ja fazia certo; o do backend nao.
+    # ExeProc e o nome do processo VIVO, diferente de Exe (o lancador): o backend nasce `uv` e quem
+    # fica segurando a porta e o `python` neto. Serve pro filtro por PADRAO do Pare-Servico — sem ele,
+    # o casamento e substring pura da linha de comando, e QUALQUER processo que so MENCIONE este
+    # caminho vira alvo (um editor, um grep, o terminal de onde se chamou o instalador).
     @{ Nome = 'claude-cockpit-backend';  Exe = 'uv';  Args = 'run python -m app.main'; Dir = "$raiz\backend"
-       Porta = $portaBack;  Padrao = [regex]::Escape("$raiz\backend") },
+       Porta = $portaBack;  Padrao = [regex]::Escape("$raiz\backend"); ExeProc = 'uv|python' },
     # `run preview`, NAO `run dev`: o passo 2 acabou de gerar o frontend\dist e subir o dev
     # server aqui serviria desenvolvimento numa instalacao de producao - a mesma incoerencia que
     # o services-setup.sh do Linux ja corrigiu. O bloco `preview` do vite.config.ts usa a MESMA
@@ -655,7 +659,7 @@ $tarefas = @(
     # (cp_servers, tema, layout). Pra mexer no layout com recarga ao vivo: pare a tarefa e rode
     # `npm run dev` na mao.
     @{ Nome = 'claude-cockpit-frontend'; Exe = 'npm'; Args = 'run preview';            Dir = "$raiz\frontend"
-       Porta = $portaFront; Padrao = [regex]::Escape("$raiz\frontend") }
+       Porta = $portaFront; Padrao = [regex]::Escape("$raiz\frontend"); ExeProc = 'node|npm|vite' }
 )
 
 # Derruba a instancia VELHA antes de subir a nova.
@@ -716,7 +720,7 @@ if ($jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu l
             # proximo login e a pessoa abre o navegador numa porta morta logo apos instalar.
             # O equivalente no Linux (`systemctl --user enable --now`) liga na hora - o `--now`
             # e justamente esta metade, e ela tinha ficado de fora aqui.
-            $mortos = Pare-Servico -Nome $t.Nome -Porta $t.Porta -Padrao $t.Padrao
+            $mortos = Pare-Servico -Nome $t.Nome -Porta $t.Porta -Padrao $t.Padrao -Exe $t.ExeProc
             if ($mortos -gt 0) { Nota "  instancia anterior derrubada ($mortos processo(s)) antes de subir" }
             Start-ScheduledTask -TaskName $t.Nome -ErrorAction SilentlyContinue
             Ok "tarefa $($t.Nome) registrada e iniciada"
