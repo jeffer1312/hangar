@@ -29,6 +29,14 @@ def test_clear_removes_sidecar():
     assert PromptQueue("s").load() == []
 
 
+def test_bump_attempts_incrementa_e_devolve():
+    q = PromptQueue("cc")
+    e = q.append("oi")
+    assert q.bump_attempts(e["id"]) == 1
+    assert q.bump_attempts(e["id"]) == 2
+    assert q.bump_attempts("id-que-nao-existe") == 0
+
+
 def test_rename_moves_entries_and_drops_old():
     PromptQueue("old").append("msg um")
     PromptQueue("old").append("msg dois")
