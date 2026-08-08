@@ -217,6 +217,58 @@ def test_paste_novo_conta_como_entrega():
     assert r is True
 
 
+# --- _limpar_composer: limpar o composer antes de reportar "partial" (07/08/2026) ---
+
+def test_limpar_composer_nao_apaga_texto_alheio():
+    # O dono pode ter digitado no terminal na janela em que o envio falhou. C-u às cegas comeria a
+    # frase dele. Só limpa quando o resíduo é confirmado como NOSSO (is True, não "not falsy").
+    pane = _pane_claude(["❯ frase comprida que o dono digitou no terminal"])
+    with patch("app.terminal_input.tmux.capture_pane", return_value=pane), \
+         patch.object(terminal_input, "send_keys") as sk:
+        assert terminal_input._limpar_composer(
+            "cc", "mensagem comprida nossa que nunca chegou no composer", None) is False
+    assert sk.call_args_list == []
+
+
+def test_limpar_composer_repete_c_u_ate_sumir():
+    # C-u apaga UMA linha (medido: bloco de 4 linhas precisou de 6 envios). Repete com teto e
+    # RECONFERE entre um envio e outro — nunca um número fixo de teclas às cegas.
+    nosso = "mensagem comprida de teste que fica no composer"
+    panes = iter([
+        _pane_claude([f"❯ {nosso}"]),      # leitura inicial: resíduo nosso
+        _pane_claude([f"❯ {nosso}"]),      # ainda lá depois do 1o C-u
+        _pane_claude(["❯ "]),              # limpo depois do 2o
+    ])
+    with patch("app.terminal_input.tmux.capture_pane", side_effect=lambda *_a, **_k: next(panes)), \
+         patch.object(terminal_input, "send_keys") as sk:
+        assert terminal_input._limpar_composer("cc", nosso, None) is True
+    assert sk.call_args_list == [call("cc", "C-u"), call("cc", "C-u")]
+
+
+def test_limpar_composer_desiste_com_teto_e_avisa(caplog):
+    # TUI que ignora C-u (pane de shell): não pode virar laço infinito nem silêncio.
+    nosso = "mensagem comprida de teste que nao sai do composer"
+    with patch("app.terminal_input.tmux.capture_pane", return_value=_pane_claude([f"❯ {nosso}"])), \
+         patch.object(terminal_input, "send_keys") as sk, \
+         caplog.at_level("WARNING", logger="claude_pocket.terminal_input"):
+        assert terminal_input._limpar_composer("cc", nosso, None) is False
+    assert len(sk.call_args_list) == terminal_input._LIMPEZA_MAX_TECLAS
+    assert "nao limpou" in caplog.text
+
+
+def test_limpar_composer_nao_trata_indefinido_como_limpo():
+    # `_composer_residuo` é tri-estado: None = "não dá pra saber" (pane ilegível, texto curto).
+    # Tratar None como sucesso é o falso positivo que o resto do módulo passou meses consertando —
+    # aqui viraria "limpei" sem ter limpado, e o requeue da Task 2 reenviaria por cima do resíduo.
+    nosso = "mensagem comprida de teste para a limpeza"
+    leituras = iter([True, None])          # havia resíduo nosso; depois do C-u não dá pra saber
+    with patch("app.terminal_input.tmux.capture_pane", return_value="pane qualquer"), \
+         patch.object(terminal_input, "_composer_residuo",
+                      side_effect=lambda *_a, **_k: next(leituras, None)), \
+         patch.object(terminal_input, "send_keys"):
+        assert terminal_input._limpar_composer("cc", nosso, None) is False
+
+
 def test_sem_foto_previa_placeholder_nao_conta():
     # pastes_antes=None (ramo de linha unica / caminhos antigos): placeholder nunca e prova.
     pane = _pane_claude(["❯ [Pasted text #7 +2 lines]"])
@@ -763,3 +815,83 @@ def test_porta_b_reconcile_redrena_com_o_mesmo_msg_id(tmp_queue, monkeypatch):
 
     assert terminal_input.drain("cc", "/no/such.jsonl", "pi") == 1   # 2a tentativa, agora "sent"
     assert ids_recebidos == [entry["id"]], "o reenvio do reconcile usa o MESMO id da 1a tentativa"
+
+
+# --- requeue de um "partial": so quando a limpeza do composer foi CONFIRMADA (08/08/2026) --------
+# _ULTIMA_LIMPEZA e POR THREAD (nao por sessao/nome): send_prompt e o drain que le em seguida rodam
+# sempre sincronos, na MESMA thread, entao setar o atributo aqui reproduz exatamente o que _partial()
+# teria deixado. Ver o comentario ao lado da declaracao (terminal_input.py) sobre a corrida que um
+# dict por nome tinha: /input e drain podem correr concorrentes pra MESMA sessao (api.py:1314).
+
+def test_drain_reenfileira_quando_a_limpeza_foi_confirmada(tmp_queue):
+    # Composer limpo = a razao do "sem retry" deixou de existir: a entrada volta pra fila.
+    q = PromptQueue("cc")
+    e = q.append("mensagem comprida de teste")
+    terminal_input._ULTIMA_LIMPEZA.limpou = True
+    with patch.object(TerminalInput, "send_prompt", return_value="partial"):
+        terminal_input.drain("cc", "/no/such.jsonl")
+    assert q.entry_delivered(e["id"]) is False           # voltou pra fila
+    assert int(q.load()[0]["attempts"]) == 1             # com tentativa contada
+
+
+def test_drain_nao_reenfileira_quando_a_limpeza_falhou(tmp_queue):
+    # Residuo continua no composer: reenfileirar digitaria por cima. Comportamento de hoje.
+    q = PromptQueue("cc")
+    e = q.append("mensagem comprida de teste")
+    terminal_input._ULTIMA_LIMPEZA.limpou = False
+    with patch.object(TerminalInput, "send_prompt", return_value="partial"):
+        terminal_input.drain("cc", "/no/such.jsonl")
+    assert q.entry_delivered(e["id"]) is True            # fica parada, com as metades a vista
+
+
+def test_drain_desiste_no_teto_de_tentativas(tmp_queue):
+    # Falhar sempre nao pode girar pra sempre no executor de envio.
+    q = PromptQueue("cc")
+    e = q.append("mensagem comprida de teste")
+    q.bump_attempts(e["id"]); q.bump_attempts(e["id"])   # ja em 2
+    terminal_input._ULTIMA_LIMPEZA.limpou = True
+    with patch.object(TerminalInput, "send_prompt", return_value="partial"):
+        terminal_input.drain("cc", "/no/such.jsonl")
+    assert q.entry_delivered(e["id"]) is True            # desistiu
+
+
+def test_drain_requeue_partial_end_a_end_sem_tocar_na_flag(tmp_queue, monkeypatch):
+    """Integracao de verdade, sem mockar `_partial`/`_limpar_composer`/`_ULTIMA_LIMPEZA`: um pane
+    falso onde o Enter NAO limpa o composer (send_prompt real conclui "partial"), `_limpar_composer`
+    real limpa via C-u de verdade, e so ENTAO o `drain` real reenfileira. Os tres testes acima provam
+    cada metade isolada (so `_limpar_composer`, ou o `drain` com a flag setada A MAO); nenhum prova
+    que `_partial` REALMENTE grava `_ULTIMA_LIMPEZA.limpou` — foi por isso que a linha sumiu (revisor)
+    com a suite inteira passando. Este teste tem que cair se ela sumir de novo (conferido: falha com a
+    linha removida, passa com ela de volta)."""
+    q = PromptQueue("cc")
+    entry = q.append("mensagem comprida o bastante pra ter cauda e comeco validos no composer")
+
+    composer = {"texto": ""}
+
+    def capture(name):
+        linha = f"❯ {composer['texto']}" if composer["texto"] else "❯ "
+        return _pane_claude([linha])
+
+    def fake_send_keys(name, keys, literal=False):
+        if literal:
+            composer["texto"] = keys           # digitado: aparece no composer
+        elif keys == "C-u":
+            composer["texto"] = ""             # C-u apaga (mesmo comportamento de _limpar_composer)
+        # Enter: propositalmente NAO limpa — é o que faz o Enter "nao submeter" e o send_prompt
+        # real concluir "partial" (o mesmo formato do bug 07/08/2026: Enter engolido).
+        return True
+
+    clock = [1000.0]
+    monkeypatch.setattr(terminal_input.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
+    monkeypatch.setattr(terminal_input.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(terminal_input, "deliverable", lambda name: True)
+    monkeypatch.setattr(terminal_input, "_wait_input_ready", lambda name, provider="claude": True)
+    monkeypatch.setattr(terminal_input.agentpane, "pane_info", lambda name: ("claude", None))
+
+    with patch.object(terminal_input, "_capture", side_effect=capture), \
+         patch.object(terminal_input, "send_keys", side_effect=fake_send_keys):
+        sent = terminal_input.drain("cc", "/no/such.jsonl")
+
+    assert sent == 0
+    assert q.entry_delivered(entry["id"]) is False        # reenfileirada, nao perdida nem travada
+    assert int(q.load()[0]["attempts"]) == 1               # bump_attempts rodou (so roda com limpou=True)

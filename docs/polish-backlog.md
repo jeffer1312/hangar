@@ -39,7 +39,7 @@ Two things measured here that decide the shape of the integration:
   `scripts/install-cp-send.sh`, not backend code.
 - **What breaks is the pair conversation in the UI.** `PairSheet` mines nothing the backend routed:
   it fetches each member's `getHistory` and matches `user_msg` whose text starts with `[de: X]`
-  (`PairSheet.svelte:62` → `parsePeerMessage`, `lib/format.ts:201`). A native message lands in the
+  (`PairSheet.svelte:67` → `parsePeerMessage`, `lib/format.ts:205`). A native message lands in the
   transcript with *its own* sender labeling, so the group timeline would go quiet with no error.
 
 Also worth carrying into any design: a delivered message counts toward usage like a typed prompt,
@@ -79,6 +79,189 @@ measured on real traffic and built. See `transcript.py` (`_peer_msg`), `registry
   `CLAUDE.md` alone would not have been enough — an already-open session never re-reads it, but it
   obeys the script immediately.
 
+## An opt-in headless session mode — no tmux, real streaming (idea, 2026-08-08)
+
+Owner's idea, and it reframes what "headless is out" meant. The objection to `claude -p` was always
+that owning the process costs the terminal: no `tmux attach` from kitty, no session living outside
+the app. **For someone who never wants a terminal, that is not a cost.** And on Windows, where tmux
+does not exist and psmux only partly stands in, it removes the dependency entirely.
+
+Shape: the default stays exactly what is here and tested (TUI in tmux, the app as an extension of
+the terminal). Headless is a **second mode**, chosen when the session is created or via a setting.
+Precedent for the shape already exists in `adapters/codex`, which consumes structured events instead
+of scraping a pane.
+
+The mode is **not** one-shot `-p`. It is the long-lived streaming-input process:
+`claude --input-format stream-json --output-format stream-json --verbose
+--include-partial-messages`, fed one JSON message per line on stdin.
+
+**Measured 2026-08-08, and the two hardest questions came back positive:**
+- **One process holds a real multi-turn session.** Sent "guarde este número: 7391", then a second
+  message asking for it back on the same stdin: it answered `7391`, the process stayed alive across
+  both turns, and both turns share one `session_id`. Not a sequence of one-shots — it is a session.
+- **Token-level streaming works**: `content_block_delta` / `text_delta` events arrived while the
+  answer was being written. The preview stops being a scrape and becomes an event feed — the gap
+  against Pi closes for these sessions, and this is the one thing no pipe over a TUI can give
+  (see the item below).
+- **The transcript is the same format.** `transcript.py::parse_line` read the long-lived session's
+  `.jsonl` (129 KB, under `~/.claude/projects/`) with **no changes at all**: two `user_msg`, two
+  `assistant_msg`, in order. The whole chat surface — history, windowing, dedup, bubbles — would
+  work untouched. Same result for a one-shot `-p` transcript.
+- **Nothing is lost.** Measured by starting the long-lived process in this repo's cwd and reading its
+  init event: **226 slash commands/skills**, **94 tools**, **74 subagents**, **4 MCP servers** (3
+  connected — `codegraph` fails here anyway), `permissionMode: bypassPermissions` inherited from
+  settings, and the account's default model. CLAUDE.md loads: asked, it answered in pt-BR citing the
+  identity rule, and named `superpowers:brainstorming` and `my-org:kubectl` correctly. **Hooks fire
+  the same**: the transcript carries `SessionStart:startup` (including the caveman and ponytail
+  plugin hooks), `UserPromptSubmit` injecting context, and 10 `Stop` hooks. It is the same context
+  assembly as an interactive session, not a reduced one.
+- **Usage comes out of the same window — today.** Anthropic's help centre, in its own words: *"We're
+  pausing the changes to Claude Agent SDK usage described below. For now, nothing has changed: Claude
+  Agent SDK, `claude -p`, and third-party app usage still draw from your subscription's usage
+  limits."* The same article separates the cases under *What stays the same*: *"Using Claude Code in
+  the terminal or your IDE continues to use your subscription usage limits exactly as before."*
+  (<https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan>).
+  Matches what the machine shows: `apiKeySource: none`, authenticating with the subscription's OAuth,
+  no API key anywhere.
+  **The caveat is real**: this is *paused*, not cancelled. The change was announced with firm numbers
+  (\$20 Pro, \$100 Max 5x, \$200 Max 20x) and suspended on the day it would have taken effect, with
+  only *"When we have an update, we'll share it before anything takes effect"* — no date. Anything
+  built on this is built on a policy that has already been announced once.
+
+**Still open, in the order a spike should take them:**
+1. **Permission prompts.** Approving a tool call from the phone is the app's core value. There is no
+   TUI dialog to read here; permissions surface as a callback / `--permission-mode`. Can the app
+   render and answer them? If not, the mode only serves `bypassPermissions`, which narrows it
+   sharply. **This is the one that decides the feature.**
+2. **Attaching to an existing session id** — resuming a session started elsewhere, and what happens
+   if two writers reach the same session.
+3. **Slash commands.** `/model`, `/clear`, `/compact`, `/usage` are TUI-level. Lost, or
+   re-implemented per command? `model_picker.py` exists precisely because there was no other way.
+4. **Statusline** (context, cost, quota badges) comes from the pane or a sidecar today; here there is
+   neither. The `result` event carries usage, which may be enough.
+5. **What the Shell tab becomes** when there is no agent pane to attach to.
+6. **Discovery has exactly one source of truth today: tmux.** `registry.list()` starts by asking tmux
+   which panes exist and only then maps each to its `.jsonl`, so a headless session is invisible to
+   the app — verified: the test session's transcript sits in `~/.claude/projects/` at 129 KB with
+   both turns intact, while `/api/sessions` lists only the four that live in tmux. The backend would
+   need a second source — a registry of the processes it owns (pid + session id + cwd) — and the
+   listing becomes the union. That cascades: state comes from stream events instead of the pane,
+   `kill` means killing a process rather than `tmux kill-session`, and there is no pane to attach.
+
+Not a small change — but not speculative either: session lifetime, streaming and transcript
+compatibility are answered, and answered well. What is left is mostly about the app's own surfaces.
+
+## Windows: the send path has a fix, and it is not a buffer (measured 2026-08-08)
+
+Measured on a real Windows box (psmux 3.3.7, build 05cc5d4 2026-07-20) against a real Claude Code
+session, with the transcript as the oracle — never the pane. This closes the "Windows is unmeasured"
+item and corrects a claim in `CLAUDE.md`.
+
+**`paste-buffer` works. Our note saying it does not is wrong** — not outdated: it names this exact
+version. Text pasted through it reached the Claude composer, with `send-keys` as a control in the
+same run proving the instrument.
+
+**Neither buffer command can carry a newline, and the reason is in psmux's source, not in a limit:**
+- `set-buffer` truncates at the first newline — 22 bytes stored out of 13799, and **rc=0**. The
+  control protocol is line-terminated (`cmd.push('\n')`) and the client does not escape, so the
+  command ends at the first newline.
+- `load-buffer` escapes it and nothing ever unescapes: `main.rs` does
+  `content.replace('\n', "\\n").replace('\r', "\\r")` before forwarding as `set-buffer`, and the
+  server's handler (`server/connection.rs`) stores `content_parts.join(" ")` verbatim. The escape
+  has no matching unescape — a genuine psmux bug. `-r` and `-s` change nothing, because the newline
+  is already gone by the time paste runs. CR is escaped the same way.
+
+So the buffer route delivers **100% of the content** (600/600 lines, no truncation) and destroys
+every separator. Worth knowing, since the path in use today loses far more than that.
+
+**The fix is the clipboard, and it is better than the Linux one.** Writing the text to the Windows
+clipboard and sending **`M-v`** (Alt+V — `Ctrl+V` is swallowed by the terminal on Windows, which is
+why Claude Code binds Alt+V there, as the owner knew and the probe confirmed) delivered **600/600
+lines with real newlines and no truncation**, verified in the transcript: 14445 bytes, one copy. The
+receiving Claude tabulated both sends itself: same 600 lines, same range, `\n` literal on the buffer
+route against a real newline on this one.
+
+Why it is better than what Linux does: **no content byte passes through the multiplexer at all**, so
+neither psmux bug matters. It is the same mechanism already measured for image paste on Linux, where
+a bare `send-keys C-v` puts `[Image #1]` in the composer because the TUI reads the system clipboard
+itself.
+
+**It survives a locked workstation**, which was the go/no-go — the whole point of this app is driving
+a session from the phone while the machine sits locked, and `send-keys` has no desktop dependency
+while the clipboard does. Measured with the test proving its own premise (`LogonUI.exe` exists only
+while locked, so the script waited for it and recorded the state at both ends):
+`TRANCADA=True | Set OK | leu: MARCADOR-TRANCADO-789 | composer tem o marcador: True | ainda trancada
+no fim: True`. Locking switches the *desktop* inside the same window station; the clipboard belongs
+to the station, so it stays reachable.
+
+**And the backend can reach it**: on Windows it runs as a scheduled task with
+`New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME` and no S4U principal (`install.ps1:635`),
+which means it runs *inside the user's interactive session* — same station, same clipboard. Derived
+from the installer, not assumed; still worth one confirmation from a task-launched process before
+writing code.
+
+**The safety net already exists in the codebase, and it is the part not to skip.** A collapsed paste
+renders as `[Pasted text #N]` with an incrementing `N`, and `terminal_input.py` already photographs
+those ids before sending (`_paste_ids` / `pastes_antes`) and requires a *new* one afterwards — that
+is precisely the evidence that was switched off when a probe in this session passed
+`pastes_antes=None` and produced a false negative. Applied here the rule is: snapshot the
+placeholders, write the clipboard, send `M-v`, and **send Enter only if a new placeholder (or the
+text) appeared**. No evidence, no submit — report and fall back to the old path. If Claude Code ever
+starts treating a programmatically-set clipboard differently from a user's Ctrl+C, this fails loudly
+instead of quietly sending nothing, which is the exact failure mode this branch spent its day
+removing.
+
+Two costs to carry into any design: it clobbers whatever the user had copied, and `Alt+V` is a Claude
+Code binding — Pi and Codex panes need their own answer.
+
+## Reading the pane: what a PTY would and would not buy (measured 2026-08-08)
+
+The PTY was cut as a *send* path (see the item above). It was then proposed twice more as a *read*
+path, and both proposals were measured rather than argued. Numbers first, so nobody re-derives them.
+
+**A PTY does not make the pre-Enter check droppable.** The claim was that writing bytes straight
+into a PTY is reliable enough to stop reading the screen before pressing Enter. Measured against a
+real Claude session, idle and working, with three payloads (short line, multi-line, 30 KB): PTY and
+`send-keys`/`paste-buffer` are **identical** — same verdict, same 2 captures, same 0.16 s, zero false
+successes on either. The reduction was an inference, and the inference was wrong.
+(First run of that probe reported false successes on the 30 KB payload for *both* paths; that was a
+defect in the probe — it passed `pastes_antes=None`, which is what switches off the collapsed-paste
+evidence in `_composer_residuo`. With it captured as production does, both paths find the text.)
+
+**A PTY reader costs more than `capture-pane`, exactly where it matters.** Per watched session:
+
+| | session working | session idle |
+|---|---|---|
+| today, `capture-pane` | 6.7 reads/s × 2.0 ms = **1.33% of a core** | 1.33/s × 2.0 ms = **0.27%** |
+| PTY + terminal emulator | 230 KB in 8 s → 276 ms of parse = **3.45%** | 440 B/s → negligible |
+
+One `capture-pane` is 2.0 ms (median of 30, max 8.8). The preview loop polls every **150 ms** while
+working — `preview.py` calls it "o poll mais caro que o backend tem" and it is right. So the PTY is
+~2.6× more expensive precisely when the preview exists, and cheaper only when nobody needs it.
+
+**And it would not improve the preview**, which was the strongest argument for it. `pyte` fed the
+recorded stream reconstructs *the same rendered screen* `capture-pane` returns, so
+`extract_assistant_text` would face the identical problem of separating prose from TUI drawing. Pi's
+advantage is not the transport, it is the **semantics**: its extension receives `message_update` from
+the agent and publishes the text block, not a rendering.
+
+**The `.jsonl` is not a streaming source either.** Measured: the assistant text landed in the
+transcript at t=9.5 s of a turn that ended at 9.6 s — the block is written when it **commits**. A
+turn with tool calls does commit each text block before the next call, so mid-turn granularity
+exists at block level; what is missing is only the block being typed right now, which is exactly what
+the preview shows.
+
+So the gap is structural, and no pipe closes it: PTY, `capture-pane` and the `.jsonl` are three ways
+of seeing the same thing either too late or too rendered. What would close it is Claude Code
+exposing the in-flight block the way Pi does. **What would flip the PTY verdict**: read frequency
+climbing well past today's (polling under ~100 ms, or many watched sessions at once) — there the fork
+cost overtakes continuous parsing. Not at 150 ms.
+
+Attaching a second client is *not* a concern here — measured earlier that a PTY sized to the current
+window disturbs nothing, and with `window-size latest` the client with recent activity wins.
+
+Probes: `leitura.py`, `vazao.py`, `emul.py`, `jsonl.py`, written to the session scratchpad.
+
 ## Peers (the cross-machine mesh) have no UI at all (2026-08-07)
 
 `backend/peers.json` is the only way to add, remove, enable or disable a remote machine. There is
@@ -103,29 +286,24 @@ Left over from `feat/terminal-real` (WebSocket + PTY + xterm.js panel on the des
 these blocked the branch; they are the items a future plan should start from. The measurements are
 here so nobody re-derives them.
 
-### A second send path, through a throwaway PTY
+### A second send path, through a throwaway PTY — closed, not built (2026-08-08)
 
 Today every message the app sends goes through `tmux send-keys` — which sends **keystrokes**. The
 terminal panel proved a different path exists: bytes written straight into a PTY master, delivered
 by the kernel's tty layer, indistinguishable from a physical keyboard. That path handles what
 `send-keys` handles badly: bracketed paste (a multi-line block arrives as *one* paste instead of N
-lines the TUI may read as N submissions), image paste, and — the concrete pain that motivated this —
-`cp-send` messages between Claude sessions arriving mangled.
+lines the TUI may read as N submissions) and — the concrete pain that motivated this — `cp-send`
+messages between Claude sessions arriving mangled.
 
-**Do not replace `send-keys`.** It works, it is stateless, and it is the only path on Windows today.
-The shape that pays off is a *throwaway* PTY used only where pasting matters: open, size it to the
-window's current size, write as a bracketed paste, close. Nothing persistent, nothing to supervise.
-The pieces already exist in `app/termsock.py`.
-
-Measured, and it invalidates the obvious objection ("a PTY client would fight for the window size"):
-`man tmux` on `window-size latest` says tmux uses *"the size of the client that had the most recent
-activity"*. An idle PTY never claims the size; one sized to match the window changes nothing when it
-does. The cost is a line of code, not a structural trade-off.
-
-Two things the design must carry from the start:
-- **the `send-keys` fallback is mandatory, not optional** — see the Windows item below;
-- **the choice between paths must be explicit in code** (has a newline / exceeds N bytes), never
-  "sometimes pasting fails".
+**Image paste is NOT one of them, measured 07/08/2026** — this line used to claim it was, written as
+a hypothesis and then read as fact, contradicting a code comment three files away. A bare
+`tmux send-keys C-v` into a Claude Code session puts `[Image #1]` in the composer: the TUI reads the
+machine's clipboard itself through `wl-paste` (which is why `tmux.py:292` (`new_session`) propagates
+`WAYLAND_DISPLAY`), so the terminal only ever delivers the **keystroke** — no image bytes cross it on
+any path. The PTY gains nothing here. Separately, the app's own attachments never touch the terminal
+at all: an upload is saved to `<cwd>/.claude-pocket-uploads/` and the prompt carries the **path** as
+text (`Composer.svelte:917`), which is also why a phone attachment works when the phone's clipboard
+is not the machine's.
 
 #### Measured (2026-08-07, tmux 3.7b, claude 2.1.220, this machine)
 
@@ -157,12 +335,30 @@ stdin, never from `capture-pane` — the pane is a rendering and lies about what
 Probe scripts: `probe.py` + `recv.py`, written to the session scratchpad (not committed — they are
 a ten-line receiver plus a driver; re-derive from this list if needed).
 
-Still unmeasured: **the image case** (the one thing only this path can carry), and **all of
-Windows** — none of the above runs there.
+7. **Image paste needs the keystroke, not the path** — `send-keys C-v` alone yields `[Image #1]`, so
+   this is not a reason to build the PTY path (see the correction above).
 
-Write the predicate from these numbers, not from intuition, and keep `send-keys` as the fallback for
-everything the PTY path did not measurably win — plus Windows, unconditionally, until the psmux
-items below are answered.
+#### Verdict (2026-08-08): not worth building
+
+`tmux load-buffer -` closes the PTY's one measured win — the 16344-byte ceiling in item 4 above — in
+one line of shell instead of a ~200-line module: **1.088 MB in 0.32s**, faster than the PTY's 459ms
+for 1 MB (shipped in `docs/superpowers/plans/2026-08-07-envio-por-pty.md`; see
+`docs/decisoes-2026-08-08-envio.md` for the full call).
+
+The PTY also carries a targeting problem the terminal panel does not have: `attach` delivers to
+whichever pane the tmux client last touched, but a send has to land on the **agent's** pane
+specifically — `_pane_target` (`tmux.py:103`). On a session with a manual split, a PTY attach could
+put the text in the owner's own shell instead. The window-size measurement above (item 6) is still
+true and it is what makes an attached PTY *harmless to have open* — it says nothing about whether it
+delivers to the right pane, and it doesn't.
+
+What's left to justify building the PTY path: nothing measured. It stays on record here as a known
+path, not as pending work — reopen only if a problem surfaces that `load-buffer` and `send-keys`
+together can't solve.
+
+What's still genuinely pending, unrelated to the PTY: swapping the post-Enter delivery check (a pane
+read — it lies, see `docs/decisoes-2026-08-08-envio.md`) for reading the transcript instead, and all
+three Windows unknowns in the section below.
 
 #### Live keystroke streaming — considered and rejected (2026-08-07)
 
@@ -242,9 +438,9 @@ a busy host or with many sessions — not here.
 
 What's actually untested is what a soak run would show, and none of it is visible in a 15 ms
 timing: SSE connections left open for hours (the 25s watchdog reconnecting on a half-open socket),
-file descriptors and `asyncio.to_thread` workers over a long run, the `capture_pane` burst
-described at `registry.py:787`, and what happens when sessions are created and killed repeatedly
-while the phone is subscribed.
+file descriptors and `asyncio.to_thread` workers over a long run, the `capture_pane` burst described
+at `registry.py:928` (`list_with_state`), and what happens when sessions are created and killed
+repeatedly while the phone is subscribed.
 
 Worth doing as a real experiment (N sessions, SSE open, forced reconnects, watch RSS/fd count over
 hours) rather than by reading more code. Deferred deliberately — nothing observed is broken.
