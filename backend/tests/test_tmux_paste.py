@@ -1,5 +1,6 @@
 """paste_text: caminho normal (tmux) e o plano B de quem nao tem paste-buffer (psmux/Windows)."""
 import subprocess
+import time
 
 from app import tmux
 
@@ -102,3 +103,97 @@ def test_probe_e_por_capacidade_e_fica_em_cache(monkeypatch):
     tmux.paste_text("s", "a\nb")
     tmux.paste_text("s", "c\nd")
     assert len([c for c in chamadas if c[1] == "show-buffer"]) == 1
+
+
+# --- clipboard do Windows (Alt+V) -------------------------------------------------------------
+#
+# Medido na winboat em 08/08/2026 (psmux 3.3.7): o clipboard entrega as 600 linhas inteiras, com
+# quebra de verdade, enquanto o caminho linha-a-linha mede 309 de 600 e devolve True. Ver
+# docs/medicoes-2026-08-08-windows.md.
+
+
+def _ok(stdout: bytes | str = b"") -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(["x"], 0, stdout=stdout, stderr=b"" if isinstance(stdout, bytes) else "")
+
+
+def _falha(err: str = "deu ruim") -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(["x"], 1, stdout=b"", stderr=err.encode())
+
+
+def test_clipboard_no_posix_e_no_op(monkeypatch):
+    # O ramo inteiro e Windows-only. No Linux nao pode nem tentar escrever clipboard: o load-buffer -
+    # ja entrega tudo, e o clipboard e da MAQUINA (sobrescreve o que o usuario copiou).
+    chamadas = []
+    monkeypatch.setattr(tmux, "RUN", lambda *a, **k: chamadas.append(a) or _ok())
+    monkeypatch.setattr(tmux.os, "name", "posix")
+    assert tmux.paste_via_clipboard("cc", "linha 1\nlinha 2") is False
+    assert chamadas == []
+
+
+def test_clipboard_falhando_nao_manda_a_tecla(monkeypatch):
+    # Se o clipboard nao foi escrito, mandar M-v colaria a mensagem ANTERIOR — conteudo de outra
+    # mensagem submetido como se fosse esta. Nada de tecla sem clipboard confirmado.
+    monkeypatch.setattr(tmux.os, "name", "nt")
+    monkeypatch.setattr(tmux, "RUN", lambda args, **kw: _falha())
+    enviadas = []
+    monkeypatch.setattr(tmux, "send_keys", lambda n, k, **kw: enviadas.append(k) or True)
+    assert tmux.paste_via_clipboard("cc", "linha 1\nlinha 2") is False
+    assert enviadas == []
+
+
+def test_clipboard_manda_o_texto_por_stdin_e_uma_tecla_so(monkeypatch):
+    # Duas garantias num teste: (1) a mensagem do usuario vai por STDIN, nunca na linha de comando —
+    # o argv e world-readable em /proc e o quoting ja provou mutilar texto no caminho pro Windows;
+    # (2) UMA tecla so. Medido: o rodape vira "paste again to expand", entao um segundo M-v EXPANDE
+    # em vez de recolar, e o codigo nunca pode mandar dois achando que reforca.
+    monkeypatch.setattr(tmux.os, "name", "nt")
+    vistas = []
+    monkeypatch.setattr(tmux, "RUN", lambda args, **kw: vistas.append((args, kw.get("input"))) or _ok())
+    teclas = []
+    monkeypatch.setattr(tmux, "send_keys", lambda n, k, **kw: teclas.append(k) or True)
+    texto = "linha 1\nlinha 2 com acento ção e emoji 🚀"
+    assert tmux.paste_via_clipboard("cc", texto) is True
+    (args, entrada), = vistas
+    assert entrada is not None and texto.encode("utf-8") in entrada
+    assert texto not in " ".join(args)
+    assert teclas == ["M-v"]
+
+
+def test_clipboard_serializa_entre_sessoes(monkeypatch):
+    # O clipboard e recurso GLOBAL da maquina. Sem lock de modulo, A escreve, B sobrescreve, e o
+    # M-v de A cola o texto de B — com o placeholder novo aparecendo do mesmo jeito, entao a prova
+    # nao ve. Este teste falha se alguem trocar o lock global por um lock por sessao.
+    import threading
+    monkeypatch.setattr(tmux.os, "name", "nt")
+    ordem = []
+
+    def fake(args, **kw):
+        ordem.append(("clip", threading.current_thread().name))
+        time.sleep(0.05)
+        return _ok()
+
+    monkeypatch.setattr(tmux, "RUN", fake)
+    monkeypatch.setattr(tmux, "send_keys",
+                        lambda n, k, **kw: ordem.append(("tecla", threading.current_thread().name)) or True)
+    ts = [threading.Thread(target=tmux.paste_via_clipboard, args=(f"s{i}", "a\nb"), name=f"t{i}")
+          for i in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    # Cada par (clip, tecla) tem que ser da MESMA thread e vir junto: sem intercalacao.
+    pares = [ordem[i:i + 2] for i in range(0, len(ordem), 2)]
+    assert all(p[0][1] == p[1][1] for p in pares), f"intercalou: {ordem}"
+
+
+def test_clipboard_recusa_texto_vazio(monkeypatch):
+    # Medido: `Set-Clipboard` com string vazia devolve rc=1 (o PowerShell casa o parametro como null)
+    # e o clipboard fica com o conteudo ANTERIOR. Recusar antes de chamar, pra nao gastar 250ms de
+    # PowerShell num caminho que so pode falhar.
+    monkeypatch.setattr(tmux.os, "name", "nt")
+    chamadas = []
+    monkeypatch.setattr(tmux, "RUN", lambda args, **kw: chamadas.append(args) or _ok())
+    teclas = []
+    monkeypatch.setattr(tmux, "send_keys", lambda n, k, **kw: teclas.append(k) or True)
+    assert tmux.paste_via_clipboard("cc", "") is False
+    assert chamadas == [] and teclas == []
