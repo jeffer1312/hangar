@@ -256,6 +256,76 @@ def provider_of_pane(pid, children: Optional[dict[int, list[int]]] = None) -> st
     return "claude"
 
 
+# Cache pid -> nome da sessao tmux. Um pid nunca muda de sessao (o processo nasce dentro do pane),
+# entao a resposta e estavel enquanto o processo vive; e um pid REUSADO depois que o processo morreu
+# so seria consultado por um recado NOVO daquele pid, que ja e o processo novo. Guarda tambem o
+# resultado vazio: sem isso, recado de sessao que nao e do tmux (um `claude -p` solto) pagaria um
+# fork de tmux por linha do transcript.
+_NOME_POR_PID: dict[int, Optional[str]] = {}
+
+
+def name_of_pid(pid: int) -> Optional[str]:
+    """Nome da sessao tmux dona deste pid, ou None.
+
+    Existe pro recado nativo entre sessoes Claude (cross-session messaging): o transcript do destino
+    traz `origin.verifiedPeerPid` do REMETENTE, e o app precisa do nome tmux — que e o endereco que
+    o cp-send, o pareamento e a UI usam. O `origin.name` que vem junto NAO serve: e o titulo da
+    sessao ("Revisar novo modo de envio no backlog"), nao o nome (medido em 07/08/2026).
+
+    Roda no parse do transcript, que vive num `to_thread` — o fork do tmux aqui nao toca o laco de
+    eventos. Falha (tmux fora, timeout) devolve None: quem chama tem fallback, e recado sem nome
+    resolvido e melhor que transcript que para de ser lido.
+    """
+    if pid in _NOME_POR_PID:
+        return _NOME_POR_PID[pid]
+    achado: Optional[str] = None
+    try:
+        children = _proc_children_map()
+        for nome, panes in tmux.list_panes_all().items():
+            for pane in panes:
+                ppid = pane.get("pid")
+                if ppid and (ppid == pid or pid in _descendant_pids(ppid, children)):
+                    achado = nome
+                    break
+            if achado:
+                break
+    except Exception:                                # noqa: BLE001
+        _log.warning("name_of_pid(%d) falhou; recado fica com o nome do remetente", pid,
+                     exc_info=True)
+        return None                                  # NAO cacheia falha: a proxima tentativa retenta
+    _NOME_POR_PID[pid] = achado
+    return achado
+
+
+def inbox_socket_of(name: str) -> Optional[str]:
+    """Socket de inbox do cross-session messaging desta sessao, ou None se ela nao tem.
+
+    O Claude Code (2.1.224+) liga um socket por sessao em `$XDG_RUNTIME_DIR/cc-socks/<pid>.sock`
+    (medido em 07/08/2026; o pid e o do processo `claude`). Ter o socket e o que torna a sessao
+    alcancavel pelo `SendMessage` de outra — e o que o `ListAgents` de la vai listar.
+
+    Serve pro cp-send decidir, com FATO em vez de suposicao, se o caminho nativo existe pra este
+    alvo: sessao aberta antes da liberacao, sessao Codex/Pi ou sessao de outra maquina nao tem
+    socket nenhum, e mandar o modelo usar `SendMessage` nesses casos seria mandar ele bater numa
+    porta que nao existe.
+    """
+    run = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    socks = Path(run) / "cc-socks"
+    if not socks.is_dir():
+        return None                                  # feature ausente/desligada nesta maquina
+    try:
+        pane = tmux.pane_pid(name)
+        if not pane:
+            return None
+        for p in _descendant_pids(pane, _proc_children_map()):
+            caminho = socks / f"{p}.sock"
+            if caminho.exists():
+                return str(caminho)
+    except Exception:                                # noqa: BLE001
+        _log.warning("inbox_socket_of(%r) falhou; tratando como sem socket", name, exc_info=True)
+    return None
+
+
 def _pi_sid_of(pid: int) -> Optional[str]:
     # CP_PI_SESSION: o uuid que o wrapper do pi injetou. Mesmo truque do _engine_of — o env do
     # processo VIVO e o registro autoritativo. Existe porque o `--session-id` some do cmdline: o pi

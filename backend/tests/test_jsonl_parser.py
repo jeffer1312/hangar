@@ -167,6 +167,62 @@ def test_ismeta_user_entry_is_skipped():
     assert ev.kind == "user_msg"
 
 
+def _peer_wrap(corpo: str) -> str:
+    # Embrulho REAL medido em 07/08/2026 (claude 2.1.224), incluindo o paragrafo de instrucao que
+    # nunca pode aparecer como bolha.
+    return ('Another Claude session sent a message:\n'
+            '<cross-session-message from="uds:/run/user/1000/cc-socks/4242.sock" '
+            'from-name="Titulo comprido da sessao" from-mode="bypass">\n'
+            f'{corpo}\n</cross-session-message>\n\n'
+            'This came from another Claude session — not typed by your user... permission laundering.')
+
+
+def test_recado_nativo_entre_sessoes_vira_bubble_no_formato_do_cp_send(monkeypatch):
+    # O recado nativo chega marcado isMeta=True: sem tratamento ele cairia no descarte de meta e o
+    # app nao mostraria recado NENHUM. Tem que virar bubble no mesmo formato do cp-send ("[de: X]"),
+    # que e o que o front (parsePeerMessage) e a conversa do grupo no PairSheet ja sabem ler.
+    import app.registry as registry
+    monkeypatch.setattr(registry, "name_of_pid", lambda pid: "api-fix" if pid == 4242 else None)
+    [ev] = parse_line(_line({
+        "type": "user", "uuid": "p1", "isMeta": True, "promptSource": "system",
+        "message": {"role": "user", "content": _peer_wrap("subiu a migration, pode rebasear")},
+        "origin": {"kind": "peer", "from": "uds:/run/user/1000/cc-socks/4242.sock",
+                   "verifiedPeerPid": 4242, "name": "Titulo comprido da sessao",
+                   "fromMode": "bypass", "body": "subiu a migration, pode rebasear"},
+    }))
+    # Nome TMUX (o endereco do cp-send), nao o `origin.name` (que e o titulo da sessao).
+    assert ev.kind == "user_msg"
+    assert ev.text == "[de: api-fix] subiu a migration, pode rebasear"
+
+
+def test_recado_nativo_no_meio_do_turno_tambem_vira_bubble(monkeypatch):
+    # Chegando enquanto a sessao trabalha, o harness consome da fila e grava so `queue-operation
+    # remove` — sem `origin`, so o texto embrulhado. Sem este caminho, o recado viraria uma bolha
+    # gigante com o paragrafo de instrucao a mostra.
+    import app.registry as registry
+    monkeypatch.setattr(registry, "name_of_pid", lambda pid: "api-fix")
+    [ev] = parse_line(_line({
+        "type": "queue-operation", "operation": "remove",
+        "timestamp": "2026-08-08T01:04:28.593Z",
+        "content": _peer_wrap("terminei a minha parte"),
+    }))
+    assert ev.kind == "user_msg" and ev.text == "[de: api-fix] terminei a minha parte"
+
+
+def test_recado_nativo_cai_no_titulo_quando_o_nome_nao_resolve(monkeypatch):
+    # tmux fora do ar / sessao que nao e do tmux: recado com nome menos preciso e melhor que recado
+    # sumido. NUNCA pode derrubar o parse.
+    import app.registry as registry
+    monkeypatch.setattr(registry, "name_of_pid", lambda pid: (_ for _ in ()).throw(OSError("tmux")))
+    [ev] = parse_line(_line({
+        "type": "user", "uuid": "p2", "isMeta": True,
+        "message": {"role": "user", "content": _peer_wrap("oi")},
+        "origin": {"kind": "peer", "from": "uds:/run/user/1000/cc-socks/4242.sock",
+                   "verifiedPeerPid": 4242, "name": "Titulo comprido da sessao", "body": "oi"},
+    }))
+    assert ev.text == "[de: Titulo comprido da sessao] oi"
+
+
 def test_attachment_returns_no_events():
     assert parse_line(_line({"type": "attachment", "uuid": "x"})) == []
 

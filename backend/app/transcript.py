@@ -69,6 +69,69 @@ _META_BLOCK_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL
 _TASK_NOTIF_RE = re.compile(r"<task-id>([^<]+)</task-id>")
 
 
+# Recado NATIVO de outra sessao Claude (cross-session messaging, claude 2.1.224+). Medido em
+# 07/08/2026 num envio real: chega como type='user' com `isMeta: True` — ou seja, cairia no descarte
+# de meta la embaixo e o app nunca mostraria recado nenhum (bolha ausente, nao bolha feia). Vem com
+# um `origin` estruturado: {kind:"peer", from:"uds:/run/user/1000/cc-socks/<pid>.sock",
+# verifiedPeerPid, name, fromMode, body, msg_id}.
+#
+# O `message.content` NAO serve pra exibir: traz o embrulho <cross-session-message> mais um paragrafo
+# inteiro de instrucao sobre lavagem de permissao. Quem presta e o `origin.body`.
+#
+# Normaliza pro MESMO formato do cp-send ("[de: <sessao>] texto") de proposito: e o que o front ja
+# sabe ler (lib/format.ts parsePeerMessage) e o que alimenta a conversa do grupo no PairSheet, os
+# badges e a deduplicacao. Assim o caminho nativo entra sem uma linha de mudanca no front, e o
+# cp-send segue valendo pra tudo que o nativo nao faz (outra maquina iniciando, Codex/Pi, --group).
+_PEER_WRAP_RE = re.compile(r"<cross-session-message\b([^>]*)>\n?(.*?)\n?</cross-session-message>",
+                           re.DOTALL)
+_PEER_ATTR_RE = re.compile(r'([\w-]+)="([^"]*)"')
+_PEER_SOCK_PID_RE = re.compile(r"/(\d+)\.sock")
+
+
+def _peer_nome(pid: Optional[int], fallback: Optional[str]) -> str:
+    """Nome tmux do remetente. Cai no `from-name` (o TITULO da sessao) quando nao der pra resolver —
+    recado com nome menos preciso e melhor que recado sumido."""
+    if isinstance(pid, int):
+        try:
+            # Import tardio: registry importa meio mundo (tmux, git, pair, pqueue) e este modulo e o
+            # parser puro do transcript. So paga quando um recado nativo aparece, que e raro.
+            from app.registry import name_of_pid
+            if nome := name_of_pid(pid):
+                return nome
+        except Exception:                            # noqa: BLE001
+            pass                                     # resolver o nome NUNCA pode derrubar o parse
+    return (fallback or "").strip() or "sessão"
+
+
+def _peer_msg(obj: dict, content) -> Optional[str]:
+    """Texto ja no formato do cp-send ("[de: X] corpo"), ou None se nao for recado nativo.
+
+    Duas fontes porque o recado entra por DOIS caminhos, e so um deles tem o `origin`:
+      - sessao ociosa  -> vira type='user' com origin (o caminho rico);
+      - meio de turno  -> o harness consome da fila e grava so `queue-operation remove`, com o texto
+        EMBRULHADO e nada mais. Sem tratar este, um recado que chega enquanto a sessao trabalha
+        viraria uma bolha gigante com o paragrafo de instrucao a mostra.
+    """
+    origin = obj.get("origin")
+    if isinstance(origin, dict) and origin.get("kind") == "peer":
+        corpo = origin.get("body")
+        if isinstance(corpo, str) and corpo.strip():
+            pid = origin.get("verifiedPeerPid")
+            return f"[de: {_peer_nome(pid if isinstance(pid, int) else None, origin.get('name'))}] " \
+                   f"{corpo.strip()}"
+    if not isinstance(content, str):
+        return None
+    m = _PEER_WRAP_RE.search(content)
+    if not m:
+        return None
+    attrs = dict(_PEER_ATTR_RE.findall(m.group(1)))
+    corpo = m.group(2).strip()
+    if not corpo:
+        return None
+    sock = _PEER_SOCK_PID_RE.search(attrs.get("from", ""))
+    return f"[de: {_peer_nome(int(sock.group(1)) if sock else None, attrs.get('from-name'))}] {corpo}"
+
+
 def _is_command_meta(text: str) -> bool:
     return text.lstrip().startswith(_COMMAND_META_PREFIXES)
 
@@ -128,6 +191,13 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
         # pelo timestamp (a entrada nao tem uuid) pro front deduplicar por id. Mesma filtragem de meta
         # do caminho user normal (comando/skill/system-reminder/imagem sintetica nao viram bubble).
         if obj.get("operation") == "remove" and isinstance(queued, str):
+            # Recado nativo consumido NO MEIO do turno: aqui nao ha `origin`, so o texto embrulhado.
+            # Antes do _is_command_meta porque o embrulho nao e comando nem system-reminder — sem
+            # este ramo ele passaria batido e viraria bolha com o paragrafo de instrucao a mostra.
+            if (peer := _peer_msg(obj, queued)) is not None:
+                digest = hashlib.md5(queued.encode("utf-8", "replace")).hexdigest()[:8]
+                return [ChatEvent(kind="user_msg",
+                                  id=f"queued:{obj.get('timestamp', '')}:{digest}", text=peer)]
             if _is_command_meta(queued):
                 return []
             cleaned = _strip_meta_blocks(queued)
@@ -156,6 +226,10 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
         # "Continue from where you left off", avisos de hook. No terminal isso nao aparece; aqui
         # viraria bubble e poluiria o chat. Fora do chat. (Os <command-*> tags e a task-notification
         # NAO vem com isMeta -> seguem tratados abaixo pelo caminho de sempre.)
+        # ANTES do descarte de meta: o recado nativo entre sessoes Claude vem marcado isMeta e sumiria
+        # inteiro (ver _peer_msg). E conversa de verdade, nao ruido do harness.
+        if (peer := _peer_msg(obj, content)) is not None:
+            return [ChatEvent(kind="user_msg", id=uid, text=peer)]
         if obj.get("isMeta") is True:
             return []
         if isinstance(content, str):
