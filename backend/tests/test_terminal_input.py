@@ -895,3 +895,81 @@ def test_drain_requeue_partial_end_a_end_sem_tocar_na_flag(tmp_queue, monkeypatc
     assert sent == 0
     assert q.entry_delivered(entry["id"]) is False        # reenfileirada, nao perdida nem travada
     assert int(q.load()[0]["attempts"]) == 1               # bump_attempts rodou (so roda com limpou=True)
+
+
+# --- Windows: multi-linha pelo clipboard (Alt+V) -----------------------------------------------
+#
+# Medido na winboat, 08/08/2026 (docs/medicoes-2026-08-08-windows.md): o caminho de hoje entrega 309
+# de 600 linhas e devolve "sent"; o clipboard entrega 600 de 600.
+
+
+def test_windows_clipboard_com_prova_manda_enter_e_nao_digita(monkeypatch):
+    # O caminho novo NAO pode digitar nada: se o paste_text for chamado, o texto vai duas vezes.
+    monkeypatch.setattr(terminal_input.os, "name", "nt")
+    with patch("app.terminal_input.tmux.has_session", return_value=True), \
+         patch("app.terminal_input.tmux.capture_pane",
+               return_value=_pane_claude(["❯ [Pasted text #1 +599 lines]"])), \
+         patch("app.terminal_input.tmux.paste_via_clipboard", return_value=True) as pvc, \
+         patch("app.terminal_input.tmux.paste_text") as pt, \
+         patch.object(terminal_input, "_wait_input_ready", lambda *a, **k: True), \
+         patch.object(terminal_input, "_provou_entrega", lambda *_a: True), \
+         patch.object(terminal_input, "_submeteu", lambda *_a: True), \
+         patch.object(terminal_input, "send_keys") as sk:
+        assert TerminalInput().send_prompt("cc", "linha 1\nlinha 2") == "sent"
+    assert pvc.called and not pt.called
+    assert call("cc", "Enter") in sk.call_args_list
+
+
+def test_windows_sem_prova_vira_partial_e_nao_digita(monkeypatch):
+    # Sem prova NAO cai no caminho antigo: ele perde 291 de 600 linhas e devolve True. Vira partial,
+    # que limpa o composer e deixa o drain reenfileirar.
+    monkeypatch.setattr(terminal_input.os, "name", "nt")
+    with patch("app.terminal_input.tmux.has_session", return_value=True), \
+         patch("app.terminal_input.tmux.capture_pane", return_value=_pane_claude(["❯ "])), \
+         patch("app.terminal_input.tmux.paste_via_clipboard", return_value=True), \
+         patch("app.terminal_input.tmux.paste_text") as pt, \
+         patch.object(terminal_input, "_wait_input_ready", lambda *a, **k: True), \
+         patch.object(terminal_input, "_provou_entrega", lambda *_a: False), \
+         patch.object(terminal_input, "send_keys") as sk:
+        assert TerminalInput().send_prompt("cc", "linha 1\nlinha 2") == "partial"
+    assert not pt.called
+    assert call("cc", "Enter") not in sk.call_args_list
+
+
+def test_windows_clipboard_nao_escrito_nao_manda_enter(monkeypatch):
+    # Quando a escrita do clipboard falha, o clipboard fica com o conteudo ANTERIOR (medido). Seguir
+    # daqui submeteria a mensagem PASSADA inteira como se fosse esta.
+    monkeypatch.setattr(terminal_input.os, "name", "nt")
+    with patch("app.terminal_input.tmux.has_session", return_value=True), \
+         patch("app.terminal_input.tmux.capture_pane", return_value=_pane_claude(["❯ "])), \
+         patch("app.terminal_input.tmux.paste_via_clipboard", return_value=False), \
+         patch("app.terminal_input.tmux.paste_text") as pt, \
+         patch.object(terminal_input, "_wait_input_ready", lambda *a, **k: True), \
+         patch.object(terminal_input, "send_keys") as sk:
+        assert TerminalInput().send_prompt("cc", "linha 1\nlinha 2") == "partial"
+    assert not pt.called
+    assert call("cc", "Enter") not in sk.call_args_list
+
+
+def test_provou_entrega_recusa_o_indefinido():
+    # `_composer_residuo` e tri-estado: None = "nao da pra saber". Tratar None como permissao e o
+    # falso positivo que o resto do modulo passou meses consertando — e aqui ele e pior, porque
+    # "nao sei" pode ser a tecla nunca entendida, com o composer vazio, e o Enter submete o que
+    # estivesse la.
+    with patch.object(terminal_input, "_composer_residuo", return_value=None), \
+         patch("app.terminal_input.tmux.capture_pane", return_value="x"), \
+         patch.object(terminal_input, "_PROVA_PRAZO", 0.01):
+        assert terminal_input._provou_entrega("cc", "texto comprido de teste", set()) is False
+
+
+def test_posix_nunca_usa_clipboard(monkeypatch):
+    monkeypatch.setattr(terminal_input.os, "name", "posix")
+    with patch("app.terminal_input.tmux.has_session", return_value=True), \
+         patch("app.terminal_input.tmux.capture_pane", return_value="? for shortcuts\n"), \
+         patch("app.terminal_input.tmux.paste_via_clipboard") as pvc, \
+         patch("app.terminal_input.tmux.paste_text", return_value=True), \
+         patch.object(terminal_input, "_entrou_no_composer", lambda *_a: True), \
+         patch.object(terminal_input, "_submeteu", lambda *_a: True), \
+         patch.object(terminal_input, "send_keys"):
+        assert TerminalInput().send_prompt("cc", "linha 1\nlinha 2") == "sent"
+    assert not pvc.called
