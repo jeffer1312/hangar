@@ -90,6 +90,30 @@ Com o composer ainda carregado da colagem de (d), um único `C-u` limpou: nenhum
 pane, composer de volta à linha vazia. Reconfirmado depois das cinco colagens da segunda rodada. `_limpar_composer` (`terminal_input.py:879`) funciona lá — e
 isso importa porque, com o caminho novo, `partial` deixa de ser exceção rara e vira caminho quente.
 
+## Verificado em uso real, com o código no ar (08/08/2026)
+
+Backend da winboat atualizado (`87064c8..6cb43a8`) e confirmado sendo o código novo pelos próprios
+processos — `uv 12828 → python 10388 → python 6708`, todos nascidos depois do pull, com
+`paste_via_clipboard` presente no `tmux.py`. Não pelo que o instalador diz.
+
+Envio pelo app (`POST /api/sessions/medicao-clip/input`), **14.008 chars em 600 linhas**, com acento e
+emoji em 11 delas: HTTP 200, `delivered=true`, **1509 ms**.
+
+A prova é o **transcript**, não o pane: 14.008 chars gravados contra 14.008 enviados, as 600 linhas
+presentes (`linha 0001` e `linha 0600` inclusive), acento e emoji preservados, **byte a byte idêntico
+ao enviado**. Nenhum `partial`, nenhum WARN, nenhum traceback.
+
+Mensagem curta logo depois: 200, `delivered=true`, 808 ms, idêntica no transcript — o caminho de
+sempre não regrediu.
+
+Para comparação, o caminho que isto substituiu media **309 de 600 linhas e devolvia sucesso**.
+
+Prova independente de que foi o caminho novo, e não o antigo acertando por sorte: depois dos dois
+envios o clipboard do Windows **ainda contém a mensagem de 600 linhas** (`Get-Clipboard` devolve
+14.019 unidades UTF-16 = os 14.008 codepoints mais os 11 pares surrogate dos emojis). E a mensagem
+curta enviada depois **não** sobrescreveu o clipboard — ou seja, o caminho de uma linha segue no
+`send-keys` de sempre e o clipboard só entra no multi-linha, que é exatamente o desenho.
+
 ## O que muda no plano
 
 1. **Task 1** usa `Set-Clipboard`, **sem BOM**. O bloco A (`clip.exe` + BOM UTF-16LE) sai; `clip.exe`
