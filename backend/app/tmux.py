@@ -2,6 +2,7 @@ import os
 import shutil
 import logging
 import subprocess
+import threading
 import time
 
 RUN = subprocess.run
@@ -115,6 +116,81 @@ def _pane_target(name: str) -> str:
     # e uma busca em dict.
     from app.agentpane import resolve_target
     return resolve_target(name) or f"={name}:"
+
+
+# O clipboard e recurso GLOBAL do usuario, nao da sessao — e o `_send_lock` do terminal_input e por
+# NOME. Sem este lock: a sessao A escreve o clipboard, a B sobrescreve, e o M-v de A cola o texto da
+# B; o `[Pasted text #N]` novo aparece do mesmo jeito, entao a prova diz "entregou" e o Enter submete
+# conteudo alheio numa sessao que pode estar em bypass. E a mesma classe de bug que o comentario do
+# _send_lock (terminal_input.py:505) descreve pro tty, agora na escala da maquina.
+#
+# RLock, e nao Lock, porque ele e segurado em DOIS niveis na mesma thread: o caller o segura da
+# escrita ate o fim da prova de entrega (senao outra sessao sobrescreve o clipboard entre a escrita e
+# o Alt+V), e `paste_via_clipboard` o segura tambem, pra ser segura quando chamada sozinha. Com um
+# Lock simples isso e deadlock imediato no caminho de envio do Windows.
+_CLIP_LOCK = threading.RLock()
+
+# Escreve o clipboard do Windows lendo o texto da STDIN. Duas escolhas medidas na winboat em
+# 08/08/2026 (docs/medicoes-2026-08-08-windows.md):
+#
+# - `Set-Clipboard` e nao `clip.exe`: o clip.exe converte todo LF em CRLF, sempre (medido byte a
+#   byte: 22 bytes contra os 20 do original), e a mensagem do usuario nao pode mudar no caminho. O
+#   clip.exe fica como plano B pra quem nao tiver PowerShell, e ai o CRLF vem junto.
+# - Sem BOM: quando o BOM vai junto, ele vira CONTEUDO literal (o primeiro caractere lido e U+FEFF),
+#   invisivel no terminal e dentro do que a sessao recebe.
+#
+# E vai por STDIN, nao por argumento: o argv e visivel na maquina inteira (a mesma razao pela qual
+# `cp-engine` existe em vez de `tmux -e`), e o quoting ja provou mutilar texto no caminho pro
+# Windows — uma aspa da mensagem do usuario morria com "unexpected EOF while looking for matching
+# quote".
+_CLIP_CMD = [
+    "powershell", "-NoProfile", "-NonInteractive", "-Command",
+    "[Console]::InputEncoding=[Text.UTF8Encoding]::new($false);"
+    "Set-Clipboard -Value ([Console]::In.ReadToEnd())",
+]
+
+
+def paste_via_clipboard(name: str, text: str) -> bool:
+    """Escreve o texto no clipboard do Windows e manda Alt+V. True = clipboard escrito E tecla
+    enviada. False = falhou, e NADA foi digitado no pane (o caller decide o que fazer).
+
+    Windows-only por desenho: no Linux o `load-buffer -` ja entrega tudo (paste_text), e o clipboard
+    nao vale o risco. Aqui ele vale porque a alternativa mede 309 de 600 linhas.
+
+    O caller TEM que segurar `_CLIP_LOCK` durante a prova de entrega, nao so durante esta funcao —
+    ver terminal_input. Soltar antes da prova reabre a janela em que outra sessao sobrescreve o
+    clipboard. O lock daqui existe pra funcao ser segura quando chamada sozinha — e por isso ele e
+    RLock: com o caller ja segurando, este `with` e no-op em vez de deadlock.
+    """
+    if os.name != "nt":
+        return False
+    # Texto vazio: o PowerShell converte a string vazia em null ao casar o parametro e o
+    # `Set-Clipboard` devolve rc=1 (ArgumentNullException). Recusar aqui, e nao contornar do lado do
+    # PowerShell: a variante que tolera escreve um espaco no clipboard, ou seja cola um espaco em vez
+    # de nada. Medido na winboat, 08/08/2026.
+    if not text:
+        return False
+    with _CLIP_LOCK:
+        # Custo medido: ~157ms de cold start do PowerShell + ~95ms de trabalho, e o tempo e PLANO em
+        # relacao ao tamanho (13,8k / 69k / 278k chars: todos ~250ms). Nao ha teto por tamanho.
+        cp = _run(_CLIP_CMD, input=text.encode("utf-8"))
+        if cp.returncode != 0:
+            # Sair AQUI e obrigatorio, nao defensivo: quando a escrita falha o clipboard fica com o
+            # conteudo ANTERIOR intacto, entao um M-v mandado assim mesmo colaria a mensagem PASSADA
+            # inteira — e ela parece legitima no composer. E a mesma familia do bug que este caminho
+            # existe pra matar, so que pior: em vez de metade da mensagem certa, a mensagem errada
+            # inteira.
+            _log.warning("clipboard nao escrito pra %r (%s) — NAO vou mandar a tecla: o M-v colaria "
+                         "a mensagem ANTERIOR", name, (cp.stderr or "").strip()[:200])
+            return False
+        # `M-v` (Alt+V) e nao `C-v`: no Windows o Ctrl+V e capturado pelo emulador antes de chegar no
+        # aplicativo, por isso o Claude Code usa Alt+V la. Comando literal confirmado na winboat;
+        # `send-keys Escape v` numa chamada so devolve rc=0 e NAO cola (mais um rc=0 mentiroso do
+        # psmux), e `C-v` tambem nao.
+        #
+        # UMA vez so: depois da primeira colagem o rodape vira "paste again to expand", entao um
+        # segundo M-v EXPANDE o bloco em vez de recolar.
+        return send_keys(name, "M-v")
 
 
 def list_sessions() -> list[dict]:
