@@ -5,19 +5,24 @@ from app import tmux
 
 
 def _grava(monkeypatch, falha_paste: bool, trunca: bool = False):
-    """Troca o RUN do tmux.py por um espiao. `falha_paste` simula o psmux VELHO, que devolve codigo
-    != 0 no paste-buffer. `trunca` simula o que foi MEDIDO no psmux 3.3.7: rc=0 mentiroso, com o
-    buffer cortado na primeira quebra de linha."""
+    """Troca o `_run` do tmux.py por um espiao. `falha_paste` simula o psmux VELHO, que devolve
+    codigo != 0 no paste-buffer. `trunca` simula o que foi MEDIDO no psmux 3.3.7: rc=0 mentiroso, com
+    o buffer cortado na primeira quebra de linha.
+
+    Patch em `_run`, nao em `RUN` (Task 3): `load-buffer -` manda o texto pela STDIN via
+    `subprocess.run` direto (para escapar do teto de 16344 bytes do comando, ver `_run`), um caminho
+    que NAO passa por `RUN` — um monkeypatch em `RUN` deixaria esse load-buffer cair no tmux de
+    verdade, sem ninguem notar (rc=0 silencioso na ausencia de servidor)."""
     chamadas: list[list[str]] = []
 
-    def fake(args, **kw):
+    def fake(args, input=None):
         chamadas.append(args)
         rc = 1 if (falha_paste and "paste-buffer" in args) else 0
         # show-buffer do probe: `trunca` devolve so o que vem ANTES do \n, como o psmux faz.
         out = ("A\n" if trunca else "A\nB\n") if "show-buffer" in args else ""
         return subprocess.CompletedProcess(args, rc, stdout=out, stderr="")
 
-    monkeypatch.setattr(tmux, "RUN", fake)
+    monkeypatch.setattr(tmux, "_run", fake)
     monkeypatch.setattr(tmux, "_TRUNCA_BUFFER", None)   # probe roda por teste, sem cache vazado
     return chamadas
 
@@ -30,7 +35,7 @@ def test_linux_usa_paste_buffer_e_nao_cai_no_plano_b(monkeypatch):
     tmux.paste_text("s", "uma\nduas\ntres")
     verbos = [c[1] for c in chamadas
               if c[1] not in ("show-buffer", "delete-buffer", "list-panes")][1:]
-    assert verbos == ["set-buffer", "paste-buffer"]   # [1:] tira o set-buffer do probe
+    assert verbos == ["load-buffer", "paste-buffer"]   # [1:] tira o set-buffer do probe
 
 
 def test_sem_paste_buffer_manda_linha_a_linha_com_cj(monkeypatch):
@@ -78,14 +83,14 @@ def test_falha_confirmada_no_meio_da_2a_linha_devolve_false_e_para(monkeypatch):
     # "entregue". Agora a falha CONFIRMADA (rc != 0) tem que propagar: False, e PARAR (nao tentar a
     # 3a linha, que deixaria um buraco no meio do texto).
     chamadas = _grava(monkeypatch, falha_paste=True)   # cai no plano B (linha a linha)
-    base_fake = tmux.RUN
+    base_fake = tmux._run
 
-    def fake_com_falha_na_segunda(args, **kw):
+    def fake_com_falha_na_segunda(args, input=None):
         if args[1] == "send-keys" and args[-1] == "duas":
             return subprocess.CompletedProcess(args, 1, stdout="", stderr="deu ruim")
-        return base_fake(args, **kw)
+        return base_fake(args, input=input)
 
-    monkeypatch.setattr(tmux, "RUN", fake_com_falha_na_segunda)
+    monkeypatch.setattr(tmux, "_run", fake_com_falha_na_segunda)
     ok = tmux.paste_text("s", "uma\nduas\ntres")
     assert ok is False
 
