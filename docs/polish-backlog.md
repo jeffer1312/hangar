@@ -250,12 +250,34 @@ overwriting: whatever they copied becomes a user turn in a session that may be r
 module lock closes this window between our own sessions and cannot close it against the user's hands.
 (2) We clobber whatever they had copied.
 
-**Unrelated bug found while verifying, and it is the same family:** `install.ps1 -Update` on Windows
-prints an `X` for step 4/8 (`npm ci falhou (exit -4048) — frontend NAO buildado`; -4048 is EPERM) and
-then still prints **`Pronto`** at the end. The backend keeps serving the *previous* build, so the
-screen stays up and nothing looks broken — which is what makes it treacherous: whoever reads the last
-line believes the front was updated. Not investigated (it was outside the scope of that session), and
-it did not affect the measurement above, since all five commits are backend.
+**Bug found while verifying, same family, and it cost the rest of the afternoon** (diagnosed
+2026-08-08): `install.ps1 -Update` prints an `X` for step 4/8 (`npm ci falhou (exit -4048)`) and then
+still prints **`Pronto`** at the end. It is not cosmetic — it is the whole failure:
+
+- **The installer sabotages itself.** It runs `npm ci` while the front it is about to replace is
+  *still running*. `npm ci` wipes `node_modules` before reinstalling, so it deleted almost everything
+  and then hit `EPERM: operation not permitted, unlink …\@rolldown\binding-win32-x64-msvc\
+  rolldown-binding.win32-x64-msvc.node` — a **native `.node`** mapped into the live Vite process, and
+  Windows does not let you delete a binary a running process has mapped. It aborted there, leaving
+  `node_modules` half-installed and **without `.bin` at all**.
+- **Nobody saw it**, because Vite kept running from its in-memory image. The damage only surfaced
+  when the VM was suspended and the process died: nothing could restart it.
+- **That is what the `502` was.** `tailscale serve` maps `/` to `127.0.0.1:5173`, so the chain is
+  `ts.net → Vite → backend`. The backend was never down — it was the same process throughout — but a
+  dead front takes every external route with it, `cp-send` included.
+- **Fixed by a clean `npm ci`** once nothing held the binary (450 packages, exit 0, `.bin\vite.cmd`
+  back). One warning left behind: `esbuild@0.28.1` has a postinstall not approved by allow-scripts.
+
+**And the logon trigger does not heal this.** The front task (`claude-cockpit-frontend`, running
+`vite preview` over `frontend/dist`) has an `MSFT_TaskLogonTrigger` with principal Interactive — it
+fires **on logon**, so when suspension kills the process without a logoff/logon cycle, nothing brings
+it back. Which is exactly what happened: the backend survived, the front did not, and the box sat
+serving 502 until someone logged in. Note the asymmetry before "fixing" it with a service principal:
+the interactive session is what gives the backend the clipboard, i.e. the Windows send path built
+above.
+
+Two things to do, not done yet: stop the front **before** `npm ci`, and make `-Update` refuse to
+print `Pronto` when any step failed.
 
 **Still open:** Pi and Codex on Windows keep the old path — `Alt+V` is Claude Code's binding and
 nobody has measured theirs. And the `cp-send`/`input` channel toward Windows was caught mutilating
