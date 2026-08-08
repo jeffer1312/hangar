@@ -236,10 +236,20 @@ target="$1"; shift
 # Só pro 1:1 LOCAL: cross-server (`::`) cai fora pelo teste do alvo, e --group/--pair/--new nem
 # chegam aqui. Nunca "quase": faltando um dos lados, segue o envio de sempre.
 if [[ $forcar_tmux -eq 0 && -n "${CLAUDE_CODE_MESSAGING_SOCKET:-}" && "$target" != *::* ]]; then
-    uds=$(api GET "/api/sessions/$target/peer-address" 2>/dev/null \
-          | python3 -c 'import json,sys
+    # A consulta NUNCA impede o envio: falhando, segue pelo tmux, que é o caminho que sempre
+    # funciona. Mas falhar CALADO seria trocar "não tem socket" (o caso normal) por "a checagem
+    # quebrou" sem ninguém notar — endpoint em 500, token vencido, backend fora, JSON torto: tudo
+    # daria o mesmo silêncio. Guarda o erro e avisa no stderr, sem interromper (achado da revisão;
+    # é o mesmo princípio que o api() já aplica ao não mascarar o `detail` do backend).
+    erro_uds=""
+    if resposta=$(api GET "/api/sessions/$target/peer-address" 2>&1); then
+        uds=$(printf '%s' "$resposta" | python3 -c 'import json,sys
 try: print(json.load(sys.stdin).get("uds") or "")
-except Exception: print("")' 2>/dev/null || true)
+except Exception: sys.exit(9)' 2>/dev/null) || { uds=""; erro_uds="resposta não é o JSON esperado"; }
+    else
+        uds=""; erro_uds="$resposta"
+    fi
+    [[ -z "$erro_uds" ]] || echo "aviso: não deu pra checar o caminho nativo de '$target' ($(printf '%s' "$erro_uds" | head -1)); enviando pelo tmux" >&2
     if [[ -n "$uds" ]]; then
         # stderr + código 3: o modelo PRECISA ver que não entregou. Um aviso no stdout com código 0
         # seria lido como sucesso e a mensagem sumiria sem ninguém notar.

@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import AsyncIterator, Optional
 from watchfiles import awatch
 from app.models import ChatEvent
+
+_log = logging.getLogger("claude_pocket.transcript")
 
 # Backfill do SSE: re-envia so as ULTIMAS N linhas do transcript em cada (re)conexao, nao o arquivo
 # inteiro. Antes o follow() comecava em pos=0 e re-shippava dezenas de MB a cada reconexao do mobile
@@ -88,9 +91,15 @@ _PEER_ATTR_RE = re.compile(r'([\w-]+)="([^"]*)"')
 _PEER_SOCK_PID_RE = re.compile(r"/(\d+)\.sock")
 
 
-def _peer_nome(pid: Optional[int], fallback: Optional[str]) -> str:
+def _peer_nome(pid: Optional[int], fallback) -> str:
     """Nome tmux do remetente. Cai no `from-name` (o TITULO da sessao) quando nao der pra resolver —
-    recado com nome menos preciso e melhor que recado sumido."""
+    recado com nome menos preciso e melhor que recado sumido.
+
+    `fallback` chega SEM tipo declarado de proposito: e valor cru de JSON. Um `origin.name` que venha
+    como numero ou lista fazia `(fallback or "").strip()` levantar AttributeError — e essa excecao
+    subia por parse_line -> _read_from -> follow() ate o `except` do sse.py, derrubando o tail da
+    sessao INTEIRA. Uma linha malformada parava o transcript todo, que e exatamente o oposto do que
+    o docstring aqui promete (achado da revisao, reproduzido com origin.name=123)."""
     if isinstance(pid, int):
         try:
             # Import tardio: registry importa meio mundo (tmux, git, pair, pqueue) e este modulo e o
@@ -99,35 +108,55 @@ def _peer_nome(pid: Optional[int], fallback: Optional[str]) -> str:
             if nome := name_of_pid(pid):
                 return nome
         except Exception:                            # noqa: BLE001
-            pass                                     # resolver o nome NUNCA pode derrubar o parse
-    return (fallback or "").strip() or "sessão"
+            # Resolver o nome NUNCA pode derrubar o parse — mas engolir CALADO tambem nao: hoje o
+            # name_of_pid ja se blinda sozinho, entao o que sobra aqui e o import. Um ImportError de
+            # regressao circular deixaria TODO recado nativo caindo no titulo, sem nenhuma pista.
+            _log.debug("nao consegui resolver o nome do remetente (pid %s)", pid, exc_info=True)
+    return (fallback.strip() or "sessão") if isinstance(fallback, str) else "sessão"
 
 
-def _peer_msg(obj: dict, content) -> Optional[str]:
-    """Texto ja no formato do cp-send ("[de: X] corpo"), ou None se nao for recado nativo.
+def _peer_msg(obj: dict) -> Optional[str]:
+    """Recado nativo de uma entrada `type='user'`, no formato do cp-send ("[de: X] corpo").
 
-    Duas fontes porque o recado entra por DOIS caminhos, e so um deles tem o `origin`:
-      - sessao ociosa  -> vira type='user' com origin (o caminho rico);
-      - meio de turno  -> o harness consome da fila e grava so `queue-operation remove`, com o texto
-        EMBRULHADO e nada mais. Sem tratar este, um recado que chega enquanto a sessao trabalha
-        viraria uma bolha gigante com o paragrafo de instrucao a mostra.
+    Le SO o `origin` estruturado — NUNCA procura o embrulho no texto. Procurar no texto aqui fazia
+    qualquer mensagem do usuario contendo `<cross-session-message ...>` (colar este proprio codigo
+    numa conversa, por exemplo) ser DESCARTADA e substituida pelo miolo das tags, com atribuicao
+    `[de: alguem]` inventada — perda calada do que a pessoa escreveu, e forja da identidade que o
+    PairSheet e os badges usam pra dizer de quem e a fala (achado da revisao).
     """
     origin = obj.get("origin")
-    if isinstance(origin, dict) and origin.get("kind") == "peer":
-        corpo = origin.get("body")
-        if isinstance(corpo, str) and corpo.strip():
-            pid = origin.get("verifiedPeerPid")
-            return f"[de: {_peer_nome(pid if isinstance(pid, int) else None, origin.get('name'))}] " \
-                   f"{corpo.strip()}"
-    if not isinstance(content, str):
+    if not isinstance(origin, dict) or origin.get("kind") != "peer":
         return None
-    m = _PEER_WRAP_RE.search(content)
+    corpo = origin.get("body")
+    if not isinstance(corpo, str) or not corpo.strip():
+        return None
+    pid = origin.get("verifiedPeerPid")
+    return (f"[de: {_peer_nome(pid if isinstance(pid, int) else None, origin.get('name'))}] "
+            f"{corpo.strip()}")
+
+
+def _peer_msg_embrulhado(texto) -> Optional[str]:
+    """Recado nativo consumido NO MEIO do turno: ali nao ha `origin`, so o texto embrulhado.
+
+    Exige que o conteudo seja EXATAMENTE o embrulho — nada antes, nada depois. Medido no jsonl real
+    (07/08/2026): o `queue-operation` do recado nativo comeca em `<cross-session-message` e termina
+    em `</cross-session-message>`, sempre. Um texto do usuario que apenas CONTENHA as tags (codigo
+    colado, este arquivo citado numa conversa) nao casa, entao continua sendo exibido inteiro e como
+    dele. Sem essa exigencia, uma mensagem enfileirada durante trabalho podia ser trocada pelo miolo
+    das tags com remetente forjado.
+    """
+    if not isinstance(texto, str):
+        return None
+    t = texto.strip()
+    if not t.startswith("<cross-session-message") or not t.endswith("</cross-session-message>"):
+        return None
+    m = _PEER_WRAP_RE.fullmatch(t)
     if not m:
         return None
-    attrs = dict(_PEER_ATTR_RE.findall(m.group(1)))
     corpo = m.group(2).strip()
     if not corpo:
         return None
+    attrs = dict(_PEER_ATTR_RE.findall(m.group(1)))
     sock = _PEER_SOCK_PID_RE.search(attrs.get("from", ""))
     return f"[de: {_peer_nome(int(sock.group(1)) if sock else None, attrs.get('from-name'))}] {corpo}"
 
@@ -194,7 +223,7 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
             # Recado nativo consumido NO MEIO do turno: aqui nao ha `origin`, so o texto embrulhado.
             # Antes do _is_command_meta porque o embrulho nao e comando nem system-reminder — sem
             # este ramo ele passaria batido e viraria bolha com o paragrafo de instrucao a mostra.
-            if (peer := _peer_msg(obj, queued)) is not None:
+            if (peer := _peer_msg_embrulhado(queued)) is not None:
                 digest = hashlib.md5(queued.encode("utf-8", "replace")).hexdigest()[:8]
                 return [ChatEvent(kind="user_msg",
                                   id=f"queued:{obj.get('timestamp', '')}:{digest}", text=peer)]
@@ -228,7 +257,7 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
         # NAO vem com isMeta -> seguem tratados abaixo pelo caminho de sempre.)
         # ANTES do descarte de meta: o recado nativo entre sessoes Claude vem marcado isMeta e sumiria
         # inteiro (ver _peer_msg). E conversa de verdade, nao ruido do harness.
-        if (peer := _peer_msg(obj, content)) is not None:
+        if (peer := _peer_msg(obj)) is not None:
             return [ChatEvent(kind="user_msg", id=uid, text=peer)]
         if obj.get("isMeta") is True:
             return []
