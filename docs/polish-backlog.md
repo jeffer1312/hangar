@@ -250,6 +250,13 @@ overwriting: whatever they copied becomes a user turn in a session that may be r
 module lock closes this window between our own sessions and cannot close it against the user's hands.
 (2) We clobber whatever they had copied.
 
+**Unrelated bug found while verifying, and it is the same family:** `install.ps1 -Update` on Windows
+prints an `X` for step 4/8 (`npm ci falhou (exit -4048) — frontend NAO buildado`; -4048 is EPERM) and
+then still prints **`Pronto`** at the end. The backend keeps serving the *previous* build, so the
+screen stays up and nothing looks broken — which is what makes it treacherous: whoever reads the last
+line believes the front was updated. Not investigated (it was outside the scope of that session), and
+it did not affect the measurement above, since all five commits are backend.
+
 **Still open:** Pi and Codex on Windows keep the old path — `Alt+V` is Claude Code's binding and
 nobody has measured theirs. And the `cp-send`/`input` channel toward Windows was caught mutilating
 text in passing (a quote died as `unexpected EOF while looking for matching quote`, and a test string
