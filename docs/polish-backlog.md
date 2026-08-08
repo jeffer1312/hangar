@@ -109,8 +109,18 @@ Today every message the app sends goes through `tmux send-keys` — which sends 
 terminal panel proved a different path exists: bytes written straight into a PTY master, delivered
 by the kernel's tty layer, indistinguishable from a physical keyboard. That path handles what
 `send-keys` handles badly: bracketed paste (a multi-line block arrives as *one* paste instead of N
-lines the TUI may read as N submissions), image paste, and — the concrete pain that motivated this —
-`cp-send` messages between Claude sessions arriving mangled.
+lines the TUI may read as N submissions) and — the concrete pain that motivated this — `cp-send`
+messages between Claude sessions arriving mangled.
+
+**Image paste is NOT one of them, measured 07/08/2026** — this line used to claim it was, written as
+a hypothesis and then read as fact, contradicting a code comment three files away. A bare
+`tmux send-keys C-v` into a Claude Code session puts `[Image #1]` in the composer: the TUI reads the
+machine's clipboard itself through `wl-paste` (which is why `tmux.py:53` propagates
+`WAYLAND_DISPLAY`), so the terminal only ever delivers the **keystroke** — no image bytes cross it on
+any path. The PTY gains nothing here. Separately, the app's own attachments never touch the terminal
+at all: an upload is saved to `<cwd>/.claude-pocket-uploads/` and the prompt carries the **path** as
+text (`Composer.svelte:917`), which is also why a phone attachment works when the phone's clipboard
+is not the machine's.
 
 **Do not replace `send-keys`.** It works, it is stateless, and it is the only path on Windows today.
 The shape that pays off is a *throwaway* PTY used only where pasting matters: open, size it to the
@@ -157,8 +167,16 @@ stdin, never from `capture-pane` — the pane is a rendering and lies about what
 Probe scripts: `probe.py` + `recv.py`, written to the session scratchpad (not committed — they are
 a ten-line receiver plus a driver; re-derive from this list if needed).
 
-Still unmeasured: **the image case** (the one thing only this path can carry), and **all of
-Windows** — none of the above runs there.
+7. **Image paste needs the keystroke, not the path** — `send-keys C-v` alone yields `[Image #1]`, so
+   this is not a reason to build the PTY path (see the correction above).
+
+What this leaves the PTY path actually worth, once the native cross-session route took the `cp-send`
+half: the 16344-byte ceiling (today a >16 KB paste falls back to 2N−1 tmux calls) and dropping the
+pre-Enter screen read, since the failures that check guards — argument mangling, a lying rc, the
+size cliff — are the ones the PTY removes. The post-Enter check still has to exist, but its right
+oracle is the **transcript**, not the pane.
+
+Still unmeasured: **all of Windows** — none of the above runs there.
 
 Write the predicate from these numbers, not from intuition, and keep `send-keys` as the fallback for
 everything the PTY path did not measurably win — plus Windows, unconditionally, until the psmux
