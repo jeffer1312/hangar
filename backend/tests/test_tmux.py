@@ -617,12 +617,16 @@ def test_session_created_nao_numerico_vira_zero():
 # --- load-buffer pela stdin: tira o teto de 16344 bytes do comando (Task 3) -----------------------
 
 def test_run_passa_stdin_quando_pedido():
-    with patch("app.tmux.subprocess.run") as sr:
-        sr.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
-        tmux._run(["tmux", "load-buffer", "-b", "p", "-"], input=b"abc")
+    # patch.object(tmux, "RUN"), nao "app.tmux.subprocess.run": RUN e a UNICA costura de mock do
+    # modulo, e o mock devolve bytes (stdout=b"ok") porque em producao, sem text=True, e sempre bytes
+    # que capture_output devolve — o contrato que este teste prova e que _run decodifica pra str.
+    with patch.object(tmux, "RUN") as sr:
+        sr.return_value = SimpleNamespace(returncode=0, stdout=b"ok", stderr=b"")
+        cp = tmux._run(["tmux", "load-buffer", "-b", "p", "-"], input=b"abc")
     assert sr.call_args.kwargs["input"] == b"abc"
     # `text=True` e `input=bytes` sao incompativeis: quem manda bytes tem que sair do modo texto.
     assert sr.call_args.kwargs.get("text") is not True
+    assert cp.stdout == "ok"   # decodificado: o retorno continua str pros chamadores de hoje
 
 
 def test_paste_text_usa_load_buffer_pela_stdin():
