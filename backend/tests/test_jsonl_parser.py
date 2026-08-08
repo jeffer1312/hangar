@@ -381,15 +381,15 @@ def test_queued_removed_meta_nao_vira_bubble():
     assert parse_line(ev) == []
 
 
-def test_dois_embrulhos_concatenados_nao_viram_uma_bolha_so(monkeypatch):
+def test_dois_embrulhos_concatenados_nao_viram_uma_bolha_so():
     # Com dois embrulhos colados, o fullmatch casa mesmo assim (o corpo não-guloso engole o
     # fechamento do primeiro e a abertura do segundo) e sairia UMA bolha, com as tags cruas no meio,
     # atribuída só ao primeiro remetente. Não foi observado no jsonl real — mas o dia em que dois
     # recados forem coalescidos num campo só é o dia em que isso vira texto podre exibido.
     # A saída escolhida é a honesta, não a bonita: o texto aparece CRU, como mensagem sem remetente,
     # em vez de virar uma bolha atribuída a quem mandou só a primeira metade. Some, nunca.
-    import app.registry as registry
-    monkeypatch.setattr(registry, "name_of_pid", lambda pid: "api-fix")
+    # Sem mock de name_of_pid de propósito: este caminho REJEITA antes de resolver nome nenhum, e um
+    # mock aqui daria a impressão de que a resolução está coberta neste teste (ela está nos outros).
     bruto = _peer_tag("primeiro") + _peer_tag("segundo")
     [ev] = parse_line(_line({
         "type": "queue-operation", "operation": "remove", "timestamp": "t", "content": bruto,
