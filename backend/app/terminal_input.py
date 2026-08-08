@@ -848,19 +848,20 @@ def answer_question_pi(name: str, answer: dict, question: dict) -> None:
 # teto isto viraria laco infinito no executor de envio.
 _LIMPEZA_MAX_TECLAS = 12
 
-# Teto de requeues de um envio parcial: ate 2 (`1 <= tentativas <= 2`), ou seja ate 3 envios reais
-# (o original + 2 requeues). NAO e "o mesmo numero" do reconcile (pqueue.reconcile_delivered,
-# max_attempts=2, que desiste em `attempts >= 2` — ou seja permite so 2 tentativas TOTAL, uma a
-# menos que aqui) — os dois numeros DIFEREM em 1, achado do item 6 da revisao final (este comentario
-# ja disse o contrario, o que era falso).
+# Teto de requeues de um envio parcial: ate 2 (ou seja ate 3 envios reais: o original + 2 requeues).
+# Mesmo teto efetivo do reconcile (pqueue.reconcile_delivered, max_attempts=2) — os dois permitem
+# exatamente 2 requeues, apesar de comparacoes DIFERENTES. Parcial compara POS-incremento
+# (`bump_attempts` incrementa e devolve o novo valor), reconcile compara PRE-incremento (`attempts
+# >= max_attempts` em pqueue.py:341 antes de somar). A diferenca de contagem cancela a diferenca de
+# comparacao: mismo teto. Unica divergencia real e o numero gravado POS-desistencia (3 no parcial,
+# 2 no reconcile) — residuo de contabilidade, nao teto.
 #
-# E os dois leem/escrevem o MESMO campo `attempts` da entrada — nao sao contadores independentes.
+# Os dois leem/escrevem o MESMO campo `attempts` da entrada — nao sao contadores independentes.
 # Consequencia real: uma entrada que gastou os 2 requeues do PARCIAL (attempts chegou a 2) e so
 # DEPOIS conseguiu um envio de verdade (delivered=True) nunca mais e reconciliada — reconcile_delivered
-# le `attempts>=2` como "ja no teto DELE" na primeira checagem, mesmo sem ter requeuado nenhuma vez
-# por conta propria, e desiste na hora (confirmed=True) sem re-tentar. Nao e bug deste commit nem
-# coisa pra consertar aqui (comportamento aceito, so o comentario estava errado) — quem for mexer
-# nos dois tetos de novo precisa lembrar que estao no MESMO campo.
+# le `attempts>=2` de cara na primeira checagem, sem ter requeuado nenhuma vez por conta propria,
+# e desiste na hora (confirmed=True) sem re-tentar. Comportamento aceito (quem for mexer nos dois
+# tetos de novo precisa lembrar que estao no MESMO campo).
 _PARTIAL_MAX_TENTATIVAS = 2
 
 # Resultado da ULTIMA limpeza, lido pelo `drain` (mesma chamada, logo apos o send_prompt que
