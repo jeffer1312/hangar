@@ -253,12 +253,31 @@ function Pare-Servico {
     # maquina em 502 ate alguem reerguer a tarefa na mao. O guard `-ne $PID` de antes protegia so o
     # processo atual, nunca a linhagem dele.
     $paisMapa = @{}
+    $nascMapa = @{}
     foreach ($p in (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
         $paisMapa[[int]$p.ProcessId] = [int]$p.ParentProcessId
+        $nascMapa[[int]$p.ProcessId] = $p.CreationDate
+    }
+    # Enumeracao de processo FALHANDO nao pode virar linhagem de um elemento so: o `-ErrorAction
+    # SilentlyContinue` engole hiccup do WMI, e com o mapa vazio a protecao degradaria exatamente
+    # pro guard antigo (`so o proprio pid`) que deixou o instalador matar o shell pai — de novo, e
+    # agora sem ninguem perceber. Sem saber quem e parente de quem, o certo e nao matar nada.
+    if ($paisMapa.Count -eq 0) {
+        Falta "nao consegui enumerar processos (WMI) — NAO vou parar $Nome: sem a arvore de processos, o kill pode derrubar o shell que roda este instalador"
+        return 0
     }
     $linhagem = New-Object System.Collections.Generic.HashSet[int]
     $cur = $PID
-    while ($cur -and $linhagem.Add($cur)) { $cur = $paisMapa[$cur] }
+    $meuNasc = $nascMapa[$PID]
+    while ($cur -and $linhagem.Add($cur)) {
+        $pai = $paisMapa[$cur]
+        # PID e RECICLADO: o ppid e so um numero gravado no nascimento, e se aquele pai morreu o
+        # numero pode pertencer hoje a um processo qualquer — inclusive ao Vite que a gente QUER
+        # matar, que assim escaparia por coincidencia numerica. Ancestral de verdade nasceu ANTES;
+        # quem aparece como "pai" e nasceu DEPOIS e outro processo com o numero reaproveitado.
+        if ($pai -and $meuNasc -and $nascMapa[$pai] -and $nascMapa[$pai] -gt $meuNasc) { break }
+        $cur = $pai
+    }
     # Por PORTA e o criterio mais preciso: quem esta segurando o socket e exatamente quem
     # impediria a instancia nova de subir.
     if ($Porta -gt 0) {
