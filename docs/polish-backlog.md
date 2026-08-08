@@ -107,10 +107,26 @@ The mode is **not** one-shot `-p`. It is the long-lived streaming-input process:
   `.jsonl` (129 KB, under `~/.claude/projects/`) with **no changes at all**: two `user_msg`, two
   `assistant_msg`, in order. The whole chat surface — history, windowing, dedup, bubbles — would
   work untouched. Same result for a one-shot `-p` transcript.
-- **Billing is not the objection.** The June 2026 announcement that programmatic usage would move to
-  a separate credit pool was cancelled on the day it was to take effect; programmatic usage draws
-  from the subscription. Anthropic said they would rework it and give notice — a dated risk, not a
-  settled one.
+- **Nothing is lost.** Measured by starting the long-lived process in this repo's cwd and reading its
+  init event: **226 slash commands/skills**, **94 tools**, **74 subagents**, **4 MCP servers** (3
+  connected — `codegraph` fails here anyway), `permissionMode: bypassPermissions` inherited from
+  settings, and the account's default model. CLAUDE.md loads: asked, it answered in pt-BR citing the
+  identity rule, and named `superpowers:brainstorming` and `acme:kubectl` correctly. **Hooks fire
+  the same**: the transcript carries `SessionStart:startup` (including the caveman and ponytail
+  plugin hooks), `UserPromptSubmit` injecting context, and 10 `Stop` hooks. It is the same context
+  assembly as an interactive session, not a reduced one.
+- **Usage comes out of the same window — today.** Anthropic's help centre, in its own words: *"We're
+  pausing the changes to Claude Agent SDK usage described below. For now, nothing has changed: Claude
+  Agent SDK, `claude -p`, and third-party app usage still draw from your subscription's usage
+  limits."* The same article separates the cases under *What stays the same*: *"Using Claude Code in
+  the terminal or your IDE continues to use your subscription usage limits exactly as before."*
+  (<https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan>).
+  Matches what the machine shows: `apiKeySource: none`, authenticating with the subscription's OAuth,
+  no API key anywhere.
+  **The caveat is real**: this is *paused*, not cancelled. The change was announced with firm numbers
+  (\$20 Pro, \$100 Max 5x, \$200 Max 20x) and suspended on the day it would have taken effect, with
+  only *"When we have an update, we'll share it before anything takes effect"* — no date. Anything
+  built on this is built on a policy that has already been announced once.
 
 **Still open, in the order a spike should take them:**
 1. **Permission prompts.** Approving a tool call from the phone is the app's core value. There is no
@@ -124,6 +140,13 @@ The mode is **not** one-shot `-p`. It is the long-lived streaming-input process:
 4. **Statusline** (context, cost, quota badges) comes from the pane or a sidecar today; here there is
    neither. The `result` event carries usage, which may be enough.
 5. **What the Shell tab becomes** when there is no agent pane to attach to.
+6. **Discovery has exactly one source of truth today: tmux.** `registry.list()` starts by asking tmux
+   which panes exist and only then maps each to its `.jsonl`, so a headless session is invisible to
+   the app — verified: the test session's transcript sits in `~/.claude/projects/` at 129 KB with
+   both turns intact, while `/api/sessions` lists only the four that live in tmux. The backend would
+   need a second source — a registry of the processes it owns (pid + session id + cwd) — and the
+   listing becomes the union. That cascades: state comes from stream events instead of the pane,
+   `kill` means killing a process rather than `tmux kill-session`, and there is no pane to attach.
 
 Not a small change — but not speculative either: session lifetime, streaming and transcript
 compatibility are answered, and answered well. What is left is mostly about the app's own surfaces.
