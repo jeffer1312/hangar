@@ -256,12 +256,14 @@ def provider_of_pane(pid, children: Optional[dict[int, list[int]]] = None) -> st
     return "claude"
 
 
-# Cache pid -> nome da sessao tmux. Um pid nunca muda de sessao (o processo nasce dentro do pane),
-# entao a resposta e estavel enquanto o processo vive; e um pid REUSADO depois que o processo morreu
-# so seria consultado por um recado NOVO daquele pid, que ja e o processo novo. Guarda tambem o
-# resultado vazio: sem isso, recado de sessao que nao e do tmux (um `claude -p` solto) pagaria um
-# fork de tmux por linha do transcript.
-_NOME_POR_PID: dict[int, Optional[str]] = {}
+# Cache pid -> (instante de inicio do processo, nome da sessao tmux). Um processo nunca muda de
+# sessao (nasce dentro do pane), entao a resposta e estavel enquanto ELE vive. A chave carrega o
+# start time porque o pid sozinho NAO identifica processo: reusado depois que o dono morreu (churn
+# alto, pid_max baixo, container), a entrada velha seria devolvida pro processo NOVO e o recado
+# apareceria vindo da sessao errada, calado — o comentario anterior afirmava que isso nao acontecia,
+# e o codigo nao fazia o que ele dizia (achado da revisao). Guarda tambem o resultado vazio: sem
+# isso, recado de sessao fora do tmux (um `claude -p` solto) pagaria um fork de tmux por linha.
+_NOME_POR_PID: dict[int, tuple[Optional[float], Optional[str]]] = {}
 
 
 def name_of_pid(pid: int) -> Optional[str]:
@@ -276,8 +278,9 @@ def name_of_pid(pid: int) -> Optional[str]:
     eventos. Falha (tmux fora, timeout) devolve None: quem chama tem fallback, e recado sem nome
     resolvido e melhor que transcript que para de ser lido.
     """
-    if pid in _NOME_POR_PID:
-        return _NOME_POR_PID[pid]
+    nascimento = _proc_start_time(pid)
+    if (cache := _NOME_POR_PID.get(pid)) is not None and cache[0] == nascimento:
+        return cache[1]
     achado: Optional[str] = None
     try:
         children = _proc_children_map()
@@ -293,7 +296,7 @@ def name_of_pid(pid: int) -> Optional[str]:
         _log.warning("name_of_pid(%d) falhou; recado fica com o nome do remetente", pid,
                      exc_info=True)
         return None                                  # NAO cacheia falha: a proxima tentativa retenta
-    _NOME_POR_PID[pid] = achado
+    _NOME_POR_PID[pid] = (nascimento, achado)
     return achado
 
 
@@ -309,11 +312,22 @@ def inbox_socket_of(name: str) -> Optional[str]:
     socket nenhum, e mandar o modelo usar `SendMessage` nesses casos seria mandar ele bater numa
     porta que nao existe.
     """
-    run = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-    socks = Path(run) / "cc-socks"
-    if not socks.is_dir():
-        return None                                  # feature ausente/desligada nesta maquina
+    # Gate de plataforma ANTES de qualquer coisa: `os.getuid()` nao existe no Windows, e e justamente
+    # la que XDG_RUNTIME_DIR costuma faltar — o AttributeError subia direto pra rota /peer-address e
+    # ela dava 500 em TODA chamada naquela plataforma (achado da revisao). O Claude Code tambem nao
+    # oferece a feature no Windows nativo, entao "sem socket" e a resposta certa, nao um erro.
+    if os.name != "posix":
+        return None
     try:
+        # O `is_dir()` tambem fica DENTRO do try: ele engole ENOENT/ENOTDIR mas RELEVANTA EACCES, e
+        # um XDG_RUNTIME_DIR sem permissao (backend sob outro uid, escopo do systemd mais apertado,
+        # container com namespace proprio) mandava PermissionError direto pra rota /peer-address —
+        # 500 em toda chamada naquele ambiente. Mesma classe do gate de Windows acima, um passo antes
+        # (achado da revisao).
+        run = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+        socks = Path(run) / "cc-socks"
+        if not socks.is_dir():
+            return None                              # feature ausente/desligada nesta maquina
         pane = tmux.pane_pid(name)
         if not pane:
             return None

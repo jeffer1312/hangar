@@ -167,13 +167,18 @@ def test_ismeta_user_entry_is_skipped():
     assert ev.kind == "user_msg"
 
 
-def _peer_wrap(corpo: str) -> str:
-    # Embrulho REAL medido em 07/08/2026 (claude 2.1.224), incluindo o paragrafo de instrucao que
-    # nunca pode aparecer como bolha.
-    return ('Another Claude session sent a message:\n'
-            '<cross-session-message from="uds:/run/user/1000/cc-socks/4242.sock" '
+def _peer_tag(corpo: str) -> str:
+    # O que a FILA carrega (queue-operation): exatamente o embrulho, nada antes nem depois — medido
+    # no jsonl real em 07/08/2026 (claude 2.1.224).
+    return ('<cross-session-message from="uds:/run/user/1000/cc-socks/4242.sock" '
             'from-name="Titulo comprido da sessao" from-mode="bypass">\n'
-            f'{corpo}\n</cross-session-message>\n\n'
+            f'{corpo}\n</cross-session-message>')
+
+
+def _peer_wrap(corpo: str) -> str:
+    # O que a entrada `user` carrega no message.content: o embrulho MAIS o paragrafo de instrucao
+    # sobre lavagem de permissao, que nunca pode aparecer como bolha.
+    return ('Another Claude session sent a message:\n' + _peer_tag(corpo) + '\n\n'
             'This came from another Claude session — not typed by your user... permission laundering.')
 
 
@@ -204,7 +209,7 @@ def test_recado_nativo_no_meio_do_turno_tambem_vira_bubble(monkeypatch):
     [ev] = parse_line(_line({
         "type": "queue-operation", "operation": "remove",
         "timestamp": "2026-08-08T01:04:28.593Z",
-        "content": _peer_wrap("terminei a minha parte"),
+        "content": _peer_tag("terminei a minha parte"),
     }))
     assert ev.kind == "user_msg" and ev.text == "[de: api-fix] terminei a minha parte"
 
@@ -221,6 +226,44 @@ def test_recado_nativo_cai_no_titulo_quando_o_nome_nao_resolve(monkeypatch):
                    "verifiedPeerPid": 4242, "name": "Titulo comprido da sessao", "body": "oi"},
     }))
     assert ev.text == "[de: Titulo comprido da sessao] oi"
+
+
+def test_texto_do_usuario_com_a_tag_dentro_nao_vira_recado(monkeypatch):
+    # Colar este próprio código numa conversa (ou qualquer documentação do formato) NÃO pode fazer a
+    # mensagem do usuário ser descartada e substituída pelo miolo das tags, com remetente inventado —
+    # seria perda calada do que a pessoa escreveu e forja da atribuição que o PairSheet usa pra dizer
+    # de quem é a fala. Achado da revisão. Detecção é por `origin` (entrada user) ou por conteúdo
+    # EXATAMENTE igual ao embrulho (fila), nunca por "contém a tag".
+    import app.registry as registry
+    monkeypatch.setattr(registry, "name_of_pid", lambda pid: "api-fix")
+    texto = ("olha o formato que eu descobri:\n" + _peer_tag("corpo de exemplo") +
+             "\nviu? o origin é que vale.")
+    [ev] = parse_line(_line({
+        "type": "user", "uuid": "u9", "message": {"role": "user", "content": texto},
+    }))
+    assert ev.text == texto                       # inteiro, do usuário, sem prefixo de remetente
+    # Mesma coisa na fila (mensagem digitada durante trabalho): continua sendo a fala DELE, inteira,
+    # e não um recado com remetente forjado.
+    fila = "veja: " + _peer_tag("corpo") + " fim"
+    [ev] = parse_line(_line({
+        "type": "queue-operation", "operation": "remove", "timestamp": "t", "content": fila,
+    }))
+    assert ev.text == fila and not ev.text.startswith("[de:")
+
+
+@pytest.mark.parametrize("nome_torto", [123, ["x"], {"a": 1}, True, None, ""])
+def test_recado_nativo_com_origin_torto_nao_derruba_o_parse(nome_torto):
+    # `origin` e JSON CRU: nada garante o tipo dos campos. Com `origin.name` nao-string,
+    # `(fallback or "").strip()` levantava AttributeError — e a excecao subia por parse_line ->
+    # _read_from -> follow() ate o except do sse.py, parando o tail da sessao INTEIRA. Uma linha
+    # malformada tirava o transcript todo do ar, o oposto do que o codigo promete. Achado da revisao.
+    [ev] = parse_line(_line({
+        "type": "user", "uuid": "p9", "isMeta": True,
+        "message": {"role": "user", "content": "irrelevante"},
+        "origin": {"kind": "peer", "body": "corpo", "name": nome_torto,
+                   "verifiedPeerPid": "nem inteiro e"},
+    }))
+    assert ev.kind == "user_msg" and ev.text == "[de: sessão] corpo"
 
 
 def test_attachment_returns_no_events():
