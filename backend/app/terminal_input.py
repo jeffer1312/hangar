@@ -853,7 +853,7 @@ _LIMPEZA_MAX_TECLAS = 12
 # exatamente 2 requeues, apesar de comparacoes DIFERENTES. Parcial compara POS-incremento
 # (`bump_attempts` incrementa e devolve o novo valor), reconcile compara PRE-incremento (`attempts
 # >= max_attempts` em pqueue.py:341 antes de somar). A diferenca de contagem cancela a diferenca de
-# comparacao: mismo teto. Unica divergencia real e o numero gravado POS-desistencia (3 no parcial,
+# comparacao: mesmo teto. Unica divergencia real e o numero gravado POS-desistencia (3 no parcial,
 # 2 no reconcile) — residuo de contabilidade, nao teto.
 #
 # Os dois leem/escrevem o MESMO campo `attempts` da entrada — nao sao contadores independentes.
