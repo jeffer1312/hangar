@@ -815,3 +815,41 @@ def test_porta_b_reconcile_redrena_com_o_mesmo_msg_id(tmp_queue, monkeypatch):
 
     assert terminal_input.drain("cc", "/no/such.jsonl", "pi") == 1   # 2a tentativa, agora "sent"
     assert ids_recebidos == [entry["id"]], "o reenvio do reconcile usa o MESMO id da 1a tentativa"
+
+
+# --- requeue de um "partial": so quando a limpeza do composer foi CONFIRMADA (08/08/2026) --------
+# _ULTIMA_LIMPEZA e POR THREAD (nao por sessao/nome): send_prompt e o drain que le em seguida rodam
+# sempre sincronos, na MESMA thread, entao setar o atributo aqui reproduz exatamente o que _partial()
+# teria deixado. Ver o comentario ao lado da declaracao (terminal_input.py) sobre a corrida que um
+# dict por nome tinha: /input e drain podem correr concorrentes pra MESMA sessao (api.py:1314).
+
+def test_drain_reenfileira_quando_a_limpeza_foi_confirmada(tmp_queue):
+    # Composer limpo = a razao do "sem retry" deixou de existir: a entrada volta pra fila.
+    q = PromptQueue("cc")
+    e = q.append("mensagem comprida de teste")
+    terminal_input._ULTIMA_LIMPEZA.limpou = True
+    with patch.object(TerminalInput, "send_prompt", return_value="partial"):
+        terminal_input.drain("cc", "/no/such.jsonl")
+    assert q.entry_delivered(e["id"]) is False           # voltou pra fila
+    assert int(q.load()[0]["attempts"]) == 1             # com tentativa contada
+
+
+def test_drain_nao_reenfileira_quando_a_limpeza_falhou(tmp_queue):
+    # Residuo continua no composer: reenfileirar digitaria por cima. Comportamento de hoje.
+    q = PromptQueue("cc")
+    e = q.append("mensagem comprida de teste")
+    terminal_input._ULTIMA_LIMPEZA.limpou = False
+    with patch.object(TerminalInput, "send_prompt", return_value="partial"):
+        terminal_input.drain("cc", "/no/such.jsonl")
+    assert q.entry_delivered(e["id"]) is True            # fica parada, com as metades a vista
+
+
+def test_drain_desiste_no_teto_de_tentativas(tmp_queue):
+    # Falhar sempre nao pode girar pra sempre no executor de envio.
+    q = PromptQueue("cc")
+    e = q.append("mensagem comprida de teste")
+    q.bump_attempts(e["id"]); q.bump_attempts(e["id"])   # ja em 2
+    terminal_input._ULTIMA_LIMPEZA.limpou = True
+    with patch.object(TerminalInput, "send_prompt", return_value="partial"):
+        terminal_input.drain("cc", "/no/such.jsonl")
+    assert q.entry_delivered(e["id"]) is True            # desistiu

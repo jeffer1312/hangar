@@ -558,14 +558,27 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
             # upgrade: render distinto / re-drain confirmado-por-transcript se virar reclamacao real.
             return sent
         if result == "partial":
-            # Texto ficou pela metade no composer e o Enter NAO foi enviado (fatiamento do Windows).
-            # NAO reverte pra delivered=False: o drain reentraria e digitaria o texto inteiro EM CIMA do
-            # residuo (nada limpa a linha entre tentativas) — concatenacao, pior que a perda. Fica
-            # delivered=True e PARA, com log de erro: a bubble segue visivel no app (o display ignora
-            # delivered) e o residuo esta a vista no terminal, entao o usuario ve as duas metades e
-            # decide. Silencio aqui era o furo do `except Exception` cego acima.
-            _log.error("drain name=%s: envio PARCIAL da entrada %s — parado, sem retry automatico "
-                       "(texto pela metade no composer)", name, entry.get("id"))
+            # O texto ficou pela metade no composer e o Enter NAO foi enviado. Ate 07/08/2026 isto
+            # PARAVA sem retry porque nada limpava a linha entre tentativas: reenfileirar digitaria o
+            # texto inteiro EM CIMA do residuo (concatenacao, pior que a perda). Agora `_partial`
+            # limpa e diz se conseguiu (via `_ULTIMA_LIMPEZA`, por THREAD — send_prompt roda nesta
+            # MESMA chamada) — limpeza CONFIRMADA e a unica coisa que autoriza o requeue.
+            limpou = getattr(_ULTIMA_LIMPEZA, "limpou", False)
+            if hasattr(_ULTIMA_LIMPEZA, "limpou"):
+                del _ULTIMA_LIMPEZA.limpou
+            tentativas = q.bump_attempts(entry["id"]) if limpou else 0
+            if limpou and tentativas <= _PARTIAL_MAX_TENTATIVAS:
+                q.set_delivered(entry["id"], False)
+                _log.warning("drain name=%s: envio PARCIAL da entrada %s — composer limpo, "
+                             "reenfileirado (tentativa %d/%d)", name, entry.get("id"),
+                             tentativas, _PARTIAL_MAX_TENTATIVAS)
+            else:
+                # Nao limpou (ou estourou o teto): fica delivered=True e PARA. A bubble segue
+                # visivel no app (o display ignora delivered) e o residuo esta a vista no terminal,
+                # entao o usuario ve as duas metades e decide. Silencio aqui seria a perda calada.
+                _log.error("drain name=%s: envio PARCIAL da entrada %s — parado, sem retry "
+                           "automatico (%s)", name, entry.get("id"),
+                           "teto de tentativas" if limpou else "composer NAO limpo")
             return sent
         if result == "deferred":
             # Reverte pra retry e para — espera o proximo idle. No caminho de TECLA isto e
@@ -807,10 +820,21 @@ def answer_question_pi(name: str, answer: dict, question: dict) -> None:
 # teto isto viraria laco infinito no executor de envio.
 _LIMPEZA_MAX_TECLAS = 12
 
-# Resultado da ULTIMA limpeza por sessao, lido pelo `drain` pra decidir se pode reenfileirar. Dict
-# simples porque `send_prompt` e o `drain` rodam na MESMA chamada, em sequencia, no mesmo executor —
-# nao ha janela pra outra sessao escrever no meio (a chave e o nome da sessao).
-_ULTIMA_LIMPEZA: dict[str, bool] = {}
+# Teto de requeues de um envio parcial. Mesmo numero do reconcile (pqueue.reconcile_delivered,
+# max_attempts=2) pra fila e reconcile nao discordarem sobre quantas vezes uma entrada pode ser
+# tentada.
+_PARTIAL_MAX_TENTATIVAS = 2
+
+# Resultado da ULTIMA limpeza, lido pelo `drain` (mesma chamada, logo apos o send_prompt que
+# devolveu "partial") pra decidir se pode reenfileirar. POR THREAD, nao por sessao: o `_send_lock`
+# que protege a escrita (dentro de send_prompt) e por NOME e e solto assim que send_prompt retorna
+# — ANTES do drain ler este valor. api.py:1314 documenta que POST /input e drain podem correr
+# concorrentes pra MESMA sessao, entao um dict chaveado por nome tinha corrida real: thread A sai de
+# send_prompt com "partial", thread B (outro envio pra mesma sessao) entra, tambem da partial e
+# sobrescreve a chave antes de A ler — A reenfileiraria uma limpeza que nao foi a dela (residuo por
+# baixo do requeue, o mesmo bug que isto existe pra matar). threading.local fecha isso: drain sempre
+# chama send_prompt na MESMA thread, sincronamente, entao so ela ve o que ela mesma escreveu.
+_ULTIMA_LIMPEZA = threading.local()
 
 
 def _limpar_composer(name: str, texto: str, pastes_antes: set[str] | None) -> bool:
@@ -853,7 +877,7 @@ def _partial(name: str, motivo: str, texto: str, pastes_antes: set[str] | None =
     """
     _log.error("envio PARCIAL name=%s: %s — %s", name, motivo,
                _diag_composer(_capture(name), texto, name, pastes_antes))
-    _ULTIMA_LIMPEZA[name] = _limpar_composer(name, texto, pastes_antes)
+    _ULTIMA_LIMPEZA.limpou = _limpar_composer(name, texto, pastes_antes)
     return "partial"
 
 
