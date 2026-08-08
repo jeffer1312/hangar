@@ -79,6 +79,54 @@ measured on real traffic and built. See `transcript.py` (`_peer_msg`), `registry
   `CLAUDE.md` alone would not have been enough — an already-open session never re-reads it, but it
   obeys the script immediately.
 
+## Reading the pane: what a PTY would and would not buy (measured 2026-08-08)
+
+The PTY was cut as a *send* path (see the item above). It was then proposed twice more as a *read*
+path, and both proposals were measured rather than argued. Numbers first, so nobody re-derives them.
+
+**A PTY does not make the pre-Enter check droppable.** The claim was that writing bytes straight
+into a PTY is reliable enough to stop reading the screen before pressing Enter. Measured against a
+real Claude session, idle and working, with three payloads (short line, multi-line, 30 KB): PTY and
+`send-keys`/`paste-buffer` are **identical** — same verdict, same 2 captures, same 0.16 s, zero false
+successes on either. The reduction was an inference, and the inference was wrong.
+(First run of that probe reported false successes on the 30 KB payload for *both* paths; that was a
+defect in the probe — it passed `pastes_antes=None`, which is what switches off the collapsed-paste
+evidence in `_composer_residuo`. With it captured as production does, both paths find the text.)
+
+**A PTY reader costs more than `capture-pane`, exactly where it matters.** Per watched session:
+
+| | session working | session idle |
+|---|---|---|
+| today, `capture-pane` | 6.7 reads/s × 2.0 ms = **1.33% of a core** | 1.33/s × 2.0 ms = **0.27%** |
+| PTY + terminal emulator | 230 KB in 8 s → 276 ms of parse = **3.45%** | 440 B/s → negligible |
+
+One `capture-pane` is 2.0 ms (median of 30, max 8.8). The preview loop polls every **150 ms** while
+working — `preview.py` calls it "o poll mais caro que o backend tem" and it is right. So the PTY is
+~2.6× more expensive precisely when the preview exists, and cheaper only when nobody needs it.
+
+**And it would not improve the preview**, which was the strongest argument for it. `pyte` fed the
+recorded stream reconstructs *the same rendered screen* `capture-pane` returns, so
+`extract_assistant_text` would face the identical problem of separating prose from TUI drawing. Pi's
+advantage is not the transport, it is the **semantics**: its extension receives `message_update` from
+the agent and publishes the text block, not a rendering.
+
+**The `.jsonl` is not a streaming source either.** Measured: the assistant text landed in the
+transcript at t=9.5 s of a turn that ended at 9.6 s — the block is written when it **commits**. A
+turn with tool calls does commit each text block before the next call, so mid-turn granularity
+exists at block level; what is missing is only the block being typed right now, which is exactly what
+the preview shows.
+
+So the gap is structural, and no pipe closes it: PTY, `capture-pane` and the `.jsonl` are three ways
+of seeing the same thing either too late or too rendered. What would close it is Claude Code
+exposing the in-flight block the way Pi does. **What would flip the PTY verdict**: read frequency
+climbing well past today's (polling under ~100 ms, or many watched sessions at once) — there the fork
+cost overtakes continuous parsing. Not at 150 ms.
+
+Attaching a second client is *not* a concern here — measured earlier that a PTY sized to the current
+window disturbs nothing, and with `window-size latest` the client with recent activity wins.
+
+Probes: `leitura.py`, `vazao.py`, `emul.py`, `jsonl.py`, written to the session scratchpad.
+
 ## Peers (the cross-machine mesh) have no UI at all (2026-08-07)
 
 `backend/peers.json` is the only way to add, remove, enable or disable a remote machine. There is
