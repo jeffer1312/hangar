@@ -79,6 +79,55 @@ measured on real traffic and built. See `transcript.py` (`_peer_msg`), `registry
   `CLAUDE.md` alone would not have been enough — an already-open session never re-reads it, but it
   obeys the script immediately.
 
+## An opt-in headless session mode — no tmux, real streaming (idea, 2026-08-08)
+
+Owner's idea, and it reframes what "headless is out" meant. The objection to `claude -p` was always
+that owning the process costs the terminal: no `tmux attach` from kitty, no session living outside
+the app. **For someone who never wants a terminal, that is not a cost.** And on Windows, where tmux
+does not exist and psmux only partly stands in, it removes the dependency entirely.
+
+Shape: the default stays exactly what is here and tested (TUI in tmux, the app as an extension of
+the terminal). Headless is a **second mode**, chosen when the session is created or via a setting.
+Precedent for the shape already exists in `adapters/codex`, which consumes structured events instead
+of scraping a pane.
+
+The mode is **not** one-shot `-p`. It is the long-lived streaming-input process:
+`claude --input-format stream-json --output-format stream-json --verbose
+--include-partial-messages`, fed one JSON message per line on stdin.
+
+**Measured 2026-08-08, and the two hardest questions came back positive:**
+- **One process holds a real multi-turn session.** Sent "guarde este número: 7391", then a second
+  message asking for it back on the same stdin: it answered `7391`, the process stayed alive across
+  both turns, and both turns share one `session_id`. Not a sequence of one-shots — it is a session.
+- **Token-level streaming works**: `content_block_delta` / `text_delta` events arrived while the
+  answer was being written. The preview stops being a scrape and becomes an event feed — the gap
+  against Pi closes for these sessions, and this is the one thing no pipe over a TUI can give
+  (see the item below).
+- **The transcript is the same format.** `transcript.py::parse_line` read the long-lived session's
+  `.jsonl` (129 KB, under `~/.claude/projects/`) with **no changes at all**: two `user_msg`, two
+  `assistant_msg`, in order. The whole chat surface — history, windowing, dedup, bubbles — would
+  work untouched. Same result for a one-shot `-p` transcript.
+- **Billing is not the objection.** The June 2026 announcement that programmatic usage would move to
+  a separate credit pool was cancelled on the day it was to take effect; programmatic usage draws
+  from the subscription. Anthropic said they would rework it and give notice — a dated risk, not a
+  settled one.
+
+**Still open, in the order a spike should take them:**
+1. **Permission prompts.** Approving a tool call from the phone is the app's core value. There is no
+   TUI dialog to read here; permissions surface as a callback / `--permission-mode`. Can the app
+   render and answer them? If not, the mode only serves `bypassPermissions`, which narrows it
+   sharply. **This is the one that decides the feature.**
+2. **Attaching to an existing session id** — resuming a session started elsewhere, and what happens
+   if two writers reach the same session.
+3. **Slash commands.** `/model`, `/clear`, `/compact`, `/usage` are TUI-level. Lost, or
+   re-implemented per command? `model_picker.py` exists precisely because there was no other way.
+4. **Statusline** (context, cost, quota badges) comes from the pane or a sidecar today; here there is
+   neither. The `result` event carries usage, which may be enough.
+5. **What the Shell tab becomes** when there is no agent pane to attach to.
+
+Not a small change — but not speculative either: session lifetime, streaming and transcript
+compatibility are answered, and answered well. What is left is mostly about the app's own surfaces.
+
 ## Reading the pane: what a PTY would and would not buy (measured 2026-08-08)
 
 The PTY was cut as a *send* path (see the item above). It was then proposed twice more as a *read*
