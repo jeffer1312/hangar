@@ -612,3 +612,47 @@ def test_session_created_nao_numerico_vira_zero():
     # psmux/variantes podem imprimir lixo: corte inventado seria pior que sem corte.
     with patch.object(tmux, "RUN", return_value=MagicMock(returncode=0, stdout="abc\n")):
         assert tmux.session_created("cc") == 0.0
+
+
+# --- load-buffer pela stdin: tira o teto de 16344 bytes do comando (Task 3) -----------------------
+
+def test_run_passa_stdin_quando_pedido():
+    with patch("app.tmux.subprocess.run") as sr:
+        sr.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+        tmux._run(["tmux", "load-buffer", "-b", "p", "-"], input=b"abc")
+    assert sr.call_args.kwargs["input"] == b"abc"
+    # `text=True` e `input=bytes` sao incompativeis: quem manda bytes tem que sair do modo texto.
+    assert sr.call_args.kwargs.get("text") is not True
+
+
+def test_paste_text_usa_load_buffer_pela_stdin():
+    # `set-buffer -- <texto>` paga o teto de 16344 bytes do comando (medido: rc=1 "command too
+    # long"). `load-buffer -` manda o texto pela stdin e some com o teto.
+    grande = "x" * 50_000
+    chamadas = []
+
+    def fake_run(args, input=None):
+        chamadas.append((args, input))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with patch("app.tmux._run", side_effect=fake_run), \
+         patch("app.tmux.buffer_trunca_no_newline", return_value=False):
+        assert tmux.paste_text("cc", grande) is True
+    assert chamadas[0][0][:4] == ["tmux", "load-buffer", "-b", "cp-prompt"]
+    assert chamadas[0][0][4] == "-"
+    assert chamadas[0][1] == grande.encode()
+    assert "set-buffer" not in " ".join(chamadas[0][0])
+
+
+def test_paste_text_falha_no_load_buffer_nao_cola_nada():
+    # load-buffer falhando (disco cheio, tmux morto) nao pode seguir pro paste-buffer: colaria o
+    # buffer ANTERIOR, que e texto de outra mensagem.
+    def fake_run(args, input=None):
+        rc = 1 if "load-buffer" in args else 0
+        return SimpleNamespace(returncode=rc, stdout="", stderr="erro")
+
+    with patch("app.tmux._run", side_effect=fake_run), \
+         patch("app.tmux.buffer_trunca_no_newline", return_value=False), \
+         patch("app.tmux._paste_linha_a_linha", return_value=True) as plinha:
+        assert tmux.paste_text("cc", "linha 1\nlinha 2") is True
+    assert plinha.called

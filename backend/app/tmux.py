@@ -70,9 +70,24 @@ def _wayland_display() -> str | None:
 _log = logging.getLogger("claude_pocket.tmux")
 
 
-def _run(args: list[str]) -> subprocess.CompletedProcess:
+def _run(args: list[str], input: bytes | None = None) -> subprocess.CompletedProcess:
     # timeout: tmux travado nao pode prender o event loop / worker do threadpool pra sempre. Estouro ->
     # trata como falha (returncode=1), igual ao tmux recusar; os callers ja checam returncode != 0.
+    #
+    # `input=` existe pro `load-buffer -`: o texto vai pela STDIN e escapa do teto de 16344 bytes do
+    # COMANDO (medido 07/08/2026: `set-buffer -- <texto>` acima disso devolve rc=1 "command too
+    # long"). `text=True` e `input=bytes` sao incompativeis, entao o modo texto sai quando ha stdin e
+    # a saida e decodificada aqui — o retorno continua sendo `str` pra todos os chamadores de hoje.
+    if input is not None:
+        try:
+            cp = subprocess.run(args, capture_output=True, timeout=5, input=input)
+            # bytes de verdade num run real; str num mock de teste que ja devolve texto — os dois
+            # caminhos tem de sair como str, igual ao retorno do modo texto abaixo.
+            out = cp.stdout.decode("utf-8", "replace") if isinstance(cp.stdout, bytes) else (cp.stdout or "")
+            err = cp.stderr.decode("utf-8", "replace") if isinstance(cp.stderr, bytes) else (cp.stderr or "")
+            return subprocess.CompletedProcess(args, cp.returncode, out, err)
+        except (subprocess.TimeoutExpired, OSError) as e:
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr=str(e))
     try:
         return RUN(args, capture_output=True, text=True, encoding="utf-8", errors="replace",
                    timeout=5)
@@ -636,7 +651,17 @@ def paste_text(name: str, text: str) -> bool:
     if buffer_trunca_no_newline():
         return _paste_linha_a_linha(name, text)
     buf = "cp-prompt"
-    _run(["tmux", "set-buffer", "-b", buf, "--", text])
+    # `load-buffer -` (texto pela STDIN), nao `set-buffer -- <texto>` (texto no argv): o teto de
+    # 16344 bytes e do COMPRIMENTO DO COMANDO, e era o set-buffer que o pagava. Medido 08/08/2026:
+    # load-buffer aceitou 1,088 MB e o paste-buffer entregou em 0,32s, byte a byte identico e com os
+    # marcadores de bracketed paste intactos.
+    lb = _run(["tmux", "load-buffer", "-b", buf, "-"], input=text.encode())
+    if lb.returncode != 0:
+        # NAO segue pro paste-buffer: com o buffer vazio (ou com o conteudo ANTERIOR), o paste
+        # colaria texto de outra mensagem no composer. Cai no plano B, que digita linha a linha.
+        _log.warning("tmux load-buffer falhou pra %r (%s) — caindo no envio linha a linha",
+                     name, (lb.stderr or "").strip()[:200])
+        return _paste_linha_a_linha(name, text)
     cp = _run(["tmux", "paste-buffer", "-t", _pane_target(name), "-b", buf, "-p", "-d"])
     if cp.returncode == 0:
         return True
