@@ -151,6 +151,48 @@ The mode is **not** one-shot `-p`. It is the long-lived streaming-input process:
 Not a small change — but not speculative either: session lifetime, streaming and transcript
 compatibility are answered, and answered well. What is left is mostly about the app's own surfaces.
 
+## Windows: the send path has a fix, and it is not a buffer (measured 2026-08-08)
+
+Measured on a real Windows box (psmux 3.3.7, build 05cc5d4 2026-07-20) against a real Claude Code
+session, with the transcript as the oracle — never the pane. This closes the "Windows is unmeasured"
+item and corrects a claim in `CLAUDE.md`.
+
+**`paste-buffer` works. Our note saying it does not is wrong** — not outdated: it names this exact
+version. Text pasted through it reached the Claude composer, with `send-keys` as a control in the
+same run proving the instrument.
+
+**Neither buffer command can carry a newline, and the reason is in psmux's source, not in a limit:**
+- `set-buffer` truncates at the first newline — 22 bytes stored out of 13799, and **rc=0**. The
+  control protocol is line-terminated (`cmd.push('\n')`) and the client does not escape, so the
+  command ends at the first newline.
+- `load-buffer` escapes it and nothing ever unescapes: `main.rs` does
+  `content.replace('\n', "\\n").replace('\r', "\\r")` before forwarding as `set-buffer`, and the
+  server's handler (`server/connection.rs`) stores `content_parts.join(" ")` verbatim. The escape
+  has no matching unescape — a genuine psmux bug. `-r` and `-s` change nothing, because the newline
+  is already gone by the time paste runs. CR is escaped the same way.
+
+So the buffer route delivers **100% of the content** (600/600 lines, no truncation) and destroys
+every separator. Worth knowing, since the path in use today loses far more than that.
+
+**The fix is the clipboard, and it is better than the Linux one.** Writing the text to the Windows
+clipboard and sending **`M-v`** (Alt+V — `Ctrl+V` is swallowed by the terminal on Windows, which is
+why Claude Code binds Alt+V there, as the owner knew and the probe confirmed) delivered **600/600
+lines with real newlines and no truncation**, verified in the transcript: 14445 bytes, one copy. The
+receiving Claude tabulated both sends itself: same 600 lines, same range, `\n` literal on the buffer
+route against a real newline on this one.
+
+Why it is better than what Linux does: **no content byte passes through the multiplexer at all**, so
+neither psmux bug matters. It is the same mechanism already measured for image paste on Linux, where
+a bare `send-keys C-v` puts `[Image #1]` in the composer because the TUI reads the system clipboard
+itself.
+
+Before building on it, one thing is unmeasured and it is the one that decides feasibility: our probe
+ran `Set-Clipboard` from an **interactive elevated PowerShell**. The backend is a different process,
+possibly on another window station, and a process that cannot reach the desktop's clipboard would
+fail silently — the paste would deliver whatever was there before. Measure that first. Also: this
+clobbers whatever the user had copied, and `Alt+V` is a Claude Code binding, so Pi and Codex panes
+need their own answer.
+
 ## Reading the pane: what a PTY would and would not buy (measured 2026-08-08)
 
 The PTY was cut as a *send* path (see the item above). It was then proposed twice more as a *read*
