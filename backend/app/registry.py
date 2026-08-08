@@ -279,7 +279,13 @@ def name_of_pid(pid: int) -> Optional[str]:
     resolvido e melhor que transcript que para de ser lido.
     """
     nascimento = _proc_start_time(pid)
-    if (cache := _NOME_POR_PID.get(pid)) is not None and cache[0] == nascimento:
+    # `nascimento is not None` faz parte da condicao: sem ele, um ambiente onde o /proc/<pid>/stat
+    # nao da pra ler (hidepid=2, backend sob outro uid — o mesmo cenario que o inbox_socket_of ja
+    # reconhece) devolve None SEMPRE, `None == None` casa, e o cache volta a ser por pid puro — o
+    # bug de atribuicao errada que esta chave existe pra fechar, de volta pela porta dos fundos
+    # (achado da revisao do proprio conserto). Nao saber a idade do processo = nao confiar no cache.
+    if (cache := _NOME_POR_PID.get(pid)) is not None and nascimento is not None \
+            and cache[0] == nascimento:
         return cache[1]
     achado: Optional[str] = None
     try:

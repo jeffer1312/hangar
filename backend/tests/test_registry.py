@@ -942,3 +942,82 @@ def test_kill_que_mata_de_fato_limpa_tudo(tmp_path, monkeypatch):
         "Q", (), {"clear": lambda self: limpou.append(("fila", n))})())
     r.kill("zz")
     assert [k for k, _ in limpou] == ["forget", "fila", "then", "pair"]
+
+
+# --- recado nativo entre sessoes Claude: name_of_pid / inbox_socket_of -----------------------
+
+@pytest.fixture(autouse=True)
+def _limpa_cache_nome_por_pid():
+    registry._NOME_POR_PID.clear()
+    yield
+    registry._NOME_POR_PID.clear()
+
+
+def _panes(nome: str, pid: int):
+    return {nome: [{"pid": pid}]}
+
+
+def test_name_of_pid_resolve_e_cacheia(monkeypatch):
+    chamadas = []
+    monkeypatch.setattr(registry, "_proc_start_time", lambda p: 100.0)
+    monkeypatch.setattr(registry, "_proc_children_map", lambda: {})
+    monkeypatch.setattr(registry.tmux, "list_panes_all",
+                        lambda: (chamadas.append(1), _panes("api-fix", 5000))[1])
+    assert registry.name_of_pid(5000) == "api-fix"
+    assert registry.name_of_pid(5000) == "api-fix"
+    assert len(chamadas) == 1                    # segunda veio do cache, sem fork de tmux
+
+
+def test_name_of_pid_nao_devolve_a_sessao_do_processo_MORTO_em_pid_reusado(monkeypatch):
+    # Um pid nao identifica processo: reusado depois que o dono morreu, a entrada velha apontaria o
+    # recado pra sessao errada, CALADO. A chave carrega o instante de inicio pra isso nao acontecer.
+    monkeypatch.setattr(registry, "_proc_children_map", lambda: {})
+    monkeypatch.setattr(registry, "_proc_start_time", lambda p: 100.0)
+    monkeypatch.setattr(registry.tmux, "list_panes_all", lambda: _panes("sessao-velha", 5000))
+    assert registry.name_of_pid(5000) == "sessao-velha"
+    monkeypatch.setattr(registry, "_proc_start_time", lambda p: 999.0)      # outro processo
+    monkeypatch.setattr(registry.tmux, "list_panes_all", lambda: _panes("sessao-nova", 5000))
+    assert registry.name_of_pid(5000) == "sessao-nova"
+
+
+def test_name_of_pid_nao_confia_no_cache_quando_nao_da_pra_ler_a_idade(monkeypatch):
+    # /proc/<pid>/stat ilegivel (hidepid=2, backend sob outro uid) -> _proc_start_time devolve None
+    # SEMPRE. Sem tratar, `None == None` casava e o cache voltava a ser por pid puro — o bug de
+    # atribuicao errada de volta pela porta dos fundos (achado da revisao do conserto).
+    monkeypatch.setattr(registry, "_proc_children_map", lambda: {})
+    monkeypatch.setattr(registry, "_proc_start_time", lambda p: None)
+    monkeypatch.setattr(registry.tmux, "list_panes_all", lambda: _panes("sessao-velha", 5000))
+    assert registry.name_of_pid(5000) == "sessao-velha"
+    monkeypatch.setattr(registry.tmux, "list_panes_all", lambda: _panes("sessao-nova", 5000))
+    assert registry.name_of_pid(5000) == "sessao-nova"      # reconsulta, nao serve o valor velho
+
+
+def test_name_of_pid_engole_falha_do_tmux_sem_derrubar_o_parse(monkeypatch):
+    monkeypatch.setattr(registry, "_proc_start_time", lambda p: 100.0)
+    monkeypatch.setattr(registry, "_proc_children_map", lambda: {})
+    def explode():
+        raise OSError("tmux fora")
+    monkeypatch.setattr(registry.tmux, "list_panes_all", explode)
+    assert registry.name_of_pid(5000) is None
+    assert 5000 not in registry._NOME_POR_PID          # falha NAO e cacheada: a proxima retenta
+
+
+def test_inbox_socket_of_fora_do_posix_devolve_none_em_vez_de_estourar(monkeypatch):
+    # os.getuid() nao existe no Windows e Path.is_dir() relevanta EACCES: os dois estouravam ANTES
+    # do try e a rota /peer-address dava 500 em toda chamada naquele ambiente.
+    monkeypatch.setattr(os, "name", "nt")
+    assert registry.inbox_socket_of("qualquer") is None
+
+
+def test_inbox_socket_of_acha_o_socket_do_descendente(monkeypatch, tmp_path):
+    socks = tmp_path / "cc-socks"
+    socks.mkdir()
+    (socks / "4242.sock").touch()
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(registry.tmux, "pane_pid", lambda n: 300)
+    monkeypatch.setattr(registry, "_descendant_pids", lambda pid, children=None: [301, 4242])
+    monkeypatch.setattr(registry, "_proc_children_map", lambda: {})
+    assert registry.inbox_socket_of("alvo") == str(socks / "4242.sock")
+    # Sessao sem socket (Pi, Codex, ou Claude anterior a liberacao) -> None, que NAO e erro.
+    monkeypatch.setattr(registry, "_descendant_pids", lambda pid, children=None: [301])
+    assert registry.inbox_socket_of("alvo") is None
