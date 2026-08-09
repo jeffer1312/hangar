@@ -79,7 +79,8 @@ fi
 # UI (o padrao novo) a unit nao existe, e um restart nela derruba o deploy inteiro no set -e — build
 # feito, servico velho no ar, deploy marcado como failed. Duas topologias sao validas: pergunta.
 UNITS=("$BACK")
-if systemctl --user list-unit-files --no-legend "$FRONT" 2>/dev/null | grep -q .; then
+# exit code, nao stdout: assim "systemctl falhou" (bus fora, timeout) nao vira "a unit nao existe".
+if systemctl --user list-unit-files "$FRONT" >/dev/null 2>&1; then
   UNITS+=("$FRONT")
 fi
 log "restart ${UNITS[*]}"

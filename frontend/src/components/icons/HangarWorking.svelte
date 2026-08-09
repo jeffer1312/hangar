@@ -22,8 +22,8 @@
   const CICLO = 3.2;
   const ARCOS = [
     { r: 9.1, a: 30, atrasoEntrada: '0s', fase: 0, volta: 360 },
-    { r: 6.35, a: 18, atrasoEntrada: '0.09s', fase: 0.48, volta: 540 },
-    { r: 3.6, a: 6, atrasoEntrada: '0.18s', fase: 0.96, volta: 720 },
+    { r: 6.35, a: 18, atrasoEntrada: '0.09s', fase: 0.48, volta: 720 },
+    { r: 3.6, a: 6, atrasoEntrada: '0.18s', fase: 0.96, volta: 1080 },
   ];
 
   const rad = (g: number) => (g * Math.PI) / 180;
@@ -117,9 +117,11 @@
      Como 360° ≡ 0° e a escala volta a 1, o último quadro é idêntico ao primeiro: o ciclo emenda
      sem costura, e o primeiro arco já está girando quando este termina. */
   /* O grupo só ENCOLHE e volta; quem gira no final são os arcos, cada um o seu tanto (--volta:
-     360°, 540°, 720°, de fora pra dentro). Girar o grupo inteiro é rotação rígida e lê como
+     360°, 720°, 1080°, de fora pra dentro). Girar o grupo inteiro é rotação rígida e lê como
      spinner; velocidades diferentes por anel leem como ESPIRAL — e como todos os valores são
-     múltiplos de 360°, no último quadro a marca está exatamente onde começou. */
+     múltiplos de 360°, no último quadro a marca está exatamente onde começou. 540° pareceria
+     igual a 180° no fim do ciclo: o anel voltaria de canto no reinício, dando o salto que esta
+     parte existe pra esconder. */
   @keyframes hangar-respiro {
     0%, 63% { transform: scale(1); }
     78%     { transform: scale(0.44); }
