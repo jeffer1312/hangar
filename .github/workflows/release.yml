@@ -64,7 +64,7 @@ jobs:
       # duvida de onde e relativo a que.
       #
       # E o sha256 e gerado com o NOME PURO: a primeira release gravou o caminho de build
-      # ("dist/Claude Cockpit-0.1.0.AppImage"), entao quem baixava o arquivo solto e rodava
+      # ("dist/Hangar-0.1.0.AppImage"), entao quem baixava o arquivo solto e rodava
       # `sha256sum -c` levava "FALHA na abertura ou na leitura" — o checksum existia e nao servia
       # pra nada. Medido em 05/08/2026 baixando a propria release.
       #

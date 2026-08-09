@@ -144,8 +144,8 @@ else
 fi
 
 # Backend desatualizado após git pull foi a causa do HTTP 404 no launcher — reinicia se existir.
-if systemctl --user list-unit-files claude-cockpit-backend.service >/dev/null 2>&1; then
-    systemctl --user restart claude-cockpit-backend.service && echo "ok: backend reiniciado"
+if systemctl --user list-unit-files hangar-backend.service >/dev/null 2>&1; then
+    systemctl --user restart hangar-backend.service && echo "ok: backend reiniciado"
 fi
 
 echo

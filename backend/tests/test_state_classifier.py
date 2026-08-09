@@ -395,7 +395,7 @@ def test_pi_question_picker_is_awaiting_input():
         "  4. Type something.\n"
         "↑↓ navigate • Enter to select • Esc to cancel\n"
         + ("─" * 60) + "\n"
-        " k3 (high) | claude-cockpit | sessão 45k\n"
+        " k3 (high) | hangar | sessão 45k\n"
     )
     state, label, question, options = classify(pane)
     assert state == "awaiting_input"

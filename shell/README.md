@@ -21,7 +21,7 @@ coisa; só quando os dois falham é que o app pede o endereço. `Ctrl+Shift+U` r
 
 ```bash
 mkdir -p ~/.local/share/applications
-sed "s|__SHELL_DIR__|$PWD|g" claude-cockpit.desktop > ~/.local/share/applications/claude-cockpit.desktop
+sed "s|__SHELL_DIR__|$PWD|g" hangar.desktop > ~/.local/share/applications/hangar.desktop
 update-desktop-database ~/.local/share/applications
 ```
 
@@ -41,20 +41,20 @@ systemctl --user stop cockpit-shell     # fechar
 
 A transparência é do app; o **desfoque** é do compositor, e o app não mexe na sua configuração.
 
-**Hyprland** — a regra casa pelo **título**, que é `claude-cockpit` nos dois modos. A classe muda
+**Hyprland** — a regra casa pelo **título**, que é `hangar` nos dois modos. A classe muda
 conforme como o app foi aberto (medido em 05/08/2026): rodando por `npm start` ela é `electron`,
 genérica e compartilhada com qualquer outro app Electron da máquina; no AppImage o
-`electron-builder` a define como `claude-cockpit`. Por isso o título é o critério confiável — ele
+`electron-builder` a define como `hangar`. Por isso o título é o critério confiável — ele
 vale nos dois. A sintaxe depende de como sua config está escrita:
 
 ```
 # config .conf (Hyprland clássico)
-windowrulev2 = noblur off, title:^(claude-cockpit)$
+windowrulev2 = noblur off, title:^(hangar)$
 ```
 
 ```lua
 -- config .lua (end-4/dots-hyprland e afins)
-hl.window_rule({ match = { title = "^(claude-cockpit)$" }, no_blur = false })
+hl.window_rule({ match = { title = "^(hangar)$" }, no_blur = false })
 ```
 
 Medido em 05/08/2026 (Hyprland 0.55.4): **não existe** um rule `blur` pra ligar — só `noblur` pra
@@ -78,7 +78,7 @@ autocontido (janela + Electron; o backend Python continua de fora, por decisão 
 
 ```bash
 cd shell && npm install     # primeira vez
-npm run dist                # gera dist/Claude Cockpit-<versão>.AppImage
+npm run dist                # gera dist/Hangar-<versão>.AppImage
 ```
 
 O ícone vem de `frontend/public/icons/icon-512.png` (copiado pra `shell/build/icon.png` — não é

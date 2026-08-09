@@ -57,7 +57,7 @@ describe('parseStatusLine — statusline do Pi', () => {
   });
 
   it('não muda a linha do Claude, que não tem "ctx"', () => {
-    const CLAUDE = '🤖 Opus5 (high✦) │ 📁 claude-cockpit [main*] │ 💬 474k/220 470k/1M │ 💵 $169.89';
+    const CLAUDE = '🤖 Opus5 (high✦) │ 📁 hangar [main*] │ 💬 474k/220 470k/1M │ 💵 $169.89';
     const f = parseStatusLine(CLAUDE)!;
     expect(f.ctxUsed).toBe(470000);
     expect(f.ctxTotal).toBe(1000000);

@@ -25,7 +25,7 @@ svelte-check (frontend).
 
 ## Global Constraints
 
-- **Worktree:** todo o trabalho acontece em `/home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress`, branch `feat/progresso-do-plano`. **Nunca** commitar na `main`; **nunca** fazer merge (o usuário faz).
+- **Worktree:** todo o trabalho acontece em `/home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress`, branch `feat/progresso-do-plano`. **Nunca** commitar na `main`; **nunca** fazer merge (o usuário faz).
 - **Baseline medido no worktree antes de começar:** backend `1118 passed, 1 skipped`; front `466 FILES 0 ERRORS 0 WARNINGS`.
 - **[adv] Nunca prometer contagem absoluta de testes.** Rodar `pytest -q` no início da task, anotar o número, e ao final exigir "esse número + os testes novos, zero falha". Contagem cravada no plano vira falso alarme de regressão.
 - **Backend não pode ler markdown na corrotina.** A decoração roda **dentro** da função `_decorate_git`, que já está em `asyncio.to_thread` (`backend/app/registry.py:829`). O incidente de 2026-07-23 (git status no tick do SSE) é o precedente.
@@ -107,7 +107,7 @@ Repetidas no relatório final. Formato: **decisão** — alternativa descartada.
 
 - [x] **Step 0: Anotar o baseline desta task**
 
-Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest -q 2>&1 | tail -2`
+Run: `cd /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/backend && uv run pytest -q 2>&1 | tail -2`
 Anotar o número exato (esperado: `1118 passed, 1 skipped`). Esse é o número a comparar no fim.
 
 - [x] **Step 1: Escrever os testes que falham**
@@ -342,7 +342,7 @@ def test_formato_real_dos_planos_do_repo():
 
 - [x] **Step 2: Rodar e ver falhar**
 
-Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest tests/test_planprog.py -q`
+Run: `cd /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/backend && uv run pytest tests/test_planprog.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.planprog'`
 
 - [x] **Step 3: Implementar `backend/app/planprog.py`**
@@ -582,16 +582,16 @@ def plan_progress(cwd: str | None) -> PlanProgress | None:
 
 - [x] **Step 4: Rodar e ver passar**
 
-Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest tests/test_planprog.py -q`
+Run: `cd /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/backend && uv run pytest tests/test_planprog.py -q`
 Expected: PASS — 17 testes (`test_formato_real_dos_planos_do_repo` pode dar skip fora deste worktree).
 
-Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest -q 2>&1 | tail -2`
+Run: `cd /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/backend && uv run pytest -q 2>&1 | tail -2`
 Expected: o número do Step 0 **+ 17**, zero falha nova.
 
 - [x] **Step 5: Sanity no plano real (dogfooding do parser)**
 
 ```bash
-cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run python -c "
+cd /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/backend && uv run python -c "
 from app.planprog import parse_plan
 p = parse_plan('../docs/superpowers/plans/2026-07-30-progresso-do-plano.md')
 print(p.name, p.done, '/', p.total, 'tasks:', p.task_total, 'atual:', p.task_idx)
@@ -700,7 +700,7 @@ def test_sig_estavel_sem_plano():
 
 - [x] **Step 2: Rodar e ver falhar**
 
-Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest tests/test_planprog_wire.py -q`
+Run: `cd /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/backend && uv run pytest tests/test_planprog_wire.py -q`
 Expected: FAIL — `ImportError: cannot import name '_decorate_plan' from 'app.registry'`
 
 - [x] **Step 3: Campos em `models.py`**
@@ -775,16 +775,16 @@ E somar ao comentário acima da função: `Sem o plan_name aqui, trocar do plano
 
 - [x] **Step 6: Rodar e ver passar**
 
-Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest tests/test_planprog_wire.py -q`
+Run: `cd /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/backend && uv run pytest tests/test_planprog_wire.py -q`
 Expected: PASS (7 testes)
 
-Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest -q 2>&1 | tail -2`
+Run: `cd /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/backend && uv run pytest -q 2>&1 | tail -2`
 Expected: número da Task 1 **+ 7**, zero falha nova.
 
 - [x] **Step 7: Verificação de ponta (o dado sai mesmo pela API)**
 
 ```bash
-cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && \
+cd /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/backend && \
   CP_AUTH_TOKEN=teste CP_LAN_BIND_IP=127.0.0.1 CP_PORT=8799 \
   setsid uv run python -m app.main > /tmp/cp-plan.log 2>&1 &
 sleep 4
@@ -866,7 +866,7 @@ describe('planBadge', () => {
 
 - [x] **Step 2: Rodar e ver falhar**
 
-Run: `npm --prefix /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/frontend run test -- plan.test.ts`
+Run: `npm --prefix /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/frontend run test -- plan.test.ts`
 Expected: FAIL — não resolve `./plan`
 
 - [x] **Step 3: Tipos em `types.ts`**
@@ -927,7 +927,7 @@ export function planBadge(s: PlanCarrier | null | undefined): PlanBadge | null {
 
 - [x] **Step 5: Rodar e ver passar**
 
-Run: `npm --prefix /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/frontend run test -- plan.test.ts`
+Run: `npm --prefix /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/frontend run test -- plan.test.ts`
 Expected: PASS (5 testes)
 
 - [x] **Step 6: Chip no `Sidebar.svelte` (desktop)**
@@ -1012,7 +1012,7 @@ CSS: só as duas cores (o resto vem do `bc-chip`):
 
 - [x] **Step 9: Gate de tipos + verificação manual (mobile E desktop)**
 
-Run: `npm --prefix /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/frontend run check`
+Run: `npm --prefix /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/frontend run check`
 Expected: `0 ERRORS 0 WARNINGS`
 
 Manual, com o backend do worktree rodando (Task 2 Step 7) e `npm --prefix …/frontend run dev`:
@@ -1148,7 +1148,7 @@ Import em cada um: `import PlanBar from './PlanBar.svelte';`
 
 - [x] **Step 3: Gate de tipos**
 
-Run: `npm --prefix /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/frontend run check`
+Run: `npm --prefix /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/frontend run check`
 Expected: `0 ERRORS 0 WARNINGS`
 
 - [x] **Step 4: Verificação manual (mobile E desktop)** — item 6 (plano 100% concluído) não testado
@@ -1250,7 +1250,7 @@ def test_plan_devolve_detalhe_e_markdown(api_client, tmp_path):
 
 - [x] **Step 2: Rodar e ver falhar**
 
-Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest tests/test_planprog_api.py -q`
+Run: `cd /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/backend && uv run pytest tests/test_planprog_api.py -q`
 Expected: FAIL — 404 de rota inexistente em todos, inclusive no de sucesso.
 
 Se a fixture não autenticar, **abrir `tests/test_api.py:57-72` e copiar o setup real** em vez de
@@ -1293,10 +1293,10 @@ Conferir que `asyncio` e `Path` já estão importados no `api.py`; se não, impo
 
 - [x] **Step 4: Rodar e ver passar**
 
-Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest tests/test_planprog_api.py -q`
+Run: `cd /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/backend && uv run pytest tests/test_planprog_api.py -q`
 Expected: PASS (3 testes)
 
-Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest -q 2>&1 | tail -2`
+Run: `cd /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/backend && uv run pytest -q 2>&1 | tail -2`
 Expected: número da Task 2 **+ 3**, zero falha nova.
 
 - [x] **Step 5: Commit**
@@ -1478,7 +1478,7 @@ gate, o painel apareceria duplicado no desktop (uma vez no `DesktopSessionContex
 
 - [x] **Step 7: Gate de tipos + verificação manual (mobile E desktop)**
 
-Run: `npm --prefix /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/frontend run check`
+Run: `npm --prefix /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/frontend run check`
 Expected: `0 ERRORS 0 WARNINGS`
 
 Manual:
@@ -1525,7 +1525,7 @@ O global é config do usuário, fora do repo — não é para o executor alterar
 `docs/superpowers/specs/2026-07-30-regra-para-o-claude-md-global.md`:
 
 ```markdown
-- **Executando plano do superpowers:** ao terminar cada Step, marcar `- [ ]` → `- [x]` no arquivo do plano. Step que precisa de conferência humana leva "verificação manual" no título. O progresso que aparece no celular (claude-cockpit) lê daí.
+- **Executando plano do superpowers:** ao terminar cada Step, marcar `- [ ]` → `- [x]` no arquivo do plano. Step que precisa de conferência humana leva "verificação manual" no título. O progresso que aparece no celular (hangar) lê daí.
 ```
 
 Sem "no mesmo commit": `docs/superpowers/` é gitignored e metade dos planos é untracked — a regra
@@ -1533,16 +1533,16 @@ seria impossível de cumprir e falharia em silêncio.
 
 - [x] **Step 4: Gate final completo**
 
-Run: `cd /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/backend && uv run pytest -q 2>&1 | tail -2`
+Run: `cd /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/backend && uv run pytest -q 2>&1 | tail -2`
 Expected: baseline do Step 0 da Task 1 **+ 27** testes novos (17 + 7 + 3), zero falha.
 
-Run: `npm --prefix /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/frontend run test`
+Run: `npm --prefix /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/frontend run test`
 Expected: tudo passa (inclui os 5 de `plan.test.ts`).
 
-Run: `npm --prefix /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/frontend run check`
+Run: `npm --prefix /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/frontend run check`
 Expected: `466+ FILES 0 ERRORS 0 WARNINGS`
 
-Run: `npm --prefix /home/jefferson/Projetos/claude-cockpit/.claude/worktrees/plan-progress/frontend run build`
+Run: `npm --prefix /home/jefferson/Projetos/hangar/.claude/worktrees/plan-progress/frontend run build`
 Expected: build ok
 
 - [x] **Step 5: Commit**

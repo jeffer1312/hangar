@@ -3,7 +3,7 @@ COMANDO PRA RODAR O TESTE DO PSMUX
 
 Abra um PowerShell e cole a linha abaixo:
 
-powershell -ExecutionPolicy Bypass -File \\host.lan\Data\Projetos\claude-cockpit\scripts\test-psmux.ps1
+powershell -ExecutionPolicy Bypass -File \\host.lan\Data\Projetos\hangar\scripts\test-psmux.ps1
 
 
 SE O WINGET RECLAMAR DO ID DO PSMUX

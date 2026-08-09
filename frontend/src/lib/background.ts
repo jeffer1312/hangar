@@ -15,7 +15,7 @@ export type BgPref = 'flat' | 'texture' | 'aurora' | 'image' | 'desktop';
 // recarga (o ensureOk recarrega no 401) nasceria opaca. User agent sobrevive a reload e redirect.
 export function isShell(): boolean {
   return typeof navigator !== 'undefined'
-    && navigator.userAgent.includes('claude-cockpit-shell');
+    && navigator.userAgent.includes('hangar-shell');
 }
 
 const KEY = 'cp_bg';

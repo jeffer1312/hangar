@@ -265,7 +265,7 @@ PANE_COM_PAINEL_DE_SUBAGENTES = """● Dinheiro: a cobranca e por caractere do t
 ────────────────────────────────────────────────────────────
 ❯ Sim, depois faz o streaming
 ────────────────────────────────────────────────────────────
-  🤖 Opus5·1M (high✦) │ 📁 claude-cockpit [main*] │ 💵 $10.51
+  🤖 Opus5·1M (high✦) │ 📁 hangar [main*] │ 💵 $10.51
   ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 2 agents
 
   ● main

@@ -16,13 +16,13 @@ It runs on your own LAN/VPN.
 
 Screenshots and demo video use synthetic sessions, prompts, states, and costs; synthetic or representative public provider/model identifiers may appear.
 
-🔗 https://github.com/jeffer1312/claude-cockpit
+🔗 https://github.com/jeffer1312/hangar
 
 ## Optional thread
 
 1/ The problem: an agent can keep working after you leave the terminal, but the next question still needs an answer.
 
-2/ claude-cockpit turns the same local sessions into a phone-friendly chat. The desktop board shows which session needs attention, which is working, and which is ready.
+2/ hangar turns the same local sessions into a phone-friendly chat. The desktop board shows which session needs attention, which is working, and which is ready.
 
 3/ Claude Code, Pi, and Codex can live side by side in one cockpit. The canvas is there when columns are too rigid for your workspace.
 
@@ -30,4 +30,4 @@ Screenshots and demo video use synthetic sessions, prompts, states, and costs; s
 
 5/ Demo assets: synthetic sessions, prompts, states, and costs. Model labels are synthetic or representative public identifiers — no real credentials or account data.
 
-🔗 https://github.com/jeffer1312/claude-cockpit
+🔗 https://github.com/jeffer1312/hangar

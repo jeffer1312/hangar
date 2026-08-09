@@ -51,7 +51,7 @@ Um **modal único com abas**. Desktop: `ModalDialog.svelte`. Mobile: o mesmo con
 `BottomSheet`.
 
 ```
-┌─ git · claude-cockpit ·  ⎇ main ──────────────────── ⋯  ✕ ┐
+┌─ git · hangar ·  ⎇ main ──────────────────── ⋯  ✕ ┐
 │  ⚠ cherry-pick em conflito — 2 arquivos    [abortar…]     │ ← só quando há sequenciador
 ├───────────────────────────────────────────────────────────┤
 │ Mudanças 88 │ Histórico │ Branches 6                      │

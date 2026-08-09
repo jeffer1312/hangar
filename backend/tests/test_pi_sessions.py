@@ -7,8 +7,8 @@ from app.adapters.pi import sessions as pi_sessions
 def test_cwd_slug_matches_pi_layout():
     # Medido na maquina alvo: /home/jefferson -> --home-jefferson--
     assert pi_sessions.cwd_slug("/home/jefferson") == "--home-jefferson--"
-    assert (pi_sessions.cwd_slug("/home/jefferson/Projetos/claude-cockpit")
-            == "--home-jefferson-Projetos-claude-cockpit--")
+    assert (pi_sessions.cwd_slug("/home/jefferson/Projetos/hangar")
+            == "--home-jefferson-Projetos-hangar--")
 
 
 def test_cwd_slug_keeps_spaces_accents_and_underscores():

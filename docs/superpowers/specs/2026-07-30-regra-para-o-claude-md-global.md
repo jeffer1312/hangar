@@ -4,7 +4,7 @@ Texto pronto pra o usuário colar no próprio `~/.claude/CLAUDE.md` se quiser �
 config global do usuário por conta própria.
 
 ```markdown
-- **Executando plano do superpowers:** ao terminar cada Step, marcar `- [ ]` → `- [x]` no arquivo do plano. Step que precisa de conferência humana leva "verificação manual" no título. O progresso que aparece no celular (claude-cockpit) lê daí.
+- **Executando plano do superpowers:** ao terminar cada Step, marcar `- [ ]` → `- [x]` no arquivo do plano. Step que precisa de conferência humana leva "verificação manual" no título. O progresso que aparece no celular (hangar) lê daí.
 ```
 
 Sem "no mesmo commit": `docs/superpowers/` é gitignored e metade dos planos é untracked — a regra

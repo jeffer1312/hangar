@@ -294,7 +294,7 @@ def test_send_prompt_troca_surrogate_solto_antes_do_tmux():
 # linha de modo. E o pane que o gate tem que aprovar.
 _CLAUDE_RODAPE = (
     "─" * 100 + "\n"
-    "  🤖 Opus5 (high✦) │ 📁 claude-cockpit [main*] │ 📟 cc-2 │ ⎈ k8s-dev\n"
+    "  🤖 Opus5 (high✦) │ 📁 hangar [main*] │ 📟 cc-2 │ ⎈ k8s-dev\n"
     "  💬 236k/600 240k/1M │ 💵 $22.83 │ ⚡5h:20% ↺57m │ 🕐 09:32 ⏱ 14h46m\n"
     "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 2 agents\n"
 )

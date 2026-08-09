@@ -47,7 +47,7 @@
   });
 
   // Celular e estreito: o cwd so entra quando ACRESCENTA algo. Quando o basename ja e o nome da
-  // sessao ("claude-cockpit" + "/home/jeff…/claude-cockpit"), a linha inteira e redundante e so
+  // sessao ("hangar" + "/home/jeff…/hangar"), a linha inteira e redundante e so
   // roubava largura do nome/branch.
   const showCwd = $derived(!!session.cwd && cwdParts.base.toLowerCase() !== session.name.toLowerCase());
 

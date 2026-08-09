@@ -1,4 +1,4 @@
-# Demo do claude-cockpit
+# Demo do hangar
 
 Storyboard público para as capturas de tela e o vídeo de demonstração. Esta página descreve o que
 será mostrado sem depender de uma conta, sessão ou custo reais.
@@ -134,7 +134,7 @@ será mostrado sem depender de uma conta, sessão ou custo reais.
 | `settings` | `docs/img/desktop-settings-demo.png` | 7 | grupos de configurações sem valores sensíveis |
 | `costs-demo` | `docs/img/desktop-costs-demo.png` | 8 | `Demo data` e valores sintéticos |
 | `cost-fixture` | `docs/demo/costs-demo.json` | 8 | fixture revisada usada para a captura local |
-| `demo-video` | `docs/demo/claude-cockpit-overview.webm` | 9 | cenas de chat, board, Pi, modelos e custos em 40 s |
+| `demo-video` | `docs/demo/hangar-overview.webm` | 9 | cenas de chat, board, Pi, modelos e custos em 40 s |
 
 Os arquivos acima são os artefatos públicos atuais. Eles foram revisados para não conter dados
 pessoais ou credenciais; o vídeo é uma montagem curta das capturas aprovadas.

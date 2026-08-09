@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude-cockpit — instalação completa no Linux/macOS.
+# hangar — instalação completa no Linux/macOS.
 #
 #   ./install.sh              # interativo
 #   ./install.sh --yes        # aceita tudo (não pergunta nada)
@@ -300,14 +300,14 @@ fi
 say "7/8 Serviços, cp-send e painel"
 if ! command -v systemctl >/dev/null; then
   nota "serviços: sem systemd nesta máquina — rode backend e frontend na mão"
-elif systemctl --user list-unit-files claude-cockpit-backend.service >/dev/null 2>&1 &&
-     systemctl --user cat claude-cockpit-backend.service >/dev/null 2>&1; then
+elif systemctl --user list-unit-files hangar-backend.service >/dev/null 2>&1 &&
+     systemctl --user cat hangar-backend.service >/dev/null 2>&1; then
   # O caminho do node e o WorkingDirectory ficam CRAVADOS dentro da unit — git pull não os
   # muda. O próprio services-setup.sh só reinicia o que mudou de verdade, então re-rodar aqui
   # não derruba a conexão SSE do celular à toa.
   if [ "$FRONTEND" = 0 ]; then ./scripts/services-setup.sh --backend-only >/dev/null
   else ./scripts/services-setup.sh >/dev/null; fi
-  ok "serviços atualizados ($(systemctl --user is-active claude-cockpit-backend.service 2>/dev/null))"
+  ok "serviços atualizados ($(systemctl --user is-active hangar-backend.service 2>/dev/null))"
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
 elif [ "$SERVICES" = 1 ] && ask "Rodar backend+frontend como serviços de usuário (sobrevivem a fechar o terminal)?"; then

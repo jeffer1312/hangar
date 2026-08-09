@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the claude-cockpit interactive `claude`, `codex` and `pi` wrappers.
+# Install the hangar interactive `claude`, `codex` and `pi` wrappers.
 #
 # The wrapper makes every interactive `claude`/`pi` trackable by the app: it injects a unique
 # --session-id (so two claudes/pis in the same folder never leak/overwrite each other) and launches

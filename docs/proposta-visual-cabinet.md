@@ -1,4 +1,4 @@
-# Proposta: o que extrair do Cabinet pro claude-cockpit
+# Proposta: o que extrair do Cabinet pro hangar
 
 Fonte: github.com/cabinetai/cabinet (cloned em /tmp/pi-github-repos/cabinetai/cabinet).
 Data: 2026-08-25. Autor: Claude.

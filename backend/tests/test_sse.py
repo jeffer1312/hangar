@@ -149,7 +149,7 @@ async def test_drain_fires_once_on_overlay_to_idle(monkeypatch):
 def test_context_pairs_conta_os_dois_pares():
     from app.sse import context_pairs
     # statusline REAL capturado do pane (Opus5, janela de 1M)
-    sl = "🤖 Opus5 (high✦) │ 📁 claude-cockpit [main] │ 💬 156k/2 160k/1M"
+    sl = "🤖 Opus5 (high✦) │ 📁 hangar [main] │ 💬 156k/2 160k/1M"
     assert context_pairs(sl) == 2
 
 

@@ -29,7 +29,7 @@ def carregar():
 JANELAS_KITTY1 = [
     {"pid": 63482, "class": "kitty", "title": "servicos-api", "address": "0xAAA"},
     {"pid": 63482, "class": "kitty", "title": "app-web", "address": "0xBBB"},
-    {"pid": 63482, "class": "kitty", "title": "claude-cockpit", "address": "0xCCC"},
+    {"pid": 63482, "class": "kitty", "title": "hangar", "address": "0xCCC"},
     {"pid": 63482, "class": "kitty", "title": "jefferson", "address": "0xDDD"},
 ]
 
@@ -38,10 +38,10 @@ ARVORE = {2324949: 2324733, 2324733: 63482, 615602: 615093, 615093: 63482,
           2562331: 71410, 71410: 63482, 2606971: 72172, 72172: 63482,
           900001: 900000, 900000: 71001}
 
-CLIENTES = {"claude-cockpit-2": [2324949], "jefferson": [615602],
+CLIENTES = {"hangar-2": [2324949], "jefferson": [615602],
             "app-web": [2562331], "servicos-api": [2606971]}
 
-TITULOS = {"claude-cockpit-2": "claude-cockpit", "jefferson": "jefferson",
+TITULOS = {"hangar-2": "hangar", "jefferson": "jefferson",
            "app-web": "app-web", "servicos-api": "servicos-api"}
 
 
@@ -58,7 +58,7 @@ def main() -> int:
     # 1. O bug: 4 janelas num pid só, cada sessão tem que achar a SUA.
     montar(mod, JANELAS_KITTY1)
     esperado = {"servicos-api": "0xAAA", "app-web": "0xBBB",
-                "claude-cockpit-2": "0xCCC", "jefferson": "0xDDD"}
+                "hangar-2": "0xCCC", "jefferson": "0xDDD"}
     for sessao, addr in esperado.items():
         obtido = mod.find_window(sessao)
         assert obtido == addr, f"{sessao}: esperava {addr}, veio {obtido}"
@@ -71,11 +71,11 @@ def main() -> int:
     # 3. Empate real (duas sessões no MESMO repo -> mesmo título): devolve None em vez de chutar.
     #    Abrir attach duplicado é visível; focar a janela errada é o bug silencioso que isto matou.
     empate = [
-        {"pid": 63482, "class": "kitty", "title": "claude-cockpit", "address": "0xCCC"},
-        {"pid": 63482, "class": "kitty", "title": "claude-cockpit", "address": "0xFFF"},
+        {"pid": 63482, "class": "kitty", "title": "hangar", "address": "0xCCC"},
+        {"pid": 63482, "class": "kitty", "title": "hangar", "address": "0xFFF"},
     ]
     montar(mod, empate)
-    assert mod.find_window("claude-cockpit-2") is None, "empate de título não pode chutar janela"
+    assert mod.find_window("hangar-2") is None, "empate de título não pode chutar janela"
 
     # 4. Sessão sem cliente attachado: nada a focar, e NÃO cai no título (janela de outra sessão).
     montar(mod, JANELAS_KITTY1, clientes={"sem-cliente": []})
@@ -87,7 +87,7 @@ def main() -> int:
     montar(mod, JANELAS_KITTY1, titulos={})
     err = io.StringIO()
     with contextlib.redirect_stderr(err):
-        obtido = mod.find_window("claude-cockpit-2")
+        obtido = mod.find_window("hangar-2")
     assert obtido is None, f"sem título esperado não pode escolher janela, veio {obtido}"
     assert "set-titles-string" in err.getvalue(), f"faltou diagnóstico no stderr: {err.getvalue()!r}"
 

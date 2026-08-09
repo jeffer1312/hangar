@@ -44,7 +44,7 @@ def _buscar(base_url: str, api_key: str) -> dict[str, Any]:
     # aparecia como "403 error code: 1010" na tela de Motores e o motor parecia inválido.
     req = urllib.request.Request(
         f"{base_url.rstrip('/')}/v1/models",
-        headers={"Authorization": f"Bearer {api_key}", "User-Agent": "claude-cockpit/1.0"})
+        headers={"Authorization": f"Bearer {api_key}", "User-Agent": "hangar/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
             # errors="replace": um provedor pode responder bytes fora de utf-8 válido; deixar
