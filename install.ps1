@@ -734,13 +734,35 @@ if (-not $script:cpPublicUrl) {
         # (config.py:215) = 5173, e o Vite escuta so em loopback: o QR sairia apontando pra uma porta
         # onde nada responde na LAN. Com a chave gravada, o curto-circuito de config.py:211 usa este
         # endereco e o QR passa a valer.
-        $ipLan = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-                  Where-Object { $_.IPAddress -notmatch '^(127\.|169\.254\.)' -and $_.PrefixOrigin -ne 'WellKnown' } |
-                  Select-Object -First 1 -ExpandProperty IPAddress)
+        # NAO pegar -First 1 da lista crua de Get-NetIPAddress: a ordem ali e enumeracao interna do
+        # Windows, nao prioridade de rota, e uma maquina com Docker Desktop/WSL/Hyper-V/VPN (perfil
+        # comum de quem instala isto) tem um vEthernet que passa nos mesmos filtros (DHCP interno,
+        # nao e 127./169.254., nao e WellKnown) e costuma vir ANTES da Wi-Fi real. Gravaria um IP
+        # interno tipo 172.x com "gravado" na tela - o QR morto que esta task existe pra evitar, so
+        # que pelo IP em vez da porta. A interface certa e a da rota padrao (0.0.0.0/0): essa e a
+        # que de fato sai pra rede.
+        $idxRota = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+                   Sort-Object RouteMetric | Select-Object -First 1 -ExpandProperty InterfaceIndex
+        $ipLan = $null
+        if ($idxRota) {
+            $ipLan = (Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $idxRota -ErrorAction SilentlyContinue |
+                      Where-Object { $_.IPAddress -notmatch '^(127\.|169\.254\.)' } |
+                      Select-Object -First 1 -ExpandProperty IPAddress)
+        }
         if ($ipLan) {
-            Set-EnvKey -Chave 'CP_PUBLIC_URL' -Valor "http://${ipLan}:$portaBack"
-            $script:cpPublicUrl = "http://${ipLan}:$portaBack"
-            Ok "CP_PUBLIC_URL=http://${ipLan}:$portaBack gravado"
+            $novaUrl = "http://${ipLan}:$portaBack"
+            # So GRAVA se o valor mudou - mesmo padrao Select-String -Quiet do bloco Tailscale
+            # acima (linha ~673): sem isto, "gravado" apareceria toda vez, mesmo reescrevendo o
+            # .env com o valor que ja estava la.
+            $jaTinhaEsseValor = (Test-Path $envFile) -and (Select-String -Path $envFile `
+                -Pattern "^CP_PUBLIC_URL=$([regex]::Escape($novaUrl))\s*$" -Quiet)
+            if ($jaTinhaEsseValor) {
+                Ok "CP_PUBLIC_URL=$novaUrl ja registrado em backend\.env"
+            } else {
+                Set-EnvKey -Chave 'CP_PUBLIC_URL' -Valor $novaUrl
+                Ok "CP_PUBLIC_URL=$novaUrl gravado em backend\.env"
+            }
+            $script:cpPublicUrl = $novaUrl
             Nota 'ATENCAO: esse endereco e o IP que o seu roteador deu a esta maquina, e ele PODE MUDAR'
             Nota '(reinicio do roteador, DHCP renovando). Quando mudar, o QR e o link param de funcionar:'
             Nota 'rode este instalador de novo pra regravar o endereco novo.'
