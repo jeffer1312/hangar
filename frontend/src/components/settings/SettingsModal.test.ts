@@ -28,7 +28,7 @@ vi.mock('../../lib/auth', () => ({
   updateServer: vi.fn(() => true),
   removeServer: vi.fn(),
   addServer: vi.fn(),
-  parseServerPairing: vi.fn(),
+  validarPareamento: vi.fn(),
   clearCredentials: vi.fn(),
   onServersChanged: vi.fn(() => () => {}),
 }));

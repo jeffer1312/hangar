@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { addServer, removeServer, selectServer, getActiveId, getBaseUrl } from '../lib/auth';
+  import { addServer, removeServer, selectServer, getActiveId, getBaseUrl, validarPareamento } from '../lib/auth';
   import { getSessions } from '../lib/api';
   import { syncStatus, register as syncRegister, login as syncLogin } from '../lib/sync';
   import QrScanner from '../components/QrScanner.svelte';
@@ -26,34 +26,47 @@
   let syncLoading = $state(false);
   let syncError = $state('');
 
-  // The QR encodes the pairing URL (…/?token=…). Pull the token (and optional ?api=)
-  // out of it — or accept a bare token — then connect. Needed because an installed iOS
-  // PWA has its own storage, so it must be paired once from inside the app.
+  // The QR encodes the pairing URL (…/?token=…). Passa pelo MESMO validarPareamento estrito do
+  // manual/deep-link: QR inválido NÃO conecta nem fecha silencioso — erro visível, form aberto pra
+  // escanear de novo ou digitar. Token cru sem URL não é aceito aqui (só o saveToken do
+  // ServerManager usa aceitarTokenCru). Necessário porque um PWA iOS instalado tem storage próprio.
   function handleScan(text: string) {
-    let tok = text.trim();
-    try {
-      const u = new URL(text);
-      const t = u.searchParams.get('token');
-      if (t) tok = t;
-      // baseUrl ABSOLUTO: ?api= se houver, senão a origem da própria URL do QR.
-      baseUrl = u.searchParams.get('api') ?? u.origin;
-    } catch {
-      /* not a URL — treat as a raw token */
-    }
+    const cru = text.trim();
+    const pareamento = validarPareamento(cru);
     scanning = false;
-    if (!tok) return;
-    token = tok;
+    if (!pareamento) {
+      error = cru.includes('://')
+        ? 'QR inválido — use a URL de pareamento (http/https com ?token=).'
+        : 'QR sem URL — escaneie a URL de pareamento do servidor.';
+      return;
+    }
+    baseUrl = pareamento.base;
+    token = pareamento.token;
     void connect();
   }
 
   async function connect() {
+    // Valida ANTES de tocar storage (round 4 da 4b): URL/token inválidos não chamam addServer, não
+    // alteram storage e não navegam. Campos separados (URL + token) -> monta o texto de pareamento
+    // e passa pelo MESMO validarPareamento estrito do QR/deep-link.
+    const base = baseUrl.trim();
+    const tok = token.trim();
+    const cru = base + (base.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(tok);
+    const pareamento = validarPareamento(cru);
+    if (!pareamento) {
+      error = !base || !tok
+        ? 'Informe a URL do servidor e o token.'
+        : 'URL ou token inválidos — use http/https com o token (sem espaços).';
+      return;
+    }
+
     loading = true;
     error = '';
 
     // Adiciona+ativa o servidor (api.ts já lê o ativo). Em falha, rollback: se era novo remove e
     // restaura o ativo anterior — pra um login ruim não sujar a lista nem trocar o server bom.
     const prevActive = getActiveId();
-    const { id, existed } = addServer(baseUrl.trim(), token.trim());
+    const { id, existed } = addServer(pareamento.base, pareamento.token);
 
     try {
       await getSessions();

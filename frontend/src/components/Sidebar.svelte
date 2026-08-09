@@ -1312,7 +1312,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 {/if}
 
 <!-- Adicionar servidor (do menu de conta): colar a URL de pareamento (com token) ou escanear QR.
-     Mesma rota de parse do QR (parseServerPairing). Estilo dos modais do desktop (confirm-card). -->
+     Mesma rota de parse do QR (validarPareamento estrito). Estilo dos modais do desktop (confirm-card). -->
 {#if showAddServer}
   <ConfirmDialog title="Adicionar servidor" aria="Adicionar servidor" role="dialog"
     onClose={() => (showAddServer = false)}

@@ -20,7 +20,7 @@ let cookieJar = '';
 // assim que o openSessionsStream (api.ts) autentica o servidor que hospeda o proprio PWA.
 (globalThis as any).window = { location: { origin: 'http://casa:8765' } };
 
-const { mergeServers, parseServerPairing, onServersChanged, removeServer,
+const { mergeServers, validarPareamento, onServersChanged, removeServer,
         addServer, updateServer, listServers, selectServer } = await import('./auth');
 
 const S = (id: string, baseUrl: string, token = 't') => ({ id, label: id, baseUrl, token });
@@ -52,56 +52,20 @@ describe('mergeServers', () => {
   });
 });
 
-describe('parseServerPairing', () => {
-  it('URL com ?token= -> origin + token', () => {
-    expect(parseServerPairing('https://pc.ts.net/?token=abc123')).toEqual({
-      base: 'https://pc.ts.net',
-      token: 'abc123',
-    });
+describe('parseServerPairing removido (round 4 da 4b)', () => {
+  it('função não existe mais — a validação tem UMA entrada (validarPareamento)', async () => {
+    const auth = await import('./auth');
+    expect((auth as unknown as { parseServerPairing?: unknown }).parseServerPairing).toBeUndefined();
   });
 
-  it('?api= sobrepoe o origin (backend atras de proxy)', () => {
-    expect(parseServerPairing('https://app.com/?api=https://backend:8765&token=xyz')).toEqual({
-      base: 'https://backend:8765',
-      token: 'xyz',
-    });
-  });
-
-  it('espacos em volta sao ignorados', () => {
-    expect(parseServerPairing('  https://pc.ts.net/?token=t9  ')).toEqual({
-      base: 'https://pc.ts.net',
-      token: 't9',
-    });
-  });
-
-  it('token cru sem URL -> null (sem origem confiavel)', () => {
-    expect(parseServerPairing('abc123')).toBeNull();
-  });
-
-  // Premissas dos dois guards do AccountMenu.saveToken. Documentam ARMADILHAS reais desta funcao,
-  // descobertas quando a primeira versao do teste falhou por assumir que tudo isso dava null.
-  it('URL malformada (new URL lanca) -> null', () => {
-    expect(parseServerPairing('https:// pc.ts.net/?token=abc')).toBeNull();   // espaco no meio
-  });
-
-  it('URL SEM ?token= devolve o proprio texto como token — a UI precisa barrar', () => {
-    // NAO e null: a funcao so substitui `tok` quando ACHA o parametro. Colar a URL do app copiada
-    // da barra de enderecos (que ja teve o token removido) devolveria a URL inteira como credencial.
-    expect(parseServerPairing('https://pc.ts.net')).toEqual({
-      base: 'https://pc.ts.net',
-      token: 'https://pc.ts.net',
-    });
-  });
-
-  it('esquema torto passa, com origin virando a STRING "null"', () => {
-    // Pre-existente e fora do caminho da troca de token (que so usa o token, nunca o base), mas
-    // fica registrado: o fluxo de ADICIONAR servidor gravaria "null" como baseUrl.
-    expect(parseServerPairing('htp://pc.ts.net?token=abc')).toEqual({ base: 'null', token: 'abc' });
-  });
-
-  it('vazio -> null', () => {
-    expect(parseServerPairing('')).toBeNull();
-    expect(parseServerPairing('   ')).toBeNull();
+  it('validarPareamento é pura: não toca storage nem cookie', () => {
+    store.clear();
+    cookieJar = '';
+    store.set('cp_token', 'guardar-isto');
+    validarPareamento('https://pc.ts.net/?token=abc');
+    validarPareamento('   ');
+    expect(store.get('cp_token')).toBe('guardar-isto');
+    expect(cookieJar).toBe('');
   });
 });
 

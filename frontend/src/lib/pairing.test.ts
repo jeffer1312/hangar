@@ -51,4 +51,27 @@ describe('validarPareamento', () => {
     expect(validarPareamento('')).toBeNull();
     expect(validarPareamento('   ')).toBeNull();
   });
+
+  it('recusa token com whitespace interno (round 4)', () => {
+    expect(validarPareamento('https://host/?token=ab%20cd')).toBeNull();   // %20 decodifica p/ espaço
+    expect(validarPareamento('https://host/?token=ab+cd')).toBeNull();     // `+` também é espaço
+  });
+
+  it('recusa token duplicado e api duplicada (round 4)', () => {
+    expect(validarPareamento('https://host/?token=one&token=two')).toBeNull();
+    expect(validarPareamento('https://host/?token=abc&api=https://b&api=https://c')).toBeNull();
+  });
+
+  it('recusa api com whitespace (round 4)', () => {
+    expect(validarPareamento('https://host/?token=abc&api=https://ho%20st')).toBeNull();
+  });
+
+  it('token cru sem aceitarTokenCru -> null; com a opção vira { base: "", token }', () => {
+    expect(validarPareamento('abc123', { aceitarTokenCru: true })).toEqual({ base: '', token: 'abc123' });
+    expect(validarPareamento('  abc123  ', { aceitarTokenCru: true })).toEqual({ base: '', token: 'abc123' });
+  });
+
+  it('token cru com espaço NÃO passa nem com aceitarTokenCru (round 4)', () => {
+    expect(validarPareamento('ab cd', { aceitarTokenCru: true })).toBeNull();
+  });
 });

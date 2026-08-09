@@ -239,39 +239,48 @@ export function updateServer(id: string, patch: { token?: string; baseUrl?: stri
   return true;
 }
 
-// Extrai base (origin do backend) + token de um texto de pareamento — o mesmo conteudo que o QR
-// carrega: uma URL com ?token=… (e opcional ?api=… apontando o backend por tras de um proxy). Token
-// cru sem URL nao tem origem confiavel -> null. Pura/testavel (nao toca storage): usada tanto pelo
-// scan do QR quanto pelo colar manual da URL no desktop (mesma rota de parse).
-export function parseServerPairing(text: string): { base: string; token: string } | null {
-  let tok = text.trim();
-  let base = '';
-  try {
-    const u = new URL(text);
-    const t = u.searchParams.get('token');
-    if (t) tok = t;
-    base = u.searchParams.get('api') ?? u.origin;
-  } catch {
-    base = ''; // token cru sem URL -> sem origem confiavel
-  }
-  if (!tok || !base) return null;
-  return { base, token: tok };
+export interface PareamentoValido {
+  base: string;    // origin do backend (ou ?api=); '' quando token cru (só com aceitarTokenCru)
+  token: string;
 }
 
-// Validação ESTRITA de texto de pareamento (manual e QR — mesma função, round 2 da 4b): a base
+// Validação ESTRITA de texto de pareamento (manual e QR — uma função só, round 4 da 4b): a base
 // precisa ser absoluta com hostname e protocolo http/https (htp://, ftp:// e api vazia caem fora),
-// o token não pode ser vazio e uma URL sem ?token= é recusada. Devolve null sem tocar storage.
-export function validarPareamento(texto: string): { base: string; token: string } | null {
+// o token não pode ser vazio nem conter whitespace, nenhum parâmetro pode vir duplicado (token/api)
+// e uma URL sem ?token= é recusada. Com `aceitarTokenCru` — USO EXCLUSIVO do ServerManager.saveToken
+// — aceita um token cru (não vazio e sem whitespace) quando o texto NÃO é URL. Devolve null sem
+// tocar storage.
+export function validarPareamento(
+  texto: string,
+  opts?: { aceitarTokenCru?: boolean },
+): PareamentoValido | null {
   const cru = texto.trim();
+  if (!cru) return null;
+
+  // Token cru (não é URL): só com a opção explícita, e sem whitespace interno.
+  if (!cru.includes('://')) {
+    if (!opts?.aceitarTokenCru) return null;
+    if (/\s/.test(cru)) return null;
+    return { base: '', token: cru };
+  }
+
   let url: URL;
   try { url = new URL(cru); } catch { return null; }
   if ((url.protocol !== 'http:' && url.protocol !== 'https:') || !url.hostname) return null;
-  const token = url.searchParams.get('token')?.trim() ?? '';
-  if (!token) return null;
+
+  // EXATAMENTE um token, não vazio, sem whitespace (getAll pega duplicatas; `+` decodifica pra espaço).
+  const tokens = url.searchParams.getAll('token');
+  if (tokens.length !== 1) return null;
+  const token = tokens[0];
+  if (!token || /\s/.test(token)) return null;
+
+  // api ausente OU exatamente uma URL http/https com hostname e sem whitespace.
+  const apis = url.searchParams.getAll('api');
+  if (apis.length > 1) return null;
   let base = url.origin;
-  // `get` devolve '' para `api=` — PRESENTE até vazio deve falhar, não cair na base da URL.
-  const api = url.searchParams.get('api');
-  if (api !== null) {
+  if (apis.length === 1) {
+    const api = apis[0];
+    if (!api || /\s/.test(api)) return null;
     let apiUrl: URL;
     try { apiUrl = new URL(api); } catch { return null; }
     if ((apiUrl.protocol !== 'http:' && apiUrl.protocol !== 'https:') || !apiUrl.hostname) return null;

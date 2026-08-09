@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { serverColor, parseServerPairing } from '../lib/auth';
+  import { serverColor, validarPareamento } from '../lib/auth';
   import { vaultPush } from '../lib/vaultPush.svelte';
   import type { Server } from '../lib/auth';
 
@@ -69,29 +69,22 @@
       return;
     }
 
-    const parsed = parseServerPairing(text);
-    // Parece URL mas nao parseou: RECUSA em vez de aceitar o texto inteiro como token. O fluxo de
-    // "Adicionar servidor" ja rejeita este mesmo caso com mensagem; aceitar aqui gravava a URL
-    // quebrada COMO token, e o campo e password — o usuario nao ve o lixo que ficou salvo. O
-    // sintoma vinha depois como 401, sem pista nenhuma de que foi um paste malformado.
-    const pareceUrl = text.includes('://');
-    if (pareceUrl && !parsed) {
-      tokenError = 'URL de pareamento inválida — cole a URL completa (com ?token=) ou só o token.';
-      return;                                   // campo CONTINUA aberto, com o texto, pra corrigir
-    }
-    // URL que PARSEOU mas nao tinha ?token=: o parseServerPairing so substitui o token quando acha o
-    // parametro — sem ele, devolve o proprio texto como "token". Ou seja, colar a URL do app copiada
-    // da barra de enderecos (que ja teve o token removido) gravaria a URL INTEIRA como credencial,
-    // sem erro nenhum. O guard de cima nao pega isto, porque aqui `parsed` nao e nulo.
-    if (pareceUrl && parsed && parsed.token === text) {
-      tokenError = 'essa URL não tem ?token= — cole a URL de pareamento completa ou só o token.';
+    const parsed = validarPareamento(text, { aceitarTokenCru: true });
+    // RECUSA em vez de aceitar lixo como token: URL malformada (esquema torto, sem ?token=, token
+    // duplicado/espacado) ou token cru com espaço. O campo e password — o usuario nao ve o lixo que
+    // ficaria salvo; gravar aqui era o 401 sem pista que chegava depois. O campo CONTINUA aberto,
+    // com o texto, pra corrigir.
+    if (!parsed) {
+      tokenError = text.includes('://')
+        ? 'URL de pareamento inválida — cole a URL completa (com ?token=) ou só o token.'
+        : 'token inválido — não pode conter espaços.';
       return;
     }
     // So o TOKEN. O botao diz "Trocar token": colar a URL de pareamento de outra maquina nao pode
     // reapontar calado um servidor ja cadastrado (com label e historico) pra outro host.
-    const token = parsed ? parsed.token : text;
+    const token = parsed.token;
     const alvo = servers.find((s) => s.id === id);
-    const outroHost = parsed && alvo && parsed.base.replace(/\/+$/, '') !== alvo.baseUrl.replace(/\/+$/, '');
+    const outroHost = parsed.base && alvo && parsed.base.replace(/\/+$/, '') !== alvo.baseUrl.replace(/\/+$/, '');
 
     vaultPush.clear();                          // tentativa NOVA: agora sim zera o resultado antigo
     const ok = onUpdateToken(id, token);
