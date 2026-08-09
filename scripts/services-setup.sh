@@ -151,6 +151,13 @@ if [[ "$BACKEND_ONLY" == 1 || "$SERVE" == backend ]]; then
   rm -f "$SD_DIR/$FRONT"
   if [[ "$BACKEND_ONLY" == 1 ]]; then log "Skipping $FRONT (--backend-only)"; else log "Skipping $FRONT (o backend serve a interface no 8765)"; fi
 else
+# O bind do preview vem da MESMA variavel do backend (backend/.env). systemd nao le .env sozinho,
+# entao a unit precisa RECEBER a variavel — senao o vite cai no padrao 127.0.0.1 e, num servidor
+# atras de reverse proxy, o front fica inalcancavel com a unit `active` (medido na VPS: o traefik
+# do Coolify fala com o vite por host.docker.internal, nao por loopback).
+BIND_IP="$(grep -sE '^CP_LAN_BIND_IP=' "$REPO/backend/.env" | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r ')"
+BIND_ENV=""
+[[ -n "$BIND_IP" ]] && BIND_ENV="Environment=CP_LAN_BIND_IP=$BIND_IP"$'\n'
 escreve_unit "$FRONT" "$(cat <<EOF
 [Unit]
 Description=hangar frontend (Vite preview, serve o build)
@@ -159,7 +166,7 @@ After=network.target
 [Service]
 WorkingDirectory=$REPO/frontend
 Environment=PATH=$NODE_BIN:/usr/local/bin:/usr/bin:/bin
-ExecStart=$NODE_BIN/npm run preview
+${BIND_ENV}ExecStart=$NODE_BIN/npm run preview
 Restart=on-failure
 RestartSec=2
 

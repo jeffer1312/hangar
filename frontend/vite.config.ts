@@ -104,6 +104,12 @@ export default defineConfig({
   // Espelha o server: proxy /api -> backend (same-origin -> cookie cp_token chega no SSE), hosts do
   // tailnet, porta fixa. Sem isto o preview nao herdaria o proxy (e o app nao falaria com o backend).
   preview: {
+    // MESMA variável do backend (CP_LAN_BIND_IP), e loopback por padrão — a postura do projeto é
+    // LAN/VPN só quando alguém pede. Sem isto o preview liga em 127.0.0.1 SEMPRE, e num servidor
+    // atrás de reverse proxy o front morre: na VPS o traefik do Coolify fala com o vite por
+    // host.docker.internal (10.0.0.1), não por loopback — connection refused, com a unit `active` e
+    // o systemctl afirmando que está tudo bem. Medido em 09/08/2026 pela sessão da VPS.
+    host: process.env.CP_LAN_BIND_IP || '127.0.0.1',
     port: 5173,
     strictPort: true,
     cors: false,
