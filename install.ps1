@@ -600,11 +600,11 @@ if (-not (Test-Path $slJs)) {
     }
 }
 
-# -- 5b/8 Publicar o backend no Tailscale -------------------------------------
+# -- 5d/8 Publicar o backend no Tailscale -------------------------------------
 # FORA do passo 6 de proposito: aquele e pulado inteiro no -Update (install.ps1:564), e -Update e o
 # caminho do hook post-merge, ou seja como as maquinas ja instaladas se atualizam. Uma migracao que
 # so roda na instalacao interativa nunca alcanca quem precisa dela.
-Titulo '5b/8 Publicar o backend no Tailscale'
+Titulo '5d/8 Publicar o backend no Tailscale'
 $script:cpPublicUrl = $null
 $portaBack = Porta-Do-Env 'CP_PORT' 8765
 if (-not (Tem 'tailscale')) {
@@ -665,8 +665,19 @@ if (-not (Tem 'tailscale')) {
             if ($script:cpPublicUrl) {
                 # E isto que conserta o QR do BACKEND tambem: com public_url preenchido, pairing_url
                 # (backend/app/config.py:211) ignora porta e bind e usa este endereco.
-                Set-EnvKey -Chave 'CP_PUBLIC_URL' -Valor $script:cpPublicUrl
-                Ok "CP_PUBLIC_URL=$($script:cpPublicUrl) gravado em backend\.env"
+                #
+                # So GRAVA se o valor mudou. Sem este check, a rodada idempotente (linha "tailscale
+                # ja publica") reescrevia o .env e dizia "gravado" toda vez, mesmo sem nada ter
+                # mudado - sugeria uma escrita que nao aconteceu. Mesmo padrao Select-String -Quiet
+                # de $temToken acima.
+                $jaTinhaEsseValor = (Test-Path $envFile) -and (Select-String -Path $envFile `
+                    -Pattern "^CP_PUBLIC_URL=$([regex]::Escape($script:cpPublicUrl))\s*$" -Quiet)
+                if ($jaTinhaEsseValor) {
+                    Ok "CP_PUBLIC_URL=$($script:cpPublicUrl) ja registrado em backend\.env"
+                } else {
+                    Set-EnvKey -Chave 'CP_PUBLIC_URL' -Valor $script:cpPublicUrl
+                    Ok "CP_PUBLIC_URL=$($script:cpPublicUrl) gravado em backend\.env"
+                }
             }
         }
     } finally { $ErrorActionPreference = $eapAnt }
@@ -861,12 +872,43 @@ if ($jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu l
     # Pelo wscript, igual as outras tarefas, e NAO por `powershell -WindowStyle Hidden`: aquele
     # parametro nao impede o console de EXISTIR (medido acima: duas janelas paradas na barra).
     # Numa tarefa que roda a cada 5 minutos, isso seria uma piscada de janela pra sempre.
-    $vigiaPs = "if (-not (Get-NetTCPConnection -State Listen -LocalPort $portaBack -ErrorAction SilentlyContinue)) { Start-ScheduledTask -TaskName 'hangar-backend' }"
+    #
+    # A vigia so pode disparar `Start-ScheduledTask` se NENHUM backend deste checkout ja estiver
+    # subindo - sem isto ela pode criar uma SEGUNDA instancia colidindo na porta: o .vbs usa
+    # Run(...,0,False), que nao espera, entao a tarefa termina na largada e fica `State=Ready`
+    # muito antes do `uv run python -m app.main` abrir a porta. Um boot lento (disco, antivirus,
+    # primeira sincronizacao do uv) passando dos 5 min do tick seguinte via a porta ainda fechada
+    # e chama `Start-ScheduledTask` de novo.
+    #
+    # UNIAO dos dois criterios, nao intersecao - medido na maquina real em 09/08/2026: a arvore
+    # do backend e uv.exe -> python.exe (.venv\Scripts, cita o caminho do checkout) -> python.exe
+    # (interpretador do uv em AppData\Roaming\uv\..., NUNCA cita o checkout). So o uv.exe do topo
+    # e o NETO que segura a porta citam `-m app.main`; so o do MEIO cita o caminho. Filtrar por
+    # um so dos dois criterios perde o processo que importa (o neto que segura o socket, ou o
+    # pai). E o filtro de NOME (-Name -match 'uv|python') fica pra nao contar espectador nenhum -
+    # terminal/editor/grep que so MENCIONE "app.main" ou o caminho numa linha de comando alheia -
+    # o mesmo cuidado que Pare-Servico ja tem com -Exe (nunca so caminho, sempre caminho + nome).
+    $vigiaPadraoAppMain = [regex]::Escape('app.main')
+    $vigiaPadraoCaminho = $tarefas[0].Padrao   # regex do checkout do backend, ja escapado (acima)
+    $vigiaExeProc = $tarefas[0].ExeProc        # 'uv|python'
+    $vigiaLog = Join-Path $env:LOCALAPPDATA "hangar\hangar-vigia.log"   # mesmo lugar dos outros .log
+    # Here-string de aspas SIMPLES (@'...'@): zero interpolacao, entao `$_` e `$subindo` sobrevivem
+    # literais sem precisar de crase nenhuma - o script so vira real quando o `.Replace()` abaixo
+    # troca os tokens, e `.Replace()` e substituicao LITERAL (nao regex), entao as barras invertidas
+    # de $vigiaPadraoCaminho (saida de [regex]::Escape) nao viram sequencia de escape de ninguem.
+    $vigiaTemplate = @'
+& { $subindo = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and ($_.CommandLine -match '__APPMAIN__' -or $_.CommandLine -match '__CAMINHO__') -and $_.Name -match '__EXE__' }); if ((-not (Get-NetTCPConnection -State Listen -LocalPort __PORTA__ -ErrorAction SilentlyContinue)) -and $subindo.Count -eq 0) { Start-ScheduledTask -TaskName 'hangar-backend' } } *>&1 | Out-File -FilePath '__LOG__' -Encoding utf8
+'@
+    # Numa linha so, sem quebra: um `.Replace(...)` iniciando a linha seguinte arrisca ser lido
+    # como dot-sourcing pelo parser (mesmo com crase antes), e nenhuma das duas formas de quebra
+    # de linha do resto do arquivo (crase, ou deixar parentese/vírgula aberto) cobre encadeamento
+    # de metodo com seguranca - a mais simples e nao quebrar.
+    $vigiaPs = $vigiaTemplate.Replace('__APPMAIN__', $vigiaPadraoAppMain).Replace('__CAMINHO__', $vigiaPadraoCaminho).Replace('__EXE__', $vigiaExeProc).Replace('__PORTA__', "$portaBack").Replace('__LOG__', $vigiaLog)
     $vigiaEnc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($vigiaPs))
     $vigiaVbs = Join-Path $env:LOCALAPPDATA "hangar\hangar-vigia.vbs"   # mesmo lugar dos outros .vbs
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $vigiaVbs) | Out-Null
     Set-Content -Path $vigiaVbs -Encoding ASCII -Value @"
-CreateObject("WScript.Shell").Run "powershell -NoProfile -EncodedCommand $vigiaEnc", 0, False
+CreateObject("WScript.Shell").Run "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $vigiaEnc", 0, False
 "@
     # -AtLogOn + repeticao, e nao -Once com horario absoluto: a serie precisa sobreviver a reboot e
     # suspensao, que sao os dois casos que a vigia existe pra cobrir.
