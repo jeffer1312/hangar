@@ -721,6 +721,38 @@ if ($regras.Count -eq 2) {
     }
 }
 
+# So aqui, nunca no bloco 5b: esta pergunta e do dono, e o -Update roda sozinho pelo post-merge.
+if (-not $script:cpPublicUrl) {
+    Write-Host '  Sem Tailscale configurado. De onde voce vai usar?'
+    Write-Host '    [1] So nesta maquina  - o app de desktop. Sem QR (nao ha o que ler do celular).'
+    Write-Host '    [2] Rede de casa      - celular no mesmo Wi-Fi.'
+    $escolha = Read-Host '  1 ou 2 (Enter = 1)'
+    if ($escolha -eq '2') {
+        Set-EnvKey -Chave 'CP_LAN_BIND_IP' -Valor 'auto'
+        Ok 'CP_LAN_BIND_IP=auto gravado - o backend passa a escutar na rede local'
+        # O IP entra no CP_PUBLIC_URL porque, sem ele, pairing_url monta a URL sobre o front_port
+        # (config.py:215) = 5173, e o Vite escuta so em loopback: o QR sairia apontando pra uma porta
+        # onde nada responde na LAN. Com a chave gravada, o curto-circuito de config.py:211 usa este
+        # endereco e o QR passa a valer.
+        $ipLan = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                  Where-Object { $_.IPAddress -notmatch '^(127\.|169\.254\.)' -and $_.PrefixOrigin -ne 'WellKnown' } |
+                  Select-Object -First 1 -ExpandProperty IPAddress)
+        if ($ipLan) {
+            Set-EnvKey -Chave 'CP_PUBLIC_URL' -Valor "http://${ipLan}:$portaBack"
+            $script:cpPublicUrl = "http://${ipLan}:$portaBack"
+            Ok "CP_PUBLIC_URL=http://${ipLan}:$portaBack gravado"
+            Nota 'ATENCAO: esse endereco e o IP que o seu roteador deu a esta maquina, e ele PODE MUDAR'
+            Nota '(reinicio do roteador, DHCP renovando). Quando mudar, o QR e o link param de funcionar:'
+            Nota 'rode este instalador de novo pra regravar o endereco novo.'
+        } else {
+            Falta 'nao achei um IP de rede local - o QR fica sem endereco valido; use Tailscale ou fixe o IP'
+        }
+        Nota 'O token do .env vira a UNICA tranca: quem estiver no Wi-Fi e souber o token roda comando como voce.'
+    } else {
+        Ok 'ficando so em 127.0.0.1'
+    }
+}
+
 if (Tem 'tailscale') {
     Ok 'Tailscale ja instalado'
     if (-not $script:cpPublicUrl) {
