@@ -173,7 +173,18 @@ if [[ "$BIND_IP" == "auto" ]]; then
   [[ -z "$BIND_IP" ]] && BIND_IP="127.0.0.1"
 fi
 BIND_ENV=""
-[[ -n "$BIND_IP" ]] && BIND_ENV="Environment=CP_LAN_BIND_IP=$BIND_IP"$'\n'
+# VALIDA antes de escrever: `Environment=CP_LAN_BIND_IP=192.168. 1.10` (espaco no meio, erro de
+# digitacao plausivel) e lido pelo systemd como DUAS atribuicoes — a variavel fica truncada em
+# "192.168." e o resto vira "Invalid environment assignment, ignoring" no journal, que ninguem le na
+# hora. Valor que nao parece IP/host: avisa ALTO e nao escreve a linha, em vez de propagar lixo.
+if [[ -n "$BIND_IP" ]]; then
+  if [[ "$BIND_IP" =~ ^[A-Za-z0-9_.:-]+$ ]]; then
+    BIND_ENV="Environment=CP_LAN_BIND_IP=$BIND_IP"$'\n'
+  else
+    echo "AVISO: CP_LAN_BIND_IP em backend/.env tem valor invalido ([$BIND_IP]) — a unit do frontend" >&2
+    echo "       vai sem bind e o vite cai no padrao 127.0.0.1. Corrija o .env e rode de novo." >&2
+  fi
+fi
 escreve_unit "$FRONT" "$(cat <<EOF
 [Unit]
 Description=hangar frontend (Vite preview, serve o build)
