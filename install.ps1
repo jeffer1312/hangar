@@ -851,6 +851,37 @@ if ($jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu l
     Nota 'Log (inclui o QR de pareamento):'
     Nota "  $env:LOCALAPPDATA\hangar\hangar-backend.log"
     Nota 'Remover depois: Unregister-ScheduledTask -TaskName hangar-backend'
+
+    # Vigia: a tarefa dos servicos dispara no LOGON, e suspensao mata o processo sem passar por
+    # logoff/logon - nada reergue, e o dono descobre pelo 502 no celular, longe do PC (foi o que
+    # aconteceu em 08/08/2026). NAO trocamos o gatilho por conta de servico: isso tiraria o backend
+    # da sessao interativa, que e o que lhe da o clipboard - o caminho de envio do Windows
+    # (backend/app/tmux.py, paste_via_clipboard). Consertaria o boot e quebraria o envio.
+    #
+    # Pelo wscript, igual as outras tarefas, e NAO por `powershell -WindowStyle Hidden`: aquele
+    # parametro nao impede o console de EXISTIR (medido acima: duas janelas paradas na barra).
+    # Numa tarefa que roda a cada 5 minutos, isso seria uma piscada de janela pra sempre.
+    $vigiaPs = "if (-not (Get-NetTCPConnection -State Listen -LocalPort $portaBack -ErrorAction SilentlyContinue)) { Start-ScheduledTask -TaskName 'hangar-backend' }"
+    $vigiaEnc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($vigiaPs))
+    $vigiaVbs = Join-Path $env:LOCALAPPDATA "hangar\hangar-vigia.vbs"   # mesmo lugar dos outros .vbs
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $vigiaVbs) | Out-Null
+    Set-Content -Path $vigiaVbs -Encoding ASCII -Value @"
+CreateObject("WScript.Shell").Run "powershell -NoProfile -EncodedCommand $vigiaEnc", 0, False
+"@
+    # -AtLogOn + repeticao, e nao -Once com horario absoluto: a serie precisa sobreviver a reboot e
+    # suspensao, que sao os dois casos que a vigia existe pra cobrir.
+    $vigiaGatilho = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $vigiaGatilho.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
+                                -RepetitionInterval (New-TimeSpan -Minutes 5)).Repetition
+    # -Settings com bateria: o default e DisallowStartIfOnBatteries=$true, e a maquina que suspende
+    # e justamente o notebook - a vigia ficaria morta exatamente quando e necessaria, e o teste na
+    # tomada passaria. As tarefas existentes ja passam estes dois (acima).
+    $vigiaSet = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    Register-ScheduledTask -TaskName 'hangar-vigia' `
+        -Action (New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$vigiaVbs`"") `
+        -Trigger $vigiaGatilho -Settings $vigiaSet `
+        -Principal (New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive) -Force | Out-Null
+    Ok 'vigia registrada (checa a cada 5 min e reergue o backend)'
     } catch {
         Falta "nao deu pra registrar as tarefas: $_"
         Nota 'Sem isso, o backend so roda enquanto o terminal estiver aberto.'
