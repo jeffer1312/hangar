@@ -147,6 +147,49 @@ for antigo in "$APPS/claude-cockpit.desktop" "$APPS/hangar.desktop"; do
     log "lançador migrado: $APPS/hangar.desktop"
 done
 
+# ── 3d. Estado do tmux-resurrect ─────────────────────────────────────────────
+# O snapshot do resurrect guarda o cwd de cada pane E o nome da sessão, e o continuum restaura
+# sozinho no boot do servidor tmux (@continuum-restore on). Depois do rename ele ressuscita uma
+# sessão "claude-cockpit" apontando pra pasta que não existe mais: o tmux cai pro $HOME e o hook de
+# resume roda `claude --resume <uuid>` lá, onde o transcript não está -> "No conversation found".
+# Medido em 09/08/2026 nesta máquina: abrir o `pi` (primeiro tmux da máquina) fazia nascer junto uma
+# sessão claude morta, e ela voltava toda vez, porque @continuum-save-interval é 0 — o snapshot só
+# se corrige num save manual, nunca sozinho.
+# NÃO dá pra usar "$OLD" aqui: numa máquina onde a pasta já foi renomeada $OLD == $NEW e o caminho
+# antigo só existe dentro destes arquivos. O par de nomes é literal, igual ao das units.
+VELHO="$(dirname "$NEW")/claude-cockpit"
+RESURRECT="${TMUX_RESURRECT_DIR:-$HOME/.local/share/tmux/resurrect}"
+if [[ -d "$RESURRECT" ]]; then
+    for f in "$RESURRECT"/tmux_resurrect_*.txt; do
+        [[ -f "$f" ]] || continue
+        grep -qF "claude-cockpit" "$f" 2>/dev/null || continue
+        # O que CURA o fantasma é o caminho: com o cwd certo o restore volta pra pasta certa e o
+        # `claude --resume` acha o transcript. Isso é sempre seguro e vai primeiro.
+        sed -i "s@$VELHO@$NEW@g" "$f"
+        # O nome da sessão é só cosmético — e renomear pode COLIDIR. Medido em 09/08/2026 nesta
+        # máquina: o snapshot já tinha uma sessão `hangar` viva (o pi) e a troca cega produziu duas
+        # sessões `hangar` no mesmo arquivo, que é pior do que o nome velho. Campos separados por
+        # TAB: casa o campo inteiro (um `claude-cockpit-2` não pode virar `hangar-2`).
+        if ! grep -qE $'^(pane|window)\thangar\t' "$f"; then
+            sed -i -e $'s@^pane\tclaude-cockpit\t@pane\thangar\t@' \
+                   -e $'s@^window\tclaude-cockpit\t@window\thangar\t@' "$f"
+        fi
+        log "snapshot do resurrect migrado: $f"
+    done
+    # Mapa nome->uuid do tmux-claude-resume.sh (é ele que relança o `claude --resume`).
+    tsv="$RESURRECT/claude-sessions.tsv"
+    if [[ -f "$tsv" ]] && grep -q $'^claude-cockpit\t' "$tsv"; then
+        if grep -q $'^hangar\t' "$tsv"; then
+            # Já existe entrada nova: renomear criaria chave duplicada e o restore mandaria DOIS
+            # `claude --resume` pro mesmo pane.
+            sed -i $'/^claude-cockpit\t/d' "$tsv"
+        else
+            sed -i $'s@^claude-cockpit\t@hangar\t@' "$tsv"
+        fi
+        log "mapa de resume migrado: $tsv"
+    fi
+fi
+
 # ── 4. Units systemd ─────────────────────────────────────────────────────────
 if command -v systemctl >/dev/null && [[ -f "$SD/claude-cockpit-backend.service" ]]; then
     log "trocando units claude-cockpit-* por hangar-*"
@@ -190,7 +233,12 @@ if [[ -f "$SD/claude-cockpit-deploy.service" ]]; then
     log "unit de deploy migrada pra hangar-deploy.service"
 fi
 
-# ── 5. Re-instalar symlinks (cp-send, skills, painel) ────────────────────────
+# ── 5. Re-instalar symlinks (cp-send, wrappers, skills, painel) ──────────────
+# O install-claude-wrapper.sh é quem cria ~/.local/bin/cp-codex e cp-engine e escreve as funções de
+# shell. Sem ele aqui, os dois symlinks ficam apontando pra pasta antiga: `codex` e qualquer sessão
+# de motor morrem com "command not found" — e nada na migração denunciava, porque a verificação só
+# olhava o cp-send (medido nesta máquina em 09/08/2026, os dois pendurados no vazio).
+./scripts/install-claude-wrapper.sh
 ./scripts/install-cp-send.sh
 if command -v qs >/dev/null && pgrep -x Hyprland >/dev/null; then
     ./scripts/install-cp-panel.sh
@@ -231,6 +279,16 @@ if command -v curl >/dev/null; then
         falhou=1
     fi
 fi
+
+# Symlink pendurado é o modo de falha típico do rename, e ele é INVISÍVEL: `ls` mostra a linha, o
+# `command -v` acha o arquivo, e só na hora de executar dá "No such file or directory". `-e` segue o
+# link e responde falso quando o alvo sumiu — é o teste que separa link vivo de link morto.
+for l in cp-send cp-codex cp-engine cp-panel-open cp-panel-data cp-panel-action cp-panel-tray; do
+    [[ -L "$HOME/.local/bin/$l" ]] || continue
+    [[ -e "$HOME/.local/bin/$l" ]] && continue
+    echo "ERRO: ~/.local/bin/$l aponta pra $(readlink "$HOME/.local/bin/$l"), que não existe" >&2
+    falhou=1
+done
 
 if command -v cp-send >/dev/null; then
     cp-send --list >/dev/null 2>&1 && log "cp-send ok" \
