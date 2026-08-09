@@ -151,6 +151,61 @@ The mode is **not** one-shot `-p`. It is the long-lived streaming-input process:
 Not a small change — but not speculative either: session lifetime, streaming and transcript
 compatibility are answered, and answered well. What is left is mostly about the app's own surfaces.
 
+## The Windows installer now ends with working access (built and measured 2026-08-09)
+
+Six tasks against `install.ps1`, each verified on the real Windows box before the next one started.
+Plan: `docs/superpowers/plans/2026-08-08-instalador-windows-acesso.md` (git-ignored, local only).
+
+What it does now: publishes the backend on `tailscale serve` and writes `CP_PUBLIC_URL` itself instead
+of telling you to; registers a watchdog that brings the backend back; asks where the phone will connect
+from when there is no Tailscale; and checks the app actually answers before drawing a QR that logs you
+in. The post-merge hook shouts in a block when the auto-update fails, because a silent one-liner is how
+a broken parse reached a machine unnoticed.
+
+**Two defects the final review caught, both of which would have taken the phone offline while printing
+`Pronto`:**
+
+- **An address the backend was not listening on.** `tailscale serve` targets loopback, but the
+  home-network branch wrote `CP_LAN_BIND_IP=auto`, and with `auto` uvicorn binds *only* that interface
+  (`api.py:258`, `pi_inbox.py:183`). The proxy would be refused and every request through the tailnet
+  name — the address written into `CP_PUBLIC_URL` and drawn in the QR — would answer 502. It writes
+  `0.0.0.0` now, the one value where loopback still works.
+- **A token that rotted by itself.** `Set-EnvKey` read the file back with no encoding, which on PS 5.1
+  means ANSI, and it rewrites the whole file on every call — so an accented token, typed at the prompt
+  the installer itself offers, was re-encoded on each run until the phone got 401 with nothing to
+  explain why. Proven fixed at the byte level: `cafezinho` with three accents keeps its `C3 A9 / C3 A7 /
+  C3 A3` sequences across two `-Update` runs.
+
+**The watchdog was measured wrong twice before it worked**, and both times only because someone ran it:
+
+- Repetition hung on an `-AtLogOn` trigger never arms until that trigger fires. Registered at 02:28 with
+  the last logon at 19:53 the day before, the task sat at `LastRunTime` 1999 with an empty
+  `NextRunTime` — registered, pretty in the scheduler, never executing. It now has its own `-Once`
+  trigger armed at registration (plus `-AtLogOn` as a second one), and the installer reads
+  `NextRunTime` back before claiming success. Confirmed firing on its own and restoring the backend with
+  nobody touching anything: killed at 02:54:38, back at 02:59:15 — one tick.
+- Detecting "the backend is already starting" cannot match on the checkout path: the tree is
+  `uv -> python -> python`, the grandchild holds the socket, and **neither the grandparent nor the
+  grandchild names the checkout** — only the middle one does. The criterion is the union (`app.main` in
+  the command line OR executable under the root). And a process counts as starting only if it is
+  *recent*: without an age cut, one hung `uv` — alive forever on Windows — would block the watchdog
+  permanently, which is worse than the race it prevents.
+
+**`Start-ScheduledTask` does not replace a running backend — it adds one.** Measured while restoring the
+`.env` after the token test: the old instance kept the port and the *old token in memory*, the new one
+could not bind 8765 and died silently, so `/api/sessions` answered 401 for the token in the file and 200
+for a token that no longer existed on disk. Harmless for the watchdog, which only starts the task when
+the port is already closed — exactly the condition where the command works — but any future path that
+wants to *restart* the backend needs `Pare-Servico` first, the way step 7 already does.
+
+**Still unverified, and both need the owner:** resuming the suspended VM (suspending it suspends the
+paired session too), and reading the QR with the phone.
+
+Smaller things left behind: `hangar-vigia.log` grows without rotation; the sibling
+`tailscale serve status --json` call still has no timeout on the unattended path; and the machine that
+verified all this had no project-preview slot, so the branch that protects a third-party handler is
+still untested.
+
 ## Windows: the send path has a fix, and it is not a buffer (measured 2026-08-08)
 
 Measured on a real Windows box (psmux 3.3.7, build 05cc5d4 2026-07-20) against a real Claude Code
