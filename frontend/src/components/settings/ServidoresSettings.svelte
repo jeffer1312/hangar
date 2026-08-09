@@ -1,6 +1,7 @@
 <script lang="ts">
   import { listServers, getActiveId, selectServer, renameServer, updateServer, removeServer,
            addServer, parseServerPairing, clearCredentials, onServersChanged } from '../../lib/auth';
+  import { pushSupported } from '../../lib/push';
   import { sessionsStore } from '../../lib/sessionsStore.svelte';
   import ServerManager from '../ServerManager.svelte';
   import PushQuiet from '../PushQuiet.svelte';
@@ -58,21 +59,47 @@
   // Adicionar servidor: colar URL de pareamento (com token) ou QR — mesmo fluxo do Sidebar
   // (mesma rota de parse), com CSS local. O reload no sucesso é deliberado: a lista nova muda
   // ativo/token e o SSE do store precisa renascer limpo.
+  //
+  // Guard equivalente ao editor de token (ServerManager.saveToken): URL que parece pareamento mas
+  // não parseou, ou parseou SEM ?token=, é RECUSADA antes de tocar storage — gravar a URL quebrada
+  // como credencial vira um 401 sem pista depois.
+  function erroPareamento(cru: string): string {
+    if (!cru.includes('://')) return 'Cole a URL de pareamento (com o token).';
+    const parsed = parseServerPairing(cru);
+    if (parsed && parsed.token === cru) return 'essa URL não tem ?token= — cole a URL de pareamento completa.';
+    return 'URL de pareamento inválida — cole a URL completa (com ?token=).';
+  }
+  function parsearPareamento(cru: string): { base: string; token: string } | null {
+    if (!cru.includes('://')) return null;   // token cru sem URL: sem origem confiável
+    const parsed = parseServerPairing(cru);
+    if (!parsed) return null;
+    if (parsed.token === cru) return null;   // URL sem ?token=
+    return parsed;
+  }
   let showAdd = $state(false);
   let addUrlText = $state('');
   let addError = $state('');
   let scanning = $state(false);
   function autofocus(node: HTMLInputElement) { node.focus(); }
   function submitPasteServer() {
-    const parsed = parseServerPairing(addUrlText.trim());
-    if (!parsed) { addError = 'Cole a URL de pareamento (com o token).'; return; }
+    const cru = addUrlText.trim();
+    const parsed = parsearPareamento(cru);
+    if (!parsed) { addError = erroPareamento(cru); return; }
     addServer(parsed.base, parsed.token);
     window.location.reload();
   }
   function handleScan(text: string) {
+    const cru = text.trim();
+    const parsed = parsearPareamento(cru);
+    if (!parsed) {
+      // QR inválido NÃO fecha silencioso: volta pro diálogo com o erro visível (role=alert) e o
+      // usuário pode escanear de novo ou colar à mão.
+      scanning = false;
+      showAdd = true;
+      addError = erroPareamento(cru);
+      return;
+    }
     scanning = false;
-    const parsed = parseServerPairing(text);
-    if (!parsed) return;
     addServer(parsed.base, parsed.token);
     window.location.reload();
   }
@@ -94,9 +121,18 @@
 
   // Sair também pede confirmação: recuperação exige o token/QR de novo.
   let confirmLogout = $state(false);
+  // Logout idempotente: Sair e remover-último podem cair aqui ao mesmo tempo; clearCredentials/
+  // onLogout rodam UMA vez, e enquanto a Promise anda as portas de saída ficam bloqueadas.
+  let logoutInFlight = $state(false);
   async function logout() {
-    clearCredentials();
-    await onLogout();   // App preserva logout do hub, clearKey, encKey e listener do sync
+    if (logoutInFlight) return;
+    logoutInFlight = true;
+    try {
+      clearCredentials();
+      await onLogout();   // App preserva logout do hub, clearKey, encKey e listener do sync
+    } finally {
+      logoutInFlight = false;
+    }
   }
 
   const pushTarget = $derived(
@@ -122,19 +158,25 @@
   onRename={rename}
   onUpdateToken={updateToken}
   onRemove={(id) => {
+    if (logoutInFlight) return;   // logout andando: portas de saída bloqueadas
     const s = servers.find((x) => x.id === id);
     pendingRemoval = { id, label: s?.label ?? id };
   }}
   onAdd={() => { showAdd = true; addUrlText = ''; addError = ''; }}
 />
 
-<div class="ss-sep"></div>
-<PushQuiet target={pushTarget} open={true} />
+{#if pushSupported()}
+  <div class="ss-sep"></div>
+  <PushQuiet target={pushTarget} open={true} />
+{:else}
+  <div class="ss-sep"></div>
+  <p class="ss-muted">Notificações não estão disponíveis neste navegador.</p>
+{/if}
 
 <div class="ss-sep"></div>
 <div class="ss-acoes">
-  <button class="ss-btn" onclick={() => sessionsStore.reconnect()}>Reconectar</button>
-  <button class="ss-btn ss-danger" onclick={() => (confirmLogout = true)}>Sair</button>
+  <button class="ss-btn" onclick={() => sessionsStore.reconnect()} disabled={logoutInFlight}>Reconectar</button>
+  <button class="ss-btn ss-danger" onclick={() => (confirmLogout = true)} disabled={logoutInFlight}>Sair</button>
 </div>
 
 {#if showAdd}

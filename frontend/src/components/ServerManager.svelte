@@ -155,7 +155,9 @@
       <span class="sm-srv-label">{s.label}</span>
       <button class="sm-srv-rename" onclick={() => startRename(s.id, s.label)} aria-label={`Renomear ${s.label}`} title="Renomear">✎</button>
       <button class="sm-srv-rename" onclick={() => startEditToken(s.id)} aria-label={`Trocar token de ${s.label}`} title="Trocar token">🔑</button>
-      <button class="sm-srv-del" onclick={() => onRemove(s.id)} aria-label={`Remover ${s.label}`}>×</button>
+      {#if servers.length > 1 || podeRemoverUltimo}
+        <button class="sm-srv-del" onclick={() => onRemove(s.id)} aria-label={`Remover ${s.label}`}>×</button>
+      {/if}
     {/if}
     {#if onPickTarget}
       <button class="sm-target" class:on={s.id === targetId}

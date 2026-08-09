@@ -32,8 +32,12 @@
   // Depender do ID, nao do objeto: `listServers()` faz JSON.parse a cada chamada (auth.ts), entao
   // `alvo` e um objeto NOVO a cada recomputo — um efeito que dependesse dele recarregaria (e
   // zeraria o rascunho) a cada troca de tela. O `?? '-'` cobre o caso sem alvo (servidor ativo).
+  // Na tela Servidores o store fica EM SILENCIO (zero GET /api/config): quem manda la sao os
+  // controllers proprios (ServerManager/PushQuiet); sair da tela recarrega pro alvo corrente.
   $effect(() => {
     alvo?.id ?? '-';
+    tela;
+    if (tela === 'servidores') return;
     store.carregar();
   });
 

@@ -10,6 +10,8 @@ import type { Server } from './auth';
 export type ValorCampo = string | number | boolean;
 
 export function criarConfigServidor(alvo: () => Server | null) {
+  // Geração do load: trocar de alvo no meio invalida a resposta pendente (ver carregar).
+  let geracao = 0;
   let campos = $state<Record<string, CampoConfig>>({});
   let leitura = $state<Record<string, string | number | boolean>>({});
   let rascunho = $state<Record<string, ValorCampo>>({});
@@ -19,18 +21,21 @@ export function criarConfigServidor(alvo: () => Server | null) {
   let salvo = $state(false);
 
   async function carregar() {
+    const mine = ++geracao;
     carregando = true;
     erro = '';
     try {
       const s = alvo();
       const c = s ? await getConfigForServer(s) : await getConfig();
+      if (mine !== geracao) return;   // alvo mudou no meio: resposta A não pinta o alvo B
       campos = c.campos;
       leitura = c.somente_leitura;
       rascunho = {};
     } catch (e) {
+      if (mine !== geracao) return;
       erro = e instanceof Error ? e.message : 'Falha ao carregar';
     } finally {
-      carregando = false;
+      if (mine === geracao) carregando = false;
     }
   }
 
