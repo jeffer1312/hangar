@@ -850,7 +850,8 @@ $tarefas = @(
 # lugar, deixa a tarefa apontando pro nada - e "ja registrada" esconderia isso. Register-...
 # -Force sobrescreve.
 $jaAgendado = Get-ScheduledTask -TaskName $tarefas[0].Nome -ErrorAction SilentlyContinue
-if ($jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu logon?')) {
+$registrou = $jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu logon?')
+if ($registrou) {
     try {
         foreach ($t in $tarefas) {
             # -Exe pelo caminho completo: a tarefa nasce com o PATH do sistema, nao com o do
@@ -1249,6 +1250,61 @@ if ($morreu) {
     Nota "limpar na mao:  tmux kill-session -t '=$sessao'"
 }
 
+# -- Confere e entrega o acesso -----------------------------------------------
+# CONFERE, nao anuncia — mesma regra do `Pronto` condicional. So quando ha tarefa registrada: quem
+# recusou o passo 7 nao deve esperar 20s por algo que ninguem pediu pra subir.
+$vivo = $false
+if ($jaAgendado -or $registrou) {
+    foreach ($t in 1..10) {
+        if (Get-NetTCPConnection -State Listen -LocalPort $portaBack -ErrorAction SilentlyContinue) { $vivo = $true; break }
+        Start-Sleep -Seconds 2
+    }
+    # Porta escutando, e nao `GET / == 200`: a raiz so devolve 200 se frontend\dist existir
+    # (backend/app/api.py:3391-3393), entao num -Update cujo npm ci falhou o backend estaria VIVO e
+    # o instalador gritaria que nao respondeu. Invoke-WebRequest no PS 5.1 ainda respeita proxy do IE.
+    if ($vivo) {
+        Ok "backend respondendo em 127.0.0.1:$portaBack"
+    } else {
+        Erro "backend NAO subiu em 127.0.0.1:$portaBack"
+        $script:pendencias += 'backend no ar'
+    }
+}
+
+# O QR do backend NAO aparece nesta maquina: print_pairing so desenha se sys.stdout.isatty()
+# (backend/app/main.py:56) e a tarefa roda por wscript, sem console. Entao quem desenha e o
+# instalador, que ESTA num terminal. Quatro detalhes, todos ja pagos neste arquivo:
+#  - `Nativo` engole a saida (install.ps1:65), entao a chamada aqui e direta;
+#  - `uv run` escreve rotina no stderr ("Resolved N packages"), e com $ErrorActionPreference='Stop'
+#    isso vira NativeCommandError -> o preference baixa pra Continue em volta (install.ps1:387-402);
+#  - sem UTF-8 no console os blocos do QR viram '?' na codepage OEM;
+#  - o .env e lido em caminho relativo (backend/app/config.py:83), logo roda de dentro de backend\.
+if ($vivo) {
+    $eapAnt = $ErrorActionPreference
+    $encAnt = $null
+    Push-Location "$raiz\backend"
+    try {
+        $ErrorActionPreference = 'Continue'
+        $encAnt = [Console]::OutputEncoding
+        [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
+        $env:PYTHONIOENCODING = 'utf-8'
+        & uv run python -c "from app.config import settings; from app.main import print_pairing; print_pairing(settings)"
+    } catch {
+        Nota "nao consegui desenhar o QR: $_"
+    } finally {
+        if ($encAnt) { [Console]::OutputEncoding = $encAnt }
+        $ErrorActionPreference = $eapAnt
+        Pop-Location
+    }
+}
+
+# Nunca no -Update: ele roda do hook post-merge, e um `git pull` que abre janela de navegador e
+# hostil. try/catch porque $ErrorActionPreference='Stop' (install.ps1:24) transformaria "sem
+# navegador padrao" em aborto do ultimo passo.
+if ($vivo -and -not $Update) {
+    $abrir = if ($script:cpPublicUrl) { $script:cpPublicUrl } else { "http://127.0.0.1:$portaBack" }
+    try { Start-Process $abrir | Out-Null; Ok "abri $abrir no navegador" } catch { Nota "abra na mao: $abrir" }
+}
+
 # -- Fim ---------------------------------------------------------------------
 # `Pronto` SO quando nada falhou. Antes, um passo com X no meio ainda terminava com 'Pronto' e o
 # texto de boas-vindas abaixo — e quem le a ultima linha acredita nela. Foi assim que o `npm ci`
@@ -1268,7 +1324,7 @@ if ($pendencias.Count -gt 0) {
 }
 Titulo 'Pronto'
 Write-Host @"
-  Abra a interface em http://127.0.0.1:8765 - o proprio backend serve o build que este
+  Abra a interface em http://127.0.0.1:$portaBack - o proprio backend serve o build que este
   instalador gerou, entao ali tem tela e API no mesmo endereco.
   O http://localhost:5173 tambem sobe: e o dev server do vite, com recarga ao vivo, util
   so pra mexer no layout. Ele escuta SO em 127.0.0.1 (vite.config.ts) - do celular se chega
@@ -1278,7 +1334,9 @@ Write-Host @"
       cd backend  ; `$env:CP_LAN_BIND_IP='auto' ; uv run python -m app.main
       cd frontend ; npm run dev
 
-  No celular: abra a URL do QR que o backend imprime e cole o token de backend\.env.
+  O QR acima ja leva o token: ler com a camera do celular abre o app JA conectado.
+  Guarde: quem tiver essa URL entra sem senha. Ela fica no historico do navegador desta
+  maquina, e num navegador logado em conta o historico sincroniza pra nuvem do fornecedor.
   Guia completo (Tailscale, instalar como PWA, cada tela): docs\USAGE.md
 
   O que este Windows ainda NAO tem:
