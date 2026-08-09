@@ -630,7 +630,10 @@ export interface ConfigServidor {
 }
 
 export function getConfig(): Promise<ConfigServidor> {
-  return apiFetch('/api/config');
+  // Prazo igual ao do caminho *ForServer (apiFetchForServer): o servidor ativo atras de VPN nao
+  // recusa conexao — sem teto, abrir Configuracoes prendia a folha em "Carregando..." pra sempre.
+  // Quem precisa de outro prazo (ou de nenhum) passa o proprio signal no init.
+  return apiFetch('/api/config', { signal: AbortSignal.timeout(8000) });
 }
 
 export function getConfigForServer(s: Server): Promise<ConfigServidor> {
@@ -639,7 +642,8 @@ export function getConfigForServer(s: Server): Promise<ConfigServidor> {
 
 export function patchConfig(mudancas: Record<string, unknown>): Promise<{ campos: Record<string, CampoConfig> }> {
   // POST, nao PATCH: o proxy na frente do backend barra PATCH (era o unico do app).
-  return apiFetch('/api/config', { method: 'POST', body: JSON.stringify(mudancas) });
+  // Mesmo teto do GET: servidor vivo demora demais pra rejeitar; sem isso o Salvar travava.
+  return apiFetch('/api/config', { method: 'POST', body: JSON.stringify(mudancas), signal: AbortSignal.timeout(8000) });
 }
 
 export function patchConfigForServer(s: Server, mudancas: Record<string, unknown>): Promise<{ campos: Record<string, CampoConfig> }> {

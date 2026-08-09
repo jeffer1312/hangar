@@ -16,6 +16,11 @@
     alvo: Server | null;
     nomeAlvo: string | null;
     semServidor: boolean;
+    // Identidade COMPOSTA (JSON de id+label+baseUrl+token) do servidor sendo configurado. O store e
+    // o $effect observam ISTO, não `alvo.id`: trocar base/token com o mesmo id (rotação de token,
+    // re-parear) é outra entidade — inicia load novo em vez de achar que é o mesmo alvo. Resolvida
+    // no App inclusive no modo global (aí é o servidor ATIVO, já que `alvo` fica null).
+    identidade: string;
     // Servidor RESOLVIDO (?srv=) + porta de escolha de alvo + logout global — só a tela
     // Servidores usa; o resto continua com `alvo` (apiTarget).
     resolvedServer?: Server | null;
@@ -25,31 +30,29 @@
     onVoltar: () => void;
     onFechar: () => void;
   }
-  let { tela, alvo, nomeAlvo, semServidor, resolvedServer = null, onPickServer, onLogout, onIrPara, onVoltar, onFechar }: Props = $props();
+  let { tela, alvo, nomeAlvo, semServidor, identidade, resolvedServer = null, onPickServer, onLogout, onIrPara, onVoltar, onFechar }: Props = $props();
 
-  const store = criarConfigServidor(() => alvo);
+  const store = criarConfigServidor(() => alvo, () => identidade);
 
-  // Depender do ID, nao do objeto: `listServers()` faz JSON.parse a cada chamada (auth.ts), entao
-  // `alvo` e um objeto NOVO a cada recomputo — um efeito que dependesse dele recarregaria (e
-  // zeraria o rascunho) a cada troca de tela. O `?? '-'` cobre o caso sem alvo (servidor ativo).
   // Na tela Servidores o store fica EM SILENCIO (zero GET /api/config) e a operacao pendente é
   // INVALIDADA sem nova chamada: quem manda la sao os controllers proprios (ServerManager/
-  // PushQuiet). O store SÓ carrega quando (a) o ALVO mudou (limpa o estado do alvo anterior) ou
+  // PushQuiet). O store SÓ carrega quando (a) a IDENTIDADE mudou (troca real de alvo: outro
+  // servidor, ou o mesmo id com base/token/label diferentes — limpa o estado do alvo anterior) ou
   // (b) se voltou de Servidores pro alvo corrente — trocar de tela no MESMO alvo preserva o
-  // rascunho único (decisão do usuário).
-  let alvoAnterior = $state<string | null | undefined>(undefined);
+  // rascunho único (decisão do usuário; o store decide pelo ultimoDono, não pela tela).
+  let identidadeAnterior = $state<string | undefined>(undefined);
   // null no primeiro run: `veioDeServidores` exige telaAnterior === 'servidores', então o boot
   // cai no ramo `mudouAlvo` (carrega) — comportamento idêntico, sem capturar `tela` no $state.
   let telaAnterior = $state<TelaConfig | null>(null);
   $effect(() => {
-    const id = alvo?.id ?? null;
-    const mudouAlvo = id !== alvoAnterior;
+    const id = identidade;
+    const mudouAlvo = id !== identidadeAnterior;
     const veioDeServidores = telaAnterior === 'servidores' && tela !== 'servidores';
-    alvoAnterior = id;
+    identidadeAnterior = id;
     telaAnterior = tela;
     if (tela === 'servidores') { store.invalidar(); return; }
-    if (mudouAlvo) store.carregar(true);
-    else if (veioDeServidores) store.carregar(false);
+    if (mudouAlvo) store.carregar();
+    else if (veioDeServidores) store.carregar();
   });
 
   const TITULO: Record<TelaConfig, string> = {

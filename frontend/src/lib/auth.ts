@@ -289,6 +289,15 @@ export function validarPareamento(
   return { base, token };
 }
 
+// Identidade COMPOSTA do alvo de configuração: id+label+baseUrl+token num JSON estável. O modal
+// observa ISTO, não o id — trocar token/base/label com o MESMO id (rotação de token, re-parear) é
+// OUTRA entidade pra config, e o store precisa recarregar em vez de achar que é o mesmo alvo.
+// `null` (modo global, edita o servidor ATIVO) ganha um rótulo próprio.
+export function serverIdentidade(s: Server | null): string {
+  if (!s) return 'global';
+  return JSON.stringify([s.id, s.label, s.baseUrl, s.token]);
+}
+
 export function selectServer(id: string): boolean {
   // Devolve false quando o id não existe localmente (push antigo, link de outra máquina) — quem
   // navega usa isso pra NÃO montar um chat contra o servidor ativo errado (cross-wire calado).

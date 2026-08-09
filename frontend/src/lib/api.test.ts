@@ -9,7 +9,7 @@ const store = new Map<string, string>();
 (globalThis as any).document = { cookie: '' };
 (globalThis as any).window = { location: { origin: 'https://app.test' } };
 
-const { getConfigForServer, patchConfigForServer, createSession, getHistory, isAbortError, transcribeFile } = await import('./api');
+const { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, isAbortError, transcribeFile } = await import('./api');
 const { listServers, getActiveId } = await import('./auth');
 const server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
 
@@ -87,6 +87,27 @@ describe('chamada a outro servidor tem prazo', () => {
     await expect(getConfigForServer(server)).rejects.toSatisfy(
       (e: unknown) => e instanceof DOMException && (e as DOMException).name === 'AbortError',
     );
+  });
+});
+
+// Round 4: o caminho GLOBAL (servidor ativo) também tinha o mesmo buraco do ForServer — servidor
+// atrás de VPN não recusa conexão e o socket pendurava a folha de Configurações pra sempre.
+describe('config global tem prazo (round 4)', () => {
+  beforeEach(() => {
+    store.set('cp_servers', JSON.stringify([server]));
+    store.set('cp_active', server.id);
+  });
+
+  it('getConfig e patchConfig globais mandam signal por padrão', async () => {
+    // Response nova por chamada: reusar o MESMO objeto faria o 2º res.json() estourar
+    // ("Body has already been read").
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ campos: {}, somente_leitura: {} }), { status: 200 }),
+    );
+    await getConfig();
+    expect(fetchMock.mock.calls[0][1]).toHaveProperty('signal');
+    await patchConfig({ automations: false });
+    expect(fetchMock.mock.calls[1][1]).toHaveProperty('signal');
   });
 });
 

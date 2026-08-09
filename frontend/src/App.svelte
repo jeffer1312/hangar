@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { isAuthenticated, setServers, listServers, mergeServers, onServersChanged, clearCredentials, selectServer, getActiveId, type Server } from './lib/auth';
+  import { isAuthenticated, setServers, listServers, mergeServers, onServersChanged, clearCredentials, selectServer, getActiveId, serverIdentidade, type Server } from './lib/auth';
   import { logoutLocal } from './lib/logout';
   import { getVault, decryptList, encryptList, putVault, logout as syncLogout, syncStatus, stashKey, loadKey, clearKey } from './lib/sync';
   import { vaultPush } from './lib/vaultPush.svelte';
@@ -170,6 +170,15 @@
   const targetConfig = $derived.by(() => {
     versaoServidores;
     return alvoConfig && alvoConfig.id !== getActiveId() ? alvoConfig : null;
+  });
+
+  // Identidade composta do servidor sendo configurado: ?srv= se resolveu, senão o ATIVO (o caminho
+  // global edita o ativo). O SettingsModal recarrega quando isto muda — inclusive no MESMO id com
+  // base/token/label diferentes (rotação de token, re-parear), que um `alvo?.id` não pegaria.
+  const identidadeConfig = $derived.by(() => {
+    versaoServidores;
+    const s = alvoConfig ?? listServers().find((x) => x.id === getActiveId()) ?? null;
+    return serverIdentidade(s);
   });
 
   function irParaConfig(tela: TelaConfig) {
@@ -472,6 +481,7 @@
     <SettingsModal
       tela={telaEfetiva}
       alvo={targetConfig}
+      identidade={identidadeConfig}
       resolvedServer={alvoConfig}
       nomeAlvo={alvoConfig?.label ?? null}
       semServidor={!alvoConfig}

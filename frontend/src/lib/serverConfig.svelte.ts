@@ -5,14 +5,20 @@
 import {
   getConfig, getConfigForServer, patchConfig, patchConfigForServer, type CampoConfig,
 } from './api';
-import type { Server } from './auth';
+import { serverIdentidade, type Server } from './auth';
 
 export type ValorCampo = string | number | boolean;
 
-export function criarConfigServidor(alvo: () => Server | null) {
+// `identidade` (opcional) é a string que identifica o alvo sendo editado. O default deriva do `alvo`,
+// mas quem precisa de precisão (SettingsModal, via App) passa a identidade EXPLÍCITA: no modo global
+// `alvo` é null e ainda assim o servidor editado é o ATIVO — só o App resolve isso.
+export function criarConfigServidor(alvo: () => Server | null, identidade?: () => string) {
+  const donoDe = () => (identidade ? identidade() : serverIdentidade(alvo()));
+
   // Geração de load/save: trocar de alvo ou tela no meio invalida a resposta pendente (ver
   // carregar/salvar) — só o dono atual pinta campos/rascunho/salvo/erro/salvando.
   let geracao = 0;
+  let ultimoDono = '';
   let timerSalvo: ReturnType<typeof setTimeout> | null = null;
   let campos = $state<Record<string, CampoConfig>>({});
   let leitura = $state<Record<string, string | number | boolean>>({});
@@ -22,12 +28,20 @@ export function criarConfigServidor(alvo: () => Server | null) {
   let erro = $state('');
   let salvo = $state(false);
 
-  async function carregar(novoAlvo = false) {
+  async function carregar() {
     const mine = ++geracao;
+    const dono = donoDe();
+    // Troca REAL de identidade (outro servidor, ou o MESMO id com base/token/label mudados): o
+    // rascunho do alvo anterior morre. Recarregar o MESMO alvo (voltar de Servidores, por exemplo)
+    // PRESERVA o rascunho único — decisão do usuário, e é o que o round 4 corrigiu (antes um reload
+    // de alvo igual apagava o draft).
+    const trocouDono = dono !== ultimoDono;
+    ultimoDono = dono;
     // Estado da operação ANTERIOR (outro alvo) morre aqui, ANTES do await: campos/leitura/erro de
     // A nunca pintam na tela de B (nem quando o load de B falha), e flags de A não travam B. O
-    // draft só morre na TROCA DE ALVO — trocar de tela no MESMO alvo preserva o rascunho único.
-    if (novoAlvo) rascunho = {};
+    // rascunho morre NA TROCA REAL — mesmo que o load do B falhe, draft de A não sobrevive ao
+    // handoff; recarregar o MESMO alvo preserva (trocouDono false).
+    if (trocouDono) rascunho = {};
     campos = {};
     leitura = {};
     erro = '';
@@ -38,12 +52,11 @@ export function criarConfigServidor(alvo: () => Server | null) {
     try {
       const s = alvo();
       const c = s ? await getConfigForServer(s) : await getConfig();
-      if (mine !== geracao) return;   // alvo mudou no meio: resposta A não pinta o alvo B
+      if (mine !== geracao || donoDe() !== dono) return;   // alvo mudou no meio: resposta A não pinta B
       campos = c.campos;
       leitura = c.somente_leitura;
-      rascunho = {};
     } catch (e) {
-      if (mine !== geracao) return;
+      if (mine !== geracao || donoDe() !== dono) return;
       erro = e instanceof Error ? e.message : 'Falha ao carregar';
     } finally {
       if (mine === geracao) carregando = false;
@@ -54,26 +67,34 @@ export function criarConfigServidor(alvo: () => Server | null) {
     if (salvando) return;                 // duplo clique antes da primeira resposta: UM POST
     if (!Object.keys(rascunho).length) return;
     const mine = ++geracao;               // invalida load E save anteriores: só o dono atual pinta
-    const s = alvo();                     // snapshot do alvo
-    const mudancas = { ...rascunho };     // snapshot do rascunho
+    const dono = donoDe();
+    ultimoDono = dono;                    // assume ownership do alvo corrente
+    const s = alvo();                     // caminho da API (global vs ForServer)
+    const enviado = { ...rascunho };      // snapshot do rascunho no instante do POST
     salvando = true;
     erro = '';
     salvo = false;
+    carregando = false;                   // um load pendente não pode mais pintar por cima deste save
     limparTimerSalvo();
     try {
       // O rascunho vai INTEIRO: o POST /api/config aceita varias chaves num corpo so, e e por isso
       // que um Salvar em qualquer das tres telas grava o que foi mexido nas outras.
-      const r = s ? await patchConfigForServer(s, mudancas) : await patchConfig(mudancas);
-      if (mine !== geracao) return;       // operacao atual tomou a frente: nao pinta nada
+      const r = s ? await patchConfigForServer(s, enviado) : await patchConfig(enviado);
+      if (mine !== geracao || donoDe() !== dono) return;   // operacao atual tomou a frente: nao pinta nada
       campos = r.campos;
-      rascunho = {};
+      // Apaga SÓ as chaves cujo valor ATUAL ainda é o enviado. Edição feita DURANTE o POST (mesma
+      // chave, valor novo) continua no rascunho e vai no PRÓXIMO Save — a resposta não a clobbera.
+      for (const k of Object.keys(enviado)) {
+        if (Object.is(rascunho[k], enviado[k])) delete rascunho[k];
+      }
       salvo = true;
       // Timer do "salvo": o callback só age se esta operacao ainda e a dona — um save posterior
       // limpa o timer anterior, e um timer velho nunca derruba o salvo do novo.
       timerSalvo = setTimeout(() => { if (mine === geracao) salvo = false; }, 2500);
     } catch (e) {
-      if (mine !== geracao) return;
+      if (mine !== geracao || donoDe() !== dono) return;
       // Erro de validacao do servidor aparece como veio ("upload_retention_days: esperado numero").
+      // O rascunho fica INTACTO: reject/timeout deixa salvando=false, erro visível e retry possível.
       erro = e instanceof Error ? e.message : 'Falha ao salvar';
     } finally {
       if (mine === geracao) salvando = false;
@@ -82,7 +103,8 @@ export function criarConfigServidor(alvo: () => Server | null) {
 
   // Invalida operacao pendente SEM nova chamada (ex: entrar na tela Servidores, que tem controller
   // proprio — a resposta de um load/save antigo nao pinta quando a tela voltar). Zera também os
-  // flags: a operacao invalidada nunca mais limpa o que ja morreu aqui.
+  // flags: a operacao invalidada nunca mais limpa o que ja morreu aqui. NÃO mexe no ultimoDono: quem
+  // volta pro MESMO alvo depois preserva o rascunho.
   function invalidar() {
     geracao++;
     limparTimerSalvo();

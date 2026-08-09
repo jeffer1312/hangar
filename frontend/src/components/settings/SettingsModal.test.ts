@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // Round 1 da 4b: a tela Servidores NÃO chama store.carregar (zero GET /api/config) — o controller
 // da tela é o ServidoresSettings; as outras telas seguem carregando o config do alvo.
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount } from 'svelte';
 import SettingsModal from './SettingsModal.svelte';
 import * as api from '../../lib/api';
@@ -41,7 +41,9 @@ const apiMock = vi.mocked(api);
 const authMock = vi.mocked(auth);
 const SRV = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'x' };
 
-function montar(tela: TelaConfig, alvo: Server | null = null) {
+beforeEach(() => { vi.clearAllMocks(); });   // contagens de chamada não vazam entre testes
+
+function montar(tela: TelaConfig, alvo: Server | null = null, identidade = alvo ? `id:${alvo.id}` : 'global') {
   authMock.listServers.mockReturnValue([SRV as never]);
   authMock.getActiveId.mockReturnValue(SRV.id);
   apiMock.getConfig.mockResolvedValue({ campos: {}, somente_leitura: {} } as never);
@@ -52,7 +54,7 @@ function montar(tela: TelaConfig, alvo: Server | null = null) {
   const comp = mount(SettingsModal, {
     target: el,
     props: {
-      tela, alvo, nomeAlvo: null, semServidor: !alvo,
+      tela, alvo, identidade, nomeAlvo: null, semServidor: !alvo,
       onIrPara: vi.fn(), onVoltar: vi.fn(), onFechar: vi.fn(),
     },
   });
@@ -73,5 +75,19 @@ describe('SettingsModal — GET config por tela', () => {
     await Promise.resolve();
     expect(apiMock.getConfigForServer).toHaveBeenCalledTimes(1);
     unmount(t.comp);
+  });
+
+  it('identidade composta chega ao store: mesmo id com identidade diferente dispara o próprio GET', async () => {
+    // O store observa a identidade (JSON id+label+baseUrl+token), não o id. Montar o MESMO alvo.id
+    // com identidades distintas (base/token rotacionados) precisa gerar UM GET por identidade — se
+    // o efeito dependesse só do id, o segundo carregaria do cache errado ou nem carregaria.
+    const t1 = montar('anexos', SRV as Server, 'id:srv-a::v1');
+    await Promise.resolve();
+    expect(apiMock.getConfigForServer).toHaveBeenCalledTimes(1);
+    unmount(t1.comp);
+    const t2 = montar('anexos', SRV as Server, 'id:srv-a::v2');
+    await Promise.resolve();
+    expect(apiMock.getConfigForServer).toHaveBeenCalledTimes(2);
+    unmount(t2.comp);
   });
 });
