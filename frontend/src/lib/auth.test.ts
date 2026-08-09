@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import type { Server } from './auth';
 
 // auth.ts toca localStorage no load (migrate()). vitest env=node nao tem -> stub minimo ANTES do
 // import dinamico (top-level await roda apos o stub). migrate() so faz getItem -> null, sai cedo.
@@ -21,7 +22,7 @@ let cookieJar = '';
 (globalThis as any).window = { location: { origin: 'http://casa:8765' } };
 
 const { mergeServers, validarPareamento, onServersChanged, removeServer,
-        addServer, updateServer, listServers, selectServer } = await import('./auth');
+        addServer, updateServer, listServers, selectServer, serverFingerprint, snapshotRemocao, removalStillMatches } = await import('./auth');
 
 const S = (id: string, baseUrl: string, token = 't') => ({ id, label: id, baseUrl, token });
 
@@ -170,6 +171,47 @@ describe('updateServer', () => {
     const antes = listServers().length;
     expect(updateServer('fantasma', { token: 'x' })).toBe(false);
     expect(listServers()).toHaveLength(antes);
+  });
+
+  // Round 4: remoção com confirmação velha NUNCA remove entidade nova — fingerprint (id+label+base+
+  // token) + revision (versão da lista no momento do clique) precisam casar com o snapshot do diálogo.
+  describe('remoção com fingerprint + revision (round 4)', () => {
+    const S1: Server = { id: 's1', label: 'Casa', baseUrl: 'http://casa:8765', token: 't1' };
+    const S2: Server = { id: 's2', label: 'VPS', baseUrl: 'http://vps:8766', token: 't2' };
+
+    it('serverFingerprint é JSON estável de id+label+baseUrl+token', () => {
+      expect(serverFingerprint(S1)).toBe(JSON.stringify(['s1', 'Casa', 'http://casa:8765', 't1']));
+      expect(serverFingerprint(S1)).not.toBe(serverFingerprint({ ...S1, token: 't1-novo' }));
+    });
+
+    it('snapshotRemocao captura id+fingerprint+revision; null quando não existe', () => {
+      expect(snapshotRemocao(S1, 3)).toEqual({ id: 's1', fingerprint: serverFingerprint(S1), revision: 3 });
+      expect(snapshotRemocao(undefined, 3)).toBeNull();
+    });
+
+    it('inalterado (mesma fingerprint+revision) pode remover', () => {
+      expect(removalStillMatches(snapshotRemocao(S1, 1)!, [S1, S2], 1)).toBeNull();
+    });
+
+    it('ausente → motivo "removido"', () => {
+      expect(removalStillMatches(snapshotRemocao(S1, 1)!, [S2], 1)).toMatch(/removido/);
+    });
+
+    it('revision mudou → motivo "mudou", mesmo com fingerprint igual', () => {
+      expect(removalStillMatches(snapshotRemocao(S1, 1)!, [S1], 2)).toMatch(/mudou/);
+    });
+
+    it('fingerprint mudou (token/label/base isoladamente) → motivo "mudou"', () => {
+      expect(removalStillMatches(snapshotRemocao(S1, 1)!, [{ ...S1, token: 't1-novo' }], 1)).toMatch(/mudou/);
+      expect(removalStillMatches(snapshotRemocao(S1, 1)!, [{ ...S1, label: 'Outra' }], 1)).toMatch(/mudou/);
+      expect(removalStillMatches(snapshotRemocao(S1, 1)!, [{ ...S1, baseUrl: 'http://nova:9999' }], 1)).toMatch(/mudou/);
+    });
+
+    it('reintroduzida com a MESMA entidade (fingerprint+revision iguais) pode remover', () => {
+      // sync removeu e re-adicionou a mesma entidade antes do clique; a lista relida é idêntica
+      // ao snapshot → a remoção continua válida (não é a entidade que mudou).
+      expect(removalStillMatches(snapshotRemocao(S1, 1)!, [S1], 1)).toBeNull();
+    });
   });
 
   it('re-sincroniza o cookie do servidor SAME-ORIGIN mesmo quando ele NAO e o ativo', () => {

@@ -19,8 +19,9 @@
   import AccountMenu from '../components/AccountMenu.svelte';
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
   import { getSessions, createSession, deleteSession, renameSession, resumeSession, broadcast } from '../lib/api';
-  import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, updateServer, serverColor, validarPareamento } from '../lib/auth';
+  import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, updateServer, serverColor, validarPareamento, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
   import type { AggSession, ResumeCandidate, Provider } from '../lib/types';
+  import type { RemovalSnapshot } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, sortSessions, clusterByPair } from '../lib/format';
   import { updateBadge } from '../lib/badge';
@@ -462,19 +463,27 @@
 
   // Remover servidor pede confirmacao — o × de um toque removia na hora e, se fosse o unico
   // servidor, deslogava junto (com o token de pareamento la no PC). O remove real so acontece
-  // no doDropServer. Sem "ativo" pra restaurar — fecha o stream e reagrega (ou desloga se zerou).
-  let confirmSrv = $state<{ id: string; label: string } | null>(null);
+  // no doDropServer. Revisão de entidade (round 4): o diálogo captura fingerprint+revision; o
+  // clique final só remove se a entidade NÃO mudou. Sem "ativo" pra restaurar — fecha o stream e
+  // reagrega (ou desloga se zerou).
+  let serverVersion = $state(0);
+  $effect(() => onServersChanged(() => serverVersion++));
+  let confirmSrv = $state<(RemovalSnapshot & { label: string }) | null>(null);
   function dropServer(id: string) {
     const s = servers.find((x) => x.id === id);
-    confirmSrv = { id, label: s?.label ?? id };
+    const snap = snapshotRemocao(s, serverVersion);
+    if (!snap) return;
+    confirmSrv = { ...snap, label: s!.label };
   }
   function doDropServer() {
     if (!confirmSrv) return;
-    const id = confirmSrv.id;
+    const snap = confirmSrv;
     confirmSrv = null;
+    const motivo = removalStillMatches(snap, listServers(), serverVersion);
+    if (motivo) { showActionMsg(motivo); return; }
     // removeServer() dispara onServersChanged -> o store reconcilia os streams sozinho (fecha o SSE
     // do removido). Só tratamos o caso "zerou" aqui; sem "ativo" pra restaurar.
-    removeServer(id);
+    removeServer(snap.id);
     if (listServers().length === 0) { handleLogout(); return; }
   }
 

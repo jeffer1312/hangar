@@ -1,13 +1,13 @@
 <script lang="ts">
   import { listServers, getActiveId, selectServer, renameServer, updateServer, removeServer,
-           addServer, validarPareamento, onServersChanged } from '../../lib/auth';
+           addServer, validarPareamento, onServersChanged, snapshotRemocao, removalStillMatches } from '../../lib/auth';
   import { pushSupported } from '../../lib/push';
   import { sessionsStore } from '../../lib/sessionsStore.svelte';
   import ServerManager from '../ServerManager.svelte';
   import PushQuiet from '../PushQuiet.svelte';
   import ConfirmDialog from '../ConfirmDialog.svelte';
   import QrScanner from '../QrScanner.svelte';
-  import type { Server } from '../../lib/auth';
+  import type { RemovalSnapshot, Server } from '../../lib/auth';
 
   // Tela Servidores das Configurações (item C): controller LOCAL do CRUD de servidores, do alvo de
   // edição e do logout global. O App continua dono do roteamento, do servidor resolvido e do
@@ -100,30 +100,28 @@
   // Remoção com confirmação REAL (ConfirmDialog). O ÚLTIMO servidor é removível de propósito:
   // remover tudo dispara o logout global (única saída pra deslogar o aparelho) — por isso o
   // ServerManager recebe `podeRemoverUltimo`.
-  function fingerprintDe(s: Server): string {
-    return `${s.label}::${s.baseUrl}::${s.token}`;
-  }
-  let pendingRemoval = $state<{ id: string; label: string; fingerprint: string } | null>(null);
+  let pendingRemoval = $state<(RemovalSnapshot & { label: string }) | null>(null);
   let avisoRemocao = $state('');
+  function abrirRemocao(id: string) {
+    if (logoutInFlight) return;   // logout andando: portas de saída bloqueadas
+    const s = servers.find((x) => x.id === id);
+    const snap = snapshotRemocao(s, serverVersion);
+    if (!snap) return;
+    pendingRemoval = { ...snap, label: s!.label };
+  }
   function confirmRemoval() {
     if (!pendingRemoval) return;
-    const { id, fingerprint } = pendingRemoval;
+    const snap = pendingRemoval;
     pendingRemoval = null;
-    const atual = servers.find((s) => s.id === id);
-    // Revalida por FINGERPRINT (não só ID): o sync pode ter apagado OU alterado este servidor
-    // entre o diálogo e o clique. Remover calado uma entidade que mudou é mentira — mostra o
-    // estado e não faz nada.
-    if (!atual) {
-      avisoRemocao = 'Este servidor já foi removido em outro aparelho.';
-      return;
-    }
-    if (fingerprintDe(atual) !== fingerprint) {
-      avisoRemocao = 'Este servidor mudou em outro aparelho — revise antes de remover.';
-      return;
-    }
+    // Revalida por FINGERPRINT + REVISION (não só ID, round 4): o sync pode ter apagado, alterado
+    // OU reintroduzido este servidor entre o diálogo e o clique — ou a lista inteira ter mudado
+    // (removido noutro aparelho, ativo trocado). Remover calado uma entidade que mudou é mentira:
+    // mostra o motivo (role=status) e não faz nada.
+    const motivo = removalStillMatches(snap, listServers(), serverVersion);
+    if (motivo) { avisoRemocao = motivo; return; }
     avisoRemocao = '';
-    const wasActive = id === getActiveId();
-    removeServer(id);   // auth notifica onServersChanged -> contador local e store reagem
+    const wasActive = snap.id === getActiveId();
+    removeServer(snap.id);   // auth notifica onServersChanged -> contador local e store reagem
     if (listServers().length === 0) { void logout(); return; }
     if (wasActive) { window.location.reload(); return; }
     sessionsStore.refreshServers();
@@ -174,12 +172,7 @@
   podeRemoverUltimo
   onRename={rename}
   onUpdateToken={updateToken}
-  onRemove={(id) => {
-    if (logoutInFlight) return;   // logout andando: portas de saída bloqueadas
-    const s = servers.find((x) => x.id === id);
-    if (!s) return;
-    pendingRemoval = { id, label: s.label, fingerprint: fingerprintDe(s) };
-  }}
+  onRemove={abrirRemocao}
   onAdd={() => { showAdd = true; addUrlText = ''; addError = ''; }}
 />
 

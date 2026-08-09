@@ -298,6 +298,41 @@ export function serverIdentidade(s: Server | null): string {
   return JSON.stringify([s.id, s.label, s.baseUrl, s.token]);
 }
 
+// Fingerprint de REMOÇÃO: JSON de id+label+baseUrl+token. O diálogo de confirmação captura o
+// fingerprint do servidor EXISTENTE ao abrir; o clique final só remove se a entidade AINDA for a
+// mesma — mudar token/label/base com o MESMO id entre abrir e confirmar (sync de outro aparelho,
+// rotação de token) não pode remover calado a entidade atualizada.
+export function serverFingerprint(s: Server): string {
+  return JSON.stringify([s.id, s.label, s.baseUrl, s.token]);
+}
+
+export interface RemovalSnapshot {
+  id: string;
+  fingerprint: string;
+  revision: number;
+}
+
+// Captura o que a confirmação pretende remover. null = a entidade já não existe (não monta diálogo).
+export function snapshotRemocao(s: Server | undefined, revision: number): RemovalSnapshot | null {
+  return s ? { id: s.id, fingerprint: serverFingerprint(s), revision } : null;
+}
+
+// Confere se a confirmação capturada AINDA corresponde à entidade atual. `current` é a lista
+// RELIDA no clique final; `revision` é a versão corrente da lista (contador local de cada tela,
+// incrementado por onServersChanged). Devolve um motivo acessível quando a remoção NÃO pode
+// prosseguir, ou null quando pode.
+export function removalStillMatches(
+  snapshot: RemovalSnapshot,
+  current: Server[],
+  revision: number,
+): string | null {
+  const s = current.find((x) => x.id === snapshot.id);
+  if (!s) return 'Este servidor já foi removido em outro aparelho.';
+  if (revision !== snapshot.revision) return 'A lista de servidores mudou em outro aparelho — revise antes de remover.';
+  if (serverFingerprint(s) !== snapshot.fingerprint) return 'Este servidor mudou em outro aparelho — revise antes de remover.';
+  return null;
+}
+
 export function selectServer(id: string): boolean {
   // Devolve false quando o id não existe localmente (push antigo, link de outra máquina) — quem
   // navega usa isso pra NÃO montar um chat contra o servidor ativo errado (cross-wire calado).

@@ -3,7 +3,7 @@
   import HangarMark from './icons/HangarMark.svelte';
   import HangarWorking from './icons/HangarWorking.svelte';
   import { createSession, deleteSession, renameSession, gitAction, checkoutBranch, resumeSession, broadcast, getHistoryTailForServer } from '../lib/api';
-  import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, updateServer, serverColor, validarPareamento, withServer } from '../lib/auth';
+  import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, updateServer, serverColor, validarPareamento, withServer, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { abrirConfig } from '../lib/configNav';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
@@ -16,6 +16,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import SessionSwitcherSheet from './SessionSwitcherSheet.svelte';
   import HoverPreview from './HoverPreview.svelte';
   import type { SessionInfo, State, ResumeCandidate, Provider } from '../lib/types';
+  import type { RemovalSnapshot } from '../lib/auth';
   import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, untrackedReason, providerName, providerTag, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
@@ -556,18 +557,28 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     window.location.reload();
   }
   // Remover servidor pede confirmacao (com o nome) — o × de um toque removia na hora e, se fosse o
-  // unico servidor, deslogava junto. O remove real so acontece no doDropServer.
-  let confirmSrv = $state<{ id: string; label: string } | null>(null);
+  // unico servidor, deslogava junto. O remove real so acontece no doDropServer. Revisão de entidade
+  // (round 4): o diálogo captura fingerprint+revision; o clique final só remove se a entidade NÃO
+  // mudou (sync de outro aparelho, rotação de token, lista alterada).
+  let serverVersion = $state(0);
+  $effect(() => onServersChanged(() => serverVersion++));
+  let confirmSrv = $state<(RemovalSnapshot & { label: string }) | null>(null);
+  let avisoRemocao = $state('');
   function dropServer(id: string) {
     const s = servers.find((x) => x.id === id);
-    confirmSrv = { id, label: s?.label ?? id };
+    const snap = snapshotRemocao(s, serverVersion);
+    if (!snap) return;
+    confirmSrv = { ...snap, label: s!.label };
   }
   function doDropServer() {
     if (!confirmSrv) return;
-    const id = confirmSrv.id;
+    const snap = confirmSrv;
     confirmSrv = null;
-    const was = id === getActiveId();
-    removeServer(id);   // auth notifica o store (onServersChanged) -> ele reconcilia os streams sozinho
+    const motivo = removalStillMatches(snap, listServers(), serverVersion);
+    if (motivo) { avisoRemocao = motivo; return; }
+    avisoRemocao = '';
+    const was = snap.id === getActiveId();
+    removeServer(snap.id);   // auth notifica o store (onServersChanged) -> ele reconcilia os streams sozinho
     activeId = getActiveId();
     // O clear de credenciais é do App (logoutLocal) — aqui só dispara o logout.
     if (listServers().length === 0) { onLogout(); return; }
@@ -1378,6 +1389,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     <p class="confirm-name">{confirmSrv.label}</p>
   </ConfirmDialog>
 {/if}
+{#if avisoRemocao}<div class="menu-toast" role="status">{avisoRemocao}</div>{/if}
 
 <!-- Confirmar exclusao (com o nome) — modal centrado, so desktop (sidebar e desktop-only). -->
 {#if confirmDel}

@@ -10,18 +10,25 @@ import * as api from '../../lib/api';
 import type { Server } from '../../lib/auth';
 
 let mudouCb: (() => void) | null = null;
-vi.mock('../../lib/auth', () => ({
-  serverColor: () => '#fff',
-  listServers: vi.fn(),
-  getActiveId: vi.fn(),
-  selectServer: vi.fn(),
-  renameServer: vi.fn(),
-  updateServer: vi.fn(() => true),
-  removeServer: vi.fn(),
-  addServer: vi.fn(),
-  validarPareamento: vi.fn(),
-  onServersChanged: vi.fn((cb: () => void) => { mudouCb = cb; return () => {}; }),
-}));
+// importOriginal mantém REAIS os helpers de remoção (serverFingerprint/snapshotRemocao/
+// removalStillMatches) — o componente precisa deles funcionando pra revisar a entidade; o resto
+// (mutadores/leitores de localStorage) fica mockado.
+vi.mock('../../lib/auth', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../lib/auth')>();
+  return {
+    ...real,
+    serverColor: () => '#fff',
+    listServers: vi.fn(),
+    getActiveId: vi.fn(),
+    selectServer: vi.fn(),
+    renameServer: vi.fn(),
+    updateServer: vi.fn(() => true),
+    removeServer: vi.fn(),
+    addServer: vi.fn(),
+    validarPareamento: vi.fn(),
+    onServersChanged: vi.fn((cb: () => void) => { mudouCb = cb; return () => {}; }),
+  };
+});
 vi.mock('../../lib/sessionsStore.svelte', () => ({
   sessionsStore: { refreshServers: vi.fn(), reconnect: vi.fn() },
 }));
@@ -139,6 +146,51 @@ describe('ServidoresSettings — logout idempotente', () => {
     await Promise.resolve();
     await tick();
     expect(onLogoutCalls).toHaveBeenCalledTimes(2);
+    unmount(t.comp);
+  });
+});
+
+describe('ServidoresSettings — remoção com fingerprint + revision (round 4)', () => {
+  async function confirmarRemocao(t: { el: HTMLElement }) {
+    t.el.querySelector<HTMLButtonElement>('.sm-srv-del')!.click();
+    await tick();
+    document.querySelector<HTMLElement>('.confirm-card')!.querySelector<HTMLButtonElement>('.c-danger')!.click();
+    await tick();
+  }
+
+  it('entidade inalterada: removeServer é chamado UMA vez com o id certo', async () => {
+    const t = montar();
+    authMock.getActiveId.mockReturnValue('outro-id');   // remover SRV não é remover o ativo -> sem reload
+    await confirmarRemocao(t);
+    expect(authMock.removeServer).toHaveBeenCalledTimes(1);
+    expect(authMock.removeServer).toHaveBeenCalledWith(SRV.id);
+    unmount(t.comp);
+  });
+
+  it('servidor ausente entre diálogo e clique: não remove, aviso role=status', async () => {
+    const t = montar();
+    t.el.querySelector<HTMLButtonElement>('.sm-srv-del')!.click();
+    await tick();
+    authMock.listServers.mockReturnValue([]);   // apagado noutro aparelho ANTES do clique
+    await tick();                                // revision inalterada (sem mudouCb)
+    document.querySelector<HTMLElement>('.confirm-card')!.querySelector<HTMLButtonElement>('.c-danger')!.click();
+    await tick();
+    expect(authMock.removeServer).not.toHaveBeenCalled();
+    const aviso = t.el.querySelector<HTMLElement>('.ss-aviso');
+    expect(aviso?.innerText).toContain('removido');
+    expect(aviso?.getAttribute('role')).toBe('status');
+    unmount(t.comp);
+  });
+
+  it('último servidor removido em Settings chama onLogout UMA vez', async () => {
+    // removeServer de verdade esvazia a lista -> o controller vê "zerou" e dispara o logout global.
+    authMock.removeServer.mockImplementation(() => {
+      authMock.listServers.mockReturnValue([]);
+    });
+    const t = montar();
+    await confirmarRemocao(t);
+    expect(authMock.removeServer).toHaveBeenCalledTimes(1);
+    expect(onLogoutCalls).toHaveBeenCalledTimes(1);
     unmount(t.comp);
   });
 });
