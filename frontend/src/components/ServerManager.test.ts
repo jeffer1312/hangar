@@ -73,16 +73,20 @@ describe('ServerManager — saveToken validado (round 4)', () => {
     await tick();
   }
 
-  it('URL inválida recusa sem chamar onUpdateToken e mostra erro visível', async () => {
+  it('URL inválida recusa sem chamar onUpdateToken e mostra erro role=alert ligado ao campo', async () => {
     authMock.validarPareamento.mockReturnValue(null);
     const onUpdateToken = vi.fn(() => true);
     const t = montar({ onUpdateToken });
     await editarToken(t, 'https:// pc.ts.net/?token=abc');
     expect(authMock.validarPareamento).toHaveBeenCalledWith('https:// pc.ts.net/?token=abc', { aceitarTokenCru: true });
     expect(onUpdateToken).not.toHaveBeenCalled();
-    const err = t.el.querySelector<HTMLElement>('.sm-sync-warn');
+    const err = t.el.querySelector<HTMLElement>('#sm-token-err');
     expect(err?.innerText).toContain('URL de pareamento inválida');
-    expect(err?.getAttribute('role')).toBe('status');
+    expect(err?.getAttribute('role')).toBe('alert');
+    const input = t.el.querySelector<HTMLInputElement>('.sm-srv-edit')!;
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(input.getAttribute('aria-describedby')).toBe('sm-token-err');
+    expect(document.activeElement).toBe(input);   // erro associado ao campo: foco onde corrigir
     unmount(t.comp);
   });
 

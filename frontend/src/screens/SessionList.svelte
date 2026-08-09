@@ -19,6 +19,7 @@
   import AccountMenu from '../components/AccountMenu.svelte';
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
   import { getSessions, createSession, deleteSession, renameSession, resumeSession, broadcast } from '../lib/api';
+  import { focusFirstInvalid } from '../lib/focusCycle';
   import { listServers, getActiveId, selectServer, removeServer, addServerWithRollback, renameServer, updateServer, serverColor, validarPareamento, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
   import type { AggSession, ResumeCandidate, Provider } from '../lib/types';
   import type { RemovalSnapshot } from '../lib/auth';
@@ -60,6 +61,9 @@
   let drawerOpen = $state(false);    // menu lateral (hamburger): navegação + conta
   let searchOpen = $state(false);    // "Buscar conversas" (switcher em modo só-busca)
   let filterText = $state('');
+  // Fallback de foco das confirmações: o hamburger é o controle que SEMPRE sobra acessível, mesmo
+  // quando o gatilho (linha do AccountMenu no drawer) já fechou/ficou inerte.
+  let hamEl = $state<HTMLElement | null>(null);
 
   // Lista de servidores (gerenciada no menu de conta: adicionar/remover). Sem "ativo" fixo — a lista é
   // agregada; o servidor-alvo de uma sessão é o dela, escolhido ao abrir/criar. Vem do store (derived).
@@ -116,6 +120,14 @@
   let addToken = $state('');
   let addError = $state('');
   let addBusy = $state(false);
+  // Erro de VALIDAÇÃO marca os campos (aria-invalid) e foca o primeiro; erro de REDE (probe) é
+  // visível mas não marca campo indevidamente.
+  let addValidacao = $state(false);
+  let addFormEl = $state<HTMLFormElement | null>(null);
+
+  // Foca o primeiro campo inválido DEPOIS do render: o aria-invalid só existe no DOM após o flush,
+  // e focusFirstInvalid o procura no DOM — chamar no mesmo handler síncrono não acharia nada.
+  $effect(() => { if (addValidacao) focusFirstInvalid(addFormEl); });
 
   // Aguardando primeiro, depois alfabetico por nome (sortSessions compartilhado com a Sidebar — as
   // duas listas ja divergiram na ordenacao no passado). Estavel: so pula quando o ESTADO muda. Antes
@@ -507,19 +519,22 @@
     const cru = `${addUrl.trim()}${addUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(addToken.trim())}`;
     const pareamento = validarPareamento(cru);
     if (!pareamento) {
+      addValidacao = true;
       addError = 'URL inválida — use http/https com o token.';
       addBusy = false;
       return;
     }
+    addValidacao = false;
     // Add TRANSACIONAL (round 4): o helper valida, adiciona, roda o probe (getSessions) e restaura
     // o snapshot completo em falha — servidor existente volta com o token antigo, novo não
     // permanece. O form segue aberto pra retry.
     try {
       const r = await addServerWithRollback(pareamento.base, pareamento.token, () => getSessions());
-      if (!r.succeeded) { addError = 'URL inválida — use http/https com o token.'; addBusy = false; return; }
+      if (!r.succeeded) { addValidacao = true; addError = 'URL inválida — use http/https com o token.'; addBusy = false; return; }
       showAddServer = false;
       window.location.reload();
     } catch (err) {
+      addValidacao = false;   // erro de REDE: visível, não marca campo
       addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
     } finally {
       addBusy = false;
@@ -535,15 +550,18 @@
     if (!parsed) {
       scanning = false;
       showAddServer = true;
+      addValidacao = true;
       addError = 'QR inválido — use a URL de pareamento (http/https com ?token=).';
       return;
     }
+    addValidacao = false;
     scanning = false;
     try {
       await addServerWithRollback(parsed.base, parsed.token, () => getSessions());
       window.location.reload();
     } catch (err) {
       showAddServer = true;
+      addValidacao = false;
       addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
     }
   }
@@ -552,7 +570,7 @@
 <div class="session-list-screen">
   <!-- Cabeçalho: hamburger (abre o drawer: navegação + conta) + marca + seleção/broadcast. -->
   <header class="sl-head">
-    <button class="sl-ham" onclick={openDrawer} aria-label="Abrir menu">
+    <button class="sl-ham" bind:this={hamEl} onclick={openDrawer} aria-label="Abrir menu">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
         <path d="M4 7h16M4 12h13M4 17h16"/>
       </svg>
@@ -787,7 +805,7 @@
     tabindex="-1"
     aria-label="Fechar menu"
   ></div>
-  <aside class="drawer" class:open={drawerOpen} aria-hidden={!drawerOpen}>
+  <aside class="drawer" class:open={drawerOpen} aria-hidden={!drawerOpen} inert={!drawerOpen}>
     <div class="drawer-acct">
       <span class="drawer-avatar" aria-hidden="true">{accountInitials}</span>
       <span class="drawer-who">
@@ -891,7 +909,7 @@
     <ModalDialog open={showAddServer} ariaLabel="Adicionar servidor" onClose={() => (showAddServer = false)} className="add-server-dialog">
       <div class="add-sheet">
         <h2 class="add-title">Adicionar servidor</h2>
-        <form onsubmit={submitAddServer} class="add-form">
+        <form onsubmit={submitAddServer} class="add-form" bind:this={addFormEl}>
           <div class="field">
             <label class="field-label" for="add-url">URL do servidor</label>
             <input
@@ -905,6 +923,8 @@
               autocapitalize="off"
               spellcheck={false}
               inputmode="url"
+              aria-invalid={addValidacao || undefined}
+              aria-describedby={addValidacao ? 'sl-add-err' : undefined}
             />
           </div>
           <div class="field">
@@ -916,10 +936,12 @@
               bind:value={addToken}
               placeholder="••••••••••••••••"
               autocomplete="current-password"
+              aria-invalid={addValidacao || undefined}
+              aria-describedby={addValidacao ? 'sl-add-err' : undefined}
             />
           </div>
           {#if addError}
-            <p class="error-msg" role="alert">{addError}</p>
+            <p id="sl-add-err" class="error-msg" role="alert">{addError}</p>
           {/if}
           <button type="submit" class="add-primary" disabled={addBusy || !addUrl.trim() || !addToken.trim()}>
             {addBusy ? 'Conectando…' : 'Adicionar'}
@@ -946,6 +968,7 @@
       : null}
     confirmLabel="Excluir"
     danger
+    fallbackFocus={hamEl}
     onConfirm={doDelete}
     onClose={() => (confirmDel = null)}
   />
@@ -956,6 +979,7 @@
     message="Você vai precisar do token (QR ou digitado) pra entrar de novo — e ele pode estar no PC."
     confirmLabel="Sair"
     danger
+    fallbackFocus={hamEl}
     onConfirm={() => { confirmLogout = false; handleLogout(); }}
     onClose={() => (confirmLogout = false)}
   />
@@ -970,6 +994,7 @@
       : null}
     confirmLabel="Remover"
     danger
+    fallbackFocus={hamEl}
     onConfirm={doDropServer}
     onClose={() => (confirmSrv = null)}
   />

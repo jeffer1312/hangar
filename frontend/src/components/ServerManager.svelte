@@ -47,6 +47,7 @@
   let editingTokenId = $state<string | null>(null);
   let editToken = $state('');
   let tokenError = $state('');
+  let tokenInputEl = $state<HTMLInputElement | null>(null);
   function startEditToken(id: string) {
     editingTokenId = id;
     editToken = '';
@@ -78,6 +79,7 @@
       tokenError = text.includes('://')
         ? 'URL de pareamento inválida — cole a URL completa (com ?token=) ou só o token.'
         : 'token inválido — não pode conter espaços.';
+      tokenInputEl?.focus();   // erro associado ao campo (aria-describedby): foco onde corrigir
       return;
     }
     // So o TOKEN. O botao diz "Trocar token": colar a URL de pareamento de outra maquina nao pode
@@ -113,12 +115,15 @@
         type="password"
         autocomplete="off"
         bind:value={editToken}
+        bind:this={tokenInputEl}
         placeholder="token novo ou URL de pareamento"
         onclick={(e) => e.stopPropagation()}
         onkeydown={(e) => { if (e.key === 'Enter') saveToken(); if (e.key === 'Escape') { editingTokenId = null; editToken = ''; } }}
         onblur={saveToken}
         autofocus
         aria-label={`Novo token de ${s.label}`}
+        aria-invalid={tokenError ? true : undefined}
+        aria-describedby={tokenError ? 'sm-token-err' : undefined}
       />
     {:else if editingId === s.id}
       <span class="sm-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
@@ -167,7 +172,7 @@
 <!-- Resultado da própria edição (recusa de URL inválida, servidor sumido, host preservado):
      separado do aviso de sync, que é sobre o push pro hub e não sobre o que você digitou. -->
 {#if tokenError}
-  <div class="sm-sync-warn" role="status">{tokenError}</div>
+  <div id="sm-token-err" class="sm-sync-warn" role="alert">{tokenError}</div>
 {/if}
 
 {#if vaultPush.estado === 'error' || vaultPush.estado === 'locked'}

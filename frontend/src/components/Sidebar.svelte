@@ -189,6 +189,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   let showCreate = $state(false);
   let accountOpen = $state(false);    // menu de conta (avatar do rodapé)
   let acctAnchorEl = $state<HTMLElement>();  // âncora do popover do menu de conta
+  // Fallback de foco dos diálogos: a engrenagem é o controle que SEMPRE sobra acessível, mesmo
+  // quando o gatilho do diálogo (linha do AccountMenu) já fechou/ficou inerte.
+  let acctBtnEl = $state<HTMLElement | null>(null);
   let searchOpen = $state(false);     // "Buscar conversas" (switcher em modo só-busca)
   let showAddServer = $state(false);  // modal de adicionar servidor (colar URL / QR)
 
@@ -1214,7 +1217,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
       <!-- Task 4c Step 1: a engrenagem abre o modal de Configurações DIRETO (root no servidor ativo).
            Ponto colorido e tooltip do servidor ativo seguem intactos. O AccountMenu desktop sai no
            Step 2 (segurando até a revisão da 4b liberar) — até lá, o drawer mobile segue como está. -->
-      <button class="acct-btn" onclick={() => abrirConfig('root', getActiveId())} aria-haspopup="menu" aria-expanded={accountOpen} aria-label="Configurações e servidor" title={expanded ? undefined : accountName}>
+      <button class="acct-btn" bind:this={acctBtnEl} onclick={() => abrirConfig('root', getActiveId())} aria-haspopup="menu" aria-expanded={accountOpen} aria-label="Configurações e servidor" title={expanded ? undefined : accountName}>
         <span class="acct-chip" aria-hidden="true" style="--pt: {accountColor};">
           <!-- Engrenagem, e não iniciais: o menu é a porta de Configurações (Aparência, servidor,
                Motores), e iniciais em círculo liam como avatar de pessoa. O PONTO mantém a outra
@@ -1337,6 +1340,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
      Mesma rota de parse do QR (validarPareamento estrito). Estilo dos modais do desktop (confirm-card). -->
 {#if showAddServer}
   <ConfirmDialog title="Adicionar servidor" aria="Adicionar servidor" role="dialog"
+    fallbackFocus={acctBtnEl}
     onClose={() => (showAddServer = false)}
     actions={[
       { label: 'Escanear QR', onClick: () => { showAddServer = false; scanning = true; } },
@@ -1392,6 +1396,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 <!-- Confirmar remocao de servidor (com o nome) — mesmo padrao do excluir sessao. -->
 {#if confirmSrv}
   <ConfirmDialog title="Remover este servidor?" aria="Confirmar remoção de servidor"
+    fallbackFocus={acctBtnEl}
     onClose={() => (confirmSrv = null)}
     actions={[
       { label: 'Cancelar', onClick: () => (confirmSrv = null) },
@@ -1405,6 +1410,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 <!-- Confirmar exclusao (com o nome) — modal centrado, so desktop (sidebar e desktop-only). -->
 {#if confirmDel}
   <ConfirmDialog title="Excluir esta sessão?" aria="Confirmar exclusão"
+    fallbackFocus={acctBtnEl}
     onClose={() => (confirmDel = null)}
     actions={[
       { label: 'Cancelar', onClick: () => (confirmDel = null) },
@@ -1424,6 +1430,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 <!-- Confirmar troca de branch com working tree suja (switch carrega mudancas nao-commitadas). -->
 {#if confirmBranch}
   <ConfirmDialog title="Trocar de branch com mudanças não salvas?" aria="Confirmar troca de branch"
+    fallbackFocus={acctBtnEl}
     onClose={() => (confirmBranch = null)}
     actions={[
       { label: 'Cancelar', onClick: () => (confirmBranch = null) },
@@ -1440,6 +1447,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 {#if resumeModal}
   {@const rm = resumeModal}
   <ConfirmDialog title="Retomar qual conversa?" aria="Retomar conversa" role="dialog" wide
+    fallbackFocus={acctBtnEl}
     onClose={() => (resumeModal = null)}
     actions={[{ label: 'Fechar', onClick: () => (resumeModal = null) }]}>
     <p class="confirm-hint">Há mais de uma sessão nesta pasta — escolha o transcript pra continuar em <strong>{rm.name}</strong>.</p>
@@ -1467,6 +1475,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 <!-- Confirmar saida (recuperacao exige token/QR de novo). -->
 {#if confirmLogout}
   <ConfirmDialog title="Sair do app?" aria="Confirmar saída"
+    fallbackFocus={acctBtnEl}
     onClose={() => (confirmLogout = false)}
     actions={[
       { label: 'Cancelar', onClick: () => (confirmLogout = false) },

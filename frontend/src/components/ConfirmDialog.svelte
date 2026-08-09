@@ -2,29 +2,25 @@
   // Chassi único dos modais de confirmação do desktop (era 6 cópias de
   // .confirm-backdrop/.confirm-card/.confirm-actions no Sidebar). O corpo entra por snippet
   // (children), compilado no escopo do CHAMADOR — CSS específico do corpo fica lá.
-  import { onMount } from 'svelte';
+  // A restauração de foco é do ModalDialog (que captura o gatilho e restaura no unmount com
+  // fallback concreto) — aqui não há captura própria pra não duplicar o restore.
   import ModalDialog from './ModalDialog.svelte';
   import type { Snippet } from 'svelte';
 
-  // Restaura o foco ao gatilho ao fechar: quem abre uma confirmação sai do fluxo e, sem isto, o
-  // foco volta pro <body> (leitor de tela mudo e Tab recomeçando do zero). Se o gatilho já saiu
-  // do DOM (navegação), não faz nada.
-  let gatilho: HTMLElement | null = null;
-  onMount(() => {
-    gatilho = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    return () => { if (gatilho?.isConnected) gatilho.focus(); };
-  });
   interface Action { label: string; kind?: 'danger' | 'primary'; disabled?: boolean; onClick: () => void }
   interface Props {
     title: string;
     aria: string;
     role?: 'dialog' | 'alertdialog';
     wide?: boolean;
+    // Alvo concreto pro foco voltar quando o gatilho original sumiu/ficou oculto/inerte (ex: menu
+    // de conta que fechou antes do diálogo). Quem abre a confirmação sabe qual controle sobra.
+    fallbackFocus?: HTMLElement | null;
     actions: Action[];
     onClose: () => void;
     children?: Snippet;
   }
-  let { title, aria, role = 'alertdialog', wide = false, actions, onClose, children }: Props = $props();
+  let { title, aria, role = 'alertdialog', wide = false, fallbackFocus = null, actions, onClose, children }: Props = $props();
   let safeButton = $state<HTMLButtonElement | null>(null);
   // O foco inicial nunca deve cair em uma ação destrutiva. Se não houver uma
   // alternativa segura habilitada, deixamos o ModalDialog focar o container.
@@ -49,6 +45,7 @@
   onClose={onClose}
   className={wide ? 'confirm-card wide' : 'confirm-card'}
   {role}
+  {fallbackFocus}
   initialFocus={safeButton}
 >
   <p class="confirm-title">{title}</p>

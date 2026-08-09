@@ -194,4 +194,22 @@ describe('ServidoresSettings — remoção com fingerprint + revision (round 4)'
     expect(onLogoutCalls).toHaveBeenCalledTimes(1);
     unmount(t.comp);
   });
+
+  it('cancelar a confirmação devolve o foco ao botão Remover (restauração segura)', async () => {
+    const t = montar();
+    authMock.getActiveId.mockReturnValue('outro-id');   // remover não é remover o ativo -> sem reload
+    const del = t.el.querySelector<HTMLButtonElement>('.sm-srv-del')!;
+    del.focus();   // happy-dom não move foco no click() — o gatilho precisa de focus explícito
+    del.click();
+    await tick(); await tick();
+    // o foco saiu do gatilho (foi pra dentro do diálogo)
+    expect(document.activeElement).not.toBe(del);
+    const cancel = document.querySelector<HTMLElement>('.confirm-card')!
+      .querySelector<HTMLButtonElement>('.c-btn:not(.c-danger)')!;
+    cancel.click();
+    await tick();
+    // ConfirmDialog desmontou (pendingRemoval=null) e o ModalDialog restaurou o foco pro gatilho
+    expect(document.activeElement).toBe(del);
+    unmount(t.comp);
+  });
 });

@@ -1,13 +1,17 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
   import type { Snippet } from 'svelte';
-  import { focusableElements, nextFocusIndex } from '../lib/focusCycle';
+  import { focusableElements, nextFocusIndex, restoreFocus } from '../lib/focusCycle';
 
   interface Props {
     open: boolean;
     ariaLabel: string;
     onClose: () => void;
     initialFocus?: HTMLElement | null;
+    // Alvo concreto quando o gatilho original sumiu/ficou oculto/inerte (ex: menu que fechou antes
+    // do diálogo). Quem abre o modal sabe qual controle do app continua acessível — engrenagem,
+    // hamburger, botão fechar.
+    fallbackFocus?: HTMLElement | null;
     closeOnBackdrop?: boolean;
     className?: string;
     layer?: 'default' | 'command';
@@ -20,6 +24,7 @@
     ariaLabel,
     onClose,
     initialFocus = null,
+    fallbackFocus = null,
     closeOnBackdrop = true,
     className = '',
     layer = 'default',
@@ -29,7 +34,19 @@
 
   let dialog = $state<HTMLElement | null>(null);
   let previousFocus: HTMLElement | null = null;
+  let restoreDone = false;
   let pressOnBackdrop = false;
+
+  // Restaura o foco pro gatilho UMA vez (close ou unmount — nunca os dois): um elemento "conectado"
+  // mas oculto/inerte não presta, então cai no fallback concreto. Sem isto o foco voltava pro <body>
+  // (leitor mudo) ou pra um elemento fora da árvore acessível.
+  function restaurarFoco() {
+    if (restoreDone || !previousFocus) return;
+    restoreDone = true;
+    const target = previousFocus;
+    previousFocus = null;
+    restoreFocus(target, fallbackFocus);
+  }
 
   // Escape transformed/filtered ancestors so fixed positioning always covers the viewport.
   function portal(node: HTMLElement) {
@@ -46,6 +63,7 @@
       previousFocus = document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
+      restoreDone = false;
     }
   });
 
@@ -58,14 +76,14 @@
           : null;
         (preferred ?? focusableElements(dialog)[0] ?? dialog).focus();
       });
-    } else if (previousFocus) {
-      const target = previousFocus;
-      previousFocus = null;
-      void tick().then(() => {
-        if (!open && target.isConnected) target.focus();
-      });
+    } else {
+      restaurarFoco();
     }
   });
+
+  // Quem destrói o modal estando ABERTO (ConfirmDialog fecha por unmount, `open` fixo em true) não
+  // passa pelo ramo else do $effect — a restauração acontece aqui, no teardown.
+  onDestroy(restaurarFoco);
 
   function onDialogKeydown(event: KeyboardEvent) {
     if (event.key === 'Escape') {

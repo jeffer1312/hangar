@@ -1,7 +1,7 @@
 <script lang="ts">
+  import { onDestroy, untrack } from 'svelte';
   import type { Snippet } from 'svelte';
-  import { untrack } from 'svelte';
-  import { focusableElements, nextFocusIndex } from '../lib/focusCycle';
+  import { focusableElements, nextFocusIndex, restoreFocus } from '../lib/focusCycle';
 
   // Shell reutilizavel de bottom-sheet: backdrop + painel que sobe de baixo.
   // Fecha por tap no backdrop, Esc ou swipe pra baixo. Conteudo entra via children.
@@ -16,6 +16,9 @@
     defaultWidth?: number;
     wide?: boolean;        // opt-in: dock desktop usa largura fixa min(1100px, 92vw) em vez de --sheet-w.
     centered?: boolean;    // opt-in: no desktop vira MODAL centrado em vez de painel docado a direita.
+    // Alvo concreto pro foco voltar quando o gatilho original sumiu/ficou oculto/inerte (ex: drawer
+    // que fechou antes da folha). Quem abre o sheet sabe qual controle do app continua acessível.
+    fallbackFocus?: HTMLElement | null;
     // opt-in: no DESKTOP o painel deixa de ser modal — igual às "Configurações rápidas" do Gmail.
     // Sem véu escuro, o app atrás continua clicável e um clique fora NÃO fecha; sai pelo × ou Esc.
     // No celular não muda nada (lá a sheet cobre a tela e o toque fora é o jeito natural de sair).
@@ -25,7 +28,7 @@
     split?: boolean;
     children: Snippet;
   }
-  let { open, onClose, ariaLabel = 'Painel', resizable = false, widthKey = 'cp_gitsheet_w', defaultWidth = 460, wide = false, centered = false, persistent = false, split = false, children }: Props = $props();
+  let { open, onClose, ariaLabel = 'Painel', resizable = false, widthKey = 'cp_gitsheet_w', defaultWidth = 460, wide = false, centered = false, fallbackFocus = null, persistent = false, split = false, children }: Props = $props();
 
   // `persistent` só vale no dock desktop: abaixo de 820px a sheet volta a ser modal.
   // `centered` GANHA de `persistent`: quem pede centrado está pedindo MODAL, e o dock é o oposto
@@ -188,21 +191,33 @@
   }
 
   // Foco a11y: ao abrir, move o foco pra DENTRO da sheet (a menos que um filho ja tenha focado — ex.
-  // a busca do switcher) pra o leitor de tela anunciar o dialog e o Tab ficar no conteudo. Ao fechar,
-  // devolve o foco pro gatilho; senao ele cai no body, atras do conteudo.
+  // a busca do switcher) pra o leitor de tela anunciar o dialog e o Tab ficar no conteudo. Ao fechar
+  // (ou desmontar aberta), devolve o foco pro gatilho com restauração SEGURA: gatilho oculto/inerte
+  // cai no fallback concreto; senao o foco ia pro body, atras do conteudo.
   let sheetEl = $state<HTMLElement | null>(null);
   let prevFocus: HTMLElement | null = null;
+  let restoreDone = false;
+  function restaurarFoco() {
+    if (restoreDone || !prevFocus) return;
+    restoreDone = true;
+    const target = prevFocus;
+    prevFocus = null;
+    restoreFocus(target, fallbackFocus);
+  }
   $effect(() => {
     if (open) {
       prevFocus = document.activeElement as HTMLElement | null;
+      restoreDone = false;
       requestAnimationFrame(() => {
         if (open && sheetEl && !sheetEl.contains(document.activeElement)) sheetEl.focus();
       });
-    } else if (prevFocus?.isConnected) {
-      prevFocus.focus();
-      prevFocus = null;
+    } else {
+      restaurarFoco();
     }
   });
+  // Sheet desmontada estando ABERTA (o `{#if open}` do pai some com ela inteira) não passa pelo
+  // ramo else do $effect — a restauração acontece aqui, no teardown.
+  onDestroy(restaurarFoco);
 </script>
 
 <svelte:window onkeydown={onKeydown} />

@@ -22,10 +22,13 @@
   interface Props {
     resolvedServer: Server | null;
     apiTarget: Server | null;
+    // Fallback de foco das confirmações: o botão FECHAR do modal é o controle que sempre sobra
+    // acessível, mesmo quando o gatilho (linha de servidor, Sair) sai da a11y tree.
+    fallbackFocus?: HTMLElement | null;
     onPickTarget: (id: string) => void;
     onLogout: () => void | Promise<void>;
   }
-  let { resolvedServer, apiTarget, onPickTarget, onLogout }: Props = $props();
+  let { resolvedServer, apiTarget, fallbackFocus = null, onPickTarget, onLogout }: Props = $props();
 
   // lista reativa local: listServers() lê localStorage e não é reativo; o contador sobe pelo mesmo
   // onServersChanged que o App usa (o sync cross-aparelho também passa por ele).
@@ -204,6 +207,7 @@
 
 {#if showAdd}
   <ConfirmDialog title="Adicionar servidor" aria="Adicionar servidor" role="dialog"
+    {fallbackFocus}
     onClose={() => (showAdd = false)}
     actions={[
       { label: 'Escanear QR', onClick: () => { showAdd = false; scanning = true; } },
@@ -234,6 +238,7 @@
 
 {#if pendingRemoval}
   <ConfirmDialog title={`Remover ${pendingRemoval.label}?`} aria="Confirmar remoção do servidor"
+    {fallbackFocus}
     onClose={() => (pendingRemoval = null)}
     actions={[
       { label: 'Cancelar', onClick: () => (pendingRemoval = null) },
@@ -245,6 +250,7 @@
 
 {#if confirmLogout}
   <ConfirmDialog title="Sair do Hangar?" aria="Confirmar saída"
+    {fallbackFocus}
     onClose={() => (confirmLogout = false)}
     actions={[
       { label: 'Cancelar', onClick: () => (confirmLogout = false) },

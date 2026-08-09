@@ -42,21 +42,44 @@ async function preencher(t: { el: HTMLElement }, base: string, token: string) {
 }
 
 describe('Login — validação estrita antes do add transacional (round 4)', () => {
-  it('URL/token inválidos: addServerWithRollback não é chamado, erro visível com role=alert', async () => {
+  it('URL/token inválidos: addServerWithRollback não é chamado, erro role=alert ligado aos campos', async () => {
     authMock.validarPareamento.mockReturnValue(null);
     const t = montar();
     await preencher(t, 'ftp://host', 'ab cd');
     t.el.querySelector<HTMLButtonElement>('.connect-btn')!.click();
     await tick();
     expect(authMock.addServerWithRollback).not.toHaveBeenCalled();
-    const err = t.el.querySelector<HTMLElement>('.error-msg');
+    const err = t.el.querySelector<HTMLElement>('#login-err');
     expect(err?.innerText).toContain('inválidos');
     expect(err?.getAttribute('role')).toBe('alert');
+    // campos ligados ao erro (aria-describedby resolve pro ID) + foco no primeiro inválido
+    const url = t.el.querySelector<HTMLInputElement>('#base-url')!;
+    const tok = t.el.querySelector<HTMLInputElement>('#token')!;
+    expect(url.getAttribute('aria-invalid')).toBe('true');
+    expect(tok.getAttribute('aria-invalid')).toBe('true');
+    expect(url.getAttribute('aria-describedby')).toBe('login-err');
+    expect(tok.getAttribute('aria-describedby')).toBe('login-err');
+    expect(document.activeElement).toBe(url);
+    unmount(t.comp);
+  });
+
+  it('erro de REDE é visível mas NÃO marca campo indevidamente', async () => {
+    authMock.validarPareamento.mockReturnValue({ base: 'http://host:8765', token: 'abc' });
+    authMock.addServerWithRollback.mockRejectedValue(new Error('servidor fora do ar'));
+    const t = montar();
+    await preencher(t, 'http://host:8765', 'abc');
+    t.el.querySelector<HTMLButtonElement>('.connect-btn')!.click();
+    await tick(); await tick();
+    const err = t.el.querySelector<HTMLElement>('.error-msg');
+    expect(err?.innerText).toContain('servidor fora do ar');
+    expect(t.el.querySelector<HTMLInputElement>('#base-url')!.getAttribute('aria-invalid')).toBeNull();
+    expect(t.el.querySelector<HTMLInputElement>('#token')!.getAttribute('aria-invalid')).toBeNull();
     unmount(t.comp);
   });
 
   it('URL/token válidos: addServerWithRollback recebe base+token parseados e conecta', async () => {
     authMock.validarPareamento.mockReturnValue({ base: 'http://host:8765', token: 'abc' });
+    authMock.addServerWithRollback.mockResolvedValue({ id: 'srv-x', succeeded: true });   // reset do teste anterior
     apiMock.getSessions.mockResolvedValue([]);
     const onLogin = vi.fn();
     const t = montar();

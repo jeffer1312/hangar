@@ -88,6 +88,9 @@
   const SECOES = ['App', 'Servidor'] as const;
 
   let tituloEl = $state<HTMLElement | null>(null);
+  // Fallback de foco das confirmações da tela Servidores: o botão FECHAR do modal é o controle que
+  // sempre sobra acessível. Desktop e mobile têm botões diferentes — ambos fazem bind no MESMO ref.
+  let fecharEl = $state<HTMLElement | null>(null);
 
   // Trocar de rota destroi a linha que tinha o foco e o activeElement cai no <body>: leitor de tela
   // fica mudo e o Tab recomeca do zero. Mover o foco pro titulo (que muda a cada tela) anuncia a
@@ -212,7 +215,7 @@
            conteudo (e `sticky` num container com padding brigaria com o topo do formulario).
            Primeiro no DOM (ele e `position: absolute`, a ordem aqui nao muda onde ele aparece) pra
            quem navega por teclado chegar nele antes de percorrer a navegacao e o conteudo inteiros. -->
-      <button class="st-fechar" onclick={onFechar} aria-label="Fechar">✕</button>
+      <button class="st-fechar" bind:this={fecharEl} onclick={onFechar} aria-label="Fechar">✕</button>
       <aside class="st-nav">
         {#each SECOES as secao (secao)}
           <p class="st-secao">{secao === 'Servidor' && nomeAlvo ? `Servidor · ${nomeAlvo}` : secao}</p>
@@ -232,7 +235,7 @@
     </div>
   {:else}
     <header class="st-head">
-      <button class="st-icone" onclick={botaoEsquerdo}
+      <button class="st-icone" bind:this={fecharEl} onclick={botaoEsquerdo}
         aria-label={tela === 'root' ? 'Fechar' : 'Voltar'}>{tela === 'root' ? '✕' : '‹'}</button>
       <!-- tabindex=-1: alvo do foco na troca de tela, sem entrar na ordem do Tab. -->
       <h2 class="st-titulo" bind:this={tituloEl} tabindex="-1">{TITULO[tela]}</h2>
@@ -271,6 +274,7 @@
     <SobreSettings />
   {:else if telaAtual === 'servidores'}
     <ServidoresSettings resolvedServer={resolvedServer} apiTarget={alvo}
+      fallbackFocus={fecharEl}
       onPickTarget={onPickServer ?? (() => {})} onLogout={onLogout ?? (() => {})} />
   {:else}
     <ServerSettings {store} secao={telaAtual} />

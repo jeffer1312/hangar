@@ -8,10 +8,12 @@
     confirmLabel?: string;
     cancelLabel?: string;
     danger?: boolean;
+    // Alvo concreto pro foco voltar quando o gatilho sumiu/ficou oculto (ex: drawer fechado).
+    fallbackFocus?: HTMLElement | null;
     onConfirm: () => void;
     onClose: () => void;
   }
-  let { open, title, message = null, confirmLabel = 'Confirmar', cancelLabel = 'Cancelar', danger = false, onConfirm, onClose }: Props = $props();
+  let { open, title, message = null, confirmLabel = 'Confirmar', cancelLabel = 'Cancelar', danger = false, fallbackFocus = null, onConfirm, onClose }: Props = $props();
 
   function confirm() {
     onConfirm();
@@ -19,7 +21,7 @@
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel={title}>
+<BottomSheet {open} {onClose} ariaLabel={title} {fallbackFocus}>
   <div class="confirm">
     <h2 class="confirm-title">{title}</h2>
     {#if message}<p class="confirm-msg">{message}</p>{/if}

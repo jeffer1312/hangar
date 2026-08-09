@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { addServerWithRollback, getBaseUrl, validarPareamento } from '../lib/auth';
   import { getSessions } from '../lib/api';
+  import { focusFirstInvalid } from '../lib/focusCycle';
   import { syncStatus, register as syncRegister, login as syncLogin } from '../lib/sync';
   import QrScanner from '../components/QrScanner.svelte';
   import HangarIntro from '../components/icons/HangarIntro.svelte';
@@ -16,7 +17,15 @@
   let token = $state('');
   let loading = $state(false);
   let error = $state('');
+  // Erro de VALIDAÇÃO (pareamento malformado) marca os campos com aria-invalid e foca o primeiro;
+  // erro de REDE (probe falhou) é visível mas NÃO marca campo indevidamente.
+  let erroValidacao = $state(false);
   let scanning = $state(false);
+  let loginFormEl = $state<HTMLFormElement | null>(null);
+
+  // Foca o primeiro campo inválido DEPOIS do render: o aria-invalid só existe no DOM após o flush,
+  // e focusFirstInvalid o procura no DOM — chamar no mesmo handler síncrono não acharia nada.
+  $effect(() => { if (erroValidacao) focusFirstInvalid(loginFormEl); });
 
   // Cloud-sync: quando o hub tem CP_SYNC=1, troca o form URL+token por user/senha. null = desabilitado.
   let syncMode = $state<null | { registered: boolean }>(null);
@@ -35,6 +44,7 @@
     const pareamento = validarPareamento(cru);
     scanning = false;
     if (!pareamento) {
+      erroValidacao = true;
       error = cru.includes('://')
         ? 'QR inválido — use a URL de pareamento (http/https com ?token=).'
         : 'QR sem URL — escaneie a URL de pareamento do servidor.';
@@ -54,12 +64,14 @@
     const cru = base + (base.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(tok);
     const pareamento = validarPareamento(cru);
     if (!pareamento) {
+      erroValidacao = true;
       error = !base || !tok
         ? 'Informe a URL do servidor e o token.'
         : 'URL ou token inválidos — use http/https com o token (sem espaços).';
       return;
     }
 
+    erroValidacao = false;
     loading = true;
     error = '';
 
@@ -74,6 +86,7 @@
       }
       onLogin();
     } catch (err) {
+      erroValidacao = false;   // erro de REDE: visível, mas não marca campo
       error = err instanceof Error
         ? `Falha na conexão: ${err.message}`
         : 'Erro desconhecido';
@@ -157,7 +170,7 @@
         </button>
       </form>
     {:else}
-    <form onsubmit={handleSubmit} class="login-form">
+    <form onsubmit={handleSubmit} class="login-form" bind:this={loginFormEl}>
       <div class="field">
         <label class="field-label" for="base-url">URL do servidor</label>
         <input
@@ -171,6 +184,8 @@
           autocapitalize="off"
           spellcheck={false}
           inputmode="url"
+          aria-invalid={erroValidacao || undefined}
+          aria-describedby={erroValidacao ? 'login-err' : undefined}
         />
       </div>
 
@@ -184,11 +199,13 @@
           placeholder="••••••••••••••••"
           autocomplete="current-password"
           required
+          aria-invalid={erroValidacao || undefined}
+          aria-describedby={erroValidacao ? 'login-err' : undefined}
         />
       </div>
 
       {#if error}
-        <p class="error-msg" role="alert">{error}</p>
+        <p id="login-err" class="error-msg" role="alert">{error}</p>
       {/if}
 
       <button
