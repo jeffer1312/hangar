@@ -5,6 +5,7 @@
   import { createSession, deleteSession, renameSession, gitAction, checkoutBranch, resumeSession, broadcast, getHistoryTailForServer } from '../lib/api';
   import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, updateServer, serverColor, validarPareamento, withServer } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
+  import { abrirConfig } from '../lib/configNav';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import SessionContextMenu from './SessionContextMenu.svelte';
   import QrScanner from './QrScanner.svelte';
@@ -1188,7 +1189,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
        era config/conta (servidores, notificações, horas silenciosas, reconectar, sair) vive no menu. -->
   <div class="side-foot" class:rail={!expanded}>
     <div class="account-anchor" bind:this={acctAnchorEl}>
-      <button class="acct-btn" onclick={openAccount} aria-haspopup="menu" aria-expanded={accountOpen} aria-label="Configurações e servidor" title={expanded ? undefined : accountName}>
+      <!-- Task 4c Step 1: a engrenagem abre o modal de Configurações DIRETO (root no servidor ativo).
+           Ponto colorido e tooltip do servidor ativo seguem intactos. O AccountMenu desktop sai no
+           Step 2 (segurando até a revisão da 4b liberar) — até lá, o drawer mobile segue como está. -->
+      <button class="acct-btn" onclick={() => abrirConfig('root', getActiveId())} aria-haspopup="menu" aria-expanded={accountOpen} aria-label="Configurações e servidor" title={expanded ? undefined : accountName}>
         <span class="acct-chip" aria-hidden="true" style="--pt: {accountColor};">
           <!-- Engrenagem, e não iniciais: o menu é a porta de Configurações (Aparência, servidor,
                Motores), e iniciais em círculo liam como avatar de pessoa. O PONTO mantém a outra
