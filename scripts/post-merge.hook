@@ -10,4 +10,14 @@ printf '\n\033[36m==>\033[0m hangar: aplicando a atualização (post-merge)\n'
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) powershell -ExecutionPolicy Bypass -File install.ps1 -Update ;;
   *)                    ./install.sh --update ;;
-esac || printf '\033[31mX\033[0m  a atualização falhou — rode o instalador na mão\n'
+esac || {
+  printf '\n'
+  printf '\033[31m  ==============================================================\033[0m\n'
+  printf '\033[31m  A ATUALIZACAO NAO RODOU.\033[0m\n'
+  printf '  O que esta no ar continua no ar, com o codigo ANTERIOR — inclusive\n'
+  printf '  a tela, que pode parecer normal por horas.\n'
+  printf '  Rode na mao e leia o erro:\n'
+  printf '      Windows:  powershell -ExecutionPolicy Bypass -File install.ps1 -Update\n'
+  printf '      Linux:    ./install.sh --update\n'
+  printf '\033[31m  ==============================================================\033[0m\n\n'
+}
