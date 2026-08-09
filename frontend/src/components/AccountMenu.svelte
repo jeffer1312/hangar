@@ -135,8 +135,10 @@
 {/snippet}
 
 {#if embedded}
-  <!-- Drawer do mobile: corpo inline, sem portal/backdrop/posição. O drawer é o "card". -->
-  <div class="am-embedded">
+  <!-- Drawer do mobile: corpo inline, sem portal/backdrop/posição. O drawer é o "card". Fica
+       montado com o drawer fechado (estado preservado), mas `inert` tira a subtree do Tab e da
+       árvore de acessibilidade — sem ele, o conteúdo escondido continuava focável via Tab. -->
+  <div class="am-embedded" inert={embedded && !open}>
     {@render menuBody()}
   </div>
 {:else}

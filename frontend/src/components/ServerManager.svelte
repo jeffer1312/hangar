@@ -211,6 +211,7 @@
     background: var(--surface-inset); border: 1px solid var(--accent); border-radius: var(--radius-sm);
     color: var(--text-primary); font-family: var(--font-ui); font-size: 16px; outline: none;
   }
+  .sm-srv-edit:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
   /* Botão "Editar" do alvo de config (SettingsModal): marca quem está sendo editado. */
   .sm-target {
