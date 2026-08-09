@@ -3,7 +3,15 @@
   let { pct, complete = false, size = 24 }: Props = $props();
   const R = 9;
   const C = 2 * Math.PI * R;
-  const value = $derived(Math.min(100, Math.max(0, pct)));
+  // Normaliza pct pra 0..100 SEM nunca produzir NaN: Math.min/max propagam NaN (o texto/ARIA/
+  // stroke sairiam com "NaN"), e ±Infinity precisa de comportamento determinístico (Infinity -> 100,
+  // -Infinity -> 0, pelo clamp de comparação — `isFinite` os descartaria junto com o NaN).
+  const value = $derived(
+    Number.isNaN(pct) ? 0
+      : pct >= 100 ? 100
+      : pct <= 0 ? 0
+      : pct,
+  );
   const offset = $derived(C * (1 - value / 100));
 </script>
 
