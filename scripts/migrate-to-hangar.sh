@@ -114,9 +114,16 @@ if [[ "$OLD" != "$NEW" ]]; then
         np="$d/projects/$new_slug"
         mkdir -p "$np"
 
-        # transcripts: tudo o que estiver na raiz do projeto (.jsonl e sidecars vizinhos)
+        # Duas políticas de cópia, e a diferença importa quando o script roda COM uma sessão viva:
+        #   - o resto (memory/, sidecars) vai com -n: já foi copiado e teve os paths corrigidos,
+        #     sobrescrever desfaria a correção;
+        #   - os .jsonl vão com -u (atualiza se a origem for mais nova), porque a sessão que roda
+        #     este script continua ESCREVENDO no slug antigo até morrer. Com -n, a cauda daquela
+        #     conversa nunca chegaria no slug novo, nem re-rodando. Assim, uma segunda passada
+        #     depois de encerrar as sessões completa o histórico.
         n_jsonl=$(find "$op" -maxdepth 1 -name '*.jsonl' 2>/dev/null | wc -l)
         cp -rn "$op"/. "$np"/ 2>/dev/null || true
+        find "$op" -maxdepth 1 -name '*.jsonl' -exec cp -u {} "$np"/ \; 2>/dev/null || true
         log "projeto copiado: $op -> $np (${n_jsonl} transcript(s))"
 
         # memórias: além de copiadas, têm os caminhos absolutos corrigidos
