@@ -155,7 +155,23 @@ else
 # entao a unit precisa RECEBER a variavel — senao o vite cai no padrao 127.0.0.1 e, num servidor
 # atras de reverse proxy, o front fica inalcancavel com a unit `active` (medido na VPS: o traefik
 # do Coolify fala com o vite por host.docker.internal, nao por loopback).
-BIND_IP="$(grep -sE '^CP_LAN_BIND_IP=' "$REPO/backend/.env" | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r ')"
+# `|| true` NAO e zelo: com `set -euo pipefail` (topo do arquivo), um grep que nao acha a linha
+# devolve != 0 e MATA o script aqui — sem mensagem, porque o -s do grep cala ate o aviso. O caso
+# comum e justamente esse (variavel nova, .env antigo): o update rodaria pela metade, sem religar
+# servico nenhum e sem dizer por que. Medido em 09/08/2026.
+# O `cut -d'#'` tira comentario inline: `CP_LAN_BIND_IP=0.0.0.0 # todas as interfaces` e valido pro
+# backend (python-dotenv trata), e sem isso virava um host colado com o comentario -> vite em
+# crash-loop com a unit parecendo boa.
+BIND_RAW="$(grep -sE '^[[:space:]]*CP_LAN_BIND_IP=' "$REPO/backend/.env" | tail -1 || true)"
+BIND_IP="$(printf '%s' "${BIND_RAW#*=}" | cut -d'#' -f1 | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^["'"'"']//' -e 's/["'"'"']$//')"
+# 'auto' e valor de primeira classe do CP_LAN_BIND_IP: o backend o resolve pro IP de LAN detectado
+# (backend/app/config.py:199 -> detect_lan_ip). Repassar a string crua pro vite daria um host
+# chamado "auto". Resolve aqui, no unico ponto que sabe qual maquina e, com a mesma tecnica do
+# Python (rota de saida ate um endereco publico; nenhum pacote e enviado).
+if [[ "$BIND_IP" == "auto" ]]; then
+  BIND_IP="$(ip route get 8.8.8.8 2>/dev/null | awk "{for(i=1;i<=NF;i++) if (\$i==\"src\") {print \$(i+1); exit}}" || true)"
+  [[ -z "$BIND_IP" ]] && BIND_IP="127.0.0.1"
+fi
 BIND_ENV=""
 [[ -n "$BIND_IP" ]] && BIND_ENV="Environment=CP_LAN_BIND_IP=$BIND_IP"$'\n'
 escreve_unit "$FRONT" "$(cat <<EOF
