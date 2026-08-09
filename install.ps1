@@ -195,9 +195,16 @@ function Set-EnvKey {
     # vira "﻿CP_AUTH_TOKEN" e simplesmente some: o token cai pro default 'change-me' e o QR passa
     # a entregar `?token=change-me`. Hoje o arquivo nasce por Add-Content sem -Encoding (ASCII, sem
     # BOM), entao usar Set-Content aqui seria REGRESSAO.
+    #
+    # -Encoding UTF8 na LEITURA tambem, e pelo motivo espelhado: SEM ele, o Get-Content do PS 5.1
+    # sem BOM no arquivo decodifica pela codepage ANSI do sistema (cp1252) - e como esta funcao
+    # REESCREVE o arquivo INTEIRO a cada chamada, todo valor acentuado ja gravado (o token
+    # memoravel pedido no passo 3/8) ia sendo corrompido de novo a cada execucao do instalador
+    # (achado CRITICO da revisao final: "cafezinho" virava lixo de bytes na 2a rodada, e o celular
+    # passava a levar 401 sem nada explicar por que).
     $linha = "$Chave=$Valor"
     $linhas = @()
-    if (Test-Path $envFile) { $linhas = @(Get-Content -Path $envFile) }
+    if (Test-Path $envFile) { $linhas = @(Get-Content -Path $envFile -Encoding UTF8) }
     $achou = $false
     # NUNCA `$novo = foreach (...) {...}`: com $linhas vazio (.env novo, instalacao do zero) o loop
     # roda zero vezes e o foreach-como-expressao vira $null, nao array vazio — dai `@($novo) + $linha`
@@ -614,7 +621,17 @@ if (-not (Tem 'tailscale')) {
     $ErrorActionPreference = 'Continue'   # chamada nativa: stderr nao pode virar excecao
     try {
         $tsJson = $null
-        try { $tsJson = (& tailscale status --json 2>$null | Out-String | ConvertFrom-Json) } catch { }
+        # Com timeout: este passo roda tambem DESATENDIDO (-Update, via o hook post-merge - ver o
+        # comentario do passo 5d) e um tailscaled travado nao pode pendurar um `git pull` pra
+        # sempre. Achado MINOR da revisao final.
+        $jobTs = Start-Job -ScriptBlock { & tailscale status --json 2>$null }
+        if (Wait-Job $jobTs -Timeout 5) {
+            try { $tsJson = (Receive-Job $jobTs | Out-String | ConvertFrom-Json) } catch { }
+        } else {
+            Stop-Job $jobTs -ErrorAction SilentlyContinue
+            Nota 'tailscale status nao respondeu em 5s - pulando deteccao'
+        }
+        Remove-Job $jobTs -Force -ErrorAction SilentlyContinue
         $dns = $null
         if ($tsJson -and $tsJson.Self -and $tsJson.Self.DNSName) { $dns = $tsJson.Self.DNSName.TrimEnd('.') }
         if (-not $dns) {
@@ -726,10 +743,19 @@ if (-not $script:cpPublicUrl) {
     Write-Host '  Sem Tailscale configurado. De onde voce vai usar?'
     Write-Host '    [1] So nesta maquina  - o app de desktop. Sem QR (nao ha o que ler do celular).'
     Write-Host '    [2] Rede de casa      - celular no mesmo Wi-Fi.'
-    $escolha = Read-Host '  1 ou 2 (Enter = 1)'
+    # -Sim honra o padrao (opcao 1, so nesta maquina) sem perguntar - achado da revisao final:
+    # `install.ps1 -Sim` (modo documentado no cabecalho) ficava parado esperando tecla aqui, porque
+    # este Read-Host era cru e nao olhava pra $Sim como o resto do arquivo (via `Pergunte`).
+    $escolha = if ($Sim) { '1' } else { Read-Host '  1 ou 2 (Enter = 1)' }
     if ($escolha -eq '2') {
-        Set-EnvKey -Chave 'CP_LAN_BIND_IP' -Valor 'auto'
-        Ok 'CP_LAN_BIND_IP=auto gravado - o backend passa a escutar na rede local'
+        # 0.0.0.0, NUNCA 'auto': resolve_bind_ip (backend/app/config.py:199-201) troca 'auto' pelo
+        # IP de LAN detectado e SO, entao o uvicorn passa a escutar SO naquela interface - o
+        # `tailscale serve` que o passo 5d publica em cima de "localhost:$portaBack" levaria recusa
+        # de conexao (502 no celular), porque o loopback deixaria de responder. '0.0.0.0' e o UNICO
+        # valor onde o loopback continua valendo (escuta em TODAS as interfaces, 127.0.0.1 inclusa)
+        # - mesmo comentario em backend/app/pi_inbox.py:184, achado CRITICO da revisao final.
+        Set-EnvKey -Chave 'CP_LAN_BIND_IP' -Valor '0.0.0.0'
+        Ok 'CP_LAN_BIND_IP=0.0.0.0 gravado - o backend passa a escutar em todas as interfaces (LAN inclusa)'
         # O IP entra no CP_PUBLIC_URL porque, sem ele, pairing_url monta a URL sobre o front_port
         # (config.py:215) = 5173, e o Vite escuta so em loopback: o QR sairia apontando pra uma porta
         # onde nada responde na LAN. Com a chave gravada, o curto-circuito de config.py:211 usa este
@@ -904,20 +930,37 @@ if ($registrou) {
     # sucesso apontando pro cadaver - o bug original (instancia velha) de volta, agora com uma
     # mensagem verde na frente afirmando o contrario.
     $subiu = $false
-    foreach ($i in 1..15) {
+    # 40s, nao 15s: o boot medido nesta maquina e ~15s (comentario da vigia, mais abaixo), e o
+    # caminho feliz sai no primeiro acerto - o teto so paga quando o boot for mais lento (disco,
+    # antivirus, primeira sincronizacao do uv). Achado IMPORTANTE da revisao final: com 15s, um
+    # boot de 16s virava alarme falso, entrava em $pendencias e derrubava o instalador inteiro
+    # (exit 1, bloco vermelho do hook dizendo "A ATUALIZACAO NAO RODOU") quando o backend so
+    # estava alguns segundos atrasado.
+    foreach ($i in 1..40) {
         if (Get-NetTCPConnection -State Listen -LocalPort $portaBack -ErrorAction SilentlyContinue) { $subiu = $true; break }
         Start-Sleep -Seconds 1
     }
     if ($subiu) {
         Ok "backend respondendo em 127.0.0.1:$portaBack"
     } else {
-        Falta 'o backend NAO subiu em 15s - o app nao vai conectar'
+        Falta 'o backend NAO subiu em 40s - o app nao vai conectar'
         Nota "veja o porque:  Get-Content `"$env:LOCALAPPDATA\hangar\hangar-backend.log`" -Tail 30"
     }
     Nota 'Log (inclui o QR de pareamento):'
     Nota "  $env:LOCALAPPDATA\hangar\hangar-backend.log"
     Nota 'Remover depois: Unregister-ScheduledTask -TaskName hangar-backend'
+    } catch {
+        Falta "nao deu pra registrar as tarefas: $_"
+        Nota 'Sem isso, o backend so roda enquanto o terminal estiver aberto.'
+    }
 
+    # Vigia registrada em try/catch PROPRIO, separado do de cima: achado IMPORTANTE da revisao
+    # final. Antes, os dois viviam sob o MESMO try, e uma falha AQUI (na vigia) saia com a mensagem
+    # "nao deu pra registrar as tarefas: ..." mesmo com backend E frontend ja registrados e ja
+    # respondendo (Ok impresso linhas acima) - e como nada disto entrava em $pendencias, o script
+    # ainda fechava em "Pronto". A vigia falhar e real (menos grave que o backend nao subir, mas
+    # ainda assim: sem ela, um crash so reergue no proximo logon) e tem que aparecer como o que e.
+    try {
     # Vigia: a tarefa dos servicos dispara no LOGON, e suspensao mata o processo sem passar por
     # logoff/logon - nada reergue, e o dono descobre pelo 502 no celular, longe do PC (foi o que
     # aconteceu em 08/08/2026). NAO trocamos o gatilho por conta de servico: isso tiraria o backend
@@ -1020,10 +1063,25 @@ CreateObject("WScript.Shell").Run "powershell -NoProfile -ExecutionPolicy Bypass
         -Action (New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$vigiaVbs`"") `
         -Trigger $vigiaOnce, $vigiaLogon -Settings $vigiaSet `
         -Principal (New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive) -Force | Out-Null
-    Ok 'vigia registrada (checa a cada 5 min e reergue o backend)'
+    # CONFERE o NextRunTime, nao anuncia so por ter registrado - achado IMPORTANTE da revisao final:
+    # este exato ponto ja mediu ERRADO 2x nesta maquina (o gatilho antigo -AtLogOn puro deixava
+    # NextRunTime vazio, comentario acima sobre a medicao de 09/08/2026). So afirma com o campo
+    # preenchido; vazio quer dizer que a vigia pode nao disparar sozinha, e isso tem que aparecer.
+    $infoVigia = Get-ScheduledTask -TaskName 'hangar-vigia' -ErrorAction SilentlyContinue |
+                 Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
+    if ($infoVigia -and $infoVigia.NextRunTime) {
+        Ok "vigia registrada (proximo tick: $($infoVigia.NextRunTime), depois a cada 5 min)"
+    } else {
+        Falta 'vigia registrada mas NextRunTime veio vazio - ela pode nao disparar sozinha'
+        $script:pendencias += 'vigia'
+    }
+    # Dispara AGORA, uma vez: com o backend ja no ar isso e inofensivo (a vigia so reage se a porta
+    # estiver fechada), e prova de graca que o .vbs e o base64 realmente executam.
+    Start-ScheduledTask -TaskName 'hangar-vigia' -ErrorAction SilentlyContinue
     } catch {
-        Falta "nao deu pra registrar as tarefas: $_"
-        Nota 'Sem isso, o backend so roda enquanto o terminal estiver aberto.'
+        Falta "nao deu pra registrar a vigia: $_"
+        Nota 'Sem ela, um crash do backend so reergue no proximo logon (nao a cada 5 min).'
+        $script:pendencias += 'vigia'
     }
 } else {
     Nota 'pulado - rodando na mao, fechar o terminal derruba o backend'
@@ -1271,7 +1329,7 @@ if ($morreu) {
 # recusou o passo 7 nao deve esperar 20s por algo que ninguem pediu pra subir.
 # Nao repete o poll: $subiu ja e o resultado do mesmo `Get-NetTCPConnection -State Listen
 # -LocalPort $portaBack` la em cima (install.ps1:906-911), so mesmo $registrou/$jaAgendado - um
-# segundo loop pagaria os mesmos ~15s de novo e imprimiria uma segunda mensagem (Ok/Erro) sobre o
+# segundo loop pagaria os mesmos ate ~40s de novo e imprimiria uma segunda mensagem (Ok/Erro) sobre o
 # MESMO fato que o Ok/Falta de la em cima ja anunciou. $subiu so alimentava a tela; aqui ele passa
 # a alimentar $pendencias tambem, que e o que falta pro gate do fim do script barrar de verdade.
 $vivo = $false
@@ -1288,7 +1346,12 @@ if ($jaAgendado -or $registrou) {
 #    isso vira NativeCommandError -> o preference baixa pra Continue em volta (install.ps1:387-402);
 #  - sem UTF-8 no console os blocos do QR viram '?' na codepage OEM;
 #  - o .env e lido em caminho relativo (backend/app/config.py:83), logo roda de dentro de backend\.
-if ($vivo) {
+# Restrito ao modo INTERATIVO (-not $Update): achado MINOR da revisao final. O -Update roda pelo
+# hook post-merge, e este bloco imprimiria a URL COM TOKEN no scrollback de TODO `git pull`, alem
+# de pagar um `uv run` que ninguem pediu (o QR nao serve pra nada num pull desatendido - nao ha
+# celular olhando o terminal naquele momento).
+$qrMostrado = $false
+if ($vivo -and -not $Update) {
     $eapAnt = $ErrorActionPreference
     $encAnt = $null
     $pyioAnt = $env:PYTHONIOENCODING
@@ -1299,6 +1362,14 @@ if ($vivo) {
         [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
         $env:PYTHONIOENCODING = 'utf-8'
         & uv run python -c "from app.config import settings; from app.main import print_pairing; print_pairing(settings)"
+        # Confere $LASTEXITCODE - achado MINOR da revisao final: sem isto, um print_pairing que
+        # falha (exit != 0, sem excecao nenhuma porque o preference aqui e 'Continue') fazia o QR
+        # sumir em silencio, sem nenhum Falta/Nota explicando o motivo.
+        if ($LASTEXITCODE -eq 0) {
+            $qrMostrado = $true
+        } else {
+            Falta "nao consegui desenhar o QR (uv run saiu $LASTEXITCODE)"
+        }
     } catch {
         Nota "nao consegui desenhar o QR: $_"
     } finally {
@@ -1335,6 +1406,11 @@ if ($pendencias.Count -gt 0) {
     exit 1
 }
 Titulo 'Pronto'
+# So menciona o QR se ele de fato foi desenhado (achado MINOR da revisao final): quem escolheu
+# "so nesta maquina" no passo 6/8 ou rodou em -Update nunca viu QR nenhum, e a frase ficava
+# afirmando algo que nao aconteceu.
+$linhaQr = ''
+if ($qrMostrado) { $linhaQr = "`n  O QR acima ja leva o token: ler com a camera do celular abre o app JA conectado." }
 Write-Host @"
   Abra a interface em http://127.0.0.1:$portaBack - o proprio backend serve o build que este
   instalador gerou, entao ali tem tela e API no mesmo endereco.
@@ -1343,10 +1419,9 @@ Write-Host @"
   pelo Tailscale, nao pelo IP da LAN direto.
 
   Rodar na mao (se voce pulou o passo 7):
-      cd backend  ; `$env:CP_LAN_BIND_IP='auto' ; uv run python -m app.main
+      cd backend  ; `$env:CP_LAN_BIND_IP='0.0.0.0' ; uv run python -m app.main
       cd frontend ; npm run dev
-
-  O QR acima ja leva o token: ler com a camera do celular abre o app JA conectado.
+$linhaQr
   Guarde: quem tiver essa URL entra sem senha. Ela fica no historico do navegador desta
   maquina, e num navegador logado em conta o historico sincroniza pra nuvem do fornecedor.
   Guia completo (Tailscale, instalar como PWA, cada tela): docs\USAGE.md
