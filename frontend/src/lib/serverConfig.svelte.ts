@@ -22,10 +22,19 @@ export function criarConfigServidor(alvo: () => Server | null) {
   let erro = $state('');
   let salvo = $state(false);
 
-  async function carregar() {
+  async function carregar(novoAlvo = false) {
     const mine = ++geracao;
-    carregando = true;
+    // Estado da operação ANTERIOR (outro alvo) morre aqui, ANTES do await: campos/leitura/erro de
+    // A nunca pintam na tela de B (nem quando o load de B falha), e flags de A não travam B. O
+    // draft só morre na TROCA DE ALVO — trocar de tela no MESMO alvo preserva o rascunho único.
+    if (novoAlvo) rascunho = {};
+    campos = {};
+    leitura = {};
     erro = '';
+    salvo = false;
+    salvando = false;
+    limparTimerSalvo();
+    carregando = true;
     try {
       const s = alvo();
       const c = s ? await getConfigForServer(s) : await getConfig();
@@ -42,6 +51,7 @@ export function criarConfigServidor(alvo: () => Server | null) {
   }
 
   async function salvar() {
+    if (salvando) return;                 // duplo clique antes da primeira resposta: UM POST
     if (!Object.keys(rascunho).length) return;
     const mine = ++geracao;               // invalida load E save anteriores: só o dono atual pinta
     const s = alvo();                     // snapshot do alvo

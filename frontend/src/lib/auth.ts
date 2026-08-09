@@ -269,8 +269,9 @@ export function validarPareamento(texto: string): { base: string; token: string 
   const token = url.searchParams.get('token')?.trim() ?? '';
   if (!token) return null;
   let base = url.origin;
+  // `get` devolve '' para `api=` — PRESENTE até vazio deve falhar, não cair na base da URL.
   const api = url.searchParams.get('api');
-  if (api) {
+  if (api !== null) {
     let apiUrl: URL;
     try { apiUrl = new URL(api); } catch { return null; }
     if ((apiUrl.protocol !== 'http:' && apiUrl.protocol !== 'https:') || !apiUrl.hostname) return null;

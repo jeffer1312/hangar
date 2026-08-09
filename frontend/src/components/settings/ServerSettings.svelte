@@ -161,7 +161,7 @@
     <p class="aviso">Carregando…</p>
   {:else if store.erro && !Object.keys(store.campos).length}
     <p class="aviso erro">{store.erro}</p>
-    <button class="btn" onclick={store.carregar}>Tentar de novo</button>
+    <button class="btn" onclick={() => void store.carregar()}>Tentar de novo</button>
   {:else}
     <div class="lista">
       {#each CAMPOS.filter((c) => c.secao === secao) as c (c.chave)}

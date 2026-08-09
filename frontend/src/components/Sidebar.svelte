@@ -3,7 +3,7 @@
   import HangarMark from './icons/HangarMark.svelte';
   import HangarWorking from './icons/HangarWorking.svelte';
   import { createSession, deleteSession, renameSession, gitAction, checkoutBranch, resumeSession, broadcast, getHistoryTailForServer } from '../lib/api';
-  import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, updateServer, serverColor, clearCredentials, parseServerPairing, withServer } from '../lib/auth';
+  import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, updateServer, serverColor, validarPareamento, withServer } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import SessionContextMenu from './SessionContextMenu.svelte';
@@ -568,18 +568,28 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     const was = id === getActiveId();
     removeServer(id);   // auth notifica o store (onServersChanged) -> ele reconcilia os streams sozinho
     activeId = getActiveId();
-    if (listServers().length === 0) { clearCredentials(); onLogout(); return; }
+    // O clear de credenciais é do App (logoutLocal) — aqui só dispara o logout.
+    if (listServers().length === 0) { onLogout(); return; }
     if (was) window.location.reload();
   }
   function handleScan(text: string) {
+    const cru = text.trim();
+    const parsed = validarPareamento(cru);
+    if (!parsed) {
+      // QR inválido NÃO fecha silencioso: volta pro diálogo com o erro visível (role=alert) e o
+      // usuário pode escanear de novo ou colar à mão.
+      scanning = false;
+      showAddServer = true;
+      addError = 'QR inválido — use a URL de pareamento (http/https com ?token=).';
+      return;
+    }
     scanning = false;
-    const parsed = parseServerPairing(text);
-    if (!parsed) return;
     addServer(parsed.base, parsed.token);
     window.location.reload();
   }
   // Colar servidor manual (desktop nao tem camera): cola a URL de pareamento (com token) e adiciona
-  // pela MESMA rota de parse do QR. Aberto pelo item "Adicionar servidor" do menu de conta.
+  // pela MESMA rota de parse do QR (validarPareamento estrito). Aberto pelo item "Adicionar
+  // servidor" do menu de conta.
   let addUrlText = $state('');
   let addError = $state('');
   function openAddServer() {
@@ -588,14 +598,19 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     showAddServer = true;
   }
   function submitPasteServer() {
-    const parsed = parseServerPairing(addUrlText.trim());
-    if (!parsed) { addError = 'Cole a URL de pareamento (com o token).'; return; }
+    const cru = addUrlText.trim();
+    const parsed = validarPareamento(cru);
+    if (!parsed) {
+      addError = cru.includes('://')
+        ? 'essa URL não tem ?token= — cole a URL de pareamento completa (http/https).'
+        : 'Cole a URL de pareamento (com o token).';
+      return;
+    }
     addServer(parsed.base, parsed.token);
     window.location.reload();
   }
   function logout() {
-    clearCredentials();
-    onLogout();
+    onLogout();   // dono do clear: App (logoutLocal)
   }
   // Sair pede confirmacao (recuperacao exige o token/QR de novo).
   let confirmLogout = $state(false);
@@ -1313,8 +1328,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
       use:autofocus
       onkeydown={(e) => { addError = ''; if (e.key === 'Enter') submitPasteServer(); }}
       aria-label="URL de pareamento do servidor"
+      aria-invalid={!!addError}
+      aria-describedby={addError ? 'sb-add-err' : undefined}
     />
-    {#if addError}<p class="resume-err" role="alert">{addError}</p>{/if}
+    {#if addError}<p id="sb-add-err" class="resume-err" role="alert">{addError}</p>{/if}
   </ConfirmDialog>
 {/if}
 

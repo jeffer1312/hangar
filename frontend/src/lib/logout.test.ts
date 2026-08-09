@@ -46,6 +46,33 @@ describe('logoutLocal', () => {
     expect(d.clearCredentials).toHaveBeenCalledTimes(1);
   });
 
+  it('duas origens simultâneas compartilham a MESMA promise: uma sincronização e uma limpeza', async () => {
+    const d = deps();
+    const p1 = logoutLocal(d);   // origem 1: Sair no drawer
+    const p2 = logoutLocal(d);   // origem 2: remover-último, no mesmo instante
+    expect(p1).toBe(p2);         // lock in-flight: mesma promise, sem re-executar
+    await p1;
+    expect(d.clearCredentials).toHaveBeenCalledTimes(1);
+    expect(d.syncLogout).toHaveBeenCalledTimes(1);
+    expect(d.clearKey).toHaveBeenCalledTimes(1);
+    expect(d.aoSair).toHaveBeenCalledTimes(1);
+    // lock liberado: um logout NOVO (legítimo, depois de terminar) executa de novo
+    await logoutLocal(d);
+    expect(d.clearCredentials).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejeição tardia do sync com lock: uma limpeza, sem unhandled', async () => {
+    const d = deps({ syncLogout: vi.fn(() => new Promise((_, rej) => setTimeout(() => rej(new Error('tarde')), 1000))) });
+    const p1 = logoutLocal(d);
+    const p2 = logoutLocal(d);
+    expect(p1).toBe(p2);
+    vi.advanceTimersByTime(1000);   // sync rejeita DEPOIS
+    await expect(p1).resolves.toBeUndefined();
+    expect(d.clearCredentials).toHaveBeenCalledTimes(1);
+    expect(d.clearKey).toHaveBeenCalledTimes(1);
+    expect(d.aoSair).toHaveBeenCalledTimes(1);
+  });
+
   it('timeoutMs custom respeita a política', async () => {
     const d = deps({ syncLogout: vi.fn(() => new Promise(() => {})), timeoutMs: 500 });
     const promessa = logoutLocal(d);

@@ -9,6 +9,7 @@ import * as auth from '../../lib/auth';
 import * as api from '../../lib/api';
 import type { Server } from '../../lib/auth';
 
+let mudouCb: (() => void) | null = null;
 vi.mock('../../lib/auth', () => ({
   serverColor: () => '#fff',
   listServers: vi.fn(),
@@ -19,7 +20,7 @@ vi.mock('../../lib/auth', () => ({
   removeServer: vi.fn(),
   addServer: vi.fn(),
   validarPareamento: vi.fn(),
-  onServersChanged: vi.fn(() => () => {}),
+  onServersChanged: vi.fn((cb: () => void) => { mudouCb = cb; return () => {}; }),
 }));
 vi.mock('../../lib/sessionsStore.svelte', () => ({
   sessionsStore: { refreshServers: vi.fn(), reconnect: vi.fn() },
@@ -57,7 +58,7 @@ function montar(over: { onLogout?: () => Promise<void> } = {}) {
   return { el, comp: comp as never };
 }
 
-beforeEach(() => { vi.clearAllMocks(); onLogoutResolve = null; });
+beforeEach(() => { vi.clearAllMocks(); onLogoutResolve = null; mudouCb = null; });
 
 describe('ServidoresSettings — logout idempotente', () => {
   it('Sair + remover-último durante a Promise chamam onLogout UMA vez', async () => {
@@ -100,6 +101,23 @@ describe('ServidoresSettings — logout idempotente', () => {
     onLogoutResolve!();
     await Promise.resolve(); await Promise.resolve();
     expect(onLogoutCalls).toHaveBeenCalledTimes(1);
+    unmount(t.comp);
+  });
+
+  it('remoção revalida fingerprint: servidor mudou no sync → aviso, sem remover', async () => {
+    const t = montar();
+    t.el.querySelector<HTMLButtonElement>('.sm-srv-del')!.click();
+    await tick();
+    // o sync alterou o servidor entre o diálogo e o clique (onServersChanged sobe a versão local)
+    authMock.listServers.mockReturnValue([{ ...SRV, token: 'novo-token' }]);
+    mudouCb?.();
+    await tick();
+    document.querySelector<HTMLElement>('.confirm-card')!.querySelector<HTMLButtonElement>('.c-danger')!.click();
+    await tick();
+    expect(authMock.removeServer).not.toHaveBeenCalled();
+    const aviso = t.el.querySelector<HTMLElement>('.ss-aviso');
+    expect(aviso?.innerText).toContain('mudou');
+    expect(aviso?.getAttribute('role')).toBe('status');
     unmount(t.comp);
   });
 

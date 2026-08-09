@@ -34,12 +34,22 @@
   // zeraria o rascunho) a cada troca de tela. O `?? '-'` cobre o caso sem alvo (servidor ativo).
   // Na tela Servidores o store fica EM SILENCIO (zero GET /api/config) e a operacao pendente é
   // INVALIDADA sem nova chamada: quem manda la sao os controllers proprios (ServerManager/
-  // PushQuiet); sair da tela recarrega pro alvo corrente. Resposta antiga nunca pinta depois.
+  // PushQuiet). O store SÓ carrega quando (a) o ALVO mudou (limpa o estado do alvo anterior) ou
+  // (b) se voltou de Servidores pro alvo corrente — trocar de tela no MESMO alvo preserva o
+  // rascunho único (decisão do usuário).
+  let alvoAnterior = $state<string | null | undefined>(undefined);
+  // null no primeiro run: `veioDeServidores` exige telaAnterior === 'servidores', então o boot
+  // cai no ramo `mudouAlvo` (carrega) — comportamento idêntico, sem capturar `tela` no $state.
+  let telaAnterior = $state<TelaConfig | null>(null);
   $effect(() => {
-    alvo?.id ?? '-';
-    tela;
+    const id = alvo?.id ?? null;
+    const mudouAlvo = id !== alvoAnterior;
+    const veioDeServidores = telaAnterior === 'servidores' && tela !== 'servidores';
+    alvoAnterior = id;
+    telaAnterior = tela;
     if (tela === 'servidores') { store.invalidar(); return; }
-    store.carregar();
+    if (mudouAlvo) store.carregar(true);
+    else if (veioDeServidores) store.carregar(false);
   });
 
   const TITULO: Record<TelaConfig, string> = {

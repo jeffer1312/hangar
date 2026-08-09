@@ -88,6 +88,49 @@ describe('criarConfigServidor — ownership do salvar (round 2)', () => {
     expect(store.salvo).toBe(false);
   });
 
+  it('troca A→B com load que FALHA: estado de A limpo, erro de B, flags coerentes (round 3)', async () => {
+    let alvo: Server | null = A;
+    const store = criarConfigServidor(() => alvo);
+    apiMock.getConfigForServer.mockResolvedValueOnce(payload({ chaveA: { valor: 'a' } }) as never);
+    await store.carregar(true);
+    store.setRascunho('x', 1);
+    const sa = deferrada<ReturnType<typeof payload>>();
+    apiMock.patchConfigForServer.mockReturnValueOnce(sa.p as never);
+    void store.salvar();                       // save A pendente
+    expect(store.salvando).toBe(true);
+    // troca A→B: load de B FALHA
+    alvo = B;
+    apiMock.getConfigForServer.mockRejectedValueOnce(new Error('HTTP 500'));
+    void store.carregar(true);
+    await Promise.resolve(); await Promise.resolve();
+    expect(store.campos).toEqual({});          // nada de A na tela de B
+    expect(store.rascunhoDe('x')).toBe('');    // draft de A morreu na troca
+    expect(store.erro).toBe('HTTP 500');       // erro do B, não do A
+    expect(store.salvando).toBe(false);        // flags do A zerados
+    expect(store.salvo).toBe(false);
+    // A resolve POR ÚLTIMO: não pinta nada por cima de B
+    sa.resolve(payload({ chaveA: { valor: 'A-TARDIA' } }));
+    await Promise.resolve(); await Promise.resolve();
+    expect(store.campos).toEqual({});
+    expect(store.erro).toBe('HTTP 500');
+  });
+
+  it('salvar duplo antes da primeira resposta emite UM POST (round 3)', async () => {
+    let alvo: Server | null = A;
+    const store = criarConfigServidor(() => alvo);
+    apiMock.getConfigForServer.mockResolvedValue(payload({ chaveA: { valor: 'a' } }) as never);
+    await store.carregar(true);
+    store.setRascunho('x', 1);
+    const sa = deferrada<ReturnType<typeof payload>>();
+    apiMock.patchConfigForServer.mockReturnValueOnce(sa.p as never);
+    const p1 = store.salvar();
+    const p2 = store.salvar();                 // duplo clique antes da resposta
+    expect(apiMock.patchConfigForServer).toHaveBeenCalledTimes(1);
+    sa.resolve(payload({ chaveA: { valor: 'a' } }) as never);
+    await p1; await p2;
+    expect(apiMock.patchConfigForServer).toHaveBeenCalledTimes(1);
+  });
+
   it('invalidar() descarta resposta pendente sem nova chamada e zera flags', async () => {
     let alvo: Server | null = A;
     const store = criarConfigServidor(() => alvo);

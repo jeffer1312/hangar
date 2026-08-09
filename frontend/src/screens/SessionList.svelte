@@ -19,7 +19,7 @@
   import AccountMenu from '../components/AccountMenu.svelte';
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
   import { getSessions, createSession, deleteSession, renameSession, resumeSession, broadcast } from '../lib/api';
-  import { clearCredentials, listServers, getActiveId, selectServer, removeServer, addServer, renameServer, updateServer, serverColor } from '../lib/auth';
+  import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, updateServer, serverColor, validarPareamento } from '../lib/auth';
   import type { AggSession, ResumeCandidate, Provider } from '../lib/types';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, sortSessions, clusterByPair } from '../lib/format';
@@ -439,8 +439,7 @@
   }
 
   function handleLogout() {
-    clearCredentials();
-    onLogout();
+    onLogout();   // dono do clear de credenciais: App (logoutLocal)
   }
   // Sair pelo botao pede confirmacao (recuperacao exige o token/QR de novo, e o token pode estar no PC).
   // O handleLogout cru continua sendo chamado direto quando o ultimo servidor e removido (ja confirmado la).
@@ -488,14 +487,23 @@
     showAddServer = true;
   }
 
-  // Adiciona um servidor digitado à mão. Valida com getSessions (api.ts lê o ativo) e faz rollback
-  // em falha — igual ao Login — pra um servidor ruim não sujar a lista nem trocar o server bom.
+  // Adiciona um servidor digitado à mão. Validação ESTRITA ANTES de tocar storage (o form tem URL
+  // e token em campos separados; monta o texto de pareamento e passa pelo MESMO validarPareamento
+  // do QR/manual). Depois valida com getSessions (api.ts lê o ativo) e faz rollback em falha —
+  // igual ao Login — pra um servidor ruim não sujar a lista nem trocar o server bom.
   async function submitAddServer(e: SubmitEvent) {
     e.preventDefault();
     addBusy = true;
     addError = '';
+    const cru = `${addUrl.trim()}${addUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(addToken.trim())}`;
+    const pareamento = validarPareamento(cru);
+    if (!pareamento) {
+      addError = 'URL inválida — use http/https com o token.';
+      addBusy = false;
+      return;
+    }
     const prevActive = getActiveId();
-    const { id, existed } = addServer(addUrl.trim(), addToken.trim());
+    const { id, existed } = addServer(pareamento.base, pareamento.token);
     try {
       await getSessions();
       showAddServer = false;
@@ -509,21 +517,19 @@
     }
   }
 
-  // Adiciona um servidor pelo QR (parecido com o Login): pega token + origem absoluta e ativa.
+  // Adiciona um servidor pelo QR (parecido com o Login): MESMO validarPareamento estrito do
+  // manual; QR inválido NÃO fecha silencioso — erro visível com retry.
   function handleScanServer(text: string) {
-    let tok = text.trim();
-    let base = '';
-    try {
-      const u = new URL(text);
-      const t = u.searchParams.get('token');
-      if (t) tok = t;
-      base = u.searchParams.get('api') ?? u.origin;
-    } catch {
-      base = ''; // token cru sem URL -> sem origem confiável; ignora
+    const cru = text.trim();
+    const parsed = validarPareamento(cru);
+    if (!parsed) {
+      scanning = false;
+      showAddServer = true;
+      addError = 'QR inválido — use a URL de pareamento (http/https com ?token=).';
+      return;
     }
     scanning = false;
-    if (!tok || !base) return;
-    addServer(base, tok);
+    addServer(parsed.base, parsed.token);
     window.location.reload();
   }
 </script>

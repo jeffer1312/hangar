@@ -100,16 +100,25 @@
   // Remoção com confirmação REAL (ConfirmDialog). O ÚLTIMO servidor é removível de propósito:
   // remover tudo dispara o logout global (única saída pra deslogar o aparelho) — por isso o
   // ServerManager recebe `podeRemoverUltimo`.
-  let pendingRemoval = $state<{ id: string; label: string } | null>(null);
+  function fingerprintDe(s: Server): string {
+    return `${s.label}::${s.baseUrl}::${s.token}`;
+  }
+  let pendingRemoval = $state<{ id: string; label: string; fingerprint: string } | null>(null);
   let avisoRemocao = $state('');
   function confirmRemoval() {
     if (!pendingRemoval) return;
-    const id = pendingRemoval.id;
+    const { id, fingerprint } = pendingRemoval;
     pendingRemoval = null;
-    // Revalida o ID: o sync pode ter apagado este servidor entre o diálogo e o clique. Remover
-    // calado um servidor que já não existe é mentira — mostra o estado e não faz nada.
-    if (!servers.some((s) => s.id === id)) {
+    const atual = servers.find((s) => s.id === id);
+    // Revalida por FINGERPRINT (não só ID): o sync pode ter apagado OU alterado este servidor
+    // entre o diálogo e o clique. Remover calado uma entidade que mudou é mentira — mostra o
+    // estado e não faz nada.
+    if (!atual) {
       avisoRemocao = 'Este servidor já foi removido em outro aparelho.';
+      return;
+    }
+    if (fingerprintDe(atual) !== fingerprint) {
+      avisoRemocao = 'Este servidor mudou em outro aparelho — revise antes de remover.';
       return;
     }
     avisoRemocao = '';
@@ -168,7 +177,8 @@
   onRemove={(id) => {
     if (logoutInFlight) return;   // logout andando: portas de saída bloqueadas
     const s = servers.find((x) => x.id === id);
-    pendingRemoval = { id, label: s?.label ?? id };
+    if (!s) return;
+    pendingRemoval = { id, label: s.label, fingerprint: fingerprintDe(s) };
   }}
   onAdd={() => { showAdd = true; addUrlText = ''; addError = ''; }}
 />
@@ -206,8 +216,10 @@
       use:autofocus
       onkeydown={(e) => { addError = ''; if (e.key === 'Enter') submitPasteServer(); }}
       aria-label="URL de pareamento do servidor"
+      aria-invalid={!!addError}
+      aria-describedby={addError ? 'ss-add-err' : undefined}
     />
-    {#if addError}<p class="ss-add-err" role="alert">{addError}</p>{/if}
+    {#if addError}<p id="ss-add-err" class="ss-add-err" role="alert">{addError}</p>{/if}
   </ConfirmDialog>
 {/if}
 

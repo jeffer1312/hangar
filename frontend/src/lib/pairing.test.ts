@@ -42,6 +42,10 @@ describe('validarPareamento', () => {
     expect(validarPareamento('http://host/?token=abc&api=nao-e-url')).toBeNull();
   });
 
+  it('api= presente mas vazio falha (não cai na base da URL)', () => {
+    expect(validarPareamento('https://front/?token=abc&api=')).toBeNull();
+  });
+
   it('recusa lixo e token cru sem URL', () => {
     expect(validarPareamento('abc123')).toBeNull();
     expect(validarPareamento('')).toBeNull();

@@ -2,8 +2,18 @@
   // Chassi único dos modais de confirmação do desktop (era 6 cópias de
   // .confirm-backdrop/.confirm-card/.confirm-actions no Sidebar). O corpo entra por snippet
   // (children), compilado no escopo do CHAMADOR — CSS específico do corpo fica lá.
+  import { onMount } from 'svelte';
   import ModalDialog from './ModalDialog.svelte';
   import type { Snippet } from 'svelte';
+
+  // Restaura o foco ao gatilho ao fechar: quem abre uma confirmação sai do fluxo e, sem isto, o
+  // foco volta pro <body> (leitor de tela mudo e Tab recomeçando do zero). Se o gatilho já saiu
+  // do DOM (navegação), não faz nada.
+  let gatilho: HTMLElement | null = null;
+  onMount(() => {
+    gatilho = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return () => { if (gatilho?.isConnected) gatilho.focus(); };
+  });
   interface Action { label: string; kind?: 'danger' | 'primary'; disabled?: boolean; onClick: () => void }
   interface Props {
     title: string;
