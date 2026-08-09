@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { Server } from './auth';
 
 // auth.ts toca localStorage no load (migrate()). vitest env=node nao tem -> stub minimo ANTES do
@@ -22,7 +22,8 @@ let cookieJar = '';
 (globalThis as any).window = { location: { origin: 'http://casa:8765' } };
 
 const { mergeServers, validarPareamento, onServersChanged, removeServer,
-        addServer, updateServer, listServers, selectServer, serverFingerprint, snapshotRemocao, removalStillMatches } = await import('./auth');
+        addServer, updateServer, listServers, selectServer, getActiveId, serverFingerprint, snapshotRemocao, removalStillMatches,
+        snapshotServerState, restoreServerState, addServerWithRollback } = await import('./auth');
 
 const S = (id: string, baseUrl: string, token = 't') => ({ id, label: id, baseUrl, token });
 
@@ -240,5 +241,74 @@ describe('updateServer', () => {
     // O cookie é reescrito (idempotente) com o token DA ORIGEM; o do remoto nunca entra aqui.
     expect(cookieJar).not.toContain('tok-vps-novo');
     expect(cookieJar).toContain('tok-casa');
+  });
+});
+
+// Round 4: add TRANSACIONAL — servidor EXISTENTE (mesma baseUrl) com token novo + probe rejeitado
+// volta ao estado anterior (lista e ativo EXATOS); novo rejeitado não permanece; sucesso persiste.
+describe('addServerWithRollback', () => {
+  function reset() {
+    store.clear();
+    cookieJar = '';
+    addServer('http://casa:8765', 'tok-casa', 'Casa');
+    addServer('http://vps:8766', 'tok-vps', 'VPS');   // addServer deixa o ÚLTIMO como ativo
+    return { casa: listServers()[0], vps: listServers()[1] };
+  }
+
+  it('probe rejeitado em servidor EXISTENTE restaura lista+ativo exatos (token novo não permanece)', async () => {
+    reset();
+    const antes = snapshotServerState();
+    const probe = vi.fn(async () => { throw new Error('servidor fora do ar'); });
+    await expect(addServerWithRollback('http://casa:8765', 'tok-novo', probe))
+      .rejects.toThrow('servidor fora do ar');
+    expect(listServers()).toEqual(antes.servers);
+    expect(getActiveId()).toBe(antes.activeId);
+    expect(listServers().find((s) => s.baseUrl === 'http://casa:8765')!.token).toBe('tok-casa');
+    expect(listServers().find((s) => s.baseUrl === 'http://casa:8765')!.label).toBe('Casa');
+  });
+
+  it('servidor NOVO rejeitado não permanece na lista nem troca o ativo', async () => {
+    reset();
+    const antes = snapshotServerState();
+    const probe = vi.fn(async () => { throw new Error('falhou'); });
+    await expect(addServerWithRollback('http://novo:9999', 'tok-novo', probe))
+      .rejects.toThrow('falhou');
+    expect(listServers()).toEqual(antes.servers);
+    expect(getActiveId()).toBe(antes.activeId);
+  });
+
+  it('sucesso persiste o novo estado e o ativo correto', async () => {
+    reset();
+    const probe = vi.fn(async () => []);
+    const r = await addServerWithRollback('http://novo:9999', 'tok-novo', probe);
+    expect(r.succeeded).toBe(true);
+    const s = listServers().find((x) => x.id === r.id)!;
+    expect(s.baseUrl).toBe('http://novo:9999');
+    expect(s.token).toBe('tok-novo');
+    expect(getActiveId()).toBe(r.id);
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+
+  it('entrada que não monta URL válida NÃO chama addServer (defesa em profundidade)', async () => {
+    reset();
+    const probe = vi.fn(async () => []);
+    const antes = listServers().length;
+    const r = await addServerWithRollback('ftp://torta', 'abc', probe);
+    expect(r.succeeded).toBe(false);
+    expect(probe).not.toHaveBeenCalled();
+    expect(listServers()).toHaveLength(antes);
+  });
+
+  it('restoreServerState devolve lista, ativo e notificação', () => {
+    reset();
+    const antes = snapshotServerState();
+    const calls: string[] = [];
+    const un = onServersChanged(() => calls.push('cb'));
+    addServer('http://temporario:1', 't');          // muda lista + ativo
+    restoreServerState(antes);
+    expect(listServers()).toEqual(antes.servers);
+    expect(getActiveId()).toBe(antes.activeId);
+    expect(calls).toContain('cb');                   // notifyChanged roda no restore
+    un();
   });
 });

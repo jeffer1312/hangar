@@ -2,8 +2,8 @@
   import { onMount } from 'svelte';
   import HangarMark from './icons/HangarMark.svelte';
   import HangarWorking from './icons/HangarWorking.svelte';
-  import { createSession, deleteSession, renameSession, gitAction, checkoutBranch, resumeSession, broadcast, getHistoryTailForServer } from '../lib/api';
-  import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, updateServer, serverColor, validarPareamento, withServer, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
+  import { createSession, deleteSession, renameSession, gitAction, checkoutBranch, resumeSession, broadcast, getHistoryTailForServer, getSessions } from '../lib/api';
+  import { listServers, getActiveId, selectServer, removeServer, addServerWithRollback, renameServer, updateServer, serverColor, validarPareamento, withServer, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { abrirConfig } from '../lib/configNav';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
@@ -584,7 +584,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     if (listServers().length === 0) { onLogout(); return; }
     if (was) window.location.reload();
   }
-  function handleScan(text: string) {
+  async function handleScan(text: string) {
     const cru = text.trim();
     const parsed = validarPareamento(cru);
     if (!parsed) {
@@ -596,8 +596,15 @@ import ConfirmDialog from './ConfirmDialog.svelte';
       return;
     }
     scanning = false;
-    addServer(parsed.base, parsed.token);
-    window.location.reload();
+    // Add transacional: probe (getSessions) rejeitado NÃO recarrega — volta pro diálogo com o erro
+    // (o rollback completo já rodou dentro do helper).
+    try {
+      await addServerWithRollback(parsed.base, parsed.token, () => getSessions());
+      window.location.reload();
+    } catch (err) {
+      showAddServer = true;
+      addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
+    }
   }
   // Colar servidor manual (desktop nao tem camera): cola a URL de pareamento (com token) e adiciona
   // pela MESMA rota de parse do QR (validarPareamento estrito). Aberto pelo item "Adicionar
@@ -609,7 +616,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     addError = '';
     showAddServer = true;
   }
-  function submitPasteServer() {
+  async function submitPasteServer() {
     const cru = addUrlText.trim();
     const parsed = validarPareamento(cru);
     if (!parsed) {
@@ -618,8 +625,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         : 'Cole a URL de pareamento (com o token).';
       return;
     }
-    addServer(parsed.base, parsed.token);
-    window.location.reload();
+    try {
+      await addServerWithRollback(parsed.base, parsed.token, () => getSessions());
+      window.location.reload();
+    } catch (err) {
+      addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
+    }
   }
   function logout() {
     onLogout();   // dono do clear: App (logoutLocal)

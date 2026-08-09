@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { addServer, removeServer, selectServer, getActiveId, getBaseUrl, validarPareamento } from '../lib/auth';
+  import { addServerWithRollback, getBaseUrl, validarPareamento } from '../lib/auth';
   import { getSessions } from '../lib/api';
   import { syncStatus, register as syncRegister, login as syncLogin } from '../lib/sync';
   import QrScanner from '../components/QrScanner.svelte';
@@ -63,17 +63,17 @@
     loading = true;
     error = '';
 
-    // Adiciona+ativa o servidor (api.ts já lê o ativo). Em falha, rollback: se era novo remove e
-    // restaura o ativo anterior — pra um login ruim não sujar a lista nem trocar o server bom.
-    const prevActive = getActiveId();
-    const { id, existed } = addServer(pareamento.base, pareamento.token);
-
+    // Add TRANSACIONAL (round 4): o helper valida, adiciona, roda o probe (getSessions) e — em
+    // falha — restaura o snapshot COMPLETO (lista, ativo e cookie). Servidor existente com token
+    // novo volta como estava; novo não permanece. O form segue aberto pra retry.
     try {
-      await getSessions();
+      const r = await addServerWithRollback(pareamento.base, pareamento.token, () => getSessions());
+      if (!r.succeeded) {
+        error = 'URL ou token inválidos — use http/https com o token (sem espaços).';
+        return;
+      }
       onLogin();
     } catch (err) {
-      if (!existed) removeServer(id);
-      if (prevActive) selectServer(prevActive);
       error = err instanceof Error
         ? `Falha na conexão: ${err.message}`
         : 'Erro desconhecido';

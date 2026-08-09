@@ -1,6 +1,7 @@
 <script lang="ts">
   import { listServers, getActiveId, selectServer, renameServer, updateServer, removeServer,
-           addServer, validarPareamento, onServersChanged, snapshotRemocao, removalStillMatches } from '../../lib/auth';
+           addServerWithRollback, validarPareamento, onServersChanged, snapshotRemocao, removalStillMatches } from '../../lib/auth';
+  import { getSessions } from '../../lib/api';
   import { pushSupported } from '../../lib/push';
   import { sessionsStore } from '../../lib/sessionsStore.svelte';
   import ServerManager from '../ServerManager.svelte';
@@ -74,14 +75,20 @@
   let addError = $state('');
   let scanning = $state(false);
   function autofocus(node: HTMLInputElement) { node.focus(); }
-  function submitPasteServer() {
+  async function submitPasteServer() {
     const cru = addUrlText.trim();
     const parsed = validarPareamento(cru);
     if (!parsed) { addError = erroPareamento(cru); return; }
-    addServer(parsed.base, parsed.token);
-    window.location.reload();
+    // Add transacional: probe rejeitado não recarrega — erro visível e o diálogo fica pra retry
+    // (o rollback completo já rodou dentro do helper).
+    try {
+      await addServerWithRollback(parsed.base, parsed.token, () => getSessions());
+      window.location.reload();
+    } catch (err) {
+      addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
+    }
   }
-  function handleScan(text: string) {
+  async function handleScan(text: string) {
     const cru = text.trim();
     const parsed = validarPareamento(cru);
     if (!parsed) {
@@ -93,8 +100,13 @@
       return;
     }
     scanning = false;
-    addServer(parsed.base, parsed.token);
-    window.location.reload();
+    try {
+      await addServerWithRollback(parsed.base, parsed.token, () => getSessions());
+      window.location.reload();
+    } catch (err) {
+      showAdd = true;
+      addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
+    }
   }
 
   // Remoção com confirmação REAL (ConfirmDialog). O ÚLTIMO servidor é removível de propósito:

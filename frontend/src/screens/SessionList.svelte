@@ -19,7 +19,7 @@
   import AccountMenu from '../components/AccountMenu.svelte';
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
   import { getSessions, createSession, deleteSession, renameSession, resumeSession, broadcast } from '../lib/api';
-  import { listServers, getActiveId, selectServer, removeServer, addServer, renameServer, updateServer, serverColor, validarPareamento, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
+  import { listServers, getActiveId, selectServer, removeServer, addServerWithRollback, renameServer, updateServer, serverColor, validarPareamento, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
   import type { AggSession, ResumeCandidate, Provider } from '../lib/types';
   import type { RemovalSnapshot } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
@@ -511,15 +511,15 @@
       addBusy = false;
       return;
     }
-    const prevActive = getActiveId();
-    const { id, existed } = addServer(pareamento.base, pareamento.token);
+    // Add TRANSACIONAL (round 4): o helper valida, adiciona, roda o probe (getSessions) e restaura
+    // o snapshot completo em falha — servidor existente volta com o token antigo, novo não
+    // permanece. O form segue aberto pra retry.
     try {
-      await getSessions();
+      const r = await addServerWithRollback(pareamento.base, pareamento.token, () => getSessions());
+      if (!r.succeeded) { addError = 'URL inválida — use http/https com o token.'; addBusy = false; return; }
       showAddServer = false;
       window.location.reload();
     } catch (err) {
-      if (!existed) removeServer(id);
-      if (prevActive) selectServer(prevActive);
       addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
     } finally {
       addBusy = false;
@@ -527,8 +527,9 @@
   }
 
   // Adiciona um servidor pelo QR (parecido com o Login): MESMO validarPareamento estrito do
-  // manual; QR inválido NÃO fecha silencioso — erro visível com retry.
-  function handleScanServer(text: string) {
+  // manual; QR inválido NÃO fecha silencioso — erro visível com retry. Add transacional: probe
+  // rejeitado não recarrega — volta pro diálogo com o erro (rollback já foi feito no helper).
+  async function handleScanServer(text: string) {
     const cru = text.trim();
     const parsed = validarPareamento(cru);
     if (!parsed) {
@@ -538,8 +539,13 @@
       return;
     }
     scanning = false;
-    addServer(parsed.base, parsed.token);
-    window.location.reload();
+    try {
+      await addServerWithRollback(parsed.base, parsed.token, () => getSessions());
+      window.location.reload();
+    } catch (err) {
+      showAddServer = true;
+      addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
+    }
   }
 </script>
 

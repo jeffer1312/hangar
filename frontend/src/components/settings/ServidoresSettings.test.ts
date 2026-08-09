@@ -33,6 +33,7 @@ vi.mock('../../lib/sessionsStore.svelte', () => ({
   sessionsStore: { refreshServers: vi.fn(), reconnect: vi.fn() },
 }));
 vi.mock('../../lib/api', () => ({
+  getSessions: vi.fn(async () => []),
   getPushSettings: vi.fn(),
   getPushSettingsForServer: vi.fn(),
   setQuietHours: vi.fn(),

@@ -9,10 +9,7 @@ import * as api from '../lib/api';
 import * as sync from '../lib/sync';
 
 vi.mock('../lib/auth', () => ({
-  addServer: vi.fn(() => ({ id: 'srv-x', existed: false })),
-  removeServer: vi.fn(),
-  selectServer: vi.fn(),
-  getActiveId: vi.fn(() => null),
+  addServerWithRollback: vi.fn(async () => ({ id: 'srv-x', succeeded: true })),
   getBaseUrl: vi.fn(() => ''),
   validarPareamento: vi.fn(),
 }));
@@ -44,21 +41,21 @@ async function preencher(t: { el: HTMLElement }, base: string, token: string) {
   await tick();
 }
 
-describe('Login — validação estrita antes de addServer (round 4)', () => {
-  it('URL/token inválidos: addServer não é chamado, erro visível com role=alert', async () => {
+describe('Login — validação estrita antes do add transacional (round 4)', () => {
+  it('URL/token inválidos: addServerWithRollback não é chamado, erro visível com role=alert', async () => {
     authMock.validarPareamento.mockReturnValue(null);
     const t = montar();
     await preencher(t, 'ftp://host', 'ab cd');
     t.el.querySelector<HTMLButtonElement>('.connect-btn')!.click();
     await tick();
-    expect(authMock.addServer).not.toHaveBeenCalled();
+    expect(authMock.addServerWithRollback).not.toHaveBeenCalled();
     const err = t.el.querySelector<HTMLElement>('.error-msg');
     expect(err?.innerText).toContain('inválidos');
     expect(err?.getAttribute('role')).toBe('alert');
     unmount(t.comp);
   });
 
-  it('URL/token válidos: addServer recebe base+token parseados e conecta', async () => {
+  it('URL/token válidos: addServerWithRollback recebe base+token parseados e conecta', async () => {
     authMock.validarPareamento.mockReturnValue({ base: 'http://host:8765', token: 'abc' });
     apiMock.getSessions.mockResolvedValue([]);
     const onLogin = vi.fn();
@@ -71,7 +68,9 @@ describe('Login — validação estrita antes de addServer (round 4)', () => {
     await preencher({ el } as never, 'http://host:8765', 'abc');
     el.querySelector<HTMLButtonElement>('.connect-btn')!.click();
     await tick();
-    expect(authMock.addServer).toHaveBeenCalledWith('http://host:8765', 'abc');
+    expect(authMock.addServerWithRollback).toHaveBeenCalledWith(
+      'http://host:8765', 'abc', expect.any(Function),
+    );
     expect(onLogin).toHaveBeenCalled();
     unmount(comp);
   });

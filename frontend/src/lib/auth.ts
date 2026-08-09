@@ -203,6 +203,51 @@ export function addServer(
   return { id, existed };
 }
 
+// ── Add TRANSACIONAL (round 4) ──────────────────────────────────────────────
+// Snapshot COMPLETO do estado de servidores (lista + ativo). O add com probe (getSessions) pode
+// falhar DEPOIS de addServer sobrescrever um servidor existente (mesma baseUrl com token novo); o
+// rollback antigo (removeServer se !existed) perdia a credencial ANTERIOR do existente. Restaurar o
+// snapshot devolve lista, ativo e cookie exatamente como estavam.
+export function snapshotServerState(): { servers: Server[]; activeId: string | null } {
+  return { servers: listServers(), activeId: getActiveId() };
+}
+
+export function restoreServerState(snap: { servers: Server[]; activeId: string | null }): void {
+  writeServers(snap.servers);
+  if (snap.activeId) localStorage.setItem(ACTIVE_KEY, snap.activeId);
+  else localStorage.removeItem(ACTIVE_KEY);
+  cookieDaOrigem();
+  notifyChanged();
+}
+
+// Valida E adiciona com rollback COMPLETO. `probe` roda DEPOIS do addServer (ex: getSessions) pra
+// confirmar que o servidor responde de verdade; rejeição restaura o snapshot anterior — servidor
+// existente com token/label novos volta como estava, servidor novo não permanece. É o ÚNICO portão
+// de addServer nos callers: entrada inválida nem chega ao storage. Devolve { id, succeeded }; o
+// chamador só navega/recarrega com succeeded.
+export async function addServerWithRollback(
+  baseUrl: string,
+  token: string,
+  probe: () => Promise<unknown>,
+  label?: string,
+): Promise<{ id: string; succeeded: boolean }> {
+  const snap = snapshotServerState();
+  // Re-valida o texto de pareamento montado (base + token) ANTES de addServer — defesa em profundidade
+  // por trás da validação do caller: um base/token que passaram pra cá mas não montam URL válida não
+  // mutam storage nem navegam.
+  const cru = baseUrl + (baseUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
+  const pareamento = validarPareamento(cru);
+  if (!pareamento) return { id: '', succeeded: false };
+  const { id } = addServer(pareamento.base, pareamento.token, label);
+  try {
+    await probe();
+    return { id, succeeded: true };
+  } catch (e) {
+    restoreServerState(snap);
+    throw e;
+  }
+}
+
 // Renomeia um servidor (label custom persistido). Vazio volta pro rotulo derivado da URL — nao da
 // pra deixar sem nome. Nao mexe em token/baseUrl/ativo.
 export function renameServer(id: string, label: string): void {
