@@ -128,8 +128,8 @@ export default defineConfig({
         swDest: 'dist/sw.js',
       },
       manifest: {
-        name: 'Claude Cockpit',
-        short_name: 'Cockpit',
+        name: 'Hangar',
+        short_name: 'Hangar',
         display: 'standalone',
         // Desktop: sem barra de título do navegador — os controles da janela viram overlay
         // sobre o app. Quem abre espaço pra eles é --cp-wco-right (app.css). Celular ignora.

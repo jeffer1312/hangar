@@ -1,4 +1,4 @@
-// Janela nativa do claude-cockpit. Ver docs/superpowers/specs/2026-08-05-shell-electron-design.md.
+// Janela nativa do hangar. Ver docs/superpowers/specs/2026-08-05-shell-electron-design.md.
 const { app, BrowserWindow, screen } = require('electron');
 const { ler, gravar } = require('./settings.cjs');
 
@@ -89,7 +89,7 @@ app.whenReady().then(async () => {
   // extensão) a tela de Aparência ofereceria "Desktop" e escolher isso zeraria o fundo de uma
   // janela sólida — o app nasceria sem fundo nenhum. Vai no user agent, e não na URL, porque
   // Login.svelte:111 apaga a query quando ela traz ?token= (pareamento).
-  if (fundo.transparente) app.userAgentFallback += ' claude-cockpit-shell';
+  if (fundo.transparente) app.userAgentFallback += ' hangar-shell';
 
   const win = new BrowserWindow({
     ...geo,
@@ -105,7 +105,7 @@ app.whenReady().then(async () => {
   // Título FIXO: é ele que a windowrulev2 do Hyprland casa (a classe é sempre 'electron' e não
   // muda — medido com app.setName e --class em 05/08/2026). preventDefault impede que a navegação
   // do SPA troque o título.
-  win.setTitle('claude-cockpit');
+  win.setTitle('hangar');
   win.on('page-title-updated', (e) => e.preventDefault());
 
   // A tela de recuperação não é endereço de cockpit: se o fechamento pegar a janela parada nela

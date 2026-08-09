@@ -66,7 +66,7 @@ measured on real traffic and built. See `transcript.py` (`_peer_msg`), `registry
   full paragraph instructing the receiver about permission laundering. `origin.body` is the clean
   text; for the `remove` shape it has to be pulled out of the wrapper.
 - **`origin.name` is the session's TITLE, not its name** ("Revisar novo modo de envio no backlog"
-  where the tmux session is `claude-cockpit`), so it does not match anything the app addresses by.
+  where the tmux session is `hangar`), so it does not match anything the app addresses by.
   `verifiedPeerPid` → pane → tmux name is what makes the group feed and the badges work.
 - The whole integration is therefore **one branch in the parser** that normalizes a native message
   into the exact shape `cp-send` already produces (`[de: <session>] body`). Nothing in the front
@@ -268,7 +268,7 @@ still prints **`Pronto`** at the end. It is not cosmetic — it is the whole fai
 - **Fixed by a clean `npm ci`** once nothing held the binary (450 packages, exit 0, `.bin\vite.cmd`
   back). One warning left behind: `esbuild@0.28.1` has a postinstall not approved by allow-scripts.
 
-**And the logon trigger does not heal this.** The front task (`claude-cockpit-frontend`, running
+**And the logon trigger does not heal this.** The front task (`hangar-frontend`, running
 `vite preview` over `frontend/dist`) has an `MSFT_TaskLogonTrigger` with principal Interactive — it
 fires **on logon**, so when suspension kills the process without a logoff/logon cycle, nothing brings
 it back. Which is exactly what happened: the backend survived, the front did not, and the box sat

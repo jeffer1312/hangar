@@ -1,4 +1,4 @@
-# claude-cockpit — wrapper interativo do Codex para fish.
+# hangar — wrapper interativo do Codex para fish.
 function codex
     if not isatty stdin; or test (count $argv) -gt 1
         command codex $argv

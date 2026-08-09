@@ -61,7 +61,7 @@ def _recorte(bruto: dict) -> dict:
 def main() -> None:
     # models.dev devolve 403 pro User-Agent default do urllib (confirmado: curl sem UA passa,
     # curl com UA "Python-urllib/..." toma o mesmo 403) — não é bloqueio de rede, é bot-detection.
-    req = urllib.request.Request(URL, headers={"User-Agent": "claude-cockpit/fetch_model_prices"})
+    req = urllib.request.Request(URL, headers={"User-Agent": "hangar/fetch_model_prices"})
     with urllib.request.urlopen(req, timeout=30) as r:
         bruto = json.load(r)
     modelos = slim(bruto)

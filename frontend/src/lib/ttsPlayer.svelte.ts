@@ -88,7 +88,7 @@ function publicarNaTelaDeBloqueio() {
   try {
     navigator.mediaSession.metadata = new MediaMetadata({
       title: label || 'Leitura em voz',
-      artist: 'claude-cockpit',
+      artist: 'hangar',
     });
     navigator.mediaSession.setActionHandler('play', () => ttsPlayer.toggle());
     navigator.mediaSession.setActionHandler('pause', () => ttsPlayer.toggle());

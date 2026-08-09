@@ -211,6 +211,43 @@ número + contexto (caro, e o arquivo pode ter mudado desde a edição). No git 
 **Observação registrada de passagem:** ele comentou que a saída do **Bash** no card *"não mostra de
 uma forma boa"*. Não foi investigado — assunto separado deste item.
 
+## 7. cp-send: pergunta com resposta rastreada (`ask`/`pending`) — avaliado 2026-08-08, não construído
+
+Hoje o cp-send é **tiro e esquece**. Quem manda um recado pro par depende do texto do protocolo
+(heredoc do `install-cp-send.sh`) pra que o outro lado responda, e não existe lugar nenhum que
+saiba *"eu perguntei X e ainda não voltou"*. Recado perdido — sessão que leu e não respondeu, ou
+morreu no meio — some sem deixar rastro, e quem perguntou só descobre relendo o próprio chat.
+
+**A ideia**: um segundo verbo ao lado do recado. `cp-send --ask <sessao> "pergunta"` gera um id de
+correlação, grava a pendência, e a resposta do outro lado (`--reply <id>`) fecha a linha. `cp-send
+--pending` lista o que está em aberto, dos dois lados (o que eu perguntei, o que me perguntaram).
+
+**Onde encaixa no que já existe**: o `pqueue` já é fila durável por sessão e já sobrevive a
+restart — a pendência é um registro a mais, não infra nova. A exibição cabe no **PairSheet**, que
+já mostra a conversa do par e o contrato compartilhado; um chip de "N em aberto" ali é o mesmo
+padrão do 🔁 do loop. Cross-server (`servidor::sessao`) precisa entrar no desenho desde o começo:
+o id de correlação tem que ser único entre máquinas, senão duas pendências colidem no `--pending`.
+
+**De onde veio**: da leitura do [agent-intercom](https://github.com/dataforxyz/agent-intercom-pi)
+(fork cross-harness do `pi-intercom`, divulgado pelo perfil do Pi em 08/08/2026), que tem
+`intercom_ask`/`intercom_reply`/`intercom_pending` e guarda a autorização de resposta em
+`broker-asks.json`, sobrevivendo a restart do broker. **Só a semântica interessa** — o transporte
+dele foi avaliado e recusado, por três motivos que valem ficar registrados pra ninguém reabrir:
+
+1. **Same-machine por desenho** (declarado no README dele: sem rede, pra não gerenciar porta).
+   Nosso `servidor::sessao` é rede. Adotar seria manter os dois caminhos, não trocar um pelo outro.
+2. **O "cross-harness" já não é ganho aqui.** É o único diferencial dele, e os três lados já
+   entram por API nativa: Claude pelo `SendMessage` (nativo desde 2.1.224), Pi pelo
+   `pi.sendUserMessage({deliverAs:"steer"})` do `pi_inbox`/`cp-state.ts`, Codex pelo app-server.
+   O adaptador Claude Code **dele** não tem injeção nativa — essa família de projetos entrega por
+   hook `PreToolUse` relendo inbox a cada tool call, com `Stop` hook pra acordar a sessão (ver
+   [claude-code#35072](https://github.com/anthropics/claude-code/issues/35072), que pede
+   justamente um interrupt confiável). Seria trocar chamada de função dentro do processo por
+   polling em hook.
+3. **Licença**: agent-intercom é AGPL-3.0-or-later, este repo é MIT. Cliente escrito lendo o código
+   deles é derivado; sobraria falar com o broker como processo separado — o que reforça o item 1:
+   dois hubs, dois registros de sessão, duas verdades sobre quem está vivo.
+
 ## Notes
 - These build on the existing infra: SSE stream, transcript parser, send-keys input, the
   HTTPS/secure-context (Tailscale), and the redesigned composer (a natural home for an

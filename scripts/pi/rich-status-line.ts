@@ -34,7 +34,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { basename, join } from "node:path";
 import { homedir } from "node:os";
 
-// ── claude-cockpit: publica a linha INTEIRA num sidecar ────────────────────────────────────────
+// ── hangar: publica a linha INTEIRA num sidecar ────────────────────────────────────────
 // O `truncateToWidth` lá embaixo corta a linha na largura do terminal ANTES de imprimir, e o app
 // (que lê o pane) herdava o corte: numa janela de 99 colunas sumiam ⚡5h/📅7d, custo e a janela de
 // contexto — o medidor do app virava "medição indisponível" só por causa da largura. Aqui a versão

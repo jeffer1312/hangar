@@ -1,4 +1,4 @@
-# claude-cockpit
+# Hangar
 
 Drive a live Claude Code session (running in a `tmux` session on your machine) from your phone over
 LAN/VPN, as a mobile chat. Single-user, LAN/VPN-only by design. Backend: Python 3.14 + FastAPI
@@ -105,7 +105,7 @@ cp-send, escreve o contrato do grupo, distribui escopo, monitora e consolida).
 ./scripts/install-claude-wrapper.sh   # symlink ~/.local/bin/cp-engine + wrapper claude-engine — sem isto,
                                        # motor configurado pelo celular abre um pane que morre na hora
                                        # (tmux new-session ainda retorna 0, o app reporta sucesso calado)
-systemctl --user restart claude-cockpit-backend.service   # API de pareamento/preview
+systemctl --user restart hangar-backend.service   # API de pareamento/preview
 npm --prefix frontend run build                          # só se o front for servido estático (vite dev pega via HMR)
 ```
 
@@ -210,7 +210,7 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   fazem nada porque a rota nunca monta). O `svelte-check` passa — o arquivo está bom, quem corrompeu é o
   cache de transform do dev server, e ele vale pra TODOS os clientes (não é por-browser). Diagnóstico:
   `fetch('/src/<modulo>')` na página — stub tem <1KB e não contém o markup. Remédio: `systemctl --user
-  restart claude-cockpit-frontend.service` + reload ignorando cache. Verificação pós-edição de front
+  restart hangar-frontend.service` + reload ignorando cache. Verificação pós-edição de front
   SEMPRE inclui abrir a tela afetada e conferir que ela montou (não só o `check`/`vitest`).
 - **Markdown NUNCA aparece cru.** Todo conteúdo `.md` exibido no app passa por `lib/markdown.ts`
   (`renderMarkdown`) com tipografia própria — contrato do par (`PairSheet`), prompt/transcript de

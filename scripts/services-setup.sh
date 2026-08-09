@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run claude-cockpit back + front as persistent systemd *user* services.
+# Run hangar back + front as persistent systemd *user* services.
 #
 # They keep running after you close the terminal (and across logout/reboot if
 # `loginctl enable-linger $USER` is set). The frontend serves the BUILD (`npm run preview`),
@@ -23,8 +23,8 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SD_DIR="$HOME/.config/systemd/user"
-BACK="claude-cockpit-backend.service"
-FRONT="claude-cockpit-frontend.service"
+BACK="hangar-backend.service"
+FRONT="hangar-frontend.service"
 
 # Diretório do npm que a unit systemd vai usar. A unit nasce sem o teu PATH de shell, então
 # precisa de um caminho ABSOLUTO e ESTÁVEL.
@@ -126,7 +126,7 @@ escreve_unit() { # escreve_unit <nome> <conteudo>
 
 escreve_unit "$BACK" "$(cat <<EOF
 [Unit]
-Description=claude-cockpit backend (FastAPI/uvicorn)
+Description=hangar backend (FastAPI/uvicorn)
 After=network.target
 
 [Service]
@@ -153,7 +153,7 @@ if [[ "$BACKEND_ONLY" == 1 || "$SERVE" == backend ]]; then
 else
 escreve_unit "$FRONT" "$(cat <<EOF
 [Unit]
-Description=claude-cockpit frontend (Vite preview, serve o build)
+Description=hangar frontend (Vite preview, serve o build)
 After=network.target
 
 [Service]

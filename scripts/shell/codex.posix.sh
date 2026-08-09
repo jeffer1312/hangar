@@ -1,4 +1,4 @@
-# claude-cockpit — wrapper interativo do Codex para bash/zsh.
+# hangar — wrapper interativo do Codex para bash/zsh.
 # `codex` e `codex "prompt"` criam a sessao pelo backend e anexam seu tmux.
 # Subcomandos/flags e usos nao interativos continuam no binario oficial.
 # Escape explicito: `command codex ...`.

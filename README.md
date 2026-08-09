@@ -1,4 +1,4 @@
-# claude-cockpit
+# Hangar
 
 **A private control panel for live Claude Code, Pi, and Codex sessions** — from your phone or desktop, over your own LAN/VPN.
 
@@ -10,14 +10,14 @@
 </p>
 
 <p align="center">
-  <a href="docs/demo/claude-cockpit-overview.webm">▶ Watch the 40-second demo</a>
+  <a href="docs/demo/hangar-overview.webm">▶ Watch the 40-second demo</a>
 </p>
 
 > **Screenshots and video use synthetic demo data.** Session names, prompts, states, and costs are synthetic; provider/model labels are either synthetic demo labels or representative public identifiers, never data from a user's account.
 
 ## What it does
 
-claude-cockpit is a self-hosted PWA that lets you keep an eye on agent sessions without having to stay at the terminal.
+Hangar is a self-hosted PWA that lets you keep an eye on agent sessions without having to stay at the terminal.
 
 - **Phone chat:** follow live output, send prompts, answer interactive questions, interrupt work, and keep drafts per session.
 - **Desktop board:** see Claude Code, Pi, and Codex sessions grouped by *needs you*, *working*, and *ready*.
@@ -79,14 +79,14 @@ The installer sets up the backend and frontend dependencies and can install the 
 ### Linux or macOS
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jeffer1312/claude-cockpit/main/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/jeffer1312/hangar/main/bootstrap.sh | bash
 ```
 
 Or clone first if you want to inspect the files:
 
 ```bash
-git clone https://github.com/jeffer1312/claude-cockpit
-cd claude-cockpit
+git clone https://github.com/jeffer1312/hangar
+cd hangar
 ./install.sh
 ```
 
@@ -95,14 +95,14 @@ cd claude-cockpit
 Python **3.14+**, Node 20+, Git, `uv`, and the current Claude Code CLI are required. The Windows installer uses psmux as the tmux-compatible multiplexer.
 
 ```powershell
-irm https://raw.githubusercontent.com/jeffer1312/claude-cockpit/main/bootstrap.ps1 | iex
+irm https://raw.githubusercontent.com/jeffer1312/hangar/main/bootstrap.ps1 | iex
 ```
 
 To choose another local destination:
 
 ```powershell
-$env:CP_DESTINO = 'D:\claude-cockpit'
-irm https://raw.githubusercontent.com/jeffer1312/claude-cockpit/main/bootstrap.ps1 | iex
+$env:CP_DESTINO = 'D:\hangar'
+irm https://raw.githubusercontent.com/jeffer1312/hangar/main/bootstrap.ps1 | iex
 ```
 
 For pairing and PWA installation, see [docs/USAGE.md](docs/USAGE.md).

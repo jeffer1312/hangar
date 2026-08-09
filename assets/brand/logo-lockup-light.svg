@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 260">
+  <g color="#100e11" transform="translate(60,42) scale(0.85)">
+    <path d="M 34.18 138.00 A 76.00 76.00 0 1 1 165.82 138.00" fill="none" stroke="currentColor" stroke-width="13.00" stroke-linecap="round"/>
+    <path d="M 49.59 116.38 A 53.00 53.00 0 1 1 150.41 116.38" fill="none" stroke="currentColor" stroke-width="13.00" stroke-linecap="round"/>
+    <path d="M 70.16 103.14 A 30.00 30.00 0 1 1 129.84 103.14" fill="none" stroke="currentColor" stroke-width="13.00" stroke-linecap="round"/>
+  </g>
+  <text x="270" y="165" font-family="Space Grotesk, Inter, sans-serif" font-size="120" font-weight="600" fill="#100e11" letter-spacing="-2">Hangar</text>
+</svg>

@@ -306,7 +306,7 @@ def _baixar() -> None:
     # UA próprio é OBRIGATÓRIO: o models.dev responde 403 ao User-Agent default do urllib
     # (`Python-urllib/3.x`) — medido na Task 1, onde o mesmo download só passou com header.
     # Sem isto, toda atualização de tarifa falha calada e o app fica preso no snapshot.
-    req = urllib.request.Request(URL, headers={"User-Agent": "claude-cockpit/pricing"})
+    req = urllib.request.Request(URL, headers={"User-Agent": "hangar/pricing"})
     try:
         if destino.is_file():
             ts = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(destino.stat().st_mtime))

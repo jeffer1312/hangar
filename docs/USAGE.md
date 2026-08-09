@@ -1,4 +1,4 @@
-# Como usar o claude-cockpit
+# Como usar o hangar
 
 Guia de uso ponta-a-ponta: subir, conectar o celular (LAN ou Tailscale), instalar
 como PWA e operar o chat. Pra arquitetura/API ver o [README](../README.md).
@@ -14,27 +14,27 @@ como PWA e operar o chat. Pra arquitetura/API ver o [README](../README.md).
 - `tmux`, `claude` (Claude Code), Python 3.14 + [`uv`](https://docs.astral.sh/uv/), Node 20+.
 - Celular na **mesma rede** do PC (Wi-Fi) **ou** ambos no **mesmo tailnet** (Tailscale).
 
-**Instalar é uma linha só** — ela clona o repositório em `~/claude-cockpit` e chama o instalador:
+**Instalar é uma linha só** — ela clona o repositório em `~/hangar` e chama o instalador:
 
 ```bash
 # Linux/macOS
-curl -fsSL https://raw.githubusercontent.com/jeffer1312/claude-cockpit/main/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/jeffer1312/hangar/main/bootstrap.sh | bash
 ```
 
 ```powershell
 # Windows
-irm https://raw.githubusercontent.com/jeffer1312/claude-cockpit/main/bootstrap.ps1 | iex
+irm https://raw.githubusercontent.com/jeffer1312/hangar/main/bootstrap.ps1 | iex
 ```
 
 Outra pasta de destino, ou flags do `install.sh`, vão **depois de `-s --`** (sob `curl | bash` é
 esse separador que impede o próprio bash de comê-las):
 
 ```bash
-curl -fsSL …/bootstrap.sh | bash -s -- ~/apps/claude-cockpit --no-frontend
+curl -fsSL …/bootstrap.sh | bash -s -- ~/apps/hangar --no-frontend
 curl -fsSL …/bootstrap.sh | bash -s -- --check      # só confere dependências e sai
 ```
 
-No Windows, defina `$env:CP_DESTINO = 'D:\claude-cockpit'` **antes** da linha do `irm` — sob
+No Windows, defina `$env:CP_DESTINO = 'D:\hangar'` **antes** da linha do `irm` — sob
 `irm | iex` o script chega como texto e não recebe argumento nenhum. Rodar de novo é seguro: se a
 pasta já for este repositório ele faz `git pull` em vez de clonar; se for outra coisa, ele **para**
 em vez de mexer no que é seu.
@@ -42,7 +42,7 @@ em vez de mexer no que é seu.
 Prefere ver o que está rodando antes? Clone na mão — dá no mesmo:
 
 ```bash
-git clone https://github.com/jeffer1312/claude-cockpit && cd claude-cockpit
+git clone https://github.com/jeffer1312/hangar && cd hangar
 ./install.sh                                       # ou --check pra só listar o que falta
 powershell -ExecutionPolicy Bypass -File install.ps1   # Windows
 powershell -ExecutionPolicy Bypass -File install.ps1 -SoChecar

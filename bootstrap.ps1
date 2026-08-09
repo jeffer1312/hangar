@@ -1,10 +1,10 @@
-﻿# claude-cockpit - clonar e instalar numa linha so, no Windows.
+﻿# hangar - clonar e instalar numa linha so, no Windows.
 #
-#   irm https://raw.githubusercontent.com/jeffer1312/claude-cockpit/main/bootstrap.ps1 | iex
+#   irm https://raw.githubusercontent.com/jeffer1312/hangar/main/bootstrap.ps1 | iex
 #
-# Destino: $HOME\claude-cockpit. Pra mudar, defina a variavel ANTES da linha acima:
+# Destino: $HOME\hangar. Pra mudar, defina a variavel ANTES da linha acima:
 #
-#   $env:CP_DESTINO = 'D:\claude-cockpit'
+#   $env:CP_DESTINO = 'D:\hangar'
 #   irm https://.../bootstrap.ps1 | iex
 #
 # Nao ha `param()` aqui de proposito: sob `irm | iex` o iex recebe so o TEXTO do script, entao
@@ -21,7 +21,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$repoUrl = 'https://github.com/jeffer1312/claude-cockpit.git'
+$repoUrl = 'https://github.com/jeffer1312/hangar.git'
 $ramo    = 'main'
 
 function Titulo($m) { Write-Host "`n$m" -ForegroundColor Cyan }
@@ -38,9 +38,9 @@ function Atualiza-Path {
 }
 
 $destino = $env:CP_DESTINO
-if (-not $destino) { $destino = Join-Path $HOME 'claude-cockpit' }
+if (-not $destino) { $destino = Join-Path $HOME 'hangar' }
 
-# $true = o remoto desta pasta e o claude-cockpit. Checar o REMOTO, nao so a existencia da
+# $true = o remoto desta pasta e o hangar. Checar o REMOTO, nao so a existencia da
 # pasta: "tem um .git aqui" nao quer dizer que e este projeto, e dar pull no repo errado e pior
 # que parar.
 function EhEsteRepo($pasta) {
@@ -49,7 +49,7 @@ function EhEsteRepo($pasta) {
     if ($LASTEXITCODE -ne 0 -or -not $url) { return $false }
     $url = ([string]$url).Trim().TrimEnd('/')
     if ($url.EndsWith('.git')) { $url = $url.Substring(0, $url.Length - 4) }
-    return ($url -match 'github\.com[:/]jeffer1312/claude-cockpit$')
+    return ($url -match 'github\.com[:/]jeffer1312/hangar$')
 }
 
 function Clona {
@@ -59,7 +59,7 @@ function Clona {
     Ok 'clonado'
 }
 
-Titulo 'claude-cockpit - instalacao em uma linha'
+Titulo 'hangar - instalacao em uma linha'
 
 Atualiza-Path
 if (Tem 'git') {
@@ -91,8 +91,8 @@ if (-not (Test-Path $destino)) {
     }
     Ok 'atualizado'
 } elseif (Get-ChildItem -Force -LiteralPath $destino -ErrorAction SilentlyContinue) {
-    Erro "$destino ja existe e NAO e o claude-cockpit - nao vou mexer no que e seu"
-    Nota 'outro destino: $env:CP_DESTINO = "D:\claude-cockpit" e rode de novo'
+    Erro "$destino ja existe e NAO e o hangar - nao vou mexer no que e seu"
+    Nota 'outro destino: $env:CP_DESTINO = "D:\hangar" e rode de novo'
     exit 1
 } else {
     Clona   # pasta existe mas esta vazia: o git clona pra dentro dela

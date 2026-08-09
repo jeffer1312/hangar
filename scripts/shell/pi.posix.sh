@@ -1,7 +1,7 @@
-# claude-cockpit — `pi` wrapper (bash + zsh). Sourced from your rc by
+# hangar — `pi` wrapper (bash + zsh). Sourced from your rc by
 # scripts/install-claude-wrapper.sh. Fish has its own version: scripts/shell/pi.fish
 #
-# Makes every interactive `pi` trackable by the claude-cockpit app:
+# Makes every interactive `pi` trackable by the hangar app:
 #  1. injects a unique --session-id  -> CP_PI_SESSION carries the SAME uuid, exported into pi's own
 #     environment. pi rewrites its own argv, so --session-id disappears from /proc/<pid>/cmdline —
 #     the backend reads CP_PI_SESSION from /proc/<pid>/environ instead (registry.py:_pi_sid_of).

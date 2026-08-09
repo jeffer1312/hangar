@@ -1,4 +1,4 @@
-# claude-cockpit — Design System
+# hangar — Design System
 
 Source of truth: `frontend/src/app.css` (tokens + shared keyframes). This file summarizes it;
 when they disagree, `app.css` wins. Dark is the default (`:root`); light is `[data-theme="light"]`,

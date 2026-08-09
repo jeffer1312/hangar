@@ -385,7 +385,7 @@ process.stdin.on('end', () => {
     }
     if (cur) lines.push(cur);
 
-    // claude-cockpit: publica a linha INTEIRA (sem ANSI, sem quebra) num sidecar que o backend lê
+    // hangar: publica a linha INTEIRA (sem ANSI, sem quebra) num sidecar que o backend lê
     // preferindo-a ao pane. O que sai no terminal é limitado pela largura — e quando a quebra cai em
     // cima do par de contexto, o Claude Code corta com "…" ("💬 769k/238 770k…") e o app fica sem
     // como medir contexto, exibindo "medição indisponível" só por causa do tamanho da janela.

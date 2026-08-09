@@ -49,7 +49,7 @@ def _load() -> dict:
         return {}   # esperado: sem peers.json = cross-server desligado, não é erro
     except (OSError, json.JSONDecodeError, ValueError) as e:
         # Arquivo existe mas está ilegível/malformado: BUG de config, não "desligado". Sem este log
-        # (journalctl --user -u claude-cockpit-backend) uma vírgula sobrando no peers.json fazia
+        # (journalctl --user -u hangar-backend) uma vírgula sobrando no peers.json fazia
         # TODOS os peers falharem com "não cadastrado" e o usuário caçava o problema errado.
         _log.warning("peers.json ilegível/malformado (%s): %r", _PEERS_FILE, e)
         return {}

@@ -1,11 +1,11 @@
 {
-  "name": "claude-cockpit-shell",
+  "name": "hangar-shell",
   "private": true,
   "version": "0.1.0",
-  "description": "Janela nativa transparente do claude-cockpit",
+  "description": "Janela nativa transparente do hangar",
   "main": "main.cjs",
   "author": "Jefferson Felizardo",
-  "desktopName": "claude-cockpit.desktop",
+  "desktopName": "hangar.desktop",
   "scripts": {
     "start": "electron main.cjs",
     "test": "node --test",
@@ -17,8 +17,8 @@
   },
   "build": {
     "appId": "com.claudecockpit.shell",
-    "productName": "Claude Cockpit",
-    "artifactName": "claude-cockpit-${version}-${arch}.${ext}",
+    "productName": "Hangar",
+    "artifactName": "hangar-${version}-${arch}.${ext}",
     "files": [
       "main.cjs",
       "settings.cjs",

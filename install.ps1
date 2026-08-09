@@ -1,4 +1,4 @@
-﻿# claude-cockpit - instalacao completa no Windows.
+﻿# hangar - instalacao completa no Windows.
 # ATENCAO: este arquivo PRECISA ser gravado em UTF-8 COM BOM.
 # O Windows PowerShell 5.1 (o que vem no Windows) le script sem BOM como cp1252, e ai um
 # travessao U+2014 (E2 80 94) vira 'a-E2-80-94' -> o byte 0x94 e a ASPA CURVA U+201D, que o
@@ -431,7 +431,7 @@ if ($precisa) {
 # backend nao sabe qual transcript e daquela sessao) e nao vive num pane (nao ha estado nem
 # input). Sessao criada PELO app funciona de qualquer jeito; isto e sobre a outra direcao.
 Titulo '5/8 Wrapper do claude (sessao aberta por voce aparece no app)'
-$marca = '# >>> claude-cockpit >>>'
+$marca = '# >>> hangar >>>'
 $perfil = $PROFILE.CurrentUserAllHosts
 $jaTem = (Test-Path $perfil) -and (Select-String -Path $perfil -Pattern ([regex]::Escape($marca)) -Quiet)
 if ($jaTem) {
@@ -462,7 +462,7 @@ if ($jaTem) {
 
 $marca
 . "$raiz\scripts\shell\claude.ps1"
-# <<< claude-cockpit <<<
+# <<< hangar <<<
 "@
     Ok "bloco adicionado em $perfil"
     Nota 'Vale nos terminais NOVOS - este aqui ainda esta com o perfil antigo.'
@@ -574,14 +574,14 @@ Nota 'claude como VOCE, entao um host exposto e execucao remota na sua maquina.'
 # achando que liberou. Ja liberado -> nem pergunta: re-rodar o instalador depois de um git pull
 # deve pegar so o que falta, nao repetir pergunta do que ja esta de pe.
 $regras = @(8765, 5173) | ForEach-Object {
-    Get-NetFirewallRule -DisplayName "claude-cockpit $_" -ErrorAction SilentlyContinue
+    Get-NetFirewallRule -DisplayName "hangar $_" -ErrorAction SilentlyContinue
 }
 if ($regras.Count -eq 2) {
     Ok 'portas 8765 e 5173 ja liberadas no firewall'
 } elseif (Pergunte '  Liberar as portas 8765 e 5173 no firewall pra rede LOCAL?') {
     if (EhAdmin) {
         foreach ($p in 8765, 5173) {
-            $nome = "claude-cockpit $p"
+            $nome = "hangar $p"
             Get-NetFirewallRule -DisplayName $nome -ErrorAction SilentlyContinue |
                 Remove-NetFirewallRule -ErrorAction SilentlyContinue
             # Profile Private: rede de casa. Em rede Publica (cafe, aeroporto) segue fechado,
@@ -592,8 +592,8 @@ if ($regras.Count -eq 2) {
         Ok 'portas liberadas (perfil Private apenas)'
     } else {
         Falta 'sem privilegio de administrador - abra um PowerShell como admin e rode:'
-        Nota 'New-NetFirewallRule -DisplayName "claude-cockpit 8765" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8765 -Profile Private'
-        Nota 'New-NetFirewallRule -DisplayName "claude-cockpit 5173" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 5173 -Profile Private'
+        Nota 'New-NetFirewallRule -DisplayName "hangar 8765" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8765 -Profile Private'
+        Nota 'New-NetFirewallRule -DisplayName "hangar 5173" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 5173 -Profile Private'
     }
 }
 
@@ -650,7 +650,7 @@ $tarefas = @(
     # fica segurando a porta e o `python` neto. Serve pro filtro por PADRAO do Pare-Servico — sem ele,
     # o casamento e substring pura da linha de comando, e QUALQUER processo que so MENCIONE este
     # caminho vira alvo (um editor, um grep, o terminal de onde se chamou o instalador).
-    @{ Nome = 'claude-cockpit-backend';  Exe = 'uv';  Args = 'run python -m app.main'; Dir = "$raiz\backend"
+    @{ Nome = 'hangar-backend';  Exe = 'uv';  Args = 'run python -m app.main'; Dir = "$raiz\backend"
        Porta = $portaBack;  Padrao = [regex]::Escape("$raiz\backend"); ExeProc = 'uv|python' },
     # `run preview`, NAO `run dev`: o passo 2 acabou de gerar o frontend\dist e subir o dev
     # server aqui serviria desenvolvimento numa instalacao de producao - a mesma incoerencia que
@@ -658,7 +658,7 @@ $tarefas = @(
     # porta 5173 com o mesmo proxy /api, entao a origem nao muda e ninguem perde localStorage
     # (cp_servers, tema, layout). Pra mexer no layout com recarga ao vivo: pare a tarefa e rode
     # `npm run dev` na mao.
-    @{ Nome = 'claude-cockpit-frontend'; Exe = 'npm'; Args = 'run preview';            Dir = "$raiz\frontend"
+    @{ Nome = 'hangar-frontend'; Exe = 'npm'; Args = 'run preview';            Dir = "$raiz\frontend"
        Porta = $portaFront; Padrao = [regex]::Escape("$raiz\frontend"); ExeProc = 'node|npm|vite' }
 )
 
@@ -691,7 +691,7 @@ if ($jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu l
             # A saida NAO pode simplesmente sumir junto: e nela que sai o QR de pareamento e
             # qualquer erro de subida. Vai pra arquivo, um por servico, sobrescrito a cada start
             # (nao cresce sem limite; o que interessa e sempre a execucao atual).
-            $log = Join-Path $env:LOCALAPPDATA "claude-cockpit\$($t.Nome).log"
+            $log = Join-Path $env:LOCALAPPDATA "hangar\$($t.Nome).log"
             New-Item -ItemType Directory -Force -Path (Split-Path -Parent $log) | Out-Null
             # -EncodedCommand (base64 UTF-16LE) em vez de -Command com aspas: o PowerShell NAO
             # escapa com barra invertida, e a string aninhada quebrava o New-ScheduledTaskAction
@@ -740,11 +740,11 @@ if ($jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu l
         Ok "backend respondendo em 127.0.0.1:$portaBack"
     } else {
         Falta 'o backend NAO subiu em 15s - o app nao vai conectar'
-        Nota "veja o porque:  Get-Content `"$env:LOCALAPPDATA\claude-cockpit\claude-cockpit-backend.log`" -Tail 30"
+        Nota "veja o porque:  Get-Content `"$env:LOCALAPPDATA\hangar\hangar-backend.log`" -Tail 30"
     }
     Nota 'Log (inclui o QR de pareamento):'
-    Nota "  $env:LOCALAPPDATA\claude-cockpit\claude-cockpit-backend.log"
-    Nota 'Remover depois: Unregister-ScheduledTask -TaskName claude-cockpit-backend'
+    Nota "  $env:LOCALAPPDATA\hangar\hangar-backend.log"
+    Nota 'Remover depois: Unregister-ScheduledTask -TaskName hangar-backend'
     } catch {
         Falta "nao deu pra registrar as tarefas: $_"
         Nota 'Sem isso, o backend so roda enquanto o terminal estiver aberto.'
@@ -802,7 +802,7 @@ if (-not $bash) {
         $arg = if ((Split-Path -Leaf $pyExe) -ieq 'py.exe') { ' -3' } else { '' }
         $shim = Join-Path $binUsuario 'python3'
         $corpoShim = "#!/bin/sh`n" +
-                     "# Gerado por claude-cockpit/install.ps1 - o cp-send chama python3.`n" +
+                     "# Gerado por hangar/install.ps1 - o cp-send chama python3.`n" +
                      "exec '$pyMsys'$arg `"`$@`"`n"
         if (-not (Test-Path $shim) -or (Get-Content $shim -Raw) -ne $corpoShim) {
             Set-Content -Path $shim -Encoding ASCII -NoNewline -Value $corpoShim
@@ -859,7 +859,7 @@ if (-not $bash) {
         # python3 volta a ser o atalho da Microsoft Store. Os dois pontos de entrada precisam
         # da mesma garantia - consertar so um deles foi o que deixou o bug de pe.
         $corpoCp = "#!/bin/sh`n" +
-                   "# Gerado por claude-cockpit/install.ps1 - ver comentario no instalador.`n" +
+                   "# Gerado por hangar/install.ps1 - ver comentario no instalador.`n" +
                    "PATH='$binMsys':`$PATH; export PATH`n" +
                    "exec '$rota/scripts/cp-send' `"`$@`"`n"
         if (-not (Test-Path $cpSendSh) -or (Get-Content $cpSendSh -Raw) -ne $corpoCp) {
@@ -888,7 +888,7 @@ if (-not $bash) {
 Titulo '7c/8 Atualizar sozinho no proximo git pull'
 $hookAlvo = "$raiz\.git\hooks\post-merge"
 $hookFonte = "$raiz\scripts\post-merge.hook"
-$hookMarca = 'claude-cockpit-post-merge-hook'
+$hookMarca = 'hangar-post-merge-hook'
 if ($Update) {
     # O proprio hook pode ser quem esta chamando: nao se reinstala no meio da propria execucao.
     Nota 'pulado no -Update (o hook pode ser o proprio chamador)'

@@ -419,7 +419,7 @@ export default function (pi: ExtensionAPI) {
   // barra (ex `cline-pass/glm-5.2` no provedor `clinepass`), entao "provider/id" seria ambiguo.
   // Nem provider nem id tem espaco.
   pi.registerCommand("cp-model", {
-    description: "claude-cockpit: troca o modelo (<provider> <id>)",
+    description: "hangar: troca o modelo (<provider> <id>)",
     handler: async (args: string, ctx: any) => {
       const [provider, ...rest] = args.trim().split(/\s+/);
       const id = rest.join(" ");
@@ -437,7 +437,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("cp-think", {
-    description: "claude-cockpit: nivel de raciocinio (off|minimal|low|medium|high|xhigh|max)",
+    description: "hangar: nivel de raciocinio (off|minimal|low|medium|high|xhigh|max)",
     handler: async (args: string, ctx: any) => {
       const level = args.trim().toLowerCase();
       if (!(LEVELS as readonly string[]).includes(level)) {

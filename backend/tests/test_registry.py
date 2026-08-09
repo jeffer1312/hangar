@@ -880,7 +880,7 @@ def test_sanitize_nao_mexe_em_nome_ja_ascii():
     # Sessoes/sidecars/filas EXISTENTES sao keyed por nomes ja sanitizados: a mudanca nao pode
     # reescrever nenhum deles, senao o sidecar antigo ficaria orfao.
     from app.names import sanitize_session_name
-    for n in ("claude-cockpit", "repo-2", "rea-de-trabalho", "a_b-C9"):
+    for n in ("hangar", "repo-2", "rea-de-trabalho", "a_b-C9"):
         assert sanitize_session_name(n) == n
 
 
@@ -901,7 +901,7 @@ def test_sidecar_codex_usa_a_mesma_regra_de_nome():
     # codex_sessions.* com nome cru sem passar pelo registry.
     from app.adapters.codex import sessions as codex_sessions
     from app.names import sanitize_session_name
-    for n in ("Área de trabalho", "São Paulo", "claude-cockpit", "repo-2"):
+    for n in ("Área de trabalho", "São Paulo", "hangar", "repo-2"):
         assert codex_sessions._sanitize(n) == sanitize_session_name(n)
 
 

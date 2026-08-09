@@ -239,14 +239,14 @@ describe("fundo 'desktop' (shell Electron)", () => {
 
   it('com a marca, desktop se mantém', () => {
     store.clear();
-    comUserAgent('Mozilla/5.0 claude-cockpit-shell');
+    comUserAgent('Mozilla/5.0 hangar-shell');
     store.set('cp_bg', 'desktop');
     expect(isShell()).toBe(true);
     expect(getBgPref()).toBe('desktop');
   });
 
   it('applyBg(desktop) marca o html e NÃO define wallpaper', () => {
-    comUserAgent('Mozilla/5.0 claude-cockpit-shell');
+    comUserAgent('Mozilla/5.0 hangar-shell');
     applyBg('desktop');
     const raiz = document.documentElement;
     expect(raiz.dataset.bg).toBe('desktop');
@@ -258,7 +258,7 @@ describe("fundo 'desktop' (shell Electron)", () => {
   });
 
   it('no modo desktop o auto liga o reforço de texto', () => {
-    comUserAgent('Mozilla/5.0 claude-cockpit-shell');
+    comUserAgent('Mozilla/5.0 hangar-shell');
     store.clear();
     store.set('cp_bg', 'desktop');
     applyBg('desktop');

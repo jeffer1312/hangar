@@ -1,4 +1,4 @@
-# claude-cockpit — Product Context
+# hangar — Product Context
 
 **Register:** product (app UI — design serves the tool, not the marketing).
 
