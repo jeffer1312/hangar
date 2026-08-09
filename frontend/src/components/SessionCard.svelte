@@ -4,8 +4,7 @@
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import { planBadge } from '../lib/plan';
   import PlanBar from './PlanBar.svelte';
-  import Lottie from './Lottie.svelte';
-  import pensando from '../lib/lottie/pensando.json';
+  import HangarWorking from './icons/HangarWorking.svelte';
 
   interface Props {
     session: SessionInfo;
@@ -245,8 +244,10 @@
         <!-- Checkbox visual (a semantica de check fica no role="checkbox" da row -> so decorativo). -->
         <input type="checkbox" class="select-check" checked={selected} tabindex="-1" aria-hidden="true" />
       {:else if session.state === 'working'}
-        <!-- Working -> "pensando" animando, cores originais. -->
-        <Lottie data={pensando as any} size={20} loop autoplay />
+        <!-- Working -> a marca desenhando, na COR DO ESTADO. O Lottie antigo trazia a cor dentro
+             do arquivo; este herda via currentColor, então quem pinta é o container — sem isto ele
+             sai na cor do texto do card, que é apagada. -->
+        <span class="work-mark" style="color: {stateColors[session.state]};"><HangarWorking size={20} /></span>
       {:else}
         <!-- Parada -> ponto na COR do estado. O icone parado era igual em todos os estados: numa
              lista sem nada animando as linhas ficavam indistinguiveis. -->
@@ -545,6 +546,7 @@
     justify-content: center;
   }
   /* Estado parado: ponto na cor do estado (verde pronto / âmbar aguardando / vermelho encerrado). */
+  .work-mark { display: inline-flex; }
   .state-dot {
     width: 9px;
     height: 9px;

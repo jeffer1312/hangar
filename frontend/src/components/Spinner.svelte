@@ -1,6 +1,5 @@
 <script lang="ts">
-  import Lottie from './Lottie.svelte';
-  import pensando from '../lib/lottie/pensando.json';
+  import HangarWorking from './icons/HangarWorking.svelte';
 
   interface Props {
     label?: string | null;
@@ -14,12 +13,15 @@
 </script>
 
 <div class="spinner" role="status" aria-live="polite">
-  <Lottie data={pensando as any} size={22} />
+  <span class="spinner-mark"><HangarWorking size={22} /></span>
   <span class="spinner-label">{stateLabel}</span>
 </div>
 
 <style>
   /* Linha slim, sem bubble/card — estilo da linha de spinner do Claude Code. */
+  /* A marca herda cor via currentColor; aqui ela usa o --accent, que e a cor de
+     "trabalhando" no resto do app (stateColors.working). */
+  .spinner-mark { display: inline-flex; color: var(--accent); flex: 0 0 auto; }
   .spinner { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-1); animation: bubble-in 200ms var(--ease-out); }
   .spinner-label { font-size: var(--text-sm); color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>

@@ -6,6 +6,7 @@
 
 <script lang="ts">
   import { onMount } from 'svelte';
+  import HangarMark from '../components/icons/HangarMark.svelte';
   import SessionCard from '../components/SessionCard.svelte';
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
   import QrScanner from '../components/QrScanner.svelte';
@@ -535,7 +536,7 @@
         <path d="M4 7h16M4 12h13M4 17h16"/>
       </svg>
     </button>
-    <span class="sl-brand">claude cockpit</span>
+    <span class="sl-brand"><HangarMark size={18} arcs={2} /> Hangar</span>
     <button
       class="sl-icon-btn"
       class:active={selectMode}
@@ -1018,6 +1019,8 @@
     transition: background 150ms var(--ease-out);
   }
   .sl-ham:active { background: var(--bg-hover); }
+  /* a marca segue o --accent; o texto fica no tom normal do cabeçalho */
+  .sl-brand :global(svg) { color: var(--accent); vertical-align: -3px; margin-right: 4px; }
   .sl-brand {
     flex: 1;
     min-width: 0;

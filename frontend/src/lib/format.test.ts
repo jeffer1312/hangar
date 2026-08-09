@@ -27,6 +27,16 @@ describe('abbrevNum', () => {
 });
 
 describe('initials', () => {
+  it('sessões irmãs não colidem: o sufixo numérico entra na sigla', () => {
+    expect(initials('claude-cockpit')).toBe('CC');
+    expect(initials('claude-cockpit-2')).toBe('C2');
+    expect(initials('hangar-logo')).toBe('HL');
+    expect(initials('api-3')).toBe('A3');
+    // dois dígitos ainda cabem; três não são sufixo de sessão irmã, é nome
+    expect(initials('worker-12')).toBe('W12');
+    expect(initials('jeffer1312')).toBe('JE');
+  });
+
   it('takes first letter of each of two words', () => {
     expect(initials('claude-pocket')).toBe('CP');
   });

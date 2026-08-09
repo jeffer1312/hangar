@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { ctxPanel, LARGURA_ABERTO, LARGURA_TRILHO } from '../lib/ctxPanel.svelte';
   import NavBar from '../components/NavBar.svelte';
   import MessageList from '../components/MessageList.svelte';
   import Composer from '../components/Composer.svelte';
@@ -1269,6 +1270,7 @@
   class="chat-screen"
   class:desktop
   class:with-context={desktop && showContextPanel}
+  style:--cp-ctx-w={`${ctxPanel.recolhido ? LARGURA_TRILHO : LARGURA_ABERTO}px`}
   bind:this={screenEl}
   style:--nav-h={navH + topInset + 'px'}
 >
@@ -1665,7 +1667,8 @@
     /* O painel lateral ocupa espaço real de leitura. Reservamos essa faixa no próprio scroller,
        então a coluna continua centrada no espaço restante quando a sidebar abre/fecha, em vez de
        ficar presa a uma margem direita fixa que desloca o chat em larguras intermediárias. */
-    .chat-screen.with-context { --ctx-w: 264px; }
+    /* a largura vem do estado do painel (ctxPanel), via style inline no elemento */
+    .chat-screen.with-context { --ctx-w: var(--cp-ctx-w, 264px); }
     .chat-screen.with-context :global(.message-list) {
       box-sizing: border-box;
       padding-right: var(--ctx-w);

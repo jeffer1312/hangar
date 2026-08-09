@@ -4,6 +4,7 @@
   import { getSessions } from '../lib/api';
   import { syncStatus, register as syncRegister, login as syncLogin } from '../lib/sync';
   import QrScanner from '../components/QrScanner.svelte';
+  import HangarIntro from '../components/icons/HangarIntro.svelte';
 
   interface Props {
     onLogin: () => void;
@@ -115,6 +116,7 @@
 
 <div class="login-screen">
   <div class="login-content">
+    <div class="app-mark"><HangarIntro size={64} /></div>
     <h1 class="app-name">Hangar</h1>
     <p class="app-tagline">Controle suas sessões de qualquer lugar</p>
 
@@ -212,6 +214,14 @@
   .login-content {
     width: 100%;
     max-width: 400px;
+  }
+
+  /* A marca adota o --accent (currentColor), que vem da paleta do papel de parede. */
+  .app-mark {
+    display: flex;
+    justify-content: center;
+    color: var(--accent);
+    margin-bottom: var(--space-4);
   }
 
   .app-name {

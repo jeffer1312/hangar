@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import HangarMark from './icons/HangarMark.svelte';
   import Sidebar from './Sidebar.svelte';
   import WorkspaceCommandPalette from './WorkspaceCommandPalette.svelte';
   import WorkspaceAttentionStrip from './WorkspaceAttentionStrip.svelte';
@@ -367,6 +368,7 @@
       {/each}
     {:else}
       <div class="desktop-empty">
+        <div class="empty-mark"><HangarMark size={72} /></div>
         <p class="empty-title">Selecione uma sessão</p>
         <p class="empty-sub">ou crie uma nova na barra lateral</p>
       </div>
@@ -497,6 +499,8 @@
     justify-content: center;
     gap: var(--space-2);
   }
+  /* marca discreta no maior vazio do app — presença de marca sem competir com o texto */
+  .empty-mark { color: var(--accent); opacity: 0.22; margin-bottom: var(--space-4); }
   .empty-title { font-size: var(--text-lg); color: var(--text-secondary); font-weight: 500; }
   .empty-sub { font-size: var(--text-sm); color: var(--text-muted); }
 </style>

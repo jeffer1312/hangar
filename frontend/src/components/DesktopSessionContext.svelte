@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { ctxPanel, alternarCtxPanel } from '../lib/ctxPanel.svelte';
+  import HangarWorking from './icons/HangarWorking.svelte';
   import RateChips from './RateChips.svelte';
   import PlanPanel from './PlanPanel.svelte';
   import type { State, SessionInfo, PlanDetail } from '../lib/types';
@@ -100,7 +102,25 @@
   }
 </script>
 
-<aside class="session-context" aria-label="Contexto da sessão">
+<aside class="session-context" class:recolhido={ctxPanel.recolhido} aria-label="Contexto da sessão">
+  <!-- Botão de recolher: o painel da esquerda sempre teve; este era ligado com showContextPanel
+       FIXO em true, sem controle nenhum. Fica no topo, no mesmo lugar nos dois estados. -->
+  <button class="ctx-fold" onclick={alternarCtxPanel}
+          aria-label={ctxPanel.recolhido ? 'Expandir contexto' : 'Recolher contexto'}
+          title={ctxPanel.recolhido ? 'Expandir' : 'Recolher'}>
+    <!-- MESMO ícone do recolher da barra esquerda: os dois fazem a mesma coisa em lados opostos,
+         então usar desenhos diferentes obrigava a reaprender o controle de cada lado. -->
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="2"/>
+      <line x1="9" y1="4" x2="9" y2="20"/>
+    </svg>
+  </button>
+
+  {#if ctxPanel.recolhido}
+    <!-- Recolhido = ESCONDIDO, não trilho. O trilho foi tentado e não se pagou: em 50px cabia só um
+         texto vertical e um anel, enquanto o valor do painel é o plano, as ações e as métricas —
+         coisas que precisam de largura. Estado e progresso continuam à vista na barra da esquerda. -->
+  {:else}
   {#if working}<div class="ctx-sweep" aria-hidden="true"></div>{/if}
   <header>
     <div class="ctx-heading">
@@ -285,9 +305,41 @@
     {#if serverLabel}<p>{serverLabel}</p>{/if}
   </section>
   </div>
+  {/if}
 </aside>
 
 <style>
+  /* Recolhido: trilho estreito. A largura da faixa que o Chat reserva muda junto (ctxPanel.svelte
+     -> --ctx-w no Chat), senão o painel encolhe e o texto não cresce. */
+  /* Recolhido: some a caixa (sem vidro, sem borda, sem sombra) e fica só a aba do botão. */
+  .session-context.recolhido {
+    width: 34px;
+    border-color: transparent;
+    box-shadow: none;
+    pointer-events: none;          /* só a aba recebe clique */
+  }
+  .session-context.recolhido::before { opacity: 0; }
+  .session-context.recolhido .ctx-fold {
+    pointer-events: auto;
+    top: 50%; right: 0; transform: translateY(-50%);
+    width: 26px; height: 64px;
+    border-radius: var(--radius-md) 0 0 var(--radius-md);
+    background: var(--surface-raised);
+    box-shadow: -1px 0 0 var(--border);
+  }
+  /* Mesmo tamanho e mesmo peso do irmão na barra esquerda (.fold-btn): antes era 26px e muted,
+     e sumia no canto — o usuário não achava. */
+  /* O cabeçalho RESERVA a faixa do botão (padding-right abaixo): sem isso ele caía por cima do
+     chip de estado — absoluto não empurra nada. */
+  .session-context:not(.recolhido) header { padding-right: 56px; }   /* 44px do botão + folga */
+  .ctx-fold {
+    position: absolute; top: var(--space-2); right: var(--space-2); z-index: 2;
+    width: 36px; height: 36px; display: grid; place-items: center;
+    background: transparent; border: 0; border-radius: var(--radius-md);
+    color: var(--text-secondary); cursor: pointer;
+  }
+  @media (hover: hover) { .ctx-fold:hover { background: var(--bg-hover); color: var(--text-primary); } }
+  .session-context.recolhido .ctx-fold { right: 50%; transform: translateX(50%); }
   .session-context {
     /* Coluna: header + acoes ficam PRESOS no topo e so o corpo rola. Antes o painel inteiro era o
        scroller, entao o nome da sessao e o botao Terminal subiam junto com as metricas. */
@@ -679,6 +731,37 @@
     font-size: 11px;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* Botão de recolher: mesmo ícone, tamanho e peso do irmão na barra esquerda (.fold-btn) — os dois
+     fazem a mesma coisa em lados opostos. O cabeçalho reserva a faixa dele (padding-right acima),
+     senão ele cai por cima do chip de estado: absoluto não empurra nada. */
+  .ctx-fold {
+    position: absolute; top: var(--space-2); right: var(--space-2); z-index: 2;
+    width: 36px; height: 36px; display: grid; place-items: center;
+    background: transparent; border: 0; border-radius: var(--radius-md);
+    color: var(--text-secondary); cursor: pointer;
+  }
+  @media (hover: hover) { .ctx-fold:hover { background: var(--bg-hover); color: var(--text-primary); } }
+
+  /* RECOLHIDO = escondido, não trilho. O trilho foi tentado e não se pagou: em 50px cabiam só um
+     texto vertical e um anel, enquanto o valor do painel é o plano, as ações e as métricas — coisas
+     que precisam de largura. Estado e progresso seguem à vista na barra da esquerda. Some a caixa
+     (vidro, borda, sombra) e fica só a aba pra trazer de volta. */
+  .session-context.recolhido {
+    width: 34px;
+    border-color: transparent;
+    box-shadow: none;
+    pointer-events: none;
+  }
+  .session-context.recolhido::before { opacity: 0; }
+  .session-context.recolhido .ctx-fold {
+    pointer-events: auto;
+    top: 50%; right: 0; transform: translateY(-50%);
+    width: 26px; height: 64px;
+    border-radius: var(--radius-md) 0 0 var(--radius-md);
+    background: var(--surface-raised);
+    box-shadow: -1px 0 0 var(--border);
   }
 
   @media (max-width: 1279px) {
