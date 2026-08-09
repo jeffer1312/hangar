@@ -976,9 +976,9 @@ if ($registrou) {
     $limite = (Get-Date).AddMinutes(-10)
     $recentes = @($candidatos | Where-Object { $_.CreationDate -and $_.CreationDate -gt $limite })
     if ($recentes.Count -gt 0) { return }
-    if ($candidatos.Count -gt 0) { Write-Output 'vigia: processo(s) do checkout vivo(s) ha mais de 10 min sem a porta aberta - pode estar pendurado; reiniciando mesmo assim' }
+    if ($candidatos.Count -gt 0) { Write-Output "$(Get-Date -Format 's') vigia: processo(s) do checkout vivo(s) ha mais de 10 min sem a porta aberta - pode estar pendurado; reiniciando mesmo assim" }
     Start-ScheduledTask -TaskName 'hangar-backend'
-} *>&1 | Out-File -FilePath '__LOG__' -Encoding utf8
+} *>&1 | Out-File -FilePath '__LOG__' -Append -Encoding utf8
 '@
     # Numa linha so, sem quebra: um `.Replace(...)` iniciando a linha seguinte arrisca ser lido
     # como dot-sourcing pelo parser (mesmo com crase antes), e nenhuma das duas formas de quebra
@@ -1269,21 +1269,15 @@ if ($morreu) {
 # -- Confere e entrega o acesso -----------------------------------------------
 # CONFERE, nao anuncia — mesma regra do `Pronto` condicional. So quando ha tarefa registrada: quem
 # recusou o passo 7 nao deve esperar 20s por algo que ninguem pediu pra subir.
+# Nao repete o poll: $subiu ja e o resultado do mesmo `Get-NetTCPConnection -State Listen
+# -LocalPort $portaBack` la em cima (install.ps1:906-911), so mesmo $registrou/$jaAgendado - um
+# segundo loop pagaria os mesmos ~15s de novo e imprimiria uma segunda mensagem (Ok/Erro) sobre o
+# MESMO fato que o Ok/Falta de la em cima ja anunciou. $subiu so alimentava a tela; aqui ele passa
+# a alimentar $pendencias tambem, que e o que falta pro gate do fim do script barrar de verdade.
 $vivo = $false
 if ($jaAgendado -or $registrou) {
-    foreach ($t in 1..10) {
-        if (Get-NetTCPConnection -State Listen -LocalPort $portaBack -ErrorAction SilentlyContinue) { $vivo = $true; break }
-        Start-Sleep -Seconds 2
-    }
-    # Porta escutando, e nao `GET / == 200`: a raiz so devolve 200 se frontend\dist existir
-    # (backend/app/api.py:3391-3393), entao num -Update cujo npm ci falhou o backend estaria VIVO e
-    # o instalador gritaria que nao respondeu. Invoke-WebRequest no PS 5.1 ainda respeita proxy do IE.
-    if ($vivo) {
-        Ok "backend respondendo em 127.0.0.1:$portaBack"
-    } else {
-        Erro "backend NAO subiu em 127.0.0.1:$portaBack"
-        $script:pendencias += 'backend no ar'
-    }
+    $vivo = $subiu
+    if (-not $vivo) { $script:pendencias += 'backend no ar' }
 }
 
 # O QR do backend NAO aparece nesta maquina: print_pairing so desenha se sys.stdout.isatty()
@@ -1297,6 +1291,7 @@ if ($jaAgendado -or $registrou) {
 if ($vivo) {
     $eapAnt = $ErrorActionPreference
     $encAnt = $null
+    $pyioAnt = $env:PYTHONIOENCODING
     Push-Location "$raiz\backend"
     try {
         $ErrorActionPreference = 'Continue'
@@ -1308,6 +1303,7 @@ if ($vivo) {
         Nota "nao consegui desenhar o QR: $_"
     } finally {
         if ($encAnt) { [Console]::OutputEncoding = $encAnt }
+        $env:PYTHONIOENCODING = $pyioAnt
         $ErrorActionPreference = $eapAnt
         Pop-Location
     }
