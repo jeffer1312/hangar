@@ -17,11 +17,11 @@
    */
   let { size = 20 }: { size?: number } = $props();
 
-  const CICLO = 3.5;
+  const CICLO = 3.2;
   const ARCOS = [
     { r: 9.1, a: 30, atrasoEntrada: '0s', fase: 0 },
-    { r: 6.35, a: 18, atrasoEntrada: '0.09s', fase: 0.65 },
-    { r: 3.6, a: 6, atrasoEntrada: '0.18s', fase: 1.3 },
+    { r: 6.35, a: 18, atrasoEntrada: '0.09s', fase: 0.48 },
+    { r: 3.6, a: 6, atrasoEntrada: '0.18s', fase: 0.96 },
   ];
 
   const rad = (g: number) => (g * Math.PI) / 180;
@@ -67,7 +67,7 @@
   .respiro {
     transform-box: view-box;
     transform-origin: 50% 50%;
-    animation: hangar-respiro 3.5s var(--ease-out) 0.9s infinite;
+    animation: hangar-respiro 3.2s var(--ease-out) 0.9s infinite;
   }
 
   .arco {
@@ -78,28 +78,35 @@
     /* entrada toca uma vez e FICA; o giro entra depois, com a fase própria de cada arco */
     animation:
       hangar-entra 0.72s var(--ease-out) var(--entrada) forwards,
-      hangar-gira 3.5s var(--ease-out) var(--giro) infinite;
+      hangar-gira 3.2s var(--ease-out) var(--giro) infinite;
   }
 
   @keyframes hangar-entra {
     to { stroke-dashoffset: 0; }
   }
 
-  /* 1,0s de volta (29% de 3,5s) e SEGURA o resto do ciclo — a pausa é o que faz ler
-     "um traço por vez". */
+  /* 1,06s de volta (33% de 3,2s) e segura o resto. A DEFASAGEM entre arcos é 0,48s — menos que
+     metade do giro —, então quando um está terminando o seguinte já está na metade do dele: os três
+     se encavalam e a leitura vira onda contínua. Com 0,65s de defasagem a sobreposição caía onde os
+     dois estão lentos (ease desacelera no fim e acelera devagar no começo) e lia como "um de cada
+     vez", que foi a queixa em uso. */
   @keyframes hangar-gira {
     0%        { transform: rotate(0deg); }
-    29%, 100% { transform: rotate(360deg); }
+    33%, 100% { transform: rotate(360deg); }
   }
 
-  /* O respiro só começa em 70% do ciclo (2,45s) — o terceiro arco fecha a volta em 2,32s, então
+  /* O respiro só começa em 68% do ciclo (2,18s) — o terceiro arco fecha a volta em 2,02s, então
      sobra uma batida de 0,13s antes de encolher. Medido no app: com 66% os dois se encavalavam por
      0,01s, que era exatamente a queixa de "não espera cada linha dar o giro". */
+  /* FINAL: depois que a onda passa por todos, os três giram JUNTOS enquanto encolhem e voltam.
+     É o contraste que fecha o ciclo — a onda é sequencial, o final é uníssono. O giro do grupo se
+     compõe com o dos arcos (que já estão parados em 360°), então o efeito é o conjunto inteiro
+     rodando uma volta enquanto respira. */
   @keyframes hangar-respiro {
-    0%, 70%   { transform: scale(1); }
-    82%       { transform: scale(0.44); }
-    90%       { transform: scale(1.06); }
-    96%, 100% { transform: scale(1); }
+    0%, 68%   { transform: scale(1) rotate(0deg); }
+    80%       { transform: scale(0.44) rotate(170deg); }
+    89%       { transform: scale(1.06) rotate(300deg); }
+    95%, 100% { transform: scale(1) rotate(360deg); }
   }
 
   @media (prefers-reduced-motion: reduce) {
