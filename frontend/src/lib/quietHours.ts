@@ -1,17 +1,20 @@
 // Controller do bloco de horas silenciosas (PushQuiet). Extraído pro arquivo PRA SER TESTÁVEL: toda a
 // máquina de corrida (dedup de load, serialização load/save, watchdog de timeout, invalidação por
-// troca de alvo) vive aqui, em TS puro, sem runes nem DOM — o componente só renderiza e dispara
-// `sync()`/`save()`. O `estado` é injetado (no componente, um objeto `$state`; no teste, um objeto
-// simples) e mutado diretamente pelo controller — quem renderiza vê a mudança.
+// troca de alvo, dispose) vive aqui, em TS puro, sem runes nem DOM — o componente só renderiza e
+// dispara `sync()`/`save()`. O `estado` é injetado (no componente, um objeto `$state`; no teste, um
+// objeto simples) e mutado diretamente pelo controller — quem renderiza vê a mudança.
 //
-// Contrato de comportamento (round 2 do review):
+// Contrato de comportamento (rounds 2 e 3 do review):
 // - mesmo alvo + load em voo => dedup: reabrir não dispara 2º GET;
 // - mesmo alvo + save pendente => NÃO limpar/recarregar/invalidar o save: refresh é deferido
-//   (refreshDepois) e roda quando o save concluir;
+//   (refreshDepois) e roda quando o save concluir — SÓ no sucesso, e nunca com o menu fechado;
 // - draft sujo do mesmo alvo (campos editados ≠ último valor carregado) não é sobrescrito por reload;
+// - ownership: o finally/callback de um save ANTIGO (invalidação por troca de alvo ou por dispose)
+//   não muta saving/flags da operação atual;
 // - transição para 'unavailable' invalida a operação anterior e deixa loading/saving coerentes;
 // - getPushSettings não tem timeout próprio: watchdog impede loading preso pra sempre, e a resposta
-//   tardia não pinta nada (geração avançada).
+//   tardia não pinta nada (geração avançada);
+// - dispose(): limpa o watchdog e avança a geração — nenhum callback tardio publica nem inicia load.
 
 import type { Server } from './auth';
 
@@ -51,6 +54,8 @@ export class QuietHoursController {
   private loadedStart = '';
   private loadedEnd = '';
   private ultimoAlvo: string | null = null;
+  private watchdog: ReturnType<typeof setTimeout> | null = null;
+  private disposed = false;
 
   constructor(private d: QuietHoursDeps) {}
 
@@ -60,8 +65,11 @@ export class QuietHoursController {
   }
 
   // Chamado pelo componente a cada mudança de alvo/abertura. Invalida a operação anterior quando o
-  // alvo troca; só então (aberto + push suportado) decide se carrega.
+  // alvo troca; só então (aberto + push suportado) decide se carrega. DEVE ser chamado dentro de
+  // untrack(...) pelo efeito do componente: o alvo é lido aqui, e sem untrack o efeito ficaria
+  // dependente do OBJETO target (re-criado a cada render do pai) — reload a cada recomputo.
   sync(): void {
+    if (this.disposed) return;
     const alvo = this.d.getAlvo();
     const key = alvo.mode === 'server' ? alvo.server.id : alvo.mode;
     if (key !== this.ultimoAlvo) {
@@ -95,6 +103,7 @@ export class QuietHoursController {
   }
 
   async save(): Promise<void> {
+    if (this.disposed) return;
     if (this.d.estado.saving || this.d.estado.loading) return;   // duplo clique / save durante load
     const alvo = this.d.getAlvo();
     const inicio = this.d.estado.qhStart;   // snapshot: salva o que o usuário editou NESTE alvo
@@ -102,12 +111,15 @@ export class QuietHoursController {
     this.d.estado.saving = true;
     const mine = ++this.generation;       // invalida load em voo: nada dele repinta depois do save
     this.d.estado.qhMsg = '';
-    const watchdog = setTimeout(() => {
+    const meuWatchdog = this.armarWatchdog(() => {
       if (mine !== this.generation) return;
+      // Estourou: o save morreu. Geração avança pra resposta tardia não pintar; draft fica no campo.
       this.generation++;
+      this.refreshDepois = false;
       this.d.estado.saving = false;
       this.d.estado.qhMsg = 'erro ao salvar';
-    }, this.d.timeoutMs ?? 15000);
+    });
+    let sucesso = false;
     try {
       if (alvo.mode === 'server') {
         await this.d.api.setQuietHoursForServer(alvo.server, inicio || null, fim || null);
@@ -117,39 +129,69 @@ export class QuietHoursController {
         throw new Error('Servidor indisponível');
       }
       if (mine !== this.generation) return;
+      sucesso = true;
       this.d.estado.qhMsg = inicio && fim ? `silenciado ${inicio}–${fim}` : 'desligado';
       this.loadedStart = inicio;   // o que salvou vira a base: draft limpo, reload permitido
       this.loadedEnd = fim;
     } catch (e) {
       if (mine !== this.generation) return;
+      this.refreshDepois = false;  // falhou: nada de refresh; draft e erro ficam na tela
       this.d.estado.qhMsg = e instanceof Error ? e.message : 'erro ao salvar';
     } finally {
-      clearTimeout(watchdog);
-      this.d.estado.saving = false;
-      if (mine === this.generation && this.refreshDepois) {
-        // Refresh deferido durante o save: agora roda (1 GET) pra trazer o estado autoritativo.
-        this.refreshDepois = false;
-        void this.load();
+      // Limpa SÓ o watchdog desta operação: o this.watchdog pode já ser de um save novo (alvo
+      // trocou no meio), e limpá-lo deixaria a operação nova sem timeout.
+      if (meuWatchdog) clearTimeout(meuWatchdog);
+      if (mine === this.generation) {
+        // Ownership: só a operação ATUAL mexe nas flags. Um save antigo (alvo trocou / dispose)
+        // já foi invalidado pela geração e não pode derrubar o saving do save novo.
+        this.d.estado.saving = false;
+        if (sucesso && this.refreshDepois) {
+          // Refresh deferido durante o save: roda agora, SÓ no sucesso e SÓ com o menu aberto.
+          this.refreshDepois = false;
+          if (this.d.getOpen()) void this.load();
+        }
       }
     }
   }
 
+  dispose(): void {
+    this.disposed = true;
+    this.generation++;              // invalida qualquer op em voo: callbacks tardios não publicam
+    this.limparWatchdog();
+  }
+
+  private armarWatchdog(fn: () => void): ReturnType<typeof setTimeout> {
+    this.limparWatchdog();
+    this.watchdog = setTimeout(() => {
+      this.watchdog = null;
+      fn();
+    }, this.d.timeoutMs ?? 15000);
+    return this.watchdog;
+  }
+
+  private limparWatchdog(): void {
+    if (this.watchdog) {
+      clearTimeout(this.watchdog);
+      this.watchdog = null;
+    }
+  }
+
   private async load(): Promise<void> {
-    if (this.loadInFlight) return;
+    if (this.disposed || this.loadInFlight) return;
     const alvo = this.d.getAlvo();
     if (alvo.mode === 'unavailable') return;
     const mine = ++this.generation;
     this.loadInFlight = true;
     this.d.estado.loading = true;
     this.d.estado.qhMsg = '';
-    const watchdog = setTimeout(() => {
+    const meuWatchdog = this.armarWatchdog(() => {
       if (mine !== this.generation) return;
       // Estourou: avança a geração pra resposta tardia não pintar, e libera o loading.
       this.generation++;
       this.loadInFlight = false;
       this.d.estado.loading = false;
       this.d.estado.qhMsg = 'não foi possível carregar';
-    }, this.d.timeoutMs ?? 15000);
+    });
     try {
       const result = alvo.mode === 'server'
         ? await this.d.api.getPushSettingsForServer(alvo.server)
@@ -167,7 +209,7 @@ export class QuietHoursController {
       // pra sempre — indistinguível de "nunca configurei".
       if (alvo.mode === 'server') this.d.estado.qhMsg = e instanceof Error ? e.message : 'não foi possível carregar';
     } finally {
-      clearTimeout(watchdog);
+      if (meuWatchdog) clearTimeout(meuWatchdog);
       if (mine === this.generation) {
         this.loadInFlight = false;
         this.d.estado.loading = false;

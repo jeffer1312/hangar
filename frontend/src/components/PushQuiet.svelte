@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack, onDestroy } from 'svelte';
   import { enablePush, pushSupported } from '../lib/push';
   import { getPushSettings, getPushSettingsForServer, setQuietHours, setQuietHoursForServer } from '../lib/api';
   import { QuietHoursController, type PushTarget, type QuietState } from '../lib/quietHours';
@@ -45,15 +46,18 @@
     podePush: pushSupported,
     api: { getPushSettings, getPushSettingsForServer, setQuietHours, setQuietHoursForServer },
   });
-  // Chave por PRIMITIVO (id/modo), não pelo objeto: `target` é re-criado a cada render do pai e um
-  // efeito que o lesse recarregaria a cada recomputo. `open` entra pra recarregar ao ABRIR (o
-  // resultado pode ter mudado no servidor) — o controller decide se o load é seguro.
+  // Chave por PRIMITIVO (id/modo), não pelo objeto: `target` é re-criado a cada render do pai.
+  // `open` entra pra recarregar ao ABRIR (o resultado pode ter mudado no servidor) — o controller
+  // decide se o load é seguro. O sync roda em untrack: sem ele, as leituras de `target` feitas
+  // DENTRO do controller registrariam dependência do objeto inteiro no efeito, e cada recomputo do
+  // pai (que re-cria o objeto) dispararia um reload.
   const alvoKey = $derived(target.mode === 'server' ? target.server.id : target.mode);
   $effect(() => {
     void alvoKey;
     void open;
-    ctrl.sync();
+    untrack(() => ctrl.sync());
   });
+  onDestroy(() => ctrl.dispose());
 </script>
 
 <button class="pq-item" role="menuitem" onclick={handleEnablePush} disabled={pushBusy}>
