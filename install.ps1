@@ -185,9 +185,9 @@ function Porta-Do-Env {
 function Set-EnvKey {
     param([Parameter(Mandatory)][string]$Chave, [Parameter(Mandatory)][string]$Valor)
     # SUBSTITUI em vez de acrescentar: o `Add-Content` de antes repetia a chave a cada re-execucao, e
-    # `Porta-Do-Env` le a PRIMEIRA ocorrencia (install.ps1:628) — um CP_PORT duplicado faria o
-    # instalador mirar a porta errada e "parar o servico" sem parar nada. De graca, conserta tambem o
-    # arquivo sem quebra de linha no fim, onde o Add-Content grudava a chave nova na ultima linha.
+    # `Porta-Do-Env` le a PRIMEIRA ocorrencia — um CP_PORT duplicado faria o instalador mirar a porta
+    # errada e "parar o servico" sem parar nada. De graca, conserta tambem o arquivo sem quebra de
+    # linha no fim, onde o Add-Content grudava a chave nova na ultima linha.
     #
     # WriteAllText com UTF8Encoding($false), e NUNCA `Set-Content -Encoding UTF8`: no PS 5.1 aquele
     # poe BOM (install.ps1:486-490), e o .env e lido pelo pydantic-settings com encoding 'utf8', nao
@@ -199,12 +199,17 @@ function Set-EnvKey {
     $linhas = @()
     if (Test-Path $envFile) { $linhas = @(Get-Content -Path $envFile) }
     $achou = $false
-    $novo = foreach ($l in $linhas) {
+    # NUNCA `$novo = foreach (...) {...}`: com $linhas vazio (.env novo, instalacao do zero) o loop
+    # roda zero vezes e o foreach-como-expressao vira $null, nao array vazio — dai `@($novo) + $linha`
+    # vira [$null, $linha] e sobra uma linha em branco no topo do arquivo pra sempre (nenhuma chamada
+    # posterior remove linha vazia, so linha que casa com alguma chave).
+    $novo = @()
+    foreach ($l in $linhas) {
         if ($l -match "^\s*$([regex]::Escape($Chave))=") {
-            if (-not $achou) { $achou = $true; $linha }   # a 1a vira a boa, as outras somem
-        } else { $l }
+            if (-not $achou) { $achou = $true; $novo += $linha }   # a 1a vira a boa, as outras somem
+        } else { $novo += $l }
     }
-    if (-not $achou) { $novo = @($novo) + $linha }
+    if (-not $achou) { $novo += $linha }
     New-Item -ItemType Directory -Force -Path (Split-Path $envFile) | Out-Null
     [System.IO.File]::WriteAllText($envFile, (($novo -join "`r`n") + "`r`n"),
                                    (New-Object System.Text.UTF8Encoding $false))
