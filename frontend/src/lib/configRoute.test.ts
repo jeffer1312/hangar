@@ -20,6 +20,11 @@ describe('parseConfig', () => {
     expect(comConfig('#/chat/x', 'sobre')).toBe('#/chat/x?config=sobre');
     expect(TELAS_DE_SERVIDOR).not.toContain('sobre');
   });
+  it('parseia Servidores sem exigir alvo e preserva srv quando informado', () => {
+    expect(parseConfig('#/?config=servidores')).toEqual({ tela: 'servidores', srv: null });
+    expect(parseConfig('#/?config=servidores&srv=vps')).toEqual({ tela: 'servidores', srv: 'vps' });
+    expect(TELAS_DE_SERVIDOR).not.toContain('servidores');
+  });
   it('config vazio e tratado como painel fechado', () => {
     expect(parseConfig('#/?config=')).toBeNull();
   });

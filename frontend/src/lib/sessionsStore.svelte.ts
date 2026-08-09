@@ -157,11 +157,18 @@ function createSessionsStore() {
     release() { if (refs > 0 && --refs === 0) stop(); },
     reconnect() {
       // Resgata streams meio-abertos sem recarregar a página (o "Atualizar" dos menus).
+      // refs=0 => ninguém consome o store (ex: Configurações aberta sobre Archive/Costs, onde a
+      // lista não está montada): reconectar abriria SSE órfão — não faz nada.
+      if (refs === 0) return;
       for (const es of streams.values()) es.close();
       streams.clear();
       connect(servers);
     },
-    refreshServers() { servers = listServers(); connect(servers); },
+    refreshServers() {
+      servers = listServers();
+      // Mesma guarda: com refs=0 a lista nova fica pronta pro próximo retain sem abrir stream.
+      if (refs > 0) connect(servers);
+    },
     // Exclusão otimista: a view marca antes do await (linha some na hora) e desmarca no catch
     // (linha REAPARECE = rollback visual). No sucesso ninguém desmarca — a faxina do recompute
     // remove a marca quando o SSE re-emitir a lista sem a sessão.

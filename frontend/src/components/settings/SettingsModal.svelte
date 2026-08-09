@@ -6,6 +6,7 @@
   import ServerSettings from './ServerSettings.svelte';
   import EnginesSettings from './EnginesSettings.svelte';
   import SobreSettings from './SobreSettings.svelte';
+  import ServidoresSettings from './ServidoresSettings.svelte';
   import { criarConfigServidor } from '../../lib/serverConfig.svelte';
   import { TELAS_DE_SERVIDOR, type TelaConfig } from '../../lib/configRoute';
   import type { Server } from '../../lib/auth';
@@ -15,11 +16,16 @@
     alvo: Server | null;
     nomeAlvo: string | null;
     semServidor: boolean;
+    // Servidor RESOLVIDO (?srv=) + porta de escolha de alvo + logout global — só a tela
+    // Servidores usa; o resto continua com `alvo` (apiTarget).
+    resolvedServer?: Server | null;
+    onPickServer?: (id: string) => void;
+    onLogout?: () => void | Promise<void>;
     onIrPara: (t: TelaConfig) => void;
     onVoltar: () => void;
     onFechar: () => void;
   }
-  let { tela, alvo, nomeAlvo, semServidor, onIrPara, onVoltar, onFechar }: Props = $props();
+  let { tela, alvo, nomeAlvo, semServidor, resolvedServer = null, onPickServer, onLogout, onIrPara, onVoltar, onFechar }: Props = $props();
 
   const store = criarConfigServidor(() => alvo);
 
@@ -36,6 +42,7 @@
     aparencia: 'Aparência',
     ditado: 'Ditado',
     sobre: 'Sobre',
+    servidores: 'Servidores',
     notificacoes: 'Notificações',
     anexos: 'Anexos e transcrição',
     avancado: 'Avançado do servidor',
@@ -49,6 +56,8 @@
       descricao: 'mãos-livres: parar no silêncio e enviar', servidor: false },
     { id: 'sobre', secao: 'App', rotulo: 'Sobre', icone: 'ℹ️',
       descricao: 'versão, marca e repositório', servidor: false },
+    { id: 'servidores', secao: 'Servidor', rotulo: 'Servidores', icone: '🖥️',
+      descricao: 'qual editar, tokens, reconectar e sair', servidor: false },
     { id: 'notificacoes', secao: 'Servidor', rotulo: 'Notificações', icone: '🔔',
       descricao: 'quando avisar que terminou, caiu ou travou', servidor: true },
     { id: 'anexos', secao: 'Servidor', rotulo: 'Anexos e transcrição', icone: '📎',
@@ -242,6 +251,9 @@
     <EnginesSettings targetServer={alvo} />
   {:else if telaAtual === 'sobre'}
     <SobreSettings />
+  {:else if telaAtual === 'servidores'}
+    <ServidoresSettings resolvedServer={resolvedServer} apiTarget={alvo}
+      onPickTarget={onPickServer ?? (() => {})} onLogout={onLogout ?? (() => {})} />
   {:else}
     <ServerSettings {store} secao={telaAtual} />
   {/if}

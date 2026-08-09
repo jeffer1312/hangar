@@ -175,6 +175,12 @@
     abrirConfig(tela, cfg?.srv ?? null);
   }
 
+  // Tela Servidores: "Editar" numa linha escolhe o alvo (?srv=) SEM sair da tela — o painel
+  // reabre a mesma tela com o servidor novo resolvido (abrirConfig conta como nova parada).
+  function pickConfigServer(id: string) {
+    abrirConfig('servidores', id);
+  }
+
   // ‹ (botaoEsquerdo de sub-tela no SettingsModal) e "subir um nivel", nao "voltar no tempo": os dois
   // coincidem quando a sub-tela foi empilhada por cima da raiz (cpDepth >= 2, history.back sobe pra
   // ela). Mas um deep-link cai DIRETO na sub-tela (normalizarChegadaDoPainel carimba cpDepth 1) — nao
@@ -460,8 +466,11 @@
     <SettingsModal
       tela={telaEfetiva}
       alvo={targetConfig}
+      resolvedServer={alvoConfig}
       nomeAlvo={alvoConfig?.label ?? null}
       semServidor={!alvoConfig}
+      onPickServer={pickConfigServer}
+      {onLogout}
       onIrPara={irParaConfig}
       onVoltar={voltarConfig}
       onFechar={fecharConfig}

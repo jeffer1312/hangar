@@ -14,6 +14,10 @@
     onPickTarget?: (id: string) => void;
     // Botão de selecionar ativo só existe quando o pai sabe trocar (desktop). Drawer mobile não troca.
     onSwitchActive?: (id: string) => void;
+    // Remover o ÚLTIMO servidor: no AccountMenu desktop o × some quando sobra 1 (remover o ativo
+    // derruba a sessão sem aviso); na tela Servidores o último TEM que ser removível — remover tudo
+    // dispara o logout global, única saída pra deslogar. Desvio aprovado do plano 4b, prop optativa.
+    podeRemoverUltimo?: boolean;
     onRename: (id: string, label: string) => void;
     onUpdateToken: (id: string, token: string) => boolean;
     onRemove: (id: string) => void;
@@ -21,6 +25,7 @@
   }
   let {
     servers, activeId = null, targetId = null, onPickTarget, onSwitchActive,
+    podeRemoverUltimo = false,
     onRename, onUpdateToken, onRemove, onAdd,
   }: Props = $props();
 
@@ -142,7 +147,7 @@
       </button>
       <button class="sm-srv-rename" onclick={() => startRename(s.id, s.label)} aria-label={`Renomear ${s.label}`} title="Renomear">✎</button>
       <button class="sm-srv-rename" onclick={() => startEditToken(s.id)} aria-label={`Trocar token de ${s.label}`} title="Trocar token">🔑</button>
-      {#if servers.length > 1}
+      {#if servers.length > 1 || podeRemoverUltimo}
         <button class="sm-srv-del" onclick={() => onRemove(s.id)} aria-label={`Remover ${s.label}`}>×</button>
       {/if}
     {:else}
