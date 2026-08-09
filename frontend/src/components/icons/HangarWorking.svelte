@@ -70,7 +70,7 @@
   .respiro {
     transform-box: view-box;
     transform-origin: 50% 50%;
-    animation: hangar-respiro var(--ciclo) var(--ease-out) 0.9s infinite;
+    animation: hangar-respiro var(--ciclo, 3.2s) var(--ease-out) 0.9s infinite;
   }
 
   .arco {
@@ -78,10 +78,13 @@
     transform-origin: 50% 50%;
     stroke-dasharray: var(--L);
     stroke-dashoffset: var(--L);
-    /* entrada toca uma vez e FICA; o giro entra depois, com a fase própria de cada arco */
+    /* entrada toca uma vez e FICA; o giro entra depois, com a fase própria de cada arco.
+       O fallback do var() não é zelo: `animation` com uma var que não resolve fica inválida em
+       tempo de valor computado, e isso derruba a DECLARAÇÃO inteira — aqui levaria a entrada junto
+       com o giro, sem erro no console. */
     animation:
       hangar-entra 0.72s var(--ease-out) var(--entrada) forwards,
-      hangar-gira var(--ciclo) var(--ease-out) var(--giro) infinite;
+      hangar-gira var(--ciclo, 3.2s) var(--ease-out) var(--giro) infinite;
   }
 
   @keyframes hangar-entra {
