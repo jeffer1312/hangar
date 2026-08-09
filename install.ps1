@@ -600,6 +600,78 @@ if (-not (Test-Path $slJs)) {
     }
 }
 
+# -- 5b/8 Publicar o backend no Tailscale -------------------------------------
+# FORA do passo 6 de proposito: aquele e pulado inteiro no -Update (install.ps1:564), e -Update e o
+# caminho do hook post-merge, ou seja como as maquinas ja instaladas se atualizam. Uma migracao que
+# so roda na instalacao interativa nunca alcanca quem precisa dela.
+Titulo '5b/8 Publicar o backend no Tailscale'
+$script:cpPublicUrl = $null
+$portaBack = Porta-Do-Env 'CP_PORT' 8765
+if (-not (Tem 'tailscale')) {
+    Nota 'tailscale nao instalado - pulando (o acesso de fora fica por sua conta)'
+} else {
+    $eapAnt = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'   # chamada nativa: stderr nao pode virar excecao
+    try {
+        $tsJson = $null
+        try { $tsJson = (& tailscale status --json 2>$null | Out-String | ConvertFrom-Json) } catch { }
+        $dns = $null
+        if ($tsJson -and $tsJson.Self -and $tsJson.Self.DNSName) { $dns = $tsJson.Self.DNSName.TrimEnd('.') }
+        if (-not $dns) {
+            Nota 'tailscale sem nome de no (nao logado?) - rode `tailscale up` e re-rode este instalador'
+        } else {
+            # FILTRA por :443. O `Web` do serve status e um mapa "host:porta" -> Handlers, e esta
+            # maquina pode ter OUTRO slot publicado — o preview de projeto usa o 10000
+            # (backend/app/tunnel.py:11). Varrer todos e guardar o ultimo `/` faria o proxy do 10000
+            # passar por "ja publica o backend", e o 443 nunca ser configurado. O mesmo filtro existe
+            # em tunnel.py:71-73, e e por isso que ele existe la.
+            $proxy443 = $null
+            try {
+                $sv = (& tailscale serve status --json 2>$null | Out-String | ConvertFrom-Json)
+                if ($sv -and $sv.Web) {
+                    foreach ($p in $sv.Web.PSObject.Properties) {
+                        if ($p.Name -notmatch ':443$') { continue }
+                        foreach ($h in $p.Value.Handlers.PSObject.Properties) {
+                            if ($h.Name -eq '/') { $proxy443 = $h.Value.Proxy }
+                        }
+                    }
+                }
+            } catch { }
+            # Compara PORTA, nao string: o tailscale normaliza o alvo, entao "localhost:8765" e
+            # "http://127.0.0.1:8765" descrevem a mesma coisa e uma comparacao literal diria que
+            # precisa reconfigurar a cada rodada. Mesmo criterio do tunnel._port_from_proxy.
+            $portaAtual = $null
+            if ($proxy443 -match ':(\d+)/?$') { $portaAtual = [int]$Matches[1] }
+            if ($portaAtual -eq $portaBack) {
+                Ok "tailscale ja publica o backend (porta $portaBack)"
+                $script:cpPublicUrl = "https://$dns"
+            } elseif ($proxy443 -and $portaAtual -ne 5173) {
+                # Handler que NAO fomos nos que criamos: avisa e nao toca. E NUNCA `serve reset`,
+                # que derrubaria o slot do preview de projeto e o que o dono tenha feito a mao.
+                Falta "tailscale ja publica '$proxy443' na raiz - NAO vou sobrescrever; ajuste na mao se quiser o backend ali"
+            } else {
+                $saida = (& tailscale serve --bg --https=443 "localhost:$portaBack" 2>&1 | Out-String)
+                if ($LASTEXITCODE -eq 0) {
+                    Ok "tailscale publicando o backend (localhost:$portaBack)"
+                    $script:cpPublicUrl = "https://$dns"
+                } else {
+                    # A saida diz a causa real (permissao, HTTPS nao habilitado no tailnet); sem ela
+                    # sobraria chutar numa lista de tres. Se for permissao, o caminho e o mesmo que o
+                    # bloco de firewall ja ensina: abrir um PowerShell como Administrador.
+                    Falta "tailscale serve falhou: $($saida.Trim())"
+                    Nota 'Se falou em permissao/acesso negado: abra um PowerShell como Administrador e rode este instalador de novo.'
+                }
+            }
+            if ($script:cpPublicUrl) {
+                # E isto que conserta o QR do BACKEND tambem: com public_url preenchido, pairing_url
+                # (backend/app/config.py:211) ignora porta e bind e usa este endereco.
+                Set-EnvKey -Chave 'CP_PUBLIC_URL' -Valor $script:cpPublicUrl
+                Ok "CP_PUBLIC_URL=$($script:cpPublicUrl) gravado em backend\.env"
+            }
+        }
+    } finally { $ErrorActionPreference = $eapAnt }
+}
+
 # -- 6/8 Acesso pelo celular -------------------------------------------------
 Titulo '6/8 Acesso pelo celular'
 if ($Update) {
@@ -640,8 +712,10 @@ if ($regras.Count -eq 2) {
 
 if (Tem 'tailscale') {
     Ok 'Tailscale ja instalado'
-    Nota 'Depois do `tailscale up`, ponha o nome .ts.net em CP_PUBLIC_URL no backend\.env'
-    Nota 'pra o QR sair com o endereco certo em vez do IP da LAN.'
+    if (-not $script:cpPublicUrl) {
+        Nota 'CP_PUBLIC_URL nao gravado ainda (veja o passo 5b acima) - se falta `tailscale up`,'
+        Nota 'rode-o e re-rode este instalador; o passo 5b grava o endereco sozinho.'
+    }
 } elseif (Pergunte '  Instalar o Tailscale? (VPN pessoal - acesso de fora de casa)') {
     # Id com MAIUSCULAS: o `--exact` do winget diferencia caixa, e 'tailscale.tailscale' nao casa
     # nada. Medido: os outros seis ids do instalador estavam certos, so este errado.
@@ -649,7 +723,7 @@ if (Tem 'tailscale') {
         # Estas instrucoes so fazem sentido se a instalacao DEU CERTO. Antes elas saiam mesmo apos
         # a falha, mandando o usuario rodar `tailscale up` de um programa que nao existia.
         Nota 'Falta logar: rode `tailscale up` e instale o Tailscale tambem no celular.'
-        Nota 'Depois ponha o nome .ts.net em CP_PUBLIC_URL no backend\.env.'
+        Nota 'Depois rode este instalador de novo - o passo 5b grava CP_PUBLIC_URL sozinho.'
     }
 }
 
