@@ -5,6 +5,7 @@
   import DictationSettings from './DictationSettings.svelte';
   import ServerSettings from './ServerSettings.svelte';
   import EnginesSettings from './EnginesSettings.svelte';
+  import SobreSettings from './SobreSettings.svelte';
   import { criarConfigServidor } from '../../lib/serverConfig.svelte';
   import { TELAS_DE_SERVIDOR, type TelaConfig } from '../../lib/configRoute';
   import type { Server } from '../../lib/auth';
@@ -34,6 +35,7 @@
     root: 'Configurações',
     aparencia: 'Aparência',
     ditado: 'Ditado',
+    sobre: 'Sobre',
     notificacoes: 'Notificações',
     anexos: 'Anexos e transcrição',
     avancado: 'Avançado do servidor',
@@ -45,6 +47,8 @@
       descricao: 'tema, fundo, leitura e texto', servidor: false },
     { id: 'ditado', secao: 'App', rotulo: 'Ditado', icone: '🎤',
       descricao: 'mãos-livres: parar no silêncio e enviar', servidor: false },
+    { id: 'sobre', secao: 'App', rotulo: 'Sobre', icone: 'ℹ️',
+      descricao: 'versão, marca e repositório', servidor: false },
     { id: 'notificacoes', secao: 'Servidor', rotulo: 'Notificações', icone: '🔔',
       descricao: 'quando avisar que terminou, caiu ou travou', servidor: true },
     { id: 'anexos', secao: 'Servidor', rotulo: 'Anexos e transcrição', icone: '📎',
@@ -236,6 +240,8 @@
     <DictationSettings />
   {:else if telaAtual === 'motores'}
     <EnginesSettings targetServer={alvo} />
+  {:else if telaAtual === 'sobre'}
+    <SobreSettings />
   {:else}
     <ServerSettings {store} secao={telaAtual} />
   {/if}

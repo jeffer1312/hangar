@@ -15,6 +15,11 @@ describe('parseConfig', () => {
   it('tela desconhecida e tratada como painel fechado', () => {
     expect(parseConfig('#/?config=xyz')).toBeNull();
   });
+  it('parseia e escreve a tela sobre sem servidor obrigatório', () => {
+    expect(parseConfig('#/chat/x?config=sobre')).toEqual({ tela: 'sobre', srv: null });
+    expect(comConfig('#/chat/x', 'sobre')).toBe('#/chat/x?config=sobre');
+    expect(TELAS_DE_SERVIDOR).not.toContain('sobre');
+  });
   it('config vazio e tratado como painel fechado', () => {
     expect(parseConfig('#/?config=')).toBeNull();
   });

@@ -3,7 +3,16 @@ import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { VitePWA } from 'vite-plugin-pwa'
 import { build as esbuild } from 'esbuild'
 import { fileURLToPath } from 'url'
+import { execSync } from 'node:child_process'
 import type { IncomingMessage, ServerResponse } from 'http'
+
+// Versão e data do build, injetadas no bundle (tela Sobre). git describe falhou (ex: fora de um
+// repo ou sem tag) -> 'dev'; o build não pode morrer por causa de metadata.
+const hangarVersion = (() => {
+  try { return execSync('git describe --tags --always --dirty').toString().trim() }
+  catch { return 'dev' }
+})()
+const hangarBuildDate = new Date().toISOString().slice(0, 10)
 
 // Serve /sw.js DE VERDADE no dev. Sem isto, um PWA que instalou o SW de um build (preview/prod)
 // fica PRESO nesse build pra sempre: o update check de /sw.js recebe o fallback HTML do SPA
@@ -79,6 +88,10 @@ function apiCorsPreflight(): PluginOption {
 }
 
 export default defineConfig({
+  define: {
+    __HANGAR_VERSION__: JSON.stringify(hangarVersion),
+    __HANGAR_BUILD_DATE__: JSON.stringify(hangarBuildDate),
+  },
   server: {
     // Bind IPv4 loopback: vite default `localhost` resolve pra ::1 (IPv6-only) nesta maquina,
     // mas o `tailscale serve` proxia pra 127.0.0.1:5173 (IPv4) -> sem isto da 502. Forca IPv4.
