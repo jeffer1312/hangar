@@ -173,6 +173,42 @@ Pop-Location
 # 'change-me', entao uma senha de 4 digitos passaria batido sem esta checagem.
 Titulo '3/8 Token de acesso'
 $envFile = "$raiz\backend\.env"
+function Porta-Do-Env {
+    param([string]$Chave, [int]$Default)
+    if (Test-Path $envFile) {
+        $l = Select-String -Path $envFile -Pattern "^$Chave=(\d+)" -ErrorAction SilentlyContinue |
+             Select-Object -First 1
+        if ($l) { return [int]$l.Matches[0].Groups[1].Value }
+    }
+    return $Default
+}
+function Set-EnvKey {
+    param([Parameter(Mandatory)][string]$Chave, [Parameter(Mandatory)][string]$Valor)
+    # SUBSTITUI em vez de acrescentar: o `Add-Content` de antes repetia a chave a cada re-execucao, e
+    # `Porta-Do-Env` le a PRIMEIRA ocorrencia (install.ps1:628) — um CP_PORT duplicado faria o
+    # instalador mirar a porta errada e "parar o servico" sem parar nada. De graca, conserta tambem o
+    # arquivo sem quebra de linha no fim, onde o Add-Content grudava a chave nova na ultima linha.
+    #
+    # WriteAllText com UTF8Encoding($false), e NUNCA `Set-Content -Encoding UTF8`: no PS 5.1 aquele
+    # poe BOM (install.ps1:486-490), e o .env e lido pelo pydantic-settings com encoding 'utf8', nao
+    # 'utf-8-sig'. O U+FEFF nao e espaco pro regex do python-dotenv, entao a PRIMEIRA chave do arquivo
+    # vira "﻿CP_AUTH_TOKEN" e simplesmente some: o token cai pro default 'change-me' e o QR passa
+    # a entregar `?token=change-me`. Hoje o arquivo nasce por Add-Content sem -Encoding (ASCII, sem
+    # BOM), entao usar Set-Content aqui seria REGRESSAO.
+    $linha = "$Chave=$Valor"
+    $linhas = @()
+    if (Test-Path $envFile) { $linhas = @(Get-Content -Path $envFile) }
+    $achou = $false
+    $novo = foreach ($l in $linhas) {
+        if ($l -match "^\s*$([regex]::Escape($Chave))=") {
+            if (-not $achou) { $achou = $true; $linha }   # a 1a vira a boa, as outras somem
+        } else { $l }
+    }
+    if (-not $achou) { $novo = @($novo) + $linha }
+    New-Item -ItemType Directory -Force -Path (Split-Path $envFile) | Out-Null
+    [System.IO.File]::WriteAllText($envFile, (($novo -join "`r`n") + "`r`n"),
+                                   (New-Object System.Text.UTF8Encoding $false))
+}
 $temToken = (Test-Path $envFile) -and (Select-String -Path $envFile -Pattern '^CP_AUTH_TOKEN=' -Quiet)
 function Token-Aleatorio {
     # RNGCryptoServiceProvider, nao RandomNumberGenerator::Fill: o segundo e .NET Core e nao
@@ -185,7 +221,7 @@ function Token-Aleatorio {
 if ($temToken) {
     Ok 'backend\.env ja tem CP_AUTH_TOKEN (mantido)'
 } elseif ($Sim) {
-    Add-Content -Path $envFile -Value "CP_AUTH_TOKEN=$(Token-Aleatorio)"
+    Set-EnvKey -Chave 'CP_AUTH_TOKEN' -Valor (Token-Aleatorio)
     Ok 'CP_AUTH_TOKEN aleatorio gerado (modo -Sim nao pergunta)'
 } else {
     Write-Host '  Voce vai DIGITAR este token no celular, entao escolha algo que lembre.'
@@ -201,7 +237,7 @@ if ($temToken) {
         if ($token -eq 'change-me') { Erro 'esse valor o backend recusa de proposito'; continue }
         break
     }
-    Add-Content -Path $envFile -Value "CP_AUTH_TOKEN=$token"
+    Set-EnvKey -Chave 'CP_AUTH_TOKEN' -Valor $token
     Ok 'CP_AUTH_TOKEN gravado em backend\.env'
 }
 Nota 'E esse token que voce digita no celular na primeira conexao.'
@@ -622,15 +658,6 @@ Titulo '7/8 Subir junto com o Windows'
 # derruba processo alheio. As duas saem do .env (mesma fonte que o backend usa), com o default do
 # config.py como piso. A do FRONT estava cravada em 5173 enquanto a do back era lida do arquivo -
 # incoerencia que custava caro: quem tivesse outro Vite em 5173 via o processo dele morrer.
-function Porta-Do-Env {
-    param([string]$Chave, [int]$Default)
-    if (Test-Path $envFile) {
-        $l = Select-String -Path $envFile -Pattern "^$Chave=(\d+)" -ErrorAction SilentlyContinue |
-             Select-Object -First 1
-        if ($l) { return [int]$l.Matches[0].Groups[1].Value }
-    }
-    return $Default
-}
 $portaBack  = Porta-Do-Env 'CP_PORT' 8765
 # O FRONT nao sai do .env. Tentei ler CP_FRONT_PORT por simetria com o backend e estava ERRADO:
 # `front_port` (config.py:95) e "where the PWA is served ... used for QR pairing" - ele monta a URL
