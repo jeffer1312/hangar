@@ -3,9 +3,11 @@
   import HangarWorking from './icons/HangarWorking.svelte';
   import RateChips from './RateChips.svelte';
   import PlanPanel from './PlanPanel.svelte';
+  import PlanRing from './PlanRing.svelte';
   import type { State, SessionInfo, PlanDetail } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
   import { stateColors, stateLabels, ctxWindow, providerName } from '../lib/format';
+  import { planBadge } from '../lib/plan';
 
   interface Props {
     state: State;
@@ -78,6 +80,7 @@
   // secao continua abrindo a PairSheet — la existe o botao por membro, e escolher por quem clicou
   // seria adivinhacao.
   const soloPeer = $derived(pairPeers?.length === 1 ? pairPeers[0] : null);
+  const planRing = $derived(session ? planBadge(session) : null);
   // Atalho direto pro modal SO quando ha um par; a PairSheet (contrato, conversa do grupo, lado a
   // lado, sair) nunca perde a porta — vira um segundo botao "grupo" na mesma secao.
   const openPeer = $derived(soloPeer && onOpenPeerChat ? () => onOpenPeerChat(soloPeer) : null);
@@ -195,7 +198,12 @@
          toda sessao sem superpowers rodando. plan_hidden entra junto: com "nenhum plano" escolhido
          o plan_name some, e o painel — que e onde fica o seletor pra voltar — sumiria com ele. -->
     <section class="sec-metric">
-      <span class="section-label">Plano</span>
+      <div class="section-head">
+        <span class="section-label">Plano</span>
+        {#if planRing}
+          <span title={planRing.title}><PlanRing pct={planRing.pct} complete={planRing.complete} /></span>
+        {/if}
+      </div>
       <PlanPanel {session} detail={planDetail ?? null} loading={planLoading ?? false}
                  error={planError ?? false} />
     </section>
@@ -568,6 +576,17 @@
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
+
+  /* Cabecalho de secao com anel na ponta (Plano): o rotulo nao pode herdar o margin-bottom do
+     .section-label global — ele e o flex item da esquerda, quem respira e o .section-head. */
+  .section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+  }
+  .section-head .section-label { margin-bottom: 0; }
 
   .state-chip {
     display: inline-flex;
