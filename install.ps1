@@ -724,8 +724,8 @@ if ($regras.Count -eq 2) {
 if (Tem 'tailscale') {
     Ok 'Tailscale ja instalado'
     if (-not $script:cpPublicUrl) {
-        Nota 'CP_PUBLIC_URL nao gravado ainda (veja o passo 5b acima) - se falta `tailscale up`,'
-        Nota 'rode-o e re-rode este instalador; o passo 5b grava o endereco sozinho.'
+        Nota 'CP_PUBLIC_URL nao gravado ainda (veja o passo 5d acima) - se falta `tailscale up`,'
+        Nota 'rode-o e re-rode este instalador; o passo 5d grava o endereco sozinho.'
     }
 } elseif (Pergunte '  Instalar o Tailscale? (VPN pessoal - acesso de fora de casa)') {
     # Id com MAIUSCULAS: o `--exact` do winget diferencia caixa, e 'tailscale.tailscale' nao casa
@@ -734,7 +734,7 @@ if (Tem 'tailscale') {
         # Estas instrucoes so fazem sentido se a instalacao DEU CERTO. Antes elas saiam mesmo apos
         # a falha, mandando o usuario rodar `tailscale up` de um programa que nao existia.
         Nota 'Falta logar: rode `tailscale up` e instale o Tailscale tambem no celular.'
-        Nota 'Depois rode este instalador de novo - o passo 5b grava CP_PUBLIC_URL sozinho.'
+        Nota 'Depois rode este instalador de novo - o passo 5d grava CP_PUBLIC_URL sozinho.'
     }
 }
 
@@ -889,15 +889,41 @@ if ($jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu l
     # terminal/editor/grep que so MENCIONE "app.main" ou o caminho numa linha de comando alheia -
     # o mesmo cuidado que Pare-Servico ja tem com -Exe (nunca so caminho, sempre caminho + nome).
     $vigiaPadraoAppMain = [regex]::Escape('app.main')
-    $vigiaPadraoCaminho = $tarefas[0].Padrao   # regex do checkout do backend, ja escapado (acima)
+    # .Replace("'","''") no CAMINHO e no LOG: os dois entram crus dentro de literais de aspas
+    # SIMPLES do template abaixo, e os dois vem do sistema de arquivos (o segundo via
+    # $env:LOCALAPPDATA) - um perfil com apostrofo no nome (C:\Users\O'Brien\...) fecharia a
+    # aspa simples cedo e quebraria o script da vigia. '' e o escape de aspa simples do
+    # PowerShell dentro de string de aspas simples.
+    $vigiaPadraoCaminho = $tarefas[0].Padrao.Replace("'", "''")   # regex do checkout, ja escapado (acima)
     $vigiaExeProc = $tarefas[0].ExeProc        # 'uv|python'
-    $vigiaLog = Join-Path $env:LOCALAPPDATA "hangar\hangar-vigia.log"   # mesmo lugar dos outros .log
-    # Here-string de aspas SIMPLES (@'...'@): zero interpolacao, entao `$_` e `$subindo` sobrevivem
-    # literais sem precisar de crase nenhuma - o script so vira real quando o `.Replace()` abaixo
-    # troca os tokens, e `.Replace()` e substituicao LITERAL (nao regex), entao as barras invertidas
-    # de $vigiaPadraoCaminho (saida de [regex]::Escape) nao viram sequencia de escape de ninguem.
+    $vigiaLog = (Join-Path $env:LOCALAPPDATA "hangar\hangar-vigia.log").Replace("'", "''")   # mesmo lugar dos outros .log
+    # Here-string de aspas SIMPLES (@'...'@): zero interpolacao, entao `$_`/`$candidatos`/etc
+    # sobrevivem literais sem precisar de crase nenhuma - o script so vira real quando o
+    # `.Replace()` abaixo troca os tokens, e `.Replace()` e substituicao LITERAL (nao regex),
+    # entao as barras invertidas de $vigiaPadraoCaminho (saida de [regex]::Escape) nao viram
+    # sequencia de escape de ninguem.
+    #
+    # IDADE, nao so existencia: processo do checkout vivo NAO E garantia de que esta subindo -
+    # no Windows nao existe zumbi, e um `uv`/`python` deste checkout PRESO (trava de rede num
+    # `uv sync`, deadlock, I/O pendurado) fica no Get-CimInstance pra sempre, casa o criterio, e
+    # a vigia original (so existencia) nunca mais chamaria Start-ScheduledTask - silenciosamente
+    # pior que a versao agressiva demais de antes, porque e o caso que ninguem percebe. Um
+    # processo so poupa o restart se nasceu ha MENOS de 10 min (bem acima do boot medido, ~15s;
+    # bem abaixo de "pendurado"). CreationDate e o mesmo campo que Pare-Servico ja usa pra
+    # comparar nascimento de processo (install.ps1, $nascMapa). Passado o limite, dispara MESMO
+    # ASSIM e registra no log que havia processo velho sem porta aberta - o problema tem que
+    # aparecer, nao sumir.
     $vigiaTemplate = @'
-& { $subindo = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and ($_.CommandLine -match '__APPMAIN__' -or $_.CommandLine -match '__CAMINHO__') -and $_.Name -match '__EXE__' }); if ((-not (Get-NetTCPConnection -State Listen -LocalPort __PORTA__ -ErrorAction SilentlyContinue)) -and $subindo.Count -eq 0) { Start-ScheduledTask -TaskName 'hangar-backend' } } *>&1 | Out-File -FilePath '__LOG__' -Encoding utf8
+& {
+    $portaViva = Get-NetTCPConnection -State Listen -LocalPort __PORTA__ -ErrorAction SilentlyContinue
+    if ($portaViva) { return }
+    $candidatos = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and ($_.CommandLine -match '__APPMAIN__' -or $_.CommandLine -match '__CAMINHO__') -and $_.Name -match '__EXE__' })
+    $limite = (Get-Date).AddMinutes(-10)
+    $recentes = @($candidatos | Where-Object { $_.CreationDate -and $_.CreationDate -gt $limite })
+    if ($recentes.Count -gt 0) { return }
+    if ($candidatos.Count -gt 0) { Write-Output 'vigia: processo(s) do checkout vivo(s) ha mais de 10 min sem a porta aberta - pode estar pendurado; reiniciando mesmo assim' }
+    Start-ScheduledTask -TaskName 'hangar-backend'
+} *>&1 | Out-File -FilePath '__LOG__' -Encoding utf8
 '@
     # Numa linha so, sem quebra: um `.Replace(...)` iniciando a linha seguinte arrisca ser lido
     # como dot-sourcing pelo parser (mesmo com crase antes), e nenhuma das duas formas de quebra
