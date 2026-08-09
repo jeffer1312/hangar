@@ -17,6 +17,8 @@
    */
   let { size = 20 }: { size?: number } = $props();
 
+  // Alimenta o CSS via --ciclo: era constante MORTA (nada a lia) e as durações viviam escritas à
+  // mão em três lugares do CSS — mexer aqui não mudava nada na tela, e quem confiasse nela erraria.
   const CICLO = 3.2;
   const ARCOS = [
     { r: 9.1, a: 30, atrasoEntrada: '0s', fase: 0 },
@@ -50,6 +52,7 @@
   stroke-width="1.55"
   stroke-linecap="round"
   aria-hidden="true"
+  style="--ciclo: {CICLO}s"
 >
   <g class="respiro">
     {#each caminhos as c}
@@ -67,7 +70,7 @@
   .respiro {
     transform-box: view-box;
     transform-origin: 50% 50%;
-    animation: hangar-respiro 3.2s var(--ease-out) 0.9s infinite;
+    animation: hangar-respiro var(--ciclo) var(--ease-out) 0.9s infinite;
   }
 
   .arco {
@@ -78,7 +81,7 @@
     /* entrada toca uma vez e FICA; o giro entra depois, com a fase própria de cada arco */
     animation:
       hangar-entra 0.72s var(--ease-out) var(--entrada) forwards,
-      hangar-gira 3.2s var(--ease-out) var(--giro) infinite;
+      hangar-gira var(--ciclo) var(--ease-out) var(--giro) infinite;
   }
 
   @keyframes hangar-entra {
@@ -95,18 +98,19 @@
     33%, 100% { transform: rotate(360deg); }
   }
 
-  /* O respiro só começa em 68% do ciclo (2,18s) — o terceiro arco fecha a volta em 2,02s, então
-     sobra uma batida de 0,13s antes de encolher. Medido no app: com 66% os dois se encavalavam por
-     0,01s, que era exatamente a queixa de "não espera cada linha dar o giro". */
+  /* O respiro começa em 63% (2,02s), que é EXATAMENTE quando o terceiro arco fecha a volta — sem
+     batida de espera. A folga de 0,16s que havia antes parecia bem maior em uso: com a curva
+     desacelerando no fim, o último arco já lê como parado antes de tecnicamente terminar, então o
+     tempo morto percebido era o dobro do medido. */
   /* FINAL: depois que a onda passa por todos, os três giram JUNTOS enquanto encolhem e voltam.
      É o contraste que fecha o ciclo — a onda é sequencial, o final é uníssono. O giro do grupo se
      compõe com o dos arcos (que já estão parados em 360°), então o efeito é o conjunto inteiro
      rodando uma volta enquanto respira. */
   @keyframes hangar-respiro {
-    0%, 68%   { transform: scale(1) rotate(0deg); }
-    80%       { transform: scale(0.44) rotate(170deg); }
-    89%       { transform: scale(1.06) rotate(300deg); }
-    95%, 100% { transform: scale(1) rotate(360deg); }
+    0%, 63%   { transform: scale(1) rotate(0deg); }
+    77%       { transform: scale(0.44) rotate(170deg); }
+    88%       { transform: scale(1.06) rotate(300deg); }
+    96%, 100% { transform: scale(1) rotate(360deg); }
   }
 
   @media (prefers-reduced-motion: reduce) {
