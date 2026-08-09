@@ -991,18 +991,34 @@ if ($registrou) {
     Set-Content -Path $vigiaVbs -Encoding ASCII -Value @"
 CreateObject("WScript.Shell").Run "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $vigiaEnc", 0, False
 "@
-    # -AtLogOn + repeticao, e nao -Once com horario absoluto: a serie precisa sobreviver a reboot e
-    # suspensao, que sao os dois casos que a vigia existe pra cobrir.
-    $vigiaGatilho = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-    $vigiaGatilho.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
-                                -RepetitionInterval (New-TimeSpan -Minutes 5)).Repetition
+    # NAO e -AtLogOn puro (era a versao anterior) - MEDIDO na maquina real em 09/08/2026 que a
+    # Repetition so comeca a CONTAR a partir do disparo do gatilho, e registrar a tarefa nao
+    # dispara nada sozinho: registrada as 02:28, com o ultimo logon interativo as 19:53 do dia
+    # ANTERIOR, o gatilho -AtLogOn ja tinha passado e nunca mais ia dispar por conta propria -
+    # LastRunTime ficou em 30/11/1999 (nunca rodou), NextRunTime VAZIO, e nem iniciar a tarefa a
+    # mao arma a repeticao. E exatamente o tipo de coisa que alguem "simplifica" de volta achando
+    # AtLogon mais direto - nao e, ele so dispara em logon FUTURO, e reboot/retomada de suspensao
+    # nao geram logon nenhum.
+    #
+    # -Once com horario no FUTURO IMEDIATO arma a serie na hora do REGISTRO, sem depender de
+    # logon: e o unico jeito medido de deixar NextRunTime preenchido logo depois de
+    # Register-ScheduledTask. -RepetitionDuration ([TimeSpan]::MaxValue) e recusado pelo
+    # Agendador no PowerShell 5.1 - 9999 dias (~27 anos) e "pra sempre" na pratica sem cair
+    # nessa rejeicao.
+    $vigiaOnce = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+        -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 9999)
+    # -AtLogOn continua registrado JUNTO, nao no lugar - cinto e suspensorio: cobre o logon
+    # interativo de verdade (login de manha, por exemplo), enquanto o -Once repetido acima e
+    # quem cobre reboot e retomada de suspensao, os dois casos que nao passam por logon e que
+    # sao justamente o motivo da vigia existir.
+    $vigiaLogon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
     # -Settings com bateria: o default e DisallowStartIfOnBatteries=$true, e a maquina que suspende
     # e justamente o notebook - a vigia ficaria morta exatamente quando e necessaria, e o teste na
     # tomada passaria. As tarefas existentes ja passam estes dois (acima).
     $vigiaSet = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName 'hangar-vigia' `
         -Action (New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$vigiaVbs`"") `
-        -Trigger $vigiaGatilho -Settings $vigiaSet `
+        -Trigger $vigiaOnce, $vigiaLogon -Settings $vigiaSet `
         -Principal (New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive) -Force | Out-Null
     Ok 'vigia registrada (checa a cada 5 min e reergue o backend)'
     } catch {
