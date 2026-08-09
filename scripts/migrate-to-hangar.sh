@@ -162,6 +162,25 @@ if command -v systemctl >/dev/null && [[ -f "$SD/claude-cockpit-backend.service"
     systemctl --user disable --now claude-cockpit-backend.service claude-cockpit-frontend.service 2>/dev/null || true
     rm -f "$SD/claude-cockpit-backend.service" "$SD/claude-cockpit-frontend.service"
     ./scripts/services-setup.sh        # escreve/sobe as hangar-* a partir do path novo
+
+# Units JA renomeadas, mas com o path VELHO dentro — e este ramo custou um apagao.
+# Medido em 09/08/2026 nesta maquina: as units viraram hangar-* antes da pasta ser renomeada (uma
+# sessao fez o rename do projeto, outra o da pasta). Como o `if` acima so entra quando encontra
+# `claude-cockpit-backend.service`, ele nao rodou; o `mv` seguiu em frente e as units ficaram
+# apontando pra uma pasta que nao existe mais. O systemd nao "falha" de um jeito obvio: ele fica em
+# `activating`, reiniciando em loop com `status=200/CHDIR`, e o app some do celular sem nenhuma
+# linha vermelha na saida da migracao — que terminou dizendo "migracao concluida".
+# Detectar pelo NOME da unit nao serve; e comparar com "$OLD" tambem nao — numa maquina ja migrada
+# $OLD e $NEW sao o MESMO caminho, entao o grep casaria o path novo e reescreveria a unit toda vez
+# (falso positivo medido na 2a passada). O criterio honesto e o unico que descreve o defeito:
+# o WorkingDirectory declarado na unit APONTA PRA UM DIRETORIO QUE NAO EXISTE.
+elif command -v systemctl >/dev/null && [[ -f "$SD/hangar-backend.service" ]]; then
+    wd="$(grep -m1 '^WorkingDirectory=' "$SD/hangar-backend.service" 2>/dev/null | cut -d= -f2-)"
+    if [[ -n "$wd" && ! -d "$wd" ]]; then
+        log "unit hangar-backend aponta pra '$wd', que nao existe — reescrevendo a partir de $NEW"
+        [[ -f "$SD/hangar-frontend.service" ]] && export CP_SERVE=preview
+        ./scripts/services-setup.sh
+    fi
 fi
 if [[ -f "$SD/claude-cockpit-deploy.service" ]]; then
     systemctl --user disable claude-cockpit-deploy.service 2>/dev/null || true
@@ -178,12 +197,50 @@ if command -v qs >/dev/null && pgrep -x Hyprland >/dev/null; then
 fi
 
 # ── Verificação ──────────────────────────────────────────────────────────────
+# FALHA ALTO, e nao com AVISO. Em 09/08/2026 esta verificacao viu o backend fora (units com o path
+# velho, `activating` em loop de CHDIR), imprimiu duas linhas de aviso no meio da saida e terminou
+# com "migracao concluida" e exit 0 — enquanto o app estava fora do ar no celular. Migracao que
+# derruba o servico e diz que terminou bem e pior do que migracao que para: o dono so descobre
+# quando vai usar, longe do terminal onde a mensagem passou.
 echo
+falhou=0
+
 if command -v systemctl >/dev/null && [[ -f "$SD/hangar-backend.service" ]]; then
-    systemctl --user is-active hangar-backend.service hangar-frontend.service \
-        && log "serviços hangar-* ativos" \
-        || echo "AVISO: serviço não subiu — ver: journalctl --user -u hangar-backend.service" >&2
+    # `is-active` responde `activating` num servico em loop de restart, e isso NAO e sucesso —
+    # exigir a palavra `active` e o que separa "subiu" de "esta tentando subir pra sempre".
+    sleep 3   # o systemd acabou de receber a unit; da tempo do primeiro bind
+    estado="$(systemctl --user is-active hangar-backend.service 2>/dev/null || true)"
+    if [[ "$estado" == "active" ]]; then
+        log "hangar-backend ativo"
+    else
+        echo "ERRO: hangar-backend está '$estado' — veja: journalctl --user -u hangar-backend.service -n 30" >&2
+        falhou=1
+    fi
 fi
-command -v cp-send >/dev/null && cp-send --list >/dev/null 2>&1 && log "cp-send ok (backend respondendo)" \
-    || echo "AVISO: cp-send --list falhou — backend fora?" >&2
+
+# A prova que importa e a porta respondendo, nao a unit existir: um backend com WorkingDirectory
+# errado fica `activating` e nunca escuta.
+porta="$(grep -m1 '^CP_PORT=' "$NEW/backend/.env" 2>/dev/null | cut -d= -f2)"
+porta="${porta:-8765}"
+if command -v curl >/dev/null; then
+    codigo="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$porta/" 2>/dev/null || true)"
+    if [[ "$codigo" =~ ^(200|401|404)$ ]]; then
+        log "backend respondendo em 127.0.0.1:$porta (HTTP $codigo)"
+    else
+        echo "ERRO: backend não respondeu em 127.0.0.1:$porta (curl: '${codigo:-sem resposta}')" >&2
+        falhou=1
+    fi
+fi
+
+if command -v cp-send >/dev/null; then
+    cp-send --list >/dev/null 2>&1 && log "cp-send ok" \
+        || { echo "ERRO: cp-send --list falhou — symlink quebrado ou backend fora" >&2; falhou=1; }
+fi
+
+if [[ "$falhou" -ne 0 ]]; then
+    echo >&2
+    echo "MIGRAÇÃO INCOMPLETA: a pasta foi renomeada mas o serviço não está no ar." >&2
+    echo "  Conserto mais provável (units com o caminho antigo dentro):  ./scripts/services-setup.sh" >&2
+    exit 1
+fi
 log "migração concluída. Clone em: $NEW"
