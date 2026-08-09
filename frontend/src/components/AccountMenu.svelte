@@ -1,16 +1,17 @@
 <script lang="ts">
-  import { enablePush, pushSupported } from '../lib/push';
-  import { getPushSettings, getPushSettingsForServer, setQuietHours, setQuietHoursForServer } from '../lib/api';
-  import { serverColor, parseServerPairing, getActiveId } from '../lib/auth';
-  import { vaultPush } from '../lib/vaultPush.svelte';
+  import { pushSupported } from '../lib/push';
+  import { getActiveId } from '../lib/auth';
   import { abrirConfig } from '../lib/configNav';
+  import ServerManager from './ServerManager.svelte';
+  import PushQuiet from './PushQuiet.svelte';
   import type { Server } from '../lib/auth';
 
   // Menu de CONTA (estilo Claude): tudo que é conta/config vive aqui, fora da navegação. Popover que
   // abre pra CIMA a partir do avatar no rodapé — mesma peça no mobile (SessionList) e no desktop
   // (Sidebar), diferindo só pelos handlers que o pai passa (trocar servidor só existe no desktop).
-  // Ações self-contained (push, horas silenciosas, renomear servidor) o menu resolve sozinho via libs;
-  // as que dependem de UI do pai (adicionar/remover servidor, reconectar, sair) vêm por callback.
+  // As linhas de servidor e o bloco de push vivem nos componentes extraídos (ServerManager/PushQuiet,
+  // Task 4a) — o mesmo fluxo é reusado pela tela Servidores das Configurações (Task 4b). Ações que
+  // dependem de UI do pai (adicionar/remover servidor, reconectar, sair) vêm por callback.
   interface Props {
     open: boolean;
     onClose: () => void;
@@ -27,7 +28,7 @@
     activeId?: string | null;
     onSwitchServer?: (id: string) => void;   // só desktop (troca + reload)
     onRenameServer: (id: string, label: string) => void;
-    // Recebe o TOKEN ja extraido e validado (o parse mora aqui, num arquivo so — nos dois pais
+    // Recebe o TOKEN ja extraido e validado (o parse mora num arquivo so — nos dois pais
     // viraria validacao duplicada, e Sidebar/SessionList sao justamente os que vivem divergindo).
     // Devolve false quando o servidor nao existe mais, pra UI poder dizer isso em vez de fingir.
     onUpdateServerToken: (id: string, token: string) => boolean;
@@ -49,146 +50,12 @@
     return { destroy() { node.remove(); } };
   }
 
-  // Web push: liga notificação de "sessão aguardando" (assina + registra nos servidores). Reusa o
-  // MESMO enablePush das duas telas — não reimplementa.
-  let pushBusy = $state(false);
-  let pushMsg = $state('');
-  async function handleEnablePush() {
-    pushBusy = true;
-    pushMsg = '';
-    try {
-      const n = await enablePush();
-      pushMsg = `Ativado em ${n} servidor${n > 1 ? 'es' : ''}.`;
-    } catch (e) {
-      pushMsg = e instanceof Error ? e.message : 'Erro ao ativar.';
-    } finally {
-      pushBusy = false;
-    }
-  }
-
-  // Horas silenciosas (feature #5): janela GLOBAL de silêncio pro push, do servidor ativo. <input
-  // type="time"> nativo. Carrega ao abrir o menu; best-effort (offline/sem rota -> campos vazios).
-  let qhStart = $state('');
-  let qhEnd = $state('');
-  let qhMsg = $state('');
   // Servidor-alvo das ações de config. No mobile a lista é AGREGADA (sem "ativo"), então sem isto
   // "Horas silenciosas"/"Configurações" batiam no servidor globalmente ativo — podia ser OUTRA
   // máquina. Resolve do array VIVO: um snapshot congelado devolveria o token de quando o drawer
   // abriu, e trocar o token na mesma linha passaria a mandar o antigo. Sumiu de `servers` -> null,
   // e a UI desabilita em vez de cair no primeiro da lista.
   const activeServer = $derived(servers.find((s) => s.id === activeId) ?? null);
-
-  async function loadQuietHours() {
-    // Alvo explícito (drawer) que sumiu de `servers`: NÃO cai nas funções globais — leria a janela
-    // de outra máquina e mostraria como se fosse desta.
-    if (embedded && !activeServer) { qhStart = ''; qhEnd = ''; qhMsg = 'Servidor indisponível'; return; }
-    qhMsg = '';
-    try {
-      const p = embedded && activeServer ? await getPushSettingsForServer(activeServer) : await getPushSettings();
-      qhStart = p.quiet_hours?.start ?? '';
-      qhEnd = p.quiet_hours?.end ?? '';
-    } catch (e) {
-      // Global segue best-effort (offline/rota ausente -> campos vazios, salvar depois resolve).
-      // Por-servidor NÃO: `apiFetchForServer` não faz o self-heal de 401 de propósito (não pode
-      // derrubar a credencial de outra máquina), então token morto ficaria como "campos vazios"
-      // pra sempre — indistinguível de "nunca configurei" — e ninguém iria trocar o token.
-      if (embedded) qhMsg = e instanceof Error ? e.message : 'não foi possível carregar';
-    }
-  }
-  async function saveQuietHours() {
-    try {
-      if (embedded) {
-        if (!activeServer) throw new Error('Servidor indisponível');
-        await setQuietHoursForServer(activeServer, qhStart || null, qhEnd || null);
-      } else {
-        await setQuietHours(qhStart || null, qhEnd || null);
-      }
-      qhMsg = qhStart && qhEnd ? `silenciado ${qhStart}–${qhEnd}` : 'desligado';
-    } catch (e) {
-      qhMsg = e instanceof Error ? e.message : 'erro ao salvar';
-    }
-  }
-  // Recarrega a janela de silêncio toda vez que o menu abre (pode ter mudado no servidor).
-  $effect(() => { if (open && pushSupported() && (!embedded || activeServer)) void loadQuietHours(); });
-
-  // Rename inline de servidor: id em edição + valor do input. O pai persiste (renameServer + reagrega).
-  let editingId = $state<string | null>(null);
-  let editLabel = $state('');
-  function startRename(id: string, current: string) {
-    editingId = id;
-    editLabel = current;
-  }
-  function saveRename() {
-    if (editingId) onRenameServer(editingId, editLabel);
-    editingId = null;
-  }
-
-  // Edicao de TOKEN, separada do rename: mesmo padrao inline, mas o campo comeca VAZIO (nunca
-  // pre-preenche com o token atual — segredo nao vai pra tela) e aceita tanto o token cru quanto a
-  // URL de pareamento inteira, pra quem cola do QR nao ter que extrair nada na mao.
-  let editingTokenId = $state<string | null>(null);
-  let editToken = $state('');
-  let tokenError = $state('');
-  function startEditToken(id: string) {
-    editingTokenId = id;
-    editToken = '';
-    tokenError = '';
-    editingId = null;      // os dois modos usam a mesma linha; abrir um fecha o outro
-    // NAO limpa o vaultPush aqui: abrir o campo nao conserta push nenhum. Limpando no clique, um
-    // erro NAO RESOLVIDO sumia da tela so por o usuario abrir o editor de outro servidor e apertar
-    // Esc — e "o aviso sumiu" se le como "resolvido", enquanto os outros aparelhos seguem com o
-    // token velho. Some so quando ha uma tentativa NOVA (saveToken).
-  }
-  function saveToken() {
-    const id = editingTokenId;
-    const text = editToken.trim();
-    // Vazio = desistiu. Gravar string vazia desautenticaria o servidor calado, e o campo em branco
-    // e exatamente o que sobra quando o usuario abre e clica fora.
-    if (!id || !text) {
-      editingTokenId = null;
-      editToken = '';
-      tokenError = '';
-      return;
-    }
-
-    const parsed = parseServerPairing(text);
-    // Parece URL mas nao parseou: RECUSA em vez de aceitar o texto inteiro como token. O fluxo de
-    // "Adicionar servidor" ja rejeita este mesmo caso com mensagem; aceitar aqui gravava a URL
-    // quebrada COMO token, e o campo e password — o usuario nao ve o lixo que ficou salvo. O
-    // sintoma vinha depois como 401, sem pista nenhuma de que foi um paste malformado.
-    const pareceUrl = text.includes('://');
-    if (pareceUrl && !parsed) {
-      tokenError = 'URL de pareamento inválida — cole a URL completa (com ?token=) ou só o token.';
-      return;                                   // campo CONTINUA aberto, com o texto, pra corrigir
-    }
-    // URL que PARSEOU mas nao tinha ?token=: o parseServerPairing so substitui o token quando acha o
-    // parametro — sem ele, devolve o proprio texto como "token". Ou seja, colar a URL do app copiada
-    // da barra de enderecos (que ja teve o token removido) gravaria a URL INTEIRA como credencial,
-    // sem erro nenhum. O guard de cima nao pega isto, porque aqui `parsed` nao e nulo.
-    if (pareceUrl && parsed && parsed.token === text) {
-      tokenError = 'essa URL não tem ?token= — cole a URL de pareamento completa ou só o token.';
-      return;
-    }
-    // So o TOKEN. O botao diz "Trocar token": colar a URL de pareamento de outra maquina nao pode
-    // reapontar calado um servidor ja cadastrado (com label e historico) pra outro host.
-    const token = parsed ? parsed.token : text;
-    const alvo = servers.find((s) => s.id === id);
-    const outroHost = parsed && alvo && parsed.base.replace(/\/+$/, '') !== alvo.baseUrl.replace(/\/+$/, '');
-
-    vaultPush.clear();                          // tentativa NOVA: agora sim zera o resultado antigo
-    const ok = onUpdateServerToken(id, token);
-    if (!ok) {
-      // false = o id sumiu (removido noutra aba/aparelho pelo sync entre abrir e salvar). Raro,
-      // mas indistinguivel de sucesso se ficasse calado — o campo ja teria fechado.
-      tokenError = 'esse servidor não existe mais nesta lista.';
-      return;
-    }
-    editingTokenId = null;
-    editToken = '';
-    tokenError = outroHost
-      ? `token trocado. O endereço NÃO mudou (segue ${alvo!.baseUrl}) — pra trocar o host, remova e adicione de novo.`
-      : '';
-  }
 
   // Posição do card: FIXED, medida da âncora (rodapé) via getBoundingClientRect. Abre pra cima.
   let pos = $state({ left: 0, bottom: 0 });
@@ -213,94 +80,23 @@
 <!-- Corpo do menu (servidores → sair): reusado igual no popover e no drawer embedded (uma só fonte
      de verdade pros handlers de push/quiet/rename/reconnect/logout). -->
 {#snippet menuBody()}
-    <div class="am-section">Servidores</div>
-    {#each servers as s (s.id)}
-      <div class="am-srv" class:on={s.id === activeId}>
-        {#if editingTokenId === s.id}
-          <span class="am-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
-          <!-- svelte-ignore a11y_autofocus -->
-          <input
-            class="am-srv-edit"
-            type="password"
-            autocomplete="off"
-            bind:value={editToken}
-            placeholder="token novo ou URL de pareamento"
-            onclick={(e) => e.stopPropagation()}
-            onkeydown={(e) => { if (e.key === 'Enter') saveToken(); if (e.key === 'Escape') { editingTokenId = null; editToken = ''; } }}
-            onblur={saveToken}
-            autofocus
-            aria-label={`Novo token de ${s.label}`}
-          />
-        {:else if editingId === s.id}
-          <span class="am-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
-          <!-- svelte-ignore a11y_autofocus -->
-          <input
-            class="am-srv-edit"
-            bind:value={editLabel}
-            onclick={(e) => e.stopPropagation()}
-            onkeydown={(e) => { if (e.key === 'Enter') saveRename(); if (e.key === 'Escape') editingId = null; }}
-            onblur={saveRename}
-            autofocus
-            aria-label="Novo nome do servidor"
-          />
-        {:else if onSwitchServer}
-          <button class="am-srv-pick" onclick={() => switchServer(s.id)}>
-            <span class="am-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
-            <span class="am-srv-label">{s.label}</span>
-            {#if s.id === activeId}<span class="am-tag">ativo</span>{/if}
-          </button>
-          <button class="am-srv-rename" onclick={() => startRename(s.id, s.label)} aria-label={`Renomear ${s.label}`} title="Renomear">✎</button>
-          <button class="am-srv-rename" onclick={() => startEditToken(s.id)} aria-label={`Trocar token de ${s.label}`} title="Trocar token">🔑</button>
-          {#if servers.length > 1}
-            <button class="am-srv-del" onclick={() => onRemoveServer(s.id)} aria-label={`Remover ${s.label}`}>×</button>
-          {/if}
-        {:else}
-          <span class="am-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
-          <span class="am-srv-label">{s.label}</span>
-          <button class="am-srv-rename" onclick={() => startRename(s.id, s.label)} aria-label={`Renomear ${s.label}`} title="Renomear">✎</button>
-          <button class="am-srv-rename" onclick={() => startEditToken(s.id)} aria-label={`Trocar token de ${s.label}`} title="Trocar token">🔑</button>
-          <button class="am-srv-del" onclick={() => onRemoveServer(s.id)} aria-label={`Remover ${s.label}`}>×</button>
-        {/if}
-      </div>
-    {/each}
-    <!-- Só aparece quando o push do vault FALHOU (ou o sync está deslogado). 'idle' = ninguém
-         configurou sync, e nesse caso não há o que avisar. Sucesso também não vira linha: a
-         mudança já está visível na lista, confirmar cada uma seria ruído. -->
-    <!-- Resultado da própria edição (recusa de URL inválida, servidor sumido, host preservado):
-         separado do aviso de sync, que é sobre o push pro hub e não sobre o que você digitou. -->
-    {#if tokenError}
-      <div class="am-sync-warn" role="status">{tokenError}</div>
-    {/if}
-
-    {#if vaultPush.estado === 'error' || vaultPush.estado === 'locked'}
-      <div class="am-sync-warn" role="status">⚠ {vaultPush.detalhe}</div>
-    {/if}
-
-    <button class="am-item" role="menuitem" onclick={addServer}>
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-      Adicionar servidor
-    </button>
-
-    {#if pushSupported()}
+    <ServerManager
+      {servers}
+      {activeId}
+      onSwitchActive={onSwitchServer ? (id) => { onClose(); onSwitchServer(id); } : undefined}
+      onRename={onRenameServer}
+      onUpdateToken={onUpdateServerToken}
+      onRemove={onRemoveServer}
+      onAdd={addServer}
+    />
+    {#if pushSupported() && (!embedded || open)}
       <div class="am-sep"></div>
-      <button class="am-item" role="menuitem" onclick={handleEnablePush} disabled={pushBusy}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
-        {pushBusy ? 'Ativando…' : 'Ativar notificações'}
-      </button>
-      {#if pushMsg}<div class="am-msg">{pushMsg}</div>{/if}
-      <div class="am-quiet">
-        <div class="am-quiet-head">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/></svg>
-          <span>Horas silenciosas</span>
-        </div>
-        <div class="am-quiet-row">
-          <input type="time" bind:value={qhStart} aria-label="Início do silêncio" />
-          <span>e</span>
-          <input type="time" bind:value={qhEnd} aria-label="Fim do silêncio" />
-          <button class="am-quiet-save" onclick={saveQuietHours}>Salvar</button>
-        </div>
-        {#if qhMsg}<div class="am-msg">{qhMsg}</div>{/if}
-      </div>
+      <!-- PushQuiet com o alvo certo por view: desktop popover e GLOBAL (o enablePush assina em
+           todos); drawer mobile mira o servidor resolvido, ou 'unavailable' quando sumiu — nunca
+           cai nas funções globais, que leriam a janela de outra máquina como se fosse desta. O
+           `(!embedded || open)` preserva o gate antigo: o drawer embedded fica SEMPRE montado (só
+           escondido), e sem ele as horas silenciosas seriam carregadas no arranque do app. -->
+      <PushQuiet target={embedded ? (activeServer ? { mode: 'server', server: activeServer } : { mode: 'unavailable' }) : { mode: 'global' }} />
     {/if}
 
     <div class="am-sep"></div>
@@ -405,39 +201,6 @@
 
   .am-sep { height: 1px; background: var(--border-subtle); margin: var(--space-1) 0; }
 
-
-  .am-section {
-    font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
-    color: var(--text-muted); padding: var(--space-2) var(--space-4) var(--space-1);
-  }
-
-  /* Aviso de push do vault que nao subiu. Fica logo abaixo dos servidores porque e ali que a
-     acao aconteceu — mensagem longe do lugar do erro ninguem associa. */
-  .am-sync-warn {
-    font-size: var(--text-xs); color: var(--warning); line-height: 1.4;
-    padding: var(--space-1) var(--space-4) var(--space-2);
-  }
-
-  /* Linha de servidor: dot + label (+ tag "ativo" no desktop) + renomear + remover. */
-  .am-srv { display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--space-2) 0 var(--space-4); min-height: 40px; }
-  .am-srv.on { background: var(--accent-dim); }
-  .am-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-  .am-srv-pick {
-    flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-2); height: 40px; min-height: 0;
-    padding: 0; text-align: left; justify-content: flex-start; color: var(--text-primary); font-size: var(--text-sm);
-  }
-  .am-srv-label { flex: 1; min-width: 0; font-size: var(--text-sm); color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .am-tag { flex-shrink: 0; font-size: 10px; font-weight: 600; color: var(--accent); }
-  .am-srv-rename { width: 30px; height: 32px; min-height: 0; flex-shrink: 0; color: var(--text-muted); font-size: var(--text-sm); border-radius: var(--radius-sm); }
-  .am-srv-rename:hover { color: var(--accent); background: var(--bg-hover); }
-  .am-srv-del { width: 30px; height: 32px; min-height: 0; flex-shrink: 0; color: var(--text-muted); font-size: var(--text-lg); line-height: 1; border-radius: var(--radius-sm); }
-  .am-srv-del:hover { color: var(--error); background: var(--bg-hover); }
-  .am-srv-edit {
-    flex: 1; min-width: 0; height: 32px; padding: 0 var(--space-2);
-    background: var(--surface-inset); border: 1px solid var(--accent); border-radius: var(--radius-sm);
-    color: var(--text-primary); font-family: var(--font-ui); font-size: 16px; outline: none;
-  }
-
   /* Item de menu (ícone + rótulo). */
   .am-item {
     display: flex; align-items: center; gap: var(--space-3);
@@ -453,24 +216,6 @@
   .am-danger { color: var(--error); }
   .am-danger svg { color: var(--error); }
   .am-danger:hover { background: rgba(255, 69, 58, 0.1); }
-
-  .am-msg { font-size: var(--text-xs); color: var(--text-muted); padding: 2px var(--space-4) var(--space-1); }
-
-  /* Horas silenciosas: cabeçalho (ícone + rótulo) + par de <input type="time"> + Salvar. */
-  .am-quiet { padding: var(--space-1) var(--space-4) var(--space-2); }
-  .am-quiet-head { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); color: var(--text-secondary); padding: var(--space-1) 0; }
-  .am-quiet-head svg { flex-shrink: 0; color: var(--text-secondary); }
-  .am-quiet-row { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); color: var(--text-secondary); }
-  .am-quiet-row input[type='time'] {
-    min-width: 0; flex: 1;
-    background: var(--surface-inset); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
-    color: var(--text-primary); font-size: var(--text-sm); padding: 4px 6px;
-  }
-  .am-quiet-save {
-    flex-shrink: 0; min-height: 0; font-size: var(--text-xs); font-weight: 600; color: var(--accent);
-    padding: 5px 10px; border-radius: var(--radius-full); border: 1px solid var(--accent);
-  }
-  .am-quiet-save:hover { background: var(--accent); color: #fff; }
 
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
