@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
-// Round 1 da 4b: logout idempotente — Sair e remover-último chamam clearCredentials/onLogout UMA
-// vez; enquanto a Promise anda, as portas de saída ficam bloqueadas.
+// Round 1/2 da 4b: logout idempotente — Sair e remover-último chamam onLogout UMA vez; enquanto a
+// Promise anda, as portas de saída ficam bloqueadas; rejeição vira erro visível recuperável (o
+// clear de credenciais é dono do App/lib/logout.ts, este componente não chama).
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import ServidoresSettings from './ServidoresSettings.svelte';
@@ -17,8 +18,7 @@ vi.mock('../../lib/auth', () => ({
   updateServer: vi.fn(() => true),
   removeServer: vi.fn(),
   addServer: vi.fn(),
-  parseServerPairing: vi.fn(),
-  clearCredentials: vi.fn(),
+  validarPareamento: vi.fn(),
   onServersChanged: vi.fn(() => () => {}),
 }));
 vi.mock('../../lib/sessionsStore.svelte', () => ({
@@ -41,33 +41,34 @@ function onLogoutDeferred() {
   return new Promise<void>((res) => { onLogoutResolve = res; });
 }
 
-beforeEach(() => { vi.clearAllMocks(); });
+let onLogoutCalls: ReturnType<typeof vi.fn<() => Promise<void>>>;
 
-function montar() {
+function montar(over: { onLogout?: () => Promise<void> } = {}) {
   authMock.listServers.mockReturnValue([SRV]);
   authMock.getActiveId.mockReturnValue(SRV.id);
   apiMock.getPushSettings.mockReturnValue(new Promise(() => {}));   // fica pendente (irrelevante)
+  onLogoutCalls = vi.fn<() => Promise<void>>(over.onLogout ?? onLogoutDeferred);
   const el = document.createElement('div');
   document.body.appendChild(el);
   const comp = mount(ServidoresSettings, {
     target: el,
-    props: { resolvedServer: SRV, apiTarget: null, onPickTarget: vi.fn(), onLogout: onLogoutDeferred },
+    props: { resolvedServer: SRV, apiTarget: null, onPickTarget: vi.fn(), onLogout: onLogoutCalls },
   });
   return { el, comp: comp as never };
 }
+
+beforeEach(() => { vi.clearAllMocks(); onLogoutResolve = null; });
 
 describe('ServidoresSettings — logout idempotente', () => {
   it('Sair + remover-último durante a Promise chamam onLogout UMA vez', async () => {
     const t = montar();
     // 1) Sair -> confirmação -> logout começa (Promise pendente). O ModalDialog vive num portal
     // pro <body>, então o diálogo se busca no document, não dentro de t.el.
-    const sair = t.el.querySelector<HTMLButtonElement>('.ss-danger');
-    sair!.click();
+    t.el.querySelector<HTMLButtonElement>('.ss-danger')!.click();
     await tick();
-    const dialog = document.querySelector<HTMLElement>('.confirm-card')!;
-    dialog.querySelector<HTMLButtonElement>('.c-danger')!.click();
+    document.querySelector<HTMLElement>('.confirm-card')!.querySelector<HTMLButtonElement>('.c-danger')!.click();
     await tick();
-    expect(authMock.clearCredentials).toHaveBeenCalledTimes(1);
+    expect(onLogoutCalls).toHaveBeenCalledTimes(1);
     // 2) Durante a Promise: remover (×) fica bloqueado — diálogo nem abre
     const del = t.el.querySelector<HTMLButtonElement>('.sm-srv-del');
     expect(del).not.toBeNull();   // podeRemoverUltimo: visível
@@ -77,8 +78,7 @@ describe('ServidoresSettings — logout idempotente', () => {
     // 3) Resolve: segue 1 chamada só
     onLogoutResolve!();
     await Promise.resolve(); await Promise.resolve();
-    expect(authMock.clearCredentials).toHaveBeenCalledTimes(1);
-    expect(onLogoutResolve).not.toBeNull();
+    expect(onLogoutCalls).toHaveBeenCalledTimes(1);
     unmount(t.comp);
   });
 
@@ -88,7 +88,7 @@ describe('ServidoresSettings — logout idempotente', () => {
     await tick();
     document.querySelector<HTMLElement>('.confirm-card')!.querySelector<HTMLButtonElement>('.c-danger')!.click();
     await tick();
-    expect(authMock.clearCredentials).toHaveBeenCalledTimes(1);
+    expect(onLogoutCalls).toHaveBeenCalledTimes(1);
     // Durante a Promise: Sair principal disabled (clique é no-op) e remover nem abre diálogo
     const sairDeNovo = t.el.querySelector<HTMLButtonElement>('.ss-danger')!;
     expect(sairDeNovo.disabled).toBe(true);
@@ -99,7 +99,28 @@ describe('ServidoresSettings — logout idempotente', () => {
     // Resolve: segue 1 chamada só
     onLogoutResolve!();
     await Promise.resolve(); await Promise.resolve();
-    expect(authMock.clearCredentials).toHaveBeenCalledTimes(1);
+    expect(onLogoutCalls).toHaveBeenCalledTimes(1);
+    unmount(t.comp);
+  });
+
+  it('rejeição do onLogout vira erro visível e libera nova tentativa (sem unhandled)', async () => {
+    const t = montar({ onLogout: () => Promise.reject(new Error('x')) });
+    t.el.querySelector<HTMLButtonElement>('.ss-danger')!.click();
+    await tick();
+    document.querySelector<HTMLElement>('.confirm-card')!.querySelector<HTMLButtonElement>('.c-danger')!.click();
+    await Promise.resolve();   // o catch do logout roda em microtask; só então a mensagem renderiza
+    await tick();
+    expect(onLogoutCalls).toHaveBeenCalledTimes(1);
+    const aviso = t.el.querySelector<HTMLElement>('.ss-aviso');
+    expect(aviso?.innerText).toContain('Não foi possível sair');
+    expect(aviso?.getAttribute('role')).toBe('status');
+    // Guard resetado: nova tentativa funciona
+    t.el.querySelector<HTMLButtonElement>('.ss-danger')!.click();
+    await tick();
+    document.querySelector<HTMLElement>('.confirm-card')!.querySelector<HTMLButtonElement>('.c-danger')!.click();
+    await Promise.resolve();
+    await tick();
+    expect(onLogoutCalls).toHaveBeenCalledTimes(2);
     unmount(t.comp);
   });
 });

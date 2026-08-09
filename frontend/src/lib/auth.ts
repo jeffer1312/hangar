@@ -258,6 +258,27 @@ export function parseServerPairing(text: string): { base: string; token: string 
   return { base, token: tok };
 }
 
+// Validação ESTRITA de texto de pareamento (manual e QR — mesma função, round 2 da 4b): a base
+// precisa ser absoluta com hostname e protocolo http/https (htp://, ftp:// e api vazia caem fora),
+// o token não pode ser vazio e uma URL sem ?token= é recusada. Devolve null sem tocar storage.
+export function validarPareamento(texto: string): { base: string; token: string } | null {
+  const cru = texto.trim();
+  let url: URL;
+  try { url = new URL(cru); } catch { return null; }
+  if ((url.protocol !== 'http:' && url.protocol !== 'https:') || !url.hostname) return null;
+  const token = url.searchParams.get('token')?.trim() ?? '';
+  if (!token) return null;
+  let base = url.origin;
+  const api = url.searchParams.get('api');
+  if (api) {
+    let apiUrl: URL;
+    try { apiUrl = new URL(api); } catch { return null; }
+    if ((apiUrl.protocol !== 'http:' && apiUrl.protocol !== 'https:') || !apiUrl.hostname) return null;
+    base = apiUrl.origin;
+  }
+  return { base, token };
+}
+
 export function selectServer(id: string): boolean {
   // Devolve false quando o id não existe localmente (push antigo, link de outra máquina) — quem
   // navega usa isso pra NÃO montar um chat contra o servidor ativo errado (cross-wire calado).

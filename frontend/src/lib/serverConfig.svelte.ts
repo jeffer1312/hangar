@@ -10,8 +10,10 @@ import type { Server } from './auth';
 export type ValorCampo = string | number | boolean;
 
 export function criarConfigServidor(alvo: () => Server | null) {
-  // Geração do load: trocar de alvo no meio invalida a resposta pendente (ver carregar).
+  // Geração de load/save: trocar de alvo ou tela no meio invalida a resposta pendente (ver
+  // carregar/salvar) — só o dono atual pinta campos/rascunho/salvo/erro/salvando.
   let geracao = 0;
+  let timerSalvo: ReturnType<typeof setTimeout> | null = null;
   let campos = $state<Record<string, CampoConfig>>({});
   let leitura = $state<Record<string, string | number | boolean>>({});
   let rascunho = $state<Record<string, ValorCampo>>({});
@@ -41,24 +43,44 @@ export function criarConfigServidor(alvo: () => Server | null) {
 
   async function salvar() {
     if (!Object.keys(rascunho).length) return;
+    const mine = ++geracao;               // invalida load E save anteriores: só o dono atual pinta
+    const s = alvo();                     // snapshot do alvo
+    const mudancas = { ...rascunho };     // snapshot do rascunho
     salvando = true;
     erro = '';
     salvo = false;
+    limparTimerSalvo();
     try {
-      const s = alvo();
       // O rascunho vai INTEIRO: o POST /api/config aceita varias chaves num corpo so, e e por isso
       // que um Salvar em qualquer das tres telas grava o que foi mexido nas outras.
-      const r = s ? await patchConfigForServer(s, rascunho) : await patchConfig(rascunho);
+      const r = s ? await patchConfigForServer(s, mudancas) : await patchConfig(mudancas);
+      if (mine !== geracao) return;       // operacao atual tomou a frente: nao pinta nada
       campos = r.campos;
       rascunho = {};
       salvo = true;
-      setTimeout(() => (salvo = false), 2500);
+      // Timer do "salvo": o callback só age se esta operacao ainda e a dona — um save posterior
+      // limpa o timer anterior, e um timer velho nunca derruba o salvo do novo.
+      timerSalvo = setTimeout(() => { if (mine === geracao) salvo = false; }, 2500);
     } catch (e) {
+      if (mine !== geracao) return;
       // Erro de validacao do servidor aparece como veio ("upload_retention_days: esperado numero").
       erro = e instanceof Error ? e.message : 'Falha ao salvar';
     } finally {
-      salvando = false;
+      if (mine === geracao) salvando = false;
     }
+  }
+
+  // Invalida operacao pendente SEM nova chamada (ex: entrar na tela Servidores, que tem controller
+  // proprio — a resposta de um load/save antigo nao pinta quando a tela voltar). Zera também os
+  // flags: a operacao invalidada nunca mais limpa o que ja morreu aqui.
+  function invalidar() {
+    geracao++;
+    limparTimerSalvo();
+    carregando = false;
+    salvando = false;
+  }
+  function limparTimerSalvo() {
+    if (timerSalvo) { clearTimeout(timerSalvo); timerSalvo = null; }
   }
 
   return {
@@ -79,6 +101,7 @@ export function criarConfigServidor(alvo: () => Server | null) {
     setRascunho(chave: string, valor: ValorCampo) { rascunho[chave] = valor; },
     carregar,
     salvar,
+    invalidar,
   };
 }
 

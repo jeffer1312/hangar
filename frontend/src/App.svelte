@@ -1,5 +1,6 @@
 <script lang="ts">
   import { isAuthenticated, setServers, listServers, mergeServers, onServersChanged, clearCredentials, selectServer, getActiveId, type Server } from './lib/auth';
+  import { logoutLocal } from './lib/logout';
   import { getVault, decryptList, encryptList, putVault, logout as syncLogout, syncStatus, stashKey, loadKey, clearKey } from './lib/sync';
   import { vaultPush } from './lib/vaultPush.svelte';
   import { ttsPlayer } from './lib/ttsPlayer.svelte';
@@ -368,20 +369,25 @@
   }
 
   async function onLogout() {
-    if (encKey) {
-      try { await syncLogout(); } catch { /* hub unreachable — log out locally regardless */ }
-      clearKey();
-      clearCredentials();
-      encKey = null;
-      syncReady = false;
-      // Solta o listener do push (quem registra TEM que chamar — auth.ts:41). Sem isto ele ficava no
-      // Set pela vida da pagina e o unico freio era o `if (!encKey) return` la dentro: real, mas
-      // implicito, e um relogin ja empilhava o proximo por cima.
-      unsubSync?.();
-      unsubSync = null;
-    }
-    authenticated = false;
-    navigateTo('#/');
+    // Dono único do logout local (lib/logout.ts): clearCredentials roda UMA vez com ou sem sync;
+    // syncLogout é best-effort com timeout bounded — hub fora do ar não segura o logout local.
+    await logoutLocal({
+      temEncKey: !!encKey,
+      syncLogout,
+      clearKey,
+      clearCredentials,
+      aoSair: () => {
+        encKey = null;
+        syncReady = false;
+        // Solta o listener do push (quem registra TEM que chamar — auth.ts:41). Sem isto ele ficava
+        // no Set pela vida da pagina e o unico freio era o `if (!encKey) return` la dentro: real,
+        // mas implicito, e um relogin ja empilhava o proximo por cima.
+        unsubSync?.();
+        unsubSync = null;
+        authenticated = false;
+        navigateTo('#/');
+      },
+    });
   }
 </script>
 

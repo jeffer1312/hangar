@@ -1,6 +1,6 @@
 <script lang="ts">
   import { listServers, getActiveId, selectServer, renameServer, updateServer, removeServer,
-           addServer, parseServerPairing, clearCredentials, onServersChanged } from '../../lib/auth';
+           addServer, validarPareamento, onServersChanged } from '../../lib/auth';
   import { pushSupported } from '../../lib/push';
   import { sessionsStore } from '../../lib/sessionsStore.svelte';
   import ServerManager from '../ServerManager.svelte';
@@ -60,21 +60,14 @@
   // (mesma rota de parse), com CSS local. O reload no sucesso é deliberado: a lista nova muda
   // ativo/token e o SSE do store precisa renascer limpo.
   //
-  // Guard equivalente ao editor de token (ServerManager.saveToken): URL que parece pareamento mas
-  // não parseou, ou parseou SEM ?token=, é RECUSADA antes de tocar storage — gravar a URL quebrada
-  // como credencial vira um 401 sem pista depois.
+  // Validação ESTRITA compartilhada (auth.validarPareamento, manual E QR — mesma função testável):
+  // base absoluta http/https com hostname, api válida quando presente, token não vazio, URL sem
+  // ?token= recusada — tudo ANTES de tocar storage. Gravar URL quebrada como credencial vira um
+  // 401 sem pista depois.
   function erroPareamento(cru: string): string {
     if (!cru.includes('://')) return 'Cole a URL de pareamento (com o token).';
-    const parsed = parseServerPairing(cru);
-    if (parsed && parsed.token === cru) return 'essa URL não tem ?token= — cole a URL de pareamento completa.';
-    return 'URL de pareamento inválida — cole a URL completa (com ?token=).';
-  }
-  function parsearPareamento(cru: string): { base: string; token: string } | null {
-    if (!cru.includes('://')) return null;   // token cru sem URL: sem origem confiável
-    const parsed = parseServerPairing(cru);
-    if (!parsed) return null;
-    if (parsed.token === cru) return null;   // URL sem ?token=
-    return parsed;
+    if (cru.includes('?token=')) return 'URL de pareamento inválida — use http/https com token.';
+    return 'essa URL não tem ?token= — cole a URL de pareamento completa.';
   }
   let showAdd = $state(false);
   let addUrlText = $state('');
@@ -83,14 +76,14 @@
   function autofocus(node: HTMLInputElement) { node.focus(); }
   function submitPasteServer() {
     const cru = addUrlText.trim();
-    const parsed = parsearPareamento(cru);
+    const parsed = validarPareamento(cru);
     if (!parsed) { addError = erroPareamento(cru); return; }
     addServer(parsed.base, parsed.token);
     window.location.reload();
   }
   function handleScan(text: string) {
     const cru = text.trim();
-    const parsed = parsearPareamento(cru);
+    const parsed = validarPareamento(cru);
     if (!parsed) {
       // QR inválido NÃO fecha silencioso: volta pro diálogo com o erro visível (role=alert) e o
       // usuário pode escanear de novo ou colar à mão.
@@ -108,10 +101,18 @@
   // remover tudo dispara o logout global (única saída pra deslogar o aparelho) — por isso o
   // ServerManager recebe `podeRemoverUltimo`.
   let pendingRemoval = $state<{ id: string; label: string } | null>(null);
+  let avisoRemocao = $state('');
   function confirmRemoval() {
     if (!pendingRemoval) return;
     const id = pendingRemoval.id;
     pendingRemoval = null;
+    // Revalida o ID: o sync pode ter apagado este servidor entre o diálogo e o clique. Remover
+    // calado um servidor que já não existe é mentira — mostra o estado e não faz nada.
+    if (!servers.some((s) => s.id === id)) {
+      avisoRemocao = 'Este servidor já foi removido em outro aparelho.';
+      return;
+    }
+    avisoRemocao = '';
     const wasActive = id === getActiveId();
     removeServer(id);   // auth notifica onServersChanged -> contador local e store reagem
     if (listServers().length === 0) { void logout(); return; }
@@ -121,15 +122,20 @@
 
   // Sair também pede confirmação: recuperação exige o token/QR de novo.
   let confirmLogout = $state(false);
-  // Logout idempotente: Sair e remover-último podem cair aqui ao mesmo tempo; clearCredentials/
-  // onLogout rodam UMA vez, e enquanto a Promise anda as portas de saída ficam bloqueadas.
+  let logoutMsg = $state('');
+  // Logout idempotente: Sair e remover-último podem cair aqui ao mesmo tempo; o App é o dono
+  // único do clear de credenciais (lib/logout.ts) — este guard só impede o disparo duplicado, e
+  // enquanto a Promise anda as portas de saída ficam bloqueadas. Rejeição capturada no limite do
+  // evento: nada de unhandled/hang, e o erro aparece recuperável na tela.
   let logoutInFlight = $state(false);
   async function logout() {
     if (logoutInFlight) return;
     logoutInFlight = true;
+    logoutMsg = '';
     try {
-      clearCredentials();
-      await onLogout();   // App preserva logout do hub, clearKey, encKey e listener do sync
+      await onLogout();
+    } catch {
+      logoutMsg = 'Não foi possível sair — tente de novo.';
     } finally {
       logoutInFlight = false;
     }
@@ -147,6 +153,8 @@
 {:else}
   <p class="ss-editando ss-muted">Escolha “Editar” em um servidor para configurá-lo.</p>
 {/if}
+{#if avisoRemocao}<p class="ss-aviso" role="status">{avisoRemocao}</p>{/if}
+{#if logoutMsg}<p class="ss-aviso" role="status">{logoutMsg}</p>{/if}
 
 <ServerManager
   {servers}
@@ -233,6 +241,7 @@
   .ss-editando { margin: 0 0 var(--space-2); font-size: var(--text-sm); color: var(--text-secondary); }
   .ss-editando strong { color: var(--text-primary); font-weight: 600; }
   .ss-muted { color: var(--text-muted); }
+  .ss-aviso { margin: 0 0 var(--space-2); font-size: var(--text-xs); color: var(--warning); }
 
   .ss-sep { height: 1px; background: var(--border-subtle); margin: var(--space-3) 0; }
 
