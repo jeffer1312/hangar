@@ -21,15 +21,15 @@
   // mão em três lugares do CSS — mexer aqui não mudava nada na tela, e quem confiasse nela erraria.
   const CICLO = 3.2;
   const ARCOS = [
-    { r: 9.1, a: 30, atrasoEntrada: '0s', fase: 0 },
-    { r: 6.35, a: 18, atrasoEntrada: '0.09s', fase: 0.48 },
-    { r: 3.6, a: 6, atrasoEntrada: '0.18s', fase: 0.96 },
+    { r: 9.1, a: 30, atrasoEntrada: '0s', fase: 0, volta: 360 },
+    { r: 6.35, a: 18, atrasoEntrada: '0.09s', fase: 0.48, volta: 540 },
+    { r: 3.6, a: 6, atrasoEntrada: '0.18s', fase: 0.96, volta: 720 },
   ];
 
   const rad = (g: number) => (g * Math.PI) / 180;
   const ponto = (r: number, g: number) => [12 + r * Math.cos(rad(g)), 12 + r * Math.sin(rad(g))];
 
-  const caminhos = ARCOS.map(({ r, a, atrasoEntrada, fase }) => {
+  const caminhos = ARCOS.map(({ r, a, atrasoEntrada, fase, volta }) => {
     const [x0, y0] = ponto(r, 180 - a);
     const [x1, y1] = ponto(r, 360 + a);
     return {
@@ -39,6 +39,7 @@
       // fase POSITIVA: cada arco espera a vez dele. O anterior está em ~65% do giro quando o
       // seguinte começa — sobreposição suficiente pra fluir, sem virar rotação contínua.
       atrasoGiro: `${(0.9 + fase).toFixed(2)}s`,
+      volta: `${volta}deg`,
     };
   });
 </script>
@@ -59,7 +60,7 @@
       <path
         d={c.d}
         class="arco"
-        style="--L: {c.L}; --entrada: {c.atrasoEntrada}; --giro: {c.atrasoGiro};"
+        style="--L: {c.L}; --entrada: {c.atrasoEntrada}; --giro: {c.atrasoGiro}; --volta: {c.volta};"
       />
     {/each}
   </g>
@@ -84,7 +85,8 @@
        com o giro, sem erro no console. */
     animation:
       hangar-entra 0.72s var(--ease-out) var(--entrada) forwards,
-      hangar-gira var(--ciclo, 3.2s) var(--ease-out) var(--giro) infinite;
+      hangar-gira var(--ciclo, 3.2s) var(--ease-out) var(--giro) infinite,
+      hangar-espiral var(--ciclo, 3.2s) var(--ease-out) 0.9s infinite;
   }
 
   @keyframes hangar-entra {
@@ -109,11 +111,27 @@
      É o contraste que fecha o ciclo — a onda é sequencial, o final é uníssono. O giro do grupo se
      compõe com o dos arcos (que já estão parados em 360°), então o efeito é o conjunto inteiro
      rodando uma volta enquanto respira. */
+  /* Termina EM 100%, sem cauda parada. O ponto da animação inteira é não ter fim visível: o giro
+     em conjunto existe pra cobrir a emenda do loop, e uma pausa de 0,13s no fim (era o que os 96%
+     deixavam) entrega justamente o que ele deveria esconder — dá pra ver que acabou e recomeçou.
+     Como 360° ≡ 0° e a escala volta a 1, o último quadro é idêntico ao primeiro: o ciclo emenda
+     sem costura, e o primeiro arco já está girando quando este termina. */
+  /* O grupo só ENCOLHE e volta; quem gira no final são os arcos, cada um o seu tanto (--volta:
+     360°, 540°, 720°, de fora pra dentro). Girar o grupo inteiro é rotação rígida e lê como
+     spinner; velocidades diferentes por anel leem como ESPIRAL — e como todos os valores são
+     múltiplos de 360°, no último quadro a marca está exatamente onde começou. */
   @keyframes hangar-respiro {
-    0%, 63%   { transform: scale(1) rotate(0deg); }
-    77%       { transform: scale(0.44) rotate(170deg); }
-    88%       { transform: scale(1.06) rotate(300deg); }
-    96%, 100% { transform: scale(1) rotate(360deg); }
+    0%, 63% { transform: scale(1); }
+    78%     { transform: scale(0.44); }
+    90%     { transform: scale(1.06); }
+    100%    { transform: scale(1); }
+  }
+
+  /* Espiral do final. Usa a propriedade `rotate` (não `transform`) de propósito: assim ela COMPÕE
+     com o giro da onda, que usa transform — uma não sobrescreve a outra. */
+  @keyframes hangar-espiral {
+    0%, 63% { rotate: 0deg; }
+    100%    { rotate: var(--volta); }
   }
 
   @media (prefers-reduced-motion: reduce) {

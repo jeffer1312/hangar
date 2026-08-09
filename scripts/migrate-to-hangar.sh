@@ -143,6 +143,15 @@ done
 # ── 4. Units systemd ─────────────────────────────────────────────────────────
 if command -v systemctl >/dev/null && [[ -f "$SD/claude-cockpit-backend.service" ]]; then
     log "trocando units claude-cockpit-* por hangar-*"
+    # A TOPOLOGIA da maquina vai junto: o services-setup.sh decide quem serve a interface olhando se
+    # existe unit de frontend NO DISCO — e nos acabamos de apagar a antiga. Sem CP_SERVE explicito
+    # ele conclui "instalacao nova" e passa a servir a UI pelo backend, matando o 5173.
+    # Numa maquina atras de reverse proxy apontado pro 5173 isso derruba o site inteiro: medido em
+    # 09/08/2026 na VPS, 4 minutos de 502 no celular do usuario. Migracao renomeia; nao muda desenho.
+    if [[ -f "$SD/claude-cockpit-frontend.service" ]]; then
+        export CP_SERVE=preview
+        log "topologia preservada: esta maquina tinha servico de frontend proprio (5173)"
+    fi
     systemctl --user disable --now claude-cockpit-backend.service claude-cockpit-frontend.service 2>/dev/null || true
     rm -f "$SD/claude-cockpit-backend.service" "$SD/claude-cockpit-frontend.service"
     ./scripts/services-setup.sh        # escreve/sobe as hangar-* a partir do path novo

@@ -75,7 +75,14 @@ if ! git diff --quiet "$LOCAL" HEAD -- uv.lock pyproject.toml 2>/dev/null; then
 fi
 
 # --- Restart (so chega aqui com build ok) ---
-log "restart $BACK + $FRONT"
-systemctl --user restart "$BACK" "$FRONT"
+# O FRONT so existe quando a instalacao escolheu servico separado no 5173; com o backend servindo a
+# UI (o padrao novo) a unit nao existe, e um restart nela derruba o deploy inteiro no set -e — build
+# feito, servico velho no ar, deploy marcado como failed. Duas topologias sao validas: pergunta.
+UNITS=("$BACK")
+if systemctl --user list-unit-files --no-legend "$FRONT" 2>/dev/null | grep -q .; then
+  UNITS+=("$FRONT")
+fi
+log "restart ${UNITS[*]}"
+systemctl --user restart "${UNITS[@]}"
 
 log "deploy concluido: $(git rev-parse --short HEAD)"
