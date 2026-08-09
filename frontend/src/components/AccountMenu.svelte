@@ -89,14 +89,14 @@
       onRemove={onRemoveServer}
       onAdd={addServer}
     />
-    {#if pushSupported() && (!embedded || open)}
+    {#if pushSupported()}
       <div class="am-sep"></div>
       <!-- PushQuiet com o alvo certo por view: desktop popover e GLOBAL (o enablePush assina em
            todos); drawer mobile mira o servidor resolvido, ou 'unavailable' quando sumiu — nunca
            cai nas funções globais, que leriam a janela de outra máquina como se fosse desta. O
-           `(!embedded || open)` preserva o gate antigo: o drawer embedded fica SEMPRE montado (só
-           escondido), e sem ele as horas silenciosas seriam carregadas no arranque do app. -->
-      <PushQuiet target={embedded ? (activeServer ? { mode: 'server', server: activeServer } : { mode: 'unavailable' }) : { mode: 'global' }} />
+           `open` so decide o LOAD (o componente fica montado sempre — fechar/reabrir o menu nao
+           pode perder busy/resultado/Janela carregada). -->
+      <PushQuiet {open} target={embedded ? (activeServer ? { mode: 'server', server: activeServer } : { mode: 'unavailable' }) : { mode: 'global' }} />
     {/if}
 
     <div class="am-sep"></div>
@@ -139,11 +139,15 @@
   <div class="am-embedded">
     {@render menuBody()}
   </div>
-{:else if open}
+{:else}
+  <!-- Popover SEMPRE montado, visibilidade via CSS (.open): os filhos (ServerManager/PushQuiet)
+       guardam estado proprio (rascunho de rename/token, busy/resultado de push) e desmontar no
+       fechar PERDERIA isso — o AccountMenu antigo guardava esses estados aqui mesmo, e eles
+       sobreviviam fechar/reabrir. Fechado = display:none (inerte, fora do foco). -->
   <div use:portal>
   <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div class="am-backdrop" role="button" tabindex="-1" aria-label="Fechar menu da conta" onclick={onClose}></div>
-  <div class="am-card" role="menu" style="left: {pos.left}px; bottom: {pos.bottom}px;">
+  <div class="am-backdrop" class:open role="button" tabindex="-1" aria-label="Fechar menu da conta" onclick={onClose}></div>
+  <div class="am-card" class:open role="menu" style="left: {pos.left}px; bottom: {pos.bottom}px;">
     <div class="am-head">
       <span class="am-avatar" aria-hidden="true">{initials}</span>
       <span class="am-who">
@@ -159,14 +163,17 @@
 
 
 <style>
-  /* Backdrop full-screen: captura o clique-fora pra fechar. */
-  .am-backdrop { position: fixed; inset: 0; z-index: 60; }
+  /* Backdrop full-screen: captura o clique-fora pra fechar. display:none quando fechado (o nó vive
+     no body pra sempre — o portal monta uma vez e a visibilidade é CSS). */
+  .am-backdrop { position: fixed; inset: 0; z-index: 60; display: none; }
+  .am-backdrop.open { display: block; }
 
   /* Card: FIXED, ancorado ao rodapé via JS (getBoundingClientRect). Fixed escapa o overflow:hidden da
      sidebar/lista. left/bottom vêm do inline style. Rola por dentro se estourar a altura. */
   .am-card {
     position: fixed;
     z-index: 61;
+    display: none;
     width: max-content;
     min-width: 260px;
     max-width: min(320px, calc(100vw - var(--space-6)));
@@ -179,6 +186,7 @@
     padding: var(--space-1) 0;
     animation: am-in 160ms var(--ease-out) both;
   }
+  .am-card.open { display: block; }
   @keyframes am-in {
     from { opacity: 0; transform: translateY(6px) scale(0.98); }
     to   { opacity: 1; transform: translateY(0) scale(1); }

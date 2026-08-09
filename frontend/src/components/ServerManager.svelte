@@ -232,4 +232,6 @@
   .sm-item:hover { background: var(--bg-hover); }
   .sm-item:active { background: var(--bg-hover); }
   .sm-item:disabled { color: var(--text-muted); }
+
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 </style>

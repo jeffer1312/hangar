@@ -6,12 +6,16 @@
   // Ativação de push + horas silenciosas, com alvo explícito: global (desktop), servidor específico
   // (drawer mobile) ou indisponível (sem servidor resolvido — campos desabilitados). Extraído do
   // AccountMenu (Task 4a) pra a tela Servidores das Configurações reusar (Task 4b).
+  //
+  // `open` NÃO controla visibilidade: o pai mantém este componente SEMPRE montado (fechar/reabrir o
+  // menu não pode perder busy/resultado de push nem a janela de silêncio carregada) — ele só decide
+  // QUANDO carregar, preservando o lifecycle antigo (nada de load no arranque do app).
   type PushTarget =
     | { mode: 'global' }
     | { mode: 'server'; server: Server }
     | { mode: 'unavailable' };
-  interface Props { target: PushTarget }
-  let { target }: Props = $props();
+  interface Props { target: PushTarget; open: boolean }
+  let { target, open }: Props = $props();
 
   // Web push: liga notificação de "sessão aguardando" (assina + registra nos servidores). Reusa o
   // MESMO enablePush das duas telas — não reimplementa. O enablePush é GLOBAL, por isso o rótulo
@@ -19,6 +23,7 @@
   let pushBusy = $state(false);
   let pushMsg = $state('');
   async function handleEnablePush() {
+    if (pushBusy) return;
     pushBusy = true;
     pushMsg = '';
     try {
@@ -36,44 +41,79 @@
   let qhStart = $state('');
   let qhEnd = $state('');
   let qhMsg = $state('');
-  // Descartar resposta de alvo ANTIGO: trocar o servidor do drawer no meio do load pintaria a janela
-  // da máquina anterior como se fosse a desta. Cada load ganha um número; só o último aplica.
+  let loading = $state(false);
+  let saving = $state(false);
+  // Geração da operação em voo: descarta resposta de load de um alvo/abertura ANTERIOR e impede um
+  // load velho repintar os campos depois de um save. Toda operação nova incrementa; quem resolve
+  // com o número velho não pinta nada.
   let loadGeneration = 0;
   async function loadQuietHours() {
     const mine = ++loadGeneration;
-    if (target.mode === 'unavailable') {
+    const alvo = target;   // snapshot: este load responde SOBRE o alvo que o disparou
+    if (alvo.mode === 'unavailable') {
       qhStart = '';
       qhEnd = '';
       qhMsg = 'Servidor indisponível';
       return;
     }
+    loading = true;
     qhMsg = '';
-    const result = target.mode === 'server'
-      ? await getPushSettingsForServer(target.server)
-      : await getPushSettings();
-    if (mine !== loadGeneration) return;
-    qhStart = result.quiet_hours?.start ?? '';
-    qhEnd = result.quiet_hours?.end ?? '';
+    try {
+      const result = alvo.mode === 'server'
+        ? await getPushSettingsForServer(alvo.server)
+        : await getPushSettings();
+      if (mine !== loadGeneration) return;   // alvo mudou ou houve save no meio: não repinta
+      qhStart = result.quiet_hours?.start ?? '';
+      qhEnd = result.quiet_hours?.end ?? '';
+    } catch (e) {
+      if (mine !== loadGeneration) return;
+      // Global segue best-effort (offline/rota ausente -> campos vazios, salvar depois resolve).
+      // Por-servidor NÃO: `apiFetchForServer` não faz o self-heal de 401 de propósito (não pode
+      // derrubar a credencial de outra máquina), então token morto ficaria como "campos vazios"
+      // pra sempre — indistinguível de "nunca configurei" — e ninguém iria trocar o token.
+      if (alvo.mode === 'server') qhMsg = e instanceof Error ? e.message : 'não foi possível carregar';
+    } finally {
+      if (mine === loadGeneration) loading = false;
+    }
   }
   async function saveQuietHours() {
+    if (saving || loading) return;   // duplo clique, ou save durante load: ignora
+    const alvo = target;             // snapshot: salva o que o usuário editou NESTE alvo
+    const inicio = qhStart;
+    const fim = qhEnd;
+    saving = true;
+    const mine = ++loadGeneration;   // invalida loads em voo: nada repinta depois do save
+    qhMsg = '';
     try {
-      if (target.mode === 'server') {
-        await setQuietHoursForServer(target.server, qhStart || null, qhEnd || null);
-      } else if (target.mode === 'global') {
-        await setQuietHours(qhStart || null, qhEnd || null);
+      if (alvo.mode === 'server') {
+        await setQuietHoursForServer(alvo.server, inicio || null, fim || null);
+      } else if (alvo.mode === 'global') {
+        await setQuietHours(inicio || null, fim || null);
       } else {
         throw new Error('Servidor indisponível');
       }
-      qhMsg = qhStart && qhEnd ? `silenciado ${qhStart}–${qhEnd}` : 'desligado';
+      if (mine !== loadGeneration) return;   // outro load/save tomou a frente: não sobrescreve msg
+      qhMsg = inicio && fim ? `silenciado ${inicio}–${fim}` : 'desligado';
     } catch (e) {
+      if (mine !== loadGeneration) return;
       qhMsg = e instanceof Error ? e.message : 'erro ao salvar';
+    } finally {
+      saving = false;   // flag de entrada: se outro save começou, o guard dele já bloqueia; a msg
+                        // pintada acima é a do dono da geração atual
     }
   }
-  // Recarrega a janela de silêncio a cada mudança de alvo (pode ter mudado no servidor).
+  // Recarrega a janela de silêncio a cada mudança de alvo OU abertura do menu (pode ter mudado no
+  // servidor). Chave por PRIMITIVO (id/modo), não pelo objeto: `target` é re-criado a cada render
+  // do pai e um efeito que o lesse recarregaria a cada recomputo.
+  const alvoKey = $derived(target.mode === 'server' ? target.server.id : target.mode);
   $effect(() => {
-    const key = target.mode === 'server' ? target.server.id : target.mode;
-    void key;
-    if (pushSupported()) void loadQuietHours();
+    void alvoKey;
+    if (!open || !pushSupported()) return;
+    // Alvo trocou: limpa o que o alvo anterior mostrou antes de carregar o novo.
+    qhStart = '';
+    qhEnd = '';
+    qhMsg = '';
+    void loadQuietHours();
   });
 </script>
 
@@ -88,10 +128,10 @@
     <span>Horas silenciosas</span>
   </div>
   <div class="pq-quiet-row">
-    <input type="time" bind:value={qhStart} aria-label="Início do silêncio" disabled={target.mode === 'unavailable'} />
+    <input type="time" bind:value={qhStart} aria-label="Início do silêncio" disabled={target.mode === 'unavailable' || loading || saving} />
     <span>e</span>
-    <input type="time" bind:value={qhEnd} aria-label="Fim do silêncio" disabled={target.mode === 'unavailable'} />
-    <button class="pq-quiet-save" onclick={saveQuietHours} disabled={target.mode === 'unavailable'}>Salvar</button>
+    <input type="time" bind:value={qhEnd} aria-label="Fim do silêncio" disabled={target.mode === 'unavailable' || loading || saving} />
+    <button class="pq-quiet-save" onclick={saveQuietHours} disabled={target.mode === 'unavailable' || loading || saving}>Salvar</button>
   </div>
   {#if qhMsg}<div class="pq-msg">{qhMsg}</div>{/if}
 </div>
@@ -128,4 +168,6 @@
   }
   .pq-quiet-save:hover:not(:disabled) { background: var(--accent); color: #fff; }
   .pq-quiet-save:disabled { opacity: 0.5; }
+
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 </style>
