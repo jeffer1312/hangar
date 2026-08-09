@@ -34,6 +34,9 @@ describe('initials', () => {
     expect(initials('api-3')).toBe('A3');
     // dois dígitos ainda cabem; três não são sufixo de sessão irmã, é nome
     expect(initials('worker-12')).toBe('W12');
+    // três+ palavras: a letra sai da palavra ANTES do número, senão a família inteira colide
+    expect(initials('svc-mailer-2')).toBe('M2');
+    expect(initials('svc-report-ai-2')).toBe('I2');
     expect(initials('jeffer1312')).toBe('JE');
   });
 
@@ -52,6 +55,9 @@ describe('initials', () => {
   });
   it('returns empty string for empty input', () => {
     expect(initials('')).toBe('');
+    // nome só com separadores: não pode virar sigla vazia (o chip do trilho ficaria em branco)
+    expect(initials('---')).toBe('--');
+    expect(initials('___')).toBe('__');
   });
 });
 

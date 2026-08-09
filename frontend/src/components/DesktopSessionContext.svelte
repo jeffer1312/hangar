@@ -309,37 +309,9 @@
 </aside>
 
 <style>
-  /* Recolhido: trilho estreito. A largura da faixa que o Chat reserva muda junto (ctxPanel.svelte
-     -> --ctx-w no Chat), senão o painel encolhe e o texto não cresce. */
-  /* Recolhido: some a caixa (sem vidro, sem borda, sem sombra) e fica só a aba do botão. */
-  .session-context.recolhido {
-    width: 34px;
-    border-color: transparent;
-    box-shadow: none;
-    pointer-events: none;          /* só a aba recebe clique */
-  }
-  .session-context.recolhido::before { opacity: 0; }
-  .session-context.recolhido .ctx-fold {
-    pointer-events: auto;
-    top: 50%; right: 0; transform: translateY(-50%);
-    width: 26px; height: 64px;
-    border-radius: var(--radius-md) 0 0 var(--radius-md);
-    background: var(--surface-raised);
-    box-shadow: -1px 0 0 var(--border);
-  }
-  /* Mesmo tamanho e mesmo peso do irmão na barra esquerda (.fold-btn): antes era 26px e muted,
-     e sumia no canto — o usuário não achava. */
-  /* O cabeçalho RESERVA a faixa do botão (padding-right abaixo): sem isso ele caía por cima do
-     chip de estado — absoluto não empurra nada. */
-  .session-context:not(.recolhido) header { padding-right: 56px; }   /* 44px do botão + folga */
-  .ctx-fold {
-    position: absolute; top: var(--space-2); right: var(--space-2); z-index: 2;
-    width: 36px; height: 36px; display: grid; place-items: center;
-    background: transparent; border: 0; border-radius: var(--radius-md);
-    color: var(--text-secondary); cursor: pointer;
-  }
-  @media (hover: hover) { .ctx-fold:hover { background: var(--bg-hover); color: var(--text-primary); } }
-  .session-context.recolhido .ctx-fold { right: 50%; transform: translateX(50%); }
+  /* O cabeçalho RESERVA a faixa do botão de recolher: sem isso ele cai por cima do chip de estado —
+     `position: absolute` não empurra nada. 44px do botão + folga. */
+  .session-context:not(.recolhido) header { padding-right: 56px; }
   .session-context {
     /* Coluna: header + acoes ficam PRESOS no topo e so o corpo rola. Antes o painel inteiro era o
        scroller, entao o nome da sessao e o botao Terminal subiam junto com as metricas. */

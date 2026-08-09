@@ -125,13 +125,20 @@ export function fmtWhen(mtime?: number | null): string {
 // avatar da conta (AccountMenu) e pelo rail recolhido da sidebar.
 export function initials(name: string): string {
   const parts = name.split(/[^a-zA-Z0-9]+/).filter(Boolean);
-  if (!parts.length) return '';
+  // Nome sem nenhum alfanumérico ("---", "___"): cai no próprio nome, como era antes. Devolver ''
+  // apagaria a sigla — e no trilho recolhido ela é o único texto que identifica a sessão, então o
+  // chip ficaria em branco sem erro nenhum. Nome de sessão tmux aceita esses caracteres.
+  if (!parts.length) return name.slice(0, 2).toUpperCase();
   // Sufixo numérico manda: sessões irmãs quase sempre diferem só nele (claude-cockpit e
   // claude-cockpit-2 davam "CC" as duas, e no trilho recolhido a sigla é o ÚNICO texto que
   // identifica a sessão — duas iguais não identificam nada). Vira "CC" e "C2".
   const ultimo = parts[parts.length - 1];
   if (parts.length >= 2 && /^\d{1,2}$/.test(ultimo)) {
-    return (parts[0][0] + ultimo).toUpperCase().slice(0, 3);
+    // A letra vem da palavra ANTES do número, não da primeira do nome: com a primeira, todo nome de
+    // uma mesma família continuava colidindo — `svc-mailer-2` e `svc-report-ai-2` davam "M2" as
+    // duas, que é exatamente o problema que este ramo existe pra resolver.
+    const anterior = parts[parts.length - 2];
+    return (anterior[0] + ultimo).toUpperCase().slice(0, 3);
   }
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
   return parts[0].slice(0, 2).toUpperCase();

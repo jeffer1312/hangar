@@ -1918,14 +1918,14 @@ import ConfirmDialog from './ConfirmDialog.svelte';
      O halo NUNCA vai a zero de alfa: sobre papel de parede movimentado a sessão sumia entre um
      pulso e outro. */
   .initials.busy {
-    box-shadow: 0 0 0 2px var(--anel);
+    box-shadow: 0 0 0 2px var(--anel, transparent);
   }
   .initials.aguardando {
     animation: rail-chama 2.2s var(--ease-out) infinite;
   }
   @keyframes rail-chama {
-    0%, 100% { box-shadow: 0 0 0 2px var(--anel), 0 0 0 2px color-mix(in srgb, var(--anel) 55%, transparent); }
-    55%      { box-shadow: 0 0 0 2px var(--anel), 0 0 0 8px color-mix(in srgb, var(--anel) 0%, transparent); }
+    0%, 100% { box-shadow: 0 0 0 2px var(--anel, transparent), 0 0 0 2px color-mix(in srgb, var(--anel, transparent) 55%, transparent); }
+    55%      { box-shadow: 0 0 0 2px var(--anel, transparent), 0 0 0 8px color-mix(in srgb, var(--anel, transparent) 0%, transparent); }
   }
   .sidebar.collapsed .sess-row { justify-content: center; }
   /* position:relative pra ancorar a PlanBar compact (position:absolute) — sem isto ela flutua em
