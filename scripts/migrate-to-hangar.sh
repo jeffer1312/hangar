@@ -54,6 +54,20 @@ else
 fi
 cd "$NEW"
 
+# ── 1b. Worktrees ────────────────────────────────────────────────────────────
+# Cada worktree guarda caminho ABSOLUTO nos dois sentidos (o .git dela aponta pro repo, e o repo
+# lista o caminho dela em .git/worktrees/*/gitdir). Depois do mv as duas pontas apontam pro caminho
+# que não existe mais, e qualquer comando git de dentro delas falha. `repair` reescreve os dois
+# lados. Medido nesta máquina: 9 worktrees registradas na hora da migração.
+if [[ "$OLD" != "$NEW" ]] && git worktree list >/dev/null 2>&1; then
+    git worktree repair 2>/dev/null || true
+    for wt in $(git worktree list --porcelain | awk '/^worktree /{print $2}'); do
+        [[ "$wt" == "$NEW" ]] && continue
+        git -C "$wt" worktree repair 2>/dev/null || true
+    done
+    log "worktrees reparadas ($(git worktree list | wc -l) registradas)"
+fi
+
 # ── 2. Remote ────────────────────────────────────────────────────────────────
 if git remote get-url origin | grep -q "claude-cockpit"; then
     git remote set-url origin "$(git remote get-url origin | sed 's/claude-cockpit/hangar/')"
@@ -80,22 +94,36 @@ if [[ "$OLD" != "$NEW" ]]; then
     done
 fi
 
-# ── 3b. Memórias do projeto ──────────────────────────────────────────────────
-# A pasta de memória é chaveada pelo PATH do projeto (projects/<path-com-hifens>/memory), então
-# após o rename o slug novo nasce VAZIO e as memórias ficam órfãs no antigo — some sem erro
-# nenhum. Copia (nunca move: original intacto) e corrige paths absolutos dentro delas.
+# ── 3b. Memórias E TRANSCRIPTS do projeto ────────────────────────────────────
+# A pasta do projeto é chaveada pelo PATH (projects/<path-com-hifens>/), então após o rename o slug
+# novo nasce VAZIO e o conteúdo antigo fica órfão — some sem erro nenhum.
+#
+# São DUAS coisas ali dentro, e a segunda é a maior: `memory/` (as memórias) e os `.jsonl` na raiz,
+# que são o HISTÓRICO das conversas. Sem levar os .jsonl, `claude --resume` não encontra nenhuma
+# conversa anterior e o app não mostra o histórico delas — medido nesta máquina: 67 arquivos na hora
+# da migração. Copia (nunca move: original intacto) e corrige paths absolutos nas memórias.
+#
+# Os .jsonl NÃO são reescritos de propósito: são registro do que aconteceu, com o caminho que era
+# verdade na época; reescrever ali seria falsificar transcript.
 if [[ "$OLD" != "$NEW" ]]; then
     old_slug="${OLD//\//-}"
     new_slug="${NEW//\//-}"
     for d in "$HOME"/.claude*/; do
-        om="$d/projects/$old_slug/memory"
-        [[ -d "$om" ]] || continue
-        nm="$d/projects/$new_slug/memory"
-        mkdir -p "$nm"
-        cp -n "$om"/*.md "$nm"/ 2>/dev/null || true
-        grep -rlF "$OLD" "$nm" 2>/dev/null | while read -r m; do sed -i "s|$OLD|$NEW|g" "$m"; done
-        log "memórias copiadas: $om -> $nm"
-        echo "    (confira nomes de unit 'claude-cockpit-*' no texto delas — não são reescritos)"
+        op="$d/projects/$old_slug"
+        [[ -d "$op" ]] || continue
+        np="$d/projects/$new_slug"
+        mkdir -p "$np"
+
+        # transcripts: tudo o que estiver na raiz do projeto (.jsonl e sidecars vizinhos)
+        n_jsonl=$(find "$op" -maxdepth 1 -name '*.jsonl' 2>/dev/null | wc -l)
+        cp -rn "$op"/. "$np"/ 2>/dev/null || true
+        log "projeto copiado: $op -> $np (${n_jsonl} transcript(s))"
+
+        # memórias: além de copiadas, têm os caminhos absolutos corrigidos
+        if [[ -d "$np/memory" ]]; then
+            grep -rlF "$OLD" "$np/memory" 2>/dev/null | while read -r m; do sed -i "s|$OLD|$NEW|g" "$m"; done
+            echo "    (confira nomes de unit 'claude-cockpit-*' no texto delas — não são reescritos)"
+        fi
     done
 fi
 
