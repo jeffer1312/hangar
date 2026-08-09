@@ -1327,7 +1327,20 @@ centro), `onMenu` no `<CommitDetail>` (zona direita); e como último filho da `.
 
 (Importar `CommitMenu` de `./git/CommitMenu.svelte` e `getCommitDiffVsWorktree` de `../lib/api`.)
 
-- [ ] **Step 8: Gate de tipos + verificação manual (mobile E desktop)**
+- [x] **Step 8: Gate de tipos + verificação manual (mobile E desktop)**
+
+> **Fechado em 2026-07-31 como SUPERADO, não como executado.** O gate de tipos rodou e passa. A
+> lista manual abaixo NÃO foi executada: ela testa a `GitSheet`/`GitPanel` e a `GitToolbar`, que
+> foram APAGADAS pelo plano seguinte (`2026-07-30-git-modal-abas.md`, commit `5a26123`) — a toolbar
+> onde o botão de abort "surge" não existe mais, e a view `log` do mobile virou a aba Histórico.
+> O `CommitMenu` sobreviveu inteiro, então os itens 1-4 e 7-11 continuam válidos como roteiro, só
+> que na tela nova: eles foram herdados pelo Step 7 do plano do modal.
+> **O que segue sem verificação humana**, lá e aqui: cherry-pick/revert que CONFLITA com a faixa de
+> abort (item 5), reset mixed/hard (item 6) e um commit real com amend/branch nova. Os três mexem no
+> repositório de verdade e por isso ficaram de fora dos testes automatizados.
+> Fechado a pedido do usuário: parado em 27/28 ele sequestrava a barra de progresso do app, que
+> elege o plano ABERTO mais recente e assim nunca mostrava o trabalho em curso.
+
 
 Run: `npm --prefix frontend run check`
 Expected: 0 erros
