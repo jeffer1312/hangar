@@ -52,7 +52,7 @@ describe('DesktopSessionContext — toggle na barra (follow-up visual)', () => {
     unmount(t.comp);
   });
 
-  it('sem toggleExterno (sidebar expandida): porta acessível PRESERVADA — .ctx-fold existe e recolhido mantém a aba', async () => {
+  it('sem toggleExterno (sidebar expandida): porta acessível no TOPO preservada — sem aba flutuante isolada', async () => {
     const t = montar(false);
     await tick();
     const fold = document.querySelector<HTMLButtonElement>('.ctx-fold');
@@ -60,8 +60,12 @@ describe('DesktopSessionContext — toggle na barra (follow-up visual)', () => {
     expect(fold?.getAttribute('aria-label')).toBe('Recolher contexto');
     ctxPanel.recolhido = true;
     await tick();
-    expect(document.querySelector('.ctx-fold')).not.toBeNull();   // aba continua clicável
-    expect(getComputedStyle(document.querySelector<HTMLElement>('.session-context')!).display).not.toBe('none');
+    // A porta continua (botão do header, não aba 26×64 top:50%): o CSS da aba isolada morreu —
+    // o ctx-fold fica na posição do header (estático no topo), não flutuando no meio da borda.
+    expect(document.querySelector('.ctx-fold')).not.toBeNull();
+    const aside = document.querySelector<HTMLElement>('.session-context')!;
+    expect(aside.classList.contains('recolhido')).toBe(true);
+    expect(aside.classList.contains('toggle-externo')).toBe(false);
     unmount(t.comp);
   });
 });

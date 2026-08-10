@@ -743,14 +743,13 @@
   }
   @media (hover: hover) { .ctx-fold:hover { background: var(--bg-hover); color: var(--text-primary); } }
 
-  /* RECOLHIDO = escondido, não trilho. O trilho foi tentado e não se pagou: em 50px cabiam só um
-     texto vertical e um anel, enquanto o valor do painel é o plano, as ações e as métricas — coisas
-     que precisam de largura. Estado e progresso seguem à vista na barra da esquerda. Some a caixa
-     (vidro, borda, sombra) e fica só a aba pra trazer de volta — SOMENTE sem a barra de abas
-     (toggleExterno=false); com toggle externo, ele é a porta e o painel recolhido SOME de vez
-     (display:none — nada de aba vertical central, follow-up visual). */
+  /* RECOLHIDO = escondido, não trilho nem aba flutuante. Clarificação final do usuário: a aba
+     vertical isolada no MEIO da borda direita (26×64, top:50%) morreu nos DOIS modos. Com toggle
+     externo (barra no modo tabs OU rodapé do rail), o painel SOME de vez (display:none). Sem
+     toggle externo (sidebar expandida), sobra uma PORTA DISCRETA no topo — o ctx-fold na posição
+     do header (36px), não uma aba flutuante: clicar reexpande. */
   .session-context.recolhido {
-    width: 34px;
+    width: 36px;
     border-color: transparent;
     box-shadow: none;
     pointer-events: none;
@@ -758,11 +757,12 @@
   .session-context.recolhido::before { opacity: 0; }
   .session-context.recolhido .ctx-fold {
     pointer-events: auto;
-    top: 50%; right: 0; transform: translateY(-50%);
-    width: 26px; height: 64px;
-    border-radius: var(--radius-md) 0 0 var(--radius-md);
+    position: static;
+    width: 36px; height: 36px;
+    margin: var(--space-2) auto 0;
+    border-radius: var(--radius-md);
     background: var(--surface-raised);
-    box-shadow: -1px 0 0 var(--border);
+    box-shadow: none;
   }
   .session-context.recolhido.toggle-externo {
     display: none;
