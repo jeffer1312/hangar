@@ -97,6 +97,13 @@ do protocolo que as sessões leem vive no heredoc de `scripts/install-cp-send.sh
 Skills do repo em `skills/` (symlinkadas em `~/.claude/skills/` pelo installer):
 `orquestrar` — esta sessão vira líder de um grupo multi-repo (cria/pareia sessões via
 cp-send, escreve o contrato do grupo, distribui escopo, monitora e consolida).
+`orchestrating-idea-to-push` — conduz UM trabalho da ideia ao push: research, spec/plano com
+o usuário, e daí em diante autônomo — um executor, um revisor independente de outra família
+por commit, portão entre as Tasks, e uma sessão fresca revisando a branch no fim. O revisor
+entrega **correção fechada** (causa reproduzida, arquivo/símbolo, inventário de callers,
+passos numerados, comportamento final, prova), não diagnóstico; a próxima Task só abre com
+`APROVA`. Um escritor por árvore — paralelo só com `git worktree`. `SKILL.md` é roteador:
+cada sessão lê só a página do seu papel em `references/`.
 
 **Instalar/atualizar numa máquina** (após `git pull`):
 
