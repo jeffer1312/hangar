@@ -9,6 +9,7 @@
   import { planBadge } from '../lib/plan';
   import { sidebarPin } from '../lib/sidebarPin.svelte';
   import { sidebarBridge } from '../lib/sidebarBridge';
+  import { ctxPanel, alternarCtxPanel } from '../lib/ctxPanel.svelte';
   import HangarMark from './icons/HangarMark.svelte';
   import type { AggSession } from '../lib/types';
 
@@ -16,8 +17,12 @@
     currentKey: string | null;
     onSelect: (session: AggSession) => void;
     onOpenConfig: () => void;
+    // Painel de contexto montado (o DesktopShell deriva: sessão aberta sem split, ou overlay).
+    // false → botão desabilitado com tooltip (decisão do usuário) — sem painel não há o que
+    // alternar. Default true: a barra fora do shell não perde o controle.
+    ctxDisponivel?: boolean;
   }
-  let { currentKey, onSelect, onOpenConfig }: Props = $props();
+  let { currentKey, onSelect, onOpenConfig, ctxDisponivel = true }: Props = $props();
 
   // Sem retain()/release(): DesktopShell é o owner do store (refcount do singleton SSE).
   const model = $derived(buildSessionTabs(sessionsStore.byServer));
@@ -132,6 +137,18 @@
   <button class="tab-action" onclick={() => sidebarBridge.openCreate()} aria-label="Nova sessão" title="Nova sessão">+</button>
   <button class="tab-action" onclick={(e) => sidebarBridge.openKebab(e)} aria-haspopup="menu" aria-label="Mais opções" title="Buscar, Arquivo, Custos, Agrupar">⋯</button>
   <button class="tab-action" onclick={onOpenConfig} aria-label="Configurações" title="Configurações">⚙</button>
+  <!-- Toggle do painel de contexto (follow-up visual): vive no EXTREMO DIREITO da barra, como o
+       OpenCode. MESMO ícone do .ctx-fold (painel dividido) e alterna o store nos dois sentidos.
+       Sem painel montado: desabilitado com tooltip (decisão do usuário). -->
+  <button class="tab-action tab-ctx" class:aberto={!ctxPanel.recolhido}
+    onclick={alternarCtxPanel} disabled={!ctxDisponivel}
+    aria-label={ctxPanel.recolhido ? 'Expandir contexto' : 'Recolher contexto'}
+    title={!ctxDisponivel ? 'sem painel de contexto aberto' : (ctxPanel.recolhido ? 'Expandir contexto' : 'Recolher contexto')}>
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="2"/>
+      <line x1="9" y1="4" x2="9" y2="20"/>
+    </svg>
+  </button>
 </div>
 
 <style>
@@ -245,6 +262,11 @@
     cursor: pointer;
   }
   .tab-action:hover { color: var(--text-primary); background: var(--bg-hover); }
+  /* Toggle do contexto: painel ABERTO = accent (mesmo vocabulário do .select-toggle-btn.active);
+     sem contexto montado = esmaecido e inerte (decisão do usuário). */
+  .tab-ctx.aberto { color: var(--accent); }
+  .tab-action:disabled { color: var(--text-muted); opacity: 0.55; cursor: default; }
+  .tab-action:disabled:hover { background: transparent; }
   /* PWA em window-controls-overlay: a faixa vira a área arrastável da janela; botões e faixa de
      abas seguem clicáveis. Mesmo padrão do NavBar desktop. */
   @media (display-mode: window-controls-overlay) {

@@ -8,6 +8,7 @@ import { mount, unmount, tick } from 'svelte';
 import SessionTabs from './SessionTabs.svelte';
 import { sidebarPin } from '../lib/sidebarPin.svelte';
 import { sidebarBridge } from '../lib/sidebarBridge';
+import { ctxPanel } from '../lib/ctxPanel.svelte';
 
 // Store REATIVO (fixture .svelte.ts): o $derived do SessionTabs re-computa quando o modelo muda —
 // necessário pro teste do foco pós-rename esperar o reflexo do SSE. Mutar via fixtureByServer.
@@ -21,12 +22,15 @@ vi.mock('../lib/format', () => ({
 vi.mock('../lib/plan', () => ({ planBadge: vi.fn() }));
 import { planBadge } from '../lib/plan';
 
-function montar() {
+function montar(over: { ctxDisponivel?: boolean } = {}) {
   const el = document.createElement('div');
   document.body.appendChild(el);
   const comp = mount(SessionTabs, {
     target: el,
-    props: { currentKey: 'srv-a::sess-1', onSelect: vi.fn(), onOpenConfig: vi.fn() },
+    props: {
+      currentKey: 'srv-a::sess-1', onSelect: vi.fn(), onOpenConfig: vi.fn(),
+      ...(over.ctxDisponivel !== undefined ? { ctxDisponivel: over.ctxDisponivel } : {}),
+    },
   });
   return { el, comp: comp as never };
 }
@@ -45,6 +49,7 @@ beforeEach(() => {
   sidebarPin.setUser(false);
   vi.mocked(planBadge).mockReturnValue(null);   // sem plano por padrão (filete ausente)
   comSessao('sess-1');
+  ctxPanel.recolhido = false;   // painel de contexto aberto por padrão
   // Teste que falha pula o unmount: o DOM vazava pro teste seguinte (abas fantasmas). Limpeza aqui.
   document.body.innerHTML = '';
 });
@@ -142,6 +147,49 @@ describe('SessionTabs — filete de progresso do plano (round 2)', () => {
     await tick();
     const tab = document.querySelector<HTMLButtonElement>('.tab');
     expect(tab?.getAttribute('aria-label')).toContain('plano 37%');
+    unmount(t.comp);
+  });
+});
+
+describe('SessionTabs — toggle do contexto na barra (follow-up visual)', () => {
+  it('botão no EXTREMO DIREITO da barra (último, depois da engrenagem)', async () => {
+    const t = montar();
+    await tick();
+    const botoes = [...document.querySelectorAll<HTMLButtonElement>('.tabs-bar button')];
+    const ctx = botoes.find((b) => b.classList.contains('tab-ctx'))!;
+    expect(ctx).toBeDefined();
+    // Último botão da barra: o toggle de contexto fecha a fila de ações
+    expect(botoes[botoes.length - 1]).toBe(ctx);
+    unmount(t.comp);
+  });
+
+  it('alterna ctxPanel.recolhido nos dois sentidos e reflete aria-label', async () => {
+    const t = montar();
+    await tick();
+    const ctx = document.querySelector<HTMLButtonElement>('.tab-ctx')!;
+    expect(ctxPanel.recolhido).toBe(false);
+    expect(ctx.getAttribute('aria-label')).toBe('Recolher contexto');
+    ctx.click();
+    await tick();
+    expect(ctxPanel.recolhido).toBe(true);
+    expect(ctx.getAttribute('aria-label')).toBe('Expandir contexto');
+    ctx.click();
+    await tick();
+    expect(ctxPanel.recolhido).toBe(false);
+    expect(ctx.getAttribute('aria-label')).toBe('Recolher contexto');
+    unmount(t.comp);
+  });
+
+  it('ctxDisponivel=false: desabilitado com tooltip explicando (decisão do usuário)', async () => {
+    const t = montar({ ctxDisponivel: false });
+    await tick();
+    const ctx = document.querySelector<HTMLButtonElement>('.tab-ctx')!;
+    expect(ctx.disabled).toBe(true);
+    expect(ctx.title).toContain('sem painel de contexto aberto');
+    // clique é no-op (disabled) — a preferência não muda
+    ctx.click();
+    await tick();
+    expect(ctxPanel.recolhido).toBe(false);
     unmount(t.comp);
   });
 });

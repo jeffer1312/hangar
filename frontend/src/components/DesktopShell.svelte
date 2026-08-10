@@ -220,6 +220,16 @@
     splitSessions = []; // trocou a principal (mesmo nome/outro servidor conta) -> fecha o split
   });
 
+  // Follow-up visual: painel de contexto MONTADO = sessão aberta sem split (o Chat só renderiza o
+  // DesktopSessionContext com showContextPanel) OU overlay (que passa showContextPanel=true).
+  // Sem isso o toggle da barra estaria habilitado sem nada pra alternar — desabilitado (decisão).
+  const ctxDisponivel = $derived(
+    (!!currentSession && currentSession !== 'null' && currentSession !== 'undefined' && splitSessions.length === 0)
+    || !!overlaySession,
+  );
+  // A barra de abas existe exatamente nestas condições; o toggle do contexto mora nela.
+  const barraDeAbas = $derived(barraRecolhida && !terminalMaximizado);
+
   // Chaves SERVER-AWARE das sessoes com um Chat montado agora (os mesmos tres mounts abaixo). Fecha
   // o terminal sozinho quando a chave dele sai da tela (navegou pro board/canvas, trocou a
   // principal, fechou o split, OU trocou de SERVIDOR com o mesmo nome na tela). Por CHAVE, nao por
@@ -285,12 +295,13 @@
   </div>
 
   <div class="desktop-com-terminal">
-  {#if barraRecolhida && !terminalMaximizado}
+  {#if barraDeAbas}
     <!-- Sidebar recolhida (trilho ou board/canvas): a navegação de sessões vira abas no topo.
          Terminal maximizado esconde a faixa junto com o resto (tp-max-hide cobre só a .desktop-main,
          a aba precisa da condição própria). Ações delegam à bridge da Sidebar ainda montada. -->
     <SessionTabs {currentKey} onSelect={openSession}
-                 onOpenConfig={() => abrirConfig('root', getActiveId())} />
+                 onOpenConfig={() => abrirConfig('root', getActiveId())}
+                 {ctxDisponivel} />
   {/if}
   <main class="desktop-main" class:split={splitSessions.length > 0} class:has-attention={hasAttention}
         class:tp-max-hide={terminalMaximizado}>
@@ -331,6 +342,7 @@
               topInset={hasAttention ? 52 : 0}
               onOpenWorkspacePalette={() => (commandOpen = true)}
               showContextPanel={true}
+              toggleCtxNaBarra={barraDeAbas}
               publishWorkspaceActions={true}
               onWorkspaceActionsChange={handleChatActionsChange}
             />
@@ -353,6 +365,7 @@
             topInset={hasAttention ? 52 : 0}
             onOpenWorkspacePalette={() => (commandOpen = true)}
             showContextPanel={splitSessions.length === 0}
+            toggleCtxNaBarra={barraDeAbas}
             publishWorkspaceActions={true}
             onWorkspaceActionsChange={handleChatActionsChange}
           />
@@ -376,7 +389,11 @@
         </div>
       {/each}
     {:else}
-      <div class="desktop-empty">
+      <!-- Compensa a faixa de abas quando ela existe: o empty centraliza no .desktop-main, que
+           começa ABAIXO dos 44px da barra — sem compensar, o centro visual ficaria 22px abaixo do
+           centro do canvas (follow-up visual, como o OpenCode). translateY é determinístico e
+           acompanha resize (recentralização pura). -->
+      <div class="desktop-empty" class:compensa-faixa={barraDeAbas}>
         <div class="empty-mark"><HangarMark size={72} /></div>
         <p class="empty-title">Selecione uma sessão</p>
         <p class="empty-sub">ou crie uma nova na barra lateral</p>
@@ -511,6 +528,11 @@
     justify-content: center;
     gap: var(--space-2);
   }
+  /* --cp-tabs-h espelha a altura da .tabs-bar (SessionTabs): a compensação é metade dela. A var
+     mora aqui porque o empty não é filho da barra — definir no .desktop-com-terminal alcança os
+     dois lados do contrato sem número mágico duplicado no shell. */
+  .desktop-com-terminal { --cp-tabs-h: 44px; }
+  .desktop-empty.compensa-faixa { transform: translateY(calc(var(--cp-tabs-h) / -2)); }
   /* marca discreta no maior vazio do app — presença de marca sem competir com o texto */
   .empty-mark { color: var(--accent); opacity: 0.22; margin-bottom: var(--space-4); }
   .empty-title { font-size: var(--text-lg); color: var(--text-secondary); font-weight: 500; }

@@ -45,6 +45,10 @@
     // Chip do loop (🔁 N/M) — morava na NavBar; aqui vai junto do estado.
     loopLabel?: string | null;
     loopColor?: string;
+    // Follow-up visual: o toggle mora na barra de abas (SessionTabs) — este painel NÃO renderiza
+    // o próprio .ctx-fold (sem duplicação) e, recolhido, SOME em vez de virar aba vertical.
+    // Sem a barra (sidebar expandida), a porta acessível do painel é preservada (toggleNaBarra=false).
+    toggleNaBarra?: boolean;
     onLoopTap?: () => void;
     // Codex: tocar o provider abre os limites de uso (na NavBar era o badge tappavel).
     onProviderTap?: () => void;
@@ -73,6 +77,7 @@
     onProviderTap = undefined, onOpenPair = undefined, onOpenGit = undefined,
     onOpenPeerChat = undefined,
     session = null, planDetail = null, planLoading = false, planError = false,
+    toggleNaBarra = false,
   }: Props = $props();
 
   const hasActions = $derived(onOpenTerminal || onOpenRun || onOpenAttachments || onOpenActivity);
@@ -105,9 +110,10 @@
   }
 </script>
 
-<aside class="session-context" class:recolhido={ctxPanel.recolhido} aria-label="Contexto da sessão">
-  <!-- Botão de recolher: o painel da esquerda sempre teve; este era ligado com showContextPanel
-       FIXO em true, sem controle nenhum. Fica no topo, no mesmo lugar nos dois estados. -->
+<aside class="session-context" class:recolhido={ctxPanel.recolhido} class:toggle-na-barra={toggleNaBarra} aria-label="Contexto da sessão">
+  <!-- Botão de recolher: com a barra de abas montada o toggle mora lá (toggleNaBarra) — aqui fica
+       sem botão duplicado. Sem a barra, o botão do topo é a porta acessível dos dois sentidos. -->
+  {#if !toggleNaBarra}
   <button class="ctx-fold" onclick={alternarCtxPanel}
           aria-label={ctxPanel.recolhido ? 'Expandir contexto' : 'Recolher contexto'}
           title={ctxPanel.recolhido ? 'Expandir' : 'Recolher'}>
@@ -118,6 +124,7 @@
       <line x1="9" y1="4" x2="9" y2="20"/>
     </svg>
   </button>
+  {/if}
 
   {#if ctxPanel.recolhido}
     <!-- Recolhido = ESCONDIDO, não trilho. O trilho foi tentado e não se pagou: em 50px cabia só um
@@ -738,7 +745,9 @@
   /* RECOLHIDO = escondido, não trilho. O trilho foi tentado e não se pagou: em 50px cabiam só um
      texto vertical e um anel, enquanto o valor do painel é o plano, as ações e as métricas — coisas
      que precisam de largura. Estado e progresso seguem à vista na barra da esquerda. Some a caixa
-     (vidro, borda, sombra) e fica só a aba pra trazer de volta. */
+     (vidro, borda, sombra) e fica só a aba pra trazer de volta — SOMENTE sem a barra de abas
+     (toggleNaBarra=false); com a barra, o toggle dela é a porta e o painel recolhido SOME de vez
+     (display:none — nada de aba vertical central, follow-up visual). */
   .session-context.recolhido {
     width: 34px;
     border-color: transparent;
@@ -753,6 +762,10 @@
     border-radius: var(--radius-md) 0 0 var(--radius-md);
     background: var(--surface-raised);
     box-shadow: -1px 0 0 var(--border);
+  }
+  .session-context.recolhido.toggle-na-barra {
+    display: none;
+    width: 0;
   }
 
   @media (max-width: 1279px) {

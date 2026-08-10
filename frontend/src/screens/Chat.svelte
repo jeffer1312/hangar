@@ -74,6 +74,9 @@
     topInset?: number;
     onOpenWorkspacePalette?: () => void;
     showContextPanel?: boolean;
+    // Follow-up visual: o toggle do painel de contexto vive na barra de abas (SessionTabs) —
+    // repassado ao DesktopSessionContext pra ele não duplicar o botão nem virar aba vertical.
+    toggleCtxNaBarra?: boolean;
     publishWorkspaceActions?: boolean;
     onWorkspaceActionsChange?: (actions: WorkspaceAction[]) => void;
     // Este Chat já está DENTRO do modal do par. Corta a recursão: sem isso o par de lá é esta
@@ -83,7 +86,7 @@
   let {
     sessionName, onBack, onNavigateToChat, desktop = false, onOpenSplit, onOpenTerminalPanel,
     terminalPanelOpen = false, terminalPanelDisponivel = true,
-    topInset = 0, onOpenWorkspacePalette, showContextPanel = false,
+    topInset = 0, onOpenWorkspacePalette, showContextPanel = false, toggleCtxNaBarra = false,
     publishWorkspaceActions = false, onWorkspaceActionsChange, nested = false,
   }: Props = $props();
 
@@ -1287,6 +1290,7 @@
 
   {#if desktop && showContextPanel}
     <DesktopSessionContext
+      toggleNaBarra={toggleCtxNaBarra}
       state={currentState}
       stateDetail={stateEvent?.label}
       {status}
