@@ -1674,9 +1674,33 @@
        ficar presa a uma margem direita fixa que desloca o chat em larguras intermediárias. */
     /* a largura vem do estado do painel (ctxPanel), via style inline no elemento */
     .chat-screen.with-context { --ctx-w: var(--cp-ctx-w, 264px); }
-    .chat-screen.with-context :global(.message-list) {
+
+    /* CENTRO FIXO. Antes, só a direita era reservada (padding-right = faixa do painel de contexto)
+       e a esquerda vinha da largura REAL da sidebar. Como as duas mudam sozinhas — sidebar
+       expandida/trilho/ausente no modo abas, painel aberto/recolhido/fechado —, o texto pulava de
+       lugar a cada toggle: no modo abas ele ficava colado na borda esquerda com a faixa do painel
+       vazia à direita (medido 10/08/2026: coluna em 0→1016 numa janela de 1280).
+       A regra agora é a que OpenCode e Claude usam: as duas faixas laterais podem existir ou não,
+       mas o CENTRO da coluna não se mexe. Para isso o recuo total de cada lado tem de ser igual —
+       à esquerda já existe a sidebar (--cp-nav-w, medida no DesktopShell), à direita existe o
+       painel (--ctx-w). O padding compensa a diferença:
+         esquerda = nav + padL   direita = padR   ->   padL = ctx - nav,  padR = max(ctx, nav)
+       O `max` na direita garante que o texto nunca passe POR BAIXO do painel, que é o motivo de
+       a reserva existir; o `max(0px, …)` na esquerda cobre o caso da sidebar mais larga que o
+       painel (ela é arrastável), onde quem compensa é o outro lado. */
+    .chat-screen.desktop {
+      --nav-w: var(--cp-nav-w, 0px);
+      --recuo-esq: max(0px, calc(var(--ctx-w, 0px) - var(--nav-w)));
+      --recuo-dir: max(var(--ctx-w, 0px), var(--nav-w));
+    }
+    .chat-screen.desktop :global(.message-list) {
       box-sizing: border-box;
-      padding-right: var(--ctx-w);
+      padding-left: var(--recuo-esq);
+      padding-right: var(--recuo-dir);
+    }
+    .chat-screen.desktop .bottom-dock {
+      left: var(--recuo-esq);
+      right: var(--recuo-dir);
     }
     .chat-screen.with-context :global(.messages-inner) {
       /* A escala de largura (Aparencia -> Texto da conversa) entra aqui tambem: sem ela, abrir o
@@ -1685,7 +1709,7 @@
       max-width: min(calc(min(1200px, 100%) * var(--cp-width-scale, 1)), 100%);
       margin-inline: auto;
     }
-    .chat-screen.with-context .bottom-dock { right: var(--ctx-w); }
+    /* (o `right` do dock agora vem do bloco de centro fixo acima, junto com o `left`) */
     .chat-screen.with-context .bottom-dock :global(.composer-card) {
       max-width: min(1220px, 94vw);
     }

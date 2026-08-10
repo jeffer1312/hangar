@@ -355,17 +355,28 @@
        translateZ — o translateZ criava uma CAMADA que renderizava PRETA quando o iOS nao repintava
        a tempo (por isso o preto era puro, ignorando o bg). O guard no fit() (Chat) tira o thrash. */
     background: var(--surface-inset);
-    /* O dock (composer glass) flutua sobre a lista (overlap). Padding = altura REAL do dock
-       (--dock-h, medido via ResizeObserver no Chat) + respiro, pra ultima msg sempre limpar o
-       glass mesmo com anexo/multilinha. ResizeObserver nao dispara na animacao do teclado
-       (composer mantem altura), entao nao volta o reflow que glitchava a NavBar. */
-    padding-bottom: calc(var(--dock-h, 150px) + var(--space-3));
+    /* A folga do dock NAO mora aqui — mora no .messages-inner. Ver o comentario la embaixo: padding
+       de FUNDO num container de rolagem e o pedaco de CSS que os navegadores tratam diferente, e a
+       conversa curta (que nem rola) e onde a diferenca aparece. */
     /* Navbar overlay (glass): a 1a msg limpa a navbar; ao rolar, o conteudo passa POR BAIXO dela. */
     padding-top: calc(var(--nav-h, 56px) + var(--space-3));
   }
 
   .messages-inner {
-    padding: var(--space-4) var(--space-4) var(--space-2);
+    /* O fundo carrega a altura REAL do dock (--dock-h, medido por ResizeObserver no Chat) + respiro,
+       pra ultima mensagem sempre limpar o vidro do composer, mesmo com anexo/multilinha.
+       Por que AQUI e nao no .message-list (que e quem rola): padding de fundo em container de
+       rolagem e justamente o ponto onde WebKit e Blink discordam — o Blink soma no scrollHeight, o
+       WebKit descarta. Com conversa LONGA a diferenca nao aparece (a rolagem esconde o problema);
+       com conversa CURTA, que nem chega a rolar, o `margin-top: auto` gruda este bloco no fundo da
+       caixa e, sem a folga valendo, a ultima mensagem nasce ATRAS do composer — so aparecia depois
+       que a conversa crescia o bastante pra rolar. Reproduzido no iPhone em 09/08/2026 (no Chrome
+       do desktop a mesma tela media certo, por isso demorou a cair a ficha).
+       Num elemento em fluxo normal, padding e padding nos dois motores.
+       --cp-tts-h: barra/pill de TTS (montada no App.svelte, FORA desta arvore) empilha por cima do
+       dock. As pilulas flutuantes do Chat ja somavam isso; a lista nao, e a cauda sumia atras dela. */
+    padding: var(--space-4) var(--space-4)
+             calc(var(--dock-h, 150px) + var(--cp-tts-h, 0px) + var(--space-3));
     display: flex;
     flex-direction: column;
     max-width: 600px;
@@ -453,8 +464,11 @@
     border-radius: var(--radius-lg);
     padding: var(--space-4);
     /* margin-BOTTOM so: margin-block aqui (especificidade maior que a regra base) sobrescrevia o
-       margin-top:auto da ancora e a conversa curta voltava a nascer no topo so neste modo. */
-    margin-bottom: var(--space-2);
+       margin-top:auto da ancora e a conversa curta voltava a nascer no topo so neste modo.
+       O `padding` acima ZERA a folga do dock da regra base — e sem repor, so neste modo a ultima
+       mensagem voltava pra tras do composer. Repoe como MARGEM (e nao padding) de proposito: aqui a
+       folga esta FORA do cartao, senao a folha ganhava um vazio de ~180px desenhado no fim dela. */
+    margin-bottom: calc(var(--dock-h, 150px) + var(--cp-tts-h, 0px) + var(--space-3));
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
   }
 
