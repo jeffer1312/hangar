@@ -45,6 +45,8 @@ beforeEach(() => {
   sidebarPin.setUser(false);
   vi.mocked(planBadge).mockReturnValue(null);   // sem plano por padrão (filete ausente)
   comSessao('sess-1');
+  // Teste que falha pula o unmount: o DOM vazava pro teste seguinte (abas fantasmas). Limpeza aqui.
+  document.body.innerHTML = '';
 });
 
 describe('SessionTabs — expandir sob override do Board/Canvas (round 7)', () => {
@@ -75,41 +77,71 @@ describe('SessionTabs — expandir sob override do Board/Canvas (round 7)', () =
   });
 });
 
-describe('SessionTabs — filete de progresso do plano (round 7)', () => {
+describe('SessionTabs — filete de progresso do plano (round 2)', () => {
   function comPlano(pct: number, complete: boolean) {
     vi.mocked(planBadge).mockReturnValue({
       pct, complete, label: '', title: `Plano ${pct}%`,
     });
   }
 
-  it('0%: filete presente com largura zero (nada a mostrar, sem quebrar)', async () => {
+  it('sem plano: NENHUM filete no DOM e aria-label sem menção a plano', async () => {
+    const t = montar();   // beforeEach: planBadge null
+    await tick();
+    expect(document.querySelector('.tab-plan')).toBeNull();
+    const tab = document.querySelector<HTMLButtonElement>('.tab');
+    expect(tab?.getAttribute('aria-label')).not.toContain('plano');
+    unmount(t.comp);
+  });
+
+  it('0%: filete presente com trilho cheio (--pct 0%) — distingue de "sem plano"', async () => {
     comPlano(0, false);
     const t = montar();
     await tick();
     const filete = document.querySelector<HTMLElement>('.tab-plan');
     expect(filete).not.toBeNull();
-    expect(filete?.style.width).toBe('0%');
+    expect(filete?.style.getPropertyValue('--pct')).toBe('0%');
     expect(filete?.classList.contains('done')).toBe(false);
     unmount(t.comp);
   });
 
-  it('parcial: largura proporcional ao progresso, sem marcação de concluído', async () => {
+  it('parcial: --pct proporcional ao progresso, sem marcação de concluído', async () => {
     comPlano(37, false);
     const t = montar();
     await tick();
     const filete = document.querySelector<HTMLElement>('.tab-plan');
-    expect(filete?.style.width).toBe('37%');
+    expect(filete?.style.getPropertyValue('--pct')).toBe('37%');
     expect(filete?.classList.contains('done')).toBe(false);
     unmount(t.comp);
   });
 
-  it('concluído: largura cheia e classe done (cor de sucesso no CSS)', async () => {
+  it('concluído: --pct 100% e classe done (cor de sucesso no CSS)', async () => {
     comPlano(100, true);
     const t = montar();
     await tick();
     const filete = document.querySelector<HTMLElement>('.tab-plan');
-    expect(filete?.style.width).toBe('100%');
+    expect(filete?.style.getPropertyValue('--pct')).toBe('100%');
     expect(filete?.classList.contains('done')).toBe(true);
+    unmount(t.comp);
+  });
+
+  it('aba ativa com plano parcial: filete presente DENTRO da aba ativa (sem sumir)', async () => {
+    comPlano(37, false);
+    const t = montar();   // currentKey 'srv-a::sess-1' = aba ativa
+    await tick();
+    const ativa = document.querySelector<HTMLButtonElement>('.tab.active')!;
+    expect(ativa).not.toBeNull();
+    const filete = ativa.querySelector<HTMLElement>('.tab-plan');
+    expect(filete).not.toBeNull();
+    expect(filete?.style.getPropertyValue('--pct')).toBe('37%');
+    unmount(t.comp);
+  });
+
+  it('aria-label carrega o progresso do plano quando existe', async () => {
+    comPlano(37, false);
+    const t = montar();
+    await tick();
+    const tab = document.querySelector<HTMLButtonElement>('.tab');
+    expect(tab?.getAttribute('aria-label')).toContain('plano 37%');
     unmount(t.comp);
   });
 });

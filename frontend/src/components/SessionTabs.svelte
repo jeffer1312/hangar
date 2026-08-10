@@ -27,7 +27,9 @@
   // de querySelector global: o app tem OUTRO tablist (TerminalPanel), e um seletor de documento
   // inteiro roubaria abas alheias no ArrowRight (medido no gate da Task 6).
   let stripEl = $state<HTMLDivElement | null>(null);
-  let tabEls: (HTMLButtonElement | null)[] = [];
+  // $state de propósito: o bind:this escreve por índice e o warning binding_property_non_reactive
+  // some (e o array fica reativo pros handlers de foco/setas).
+  let tabEls = $state<(HTMLButtonElement | null)[]>([]);
   let focusedKey = $state<string | null>(null);
   const focusableKey = $derived(focusedTabKey(model.tabs, currentKey, focusedKey));
 
@@ -85,7 +87,7 @@
 </script>
 
 <div class="tabs-bar">
-  <button class="tab-expand" class:disabled={expandBlocked} onclick={expand} disabled={expandBlocked}
+  <button class="tab-expand" onclick={expand} disabled={expandBlocked}
     aria-label={expandBlocked ? 'Barra recolhida no Quadro/Canvas' : 'Expandir barra lateral'}
     title={expandBlocked ? 'Quadro/Canvas recolhe a barra — expanda ao sair' : 'Expandir barra lateral'}>
     <HangarMark size={18} />
@@ -98,9 +100,10 @@
       {@const active = key === currentKey}
       {@const badge = planBadge(tab.session)}
       {@const stateName = stateLabels[tab.session.state]}
+      {@const plano = badge ? ` · plano ${Math.round(badge.pct)}%${badge.complete ? ', concluído' : ''}` : ''}
       <button class="tab" class:boundary={tab.boundary} class:active
         role="tab" aria-selected={active}
-        aria-label={`${tab.session.name} · ${stateName}`}
+        aria-label={`${tab.session.name} · ${stateName}${plano}`}
         tabindex={key === focusableKey ? 0 : -1}
         bind:this={tabEls[i]}
         onfocus={() => (focusedKey = key)}
@@ -109,11 +112,11 @@
           e.preventDefault();
           sidebarBridge.openSessionMenu(e, tab.session, tab.session.serverId);
         }}
-        title={`${tab.session.name} · ${stateName}`}>
+        title={`${tab.session.name} · ${stateName}${plano}`}>
         <span class="tab-dot" style:background={stateColors[tab.session.state]} aria-hidden="true"></span>
         <span class="tab-name">{tab.session.name}</span>
         {#if badge}
-          <span class="tab-plan" class:done={badge.complete} style:width={`${badge.pct}%`} title={badge.title} aria-hidden="true"></span>
+          <span class="tab-plan" class:done={badge.complete} style:--pct={`${badge.pct}%`} title={badge.title} aria-hidden="true"></span>
         {/if}
       </button>
     {/each}
@@ -188,20 +191,24 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  /* Filete do progresso do plano, na base da aba. Token de PROGRESSO, não de superfície: antes
-     usava --surface-inset (cor de fundo de campo) — invisível como progresso e, a bottom:0 com
-     2px, pintava POR CIMA do sublinhado accent do ativo (box-shadow inset) e apagava o indicador.
-     Parcial = text-secondary (mesma família do anel do PlanRing); concluído = success. Na aba
-     ATIVA o filete sobe 2px pra não cobrir o sublinhado accent (round 7). */
+  /* Filete do progresso do plano, na base da aba: TRILHO cheio (--border-default) + preenchimento
+     proporcional via --pct (gradiente num elemento só) — 0% mostra o trilho inteiro e se distingue
+     de "sem plano" (elemento nem existe). Parcial = --text-secondary (mesma família do anel do
+     PlanRing); concluído = --success. Na aba ATIVA o filete sobe 2px pra não pintar por cima do
+     sublinhado accent (round 7/2). */
   .tab-plan {
+    --fill: var(--text-secondary);
     position: absolute;
     left: 0;
+    right: 0;
     bottom: 0;
     height: 2px;
-    background: var(--text-secondary);
+    background:
+      linear-gradient(to right, var(--fill) var(--pct), transparent var(--pct)) no-repeat,
+      var(--border-default);
   }
   .tab.active .tab-plan { bottom: 2px; }
-  .tab-plan.done { background: var(--success); }
+  .tab-plan.done { --fill: var(--success); }
   .tab-expand {
     flex-shrink: 0;
     display: inline-flex;
