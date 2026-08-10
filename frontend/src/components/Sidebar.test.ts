@@ -563,4 +563,30 @@ describe('Sidebar — trilho original no modo rail', () => {
       .not.toBe(document.querySelector('.fold-btn:not(.rail-ctx) svg')!.innerHTML);
     unmount(t.comp);
   });
+
+  it('fold sob override fica desabilitado no atributo', async () => {
+    // sidebarPin.setUser(false) + setForced(true) = Quadro/Canvas forçando o recolhimento
+    navMode.mode = 'rail';
+    sidebarPin.setUser(false);   // pin do usuário: expandida
+    comStore([{ id: 'srv-a', label: 'Servidor A', sessions: [sess('hangar', 'srv-a', 'idle')] }]);
+    const t = montar();
+    await tick();
+    // override DEPOIS do mount (o $effect do mount limparia um override pré-montado)
+    sidebarPin.setForced(true);
+    await tick();
+    expect(document.querySelector('.fold-btn:not(.rail-ctx)')!.hasAttribute('disabled')).toBe(true);
+    sidebarPin.setForced(null);
+    unmount(t.comp);
+  });
+
+  it('rail-ctx sem painel fica desabilitado no atributo', async () => {
+    // montar com ctxDisponivel={false}
+    navMode.mode = 'rail';
+    sidebarPin.setUser(true);
+    comStore([{ id: 'srv-a', label: 'Servidor A', sessions: [sess('hangar', 'srv-a', 'idle')] }]);
+    const t = montar({ ctxDisponivel: false });
+    await tick();
+    expect(document.querySelector('.rail-ctx')!.hasAttribute('disabled')).toBe(true);
+    unmount(t.comp);
+  });
 });

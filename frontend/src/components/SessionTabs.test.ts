@@ -185,7 +185,7 @@ describe('SessionTabs — toggle do contexto na barra (follow-up visual)', () =>
     await tick();
     const ctx = document.querySelector<HTMLButtonElement>('.tab-ctx')!;
     expect(ctx.disabled).toBe(true);
-    expect(ctx.title).toContain('sem painel de contexto aberto');
+    expect(ctx.title).toBe('Sem painel de contexto aberto');
     // clique é no-op (disabled) — a preferência não muda
     ctx.click();
     await tick();
@@ -198,6 +198,24 @@ describe('SessionTabs — toggle do contexto na barra (follow-up visual)', () =>
     await tick();
     const ctx = document.querySelector<HTMLButtonElement>('.tab-ctx')!;
     expect(ctx.getAttribute('aria-label')).toBe('Sem painel de contexto aberto');
+    unmount(t.comp);
+  });
+
+  it('tab-ctx desabilitado tem title igual ao aria-label', async () => {
+    const t = montar({ ctxDisponivel: false });
+    await tick();
+    const ctx = document.querySelector<HTMLButtonElement>('.tab-ctx')!;
+    expect(ctx.getAttribute('title')).toBe(ctx.getAttribute('aria-label'));
+    expect(ctx.getAttribute('title')).toBe('Sem painel de contexto aberto');
+    unmount(t.comp);
+  });
+
+  it('tab-ctx habilitado tem title igual ao aria-label', async () => {
+    const t = montar();
+    await tick();
+    const ctx = document.querySelector<HTMLButtonElement>('.tab-ctx')!;
+    expect(ctx.getAttribute('title')).toBe(ctx.getAttribute('aria-label'));
+    expect(ctx.getAttribute('title')).toBe('Recolher painel de contexto');
     unmount(t.comp);
   });
 });

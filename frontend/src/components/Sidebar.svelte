@@ -1562,7 +1562,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     color: var(--text-muted); cursor: pointer;
   }
   .sidebar.collapsed .fold-btn { width: 100%; }
-  @media (hover: hover) { .fold-btn:hover { background: var(--bg-hover); color: var(--text-primary); } }
+  @media (hover: hover) { .fold-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); } }
+  .fold-btn:disabled { color: var(--text-muted); opacity: 0.55; cursor: default; }
   /* o rotulo so aparece se sobrar espaco: no rodape em linha o icone ja basta */
   .fold-label { display: none; }
   .row-mark { display: inline-flex; }

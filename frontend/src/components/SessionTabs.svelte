@@ -144,7 +144,8 @@
     onclick={alternarCtxPanel} disabled={!ctxDisponivel}
     aria-label={!ctxDisponivel ? 'Sem painel de contexto aberto'
       : (ctxPanel.recolhido ? 'Expandir painel de contexto' : 'Recolher painel de contexto')}
-    title={!ctxDisponivel ? 'sem painel de contexto aberto' : (ctxPanel.recolhido ? 'Expandir contexto' : 'Recolher contexto')}>
+    title={!ctxDisponivel ? 'Sem painel de contexto aberto'
+      : (ctxPanel.recolhido ? 'Expandir painel de contexto' : 'Recolher painel de contexto')}>
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
       <rect x="3" y="4" width="18" height="16" rx="2"/>
       <line x1="9" y1="4" x2="9" y2="20"/>

@@ -136,7 +136,7 @@ describe('DesktopShell — empty state compensa a faixa (follow-up visual)', () 
     const ctx = document.querySelector<HTMLButtonElement>('.tab-ctx')!;
     expect(ctx).not.toBeNull();
     expect(ctx.disabled).toBe(true);
-    expect(ctx.title).toContain('sem painel de contexto aberto');
+    expect(ctx.title).toBe('Sem painel de contexto aberto');
     unmount(t.comp);
   });
 
