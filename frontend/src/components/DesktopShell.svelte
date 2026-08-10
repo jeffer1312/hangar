@@ -316,7 +316,8 @@
              key deixaria o Chat preso no servidor antigo. -->
         {#key workspaceSessionKey(overlaySession)}
           {@const overlayName = overlaySession.name}
-          <div class="board-overlay" role="region" aria-label="Chat da sessão">
+          <div class="board-overlay" class:aba-faixa={barraRecolhida && !terminalMaximizado}
+               role="region" aria-label="Chat da sessão">
             <button class="split-close" onclick={onCloseOverlay}
                     aria-label="Fechar chat" title="Fechar (Esc)">×</button>
             <Chat
@@ -499,6 +500,9 @@
     font-size: 16px; line-height: 1; cursor: pointer;
   }
   .split-close:hover { color: var(--text-primary); background: var(--bg-hover); }
+  /* Com a faixa de abas no topo (sidebar recolhida), o × do overlay caía 8px abaixo da faixa e
+     parecia parte dela (achado do gate final, see 04). Folga de 16px separa o botão da faixa. */
+  .board-overlay.aba-faixa .split-close { top: calc(16px + 44px); }
   .desktop-empty {
     height: 100%;
     display: flex;
