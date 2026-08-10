@@ -95,7 +95,7 @@ beforeEach(() => {
   ctxPanel.recolhido = false;  // painel de contexto aberto por padrão
 });
 
-function montar() {
+function montar(over: { ctxDisponivel?: boolean } = {}) {
   const el = document.createElement('div');
   document.body.appendChild(el);
   const comp = mount(Sidebar, {
@@ -110,6 +110,7 @@ function montar() {
       onSelectView: vi.fn(),
       onOpenCommand: vi.fn(),
       onCollapsedChange: vi.fn(),
+      ...(over.ctxDisponivel !== undefined ? { ctxDisponivel: over.ctxDisponivel } : {}),
     },
   });
   return { el, comp: comp as never };
@@ -318,11 +319,11 @@ describe('Sidebar — renomear com a sidebar recolhida (round 7)', () => {
     // Rodapé: engrenagem + Nova + kebab + fold + toggle do painel de contexto (referência)
     const ctx = aside?.querySelector<HTMLButtonElement>('.rail-ctx');
     expect(ctx).not.toBeNull();
-    expect(ctx?.getAttribute('aria-label')).toBe('Recolher contexto');
+    expect(ctx?.getAttribute('aria-label')).toBe('Recolher painel de contexto');
     // clique no toggle alterna o estado do painel
     ctx!.click();
     await tick();
-    expect(ctx?.getAttribute('aria-label')).toBe('Expandir contexto');
+    expect(ctx?.getAttribute('aria-label')).toBe('Expandir painel de contexto');
     sidebarPin.setForced(null);
     unmount(t.comp);
   });
@@ -539,6 +540,27 @@ describe('Sidebar — trilho original no modo rail', () => {
     await tick();
     expect(sidebarPin.preferred).toBe(true);
     sidebarPin.setForced(null);
+    unmount(t.comp);
+  });
+
+  it('rail-ctx desabilita sem painel disponível', async () => {
+    navMode.mode = 'rail';
+    sidebarPin.setUser(true);
+    comStore([{ id: 'srv-a', label: 'Servidor A', sessions: [sess('hangar', 'srv-a', 'idle')] }]);
+    const t = montar({ ctxDisponivel: false });
+    await tick();
+    expect(document.querySelector('.rail-ctx')!.hasAttribute('disabled')).toBe(true);
+    unmount(t.comp);
+  });
+
+  it('rail-ctx e fold-btn não têm o mesmo desenho', async () => {
+    navMode.mode = 'rail';
+    sidebarPin.setUser(true);
+    comStore([{ id: 'srv-a', label: 'Servidor A', sessions: [sess('hangar', 'srv-a', 'idle')] }]);
+    const t = montar();
+    await tick();
+    expect(document.querySelector('.rail-ctx svg')!.innerHTML)
+      .not.toBe(document.querySelector('.fold-btn:not(.rail-ctx) svg')!.innerHTML);
     unmount(t.comp);
   });
 });

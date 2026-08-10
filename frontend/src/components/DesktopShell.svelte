@@ -297,7 +297,8 @@
              canvasActive={view === 'canvas'}
              onWorkspaceActionsChange={handleSidebarActionsChange}
              {view} onSelectView={selectView} onOpenCommand={() => (commandOpen = true)}
-             onCollapsedChange={(v) => (barraRecolhida = v)} />
+             onCollapsedChange={(v) => (barraRecolhida = v)}
+             {ctxDisponivel} />
   </div>
 
   <div class="desktop-com-terminal">

@@ -168,15 +168,15 @@ describe('SessionTabs — toggle do contexto na barra (follow-up visual)', () =>
     await tick();
     const ctx = document.querySelector<HTMLButtonElement>('.tab-ctx')!;
     expect(ctxPanel.recolhido).toBe(false);
-    expect(ctx.getAttribute('aria-label')).toBe('Recolher contexto');
+    expect(ctx.getAttribute('aria-label')).toBe('Recolher painel de contexto');
     ctx.click();
     await tick();
     expect(ctxPanel.recolhido).toBe(true);
-    expect(ctx.getAttribute('aria-label')).toBe('Expandir contexto');
+    expect(ctx.getAttribute('aria-label')).toBe('Expandir painel de contexto');
     ctx.click();
     await tick();
     expect(ctxPanel.recolhido).toBe(false);
-    expect(ctx.getAttribute('aria-label')).toBe('Recolher contexto');
+    expect(ctx.getAttribute('aria-label')).toBe('Recolher painel de contexto');
     unmount(t.comp);
   });
 
@@ -190,6 +190,14 @@ describe('SessionTabs — toggle do contexto na barra (follow-up visual)', () =>
     ctx.click();
     await tick();
     expect(ctxPanel.recolhido).toBe(false);
+    unmount(t.comp);
+  });
+
+  it('tab-ctx desabilitado anuncia o motivo no aria-label', async () => {
+    const t = montar({ ctxDisponivel: false });
+    await tick();
+    const ctx = document.querySelector<HTMLButtonElement>('.tab-ctx')!;
+    expect(ctx.getAttribute('aria-label')).toBe('Sem painel de contexto aberto');
     unmount(t.comp);
   });
 });

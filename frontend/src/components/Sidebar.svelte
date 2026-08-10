@@ -74,10 +74,14 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     // o valor). O DesktopShell nao enxerga o estado interno, e precisa dele pra so esconder a
     // sidebar com o terminal maximizado quando ela esta recolhida, nao quando esta fixada aberta.
     onCollapsedChange?: (v: boolean) => void;
+    // Painel de contexto montado (= sessão aberta sem split, ou overlay). Sem ele o toggle do
+    // rodapé do trilho desabilita — mesmo contrato que a SessionTabs (DesktopShell entrega).
+    ctxDisponivel?: boolean;
   }
   let {
     currentSession, onSelect, onCompare, boardActive, canvasActive,
     onWorkspaceActionsChange, view, onSelectView, onOpenCommand, onCollapsedChange,
+    ctxDisponivel = true,
   }: Props = $props();
 
   // Grupo generico: por SERVIDOR (hoje) ou por PROJETO (cwd) — mesmo shape nos dois modos. Cada
@@ -1188,12 +1192,15 @@ import ConfirmDialog from './ConfirmDialog.svelte';
          o controle vive aqui, como a referência do usuário — último item do rodapé. No modo
          'tabs' ele fica no extremo direito da SessionTabs e este não existe (sem duplicação). -->
     {#if sidebarPin.collapsed}
-      <button class="fold-btn rail-ctx" onclick={alternarCtxPanel}
-        aria-label={ctxPanel.recolhido ? 'Expandir contexto' : 'Recolher contexto'}
-        title={ctxPanel.recolhido ? 'Expandir contexto' : 'Recolher contexto'}>
+      <button class="fold-btn rail-ctx" disabled={!ctxDisponivel}
+        onclick={alternarCtxPanel}
+        aria-label={!ctxDisponivel ? 'Sem painel de contexto aberto'
+          : (ctxPanel.recolhido ? 'Expandir painel de contexto' : 'Recolher painel de contexto')}
+        title={!ctxDisponivel ? 'Sem painel de contexto aberto'
+          : (ctxPanel.recolhido ? 'Expandir painel de contexto' : 'Recolher painel de contexto')}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <rect x="3" y="4" width="18" height="16" rx="2"/>
-          <line x1="9" y1="4" x2="9" y2="20"/>
+          <line x1="15" y1="4" x2="15" y2="20"/>
         </svg>
       </button>
     {/if}
