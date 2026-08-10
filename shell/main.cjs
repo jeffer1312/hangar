@@ -155,6 +155,46 @@ app.whenReady().then(async () => {
       e.preventDefault();
       win.loadURL(telaDeUrl(win.webContents.getURL() || url));
     }
+    // Ctrl+Shift+R — recarregar de verdade. O `removeMenu()` acima tira o menu padrao e, com ele,
+    // TODOS os aceleradores que vinham de graca: no Electron o reload nasce do role do menu, entao
+    // sem menu o Ctrl+R e o Ctrl+Shift+R simplesmente nao existem (medido 10/08/2026 — o usuario
+    // apertava e nada acontecia).
+    //
+    // E `reloadIgnoringCache()` sozinho NAO bastaria: a interface e um PWA com service worker
+    // fazendo precache dos assets. O SW intercepta o fetch ANTES do cache HTTP, entao ignorar o
+    // cache do Chromium ainda entrega o bundle velho — foi exatamente isso que segurou uma versao
+    // antiga da tela depois de um rebuild nesta mesma sessao. Por isso limpa `serviceworkers` +
+    // `cachestorage` primeiro e so entao recarrega.
+    //
+    // Nao mexe em cookies nem localStorage de proposito: ali moram o token de autenticacao e as
+    // preferencias de aparencia — um "recarregar" que desloga o usuario e uma armadilha.
+    if (input.control && input.shift && input.key.toLowerCase() === 'r') {
+      e.preventDefault();
+      // Desregistra o SW ANTES de limpar o armazenamento dele. `clearStorageData` apaga os bytes,
+      // mas o registro vivo continua na página: ele volta a se instalar no reload e pode reservir
+      // o bundle antigo. Sem isto o atalho "funcionava" e a tela continuava velha, que foi o que o
+      // usuário viu — e como a promessa era engolida, nada aparecia dizendo o que houve.
+      win.webContents
+        .executeJavaScript(`navigator.serviceWorker?.getRegistrations?.()
+            .then(rs => Promise.all(rs.map(r => r.unregister())))
+            .then(rs => rs.length).catch(() => -1)`)
+        .then((n) => console.log(`[recarregar] service workers desregistrados: ${n}`))
+        .catch((err) => console.error('[recarregar] desregistro falhou:', err))
+        .then(() => win.webContents.session.clearStorageData({
+          storages: ['serviceworkers', 'cachestorage'],
+        }))
+        .then(() => console.log('[recarregar] cache do service worker limpo'))
+        .catch((err) => console.error('[recarregar] limpeza falhou:', err))
+        .finally(() => win.webContents.reloadIgnoringCache());
+    }
+    // Ctrl+Shift+I — DevTools. Mesmo motivo do R: o `removeMenu()` acima leva junto TODOS os
+    // aceleradores padrão, e o DevTools é um deles. Sem menu, sem atalho — e sem DevTools não há
+    // como conferir qual bundle a janela carregou, que é justamente o que se precisa quando a tela
+    // não acompanha o build.
+    if (input.control && input.shift && input.key.toLowerCase() === 'i') {
+      e.preventDefault();
+      win.webContents.toggleDevTools();
+    }
   });
 
   // Endereco salvo fora do ar NAO significa perguntar: o caso comum e o backend local, que esta
