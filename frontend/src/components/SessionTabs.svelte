@@ -29,12 +29,16 @@
   // Sem retain()/release(): DesktopShell é o owner do store (refcount do singleton SSE).
   const model = $derived(buildSessionTabs(sessionsStore.byServer));
 
-  // Servidor ativo, só pro ponto colorido da engrenagem (ver o comentário no template). `getActiveId`
-  // lê localStorage e NÃO é reativo — a dependência que faz isto recalcular é `sessionsStore.servers`,
-  // que muda quando um servidor entra, sai ou troca de estado. É o mesmo par que a Sidebar usa.
+  // Servidor ativo, só pro ponto colorido da engrenagem (ver o comentário no template).
+  // `getActiveId` lê localStorage e NÃO é reativo, e `selectServer` (lib/auth.ts:440) só grava a
+  // chave — NÃO chama `notifyChanged()`. Então `sessionsStore.servers` sozinho não bastava: abrir
+  // uma aba de outro servidor trocava o ativo e o ponto continuava na cor do anterior até algo
+  // MAIS (sessão criada/removida) reatribuir a lista.
+  // Quem faz o ponto acompanhar é o `currentKey` (`<serverId>::<nome>`), que muda no MESMO clique.
+  // Mesmo truque do `void currentKey` do foco, mais abaixo. Sem sessão aberta cai no id salvo.
   const servidorAtivo = $derived.by(() => {
     const lista = sessionsStore.servers;
-    const id = getActiveId();
+    const id = currentKey?.split('::')[0] || getActiveId();
     return lista.find((s) => s.id === id) ?? lista[0] ?? null;
   });
   const corDoServidor = $derived(servidorAtivo ? serverColor(servidorAtivo.id) : 'var(--text-muted)');

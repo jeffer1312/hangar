@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import HangarMark from './icons/HangarMark.svelte';
   import Sidebar from './Sidebar.svelte';
   import SessionTabs from './SessionTabs.svelte';
@@ -324,7 +324,12 @@
       const l = Math.round(navEl.getBoundingClientRect().left);
       if (Math.abs(l - navW) > 1) navW = l;
     };
-    medir();
+    // `untrack`: `medir` LÊ `navW` pra comparar, e o corpo do $effect roda rastreado — sem isto o
+    // effect vira dependente do valor que ele mesmo escreve e se reinvalida, desconectando e
+    // recriando o ResizeObserver a cada passo do arrasto da borda. O guard de 1px impede o loop
+    // infinito, não o churn. Os medidores do Chat (--dock-h, --nav-h) não têm o problema porque só
+    // leem/escrevem DENTRO do callback do observer, que já roda fora do rastreio.
+    untrack(medir);
     const ro = new ResizeObserver(medir);
     ro.observe(navEl);
     // A sidebar encolher/expandir muda o `left` daqui sem mudar o TAMANHO deste elemento em alguns
