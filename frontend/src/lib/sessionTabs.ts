@@ -9,6 +9,24 @@ import type { ServerBucket } from './sessions';
 export interface SessionTab { session: AggSession; boundary: boolean }
 export interface SessionTabsModel { tabs: SessionTab[]; offlineLabels: string[] }
 
+// Chave SERVER-AWARE de uma aba (igual currentKey/workspaceSessionKey): homônimas em servidores
+// diferentes têm o MESMO nome — sem o servidor, a chave colide e o tabindex/aria-selected erram.
+export const tabKeyOf = (s: AggSession) => `${s.serverId}::${s.name}`;
+
+// Chave focável (roving tabindex): a ÚNICA aba com tabindex=0. Ordem: focusedKey (foco manual via
+// Tab/setas) se ainda existe na lista -> currentKey (seleção) se existe -> primeira aba.
+// null = sem abas (nada focável). A seleção (aria-selected) e o foco são independentes: trocar a
+// sessão selecionada não move o foco — quem focou a aba X continua nela.
+export function focusedTabKey(
+  tabs: SessionTab[],
+  currentKey: string | null,
+  focusedKey: string | null,
+): string | null {
+  if (focusedKey && tabs.some((t) => tabKeyOf(t.session) === focusedKey)) return focusedKey;
+  if (currentKey && tabs.some((t) => tabKeyOf(t.session) === currentKey)) return currentKey;
+  return tabs[0] ? tabKeyOf(tabs[0].session) : null;
+}
+
 export function buildSessionTabs(buckets: ServerBucket[]): SessionTabsModel {
   const tabs: SessionTab[] = [];
   const offlineLabels: string[] = [];

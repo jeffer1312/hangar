@@ -3,8 +3,8 @@
   // vira uma faixa de abas. Só a <aside> some — os workflows pesados (criar, menu de contexto,
   // kebab) continuam na Sidebar montada, chamados via sidebarBridge.
   import { sessionsStore } from '../lib/sessionsStore.svelte';
-  import { buildSessionTabs } from '../lib/sessionTabs';
-  import { stateColors } from '../lib/format';
+  import { buildSessionTabs, focusedTabKey, tabKeyOf } from '../lib/sessionTabs';
+  import { stateColors, stateLabels } from '../lib/format';
   import { planBadge } from '../lib/plan';
   import { sidebarPin } from '../lib/sidebarPin.svelte';
   import { sidebarBridge } from '../lib/sidebarBridge';
@@ -21,30 +21,39 @@
   // Sem retain()/release(): DesktopShell é o owner do store (refcount do singleton SSE).
   const model = $derived(buildSessionTabs(sessionsStore.byServer));
 
-  const keyOf = (s: AggSession) => `${s.serverId}::${s.name}`;
+  // Roving tabindex: focusedKey é a aba que o USUÁRIO focou (Tab/setas); a ÚNICA com tabindex=0
+  // é a focável da vez (focusedKey válido -> currentKey -> primeira). Tudo por refs locais — nada
+  // de querySelector global: o app tem OUTRO tablist (TerminalPanel), e um seletor de documento
+  // inteiro roubaria abas alheias no ArrowRight (medido no gate da Task 6).
+  let stripEl = $state<HTMLDivElement | null>(null);
+  let tabEls: (HTMLButtonElement | null)[] = [];
+  let focusedKey = $state<string | null>(null);
+  const focusableKey = $derived(focusedTabKey(model.tabs, currentKey, focusedKey));
 
   function expand() {
     sidebarPin.setUser(false);
   }
 
   // Tabs de ROLE button já respondem a Enter/Space nativamente; as setas movem o FOCO entre elas
-  // (padrão tablist). Wrap nas pontas.
+  // (padrão tablist). Wrap nas pontas. O onfocus de cada aba atualiza `focusedKey`, então o
+  // tabindex=0 migra junto com o foco.
   function onStripKey(e: KeyboardEvent) {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-    const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('.tabs-strip [role="tab"]'));
-    const current = tabs.indexOf(document.activeElement as HTMLButtonElement);
-    if (current < 0) return;
+    const current = tabEls.indexOf(document.activeElement as HTMLButtonElement);
+    if (current < 0 || tabEls.length === 0) return;
     e.preventDefault();
     const delta = e.key === 'ArrowRight' ? 1 : -1;
-    tabs[(current + delta + tabs.length) % tabs.length].focus();
+    const next = (current + delta + tabEls.length) % tabEls.length;
+    tabEls[next]?.focus();
   }
 
-  // Aba ativa entra na viewport: quando o ativo muda (troca de sessão, remontagem da lista) ou o
-  // conjunto de abas muda, re-loca a seleção. `nearest` evita pular quando já está visível.
+  // Aba ativa entra na viewport: quando a seleção muda (troca de sessão, remontagem da lista) ou o
+  // conjunto de abas muda, re-loca a seleção. Só dentro do strip — `nearest` evita pular quando já
+  // está visível.
   $effect(() => {
     void currentKey;
     void model.tabs.length;
-    document.querySelector('[aria-selected="true"]')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+    tabEls.find((t) => t?.getAttribute('aria-selected') === 'true')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
   });
 </script>
 
@@ -53,18 +62,25 @@
     <HangarMark size={18} />
   </button>
 
-  <div class="tabs-strip" role="tablist" aria-label="Sessões" tabindex="-1" onkeydown={onStripKey}>
-    {#each model.tabs as tab (keyOf(tab.session))}
-      {@const active = keyOf(tab.session) === currentKey}
+  <div class="tabs-strip" role="tablist" aria-label="Sessões" tabindex="-1"
+       bind:this={stripEl} onkeydown={onStripKey}>
+    {#each model.tabs as tab, i (tabKeyOf(tab.session))}
+      {@const key = tabKeyOf(tab.session)}
+      {@const active = key === currentKey}
       {@const badge = planBadge(tab.session)}
+      {@const stateName = stateLabels[tab.session.state]}
       <button class="tab" class:boundary={tab.boundary} class:active
-        role="tab" aria-selected={active} tabindex={active ? 0 : -1}
+        role="tab" aria-selected={active}
+        aria-label={`${tab.session.name} · ${stateName}`}
+        tabindex={key === focusableKey ? 0 : -1}
+        bind:this={tabEls[i]}
+        onfocus={() => (focusedKey = key)}
         onclick={() => onSelect(tab.session)}
         oncontextmenu={(e) => {
           e.preventDefault();
           sidebarBridge.openSessionMenu(e, tab.session, tab.session.serverId);
         }}
-        title={tab.session.name}>
+        title={`${tab.session.name} · ${stateName}`}>
         <span class="tab-dot" style:background={stateColors[tab.session.state]} aria-hidden="true"></span>
         <span class="tab-name">{tab.session.name}</span>
         {#if badge}
@@ -125,7 +141,17 @@
   }
   .tab:hover { color: var(--text-primary); background: var(--bg-hover); }
   .tab.boundary { margin-left: var(--space-3); }
-  .tab.active { background: var(--accent-dim); box-shadow: inset 0 -2px 0 var(--accent); color: var(--text-primary); }
+  /* Ativo explícito: fundo accent + borda accent + filete inferior + semibold. O contraste com o
+     hover (bg-hover, sem borda) tem que ser inequívoco — a primeira prova visual do gate mostrou
+     o estado ativo confundível com hover/foco (achado analysis-01..04). */
+  .tab.active {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    box-shadow: inset 0 -2px 0 var(--accent);
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+  .tab.active:hover { background: var(--accent-dim); }
   .tab-dot { flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; }
   .tab-name {
     min-width: 0;
