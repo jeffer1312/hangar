@@ -442,7 +442,6 @@
       onToggleCanvas={() => navigateTo(route.name === 'canvas' ? '#/' : '#/canvas')}
       onNavigateToChat={navigateToChat}
       onCompare={navigateToCompare}
-      {onLogout}
     />
   {:else if route.name === 'sessions' || route.name === 'board' || route.name === 'canvas'}
     <!-- Quadro/canvas são só desktop: no mobile caem na lista normal (em vez de tela em branco). -->

@@ -1,10 +1,12 @@
 // @vitest-environment happy-dom
 // A Sidebar monta uma árvore pesada; os componentes de trabalho (sheets, menus, git, loop) viram
-// stubs. O fluxo de adicionar servidor (que vivia aqui desde a round 5) migrou pra
-// ServidoresSettings na Task 4b/4c — a cobertura dele mora em ServidoresSettings.test.ts.
+// stubs. Cobertura do fluxo de adicionar servidor (que vivia aqui desde a round 5) migrou pra
+// ServidoresSettings na Task 4b/4c — ela mora em ServidoresSettings.test.ts.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick, createRawSnippet } from 'svelte';
 import Sidebar from './Sidebar.svelte';
+import * as auth from '../lib/auth';
+import { abrirConfig } from '../lib/configNav';
 
 // Snippet criado DENTRO de cada factory: vi.mock é hoisted; function declaration é hoisted também
 // (const top-level cairia em TDZ quando a factory rodasse).
@@ -51,6 +53,9 @@ vi.mock('./HoverPreview.svelte', stubDe);
 vi.mock('./PlanBar.svelte', stubDe);
 vi.mock('./WorkspaceNav.svelte', stubDe);
 
+const authMock = vi.mocked(auth);
+const navMock = vi.mocked(abrirConfig);
+
 beforeEach(() => { vi.clearAllMocks(); });   // contagens de chamada não vazam entre testes
 
 function montar() {
@@ -62,7 +67,6 @@ function montar() {
       currentSession: null,
       onSelect: vi.fn(),
       onCompare: vi.fn(),
-      onLogout: vi.fn(),
       boardActive: false,
       canvasActive: false,
       view: 'chat',
@@ -74,12 +78,21 @@ function montar() {
   return { el, comp: comp as never };
 }
 
-describe('Sidebar — montagem', () => {
-  it('monta a árvore stubada sem quebrar', async () => {
+describe('Sidebar — engrenagem abre Configurações (Task 4c)', () => {
+  it('nome acessível e aria-haspopup corretos; clique chama abrirConfig("root", srv ativo) uma vez', async () => {
+    authMock.getActiveId.mockReturnValue('srv-b');
     const t = montar();
     await tick();
-    expect(document.querySelector('.sidebar')).not.toBeNull();
-    expect(document.querySelector('.acct-btn')).not.toBeNull();   // engrenagem = porta de Configurações
+    const gear = document.querySelector<HTMLButtonElement>('.acct-btn');
+    expect(gear).not.toBeNull();
+    expect(gear?.getAttribute('aria-label')).toBe('Configurações e servidor');
+    expect(gear?.getAttribute('aria-haspopup')).toBe('dialog');
+    gear!.focus();
+    expect(document.activeElement).toBe(gear);
+    gear!.click();
+    await tick();
+    expect(navMock).toHaveBeenCalledTimes(1);
+    expect(navMock).toHaveBeenCalledWith('root', 'srv-b');
     unmount(t.comp);
   });
 });

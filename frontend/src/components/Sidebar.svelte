@@ -56,7 +56,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     currentSession: string | null;
     onSelect: (name: string) => void;
     onCompare: (ids: { serverId: string; name: string }[]) => void;
-    onLogout: () => void;
     boardActive: boolean;      // quadro aberto -> destaca o toggle e recolhe a sidebar pro rail
     canvasActive: boolean;     // canvas aberto -> mesmo tratamento do quadro (destaca + recolhe)
     onWorkspaceActionsChange?: (actions: WorkspaceAction[]) => void;
@@ -73,7 +72,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     onCollapsedChange?: (v: boolean) => void;
   }
   let {
-    currentSession, onSelect, onCompare, onLogout, boardActive, canvasActive,
+    currentSession, onSelect, onCompare, boardActive, canvasActive,
     onWorkspaceActionsChange, view, onSelectView, onOpenCommand, onCollapsedChange,
   }: Props = $props();
 

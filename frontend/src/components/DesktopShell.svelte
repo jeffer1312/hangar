@@ -40,12 +40,11 @@
     onToggleCanvas: () => void;
     onNavigateToChat: (name: string) => void;
     onCompare: (ids: { serverId: string; name: string }[]) => void;
-    onLogout: () => void;
   }
   let {
     currentSession, currentKey = null, view, overlaySession,
     onOpenBoardSession, onOpenCanvasSession, onCloseOverlay, onToggleBoard, onToggleCanvas,
-    onNavigateToChat, onCompare, onLogout,
+    onNavigateToChat, onCompare,
   }: Props = $props();
 
   let commandOpen = $state(false);
@@ -275,7 +274,7 @@
 
 <div class="desktop-shell">
   <div class="sidebar-wrap" class:tp-max-hide={terminalMaximizado && barraRecolhida}>
-    <Sidebar {currentSession} onSelect={onNavigateToChat} {onCompare} {onLogout}
+    <Sidebar {currentSession} onSelect={onNavigateToChat} {onCompare}
              boardActive={view === 'board'}
              canvasActive={view === 'canvas'}
              onWorkspaceActionsChange={handleSidebarActionsChange}
