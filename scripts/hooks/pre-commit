@@ -26,19 +26,47 @@ PADROES=(
     "senha em URL::[a-z]+://[^/[:space:]]+:[^/@[:space:]]{6,}@"
 )
 
-# Padrões PRIVADOS, um por linha, no mesmo formato `nome::regex`. Ficam FORA do versionamento, no
-# diretório do git (que nunca vai pro clone público). `--git-common-dir` e não `--git-dir`: numa
-# worktree o segundo aponta pra `.git/worktrees/<nome>`, e o arquivo — escrito uma vez, na raiz —
-# não seria achado justamente onde mais se commita em paralelo.
-# Ausente = trava genérica só. É de propósito: máquina nova protege contra chave vazada desde o
-# primeiro commit, e quem tem nome interno pra esconder escreve o arquivo uma vez.
-PRIVADOS="$(git rev-parse --git-common-dir)/hooks-padroes-privados"
-if [[ -f "$PRIVADOS" ]]; then
+# Padrões PRIVADOS, um por linha, no mesmo formato `nome::regex`. Ficam FORA do versionamento — é o
+# lugar do que não pode aparecer num repo público.
+#
+# DOIS caminhos, os dois lidos: o da MÁQUINA (`~/.config/git/`, ou $XDG_CONFIG_HOME) e o do REPO
+# (dentro do .git). O da máquina é o que importa: o do repo morre no `git clone` — some justamente
+# no clone novo, que é onde o descuido acontece. O do repo fica pro que é específico daquele
+# checkout. `--git-common-dir` e não `--git-dir`: numa worktree o segundo aponta pra
+# `.git/worktrees/<nome>`, e o arquivo — escrito uma vez, na raiz — não seria achado justamente
+# onde mais se commita em paralelo.
+# Nenhum dos dois = trava genérica só. É de propósito: máquina nova protege contra chave vazada
+# desde o primeiro commit, e quem tem nome interno pra esconder escreve o arquivo uma vez.
+#
+# Os três `exit 1` abaixo são deliberados: numa trava, "não consegui carregar o padrão" tem que
+# parar o commit, nunca virar "procurei e não achei". Os dois casos são de SETUP quebrado (permissão
+# trocada, regex com typo), não de uso normal — e um deles some justamente quando mais importa.
+_gitdir="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+for PRIVADOS in "${XDG_CONFIG_HOME:-$HOME/.config}/git/hooks-padroes-privados" \
+                ${_gitdir:+"$_gitdir/hooks-padroes-privados"}; do
+    [[ -e "$PRIVADOS" ]] || continue
+    # Existe mas não lê: sem isto o `while` falhava e o hook seguia com a lista genérica, deixando
+    # justamente os nomes internos sem checagem — com uma linha de stderr que some no meio da saída
+    # do commit (e nem aparece em cliente gráfico).
+    if [[ ! -r "$PRIVADOS" ]]; then
+        echo "pre-commit: $PRIVADOS existe mas não pôde ser lido — trava incompleta, commit recusado." >&2
+        exit 1
+    fi
     while IFS= read -r linha || [[ -n "$linha" ]]; do
         [[ -z "${linha// }" || "$linha" == \#* ]] && continue
+        # Regex com typo: `grep -E` sai com 2 (erro de sintaxe), e o `|| true` lá embaixo engole
+        # isso igual a 1 (sem match) — a linha nunca seria de fato procurada. Este arquivo é escrito
+        # à mão, então é o lugar mais provável de ter um parêntese sem fechar.
+        # rc do grep: 0 = casou, 1 = não casou, >=2 = ERRO (sintaxe). Com stdin vazio o normal é 1;
+        # tratar 1 como falha rejeitava toda regex válida — e a trava recusaria todo commit.
+        grep -Eq -- "${linha#*::}" </dev/null 2>/dev/null
+        if (( $? > 1 )); then
+            echo "pre-commit: padrão inválido em $PRIVADOS -> ${linha%%::*}" >&2
+            exit 1
+        fi
         PADROES+=("$linha")
     done < "$PRIVADOS"
-fi
+done
 
 # IP da tailnet: 100.64.0.0/10 é o CGNAT que a Tailscale usa. O bloco 100.64.0.x fica de FORA
 # porque é o que a documentação e o peers.json.example usam como exemplo — bloquear o exemplo
