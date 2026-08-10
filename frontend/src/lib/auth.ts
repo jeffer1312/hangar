@@ -281,8 +281,13 @@ function rollbackAddEntry(
   if (prev) {
     // Entrada EXISTENTE atualizada por esta transação: reverte só se ainda estiver como a
     // transação deixou — rotação de token na mesma entrada durante o probe não é desfeita.
-    if (i >= 0 && escrito && serverFingerprint(list[i]) === serverFingerprint(escrito)) {
-      list[i] = prev;
+    // Compara só o que a transação escreveu de CREDENCIAL (id+baseUrl+token). O label é
+    // preservado: um rename concorrente durante o probe não pode impedir a reversão do token
+    // que falhou (serverFingerprint inclui label e dava mismatch calado).
+    const mesmaCredencial = (a: Server, b: Server) =>
+      a.id === b.id && a.baseUrl === b.baseUrl && a.token === b.token;
+    if (i >= 0 && escrito && mesmaCredencial(list[i], escrito)) {
+      list[i] = { ...list[i], token: prev.token, baseUrl: prev.baseUrl };
     }
   } else if (i >= 0) {
     list.splice(i, 1);

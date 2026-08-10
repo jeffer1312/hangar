@@ -22,7 +22,7 @@ let cookieJar = '';
 (globalThis as any).window = { location: { origin: 'http://casa:8765' } };
 
 const { mergeServers, validarPareamento, onServersChanged, removeServer,
-        addServer, updateServer, listServers, selectServer, getActiveId, serverFingerprint, snapshotRemocao, removalStillMatches,
+        addServer, updateServer, renameServer, listServers, selectServer, getActiveId, serverFingerprint, snapshotRemocao, removalStillMatches,
         addServerWithRollback } = await import('./auth');
 
 const S = (id: string, baseUrl: string, token = 't') => ({ id, label: id, baseUrl, token });
@@ -366,6 +366,22 @@ describe('addServerWithRollback', () => {
     expect((globalThis as any).localStorage.getItem('cp_active')).toBeNull();
     // entrada nova do add não permanece
     expect(listServers().find((s) => s.baseUrl === 'http://novo:9999')).toBeUndefined();
+  });
+
+  it('rename concorrente na própria entrada NÃO impede a reversão do token', async () => {
+    const { casa } = reset();
+    let rejectProbe!: (e: Error) => void;
+    const pendente = new Promise<void>((_res, rej) => { rejectProbe = rej; });
+    // update em casa (mesma baseUrl já cadastrada) com probe pendente
+    const p = addServerWithRollback('http://casa:8765', 'tok-casa-novo', () => pendente);
+    await Promise.resolve(); await Promise.resolve();
+    // durante o probe, OUTRA view renomeia a MESMA entrada que o add tocou
+    renameServer(casa.id, 'Casa nova');
+    rejectProbe(new Error('falhou'));
+    await expect(p).rejects.toThrow('falhou');
+    // o token que falhou NUNCA fica gravado; o label concorrente é preservado
+    expect(listServers().find((s) => s.id === casa.id)!.token).toBe('tok-casa');
+    expect(listServers().find((s) => s.id === casa.id)!.label).toBe('Casa nova');
   });
 
   it('rollback NÃO sobrescreve rotação de token na PRÓPRIA entrada durante o probe (round 2)', async () => {
