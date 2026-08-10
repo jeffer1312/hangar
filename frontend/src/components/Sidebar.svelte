@@ -379,10 +379,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     if (!el?.closest?.('.sess-row')) hpLeave();
   }
 
-  async function saveEdit(old: string, serverId: string) {
-    const nv = editValue.trim();
-    editing = null;
-    if (!nv || nv === old) return;
+  // Núcleo do rename (inline E diálogo da sidebar recolhida): mira o servidor dono, renomeia e
+  // restaura. `old` é o nome ANTIGO (chave tmux); `nv` já validado/trimado pelo chamador.
+  async function doRename(nv: string, old: string, serverId: string) {
     const prev = getActiveId(); // C1: save before pointing at target server
     selectServer(serverId);
     try {
@@ -393,6 +392,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
       if (prev && prev !== serverId) selectServer(prev); // C1: restore so open chat stays on its server
       // SSE stream emitirá a sessão renomeada automaticamente
     }
+  }
+  function saveEdit(old: string, serverId: string) {
+    const nv = editValue.trim();
+    editing = null;
+    if (!nv || nv === old) return;
+    void doRename(nv, old, serverId);
   }
   function onEditKey(e: KeyboardEvent, old: string) {
     if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
@@ -495,11 +500,30 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 
   const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+  // Sidebar recolhida (pin OU override do board/canvas): a <aside> sai do DOM e a edição inline
+  // não existe — Rename do menu de contexto abre um diálogo acessível (ConfirmDialog + input,
+  // mesmo padrão do modal de Adicionar servidor em ServidoresSettings). Com a sidebar visível o
+  // inline continua como sempre foi.
+  let renameDialog = $state<{ old: string; serverId: string } | null>(null);
+  let renameValue = $state('');
   function menuRename() {
     if (!menu) return;
-    editing = `${menu.serverId}::${menu.name}`;
-    editValue = menu.name;
+    if (sidebarPin.collapsed) {
+      renameValue = menu.name;
+      renameDialog = { old: menu.name, serverId: menu.serverId };
+    } else {
+      editing = `${menu.serverId}::${menu.name}`;
+      editValue = menu.name;
+    }
     closeMenu();
+  }
+  function submitRenameDialog() {
+    if (!renameDialog) return;
+    const { old, serverId } = renameDialog;
+    const nv = renameValue.trim();
+    renameDialog = null;
+    if (!nv || nv === old) return;
+    void doRename(nv, old, serverId);
   }
   function menuDelete() {
     if (!menu) return;
@@ -1150,6 +1174,34 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 {/if}
 {#if menuMsg}<div class="menu-toast" role="status">{menuMsg}</div>{/if}
 
+<!-- Renomear com a sidebar RECOLHIDA: a <aside> está fora do DOM (sem edição inline) — diálogo
+     acessível com input, mesmo padrão do modal de Adicionar servidor. Enter confirma, Esc
+     cancela (ModalDialog). -->
+{#if renameDialog}
+  {@const rd = renameDialog}
+  <ConfirmDialog title="Renomear sessão" aria="Renomear sessão" role="dialog"
+    fallbackFocus={acctBtnEl}
+    onClose={() => (renameDialog = null)}
+    actions={[
+      { label: 'Cancelar', onClick: () => (renameDialog = null) },
+      { label: 'Renomear', kind: 'primary', disabled: !renameValue.trim() || renameValue === rd.old, onClick: submitRenameDialog },
+    ]}>
+    <input
+      class="rename-dialog-input"
+      bind:value={renameValue}
+      use:autofocus
+      autocomplete="off"
+      autocorrect="off"
+      autocapitalize="off"
+      spellcheck={false}
+      aria-label="Novo nome da sessão"
+      onkeydown={(e) => {
+        if (e.key === 'Enter' && renameValue.trim() && renameValue !== rd.old) submitRenameDialog();
+      }}
+    />
+  </ConfirmDialog>
+{/if}
+
 <!-- Gerenciador git aberto pelo menu de contexto (repo da sessao, sem abrir o chat). -->
 {#if gitSheet}
   <Git open={true} sessionName={gitSheet.name} desktop={true} onClose={closeGitSheet} />
@@ -1643,6 +1695,14 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     background: var(--surface-inset); border: 1px solid var(--accent); border-radius: var(--radius-md);
     color: var(--text-primary); font-size: var(--text-sm); outline: none;
   }
+  /* Input do diálogo de rename (sidebar recolhida) — mesma família visual do .sess-edit. */
+  .rename-dialog-input {
+    width: 100%; height: 44px; padding: 0 var(--space-3);
+    background: var(--surface-inset); border: 1px solid var(--border-default); border-radius: var(--radius-md);
+    color: var(--text-primary); font-family: var(--font-ui); font-size: var(--text-sm); outline: none;
+  }
+  .rename-dialog-input::placeholder { color: var(--text-muted); }
+  .rename-dialog-input:focus { border-color: var(--accent); }
   .sess-del {
     width: 22px; height: 22px; min-height: 0; flex-shrink: 0; border-radius: var(--radius-sm);
     color: var(--text-muted); font-size: var(--text-base); line-height: 1; margin-right: 2px;
