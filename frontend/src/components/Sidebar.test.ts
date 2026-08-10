@@ -506,4 +506,39 @@ describe('Sidebar — trilho original no modo rail', () => {
     expect(document.querySelector('.side-views')).toBeNull();
     unmount(t.comp);
   });
+
+  it('fold sob override do Board/Canvas não muda preferred', async () => {
+    navMode.mode = 'rail';
+    sidebarPin.setUser(false);   // preferência do usuário: expandida
+    comStore([{ id: 'srv-a', label: 'Servidor A', sessions: [sess('hangar', 'srv-a', 'idle')] }]);
+    const t = montar();
+    await tick();
+    // override DEPOIS do mount (o $effect do mount limparia um override pré-montado)
+    sidebarPin.setForced(true);
+    await tick();
+    const fold = document.querySelector<HTMLButtonElement>('.fold-btn')!;
+    expect(fold.disabled).toBe(true);
+    fold.click();
+    await tick();
+    expect(sidebarPin.preferred).toBe(false);
+    expect(localStorage.getItem('cp_sidebar_collapsed')).not.toBe('1');
+    sidebarPin.setForced(null);
+    unmount(t.comp);
+  });
+
+  it('fold sem override continua alternando preferred', async () => {
+    navMode.mode = 'rail';
+    sidebarPin.setUser(false);
+    sidebarPin.setForced(null);
+    comStore([{ id: 'srv-a', label: 'Servidor A', sessions: [sess('hangar', 'srv-a', 'idle')] }]);
+    const t = montar();
+    await tick();
+    const fold = document.querySelector<HTMLButtonElement>('.fold-btn')!;
+    expect(fold.disabled).toBe(false);
+    fold.click();
+    await tick();
+    expect(sidebarPin.preferred).toBe(true);
+    sidebarPin.setForced(null);
+    unmount(t.comp);
+  });
 });

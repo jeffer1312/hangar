@@ -1170,7 +1170,14 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     <!-- Recolher e a ULTIMA linha da barra: identidade no topo, chrome do app no rodape.
          Nao ficou no cabecalho porque os tres controles a direita espremiam o nome ("Han…"),
          e nao no meio do rodape porque entre as sessoes e o avatar ele lia como item solto. -->
-    <button class="fold-btn" onclick={() => sidebarPin.toggleUser()} aria-label="Recolher barra" title="Recolher">
+    <button class="fold-btn" disabled={sidebarPin.forcedOverride === true}
+      onclick={() => { if (sidebarPin.forcedOverride === true) return; sidebarPin.toggleUser(); }}
+      aria-label={sidebarPin.forcedOverride === true
+        ? 'Barra recolhida no Quadro/Canvas'
+        : (sidebarPin.collapsed ? 'Expandir barra' : 'Recolher barra')}
+      title={sidebarPin.forcedOverride === true
+        ? 'Quadro/Canvas recolhe a barra — ajuste ao sair'
+        : (sidebarPin.collapsed ? 'Expandir' : 'Recolher')}>
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
         <rect x="3" y="4" width="18" height="16" rx="2"/>
         <line x1="9" y1="4" x2="9" y2="20"/>
