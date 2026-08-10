@@ -228,9 +228,21 @@
     (!!currentSession && currentSession !== 'null' && currentSession !== 'undefined' && splitSessions.length === 0)
     || !!overlaySession,
   );
-  // A barra de abas existe somente no modo 'tabs' (decisão do usuário: o padrão é o RAIL, que
-  // vive na própria Sidebar); o toggle do contexto mora no extremo direito dela nesse modo.
-  const barraDeAbas = $derived(barraRecolhida && !terminalMaximizado && navMode.mode === 'tabs');
+  // A barra do topo é PERMANENTE (decisão do usuário, 10/08/2026, referência OpenCode): ela é o
+  // chrome do app — nova sessão, mais opções, configurações e o toggle do painel de contexto moram
+  // ali, sempre no mesmo lugar. O que a configuração Trilho/Abas decide não é a existência da
+  // barra, e sim ONDE ficam as SESSÕES: no trilho da esquerda ou como abas dentro dela (o próprio
+  // SessionTabs esconde a tira quando o modo é trilho).
+  // Antes ela nascia só no modo 'tabs' e com a sidebar recolhida — os mesmos comandos apareciam
+  // ora aqui, ora no rodapé do trilho, dependendo de dois estados.
+  // Terminal maximizado continua sendo exceção: ali o painel cobre a tela inteira de propósito.
+  const barraDeAbas = $derived(!terminalMaximizado);
+  // Modo abas = as sessões moram na barra do topo, e a barra lateral some. Sem isto a MESMA lista
+  // aparecia nos dois lugares ao mesmo tempo (relatado 10/08/2026): antes a tira de abas exigia
+  // sidebar recolhida, e ao tornar a barra permanente essa segunda condição se perdeu.
+  // Por ora ela some por completo no modo abas — decisão do usuário, com a ressalva dele de que a
+  // barra deve ganhar outras coisas no futuro.
+  const sessoesNasAbas = $derived(navMode.mode === 'tabs' && !terminalMaximizado);
   // Toggle do painel de contexto FORA do painel: barra de abas (modo tabs) OU rodapé do rail
   // (modo rail com a sidebar recolhida e visível). Com toggle externo o painel não duplica o
   // botão nem vira aba vertical quando recolhido (follow-up visual).
@@ -286,12 +298,62 @@
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   });
+
+  // Largura REAL da faixa da esquerda, publicada em --cp-nav-w pro chat manter a coluna de leitura
+  // no mesmo lugar quando os painéis abrem e fecham (é o que OpenCode e Claude fazem: o centro do
+  // texto não se mexe). Tem de ser MEDIDA, não constante: são quatro estados diferentes — expandida
+  // (270px de base, mas o usuário arrasta a borda e muda isso), trilho de 56px, escondida com o
+  // terminal maximizado, e ZERO no modo abas, onde a Sidebar nem chega a existir no DOM.
+  // ResizeObserver e não $effect sobre o estado: o arrasto da borda muda a largura sem passar por
+  // nenhuma prop daqui.
+  //
+  // MEDE A BORDA ESQUERDA DO CONTEÚDO, não a largura da sidebar — e a diferença não é estilo, é o
+  // que funciona. A `.sidebar-wrap` é `display: contents`: ela não gera caixa nenhuma, então um
+  // ResizeObserver nela devolve 0 mesmo com o trilho de 56px desenhado na tela (medido aqui:
+  // navW=0px com `.sidebar` real de 56px). E observar `.sidebar` direto traria outro problema — ela
+  // some do DOM no modo abas, e aí não há elemento pra observar.
+  // O `.desktop-com-terminal` existe SEMPRE e é irmão flex da sidebar, então o `left` dele é, por
+  // construção, exatamente o quanto a faixa da esquerda ocupa: 0 no modo abas, 56 no trilho, a
+  // largura arrastada quando expandida. Uma medida só, sem casos especiais.
+  let navEl: HTMLElement | undefined = $state();
+  let navW = $state(0);
+  $effect(() => {
+    if (!navEl) { navW = 0; return; }
+    const medir = () => {
+      if (!navEl) return;
+      const l = Math.round(navEl.getBoundingClientRect().left);
+      if (Math.abs(l - navW) > 1) navW = l;
+    };
+    medir();
+    const ro = new ResizeObserver(medir);
+    ro.observe(navEl);
+    // A sidebar encolher/expandir muda o `left` daqui sem mudar o TAMANHO deste elemento em alguns
+    // casos (janela fixa, flex redistribuindo) — o observer do irmão cobre isso.
+    const pai = navEl.parentElement;
+    if (pai) ro.observe(pai);
+    return () => ro.disconnect();
+  });
 </script>
 
 <svelte:window onkeydown={onShellKey} />
 
-<div class="desktop-shell">
-  <div class="sidebar-wrap" class:tp-max-hide={terminalMaximizado && barraRecolhida}>
+<div class="desktop-shell" style:--cp-nav-w={`${navW}px`}>
+  {#if barraDeAbas}
+    <!-- PRIMEIRA faixa da janela, fora da linha sidebar|conteúdo: ela atravessa a tela inteira,
+         inclusive por cima do trilho. Enquanto morava dentro da coluna do conteúdo, começava onde a
+         sidebar terminava. Terminal maximizado a esconde junto com o resto (`barraDeAbas` já cobre).
+         Ações delegam à bridge da Sidebar, que segue montada mesmo escondida no modo abas. -->
+    <SessionTabs {currentKey} onSelect={openSession}
+                 onOpenConfig={() => abrirConfig('root', getActiveId())}
+                 {ctxDisponivel} />
+  {/if}
+
+  <div class="shell-linha">
+  <!-- ESCONDIDA, não desmontada, no modo abas: a barra do topo delega "nova sessão", "mais opções" e
+       o menu de contexto da aba pra dentro da Sidebar (sidebarBridge). Um `{#if}` aqui tiraria ela do
+       DOM e esses três botões virariam nada. -->
+  <div class="sidebar-wrap" class:oculta={sessoesNasAbas}
+       class:tp-max-hide={terminalMaximizado && barraRecolhida}>
     <Sidebar {currentSession} onSelect={onNavigateToChat} {onCompare}
              boardActive={view === 'board'}
              canvasActive={view === 'canvas'}
@@ -301,15 +363,7 @@
              {ctxDisponivel} />
   </div>
 
-  <div class="desktop-com-terminal">
-  {#if barraDeAbas}
-    <!-- Sidebar recolhida (trilho ou board/canvas): a navegação de sessões vira abas no topo.
-         Terminal maximizado esconde a faixa junto com o resto (tp-max-hide cobre só a .desktop-main,
-         a aba precisa da condição própria). Ações delegam à bridge da Sidebar ainda montada. -->
-    <SessionTabs {currentKey} onSelect={openSession}
-                 onOpenConfig={() => abrirConfig('root', getActiveId())}
-                 {ctxDisponivel} />
-  {/if}
+  <div class="desktop-com-terminal" bind:this={navEl}>
   <main class="desktop-main" class:split={splitSessions.length > 0} class:has-attention={hasAttention}
         class:tp-max-hide={terminalMaximizado}>
     {#if hasAttention}
@@ -403,7 +457,10 @@
       <div class="desktop-empty" class:compensa-faixa={barraDeAbas}>
         <div class="empty-mark"><HangarMark size={72} /></div>
         <p class="empty-title">Selecione uma sessão</p>
-        <p class="empty-sub">{barraDeAbas ? 'ou crie uma nova em + na faixa de abas' : 'ou crie uma nova na barra lateral'}</p>
+        <!-- A dica aponta pra ONDE as sessões estão, e isso agora é `sessoesNasAbas`, não a
+             existência da barra: ela é permanente, então `barraDeAbas` mandaria todo mundo pras
+             abas mesmo com a lista na barra lateral. -->
+        <p class="empty-sub">{sessoesNasAbas ? 'ou crie uma nova em + na faixa de abas' : 'ou crie uma nova na barra lateral'}</p>
       </div>
     {/if}
   </main>
@@ -411,6 +468,7 @@
                  onClose={() => (terminalOpen = false)}
                  onMaximizar={(v) => (terminalMaximizado = v)} />
   </div>
+  </div><!-- /.shell-linha -->
 
   <WorkspaceCommandPalette
     open={commandOpen}
@@ -423,11 +481,31 @@
 </div>
 
 <style>
+  /* COLUNA, não linha: a barra do topo é a primeira faixa e atravessa a janela inteira — inclusive
+     por cima do trilho, como no OpenCode (decisão do usuário, 10/08/2026). Antes ela vivia dentro
+     da coluna do conteúdo e por isso começava onde a sidebar terminava.
+     A linha de antes (sidebar | conteúdo) virou a `.shell-linha` logo abaixo, com o mesmo
+     comportamento — só deixou de ser o elemento raiz. */
   .desktop-shell {
     display: flex;
+    flex-direction: column;
     height: 100vh;
     width: 100%;
     overflow: hidden;
+  }
+  .shell-linha {
+    display: flex;
+    flex: 1;
+    /* SEM fundo próprio, de propósito. Cheguei a pintar `--surface-inset` aqui achando que a costura
+       vertical entre o trilho e o chat era diferença de cor — não era: medido na tela do usuário,
+       `.shell-linha`, `.message-list`, `.chat-screen` e `body` davam todos rgb(248,246,242). A
+       causa é a SOMBRA do cartão flutuante do trilho sendo coberta pela coluna do chat (ver o
+       z-index em Sidebar.svelte). Pintar aqui era tinta sobre tinta igual. */
+    /* min-height/min-width: 0 pelo mesmo motivo documentado na .desktop-com-terminal — item flex
+       nasce com min-* auto e se recusa a encolher abaixo do conteúdo, empurrando o painel de
+       contexto pra fora da janela. */
+    min-height: 0;
+    min-width: 0;
   }
   /* Coluna AQUI, no wrapper — a .desktop-main segue exatamente como estava (regra abaixo intocada),
      entao .desktop-main.split continua "display: flex" e os dois chats do split seguem lado a lado.
@@ -477,6 +555,9 @@
      TAMBEM no trilho (`barraRecolhida`) -- fixada aberta continua visivel, dividindo a largura com
      o painel. */
   .sidebar-wrap { display: contents; }
+  /* `display: none` no WRAP não bastaria: ele é `display: contents`, então quem ocupa espaço é a
+     `.sidebar` filha — esconder o pai que não gera caixa não esconde a filha. Alcança a filha. */
+  .sidebar-wrap.oculta :global(.sidebar) { display: none; }
   .sidebar-wrap.tp-max-hide { display: none; }
   .workspace-attention-layer {
     position: absolute;

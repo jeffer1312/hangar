@@ -1139,37 +1139,13 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   <!-- Rodapé (estilo Claude): botão da conta (avatar -> menu de conta) + CTA "Nova sessão". Tudo que
        era config/conta (servidores, notificações, horas silenciosas, reconectar, sair) vive no menu. -->
   <div class="side-foot" class:rail={!expanded}>
-    <div class="account-anchor">
-      <!-- Task 4c: a engrenagem abre o modal de Configurações DIRETO (root no servidor ativo).
-           Ponto colorido e tooltip do servidor ativo seguem. O AccountMenu desktop saiu (Step 2);
-           o drawer mobile (SessionList) continua usando o componente extraído na 4a. -->
-      <button class="acct-btn" bind:this={acctBtnEl} onclick={() => abrirConfig('root', getActiveId())} aria-haspopup="dialog" aria-label="Configurações e servidor" title={expanded ? undefined : accountName}>
-        <span class="acct-chip" aria-hidden="true" style="--pt: {accountColor};">
-          <!-- Engrenagem, e não iniciais: o menu é a porta de Configurações (Aparência, servidor,
-               Motores), e iniciais em círculo liam como avatar de pessoa. O PONTO mantém a outra
-               metade da informação — em qual servidor você está —, na mesma cor que agrupa a lista. -->
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="3"/>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6h.09A1.65 1.65 0 0 0 10.6 3.09V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-          </svg>
-          <span class="acct-dot"></span>
-        </span>
-        {#if expanded}
-        <span class="acct-who">
-          <span class="acct-name">{accountName}</span>
-          <span class="acct-sub">{accountSub}</span>
-        </span>
-        {/if}
-      </button>
-    </div>
+    <!-- A engrenagem e o kebab MUDARAM pra barra do topo (10/08/2026, decisão do usuário):
+         a barra é permanente, então os comandos do app moram nela, num lugar só. O ponto do
+         servidor ativo foi junto com a engrenagem (SessionTabs). Aqui fica só o que é do
+         trilho: criar sessão e recolher/expandir. -->
     <button class="cta-new" onclick={() => (showCreate = true)} aria-label="Nova sessão" title="Nova sessão">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
       {#if expanded}<span>Nova</span>{/if}
-    </button>
-    <!-- Controles moram TODOS no rodape: identidade em cima, sessoes no meio, controle embaixo.
-         Antes o kebab ficava no cabecalho e o recolher no rodape — duas zonas de controle. -->
-    <button class="kebab-btn" class:active={kebabOpen} onclick={openKebab} aria-haspopup="menu" aria-expanded={kebabOpen} aria-label="Mais opções" title="Buscar, Arquivo, Custos, Agrupar">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
     </button>
     <!-- Recolher e a ULTIMA linha da barra: identidade no topo, chrome do app no rodape.
          Nao ficou no cabecalho porque os tres controles a direita espremiam o nome ("Han…"),
@@ -1399,6 +1375,14 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 <style>
   .sidebar {
     position: relative;   /* ancora o resize-handle */
+    /* ACIMA da coluna do chat, pra a SOMBRA desta barra desenhar por cima dela. Sem isto a coluna do
+       chat, que vem depois no DOM e pinta fundo opaco, cobria a metade direita da sombra e sobrava
+       só a esquerda — degradê suave de um lado, corte reto exatamente na fronteira das duas colunas.
+       Lido como "o trilho tem outro fundo", e não era: medido na tela do usuário em 10/08/2026,
+       .shell-linha, .message-list, .chat-screen e body davam TODOS rgb(248,246,242). Cor idêntica,
+       sombra pela metade. A sombra é grande de propósito no modo caixa solta
+       (0 18px 44px rgba(0,0,0,.34)), então ela invade bastante a coluna vizinha. */
+    z-index: 1;
     width: 270px;
     flex-shrink: 0;
     height: 100%;
@@ -1526,7 +1510,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     margin: var(--space-1) calc(var(--space-2) * -1) 0;
     padding: var(--space-2) var(--space-2) 0;
   }
-  .sidebar.floating .side-foot.rail .acct-chip { width: 36px; height: 36px; }
 
   /* ── Polish: foco de teclado + transições de estado ──────────────────────
      Foco visível (dev-tool: anel accent), inset pra nao ser cortado pelo overflow da sidebar/lista.
@@ -1578,12 +1561,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .select-toggle-btn.active { color: var(--accent); background: var(--accent-dim); }
 
   /* ── Kebab "⋯" do header + seu popover (nav secundária + agrupamento) ── */
-  .kebab-btn {
-    flex-shrink: 0; width: 36px; height: 36px;
-    border-radius: var(--radius-md); color: var(--text-secondary);
-    display: inline-flex; align-items: center; justify-content: center;
-  }
-  .kebab-btn:hover, .kebab-btn.active { background: var(--bg-hover); color: var(--text-primary); }
   /* Popover do kebab: mesmo visual do menu de contexto (bg/borda/sombra), aberto pra baixo. */
   .kebab-menu {
     position: fixed; z-index: 41; min-width: 220px; padding: 4px;
@@ -2003,38 +1980,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     border-top: 1px solid var(--border-subtle); padding-top: var(--space-2); margin-top: var(--space-1);
   }
   .side-foot.rail { flex-direction: column; }
-  .account-anchor { position: relative; flex: 1; min-width: 0; }
-  .side-foot.rail .account-anchor { flex: 0 0 auto; }
-  .acct-btn {
-    display: flex; align-items: center; gap: var(--space-2); width: 100%; min-width: 0;
-    padding: var(--space-1) var(--space-2); justify-content: flex-start; text-align: left;
-    color: var(--text-primary); border-radius: var(--radius-md);
-  }
-  .acct-btn:hover { background: var(--bg-hover); }
-  .side-foot.rail .acct-btn { justify-content: center; padding: var(--space-1); }
   /* Mesmo vocabulario dos chips de sessao: superficie que acompanha a transparencia + anel de
      accent pra dizer "este e voce". O gradiente anterior tinha um roxo CHUMBADO (#a06de0) que nao
      existe em token nenhum: com a paleta vinda do papel de parede, o accent mudava e ele nao. */
   /* NÃO é avatar de pessoa: é o SERVIDOR ativo (a engrenagem abre Configurações). Círculo com
      iniciais lia como gente — daí a pergunta "o que é esse NJ?". Quadrado arredondado é convenção
      de coisa, e o ponto no canto traz a cor daquele servidor, a mesma que já agrupa a lista. */
-  .acct-chip {
-    position: relative;
-    width: 30px; height: 30px; flex-shrink: 0; border-radius: var(--radius-md);
-    display: grid; place-items: center;
-    background: var(--surface-raised);
-    border: 1px solid var(--border);
-    color: var(--text-secondary);
-  }
-  .acct-dot {
-    position: absolute; right: -2px; bottom: -2px;
-    width: 9px; height: 9px; border-radius: 50%;
-    background: var(--pt);
-    box-shadow: 0 0 0 2px var(--bg-elevated);
-  }
-  .acct-who { min-width: 0; display: flex; flex-direction: column; }
-  .acct-name { font-size: var(--text-sm); font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .acct-sub { font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .cta-new {
     display: flex; align-items: center; gap: var(--space-1); flex-shrink: 0;
     height: 36px; padding: 0 var(--space-3);

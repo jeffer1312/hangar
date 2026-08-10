@@ -104,13 +104,17 @@ beforeEach(() => {
 });
 
 describe('DesktopShell — empty state compensa a faixa (follow-up visual)', () => {
-  it('sem barra de abas (sidebar expandida): empty SEM compensação', async () => {
+  // A barra do topo é PERMANENTE desde 10/08/2026 (decisão do usuário): ela não depende mais de a
+  // sidebar estar recolhida nem do modo de navegação. O que o modo decide é só ONDE ficam as
+  // sessões — tira de abas no topo, ou lista na barra lateral. Os testes abaixo travam essas duas
+  // coisas separadamente, porque foi juntá-las que produziu a lista duplicada em tela.
+  it('a barra do topo existe mesmo com a sidebar expandida', async () => {
     const t = montar(null);
     await tick();
-    expect(document.querySelector('.tabs-bar')).toBeNull();
+    expect(document.querySelector('.tabs-bar')).not.toBeNull();
     const empty = document.querySelector<HTMLElement>('.desktop-empty')!;
     expect(empty).not.toBeNull();
-    expect(empty.classList.contains('compensa-faixa')).toBe(false);
+    expect(empty.classList.contains('compensa-faixa')).toBe(true);
     unmount(t.comp);
   });
 
@@ -150,14 +154,29 @@ describe('DesktopShell — empty state compensa a faixa (follow-up visual)', () 
     unmount(t.comp);
   });
 
-  it('modo RAIL (padrão): sidebar recolhida NÃO monta a barra de abas', async () => {
+  it('modo RAIL: a barra existe, mas SEM a tira de sessões (elas ficam no trilho)', async () => {
     navMode.mode = 'rail';
     const t = montar(null);
     await tick();
     sidebarPin.setForced(true);
     await tick();
-    expect(document.querySelector('.tabs-bar')).toBeNull();
-    expect(document.querySelector('.tab-ctx')).toBeNull();
+    expect(document.querySelector('.tabs-bar')).not.toBeNull();
+    expect(document.querySelector('.tab-ctx')).not.toBeNull();
+    // A tira some; o espaçador entra no lugar dela pra as ações seguirem à direita.
+    expect(document.querySelector('.tabs-strip')).toBeNull();
+    expect(document.querySelector('.tabs-vazio')).not.toBeNull();
+    // E a barra lateral continua visível: é onde as sessões estão neste modo.
+    expect(document.querySelector('.sidebar-wrap.oculta')).toBeNull();
+    unmount(t.comp);
+  });
+
+  it('modo ABAS: a tira aparece e a barra lateral é escondida (lista num lugar só)', async () => {
+    navMode.mode = 'tabs';
+    const t = montar(null);
+    await tick();
+    expect(document.querySelector('.tabs-strip')).not.toBeNull();
+    // Escondida, NÃO desmontada: a barra do topo delega +/⋯/menu pra dentro da Sidebar via bridge.
+    expect(document.querySelector('.sidebar-wrap.oculta')).not.toBeNull();
     unmount(t.comp);
   });
 
@@ -170,7 +189,7 @@ describe('DesktopShell — empty state compensa a faixa (follow-up visual)', () 
     expect(document.querySelector<HTMLElement>('.empty-sub')!.textContent).toContain('na faixa de abas');
     unmount(t1.comp);
 
-    // modo rail: a faixa não existe -> a dica fala da barra lateral
+    // modo rail: as sessões ficam no trilho -> a dica fala da barra lateral (a faixa segue lá)
     navMode.mode = 'rail';
     const t2 = montar(null);
     await tick();

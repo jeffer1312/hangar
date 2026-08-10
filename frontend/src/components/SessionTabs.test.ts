@@ -9,6 +9,7 @@ import SessionTabs from './SessionTabs.svelte';
 import { sidebarPin } from '../lib/sidebarPin.svelte';
 import { sidebarBridge } from '../lib/sidebarBridge';
 import { ctxPanel } from '../lib/ctxPanel.svelte';
+import { navMode } from '../lib/navMode.svelte';
 
 // Store REATIVO (fixture .svelte.ts): o $derived do SessionTabs re-computa quando o modelo muda —
 // necessário pro teste do foco pós-rename esperar o reflexo do SSE. Mutar via fixtureByServer.
@@ -50,8 +51,58 @@ beforeEach(() => {
   vi.mocked(planBadge).mockReturnValue(null);   // sem plano por padrão (filete ausente)
   comSessao('sess-1');
   ctxPanel.recolhido = false;   // painel de contexto aberto por padrão
+  // A tira de sessões passou a existir SÓ no modo abas (10/08/2026): a barra do topo virou
+  // permanente e o modo decide onde as sessões moram. Estes testes são todos sobre a tira, então
+  // precisam do modo em que ela existe — sem isto o componente monta a barra sem nenhuma aba.
+  navMode.mode = 'tabs';
   // Teste que falha pula o unmount: o DOM vazava pro teste seguinte (abas fantasmas). Limpeza aqui.
   document.body.innerHTML = '';
+});
+
+describe('SessionTabs — a marca alterna Abas <-> Trilho', () => {
+  // A marca ficou sem função quando a barra virou permanente ("expandir barra lateral" não quer
+  // dizer nada no modo abas, onde a lateral está escondida de propósito), então virou o alternador
+  // — pedido do usuário, 10/08/2026.
+  it('clicar troca o modo nos dois sentidos e reflete em aria-pressed', async () => {
+    navMode.mode = 'tabs';
+    const t = montar();
+    await tick();
+    const marca = document.querySelector<HTMLButtonElement>('.tab-expand')!;
+    expect(marca).not.toBeNull();
+    expect(marca.getAttribute('aria-pressed')).toBe('true');
+    marca.click();
+    await tick();
+    expect(navMode.mode).toBe('rail');
+    unmount(t.comp);
+  });
+
+  it('sair das abas destrava a barra lateral (senão ela volta recolhida e parece sem efeito)', async () => {
+    navMode.mode = 'tabs';
+    sidebarPin.setUser(true);          // usuário tinha recolhido antes de ir pras abas
+    const t = montar();
+    await tick();
+    document.querySelector<HTMLButtonElement>('.tab-expand')!.click();
+    await tick();
+    expect(navMode.mode).toBe('rail');
+    expect(sidebarPin.preferred).toBe(false);
+    unmount(t.comp);
+  });
+});
+
+describe('SessionTabs — engrenagem e ponto do servidor (vieram do rodapé do trilho)', () => {
+  // A engrenagem saiu do rodapé da Sidebar e passou a morar aqui (10/08/2026). O PONTO veio junto
+  // de propósito: ele é a única coisa na tela que diz em qual servidor você está, na mesma cor que
+  // agrupa as sessões. Sem este teste, uma limpeza futura tiraria o ponto sem ninguém notar — a
+  // engrenagem continuaria funcionando e só a informação sumiria.
+  it('a engrenagem existe, cita o servidor ativo e carrega o ponto colorido', async () => {
+    const t = montar();
+    await tick();
+    const gear = document.querySelector<HTMLButtonElement>('.tab-config');
+    expect(gear).not.toBeNull();
+    expect(gear?.getAttribute('aria-label')).toContain('Configurações');
+    expect(gear?.querySelector('.tab-srv-dot')).not.toBeNull();
+    unmount(t.comp);
+  });
 });
 
 describe('SessionTabs — expandir sob override do Board/Canvas (round 7)', () => {

@@ -116,21 +116,18 @@ function montar(over: { ctxDisponivel?: boolean } = {}) {
   return { el, comp: comp as never };
 }
 
-describe('Sidebar — engrenagem abre Configurações (Task 4c)', () => {
-  it('nome acessível e aria-haspopup corretos; clique chama abrirConfig("root", srv ativo) uma vez', async () => {
-    authMock.getActiveId.mockReturnValue('srv-b');
+describe('Sidebar — a engrenagem MUDOU pra barra do topo (10/08/2026)', () => {
+  // Plano A da reorganização: a barra do topo virou permanente, então os comandos do app moram nela
+  // — engrenagem e "mais opções" saíram do rodapé do trilho, e só o "+ Nova" ficou nos dois lugares
+  // (pedido do usuário). O teste vive aqui pra travar a AUSÊNCIA: se a engrenagem voltar pro rodapé
+  // sem alguém tirar a da barra, o mesmo comando fica em dois lugares na mesma tela outra vez.
+  // A presença dela (com o ponto do servidor ativo) é coberta em SessionTabs.test.ts.
+  it('o rodapé não tem mais engrenagem nem kebab; o + Nova continua', async () => {
     const t = montar();
     await tick();
-    const gear = document.querySelector<HTMLButtonElement>('.acct-btn');
-    expect(gear).not.toBeNull();
-    expect(gear?.getAttribute('aria-label')).toBe('Configurações e servidor');
-    expect(gear?.getAttribute('aria-haspopup')).toBe('dialog');
-    gear!.focus();
-    expect(document.activeElement).toBe(gear);
-    gear!.click();
-    await tick();
-    expect(navMock).toHaveBeenCalledTimes(1);
-    expect(navMock).toHaveBeenCalledWith('root', 'srv-b');
+    expect(document.querySelector('.acct-btn')).toBeNull();
+    expect(document.querySelector('.kebab-btn')).toBeNull();
+    expect(document.querySelector('.cta-new')).not.toBeNull();
     unmount(t.comp);
   });
 });

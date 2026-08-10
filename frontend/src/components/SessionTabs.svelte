@@ -10,6 +10,8 @@
   import { sidebarPin } from '../lib/sidebarPin.svelte';
   import { sidebarBridge } from '../lib/sidebarBridge';
   import { ctxPanel, alternarCtxPanel } from '../lib/ctxPanel.svelte';
+  import { navMode } from '../lib/navMode.svelte';
+  import { getActiveId, serverColor } from '../lib/auth';
   import HangarMark from './icons/HangarMark.svelte';
   import type { AggSession } from '../lib/types';
 
@@ -27,6 +29,16 @@
   // Sem retain()/release(): DesktopShell é o owner do store (refcount do singleton SSE).
   const model = $derived(buildSessionTabs(sessionsStore.byServer));
 
+  // Servidor ativo, só pro ponto colorido da engrenagem (ver o comentário no template). `getActiveId`
+  // lê localStorage e NÃO é reativo — a dependência que faz isto recalcular é `sessionsStore.servers`,
+  // que muda quando um servidor entra, sai ou troca de estado. É o mesmo par que a Sidebar usa.
+  const servidorAtivo = $derived.by(() => {
+    const lista = sessionsStore.servers;
+    const id = getActiveId();
+    return lista.find((s) => s.id === id) ?? lista[0] ?? null;
+  });
+  const corDoServidor = $derived(servidorAtivo ? serverColor(servidorAtivo.id) : 'var(--text-muted)');
+
   // Roving tabindex: focusedKey é a aba que o USUÁRIO focou (Tab/setas); a ÚNICA com tabindex=0
   // é a focável da vez (focusedKey válido -> currentKey -> primeira). Tudo por refs locais — nada
   // de querySelector global: o app tem OUTRO tablist (TerminalPanel), e um seletor de documento
@@ -43,10 +55,23 @@
   // pin do usuário mudava calado). Com override ativo o botão desabilita (tooltip explica);
   // a preferência só muda quando o usuário decide de verdade, sem override.
   const expandBlocked = $derived(sidebarPin.forcedOverride === true);
-  function expand() {
-    if (sidebarPin.forcedOverride === true) return;   // guard duplo: disabled + handler (teclado)
-    sidebarPin.setUser(false);
+  // A MARCA alterna Abas <-> Trilho (pedido do usuário, 10/08/2026). Ela ficou sem função quando a
+  // barra virou permanente: "expandir barra lateral" não quer dizer nada no modo abas, onde a barra
+  // lateral está escondida de propósito. Como alternador ela ganha o papel que a posição sugere —
+  // é o primeiro elemento da barra, do lado de onde a navegação mora.
+  // Sair do modo abas RESTAURA a barra lateral (setUser(false)): sem isto, quem tivesse recolhido o
+  // trilho antes de ir pras abas voltava pro trilho recolhido e parecia que o botão não fez nada.
+  function alternarModo() {
+    if (navMode.mode === 'tabs') {
+      navMode.mode = 'rail';
+      if (sidebarPin.forcedOverride !== true) sidebarPin.setUser(false);
+    } else {
+      navMode.mode = 'tabs';
+    }
   }
+  const rotuloModo = $derived(navMode.mode === 'tabs'
+    ? 'Mostrar sessões na barra lateral'
+    : 'Mostrar sessões como abas no topo');
 
   // Tabs de ROLE button já respondem a Enter/Space nativamente; as setas movem o FOCO entre elas
   // (padrão tablist). Wrap nas pontas. O onfocus de cada aba atualiza `focusedKey`, então o
@@ -92,12 +117,18 @@
 </script>
 
 <div class="tabs-bar">
-  <button class="tab-expand" onclick={expand} disabled={expandBlocked}
-    aria-label={expandBlocked ? 'Barra recolhida no Quadro/Canvas' : 'Expandir barra lateral'}
-    title={expandBlocked ? 'Quadro/Canvas recolhe a barra — expanda ao sair' : 'Expandir barra lateral'}>
+  <button class="tab-expand" onclick={alternarModo} disabled={expandBlocked}
+    aria-label={expandBlocked ? 'Barra recolhida no Quadro/Canvas' : rotuloModo}
+    aria-pressed={navMode.mode === 'tabs'}
+    title={expandBlocked ? 'Quadro/Canvas recolhe a barra — expanda ao sair' : rotuloModo}>
     <HangarMark size={18} />
   </button>
 
+  <!-- A tira de sessões é a ÚNICA parte da barra que a configuração Trilho/Abas liga e desliga: a
+       barra em si é permanente (ver DesktopShell). No modo trilho as sessões vivem na esquerda, e
+       repeti-las aqui seria a mesma lista em dois lugares na mesma tela. O `tabs-vazio` abaixo
+       ocupa o lugar dela pra que as ações continuem ancoradas à direita. -->
+  {#if navMode.mode === 'tabs'}
   <div class="tabs-strip" role="tablist" aria-label="Sessões" tabindex="-1"
        bind:this={stripEl} onkeydown={onStripKey}>
     {#each model.tabs as tab, i (tabKeyOf(tab.session))}
@@ -126,6 +157,9 @@
       </button>
     {/each}
   </div>
+  {:else}
+    <div class="tabs-vazio" aria-hidden="true"></div>
+  {/if}
 
   {#if model.offlineLabels.length > 0}
     <span class="tab-offline" title={model.offlineLabels.join(', ')}
@@ -136,7 +170,16 @@
 
   <button class="tab-action" onclick={() => sidebarBridge.openCreate()} aria-label="Nova sessão" title="Nova sessão">+</button>
   <button class="tab-action" onclick={(e) => sidebarBridge.openKebab(e)} aria-haspopup="menu" aria-label="Mais opções" title="Buscar, Arquivo, Custos, Agrupar">⋯</button>
-  <button class="tab-action" onclick={onOpenConfig} aria-label="Configurações" title="Configurações">⚙</button>
+  <!-- O ponto colorido veio junto com a engrenagem quando ela saiu do rodapé do trilho: ele não é
+       enfeite, é a única coisa na tela que diz EM QUAL SERVIDOR você está, na mesma cor que agrupa
+       as sessões por servidor. Tirar a engrenagem de lá sem trazer o ponto perderia essa metade da
+       informação sem ninguém notar. -->
+  <button class="tab-action tab-config" onclick={onOpenConfig}
+    aria-label={`Configurações · ${servidorAtivo?.label ?? 'servidor'}`}
+    title={`Configurações · ${servidorAtivo?.label ?? 'servidor'}`}>
+    ⚙
+    <span class="tab-srv-dot" style:background={corDoServidor} aria-hidden="true"></span>
+  </button>
   <!-- Toggle do painel de contexto (follow-up visual): vive no EXTREMO DIREITO da barra, como o
        OpenCode. MESMO ícone do .ctx-fold (painel dividido) e alterna o store nos dois sentidos.
        Sem painel montado: desabilitado com tooltip (decisão do usuário). -->
@@ -170,6 +213,22 @@
     display: flex;
     overflow-x: auto;
     scrollbar-width: none;
+  }
+  /* Modo trilho: sem a tira, algo precisa empurrar as ações pro extremo direito — senão elas
+     encostam no botão de expandir, à esquerda, e a barra fica com um bloco de ícones no canto
+     errado. Mesmo `flex: 1` da tira, sem conteúdo. */
+  .tabs-vazio { flex: 1; min-width: 0; }
+
+  .tab-config { position: relative; }
+  .tab-srv-dot {
+    position: absolute;
+    right: 3px;
+    bottom: 3px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    /* Anel da cor da barra: sobre a engrenagem o ponto encostava no traço do ícone e virava borrão. */
+    box-shadow: 0 0 0 1.5px var(--bg-base);
   }
   .tabs-strip::-webkit-scrollbar { display: none; }
   .tab {
