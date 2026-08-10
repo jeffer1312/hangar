@@ -2,7 +2,7 @@
 // Round 5: addBusy na transação de servidor — botão Add desabilitado durante o await, uma tentativa
 // por clique, erro/retry visível. O Sidebar monta uma árvore pesada; os componentes de trabalho
 // (sheets, menus, git, loop) viram stubs — o que importa aqui é o fluxo de adicionar servidor.
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick, createRawSnippet } from 'svelte';
 import Sidebar from './Sidebar.svelte';
 import * as auth from '../lib/auth';
@@ -55,7 +55,7 @@ vi.mock('../lib/configNav', () => ({ abrirConfig: vi.fn() }));
 
 vi.mock('./CreateSessionSheet.svelte', stubDe);
 vi.mock('./SessionContextMenu.svelte', stubDe);
-vi.mock('./QrScanner.svelte', stubDe);
+vi.mock('./QrScanner.svelte');   // __mocks__/QrScanner.svelte (porta do onScan)
 vi.mock('./Git.svelte', stubDe);
 vi.mock('./LoopSheet.svelte', stubDe);
 vi.mock('./SessionSwitcherSheet.svelte', stubDe);
@@ -65,6 +65,8 @@ vi.mock('./WorkspaceNav.svelte', stubDe);
 vi.mock('./AccountMenu.svelte');   // __mocks__/AccountMenu.svelte (porta do onAddServer)
 
 const authMock = vi.mocked(auth);
+
+beforeEach(() => { vi.clearAllMocks(); });   // contagens de chamada não vazam entre testes
 
 function montar() {
   const el = document.createElement('div');
@@ -120,6 +122,52 @@ describe('Sidebar — addBusy na transação de servidor (round 5)', () => {
     addBtn.click();
     await tick();
     expect(authMock.addServerWithRollback).toHaveBeenCalledTimes(2);
+    unmount(t.comp);
+  });
+
+  // Round 6: o botão é disabled, mas Enter chama o handler direto — o guard no handler é o que
+  // impede a segunda transação; o callback QR (handleScan) tem o mesmo guard.
+  it('Enter e QR durante a transação não iniciam segunda tentativa; retry após reject', async () => {
+    authMock.validarPareamento.mockReturnValue({ base: 'http://host:8765', token: 'abc' });
+    let rejectAdd!: (e: Error) => void;
+    authMock.addServerWithRollback.mockReturnValueOnce(new Promise((_res, rej) => { rejectAdd = rej; }));
+    const t = montar();
+    await tick();
+    // ── tentativa 1: colar + Add ──
+    document.querySelector<HTMLButtonElement>('[data-testid="stub-add"]')!.click();
+    await tick(); await tick();
+    const input = document.querySelector<HTMLInputElement>('.add-srv-input')!;
+    input.value = 'http://host:8765/?token=abc';
+    input.dispatchEvent(new Event('input'));
+    await tick();
+    const addBtn = document.querySelector<HTMLButtonElement>('.confirm-card .c-primary')!;
+    addBtn.click();
+    await tick();
+    expect(authMock.addServerWithRollback).toHaveBeenCalledTimes(1);
+    expect(input.disabled).toBe(true);   // input travado durante a transação
+    // Enter no input enquanto pendente: ignorado (handler tem guard)
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await tick();
+    expect(authMock.addServerWithRollback).toHaveBeenCalledTimes(1);
+    // botão QR desabilitado durante a transação
+    expect(document.querySelector<HTMLButtonElement>('.confirm-card .c-btn:not(.c-primary)')!.disabled).toBe(true);
+    // rejeição libera: erro visível + retry possível
+    rejectAdd(new Error('servidor fora do ar'));
+    await tick(); await tick();
+    expect(document.querySelector<HTMLElement>('#sb-add-err')?.innerText).toContain('servidor fora do ar');
+    expect(input.disabled).toBe(false);
+    // ── tentativa 2: QR (callback handleScan) ──
+    authMock.addServerWithRollback.mockReturnValueOnce(new Promise((_res, rej2) => { rejectAdd = rej2; }));
+    document.querySelector<HTMLButtonElement>('.confirm-card .c-btn:not(.c-primary)')!.click();   // Escanear QR
+    await tick(); await tick();
+    const scanBtn = document.querySelector<HTMLButtonElement>('[data-testid="stub-scan"]')!;
+    scanBtn.click();   // onScan → handleScan: addBusy=true, scanning=false agendado
+    // callback QR de novo NA MESMA volta (botão ainda montado, flush não rodou): guard ignora
+    scanBtn.click();
+    await tick();
+    expect(authMock.addServerWithRollback).toHaveBeenCalledTimes(2);
+    rejectAdd(new Error('segunda falha'));
+    await tick(); await tick();
     unmount(t.comp);
   });
 });

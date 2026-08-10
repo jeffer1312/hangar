@@ -82,6 +82,7 @@
   let scanning = $state(false);
   function autofocus(node: HTMLInputElement) { node.focus(); }
   async function submitPasteServer() {
+    if (addBusy) return;   // guard: o botão é disabled, mas Enter chama o handler direto (round 6)
     const cru = addUrlText.trim();
     const parsed = validarPareamento(cru);
     if (!parsed) { addError = erroPareamento(cru); return; }
@@ -98,6 +99,7 @@
     }
   }
   async function handleScan(text: string) {
+    if (addBusy) return;   // guard: callback QR não pode iniciar transação por cima de outra (round 6)
     const cru = text.trim();
     const parsed = validarPareamento(cru);
     if (!parsed) {
@@ -232,7 +234,8 @@
       autocapitalize="off"
       spellcheck={false}
       use:autofocus
-      onkeydown={(e) => { addError = ''; if (e.key === 'Enter') submitPasteServer(); }}
+      onkeydown={(e) => { addError = ''; if (e.key === 'Enter' && !addBusy) submitPasteServer(); }}
+      disabled={addBusy}
       aria-label="URL de pareamento do servidor"
       aria-invalid={!!addError}
       aria-describedby={addError ? 'ss-add-err' : undefined}

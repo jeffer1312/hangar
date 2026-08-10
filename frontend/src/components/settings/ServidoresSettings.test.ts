@@ -231,6 +231,39 @@ describe('ServidoresSettings — remoção com fingerprint + revision (round 4)'
     unmount(t.comp);
   });
 
+  // Round 6: o botão é disabled, mas Enter chama o handler direto — o guard no handler é o que
+  // impede a segunda transação; input fica travado durante o await e o retry roda após o finally.
+  it('Enter no input durante a transação não inicia segunda tentativa; retry após reject', async () => {
+    authMock.validarPareamento.mockReturnValue({ base: 'http://a', token: 'x' });
+    let rejectAdd!: (e: Error) => void;
+    authMock.addServerWithRollback.mockReturnValueOnce(new Promise((_res, rej) => { rejectAdd = rej; }));
+    const t = montar();
+    t.el.querySelector<HTMLButtonElement>('.sm-item')!.click();   // "Adicionar servidor"
+    await tick(); await tick();
+    const input = document.querySelector<HTMLInputElement>('.ss-add-input')!;
+    input.value = 'http://a/?token=x';
+    input.dispatchEvent(new Event('input'));
+    await tick();
+    document.querySelector<HTMLButtonElement>('.confirm-card .c-primary')!.click();
+    await tick();
+    expect(authMock.addServerWithRollback).toHaveBeenCalledTimes(1);
+    expect(input.disabled).toBe(true);   // input travado durante a transação
+    // Enter enquanto pendente: ignorado (handler tem guard)
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await tick();
+    expect(authMock.addServerWithRollback).toHaveBeenCalledTimes(1);
+    rejectAdd(new Error('servidor fora do ar'));
+    await tick(); await tick();
+    expect(document.querySelector<HTMLElement>('#ss-add-err')?.innerText).toContain('servidor fora do ar');
+    expect(input.disabled).toBe(false);
+    // retry via Enter após o finally: segunda tentativa roda
+    authMock.addServerWithRollback.mockReturnValueOnce(new Promise(() => {}));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await tick();
+    expect(authMock.addServerWithRollback).toHaveBeenCalledTimes(2);
+    unmount(t.comp);
+  });
+
   it('cancelar a confirmação devolve o foco ao botão Remover (restauração segura)', async () => {
     const t = montar();
     authMock.getActiveId.mockReturnValue('outro-id');   // remover não é remover o ativo -> sem reload

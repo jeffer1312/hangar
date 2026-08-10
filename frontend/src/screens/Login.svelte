@@ -136,7 +136,9 @@
     const pareamento = validarPareamento(href);
     if (!pareamento) {
       // Deep-link inválido: NÃO limpa a query (o usuário precisa ver o link pra corrigir), NÃO
-      // preenche campos e NÃO conecta — erro visível com retry manual.
+      // preenche campos e NÃO conecta — erro visível com retry manual. erroValidacao associa o
+      // erro aos campos (aria-invalid/aria-describedby) e o $effect foca o primeiro inválido.
+      erroValidacao = true;
       error = 'Deep-link de pareamento inválido — o link tem token/api duplicados ou api vazia.';
       return;
     }

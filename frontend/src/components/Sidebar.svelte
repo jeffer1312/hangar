@@ -588,6 +588,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     if (was) window.location.reload();
   }
   async function handleScan(text: string) {
+    if (addBusy) return;   // guard: callback QR não pode iniciar transação por cima de outra (round 6)
     const cru = text.trim();
     const parsed = validarPareamento(cru);
     if (!parsed) {
@@ -626,6 +627,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     showAddServer = true;
   }
   async function submitPasteServer() {
+    if (addBusy) return;   // guard: o botão é disabled, mas Enter chama o handler direto (round 6)
     const cru = addUrlText.trim();
     const parsed = validarPareamento(cru);
     if (!parsed) {
@@ -1365,7 +1367,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
       autocapitalize="off"
       spellcheck={false}
       use:autofocus
-      onkeydown={(e) => { addError = ''; if (e.key === 'Enter') submitPasteServer(); }}
+      onkeydown={(e) => { addError = ''; if (e.key === 'Enter' && !addBusy) submitPasteServer(); }}
+      disabled={addBusy}
       aria-label="URL de pareamento do servidor"
       aria-invalid={!!addError}
       aria-describedby={addError ? 'sb-add-err' : undefined}

@@ -116,7 +116,7 @@ describe('Login — deep-link validado pela URL completa (round 5)', () => {
     return { el, comp };
   }
 
-  it('token duplicado: validator recebe a URL COMPLETA, nada conecta, URL não é limpa, erro visível', async () => {
+  it('token duplicado: validator recebe a URL COMPLETA, nada conecta, URL não é limpa, erro associado aos campos', async () => {
     const replaceState = vi.spyOn(window.history, 'replaceState');
     authMock.validarPareamento.mockReturnValue(null);
     const t = await montarComUrl('https://casa.ts.net/?token=abc&token=def');
@@ -126,10 +126,18 @@ describe('Login — deep-link validado pela URL completa (round 5)', () => {
     const err = t.el.querySelector<HTMLElement>('.error-msg');
     expect(err?.innerText).toContain('Deep-link');
     expect(err?.getAttribute('role')).toBe('alert');
+    // round 6: erro associado aos campos (aria-invalid/describedby) + foco no primeiro inválido
+    const url = t.el.querySelector<HTMLInputElement>('#base-url')!;
+    const tok = t.el.querySelector<HTMLInputElement>('#token')!;
+    expect(url.getAttribute('aria-invalid')).toBe('true');
+    expect(tok.getAttribute('aria-invalid')).toBe('true');
+    expect(url.getAttribute('aria-describedby')).toBe('login-err');
+    expect(tok.getAttribute('aria-describedby')).toBe('login-err');
+    expect(document.activeElement).toBe(url);
     unmount(t.comp);
   });
 
-  it('api duplicada: rejeita sem conectar nem limpar', async () => {
+  it('api duplicada: rejeita sem conectar nem limpar, erro associado aos campos', async () => {
     const replaceState = vi.spyOn(window.history, 'replaceState');
     authMock.validarPareamento.mockReturnValue(null);
     const t = await montarComUrl('https://casa.ts.net/?token=abc&api=https://a.example&api=https://b.example');
@@ -138,16 +146,21 @@ describe('Login — deep-link validado pela URL completa (round 5)', () => {
     );
     expect(authMock.addServerWithRollback).not.toHaveBeenCalled();
     expect(replaceState).not.toHaveBeenCalled();
+    expect(t.el.querySelector<HTMLInputElement>('#base-url')!.getAttribute('aria-invalid')).toBe('true');
+    expect(t.el.querySelector<HTMLInputElement>('#token')!.getAttribute('aria-describedby')).toBe('login-err');
     unmount(t.comp);
   });
 
-  it('api vazia: rejeita sem conectar nem limpar', async () => {
+  it('api vazia: rejeita sem conectar nem limpar, erro associado aos campos', async () => {
     const replaceState = vi.spyOn(window.history, 'replaceState');
     authMock.validarPareamento.mockReturnValue(null);
     const t = await montarComUrl('https://casa.ts.net/?token=abc&api=');
     expect(authMock.validarPareamento).toHaveBeenCalledWith('https://casa.ts.net/?token=abc&api=');
     expect(authMock.addServerWithRollback).not.toHaveBeenCalled();
     expect(replaceState).not.toHaveBeenCalled();
+    expect(t.el.querySelector<HTMLInputElement>('#base-url')!.getAttribute('aria-invalid')).toBe('true');
+    expect(t.el.querySelector<HTMLInputElement>('#token')!.getAttribute('aria-describedby')).toBe('login-err');
+    expect(document.activeElement).toBe(t.el.querySelector<HTMLInputElement>('#base-url'));
     unmount(t.comp);
   });
 
