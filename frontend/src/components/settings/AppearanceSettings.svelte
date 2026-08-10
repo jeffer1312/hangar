@@ -16,6 +16,7 @@
   import { getThemePref, getTextoDoDesktop, setTextoDoDesktop, type ThemePref } from '../../lib/theme';
   import { buscarPaleta, aplicarPaleta, paletaEmCache } from '../../lib/desktopTheme';
   import { sidebarPrefs, type SidebarHeight } from '../../lib/sidebarPrefs.svelte';
+  import { navMode, type NavMode } from '../../lib/navMode.svelte';
 
   interface Props {
     /** Desktop: oferece o botao "Ver ao vivo", que troca o painel pela caixinha flutuante. */
@@ -131,6 +132,13 @@
   const opcoesAltura: { v: SidebarHeight; label: string; aria: string }[] = [
     { v: 'full', label: 'Altura total', aria: 'A barra lateral vai de ponta a ponta da tela' },
     { v: 'content', label: 'Só o conteúdo', aria: 'A barra lateral encolhe até a altura das sessões' },
+  ];
+
+  // Follow-up visual: MODO da navegação com a sidebar recolhida. O rail (Barra lateral) é o
+  // padrão — decisão do usuário; 'Abas no topo' é a faixa horizontal da SessionTabs.
+  const opcoesModo: { v: NavMode; label: string; aria: string }[] = [
+    { v: 'rail', label: 'Barra lateral', aria: 'Recolhida, a barra vira o trilho vertical de iniciais' },
+    { v: 'tabs', label: 'Abas no topo', aria: 'Recolhida, a barra vira a faixa horizontal de abas no topo' },
   ];
 </script>
 
@@ -294,7 +302,16 @@
 
   <!-- Barra lateral: só existe no desktop (no celular a lista é a tela inteira), então a seção some
        abaixo de 820px em vez de oferecer um ajuste que não muda nada.
-       Abrir e fechar a barra é o botão dela mesma — aqui fica só a altura. -->
+       Abrir e fechar a barra é o botão dela mesma — aqui ficam o modo da navegação recolhida e a
+       altura. O modo reage na hora, sem reload (store $state, follow-up visual round 2). -->
+  <div class="ap-row ap-row--desktop">
+    <div class="ap-label">
+      <strong>Navegação recolhida</strong>
+      <span>trilho vertical de iniciais, ou abas no topo</span>
+    </div>
+    <SegmentedPicker value={navMode.mode} options={opcoesModo} ariaLabel="Navegação com a barra recolhida"
+                     onPick={(v) => (navMode.mode = v)} />
+  </div>
   <div class="ap-row ap-row--desktop">
     <div class="ap-label">
       <strong>Altura da barra lateral</strong>

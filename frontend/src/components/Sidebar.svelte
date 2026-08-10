@@ -14,7 +14,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import SessionSwitcherSheet from './SessionSwitcherSheet.svelte';
   import HoverPreview from './HoverPreview.svelte';
   import type { SessionInfo, State, ResumeCandidate, Provider } from '../lib/types';
-  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, untrackedReason, providerName, providerTag, type GroupBy } from '../lib/format';
+  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, untrackedReason, providerName, providerTag, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import { planBadge } from '../lib/plan';
@@ -24,6 +24,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import { sidebarPrefs } from '../lib/sidebarPrefs.svelte';
   import { sidebarBridge } from '../lib/sidebarBridge';
   import { sidebarPin } from '../lib/sidebarPin.svelte';
+  import { navMode } from '../lib/navMode.svelte';
+  import { ctxPanel, alternarCtxPanel } from '../lib/ctxPanel.svelte';
 
   const stateChipBg: Record<State, string> = {
     working: 'var(--accent-dim)', idle: 'rgba(52,199,89,0.12)',
@@ -755,12 +757,13 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
 </script>
 
-<!-- `floating` segue a escolha de altura em Aparencia ('content' = dock flutuante permanente); o
-     pin recolhido hoje tira a <aside> inteira do DOM, entao nao ha dock por recolhimento. O gate
-     abaixo envolve SOMENTE a <aside>: sheets, menus, Git/Loop, confirmacoes e kebab — tudo que vem
-     depois do </aside> — continuam montados e acessiveis pelas abas (Task 6). -->
-{#if !sidebarPin.collapsed}
-<aside class="sidebar" class:floating class:resizing style:width={width + 'px'}>
+<!-- `floating` segue a escolha de altura em Aparencia ('content' = dock flutuante permanente).
+     O gate abaixo envolve SOMENTE a <aside>: sheets, menus, Git/Loop, confirmacoes e kebab — tudo
+     que vem depois do </aside> — continuam montados e acessiveis. Recolhida: no modo RAIL (o
+     padrão) a aside vira o trilho vertical de iniciais (classe .rail); no modo 'tabs' ela sai do
+     DOM e a SessionTabs assume (Task 6). -->
+{#if !sidebarPin.collapsed || navMode.mode === 'rail'}
+<aside class="sidebar" class:rail={sidebarPin.collapsed} class:floating class:resizing style:width={sidebarPin.collapsed ? undefined : width + 'px'}>
   <div class="side-top">
     <!-- Este botao E o liga/desliga da barra: alterna entre trilho de iniciais e aberta. Chegou a
          existir uma preferencia "manter aberta" em Aparencia que fazia a mesma coisa e deixava este
@@ -887,7 +890,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
               class:untracked={s.tracked === false}
               aria-pressed={selectMode ? selected.has(selKey) : undefined}
               title={s.tracked === false ? untrackedReason(s.provider) : 'Toque longo pra renomear'}
-              onpointerdown={() => { if (!selectMode) pressStart(rowKey); }}
+              onpointerdown={() => { if (!selectMode && !sidebarPin.collapsed) pressStart(rowKey); }}
               onpointerup={pressEnd}
               onpointerleave={pressEnd}
               onpointercancel={pressEnd}
@@ -899,6 +902,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
               }}
             >
               <span class="lead" aria-hidden="true">
+                <!-- Iniciais da sessão: só no RAIL (modo Barra lateral) — o expandido usa o ícone. -->
+                <span class="rail-iniciais">{initials(s.name)}</span>
                 {#if selectMode}
                   <input type="checkbox" class="select-check" checked={selected.has(selKey)} tabindex="-1" aria-hidden="true" />
                 {:else if s.state === 'working'}
@@ -1121,6 +1126,19 @@ import ConfirmDialog from './ConfirmDialog.svelte';
       </svg>
       <span class="fold-label">Recolher</span>
     </button>
+    <!-- Toggle do painel de contexto no rodapé do RAIL (follow-up visual): no modo Barra lateral
+         o controle vive aqui, como a referência do usuário — último item do rodapé. No modo
+         'tabs' ele fica no extremo direito da SessionTabs e este não existe (sem duplicação). -->
+    {#if sidebarPin.collapsed}
+      <button class="fold-btn rail-ctx" onclick={alternarCtxPanel}
+        aria-label={ctxPanel.recolhido ? 'Expandir contexto' : 'Recolher contexto'}
+        title={ctxPanel.recolhido ? 'Expandir contexto' : 'Recolher contexto'}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="16" rx="2"/>
+          <line x1="9" y1="4" x2="9" y2="20"/>
+        </svg>
+      </button>
+    {/if}
   </div>
 
   <!-- Drag na borda direita pra redimensionar (a <aside> so esta no DOM expandida; recolhida ela
@@ -1408,6 +1426,64 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
   /* A lista so rola quando bate no teto: com 2 sessoes o dock e curto e sem barra. */
   .sidebar.floating .sess-list { flex: 0 1 auto; }
+
+  /* ── RAIL (modo Barra lateral — o PADRÃO): trilho de 56px com iniciais ──────────
+     Referência do usuário (ec799c): marca no topo, iniciais com indicador de estado, rodapé com
+     engrenagem, Nova, kebab, Recolher e o toggle do painel de contexto como ÚLTIMO item.
+     O rail reusa a MESMA lista e os mesmos handlers da sidebar expandida — só o CSS troca o
+     desenho: iniciais no lugar do ícone, textos/botões de linha escondidos, rodapé em coluna. */
+  .rail-iniciais { display: none; }
+  .sidebar.rail {
+    width: 56px;
+    padding: var(--space-3) var(--space-2);
+    align-items: center;
+  }
+  .sidebar.rail .side-top { flex-direction: column; gap: var(--space-2); min-height: 0; }
+  .sidebar.rail .side-brand,
+  .sidebar.rail .select-toggle-btn { display: none; }
+  .sidebar.rail .sess-list { gap: var(--space-1); width: 100%; }
+  .sidebar.rail .sess-main {
+    min-height: 36px;
+    padding: 0;
+    justify-content: center;
+  }
+  .sidebar.rail .lead { width: 36px; }
+  .sidebar.rail .row-mark { display: none; }
+  .sidebar.rail .rail-iniciais {
+    display: grid; place-items: center;
+    width: 36px; height: 36px;
+    border-radius: var(--radius-md);
+    font-size: var(--text-xs); font-weight: 600;
+    color: var(--text-secondary);
+    background: var(--surface-raised);
+  }
+  .sidebar.rail .row-info,
+  .sidebar.rail .state-chip,
+  .sidebar.rail .sess-resume,
+  .sidebar.rail .sess-git,
+  .sidebar.rail .sess-del,
+  .sidebar.rail .sess-kebab,
+  .sidebar.rail .sess-edit { display: none; }
+  .sidebar.rail .sess-row.active {
+    background: var(--accent-dim);
+    box-shadow: inset 3px 0 0 0 var(--accent);
+  }
+  .sidebar.rail .sess-row.active .rail-iniciais { color: var(--accent); }
+  .sidebar.rail .side-foot {
+    flex-direction: column;
+    gap: var(--space-1);
+    width: 100%;
+  }
+  .sidebar.rail .side-foot .acct-btn { justify-content: center; padding: 0; }
+  .sidebar.rail .side-foot .acct-chip { width: 36px; height: 36px; }
+  .sidebar.rail .side-foot .acct-who { display: none; }
+  .sidebar.rail .side-foot .cta-new {
+    width: 100%; height: 36px; padding: 0;
+    justify-content: center;
+    border-radius: var(--radius-md);
+  }
+  .sidebar.rail .fold-btn { width: 100%; }
+  .sidebar.rail .resize-handle { display: none; }
 
   /* ── Polish: foco de teclado + transições de estado ──────────────────────
      Foco visível (dev-tool: anel accent), inset pra nao ser cortado pelo overflow da sidebar/lista.

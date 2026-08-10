@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick, createRawSnippet } from 'svelte';
 import DesktopShell from './DesktopShell.svelte';
 import { sidebarPin } from '../lib/sidebarPin.svelte';
+import { navMode } from '../lib/navMode.svelte';
 
 function stubDe() { return { default: createRawSnippet(() => ({ render: () => '<div />' })) }; }
 
@@ -98,6 +99,7 @@ function montar(currentSession: string | null) {
 beforeEach(() => {
   sidebarPin.setForced(null);
   sidebarPin.setUser(false);   // sidebar expandida por padrão (sem barra de abas)
+  navMode.mode = 'tabs';       // barra de abas ligada por padrão NOS TESTES (modo explícito)
   document.body.innerHTML = '';
 });
 
@@ -145,6 +147,17 @@ describe('DesktopShell — empty state compensa a faixa (follow-up visual)', () 
     await tick();
     const ctx = document.querySelector<HTMLButtonElement>('.tab-ctx')!;
     expect(ctx.disabled).toBe(false);
+    unmount(t.comp);
+  });
+
+  it('modo RAIL (padrão): sidebar recolhida NÃO monta a barra de abas', async () => {
+    navMode.mode = 'rail';
+    const t = montar(null);
+    await tick();
+    sidebarPin.setForced(true);
+    await tick();
+    expect(document.querySelector('.tabs-bar')).toBeNull();
+    expect(document.querySelector('.tab-ctx')).toBeNull();
     unmount(t.comp);
   });
 });

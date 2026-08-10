@@ -13,6 +13,7 @@
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { getConfig } from '../lib/api';
   import { getActiveId, selectServer } from '../lib/auth';
+  import { navMode } from '../lib/navMode.svelte';
   import type { AggSession } from '../lib/types';
   import {
     aggregateWorkspaceActions,
@@ -227,8 +228,9 @@
     (!!currentSession && currentSession !== 'null' && currentSession !== 'undefined' && splitSessions.length === 0)
     || !!overlaySession,
   );
-  // A barra de abas existe exatamente nestas condições; o toggle do contexto mora nela.
-  const barraDeAbas = $derived(barraRecolhida && !terminalMaximizado);
+  // A barra de abas existe somente no modo 'tabs' (decisão do usuário: o padrão é o RAIL, que
+  // vive na própria Sidebar); o toggle do contexto mora no extremo direito dela nesse modo.
+  const barraDeAbas = $derived(barraRecolhida && !terminalMaximizado && navMode.mode === 'tabs');
 
   // Chaves SERVER-AWARE das sessoes com um Chat montado agora (os mesmos tres mounts abaixo). Fecha
   // o terminal sozinho quando a chave dele sai da tela (navegou pro board/canvas, trocou a

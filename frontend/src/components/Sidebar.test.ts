@@ -81,12 +81,16 @@ const navMock = vi.mocked(abrirConfig);
 // beforeEach garante sidebar EXPANDIDA por padrão — o teste do recolhido seta e limpa o dele.
 import { sidebarPin } from '../lib/sidebarPin.svelte';
 import { sidebarBridge } from '../lib/sidebarBridge';
+import { navMode } from '../lib/navMode.svelte';
+import { ctxPanel } from '../lib/ctxPanel.svelte';
 import * as api from '../lib/api';
 import type { AggSession } from '../lib/types';
 
 beforeEach(() => {
   vi.clearAllMocks();   // contagens de chamada não vazam entre testes
   sidebarPin.setUser(false);   // pin do usuário: expandido (o persistido '0' não vaza do teste anterior)
+  navMode.mode = 'tabs';       // modo abas nos testes existentes (a aside some com o pin)
+  ctxPanel.recolhido = false;  // painel de contexto aberto por padrão
 });
 
 function montar() {
@@ -289,6 +293,30 @@ describe('Sidebar — renomear com a sidebar recolhida (round 7)', () => {
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await tick(); await tick();
     expect(retrySpy).toHaveBeenCalledWith('sess-1', 'sess-novo');
+    sidebarPin.setForced(null);
+    unmount(t.comp);
+  });
+
+  it('RECOLHIDA no modo RAIL (padrão): aside monta o trilho com iniciais e rodapé com toggle do painel', async () => {
+    comUmaSessao();
+    navMode.mode = 'rail';
+    const t = montar();
+    await tick();
+    sidebarPin.setForced(true);
+    await tick();
+    // A aside NÃO sai do DOM: vira o rail (56px) com as iniciais da sessão
+    const aside = document.querySelector<HTMLElement>('.sidebar');
+    expect(aside).not.toBeNull();
+    expect(aside?.classList.contains('rail')).toBe(true);
+    expect(aside?.querySelector('.rail-iniciais')).not.toBeNull();
+    // Rodapé: engrenagem + Nova + kebab + fold + toggle do painel de contexto (referência)
+    const ctx = aside?.querySelector<HTMLButtonElement>('.rail-ctx');
+    expect(ctx).not.toBeNull();
+    expect(ctx?.getAttribute('aria-label')).toBe('Recolher contexto');
+    // clique no toggle alterna o estado do painel
+    ctx!.click();
+    await tick();
+    expect(ctx?.getAttribute('aria-label')).toBe('Expandir contexto');
     sidebarPin.setForced(null);
     unmount(t.comp);
   });
