@@ -47,7 +47,9 @@ vi.mock('../lib/sessionsStore.svelte', () => ({
   },
 }));
 vi.mock('../lib/format', () => ({
-  stateLabels: {}, stateColors: {}, countAwaiting: () => 0,
+  // Rótulos REAIS (format.ts:58-63): o trilho original anuncia estado no aria-label/title.
+  stateLabels: { working: 'em execução', idle: 'pronto', awaiting_input: 'aguardando', dead: 'encerrado' },
+  stateColors: {}, countAwaiting: () => 0,
   groupSelectedByServer: () => [], initials: (n: string) => n.slice(0, 2),
   projectKey: () => '', projectLabel: () => '', effectiveGroupBy: () => 'server',
   fmtWhen: () => '', sortSessions: (s: unknown[]) => s, latestAssistantEvent: () => null,
@@ -297,20 +299,22 @@ describe('Sidebar — renomear com a sidebar recolhida (round 7)', () => {
     unmount(t.comp);
   });
 
-  it('RECOLHIDA no modo RAIL (padrão): aside monta o trilho com iniciais e rodapé com toggle do painel', async () => {
+  it('RECOLHIDA no modo RAIL (padrão): aside monta o trilho original (iniciais, sem reconstrução) com rodapé e toggle do painel', async () => {
     comUmaSessao();
     navMode.mode = 'rail';
     const t = montar();
     await tick();
     sidebarPin.setForced(true);
     await tick();
-    // A aside NÃO sai do DOM: vira o rail (56px) com as iniciais da sessão
+    // A aside NÃO sai do DOM: vira o trilho (56px) com o desenho ORIGINAL (classe collapsed)
     const aside = document.querySelector<HTMLElement>('.sidebar');
     expect(aside).not.toBeNull();
-    expect(aside?.classList.contains('rail')).toBe(true);
-    expect(aside?.querySelector('.rail-iniciais')).not.toBeNull();
-    // indicador de estado por sessão (referência: dots junto às iniciais)
-    expect(aside?.querySelector('.rail-state-dot')).not.toBeNull();
+    expect(aside?.classList.contains('collapsed')).toBe(true);
+    expect(aside?.classList.contains('rail')).toBe(false);
+    // Iniciais com anel de estado — nada da reconstrução da Task 5
+    expect(aside?.querySelector('.initials')).not.toBeNull();
+    expect(aside?.querySelector('.rail-iniciais')).toBeNull();
+    expect(aside?.querySelector('.rail-state-dot')).toBeNull();
     // Rodapé: engrenagem + Nova + kebab + fold + toggle do painel de contexto (referência)
     const ctx = aside?.querySelector<HTMLButtonElement>('.rail-ctx');
     expect(ctx).not.toBeNull();
@@ -345,6 +349,161 @@ describe('Sidebar — renomear com a sidebar recolhida (round 7)', () => {
     expect(focusSpy).toHaveBeenCalledWith('srv-a::sess-novo');
     un();
     sidebarPin.setForced(null);
+    unmount(t.comp);
+  });
+});
+
+describe('Sidebar — trilho original no modo rail', () => {
+  // Preenche servers + byServer com 1 grupo por servidor, na ordem dos specs. O mock do store é
+  // plain: os deriveds do Sidebar leem as arrays uma vez, no mount (mesmo padrão de comUmaSessao).
+  function comStore(specs: Array<{ id: string; label: string; sessions: unknown[] }>) {
+    storeState.servers.length = 0;
+    storeState.byServer.length = 0;
+    for (const sp of specs) {
+      storeState.servers.push({ id: sp.id, label: sp.label, baseUrl: 'http://' + sp.id, token: 'x' });
+      storeState.byServer.push({
+        server: { id: sp.id, label: sp.label },
+        sessions: sp.sessions,
+        error: null, loaded: true,
+      });
+    }
+  }
+  const sess = (name: string, serverId: string, state: string, extra: Record<string, unknown> = {}) =>
+    ({ name, serverId, state, ...extra });
+
+  it('RAIL: não renderiza WorkspaceNav, filtro nem cabeçalho de grupo', async () => {
+    navMode.mode = 'rail';
+    sidebarPin.setUser(true);   // pin recolhido -> trilho
+    comStore([
+      { id: 'srv-a', label: 'Servidor A', sessions: [1, 2, 3, 4].map((i) => sess(`sess-${i}`, 'srv-a', 'idle')) },
+      { id: 'srv-b', label: 'Servidor B', sessions: [5, 6, 7, 8].map((i) => sess(`sess-${i}`, 'srv-b', 'idle')) },
+    ]);
+    const t = montar();
+    await tick();
+    expect(document.querySelector('.side-views')).toBeNull();
+    expect(document.querySelector('.filter-input')).toBeNull();
+    expect(document.querySelector('.grp-head-row')).toBeNull();
+    unmount(t.comp);
+  });
+
+  it('RAIL: rodapé sem rótulos de texto', async () => {
+    navMode.mode = 'rail';
+    sidebarPin.setUser(true);
+    comStore([{ id: 'srv-a', label: 'Servidor A', sessions: [sess('hangar', 'srv-a', 'idle')] }]);
+    const t = montar();
+    await tick();
+    expect(document.querySelector('.fold-label')).toBeNull();
+    expect(document.querySelector('.cta-new')!.textContent!.trim()).toBe('');
+    unmount(t.comp);
+  });
+
+  it('RAIL: homônimas cross-server têm aria-label completo e distinto', async () => {
+    navMode.mode = 'rail';
+    sidebarPin.setUser(true);
+    comStore([
+      { id: 'srv-a', label: 'Servidor A', sessions: [sess('hangar', 'srv-a', 'idle')] },
+      { id: 'srv-b', label: 'Servidor B', sessions: [sess('hangar', 'srv-b', 'idle')] },
+    ]);
+    const t = montar();
+    await tick();
+    const labels = [...document.querySelectorAll('.sess-main')].map((b) => b.getAttribute('aria-label'));
+    expect(labels).toEqual([
+      'hangar · Servidor A · pronto',
+      'hangar · Servidor B · pronto',
+    ]);
+    unmount(t.comp);
+  });
+
+  it('RAIL: title repete nome, servidor e estado', async () => {
+    navMode.mode = 'rail';
+    sidebarPin.setUser(true);
+    comStore([
+      { id: 'srv-a', label: 'Servidor A', sessions: [sess('hangar', 'srv-a', 'idle')] },
+      { id: 'srv-b', label: 'Servidor B', sessions: [sess('hangar', 'srv-b', 'idle')] },
+    ]);
+    const t = montar();
+    await tick();
+    expect(document.querySelector('.sess-main')!.getAttribute('title')).toBe('hangar · Servidor A · pronto');
+    unmount(t.comp);
+  });
+
+  it('RAIL: estado em execução aparece no rótulo e na classe do anel', async () => {
+    navMode.mode = 'rail';
+    sidebarPin.setUser(true);
+    comStore([{ id: 'srv-a', label: 'Servidor A', sessions: [sess('hangar', 'srv-a', 'working')] }]);
+    const t = montar();
+    await tick();
+    expect(document.querySelector('.sess-main')!.getAttribute('aria-label')).toBe('hangar · Servidor A · em execução');
+    expect(document.querySelector('.initials')!.classList.contains('busy')).toBe(true);
+    unmount(t.comp);
+  });
+
+  it('RAIL: sessão travada anuncia o aviso', async () => {
+    navMode.mode = 'rail';
+    sidebarPin.setUser(true);
+    comStore([{ id: 'srv-a', label: 'Servidor A', sessions: [sess('hangar', 'srv-a', 'idle', { stalled: true })] }]);
+    const t = montar();
+    await tick();
+    expect(document.querySelector('.sess-main')!.getAttribute('aria-label')).toBe('hangar · Servidor A · pode estar travada');
+    expect(document.querySelector('.initials')!.classList.contains('stalled')).toBe(true);
+    unmount(t.comp);
+  });
+
+  it('RAIL: não sobrou markup da reconstrução', async () => {
+    navMode.mode = 'rail';
+    sidebarPin.setUser(true);
+    comStore([{ id: 'srv-a', label: 'Servidor A', sessions: [sess('hangar', 'srv-a', 'idle')] }]);
+    const t = montar();
+    await tick();
+    expect(document.querySelector('.rail-iniciais')).toBeNull();
+    expect(document.querySelector('.rail-state-dot')).toBeNull();
+    unmount(t.comp);
+  });
+
+  it('EXPANDIDA: aria-label não é imposto e o nome visível continua', async () => {
+    navMode.mode = 'rail';
+    sidebarPin.setUser(false);   // expandida
+    comStore([{ id: 'srv-a', label: 'Servidor A', sessions: [sess('hangar', 'srv-a', 'idle')] }]);
+    const t = montar();
+    await tick();
+    expect(document.querySelector('.sess-main')!.getAttribute('aria-label')).toBeNull();
+    expect(document.querySelector('.sess-name')!.textContent).toContain('hangar');
+    unmount(t.comp);
+  });
+
+  it('EXPANDIDA: WorkspaceNav e filtro continuam presentes', async () => {
+    navMode.mode = 'rail';
+    sidebarPin.setUser(false);
+    comStore([
+      { id: 'srv-a', label: 'Servidor A', sessions: [1, 2, 3, 4].map((i) => sess(`sess-${i}`, 'srv-a', 'idle')) },
+      { id: 'srv-b', label: 'Servidor B', sessions: [5, 6, 7, 8].map((i) => sess(`sess-${i}`, 'srv-b', 'idle')) },
+    ]);
+    const t = montar();
+    await tick();
+    expect(document.querySelector('.side-views')).not.toBeNull();
+    expect(document.querySelector('.filter-input')).not.toBeNull();
+    unmount(t.comp);
+  });
+
+  it('TABS recolhido: a aside não é montada', async () => {
+    navMode.mode = 'tabs';
+    sidebarPin.setUser(true);
+    comStore([{ id: 'srv-a', label: 'Servidor A', sessions: [sess('hangar', 'srv-a', 'idle')] }]);
+    const t = montar();
+    await tick();
+    expect(document.querySelector('.sidebar')).toBeNull();
+    unmount(t.comp);
+  });
+
+  it('sem hover-expansion: mouseenter na aside não expande', async () => {
+    navMode.mode = 'rail';
+    sidebarPin.setUser(true);
+    comStore([{ id: 'srv-a', label: 'Servidor A', sessions: [sess('hangar', 'srv-a', 'idle')] }]);
+    const t = montar();
+    await tick();
+    document.querySelector('.sidebar')!.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    await tick();
+    expect(document.querySelector('.side-views')).toBeNull();
     unmount(t.comp);
   });
 });

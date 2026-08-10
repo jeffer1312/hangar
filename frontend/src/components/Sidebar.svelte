@@ -430,6 +430,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // expansion nao existem mais. O que sobra decide a altura: dock flutuante so quando o usuario
   // escolheu 'content' em Aparencia (sem pin recolhido pra forcar dock, 'content' e a regra).
   const floating = $derived(sidebarPrefs.height === 'content');
+  // Trilho quando o pin está recolhido. SEM os termos de hover/menu/editing do original: a
+  // hover-expansion foi removida de propósito na Task 5 e não volta.
+  const expanded = $derived(!sidebarPin.collapsed);
 
   function openMenu(e: MouseEvent, s: SessionInfo, serverId: string) {
     e.preventDefault();
@@ -760,10 +763,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 <!-- `floating` segue a escolha de altura em Aparencia ('content' = dock flutuante permanente).
      O gate abaixo envolve SOMENTE a <aside>: sheets, menus, Git/Loop, confirmacoes e kebab — tudo
      que vem depois do </aside> — continuam montados e acessiveis. Recolhida: no modo RAIL (o
-     padrão) a aside vira o trilho vertical de iniciais (classe .rail); no modo 'tabs' ela sai do
-     DOM e a SessionTabs assume (Task 6). -->
+     padrão) a aside vira o trilho vertical de iniciais (classe .collapsed, desenho original);
+     no modo 'tabs' ela sai do DOM e a SessionTabs assume (Task 6). -->
 {#if !sidebarPin.collapsed || navMode.mode === 'rail'}
-<aside class="sidebar" class:rail={sidebarPin.collapsed} class:floating class:resizing style:width={sidebarPin.collapsed ? undefined : width + 'px'}>
+<aside class="sidebar" class:collapsed={!expanded} class:floating class:resizing style:width={sidebarPin.collapsed ? undefined : width + 'px'}>
   <div class="side-top">
     <!-- Este botao E o liga/desliga da barra: alterna entre trilho de iniciais e aberta. Chegou a
          existir uma preferencia "manter aberta" em Aparencia que fazia a mesma coisa e deixava este
@@ -771,7 +774,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     <!-- A marca fica nas DUAS formas do sidebar: expandido acompanha o nome, recolhido (rail) ela
          é o que sobra. Com 2 arcos, porque no rail ela desenha em ~20px. -->
     <span class="side-mark" aria-label="Hangar"><HangarMark size={20} arcs={2} /></span>
-    <span class="side-brand">Hangar</span>
+    {#if expanded}<span class="side-brand">Hangar</span>{/if}
+    {#if expanded}
     <!-- Broadcast (feature #9): entra/sai do modo seleção multipla. -->
     <button
       class="select-toggle-btn"
@@ -784,18 +788,22 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
       </svg>
     </button>
+    {/if}
     <!-- Kebab "⋯": nav secundária (Buscar/Arquivo/Custos) + agrupamento, docado no header — o twin
          desktop do hamburger do mobile. Abre um popover ancorado (renderizado fora do <aside>). -->
   </div>
 
+  {#if expanded}
   <div class="side-views">
     <WorkspaceNav {view} onSelect={onSelectView} {onOpenCommand} />
   </div>
+  {/if}
 
   <nav class="sess-list" class:compact aria-label="Sessões">
     <!-- A fila "Precisa de você" migrou para o chrome global do DesktopShell: continua visível
          em Conversa/Quadro/Canvas e deixa de duplicar conteúdo no topo da lista. -->
 
+    {#if expanded}
     <!-- Filtro (paridade com o mobile): so aparece quando a lista fica longa. -->
     {#if showFilter}
       <input
@@ -813,14 +821,15 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     {#if filterEmpty}
       <p class="filter-empty">Nenhuma sessão corresponde ao filtro.</p>
     {/if}
+    {/if}
     <!-- Servidor online e vazio nao aparece mais; com TODOS vazios a lista ficaria em branco, sem
          dizer o porque. (Nao vale quando o filtro esta ativo — ai quem fala e o filter-empty.) -->
-    {#if !filterText.trim() && renderGroups.length === 0 && offlineGroups.length === 0}
+    {#if expanded && !filterText.trim() && renderGroups.length === 0 && offlineGroups.length === 0}
       <p class="filter-empty">Nenhuma sessão aberta. Crie uma em <strong>+ Nova</strong>.</p>
     {/if}
     {#each renderGroups as g (g.id)}
       {@const awaiting = countAwaiting(g.sessions)}
-      {#if g.label}
+      {#if expanded && g.label}
         <!-- Sem label = modo "Nenhum": lista lisa, sem cabecalho nem chevron. -->
         <div class="grp-head-row">
           <!-- Header colapsavel (paridade com o mobile): chevron + label + contagem + aguardando. -->
@@ -851,9 +860,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
           </button>
         </div>
       {/if}
-      {#if !collapsedGroups.has(g.id)}
+      {#if !expanded || !collapsedGroups.has(g.id)}
       {#each clusterByPair(g.sessions) as item (item.kind === 'header' ? `ph:${item.gid}` : `${item.session.serverId}::${item.session.name}`)}
         {#if item.kind === 'header'}
+          {#if expanded}
           <!-- Cluster de pareamento (Opção C): sub-header colapsável do grupo, dentro do servidor. -->
           <button class="pair-head" onclick={() => toggleGroup(`pair:${item.gid}`)}
                   aria-expanded={!collapsedGroups.has(`pair:${item.gid}`)} title={`Grupo pareado: ${item.label}`}>
@@ -861,12 +871,15 @@ import ConfirmDialog from './ConfirmDialog.svelte';
             <span class="pair-head-label">🤝&nbsp;{item.label}</span>
             <span class="grp-count">{item.count}</span>
           </button>
+          {/if}
         {:else if !item.gid || !collapsedGroups.has(`pair:${item.gid}`)}
         {@const s = item.session}
         {@const rowKey = `${s.serverId}::${s.name}`}
         {@const selKey = `${s.serverId}:${s.name}`}
         {@const provTag = showProviderTags ? providerTag(s.provider) : null}
         {@const sub = sidebarStatus(s)}
+        {@const srvLabel = servers.find((sv) => sv.id === s.serverId)?.label ?? s.serverId}
+        {@const estadoTxt = s.stalled ? 'pode estar travada' : stateLabels[s.state]}
         <!-- role=presentation: a row e so o wrapper flex — a semantica toda vive no .sess-main
              (button) e nos botoes irmaos. O hover aqui e decoracao redundante (a resposta ja esta no
              chat), entao nao pede equivalente de teclado. -->
@@ -889,7 +902,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
               class="sess-main"
               class:untracked={s.tracked === false}
               aria-pressed={selectMode ? selected.has(selKey) : undefined}
-              title={s.tracked === false ? untrackedReason(s.provider) : 'Toque longo pra renomear'}
+              aria-label={!expanded ? `${s.name} · ${srvLabel} · ${estadoTxt}` : undefined}
+              title={!expanded
+                ? `${s.name} · ${srvLabel} · ${estadoTxt}${provTag ? ` · sessão ${provTag}` : ''}`
+                : (s.tracked === false ? untrackedReason(s.provider) : 'Toque longo pra renomear')}
               onpointerdown={() => { if (!selectMode && !sidebarPin.collapsed) pressStart(rowKey); }}
               onpointerup={pressEnd}
               onpointerleave={pressEnd}
@@ -902,18 +918,48 @@ import ConfirmDialog from './ConfirmDialog.svelte';
               }}
             >
               <span class="lead" aria-hidden="true">
-                <!-- Iniciais da sessão: só no RAIL (modo Barra lateral) — o expandido usa o ícone.
-                     O dot de estado acompanha as iniciais no canto da caixa (referência do usuário). -->
-                <span class="rail-iniciais">{initials(s.name)}</span>
-                <span class="rail-state-dot" style:background={stateColors[s.state]}></span>
                 {#if selectMode}
                   <input type="checkbox" class="select-check" checked={selected.has(selKey)} tabindex="-1" aria-hidden="true" />
+                {:else if !expanded}
+                  <!-- Rail recolhido: SEMPRE iniciais, tingidas pelo estado — é o único texto que
+                       identifica a sessão sem o nome. Trabalhando trocava as iniciais pelo spinner,
+                       e aí a coluna virava bolinhas anônimas justo nas sessões ocupadas; agora o
+                       "trabalhando" é um anel pulsando em volta das mesmas iniciais, no mesmo
+                       vocabulário do anel âmbar da travada (que continua tendo prioridade: um aviso
+                       não pode virar animação de rotina). -->
+                  <span
+                    class="initials"
+                    class:stalled={s.stalled}
+                    class:ociosa={s.state === 'idle' && !s.stalled}
+                    class:busy={s.state === 'working' && !s.stalled}
+                    class:aguardando={s.state === 'awaiting_input' && !s.stalled}
+                    title={`${s.name} — ${estadoTxt}`}
+                    style="--anel: {stateColors[s.state]};"
+                  >{initials(s.name)}</span>
                 {:else if s.state === 'working'}
                   <span class="row-mark" style="color: {stateColors[s.state]};"><HangarWorking size={18} /></span>
                 {:else}
                   <span class="row-mark" style="color: {stateColors[s.state]};"><HangarMark size={18} /></span>
                 {/if}
+                {#if !expanded && !selectMode && provTag}
+                  <!-- Rail recolhido: não cabe chip na linha (não há linha), então o rótulo vira uma
+                       etiqueta colada na base do avatar/spinner. Absoluta, pra não mudar a altura da
+                       row nem empurrar as iniciais. -->
+                  <span class="prov-rail">{provTag}</span>
+                {/if}
               </span>
+              {#if !expanded && !selectMode && !provTag}
+                <!-- Rail recolhido: barra única na base da row, irmã de .lead (não dentro dele —
+                     .lead é a coluna das iniciais, gated em provTag). .sess-main precisa de
+                     position:relative pra ancorar o position:absolute do compact (ver CSS).
+                     ponytail: gate em !provTag — geometria do .prov-rail (badge do provider, também
+                     absoluto e centralizado na base do avatar) ocupa a MESMA faixa de ~13px que a
+                     barra usaria; os 36-40px do trilho não têm altura pra empilhar os dois sem
+                     colidir. Mutuamente exclusivo por ora (raro ter Pi/Codex + plano ativo); se
+                     precisar dos dois ao mesmo tempo, mover um dos dois pro topo do avatar. -->
+                <PlanBar session={s} compact />
+              {/if}
+              {#if expanded}
               <span class="row-info">
                   <span class="name-row">
                     <span class="sess-name">{s.name}</span>
@@ -985,8 +1031,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   style="color: {stateColors[s.state]}; background: {stateChipBg[s.state]};"
                   title={s.stalled ? 'Pode estar travada — sem atividade há um tempo' : undefined}
                 >{stateLabels[s.state]}</span>
+              {/if}
             </button>
-            {#if !selectMode}
+            {#if expanded && !selectMode}
               <!-- Retomar (paridade com o SessionCard do mobile): unica acao possivel numa linha "sem
                    id" -> visivel sempre (nao escondida no hover), tingida de accent. Reusa resumeSession.
                    Fora do Pi: o resume varre ~/.claude/projects e relanca `claude --resume` DEPOIS de
@@ -1038,7 +1085,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
       {/each}
       {/if}
     {/each}
-    {#if offlineGroups.length > 0}
+    {#if expanded && offlineGroups.length > 0}
       <!-- Resumo dos offline (uma linha em vez de N headers): expande pra ver/gerenciar. -->
       <button class="grp-offline-sum" onclick={() => (showOffline = !showOffline)} aria-expanded={showOffline}>
         <span class="grp-chevron" class:collapsed={!showOffline} aria-hidden="true">▾</span>
@@ -1048,7 +1095,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     {/if}
   </nav>
 
-  {#if selectMode}
+  {#if expanded && selectMode}
     <!-- Composer compacto do broadcast (feature #9): so texto + enviar, sem anexos/slash-UI (isso
          fica no Composer normal, por sessão). Slash-command desabilita o envio (rota por sessão). -->
     <div class="broadcast-bar">
@@ -1087,12 +1134,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 
   <!-- Rodapé (estilo Claude): botão da conta (avatar -> menu de conta) + CTA "Nova sessão". Tudo que
        era config/conta (servidores, notificações, horas silenciosas, reconectar, sair) vive no menu. -->
-  <div class="side-foot">
+  <div class="side-foot" class:rail={!expanded}>
     <div class="account-anchor">
       <!-- Task 4c: a engrenagem abre o modal de Configurações DIRETO (root no servidor ativo).
            Ponto colorido e tooltip do servidor ativo seguem. O AccountMenu desktop saiu (Step 2);
            o drawer mobile (SessionList) continua usando o componente extraído na 4a. -->
-      <button class="acct-btn" bind:this={acctBtnEl} onclick={() => abrirConfig('root', getActiveId())} aria-haspopup="dialog" aria-label="Configurações e servidor">
+      <button class="acct-btn" bind:this={acctBtnEl} onclick={() => abrirConfig('root', getActiveId())} aria-haspopup="dialog" aria-label="Configurações e servidor" title={expanded ? undefined : accountName}>
         <span class="acct-chip" aria-hidden="true" style="--pt: {accountColor};">
           <!-- Engrenagem, e não iniciais: o menu é a porta de Configurações (Aparência, servidor,
                Motores), e iniciais em círculo liam como avatar de pessoa. O PONTO mantém a outra
@@ -1103,15 +1150,17 @@ import ConfirmDialog from './ConfirmDialog.svelte';
           </svg>
           <span class="acct-dot"></span>
         </span>
+        {#if expanded}
         <span class="acct-who">
           <span class="acct-name">{accountName}</span>
           <span class="acct-sub">{accountSub}</span>
         </span>
+        {/if}
       </button>
     </div>
     <button class="cta-new" onclick={() => (showCreate = true)} aria-label="Nova sessão" title="Nova sessão">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-      <span>Nova</span>
+      {#if expanded}<span>Nova</span>{/if}
     </button>
     <!-- Controles moram TODOS no rodape: identidade em cima, sessoes no meio, controle embaixo.
          Antes o kebab ficava no cabecalho e o recolher no rodape — duas zonas de controle. -->
@@ -1126,7 +1175,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         <rect x="3" y="4" width="18" height="16" rx="2"/>
         <line x1="9" y1="4" x2="9" y2="20"/>
       </svg>
-      <span class="fold-label">Recolher</span>
+      {#if expanded}<span class="fold-label">Recolher</span>{/if}
     </button>
     <!-- Toggle do painel de contexto no rodapé do RAIL (follow-up visual): no modo Barra lateral
          o controle vive aqui, como a referência do usuário — último item do rodapé. No modo
@@ -1143,11 +1192,13 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     {/if}
   </div>
 
-  <!-- Drag na borda direita pra redimensionar (a <aside> so esta no DOM expandida; recolhida ela
-       some inteira, entao o handle nunca aparece sem a barra). -->
+  <!-- Drag na borda direita pra redimensionar: so expandida (no trilho de 56px o handle de 6px
+       flutuaria sobre a borda — era `{#if !collapsed}` no original). -->
+  {#if expanded}
   <div class="resize-handle" onpointerdown={resizeStart} onpointermove={resizeMove}
     onpointerup={resizeEnd} onpointercancel={resizeEnd}
     role="separator" aria-label="Redimensionar barra lateral" aria-orientation="vertical"></div>
+  {/if}
 </aside>
 {/if}
 
@@ -1398,6 +1449,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     background: var(--glass-bg);
   }
 
+  .sidebar.collapsed { width: 56px; padding: var(--space-3) var(--space-2); }
+
   /* Aparência → Painéis → "Soltos" (o padrão): a sidebar deixa de ser parede colada e vira card,
      mesmo tratamento do painel de contexto (DesktopSessionContext.svelte:287) e do dock recolhido
      logo abaixo. `height: auto` + as margens: o flex do shell estica o item pra altura do container
@@ -1429,76 +1482,37 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   /* A lista so rola quando bate no teto: com 2 sessoes o dock e curto e sem barra. */
   .sidebar.floating .sess-list { flex: 0 1 auto; }
 
-  /* ── RAIL (modo Barra lateral — o PADRÃO): trilho de 56px com iniciais ──────────
-     Referência do usuário (ec799c): marca no topo, iniciais com indicador de estado, rodapé com
-     engrenagem, Nova, kebab, Recolher e o toggle do painel de contexto como ÚLTIMO item.
-     O rail reusa a MESMA lista e os mesmos handlers da sidebar expandida — só o CSS troca o
-     desenho: iniciais no lugar do ícone, textos/botões de linha escondidos, rodapé em coluna. */
-  .rail-iniciais { display: none; }
-  .rail-state-dot { display: none; }
-  .sidebar.rail {
-    width: 56px;
-    padding: var(--space-3) var(--space-2);
-    align-items: center;
-  }
-  .sidebar.rail .side-top { flex-direction: column; gap: var(--space-2); min-height: 0; }
-  .sidebar.rail .side-brand,
-  .sidebar.rail .select-toggle-btn { display: none; }
-  .sidebar.rail .sess-list { gap: var(--space-1); width: 100%; }
-  .sidebar.rail .sess-main {
-    min-height: 36px;
-    padding: 0;
-    justify-content: center;
-  }
-  .sidebar.rail .lead { width: 36px; position: relative; }
-  /* Indicador de estado no canto da caixa de iniciais (mesmo desenho do acct-dot): âncoras de 9px
-     com anel do fundo, pra cor de estado não sumir no véu do trilho. */
-  .sidebar.rail .rail-state-dot {
-    display: block;
-    position: absolute;
-    right: -2px;
-    bottom: -2px;
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    box-shadow: 0 0 0 2px var(--bg-elevated);
-  }
-  .sidebar.rail .row-mark { display: none; }
-  .sidebar.rail .rail-iniciais {
-    display: grid; place-items: center;
-    width: 36px; height: 36px;
-    border-radius: var(--radius-md);
-    font-size: var(--text-xs); font-weight: 600;
-    color: var(--text-secondary);
-    background: var(--surface-raised);
-  }
-  .sidebar.rail .row-info,
-  .sidebar.rail .state-chip,
-  .sidebar.rail .sess-resume,
-  .sidebar.rail .sess-git,
-  .sidebar.rail .sess-del,
-  .sidebar.rail .sess-kebab,
-  .sidebar.rail .sess-edit { display: none; }
-  .sidebar.rail .sess-row.active {
+  /* ── Vocabulario do trilho (desenho ORIGINAL, restaurado de 0d9ffc5) ─────
+     Um item, uma medida: 36px de lado pra TUDO que e acao (recolher, ⋯, sessao, nova sessao) e o
+     mesmo raio. Antes conviviam 36px de icone, 48px de linha de sessao e 36px de botao redondo, com
+     tres raios — a coluna parecia desalinhada mesmo com todos os itens centralizados. O circulo
+     fica reservado ao avatar da conta: circulo = pessoa, quadrado arredondado = acao. */
+  .sidebar.collapsed .sess-main { min-height: 36px; }
+  /* Sessao ABERTA no trilho: anel accent na moldura da linha. O realce era um fundo accent a 10%
+     atras de um quadrado que cobre a linha toda — invisivel. O anel vai por dentro (inset) pra nao
+     estourar os 40px uteis do dock, e nao disputa com o box-shadow das iniciais (travada/ocupada). */
+  /* Selecionado: BARRA na borda, não anel. O anel agora é vocabulário de estado; usar anel de
+     accent aqui fazia "selecionado" e "trabalhando" competirem pelo mesmo desenho e pela mesma cor. */
+  .sidebar.collapsed .sess-row.active {
     background: var(--accent-dim);
     box-shadow: inset 3px 0 0 0 var(--accent);
   }
-  .sidebar.rail .sess-row.active .rail-iniciais { color: var(--accent); }
-  .sidebar.rail .side-foot {
-    flex-direction: column;
-    gap: var(--space-1);
-    width: 100%;
-  }
-  .sidebar.rail .side-foot .acct-btn { justify-content: center; padding: 0; }
-  .sidebar.rail .side-foot .acct-chip { width: 36px; height: 36px; }
-  .sidebar.rail .side-foot .acct-who { display: none; }
-  .sidebar.rail .side-foot .cta-new {
-    width: 100%; height: 36px; padding: 0;
-    justify-content: center;
+  .sidebar.collapsed .sess-list { gap: var(--space-1); }
+  /* 36px em TODAS as caixas visiveis do trilho. Com iniciais/avatar a 32 e os botoes a 36, a coluna
+     lia como desalinhada: os itens estavam centrados, mas com larguras diferentes. */
+  .sidebar.collapsed .initials { width: 36px; height: 36px; border-radius: var(--radius-md); }
+  .sidebar.collapsed .side-foot.rail .cta-new {
+    height: 36px;
     border-radius: var(--radius-md);
   }
-  .sidebar.rail .fold-btn { width: 100%; }
-  .sidebar.rail .resize-handle { display: none; }
+  /* Rodape do dock: mesma distancia entre itens que o resto do trilho, e a regua encostada nas
+     bordas internas do dock em vez de uma linha curta boiando no meio. */
+  .sidebar.floating .side-foot.rail {
+    gap: var(--space-1);
+    margin: var(--space-1) calc(var(--space-2) * -1) 0;
+    padding: var(--space-2) var(--space-2) 0;
+  }
+  .sidebar.floating .side-foot.rail .acct-chip { width: 36px; height: 36px; }
 
   /* ── Polish: foco de teclado + transições de estado ──────────────────────
      Foco visível (dev-tool: anel accent), inset pra nao ser cortado pelo overflow da sidebar/lista.
@@ -1522,12 +1536,18 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .side-top { display: flex; align-items: center; gap: var(--space-2); min-height: 36px; }
   /* Linha propria sob o header: o seletor de view separa "onde estou" da lista de sessoes. */
   .side-views { display: flex; margin-top: var(--space-2); }
+  /* Rail recolhido: o header empilha (recolher em cima, kebab embaixo) — a nav secundária segue
+     acessível num toque sem precisar expandir. */
+  .sidebar.collapsed .side-top { flex-direction: column; gap: var(--space-2); }
+  /* O rodape e LINHA quando aberto e COLUNA no rail (.side-foot.rail), entao o botao muda de forma:
+     aberto ele e um icone compacto ao lado do CTA; no rail ocupa a largura do trilho. */
   .fold-btn {
     display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
     flex: 0 0 auto; width: 36px; height: 36px; padding: 0;
     background: transparent; border: 0; border-radius: var(--radius-md);
     color: var(--text-muted); cursor: pointer;
   }
+  .sidebar.collapsed .fold-btn { width: 100%; }
   @media (hover: hover) { .fold-btn:hover { background: var(--bg-hover); color: var(--text-primary); } }
   /* o rotulo so aparece se sobrar espaco: no rodape em linha o icone ja basta */
   .fold-label { display: none; }
@@ -1801,6 +1821,16 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     border: 1px solid var(--border-subtle);
     padding: 1px 6px; border-radius: var(--radius-full); white-space: nowrap;
   }
+  /* Mesma etiqueta no rail de 56px: colada na base do avatar, absoluta (não mexe na altura da row).
+     bottom: -3px e não -7px: com densidade compacta a row cai pra 34px e o avatar de 30px quase a
+     preenche — a -7px a etiqueta passava da row e encostava no avatar de baixo. */
+  .prov-rail {
+    position: absolute; left: 50%; bottom: -3px; transform: translateX(-50%);
+    font-size: 9px; font-weight: 700; letter-spacing: 0.02em; line-height: 1.3;
+    color: var(--text-secondary); background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
+    padding: 0 4px; border-radius: var(--radius-full); white-space: nowrap;
+  }
   .engine-chip {
     flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
     font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
@@ -1808,6 +1838,49 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     padding: 1px 6px; border-radius: var(--radius-full);
   }
   .lead { width: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
+  /* Rail recolhido: iniciais precisam de mais espaco que o icone de 18px. */
+  .sidebar.collapsed .lead { width: auto; position: relative; }
+  /* Rail recolhido — as INICIAIS dizem quem é, o ANEL diz como está. Antes a cor do estado pintava
+     a letra E o fundo do chip, então o olho lia "chip verde / chip roxo" em vez de ler a sessão, e o
+     roxo do trabalhando era o mesmo --accent do selecionado. Superfície em --surface-raised (e não
+     uma cor sólida) porque era o único elemento do trilho que não deixava o papel de parede passar. */
+  .initials {
+    width: 30px; height: 30px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
+    color: var(--text-primary);
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    box-shadow: 0 0 0 2px var(--anel, transparent);
+  }
+  /* Ociosa é o estado calmo: sem anel, pra que anel signifique "olha aqui". */
+  .initials.ociosa { box-shadow: none; }
+  /* Travada (feature #7) no rail recolhido: anel âmbar sutil, mesma ideia do .state-chip.stalled. */
+  .initials.stalled {
+    box-shadow: inset 0 0 0 1px var(--warning);
+  }
+  /* ÊNFASE POR URGÊNCIA — quem pulsa é quem precisa DE TI.
+     Antes era ao contrário: "trabalhando" (rotina) era o único estado animado, e "esperando
+     resposta", que é o único que exige ação humana, tinha só a cor do anel. Agora:
+       aguardando -> halo pulsando, largo e lento (chama sem apressar)
+       trabalhando -> anel firme, sem pulso (informa, não interrompe)
+       travada    -> anel âmbar por dentro (aviso, não animação de rotina)
+     O halo NUNCA vai a zero de alfa: sobre papel de parede movimentado a sessão sumia entre um
+     pulso e outro. */
+  .initials.busy {
+    box-shadow: 0 0 0 2px var(--anel, transparent);
+  }
+  .initials.aguardando {
+    animation: rail-chama 2.2s var(--ease-out) infinite;
+  }
+  @keyframes rail-chama {
+    0%, 100% { box-shadow: 0 0 0 2px var(--anel, transparent), 0 0 0 2px color-mix(in srgb, var(--anel, transparent) 55%, transparent); }
+    55%      { box-shadow: 0 0 0 2px var(--anel, transparent), 0 0 0 8px color-mix(in srgb, var(--anel, transparent) 0%, transparent); }
+  }
+  .sidebar.collapsed .sess-row { justify-content: center; }
+  /* position:relative pra ancorar a PlanBar compact (position:absolute) — sem isto ela flutua em
+     relação ao body inteiro em vez de ficar na base desta linha. */
+  .sidebar.collapsed .sess-main { justify-content: center; padding: 0; position: relative; }
   .sess-row.active .sess-main { color: var(--text-primary); }
   .sess-name { flex: 1; min-width: 0; font-size: var(--text-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sess-main.untracked { opacity: 0.45; cursor: default; }
@@ -1914,13 +1987,16 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     display: flex; align-items: center; gap: var(--space-2);
     border-top: 1px solid var(--border-subtle); padding-top: var(--space-2); margin-top: var(--space-1);
   }
+  .side-foot.rail { flex-direction: column; }
   .account-anchor { position: relative; flex: 1; min-width: 0; }
+  .side-foot.rail .account-anchor { flex: 0 0 auto; }
   .acct-btn {
     display: flex; align-items: center; gap: var(--space-2); width: 100%; min-width: 0;
     padding: var(--space-1) var(--space-2); justify-content: flex-start; text-align: left;
     color: var(--text-primary); border-radius: var(--radius-md);
   }
   .acct-btn:hover { background: var(--bg-hover); }
+  .side-foot.rail .acct-btn { justify-content: center; padding: var(--space-1); }
   /* Mesmo vocabulario dos chips de sessao: superficie que acompanha a transparencia + anel de
      accent pra dizer "este e voce". O gradiente anterior tinha um roxo CHUMBADO (#a06de0) que nao
      existe em token nenhum: com a paleta vinda do papel de parede, o accent mudava e ele nao. */
@@ -1952,6 +2028,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
   .cta-new svg { flex-shrink: 0; }
   .cta-new:hover { background: var(--accent-press); }
+  .side-foot.rail .cta-new { width: 36px; padding: 0; justify-content: center; }
 
   /* ── Menu de contexto ── */
   /* .menu-backdrop e .ctx-sep ficam aqui porque o kebab do header tambem os usa; o resto do menu de
