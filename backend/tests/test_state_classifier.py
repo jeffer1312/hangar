@@ -40,7 +40,7 @@ def test_awaiting_input_parses_question_and_options():
 
 def test_awaiting_input_option_cut_at_preview_box():
     # AskUserQuestion com `preview`: box (│...│) renderiza NA MESMA LINHA da opção. O label deve
-    # parar na borda │ — sem o corte, o conteúdo do preview poluia a opção (bug real do my-service).
+    # parar na borda │ — sem o corte, o conteúdo do preview poluia a opção (bug real observado numa sessão).
     pane = (
         "   Como deixo o meu?\n"
         "\n"

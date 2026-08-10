@@ -135,7 +135,7 @@ export function initials(name: string): string {
   const ultimo = parts[parts.length - 1];
   if (parts.length >= 2 && /^\d{1,2}$/.test(ultimo)) {
     // A letra vem da palavra ANTES do número, não da primeira do nome: com a primeira, todo nome de
-    // uma mesma família continuava colidindo — `svc-mailer-2` e `svc-report-ai-2` davam "M2" as
+    // uma mesma família continuava colidindo — `svc-mailer-2` e `svc-report-ai-2` davam "S2" as
     // duas, que é exatamente o problema que este ramo existe pra resolver.
     const anterior = parts[parts.length - 2];
     return (anterior[0] + ultimo).toUpperCase().slice(0, 3);

@@ -1,7 +1,7 @@
 ---
 name: orquestrar
 description: |
-  Orquestra uma tarefa que atravessa VARIOS repos usando sessoes Claude pareadas do claude-pocket - esta sessao vira a LIDER, cria/pareia uma sessao visivel por repo (cp-send --new/--pair), escreve o contrato compartilhado do grupo, distribui o escopo, monitora os reportes e consolida o painel final pro usuario. Use quando o usuario pedir "orquestra", "coordena", "distribui essa tarefa/PM entre os repos", "abre uma sessao pra cada repo", ou quando uma PM multi-repo precisar de trabalho paralelo em mais de um repo. NAO use para: tarefa de um repo so (sessao normal), exploracao read-only multi-repo (subagent Explore resolve), ou mandar um recado avulso (cp-send direto).
+  Orquestra uma tarefa que atravessa VARIOS repos usando sessoes Claude pareadas do claude-pocket - esta sessao vira a LIDER, cria/pareia uma sessao visivel por repo (cp-send --new/--pair), escreve o contrato compartilhado do grupo, distribui o escopo, monitora os reportes e consolida o painel final pro usuario. Use quando o usuario pedir "orquestra", "coordena", "distribui essa tarefa/ticket entre os repos", "abre uma sessao pra cada repo", ou quando um ticket multi-repo precisar de trabalho paralelo em mais de um repo. NAO use para: tarefa de um repo so (sessao normal), exploracao read-only multi-repo (subagent Explore resolve), ou mandar um recado avulso (cp-send direto).
 ---
 
 # orquestrar — sessão líder de um grupo de trabalho multi-repo
@@ -28,7 +28,7 @@ fora do cwd desta sessão = sessão pareada, sempre.
 ### 1. Escopo (antes de criar qualquer sessão)
 
 Levantar e **confirmar com o usuário**:
-- Tarefa: chave da PM (`ABC-1234`) ou descrição livre. PM → branch = chave, regras de PM do CLAUDE.md valem em todas as sessões.
+- Tarefa: chave do ticket (`ABC-1234`) ou descrição livre. Ticket → branch = chave, e as regras de ticket do CLAUDE.md valem em todas as sessões.
 - Repos afetados: cwd de cada um + o que cada sessão vai fazer (1 linha por repo).
 - Interfaces entre repos que precisam ser combinadas (rota, payload, evento, tipo).
 
@@ -42,7 +42,7 @@ cp-send --list        # nome, estado, cwd das sessões vivas
 ```
 
 - Já existe sessão viva no cwd do repo → **reusar** (perguntar ao usuário se ela está livre pra tarefa).
-- Não existe → `cp-send --new <tarefa>-<repo> <cwd>` (ex: `abc-1234-svc-mailer`). Nunca `tmux new-session` cru.
+- Não existe → `cp-send --new <tarefa>-<repo> <cwd>` (ex: `abc-1234-api-web`). Nunca `tmux new-session` cru.
 
 ### 3. Parear (uma chamada por sessão)
 

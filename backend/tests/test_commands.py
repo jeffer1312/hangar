@@ -103,7 +103,7 @@ def test_scan_installed_plugins(monkeypatch, tmp_path):
     install = tmp_path / "cache" / "acme" / "1.0"
     (install / "commands").mkdir(parents=True)
     (install / "commands" / "abrir-ticket.md").write_text(
-        "---\ndescription: Abre a PM\nargument-hint: <chave>\n---\n\ncorpo\n",
+        "---\ndescription: Abre o ticket\nargument-hint: <chave>\n---\n\ncorpo\n",
         encoding="utf-8",
     )
     (install / "skills" / "kubectl").mkdir(parents=True)

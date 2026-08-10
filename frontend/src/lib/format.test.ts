@@ -36,7 +36,7 @@ describe('initials', () => {
     expect(initials('worker-12')).toBe('W12');
     // três+ palavras: a letra sai da palavra ANTES do número, senão a família inteira colide
     expect(initials('svc-mailer-2')).toBe('M2');
-    expect(initials('svc-report-ai-2')).toBe('I2');
+    expect(initials('svc-report-ai-2')).toBe('A2');
     expect(initials('jeffer1312')).toBe('JE');
   });
 

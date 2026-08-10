@@ -158,7 +158,7 @@ def narrar(texto: str, blocos: list[str], instrucao: str) -> str:
     )
 
 
-# Limpeza do ditado. O usuario dita PROMPTS: nome de sessao, caminho, comando, chave de PM. Um
+# Limpeza do ditado. O usuario dita PROMPTS: nome de sessao, caminho, comando, chave de ticket. Um
 # modelo com liberdade pra "arrumar o texto" transforma cp-send em "CP send" e ABC-1234 em
 # "ABC 1234" — e ai o ditado fica pior do que era.
 _SYSTEM_DITADO = (
