@@ -160,4 +160,23 @@ describe('DesktopShell — empty state compensa a faixa (follow-up visual)', () 
     expect(document.querySelector('.tab-ctx')).toBeNull();
     unmount(t.comp);
   });
+
+  it('empty state cita a faixa no modo tabs e a barra no modo rail', async () => {
+    // modo tabs (padrão dos testes): sidebar recolhida -> a faixa de abas existe e a dica a cita
+    const t1 = montar(null);
+    await tick();
+    sidebarPin.setForced(true);
+    await tick();
+    expect(document.querySelector<HTMLElement>('.empty-sub')!.textContent).toContain('na faixa de abas');
+    unmount(t1.comp);
+
+    // modo rail: a faixa não existe -> a dica fala da barra lateral
+    navMode.mode = 'rail';
+    const t2 = montar(null);
+    await tick();
+    sidebarPin.setForced(true);
+    await tick();
+    expect(document.querySelector<HTMLElement>('.empty-sub')!.textContent).toContain('na barra lateral');
+    unmount(t2.comp);
+  });
 });

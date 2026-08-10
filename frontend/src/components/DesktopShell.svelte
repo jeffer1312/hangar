@@ -403,7 +403,7 @@
       <div class="desktop-empty" class:compensa-faixa={barraDeAbas}>
         <div class="empty-mark"><HangarMark size={72} /></div>
         <p class="empty-title">Selecione uma sessão</p>
-        <p class="empty-sub">ou crie uma nova na barra lateral</p>
+        <p class="empty-sub">{barraDeAbas ? 'ou crie uma nova em + na faixa de abas' : 'ou crie uma nova na barra lateral'}</p>
       </div>
     {/if}
   </main>
