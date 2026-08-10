@@ -63,4 +63,16 @@ describe('sidebarPin', () => {
     expect(sidebarPin.collapsed).toBe(false);
     expect(storage.getItem('cp_sidebar_collapsed')).toBe('0');
   });
+
+  it('forcedOverride expõe o override sem confundir com a preferência (round 7)', async () => {
+    const storage = fakeStorage();
+    vi.stubGlobal('localStorage', storage);
+    const { sidebarPin } = await import('./sidebarPin.svelte');
+    expect(sidebarPin.forcedOverride).toBeNull();
+    sidebarPin.setForced(true);
+    expect(sidebarPin.forcedOverride).toBe(true);
+    expect(sidebarPin.preferred).toBe(false);   // preferência intocada
+    sidebarPin.setForced(null);
+    expect(sidebarPin.forcedOverride).toBeNull();
+  });
 });

@@ -30,7 +30,13 @@
   let focusedKey = $state<string | null>(null);
   const focusableKey = $derived(focusedTabKey(model.tabs, currentKey, focusedKey));
 
+  // Board/Canvas: a sidebar fica recolhida POR FORÇA (override temporário) — expandir ali é
+  // clique morto que gravaria a preferência por baixo (o override vence e nada abre, mas o
+  // pin do usuário mudava calado). Com override ativo o botão desabilita (tooltip explica);
+  // a preferência só muda quando o usuário decide de verdade, sem override.
+  const expandBlocked = $derived(sidebarPin.forcedOverride === true);
   function expand() {
+    if (sidebarPin.forcedOverride === true) return;   // guard duplo: disabled + handler (teclado)
     sidebarPin.setUser(false);
   }
 
@@ -58,7 +64,9 @@
 </script>
 
 <div class="tabs-bar">
-  <button class="tab-expand" onclick={expand} aria-label="Expandir barra lateral" title="Expandir barra lateral">
+  <button class="tab-expand" class:disabled={expandBlocked} onclick={expand} disabled={expandBlocked}
+    aria-label={expandBlocked ? 'Barra recolhida no Quadro/Canvas' : 'Expandir barra lateral'}
+    title={expandBlocked ? 'Quadro/Canvas recolhe a barra — expanda ao sair' : 'Expandir barra lateral'}>
     <HangarMark size={18} />
   </button>
 
@@ -181,7 +189,8 @@
     color: var(--accent);
     cursor: pointer;
   }
-  .tab-expand:hover { background: var(--bg-hover); }
+  .tab-expand:hover:not(:disabled) { background: var(--bg-hover); }
+  .tab-expand:disabled { color: var(--text-muted); cursor: default; opacity: 0.55; }
   .tab-offline {
     flex-shrink: 0;
     font-size: var(--text-xs);

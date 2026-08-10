@@ -11,6 +11,10 @@ let forced = $state<boolean | null>(null);
 export const sidebarPin = {
   get collapsed() { return forced ?? preferred; },
   get preferred() { return preferred; },
+  // Override ativo (Board/Canvas segurando o recolhido). Quem precisa distinguir "recolhido por
+  // preferência" (expandir é ação legítima) de "recolhido por override" (expandir é clique morto)
+  // lê isto — `collapsed` sozinho não separa os dois (round 7).
+  get forcedOverride() { return forced; },
   setUser(value: boolean) {
     preferred = value;
     try { localStorage.setItem(KEY, value ? '1' : '0'); } catch { /* modo privado */ }
