@@ -2,6 +2,7 @@
   // Abas horizontais no topo (Task 6): quando a sidebar está recolhida, a navegação de sessões
   // vira uma faixa de abas. Só a <aside> some — os workflows pesados (criar, menu de contexto,
   // kebab) continuam na Sidebar montada, chamados via sidebarBridge.
+  import { onMount } from 'svelte';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { buildSessionTabs, focusedTabKey, tabKeyOf } from '../lib/sessionTabs';
   import { stateColors, stateLabels } from '../lib/format';
@@ -53,13 +54,33 @@
     tabEls[next]?.focus();
   }
 
+  // Foco pós-rename (round 2): a Sidebar pede foco pra aba recriada (`${serverId}::${novoNome}`)
+  // quando o rename do diálogo fecha — mas o modelo ainda tem o nome VELHO. Registramos o handler
+  // e deixamos o foco PENDENTE: o $effect abaixo foca assim que o modelo refletir o novo nome (o
+  // SSE re-emite e a aba antiga, keyed por nome, é substituída).
+  let pendingFocusKey = $state<string | null>(null);
+  onMount(() => sidebarBridge.registerTabFocus({
+    focusTab: (key: string) => {
+      const idx = model.tabs.findIndex((t) => tabKeyOf(t.session) === key);
+      if (idx >= 0) tabEls[idx]?.focus();
+      else pendingFocusKey = key;
+    },
+  }));
+
   // Aba ativa entra na viewport: quando a seleção muda (troca de sessão, remontagem da lista) ou o
   // conjunto de abas muda, re-loca a seleção. Só dentro do strip — `nearest` evita pular quando já
-  // está visível.
+  // está visível. O mesmo efeito consome pendingFocusKey quando a aba recriada aparecer.
   $effect(() => {
     void currentKey;
     void model.tabs.length;
     tabEls.find((t) => t?.getAttribute('aria-selected') === 'true')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+    if (pendingFocusKey) {
+      const idx = model.tabs.findIndex((t) => tabKeyOf(t.session) === pendingFocusKey);
+      if (idx >= 0) {
+        tabEls[idx]?.focus();
+        pendingFocusKey = null;
+      }
+    }
   });
 </script>
 

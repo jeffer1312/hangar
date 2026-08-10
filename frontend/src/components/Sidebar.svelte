@@ -381,14 +381,22 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 
   // Núcleo do rename (inline E diálogo da sidebar recolhida): mira o servidor dono, renomeia e
   // restaura. `old` é o nome ANTIGO (chave tmux); `nv` já validado/trimado pelo chamador.
-  async function doRename(nv: string, old: string, serverId: string) {
+  // Retorno tipado: falha NÃO é engolida — o chamador decide onde expor (diálogo aberto com
+  // role=alert, flash no inline); nada de reportar sucesso calado (round 2).
+  async function doRename(
+    nv: string,
+    old: string,
+    serverId: string,
+  ): Promise<{ ok: boolean; name: string; erro: string }> {
     const prev = getActiveId(); // C1: save before pointing at target server
     selectServer(serverId);
     try {
       const r = await renameSession(old, nv);
       if (old === currentSession) onSelect(r.name);
-    } catch { /* load corrige */ }
-    finally {
+      return { ok: true, name: r.name, erro: '' };
+    } catch (e) {
+      return { ok: false, name: old, erro: e instanceof Error ? e.message : 'falha ao renomear' };
+    } finally {
       if (prev && prev !== serverId) selectServer(prev); // C1: restore so open chat stays on its server
       // SSE stream emitirá a sessão renomeada automaticamente
     }
@@ -397,7 +405,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     const nv = editValue.trim();
     editing = null;
     if (!nv || nv === old) return;
-    void doRename(nv, old, serverId);
+    // Inline preserva o comportamento (fecha o input no blur); falha aparece no toast, não some.
+    void doRename(nv, old, serverId).then((r) => {
+      if (!r.ok) flash(`renomear: ${r.erro}`);
+    });
   }
   function onEditKey(e: KeyboardEvent, old: string) {
     if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
@@ -506,10 +517,14 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // inline continua como sempre foi.
   let renameDialog = $state<{ old: string; serverId: string } | null>(null);
   let renameValue = $state('');
+  let renameInputEl = $state<HTMLInputElement | null>(null);
+  let renameBusy = $state(false);
+  let renameError = $state('');
   function menuRename() {
     if (!menu) return;
     if (sidebarPin.collapsed) {
       renameValue = menu.name;
+      renameError = '';
       renameDialog = { old: menu.name, serverId: menu.serverId };
     } else {
       editing = `${menu.serverId}::${menu.name}`;
@@ -518,12 +533,24 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     closeMenu();
   }
   function submitRenameDialog() {
-    if (!renameDialog) return;
+    if (!renameDialog || renameBusy) return;
     const { old, serverId } = renameDialog;
     const nv = renameValue.trim();
-    renameDialog = null;
+    // Guard duplo do disabled (que também trima): nunca fecha em no-op.
     if (!nv || nv === old) return;
-    void doRename(nv, old, serverId);
+    renameBusy = true;
+    renameError = '';
+    void doRename(nv, old, serverId).then((r) => {
+      renameBusy = false;
+      if (r.ok) {
+        renameDialog = null;
+        // A aba antiga foi destruída (keyed por nome): o foco vai pra aba recriada quando o
+        // modelo refletir o novo nome (round 2).
+        sidebarBridge.focusTab(`${serverId}::${r.name}`);
+      } else {
+        renameError = r.erro;   // diálogo fica aberto; erro visível ligado ao campo (role=alert)
+      }
+    });
   }
   function menuDelete() {
     if (!menu) return;
@@ -1181,13 +1208,15 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   {@const rd = renameDialog}
   <ConfirmDialog title="Renomear sessão" aria="Renomear sessão" role="dialog"
     fallbackFocus={acctBtnEl}
+    initialFocus={renameInputEl}
     onClose={() => (renameDialog = null)}
     actions={[
       { label: 'Cancelar', onClick: () => (renameDialog = null) },
-      { label: 'Renomear', kind: 'primary', disabled: !renameValue.trim() || renameValue === rd.old, onClick: submitRenameDialog },
+      { label: 'Renomear', kind: 'primary', disabled: renameBusy || !renameValue.trim() || renameValue.trim() === rd.old, onClick: submitRenameDialog },
     ]}>
     <input
       class="rename-dialog-input"
+      bind:this={renameInputEl}
       bind:value={renameValue}
       use:autofocus
       autocomplete="off"
@@ -1195,10 +1224,15 @@ import ConfirmDialog from './ConfirmDialog.svelte';
       autocapitalize="off"
       spellcheck={false}
       aria-label="Novo nome da sessão"
+      aria-invalid={renameError ? true : undefined}
+      aria-describedby={renameError ? 'rename-dialog-err' : undefined}
       onkeydown={(e) => {
-        if (e.key === 'Enter' && renameValue.trim() && renameValue !== rd.old) submitRenameDialog();
+        if (e.key === 'Enter' && !renameBusy && renameValue.trim() && renameValue.trim() !== rd.old) {
+          submitRenameDialog();
+        }
       }}
     />
+    {#if renameError}<p id="rename-dialog-err" class="rename-dialog-err" role="alert">{renameError}</p>{/if}
   </ConfirmDialog>
 {/if}
 
@@ -1703,6 +1737,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
   .rename-dialog-input::placeholder { color: var(--text-muted); }
   .rename-dialog-input:focus { border-color: var(--accent); }
+  .rename-dialog-input[aria-invalid='true'] { border-color: var(--error); }
+  .rename-dialog-err { margin: var(--space-2) 0 0; font-size: var(--text-xs); color: var(--error); }
   .sess-del {
     width: 22px; height: 22px; min-height: 0; flex-shrink: 0; border-radius: var(--radius-sm);
     color: var(--text-muted); font-size: var(--text-base); line-height: 1; margin-right: 2px;

@@ -16,11 +16,15 @@
     // Alvo concreto pro foco voltar quando o gatilho original sumiu/ficou oculto/inerte (ex: menu
     // de conta que fechou antes do diálogo). Quem abre a confirmação sabe qual controle sobra.
     fallbackFocus?: HTMLElement | null;
+    // Foco inicial EXPLÍCITO do chamador (ex: o campo de um formulário no corpo, como o rename da
+    // sidebar recolhida): sobrepõe o safeButton — o ModalDialog prefere um alvo conectado e
+    // contido. Sem isto o foco cairia na primeira ação segura (Cancelar), longe do campo (round 2).
+    initialFocus?: HTMLElement | null;
     actions: Action[];
     onClose: () => void;
     children?: Snippet;
   }
-  let { title, aria, role = 'alertdialog', wide = false, fallbackFocus = null, actions, onClose, children }: Props = $props();
+  let { title, aria, role = 'alertdialog', wide = false, fallbackFocus = null, initialFocus = null, actions, onClose, children }: Props = $props();
   let safeButton = $state<HTMLButtonElement | null>(null);
   // O foco inicial nunca deve cair em uma ação destrutiva. Se não houver uma
   // alternativa segura habilitada, deixamos o ModalDialog focar o container.
@@ -46,7 +50,7 @@
   className={wide ? 'confirm-card wide' : 'confirm-card'}
   {role}
   {fallbackFocus}
-  initialFocus={safeButton}
+  initialFocus={initialFocus ?? safeButton}
 >
   <p class="confirm-title">{title}</p>
   {@render children?.()}

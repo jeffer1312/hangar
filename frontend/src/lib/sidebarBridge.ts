@@ -10,6 +10,14 @@ export interface SidebarBridgeHandlers {
 }
 let handlers: SidebarBridgeHandlers | null = null;
 
+// Canal SEPARADO de foco de aba (round 2): quem RENDERIZA as abas (SessionTabs) registra o
+// handler de foco — a Sidebar só pede foco pra aba recriada após um rename. Canal próprio porque
+// o slot de workflows é da Sidebar e o slot de foco é do SessionTabs (direções opostas).
+export interface TabFocusHandler {
+  focusTab: (key: string) => void;
+}
+let tabFocus: TabFocusHandler | null = null;
+
 export const sidebarBridge = {
   register(next: SidebarBridgeHandlers) {
     handlers = next;
@@ -20,4 +28,9 @@ export const sidebarBridge = {
     handlers?.openSessionMenu(event, session, serverId);
   },
   openKebab(event: MouseEvent) { handlers?.openKebab(event); },
+  registerTabFocus(next: TabFocusHandler) {
+    tabFocus = next;
+    return () => { if (tabFocus === next) tabFocus = null; };
+  },
+  focusTab(key: string) { tabFocus?.focusTab(key); },
 };

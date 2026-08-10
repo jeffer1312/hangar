@@ -7,16 +7,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import SessionTabs from './SessionTabs.svelte';
 import { sidebarPin } from '../lib/sidebarPin.svelte';
+import { sidebarBridge } from '../lib/sidebarBridge';
 
-vi.mock('../lib/sessionsStore.svelte', () => ({
-  sessionsStore: {
-    byServer: [{
-      server: { id: 'srv-a', label: 'A' },
-      sessions: [{ name: 'sess-1', serverId: 'srv-a', state: 'idle' }],
-      error: null, loaded: true,
-    }],
-  },
+// Store REATIVO (fixture .svelte.ts): o $derived do SessionTabs re-computa quando o modelo muda —
+// necessário pro teste do foco pós-rename esperar o reflexo do SSE. Mutar via fixtureByServer.
+vi.mock('../lib/sessionsStore.svelte', async () => ({
+  sessionsStore: (await import('./sessionTabs.test-store.svelte')).fixtureStore,
 }));
+import { fixtureByServer } from './sessionTabs.test-store.svelte';
 vi.mock('../lib/format', () => ({
   stateColors: {}, stateLabels: {}, sortSessions: (s: unknown[]) => s,
 }));
@@ -33,10 +31,20 @@ function montar() {
   return { el, comp: comp as never };
 }
 
+function comSessao(nome: string) {
+  fixtureByServer.length = 0;
+  fixtureByServer.push({
+    server: { id: 'srv-a', label: 'A' },
+    sessions: [{ name: nome, serverId: 'srv-a', state: 'idle' }],
+    error: null, loaded: true,
+  });
+}
+
 beforeEach(() => {
   sidebarPin.setForced(null);
   sidebarPin.setUser(false);
   vi.mocked(planBadge).mockReturnValue(null);   // sem plano por padrão (filete ausente)
+  comSessao('sess-1');
 });
 
 describe('SessionTabs — expandir sob override do Board/Canvas (round 7)', () => {
@@ -102,6 +110,35 @@ describe('SessionTabs — filete de progresso do plano (round 7)', () => {
     const filete = document.querySelector<HTMLElement>('.tab-plan');
     expect(filete?.style.width).toBe('100%');
     expect(filete?.classList.contains('done')).toBe(true);
+    unmount(t.comp);
+  });
+});
+
+describe('SessionTabs — foco pós-rename via bridge (round 2)', () => {
+  const aba = () => document.querySelector<HTMLButtonElement>('.tab');
+
+  it('focusTab com chave presente foca a aba imediatamente', async () => {
+    const t = montar();
+    await tick();
+    sidebarBridge.focusTab('srv-a::sess-1');
+    await tick();
+    expect(document.activeElement).toBe(aba());
+    unmount(t.comp);
+  });
+
+  it('focusTab com chave ainda ausente espera o modelo refletir e foca a aba recriada (conectada)', async () => {
+    const t = montar();
+    await tick();
+    // O SSE ainda não refletiu o rename: a chave nova não existe no modelo
+    sidebarBridge.focusTab('srv-a::sess-novo');
+    await tick();
+    expect(document.activeElement).not.toBe(aba());
+    // Modelo reflete o novo nome: a aba antiga (keyed por nome) é substituída pela recriada
+    comSessao('sess-novo');
+    await tick(); await tick();
+    const novaAba = aba();
+    expect(novaAba?.isConnected).toBe(true);
+    expect(document.activeElement).toBe(novaAba);
     unmount(t.comp);
   });
 });

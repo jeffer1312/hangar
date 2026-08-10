@@ -22,7 +22,9 @@ const storeState = vi.hoisted(() => ({
 }));
 
 vi.mock('../lib/api', () => ({
-  createSession: vi.fn(), deleteSession: vi.fn(), renameSession: vi.fn(),
+  createSession: vi.fn(), deleteSession: vi.fn(),
+  // Contrato real do renameSession: devolve { ok, name } (o doRename lê r.name).
+  renameSession: vi.fn(async (_old: string, nv: string) => ({ ok: true, name: nv })),
   gitAction: vi.fn(), checkoutBranch: vi.fn(), resumeSession: vi.fn(),
   broadcast: vi.fn(), getHistoryTailForServer: vi.fn(async () => []),
   // Imports do SessionContextMenu REAL (não stubado): o onMount chama getPushSettings.
@@ -178,7 +180,7 @@ describe('Sidebar — renomear com a sidebar recolhida (round 7)', () => {
     input!.dispatchEvent(new Event('input'));
     await tick();
     document.querySelector<HTMLElement>('.confirm-card')!.querySelector<HTMLButtonElement>('.c-primary')!.click();
-    await tick();
+    await tick(); await tick();   // fechamento é assíncrono (espera o doRename resolver — round 2)
     expect(api.renameSession).toHaveBeenCalledWith('sess-1', 'sess-novo');
     expect(document.querySelector('.confirm-card')).toBeNull();   // fechou sozinho após confirmar
     sidebarPin.setForced(null);
@@ -199,6 +201,120 @@ describe('Sidebar — renomear com a sidebar recolhida (round 7)', () => {
     await tick();
     expect(document.querySelector('.confirm-card')).toBeNull();   // nenhum diálogo
     expect(document.querySelector('.sess-edit')).not.toBeNull();  // input inline na linha
+    unmount(t.comp);
+  });
+
+  // Round 2: foco/teclado de VERDADE no diálogo (não input.value + clique no botão).
+  function abrirDialogoRename() {
+    abrirMenuDaAba();
+    return tick().then(() => {
+      const renameBtn = [...document.querySelectorAll<HTMLButtonElement>('.ctx-menu button')]
+        .find((b) => b.textContent?.trim() === 'Renomear')!;
+      renameBtn.click();
+      return tick();
+    });
+  }
+
+  it('RECOLHIDA: diálogo foca o input sozinho (pós-tick); digitar + Enter renomeia sem acionar Cancelar', async () => {
+    comUmaSessao();
+    const t = montar();
+    await tick();
+    sidebarPin.setForced(true);
+    await tick();
+    await abrirDialogoRename();
+    await tick();
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="Novo nome da sessão"]')!;
+    // Foco inicial explícito no CAMPO — não no safeButton (Cancelar) do ConfirmDialog
+    expect(document.activeElement).toBe(input);
+    // Digitação real (valor + evento de input do bind:value)
+    input.value = 'sess-novo';
+    input.dispatchEvent(new Event('input'));
+    await tick();
+    // Enter no campo (teclado) renomeia — e não dispara Cancelar
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await tick(); await tick();   // fechamento assíncrono (espera o doRename resolver)
+    expect(api.renameSession).toHaveBeenCalledWith('sess-1', 'sess-novo');
+    expect(document.querySelector('.confirm-card')).toBeNull();   // fechou no sucesso
+    sidebarPin.setForced(null);
+    unmount(t.comp);
+  });
+
+  it('RECOLHIDA: valor que trima pro nome atual mantém Renomear desabilitado (sem no-op que fecha)', async () => {
+    comUmaSessao();
+    const t = montar();
+    await tick();
+    sidebarPin.setForced(true);
+    await tick();
+    await abrirDialogoRename();
+    await tick();
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="Novo nome da sessão"]')!;
+    input.value = '  sess-1  ';   // trim() === nome atual (só espaços a mais)
+    input.dispatchEvent(new Event('input'));
+    await tick();
+    const confirmBtn = document.querySelector<HTMLButtonElement>('.confirm-card .c-primary')!;
+    expect(confirmBtn.disabled).toBe(true);
+    // Enter com o mesmo valor também não fecha em no-op
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await tick();
+    expect(api.renameSession).not.toHaveBeenCalled();
+    expect(document.querySelector('.confirm-card')).not.toBeNull();
+    sidebarPin.setForced(null);
+    unmount(t.comp);
+  });
+
+  it('RECOLHIDA: falha do renameSession mantém o diálogo aberto com erro role=alert ligado ao campo', async () => {
+    comUmaSessao();
+    vi.mocked(api.renameSession).mockRejectedValueOnce(new Error('tmux falhou'));
+    const t = montar();
+    await tick();
+    sidebarPin.setForced(true);
+    await tick();
+    await abrirDialogoRename();
+    await tick();
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="Novo nome da sessão"]')!;
+    input.value = 'sess-novo';
+    input.dispatchEvent(new Event('input'));
+    await tick();
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await tick(); await tick();
+    // Nada de sucesso falso: diálogo segue aberto, erro visível e associado ao campo
+    expect(document.querySelector('.confirm-card')).not.toBeNull();
+    const err = document.querySelector<HTMLElement>('#rename-dialog-err');
+    expect(err?.innerText).toContain('tmux falhou');
+    expect(err?.getAttribute('role')).toBe('alert');
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(input.getAttribute('aria-describedby')).toContain('rename-dialog-err');
+    // retry possível: Enter de novo dispara nova tentativa (o diálogo não travou)
+    const retrySpy = vi.mocked(api.renameSession).mockResolvedValueOnce({ ok: true, name: 'sess-novo' });
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await tick(); await tick();
+    expect(retrySpy).toHaveBeenCalledWith('sess-1', 'sess-novo');
+    sidebarPin.setForced(null);
+    unmount(t.comp);
+  });
+
+  it('RECOLHIDA: sucesso do rename pede foco na aba recriada (focusTab com a chave nova)', async () => {
+    comUmaSessao();
+    const focusSpy = vi.fn();
+    const un = sidebarBridge.registerTabFocus({ focusTab: focusSpy });
+    const t = montar();
+    await tick();
+    sidebarPin.setForced(true);
+    await tick();
+    await abrirDialogoRename();
+    await tick();
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="Novo nome da sessão"]')!;
+    input.value = 'sess-novo';
+    input.dispatchEvent(new Event('input'));
+    await tick();
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await tick(); await tick();
+    // A aba antiga (keyed por nome) será destruída — o foco é delegado à aba recriada, quando o
+    // modelo (SSE) refletir o novo nome. A cadeia completa (espera + foco conectado) está coberta
+    // no SessionTabs.test.ts; aqui provamos a chamada com a chave certa.
+    expect(focusSpy).toHaveBeenCalledWith('srv-a::sess-novo');
+    un();
+    sidebarPin.setForced(null);
     unmount(t.comp);
   });
 });
