@@ -2,6 +2,8 @@
   import { onMount } from 'svelte';
   import HangarMark from './icons/HangarMark.svelte';
   import Sidebar from './Sidebar.svelte';
+  import SessionTabs from './SessionTabs.svelte';
+  import { abrirConfig } from '../lib/configNav';
   import WorkspaceCommandPalette from './WorkspaceCommandPalette.svelte';
   import WorkspaceAttentionStrip from './WorkspaceAttentionStrip.svelte';
   import TerminalPanel from './TerminalPanel.svelte';
@@ -283,6 +285,13 @@
   </div>
 
   <div class="desktop-com-terminal">
+  {#if barraRecolhida && !terminalMaximizado}
+    <!-- Sidebar recolhida (trilho ou board/canvas): a navegação de sessões vira abas no topo.
+         Terminal maximizado esconde a faixa junto com o resto (tp-max-hide cobre só a .desktop-main,
+         a aba precisa da condição própria). Ações delegam à bridge da Sidebar ainda montada. -->
+    <SessionTabs {currentKey} onSelect={openSession}
+                 onOpenConfig={() => abrirConfig('root', getActiveId())} />
+  {/if}
   <main class="desktop-main" class:split={splitSessions.length > 0} class:has-attention={hasAttention}
         class:tp-max-hide={terminalMaximizado}>
     {#if hasAttention}
