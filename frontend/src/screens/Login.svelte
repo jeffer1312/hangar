@@ -127,14 +127,23 @@
       syncMode = { registered: s.registered };
       return;
     }
-    // QR pairing: the QR opens this app with ?token=… (and optional ?api=…). Pick it up,
-    // strip it from the URL (don't leave the secret in history), and connect automatically.
-    const params = new URLSearchParams(window.location.search);
-    const t = params.get('token');
-    if (!t) return;
-    token = t;
+    // Deep-link de pareamento (?token=…): valida a URL COMPLETA antes de extrair QUALQUER coisa.
+    // URLSearchParams.get descarta duplicatas e api vazia silenciosamente — o validator precisa
+    // ver a URL inteira (round 5): token/api duplicados ou api vazia são rejeitados sem alterar
+    // campos, URL, storage ou iniciar conexão. Visita normal (sem token na URL) não é deep-link.
+    const href = window.location.href;
+    if (!new URL(href).searchParams.has('token')) return;   // presença só: extração é do validator
+    const pareamento = validarPareamento(href);
+    if (!pareamento) {
+      // Deep-link inválido: NÃO limpa a query (o usuário precisa ver o link pra corrigir), NÃO
+      // preenche campos e NÃO conecta — erro visível com retry manual.
+      error = 'Deep-link de pareamento inválido — o link tem token/api duplicados ou api vazia.';
+      return;
+    }
     // baseUrl ABSOLUTO = ?api= ou a origem onde o app foi aberto (ex: https://casa.ts.net).
-    baseUrl = params.get('api') ?? window.location.origin;
+    baseUrl = pareamento.base;
+    token = pareamento.token;
+    // Só depois da validação: remove o segredo do histórico e conecta com os valores validados.
     window.history.replaceState({}, '', window.location.pathname + window.location.hash);
     void connect();
   });

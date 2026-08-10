@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // Round 4 da 4b: validação ESTRITA ANTES de addServer — URL/token inválidos não mutam storage nem
 // navegam (erro visível com retry); válidos chegam parseados ao addServer.
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import Login from './Login.svelte';
 import * as auth from '../lib/auth';
@@ -22,6 +22,8 @@ vi.mock('../lib/sync', () => ({
 
 const authMock = vi.mocked(auth);
 const apiMock = vi.mocked(api);
+
+beforeEach(() => { vi.clearAllMocks(); });   // contagens de chamada não vazam entre testes
 
 function montar() {
   const el = document.createElement('div');
@@ -96,5 +98,77 @@ describe('Login — validação estrita antes do add transacional (round 4)', ()
     );
     expect(onLogin).toHaveBeenCalled();
     unmount(comp);
+  });
+});
+
+// Round 5: o deep-link é validado pela URL COMPLETA antes de extrair qualquer coisa — URLSearchParams
+// descartava duplicatas e api vazia, e o validator via uma URL reconstruída (token/api duplicados
+// passavam). Agora o validator recebe a href inteira; inválido = sem preencher campos, sem limpar a
+// URL, sem conectar; válido = limpa o histórico DEPOIS da validação.
+describe('Login — deep-link validado pela URL completa (round 5)', () => {
+  async function montarComUrl(url: string) {
+    // happy-dom expõe a troca de URL em window.happyDOM (fora dos tipos TS do navegador)
+    (window as unknown as { happyDOM: { setURL: (u: string) => void } }).happyDOM.setURL(url);
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(Login, { target: el, props: { onLogin: vi.fn() } }) as never;
+    await tick(); await tick();   // onMount async (syncStatus) + handler do deep-link
+    return { el, comp };
+  }
+
+  it('token duplicado: validator recebe a URL COMPLETA, nada conecta, URL não é limpa, erro visível', async () => {
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    authMock.validarPareamento.mockReturnValue(null);
+    const t = await montarComUrl('https://casa.ts.net/?token=abc&token=def');
+    expect(authMock.validarPareamento).toHaveBeenCalledWith('https://casa.ts.net/?token=abc&token=def');
+    expect(authMock.addServerWithRollback).not.toHaveBeenCalled();
+    expect(replaceState).not.toHaveBeenCalled();
+    const err = t.el.querySelector<HTMLElement>('.error-msg');
+    expect(err?.innerText).toContain('Deep-link');
+    expect(err?.getAttribute('role')).toBe('alert');
+    unmount(t.comp);
+  });
+
+  it('api duplicada: rejeita sem conectar nem limpar', async () => {
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    authMock.validarPareamento.mockReturnValue(null);
+    const t = await montarComUrl('https://casa.ts.net/?token=abc&api=https://a.example&api=https://b.example');
+    expect(authMock.validarPareamento).toHaveBeenCalledWith(
+      'https://casa.ts.net/?token=abc&api=https://a.example&api=https://b.example',
+    );
+    expect(authMock.addServerWithRollback).not.toHaveBeenCalled();
+    expect(replaceState).not.toHaveBeenCalled();
+    unmount(t.comp);
+  });
+
+  it('api vazia: rejeita sem conectar nem limpar', async () => {
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    authMock.validarPareamento.mockReturnValue(null);
+    const t = await montarComUrl('https://casa.ts.net/?token=abc&api=');
+    expect(authMock.validarPareamento).toHaveBeenCalledWith('https://casa.ts.net/?token=abc&api=');
+    expect(authMock.addServerWithRollback).not.toHaveBeenCalled();
+    expect(replaceState).not.toHaveBeenCalled();
+    unmount(t.comp);
+  });
+
+  it('deep-link válido: valida a URL completa, conecta UMA vez e limpa o histórico depois da validação', async () => {
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    authMock.validarPareamento.mockReturnValue({ base: 'https://casa.ts.net', token: 'abc' });
+    authMock.addServerWithRollback.mockResolvedValue({ id: 'srv-x', succeeded: true });
+    const t = await montarComUrl('https://casa.ts.net/?token=abc');
+    expect(authMock.validarPareamento).toHaveBeenCalledWith('https://casa.ts.net/?token=abc');
+    expect(authMock.addServerWithRollback).toHaveBeenCalledTimes(1);
+    expect(replaceState).toHaveBeenCalledTimes(1);
+    unmount(t.comp);
+  });
+
+  it('visita normal (sem token na URL) não é deep-link: nada de erro nem de conexão', async () => {
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    const t = await montarComUrl('https://casa.ts.net/');
+    expect(authMock.validarPareamento).not.toHaveBeenCalled();
+    expect(authMock.addServerWithRollback).not.toHaveBeenCalled();
+    expect(replaceState).not.toHaveBeenCalled();
+    expect(t.el.querySelector('.error-msg')).toBeNull();
+    unmount(t.comp);
   });
 });

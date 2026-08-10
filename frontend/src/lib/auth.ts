@@ -220,12 +220,30 @@ export function restoreServerState(snap: { servers: Server[]; activeId: string |
   notifyChanged();
 }
 
-// Valida E adiciona com rollback COMPLETO. `probe` roda DEPOIS do addServer (ex: getSessions) pra
-// confirmar que o servidor responde de verdade; rejeição restaura o snapshot anterior — servidor
-// existente com token/label novos volta como estava, servidor novo não permanece. É o ÚNICO portão
-// de addServer nos callers: entrada inválida nem chega ao storage. Devolve { id, succeeded }; o
-// chamador só navega/recarrega com succeeded.
-export async function addServerWithRollback(
+// Fila FIFO module-level (round 5): duas transações de add concorrentes (dois cliques simultâneos,
+// QR + colar) viram SEQUENCIAIS — a próxima só começa depois de a anterior concluir sucesso OU
+// rollback. Sem isto, o rollback da primeira restaurava o snapshot ANTIGO por cima do sucesso da
+// segunda (probe de `bad` rejeitou depois de `good` persistir, e o rollback de `bad` apagou `good`).
+let addTail: Promise<void> = Promise.resolve();
+
+// Valida E adiciona com rollback COMPLETO, serializado pela fila. `probe` roda DEPOIS do addServer
+// (ex: getSessions) pra confirmar que o servidor responde de verdade; rejeição restaura o snapshot
+// anterior — servidor existente com token/label novos volta como estava, servidor novo não
+// permanece. É o ÚNICO portão de addServer nos callers: entrada inválida nem chega ao storage.
+// Devolve { id, succeeded }; o chamador só navega/recarrega com succeeded.
+export function addServerWithRollback(
+  baseUrl: string,
+  token: string,
+  probe: () => Promise<unknown>,
+  label?: string,
+): Promise<{ id: string; succeeded: boolean }> {
+  const run = addTail.then(() => runAddServerWithRollback(baseUrl, token, probe, label));
+  // A fila sobrevive a reject: o handler de rejeição consome o erro e a próxima transação roda.
+  addTail = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+async function runAddServerWithRollback(
   baseUrl: string,
   token: string,
   probe: () => Promise<unknown>,

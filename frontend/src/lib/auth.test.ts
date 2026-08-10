@@ -311,4 +311,46 @@ describe('addServerWithRollback', () => {
     expect(calls).toContain('cb');                   // notifyChanged roda no restore
     un();
   });
+
+  // Round 5: transações de add são FIFO — duas chamadas concorrentes viram sequenciais, e o
+  // rollback da primeira NUNCA apaga o sucesso da segunda.
+  it('serializa FIFO: a segunda não começa antes da primeira concluir; rollback não apaga sucesso seguinte', async () => {
+    reset();
+    let rejectBad!: (e: Error) => void;
+    const bad = new Promise<void>((_res, rej) => { rejectBad = rej; });
+    let resolveGood!: () => void;
+    const good = new Promise<void>((res) => { resolveGood = res; });
+    const probeBad = vi.fn(() => bad);
+    const probeGood = vi.fn(() => good);
+    const pBad = addServerWithRollback('http://bad:1', 'tok-bad', probeBad);
+    const pGood = addServerWithRollback('http://good:2', 'tok-good', probeGood);
+    await Promise.resolve(); await Promise.resolve();
+    // primeira rodou; a segunda ainda NÃO (está na fila)
+    expect(probeBad).toHaveBeenCalledTimes(1);
+    expect(probeGood).not.toHaveBeenCalled();
+    expect(listServers().find((s) => s.baseUrl === 'http://good:2')).toBeUndefined();
+    // primeira rejeita: rollback + erro pro primeiro caller
+    rejectBad(new Error('bad falhou'));
+    await expect(pBad).rejects.toThrow('bad falhou');
+    await Promise.resolve(); await Promise.resolve();
+    // fila liberada: segunda começa e persiste
+    expect(probeGood).toHaveBeenCalledTimes(1);
+    resolveGood();
+    await pGood;
+    expect(listServers().find((s) => s.baseUrl === 'http://good:2')!.token).toBe('tok-good');
+    // o rollback da primeira NÃO apagou o sucesso da segunda
+    expect(listServers().find((s) => s.baseUrl === 'http://good:2')).toBeDefined();
+    expect(listServers().find((s) => s.baseUrl === 'http://bad:1')).toBeUndefined();
+  });
+
+  it('após rejeição a fila segue livre: a próxima transação roda normalmente', async () => {
+    reset();
+    const probeFail = vi.fn(async () => { throw new Error('x'); });
+    await expect(addServerWithRollback('http://bad:1', 't', probeFail)).rejects.toThrow('x');
+    const probeOk = vi.fn(async () => []);
+    const r = await addServerWithRollback('http://ok:2', 't', probeOk);
+    expect(r.succeeded).toBe(true);
+    expect(probeOk).toHaveBeenCalledTimes(1);
+    expect(listServers().find((s) => s.baseUrl === 'http://ok:2')).toBeDefined();
+  });
 });

@@ -25,6 +25,7 @@ vi.mock('../../lib/auth', async (importOriginal) => {
     updateServer: vi.fn(() => true),
     removeServer: vi.fn(),
     addServer: vi.fn(),
+    addServerWithRollback: vi.fn(async () => ({ id: 'srv-x', succeeded: true })),
     validarPareamento: vi.fn(),
     onServersChanged: vi.fn((cb: () => void) => { mudouCb = cb; return () => {}; }),
   };
@@ -192,6 +193,41 @@ describe('ServidoresSettings — remoção com fingerprint + revision (round 4)'
     await confirmarRemocao(t);
     expect(authMock.removeServer).toHaveBeenCalledTimes(1);
     expect(onLogoutCalls).toHaveBeenCalledTimes(1);
+    unmount(t.comp);
+  });
+
+  it('botão Add desabilitado durante a transação; uma tentativa por clique; erro visível com retry (round 5)', async () => {
+    authMock.validarPareamento.mockReturnValue({ base: 'http://a', token: 'x' });
+    let rejectAdd!: (e: Error) => void;
+    authMock.addServerWithRollback.mockReturnValueOnce(new Promise((_res, rej) => { rejectAdd = rej; }));
+    const t = montar();
+    t.el.querySelector<HTMLButtonElement>('.sm-item')!.click();   // "Adicionar servidor"
+    await tick(); await tick();
+    const addBtn = document.querySelector<HTMLButtonElement>('.confirm-card .c-primary')!;
+    const qrBtn = document.querySelector<HTMLButtonElement>('.confirm-card .c-btn:not(.c-primary)')!;
+    const input = document.querySelector<HTMLInputElement>('.ss-add-input')!;
+    input.value = 'http://a/?token=x';
+    input.dispatchEvent(new Event('input'));
+    await tick();   // re-render do disabled (bind:value) antes do clique
+    addBtn.click();
+    await tick();
+    expect(authMock.addServerWithRollback).toHaveBeenCalledTimes(1);
+    expect(addBtn.disabled).toBe(true);   // Add bloqueado durante o await
+    expect(qrBtn.disabled).toBe(true);    // acionador de QR bloqueado também
+    addBtn.click();                       // segundo clique não abre outra tentativa
+    await tick();
+    expect(authMock.addServerWithRollback).toHaveBeenCalledTimes(1);
+    rejectAdd(new Error('servidor fora do ar'));
+    await tick(); await tick();
+    expect(addBtn.disabled).toBe(false);  // finally libera o botão
+    const err = document.querySelector<HTMLElement>('#ss-add-err');
+    expect(err?.innerText).toContain('servidor fora do ar');
+    expect(err?.getAttribute('role')).toBe('alert');
+    // retry: nova tentativa roda
+    authMock.addServerWithRollback.mockReturnValueOnce(new Promise(() => {}));
+    addBtn.click();
+    await tick();
+    expect(authMock.addServerWithRollback).toHaveBeenCalledTimes(2);
     unmount(t.comp);
   });
 

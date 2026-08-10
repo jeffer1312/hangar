@@ -601,12 +601,15 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     scanning = false;
     // Add transacional: probe (getSessions) rejeitado NÃO recarrega — volta pro diálogo com o erro
     // (o rollback completo já rodou dentro do helper).
+    addBusy = true;
     try {
       await addServerWithRollback(parsed.base, parsed.token, () => getSessions());
       window.location.reload();
     } catch (err) {
       showAddServer = true;
       addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
+    } finally {
+      addBusy = false;
     }
   }
   // Colar servidor manual (desktop nao tem camera): cola a URL de pareamento (com token) e adiciona
@@ -614,6 +617,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // servidor" do menu de conta.
   let addUrlText = $state('');
   let addError = $state('');
+  // Transação em voo: o botão Add e o QR ficam desabilitados até o settle (sucesso ou rollback) —
+  // o helper é serializado FIFO, mas um segundo clique não pode abrir outra tentativa por cima.
+  let addBusy = $state(false);
   function openAddServer() {
     addUrlText = '';
     addError = '';
@@ -628,11 +634,14 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         : 'Cole a URL de pareamento (com o token).';
       return;
     }
+    addBusy = true;
     try {
       await addServerWithRollback(parsed.base, parsed.token, () => getSessions());
       window.location.reload();
     } catch (err) {
       addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
+    } finally {
+      addBusy = false;
     }
   }
   function logout() {
@@ -1343,8 +1352,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     fallbackFocus={acctBtnEl}
     onClose={() => (showAddServer = false)}
     actions={[
-      { label: 'Escanear QR', onClick: () => { showAddServer = false; scanning = true; } },
-      { label: 'Adicionar', kind: 'primary', disabled: !addUrlText.trim(), onClick: submitPasteServer },
+      { label: 'Escanear QR', disabled: addBusy, onClick: () => { showAddServer = false; scanning = true; } },
+      { label: 'Adicionar', kind: 'primary', disabled: !addUrlText.trim() || addBusy, onClick: submitPasteServer },
     ]}>
     <input
       type="url"

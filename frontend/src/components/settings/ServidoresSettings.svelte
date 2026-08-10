@@ -76,6 +76,9 @@
   let showAdd = $state(false);
   let addUrlText = $state('');
   let addError = $state('');
+  // Transação em voo: o botão Add e o QR ficam desabilitados até o settle (sucesso ou rollback) —
+  // o helper é serializado FIFO, mas um segundo clique não pode abrir outra tentativa por cima.
+  let addBusy = $state(false);
   let scanning = $state(false);
   function autofocus(node: HTMLInputElement) { node.focus(); }
   async function submitPasteServer() {
@@ -84,11 +87,14 @@
     if (!parsed) { addError = erroPareamento(cru); return; }
     // Add transacional: probe rejeitado não recarrega — erro visível e o diálogo fica pra retry
     // (o rollback completo já rodou dentro do helper).
+    addBusy = true;
     try {
       await addServerWithRollback(parsed.base, parsed.token, () => getSessions());
       window.location.reload();
     } catch (err) {
       addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
+    } finally {
+      addBusy = false;
     }
   }
   async function handleScan(text: string) {
@@ -103,12 +109,15 @@
       return;
     }
     scanning = false;
+    addBusy = true;
     try {
       await addServerWithRollback(parsed.base, parsed.token, () => getSessions());
       window.location.reload();
     } catch (err) {
       showAdd = true;
       addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
+    } finally {
+      addBusy = false;
     }
   }
 
@@ -210,8 +219,8 @@
     {fallbackFocus}
     onClose={() => (showAdd = false)}
     actions={[
-      { label: 'Escanear QR', onClick: () => { showAdd = false; scanning = true; } },
-      { label: 'Adicionar', kind: 'primary', disabled: !addUrlText.trim(), onClick: submitPasteServer },
+      { label: 'Escanear QR', disabled: addBusy, onClick: () => { showAdd = false; scanning = true; } },
+      { label: 'Adicionar', kind: 'primary', disabled: !addUrlText.trim() || addBusy, onClick: submitPasteServer },
     ]}>
     <input
       type="url"
