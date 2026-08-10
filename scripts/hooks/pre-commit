@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Trava de vazamento — roda antes de cada commit e recusa o que não pode virar público.
+#
+# Instalado por scripts/install-hooks.sh, que aponta core.hooksPath pra esta pasta. Versionado
+# no repo de propósito: hook em .git/hooks não vai junto no clone, e a trava que só existe numa
+# máquina é a que falha justamente na máquina nova.
+#
+# Olha SÓ o conteúdo ADICIONADO no que está em stage (git diff --cached). Não varre o histórico
+# nem a árvore inteira: um arquivo já commitado com um padrão antigo não pode travar todo commit
+# futuro que encoste nele — trava que grita sem motivo é trava que o dono desliga.
+#
+# Emergência: `git commit --no-verify` pula. É a saída deliberada, não um bug.
+set -uo pipefail
+
+# nome::regex(ERE). Duas famílias, misturadas por escolha: segredo de verdade (chave, token) e
+# identificador interno (domínio, ticket, IP da tailnet). Este repo é público; os dois vazam.
+PADROES=(
+    "chave OpenAI::sk-[A-Za-z0-9_-]{20,}"
+    "token GitHub::gh[pousr]_[A-Za-z0-9]{20,}"
+    "token GitLab::glpat-[A-Za-z0-9_-]{15,}"
+    "chave AWS::AKIA[0-9A-Z]{16}"
+    "chave Anthropic::sk-ant-[A-Za-z0-9_-]{20,}"
+    "chave privada::BEGIN (RSA|OPENSSH|EC|DSA|PGP) PRIVATE KEY"
+    "senha em URL::[a-z]+://[^/[:space:]]+:[^/@[:space:]]{6,}@"
+    "dominio interno::acme\.(com|dev)"
+    "ticket interno::TICKET-[0-9]{4,}"
+    "e-mail de trabalho::jefferson@"
+)
+
+# IP da tailnet: 100.64.0.0/10 é o CGNAT que a Tailscale usa. O bloco 100.64.0.x fica de FORA
+# porque é o que a documentação e o peers.json.example usam como exemplo — bloquear o exemplo
+# do próprio repo seria a trava mentindo.
+PADRAO_TAILNET='100\.(6[5-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}'
+
+# Só as linhas ADICIONADAS (o `+` do diff), sem o cabeçalho `+++` do arquivo.
+#
+# A PRÓPRIA trava fica de fora, mesmo motivo do 100.64.0.x logo acima: ela precisa CONTER os padrões
+# pra poder procurá-los, e o texto de ajuda do instalador mostra um ticket de exemplo. Sem a
+# exclusão, o commit que traz o hook é recusado pelo hook — ele nunca chega a existir no repo.
+# ponytail: exclui os dois arquivos inteiros, não só as linhas de padrão; se um dia um segredo de
+# verdade for parar dentro deles, esta trava não vê. Revisar hook à mão é o preço.
+adicionado="$(git diff --cached --unified=0 --no-color -- . \
+    ':(exclude)scripts/hooks' ':(exclude)scripts/install-hooks.sh' | grep '^+' | grep -v '^+++' || true)"
+[[ -z "$adicionado" ]] && exit 0
+
+achou=0
+relatar() {   # $1 = rótulo, $2 = linhas casadas
+    achou=1
+    printf '\n  \033[31m%s\033[0m\n' "$1"
+    printf '%s\n' "$2" | head -5 | sed 's/^+/    /' | cut -c1-140
+    local n; n=$(printf '%s\n' "$2" | wc -l)
+    (( n > 5 )) && printf '    … e mais %d linha(s)\n' $(( n - 5 ))
+}
+
+for entrada in "${PADROES[@]}"; do
+    rotulo="${entrada%%::*}"
+    regex="${entrada#*::}"
+    casadas="$(printf '%s\n' "$adicionado" | grep -Ei "$regex" || true)"
+    [[ -n "$casadas" ]] && relatar "$rotulo" "$casadas"
+done
+
+casadas="$(printf '%s\n' "$adicionado" | grep -E "$PADRAO_TAILNET" || true)"
+[[ -n "$casadas" ]] && relatar "IP da tailnet (endereço real de máquina)" "$casadas"
+
+if (( achou )); then
+    cat >&2 <<'FIM'
+
+  ── commit recusado: isto é um repositório PÚBLICO ─────────────────────────
+
+  O que está acima foi encontrado nas linhas que este commit ADICIONA.
+  Tire, ou troque por um valor de exemplo (o peers.json.example é o modelo:
+  100.64.0.2 no lugar de um IP real da tailnet).
+
+  Se for falso positivo e tu tem certeza:  git commit --no-verify
+
+FIM
+    exit 1
+fi
+exit 0
