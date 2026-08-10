@@ -525,9 +525,10 @@
       return;
     }
     addValidacao = false;
-    // Add TRANSACIONAL (round 4): o helper valida, adiciona, roda o probe (getSessions) e restaura
-    // o snapshot completo em falha — servidor existente volta com o token antigo, novo não
-    // permanece. O form segue aberto pra retry.
+    // Add TRANSACIONAL: o helper valida, adiciona, roda o probe (getSessions) e reverte SÓ a
+    // entrada tocada em falha (rollback escopado) — servidor existente volta com o token antigo
+    // se nada mudou, novo não permanece; mutações concorrentes vencem. O form segue aberto pra
+    // retry, e o erro tardio reabre o modal (round 2).
     try {
       const r = await addServerWithRollback(pareamento.base, pareamento.token, () => getSessions());
       if (!r.succeeded) { addValidacao = true; addError = 'URL inválida — use http/https com o token.'; addBusy = false; return; }
@@ -535,6 +536,9 @@
       window.location.reload();
     } catch (err) {
       addValidacao = false;   // erro de REDE: visível, não marca campo
+      // Erro TARDIO não some: o usuário pode ter fechado o modal enquanto a transação rodava —
+      // reabre com a mensagem visível (mesmo caminho do QR e do desktop, round 2).
+      showAddServer = true;
       addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
     } finally {
       addBusy = false;

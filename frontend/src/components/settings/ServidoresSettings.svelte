@@ -87,7 +87,7 @@
     const parsed = validarPareamento(cru);
     if (!parsed) { addError = erroPareamento(cru); return; }
     // Add transacional: probe rejeitado não recarrega — erro visível e o diálogo fica pra retry
-    // (o rollback completo já rodou dentro do helper).
+    // (o rollback escopado já rodou dentro do helper).
     addBusy = true;
     try {
       await addServerWithRollback(parsed.base, parsed.token, () => getSessions());

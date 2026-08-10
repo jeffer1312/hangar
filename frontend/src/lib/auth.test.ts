@@ -23,7 +23,7 @@ let cookieJar = '';
 
 const { mergeServers, validarPareamento, onServersChanged, removeServer,
         addServer, updateServer, listServers, selectServer, getActiveId, serverFingerprint, snapshotRemocao, removalStillMatches,
-        snapshotServerState, restoreServerState, addServerWithRollback } = await import('./auth');
+        addServerWithRollback } = await import('./auth');
 
 const S = (id: string, baseUrl: string, token = 't') => ({ id, label: id, baseUrl, token });
 
@@ -255,26 +255,27 @@ describe('addServerWithRollback', () => {
     return { casa: listServers()[0], vps: listServers()[1] };
   }
 
-  it('probe rejeitado em servidor EXISTENTE restaura lista+ativo exatos (token novo não permanece)', async () => {
-    reset();
-    const antes = snapshotServerState();
+  it('probe rejeitado em servidor EXISTENTE restaura a entrada (token novo não permanece)', async () => {
+    const { casa, vps } = reset();
     const probe = vi.fn(async () => { throw new Error('servidor fora do ar'); });
     await expect(addServerWithRollback('http://casa:8765', 'tok-novo', probe))
       .rejects.toThrow('servidor fora do ar');
-    expect(listServers()).toEqual(antes.servers);
-    expect(getActiveId()).toBe(antes.activeId);
-    expect(listServers().find((s) => s.baseUrl === 'http://casa:8765')!.token).toBe('tok-casa');
-    expect(listServers().find((s) => s.baseUrl === 'http://casa:8765')!.label).toBe('Casa');
+    // entrada tocada volta EXATA; as outras intactas; ativo de volta
+    expect(listServers()).toHaveLength(2);
+    expect(listServers().find((s) => s.baseUrl === 'http://casa:8765')).toEqual(casa);
+    expect(listServers().find((s) => s.baseUrl === 'http://vps:8766')).toEqual(vps);
+    expect(getActiveId()).toBe(vps.id);
   });
 
   it('servidor NOVO rejeitado não permanece na lista nem troca o ativo', async () => {
-    reset();
-    const antes = snapshotServerState();
+    const { casa, vps } = reset();
     const probe = vi.fn(async () => { throw new Error('falhou'); });
     await expect(addServerWithRollback('http://novo:9999', 'tok-novo', probe))
       .rejects.toThrow('falhou');
-    expect(listServers()).toEqual(antes.servers);
-    expect(getActiveId()).toBe(antes.activeId);
+    expect(listServers()).toHaveLength(2);
+    expect(listServers().find((s) => s.baseUrl === 'http://novo:9999')).toBeUndefined();
+    expect(listServers().find((s) => s.baseUrl === 'http://casa:8765')).toEqual(casa);
+    expect(getActiveId()).toBe(vps.id);
   });
 
   it('sucesso persiste o novo estado e o ativo correto', async () => {
@@ -297,19 +298,6 @@ describe('addServerWithRollback', () => {
     expect(r.succeeded).toBe(false);
     expect(probe).not.toHaveBeenCalled();
     expect(listServers()).toHaveLength(antes);
-  });
-
-  it('restoreServerState devolve lista, ativo e notificação', () => {
-    reset();
-    const antes = snapshotServerState();
-    const calls: string[] = [];
-    const un = onServersChanged(() => calls.push('cb'));
-    addServer('http://temporario:1', 't');          // muda lista + ativo
-    restoreServerState(antes);
-    expect(listServers()).toEqual(antes.servers);
-    expect(getActiveId()).toBe(antes.activeId);
-    expect(calls).toContain('cb');                   // notifyChanged roda no restore
-    un();
   });
 
   // Round 5: transações de add são FIFO — duas chamadas concorrentes viram sequenciais, e o
@@ -378,6 +366,22 @@ describe('addServerWithRollback', () => {
     expect((globalThis as any).localStorage.getItem('cp_active')).toBeNull();
     // entrada nova do add não permanece
     expect(listServers().find((s) => s.baseUrl === 'http://novo:9999')).toBeUndefined();
+  });
+
+  it('rollback NÃO sobrescreve rotação de token na PRÓPRIA entrada durante o probe (round 2)', async () => {
+    const { casa } = reset();
+    let rejectProbe!: (e: Error) => void;
+    const pendente = new Promise<void>((_res, rej) => { rejectProbe = rej; });
+    // update em casa (mesma baseUrl já cadastrada) com probe pendente
+    const p = addServerWithRollback('http://casa:8765', 'tok-casa-novo', () => pendente);
+    await Promise.resolve(); await Promise.resolve();
+    // durante o probe, OUTRA view roda a rotação de token DA MESMA entrada que o add tocou
+    updateServer(casa.id, { token: 'tok-casa-rotacionado' });
+    rejectProbe(new Error('falhou'));
+    await expect(p).rejects.toThrow('falhou');
+    // a rotação concorrente VENCE: o rollback não regrava o token pré-add por cima dela
+    expect(listServers().find((s) => s.id === casa.id)!.token).toBe('tok-casa-rotacionado');
+    expect(listServers().find((s) => s.id === casa.id)!.label).toBe('Casa');
   });
 
   it('rollback não desfaz token trocado concorrentemente em outro servidor', async () => {

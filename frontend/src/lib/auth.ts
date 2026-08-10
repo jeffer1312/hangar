@@ -203,34 +203,22 @@ export function addServer(
   return { id, existed };
 }
 
-// ── Add TRANSACIONAL (round 4) ──────────────────────────────────────────────
-// Snapshot COMPLETO de lista + ativo, e seu restore total. Foi o rollback do add (round 4: o
-// addServer podia falhar no probe DEPOIS de sobrescrever um existente com token novo, e o
-// removeServer-if-!existed perdia a credencial anterior). Desde o round 7 o add usa rollback
-// escopado (rollbackAddEntry) — este par ficou como API genérica, exportada e coberta por teste,
-// sem callers de produção.
-export function snapshotServerState(): { servers: Server[]; activeId: string | null } {
-  return { servers: listServers(), activeId: getActiveId() };
-}
-
-export function restoreServerState(snap: { servers: Server[]; activeId: string | null }): void {
-  writeServers(snap.servers);
-  if (snap.activeId) localStorage.setItem(ACTIVE_KEY, snap.activeId);
-  else localStorage.removeItem(ACTIVE_KEY);
-  cookieDaOrigem();
-  notifyChanged();
-}
+// ── Add TRANSACIONAL (round 4 → 7 → 2) ──────────────────────────────────────
+// O rollback do add é SCOPED à entrada que o add tocou (rollbackAddEntry) — nunca um snapshot
+// global de lista+ativo: regravar a lista inteira revertia calado mutações concorrentes. O
+// snapshot completo (round 4) foi removido no round 2 por ficar sem caller de produção.
 
 // Fila FIFO module-level (round 5): duas transações de add concorrentes (dois cliques simultâneos,
 // QR + colar) viram SEQUENCIAIS — a próxima só começa depois de a anterior concluir sucesso OU
-// rollback. Sem isto, o rollback da primeira restaurava o snapshot ANTIGO por cima do sucesso da
-// segunda (probe de `bad` rejeitou depois de `good` persistir, e o rollback de `bad` apagou `good`).
+// rollback. Sem isto, o rollback da primeira desfazia o sucesso da segunda (probe de `bad`
+// rejeitou depois de `good` persistir, e o rollback de `bad` apagou `good`).
 let addTail: Promise<void> = Promise.resolve();
 
-// Valida E adiciona com rollback COMPLETO, serializado pela fila. `probe` roda DEPOIS do addServer
-// (ex: getSessions) pra confirmar que o servidor responde de verdade; rejeição restaura o snapshot
-// anterior — servidor existente com token/label novos volta como estava, servidor novo não
-// permanece. É o ÚNICO portão de addServer nos callers: entrada inválida nem chega ao storage.
+// Valida E adiciona com rollback escopado, serializado pela fila. `probe` roda DEPOIS do addServer
+// (ex: getSessions) pra confirmar que o servidor responde de verdade; rejeição reverte SÓ a
+// entrada que esta transação tocou (rollbackAddEntry) — servidor existente com token/label novos
+// volta como estava (se nada mais mudou), servidor novo não permanece. É o ÚNICO portão de
+// addServer nos callers: entrada inválida nem chega ao storage.
 // Devolve { id, succeeded }; o chamador só navega/recarrega com succeeded.
 export function addServerWithRollback(
   baseUrl: string,
@@ -264,28 +252,40 @@ async function runAddServerWithRollback(
   const prev = listServers().find((s) => norm(s.baseUrl) === norm(pareamento.base)) ?? null;
   const prevActive = getActiveId();
   const { id } = addServer(pareamento.base, pareamento.token, label);
+  // Estado EXATAMENTE como esta transação o deixou: o rollback só desfaz se a entrada ainda for
+  // este escrito — uma rotação/edição CONCORRENTE na própria entrada vence (round 2).
+  const escrito = listServers().find((s) => s.id === id) ?? null;
   try {
     await probe();
     return { id, succeeded: true };
   } catch (e) {
-    rollbackAddEntry(id, prev, prevActive);
+    rollbackAddEntry(id, prev, escrito, prevActive);
     throw e;
   }
 }
 
-// Rollback SCOPED (round 7): reverte só a entrada que o add tocou — removida se era nova, valor
-// anterior se era atualização. Entrada removida/alterada CONCORRENTEMENTE durante o probe não é
-// tocada: se sumiu, a remoção vence (nada de ressuscitar). O ativo só volta se ainda apontar pro
-// id do add E o anterior ainda existir; senão o fallback de leitura escolhe — nunca aponta pra
-// servidor que foi removido enquanto o probe rodava.
-function rollbackAddEntry(id: string, prev: Server | null, prevActive: string | null): void {
+// Rollback SCOPED (round 7/2): reverte só a entrada que o add tocou — removida se era nova, valor
+// anterior se era atualização. Mutações CONCORRENTES vencem em todos os casos: entrada removida
+// não ressuscita; entrada alterada (outra ou a PRÓPRIA) não é sobrescrita — o restore do valor
+// anterior só roda se a entrada ainda corresponder EXATAMENTE ao que esta transação escreveu
+// (fingerprint). O ativo só volta se ainda apontar pro id do add E o anterior ainda existir;
+// senão o fallback de leitura escolhe — nunca aponta pra servidor removido enquanto o probe rodava.
+function rollbackAddEntry(
+  id: string,
+  prev: Server | null,
+  escrito: Server | null,
+  prevActive: string | null,
+): void {
   const list = listServers();
-  const i = prev
-    ? list.findIndex((s) => s.id === prev.id)
-    : list.findIndex((s) => s.id === id);
-  if (i >= 0) {
-    if (prev) list[i] = prev;
-    else list.splice(i, 1);
+  const i = list.findIndex((s) => s.id === id);
+  if (prev) {
+    // Entrada EXISTENTE atualizada por esta transação: reverte só se ainda estiver como a
+    // transação deixou — rotação de token na mesma entrada durante o probe não é desfeita.
+    if (i >= 0 && escrito && serverFingerprint(list[i]) === serverFingerprint(escrito)) {
+      list[i] = prev;
+    }
+  } else if (i >= 0) {
+    list.splice(i, 1);
   }
   writeServers(list);
   // Comparar a CHAVE CRUA, não getActiveId(): com a entrada nova fora da lista, getActiveId()
