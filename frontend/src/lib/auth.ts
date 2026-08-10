@@ -204,10 +204,11 @@ export function addServer(
 }
 
 // ── Add TRANSACIONAL (round 4) ──────────────────────────────────────────────
-// Snapshot COMPLETO do estado de servidores (lista + ativo). O add com probe (getSessions) pode
-// falhar DEPOIS de addServer sobrescrever um servidor existente (mesma baseUrl com token novo); o
-// rollback antigo (removeServer se !existed) perdia a credencial ANTERIOR do existente. Restaurar o
-// snapshot devolve lista, ativo e cookie exatamente como estavam.
+// Snapshot COMPLETO de lista + ativo, e seu restore total. Foi o rollback do add (round 4: o
+// addServer podia falhar no probe DEPOIS de sobrescrever um existente com token novo, e o
+// removeServer-if-!existed perdia a credencial anterior). Desde o round 7 o add usa rollback
+// escopado (rollbackAddEntry) — este par ficou como API genérica, exportada e coberta por teste,
+// sem callers de produção.
 export function snapshotServerState(): { servers: Server[]; activeId: string | null } {
   return { servers: listServers(), activeId: getActiveId() };
 }
@@ -249,21 +250,56 @@ async function runAddServerWithRollback(
   probe: () => Promise<unknown>,
   label?: string,
 ): Promise<{ id: string; succeeded: boolean }> {
-  const snap = snapshotServerState();
   // Re-valida o texto de pareamento montado (base + token) ANTES de addServer — defesa em profundidade
   // por trás da validação do caller: um base/token que passaram pra cá mas não montam URL válida não
   // mutam storage nem navegam.
   const cru = baseUrl + (baseUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
   const pareamento = validarPareamento(cru);
   if (!pareamento) return { id: '', succeeded: false };
+  // Pré-estado da entrada que o add vai tocar (mesma baseUrl normalizada do addServer): null = era
+  // NOVA. Só ela é revertida na falha do probe — o snapshot antigo regravava a LISTA INTEIRA e
+  // revertia calado mutações concorrentes em outras entradas (remoção/troca de token durante o
+  // probe pendente: outra view, sync do hub).
+  const norm = (u: string) => u.replace(/\/+$/, '');
+  const prev = listServers().find((s) => norm(s.baseUrl) === norm(pareamento.base)) ?? null;
+  const prevActive = getActiveId();
   const { id } = addServer(pareamento.base, pareamento.token, label);
   try {
     await probe();
     return { id, succeeded: true };
   } catch (e) {
-    restoreServerState(snap);
+    rollbackAddEntry(id, prev, prevActive);
     throw e;
   }
+}
+
+// Rollback SCOPED (round 7): reverte só a entrada que o add tocou — removida se era nova, valor
+// anterior se era atualização. Entrada removida/alterada CONCORRENTEMENTE durante o probe não é
+// tocada: se sumiu, a remoção vence (nada de ressuscitar). O ativo só volta se ainda apontar pro
+// id do add E o anterior ainda existir; senão o fallback de leitura escolhe — nunca aponta pra
+// servidor que foi removido enquanto o probe rodava.
+function rollbackAddEntry(id: string, prev: Server | null, prevActive: string | null): void {
+  const list = listServers();
+  const i = prev
+    ? list.findIndex((s) => s.id === prev.id)
+    : list.findIndex((s) => s.id === id);
+  if (i >= 0) {
+    if (prev) list[i] = prev;
+    else list.splice(i, 1);
+  }
+  writeServers(list);
+  // Comparar a CHAVE CRUA, não getActiveId(): com a entrada nova fora da lista, getActiveId()
+  // mascara a chave stale caindo pro list[0] — o guard nunca dispararia e o ativo ficaria
+  // apontando pra um servidor que não existe mais.
+  if (localStorage.getItem(ACTIVE_KEY) === id) {
+    if (prevActive && list.some((s) => s.id === prevActive)) {
+      localStorage.setItem(ACTIVE_KEY, prevActive);
+    } else {
+      localStorage.removeItem(ACTIVE_KEY);
+    }
+  }
+  cookieDaOrigem();
+  notifyChanged();
 }
 
 // Renomeia um servidor (label custom persistido). Vazio volta pro rotulo derivado da URL — nao da

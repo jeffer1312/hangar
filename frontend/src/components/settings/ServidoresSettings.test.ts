@@ -264,6 +264,38 @@ describe('ServidoresSettings — remoção com fingerprint + revision (round 4)'
     unmount(t.comp);
   });
 
+  // Round 7: erro TARDIO — o probe rejeita DEPOIS de o usuário fechar o diálogo de colar URL.
+  // O erro não pode sumir calado: o modal reabre com a mensagem visível pra retry (mesmo
+  // caminho que o QR já fazia).
+  it('fechar o diálogo durante a transação não engole o erro tardio: reabre com role=alert', async () => {
+    authMock.validarPareamento.mockReturnValue({ base: 'http://a', token: 'x' });
+    let rejectAdd!: (e: Error) => void;
+    authMock.addServerWithRollback.mockReturnValueOnce(new Promise((_res, rej) => { rejectAdd = rej; }));
+    const t = montar();
+    t.el.querySelector<HTMLButtonElement>('.sm-item')!.click();
+    await tick(); await tick();
+    const input = document.querySelector<HTMLInputElement>('.ss-add-input')!;
+    input.value = 'http://a/?token=x';
+    input.dispatchEvent(new Event('input'));
+    await tick();
+    document.querySelector<HTMLButtonElement>('.confirm-card .c-primary')!.click();
+    await tick();
+    expect(authMock.addServerWithRollback).toHaveBeenCalledTimes(1);
+    // usuário fecha o diálogo (Esc) com a transação ainda pendente
+    document.querySelector<HTMLElement>('.modal-dialog')!
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await tick();
+    expect(document.querySelector('.confirm-card')).toBeNull();
+    // o probe falha DEPOIS do fechamento: erro visível, modal reaberto
+    rejectAdd(new Error('servidor fora do ar'));
+    await tick(); await tick();
+    expect(document.querySelector('.confirm-card')).not.toBeNull();
+    const err = document.querySelector<HTMLElement>('#ss-add-err');
+    expect(err?.innerText).toContain('servidor fora do ar');
+    expect(err?.getAttribute('role')).toBe('alert');
+    unmount(t.comp);
+  });
+
   it('cancelar a confirmação devolve o foco ao botão Remover (restauração segura)', async () => {
     const t = montar();
     authMock.getActiveId.mockReturnValue('outro-id');   // remover não é remover o ativo -> sem reload

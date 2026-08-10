@@ -353,4 +353,48 @@ describe('addServerWithRollback', () => {
     expect(probeOk).toHaveBeenCalledTimes(1);
     expect(listServers().find((s) => s.baseUrl === 'http://ok:2')).toBeDefined();
   });
+
+  // Round 7: rollback SCOPED à entrada que o add tocou. O snapshot antigo regravava a lista
+  // INTEIRA na falha do probe e revertia calado mutações concorrentes em OUTRAS entradas —
+  // remoção ou troca de token feita durante o probe pendente (outra view, sync do hub) voltava
+  // como estava, sem mensagem.
+  it('rollback não ressuscita servidor removido concorrentemente durante o probe', async () => {
+    const { casa, vps } = reset();
+    let rejectProbe!: (e: Error) => void;
+    const pendente = new Promise<void>((_res, rej) => { rejectProbe = rej; });
+    const p = addServerWithRollback('http://novo:9999', 'tok-novo', () => pendente);
+    await Promise.resolve(); await Promise.resolve();
+    // add rodou (novo na lista) e o probe está pendente; noutra view removem o vps
+    expect(listServers().find((s) => s.baseUrl === 'http://novo:9999')).toBeDefined();
+    removeServer(vps.id);
+    rejectProbe(new Error('falhou'));
+    await expect(p).rejects.toThrow('falhou');
+    // vps CONTINUA removido — o rollback não regravou o snapshot antigo nem aponta o ativo pra ele
+    expect(listServers().find((s) => s.id === vps.id)).toBeUndefined();
+    expect(getActiveId()).not.toBe(vps.id);
+    expect(getActiveId()).toBe(casa.id);
+    // a CHAVE crua não pode ficar apontando pro id que o add criou (getActiveId mascara chave
+    // stale caindo pro list[0] — a asserção de cima sozinha não pegaria a chave vazada)
+    expect((globalThis as any).localStorage.getItem('cp_active')).toBeNull();
+    // entrada nova do add não permanece
+    expect(listServers().find((s) => s.baseUrl === 'http://novo:9999')).toBeUndefined();
+  });
+
+  it('rollback não desfaz token trocado concorrentemente em outro servidor', async () => {
+    const { casa, vps } = reset();
+    let rejectProbe!: (e: Error) => void;
+    const pendente = new Promise<void>((_res, rej) => { rejectProbe = rej; });
+    // update em casa (mesma baseUrl já cadastrada) com probe pendente
+    const p = addServerWithRollback('http://casa:8765', 'tok-casa-novo', () => pendente);
+    await Promise.resolve(); await Promise.resolve();
+    // noutra view trocam o token do vps durante o probe
+    updateServer(vps.id, { token: 'tok-vps-novo' });
+    rejectProbe(new Error('falhou'));
+    await expect(p).rejects.toThrow('falhou');
+    // vps preserva a troca concorrente; casa (entrada tocada pelo add) volta ao token anterior;
+    // ativo volta ao anterior (vps) em vez de apontar pro id que o add criou
+    expect(listServers().find((s) => s.id === vps.id)!.token).toBe('tok-vps-novo');
+    expect(listServers().find((s) => s.baseUrl === 'http://casa:8765')!.token).toBe('tok-casa');
+    expect(getActiveId()).toBe(vps.id);
+  });
 });

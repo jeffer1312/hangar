@@ -93,6 +93,9 @@
       await addServerWithRollback(parsed.base, parsed.token, () => getSessions());
       window.location.reload();
     } catch (err) {
+      // Erro TARDIO não some: o usuário pode ter fechado o diálogo enquanto a transação rodava —
+      // reabre com a mensagem visível (mesmo caminho do QR logo abaixo).
+      showAdd = true;
       addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
     } finally {
       addBusy = false;
