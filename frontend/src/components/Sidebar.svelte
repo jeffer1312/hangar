@@ -902,8 +902,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
               }}
             >
               <span class="lead" aria-hidden="true">
-                <!-- Iniciais da sessão: só no RAIL (modo Barra lateral) — o expandido usa o ícone. -->
+                <!-- Iniciais da sessão: só no RAIL (modo Barra lateral) — o expandido usa o ícone.
+                     O dot de estado acompanha as iniciais no canto da caixa (referência do usuário). -->
                 <span class="rail-iniciais">{initials(s.name)}</span>
+                <span class="rail-state-dot" style:background={stateColors[s.state]}></span>
                 {#if selectMode}
                   <input type="checkbox" class="select-check" checked={selected.has(selKey)} tabindex="-1" aria-hidden="true" />
                 {:else if s.state === 'working'}
@@ -1433,6 +1435,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
      O rail reusa a MESMA lista e os mesmos handlers da sidebar expandida — só o CSS troca o
      desenho: iniciais no lugar do ícone, textos/botões de linha escondidos, rodapé em coluna. */
   .rail-iniciais { display: none; }
+  .rail-state-dot { display: none; }
   .sidebar.rail {
     width: 56px;
     padding: var(--space-3) var(--space-2);
@@ -1447,7 +1450,19 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     padding: 0;
     justify-content: center;
   }
-  .sidebar.rail .lead { width: 36px; }
+  .sidebar.rail .lead { width: 36px; position: relative; }
+  /* Indicador de estado no canto da caixa de iniciais (mesmo desenho do acct-dot): âncoras de 9px
+     com anel do fundo, pra cor de estado não sumir no véu do trilho. */
+  .sidebar.rail .rail-state-dot {
+    display: block;
+    position: absolute;
+    right: -2px;
+    bottom: -2px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    box-shadow: 0 0 0 2px var(--bg-elevated);
+  }
   .sidebar.rail .row-mark { display: none; }
   .sidebar.rail .rail-iniciais {
     display: grid; place-items: center;

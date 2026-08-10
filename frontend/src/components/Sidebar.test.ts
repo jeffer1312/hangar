@@ -309,6 +309,8 @@ describe('Sidebar — renomear com a sidebar recolhida (round 7)', () => {
     expect(aside).not.toBeNull();
     expect(aside?.classList.contains('rail')).toBe(true);
     expect(aside?.querySelector('.rail-iniciais')).not.toBeNull();
+    // indicador de estado por sessão (referência: dots junto às iniciais)
+    expect(aside?.querySelector('.rail-state-dot')).not.toBeNull();
     // Rodapé: engrenagem + Nova + kebab + fold + toggle do painel de contexto (referência)
     const ctx = aside?.querySelector<HTMLButtonElement>('.rail-ctx');
     expect(ctx).not.toBeNull();
