@@ -160,6 +160,76 @@ export function clearBgImage(): void {
   if (getBgPref() === 'image') setBgPref('flat');
 }
 
+// VIDRO no fundo Desktop. Desligado (o padrao) a janela fica transparente e quem aparece atras e a
+// area de trabalho DE VERDADE — outra janela que passe por tras aparece junto. Ligado, o app baixa a
+// foto que o rice esta usando e desenha ela DENTRO da pagina, igualzinho ao modo Imagem: e a unica
+// forma de ter vidro ali, porque `backdrop-filter` so borra o que a propria pagina pintou e atras de
+// janela transparente nao ha pixel nenhum. Troca: perde-se o buraco (nao se ve mais o que esta atras
+// do app), ganha-se o material — e o papel de parede continua vindo do sistema, sem escolher arquivo.
+const GLASS_KEY = 'cp_desktop_glass';
+
+export function getDesktopGlass(): boolean {
+  return typeof localStorage !== 'undefined' && localStorage.getItem(GLASS_KEY) === '1';
+}
+
+export function setDesktopGlass(v: boolean): void {
+  try {
+    if (v) localStorage.setItem(GLASS_KEY, '1');
+    else localStorage.removeItem(GLASS_KEY);
+  } catch { /* modo privado */ }
+  applyBg();
+}
+
+// A blob URL da foto do desktop. Guardada pra ser REVOGADA na troca: sem isto cada recarga da
+// imagem (troca de papel de parede, volta do foco) deixa a anterior presa na memoria do processo.
+let urlDesktop: string | null = null;
+
+function soltarWallpaperDoDesktop(): void {
+  if (urlDesktop) {
+    URL.revokeObjectURL(urlDesktop);
+    urlDesktop = null;
+  }
+}
+
+// `fetch` + blob, e nao a URL do endpoint direto no `url()` do CSS: requisicao de imagem feita pelo
+// navegador NAO carrega o header de autorizacao, entao apontar pra rota daria 401 e a foto sumia
+// calada. Falha (sem rice, backend fora, servidor remoto) deixa o modo como esta hoje — janela
+// transparente — em vez de tela sem fundo nenhum.
+async function carregarWallpaperDoDesktop(): Promise<void> {
+  try {
+    const { getBaseUrl, getToken } = await import('./auth');
+    const r = await fetch(`${getBaseUrl()}/api/desktop/wallpaper`, {
+      headers: { Authorization: `Bearer ${getToken() ?? ''}` },
+    });
+    if (!r.ok) return;
+    const url = URL.createObjectURL(await r.blob());
+    // Confere que a preferencia ainda vale: entre o pedido e a resposta o usuario pode ter trocado
+    // de fundo, e pintar a foto depois disso seria mudar a tela sozinho.
+    if (getBgPref() !== 'desktop' || !getDesktopGlass()) { URL.revokeObjectURL(url); return; }
+    soltarWallpaperDoDesktop();
+    urlDesktop = url;
+    document.documentElement.style.setProperty('--cp-wallpaper', `url("${url}")`);
+  } catch { /* rede/backend fora: segue sem foto */ }
+}
+
+// Papel de parede trocado com o app aberto: quem troca é o Control Center do rice, FORA da janela,
+// então voltar o foco é exatamente o instante em que repintar importa. Mesma escolha (e mesmo
+// motivo) do `ligarAtualizacaoAoFocar` da paleta: custa zero conexão persistente, num navegador que
+// só permite ~6 por host e num app que já usa duas. O `no-store` da rota é o que garante que o
+// segundo pedido traga a foto NOVA e não um 304 com a antiga.
+let ligadoAoFoco = false;
+
+function ligarWallpaperAoFocar(): void {
+  if (ligadoAoFoco || typeof window === 'undefined') return;
+  ligadoAoFoco = true;
+  const rebuscar = () => {
+    if (getBgPref() !== 'desktop' || !getDesktopGlass()) return;
+    void carregarWallpaperDoDesktop();
+  };
+  window.addEventListener('focus', rebuscar);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) rebuscar(); });
+}
+
 export function getBgPref(): BgPref {
   const v = typeof localStorage !== 'undefined' ? localStorage.getItem(KEY) : null;
   // 'image' sem imagem guardada (limpou o storage, trocou de dispositivo) cai pro chapado em vez de
@@ -176,6 +246,13 @@ export function applyBg(pref: BgPref = getBgPref()): void {
   const raiz = document.documentElement;
   if (pref === 'flat') delete raiz.dataset.bg;
   else raiz.dataset.bg = pref;
+  // Sair do fundo Desktop apaga a marca e solta a foto: sem isto o `data-desktop-glass` ficava
+  // grudado no <html> (a CSS dele some junto com o `data-bg`, mas a blob URL não) e o modo Imagem
+  // seguinte herdava o vazamento de memória.
+  if (pref !== 'desktop') {
+    delete raiz.dataset.desktopGlass;
+    soltarWallpaperDoDesktop();
+  }
   // A imagem entra por variavel CSS: assim a folha de estilo desenha a camada (cobertura, scrim,
   // grao) e o TS so entrega o arquivo.
   const img = pref === 'image' ? getBgImage() : null;
@@ -187,7 +264,17 @@ export function applyBg(pref: BgPref = getBgPref()): void {
     // atrás da janela transparente. O scrim continua sendo o que torna painéis e caixas
     // translúcidos (--cp-panel-alpha / --cp-surface-alpha) — sem ele os tokens ficam nas cores
     // opacas de app.css:88-89 e cada chip vira um retângulo sólido sobre o desktop.
-    raiz.style.removeProperty('--cp-wallpaper');
+    // Com o Vidro ligado (GLASS_KEY), a foto do sistema entra como camada da PÁGINA e o modo passa a
+    // ser o Imagem com o arquivo que o rice escolheu — é o que devolve vidro e cor às caixas.
+    if (getDesktopGlass()) {
+      raiz.dataset.desktopGlass = '1';
+      void carregarWallpaperDoDesktop();
+      ligarWallpaperAoFocar();
+    } else {
+      delete raiz.dataset.desktopGlass;
+      soltarWallpaperDoDesktop();
+      raiz.style.removeProperty('--cp-wallpaper');
+    }
     aplicarScrim();
   } else {
     raiz.style.removeProperty('--cp-wallpaper');

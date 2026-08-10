@@ -9,7 +9,7 @@
     getFontPref, setFontPref, getMedidaTexto, setMedidaTexto,
     getSurfaceSolid, setSurfaceSolid,
     getBackdropBlur, setBackdropBlur,
-    getBgPref,
+    getBgPref, getDesktopGlass, setDesktopGlass,
     READ_ALPHA_PADRAO, TEXT_BOOST_PADRAO, SURFACE_SOLID_PADRAO,
     type ReadMode, type PanelStyle, type FontPref, type MedidaTexto, type BackdropBlurPref, type BgPref,
   } from '../../lib/background';
@@ -67,6 +67,10 @@
     { v: 'light', label: 'Leve', aria: 'Um leve embaçado ajuda texto sobre foto muito detalhada' },
     { v: 'strong', label: 'Forte', aria: 'A foto vira uma mancha de cor — máximo alívio pra leitura' },
   ];
+  const opcoesVidroDesktop: { v: 'janela' | 'vidro'; label: string; aria: string }[] = [
+    { v: 'janela', label: 'Janela', aria: 'A janela fica transparente e mostra a área de trabalho de verdade' },
+    { v: 'vidro', label: 'Vidro', aria: 'O app copia o papel de parede do sistema pra dentro da página e ganha vidro' },
+  ];
   const opcoesPaineis: { v: PanelStyle; label: string; aria: string }[] = [
     { v: 'card', label: 'Caixa solta', aria: 'Painéis flutuando, com folga e cantos redondos' },
     { v: 'edge', label: 'Colados', aria: 'Painéis colados na borda da tela, de ponta a ponta' },
@@ -82,6 +86,7 @@
   // atualizado pelo callback onEscolha (ver BackgroundToggle) — nao por effect, porque a mudanca so
   // acontece por clique, nunca sozinha.
   let fundo = $state<BgPref>(getBgPref());
+  let vidroDesktop = $state(getDesktopGlass());
   // `tema` e $state e nao `getThemePref()` direto: aquela funcao le localStorage por chamada comum,
   // sem sinal reativo, entao o bloco nunca reavaliaria e o controle so apareceria ao reabrir a
   // folha. Mesmo remedio do `caixas` (linhas 71-76) e do `onEscolha` do BackgroundToggle.
@@ -209,6 +214,25 @@
     {#key resetSeq}<BackgroundToggle onEscolha={(p) => (fundo = p)} />{/key}
   </div>
 
+  <!-- Só no fundo Desktop: é a escolha entre janela transparente de verdade (vê o que está atrás do
+       app) e uma cópia do papel de parede dentro da página. A cópia é o que devolve vidro e cor às
+       caixas — `backdrop-filter` só borra o que a própria página pintou, e atrás de transparência
+       não há pixel nenhum (ver GLASS_KEY em lib/background.ts). -->
+  {#if fundo === 'desktop'}
+    <div class="ap-row">
+      <div class="ap-label">
+        <strong>Papel de parede do sistema</strong>
+        <span>deixar a janela vazada, ou copiar a foto pra dentro do app e ter vidro de verdade</span>
+      </div>
+      <SegmentedPicker
+        value={vidroDesktop ? 'vidro' : 'janela'}
+        options={opcoesVidroDesktop}
+        ariaLabel="Papel de parede do sistema"
+        onPick={(v) => { vidroDesktop = v === 'vidro'; setDesktopGlass(vidroDesktop); }}
+      />
+    </div>
+  {/if}
+
   <!-- Só faz sentido com foto de fundo — sem imagem não há o que embaçar. Aparecer aqui ensina que
        a opção existe, e desligada NÃO muda nada no resto da tela: o scrim, a leitura e a solidez
        das caixas ficam intocados. -->
@@ -217,7 +241,7 @@
       <strong>Desfoque do fundo</strong>
       <span>quanto a foto atrás da conversa fica embaçada — ajuda o texto a se ler</span>
     </div>
-    {#if fundo !== 'desktop'}
+    {#if fundo !== 'desktop' || vidroDesktop}
       <SegmentedPicker value={desfoque} options={opcoesDesfoque} ariaLabel="Desfoque do fundo"
                        onPick={(v) => { desfoque = v; setBackdropBlur(v); }} />
     {:else}

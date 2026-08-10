@@ -16,7 +16,12 @@ let falhaAoGravar = false;
 
 // O <html> só existe no jsdom; nos testes de node basta um objeto que guarde o que foi setado.
 const varsCss = new Map<string, string>();
+// Ouvintes registrados (window + document), pro teste do "repinta ao voltar o foco" poder disparar
+// o evento à mão — é o único jeito de provar que trocar o papel de parede com o app aberto repinta.
+const ouvintes = new Map<string, () => void>();
 (globalThis as any).document = {
+  hidden: false,
+  addEventListener: (ev: string, fn: () => void) => ouvintes.set(`document:${ev}`, fn),
   documentElement: {
     style: {
       setProperty: (k: string, v: string) => varsCss.set(k, v),
@@ -25,8 +30,11 @@ const varsCss = new Map<string, string>();
     dataset: {},
   },
 };
+(globalThis as any).window = {
+  addEventListener: (ev: string, fn: () => void) => ouvintes.set(`window:${ev}`, fn),
+};
 
-const { getBgScrim, getReadAlpha, getTextBoost, getFontPref, setFontPref, getSurfaceSolid, setSurfaceSolid, setBgScrim, getMedidaTexto, setMedidaTexto, getBackdropBlur, setBackdropBlur, applyBg, applyAppearance, getBgPref, isShell } = await import('./background');
+const { getBgScrim, getReadAlpha, getTextBoost, getFontPref, setFontPref, getSurfaceSolid, setSurfaceSolid, setBgScrim, getMedidaTexto, setMedidaTexto, getBackdropBlur, setBackdropBlur, applyBg, applyAppearance, getBgPref, isShell, getDesktopGlass, setDesktopGlass } = await import('./background');
 
 // Fonte: 'system' é o padrão e NÃO grava chave (mesma convenção do tema/painéis — só o desvio do
 // padrão persiste). Lixo na chave cai em 'system' em vez de deixar o app numa fonte que não existe.
@@ -247,6 +255,7 @@ describe("fundo 'desktop' (shell Electron)", () => {
 
   it('applyBg(desktop) marca o html e NÃO define wallpaper', () => {
     comUserAgent('Mozilla/5.0 hangar-shell');
+    store.delete('cp_desktop_glass');
     applyBg('desktop');
     const raiz = document.documentElement;
     expect(raiz.dataset.bg).toBe('desktop');
@@ -272,5 +281,58 @@ describe("fundo 'desktop' (shell Electron)", () => {
     applyBg('flat');
     applyAppearance();
     expect(document.documentElement.dataset.read).toBeUndefined();
+  });
+});
+
+// Vidro no fundo Desktop: a opção que troca a janela vazada por uma cópia do papel de parede dentro
+// da página. Só o DESVIO persiste (mesma convenção da fonte, do tema e dos painéis), e a marca no
+// <html> é o que a CSS lê pra parar de pintar o fundo de transparente.
+describe("vidro do fundo 'desktop'", () => {
+  beforeEach(() => { varsCss.clear(); store.clear(); comUserAgent('Mozilla/5.0 hangar-shell'); });
+
+  it('padrão é desligado e não grava chave', () => {
+    expect(getDesktopGlass()).toBe(false);
+    expect(store.has('cp_desktop_glass')).toBe(false);
+  });
+
+  it('ligar grava, desligar remove a chave', () => {
+    setDesktopGlass(true);
+    expect(store.get('cp_desktop_glass')).toBe('1');
+    expect(getDesktopGlass()).toBe(true);
+    setDesktopGlass(false);
+    expect(store.has('cp_desktop_glass')).toBe(false);
+  });
+
+  it('ligado, applyBg(desktop) marca o html; desligado, tira a marca', () => {
+    store.set('cp_bg', 'desktop');
+    store.set('cp_desktop_glass', '1');
+    applyBg('desktop');
+    expect(document.documentElement.dataset.desktopGlass).toBe('1');
+    store.delete('cp_desktop_glass');
+    applyBg('desktop');
+    expect(document.documentElement.dataset.desktopGlass).toBeUndefined();
+    // Sem a foto do backend (não há fetch nos testes), o modo continua o de hoje: sem wallpaper.
+    expect(varsCss.get('--cp-wallpaper')).toBeUndefined();
+  });
+
+  it('ligado, escuta foco e visibilidade pra repintar quando o papel de parede muda', () => {
+    // O rice troca o wallpaper FORA da janela do app: sem estes dois ouvintes a foto só mudaria no
+    // próximo boot, e a paleta (que já escuta) trocaria sozinha — cores novas com a foto velha.
+    store.set('cp_bg', 'desktop');
+    store.set('cp_desktop_glass', '1');
+    applyBg('desktop');
+    expect(ouvintes.has('window:focus')).toBe(true);
+    expect(ouvintes.has('document:visibilitychange')).toBe(true);
+    // Disparar não pode levantar: sem `fetch` (env node) o carregador cai no próprio catch e o modo
+    // segue como está, em vez de derrubar o handler de foco do app inteiro.
+    expect(() => ouvintes.get('window:focus')!()).not.toThrow();
+  });
+
+  it('sair do fundo desktop apaga a marca', () => {
+    store.set('cp_desktop_glass', '1');
+    applyBg('desktop');
+    expect(document.documentElement.dataset.desktopGlass).toBe('1');
+    applyBg('flat');
+    expect(document.documentElement.dataset.desktopGlass).toBeUndefined();
   });
 });

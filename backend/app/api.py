@@ -876,6 +876,19 @@ def desktop_palette_get():
     return p
 
 
+@app.get("/api/desktop/wallpaper", dependencies=[Depends(require_auth), Depends(require_loopback)])
+def desktop_wallpaper_get():
+    # A imagem que o rice esta usando agora, pro modo "Vidro" do fundo Desktop desenhar ela DENTRO da
+    # pagina (backdrop-filter so enxerga o que a propria pagina pintou; atras de janela transparente
+    # nao ha pixel nenhum pra virar vidro). 404 = sem rice/sem foto, e o front esconde a opcao.
+    p = desktop_palette.wallpaper()
+    if p is None:
+        raise HTTPException(status_code=404, detail="sem papel de parede")
+    # Sem cache do navegador: trocar o papel de parede mantem a URL e so muda o conteudo, entao um
+    # 304 deixaria a foto velha na tela ate alguem limpar o cache.
+    return FileResponse(p, headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/costs", dependencies=[Depends(require_auth)], response_model=CostReport)
 def costs_endpoint(period: str = "all"):
     # Período inválido cai em "all" em vez de 422: um cliente antigo da malha mandando qualquer

@@ -108,3 +108,36 @@ def ler() -> dict | None:
         _avisar(f"paleta do desktop ilegivel: {e!r}")
         return None
     return parse(texto)
+
+
+# ── Papel de parede ───────────────────────────────────────────────────────────
+# Mesma pasta do rice, mesmo dono: o quickshell escreve aqui o CAMINHO da imagem atual (uma linha).
+# Vive neste modulo, e nao num `desktop_wallpaper.py`, porque e a mesma fonte e o mesmo contrato de
+# degradacao — sem rice, os dois somem juntos e o app volta pro fundo dele.
+_EXTENSOES = {".png", ".jpg", ".jpeg", ".webp", ".avif", ".bmp", ".gif"}
+
+
+def _caminho_wallpaper() -> Path:
+    # Funcao pelo mesmo motivo de `_caminho()`: o teste troca por monkeypatch.
+    return Path.home() / ".local/state/quickshell/user/generated/wallpaper/path.txt"
+
+
+def wallpaper() -> Path | None:
+    """Arquivo do papel de parede atual. Ausente, ilegivel ou apontando pra nada -> None."""
+    try:
+        cru = _caminho_wallpaper().read_text(encoding="utf-8", errors="replace").strip()
+    except FileNotFoundError:
+        return None
+    except (OSError, RuntimeError) as e:
+        _avisar(f"caminho do papel de parede ilegivel: {e!r}")
+        return None
+    if not cru:
+        return None
+    p = Path(cru).expanduser()
+    # Confere ANTES de devolver: o arquivo pode ter sido apagado depois de virar papel de parede, e
+    # um 404 aqui e uma resposta que o front sabe tratar — um caminho morto viraria erro de leitura
+    # la na frente, quando ja nao da mais pra explicar o que aconteceu.
+    if p.suffix.lower() not in _EXTENSOES or not p.is_file():
+        _avisar(f"papel de parede nao utilizavel: {cru!r}")
+        return None
+    return p

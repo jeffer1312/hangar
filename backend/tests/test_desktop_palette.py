@@ -153,3 +153,44 @@ def test_permissao_negada_loga_diferente_de_arquivo_ausente(tmp_path, monkeypatc
         assert "ilegivel" in caplog.text
     finally:
         d.chmod(0o700)   # senao o tmp_path nao e limpo no teardown
+
+
+# ── Papel de parede (modo Vidro do fundo Desktop) ─────────────────────────────
+# Mesmo contrato do resto do modulo: ausencia e ilegibilidade sao RESPOSTA (None), nunca excecao —
+# a rota traduz None em 404 e o front esconde a opcao.
+def test_wallpaper_le_o_caminho_do_arquivo(tmp_path, monkeypatch):
+    foto = tmp_path / "parede.png"
+    foto.write_bytes(b"\x89PNG fingindo ser imagem")
+    ponteiro = tmp_path / "path.txt"
+    ponteiro.write_text(f"{foto}\n", encoding="utf-8")
+    monkeypatch.setattr(desktop_palette, "_caminho_wallpaper", lambda: ponteiro)
+    assert desktop_palette.wallpaper() == foto
+
+
+def test_wallpaper_sem_ponteiro_ou_vazio_devolve_nada(tmp_path, monkeypatch):
+    monkeypatch.setattr(desktop_palette, "_caminho_wallpaper", lambda: tmp_path / "nao-existe.txt")
+    assert desktop_palette.wallpaper() is None
+    vazio = tmp_path / "path.txt"
+    vazio.write_text("\n", encoding="utf-8")
+    monkeypatch.setattr(desktop_palette, "_caminho_wallpaper", lambda: vazio)
+    assert desktop_palette.wallpaper() is None
+
+
+def test_wallpaper_apontando_pra_arquivo_morto_devolve_nada(tmp_path, monkeypatch):
+    # A foto pode ter sido apagada DEPOIS de virar papel de parede: e caminho valido apontando pra
+    # nada. Devolver o Path assim mandaria o erro pra FileResponse, que vira 500 em vez de 404.
+    ponteiro = tmp_path / "path.txt"
+    ponteiro.write_text(str(tmp_path / "sumiu.png"), encoding="utf-8")
+    monkeypatch.setattr(desktop_palette, "_caminho_wallpaper", lambda: ponteiro)
+    assert desktop_palette.wallpaper() is None
+
+
+def test_wallpaper_recusa_o_que_nao_e_imagem(tmp_path, monkeypatch):
+    # O ponteiro e um arquivo de texto do rice: se ele um dia trouxer outra coisa (um .conf, um
+    # script), servir aquilo seria entregar arquivo arbitrario da HOME por uma rota de imagem.
+    alvo = tmp_path / "segredo.conf"
+    alvo.write_text("api_key = 123", encoding="utf-8")
+    ponteiro = tmp_path / "path.txt"
+    ponteiro.write_text(str(alvo), encoding="utf-8")
+    monkeypatch.setattr(desktop_palette, "_caminho_wallpaper", lambda: ponteiro)
+    assert desktop_palette.wallpaper() is None

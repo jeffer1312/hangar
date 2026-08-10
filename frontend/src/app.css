@@ -396,8 +396,12 @@ html:is([data-bg="image"], [data-bg="desktop"]) {
 /* O html é o único que ainda pinta no modo desktop: a regra acima (compartilhada com o modo Imagem)
    define background: var(--bg-base), e ali a foto cobre; aqui, atrás, é a área de trabalho.
    Mesma especificidade e vem depois, então ganha. O blur NÃO é daqui: é windowrulev2 do
-   compositor (ver shell/README.md). */
-html[data-bg="desktop"] { background: transparent; }
+   compositor (ver shell/README.md).
+   Com o Vidro ligado (`data-desktop-glass`, opção da Aparência) NÃO vale: ali a foto do sistema é
+   desenhada dentro da página, então o fundo volta a ser `--bg-base` e a janela deixa de ser buraco —
+   é essa troca que devolve vidro e cor às caixas, que `backdrop-filter` não consegue dar sobre
+   transparência. */
+html[data-bg="desktop"]:not([data-desktop-glass]) { background: transparent; }
 
 /* CHROME (navbar e composer) com papel de parede: entra no veu, como o resto.
    Sem blur (proibido no WebKit) o texto que rola por baixo aparece um pouco atraves da faixa — isso
