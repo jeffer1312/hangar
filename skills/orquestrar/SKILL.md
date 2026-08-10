@@ -42,7 +42,7 @@ cp-send --list        # nome, estado, cwd das sessões vivas
 ```
 
 - Já existe sessão viva no cwd do repo → **reusar** (perguntar ao usuário se ela está livre pra tarefa).
-- Não existe → `cp-send --new <tarefa>-<repo> <cwd>` (ex: `ticket-0000-svc-mailer`). Nunca `tmux new-session` cru.
+- Não existe → `cp-send --new <tarefa>-<repo> <cwd>` (ex: `abc-1234-svc-mailer`). Nunca `tmux new-session` cru.
 
 ### 3. Parear (uma chamada por sessão)
 

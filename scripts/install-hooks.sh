@@ -34,6 +34,22 @@ if (( sem_x )); then
     echo "FALHOU: hook sem permissão de execução — o git NÃO vai rodá-lo. Confira o filesystem." >&2
     exit 1
 fi
+# Padrões privados (domínio do trabalho, prefixo de ticket, e-mail corporativo): moram fora do
+# versionamento, senão o repo público publica o que a trava existe pra esconder. Criado vazio, com
+# o formato comentado — quem tem o que esconder preenche uma vez; quem não tem, ignora.
+PRIVADOS="$(git rev-parse --git-common-dir)/hooks-padroes-privados"
+if [[ ! -f "$PRIVADOS" ]]; then
+    cat > "$PRIVADOS" <<'MODELO'
+# Padrões privados do pre-commit, um por linha:  nome::regex(ERE)
+# Este arquivo NÃO é versionado — é o lugar do que não pode aparecer num repo público.
+# Exemplos (descomente e troque pelos seus):
+# dominio do trabalho::empresa\.(com|dev)
+# prefixo de ticket::ABC-[0-9]{4,}
+# e-mail corporativo::seu_usuario@
+MODELO
+    echo "criado (fora do versionamento): $PRIVADOS"
+fi
+
 echo
-echo "teste rápido:  echo 'TICKET-0000' >> /tmp/x && git add -f /tmp/x  (deve recusar)"
+echo "teste rápido:  echo 'AKIAIOSFODNN7EXAMPLE' >> /tmp/x && git add -f /tmp/x  (deve recusar)"
 echo "pular numa emergência:  git commit --no-verify"
