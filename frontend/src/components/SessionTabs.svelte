@@ -92,7 +92,7 @@
         <span class="tab-dot" style:background={stateColors[tab.session.state]} aria-hidden="true"></span>
         <span class="tab-name">{tab.session.name}</span>
         {#if badge}
-          <span class="tab-plan" style:width={`${badge.pct}%`} title={badge.title} aria-hidden="true"></span>
+          <span class="tab-plan" class:done={badge.complete} style:width={`${badge.pct}%`} title={badge.title} aria-hidden="true"></span>
         {/if}
       </button>
     {/each}
@@ -167,15 +167,20 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  /* Filete do progresso do plano, na base da aba. Surface própria (camada fina por cima da aba),
-     não fundo chapado — quem vaza é o véu, ver regra de transparência no CLAUDE.md. */
+  /* Filete do progresso do plano, na base da aba. Token de PROGRESSO, não de superfície: antes
+     usava --surface-inset (cor de fundo de campo) — invisível como progresso e, a bottom:0 com
+     2px, pintava POR CIMA do sublinhado accent do ativo (box-shadow inset) e apagava o indicador.
+     Parcial = text-secondary (mesma família do anel do PlanRing); concluído = success. Na aba
+     ATIVA o filete sobe 2px pra não cobrir o sublinhado accent (round 7). */
   .tab-plan {
     position: absolute;
     left: 0;
     bottom: 0;
     height: 2px;
-    background: var(--surface-inset);
+    background: var(--text-secondary);
   }
+  .tab.active .tab-plan { bottom: 2px; }
+  .tab-plan.done { background: var(--success); }
   .tab-expand {
     flex-shrink: 0;
     display: inline-flex;

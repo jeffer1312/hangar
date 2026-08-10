@@ -20,7 +20,8 @@ vi.mock('../lib/sessionsStore.svelte', () => ({
 vi.mock('../lib/format', () => ({
   stateColors: {}, stateLabels: {}, sortSessions: (s: unknown[]) => s,
 }));
-vi.mock('../lib/plan', () => ({ planBadge: () => null }));
+vi.mock('../lib/plan', () => ({ planBadge: vi.fn() }));
+import { planBadge } from '../lib/plan';
 
 function montar() {
   const el = document.createElement('div');
@@ -35,6 +36,7 @@ function montar() {
 beforeEach(() => {
   sidebarPin.setForced(null);
   sidebarPin.setUser(false);
+  vi.mocked(planBadge).mockReturnValue(null);   // sem plano por padrão (filete ausente)
 });
 
 describe('SessionTabs — expandir sob override do Board/Canvas (round 7)', () => {
@@ -61,6 +63,45 @@ describe('SessionTabs — expandir sob override do Board/Canvas (round 7)', () =
     btn.click();
     await tick();
     expect(sidebarPin.preferred).toBe(false);   // expandiu: preferência mudou de propósito
+    unmount(t.comp);
+  });
+});
+
+describe('SessionTabs — filete de progresso do plano (round 7)', () => {
+  function comPlano(pct: number, complete: boolean) {
+    vi.mocked(planBadge).mockReturnValue({
+      pct, complete, label: '', title: `Plano ${pct}%`,
+    });
+  }
+
+  it('0%: filete presente com largura zero (nada a mostrar, sem quebrar)', async () => {
+    comPlano(0, false);
+    const t = montar();
+    await tick();
+    const filete = document.querySelector<HTMLElement>('.tab-plan');
+    expect(filete).not.toBeNull();
+    expect(filete?.style.width).toBe('0%');
+    expect(filete?.classList.contains('done')).toBe(false);
+    unmount(t.comp);
+  });
+
+  it('parcial: largura proporcional ao progresso, sem marcação de concluído', async () => {
+    comPlano(37, false);
+    const t = montar();
+    await tick();
+    const filete = document.querySelector<HTMLElement>('.tab-plan');
+    expect(filete?.style.width).toBe('37%');
+    expect(filete?.classList.contains('done')).toBe(false);
+    unmount(t.comp);
+  });
+
+  it('concluído: largura cheia e classe done (cor de sucesso no CSS)', async () => {
+    comPlano(100, true);
+    const t = montar();
+    await tick();
+    const filete = document.querySelector<HTMLElement>('.tab-plan');
+    expect(filete?.style.width).toBe('100%');
+    expect(filete?.classList.contains('done')).toBe(true);
     unmount(t.comp);
   });
 });
