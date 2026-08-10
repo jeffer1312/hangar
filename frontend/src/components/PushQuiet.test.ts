@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, tick, unmount } from 'svelte';
 import PushQuietHarness from './PushQuietHarness.svelte';
+import PushQuiet from './PushQuiet.svelte';
 import * as api from '../lib/api';
 import type { PushTarget } from '../lib/quietHours';
 import type { Server } from '../lib/auth';
@@ -49,6 +50,33 @@ beforeEach(() => {
 
 afterEach(() => {
   document.body.innerHTML = '';
+});
+
+describe('PushQuiet — semântica ARIA do botão Ativar (round 7)', () => {
+  function montarDireto(menuitem?: boolean) {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(PushQuiet, {
+      target: el,
+      props: { target: { mode: 'global' }, open: true, ...(menuitem !== undefined ? { menuitem } : {}) },
+    });
+    return { el, comp: comp as never };
+  }
+
+  it('default (Settings): botão COMUM, sem role=menuitem (não há ancestral role=menu)', () => {
+    const t = montarDireto();
+    const btn = t.el.querySelector<HTMLButtonElement>('.pq-item')!;
+    expect(btn).not.toBeNull();
+    expect(btn.getAttribute('role')).toBeNull();
+    unmount(t.comp);
+  });
+
+  it('menuitem=true (AccountMenu popover, dentro de role=menu): papel preservado', () => {
+    const t = montarDireto(true);
+    const btn = t.el.querySelector<HTMLButtonElement>('.pq-item')!;
+    expect(btn.getAttribute('role')).toBe('menuitem');
+    unmount(t.comp);
+  });
 });
 
 describe('PushQuiet runtime (1 GET por abertura/alvo estável)', () => {

@@ -62,6 +62,24 @@ describe('ServerManager — botão Remover', () => {
   });
 });
 
+describe('ServerManager — semântica ARIA do botão Adicionar (round 7)', () => {
+  it('default (Settings): botão COMUM, sem role=menuitem (não há ancestral role=menu)', () => {
+    const t = montar();
+    const add = t.el.querySelector<HTMLButtonElement>('.sm-item')!;
+    expect(add).not.toBeNull();
+    expect(add.getAttribute('role')).toBeNull();
+    expect(add.getAttribute('type')).toBe('button');
+    unmount(t.comp);
+  });
+
+  it('menuitem=true (AccountMenu popover, dentro de role=menu): papel preservado', () => {
+    const t = montar({ menuitem: true });
+    const add = t.el.querySelector<HTMLButtonElement>('.sm-item')!;
+    expect(add.getAttribute('role')).toBe('menuitem');
+    unmount(t.comp);
+  });
+});
+
 describe('ServerManager — saveToken validado (round 4)', () => {
   async function editarToken(t: { el: HTMLElement }, texto: string) {
     t.el.querySelector<HTMLButtonElement>('.sm-srv-rename[aria-label="Trocar token de A"]')!.click();

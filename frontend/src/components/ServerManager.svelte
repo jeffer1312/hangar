@@ -18,6 +18,10 @@
     // derruba a sessão sem aviso); na tela Servidores o último TEM que ser removível — remover tudo
     // dispara o logout global, única saída pra deslogar. Desvio aprovado do plano 4b, prop optativa.
     podeRemoverUltimo?: boolean;
+    // Semântica de MENU só quando há ancestral role="menu" (popover do AccountMenu desktop). A tela
+    // Servidores das Configurações renderiza isto dentro de role="dialog" — menuitem ali seria
+    // papel inválido (WCAG 4.1.2). Default seguro: botão comum. (round 7)
+    menuitem?: boolean;
     onRename: (id: string, label: string) => void;
     onUpdateToken: (id: string, token: string) => boolean;
     onRemove: (id: string) => void;
@@ -25,7 +29,7 @@
   }
   let {
     servers, activeId = null, targetId = null, onPickTarget, onSwitchActive,
-    podeRemoverUltimo = false,
+    podeRemoverUltimo = false, menuitem = false,
     onRename, onUpdateToken, onRemove, onAdd,
   }: Props = $props();
 
@@ -179,7 +183,7 @@
   <div class="sm-sync-warn" role="status">⚠ {vaultPush.detalhe}</div>
 {/if}
 
-<button class="sm-item" role="menuitem" onclick={onAdd}>
+<button class="sm-item" type="button" role={menuitem ? 'menuitem' : undefined} onclick={onAdd}>
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
   Adicionar servidor
 </button>

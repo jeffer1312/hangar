@@ -80,9 +80,12 @@
 <!-- Corpo do menu (servidores → sair): reusado igual no popover e no drawer embedded (uma só fonte
      de verdade pros handlers de push/quiet/rename/reconnect/logout). -->
 {#snippet menuBody()}
+    <!-- menuitem só no POPOVER (que tem role="menu"); o drawer embedded (mobile) é div comum sem
+         ancestral de menu — menuitem lá seria papel inválido, mesmo problema do Settings (round 7). -->
     <ServerManager
       {servers}
       {activeId}
+      menuitem={!embedded}
       onSwitchActive={onSwitchServer ? (id) => { onClose(); onSwitchServer(id); } : undefined}
       onRename={onRenameServer}
       onUpdateToken={onUpdateServerToken}
@@ -96,7 +99,7 @@
            cai nas funções globais, que leriam a janela de outra máquina como se fosse desta. O
            `open` so decide o LOAD (o componente fica montado sempre — fechar/reabrir o menu nao
            pode perder busy/resultado/Janela carregada). -->
-      <PushQuiet {open} target={embedded ? (activeServer ? { mode: 'server', server: activeServer } : { mode: 'unavailable' }) : { mode: 'global' }} />
+      <PushQuiet {open} menuitem={!embedded} target={embedded ? (activeServer ? { mode: 'server', server: activeServer } : { mode: 'unavailable' }) : { mode: 'global' }} />
     {/if}
 
     <div class="am-sep"></div>

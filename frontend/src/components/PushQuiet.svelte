@@ -15,8 +15,11 @@
   //
   // Toda a máquina de corrida (dedup de GET, serialização load/save, watchdog, invalidação por
   // troca de alvo) vive no controller em lib/quietHours.ts — testado determinísticamente.
-  type Props = { target: PushTarget; open: boolean };
-  let { target, open }: Props = $props();
+  // Semântica de MENU só quando há ancestral role="menu" (popover do AccountMenu desktop). A tela
+  // Servidores das Configurações renderiza isto dentro de role="dialog" — menuitem ali seria papel
+  // inválido (WCAG 4.1.2). Default seguro: botão comum. (round 7)
+  type Props = { target: PushTarget; open: boolean; menuitem?: boolean };
+  let { target, open, menuitem = false }: Props = $props();
 
   // Web push: liga notificação de "sessão aguardando" (assina + registra nos servidores). Reusa o
   // MESMO enablePush das duas telas — não reimplementa. O enablePush é GLOBAL, por isso o rótulo
@@ -60,7 +63,7 @@
   onDestroy(() => ctrl.dispose());
 </script>
 
-<button class="pq-item" role="menuitem" onclick={handleEnablePush} disabled={pushBusy}>
+<button class="pq-item" type="button" role={menuitem ? 'menuitem' : undefined} onclick={handleEnablePush} disabled={pushBusy}>
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
   {pushBusy ? 'Ativando…' : 'Ativar notificações em todos os servidores'}
 </button>
