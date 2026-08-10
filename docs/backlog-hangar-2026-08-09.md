@@ -68,6 +68,65 @@ As mudanças de vocabulário visual (chip neutro + anel, superfície que segue a
 engrenagem no lugar do avatar) foram feitas e verificadas **só no desktop**. `SessionCard.svelte` e
 o cabeçalho de `SessionList.svelte` têm elementos próprios que podem ter ficado destoando.
 
+### 10. Recado de pareamento fica parado no composer do Pi, e o reenvio duplica
+Relatado e medido em 2026-08-09. Sintoma: recado que chega numa sessão **Pi** entra no composer e
+**não é submetido**; destrava com um Enter manual no terminal, e a mensagem aparece duplicada.
+
+Causa raiz, com evidência. `terminal_input.py:309` —
+`_PASTE_ID_RE = re.compile(r"\[Pasted text #(\d+)")`. Esse é o placeholder do **Claude Code**. O Pi
+colapsa paste também, com outro texto: **`[paste #1 1171 chars]`** (lido do pane do
+`hangar-gpt-review`, pi 0.83.0, gpt-5.6-luna). Conferido no interpretador: a regex casa
+`[Pasted text #3 +42 lines]` e devolve `[]` para a forma do Pi.
+
+A cadeia inteira segue daí, e cada elo já está escrito no arquivo:
+
+1. `_composer_residuo` (linha 330) procura a **cauda** ou o **começo** do texto na região do
+   composer. Num paste colapsado o texto real nunca é desenhado — só o chip —, então nenhum dos
+   dois casa.
+2. O ramo que existe justamente pra isso (linha ~385, `if pastes_antes is not None and
+   (_paste_ids(composer) - pastes_antes)`) depende da regex acima. No Pi ele nunca dispara.
+3. Sem evidência, a função devolve `False`, `_entrou_no_composer` lê "não chegou" e **o Enter não é
+   enviado**.
+4. O remetente repete, e cada tentativa empilha OUTRO paste no composer — a duplicação que o
+   usuário vê. Quando ele dá o Enter manual, a pilha drena de uma vez.
+
+É o mesmo defeito já corrigido para o Claude Code em 31/07 (o comentário na linha 380 descreve a
+mensagem quíntupla daquele episódio); a correção nunca foi estendida ao Pi, que na época ainda não
+colapsava paste — ou não tinha sido medido.
+
+**Por que funciona na maior parte das vezes.** O colapso só acontece acima de um certo tamanho.
+Mensagem curta é desenhada literalmente no composer, a comparação por cauda/começo casa, e o Enter
+vai — por isso o placar de hoje é de 135 `sent` em `hangar` contra 6 `deferred` em
+`hangar-gpt-review`. Falha só a mensagem longa. Os dois casos capturados hoje têm **1032** e
+**1171** caracteres; o limiar exato do Pi ainda não foi medido.
+
+**A prova, no diagnóstico do próprio código** (journal, 21:44:56, `hangar-gpt-review-fresh`):
+
+```
+envio PARCIAL: multi-linha NAO chegou no composer em 1.0s — Enter nao enviado
+composer='────…\n [paste #1 1032 chars]\n────…'  reguas=46,48  fundo=3  altura=2
+pastes(antes=[] depois=[])
+```
+
+O composer **mostra** `[paste #1 1032 chars]` e o mesmo log diz `pastes(antes=[] depois=[])` — ou
+seja, o texto chegou e o detector não viu nada. A região foi lida corretamente (as duas réguas
+foram achadas, `reguas=46,48`); o que falhou foi só o reconhecimento do chip.
+
+**O `deferred` é consequência, não causa.** Depois do primeiro envio travado o composer fica
+ocupado, e o `_composer_ocupado_pi` (linha 1038) passa a adiar tudo que vem atrás — daí a fila que
+drena de uma vez quando o usuário dá o Enter manual.
+
+**CORRIGIDO em 09/08/2026** (ainda sem commit). `_PASTE_ID_RE` passou a aceitar os dois desenhos:
+`\[(?:Pasted text|paste) #(\d+)`. A trava de identidade continua valendo — só um número NOVO em
+relação à foto pré-paste conta, então rascunho do dono não vira prova da nossa entrega. Três testes
+de regressão em `test_terminal_input.py` (chip do Pi novo conta; chip do Pi alheio não conta;
+`_paste_ids` lê os dois desenhos). Suíte completa: 1660 passando.
+
+Fica em aberto, e é medição, não código: **o limiar de colapso do Pi** (falhas vistas em 1032 e
+1171 caracteres) e se a forma muda com `--no-extensions` — o composer do Pi já apareceu desenhado
+de três jeitos diferentes neste arquivo (ver `_READY_MARKERS_BY_PROVIDER`, linha 193). Se aparecer
+um quarto desenho, o lugar de acrescentar é o mesmo.
+
 ---
 
 ## Ideias — precisam de plano

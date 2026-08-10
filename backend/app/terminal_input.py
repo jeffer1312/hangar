@@ -302,12 +302,24 @@ def _sem_espaco(s: str) -> str:
     return re.sub(r"\s+", "", s)
 
 
-# Numeros dos placeholders de paste ("[Pasted text #N +X lines]") numa regiao do pane. A IDENTIDADE
-# importa: aceitar qualquer placeholder fazia um paste ALHEIO (rascunho do usuario) contar como a
-# nossa entrega — o Enter submetia o texto do usuario como se fosse o prompt do agente (achado
-# CRITICO da review de 31/07). So um numero NOVO em relacao a foto tirada ANTES do nosso paste
-# prova alguma coisa.
-_PASTE_ID_RE = re.compile(r"\[Pasted text #(\d+)")
+# Numeros dos placeholders de paste numa regiao do pane. A IDENTIDADE importa: aceitar qualquer
+# placeholder fazia um paste ALHEIO (rascunho do usuario) contar como a nossa entrega — o Enter
+# submetia o texto do usuario como se fosse o prompt do agente (achado CRITICO da review de 31/07).
+# So um numero NOVO em relacao a foto tirada ANTES do nosso paste prova alguma coisa.
+#
+# DOIS desenhos, um por agente, e cada um tem de estar aqui porque o texto real nunca chega a ser
+# desenhado quando o TUI colapsa:
+#   Claude Code -> "[Pasted text #1 +12 lines]"
+#   Pi          -> "[paste #1 1032 chars]"      (medido 09/08/2026, pi 0.83.0)
+# So o do Claude estava coberto, e o do Pi custou o bug que o usuario relatou: recado longo de
+# pareamento entrava no composer do Pi, `_composer_residuo` nao achava prova nenhuma, o Enter nunca
+# era enviado e cada retry empilhava outro paste (o log do proprio codigo imprimia
+# `composer='… [paste #1 1032 chars] …' pastes(antes=[] depois=[])` — mostrando o chip na tela e o
+# detector cego). Depois do primeiro travamento o `_composer_ocupado_pi` passava a adiar tudo, e a
+# fila so drenava com um Enter manual no terminal, entregando a pilha de uma vez.
+# ponytail: e uma lista de desenhos medidos, igual ao _READY_MARKERS_BY_PROVIDER — provider novo que
+# colapse paste entra aqui, com a forma medida no pane, nunca chutada.
+_PASTE_ID_RE = re.compile(r"\[(?:Pasted text|paste) #(\d+)")
 
 
 def _paste_ids(regiao: str) -> set[str]:

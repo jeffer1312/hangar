@@ -217,6 +217,33 @@ def test_paste_novo_conta_como_entrega():
     assert r is True
 
 
+# --- placeholder do Pi: outro desenho, mesmo mecanismo (bug medido 09/08/2026) ---
+# O Pi escreve "[paste #1 1032 chars]", nao "[Pasted text #N +X lines]". So o do Claude era
+# reconhecido, entao recado LONGO pro Pi entrava no composer, nao achava prova, o Enter nunca ia e
+# cada retry empilhava outro paste. Curto passava (desenhado literal), por isso o bug parecia
+# intermitente.
+
+def test_paste_do_pi_novo_conta_como_entrega():
+    pane = _pane_claude([" [paste #1 1032 chars]"])
+    r = terminal_input._composer_residuo(pane, "recado de pareamento com mais de mil caracteres",
+                                         "pi", pastes_antes=set())
+    assert r is True
+
+
+def test_paste_do_pi_alheio_nao_conta_como_entrega():
+    # Mesma trava de identidade do lado do Claude: chip que JA estava la e rascunho do dono.
+    pane = _pane_claude([" [paste #1 1032 chars]"])
+    r = terminal_input._composer_residuo(pane, "recado de pareamento com mais de mil caracteres",
+                                         "pi", pastes_antes={"1"})
+    assert r is not True
+
+
+def test_paste_ids_le_os_dois_desenhos():
+    assert terminal_input._paste_ids("[Pasted text #3 +42 lines]") == {"3"}
+    assert terminal_input._paste_ids(" [paste #1 1171 chars]") == {"1"}
+    assert terminal_input._paste_ids("nada aqui") == set()
+
+
 # --- _limpar_composer: limpar o composer antes de reportar "partial" (07/08/2026) ---
 
 def test_limpar_composer_nao_apaga_texto_alheio():
