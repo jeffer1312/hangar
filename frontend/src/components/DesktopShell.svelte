@@ -231,6 +231,10 @@
   // A barra de abas existe somente no modo 'tabs' (decisão do usuário: o padrão é o RAIL, que
   // vive na própria Sidebar); o toggle do contexto mora no extremo direito dela nesse modo.
   const barraDeAbas = $derived(barraRecolhida && !terminalMaximizado && navMode.mode === 'tabs');
+  // Toggle do painel de contexto FORA do painel: barra de abas (modo tabs) OU rodapé do rail
+  // (modo rail com a sidebar recolhida e visível). Com toggle externo o painel não duplica o
+  // botão nem vira aba vertical quando recolhido (follow-up visual).
+  const toggleExterno = $derived(barraDeAbas || (barraRecolhida && !terminalMaximizado && navMode.mode === 'rail'));
 
   // Chaves SERVER-AWARE das sessoes com um Chat montado agora (os mesmos tres mounts abaixo). Fecha
   // o terminal sozinho quando a chave dele sai da tela (navegou pro board/canvas, trocou a
@@ -344,7 +348,7 @@
               topInset={hasAttention ? 52 : 0}
               onOpenWorkspacePalette={() => (commandOpen = true)}
               showContextPanel={true}
-              toggleCtxNaBarra={barraDeAbas}
+              ctxToggleExterno={toggleExterno}
               publishWorkspaceActions={true}
               onWorkspaceActionsChange={handleChatActionsChange}
             />
@@ -367,7 +371,7 @@
             topInset={hasAttention ? 52 : 0}
             onOpenWorkspacePalette={() => (commandOpen = true)}
             showContextPanel={splitSessions.length === 0}
-            toggleCtxNaBarra={barraDeAbas}
+            ctxToggleExterno={toggleExterno}
             publishWorkspaceActions={true}
             onWorkspaceActionsChange={handleChatActionsChange}
           />

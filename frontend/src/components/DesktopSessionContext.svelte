@@ -45,10 +45,11 @@
     // Chip do loop (🔁 N/M) — morava na NavBar; aqui vai junto do estado.
     loopLabel?: string | null;
     loopColor?: string;
-    // Follow-up visual: o toggle mora na barra de abas (SessionTabs) — este painel NÃO renderiza
-    // o próprio .ctx-fold (sem duplicação) e, recolhido, SOME em vez de virar aba vertical.
-    // Sem a barra (sidebar expandida), a porta acessível do painel é preservada (toggleNaBarra=false).
-    toggleNaBarra?: boolean;
+    // Follow-up visual: existe um toggle do painel FORA dele (barra de abas no modo 'tabs' OU
+    // rodapé do rail no modo 'rail' com a sidebar recolhida) — este painel NÃO renderiza o próprio
+    // .ctx-fold (sem duplicação) e, recolhido, SOME em vez de virar aba vertical. Sem toggle
+    // externo (sidebar expandida), a porta acessível do painel é preservada (aba vertical).
+    toggleExterno?: boolean;
     onLoopTap?: () => void;
     // Codex: tocar o provider abre os limites de uso (na NavBar era o badge tappavel).
     onProviderTap?: () => void;
@@ -77,7 +78,7 @@
     onProviderTap = undefined, onOpenPair = undefined, onOpenGit = undefined,
     onOpenPeerChat = undefined,
     session = null, planDetail = null, planLoading = false, planError = false,
-    toggleNaBarra = false,
+    toggleExterno = false,
   }: Props = $props();
 
   const hasActions = $derived(onOpenTerminal || onOpenRun || onOpenAttachments || onOpenActivity);
@@ -110,10 +111,10 @@
   }
 </script>
 
-<aside class="session-context" class:recolhido={ctxPanel.recolhido} class:toggle-na-barra={toggleNaBarra} aria-label="Contexto da sessão">
-  <!-- Botão de recolher: com a barra de abas montada o toggle mora lá (toggleNaBarra) — aqui fica
+<aside class="session-context" class:recolhido={ctxPanel.recolhido} class:toggle-externo={toggleExterno} aria-label="Contexto da sessão">
+  <!-- Botão de recolher: com toggle externo (barra no modo tabs OU rail recolhido) o controle mora lá — aqui fica
        sem botão duplicado. Sem a barra, o botão do topo é a porta acessível dos dois sentidos. -->
-  {#if !toggleNaBarra}
+  {#if !toggleExterno}
   <button class="ctx-fold" onclick={alternarCtxPanel}
           aria-label={ctxPanel.recolhido ? 'Expandir contexto' : 'Recolher contexto'}
           title={ctxPanel.recolhido ? 'Expandir' : 'Recolher'}>
@@ -746,7 +747,7 @@
      texto vertical e um anel, enquanto o valor do painel é o plano, as ações e as métricas — coisas
      que precisam de largura. Estado e progresso seguem à vista na barra da esquerda. Some a caixa
      (vidro, borda, sombra) e fica só a aba pra trazer de volta — SOMENTE sem a barra de abas
-     (toggleNaBarra=false); com a barra, o toggle dela é a porta e o painel recolhido SOME de vez
+     (toggleExterno=false); com toggle externo, ele é a porta e o painel recolhido SOME de vez
      (display:none — nada de aba vertical central, follow-up visual). */
   .session-context.recolhido {
     width: 34px;
@@ -763,7 +764,7 @@
     background: var(--surface-raised);
     box-shadow: -1px 0 0 var(--border);
   }
-  .session-context.recolhido.toggle-na-barra {
+  .session-context.recolhido.toggle-externo {
     display: none;
     width: 0;
   }

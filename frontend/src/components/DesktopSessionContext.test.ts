@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
-// Follow-up visual: com o toggle na barra de abas (toggleNaBarra), o DesktopSessionContext NÃO
+// Follow-up visual: com toggle externo (barra/rail), o DesktopSessionContext NÃO
 // pode ter botão duplicado (.ctx-fold) nem aba vertical central quando recolhido — o painel
-// simplesmente some. Sem a barra (toggleNaBarra=false), a porta acessível do painel continua.
+// simplesmente some. Sem toggle externo (sidebar expandida), a porta acessível do painel continua.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import DesktopSessionContext from './DesktopSessionContext.svelte';
@@ -11,7 +11,7 @@ import { ctxPanel } from '../lib/ctxPanel.svelte';
 vi.mock('./PlanRing.svelte', () => ({ default: class { $destroy() {} } }));
 vi.mock('./PlanPanel.svelte', () => ({ default: class { $destroy() {} } }));
 
-function montar(toggleNaBarra: boolean) {
+function montar(toggleExterno: boolean) {
   const el = document.createElement('div');
   document.body.appendChild(el);
   const comp = mount(DesktopSessionContext, {
@@ -19,7 +19,7 @@ function montar(toggleNaBarra: boolean) {
     props: {
       state: 'idle',
       sessionName: 'sess-1',
-      toggleNaBarra,
+      toggleExterno,
     },
   });
   return { el, comp: comp as never };
@@ -31,28 +31,28 @@ beforeEach(() => {
 });
 
 describe('DesktopSessionContext — toggle na barra (follow-up visual)', () => {
-  it('toggleNaBarra: NENHUM .ctx-fold (nem no aberto) — sem botão duplicado', async () => {
+  it('toggleExterno: NENHUM .ctx-fold (nem no aberto) — sem botão duplicado', async () => {
     const t = montar(true);
     await tick();
     expect(document.querySelector('.ctx-fold')).toBeNull();
     unmount(t.comp);
   });
 
-  it('toggleNaBarra + recolhido: painel some (sem aba vertical central)', async () => {
+  it('toggleExterno + recolhido: painel some (sem aba vertical central)', async () => {
     const t = montar(true);
     await tick();
     ctxPanel.recolhido = true;
     await tick();
     const aside = document.querySelector<HTMLElement>('.session-context');
     expect(aside?.classList.contains('recolhido')).toBe(true);
-    expect(aside?.classList.contains('toggle-na-barra')).toBe(true);
-    // nenhuma aba vertical: não existe .ctx-fold (o display:none da regra recolhido+toggle-na-barra
+    expect(aside?.classList.contains('toggle-externo')).toBe(true);
+    // nenhuma aba vertical: não existe .ctx-fold (o display:none da regra recolhido+toggle-externo
     // é validado no browser — happy-dom não injeta o CSS escopado)
     expect(document.querySelector('.ctx-fold')).toBeNull();
     unmount(t.comp);
   });
 
-  it('sem toggleNaBarra (sidebar expandida): porta acessível PRESERVADA — .ctx-fold existe e recolhido mantém a aba', async () => {
+  it('sem toggleExterno (sidebar expandida): porta acessível PRESERVADA — .ctx-fold existe e recolhido mantém a aba', async () => {
     const t = montar(false);
     await tick();
     const fold = document.querySelector<HTMLButtonElement>('.ctx-fold');
