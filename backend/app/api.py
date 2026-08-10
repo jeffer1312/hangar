@@ -3401,6 +3401,39 @@ async def tts_audio(h: str):
 # /api/sessions/events e o backend vivo o tempo todo.
 #
 # Ausente = instalação com --no-frontend, ou repo sem build. Sobe igual, só não serve tela.
+class _UIStatic(StaticFiles):
+    """`index.html` sempre revalida; o resto (nome com hash) segue cacheável à vontade.
+
+    O `StaticFiles` manda só `etag`/`last-modified`, sem `cache-control` — e sem essa diretiva o
+    navegador aplica FRESCOR HEURÍSTICO: serve o `index.html` que ele guardou sem nem perguntar ao
+    servidor. Como o nome dos bundles tem hash, a página velha continua pedindo o CSS/JS velho: o
+    build novo está no disco, servido corretamente, e a tela não muda. Fica parecendo bug de CSS.
+
+    Medido em 10/08/2026: uma aba NOVA em 127.0.0.1:8765 carregou `index-DYyp82gq.css` enquanto
+    `curl /` na mesma máquina entregava `index-CDPetMR_.css`; só `reloadIgnoringCache` consertou.
+    Custou uma investigação inteira de "costura vertical na sidebar" que já estava consertada no
+    código. A janela do Electron carrega deste mesmo endereço, então ela sofria igual.
+
+    `no-cache` NÃO é `no-store`: o arquivo continua guardado, só volta a perguntar antes de usar —
+    e com o ETag a resposta vira um 304 de algumas dezenas de bytes. Os assets ficam de fora de
+    propósito; o hash no nome já os torna imutáveis, e revalidar cada um seria pagar ida e volta
+    por arquivo sem ganhar nada.
+
+    Decide pelo CAMINHO, não pelo `content-type` da resposta pronta: quando o pedido chega com
+    `If-None-Match` batendo, o starlette devolve um `NotModifiedResponse`, que copia só uma lista
+    fixa de headers e NÃO inclui o `content-type` — olhar o header ali deixaria justamente a
+    resposta de revalidação sem diretiva nenhuma. Navegador nenhum regride por isso (o 304 mescla
+    com o que ele já guardou), mas um proxy na frente do backend, sim — e tem um: a tela do celular
+    passa por Traefik.
+    """
+
+    def file_response(self, full_path, *args, **kwargs) -> Response:  # type: ignore[no-untyped-def]
+        resp = super().file_response(full_path, *args, **kwargs)
+        if str(full_path).endswith(".html"):
+            resp.headers["cache-control"] = "no-cache"
+        return resp
+
+
 _DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 if _DIST.is_dir():
-    app.mount("/", StaticFiles(directory=_DIST, html=True), name="ui")
+    app.mount("/", _UIStatic(directory=_DIST, html=True), name="ui")
