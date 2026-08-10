@@ -29,6 +29,14 @@ set -euo pipefail
 OLD="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)"
 NEW="$(dirname "$OLD")/hangar"
 SD="$HOME/.config/systemd/user"
+# O caminho antigo, LITERAL — e ele não é "$OLD". $OLD é onde o clone está AGORA; numa máquina cujo
+# rename já aconteceu (segunda passada, ou outra sessão renomeou a pasta antes) $OLD já vale
+# "$NEW", e aí todo `sed s|$OLD|$NEW|` vira no-op e todo `if [[ $OLD != $NEW ]]` pula o passo
+# inteiro — enquanto o caminho velho continua escrito dentro dos arquivos, calado.
+# Medido em 09/08/2026 nesta máquina: o hangar.desktop ficou com
+# /home/jefferson/Projetos/claude-cockpit/shell no Exec e no Path, e o app Electron simplesmente
+# parou de abrir pelo lançador. Procurar SEMPRE por $VELHO conserta nos dois cenários.
+VELHO="$(dirname "$NEW")/claude-cockpit"
 
 log() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 
@@ -59,7 +67,9 @@ cd "$NEW"
 # lista o caminho dela em .git/worktrees/*/gitdir). Depois do mv as duas pontas apontam pro caminho
 # que não existe mais, e qualquer comando git de dentro delas falha. `repair` reescreve os dois
 # lados. Medido nesta máquina: 9 worktrees registradas na hora da migração.
-if [[ "$OLD" != "$NEW" ]] && git worktree list >/dev/null 2>&1; then
+# Sem guard de "renomeou agora": `worktree repair` é no-op quando os caminhos já batem, e numa
+# máquina cujo rename veio de fora ele é justamente o passo que ainda falta.
+if git worktree list >/dev/null 2>&1; then
     git worktree repair 2>/dev/null || true
     for wt in $(git worktree list --porcelain | awk '/^worktree /{print $2}'); do
         [[ "$wt" == "$NEW" ]] && continue
@@ -78,21 +88,19 @@ log "remote: $(git remote get-url origin)"
 # TODOS os perfis do Claude (~/.claude, ~/.claude-work, …), não só o ativo: hooks e statusline
 # são instalados por PERFIL, e um settings.json apontando pro path velho TRAVA TODA TOOL da
 # sessão que usa aquele perfil.
-if [[ "$OLD" != "$NEW" ]]; then
-    targets=("$HOME/.tmux.conf")
-    for d in "$HOME"/.claude*/; do
-        [[ -d "$d" ]] || continue
-        for f in settings.json settings.local.json; do
-            [[ -f "$d$f" ]] && targets+=("$d$f")
-        done
+targets=("$HOME/.tmux.conf")
+for d in "$HOME"/.claude*/; do
+    [[ -d "$d" ]] || continue
+    for f in settings.json settings.local.json; do
+        [[ -f "$d$f" ]] && targets+=("$d$f")
     done
-    for f in "${targets[@]}"; do
-        if [[ -f "$f" ]] && grep -qF "$OLD" "$f" 2>/dev/null; then
-            sed -i "s|$OLD|$NEW|g" "$f"
-            log "paths corrigidos em $f"
-        fi
-    done
-fi
+done
+for f in "${targets[@]}"; do
+    if [[ -f "$f" ]] && grep -qF "$VELHO" "$f" 2>/dev/null; then
+        sed -i "s|$VELHO|$NEW|g" "$f"
+        log "paths corrigidos em $f"
+    fi
+done
 
 # ── 3b. Memórias E TRANSCRIPTS do projeto ────────────────────────────────────
 # A pasta do projeto é chaveada pelo PATH (projects/<path-com-hifens>/), então após o rename o slug
@@ -105,8 +113,8 @@ fi
 #
 # Os .jsonl NÃO são reescritos de propósito: são registro do que aconteceu, com o caminho que era
 # verdade na época; reescrever ali seria falsificar transcript.
-if [[ "$OLD" != "$NEW" ]]; then
-    old_slug="${OLD//\//-}"
+if [[ "$VELHO" != "$NEW" ]]; then
+    old_slug="${VELHO//\//-}"
     new_slug="${NEW//\//-}"
     for d in "$HOME"/.claude*/; do
         op="$d/projects/$old_slug"
@@ -128,7 +136,7 @@ if [[ "$OLD" != "$NEW" ]]; then
 
         # memórias: além de copiadas, têm os caminhos absolutos corrigidos
         if [[ -d "$np/memory" ]]; then
-            grep -rlF "$OLD" "$np/memory" 2>/dev/null | while read -r m; do sed -i "s|$OLD|$NEW|g" "$m"; done
+            grep -rlF "$VELHO" "$np/memory" 2>/dev/null | while read -r m; do sed -i "s|$VELHO|$NEW|g" "$m"; done
             echo "    (confira nomes de unit 'claude-cockpit-*' no texto delas — não são reescritos)"
         fi
     done
@@ -140,7 +148,7 @@ fi
 APPS="$HOME/.local/share/applications"
 for antigo in "$APPS/claude-cockpit.desktop" "$APPS/hangar.desktop"; do
     [[ -f "$antigo" ]] || continue
-    sed "s|$OLD|$NEW|g" "$antigo" > "$APPS/hangar.desktop.novo"
+    sed "s|$VELHO|$NEW|g" "$antigo" > "$APPS/hangar.desktop.novo"
     mv "$APPS/hangar.desktop.novo" "$APPS/hangar.desktop"
     [[ "$antigo" == "$APPS/hangar.desktop" ]] || rm -f "$antigo"
     command -v update-desktop-database >/dev/null && update-desktop-database "$APPS" 2>/dev/null || true
@@ -155,9 +163,6 @@ done
 # Medido em 09/08/2026 nesta máquina: abrir o `pi` (primeiro tmux da máquina) fazia nascer junto uma
 # sessão claude morta, e ela voltava toda vez, porque @continuum-save-interval é 0 — o snapshot só
 # se corrige num save manual, nunca sozinho.
-# NÃO dá pra usar "$OLD" aqui: numa máquina onde a pasta já foi renomeada $OLD == $NEW e o caminho
-# antigo só existe dentro destes arquivos. O par de nomes é literal, igual ao das units.
-VELHO="$(dirname "$NEW")/claude-cockpit"
 RESURRECT="${TMUX_RESURRECT_DIR:-$HOME/.local/share/tmux/resurrect}"
 if [[ -d "$RESURRECT" ]]; then
     for f in "$RESURRECT"/tmux_resurrect_*.txt; do
@@ -227,7 +232,7 @@ elif command -v systemctl >/dev/null && [[ -f "$SD/hangar-backend.service" ]]; t
 fi
 if [[ -f "$SD/claude-cockpit-deploy.service" ]]; then
     systemctl --user disable claude-cockpit-deploy.service 2>/dev/null || true
-    sed "s|$OLD|$NEW|g" "$SD/claude-cockpit-deploy.service" > "$SD/hangar-deploy.service"
+    sed "s|$VELHO|$NEW|g" "$SD/claude-cockpit-deploy.service" > "$SD/hangar-deploy.service"
     rm -f "$SD/claude-cockpit-deploy.service"
     systemctl --user daemon-reload
     log "unit de deploy migrada pra hangar-deploy.service"
@@ -276,6 +281,18 @@ if command -v curl >/dev/null; then
         log "backend respondendo em 127.0.0.1:$porta (HTTP $codigo)"
     else
         echo "ERRO: backend não respondeu em 127.0.0.1:$porta (curl: '${codigo:-sem resposta}')" >&2
+        falhou=1
+    fi
+fi
+
+# Lançador do desktop: o binário citado no Exec= tem que existir. Sem esta linha o app Electron
+# some do menu sem erro nenhum — foi o que aconteceu aqui em 09/08/2026, e a migração tinha
+# terminado dizendo "concluída".
+lanc="$HOME/.local/share/applications/hangar.desktop"
+if [[ -f "$lanc" ]]; then
+    bin="$(grep -m1 '^Exec=' "$lanc" | cut -d= -f2- | awk '{print $1}')"
+    if [[ -n "$bin" && ! -x "$bin" ]]; then
+        echo "ERRO: $lanc aponta pro executável '$bin', que não existe" >&2
         falhou=1
     fi
 fi
