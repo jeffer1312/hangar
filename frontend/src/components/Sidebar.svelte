@@ -2,21 +2,18 @@
   import { onMount } from 'svelte';
   import HangarMark from './icons/HangarMark.svelte';
   import HangarWorking from './icons/HangarWorking.svelte';
-  import { createSession, deleteSession, renameSession, gitAction, checkoutBranch, resumeSession, broadcast, getHistoryTailForServer, getSessions } from '../lib/api';
-  import { listServers, getActiveId, selectServer, removeServer, addServerWithRollback, renameServer, updateServer, serverColor, validarPareamento, withServer, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
+  import { createSession, deleteSession, renameSession, gitAction, checkoutBranch, resumeSession, broadcast, getHistoryTailForServer } from '../lib/api';
+  import { getActiveId, selectServer, serverColor, withServer } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { abrirConfig } from '../lib/configNav';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import SessionContextMenu from './SessionContextMenu.svelte';
-  import QrScanner from './QrScanner.svelte';
   import Git from './Git.svelte';
   import LoopSheet from './LoopSheet.svelte';
 import ConfirmDialog from './ConfirmDialog.svelte';
-  import AccountMenu from './AccountMenu.svelte';
   import SessionSwitcherSheet from './SessionSwitcherSheet.svelte';
   import HoverPreview from './HoverPreview.svelte';
   import type { SessionInfo, State, ResumeCandidate, Provider } from '../lib/types';
-  import type { RemovalSnapshot } from '../lib/auth';
   import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, untrackedReason, providerName, providerTag, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
@@ -185,15 +182,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // ruído repetido. Ele só entra quando há providers diferentes convivendo na mesma lista.
   const showProviderTags = $derived(new Set(sessionsStore.rows.map((s) => providerName(s.provider))).size > 1);
   let activeId = $state(getActiveId());
-  let scanning = $state(false);
   let showCreate = $state(false);
-  let accountOpen = $state(false);    // menu de conta (avatar do rodapé)
-  let acctAnchorEl = $state<HTMLElement>();  // âncora do popover do menu de conta
-  // Fallback de foco dos diálogos: a engrenagem é o controle que SEMPRE sobra acessível, mesmo
-  // quando o gatilho do diálogo (linha do AccountMenu) já fechou/ficou inerte.
+  // Fallback de foco dos diálogos: a engrenagem é o controle que SEMPRE sobra acessível.
   let acctBtnEl = $state<HTMLElement | null>(null);
   let searchOpen = $state(false);     // "Buscar conversas" (switcher em modo só-busca)
-  let showAddServer = $state(false);  // modal de adicionar servidor (colar URL / QR)
 
   // Kebab "⋯" do header: popover com a nav secundária (Buscar/Arquivo/Custos) + o toggle de
   // agrupamento — o que antes empilhava no topo da sidebar. Ancorado ao botão, abre pra baixo.
@@ -251,8 +243,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     }));
   });
 
-  // Web push + horas silenciosas migraram pro AccountMenu (menu de conta do rodapé), que reusa os
-  // mesmos enablePush/getPushSettings/setQuietHours — não reimplementa nada aqui.
+  // Web push + horas silenciosas vivem na tela Servidores da Configuração (ServidoresSettings,
+  // extraído na Task 4a/4b) — não existem mais aqui.
 
   // ── Retomar sessao "sem id" (paridade com o SessionCard do mobile): relança o pane com
   // `claude --resume <uuid>` -> passa a rastrear. Caso seguro resolve direto; caso ambiguo o backend
@@ -525,140 +517,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     closeMenu();
   }
 
-  // Renomear servidor: o AccountMenu cuida da UI inline; aqui só persistimos e reagregamos pra os
-  // headers de grupo pegarem o nome novo (sem esperar o próximo SSE).
-  function onRenameServer(id: string, label: string) {
-    renameServer(id, label);
-    sessionsStore.refreshServers();   // reagrega pra os headers de grupo pegarem o nome novo já
-  }
-
-  // Trocar o token de um servidor já cadastrado (rotação de CP_AUTH_TOKEN, sem remover+re-parear).
-  // Aceita o token cru OU a URL de pareamento inteira — mesmo parse do fluxo de adicionar.
-  function onUpdateServerToken(id: string, token: string): boolean {
-    // Só o token: o AccountMenu já extraiu e validou (inclusive o caso "URL de pareamento de outro
-    // host", que NÃO reaponta o servidor — o botão promete trocar token, não endereço).
-    const ok = updateServer(id, { token });
-    if (!ok) return false;                      // servidor sumiu: quem avisa é o AccountMenu
-    sessionsStore.refreshServers();
-    // reconnect, não só refresh: os SSE abertos seguem autenticados com o token ANTIGO até serem
-    // derrubados. Sem isto a tela ficava viva com conexões que o servidor já ia recusar, e o
-    // sintoma só aparecia no próximo reconnect espontâneo.
-    sessionsStore.reconnect();
-    return true;
-  }
-
-  // Abre o menu de conta recarregando a lista de servidores (pode ter mudado desde a última abertura).
-  function openAccount() {
-    sessionsStore.refreshServers();
-    accountOpen = !accountOpen;
-  }
-
-  // Trocar de servidor ativo (menu de conta): reload pra o app inteiro apontar pro novo backend.
-  function pickServer(id: string) {
-    if (id === getActiveId()) { accountOpen = false; return; }
-    selectServer(id);
-    window.location.reload();
-  }
-  // Remover servidor pede confirmacao (com o nome) — o × de um toque removia na hora e, se fosse o
-  // unico servidor, deslogava junto. O remove real so acontece no doDropServer. Revisão de entidade
-  // (round 4): o diálogo captura fingerprint+revision; o clique final só remove se a entidade NÃO
-  // mudou (sync de outro aparelho, rotação de token, lista alterada).
-  let serverVersion = $state(0);
-  $effect(() => onServersChanged(() => serverVersion++));
-  let confirmSrv = $state<(RemovalSnapshot & { label: string }) | null>(null);
-  let avisoRemocao = $state('');
-  function dropServer(id: string) {
-    const s = servers.find((x) => x.id === id);
-    const snap = snapshotRemocao(s, serverVersion);
-    if (!snap) return;
-    confirmSrv = { ...snap, label: s!.label };
-  }
-  function doDropServer() {
-    if (!confirmSrv) return;
-    const snap = confirmSrv;
-    confirmSrv = null;
-    const motivo = removalStillMatches(snap, listServers(), serverVersion);
-    if (motivo) { avisoRemocao = motivo; return; }
-    avisoRemocao = '';
-    const was = snap.id === getActiveId();
-    removeServer(snap.id);   // auth notifica o store (onServersChanged) -> ele reconcilia os streams sozinho
-    activeId = getActiveId();
-    // O clear de credenciais é do App (logoutLocal) — aqui só dispara o logout.
-    if (listServers().length === 0) { onLogout(); return; }
-    if (was) window.location.reload();
-  }
-  async function handleScan(text: string) {
-    if (addBusy) return;   // guard: callback QR não pode iniciar transação por cima de outra (round 6)
-    const cru = text.trim();
-    const parsed = validarPareamento(cru);
-    if (!parsed) {
-      // QR inválido NÃO fecha silencioso: volta pro diálogo com o erro visível (role=alert) e o
-      // usuário pode escanear de novo ou colar à mão.
-      scanning = false;
-      showAddServer = true;
-      addError = 'QR inválido — use a URL de pareamento (http/https com ?token=).';
-      return;
-    }
-    scanning = false;
-    // Add transacional: probe (getSessions) rejeitado NÃO recarrega — volta pro diálogo com o erro
-    // (o rollback completo já rodou dentro do helper).
-    addBusy = true;
-    try {
-      await addServerWithRollback(parsed.base, parsed.token, () => getSessions());
-      window.location.reload();
-    } catch (err) {
-      showAddServer = true;
-      addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
-    } finally {
-      addBusy = false;
-    }
-  }
-  // Colar servidor manual (desktop nao tem camera): cola a URL de pareamento (com token) e adiciona
-  // pela MESMA rota de parse do QR (validarPareamento estrito). Aberto pelo item "Adicionar
-  // servidor" do menu de conta.
-  let addUrlText = $state('');
-  let addError = $state('');
-  // Transação em voo: o botão Add e o QR ficam desabilitados até o settle (sucesso ou rollback) —
-  // o helper é serializado FIFO, mas um segundo clique não pode abrir outra tentativa por cima.
-  let addBusy = $state(false);
-  function openAddServer() {
-    addUrlText = '';
-    addError = '';
-    showAddServer = true;
-  }
-  async function submitPasteServer() {
-    if (addBusy) return;   // guard: o botão é disabled, mas Enter chama o handler direto (round 6)
-    const cru = addUrlText.trim();
-    const parsed = validarPareamento(cru);
-    if (!parsed) {
-      addError = cru.includes('://')
-        ? 'essa URL não tem ?token= — cole a URL de pareamento completa (http/https).'
-        : 'Cole a URL de pareamento (com o token).';
-      return;
-    }
-    addBusy = true;
-    try {
-      await addServerWithRollback(parsed.base, parsed.token, () => getSessions());
-      window.location.reload();
-    } catch (err) {
-      addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
-    } finally {
-      addBusy = false;
-    }
-  }
-  function logout() {
-    onLogout();   // dono do clear: App (logoutLocal)
-  }
-  // Sair pede confirmacao (recuperacao exige o token/QR de novo).
-  let confirmLogout = $state(false);
-
   const activeServer = $derived(servers.find((s) => s.id === activeId) ?? servers[0] ?? null);
 
   // Conta (avatar do rodapé): nome = servidor ativo; subtítulo = contagem de servidores. Iniciais
   // reusam o helper compartilhado (format).
   const accountName = $derived(activeServer?.label ?? 'conta');
   const accountSub = $derived(`${servers.length} servidor${servers.length === 1 ? '' : 'es'}`);
-  const accountInitials = $derived(initials(accountName));
   // Cor do servidor ATIVO: o mesmo mapa que já pinta os grupos por servidor na lista. Vira o ponto
   // no canto do botão — é o que diz "estou conectado NESTA máquina" sem gastar linha de texto.
   const accountColor = $derived(activeServer ? serverColor(activeServer.id) : 'var(--text-muted)');
@@ -1224,11 +1088,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   <!-- Rodapé (estilo Claude): botão da conta (avatar -> menu de conta) + CTA "Nova sessão". Tudo que
        era config/conta (servidores, notificações, horas silenciosas, reconectar, sair) vive no menu. -->
   <div class="side-foot" class:rail={!expanded}>
-    <div class="account-anchor" bind:this={acctAnchorEl}>
-      <!-- Task 4c Step 1: a engrenagem abre o modal de Configurações DIRETO (root no servidor ativo).
-           Ponto colorido e tooltip do servidor ativo seguem intactos. O AccountMenu desktop sai no
-           Step 2 (segurando até a revisão da 4b liberar) — até lá, o drawer mobile segue como está. -->
-      <button class="acct-btn" bind:this={acctBtnEl} onclick={() => abrirConfig('root', getActiveId())} aria-haspopup="menu" aria-expanded={accountOpen} aria-label="Configurações e servidor" title={expanded ? undefined : accountName}>
+    <div class="account-anchor">
+      <!-- Task 4c: a engrenagem abre o modal de Configurações DIRETO (root no servidor ativo).
+           Ponto colorido e tooltip do servidor ativo seguem. O AccountMenu desktop saiu (Step 2);
+           o drawer mobile (SessionList) continua usando o componente extraído na 4a. -->
+      <button class="acct-btn" bind:this={acctBtnEl} onclick={() => abrirConfig('root', getActiveId())} aria-haspopup="dialog" aria-label="Configurações e servidor" title={expanded ? undefined : accountName}>
         <span class="acct-chip" aria-hidden="true" style="--pt: {accountColor};">
           <!-- Engrenagem, e não iniciais: o menu é a porta de Configurações (Aparência, servidor,
                Motores), e iniciais em círculo liam como avatar de pessoa. O PONTO mantém a outra
@@ -1246,23 +1110,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
           </span>
         {/if}
       </button>
-      <AccountMenu
-        open={accountOpen}
-        onClose={() => (accountOpen = false)}
-        initials={accountInitials}
-        {accountName}
-        {accountSub}
-        {servers}
-        anchorEl={acctAnchorEl}
-        {activeId}
-        onSwitchServer={pickServer}
-        {onRenameServer}
-        {onUpdateServerToken}
-        onRemoveServer={dropServer}
-        onAddServer={openAddServer}
-        onReconnect={sessionsStore.reconnect}
-        onLogout={() => (confirmLogout = true)}
-      />
     </div>
     <button class="cta-new" onclick={() => (showCreate = true)} aria-label="Nova sessão" title="Nova sessão">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
@@ -1299,7 +1146,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 {#if hp}<HoverPreview text={hp.text} x={hp.x} y={hp.y} />{/if}
 
 <CreateSessionSheet open={showCreate} {servers} onClose={() => (showCreate = false)} onCreate={handleCreate} onOpenSession={onSelect} />
-{#if scanning}<QrScanner onScan={handleScan} onClose={() => (scanning = false)} />{/if}
 
 <!-- "Buscar conversas" (nav): switcher em modo só-busca (busca de conteúdo cross-servidor, feature #10). -->
 <SessionSwitcherSheet
@@ -1317,7 +1163,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 {#if kebabOpen}
   <div class="menu-backdrop" onclick={closeKebab} role="presentation"></div>
   <div class="kebab-menu" style="left: {kebabPos.left}px; top: {kebabPos.top}px;" role="menu">
-    <button type="button" role="menuitem" class="kebab-item" onclick={() => { closeKebab(); accountOpen = false; searchOpen = true; }}>
+    <button type="button" role="menuitem" class="kebab-item" onclick={() => { closeKebab(); searchOpen = true; }}>
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
       Buscar conversas
     </button>
@@ -1347,37 +1193,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   </div>
 {/if}
 
-<!-- Adicionar servidor (do menu de conta): colar a URL de pareamento (com token) ou escanear QR.
-     Mesma rota de parse do QR (validarPareamento estrito). Estilo dos modais do desktop (confirm-card). -->
-{#if showAddServer}
-  <ConfirmDialog title="Adicionar servidor" aria="Adicionar servidor" role="dialog"
-    fallbackFocus={acctBtnEl}
-    onClose={() => (showAddServer = false)}
-    actions={[
-      { label: 'Escanear QR', disabled: addBusy, onClick: () => { showAddServer = false; scanning = true; } },
-      { label: 'Adicionar', kind: 'primary', disabled: !addUrlText.trim() || addBusy, onClick: submitPasteServer },
-    ]}>
-    <input
-      type="url"
-      class="add-srv-input"
-      bind:value={addUrlText}
-      placeholder="Colar URL do servidor (com token)"
-      autocomplete="off"
-      autocorrect="off"
-      autocapitalize="off"
-      spellcheck={false}
-      use:autofocus
-      onkeydown={(e) => { addError = ''; if (e.key === 'Enter' && !addBusy) submitPasteServer(); }}
-      disabled={addBusy}
-      aria-label="URL de pareamento do servidor"
-      aria-invalid={!!addError}
-      aria-describedby={addError ? 'sb-add-err' : undefined}
-    />
-    {#if addError}<p id="sb-add-err" class="resume-err" role="alert">{addError}</p>{/if}
-  </ConfirmDialog>
-{/if}
-
-<svelte:window onpointermove={hpGuard} onkeydown={(e) => { if (e.key === 'Escape') { if (kebabOpen) closeKebab(); else if (menu) closeMenu(); else if (resumeModal) resumeModal = null; else if (confirmDel) confirmDel = null; else if (confirmSrv) confirmSrv = null; else if (confirmBranch) confirmBranch = null; else if (confirmLogout) confirmLogout = false; } }} />
+<svelte:window onpointermove={hpGuard} onkeydown={(e) => { if (e.key === 'Escape') { if (kebabOpen) closeKebab(); else if (menu) closeMenu(); else if (resumeModal) resumeModal = null; else if (confirmDel) confirmDel = null; else if (confirmBranch) confirmBranch = null; } }} />
 
 <!-- Menu de contexto (botao direito na sessao). Backdrop + itens vivem no componente; o Sidebar so
      guarda posicao/alvo em `menu` e decide o que dirty->confirm / checkout / GitSheet fazem. -->
@@ -1404,20 +1220,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 {#if loopSheet}
   <LoopSheet open={true} sessionName={loopSheet.name} onClose={closeLoopSheet} />
 {/if}
-
-<!-- Confirmar remocao de servidor (com o nome) — mesmo padrao do excluir sessao. -->
-{#if confirmSrv}
-  <ConfirmDialog title="Remover este servidor?" aria="Confirmar remoção de servidor"
-    fallbackFocus={acctBtnEl}
-    onClose={() => (confirmSrv = null)}
-    actions={[
-      { label: 'Cancelar', onClick: () => (confirmSrv = null) },
-      { label: 'Remover', kind: 'danger', onClick: doDropServer },
-    ]}>
-    <p class="confirm-name">{confirmSrv.label}</p>
-  </ConfirmDialog>
-{/if}
-{#if avisoRemocao}<div class="menu-toast" role="status">{avisoRemocao}</div>{/if}
 
 <!-- Confirmar exclusao (com o nome) — modal centrado, so desktop (sidebar e desktop-only). -->
 {#if confirmDel}
@@ -1481,19 +1283,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         </li>
       {/each}
     </ul>
-  </ConfirmDialog>
-{/if}
-
-<!-- Confirmar saida (recuperacao exige token/QR de novo). -->
-{#if confirmLogout}
-  <ConfirmDialog title="Sair do app?" aria="Confirmar saída"
-    fallbackFocus={acctBtnEl}
-    onClose={() => (confirmLogout = false)}
-    actions={[
-      { label: 'Cancelar', onClick: () => (confirmLogout = false) },
-      { label: 'Sair', kind: 'danger', onClick: () => { confirmLogout = false; logout(); } },
-    ]}>
-    <p class="confirm-hint">Você vai precisar do token (QR ou digitado) pra entrar de novo — e ele pode estar no PC.</p>
   </ConfirmDialog>
 {/if}
 
@@ -2087,13 +1876,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
   .broadcast-send:disabled { background: var(--bg-hover); color: var(--text-muted); }
 
-  /* ── Rodapé: conta (avatar -> menu) + CTA "Nova sessão" ── */
+  /* ── Rodapé: engrenagem (Configurações) + CTA "Nova sessão" ── */
   .side-foot {
     display: flex; align-items: center; gap: var(--space-2);
     border-top: 1px solid var(--border-subtle); padding-top: var(--space-2); margin-top: var(--space-1);
   }
   .side-foot.rail { flex-direction: column; }
-  /* Âncora do popover do menu de conta (abre pra cima). */
   .account-anchor { position: relative; flex: 1; min-width: 0; }
   .side-foot.rail .account-anchor { flex: 0 0 auto; }
   .acct-btn {
@@ -2106,10 +1894,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   /* Mesmo vocabulario dos chips de sessao: superficie que acompanha a transparencia + anel de
      accent pra dizer "este e voce". O gradiente anterior tinha um roxo CHUMBADO (#a06de0) que nao
      existe em token nenhum: com a paleta vinda do papel de parede, o accent mudava e ele nao. */
-  /* NÃO é avatar de pessoa: é o SERVIDOR ativo (o menu abre servidores, configurações, reconectar,
-     sair). Círculo com iniciais lia como gente — daí a pergunta "o que é esse NJ?". Quadrado
-     arredondado é convenção de coisa, e o ponto no canto traz a cor daquele servidor, a mesma que
-     já agrupa a lista. */
+  /* NÃO é avatar de pessoa: é o SERVIDOR ativo (a engrenagem abre Configurações). Círculo com
+     iniciais lia como gente — daí a pergunta "o que é esse NJ?". Quadrado arredondado é convenção
+     de coisa, e o ponto no canto traz a cor daquele servidor, a mesma que já agrupa a lista. */
   .acct-chip {
     position: relative;
     width: 30px; height: 30px; flex-shrink: 0; border-radius: var(--radius-md);
@@ -2136,15 +1923,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .cta-new svg { flex-shrink: 0; }
   .cta-new:hover { background: var(--accent-press); }
   .side-foot.rail .cta-new { width: 36px; padding: 0; justify-content: center; }
-
-  /* Input do modal "Adicionar servidor" (colar URL de pareamento). */
-  .add-srv-input {
-    width: 100%; height: 44px; padding: 0 var(--space-3);
-    background: var(--surface-inset); border: 1px solid var(--border-default); border-radius: var(--radius-md);
-    color: var(--text-primary); font-family: var(--font-ui); font-size: var(--text-sm); outline: none;
-  }
-  .add-srv-input::placeholder { color: var(--text-muted); }
-  .add-srv-input:focus { border-color: var(--accent); }
 
   /* ── Menu de contexto ── */
   /* .menu-backdrop e .ctx-sep ficam aqui porque o kebab do header tambem os usa; o resto do menu de
