@@ -72,6 +72,13 @@ function claude {
         $nome = "$base-$i"; $i++
     }
 
+    # Conta Claude (claude-conta setou CLAUDE_CONFIG_DIR): psmux NAO herda o env de quem chama —
+    # sem repassar aqui, a sessao nasceria na conta padrao, calada. Aqui pode ir por `-e` (ao
+    # contrario da key do motor, que vai pelo `cp-engine --exec` justamente pra nao aparecer em
+    # /proc/<pid>/cmdline): isto e um caminho, nao um segredo.
+    $cfg = @()
+    if ($env:CLAUDE_CONFIG_DIR) { $cfg = @('-e', "CLAUDE_CONFIG_DIR=$($env:CLAUDE_CONFIG_DIR)") }
+
     # Sem `exec` e sem systemd-run, ao contrario do POSIX: nao ha shell intermediario dentro do
     # pane do psmux (ele roda o comando direto no ConPTY) e nao ha cgroup de servico pra escapar.
     # CP_SESSION_NAME: mesmo carimbo que o backend poe em new_session (app/tmux.py). Sem ele o
@@ -80,7 +87,7 @@ function claude {
     $cmd = @('tmux', 'new-session', '-s', $nome, '-c', (Get-Location).Path,
              '-e', 'COLORTERM=truecolor', '-e', 'CLAUDE_CODE_TMUX_TRUECOLOR=1',
              '-e', "CP_SESSION_NAME=$nome") +
-           $pre + @('claude', '--session-id', $id) + $args
+           $cfg + $pre + @('claude', '--session-id', $id) + $args
     $r = @($cmd[1..($cmd.Count - 1)])
     & $cmd[0] @r
 }

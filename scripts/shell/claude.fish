@@ -94,6 +94,15 @@ function claude
         set i (math $i + 1)
     end
 
+    # Conta Claude (claude-conta setou CLAUDE_CONFIG_DIR): tmux NÃO herda o env de quem chama —
+    # sem repassar aqui, a sessão nasceria na conta padrão, calada. Aqui pode ir por `-e` (ao
+    # contrário da key do motor, que vai pelo `cp-engine --exec` justamente pra não aparecer em
+    # /proc/<pid>/cmdline): isto é um caminho, não um segredo.
+    set -l cfg
+    if set -q CLAUDE_CONFIG_DIR; and test -n "$CLAUDE_CONFIG_DIR"
+        set cfg -e "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR"
+    end
+
     set -l run
     # `command -q systemd-run` diz que o BINARIO existe, nao que ele FUNCIONA: o gerenciador systemd
     # do usuario pode recusar criar scope transiente ("Failed to start transient scope unit"), e ai
@@ -116,11 +125,11 @@ function claude
         systemd-run --user --scope --collect -q -- tmux new-session -s $name -c "$PWD" \
             -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 \
             -e "CP_SESSION_NAME=$name" \
-            $pre claude --session-id $id $argv
+            $cfg $pre claude --session-id $id $argv
     else
         tmux new-session -s $name -c "$PWD" \
             -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 \
             -e "CP_SESSION_NAME=$name" \
-            $pre claude --session-id $id $argv
+            $cfg $pre claude --session-id $id $argv
     end
 end
