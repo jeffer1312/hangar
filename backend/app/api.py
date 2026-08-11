@@ -48,7 +48,7 @@ from app import runtime_config
 from app import tts
 from app.tts_text import preparar as tts_preparar
 from app import narrar
-from app import default_model, engine_probe, engines
+from app import default_model, engine_probe, engines, contas
 from app.costs import report as costs_report, usd_brl as _usd_brl, PERIODOS as _COST_PERIODOS
 from app import pricing
 from app.git_ops import (
@@ -866,6 +866,44 @@ def claude_configs():
     return list_config_dirs()
 
 
+class ContaBody(_StrictBody):
+    nome: str = Field(min_length=1, max_length=32)
+
+
+@app.post("/api/claude-configs", dependencies=[Depends(require_auth)])
+async def post_claude_config(body: ContaBody):
+    """Cria a pasta da conta. NÃO loga: o OAuth abre navegador e é interativo — quem roda o
+    /login é o usuário, dentro da primeira sessão aberta nessa conta."""
+    if os.environ.get("CP_CLAUDE_CONFIG_DIRS", "").strip():
+        # Com a lista fixa por env, list_config_dirs ignora o auto-scan: a conta seria criada e
+        # nunca apareceria no seletor. Recusar com o motivo é melhor que um 200 inútil.
+        raise HTTPException(409, "CP_CLAUDE_CONFIG_DIRS está setado: a lista de contas é fixa por "
+                                 "ambiente. Remova a variável ou acrescente a conta nela.")
+    try:
+        p = await asyncio.to_thread(contas.criar, body.nome)
+    except contas.ContaError as e:
+        raise HTTPException(e.status, e.detail) from None
+    return {"path": str(p), "label": body.nome, "active": False}
+
+
+@app.delete("/api/claude-configs/{nome}", dependencies=[Depends(require_auth)])
+async def delete_claude_config(nome: str):
+    """Apaga a conta e os transcripts dela. Recusa se alguma sessão viva estiver usando —
+    apagar debaixo de uma sessão em uso deixa o CLI escrevendo num caminho que sumiu."""
+    try:
+        alvo = contas.caminho(nome)
+    except contas.ContaError as e:
+        raise HTTPException(e.status, e.detail) from None
+    for s in registry.list():
+        if _session_config_dir(s.name) == alvo:
+            raise HTTPException(409, f"a sessão '{s.name}' está usando esta conta")
+    try:
+        await asyncio.to_thread(contas.apagar, nome)
+    except contas.ContaError as e:
+        raise HTTPException(e.status, e.detail) from None
+    return {"ok": True}
+
+
 @app.get("/api/desktop/palette", dependencies=[Depends(require_auth), Depends(require_loopback)])
 def desktop_palette_get():
     # 404 e resposta de negocio, nao erro: e como o front sabe que nao ha rice nesta maquina e
@@ -914,6 +952,16 @@ async def create_session(body: CreateBody):
         raise HTTPException(400, "provider invalido")
     if body.config_dir is not None and body.config_dir not in {c.path for c in list_config_dirs()}:
         raise HTTPException(400, "config_dir invalido")
+    if body.config_dir is not None:
+        alvo = Path(body.config_dir)
+        if contas.e_conta(alvo):
+            # Refaz os atalhos ANTES de subir: é o que mantém a conta igual ao ~/.claude sem
+            # ninguém rodar nada à mão. O projeto vai junto pra ligar a memória do cwd desta
+            # sessão — que pode ser um projeto que nenhuma conta abriu ainda.
+            for aviso in await asyncio.to_thread(contas.reconciliar,
+                                                 alvo.name.removeprefix(".claude-"),
+                                                 registry.sanitize_cwd(body.cwd)):
+                _log.warning("conta %s: %s", alvo.name, aviso)
     # Mesma guarda do config_dir. Codex nao usa spawn_command/tmux desse jeito, entao motor + codex e
     # pedido incoerente — 400, nao "ignora e segue".
     if body.engine is not None:
