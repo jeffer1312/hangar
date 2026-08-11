@@ -30,7 +30,7 @@ from app.pi_inbox import INBOX
 from app.registry import KillFailed, SessionRegistry
 from app.names import sanitize_session_name
 from app.models import (SessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody, RunInfo,
-                        ProjectStatus)
+                        ProjectStatus, session_key)
 from app.planprog import plan_progress, list_plans, write_pin, is_safe_stem, _plans_dir, PlanPinError, PIN_NONE
 from app.pqueue import PromptQueue, _transcript_start_ts, committed_user_lines
 from app.chain import ThenLink
@@ -173,7 +173,7 @@ async def _lifespan(app: FastAPI):
                 if info is None:
                     loop_mod._end(link, stem, "failed", "sessão morta no boot", push.notify_loop)
                     continue
-                m = hook_state.get_state(Path(info.jsonl).stem) if info.jsonl else None
+                m = hook_state.get_state(session_key(info.jsonl)) if info.jsonl else None
                 if m and m[0] == "idle":
                     loop_mod.schedule_tick(info.name, lambda n=info.name: _loop_ctx(n))
         except Exception:
@@ -511,7 +511,7 @@ def _notify_async(session_id: str, send_fn) -> None:
     def _work() -> None:
         try:
             name = next(
-                (s.name for s in registry.list() if s.jsonl and Path(s.jsonl).stem == session_id),
+                (s.name for s in registry.list() if s.jsonl and session_key(s.jsonl) == session_id),
                 None,
             )
             if name:
@@ -564,7 +564,7 @@ def _do_notify_awaiting(session_id: str) -> None:
     "idle ha 60s" do Claude Code, que chega DEPOIS do Stop com a sessao apenas parada. Sem o gate,
     toda sessao parada >60s empurrava push falso "Aguardando sua resposta". Push so sai com awaiting
     REAL: askq pendente no sidecar OU menu/overlay no pane (retry curto cobre o frame de render)."""
-    info = next((s for s in registry.list() if s.jsonl and Path(s.jsonl).stem == session_id), None)
+    info = next((s for s in registry.list() if s.jsonl and session_key(s.jsonl) == session_id), None)
     if info is None:
         return
     def _real() -> bool:
@@ -617,7 +617,7 @@ def _confirm_and_drain(name: str) -> None:
         # MID-TURN o prompt entregue ainda pode nao ter virado entrada no transcript (vive na fila
         # interna do Claude Code) — decidir requeue agora arriscaria redigitar mensagem ja recebida.
         # Adia pro proximo ciclo (o turno acabando dispara transicao -> novo timer).
-        m = hook_state.get_state(Path(info.jsonl).stem)
+        m = hook_state.get_state(session_key(info.jsonl))
         if m and m[0] == "working":
             threading.Timer(_CONFIRM_GRACE + 0.5, _confirm_and_drain, args=(name,)).start()
             return
@@ -690,7 +690,7 @@ def _on_hook_transition(session_id: str, state: str) -> None:
         def _pause_loop() -> None:
             try:
                 info = next((s for s in registry.list()
-                             if s.jsonl and Path(s.jsonl).stem == session_id), None)
+                             if s.jsonl and session_key(s.jsonl) == session_id), None)
                 if info:
                     with loop_mod._lock:
                         link = loop_mod.LoopLink(info.name)
@@ -704,7 +704,7 @@ def _on_hook_transition(session_id: str, state: str) -> None:
     def _work() -> None:
         try:
             info = next((s for s in registry.list()
-                         if s.jsonl and Path(s.jsonl).stem == session_id), None)
+                         if s.jsonl and session_key(s.jsonl) == session_id), None)
             if info and info.jsonl:
                 sent = drain(info.name, info.jsonl, info.provider)
                 # Confirmacao em TODO idle (nao so pos-drain): Timers pendentes morrem no restart
@@ -910,7 +910,7 @@ async def create_session(body: CreateBody):
     # exceções do create() Claude ficam IDENTICOS, so a chamada muda de sync p/ thread).
     # Pi entra pelo MESMO registry.create do Claude (pane tmux + spawn_command do PiAdapter); o que
     # muda la dentro e so o transcript, que nao e pre-semeado (layout proprio, arquivo so no 1o turno).
-    if body.provider not in ("claude", "codex", "pi"):
+    if body.provider not in ("claude", "codex", "pi", "kimi"):
         raise HTTPException(400, "provider invalido")
     if body.config_dir is not None and body.config_dir not in {c.path for c in list_config_dirs()}:
         raise HTTPException(400, "config_dir invalido")
@@ -1279,7 +1279,7 @@ async def events(name: str, request: Request):
     start_offset = None
     if raw:
         stem, _, off = raw.rpartition(":")
-        if stem and stem == Path(info.jsonl).stem:
+        if stem and stem == session_key(info.jsonl):
             try:
                 start_offset = int(off)
             except ValueError:
@@ -2979,6 +2979,26 @@ def answer(name: str, body: AnswerBody):
                 raise HTTPException(409, f"drive falhou e fallback por texto tambem: {res['error']}")
             fallback = True
         return {"ok": True, "fallback": fallback}
+
+    # Kimi: a pergunta nativa (tool AskUserQuestion) mora no wire — o front sintetiza o card a
+    # partir do tool_use pendente, igual ao Pi. Diferente do Pi, o picker do Kimi NAO tem drive de
+    # teclas medido ainda -> vai DIRETO pro fallback por texto (Escape fecha o picker e a resposta
+    # vira mensagem normal; a resposta do usuario nunca se perde).
+    if getattr(info, "provider", "claude") == "kimi":
+        from app.adapters.kimi.transcript import read_pending_question
+        q = read_pending_question(jsonl) if jsonl else None
+        if q is None:
+            raise HTTPException(409, "nenhuma pergunta do Kimi pendente (ja respondida no terminal?)")
+        if not answers:
+            raise HTTPException(409, "sem resposta")
+        text = _pi_answer_fallback_text(answers[0])
+        if not text:
+            raise HTTPException(409, "sem texto de fallback — responda no terminal")
+        terminal.interrupt(name)  # Escape unico: fecha o picker do Kimi (sem clear — input vazio)
+        res = _send_one(name, text)
+        if not res["ok"]:
+            raise HTTPException(409, f"fallback por texto falhou: {res['error']}")
+        return {"ok": True, "fallback": True}
     try:
         terminal_input.answer_questions(name, answers)
     except ValueError as e:

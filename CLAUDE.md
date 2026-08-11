@@ -20,6 +20,11 @@ only peeks at the tmux pane for live **state**. Backend pieces (`backend/app/`):
 - `terminal_input.py` + `tmux.py` — input via `tmux send-keys` (prompt / option select via `(n-1)×Down`+`Enter` / `Esc`).
 - `adapters/codex/` — one loopback WebSocket app-server per Codex session; the backend consumes
   structured JSON-RPC events while a `codex --remote` TUI for the same thread runs inside tmux.
+- `adapters/kimi/` + `hooks/kimi_state_hook.py` + `kimi_hook_installer.py` — Kimi Code runs in the
+  same tmux-native shape as Pi: TUI in the pane, chat from
+  `~/.kimi-code/sessions/<wd>/<session_id>/agents/main/wire.jsonl`, state pushed by hooks in
+  `~/.kimi-code/config.toml` (no pane scraping for state). The pane↔session link is the hook's
+  ticket (`~/.claude/.claude-pocket-kimi/<pane>.json`) — the CLI has no caller-chosen session-id.
 - `sse.py` — merges the above into the SSE stream. `api.py` — FastAPI routes. `auth.py` — bearer token / `cp_token` cookie.
 - Also: `pqueue.py` (durable input queue), `preview.py` (live in-flight block), `askquestion.py`
   (native AskUserQuestion stepper), `uploads.py`, `git_ops.py`, `commands.py`, `workflows.py`,

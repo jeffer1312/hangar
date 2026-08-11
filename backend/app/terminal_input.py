@@ -190,12 +190,16 @@ def _pane_tail(pane: str, lines: int = _READY_TAIL_LINES) -> str:
 # baixa `fd`/`rg`) não imprime uma moldura sequer: medido em dois boots reais capturados a cada
 # 0.1–0.25s, o primeiro caractere de moldura aparece em 4.2s / 4.5s, junto com o composer.
 # ponytail: o conjunto de glifos é calibration knob, igual ao _LOGIN_RE do state.py.
-_READY_MARKERS_BY_PROVIDER = {"pi": ("─", "━", "═", "╰", "│")}
+_READY_MARKERS_BY_PROVIDER = {"pi": ("─", "━", "═", "╰", "│"),
+                              # Kimi: composer = mesma caixa arredondada do Pi (╭─╮ ╰─╯ com "> "
+                              # dentro) — medido num pane real do Kimi 0.34.0. O conjunto do Pi vale
+                              # inteiro: qualquer moldura em tela prova que a TUI ja aceita tecla.
+                              "kimi": ("─", "━", "═", "╰", "│")}
 
 # Timeout por provider. O Pi ficou mais curto de propósito: o boot medido até o composer é ~4.3s,
 # então 8s é ~2× de folga, e no estouro a gente ENVIA mesmo assim — ou seja, a espera só compra
 # segurança durante o boot e todo o resto é latência pura no dia em que o marcador desandar de novo.
-_TIMEOUTS_BY_PROVIDER = {"pi": 8.0}
+_TIMEOUTS_BY_PROVIDER = {"pi": 8.0, "kimi": 8.0}
 _DEFAULT_TIMEOUT = 12.0
 
 # Um aviso por (sessão, provider): marcador que para de casar não pode ser silencioso — foi assim

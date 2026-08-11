@@ -254,3 +254,21 @@ dele foi avaliado e recusado, por três motivos que valem ficar registrados pra 
   attach button next to the slash/model controls).
 - Prior backlog (UI polish, separate-statusline-from-badge, etc.) is largely addressed by
   the redesign; see docs/polish-backlog.md + docs/ui-redesign-proposal.md.
+
+## Follow-ups do provider Kimi (entregue 2026-08-11; medidas no 0.34.0)
+
+- **ACP (`kimi acp`) como canal do app** — JSON-RPC stdio, daria permissão relayada/cancel/model
+  picker estruturado. Medido: só é seguro com a sessão FECHADA — com a TUI aberta, turnos injetados
+  por outro processo não entram no contexto em memória dela (app e pane divergem, o problema do
+  app-server do Codex). Se um dia entrar, é modo exclusivo/headless.
+- **Model sheet do Kimi** — hoje a pill é passiva; fonte possível: `kimi provider list --json`.
+- **Drive do picker de AskUserQuestion do Kimi** — hoje o /answer vai direto pro fallback por texto
+  (Escape + mensagem). O picker tem tela de Review ("Ready to submit?"), dá pra dirigir por teclas
+  como o do Claude — medir e implementar.
+- **`_composer_residuo` para Kimi** — a conferência de "o Enter submeteu?" fica inerte em overlays
+  (medido: região do composer não casa durante picker/fila). Calibrar `_composer_regiao` pro desenho
+  do Kimi se um falso "sent" aparecer.
+- **`_composer_ocupado` para Kimi** — hoje Pi-only; o composer vazio do Kimi desenha `│ >` dentro da
+  caixa, então habilitar sem stripar o prompt travaria todo envio como "ocupado".
+- **Sessões mortas do Kimi no Arquivo** — o resume pelo app (`kimi --session <id>`, suportado no
+  registry.create) ainda não tem listagem de candidatos; varrer `session_index.jsonl` + `state.json`.

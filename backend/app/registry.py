@@ -229,7 +229,7 @@ def _jsonl_mtime(jsonl: Optional[str]) -> Optional[float]:
 
 # Executavel do agente -> provider. Casa o BASENAME do argv[0], nunca a linha inteira: `pip`,
 # `pipx`, `mpirun` e um caminho contendo "/pi/" nao sao o agente Pi.
-_EXEC_PROVIDER = {"pi": "pi", "claude": "claude"}
+_EXEC_PROVIDER = {"pi": "pi", "claude": "claude", "kimi": "kimi"}
 
 
 def provider_of_pane(pid, children: Optional[dict[int, list[int]]] = None) -> str:
@@ -464,6 +464,53 @@ def pi_session_file(pane_id: str, pid: Optional[int] = None,
     except (OSError, ValueError):
         pass
     return _pi_transcript_of_id(cwd, sid) if sid else None
+
+
+_KIMI_TICKET_WARNED: set[tuple[str, str]] = set()
+
+
+def _warn_kimi_once(pane_id: str, motivo: str) -> None:
+    # Mesmo aviso-uma-vez do _warn_bilhete_once: list() e polled, um warning por varredura
+    # entupiria o journal.
+    if (pane_id, motivo) not in _KIMI_TICKET_WARNED:
+        _KIMI_TICKET_WARNED.add((pane_id, motivo))
+        _log.warning("kimi: bilhete de %s recusado (%s)", pane_id, motivo)
+
+
+def kimi_session_file(pane_id: str, pid: Optional[int] = None,
+                      cwd: str = "") -> Optional[str]:
+    """Transcript (wire.jsonl) de um pane Kimi: so o bilhete do hook — NAO ha fallback por env
+    (o wrapper do kimi nao injeta id; o CLI nao aceita id escolhido pelo caller).
+
+    Bilhete ausente/velho -> None, e a sessao entra na lista SEM transcript (tracked=False),
+    nunca um chute newest-by-mtime que abriria o wire de OUTRA sessao. E temporario por
+    construcao: o hook grava o bilhete no 1o evento da sessao (SessionStart/UserPromptSubmit)
+    e a proxima varredura resolve. Mesmo contrato do pi_session_file, inclusive o teste de
+    FRESCOR: o tmux reusa %pane_id apos restart do servidor, e um bilhete da encarnacao anterior
+    apontaria pra sessao errada.
+    """
+    base = (_config_dir_of(pid) if pid else None) or Path.home() / ".claude"
+    ticket = Path(base) / ".claude-pocket-kimi" / f"{pane_id.lstrip('%')}.json"
+    try:
+        data = json.loads(ticket.read_text())
+        sid, ts = data.get("session_id"), data.get("ts")
+        if not sid:
+            return None
+        nasceu = _proc_start_time(pid) if pid else None
+        if nasceu is None or not isinstance(ts, (int, float)):
+            # Frescor INDETERMINAVEL (proc ilegivel ou bilhete sem ts): recusa, como no Pi —
+            # deixar passar era o furo silencioso do pane reusado abrindo a conversa anterior.
+            _warn_kimi_once(pane_id, "nascimento" if nasceu is None else "ts")
+            return None
+        if ts < nasceu - 2:
+            # 2s de folga: relogios/granularidades diferentes (mesmo criterio do bilhete do Pi).
+            return None
+        from app.adapters.kimi import sessions as kimi_sessions
+        # cwd do bilhete (o hook grava o cwd que o CLI reporta) com fallback pro do pane.
+        wire = kimi_sessions.transcript_path(data.get("cwd") or cwd, sid)
+        return wire or None
+    except (OSError, ValueError):
+        return None
 
 
 # Cadencia do cache de statusline da lista (list_with_state): TTL por sessao + teto de capturas de
@@ -856,6 +903,13 @@ class SessionRegistry:
                 # turno o Pi escreve o transcript, o bilhete passa a resolver e a proxima varredura
                 # devolve tracked=True sozinha (list() e polled).
                 tracked = jsonl is not None
+            elif prov == "kimi":
+                # Mesmo contrato do Pi acima: so o bilhete do hook (kimi_session_file) liga o pane
+                # ao wire — sem ele NAO ha fallback (o Kimi nao aceita id escolhido pelo caller).
+                # Temporario: a sessao Kimi so nasce no 1o prompt ("No session yet" da TUI), entao
+                # toda sessao recem-criada fica untracked ate o 1o turno.
+                jsonl = kimi_session_file(p.get("pane_id", ""), p["pid"], p["cwd"])
+                tracked = jsonl is not None
             else:
                 jsonl, tracked = self.resolve_tracked(p["name"], p["cwd"], p["pid"], children)
             link = ThenLink(p["name"]).get()
@@ -868,6 +922,8 @@ class SessionRegistry:
                                pair_task=pair.get("task") if pair else None)
             if prov == "pi":
                 info.provider = "pi"
+            elif prov == "kimi":
+                info.provider = "kimi"
             # Motor da sessão, do mesmo pid que já resolve o config_dir. É uma leitura de
             # /proc/<pid>/environ por sessão (a mesma ordem de custo do _config_dir_of ao lado) —
             # não é de graça, mas é local e sem rede. Feature em tick do SSE tem que ser barata.
@@ -1088,6 +1144,10 @@ class SessionRegistry:
                 raise ValueError("motor so vale para provider claude")
             if resume_session_id is not None:
                 raise ValueError("resume de sessao pi ainda nao e suportado")
+        # Kimi anda no MESMO caminho tmux do Pi. Motor segue Claude-puro (cp-engine so exporta
+        # ANTHROPIC_*). Resume existe: `kimi --session <id>` (diferente do Pi, que nao tinha flag).
+        if provider == "kimi" and engine:
+            raise ValueError("motor so vale para provider claude")
         # Unicidade contra tmux (Claude) E sidecars Codex: sem o segundo check, um nome de sessao
         # Codex reusado aqui geraria DOIS SessionInfo com o mesmo name no list() (front keyed por
         # nome) e o kill(name) cairia no branch Codex (checado 1o) -> fecharia o client Codex sem
@@ -1100,12 +1160,20 @@ class SessionRegistry:
         # ponytail: resume so cobre o path do Claude por ora (--resume nao existe no Codex — a Task 5
         # do plano de Codex resolve o resume dele por fora deste branch).
         if resume_session_id is not None:
-            try:
-                uuid.UUID(resume_session_id)
-            except (ValueError, AttributeError, TypeError):
-                raise ValueError("session_id invalido")
-            sid = resume_session_id
-            cmd = f"claude --resume {sid}"
+            if provider == "kimi":
+                # Sid do Kimi e `session_<uuid>` (nao uuid puro) e o resume e `--session`, nao
+                # --resume. Validacao propria: vai direto pro comando do shell.
+                if not re.fullmatch(r"session_[0-9a-fA-F-]{36}", resume_session_id):
+                    raise ValueError("session_id invalido")
+                sid = resume_session_id
+                cmd = f"kimi --session {sid}"
+            else:
+                try:
+                    uuid.UUID(resume_session_id)
+                except (ValueError, AttributeError, TypeError):
+                    raise ValueError("session_id invalido")
+                sid = resume_session_id
+                cmd = f"claude --resume {sid}"
         else:
             sid = str(uuid.uuid4())
             # spawn_command vem do Adapter do provider (import local: get_adapter->ClaudeAdapter nao
@@ -1124,13 +1192,20 @@ class SessionRegistry:
         # (ver o final do metodo): o _jsonl_cache e de CLASSE, compartilhado com o sse, e um path do
         # layout do Claude ali seria um arquivo que nunca existe, devolvido por resolve() pra sempre.
         # Quem liga o pane ao transcript e o bilhete que a extensao escreve (ver pi_session_file).
-        jsonl = None if provider == "pi" else str(base / sanitize_cwd(cwd) / f"{sid}.jsonl")
+        # Kimi idem (sessions/<wd>/session_<uuid>/agents/main/wire.jsonl, sessao so no 1o prompt);
+        # quem liga e o bilhete do hook (ver kimi_session_file).
+        jsonl = None if provider in ("pi", "kimi") else str(base / sanitize_cwd(cwd) / f"{sid}.jsonl")
         # Pré-confia a pasta no .claude.json: sem isto, uma sessão criada pelo app numa pasta NOVA
         # nasce presa no "trust this folder?" do Claude Code (invisível/ininteragível pelo chat até
         # aceitar na TUI). Só é o 1º acesso à pasta — depois o próprio Claude Code grava. Best-effort.
         # Pi não lê o .claude.json e tem o próprio fluxo de confiança -> escrever ali só sujaria a
         # lista de pastas confiadas do Claude com pasta que ele talvez nunca abra.
-        if provider != "pi":
+        # Kimi tem trust PROPRIO (medido: pasta nova trava no "Trust this folder?" do boot) ->
+        # pré-confia no formato dele (~/.kimi-code/workspace-trust), nao no do Claude.
+        if provider == "kimi":
+            from app.adapters.kimi import sessions as kimi_sessions
+            kimi_sessions.pretrust_cwd(cwd)
+        elif provider != "pi":
             _pretrust_cwd(cwd, config_dir)
         if not tmux.new_session(name, cwd, cmd, config_dir):
             raise ValueError("falha ao criar sessao no tmux")

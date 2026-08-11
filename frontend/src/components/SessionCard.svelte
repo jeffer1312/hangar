@@ -57,6 +57,11 @@
   // Sessao sem vinculo confiavel (claude manual sem --session-id): NAO da pra abrir o chat com
   // seguranca. Marca "sem id" e bloqueia o clique (delete continua valendo).
   const untracked = $derived(session.tracked === false);
+  // EXCECAO kimi: "sem id" e o estado NORMAL pre-1o-prompt — a sessao (id + wire.jsonl) so nasce no
+  // primeiro envio. Bloquear o clique fechava um ciclo sem saida: sem chat -> sem 1o prompt -> sem
+  // id, pra sempre. O badge/hint continuam; so renomear e broadcast seguem bloqueados (precisam do
+  // vinculo). O /input do backend nao depende de jsonl (vai por tmux), entao o chat abre e envia.
+  const abreChat = $derived(!untracked || session.provider === 'kimi');
 
   // "Precisa de voce": aguardando input -> barra de acao + fundo tingido.
   const action = $derived(session.state === 'awaiting_input');
@@ -175,7 +180,7 @@
     if (selectMode) { if (!untracked) onToggleSelect?.(); return; }  // sem id -> nao entra no broadcast
     if (longPressed) { longPressed = false; return; }   // foi toque longo (renomear) -> nao abre o chat
     if (suppressClick || offset !== 0) { offset = 0; return; }
-    if (!untracked) onClick();
+    if (abreChat) onClick();
   }
 </script>
 
@@ -221,16 +226,17 @@
     class="session-row"
     class:action
     class:untracked
+    class:untracked-open={untracked && abreChat}
     class:dragging
     style="transform: translateX({offset}px);"
     role="button"
     tabindex="0"
-    aria-disabled={untracked}
+    aria-disabled={!abreChat}
     aria-pressed={selectMode ? selected : undefined}
     onclick={onRowClick}
     onkeydown={(e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return;
-      if (untracked) return;
+      if (!abreChat) return;
       e.preventDefault();
       if (selectMode) onToggleSelect?.(); else onClick();
     }}
@@ -336,9 +342,9 @@
       {/if}
       <PlanBar {session} />
       <!-- Retomar e Claude-only de ponta a ponta (candidatos de ~/.claude/projects + relance com
-           `claude --resume`): numa sessao Pi o botao so poderia errar, entao mostramos a razao no
-           lugar dele. O backend recusa igual, pra um cliente velho nao matar o pane. -->
-      {#if untracked && session.provider === 'pi'}
+           `claude --resume`): numa sessao Pi/Kimi o botao so poderia errar, entao mostramos a razao
+           no lugar dele. O backend recusa igual, pra um cliente velho nao matar o pane. -->
+      {#if untracked && (session.provider === 'pi' || session.provider === 'kimi')}
         <span class="untracked-hint">{untrackedReason(session.provider)}</span>
       {:else if untracked}
         <button
@@ -503,6 +509,10 @@
      (mesmo motivo do fundo OPACO no .action). */
   .session-row.untracked {
     cursor: not-allowed;
+  }
+  /* Kimi "sem id" (pre-1o-prompt) ABRE o chat: o cursor nao pode mentir que a linha e inerte. */
+  .session-row.untracked.untracked-open {
+    cursor: pointer;
   }
   .session-row.untracked .session-name,
   .session-row.untracked .meta-line,

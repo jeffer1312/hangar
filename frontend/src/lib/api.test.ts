@@ -158,9 +158,9 @@ describe('getHistory', () => {
 });
 
 describe('createSession', () => {
-  // O backend so aceita provider em ("claude", "codex", "pi") e devolve 400 se vier `engine` com
-  // provider != claude. O sheet manda engine/config_dir nulos fora do Claude — aqui garantimos que o
-  // provider viaja LITERAL (a versao anterior tipava 'claude' | 'codex' e uma sessao Pi nem compilava).
+  // O backend so aceita provider em ("claude", "codex", "pi", "kimi") e devolve 400 se vier `engine`
+  // com provider != claude. O sheet manda engine/config_dir nulos fora do Claude — aqui garantimos que
+  // o provider viaja LITERAL (a versao anterior tipava 'claude' | 'codex' e uma sessao Pi nem compilava).
   it('manda o provider escolhido no corpo, sem motor', async () => {
     store.set('cp_servers', JSON.stringify([server]));
     store.set('cp_active', server.id);
@@ -173,6 +173,19 @@ describe('createSession', () => {
     const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
     expect(fetchMock.mock.calls[0][0]).toBe('https://a.test/api/sessions');
     expect(body).toMatchObject({ name: 'x', cwd: '/home/eu/proj', provider: 'pi', config_dir: null, engine: null });
+  });
+
+  it('manda provider kimi literal no corpo (quarto provider)', async () => {
+    store.set('cp_servers', JSON.stringify([server]));
+    store.set('cp_active', server.id);
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ name: 'x', state: 'idle' }), { status: 200 }),
+    );
+
+    await createSession('x', '/home/eu/proj', null, 'kimi', null);
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body).toMatchObject({ name: 'x', cwd: '/home/eu/proj', provider: 'kimi', config_dir: null, engine: null });
   });
 });
 

@@ -87,6 +87,9 @@ def main():
     # Instala (idempotente, fail-soft) os hooks de estado e de AskUserQuestion.
     ensure_askq_hook_installed()
     ensure_state_hooks_installed()
+    # Idem pro hook do Kimi (config.toml do ~/.kimi-code) — ver app/kimi_hook_installer.py.
+    from app.kimi_hook_installer import ensure_kimi_hooks_installed
+    ensure_kimi_hooks_installed()
     # Endereço pra extensão do Pi ligar de volta (ver pi_inbox.escrever_endpoint).
     escrever_endpoint()
     _state_dirs = list({Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()})

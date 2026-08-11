@@ -520,3 +520,53 @@ def test_merged_history_nao_absorve_legenda_igual_enviada_depois(tmp_path):
                     "delivered": True}) + "\n",
         encoding="utf-8")
     assert any(e.id == "queued-e2" for e in pqueue.merged_history("s", str(j)))
+
+
+def _wire_kimi(tmp_path, linhas):
+    import json
+    j = tmp_path / "wire.jsonl"
+    j.write_text("\n".join(json.dumps(l) for l in linhas) + "\n", encoding="utf-8")
+    return str(j)
+
+
+def test_committed_user_lines_kimi_provider(tmp_path):
+    # Sem o branch kimi o oraculo devolvia set() vazio e o reconcile redigitava cada entrega
+    # (3x "ola" em producao, 2026-08-11). A injection NAO pode contar como texto do usuario.
+    wire = _wire_kimi(tmp_path, [
+        {"type": "context.append_message", "time": 1786453187986,
+         "message": {"role": "user", "id": "msg_1", "origin": {"kind": "user"},
+                     "content": [{"type": "text", "text": "ola"}]}},
+        {"type": "context.append_message", "time": 1786453187990,
+         "message": {"role": "user", "id": "msg_2", "origin": {"kind": "injection"},
+                     "content": [{"type": "text", "text": "<system-reminder>x</system-reminder>"}]}},
+    ])
+    lines = pqueue.committed_user_lines(wire, "kimi")
+    assert "ola" in lines
+    assert not any("system-reminder" in l for l in lines)
+
+
+def test_transcript_start_ts_kimi_envelope_time(tmp_path):
+    # O ts do Kimi mora no envelope `time` (ms) — sem isto o start_ts era 0.0 e a poda de fila
+    # pre-/clear nao funcionava pro provider.
+    wire = _wire_kimi(tmp_path, [
+        {"type": "metadata", "protocol_version": "1.5", "created_at": 1786452160239},
+        {"type": "context.append_message", "time": 1786453187986,
+         "message": {"role": "user", "id": "m1", "origin": {"kind": "user"},
+                     "content": [{"type": "text", "text": "oi"}]}},
+    ])
+    assert pqueue._transcript_start_ts(wire) == 1786452160.239
+
+
+def test_merged_history_kimi_provider(tmp_path):
+    # O /history passa o provider: sem o branch, o parser do Claude nao lia NENHUMA linha do wire
+    # e o historico de uma sessao Kimi voltava vazio (so o SSE ao vivo enchia o chat).
+    wire = _wire_kimi(tmp_path, [
+        {"type": "context.append_message", "time": 1786453187986,
+         "message": {"role": "user", "id": "m1", "origin": {"kind": "user"},
+                     "content": [{"type": "text", "text": "ola"}]}},
+        {"type": "context.append_loop_event", "time": 1786453190000,
+         "event": {"type": "content.part", "uuid": "u1",
+                   "part": {"type": "text", "text": "oi!"}}},
+    ])
+    evs = pqueue.merged_history("s", wire, "kimi")
+    assert [(e.kind, e.text) for e in evs] == [("user_msg", "ola"), ("assistant_msg", "oi!")]

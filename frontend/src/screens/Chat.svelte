@@ -46,7 +46,7 @@
   import { createActivityFolder } from '../lib/activity';
   import type { ChatEvent, StateEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail } from '../lib/types';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
-  import { stateLabels, stateColors, countAwaiting, nextAwaiting, providerName } from '../lib/format';
+  import { stateLabels, stateColors, countAwaiting, nextAwaiting, providerName, untrackedReason } from '../lib/format';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
   import { ouvirTexto } from '../lib/ouvir';
   import { textoFalavelComCodigo } from '../lib/speakable';
@@ -181,9 +181,9 @@
   let limitsOpen = $state(false);  // Task B: sheet de limites de uso Codex (badge da NavBar)
   let askPayload = $state<AskQuestionPayload | null>(null);
   let askOpen = $state(false);
-  // Pergunta nativa do Pi (tool `question`): qual tool_use_id abriu o sheet e qual o usuario ja
-  // DISPENSOU sem responder (fechou o sheet -> nao reabre; o OptionButtons cru, lido do pane,
-  // fica como fallback). null = nenhuma.
+  // Pergunta nativa sintetizada do transcript (Pi: tool `question`; Kimi: `AskUserQuestion`): qual
+  // tool_use_id abriu o sheet e qual o usuario ja DISPENSOU sem responder (fechou o sheet -> nao
+  // reabre; o OptionButtons cru, lido do pane, fica como fallback). null = nenhuma.
   let askPiId = $state<string | null>(null);
   let askPiDismissed = $state<string | null>(null);
   // Viewport largo → pergunta vira card inline no chat (contexto visível); estreito → bottom-sheet.
@@ -422,9 +422,32 @@
 
   const currentState = $derived<State>(stateEvent?.state ?? 'idle');
   // Provider desta sessao (allSessions ja carregada pro switcher/nav — sem round-trip extra).
-  // "claude" e o caso comum e some do header; so "codex" ganha badge + esconde controles Claude-only.
+  // "claude" e o caso comum e some do header; os demais ganham badge (providerBadge abaixo) e o
+  // "codex" alem disso esconde controles Claude-only.
   const sessionProvider = $derived(allSessions.find((s) => s.name === sessionName)?.provider);
   const isCodex = $derived(sessionProvider === 'codex');
+  const sessionTracked = $derived(allSessions.find((s) => s.name === sessionName)?.tracked);
+  // Kimi "sem id" e o estado NORMAL pre-1o-prompt: o Kimi so cria a sessao (id + wire.jsonl) no
+  // primeiro envio. /history e /events 404am ate la — NAO e erro: o chat mostra um hint e o composer
+  // segue usavel (o POST /input vai por tmux, nao precisa de jsonl). `kimiSemTranscript` cobre a
+  // janela em que o 404 do /history chegou ANTES da lista reportar tracked=false (poll de 5s) —
+  // mas tracked=true sempre desempata (transcript existe, por mais que o 404 tenha vindo antes).
+  let kimiSemTranscript = $state(false);
+  const kimiPreNascimento = $derived(sessionProvider === 'kimi'
+    && (sessionTracked === false || (kimiSemTranscript && sessionTracked !== true)));
+  // Nascimento da sessao kimi: o hook grava o ticket ~1s apos o 1o prompt e o poll da lista traz
+  // tracked=true — carrega history e conecta o SSE (que o guard de kimiPreNascimento no connectSSE
+  // segurou ate aqui). Chave em PRIMITIVOS: allSessions troca de referencia a cada poll de 5s,
+  // entao efeito lendo o objeto re-rodaria em todo poll (ver pairPeersKey).
+  let kimiEstavaSemId = false;
+  $effect(() => {
+    const nasceu = sessionProvider === 'kimi' && sessionTracked === true;
+    if (kimiEstavaSemId && nasceu) {
+      kimiSemTranscript = false;
+      loadHistory().then(() => { if (alive) connectSSE(); });
+    }
+    kimiEstavaSemId = kimiPreNascimento;
+  });
   // Badge do provider na NavBar (mobile): so aparece quando NAO e Claude — antes so o Codex tinha
   // rotulo e uma sessao Pi ficava sem badge nenhum, indistinguivel de uma Claude no celular.
   // O TAP continua so do Codex: a sheet de limites de uso e da API do Codex, o Pi nao tem.
@@ -446,8 +469,13 @@
   // descricao) no instante da pergunta. Aqui o app sintetiza o MESMO AskQuestionPayload do Claude e
   // abre o sheet/card nativo; o /answer do backend ramifica por provider e dirige o picker do Pi.
   // Pendente = tool_use 'question' sem tool_result com o mesmo id. (2026-08-04)
+  // Kimi: mesmo desenho, mas o parser emite tool_name 'AskUserQuestion' com tool_input JA no shape
+  // do Claude ({questions: [{question, header, options, multi_select}]}) — o mapeamento abaixo
+  // ramifica por provider. (2026-08-11)
   const pendingPiQuestion = $derived.by(() => {
-    if (sessionProvider !== 'pi') return null;
+    const toolName = sessionProvider === 'pi' ? 'question'
+      : sessionProvider === 'kimi' ? 'AskUserQuestion' : null;
+    if (!toolName) return null;
     // Varredura UNICA: coleciona os resultados e lembra o ultimo tool_use question; pendente =
     // esse ultimo sem resultado. O(n) por evento novo, loop simples (o fold caro que o projeto
     // baniu era o deriveActivity; aqui e so Set+ultimo — se pesar, medir antes de otimizar).
@@ -455,7 +483,7 @@
     let last: ChatEvent | null = null;
     for (const ev of events) {
       if (ev.kind === 'tool_result' && ev.tool_use_id) answered.add(ev.tool_use_id);
-      else if (ev.kind === 'tool_use' && ev.tool_name === 'question' && ev.tool_use_id) last = ev;
+      else if (ev.kind === 'tool_use' && ev.tool_name === toolName && ev.tool_use_id) last = ev;
     }
     return last && !answered.has(last.tool_use_id ?? '') ? last : null;
   });
@@ -464,31 +492,49 @@
     const q = pendingPiQuestion;
     if (!q) {
       // A resposta aterrissou no transcript (pelo app ou pelo terminal) -> fecha o sheet se foi
-      // uma pergunta do Pi que o abriu.
+      // uma pergunta do Pi/Kimi que o abriu.
       if (askPiId) { askPiId = null; askOpen = false; }
       return;
     }
     if (askOpen || askPiDismissed === q.id) return;
     const args = (q.tool_input ?? {}) as Record<string, unknown>;
-    const opts = Array.isArray(args.options) ? args.options : [];
-    const options = opts.map((o) => ({
+    const mapOpts = (opts: unknown) => (Array.isArray(opts) ? opts : []).map((o) => ({
       label: String((o as Record<string, unknown> | null)?.label ?? ''),
       description: String((o as Record<string, unknown> | null)?.description ?? ''),
     })).filter((o) => o.label);
-    if (!options.length || !args.question) {
-      // Shape inesperado (o Pi mudou o tool?) — sem o warn o sheet simplesmente parava de abrir um
-      // dia, calado. O OptionButtons cru segue como saida.
-      console.warn('[pi-question] payload inesperado, sheet nao abre', args);
-      return;
+    if (sessionProvider === 'kimi') {
+      // Shape do Claude: lista de perguntas pronta, so falta snake_case -> camelCase.
+      const qs = (Array.isArray(args.questions) ? args.questions : []).map((item) => {
+        const it = item as Record<string, unknown> | null;
+        return {
+          header: String(it?.header ?? ''),
+          question: String(it?.question ?? ''),
+          multiSelect: it?.multi_select === true,
+          options: mapOpts(it?.options),
+        };
+      }).filter((item) => item.question && item.options.length);
+      if (!qs.length) {
+        console.warn('[kimi-question] payload inesperado, sheet nao abre', args);
+        return;
+      }
+      askPayload = { questions: qs };
+    } else {
+      const options = mapOpts(args.options);
+      if (!options.length || !args.question) {
+        // Shape inesperado (o Pi mudou o tool?) — sem o warn o sheet simplesmente parava de abrir um
+        // dia, calado. O OptionButtons cru segue como saida.
+        console.warn('[pi-question] payload inesperado, sheet nao abre', args);
+        return;
+      }
+      askPayload = {
+        questions: [{
+          header: String(args.header ?? ''),
+          question: String(args.question),
+          multiSelect: args.multiSelect === true,
+          options,
+        }],
+      };
     }
-    askPayload = {
-      questions: [{
-        header: String(args.header ?? ''),
-        question: String(args.question),
-        multiSelect: args.multiSelect === true,
-        options,
-      }],
-    };
     askPiId = q.id;
     askOpen = true;
   });
@@ -687,11 +733,19 @@
       rebuildIndex();
       reseedDerived();
       error = '';
+      kimiSemTranscript = false;   // transcript existe -> sai do modo "kimi pre-1o-prompt"
       // Veio menos que o pedido = o transcript inteiro coube na cauda; não há o que buscar.
       if (tail.length >= TAIL_FIRST) loadOlderInBackground(g);
     } catch (err) {
       if (isAbortError(err) || g !== histGen) return;   // cancelado ≠ falhou: nada na tela
-      error = err instanceof Error ? err.message : 'Erro ao carregar histórico';
+      const msg = err instanceof Error ? err.message : 'Erro ao carregar histórico';
+      // Kimi pre-1o-prompt: o 404 do /history e ESPERADO (sem jsonl ainda) -> vira hint, nao a
+      // tela de erro "Não encontrei o transcript" (que apavorava num estado que e por design).
+      if (sessionProvider === 'kimi' && (/(^|\D)404(\D|$)/.test(msg) || /not found/i.test(msg))) {
+        kimiSemTranscript = true;
+        return;
+      }
+      error = msg;
     } finally {
       if (g === histGen) loading = false;
     }
@@ -749,6 +803,10 @@
 
   function connectSSE() {
     if (!alive) return;
+    // Kimi pre-1o-prompt: /events 404 (sem jsonl) -> nao conecta ate o flip tracked (efeito mais
+    // abaixo dispara). Sem este guard o onerror virava retry com backoff martelando pra sempre um
+    // endpoint que so passa a existir depois do primeiro envio.
+    if (kimiPreNascimento) return;
     clearTimeout(reconnectTimer);
     if (es) { es.close(); es = null; }
 
@@ -1334,6 +1392,20 @@
       <div class="sk-line sk-r" style="width:38%"></div>
       <div class="sk-line" style="width:90%"></div>
       <div class="sk-line" style="width:55%"></div>
+    </div>
+  {:else if kimiPreNascimento}
+    <!-- Kimi pre-1o-prompt: NAO e erro — a sessao (id + wire.jsonl) so nasce no primeiro envio.
+         O composer la embaixo segue usavel: e justamente ele que faz a sessao nascer (o /input vai
+         por tmux, sem jsonl). O flip tracked do poll da lista dispara a carga normal. -->
+    <div class="chat-error">
+      <p class="chat-error-title">A sessão Kimi ainda não tem transcript.</p>
+      <p class="chat-error-hint">{untrackedReason('kimi')}</p>
+      <p class="chat-error-hint">Envie a primeira mensagem abaixo — o Kimi cria a sessão nesse envio e a conversa aparece aqui sozinha.</p>
+      {#if pending.length}
+        <!-- O eco pendente some da tela enquanto o hint substitui a MessageList — sem esta linha
+             o 1o envio parecia engolido nos ~5s ate o poll da lista reportar o flip tracked. -->
+        <p class="chat-error-hint">Mensagem enviada — a conversa aparece aqui assim que a sessão nascer.</p>
+      {/if}
     </div>
   {:else if error}
     <div class="chat-error">

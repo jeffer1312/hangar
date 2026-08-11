@@ -343,7 +343,9 @@
   // Abrir/apagar precisam mirar o servidor DA sessão: selectServer(serverId) antes, pois api.ts lê
   // o ativo a cada chamada (sem reload). Assim chat/SSE/delete vão pro backend certo.
   function openSession(s: AggSession) {
-    if (s.tracked === false) return; // sem id confiavel: chat bloqueado (evita transcript errado)
+    // Sem id confiavel: chat bloqueado (evita transcript errado). EXCECAO kimi: "sem id" e o normal
+    // pre-1o-prompt e o /input nao depende de jsonl — bloquear aqui impedia a sessao de nascer.
+    if (s.tracked === false && s.provider !== 'kimi') return;
     // Captura a posição AGORA (DOM intacto) e congela o save — ver comentário do restore.
     if (restoreTarget <= 0) savedScroll = listEl?.scrollTop ?? savedScroll;
     leaving = true;

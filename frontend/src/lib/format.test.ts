@@ -3,6 +3,7 @@ import {
   abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, fmtWhen, groupSelectedByServer, initials, nextAwaiting,
   projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent, resetsIn,
   clusterByPair, sortSessions, bubblesFromTail, ctxWindow, fileKind, fmtBytes, providerName, providerTag,
+  untrackedReason,
   summarizeText, summarizeToolInput, summarizeToolResult, toolPhase, toolGroupLabel, toolGroupCounts,
   splitTodoBlock, parseImageMessage,
 } from './format';
@@ -503,6 +504,10 @@ describe('providerName', () => {
     expect(providerName('pi')).toBe('Pi');
   });
 
+  it('names the fourth provider (kimi) instead of falling back to Claude', () => {
+    expect(providerName('kimi')).toBe('Kimi');
+  });
+
   it('keeps Claude and Codex byte-identical', () => {
     expect(providerName('claude')).toBe('Claude');
     expect(providerName('codex')).toBe('Codex');
@@ -518,6 +523,7 @@ describe('providerTag', () => {
   it('marca só as sessões que NÃO são Claude', () => {
     expect(providerTag('pi')).toBe('Pi');
     expect(providerTag('codex')).toBe('Codex');
+    expect(providerTag('kimi')).toBe('Kimi');
   });
 
   it('não marca Claude (maioria das linhas — chip em todas seria ruído)', () => {
@@ -528,6 +534,19 @@ describe('providerTag', () => {
 
   it('provider desconhecido não vira um chip "Claude" mentiroso', () => {
     expect(providerTag('gemini' as any)).toBeNull();
+  });
+});
+
+describe('untrackedReason', () => {
+  it('Pi e Kimi: transcript tardio é normal antes do 1º turno', () => {
+    expect(untrackedReason('pi')).toContain('1º turno');
+    expect(untrackedReason('kimi')).toContain('1º turno');
+    expect(untrackedReason('kimi')).toContain('Kimi');
+  });
+
+  it('Claude (e default): o problema é a falta de --session-id', () => {
+    expect(untrackedReason('claude')).toContain('--session-id');
+    expect(untrackedReason(undefined)).toContain('--session-id');
   });
 });
 

@@ -61,7 +61,10 @@ _PI_BOX_RE = re.compile(r"^\s*[╭╰][─\s]*[╮╯]\s*$")
 # Separador do overlay do /model: `▔` (U+2594), não a régua reta. Medido nas fixtures
 # pane_model_picker_*.txt — nelas o _RULE_RE não casa NADA.
 _OVERLAY_RULE_RE = re.compile(r"^[\s▔]*▔{10,}[\s▔]*$")
-_STOPS_BY_PROVIDER = {"pi": (_PI_BOX_RE,)}
+_STOPS_BY_PROVIDER = {"pi": (_PI_BOX_RE,),
+                      # Kimi desenha o composer com a MESMA caixa arredondada do Pi (medido num
+                      # pane real, 0.34.0) -> a ancora de corte e a mesma.
+                      "kimi": (_PI_BOX_RE,)}
 
 # Bloco de FERRAMENTA do Pi. O _TOOL_BLOCK_RE exige "Nome(" colado, e o Pi escreve de pelo menos
 # cinco jeitos — medidos no pane em 01/08/2026:

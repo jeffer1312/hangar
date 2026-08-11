@@ -8,7 +8,7 @@ from app.adapters import get_adapter
 from app.adapters.codex.preview import CodexPreviewSource
 from app.pqueue import PromptQueue, _transcript_start_ts
 from app.preview import PreviewBroker, _norm
-from app.models import PreviewEvent
+from app.models import PreviewEvent, session_key
 from app.registry import SessionRegistry
 from app.askquestion import read_pending_askq
 
@@ -344,7 +344,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
     # Ancora de hook do estado: o monitor le o marcador do sid VIVO (a closure acompanha o rebind
     # do /clear, que troca o current_jsonl -> sid novo).
     monitor_stream = adapter.state_monitor(
-        name, sid_get=lambda: Path(current_jsonl).stem if current_jsonl else None)
+        name, sid_get=lambda: session_key(current_jsonl) if current_jsonl else None)
     pqueue = PromptQueue(name)
     # Fonte do preview ao vivo ramifica por provider: Claude nao tem push (o app-server manda os
     # deltas, o TUI do Claude nao) -> continua no PreviewBroker (poll do pane). Codex nao tem pane
@@ -357,7 +357,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
     # o transcript, e um stem congelado leria o marcador da sessao anterior.
     broker = (CodexPreviewSource.get(name) if provider == "codex"
               else PreviewBroker.get(name, provider,
-                                     lambda: Path(current_jsonl).stem if current_jsonl else None))
+                                     lambda: session_key(current_jsonl) if current_jsonl else None))
     # Inicio da sessao atual: poda entradas de fila pre-/clear no live SSE (mesma regra do history).
     start_ts = _transcript_start_ts(jsonl)
     queue: asyncio.Queue = asyncio.Queue()
@@ -424,7 +424,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                 # acaso coubesse no tamanho do novo passava na validacao, dava seek no meio dele e
                 # PULAVA calado todo o inicio da conversa nova (parse_line engole a linha parcial).
                 # Com o stem, id de outro transcript simplesmente nao e honrado.
-                ev_id = f"{Path(path).stem}:{ev.offset}" if ev.offset is not None else None
+                ev_id = f"{session_key(path)}:{ev.offset}" if ev.offset is not None else None
                 await queue.put(("message", ev.model_dump_json(), ev_id))
         except asyncio.CancelledError:
             raise  # rebind do watcher cancela este task de proposito -> nao reportar como erro

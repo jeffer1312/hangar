@@ -315,9 +315,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   function pressEnd() {
     clearTimeout(pressTimer);
   }
-  function onMainClick(name: string, serverId: string, tracked: boolean | undefined) {
+  function onMainClick(name: string, serverId: string, tracked: boolean | undefined, provider?: SessionInfo['provider']) {
     if (longPressed) { longPressed = false; return; } // foi toque longo (renomear)
-    if (tracked === false) return; // sem id confiável -> não abre
+    // Sem id confiável -> não abre. EXCEÇÃO kimi: "sem id" é o normal pré-1º-prompt e o /input não
+    // depende de jsonl — bloquear aqui impedia a sessão de nascer (sem chat, sem 1º prompt, sem id).
+    if (tracked === false && provider !== 'kimi') return;
     selectServer(serverId); // o Chat usa o server ativo
     activeId = serverId; // I2: keep local badge in sync immediately
     onSelect(name);
@@ -905,6 +907,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
             <button
               class="sess-main"
               class:untracked={s.tracked === false}
+              class:untracked-open={s.tracked === false && s.provider === 'kimi'}
               aria-pressed={selectMode ? selected.has(selKey) : undefined}
               aria-label={!expanded ? `${s.name} · ${srvLabel} · ${estadoTxt}` : undefined}
               title={!expanded
@@ -918,7 +921,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
               onclick={() => {
                 hpLeave();   // clique nao move o mouse -> sem mouseleave; fecha a espiada na mao
                 if (selectMode) { if (s.tracked !== false) toggleSelected(selKey); return; }
-                onMainClick(s.name, s.serverId, s.tracked);
+                onMainClick(s.name, s.serverId, s.tracked, s.provider);
               }}
             >
               <span class="lead" aria-hidden="true">
@@ -1040,10 +1043,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
             {#if expanded && !selectMode}
               <!-- Retomar (paridade com o SessionCard do mobile): unica acao possivel numa linha "sem
                    id" -> visivel sempre (nao escondida no hover), tingida de accent. Reusa resumeSession.
-                   Fora do Pi: o resume varre ~/.claude/projects e relanca `claude --resume` DEPOIS de
-                   matar o pane -> num pane Pi ofereceria a conversa do agente errado e mataria a
-                   sessao viva. Ali o title da linha ja diz o que fazer (untrackedReason). -->
-              {#if s.tracked === false && s.provider !== 'pi'}
+                   Fora do Pi/Kimi: o resume varre ~/.claude/projects e relanca `claude --resume` DEPOIS
+                   de matar o pane -> num pane Pi/Kimi ofereceria a conversa do agente errado e mataria
+                   a sessao viva. Ali o title da linha ja diz o que fazer (untrackedReason). -->
+              {#if s.tracked === false && s.provider !== 'pi' && s.provider !== 'kimi'}
                 <button
                   class="sess-resume"
                   onclick={(e) => handleResume(s.name, s.serverId, undefined, e)}
@@ -1876,6 +1879,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .sess-row.active .sess-main { color: var(--text-primary); }
   .sess-name { flex: 1; min-width: 0; font-size: var(--text-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sess-main.untracked { opacity: 0.45; cursor: default; }
+  /* Kimi "sem id" (pré-1º-prompt) ABRE o chat: cursor normal pra não mentir que a linha é inerte. */
+  .sess-main.untracked.untracked-open { cursor: pointer; }
   .sess-badge {
     flex-shrink: 0; font-size: 10px; padding: 1px 5px; border-radius: var(--radius-sm);
     background: var(--surface-raised); border: 1px solid var(--border-subtle); color: var(--warning); white-space: nowrap;

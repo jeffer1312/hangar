@@ -19,10 +19,10 @@
   }
   let { open, servers, onClose, onCreate, onOpenSession }: Props = $props();
 
-  // Provider da sessao nova: Claude (padrao, tmux), Codex (app-server, sem tmux/config_dir) ou Pi
-  // (pane tmux como o Claude, mas sem config_dir e sem motor — o backend recusa motor fora do Claude
-  // com 400, entao os dois pickers abaixo seguem Claude-only).
-  const PROVIDERS: Provider[] = ['claude', 'codex', 'pi'];
+  // Provider da sessao nova: Claude (padrao, tmux), Codex (app-server, sem tmux/config_dir), Pi ou
+  // Kimi (pane tmux como o Claude, mas sem config_dir e sem motor — o backend recusa motor fora do
+  // Claude com 400, entao os dois pickers abaixo seguem Claude-only).
+  const PROVIDERS: Provider[] = ['claude', 'codex', 'pi', 'kimi'];
   let provider = $state<Provider>('claude');
 
   // Servidor-alvo da nova sessão. Como o scanner/dedupe/criação leem o servidor ATIVO, escolher

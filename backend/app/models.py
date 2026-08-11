@@ -1,5 +1,6 @@
 import json
 import re
+from pathlib import Path
 from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, model_validator
 
@@ -39,6 +40,20 @@ def dumps_safe(obj: Any) -> str:
     string por UNIDADE UTF-16, entao um corte no meio do par ja chega assim no POST. Sem isto, o
     write do sidecar (fila, chain, loop, pair) virava 500 e a mensagem do usuario sumia."""
     return json.dumps(scrub_surrogates(obj), ensure_ascii=False)
+
+
+def session_key(jsonl_path: str) -> str:
+    """Chave de ESTADO/sidecar de um transcript (marcador .claude-pocket-state, id de SSE).
+
+    No Claude/Pi e o stem do arquivo (== session-id). No Kimi o transcript se chama wire.jsonl em
+    TODA sessao (sessions/<wd>/<session_id>/agents/main/wire.jsonl), entao o stem seria "wire" pra
+    todo mundo — a chave e o nome do sessionDir, que e o session_id que o hook grava. Qualquer
+    outro layout cai no stem (comportamento de sempre).
+    """
+    p = Path(jsonl_path)
+    if p.name == "wire.jsonl" and p.parent.parent.name == "agents":
+        return p.parent.parent.parent.name
+    return p.stem
 
 
 class SessionInfo(BaseModel):

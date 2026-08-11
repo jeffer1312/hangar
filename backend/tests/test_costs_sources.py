@@ -260,6 +260,7 @@ def test_coletar_junta_as_tres_fontes_e_dedup_e_por_fonte(tmp_path, monkeypatch)
     ])
     monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "sessions")
     monkeypatch.setattr(cs, "raiz_codex", lambda: tmp_path / "sem-codex")
+    monkeypatch.setattr(cs, "raiz_kimi", lambda: tmp_path / "sem-kimi")
     monkeypatch.setattr(cs, "_config_dirs", lambda: [(str(cfg), "conta-x")])
     cs.invalidar_cache()
     linhas = cs.coletar()
@@ -272,6 +273,7 @@ def test_cache_relê_quando_o_arquivo_muda(tmp_path, monkeypatch):
     _transcript_claude(cfg, "s", "claude-opus-5", "/r", i=1, o=0)
     monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "x")
     monkeypatch.setattr(cs, "raiz_codex", lambda: tmp_path / "y")
+    monkeypatch.setattr(cs, "raiz_kimi", lambda: tmp_path / "z")
     monkeypatch.setattr(cs, "_config_dirs", lambda: [(str(cfg), "c")])
     cs.invalidar_cache()
     assert len(cs.coletar()) == 1
@@ -294,6 +296,7 @@ def test_cache_evita_reparse_quando_nada_muda(tmp_path, monkeypatch):
     ])
     monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "sessions")
     monkeypatch.setattr(cs, "raiz_codex", lambda: tmp_path / "sem-codex")
+    monkeypatch.setattr(cs, "raiz_kimi", lambda: tmp_path / "sem-kimi")
     monkeypatch.setattr(cs, "_config_dirs", lambda: [(str(cfg), "c")])
     cs.invalidar_cache()   # senão o estado de um teste anterior contamina a contagem
 
@@ -420,3 +423,44 @@ def test_provedor_clinepass_nao_vira_moonshot():
     assert pricing.canonizar_provedor("cline-pass") == "cline-pass"
     assert pricing.canonizar_provedor("kimi-coding") == "moonshotai"
     assert pricing.canonizar_provedor("openai-codex") == "openai"
+
+
+def test_linhas_kimi_soma_usage_record_e_resolve_projeto(tmp_path, monkeypatch):
+    # Layout medido no Kimi 0.34.0: sessions/<wd>/<sid>/agents/main/wire.jsonl, um usage.record
+    # por turno com o DELTA (soma, nao ultima linha). Projeto vem do session_index.jsonl.
+    home = tmp_path / "kimi-home"
+    monkeypatch.setenv("KIMI_CODE_HOME", str(home))
+    monkeypatch.setattr(cs, "raiz_kimi", lambda: home / "sessions")
+    sid = "session_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    wire = home / "sessions" / "wd_r_000000000000" / sid / "agents" / "main" / "wire.jsonl"
+    _escrever(wire, [
+        {"type": "metadata", "protocol_version": "1.5"},
+        {"type": "usage.record", "model": "apikey/k3", "time": 1786452188171,
+         "usage": {"inputOther": 100, "output": 10, "inputCacheRead": 50, "inputCacheCreation": 5}},
+        {"type": "usage.record", "model": "apikey/k3", "time": 1786452190000,
+         "usage": {"inputOther": 200, "output": 20, "inputCacheRead": 0, "inputCacheCreation": 0}},
+    ])
+    _escrever(home / "session_index.jsonl", [
+        {"sessionId": sid, "sessionDir": str(wire.parent.parent), "workDir": "/r"}])
+    linhas = cs.linhas_kimi()
+    assert len(linhas) == 1
+    r = linhas[0]
+    assert r.source == "kimi"
+    assert r.model == "apikey/k3"
+    assert (r.input, r.output, r.cache_read, r.cache_write) == (300, 30, 50, 5)
+    assert r.project == "/r"
+    assert r.session_id == sid
+    assert r.subagente is False
+
+
+def test_linhas_kimi_marca_subagente(tmp_path, monkeypatch):
+    home = tmp_path / "kimi-home"
+    monkeypatch.setenv("KIMI_CODE_HOME", str(home))
+    monkeypatch.setattr(cs, "raiz_kimi", lambda: home / "sessions")
+    sid = "session_bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+    _escrever(home / "sessions" / "wd_r_000000000000" / sid / "agents" / "agent-0" / "wire.jsonl", [
+        {"type": "usage.record", "model": "apikey/k3", "time": 1786452188171,
+         "usage": {"inputOther": 1, "output": 1, "inputCacheRead": 0, "inputCacheCreation": 0}},
+    ])
+    (r,) = cs.linhas_kimi()
+    assert r.subagente is True

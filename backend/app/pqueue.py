@@ -55,6 +55,12 @@ def _ts_of_obj(obj: dict) -> float:
         raw = msg.get("timestamp")
         if isinstance(raw, (int, float)):
             return raw / 1000.0
+    # Kimi (wire.jsonl): epoch ms no envelope `time` da linha (`created_at` na linha metadata,
+    # a 1a do arquivo — sem ela o start_ts escorregava pro 1o turno).
+    for k in ("time", "created_at"):
+        raw = obj.get(k)
+        if isinstance(raw, (int, float)):
+            return raw / 1000.0
     return 0.0
 
 
@@ -134,7 +140,8 @@ def committed_user_lines(jsonl: str, provider: str = "claude") -> set[str]:
     (`{"type":"message","message":{"role":"user",...}}`), entao as regras cruas acima nao casam
     NADA e o oraculo devolvia set() vazio -> toda entrega era lida como engolida e o drain
     redigitava o mesmo prompt (double-send medido: pi-e2e.jsonl com attempts: 2). Pi nao tem fila
-    interna com `queue-operation`, entao o parser proprio ja basta."""
+    interna com `queue-operation`, entao o parser proprio ja basta. Kimi: mesmo motivo, shape
+    `context.append_message` — o parser do adapter e usado do mesmo jeito."""
     out: set[str] = set()
 
     def add(t: str) -> None:
@@ -157,8 +164,14 @@ def committed_user_lines(jsonl: str, provider: str = "claude") -> set[str]:
 
     # Import local pelo mesmo motivo do merged_history: app.adapters importa app.pqueue no boot.
     pi_parse = None
+    kimi_parse = None
     if provider == "pi":
         from app.adapters.pi.transcript import parse_obj as pi_parse
+    elif provider == "kimi":
+        # Kimi: sem o parser proprio, NENHUMA linha do wire casa o shape do Claude (o role mora em
+        # `context.append_message`) -> oraculo vazio -> reconcile lia TODA entrega como engolida e
+        # redigitava ate max_attempts (medido em producao: 3x "ola", 2026-08-11).
+        from app.adapters.kimi.transcript import parse_obj as kimi_parse
 
     try:
         with open(jsonl, encoding="utf-8", errors="replace") as fh:
@@ -167,8 +180,9 @@ def committed_user_lines(jsonl: str, provider: str = "claude") -> set[str]:
                     obj = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
                     continue
-                if pi_parse is not None:
-                    for ev in pi_parse(obj):
+                parse = pi_parse or kimi_parse
+                if parse is not None:
+                    for ev in parse(obj):
                         if ev.kind == "user_msg" and ev.text:
                             add(ev.text)
                     continue
@@ -467,6 +481,9 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
         # mensagem retida no lugar errado.
         from app.adapters.pi.transcript import Stream as _pi_stream
         _parse = parse_obj      # trocado dentro do _parse_from pela instancia da vez
+    elif provider == "kimi":
+        # parse_obj solto basta: o parser do wire do Kimi nao guarda estado entre linhas.
+        from app.adapters.kimi.transcript import parse_obj as _parse
     else:
         _parse = parse_obj
     items: list[tuple[float, int, ChatEvent]] = []

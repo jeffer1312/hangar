@@ -81,12 +81,13 @@ install_posix() {  # $1 = rc file
   ensure_block "$1" "source \"$SHELL_DIR/claude.posix.sh\"
 source \"$SHELL_DIR/codex.posix.sh\"
 source \"$SHELL_DIR/claude-engine.posix.sh\"
-source \"$SHELL_DIR/pi.posix.sh\""
+source \"$SHELL_DIR/pi.posix.sh\"
+source \"$SHELL_DIR/kimi.posix.sh\""
 }
 
 install_fish() {
   local name dst src
-  for name in claude codex claude-engine pi; do
+  for name in claude codex claude-engine pi kimi; do
     src="$SHELL_DIR/$name.fish"
     dst="$HOME/.config/fish/functions/$name.fish"
     mkdir -p "$(dirname "$dst")"

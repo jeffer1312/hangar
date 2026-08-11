@@ -15,7 +15,7 @@
     status?: StatusFields | null;
     pairPeers?: string[] | null;
     serverLabel?: string;
-    provider?: 'claude' | 'codex' | 'pi';
+    provider?: 'claude' | 'codex' | 'pi' | 'kimi';
     // Nome da sessao aberta: com a NavBar escondida (>=1280px) ele some da tela — e no overlay
     // do board/canvas nem a lista lateral esta a vista. Vai no header do painel.
     sessionName?: string;

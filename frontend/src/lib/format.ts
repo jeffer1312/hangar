@@ -29,7 +29,7 @@ import type { State, ChatEvent, SessionInfo } from './types';
 // (`provider === 'codex' ? 'Codex' : 'Claude'`) e, quando o Pi entrou como terceiro provider, toda
 // sessão Pi aparecia rotulada como "Claude". Um lugar só -> um provider novo não volta a mentir.
 // Ausente/desconhecido -> "Claude", que é o default do backend (SessionInfo.provider).
-const PROVIDER_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex', pi: 'Pi' };
+const PROVIDER_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex', pi: 'Pi', kimi: 'Kimi' };
 
 export function providerName(p: SessionInfo['provider'] | null | undefined): string {
   return PROVIDER_NAMES[p ?? 'claude'] ?? 'Claude';
@@ -46,13 +46,17 @@ export function providerTag(p: SessionInfo['provider'] | null | undefined): stri
 }
 
 // Por que a linha está "sem id" — a causa (e a saída) mudam por provider, e as duas views mostram
-// a mesma frase. Claude: aberto sem --session-id, o vínculo com o transcript seria um chute. Pi: o
-// pane não resolve transcript nenhum — normal antes do 1º turno (a sessão só escreve o arquivo
-// então), definitivo se a extensão cp-state não carregou naquele pane.
+// a mesma frase. Claude: aberto sem --session-id, o vínculo com o transcript seria um chute. Pi e
+// Kimi: o pane não resolve transcript nenhum — normal antes do 1º turno (a sessão só escreve o
+// arquivo então), definitivo se a extensão de estado não carregou naquele pane.
 export function untrackedReason(p: SessionInfo['provider'] | null | undefined): string {
-  return p === 'pi'
-    ? 'sessão Pi sem transcript: aparece depois do 1º turno — se não aparecer, feche o pane e abra de novo pelo `pi`'
-    : 'claude aberto sem --session-id: não dá pra rastrear o transcript com segurança';
+  if (p === 'pi') {
+    return 'sessão Pi sem transcript: aparece depois do 1º turno — se não aparecer, feche o pane e abra de novo pelo `pi`';
+  }
+  if (p === 'kimi') {
+    return 'sessão Kimi sem transcript: aparece depois do 1º turno — se não aparecer, feche o pane e abra de novo pelo `kimi`';
+  }
+  return 'claude aberto sem --session-id: não dá pra rastrear o transcript com segurança';
 }
 
 export const stateLabels: Record<State, string> = {

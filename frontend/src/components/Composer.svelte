@@ -61,8 +61,8 @@
     inputText?: string;  // bindable: o pai injeta um draft (ex: interrupt devolve a msg pendente)
     // Provider da sessao (Chat.svelte, via allSessions). undefined/"claude" = comportamento de
     // sempre; "codex" esconde o picker de /model e o autocomplete de slash-commands (Claude-only —
-    // o Codex nao tem nem um nem outro).
-    provider?: 'claude' | 'codex' | 'pi';
+    // o Codex nao tem nem um nem outro); "kimi" nao tem sheet de modelo neste MVP (pill so leitura).
+    provider?: 'claude' | 'codex' | 'pi' | 'kimi';
   }
   let {
     sessionName, sessionState, status, lastCache = null, onSend, onCommand, onInterrupt, onOpenGit,
@@ -104,6 +104,7 @@
 
   const isCodex = $derived(provider === 'codex');
   const isPi = $derived(provider === 'pi');
+  const isKimi = $derived(provider === 'kimi');
 
   // ── Slash commands: busca uma vez por sessao (com cache) ────────────────────
   // Comeca vazio; o $effect popula na hora a partir do cache (sincrono) ou da rede.
@@ -1072,7 +1073,7 @@
       bind:this={textareaEl}
       bind:value={inputText}
       class="composer-textarea"
-      placeholder={isCodex ? "Mensagem para Codex…" : "Mensagem para Claude…"}
+      placeholder={isCodex ? "Mensagem para Codex…" : isKimi ? "Mensagem para Kimi…" : "Mensagem para Claude…"}
       rows={1}
       oninput={handleInput}
       onkeydown={handleKeydown}
@@ -1141,6 +1142,15 @@
             </span>
             <ContextRing pct={status?.ctxPct ?? null} />
           </button>
+        {:else if isKimi}
+          <!-- Kimi nao tem sheet de modelo neste MVP (o /model dele e so-TUI): pill vira rotulo
+               passivo com o modelo da statusline, sem abrir nada — nem o ModelEffortSheet do Claude. -->
+          <span class="model-pill">
+            <span class="pill-label">
+              <span class="pill-model">{status?.model ?? 'Modelo'}</span>
+            </span>
+            <ContextRing pct={status?.ctxPct ?? null} />
+          </span>
         {:else if !isCodex}
           <button
             class="model-pill"

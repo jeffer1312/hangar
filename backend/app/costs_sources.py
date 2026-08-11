@@ -1,4 +1,4 @@
-"""Os três formatos de uso (Claude Code, Codex, Pi) normalizados num UsageRow só.
+"""Os quatro formatos de uso (Claude Code, Codex, Pi, Kimi) normalizados num UsageRow só.
 
 A armadilha central: cada fonte ACUMULA de um jeito diferente. Usar a regra errada não quebra
 nada — devolve um número plausível e errado.
@@ -6,6 +6,7 @@ nada — devolve um número plausível e errado.
   Claude  cumulativo por sessão -> ÚLTIMA linha por session_id
   Codex   cumulativo            -> ÚLTIMO evento token_count
   Pi      por mensagem          -> SOMA de todos os usage
+  Kimi    por evento/turno      -> SOMA dos usage.record
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app import costs_claude_transcript, pricing
+from app.adapters.kimi import sessions as kimi_sessions
 from app.adapters.pi import sessions as pi_sessions
 from app.config import list_config_dirs
 
@@ -28,7 +30,7 @@ PROJETO_DESCONHECIDO = "desconhecido"
 @dataclass(frozen=True)
 class UsageRow:
     ts: datetime
-    source: str        # "claude" | "codex" | "pi"
+    source: str        # "claude" | "codex" | "pi" | "kimi"
     provider: str      # onde a fatura cai: "anthropic:<uuid>" | "openai" | "kimi-coding" | ...
     model: str         # id CRU do log; quem canoniza é o pricing
     project: str       # caminho absoluto REAL, ou PROJETO_DESCONHECIDO
@@ -230,6 +232,78 @@ def linhas_pi() -> list[UsageRow]:
     return out
 
 
+def raiz_kimi() -> Path:
+    return kimi_sessions.kimi_home() / "sessions"
+
+
+def _kimi_index() -> dict[str, str]:
+    """sessionId -> workDir, do session_index.jsonl do Kimi (projeto da linha de uso)."""
+    out: dict[str, str] = {}
+    try:
+        with open(kimi_sessions.kimi_home() / "session_index.jsonl", encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    o = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(o, dict) and o.get("sessionId"):
+                    out[o["sessionId"]] = o.get("workDir") or ""
+    except OSError:
+        pass
+    return out
+
+
+def linhas_kimi() -> list[UsageRow]:
+    """~/.kimi-code/sessions/*/session_*/agents/*/wire.jsonl — eventos `usage.record`, SOMA tudo.
+
+    Medido no 0.34.0: um usage.record por turno com o DELTA (inputOther/output/inputCacheRead/
+    inputCacheCreation), nao cumulativo — a regra e a mesma do Pi (somar), nao a do Claude (ultima
+    linha). Subagentes (agents/agent-N/wire.jsonl) somam junto, marcados subagente=True: o wire do
+    agente principal NAO inclui o uso dos filhos (mesmo fato medido no Pi).
+    """
+    raiz = raiz_kimi()
+    if not raiz.is_dir():
+        return []
+    index = _kimi_index()
+    out: list[UsageRow] = []
+    for arq in raiz.rglob("wire.jsonl"):
+        acc = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
+        modelo = ""
+        ts = None
+        viu = False
+        for d in _ler_jsonl(arq):
+            if d.get("type") != "usage.record":
+                continue
+            u = d.get("usage")
+            if not isinstance(u, dict):
+                continue
+            viu = True
+            modelo = d.get("model") or modelo
+            t = d.get("time")
+            if isinstance(t, (int, float)):
+                ts = datetime.fromtimestamp(t / 1000.0, LOCAL)
+            acc["input"] += _int(u.get("inputOther"))
+            acc["output"] += _int(u.get("output"))
+            acc["cacheRead"] += _int(u.get("inputCacheRead"))
+            acc["cacheWrite"] += _int(u.get("inputCacheCreation"))
+        if not viu or ts is None:
+            continue
+        # session_id = nome do sessionDir (session_<uuid>) — o stem seria "wire" pra TODOS
+        # (mesmo caso do session.jsonl do Pi, ver linhas_pi).
+        sid = arq.parent.parent.parent.name
+        # Modelo vem como ALIAS ("apikey/k3"); o provedor e o prefixo. Canoniza como os demais.
+        prov = modelo.split("/", 1)[0] if "/" in modelo else ""
+        out.append(UsageRow(
+            ts=ts, source="kimi", provider=pricing.canonizar_provedor(prov) or prov or "?",
+            model=modelo or "?",
+            project=index.get(sid) or PROJETO_DESCONHECIDO, session_id=sid,
+            input=acc["input"], output=acc["output"],
+            cache_write=acc["cacheWrite"], cache_read=acc["cacheRead"],
+            subagente=kimi_sessions.is_subagent_wire(str(arq)),
+        ))
+    return out
+
+
 # Cache por ARQUIVO, chaveado por (mtime_ns, st_size) — mesmo padrão do planprog.py.
 # Guarda só Codex e Pi (o Claude saiu daqui, foi pro cache em disco de costs_claude_transcript.py).
 # Rollout e sessão de Pi fechados nunca mudam e ficam aqui pra sempre.
@@ -309,13 +383,15 @@ def coletar() -> list[UsageRow]:
             out.extend(linhas_claude(Path(caminho), account_id))
 
         for nome, raiz, leitor in (("codex", raiz_codex(), linhas_codex),
-                                   ("pi", raiz_pi(), linhas_pi)):
+                                   ("pi", raiz_pi(), linhas_pi),
+                                   ("kimi", raiz_kimi(), linhas_kimi)):
             if not raiz.is_dir():
                 _cache.pop(nome, None)
                 continue
             # O caro do Codex e do Pi é o walk, e é preciso andar pra descobrir os mtimes — então
             # a chave é o conjunto de (arquivo, mtime, tamanho), calculado no próprio walk.
-            padrao = "rollout-*.jsonl" if nome == "codex" else "*.jsonl"
+            padrao = "rollout-*.jsonl" if nome == "codex" else ("wire.jsonl" if nome == "kimi"
+                                                                else "*.jsonl")
             sig_dir = tuple(sorted(
                 (str(p), *(_assinatura(p) or (0, 0))) for p in raiz.rglob(padrao)))
             hit = _cache.get(nome)
