@@ -190,6 +190,15 @@ def test_nome_invalido_estoura(casa):
         contas.criar("Conta 2")
 
 
+def test_nome_com_quebra_de_linha_e_recusado(casa):
+    """re.match com $ casa antes do \n final — fullmatch não. Sem esta guarda, a pasta nasceria
+    com quebra de linha no nome, e label, caminho e logs ganhariam controle de linha."""
+    for nome in ("conta2\n", "conta/2", "..", "x" * 33):
+        with pytest.raises(contas.ContaError):
+            contas.criar(nome)
+    assert not (casa / ".claude-conta2\n").exists()
+
+
 def test_apagar_so_aceita_pasta_carimbada(casa):
     (casa / ".claude-backup").mkdir()
     with pytest.raises(contas.ContaError) as e:

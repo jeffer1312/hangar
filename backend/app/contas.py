@@ -74,7 +74,9 @@ def compartilhado() -> Path:
 
 
 def caminho(nome: str) -> Path:
-    if not _NOME_OK.match(nome or ""):
+    # fullmatch e não match+$: o $ casa antes de uma quebra de linha FINAL, então
+    # 'conta2\n' passava e a pasta nascia com controle de linha no nome.
+    if not _NOME_OK.fullmatch(nome or ""):
         raise ContaError(400, "nome: use minúsculas, números, '-' ou '_' (até 32 caracteres)")
     return Path.home() / f".claude-{nome}"
 
@@ -253,40 +255,84 @@ def _ligar_memoria(dir_conta: Path, projeto: str | None) -> list[str]:
     return avisos
 
 
+def _reconciliar(dir_conta: Path, projeto: str | None) -> list[str]:
+    """Corpo da reconciliação, SEM as travas — quem chama (reconciliar público ou o ciclo da
+    conta) já as segura. Validar o projeto aqui também protege o caminho do ciclo, que recebe
+    o projeto do backend sem passar pelo público."""
+    if projeto is not None and not re.fullmatch(r"[A-Za-z0-9_-]+", projeto):
+        # projeto entra em caminhos (raiz / projeto / memory): absoluto, `..` ou barra
+        # escapariam do ~/.claude/projects. O regex aceita exatamente o que o
+        # registry.sanitize_cwd produz, e nada além.
+        raise ContaError(400, "projeto inválido")
+    avisos: list[str] = []
+    for alvo in sorted(compartilhado().iterdir()):
+        if alvo.name in _NAO_LIGAR:
+            continue
+        destino = dir_conta / alvo.name
+        if destino.is_symlink() and os.readlink(destino) == str(alvo):
+            continue
+        if destino.is_symlink() or destino.exists():
+            aviso = _resolver_colisao(dir_conta, destino, alvo)
+            if aviso:
+                avisos.append(aviso)
+        _ligar(destino, alvo)
+    for p in dir_conta.iterdir():
+        # Atalho apontando pra coisa que sumiu do compartilhado.
+        if p.is_symlink() and not p.exists():
+            p.unlink()
+    avisos.extend(_ligar_memoria(dir_conta, projeto))
+    return avisos
+
+
 def reconciliar(nome: str, projeto: str | None = None) -> list[str]:
     """Refaz os atalhos da conta. Idempotente — roda a cada abertura de sessão.
 
     É isto que impede a deriva: pasta que aparecer no `~/.claude` depois entra na conta no próximo
     uso, sem ninguém rodar nada à mão. Devolve avisos (lista vazia = nada fora do lugar).
     """
-    if projeto is not None and not re.fullmatch(r"[A-Za-z0-9_-]+", projeto):
-        # projeto entra em caminhos (raiz / projeto / memory): absoluto, `..` ou barra
-        # escapariam do ~/.claude/projects. O regex aceita exatamente o que o
-        # registry.sanitize_cwd produz, e nada além.
-        raise ContaError(400, "projeto inválido")
     dir_conta = caminho(nome)
     if not e_conta(dir_conta):
         raise ContaError(404, f"{dir_conta} não é uma conta criada pelo hangar")
-    avisos: list[str] = []
     # Compartilhada primeiro, a da conta depois — sempre nesta ordem, em toda operação.
     with _trava_compartilhada(), _trava(dir_conta):
-        for alvo in sorted(compartilhado().iterdir()):
-            if alvo.name in _NAO_LIGAR:
-                continue
-            destino = dir_conta / alvo.name
-            if destino.is_symlink() and os.readlink(destino) == str(alvo):
-                continue
-            if destino.is_symlink() or destino.exists():
-                aviso = _resolver_colisao(dir_conta, destino, alvo)
-                if aviso:
-                    avisos.append(aviso)
-            _ligar(destino, alvo)
-        for p in dir_conta.iterdir():
-            # Atalho apontando pra coisa que sumiu do compartilhado.
-            if p.is_symlink() and not p.exists():
-                p.unlink()
-        avisos.extend(_ligar_memoria(dir_conta, projeto))
-    return avisos
+        return _reconciliar(dir_conta, projeto)
+
+
+class _Ciclo:
+    """A conta sob a trava do ciclo: as operações internas que a API roda DENTRO da janela em
+    que a conta não pode sumir. Só o `ciclo_conta` fabrica — a API não adquire `_trava` por
+    conta própria."""
+
+    def __init__(self, dir_conta: Path):
+        self.dir_conta = dir_conta
+
+    def reconciliar(self, projeto: str | None = None) -> list[str]:
+        return _reconciliar(self.dir_conta, projeto)
+
+    def apagar(self) -> None:
+        _apagar(self.dir_conta)
+
+
+@contextmanager
+def ciclo_conta(nome: str):
+    """Trava do ciclo de vida da conta: da reconciliação até o `registry.create` (abrir sessão),
+    e ao redor da checagem + rmtree do apagar.
+
+    Por quê: a criação de sessão é assíncrona (roda em thread) e a reconciliação tem efeito no
+    disco. Sem esta janela, um DELETE da MESMA conta no meio dela via a lista de sessões ainda
+    vazia e apagava a pasta embaixo da sessão que estava subindo — o CLI passaria a escrever num
+    caminho que sumiu. Quem abre sessão e quem apaga disputam o mesmo recurso; as duas pontas
+    usam esta mesma trava, então uma espera a outra.
+
+    O `apagar` público adquire a mesma trava sozinho (o `cp-conta` não conhece o ciclo); a API
+    usa as operações do `_Ciclo` devolvido para não se trancar duas vezes.
+    """
+    dir_conta = caminho(nome)
+    if not e_conta(dir_conta):
+        raise ContaError(404, f"{dir_conta} não é uma conta criada pelo hangar")
+    # Compartilhada primeiro, a da conta depois — sempre nesta ordem, em toda operação.
+    with _trava_compartilhada(), _trava(dir_conta):
+        yield _Ciclo(dir_conta)
 
 
 def _semear_claude_json(dir_conta: Path) -> None:
@@ -338,14 +384,24 @@ def criar(nome: str) -> Path:
             shutil.rmtree(dir_conta)
 
 
+def _apagar(dir_conta: Path) -> None:
+    """rmtree sob a trava — quem chama (apagar público ou o ciclo da conta) já validou e já
+    segura as travas."""
+    shutil.rmtree(dir_conta)
+
+
 def apagar(nome: str) -> None:
     """Some com a conta. Existe porque um nome digitado errado no cadastro ficaria pra sempre no
     seletor — `criar` só recusa sobrescrever, não desfaz.
 
     Os `.jsonl` daquela conta vão junto: são dela, e o gasto histórico dela sai do painel. Quem
     chama (a API) é quem checa se há sessão viva usando esta conta.
+
+    Adquire a mesma trava da reconciliação e do ciclo: o `cp-conta` (que não conhece o ciclo)
+    também não pode apagar a conta no meio de uma abertura de sessão.
     """
     dir_conta = caminho(nome)
     if not e_conta(dir_conta):
         raise ContaError(404, f"{dir_conta} não é uma conta criada pelo hangar")
-    shutil.rmtree(dir_conta)
+    with _trava_compartilhada(), _trava(dir_conta):
+        _apagar(dir_conta)

@@ -29,7 +29,11 @@ def _is_config_dir(p: Path) -> bool:
     # /login só roda DENTRO de uma sessão dela. Sem o marcador aqui, a conta sumia da lista
     # justamente entre criar e logar, e não havia onde abrir a sessão: impasse.
     if (p / contas.MARCADOR).is_file():
-        return True
+        # Quem decide sobre pasta carimbada é o contas.e_conta endurecido (diretório REAL,
+        # marcador REAL): o .is_file() raso segue symlink, e um ~/.claude-evil -> /tmp/fora com
+        # um marcador do lado de lá entraria na lista como conta — a reconciliação remexeria, e
+        # o apagar destruiria, o diretório externo.
+        return contas.e_conta(p)
     return (p / ".credentials.json").is_file() and (p / "projects").is_dir()
 
 
