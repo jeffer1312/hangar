@@ -4,6 +4,8 @@ from pathlib import Path
 from pydantic import AliasChoices, BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app import contas
+
 _LOOPBACK = {"127.0.0.1", "localhost", "::1", "0.0.0.0", "auto"}
 
 
@@ -23,6 +25,11 @@ def _label_for(path: Path) -> str:
 
 
 def _is_config_dir(p: Path) -> bool:
+    # Conta recém-criada ainda NÃO tem .credentials.json — quem grava esse arquivo é o /login, e o
+    # /login só roda DENTRO de uma sessão dela. Sem o marcador aqui, a conta sumia da lista
+    # justamente entre criar e logar, e não havia onde abrir a sessão: impasse.
+    if (p / contas.MARCADOR).is_file():
+        return True
     return (p / ".credentials.json").is_file() and (p / "projects").is_dir()
 
 
