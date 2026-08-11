@@ -136,6 +136,24 @@ fi
 # esperado, não uma degradação. E `display-message` pode sair 0 imprimindo VAZIO (servidor sem
 # cliente anexado); vazio viraria a URL /api/sessions//pair, então cai em "cli" também.
 me() {
+    # 1) O PANE, que é o dono de verdade. `rename-session` não reescreve env de processo já rodando,
+    # então o carimbo fica obsoleto no instante em que o usuário renomeia pelo app — e renomear é
+    # FEATURE, não acidente: perder a identidade por usá-la era o app punindo o próprio recurso. O
+    # pane id não muda no rename, e vem do env do pane, então também é imune ao cliente anexado.
+    #
+    # `list-panes -a` contando ocorrências, e não `display-message -t "$TMUX_PANE"`: o psmux
+    # (Windows) numera pane id POR SESSÃO, então `%1` pode existir em várias e o display-message
+    # devolveria UMA delas, calado — nome errado é pior que nome ausente. Contando, ambiguidade vira
+    # "não sei" e cai no carimbo. O awk monta o nome a partir do 2o campo em diante porque nome de
+    # sessão pode ter espaço.
+    local dono=""
+    if [[ -n "${TMUX_PANE:-}" ]]; then
+        dono=$(tmux list-panes -a -F '#{pane_id} #{session_name}' 2>/dev/null |
+               awk -v p="$TMUX_PANE" '$1 == p { $1 = ""; sub(/^ /, ""); s = $0; n++ }
+                                      END { if (n == 1) print s }')
+        if [[ -n "$dono" ]]; then echo "$dono"; return; fi
+    fi
+    # 2) O carimbo do nascimento, só se a sessão AINDA se chamar assim (Windows, ou tmux sem pane).
     if [[ -n "${CP_SESSION_NAME:-}" ]] && tmux has-session -t "=$CP_SESSION_NAME" 2>/dev/null; then
         echo "$CP_SESSION_NAME"; return
     fi
