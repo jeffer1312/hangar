@@ -155,6 +155,24 @@ def test_new_session_falls_back_to_backend_config_dir(monkeypatch):
     assert "CLAUDE_CONFIG_DIR=/home/u/.claude-work" in captured["args"]
 
 
+def test_new_session_sempre_manda_config_dir(monkeypatch, tmp_path):
+    """SEM config_dir e SEM a variavel, o -e tem que sair mesmo assim, com o ~/.claude explicito.
+
+    O ambiente do pane e o global do SERVIDOR tmux somado ao da sessao, e o global vem de quem
+    subiu o servidor. Se foi um `claude-conta contaA`, uma sessao aberta depois sem -e nasce na
+    contaA em silencio — a troca de conta que esta feature existe pra impedir. Reproduzido a mao:
+        CLAUDE_CONFIG_DIR=/tmp/conta-a tmux -L t new-session -d -s um 'sleep 30'
+        env -u CLAUDE_CONFIG_DIR tmux -L t new-session -d -s dois 'sh -c "echo $CLAUDE_CONFIG_DIR"'
+        -> /tmp/conta-a
+    """
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    captured = {}
+    with patch.object(tmux, "RUN", lambda args, **k: (captured.update(args=args) or _CP())):
+        tmux.new_session("s", "/tmp", "claude --session-id x")
+    assert f"CLAUDE_CONFIG_DIR={tmp_path}/.claude" in captured["args"]
+
+
 def test_scope_prefix_empty_without_runtime_dir(monkeypatch):
     # Sem XDG_RUNTIME_DIR (host nao-systemd) -> spawn direto, sem wrap.
     monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)

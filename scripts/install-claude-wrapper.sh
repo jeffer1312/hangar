@@ -79,6 +79,7 @@ ensure_block() {
 
 install_posix() {  # $1 = rc file
   ensure_block "$1" "source \"$SHELL_DIR/claude.posix.sh\"
+source \"$SHELL_DIR/claude-conta.posix.sh\"
 source \"$SHELL_DIR/codex.posix.sh\"
 source \"$SHELL_DIR/claude-engine.posix.sh\"
 source \"$SHELL_DIR/pi.posix.sh\""
@@ -86,7 +87,7 @@ source \"$SHELL_DIR/pi.posix.sh\""
 
 install_fish() {
   local name dst src
-  for name in claude codex claude-engine pi; do
+  for name in claude codex claude-engine claude-conta pi; do
     src="$SHELL_DIR/$name.fish"
     dst="$HOME/.config/fish/functions/$name.fish"
     mkdir -p "$(dirname "$dst")"
@@ -108,6 +109,12 @@ echo "  installed Codex helper -> $HOME/.local/bin/cp-codex"
 chmod +x "$SCRIPT_DIR/cp-engine"
 ln -sfn "$SCRIPT_DIR/cp-engine" "$HOME/.local/bin/cp-engine"
 echo "  installed engine helper -> $HOME/.local/bin/cp-engine"
+
+# Helper de contas (claude-conta). Symlink absoluto, mesma regra dos dois acima: descoberta do
+# backend/.env preservada de qualquer cwd e atualização automática depois de git pull.
+chmod +x "$SCRIPT_DIR/cp-conta"
+ln -sfn "$SCRIPT_DIR/cp-conta" "$HOME/.local/bin/cp-conta"
+echo "  installed account helper -> $HOME/.local/bin/cp-conta"
 
 # Point Claude Code's statusLine at scripts/omniroute-statusline.js so the app parses it reliably.
 install_statusline() {

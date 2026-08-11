@@ -141,6 +141,55 @@ def _proc_stat_path(pid: int) -> str:
     return f"/proc/{pid}/stat"
 
 
+# Raiz do /proc, indireta só para o teste da varredura apontar pra um /proc de mentira
+# (mesma função dos _proc_environ_path/_proc_stat_path).
+_PROC_ROOT = "/proc"
+
+
+def _pids_com_config_dir(alvo: Path) -> list[int]:
+    """Pids de processos VIVOS cujo CLAUDE_CONFIG_DIR é `alvo` (comparação por caminho
+    normalizado).
+
+    É a consulta que a borda destrutiva (DELETE de conta) usa: um `claude` aberto FORA do tmux
+    não aparece no registry, mas tem o config dir no próprio ambiente — apagar a conta debaixo
+    dele deixaria o processo escrevendo num caminho que sumiu. Quem não tem a var (config dir
+    padrão) não casa; quem não dá pra ler (morto no meio, outro dono) também não — e a API tem
+    a própria resolução fail-closed por sessão do registry pra cobrir a dúvida.
+    """
+    alvo_resolvido = alvo.resolve()
+    if not _TEM_PROC:
+        achados = []
+        try:
+            for proc in psutil.process_iter(attrs=["pid"]):
+                v = _env_psutil(proc.info["pid"]).get("CLAUDE_CONFIG_DIR")
+                if v and Path(v).resolve() == alvo_resolvido:
+                    achados.append(proc.info["pid"])
+        except psutil.Error:
+            pass   # varredura morreu no meio: devolve o que achou até aqui, nunca exceção
+        return achados
+    achados = []
+    try:
+        entradas = os.listdir(_PROC_ROOT)
+    except OSError:
+        return achados
+    for entrada in entradas:
+        if not entrada.isdigit():
+            continue
+        try:
+            with open(f"{_PROC_ROOT}/{entrada}/environ", "rb") as fh:
+                env = fh.read()
+        except OSError:
+            continue
+        for kv in env.split(b"\x00"):
+            if kv.startswith(b"CLAUDE_CONFIG_DIR="):
+                # surrogateescape = round-trip fiel dos bytes POSIX (mesmo do _config_dir_of).
+                v = kv.split(b"=", 1)[1].decode("utf-8", "surrogateescape")
+                if Path(v).resolve() == alvo_resolvido:
+                    achados.append(int(entrada))
+                break
+    return achados
+
+
 def _proc_start_time(pid: int) -> Optional[float]:
     if not _TEM_PROC:
         return _start_time_psutil(pid)

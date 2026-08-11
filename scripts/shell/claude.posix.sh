@@ -101,6 +101,18 @@ claude() {
         name="$base-$i"; i=$((i + 1))
     done
 
+    # Conta Claude (claude-conta setou CLAUDE_CONFIG_DIR): tmux NAO herda o env de quem chama —
+    # sem repassar aqui, a sessao nasceria na conta padrao, calada. Aqui pode ir por `-e` (ao
+    # contrario da key do motor, que vai pelo `cp-engine --exec` justamente pra nao aparecer em
+    # /proc/<pid>/cmdline): isto e um caminho, nao um segredo. Variavel vazia em posicao de
+    # ARGUMENTO some da linha (a armadilha do `$run` acima e so para posicao de COMANDO).
+    # Passado SEMPRE, nao so quando o chamador tem a variavel: o servidor tmux guarda o ambiente
+    # com que foi INICIADO, e omitir o `-e` numa sessao posterior nao remove a variavel — o pane
+    # nasceria na conta de uma sessao antiga. Chamador sem a variavel -> padrao explicito
+    # ($HOME/.claude), nunca string vazia (diretorio invalido/indefinido pro claude).
+    local -a cfg
+    cfg=(-e "CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR:-$HOME/.claude}")
+
     # duplicated call: zsh doesn't word-split an unquoted prefix var, so no $run trick here.
     # O `command -v` diz que o BINARIO existe, nao que ele FUNCIONA: o gerenciador systemd do usuario
     # pode recusar criar scope transiente ("Failed to start transient scope unit"), e ai o `claude`
@@ -116,11 +128,11 @@ claude() {
         systemd-run --user --scope --collect -q -- tmux new-session -s "$name" -c "$PWD" \
             -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 \
             -e "CP_SESSION_NAME=$name" \
-            "${pre[@]}" claude --session-id "$id" "$@"
+            "${cfg[@]}" "${pre[@]}" claude --session-id "$id" "$@"
     else
         tmux new-session -s "$name" -c "$PWD" \
             -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 \
             -e "CP_SESSION_NAME=$name" \
-            "${pre[@]}" claude --session-id "$id" "$@"
+            "${cfg[@]}" "${pre[@]}" claude --session-id "$id" "$@"
     fi
 }

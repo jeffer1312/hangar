@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""CLI de contas Claude, para o wrapper de shell chamar.
+
+Mesma razão de existir do cp-engine: a regra mora num lugar SÓ. O backend importa app.contas
+direto; o shell não pode (não tem venv), então chama este script com o python3 do sistema.
+
+  cp-conta --list          -> um nome de conta por linha
+  cp-conta --prep <nome>   -> refaz os atalhos e imprime o caminho do config dir
+  cp-conta --new <nome>    -> cria a conta e imprime o caminho
+"""
+import sys
+from pathlib import Path
+
+# app.contas é stdlib pura (garantido por teste): importável sem instalar o backend.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
+
+from app import contas  # noqa: E402
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) == 2 and argv[1] == "--list":
+        for nome in contas.listar():
+            print(nome)
+        return 0
+
+    if len(argv) == 3 and argv[1] in ("--prep", "--new"):
+        nome = argv[2]
+        try:
+            if argv[1] == "--new":
+                print(contas.criar(nome))
+            else:
+                # Sem `projeto`: daqui não dá pra sanitizar o cwd sem duplicar a regra do
+                # registry.sanitize_cwd. A varredura do que já existe cobre todo projeto conhecido;
+                # projeto novo aberto pelo terminal ganha a memória na abertura seguinte.
+                for aviso in contas.reconciliar(nome):
+                    print(f"cp-conta: {aviso}", file=sys.stderr)
+                print(contas.caminho(nome))
+        except contas.ContaError as e:
+            print(f"cp-conta: {e.detail}", file=sys.stderr)
+            return 1
+        return 0
+
+    print(__doc__, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv))
+    except OSError as e:
+        # Mesma borda do cp-engine: traceback aqui vazaria pro usuario errado (o wrapper de shell).
+        print(f"cp-conta: falha ao executar: {e}", file=sys.stderr)
+        sys.exit(126)

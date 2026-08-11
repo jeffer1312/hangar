@@ -480,10 +480,25 @@ if ($precisa) {
 # input). Sessao criada PELO app funciona de qualquer jeito; isto e sobre a outra direcao.
 Titulo '5/8 Wrapper do claude (sessao aberta por voce aparece no app)'
 $marca = '# >>> hangar >>>'
+$marcaFim = '# <<< hangar <<<'
 $perfil = $PROFILE.CurrentUserAllHosts
 $jaTem = (Test-Path $perfil) -and (Select-String -Path $perfil -Pattern ([regex]::Escape($marca)) -Quiet)
 if ($jaTem) {
-    Ok 'bloco ja presente no seu $PROFILE'
+    # Bloco antigo (instalado antes do claude-conta existir) nao deixa o wrapper novo de fora:
+    # reescreve o conteudo ENTRE as marcas, preservando o resto do perfil.
+    $linhas = Get-Content -Path $perfil
+    $ini = [Array]::IndexOf($linhas, $marca)
+    $fim = [Array]::IndexOf($linhas, $marcaFim)
+    $temConta = ($linhas -match 'claude-conta\.ps1').Count -gt 0
+    if (-not $temConta -and $ini -ge 0 -and $fim -gt $ini) {
+        if ($ini -gt 0) { $antes = @($linhas[0..($ini - 1)]) } else { $antes = @() }
+        if ($fim -lt ($linhas.Count - 1)) { $depois = @($linhas[($fim + 1)..($linhas.Count - 1)]) } else { $depois = @() }
+        $bloco = @($marca, ". `"$raiz\scripts\shell\claude.ps1`"", ". `"$raiz\scripts\shell\claude-conta.ps1`"", $marcaFim)
+        Set-Content -Path $perfil -Value ($antes + $bloco + $depois)
+        Ok 'bloco do $PROFILE atualizado (claude-conta incluido)'
+    } else {
+        Ok 'bloco ja presente no seu $PROFILE'
+    }
 } elseif (Pergunte '  Instalar (recomendado)?') {
     # O Windows vem com ExecutionPolicy = Restricted, que recusa carregar QUALQUER perfil. Escrever
     # o bloco assim mesmo nao so deixaria o wrapper sem carregar: todo terminal novo passaria a
@@ -510,6 +525,7 @@ if ($jaTem) {
 
 $marca
 . "$raiz\scripts\shell\claude.ps1"
+. "$raiz\scripts\shell\claude-conta.ps1"
 # <<< hangar <<<
 "@
     Ok "bloco adicionado em $perfil"
@@ -1158,6 +1174,17 @@ if (-not $bash) {
         Set-Content -Path $lancador -Value $conteudo -Encoding ASCII -NoNewline
         Ok "lancador cp-send.cmd criado em $binUsuario"
     } else { Ok 'lancador cp-send.cmd ja atualizado' }
+
+    # (2b) mesmo lancador pro cp-conta (helper de contas do claude-conta): sem ele o
+    # claude-conta.ps1 falha com "cp-conta nao e reconhecido" antes de abrir o Claude.
+    $lancadorConta = Join-Path $binUsuario 'cp-conta.cmd'
+    $conteudoConta = "@echo off`r`n" +
+                     "set `"PATH=%USERPROFILE%\.local\bin;%PATH%`"`r`n" +
+                     "`"$bash`" `"$raiz\scripts\cp-conta`" %*`r`n"
+    if (-not (Test-Path $lancadorConta) -or (Get-Content $lancadorConta -Raw) -ne $conteudoConta) {
+        Set-Content -Path $lancadorConta -Value $conteudoConta -Encoding ASCII -NoNewline
+        Ok "lancador cp-conta.cmd criado em $binUsuario"
+    } else { Ok 'lancador cp-conta.cmd ja atualizado' }
 
     # (3) PATH do usuario, pra `cp-send` funcionar de qualquer terminal (e pro bash achar o shim).
     $pathUsuario = [Environment]::GetEnvironmentVariable('Path', 'User')

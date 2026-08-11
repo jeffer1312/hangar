@@ -297,6 +297,20 @@ export function createSession(
   });
 }
 
+// Cria a pasta da conta Claude no servidor. NÃO loga — o OAuth é interativo e roda dentro da
+// primeira sessão aberta nela (o backend devolve a conta com active=false justamente por isso).
+export async function criarConta(nome: string): Promise<ConfigDirInfo> {
+  return apiFetch<ConfigDirInfo>('/api/claude-configs', {
+    method: 'POST',
+    body: JSON.stringify({ nome }),
+  });
+}
+
+// Apaga a conta e os transcripts dela no servidor. Recusa 409 se houver sessão viva usando-a.
+export async function apagarConta(nome: string): Promise<void> {
+  await apiFetch(`/api/claude-configs/${encodeURIComponent(nome)}`, { method: 'DELETE' });
+}
+
 // Web Push: chave VAPID publica deste servidor (applicationServerKey). Vazia = push desligado la.
 export async function getVapidKey(s: Server): Promise<string> {
   const res = await fetch(`${s.baseUrl}/api/push/vapid`, {

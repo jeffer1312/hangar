@@ -3,7 +3,8 @@
   import BottomSheet from './BottomSheet.svelte';
   import Select from './Select.svelte';
   import FolderScanner from './FolderScanner.svelte';
-  import { getSessions, listClaudeConfigs, getEngines, type Motor } from '../lib/api';
+  import { getSessions, listClaudeConfigs, getEngines, criarConta, apagarConta,
+           type Motor } from '../lib/api';
   import { basename, providerName } from '../lib/format';
   import { selectServer, getActiveId, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
@@ -63,6 +64,16 @@
   // Motor de modelo (Task 5): '' = conta Anthropic (o padrão de sempre). Só faz sentido com provider claude.
   let engine = $state('');
   let motores = $state<Record<string, Motor>>({});
+  // Criar conta pela tela: botão "+ conta" no seletor. Ocupada = POST em voo (desabilita o botão);
+  // avisoConta leva a mensagem pro usuário (sucesso ou erro).
+  let contaOcupada = $state(false);
+  let avisoConta = $state('');
+  // Path da conta criada com sucesso nesta abertura: o aviso do /login só vale enquanto a
+  // seleção aponta pra ela — trocou a conta, o texto não pode continuar afirmando o que a
+  // próxima sessão não vai ser. Erro e "criada mas não listada" ficam com null.
+  let contaCriadaPath = $state<string | null>(null);
+  // O aviso é erro (role=alert) ou status (role=status) — leitor de tela anuncia diferente.
+  let contaErro = $state(false);
   // Guard de corrida: trocas rapidas de servidor deixam fetches em voo; so a resposta do ULTIMO
   // pedido pode escrever (senao a lista de um servidor antigo aterrissava por cima da atual).
   // Motores tambem sao POR SERVIDOR (cada um tem seu proprio ~/.claude/engines.json) -- por isso
@@ -86,6 +97,126 @@
     getEngines()
       .then((r) => { if (seq === cfgSeq) motores = r.motores; })
       .catch(() => { if (seq === cfgSeq) motores = {}; });
+  }
+
+  // Campo inline em vez de prompt(): o prompt nativo pode ser suprimido pelo navegador
+  // ("impedir que esta página crie mais diálogos") e aí o clique vira nada, calado.
+  let pedindoNome = $state(false);
+  let nomeConta = $state('');
+
+  function abrirCampoConta() {
+    nomeConta = '';
+    avisoConta = '';
+    contaCriadaPath = null;
+    contaErro = false;
+    confirmandoApagar = false;
+    pedindoNome = true;
+  }
+
+  // Só conta criada pelo hangar (`~/.claude-<nome>`) pode ser apagada, e nunca a que está em uso
+  // pelo backend: o servidor recusa as duas com 409, mas oferecer o botão pra depois negar é pior
+  // que não oferecer. `label` não serve de teste — o backend rotula pelo conteúdo, não pelo nome.
+  const contaSelecionada = $derived(configs.find((c) => c.path === selectedConfig) ?? null);
+  const nomeDaSelecionada = $derived(
+    contaSelecionada && !contaSelecionada.active
+      ? (contaSelecionada.path.split('/').pop() ?? '').match(/^\.claude-(.+)$/)?.[1] ?? null
+      : null,
+  );
+
+  // Confirmação DENTRO da tela: `confirm()` nativo tem o mesmo defeito do `prompt()` — o navegador
+  // pode suprimi-lo e aí apagar vira um clique que não faz nada, ou pior, faz sem perguntar.
+  let confirmandoApagar = $state(false);
+
+  async function apagar() {
+    const nome = nomeDaSelecionada;
+    if (!nome) return;
+    const seq = ++cfgSeq;
+    const serverId = targetServer;
+    contaOcupada = true;
+    avisoConta = '';
+    contaErro = false;
+    contaCriadaPath = null;
+    try {
+      await apagarConta(nome);
+      if (seq !== cfgSeq || targetServer !== serverId) return;
+      confirmandoApagar = false;
+      let cs: ConfigDirInfo[];
+      try {
+        cs = await listClaudeConfigs();
+      } catch {
+        if (seq !== cfgSeq || targetServer !== serverId) return;
+        avisoConta = `Conta ${nome} apagada, mas não consegui atualizar a lista — recarregue a tela.`;
+        return;
+      }
+      if (seq !== cfgSeq || targetServer !== serverId) return;
+      configs = cs;
+      // A seleção apontava pra pasta que sumiu: mandar esse caminho no create daria 400.
+      selectedConfig = cs.find((c) => c.active)?.path ?? cs[0]?.path ?? null;
+      avisoConta = `Conta ${nome} apagada.`;
+    } catch (e) {
+      if (seq !== cfgSeq || targetServer !== serverId) return;
+      contaErro = true;
+      avisoConta = e instanceof Error ? e.message : 'não consegui apagar a conta';
+    } finally {
+      if (seq === cfgSeq) contaOcupada = false;
+    }
+  }
+
+  async function novaConta() {
+    const nome = nomeConta.trim();
+    if (!nome) {
+      // Cancelou: encerra a intenção de criar. Feedback de tentativa anterior (sucesso ou erro)
+      // não pode sobrar na tela como se valesse pro fluxo atual.
+      avisoConta = '';
+      contaCriadaPath = null;
+      contaErro = false;
+      return;
+    }
+    // Geração desta operação — a MESMA guarda do loadConfigs: um GET antigo (da abertura, ou do
+    // servidor anterior) que aterrissar depois não pode sobrescrever a seleção da conta nova.
+    // Sem isto, o loadConfigs em voo re-escolheria a conta ativa por cima do caminho criado.
+    const seq = ++cfgSeq;
+    const serverId = targetServer;
+    contaOcupada = true;
+    avisoConta = '';
+    contaErro = false;
+    try {
+      const c = await criarConta(nome);
+      if (seq !== cfgSeq || targetServer !== serverId) return;
+      // Refresh em FASE PRÓPRIA: o POST já respondeu 200, então falha do GET não é falha da
+      // criação — reportá-la como tal faria o usuário tentar de novo e levar 409.
+      let cs: ConfigDirInfo[];
+      try {
+        cs = await listClaudeConfigs();
+      } catch {
+        if (seq !== cfgSeq || targetServer !== serverId) return;
+        avisoConta = 'Conta criada, mas não consegui atualizar a lista — recarregue a tela.';
+        return;
+      }
+      if (seq !== cfgSeq || targetServer !== serverId) return;
+      configs = cs;
+      // Exige que o caminho voltou do servidor antes de selecionar: selecionar um valor que não
+      // está nas opções mandaria um config_dir órfão pro create() (400 do backend).
+      const criada = cs.find((x) => x.path === c.path);
+      if (criada) {
+        pedindoNome = false;
+        nomeConta = '';
+        selectedConfig = criada.path;
+        contaCriadaPath = criada.path;
+        avisoConta = 'Conta criada. A sessão vai subir DESLOGADA — rode /login nela uma vez.';
+      } else {
+        contaCriadaPath = null;
+        avisoConta = 'Conta criada, mas ainda não apareceu na lista — recarregue a tela.';
+      }
+    } catch (e) {
+      if (seq !== cfgSeq || targetServer !== serverId) return;
+      contaErro = true;
+      avisoConta = e instanceof Error ? e.message : 'não consegui criar a conta';
+    } finally {
+      // Só a operação VIGENTE libera o botão: o finally de uma operação antiga (sheet fechado e
+      // reaberto no meio do POST) não pode derrubar o estado da nova.
+      if (seq === cfgSeq) contaOcupada = false;
+    }
   }
 
   // Escape hatch: digitar o caminho na mao.
@@ -112,6 +243,13 @@
       manualPath = '';
       provider = 'claude';
       engine = '';
+      // Feedback da criação de conta não pode vazar entre aberturas: o botão liberado, o aviso
+      // limpo e a conta criada esquecida — o cfgSeq do loadConfigs abaixo invalida qualquer
+      // novaConta que ainda esteja em voo da abertura anterior.
+      contaOcupada = false;
+      avisoConta = '';
+      contaCriadaPath = null;
+      contaErro = false;
       const cur = getActiveId();
       const target = servers.find((s) => s.id === cur) ? cur! : servers[0]?.id ?? '';
       if (target) pickTarget(target);      // pickTarget ja carrega configs E motores do alvo
@@ -268,14 +406,58 @@
         </div>
       </div>
 
-      {#if provider === 'claude' && configs.length > 1}
+      {#if provider === 'claude'}
         <div class="field">
-          <label class="field-label" for="cfg-pick">Claude config</label>
-          <Select id="cfg-pick" class="field-input" ariaLabel="Configuração"
-            value={selectedConfig ?? ''}
-            opcoes={configs.map((c) => ({
-              value: c.path, label: c.label, hint: c.active ? 'atual' : undefined, title: c.path }))}
-            onchange={(v) => (selectedConfig = v)} />
+          <label class="field-label" for="cfg-pick">Conta Claude</label>
+          <div class="conta-row">
+            <Select id="cfg-pick" class="field-input" ariaLabel="Conta"
+              value={selectedConfig ?? ''}
+              opcoes={configs.map((c) => ({
+                value: c.path, label: c.label, hint: c.active ? 'atual' : undefined, title: c.path }))}
+              onchange={(v) => (selectedConfig = v)} />
+            <button type="button" class="ghost-btn conta-add" onclick={abrirCampoConta}
+              disabled={contaOcupada} aria-busy={contaOcupada}
+              aria-label={contaOcupada ? 'Criando conta Claude' : 'Adicionar conta Claude'}>
+              {contaOcupada ? '…' : '+ conta'}
+            </button>
+            {#if nomeDaSelecionada && !pedindoNome && !confirmandoApagar}
+              <button type="button" class="ghost-btn conta-add" onclick={() => (confirmandoApagar = true)}
+                disabled={contaOcupada}
+                aria-label={`Apagar a conta ${nomeDaSelecionada}`}>apagar</button>
+            {/if}
+          </div>
+          {#if confirmandoApagar && nomeDaSelecionada}
+            <div class="conta-row conta-nova">
+              <p class="conta-hint conta-confirma">
+                Apagar <strong>{nomeDaSelecionada}</strong> e as conversas dela?
+              </p>
+              <button type="button" class="ghost-btn conta-add conta-perigo" onclick={apagar}
+                disabled={contaOcupada}>{contaOcupada ? '…' : 'apagar'}</button>
+              <button type="button" class="ghost-btn conta-add"
+                onclick={() => (confirmandoApagar = false)} disabled={contaOcupada}>cancelar</button>
+            </div>
+          {/if}
+          {#if pedindoNome}
+            <div class="conta-row conta-nova">
+              <!-- svelte-ignore a11y_autofocus -->
+              <input class="field-input" type="text" autofocus bind:value={nomeConta}
+                placeholder="nome da conta (minúsculas, números, - ou _)"
+                aria-label="Nome da conta nova" disabled={contaOcupada}
+                onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); novaConta(); }
+                                    else if (e.key === 'Escape') pedindoNome = false; }} />
+              <button type="button" class="ghost-btn conta-add" onclick={novaConta}
+                disabled={contaOcupada || !nomeConta.trim()}>criar</button>
+              <button type="button" class="ghost-btn conta-add" onclick={() => (pedindoNome = false)}
+                disabled={contaOcupada}>cancelar</button>
+            </div>
+          {/if}
+          {#if avisoConta && (!contaCriadaPath || selectedConfig === contaCriadaPath)}
+            {#if contaErro}
+              <p class="conta-hint" role="alert">{avisoConta}</p>
+            {:else}
+              <p class="conta-hint" role="status" aria-live="polite" aria-atomic="true">{avisoConta}</p>
+            {/if}
+          {/if}
         </div>
       {/if}
 
@@ -501,6 +683,38 @@
     border-color: var(--accent);
     box-shadow: 0 0 0 2px var(--accent-dim);
   }
+
+  /* Linha do seletor de conta + botão de cadastrar. O combo estica (flex: 1) e o botão fica
+     fixo à direita; o aviso do /login vai embaixo. */
+  .conta-row { display: flex; gap: 8px; align-items: center; }
+  .conta-row :global(.field-input) { flex: 1; min-width: 0; }
+  /* Especificidade de 2 classes: .ghost-btn (width:100%) vem DEPOIS no arquivo e, com uma classe
+     só, venceria pela ordem da cascata — o botão comeria a linha e colapsaria o Select. */
+  .conta-row .conta-add {
+    flex: 0 0 auto;
+    width: auto;
+    height: 40px;                 /* mesma altura do .sel-campo, pra linha alinhar */
+    margin-top: 0;
+    padding: 0 var(--space-3);
+    background: var(--surface-inset);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+    white-space: nowrap;
+    transition: border-color 140ms var(--ease-out), color 140ms var(--ease-out);
+  }
+  .conta-row .conta-add:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--text-primary);
+  }
+  .conta-row .conta-add:disabled { opacity: 0.45; cursor: default; }
+  .conta-nova { margin-top: var(--space-2); }
+  .conta-confirma { flex: 1; min-width: 0; margin: 0; }
+  .conta-row .conta-perigo { color: var(--error); border-color: var(--error); }
+  .conta-row .conta-perigo:hover:not(:disabled) { color: var(--error); border-color: var(--error); }
+  .conta-nova :global(.field-input) { height: 40px; }
+  .conta-hint { margin: var(--space-2) 0 0; font-size: 12px; color: var(--text-secondary); }
 
   .error-msg {
     font-size: var(--text-sm);

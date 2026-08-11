@@ -4,6 +4,7 @@ import logging
 import subprocess
 import threading
 import time
+from pathlib import Path
 
 RUN = subprocess.run
 
@@ -354,7 +355,16 @@ def new_session(name: str, cwd: str, command: str, config_dir: str | None = None
     # Ver docs/tmux-truecolor-setup.md.
     # Retorna False quando o tmux recusa (ex: nome duplicado) -> o caller NAO pode mapear a sessao
     # nova pra um jsonl, senao reusaria a sessao existente de mesmo nome (= "sessao nova foi pra 0").
-    cfg = config_dir or os.environ.get("CLAUDE_CONFIG_DIR")
+    # Padrao EXPLICITO, nunca "sem -e": o ambiente do pane e o global do SERVIDOR tmux somado ao
+    # da sessao, e o global vem de quem subiu o servidor. Se foi um `claude-conta contaA`, toda
+    # sessao aberta depois SEM -e nasce na contaA, calada — exatamente a troca silenciosa de conta
+    # que esta feature existe pra impedir. Reproduzido:
+    #   CLAUDE_CONFIG_DIR=/tmp/conta-a tmux -L t new-session -d -s um 'sleep 30'
+    #   env -u CLAUDE_CONFIG_DIR tmux -L t new-session -d -s dois 'sh -c "echo $CLAUDE_CONFIG_DIR"'
+    #   -> /tmp/conta-a
+    # String vazia nao serve de padrao: viraria config dir "" e cada leitor decide se trata como
+    # ausente. O wrapper do shell (scripts/shell/claude.posix.sh) usa a MESMA regra.
+    cfg = config_dir or os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude")
     # CP_SESSION_NAME: identidade CARIMBADA no nascimento — "quem sou eu" pra tudo que roda dentro do
     # pane (o cp-send usa pra assinar recado, parear e desparear). Antes o cp-send perguntava
     # `tmux display-message -p '#S'`, que NAO e propriedade de quem chama: e a "sessao corrente",
@@ -378,10 +388,10 @@ def new_session(name: str, cwd: str, command: str, config_dir: str | None = None
     if wl:
         # sem isto o wl-paste dentro do pane nao conecta -> paste de imagem no Claude Code morre.
         args += ["-e", f"WAYLAND_DISPLAY={wl}"]
-    if cfg:
-        # sessao app-criada usa o MESMO config dir que o backend (ou o escolhido), em vez de cair
-        # no ~/.claude default (deslogado -> tela de boas-vindas).
-        args += ["-e", f"CLAUDE_CONFIG_DIR={cfg}"]
+    # SEMPRE, sem `if`: sessao app-criada usa o config dir escolhido (ou o do backend, ou o padrao
+    # explicito) — e omitir o -e e justamente o que deixa a conta vazar do servidor tmux, ver o
+    # comentario do `cfg` acima.
+    args += ["-e", f"CLAUDE_CONFIG_DIR={cfg}"]
     # `exec`: o tmux SEMPRE roda o comando via `$SHELL -c` (fish aqui). Sem exec, o fish fica como
     # dono do tty/grupo de foreground e o `send-keys` (input do app) NAO chega no claude -> ele
     # renderiza mas nunca le o teclado. Com exec o fish vira o claude (dono do tty) -> input chega.
