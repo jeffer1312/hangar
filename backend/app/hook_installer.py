@@ -1,4 +1,5 @@
 import json
+import os
 import shlex
 import sys
 from pathlib import Path
@@ -28,16 +29,26 @@ def _tokens(command: str) -> list[str]:
         return command.split() or [command]
 
 
-def _refers_to(command: object, script: str) -> bool:
+def _refers_to(command: object, script: str, por_nome: bool = False) -> bool:
     """True se este hook e NOSSO: o command referencia o arquivo `script`, nao importa o
     formato ('python3 X', '"/venv/bin/python3" "X"', com ou sem aspas).
 
     Comparar a string INTEIRA foi o que duplicou os hooks quando o formato do command
     mudou — a entrada antiga deixou de ser reconhecida e uma nova foi acrescentada.
-    Casa pelo caminho: outro checkout do repo aponta pra outro arquivo, logo e outro hook."""
+    Casa pelo caminho: outro checkout do repo aponta pra outro arquivo, logo e outro hook.
+
+    `por_nome=True` afrouxa pro NOME do arquivo. E o que a trava do tmux (guard_tmux.py) usa:
+    ela mudou de caminho uma vez (repo -> symlink em <config>/hooks/, pra passar na allowlist do
+    pi) e dois config dirs desta maquina compartilham o mesmo settings.json — nos dois casos o
+    casamento por caminho nao reconhecia a entrada anterior e ia empilhando copias da mesma
+    trava. Pra um guard global isso e o certo: uma so, valendo pra qualquer checkout."""
     if not isinstance(command, str):
         return False
-    return any(t.strip("\"'") == script for t in _tokens(command))
+    alvo = os.path.basename(script) if por_nome else script
+    return any(
+        (os.path.basename(t.strip("\"'")) if por_nome else t.strip("\"'")) == alvo
+        for t in _tokens(command)
+    )
 
 
 def _load_settings(settings_path: Path) -> dict | None:
@@ -59,7 +70,9 @@ def _load_settings(settings_path: Path) -> dict | None:
     return data
 
 
-def _sync_hook(data: dict, event: str, command: str, matcher: str | None = None) -> bool:
+def _sync_hook(
+    data: dict, event: str, command: str, matcher: str | None = None, por_nome: bool = False
+) -> bool:
     """Deixa EXATAMENTE UMA entrada nossa sob hooks[event], com o command atual.
     Formato antigo e substituido no lugar; duplicatas colapsam na primeira ocorrencia
     (o installer roda a cada subida do backend, entao ele cura a bagunca que criou).
@@ -81,7 +94,7 @@ def _sync_hook(data: dict, event: str, command: str, matcher: str | None = None)
             continue
         surviving = []
         for h in entries:
-            if isinstance(h, dict) and _refers_to(h.get("command"), script):
+            if isinstance(h, dict) and _refers_to(h.get("command"), script, por_nome):
                 if kept:
                     changed = True  # duplicata nossa -> descarta
                     continue
@@ -134,13 +147,19 @@ _STATE_COMMAND = f'"{sys.executable}" "{STATE_HOOK}"'  # mesma razao do _COMMAND
 _STATE_EVENTS = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "SessionStart"]
 
 
-def _ensure_event_hook(settings_path: Path, event: str, command: str) -> bool:
+def _ensure_event_hook(
+    settings_path: Path,
+    event: str,
+    command: str,
+    matcher: str | None = None,
+    por_nome: bool = False,
+) -> bool:
     """Garante UMA entrada {command} sob settings['hooks'][event], preservando todo o resto.
     Mesma blindagem do _ensure_settings_file: settings.json quebrado/estranho e PULADO (False)."""
     data = _load_settings(settings_path)
     if data is None:
         return False
-    if not _sync_hook(data, event, command):
+    if not _sync_hook(data, event, command, matcher=matcher, por_nome=por_nome):
         return False
     _write(settings_path, data)
     return True
@@ -163,6 +182,70 @@ def ensure_state_hooks_installed() -> list[str]:
                 if _ensure_event_hook(d / "settings.json", ev, _STATE_COMMAND):
                     changed = True
             if changed:
+                touched.append(str(d))
+        except Exception:
+            continue
+    return touched
+
+
+GUARD_HOOK = str((Path(__file__).parent.parent / "hooks" / "guard_tmux.py").resolve())
+
+
+def _guard_path(config_dir: Path) -> str:
+    """Caminho do guard a registrar no settings.json daquele config dir.
+
+    Preferimos um symlink em `<config>/hooks/guard_tmux.py` em vez do caminho do repo por causa
+    do **pi**: o adaptador dele (`~/.pi/agent/claude-hooks-adapter.json`) so roda hooks cujo
+    command casa a allowlist, e o DEFAULT dela e `/.claude/hooks/`, `/Projetos/skills/`,
+    `rtk hook` — um command apontando pro checkout do hangar e simplesmente ignorado la, sem
+    erro nenhum (a pior falha possivel: parece protegido e nao esta). Pelo symlink a trava vale
+    nos tres motores sem editar config de ninguem.
+
+    Symlink falhou (Windows sem privilegio, FS sem suporte)? Cai no caminho do repo: Claude e
+    Kimi continuam protegidos e o pi fica de fora — pior que o ideal, melhor que sem trava."""
+    link = config_dir / "hooks" / "guard_tmux.py"
+    try:
+        link.parent.mkdir(parents=True, exist_ok=True)
+        if link.is_symlink() and os.readlink(link) == GUARD_HOOK:
+            return str(link)
+        if link.exists() or link.is_symlink():
+            link.unlink()
+        link.symlink_to(GUARD_HOOK)
+        return str(link)
+    except OSError:
+        return GUARD_HOOK
+
+
+def ensure_guard_hooks_installed() -> list[str]:
+    """Instala (idempotente) a trava de `tmux kill-server` sem -L/-S em cada config dir.
+
+    Vive AQUI, no instalador do app, e nao no ~/.claude de quem escreveu: a maquina que roda o
+    hangar e justamente a que tem varias sessoes tmux vivas pra perder, e subagente nasce sem
+    memoria e sem regra de CLAUDE.md de quem o criou. Fail-soft igual aos outros."""
+    try:
+        dirs = {Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()}
+    except Exception:
+        return []
+    touched: list[str] = []
+    vistos: set[Path] = set()
+    # Ordem DETERMINISTICA, com `.claude` na frente: quando varios config dirs dividem o mesmo
+    # settings.json, quem escreve primeiro define o caminho que fica gravado — e o pi so roda
+    # hook cujo command casa `/.claude/hooks/`. Iterando o set cru, o sorteio as vezes gravava
+    # `~/.claude-jefferson/hooks/...` e a trava sumia silenciosamente no pi.
+    for d in sorted(dirs, key=lambda p: (p.name != ".claude", str(p))):
+        try:
+            if not d.is_dir():
+                continue
+            settings = d / "settings.json"
+            # Dois config dirs desta maquina apontam pro MESMO settings.json (um e symlink do
+            # outro). Sem esta chave por arquivo resolvido, cada dir escrevia a sua entrada la
+            # dentro e a trava aparecia duplicada.
+            chave = settings.resolve()
+            if chave in vistos:
+                continue
+            vistos.add(chave)
+            comando = f'"{sys.executable}" "{_guard_path(d)}"'
+            if _ensure_event_hook(settings, "PreToolUse", comando, matcher="Bash", por_nome=True):
                 touched.append(str(d))
         except Exception:
             continue

@@ -6,7 +6,11 @@ import uvicorn
 import qrcode
 
 from app.config import settings, resolve_bind_ip, pairing_url, list_config_dirs, _backend_config_base
-from app.hook_installer import ensure_askq_hook_installed, ensure_state_hooks_installed
+from app.hook_installer import (
+    ensure_askq_hook_installed,
+    ensure_guard_hooks_installed,
+    ensure_state_hooks_installed,
+)
 from app.hook_state import hook_state
 from app.pi_inbox import escrever_endpoint
 
@@ -87,6 +91,7 @@ def main():
     # Instala (idempotente, fail-soft) os hooks de estado e de AskUserQuestion.
     ensure_askq_hook_installed()
     ensure_state_hooks_installed()
+    ensure_guard_hooks_installed()
     # Idem pro hook do Kimi (config.toml do ~/.kimi-code) — ver app/kimi_hook_installer.py.
     from app.kimi_hook_installer import ensure_kimi_hooks_installed
     ensure_kimi_hooks_installed()

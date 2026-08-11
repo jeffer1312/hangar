@@ -15,6 +15,7 @@ usuario); hooks em forma inline (`hooks = [...]`, fora da doc) -> pula com warni
 `[[hooks]]` depois de um array inline seria redefinicao e o TOML nao abriria mais).
 """
 import logging
+import os
 import shlex
 import shutil
 import sys
@@ -37,9 +38,22 @@ _ENTRIES = [("SessionStart", None), ("UserPromptSubmit", None), ("TurnStarted", 
             ("Stop", None), ("Interrupt", None), ("PermissionRequest", None),
             ("PreToolUse", "AskUserQuestion"), ("PostToolUse", "AskUserQuestion")]
 
+# Segundo hook, outro assunto: a trava de `tmux kill-server` (hooks/guard_tmux.py). Entra aqui e
+# nao so no Claude porque a sessao Kimi roda no MESMO tmux — quem derruba o servidor derruba as
+# sessoes de todo mundo, nao importa o motor. Medido no binario do kimi: `exitCode === 2` ->
+# `action: "block"` com o stderr como motivo, e a ferramenta de shell dele se chama `Bash`.
+GUARD = str((Path(__file__).parent.parent / "hooks" / "guard_tmux.py").resolve())
+_GUARD_COMMAND = f'"{sys.executable}" "{GUARD}"'
+_GUARD_ENTRIES = [("PreToolUse", "Bash")]
 
-def _blocks(entries: list[tuple[str, str | None]]) -> str:
-    lines = ["", "# hangar: marcadores de estado + bilhete pane->sessao (app/kimi_hook_installer).",
+
+def _blocks(entries: list[tuple[str, str | None]], command: str = _COMMAND) -> str:
+    cabecalho = (
+        "# hangar: trava de `tmux kill-server` (app/kimi_hook_installer + hooks/guard_tmux.py)."
+        if command == _GUARD_COMMAND
+        else "# hangar: marcadores de estado + bilhete pane->sessao (app/kimi_hook_installer)."
+    )
+    lines = ["", cabecalho,
              "# Remova este bloco para desligar o rastreio de sessoes Kimi pelo app."]
     for ev, matcher in entries:
         # TOML literal string (aspas simples): nao escapa nada e nenhum path nosso tem apostrofo —
@@ -48,14 +62,14 @@ def _blocks(entries: list[tuple[str, str | None]]) -> str:
         lines.append(f'event = "{ev}"')
         if matcher is not None:
             lines.append(f'matcher = "{matcher}"')
-        lines.append(f"command = '{_COMMAND}'")
+        lines.append(f"command = '{command}'")
         lines.append("timeout = 5")
         lines.append("")
     return "\n".join(lines) + "\n"
 
 
-def _refers_to(command: object) -> bool:
-    """True se este command aponta pro NOSSO script (qualquer formato de aspas), como o _refers_to
+def _refers_to(command: object, script: str = HOOK) -> bool:
+    """True se este command aponta pro script dado (qualquer formato de aspas), como o _refers_to
     do hook_installer do Claude: comparar a string inteira foi o que duplicou hooks la."""
     if not isinstance(command, str):
         return False
@@ -63,21 +77,26 @@ def _refers_to(command: object) -> bool:
         tokens = shlex.split(command) or [command]
     except ValueError:
         tokens = command.split() or [command]
-    return any(t.strip("\"'") == HOOK for t in tokens)
+    return any(t.strip("\"'") == script for t in tokens)
 
 
-def _missing(data: dict) -> list[tuple[str, str | None]]:
+def _missing(
+    data: dict,
+    entries: list[tuple[str, str | None]] | None = None,
+    script: str = HOOK,
+) -> list[tuple[str, str | None]]:
     """Entradas nossas que AINDA nao estao no config. Idempotencia POR ENTRADA (evento+matcher):
     o conjunto cresceu uma vez ja (PreToolUse/PostToolUse de AskUserQuestion entraram depois) e um
     check de "tem algum hook nosso" pularia a instalacao das novas pra sempre."""
+    entries = _ENTRIES if entries is None else entries
     hooks = data.get("hooks")
     if not isinstance(hooks, list):
-        return list(_ENTRIES)
+        return list(entries)
     out = []
-    for ev, matcher in _ENTRIES:
+    for ev, matcher in entries:
         found = any(
             isinstance(h, dict) and h.get("event") == ev and h.get("matcher") == matcher
-            and _refers_to(h.get("command"))
+            and _refers_to(h.get("command"), script)
             for h in hooks
         )
         if not found:
@@ -101,9 +120,10 @@ def ensure_kimi_hooks_installed() -> list[str]:
                 _log.warning("kimi: config.toml invalido; hook NAO instalado (arquivo intacto)")
                 return []
             missing = _missing(data)
-            if not missing:
+            missing_guard = _missing(data, _GUARD_ENTRIES, GUARD)
+            if not missing and not missing_guard:
                 return []
-            if missing and "hooks" in data and "[[hooks]]" not in raw:
+            if "hooks" in data and "[[hooks]]" not in raw:
                 # hooks definido como array inline (fora da doc oficial): apendar [[hooks]] seria
                 # redefinicao e quebraria o TOML. Melhor sem hook que sem config.
                 _log.warning("kimi: hooks inline no config.toml; hook NAO instalado")
@@ -112,14 +132,26 @@ def ensure_kimi_hooks_installed() -> list[str]:
             bak = home / "config.toml.bak-hangar"
             if not bak.exists():
                 shutil.copyfile(cfg, bak)
+                # copyfile leva o CONTEUDO, nao a permissao: o backup nasceria 0644 pelo umask, e este
+                # arquivo tem a API key do Kimi em texto plano (o config.toml original e 0600).
+                os.chmod(bak, 0o600)
         else:
             missing = list(_ENTRIES)
+            missing_guard = list(_GUARD_ENTRIES)
         out = raw
         if out and not out.endswith("\n"):
             out += "\n"
-        out += _blocks(missing)
-        tmp = cfg.with_suffix(".toml.tmp-hangar")
+        if missing:
+            out += _blocks(missing)
+        if missing_guard:
+            out += _blocks(missing_guard, _GUARD_COMMAND)
+        # tmp com PID: dois backends subindo sobrepostos (restart) usariam o mesmo nome e um dos
+        # writes sumiria. Mesma razao do tmp do kimi_state_hook.
+        tmp = cfg.with_suffix(".toml.tmp-hangar-%d" % os.getpid())
         tmp.write_text(out, encoding="utf-8")
+        # O replace adota a permissao da ORIGEM (o tmp), nao a do destino: sem este chmod o
+        # config.toml com a API key saia de 0600 pra 0644 a cada instalacao do hook.
+        os.chmod(tmp, 0o600)
         tmp.replace(cfg)  # atomico
         return [str(cfg)]
     except Exception:
