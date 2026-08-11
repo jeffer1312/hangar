@@ -77,10 +77,17 @@ function claude {
     # CP_SESSION_NAME: mesmo carimbo que o backend poe em new_session (app/tmux.py). Sem ele o
     # cp-send de dentro da sessao cai no `display-message -p '#S'`, que devolve a sessao do CLIENTE
     # anexado e nao a de quem chama -> o --unpair de uma sessao desfazia o vinculo da OUTRA.
+    # CLAUDE_CONFIG_DIR (claude-conta): o psmux nao herda o env de quem chama - sem repassar aqui,
+    # a sessao nasceria na conta padrao, calada. E um caminho, nao um segredo: pode ir por `-e`
+    # (a key do motor nao pode, por isso vai pelo cp-engine --exec).
+    $cfg = @()
+    if ($env:CLAUDE_CONFIG_DIR) {
+        $cfg = @('-e', "CLAUDE_CONFIG_DIR=$($env:CLAUDE_CONFIG_DIR)")
+    }
     $cmd = @('tmux', 'new-session', '-s', $nome, '-c', (Get-Location).Path,
              '-e', 'COLORTERM=truecolor', '-e', 'CLAUDE_CODE_TMUX_TRUECOLOR=1',
              '-e', "CP_SESSION_NAME=$nome") +
-           $pre + @('claude', '--session-id', $id) + $args
+           $cfg + $pre + @('claude', '--session-id', $id) + $args
     $r = @($cmd[1..($cmd.Count - 1)])
     & $cmd[0] @r
 }

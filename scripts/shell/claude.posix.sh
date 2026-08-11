@@ -111,16 +111,27 @@ claude() {
     # sessao do CLIENTE anexado e nao a de quem chama — o `--unpair` de uma sessao desfazia o vinculo
     # da OUTRA. Sessao aberta no terminal e criada AQUI, nao pelo backend, entao o carimbo tem que
     # sair daqui tambem, senao o bug fica vivo justamente no caminho mais usado.
+    # CLAUDE_CONFIG_DIR (claude-conta): tmux NAO herda o env de quem chama — sem repassar aqui, a
+    # sessao nasceria na conta padrao, calada. Aqui pode ir por `-e` (ao contrario da key do motor,
+    # que vai pelo `cp-engine --exec` justamente pra nao aparecer em /proc/<pid>/cmdline): isto e um
+    # caminho, nao um segredo.
+    local -a cfg
+    cfg=()
+    if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+        cfg=(-e "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
+    fi
     if command -v systemd-run >/dev/null 2>&1 && [ -n "${XDG_RUNTIME_DIR:-}" ] \
        && systemd-run --user --scope --collect -q -- true >/dev/null 2>&1; then
         systemd-run --user --scope --collect -q -- tmux new-session -s "$name" -c "$PWD" \
             -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 \
             -e "CP_SESSION_NAME=$name" \
+            "${cfg[@]}" \
             "${pre[@]}" claude --session-id "$id" "$@"
     else
         tmux new-session -s "$name" -c "$PWD" \
             -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 \
             -e "CP_SESSION_NAME=$name" \
+            "${cfg[@]}" \
             "${pre[@]}" claude --session-id "$id" "$@"
     fi
 }
