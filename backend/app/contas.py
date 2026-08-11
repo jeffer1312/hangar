@@ -184,9 +184,19 @@ def _gavetar(dir_conta: Path, destino: Path) -> str:
     while (gaveta / f"{destino.name}.{n}").exists():
         n += 1
     shutil.move(str(destino), str(gaveta / f"{destino.name}.{n}"))
+    # Teto POR NOME DE ORIGEM, não pela gaveta inteira: com `iterdir()` cru, três versões de
+    # `skills` enchiam o teto e a poda levava junto o `hooks.1` — a única cópia de uma pasta que o
+    # usuário tinha editado à mão. A gaveta existe pra NÃO perder dado; podar entre arquivos
+    # diferentes fazia exatamente o contrário, e calado (o aviso só fala do que está entrando).
+    # O sufixo `.N` é nosso (linha acima); tudo antes dele é o nome original.
+    def _origem(p: Path) -> str:
+        base, _, ultimo = p.name.rpartition(".")
+        return base if base and ultimo.isdigit() else p.name
+
+    irmas = [p for p in gaveta.iterdir() if _origem(p) == destino.name]
     # lstat e não stat: entradas podem ser symlinks (colisão de symlink inesperado vai pra
     # gaveta), e stat seguiria o alvo — quebrado, levantaria no meio da poda.
-    antigas = sorted(gaveta.iterdir(), key=lambda p: p.lstat().st_mtime, reverse=True)
+    antigas = sorted(irmas, key=lambda p: p.lstat().st_mtime, reverse=True)
     for velha in antigas[DRIFT_TETO:]:
         if velha.is_symlink() or velha.is_file():
             velha.unlink()

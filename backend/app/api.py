@@ -916,7 +916,11 @@ async def delete_claude_config(nome: str):
     # O ciclo segura a trava da conta (a mesma do create_session) ao redor da checagem e do
     # rmtree: sem ele, o DELETE passaria na janela entre a reconciliação e o registry.create de
     # uma sessão que está subindo, e apagaria a pasta embaixo dela.
-    try:
+    def _checar_e_apagar():
+        # TUDO numa thread só: o `ciclo_conta` pega `flock` no __enter__, que BLOQUEIA. Chamado
+        # direto da rota async, uma segunda operação de conta concorrente congelava o event loop
+        # inteiro — todas as rotas do app, não só esta — até a primeira soltar. E a janela é longa:
+        # o laço abaixo roda um `subprocess` do tmux por sessão viva, também síncrono.
         with contas.ciclo_conta(nome) as ciclo:
             for s in registry.list():
                 cfg, confiavel = _session_config_dir_strict(s.name)
@@ -927,13 +931,18 @@ async def delete_claude_config(nome: str):
                     raise HTTPException(409, f"a sessão '{s.name}' está usando esta conta")
             # CLI aberto FORA do tmux não aparece no registry: a varredura por CLAUDE_CONFIG_DIR
             # no /proc é quem segura o apagar debaixo dele.
-            pids = await asyncio.to_thread(procinfo._pids_com_config_dir, alvo)
+            pids, varredura_ok = procinfo._pids_com_config_dir(alvo)
+            if not varredura_ok:
+                # "Não consegui olhar" não é "olhei e não achei": seguir aqui apagaria a pasta
+                # debaixo de um `claude` vivo que a varredura não chegou a enxergar.
+                raise HTTPException(409, "não consegui varrer os processos da máquina — apagar "
+                                         "recusado (pode haver um claude aberto nesta conta)")
             if pids:
                 raise HTTPException(409, f"processo(s) {pids} estão usando esta conta")
-            try:
-                await asyncio.to_thread(ciclo.apagar)
-            except contas.ContaError as e:
-                raise HTTPException(e.status, e.detail) from None
+            ciclo.apagar()
+
+    try:
+        await asyncio.to_thread(_checar_e_apagar)
     except contas.ContaError as e:
         # Pasta não carimbada (ou conta que sumiu): mesmo 404 do apagar() antigo.
         raise HTTPException(e.status, e.detail) from None
@@ -1007,7 +1016,13 @@ async def create_session(body: CreateBody):
         if contas.e_conta(alvo):
             nome_conta = alvo.name.removeprefix(".claude-")
             try:
-                with contas.ciclo_conta(nome_conta) as ciclo:
+                # `ciclo_conta` numa thread pelo mesmo motivo do DELETE: o `flock` do __enter__
+                # bloqueia, e no event loop isso congelava o app inteiro quando duas operações de
+                # conta se cruzavam. flock pertence ao descritor aberto, não à thread — tomar e
+                # soltar de threads diferentes é válido.
+                cm = contas.ciclo_conta(nome_conta)
+                ciclo = await asyncio.to_thread(cm.__enter__)
+                try:
                     try:
                         avisos = await asyncio.to_thread(ciclo.reconciliar,
                                                          sanitize_cwd(body.cwd))
@@ -1027,6 +1042,9 @@ async def create_session(body: CreateBody):
                             provider=body.provider, engine=body.engine)
                     except ValueError as e:
                         raise HTTPException(409, str(e))
+                finally:
+                    # Solta a trava sempre — inclusive quando o corpo levanta HTTPException.
+                    await asyncio.to_thread(cm.__exit__, None, None, None)
             except contas.ContaError as e:
                 # Conta sumiu entre a validação e a trava (ex: DELETE concorrente).
                 raise HTTPException(e.status, e.detail) from None

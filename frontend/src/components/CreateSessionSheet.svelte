@@ -86,6 +86,18 @@
     configs = [];
     selectedConfig = null;
     motores = {};
+    // Zera o estado da linha de conta AQUI porque este `++cfgSeq` invalida qualquer criar/apagar em
+    // voo: o `finally` daquela operação só libera o botão se a geração dele ainda for a vigente, e
+    // agora não é. Sem este reset o "+ conta" ficava em "…" e `aria-busy` pra sempre, e só fechar e
+    // reabrir o sheet destravava. A conta EM VOO pode ter sido criada no servidor de origem — o
+    // aviso dela se perde junto, e é por isso que os chips e o seletor ficam desabilitados enquanto
+    // `contaOcupada` (ver o template): a troca de servidor no meio da operação deixa de acontecer.
+    contaOcupada = false;
+    avisoConta = '';
+    contaErro = false;
+    contaCriadaPath = null;
+    pedindoNome = false;
+    confirmandoApagar = false;
     listClaudeConfigs()
       .then((cs) => {
         if (seq !== cfgSeq) return;
@@ -130,6 +142,9 @@
   async function apagar() {
     const nome = nomeDaSelecionada;
     if (!nome) return;
+    // Caminho capturado ANTES do await, junto com o nome: `selectedConfig` é o que a tela mostra e
+    // não pode ser a fonte da verdade depois que a operação começou.
+    const apagadaPath = selectedConfig;
     const seq = ++cfgSeq;
     const serverId = targetServer;
     contaOcupada = true;
@@ -145,6 +160,11 @@
         cs = await listClaudeConfigs();
       } catch {
         if (seq !== cfgSeq || targetServer !== serverId) return;
+        // O DELETE JÁ deu certo: a pasta não existe mais. Deixar `selectedConfig` apontando pra ela
+        // faria o "Nova sessão" mandar um config_dir apagado e levar 400 lá no backend. Tira da
+        // lista local e volta pra ativa — sem depender do GET que acabou de falhar.
+        configs = configs.filter((c) => c.path !== apagadaPath);
+        selectedConfig = configs.find((c) => c.active)?.path ?? configs[0]?.path ?? null;
         avisoConta = `Conta ${nome} apagada, mas não consegui atualizar a lista — recarregue a tela.`;
         return;
       }
@@ -321,6 +341,7 @@
             class:on={targetServer === s.id}
             style="--chip: {serverColor(s.id)};"
             onclick={() => pickTarget(s.id)}
+            disabled={contaOcupada}
           >
             <span class="chip-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
             {s.label}
@@ -410,7 +431,10 @@
         <div class="field">
           <label class="field-label" for="cfg-pick">Conta Claude</label>
           <div class="conta-row">
-            <Select id="cfg-pick" class="field-input" ariaLabel="Conta"
+            <!-- disabled enquanto ocupada: trocar a conta com um apagar em voo fazia o texto da
+                 confirmação mostrar um nome e a requisição apagar OUTRO (o nome foi capturado antes
+                 do await), e a troca ainda era descartada calada no fim da operação. -->
+            <Select id="cfg-pick" class="field-input" ariaLabel="Conta" disabled={contaOcupada}
               value={selectedConfig ?? ''}
               opcoes={configs.map((c) => ({
                 value: c.path, label: c.label, hint: c.active ? 'atual' : undefined, title: c.path }))}

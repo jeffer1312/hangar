@@ -127,8 +127,8 @@ def test_pids_com_config_dir_acha_no_proc_fake(monkeypatch, tmp_path):
     (raiz / "nao-pid").mkdir()
     (raiz / "nao-pid" / "environ").write_bytes(b"CLAUDE_CONFIG_DIR=/x/.claude-conta2\x00")
     monkeypatch.setattr(procinfo, "_PROC_ROOT", str(raiz))
-    assert procinfo._pids_com_config_dir(Path("/x/.claude-conta2")) == [100]
-    assert procinfo._pids_com_config_dir(Path("/x/.claude-outra")) == []
+    assert procinfo._pids_com_config_dir(Path("/x/.claude-conta2")) == ([100], True)
+    assert procinfo._pids_com_config_dir(Path("/x/.claude-outra")) == ([], True)
 
 
 def test_pids_com_config_dir_psutil_casa_pelo_env(via_psutil, monkeypatch):
@@ -139,10 +139,10 @@ def test_pids_com_config_dir_psutil_casa_pelo_env(via_psutil, monkeypatch):
         return {"CLAUDE_CONFIG_DIR": "/x/.claude-conta2"} if pid == eu else {}
 
     monkeypatch.setattr(procinfo, "_env_psutil", env_fake)
-    assert procinfo._pids_com_config_dir(Path("/x/.claude-conta2")) == [eu]
-    assert procinfo._pids_com_config_dir(Path("/x/.claude-outra")) == []
+    assert procinfo._pids_com_config_dir(Path("/x/.claude-conta2")) == ([eu], True)
+    assert procinfo._pids_com_config_dir(Path("/x/.claude-outra")) == ([], True)
 
 
 def test_pids_com_config_dir_pid_morto_nao_levanta(via_psutil):
     # Mesmo contrato de degradacao dos vizinhos: pid morto/ilegivel nunca vira excecao.
-    assert procinfo._pids_com_config_dir(Path("/tmp/.claude-conta-que-nao-existe-xyz")) == []
+    assert procinfo._pids_com_config_dir(Path("/tmp/.claude-conta-que-nao-existe-xyz")) == ([], True)

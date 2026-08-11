@@ -444,3 +444,37 @@ def test_modulo_e_stdlib_pura():
         if isinstance(n, ast.Import) for a in n.names
     }
     assert not (importados & {"app", "pydantic", "fastapi", "httpx"})
+
+
+def test_drift_poda_por_nome_e_nao_pela_gaveta_inteira(casa):
+    """A gaveta existe pra NAO perder dado — o teto tem que ser POR ARQUIVO DE ORIGEM.
+
+    Com `iterdir()` cru, DRIFT_TETO versoes de `skills` enchiam a gaveta e a poda levava junto o
+    `plugins.1`, que era a UNICA copia de uma pasta que o usuario tinha editado a mao. E calado: o
+    aviso devolvido so fala da pasta que esta ENTRANDO, nunca da que foi expulsa.
+    """
+    compartilhado = pathlib.Path(os.environ["HOME"]) / ".claude"
+    (compartilhado / "plugins").mkdir()
+    contas.criar("gaveta")
+    dir_conta = pathlib.Path(os.environ["HOME"]) / ".claude-gaveta"
+
+    # plugins vira pasta LOCAL, com conteudo que so existe aqui -> vai pra .drift/plugins.1
+    (dir_conta / "plugins").unlink()
+    (dir_conta / "plugins").mkdir()
+    (dir_conta / "plugins" / "meu.json").write_text("unico", encoding="utf-8")
+    contas.reconciliar("gaveta")
+    guardado = dir_conta / ".drift" / "plugins.1" / "meu.json"
+    assert guardado.is_file(), "a colisao de pasta local devia ter ido pra gaveta"
+
+    # agora DRIFT_TETO+1 colisoes de OUTRO nome, o suficiente pra encher o teto global
+    for i in range(contas.DRIFT_TETO + 1):
+        (dir_conta / "skills").unlink()
+        (dir_conta / "skills").mkdir()
+        (dir_conta / "skills" / f"v{i}.md").write_text(str(i), encoding="utf-8")
+        contas.reconciliar("gaveta")
+
+    assert guardado.is_file(), "a poda de 'skills' levou o unico backup de 'plugins' junto"
+    assert guardado.read_text(encoding="utf-8") == "unico"
+    # e o teto continua valendo DENTRO do proprio nome
+    skills = [p for p in (dir_conta / ".drift").iterdir() if p.name.startswith("skills.")]
+    assert len(skills) <= contas.DRIFT_TETO

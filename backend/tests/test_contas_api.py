@@ -184,7 +184,7 @@ def test_apagar_com_processo_vivo_usando_a_conta_devolve_409(casa, monkeypatch):
     """Um `claude` aberto FORA do tmux não aparece no registry: a consulta por CLAUDE_CONFIG_DIR
     no /proc é quem segura o apagar debaixo dele."""
     contas.criar("conta2")
-    monkeypatch.setattr(api_mod.procinfo, "_pids_com_config_dir", lambda alvo: [999])
+    monkeypatch.setattr(api_mod.procinfo, "_pids_com_config_dir", lambda alvo: ([999], True))
     r = TestClient(app).delete("/api/claude-configs/conta2", headers=AUTH)
     assert r.status_code == 409
     assert (casa / ".claude-conta2").is_dir()
@@ -277,3 +277,20 @@ def test_engine_invalido_rejeita_antes_de_reconciliar(casa, monkeypatch):
         "provider": "claude", "engine": "naoexiste"}, headers=AUTH)
     assert r.status_code == 400
     assert reconciliou == []
+
+
+def test_apagar_recusa_quando_a_varredura_de_processos_falha(casa, monkeypatch):
+    """"Nao consegui olhar" nao pode sair igual a "olhei e nao achei".
+
+    `_pids_com_config_dir` devolvia `[]` tanto quando terminava a varredura sem achar nada quanto
+    quando ela morria no meio (psutil.Error no laco, /proc ilegivel). O DELETE seguia com o rmtree e
+    apagava a pasta debaixo de um `claude` vivo que a varredura nem chegou a enxergar. Agora o
+    segundo elemento diz se a varredura completou, e o DELETE recusa quando nao completou.
+    """
+    contas.criar("conta2")
+    monkeypatch.setattr(api_mod.registry, "list", lambda: [])
+    monkeypatch.setattr(api_mod.procinfo, "_pids_com_config_dir", lambda alvo: ([], False))
+    r = TestClient(app).delete("/api/claude-configs/conta2", headers=AUTH)
+    assert r.status_code == 409
+    assert "varrer os processos" in r.json()["detail"]
+    assert (casa / ".claude-conta2").is_dir(), "apagou mesmo sem conseguir varrer os processos"
