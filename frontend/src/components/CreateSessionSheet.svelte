@@ -67,6 +67,12 @@
   // avisoConta leva a mensagem pro usuário (sucesso ou erro).
   let contaOcupada = $state(false);
   let avisoConta = $state('');
+  // Path da conta criada com sucesso nesta abertura: o aviso do /login só vale enquanto a
+  // seleção aponta pra ela — trocou a conta, o texto não pode continuar afirmando o que a
+  // próxima sessão não vai ser. Erro e "criada mas não listada" ficam com null.
+  let contaCriadaPath = $state<string | null>(null);
+  // O aviso é erro (role=alert) ou status (role=status) — leitor de tela anuncia diferente.
+  let contaErro = $state(false);
   // Guard de corrida: trocas rapidas de servidor deixam fetches em voo; so a resposta do ULTIMO
   // pedido pode escrever (senao a lista de um servidor antigo aterrissava por cima da atual).
   // Motores tambem sao POR SERVIDOR (cada um tem seu proprio ~/.claude/engines.json) -- por isso
@@ -94,23 +100,56 @@
 
   async function novaConta() {
     const nome = (prompt('Nome da conta (minúsculas, números, - ou _):') ?? '').trim();
-    if (!nome) return;
+    if (!nome) {
+      // Cancelou: encerra a intenção de criar. Feedback de tentativa anterior (sucesso ou erro)
+      // não pode sobrar na tela como se valesse pro fluxo atual.
+      avisoConta = '';
+      contaCriadaPath = null;
+      contaErro = false;
+      return;
+    }
+    // Geração desta operação — a MESMA guarda do loadConfigs: um GET antigo (da abertura, ou do
+    // servidor anterior) que aterrissar depois não pode sobrescrever a seleção da conta nova.
+    // Sem isto, o loadConfigs em voo re-escolheria a conta ativa por cima do caminho criado.
+    const seq = ++cfgSeq;
+    const serverId = targetServer;
     contaOcupada = true;
     avisoConta = '';
+    contaErro = false;
     try {
       const c = await criarConta(nome);
-      // Recarrega do servidor em vez de empurrar na lista local: o backend decide rótulo e ordem,
-      // e duplicar essa regra aqui é onde as duas versões começam a divergir.
-      // Direto no listClaudeConfigs, não no loadConfigs(): loadConfigs dispara o GET e devolve na
-      // hora (não é async), e o .then dela re-escolheria a conta ativa por cima desta seleção.
-      const cs = await listClaudeConfigs();
+      if (seq !== cfgSeq || targetServer !== serverId) return;
+      // Refresh em FASE PRÓPRIA: o POST já respondeu 200, então falha do GET não é falha da
+      // criação — reportá-la como tal faria o usuário tentar de novo e levar 409.
+      let cs: ConfigDirInfo[];
+      try {
+        cs = await listClaudeConfigs();
+      } catch {
+        if (seq !== cfgSeq || targetServer !== serverId) return;
+        avisoConta = 'Conta criada, mas não consegui atualizar a lista — recarregue a tela.';
+        return;
+      }
+      if (seq !== cfgSeq || targetServer !== serverId) return;
       configs = cs;
-      selectedConfig = c.path;
-      avisoConta = 'Conta criada. A sessão vai subir DESLOGADA — rode /login nela uma vez.';
+      // Exige que o caminho voltou do servidor antes de selecionar: selecionar um valor que não
+      // está nas opções mandaria um config_dir órfão pro create() (400 do backend).
+      const criada = cs.find((x) => x.path === c.path);
+      if (criada) {
+        selectedConfig = criada.path;
+        contaCriadaPath = criada.path;
+        avisoConta = 'Conta criada. A sessão vai subir DESLOGADA — rode /login nela uma vez.';
+      } else {
+        contaCriadaPath = null;
+        avisoConta = 'Conta criada, mas ainda não apareceu na lista — recarregue a tela.';
+      }
     } catch (e) {
+      if (seq !== cfgSeq || targetServer !== serverId) return;
+      contaErro = true;
       avisoConta = e instanceof Error ? e.message : 'não consegui criar a conta';
     } finally {
-      contaOcupada = false;
+      // Só a operação VIGENTE libera o botão: o finally de uma operação antiga (sheet fechado e
+      // reaberto no meio do POST) não pode derrubar o estado da nova.
+      if (seq === cfgSeq) contaOcupada = false;
     }
   }
 
@@ -138,6 +177,13 @@
       manualPath = '';
       provider = 'claude';
       engine = '';
+      // Feedback da criação de conta não pode vazar entre aberturas: o botão liberado, o aviso
+      // limpo e a conta criada esquecida — o cfgSeq do loadConfigs abaixo invalida qualquer
+      // novaConta que ainda esteja em voo da abertura anterior.
+      contaOcupada = false;
+      avisoConta = '';
+      contaCriadaPath = null;
+      contaErro = false;
       const cur = getActiveId();
       const target = servers.find((s) => s.id === cur) ? cur! : servers[0]?.id ?? '';
       if (target) pickTarget(target);      // pickTarget ja carrega configs E motores do alvo
@@ -304,10 +350,17 @@
                 value: c.path, label: c.label, hint: c.active ? 'atual' : undefined, title: c.path }))}
               onchange={(v) => (selectedConfig = v)} />
             <button type="button" class="ghost-btn conta-add" onclick={novaConta}
-              disabled={contaOcupada}>{contaOcupada ? '…' : '+ conta'}</button>
+              disabled={contaOcupada} aria-busy={contaOcupada}
+              aria-label={contaOcupada ? 'Criando conta Claude' : 'Adicionar conta Claude'}>
+              {contaOcupada ? '…' : '+ conta'}
+            </button>
           </div>
-          {#if avisoConta}
-            <p class="conta-hint">{avisoConta}</p>
+          {#if avisoConta && (!contaCriadaPath || selectedConfig === contaCriadaPath)}
+            {#if contaErro}
+              <p class="conta-hint" role="alert">{avisoConta}</p>
+            {:else}
+              <p class="conta-hint" role="status" aria-live="polite" aria-atomic="true">{avisoConta}</p>
+            {/if}
           {/if}
         </div>
       {/if}
