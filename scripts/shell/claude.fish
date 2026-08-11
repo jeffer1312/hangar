@@ -116,10 +116,15 @@ function claude
     # sessão nasceria na conta padrão, calada. Aqui pode ir por `-e` (ao contrário da key do motor,
     # que vai pelo `cp-engine --exec` justamente pra não aparecer em /proc/<pid>/cmdline): isto é um
     # caminho, não um segredo.
-    set -l cfg
+    # O `-e` vai SEMPRE, nunca condicionado à presença da variável: o servidor tmux guarda o
+    # ambiente com que nasceu (uma conta aberta antes contamina o global), então uma sessão sem
+    # `-e` herda a conta ALHEIA do servidor, calada. Quando o chamador não tem a variável, passa o
+    # default explícito (~/.claude) — string vazia dependeria do CLI tratar vazio como ausente.
+    set -l dir_cfg "$HOME/.claude"
     if set -q CLAUDE_CONFIG_DIR; and test -n "$CLAUDE_CONFIG_DIR"
-        set cfg -e "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR"
+        set dir_cfg "$CLAUDE_CONFIG_DIR"
     end
+    set -l cfg -e "CLAUDE_CONFIG_DIR=$dir_cfg"
     if command -q systemd-run; and set -q XDG_RUNTIME_DIR; and systemd-run --user --scope --collect -q -- true >/dev/null 2>&1
         systemd-run --user --scope --collect -q -- tmux new-session -s $name -c "$PWD" \
             -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 \

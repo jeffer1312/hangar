@@ -80,10 +80,12 @@ function claude {
     # CLAUDE_CONFIG_DIR (claude-conta): o psmux nao herda o env de quem chama - sem repassar aqui,
     # a sessao nasceria na conta padrao, calada. E um caminho, nao um segredo: pode ir por `-e`
     # (a key do motor nao pode, por isso vai pelo cp-engine --exec).
-    $cfg = @()
-    if ($env:CLAUDE_CONFIG_DIR) {
-        $cfg = @('-e', "CLAUDE_CONFIG_DIR=$($env:CLAUDE_CONFIG_DIR)")
-    }
+    # O `-e` vai SEMPRE: o multiplexador guarda o ambiente com que nasceu, entao uma sessao sem
+    # `-e` herda a conta alheia do servidor. Sem a variavel no chamador, passa o default explicito
+    # (~/.claude) — string vazia dependeria do CLI tratar vazio como ausente.
+    $dirCfg = $env:CLAUDE_CONFIG_DIR
+    if (-not $dirCfg) { $dirCfg = Join-Path $HOME '.claude' }
+    $cfg = @('-e', "CLAUDE_CONFIG_DIR=$dirCfg")
     $cmd = @('tmux', 'new-session', '-s', $nome, '-c', (Get-Location).Path,
              '-e', 'COLORTERM=truecolor', '-e', 'CLAUDE_CODE_TMUX_TRUECOLOR=1',
              '-e', "CP_SESSION_NAME=$nome") +

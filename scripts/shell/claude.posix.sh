@@ -115,11 +115,12 @@ claude() {
     # sessao nasceria na conta padrao, calada. Aqui pode ir por `-e` (ao contrario da key do motor,
     # que vai pelo `cp-engine --exec` justamente pra nao aparecer em /proc/<pid>/cmdline): isto e um
     # caminho, nao um segredo.
+    # O `-e` vai SEMPRE, nunca condicionado a presenca da variavel: o servidor tmux guarda o
+    # ambiente com que nasceu (uma conta aberta antes contamina o global), entao uma sessao sem
+    # `-e` herda a conta ALHEIA do servidor, calada. Quando o chamador nao tem a variavel, passa o
+    # default explicito (~/.claude) — string vazia dependeria do CLI tratar vazio como ausente.
     local -a cfg
-    cfg=()
-    if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
-        cfg=(-e "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
-    fi
+    cfg=(-e "CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR:-$HOME/.claude}")
     if command -v systemd-run >/dev/null 2>&1 && [ -n "${XDG_RUNTIME_DIR:-}" ] \
        && systemd-run --user --scope --collect -q -- true >/dev/null 2>&1; then
         systemd-run --user --scope --collect -q -- tmux new-session -s "$name" -c "$PWD" \

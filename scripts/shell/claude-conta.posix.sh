@@ -4,10 +4,15 @@
 claude-conta() {
     if [ "$#" -eq 0 ]; then
         cp-conta --list
-        return 0
+        return
     fi
+    local dir
     dir=$(cp-conta --prep "$1") || return 1
+    # Contrato do `--prep`: UMA linha de stdout. Duas linhas (progresso acidental no futuro)
+    # entrariam no caminho com quebra de linha — recusa em vez de montar um config dir inválido.
+    [ "$(printf '%s\n' "$dir" | wc -l)" -eq 1 ] || return 1
     [ -n "$dir" ] || return 1
+    [ -d "$dir" ] || return 1
     shift
     CLAUDE_CONFIG_DIR="$dir" claude "$@"
 }

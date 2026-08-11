@@ -19,8 +19,12 @@ from app import contas  # noqa: E402
 
 def main(argv: list[str]) -> int:
     if len(argv) == 2 and argv[1] == "--list":
-        for nome in contas.listar():
-            print(nome)
+        try:
+            for nome in contas.listar():
+                print(nome)
+        except contas.ContaError as e:
+            print(f"cp-conta: {e.detail}", file=sys.stderr)
+            return 1
         return 0
 
     if len(argv) == 3 and argv[1] in ("--prep", "--new"):
@@ -45,4 +49,10 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    try:
+        sys.exit(main(sys.argv))
+    except OSError as e:
+        # Falha de filesystem (ex: HOME sem permissão) não pode vazar traceback pro wrapper de
+        # shell — mesmo tratamento do cp-engine: mensagem amigável e código não-zero.
+        print(f"cp-conta: {e}", file=sys.stderr)
+        sys.exit(126)

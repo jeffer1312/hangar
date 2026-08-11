@@ -4,13 +4,17 @@
 function claude-conta
     if test (count $argv) -eq 0
         cp-conta --list
-        return 0
+        return $status
     end
     set -l dir (cp-conta --prep $argv[1])
     # Checar o CONTEÚDO, não `or`: em fish o `or` depois de `set` lê o status do SET, que é 0
     # mesmo quando a substituição de comando falhou. Com `or`, uma falha do cp-conta deixava $dir
     # vazio, não retornava, e `CLAUDE_CONFIG_DIR=""` abria na conta PADRÃO sem avisar.
+    # O contrato do `--prep` é UMA linha de stdout: duas linhas (progresso acidental no futuro)
+    # virariam dois elementos de lista — recusa em vez de montar um caminho com quebra de linha.
+    test (count $dir) -eq 1; or return 1
     test -n "$dir"; or return 1
+    test -d "$dir"; or return 1
     set -lx CLAUDE_CONFIG_DIR $dir
     claude $argv[2..]
 end

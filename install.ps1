@@ -483,7 +483,21 @@ $marca = '# >>> hangar >>>'
 $perfil = $PROFILE.CurrentUserAllHosts
 $jaTem = (Test-Path $perfil) -and (Select-String -Path $perfil -Pattern ([regex]::Escape($marca)) -Quiet)
 if ($jaTem) {
-    Ok 'bloco ja presente no seu $PROFILE'
+    $jaTemConta = (Select-String -Path $perfil -Pattern 'claude-conta\.ps1' -Quiet)
+    if ($jaTemConta) {
+        Ok 'bloco ja presente no seu $PROFILE'
+    } else {
+        # Bloco antigo so tem o claude.ps1: o "ja presente" nao atualizava nada, e quem instalou
+        # antes desta versao nunca ganharia o claude-conta. Reescreve o trecho entre os marcadores.
+        # Get/Set sem -Encoding (Default do PS 5.1, ANSI): mesmo encoding nos dois lados, entao o
+        # resto do perfil volta byte-fiel.
+        $payload = "$marca`n. `"$raiz\scripts\shell\claude.ps1`"`n" +
+                   ". `"$raiz\scripts\shell\claude-conta.ps1`"`n# <<< hangar <<<"
+        $conteudo = Get-Content -Path $perfil -Raw
+        $novo = $conteudo -replace '(?s)# >>> hangar >>>.*?# <<< hangar <<<', ($payload.Replace('$', '$$'))
+        Set-Content -Path $perfil -Value $novo -Encoding Default
+        Ok 'bloco atualizado: claude-conta adicionado ao seu $PROFILE'
+    }
 } elseif (Pergunte '  Instalar (recomendado)?') {
     # O Windows vem com ExecutionPolicy = Restricted, que recusa carregar QUALQUER perfil. Escrever
     # o bloco assim mesmo nao so deixaria o wrapper sem carregar: todo terminal novo passaria a
@@ -510,6 +524,7 @@ if ($jaTem) {
 
 $marca
 . "$raiz\scripts\shell\claude.ps1"
+. "$raiz\scripts\shell\claude-conta.ps1"
 # <<< hangar <<<
 "@
     Ok "bloco adicionado em $perfil"
@@ -1158,6 +1173,18 @@ if (-not $bash) {
         Set-Content -Path $lancador -Value $conteudo -Encoding ASCII -NoNewline
         Ok "lancador cp-send.cmd criado em $binUsuario"
     } else { Ok 'lancador cp-send.cmd ja atualizado' }
+
+    # (2b) mesmo lancador pro cp-conta: script python sem extensao, e o PowerShell nao executa
+    # arquivo sem extensao pelo nome. O bash le o shebang do cp-conta e o python3 (atalho acima,
+    # prefixado no PATH por este .cmd) executa — mesmo mecanismo do cp-send.cmd.
+    $lancador = Join-Path $binUsuario 'cp-conta.cmd'
+    $conteudo = "@echo off`r`n" +
+                "set `"PATH=%USERPROFILE%\.local\bin;%PATH%`"`r`n" +
+                "`"$bash`" `"$raiz\scripts\cp-conta`" %*`r`n"
+    if (-not (Test-Path $lancador) -or (Get-Content $lancador -Raw) -ne $conteudo) {
+        Set-Content -Path $lancador -Value $conteudo -Encoding ASCII -NoNewline
+        Ok "lancador cp-conta.cmd criado em $binUsuario"
+    } else { Ok 'lancador cp-conta.cmd ja atualizado' }
 
     # (3) PATH do usuario, pra `cp-send` funcionar de qualquer terminal (e pro bash achar o shim).
     $pathUsuario = [Environment]::GetEnvironmentVariable('Path', 'User')
