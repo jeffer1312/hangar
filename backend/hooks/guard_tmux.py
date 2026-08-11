@@ -14,49 +14,113 @@
 # Libera com socket explicito (`tmux -L probe-x kill-server`) e alvo exato
 # (`tmux kill-session -t '=nome:'`).
 #
-# ponytail: casa por token, nao por regex no comando cru. Nao tenta cobrir heredoc/eval/string
-# montada em runtime — guarda, nao sandbox: pega o jeito que o agente escreve de verdade.
+# ponytail: casa POSICAO DE COMANDO (ver `segmentos`), nao substring. Falar sobre um comando
+# proibido — mensagem de commit, doc, grep, recado pra outra sessao — nunca e bloqueio. Nao tenta
+# cobrir eval/string montada em runtime nem corpo de heredoc: guarda, nao sandbox.
 import json
 import os
 import shlex
 import sys
 
-SEPARADORES = {"&&", "||", ";", "|", "\n"}
 MULTIPLEXADORES = {"tmux", "psmux"}  # no Windows o psmux publica o alias `tmux`
 MATADORES = {"pkill", "killall"}
 SOCKET_FLAGS = ("-L", "-S")
+# Prefixos que ainda NAO sao o comando: o de verdade vem depois deles.
+ENVELOPES = {"sudo", "doas", "env", "nohup", "setsid", "time", "command", "exec", "builtin",
+             "xargs", "stdbuf", "nice", "ionice", "systemd-run", "rtk", "proxy", "--"}
 
 
-def _invocacao(tokens: list[str], i: int) -> list[str]:
-    """Argumentos da invocacao que comeca em tokens[i]: para no proximo comando da linha."""
-    resto: list[str] = []
-    for t in tokens[i + 1:]:
-        if t in SEPARADORES:
+def segmentos(comando: str) -> list[str]:
+    """Fatia a linha em POSICOES DE COMANDO, respeitando aspas.
+
+    Existe por causa de um falso positivo real (11/08/2026): varrendo todos os tokens, qualquer
+    comando que so FALASSE de `tmux kill-server` era recusado — mensagem de commit explicando o
+    incidente, doc escrita por heredoc, recado pra outra sessao. O corte e por `;`, `&&`, `||`,
+    `|`, `&`, quebra de linha e abertura de subshell/substituicao (`(`, `$(`, crase), que sao
+    exatamente os lugares onde o shell comeca um comando novo.
+
+    No `<<` a varredura PARA: dali pra frente e corpo de heredoc, ou seja DADO. Documentar a
+    propria trava dentro de um heredoc e legitimo e era o caso que mais pegava."""
+    fora: list[str] = []
+    buf: list[str] = []
+    aspas = ""
+    i = 0
+    while i < len(comando):
+        c = comando[i]
+        if aspas:
+            buf.append(c)
+            if c == aspas:
+                aspas = ""
+            i += 1
+            continue
+        if c in "'\"":
+            aspas = c
+            buf.append(c)
+            i += 1
+            continue
+        if c == "\\" and i + 1 < len(comando):
+            buf.append(comando[i:i + 2])
+            i += 2
+            continue
+        if comando.startswith("<<", i):
             break
-        resto.append(t)
-    return resto
+        if comando.startswith(("&&", "||"), i):
+            fora.append("".join(buf))
+            buf = []
+            i += 2
+            continue
+        if c in ";|&\n()`":  # `)` fecha subshell: sem ele o token vinha `kill-server)`
+            fora.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        if comando.startswith("$(", i):
+            fora.append("".join(buf))
+            buf = []
+            i += 2
+            continue
+        buf.append(c)
+        i += 1
+    fora.append("".join(buf))
+    return [s for s in fora if s.strip()]
+
+
+def _tokens(segmento: str) -> list[str]:
+    try:
+        return shlex.split(segmento)
+    except ValueError:  # aspas desbalanceadas (metade de um heredoc, string montada na mao)
+        try:
+            return shlex.split(segmento, posix=False)
+        except ValueError:
+            return segmento.split()
+
+
+def _cabeca(tokens: list[str]) -> tuple[str, list[str]]:
+    """(comando de verdade, argumentos dele) — pulando `VAR=x`, `sudo`, `rtk proxy` e afins."""
+    for i, t in enumerate(tokens):
+        nome = os.path.basename(t.strip("\"'"))
+        if "=" in t and not t.startswith("-"):  # VAR=valor antes do comando
+            continue
+        if nome in ENVELOPES or t.startswith("-"):
+            continue
+        return nome, tokens[i + 1:]
+    return "", []
 
 
 def perigosos(comando: str) -> str | None:
     """Motivo do bloqueio, ou None se o comando esta liberado."""
-    try:
-        tokens = shlex.split(comando)
-    except ValueError:  # aspas desbalanceadas -> melhor olhar cru do que desistir
-        tokens = comando.split()
-
-    for i, tok in enumerate(tokens):
-        nome = os.path.basename(tok.strip("\"'"))
+    for segmento in segmentos(comando):
+        nome, resto = _cabeca(_tokens(segmento))
 
         if nome in MATADORES:
             # `pkill -f app.main` (reiniciar o backend, documentado no CLAUDE.md) continua liberado:
             # so casa quando o PADRAO fala de tmux — que e o processo com sessoes vivas dentro.
-            if any("tmux" in t or "psmux" in t for t in _invocacao(tokens, i)):
+            if any("tmux" in t or "psmux" in t for t in resto):
                 return f"`{nome}` casando tmux mata o servidor e todas as sessoes junto"
             continue
 
         if nome not in MULTIPLEXADORES:
             continue
-        resto = _invocacao(tokens, i)
         # `-L nome` / `-Lnome` / `-S /caminho`: servidor proprio, entao a explosao e contida
         if any(t.startswith(SOCKET_FLAGS) for t in resto):
             continue

@@ -34,6 +34,11 @@ def roda(comando: str, tool: str = "Bash") -> subprocess.CompletedProcess:
     "pkill tmux",
     "pkill -f 'tmux server'",
     "killall tmux",
+    "sudo tmux kill-server",              # envelope antes do comando
+    "CP_X=1 tmux kill-server",            # env na frente
+    "echo oi; tmux kill-server",          # 2o segmento
+    "echo $(tmux kill-server)",           # substituicao roda de verdade
+    "(tmux kill-server)",                 # subshell
 ])
 def test_bloqueia(cmd):
     r = roda(cmd)
@@ -56,7 +61,15 @@ def test_bloqueia(cmd):
     "pkill -f 'node .*vite'",
     "tmux new-session -d -s x",
     "tmux ls",
-    "echo 'tmux kill-server e proibido'",  # so fala do assunto
+    # FALAR do comando nunca e bloqueio (falso positivo achado pela propria trava, 11/08/2026:
+    # a mensagem de commit que explicava o incidente foi recusada).
+    "echo 'tmux kill-server e proibido'",
+    'git commit -m "explica o incidente: tmux kill-server derrubou tudo"',
+    "grep -rn kill-server backend/",
+    "rtk proxy git add x && git commit -m 'bloqueia tmux kill-server'",
+    "cat > /tmp/doc.md <<'EOF'\nNao rode tmux kill-server nunca.\nEOF",
+    "echo 'avisa: tmux kill-server e proibido' | cp-send hangar",
+    "sed -i 's/tmux kill-server/tmux -L probe kill-server/' script.sh",
 ])
 def test_libera(cmd):
     assert roda(cmd).returncode == 0, f"bloqueou demais: {cmd!r}"
