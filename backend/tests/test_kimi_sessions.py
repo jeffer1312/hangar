@@ -54,3 +54,38 @@ def test_pretrust_writes_workspace_trust_once(tmp_path, monkeypatch):
     f.write_text('{"root":"/tmp/kimi-acp-probe","trustedAt":1}')
     ks.pretrust_cwd("/tmp/kimi-acp-probe")
     assert json.loads(f.read_text())["trustedAt"] == 1
+
+
+# --- Bilhete pane->sessao com JSON valido do TIPO errado ---
+# `json.loads` aceita `null`, lista e string, e o `.get` num nao-dict e AttributeError — que NAO e
+# nem OSError nem ValueError, entao o except das duas funcoes deixava subir. Elas rodam dentro do
+# loop de `SessionRegistry.list()`, que nao tem guarda: um bilhete torto apagava TODAS as sessoes
+# da tela (Claude, Codex e Pi junto), nao so a Kimi. Bilhete torto e cenario real — o _write_marker
+# do hook usava tmp de nome fixo, entao dois eventos sobrepostos entrelacavam bytes.
+import json as _json
+
+import pytest as _pytest
+
+from app import registry as _registry
+
+
+@_pytest.mark.parametrize("lixo", ["null", "[1, 2, 3]", '"uma string"', "42"])
+def test_bilhete_nao_dict_devolve_none_em_vez_de_estourar(monkeypatch, tmp_path, lixo):
+    for sub, fn in ((".claude-pocket-kimi", _registry.kimi_session_file),
+                    (".claude-pocket-pi", _registry.pi_session_file)):
+        cfg = tmp_path / sub.lstrip(".")
+        (cfg / sub).mkdir(parents=True, exist_ok=True)
+        (cfg / sub / "123.json").write_text(lixo, encoding="utf-8")
+        monkeypatch.setattr(_registry, "_config_dir_of", lambda pid, _c=cfg: _c)
+        assert fn("%123", pid=7, cwd="/w") is None
+
+
+def test_bilhete_dict_normal_ainda_e_lido(monkeypatch, tmp_path):
+    # Contra-prova: a guarda de tipo nao pode recusar bilhete legitimo. Sem ts confiavel o frescor
+    # reprova (devolve None), entao o que este teste garante e que o caminho NAO estoura.
+    cfg = tmp_path / "cfg"
+    (cfg / ".claude-pocket-kimi").mkdir(parents=True)
+    (cfg / ".claude-pocket-kimi" / "123.json").write_text(
+        _json.dumps({"session_id": "session_abc", "cwd": "/w", "ts": 1.0}), encoding="utf-8")
+    monkeypatch.setattr(_registry, "_config_dir_of", lambda pid: cfg)
+    assert _registry.kimi_session_file("%123", pid=7, cwd="/w") is None

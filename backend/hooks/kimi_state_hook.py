@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import time
+import traceback
 
 # Medido no Kimi 0.34.0: TurnStarted/UserPromptSubmit abrem o turno; Stop fecha; Interrupt e o
 # Esc do usuario (Stop NAO dispara em interrupt, pela doc); PermissionRequest e a espera de
@@ -51,19 +52,25 @@ def _state_of(event: str, o: dict) -> str | None:
 def _write_marker(base: str, subdir: str, key: str, payload: dict) -> None:
     d = os.path.join(base, subdir)
     os.makedirs(d, exist_ok=True)
-    tmp = os.path.join(d, key + ".json.tmp")
+    # O tmp leva o PID: o hook roda como processo solto e dois eventos da MESMA sessao se sobrepoem
+    # (PreToolUse/PostToolUse em sequencia). Com nome fixo, as duas escritas usam o mesmo arquivo e o
+    # replace promove bytes entrelacados — bilhete torto, que o registry le. Mesmo furo ja corrigido
+    # em cp_panel_common.py.
+    tmp = os.path.join(d, "%s.json.tmp.%d" % (key, os.getpid()))
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(payload, fh)
     os.replace(tmp, os.path.join(d, key + ".json"))  # escrita atomica (leitor nunca pega parcial)
 
 
+# Mesma base do hook do Claude e da extensao do Pi: o HookState vigia <base>/.claude-pocket-state
+# e o registry le <base>/.claude-pocket-*. Sem CLAUDE_CONFIG_DIR (padrao) = ~/.claude. FORA do try
+# de proposito: o log de falha abaixo precisa dela, e ela nao depende do stdin.
+base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+
 try:
     o = json.loads(sys.stdin.read())
     event = o.get("hook_event_name")
     sid = o.get("session_id")
-    # Mesma base do hook do Claude e da extensao do Pi: o HookState vigia <base>/.claude-pocket-state
-    # e o registry le <base>/.claude-pocket-*. Sem CLAUDE_CONFIG_DIR (padrao) = ~/.claude.
-    base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
 
     state = _state_of(event, o)
     if state and sid:
@@ -76,5 +83,14 @@ try:
         _write_marker(base, ".claude-pocket-kimi", pane.lstrip("%"),
                       {"session_id": sid, "cwd": o.get("cwd"), "ts": time.time()})
 except Exception:
-    pass
+    # NUNCA travar o prompt do usuario por causa do hook -> engole a excecao. Mas nao pode ser um
+    # `pass` mudo: este hook e a UNICA fonte de estado do Kimi (o spinner dele e fase de lua, fora
+    # de SPINNER_GLYPHS, entao o fallback de pane nunca detecta "working") E a unica fonte do
+    # bilhete pane->sessao. Falhando calado, a sessao fica congelada em "ociosa/sem transcript" pra
+    # sempre e nao ha onde olhar. Deixa UMA linha em disco, best-effort, sem depender de logging.
+    try:
+        with open(os.path.join(base, "kimi_hook_error.log"), "a", encoding="utf-8") as _fh:
+            _fh.write("%s %s\n" % (time.time(), traceback.format_exc().replace("\n", " | ")))
+    except Exception:
+        pass
 sys.exit(0)

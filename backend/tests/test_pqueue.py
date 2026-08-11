@@ -570,3 +570,74 @@ def test_merged_history_kimi_provider(tmp_path):
     ])
     evs = pqueue.merged_history("s", wire, "kimi")
     assert [(e.kind, e.text) for e in evs] == [("user_msg", "ola"), ("assistant_msg", "oi!")]
+
+
+# --- Redigitacao as cegas: o incidente de 2026-08-11 (kill-server -> resume -> msg duplicada) ---
+# Cadeia medida: um subagente rodou `tmux kill-server` 13:55:29 (o log do backend registra
+# "no server running on /tmp/tmux-1000/default"); as sessoes morreram e a de nome `hangar` voltou
+# 13:59:09 via `claude --resume`. A fila duravel e um arquivo por NOME de sessao, entao ela
+# sobreviveu ao pane. As 14:00:48 saiu UM POST /input; as 14:01:48 o backend concluiu "a TUI
+# engoliu" e redigitou (log REQUEUE n=1, e a entrada do sidecar com attempts:1) -> a mesma
+# mensagem apareceu duas vezes no chat.
+# O guard de `_confirm_and_drain` so adia enquanto o marcador do hook diz `working`. Sessao
+# ressuscitada e exatamente o caso em que esse marcador nao e confiavel: `get_state` devolve None
+# e o codigo caia PRA FRENTE, redigitando as cegas dentro de um turno vivo.
+# Regra: redigitar e a acao destrutiva aqui (mete texto num prompt em uso). Sem PROVA de que a
+# sessao nao esta no meio de um turno, nao se redigita — confirma e desiste. O pior caso vira o
+# comportamento antigo (envio engolido fica visivel como bolha), que e falha VISIVEL, nao duplicata.
+
+def _sessao_fake(nome, jsonl):
+    from types import SimpleNamespace
+    return SimpleNamespace(name=nome, jsonl=str(jsonl), provider="claude")
+
+
+def _cenario_engolida(tmp_path, monkeypatch, estado):
+    """Fila com uma entrega nao-confirmada + transcript SEM o texto. `estado` = o que o marcador
+    do hook responde. Devolve (chamou_drain, linha_da_fila_depois)."""
+    import json
+    import time as _t
+    from types import SimpleNamespace
+    import app.api as api
+
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "user", "timestamp": "2026-01-01T00:00:00Z",
+                             "message": {"role": "user", "content": "inicio"}}) + "\n",
+                 encoding="utf-8")
+    q = PromptQueue("ressuscitada")
+    q.path.write_text(json.dumps({"id": "e1", "text": "MENSAGEM-UNICA", "ts": _t.time() - 30,
+                                  "delivered": True}) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(api.registry, "list", lambda: [_sessao_fake("ressuscitada", j)])
+    monkeypatch.setattr(api.hook_state, "get_state", lambda _sid: estado)
+    monkeypatch.setattr(api.threading, "Timer", lambda *a, **k: SimpleNamespace(start=lambda: None))
+    chamou = []
+    monkeypatch.setattr(api, "drain", lambda *a, **k: chamou.append(a))
+
+    api._confirm_and_drain("ressuscitada")
+    return chamou, q.load()[0]
+
+
+def test_confirm_nao_redigita_com_estado_desconhecido(tmp_path, monkeypatch):
+    # Marcador ausente (sessao ressuscitada apos o tmux morrer): NAO pode redigitar.
+    chamou, row = _cenario_engolida(tmp_path, monkeypatch, None)
+    assert chamou == []                        # nada de re-drenar -> nada de segunda digitacao
+    assert row["delivered"] is True            # nunca volta pra fila
+    assert not row.get("attempts")             # nao contou tentativa
+    assert row["confirmed"] is True            # e para de rechecar (sem loop de timer)
+
+
+def test_confirm_ainda_redigita_com_estado_conhecido_ocioso(tmp_path, monkeypatch):
+    # O contrario, pra a correcao acima nao matar a feature: estado PROVADAMENTE ocioso e
+    # texto ausente do transcript continua sendo re-enfileirado (envio engolido pela TUI).
+    import time as _t
+    chamou, row = _cenario_engolida(tmp_path, monkeypatch, ("idle", _t.time()))
+    assert chamou and chamou[0][0] == "ressuscitada"
+    assert row["delivered"] is False and row["attempts"] == 1
+
+
+def test_confirm_adia_enquanto_trabalha(tmp_path, monkeypatch):
+    # Guard que ja existia: mid-turn nao se mexe na fila (nem confirma, nem redigita).
+    import time as _t
+    chamou, row = _cenario_engolida(tmp_path, monkeypatch, ("working", _t.time()))
+    assert chamou == []
+    assert "confirmed" not in row and not row.get("attempts")

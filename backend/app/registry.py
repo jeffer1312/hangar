@@ -14,7 +14,7 @@ from app.config import settings
 from app import runtime_config
 from app.names import sanitize_session_name
 from app.git_ops import git_summary, branch_of
-from app.models import SessionInfo
+from app.models import SessionInfo, session_key
 from app.pqueue import PromptQueue
 from app.chain import ThenLink
 from app.pair import PairLink, rename_pair, leave as pair_leave
@@ -416,6 +416,8 @@ def pi_session_file(pane_id: str, pid: Optional[int] = None,
     sid = _pi_sid_of(pid) if pid else None
     try:
         data = json.loads(ticket.read_text())
+        if not isinstance(data, dict):
+            return None            # ver o irmao em kimi_session_file: nao-dict derruba list() inteira
         f, ts = data.get("file"), data.get("ts")
         # Bilhete de OUTRA encarnacao do pane: o tmux reusa %pane_id apos um restart do servidor e o
         # .jsonl da sessao anterior continua no disco, entao o exists() abaixo nao pega nada — o pane
@@ -493,6 +495,13 @@ def kimi_session_file(pane_id: str, pid: Optional[int] = None,
     ticket = Path(base) / ".claude-pocket-kimi" / f"{pane_id.lstrip('%')}.json"
     try:
         data = json.loads(ticket.read_text())
+        if not isinstance(data, dict):
+            # JSON VALIDO do tipo errado (`null`, lista) nao levanta ValueError, entao o except
+            # abaixo nao pega: `.get` num nao-dict e AttributeError, que sobe pelo loop de list()
+            # SEM guarda e apaga TODAS as sessoes da tela (Claude, Codex, Pi junto). Mesmo furo que
+            # o CLAUDE.md ja registra pro hook_state. Bilhete torto acontece: o _write_marker do
+            # hook usa tmp de nome fixo, sem pid, entao dois eventos sobrepostos entrelacam bytes.
+            return None
         sid, ts = data.get("session_id"), data.get("ts")
         if not sid:
             return None
@@ -959,7 +968,11 @@ class SessionRegistry:
         # a statusline nao tem outra fonte. O "custo ~0" continua valendo pra CLASSIFICACAO; o
         # sweep e limitado a _STATUS_BUDGET capturas por chamada com TTL de _STATUS_TTL.
         def _sid(jsonl):
-            return Path(jsonl).stem if jsonl else None
+            # session_key, NAO Path().stem: no Kimi todo transcript se chama wire.jsonl, entao o stem
+            # e "wire" pra TODA sessao — get_state("wire") nunca casava o marcador (que o hook grava
+            # sob o session_id) e toda sessao Kimi caia no fallback de pane. La o spinner e fase de
+            # lua, fora de SPINNER_GLYPHS, entao sessao trabalhando aparecia OCIOSA na lista.
+            return session_key(jsonl) if jsonl else None
         pending = []  # infos sem marcador (ou awaiting) -> precisa raspar o pane
         for info in infos:
             # Sessoes Codex nao vivem no tmux -> nunca raspar o pane (capture_pane erraria numa

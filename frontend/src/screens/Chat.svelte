@@ -741,7 +741,10 @@
       const msg = err instanceof Error ? err.message : 'Erro ao carregar histórico';
       // Kimi pre-1o-prompt: o 404 do /history e ESPERADO (sem jsonl ainda) -> vira hint, nao a
       // tela de erro "Não encontrei o transcript" (que apavorava num estado que e por design).
-      if (sessionProvider === 'kimi' && (/(^|\D)404(\D|$)/.test(msg) || /not found/i.test(msg))) {
+      // Pelo `.status` que o apiFetch anexa, NAO por regex na frase do backend: o texto do detail
+      // e prosa (traduzir/reescrever ele apagaria esta tela sem quebrar teste nenhum). Mesmo
+      // padrao do 409 do terminal, linha ~1324, e do Composer.
+      if (sessionProvider === 'kimi' && (err as { status?: number } | null)?.status === 404) {
         kimiSemTranscript = true;
         return;
       }

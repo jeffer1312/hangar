@@ -122,7 +122,10 @@ async def _tick(list_fn) -> None:
     # Death ping (feature #2): quem estava vivo no ciclo anterior e sumiu agora = morreu (ver docstring
     # dos sets no topo). Dispara notify_dead 1x (respeita CP_NOTIFY_DEAD) e limpa o _working_started da
     # api pra a sessao morta nao vazar no dict. Dedupe/re-arme por _notified_dead.
-    now_live = {i.name: (Path(i.jsonl).stem if getattr(i, "jsonl", None) else None) for i in infos}
+    # session_key, nao .stem: o transcript do Kimi se chama wire.jsonl em toda sessao (mesmo motivo
+    # do _sid do registry) -> o pop de _working_started nunca casava a chave real e vazava.
+    from app.models import session_key
+    now_live = {i.name: (session_key(i.jsonl) if getattr(i, "jsonl", None) else None) for i in infos}
     for name in _seen_live.keys() - now_live.keys():
         if name in _notified_dead:
             continue

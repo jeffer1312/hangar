@@ -621,10 +621,19 @@ def _confirm_and_drain(name: str) -> None:
         if m and m[0] == "working":
             threading.Timer(_CONFIRM_GRACE + 0.5, _confirm_and_drain, args=(name,)).start()
             return
+        # Estado DESCONHECIDO (marcador ausente): nao da pra provar que a sessao nao esta no meio de
+        # um turno — e redigitar e a acao destrutiva daqui (mete texto num prompt em uso). Entao
+        # confirma sem NUNCA redigitar (max_attempts=0). O caso real e sessao RESSUSCITADA: o
+        # kill-server de 2026-08-11 13:55 matou o tmux, a sessao voltou por `claude --resume` e a
+        # fila duravel (arquivo por NOME) sobreviveu ao pane — o guard acima caiu pra frente com
+        # get_state()=None e o backend redigitou dentro do turno vivo (log REQUEUE 14:01:48).
+        # Pior caso agora = comportamento antigo: envio engolido fica visivel como bolha da fila,
+        # que e falha VISIVEL. Duplicar a msg do usuario nao e.
         requeued = q.reconcile_delivered(
             committed_user_lines(info.jsonl, info.provider), _transcript_start_ts(info.jsonl),
             time.time(),
             grace=_CONFIRM_GRACE,
+            max_attempts=0 if m is None else 2,
         )
         if requeued:
             _log.info("REQUEUE name=%s n=%d (TUI engoliu o send; re-drenando)", name, len(requeued))
