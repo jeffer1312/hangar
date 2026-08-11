@@ -98,9 +98,15 @@ function claude
     # sem repassar aqui, a sessão nasceria na conta padrão, calada. Aqui pode ir por `-e` (ao
     # contrário da key do motor, que vai pelo `cp-engine --exec` justamente pra não aparecer em
     # /proc/<pid>/cmdline): isto é um caminho, não um segredo.
+    # Passado SEMPRE, não só quando o chamador tem a variável: o servidor tmux guarda o ambiente
+    # com que foi INICIADO, e omitir o `-e` numa sessão posterior não remove a variável — o pane
+    # nasceria na conta de uma sessão antiga. Chamador sem a variável -> padrão explícito
+    # ($HOME/.claude), nunca string vazia (diretório inválido/indefinido pro claude).
     set -l cfg
     if set -q CLAUDE_CONFIG_DIR; and test -n "$CLAUDE_CONFIG_DIR"
         set cfg -e "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR"
+    else
+        set cfg -e "CLAUDE_CONFIG_DIR=$HOME/.claude"
     end
 
     set -l run

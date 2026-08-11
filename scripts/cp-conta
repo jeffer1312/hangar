@@ -45,4 +45,9 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    try:
+        sys.exit(main(sys.argv))
+    except OSError as e:
+        # Mesma borda do cp-engine: traceback aqui vazaria pro usuario errado (o wrapper de shell).
+        print(f"cp-conta: falha ao executar: {e}", file=sys.stderr)
+        sys.exit(126)

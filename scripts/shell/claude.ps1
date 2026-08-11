@@ -76,8 +76,12 @@ function claude {
     # sem repassar aqui, a sessao nasceria na conta padrao, calada. Aqui pode ir por `-e` (ao
     # contrario da key do motor, que vai pelo `cp-engine --exec` justamente pra nao aparecer em
     # /proc/<pid>/cmdline): isto e um caminho, nao um segredo.
-    $cfg = @()
+    # Passado SEMPRE, nao so quando o chamador tem a variavel: o multiplexador guarda o ambiente
+    # com que foi INICIADO, e omitir o `-e` numa sessao posterior nao remove a variavel — o pane
+    # nasceria na conta de uma sessao antiga. Chamador sem a variavel -> padrao explicito
+    # ($HOME/.claude), nunca string vazia (diretorio invalido/indefinido pro claude).
     if ($env:CLAUDE_CONFIG_DIR) { $cfg = @('-e', "CLAUDE_CONFIG_DIR=$($env:CLAUDE_CONFIG_DIR)") }
+    else { $cfg = @('-e', "CLAUDE_CONFIG_DIR=$HOME\.claude") }
 
     # Sem `exec` e sem systemd-run, ao contrario do POSIX: nao ha shell intermediario dentro do
     # pane do psmux (ele roda o comando direto no ConPTY) e nao ha cgroup de servico pra escapar.
