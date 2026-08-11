@@ -326,14 +326,16 @@ class PromptQueue:
         msg sumia com cara de entregue. Entrada delivered, nao-confirmada, da sessao atual e mais
         velha que `grace`: texto no transcript -> confirmed=True (para de checar); ausente ->
         delivered=False + attempts+1 (o drain reentrega); attempts >= max_attempts -> desiste
-        (confirmed=True: fica visivel como bubble = comportamento antigo, sem loop de redigitacao).
+        (`desistiu=True`: fica VISIVEL como bubble = comportamento antigo, sem loop de redigitacao).
+        Os dois desfechos sao campos DIFERENTES de proposito — `confirmed` esconde o eco, `desistiu`
+        nao. Ate 2026-08-11 os dois gravavam `confirmed` e a msg engolida sumia da tela.
         Devolve as re-enfileiradas."""
         with _append_lock:
             rows = self.load()
             requeued: list[dict] = []
             changed = False
             for r in rows:
-                if r.get("delivered") is not True or r.get("confirmed"):
+                if r.get("delivered") is not True or r.get("confirmed") or r.get("desistiu"):
                     continue
                 ts = float(r.get("ts") or 0.0)
                 if ts < min_ts:
@@ -353,7 +355,13 @@ class PromptQueue:
                 if not text_raw or lines & committed:
                     r["confirmed"] = True
                 elif int(r.get("attempts") or 0) >= max_attempts:
-                    r["confirmed"] = True
+                    # DESISTIU != CONFIRMADA. `confirmed` quer dizer "o texto esta comprovadamente
+                    # no transcript" e e o que faz merged_history/follow ESCONDEREM o eco (a bolha
+                    # real ja cobre). Aqui nao ha bolha real nenhuma — a msg foi engolida de vez —,
+                    # entao marcar confirmed sumia com a mensagem do usuario: some do /history e do
+                    # SSE, e o `pending` do front so a segura ate o proximo reload. Campo proprio:
+                    # para de rechecar (o loop acima pula) SEM esconder.
+                    r["desistiu"] = True
                 else:
                     r["delivered"] = False
                     r["attempts"] = int(r.get("attempts") or 0) + 1

@@ -229,11 +229,26 @@ def test_reconcile_confirms_requeues_and_silences_old():
     assert got["old"]["confirmed"] is True                       # sessao anterior: silenciada
 
 
-def test_reconcile_gives_up_after_max_attempts():
+def test_reconcile_gives_up_after_max_attempts(tmp_path):
+    # "Desiste" NAO pode virar "confirmed": esse flag e o que faz merged_history/follow esconderem o
+    # eco, porque significa "a bolha real do transcript ja cobre". Numa desistencia nao ha bolha
+    # real — a msg foi engolida —, entao marcar confirmed SUMIA com a mensagem do usuario. O teste
+    # antigo comentava "fica visivel" e nunca chamava merged_history pra provar; agora prova.
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "user", "timestamp": "2026-01-01T00:00:00Z",
+                             "message": {"role": "user", "content": "inicio"}}) + "\n",
+                 encoding="utf-8")
     q = PromptQueue("s")
-    q.path.write_text('{"id":"x","text":"t","ts":900.0,"delivered":true,"attempts":2}\n', encoding="utf-8")
-    assert q.reconcile_delivered(set(), min_ts=100.0, now=1000.0) == []
-    assert q.load()[0]["confirmed"] is True    # desiste: fica visivel, sem loop de redigitacao
+    # ts POSTERIOR ao inicio do transcript (2026-01-01), senao quem tira a bolha e a poda de
+    # sessao-anterior do merged_history e o teste mediria a coisa errada.
+    q.path.write_text('{"id":"x","text":"engolida","ts":1800000000.0,"delivered":true,"attempts":2}\n',
+                      encoding="utf-8")
+    assert q.reconcile_delivered(set(), min_ts=100.0, now=1800000100.0) == []
+    row = q.load()[0]
+    assert row["desistiu"] is True             # para de rechecar (sem loop de redigitacao)
+    assert "confirmed" not in row              # ...mas NAO se passa por "achei no transcript"
+    assert "engolida" in [e.text for e in pqueue.merged_history("s", str(j))]   # segue na tela
 
 
 def test_reconcile_strips_attachment_marker():
@@ -623,7 +638,8 @@ def test_confirm_nao_redigita_com_estado_desconhecido(tmp_path, monkeypatch):
     assert chamou == []                        # nada de re-drenar -> nada de segunda digitacao
     assert row["delivered"] is True            # nunca volta pra fila
     assert not row.get("attempts")             # nao contou tentativa
-    assert row["confirmed"] is True            # e para de rechecar (sem loop de timer)
+    assert row["desistiu"] is True             # para de rechecar, SEM se passar por confirmada
+    assert "confirmed" not in row              # senao a msg do usuario sumiria da tela
 
 
 def test_confirm_ainda_redigita_com_estado_conhecido_ocioso(tmp_path, monkeypatch):
