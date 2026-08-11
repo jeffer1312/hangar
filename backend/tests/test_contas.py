@@ -12,11 +12,23 @@ O que esta suíte trava:
 * arquivo de topo que virou local com conteúdo NOVO é devolvido pro compartilhado, não descartado
   (quem grava por tmp+rename substitui o atalho por arquivo comum: mandar pra `.drift` perderia a
   mudança nas duas contas);
-* pasta sem marcador é recusada (senão um `~/.claude-backup` do usuário viraria alvo de poda).
+* pasta sem marcador é recusada (senão um `~/.claude-backup` do usuário viraria alvo de poda);
+* nada que não seja dado da conta é seguido: symlink apontando pra fora, raiz de conta symlinkada,
+  gaveta `.drift` symlinkada e `projeto` com `..`/barra são recusados ou vão pra gaveta sem tocar
+  no alvo;
+* criação com falha no meio (sem `~/.claude`, symlink recusado) NÃO deixa conta parcial;
+* reconciliações de contas diferentes se serializam — o `~/.claude` compartilhado é escrito por
+  todas, e o último-vencedor de uma corrida perderia alteração sem aviso;
+* o módulo é importável com o python do sistema (`-S`, sem site-packages) — é o que o `cp-conta`
+  usa.
 """
 import ast
 import json
+import os
 import pathlib
+import subprocess
+import sys
+import threading
 
 import pytest
 
@@ -144,13 +156,228 @@ def test_arquivo_local_identico_nao_gera_aviso(casa):
 
 def test_pasta_local_vai_pra_drift_com_teto(casa):
     """Pasta não dá pra fundir com o compartilhado — vai pra gaveta. Com teto, senão a gaveta
-    cresce pra sempre sem ninguém olhar."""
+    cresce pra sempre sem ninguém olhar. Cada versão carrega conteúdo próprio e mtime controlado:
+    o teste trava a ORDEM da poda, não só a contagem — apagar tudo e criar três pastas vazias
+    passaria na contagem, não aqui."""
     p = contas.criar("conta2")
-    for _ in range(5):
+    base = 1_700_000_000
+    for i in range(5):
         (p / "skills").unlink()
         (p / "skills").mkdir()
+        (p / "skills" / "versao.txt").write_text(str(i), encoding="utf-8")
+        os.utime(p / "skills", (base + i, base + i))
         contas.reconciliar("conta2")
-    assert len(list((p / ".drift").iterdir())) == contas.DRIFT_TETO
+    gaveta = p / ".drift"
+    assert len(list(gaveta.iterdir())) == contas.DRIFT_TETO
+    conteudos = {int((gaveta / f"skills.{n}" / "versao.txt").read_text(encoding="utf-8"))
+                 for n in range(1, 6) if (gaveta / f"skills.{n}").is_dir()}
+    assert conteudos == {2, 3, 4}
+
+
+def test_arquivo_local_contra_alvo_que_virou_pasta_vai_pra_gaveta(casa):
+    """`hooks` virou pasta no ~/.claude e a conta tem um arquivo local `hooks` com dados:
+    descartar perderia o arquivo. Incompatibilidade de tipo é deriva — vai pra gaveta, íntegro."""
+    p = contas.criar("conta2")
+    (casa / ".claude" / "hooks").mkdir()   # pasta no compartilhado, criada DEPOIS da conta
+    (p / "hooks").write_text("script meu", encoding="utf-8")
+    avisos = contas.reconciliar("conta2")
+    assert (p / "hooks").is_symlink()
+    assert any("hooks" in a for a in avisos)
+    assert (p / ".drift" / "hooks.1").read_text(encoding="utf-8") == "script meu"
+
+
+def test_symlink_local_inesperado_vai_pra_gaveta_sem_ler_o_alvo(casa):
+    """Symlink dentro da conta apontando pra fora não pode ser seguido: filecmp/copyfile leriam o
+    alvo externo e sobrescreveriam o compartilhado com ele. O link vai pra gaveta sem tocar no
+    alvo — o compartilhado fica como está."""
+    p = contas.criar("conta2")
+    segredo = casa / "segredo.txt"
+    segredo.write_text("s3nh4", encoding="utf-8")
+    (p / "settings.json").unlink()
+    (p / "settings.json").symlink_to(segredo)
+    avisos = contas.reconciliar("conta2")
+    assert (casa / ".claude" / "settings.json").read_text(encoding="utf-8") == '{"theme":"dark"}'
+    assert os.readlink(p / "settings.json") == str(casa / ".claude" / "settings.json")
+    assert any("settings.json" in a for a in avisos)
+    assert (p / ".drift" / "settings.json.1").is_symlink()
+
+
+def test_gaveta_drift_symlinkada_e_recusada(casa):
+    """Gaveta .drift apontando pra fora: o move mandaria a pasta colidida pro alvo externo, e a
+    poda poderia rmtree lá. Recusar é a única saída que não mexe fora da conta."""
+    p = contas.criar("conta2")
+    fora = casa / "fora"
+    fora.mkdir()
+    (p / "skills").unlink()
+    (p / "skills").mkdir()
+    (p / ".drift").symlink_to(fora, target_is_directory=True)
+    with pytest.raises(contas.ContaError) as e:
+        contas.reconciliar("conta2")
+    assert e.value.status == 500
+    assert not (fora / "skills.1").exists()
+
+
+def test_conta_raiz_symlinkada_e_ignorada(casa):
+    """`~/.claude-evil -> /tmp/fora` com um marcador plantado lá dentro não pode virar conta:
+    listar mostraria a conta, reconciliar remexeria em /tmp/fora e apagar derrubaria com erro
+    bruto de rmtree em symlink."""
+    fora = casa / "fora"
+    fora.mkdir()
+    (fora / contas.MARCADOR).write_text("", encoding="utf-8")
+    (casa / ".claude-evil").symlink_to(fora, target_is_directory=True)
+    assert contas.e_conta(casa / ".claude-evil") is False
+    assert "evil" not in contas.listar()
+    with pytest.raises(contas.ContaError) as e:
+        contas.reconciliar("evil")
+    assert e.value.status == 404
+    with pytest.raises(contas.ContaError) as e:
+        contas.apagar("evil")
+    assert e.value.status == 404
+
+
+def test_projeto_absoluto_ou_com_traversal_e_recusado(casa):
+    """`projeto` é entrada da interface pública e vira caminho: absoluto, `..`, barra e barra
+    invertida escapariam de ~/.claude. A regra aceita exatamente o que registry.sanitize_cwd
+    produz (letras, dígitos e hífen)."""
+    contas.criar("conta2")
+    for projeto in ("/tmp/fora", "../../fora", "a/b", "a\\b"):
+        with pytest.raises(contas.ContaError) as e:
+            contas.reconciliar("conta2", projeto=projeto)
+        assert e.value.status == 400
+    assert not (casa / "tmp" / "fora").exists()
+    assert not (casa / "fora").exists()
+
+
+def test_reconciliacoes_paralelas_de_contas_diferentes_nao_se_perdem(casa):
+    """Duas contas reconciliando ao mesmo tempo escrevem no MESMO ~/.claude: o settings.json
+    alterado dentro de cada conta sobe pro compartilhado. Sem a trava compartilhada, as duas
+    passam o filecmp contra o mesmo estado e o último copyfile vence — a alteração da primeira
+    morre sem aviso. A corrida real não reproduz com determinismo (janela pequena), então o
+    teste roda a condição 20 vezes e verifica os invariantes: nenhum erro, o compartilhado
+    sempre termina com UMA das versões íntegras e as duas contas religadas."""
+    contas.criar("uma")
+    contas.criar("dois")
+    erros: list[Exception] = []
+
+    def rodar(nome: str) -> None:
+        try:
+            contas.reconciliar(nome)
+        except Exception as e:  # noqa: BLE001 — o assert fora da thread é o teste
+            erros.append(e)
+
+    versoes = {"uma": "light", "dois": "dark"}
+    for _ in range(20):
+        # O compartilhado parte de uma TERCEIRA versão: as duas contas têm alteração local a
+        # subir, que é exatamente a condição da corrida (ambas passam o filecmp contra o mesmo).
+        (casa / ".claude" / "settings.json").write_text('{"theme":"grey"}', encoding="utf-8")
+        for nome, tema in versoes.items():
+            alvo = casa / f".claude-{nome}" / "settings.json"
+            alvo.unlink()
+            alvo.write_text(json.dumps({"theme": tema}), encoding="utf-8")
+        t1 = threading.Thread(target=rodar, args=("uma",))
+        t2 = threading.Thread(target=rodar, args=("dois",))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+        assert not erros, erros
+        final = json.loads((casa / ".claude" / "settings.json").read_text(encoding="utf-8"))
+        assert final["theme"] in versoes.values()
+        for nome in versoes:
+            assert (casa / f".claude-{nome}" / "settings.json").is_symlink()
+
+
+def test_criar_sem_claude_na_maquina(casa):
+    """Máquina nova: nem ~/.claude nem ~/.claude.json existem. A conta nasce mesmo assim — sem o
+    mkdir explícito do compartilhado, criar() quebrava no iterdir() da reconciliação e ainda
+    deixava pasta parcial com marcador: conta quebrada no seletor e 409 na tentativa seguinte."""
+    import shutil
+    shutil.rmtree(casa / ".claude")
+    (casa / ".claude.json").unlink()
+    p = contas.criar("conta2")
+    assert (casa / ".claude").is_dir()
+    assert (p / contas.MARCADOR).is_file()
+    assert contas.listar() == ["conta2"]
+
+
+def test_falha_ao_criar_atalho_nao_deixa_conta_parcial(casa, monkeypatch):
+    """No Windows sem Modo Desenvolvedor o os.symlink falha; a conta não pode sobrar pela metade
+    (marcador publicado, seletor mostrando conta quebrada). O rollback remove a pasta inteira."""
+    def quebra(src, dst, **kw):
+        raise OSError(1, "permission denied")
+
+    monkeypatch.setattr(os, "symlink", quebra)
+    with pytest.raises(contas.ContaError):
+        contas.criar("conta2")
+    assert not (casa / ".claude-conta2").exists()
+
+
+def test_semear_com_claude_json_truncado_estoura(casa):
+    """Arquivo truncado por escrita concorrente não vira conta "criada" sem MCP nem permissões,
+    com o problema escondido — e a pasta parcial é desfeita."""
+    (casa / ".claude.json").write_text("{tru", encoding="utf-8")
+    with pytest.raises(contas.ContaError) as e:
+        contas.criar("conta2")
+    assert e.value.status == 500
+    assert not (casa / ".claude-conta2").exists()
+
+
+def test_semear_com_claude_json_nao_objeto_estoura(casa):
+    (casa / ".claude.json").write_text('"sou uma string"', encoding="utf-8")
+    with pytest.raises(contas.ContaError) as e:
+        contas.criar("conta2")
+    assert e.value.status == 500
+
+
+def test_semear_com_erro_de_leitura_estoura(casa, monkeypatch):
+    def quebra(*a, **kw):
+        raise OSError(13, "permission denied")
+
+    monkeypatch.setattr(pathlib.Path, "read_text", quebra)
+    with pytest.raises(contas.ContaError) as e:
+        contas.criar("conta2")
+    assert e.value.status == 500
+
+
+def test_memoria_local_vai_pra_gaveta_e_volta_a_ser_atalho(casa):
+    """Memória local de verdade dentro da conta diverge do compartilhado calada — mesma regra do
+    resto do ambiente: vai pra gaveta, o atalho é refeito e o aviso sai no reconciliar."""
+    p = contas.criar("conta2")
+    memo = p / "projects" / "-tmp-x" / "memory"
+    memo.unlink()
+    memo.mkdir()
+    (memo / "MEMORY.md").write_text("versao so minha", encoding="utf-8")
+    avisos = contas.reconciliar("conta2")
+    assert memo.is_symlink()
+    assert (memo / "MEMORY.md").read_text(encoding="utf-8") == "m"
+    assert (p / ".drift" / "memory.1" / "MEMORY.md").read_text(encoding="utf-8") == "versao so minha"
+    assert any("memory" in a for a in avisos)
+
+
+def test_memoria_de_projeto_removido_e_podada(casa):
+    """Projeto sumiu do compartilhado: o symlink de memory que ficou apontando pro nada é link
+    morto, não dado — sai sem gaveta, na próxima reconciliação."""
+    p = contas.criar("conta2")
+    contas.reconciliar("conta2", projeto="-home-jefferson-saiu")
+    memo = p / "projects" / "-home-jefferson-saiu" / "memory"
+    assert memo.is_symlink()
+    import shutil
+    shutil.rmtree(casa / ".claude" / "projects" / "-home-jefferson-saiu")
+    assert contas.reconciliar("conta2") == []
+    assert not memo.exists()
+    assert not memo.is_symlink()
+
+
+def test_temporario_hangar_novo_do_usuario_nao_e_apagado(casa):
+    """O temporário da troca atômica tinha nome fixo; um arquivo legítimo com esse nome era
+    apagado na religação. Com nome único por chamada, o arquivo do usuário sobrevive."""
+    p = contas.criar("conta2")
+    (p / "skills.hangar-novo").write_text("dado meu", encoding="utf-8")
+    (p / "skills").unlink()
+    (p / "skills").mkdir()
+    contas.reconciliar("conta2")
+    assert (p / "skills.hangar-novo").read_text(encoding="utf-8") == "dado meu"
+    assert (p / "skills").is_symlink()
 
 
 def test_reconciliar_recusa_pasta_sem_marcador(casa):
@@ -197,7 +424,14 @@ def test_listar_devolve_so_conta_carimbada(casa):
 def test_modulo_e_stdlib_pura():
     """O cp-conta importa este módulo com o python3 do SISTEMA (sem venv). Um import de app.config
     puxaria pydantic e quebraria o terminal deixando só o app funcionando — falha assimétrica,
-    chata de diagnosticar. Sentinela, não prova: barra os culpados conhecidos."""
+    chata de diagnosticar. Prova real: subprocesso com `-S` (sem site-packages), só o backend no
+    sys.path. O AST fica como diagnóstico pra apontar o import culpado se o subprocesso falhar."""
+    raiz = str(pathlib.Path(contas.__file__).resolve().parent.parent)
+    r = subprocess.run(
+        [sys.executable, "-S", "-c",
+         f"import sys; sys.path.insert(0, {raiz!r}); import app.contas"],
+        capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
     fonte = pathlib.Path(contas.__file__).read_text(encoding="utf-8")
     arvore = ast.parse(fonte)
     importados = {

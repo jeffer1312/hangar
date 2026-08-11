@@ -25,7 +25,7 @@ conta, não.
 | Sistema | Estado |
 |---|---|
 | Linux | Funciona. Medido: config dir vazio faz o CLI responder `Not logged in · Please run /login`. |
-| Windows | **Pode não funcionar.** Atalho exige o Modo Desenvolvedor ligado; sem ele a criação falha com mensagem explícita, em vez de cair pra cópia (cópia divergiria em silêncio). Além disso não há `flock`, então a trava contra reconciliação simultânea vira no-op. |
+| Windows | **Pode não funcionar.** Atalho exige o Modo Desenvolvedor ligado; sem ele a criação falha com mensagem explícita e a pasta da conta é desfeita por inteiro, em vez de cair pra cópia (cópia divergiria em silêncio). Além disso não há `flock`, então a trava contra reconciliação simultânea vira no-op. |
 | macOS | **Provavelmente não isola. Não testado.** A doc oficial escopa o comportamento a Linux e Windows: *"If you've set the `CLAUDE_CONFIG_DIR` environment variable on Linux or Windows, the `.credentials.json` file lives under that directory instead."* No macOS a credencial é do Keychain e a doc não promete separação por config dir — se o item for o mesmo pras duas contas, elas brigam por ele. Teste de um minuto num Mac: criar a conta, rodar `/login` nela e conferir se a conta anterior continua logada. |
 
 ## Atalho e descoberta de skills

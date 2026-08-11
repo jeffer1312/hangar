@@ -27,6 +27,7 @@ import re
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
+from uuid import uuid4
 
 try:
     import fcntl
@@ -44,6 +45,10 @@ class ContaError(Exception):
 
 
 _NOME_OK = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+
+# Projeto sanitizado (registry.sanitize_cwd): só letras, dígitos e hífen. Regra separada da do
+# nome de conta porque o sanitize preserva maiúsculas e a conta não.
+_PROJETO_OK = re.compile(r"[A-Za-z0-9_-]+")
 
 # Carimbo de "esta pasta foi criada aqui". reconciliar()/apagar() só mexem em pasta carimbada —
 # sem isto, um `~/.claude-backup` do usuário entraria na poda de atalhos e no apagar.
@@ -74,12 +79,21 @@ def caminho(nome: str) -> Path:
 
 
 def e_conta(p: Path) -> bool:
-    return (p / MARCADOR).is_file()
+    """Pasta é conta só se o marcador for real e a raiz não for symlink.
+
+    Seguir symlink aqui aceitaria `~/.claude-evil -> /tmp/fora` com um marcador plantado lá dentro:
+    listar() mostraria a conta, reconciliar() remexeria em /tmp/fora e apagar() derrubaria com erro
+    bruto de rmtree em symlink. A raiz tem que ser diretório de verdade da conta.
+    """
+    if p.is_symlink() or not p.is_dir():
+        return False
+    marcador = p / MARCADOR
+    return marcador.is_file() and not marcador.is_symlink()
 
 
 def listar() -> list[str]:
     return sorted(p.name.removeprefix(".claude-") for p in Path.home().glob(".claude-*")
-                  if p.is_dir() and e_conta(p))
+                  if e_conta(p))
 
 
 @contextmanager
@@ -102,15 +116,37 @@ def _trava(dir_conta: Path):
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
+@contextmanager
+def _trava_compartilhada():
+    """Serializa reconciliações de contas DIFERENTES.
+
+    A reconciliação também escreve no `~/.claude` compartilhado (o arquivo local alterado sobe pro
+    compartilhado). A _trava por conta não cobre isso: duas contas reconciliando ao mesmo tempo
+    passam o filecmp contra o MESMO estado e cada uma copia a sua versão — o último copyfile
+    vence e a alteração da primeira morre sem aviso. O lock mora no HOME, fora de qualquer conta,
+    e é tomado SEMPRE antes da _trava da conta (ordem fixa nas duas pontas, senão deadlock).
+    Mesma ressalva do Windows da _trava.
+    """
+    if fcntl is None:
+        yield
+        return
+    with open(Path.home() / ".hangar-contas.lock", "a+", encoding="utf-8") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
 def _ligar(destino: Path, alvo: Path) -> None:
     """Cria o atalho por troca atômica: sem janela em que o caminho não existe.
 
     A forma ingênua (`unlink` e depois `symlink`) deixa um instante sem o caminho — e um CLI vivo
-    daquela conta lendo `skills/` nesse instante recebe ENOENT.
+    daquela conta lendo `skills/` nesse instante recebe ENOENT. O temporário tem nome único por
+    chamada: um arquivo do usuário chamado `<nome>.hangar-novo` (o nome fixo antigo) era apagado
+    na religação. Órfão de crash fica com nome claro e inócuo — nenhuma chamada futura o acha.
     """
-    tmp = destino.with_name(destino.name + ".hangar-novo")
-    if tmp.is_symlink() or tmp.exists():
-        tmp.unlink()
+    tmp = destino.with_name(f"{destino.name}.hangar-novo-{uuid4().hex}")
     try:
         os.symlink(alvo, tmp, target_is_directory=alvo.is_dir())
     except OSError as e:
@@ -126,6 +162,10 @@ def _ligar(destino: Path, alvo: Path) -> None:
 def _gavetar(dir_conta: Path, destino: Path) -> str:
     """Move pra `.drift/`, mantendo só as DRIFT_TETO mais novas."""
     gaveta = dir_conta / ".drift"
+    if gaveta.is_symlink() or (gaveta.exists() and not gaveta.is_dir()):
+        # Gaveta apontando pra fora: o move mandaria a pasta colidida pro alvo externo, e a poda
+        # poderia rmtree lá. Recusar é a única saída que não mexe fora da conta.
+        raise ContaError(500, "a gaveta .drift desta conta é inválida (symlink ou não-diretório)")
     gaveta.mkdir(exist_ok=True)
     n = 1
     while (gaveta / f"{destino.name}.{n}").exists():
@@ -140,16 +180,23 @@ def _gavetar(dir_conta: Path, destino: Path) -> str:
 def _resolver_colisao(dir_conta: Path, destino: Path, alvo: Path) -> str | None:
     """O caminho existe e NÃO é o atalho esperado. Decide o que fazer sem perder dado.
 
+    Symlink inesperado (o esperado foi filtrado em reconciliar): seguir com filecmp/copyfile
+    LERIA o alvo do link — que pode estar fora da conta — e sobrescreveria o compartilhado com
+    ele. Link não é dado: vai pra gaveta sem tocar no alvo.
+
     Arquivo: quem grava por tmp+rename (`os.replace`) substitui o ATALHO por um arquivo comum
     dentro da conta. A mudança é real e é do usuário — e como o arquivo é compartilhado por
     desenho, devolvê-la pro compartilhado é o que "compartilhado" quer dizer. Mandar pra `.drift`
     perderia a mudança nas DUAS contas, com um log como único rastro.
 
-    Pasta: não dá pra fundir. Vai pra gaveta.
+    Pasta, ou incompatibilidade de tipo (arquivo contra alvo que virou pasta): não dá pra fundir,
+    e descartar o arquivo perderia dado. Vai pra gaveta.
     """
-    if destino.is_dir():
+    if destino.is_symlink():
         return _gavetar(dir_conta, destino)
-    if alvo.is_file() and not filecmp.cmp(destino, alvo, shallow=False):
+    if destino.is_dir() or not destino.is_file() or not alvo.is_file():
+        return _gavetar(dir_conta, destino)
+    if not filecmp.cmp(destino, alvo, shallow=False):
         shutil.copyfile(destino, alvo)
         destino.unlink()
         return f"'{destino.name}' foi alterado dentro desta conta; a mudança subiu pro ~/.claude"
@@ -157,13 +204,18 @@ def _resolver_colisao(dir_conta: Path, destino: Path, alvo: Path) -> str | None:
     return None
 
 
-def _ligar_memoria(dir_conta: Path, projeto: str | None) -> None:
+def _ligar_memoria(dir_conta: Path, projeto: str | None) -> list[str]:
     """`projects/` é real por conta; só o `memory/` de cada projeto é atalho.
 
     Duas passadas: uma varre o que já existe no compartilhado (cobre tudo que a máquina conhece),
     e a outra atende o projeto que está subindo agora — que pode ser novo e ainda não ter memória
     nenhuma. Quem chama com `projeto` é o backend, que sabe o cwd da sessão e sanitiza com
     `registry.sanitize_cwd` (fonte única dessa regra).
+
+    Colisão de memória usa a MESMA regra de preservação do resto: memória local real vai pra
+    gaveta e o atalho é refeito — deixar quieto faria a conta divergir do compartilhado calada.
+    Symlink de memória apontando pra projeto que sumiu do compartilhado é link morto, não dado:
+    é removido, sem gaveta. Devolve avisos (mesmo contrato do reconciliar).
     """
     raiz = compartilhado() / "projects"
     raiz.mkdir(parents=True, exist_ok=True)
@@ -171,6 +223,7 @@ def _ligar_memoria(dir_conta: Path, projeto: str | None) -> None:
     if projeto:
         (raiz / projeto / "memory").mkdir(parents=True, exist_ok=True)
         nomes.add(projeto)
+    avisos: list[str] = []
     for nome in nomes:
         alvo = raiz / nome / "memory"
         if not alvo.is_dir():
@@ -180,9 +233,18 @@ def _ligar_memoria(dir_conta: Path, projeto: str | None) -> None:
         destino = local / "memory"
         if destino.is_symlink() and os.readlink(destino) == str(alvo):
             continue
-        if destino.exists() and not destino.is_symlink():
-            continue   # memória local de verdade: não sobrescreve, deixa quieto
+        if destino.exists() or destino.is_symlink():
+            aviso = _resolver_colisao(dir_conta, destino, alvo)
+            if aviso:
+                avisos.append(aviso)
         _ligar(destino, alvo)
+    raiz_local = dir_conta / "projects"
+    if raiz_local.is_dir():
+        for local in raiz_local.iterdir():
+            memo = local / "memory"
+            if memo.is_symlink() and not memo.exists():
+                memo.unlink()
+    return avisos
 
 
 def reconciliar(nome: str, projeto: str | None = None) -> list[str]:
@@ -194,8 +256,12 @@ def reconciliar(nome: str, projeto: str | None = None) -> list[str]:
     dir_conta = caminho(nome)
     if not e_conta(dir_conta):
         raise ContaError(404, f"{dir_conta} não é uma conta criada pelo hangar")
+    if projeto is not None and not _PROJETO_OK.fullmatch(projeto):
+        # `projeto` vira caminho logo abaixo: absoluto, `..`, barra ou barra invertida escapariam
+        # de ~/.claude. A regra aceita exatamente o que registry.sanitize_cwd produz.
+        raise ContaError(400, "projeto inválido")
     avisos: list[str] = []
-    with _trava(dir_conta):
+    with _trava_compartilhada(), _trava(dir_conta):
         for alvo in sorted(compartilhado().iterdir()):
             if alvo.name in _NAO_LIGAR:
                 continue
@@ -211,7 +277,7 @@ def reconciliar(nome: str, projeto: str | None = None) -> list[str]:
             # Atalho apontando pra coisa que sumiu do compartilhado.
             if p.is_symlink() and not p.exists():
                 p.unlink()
-        _ligar_memoria(dir_conta, projeto)
+        avisos.extend(_ligar_memoria(dir_conta, projeto))
     return avisos
 
 
@@ -221,28 +287,48 @@ def _semear_claude_json(dir_conta: Path) -> None:
     Copiar em vez de começar do zero salva o que dói perder: as permissões já aceitas por diretório
     e os MCP de escopo usuário moram nesse arquivo. O `oauthAccount` é o único campo que PRECISA
     ser diferente — mantê-lo faria o CLI abrir dizendo estar logado numa conta cujo token não tem.
+
+    Só a AUSÊNCIA do arquivo conta como máquina nova. Arquivo truncado por escrita concorrente,
+    sem permissão ou com JSON inválido não pode virar conta "criada" sem MCP nem permissões, com
+    o problema escondido — isso é falha de criação, não começo limpo.
     """
-    dados: dict = {}
+    origem = Path.home() / ".claude.json"
     try:
-        lido = json.loads((Path.home() / ".claude.json").read_text(encoding="utf-8"))
-        if isinstance(lido, dict):
-            dados = lido
-    except (OSError, ValueError):
-        dados = {}   # sem arquivo de origem (máquina nova) a conta começa limpa, não quebra
+        lido = json.loads(origem.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        dados: dict = {}
+    except (OSError, ValueError) as e:
+        raise ContaError(500, f"não consegui ler {origem}: {e}") from None
+    else:
+        if not isinstance(lido, dict):
+            raise ContaError(500, f"{origem} não é um objeto JSON — conta não criada")
+        dados = lido
     dados.pop("oauthAccount", None)
     (dir_conta / ".claude.json").write_text(json.dumps(dados, indent=2), encoding="utf-8")
 
 
 def criar(nome: str) -> Path:
-    """Cria a pasta pronta pro `/login`. NÃO loga — o OAuth abre navegador e é interativo."""
+    """Cria a pasta pronta pro `/login`. NÃO loga — o OAuth abre navegador e é interativo.
+
+    Rollback explícito: se qualquer passo falhar (sem `~/.claude` pra iterar, symlink recusado no
+    Windows), a pasta inteira some. Conta pela metade apareceria no seletor e travaria o cadastro
+    com 409 na tentativa seguinte.
+    """
     dir_conta = caminho(nome)
     if dir_conta.exists():
         raise ContaError(409, f"já existe {dir_conta}")
     dir_conta.mkdir(parents=True)
-    (dir_conta / MARCADOR).write_text("", encoding="utf-8")
-    _semear_claude_json(dir_conta)
-    (dir_conta / "projects").mkdir()
-    reconciliar(nome)
+    ok = False
+    try:
+        (dir_conta / MARCADOR).write_text("", encoding="utf-8")
+        _semear_claude_json(dir_conta)
+        (dir_conta / "projects").mkdir()
+        compartilhado().mkdir(parents=True, exist_ok=True)
+        reconciliar(nome)
+        ok = True
+    finally:
+        if not ok and dir_conta.is_dir() and not dir_conta.is_symlink():
+            shutil.rmtree(dir_conta)
     return dir_conta
 
 
