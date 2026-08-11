@@ -3,7 +3,7 @@
   import BottomSheet from './BottomSheet.svelte';
   import Select from './Select.svelte';
   import FolderScanner from './FolderScanner.svelte';
-  import { getSessions, listClaudeConfigs, getEngines, type Motor } from '../lib/api';
+  import { getSessions, listClaudeConfigs, getEngines, criarConta, type Motor } from '../lib/api';
   import { basename, providerName } from '../lib/format';
   import { selectServer, getActiveId, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
@@ -60,6 +60,9 @@
   // Config dirs do Claude (ex: ~/.claude, ~/.claude-work). Picker so aparece quando ha mais de um.
   let configs = $state<ConfigDirInfo[]>([]);
   let selectedConfig = $state<string | null>(null);
+  // Estado do botão "+ conta": trava enquanto o POST roda e mostra o aviso do /login na volta.
+  let contaOcupada = $state(false);
+  let avisoConta = $state('');
   // Motor de modelo (Task 5): '' = conta Anthropic (o padrão de sempre). Só faz sentido com provider claude.
   let engine = $state('');
   let motores = $state<Record<string, Motor>>({});
@@ -86,6 +89,28 @@
     getEngines()
       .then((r) => { if (seq === cfgSeq) motores = r.motores; })
       .catch(() => { if (seq === cfgSeq) motores = {}; });
+  }
+
+  // Cadastra conta nova pela API. A sessão sobe DESLOGADA — o /login roda dentro dela, uma vez.
+  async function novaConta() {
+    const nome = (prompt('Nome da conta (minúsculas, números, - ou _):') ?? '').trim();
+    if (!nome) return;
+    contaOcupada = true;
+    avisoConta = '';
+    try {
+      const c = await criarConta(nome);
+      // Direto no listClaudeConfigs, NÃO no loadConfigs: loadConfigs não é async (devolve void), e o
+      // .then interno selecionaria a conta ATIVA por cima do c.path — a conta nova nunca é active
+      // antes do /login, e o aviso sairia com a conta errada selecionada.
+      const cs = await listClaudeConfigs();
+      configs = cs;
+      selectedConfig = c.path;
+      avisoConta = 'Conta criada. A sessão vai subir DESLOGADA — rode /login nela uma vez.';
+    } catch (e) {
+      avisoConta = e instanceof Error ? e.message : 'não consegui criar a conta';
+    } finally {
+      contaOcupada = false;
+    }
   }
 
   // Escape hatch: digitar o caminho na mao.
@@ -268,14 +293,21 @@
         </div>
       </div>
 
-      {#if provider === 'claude' && configs.length > 1}
+      {#if provider === 'claude'}
         <div class="field">
-          <label class="field-label" for="cfg-pick">Claude config</label>
-          <Select id="cfg-pick" class="field-input" ariaLabel="Configuração"
-            value={selectedConfig ?? ''}
-            opcoes={configs.map((c) => ({
-              value: c.path, label: c.label, hint: c.active ? 'atual' : undefined, title: c.path }))}
-            onchange={(v) => (selectedConfig = v)} />
+          <label class="field-label" for="cfg-pick">Conta Claude</label>
+          <div class="conta-row">
+            <Select id="cfg-pick" class="field-input" ariaLabel="Conta"
+              value={selectedConfig ?? ''}
+              opcoes={configs.map((c) => ({
+                value: c.path, label: c.label, hint: c.active ? 'atual' : undefined, title: c.path }))}
+              onchange={(v) => (selectedConfig = v)} />
+            <button type="button" class="ghost-btn conta-add" onclick={novaConta}
+              disabled={contaOcupada}>{contaOcupada ? '…' : '+ conta'}</button>
+          </div>
+          {#if avisoConta}
+            <p class="conta-hint">{avisoConta}</p>
+          {/if}
         </div>
       {/if}
 
@@ -506,6 +538,29 @@
     font-size: var(--text-sm);
     color: var(--error);
     margin-bottom: var(--space-3);
+  }
+
+  /* ── Linha de conta: seletor + botão de cadastrar ─────────────────────── */
+  .conta-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .conta-row :global(.field-input) {
+    flex: 1;
+    min-width: 0;
+  }
+  /* ghost-btn é 100% de largura (pensado pra botão de rodapé); num row o botão precisa do
+     tamanho do conteúdo, senão ele toma a linha e o seletor some. */
+  .conta-add {
+    flex: 0 0 auto;
+    width: auto;
+    margin-top: 0;
+  }
+  .conta-hint {
+    margin: 6px 0 0;
+    font-size: 12px;
+    opacity: 0.75;
   }
 
   .primary-btn {

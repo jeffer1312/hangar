@@ -297,6 +297,18 @@ export function createSession(
   });
 }
 
+// Cria a pasta da conta. NÃO loga: a sessão sobe deslogada e o /login roda dentro dela, uma vez.
+export async function criarConta(nome: string): Promise<ConfigDirInfo> {
+  return apiFetch<ConfigDirInfo>('/api/claude-configs', {
+    method: 'POST',
+    body: JSON.stringify({ nome }),
+  });
+}
+
+export async function apagarConta(nome: string): Promise<void> {
+  await apiFetch(`/api/claude-configs/${encodeURIComponent(nome)}`, { method: 'DELETE' });
+}
+
 // Web Push: chave VAPID publica deste servidor (applicationServerKey). Vazia = push desligado la.
 export async function getVapidKey(s: Server): Promise<string> {
   const res = await fetch(`${s.baseUrl}/api/push/vapid`, {
