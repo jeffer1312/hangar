@@ -48,7 +48,7 @@ from app import runtime_config
 from app import tts
 from app.tts_text import preparar as tts_preparar
 from app import narrar
-from app import default_model, engine_probe, engines, contas
+from app import default_model, engine_probe, engines, contas, procinfo
 from app.costs import report as costs_report, usd_brl as _usd_brl, PERIODOS as _COST_PERIODOS
 from app import pricing
 from app.git_ops import (
@@ -867,7 +867,10 @@ def claude_configs():
 
 
 class ContaBody(_StrictBody):
-    nome: str = Field(min_length=1, max_length=32)
+    # Mesma regra do contas._NOME_OK. O pattern aqui roda no regex do pydantic-core (crate Rust),
+    # cujo `$` é fim ABSOLUTO do texto — diferente do re do Python, que aceita quebra de linha
+    # final. Sem o pattern, POST {"nome": "conta2\n"} criaria pasta com \n no nome.
+    nome: str = Field(min_length=1, max_length=32, pattern=r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
 
 @app.post("/api/claude-configs", dependencies=[Depends(require_auth)])
@@ -888,17 +891,56 @@ async def post_claude_config(body: ContaBody):
 
 @app.delete("/api/claude-configs/{nome}", dependencies=[Depends(require_auth)])
 async def delete_claude_config(nome: str):
-    """Apaga a conta e os transcripts dela. Recusa se alguma sessão viva estiver usando —
-    apagar debaixo de uma sessão em uso deixa o CLI escrevendo num caminho que sumiu."""
+    """Apaga a conta e os transcripts dela.
+
+    Recusa quando a conta é o config dir ATIVO do backend, quando veio da lista fixa do ambiente,
+    quando alguma sessão viva ou processo fora do tmux a usa, ou quando não dá pra confirmar que
+    ninguém a usa. Checagem e rmtree rodam sob a MESMA trava da criação de sessão — sem isto, uma
+    sessão que passou da reconciliação mas ainda não apareceu no registry teria a pasta apagada
+    debaixo dela.
+    """
     try:
         alvo = contas.caminho(nome)
     except contas.ContaError as e:
         raise HTTPException(e.status, e.detail) from None
-    for s in registry.list():
-        if _session_config_dir(s.name) == alvo:
-            raise HTTPException(409, f"a sessão '{s.name}' está usando esta conta")
+    if alvo.resolve() == _backend_config_base().resolve():
+        raise HTTPException(409, "esta conta é o config dir ativo do backend — remova "
+                                 "CLAUDE_CONFIG_DIR antes de apagar")
+    if os.environ.get("CP_CLAUDE_CONFIG_DIRS", "").strip():
+        # Lista fixa por env: a conta apagada voltaria da variável e o seletor mostraria fantasma.
+        if alvo.resolve() in {Path(c.path).resolve() for c in list_config_dirs()}:
+            raise HTTPException(409, "esta conta veio da lista fixa de CP_CLAUDE_CONFIG_DIRS — "
+                                     "remova-a da variável antes de apagar")
+
+    def _checar_e_apagar():
+        from app import tmux
+        if not contas.e_conta(alvo):
+            # Antes da trava: ela abre o marcador, e pasta sem marcador não tem onde travar.
+            raise contas.ContaError(404, f"{alvo} não é uma conta criada pelo hangar")
+        with contas.travada(nome):
+            for s in registry.list():
+                pid = tmux.pane_pid(s.name)
+                if pid is None:
+                    continue   # pane morreu entre a listagem e agora: não está usando nada
+                # Resolução ESTRITA, não o _session_config_dir: o fallback dele trata falha de
+                # leitura como "conta padrão", e apagar por cima disso remove a conta de um CLI
+                # vivo. Aqui falha de leitura é recusa.
+                cfg, confiavel = procinfo._config_dir_confiavel(pid)
+                if not confiavel:
+                    raise HTTPException(409, f"não consegui ler o config dir da sessão "
+                                             f"'{s.name}' — recusado")
+                if cfg is not None and cfg.resolve() == alvo.resolve():
+                    raise HTTPException(409, f"a sessão '{s.name}' está usando esta conta")
+            usando = procinfo.pids_com_config_dir(alvo)
+            if usando is None:
+                raise HTTPException(409, "não consegui confirmar que nenhum processo usa esta "
+                                         "conta — recusado")
+            if usando:
+                raise HTTPException(409, "há processo vivo usando esta conta")
+            contas.apagar(nome)
+
     try:
-        await asyncio.to_thread(contas.apagar, nome)
+        await asyncio.to_thread(_checar_e_apagar)
     except contas.ContaError as e:
         raise HTTPException(e.status, e.detail) from None
     return {"ok": True}
@@ -952,18 +994,9 @@ async def create_session(body: CreateBody):
         raise HTTPException(400, "provider invalido")
     if body.config_dir is not None and body.config_dir not in {c.path for c in list_config_dirs()}:
         raise HTTPException(400, "config_dir invalido")
-    if body.config_dir is not None:
-        alvo = Path(body.config_dir)
-        if contas.e_conta(alvo):
-            # Refaz os atalhos ANTES de subir: é o que mantém a conta igual ao ~/.claude sem
-            # ninguém rodar nada à mão. O projeto vai junto pra ligar a memória do cwd desta
-            # sessão — que pode ser um projeto que nenhuma conta abriu ainda.
-            for aviso in await asyncio.to_thread(contas.reconciliar,
-                                                 alvo.name.removeprefix(".claude-"),
-                                                 registry.sanitize_cwd(body.cwd)):
-                _log.warning("conta %s: %s", alvo.name, aviso)
     # Mesma guarda do config_dir. Codex nao usa spawn_command/tmux desse jeito, entao motor + codex e
-    # pedido incoerente — 400, nao "ignora e segue".
+    # pedido incoerente — 400, nao "ignora e segue". As validações rodam ANTES da reconciliação de
+    # propósito: um pedido rejeitado aqui não pode ter efeito no disco da conta.
     if body.engine is not None:
         if body.provider != "claude":
             raise HTTPException(400, "motor so vale para provider claude")
@@ -972,8 +1005,31 @@ async def create_session(body: CreateBody):
     try:
         if body.provider == "codex":
             return await registry.create_codex(body.name, body.cwd, body.initial_prompt)
-        return await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir,
-                                       provider=body.provider, engine=body.engine)
+
+        def _criar():
+            from app import registry as registry_mod
+            if body.config_dir is not None and contas.e_conta(Path(body.config_dir)):
+                nome = Path(body.config_dir).name.removeprefix(".claude-")
+                # Trava da conta segura da reconciliação até o registry.create: sem ela, um DELETE
+                # concorrente vê a sessão ainda ausente do registry e apaga a pasta debaixo dela.
+                with contas.travada(nome):
+                    # Refaz os atalhos ANTES de subir: é o que mantém a conta igual ao ~/.claude sem
+                    # ninguém rodar nada à mão. O projeto vai junto pra ligar a memória do cwd desta
+                    # sessão — que pode ser um projeto que nenhuma conta abriu ainda.
+                    for aviso in contas.reconciliar(nome, registry_mod.sanitize_cwd(body.cwd)):
+                        _log.warning("conta %s: %s", nome, aviso)
+                    return registry.create(body.name, body.cwd, body.config_dir,
+                                           provider=body.provider, engine=body.engine)
+            return registry.create(body.name, body.cwd, body.config_dir,
+                                   provider=body.provider, engine=body.engine)
+
+        return await asyncio.to_thread(_criar)
+    except contas.ContaError as e:
+        # ContaError e falha de filesystem da reconciliação escapavam como 500 com traceback: a
+        # rota aborta a abertura e devolve o status/detail que o módulo já conhece.
+        raise HTTPException(e.status, e.detail) from None
+    except OSError as e:
+        raise HTTPException(500, f"não consegui preparar a conta: {e}") from None
     except ValueError as e:
         raise HTTPException(409, str(e))
 

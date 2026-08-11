@@ -400,6 +400,28 @@ def test_nome_invalido_estoura(casa):
         contas.criar("Conta 2")
 
 
+def test_nome_com_quebra_de_linha_e_recusado(casa):
+    """O `$` casa antes do \n final; o fullmatch não. Sem isto, POST {"nome": "conta2\n"}
+    criaria uma pasta com quebra de linha no nome."""
+    with pytest.raises(contas.ContaError):
+        contas.criar("conta2\n")
+
+
+def test_nome_com_barra_e_recusado(casa):
+    with pytest.raises(contas.ContaError):
+        contas.criar("a/b")
+
+
+def test_nome_pontinhos_e_recusado(casa):
+    with pytest.raises(contas.ContaError):
+        contas.criar("..")
+
+
+def test_nome_muito_longo_e_recusado(casa):
+    with pytest.raises(contas.ContaError):
+        contas.criar("a" * 33)
+
+
 def test_apagar_so_aceita_pasta_carimbada(casa):
     (casa / ".claude-backup").mkdir()
     with pytest.raises(contas.ContaError) as e:

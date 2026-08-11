@@ -141,6 +141,72 @@ def _proc_stat_path(pid: int) -> str:
     return f"/proc/{pid}/stat"
 
 
+def _config_dir_confiavel(pid: int) -> tuple[Optional[Path], bool]:
+    """(config_dir, confiavel) — versão estrita do _config_dir_of.
+
+    O _config_dir_of degrada em silêncio (None quando não lê), o que serve pra poll e navegação,
+    mas não pra operação DESTRUTIVA: um None de FALHA parece um None de "não usa config dir", e
+    apagar por cima disso remove a conta de um CLI vivo. O segundo elemento diz se a leitura foi
+    confiável; quem decide apagar trata False como recusa.
+    """
+    if not _TEM_PROC:
+        try:
+            env = psutil.Process(pid).environ() or {}
+        except psutil.Error:
+            return None, False
+        v = env.get("CLAUDE_CONFIG_DIR")
+        return (Path(v) if v else None), True
+    try:
+        with open(_proc_environ_path(pid), "rb") as fh:
+            env = fh.read()
+    except OSError:
+        return None, False
+    for kv in env.split(b"\x00"):
+        if kv.startswith(b"CLAUDE_CONFIG_DIR="):
+            return Path(kv.split(b"=", 1)[1].decode("utf-8", "surrogateescape")), True
+    return None, True
+
+
+def pids_com_config_dir(alvo: Path) -> Optional[list[int]]:
+    """Pids vivos cujo CLAUDE_CONFIG_DIR resolve para `alvo`. None = varredura não confiável.
+
+    Cobre o claude rodando FORA do tmux: o registry só vê sessões com pane; um
+    `CLAUDE_CONFIG_DIR=... claude` manual não aparece em lugar nenhum e um DELETE apagaria a pasta
+    debaixo dele. Processo que morre no meio (ENOENT) ou é de OUTRO usuário (EACCES — não pode
+    estar usando um config dir do nosso HOME) é pulado; qualquer outra falha de leitura vira None,
+    e quem decide apagar trata None como recusa. Só roda em operação rara (apagar conta), não em
+    poll — o custo de ler o environ de todo o /proc é aceitável aí.
+    """
+    if not _TEM_PROC:
+        return _pids_com_config_dir_psutil(alvo)
+    alvo = alvo.resolve()
+    out = []
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return None
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        try:
+            with open(_proc_environ_path(pid), "rb") as fh:
+                env = fh.read()
+        except FileNotFoundError:
+            continue          # morreu no meio: não está usando nada
+        except PermissionError:
+            continue          # outro usuário: não usa um config dir do nosso HOME
+        except OSError:
+            return None       # não confiável: não dá pra garantir
+        for kv in env.split(b"\x00"):
+            if kv.startswith(b"CLAUDE_CONFIG_DIR="):
+                v = kv.split(b"=", 1)[1].decode("utf-8", "surrogateescape")
+                if Path(v).resolve() == alvo:
+                    out.append(pid)
+                break
+    return out
+
+
 def _proc_start_time(pid: int) -> Optional[float]:
     if not _TEM_PROC:
         return _start_time_psutil(pid)
@@ -225,3 +291,21 @@ def _start_time_psutil(pid: int) -> Optional[float]:
         return psutil.Process(pid).create_time()
     except psutil.Error:
         return None
+
+
+def _pids_com_config_dir_psutil(alvo: Path) -> Optional[list[int]]:
+    # process_iter com attrs=["environ"] enumera o environ de TUDO (caro no Windows, mas isto só
+    # roda em operação rara de apagar conta, nunca em poll). O process_iter engole psutil.Error de
+    # processo individual (morto/permissão) — o processo some da varredura, o que é o mesmo
+    # tratamento de ENOENT/EACCES do lado /proc.
+    alvo = alvo.resolve()
+    out = []
+    try:
+        for proc in psutil.process_iter(attrs=["environ"]):
+            env = proc.info.get("environ") or {}
+            v = env.get("CLAUDE_CONFIG_DIR")
+            if v and Path(v).resolve() == alvo:
+                out.append(proc.pid)
+    except psutil.Error:
+        return None
+    return out

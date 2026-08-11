@@ -6,6 +6,9 @@ caminho de Windows/macOS contra processos REAIS desta maquina e comparar com o q
 desenvolve no Linux — e a primeira vez que alguem descobriria um erro seria no Windows.
 """
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 import psutil
 import pytest
@@ -104,8 +107,52 @@ def test_pid_morto_degrada_igual_ao_lado_proc(via_psutil):
     assert procinfo._env_psutil(morto) == {}
     assert procinfo._proc_start_time(morto) is None
     assert procinfo._config_dir_of(morto) is None
+    assert procinfo._config_dir_confiavel(morto) == (None, False)
     assert procinfo._engine_of(morto) is None
     assert procinfo._open_jsonl(morto, "/qualquer") is None
+
+
+def test_config_dir_confiavel_do_proprio_processo(via_psutil):
+    # Sem CLAUDE_CONFIG_DIR no env (ou com, mas não testável aqui — o environ do processo congela
+    # no exec): a leitura é confiável e o valor, quando presente, é um Path.
+    cfg, confiavel = procinfo._config_dir_confiavel(os.getpid())
+    assert confiavel is True
+    assert cfg is None or isinstance(cfg, Path)
+
+
+def test_pids_com_config_dir_acha_subprocesso(tmp_path):
+    """Varredura cobre o claude mantido FORA do tmux (invisível ao registry): processo vivo com
+    CLAUDE_CONFIG_DIR=alvo é achado pelo caminho do env, e um alvo diferente não o acha."""
+    alvo = tmp_path / "cfg"
+    alvo.mkdir()
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        env={**os.environ, "CLAUDE_CONFIG_DIR": str(alvo)})
+    try:
+        pids = procinfo.pids_com_config_dir(alvo)
+        assert pids is not None
+        assert proc.pid in pids
+        outro = tmp_path / "outro"
+        outro.mkdir()
+        assert proc.pid not in (procinfo.pids_com_config_dir(outro) or [])
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_pids_com_config_dir_acha_subprocesso_via_psutil(tmp_path, via_psutil):
+    alvo = tmp_path / "cfg"
+    alvo.mkdir()
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        env={**os.environ, "CLAUDE_CONFIG_DIR": str(alvo)})
+    try:
+        pids = procinfo.pids_com_config_dir(alvo)
+        assert pids is not None
+        assert proc.pid in pids
+    finally:
+        proc.kill()
+        proc.wait()
 
 
 def _cmdline_proc_direto(pid: int) -> str:

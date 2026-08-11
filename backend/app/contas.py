@@ -46,6 +46,9 @@ class ContaError(Exception):
 
 _NOME_OK = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
+# _NOME_OK casa com fullmatch (e não match): o `$` aceita quebra de linha FINAL, e
+# POST {"nome": "conta2\n"} criaria uma pasta com \n no nome.
+
 # Projeto sanitizado (registry.sanitize_cwd): só letras, dígitos e hífen. Regra separada da do
 # nome de conta porque o sanitize preserva maiúsculas e a conta não.
 _PROJETO_OK = re.compile(r"[A-Za-z0-9_-]+")
@@ -73,7 +76,7 @@ def compartilhado() -> Path:
 
 
 def caminho(nome: str) -> Path:
-    if not _NOME_OK.match(nome or ""):
+    if not _NOME_OK.fullmatch(nome or ""):
         raise ContaError(400, "nome: use minúsculas, números, '-' ou '_' (até 32 caracteres)")
     return Path.home() / f".claude-{nome}"
 
@@ -136,6 +139,23 @@ def _trava_compartilhada():
             yield
         finally:
             fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+@contextmanager
+def travada(nome: str):
+    """Trava pública do ciclo de vida da conta: compartilhada primeiro, da conta depois.
+
+    A criação de sessão segura esta trava da reconciliação até o `registry.create`, e o DELETE
+    (checagem de sessões + `apagar`) também — é a MESMA trava, então uma sessão que passou da
+    reconciliação mas ainda não apareceu no registry não pode ter a pasta apagada debaixo dela por
+    um DELETE que vê a lista vazia. `apagar` NÃO adquire a trava internamente de propósito:
+    chamado de dentro do DELETE, re-adquirir seria deadlock (flock não é reentrante — duas
+    aberturas do mesmo arquivo no mesmo processo se bloqueiam). Chamador solto que apague usa
+    esta trava.
+    """
+    dir_conta = caminho(nome)
+    with _trava_compartilhada(), _trava(dir_conta):
+        yield
 
 
 def _ligar(destino: Path, alvo: Path) -> None:
@@ -261,7 +281,7 @@ def reconciliar(nome: str, projeto: str | None = None) -> list[str]:
         # de ~/.claude. A regra aceita exatamente o que registry.sanitize_cwd produz.
         raise ContaError(400, "projeto inválido")
     avisos: list[str] = []
-    with _trava_compartilhada(), _trava(dir_conta):
+    with travada(nome):
         for alvo in sorted(compartilhado().iterdir()):
             if alvo.name in _NAO_LIGAR:
                 continue

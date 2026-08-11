@@ -28,7 +28,10 @@ def _is_config_dir(p: Path) -> bool:
     # Conta recém-criada ainda NÃO tem .credentials.json — quem grava esse arquivo é o /login, e o
     # /login só roda DENTRO de uma sessão dela. Sem o marcador aqui, a conta sumia da lista
     # justamente entre criar e logar, e não havia onde abrir a sessão: impasse.
-    if (p / contas.MARCADOR).is_file():
+    # `contas.e_conta` (e não um `is_file` cru): marcador e raiz têm que ser REAIS — um
+    # `~/.claude-evil -> /tmp/fora` com marcador plantado lá dentro entraria como conta e a
+    # reconciliação remexeria no alvo externo.
+    if contas.e_conta(p):
         return True
     return (p / ".credentials.json").is_file() and (p / "projects").is_dir()
 
