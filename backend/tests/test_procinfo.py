@@ -6,6 +6,7 @@ caminho de Windows/macOS contra processos REAIS desta maquina e comparar com o q
 desenvolve no Linux — e a primeira vez que alguem descobriria um erro seria no Windows.
 """
 import os
+from pathlib import Path
 
 import psutil
 import pytest
@@ -111,3 +112,37 @@ def test_pid_morto_degrada_igual_ao_lado_proc(via_psutil):
 def _cmdline_proc_direto(pid: int) -> str:
     with open(f"/proc/{pid}/cmdline", "rb") as fh:
         return fh.read().replace(b"\x00", b" ").decode(errors="replace")
+
+
+def test_pids_com_config_dir_acha_no_proc_fake(monkeypatch, tmp_path):
+    """Varredura de processos por CLAUDE_CONFIG_DIR (a guarda do DELETE de conta contra CLI vivo
+    fora do tmux), exercitada contra um /proc de mentira: casa pelo valor do env, ignora quem não
+    tem a var e ignora entradas não numéricas."""
+    raiz = tmp_path / "proc"
+    (raiz / "100").mkdir(parents=True)
+    (raiz / "100" / "environ").write_bytes(
+        b"PATH=/bin\x00CLAUDE_CONFIG_DIR=/x/.claude-conta2\x00")
+    (raiz / "101").mkdir()
+    (raiz / "101" / "environ").write_bytes(b"PATH=/bin\x00")
+    (raiz / "nao-pid").mkdir()
+    (raiz / "nao-pid" / "environ").write_bytes(b"CLAUDE_CONFIG_DIR=/x/.claude-conta2\x00")
+    monkeypatch.setattr(procinfo, "_PROC_ROOT", str(raiz))
+    assert procinfo._pids_com_config_dir(Path("/x/.claude-conta2")) == ([100], True)
+    assert procinfo._pids_com_config_dir(Path("/x/.claude-outra")) == ([], True)
+
+
+def test_pids_com_config_dir_psutil_casa_pelo_env(via_psutil, monkeypatch):
+    """Lado psutil: o pid cujo env fake casa entra, os outros não — mesmo contrato do /proc."""
+    eu = os.getpid()
+
+    def env_fake(pid):
+        return {"CLAUDE_CONFIG_DIR": "/x/.claude-conta2"} if pid == eu else {}
+
+    monkeypatch.setattr(procinfo, "_env_psutil", env_fake)
+    assert procinfo._pids_com_config_dir(Path("/x/.claude-conta2")) == ([eu], True)
+    assert procinfo._pids_com_config_dir(Path("/x/.claude-outra")) == ([], True)
+
+
+def test_pids_com_config_dir_pid_morto_nao_levanta(via_psutil):
+    # Mesmo contrato de degradacao dos vizinhos: pid morto/ilegivel nunca vira excecao.
+    assert procinfo._pids_com_config_dir(Path("/tmp/.claude-conta-que-nao-existe-xyz")) == ([], True)

@@ -15,9 +15,12 @@ Sao DUAS implementacoes no MESMO namespace, de proposito — nao tres arquivos. 
 nao alcancaria o chamador la dentro, e o teste passaria por ACIDENTE lendo o /proc real. Um
 arquivo, um namespace, um alvo de patch.
 """
+import logging
 import os
 from pathlib import Path
 from typing import Optional
+
+_log = logging.getLogger("claude_pocket.procinfo")
 
 # Escolha da implementacao: por CAPACIDADE, uma vez, na importacao. Nao por nome de sistema —
 # "e unix?" responde SIM pro macOS, que nao tem /proc, e mandaria o Mac ler /proc/<pid>/fd pra
@@ -139,6 +142,64 @@ def _proc_environ_path(pid: int) -> str:
 def _proc_stat_path(pid: int) -> str:
     # Indireção só para o teste poder apontar para um arquivo de mentira (igual _proc_environ_path).
     return f"/proc/{pid}/stat"
+
+
+# Raiz do /proc, indireta só para o teste da varredura apontar pra um /proc de mentira
+# (mesma função dos _proc_environ_path/_proc_stat_path).
+_PROC_ROOT = "/proc"
+
+
+def _pids_com_config_dir(alvo: Path) -> tuple[list[int], bool]:
+    """Pids de processos VIVOS cujo CLAUDE_CONFIG_DIR é `alvo` (comparação por caminho
+    normalizado).
+
+    É a consulta que a borda destrutiva (DELETE de conta) usa: um `claude` aberto FORA do tmux
+    não aparece no registry, mas tem o config dir no próprio ambiente — apagar a conta debaixo
+    dele deixaria o processo escrevendo num caminho que sumiu. Quem não tem a var (config dir
+    padrão) não casa; quem não dá pra ler (morto no meio, outro dono) também não — processo a
+    processo isso é aceitável, e o registry cobre as sessões dele com resolução fail-closed.
+
+    O que NÃO é aceitável é a varredura INTEIRA falhar: devolver `[]` ali diria "olhei e não achei"
+    quando a verdade é "não consegui olhar", e o DELETE seguiria com o rmtree por cima de um
+    `claude` vivo. Por isso `varredura_ok=False` no segundo elemento — quem chama recusa em vez de
+    apagar. Falha de UM processo (morto no meio, outro dono) continua sendo só ignorada.
+    """
+    alvo_resolvido = alvo.resolve()
+    achados: list[int] = []
+    if not _TEM_PROC:
+        try:
+            for proc in psutil.process_iter(attrs=["pid"]):
+                try:
+                    v = _env_psutil(proc.info["pid"]).get("CLAUDE_CONFIG_DIR")
+                except psutil.Error:
+                    continue   # ESTE processo não deu — segue varrendo os outros
+                if v and Path(v).resolve() == alvo_resolvido:
+                    achados.append(proc.info["pid"])
+        except psutil.Error as e:
+            _log.warning("varredura de processos falhou (%s) — apagar conta vai recusar", e)
+            return achados, False
+        return achados, True
+    try:
+        entradas = os.listdir(_PROC_ROOT)
+    except OSError as e:
+        _log.warning("não consegui ler %s (%s) — apagar conta vai recusar", _PROC_ROOT, e)
+        return achados, False
+    for entrada in entradas:
+        if not entrada.isdigit():
+            continue
+        try:
+            with open(f"{_PROC_ROOT}/{entrada}/environ", "rb") as fh:
+                env = fh.read()
+        except OSError:
+            continue
+        for kv in env.split(b"\x00"):
+            if kv.startswith(b"CLAUDE_CONFIG_DIR="):
+                # surrogateescape = round-trip fiel dos bytes POSIX (mesmo do _config_dir_of).
+                v = kv.split(b"=", 1)[1].decode("utf-8", "surrogateescape")
+                if Path(v).resolve() == alvo_resolvido:
+                    achados.append(int(entrada))
+                break
+    return achados, True
 
 
 def _proc_start_time(pid: int) -> Optional[float]:

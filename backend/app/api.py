@@ -27,7 +27,7 @@ from app.fs import FsError, list_roots, scan_dir
 from app.model_picker import PickerError
 from app import pi_models
 from app.pi_inbox import INBOX
-from app.registry import KillFailed, SessionRegistry
+from app.registry import KillFailed, SessionRegistry, sanitize_cwd
 from app.names import sanitize_session_name
 from app.models import (SessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody, RunInfo,
                         ProjectStatus, session_key)
@@ -48,7 +48,7 @@ from app import runtime_config
 from app import tts
 from app.tts_text import preparar as tts_preparar
 from app import narrar
-from app import default_model, engine_probe, engines
+from app import contas, default_model, engine_probe, engines, procinfo
 from app.costs import report as costs_report, usd_brl as _usd_brl, PERIODOS as _COST_PERIODOS
 from app import pricing
 from app.git_ops import (
@@ -866,6 +866,89 @@ def claude_configs():
     return list_config_dirs()
 
 
+class ContaBody(_StrictBody):
+    # pattern com \z (fim absoluto da crate regex do pydantic — o \Z do Python não é aceito lá,
+    # e o $ casaria antes de uma quebra de linha final, deixando 'conta2\n' passar: pasta com
+    # controle de linha no nome). O mesmo padrão do contas._NOME_OK, que é fullmatch; aqui no
+    # schema o pedido inválido nem chega no módulo.
+    nome: str = Field(min_length=1, max_length=32,
+                      pattern=r"^[a-z0-9][a-z0-9_-]{0,31}\z")
+
+
+@app.post("/api/claude-configs", dependencies=[Depends(require_auth)])
+async def post_claude_config(body: ContaBody):
+    """Cria a pasta da conta. NÃO loga: o OAuth abre navegador e é interativo — quem roda o
+    /login é o usuário, dentro da primeira sessão aberta nessa conta."""
+    if os.environ.get("CP_CLAUDE_CONFIG_DIRS", "").strip():
+        # Com a lista fixa por env, list_config_dirs ignora o auto-scan: a conta seria criada e
+        # nunca apareceria no seletor. Recusar com o motivo é melhor que um 200 inútil.
+        raise HTTPException(409, "CP_CLAUDE_CONFIG_DIRS está setado: a lista de contas é fixa por "
+                                 "ambiente. Remova a variável ou acrescente a conta nela.")
+    try:
+        p = await asyncio.to_thread(contas.criar, body.nome)
+    except contas.ContaError as e:
+        raise HTTPException(e.status, e.detail) from None
+    return {"path": str(p), "label": body.nome, "active": False}
+
+
+@app.delete("/api/claude-configs/{nome}", dependencies=[Depends(require_auth)])
+async def delete_claude_config(nome: str):
+    """Apaga a conta e os transcripts dela. Recusa se alguma sessão viva estiver usando, se a
+    conta for a configuração ativa do backend, se estiver na lista fixa do ambiente ou se algum
+    processo vivo tiver o config dir dela — apagar debaixo de um deles deixa o CLI escrevendo
+    num caminho que sumiu."""
+    try:
+        alvo = contas.caminho(nome)
+    except contas.ContaError as e:
+        raise HTTPException(e.status, e.detail) from None
+    if alvo.resolve() == _backend_config_base().resolve():
+        # A config ativa do backend é o ~/.claude (ou o CLAUDE_CONFIG_DIR dele): settings,
+        # custos e transcripts do próprio app moram lá — apagar derrubaria o app em si.
+        raise HTTPException(409, "esta conta é a configuração ativa do backend — não dá pra "
+                                 "apagar por aqui")
+    if os.environ.get("CP_CLAUDE_CONFIG_DIRS", "").strip():
+        # Com a lista fixa por env, o GET continua devolvendo esta conta MESMO apagada: sobraria
+        # um fantasma no seletor, e a próxima sessão recriaria a pasta sem marcador nem atalhos.
+        if alvo.resolve() in {Path(c.path).resolve() for c in list_config_dirs()}:
+            raise HTTPException(409, "CP_CLAUDE_CONFIG_DIRS está setado: esta conta está na "
+                                     "lista fixa por ambiente. Remova-a da variável antes de "
+                                     "apagar.")
+    # O ciclo segura a trava da conta (a mesma do create_session) ao redor da checagem e do
+    # rmtree: sem ele, o DELETE passaria na janela entre a reconciliação e o registry.create de
+    # uma sessão que está subindo, e apagaria a pasta embaixo dela.
+    def _checar_e_apagar():
+        # TUDO numa thread só: o `ciclo_conta` pega `flock` no __enter__, que BLOQUEIA. Chamado
+        # direto da rota async, uma segunda operação de conta concorrente congelava o event loop
+        # inteiro — todas as rotas do app, não só esta — até a primeira soltar. E a janela é longa:
+        # o laço abaixo roda um `subprocess` do tmux por sessão viva, também síncrono.
+        with contas.ciclo_conta(nome) as ciclo:
+            for s in registry.list():
+                cfg, confiavel = _session_config_dir_strict(s.name)
+                if not confiavel:
+                    raise HTTPException(409, f"não consegui confirmar o config dir da sessão "
+                                             f"'{s.name}' — apagar recusado")
+                if cfg is not None and cfg.resolve() == alvo.resolve():
+                    raise HTTPException(409, f"a sessão '{s.name}' está usando esta conta")
+            # CLI aberto FORA do tmux não aparece no registry: a varredura por CLAUDE_CONFIG_DIR
+            # no /proc é quem segura o apagar debaixo dele.
+            pids, varredura_ok = procinfo._pids_com_config_dir(alvo)
+            if not varredura_ok:
+                # "Não consegui olhar" não é "olhei e não achei": seguir aqui apagaria a pasta
+                # debaixo de um `claude` vivo que a varredura não chegou a enxergar.
+                raise HTTPException(409, "não consegui varrer os processos da máquina — apagar "
+                                         "recusado (pode haver um claude aberto nesta conta)")
+            if pids:
+                raise HTTPException(409, f"processo(s) {pids} estão usando esta conta")
+            ciclo.apagar()
+
+    try:
+        await asyncio.to_thread(_checar_e_apagar)
+    except contas.ContaError as e:
+        # Pasta não carimbada (ou conta que sumiu): mesmo 404 do apagar() antigo.
+        raise HTTPException(e.status, e.detail) from None
+    return {"ok": True}
+
+
 @app.get("/api/desktop/palette", dependencies=[Depends(require_auth), Depends(require_loopback)])
 def desktop_palette_get():
     # 404 e resposta de negocio, nao erro: e como o front sabe que nao ha rice nesta maquina e
@@ -910,6 +993,8 @@ async def create_session(body: CreateBody):
     # exceções do create() Claude ficam IDENTICOS, so a chamada muda de sync p/ thread).
     # Pi entra pelo MESMO registry.create do Claude (pane tmux + spawn_command do PiAdapter); o que
     # muda la dentro e so o transcript, que nao e pre-semeado (layout proprio, arquivo so no 1o turno).
+    # Validar provider, config_dir e engine ANTES de qualquer efeito no disco: um pedido que vai
+    # ser rejeitado aqui não pode ter reconciliado a conta (deriva movida, memória criada) à toa.
     if body.provider not in ("claude", "codex", "pi", "kimi"):
         raise HTTPException(400, "provider invalido")
     if body.config_dir is not None and body.config_dir not in {c.path for c in list_config_dirs()}:
@@ -921,6 +1006,48 @@ async def create_session(body: CreateBody):
             raise HTTPException(400, "motor so vale para provider claude")
         if body.engine not in await asyncio.to_thread(engines.listar):
             raise HTTPException(400, "motor invalido")
+
+    # Reconciliar e criar a sessão sob a MESMA trava (ciclo_conta), só no caminho que consome o
+    # config dir (Claude/Pi — codex nem recebe ele no create_codex). Sem o ciclo, um DELETE da
+    # conta no meio via a lista de sessões ainda vazia e apagaria a pasta embaixo da sessão que
+    # está subindo (a criação roda em thread).
+    if body.config_dir is not None and body.provider in ("claude", "pi"):
+        alvo = Path(body.config_dir)
+        if contas.e_conta(alvo):
+            nome_conta = alvo.name.removeprefix(".claude-")
+            try:
+                # `ciclo_conta` numa thread pelo mesmo motivo do DELETE: o `flock` do __enter__
+                # bloqueia, e no event loop isso congelava o app inteiro quando duas operações de
+                # conta se cruzavam. flock pertence ao descritor aberto, não à thread — tomar e
+                # soltar de threads diferentes é válido.
+                cm = contas.ciclo_conta(nome_conta)
+                ciclo = await asyncio.to_thread(cm.__enter__)
+                try:
+                    try:
+                        avisos = await asyncio.to_thread(ciclo.reconciliar,
+                                                         sanitize_cwd(body.cwd))
+                    except contas.ContaError as e:
+                        # ContaError já carrega status HTTP (o cp-conta imprime o detail). Deixar
+                        # escapar viraria 500 com traceback — o usuário não saberia por que a
+                        # abertura falhou (ex: Windows sem Modo Desenvolvedor recusando symlink).
+                        raise HTTPException(e.status, e.detail) from None
+                    except OSError as e:
+                        raise HTTPException(500, f"não consegui reconciliar a conta "
+                                                 f"{nome_conta}: {e}") from None
+                    for aviso in avisos:
+                        _log.warning("conta %s: %s", alvo.name, aviso)
+                    try:
+                        return await asyncio.to_thread(
+                            registry.create, body.name, body.cwd, body.config_dir,
+                            provider=body.provider, engine=body.engine)
+                    except ValueError as e:
+                        raise HTTPException(409, str(e))
+                finally:
+                    # Solta a trava sempre — inclusive quando o corpo levanta HTTPException.
+                    await asyncio.to_thread(cm.__exit__, None, None, None)
+            except contas.ContaError as e:
+                # Conta sumiu entre a validação e a trava (ex: DELETE concorrente).
+                raise HTTPException(e.status, e.detail) from None
     try:
         if body.provider == "codex":
             return await registry.create_codex(body.name, body.cwd, body.initial_prompt)
@@ -3201,6 +3328,33 @@ def _session_config_dir(name: str) -> Path | None:
         _log.warning("pi: nao consegui resolver o config dir de %s; usando ~/.claude", name,
                      exc_info=True)
         return None
+
+
+def _session_config_dir_strict(name: str) -> tuple[Path | None, bool]:
+    """CLAUDE_CONFIG_DIR da sessão pro DELETE de conta: (Path | None, confiável).
+
+    A irmã acima (fallback silencioso pro ~/.claude) é certa pra LEITURA e perigosa numa operação
+    DESTRUTIVA: falha de resolução virava None, None não casa com o alvo, e o apagar seguia como
+    se a sessão usasse a conta padrão. Aqui falha devolve confiável=False e quem chama recusa —
+    na dúvida, não apaga. None + True = processo vivo SEM a var no ambiente: usa a conta padrão,
+    não a que está sendo apagada.
+    """
+    from app import tmux
+    try:
+        pid = tmux.pane_pid(name)
+    except Exception:
+        return None, False
+    if not pid:
+        return None, True   # sem processo vivo: ninguém está usando nada
+    try:
+        with open(procinfo._proc_environ_path(pid), "rb") as fh:
+            env = fh.read()
+    except OSError:
+        return None, False
+    for kv in env.split(b"\x00"):
+        if kv.startswith(b"CLAUDE_CONFIG_DIR="):
+            return (Path(kv.split(b"=", 1)[1].decode("utf-8", "surrogateescape")), True)
+    return None, True
 
 
 async def _pi_catalog(name: str) -> tuple[dict, str]:
