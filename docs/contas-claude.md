@@ -25,7 +25,7 @@ conta, não.
 | Sistema | Estado |
 |---|---|
 | Linux | Funciona. Medido: config dir vazio faz o CLI responder `Not logged in · Please run /login`. |
-| Windows | **Pode não funcionar.** Atalho exige o Modo Desenvolvedor ligado; sem ele a criação falha com mensagem explícita, em vez de cair pra cópia (cópia divergiria em silêncio). Além disso não há `flock`, então a trava contra reconciliação simultânea vira no-op. |
+| Windows | **Pode não funcionar.** Atalho exige o Modo Desenvolvedor ligado; sem ele a criação falha com mensagem explícita e **sem deixar conta parcial** (rollback), em vez de cair pra cópia (cópia divergiria em silêncio). A trava por conta usa `flock` (inexistente no Windows) e vira no-op; a trava compartilhada usa `msvcrt.locking` e vale. |
 | macOS | **Provavelmente não isola. Não testado.** A doc oficial escopa o comportamento a Linux e Windows: *"If you've set the `CLAUDE_CONFIG_DIR` environment variable on Linux or Windows, the `.credentials.json` file lives under that directory instead."* No macOS a credencial é do Keychain e a doc não promete separação por config dir — se o item for o mesmo pras duas contas, elas brigam por ele. Teste de um minuto num Mac: criar a conta, rodar `/login` nela e conferir se a conta anterior continua logada. |
 
 ## Atalho e descoberta de skills
@@ -48,7 +48,9 @@ Os atalhos são refeitos a cada abertura de sessão, então pasta nova no `~/.cl
 sozinha. Se um arquivo compartilhado tiver sido reescrito dentro de uma conta (quem grava por
 tmp+rename substitui o atalho por arquivo comum), a mudança **sobe** pro `~/.claude` e o atalho é
 refeito — ela vale nas contas todas, que é o que "compartilhado" quer dizer. Pasta local que
-colidir vai pra `.drift/`, que guarda as 3 mais novas.
+colidir vai pra `.drift/`, que guarda as 3 mais novas — e a `memory/` de um projeto segue a
+MESMA regra: memória local de verdade vai pra gaveta com aviso e o atalho é refeito, e atalho de
+memória apontando pra projeto que sumiu do `~/.claude` é podado na próxima abertura.
 
 ## Um detalhe do `.credentials.json`
 
