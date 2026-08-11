@@ -37,9 +37,23 @@ fi
 # Padrões privados (domínio do trabalho, prefixo de ticket, e-mail corporativo): moram fora do
 # versionamento, senão o repo público publica o que a trava existe pra esconder. Criado vazio, com
 # o formato comentado — quem tem o que esconder preenche uma vez; quem não tem, ignora.
-PRIVADOS="$(git rev-parse --git-common-dir)/hooks-padroes-privados"
-if [[ ! -f "$PRIVADOS" ]]; then
-    cat > "$PRIVADOS" <<'MODELO'
+#
+# No diretório da MÁQUINA, não no `.git`: o hook lê os dois, mas o do repo morre no `git clone` —
+# criar o modelo lá mandava o usuário preencher o arquivo que some justamente no clone seguinte, e
+# a trava nasceria sem os padrões internos sem nada avisar. O do repo continua valendo pra quem
+# quiser um padrão só daquele checkout; só não é o que o instalador oferece.
+PRIVADOS="${XDG_CONFIG_HOME:-$HOME/.config}/git/hooks-padroes-privados"
+mkdir -p "$(dirname "$PRIVADOS")"
+# `-s` (existe E tem conteúdo), não `-f`: uma escrita interrompida no meio — disco cheio, quota do
+# $HOME, processo morto — deixaria um arquivo vazio que todas as execuções seguintes aceitariam como
+# "já existe", e a trava rodaria pra sempre só com os padrões genéricos, sem nada avisando.
+if [[ ! -s "$PRIVADOS" ]]; then
+    # Escreve em temporário, tranca em 600 e só então move: o arquivo guarda domínio do empregador e
+    # prefixo de ticket, e com o umask normal nasceria 644 — legível por qualquer conta da máquina,
+    # trocando um vazamento público por um local. O `mv` é atômico, então nunca há arquivo parcial
+    # no destino final.
+    tmp_privados="$PRIVADOS.tmp.$$"
+    cat > "$tmp_privados" <<'MODELO'
 # Padrões privados do pre-commit, um por linha:  nome::regex(ERE)
 # Este arquivo NÃO é versionado — é o lugar do que não pode aparecer num repo público.
 # Exemplos (descomente e troque pelos seus):
@@ -47,7 +61,9 @@ if [[ ! -f "$PRIVADOS" ]]; then
 # prefixo de ticket::ABC-[0-9]{4,}
 # e-mail corporativo::seu_usuario@
 MODELO
-    echo "criado (fora do versionamento): $PRIVADOS"
+    chmod 600 "$tmp_privados"
+    mv "$tmp_privados" "$PRIVADOS"
+    echo "criado (fora do versionamento, 600): $PRIVADOS"
 fi
 
 echo
