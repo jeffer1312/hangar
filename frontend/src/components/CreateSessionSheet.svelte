@@ -63,6 +63,11 @@
   // Estado do botão "+ conta": trava enquanto o POST roda e mostra o aviso do /login na volta.
   let contaOcupada = $state(false);
   let avisoConta = $state('');
+  // Path da conta recém-criada: o aviso do /login só vale enquanto a seleção aponta pra ela —
+  // selecionar outra conta com o aviso na tela é afirmar que a sessão subirá deslogada sem ser.
+  let contaCriadaPath = $state<string | null>(null);
+  // Erro de conta: anuncia com role="alert" (assíncrono, precisa de atenção) em vez de status.
+  let contaErro = $state(false);
   // Motor de modelo (Task 5): '' = conta Anthropic (o padrão de sempre). Só faz sentido com provider claude.
   let engine = $state('');
   let motores = $state<Record<string, Motor>>({});
@@ -94,22 +99,57 @@
   // Cadastra conta nova pela API. A sessão sobe DESLOGADA — o /login roda dentro dela, uma vez.
   async function novaConta() {
     const nome = (prompt('Nome da conta (minúsculas, números, - ou _):') ?? '').trim();
-    if (!nome) return;
+    if (!nome) {
+      avisoConta = '';
+      return;   // cancelou: nenhuma API roda, e o feedback de tentativa anterior sai da tela
+    }
+    // Participa da MESMA guarda de sequência do loadConfigs: um GET iniciado antes (ou a troca de
+    // servidor durante o POST) não pode sobrescrever a seleção da conta nova por cima.
+    const seq = ++cfgSeq;
+    const serverId = getActiveId();
     contaOcupada = true;
     avisoConta = '';
+    contaErro = false;
+    contaCriadaPath = null;
+    let c: ConfigDirInfo;
     try {
-      const c = await criarConta(nome);
-      // Direto no listClaudeConfigs, NÃO no loadConfigs: loadConfigs não é async (devolve void), e o
-      // .then interno selecionaria a conta ATIVA por cima do c.path — a conta nova nunca é active
-      // antes do /login, e o aviso sairia com a conta errada selecionada.
-      const cs = await listClaudeConfigs();
-      configs = cs;
-      selectedConfig = c.path;
-      avisoConta = 'Conta criada. A sessão vai subir DESLOGADA — rode /login nela uma vez.';
+      c = await criarConta(nome);
     } catch (e) {
+      contaErro = true;
       avisoConta = e instanceof Error ? e.message : 'não consegui criar a conta';
+      return;
     } finally {
       contaOcupada = false;
+    }
+    // A pasta existe; o resto é refresh — falha aqui NÃO é falha da criação (senão o usuário
+    // tentaria de novo e levaria 409 "já existe").
+    let cs: ConfigDirInfo[];
+    try {
+      // Direto no listClaudeConfigs, NÃO no loadConfigs: loadConfigs não é async (devolve void), e
+      // o .then interno selecionaria a conta ATIVA por cima do c.path — a conta nova nunca é
+      // active antes do /login, e o aviso sairia com a conta errada selecionada.
+      cs = await listClaudeConfigs();
+    } catch {
+      if (seq === cfgSeq && getActiveId() === serverId) {
+        contaErro = true;
+        avisoConta = 'Conta criada, mas não consegui atualizar a lista — recarregue o painel.';
+      }
+      return;
+    }
+    if (seq !== cfgSeq || getActiveId() !== serverId) {
+      // O usuário trocou de servidor (ou reabriu) enquanto o GET rodava: a resposta é do servidor
+      // anterior, descartar — o loadConfigs do servidor atual escreve a lista certa.
+      return;
+    }
+    configs = cs;
+    const criada = cs.find((x) => x.path === c.path);
+    if (criada) {
+      selectedConfig = criada.path;
+      contaCriadaPath = criada.path;
+      avisoConta = 'Conta criada. A sessão vai subir DESLOGADA — rode /login nela uma vez.';
+    } else {
+      contaErro = true;
+      avisoConta = 'Conta criada, mas ainda não apareceu na lista — recarregue o painel.';
     }
   }
 
@@ -137,6 +177,12 @@
       manualPath = '';
       provider = 'claude';
       engine = '';
+      // Estado da conta recém-criada não vaza pra abertura seguinte: sem este reset, uma operação
+      // em voo da abertura anterior deixa o botão em "…" e o aviso dela na tela da nova.
+      contaOcupada = false;
+      avisoConta = '';
+      contaCriadaPath = null;
+      contaErro = false;
       const cur = getActiveId();
       const target = servers.find((s) => s.id === cur) ? cur! : servers[0]?.id ?? '';
       if (target) pickTarget(target);      // pickTarget ja carrega configs E motores do alvo
@@ -303,10 +349,14 @@
                 value: c.path, label: c.label, hint: c.active ? 'atual' : undefined, title: c.path }))}
               onchange={(v) => (selectedConfig = v)} />
             <button type="button" class="ghost-btn conta-add" onclick={novaConta}
-              disabled={contaOcupada}>{contaOcupada ? '…' : '+ conta'}</button>
+              disabled={contaOcupada} aria-busy={contaOcupada}
+              aria-label={contaOcupada ? 'Criando conta Claude' : 'Adicionar conta Claude'}>
+              {contaOcupada ? '…' : '+ conta'}</button>
           </div>
-          {#if avisoConta}
-            <p class="conta-hint">{avisoConta}</p>
+          {#if avisoConta && (contaErro || selectedConfig === contaCriadaPath)}
+            <!-- role=alert no erro (assíncrono, precisa de atenção); status no sucesso. O aviso do
+                 /login some quando a seleção deixa a conta criada. -->
+            <p class="conta-hint" role={contaErro ? 'alert' : 'status'} aria-atomic="true">{avisoConta}</p>
           {/if}
         </div>
       {/if}
