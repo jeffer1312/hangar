@@ -17,6 +17,9 @@
   import { buscarPaleta, aplicarPaleta, paletaEmCache } from '../../lib/desktopTheme';
   import { sidebarPrefs, type SidebarHeight } from '../../lib/sidebarPrefs.svelte';
   import { navMode, type NavMode } from '../../lib/navMode.svelte';
+  import { toolLook, type ToolLook } from '../../lib/toolLook.svelte';
+  import { taskRows, type TaskRowsPref } from '../../lib/taskRows.svelte';
+  import { tableChartPref, type TableChartPref } from '../../lib/tableChartPref.svelte';
 
   interface Props {
     /** Desktop: oferece o botao "Ver ao vivo", que troca o painel pela caixinha flutuante. */
@@ -247,6 +250,61 @@
     {:else}
       <p class="hint">O desfoque aqui é do seu sistema, não do app — veja shell/README.md.</p>
     {/if}
+  </div>
+
+  <!-- Pele das chamadas de ferramenta. Interruptor, não migração: 'Clássico' é o padrão e nada
+       muda pra quem não mexer. As duas leem os MESMOS dados — o diff da edição, o erro em texto e
+       o realce do Read continuam iguais nas duas. -->
+  <div class="ap-row">
+    <div class="ap-label">
+      <strong>Chamadas de ferramenta</strong>
+      <span>como cada Bash/Edit/Read aparece no chat: duas linhas com a saída embaixo, ou uma linha com o argumento num chip</span>
+    </div>
+    <SegmentedPicker
+      value={toolLook.look}
+      options={[
+        { v: 'classico', label: 'Clássico', aria: 'Bloco de duas linhas' },
+        { v: 'chips', label: 'Chips', aria: 'Uma linha com o argumento num chip' },
+      ]}
+      ariaLabel="Chamadas de ferramenta"
+      onPick={(v) => { toolLook.look = v as ToolLook; }}
+    />
+  </div>
+
+  <!-- Chave SEPARADA da pele das ferramentas, de propósito: são duas decisões independentes.
+       Desligada, as chamadas de tarefa continuam aparecendo como linha de ferramenta normal. -->
+  <div class="ap-row">
+    <div class="ap-label">
+      <strong>Lista de tarefas</strong>
+      <span>desenha as tarefas do agente como cápsulas no fim da conversa, com estado e contagem, em vez de linhas de ferramenta soltas</span>
+    </div>
+    <SegmentedPicker
+      value={taskRows.pref}
+      options={[
+        { v: 'off', label: 'Não mostrar', aria: 'Tarefas como linha de ferramenta' },
+        { v: 'on', label: 'Cápsulas', aria: 'Tarefas como cápsulas' },
+      ]}
+      ariaLabel="Lista de tarefas"
+      onPick={(v) => { taskRows.pref = v as TaskRowsPref; }}
+    />
+  </div>
+
+  <!-- Desligado por padrão: o recurso existe e está testado, mas fica fora do caminho até haver
+       caso de uso. Com off o uPlot nem é baixado (import dinâmico). -->
+  <div class="ap-row">
+    <div class="ap-label">
+      <strong>Gráfico nas tabelas</strong>
+      <span>tabela com coluna numérica ganha um botão pra virar gráfico de barras — uma coluna por vez</span>
+    </div>
+    <SegmentedPicker
+      value={tableChartPref.pref}
+      options={[
+        { v: 'off', label: 'Não mostrar', aria: 'Tabelas sem botão de gráfico' },
+        { v: 'on', label: 'Mostrar', aria: 'Tabelas com botão de gráfico' },
+      ]}
+      ariaLabel="Gráfico nas tabelas"
+      onPick={(v) => { tableChartPref.pref = v as TableChartPref; }}
+    />
   </div>
 
   <div class="ap-row ap-row--stack">

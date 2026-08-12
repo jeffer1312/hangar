@@ -7,6 +7,8 @@
   import FileAttachment from './FileAttachment.svelte';
   import IconSpeaker from './icons/IconSpeaker.svelte';
   import { highlightCodeBlocks } from '../lib/highlight';
+  import { enhanceTables } from '../lib/tableChartMount';
+  import { tableChartPref } from '../lib/tableChartPref.svelte';
 
   interface Props {
     text: string;
@@ -38,7 +40,28 @@
     return m && m.index !== undefined ? h.slice(0, m.index) + CARET + h.slice(m.index) : h + CARET;
   }
 
-  const previewHtml = $derived(preview && md ? comCaret(renderMarkdown(text)) : '');
+  // A prévia NUNCA encolhe dentro do mesmo turno.
+  //
+  // Medido ao vivo em 11/08/2026, 91 amostras a 200ms numa sessão Claude trabalhando: a prévia ia a
+  // ZERO e voltava, 7 vezes em 18s, e cada ciclo tirava e repunha 53px (o maior, 139px) da altura da
+  // lista. Como a conversa fica ancorada no fim, tudo o que estava sendo lido subia e descia junto —
+  // é o "pulo". A causa não é encolher aos poucos: entre uma ferramenta e outra o extrator não acha
+  // prosa nenhuma no pane e devolve vazio, então a bolha some inteira e volta no quadro seguinte.
+  // Sessão Claude sofre mais porque Claude Code não tem API de extensão: a prévia dela vem de raspar
+  // o pane, enquanto Pi e Codex publicam o texto por conta própria.
+  //
+  // O teto de 10 linhas (de 31/07, no CSS) continua valendo e resolve o outro lado — o quanto ela
+  // pode CRESCER. Teto não protege contra ir a zero; é isso que este trecho cobre.
+  let ultimoNaoVazio = $state('');
+  $effect(() => {
+    if (!preview) { ultimoNaoVazio = ''; return; }   // turno acabou: a bolha canônica assume
+    if (text.trim()) ultimoNaoVazio = text;
+  });
+  // Vazio MOMENTÂNEO mantém o que já estava; o texto certo chega no quadro seguinte e, no fim do
+  // turno, a bolha real substitui tudo.
+  const textoPrevia = $derived(preview && !text.trim() ? ultimoNaoVazio : text);
+
+  const previewHtml = $derived(preview && md ? comCaret(renderMarkdown(textoPrevia)) : '');
   const html = $derived(preview ? '' : renderMarkdown(text));
   // Anexos por caminho citado na minha msg (img/video/html/pdf que eu "mandar").
   const fileRefs = $derived(!preview && sessionName ? parseFilePaths(text) : []);
@@ -50,7 +73,7 @@
   let plainEl = $state<HTMLElement | null>(null);
   let plainOverflows = $state(false);
   $effect(() => {
-    void text; // prévia é full-replace ~7×/s -> remede a cada troca
+    void textoPrevia; // prévia é full-replace ~7×/s -> remede a cada troca do que está NA TELA
     plainOverflows = !!plainEl && plainEl.scrollHeight > plainEl.clientHeight + 4;
   });
 
@@ -73,6 +96,10 @@
     const el = proseEl;
     if (!el) return;
     void highlightCodeBlocks(el);
+    // Tabela com coluna numérica PODE ganhar um botão "Gráfico" (uPlot). Mesma passada, mesma
+    // razão: a tabela vem de dentro do {@html} e não há componente Svelte pra pendurar nela.
+    // Desligado por padrão — com a chave off nem roda, e a tabela sai como sempre saiu.
+    if (tableChartPref.ativo) void enhanceTables(el);
   });
 
   // Copiar a MENSAGEM inteira (markdown cru). Botao aparece no hover (desktop).
@@ -108,7 +135,7 @@
   {#if preview}
     <!-- Preview ao vivo: texto PLANO (markdown so no snap final canonico, pra nao piscar **/code-fence
          meio-aberto) + caret. Mesma casca da bolha real -> swap quase invisivel. -->
-    {@const todo = md ? null : splitTodoBlock(text)}
+    {@const todo = md ? null : splitTodoBlock(textoPrevia)}
     {#if todo}
       <!-- Painel de tarefas do TUI: fechado por padrao, so o contador na linha. <details> nativo —
            sem estado no componente, e o navegador ja lembra do aberto enquanto o no viver. -->
@@ -132,7 +159,7 @@
            cima, ver o CSS), e num flex container um nó de texto SOLTO vira item anônimo próprio —
            o caret virava um segundo item, numa linha só dele, em vez de piscar colado na última
            palavra. Com um item único, o conteúdo volta a fluir inline lá dentro. -->
-      <div class="prose plain" class:masked={plainOverflows} bind:this={plainEl}><span class="live">{todo ? todo.rest : text}<span class="caret" aria-hidden="true"></span></span></div>
+      <div class="prose plain" class:masked={plainOverflows} bind:this={plainEl}><span class="live">{todo ? todo.rest : textoPrevia}<span class="caret" aria-hidden="true"></span></span></div>
     {/if}
   {:else}
     <!-- eslint-disable-next-line svelte/no-at-html-tags -->

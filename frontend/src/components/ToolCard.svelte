@@ -2,9 +2,14 @@
   import type { ChatEvent } from '../lib/types';
   import { parseFilePaths, summarizeToolInput, summarizeToolResult, toolPhase } from '../lib/format';
   import { extractEdits, extractFilePath } from '../lib/editdiff';
+  import { toolLook } from '../lib/toolLook.svelte';
+  import { caminhoDeCodigoNoComando } from '../lib/codeFromBash';
+  import { pseudoCaminhoPorConteudo } from '../lib/detectarLinguagem';
+  import { rolagemSoAoClicar } from '../lib/rolagemSoAoClicar';
   import FileAttachment from './FileAttachment.svelte';
   import EditDiff from './EditDiff.svelte';
   import ReadView from './ReadView.svelte';
+  import ToolGlyph from './ToolGlyph.svelte';
 
   interface Props {
     event: ChatEvent;
@@ -41,6 +46,29 @@
     (event.tool_name ?? '').toLowerCase() === 'read' && fileRefs.length === 0
   );
 
+  // Saída de COMANDO que é código (cat/sed/head/tail/grep num arquivo) merece o mesmo visualizador
+  // do Read, não um <pre> cinza: é código igual, e realce é o que faz dar pra ler. O caminho sai do
+  // próprio comando — o ReadView só precisa dele pra escolher a linguagem. Regra estreita de
+  // propósito (ver codeFromBash.ts): realce errado é pior que realce nenhum.
+  const caminhoDoComando = $derived(
+    event.tool_name === 'Bash'
+      ? caminhoDeCodigoNoComando(String((event.tool_input as Record<string, unknown> | null)?.['command'] ?? ''))
+      : null
+  );
+  // Último recurso: o comando não revelou o alvo (composto, com pipe) mas a SAÍDA parece código.
+  // Detecção por conteúdo, conservadora — na dúvida devolve null e o texto sai cru (detectarLinguagem.ts).
+  // Só entra quando os dois caminhos acima falharam, e nunca sobrepõe um caminho de verdade.
+  const caminhoPorConteudo = $derived(
+    !editPath && !caminhoDoComando && phase !== 'error' && result?.result
+      ? pseudoCaminhoPorConteudo(result.result)
+      : null
+  );
+  // Caminho pro realce, em ordem de confiança: o do Read > o que o comando revelou > o adivinhado.
+  const caminhoRealce = $derived(editPath || caminhoDoComando || caminhoPorConteudo || '');
+  const temRealce = $derived(
+    (isRead || !!caminhoDoComando || !!caminhoPorConteudo) && phase !== 'error'
+  );
+
   const summary = $derived(summarizeToolInput(event.tool_name, event.tool_input));
 
   // Desfecho na 2a linha ("Pronto (38 linhas)" / "320 linhas carregadas" / 1a linha do erro).
@@ -54,6 +82,68 @@
   );
 </script>
 
+<!-- O DETALHE e identico nas duas peles: e o mesmo dado, so a moldura muda. Snippet pra existir uma
+     vez so — duplicar estas tres pontas era o jeito de a pele nova perder o diff ou o erro. -->
+{#snippet detalhe()}
+  {#if showDiff && editEdits}
+    <div class="row-result row-result--diff" use:rolagemSoAoClicar>
+      <EditDiff path={editPath} edits={editEdits} />
+    </div>
+  {:else if temRealce && result?.result}
+    <div class="row-result" use:rolagemSoAoClicar>
+      <ReadView path={caminhoRealce} text={result.result} />
+    </div>
+  {:else if result?.result}
+    <div class="row-result" use:rolagemSoAoClicar>
+      <pre>{result.result}</pre>
+    </div>
+  {/if}
+{/snippet}
+
+{#if toolLook.look === 'chips'}
+  <!-- Pele 'chips' (portada do beautiful-ui): UMA linha — glifo + nome + o argumento num chip +
+       o desfecho em texto apagado. O glifo vira chevron no hover (a linha fica limpa em repouso).
+       O desfecho NAO saiu: e ele que diz "Pronto (38 linhas)" e a mensagem de erro. -->
+  <div class="tc" class:noanim={!animate} class:tc--error={phase === 'error'}>
+    <button
+      type="button"
+      class="tc-row"
+      aria-expanded={expanded}
+      onclick={() => (expanded = !expanded)}
+    >
+      <span class="tc-glyph" data-phase={phase} class:pending={phase === 'pending'}>
+        <ToolGlyph tool={event.tool_name} />
+        <svg class="tc-chevron" class:open={expanded} width="12" height="12" viewBox="0 0 24 24"
+             fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"
+             stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+      </span>
+      <span class="tc-label">{event.tool_name ?? 'Tool'}</span>
+      {#if isBackground}<span class="tr-badge">background</span>{/if}
+      <!-- O chip TOMA o resto da linha (flex:1), como no original — é o que dá o desenho; pílula do
+           tamanho do texto deixa a linha frouxa e desalinhada entre chamadas. Sem argumento ele
+           some e o desfecho ocupa o lugar, senão sobra um retângulo vazio. -->
+      {#if summary}
+        <span class="tc-chip">{summary}</span>
+      {:else}
+        <span class="tc-chip tc-chip--vazio">{outcome}</span>
+      {/if}
+      <!-- Erro é a ÚNICA coisa que fica na linha além do chip: precisa aparecer sem abrir. -->
+      {#if phase === 'error'}<span class="tc-erro">{outcome}</span>{/if}
+    </button>
+
+    <!-- grid 0fr -> 1fr: a altura anima sozinha, sem medir nada no JS (o truque do original). -->
+    <div class="tc-wrap" style:grid-template-rows={expanded ? '1fr' : '0fr'} style:opacity={expanded ? 1 : 0}>
+      <div class="tc-clip">
+        <div class="tc-detail">
+          <!-- O desfecho saiu da linha e virou a 1a linha do detalhe: no original a linha é só
+               glifo + rótulo + chip, e é isso que a deixa limpa. A informação não se perdeu. -->
+          {#if phase !== 'error'}<div class="tc-desfecho">{outcome}</div>{/if}
+          {@render detalhe()}
+        </div>
+      </div>
+    </div>
+  </div>
+{:else}
 <!-- Bloco de DUAS linhas (layout do Pi): "● Bash <arg>" / "└ Pronto (38 linhas) • toque para ver".
      A linha 2 nao usa o caractere └: o corner e desenhado em CSS (border), que alinha na bolinha em
      qualquer fonte/tamanho e nunca cai num glifo de fallback torto. -->
@@ -86,24 +176,146 @@
     {/if}
   </div>
 
-  {#if expanded && showDiff && editEdits}
-    <div class="row-result row-result--diff">
-      <EditDiff path={editPath} edits={editEdits} />
-    </div>
-  {:else if expanded && isRead && phase !== 'error' && result?.result}
-    <div class="row-result">
-      <ReadView path={editPath} text={result.result} />
-    </div>
-  {:else if expanded && result?.result}
-    <div class="row-result">
-      <pre>{result.result}</pre>
-    </div>
-  {/if}
+  {#if expanded}{@render detalhe()}{/if}
 </div>
+{/if}
 
 {#if fileRefs.length}<FileAttachment {sessionName} refs={fileRefs} />{/if}
 
 <style>
+  /* ─── pele 'chips' ─────────────────────────────────────────────────────────
+     Superfícies pelos tokens (--surface-raised), NUNCA --bg-* cru: com papel de
+     parede ligado, um bg cru vira retângulo chapado boiando e não acompanha o
+     slider de Transparência. O chip é a única superfície própria aqui. */
+  /* Sem margem própria: quem espaça é o grupo (.tg-body--chips, gap 4px). Solta no fluxo (chamada
+     única, fora de grupo) a margem volta pelo :only-child abaixo. */
+  .tc { animation: bubble-in 180ms ease-out both; }
+  .tc.noanim { animation: none; }
+  .tc:only-child { margin-bottom: var(--space-1); }
+
+  /* Medidas do original: linha de 28px, gap de 8px, respiro de 3px nas laterais. */
+  .tc-row {
+    display: flex;
+    align-items: center;
+    /* EXPLÍCITO: o app tem regra global de button com justify-content:center, e sem isto o conteúdo
+       da linha nascia centrado — 112px de recuo fantasma numa coluna larga. */
+    justify-content: flex-start;
+    gap: 8px;
+    width: calc(100% + 6px);
+    min-height: 28px;
+    min-width: 0;
+    padding: 0 3px;
+    margin: 0 -3px;
+    border: none;
+    background: transparent;
+    border-radius: 8px;
+    line-height: 1.5;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 100ms var(--ease-out);
+  }
+  /* Sem faixa opaca no hover: com papel de parede ela virava um bloco escuro atravessando a linha,
+     que é justamente o que destoava do tema. Quem sinaliza o hover é o chip perdendo a caixa. */
+
+  /* Glifo e chevron ocupam a MESMA caixa: um troca pelo outro sem a linha pular. */
+  .tc-glyph {
+    position: relative;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    color: var(--text-muted);
+  }
+  .tc-glyph[data-phase='pending'] { color: var(--accent); }
+  .tc-glyph[data-phase='error']   { color: var(--error); }
+  .tc-glyph.pending { animation: pulse-scale 1.2s ease-in-out infinite; }
+
+  .tc-glyph :global(svg:first-child) { transition: opacity 100ms var(--ease-out); }
+  .tc-chevron {
+    position: absolute;
+    opacity: 0;
+    transition: opacity 150ms var(--ease-out), transform 150ms var(--ease-out);
+    transform: rotate(-90deg);
+  }
+  .tc-chevron.open { opacity: 1; transform: rotate(0deg); }
+  .tc-row:hover .tc-chevron { opacity: 1; }
+  .tc-row:hover .tc-glyph :global(svg:first-child) { opacity: 0; }
+  .tc-glyph:has(.tc-chevron.open) :global(svg:first-child) { opacity: 0; }
+
+  /* Medidas lidas do computed style do original: 12.5px / peso 500 / cor de texto PRIMÁRIA (não a
+     secundária — é o rótulo que ancora a linha; apagado ele some ao lado do chip). */
+  .tc-label {
+    flex-shrink: 0;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  /* O chip é RETÂNGULO arredondado que TOMA o resto da linha (flex:1), não pílula do tamanho do
+     texto: é o que alinha uma chamada embaixo da outra e dá o desenho do original. 22px de altura,
+     fio de contorno em vez de sombra (o app não tem token de sombra de chip). */
+  .tc-chip {
+    display: inline-flex;
+    align-items: center;
+    /* Cresce, mas PARA. O flex:1 do original vive num cartão de ~370px; num chat largo ele virava
+       barra de 590px atravessando a tela. O teto mantém a proporção do desenho deles em qualquer
+       largura de coluna. */
+    flex: 1 1 0%;
+    max-width: 380px;
+    min-width: 0;
+    height: 22px;
+    padding: 0 6px;
+    border-radius: 6px;
+    background: var(--fill-subtle);
+    box-shadow: 0 0 0 1px var(--border-subtle);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: background-color 120ms var(--ease-out), box-shadow 120ms var(--ease-out),
+                max-width 160ms var(--ease-out);
+  }
+
+  /* No hover a caixa FICA (é ela que dá o desenho) e o chip solta o teto de 380px pra mostrar a
+     linha inteira. Sem quebra em várias linhas de propósito: embrulhar aumentaria a altura e
+     empurraria a conversa pra baixo do ponteiro. */
+  .tc-row:hover .tc-chip,
+  .tc-row:focus-visible .tc-chip {
+    max-width: none;
+    color: var(--text);
+  }
+  /* Sem argumento (TodoWrite e afins): o chip carrega o desfecho, em texto normal, pra a linha não
+     ficar com um retângulo vazio. */
+  .tc-chip--vazio { font-family: inherit; color: var(--text-muted); }
+
+  .tc-erro {
+    flex-shrink: 0;
+    max-width: 45%;
+    color: var(--error);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Desfecho, agora dentro do detalhe. */
+  .tc-desfecho {
+    margin-bottom: var(--space-1);
+    font-size: 11.5px;
+    color: var(--text-muted);
+  }
+
+  .tc-wrap {
+    display: grid;
+    transition: grid-template-rows 300ms cubic-bezier(0.23, 1, 0.32, 1), opacity 300ms var(--ease-out);
+  }
+  .tc-clip { min-height: 0; overflow: hidden; }
+  .tc-detail { padding-top: var(--space-1); margin-left: 8px; }
+
+  /* ─── pele clássica ─────────────────────────────────────────────────────── */
   .tool-row {
     padding: var(--space-1) 0;
     margin-bottom: var(--space-1);

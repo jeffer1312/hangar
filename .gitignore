@@ -79,3 +79,6 @@ node_modules/
 # Saida dos subagentes do Pi. Nao e fonte, e cresce sozinha: 40 MB medidos em 06/08/2026. Sem esta
 # regra, um `git add -A` distraido leva tudo isso pro repo.
 .pi-subagents/
+
+# Referencia de terceiros baixada pra estudo (beautiful-ui). Nao e nosso codigo, nao vai pro repo.
+.refs/

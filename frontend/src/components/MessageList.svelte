@@ -6,6 +6,9 @@
   import AssistantBubble from './AssistantBubble.svelte';
   import ToolCard from './ToolCard.svelte';
   import ToolGroup from './ToolGroup.svelte';
+  import TaskRows from './TaskRows.svelte';
+  import { foldTasks } from '../lib/tasks';
+  import { taskRows } from '../lib/taskRows.svelte';
   import OptionButtons from './OptionButtons.svelte';
   import AskQuestionCard from './AskQuestionCard.svelte';
   import Spinner from './Spinner.svelte';
@@ -13,7 +16,7 @@
   import FileAttachment from './FileAttachment.svelte';
   import { parseImageMessage, parseFilePaths, parsePeerMessage } from '../lib/format';
   import { transcriptImageUrl, uploadUrl } from '../lib/api';
-  import { windowStartFor, nextWindowEnd } from '../lib/window';
+  import { windowStartFor, nextWindowEnd, precisaPreencher } from '../lib/window';
 
   interface Props {
     events: ChatEvent[];
@@ -72,6 +75,19 @@
     scrolledUp = gap > listEl.clientHeight; // mais de uma tela do fim = "muito pra cima" -> botao
     // Perto do topo + ainda ha eventos antigos fora da janela -> revela a proxima pagina.
     if (listEl.scrollTop < 200 && hasOlder) revealOlder();
+  }
+
+  // Janela curta demais pra rolar (rajada de tool calls colapsada em linhas de grupo) -> revela
+  // pagina por pagina ATE dar pra rolar. Sem isto a paginacao pra cima depende do `onscroll`, que
+  // numa lista sem rolagem nunca dispara: o historico existe e o chat parece nao ter nada acima.
+  // ponytail: laco simples — cada volta revela uma PAGE; para quando da pra rolar, quando acaba o
+  // historico, ou quando o reveal nao andou (guarda de reentrancia) — nunca gira em falso.
+  async function preencherTela() {
+    while (listEl && precisaPreencher(listEl.scrollHeight, listEl.clientHeight, hasOlder)) {
+      const antes = extra;
+      await revealOlder();
+      if (extra === antes) return;
+    }
   }
 
   let revealing = false;
@@ -159,7 +175,17 @@
   type RenderItem =
     | { type: 'event'; id: string; ev: ChatEvent }
     | { type: 'tool'; id: string; ev: ChatEvent }
-    | { type: 'group'; id: string; tools: ChatEvent[] };
+    | { type: 'group'; id: string; tools: ChatEvent[] }
+    | { type: 'tasks'; id: string };
+
+  // Lista de tarefas do agente, dobrada do fluxo INTEIRO (não só da janela visível): o TaskCreate
+  // que nomeou a tarefa pode ter rolado pra fora da janela enquanto o TaskUpdate que a concluiu
+  // está na tela. Só calcula com a chave ligada — desligada, custo zero.
+  const tarefas = $derived(
+    taskRows.ativo ? foldTasks(events, (id) => toolResults.get(id)) : []
+  );
+  const EH_TASK = (n?: string | null) => n === 'TaskCreate' || n === 'TaskUpdate';
+
   const renderItems = $derived.by(() => {
     const items: RenderItem[] = [];
     let run: ChatEvent[] = [];
@@ -169,6 +195,21 @@
       run = [];
     };
     for (const ev of visibleEvents) {
+      // Com a chave ligada, a chamada de tarefa sai da lista como LINHA e a cápsula ocupa o lugar
+      // dela — senão a mesma tarefa apareceria duas vezes (a linha crua e a cápsula). Desligada,
+      // nada muda: elas seguem como tool_use normal.
+      //
+      // A cápsula fica ONDE a última chamada aconteceu, no meio da conversa, e não colada no fim:
+      // presa no rodapé ela se descolava do ponto de uso e ainda escorregava pra baixo a cada
+      // mensagem nova. Cada nova chamada tira a cápsula do lugar anterior e a repõe aqui — só a
+      // posição MAIS RECENTE vale, porque o conteúdo dela é o estado atual da lista inteira.
+      if (taskRows.ativo && ev.kind === 'tool_use' && EH_TASK(ev.tool_name)) {
+        flush();
+        const antiga = items.findIndex((x) => x.type === 'tasks');
+        if (antiga >= 0) items.splice(antiga, 1);
+        if (tarefas.length) items.push({ type: 'tasks', id: 'tasks-vivas' });
+        continue;
+      }
       if (ev.kind === 'tool_use') { run.push(ev); continue; }
       flush();
       items.push({ type: 'event', id: ev.id, ev });
@@ -198,11 +239,14 @@
     // escrever windowEnd=len o effect re-roda e nextWindowEnd vira no-op.
     const next = nextWindowEnd(atBottom, len, windowEnd);
     if (next !== windowEnd) windowEnd = next;
-    // De volta ao fim (live): re-ancora na janela-cauda, descartando o que foi revelado pra cima ->
-    // limita o mount count de novo. So reseta quando colado no fim (lendo historico, extra persiste).
-    if (atBottom && extra !== 0) extra = 0;
+    // NAO zera `extra` aqui. Zerava "de volta ao fim, descarta o revelado" pra limitar o mount
+    // count — mas numa lista que so rola PORQUE foi revelada, `atBottom` e verdade o tempo todo
+    // (a folga de 64px nunca e vencida), entao o reset desfazia o preencherTela a cada evento e os
+    // dois ficavam se revezando: revela 100, descarta 100, revela 100. Quem descarta agora e o
+    // botao "ir pro fim", que e ato do usuario. ponytail: o teto do mount vira o historico ja
+    // carregado; se pesar no celular, o lugar de cortar e o WINDOW, nao um reset automatico.
     if (!atBottom) return;
-    tick().then(scrollToBottom);
+    tick().then(() => { scrollToBottom(); preencherTela(); });
   });
 
   let rafScroll = 0;
@@ -229,7 +273,9 @@
 >
   <div class="messages-inner">
     {#each renderItems as item (item.id)}
-      {#if item.type === 'group'}
+      {#if item.type === 'tasks'}
+        <TaskRows tasks={tarefas} />
+      {:else if item.type === 'group'}
         <ToolGroup tools={item.tools} {toolResults} {sessionName} animate={!histIds.has(item.tools[0].id)} />
       {:else}
         {@const ev = item.ev}

@@ -306,7 +306,8 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   `xhigh`). Missing sidecar → 409 telling the user to re-run `install-claude-wrapper.sh`, never an
   empty list that reads as "no models".
 - **Statusline por sidecar, não pelo pane** (`app/statusline.py` + `scripts/omniroute-statusline.js`
-  + `scripts/pi/rich-status-line.ts`): a linha que o app mostra (modelo, contexto, ⚡5h/📅7d, custo)
+  + `scripts/pi/rich-status-line.ts` + `~/.kimi-code/statusline.js`): a linha que o app mostra
+  (modelo, contexto, ⚡5h/📅7d, custo)
   **não** sai do transcript — quem a calcula é o agente, e o app só via o texto **já renderizado no
   terminal**, cortado na largura da janela. Medido 2026-07-30 num pane de 99 colunas: o Pi chama
   `truncateToWidth` e a linha morre em `cache…` (somem contexto, cota e custo); o Claude quebra em
@@ -323,7 +324,16 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   resolução de estado de TODAS as sessões em `list_with_state`; (3) o publicador do Pi vive na
   extensão porque a linha completa só existe dentro do processo dele — logo, **sessão Pi já aberta
   só passa a publicar depois de `/reload`** (o Pi carrega extensão na largada), enquanto o lado
-  Claude vale na hora, por ser script executado a cada render.
+  Claude vale na hora, por ser script executado a cada render. O publicador do **Kimi Code**
+  (`~/.kimi-code/statusline.js`, fora do repo porque o `tui.toml` aponta pra lá) segue o lado
+  Claude: script a cada render, sidecar em `~/.claude/.claude-pocket-status/<sessionId>.json` —
+  a chave é o `sessionId` do stdin, o mesmo que `session_key()` extrai do `wire.jsonl`. A linha
+  dele replica os marcadores do Claude (`🤖 K3 (high✦)`, `📁 dir [branch*]`, `⚡5h`, `📅7d`,
+  `🕐 HH:MM ⏱`) com duas diferenças de formato: o contexto vem como par **rotulado e sozinho**
+  (`💬 ctx 480k/1M` — o stdin do Kimi não traz in/out do turno, então a regra dos "≥2 pares" do
+  parser/`sse._status_sig` tem exceção pro rótulo `ctx`, a mesma do Pi) e **não há 💵** (Kimi é
+  assinatura de valor fixo, mesmo motivo do Claude em motor). O ⏱ dele é a idade do
+  `wire.jsonl` (birthtime), não duração de API como no Claude.
 - **Prévia ao vivo: sidecar do agente primeiro, pane depois** (`preview.read_sidecar` +
   `scripts/pi/cp-state.ts`): mesmo contrato da statusline, agora pro texto **em voo**. A extensão do
   Pi recebe o bloco do assistente token a token (`message_update`) e publica o **último bloco de

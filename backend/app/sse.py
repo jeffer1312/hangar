@@ -19,14 +19,25 @@ from app.askquestion import read_pending_askq
 # usuário a partir do payload do Claude Code, que às vezes não traz context_window. Este log grava o
 # statusline CRU nesses momentos, pra a causa sair de medição e não de chute.
 _CTX_PAIR_RE = re.compile(r"([\d.,]+)\s*[kKmM]?\s*/\s*([\d.,]+)\s*[kKmM]?")
+# Par ROTULADO "ctx 97k/1M": como a statusline do Pi e a do Kimi Code escrevem o contexto — o
+# par do turno vem grudado em letras ("251kin/10kout") ou nem existe (o stdin do Kimi nao traz
+# in/out), entao a regra dos >=2 pares descartaria o unico par existente. Com o rotulo na frente
+# nao ha ambiguidade (mesma regra do parseStatusLine do front).
+_CTX_LABELED_RE = re.compile(r"\bctx\s*[\d.,]+\s*[kKmM]?\s*/\s*[\d.,]+\s*[kKmM]?")
 
 
 def context_pairs(status_line: str | None) -> int:
-    """Quantos pares numéricos há no segmento 💬 do statusline (>=2 => há métrica de contexto)."""
+    """Quantos pares numéricos há no segmento 💬 do statusline (>=2 => há métrica de contexto).
+
+    Um par rotulado "ctx x/y" CONTA como métrica (retorna 2): sem isto toda sessao Pi/Kimi
+    caia no log de "sem métrica" com o contexto certo na tela — ruido que escondia o caso real."""
     if not status_line:
         return 0
     seg = re.search(r"💬([^│]*)", status_line)
-    return len(_CTX_PAIR_RE.findall(seg.group(1))) if seg else 0
+    if not seg:
+        return 0
+    n = len(_CTX_PAIR_RE.findall(seg.group(1)))
+    return max(n, 2) if _CTX_LABELED_RE.search(seg.group(1)) else n
 
 
 def preview_is_committed(preview: str, committed: str) -> bool:
@@ -157,6 +168,7 @@ _ST_MODEL = re.compile(r"🤖\s*([^(│]+)")
 _ST_5H = re.compile(r"⚡[^│]*?(\d+)\s*%")
 _ST_7D = re.compile(r"📅[^│]*?(\d+)\s*%")
 _ST_PAIR = re.compile(r"([\d.,]+)\s*([kKmM])?\s*/\s*([\d.,]+)\s*([kKmM])?")
+_ST_LABELED = re.compile(r"\bctx\s*([\d.,]+)\s*([kKmM])?\s*/\s*([\d.,]+)\s*([kKmM])?")
 
 
 def _status_sig(s):
@@ -165,16 +177,20 @@ def _status_sig(s):
     ctx = None
     seg = re.search(r"💬([^│]*)", s)
     if seg:
+        def _num(x, unit):
+            mult = {"k": 1e3, "m": 1e6}.get((unit or "").lower(), 1.0)
+            try:
+                return float(x.replace(",", "")) * mult
+            except ValueError:
+                return 0.0
+        # O par ROTULADO "ctx x/y" (Pi, Kimi Code) vence: sem ele a regra dos >=2 pares
+        # descartava o unico par dessas linhas e o sig nunca via o contexto mudar.
+        rotulado = _ST_LABELED.search(seg.group(1))
         pairs = _ST_PAIR.findall(seg.group(1))
-        # >=2 pares: o 1o e in/out do turno; o ULTIMO e uso/janela (mesma regra do front).
-        if len(pairs) >= 2:
-            def _num(x, unit):
-                mult = {"k": 1e3, "m": 1e6}.get((unit or "").lower(), 1.0)
-                try:
-                    return float(x.replace(",", "")) * mult
-                except ValueError:
-                    return 0.0
-            u, uu, t, tu = pairs[-1]
+        # >=2 pares (Claude): o 1o e in/out do turno; o ULTIMO e uso/janela (regra do front).
+        alvo = rotulado.groups() if rotulado else (pairs[-1] if len(pairs) >= 2 else None)
+        if alvo:
+            u, uu, t, tu = alvo
             total = _num(t, tu)
             if total > 0:
                 ctx = round(_num(u, uu) / total * 20)  # baldes de 5% (round: 4.9999… nao vira 4)

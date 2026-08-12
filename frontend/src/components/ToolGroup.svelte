@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { ChatEvent } from '../lib/types';
   import { summarizeToolInput, toolGroupCounts, toolGroupLabel, toolPhase } from '../lib/format';
+  import { computeEditDiff, extractEdits, extractFilePath } from '../lib/editdiff';
+  import { toolLook } from '../lib/toolLook.svelte';
   import ToolCard from './ToolCard.svelte';
 
   interface Props {
@@ -29,6 +31,34 @@
   // faz); misturadas -> cada filho carrega o proprio nome, senao a linha vira um path sem dono.
   const mixed = $derived(label === 'Ferramentas');
 
+  // Faixa de chips de diff (pele 'chips'): o resumo dos ARQUIVOS que a rodada tocou, com +add/-del,
+  // que a pele classica nao tem — hoje o diff so existe dentro de cada Edit, e uma rodada de 8
+  // ferramentas nao diz em lugar nenhum "mexeu nestes 3 arquivos". Sai dos MESMOS extractEdits/
+  // extractFilePath que o ToolCard ja usa; nada de dado novo. Mesmo arquivo editado 2x soma num chip
+  // so (o Map junta por caminho), senao uma rodada de MultiEdit viraria uma parede de chips iguais.
+  const TETO_CHIPS = 6;
+  const diffs = $derived.by(() => {
+    const por = new Map<string, { file: string; add: number; del: number }>();
+    for (const t of tools) {
+      const edits = extractEdits(t.tool_name, t.tool_input);
+      if (!edits) continue;
+      const caminho = extractFilePath(t.tool_input) || '?';
+      const nome = caminho.split('/').pop() || caminho;
+      const acc = por.get(caminho) ?? { file: nome, add: 0, del: 0 };
+      // extractEdits devolve os TEXTOS; quem conta linha e o computeEditDiff (Myers, ja com teto
+      // interno). E o mesmo calculo que o EditDiff faz ao abrir — aqui so o total interessa.
+      for (const e of edits) {
+        const d = computeEditDiff(e.oldText, e.newText);
+        acc.add += d.add;
+        acc.del += d.del;
+      }
+      por.set(caminho, acc);
+    }
+    return [...por.values()];
+  });
+  const chipsVisiveis = $derived(diffs.slice(0, TETO_CHIPS));
+  const chipsOcultos = $derived(diffs.length - chipsVisiveis.length);
+
   // A chamada viva: a ULTIMA pendente (a mais nova), como o "$ …" que o Claude mostra sob o resumo.
   const running = $derived.by(() => {
     for (let i = tools.length - 1; i >= 0; i--) if (phases[i] === 'pending') return { t: tools[i], i };
@@ -52,22 +82,48 @@
     onclick={() => (expanded = !expanded)}
     onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expanded = !expanded; } }}
   >
-    <span class="tg-dot" class:pending={phases.includes('pending')}
-          data-phase={anyError ? 'error' : phases.includes('pending') ? 'pending' : 'done'} aria-hidden="true"></span>
-    <span class="tg-label">{label}:</span>
-    <span class="tg-counts">{counts}</span>
-    <span class="tg-hint">
-      <span class="sep" aria-hidden="true">•</span>
-      <span class="coarse">{expanded ? 'toque para ocultar' : 'toque para ver'}</span><span
-            class="fine">{expanded ? 'clique para ocultar' : 'clique para ver'}</span>
-    </span>
+    {#if toolLook.look === 'chips'}
+      <!-- Cabeçalho da pele 'chips': chevron + contagem, e mais nada — no original a linha é limpa
+           e o próprio chevron ensina que abre. A bolinha de estado e a dica "clique para ver" da
+           pele clássica sairiam de cena aqui, então o ERRO ganha a cor no lugar da bolinha. -->
+      <svg class="tg-chevron" class:open={expanded} width="12" height="12" viewBox="0 0 24 24"
+           fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"
+           stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+      <span class="tg-resumo">{label.toLowerCase()}, {counts}</span>
+    {:else}
+      <span class="tg-dot" class:pending={phases.includes('pending')}
+            data-phase={anyError ? 'error' : phases.includes('pending') ? 'pending' : 'done'} aria-hidden="true"></span>
+      <span class="tg-label">{label}:</span>
+      <span class="tg-counts">{counts}</span>
+      <span class="tg-hint">
+        <span class="sep" aria-hidden="true">•</span>
+        <span class="coarse">{expanded ? 'toque para ocultar' : 'toque para ver'}</span><span
+              class="fine">{expanded ? 'clique para ocultar' : 'clique para ver'}</span>
+      </span>
+    {/if}
   </div>
 
   {#if expanded}
-    <div class="tg-body">
+    <div class="tg-body" class:tg-body--chips={toolLook.look === 'chips'}>
       {#each tools as t (t.id)}
         <ToolCard event={t} result={resultOf(t)} {sessionName} animate={false} />
       {/each}
+
+      <!-- A faixa de arquivos vive DENTRO do expandido, como no original: fechado o grupo mostra
+           só o cabeçalho. Fora daqui ela vazava pra baixo de um grupo recolhido e a linha deixava
+           de ser uma linha. -->
+      {#if toolLook.look === 'chips' && diffs.length}
+        <div class="tg-diffs">
+          {#each chipsVisiveis as d, i (d.file + i)}
+            <span class="dchip" style:animation-delay="{i * 80}ms">
+              <span class="dchip-file">{d.file}</span>
+              <span class="dchip-add">+{d.add}</span>
+              {#if d.del > 0}<span class="dchip-del">−{d.del}</span>{/if}
+            </span>
+          {/each}
+          {#if chipsOcultos > 0}<span class="dchip-mais">+{chipsOcultos} outro{chipsOcultos > 1 ? 's' : ''}</span>{/if}
+        </div>
+      {/if}
     </div>
   {:else if running}
     <!-- Uma linha so: a chamada em curso. O "└" e CSS (tronco + bracinho), nao box-drawing — em
@@ -80,6 +136,7 @@
       </div>
     </div>
   {/if}
+
 </div>
 {/if}
 
@@ -111,6 +168,26 @@
   .tg-dot[data-phase='pending'] { background: var(--accent); }
   .tg-dot[data-phase='error']   { background: var(--error); }
   .tg-dot.pending { animation: pulse-scale 1.2s ease-in-out infinite; }
+
+  /* Cabeçalho da pele 'chips'. */
+  .tg-chevron {
+    flex-shrink: 0;
+    align-self: center;
+    color: var(--text-muted);
+    transition: transform 200ms var(--ease-out);
+    transform: rotate(-90deg);
+  }
+  .tg-chevron.open { transform: rotate(0deg); }
+  .tg-resumo {
+    min-width: 0;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tg-head--error .tg-resumo { color: var(--error); }
 
   .tg-label { flex-shrink: 0; font-weight: 600; color: var(--text-secondary); }
   .tg-counts { flex-shrink: 0; }
@@ -170,6 +247,58 @@
     text-overflow: ellipsis;
   }
 
+  /* Faixa de chips de diff (pele 'chips'): resumo dos arquivos da rodada. */
+  .tg-diffs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  /* Retangulo arredondado de 28px, como o original — nao pilula: ele e um BOTAO de arquivo, e a
+     forma tem que conversar com o chip do argumento da linha de cima. */
+  .dchip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    height: 28px;
+    padding: 0 8px;
+    border-radius: 6px;
+    /* Mesma tinta do chip do argumento (ver --fill-subtle no app.css): degrau pra cima, translúcido,
+       anda junto do tema — nao slab opaco. */
+    background: var(--fill-subtle);
+    /* Anel de 1px + sombra rasa: as duas medidas saem do computed style do original. */
+    box-shadow: 0 0 0 1px var(--border-subtle), 0 1px 2px rgba(0, 0, 0, 0.18);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--text);
+    animation: pop-in 250ms cubic-bezier(0.23, 1, 0.32, 1) both;
+  }
+  .dchip-file { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dchip-add { flex-shrink: 0; color: var(--success); font-variant-numeric: tabular-nums; }
+  .dchip-del { flex-shrink: 0; color: var(--error); font-variant-numeric: tabular-nums; }
+
+  .dchip-mais {
+    align-self: center;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--text-muted);
+  }
+
   /* Corpo expandido: os ToolCards individuais, recuados sob o tronco do grupo. */
   .tg-body { padding-left: var(--space-3); border-left: 1px solid var(--border-subtle); margin-left: 2px; }
+
+  /* Na pele 'chips' o tronco lateral sai (o recuo já vem do glifo) e as linhas ganham respiro:
+     4px entre uma chamada e outra, como no original. */
+  .tg-body--chips {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-left: 0;
+    margin-left: 0;
+    border-left: none;
+  }
 </style>

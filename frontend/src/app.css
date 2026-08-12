@@ -23,6 +23,13 @@
   --border-default: rgba(255,248,244,0.12);
   --border-strong:  rgba(255,248,244,0.22);
 
+  /* Preenchimento de TINTA, não superfície: a mesma cor das bordas com alfa baixo. Serve pra caixa
+     que precisa se destacar UM degrau do que está atrás (chip, pílula) sem virar bloco opaco. É a
+     diferença que fazia o chip da ferramenta destoar: --surface-raised parte de --bg-elevated e,
+     sobre papel de parede claro, lê como slab PRETO — degrau pro lado errado. Tinta translúcida
+     sempre anda junto do tema e deixa a foto atravessar. */
+  --fill-subtle: rgba(255,248,244,0.055);
+
   /* Text */
   /* 12,0:1 sobre o --bg-base (era #eee8e9, 15,9:1). Perto do maximo possivel (21:1) o texto claro
      "sangra" nas bordas em fundo escuro — halation — e o olho fica reajustando o foco: e o que
@@ -158,6 +165,9 @@
   --border-subtle:  rgba(50,40,35,0.08);
   --border-default: rgba(50,40,35,0.14);
   --border-strong:  rgba(50,40,35,0.24);
+
+  /* Par claro do --fill-subtle (ver o bloco escuro). */
+  --fill-subtle: rgba(50,40,35,0.055);
 
   /* Text */
   --text-primary:   #221d1b;
@@ -599,6 +609,19 @@ button:active:not(:disabled) {
   50%       { transform: scale(1.3); }
 }
 
+/* Chip que entra estufando um tico (faixa de diff do ToolGroup na pele 'chips'). A regra global de
+   prefers-reduced-motion mais abaixo já neutraliza isto — não precisa de guarda própria. */
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* Entra subindo alguns pixels — cápsulas de tarefa e linhas de rastro entram escalonadas com isto. */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 @keyframes bubble-in {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -707,4 +730,61 @@ html:is([data-bg='image'], [data-bg='desktop']) .code-block pre { background: no
 ::-webkit-scrollbar-thumb {
   background: var(--border-subtle);
   border-radius: 99px;
+}
+
+/* ── Tabela markdown -> gráfico (lib/tableChartMount.ts) ─────────────────────────────────────
+   Os controles nascem fora de qualquer componente Svelte (a tabela vem do {@html}), então o
+   estilo vive aqui e não num <style> com escopo. Superfícies pelos tokens de tinta — igual ao
+   chip da ferramenta, pra acompanhar o slider de Transparência em vez de virar bloco chapado. */
+.cp-chart-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: var(--space-2) 0 var(--space-1);
+}
+
+.cp-chart-btn,
+.cp-chart-sel {
+  height: 24px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: var(--fill-subtle);
+  box-shadow: 0 0 0 1px var(--border-subtle);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: background-color 120ms var(--ease-out), color 120ms var(--ease-out);
+}
+.cp-chart-btn:hover,
+.cp-chart-sel:hover { color: var(--text); }
+.cp-chart-btn.ativo { color: var(--accent); }
+
+/* O gráfico precisa de superfície própria: solto sobre o papel de parede, a grade e os rótulos
+   brigam com a foto e o desenho fica ilegível. Mesma ideia do "chart stage" do original. */
+.cp-chart-palco {
+  width: 100%;
+  padding: 4px 2px 2px;
+  border-radius: 8px;
+  background: var(--surface-inset);
+  box-shadow: 0 0 0 1px var(--border-subtle);
+}
+
+/* O uPlot traz CSS próprio com cor clara chumbada — estes três empurram ele pros nossos tokens. */
+.cp-chart-palco .u-wrap { background: transparent; }
+.cp-chart-palco .u-axis { color: var(--text-muted); }
+.cp-chart-palco .u-select { background: var(--fill-subtle); }
+
+/* ── Rolagem presa em bloco interno (lib/rolagemSoAoClicar.ts) ───────────────────────────────
+   Bloco com scroll próprio no meio da conversa (saída de comando, diff) rouba a roda do mouse de
+   quem só está passando por cima — e com `overscroll-behavior: contain` a rolagem fica presa lá.
+   Travado, ele não rola: a roda atravessa pra conversa. Um clique destrava; tirar o ponteiro
+   trava de novo.
+   Só em ponteiro FINO: no celular arrastar dentro do bloco é o gesto natural e não há hover. */
+@media not (pointer: coarse) {
+  /* `not coarse` e nao `fine`: ambiente que nao declara ponteiro nenhum (navegador automatizado,
+     algum embed) responde `false` pras DUAS, e com `fine` a trava simplesmente nunca ligava la.
+     O requisito e "nao atrapalhar tela de toque" — entao a excecao e o toque, nao a regra. */
+  .rolagem-travada { overflow: hidden !important; }
 }

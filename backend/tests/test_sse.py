@@ -169,3 +169,26 @@ def test_context_pairs_nao_vaza_para_o_proximo_segmento():
     from app.sse import context_pairs
     # o '│' delimita: o par de outro segmento não pode contar como contexto.
     assert context_pairs("💬 156k/2 │ ⚡5h:11% ↺3h17m │ 📅7d:2/3") == 1
+
+
+def test_context_pairs_par_rotulado_ctx_conta_como_metrica():
+    from app.sse import context_pairs
+    # Linha REAL da statusline do Kimi Code (~/.kimi-code/statusline.js, 2026-08-12): o stdin do
+    # Kimi nao traz in/out do turno, entao o par de contexto vem rotulado e SOZINHO — sem contar
+    # o rotulo, toda sessao Kimi/Pi caia no log de "sem métrica" com o contexto certo na tela.
+    sl = "🤖 K3 (high✦) │ 📁 hangar [main] │ 💬 ctx 77k/1M │ ⚡5h:3% ↺50m │ 📅7d:33% │ 🕐 08:09 ⏱ 15h13m"
+    assert context_pairs(sl) == 2
+
+
+def test_status_sig_usa_o_par_rotulado_ctx():
+    from app.sse import _status_sig
+    # Sem o rotulo o sig so aceitava >=2 pares -> sessao Kimi/Pi tinha ctx=None e a lista do SSE
+    # nao re-emitia quando so o contexto mudava de balde.
+    sl = "🤖 K3 (high✦) │ 📁 hangar [main] │ 💬 ctx 500k/1M │ ⚡5h:3% │ 📅7d:33%"
+    assert _status_sig(sl) == ("K3", 10, "3", "33")  # 500k/1M = 50% -> balde 10 (20 baldes de 5%)
+
+
+def test_status_sig_linha_do_claude_intacta():
+    from app.sse import _status_sig
+    # 2+ pares sem rotulo: o ULTIMO continua sendo o contexto (regra de sempre).
+    assert _status_sig("🤖 Opus5 (high✦) │ 💬 156k/2 160k/1M │ ⚡5h:11% │ 📅7d:2%")[1] == 3

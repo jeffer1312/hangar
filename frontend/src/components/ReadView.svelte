@@ -14,19 +14,31 @@
 
   interface Ln { num: number | null; content: string }
 
+  // Dois formatos de numeração, cada um com o MESMO teste de segurança (quase toda linha casa E os
+  // números crescem):
+  //   `123\tconteudo`  — o `cat -n` que o Claude devolve no Read
+  //   `123:conteudo`   — `grep -n` / `rg -n`, agora que a saída de comando também vem pra cá
+  // O `:` é bem mais comum em dado que o tab (JSON, log com hora, `chave: valor`), então ele só é
+  // aceito quando TODA linha casa, não 80% — sem isso um log com "12:34:56 mensagem" viraria gutter.
+  const FORMATOS: { re: RegExp; minimo: number }[] = [
+    { re: /^(\d+)\t(.*)$/, minimo: 0.8 },
+    { re: /^(\d+):(.*)$/, minimo: 1 },
+  ];
+
   const lines = $derived.by((): Ln[] => {
     const raw = text.replace(/\n$/, '').split('\n');
-    const NUM = /^(\d+)\t(.*)$/;
-    const nums = raw.map((l) => NUM.exec(l)?.[1]).filter((n) => n !== undefined).map(Number);
-    // Formato cat -n do Claude: quase toda linha numerada E os numeros estritamente CRESCENTES.
-    // Sem a monotonicidade, um TSV/dado com 1a coluna numerica (lido pelo Pi, que vem cru) perdia
-    // a coluna como gutter falso (achado do typescript-reviewer 2026-08-04).
-    const crescente = nums.length > 1 && nums.every((n, i) => i === 0 || n > nums[i - 1]);
-    if (raw.length > 0 && crescente && nums.length / raw.length >= 0.8) {
-      return raw.map((l) => {
-        const m = l.match(NUM);
-        return m ? { num: parseInt(m[1], 10), content: m[2] } : { num: null, content: l };
-      });
+    for (const { re, minimo } of FORMATOS) {
+      const nums = raw.map((l) => re.exec(l)?.[1]).filter((n) => n !== undefined).map(Number);
+      // Numeros estritamente CRESCENTES. Sem a monotonicidade, um TSV/dado com 1a coluna numerica
+      // (lido pelo Pi, que vem cru) perdia a coluna como gutter falso (achado do
+      // typescript-reviewer 2026-08-04).
+      const crescente = nums.length > 1 && nums.every((n, i) => i === 0 || n > nums[i - 1]);
+      if (raw.length > 0 && crescente && nums.length / raw.length >= minimo) {
+        return raw.map((l) => {
+          const m = l.match(re);
+          return m ? { num: parseInt(m[1], 10), content: m[2] } : { num: null, content: l };
+        });
+      }
     }
     return raw.map((l) => ({ num: null, content: l }));
   });

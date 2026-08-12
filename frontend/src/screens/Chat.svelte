@@ -891,7 +891,17 @@
       noteAlive();
       try {
         stateEvent = JSON.parse(e.data) as StateEvent;
-      } catch {}
+        // Turno acabou sem bloco de assistente (só ferramentas, ou interrompido): ninguém mais viria
+        // apagar a prévia, porque o "" deixou de apagá-la enquanto working (ver o handler de
+        // preview). Sair de `working` é o outro dono — sem isto a última frase em voo ficaria
+        // congelada na tela depois do fim.
+        if (stateEvent?.state !== 'working' && previewText) previewText = '';
+      } catch (err) {
+        // Mesmo motivo do handler de `preview` logo abaixo: engolir aqui congela a prévia na tela
+        // (este handler virou o OUTRO dono dela) e ainda deixa o `stateEvent` preso no valor
+        // antigo. O erro não pode derrubar o SSE, mas tem que dar pra ver no dev.
+        if (import.meta.env.DEV) console.debug('state: evento ilegivel', err);
+      }
     });
 
     // Heartbeat do backend: so prova de vida (reseta o watchdog numa conexao ociosa, sem msgs).
@@ -918,6 +928,15 @@
         // uma fonte que ja nao existe, sem nenhum sinal. Troca de fonte passa sempre.
         if (t && !!ev.md === previewMd
             && t.length < previewText.length && previewText.startsWith(t)) return;
+        // VAZIO enquanto a sessão TRABALHA não apaga a bolha. Medido em 11/08/2026, 200ms de
+        // amostragem numa sessão Claude: entre uma ferramenta e outra o extrator não acha prosa
+        // no pane e manda "", a bolha desmontava, e cada ciclo tirava e repunha ~53px (o maior,
+        // 139px) da altura da lista — 7 ciclos em 18s. Como a conversa fica ancorada no fim, tudo
+        // o que estava sendo lido subia e descia junto: o "pulo".
+        // Não vira bolha fantasma porque quem apaga a prévia de verdade são os DOIS donos que já
+        // existem: o `assistant_msg` real (swap atômico, ~30 linhas acima) e a saída de `working`
+        // (logo abaixo, no handler de state). O "" só perdeu o papel de terceiro dono.
+        if (!t && stateEvent?.state === 'working') return;
         previewText = t;
         previewMd = !!ev.md;
       } catch (err) {
