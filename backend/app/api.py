@@ -25,6 +25,7 @@ from app.auth import require_auth, require_loopback
 from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
 from app.model_picker import PickerError
+from app import model_args
 from app import pi_models
 from app.pi_inbox import INBOX
 from app.registry import KillFailed, SessionRegistry, sanitize_cwd
@@ -754,6 +755,10 @@ class CreateBody(_StrictBody):
     initial_prompt: str | None = None
     # Motor de modelo (nome no engines.json). None = conta Anthropic, comportamento de hoje.
     engine: str | None = None
+    # Escolhidos na tela de abertura. None = padrão do binário (comportamento de hoje). Validado
+    # aqui, nunca no front: o valor entra num comando de shell.
+    model: str | None = None
+    effort: str | None = None
 
 
 class TtsBody(_StrictBody):
@@ -1015,6 +1020,13 @@ async def create_session(body: CreateBody):
             raise HTTPException(400, "motor so vale para provider claude")
         if body.engine not in await asyncio.to_thread(engines.listar):
             raise HTTPException(400, "motor invalido")
+    # Mesma regra das linhas acima, pro model/effort: recusa ANTES de qualquer efeito no disco,
+    # inclusive pro provedor fora de escopo (codex/kimi) quando alguem pedir escolha — o valor
+    # entraria num comando de shell montado por concatenacao.
+    try:
+        model_args.validar(body.provider, body.model, body.effort)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
 
     # Reconciliar e criar a sessão sob a MESMA trava (ciclo_conta), só no caminho que consome o
     # config dir (Claude/Pi — codex nem recebe ele no create_codex). Sem o ciclo, um DELETE da
@@ -1048,7 +1060,8 @@ async def create_session(body: CreateBody):
                     try:
                         return await asyncio.to_thread(
                             registry.create, body.name, body.cwd, body.config_dir,
-                            provider=body.provider, engine=body.engine)
+                            provider=body.provider, engine=body.engine,
+                            model=body.model, effort=body.effort)
                     except ValueError as e:
                         raise HTTPException(409, str(e))
                 finally:
@@ -1061,7 +1074,8 @@ async def create_session(body: CreateBody):
         if body.provider == "codex":
             return await registry.create_codex(body.name, body.cwd, body.initial_prompt)
         return await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir,
-                                       provider=body.provider, engine=body.engine)
+                                       provider=body.provider, engine=body.engine,
+                                       model=body.model, effort=body.effort)
     except ValueError as e:
         raise HTTPException(409, str(e))
 

@@ -798,7 +798,8 @@ def test_create_default_provider_routes_to_claude_create(api_client):
         r = api_client.post("/api/sessions", headers=_h(), json={"name": "x", "cwd": "/tmp"})
     assert r.status_code == 200
     assert r.json()["provider"] == "claude"
-    cr.assert_called_once_with("x", "/tmp", None, provider="claude", engine=None)
+    cr.assert_called_once_with("x", "/tmp", None, provider="claude", engine=None,
+                               model=None, effort=None)
 
 
 def test_create_explicit_claude_provider_routes_to_claude_create(api_client):
@@ -807,7 +808,8 @@ def test_create_explicit_claude_provider_routes_to_claude_create(api_client):
         r = api_client.post("/api/sessions", headers=_h(),
                             json={"name": "x", "cwd": "/tmp", "provider": "claude"})
     assert r.status_code == 200
-    cr.assert_called_once_with("x", "/tmp", None, provider="claude", engine=None)
+    cr.assert_called_once_with("x", "/tmp", None, provider="claude", engine=None,
+                               model=None, effort=None)
 
 
 def test_create_codex_provider_routes_to_create_codex(api_client):
@@ -845,7 +847,8 @@ def test_create_pi_provider_routes_to_claude_create_with_provider(api_client):
     assert r.status_code == 200
     assert r.json()["provider"] == "pi"
     assert r.json()["jsonl"] is None
-    cr.assert_called_once_with("p", "/tmp", None, provider="pi", engine=None)
+    cr.assert_called_once_with("p", "/tmp", None, provider="pi", engine=None,
+                               model=None, effort=None)
 
 
 def test_create_pi_with_engine_is_refused(api_client):

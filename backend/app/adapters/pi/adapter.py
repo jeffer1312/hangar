@@ -11,6 +11,7 @@ from app.adapters.pi import sessions as pi_sessions
 from app.adapters.pi.transcript import Stream as PiStream
 from app.state import StateEvent, StateMonitor
 from app.transcript import ChatEvent, TranscriptTailer
+from app import model_args
 from app import terminal_input as ti
 from app import agentpane
 
@@ -60,8 +61,10 @@ class PiAdapter:
     async def deliverable(self, name: str) -> bool:
         return await asyncio.to_thread(ti.deliverable, name)
 
-    def spawn_command(self, cwd: str, session_id: str) -> list[str]:
-        return ["pi", "--session-id", session_id]
+    def spawn_command(self, cwd: str, session_id: str,
+                      model: str | None = None, effort: str | None = None) -> list[str]:
+        # `--thinking`, não `--effort`: o binário do Pi não conhece a outra flag.
+        return ["pi", "--session-id", session_id] + model_args.args_de("pi", model, effort)
 
     def transcript_path(self, cwd: str, session_id: str) -> str:
         return pi_sessions.transcript_path(cwd, session_id)

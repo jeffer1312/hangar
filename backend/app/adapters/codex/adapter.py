@@ -822,7 +822,10 @@ class CodexAdapter:
             return {"model": meta.get("model"), "effort": meta.get("effort")}
         return {"model": None, "effort": None}
 
-    def spawn_command(self, cwd: str, session_id: str) -> list[str]:
+    def spawn_command(self, cwd: str, session_id: str,
+                      model: str | None = None, effort: str | None = None) -> list[str]:
+        # Assinatura aceita model/effort so pra conformar com o Protocol — o caminho Codex e morto
+        # (registry.create recusa provider codex antes da montagem) e a recusa e o comportamento.
         # Sessao Codex NAO nasce de um comando tmux -- nasce de thread/start no app-server
         # (registry.create_codex). registry.create ramifica por provider ANTES de chamar isto no
         # caminho Codex, entao chegar aqui e uso incorreto -> falha alto (Protocol honesto).

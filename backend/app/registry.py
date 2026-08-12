@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import threading
 import time
 import uuid
@@ -29,6 +30,7 @@ from app.planprog import plan_progress, plano_escondido
 # As funcoes de /proc vivem no procinfo.py — e o unico ponto do backend preso ao Linux.
 # Importadas por NOME (nao `procinfo._cmdline(...)`) de proposito: os testes fazem
 # monkeypatch delas neste modulo, e o binding local preserva isso.
+from app import model_args
 from app import procinfo
 from app.procinfo import (_proc_children_map, _descendant_pids, _open_jsonl, _cmdline,
                          _config_dir_of, _proc_start_time, _engine_of)
@@ -1127,7 +1129,8 @@ class SessionRegistry:
 
     def create(self, name: str, cwd: str, config_dir: str | None = None,
                resume_session_id: str | None = None, provider: str = "claude",
-               engine: str | None = None) -> SessionInfo:
+               engine: str | None = None, model: str | None = None,
+               effort: str | None = None) -> SessionInfo:
         # Nome tmux nao aceita "."/":"/espaco -> sanitiza igual ao rename. Varias sessoes na MESMA
         # pasta sao permitidas: cada uma tem nome unico + --session-id proprio -> jsonl proprio.
         name = sanitize_session_name(name)
@@ -1179,20 +1182,27 @@ class SessionRegistry:
                 if not re.fullmatch(r"session_[0-9a-fA-F-]{36}", resume_session_id):
                     raise ValueError("session_id invalido")
                 sid = resume_session_id
-                cmd = f"kimi --session {sid}"
+                # args_de("kimi", None, None) == []: a escolha na abertura nao cobre o Kimi (e
+                # qualquer escolha pra ele e recusada pela validacao na api), e com ausencia o
+                # shlex.join e byte por byte o f-string de antes.
+                cmd = shlex.join(["kimi", "--session", sid]
+                                 + model_args.args_de(provider, model, effort))
             else:
                 try:
                     uuid.UUID(resume_session_id)
                 except (ValueError, AttributeError, TypeError):
                     raise ValueError("session_id invalido")
                 sid = resume_session_id
-                cmd = f"claude --resume {sid}"
+                # Retomada de conversa MORTA (vinda do Arquivo): nao existe sessao antiga nem pid
+                # pra consultar. A escolha que vale e a que este create() recebeu.
+                cmd = shlex.join(["claude", "--resume", sid]
+                                 + model_args.args_de(provider, model, effort))
         else:
             sid = str(uuid.uuid4())
             # spawn_command vem do Adapter do provider (import local: get_adapter->ClaudeAdapter nao
             # importa registry, mas evita qualquer ciclo se um adapter futuro vier a importar daqui).
             from app.adapters import get_adapter
-            cmd = " ".join(get_adapter(provider).spawn_command(cwd, sid))
+            cmd = shlex.join(get_adapter(provider).spawn_command(cwd, sid, model, effort))
         if engine:
             # `cp-engine --exec` aplica o env DENTRO do pane (os.execvpe). Não usamos `tmux -e` porque
             # a key ficaria em /proc/<pid>/cmdline, legível por qualquer usuário da máquina. Depois do
@@ -1510,15 +1520,32 @@ class SessionRegistry:
                 # Motor apagado no app depois de a sessão nascer: melhor voltar na conta Anthropic (o
                 # badge mostra isso) do que recusar o resume e deixar a sessão inacessível.
                 motor = None
+        # Modelo/esforço com que a sessão SUBIU, lidos do cmdline do processo que está morrendo.
+        # Sem reaplicar, `claude --resume <sid>` pelado volta pro modelo do motor — a escolha some
+        # sem aviso. Mesma regra do motor: ler ANTES do kill_session, o /proc do pane some com ele.
+        modelo, esforco = procinfo._model_of(pane["pid"]) if pane.get("pid") else (None, None)
         proj = ((cdir / "projects") if cdir else self.projects_dir) / sanitize_cwd(cwd)
         jsonl = proj / f"{session_id}.jsonl"
         if not jsonl.exists():
             raise ValueError("transcript nao encontrado")
         tmux.kill_session(name)
         self._forget(name)
-        cmd = f"claude --resume {session_id}"
+        # "claude" literal: esta funcao ja recusa provider nao-Claude acima
+        # (_refuse_non_claude_resume), e nao ha variavel `provider` neste escopo.
+        cmd = shlex.join(["claude", "--resume", session_id]
+                         + model_args.args_de("claude", modelo, esforco))
         if motor:
-            cmd = f"cp-engine --exec {motor} -- {cmd}"
+            # Prefixo remontado JUNTO com a escolha: preservar so a flag deixaria a sessao
+            # ressuscitada com a flag num modelo e o AMBIENTE noutro (as cinco chaves ANTHROPIC_*,
+            # o SUBAGENT_MODEL e a janela voltariam pro modelo do motor). A janela sai do mesmo
+            # lugar de onde o motor e lido — o /proc/<pid>/environ do processo que esta morrendo.
+            janela = procinfo._env_var_of(pane["pid"], "CLAUDE_CODE_MAX_CONTEXT_TOKENS")
+            pre = ["cp-engine", "--exec", motor]
+            if modelo:
+                pre += ["--model", modelo]
+                if janela:
+                    pre += ["--context", janela]
+            cmd = shlex.join(pre + ["--"]) + " " + cmd
         if not tmux.new_session(name, cwd, cmd, str(cdir) if cdir else None):
             raise ValueError("falha ao relançar a sessao")
         # Fixa o transcript resumido no cache: resolve() ja o devolveria (o --resume esta no cmdline),

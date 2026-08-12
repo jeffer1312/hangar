@@ -240,6 +240,51 @@ def _engine_of(pid: int) -> Optional[str]:
     return None
 
 
+def _model_of(pid: int) -> tuple[str | None, str | None]:
+    """Modelo e esforço com que a sessão SUBIU, lidos do cmdline.
+
+    Par do _engine_of, que lê o motor do environ pelo mesmo motivo: sem isto, retomar pelo app monta
+    `claude --resume <sid>` pelado e a sessão volta pro modelo do motor — a escolha some sem aviso.
+    """
+    # `.split()` obrigatório: _cmdline devolve STRING (a versão /proc troca os NUL por espaço,
+    # e a psutil faz `" ".join` de propósito pra os dois sistemas darem o mesmo formato).
+    # Sem o split, `argv.index("--model")` seria índice de CARACTERE e `argv[i+1]` devolveria uma
+    # letra — o resume montaria `--model -`, calado. E NÃO mexa no _cmdline: os dois consumidores
+    # atuais (agentpane.py:48-51 e _session_id_from_cmdline) fazem operação de string.
+    argv = _cmdline(pid).split()
+    if not argv:
+        return None, None
+
+    def _val(flag: str) -> str | None:
+        if flag in argv:
+            i = argv.index(flag)
+            if i + 1 < len(argv):
+                return argv[i + 1]
+        return None
+
+    return _val("--model"), _val("--effort") or _val("--thinking")
+
+
+def _env_var_of(pid: int, nome: str) -> str | None:
+    """Uma variável do environ do processo, irmã do _engine_of (que lê só CP_ENGINE).
+
+    O resume remonta o prefixo cp-engine com a janela da sessão que está morrendo
+    (CLAUDE_CODE_MAX_CONTEXT_TOKENS): sem ler do processo vivo, a sessão ressuscitaria com a flag
+    num modelo e o ambiente noutro — o cenário "motor de 1M com modelo de 262k" depois de um
+    resume e sem nada na tela acusando.
+    """
+    if not _TEM_PROC:
+        return _env_psutil(pid).get(nome) or None
+    try:
+        with open(_proc_environ_path(pid), "rb") as fh:
+            for kv in fh.read().split(b"\x00"):
+                if kv.startswith(f"{nome}=".encode()):
+                    return kv.split(b"=", 1)[1].decode("utf-8", "replace") or None
+    except OSError:
+        return None
+    return None
+
+
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 # Implementacao psutil — Windows e macOS. Contrato IDENTICO ao de cima, degradacao inclusive:
 # processo morto / sem permissao devolve {} , "" ou None, nunca excecao. `psutil.Error` cobre
