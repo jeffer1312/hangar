@@ -136,12 +136,18 @@ if [[ "$VELHO" != "$NEW" ]]; then
 
         # memórias: além de copiadas, têm os caminhos absolutos corrigidos
         if [[ -d "$np/memory" ]]; then
-            # `|| true`: sob `set -euo pipefail`, um grep SEM MATCH sai 1 e mata a migração aqui —
-            # medido nesta máquina em 12/08/2026, no perfil .claude-clean, cujas memórias não citam
-            # o caminho velho. O script morria logo após "projeto copiado", com a pasta já renomeada
-            # e as units ainda claude-cockpit-* apontando pra pasta inexistente. Nada a corrigir é o
-            # caso NORMAL, não uma falha.
-            grep -rlF "$VELHO" "$np/memory" 2>/dev/null | while read -r m; do sed -i "s|$VELHO|$NEW|g" "$m"; done || true
+            # `|| true` no GREP, e só nele: sob `set -euo pipefail` um grep SEM MATCH sai 1 e mata a
+            # migração aqui — medido nesta máquina em 12/08/2026, no perfil .claude-clean, cujas
+            # memórias não citam o caminho velho. O script morria logo após "projeto copiado", com a
+            # pasta já renomeada e as units ainda claude-cockpit-* apontando pra pasta inexistente.
+            # Nada a corrigir é o caso NORMAL, não uma falha.
+            # O `sed` fica FORA do escudo, por isso a lista entra por process substitution em vez de
+            # pipe: com `grep | while …; done || true` o `|| true` cobriria o loop inteiro e um `sed`
+            # que falhasse (permissão, disco cheio) passaria calado — e não há verificação nenhuma,
+            # aqui ou no bloco final, que confira se as memórias foram mesmo reescritas. Ficaria uma
+            # memória com o caminho morto dentro e um "migração concluída" na tela.
+            while read -r m; do sed -i "s|$VELHO|$NEW|g" "$m"; done \
+                < <(grep -rlF "$VELHO" "$np/memory" 2>/dev/null || true)
             echo "    (confira nomes de unit 'claude-cockpit-*' no texto delas — não são reescritos)"
         fi
     done
