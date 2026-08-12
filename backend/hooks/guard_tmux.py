@@ -15,19 +15,33 @@
 # (`tmux kill-session -t '=nome:'`).
 #
 # ponytail: casa POSICAO DE COMANDO (ver `segmentos`), nao substring. Falar sobre um comando
-# proibido — mensagem de commit, doc, grep, recado pra outra sessao — nunca e bloqueio. Nao tenta
-# cobrir eval/string montada em runtime nem corpo de heredoc: guarda, nao sandbox.
+# proibido — mensagem de commit, doc, grep, recado pra outra sessao — nunca e bloqueio.
+#
+# O QUE ESTA TRAVA NAO PEGA (guarda, nao sandbox — quem quiser burlar, burla):
+#   - Expansao de variavel: `CMD=tmux; ${CMD} kill-server` passa. Saber o valor de ${CMD} exigiria
+#     rodar um shell aqui dentro, que e caro e perigoso num hook que roda a cada Bash.
+#   - Corpo de heredoc e string montada em runtime (`printf ... > x.sh && ./x.sh`).
+#   - Recursao em interprete so vai ate FUNDO niveis.
+# Tudo isso e aceito de propos ito: o alvo e o agente distraido querendo bancada limpa, nao um
+# atacante. Falso positivo custa mais que furo — a trava vive no caminho de TODO comando Bash.
 import json
 import os
+import re
 import shlex
 import sys
+import time
 
 MULTIPLEXADORES = {"tmux", "psmux"}  # no Windows o psmux publica o alias `tmux`
 MATADORES = {"pkill", "killall"}
 SOCKET_FLAGS = ("-L", "-S")
 # Prefixos que ainda NAO sao o comando: o de verdade vem depois deles.
-ENVELOPES = {"sudo", "doas", "env", "nohup", "setsid", "time", "command", "exec", "builtin",
-             "xargs", "stdbuf", "nice", "ionice", "systemd-run", "rtk", "proxy", "--"}
+ENVELOPES = {"sudo", "doas", "env", "nohup", "setsid", "time", "timeout", "command", "exec",
+             "builtin", "stdbuf", "nice", "ionice", "systemd-run", "rtk", "proxy", "--"}
+# Rodam um comando que vem como ARGUMENTO — precisam ser reprocessados, senao `bash -c "..."`
+# entrega a linha inteira num token so e a trava nao ve nada dentro.
+INTERPRETES = {"sh", "bash", "zsh", "dash", "ksh", "ash", "busybox", "eval"}
+DURACAO = re.compile(r"^\d+(\.\d+)?[smhd]?$")  # o `5` do `timeout 5 tmux ...`
+FUNDO = 3  # teto de recursao: `bash -c "bash -c ..."` nao vira loop
 
 
 def segmentos(comando: str) -> list[str]:
@@ -101,21 +115,75 @@ def _cabeca(tokens: list[str]) -> tuple[str, list[str]]:
         nome = os.path.basename(t.strip("\"'"))
         if "=" in t and not t.startswith("-"):  # VAR=valor antes do comando
             continue
-        if nome in ENVELOPES or t.startswith("-"):
+        if nome in ENVELOPES or t.startswith("-") or DURACAO.match(nome):
             continue
         return nome, tokens[i + 1:]
     return "", []
 
 
-def perigosos(comando: str) -> str | None:
+def _mata_tmux(nome: str, args: list[str]) -> bool:
+    """O pkill/killall alcanca um processo tmux?
+
+    Com `-f` o argumento e REGEX contra a linha de comando inteira, entao comparar substring
+    deixava passar `pkill -f 't*mux'` e `pkill -f 'tm.x'` — os dois casam um tmux de verdade sem
+    conter as letras 'tmux'. Aqui a gente pergunta o contrario: esse padrao casaria `tmux`?"""
+    regex = any(t.startswith("-") and not t.startswith("--") and "f" in t for t in args)
+    for t in args:
+        if t.startswith("-"):
+            continue
+        if not regex:
+            if "tmux" in t or "psmux" in t:
+                return True
+            continue
+        try:
+            if re.search(t, "tmux server") or re.search(t, "psmux"):
+                return True
+        except re.error:  # padrao invalido: cai no criterio antigo em vez de estourar
+            if "tmux" in t:
+                return True
+    return False
+
+
+def _script_do_interprete(nome: str, args: list[str]) -> str | None:
+    """O comando embutido em `eval "..."` / `bash -c "..."`, ou None se nao ha."""
+    if nome == "eval":
+        return " ".join(args) if args else None
+    for i, t in enumerate(args):
+        # cobre `-c`, `-lc`, `-euc` — qualquer flag curta que contenha o c
+        if t.startswith("-") and not t.startswith("--") and "c" in t:
+            return args[i + 1] if i + 1 < len(args) else None
+    return None
+
+
+def perigosos(comando: str, fundo: int = 0) -> str | None:
     """Motivo do bloqueio, ou None se o comando esta liberado."""
     for segmento in segmentos(comando):
         nome, resto = _cabeca(_tokens(segmento))
 
+        # `bash -c "tmux kill-server"` / `eval "..."`: o comando de verdade e o ARGUMENTO. Sem
+        # reprocessar, a trava so via `bash` e liberava — e encadear com `bash -c` e coisa que
+        # agente escreve sem malicia nenhuma.
+        if nome in INTERPRETES and fundo < FUNDO:
+            dentro = _script_do_interprete(nome, resto)
+            if dentro:
+                motivo = perigosos(dentro, fundo + 1)
+                if motivo:
+                    return motivo
+            continue
+
+        # `printf 'kill-server' | xargs tmux`: os argumentos vem da ENTRADA, nao da linha — nao da
+        # pra saber o que o tmux vai receber. Alvo tmux/pkill via xargs e recusa por padrao.
+        if nome == "xargs":
+            alvo, _ = _cabeca(resto)
+            if alvo in MULTIPLEXADORES or alvo in MATADORES:
+                return (f"`xargs {alvo}` monta os argumentos pela entrada — o comando real nao "
+                        "aparece na linha, entao pode ser um kill-server")
+            continue
+
         if nome in MATADORES:
             # `pkill -f app.main` (reiniciar o backend, documentado no CLAUDE.md) continua liberado:
-            # so casa quando o PADRAO fala de tmux — que e o processo com sessoes vivas dentro.
-            if any("tmux" in t or "psmux" in t for t in resto):
+            # so casa quando o PADRAO alcanca tmux — que e o processo com sessoes vivas dentro.
+            if _mata_tmux(nome, resto):
                 return f"`{nome}` casando tmux mata o servidor e todas as sessoes junto"
             continue
 
@@ -134,10 +202,30 @@ def perigosos(comando: str) -> str | None:
     return None
 
 
+def _registrar(motivo: str) -> None:
+    """Anota no disco quando a trava LIBERA por nao ter conseguido decidir.
+
+    Ela falha aberta de proposito (um hook que estoura nao pode travar a sessao), mas falhar
+    aberta E muda deixaria o furo invisivel pra sempre: ninguem descobre que a trava parou de
+    valer olhando pra tela. Mesmo raciocinio do log em disco do kimi_state_hook. Best-effort:
+    se nem logar der, engole — o comando do usuario nao paga por isso."""
+    try:
+        base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+        with open(os.path.join(base, "guard_tmux-falhas.log"), "a", encoding="utf-8") as fh:
+            fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {motivo}\n")
+    except Exception:
+        pass
+
+
 try:
     entrada = json.loads(sys.stdin.read())
     if entrada.get("tool_name") == "Bash":
-        motivo = perigosos(entrada.get("tool_input", {}).get("command", "") or "")
+        bruto = entrada.get("tool_input", {}).get("command", "")
+        if bruto and not isinstance(bruto, str):
+            # Nao da pra parsear o que nao e texto — libera, mas deixa rastro.
+            _registrar(f"tool_input.command nao e string: {type(bruto).__name__}")
+            sys.exit(0)
+        motivo = perigosos(bruto or "")
         if motivo:
             texto = (
                 f"BLOQUEADO: {motivo}.\n"
@@ -162,6 +250,8 @@ try:
             }}))
             print(texto, file=sys.stderr)
             sys.exit(2)
-except Exception:
-    pass  # guarda nunca trava a sessao: falhou, libera
+except SystemExit:
+    raise  # o exit(2)/exit(0) de cima passa reto
+except Exception as erro:
+    _registrar(f"{type(erro).__name__}: {erro}")  # falhou -> libera, mas NAO em silencio
 sys.exit(0)
