@@ -5,7 +5,7 @@
   // resultados. Os niveis de raciocinio nao sao fixos: cada modelo aceita um conjunto (o backend
   // devolve `levels`), e depois de trocar de modelo eles mudam — por isso o read-back manda.
   import BottomSheet from './BottomSheet.svelte';
-  import { getPiModels, setPiModel } from '../lib/api';
+  import { getPiModels, setPiModel, modelOptions } from '../lib/api';
   import type { PiModel } from '../lib/types';
 
   interface Props {
@@ -31,12 +31,22 @@
     err = null;
     loading = true;
     try {
-      const res = await getPiModels(sessionName);
-      models = res.models;
-      levels = res.levels;
-      selectedEffort = res.thinking;
-      selected = res.current
-        ? models.find((m) => m.provider === res.current!.provider && m.id === res.current!.id) ?? null
+      // allSettled, NÃO all: o sidecar é leitura de arquivo local e quase não falha; o catálogo é
+      // subprocess Node (timeout de 30s, `pi` pode não estar no PATH do backend sob systemd). Com
+      // Promise.all, uma falha do catálogo derrubaria a folha INTEIRA — inclusive o bloco "Nível de
+      // raciocínio", que depende só do sidecar e funciona hoje.
+      const [est, cat] = await Promise.allSettled([getPiModels(sessionName), modelOptions('pi')]);
+      if (est.status === 'rejected') throw est.reason;
+      selectedEffort = est.value.thinking ?? '';
+      levels = est.value.levels ?? [];
+      // Catálogo falhou -> cai na lista do sidecar (sem etiqueta, como é hoje). Isso também cobre o
+      // dia em que as duas fontes divergirem: quem valida o Aplicar é `pi_models.check_known`
+      // contra o catálogo DO SIDECAR, e id que só exista na lista nova volta 422.
+      models = (cat.status === 'fulfilled' ? cat.value.models : est.value.models) as PiModel[];
+      // `current` vem do sidecar como choice (provider+id+name), não como modelo completo — resolve
+      // o objeto na lista mostrada pra pintar o tique e alimentar o Aplicar.
+      selected = est.value.current
+        ? models.find((m) => m.provider === est.value.current!.provider && m.id === est.value.current!.id) ?? null
         : null;
     } catch (e) {
       err = e instanceof Error ? e.message : 'Falha ao carregar modelos';
@@ -52,13 +62,24 @@
   const filtered = $derived.by(() => {
     const q = query.trim().toLowerCase();
     const hit = q
-      ? models.filter((m) => `${m.provider}/${m.id} ${m.name}`.toLowerCase().includes(q))
+      ? models.filter((m) => `${m.provider}/${m.id} ${m.name ?? m.id}`.toLowerCase().includes(q))
       : models;
     return hit.slice(0, MAX_ROWS);
   });
   const hiddenCount = $derived(
-    Math.max(0, (query.trim() ? models.filter((m) => `${m.provider}/${m.id} ${m.name}`.toLowerCase().includes(query.trim().toLowerCase())).length : models.length) - MAX_ROWS),
+    Math.max(0, (query.trim() ? models.filter((m) => `${m.provider}/${m.id} ${m.name ?? m.id}`.toLowerCase().includes(query.trim().toLowerCase())).length : models.length) - MAX_ROWS),
   );
+
+  // Agrupa preservando a ordem que a fonte mandou — reordenar aqui esconderia a ordem de
+  // relevância que ela já aplica.
+  const agrupado = $derived.by(() => {
+    const mapa = new Map<string, PiModel[]>();
+    for (const m of filtered) {
+      if (!mapa.has(m.provider)) mapa.set(m.provider, []);
+      mapa.get(m.provider)!.push(m);
+    }
+    return [...mapa.entries()];
+  });
 
   function same(a: PiModel | null, b: PiModel) {
     return !!a && a.provider === b.provider && a.id === b.id;
@@ -116,30 +137,35 @@
       aria-label="Buscar modelo"
     />
 
-    <ul class="model-list">
-      {#each filtered as m (m.provider + '/' + m.id)}
-        <li>
-          <button
-            class="model-row"
-            class:active={same(selected, m)}
-            aria-pressed={same(selected, m)}
-            onclick={() => (selected = m)}
-          >
-            <span class="model-text">
-              <span class="model-name">{m.name}</span>
-              <span class="model-meta">{m.provider}/{m.id}</span>
-            </span>
-            {#if same(selected, m)}
-              <svg class="check" width="18" height="18" viewBox="0 0 24 24" fill="none"
-                stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
-                stroke-linejoin="round" aria-hidden="true">
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-            {/if}
-          </button>
-        </li>
-      {/each}
-    </ul>
+    {#each agrupado as [prov, itens] (prov)}
+      <h4 class="group-label">{prov}</h4>
+      <ul class="model-list">
+        {#each itens as m (m.provider + '/' + m.id)}
+          <li>
+            <button
+              class="model-row"
+              class:active={same(selected, m)}
+              aria-pressed={same(selected, m)}
+              onclick={() => (selected = m)}
+            >
+              <span class="model-text">
+                <span class="model-name">{m.name ?? m.id}</span>
+                <span class="model-meta">
+                  {m.id}{#if m.context} · {m.context}{/if}{#if m.images} · 👁{/if}
+                </span>
+              </span>
+              {#if same(selected, m)}
+                <svg class="check" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
+                  stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              {/if}
+            </button>
+          </li>
+        {/each}
+      </ul>
+    {/each}
     {#if hiddenCount}
       <p class="more">+{hiddenCount} — refine a busca</p>
     {/if}
@@ -196,6 +222,8 @@
   }
   /* A lista pode ter 40 linhas: rola dentro da folha em vez de empurrar o botao Aplicar pra fora. */
   .model-list { max-height: 46vh; overflow-y: auto; }
+
+  .group-label { margin: 12px 0 4px; font-size: 12px; opacity: 0.6; }
 
   .model-row, .effort-row {
     width: 100%;
