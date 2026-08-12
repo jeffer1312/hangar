@@ -235,6 +235,9 @@
     cursor: pointer;
   }
   .linha:hover:not(:disabled) { background: var(--bg-hover); }
+  /* (0,4,0) pra ganhar do hover (0,3,0): desde que o marcador de selecao virou FUNDO, passar o
+     mouse por cima da linha atual apagava a marcacao e so o tique segurava. */
+  .linha.ativa:hover:not(:disabled) { background: var(--accent-dim); }
   .linha:disabled { cursor: default; }
   /* A linha escolhida se marca pelo FUNDO, nao pela cor do texto: --accent sobre o papel do tema
      claro da 4,0:1, abaixo dos 4,5:1 que o AA pede pra texto de 14px (a Task 6 ja reprovou um
