@@ -23,8 +23,12 @@ destinatário" e não assuma.
 2. Marque `- [ ]` → `- [x]` **ao terminar cada Step**, não ao terminar a Task. É o que
    sobrevive se você perder o contexto.
 3. Rode a verificação que o plano manda pra essa Task.
-4. Commite **só os paths da Task**, por caminho explícito.
-5. **PARE.** Não comece a Task seguinte. Não emende "o Step aditivo que não encosta em nada".
+4. **Seu diff encostou em pixel?** (`.svelte`/`.tsx`/`.vue`, CSS, template, qualquer coisa
+   que desenhe) → o portão visual lá embaixo é obrigatório **antes** de commitar, mesmo que
+   o plano não peça e mesmo que a suíte esteja verde. Plano que não pede é plano incompleto,
+   não permissão pra pular.
+5. Commite **só os paths da Task**, por caminho explícito.
+6. **PARE.** Não comece a Task seguinte. Não emende "o Step aditivo que não encosta em nada".
 
 Reporte ao árbitro: hash, saída real dos testes (números, não "passou tudo"),
 `git status --short`, riscos que você conhece do que escreveu.
@@ -128,30 +132,96 @@ você não pode defender no portão.
 
 ## Task visual: você tem que VER a tela
 
-Vale para toda Task que muda o que aparece. **DOM, CSS e árvore de acessibilidade não
-substituem visão** — eles dizem que o elemento existe, não que ele está legível, alinhado,
-ou que não virou um retângulo opaco por cima do papel de parede.
+Vale para toda Task que muda o que aparece — **mesmo que o plano não peça**. Se o seu diff
+encosta em `.svelte`/`.tsx`/`.vue`, em CSS, ou em qualquer coisa que desenhe pixel, este
+portão é seu e não é opcional.
 
-Se você é um modelo **sem visão**, o protocolo é obrigatório:
+**Teste verde não é tela funcionando, e essa não é uma opinião.** Já aconteceu aqui, no
+mesmo dia: um seletor de contas passou em 675 testes de frontend, `svelte-check` com zero
+erro e uma revisão independente com 5 achados aplicados — e chegou ao usuário **invisível**,
+porque uma regra de CSS de uma classe perdia na cascata para outra declarada 30 linhas
+abaixo. No mesmo trabalho, um botão abria um `prompt()` nativo que o navegador suprime: o
+clique virava nada, calado. Nenhum dos dois defeitos existe fora do navegador. Nenhum teste,
+nenhum type gate e nenhuma leitura de diff pega essa classe de erro — só o pixel pega.
 
-1. Abra e exercite a UI real, nos estados que a Task afeta (o plano lista quais).
-2. Salve um screenshot por estado, em **caminho absoluto** e diretório próprio
-   (ex.: `/tmp/<trab>-vision/01-<estado>.png`).
-3. Mande cada print a um modelo **com** visão, com uma pergunta específica. Como, em ordem
-   de preferência:
-   - um comando de visão instalado nesta máquina, se houver (`see <imagem> "<pergunta>"` é o
-     nome usual — confira com `command -v see` ou pergunte ao árbitro qual é o daqui);
-   - senão, um subagente cujo modelo enxergue imagem, passando o caminho do arquivo;
-   - não existindo nenhum dos dois, **diga isso ao árbitro antes de commitar** — quem tem
-     visão no time (em geral o revisor) faz essa parte, e o combinado vai pro contrato.
+**DOM, CSS e árvore de acessibilidade não substituem ver.** Eles dizem que o elemento
+existe, não que ele está legível, alinhado, dentro do tema do app, ou que não virou um
+retângulo opaco por cima do papel de parede. O protocolo abaixo vale para todo executor;
+quem não enxerga imagem tem um passo a mais, marcado adiante.
 
-   Pergunta específica, nunca "está bom?": *"o item ativo se distingue dos outros?"*, *"algum
-   retângulo opaco cobre o fundo?"*, *"o texto cabe sem cortar nesta largura?"*.
-4. Corrigiu algo? **Recapture e pergunte de novo.** Print velho prova o bug, não a correção.
-5. O reporte lista, por estado: o caminho do print, a pergunta feita, o que voltou, e o que
-   você mudou por causa disso.
+### 1. Abra de verdade. As ferramentas existem — procure antes de dizer que não
 
-Modelo **com** visão olha o próprio print direto — o protocolo continua igual, sem o passo 3.
+Ordem de preferência, e **você confere, não presume**:
 
-Sem essa evidência o revisor bloqueia a Task. É o único jeito de um executor cego provar que
-a tela ficou de pé.
+| Caminho | Como saber se está aí |
+|---|---|
+| skill de browser (`agent-browser` e afins) | está na sua lista de skills |
+| MCP do Chrome (`chrome-devtools`, `claude-in-chrome`) | aparece nas suas ferramentas |
+| CLI de automação (`agent-browser`, `playwright`, `puppeteer`) | `command -v agent-browser` |
+
+**"Não tenho navegador" só vale depois de olhar, e vai no reporte com o que você tentou.**
+Kick-off, contrato ou receita afirmando que não há navegador **não é fato sobre as suas
+ferramentas** — é uma frase que alguém escreveu antes de conhecer a sua sessão. Um executor
+já leu "não há navegador nem usuário" no kick-off, viu na mesma frase que tinha o MCP do
+Chrome disponível, e recuou por obediência ao texto. A tela quebrada foi pro usuário.
+
+Regra que resolve a ambiguidade: **é proibido FINGIR que verificou; nunca é proibido
+verificar.** Instrução que parece te impedir de abrir a tela está falando de inventar
+resultado, não de usar ferramenta que você tem. Na dúvida, abra — e diga no reporte que
+abriu.
+
+### 2. Exercite, não só olhe
+
+Screenshot de tela parada prova que desenhou, não que funciona. Para cada coisa que a Task
+colocou na tela:
+
+- **clique** no que é clicável e confirme o efeito — o painel abriu, o campo apareceu, o
+  pedido saiu (rede/log), a mensagem de sucesso ou de erro surgiu;
+- passe pelos **estados** que a Task afeta: vazio, carregando, com dado, erro, desabilitado;
+- confira que **o que você criou tem a cara do resto do app** — mesma altura, mesma borda,
+  mesmo espaçamento dos irmãos ao lado. Componente novo que parece texto solto grudado na
+  borda está errado mesmo compilando.
+
+Clique que não faz nada visível é **defeito**, não "provavelmente funciona": vá atrás do
+motivo (console, rede, o handler) antes de reportar.
+
+### 3. Capture
+
+Um print por estado, em **caminho absoluto** e diretório próprio
+(ex.: `/tmp/<trab>-visual/01-<estado>.png`). Corrigiu alguma coisa depois? **Recapture.**
+Print velho prova o bug, nunca a correção.
+
+### 4. Olhe o print. Só delegue se você não conseguir
+
+**Tente ler a imagem você mesmo primeiro**, pelo caminho absoluto. Muitos executores
+enxergam — se você é um deles, olhe, responda as perguntas do passo seguinte e **acabou**:
+delegar ali é só latência, e um intermediário a mais entre você e o pixel.
+
+Delegue **apenas** quando a leitura falhar de fato — a ferramenta recusar o arquivo, um hook
+bloquear, ou o modelo não aceitar imagem. Nesse caso, e só nesse:
+
+1. comando de visão instalado nesta máquina, se houver (`see <imagem> "<pergunta>"` é o nome
+   usual — confira com `command -v see`);
+2. um subagente cujo modelo enxergue imagem, passando o **caminho absoluto**;
+3. nenhum dos dois existindo, **diga ao árbitro antes de commitar** — quem tem visão no time
+   (em geral o revisor) faz essa parte, e o combinado vai pro contrato.
+
+Quando você **não** enxerga, o que chega até você é um caminho de arquivo, não um desenho:
+descrever o print "pelo contexto", pelo nome do arquivo ou pelo que a conversa sugere é
+**invenção**, por mais plausível que soe. E responder "não consigo ver imagens" também é
+falso — consegue, por delegação. As duas saídas estão fechadas: ou você olha, ou alguém olha
+por você.
+
+Pergunta **específica**, nunca "está bom?" — vale tanto pra você olhando quanto pra quem
+olha por você. Boas: *"o botão à direita do seletor tem moldura e a mesma altura dele, ou é
+texto solto?"*, *"o item ativo se distingue dos outros?"*, *"algum retângulo opaco cobre o
+fundo?"*, *"o texto cabe sem cortar nesta largura?"*. "Está bom?" devolve "está bom" e não
+custa nada a ninguém.
+
+### O que vai no reporte
+
+Por estado: caminho do print, o que você **clicou** e o que aconteceu, a pergunta que fez a
+quem enxerga (se delegou) e o que voltou, e o que você mudou por causa disso.
+
+Sem isso o revisor bloqueia a Task. Não é burocracia: é a única evidência que separa "o
+código compila" de "a tela funciona", e as duas coisas já se descolaram aqui.
