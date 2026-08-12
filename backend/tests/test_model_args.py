@@ -14,6 +14,7 @@ from app import model_args as ma
 @pytest.mark.parametrize("mau", [
     "k3; touch /tmp/x", "k3 && rm -rf /", "k3 $(whoami)", "k3 `id`",
     "k3 modelo", "k3\nrm -rf /", "k3|tee /tmp/x", "", "x" * 129,
+    "k3\n", "k3-256k\n",
 ])
 def test_id_perigoso_e_recusado(mau):
     with pytest.raises(ValueError):

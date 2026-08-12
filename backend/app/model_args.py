@@ -16,7 +16,7 @@ import re
 # Cobre tudo que os provedores medidos usam: `k3-256k`, `cx/gpt-5.6-sol-high`,
 # `clinepass/cline-pass/glm-5.2`, `claude-opus-5`. Barra é necessária (o Pi usa provider/id) e é
 # inofensiva; espaço, `;`, `$`, crase e `|` não entram.
-ID_OK = re.compile(r"^[A-Za-z0-9._:/-]{1,128}$")
+ID_OK = re.compile(r"^[A-Za-z0-9._:/-]{1,128}\Z")
 
 # Listas FECHADAS, do --help de cada binário (medido em 10/08/2026). `ultracode` NÃO entra: é do
 # picker interativo (`/effort ultracode`), não da flag de arranque.
