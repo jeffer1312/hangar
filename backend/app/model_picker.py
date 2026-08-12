@@ -177,8 +177,10 @@ def model_nav_steps(rows: list[dict], target_keyword: str) -> int:
 
     O MODEL_NUMBERS so tem keyword pura, entao um alvo com sufixo (`opus[1m]`) rolado pra fora da
     tela cai no ValueError final — de proposito. Nao descasque o sufixo pra reaproveitar o numero de
-    `opus`: isso navega pra linha do Opus NORMAL e aplica o modelo errado, calado, que e o defeito
-    que o id unico veio consertar. Ha teste travando isso.
+    `opus`: o fallback por numero nao identifica a variante — vai pra linha do numero 2 do picker,
+    seja ela qual for (a ordem e dinamica entre versoes; na fixture atual a linha 2 e Sonnet e o
+    Opus normal mora na 4). Modelo errado aplicado, calado, e o defeito que o id unico veio
+    consertar. Ha teste travando isso.
     """
     base = cursor_row(rows)
     if base is None:

@@ -85,8 +85,10 @@ def test_linha_unica_com_1m_no_rotulo_tambem_ganha_o_sufixo():
 
 def test_variante_fora_da_tela_falha_em_vez_de_ir_pra_linha_errada():
     """Trava contra a correção "óbvia" que alguém pode fazer no futuro: descascar o sufixo pra usar o
-    número de `opus` do MODEL_NUMBERS levaria o cursor pra linha do Opus NORMAL — o modelo errado,
-    calado, que é o defeito que o id único veio consertar. Melhor 409 na cara."""
+    número de `opus` do MODEL_NUMBERS. O fallback por número não identifica a variante — vai pra
+    linha do número 2 do picker, seja ela qual for (a ordem é dinâmica; neste cenário a linha 2 é
+    Sonnet). Modelo errado aplicado, calado, que é o defeito que o id único veio consertar. Melhor
+    409 na cara."""
     rows = [
         {"number": 1, "keyword": "default", "id": "default", "cursor": True, "active": False},
         {"number": 2, "keyword": "sonnet", "id": "sonnet", "cursor": False, "active": False},
