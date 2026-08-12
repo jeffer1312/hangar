@@ -72,9 +72,14 @@ export function parseStatusLine(raw: string | null | undefined): StatusFields | 
     // caminho de sempre.
     const rotulado = ctxSeg[1].match(/\bctx\s*([\d.,]+)\s*([kKmM])?\s*\/\s*([\d.,]+)\s*([kKmM])?/u);
     const last = rotulado ?? (pairs.length >= 2 ? pairs[pairs.length - 1] : null);
-    // Par do TURNO (in/out): sempre o PRIMEIRO par, e so quando ele nao e o par de contexto — com
-    // rotulo "ctx" o par solto e o do turno; sem rotulo, o do turno so existe se houver >=2 pares.
-    const turn = rotulado ? (pairs[0] ?? null) : (pairs.length >= 2 ? pairs[0] : null);
+    // Par do TURNO (in/out): com rotulo, e um par SOLTO fora do trecho rotulado — o proprio par
+    // "ctx x/y" tambem casa o regex de par, entao sem exclui-lo o turno herdava usado/janela do
+    // contexto (turnOut=1M inventado numa linha de Kimi Code, que nem informa tokens de turno).
+    // Sem rotulo, o do turno so existe se houver >=2 pares (o 1o e in/out, o ultimo e contexto).
+    const turn = rotulado
+      ? (pairs.find(p => p.index! < rotulado.index!
+          || p.index! >= rotulado.index! + rotulado[0].length) ?? null)
+      : (pairs.length >= 2 ? pairs[0] : null);
     if (turn && turn !== last) {
       const tin = toNumber(turn[1], turn[2]);
       const tout = toNumber(turn[3], turn[4]);

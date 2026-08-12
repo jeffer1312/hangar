@@ -500,7 +500,7 @@
     <footer class="bc-foot">
       {#if meta?.model || meta?.ctxPct != null}
         <div class="bc-meta">
-          {#if meta.model}<span title="modelo da sessão">🤖 {meta.model}</span>{/if}
+          {#if meta.model}<span title="modelo da sessão">🤖 {meta.model}{meta.effort ? ` · ${meta.effort}` : ''}</span>{/if}
           {#if meta.ctxPct != null}
             <span class:bc-ctx-warn={meta.ctxPct >= 80} title="uso da janela de contexto">
               💬 {Math.round(meta.ctxPct)}%

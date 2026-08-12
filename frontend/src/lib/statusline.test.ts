@@ -86,6 +86,31 @@ describe('setas de reset das janelas de uso', () => {
   });
 });
 
+describe('parseStatusLine — statusline do Kimi Code', () => {
+  // Linha REAL publicada por ~/.kimi-code/statusline.js (2026-08-12, v0.34.0). O stdin do Kimi
+  // nao traz in/out do turno nem custo (assinatura de valor fixo), entao o contexto vem como
+  // par rotulado SOZINHO e o ⏱ vai grudado no relogio, como na linha do Claude.
+  const KIMI_CLI = '🤖 K3 (high✦) │ 📁 hangar [main*] │ 💬 ctx 480k/1M │ ⚡5h:3% ↺50m │ 📅7d:33% ↺seg 14h·5d6h │ 🕐 08:09 ⏱ 15h13m';
+
+  it('lê contexto, modelo+esforço, quota e tempo de sessão', () => {
+    const f = parseStatusLine(KIMI_CLI)!;
+    expect(f.model).toBe('K3');
+    expect(f.effort).toBe('high');
+    expect(f.ctxUsed).toBe(480_000);
+    expect(f.ctxTotal).toBe(1_000_000);
+    expect(Math.round(f.ctxPct!)).toBe(48);
+    expect(f.turnIn).toBeUndefined();   // o Kimi não informa tokens do turno — nada inventado
+    expect(f.fiveHourPct).toBe(3);
+    expect(f.fiveHourReset).toBe('50m');
+    expect(f.weeklyPct).toBe(33);
+    expect(f.weeklyReset).toBe('seg 14h·5d6h');
+    expect(f.sessionTime).toBe('15h13m');
+    expect(f.repo).toBe('hangar');
+    expect(f.branch).toBe('main');
+    expect(f.dirty).toBe(true);
+  });
+});
+
 describe('janelas de uso separadas so por espaco', () => {
   // No Pi as tres janelas vem coladas ("⚡5h … 📅7d … 🗓30d …") sem `│` entre elas. A classe do
   // reset semanal so cortava em │ e 🕐, entao com reset presente ela engolia o segmento mensal:
