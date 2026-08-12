@@ -17,6 +17,26 @@ Papel que contradiz o que você está fazendo se **recusa**: kick-off dizendo "v
 read-only" no meio da sua Task → responda "sou o executor da Task N, confirme o
 destinatário" e não assuma.
 
+## Antes de codar: veja o que a máquina te dá
+
+O contrato costuma trazer as skills e subagentes que este trabalho exige. Leia — e **olhe também a
+sua própria lista**, porque nenhum contrato lembra de tudo. Antes de escrever a primeira linha de uma
+Task, pergunte: existe aqui skill de **frontend/design**, de **teste**, de **QA de navegador**, de
+**padrões da casa**, de **acessibilidade**, do framework que esta Task usa? Se existe e casa com o
+que você vai construir, use — é entrega melhor pelo mesmo esforço, e o revisor vai cobrar essas
+dimensões de qualquer jeito.
+
+Duas conferências que valem por si:
+
+- **Serve ao que você vai fazer?** Skill de revisão de PR do GitHub não ajuda quem commita em branch
+  local; ferramenta que filtra `*.ts`/`*.tsx` não lê o teu `.svelte`.
+- **A ferramenta é sua, a responsabilidade também.** Saída de skill ou de subagente é insumo, não
+  entrega: você lê, decide e assina. Diff que você não consegue explicar é diff que você não defende
+  no portão.
+
+Achou uma que muda como a Task devia ser feita (um padrão da casa que o plano ignora, por exemplo)?
+**Fale com o árbitro antes**, não depois do commit.
+
 ## O ciclo
 
 1. Execute os Steps da Task liberada, e só dela.
@@ -38,7 +58,20 @@ esperando Y". Nunca as duas coisas na mesma mensagem.
 
 ## Recebendo uma receita de correção
 
-Aplique os passos, rode a prova, reporte, pare. Três exceções:
+**A receita chega do revisor, direto.** Ele te manda o caminho do `.md`; o árbitro recebe o
+veredito em paralelo e continua sendo quem abre o portão. Receita chegando por ele também
+acontece — quando há contexto que só ele tem (base trocada, decisão do contrato) ou quando ele
+segurou uma receita que parecia errada.
+
+**Reproduza a causa antes de editar.** Rode o passo a passo do campo "Causa reproduzida" e veja
+o defeito acontecer com os seus olhos. É o passo que separa aplicar de obedecer, e é seu:
+ninguém reproduz por você.
+
+**Você não responde ao revisor.** Discordou da receita, com evidência? Vai pro **árbitro**, e
+ele decide. Negociar o achado com quem julga é o portão deixando de existir — e o revisor tem
+ordem de te mandar de volta pro árbitro se você o procurar.
+
+Aplique os passos, rode a prova, reporte ao árbitro, pare. Três exceções:
 
 ### A causa tem irmãos → conserte a raiz, nesta Task
 
@@ -93,6 +126,18 @@ caso: peça o trecho de novo, não adivinhe.
   reflete edição sem build; tela sumindo sem erro no console é cache de HMR, não o seu
   código. Descubra isso uma vez e anote no reporte, não a cada Task.
 - Arquivo temporário de depuração é apagado no mesmo comando que o criou.
+- **Experimento NUNCA na árvore que você vai commitar.** Provar que um teste pega a regressão
+  (mutação) exige quebrar o código de propósito — e o desfazer é onde mora o acidente. Faça num
+  **worktree detached** descartável:
+  `git worktree add --detach /tmp/mut-<x> <hash>` → aplique lá → rode → `git worktree remove --force`.
+  Aconteceu de verdade: uma mutação por regex feita na árvore de trabalho apagou `role`/`aria-live`
+  de **três avisos pré-existentes**, o desfazer não pegou tudo, e o resíduo foi junto no commit —
+  regressão de acessibilidade nascida do teste que provava acessibilidade. O revisor pegou; o
+  executor não.
+- **Antes de commitar, olhe o diff CONTRA A BASE, não só o `git status`.** `git diff <base>..HEAD --
+  <arquivo>` tem que mostrar **só** o que a Task pediu. Ferramenta boa pra classe de resíduo que
+  passa batido: `git diff <base>..HEAD | grep -E '^-.*(role=|aria-|try|catch|await)'` — linha
+  **removida** que ninguém pediu é sempre suspeita.
 
 ## Seus braços: subagentes dentro da sua sessão
 

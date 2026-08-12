@@ -105,6 +105,10 @@ peça ao usuário quem é quem antes de mandar recado a alguém que não pediu p
 
   Aspas duplas cruas fazem o shell comer crase e `$`, e receita mutilada é pior que receita
   nenhuma. Heredoc solto (`cp-send <sessao> <<'EOF'`) devolve erro de uso — a mensagem não sai.
+- **Entrega não é resposta.** `entregue -> <sessao>` e o `success` do `SendMessage` dizem que a
+  mensagem **entrou na fila do destino**, não que alguém leu, nem que a resposta vai voltar. Não
+  existe prazo por mensagem: Task inteira leva o tempo que levar, e cutucar executor trabalhando é
+  ruído. **O sinal é outro — ver "Ociosidade" abaixo.**
 - **Nunca `comando | tail && echo OK`** — o `&&` lê o código de saída do `tail`, e o "OK"
   imprime com o comando falhando. Use `set -o pipefail` ou cheque `${PIPESTATUS[0]}`.
 - **Verificação roda o comando que o plano definiu para aquela Task**, na forma que não
