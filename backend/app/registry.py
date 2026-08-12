@@ -1551,8 +1551,10 @@ class SessionRegistry:
         jsonl = proj / f"{session_id}.jsonl"
         if not jsonl.exists():
             raise ValueError("transcript nao encontrado")
-        tmux.kill_session(name)
-        self._forget(name)
+        # COMANDO INTEIRO ANTES DO KILL. `args_de` valida e estoura ValueError; montar depois de
+        # matar o pane trocava "resume falhou" por "sessao destruida e nao relancada" — e o gatilho
+        # e real: o settings.json das contas traz `"model": "opus[1m]"`, que o proprio Claude Code
+        # anexa ao nome. Nada aqui toca o tmux.
         # "claude" literal: esta funcao ja recusa provider nao-Claude acima
         # (_refuse_non_claude_resume), e nao ha variavel `provider` neste escopo.
         cmd = shlex.join(["claude", "--resume", session_id]
@@ -1567,6 +1569,8 @@ class SessionRegistry:
                 if janela:
                     pre += ["--context", janela]
             cmd = shlex.join(pre + ["--"]) + " " + cmd
+        tmux.kill_session(name)
+        self._forget(name)
         if not tmux.new_session(name, cwd, cmd, str(cdir) if cdir else None):
             raise ValueError("falha ao relançar a sessao")
         # Fixa o transcript resumido no cache: resolve() ja o devolveria (o --resume esta no cmdline),

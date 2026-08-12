@@ -94,7 +94,7 @@
     padding: 6px 10px; background: transparent; border: none;
     color: var(--text-primary); font-size: var(--text-sm); text-align: left; cursor: pointer;
   }
-  .linha:hover:not(:disabled) { background: var(--surface-hover, rgba(127, 127, 127, 0.12)); }
+  .linha:hover:not(:disabled) { background: var(--bg-hover); }
   .linha:disabled { cursor: default; }
   .linha.ativa { color: var(--accent); }
 
@@ -103,6 +103,6 @@
 
   .dica {
     font-size: var(--text-xs); color: var(--text-muted);
-    padding: 6px 10px 8px; margin: 0; border-top: 1px solid var(--border);
+    padding: 6px 10px 8px; margin: 0; border-top: 1px solid var(--border-subtle);
   }
 </style>

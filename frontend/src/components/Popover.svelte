@@ -110,9 +110,12 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
+    /* Mesma receita do AccountMenu, o outro menu flutuante ancorado do app: --surface-raised (que
+       respeita a transparência sobre papel de parede, ao contrário do --bg-elevated cru) e sombra
+       literal — o projeto não tem token de sombra. */
+    background: var(--surface-raised);
+    border: 1px solid var(--border-default);
     border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-lg);
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
   }
 </style>

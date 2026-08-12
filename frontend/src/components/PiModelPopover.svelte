@@ -191,7 +191,7 @@
     align-items: center;
     gap: 6px;
     padding: 8px 10px;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--border-subtle);
   }
   .lupa { color: var(--text-muted); flex: none; }
   .busca {
@@ -234,7 +234,7 @@
     text-align: left;
     cursor: pointer;
   }
-  .linha:hover:not(:disabled) { background: var(--surface-hover, rgba(127, 127, 127, 0.12)); }
+  .linha:hover:not(:disabled) { background: var(--bg-hover); }
   .linha:disabled { cursor: default; }
   .linha.ativa { color: var(--accent); }
 
@@ -244,7 +244,7 @@
     flex: none;
     font-size: var(--text-xs);
     color: var(--text-muted);
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
     padding: 0 5px;
   }
@@ -258,6 +258,6 @@
     text-align: center;
     padding: 6px 0 8px;
     margin: 0;
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--border-subtle);
   }
 </style>

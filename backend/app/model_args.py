@@ -1,8 +1,9 @@
 """Modelo e nível de esforço: validar antes de virar comando, montar por provider.
 
-Por que a validação mora aqui e não no front: o comando que sobe a sessão é montado por
-CONCATENAÇÃO (`" ".join(...)` em registry.py:1114) e executado como `exec {command}` por um
-`$SHELL -c` (tmux.py:391). Não há quoting nesse caminho. O id vem de JSON de provedor (292 ids na
+Por que a validação mora aqui e não no front: o comando que sobe a sessão vira uma STRING única e é
+executado como `exec {command}` por um `$SHELL -c` (tmux.py:391) — quem monta usa `shlex.join`, mas
+a regex continua sendo a barreira, porque ela é o que garante que o valor não é uma flag nem carrega
+metacaractere caso alguém remonte o comando sem citar. O id vem de JSON de provedor (292 ids na
 omniroute) ou de parse de tabela — nenhum dos dois é fonte confiável, e o front é só um cliente
 entre outros. O repo já trata assim todo caminho comparável: uuid validado em registry.py:1404
 ("vai DIRETO pro comando do shell"), _PROIBIDO_NO_VALOR no engines.py, _clean no pi_models.py.
@@ -16,9 +17,17 @@ import re
 # Cobre tudo que os provedores medidos usam: `k3-256k`, `cx/gpt-5.6-sol-high`,
 # `clinepass/cline-pass/glm-5.2`, `claude-opus-5` e `openrouter/~anthropic/claude-opus-latest` — o
 # catálogo real do Pi traz 11 ids com `~` (revisão final da branch), e dentro do argumento citado
-# por shlex.join o `~` não sofre expansão do shell. Barra é necessária (o Pi usa provider/id) e é
-# inofensiva; espaço, `;`, `$`, crase e `|` não entram — a regex é a barreira do shell.
-ID_OK = re.compile(r"^[A-Za-z0-9._:~/-]{1,128}\Z")
+# por shlex.join o `~` não sofre expansão do shell. Colchete entra por causa de `opus[1m]`: é o
+# formato que o próprio Claude Code usa pra marcar a janela de contexto e está no settings.json das
+# contas do usuário — sem ele, retomar uma sessão dessas estourava. Barra é necessária (o Pi usa
+# provider/id) e é inofensiva; espaço, `;`, `$`, crase e `|` não entram — a regex é a barreira.
+ID_OK = re.compile(r"^[A-Za-z0-9._:~/\[\]-]{1,128}\Z")
+
+# Valor que COMEÇA com `-` vira flag na linha de comando, não argumento de `--model`: `--model`
+# seguido de `--dangerously-skip-permissions` acabaria com o binário lendo a segunda como opção
+# dele. O shlex.join cita o valor, mas quoting não muda que o argv começa com `-`.
+def _e_flag(valor: str) -> bool:
+    return valor.startswith("-")
 
 # Listas FECHADAS, do --help de cada binário (medido em 10/08/2026). `ultracode` NÃO entra: é do
 # picker interativo (`/effort ultracode`), não da flag de arranque.
@@ -39,8 +48,8 @@ def validar(provider: str, model: str | None, effort: str | None) -> tuple[str |
         return None, None
     if provider not in _FLAG_ESFORCO:
         raise ValueError(f"provider {provider!r} não aceita escolha de modelo aqui")
-    if model is not None and not ID_OK.match(model):
-        raise ValueError("model: use letras, números e . _ : / - ~ (até 128 caracteres)")
+    if model is not None and (not ID_OK.match(model) or _e_flag(model)):
+        raise ValueError("model: use letras, números e . _ : / - ~ [ ] (até 128 caracteres, sem começar com -)")
     if effort is not None and effort not in _NIVEIS[provider]:
         raise ValueError(f"effort: use um de {', '.join(_NIVEIS[provider])}")
     return model, effort

@@ -182,6 +182,34 @@ def test_resume_preserva_modelo_e_janela_do_pane(tmp_path, monkeypatch):
     assert info.engine == "kimi"
 
 
+def test_resume_com_modelo_marcado_de_janela_nao_estoura(tmp_path, monkeypatch):
+    """`opus[1m]` é o que o próprio Claude Code anexa ao nome do modelo, e está no settings.json das
+    contas do usuário. Com o colchete fora da whitelist, retomar uma sessão dessas estourava."""
+    _motor()
+    monkeypatch.setattr(procinfo, "_model_of", lambda pid: ("opus[1m]", None))
+    monkeypatch.setattr(procinfo, "_env_var_of", lambda pid, nome: None)
+    visto = {}
+    r, sid = _prep_resume(tmp_path, monkeypatch, visto, None)
+    r.resume("s", sid)
+    assert visto["command"] == f"claude --resume {sid} --model 'opus[1m]'"
+
+
+def test_resume_com_modelo_invalido_nao_mata_o_pane(tmp_path, monkeypatch):
+    """O comando é montado ANTES do kill. Montar depois trocava 'o resume falhou' por 'a sessão foi
+    destruída e não relançada' — o pane já não existia quando a validação estourava."""
+    _motor()
+    monkeypatch.setattr(procinfo, "_model_of", lambda pid: ("opus; rm -rf /", None))
+    monkeypatch.setattr(procinfo, "_env_var_of", lambda pid, nome: None)
+    visto = {}
+    mortes = []
+    r, sid = _prep_resume(tmp_path, monkeypatch, visto, None)
+    monkeypatch.setattr(reg.tmux, "kill_session", lambda n: mortes.append(n))
+    with pytest.raises(ValueError):
+        r.resume("s", sid)
+    assert mortes == []                 # a sessão continua de pé
+    assert "command" not in visto       # e nada foi relançado
+
+
 def test_resume_com_modelo_sem_janela_omite_o_context(tmp_path, monkeypatch):
     _motor()
     monkeypatch.setattr(procinfo, "_model_of", lambda pid: ("k3-256k", "high"))

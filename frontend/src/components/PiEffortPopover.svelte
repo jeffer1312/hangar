@@ -130,7 +130,7 @@
     text-align: left;
     cursor: pointer;
   }
-  .linha:hover:not(:disabled) { background: var(--surface-hover, rgba(127, 127, 127, 0.12)); }
+  .linha:hover:not(:disabled) { background: var(--bg-hover); }
   .linha:disabled { cursor: default; }
   .linha.ativa { color: var(--accent); }
 
@@ -142,6 +142,6 @@
     color: var(--text-muted);
     padding: 6px 10px 8px;
     margin: 0;
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--border-subtle);
   }
 </style>

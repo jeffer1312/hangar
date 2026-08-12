@@ -241,7 +241,7 @@
 <style>
   .busca-wrap {
     display: flex; align-items: center; gap: 6px;
-    padding: 8px 10px; border-bottom: 1px solid var(--border);
+    padding: 8px 10px; border-bottom: 1px solid var(--border-subtle);
   }
   .lupa { color: var(--text-muted); flex: none; }
   .busca {
@@ -260,7 +260,7 @@
     padding: 7px 10px; background: transparent; border: none;
     color: var(--text-primary); font-size: var(--text-sm); text-align: left; cursor: pointer;
   }
-  .linha:hover:not(:disabled) { background: var(--surface-hover, rgba(127, 127, 127, 0.12)); }
+  .linha:hover:not(:disabled) { background: var(--bg-hover); }
   .linha:disabled { cursor: default; }
   .linha.ativa { color: var(--accent); }
 
@@ -274,14 +274,14 @@
 
   .mais {
     font-size: var(--text-xs); color: var(--text-muted); text-align: center;
-    padding: 6px 0; margin: 0; border-top: 1px solid var(--border);
+    padding: 6px 0; margin: 0; border-top: 1px solid var(--border-subtle);
   }
 
-  .acoes { border-top: 1px solid var(--border); padding: 8px; display: flex; flex-direction: column; gap: 4px; }
+  .acoes { border-top: 1px solid var(--border-subtle); padding: 8px; display: flex; flex-direction: column; gap: 4px; }
 
   .btn-aplicar {
     width: 100%; padding: 8px 10px; border: none; border-radius: var(--radius-md);
-    background: var(--accent); color: var(--on-accent, #fff);
+    background: var(--accent); color: var(--text-inverse);
     font-size: var(--text-sm); font-weight: 600; cursor: pointer;
   }
   .btn-aplicar:disabled { opacity: 0.5; cursor: default; }
@@ -290,5 +290,5 @@
     width: 100%; padding: 8px 10px; background: transparent; border: none;
     color: var(--text-muted); font-size: var(--text-xs); text-align: center; cursor: pointer;
   }
-  .rodape:hover:not(:disabled) { background: var(--surface-hover, rgba(127, 127, 127, 0.12)); color: var(--text-primary); }
+  .rodape:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
 </style>

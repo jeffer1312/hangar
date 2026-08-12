@@ -4,7 +4,7 @@
 
   // Folha de comandos: busca no topo + lista agrupada (Built-ins, Suas skills, Plugins).
   // Comportamento ao tocar: destrutivos pedem confirmacao inline; model/effort abrem o
-  // ModelEffortSheet (evita o TUI cego do /model); comandos com argumento preenchem o
+  // popover de modelo do Claude (evita o TUI cego do /model); comandos com argumento preenchem o
   // textarea; o resto envia direto.
   interface Props {
     open: boolean;

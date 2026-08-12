@@ -1,6 +1,6 @@
 <script lang="ts">
-  // Task C: modelo + reasoning effort pra sessoes Codex (equivalente do ModelEffortSheet do
-  // Claude). Auto-contido igual ao CodexLimitsSheet (Task B): busca a lista + escolha atual ao
+  // Task C: modelo + reasoning effort pra sessoes Codex (equivalente do ClaudeModelPopover +
+  // ClaudeEffortPopover). Esta e a unica das tres pills que ainda abre FOLHA, nao popover. Auto-contido igual ao CodexLimitsSheet (Task B): busca a lista + escolha atual ao
   // abrir (GET /models) e aplica na hora (POST /model) -- sem estado intermediario no Composer,
   // que so recebe o resultado via onApplied pra atualizar o pill otimista.
   import BottomSheet from './BottomSheet.svelte';

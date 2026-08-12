@@ -319,12 +319,12 @@
     return () => document.removeEventListener('keydown', aoAtalhoMic);
   });
 
-  // ── Pill de modelo + esforco: abre o ModelEffortSheet (aplica via endpoint dedicado) ──
+  // ── Pills de modelo e de esforco: cada uma abre seu popover (aplica via endpoint dedicado) ──
   // Display otimista: a escolha aparece na hora; o status (read-back real do statusline)
   // reconcilia o modelo quando confirma. Esforco e write-only (sem read-back confiavel)
   // -> a escolha local persiste.
-  // Popovers do Claude ancorados nas pills (antes: a folha ModelEffortSheet, de altura cheia, com
-  // modelo e esforco juntos). Mesma forma do Pi e a mesma referencia do usuario (opencode).
+  // Popovers do Claude ancorados nas pills (antes: uma folha de altura cheia, com modelo e esforco
+  // juntos). Mesma forma do Pi e a mesma referencia do usuario (opencode).
   let claudePopOpen = $state(false);
   let claudeEffortOpen = $state(false);
   let claudePillEl = $state<HTMLElement | null>(null);
@@ -1186,7 +1186,7 @@
           </button>
         {:else if isKimi}
           <!-- Kimi nao tem sheet de modelo neste MVP (o /model dele e so-TUI): pill vira rotulo
-               passivo com o modelo da statusline, sem abrir nada — nem o ModelEffortSheet do Claude. -->
+               passivo com o modelo da statusline, sem abrir nada — nem o popover de modelo do Claude. -->
           <span class="model-pill">
             <span class="pill-label">
               <span class="pill-model">{status?.model ?? 'Modelo'}</span>
@@ -1438,7 +1438,7 @@
     min-width: 0;
   }
 
-  /* Chip de modelo/esforco: botao que abre o ModelEffortSheet (mantem o visual do chip).
+  /* Chip de modelo/esforco: botao que abre o popover correspondente (mantem o visual do chip).
      min-height:0 sobrescreve o alvo global de 44px pra preservar o pill compacto de 28px
      (o tap fica confortavel dentro da control-row de 44px). :active scale vem do global. */
   .model-pill {

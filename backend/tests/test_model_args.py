@@ -1,8 +1,8 @@
 """Argumentos de modelo e esforço: validar antes, montar depois.
 
-O que esta suíte trava: id que quebraria o shell é RECUSADO (o comando é montado por concatenação em
-registry.py:1114 e executado como `exec {command}` por `$SHELL -c` em tmux.py:391 — sem quoting no
-caminho); cada provider produz a flag do SEU binário; nível fora da lista fechada não passa; e
+O que esta suíte trava: id que quebraria o shell — ou que viraria uma FLAG — é RECUSADO (o comando
+vira string única e é executado como `exec {command}` por `$SHELL -c` em tmux.py:391); cada provider
+produz a flag do SEU binário; nível fora da lista fechada não passa; e
 provider fora de escopo continua funcionando quando ninguém pediu modelo (senão a criação de sessão
 Codex, que é caminho vivo, passaria a devolver 400 sem motivo).
 """
@@ -15,6 +15,9 @@ from app import model_args as ma
     "k3; touch /tmp/x", "k3 && rm -rf /", "k3 $(whoami)", "k3 `id`",
     "k3 modelo", "k3\nrm -rf /", "k3|tee /tmp/x", "", "x" * 129,
     "k3\n", "k3-256k\n",
+    # Valor que começa com `-` vira FLAG no argv, não argumento de `--model`: o binário leria a
+    # segunda como opção dele. Citar com shlex não muda isso.
+    "--dangerously-skip-permissions", "-opus", "--model",
 ])
 def test_id_perigoso_e_recusado(mau):
     with pytest.raises(ValueError):
@@ -28,6 +31,10 @@ def test_id_perigoso_e_recusado(mau):
     # caractere na whitelist, a tela oferecia a linha e o POST devolvia 400. `~` dentro do
     # argumento citado por shlex.join não sofre expansão do shell.
     "openrouter/~anthropic/claude-opus-latest",
+    # B1 da segunda revisão final: é o formato que o próprio Claude Code usa pra marcar a janela de
+    # contexto, e está no `settings.json` das duas contas do usuário. Recusar aqui estourava na
+    # RETOMADA de uma sessão dessas, quando o modelo é lido do /proc do processo que já rodava.
+    "opus[1m]", "claude-opus-5[1m]",
 ])
 def test_id_legitimo_passa(bom):
     assert ma.validar("claude", bom, None)[0] == bom
