@@ -4,7 +4,7 @@
   import Select from './Select.svelte';
   import FolderScanner from './FolderScanner.svelte';
   import { getSessions, listClaudeConfigs, getEngines, criarConta, apagarConta,
-           type Motor } from '../lib/api';
+           modelOptions, type ModelOption, type Motor } from '../lib/api';
   import { basename, providerName } from '../lib/format';
   import { selectServer, getActiveId, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
@@ -15,7 +15,7 @@
     servers: Server[];
     onClose: () => void;
     onCreate: (name: string, cwd?: string, configDir?: string | null, provider?: Provider,
-               engine?: string | null) => Promise<void>;
+               engine?: string | null, model?: string | null, effort?: string | null) => Promise<void>;
     onOpenSession: (name: string) => void;
   }
   let { open, servers, onClose, onCreate, onOpenSession }: Props = $props();
@@ -64,6 +64,64 @@
   // Motor de modelo (Task 5): '' = conta Anthropic (o padrão de sempre). Só faz sentido com provider claude.
   let engine = $state('');
   let motores = $state<Record<string, Motor>>({});
+
+  // Escolha de modelo e esforço (só claude e pi — ver NIVEIS abaixo). `''` = Padrão, ou seja
+  // nenhuma flag no comando: comportamento de hoje, byte por byte. A lista vem do
+  // GET /api/model-options (Task 4), que já traz contexto/👁 pros provedores que informam.
+  let modelo = $state('');
+  let esforco = $state('');
+  let modelos = $state<ModelOption[]>([]);
+  let listaReduzida = $state(false);
+  let erroModelos = $state('');
+
+  // Listas FECHADAS por provider, as mesmas do backend (model_args.py). O Kimi é o QUARTO botão da
+  // tela e não tem nível de esforço nenhum: uma guarda `provider !== 'codex'` deixaria ele entrar
+  // aqui e `NIVEIS['kimi']` seria undefined — o `.map` derrubaria a folha inteira. Por isso a
+  // lista explícita dos dois providers em escopo.
+  const NIVEIS: Record<string, string[]> = {
+    claude: ['low', 'medium', 'high', 'xhigh', 'max'],
+    pi: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+  };
+
+  // `targetServer` (acima) é o servidor de destino. Ele entra na chave porque MOTOR É POR SERVIDOR
+  // (comentário do loadConfigs): sem isso o app lembraria um modelo de motor que o outro servidor
+  // não tem — a sessão subiria com --model de um id que aquele provedor não conhece.
+  const chaveMemoria = () => `cp_last_model:${targetServer}:${provider}:${engine || '-'}`;
+
+  // Mesma guarda de sequência que o sheet já usa pra configs/motores (`cfgSeq`), pelo mesmo motivo
+  // escrito lá: provider → motor → config em sequência rápida deixa várias respostas em voo, e a
+  // mais LENTA venceria — o usuário escolheria um modelo que não existe no que acabou de selecionar.
+  let modSeq = 0;
+
+  // Catálogo do Pi traz ids que se REPETEM entre providers (medido: k3 existe na kimi-coding E na
+  // kimi-jefferson; gpt-5.6-luna na openai-codex E na opencode-go). O valor da opção tem que ser
+  // provider/id: sem o provider, a chave do each do Select colide e o each_key_duplicate derruba a
+  // lista inteira — e o `pi --model k3` cru seria ambíguo e recusado pelo CLI (o model-resolver do
+  // Pi rejeita bare id que casa em mais de um provider). Nos outros formatos (motor, cache do
+  // Claude, aliases reduzidos) não há provider e o id já é único — o valor é o id puro, como hoje.
+  const valorModelo = (m: ModelOption) => (m.provider ? `${m.provider}/${m.id}` : m.id);
+
+  async function carregarModelos() {
+    const seq = ++modSeq;
+    modelos = []; erroModelos = ''; listaReduzida = false; modelo = ''; esforco = '';
+    // Só os dois providers em escopo. `provider !== 'codex'` NÃO serve: a tela tem quatro botões
+    // (claude, codex, pi, kimi) e o Kimi não tem nível de esforço nenhum.
+    if (provider !== 'claude' && provider !== 'pi') return;
+    try {
+      const r = await modelOptions(provider, engine, selectedConfig);
+      if (seq !== modSeq) return;
+      modelos = r.models;
+      listaReduzida = r.reduced;
+      const lembrado = localStorage.getItem(chaveMemoria());
+      // Casar contra a lista: modelo tirado do provedor ou motor removido não pode virar flag às
+      // cegas — a sessão subiria e falharia no primeiro turno.
+      if (lembrado && modelos.some((m) => valorModelo(m) === lembrado)) modelo = lembrado;
+      esforco = localStorage.getItem(chaveMemoria() + ':effort') ?? '';
+    } catch (e) {
+      if (seq !== modSeq) return;
+      erroModelos = e instanceof Error ? e.message : 'não consegui listar os modelos';
+    }
+  }
   // Criar conta pela tela: botão "+ conta" no seletor. Ocupada = POST em voo (desabilita o botão);
   // avisoConta leva a mensagem pro usuário (sucesso ou erro).
   let contaOcupada = $state(false);
@@ -103,6 +161,11 @@
         if (seq !== cfgSeq) return;
         configs = cs;
         selectedConfig = cs.find((c) => c.active)?.path ?? cs[0]?.path ?? null;
+        // DENTRO do .then, nunca depois de loadConfigs(): ela não é async — dispara os fetches e
+        // volta na hora, e `selectedConfig` só é preenchido aqui. Chamar logo depois mandaria
+        // config_dir vazio pra rota de modelos, e nada re-dispararia quando os configs aterrissassem
+        // (numa máquina com conta secundária, a lista viria reduzida ou da conta errada, sempre).
+        carregarModelos();
       })
       .catch(() => {});
     // Best-effort: falha aqui NAO pode travar a criação de sessão, so tira o seletor da tela.
@@ -315,8 +378,13 @@
     loading = true;
     error = '';
     try {
+      // Memória ANTES do onCreate: se a criação falhar (rede, 400), a escolha não se perde — o
+      // valor lembrado é casado contra a lista na próxima abertura, então id de provedor que saiu
+      // do ar nunca vira flag às cegas.
+      if (modelo) localStorage.setItem(chaveMemoria(), modelo);
+      if (esforco) localStorage.setItem(chaveMemoria() + ':effort', esforco);
       await onCreate(name.trim(), picked, provider === 'claude' ? selectedConfig : null, provider,
-                     provider === 'claude' ? (engine || null) : null);
+                     provider === 'claude' ? (engine || null) : null, modelo || null, esforco || null);
       onClose();
     } catch (err) {
       error = err instanceof Error ? err.message : 'Erro ao criar sessão';
@@ -421,7 +489,7 @@
               class="provider-btn"
               class:on={provider === p}
               aria-pressed={provider === p}
-              onclick={() => (provider = p)}
+              onclick={() => { provider = p; carregarModelos(); }}
             >{providerName(p)}</button>
           {/each}
         </div>
@@ -438,7 +506,7 @@
               value={selectedConfig ?? ''}
               opcoes={configs.map((c) => ({
                 value: c.path, label: c.label, hint: c.active ? 'atual' : undefined, title: c.path }))}
-              onchange={(v) => (selectedConfig = v)} />
+              onchange={(v) => { selectedConfig = v; carregarModelos(); }} />
             <button type="button" class="ghost-btn conta-add" onclick={abrirCampoConta}
               disabled={contaOcupada} aria-busy={contaOcupada}
               aria-label={contaOcupada ? 'Criando conta Claude' : 'Adicionar conta Claude'}>
@@ -492,7 +560,40 @@
             opcoes={[{ value: '', label: 'Claude (sua conta)' },
                      ...Object.entries(motores).map(([nome, m]) => ({
                        value: nome, label: m.label ?? nome, hint: m.model }))]}
-            onchange={(v) => (engine = v)} />
+            onchange={(v) => { engine = v; carregarModelos(); }} />
+        </div>
+      {/if}
+
+      {#if provider === 'claude' || provider === 'pi'}
+        <div class="field">
+          <label class="field-label" for="model-pick">Modelo</label>
+          <Select id="model-pick" class="field-input" ariaLabel="Modelo" value={modelo}
+            opcoes={[{ value: '', label: 'Padrão' },
+                     ...modelos.map((m) => ({
+                       value: valorModelo(m),
+                       label: m.name ?? m.id,
+                       // Quatro formatos do campo `models` (Task 4): pi traz provider/context/
+                       // images, motor traz context_length/vision, cache do Claude traz name, e os
+                       // aliases reduzidos não trazem nada. Campos ausentes simplesmente somem do
+                       // hint (.filter(Boolean)) — nenhum formato pode quebrar a linha.
+                       hint: [m.provider,
+                              m.context ?? (m.context_length ? `${Math.round(m.context_length / 1000)}K` : null),
+                              (m.vision ?? m.images) ? '👁' : null].filter(Boolean).join(' · ') }))]}
+            onchange={(v) => (modelo = v)} />
+          {#if listaReduzida}
+            <p class="model-hint">Lista reduzida — abra uma sessão nesta conta uma vez para o app aprender os modelos dela.</p>
+          {/if}
+          {#if erroModelos}
+            <p class="model-hint">{erroModelos} — a sessão abre no padrão.</p>
+          {/if}
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="effort-pick">{provider === 'pi' ? 'Raciocínio' : 'Esforço'}</label>
+          <Select id="effort-pick" class="field-input" ariaLabel="Esforço" value={esforco}
+            opcoes={[{ value: '', label: 'Padrão' },
+                     ...NIVEIS[provider].map((n) => ({ value: n, label: n }))]}
+            onchange={(v) => (esforco = v)} />
         </div>
       {/if}
 
@@ -663,6 +764,14 @@
     font-size: var(--text-sm);
     color: var(--text-secondary);
     margin-bottom: var(--space-3);
+  }
+
+  /* Avisos do campo de modelo: lista reduzida (cache do Claude frio) e erro de listagem. O erro
+     termina com o caminho de saída (a sessão abre no padrão) — o usuário nunca fica sem ação. */
+  .model-hint {
+    margin: 6px 0 0;
+    font-size: 12px;
+    opacity: 0.75;
   }
 
   /* ── Campos / botoes ───────────────────────────────────────────────────── */

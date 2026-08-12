@@ -273,9 +273,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
 
   async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: Provider,
-                              engine?: string | null) {
+                              engine?: string | null, model?: string | null, effort?: string | null) {
     // O CreateSessionSheet já posicionou o servidor-alvo como ativo (selectServer).
-    await createSession(name, cwd, configDir, provider, engine);
+    await createSession(name, cwd, configDir, provider, engine, model, effort);
     activeId = getActiveId(); // I2: sync local state after sheet's selectServer
     onSelect(name);
     // SSE stream emitirá a sessão nova automaticamente

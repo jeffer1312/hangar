@@ -290,11 +290,42 @@ export function createSession(
   configDir?: string | null,
   provider: Provider = 'claude',
   engine?: string | null,
+  model?: string | null,
+  effort?: string | null,
 ): Promise<SessionInfo> {
+  // `model`/`effort` no FIM de propósito: chamador antigo com 5 argumentos continua válido e abre
+  // no padrão, byte por byte (o backend valida None = comportamento de hoje).
   return apiFetch<SessionInfo>('/api/sessions', {
     method: 'POST',
-    body: JSON.stringify({ name, cwd, config_dir: configDir ?? null, provider, engine: engine ?? null }),
+    body: JSON.stringify({ name, cwd, config_dir: configDir ?? null, provider, engine: engine ?? null,
+                           model: model ?? null, effort: effort ?? null }),
   });
+}
+
+// Modelo oferecido na tela de ABERTURA (GET /api/model-options). O backend devolve QUATRO formatos
+// do campo `models` conforme o ramo (pi, motor, cache do Claude, aliases reduzidos) — os campos são
+// todos opcionais porque nenhum formato tem todos; quem renderiza usa `m.name ?? m.id` e só mostra
+// a etiqueta do que a fonte informou.
+export interface ModelOption {
+  id: string;
+  name?: string;
+  provider?: string;
+  context_length?: number | null;
+  context?: string;
+  vision?: boolean | null;
+  images?: boolean;
+}
+
+// Lista de modelos da tela de nova sessão, onde ainda não existe sessão viva. O front manda
+// CAMINHO de config dir (nunca rótulo de conta): é o que faz a chave do cache do backend casar com
+// a da sessão viva — sem isto a lista quente de uma conta nunca seria aproveitada na abertura.
+export async function modelOptions(
+  provider: string, engine?: string | null, configDir?: string | null,
+): Promise<{ kind: string; reduced: boolean; models: ModelOption[] }> {
+  const q = new URLSearchParams({ provider });
+  if (engine) q.set('engine', engine);
+  if (configDir) q.set('config_dir', configDir);
+  return apiFetch(`/api/model-options?${q}`);
 }
 
 // Cria a pasta da conta Claude no servidor. NÃO loga — o OAuth é interativo e roda dentro da

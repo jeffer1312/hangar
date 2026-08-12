@@ -288,8 +288,8 @@
   }
 
   async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: Provider,
-                              engine?: string | null) {
-    await createSession(name, cwd, configDir, provider, engine);
+                              engine?: string | null, model?: string | null, effort?: string | null) {
+    await createSession(name, cwd, configDir, provider, engine, model, effort);
     onNavigateToChat(name);
   }
 
