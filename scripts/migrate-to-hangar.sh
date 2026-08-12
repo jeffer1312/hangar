@@ -136,7 +136,18 @@ if [[ "$VELHO" != "$NEW" ]]; then
 
         # memórias: além de copiadas, têm os caminhos absolutos corrigidos
         if [[ -d "$np/memory" ]]; then
-            grep -rlF "$VELHO" "$np/memory" 2>/dev/null | while read -r m; do sed -i "s|$VELHO|$NEW|g" "$m"; done
+            # `|| true` no GREP, e só nele: sob `set -euo pipefail` um grep SEM MATCH sai 1 e mata a
+            # migração aqui — medido nesta máquina em 12/08/2026, no perfil .claude-clean, cujas
+            # memórias não citam o caminho velho. O script morria logo após "projeto copiado", com a
+            # pasta já renomeada e as units ainda claude-cockpit-* apontando pra pasta inexistente.
+            # Nada a corrigir é o caso NORMAL, não uma falha.
+            # O `sed` fica FORA do escudo, por isso a lista entra por process substitution em vez de
+            # pipe: com `grep | while …; done || true` o `|| true` cobriria o loop inteiro e um `sed`
+            # que falhasse (permissão, disco cheio) passaria calado — e não há verificação nenhuma,
+            # aqui ou no bloco final, que confira se as memórias foram mesmo reescritas. Ficaria uma
+            # memória com o caminho morto dentro e um "migração concluída" na tela.
+            while read -r m; do sed -i "s|$VELHO|$NEW|g" "$m"; done \
+                < <(grep -rlF "$VELHO" "$np/memory" 2>/dev/null || true)
             echo "    (confira nomes de unit 'claude-cockpit-*' no texto delas — não são reescritos)"
         fi
     done
@@ -223,7 +234,9 @@ if command -v systemctl >/dev/null && [[ -f "$SD/claude-cockpit-backend.service"
 # (falso positivo medido na 2a passada). O criterio honesto e o unico que descreve o defeito:
 # o WorkingDirectory declarado na unit APONTA PRA UM DIRETORIO QUE NAO EXISTE.
 elif command -v systemctl >/dev/null && [[ -f "$SD/hangar-backend.service" ]]; then
-    wd="$(grep -m1 '^WorkingDirectory=' "$SD/hangar-backend.service" 2>/dev/null | cut -d= -f2-)"
+    # `|| true` pelo mesmo motivo do grep das memórias: unit sem a linha -> grep 1 -> pipefail mata
+    # a migração aqui, e o `[[ -n "$wd" ]]` logo abaixo já existe justamente pro caso de vir vazio.
+    wd="$(grep -m1 '^WorkingDirectory=' "$SD/hangar-backend.service" 2>/dev/null | cut -d= -f2- || true)"
     if [[ -n "$wd" && ! -d "$wd" ]]; then
         log "unit hangar-backend aponta pra '$wd', que nao existe — reescrevendo a partir de $NEW"
         [[ -f "$SD/hangar-frontend.service" ]] && export CP_SERVE=preview
@@ -273,7 +286,11 @@ fi
 
 # A prova que importa e a porta respondendo, nao a unit existir: um backend com WorkingDirectory
 # errado fica `activating` e nunca escuta.
-porta="$(grep -m1 '^CP_PORT=' "$NEW/backend/.env" 2>/dev/null | cut -d= -f2)"
+# `|| true`: medido nesta máquina em 12/08/2026 — o .env existe mas NÃO declara CP_PORT (a porta é o
+# default). Sob pipefail o grep sem match matava o script AQUI, logo depois de "hangar-backend ativo"
+# e sem imprimir uma linha sequer: exit 1 com a migração de fato completa, que é o pior dos dois erros
+# (o dono relê a saída procurando um erro que não existe). O `${porta:-8765}` abaixo já é o fallback.
+porta="$(grep -m1 '^CP_PORT=' "$NEW/backend/.env" 2>/dev/null | cut -d= -f2 || true)"
 porta="${porta:-8765}"
 if command -v curl >/dev/null; then
     codigo="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$porta/" 2>/dev/null || true)"
@@ -290,7 +307,9 @@ fi
 # terminado dizendo "concluída".
 lanc="$HOME/.local/share/applications/hangar.desktop"
 if [[ -f "$lanc" ]]; then
-    bin="$(grep -m1 '^Exec=' "$lanc" | cut -d= -f2- | awk '{print $1}')"
+    # `|| true`: mesmo padrão dos outros dois — .desktop sem Exec= é arquivo malformado, e o teste
+    # que interessa (`-n "$bin"`) já trata o vazio; abortar aqui esconderia as verificações seguintes.
+    bin="$(grep -m1 '^Exec=' "$lanc" | cut -d= -f2- | awk '{print $1}' || true)"
     if [[ -n "$bin" && ! -x "$bin" ]]; then
         echo "ERRO: $lanc aponta pro executável '$bin', que não existe" >&2
         falhou=1
