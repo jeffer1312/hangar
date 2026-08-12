@@ -167,7 +167,10 @@
         // (numa máquina com conta secundária, a lista viria reduzida ou da conta errada, sempre).
         carregarModelos();
       })
-      .catch(() => {});
+      // A lista de contas fora do ar NÃO pode deixar a tela com o estado da abertura passada — o
+      // reset do `$effect` zera os campos, mas a lista de modelos só volta a ser pedida aqui (e no
+      // onchange dos pickers). Com `selectedConfig` nulo, o backend normaliza pra conta padrão.
+      .catch(() => { carregarModelos(); });
     // Best-effort: falha aqui NAO pode travar a criação de sessão, so tira o seletor da tela.
     getEngines()
       .then((r) => { if (seq === cfgSeq) motores = r.motores; })
@@ -326,6 +329,12 @@
       manualPath = '';
       provider = 'claude';
       engine = '';
+      // O sheet nunca desmonta (só o prop `open` alterna): sem este reset, a escolha da abertura
+      // anterior sobrevive à reabertura quando o fetch de contas falha — o reset de carregarModelos
+      // fica atrás dele e não roda. Escolha de Pi indo pro create do Claude é pane no ar e erro no
+      // primeiro turno, calado.
+      modelo = ''; esforco = '';
+      modelos = []; listaReduzida = false; erroModelos = '';
       // Feedback da criação de conta não pode vazar entre aberturas: o botão liberado, o aviso
       // limpo e a conta criada esquecida — o cfgSeq do loadConfigs abaixo invalida qualquer
       // novaConta que ainda esteja em voo da abertura anterior.
