@@ -25,39 +25,22 @@ function sessionFile(ctx: any): string | null {
   return ctx?.sessionManager?.getSessionFile?.() ?? null;   // --no-session: nada pra rastrear
 }
 
-// ── de quem e este pane ────────────────────────────────────────────────────────────────────────
-// O Pi cria, DENTRO DO MESMO PROCESSO, sessoes que nao sao a conversa do usuario: a extensao
-// `pi-subagents` FORKA a sessao pra dar contexto a cada subagente (subagent-executor.ts,
-// `createForkContextResolver(..., "fork")`), e cada fork dispara `session_start` com um ctx cujo
-// getSessionFile() aponta pro arquivo DO FORK. Esse arquivo nasce no topo do diretorio do cwd, com
-// `<ts>_<uuid>.jsonl` — indistinguivel de uma sessao de verdade pelo caminho, entao o guarda do
-// backend (`is_subagent_transcript`, que pega o layout `<stem>/<taskId>/run-N/session.jsonl`) nao
-// ve este. Medido 12/08/2026 no pane %2612 da sessao `mod-rev-final`: o bilhete caiu em
-// `…12-58-03-419Z_f334db50….jsonl` e o app passou a mostrar o modelo daquele fork (Sakana Namazu,
-// antes MiMo-V2.5-Pro e Grok 4.20) no lugar do gpt-5.6-sol da sessao — piscando de volta ao certo
-// no proximo `agent_start` do agente principal, que reescrevia o bilhete.
+// ── subagente (pi-subagents) publica NADA ──────────────────────────────────────────────────────
+// O subagente do pi-subagents e OUTRO PROCESSO, nao outra sessao no mesmo processo: o fork so
+// ESCREVE o arquivo da sessao no disco (shared/fork-context.ts, `writeForkedSessionFile`) — nao
+// emite evento nenhum no pai —, e o filho nasce com `--session <esse arquivo>` (runs/shared/
+// pi-args.ts:519) e o MESMO TMUX_PANE herdado (runs/foreground/execution.ts:463, `spawnEnv =
+// {...process.env, ...}`). Com a memoria do modulo zerada, o filho se declarava dono e reescrevia
+// o bilhete pane->sessao com o arquivo DO FORK — a pill do app mostrava o modelo do subagente no
+// lugar do da sessao (medido 12/08/2026 no pane %2612). O 24f1b75 tentou resolver com a trava
+// `sessaoDoPane`, mas ela compara sessoes DENTRO de um processo, e pai e filho nunca dividem
+// processo — o fork nao emite session_start no pai (grep por emit no fork-context.ts volta vazio).
 //
-// A trava: o pane pertence a PRIMEIRA sessao que se apresenta e so troca de dono quando ESSA
-// sessao cai. Troca legitima continua valendo porque `/new`, `/fork`, `/resume` e `/tree` passam
-// por `teardownCurrent` (agent-session-runtime.js:102-113), que emite `session_shutdown` da sessao
-// atual ANTES do `session_start` da nova. O fork de subagente nao derruba ninguem: nasce ao lado, e
-// e por isso que da pra separar os dois sem depender do formato do caminho.
-let sessaoDoPane: string | null = null;
-
-function ehDoPane(ctx: any): string | null {
-  const file = sessionFile(ctx);
-  if (!file) return null;
-  if (sessaoDoPane === null) sessaoDoPane = file;   // 1o evento do processo = a sessao do usuario
-  return file === sessaoDoPane ? file : null;
-}
-
-/** E a sessao dona do pane? Diferente de `ehDoPane`, NAO adota o pane quando ele esta sem dono —
- *  quem pergunta isso e o `session_shutdown`, e adotar ali faria a sessao que esta MORRENDO virar
- *  dona de novo (o teste `scripts/test-pi-cp-state.mjs` pega exatamente isso). */
-function ehDona(ctx: any): boolean {
-  const file = sessionFile(ctx);
-  return !!file && file === sessaoDoPane;
-}
+// O sinal que atravessa o spawn: `PI_SUBAGENT_DEPTH`. O pai nao tem a var (vale 0); o filho
+// recebe "1" (o neto "2") do getSubagentDepthEnv() — a unica var que o pi-subagents injeta no env
+// do filho (runs/foreground/execution.ts:463 e runs/background/subagent-runner.ts:541). O backend
+// do hangar nao seta esta var ao criar sessoes Pi (registry.py spawna `pi --session-id` cru).
+const emSubagente = Number(process.env.PI_SUBAGENT_DEPTH ?? "0") > 0;
 
 // A CHAVE do marcador de estado e o stem do arquivo de sessao, nao o session-id: o backend procura
 // por `Path(jsonl).stem` (sse.py:305, registry.py:604). No Claude os dois coincidem (<uuid>.jsonl);
@@ -88,7 +71,7 @@ function guard(what: string, fn: () => void): void {
 
 function publishState(state: "working" | "idle", ctx: any): void {
   guard(`publishState(${state})`, () => {
-    const file = ehDoPane(ctx);
+    const file = sessionFile(ctx);
     if (!file) return;
     writeAtomic(path.join(dir, `${path.basename(file, ".jsonl")}.json`),
                 { state, ts: Date.now() / 1000 });
@@ -101,8 +84,8 @@ function publishState(state: "working" | "idle", ctx: any): void {
 function publishPane(ctx: any): void {
   guard("publishPane", () => {
     const pane = process.env.TMUX_PANE;
-    const file = ehDoPane(ctx);
-    if (!pane || !file) return;      // fora do tmux (ou fork de subagente) nao ha o que ligar
+    const file = sessionFile(ctx);
+    if (!pane || !file) return;      // fora do tmux nao ha o que ligar
     writeAtomic(path.join(paneDir, `${pane.replace("%", "")}.json`),
                 { file, id: ctx?.sessionManager?.getSessionId?.() ?? null, ts: Date.now() / 1000 });
   });
@@ -142,7 +125,7 @@ function supportedLevels(model: any): string[] {
 // turno pra um dado que so muda quando o usuario troca de modelo.
 function publishModels(pi: ExtensionAPI, ctx: any): void {
   guard("publishModels", () => {
-    const file = ehDoPane(ctx);
+    const file = sessionFile(ctx);
     if (!file) return;
     const model = ctx?.model;
     const all = ctx?.modelRegistry?.getAvailable?.() ?? [];   // so provedores com auth configurada
@@ -201,8 +184,8 @@ function gravaPreview(file: string, text: string): void {
 }
 
 function publishPreview(ctx: any, text: string, agora: boolean): void {
-  const file = ehDoPane(ctx);
-  if (!file) return;                       // --no-session/fork de subagente: nao e a nossa previa
+  const file = sessionFile(ctx);
+  if (!file) return;                       // --no-session: nao ha chave pro backend casar
   if (text === previewUltimo && !agora) return;
   previewUltimo = text;
   if (agora) {
@@ -400,6 +383,12 @@ function conectar(pi: ExtensionAPI): void {
 }
 
 export default function (pi: ExtensionAPI) {
+  // Subagente: NAO registra nada. Tudo o que esta abaixo publicaria no MESMO pane do pai (TMUX_PANE
+  // herdado) com o arquivo DO FORK — o app le o pai e nao sabe que existem dois processos, entao a
+  // copia dentro do filho so pode publicar nada: sem estado, sem pane, sem modelo, sem previa, sem
+  // socket, sem comandos. O retorno cedo cobre todas as saidas de uma vez.
+  if (emSubagente) return;
+
   // Handlers recebem (event, ctx) — types.d.ts:845. Sem o ctx nao ha arquivo de sessao.
   pi.on("session_start", async (_e: any, ctx: any) => {
     // Achado da revisão, confirmado no pacote instalado (agent-session-runtime.js:102-113,
@@ -411,7 +400,7 @@ export default function (pi: ExtensionAPI) {
     // início de toda sessão nova dentro do MESMO processo, é o caminho mais simples que cobre
     // /new, /fork e /resume sem precisar decidir com o `reason` do evento — só "quit" de verdade
     // não passa por aqui de novo (o processo morre, e o valor não importa mais).
-    if (!ehDoPane(ctx)) return;   // fork de subagente nascendo ao lado — ver `sessaoDoPane`
+    if (!sessionFile(ctx)) return;   // --no-session: nada pra rastrear
     desligando = false;
     publishPane(ctx); publishModels(pi, ctx); conectar(pi);
   });
@@ -419,29 +408,31 @@ export default function (pi: ExtensionAPI) {
   // NOVO: fecha de propósito ao morrer. Sem isto, um /reload deixaria o backend achando que ainda
   // tem alguém lendo até o prazo estourar, e a mensagem daquele intervalo esperaria à toa.
   pi.on("session_shutdown", async (_e: any, ctx: any) => {
-    // Antes da trava, o shutdown de QUALQUER sessao do processo — inclusive o de um fork de
-    // subagente — ligava `desligando`, e a linha do app so voltava no proximo `session_start` da
-    // sessao de verdade: a entrega por WebSocket caia pro envio por tecla nesse meio, calada.
-    if (!ehDona(ctx)) return;
+    // Sem gate de dono: no processo do usuario (emSubagente falso), toda shutdown e da propria
+    // sessao — trocas legitimas passam por teardownCurrent, que emite session_shutdown ANTES do
+    // session_start da nova —, e a copia que roda no subagente nao registra handler nenhum.
+    // Antes do 24f1b75, o shutdown de QUALQUER sessao ligava `desligando`; a trava sessaoDoPane
+    // (removida — ver `emSubagente`) tapava isso comparando sessoes no mesmo processo, o que o
+    // fork de subagente nunca faz: pai e filho nao compartilham evento.
     desligando = true;
     // Zera a previa da sessao que SAI. "session_shutdown" dispara em /new, /fork, /resume e /tree —
     // inclusive com o turno rodando —, e nesse caminho nem "message_end" nem "agent_settled" chegam:
     // o sidecar ficaria com o ultimo texto em voo, e retomar essa sessao dentro dos 10min do
     // _PREVIEW_MAX_AGE mostraria no app um texto "sendo digitado" por uma sessao parada.
     publishPreview(ctx, "", true);
-    sessaoDoPane = null;   // por ULTIMO: zerar a previa acima ainda e trabalho da sessao que sai
     guard("fechar", () => socket?.close());
   });
   pi.on("agent_start", async (_e: any, ctx: any) => {
-    // O gate vale tambem pro `trabalhando`/corroboracao: o turno de um subagente nao e o turno da
-    // sessao, e tratar como se fosse confirmaria entrega de mensagem que ninguem leu.
-    if (!ehDoPane(ctx)) return;
+    // O gate de subagente vale tambem pro `trabalhando`/corroboracao: o turno do subagente nao e o
+    // turno da sessao, e tratar como se fosse confirmaria entrega de mensagem que ninguem leu —
+    // mas quem bloqueia isso e o `emSubagente` la em cima; aqui so o --no-session.
+    if (!sessionFile(ctx)) return;
     publishPane(ctx); publishState("working", ctx);
     trabalhando = true;
     eventosAgente.emit("agent_start");   // corrobora entrega pendente — ver bloco da entrega acima
   });
   pi.on("agent_settled", async (_e: any, ctx: any) => {
-    if (!ehDoPane(ctx)) return;
+    if (!sessionFile(ctx)) return;
     publishState("idle", ctx); trabalhando = false;
     publishPreview(ctx, "", true);   // turno fechou: nada em voo (rede pro message_end perdido)
   });

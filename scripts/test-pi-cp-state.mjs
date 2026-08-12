@@ -1,10 +1,14 @@
-// Contrato da trava de dono do pane em scripts/pi/cp-state.ts (node >= 22.18 roda o .ts direto).
+// Contrato: a copia da extensao que roda DENTRO de um subagente do pi-subagents nao publica NADA.
 //   node scripts/test-pi-cp-state.mjs
 //
-// O que ela protege: o Pi cria sessoes DENTRO DO MESMO PROCESSO que nao sao a conversa do usuario
-// (a extensao pi-subagents forka a sessao pra dar contexto a cada subagente). Sem a trava, o
-// session_start do fork reescrevia o bilhete pane->sessao e o catalogo de modelos, e o app mostrava
-// o modelo do fork no lugar do da sessao (medido 12/08/2026 no pane %2612).
+// O subagente e OUTRO PROCESSO com o MESMO TMUX_PANE herdado (execution.ts:463, `spawnEnv =
+// {...process.env, ...}`) e o arquivo de sessao do fork via `--session` (pi-args.ts:519). O sinal
+// que atravessa o spawn e PI_SUBAGENT_DEPTH: o pai nao tem a var (vale 0), o filho recebe "1"
+// (getSubagentDepthEnv, execution.ts:463 / subagent-runner.ts:541). O fork em si (fork-context.ts)
+// so escreve o arquivo no disco — nao emite session_start no pai —, entao pai e filho nunca
+// dividem evento; a trava por sessao do 24f1b75 comparava sessoes DENTRO de um processo e nao via
+// o filho. Aqui os dois processos sao simulados com duas instancias do modulo (import com query
+// string): uma sem a var (o usuario), outra com PI_SUBAGENT_DEPTH=1 (o subagente).
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -14,19 +18,21 @@ const cfg = fs.mkdtempSync(path.join(os.tmpdir(), "cp-state-test-"));
 process.env.CLAUDE_CONFIG_DIR = cfg;
 process.env.TMUX_PANE = "%999";
 
-const { default: registrar } = await import("./pi/cp-state.ts");
-
-const handlers = new Map();
-const pi = {
-  on: (evento, fn) => handlers.set(evento, fn),
-  registerCommand: () => {},
-  getThinkingLevel: () => "high",
-  setModel: async () => true,
-  setThinkingLevel: () => {},
+const fakePi = () => {
+  const handlers = new Map();
+  const commands = new Map();
+  return {
+    handlers,
+    commands,
+    on: (evento, fn) => handlers.set(evento, fn),
+    registerCommand: (nome, def) => commands.set(nome, def),
+    getThinkingLevel: () => "high",
+    setModel: async () => true,
+    setThinkingLevel: () => {},
+  };
 };
-registrar(pi);
 
-const disparar = (evento, ctx) => handlers.get(evento)(({}), ctx);
+const disparar = (pi, evento, ctx) => pi.handlers.get(evento)?.({}, ctx) ?? Promise.resolve();
 
 const sessao = (file, modelo) => ({
   sessionManager: { getSessionFile: () => file, getSessionId: () => path.basename(file) },
@@ -34,38 +40,60 @@ const sessao = (file, modelo) => ({
   modelRegistry: { getAvailable: () => [{ provider: "p", id: modelo, name: modelo }] },
 });
 
-const A = "/tmp/sessoes/2026-08-12T12-40-06-359Z_aaaa.jsonl";   // a conversa do usuario
-const B = "/tmp/sessoes/2026-08-12T12-58-03-419Z_bbbb.jsonl";   // fork feito pra um subagente
-const C = "/tmp/sessoes/2026-08-12T13-10-00-000Z_cccc.jsonl";   // /fork ou /resume do usuario
+const A = path.join(cfg, "2026-08-12T12-40-06-359Z_aaaa.jsonl");   // a conversa do usuario
+const C = path.join(cfg, "2026-08-12T13-10-00-000Z_cccc.jsonl");   // /tree ou /resume do usuario
 
 const bilhete = () => JSON.parse(fs.readFileSync(path.join(cfg, ".claude-pocket-pi", "999.json"), "utf8")).file;
 const temCatalogo = (f) => fs.existsSync(path.join(cfg, ".claude-pocket-pi", "models", `${path.basename(f, ".jsonl")}.json`));
 const temEstado = (f) => fs.existsSync(path.join(cfg, ".claude-pocket-state", `${path.basename(f, ".jsonl")}.json`));
+const temPreview = (f) => fs.existsSync(path.join(cfg, ".claude-pocket-preview", `${path.basename(f, ".jsonl")}.json`));
 
-// 1. a primeira sessao do processo vira a dona do pane
-await disparar("session_start", sessao(A, "gpt-5.6-sol"));
-assert.equal(bilhete(), A, "a sessao do usuario tem que publicar o bilhete");
+// ── caso real 1: o SUBAGENTE (PI_SUBAGENT_DEPTH=1) nao publica nada ─────────────────────────────
+process.env.PI_SUBAGENT_DEPTH = "1";
+const piFilho = fakePi();
+(await import("./pi/cp-state.ts?filho=1")).default(piFilho);
+
+assert.equal(piFilho.handlers.size, 0, "subagente nao registra handler nenhum");
+assert.equal(piFilho.commands.size, 0, "nem comandos");
+
+// Dispara tudo o que a extensao do pai escuta: nada pode existir apos isto.
+await disparar(piFilho, "session_start", sessao(A, "sakana-namazu"));
+await disparar(piFilho, "session_shutdown", sessao(A, "sakana-namazu"));
+await disparar(piFilho, "agent_start", sessao(A, "sakana-namazu"));
+await disparar(piFilho, "agent_settled", sessao(A, "sakana-namazu"));
+await disparar(piFilho, "message_update", { message: { role: "assistant", content: [{ type: "text", text: "oi" }] } });
+await disparar(piFilho, "message_end", { message: { role: "assistant" } });
+await new Promise((r) => setTimeout(r, 250));   // folga pro coalesce de previa (150ms), se existisse
+
+for (const d of [".claude-pocket-state", ".claude-pocket-pi", ".claude-pocket-preview"]) {
+  assert.ok(!fs.existsSync(path.join(cfg, d)), `${d} nao pode existir: subagente nao escreve nada`);
+}
+delete process.env.PI_SUBAGENT_DEPTH;
+
+// ── caso real 2: a sessao do usuario publica como sempre ───────────────────────────────────────
+const piPai = fakePi();
+(await import("./pi/cp-state.ts?pai=1")).default(piPai);
+
+await disparar(piPai, "session_start", sessao(A, "gpt-5.6-sol"));
+assert.equal(bilhete(), A, "a sessao do usuario publica o bilhete pane->sessao");
 assert.ok(temCatalogo(A), "e o catalogo de modelos dela");
 
-// 2. fork de subagente nao rouba o pane, nem publica catalogo proprio
-await disparar("session_start", sessao(B, "sakana-namazu"));
-await disparar("agent_start", sessao(B, "sakana-namazu"));
-await disparar("message_update", { message: { role: "assistant", content: [{ type: "text", text: "oi" }] } });
-assert.equal(bilhete(), A, "o fork do subagente NAO pode reescrever o bilhete");
-assert.ok(!temCatalogo(B), "nem publicar o modelo dele como o da sessao");
-assert.ok(!temEstado(B), "nem marcar estado por conta propria");
+await disparar(piPai, "agent_start", sessao(A, "gpt-5.6-sol"));
+assert.ok(temEstado(A), "agent_start marca working");
 
-// 3. o fim do fork nao deixa o pane sem dono
-await disparar("session_shutdown", sessao(B, "sakana-namazu"));
-await disparar("session_start", sessao(C, "outro"));
-assert.equal(bilhete(), A, "so a queda da DONA solta o pane");
+// message_update/message_end levam o evento no 1o argumento (e.message) e o ctx de sessao no 2o.
+const msg = (role, text) => ({ message: { role, content: [{ type: "text", text }] } });
+await piPai.handlers.get("message_update")(msg("assistant", "oi"), sessao(A, "gpt-5.6-sol"));
+await new Promise((r) => setTimeout(r, 200));   // coalesce de 150ms da previa
+assert.ok(temPreview(A), "previa ao vivo e publicada");
 
-// 4. troca de verdade (/new, /fork, /resume, /tree) derruba a dona antes -> o pane muda de mao
-await disparar("session_shutdown", sessao(A, "gpt-5.6-sol"));
-await disparar("session_start", sessao(C, "outro"));
-assert.equal(bilhete(), C, "troca legitima de sessao tem que atualizar o bilhete");
+// Troca legitima (/new, /fork, /resume, /tree): shutdown da atual, start da nova -> o bilhete
+// acompanha a sessao do processo (teardownCurrent, agent-session-runtime.js:102-113).
+await disparar(piPai, "session_shutdown", sessao(A, "gpt-5.6-sol"));
+await disparar(piPai, "session_start", sessao(C, "outro"));
+assert.equal(bilhete(), C, "troca legitima de sessao atualiza o bilhete");
 assert.ok(temCatalogo(C), "e o catalogo da sessao nova");
 
 fs.rmSync(cfg, { recursive: true, force: true });
-console.log("ok: trava de dono do pane (cp-state.ts)");
+console.log("ok: subagente nao publica nada; sessao do usuario publica (cp-state.ts)");
 process.exit(0);   // conectar() agendou retry do WebSocket; nada a esperar aqui
