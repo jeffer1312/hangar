@@ -145,8 +145,10 @@ Você costuma ser o modelo mais caro do time. Subir o app, dirigir navegador, cl
 capturar print, rodar suíte longa: nada disso precisa do teu raciocínio, e feito por você custa
 várias vezes mais caro pelo mesmo resultado.
 
-**A sessão verificadora é sua, do começo ao fim.** Você abre, escolhe o modelo, dirige e fecha —
-sem pedir nada ao árbitro. Ele não entra nesse laço: o que chega nele é o teu parecer.
+**A sessão verificadora é sua, do começo ao fim.** Você abre, dirige e fecha — sem pedir nada ao
+árbitro. **O modelo dela NÃO é escolha sua:** é o que o contrato define pra esse papel. Sessão nova
+nasce no padrão do harness, que não é esse modelo — troque, **leia de volta** e confira antes de
+mandar trabalho. Ele não entra nesse laço: o que chega nele é o teu parecer.
 
 Receita completa, com o backend local do claude-pocket (troque nome, worktree e modelo):
 
@@ -204,6 +206,27 @@ papel de parede.
 
 O protocolo do executor sem visão está em `executor.md`. Print anterior à correção não vale:
 se ele consertou, tem que ter recapturado.
+
+**Task com barra: o veredito cego vem junto, ou é BLOQUEADOR.** O plano nomeia, pra toda Task
+que mexe em pixel, contra o que o resultado é comparado — uma tela que dá pra abrir, no mesmo
+estado e na mesma largura. O reporte do executor tem que trazer, por rodada: quem venceu,
+**qual letra era o trabalho dele**, o maior buraco apontado e o que ele consertou. Reporte que
+diz só "comparei e ficou bom" é o mesmo "está bom?" com outra roupa — bloqueia.
+
+Você refaz a comparação por conta própria, uma vez, no fim: abra o print final e a barra lado
+a lado e escolha. Duas coisas que essa passada procura e que a do executor não pega:
+
+- **Barra trocada no meio** — ele comparou com um estado diferente, outra largura, ou uma
+  versão da tela de referência que já mudou. Comparação contra a barra errada é evidência
+  falsa, não evidência fraca.
+- **Ele venceu e mesmo assim está errado** — a barra é o piso, não o teto. Vencer a
+  comparação cega não perdoa retângulo opaco sobre o papel de parede, texto cortado, nem
+  estado que ninguém capturou.
+
+Perdeu as duas rodadas e ele commitou mesmo assim (é o que `executor.md` manda fazer, com o
+risco declarado): isso **não** é bloqueador automático. Você julga o buraco que sobrou —
+tela quebrada é bloqueador com receita; acabamento aquém da barra, sem defeito funcional, é
+`REGISTRADO`.
 
 **Como olhar sem torrar contexto:** não acompanhe print por print enquanto o trabalho anda. Quem
 captura descreve — o executor e a tua sessão verificadora têm como enxergar (comando de visão local

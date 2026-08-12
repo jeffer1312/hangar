@@ -33,6 +33,10 @@ sessão acaba confirmando que é revisora enquanto está no meio de um commit.
 | **revisor** | `references/revisor.md` | o kick-off diz `Papel: revisor` |
 | **revisão final** | `references/revisao-final.md` | o kick-off diz `Papel: revisão da branch` |
 
+Uma página que não é papel: `references/paralelo-worktree.md`, a **exceção** de rodar Tasks
+em paralelo com uma worktree cada. O padrão é serial; leia só se o plano declarou um lote
+paralelo (planejador) ou se você vai integrá-lo (árbitro).
+
 **Papel é declarado, nunca deduzido — e é recusado quando contradiz o que você está
 fazendo.** Kick-off dizendo "você é revisor read-only" chegando numa sessão que está no meio
 de uma Task: responda *"sou o executor da Task N, confirme o destinatário"* e **não** assuma.
@@ -105,6 +109,28 @@ peça ao usuário quem é quem antes de mandar recado a alguém que não pediu p
 
   Aspas duplas cruas fazem o shell comer crase e `$`, e receita mutilada é pior que receita
   nenhuma. Heredoc solto (`cp-send <sessao> <<'EOF'`) devolve erro de uso — a mensagem não sai.
+- **MODELO É DECISÃO DO USUÁRIO. Ninguém escolhe modelo.** A política de contas da máquina fica em
+  **`~/.claude/orquestracao-contas.md`** — quais contas existem, quais são assinatura (troca livre
+  dentro da conta), quais são travadas num modelo e quais são proibidas por cobrarem por token. O
+  árbitro **lê esse arquivo antes de montar time** e copia pro contrato só o que aquele trabalho vai
+  usar. Arquivo ausente ou desatualizado: **levante o inventário e pergunte ao usuário** (a receita
+  de levantamento está dentro do próprio arquivo), escreva a resposta lá com a data, e siga. O
+  contrato traz a tabela conta↔modelo por papel; ela é fechada. Modelo fora dela não se usa **nem pra teste**, nem porque "é mais barato",
+  nem porque apareceu no catálogo. Cada conta tem cota e preço próprios, e provedor errado **cobra
+  dinheiro do usuário** — um `openrouter/*` escolhido por conta própria é fatura, não experimento.
+  - **Sessão nova nasce no padrão do harness, que não é o modelo da tabela.** Quem cria: troca,
+    **lê o modelo de volta** e confere; só então manda trabalho. Sessão trabalhando em modelo não
+    conferido é gasto na conta errada que só aparece na fatura.
+  - **Subagente pode — mas SEMPRE na mesma CONTA da sessão, e a liberdade de modelo é POR CONTA.**
+    Sair da conta nunca pode. Trocar de modelo **dentro** dela só onde o contrato liberar
+    explicitamente: há conta em que o usuário aceita dois modelos (um mais forte pro julgamento,
+    outro mais barato pro mecânico) e há conta **travada num modelo só** — e existe conta proibida,
+    porque cobra por token no cartão dele. Não deduza pela lista de modelos que a conta oferece: vale
+    o que está escrito no contrato, e conta não listada é **pare e pergunte**. E confira o frontmatter do que você despacha: um `model:` escrito lá dentro
+    sobrepõe o teu (os agentes `ecc:*` trazem `model: sonnet`, que numa sessão Claude gasta a conta
+    Anthropic; a ponte do Pi remove esse campo).
+  - Precisa de um modelo que não está na tabela? **Pare e pergunte.** Não é decisão de árbitro,
+    executor nem revisor.
 - **Entrega não é resposta.** `entregue -> <sessao>` e o `success` do `SendMessage` dizem que a
   mensagem **entrou na fila do destino**, não que alguém leu, nem que a resposta vai voltar. Não
   existe prazo por mensagem: Task inteira leva o tempo que levar, e cutucar executor trabalhando é

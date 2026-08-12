@@ -26,6 +26,12 @@ você — e é assim que tem que ser.
 
 Nenhuma Task começa antes da anterior ser aprovada.
 
+**Lote paralelo, se o PLANO declarou um:** o ciclo acima roda igual, uma vez por Task, cada
+uma na worktree e na branch dela. O que muda é a integração — merge mecânico, conflito que
+você não resolve, verificação completa depois de cada merge. Está tudo em
+`paralelo-worktree.md`. Plano que não declarou lote → serial, e você não promove nada a
+paralelo por conta própria.
+
 ## A correção não passa por você
 
 O revisor escreve o parecer num `.md` e manda o caminho **direto ao executor**. Você **não recebe o
@@ -238,6 +244,31 @@ Se o usuário quiser mesmo liberar cedo, a forma é:
 - Sessão calada há mais de 15 minutos sem você ter checado.
 - Executor no mesmo modelo/família do revisor.
 
+## Antes do time: leia a política de contas da máquina
+
+**`~/.claude/orquestracao-contas.md`** diz quais contas existem, quais são assinatura (trocar de
+modelo dentro delas é de graça), quais estão travadas num modelo só e quais **cobram por token** —
+essas últimas são proibidas, porque a conta errada vira fatura do usuário, não erro de execução.
+
+Leia antes de abrir a primeira sessão e **copie pro contrato só o que este trabalho vai usar**, com
+papel, conta, modelo e nível. Não repasse o arquivo inteiro: sessão escolhe pelo que está no
+contrato.
+
+O arquivo não existe, ou está velho? **Monte o inventário e pergunte** — a receita de levantamento
+está dentro dele (motores do `engines.json`, providers do catálogo do agente, config dirs de conta).
+Chegue com a lista pronta e faça **uma pergunta só**: quais podem ser usadas, quais são assinatura,
+quais cobram por token. Escreva a resposta lá, com a data. Enquanto não houver resposta, **não abra
+sessão nenhuma** — nem "só pra testar".
+
+**Você descobre que a conta existe; só o usuário sabe se ela cobra.** Discovery lista provider,
+modelo e `base_url` — nada disso diz se é assinatura ou se debita por token, de quem é a conta, nem
+se ele quer que agente gaste ali. A pista serve pra formular a pergunta, nunca pra pular ela.
+
+**Toda vez que for montar time, compare os providers do catálogo com a tabela do arquivo.** Provider
+novo que apareceu desde a última revisão **não entra por conta própria**: pare e pergunte. Numa
+máquina real, 341 dos 390 modelos do catálogo eram de um provider pago por token — escolher "pelo que
+aparece na lista" é o caminho mais curto pra gastar dinheiro de quem confiou em você.
+
 ## Levante o ferramental ANTES de abrir o time
 
 Sessão nova não sabe o que a máquina tem. Se você não disser, cada uma revisa e constrói pelo
@@ -314,3 +345,23 @@ subagente fresco — são coisas diferentes, não confunda as duas.)
 Kick-off com `Papel: revisão da branch`, o range (`<base>..<ponta>`), os paths
 paralelos a ignorar, e o que está fora de escopo. Achado dela volta pro ciclo normal. Push e
 MR são do usuário.
+
+**Com revisão final aberta, a árvore congela.** Ela lê o disco, não só o `git show`: os
+subagentes abrem arquivo direto. Corrigir ali no meio faz cada um deles ler um híbrido de
+HEAD com o teu rascunho, e o parecer sai sobre código que nunca existiu.
+
+Duas revisões finais em paralelo tornam isso pior, porque a primeira a reprovar te dá vontade
+de consertar enquanto a segunda ainda lê. Não conserte. Quando precisar mesmo mexer:
+
+1. **Avise antes**, com o que vai tocar.
+2. Commite — nunca deixe a correção só no disco.
+3. Mande o **hash novo** e diga o que mudou, arquivo a arquivo.
+4. Diga o que **não** mudou, pra ela não re-verificar o que continua válido.
+
+O sinal de que você errou vem dela: "o arquivo mudou entre duas leituras". Aí a resposta é
+assumir, dar o hash novo e congelar — nunca "pode seguir que é só ajuste".
+
+**Achado de uma revisão que a outra ainda pode tocar fica em espera.** Duas revisões finais
+com escopos vizinhos (uma com o revisor de acessibilidade, outra com o de tipos, por exemplo)
+podem consertar o mesmo ponto em direções diferentes. Segure o que se sobrepõe até as duas
+entregarem, e diga a cada uma que está segurando — silêncio parece descaso pelo achado.

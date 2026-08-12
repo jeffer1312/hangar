@@ -16,9 +16,13 @@ isso? Pule.
 É aqui que as decisões se fecham; cada uma que ficar aberta é uma chance de acordar o
 usuário às 3h da manhã. Além do que o `writing-plans` já pede, o plano carrega:
 
-- **Ordem das Tasks** e quais não paralelizam, com o motivo.
+- **Ordem das Tasks** e quais não paralelizam, com o motivo. O padrão é **serial**: uma Task
+  por vez, portão fechando cada uma. Trabalho grande com Tasks de verdade independentes pode
+  virar lote paralelo com uma worktree cada — a exceção, o gatilho e o custo estão em
+  `paralelo-worktree.md`, e a decisão é **aqui**, com o usuário, nunca do árbitro depois.
 - **Intocáveis**: paths com mudança paralela na árvore, listados um a um.
 - **Verificação por Task**: o comando exato e o que conta como passou.
+- **Barra** das Tasks que mexem em pixel: contra o que o resultado vai ser comparado — ver abaixo.
 - **O que a revisão precisa cobrir** — ver abaixo. Isso entra **antes da Task 1**.
 - **Decisões em aberto**: o que ainda não foi decidido e quem decide. Lista vazia é a meta.
 - **Teto**: quanto de custo/cota o usuário aceita gastar sozinho, e o que faz parar.
@@ -34,6 +38,26 @@ de Task.
 Task visual entra com **a lista dos estados** que precisam de screenshot (as duas larguras,
 overlay, tela cheia, o que mais a Task afetar). É essa lista que o revisor cobra depois —
 estado que ninguém listou é estado que ninguém olha.
+
+### Task visual entra também com uma BARRA
+
+Uma linha por Task que mexe em pixel: **contra o que o resultado vai ser comparado**. Não é
+adjetivo ("bonito", "acabado", "com a cara do app") — é uma coisa que existe e que dá pra
+abrir. Três testes, todos obrigatórios:
+
+- **Nomeada**: uma tela específica, não uma categoria. `EnginesSheet` sim; "as outras folhas
+  do app" não.
+- **Buscável**: quem julga consegue **ver** — caminho absoluto de um print, ou uma tela do
+  próprio app que dá pra abrir e capturar. Referência que só existe na cabeça de alguém não
+  serve.
+- **Comparável**: as duas imagens cabem lado a lado, no mesmo estado e na mesma largura.
+
+Na prática a barra quase sempre é **uma tela irmã deste app** — é a comparação mais dura que
+existe, porque é exatamente onde o desalinhamento aparece. Referência de fora (print de outro
+produto que o usuário salvou) vale igual, desde que ele entregue o arquivo aqui na fase 1.
+
+Sem barra escrita, o portão visual continua sendo o autor perguntando ao próprio pixel se
+está bom — e "está bom?" devolve "está bom". Task que não desenha nada não precisa de barra.
 
 Sem isso as primeiras Tasks passam por um portão que ainda não existe, e o preço é uma
 auditoria retroativa que reabre Task já aprovada — mais cara que ter escrito três linhas.

@@ -107,8 +107,13 @@ o usuário, e daí em diante autônomo — um executor, um revisor independente 
 por commit, portão entre as Tasks, e uma sessão fresca revisando a branch no fim. O revisor
 entrega **correção fechada** (causa reproduzida, arquivo/símbolo, inventário de callers,
 passos numerados, comportamento final, prova), não diagnóstico; a próxima Task só abre com
-`APROVA`. Um escritor por árvore — paralelo só com `git worktree`. `SKILL.md` é roteador:
-cada sessão lê só a página do seu papel em `references/`.
+`APROVA`. Task que mexe em pixel carrega uma **barra** (uma tela nomeada, que dá pra abrir):
+o executor compara o print dela com a barra numa escolha **cega** feita por subagente fresco,
+teto de 2 rodadas, e o revisor refaz a comparação. Um escritor por árvore, e o padrão é
+**serial** — lote paralelo com uma worktree por Task é exceção declarada no plano
+(`references/paralelo-worktree.md`), com merge mecânico do árbitro e verificação completa
+depois de cada merge. `SKILL.md` é roteador: cada sessão lê só a página do seu papel em
+`references/`.
 
 **Instalar/atualizar numa máquina** (após `git pull`):
 

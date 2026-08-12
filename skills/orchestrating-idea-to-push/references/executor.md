@@ -263,10 +263,43 @@ texto solto?"*, *"o item ativo se distingue dos outros?"*, *"algum retângulo op
 fundo?"*, *"o texto cabe sem cortar nesta largura?"*. "Está bom?" devolve "está bom" e não
 custa nada a ninguém.
 
+### 5. Compare cego com a barra
+
+O plano dá uma **barra** pra toda Task que mexe em pixel: uma tela nomeada, que dá pra abrir
+e capturar, no mesmo estado e na mesma largura do seu print. Capture os dois lados e ponha um
+**subagente fresco** pra escolher — sem dizer qual é qual:
+
+> Duas imagens: `/tmp/<trab>-visual/A.png` e `/tmp/<trab>-visual/B.png`. Mesma tela, dois
+> desenhos. **Qual das duas parece mais acabada?** Responda `A` ou `B`, depois o **maior
+> buraco** da que perdeu, em uma frase concreta (o que está desalinhado, cortado, sem
+> contraste, com altura diferente dos irmãos).
+
+Três coisas que fazem isso valer alguma coisa:
+
+- **Cego de verdade**: nome de arquivo neutro (`A`/`B`), e você **alterna** qual letra é o
+  seu trabalho entre as rodadas. `novo.png` vs `referencia.png` não é cego — é uma dica.
+- **Subagente fresco, nunca o braço que desenhou.** Quem construiu já sabe por que cada
+  escolha foi feita, e defende ela. É o mesmo motivo do revisor ser de outra família.
+- **Escolha binária, não nota.** "Qual está melhor" tem resposta; "de 0 a 10, quanto está
+  bom" devolve 7 sempre.
+
+Perdeu → conserte **o maior buraco**, recapture, rode de novo. **Teto de 2 rodadas**, e daí
+você commita com o resultado no reporte, mesmo perdendo. O teto não é preguiça: laço sem
+fronteira de gasto é o modo de falha medido dessa técnica lá fora — gente torrando centenas
+de dólares e jogando fora 95% do que saiu. Perdeu as duas rodadas → isso vai no reporte como
+risco conhecido, e quem decide é o árbitro.
+
+Você não enxerga imagem? O passo continua sendo seu — é o mesmo protocolo do passo 4: o
+subagente de visão (ou o `see`) é quem olha, você é quem manda e quem lê a resposta.
+
 ### O que vai no reporte
 
 Por estado: caminho do print, o que você **clicou** e o que aconteceu, a pergunta que fez a
 quem enxerga (se delegou) e o que voltou, e o que você mudou por causa disso.
+
+Task com barra leva também: **quem venceu cada rodada cega** (e qual letra era a sua), o
+maior buraco apontado, o que você consertou, e o caminho do print final. Perdeu no fim das
+duas rodadas → diga isso na cara, com o buraco que sobrou.
 
 Sem isso o revisor bloqueia a Task. Não é burocracia: é a única evidência que separa "o
 código compila" de "a tela funciona", e as duas coisas já se descolaram aqui.
