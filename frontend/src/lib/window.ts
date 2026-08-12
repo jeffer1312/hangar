@@ -16,3 +16,16 @@ export function nextWindowEnd(atBottom: boolean, len: number, windowEnd: number)
   if (atBottom) return len;          // gruda no fim: janela segue a cauda
   return windowEnd;                  // lendo historico: congela
 }
+
+/** A janela cabe INTEIRA na tela e ainda ha evento antigo fora dela?
+ *
+ * A janela conta EVENTOS CRUS, mas quem enche a tela sao as LINHAS renderizadas — e as duas contas
+ * divergem muito: tool_result e filtrado e uma rajada de >=3 tool_use vira UMA linha de grupo, entao
+ * uma sessao que so chama ferramenta cabe em ~20 linhas com os 120 eventos montados. Sem rolagem o
+ * `onscroll` nunca dispara, e ele e o unico gatilho da paginacao pra cima: o chat fica parado
+ * PARECENDO que nao ha nada acima, com milhares de eventos ali. Medido em 12/08/2026 numa sessao Pi.
+ * 64px = a mesma folga do "esta no fim" (rolagem menor que isso nao da pra usar). */
+export function precisaPreencher(scrollHeight: number, clientHeight: number,
+                                 hasOlder: boolean): boolean {
+  return hasOlder && scrollHeight - clientHeight <= 64;
+}

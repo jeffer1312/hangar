@@ -16,7 +16,7 @@
   import FileAttachment from './FileAttachment.svelte';
   import { parseImageMessage, parseFilePaths, parsePeerMessage } from '../lib/format';
   import { transcriptImageUrl, uploadUrl } from '../lib/api';
-  import { windowStartFor, nextWindowEnd } from '../lib/window';
+  import { windowStartFor, nextWindowEnd, precisaPreencher } from '../lib/window';
 
   interface Props {
     events: ChatEvent[];
@@ -75,6 +75,19 @@
     scrolledUp = gap > listEl.clientHeight; // mais de uma tela do fim = "muito pra cima" -> botao
     // Perto do topo + ainda ha eventos antigos fora da janela -> revela a proxima pagina.
     if (listEl.scrollTop < 200 && hasOlder) revealOlder();
+  }
+
+  // Janela curta demais pra rolar (rajada de tool calls colapsada em linhas de grupo) -> revela
+  // pagina por pagina ATE dar pra rolar. Sem isto a paginacao pra cima depende do `onscroll`, que
+  // numa lista sem rolagem nunca dispara: o historico existe e o chat parece nao ter nada acima.
+  // ponytail: laco simples — cada volta revela uma PAGE; para quando da pra rolar, quando acaba o
+  // historico, ou quando o reveal nao andou (guarda de reentrancia) — nunca gira em falso.
+  async function preencherTela() {
+    while (listEl && precisaPreencher(listEl.scrollHeight, listEl.clientHeight, hasOlder)) {
+      const antes = extra;
+      await revealOlder();
+      if (extra === antes) return;
+    }
   }
 
   let revealing = false;
@@ -226,11 +239,14 @@
     // escrever windowEnd=len o effect re-roda e nextWindowEnd vira no-op.
     const next = nextWindowEnd(atBottom, len, windowEnd);
     if (next !== windowEnd) windowEnd = next;
-    // De volta ao fim (live): re-ancora na janela-cauda, descartando o que foi revelado pra cima ->
-    // limita o mount count de novo. So reseta quando colado no fim (lendo historico, extra persiste).
-    if (atBottom && extra !== 0) extra = 0;
+    // NAO zera `extra` aqui. Zerava "de volta ao fim, descarta o revelado" pra limitar o mount
+    // count — mas numa lista que so rola PORQUE foi revelada, `atBottom` e verdade o tempo todo
+    // (a folga de 64px nunca e vencida), entao o reset desfazia o preencherTela a cada evento e os
+    // dois ficavam se revezando: revela 100, descarta 100, revela 100. Quem descarta agora e o
+    // botao "ir pro fim", que e ato do usuario. ponytail: o teto do mount vira o historico ja
+    // carregado; se pesar no celular, o lugar de cortar e o WINDOW, nao um reset automatico.
     if (!atBottom) return;
-    tick().then(scrollToBottom);
+    tick().then(() => { scrollToBottom(); preencherTela(); });
   });
 
   let rafScroll = 0;
