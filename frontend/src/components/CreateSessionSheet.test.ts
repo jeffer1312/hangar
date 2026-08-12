@@ -121,6 +121,16 @@ describe('CreateSessionSheet — reabertura com a lista de contas fora do ar', (
     expect(document.querySelector('#model-pick')!.textContent).toContain('Padrão');
     expect(document.querySelector('#effort-pick')!.textContent).toContain('Padrão');
 
+    // A LISTA também não pode ser a do Pi: sem o `modelos = []` do reset, a lista antiga com
+    // gpt-5.6-luna continuaria clicável dentro de uma sessão Claude (o combo abriria e o id do Pi
+    // estaria lá pra ser escolhido).
+    (document.querySelector('#model-pick') as HTMLElement).click();
+    await tick();
+    const rotulos = [...document.querySelectorAll('.sel-item')].map((b) => b.textContent ?? '');
+    expect(rotulos.some((t) => t.includes('gpt-5.6-luna'))).toBe(false);
+    (document.body.querySelector('.sel-fora') as HTMLElement)?.click();
+    await tick();
+
     // O create manda provider=claude com model/effort NULOS — o cenário do bloqueador morre aqui.
     (document.querySelector('.primary-btn') as HTMLElement).click();
     await flush();
@@ -136,11 +146,74 @@ describe('CreateSessionSheet — reabertura com a lista de contas fora do ar', (
     await escolherPasta();
 
     // Com o .catch chamando carregarModelos, a lista do Claude (aliases) carrega mesmo com a
-    // lista de contas fora do ar — o combo tem opções além de "Padrão".
+    // lista de contas fora do ar — o combo tem opções além de "Padrão". E o aviso de lista
+    // reduzida é uma live region (role=status), não um texto mudo.
     (document.querySelector('#model-pick') as HTMLElement).click();
     await tick();
     const rotulos = [...document.querySelectorAll('.sel-item')].map((b) => b.textContent);
     expect(rotulos.some((t) => t?.includes('opus'))).toBe(true);
+    (document.body.querySelector('.sel-fora') as HTMLElement)?.click();
+    await tick();
+    const aviso = [...document.querySelectorAll('.model-hint')]
+      .find((p) => p.textContent?.includes('Lista reduzida'));
+    expect(aviso?.getAttribute('role')).toBe('status');
+    unmount(comp);
+  });
+
+  it('C: rejeição de chamada SUPERADA não apaga a escolha feita depois (guarda de geração)', async () => {
+    // 1ª chamada fica pendente (a do "servidor A", que depois cai); a 2ª resolve.
+    let rejeitar1!: (e: Error) => void;
+    let chamadas = 0;
+    vi.mocked(api.listClaudeConfigs).mockImplementation(() => {
+      chamadas++;
+      if (chamadas === 1) {
+        return new Promise((_res, rej) => { rejeitar1 = rej; });
+      }
+      return Promise.resolve([]);
+    });
+
+    const { comp } = montar();
+    await flush();
+    await escolherPasta();            // loadConfigs #1 em voo (pendente)
+    await reabrir();                  // loadConfigs #2 resolve -> lista do Claude na tela
+    await escolherNoCombo('#model-pick', 'sonnet');
+
+    // A chamada #1, já superada, finalmente rejeita — com a guarda, é descartada.
+    rejeitar1(new Error('servidor A caiu'));
+    await flush();
+
+    expect(document.querySelector('#model-pick')!.textContent).toContain('sonnet');
+    (document.querySelector('.primary-btn') as HTMLElement).click();
+    await flush();
+    expect(onCreate).toHaveBeenCalledWith('x', '/tmp/x', null, 'claude', null, 'sonnet', null);
+    unmount(comp);
+  });
+
+  it('D: nome acessível do esforço e roles dos avisos (WCAG 2.5.3 e 4.1.3)', async () => {
+    vi.mocked(api.listClaudeConfigs).mockRejectedValue(new Error('fora do ar'));
+
+    const { comp } = montar();
+    await flush();
+    await escolherPasta();
+
+    // Claude: nome acessível "Esforço" (igual ao rótulo visível).
+    expect(document.querySelector('#effort-pick')!.getAttribute('aria-label')).toBe('Esforço');
+
+    // Pi: o rótulo visível vira "Raciocínio" e o nome acessível tem que acompanhar (Label in Name).
+    [...(document.querySelectorAll('.provider-btn') as unknown as HTMLElement[])]
+      .find((b) => b.textContent === 'Pi')!.click();
+    await flush();
+    expect(document.querySelector('#effort-pick')!.getAttribute('aria-label')).toBe('Raciocínio');
+
+    // Erro de listagem: modelOptions rejeita -> aviso com role=alert (o mesmo padrão do aviso de
+    // conta deste arquivo), anunciado em vez de mudo.
+    vi.mocked(api.modelOptions).mockRejectedValueOnce(new Error('provedor fora do ar'));
+    [...(document.querySelectorAll('.provider-btn') as unknown as HTMLElement[])]
+      .find((b) => b.textContent === 'Claude')!.click();
+    await flush();
+    const erro = [...document.querySelectorAll('.model-hint')]
+      .find((p) => p.textContent?.includes('sessão abre no padrão'));
+    expect(erro?.getAttribute('role')).toBe('alert');
     unmount(comp);
   });
 });

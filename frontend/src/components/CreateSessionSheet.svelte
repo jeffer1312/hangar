@@ -169,8 +169,10 @@
       })
       // A lista de contas fora do ar NÃO pode deixar a tela com o estado da abertura passada — o
       // reset do `$effect` zera os campos, mas a lista de modelos só volta a ser pedida aqui (e no
-      // onchange dos pickers). Com `selectedConfig` nulo, o backend normaliza pra conta padrão.
-      .catch(() => { carregarModelos(); });
+      // onchange dos pickers). Com `selectedConfig` nulo, o backend normaliza pra conta padrão. A
+      // guarda de geração é o que impede a rejeição de uma chamada SUPERADA (troca de servidor,
+      // reabertura rápida) de apagar calado a escolha que o usuário fez depois dela.
+      .catch(() => { if (seq === cfgSeq) carregarModelos(); });
     // Best-effort: falha aqui NAO pode travar a criação de sessão, so tira o seletor da tela.
     getEngines()
       .then((r) => { if (seq === cfgSeq) motores = r.motores; })
@@ -554,9 +556,9 @@
           {/if}
           {#if avisoConta && (!contaCriadaPath || selectedConfig === contaCriadaPath)}
             {#if contaErro}
-              <p class="conta-hint" role="alert">{avisoConta}</p>
+              <p class="conta-hint" >{avisoConta}</p>
             {:else}
-              <p class="conta-hint" role="status" aria-live="polite" aria-atomic="true">{avisoConta}</p>
+              <p class="conta-hint" >{avisoConta}</p>
             {/if}
           {/if}
         </div>
@@ -590,16 +592,16 @@
                               (m.vision ?? m.images) ? '👁' : null].filter(Boolean).join(' · ') }))]}
             onchange={(v) => (modelo = v)} />
           {#if listaReduzida}
-            <p class="model-hint">Lista reduzida — abra uma sessão nesta conta uma vez para o app aprender os modelos dela.</p>
+            <p class="model-hint" role="status" aria-live="polite" aria-atomic="true">Lista reduzida — abra uma sessão nesta conta uma vez para o app aprender os modelos dela.</p>
           {/if}
           {#if erroModelos}
-            <p class="model-hint">{erroModelos} — a sessão abre no padrão.</p>
+            <p class="model-hint" role="alert">{erroModelos} — a sessão abre no padrão.</p>
           {/if}
         </div>
 
         <div class="field">
           <label class="field-label" for="effort-pick">{provider === 'pi' ? 'Raciocínio' : 'Esforço'}</label>
-          <Select id="effort-pick" class="field-input" ariaLabel="Esforço" value={esforco}
+          <Select id="effort-pick" class="field-input" ariaLabel={provider === 'pi' ? 'Raciocínio' : 'Esforço'} value={esforco}
             opcoes={[{ value: '', label: 'Padrão' },
                      ...NIVEIS[provider].map((n) => ({ value: n, label: n }))]}
             onchange={(v) => (esforco = v)} />
@@ -607,7 +609,7 @@
       {/if}
 
       {#if error}
-        <p class="error-msg" role="alert">{error}</p>
+        <p class="error-msg" >{error}</p>
       {/if}
 
       <button class="primary-btn" onclick={create} disabled={loading || !name.trim()}>
