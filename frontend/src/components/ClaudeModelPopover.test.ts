@@ -27,15 +27,21 @@ const PICKER = {
     { id: 'fable', name: 'Fable', desc: 'Fable 5 · Most capable', active: false },
     { id: 'opus', name: 'Opus', desc: 'Opus 5 · Best for everyday, complex tasks', active: false },
     { id: 'haiku', name: 'Haiku', desc: 'Haiku 4.5 · Fastest', active: false },
-    { id: 'opus', name: 'Opus (1M context)', desc: 'Opus 5 with 1M context', active: true },
+    { id: 'opus[1m]', name: 'Opus (1M context)', desc: 'Opus 5 with 1M context', active: true },
   ],
+};
+
+// Como era ANTES do backend dar id único: as duas linhas `opus` chegavam com o mesmo id.
+const PICKER_ID_REPETIDO = {
+  ...PICKER,
+  models: PICKER.models.map((m) => (m.id === 'opus[1m]' ? { ...m, id: 'opus' } : m)),
 };
 
 async function flush(): Promise<void> {
   for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
 }
 
-function montar() {
+function montar(currentModel = 'Opus 5') {
   document.body.innerHTML = '';
   const pill = document.createElement('button');
   const alvo = document.createElement('div');
@@ -46,7 +52,7 @@ function montar() {
       open: true,
       anchor: pill,
       sessionName: 'x',
-      currentModel: 'Opus 5',
+      currentModel,
       currentEffort: 'high',
       onApply: vi.fn(),
       onClose: vi.fn(),
@@ -57,8 +63,8 @@ function montar() {
 beforeEach(() => vi.clearAllMocks());
 
 describe('ClaudeModelPopover — picker com keyword repetida', () => {
-  it('desenha as seis linhas mesmo com dois `opus`', async () => {
-    apiMock.getModelOptions.mockResolvedValue(PICKER);
+  it('desenha as seis linhas mesmo com o id repetido de antes', async () => {
+    apiMock.getModelOptions.mockResolvedValue(PICKER_ID_REPETIDO);
     const comp = montar();
     await flush();
     const linhas = document.querySelectorAll('.pop .linha');
@@ -70,10 +76,30 @@ describe('ClaudeModelPopover — picker com keyword repetida', () => {
   });
 
   it('a lista não fica presa em "Carregando…"', async () => {
-    apiMock.getModelOptions.mockResolvedValue(PICKER);
+    apiMock.getModelOptions.mockResolvedValue(PICKER_ID_REPETIDO);
     const comp = montar();
     await flush();
     expect(document.querySelector('.pop')?.textContent).not.toContain('Carregando');
+    unmount(comp);
+  });
+
+  // Quem escolhe entre as duas linhas `opus` é a statusline citar a janela de 1M ou não. Sem isso,
+  // a sessão rodando no 1M mostrava o tique no Opus normal — visto na tela.
+  it('sessão no 1M marca a linha de 1M', async () => {
+    apiMock.getModelOptions.mockResolvedValue(PICKER);
+    const comp = montar('Opus5·1M');
+    await flush();
+    const marcada = document.querySelector('.pop .linha.ativa .nome')?.textContent?.trim();
+    expect(marcada).toBe('Opus (1M context)');
+    unmount(comp);
+  });
+
+  it('sessão no Opus normal marca a linha normal', async () => {
+    apiMock.getModelOptions.mockResolvedValue(PICKER);
+    const comp = montar('Opus 5');
+    await flush();
+    const marcada = document.querySelector('.pop .linha.ativa .nome')?.textContent?.trim();
+    expect(marcada).toBe('Opus');
     unmount(comp);
   });
 });

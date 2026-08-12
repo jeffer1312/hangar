@@ -58,8 +58,18 @@
     if (exato) return exato.id;
     // Substring nos dois sentidos: no picker o id e a keyword ('fable' dentro de 'Fable 5'); no
     // motor o id e o proprio nome que a statusline mostra ('k3').
-    const porNome = opts.find((m) => m.id !== 'default' && c.includes(m.id.toLowerCase()));
-    if (porNome) return porNome.id;
+    //
+    // DUAS linhas podem dividir a mesma palavra — 'opus' e 'opus[1m]'. O que decide entre elas e a
+    // statusline citar a janela de 1M ou nao ('Opus5·1M' vs 'Opus 5'); sem isso, quem roda no 1M
+    // via o tique no Opus normal, que foi o que apareceu na tela.
+    const querMilhao = c.includes('1m');
+    const base = (id: string) => id.replace(/\[[^\]]*\]$/, '').toLowerCase();
+    const candidatos = opts.filter((m) => m.id !== 'default' && c.includes(base(m.id)));
+    const porJanela = candidatos.find(
+      (m) => m.id.toLowerCase().endsWith('[1m]') === querMilhao,
+    );
+    if (porJanela) return porJanela.id;
+    if (candidatos.length) return candidatos[0].id;
     return opts.find((m) => m.active)?.id ?? null;
   }
 

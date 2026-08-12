@@ -3295,7 +3295,9 @@ async def model_options(name: str):
     except PickerError as e:
         raise HTTPException(e.status, e.detail)
     resp = {"kind": "claude", "engine": None, "effort": lido["effort"],
-            "models": [{"id": r["keyword"], "name": r["name"], "desc": r["desc"],
+            # `id` (único por linha), não `keyword`: duas linhas do picker compartilham a keyword
+            # `opus` ("Opus" e "Opus (1M context)"), e id repetido derrubava a lista na tela.
+            "models": [{"id": r["id"], "name": r["name"], "desc": r["desc"],
                         "active": r["active"]} for r in lido["models"]]}
     _claude_models_cache[chave] = (time.monotonic(), resp)
     return resp

@@ -36,6 +36,51 @@ def test_parse_model_rows_haiku_cursor_distinct_from_active():
     assert next(r for r in rows if r["active"])["keyword"] == "opus"
 
 
+# Picker do Claude Code 5 nesta máquina (12/08/2026): SEIS linhas, e duas delas com a keyword
+# `opus` — "Opus" e "Opus (1M context)". Foi o que travou a caixa da tela em "Carregando…"
+# (each_key_duplicate) e fazia escolher a de 1M aplicar o Opus normal.
+PANE_DUAS_OPUS = """\
+   Select model
+   Switch between Claude models.
+
+     1. Default (recommended)  Sonnet 5 · Efficient for routine tasks
+     2. Sonnet                 Sonnet 5 · Efficient for routine tasks
+     3. Fable                  Fable 5 · Most capable
+   ❯ 4. Opus                   Opus 5 · Best for everyday, complex tasks
+     5. Haiku                  Haiku 4.5 · Fastest for quick answers
+     6. Opus (1M context) ✔    Opus 5 with 1M context · Best for everyday, complex tasks
+
+   ◉ High effort ←/→ to adjust
+
+   Enter to set as default · s to use this session only · Esc to cancel
+"""
+
+
+def test_parse_model_rows_da_id_unico_as_duas_linhas_opus():
+    rows = mp.parse_model_rows(PANE_DUAS_OPUS)
+    assert [r["keyword"] for r in rows] == [
+        "default", "sonnet", "fable", "opus", "haiku", "opus"]
+    ids = [r["id"] for r in rows]
+    assert ids == ["default", "sonnet", "fable", "opus", "haiku", "opus[1m]"]
+    assert len(set(ids)) == len(ids)
+
+
+def test_id_nao_muda_quando_so_a_DESCRICAO_fala_de_1m():
+    """No picker do 4.8 a descrição de `Default` e de `Opus` já dizia "Opus 4.8 with 1M context" sem
+    haver linha separada. Casar pela descrição renomearia linha que ninguém duplicou."""
+    rows = mp.parse_model_rows(PANE_OPUS)
+    assert [r["id"] for r in rows] == ["default", "opus", "sonnet", "haiku"]
+
+
+def test_nav_steps_leva_a_linha_certa_das_duas_opus():
+    """Com as duas linhas, casar só pela keyword mandava `opus[1m]` pra primeira `opus` e aplicava
+    o Opus normal, calado. O cursor está na linha 4 (Opus)."""
+    rows = mp.parse_model_rows(PANE_DUAS_OPUS)
+    assert mp.model_nav_steps(rows, "opus[1m]") == 2    # 6 - 4, Down 2
+    assert mp.model_nav_steps(rows, "opus") == 0        # já está
+    assert mp.model_nav_steps(rows, "fable") == -1
+
+
 def test_picker_open_detection():
     assert mp.picker_open(PANE_OPUS) is True
     assert mp.picker_open("apenas chat sem picker\n❯ \n") is False
