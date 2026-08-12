@@ -24,6 +24,10 @@ def test_id_perigoso_e_recusado(mau):
 @pytest.mark.parametrize("bom", [
     "k3", "k3-256k", "cx/gpt-5.6-sol-high", "clinepass/cline-pass/glm-5.2",
     "deepseek-v4-flash", "claude-opus-5", "opus", "gpt-4.1_mini", "a:b",
+    # B1 da revisão final: o catálogo real do Pi traz 11 ids com `~` (ex. openrouter). Sem o
+    # caractere na whitelist, a tela oferecia a linha e o POST devolvia 400. `~` dentro do
+    # argumento citado por shlex.join não sofre expansão do shell.
+    "openrouter/~anthropic/claude-opus-latest",
 ])
 def test_id_legitimo_passa(bom):
     assert ma.validar("claude", bom, None)[0] == bom

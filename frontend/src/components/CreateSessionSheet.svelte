@@ -234,6 +234,9 @@
         configs = configs.filter((c) => c.path !== apagadaPath);
         selectedConfig = configs.find((c) => c.active)?.path ?? configs[0]?.path ?? null;
         avisoConta = `Conta ${nome} apagada, mas não consegui atualizar a lista — recarregue a tela.`;
+        // B4 da revisão final: a seleção mudou de conta sem o onchange do combo passar — sem
+        // recarregar aqui, o modelo/esforço da conta apagada sobreviveria e iria pro create.
+        carregarModelos();
         return;
       }
       if (seq !== cfgSeq || targetServer !== serverId) return;
@@ -241,6 +244,9 @@
       // A seleção apontava pra pasta que sumiu: mandar esse caminho no create daria 400.
       selectedConfig = cs.find((c) => c.active)?.path ?? cs[0]?.path ?? null;
       avisoConta = `Conta ${nome} apagada.`;
+      // B4 da revisão final: mesma regra do catch acima — seleção mudou por caminho
+      // programático, o catálogo da conta que ficou tem que recarregar.
+      carregarModelos();
     } catch (e) {
       if (seq !== cfgSeq || targetServer !== serverId) return;
       contaErro = true;
@@ -292,6 +298,9 @@
         selectedConfig = criada.path;
         contaCriadaPath = criada.path;
         avisoConta = 'Conta criada. A sessão vai subir DESLOGADA — rode /login nela uma vez.';
+        // B4 da revisão final: seleção mudou por caminho programático (sem onchange) — sem o
+        // recarregar, o modelo da conta anterior iria pro create junto com a conta nova.
+        carregarModelos();
       } else {
         contaCriadaPath = null;
         avisoConta = 'Conta criada, mas ainda não apareceu na lista — recarregue a tela.';
@@ -392,8 +401,13 @@
       // Memória ANTES do onCreate: se a criação falhar (rede, 400), a escolha não se perde — o
       // valor lembrado é casado contra a lista na próxima abertura, então id de provedor que saiu
       // do ar nunca vira flag às cegas.
+      // B6 da revisão final: campo em Padrão (vazio) REMOVE a chave — sem o removeItem, a
+      // escolha "Padrão" nunca apagava a preferência antiga e a reabertura seguinte restaurava
+      // o modelo que o usuário tinha acabado de descartar.
       if (modelo) localStorage.setItem(chaveMemoria(), modelo);
+      else localStorage.removeItem(chaveMemoria());
       if (esforco) localStorage.setItem(chaveMemoria() + ':effort', esforco);
+      else localStorage.removeItem(chaveMemoria() + ':effort');
       await onCreate(name.trim(), picked, provider === 'claude' ? selectedConfig : null, provider,
                      provider === 'claude' ? (engine || null) : null, modelo || null, esforco || null);
       onClose();

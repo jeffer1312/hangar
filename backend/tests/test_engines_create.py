@@ -202,3 +202,43 @@ def test_resume_sem_modelo_no_pane_nao_poe_flags_nem_context(tmp_path, monkeypat
     r, sid = _prep_resume(tmp_path, monkeypatch, visto, "kimi")
     r.resume("s", sid)
     assert visto["command"] == f"cp-engine --exec kimi -- claude --resume {sid}"
+
+
+def test_resume_le_a_janela_antes_de_matar_o_pane(tmp_path, monkeypatch):
+    """B2 da revisão final. A janela mora no /proc/<pid>/environ do processo que está no pane:
+    lê-la DEPOIS do kill_session devolve nada (o /proc some junto), e a sessão ressuscita sem
+    --context — compactando em ~167k com um modelo de 262k, calado. O fake deixa o environ
+    ILEGÍVEL depois do kill: se a ordem voltar a errar, o --context 262144 some do comando."""
+    _motor()
+    monkeypatch.setattr(procinfo, "_model_of", lambda pid: ("k3-256k", "high"))
+    morto = {"sim": False}
+
+    def _env(pid, nome):
+        return None if morto["sim"] else "262144"
+
+    def _kill(nome):
+        morto["sim"] = True
+
+    monkeypatch.setattr(procinfo, "_env_var_of", _env)
+    visto = {}
+    r, sid = _prep_resume(tmp_path, monkeypatch, visto, "kimi")
+    monkeypatch.setattr(reg.tmux, "kill_session", _kill)
+    r.resume("s", sid)
+    assert visto["command"] == (
+        f"cp-engine --exec kimi --model k3-256k --context 262144 -- "
+        f"claude --resume {sid} --model k3-256k --effort high")
+
+
+def test_resume_de_motor_removido_descarta_a_escolha_no_fallback(tmp_path, monkeypatch):
+    """B3 (versão estreita) da revisão final. Motor apagado cai pro fallback da conta Anthropic —
+    decisão anterior a esta branch, não se mexe. O que ESTA branch piorou é carregar junto o
+    modelo/esforço do MOTOR: `claude --resume … --model k3-256k --effort high` na conta Anthropic
+    é sessão inviável (id que ela não conhece). No fallback, descartar modelo, esforço e janela:
+    resume pelado, como antes desta branch."""
+    monkeypatch.setattr(procinfo, "_model_of", lambda pid: ("k3-256k", "high"))
+    monkeypatch.setattr(procinfo, "_env_var_of", lambda pid, nome: "262144")
+    visto = {}
+    r, sid = _prep_resume(tmp_path, monkeypatch, visto, "sumiu")
+    info = r.resume("s", sid)
+    assert visto["command"] == f"claude --resume {sid}"
+    assert info.engine is None

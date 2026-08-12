@@ -14,9 +14,11 @@ uma sessão aberta que não existe.
 import re
 
 # Cobre tudo que os provedores medidos usam: `k3-256k`, `cx/gpt-5.6-sol-high`,
-# `clinepass/cline-pass/glm-5.2`, `claude-opus-5`. Barra é necessária (o Pi usa provider/id) e é
-# inofensiva; espaço, `;`, `$`, crase e `|` não entram.
-ID_OK = re.compile(r"^[A-Za-z0-9._:/-]{1,128}\Z")
+# `clinepass/cline-pass/glm-5.2`, `claude-opus-5` e `openrouter/~anthropic/claude-opus-latest` — o
+# catálogo real do Pi traz 11 ids com `~` (revisão final da branch), e dentro do argumento citado
+# por shlex.join o `~` não sofre expansão do shell. Barra é necessária (o Pi usa provider/id) e é
+# inofensiva; espaço, `;`, `$`, crase e `|` não entram — a regex é a barreira do shell.
+ID_OK = re.compile(r"^[A-Za-z0-9._:~/-]{1,128}\Z")
 
 # Listas FECHADAS, do --help de cada binário (medido em 10/08/2026). `ultracode` NÃO entra: é do
 # picker interativo (`/effort ultracode`), não da flag de arranque.
@@ -38,7 +40,7 @@ def validar(provider: str, model: str | None, effort: str | None) -> tuple[str |
     if provider not in _FLAG_ESFORCO:
         raise ValueError(f"provider {provider!r} não aceita escolha de modelo aqui")
     if model is not None and not ID_OK.match(model):
-        raise ValueError("model: use letras, números e . _ : / - (até 128 caracteres)")
+        raise ValueError("model: use letras, números e . _ : / - ~ (até 128 caracteres)")
     if effort is not None and effort not in _NIVEIS[provider]:
         raise ValueError(f"effort: use um de {', '.join(_NIVEIS[provider])}")
     return model, effort

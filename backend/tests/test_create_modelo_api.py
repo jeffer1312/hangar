@@ -23,6 +23,22 @@ def test_model_invalido_devolve_400():
     assert r.status_code == 400
 
 
+def test_pi_com_til_no_id_chega_intacto_ao_create():
+    """B1 da revisão final: o catálogo real do Pi traz `openrouter/~anthropic/claude-opus-latest`
+    (11 ids com `~` entre 390). A tela oferece a linha; o backend tem que aceitar o id inteiro — a
+    regex é a barreira do shell, e `~` citado por shlex.join não sofre expansão — e repassá-lo
+    intacto ao create, sem corromper nada."""
+    with patch("app.api.registry.create",
+               return_value=SessionInfo(name="pi-til", cwd="/tmp", provider="pi")) as cr:
+        r = TestClient(app).post("/api/sessions", headers=AUTH, json={
+            "name": "pi-til", "cwd": "/tmp", "provider": "pi",
+            "model": "openrouter/~anthropic/claude-opus-latest", "effort": "high"})
+    assert r.status_code == 200
+    cr.assert_called_once_with("pi-til", "/tmp", None, provider="pi", engine=None,
+                               model="openrouter/~anthropic/claude-opus-latest",
+                               effort="high", context_window=None)
+
+
 def test_effort_fora_da_lista_devolve_400():
     r = TestClient(app).post("/api/sessions", headers=AUTH, json={
         "name": "x", "cwd": "/tmp", "provider": "claude", "effort": "turbo"})

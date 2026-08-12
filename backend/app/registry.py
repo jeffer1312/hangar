@@ -1525,16 +1525,28 @@ class SessionRegistry:
         # Anthropic continuando um transcript de Kimi — calado. Tem que ler ANTES do kill_session: o
         # /proc do pane some com ele.
         motor = _engine_of(pane["pid"]) if pane.get("pid") else None
+        motor_sumiu = False
         if motor:
             from app import engines
             if motor not in engines.listar():
                 # Motor apagado no app depois de a sessão nascer: melhor voltar na conta Anthropic (o
-                # badge mostra isso) do que recusar o resume e deixar a sessão inacessível.
+                # badge mostra isso) do que recusar o resume e deixar a sessão inacessível. Nesse
+                # fallback a escolha lida abaixo é DO MOTOR — reaplicá-la na conta Anthropic criaria
+                # uma sessão inviável (id que ela não conhece). Descartar modelo, esforço e janela:
+                # resume pelado, como antes desta branch.
+                motor_sumiu = True
                 motor = None
         # Modelo/esforço com que a sessão SUBIU, lidos do cmdline do processo que está morrendo.
         # Sem reaplicar, `claude --resume <sid>` pelado volta pro modelo do motor — a escolha some
         # sem aviso. Mesma regra do motor: ler ANTES do kill_session, o /proc do pane some com ele.
         modelo, esforco = procinfo._model_of(pane["pid"]) if pane.get("pid") else (None, None)
+        # A janela mora no MESMO /proc/<pid>/environ — lê-la junto de motor/modelo, nunca depois
+        # do kill (B2 da revisão final: o kill derruba o processo e a leitura pós-kill devolve
+        # nada, e a sessão ressuscitava sem --context, calado).
+        janela = (procinfo._env_var_of(pane["pid"], "CLAUDE_CODE_MAX_CONTEXT_TOKENS")
+                  if pane.get("pid") else None)
+        if motor_sumiu:
+            modelo = esforco = janela = None
         proj = ((cdir / "projects") if cdir else self.projects_dir) / sanitize_cwd(cwd)
         jsonl = proj / f"{session_id}.jsonl"
         if not jsonl.exists():
@@ -1548,9 +1560,7 @@ class SessionRegistry:
         if motor:
             # Prefixo remontado JUNTO com a escolha: preservar so a flag deixaria a sessao
             # ressuscitada com a flag num modelo e o AMBIENTE noutro (as cinco chaves ANTHROPIC_*,
-            # o SUBAGENT_MODEL e a janela voltariam pro modelo do motor). A janela sai do mesmo
-            # lugar de onde o motor e lido — o /proc/<pid>/environ do processo que esta morrendo.
-            janela = procinfo._env_var_of(pane["pid"], "CLAUDE_CODE_MAX_CONTEXT_TOKENS")
+            # o SUBAGENT_MODEL e a janela voltariam pro modelo do motor).
             pre = ["cp-engine", "--exec", motor]
             if modelo:
                 pre += ["--model", modelo]
