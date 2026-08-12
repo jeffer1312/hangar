@@ -570,6 +570,26 @@ def test_modelo_com_caractere_proibido_e_recusado():
         eng.env_de("kimi", modelo="k3-256k\nrm -rf /")
 
 
+def test_motor_sem_janela_configurada_usa_a_do_modelo_escolhido():
+    """context_window do motor é OPCIONAL. Sem ele, a janela do modelo escolhido é a única que
+    existe — descartá-la deixa a sessão compactando em ~167k com um modelo de 262k."""
+    cfg = {k: v for k, v in _kimi().items() if k != "context_window"}
+    eng.salvar("kimi", cfg)
+    assert "CLAUDE_CODE_MAX_CONTEXT_TOKENS" not in eng.env_de("kimi")          # segue como hoje
+    env = eng.env_de("kimi", modelo="k3-256k", context_window=262144)
+    assert env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "262144"
+
+
+def test_cli_exec_janela_do_modelo_em_motor_sem_janela_configurada():
+    """Ponta a ponta: a flag --context não pode ser aceita e descartada."""
+    eng.salvar("kimi", {k: v for k, v in _kimi().items() if k != "context_window"})
+    r = _cli("--exec", "kimi", "--model", "k3-256k", "--context", "262144", "--",
+             sys.executable, "-c",
+             "import os;print(os.environ.get('CLAUDE_CODE_MAX_CONTEXT_TOKENS'))")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "262144"
+
+
 def test_cli_exec_com_modelo_e_janela_aplica_env_no_filho():
     # O parse novo do cp-engine: `--model` e `--context` viram parte do env, não do cmdline.
     eng.salvar("kimi", _kimi())

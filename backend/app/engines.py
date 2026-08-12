@@ -329,17 +329,18 @@ def env_de(nome: str, modelo: str | None = None, context_window: int | None = No
         # descartar a key e voltar pro login OAuth — o cabeçalho vira "Claude Max" e o 401 volta,
         # agora por outra causa. AUTH_TOKEN nunca pergunta; o header cobre o que falta.
         env["ANTHROPIC_CUSTOM_HEADERS"] = f"x-api-key: {e['api_key']}"
-    if e.get("context_window"):
-        # MAX_CONTEXT_TOKENS, nao AUTO_COMPACT_WINDOW: medido nos dois provedores, a segunda nao move
-        # a janela (o /context seguia em 200k) e a primeira move. Sem isto, um modelo de 256k/500k
-        # compacta em ~167k — capacidade jogada fora, calado.
-        #
-        # Com modelo escolhido, a janela é a DELE. Sem número pra ele, omitir — exportar a do motor
-        # com outro modelo é exatamente o bug que esta variável existe pra corrigir (motor de 1M com
-        # modelo de 262k estouraria no provedor em vez de compactar no limite certo).
-        janela = context_window if modelo else e.get("context_window")
-        if janela:
-            env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(_inteiro_positivo("context_window", janela))
+    # MAX_CONTEXT_TOKENS, nao AUTO_COMPACT_WINDOW: medido nos dois provedores, a segunda nao move
+    # a janela (o /context seguia em 200k) e a primeira move. Sem isto, um modelo de 256k/500k
+    # compacta em ~167k — capacidade jogada fora, calado.
+    #
+    # Com modelo escolhido, a janela é a DELE — inclusive quando o MOTOR não configurou nenhuma
+    # (context_window é opcional): o número vem do catálogo do provedor, e descartá-lo por causa de
+    # um campo ausente do motor deixa a sessão compactando em ~167k com um modelo de 262k, com o
+    # `--context` do prefixo aceito e ignorado, calado. Sem número pra ele, omitir — exportar a do
+    # motor com outro modelo é exatamente o bug que esta variável existe pra corrigir.
+    janela = context_window if modelo else e.get("context_window")
+    if janela:
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(_inteiro_positivo("context_window", janela))
     if _booleano("bundled_skills", e.get("bundled_skills")) is not True:
         # Default desligado por MEDIÇÃO: a skill empacotada `claude-api` não tem SKILL.md na raiz, e
         # invocá-la injeta os 64 arquivos dela de uma vez — medido em 847.630 chars / 206.553 tokens
