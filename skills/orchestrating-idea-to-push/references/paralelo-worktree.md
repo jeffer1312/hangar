@@ -69,6 +69,12 @@ Duas regras fecham o desenho:
   daquela Task, **mesmo com o `APROVA` isolado dela no bolso**. Aprovado isolado quer dizer
   "certo sozinho", e é exatamente essa a lacuna que o paralelo abre.
 
+Vermelho pós-merge **volta pro ciclo inteiro**, igualzinho ao conflito: executor conserta na
+principal, e o **revisor julga o commit de correção** antes de você fechar. Você não vira quem
+diz que o código está certo só porque a verificação ficou verde na tua mão — a única coisa que
+fecha portão neste tubo é `APROVA` de quem revisa, e é justamente na integração, onde a
+tentação de resolver sozinho é maior, que essa regra precisa estar escrita.
+
 Terminou o lote: `git worktree remove` em cada uma. Worktree órfã é a próxima sessão
 trabalhando num checkout que ninguém explica.
 
