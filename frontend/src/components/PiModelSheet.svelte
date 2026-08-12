@@ -39,10 +39,18 @@
       if (est.status === 'rejected') throw est.reason;
       selectedEffort = est.value.thinking ?? '';
       levels = est.value.levels ?? [];
-      // Catálogo falhou -> cai na lista do sidecar (sem etiqueta, como é hoje). Isso também cobre o
-      // dia em que as duas fontes divergirem: quem valida o Aplicar é `pi_models.check_known`
-      // contra o catálogo DO SIDECAR, e id que só exista na lista nova volta 422.
-      models = (cat.status === 'fulfilled' ? cat.value.models : est.value.models) as PiModel[];
+      // O SIDECAR é o conjunto, o catálogo é só o enriquecimento. Quem valida o Aplicar é
+      // `pi_models.check_known` contra o catálogo DO SIDECAR (api.py -> pi_models.py) — oferecer
+      // id que só o `pi --list-models` conhece é um 422 na cara do usuário (medido em 12/08/2026:
+      // 390 vs 388, dois modelos só na lista nova). Contexto e 👁 vêm do catálogo; sem eles (ele
+      // caiu, ou o id não casa), a etiqueta simplesmente não aparece — mesma lista, sem caso
+      // especial. E sem cast: `est.value.models` já é `PiModel[]` de verdade, com `name` e
+      // `reasoning` — o cast escondia que os objetos do catálogo não satisfazem o tipo.
+      const extra = new Map<string, { context?: string; images?: boolean }>();
+      if (cat.status === 'fulfilled')
+        for (const c of cat.value.models)
+          if (c.provider) extra.set(`${c.provider}/${c.id}`, { context: c.context, images: c.images });
+      models = est.value.models.map((m) => ({ ...m, ...(extra.get(`${m.provider}/${m.id}`) ?? {}) }));
       // `current` vem do sidecar como choice (provider+id+name), não como modelo completo — resolve
       // o objeto na lista mostrada pra pintar o tique e alimentar o Aplicar.
       selected = est.value.current
@@ -137,35 +145,37 @@
       aria-label="Buscar modelo"
     />
 
-    {#each agrupado as [prov, itens] (prov)}
-      <h4 class="group-label">{prov}</h4>
-      <ul class="model-list">
-        {#each itens as m (m.provider + '/' + m.id)}
-          <li>
-            <button
-              class="model-row"
-              class:active={same(selected, m)}
-              aria-pressed={same(selected, m)}
-              onclick={() => (selected = m)}
-            >
-              <span class="model-text">
-                <span class="model-name">{m.name ?? m.id}</span>
-                <span class="model-meta">
-                  {m.id}{#if m.context} · {m.context}{/if}{#if m.images} · 👁{/if}
+    <div class="model-scroll">
+      {#each agrupado as [prov, itens] (prov)}
+        <h4 class="group-label">{prov}</h4>
+        <ul class="model-list">
+          {#each itens as m (m.provider + '/' + m.id)}
+            <li>
+              <button
+                class="model-row"
+                class:active={same(selected, m)}
+                aria-pressed={same(selected, m)}
+                onclick={() => (selected = m)}
+              >
+                <span class="model-text">
+                  <span class="model-name">{m.name ?? m.id}</span>
+                  <span class="model-meta">
+                    {m.id}{#if m.context}{' · ' + m.context}{/if}{#if m.images}{' · 👁'}{/if}
+                  </span>
                 </span>
-              </span>
-              {#if same(selected, m)}
-                <svg class="check" width="18" height="18" viewBox="0 0 24 24" fill="none"
-                  stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
-                  stroke-linejoin="round" aria-hidden="true">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              {/if}
-            </button>
-          </li>
-        {/each}
-      </ul>
-    {/each}
+                {#if same(selected, m)}
+                  <svg class="check" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
+                    stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                {/if}
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {/each}
+    </div>
     {#if hiddenCount}
       <p class="more">+{hiddenCount} — refine a busca</p>
     {/if}
@@ -220,8 +230,11 @@
     gap: var(--space-1);
     margin-bottom: var(--space-4);
   }
-  /* A lista pode ter 40 linhas: rola dentro da folha em vez de empurrar o botao Aplicar pra fora. */
-  .model-list { max-height: 46vh; overflow-y: auto; }
+  /* A lista pode ter 40 linhas: uma caixa de rolagem SÓ (com os grupos e seus títulos rolando
+     juntos) em vez de empurrar o botao Aplicar pra fora. A altura/overflow moram no .model-scroll,
+     nao na .model-list: com N listas dentro do each, a altura por lista recortaria cada grupo no
+     meio e criaria rolagem aninhada (medido na round 1: linha cortada e rodapé colado). */
+  .model-scroll { max-height: 46vh; overflow-y: auto; }
 
   .group-label { margin: 12px 0 4px; font-size: 12px; opacity: 0.6; }
 
