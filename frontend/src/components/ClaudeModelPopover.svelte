@@ -196,7 +196,10 @@
     <p class="vazio">Nada encontrado.</p>
   {:else}
     <ul class="lista">
-      {#each visiveis as m (m.id)}
+      <!-- Chave = id + nome, NAO so o id: o picker do Claude tem DUAS linhas com a keyword `opus`
+           ("Opus" e "Opus (1M context)"), e chave repetida num `{#each}` com key derruba o render
+           inteiro (each_key_duplicate) — a caixa ficava presa em "Carregando…", medido na tela. -->
+      {#each visiveis as m (m.id + '|' + (m.name ?? ''))}
         <li>
           <button
             class="linha"
