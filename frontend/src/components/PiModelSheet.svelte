@@ -236,7 +236,10 @@
      meio e criaria rolagem aninhada (medido na round 1: linha cortada e rodapé colado). */
   .model-scroll { max-height: 46vh; overflow-y: auto; }
 
-  .group-label { margin: 12px 0 4px; font-size: 12px; opacity: 0.6; }
+  /* Cor por TOKEN, nao por opacity: a opacidade mistura a tinta com o painel e derruba o contraste
+     abaixo de 4,5:1 no tema claro (medido: 4,34:1 com 12px — falha AA). O --text-muted já é a cor
+     semitransparente preparada pra texto pequeno (medido: 5,33:1 claro, 4,96:1 escuro). */
+  .group-label { margin: 12px 0 4px; font-size: 12px; color: var(--text-muted); }
 
   .model-row, .effort-row {
     width: 100%;
