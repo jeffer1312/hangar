@@ -25,6 +25,8 @@ from app.auth import require_auth, require_loopback
 from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
 from app.model_picker import PickerError
+from app import model_args
+from app import pi_catalog
 from app import pi_models
 from app.pi_inbox import INBOX
 from app.registry import KillFailed, SessionRegistry, sanitize_cwd
@@ -754,6 +756,10 @@ class CreateBody(_StrictBody):
     initial_prompt: str | None = None
     # Motor de modelo (nome no engines.json). None = conta Anthropic, comportamento de hoje.
     engine: str | None = None
+    # Escolhidos na tela de abertura. None = padrão do binário (comportamento de hoje). Validado
+    # aqui, nunca no front: o valor entra num comando de shell.
+    model: str | None = None
+    effort: str | None = None
 
 
 class TtsBody(_StrictBody):
@@ -1015,6 +1021,32 @@ async def create_session(body: CreateBody):
             raise HTTPException(400, "motor so vale para provider claude")
         if body.engine not in await asyncio.to_thread(engines.listar):
             raise HTTPException(400, "motor invalido")
+    # Mesma regra das linhas acima, pro model/effort: recusa ANTES de qualquer efeito no disco,
+    # inclusive pro provedor fora de escopo (codex/kimi) quando alguem pedir escolha — o valor
+    # entraria num comando de shell montado por concatenacao.
+    try:
+        model_args.validar(body.provider, body.model, body.effort)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+    # Janela do modelo escolhido, pra entrar no env do motor (Task 3). O número já está no cache do
+    # catálogo do provedor (_engine_models); vir do navegador seria deixar um terceiro escolher uma
+    # variável de ambiente — e ainda ficaria None justamente nos provedores que não reportam
+    # context_length. Com motor mas sem modelo (ou vice-versa), nada a resolver: o env segue o motor.
+    janela = None
+    if body.engine and body.model:
+        try:
+            for m in await _engine_models(body.engine):
+                if m["id"] == body.model:
+                    janela = m.get("context_length")
+                    break
+        except HTTPException:
+            # _engine_models devolve 502 quando o cache expirou e o /v1/models não responde, e 409
+            # quando o motor sumiu do arquivo entre a validação e aqui. A janela é enfeite: deixar
+            # essa chamada derrubar a criação faria o provedor fora do ar IMPEDIR de abrir sessão —
+            # coisa que hoje não acontece, e que contradiz o Step 5 da Task 5 ("provedor parado: a
+            # sessão ainda cria"). A sessão sobe sem a var e o CLI usa o default dele.
+            janela = None
 
     # Reconciliar e criar a sessão sob a MESMA trava (ciclo_conta), só no caminho que consome o
     # config dir (Claude/Pi — codex nem recebe ele no create_codex). Sem o ciclo, um DELETE da
@@ -1048,7 +1080,8 @@ async def create_session(body: CreateBody):
                     try:
                         return await asyncio.to_thread(
                             registry.create, body.name, body.cwd, body.config_dir,
-                            provider=body.provider, engine=body.engine)
+                            provider=body.provider, engine=body.engine,
+                            model=body.model, effort=body.effort, context_window=janela)
                     except ValueError as e:
                         raise HTTPException(409, str(e))
                 finally:
@@ -1061,7 +1094,8 @@ async def create_session(body: CreateBody):
         if body.provider == "codex":
             return await registry.create_codex(body.name, body.cwd, body.initial_prompt)
         return await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir,
-                                       provider=body.provider, engine=body.engine)
+                                       provider=body.provider, engine=body.engine,
+                                       model=body.model, effort=body.effort, context_window=janela)
     except ValueError as e:
         raise HTTPException(409, str(e))
 
@@ -2287,6 +2321,9 @@ async def put_engine(nome: str, request: Request):
         await asyncio.to_thread(engines.salvar, nome, body)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    # A chave do cache é o NOME do motor: trocar base_url ou api_key mantendo o nome serviria a
+    # lista do provedor ANTIGO por até 5 minutos.
+    _engine_models_cache.pop(nome, None)
     return {"motores": await asyncio.to_thread(_motores_para_cliente)}
 
 
@@ -2299,6 +2336,8 @@ async def delete_engine(nome: str):
         # engines.json corrompido: remover() recusa escrever por cima (item 1 do review) em vez de
         # apagar os outros motores. Vira 400 com a mensagem em vez de 500 cru.
         raise HTTPException(400, str(e))
+    # Mesma invalidação do PUT: a chave do cache é o NOME do motor.
+    _engine_models_cache.pop(nome, None)
     return {"ok": True}
 
 
@@ -3197,6 +3236,15 @@ _CLAUDE_MODELS_TTL = 3600.0
 _claude_models_cache: dict[str, tuple[float, dict]] = {}
 
 
+def _chave_config(p) -> str:
+    """Chave única do cache de modelos da conta. As duas rotas TÊM que passar por aqui: a da sessão
+    viva deriva do /proc (vazio = "~") e a da abertura recebe caminho do cliente."""
+    s = str(p or "").strip()
+    if not s or s == "~":
+        return str(Path.home() / ".claude")
+    return str(Path(s).expanduser().resolve())
+
+
 async def _engine_models(nome: str, fresco: bool = False) -> list[dict]:
     """Catalogo do provedor. `fresco=True` ignora o cache.
 
@@ -3238,7 +3286,7 @@ async def model_options(name: str):
     # Conta Anthropic: le o picker de verdade. Abre e fecha um overlay — nao vai pro scrollback,
     # nao entra no transcript e nao gasta token.
     _recusa_se_painel_aberto(name)
-    chave = str(_session_config_dir(name) or "~")
+    chave = _chave_config(_session_config_dir(name))
     hit = _claude_models_cache.get(chave)
     if hit and time.monotonic() - hit[0] < _CLAUDE_MODELS_TTL:
         return hit[1]
@@ -3247,10 +3295,42 @@ async def model_options(name: str):
     except PickerError as e:
         raise HTTPException(e.status, e.detail)
     resp = {"kind": "claude", "engine": None, "effort": lido["effort"],
-            "models": [{"id": r["keyword"], "name": r["name"], "desc": r["desc"],
+            # `id` (único por linha), não `keyword`: duas linhas do picker compartilham a keyword
+            # `opus` ("Opus" e "Opus (1M context)"), e id repetido derrubava a lista na tela.
+            "models": [{"id": r["id"], "name": r["name"], "desc": r["desc"],
                         "active": r["active"]} for r in lido["models"]]}
     _claude_models_cache[chave] = (time.monotonic(), resp)
     return resp
+
+
+@app.get("/api/model-options", dependencies=[Depends(require_auth)])
+async def model_options_sem_sessao(provider: str = "claude", engine: str = "", config_dir: str = ""):
+    """Modelos oferecidos na tela de ABERTURA, onde ainda não existe sessão.
+
+    Irmã de /api/sessions/{name}/model/options, que não serve aqui: no ramo da conta Anthropic
+    aquela LÊ O PICKER dirigindo o terminal de uma sessão viva. Sem sessão, o melhor que existe é o
+    cache por config dir que aquela rota já alimentou — e, frio, os aliases mínimos, ditos como
+    reduzidos em vez de fingirem ser a lista completa (ver o comentário acima sobre a lista
+    chumbada que não soube do Fable).
+    """
+    if provider == "pi":
+        try:
+            return {"kind": "pi", "reduced": False,
+                    "models": await asyncio.to_thread(pi_catalog.listar)}
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            raise HTTPException(502, f"pi --list-models falhou: {e}")
+    if provider != "claude":
+        raise HTTPException(400, "provider deve ser 'claude' ou 'pi'")
+    if engine:
+        modelos = await _engine_models(engine)
+        return {"kind": "engine", "reduced": False,
+                "models": [{"id": m["id"], "context_length": m.get("context_length"),
+                            "vision": m.get("vision")} for m in modelos]}
+    hit = _claude_models_cache.get(_chave_config(config_dir))
+    if hit and time.monotonic() - hit[0] < _CLAUDE_MODELS_TTL:
+        return {**hit[1], "reduced": False}
+    return {"kind": "claude", "reduced": True,
+            "models": [{"id": a} for a in ("opus", "sonnet", "haiku")]}
 
 
 @app.post("/api/sessions/{name}/engine/model", dependencies=[Depends(require_auth)])

@@ -45,7 +45,10 @@ class KimiAdapter:
     async def deliverable(self, name: str) -> bool:
         return await asyncio.to_thread(ti.deliverable, name)
 
-    def spawn_command(self, cwd: str, session_id: str) -> list[str]:
+    def spawn_command(self, cwd: str, session_id: str,
+                      model: str | None = None, effort: str | None = None) -> list[str]:
+        # model/effort aceitos e IGNORADOS: Kimi fora de escopo desta feature (o binário tem
+        # -m/--model, mas a escolha na abertura nao cobre ele — ver Correções de base do plano).
         # O session_id gerado pelo registry e IGNORADO de proposito: o Kimi nao aceita id escolhido
         # pelo caller (nao existe --session-id; -S so resume sessao existente). O sid real nasce no
         # 1o prompt e chega ao backend pelo bilhete do hook (registry.kimi_session_file).

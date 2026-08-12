@@ -128,11 +128,33 @@ def parse_model_rows(pane: str) -> list[dict]:
                 "name": label.replace("✔", "").replace("(recommended)", "").strip(),
                 "desc": desc,
                 "keyword": keyword,
+                "id": _id_da_linha(keyword, label),
                 "cursor": marker == "❯",  # ❯
                 "active": "✔" in label,  # ✔
             }
         )
     return rows
+
+
+def _id_da_linha(keyword: str, label: str) -> str:
+    """Id ÚNICO da linha. A keyword sozinha não serve: o picker tem duas linhas `opus` — "Opus" e
+    "Opus (1M context)" —, porque a keyword é a primeira palavra do rótulo.
+
+    Duas linhas com o mesmo id fizeram estrago dos dois lados. Na tela, chave repetida derrubava a
+    lista inteira (`each_key_duplicate`) e a caixa ficava presa em "Carregando…". No driver, escolher
+    a variante de 1M navegava pra primeira linha `opus` e aplicava o Opus normal, sem avisar.
+
+    O sufixo `[1m]` não é invenção nossa: é a notação do PRÓPRIO Claude Code pra janela de contexto
+    (o `settings.json` das contas traz `"model": "opus[1m]"`, e o binário manda anexá-lo quando não
+    reconhece a janela). Por isso ele também vale como valor de `--model` no arranque.
+
+    Olha SÓ o rótulo, nunca a descrição: no picker do 4.8 (fixture `pane_model_picker_opus.txt`) a
+    descrição de `Default` e de `Opus` já dizia "Opus 4.8 with 1M context" sem que existisse linha
+    separada — casar pela descrição renomearia linhas que ninguém duplicou.
+    """
+    if "1m context" in label.lower():
+        return f"{keyword}[1m]"
+    return keyword
 
 
 def cursor_row(rows: list[dict]) -> dict | None:
@@ -148,11 +170,24 @@ def model_nav_steps(rows: list[dict], target_keyword: str) -> int:
     Usa o numero de linha real quando o alvo esta visivel; senao cai pro MODEL_NUMBERS
     (a linha-alvo pode estar rolada pra fora). Levanta ValueError se o cursor nao for achado
     ou o alvo for desconhecido.
+
+    Casa pelo `id` ANTES da `keyword`: com duas linhas `opus`, casar so pela keyword mandava
+    `opus[1m]` pra primeira delas e aplicava o Opus normal, calado. A keyword continua valendo
+    como entrada — quem pede `opus` quer a linha `opus` mesmo.
+
+    O MODEL_NUMBERS so tem keyword pura, entao um alvo com sufixo (`opus[1m]`) rolado pra fora da
+    tela cai no ValueError final — de proposito. Nao descasque o sufixo pra reaproveitar o numero de
+    `opus`: o fallback por numero nao identifica a variante — vai pra linha do numero 2 do picker,
+    seja ela qual for (a ordem e dinamica entre versoes; na fixture atual a linha 2 e Sonnet e o
+    Opus normal mora na 4). Modelo errado aplicado, calado, e o defeito que o id unico veio
+    consertar. Ha teste travando isso.
     """
     base = cursor_row(rows)
     if base is None:
         raise ValueError("cursor row not found in picker")
-    target = next((r for r in rows if r["keyword"] == target_keyword), None)
+    target = next((r for r in rows if r.get("id") == target_keyword), None)
+    if target is None:
+        target = next((r for r in rows if r["keyword"] == target_keyword), None)
     if target is not None:
         tnum = target["number"]
     elif target_keyword in MODEL_NUMBERS:

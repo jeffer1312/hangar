@@ -11,7 +11,12 @@ ambiente é aplicado DENTRO do processo e, depois do exec, o cmdline é o do com
 
   cp-engine --list                       -> nome<TAB>label<TAB>modelo
   cp-engine --env <motor>                -> CHAVE=VALOR por linha (diagnóstico)
-  cp-engine --exec <motor> -- <cmd> ...  -> executa cmd com o env do motor (substitui este processo)
+  cp-engine --exec <motor> [--model <id>] [--context <n>] -- <cmd> ...
+                                         -> executa cmd com o env do motor (substitui este processo)
+
+`--model`/`--context` são a escolha da tela de abertura: o env do motor tem que saber qual modelo
+está subindo, senão as cinco chaves ANTHROPIC_*, o subagente e a janela ficariam no modelo do
+motor com a flag num outro — o cenário "motor de 1M com modelo de 262k".
 """
 import os
 import sys
@@ -23,9 +28,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 from app import engines  # noqa: E402
 
 
-def _env_ou_morre(nome: str) -> dict[str, str]:
+def _env_ou_morre(nome: str, modelo: str | None = None, context: int | None = None) -> dict[str, str]:
     try:
-        return engines.env_de(nome)
+        return engines.env_de(nome, modelo, context)
     except (KeyError, ValueError) as e:
         # KeyError: motor não existe no registro. ValueError: existe, mas engines.json foi
         # hand-editado com um valor que viola o contrato de shell (\n/\r/\0 — ver env_de). Os dois
@@ -49,9 +54,38 @@ def main(argv: list[str]) -> int:
             print(f"{chave}={valor}")
         return 0
 
-    if len(argv) >= 5 and argv[1] == "--exec" and argv[3] == "--":
-        env = _env_ou_morre(argv[2])
-        cmd = argv[4:]
+    if len(argv) >= 5 and argv[1] == "--exec" and "--" in argv[3:]:
+        corte = argv.index("--", 3)
+        nome = argv[2]
+        modelo = None
+        context = None
+        i = 3
+        while i < corte:
+            if argv[i] in ("--model", "--context"):
+                if i + 1 >= corte:
+                    print(f"cp-engine: {argv[i]} precisa de um valor", file=sys.stderr)
+                    return 2
+                if argv[i] == "--model":
+                    modelo = argv[i + 1]
+                else:
+                    try:
+                        context = int(argv[i + 1])
+                    except ValueError:
+                        print("cp-engine: --context precisa de um número", file=sys.stderr)
+                        return 2
+                i += 2
+            else:
+                print(f"cp-engine: opção desconhecida {argv[i]!r}", file=sys.stderr)
+                return 2
+        env = _env_ou_morre(nome, modelo, context)
+        cmd = argv[corte + 1:]
+        if not cmd:
+            # A guarda antiga (`argv[3] == "--"` com len>=5) garantia comando depois do `--`; a nova
+            # não. `cp-engine --exec kimi --model x --` passaria e `cmd[0]` estouraria IndexError —
+            # traceback cru, que é o oposto do que este parse existe pra fazer. O `except OSError` do
+            # __main__ não pega IndexError.
+            print("cp-engine: falta o comando depois de --", file=sys.stderr)
+            return 2
         # execvpe substitui este processo: o pane do tmux passa a ser o próprio claude (dono do tty),
         # que é o que faz o send-keys do app chegar nele. Um wrapper que ficasse no meio quebraria isso.
         os.execvpe(cmd[0], cmd, {**os.environ, **env})

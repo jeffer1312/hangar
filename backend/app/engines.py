@@ -271,8 +271,15 @@ def _inteiro_positivo(campo: str, valor: Any) -> int:
     return n
 
 
-def env_de(nome: str) -> dict[str, str]:
+def env_de(nome: str, modelo: str | None = None, context_window: int | None = None) -> dict[str, str]:
     """Variáveis de ambiente que fazem uma sessão rodar neste motor.
+
+    `modelo`/`context_window` vêm da escolha da tela de abertura. Precisam entrar AQUI, e não só
+    como `--model` na linha de comando, porque este env exporta o mesmo modelo em cinco chaves e a
+    janela em outra: a flag ganha só de ANTHROPIC_MODEL, e o resto continuaria no modelo do motor.
+
+    `subagent_model` configurado continua ganhando: quem o escreveu fez escolha de custo deliberada,
+    e trocar o modelo principal não desfaz isso.
 
     KeyError no motor inexistente de propósito: env vazio faria a sessão subir na conta Anthropic
     ACHANDO que é o motor escolhido — o pior tipo de falha, a silenciosa.
@@ -291,21 +298,25 @@ def env_de(nome: str) -> dict[str, str]:
         if isinstance(valor, str) and any(c in valor for c in _PROIBIDO_NO_VALOR):
             raise ValueError(f"{campo}: contém caractere proibido (quebra de linha ou nulo)")
 
-    modelo = e["model"]
+    modelo_final = modelo or e["model"]
+    if any(c in modelo_final for c in _PROIBIDO_NO_VALOR):
+        # O modelo escolhido na abertura não passa pelo _normalizar (que só roda no SAVE): a
+        # checagem de shell-safety tem que rodar aqui também — o valor vai pro `export` do wrapper.
+        raise ValueError("model: contém caractere proibido (quebra de linha ou nulo)")
     env = {
         # Marca lida do /proc/<pid>/environ para descobrir o motor de uma sessão viva (Task 5).
         "CP_ENGINE": nome,
         "ANTHROPIC_BASE_URL": e["base_url"],
         "ANTHROPIC_AUTH_TOKEN": e["api_key"],
         # Os 6 andam juntos: faltar um faz subagent/background falhar sem mensagem clara.
-        "ANTHROPIC_MODEL": modelo,
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": modelo,
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": modelo,
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": modelo,
-        "ANTHROPIC_DEFAULT_FABLE_MODEL": modelo,
+        "ANTHROPIC_MODEL": modelo_final,
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": modelo_final,
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": modelo_final,
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": modelo_final,
+        "ANTHROPIC_DEFAULT_FABLE_MODEL": modelo_final,
         # Subagentes fazem muita busca mecânica; um modelo mais barato aí é dinheiro de verdade.
         # Vazio (campo ausente) cai no mesmo modelo principal — nunca uma env var vazia.
-        "CLAUDE_CODE_SUBAGENT_MODEL": e.get("subagent_model") or modelo,
+        "CLAUDE_CODE_SUBAGENT_MODEL": e.get("subagent_model") or modelo_final,
     }
     if _booleano("auth_via_api_key", e.get("auth_via_api_key")) is True:
         # Provedor que lê a key SÓ em `x-api-key` e ignora `Authorization: Bearer`. opencode zen
@@ -318,11 +329,18 @@ def env_de(nome: str) -> dict[str, str]:
         # descartar a key e voltar pro login OAuth — o cabeçalho vira "Claude Max" e o 401 volta,
         # agora por outra causa. AUTH_TOKEN nunca pergunta; o header cobre o que falta.
         env["ANTHROPIC_CUSTOM_HEADERS"] = f"x-api-key: {e['api_key']}"
-    if e.get("context_window"):
-        # MAX_CONTEXT_TOKENS, nao AUTO_COMPACT_WINDOW: medido nos dois provedores, a segunda nao move
-        # a janela (o /context seguia em 200k) e a primeira move. Sem isto, um modelo de 256k/500k
-        # compacta em ~167k — capacidade jogada fora, calado.
-        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(_inteiro_positivo("context_window", e["context_window"]))
+    # MAX_CONTEXT_TOKENS, nao AUTO_COMPACT_WINDOW: medido nos dois provedores, a segunda nao move
+    # a janela (o /context seguia em 200k) e a primeira move. Sem isto, um modelo de 256k/500k
+    # compacta em ~167k — capacidade jogada fora, calado.
+    #
+    # Com modelo escolhido, a janela é a DELE — inclusive quando o MOTOR não configurou nenhuma
+    # (context_window é opcional): o número vem do catálogo do provedor, e descartá-lo por causa de
+    # um campo ausente do motor deixa a sessão compactando em ~167k com um modelo de 262k, com o
+    # `--context` do prefixo aceito e ignorado, calado. Sem número pra ele, omitir — exportar a do
+    # motor com outro modelo é exatamente o bug que esta variável existe pra corrigir.
+    janela = context_window if modelo else e.get("context_window")
+    if janela:
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(_inteiro_positivo("context_window", janela))
     if _booleano("bundled_skills", e.get("bundled_skills")) is not True:
         # Default desligado por MEDIÇÃO: a skill empacotada `claude-api` não tem SKILL.md na raiz, e
         # invocá-la injeta os 64 arquivos dela de uma vez — medido em 847.630 chars / 206.553 tokens

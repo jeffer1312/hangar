@@ -515,3 +515,133 @@ def test_sem_aviso_quando_a_combinacao_e_coerente(caplog):
     with caplog.at_level(logging.WARNING):
         eng.env_de("kimi")
     assert "não tem efeito" not in caplog.text
+
+
+# ── Task 3: modelo e janela escolhidos na abertura entram no env ───────────────────────────────
+
+
+def test_env_com_modelo_troca_as_cinco_chaves_de_modelo():
+    """`--model` sozinho ganha só de ANTHROPIC_MODEL; os quatro aliases continuariam no modelo do
+    motor, e `/model opus` dentro da sessão voltaria pra ele."""
+    eng.salvar("kimi", _kimi())
+    env = eng.env_de("kimi", modelo="k3-256k")
+    for chave in ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                  "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL"):
+        assert env[chave] == "k3-256k"
+
+
+def test_subagente_segue_o_modelo_escolhido_quando_o_motor_nao_fixou_um():
+    eng.salvar("kimi", _kimi())            # _kimi() não define subagent_model
+    assert eng.env_de("kimi", modelo="k3-256k")["CLAUDE_CODE_SUBAGENT_MODEL"] == "k3-256k"
+
+
+def test_subagent_model_configurado_ganha_do_modelo_escolhido():
+    """Decisão explícita: quem escreveu subagent_model no motor fez escolha DE CUSTO (subagente faz
+    busca mecânica; modelo barato ali é dinheiro). Trocar o modelo principal não desfaz isso."""
+    cfg = {**_kimi(), "subagent_model": "kimi-for-coding"}
+    eng.salvar("kimi", cfg)
+    assert eng.env_de("kimi", modelo="k3-256k")["CLAUDE_CODE_SUBAGENT_MODEL"] == "kimi-for-coding"
+
+
+def test_env_com_janela_do_modelo_escolhido():
+    """Motor de 1M mais modelo de 262k faria a sessão compactar só em 1M e estourar no provedor — o
+    inverso exato do bug que MAX_CONTEXT_TOKENS existe pra corrigir."""
+    eng.salvar("kimi", _kimi())
+    env = eng.env_de("kimi", modelo="k3-256k", context_window=262144)
+    assert env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "262144"
+
+
+def test_modelo_escolhido_sem_janela_conhecida_omite_a_variavel():
+    """Provedor que não reporta context_length (opencode zen, medido). Exportar a janela do MOTOR
+    com outro modelo é o bug de volta; omitir deixa o CLI usar o default dele."""
+    eng.salvar("kimi", _kimi())            # _kimi() tem context_window de 262k
+    env = eng.env_de("kimi", modelo="k3-256k", context_window=None)
+    assert "CLAUDE_CODE_MAX_CONTEXT_TOKENS" not in env
+
+
+def test_env_sem_modelo_e_identico_ao_de_hoje():
+    eng.salvar("kimi", _kimi())
+    assert eng.env_de("kimi") == eng.env_de("kimi", modelo=None, context_window=None)
+
+
+def test_modelo_com_caractere_proibido_e_recusado():
+    eng.salvar("kimi", _kimi())
+    with pytest.raises(ValueError):
+        eng.env_de("kimi", modelo="k3-256k\nrm -rf /")
+
+
+def test_motor_sem_janela_configurada_usa_a_do_modelo_escolhido():
+    """context_window do motor é OPCIONAL. Sem ele, a janela do modelo escolhido é a única que
+    existe — descartá-la deixa a sessão compactando em ~167k com um modelo de 262k."""
+    cfg = {k: v for k, v in _kimi().items() if k != "context_window"}
+    eng.salvar("kimi", cfg)
+    assert "CLAUDE_CODE_MAX_CONTEXT_TOKENS" not in eng.env_de("kimi")          # segue como hoje
+    env = eng.env_de("kimi", modelo="k3-256k", context_window=262144)
+    assert env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "262144"
+
+
+def test_cli_exec_janela_do_modelo_em_motor_sem_janela_configurada():
+    """Ponta a ponta: a flag --context não pode ser aceita e descartada."""
+    eng.salvar("kimi", {k: v for k, v in _kimi().items() if k != "context_window"})
+    r = _cli("--exec", "kimi", "--model", "k3-256k", "--context", "262144", "--",
+             sys.executable, "-c",
+             "import os;print(os.environ.get('CLAUDE_CODE_MAX_CONTEXT_TOKENS'))")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "262144"
+
+
+def test_cli_exec_com_modelo_e_janela_aplica_env_no_filho():
+    # O parse novo do cp-engine: `--model` e `--context` viram parte do env, não do cmdline.
+    eng.salvar("kimi", _kimi())
+    r = _cli("--exec", "kimi", "--model", "k3-256k", "--context", "262144", "--",
+             sys.executable, "-c",
+             "import os;print(os.environ['ANTHROPIC_MODEL'], "
+             "os.environ['CLAUDE_CODE_MAX_CONTEXT_TOKENS'])")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "k3-256k 262144"
+
+
+def test_cli_exec_sem_flags_novas_continua_igual():
+    # A forma antiga (`cp-engine --exec <motor> -- <cmd>`) não pode regredir: é o que o backend
+    # usava até a Task 3 e continua sendo o caminho de sessão sem escolha.
+    eng.salvar("kimi", _kimi())
+    r = _cli("--exec", "kimi", "--", sys.executable, "-c",
+             "import os;print(os.environ['ANTHROPIC_MODEL'])")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "k3"
+
+
+def test_cli_exec_model_sem_valor_erro_limpo():
+    eng.salvar("kimi", _kimi())
+    r = _cli("--exec", "kimi", "--model", "--", sys.executable, "-c", "print('RODOU')")
+    assert r.returncode == 2
+    assert "--model precisa de um valor" in r.stderr
+    assert "RODOU" not in r.stdout
+    assert "Traceback" not in r.stderr
+
+
+def test_cli_exec_context_nao_numerico_erro_limpo():
+    eng.salvar("kimi", _kimi())
+    r = _cli("--exec", "kimi", "--context", "abc", "--", sys.executable, "-c", "print('RODOU')")
+    assert r.returncode == 2
+    assert "--context precisa de um número" in r.stderr
+    assert "RODOU" not in r.stdout
+    assert "Traceback" not in r.stderr
+
+
+def test_cli_exec_opcao_desconhecida_erro_limpo():
+    eng.salvar("kimi", _kimi())
+    r = _cli("--exec", "kimi", "--bogus", "x", "--", sys.executable, "-c", "print('RODOU')")
+    assert r.returncode == 2
+    assert "opção desconhecida" in r.stderr
+    assert "Traceback" not in r.stderr
+
+
+def test_cli_exec_sem_comando_depois_do_separador_erro_limpo():
+    # `cp-engine --exec kimi --model x --` passaria do parse e `cmd[0]` estouraria IndexError —
+    # traceback cru, o oposto do que este parse existe pra fazer.
+    eng.salvar("kimi", _kimi())
+    r = _cli("--exec", "kimi", "--model", "k3-256k", "--")
+    assert r.returncode == 2
+    assert "falta o comando depois de --" in r.stderr
+    assert "Traceback" not in r.stderr

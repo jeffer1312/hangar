@@ -798,7 +798,8 @@ def test_create_default_provider_routes_to_claude_create(api_client):
         r = api_client.post("/api/sessions", headers=_h(), json={"name": "x", "cwd": "/tmp"})
     assert r.status_code == 200
     assert r.json()["provider"] == "claude"
-    cr.assert_called_once_with("x", "/tmp", None, provider="claude", engine=None)
+    cr.assert_called_once_with("x", "/tmp", None, provider="claude", engine=None,
+                               model=None, effort=None, context_window=None)
 
 
 def test_create_explicit_claude_provider_routes_to_claude_create(api_client):
@@ -807,7 +808,8 @@ def test_create_explicit_claude_provider_routes_to_claude_create(api_client):
         r = api_client.post("/api/sessions", headers=_h(),
                             json={"name": "x", "cwd": "/tmp", "provider": "claude"})
     assert r.status_code == 200
-    cr.assert_called_once_with("x", "/tmp", None, provider="claude", engine=None)
+    cr.assert_called_once_with("x", "/tmp", None, provider="claude", engine=None,
+                               model=None, effort=None, context_window=None)
 
 
 def test_create_codex_provider_routes_to_create_codex(api_client):
@@ -845,7 +847,8 @@ def test_create_pi_provider_routes_to_claude_create_with_provider(api_client):
     assert r.status_code == 200
     assert r.json()["provider"] == "pi"
     assert r.json()["jsonl"] is None
-    cr.assert_called_once_with("p", "/tmp", None, provider="pi", engine=None)
+    cr.assert_called_once_with("p", "/tmp", None, provider="pi", engine=None,
+                               model=None, effort=None, context_window=None)
 
 
 def test_create_pi_with_engine_is_refused(api_client):
@@ -1884,8 +1887,8 @@ def test_model_options_conta_anthropic_le_o_picker_ao_vivo(api_client_limpo):
     # A lista muda com a conta e com a versao do CC (o Fable entrou e a lista chumbada no front nao
     # soube): ela vem das linhas lidas, nunca de constante.
     lido = {"effort": "high", "models": [
-        {"keyword": "default", "name": "Default", "desc": "Opus 5 …", "active": False},
-        {"keyword": "fable", "name": "Fable", "desc": "Fable 5 …", "active": True},
+        {"keyword": "default", "id": "default", "name": "Default", "desc": "Opus 5 …", "active": False},
+        {"keyword": "fable", "id": "fable", "name": "Fable", "desc": "Fable 5 …", "active": True},
     ]}
     with patch("app.api._cached_info", AsyncMock(return_value=SessionInfo(
             name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude"))), \
@@ -1896,6 +1899,25 @@ def test_model_options_conta_anthropic_le_o_picker_ao_vivo(api_client_limpo):
     assert body["kind"] == "claude" and body["effort"] == "high"
     assert [m["id"] for m in body["models"]] == ["default", "fable"]
     assert body["models"][1]["active"] is True
+
+
+def test_model_options_nao_repete_id_com_as_duas_linhas_opus(api_client_limpo):
+    """O picker desta máquina tem DUAS linhas `opus` (a normal e a de 1M). Enquanto a rota mandava a
+    keyword como id, os dois ids vinham iguais: a lista da tela morria em `each_key_duplicate` e
+    escolher a de 1M aplicava o Opus normal."""
+    lido = {"effort": "high", "models": [
+        {"keyword": "opus", "id": "opus", "name": "Opus",
+         "desc": "Opus 5 · Best for everyday", "active": False},
+        {"keyword": "opus", "id": "opus[1m]", "name": "Opus (1M context)",
+         "desc": "Opus 5 with 1M context", "active": True},
+    ]}
+    with patch("app.api._cached_info", AsyncMock(return_value=SessionInfo(
+            name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude"))), \
+         patch("app.api.terminal.list_model_options", return_value=lido):
+        r = api_client_limpo.get("/api/sessions/cc/model/options", headers=_h())
+    ids = [m["id"] for m in r.json()["models"]]
+    assert ids == ["opus", "opus[1m]"]
+    assert len(set(ids)) == len(ids)
 
 
 def test_model_options_sessao_ocupada_propaga_409(api_client_limpo):

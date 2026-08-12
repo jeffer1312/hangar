@@ -130,3 +130,143 @@ def test_resume_do_arquivo_aceita_motor(tmp_path, monkeypatch):
     info = r.create("s", str(tmp_path), resume_session_id=sid, engine="kimi")
     assert visto["command"] == f"cp-engine --exec kimi -- claude --resume {sid}"
     assert info.engine == "kimi"
+
+
+# ── Task 3: escolha de modelo/janela entra no prefixo cp-engine ────────────────────────────────
+
+
+def test_create_com_escolha_poe_modelo_e_esforco_no_comando(tmp_path, monkeypatch):
+    # A flag do modelo chega ao claude; o uuid é aleatório, então confere por prefixo.
+    visto = {}
+    _reg(tmp_path, monkeypatch, visto).create("s", str(tmp_path), model="k3-256k", effort="high")
+    assert visto["command"].startswith(
+        "claude --session-id ") and visto["command"].endswith("--model k3-256k --effort high")
+
+
+def test_create_com_motor_e_escolha_remonta_o_prefixo_com_modelo_e_janela(tmp_path, monkeypatch):
+    """O prefixo do motor leva modelo E janela: a flag sozinha ganharia só de ANTHROPIC_MODEL, e o
+    ambiente (aliases, subagente, janela) voltaria pro modelo do motor — o cenário "motor de 1M
+    com modelo de 262k"."""
+    _motor()
+    visto = {}
+    _reg(tmp_path, monkeypatch, visto).create("s", str(tmp_path), engine="kimi",
+                                              model="k3-256k", context_window=262144)
+    assert visto["command"].startswith(
+        "cp-engine --exec kimi --model k3-256k --context 262144 -- claude --session-id ")
+
+
+def test_create_com_motor_e_modelo_sem_janela_omite_o_context(tmp_path, monkeypatch):
+    # Provedor que não reporta context_length: sem o número do modelo, o --context não pode sair
+    # (exportar a janela do MOTOR com outro modelo é o bug de volta).
+    _motor()
+    visto = {}
+    _reg(tmp_path, monkeypatch, visto).create("s", str(tmp_path), engine="kimi",
+                                              model="k3-256k", context_window=None)
+    assert visto["command"].startswith(
+        "cp-engine --exec kimi --model k3-256k -- claude --session-id ")
+
+
+def test_resume_preserva_modelo_e_janela_do_pane(tmp_path, monkeypatch):
+    """Dívida de teste do caminho de resume: sem o par procinfo._model_of/_env_var_of aplicado, a
+    sessão ressuscita com a flag num modelo e o AMBIENTE noutro (as cinco chaves, o subagente e a
+    janela voltariam pro modelo do motor) — e nada na tela acusa."""
+    _motor()
+    monkeypatch.setattr(procinfo, "_model_of", lambda pid: ("k3-256k", "high"))
+    monkeypatch.setattr(procinfo, "_env_var_of", lambda pid, nome: "262144")
+    visto = {}
+    r, sid = _prep_resume(tmp_path, monkeypatch, visto, "kimi")
+    info = r.resume("s", sid)
+    assert visto["command"] == (
+        f"cp-engine --exec kimi --model k3-256k --context 262144 -- "
+        f"claude --resume {sid} --model k3-256k --effort high")
+    assert info.engine == "kimi"
+
+
+def test_resume_com_modelo_marcado_de_janela_nao_estoura(tmp_path, monkeypatch):
+    """`opus[1m]` é o que o próprio Claude Code anexa ao nome do modelo, e está no settings.json das
+    contas do usuário. Com o colchete fora da whitelist, retomar uma sessão dessas estourava."""
+    _motor()
+    monkeypatch.setattr(procinfo, "_model_of", lambda pid: ("opus[1m]", None))
+    monkeypatch.setattr(procinfo, "_env_var_of", lambda pid, nome: None)
+    visto = {}
+    r, sid = _prep_resume(tmp_path, monkeypatch, visto, None)
+    r.resume("s", sid)
+    assert visto["command"] == f"claude --resume {sid} --model 'opus[1m]'"
+
+
+def test_resume_com_modelo_invalido_nao_mata_o_pane(tmp_path, monkeypatch):
+    """O comando é montado ANTES do kill. Montar depois trocava 'o resume falhou' por 'a sessão foi
+    destruída e não relançada' — o pane já não existia quando a validação estourava."""
+    _motor()
+    monkeypatch.setattr(procinfo, "_model_of", lambda pid: ("opus; rm -rf /", None))
+    monkeypatch.setattr(procinfo, "_env_var_of", lambda pid, nome: None)
+    visto = {}
+    mortes = []
+    r, sid = _prep_resume(tmp_path, monkeypatch, visto, None)
+    monkeypatch.setattr(reg.tmux, "kill_session", lambda n: mortes.append(n))
+    with pytest.raises(ValueError):
+        r.resume("s", sid)
+    assert mortes == []                 # a sessão continua de pé
+    assert "command" not in visto       # e nada foi relançado
+
+
+def test_resume_com_modelo_sem_janela_omite_o_context(tmp_path, monkeypatch):
+    _motor()
+    monkeypatch.setattr(procinfo, "_model_of", lambda pid: ("k3-256k", "high"))
+    monkeypatch.setattr(procinfo, "_env_var_of", lambda pid, nome: None)
+    visto = {}
+    r, sid = _prep_resume(tmp_path, monkeypatch, visto, "kimi")
+    r.resume("s", sid)
+    assert visto["command"] == (
+        f"cp-engine --exec kimi --model k3-256k -- claude --resume {sid} --model k3-256k --effort high")
+
+
+def test_resume_sem_modelo_no_pane_nao_poe_flags_nem_context(tmp_path, monkeypatch):
+    # Sessão que subiu sem escolha: o resume tem que continuar byte por byte o de hoje.
+    _motor()
+    monkeypatch.setattr(procinfo, "_model_of", lambda pid: (None, None))
+    monkeypatch.setattr(procinfo, "_env_var_of", lambda pid, nome: "262144")
+    visto = {}
+    r, sid = _prep_resume(tmp_path, monkeypatch, visto, "kimi")
+    r.resume("s", sid)
+    assert visto["command"] == f"cp-engine --exec kimi -- claude --resume {sid}"
+
+
+def test_resume_le_a_janela_antes_de_matar_o_pane(tmp_path, monkeypatch):
+    """B2 da revisão final. A janela mora no /proc/<pid>/environ do processo que está no pane:
+    lê-la DEPOIS do kill_session devolve nada (o /proc some junto), e a sessão ressuscita sem
+    --context — compactando em ~167k com um modelo de 262k, calado. O fake deixa o environ
+    ILEGÍVEL depois do kill: se a ordem voltar a errar, o --context 262144 some do comando."""
+    _motor()
+    monkeypatch.setattr(procinfo, "_model_of", lambda pid: ("k3-256k", "high"))
+    morto = {"sim": False}
+
+    def _env(pid, nome):
+        return None if morto["sim"] else "262144"
+
+    def _kill(nome):
+        morto["sim"] = True
+
+    monkeypatch.setattr(procinfo, "_env_var_of", _env)
+    visto = {}
+    r, sid = _prep_resume(tmp_path, monkeypatch, visto, "kimi")
+    monkeypatch.setattr(reg.tmux, "kill_session", _kill)
+    r.resume("s", sid)
+    assert visto["command"] == (
+        f"cp-engine --exec kimi --model k3-256k --context 262144 -- "
+        f"claude --resume {sid} --model k3-256k --effort high")
+
+
+def test_resume_de_motor_removido_descarta_a_escolha_no_fallback(tmp_path, monkeypatch):
+    """B3 (versão estreita) da revisão final. Motor apagado cai pro fallback da conta Anthropic —
+    decisão anterior a esta branch, não se mexe. O que ESTA branch piorou é carregar junto o
+    modelo/esforço do MOTOR: `claude --resume … --model k3-256k --effort high` na conta Anthropic
+    é sessão inviável (id que ela não conhece). No fallback, descartar modelo, esforço e janela:
+    resume pelado, como antes desta branch."""
+    monkeypatch.setattr(procinfo, "_model_of", lambda pid: ("k3-256k", "high"))
+    monkeypatch.setattr(procinfo, "_env_var_of", lambda pid, nome: "262144")
+    visto = {}
+    r, sid = _prep_resume(tmp_path, monkeypatch, visto, "sumiu")
+    info = r.resume("s", sid)
+    assert visto["command"] == f"claude --resume {sid}"
+    assert info.engine is None

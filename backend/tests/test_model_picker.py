@@ -36,6 +36,78 @@ def test_parse_model_rows_haiku_cursor_distinct_from_active():
     assert next(r for r in rows if r["active"])["keyword"] == "opus"
 
 
+# Picker do Claude Code 5 nesta máquina (12/08/2026): SEIS linhas, e duas delas com a keyword
+# `opus` — "Opus" e "Opus (1M context)". Foi o que travou a caixa da tela em "Carregando…"
+# (each_key_duplicate) e fazia escolher a de 1M aplicar o Opus normal.
+PANE_DUAS_OPUS = """\
+   Select model
+   Switch between Claude models.
+
+     1. Default (recommended)  Sonnet 5 · Efficient for routine tasks
+     2. Sonnet                 Sonnet 5 · Efficient for routine tasks
+     3. Fable                  Fable 5 · Most capable
+   ❯ 4. Opus                   Opus 5 · Best for everyday, complex tasks
+     5. Haiku                  Haiku 4.5 · Fastest for quick answers
+     6. Opus (1M context) ✔    Opus 5 with 1M context · Best for everyday, complex tasks
+
+   ◉ High effort ←/→ to adjust
+
+   Enter to set as default · s to use this session only · Esc to cancel
+"""
+
+
+def test_parse_model_rows_da_id_unico_as_duas_linhas_opus():
+    rows = mp.parse_model_rows(PANE_DUAS_OPUS)
+    assert [r["keyword"] for r in rows] == [
+        "default", "sonnet", "fable", "opus", "haiku", "opus"]
+    ids = [r["id"] for r in rows]
+    assert ids == ["default", "sonnet", "fable", "opus", "haiku", "opus[1m]"]
+    assert len(set(ids)) == len(ids)
+
+
+def test_id_nao_muda_quando_so_a_DESCRICAO_fala_de_1m():
+    """No picker do 4.8 a descrição de `Default` e de `Opus` já dizia "Opus 4.8 with 1M context" sem
+    haver linha separada. Casar pela descrição renomearia linha que ninguém duplicou."""
+    rows = mp.parse_model_rows(PANE_OPUS)
+    assert [r["id"] for r in rows] == ["default", "opus", "sonnet", "haiku"]
+
+
+def test_linha_unica_com_1m_no_rotulo_tambem_ganha_o_sufixo():
+    """Caso mais comum, e o que a fixture `fable` capturou: UMA linha `Opus (1M context)`, sem
+    duplicata. O id dela é `opus[1m]` do mesmo jeito — o sufixo descreve a linha, não resolve a
+    briga —, e a keyword continua `opus`, então quem manda a keyword antiga segue chegando lá."""
+    rows = mp.parse_model_rows(PANE_FABLE)
+    opus = next(r for r in rows if r["keyword"] == "opus")
+    assert opus["id"] == "opus[1m]"
+    assert mp.model_nav_steps(rows, "opus[1m]") == 0
+    assert mp.model_nav_steps(rows, "opus") == 0
+
+
+def test_variante_fora_da_tela_falha_em_vez_de_ir_pra_linha_errada():
+    """Trava contra a correção "óbvia" que alguém pode fazer no futuro: descascar o sufixo pra usar o
+    número de `opus` do MODEL_NUMBERS. O fallback por número não identifica a variante — vai pra
+    linha do número 2 do picker, seja ela qual for (a ordem é dinâmica; neste cenário a linha 2 é
+    Sonnet). Modelo errado aplicado, calado, que é o defeito que o id único veio consertar. Melhor
+    409 na cara."""
+    rows = [
+        {"number": 1, "keyword": "default", "id": "default", "cursor": True, "active": False},
+        {"number": 2, "keyword": "sonnet", "id": "sonnet", "cursor": False, "active": False},
+    ]
+    with pytest.raises(ValueError, match="not in picker"):
+        mp.model_nav_steps(rows, "opus[1m]")
+    # sem sufixo, o fallback por número continua valendo
+    assert mp.model_nav_steps(rows, "haiku") == 4
+
+
+def test_nav_steps_leva_a_linha_certa_das_duas_opus():
+    """Com as duas linhas, casar só pela keyword mandava `opus[1m]` pra primeira `opus` e aplicava
+    o Opus normal, calado. O cursor está na linha 4 (Opus)."""
+    rows = mp.parse_model_rows(PANE_DUAS_OPUS)
+    assert mp.model_nav_steps(rows, "opus[1m]") == 2    # 6 - 4, Down 2
+    assert mp.model_nav_steps(rows, "opus") == 0        # já está
+    assert mp.model_nav_steps(rows, "fable") == -1
+
+
 def test_picker_open_detection():
     assert mp.picker_open(PANE_OPUS) is True
     assert mp.picker_open("apenas chat sem picker\n❯ \n") is False
@@ -265,6 +337,18 @@ def test_list_model_options_reads_rows_and_closes_with_escape():
     assert keys[:2] == ["/model", "Enter"]
     assert keys[-1] == "Escape"      # so LE: fecha sem confirmar nada
     assert "s" not in keys and keys.count("Enter") == 1
+
+
+def test_apply_aceita_a_variante_de_1m_e_recusa_lixo():
+    """O gate do apply era `isalnum()`, que passou a devolver 422 pra `opus[1m]` assim que o id
+    ficou único — a tela oferecia a linha e o POST recusava. Continua recusando o que não é id."""
+    ti = TerminalInput()
+    with patch.object(ti, "_drive_model_effort", return_value={"ok": True}) as drive:
+        ti.set_model_effort("cc", model="opus[1m]", effort=None, scope="session")
+    assert drive.call_args.args[1] == "opus[1m]"
+    for mau in ["opus 5", "opus;rm -rf /", "--model", "opus[1m]x", "opus[]", "opus[1m"]:
+        with pytest.raises(ValueError, match="unknown model"):
+            ti.set_model_effort("cc", model=mau, effort=None, scope="session")
 
 
 def test_list_model_options_refuses_while_working():

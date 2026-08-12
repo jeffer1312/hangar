@@ -19,6 +19,11 @@ _log = logging.getLogger("claude_pocket.terminal_input")
 _SETTLE = 0.3  # apos uma tecla de navegacao
 _OPEN_SETTLE = 0.7  # apos abrir o picker / confirmar (precisa redesenhar/commitar o resultado)
 _NAV_GAP = 0.12  # entre toques Up/Down em rajada
+# Id de modelo aceito na troca: alfanumérico, opcionalmente com o sufixo de janela do próprio
+# Claude Code (`opus[1m]`). É o que separa as duas linhas `opus` do picker. Este valor NÃO vira
+# tecla — ele só resolve qual linha navegar, e o que sai pro tty é Up/Down/s/Enter. Quem digita id
+# literal é o `set_engine_model`, com gate próprio.
+_MODEL_KW_OK = re.compile(r"^[a-z0-9]+(\[[a-z0-9]+\])?\Z")
 _SLASH_SETTLE = 0.3  # apos digitar "/cmd": deixa o menu de autocomplete renderizar antes do Enter
 _SUBMIT_SETTLE = 0.2  # entre o texto livre e o Enter: claude detecta input rapido como paste e engole o Enter
 # Idem pro MULTILINHA, que estava em 0.05 - MENOR que o do caminho de uma linha, embora seja o
@@ -1414,7 +1419,10 @@ class TerminalInput:
         # Sem lista chumbada de modelos aqui: quem diz o que existe e o picker lido ao vivo
         # (model_nav_steps levanta se a keyword nao estiver la). Um `MODEL_ORDER` como gate
         # rejeitava, com 422, um modelo NOVO que o picker ja oferecia — foi o que escondeu o Fable.
-        if model_kw and (not model_kw.isascii() or not model_kw.isalnum()):
+        # Alnum + o sufixo `[1m]`, que é a notação do próprio Claude Code pra janela de contexto e
+        # o que distingue as DUAS linhas `opus` do picker. Sem abrir pro colchete, escolher
+        # "Opus (1M context)" voltava 422 depois que o id passou a ser único.
+        if model_kw and not _MODEL_KW_OK.match(model_kw):
             raise ValueError(f"unknown model {model!r}")
         if effort_kw and effort_kw not in mp.EFFORT_ORDER:
             raise ValueError(f"unknown effort {effort!r}")

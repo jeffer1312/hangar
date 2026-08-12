@@ -451,6 +451,10 @@ export interface PiModel {
   id: string;
   name: string;
   reasoning: boolean;
+  // Vêm do `pi --list-models` (fonte da lista). O sidecar não publica os dois, então são opcionais:
+  // etiqueta que a fonte não informar simplesmente não aparece.
+  context?: string;
+  images?: boolean;
 }
 
 export interface PiModelsResponse {
