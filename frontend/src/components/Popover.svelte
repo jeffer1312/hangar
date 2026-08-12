@@ -78,7 +78,7 @@
   }
 </script>
 
-<svelte:window on:keydown={open ? teclado : undefined} />
+<svelte:window onkeydown={open ? teclado : undefined} />
 
 {#if open}
   <!-- Camada de fora: fecha ao clicar em qualquer lugar. Sem foco proprio (role=presentation),

@@ -31,8 +31,9 @@
     return EFFORTS.find((l) => l === c) ?? EFFORTS.find((l) => l.startsWith(c)) ?? null;
   });
 
+  // `aplicando` zera junto com o erro: fechar com pedido em voo travava a lista na reabertura.
   $effect(() => {
-    if (open) err = null;
+    if (open) { err = null; aplicando = null; }
   });
 
   async function escolher(lv: string) {

@@ -26,13 +26,20 @@
   let query = $state('');
   let selected = $state<PiModel | null>(null);
 
+  // Geracao da busca em voo: o componente NAO e recriado entre fechar e reabrir, entao fechar
+  // durante um GET lento e reabrir dispara um segundo load com o primeiro pendente — sem este
+  // carimbo, a resposta VELHA aterrissa por cima da nova.
+  let carga = 0;
+
   async function load() {
+    const minha = ++carga;
     err = null;
     loading = true;
     try {
       // allSettled, NAO all: o sidecar e leitura de arquivo local e quase nao falha; o catalogo e
       // subprocess Node. Com Promise.all, a falha do catalogo derrubaria a lista inteira.
       const [est, cat] = await Promise.allSettled([getPiModels(sessionName), modelOptions('pi')]);
+      if (minha !== carga) return;
       if (est.status === 'rejected') throw est.reason;
       // O SIDECAR e o conjunto; o catalogo so enriquece. Quem valida o apply e o check_known contra
       // o catalogo DO SIDECAR — oferecer id que so o `pi --list-models` conhece e 422 na cara do
@@ -46,17 +53,20 @@
         ? models.find((m) => m.provider === est.value.current!.provider && m.id === est.value.current!.id) ?? null
         : null;
     } catch (e) {
+      if (minha !== carga) return;
       err = e instanceof Error ? e.message : 'Falha ao carregar modelos';
     } finally {
-      loading = false;
+      if (minha === carga) loading = false;
     }
   }
 
   // untrack: o load() le props que MUDAM SOZINHAS (o modelo atual vem da statusline e atualiza a
   // cada tick). Sem isolar, o efeito virava dependente delas, recarregava a lista no meio do uso e
   // REESCREVIA a selecao do usuario com o modelo atual — clicar numa linha nao pegava.
+  // `aplicando` volta a null ao reabrir: fechar com um pedido em voo deixava a lista `disabled`
+  // na abertura seguinte, sem nada explicando.
   $effect(() => {
-    if (open) untrack(() => { query = ''; load(); });
+    if (open) untrack(() => { query = ''; aplicando = null; load(); });
   });
 
   function casa(m: PiModel, q: string) {

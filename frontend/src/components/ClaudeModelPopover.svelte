@@ -25,11 +25,13 @@
     currentEffort?: string | null;
     onApply: (body: ModelEffortBody) => Promise<void> | void;
     onApplied?: (model: string, effort: string | null) => void;
+    /** Falha que chegou DEPOIS da caixa fechar — quem mostra e o composer, na linha de erro dele. */
+    onFail?: (msg: string) => void;
     onClose: () => void;
   }
   let {
     open, anchor, sessionName, currentModel = null, currentEffort = null,
-    onApply, onApplied, onClose,
+    onApply, onApplied, onFail, onClose,
   }: Props = $props();
 
   const MAX_ROWS = 40;   // teto de linhas desenhadas: 269 botoes travariam o celular
@@ -91,8 +93,10 @@
   // untrack: o load() le props que MUDAM SOZINHAS (o modelo atual vem da statusline e atualiza a
   // cada tick). Sem isolar, o efeito virava dependente delas, recarregava a lista no meio do uso e
   // REESCREVIA a selecao do usuario com o modelo atual — clicar numa linha nao pegava.
+  // `aplicando` volta a false ao reabrir: fechar (Esc/fundo) com um pedido em voo deixava a lista
+  // inteira `disabled` na proxima abertura, sem nada explicando — a caixa abria morta.
   $effect(() => {
-    if (open) untrack(() => { query = ''; load(); });
+    if (open) untrack(() => { query = ''; aplicando = false; load(); });
   });
 
   const casados = $derived.by(() => {
@@ -144,10 +148,13 @@
         }
         onApplied?.(res.model, currentEffort ?? null);
       } else {
-        // Nao se espera o picker: dispara, sai da frente e deixa a confirmacao com o usuario. Falha
-        // de rede vira console — a caixa ja fechou, e inventar um lugar pra ela aqui seria mentir
-        // sobre um fluxo que continua acontecendo no terminal.
-        Promise.resolve(onApply({ model: m.id, scope })).catch((e) => console.error('modelo', e));
+        // Nao se espera o picker: dispara, sai da frente e deixa a confirmacao com o usuario. Mas
+        // a falha vai pra fora (`onFail`), nao pro console: o backend recusa a troca de verdade
+        // (PickerError 409/422 quando o Claude nega ou o picker nao fecha), e engolir isso deixa
+        // o pill mostrando um modelo que nunca entrou.
+        Promise.resolve(onApply({ model: m.id, scope })).catch((e) =>
+          onFail?.(e instanceof Error ? e.message : 'Falha ao trocar o modelo'),
+        );
         atual = m.id;
         aplicando = false;
         onClose();

@@ -24,23 +24,31 @@
   let err = $state<string | null>(null);
   let aplicando = $state<string | null>(null);
 
+  // Geracao em voo: fechar durante um GET lento e reabrir deixaria a resposta VELHA aterrissar
+  // por cima da nova (o componente nao e recriado entre uma abertura e outra).
+  let carga = 0;
+
   async function load() {
+    const minha = ++carga;
     err = null;
     loading = true;
     try {
       const res = await getPiModels(sessionName);
+      if (minha !== carga) return;
       levels = res.levels ?? [];
       atual = res.thinking;
     } catch (e) {
+      if (minha !== carga) return;
       err = e instanceof Error ? e.message : 'Falha ao carregar níveis';
     } finally {
-      loading = false;
+      if (minha === carga) loading = false;
     }
   }
 
   // untrack: ver ClaudeModelPopover — efeito que depende de prop volatil recarrega no meio do uso.
+  // `aplicando` zera junto: fechar com pedido em voo travava a lista na abertura seguinte.
   $effect(() => {
-    if (open) untrack(() => load());
+    if (open) untrack(() => { aplicando = null; load(); });
   });
 
   // Read-back manda: o Pi clampa o nivel pro que o modelo suporta, entao quem pinta a lista depois

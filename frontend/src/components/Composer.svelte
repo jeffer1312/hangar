@@ -331,6 +331,10 @@
   let claudeEffortPillEl = $state<HTMLElement | null>(null);
   let chosenModel = $state<string | null>(null);   // rotulo otimista: 'Opus' | 'Sonnet' | ...
   let chosenEffort = $state<string | null>(null);   // low | medium | high | xhigh | max | ultracode
+  // A caixa do Claude fecha ANTES do backend responder (pra nao tapar o picker no terminal), entao
+  // a falha que chega depois nao tem onde aparecer la dentro: sai aqui, na linha de erro do envio.
+  let modelError = $state<string | null>(null);
+  $effect(() => { if (claudePopOpen) modelError = null; });
 
   // ── Pill de modelo do Codex (Task C): equivalente do pill acima, so quando isCodex ──
   // Fonte de verdade do rotulo do pill e o GET /models (sidecar/dict do backend), nao a
@@ -410,7 +414,11 @@
   // nao deixa o pill mostrando uma escolha que nao pegou). 'default' resolve pra um modelo
   // concreto -> deixa o statusline ditar o rotulo; os demais aparecem capitalizados.
   function handleApply(body: ModelEffortBody): Promise<void> {
-    return setModelEffort(sessionName, body).then(() => {
+    return setModelEffort(sessionName, body).then((res) => {
+      // `pending_confirm` = o Claude abriu "Change effort level?" no terminal e ESPERA o usuario.
+      // Adiantar o pill aqui mostraria um nivel que so vale se ele tocar "Yes" — e se tocar "No",
+      // o pill ficaria mentindo ate a proxima statusline. Deixa a conversa contar o desfecho.
+      if (res?.pending_confirm) return;
       if (body.model) {
         chosenModel = body.model === 'default'
           ? null
@@ -1142,6 +1150,9 @@
     {#if sendError}
       <div class="send-error" role="alert">{sendError}</div>
     {/if}
+    {#if modelError}
+      <div class="send-error" role="alert">{modelError}</div>
+    {/if}
 
     <div class="control-row">
       <div class="control-left">
@@ -1268,6 +1279,7 @@
     currentEffort={pillEffort}
     onApply={handleApply}
     onApplied={handleEngineModelApplied}
+    onFail={(msg) => (modelError = msg)}
     onClose={() => (claudePopOpen = false)}
   />
 

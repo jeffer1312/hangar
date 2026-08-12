@@ -1138,11 +1138,23 @@ export function setEngineModel(
  * Unlike the old full-arg `/model <arg>` command, scope 'session' does NOT change the user's
  * default for new sessions.
  */
-export async function setModelEffort(name: string, body: ModelEffortBody): Promise<void> {
-  await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/model-effort`, {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
+export interface ModelEffortResposta {
+  ok: boolean;
+  scope?: string;
+  /** Nome do nivel quando o Claude abriu "Change effort level?" no terminal: NAO pegou ainda —
+   *  quem aceita e o usuario, na conversa. Tratar isto como sucesso pinta um valor que nao vale. */
+  pending_confirm?: string | null;
+  result?: string | null;
+}
+
+export async function setModelEffort(
+  name: string,
+  body: ModelEffortBody,
+): Promise<ModelEffortResposta> {
+  return apiFetch<ModelEffortResposta>(
+    `/api/sessions/${encodeURIComponent(name)}/model-effort`,
+    { method: 'POST', body: JSON.stringify(body) },
+  );
 }
 
 // provider: quem RESPONDEU de fato (pode ter virado "local" pelo fallback do backend quando falta
