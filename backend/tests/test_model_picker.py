@@ -72,6 +72,31 @@ def test_id_nao_muda_quando_so_a_DESCRICAO_fala_de_1m():
     assert [r["id"] for r in rows] == ["default", "opus", "sonnet", "haiku"]
 
 
+def test_linha_unica_com_1m_no_rotulo_tambem_ganha_o_sufixo():
+    """Caso mais comum, e o que a fixture `fable` capturou: UMA linha `Opus (1M context)`, sem
+    duplicata. O id dela é `opus[1m]` do mesmo jeito — o sufixo descreve a linha, não resolve a
+    briga —, e a keyword continua `opus`, então quem manda a keyword antiga segue chegando lá."""
+    rows = mp.parse_model_rows(PANE_FABLE)
+    opus = next(r for r in rows if r["keyword"] == "opus")
+    assert opus["id"] == "opus[1m]"
+    assert mp.model_nav_steps(rows, "opus[1m]") == 0
+    assert mp.model_nav_steps(rows, "opus") == 0
+
+
+def test_variante_fora_da_tela_falha_em_vez_de_ir_pra_linha_errada():
+    """MODEL_NUMBERS só conhece keywords. Descascar o sufixo pra usar o número de `opus` levaria o
+    cursor pra linha do Opus NORMAL — o modelo errado, calado, que é o defeito que o id único veio
+    consertar. Melhor 409 na cara."""
+    rows = [
+        {"number": 1, "keyword": "default", "id": "default", "cursor": True, "active": False},
+        {"number": 2, "keyword": "sonnet", "id": "sonnet", "cursor": False, "active": False},
+    ]
+    with pytest.raises(ValueError, match="not visible"):
+        mp.model_nav_steps(rows, "opus[1m]")
+    # sem sufixo, o fallback por número continua valendo
+    assert mp.model_nav_steps(rows, "haiku") == 4
+
+
 def test_nav_steps_leva_a_linha_certa_das_duas_opus():
     """Com as duas linhas, casar só pela keyword mandava `opus[1m]` pra primeira `opus` e aplicava
     o Opus normal, calado. O cursor está na linha 4 (Opus)."""
@@ -310,6 +335,18 @@ def test_list_model_options_reads_rows_and_closes_with_escape():
     assert keys[:2] == ["/model", "Enter"]
     assert keys[-1] == "Escape"      # so LE: fecha sem confirmar nada
     assert "s" not in keys and keys.count("Enter") == 1
+
+
+def test_apply_aceita_a_variante_de_1m_e_recusa_lixo():
+    """O gate do apply era `isalnum()`, que passou a devolver 422 pra `opus[1m]` assim que o id
+    ficou único — a tela oferecia a linha e o POST recusava. Continua recusando o que não é id."""
+    ti = TerminalInput()
+    with patch.object(ti, "_drive_model_effort", return_value={"ok": True}) as drive:
+        ti.set_model_effort("cc", model="opus[1m]", effort=None, scope="session")
+    assert drive.call_args.args[1] == "opus[1m]"
+    for mau in ["opus 5", "opus;rm -rf /", "--model", "opus[1m]x", "opus[]", "opus[1m"]:
+        with pytest.raises(ValueError, match="unknown model"):
+            ti.set_model_effort("cc", model=mau, effort=None, scope="session")
 
 
 def test_list_model_options_refuses_while_working():

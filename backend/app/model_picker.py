@@ -183,6 +183,14 @@ def model_nav_steps(rows: list[dict], target_keyword: str) -> int:
         target = next((r for r in rows if r["keyword"] == target_keyword), None)
     if target is not None:
         tnum = target["number"]
+    elif "[" in target_keyword:
+        # Alvo com sufixo de variante (`opus[1m]`) que NAO esta na tela: nao ha numero pra ele. Cair
+        # pro MODEL_NUMBERS aqui seria descascar o sufixo e navegar pra linha `opus` normal — de
+        # novo o modelo errado, calado, que e o defeito que o id unico veio consertar. Falha alta:
+        # vira PickerError 409 e o picker fecha, em vez de aplicar outra coisa.
+        raise ValueError(
+            f"target model {target_keyword!r} not visible in picker (no fixed row number for a "
+            f"context variant)")
     elif target_keyword in MODEL_NUMBERS:
         tnum = MODEL_NUMBERS[target_keyword]
     else:
