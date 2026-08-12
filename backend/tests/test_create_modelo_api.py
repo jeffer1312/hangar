@@ -51,4 +51,4 @@ def test_kimi_sem_modelo_nao_e_barrado_pela_validacao():
             "name": "km", "cwd": "/tmp", "provider": "kimi"})
     assert r.status_code == 200
     cr.assert_called_once_with("km", "/tmp", None, provider="kimi", engine=None,
-                               model=None, effort=None)
+                               model=None, effort=None, context_window=None)

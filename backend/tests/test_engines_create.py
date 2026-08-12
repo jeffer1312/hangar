@@ -130,3 +130,75 @@ def test_resume_do_arquivo_aceita_motor(tmp_path, monkeypatch):
     info = r.create("s", str(tmp_path), resume_session_id=sid, engine="kimi")
     assert visto["command"] == f"cp-engine --exec kimi -- claude --resume {sid}"
     assert info.engine == "kimi"
+
+
+# ── Task 3: escolha de modelo/janela entra no prefixo cp-engine ────────────────────────────────
+
+
+def test_create_com_escolha_poe_modelo_e_esforco_no_comando(tmp_path, monkeypatch):
+    # A flag do modelo chega ao claude; o uuid é aleatório, então confere por prefixo.
+    visto = {}
+    _reg(tmp_path, monkeypatch, visto).create("s", str(tmp_path), model="k3-256k", effort="high")
+    assert visto["command"].startswith(
+        "claude --session-id ") and visto["command"].endswith("--model k3-256k --effort high")
+
+
+def test_create_com_motor_e_escolha_remonta_o_prefixo_com_modelo_e_janela(tmp_path, monkeypatch):
+    """O prefixo do motor leva modelo E janela: a flag sozinha ganharia só de ANTHROPIC_MODEL, e o
+    ambiente (aliases, subagente, janela) voltaria pro modelo do motor — o cenário "motor de 1M
+    com modelo de 262k"."""
+    _motor()
+    visto = {}
+    _reg(tmp_path, monkeypatch, visto).create("s", str(tmp_path), engine="kimi",
+                                              model="k3-256k", context_window=262144)
+    assert visto["command"].startswith(
+        "cp-engine --exec kimi --model k3-256k --context 262144 -- claude --session-id ")
+
+
+def test_create_com_motor_e_modelo_sem_janela_omite_o_context(tmp_path, monkeypatch):
+    # Provedor que não reporta context_length: sem o número do modelo, o --context não pode sair
+    # (exportar a janela do MOTOR com outro modelo é o bug de volta).
+    _motor()
+    visto = {}
+    _reg(tmp_path, monkeypatch, visto).create("s", str(tmp_path), engine="kimi",
+                                              model="k3-256k", context_window=None)
+    assert visto["command"].startswith(
+        "cp-engine --exec kimi --model k3-256k -- claude --session-id ")
+
+
+def test_resume_preserva_modelo_e_janela_do_pane(tmp_path, monkeypatch):
+    """Dívida de teste do caminho de resume: sem o par procinfo._model_of/_env_var_of aplicado, a
+    sessão ressuscita com a flag num modelo e o AMBIENTE noutro (as cinco chaves, o subagente e a
+    janela voltariam pro modelo do motor) — e nada na tela acusa."""
+    _motor()
+    monkeypatch.setattr(procinfo, "_model_of", lambda pid: ("k3-256k", "high"))
+    monkeypatch.setattr(procinfo, "_env_var_of", lambda pid, nome: "262144")
+    visto = {}
+    r, sid = _prep_resume(tmp_path, monkeypatch, visto, "kimi")
+    info = r.resume("s", sid)
+    assert visto["command"] == (
+        f"cp-engine --exec kimi --model k3-256k --context 262144 -- "
+        f"claude --resume {sid} --model k3-256k --effort high")
+    assert info.engine == "kimi"
+
+
+def test_resume_com_modelo_sem_janela_omite_o_context(tmp_path, monkeypatch):
+    _motor()
+    monkeypatch.setattr(procinfo, "_model_of", lambda pid: ("k3-256k", "high"))
+    monkeypatch.setattr(procinfo, "_env_var_of", lambda pid, nome: None)
+    visto = {}
+    r, sid = _prep_resume(tmp_path, monkeypatch, visto, "kimi")
+    r.resume("s", sid)
+    assert visto["command"] == (
+        f"cp-engine --exec kimi --model k3-256k -- claude --resume {sid} --model k3-256k --effort high")
+
+
+def test_resume_sem_modelo_no_pane_nao_poe_flags_nem_context(tmp_path, monkeypatch):
+    # Sessão que subiu sem escolha: o resume tem que continuar byte por byte o de hoje.
+    _motor()
+    monkeypatch.setattr(procinfo, "_model_of", lambda pid: (None, None))
+    monkeypatch.setattr(procinfo, "_env_var_of", lambda pid, nome: "262144")
+    visto = {}
+    r, sid = _prep_resume(tmp_path, monkeypatch, visto, "kimi")
+    r.resume("s", sid)
+    assert visto["command"] == f"cp-engine --exec kimi -- claude --resume {sid}"

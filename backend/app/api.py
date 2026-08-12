@@ -1028,6 +1028,25 @@ async def create_session(body: CreateBody):
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
 
+    # Janela do modelo escolhido, pra entrar no env do motor (Task 3). O número já está no cache do
+    # catálogo do provedor (_engine_models); vir do navegador seria deixar um terceiro escolher uma
+    # variável de ambiente — e ainda ficaria None justamente nos provedores que não reportam
+    # context_length. Com motor mas sem modelo (ou vice-versa), nada a resolver: o env segue o motor.
+    janela = None
+    if body.engine and body.model:
+        try:
+            for m in await _engine_models(body.engine):
+                if m["id"] == body.model:
+                    janela = m.get("context_length")
+                    break
+        except HTTPException:
+            # _engine_models devolve 502 quando o cache expirou e o /v1/models não responde, e 409
+            # quando o motor sumiu do arquivo entre a validação e aqui. A janela é enfeite: deixar
+            # essa chamada derrubar a criação faria o provedor fora do ar IMPEDIR de abrir sessão —
+            # coisa que hoje não acontece, e que contradiz o Step 5 da Task 5 ("provedor parado: a
+            # sessão ainda cria"). A sessão sobe sem a var e o CLI usa o default dele.
+            janela = None
+
     # Reconciliar e criar a sessão sob a MESMA trava (ciclo_conta), só no caminho que consome o
     # config dir (Claude/Pi — codex nem recebe ele no create_codex). Sem o ciclo, um DELETE da
     # conta no meio via a lista de sessões ainda vazia e apagaria a pasta embaixo da sessão que
@@ -1061,7 +1080,7 @@ async def create_session(body: CreateBody):
                         return await asyncio.to_thread(
                             registry.create, body.name, body.cwd, body.config_dir,
                             provider=body.provider, engine=body.engine,
-                            model=body.model, effort=body.effort)
+                            model=body.model, effort=body.effort, context_window=janela)
                     except ValueError as e:
                         raise HTTPException(409, str(e))
                 finally:
@@ -1075,7 +1094,7 @@ async def create_session(body: CreateBody):
             return await registry.create_codex(body.name, body.cwd, body.initial_prompt)
         return await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir,
                                        provider=body.provider, engine=body.engine,
-                                       model=body.model, effort=body.effort)
+                                       model=body.model, effort=body.effort, context_window=janela)
     except ValueError as e:
         raise HTTPException(409, str(e))
 

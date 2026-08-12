@@ -146,3 +146,75 @@ def test_pids_com_config_dir_psutil_casa_pelo_env(via_psutil, monkeypatch):
 def test_pids_com_config_dir_pid_morto_nao_levanta(via_psutil):
     # Mesmo contrato de degradacao dos vizinhos: pid morto/ilegivel nunca vira excecao.
     assert procinfo._pids_com_config_dir(Path("/tmp/.claude-conta-que-nao-existe-xyz")) == ([], True)
+
+
+# ── Task 3: _model_of e _env_var_of (o par que o resume usa) ───────────────────────────────────
+
+
+def test_model_of_le_modelo_e_esforco_do_cmdline(monkeypatch):
+    """O parse que o resume consome: `claude --resume <sid> --model X --effort Y` tem que
+    devolver exatamente o par que subiu — senão o resume remonta a flag errada, calado."""
+    monkeypatch.setattr(procinfo, "_cmdline",
+                        lambda pid: "claude --session-id abc --model k3-256k --effort high")
+    assert procinfo._model_of(1234) == ("k3-256k", "high")
+
+
+def test_model_of_prefere_thinking_quando_nao_ha_effort(monkeypatch):
+    # O Pi usa --thinking, não --effort; o 2o elemento tem que vir do flag do binário que subiu.
+    monkeypatch.setattr(procinfo, "_cmdline",
+                        lambda pid: "pi --session-id abc --model kimi-coding/k3 --thinking high")
+    assert procinfo._model_of(1234) == ("kimi-coding/k3", "high")
+
+
+def test_model_of_sem_flags_degrada_para_none(monkeypatch):
+    # Sessão aberta sem escolha: resume deve voltar a montar o comando pelado (comportamento de hoje).
+    monkeypatch.setattr(procinfo, "_cmdline", lambda pid: "claude --session-id abc")
+    assert procinfo._model_of(1234) == (None, None)
+    monkeypatch.setattr(procinfo, "_cmdline", lambda pid: "")
+    assert procinfo._model_of(1234) == (None, None)
+
+
+def test_model_of_processo_real_sem_modelo_degrada():
+    # Caminho /proc de verdade: o pytest não sobe com --model, e o contrato é degradar, não estourar.
+    assert procinfo._model_of(os.getpid()) == (None, None)
+
+
+def test_model_of_igual_na_implementacao_psutil(via_psutil, monkeypatch):
+    # Mesmo parse, dispatch psutil (Windows/macOS): o monkeypatch é em _cmdline_psutil — o _model_of
+    # despacha pra ela via _cmdline, e virar só o _TEM_PROC daria NameError (a receita do contrato).
+    monkeypatch.setattr(procinfo, "_cmdline_psutil",
+                        lambda pid: "claude --session-id abc --model k3-256k --effort high")
+    assert procinfo._model_of(1234) == ("k3-256k", "high")
+
+
+def test_model_of_psutil_real_sem_modelo_degrada(via_psutil):
+    assert procinfo._model_of(os.getpid()) == (None, None)
+
+
+def test_env_var_of_le_variavel_do_environ(tmp_path, monkeypatch):
+    # Mesmo truque do test_engine_of_le_o_cp_engine_do_proc (test_engines_create.py): arquivo
+    # environ de mentira apontado por _proc_environ_path.
+    environ = tmp_path / "environ"
+    environ.write_bytes(b"PATH=/usr/bin\x00CLAUDE_CODE_MAX_CONTEXT_TOKENS=262144\x00HOME=/home/x\x00")
+    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(environ))
+    assert procinfo._env_var_of(1234, "CLAUDE_CODE_MAX_CONTEXT_TOKENS") == "262144"
+
+
+def test_env_var_of_ausente_devolve_none(tmp_path, monkeypatch):
+    environ = tmp_path / "environ"
+    environ.write_bytes(b"PATH=/usr/bin\x00")
+    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(environ))
+    assert procinfo._env_var_of(1234, "CLAUDE_CODE_MAX_CONTEXT_TOKENS") is None
+
+
+def test_env_var_of_igual_na_implementacao_psutil(via_psutil, monkeypatch):
+    monkeypatch.setattr(procinfo, "_env_psutil",
+                        lambda pid: {"PATH": "/usr/bin", "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "262144"})
+    assert procinfo._env_var_of(1234, "CLAUDE_CODE_MAX_CONTEXT_TOKENS") == "262144"
+    assert procinfo._env_var_of(1234, "CHAVE_QUE_NAO_EXISTE") is None
+
+
+def test_env_var_of_le_o_environ_real_no_psutil(via_psutil):
+    # Leitura real no dispatch psutil: o environ do pytest tem PATH; a chave volta igual.
+    esperado = psutil.Process(os.getpid()).environ().get("PATH")
+    assert procinfo._env_var_of(os.getpid(), "PATH") == esperado

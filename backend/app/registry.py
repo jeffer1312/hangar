@@ -1130,7 +1130,7 @@ class SessionRegistry:
     def create(self, name: str, cwd: str, config_dir: str | None = None,
                resume_session_id: str | None = None, provider: str = "claude",
                engine: str | None = None, model: str | None = None,
-               effort: str | None = None) -> SessionInfo:
+               effort: str | None = None, context_window: int | None = None) -> SessionInfo:
         # Nome tmux nao aceita "."/":"/espaco -> sanitiza igual ao rename. Varias sessoes na MESMA
         # pasta sao permitidas: cada uma tem nome unico + --session-id proprio -> jsonl proprio.
         name = sanitize_session_name(name)
@@ -1208,7 +1208,18 @@ class SessionRegistry:
             # a key ficaria em /proc/<pid>/cmdline, legível por qualquer usuário da máquina. Depois do
             # exec o cmdline é o do claude, então a resolução de transcript por --session-id/--resume
             # continua funcionando.
-            cmd = f"cp-engine --exec {engine} -- {cmd}"
+            #
+            # Modelo e janela entram NO PREFIXO, não só no comando: o env que o cp-engine aplica
+            # exporta o mesmo modelo em cinco chaves e a janela em outra — a flag sozinha ganharia só
+            # de ANTHROPIC_MODEL (ver engines.env_de). A janela vem do catálogo do provedor, resolvida
+            # no backend (api.create_session); quem passa por aqui sem ela (ex: resume do Arquivo)
+            # simplesmente não exporta a var — o CLI usa o default dele.
+            pre = ["cp-engine", "--exec", engine]
+            if model:
+                pre += ["--model", model]
+                if context_window:
+                    pre += ["--context", str(context_window)]
+            cmd = shlex.join(pre + ["--"]) + " " + cmd
         base = (Path(config_dir) / "projects") if config_dir else self.projects_dir
         # Pi tem layout PROPRIO (~/.pi/agent/sessions/<slug>/<ts>_<uuid>.jsonl) e o arquivo so nasce
         # quando a TUI grava o 1o turno -> nao ha path pra pre-semear. jsonl=None e cache INTOCADO
