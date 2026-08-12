@@ -61,10 +61,26 @@ _PI_BOX_RE = re.compile(r"^\s*[╭╰][─\s]*[╮╯]\s*$")
 # Separador do overlay do /model: `▔` (U+2594), não a régua reta. Medido nas fixtures
 # pane_model_picker_*.txt — nelas o _RULE_RE não casa NADA.
 _OVERLAY_RULE_RE = re.compile(r"^[\s▔]*▔{10,}[\s▔]*$")
+# Eco do prompt do usuario no pane do Kimi: ` ✨ <texto>`. E o `❯` do Claude com outro glifo — sem
+# ele o preview passava da resposta ANTERIOR direto pra dentro da pergunta seguinte, e a bolha do
+# assistente terminava com o texto que o proprio usuario digitou.
+_KIMI_PROMPT_RE = re.compile(r"^\s*✨\s")
+
+# Rodape de dica do Kimi, DUAS formas — capturadas do pane em 11/08/2026, 150 quadros:
+#     '  ⠋ working... · Tip: /goal for multi-step work with a clear finish line'   (em voo)
+#     '  🌓 · Tip: Try /dance for a hidden Easter egg'                              (parado)
+# O glifo GIRA nas duas (as 8 fases da lua U+1F311..U+1F318 e o ciclo braille U+2800..U+28FF
+# aparecem entre os quadros), entao a ancora e a FORMA da linha — spinner + ` · Tip: ` — e nunca um
+# glifo fixo. Nenhum dos dois cai nas paradas que ja existiam: SPINNER_GLYPHS (state.py) nao tem
+# braille nem lua, e o _ASCII_SPINNER_RE casa asterisco.
+_KIMI_TIP_RE = re.compile(r"^\s*[⠀-⣿\U0001f311-\U0001f318]\s.*·\s*Tip:")
+
 _STOPS_BY_PROVIDER = {"pi": (_PI_BOX_RE,),
                       # Kimi desenha o composer com a MESMA caixa arredondada do Pi (medido num
-                      # pane real, 0.34.0) -> a ancora de corte e a mesma.
-                      "kimi": (_PI_BOX_RE,)}
+                      # pane real, 0.34.0) -> a ancora de corte e a mesma. Mas a caixa e o rodape
+                      # MAIS BAIXO: entre ela e a resposta ainda cabem o eco do prompt e a dica, e
+                      # por isso os dois precisam parar o preview por conta propria.
+                      "kimi": (_PI_BOX_RE, _KIMI_PROMPT_RE, _KIMI_TIP_RE)}
 
 # Bloco de FERRAMENTA do Pi. O _TOOL_BLOCK_RE exige "Nome(" colado, e o Pi escreve de pelo menos
 # cinco jeitos — medidos no pane em 01/08/2026:

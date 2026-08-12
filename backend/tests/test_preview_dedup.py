@@ -470,3 +470,42 @@ def test_broker_segue_o_stem_da_conexao_mais_recente():
         assert _prev.PreviewBroker.get("sessao-z", "pi").stem_get() == "stem-novo"
     finally:
         _prev.PreviewBroker._brokers.pop("sessao-z", None)
+
+
+def _pane_kimi_eco_e_dica() -> str:
+    return (Path(__file__).parent / "fixtures" / "pane_kimi_eco_e_dica.txt").read_text(
+        encoding="utf-8")
+
+
+def test_preview_kimi_nao_vaza_eco_do_prompt_nem_a_dica():
+    """O pane do Kimi guarda DUAS coisas entre a resposta e a caixa do composer, e as duas vazavam
+    pra dentro da bolha do assistente (relatado com print do app em 11/08/2026):
+
+        …prosa do assistente…
+         ✨ sim                                        <- o proprio prompt do usuario, ecoado
+          🌓 · Tip: Try /dance for a hidden Easter egg  <- rodape de dica
+
+    O Kimi herdou a config do Pi (`_PI_BOX_RE` como unica parada) porque ele desenha a MESMA caixa
+    arredondada. Verdade — mas a caixa fica ABAIXO das duas linhas, entao a parada chegava tarde.
+
+    Fixture = captura real do pane (150 quadros a 1/s), nao texto inventado: as duas linhas trazem
+    glifo ANIMADO (8 fases da lua parado, ciclo braille em voo) e escrever a regra olhando print
+    fixaria um quadro so.
+    """
+    out = extract_assistant_text(_pane_kimi_eco_e_dica(), "kimi")
+    assert "✨" not in out, "o prompt do usuario voltou dentro da resposta do assistente"
+    assert "Tip:" not in out, "o rodape de dica do TUI entrou na resposta"
+    # e a prosa de verdade continua inteira — parada cedo demais seria a troca de um bug por outro
+    assert "Quer que eu faça?" in out
+    assert "sincroniza só para o Claude" in out
+
+
+def test_preview_kimi_corta_a_dica_nas_DUAS_formas():
+    """Parado a linha comeca com fase da lua; em voo, com spinner braille + "working...". Uma regra
+    que so cobrisse a forma do print (a lua) deixaria o vazamento vivo durante o turno, que e
+    justamente quando o preview ao vivo existe."""
+    for chrome in ("  🌓 · Tip: Try /dance for a hidden Easter egg",
+                   "  ⠋ working... · Tip: /goal for multi-step work with a clear finish line"):
+        pane = "● resposta do assistente\n\n" + chrome + "\n ╭───────────╮\n │ >         │\n ╰───────────╯"
+        out = extract_assistant_text(pane, "kimi")
+        assert out == "resposta do assistente", f"nao cortou: {out!r}"

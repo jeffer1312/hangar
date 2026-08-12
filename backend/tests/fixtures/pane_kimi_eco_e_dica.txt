@@ -1,0 +1,50 @@
+
+ ● Resposta curta: não, só parcialmente. Sou o Kimi Code CLI, não o Claude — então as configurações dele não vêm automaticamente. O que existe:
+
+   Skills que eu realmente tenho carregadas (escopo User, em ~/.agents/skills/):
+   • agent-browser, emil-design-eng, falar, find-skills, humanizer, impeccable
+
+   Skills suas em ~/.claude/skills/ que eu NÃO vejo (o Claude tem, eu não):
+   • conselho-5-agentes, design-sprint, graphify, handoff, hooked-ux, ios-hig-design, learned, orchestrating-idea-to-push, orquestrar, refactoring-ui, scout-fix, supply-chain-hardening, ux-heuristics
+
+   Hooks (~/.claude/hooks/): não tenho acesso — são específicos do Claude Code. O Kimi Code tem um sistema próprio de hooks configurável no config.toml, mas seus scripts (skill-suggester.py,
+   guard_tmux.py, etc.) não estão conectados a ele. Aliás, vejo que existe um sync-skills.sh lá — talvez seja justamente pra isso.
+
+   Se quiser, posso:
+   1. Ler o sync-skills.sh e ver se ele já faz a ponte ~/.claude/skills → ~/.agents/skills (e rodá-lo, se fizer sentido), ou
+   2. Criar symlinks das skills faltantes para o diretório que eu leio.
+
+   Qual prefere?
+
+ ✨ onde ta esse sync-skills.sh?
+
+ ● It's in ~/.claude/hooks/sync-skills.sh. Let me confirm path and maybe show it briefly.
+
+ ● Ran a command
+   $ ls -la ~/.claude/hooks/sync-skills.sh && head -30 ~/.claude/hooks/sync-skills.sh
+   lrwxrwxrwx 1 jefferson jefferson 52 jul 15 11:55 /home/jefferson/.claude/hooks/sync-skills.sh -> /home/jefferson/Projetos/skills/hooks/sync-skills.sh
+   #!/usr/bin/env bash
+   # Pulls jeffer1312/skills repo and syncs symlinks into ~/.claude/skills/
+   ... (28 more lines, ctrl+o to expand)
+
+ ● Está em ~/.claude/hooks/sync-skills.sh, que é um symlink para /home/jefferson/Projetos/skills/hooks/sync-skills.sh.
+
+   O que ele faz (pelo início do script):
+
+   • Faz git pull do repo ~/Projetos/skills (seu repo de skills, jeffer1312/skills)
+   • Cria symlinks de cada pasta com SKILL.md para ~/.claude/skills/
+   • Sincroniza scripts de hooks (*.sh, *.py) para ~/.claude/hooks/
+   • É disparado como hook SessionStart do Claude Code
+
+   Ou seja: ele sincroniza só para o Claude — nada aponta para ~/.agents/skills/ (onde eu leio skills). Por isso eu só vejo as 6 que já existem lá.
+
+   Se quiser que eu também enxergue as outras, dá pra estender o script com um segundo destino (~/.agents/skills/) ou só criar os symlinks manualmente agora. Quer que eu faça?
+
+ ✨ sim
+
+  🌓 · Tip: Try /dance for a hidden Easter egg
+ ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ >                                                                                                                                                                                                  │
+ ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ 🤖 K3 │ 📁 projeto-exemplo [ABC-123] │ ⚡5h:25% ↺1h25m │ 📅7d:30% ↺seg 14h·5d22h │ 🕐 16:34
+                                                                                                                                                                                 context: 3% (23.5k/1M)
