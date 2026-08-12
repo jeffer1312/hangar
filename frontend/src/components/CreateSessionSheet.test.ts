@@ -214,6 +214,13 @@ describe('CreateSessionSheet — reabertura com a lista de contas fora do ar', (
     const erro = [...document.querySelectorAll('.model-hint')]
       .find((p) => p.textContent?.includes('sessão abre no padrão'));
     expect(erro?.getAttribute('role')).toBe('alert');
+
+    // A mensagem de FALHA AO CRIAR também é anunciada (role=alert) — é o erro do fluxo principal
+    // desta tela, e é a que nenhum teste cobria.
+    vi.mocked(onCreate).mockRejectedValueOnce(new Error('falha ao criar'));
+    (document.querySelector('.primary-btn') as HTMLElement).click();
+    await flush();
+    expect(document.querySelector('.error-msg')?.getAttribute('role')).toBe('alert');
     unmount(comp);
   });
 });

@@ -556,9 +556,9 @@
           {/if}
           {#if avisoConta && (!contaCriadaPath || selectedConfig === contaCriadaPath)}
             {#if contaErro}
-              <p class="conta-hint" >{avisoConta}</p>
+              <p class="conta-hint" role="alert">{avisoConta}</p>
             {:else}
-              <p class="conta-hint" >{avisoConta}</p>
+              <p class="conta-hint" role="status" aria-live="polite" aria-atomic="true">{avisoConta}</p>
             {/if}
           {/if}
         </div>
@@ -609,7 +609,7 @@
       {/if}
 
       {#if error}
-        <p class="error-msg" >{error}</p>
+        <p class="error-msg" role="alert">{error}</p>
       {/if}
 
       <button class="primary-btn" onclick={create} disabled={loading || !name.trim()}>
