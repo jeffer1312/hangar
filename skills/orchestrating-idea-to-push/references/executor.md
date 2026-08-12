@@ -292,6 +292,14 @@ risco conhecido, e quem decide é o árbitro.
 Você não enxerga imagem? O passo continua sendo seu — é o mesmo protocolo do passo 4: o
 subagente de visão (ou o `see`) é quem olha, você é quem manda e quem lê a resposta.
 
+**Contrato dizendo `Barra: nenhuma — decisão do usuário`: pule este passo inteiro** e commite
+com os passos 1 a 4. Não invente uma barra por conta própria — a referência é escolha do
+usuário, e uma escolhida por você mede o teu palpite, não o trabalho.
+
+**Seu diff encosta em pixel e o contrato não traz nem barra nem dispensa? Pare e reporte ao
+árbitro antes de commitar.** É decisão de fase 1 que ficou em branco; ele pergunta ao usuário
+e te devolve a resposta. Commitar assim custa a Task inteira, porque o revisor devolve.
+
 ### O que vai no reporte
 
 Por estado: caminho do print, o que você **clicou** e o que aconteceu, a pergunta que fez a

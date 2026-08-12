@@ -95,10 +95,35 @@ E a linha entre decidir e acordar o usuário:
 | Ação irreversível fora do repo: push, MR, registrar domínio, subir asset, pagar | **sempre o usuário** |
 | Outra sessão escrevendo na árvore | resolve com ela; não resolveu, **acorda** |
 | Item da fase 1 faltando no plano (sem teto, sem intocáveis) | **decide** o default conservador, registra como decisão sua, conta depois |
+| Task mexe em pixel e o plano não trouxe **barra** | **acorda** — ver abaixo. É a exceção da linha acima: barra não tem default conservador |
 
 Parar **entre** Tasks é limpo; parar **durante** deixa a árvore num estado que ninguém
 entende depois. Ao acordar o usuário, entregue a decisão pronta: o que está em jogo, as
 opções, e o que você recomenda.
+
+### Task visual sem barra: pergunte ANTES de liberar
+
+O plano diz quais arquivos cada Task toca — então você sabe, antes de abrir o portão, se ela
+mexe em pixel. Mexeu e o plano não trouxe barra: **pergunte ao usuário antes de liberar a
+Task**, não depois. Perguntar depois custa a Task inteira, porque a comparação cega acontece
+antes do commit.
+
+Barra é a exceção ao "decide o default conservador" da tabela acima. Não existe default aqui —
+qual referência é dura depende do gosto e do contexto do usuário, e uma escolhida por você é o
+portão medindo o teu palpite. Mas **a pergunta é sua pra formular**: chegue com 2-3 candidatas já verificadas
+(nomeada, buscável, comparável) mais a opção `sem barra`. A receita de como montar essa lista
+está em `planejamento.md`, seção "Você PROPÕE a barra; ele escolhe".
+
+Escreva a resposta no contrato, na linha daquela Task, dos dois jeitos:
+
+```markdown
+Task 3 — Barra: `EnginesSheet.svelte`, desktop 1440px, modal centrado
+Task 5 — Barra: nenhuma — decisão do usuário, 2026-08-12
+```
+
+**`nenhuma` registrado vale tanto quanto uma barra.** É o que faz o revisor julgar a Task pelo
+protocolo visual normal em vez de devolver por falta de barra — e é por isso que o registro
+precisa estar no contrato, não só na tua memória da conversa.
 
 ## Ociosidade — o sinal de que alguma coisa não chegou
 

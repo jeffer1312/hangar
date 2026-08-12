@@ -59,6 +59,35 @@ produto que o usuário salvou) vale igual, desde que ele entregue o arquivo aqui
 Sem barra escrita, o portão visual continua sendo o autor perguntando ao próprio pixel se
 está bom — e "está bom?" devolve "está bom". Task que não desenha nada não precisa de barra.
 
+#### Você PROPÕE a barra; ele escolhe
+
+Não pergunte *"qual é a barra?"*. Quem usa o app sabe o que quer ver, não necessariamente qual
+referência funciona como barra — e barra malformada (categoria em vez de tela, coisa que quem
+julga não consegue abrir, estado que não casa) é pior que barra nenhuma, porque parece que o
+portão existe.
+
+Chegue com **duas ou três candidatas prontas**, cada uma já passada pelos três testes, e uma
+frase dizendo por que aquela é dura:
+
+```
+Task 3 mexe na folha de Configurações. Barra — escolha uma:
+
+a) `EnginesSheet.svelte` no desktop, modal centrado, 1440px — é a folha mais acabada
+   do app e usa o mesmo par `wide`/`centered`; se a nova não empatar com ela, dá pra ver.
+b) `Git.svelte`, mesma largura — mesmo material de vidro, mas com abas; boa se você quer
+   cobrar a navegação por aba junto.
+c) Um print que você salvar de outro produto — me manda o caminho e eu uso esse.
+d) Sem barra nesta Task.
+```
+
+**"Sem barra" é opção legítima e fica na lista.** Escolhida, ela entra no plano como
+`Barra: nenhuma — decisão do usuário, <data>`, e o portão visual daquela Task volta a ser o
+protocolo normal do `executor.md` (abrir, clicar, capturar, olhar), sem a comparação cega.
+Escolha registrada não é buraco; buraco é o campo em branco que ninguém decidiu.
+
+Se as três candidatas te parecerem fracas, diga isso e proponha outras — barra que você mesmo
+não defenderia não deve ir pra lista só pra ter três itens.
+
 Sem isso as primeiras Tasks passam por um portão que ainda não existe, e o preço é uma
 auditoria retroativa que reabre Task já aprovada — mais cara que ter escrito três linhas.
 

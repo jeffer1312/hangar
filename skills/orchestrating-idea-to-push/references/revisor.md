@@ -228,6 +228,20 @@ risco declarado): isso **não** é bloqueador automático. Você julga o buraco 
 tela quebrada é bloqueador com receita; acabamento aquém da barra, sem defeito funcional, é
 `REGISTRADO`.
 
+**Task que mexe em pixel e não tem barra nenhuma no contrato: `DEVOLVIDO`.** Não é bloqueador
+de código — é decisão da fase 1 que ninguém tomou, e problema de processo não vira achado
+técnico. Devolva ao árbitro dizendo *"Task N desenha tela e o contrato não traz barra nem
+dispensa; a barra é decisão do usuário"*, e pare por aí: você não propõe a barra, não escolhe
+uma, e não julga como se ela existisse. As duas coisas que a falta de barra faria em silêncio
+— o executor pular a comparação cega e você aprovar sem cobrar — são exatamente o que este
+`DEVOLVIDO` tira do silêncio.
+
+**Contrato dizendo `Barra: nenhuma — decisão do usuário`: julgue normal.** A Task passa pelo
+portão visual sem a comparação cega (prints por estado, você olha o conjunto no fim, estado
+faltando continua sendo achado) e **você não cobra barra nenhuma**. Escolha registrada do
+usuário é ordem, não lacuna — cobrar barra depois que ele dispensou é reabrir decisão já
+tomada.
+
 **Como olhar sem torrar contexto:** não acompanhe print por print enquanto o trabalho anda. Quem
 captura descreve — o executor e a tua sessão verificadora têm como enxergar (comando de visão local
 ou subagente de visão; numa máquina com o helper `see`, é ele). Deixe os dois trabalharem e, **no
