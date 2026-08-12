@@ -896,7 +896,12 @@
         // preview). Sair de `working` é o outro dono — sem isto a última frase em voo ficaria
         // congelada na tela depois do fim.
         if (stateEvent?.state !== 'working' && previewText) previewText = '';
-      } catch {}
+      } catch (err) {
+        // Mesmo motivo do handler de `preview` logo abaixo: engolir aqui congela a prévia na tela
+        // (este handler virou o OUTRO dono dela) e ainda deixa o `stateEvent` preso no valor
+        // antigo. O erro não pode derrubar o SSE, mas tem que dar pra ver no dev.
+        if (import.meta.env.DEV) console.debug('state: evento ilegivel', err);
+      }
     });
 
     // Heartbeat do backend: so prova de vida (reseta o watchdog numa conexao ociosa, sem msgs).

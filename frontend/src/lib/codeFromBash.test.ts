@@ -48,3 +48,21 @@ describe('caminhoDeCodigoNoComando', () => {
     expect(alvo(null)).toBeNull();
   });
 });
+
+describe('flags que mudam a natureza da saída (achado da revisão pré-push)', () => {
+  it('grep que não imprime conteúdo', () => {
+    expect(alvo('grep -c foo x.ts')).toBeNull();      // conta
+    expect(alvo('grep -l foo x.ts')).toBeNull();      // só o nome do arquivo
+    expect(alvo('grep -q foo x.ts')).toBeNull();      // nada
+    expect(alvo('grep -rn foo x.ts')).toBe('x.ts');   // este imprime, continua valendo
+  });
+
+  it('sed que edita no lugar não imprime nada', () => {
+    expect(alvo("sed -i 's/a/b/' x.ts")).toBeNull();
+    expect(alvo("sed -n '1,20p' x.ts")).toBe('x.ts');
+  });
+
+  it('nl saiu da lista: numera com padding e o gutter não reconhece', () => {
+    expect(alvo('nl x.py')).toBeNull();
+  });
+});

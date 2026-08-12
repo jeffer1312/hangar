@@ -11,7 +11,21 @@
 // Comandos cuja saída É o conteúdo do arquivo (inteiro, uma faixa, ou as linhas que casaram).
 // O verbo importa e não dá pra dispensar: `python3 script.py` também cita um .py, mas o que sai
 // dali é o que o programa IMPRIME, não o código dele — realçar seria pintar a coisa errada.
-const DESPEJAM = new Set(['cat', 'sed', 'head', 'tail', 'bat', 'grep', 'rg', 'nl', 'tac']);
+const DESPEJAM = new Set(['cat', 'sed', 'head', 'tail', 'bat', 'grep', 'rg', 'tac']);
+
+// `nl` saiu da lista: ele numera com PADDING à esquerda (`     1\tdef foo():`), e o detector de
+// gutter do ReadView exige o dígito colado no início da linha — o número acabava realçado como se
+// fosse código. Achado na revisão pré-push.
+
+// Flags que mudam a NATUREZA da saída: ela deixa de ser o conteúdo do arquivo.
+//   grep -c  -> uma contagem      grep -l/-L -> nomes de arquivo      grep -q -> nada
+//   sed -i   -> edita no lugar, não imprime
+// Sem isto o verbo sozinho decidia, e um `grep -c foo x.ts` se oferecia pra realce.
+const FLAGS_QUE_MUDAM: Record<string, RegExp> = {
+  grep: /^-[a-zA-Z]*[clLq]/,
+  rg: /^-[a-zA-Z]*[clLq]|^--count$|^--files-with-matches$/,
+  sed: /^-[a-zA-Z]*i/,
+};
 
 // Extensões que o realce conhece e que aparecem neste repo. Sem lista, `.log`/`.txt`/`.csv` entrariam
 // como se fossem código.
@@ -36,6 +50,9 @@ export function caminhoDeCodigoNoComando(cmd: string | null | undefined): string
   const tokens = s.split(/\s+/);
   const verbo = tokens[0]?.split('/').pop() ?? '';   // aceita /usr/bin/cat
   if (!DESPEJAM.has(verbo)) return null;
+
+  const proibida = FLAGS_QUE_MUDAM[verbo];
+  if (proibida && tokens.slice(1).some((t) => t.startsWith('-') && proibida.test(t))) return null;
 
   // Candidatos: token com extensão conhecida, fora de aspas simples (o `sed -n '1,20p'` tem ponto
   // no meio e não pode virar caminho).

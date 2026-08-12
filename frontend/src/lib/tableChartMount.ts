@@ -91,6 +91,10 @@ async function desenhar(alvo: HTMLElement, t: TabelaLida, col: number): Promise<
 
   // A bolha muda de largura (painel abre, janela redimensiona) e o uPlot não é fluido sozinho.
   const ro = new ResizeObserver(() => {
+    // A bolha inteira é recriada quando a mensagem re-renderiza (replay do SSE reatribui o evento e
+    // o {@html} refaz os filhos), e aí este palco vira nó solto — o uPlot e este observer ficariam
+    // pendurados sem ninguém pra desmontá-los. Auto-desmonte quando o alvo sai do documento.
+    if (!alvo.isConnected) { ro.disconnect(); u.destroy(); return; }
     const l = alvo.clientWidth;
     if (l > 0) u.setSize({ width: l, height: 180 });
   });
@@ -150,10 +154,26 @@ export function enhanceTables(raiz: HTMLElement): void {
       limpar = null;
       palco.textContent = '';
       if (!aberto) return;
-      void desenhar(palco, lida, Number(seletor.value || 0)).then((fim) => {
-        if (minha !== geracao) { fim(); return; }   // chegou tarde: desfaz em vez de pintar
-        limpar = fim;
-      });
+      const voltarPraTabela = () => {
+        aberto = false;
+        palco.hidden = true;
+        el.hidden = false;
+        seletor.hidden = true;
+        botao.textContent = 'Gráfico';
+        botao.classList.remove('ativo');
+      };
+      void desenhar(palco, lida, Number(seletor.value || 0))
+        .then((fim) => {
+          if (minha !== geracao) { fim(); return; }   // chegou tarde: desfaz em vez de pintar
+          limpar = fim;
+        })
+        .catch((err) => {
+          // O import do uPlot pode falhar (offline, chunk 404). Sem isto o clique já tinha
+          // ESCONDIDO a tabela e mostrado o palco vazio: o usuário ficava sem tabela e sem
+          // gráfico, olhando um retângulo, com o botão dizendo "Tabela" como se tivesse dado certo.
+          console.error('gráfico da tabela: falhou ao desenhar', err);
+          if (minha === geracao) voltarPraTabela();
+        });
     };
 
     botao.addEventListener('click', () => {
