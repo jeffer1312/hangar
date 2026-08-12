@@ -25,6 +25,40 @@ function sessionFile(ctx: any): string | null {
   return ctx?.sessionManager?.getSessionFile?.() ?? null;   // --no-session: nada pra rastrear
 }
 
+// ── de quem e este pane ────────────────────────────────────────────────────────────────────────
+// O Pi cria, DENTRO DO MESMO PROCESSO, sessoes que nao sao a conversa do usuario: a extensao
+// `pi-subagents` FORKA a sessao pra dar contexto a cada subagente (subagent-executor.ts,
+// `createForkContextResolver(..., "fork")`), e cada fork dispara `session_start` com um ctx cujo
+// getSessionFile() aponta pro arquivo DO FORK. Esse arquivo nasce no topo do diretorio do cwd, com
+// `<ts>_<uuid>.jsonl` — indistinguivel de uma sessao de verdade pelo caminho, entao o guarda do
+// backend (`is_subagent_transcript`, que pega o layout `<stem>/<taskId>/run-N/session.jsonl`) nao
+// ve este. Medido 12/08/2026 no pane %2612 da sessao `mod-rev-final`: o bilhete caiu em
+// `…12-58-03-419Z_f334db50….jsonl` e o app passou a mostrar o modelo daquele fork (Sakana Namazu,
+// antes MiMo-V2.5-Pro e Grok 4.20) no lugar do gpt-5.6-sol da sessao — piscando de volta ao certo
+// no proximo `agent_start` do agente principal, que reescrevia o bilhete.
+//
+// A trava: o pane pertence a PRIMEIRA sessao que se apresenta e so troca de dono quando ESSA
+// sessao cai. Troca legitima continua valendo porque `/new`, `/fork`, `/resume` e `/tree` passam
+// por `teardownCurrent` (agent-session-runtime.js:102-113), que emite `session_shutdown` da sessao
+// atual ANTES do `session_start` da nova. O fork de subagente nao derruba ninguem: nasce ao lado, e
+// e por isso que da pra separar os dois sem depender do formato do caminho.
+let sessaoDoPane: string | null = null;
+
+function ehDoPane(ctx: any): string | null {
+  const file = sessionFile(ctx);
+  if (!file) return null;
+  if (sessaoDoPane === null) sessaoDoPane = file;   // 1o evento do processo = a sessao do usuario
+  return file === sessaoDoPane ? file : null;
+}
+
+/** E a sessao dona do pane? Diferente de `ehDoPane`, NAO adota o pane quando ele esta sem dono —
+ *  quem pergunta isso e o `session_shutdown`, e adotar ali faria a sessao que esta MORRENDO virar
+ *  dona de novo (o teste `scripts/test-pi-cp-state.mjs` pega exatamente isso). */
+function ehDona(ctx: any): boolean {
+  const file = sessionFile(ctx);
+  return !!file && file === sessaoDoPane;
+}
+
 // A CHAVE do marcador de estado e o stem do arquivo de sessao, nao o session-id: o backend procura
 // por `Path(jsonl).stem` (sse.py:305, registry.py:604). No Claude os dois coincidem (<uuid>.jsonl);
 // no Pi o arquivo e <ts>_<uuid>.jsonl, entao gravar por session-id cria um marcador que ninguem le
@@ -54,7 +88,7 @@ function guard(what: string, fn: () => void): void {
 
 function publishState(state: "working" | "idle", ctx: any): void {
   guard(`publishState(${state})`, () => {
-    const file = sessionFile(ctx);
+    const file = ehDoPane(ctx);
     if (!file) return;
     writeAtomic(path.join(dir, `${path.basename(file, ".jsonl")}.json`),
                 { state, ts: Date.now() / 1000 });
@@ -67,8 +101,8 @@ function publishState(state: "working" | "idle", ctx: any): void {
 function publishPane(ctx: any): void {
   guard("publishPane", () => {
     const pane = process.env.TMUX_PANE;
-    const file = sessionFile(ctx);
-    if (!pane || !file) return;      // fora do tmux nao ha o que ligar
+    const file = ehDoPane(ctx);
+    if (!pane || !file) return;      // fora do tmux (ou fork de subagente) nao ha o que ligar
     writeAtomic(path.join(paneDir, `${pane.replace("%", "")}.json`),
                 { file, id: ctx?.sessionManager?.getSessionId?.() ?? null, ts: Date.now() / 1000 });
   });
@@ -108,7 +142,7 @@ function supportedLevels(model: any): string[] {
 // turno pra um dado que so muda quando o usuario troca de modelo.
 function publishModels(pi: ExtensionAPI, ctx: any): void {
   guard("publishModels", () => {
-    const file = sessionFile(ctx);
+    const file = ehDoPane(ctx);
     if (!file) return;
     const model = ctx?.model;
     const all = ctx?.modelRegistry?.getAvailable?.() ?? [];   // so provedores com auth configurada
@@ -167,8 +201,8 @@ function gravaPreview(file: string, text: string): void {
 }
 
 function publishPreview(ctx: any, text: string, agora: boolean): void {
-  const file = sessionFile(ctx);
-  if (!file) return;                       // --no-session: nao ha chave pro backend casar
+  const file = ehDoPane(ctx);
+  if (!file) return;                       // --no-session/fork de subagente: nao e a nossa previa
   if (text === previewUltimo && !agora) return;
   previewUltimo = text;
   if (agora) {
@@ -377,6 +411,7 @@ export default function (pi: ExtensionAPI) {
     // início de toda sessão nova dentro do MESMO processo, é o caminho mais simples que cobre
     // /new, /fork e /resume sem precisar decidir com o `reason` do evento — só "quit" de verdade
     // não passa por aqui de novo (o processo morre, e o valor não importa mais).
+    if (!ehDoPane(ctx)) return;   // fork de subagente nascendo ao lado — ver `sessaoDoPane`
     desligando = false;
     publishPane(ctx); publishModels(pi, ctx); conectar(pi);
   });
@@ -384,20 +419,29 @@ export default function (pi: ExtensionAPI) {
   // NOVO: fecha de propósito ao morrer. Sem isto, um /reload deixaria o backend achando que ainda
   // tem alguém lendo até o prazo estourar, e a mensagem daquele intervalo esperaria à toa.
   pi.on("session_shutdown", async (_e: any, ctx: any) => {
+    // Antes da trava, o shutdown de QUALQUER sessao do processo — inclusive o de um fork de
+    // subagente — ligava `desligando`, e a linha do app so voltava no proximo `session_start` da
+    // sessao de verdade: a entrega por WebSocket caia pro envio por tecla nesse meio, calada.
+    if (!ehDona(ctx)) return;
     desligando = true;
     // Zera a previa da sessao que SAI. "session_shutdown" dispara em /new, /fork, /resume e /tree —
     // inclusive com o turno rodando —, e nesse caminho nem "message_end" nem "agent_settled" chegam:
     // o sidecar ficaria com o ultimo texto em voo, e retomar essa sessao dentro dos 10min do
     // _PREVIEW_MAX_AGE mostraria no app um texto "sendo digitado" por uma sessao parada.
     publishPreview(ctx, "", true);
+    sessaoDoPane = null;   // por ULTIMO: zerar a previa acima ainda e trabalho da sessao que sai
     guard("fechar", () => socket?.close());
   });
   pi.on("agent_start", async (_e: any, ctx: any) => {
+    // O gate vale tambem pro `trabalhando`/corroboracao: o turno de um subagente nao e o turno da
+    // sessao, e tratar como se fosse confirmaria entrega de mensagem que ninguem leu.
+    if (!ehDoPane(ctx)) return;
     publishPane(ctx); publishState("working", ctx);
     trabalhando = true;
     eventosAgente.emit("agent_start");   // corrobora entrega pendente — ver bloco da entrega acima
   });
   pi.on("agent_settled", async (_e: any, ctx: any) => {
+    if (!ehDoPane(ctx)) return;
     publishState("idle", ctx); trabalhando = false;
     publishPreview(ctx, "", true);   // turno fechou: nada em voo (rede pro message_end perdido)
   });

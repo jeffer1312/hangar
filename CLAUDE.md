@@ -73,6 +73,7 @@ npm --prefix frontend run check            # svelte-check + tsc — THIS is the 
 
 ./scripts/test-wrappers.sh                 # claude-engine (bash/zsh/fish) against a fake `claude`, no tmux
 ./scripts/test-statusline.sh               # statusline.js contract (engine sessions suppress cost), needs node
+node scripts/test-pi-cp-state.mjs          # cp-state.ts: fork de subagente do Pi não rouba o pane
 ```
 
 Sessions must run as `claude --session-id <uuid>` **inside tmux** — `scripts/install-claude-wrapper.sh`
