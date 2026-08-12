@@ -174,6 +174,11 @@ def model_nav_steps(rows: list[dict], target_keyword: str) -> int:
     Casa pelo `id` ANTES da `keyword`: com duas linhas `opus`, casar so pela keyword mandava
     `opus[1m]` pra primeira delas e aplicava o Opus normal, calado. A keyword continua valendo
     como entrada — quem pede `opus` quer a linha `opus` mesmo.
+
+    O MODEL_NUMBERS so tem keyword pura, entao um alvo com sufixo (`opus[1m]`) rolado pra fora da
+    tela cai no ValueError final — de proposito. Nao descasque o sufixo pra reaproveitar o numero de
+    `opus`: isso navega pra linha do Opus NORMAL e aplica o modelo errado, calado, que e o defeito
+    que o id unico veio consertar. Ha teste travando isso.
     """
     base = cursor_row(rows)
     if base is None:
@@ -183,14 +188,6 @@ def model_nav_steps(rows: list[dict], target_keyword: str) -> int:
         target = next((r for r in rows if r["keyword"] == target_keyword), None)
     if target is not None:
         tnum = target["number"]
-    elif "[" in target_keyword:
-        # Alvo com sufixo de variante (`opus[1m]`) que NAO esta na tela: nao ha numero pra ele. Cair
-        # pro MODEL_NUMBERS aqui seria descascar o sufixo e navegar pra linha `opus` normal — de
-        # novo o modelo errado, calado, que e o defeito que o id unico veio consertar. Falha alta:
-        # vira PickerError 409 e o picker fecha, em vez de aplicar outra coisa.
-        raise ValueError(
-            f"target model {target_keyword!r} not visible in picker (no fixed row number for a "
-            f"context variant)")
     elif target_keyword in MODEL_NUMBERS:
         tnum = MODEL_NUMBERS[target_keyword]
     else:

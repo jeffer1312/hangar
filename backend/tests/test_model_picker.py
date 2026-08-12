@@ -84,14 +84,14 @@ def test_linha_unica_com_1m_no_rotulo_tambem_ganha_o_sufixo():
 
 
 def test_variante_fora_da_tela_falha_em_vez_de_ir_pra_linha_errada():
-    """MODEL_NUMBERS só conhece keywords. Descascar o sufixo pra usar o número de `opus` levaria o
-    cursor pra linha do Opus NORMAL — o modelo errado, calado, que é o defeito que o id único veio
-    consertar. Melhor 409 na cara."""
+    """Trava contra a correção "óbvia" que alguém pode fazer no futuro: descascar o sufixo pra usar o
+    número de `opus` do MODEL_NUMBERS levaria o cursor pra linha do Opus NORMAL — o modelo errado,
+    calado, que é o defeito que o id único veio consertar. Melhor 409 na cara."""
     rows = [
         {"number": 1, "keyword": "default", "id": "default", "cursor": True, "active": False},
         {"number": 2, "keyword": "sonnet", "id": "sonnet", "cursor": False, "active": False},
     ]
-    with pytest.raises(ValueError, match="not visible"):
+    with pytest.raises(ValueError, match="not in picker"):
         mp.model_nav_steps(rows, "opus[1m]")
     # sem sufixo, o fallback por número continua valendo
     assert mp.model_nav_steps(rows, "haiku") == 4
