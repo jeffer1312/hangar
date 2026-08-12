@@ -40,5 +40,11 @@ def listar(fresco: bool = False) -> list[dict]:
     if r.returncode != 0:
         raise RuntimeError(r.stderr.strip() or "pi --list-models falhou")
     modelos = parse(r.stdout)
+    if not modelos:
+        # rc=0 com tabela que o parse não reconhece (coluna a mais, saída truncada, saída
+        # vazia) é falha do provedor, não catálogo vazio. Levanta pra virar o 502 que a rota
+        # já sabe dar, e NÃO cacheia: senão o erro dura 10 min depois de o pi voltar.
+        primeira = (r.stdout.strip().splitlines() or [""])[0][:120]
+        raise RuntimeError(f"pi --list-models nao devolveu modelo nenhum (1a linha: {primeira!r})")
     _cache = (time.monotonic(), modelos)
     return modelos
