@@ -29,9 +29,11 @@
   import IconFolder from './icons/IconFolder.svelte';
   import { prepareImage } from '../lib/imagePrep';
   import ContextRing from './ContextRing.svelte';
-  import ModelEffortSheet from './ModelEffortSheet.svelte';
+  import ClaudeModelPopover from './ClaudeModelPopover.svelte';
+  import ClaudeEffortPopover from './ClaudeEffortPopover.svelte';
   import CodexModelSheet from './CodexModelSheet.svelte';
-  import PiModelSheet from './PiModelSheet.svelte';
+  import PiModelPopover from './PiModelPopover.svelte';
+  import PiEffortPopover from './PiEffortPopover.svelte';
   import SlashSuggest from './SlashSuggest.svelte';
   import CommandSheet from './CommandSheet.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
@@ -321,7 +323,12 @@
   // Display otimista: a escolha aparece na hora; o status (read-back real do statusline)
   // reconcilia o modelo quando confirma. Esforco e write-only (sem read-back confiavel)
   // -> a escolha local persiste.
-  let sheetOpen = $state(false);
+  // Popovers do Claude ancorados nas pills (antes: a folha ModelEffortSheet, de altura cheia, com
+  // modelo e esforco juntos). Mesma forma do Pi e a mesma referencia do usuario (opencode).
+  let claudePopOpen = $state(false);
+  let claudeEffortOpen = $state(false);
+  let claudePillEl = $state<HTMLElement | null>(null);
+  let claudeEffortPillEl = $state<HTMLElement | null>(null);
   let chosenModel = $state<string | null>(null);   // rotulo otimista: 'Opus' | 'Sonnet' | ...
   let chosenEffort = $state<string | null>(null);   // low | medium | high | xhigh | max | ultracode
 
@@ -358,7 +365,13 @@
   // /settings — nada disso e dirigivel por send-keys como o picker do Claude. Quem responde e o
   // sidecar da extensao (GET /pi/models); ver backend/app/pi_models.py. Falha (extensao velha ->
   // 409) deixa o pill com o rotulo da statusline, sem quebrar o composer.
-  let piSheetOpen = $state(false);
+  // Popovers ancorados nas pills (antes: uma folha de altura cheia com modelo e nivel juntos). A
+  // referencia pedida pelo usuario e o opencode: caixa compacta sobre a pill, clique aplica, e o
+  // nivel tem pill propria. Os `El` sao as ancoras que o Popover mede.
+  let piPopOpen = $state(false);
+  let piEffortOpen = $state(false);
+  let piPillEl = $state<HTMLElement | null>(null);
+  let piEffortPillEl = $state<HTMLElement | null>(null);
   let piModel = $state<string | null>(null);
   let piEffort = $state<string | null>(null);
 
@@ -380,6 +393,8 @@
 
   const pillModel = $derived(chosenModel ?? status?.model ?? null);
   const pillEffort = $derived(chosenEffort ?? status?.effort ?? null);
+  // Haiku nao usa esforco de raciocinio (o picker responde "Effort not supported").
+  const semEsforcoClaude = $derived((pillModel ?? '').toLowerCase().includes('haiku'));
   // Reconciliacao do modelo: quando o statusline confirma a escolha (substring match),
   // solta a escolha otimista pra que mudancas feitas direto no terminal reaparecam.
   $effect(() => {
@@ -434,7 +449,7 @@
   function handleSuggestPick(cmd: CommandInfo) {
     if (cmd.name === 'model' || cmd.name === 'effort') {
       inputText = '';
-      sheetOpen = true;
+      claudePopOpen = true;
       return;
     }
     if (cmd.argumentHint || cmd.destructive) {
@@ -1133,14 +1148,30 @@
         {#if isPi}
           <button
             class="model-pill"
-            onclick={() => (piSheetOpen = true)}
-            aria-label="Modelo e nível de raciocínio do Pi"
+            bind:this={piPillEl}
+            onclick={() => (piPopOpen = true)}
+            aria-haspopup="dialog"
+            aria-expanded={piPopOpen}
+            aria-label="Modelo do Pi"
           >
             <span class="pill-label">
               <span class="pill-model">{piModel ?? status?.model ?? 'Modelo'}</span>
-              {#if piEffort}<span class="pill-effort">· {piEffort}</span>{/if}
             </span>
             <ContextRing pct={status?.ctxPct ?? null} />
+          </button>
+          <!-- Nivel de raciocinio em pill propria (referencia: opencode). Antes vivia dentro da
+               folha de modelo, atras da lista de 390 itens. -->
+          <button
+            class="model-pill"
+            bind:this={piEffortPillEl}
+            onclick={() => (piEffortOpen = true)}
+            aria-haspopup="dialog"
+            aria-expanded={piEffortOpen}
+            aria-label="Nível de raciocínio do Pi"
+          >
+            <span class="pill-label">
+              <span class="pill-model">{piEffort ?? 'Nível'}</span>
+            </span>
           </button>
         {:else if isKimi}
           <!-- Kimi nao tem sheet de modelo neste MVP (o /model dele e so-TUI): pill vira rotulo
@@ -1154,15 +1185,33 @@
         {:else if !isCodex}
           <button
             class="model-pill"
-            onclick={() => (sheetOpen = true)}
-            aria-label="Modelo, esforço e contexto"
+            bind:this={claudePillEl}
+            onclick={() => (claudePopOpen = true)}
+            aria-haspopup="dialog"
+            aria-expanded={claudePopOpen}
+            aria-label="Modelo e contexto"
           >
             <span class="pill-label">
               <span class="pill-model">{pillModel ?? 'Modelo'}</span>
-              {#if pillEffort}<span class="pill-effort">· {pillEffort}</span>{/if}
             </span>
             <ContextRing pct={status?.ctxPct ?? null} />
           </button>
+          <!-- Esforco em pill propria. Some no Haiku, que nao usa esforco (o picker responde
+               "Effort not supported") — pill que nao aplica nada e pior que pill ausente. -->
+          {#if !semEsforcoClaude}
+            <button
+              class="model-pill"
+              bind:this={claudeEffortPillEl}
+              onclick={() => (claudeEffortOpen = true)}
+              aria-haspopup="dialog"
+              aria-expanded={claudeEffortOpen}
+              aria-label="Esforço de raciocínio"
+            >
+              <span class="pill-label">
+                <span class="pill-model">{pillEffort ?? 'Esforço'}</span>
+              </span>
+            </button>
+          {/if}
         {:else}
           <button
             class="model-pill"
@@ -1211,14 +1260,23 @@
     </div>
   </div>
 
-  <ModelEffortSheet
-    open={sheetOpen}
+  <ClaudeModelPopover
+    open={claudePopOpen}
+    anchor={claudePillEl}
     {sessionName}
     currentModel={pillModel}
     currentEffort={pillEffort}
     onApply={handleApply}
     onApplied={handleEngineModelApplied}
-    onClose={() => (sheetOpen = false)}
+    onClose={() => (claudePopOpen = false)}
+  />
+
+  <ClaudeEffortPopover
+    open={claudeEffortOpen}
+    anchor={claudeEffortPillEl}
+    currentEffort={pillEffort}
+    onApply={handleApply}
+    onClose={() => (claudeEffortOpen = false)}
   />
 
   <CodexModelSheet
@@ -1228,11 +1286,20 @@
     onClose={() => (codexSheetOpen = false)}
   />
 
-  <PiModelSheet
-    open={piSheetOpen}
+  <PiModelPopover
+    open={piPopOpen}
+    anchor={piPillEl}
     {sessionName}
     onApplied={handlePiModelApplied}
-    onClose={() => (piSheetOpen = false)}
+    onClose={() => (piPopOpen = false)}
+  />
+
+  <PiEffortPopover
+    open={piEffortOpen}
+    anchor={piEffortPillEl}
+    {sessionName}
+    onApplied={(effort) => (piEffort = effort)}
+    onClose={() => (piEffortOpen = false)}
   />
 
   <CommandSheet
@@ -1240,7 +1307,7 @@
     {commands}
     onCommand={runCommand}
     onFill={fillCommand}
-    onOpenModelEffort={() => (sheetOpen = true)}
+    onOpenModelEffort={() => (claudePopOpen = true)}
     onClose={() => (commandSheetOpen = false)}
   />
 
