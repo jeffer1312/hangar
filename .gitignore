@@ -77,8 +77,12 @@ node_modules/
 .worktrees/
 
 # Saida dos subagentes do Pi. Nao e fonte, e cresce sozinha: 40 MB medidos em 06/08/2026. Sem esta
-# regra, um `git add -A` distraido leva tudo isso pro repo.
+# regra, um `git add -A` distraido leva tudo isso pro repo. `.pi/` e o diretorio novo (o antigo
+# `.pi-subagents/` continua aqui porque checkout velho ainda o tem): apareceu quando uma sessao do
+# Pi revisou dentro do worktree e deixou os transcripts dos subagentes dela em
+# .pi/subagents/artifacts/ — a revisao final pegou isso a um `git add -A` de entrar na branch.
 .pi-subagents/
+.pi/
 
 # Referencia de terceiros baixada pra estudo (beautiful-ui). Nao e nosso codigo, nao vai pro repo.
 .refs/

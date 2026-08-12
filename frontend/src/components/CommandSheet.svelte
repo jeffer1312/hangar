@@ -11,7 +11,8 @@
     commands: CommandInfo[];
     onCommand: (cmd: string) => void; // envia "/nome"
     onFill: (name: string) => void; // preenche "/nome " no textarea
-    onOpenModelEffort: () => void;
+    /** Qual das duas caixas abrir: `/model` e `/effort` viraram pills separadas. */
+    onOpenModelEffort: (qual: 'model' | 'effort') => void;
     onClose: () => void;
   }
   let { open, commands, onCommand, onFill, onOpenModelEffort, onClose }: Props = $props();
@@ -51,7 +52,7 @@
 
   function handleTap(c: CommandInfo) {
     if (c.name === 'model' || c.name === 'effort') {
-      onOpenModelEffort();
+      onOpenModelEffort(c.name === 'effort' ? 'effort' : 'model');
       onClose();
       return;
     }

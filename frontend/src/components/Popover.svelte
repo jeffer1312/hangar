@@ -53,11 +53,49 @@
     };
   }
 
+  // O foco NAO chega num frame so. O conteudo dos popovers vem de `await`: a busca do modelo do
+  // Claude so aparece depois da lista carregar (ela nem existe com 8 itens ou menos), e os niveis do
+  // Pi idem. Tentar uma vez e desistir deixava o foco na pill: o Tab seguinte ia pra pagina ATRAS do
+  // portal, e quem navega por teclado nunca entrava na caixa. Entao observa ate o alvo nascer.
   $effect(() => {
-    if (open) {
-      medir();
-      requestAnimationFrame(() => caixa?.querySelector<HTMLElement>('[data-foco]')?.focus());
-    }
+    if (!open) return;
+    // Ancora que sumiu com a caixa aberta (a pill de esforco some quando a sessao vira Haiku): sem
+    // ela nao ha o que medir, e a caixa ficaria parada no ultimo lugar conhecido, solta na tela.
+    if (!anchor) { onClose(); return; }
+    medir();
+    let vivo = true;
+    let obs: MutationObserver | null = null;
+    const focar = () => {
+      if (!vivo || !caixa) return false;
+      const alvo = caixa.querySelector<HTMLElement>('[data-foco]');
+      if (!alvo) return false;
+      // Nao rouba foco de quem ja mexeu em outra coisa nesse meio-tempo — so age enquanto o foco
+      // segue onde estava quando a caixa abriu (a pill) ou em lugar nenhum.
+      const at = document.activeElement;
+      if (at && at !== document.body && at !== anchor && !caixa.contains(at)) { vivo = false; return true; }
+      alvo.focus();
+      vivo = false;
+      return true;
+    };
+    requestAnimationFrame(() => {
+      if (!vivo || focar() || !caixa) return;
+      obs = new MutationObserver(() => { if (focar()) obs?.disconnect(); });
+      obs.observe(caixa, { childList: true, subtree: true });
+    });
+    return () => { vivo = false; obs?.disconnect(); };
+  });
+
+  // Fechar devolve o foco a pill. Sem isto o elemento focado morre junto com o portal, o foco cai no
+  // <body> e o Tab recomeca do topo da pagina — o usuario de teclado perde o lugar toda vez que
+  // fecha a caixa. So devolve se o foco ainda estiver "solto": quem clicou noutro botao fica onde
+  // clicou.
+  let estavaAberto = false;
+  $effect(() => {
+    if (open) { estavaAberto = true; return; }
+    if (!estavaAberto) return;
+    estavaAberto = false;
+    const at = document.activeElement;
+    if (!at || at === document.body) anchor?.focus();
   });
 
   // Reposiciona em scroll/resize: o composer se move quando o teclado do celular abre ou a conversa

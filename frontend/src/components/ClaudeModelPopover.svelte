@@ -262,7 +262,11 @@
   }
   .linha:hover:not(:disabled) { background: var(--bg-hover); }
   .linha:disabled { cursor: default; }
-  .linha.ativa { color: var(--accent); }
+  /* A linha escolhida se marca pelo FUNDO, nao pela cor do texto: --accent sobre o papel do tema
+     claro da 4,0:1, abaixo dos 4,5:1 que o AA pede pra texto de 14px (a Task 6 ja reprovou um
+     4,34:1 pelo mesmo motivo). Fundo tingido + texto normal passa folgado, e e o mesmo desenho que
+     a folha antiga usava. O tique continua em --accent: e grafico, e grafico pede 3:1. */
+  .linha.ativa { background: var(--accent-dim); color: var(--text-primary); }
 
   .txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
   .nome { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

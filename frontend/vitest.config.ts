@@ -11,6 +11,9 @@ export default defineConfig({
   },
   test: {
     environment: 'node', // pure-function + WebCrypto units; no DOM needed
-    include: ['src/**/*.test.ts'],
+    // `.test.svelte.ts` entra junto porque runes (`$state`) só compilam em arquivo com o sufixo
+    // `.svelte.ts` — e testar componente que reage a MUDANÇA de prop (abrir/fechar) precisa de uma
+    // prop reativa de verdade, não de um objeto solto.
+    include: ['src/**/*.test.ts', 'src/**/*.test.svelte.ts'],
   },
 });

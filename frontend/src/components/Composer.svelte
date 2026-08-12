@@ -452,12 +452,21 @@
     onCommand(cmd);
   }
 
-  // Toque numa sugestao do strip inline. model/effort abrem o sheet; comando com argumento
-  // (ou destrutivo) preenche pra revisao antes de enviar; o resto envia direto.
+  // `/model` e `/effort` viraram DUAS caixas. Mandar as duas pro seletor de modelo (o que acontecia
+  // desde a separacao) deixava `/effort` sem jeito nenhum de chegar no nivel: quem digitava o
+  // comando caia na lista de modelos e tinha que fechar e achar a outra pill.
+  // Haiku nao tem esforco -> a pill nao existe -> cai no seletor de modelo, que existe sempre.
+  function abrirSeletor(qual: 'model' | 'effort') {
+    if (qual === 'effort' && !semEsforcoClaude) claudeEffortOpen = true;
+    else claudePopOpen = true;
+  }
+
+  // Toque numa sugestao do strip inline. model/effort abrem a caixa correspondente; comando com
+  // argumento (ou destrutivo) preenche pra revisao antes de enviar; o resto envia direto.
   function handleSuggestPick(cmd: CommandInfo) {
     if (cmd.name === 'model' || cmd.name === 'effort') {
       inputText = '';
-      claudePopOpen = true;
+      abrirSeletor(cmd.name === 'effort' ? 'effort' : 'model');
       return;
     }
     if (cmd.argumentHint || cmd.destructive) {
@@ -1319,7 +1328,7 @@
     {commands}
     onCommand={runCommand}
     onFill={fillCommand}
-    onOpenModelEffort={() => (claudePopOpen = true)}
+    onOpenModelEffort={abrirSeletor}
     onClose={() => (commandSheetOpen = false)}
   />
 

@@ -15,8 +15,9 @@ from app import model_args as ma
     "k3; touch /tmp/x", "k3 && rm -rf /", "k3 $(whoami)", "k3 `id`",
     "k3 modelo", "k3\nrm -rf /", "k3|tee /tmp/x", "", "x" * 129,
     "k3\n", "k3-256k\n",
-    # Valor que começa com `-` vira FLAG no argv, não argumento de `--model`: o binário leria a
-    # segunda como opção dele. Citar com shlex não muda isso.
+    # Valor começando com `-`: higiene, não injeção. Medido — `claude --model --version` consome
+    # `--version` como VALOR do --model. O que isso produz é sessão com modelo inválido, e o valor
+    # vem de catálogo de provedor; recusar aqui é mais barato que descobrir na sessão.
     "--dangerously-skip-permissions", "-opus", "--model",
 ])
 def test_id_perigoso_e_recusado(mau):

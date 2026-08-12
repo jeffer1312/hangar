@@ -23,9 +23,17 @@ import re
 # provider/id) e é inofensiva; espaço, `;`, `$`, crase e `|` não entram — a regex é a barreira.
 ID_OK = re.compile(r"^[A-Za-z0-9._:~/\[\]-]{1,128}\Z")
 
-# Valor que COMEÇA com `-` vira flag na linha de comando, não argumento de `--model`: `--model`
-# seguido de `--dangerously-skip-permissions` acabaria com o binário lendo a segunda como opção
-# dele. O shlex.join cita o valor, mas quoting não muda que o argv começa com `-`.
+# Valor que começa com `-` é recusado por HIGIENE, não por injeção de flag — medido em 12/08/2026,
+# nesta máquina:
+#
+#     $ claude --model --version
+#     "--version" is not a model this version of Claude Code recognizes, ...
+#
+# O parser CONSOME o token seguinte como valor de `--model`, mesmo começando com `-`; não há como
+# fazer o binário ler o valor como opção dele. O que um id assim produz é uma sessão que sobe com
+# modelo inválido e só reclama depois — e como o valor vem de catálogo de provedor, recusar aqui é
+# mais barato que descobrir na sessão. Não trate isto como barreira de segurança: a barreira é a
+# ID_OK acima.
 def _e_flag(valor: str) -> bool:
     return valor.startswith("-")
 
