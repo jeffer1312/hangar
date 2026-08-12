@@ -67,6 +67,7 @@
   const PAGE = 100;            // quantos eventos antigos revelar por vez ao rolar pro topo (paginacao)
   let windowEnd = $state(0);
   let extra = $state(0);       // eventos revelados ALEM da janela padrao (cresce ao rolar pro topo)
+  let piso = 0;                // quanto do `extra` a TELA precisa pra ter rolagem (ver preencherTela)
 
   function onScroll() {
     if (!listEl) return;
@@ -80,28 +81,46 @@
   // Janela curta demais pra rolar (rajada de tool calls colapsada em linhas de grupo) -> revela
   // pagina por pagina ATE dar pra rolar. Sem isto a paginacao pra cima depende do `onscroll`, que
   // numa lista sem rolagem nunca dispara: o historico existe e o chat parece nao ter nada acima.
-  // ponytail: laco simples — cada volta revela uma PAGE; para quando da pra rolar, quando acaba o
-  // historico, ou quando o reveal nao andou (guarda de reentrancia) — nunca gira em falso.
+  // ponytail: laco simples — cada volta revela uma PAGE; para quando da pra rolar ou quando acaba o
+  // historico. `extra` parado depois de um reveal SO acontece com hasOlder falso (o reveal em voo e
+  // esperado, nao ignorado — ver revealOlder), entao a saida aqui nunca e "desisti calado".
   async function preencherTela() {
     while (listEl && precisaPreencher(listEl.scrollHeight, listEl.clientHeight, hasOlder)) {
       const antes = extra;
       await revealOlder();
       if (extra === antes) return;
+      // Piso do descarte: o que foi revelado AQUI e o minimo pra tela ter rolagem. Voltar pro fim
+      // pode jogar fora o que o usuario paginou a mao, nunca isto — senao a lista volta a nao rolar
+      // e os dois ficam se revezando (revela, descarta, revela).
+      piso = extra;
     }
   }
 
-  let revealing = false;
-  async function revealOlder() {
-    if (revealing || !listEl || !hasOlder) return;
-    revealing = true;
-    // Preserva a posicao de leitura: o conteudo cresce PRA CIMA (prepend); mede a altura antes, revela,
-    // e empurra o scrollTop pelo delta -> a tela nao "pula" pro topo.
-    const prevH = listEl.scrollHeight;
-    const prevTop = listEl.scrollTop;
-    extra += PAGE;
-    await tick();
-    if (listEl) listEl.scrollTop = prevTop + (listEl.scrollHeight - prevH);
-    revealing = false;
+  // Reveal em voo: o chamador novo ESPERA o que ja esta rodando, em vez de virar no-op. Com no-op,
+  // o preencherTela do chamador novo lia `extra` parado e entendia como "acabou o historico" — saia
+  // calado deixando o chat sem nada acima, que e exatamente o bug que ele existe pra consertar. E o
+  // effect de auto-scroll dispara em rajada (o preview muda a cada ~150ms), entao a colisao e o caso
+  // normal, nao o raro.
+  let emVoo: Promise<void> | null = null;
+  function revealOlder(): Promise<void> {
+    if (emVoo) return emVoo;
+    if (!listEl || !hasOlder) return Promise.resolve();
+    emVoo = (async () => {
+      try {
+        // Preserva a posicao de leitura: o conteudo cresce PRA CIMA (prepend); mede a altura antes,
+        // revela, e empurra o scrollTop pelo delta -> a tela nao "pula" pro topo.
+        const prevH = listEl!.scrollHeight;
+        const prevTop = listEl!.scrollTop;
+        extra += PAGE;
+        await tick();
+        if (listEl) listEl.scrollTop = prevTop + (listEl.scrollHeight - prevH);
+      } finally {
+        // Dentro do async: roda ANTES da promise resolver, entao quem estava esperando ja acorda
+        // com o slot livre e a volta seguinte do laco revela de verdade em vez de pegar o em-voo velho.
+        emVoo = null;
+      }
+    })();
+    return emVoo;
   }
 
   // tool_use_id -> tool_result, INCREMENTAL: `events` e append-only na pratica (replaces do replay
@@ -239,12 +258,12 @@
     // escrever windowEnd=len o effect re-roda e nextWindowEnd vira no-op.
     const next = nextWindowEnd(atBottom, len, windowEnd);
     if (next !== windowEnd) windowEnd = next;
-    // NAO zera `extra` aqui. Zerava "de volta ao fim, descarta o revelado" pra limitar o mount
-    // count — mas numa lista que so rola PORQUE foi revelada, `atBottom` e verdade o tempo todo
-    // (a folga de 64px nunca e vencida), entao o reset desfazia o preencherTela a cada evento e os
-    // dois ficavam se revezando: revela 100, descarta 100, revela 100. Quem descarta agora e o
-    // botao "ir pro fim", que e ato do usuario. ponytail: o teto do mount vira o historico ja
-    // carregado; se pesar no celular, o lugar de cortar e o WINDOW, nao um reset automatico.
+    // De volta ao fim (live): descarta o que foi paginado A MAO, pra limitar o mount count de novo —
+    // mas NUNCA abaixo do `piso`, que e o que a tela precisa pra ter rolagem. Zerar reto (o que este
+    // codigo fazia) quebrava numa lista que so rola PORQUE foi revelada: ali `atBottom` e verdade o
+    // tempo todo (a folga de 64px nunca e vencida), entao o reset desfazia o preencherTela a cada
+    // evento e os dois se revezavam — revela 100, descarta 100, revela 100.
+    if (atBottom && extra > piso) extra = piso;
     if (!atBottom) return;
     tick().then(() => { scrollToBottom(); preencherTela(); });
   });
@@ -368,12 +387,14 @@
 </section>
 
 {#if scrolledUp}
-  <!-- Botao "ir pro fim": aparece so quando rolou muito pra cima. Ao tocar, volta pra cauda E zera a
-       paginacao revelada (extra=0) -> nao fica montando/segurando paginas antigas que nao precisam. -->
+  <!-- Botao "ir pro fim": aparece so quando rolou muito pra cima. Ao tocar, volta pra cauda E
+       descarta a paginacao revelada -> nao fica montando paginas antigas que nao precisam. Volta ao
+       `piso`, nao a zero: abaixo dele a lista deixa de ter rolagem e o preencherTela reveria tudo
+       de novo no mesmo instante (pisca a lista inteira por nada). -->
   <button
     class="to-bottom"
     style="bottom: calc({dockH}px + var(--space-3))"
-    onclick={() => { extra = 0; atBottom = true; scrollToBottom(); }}
+    onclick={() => { extra = piso; atBottom = true; scrollToBottom(); }}
     aria-label="Ir para a última mensagem"
   >
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
