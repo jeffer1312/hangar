@@ -282,7 +282,10 @@
 
   .check { color: var(--accent); flex-shrink: 0; }
 
-  .more { font-size: var(--text-xs); color: var(--text-muted); text-align: center; margin: calc(-1 * var(--space-3)) 0 var(--space-3); }
+  /* Margem de topo POSITIVA: o irmão anterior agora é o .model-scroll, caixa recortada em 46vh sem
+     margem embaixo — a margem negativa antiga (feita pra encostar no <ul> de antes) puxava o rodapé
+     PRA DENTRO da última linha visível (medido na round 2: "+348" sobre o meta da linha). */
+  .more { font-size: var(--text-xs); color: var(--text-muted); text-align: center; margin: var(--space-2) 0 var(--space-3); }
 
   .section-label {
     font-size: var(--text-sm);
