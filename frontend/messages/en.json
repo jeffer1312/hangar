@@ -1,0 +1,11 @@
+{
+  "$schema": "https://inlang.com/schema/inlang-message-format",
+  "config_geral_titulo": "General",
+  "config_geral_linha": "Geral · General",
+  "config_idioma_rotulo": "Idioma · Language",
+  "config_geral_descricao": "language and other app-wide options",
+  "config_idioma_sistema": "Follow the system",
+  "config_idioma_pt": "Português",
+  "config_idioma_en": "English",
+  "config_idioma_nota_reload": "Switching the language reloads the app."
+}

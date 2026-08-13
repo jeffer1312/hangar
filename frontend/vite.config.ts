@@ -1,5 +1,6 @@
 import { defineConfig, type PluginOption } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
+import { paraglideVitePlugin } from '@inlang/paraglide-js'
 import { VitePWA } from 'vite-plugin-pwa'
 import { build as esbuild } from 'esbuild'
 import { fileURLToPath } from 'url'
@@ -136,6 +137,15 @@ export default defineConfig({
   plugins: [
     apiCorsPreflight(),
     devServiceWorker(),
+    paraglideVitePlugin({
+      project: './project.inlang',
+      outdir: './src/paraglide',
+      emitTsDeclarations: true,
+      // Cadeia de resolucao: escolha manual (localStorage) manda; sem escolha, segue o idioma do
+      // sistema (navigator.languages); sem nada disso, cai no en (o baseLocale). E o que faz
+      // "Seguir o sistema" ser so apagar a chave do localStorage.
+      strategy: ['localStorage', 'preferredLanguage', 'baseLocale'],
+    }),
     svelte(),
     VitePWA({
       registerType: 'autoUpdate',

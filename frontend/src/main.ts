@@ -5,6 +5,7 @@ import { applyTheme, getThemePref, getTextoDoDesktop } from './lib/theme';
 import { buscarPaleta, aplicarPaleta, ligarAtualizacaoAoFocar } from './lib/desktopTheme';
 import { applyBg, applyAppearance } from './lib/background';
 import { ensureCookie } from './lib/auth';
+import { localeAtual } from './lib/locale';
 
 // Resolve o tema (escolha do usuario ou prefers-color-scheme) ANTES de montar -> sem flash do default.
 applyTheme();
@@ -13,6 +14,11 @@ applyBg();
 applyAppearance();
 // Cookie do SSE: reescrito a cada boot (é por host e morria ao fechar o navegador).
 ensureCookie();
+
+// Rede do lang: o script inline do index.html ja escreveu o lang antes do primeiro paint; aqui
+// corrigimos pro idioma que o Paraglide REALMENTE resolveu (caso o script nao tenha rodado) —
+// leitor de tela e a hifenizacao do browser leem daqui.
+document.documentElement.lang = localeAtual() === 'pt' ? 'pt-BR' : 'en';
 
 // Tema do desktop: assincrono de proposito. O boot NAO espera a rede — a tela sobe com a paleta do
 // app e repinta quando a resposta chega. Bloquear aqui prenderia o app a um backend fora do ar.

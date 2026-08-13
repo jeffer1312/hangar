@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
@@ -11,6 +11,24 @@
     <link rel="apple-touch-icon" href="/icons/icon-180.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <title>Hangar</title>
+    <!-- Idioma antes do primeiro paint: o lang do <html> e o que o navegador le pra leitor de tela
+         e hifenizacao, e um lang errado no HTML servido faz o Chrome oferecer "Traduzir esta
+         pagina" a cada boot. NAO escrever lang fixo no HTML acima: o valor depende do locale. A
+         cadeia aqui espelha a do Paraglide (localStorage -> navigator.languages -> en), e o main.ts
+         reescreve por seguranca (rede) depois de montar. -->
+    <script>
+      (function () {
+        try {
+          var l = localStorage.getItem('PARAGLIDE_LOCALE');
+          if (l === 'pt' || l === 'en') {
+            document.documentElement.lang = l === 'pt' ? 'pt-BR' : 'en';
+            return;
+          }
+          var n = (navigator.languages || [navigator.language]).map(function (x) { return x.split('-')[0]; });
+          document.documentElement.lang = n.indexOf('pt') >= 0 ? 'pt-BR' : 'en';
+        } catch (e) { /* storage off/modo privado: fica sem lang, o main.ts reescreve */ }
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>

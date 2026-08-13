@@ -22,3 +22,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Gerado pelo compilador do Paraglide a cada build/dev (nao versionar: e artefato, e o diff dele
+# polui toda extracao de string).
+src/paraglide/
+# O compilador baixa o plugin de mensagem e o cacheia aqui.
+project.inlang/cache/

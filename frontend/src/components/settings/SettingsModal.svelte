@@ -1,6 +1,7 @@
 <script lang="ts">
   import BottomSheet from '../BottomSheet.svelte';
   import SettingsRow from './SettingsRow.svelte';
+  import GeneralSettings from './GeneralSettings.svelte';
   import AppearanceSettings from './AppearanceSettings.svelte';
   import DictationSettings from './DictationSettings.svelte';
   import ServerSettings from './ServerSettings.svelte';
@@ -9,6 +10,7 @@
   import ServidoresSettings from './ServidoresSettings.svelte';
   import { criarConfigServidor } from '../../lib/serverConfig.svelte';
   import { TELAS_DE_SERVIDOR, type TelaConfig } from '../../lib/configRoute';
+  import * as m from '../../paraglide/messages';
   import type { Server } from '../../lib/auth';
 
   interface Props {
@@ -57,6 +59,7 @@
 
   const TITULO: Record<TelaConfig, string> = {
     root: 'Configurações',
+    geral: m.config_geral_titulo(),
     aparencia: 'Aparência',
     ditado: 'Ditado',
     sobre: 'Sobre',
@@ -67,7 +70,11 @@
     motores: 'Motores de modelo',
   };
 
+  // Valores de rotulo vindo de funcao (m.*) dependem do locale: o `as const` nao pode mais
+  // existir (valor de funcao nao e literal), mas o `satisfies` fica — e ele que checa a forma.
   const LINHAS = [
+    { id: 'geral', secao: 'App', rotulo: m.config_geral_linha(), icone: '🌐',
+      descricao: m.config_geral_descricao(), servidor: false },
     { id: 'aparencia', secao: 'App', rotulo: 'Aparência', icone: '🎨',
       descricao: 'tema, fundo, leitura e texto', servidor: false },
     { id: 'ditado', secao: 'App', rotulo: 'Ditado', icone: '🎤',
@@ -84,7 +91,7 @@
       descricao: 'automações, editor e o que só muda pelo .env', servidor: true },
     { id: 'motores', secao: 'Servidor', rotulo: 'Motores de modelo', icone: '🔌',
       descricao: 'rodar uma sessão em outro provedor', servidor: true },
-  ] as const satisfies readonly { id: TelaConfig; secao: string; rotulo: string; icone: string; descricao: string; servidor: boolean }[];
+  ] satisfies readonly { id: TelaConfig; secao: string; rotulo: string; icone: string; descricao: string; servidor: boolean }[];
   const SECOES = ['App', 'Servidor'] as const;
 
   let tituloEl = $state<HTMLElement | null>(null);
@@ -264,6 +271,8 @@
         {/each}
       </div>
     {/each}
+  {:else if telaAtual === 'geral'}
+    <GeneralSettings />
   {:else if telaAtual === 'aparencia'}
     <AppearanceSettings podeAoVivo={isDesktop} onVerAoVivo={() => (aoVivo = true)} />
   {:else if telaAtual === 'ditado'}
