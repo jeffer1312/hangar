@@ -7,8 +7,10 @@ import pytest
 from app import terminal_input as ti
 
 
-def _pane_escolha(cursor=1, n=3):
-    linhas = ["  question", "", "   Cor    Submit", "", "  ? Qual cor você prefere?", ""]
+def _pane_escolha(cursor=1, n=3, pergunta="Qual cor?"):
+    # A pergunta entra no pane porque o drive CONFERE qual aba esta na tela antes de digitar (o
+    # texto depois do "? " e a unica pista sem ler cor ANSI).
+    linhas = ["  question", "", "   Cor    Submit", "", f"  ? {pergunta}", ""]
     for i in range(1, n + 2):                     # +1 = o "Other" que a TUI adiciona
         marca = "   → " if i == cursor else "     "
         linhas.append(f"{marca}[{i}] Opcao{i}" if i <= n else f"{marca}[{i}] Other")
@@ -17,12 +19,12 @@ def _pane_escolha(cursor=1, n=3):
 
 
 _PANE_MULTI = "\n".join([
-    "  question", "", "   Linguagens    Submit", "", "  ? Quais linguagens você usa?", "",
+    "  question", "", "   Linguagens    Submit", "", "  ? Quais?", "",
     "   [ ] Python", "   [ ] Rust", "   [ ] Go", "   [ ] Other", "",
     "   ↑↓ select  1-4 / ↵ toggle  ←/→/tab switch  esc cancel"])
 
 _PANE_TEXTO = "\n".join([
-    "  question", "", "  ? Qual linguagem?", "    Type your answer, then press Enter to save.", "",
+    "  question", "", "  ? Qual cor?", "    Type your answer, then press Enter to save.", "",
     "     [1] Python", "   → [2] Other:", "",
     "   type answer  ↵ save  tab switch  esc cancel"])
 
@@ -62,14 +64,14 @@ QS = [{"question": "Qual cor?", "options": [{"label": "Azul"}, {"label": "Verde"
 
 def test_escolha_simples_manda_o_numero_e_confirma_no_review(teclado, monkeypatch):
     # Tecla numerica escolhe E avanca — nada de contar linha e mandar (n-1)xDown como no Claude.
-    _panes(monkeypatch, [_pane_escolha(), _pane_escolha(), _PANE_REVIEW])
+    _panes(monkeypatch, [_pane_escolha()] * 3 + [_PANE_REVIEW])
     ti.answer_question_kimi("s", [{"kind": "option", "indices": [1], "labels": ["Verde"]}], QS)
     assert teclado == [("2", True), ("1", True)]        # opcao 2, depois [1] Submit
 
 
 def test_multi_escolha_sai_com_tab_nao_com_enter(teclado, monkeypatch):
     # No multi-select o ↵ e TOGGLE e nao avanca: quem sai da pergunta e o Tab.
-    _panes(monkeypatch, [_PANE_MULTI] * 4 + [_PANE_REVIEW])
+    _panes(monkeypatch, [_PANE_MULTI] * 5 + [_PANE_REVIEW])
     ti.answer_question_kimi("s", [{"kind": "option", "indices": [0, 2], "multi": True,
                                    "labels": ["Python", "Go"]}],
                             [{"question": "Quais?", "options": [{"label": "Python"},
@@ -79,7 +81,7 @@ def test_multi_escolha_sai_com_tab_nao_com_enter(teclado, monkeypatch):
 
 
 def test_texto_livre_usa_o_other_que_e_sempre_a_ultima(teclado, monkeypatch):
-    _panes(monkeypatch, [_pane_escolha(), _pane_escolha(), _pane_escolha(), _pane_escolha(), _PANE_REVIEW])
+    _panes(monkeypatch, [_pane_escolha()] * 5 + [_PANE_REVIEW])
     ti.answer_question_kimi("s", [{"kind": "text", "value": "Elixir"}], QS)
     # 3 opcoes -> "Other" e a [4]; depois o texto e o Enter que salva
     assert teclado == [("4", True), ("Elixir", True), ("Enter", False), ("1", True)]
@@ -88,7 +90,7 @@ def test_texto_livre_usa_o_other_que_e_sempre_a_ultima(teclado, monkeypatch):
 def test_recusa_numero_quando_o_picker_virou_campo_de_texto(teclado, monkeypatch):
     # No modo "type answer" a tecla numerica vira CARACTERE: mandaria "2" pro campo em vez de
     # escolher a opcao 2.
-    _panes(monkeypatch, [_pane_escolha(), _PANE_TEXTO])
+    _panes(monkeypatch, [_pane_escolha(), _pane_escolha(), _PANE_TEXTO])
     with pytest.raises(ti.DriveError, match="modo texto"):
         ti.answer_question_kimi("s", [{"kind": "option", "indices": [1], "labels": ["Verde"]}], QS)
     assert teclado == []                                # nada digitado
@@ -218,10 +220,80 @@ def test_drive_falhando_no_meio_de_varias_perguntas(teclado, monkeypatch):
     # O caso que faltava: picker de DUAS perguntas, a primeira ja respondida (aba avancou) e a
     # segunda travando. O DriveError sai com teclas JA mandadas — o picker fica meio-navegado, e e
     # por isso que o caller manda Escape antes do fallback por texto.
-    _panes(monkeypatch, [_pane_escolha(), _pane_escolha(), _PANE_TEXTO])
+    _panes(monkeypatch, [_pane_escolha(pergunta="Cor?"), _pane_escolha(pergunta="Cor?"),
+                         _pane_escolha(pergunta="Ling?"),
+                         _PANE_TEXTO.replace("? Qual cor?", "? Ling?")])
     qs = [{"question": "Cor?", "options": [{"label": "A"}, {"label": "B"}, {"label": "C"}]},
           {"question": "Ling?", "options": [{"label": "X"}, {"label": "Y"}, {"label": "Z"}]}]
     with pytest.raises(ti.DriveError, match="modo texto"):
         ti.answer_question_kimi("s", [{"kind": "option", "indices": [0], "labels": ["A"]},
                                       {"kind": "option", "indices": [1], "labels": ["Y"]}], qs)
     assert teclado == [("1", True)]        # a 1a passou; a 2a travou ANTES de digitar
+
+
+def test_nao_digita_na_aba_errada(teclado, monkeypatch):
+    # O buraco que a malha fechada por aba fecha: a tecla numerica avanca de aba sozinha, entao um
+    # redesenho atrasado deixava a tela AINDA na pergunta 1 quando o drive ia digitar a resposta da
+    # 2. O rodape casa igual em qualquer aba do mesmo modo — nada levantava erro: o Submit saia, o
+    # tool.result chegava, e a resposta ia pra pergunta ERRADA com cara de sucesso.
+    qs = [{"question": "Cor?", "options": [{"label": "A"}, {"label": "B"}, {"label": "C"}]},
+          {"question": "Ling?", "options": [{"label": "X"}, {"label": "Y"}, {"label": "Z"}]}]
+    # a tela NUNCA sai da pergunta 1
+    _panes(monkeypatch, [_pane_escolha(pergunta="Cor?")] * 30)
+    with pytest.raises(ti.DriveError, match="nao chegou na pergunta 2"):
+        ti.answer_question_kimi("s", [{"kind": "option", "indices": [0], "labels": ["A"]},
+                                      {"kind": "option", "indices": [1], "labels": ["Y"]}], qs)
+    assert teclado == [("1", True)]        # so a resposta da 1a; nada digitado as cegas na 2a
+
+
+def test_multi_escolha_recusa_indice_repetido(teclado, monkeypatch):
+    # A tecla numerica e TOGGLE: o mesmo indice duas vezes liga e desliga, e a opcao terminaria
+    # DESMARCADA — o drive seguiria ate o Submit e entregaria resposta diferente da pedida.
+    _panes(monkeypatch, [_PANE_MULTI])
+    with pytest.raises(ValueError, match="indice repetido"):
+        ti.answer_question_kimi("s", [{"kind": "option", "indices": [0, 0], "multi": True,
+                                       "labels": ["Python"]}],
+                                [{"question": "Quais?", "options": [{"label": "Python"},
+                                                                    {"label": "Go"}]}])
+    assert teclado == []
+
+
+def test_confirmacao_atrasada_nao_entrega_duas_vezes(monkeypatch, tmp_path):
+    # Prazo estourado NAO prova que nada foi submetido: pode ser o Kimi demorando pra gravar. Cair
+    # no fallback ali mandaria Escape num turno que ja processa a resposta certa e entregaria a
+    # mesma resposta DUAS vezes — uma pela ferramenta, outra como mensagem no chat.
+    import json
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    import app.api as api
+
+    w = tmp_path / "wire.jsonl"
+    w.write_text(json.dumps({"type": "context.append_loop_event",
+                             "event": {"type": "tool.call", "toolCallId": "tool_X",
+                                       "name": "AskUserQuestion",
+                                       "args": {"questions": [{"question": "Cor?",
+                                                               "options": [{"label": "A"}]}]}}}) + "\n",
+                 encoding="utf-8")
+    info = SimpleNamespace(name="k", jsonl=str(w), provider="kimi")
+    monkeypatch.setattr(api.registry, "list", lambda: [info])
+    monkeypatch.setattr(api, "_recusa_se_painel_aberto", lambda n: None)
+    monkeypatch.setattr(api.terminal_input, "answer_question_kimi", lambda *a: None)
+    monkeypatch.setattr(api, "_espera_resposta_kimi", lambda *a, **k: False)
+    enviados, escapes = [], []
+    monkeypatch.setattr(api, "_send_one", lambda n, t: enviados.append(t) or {"ok": True})
+    monkeypatch.setattr(api.terminal, "interrupt", lambda n: escapes.append(n))
+
+    body = api.AnswerBody(answers=[api.AnswerItem(kind="option", indices=[0], labels=["A"])])
+
+    # picker SUMIU da tela = alguem submeteu: admite a duvida, nao reenvia nem interrompe
+    monkeypatch.setattr(api.terminal_input, "picker_kimi_aberto", lambda n: False)
+    with pytest.raises(HTTPException) as e:
+        api.answer("k", body)
+    assert e.value.status_code == 409 and "confirmar a tempo" in e.value.detail
+    assert enviados == [] and escapes == []       # nada duplicado, nenhum turno interrompido
+
+    # picker AINDA aberto = prova de que nada pegou: fallback por texto, como sempre
+    monkeypatch.setattr(api.terminal_input, "picker_kimi_aberto", lambda n: True)
+    monkeypatch.setattr(api, "_espera_picker_fechar", lambda n: True)
+    assert api.answer("k", body) == {"ok": True, "fallback": True}
+    assert len(enviados) == 1 and escapes == ["k"]

@@ -901,10 +901,33 @@ def answer_question_pi(name: str, answer: dict, question: dict) -> None:
 # (13/08/2026, Kimi 0.36.0): escolha simples ("1-4 / ↵ choose"), multipla ("1-5 / ↵ toggle") e campo
 # de texto ("type answer  ↵ save"). No de texto a tecla numerica vira CARACTERE — mandar numero ali
 # escreveria "2" no campo em vez de escolher.
+# Quantas releituras esperando a aba certa aparecer antes de desistir (o redesenho da troca de aba
+# leva alguns quadros).
+_KIMI_ABA_TENTATIVAS = 6
 _KIMI_FOOTER_RE = re.compile(r"↵\s*(choose|toggle|save)|type answer")
 _KIMI_TEXTO_RE = re.compile(r"type answer")
 # Tela de Review do Kimi: sem passar por ela a resposta NAO chega na ferramenta (medido).
 _KIMI_REVIEW_RE = re.compile(r"Ready to submit your answers\?")
+# A pergunta desenhada AGORA. O relatorio da medicao: "pra saber qual aba esta ativa sem ler ANSI,
+# use o texto depois do `? ` — ele e sempre a pergunta da aba atual" (o destaque da aba e cor, que o
+# capture-pane -p descarta).
+_KIMI_PERGUNTA_RE = re.compile(r"^\s*\?\s+(\S.*?)\s*$", re.M)
+
+
+def _kimi_pergunta_atual(pane: str) -> str | None:
+    m = _KIMI_PERGUNTA_RE.search(pane)
+    return m.group(1) if m else None
+
+
+def _mesma_pergunta(na_tela: str, esperada: str) -> bool:
+    # Comparacao TOLERANTE: o pane quebra/corta o texto na largura da janela, entao exigir igualdade
+    # exata reprovaria pergunta longa legitima. Prefixo em qualquer direcao basta pra distinguir uma
+    # aba da outra, que e o unico julgamento necessario aqui.
+    a = " ".join(na_tela.split())
+    b = " ".join(esperada.split())
+    if not a or not b:
+        return False
+    return a.startswith(b[:40]) or b.startswith(a[:40])
 
 
 def _kimi_picker_aberto(pane: str) -> bool:
@@ -912,6 +935,12 @@ def _kimi_picker_aberto(pane: str) -> bool:
     # conversa, e o resto do pane fica em branco — medido a 16, 11 e 3 linhas do fim conforme a
     # conversa cresce. Um detector de cauda perde o picker justamente na conversa curta.
     return bool(_KIMI_FOOTER_RE.search(pane))
+
+
+def picker_kimi_aberto(name: str) -> bool:
+    """O picker do Kimi ainda esta na tela? Usado como PROVA de que nada foi submetido quando a
+    confirmacao pelo transcript estoura o prazo."""
+    return _kimi_picker_aberto(_capture(name))
 
 
 def answer_question_kimi(name: str, answers: list[dict], questions: list[dict]) -> None:
@@ -951,6 +980,11 @@ def answer_question_kimi(name: str, answers: list[dict], questions: list[dict]) 
                     raise ValueError(f"pergunta {i + 1}: opcao {int(n) + 1} fora de 1..{len(ops)}")
             if len(idx) > 1 and not a.get("multi"):
                 raise ValueError(f"pergunta {i + 1}: varias opcoes numa pergunta de escolha unica")
+            # Em multi-escolha a tecla numerica e TOGGLE: o mesmo indice duas vezes liga e desliga, e
+            # a opcao terminaria DESMARCADA — o drive seguiria ate o Submit e entregaria uma resposta
+            # diferente da pedida, sem erro nenhum.
+            if len(set(int(n) for n in idx)) != len(idx):
+                raise ValueError(f"pergunta {i + 1}: indice repetido (a tecla numerica e toggle)")
             passos = [("tecla", str(int(n) + 1)) for n in idx]
             if a.get("multi"):
                 passos.append(("tecla", "Tab"))   # ↵ ali e toggle: quem avanca e o Tab
@@ -970,6 +1004,21 @@ def answer_question_kimi(name: str, answers: list[dict], questions: list[dict]) 
         raise DriveError("picker do Kimi nao esta aberto no pane")
 
     for i, passos in enumerate(plano):
+        # MALHA FECHADA por aba. Sem isto o drive so sabia "tem picker aberto" e "nao e campo de
+        # texto" — nunca QUAL pergunta estava na tela. Como a tecla numerica avanca de aba sozinha,
+        # um redesenho atrasado fazia a tecla da pergunta i+1 caier ainda na pergunta i, e o rodape
+        # casa igual em qualquer aba do mesmo modo: nada levantava erro, o Submit saia, o
+        # `tool.result` chegava e a resposta ia pra pergunta ERRADA com cara de sucesso.
+        esperada = str(questions[i].get("question") or "")
+        if esperada:
+            for tentativa in range(_KIMI_ABA_TENTATIVAS):
+                atual = _kimi_pergunta_atual(_capture(name))
+                if atual and _mesma_pergunta(atual, esperada):
+                    break
+                time.sleep(_SETTLE)     # redesenho da troca de aba pode estar em voo
+            else:
+                raise DriveError(
+                    f"a tela nao chegou na pergunta {i + 1} ({esperada[:40]!r}); nao submetido")
         for tipo, valor in passos:
             pane = _capture(name)
             if not _kimi_picker_aberto(pane):

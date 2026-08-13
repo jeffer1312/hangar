@@ -3412,7 +3412,17 @@ def answer(name: str, body: AnswerBody):
             # ferramenta receber as respostas. Sem esta checagem, um Submit que nao pegou voltaria
             # 200 com cara de sucesso — o mesmo "sent sem chegar" que ja custou uma resposta perdida.
             if not _espera_resposta_kimi(jsonl, call_id):
-                raise terminal_input.DriveError("Submit enviado mas o tool.result nao apareceu no wire")
+                # Prazo estourado NAO prova que nada foi submetido — pode ser o Kimi demorando pra
+                # gravar. Os outros dois drivers so levantam DriveError com prova estrutural (o
+                # picker AINDA na tela), e aqui vale o mesmo: se o picker sumiu, alguem submeteu.
+                # Cair no fallback nesse caso mandaria Escape num turno que ja processa a resposta
+                # certa e entregaria a mesma resposta DUAS vezes — uma pela ferramenta, outra como
+                # mensagem. Entre duplicar calado e admitir a duvida, admite-se a duvida.
+                if terminal_input.picker_kimi_aberto(name):
+                    raise terminal_input.DriveError(
+                        "Submit nao pegou: o picker continua aberto e o tool.result nao apareceu")
+                raise HTTPException(409, "resposta enviada, mas nao deu pra confirmar a tempo — "
+                                         "confira na sessao antes de responder de novo")
         except ValueError as e:
             raise HTTPException(409, str(e))
         except terminal_input.DriveError as e:
