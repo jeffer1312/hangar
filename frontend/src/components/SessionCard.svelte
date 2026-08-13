@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { SessionInfo, State } from '../lib/types';
-  import { stateLabels, stateColors, untrackedReason, providerTag } from '../lib/format';
+  import { rotuloEstado, stateColors, untrackedReason, providerTag } from '../lib/format';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import { planBadge } from '../lib/plan';
   import PlanBar from './PlanBar.svelte';
@@ -365,12 +365,12 @@
           style="color: {stateColors[session.state]}; background: {stateChipBg[session.state]};"
           title={stalled ? 'Pode estar travada — sem atividade há um tempo' : undefined}
         >
-          {stateLabels[session.state]}
+          {rotuloEstado(session.state)}
         </span>
       {:else}
         <!-- Sem chip, o estado so existia como COR (o .lead e aria-hidden) — leitor de tela ficava
              sem saber que a sessao esta pronta. Texto so pra AT (SC 1.4.1). -->
-        <span class="sr-only">{stateLabels[session.state]}</span>
+        <span class="sr-only">{rotuloEstado(session.state)}</span>
       {/if}
       <!-- Caminho por TECLADO/leitor de tela pras acoes do swipe (git / loop / excluir), que e
            pointer-only. Escondidos visualmente, sempre focaveis e anunciados; reaparecem como botao

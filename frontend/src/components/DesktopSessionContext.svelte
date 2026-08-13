@@ -6,7 +6,7 @@
   import PlanRing from './PlanRing.svelte';
   import type { State, SessionInfo, PlanDetail } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
-  import { stateColors, stateLabels, ctxWindow, providerName } from '../lib/format';
+  import { stateColors, rotuloEstado, ctxWindow, providerName } from '../lib/format';
   import { planBadge } from '../lib/plan';
 
   interface Props {
@@ -141,7 +141,7 @@
       {#if stateDetail}<p class="header-detail">{stateDetail}</p>{/if}
     </div>
     <div class="header-right">
-      <span class="state-chip header-state" style="color: {stateColors[state]}">{stateLabels[state]}</span>
+      <span class="state-chip header-state" style="color: {stateColors[state]}">{rotuloEstado(state)}</span>
       {#if loopLabel}
         <button type="button" class="loop-chip" style="color: {loopColor};" onclick={onLoopTap} aria-label="Loop da sessão: {loopLabel}">{loopLabel}</button>
       {/if}

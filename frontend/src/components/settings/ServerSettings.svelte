@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ConfigServidorStore } from '../../lib/serverConfig.svelte';
+import { intlLocale } from '../../lib/locale';
   import { listarVozesTts, saldoTts, type TtsVoz } from '../../lib/api';
   import Select from '../Select.svelte';
   import { ttsPlayer } from '../../lib/ttsPlayer.svelte';
@@ -286,7 +287,7 @@
 
         <div class="amostra">
           <button class="btn" onclick={ouvirAmostraDaVoz} disabled={!ttsPlayer.ultimoTexto}>
-            🔊 Ouvir amostra desta voz{ttsPlayer.ultimoTexto ? ` · ${amostraTexto.length.toLocaleString('pt-BR')} car.` : ''}
+            🔊 Ouvir amostra desta voz{ttsPlayer.ultimoTexto ? ` · ${amostraTexto.length.toLocaleString(intlLocale())} car.` : ''}
           </button>
           {#if !ttsPlayer.ultimoTexto}
             <span class="ajuda">ouça algum trecho primeiro pra comparar vozes com ele</span>

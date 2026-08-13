@@ -2,7 +2,7 @@
   import BottomSheet from './BottomSheet.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
   import BackgroundToggle from './BackgroundToggle.svelte';
-  import { relativeTime, stateLabels, stateColors } from '../lib/format';
+  import { relativeTime, rotuloEstado, stateColors } from '../lib/format';
   import { listServers, selectServer, serverColor, getActiveId } from '../lib/auth';
   import { searchTranscriptsForServer, askHistoryForServer, type SearchHit } from '../lib/api';
   import type { SessionInfo, State } from '../lib/types';
@@ -297,7 +297,7 @@
           class:row--active={i === activeIdx}
           onclick={() => tap(s)}
           onmousemove={() => (activeIdx = i)}
-          aria-label={`${s.name} — ${stateLabels[s.state]}`}
+          aria-label={`${s.name} — ${rotuloEstado(s.state)}`}
         >
           <span class="dot" style="background: {stateColors[s.state]};" aria-hidden="true"></span>
           <span class="row-main">

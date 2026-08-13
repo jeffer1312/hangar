@@ -1,13 +1,23 @@
-import { describe, it, expect } from 'vitest';
+// @vitest-environment happy-dom
+// format.ts importa locale.ts (getLocale do Paraglide com estrategia localStorage) — o
+// formato de data/hora e numero passa a depender do idioma escolhido, e o teste precisa do DOM.
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, fmtWhen, groupSelectedByServer, initials, nextAwaiting,
-  projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent, resetsIn,
+  projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent, resetsIn, relativeTime,
   clusterByPair, sortSessions, bubblesFromTail, ctxWindow, fileKind, fmtBytes, providerName, providerTag,
   untrackedReason,
   summarizeText, summarizeToolInput, summarizeToolResult, toolPhase, toolGroupLabel, toolGroupCounts,
+  rotuloEstado,
   splitTodoBlock, parseImageMessage,
 } from './format';
 import type { ChatEvent, State } from './types';
+import { overwriteGetLocale } from '../paraglide/runtime';
+import { intlLocale } from './locale';
+
+// Default dos testes antigos: eles foram escritos esperando pt-BR. Quem troca de idioma seta
+// o locale DENTRO do teste e o beforeEach repoe o pt a cada it — nenhum estado vaza entre tests.
+beforeEach(() => overwriteGetLocale(() => 'pt'));
 
 describe('abbrevNum', () => {
   it('abbreviates millions', () => {
@@ -325,7 +335,8 @@ describe('fmtWhen', () => {
 
   it('formats epoch SECONDS (x1000) as a local short date-time', () => {
     const ts = 1_700_000_000; // epoch em segundos
-    const expected = new Date(ts * 1000).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+    // fmtWhen usa o locale ESCOLHIDO no app (intlLocale), nao o do navegador (array vazio).
+    const expected = new Date(ts * 1000).toLocaleString(intlLocale(), { dateStyle: 'short', timeStyle: 'short' });
     expect(fmtWhen(ts)).toBe(expected);
     expect(fmtWhen(ts)).not.toBe('');
   });
@@ -739,5 +750,34 @@ describe('parseImageMessage', () => {
   });
   it('sem marcador não é mensagem de imagem', () => {
     expect(parseImageMessage('só texto')).toBeNull();
+  });
+});
+
+describe('formatacao segue o idioma', () => {
+  // Troca o locale pelo MESMO caminho que a tela usa: localeAtual() chama getLocale() do
+  // Paraglide, e overwriteGetLocale e o hook oficial do runtime pra substituir a resolucao em
+  // teste (a tela escolhe via setLocale, mas em teste nao ha reload). As mensagens m.* leem
+  // getLocale() a cada chamada, entao o hook cobre as duas pontas.
+  it('relativeTime devolve "agora" em pt e "now" em en', () => {
+    overwriteGetLocale(() => 'pt');
+    expect(relativeTime(Date.now() / 1000)).toBe('agora');
+    overwriteGetLocale(() => 'en');
+    expect(relativeTime(Date.now() / 1000)).toBe('now');
+  });
+
+  it('intlLocale devolve etiqueta BCP-47 com regiao', () => {
+    overwriteGetLocale(() => 'pt');
+    expect(intlLocale()).toBe('pt-BR');
+    overwriteGetLocale(() => 'en');
+    expect(intlLocale()).toBe('en-US');
+  });
+
+  it('rotuloEstado cobre os quatro estados nos dois idiomas', () => {
+    for (const st of ['working', 'idle', 'awaiting_input', 'dead'] as const) {
+      overwriteGetLocale(() => 'pt');
+      expect(rotuloEstado(st)).not.toBe('');
+      overwriteGetLocale(() => 'en');
+      expect(rotuloEstado(st)).not.toBe('');
+    }
   });
 });

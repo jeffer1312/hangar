@@ -46,8 +46,7 @@ describe('trava de string crua', () => {
   // funcao o primeiro passa a ser o stateColors (format.ts:68-73), cujos valores ('var(--accent)')
   // tambem casam o teste de literal — e a suite fecharia em vermelho justo quando o problema foi
   // consertado. Cor nao e idioma; so o mapa de ROTULO e vigiado aqui.
-  // Task 3 (Step 7) remove o it.fails e devolve este teste a ser `it(...)` normal.
-  it.fails('lib/format.ts nao tem mapa de rotulo com valor literal', () => {
+  it('lib/format.ts nao tem mapa de rotulo com valor literal', () => {
     const fonte = readFileSync(join(SRC, 'lib', 'format.ts'), 'utf8');
     const mapa = /stateLabels\s*:\s*Record<\s*State\s*,\s*string\s*>\s*=\s*\{([^}]*)\}/.exec(fonte);
     expect(mapa?.[1] ?? '', 'stateLabels deve chamar mensagem, nao carregar literal').not.toMatch(/['"][^'"]{3,}['"]/);

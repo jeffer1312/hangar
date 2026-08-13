@@ -28,6 +28,15 @@ export function localeAtual(): Locale {
   return (LOCALES as readonly string[]).includes(l) ? (l as Locale) : (baseLocale as Locale);
 }
 
+// O Intl quer etiqueta BCP-47 com regiao ('pt-BR'), o Paraglide trabalha com o idioma sozinho
+// ('pt'). Esta e a unica traducao entre os dois mundos — sem ela, `Intl.NumberFormat('pt')` cai no
+// default de regiao e o separador de milhar muda sem ninguem pedir.
+// 'en-US' e escolha do usuario (13/08/2026), nao default: muda formato de data (M/D/AAAA contra o
+// D/M/AAAA do en-GB) e a primeira moeda sem simbolo explicito. Nao trocar sem perguntar.
+export function intlLocale(): string {
+  return localeAtual() === 'en' ? 'en-US' : 'pt-BR';
+}
+
 // Valor fora da lista conta como "sem escolha": storage e editavel pelo usuario e por extensao,
 // e um "klingon" ali nao pode deixar a tela sem nenhuma opcao marcada.
 export function preferenciaSalva(): Preferencia {

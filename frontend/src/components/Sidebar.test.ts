@@ -47,8 +47,8 @@ vi.mock('../lib/sessionsStore.svelte', () => ({
   },
 }));
 vi.mock('../lib/format', () => ({
-  // Rótulos REAIS (format.ts:58-63): o trilho original anuncia estado no aria-label/title.
-  stateLabels: { working: 'em execução', idle: 'pronto', awaiting_input: 'aguardando', dead: 'encerrado' },
+  // Rótulo REAL de estado (agora funcao): o trilho original anuncia estado no aria-label/title.
+  rotuloEstado: (s: string) => ({ working: 'em execução', idle: 'pronto', awaiting_input: 'aguardando', dead: 'encerrado' })[s] ?? '',
   stateColors: {}, countAwaiting: () => 0,
   groupSelectedByServer: () => [], initials: (n: string) => n.slice(0, 2),
   projectKey: () => '', projectLabel: () => '', effectiveGroupBy: () => 'server',

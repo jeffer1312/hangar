@@ -6,6 +6,7 @@
 
 <script lang="ts">
   import { onMount } from 'svelte';
+import { intlLocale } from '../lib/locale';
   import HangarMark from '../components/icons/HangarMark.svelte';
   import SessionCard from '../components/SessionCard.svelte';
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
@@ -450,7 +451,7 @@
   // Formata a data da última atividade do candidato (epoch s) de forma curta e local.
   function fmtWhen(mtime?: number | null): string {
     if (!mtime) return '';
-    return new Date(mtime * 1000).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+    return new Date(mtime * 1000).toLocaleString(intlLocale(), { dateStyle: 'short', timeStyle: 'short' });
   }
 
   function handleLogout() {

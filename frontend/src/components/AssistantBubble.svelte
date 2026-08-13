@@ -1,5 +1,6 @@
 <script lang="ts">
   import { renderMarkdown } from '../lib/markdown';
+import { intlLocale } from '../lib/locale';
   import { parseFilePaths, parseMediaUrls, splitTodoBlock } from '../lib/format';
   import { copyText } from '../lib/clipboard';
   import { textoFalavelComCodigo } from '../lib/speakable';
@@ -79,7 +80,7 @@
 
   function formatTime(ts: number | null | undefined): string {
     if (!ts) return '';
-    return new Date(ts * 1000).toLocaleTimeString('pt-BR', {
+    return new Date(ts * 1000).toLocaleTimeString(intlLocale(), {
       hour: '2-digit',
       minute: '2-digit',
     });

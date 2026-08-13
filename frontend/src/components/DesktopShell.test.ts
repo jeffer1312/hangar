@@ -44,7 +44,7 @@ vi.mock('../lib/sessionsStore.svelte', () => ({
   },
 }));
 vi.mock('../lib/format', () => ({
-  stateLabels: {}, stateColors: {}, countAwaiting: () => 0,
+  rotuloEstado: () => '', stateColors: {}, countAwaiting: () => 0,
   groupSelectedByServer: () => [], initials: (n: string) => n.slice(0, 2),
   projectKey: () => '', projectLabel: () => '', effectiveGroupBy: () => 'server',
   fmtWhen: () => '', sortSessions: (s: unknown[]) => s, latestAssistantEvent: () => null,

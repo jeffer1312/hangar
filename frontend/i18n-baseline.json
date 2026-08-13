@@ -94,7 +94,7 @@
   "lib/detectarLinguagem.ts": 4,
   "lib/editdiff.ts": 1,
   "lib/fmt.ts": 2,
-  "lib/format.ts": 22,
+  "lib/format.ts": 11,
   "lib/gitStore.svelte.ts": 1,
   "lib/gitTabs.ts": 3,
   "lib/highlight.ts": 4,

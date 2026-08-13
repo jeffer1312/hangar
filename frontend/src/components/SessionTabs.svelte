@@ -5,7 +5,7 @@
   import { onMount } from 'svelte';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { buildSessionTabs, focusedTabKey, tabKeyOf } from '../lib/sessionTabs';
-  import { stateColors, stateLabels } from '../lib/format';
+  import { stateColors, rotuloEstado } from '../lib/format';
   import { planBadge } from '../lib/plan';
   import { sidebarPin } from '../lib/sidebarPin.svelte';
   import { sidebarBridge } from '../lib/sidebarBridge';
@@ -139,7 +139,7 @@
       {@const key = tabKeyOf(tab.session)}
       {@const active = key === currentKey}
       {@const badge = planBadge(tab.session)}
-      {@const stateName = stateLabels[tab.session.state]}
+      {@const stateName = rotuloEstado(tab.session.state)}
       {@const plano = badge ? ` · plano ${Math.round(badge.pct)}%${badge.complete ? ', concluído' : ''}` : ''}
       <button class="tab" class:boundary={tab.boundary} class:active
         role="tab" aria-selected={active}

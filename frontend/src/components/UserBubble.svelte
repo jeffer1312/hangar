@@ -1,4 +1,5 @@
 <script lang="ts">
+import { intlLocale } from '../lib/locale';
   interface Props {
     text: string;
     ts?: number | null;
@@ -12,7 +13,7 @@
 
   function formatTime(ts: number | null | undefined): string {
     if (!ts) return '';
-    return new Date(ts * 1000).toLocaleTimeString('pt-BR', {
+    return new Date(ts * 1000).toLocaleTimeString(intlLocale(), {
       hour: '2-digit',
       minute: '2-digit',
     });

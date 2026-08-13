@@ -3,6 +3,7 @@
   // proprio — quem limita altura agora e o empilhado da aba, senao dois paineis brigariam pelo
   // mesmo 52vh e a soma estouraria a tela.
   import type { GitCommit } from '../../lib/api';
+import { intlLocale } from '../../lib/locale';
 
   interface Props { commit: GitCommit }
   let { commit }: Props = $props();
@@ -21,7 +22,7 @@
   <dl class="cm-meta">
     <dt>hash</dt><dd class="mono">{commit.hash}</dd>
     <dt>autor</dt><dd>{commit.author}</dd>
-    <dt>data</dt><dd>{new Date(commit.ts * 1000).toLocaleString()} · {commit.rel}</dd>
+    <dt>data</dt><dd>{new Date(commit.ts * 1000).toLocaleString(intlLocale())} · {commit.rel}</dd>
     <dt>parents</dt><dd class="mono">{commit.parents.length ? commit.parents.map((p) => p.slice(0, 7)).join(', ') : '(root)'}</dd>
   </dl>
 </div>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+import { intlLocale } from '../lib/locale';
   import { ttsSelection, iniciarCapturaDeSelecao } from '../lib/ttsSelection.svelte';
   import { ouvirTexto } from '../lib/ouvir';
   import { ttsNarracao } from '../lib/ttsNarracao.svelte';
@@ -59,7 +60,7 @@
   });
 
   const temCodigoSel = $derived(blocosSel.length > 0);
-  const rotulo = $derived(`🔊 Ouvir · ${textoSel.length.toLocaleString('pt-BR')} car.`);
+  const rotulo = $derived(`🔊 Ouvir · ${textoSel.length.toLocaleString(intlLocale())} car.`);
   // Instrucao que VAI valer se o usuario tocar "Ouvir" agora: texto livre sempre vence; senao, a
   // escolha explicita de "ler como esta"; senao o padrao esperto (explicar codigo quando ha bloco
   // de codigo, ler como esta senao).
@@ -205,7 +206,7 @@
         onkeydown={(e) => { if (e.key === 'Enter') ouvirClique(); }}
       />
       {#if efetiva}
-        <span class="tts-sel-custo">{charsGroq.toLocaleString('pt-BR')} car. para o modelo</span>
+        <span class="tts-sel-custo">{charsGroq.toLocaleString(intlLocale())} car. para o modelo</span>
       {/if}
     {/if}
   </div>

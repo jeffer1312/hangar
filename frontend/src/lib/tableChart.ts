@@ -9,6 +9,8 @@
 // "chamadas" e "bruto" juntos põe 327 e 46.900.000 na mesma escala: a primeira barra vira um traço
 // invisível e o gráfico mente. Então o gráfico mostra uma coluna, e quem lê escolhe qual.
 
+import { intlLocale } from './locale';
+
 export interface ColunaNumerica {
   indice: number;
   titulo: string;
@@ -88,8 +90,8 @@ export function lerTabela(tabela: HTMLTableElement): TabelaLida | null {
 /** Formata pro eixo: 46900000 -> "46,9M". */
 export function formatarValor(v: number): string {
   const abs = Math.abs(v);
-  if (abs >= 1e9) return (v / 1e9).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + 'B';
-  if (abs >= 1e6) return (v / 1e6).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + 'M';
-  if (abs >= 1e3) return (v / 1e3).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + 'k';
-  return v.toLocaleString('pt-BR', { maximumFractionDigits: 2 });
+  if (abs >= 1e9) return (v / 1e9).toLocaleString(intlLocale(), { maximumFractionDigits: 1 }) + 'B';
+  if (abs >= 1e6) return (v / 1e6).toLocaleString(intlLocale(), { maximumFractionDigits: 1 }) + 'M';
+  if (abs >= 1e3) return (v / 1e3).toLocaleString(intlLocale(), { maximumFractionDigits: 1 }) + 'k';
+  return v.toLocaleString(intlLocale(), { maximumFractionDigits: 2 });
 }

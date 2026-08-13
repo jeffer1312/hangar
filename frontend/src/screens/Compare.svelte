@@ -6,7 +6,7 @@
   import { listServers, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
   import type { ChatEvent, StateEvent } from '../lib/types';
-  import { stateLabels, stateColors, latestAssistantEvent, type CompareId } from '../lib/format';
+  import { rotuloEstado, stateColors, latestAssistantEvent, type CompareId } from '../lib/format';
 
   // Grade de comparação (feature #11): abre UM EventSource leve por sessão selecionada (reusa o
   // mesmo stream do Chat, só que apontado pro SERVIDOR DONO de cada uma — sessões de servidores
@@ -153,7 +153,7 @@
           <span class="cc-name">{c.name}</span>
           <span class="cc-srv" style="color: {c.color};" title={c.serverLabel}>{c.serverLabel}</span>
           {#if c.stateEvent}
-            <span class="cc-state" style="color: {stateColors[c.stateEvent.state]};">{stateLabels[c.stateEvent.state]}</span>
+            <span class="cc-state" style="color: {stateColors[c.stateEvent.state]};">{rotuloEstado(c.stateEvent.state)}</span>
           {/if}
         </div>
         <div class="cc-body">

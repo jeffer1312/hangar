@@ -14,7 +14,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import SessionSwitcherSheet from './SessionSwitcherSheet.svelte';
   import HoverPreview from './HoverPreview.svelte';
   import type { SessionInfo, State, ResumeCandidate, Provider } from '../lib/types';
-  import { stateLabels, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, untrackedReason, providerName, providerTag, type GroupBy } from '../lib/format';
+  import { rotuloEstado, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, untrackedReason, providerName, providerTag, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import { planBadge } from '../lib/plan';
@@ -885,7 +885,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         {@const provTag = showProviderTags ? providerTag(s.provider) : null}
         {@const sub = sidebarStatus(s)}
         {@const srvLabel = servers.find((sv) => sv.id === s.serverId)?.label ?? s.serverId}
-        {@const estadoTxt = s.stalled ? 'pode estar travada' : stateLabels[s.state]}
+        {@const estadoTxt = s.stalled ? 'pode estar travada' : rotuloEstado(s.state)}
         <!-- role=presentation: a row e so o wrapper flex — a semantica toda vive no .sess-main
              (button) e nos botoes irmaos. O hover aqui e decoracao redundante (a resposta ja esta no
              chat), entao nao pede equivalente de teclado. -->
@@ -1037,7 +1037,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   class:stalled={s.stalled === true}
                   style="color: {stateColors[s.state]}; background: {stateChipBg[s.state]};"
                   title={s.stalled ? 'Pode estar travada — sem atividade há um tempo' : undefined}
-                >{stateLabels[s.state]}</span>
+                >{rotuloEstado(s.state)}</span>
               {/if}
             </button>
             {#if expanded && !selectMode}

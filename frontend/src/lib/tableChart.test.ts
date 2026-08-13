@@ -1,8 +1,12 @@
 // @vitest-environment happy-dom
 // `lerTabela` recebe uma <table> do DOM (o markdown já virou HTML antes dela) — o ambiente node
 // padrão do projeto não tem document.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { parseNumero, lerTabela, formatarValor } from './tableChart';
+import { overwriteGetLocale } from '../paraglide/runtime';
+
+// tableChart importa locale.ts (getLocale do Paraglide) — fixa o pt por padrao.
+beforeEach(() => overwriteGetLocale(() => 'pt'));
 
 describe('parseNumero', () => {
   it('lê as formas que aparecem numa tabela minha de verdade', () => {

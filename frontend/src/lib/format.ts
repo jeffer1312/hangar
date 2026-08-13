@@ -1,12 +1,13 @@
-// Tempo relativo curto em pt-BR a partir de um timestamp epoch em segundos.
+// Tempo relativo curto a partir de um timestamp epoch em segundos, no idioma escolhido
+// (as frases sao mensagens; a data acima de 24h usa o intlLocale).
 // Mesma semântica do antigo formatActivity do SessionCard, agora compartilhada.
 export function relativeTime(ts: number | null | undefined): string {
   if (!ts) return '';
   const diff = Date.now() / 1000 - ts;
-  if (diff < 60) return 'agora';
-  if (diff < 3600) return `${Math.floor(diff / 60)} min atrás`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} h atrás`;
-  return new Date(ts * 1000).toLocaleDateString('pt-BR');
+  if (diff < 60) return m.tempo_agora();
+  if (diff < 3600) return m.tempo_min_atras({ n: Math.floor(diff / 60) });
+  if (diff < 86400) return m.tempo_h_atras({ n: Math.floor(diff / 3600) });
+  return new Date(ts * 1000).toLocaleDateString(intlLocale());
 }
 
 // Tempo relativo FUTURO ("em X") a partir de um epoch em SEGUNDOS — pro reset de rate limit do Codex
@@ -16,14 +17,16 @@ export function resetsIn(ts: number | null | undefined): string {
   if (!ts) return '';
   const diff = ts - Date.now() / 1000;
   if (diff <= 0) return '';
-  if (diff < 3600) return `em ${Math.max(1, Math.floor(diff / 60))} min`;
-  if (diff < 86400) return `em ${Math.floor(diff / 3600)} h`;
-  return `em ${Math.floor(diff / 86400)} d`;
+  if (diff < 3600) return m.tempo_em_min({ n: Math.max(1, Math.floor(diff / 60)) });
+  if (diff < 86400) return m.tempo_em_h({ n: Math.floor(diff / 3600) });
+  return m.tempo_em_d({ n: Math.floor(diff / 86400) });
 }
 
 // Vocabulário único de estado (label pt-BR + cor) — compartilhado por SessionCard, Sidebar e
 // SessionSwitcherSheet pra mesma sessão nunca aparecer com nomes/cores divergentes.
 import type { State, ChatEvent, SessionInfo } from './types';
+import { intlLocale } from './locale';
+import * as m from '../paraglide/messages';
 
 // Nome humano do provider da sessão. Existe porque cada tela escrevia o próprio ternário
 // (`provider === 'codex' ? 'Codex' : 'Claude'`) e, quando o Pi entrou como terceiro provider, toda
@@ -50,21 +53,22 @@ export function providerTag(p: SessionInfo['provider'] | null | undefined): stri
 // Kimi: o pane não resolve transcript nenhum — normal antes do 1º turno (a sessão só escreve o
 // arquivo então), definitivo se a extensão de estado não carregou naquele pane.
 export function untrackedReason(p: SessionInfo['provider'] | null | undefined): string {
-  if (p === 'pi') {
-    return 'sessão Pi sem transcript: aparece depois do 1º turno — se não aparecer, feche o pane e abra de novo pelo `pi`';
-  }
-  if (p === 'kimi') {
-    return 'sessão Kimi sem transcript: aparece depois do 1º turno — se não aparecer, feche o pane e abra de novo pelo `kimi`';
-  }
-  return 'claude aberto sem --session-id: não dá pra rastrear o transcript com segurança';
+  if (p === 'pi') return m.formato_sem_transcript_pi();
+  if (p === 'kimi') return m.formato_sem_transcript_kimi();
+  return m.formato_sem_transcript_claude();
 }
 
-export const stateLabels: Record<State, string> = {
-  working: 'em execução',
-  idle: 'pronto',
-  awaiting_input: 'aguardando',
-  dead: 'encerrado',
-};
+// Vocabulario unico de estado. Era um Record de literais em pt; virou funcao porque um Record de
+// literais e o formato que mais vaza: nao tem markup, nao parece texto de tela, e passa batido em
+// qualquer varredura. O guard em i18nGuard.test.ts trava a volta disso.
+export function rotuloEstado(s: State): string {
+  switch (s) {
+    case 'working': return m.estado_em_execucao();
+    case 'idle': return m.estado_pronto();
+    case 'awaiting_input': return m.estado_aguardando();
+    case 'dead': return m.estado_encerrado();
+  }
+}
 export const stateColors: Record<State, string> = {
   working: 'var(--accent)',
   idle: 'var(--success)',
@@ -165,7 +169,7 @@ export function projectKey(cwd: string | null | undefined): string {
 
 // Rótulo exibido pro grupo de projeto: basename do cwd (reusa basename); sem cwd -> rótulo fixo.
 export function projectLabel(cwd: string | null | undefined): string {
-  return cwd ? basename(cwd) : 'sem projeto';
+  return cwd ? basename(cwd) : m.formato_sem_projeto();
 }
 
 // Modo de agrupamento da lista de sessões (toggle Nenhum|Servidor|Projeto, feature #3).
@@ -556,20 +560,20 @@ export function summarizeToolResult(
 ): string {
   if (result === null || result === undefined) return '';
   const raw = (result.result ?? '').trim();
-  if (result.is_error) return raw ? summarizeText(raw.split('\n')[0], TOOL_MAX) : 'Falhou';
-  if (!raw) return 'Pronto';
+  if (result.is_error) return raw ? summarizeText(raw.split('\n')[0], TOOL_MAX) : m.formato_tool_falhou();
+  if (!raw) return m.formato_tool_pronto();
   const n = raw.split('\n').length;
-  const linhas = n === 1 ? '1 linha' : `${n} linhas`;
-  if (toolName === 'Bash' || toolName === 'BashOutput') return `Pronto (${linhas})`;
-  if (toolName === 'Read') return n === 1 ? '1 linha carregada' : `${n} linhas carregadas`;
-  return n === 1 ? '1 linha retornada' : `${n} linhas retornadas`;
+  const linhas = n === 1 ? m.formato_linha_1() : m.formato_linhas({ n });
+  if (toolName === 'Bash' || toolName === 'BashOutput') return `${m.formato_tool_pronto()} (${linhas})`;
+  if (toolName === 'Read') return n === 1 ? m.formato_linhas_carregadas_1() : m.formato_linhas_carregadas({ n });
+  return n === 1 ? m.formato_linhas_retornadas_1() : m.formato_linhas_retornadas({ n });
 }
 
 // Rótulo do cabeçalho de um burst: todas do MESMO tipo -> o nome dela ("Read"), misturadas ->
 // rótulo genérico. É o que dá sentido a esconder o nome em cada filho da árvore.
 export function toolGroupLabel(names: (string | null | undefined)[]): string {
-  const first = names[0] ?? 'Tool';
-  return names.every((n) => (n ?? 'Tool') === first) ? first : 'Ferramentas';
+  const first = names[0] ?? m.formato_tool_generico();
+  return names.every((n) => (n ?? m.formato_tool_generico()) === first) ? first : m.formato_ferramentas();
 }
 
 // Contagem por fase no cabeçalho do grupo ("2 rodando • 3 concluídos"), na ordem rodando → ok → erro.
@@ -577,9 +581,9 @@ export function toolGroupCounts(phases: ToolPhase[]): string {
   const n = { pending: 0, done: 0, error: 0 };
   for (const p of phases) n[p]++;
   const parts: string[] = [];
-  if (n.pending) parts.push(`${n.pending} rodando`);
-  if (n.done) parts.push(`${n.done} ${n.done === 1 ? 'concluído' : 'concluídos'}`);
-  if (n.error) parts.push(`${n.error} com erro`);
+  if (n.pending) parts.push(m.formato_rodando({ n: n.pending }));
+  if (n.done) parts.push(n.done === 1 ? m.formato_concluido_1({ n: 1 }) : m.formato_concluidos({ n: n.done }));
+  if (n.error) parts.push(m.formato_com_erro({ n: n.error }));
   return parts.join(' • ');
 }
 

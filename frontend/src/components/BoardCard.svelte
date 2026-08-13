@@ -5,7 +5,7 @@
     getHistoryTailCached, getHistoryTailForServer, sendInputForServer, selectOptionForServer,
     uploadFileForServer, transcribeFileForServer,
   } from '../lib/api';
-  import { relativeTime, bubblesFromTail, stateLabels, pairColor, parsePeerMessage, providerTag } from '../lib/format';
+  import { relativeTime, bubblesFromTail, rotuloEstado, pairColor, parsePeerMessage, providerTag } from '../lib/format';
   import { parseStatusLine } from '../lib/statusline';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import { planBadge } from '../lib/plan';
@@ -371,7 +371,7 @@
     <!-- Pill de estado SÓ no canvas (fill): lá não há colunas dizendo o estado; no board a coluna
          já diz e o pill viraria ruído repetido. Vocabulário --pill-* do design system. -->
     {#if fill}
-      <span class="bc-state" data-state={session.state}>{stateLabels[session.state]}</span>
+      <span class="bc-state" data-state={session.state}>{rotuloEstado(session.state)}</span>
     {/if}
     <span class="bc-time">{relativeTime(session.last_activity)}</span>
     <span class="bc-open" title="Abrir chat completo">⤢</span>

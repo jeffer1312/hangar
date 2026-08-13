@@ -2,9 +2,9 @@
   import BottomSheet from './BottomSheet.svelte';
   import { renderMarkdown } from '../lib/markdown';
   import { getSessions, pairSession, unpairSession, getHistory, getPairContract } from '../lib/api';
-  import { stateLabels, stateColors, parsePeerMessage, relativeTime, encodeCompareIds } from '../lib/format';
+  import { rotuloEstado, stateColors, parsePeerMessage, relativeTime, encodeCompareIds } from '../lib/format';
   import { getActiveId } from '../lib/auth';
-  import type { SessionInfo } from '../lib/types';
+  import type { SessionInfo, State } from '../lib/types';
 
   interface Props {
     open: boolean;
@@ -190,7 +190,7 @@
           <div class="row row--member">
             {#if st}<span class="dot" style="background: {stateColors[st as keyof typeof stateColors]};" aria-hidden="true"></span>{/if}
             <span class="row-main"><span class="row-name">{p}</span></span>
-            {#if st}<span class="row-paired">{stateLabels[st as keyof typeof stateLabels]}</span>{/if}
+            {#if st}<span class="row-paired">{rotuloEstado(st as State)}</span>{/if}
             {#if onOpenPeerChat}
               <!-- Ícones em vez de glifos: `⤢` (expandir) e `⫽` (paralelas) não diziam o que fazem.
                    Aqui: um balão de conversa = abrir a conversa dele; duas colunas = lado a lado. -->
@@ -234,7 +234,7 @@
             {#each candidates as s (s.name)}
               <button class="row" class:row--picked={picked.includes(s.name)}
                       onclick={() => togglePick(s.name)}
-                      aria-label={`Adicionar ${s.name} ao grupo — ${stateLabels[s.state]}`}>
+                      aria-label={`Adicionar ${s.name} ao grupo — ${rotuloEstado(s.state)}`}>
                 <span class="dot" style="background: {stateColors[s.state]};" aria-hidden="true"></span>
                 <span class="row-main">
                   <span class="row-name">{s.name}</span>
@@ -309,7 +309,7 @@
           {#each candidates as s (s.name)}
             <button class="row" class:row--picked={picked.includes(s.name)}
                     onclick={() => togglePick(s.name)}
-                    aria-label={`Parear com ${s.name} — ${stateLabels[s.state]}`}>
+                    aria-label={`Parear com ${s.name} — ${rotuloEstado(s.state)}`}>
               <span class="dot" style="background: {stateColors[s.state]};" aria-hidden="true"></span>
               <span class="row-main">
                 <span class="row-name">{s.name}</span>

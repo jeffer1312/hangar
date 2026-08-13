@@ -1,7 +1,7 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
   import { getSessions, sendInput } from '../lib/api';
-  import { stateLabels, stateColors } from '../lib/format';
+  import { rotuloEstado, stateColors } from '../lib/format';
   import type { SessionInfo } from '../lib/types';
 
   interface Props {
@@ -60,7 +60,7 @@
       {:else}
         {#each sessions as s (s.name)}
           <button class="row" onclick={() => forward(s.name)} disabled={sentTo != null}
-                  aria-label={`Encaminhar pra ${s.name} — ${stateLabels[s.state]}`}>
+                  aria-label={`Encaminhar pra ${s.name} — ${rotuloEstado(s.state)}`}>
             <span class="dot" style="background: {stateColors[s.state]};" aria-hidden="true"></span>
             <span class="row-main">
               <span class="row-name">{s.name}</span>

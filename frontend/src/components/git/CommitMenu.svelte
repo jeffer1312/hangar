@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { GitCommit } from '../../lib/api';
+import { intlLocale } from '../../lib/locale';
   import { getCommitFiles, getCommitBranches } from '../../lib/api';
   import { portal } from '../../lib/portal';
   import { cleanErr, type GitStore } from '../../lib/gitStore.svelte';
@@ -63,7 +64,7 @@
     await copy([
       `commit ${commit.hash}`,
       `Autor:  ${commit.author}`,
-      `Data:   ${new Date(commit.ts * 1000).toLocaleString()}`,
+      `Data:   ${new Date(commit.ts * 1000).toLocaleString(intlLocale())}`,
       '',
       commit.subject,
       '',

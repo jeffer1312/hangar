@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+import { intlLocale } from '../lib/locale';
   import type { StatusFields } from '../lib/statusline';
 
   interface Props {
@@ -20,7 +21,7 @@
     if (typeof s.monthlyPct === 'number')
       out.push({ label: 'Janela 30d', value: `${s.monthlyPct}%` + (s.monthlyReset ? ` · reset ${s.monthlyReset}` : '') });
     if (typeof s.ctxUsed === 'number')
-      out.push({ label: 'Contexto', value: `${s.ctxUsed.toLocaleString('pt-BR')}${s.ctxTotal ? ' / ' + s.ctxTotal.toLocaleString('pt-BR') : ''}${typeof s.ctxPct === 'number' ? ` (${Math.round(s.ctxPct)}%)` : ''}` });
+      out.push({ label: 'Contexto', value: `${s.ctxUsed.toLocaleString(intlLocale())}${s.ctxTotal ? ' / ' + s.ctxTotal.toLocaleString(intlLocale()) : ''}${typeof s.ctxPct === 'number' ? ` (${Math.round(s.ctxPct)}%)` : ''}` });
     if (typeof s.costUsd === 'number')
       out.push({ label: 'Custo', value: `$${s.costUsd.toFixed(2)}` });
     if (s.sessionTime)

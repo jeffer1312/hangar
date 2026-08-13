@@ -18,7 +18,7 @@ vi.mock('../lib/sessionsStore.svelte', async () => ({
 }));
 import { fixtureByServer } from './sessionTabs.test-store.svelte';
 vi.mock('../lib/format', () => ({
-  stateColors: {}, stateLabels: {}, sortSessions: (s: unknown[]) => s,
+  stateColors: {}, rotuloEstado: () => '', sortSessions: (s: unknown[]) => s,
 }));
 vi.mock('../lib/plan', () => ({ planBadge: vi.fn() }));
 import { planBadge } from '../lib/plan';

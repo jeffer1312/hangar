@@ -1,5 +1,6 @@
 <script lang="ts">
   import NavBar from '../components/NavBar.svelte';
+import { intlLocale } from '../lib/locale';
   import MessageList from '../components/MessageList.svelte';
   import Select from '../components/Select.svelte';
   import {
@@ -143,7 +144,7 @@
   }
 
   function fmtDate(ts: number): string {
-    return new Date(ts * 1000).toLocaleString('pt-BR', {
+    return new Date(ts * 1000).toLocaleString(intlLocale(), {
       day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
     });
   }

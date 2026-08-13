@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest';
+// @vitest-environment happy-dom
+// fmt.ts importa locale.ts (getLocale do Paraglide) — o teste fixa o locale pt por padrao.
+import { describe, expect, it, beforeEach } from 'vitest';
 import { dec, money, money2, tok } from './fmt';
+import { overwriteGetLocale } from '../paraglide/runtime';
+
+beforeEach(() => overwriteGetLocale(() => 'pt'));
 
 describe('formatação pt-BR', () => {
   it('token grande usa vírgula decimal, não ponto', () => {
