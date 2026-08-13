@@ -62,6 +62,45 @@ describe('ServerManager — botão Remover', () => {
   });
 });
 
+// Na tela Servidores das Configurações a linha INTEIRA escolhe onde as configs de servidor serão
+// gravadas — e o conceito de "ativo" não aparece. Ele não é escolha do usuário: quem o troca é a
+// rota (App.applyRouteServer), a cada sessão aberta, então um botão "ativo" ali era um controle que
+// mente (apertar não muda nada visível; o próximo clique numa sessão desfaz).
+describe('ServerManager — escolha de alvo das configs', () => {
+  const B: Server = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'y' } as Server;
+
+  it('com onPickTarget: clicar na linha escolhe o alvo', () => {
+    const onPickTarget = vi.fn();
+    const t = montar({ servers: [UNICO, B], onPickTarget, targetId: 'srv-a' });
+    const linhas = t.el.querySelectorAll<HTMLButtonElement>('.sm-srv-pick');
+    expect(linhas.length).toBe(2);
+    linhas[1].click();
+    expect(onPickTarget).toHaveBeenCalledWith('srv-b');
+    unmount(t.comp);
+  });
+
+  it('com onPickTarget: o marcado é o ALVO, e nenhuma linha diz "ativo"', () => {
+    // activeId aponta pro OUTRO servidor de propósito: se o destaque seguisse o ativo, a tela
+    // marcaria a máquina errada como destino das configs.
+    const t = montar({ servers: [UNICO, B], onPickTarget: vi.fn(), targetId: 'srv-b', activeId: 'srv-a' });
+    const tags = [...t.el.querySelectorAll('.sm-tag')].map((n) => n.textContent);
+    expect(tags).toEqual(['escolhido']);
+    expect(t.el.textContent).not.toContain('ativo');
+    const marcadas = [...t.el.querySelectorAll('.sm-srv.on .sm-srv-label')].map((n) => n.textContent);
+    expect(marcadas).toEqual(['B']);
+    unmount(t.comp);
+  });
+
+  it('sem onPickTarget (menu de conta): segue trocando o ativo', () => {
+    const onSwitchActive = vi.fn();
+    const t = montar({ servers: [UNICO, B], onSwitchActive, activeId: 'srv-a' });
+    expect([...t.el.querySelectorAll('.sm-tag')].map((n) => n.textContent)).toEqual(['ativo']);
+    t.el.querySelectorAll<HTMLButtonElement>('.sm-srv-pick')[1].click();
+    expect(onSwitchActive).toHaveBeenCalledWith('srv-b');
+    unmount(t.comp);
+  });
+});
+
 describe('ServerManager — semântica ARIA do botão Adicionar (round 7)', () => {
   it('default (Settings): botão COMUM, sem role=menuitem (não há ancestral role=menu)', () => {
     const t = montar();

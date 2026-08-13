@@ -25,6 +25,13 @@ import traceback
 # aprovacao de tool = awaiting_input. SessionStart NAO mapeia estado: a sessao so e criada no 1o
 # prompt ("No session yet" da TUI), entao ele ja vem colado num turno — mas mesmo em resume sem
 # turno o bilhete abaixo precisa ser gravado, e ele grava em TODO evento.
+#
+# LIMITE MEDIDO EM 13/08/2026 (instrumentei o hook e gravei o payload cru de cada evento): turno que
+# comeca a partir de um prompt ENFILEIRADO na TUI nao dispara evento NENHUM — nem UserPromptSubmit,
+# nem TurnStarted. Zero eventos entre 08:38 e 08:56 com a sessao escrevendo codigo o tempo todo, e o
+# marcador congelado em "idle" o intervalo inteiro. Nao ha o que corrigir aqui: o evento nao existe.
+# Quem cobre esse buraco e o backend, comparando este marcador com o mtime do wire.jsonl — ver
+# app/state.py, corrige_ocioso_kimi.
 _STATE = {
     "UserPromptSubmit": "working",
     "TurnStarted": "working",

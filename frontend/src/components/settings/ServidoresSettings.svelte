@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { listServers, getActiveId, selectServer, renameServer, updateServer, removeServer,
+  import { listServers, getActiveId, renameServer, updateServer, removeServer,
            addServerWithRollback, validarPareamento, onServersChanged, snapshotRemocao, removalStillMatches } from '../../lib/auth';
   import { getSessions } from '../../lib/api';
   import { pushSupported } from '../../lib/push';
@@ -38,11 +38,6 @@
     serverVersion;   // dependência explícita do contador (listServers não é reativo)
     return listServers();
   });
-  const activeId = $derived.by(() => {
-    serverVersion;
-    return getActiveId();
-  });
-
   function rename(id: string, label: string) {
     renameServer(id, label);
     sessionsStore.refreshServers();
@@ -54,11 +49,10 @@
     sessionsStore.reconnect();
     return true;
   }
-  function switchActive(id: string) {
-    if (id === getActiveId()) return;
-    selectServer(id);
-    window.location.reload();
-  }
+  // Não há mais "tornar ativo" AQUI de propósito. O servidor ativo é derivado da SESSÃO ABERTA:
+  // `App.applyRouteServer` chama `selectServer` a cada mudança de rota, síncrono, antes do chat
+  // montar — abrir qualquer sessão o sobrescreve. Um botão nesta tela era um controle que mente.
+  // O que se escolhe aqui é o ALVO das telas de config de servidor, e só.
 
   // Adicionar servidor: colar URL de pareamento (com token) ou QR — mesmo fluxo do Sidebar
   // (mesma rota de parse), com CSS local. O reload no sucesso é deliberado: a lista nova muda
@@ -185,19 +179,20 @@
 </script>
 
 {#if resolvedServer}
-  <p class="ss-editando">Editando: <strong>{resolvedServer.label}</strong></p>
+  <p class="ss-editando">
+    Notificações, chaves de API e motores serão gravados em <strong>{resolvedServer.label}</strong>.
+    Toque em outro para trocar.
+  </p>
 {:else}
-  <p class="ss-editando ss-muted">Escolha “Editar” em um servidor para configurá-lo.</p>
+  <p class="ss-editando ss-muted">Toque num servidor para escolher onde as configurações serão gravadas.</p>
 {/if}
 {#if avisoRemocao}<p class="ss-aviso" role="status">{avisoRemocao}</p>{/if}
 {#if logoutMsg}<p class="ss-aviso" role="status">{logoutMsg}</p>{/if}
 
 <ServerManager
   {servers}
-  {activeId}
   targetId={resolvedServer?.id ?? null}
   {onPickTarget}
-  onSwitchActive={switchActive}
   podeRemoverUltimo
   onRename={rename}
   onUpdateToken={updateToken}
@@ -207,6 +202,14 @@
 
 {#if pushSupported()}
   <div class="ss-sep"></div>
+  <!-- Bloco de natureza MISTA, e por isso a legenda existe: ativar o push é do aparelho (assina o
+       navegador e registra em todos os servidores de uma vez), as horas silenciosas são do servidor
+       escolhido acima. Sem dizer isso, a tela deixava as duas parecendo a mesma coisa. -->
+  <p class="ss-secao">Notificações</p>
+  <p class="ss-legenda">
+    Ativar vale para este aparelho; as horas silenciosas são gravadas
+    {resolvedServer ? `em ${resolvedServer.label}` : 'no servidor escolhido acima'}.
+  </p>
   <PushQuiet target={pushTarget} open={true} />
 {:else}
   <div class="ss-sep"></div>
@@ -214,6 +217,10 @@
 {/if}
 
 <div class="ss-sep"></div>
+<!-- Fronteira explícita: daqui pra baixo NADA vai pro servidor escolhido acima. Reconectar refaz as
+     conexões deste aparelho e Sair apaga os tokens guardados AQUI — em todos os servidores. Era o
+     que mais confundia: a tela misturava as duas coisas sem dizer qual era qual. -->
+<p class="ss-secao">Neste aparelho</p>
 <div class="ss-acoes">
   <button class="ss-btn" onclick={() => sessionsStore.reconnect()} disabled={logoutInFlight}>Reconectar</button>
   <button class="ss-btn ss-danger" onclick={() => (confirmLogout = true)} disabled={logoutInFlight}>Sair</button>
@@ -282,6 +289,15 @@
   .ss-aviso { margin: 0 0 var(--space-2); font-size: var(--text-xs); color: var(--warning); }
 
   .ss-sep { height: 1px; background: var(--border-subtle); margin: var(--space-3) 0; }
+  .ss-secao {
+    margin: 0 0 var(--space-1) var(--space-2);
+    color: var(--text-muted); font-size: var(--text-xs);
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .ss-legenda {
+    margin: 0 var(--space-2) var(--space-2);
+    color: var(--text-muted); font-size: var(--text-xs); line-height: 1.4;
+  }
 
   .ss-acoes { display: flex; flex-direction: column; gap: var(--space-1); }
   .ss-btn {

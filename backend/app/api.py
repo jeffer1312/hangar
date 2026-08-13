@@ -41,6 +41,7 @@ from app.terminal_input import TerminalInput, drain
 from app.adapters import get_adapter
 from app.adapters.codex import sessions as codex_sessions
 from app.sse import merged_events
+from app.state import corrige_ocioso_kimi
 from app.uploads import save_upload, resolve_upload, prune_old, list_uploads, UploadError, MAX_BYTES
 from app.video import is_video, extract_frames, extract_audio
 from app.transcribe import transcribe, TranscribeError
@@ -593,6 +594,10 @@ def _on_awaiting(session_id: str) -> None:
 
 
 _CONFIRM_GRACE = 8.0  # s entre o send e a checagem "o transcript gravou o prompt?"
+# Kimi: de quanto em quanto tempo reavaliar um "idle" que o transcript desmentiu. Nao ha evento pra
+# esperar (o fim de turno real grava idle sobre idle e nao gera transicao), entao a saida e reolhar.
+# 5s: a sessao demora isso pra aparecer parada, e enquanto o turno anda o custo e um getmtime.
+_RECHECA_KIMI = 5.0
 
 
 def _drain_session(name: str) -> None:
@@ -620,6 +625,12 @@ def _confirm_and_drain(name: str) -> None:
         # interna do Claude Code) — decidir requeue agora arriscaria redigitar mensagem ja recebida.
         # Adia pro proximo ciclo (o turno acabando dispara transicao -> novo timer).
         m = hook_state.get_state(session_key(info.jsonl))
+        # No Kimi o marcador mente pra baixo (idle congelado do turno anterior, ver
+        # state.corrige_ocioso_kimi). Sem corrigir AQUI, o guard de mid-turn abaixo nunca segurava
+        # nada nesse provider — e ai toda entrega virava `desistiu` 8s depois do envio, mesmo a que
+        # so estava esperando a vez na fila da propria TUI.
+        if m and info.provider == "kimi":
+            m = corrige_ocioso_kimi(m, info.jsonl)
         if m and m[0] == "working":
             threading.Timer(_CONFIRM_GRACE + 0.5, _confirm_and_drain, args=(name,)).start()
             return
@@ -631,11 +642,21 @@ def _confirm_and_drain(name: str) -> None:
         # get_state()=None e o backend redigitou dentro do turno vivo (log REQUEUE 14:01:48).
         # Pior caso agora = comportamento antigo: envio engolido fica visivel como bolha da fila,
         # que e falha VISIVEL. Duplicar a msg do usuario nao e.
+        # Kimi NUNCA redigita. Prompt digitado durante um turno fica na fila da TUI e so entra no
+        # wire.jsonl quando o turno chega nele — nao ha o equivalente do `queue-operation` do Claude
+        # Code, que e o registro feito NO MOMENTO da digitacao. Entao, no Kimi, "ausente do
+        # transcript" nao prova engolido, e redigitar e a acao destrutiva. Some a isso o marcador de
+        # estado dizer "ociosa" no meio do turno (o Stop do SUBAGENTE grava na chave do pai) e o
+        # guard de working acima nao segura nada: medido em 13/08/2026, a mesma mensagem entrou 3x na
+        # fila de uma sessao Kimi (REQUEUE n=3 no log das 08:29). Pior caso agora e o mesmo aceito
+        # logo acima pro estado desconhecido: envio de verdade engolido fica VISIVEL como bolha da
+        # fila (`desistiu`), que e falha visivel — duplicar a msg do usuario nao e.
+        max_attempts = 0 if (m is None or info.provider == "kimi") else 2
         requeued = q.reconcile_delivered(
             committed_user_lines(info.jsonl, info.provider), _transcript_start_ts(info.jsonl),
             time.time(),
             grace=_CONFIRM_GRACE,
-            max_attempts=0 if m is None else 2,
+            max_attempts=max_attempts,
         )
         if requeued:
             _log.info("REQUEUE name=%s n=%d (TUI engoliu o send; re-drenando)", name, len(requeued))
@@ -717,10 +738,22 @@ def _on_hook_transition(session_id: str, state: str) -> None:
             info = next((s for s in registry.list()
                          if s.jsonl and session_key(s.jsonl) == session_id), None)
             if info and info.jsonl:
+                # Kimi: este "idle" pode ser MENTIRA. Um turno que comeca a partir de um prompt
+                # enfileirado na TUI nao dispara evento nenhum, entao o marcador fica congelado no
+                # idle do turno ANTERIOR enquanto o novo roda (ver state.corrige_ocioso_kimi). Sem
+                # esta checagem, tres automacoes disparam com a sessao trabalhando: o loop
+                # re-prompta, o `then` e CONSUMIDO (one-shot: o fim de turno real nao o dispara de
+                # novo) e o push diz "terminou". O drain segue — enfileirar texto e sempre seguro,
+                # e e o que o Claude/Kimi ja fazem sozinhos.
+                real = state
+                if state == "idle" and getattr(info, "provider", "claude") == "kimi":
+                    m = hook_state.get_state(session_id)
+                    if m and corrige_ocioso_kimi(m, info.jsonl)[0] == "working":
+                        real = "working"
                 sent = drain(info.name, info.jsonl, info.provider)
                 # Confirmacao em TODO idle (nao so pos-drain): Timers pendentes morrem no restart
                 # do backend — sem isto, entrada entregue ficava sem confirmar indefinidamente.
-                if sent or state == "idle":
+                if sent or real == "idle":
                     threading.Timer(_CONFIRM_GRACE + 0.5, _confirm_and_drain,
                                     args=(info.name,)).start()
                 # Loop runner: no idle, se ha loop ativo e o drain NAO acabou de digitar algo
@@ -728,12 +761,20 @@ def _on_hook_transition(session_id: str, state: str) -> None:
                 # tica o loop. Loop ativo SUPRIME o chain (senao cada idle entre iteracoes dispararia).
                 loop_d = loop_mod.LoopLink(info.name).get()
                 loop_active = loop_d is not None and loop_d["status"] in loop_mod.ACTIVE
-                if state == "idle" and loop_active and sent == 0:
+                if real == "idle" and loop_active and sent == 0:
                     loop_mod.schedule_tick(info.name, lambda: _loop_ctx(info.name))
                 # Encadeamento (feature #12): so quando NAO ha loop ativo — turno REALMENTE terminado,
                 # reusando o info.name ja resolvido nesta thread — ver _maybe_chain.
-                if state == "idle" and not loop_active:
+                if real == "idle" and not loop_active:
                     _maybe_chain(info.name)
+                # Idle desmentido pelo transcript: o fim de turno REAL nao vai gerar transicao
+                # nenhuma (o Stop grava idle sobre idle, e hook_state._apply so avisa quando o
+                # estado MUDA). Sem reagendar, o turno terminaria sem drenar a fila, sem ticar o
+                # loop e sem disparar o `then`. O reagendamento converge sozinho: quando o turno
+                # acaba, o wire.jsonl para de crescer e a proxima passada ve idle de verdade.
+                if real != state:
+                    threading.Timer(_RECHECA_KIMI, _on_hook_transition,
+                                    args=(session_id, state)).start()
         except Exception:
             pass
     threading.Thread(target=_work, daemon=True).start()

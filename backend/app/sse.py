@@ -359,8 +359,12 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
     current_jsonl = jsonl          # atualizado no __reset__ (ex: /clear abre novo transcript)
     # Ancora de hook do estado: o monitor le o marcador do sid VIVO (a closure acompanha o rebind
     # do /clear, que troca o current_jsonl -> sid novo).
+    # transcript_get so vai pro adapter que o aceita (hoje o Kimi): fecha sobre `current_jsonl` pelo
+    # mesmo motivo do sid_get — o /clear troca o transcript, e um caminho congelado leria o mtime do
+    # arquivo da sessao anterior.
+    _monitor_kw = ({"transcript_get": lambda: current_jsonl} if provider == "kimi" else {})
     monitor_stream = adapter.state_monitor(
-        name, sid_get=lambda: session_key(current_jsonl) if current_jsonl else None)
+        name, sid_get=lambda: session_key(current_jsonl) if current_jsonl else None, **_monitor_kw)
     pqueue = PromptQueue(name)
     # Fonte do preview ao vivo ramifica por provider: Claude nao tem push (o app-server manda os
     # deltas, o TUI do Claude nao) -> continua no PreviewBroker (poll do pane). Codex nao tem pane

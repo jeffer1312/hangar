@@ -28,10 +28,16 @@ class KimiAdapter:
         # esperar a linha irma.
         return TranscriptTailer(path, parse_line=kimi_parse_line).follow(start_offset)
 
-    def state_monitor(self, name: str, sid_get: Callable[[], str]) -> AsyncIterator[StateEvent]:
+    def state_monitor(self, name: str, sid_get: Callable[[], str],
+                      transcript_get: Callable[[], str | None] | None = None) -> AsyncIterator[StateEvent]:
         # hook_grace=None, mesma razao do Pi: o spinner do Kimi sao fases de lua (🌘🌗…), fora de
         # SPINNER_GLYPHS — a grace do Claude descartaria o marcador working NO MEIO do turno.
-        return StateMonitor(name, sid_get=sid_get, hook_grace=None).stream()
+        # transcript_get: SO o Kimi passa. Um turno que comeca a partir de um prompt enfileirado na
+        # TUI nao dispara evento nenhum, entao o marcador fica preso em "idle" o turno inteiro — e
+        # sem spinner legivel o pane tambem nao salva. O wire.jsonl crescendo e a unica prova de
+        # vida (ver state.corrige_ocioso_kimi).
+        return StateMonitor(name, sid_get=sid_get, hook_grace=None,
+                            transcript_get=transcript_get).stream()
 
     # provider="kimi" nos dois: o gate de "TUI pronta" (_wait_input_ready) casa marcas do RODAPE do
     # Claude por default, que o pane do Kimi nunca imprime -> sem o argumento, cada envio esperava

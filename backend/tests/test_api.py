@@ -2020,3 +2020,62 @@ def test_engine_model_set_valida_contra_catalogo_FRESCO(api_client_limpo):
     assert probe.call_count == 2          # nao reusou o cache
     assert r.status_code == 422
     drv.assert_not_called()
+
+
+# 13/08/2026 — o "idle" mentiroso do Kimi no caminho de ACAO
+# ---------------------------------------------------------------------------
+# Um turno Kimi que comeca a partir de um prompt enfileirado na TUI nao dispara evento nenhum, entao
+# o marcador fica congelado no idle do turno ANTERIOR enquanto o novo roda. As leituras (lista e
+# chat) ja corrigem isso; aqui esta o caminho que MEXE: sem a checagem, o loop re-prompta uma sessao
+# ocupada e o vinculo `then` e CONSUMIDO — e como o Stop real grava idle SOBRE idle, o
+# hook_state._apply nao avisa ninguem e o fim de turno de verdade nunca dispararia o `then` de novo.
+def _sessao_kimi(tmp_path, nome="k1", mtime=None):
+    import os
+    from types import SimpleNamespace
+    j = tmp_path / "wire.jsonl"
+    j.write_text("{}\n", encoding="utf-8")
+    if mtime is not None:
+        os.utime(j, (mtime, mtime))
+    return SimpleNamespace(name=nome, jsonl=str(j), provider="kimi")
+
+
+def _rodar_transicao_idle(monkeypatch, tmp_path, mtime_do_wire, marcador_ts):
+    """Dispara _on_hook_transition(sid, 'idle') com o wire escrito em `mtime_do_wire` e o marcador
+    gravado em `marcador_ts`. Devolve (chamou_chain, chamou_tick, reagendou)."""
+    from types import SimpleNamespace
+    info = _sessao_kimi(tmp_path, mtime=mtime_do_wire)
+    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
+    monkeypatch.setattr(api_mod, "session_key", lambda p: "sid-k")
+    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", marcador_ts))
+    monkeypatch.setattr(api_mod, "drain", lambda *a, **k: 0)
+    monkeypatch.setattr(api_mod.settings, "notify_finished", False)
+    chain, tick, timers = [], [], []
+    monkeypatch.setattr(api_mod, "_maybe_chain", lambda n: chain.append(n))
+    monkeypatch.setattr(api_mod.loop_mod, "schedule_tick", lambda n, ctx: tick.append(n))
+    monkeypatch.setattr(api_mod.loop_mod, "LoopLink",
+                        lambda n: SimpleNamespace(get=lambda: {"status": "running"}))
+    monkeypatch.setattr(api_mod.threading, "Timer",
+                        lambda *a, **k: (timers.append(a), SimpleNamespace(start=lambda: None))[1])
+    # _work roda numa thread; aqui executa o alvo direto pra o teste ser deterministico.
+    monkeypatch.setattr(api_mod.threading, "Thread",
+                        lambda target, daemon=None: SimpleNamespace(start=target))
+    api_mod._on_hook_transition("sid-k", "idle")
+    return chain, tick, timers
+
+
+def test_idle_falso_do_kimi_nao_dispara_automacao(monkeypatch, tmp_path):
+    # wire escrito 90s DEPOIS do marcador ocioso = turno andando.
+    chain, tick, timers = _rodar_transicao_idle(monkeypatch, tmp_path, 1090.0, 1000.0)
+    assert chain == []                        # `then` NAO e consumido no meio do turno
+    assert tick == []                         # loop NAO re-prompta sessao ocupada
+    # reagenda a reavaliacao: sem isto o fim de turno real (idle sobre idle) nao gera transicao
+    # nenhuma e a fila nunca seria drenada.
+    assert any(a[1] is api_mod._on_hook_transition for a in timers)
+
+
+def test_idle_de_verdade_do_kimi_segue_disparando(monkeypatch, tmp_path):
+    # O contrario, pra a correcao nao matar a feature: wire e marcador no mesmo instante = parada.
+    chain, tick, timers = _rodar_transicao_idle(monkeypatch, tmp_path, 1000.0, 1000.0)
+    assert tick == ["k1"]                     # loop ativo + sent == 0 -> tica
+    assert chain == []                        # com loop ativo o chain fica suprimido (regra antiga)
+    assert not any(a[1] is api_mod._on_hook_transition for a in timers)   # nada a reavaliar

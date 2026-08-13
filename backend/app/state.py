@@ -1,4 +1,5 @@
 import asyncio
+import os
 import re
 from typing import AsyncIterator, Callable, Optional
 
@@ -229,6 +230,41 @@ def classify(pane_text: str) -> tuple[str, Optional[str], Optional[str], Optiona
     return ("idle", None, None, None)
 
 
+# Folga entre a ultima escrita no transcript e o Stop do MESMO turno. Medido em 18 sessoes Kimi
+# reais (13/08/2026): numa sessao que terminou o turno a diferenca e 0.0s — o Stop chega no mesmo
+# segundo da ultima linha. A sessao travada media +1089s. 2s separa os dois casos com folga.
+KIMI_FOLGA_S = 2.0
+
+
+def corrige_ocioso_kimi(marker, jsonl: Optional[str], folga: float = KIMI_FOLGA_S):
+    """Kimi: marcador 'idle' velho + transcript crescendo = turno ANDANDO, nao sessao parada.
+
+    No Kimi, um turno que comeca a partir de um prompt ENFILEIRADO na TUI nao dispara
+    UserPromptSubmit nem TurnStarted (medido 13/08/2026: uma sessao Kimi ficou com o
+    marcador congelado em 'idle' as 08:38:35 enquanto escrevia codigo ate 08:56 — 18 minutos
+    aparecendo "pronta" na lista e no chat). O hook nao tem como cobrir isso: o evento nao existe.
+
+    O Stop, porem, e o ULTIMO evento do turno — sempre DEPOIS da ultima escrita no transcript. Logo
+    transcript mais novo que um marcador OCIOSO so pode ser turno em andamento. Sem raspar o pane,
+    de proposito: o spinner do Kimi e fase de lua, fora de SPINNER_GLYPHS, e nunca seria detectado
+    la — foi por isso que o fallback visual tambem nao salvou.
+
+    So corrige idle -> working. 'awaiting_input' segue seu caminho (a pergunta so existe no pane) e
+    'working' ja esta certo.
+
+    Recebe o CAMINHO (e nao o mtime ja lido) porque sao tres chamadores — a lista, o monitor do chat
+    aberto e o gatilho de automacoes — e a leitura com try/except tem que ser a mesma nos tres."""
+    if not marker or marker[0] != "idle":
+        return marker
+    try:
+        mtime = os.path.getmtime(jsonl) if jsonl else None
+    except OSError:
+        mtime = None
+    if mtime is not None and mtime > marker[1] + folga:
+        return ("working", mtime)
+    return marker
+
+
 class StateMonitor:
     # Polls com o MESMO spinner antes de tratá-lo como marcador de turn CONCLUÍDO congelado (idle)
     # em vez de spinner vivo animando (working).
@@ -243,7 +279,8 @@ class StateMonitor:
 
     def __init__(self, name: str, poll: float = 0.75,
                  sid_get: Optional[Callable[[], Optional[str]]] = None,
-                 hook_grace: Optional[int] = HOOK_WORKING_GRACE):
+                 hook_grace: Optional[int] = HOOK_WORKING_GRACE,
+                 transcript_get: Optional[Callable[[], Optional[str]]] = None):
         self.name = name
         self.poll = poll
         # hook_grace: apos quantos polls SEM SPINNER o marcador "working" deixa de valer. None =
@@ -257,6 +294,17 @@ class StateMonitor:
         # sid_get: session-id VIVO da sessao (muda no /clear) -> ancora o estado nos marcadores dos
         # hooks (deterministicos) em vez de depender so da leitura visual do pane. None = so pane.
         self.sid_get = sid_get
+        # transcript_get: caminho do transcript VIVO. So o Kimi passa — e a segunda fonte de
+        # `corrige_ocioso_kimi`, pro chat aberto nao mostrar "pronta" uma sessao que esta no meio de
+        # um turno vindo da fila da TUI (ver a docstring da funcao). None = comportamento de sempre.
+        self.transcript_get = transcript_get
+
+    def _marcador(self):
+        """Marcador do hook, ja corrigido quando ha transcript pra contradizer um idle velho."""
+        m = hook_state.get_state(self.sid_get())
+        if m is None or self.transcript_get is None:
+            return m
+        return corrige_ocioso_kimi(m, self.transcript_get())
 
     async def stream(self) -> AsyncIterator[StateEvent]:
         last_key = object()
@@ -298,7 +346,7 @@ class StateMonitor:
             # dono de awaiting_input/overlay (menus NAO disparam hook) e de dead. Marcador
             # "working" preso (claude morto mid-turn) expira via HOOK_WORKING_GRACE.
             if self.sid_get is not None and state in ("working", "idle"):
-                m = hook_state.get_state(self.sid_get())
+                m = self._marcador()
                 if m is not None:
                     if m[0] == "idle" and state == "working":
                         state, label = "idle", None

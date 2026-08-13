@@ -152,7 +152,13 @@
   // entao um id desconhecido devolveria O PRIMEIRO SERVIDOR DA LISTA, silenciosamente.
   const alvoConfig = $derived.by(() => {
     versaoServidores;                                   // dependencia explicita, ver acima
-    return cfg?.srv ? (listServers().find((s) => s.id === cfg.srv) ?? null) : null;
+    if (cfg?.srv) return listServers().find((s) => s.id === cfg.srv) ?? null;
+    // SEM `?srv=` o alvo e o ATIVO — que ja e o servidor da sessao aberta (applyRouteServer o troca
+    // a cada rota). Devolver null aqui abria a tela Servidores com NADA escolhido e "Servidor
+    // indisponivel" nas horas silenciosas mesmo havendo servidor cadastrado. `null` fica reservado
+    // pro caso que ele realmente descreve: um `?srv=` que NAO resolve (removido, link velho, id
+    // re-pareado) — e ai as telas de servidor continuam caindo na Aparencia, como antes.
+    return listServers().find((s) => s.id === getActiveId()) ?? null;
   });
 
   // Alvo que nao resolve (servidor removido, link velho, id re-pareado) NAO abre tela de servidor: cai

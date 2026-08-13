@@ -23,7 +23,8 @@ from app.adapters.codex import sessions as codex_sessions
 from app.adapters.codex import adapter as codex_adapter
 from app.adapters.codex.appserver import AppServerClient
 from app.askquestion import clear_pending_askq
-from app.state import classify, _live_spinner, rate_limit_reset, status_line as _pane_status
+from app.state import (classify, _live_spinner, rate_limit_reset, corrige_ocioso_kimi,
+                       status_line as _pane_status)
 from app.statusline import read as _sidecar_status
 from app.hook_state import hook_state
 from app.planprog import plan_progress, plano_escondido
@@ -227,6 +228,12 @@ def _jsonl_mtime(jsonl: Optional[str]) -> Optional[float]:
     except OSError:
         return None
 
+
+def _kimi_corrige_ocioso(info, marker):
+    """Aplica `corrige_ocioso_kimi` (app/state.py) a uma linha da lista. So pra provider kimi."""
+    if getattr(info, "provider", "claude") != "kimi":
+        return marker
+    return corrige_ocioso_kimi(marker, info.jsonl)
 
 
 # Executavel do agente -> provider. Casa o BASENAME do argv[0], nunca a linha inteira: `pip`,
@@ -984,6 +991,7 @@ class SessionRegistry:
                 info.last_activity = _jsonl_mtime(info.jsonl)
                 continue
             marker = hook_state.get_state(_sid(info.jsonl))
+            marker = _kimi_corrige_ocioso(info, marker)
             # Marker autoritativo pra working/idle/dead (custo ~0). Pra awaiting_input o marcador NAO
             # carrega a pergunta -> raspa o pane (junto das sem-marcador) pra pegar question/options.
             # LIMITACAO CONHECIDA (rate-limit radar, feature #8): este fast-path PULA a captura do pane,

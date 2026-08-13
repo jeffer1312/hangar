@@ -9,10 +9,14 @@
   interface Props {
     servers: Server[];
     activeId?: string | null;
-    // Linha "Editar" do alvo de config (desktop): quem está sendo editado fica marcado.
+    // Alvo das telas de config de servidor. Quando o pai passa `onPickTarget`, a LINHA INTEIRA é o
+    // seletor de alvo e o conceito de "ativo" nem aparece — ele não é uma escolha do usuário: quem
+    // troca o ativo é a rota (`App.applyRouteServer`), a cada sessão aberta. Um botão "ativo" ali
+    // era um controle que mente: apertar não muda nada que se veja, e o próximo clique numa sessão
+    // desfaz. O que se escolhe nesta tela é só ONDE as configs de servidor vão ser gravadas.
     targetId?: string | null;
     onPickTarget?: (id: string) => void;
-    // Botão de selecionar ativo só existe quando o pai sabe trocar (desktop). Drawer mobile não troca.
+    // Trocar o ativo à mão: só o menu de conta (que não escolhe alvo de config).
     onSwitchActive?: (id: string) => void;
     // Remover o ÚLTIMO servidor: no AccountMenu desktop o × some quando sobra 1 (remover o ativo
     // derruba a sessão sem aviso); na tela Servidores o último TEM que ser removível — remover tudo
@@ -32,6 +36,9 @@
     podeRemoverUltimo = false, menuitem = false,
     onRename, onUpdateToken, onRemove, onAdd,
   }: Props = $props();
+
+  // Quem está marcado na lista: o ALVO das configs quando o pai escolhe alvo, senão o ativo.
+  const marcado = (id: string) => (onPickTarget ? id === targetId : id === activeId);
 
   // Rename inline de servidor: id em edição + valor do input. O pai persiste (renameServer + reagrega).
   let editingId = $state<string | null>(null);
@@ -110,7 +117,7 @@
 
 <div class="sm-section">Servidores</div>
 {#each servers as s (s.id)}
-  <div class="sm-srv" class:on={s.id === activeId}>
+  <div class="sm-srv" class:on={marcado(s.id)}>
     {#if editingTokenId === s.id}
       <span class="sm-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
       <!-- svelte-ignore a11y_autofocus -->
@@ -141,11 +148,14 @@
         autofocus
         aria-label="Novo nome do servidor"
       />
-    {:else if onSwitchActive}
-      <button class="sm-srv-pick" onclick={() => onSwitchActive(s.id)}>
+    {:else if onPickTarget || onSwitchActive}
+      <button class="sm-srv-pick"
+        onclick={() => (onPickTarget ? onPickTarget(s.id) : onSwitchActive!(s.id))}
+        aria-pressed={onPickTarget ? s.id === targetId : undefined}
+        aria-label={onPickTarget ? `Gravar as configurações de servidor em ${s.label}` : undefined}>
         <span class="sm-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
         <span class="sm-srv-label">{s.label}</span>
-        {#if s.id === activeId}<span class="sm-tag">ativo</span>{/if}
+        {#if marcado(s.id)}<span class="sm-tag">{onPickTarget ? 'escolhido' : 'ativo'}</span>{/if}
       </button>
       <button class="sm-srv-rename" onclick={() => startRename(s.id, s.label)} aria-label={`Renomear ${s.label}`} title="Renomear">✎</button>
       <button class="sm-srv-rename" onclick={() => startEditToken(s.id)} aria-label={`Trocar token de ${s.label}`} title="Trocar token">🔑</button>
@@ -160,13 +170,6 @@
       {#if servers.length > 1 || podeRemoverUltimo}
         <button class="sm-srv-del" onclick={() => onRemove(s.id)} aria-label={`Remover ${s.label}`}>×</button>
       {/if}
-    {/if}
-    {#if onPickTarget}
-      <button class="sm-target" class:on={s.id === targetId}
-        onclick={() => onPickTarget(s.id)}
-        aria-label={`Editar configurações de ${s.label}`}>
-        {s.id === targetId ? '● editando' : 'Editar'}
-      </button>
     {/if}
   </div>
 {/each}
@@ -221,14 +224,6 @@
     color: var(--text-primary); font-family: var(--font-ui); font-size: 16px; outline: none;
   }
   .sm-srv-edit:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-
-  /* Botão "Editar" do alvo de config (SettingsModal): marca quem está sendo editado. */
-  .sm-target {
-    flex-shrink: 0; font-size: var(--text-xs); font-weight: 600; color: var(--text-secondary);
-    border-radius: var(--radius-sm); padding: 4px 8px;
-  }
-  .sm-target.on { color: var(--accent); background: var(--accent-dim); }
-  .sm-target:hover { color: var(--accent); background: var(--bg-hover); }
 
   /* Item de menu (ícone + rótulo). */
   .sm-item {

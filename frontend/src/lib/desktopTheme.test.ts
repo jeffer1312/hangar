@@ -35,13 +35,13 @@ let fetchImpl: (...args: any[]) => Promise<any> = async () => {
 };
 (globalThis as any).fetch = (...args: any[]) => fetchImpl(...args);
 
-// `desktopTheme.ts` so consome getBaseUrl/getToken — mockar `./auth` inteiro evita montar um
+// `desktopTheme.ts` so consome servidorDaOrigem — mockar `./auth` inteiro evita montar um
 // localStorage stateful so pra simular servidores cadastrados.
-const mockGetBaseUrl = vi.fn(() => '');
-const mockGetToken = vi.fn(() => 'tok');
+const mockOrigem = vi.fn<() => { id: string; label: string; baseUrl: string; token: string } | null>(
+  () => ({ id: 's1', label: 'servidor', baseUrl: '', token: 'tok' }),
+);
 vi.mock('./auth', () => ({
-  getBaseUrl: () => mockGetBaseUrl(),
-  getToken: () => mockGetToken(),
+  servidorDaOrigem: () => mockOrigem(),
 }));
 
 const { mapear, aplicarPaleta, limparPaleta, CHAVES, ehLocal, buscarPaleta, ligarAtualizacaoAoFocar, paletaEmCache } =
@@ -156,29 +156,48 @@ describe('tema do desktop', () => {
   });
 });
 
-// O gate real: a pagina pode ter vindo do localhost com um servidor REMOTO ativo — o caso que
-// `ehLocal` existe pra barrar, senao o app pediria a paleta (e o wallpaper) da maquina errada.
+// O gate real: existe servidor cadastrado NA ORIGEM desta pagina? Quem esta ATIVO nao entra na
+// conta — trocar pra um servidor remoto no meio da conversa nao pode apagar o tema Desktop, que e
+// da maquina onde a janela esta aberta.
 describe('ehLocal', () => {
-  it('true quando o servidor ativo nao tem baseUrl (mesma origem por convencao)', () => {
-    mockGetBaseUrl.mockReturnValue('');
+  it('true quando ha servidor na origem', () => {
+    mockOrigem.mockReturnValue({ id: 's1', label: 'servidor', baseUrl: '', token: 'tok' });
     expect(ehLocal()).toBe(true);
   });
 
-  it('true quando o baseUrl bate com a origem da pagina', () => {
-    mockGetBaseUrl.mockReturnValue('http://127.0.0.1:8765');
+  it('true mesmo com um servidor REMOTO ativo — o da origem continua cadastrado', () => {
+    // auth.servidorDaOrigem ja ignora o ativo; aqui o que importa e que desktopTheme nao reintroduza
+    // a pergunta "quem esta ativo?" — foi exatamente esse acoplamento que sumia com a opcao Desktop.
+    mockOrigem.mockReturnValue({ id: 's1', label: 'servidor', baseUrl: 'http://127.0.0.1:8765', token: 'tok' });
     expect(ehLocal()).toBe(true);
   });
 
-  it('false quando o baseUrl e de outra maquina — pagina local, servidor ativo remoto', () => {
-    mockGetBaseUrl.mockReturnValue('http://outra-maquina.ts.net:8765');
+  it('false quando nenhum servidor e desta origem — pagina servida por uma VPS', () => {
+    mockOrigem.mockReturnValue(null);
     expect(ehLocal()).toBe(false);
   });
 });
 
 describe('buscarPaleta', () => {
   beforeEach(() => {
-    mockGetBaseUrl.mockReturnValue(''); // ehLocal() = true nos quatro testes
-    mockGetToken.mockReturnValue('tok');
+    mockOrigem.mockReturnValue({ id: 's1', label: 'servidor', baseUrl: '', token: 'tok' });
+  });
+
+  it('sem servidor na origem -> null, sem tocar a rede', async () => {
+    mockOrigem.mockReturnValue(null);
+    let chamou = false;
+    fetchImpl = async () => { chamou = true; return { ok: true, json: async () => AZUL }; };
+    expect(await buscarPaleta()).toBeNull();
+    expect(chamou).toBe(false);
+  });
+
+  it('usa o token do servidor da ORIGEM, nao o do ativo', async () => {
+    mockOrigem.mockReturnValue({ id: 's1', label: 'servidor', baseUrl: 'http://127.0.0.1:8765', token: 'tok-origem' });
+    let visto: any = null;
+    fetchImpl = async (url: any, init: any) => { visto = { url, init }; return { ok: true, json: async () => AZUL }; };
+    await buscarPaleta();
+    expect(visto.url).toBe('http://127.0.0.1:8765/api/desktop/palette');
+    expect(visto.init.headers.Authorization).toBe('Bearer tok-origem');
   });
 
   it('404 (maquina sem rice) -> null', async () => {
@@ -241,8 +260,7 @@ describe('buscarPaleta', () => {
 // chamada com um predicate diferente nao substitui o primeiro, ela e descartada pelo guard.
 describe('ligarAtualizacaoAoFocar', () => {
   it('registra os listeners uma unica vez, e so rebusca quando o predicate diz "ativo"', async () => {
-    mockGetBaseUrl.mockReturnValue('');
-    mockGetToken.mockReturnValue('tok');
+    mockOrigem.mockReturnValue({ id: 's1', label: 'servidor', baseUrl: '', token: 'tok' });
     let chamadas = 0;
     fetchImpl = async () => {
       chamadas++;

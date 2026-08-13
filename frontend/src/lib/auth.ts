@@ -131,8 +131,18 @@ export function ensureCookie(): void {
 // e trocar pro remoto apagava o cookie de que o stream do servidor local ainda precisava.
 // Nenhum servidor na origem → limpa, em vez de deixar sobra de um ativo anterior.
 function cookieDaOrigem(): void {
-  const s = readServers().find((x) => isSameOrigin(x.baseUrl));
+  const s = servidorDaOrigem();
   syncCookie(s ? s.token : null);
+}
+
+// O servidor da PRÓPRIA ORIGEM (a máquina que serviu esta página), independente de qual está ATIVO.
+// Nem tudo no app fala com o ativo: o cookie do SSE é desta origem, e as coisas do desktop
+// (paleta do papel de parede, o próprio papel de parede) são da máquina onde a janela está aberta —
+// pedir isso pro servidor ativo dá 403 (a rota é só loopback) e a opção some da Aparência assim que
+// o usuário troca pra outra máquina. Sem servidor na origem (página vinda de uma VPS) → null, e
+// quem pergunta trata como "não tem".
+export function servidorDaOrigem(): Server | null {
+  return readServers().find((x) => isSameOrigin(x.baseUrl)) ?? null;
 }
 
 // Migração single-server -> multi (uma vez). baseUrl vazio vira o origin atual (absoluto) pra

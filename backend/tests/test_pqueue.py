@@ -601,12 +601,12 @@ def test_merged_history_kimi_provider(tmp_path):
 # sessao nao esta no meio de um turno, nao se redigita — confirma e desiste. O pior caso vira o
 # comportamento antigo (envio engolido fica visivel como bolha), que e falha VISIVEL, nao duplicata.
 
-def _sessao_fake(nome, jsonl):
+def _sessao_fake(nome, jsonl, provider="claude"):
     from types import SimpleNamespace
-    return SimpleNamespace(name=nome, jsonl=str(jsonl), provider="claude")
+    return SimpleNamespace(name=nome, jsonl=str(jsonl), provider=provider)
 
 
-def _cenario_engolida(tmp_path, monkeypatch, estado):
+def _cenario_engolida(tmp_path, monkeypatch, estado, provider="claude"):
     """Fila com uma entrega nao-confirmada + transcript SEM o texto. `estado` = o que o marcador
     do hook responde. Devolve (chamou_drain, linha_da_fila_depois)."""
     import json
@@ -622,7 +622,7 @@ def _cenario_engolida(tmp_path, monkeypatch, estado):
     q.path.write_text(json.dumps({"id": "e1", "text": "MENSAGEM-UNICA", "ts": _t.time() - 30,
                                   "delivered": True}) + "\n", encoding="utf-8")
 
-    monkeypatch.setattr(api.registry, "list", lambda: [_sessao_fake("ressuscitada", j)])
+    monkeypatch.setattr(api.registry, "list", lambda: [_sessao_fake("ressuscitada", j, provider)])
     monkeypatch.setattr(api.hook_state, "get_state", lambda _sid: estado)
     monkeypatch.setattr(api.threading, "Timer", lambda *a, **k: SimpleNamespace(start=lambda: None))
     chamou = []
@@ -657,3 +657,19 @@ def test_confirm_adia_enquanto_trabalha(tmp_path, monkeypatch):
     chamou, row = _cenario_engolida(tmp_path, monkeypatch, ("working", _t.time()))
     assert chamou == []
     assert "confirmed" not in row and not row.get("attempts")
+
+
+# 13/08/2026: a mesma mensagem entrou 3x na fila da TUI de uma sessao Kimi (REQUEUE n=3 no log das
+# 08:29, tres bolhas identicas visiveis no pane). No Kimi um prompt digitado durante um turno fica
+# na fila da TUI e so entra no wire.jsonl quando o turno chega nele — nao ha o `queue-operation` do
+# Claude Code, que e o registro feito no momento da digitacao. Logo "ausente do transcript" nao
+# prova engolido. E o marcador de estado nao salva: o Stop de um SUBAGENTE grava "idle" na chave do
+# pai, entao o guard de working acima ja tinha soltado o caminho.
+def test_confirm_nunca_redigita_no_kimi_mesmo_ocioso(tmp_path, monkeypatch):
+    import time as _t
+    chamou, row = _cenario_engolida(tmp_path, monkeypatch, ("idle", _t.time()), provider="kimi")
+    assert chamou == []                        # nada de re-drenar -> nunca uma segunda digitacao
+    assert row["delivered"] is True
+    assert not row.get("attempts")
+    assert row["desistiu"] is True             # visivel como bolha da fila, nao escondida
+    assert "confirmed" not in row

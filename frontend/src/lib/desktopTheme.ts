@@ -1,7 +1,7 @@
 // Tema vindo do desktop: o app pinta neutros, vidro e destaque com a paleta Material You que o rice
 // (quickshell/end-4) gera do papel de parede. Ver
 // docs/superpowers/specs/2026-08-05-tema-do-sistema-design.md.
-import { getBaseUrl, getToken } from './auth';
+import { servidorDaOrigem } from './auth';
 
 export type Paleta = { escuro: boolean; cores: Record<string, string> };
 
@@ -13,14 +13,14 @@ const CHAVES_CORES = [
   'primary', 'outlineVariant', 'outline', 'onPrimary', 'onSurface', 'onSurfaceVariant',
 ] as const;
 
-// A paleta e da MAQUINA onde o backend roda. Nao basta a pagina ter vindo do localhost: o app troca
-// de SERVIDOR ativo (o mesmo front fala com varias maquinas), e um servidor remoto devolveria 403 —
-// ou, pior, a paleta do papel de parede DELE. Entao o gate compara a origem do pedido com a da
-// pagina. `getBaseUrl()` vazio significa mesma origem.
+// A paleta e da MAQUINA onde esta janela esta aberta, entao ela vem SEMPRE do servidor da PROPRIA
+// ORIGEM — nunca do ativo. Sao coisas diferentes: o ativo e pra quem vai a conversa, e o usuario
+// troca de maquina no meio o tempo todo. Amarrar a paleta ao ativo fazia o tema Desktop sumir da
+// Aparencia assim que ele escolhia outro servidor (a rota e so loopback: o remoto devolve 403 —
+// ou, pior, a paleta do papel de parede DELE). Mesmo criterio do cookie do SSE (auth.ts,
+// cookieDaOrigem). Sem servidor na origem (pagina servida por uma VPS) nao ha paleta pra buscar.
 export function ehLocal(): boolean {
-  if (typeof location === 'undefined') return false;
-  const base = getBaseUrl();
-  return base === '' || base === location.origin;
+  return servidorDaOrigem() !== null;
 }
 
 function hexPraRgb(hex: string): string {
@@ -164,10 +164,11 @@ function paletaValida(v: unknown): v is Paleta {
 }
 
 export async function buscarPaleta(): Promise<Paleta | null> {
-  if (!ehLocal()) return null;
+  const s = servidorDaOrigem();
+  if (!s) return null;
   try {
-    const r = await fetch(`${getBaseUrl()}/api/desktop/palette`, {
-      headers: { Authorization: `Bearer ${getToken() ?? ''}` },
+    const r = await fetch(`${s.baseUrl}/api/desktop/palette`, {
+      headers: { Authorization: `Bearer ${s.token}` },
     });
     if (!r.ok) return null;   // 404 = maquina sem rice; 403 = nao e a maquina. Os dois: sem opcao.
     const bruto: unknown = await r.json();

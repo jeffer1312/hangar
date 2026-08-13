@@ -197,9 +197,13 @@ function soltarWallpaperDoDesktop(): void {
 // transparente — em vez de tela sem fundo nenhum.
 async function carregarWallpaperDoDesktop(): Promise<void> {
   try {
-    const { getBaseUrl, getToken } = await import('./auth');
-    const r = await fetch(`${getBaseUrl()}/api/desktop/wallpaper`, {
-      headers: { Authorization: `Bearer ${getToken() ?? ''}` },
+    // Servidor da ORIGEM, nao o ativo: a foto e da maquina onde esta janela esta aberta. Mesmo
+    // motivo (e mesma funcao) da paleta em desktopTheme.ts.
+    const { servidorDaOrigem } = await import('./auth');
+    const s = servidorDaOrigem();
+    if (!s) return;
+    const r = await fetch(`${s.baseUrl}/api/desktop/wallpaper`, {
+      headers: { Authorization: `Bearer ${s.token}` },
     });
     if (!r.ok) return;
     const url = URL.createObjectURL(await r.blob());
