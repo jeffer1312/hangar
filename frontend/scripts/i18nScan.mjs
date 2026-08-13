@@ -3,6 +3,13 @@
 // precisao, calibrada numa amostra de 45 achados. Falso positivo se resolve pondo a string no
 // i18n-allow.json; falso negativo o `svelte-check` nao pega, e e por isso que a linha de base
 // existe — ela mede o que sobra, nao o que e perfeito.
+//
+// Comentarios de BLOCO e comentarios de linha no inicio sao removidos ANTES da procura de
+// literais: sem isso, aspas dentro de comentario (// mostra "Salvar alterações") contariam como
+// string crua — 17% da baseline era ruido fantasma de prosa e o zero da Task 12 ficava
+// inalcancavel. Comentario de LINHA no fim (codigo // tal) NAO e removido de proposito: cortar
+// `//` ingenuamente come o resto de strings com https://… — falso negativo silencioso, pior que
+// o ruido. Residuo aceito: comentario de linha com aspas continua contando (padrao raro).
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
@@ -68,7 +75,12 @@ export function escanearArquivo(caminho, fonte, permitidas = new Set()) {
   const corpos = caminho.endsWith('.svelte') ? scripts : [fonte];
   for (const corpo of corpos) {
     const semImport = corpo.replace(/^\s*import .*$/gm, '');
-    for (const m of semImport.matchAll(/'([^'\\\n]{3,200})'|"([^"\\\n]{3,200})"|`([^`\\$\n]{3,200})`/g)) {
+    // Comentario de bloco sai inteiro; comentario de linha so quando ocupa a linha sozinho (ver
+    // cabecalho do arquivo: o `//` no fim de codigo nao e cortado, pra nao comer https://…).
+    const semComentario = semImport
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/^\s*\/\/.*$/gm, '');
+    for (const m of semComentario.matchAll(/'([^'\\\n]{3,200})'|"([^"\\\n]{3,200})"|`([^`\\$\n]{3,200})`/g)) {
       const t = pareceTexto(m[1] ?? m[2] ?? m[3], permitidas);
       if (t) achados.push(t);
     }
