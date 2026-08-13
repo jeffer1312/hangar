@@ -377,10 +377,44 @@ no meio deles.
    *"Sessão de <agente>"* quer dizer a conta padrão dele. Modelo daquele fabricante
    acessível por gateway, roteador ou API **não é** uma sessão dele — é outro provedor
    servindo um modelo parecido, com outra conta e outro comportamento.
-2. **Provar o que nasceu**, lendo o motor/modelo **real** da sessão (o que o app reporta),
-   nunca o que você pediu. Divergiu do plano → apague e recrie. Sessão errada recebendo o
-   pedido é trabalho inteiro no lugar errado, e o dado que denuncia isso aparece antes de
-   qualquer erro.
+
+   **`cp-send --new` NÃO carrega modelo nem nível de esforço.** Ele aceita
+   `[cwd] [--engine <motor>] [--provider <claude|pi>]` e mais nada. O contrato que nomeia modelo e
+   thinking (o caso normal quando o time roda em Pi) **não cabe nesse comando** — a sessão nasceria
+   no padrão do binário. Quem carrega os quatro campos é a API:
+
+   ```bash
+   T=$(grep '^CP_AUTH_TOKEN=' <repo>/backend/.env | cut -d= -f2-)
+   curl -s -X POST http://127.0.0.1:8765/api/sessions \
+     -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
+     -d '{"name":"<nome>","cwd":"<repo>","provider":"pi",
+          "model":"<provider>/<id>","effort":"<nivel>"}'
+   ```
+
+   O backend valida **antes** de qualquer efeito em disco: modelo fora da regex, nível fora da lista
+   fechada ou provider desconhecido devolvem 400 e a sessão **não nasce** — nunca uma sessão que
+   parece estar no modelo certo e não está. O caminho alternativo (criar pelo `cp-send` e trocar
+   depois por `/cp-model` + `/cp-think`) funciona, mas deixa a sessão viva um intervalo no modelo
+   errado, e contradiz o passo 2 abaixo.
+
+2. **Provar o que nasceu**, lendo o motor/modelo **real** da sessão, nunca o que você pediu.
+   Divergiu do plano → apague e recrie. Sessão errada recebendo o pedido é trabalho inteiro no lugar
+   errado, e o dado que denuncia isso aparece antes de qualquer erro.
+
+   Duas provas, e você quer as duas — elas falham por motivos diferentes:
+
+   ```bash
+   tmux display -p -t "=<nome>:" '#{pane_start_command}'   # o argv real com que o pane subiu
+   ```
+
+   Isso mostra `exec pi --session-id … --model <provider>/<id> --thinking <nivel>` e prova que o
+   **pedido** virou comando. Não prova o que o agente **aceitou**: o Pi trunca o nível ao que o
+   modelo suporta, então peça também a prova **ao vivo** à própria sessão (statusline ou o retorno de
+   `/cp-think`) no primeiro turno dela, antes do primeiro `Edit`. Repetir o que o kick-off pediu não
+   é prova.
+
+   Não leia `/proc/<pid>/cmdline` esperando as flags: o Pi reescreve o próprio argv e o cmdline
+   mostra só `pi`. Isso já pareceu, por um minuto, uma sessão criada sem modelo nenhum.
 3. **Escrever o pedido num arquivo** e entregar com `cp-send <nome> "$(cat <arquivo>)"`.
    Pedido longo digitado direto na linha quebra: `|`, `$`, crase e `|` de "SIM | NÃO" viram
    comando, e a mensagem sai mutilada ou não sai.

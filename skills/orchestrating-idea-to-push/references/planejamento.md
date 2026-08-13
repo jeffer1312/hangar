@@ -22,6 +22,13 @@ usuário às 3h da manhã. Além do que o `writing-plans` já pede, o plano carr
   `paralelo-worktree.md`, e a decisão é **aqui**, com o usuário, nunca do árbitro depois.
 - **Intocáveis**: paths com mudança paralela na árvore, listados um a um.
 - **Verificação por Task**: o comando exato e o que conta como passou.
+- **Steps escritos como `- [ ] **Step N: …**`** — é o formato que o contador de progresso reconhece
+  (`_STEP_RE` em `backend/app/planprog.py`; `### Task N:` para os cabeçalhos). Numerar de outro
+  jeito (`Passo A`, `Etapa 1`) faz a Task inteira contar **zero** e a barra que o usuário acompanha
+  no celular ficar parada com o trabalho andando. Receita partilhada por várias Tasks: escreva-a
+  como texto explicativo e **repita os Steps dentro de cada Task** — o executor lê uma Task por vez
+  e não pode depender de ter lido a anterior. Confira antes de aprovar:
+  `uv run python -c "from app.planprog import parse_plan; p=parse_plan('<caminho>', require_started=False); print(p.total, [t.total for t in p.tasks])"`
 - **Barra** das Tasks que mexem em pixel: contra o que o resultado vai ser comparado — ver abaixo.
 - **O que a revisão precisa cobrir** — ver abaixo. Isso entra **antes da Task 1**.
 - **Decisões em aberto**: o que ainda não foi decidido e quem decide. Lista vazia é a meta.
@@ -91,10 +98,38 @@ não defenderia não deve ir pra lista só pra ter três itens.
 Sem isso as primeiras Tasks passam por um portão que ainda não existe, e o preço é uma
 auditoria retroativa que reabre Task já aprovada — mais cara que ter escrito três linhas.
 
-### O time é saída do planejamento
+### O time é saída do planejamento — mas **você PROPÕE, ele escolhe**
 
 Quem escreve e quem revisa se decide **aqui**, porque o research e o brainstorming acabaram
 de mostrar de que este trabalho é feito. Decidir no lançamento é decidir sem esse dado.
+
+**"Se decide aqui" quer dizer que a PERGUNTA se faz aqui — não que você responde.** Modelo, motor,
+harness e conta são do usuário, sempre, e ler a política de contas da máquina **não** te autoriza a
+preencher: aquele arquivo diz o que **pode** ser usado, nunca o que **vai** ser usado neste
+trabalho. Preencher a tabela sozinho é indistinguível, no registro, de uma decisão que ele tomou.
+
+Mesmo formato da barra (seção abaixo): chegue com o trabalho caracterizado e as combinações que a
+máquina realmente consegue abrir, e faça **uma pergunta**. Não pergunte "qual modelo?" — ele pode
+não saber o que a máquina oferece; e não liste "as contas permitidas" como se fossem opções.
+
+Levante o inventário de verdade antes de perguntar, porque **`engines.json` não é o universo**:
+
+```bash
+claude-engine                     # motores p/ sessão Claude com --engine
+pi --list-models | awk 'NR>1{print $1}' | sort -u   # providers do Pi (rode do SHELL do usuário)
+ls -d ~/.claude ~/.claude-*       # contas Claude
+```
+
+Duas armadilhas medidas em 13/08/2026, as duas capazes de te fazer propor coisa que não existe:
+
+- **Harness ≠ motor.** Uma conta pode ser inalcançável por `--engine` e perfeitamente alcançável por
+  `--provider pi` ou pelo CLI próprio. Listar só os motores esconde metade das opções reais.
+- **Rode a listagem do shell do usuário.** Provider cuja credencial é variável de ambiente (fish
+  universal, `set -Ux`) **não aparece** num bash não-interativo, e você conclui que não existe. Use
+  `fish -l -c '...'` (ou o shell dele) antes de afirmar que uma conta não está configurada.
+
+E confira **colisão de id** antes de propor: duas contas diferentes podem oferecer os mesmos nomes de
+modelo, e só o `provider/id` completo distingue — propor a errada é a fatura de outra pessoa.
 
 Não existe elenco padrão. Modelo citado em qualquer exemplo é exemplo — nunca default.
 Olhe as Tasks e responda:
@@ -141,6 +176,18 @@ Passe o plano por um olhar adversarial (subagente de arquitetura + explorador): 
 arquivo/símbolo citado existe? A ordem se sustenta? O que quebra? Plano que cita símbolo
 inexistente vira round perdido na execução.
 
+**Este subagente roda com o modelo da definição dele — não force nada.** A política de contas da
+máquina governa as **sessões do time**, que ainda nem foram decididas nesta altura; ela não governa
+um subagente que você despacha durante o planejamento. Passar `model:` aqui "pra respeitar a tabela"
+é aplicar uma regra fora do escopo dela, e ainda troca o modelo que o autor do agente escolheu.
+Erro medido em 13/08/2026: o planejador tentou fixar `model: opus` num pass adversarial citando a
+tabela de contas, numa fase em que o usuário não tinha definido time nenhum.
+
+Ofereça o pass — não o rode sozinho, e não o pule por achar que já conferiu tudo. Ele pega o que
+você não tem como ver: na mesma data, achou 20 problemas num plano revisado, sendo 5 que faziam
+Task fechar em vermelho — inclusive três arquivos citados que **não existiam** e a regex do próprio
+guard do plano, que passaria a casar o mapa errado depois da Task que a consertava.
+
 ## Fase 2 — Lançamento (o único "pode ir" do usuário)
 
 ### Pré-voo, antes de criar sessão
@@ -149,18 +196,51 @@ inexistente vira round perdido na execução.
 git status --short          # árvore suja → os paths viram intocáveis, listados um a um
 git branch --show-current   # branch certa
 cp-send --list              # QUEM mais está vivo neste cwd
+tmux display -p '#{session_name}'   # ... e QUAL DESSES É VOCÊ
 ```
 
 Outra sessão escrevendo neste checkout trava a largada — resolva com ela, não com o usuário.
 Não resolveu → aí sim é decisão dele.
+
+**A quarta linha não é enfeite: você aparece na própria lista.** Sem ela, a sessão `working` no seu
+cwd parece um segundo escritor, e você gasta uma rodada mandando recado — para você mesmo, que
+volta como `[de: <você>]`. Medido em 13/08/2026.
+
+**Branch: `main`/`master` não é decisão sua.** Se a árvore está na branch principal e o plano tem
+mais de um commit, **pergunte antes de criar sessão** — criar ou trocar branch por iniciativa
+própria é proibido, e largar um time de doze commits na `main` é pior. Chegue com a proposta pronta
+(branch nova a partir do HEAD atual, com nome) e a alternativa (commitar direto), e deixe ele
+escolher. Se ele pedir `pull` antes, **reconfira os números do plano depois**: um pull que traz
+centenas de linhas move as linhas que o plano cita e pode mudar as contagens que a fase 1 mediu.
 
 ### Criar, na ordem
 
 ```bash
 cp-send --new <trab>-writer /caminho/do/repo --engine <motor do plano>
 cp-send --new <trab>-review /caminho/do/repo --engine <outro motor>
-cp-send --pair <sessao> "<trab>: <papel dela>"     # uma chamada por sessão
+cp-send --pair <sessao> "<trab>: <onde está o contrato>"   # uma chamada por sessão
 ```
+
+**NUNCA ponha o papel na string do `--pair`.** Ela é um campo do **GRUPO**, não da sessão: o
+sidecar de cada membro guarda a MESMA `task`, e cada `--pair` novo **sobrescreve a de todos** e
+dispara um aviso pro grupo inteiro com aquele texto. Pareando o executor com `"papel: executor"` e
+depois o revisor com `"papel: revisor independente"`, o executor recebe um aviso dizendo que ele é o
+revisor — e assume, porque a mensagem chegou pela infraestrutura, com cara de autoridade.
+
+Aconteceu de verdade em 13/08/2026: a sessão do executor anunciou *"a segunda mensagem corrigiu meu
+papel: agora sou i18n-review"* e foi ler o contrato como revisora. Custou uma correção de papel nas
+duas sessões e uma reescrita dos três sidecars.
+
+A string do `--pair` é **neutra e aponta pro contrato**, nunca afirma papel:
+
+```bash
+cp-send --pair <sessao> "<trab> — o papel de cada sessão está no contrato grupo-<gid>.md"
+```
+
+Papel se declara **no kick-off e na tabela do contrato**, e o contrato diz explicitamente que, se um
+aviso de grupo contradisser a tabela, vale a tabela. Se você já errou isto, conserte o estado, não
+só o texto: os sidecars ficam em `<config>/.claude-pocket-pair/<sessao>.json`, campo `task`, e dá
+pra reescrever direto (tmp+rename) sem disparar broadcast novo.
 
 Ordem obrigatória: `--new` → `--pair` → ler o `gid` no próprio sidecar → **escrever o
 contrato** → só então os kick-offs. Endereço apontando pra arquivo que ainda não existe é

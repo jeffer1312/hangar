@@ -102,6 +102,10 @@ foram decididos pelo usuário — nenhuma sessão reabre isso porque a situaçã
 - **Stage por caminho explícito.** Nunca `git add -A` nem `git add .`. Intocáveis nunca
   entram, em commit nenhum.
 - **Sem `--amend`/rebase/squash** em commit já commitado. Correção é commit novo.
+- **`cp-send <sessao>` RECUSA falar com sessão Claude desta máquina** (rc=3, "o caminho nativo
+  alcança os dois lados") e manda usar `SendMessage`. Se o `ListAgents` vier **vazio** — acontece —,
+  o `SendMessage` não tem endereço e você fica sem caminho nenhum. A saída é `cp-send --tmux
+  <sessao>`, que envia do jeito antigo. Sessão Pi ou Codex não sofre disso: só o par Claude→Claude.
 - **`cp-send` recebe a mensagem como argumento, não por stdin.** Texto longo vai por heredoc
   de aspas simples **dentro** de uma substituição:
 

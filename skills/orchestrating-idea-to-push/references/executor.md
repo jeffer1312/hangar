@@ -100,6 +100,42 @@ caso: peça o trecho de novo, não adivinhe.
 
 ### A receita quebra outra coisa → pare, reporte com a evidência, espere
 
+## O plano errou uma premissa no meio da Task: decidir sozinho ou parar?
+
+Acontece: você chega num Step e a realidade contradiz algo que o plano afirma — a biblioteca se
+comporta de outro jeito, o símbolo mudou, o teste que o plano escreveu falha por causa do
+**mecanismo**, não do teu código.
+
+Não pare por reflexo, e não decida por reflexo. **O discriminador é a prova que você tem na mão:**
+
+| A verificação da Task consegue distinguir os caminhos? | O que fazer |
+|---|---|
+| **Sim** — um passa e o outro falha | **decida, implemente, prove e reporte.** Edição local é reversível; o árbitro revisa uma coisa que funciona, não uma hipótese. Diga o que escolheu, o que descartou e por quê. |
+| **Não** — os dois ficam verdes | **pare ANTES e reporte**, com os caminhos e uma recomendação. |
+
+A linha de baixo é a que importa e a que se erra. Quando os dois caminhos passam em tudo, o teu
+reporte "está verde" **esconde** a escolha: o árbitro recebe um fato irrelevante em vez da decisão
+que ele precisa tomar, e o caminho pior entra no commit com prova a favor.
+
+É o caso típico da diferença que só aparece **depois**: robustez a upgrade de dependência,
+acoplamento a detalhe interno de biblioteca, custo de manutenção. Nenhum teste de hoje mede isso.
+
+Medido em 13/08/2026, Task 1: o executor achou que o `getLocale()` do Paraglide grava a chave do
+locale sozinho na primeira resolução, o que quebrava o "Seguir o sistema" do plano. Ele parou e
+propôs filtrar as chamadas por `opcoes.reload === false`. Os dois caminhos possíveis deixavam os 7
+testes verdes — então a parada foi certa, e no portão o árbitro trocou o discriminador por uma flag
+de intenção própria, porque olhar o formato da chamada interna da biblioteca quebra **calado** no
+dia em que ela mudar a assinatura. Se ele tivesse "testado e reportado", o frágil teria entrado com
+a suíte verde a favor.
+
+**Dois casos param sempre, sem passar por esta tabela:** o plano prescreveu **código literal** e você
+vai desviar dele; ou a descoberta contradiz uma **decisão registrada** no plano ou no contrato (não
+um detalhe de implementação — uma decisão que tem seção própria). Aí não é escolha técnica, é
+mudança de contrato, e contrato não se muda de dentro.
+
+Em todos os casos: **o que você descobriu vai pro plano, não só pro código.** Armadilha que não é
+registrada é armadilha que a próxima pessoa reintroduz.
+
 ## Travas
 
 - **Stage por caminho explícito.** Nunca `git add -A` nem `git add .`.
