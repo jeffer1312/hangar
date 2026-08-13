@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { SessionInfo, State } from '../lib/types';
+import * as m from '../paraglide/messages';
   import { rotuloEstado, stateColors, untrackedReason, providerTag } from '../lib/format';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import { planBadge } from '../lib/plan';
@@ -200,7 +201,7 @@
           <circle cx="6" cy="18" r="3"/>
           <path d="M18 9a9 9 0 0 1-9 9"/>
         </svg>
-        <span>Git</span>
+        <span>{m.sessao_git()}</span>
       </button>
       <button class="act loop" onclick={() => { offset = 0; onLoop?.(); }} aria-label="Loop de {session.name}">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -209,7 +210,7 @@
           <path d="m7 22-4-4 4-4"/>
           <path d="M21 13v1a4 4 0 0 1-4 4H3"/>
         </svg>
-        <span>Loop</span>
+        <span>{m.sessao_loop_runner()}</span>
       </button>
     {/if}
     <button class="act del" onclick={onDelete} aria-label="Excluir sessão {session.name}">
@@ -218,7 +219,7 @@
         <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
         <path d="M10 11v6M14 11v6"/>
       </svg>
-      <span>Excluir</span>
+      <span>{m.sessao_excluir_curto()}</span>
     </button>
   </div>
 
@@ -273,13 +274,13 @@
             onpointerdown={(e) => e.stopPropagation()}
             onkeydown={onEditKey}
             onblur={saveRename}
-            aria-label="Novo nome da sessão"
+            aria-label={m.sessao_novo_nome()}
           />
         {:else}
           <span class="session-name">{title}</span>
         {/if}
         {#if untracked}
-          <span class="untracked-badge" title={untrackedReason(session.provider)}>⚠ sem id</span>
+          <span class="untracked-badge" title={untrackedReason(session.provider)}>⚠ {m.sessao_sem_id()}</span>
         {/if}
       </span>
       {#if session.state === 'awaiting_input' && session.question}
@@ -327,7 +328,7 @@
             <span
               class="paired-chip"
               style="color: {LOOP_TONE_COLOR[loopChip.tone]}; background: color-mix(in srgb, {LOOP_TONE_COLOR[loopChip.tone]} 14%, transparent);"
-              title="Loop runner"
+              title={m.sessao_loop_runner()}
             >{loopChip.label}</span>
           {/if}
           {#if planChip}

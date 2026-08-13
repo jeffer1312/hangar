@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from '../paraglide/messages';
   type WorkspaceView = 'chat' | 'board' | 'canvas';
 
   interface Props {
@@ -12,14 +13,14 @@
   // Rotulos CURTOS de proposito: a coluna tem 248px por padrao, e "Conversa" + "Quadro" + "Canvas"
   // + o botao de busca nao cabem sem cortar palavra no meio. O nome longo vive no title.
   const items: { id: WorkspaceView; label: string; title: string }[] = [
-    { id: 'chat', label: 'Chat', title: 'Conversa' },
-    { id: 'board', label: 'Quadro', title: 'Quadro' },
-    { id: 'canvas', label: 'Canvas', title: 'Canvas' },
+    { id: 'chat', label: m.shell_conversa(), title: m.shell_conversa() },
+    { id: 'board', label: m.shell_quadro(), title: m.shell_quadro() },
+    { id: 'canvas', label: m.shell_canvas(), title: m.shell_canvas() },
   ];
 </script>
 
 <div class="workspace-nav-wrap">
-  <nav class="workspace-nav" aria-label="Visualização do espaço de trabalho">
+  <nav class="workspace-nav" aria-label={m.shell_visualizacao()}>
     {#each items as item (item.id)}
       <button
         type="button"
@@ -36,7 +37,7 @@
     type="button"
     class="command-button"
     onclick={onOpenCommand}
-    aria-label="Abrir busca e comandos"
+    aria-label={m.shell_abrir_busca()}
     title="Busca e comandos (Ctrl ou ⌘ + K)"
   >
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"

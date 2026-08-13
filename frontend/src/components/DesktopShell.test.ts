@@ -6,6 +6,7 @@
 // stubados.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick, createRawSnippet } from 'svelte';
+import { overwriteGetLocale } from '../paraglide/runtime';
 import DesktopShell from './DesktopShell.svelte';
 import { sidebarPin } from '../lib/sidebarPin.svelte';
 import { navMode } from '../lib/navMode.svelte';
@@ -97,6 +98,7 @@ function montar(currentSession: string | null) {
 }
 
 beforeEach(() => {
+  overwriteGetLocale(() => 'pt');   // textos dos estados sao mensagens agora
   sidebarPin.setForced(null);
   sidebarPin.setUser(false);   // sidebar expandida por padrão (sem barra de abas)
   navMode.mode = 'tabs';       // barra de abas ligada por padrão NOS TESTES (modo explícito)

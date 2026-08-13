@@ -1,7 +1,9 @@
 import type { AggSession } from './types';
+import * as m from '../paraglide/messages';
 
 export type WorkspaceView = 'chat' | 'board' | 'canvas';
-export type WorkspaceActionGroup = 'Navegação' | 'Sessão' | 'Ferramentas' | 'Colaboração';
+// Grupo do item no palette: rotulo traduzido (antes era union de literais pt).
+export type WorkspaceActionGroup = string;
 
 export interface WorkspaceSessionRef {
   serverId: string;
@@ -44,12 +46,18 @@ export type PaletteItem = WorkspaceActionItem | WorkspaceSessionItem;
 const normalize = (value: string) =>
   value.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim();
 
-const actionGroups: WorkspaceActionGroup[] = [
-  'Navegação',
-  'Sessão',
-  'Ferramentas',
-  'Colaboração',
-];
+// Ordem dos grupos no palette — rotulos traduzidos, mesmas mensagens que os itens usam,
+// senao a agregacao (action.group === group) nunca casa. FUNCAO e nao constante de proposito:
+// as mensagens leem o locale no momento da chamada, e uma constante avaliada no import
+// congelaria o idioma do boot (em teste, o baseLocale) e nunca casaria com os itens.
+function actionGroupOrder(): WorkspaceActionGroup[] {
+  return [
+    m.nav_navegacao(),
+    m.sessao_grupo(),
+    m.lista_ferramentas(),
+    m.lista_colaboracao(),
+  ];
+}
 
 export function workspaceSessionKey(session: WorkspaceSessionRef): string {
   return `${session.serverId}::${session.name}`;
@@ -65,7 +73,7 @@ export function resolveWorkspaceChatTarget(
 export function aggregateWorkspaceActions(actions: WorkspaceAction[]): WorkspaceAction[] {
   const actionsById = new Map<string, WorkspaceAction>();
   for (const action of actions) actionsById.set(action.id, action);
-  return actionGroups.flatMap((group) =>
+  return actionGroupOrder().flatMap((group) =>
     [...actionsById.values()].filter((action) => action.group === group),
   );
 }

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ctxPanel, alternarCtxPanel } from '../lib/ctxPanel.svelte';
+import * as m from '../paraglide/messages';
   import HangarWorking from './icons/HangarWorking.svelte';
   import RateChips from './RateChips.svelte';
   import PlanPanel from './PlanPanel.svelte';
@@ -111,7 +112,7 @@
   }
 </script>
 
-<aside class="session-context" class:recolhido={ctxPanel.recolhido} class:toggle-externo={toggleExterno} aria-label="Contexto da sessão">
+<aside class="session-context" class:recolhido={ctxPanel.recolhido} class:toggle-externo={toggleExterno} aria-label={m.ctx_painel_titulo()}>
   <!-- Botão de recolher: com toggle externo (barra no modo tabs OU rail recolhido) o controle mora lá — aqui fica
        sem botão duplicado. Sem a barra, o botão do topo é a porta acessível dos dois sentidos. -->
   {#if !toggleExterno}
@@ -151,13 +152,13 @@
   {#if hasActions}
     <div class="ctx-actions">
       {#if onOpenTerminal}
-        <button class="ctx-action terminal-btn" class:alert={terminalAlert} onclick={onOpenTerminal} aria-label="Terminal">
+        <button class="ctx-action terminal-btn" class:alert={terminalAlert} onclick={onOpenTerminal} aria-label={m.ctx_terminal()}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <rect x="2.5" y="4" width="19" height="16" rx="2"/>
             <path d="M6.5 9l3 3-3 3"/>
             <line x1="12.5" y1="15" x2="17" y2="15"/>
           </svg>
-          <span>Terminal</span>
+          <span>{m.ctx_terminal()}</span>
         </button>
       {/if}
       {#if onOpenRun}
@@ -174,15 +175,15 @@
         </button>
       {/if}
       {#if onOpenAttachments}
-        <button class="ctx-action" onclick={onOpenAttachments} aria-label="Anexos da sessão">
+        <button class="ctx-action" onclick={onOpenAttachments} aria-label={m.ctx_anexos_da_sessao()}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L16 6"/>
           </svg>
-          <span>Anexos</span>
+          <span>{m.ctx_anexos()}</span>
         </button>
       {/if}
       {#if onOpenActivity}
-        <button class="ctx-action activity-btn" class:running={activityRunning} onclick={onOpenActivity} aria-label="Atividade">
+        <button class="ctx-action activity-btn" class:running={activityRunning} onclick={onOpenActivity} aria-label={m.ctx_atividade()}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <polyline points="3 5 4.5 6.5 7 4"/>
             <polyline points="3 11.5 4.5 13 7 10.5"/>
@@ -190,7 +191,7 @@
             <line x1="10" y1="12" x2="20" y2="12"/>
             <line x1="10" y1="18.5" x2="20" y2="18.5"/>
           </svg>
-          <span>Atividade</span>
+          <span>{m.ctx_atividade()}</span>
           {#if activityBadge > 0}<span class="activity-badge">{activityBadge}</span>{/if}
         </button>
       {/if}
@@ -207,7 +208,7 @@
          o plan_name some, e o painel — que e onde fica o seletor pra voltar — sumiria com ele. -->
     <section class="sec-metric">
       <div class="section-head">
-        <span class="section-label">Plano</span>
+        <span class="section-label">{m.ctx_plano()}</span>
         {#if planRing}
           <span title={planRing.title}><PlanRing pct={planRing.pct} complete={planRing.complete} /></span>
         {/if}
@@ -218,7 +219,7 @@
   {/if}
 
   <section class="sec-metric">
-    <span class="section-label">Contexto</span>
+    <span class="section-label">{m.ctx_contexto()}</span>
     {#if status?.ctxPct != null}
       <!-- Mesma forma das barras de Limites: qualificador a esquerda, leitura a direita. Antes o
            Contexto punha o numero a esquerda e os Limites a direita — dois medidores irmaos com a
@@ -236,68 +237,68 @@
         <!-- Tokens do ULTIMO turno: o dado ja vinha na statusline crua (💬 271k/590) e so a barra
              de percentual chegava aqui. E o que responde "por que o contexto pulou". -->
         <p class="turn-tokens">
-          último turno: {ctxWindow(status.turnIn ?? 0)} entrada · {status.turnOut != null ? tokenShort(status.turnOut) : '—'} saída
+          {m.ctx_ultimo_turno()} {ctxWindow(status.turnIn ?? 0)} {m.ctx_entrada()} · {status.turnOut != null ? tokenShort(status.turnOut) : '—'} {m.ctx_saida()}
         </p>
       {/if}
     {:else}
-      <p>medição indisponível</p>
+      <p>{m.ctx_medicao_indisponivel()}</p>
     {/if}
   </section>
 
   {#if hasRate}
     <section class="sec-metric">
-      <span class="section-label">Limites</span>
+      <span class="section-label">{m.ctx_limites()}</span>
       <RateChips {status} onExpand={onExpandUsage} {limited} {limitReset} variant="bars" />
     </section>
   {/if}
 
   <section class="sec-break">
-    <span class="section-label">Grupo</span>
+    <span class="section-label">{m.ctx_grupo()}</span>
     {#if pairPeers?.length}
       {#if openGroup}
         <button type="button" class="sec-open" onclick={openGroup}
                 aria-label={soloPeer && onOpenPeerChat ? `Abrir a sessão ${soloPeer} num modal` : `Abrir o par: ${pairPeers.join(', ')}`}>
           <span class="sec-open-body">
             <strong>🤝 {pairPeers.join(' · ')}</strong>
-            <p>{soloPeer && onOpenPeerChat ? 'abrir a conversa dele' : `${pairPeers.length + 1} sessões pareadas`}</p>
+            <p>{soloPeer && onOpenPeerChat ? m.ctx_abrir_conversa_dele() : `${pairPeers.length + 1} ${m.ctx_sessoes_pareadas()}`}</p>
           </span>
           <span class="sec-open-arrow" aria-hidden="true">›</span>
         </button>
         {#if openPeer && onOpenPair}
           <!-- O atalho abre a conversa do par; o grupo em si (contrato, conversa, lado a lado, sair)
                continua a um toque daqui. -->
-          <button type="button" class="sec-side" onclick={onOpenPair} aria-label="Abrir o grupo pareado">
-            ver grupo
+          <button type="button" class="sec-side" onclick={onOpenPair} aria-label={m.ctx_abrir_grupo_pareado()}>
+            {m.ctx_ver_grupo()}
           </button>
         {/if}
       {:else}
         <strong>🤝 {pairPeers.join(' · ')}</strong>
-        <p>{pairPeers.length + 1} sessões pareadas</p>
+        <p>{pairPeers.length + 1} {m.ctx_sessoes_pareadas()}</p>
       {/if}
     {:else if onOpenPair}
       <!-- Sem par, a secao era so a frase "sessao independente" — e justamente aqui que se pensa em
            parear. Mesmo alvo clicavel das outras secoes, abrindo a PairSheet no modo "Parear com
            sessao". -->
-      <button type="button" class="sec-open" onclick={onOpenPair} aria-label="Parear com outra sessão">
+      <button type="button" class="sec-open" onclick={onOpenPair} aria-label={m.ctx_parear_outra()}>
         <span class="sec-open-body">
-          <strong>sessão independente</strong>
-          <p>parear com outra sessão</p>
+          <strong>{m.ctx_sessao_independente()}</strong>
+          <p>{m.ctx_parear_outra()}</p>
         </span>
         <span class="sec-open-arrow" aria-hidden="true">›</span>
       </button>
     {:else}
-      <p>sessão independente</p>
+      <p>{m.ctx_sessao_independente()}</p>
     {/if}
   </section>
 
   {#if status?.repo}
   <section class="sec-break">
-    <span class="section-label">Repositório</span>
+    <span class="section-label">{m.ctx_repositorio()}</span>
     {#if onOpenGit}
       <button type="button" class="sec-open" onclick={onOpenGit} aria-label="Abrir o git de {status.repo}">
         <span class="sec-open-body">
           <strong class="mono">{status.repo}</strong>
-          <p class="mono">{status.branch ?? 'sem branch'}{status.dirty ? ' · alterações locais' : ''}</p>
+          <p class="mono">{status.branch ?? m.ctx_sem_branch()}{status.dirty ? ` · ${m.ctx_alteracoes_locais()}` : ''}</p>
         </span>
         <span class="sec-open-arrow" aria-hidden="true">›</span>
       </button>
@@ -309,9 +310,9 @@
   {/if}
 
   <section class="sec-break">
-    <span class="section-label">Execução</span>
+    <span class="section-label">{m.ctx_execucao()}</span>
     {#if onProviderTap}
-      <button type="button" class="provider-tap" onclick={onProviderTap} aria-label="Limites de uso do provider">
+      <button type="button" class="provider-tap" onclick={onProviderTap} aria-label={m.ctx_limites_provider()}>
         {providerName(provider)}
       </button>
     {:else}

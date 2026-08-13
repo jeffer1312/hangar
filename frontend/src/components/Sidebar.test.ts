@@ -7,6 +7,7 @@ import { mount, unmount, tick, createRawSnippet } from 'svelte';
 import Sidebar from './Sidebar.svelte';
 import * as auth from '../lib/auth';
 import { abrirConfig } from '../lib/configNav';
+import { overwriteGetLocale } from '../paraglide/runtime';
 
 // Snippet criado DENTRO de cada factory: vi.mock é hoisted; function declaration é hoisted também
 // (const top-level cairia em TDZ quando a factory rodasse).
@@ -89,6 +90,7 @@ import * as api from '../lib/api';
 import type { AggSession } from '../lib/types';
 
 beforeEach(() => {
+  overwriteGetLocale(() => 'pt');   // textos dos menus e dialogs sao mensagens agora
   vi.clearAllMocks();   // contagens de chamada não vazam entre testes
   sidebarPin.setUser(false);   // pin do usuário: expandido (o persistido '0' não vaza do teste anterior)
   navMode.mode = 'tabs';       // modo abas nos testes existentes (a aside some com o pin)

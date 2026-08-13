@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+import * as m from '../paraglide/messages';
   import { getSessions, sendInput } from '../lib/api';
   import { rotuloEstado, stateColors } from '../lib/format';
   import type { SessionInfo } from '../lib/types';
@@ -28,7 +29,7 @@
     error = null;
     getSessions()
       .then((all) => { if (my === epoch) sessions = all.filter((s) => s.name !== fromSession && s.state !== 'dead'); })
-      .catch(() => { if (my === epoch) error = 'Não deu pra listar as sessões.'; });
+      .catch(() => { if (my === epoch) error = m.forward_nao_listou(); });
   });
 
   async function forward(target: string) {
@@ -47,7 +48,7 @@
 
 <BottomSheet {open} {onClose} ariaLabel="Encaminhar pra outra sessão">
   <div class="fwd">
-    <h2 class="title">Encaminhar pra sessão</h2>
+    <h2 class="title">{m.forward_titulo()}</h2>
     <p class="excerpt">{text.length > 160 ? text.slice(0, 160) + '…' : text}</p>
 
     {#if error}
@@ -56,7 +57,7 @@
 
     <div class="list">
       {#if sessions.length === 0 && !error}
-        <p class="empty">Nenhuma outra sessão viva.</p>
+        <p class="empty">{m.forward_nenhuma_viva()}</p>
       {:else}
         {#each sessions as s (s.name)}
           <button class="row" onclick={() => forward(s.name)} disabled={sentTo != null}

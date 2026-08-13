@@ -6,6 +6,7 @@
 
 <script lang="ts">
   import { onMount } from 'svelte';
+import * as m from '../paraglide/messages';
 import { intlLocale } from '../lib/locale';
   import HangarMark from '../components/icons/HangarMark.svelte';
   import SessionCard from '../components/SessionCard.svelte';
@@ -60,7 +61,7 @@ import { intlLocale } from '../lib/locale';
   }
   let showCreateSheet = $state(false);
   let drawerOpen = $state(false);    // menu lateral (hamburger): navegação + conta
-  let searchOpen = $state(false);    // "Buscar conversas" (switcher em modo só-busca)
+  let searchOpen = $state(false);    // Buscar conversas (switcher em modo so-busca)
   let filterText = $state('');
   // Fallback de foco das confirmações: o hamburger é o controle que SEMPRE sobra acessível, mesmo
   // quando o gatilho (linha do AccountMenu no drawer) já fechou/ficou inerte.
@@ -442,7 +443,7 @@ import { intlLocale } from '../lib/locale';
         resumeSheet = null;   // religada (caso seguro ou escolha confirmada)
       }
     } catch (e) {
-      resumeError = e instanceof Error ? e.message : 'falha ao retomar';
+      resumeError = e instanceof Error ? e.message : m.sessao_falha_retomar();
     } finally {
       resumeBusy = '';
     }
@@ -523,7 +524,7 @@ import { intlLocale } from '../lib/locale';
     const pareamento = validarPareamento(cru);
     if (!pareamento) {
       addValidacao = true;
-      addError = 'URL inválida — use http/https com o token.';
+      addError = m.url_invalida();
       addBusy = false;
       return;
     }
@@ -534,7 +535,7 @@ import { intlLocale } from '../lib/locale';
     // retry, e o erro tardio reabre o modal (round 2).
     try {
       const r = await addServerWithRollback(pareamento.base, pareamento.token, () => getSessions());
-      if (!r.succeeded) { addValidacao = true; addError = 'URL inválida — use http/https com o token.'; addBusy = false; return; }
+      if (!r.succeeded) { addValidacao = true; addError = m.url_invalida(); addBusy = false; return; }
       showAddServer = false;
       window.location.reload();
     } catch (err) {
@@ -542,7 +543,7 @@ import { intlLocale } from '../lib/locale';
       // Erro TARDIO não some: o usuário pode ter fechado o modal enquanto a transação rodava —
       // reabre com a mensagem visível (mesmo caminho do QR e do desktop, round 2).
       showAddServer = true;
-      addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
+      addError = err instanceof Error ? `${m.falha_conexao()}: ${err.message}` : m.erro_desconhecido();
     } finally {
       addBusy = false;
     }
@@ -569,7 +570,7 @@ import { intlLocale } from '../lib/locale';
     } catch (err) {
       showAddServer = true;
       addValidacao = false;
-      addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
+      addError = err instanceof Error ? `${m.falha_conexao()}: ${err.message}` : m.erro_desconhecido();
     }
   }
 </script>
@@ -577,7 +578,7 @@ import { intlLocale } from '../lib/locale';
 <div class="session-list-screen">
   <!-- Cabeçalho: hamburger (abre o drawer: navegação + conta) + marca + seleção/broadcast. -->
   <header class="sl-head">
-    <button class="sl-ham" bind:this={hamEl} onclick={openDrawer} aria-label="Abrir menu">
+    <button class="sl-ham" bind:this={hamEl} onclick={openDrawer} aria-label={m.sessao_menu_abrir()}>
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
         <path d="M4 7h16M4 12h13M4 17h16"/>
       </svg>
@@ -587,8 +588,8 @@ import { intlLocale } from '../lib/locale';
       class="sl-icon-btn"
       class:active={selectMode}
       onclick={toggleSelectMode}
-      aria-label={selectMode ? 'Cancelar seleção' : 'Selecionar sessões'}
-      title={selectMode ? 'Cancelar seleção' : 'Selecionar / broadcast'}
+      aria-label={selectMode ? m.lista_cancelar_selecao() : m.sessao_selecionar()}
+      title={selectMode ? m.lista_cancelar_selecao() : m.lista_selecionar_broadcast()}
     >
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
@@ -620,7 +621,7 @@ import { intlLocale } from '../lib/locale';
           <!-- Toggle Servidor|Projeto (feature #3): so aparece com >=2 servidores (paridade com o desktop
                via effectiveGroupBy) — com 1 servidor "por servidor" seria 1 grupo so, entao o toggle vira
                ruido e some. -->
-          <div class="group-toggle" role="radiogroup" aria-label="Agrupar por">
+          <div class="group-toggle" role="radiogroup" aria-label={m.lista_agrupar()}>
             <button type="button" class:active={groupBy === 'server'} role="radio" aria-checked={groupBy === 'server'} onclick={() => setGroupBy('server')}>Servidor</button>
             <button type="button" class:active={groupBy === 'project'} role="radio" aria-checked={groupBy === 'project'} onclick={() => setGroupBy('project')}>Projeto</button>
           </div>
@@ -637,7 +638,7 @@ import { intlLocale } from '../lib/locale';
     {#if loading && sessions.length === 0}
       <div class="empty-state">
         <div class="spinner-large" aria-label="Carregando…">⟳</div>
-        <p>Carregando sessões…</p>
+        <p>{m.lista_carregando()}</p>
       </div>
     {:else if error}
       <div class="empty-state">
@@ -646,8 +647,8 @@ import { intlLocale } from '../lib/locale';
       </div>
     {:else if sessions.length === 0}
       <div class="empty-state">
-        <p class="empty-title">Nenhuma sessão ativa</p>
-        <p class="empty-sub">Toque em + para criar</p>
+        <p class="empty-title">{m.lista_nenhuma_ativa()}</p>
+        <p class="empty-sub">{m.lista_toque_criar()}</p>
       </div>
     {:else}
       {#if showFilter}
@@ -655,16 +656,16 @@ import { intlLocale } from '../lib/locale';
           type="text"
           class="filter-input"
           bind:value={filterText}
-          placeholder="Filtrar sessões"
+          placeholder={m.lista_filtrar()}
           autocomplete="off"
           autocorrect="off"
           autocapitalize="off"
           spellcheck={false}
-          aria-label="Filtrar sessões"
+          aria-label={m.lista_filtrar()}
         />
       {/if}
       {#if visibleSessions.length === 0}
-        <p class="filter-empty">Nenhuma sessão corresponde ao filtro.</p>
+        <p class="filter-empty">{m.lista_vazia_filtro()}</p>
       {:else}
         {#if showGrouped}
           {#each grouped as g (g.id)}
@@ -689,8 +690,8 @@ import { intlLocale } from '../lib/locale';
                 <button
                   class="group-broadcast"
                   onclick={() => selectGroupForBroadcast(g)}
-                  aria-label={`Enviar mensagem para todas as sessões de ${g.label}`}
-                  title="Enviar p/ todas"
+                  aria-label={`${m.lista_enviar_msg_todas()} ${g.label}`}
+                  title={m.lista_enviar_todas()}
                 >➤</button>
               </div>
               {#if !collapsed.has(g.id)}
@@ -768,9 +769,9 @@ import { intlLocale } from '../lib/locale';
          fica no Composer normal, por sessão). Slash-command desabilita o envio (rota por sessão). -->
     <div class="broadcast-bar">
       <div class="broadcast-row">
-        <button class="broadcast-cancel" onclick={toggleSelectMode} aria-label="Cancelar seleção">×</button>
+        <button class="broadcast-cancel" onclick={toggleSelectMode} aria-label={m.lista_cancelar_selecao()}>×</button>
         <span class="broadcast-count">{selected.size} selecionada{selected.size === 1 ? '' : 's'}</span>
-        <button class="broadcast-compare" onclick={openCompare} disabled={compareDisabled} aria-label="Comparar sessões selecionadas" title="Comparar">Comparar</button>
+        <button class="broadcast-compare" onclick={openCompare} disabled={compareDisabled} aria-label={m.lista_comparar_selecionadas()} title={m.lista_comparar()}>{m.lista_comparar()}</button>
       </div>
       {#if broadcastMsg}<p class="broadcast-msg">{broadcastMsg}</p>{/if}
       <div class="broadcast-input-row">
@@ -778,25 +779,25 @@ import { intlLocale } from '../lib/locale';
           type="text"
           class="broadcast-input"
           bind:value={broadcastText}
-          placeholder="Mensagem para as sessões selecionadas"
+          placeholder={m.lista_msg_selecionadas()}
           disabled={broadcastBusy}
           onkeydown={(e) => { if (e.key === 'Enter' && !broadcastDisabled) sendBroadcast(); }}
-          aria-label="Mensagem de broadcast"
+          aria-label={m.lista_broadcast_msg()}
         />
-        <button class="broadcast-send" onclick={sendBroadcast} disabled={broadcastDisabled} aria-label="Enviar">
+        <button class="broadcast-send" onclick={sendBroadcast} disabled={broadcastDisabled} aria-label={m.lista_enviar()}>
           {broadcastBusy ? '…' : '➤'}
         </button>
       </div>
       {#if broadcastIsSlash}
-        <p class="broadcast-hint">Slash-commands não têm broadcast — envie dentro da sessão.</p>
+        <p class="broadcast-hint">{m.lista_broadcast_aviso()}</p>
       {/if}
     </div>
   {:else}
     <!-- Rodapé: só o CTA "Nova sessão" (a conta migrou pro drawer do hamburger). -->
     <footer class="sl-foot">
-      <button class="cta-new" onclick={() => (showCreateSheet = true)} aria-label="Nova sessão">
+      <button class="cta-new" onclick={() => (showCreateSheet = true)} aria-label={m.sessao_nova()}>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-        Nova sessão
+        {m.sessao_nova()}
       </button>
     </footer>
   {/if}
@@ -810,7 +811,7 @@ import { intlLocale } from '../lib/locale';
     onclick={() => (drawerOpen = false)}
     role="button"
     tabindex="-1"
-    aria-label="Fechar menu"
+    aria-label={m.sessao_menu_fechar()}
   ></div>
   <aside class="drawer" class:open={drawerOpen} aria-hidden={!drawerOpen} inert={!drawerOpen}>
     <div class="drawer-acct">
@@ -819,27 +820,27 @@ import { intlLocale } from '../lib/locale';
         <span class="drawer-name">{accountName}</span>
         <span class="drawer-sub">{accountSub}</span>
       </span>
-      <button class="drawer-close" onclick={() => (drawerOpen = false)} aria-label="Fechar menu">
+      <button class="drawer-close" onclick={() => (drawerOpen = false)} aria-label={m.sessao_menu_fechar()}>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </div>
     <div class="drawer-sep"></div>
-    <nav class="drawer-nav" aria-label="Navegação">
+    <nav class="drawer-nav" aria-label={m.nav_navegacao()}>
       <button class="drawer-nav-item on" aria-current="page" onclick={() => (drawerOpen = false)}>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-        Sessões
+        {m.lista_titulo()}
       </button>
       <button class="drawer-nav-item" onclick={() => { drawerOpen = false; searchOpen = true; }}>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-        Buscar conversas
+        {m.lista_buscar()}
       </button>
       <button class="drawer-nav-item" onclick={() => { drawerOpen = false; window.location.hash = '#/archive'; }}>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg>
-        Arquivo
+        {m.nav_arquivo()}
       </button>
       <button class="drawer-nav-item" onclick={() => { drawerOpen = false; window.location.hash = '#/costs'; }}>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
-        Custos
+        {m.nav_custos()}
       </button>
     </nav>
     <div class="drawer-sep"></div>
@@ -887,9 +888,9 @@ import { intlLocale } from '../lib/locale';
     {#if resumeSheet}
       {@const sheet = resumeSheet}
       <div class="resume-sheet">
-        <h2 class="resume-title">Retomar qual conversa?</h2>
+        <h2 class="resume-title">{m.sessao_retomar_qual()}</h2>
         <p class="resume-sub">
-          Há mais de uma sessão nesta pasta — escolha o transcript pra continuar em <strong>{sheet.session.name}</strong>.
+          {m.sessao_multiplas_pasta()} <strong>{sheet.session.name}</strong>.
         </p>
         {#if resumeError}<p class="resume-err">{resumeError}</p>{/if}
         <ul class="resume-list">
@@ -902,7 +903,7 @@ import { intlLocale } from '../lib/locale';
               >
                 <span class="resume-item-preview">{c.preview || '(sem prévia)'}</span>
                 <span class="resume-item-meta">
-                  {fmtWhen(c.mtime)}{#if c.in_use} · em uso por outra sessão{/if}
+                  {fmtWhen(c.mtime)}{#if c.in_use} {m.sessao_em_uso()}{/if}
                 </span>
               </button>
             </li>
@@ -913,12 +914,12 @@ import { intlLocale } from '../lib/locale';
   </BottomSheet>
 
   {#if showAddServer}
-    <ModalDialog open={showAddServer} ariaLabel="Adicionar servidor" onClose={() => (showAddServer = false)} className="add-server-dialog">
+    <ModalDialog open={showAddServer} ariaLabel={m.sessao_adicionar_servidor()} onClose={() => (showAddServer = false)} className="add-server-dialog">
       <div class="add-sheet">
-        <h2 class="add-title">Adicionar servidor</h2>
+        <h2 class="add-title">{m.sessao_adicionar_servidor()}</h2>
         <form onsubmit={submitAddServer} class="add-form" bind:this={addFormEl}>
           <div class="field">
-            <label class="field-label" for="add-url">URL do servidor</label>
+            <label class="field-label" for="add-url">{m.sessao_url_servidor()}</label>
             <input
               id="add-url"
               type="url"
@@ -935,7 +936,7 @@ import { intlLocale } from '../lib/locale';
             />
           </div>
           <div class="field">
-            <label class="field-label" for="add-token">Token</label>
+            <label class="field-label" for="add-token">{m.sessao_token()}</label>
             <input
               id="add-token"
               type="password"
@@ -954,7 +955,7 @@ import { intlLocale } from '../lib/locale';
             {addBusy ? 'Conectando…' : 'Adicionar'}
           </button>
           <button type="button" class="add-secondary" onclick={() => { showAddServer = false; scanning = true; }}>
-            Escanear QR
+            {m.sessao_escanear_qr()}
           </button>
         </form>
       </div>
@@ -967,7 +968,7 @@ import { intlLocale } from '../lib/locale';
 
   <ConfirmSheet
     open={confirmDel !== null}
-    title="Excluir esta sessão?"
+    title={m.sessao_excluir()}
     message={confirmDel
       ? confirmDel.state === 'working'
         ? `${confirmDel.name} está em execução — excluir encerra o processo do tmux e perde o que estiver rodando.`
@@ -982,7 +983,7 @@ import { intlLocale } from '../lib/locale';
 
   <ConfirmSheet
     open={confirmLogout}
-    title="Sair do app?"
+    title={m.sessao_sair_app()}
     message="Você vai precisar do token (QR ou digitado) pra entrar de novo — e ele pode estar no PC."
     confirmLabel="Sair"
     danger
@@ -993,7 +994,7 @@ import { intlLocale } from '../lib/locale';
 
   <ConfirmSheet
     open={confirmSrv !== null}
-    title="Remover este servidor?"
+    title={m.sessao_remover_servidor()}
     message={confirmSrv
       ? servers.length === 1
         ? `${confirmSrv.label} é o único servidor — remover desconecta o app e o pareamento precisa ser refeito (QR ou token no PC).`

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from 'svelte';
+import * as m from '../paraglide/messages';
   import AssistantBubble from './AssistantBubble.svelte';
   import {
     getHistoryTailCached, getHistoryTailForServer, sendInputForServer, selectOptionForServer,
@@ -89,7 +90,7 @@
       // Falha por-requisição (timeout de 8s / 404 / 500) com o SSE do Board saudável NÃO acende o
       // banner de offline (que é por servidor inteiro): sem marcador o card ficava em branco, igual a
       // sessão vazia, e sem retry — a cauda só roda no mount.
-      tailError = 'falha ao carregar — tocar pra tentar de novo';
+      tailError = m.board_falha_carregar();
     } finally {
       if (my === seq) loading = false;
     }
@@ -159,7 +160,7 @@
       });
     } catch {
       // Sinaliza no mesmo canal do tail inicial (retry recarrega a base) — nunca falha calada.
-      if (my === seq) tailError = 'falha ao carregar mais — tocar pra tentar de novo';
+      if (my === seq) tailError = m.board_falha_carregar_mais();
     } finally {
       // Incondicional: é o flag DESTA chamada, não do resultado compartilhado — condicionar ao seq
       // deixava "carregando mais…" preso pra sempre quando um retry invalidava o fetch em voo.
@@ -248,7 +249,7 @@
           // o draft sobrevive e o card remontado re-semeia dele.
           onDraftChange(nt);
         } catch (err) {
-          onSendError(err instanceof Error ? err.message : 'falha na transcrição');
+          onSendError(err instanceof Error ? err.message : m.board_falha_transcricao());
         } finally {
           recState = 'idle';
           recorder = null;
@@ -260,7 +261,7 @@
       // getUserMedia deu certo mas MediaRecorder/start falhou: solta o mic também neste caminho.
       stream?.getTracks().forEach((t) => t.stop());
       recStream = null;
-      onSendError(err instanceof Error ? err.message : 'microfone indisponível');
+      onSendError(err instanceof Error ? err.message : m.board_microfone_indisponivel());
     }
   }
 
@@ -276,12 +277,12 @@
         const parts: string[] = [];
         for (const f of attach) {
           const { path } = await uploadFileForServer(server, session.name, f);
-          parts.push((f.type.startsWith('image/') ? '📎 imagem: ' : '📎 arquivo: ') + path);
+          parts.push((f.type.startsWith('image/') ? `📎 ${m.board_imagem()}:` : `📎 ${m.board_arquivo()}:`) + path);
         }
         msg = (raw ? raw + ' — ' : '') + parts.join(' ');
       } catch (err) {
         // Upload falhou: mantém anexos + texto pro retry, nada se perde calado.
-        onSendError(err instanceof Error ? err.message : 'falha no upload');
+        onSendError(err instanceof Error ? err.message : m.board_falha_upload());
         attachBusy = false;
         return;
       }
@@ -303,7 +304,7 @@
       // Devolve a MSG COMPLETA (com os 📎 path já uploadados), não só o raw: os anexos já subiram e
       // reenviar o texto com os paths reaproveita — restaurar só o texto órfãozava os uploads.
       if (!text) text = msg;
-      onSendError(err instanceof Error ? err.message : 'falha no envio');
+      onSendError(err instanceof Error ? err.message : m.board_falha_envio());
     }
   }
   function onKey(e: KeyboardEvent) {
@@ -374,7 +375,7 @@
       <span class="bc-state" data-state={session.state}>{rotuloEstado(session.state)}</span>
     {/if}
     <span class="bc-time">{relativeTime(session.last_activity)}</span>
-    <span class="bc-open" title="Abrir chat completo">⤢</span>
+    <span class="bc-open" title={m.board_abrir_chat()}>⤢</span>
   </header>
   <!-- Linha de contexto do card: branch/par + infos da statusline (custo, tempo de sessão) — a
        "parte de cima" das infos compartilhadas do turno. Só aparece quando há o que mostrar. -->
@@ -396,7 +397,7 @@
         <span
           class="bc-chip"
           style="color: {LOOP_TONE_COLOR[loopChip.tone]}; background: color-mix(in srgb, {LOOP_TONE_COLOR[loopChip.tone]} 16%, transparent);"
-          title="Loop runner"
+          title={m.sessao_loop_runner()}
         >{loopChip.label}</span>
       {/if}
       {#if planChip}
@@ -421,8 +422,8 @@
                 title={'pareada com ' + session.pair_peers.join(', ')}>🤝 {session.pair_peers.join(', ')}</span>
         {/if}
       {/if}
-      {#if meta?.costUsd != null}<span title="custo da sessão">💵 ${meta.costUsd.toFixed(2)}</span>{/if}
-      {#if meta?.sessionTime}<span title="tempo de sessão">⏱ {meta.sessionTime}</span>{/if}
+      {#if meta?.costUsd != null}<span title={m.board_custo_sessao()}>💵 ${meta.costUsd.toFixed(2)}</span>{/if}
+      {#if meta?.sessionTime}<span title={m.board_tempo_sessao()}>⏱ {meta.sessionTime}</span>{/if}
     </div>
   {/if}
   <PlanBar {session} />
@@ -433,13 +434,13 @@
     {#if loading && visible.length === 0 && pending.length === 0}
       <p class="bc-empty">carregando…</p>
     {:else}
-      {#if loadingMore}<p class="bc-empty">carregando mais…</p>{/if}
+      {#if loadingMore}<p class="bc-empty">{m.board_carregando_mais()}</p>{/if}
       <!-- Descoberta explícita da paginação quando há mais história e o corpo não rola sozinho. -->
       {#if !loadingMore && !loading && !atEnd && events.length >= TAIL}
-        <button class="bc-more" onclick={loadMore}>· mensagens anteriores ·</button>
+        <button class="bc-more" onclick={loadMore}>· {m.board_mensagens_anteriores()} ·</button>
       {/if}
       {#if !loading && !loadingMore && visible.length === 0 && pending.length === 0 && !tailError && events.length > 0}
-        <p class="bc-empty">cauda recente só tem ferramentas — abrir o chat pra ver a conversa</p>
+        <p class="bc-empty">{m.board_cauda_ferramentas()}</p>
       {/if}
       {#each visible as e (e.id)}
         {#if e.kind === 'assistant_msg'}
@@ -476,7 +477,7 @@
       {#if refreshPending}
         <!-- Chegou resposta enquanto lias histórico: aviso clicável em vez de puxar teu scroll. -->
         <button class="bc-new" onclick={() => { refreshPending = false; loadTail(); }}>
-          ▼ novas mensagens
+          ▼ {m.board_novas_mensagens()}
         </button>
       {/if}
       {#if session.state === 'awaiting_input' && session.question}
@@ -500,9 +501,9 @@
     <footer class="bc-foot">
       {#if meta?.model || meta?.ctxPct != null}
         <div class="bc-meta">
-          {#if meta.model}<span title="modelo da sessão">🤖 {meta.model}{meta.effort ? ` · ${meta.effort}` : ''}</span>{/if}
+          {#if meta.model}<span title={m.board_modelo_sessao()}>🤖 {meta.model}{meta.effort ? ` · ${meta.effort}` : ''}</span>{/if}
           {#if meta.ctxPct != null}
-            <span class:bc-ctx-warn={meta.ctxPct >= 80} title="uso da janela de contexto">
+            <span class:bc-ctx-warn={meta.ctxPct >= 80} title={m.board_uso_janela()}>
               💬 {Math.round(meta.ctxPct)}%
             </span>
           {/if}
@@ -511,7 +512,7 @@
       {#if attach.length}
         <div class="bc-attach">
           {#each attach as f, i (i)}
-            <button class="bc-att" onclick={() => dropAttach(i)} title="Remover anexo">
+            <button class="bc-att" onclick={() => dropAttach(i)} title={m.board_remover_anexo()}>
               {f.type.startsWith('image/') ? '🖼' : '📄'} {f.name} ✕
             </button>
           {/each}
@@ -520,15 +521,15 @@
       <div class="bc-inrow">
         <input type="file" multiple hidden bind:this={fileInput} onchange={onFiles} />
         <button class="bc-tool" onclick={() => fileInput?.click()} disabled={attachBusy}
-                title="Anexar imagem/arquivo" aria-label="Anexar">📎</button>
+                title={m.board_anexar_imagem()} aria-label={m.board_anexar()}>📎</button>
         <button class="bc-tool" class:bc-rec={recState === 'rec'} onclick={toggleRec}
                 disabled={recState === 'busy'}
-                title={recState === 'rec' ? 'Parar e transcrever' : 'Gravar áudio (vira texto + anexo)'}
-                aria-label="Gravar áudio">{recState === 'busy' ? '…' : '🎤'}</button>
-        <textarea rows="1" placeholder={attachBusy ? 'enviando anexos…' : recState === 'busy' ? 'transcrevendo…' : 'Mensagem…'}
+                title={recState === 'rec' ? m.board_parar_transcrever() : m.board_gravar_audio()}
+                aria-label={m.board_gravar_audio()}>{recState === 'busy' ? '…' : '🎤'}</button>
+        <textarea rows="1" placeholder={attachBusy ? m.board_enviando_anexos() : recState === 'busy' ? m.board_transcrevendo() : m.composer_mensagem()}
                   bind:value={text} onkeydown={onKey}></textarea>
         <button class="bc-send" onclick={send}
-                disabled={(!text.trim() && attach.length === 0) || attachBusy} aria-label="Enviar">↑</button>
+                disabled={(!text.trim() && attach.length === 0) || attachBusy} aria-label={m.lista_enviar()}>↑</button>
       </div>
     </footer>
   {/if}
@@ -537,7 +538,7 @@
        erro do answer() ficava engolido ali dentro. E se a sessão sumir da lista o card inteiro
        evapora: aí o recibo é o do Board (orphanErrors). Clicar dispensa. -->
   {#if sendError}
-    <button class="bc-error" onclick={() => onSendError('')} title="Dispensar">{sendError}</button>
+    <button class="bc-error" onclick={() => onSendError('')} title={m.board_dispensar()}>{sendError}</button>
   {/if}
 </article>
 

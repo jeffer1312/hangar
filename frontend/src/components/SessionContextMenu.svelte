@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+import * as m from '../paraglide/messages';
   import { getPushSettings, setSessionMute, getBranches, openEditor, gitAction, setThenLink, clearThenLink } from '../lib/api';
   import { withServer } from '../lib/auth';
   import { copyText } from '../lib/clipboard';
@@ -39,7 +40,7 @@
     onClose();
     try {
       await withServer(serverId, () => setSessionMute(name, next));
-      onFlash(next ? 'notificações silenciadas' : 'notificações religadas');
+      onFlash(next ? m.ctx_notif_silenciadas() : m.ctx_notif_religadas());
     } catch (e) { onFlash(`silenciar: ${errMsg(e)}`); }
   }
 
@@ -93,7 +94,7 @@
     onClose();
     try {
       await withServer(serverId, () => clearThenLink(name));
-      onFlash('vínculo removido');
+      onFlash(m.ctx_vinculo_removido());
     } catch (e) {
       onFlash(`remover vínculo: ${errMsg(e)}`);
     }
@@ -119,7 +120,7 @@
 <div class="menu-backdrop" onclick={onClose} oncontextmenu={(e) => { e.preventDefault(); onClose(); }} role="presentation"></div>
 <div class="ctx-menu" style="left: {x}px; top: {y}px;" role="menu">
   {#if branchView}
-    <button type="button" class="ctx-back" onclick={() => (branchView = null)}>‹ Trocar branch</button>
+    <button type="button" class="ctx-back" onclick={() => (branchView = null)}>‹ {m.ctx_trocar_branch()}</button>
     <div class="ctx-sep"></div>
     {#if branchLoading}
       <div class="ctx-info">carregando…</div>
@@ -132,7 +133,7 @@
         {/each}
       </div>
     {:else}
-      <div class="ctx-info">sem branches</div>
+      <div class="ctx-info">{m.ctx_sem_branches()}</div>
     {/if}
   {:else if chainView}
     <button type="button" class="ctx-back" onclick={() => (chainView = null)}>‹ Quando terminar, enviar p/</button>
@@ -148,47 +149,47 @@
         {/each}
       </div>
     {:else}
-      <div class="ctx-info">nenhuma outra sessão neste servidor</div>
+      <div class="ctx-info">{m.ctx_nenhuma_outra()}</div>
     {/if}
     <div class="ctx-sep"></div>
     <div class="ctx-chain-form">
       <input
         type="text"
         class="ctx-chain-input"
-        placeholder="Prompt a enviar…"
+        placeholder={m.ctx_prompt_enviar()}
         bind:value={chainView.text}
         onkeydown={(e) => { if (e.key === 'Enter') saveChain(); }}
-        aria-label="Prompt a enviar pra sessão alvo"
+        aria-label={m.ctx_prompt_alvo()}
       />
       <button
         type="button" class="ctx-chain-save" onclick={saveChain}
         disabled={!chainView.target || !chainView.text.trim() || chainBusy}
-      >Salvar</button>
+      >{m.ctx_salvar()}</button>
     </div>
     {#if thenTarget}
       <div class="ctx-sep"></div>
-      <button type="button" role="menuitem" class="danger" onclick={removeChain}>Remover vínculo</button>
+      <button type="button" role="menuitem" class="danger" onclick={removeChain}>{m.ctx_remover_vinculo()}</button>
     {/if}
   {:else}
-    <button type="button" role="menuitem" onclick={onRename}>Renomear</button>
+    <button type="button" role="menuitem" onclick={onRename}>{m.ctx_renomear()}</button>
     <button type="button" role="menuitem" onclick={toggleMute}>
       {menuMuted ? 'Reativar notificações' : 'Silenciar notificações'}
     </button>
     {#if cwd}
-      <button type="button" role="menuitem" onclick={copyCwd}>Copiar cwd</button>
-      <button type="button" role="menuitem" onclick={doOpenEditor}>Abrir no editor</button>
+      <button type="button" role="menuitem" onclick={copyCwd}>{m.ctx_copiar_cwd()}</button>
+      <button type="button" role="menuitem" onclick={doOpenEditor}>{m.ctx_abrir_editor()}</button>
       <div class="ctx-sep"></div>
-      <button type="button" role="menuitem" onclick={onGit}>Git<span class="ctx-more">›</span></button>
-      <button type="button" role="menuitem" onclick={doGitPull}>Git pull</button>
-      <button type="button" role="menuitem" onclick={onLoop}>Loop<span class="ctx-more">›</span></button>
-      <button type="button" role="menuitem" onclick={loadBranches}>Trocar branch<span class="ctx-more">›</span></button>
+      <button type="button" role="menuitem" onclick={onGit}>{m.sessao_git()}<span class="ctx-more">›</span></button>
+      <button type="button" role="menuitem" onclick={doGitPull}>{m.ctx_git_pull()}</button>
+      <button type="button" role="menuitem" onclick={onLoop}>{m.sessao_loop_runner()}<span class="ctx-more">›</span></button>
+      <button type="button" role="menuitem" onclick={loadBranches}>{m.ctx_trocar_branch()}<span class="ctx-more">›</span></button>
     {/if}
     <div class="ctx-sep"></div>
     <button type="button" role="menuitem" onclick={openChain}>
       {thenTarget ? `Encadeado → ${thenTarget}` : 'Quando terminar, enviar p/…'}<span class="ctx-more">›</span>
     </button>
     <div class="ctx-sep"></div>
-    <button type="button" role="menuitem" class="danger" onclick={onDelete}>Excluir</button>
+    <button type="button" role="menuitem" class="danger" onclick={onDelete}>{m.sessao_excluir_curto()}</button>
   {/if}
 </div>
 

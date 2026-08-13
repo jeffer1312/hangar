@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+import * as m from '../paraglide/messages';
   import { SvelteMap } from 'svelte/reactivity';
   import BoardCard from '../components/BoardCard.svelte';
   import RateStrip from '../components/RateStrip.svelte';
@@ -67,7 +68,7 @@
   let collapsedGids = $state<string[]>(loadCollapsed());
   function saveCollapsed() {
     try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsedGids)); }
-    catch (e) { console.warn('cp_canvas_collapsed: falha ao persistir', e); }
+    catch (e) { console.warn('cp_canvas_collapsed: ' + m.board_falha_persistir(), e); }
   }
   function toggleCollapse(gid: string) {
     collapsedGids = collapsedGids.includes(gid)
@@ -286,7 +287,7 @@
   // atropelados são empurrados pela cascata. Disparado pelo clique no chip 🤝 do card.
   function gatherPair(anchorKey: string, gk: string) {
     const a = layout[anchorKey];
-    if (!a) { console.warn('reunir: âncora sem posição no layout', anchorKey); return; }
+    if (!a) { console.warn(m.board_reunir_ancora() + ':', anchorKey); return; }
     const members = rows.filter((r) => gkeyOf(r) === gk && rowKey(r) !== anchorKey);
     if (members.length === 0) return;
     const memberKeys = members.map(rowKey);
@@ -366,11 +367,11 @@
     <div class="cv-actions">
       {#if focusGid}
         <button class="cv-btn active" onclick={() => (focusGid = null)}
-                title="Sair do modo foco e mostrar todas as sessões">✕ mostrando só 1 grupo</button>
+                title={m.board_sair_foco()}>✕ {m.board_mostrando_1_grupo()}</button>
       {/if}
       <button class="cv-btn" onclick={autoArrange}
-              title="Reorganiza numa grade: quem espera por você primeiro, pareados lado a lado">
-        Organizar
+              title={m.board_reorganiza_grade()}>
+        {m.board_organizar()}
       </button>
       {#if hiddenRows.length}
         <button class="cv-btn" class:active={showHidden} onclick={() => (showHidden = !showHidden)}>
@@ -382,7 +383,7 @@
   {#if showHidden && hiddenRows.length}
     <div class="cv-hiddenrow">
       {#each hiddenRows as r (rowKey(r))}
-        <button class="cv-chip" onclick={() => unhide(rowKey(r))} title="Mostrar de novo">
+        <button class="cv-chip" onclick={() => unhide(rowKey(r))} title={m.board_mostrar_de_novo()}>
           <span class="cv-chip-dot" style="background: {serverColor(r.serverId)}" aria-hidden="true"></span>
           {r.name}
         </button>
@@ -390,11 +391,11 @@
     </div>
   {/if}
   {#if offline.length}
-    <p class="cv-offline">sem conexão: {offline.join(', ')}</p>
+    <p class="cv-offline">{m.board_sem_conexao()}: {offline.join(', ')}</p>
   {/if}
   {#each orphanErrors as [key, msg] (key)}
-    <button class="cv-senderr" onclick={() => sendErrors.delete(key)} title="Dispensar">
-      {key.split('::')[1]}: {msg} — msg não entregue
+    <button class="cv-senderr" onclick={() => sendErrors.delete(key)} title={m.board_dispensar()}>
+      {key.split('::')[1]}: {msg} — {m.board_msg_nao_entregue()}
     </button>
   {/each}
   <div class="cv-plane" style="width: {extent.w}px; height: {extent.h}px;">
@@ -412,8 +413,8 @@
                   if (anchor) gatherPair(rowKey(anchor), f.gid);
                   else console.warn('reunir: grupo sem membro posicionado', f.gid);
                 }}
-                title="Reunir os membros lado a lado">⇱</button>
-        <button onclick={() => toggleCollapse(f.gid)} title="Colapsar o grupo num card só">▾</button>
+                title={m.board_reunir_membros()}>⇱</button>
+        <button onclick={() => toggleCollapse(f.gid)} title={m.board_colapsar_grupo()}>▾</button>
         <button onclick={() => (focusGid = focusGid === f.gid ? null : f.gid)}
                 title="Ver só este grupo (esconde o resto)">◎</button>
       </div>
@@ -422,7 +423,7 @@
     {#each collapsedCards as g (g.gid)}
       <div class="cv-gcard" style="left: {g.x}px; top: {g.y}px; width: {g.w}px; color: {g.color};">
         <button class="cv-gcard-head" onclick={() => toggleCollapse(g.gid)}
-                title="Expandir o grupo de volta">
+                title={m.board_expandir_grupo()}>
           ▸ 🤝 {g.label ?? g.members.map((m) => m.name).join(' · ')}
         </button>
         {#each g.members as m (rowKey(m))}
@@ -447,12 +448,12 @@
                onpointerup={dragEnd} onpointercancel={dragEnd}
                role="button" tabindex="-1" aria-label={`Mover ${row.name}`}
                style={row.pair_gid ? `background: color-mix(in srgb, ${pairColor(gkeyOf(row)!)} 16%, var(--bg-surface)); color: ${pairColor(gkeyOf(row)!)};` : ''}
-               title="Arrastar pra mover">⋮⋮</div>
+               title={m.board_arrastar_mover()}>⋮⋮</div>
           <!-- IRMÃO do handle (não filho): botão real dentro de role="button" é aninhamento
                interativo inválido (ARIA). Absoluto por cima da faixa; intercepta o ponteiro antes
                do handle, então não dispara drag. -->
           <button class="cv-hide" onclick={() => hide(key)}
-                  title="Ocultar card (volta em «Ocultos»)" aria-label={`Ocultar ${row.name}`}>−</button>
+                  title={m.board_ocultar_card()} aria-label={`${m.board_ocultar()} ${row.name}`}>−</button>
           <div class="cv-body">
             <BoardCard
               session={row}
@@ -480,7 +481,7 @@
       {/if}
     {/each}
     {#if rows.length === 0}
-      <p class="cv-empty">nenhuma sessão viva</p>
+      <p class="cv-empty">{m.board_nenhuma_viva()}</p>
     {:else if visibleRows.length === 0 && collapsedCards.length > 0}
       <!-- Vazio de cards individuais mas COM grupos colapsados na tela: os compactos são o
            conteúdo — nenhuma mensagem (o texto de "ocultos" aqui mentiria sobre a causa). -->
@@ -488,10 +489,10 @@
       <!-- Vazio POR CAUSA do foco (grupo focado esvaziou/desfez): a instrução certa é sair do
            foco, não o botão «Ocultos». -->
       <button class="cv-empty cv-empty-btn" onclick={() => (focusGid = null)}>
-        o grupo em foco ficou sem sessões visíveis — clicar pra mostrar tudo de novo
+        {m.board_grupo_foco_sem_visiveis()}
       </button>
     {:else if visibleRows.length === 0}
-      <p class="cv-empty">todos os cards estão ocultos — use «Ocultos» no topo pra trazer de volta</p>
+      <p class="cv-empty">{m.board_cards_ocultos()}</p>
     {/if}
   </div>
 </div>

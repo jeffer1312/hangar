@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+import * as m from '../paraglide/messages';
   import ThemeToggle from './ThemeToggle.svelte';
   import BackgroundToggle from './BackgroundToggle.svelte';
   import { relativeTime, rotuloEstado, stateColors } from '../lib/format';
@@ -196,8 +197,8 @@
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel={searchOnly ? 'Buscar conversas' : 'Trocar de sessão'}>
-  <h2 class="sheet-title">{searchOnly ? 'Buscar conversas' : 'Sessões'}</h2>
+<BottomSheet {open} {onClose} ariaLabel={searchOnly ? m.lista_buscar() : m.sessao_trocar_de()}>
+  <h2 class="sheet-title">{searchOnly ? m.lista_buscar() : m.lista_titulo()}</h2>
 
   <!-- Alterna entre trocar de sessao (vivas) e buscar conteudo em todas as conversas (feature #10).
        Escondido no modo "só busca" (a navegação abre direto na busca, sem sessão atual pra trocar). -->
@@ -207,12 +208,12 @@
       class="tab" class:tab--on={mode === 'sessions'}
       role="tab" aria-selected={mode === 'sessions'}
       onclick={() => setMode('sessions')}
-    >Sessões</button>
+    >{m.lista_titulo()}</button>
     <button
       class="tab" class:tab--on={mode === 'search'}
       role="tab" aria-selected={mode === 'search'}
       onclick={() => setMode('search')}
-    >Buscar conversas</button>
+    >{m.lista_buscar()}</button>
   </div>
   {/if}
 
@@ -258,11 +259,11 @@
     {/if}
     <div class="list">
       {#if !query.trim()}
-        <p class="empty">Digite para buscar em todas as conversas.</p>
+        <p class="empty">{m.busca_digite_todas()}</p>
       {:else if searching}
         <p class="empty">Buscando…</p>
       {:else if results.length === 0}
-        <p class="empty">Nenhum resultado.</p>
+        <p class="empty">{m.busca_nenhum_resultado()}</p>
       {:else}
         {#each results as h (h.serverId + '/' + h.project + '/' + h.session_id)}
           <button class="row row--hit" onclick={() => tapHit(h)}>
@@ -288,7 +289,7 @@
   {:else}
   <div class="list">
     {#if sorted.length === 0}
-      <p class="empty">Nenhuma sessão encontrada.</p>
+      <p class="empty">{m.busca_nenhuma_sessao()}</p>
     {:else}
       {#each sorted as s, i (s.name)}
         <button
@@ -321,19 +322,19 @@
       onmousemove={() => (activeIdx = sorted.length)}
     >
       <span class="plus" aria-hidden="true">+</span>
-      <span class="row-name row-name--new">Nova sessão</span>
+      <span class="row-name row-name--new">{m.sessao_nova()}</span>
     </button>
   </div>
 
-  <p class="kbd-hint" aria-hidden="true">↑↓ mover · Enter abrir · Esc fechar</p>
+  <p class="kbd-hint" aria-hidden="true">{m.busca_atalhos()}</p>
   {/if}
 
   <div class="theme-row">
-    <span class="theme-label">Tema</span>
+    <span class="theme-label">{m.config_tema_curto()}</span>
     <ThemeToggle />
   </div>
   <div class="theme-row">
-    <span class="theme-label">Fundo</span>
+    <span class="theme-label">{m.config_fundo_curto()}</span>
     <BackgroundToggle />
   </div>
 </BottomSheet>

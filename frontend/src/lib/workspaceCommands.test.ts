@@ -1,4 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
+import { overwriteGetLocale } from '../paraglide/runtime';
+import * as m from '../paraglide/messages';
+
+// Os grupos das acoes sao mensagens agora: o teste fixa o pt e usa as MESMAS mensagens
+// que os componentes usam, senao a agregacao (action.group === group) nunca casa.
+beforeEach(() => overwriteGetLocale(() => 'pt'));
 import type { AggSession } from './types';
 import {
   aggregateWorkspaceActions,
@@ -22,18 +28,18 @@ describe('filterWorkspaceItems', () => {
 
   it('keeps the supplied group order', () => {
     const groupedItems = [
-      { key: 'chat', title: 'Conversa', detail: 'Abrir conversa', keywords: [], group: 'Navegação' as const },
-      { key: 'archive', title: 'Arquivo', detail: 'Abrir arquivo', keywords: [], group: 'Sessão' as const },
-      { key: 'git', title: 'Git', detail: 'Abrir Git', keywords: [], group: 'Ferramentas' as const },
-      { key: 'pair', title: 'Parear', detail: 'Parear sessão', keywords: [], group: 'Colaboração' as const },
-      { key: 'session', title: 'Projeto', detail: 'Abrir sessão', keywords: [], group: 'Sessões' as const },
+      { key: 'chat', title: 'Conversa', detail: 'Abrir conversa', keywords: [], group: m.nav_navegacao() },
+      { key: 'archive', title: 'Arquivo', detail: 'Abrir arquivo', keywords: [], group: m.sessao_grupo() },
+      { key: 'git', title: 'Git', detail: 'Abrir Git', keywords: [], group: m.lista_ferramentas() },
+      { key: 'pair', title: 'Parear', detail: 'Parear sessão', keywords: [], group: m.lista_colaboracao() },
+      { key: 'session', title: 'Projeto', detail: 'Abrir sessão', keywords: [], group: 'Sessões' },
     ];
 
     expect(filterWorkspaceItems(groupedItems, '').map((item) => item.group)).toEqual([
-      'Navegação',
-      'Sessão',
-      'Ferramentas',
-      'Colaboração',
+      m.nav_navegacao(),
+      m.sessao_grupo(),
+      m.lista_ferramentas(),
+      m.lista_colaboracao(),
       'Sessões',
     ]);
   });
@@ -104,12 +110,12 @@ describe('aggregateWorkspaceActions', () => {
   });
 
   it('deduplicates by id, orders shuffled groups and preserves order inside each group', () => {
-    const first = action('first', 'Ferramentas');
-    const navigation = action('navigation', 'Navegação');
-    const session = action('session', 'Sessão');
-    const second = action('second', 'Ferramentas');
-    const collaboration = action('collaboration', 'Colaboração');
-    const replacement = action('first', 'Ferramentas', 'substituída');
+    const first = action('first', m.lista_ferramentas());
+    const navigation = action('navigation', m.nav_navegacao());
+    const session = action('session', m.sessao_grupo());
+    const second = action('second', m.lista_ferramentas());
+    const collaboration = action('collaboration', m.lista_colaboracao());
+    const replacement = action('first', m.lista_ferramentas(), 'substituída');
 
     expect(aggregateWorkspaceActions([
       first,

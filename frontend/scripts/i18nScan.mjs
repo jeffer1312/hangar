@@ -10,6 +10,9 @@
 // inalcancavel. Comentario de LINHA no fim (codigo // tal) NAO e removido de proposito: cortar
 // `//` ingenuamente come o resto de strings com https://… — falso negativo silencioso, pior que
 // o ruido. Residuo aceito: comentario de linha com aspas continua contando (padrao raro).
+// No MARKUP vale o mesmo: comentario HTML <!-- … --> e removido antes do split por tags — sem
+// isto, um comentario com seta (<!-- Working -> … -->) cortava no primeiro `>` e o resto virava
+// texto solto contando como string crua (medido na Task 4: 26 dos 85 achados do Sidebar).
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
@@ -57,7 +60,8 @@ export function escanearArquivo(caminho, fonte, permitidas = new Set()) {
   const scripts = [...fonte.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
   const markup = fonte
     .replace(/<script[^>]*>[\s\S]*?<\/script>/g, '')
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/g, '');
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/g, '')
+    .replace(/<!--[\s\S]*?-->/g, ' ');
 
   for (const pedaco of markup.split(/<[^>]*>/)) {
     for (const linha of pedaco.replace(/\{[^{}]*\}/g, ' ').split('\n')) {

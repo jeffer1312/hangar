@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
+import * as m from '../paraglide/messages';
   import HangarMark from './icons/HangarMark.svelte';
   import Sidebar from './Sidebar.svelte';
   import SessionTabs from './SessionTabs.svelte';
@@ -159,26 +160,26 @@
   const navigationActions: WorkspaceAction[] = [
     {
       id: 'view:chat',
-      title: 'Conversa',
-      detail: 'Espaço principal de chat',
-      keywords: ['chat', 'conversa'],
-      group: 'Navegação',
+      title: m.shell_conversa(),
+      detail: m.shell_espaco_chat(),
+      keywords: ['chat', m.shell_conversa()],
+      group: m.nav_navegacao(),
       run: () => selectView('chat'),
     },
     {
       id: 'view:board',
-      title: 'Quadro',
-      detail: 'Sessões agrupadas por estado',
-      keywords: ['board', 'quadro', 'kanban'],
-      group: 'Navegação',
+      title: m.shell_quadro(),
+      detail: m.shell_sessoes_estado(),
+      keywords: ['board', m.shell_quadro(), 'kanban'],
+      group: m.nav_navegacao(),
       run: () => selectView('board'),
     },
     {
       id: 'view:canvas',
-      title: 'Canvas',
-      detail: 'Organização livre das sessões',
-      keywords: ['canvas', 'organização'],
-      group: 'Navegação',
+      title: m.shell_canvas(),
+      detail: m.shell_org_livre(),
+      keywords: ['canvas', m.shell_org_curto()],
+      group: m.nav_navegacao(),
       run: () => selectView('canvas'),
     },
   ];
@@ -394,9 +395,9 @@
         {#key workspaceSessionKey(overlaySession)}
           {@const overlayName = overlaySession.name}
           <div class="board-overlay" class:aba-faixa={barraRecolhida && !terminalMaximizado}
-               role="region" aria-label="Chat da sessão">
+               role="region" aria-label={m.shell_chat_da_sessao()}>
             <button class="split-close" onclick={onCloseOverlay}
-                    aria-label="Fechar chat" title="Fechar (Esc)">×</button>
+                    aria-label={m.shell_fechar_chat()} title={m.shell_fechar_esc()}>×</button>
             <Chat
               sessionName={overlayName}
               desktop={true}
@@ -440,7 +441,7 @@
       {#each splitSessions as split (split)}
         <div class="pane pane--split">
           <button class="split-close" onclick={() => (splitSessions = splitSessions.filter((s) => s !== split))}
-                  aria-label={`Fechar painel de ${split}`} title="Fechar painel">×</button>
+                  aria-label={`${m.shell_fechar_painel_de()} ${split}`} title={m.shell_fechar_painel()}>×</button>
           <Chat
             sessionName={split}
             desktop={true}
@@ -461,11 +462,11 @@
            acompanha resize (recentralização pura). -->
       <div class="desktop-empty" class:compensa-faixa={barraDeAbas}>
         <div class="empty-mark"><HangarMark size={72} /></div>
-        <p class="empty-title">Selecione uma sessão</p>
+        <p class="empty-title">{m.shell_selecione_sessao()}</p>
         <!-- A dica aponta pra ONDE as sessões estão, e isso agora é `sessoesNasAbas`, não a
              existência da barra: ela é permanente, então `barraDeAbas` mandaria todo mundo pras
              abas mesmo com a lista na barra lateral. -->
-        <p class="empty-sub">{sessoesNasAbas ? 'ou crie uma nova em + na faixa de abas' : 'ou crie uma nova na barra lateral'}</p>
+        <p class="empty-sub">{sessoesNasAbas ? m.shell_ou_crie_abas() : m.shell_ou_crie_barra()}</p>
       </div>
     {/if}
   </main>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+import * as m from '../paraglide/messages';
   import NavBar from '../components/NavBar.svelte';
   import AssistantBubble from '../components/AssistantBubble.svelte';
   import { openEventStreamForServer, getHistoryTailForServer } from '../lib/api';
@@ -130,14 +131,14 @@
 </script>
 
 <NavBar
-  title="Comparar"
+  title={m.lista_comparar()}
   subtitle={`${ids.length} ${ids.length === 1 ? 'sessão' : 'sessões'}`}
   showBack={true}
   onBack={onBack}
 />
 
 {#if ids.length === 0}
-  <div class="compare-empty"><p>Nenhuma sessão selecionada.</p></div>
+  <div class="compare-empty"><p>{m.compare_nenhuma_selecionada()}</p></div>
 {:else}
   <div class="compare-grid">
     {#each cards as c (c.serverId + '::' + c.name)}
@@ -164,11 +165,11 @@
                  dono desta sessão num relance cross-server -> tapping abre o chat completo pra isso. -->
             <AssistantBubble text={last.text ?? ''} ts={last.ts} animate={false} />
           {:else if c.invalidServer}
-            <p class="cc-empty">servidor não encontrado</p>
+            <p class="cc-empty">{m.compare_servidor_nao_encontrado()}</p>
           {:else if c.offline}
-            <p class="cc-empty">sem conexão</p>
+            <p class="cc-empty">{m.compare_sem_conexao()}</p>
           {:else}
-            <p class="cc-empty">sem respostas ainda</p>
+            <p class="cc-empty">{m.compare_sem_respostas()}</p>
           {/if}
         </div>
       </button>

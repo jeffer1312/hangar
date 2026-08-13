@@ -3,6 +3,7 @@
   // vira uma faixa de abas. Só a <aside> some — os workflows pesados (criar, menu de contexto,
   // kebab) continuam na Sidebar montada, chamados via sidebarBridge.
   import { onMount } from 'svelte';
+import * as m from '../paraglide/messages';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { buildSessionTabs, focusedTabKey, tabKeyOf } from '../lib/sessionTabs';
   import { stateColors, rotuloEstado } from '../lib/format';
@@ -74,8 +75,8 @@
     }
   }
   const rotuloModo = $derived(navMode.mode === 'tabs'
-    ? 'Mostrar sessões na barra lateral'
-    : 'Mostrar sessões como abas no topo');
+    ? m.tabs_mostrar_barra()
+    : m.tabs_mostrar_abas());
 
   // Tabs de ROLE button já respondem a Enter/Space nativamente; as setas movem o FOCO entre elas
   // (padrão tablist). Wrap nas pontas. O onfocus de cada aba atualiza `focusedKey`, então o
@@ -133,7 +134,7 @@
        repeti-las aqui seria a mesma lista em dois lugares na mesma tela. O `tabs-vazio` abaixo
        ocupa o lugar dela pra que as ações continuem ancoradas à direita. -->
   {#if navMode.mode === 'tabs'}
-  <div class="tabs-strip" role="tablist" aria-label="Sessões" tabindex="-1"
+  <div class="tabs-strip" role="tablist" aria-label={m.lista_titulo()} tabindex="-1"
        bind:this={stripEl} onkeydown={onStripKey}>
     {#each model.tabs as tab, i (tabKeyOf(tab.session))}
       {@const key = tabKeyOf(tab.session)}
@@ -172,8 +173,8 @@
     </span>
   {/if}
 
-  <button class="tab-action" onclick={() => sidebarBridge.openCreate()} aria-label="Nova sessão" title="Nova sessão">+</button>
-  <button class="tab-action" onclick={(e) => sidebarBridge.openKebab(e)} aria-haspopup="menu" aria-label="Mais opções" title="Buscar, Arquivo, Custos, Agrupar">⋯</button>
+  <button class="tab-action" onclick={() => sidebarBridge.openCreate()} aria-label={m.sessao_nova()} title={m.sessao_nova()}>+</button>
+  <button class="tab-action" onclick={(e) => sidebarBridge.openKebab(e)} aria-haspopup="menu" aria-label={m.tabs_mais_opcoes()} title={m.tabs_buscar_arquivo_custos()}>⋯</button>
   <!-- O ponto colorido veio junto com a engrenagem quando ela saiu do rodapé do trilho: ele não é
        enfeite, é a única coisa na tela que diz EM QUAL SERVIDOR você está, na mesma cor que agrupa
        as sessões por servidor. Tirar a engrenagem de lá sem trazer o ponto perderia essa metade da

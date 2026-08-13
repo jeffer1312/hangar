@@ -1,5 +1,6 @@
 <script lang="ts" module>
   import type { SessionInfo } from '../lib/types';
+import * as m from '../paraglide/messages';
   // Linha do quadro: sessão + servidor dono (pro card falar com o backend certo).
   export interface BoardRow extends SessionInfo { serverId: string }
   // Eco otimista de uma msg mandada do card. `ackAt` = instante em que o /input respondeu 200 (0 =
@@ -40,9 +41,9 @@
   // (state.py:228). Matar uma sessão REMOVE a linha, o card não migra: verificado ao vivo (o card
   // sumiu e a coluna seguiu em 0). A coluna era código morto ocupando largura.
   const COLS: { state: State; title: string }[] = [
-    { state: 'awaiting_input', title: 'Precisa de você' },
-    { state: 'working', title: 'Trabalhando' },
-    { state: 'idle', title: 'Pronto' },
+    { state: 'awaiting_input', title: m.board_precisa_de_voce() },
+    { state: 'working', title: m.board_trabalhando() },
+    { state: 'idle', title: m.board_pronto() },
   ];
   function byRecency(a: BoardRow, b: BoardRow): number {
     return (b.last_activity ?? 0) - (a.last_activity ?? 0) || a.name.localeCompare(b.name);
@@ -90,13 +91,13 @@
   <!-- ⚡5h/📅7d por servidor — compartilhado pela conta, então acima de todas as sessões. -->
   <RateStrip buckets={sessionsStore.byServer} />
   {#if offline.length}
-    <p class="board-offline">sem conexão: {offline.join(', ')}</p>
+    <p class="board-offline">{m.board_sem_conexao()}: {offline.join(', ')}</p>
   {/if}
   <!-- Recibo de msg não entregue a uma sessão que sumiu (o card que mostraria o erro já não existe).
        Clique dispensa. -->
   {#each orphanErrors as [key, msg] (key)}
-    <button class="board-senderr" onclick={() => sendErrors.delete(key)} title="Dispensar">
-      {key.split('::')[1]}: {msg} — msg não entregue
+    <button class="board-senderr" onclick={() => sendErrors.delete(key)} title={m.board_dispensar()}>
+      {key.split('::')[1]}: {msg} — {m.board_msg_nao_entregue()}
     </button>
   {/each}
   <div class="board-cols">
