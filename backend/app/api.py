@@ -2285,6 +2285,26 @@ def _espera_picker_fechar(name: str, timeout: float = _FECHA_PICKER_TIMEOUT) -> 
     return False
 
 
+# Prazo pro `tool.result` do picker do Kimi aparecer no wire depois do Submit.
+_RESULT_KIMI_TIMEOUT = 5.0
+
+
+def _espera_resposta_kimi(jsonl: str | None, call_id: str,
+                          timeout: float = _RESULT_KIMI_TIMEOUT) -> bool:
+    """True quando o `tool.result` daquele toolCallId chega no wire. A escrita nao e instantanea —
+    sem a espera, a checagem rodaria antes do Kimi gravar e todo drive bem-sucedido cairia no
+    fallback por texto, entregando a resposta DUAS vezes (uma pela ferramenta, outra como msg)."""
+    if not jsonl:
+        return False
+    from app.adapters.kimi.transcript import resposta_chegou
+    limite = time.monotonic() + timeout
+    while time.monotonic() < limite:
+        if resposta_chegou(jsonl, call_id):
+            return True
+        time.sleep(0.2)
+    return False
+
+
 def _recusa_se_painel_aberto(name: str) -> None:
     # Com o painel anexado, a janela do tmux esta no tamanho DELE (~120x20). Quem conta linha no
     # pane — o seletor de opcao, o stepper do AskUserQuestion (terminal_input.answer_questions /
@@ -3315,11 +3335,15 @@ def _pi_answer_fallback_text(a: dict) -> str:
         resp = ""
     if not resp:
         return ""
-    # Texto NEUTRO. Dizia "o seletor de opções falhou" — e no Kimi isso e mentira: la nao existe
-    # drive de teclas, o texto e o caminho NORMAL e unico. O usuario lia "falhou" na propria
+    # Texto NEUTRO. Dizia "o seletor de opções falhou" — e no Kimi isso era mentira ate hoje: la nao
+    # havia drive de teclas, o texto era o caminho NORMAL e unico. O usuario lia "falhou" na propria
     # conversa e achava que a resposta tinha dado errado (relatado em 13/08/2026), e o agente lia a
-    # mesma frase e respondia ao fantasma. Quem quiser saber que houve fallback tem o log e o
-    # `fallback: true` da resposta da API.
+    # mesma frase e respondia ao fantasma.
+    #
+    # Quem soube que houve fallback foi o LOG do servidor. O `fallback: true` volta no corpo da
+    # resposta, mas o front descarta (`api.ts answerQuestions` tipa so `{ok}`) — entao nao prometa
+    # aqui que o usuario ve isso. O que ele ve e a propria resposta virando mensagem no chat, que ja
+    # diz "foi por texto" sem precisar de aviso.
     return f"Respondendo à pergunta: {resp}"
 
 
@@ -3368,25 +3392,43 @@ def answer(name: str, body: AnswerBody):
         return {"ok": True, "fallback": fallback}
 
     # Kimi: a pergunta nativa (tool AskUserQuestion) mora no wire — o front sintetiza o card a
-    # partir do tool_use pendente, igual ao Pi. Diferente do Pi, o picker do Kimi NAO tem drive de
-    # teclas medido ainda -> vai DIRETO pro fallback por texto (Escape fecha o picker e a resposta
-    # vira mensagem normal; a resposta do usuario nunca se perde).
+    # partir do tool_use pendente, igual ao Pi. O drive do picker foi medido em 13/08/2026 (Kimi
+    # 0.36.0) e e mais confiavel que o dos outros dois: as opcoes sao numeradas e a tecla numerica
+    # escolhe e avanca (sem contar linha), e a CONFIRMACAO nao e visual — o `tool.result` daquele
+    # toolCallId aparecendo no wire prova que a ferramenta recebeu. Drive falhou -> Escape +
+    # fallback por texto, igual Claude/Pi: a resposta do usuario nunca se perde.
     if getattr(info, "provider", "claude") == "kimi":
-        from app.adapters.kimi.transcript import read_pending_question
-        q = read_pending_question(jsonl) if jsonl else None
-        if q is None:
+        from app.adapters.kimi.transcript import read_pending_call, resposta_chegou
+        pend = read_pending_call(jsonl) if jsonl else None
+        if pend is None:
             raise HTTPException(409, "nenhuma pergunta do Kimi pendente (ja respondida no terminal?)")
         if not answers:
             raise HTTPException(409, "sem resposta")
-        text = _pi_answer_fallback_text(answers[0])
-        if not text:
-            raise HTTPException(409, "sem texto de fallback — responda no terminal")
-        terminal.interrupt(name)  # Escape unico: fecha o picker do Kimi (sem clear — input vazio)
-        _espera_picker_fechar(name)       # sem isto o texto sai junto do Escape e a TUI o engole
-        res = _send_one(name, text)
-        if not res["ok"]:
-            raise HTTPException(409, f"fallback por texto falhou: {res['error']}")
-        return {"ok": True, "fallback": True}
+        call_id, args = pend
+        perguntas = args.get("questions") if isinstance(args.get("questions"), list) else []
+        try:
+            terminal_input.answer_question_kimi(name, answers, perguntas)
+            # PROVA no transcript, nao no pane: o Kimi so escreve o tool.result depois de a
+            # ferramenta receber as respostas. Sem esta checagem, um Submit que nao pegou voltaria
+            # 200 com cara de sucesso — o mesmo "sent sem chegar" que ja custou uma resposta perdida.
+            if not _espera_resposta_kimi(jsonl, call_id):
+                raise terminal_input.DriveError("Submit enviado mas o tool.result nao apareceu no wire")
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+        except terminal_input.DriveError as e:
+            text = _pi_answer_fallback_text(answers[0])
+            _log.warning("KIMI-QUESTION fallback name=%s reason=%s text=%r", name, e, text[:120])
+            if not text:
+                # Sem texto de fallback, NAO manda o Escape: picker aberto = o usuario ainda pode
+                # responder no terminal. Fechar e devolver ok sem entregar nada seria a pior saida.
+                raise HTTPException(409, f"drive falhou ({e}) e nao ha texto de fallback — responda no terminal")
+            terminal.interrupt(name)  # Escape unico: fecha o picker do Kimi (sem clear — input vazio)
+            _espera_picker_fechar(name)   # sem isto o texto sai junto do Escape e a TUI o engole
+            res = _send_one(name, text)
+            if not res["ok"]:
+                raise HTTPException(409, f"drive falhou e fallback por texto tambem: {res['error']}")
+            return {"ok": True, "fallback": True}
+        return {"ok": True, "fallback": False}
     try:
         terminal_input.answer_questions(name, answers)
     except ValueError as e:

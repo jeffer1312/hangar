@@ -897,6 +897,106 @@ def answer_question_pi(name: str, answer: dict, question: dict) -> None:
         raise DriveError("picker do Pi ainda aberto apos o Enter — nada foi submetido")
 
 
+# Rodape do picker do Kimi. Ele muda conforme o MODO e e o que distingue os tres desenhos medidos
+# (13/08/2026, Kimi 0.36.0): escolha simples ("1-4 / ↵ choose"), multipla ("1-5 / ↵ toggle") e campo
+# de texto ("type answer  ↵ save"). No de texto a tecla numerica vira CARACTERE — mandar numero ali
+# escreveria "2" no campo em vez de escolher.
+_KIMI_FOOTER_RE = re.compile(r"↵\s*(choose|toggle|save)|type answer")
+_KIMI_TEXTO_RE = re.compile(r"type answer")
+# Tela de Review do Kimi: sem passar por ela a resposta NAO chega na ferramenta (medido).
+_KIMI_REVIEW_RE = re.compile(r"Ready to submit your answers\?")
+
+
+def _kimi_picker_aberto(pane: str) -> bool:
+    # Pane INTEIRO, nunca a cauda: o overlay do Kimi e desenhado logo abaixo do ultimo conteudo da
+    # conversa, e o resto do pane fica em branco — medido a 16, 11 e 3 linhas do fim conforme a
+    # conversa cresce. Um detector de cauda perde o picker justamente na conversa curta.
+    return bool(_KIMI_FOOTER_RE.search(pane))
+
+
+def answer_question_kimi(name: str, answers: list[dict], questions: list[dict]) -> None:
+    """Dirige o picker de AskUserQuestion do Kimi. Input invalido -> ValueError (409); drive falhou
+    -> DriveError SEM submeter (o caller faz Escape + fallback por texto, igual Claude/Pi).
+
+    Medido no Kimi 0.36.0 e diferente dos outros dois providers em tres pontos:
+
+    - As opcoes sao NUMERADAS na tela e a tecla numerica escolhe E JA AVANCA pra proxima aba. Nao se
+      conta linha nem se manda (n-1)xDown como no Claude: numero e mais barato e nao tem drift.
+    - Multi-escolha nao avanca sozinha (ali ↵ e toggle) — sai com Tab. E nao ha cursor visivel nas
+      linhas, so cor, entao contar linha ali seria cego de qualquer forma.
+    - "Other" e sempre a ULTIMA opcao (len(options)+1) e abre campo de texto; dali em diante numero
+      vira caractere, e o rodape muda pra "type answer" — que e como se detecta esse modo.
+
+    A CONFIRMACAO nao e visual: quem chama confere o `tool.result` daquele toolCallId no wire
+    (transcript.resposta_chegou). O pane so diz o que esta desenhado; o wire diz o que a ferramenta
+    recebeu."""
+    if len(answers) != len(questions):
+        raise ValueError(f"{len(answers)} respostas para {len(questions)} perguntas")
+
+    def opcoes(i: int) -> list:
+        o = questions[i].get("options")
+        return o if isinstance(o, list) else []
+
+    # Valida TUDO antes de tocar no terminal: um drive que para no meio deixa o picker aberto numa
+    # aba qualquer, e o fallback por texto depois disso entra por cima de um overlay meio-navegado.
+    plano: list[list[tuple[str, str]]] = []      # por pergunta: [(tipo, valor)]
+    for i, a in enumerate(answers):
+        kind, ops = a.get("kind"), opcoes(i)
+        if kind == "option":
+            idx = a.get("indices") or []
+            if not idx:
+                raise ValueError(f"pergunta {i + 1}: sem opcao escolhida")
+            for n in idx:
+                if not 0 <= int(n) < len(ops):
+                    raise ValueError(f"pergunta {i + 1}: opcao {int(n) + 1} fora de 1..{len(ops)}")
+            if len(idx) > 1 and not a.get("multi"):
+                raise ValueError(f"pergunta {i + 1}: varias opcoes numa pergunta de escolha unica")
+            passos = [("tecla", str(int(n) + 1)) for n in idx]
+            if a.get("multi"):
+                passos.append(("tecla", "Tab"))   # ↵ ali e toggle: quem avanca e o Tab
+            plano.append(passos)
+        elif kind == "text":
+            valor = str(a.get("value") or "")
+            if not valor.strip():
+                raise ValueError(f"pergunta {i + 1}: texto vazio")
+            if any(ord(c) < 32 and c != "\t" for c in valor):
+                raise ValueError(f"pergunta {i + 1}: texto com caractere de controle")
+            # "Other" e adicionado pela propria TUI depois das opcoes do modelo.
+            plano.append([("tecla", str(len(ops) + 1)), ("texto", valor), ("tecla", "Enter")])
+        else:
+            raise ValueError(f"pergunta {i + 1}: kind nao suportado no picker do Kimi: {kind!r}")
+
+    if not _kimi_picker_aberto(_capture(name)):
+        raise DriveError("picker do Kimi nao esta aberto no pane")
+
+    for i, passos in enumerate(plano):
+        for tipo, valor in passos:
+            pane = _capture(name)
+            if not _kimi_picker_aberto(pane):
+                raise DriveError(f"picker do Kimi sumiu na pergunta {i + 1}; nao submetido")
+            # Numero so vale enquanto o rodape NAO estiver em modo texto — ali ele viraria caractere.
+            if tipo == "tecla" and valor.isdigit() and _KIMI_TEXTO_RE.search(pane):
+                raise DriveError(f"picker do Kimi em modo texto na pergunta {i + 1}; nao submetido")
+            if tipo == "texto":
+                send_keys(name, valor, literal=True)
+                time.sleep(_SUBMIT_SETTLE)
+            elif valor.isdigit():
+                send_keys(name, valor, literal=True)   # literal: "1" e caractere, nao nome de tecla
+                time.sleep(_SETTLE)
+            else:
+                send_keys(name, valor)
+                time.sleep(_SETTLE)
+
+    time.sleep(_OPEN_SETTLE)
+    review = _capture(name)
+    if not _KIMI_REVIEW_RE.search(review):
+        # Sem Review na tela nao se aperta nada: um "1" as cegas podia cair numa pergunta que ficou
+        # aberta e escolher a opcao errada.
+        raise DriveError("tela de Review do Kimi nao apareceu; nada submetido")
+    send_keys(name, "1", literal=True)                 # [1] Submit
+    time.sleep(_OPEN_SETTLE)
+
+
 # Teto de teclas na limpeza. C-u apaga UMA linha do composer (medido 07/08/2026: um bloco de 4
 # linhas precisou de 6 envios; uma colagem colapsada em "[Pasted text #N]" sai com um so). O teto
 # existe porque nem toda TUI honra C-u — num pane de shell ele volta rc=0 sem apagar nada, e sem

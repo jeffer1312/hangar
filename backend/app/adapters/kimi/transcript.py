@@ -131,7 +131,53 @@ def parse_line(line: str) -> list[ChatEvent]:
 
 
 def read_pending_question(jsonl: str) -> dict | None:
-    """Os `args` do ultimo tool.call AskUserQuestion ainda sem resposta, ou None.
+    """Os `args` do ultimo tool.call AskUserQuestion ainda sem resposta, ou None."""
+    pend = read_pending_call(jsonl)
+    return pend[1] if pend else None
+
+
+def resposta_chegou(jsonl: str, call_id: str) -> bool:
+    """True SO quando o `tool.result` daquele `toolCallId` esta comprovadamente no wire.
+
+    E a PROVA de entrega do drive do picker, e vale mais que reler o pane: o Kimi so escreve este
+    evento depois de a ferramenta receber as respostas de verdade. Medido em 13/08/2026 (Kimi
+    0.36.0): sem passar pela tela de Review, o result nunca aparece.
+
+    Procura o result DIRETO, em vez de deduzir pela ausencia da pergunta pendente. A deducao parecia
+    equivalente e nao era: `read_pending_call` devolve None tanto pra "respondida" quanto pra
+    "arquivo sumiu" e "linha corrompida" — e ai um wire ilegivel virava "entregue com sucesso", que e
+    exatamente a confirmacao por ausencia de dado que esta funcao existe pra impedir. Nao deu pra
+    ler = nao chegou; quem chama tenta de novo ate o prazo e cai no fallback por texto."""
+    try:
+        with open(jsonl, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - _PENDQ_TAIL_BYTES))
+            tail = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return False
+    lines = tail.splitlines()
+    if size > _PENDQ_TAIL_BYTES:
+        lines = lines[1:]                  # primeira linha veio cortada pelo seek no meio
+    for line in lines:
+        line = line.strip()
+        if not line or '"context.append_loop_event"' not in line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        ev = _loop_event(obj)
+        if ev and ev.get("type") == "tool.result" and ev.get("toolCallId") == call_id:
+            return True
+    return False
+
+
+def read_pending_call(jsonl: str) -> tuple[str, dict] | None:
+    """(toolCallId, args) do ultimo tool.call AskUserQuestion ainda sem resposta, ou None.
+
+    O id vai junto de proposito: e por ele que o drive do picker confirma a entrega (o `tool.result`
+    do MESMO id aparecendo no wire), em vez de reler a tela.
 
     Le so a CAUDA do wire. Malformado/ausente -> None, nunca levanta: quem chama e o /answer, e um
     None vira 409 legivel pro usuario."""
@@ -172,4 +218,4 @@ def read_pending_question(jsonl: str) -> dict | None:
             last_q = (ev["toolCallId"], ev["args"])
     if last_q is None or last_q[0] in answered:
         return None
-    return last_q[1]
+    return last_q
