@@ -713,3 +713,66 @@ def test_entry_event_carrega_desistiu():
     from app.pqueue import _entry_event
     assert _entry_event({"id": "e1", "text": "oi"}).desistiu is None
     assert _entry_event({"id": "e1", "text": "oi", "desistiu": True}).desistiu is True
+
+
+def test_reconcile_resgata_desistida_que_apareceu_depois():
+    # `desistiu` era irreversivel: a bolha ficava avisando "nao chegou" pra sempre sobre uma msg que
+    # CHEGOU — so que depois do prazo. Medido em 13/08/2026 numa sessao Kimi: 6 de 7 desistidas
+    # estavam no wire.jsonl no fim do dia. O reload escondia (merged_history absorve), o SSE ao vivo
+    # nao — entao o usuario via o aviso errado ate recarregar.
+    import json
+    import time as _t
+    q = PromptQueue("resgate")
+    q.path.write_text(json.dumps({"id": "e1", "text": "chegou tarde", "ts": _t.time() - 100,
+                                  "delivered": True, "desistiu": True}) + "\n", encoding="utf-8")
+    q.reconcile_delivered({"chegou tarde"}, 0.0, _t.time())
+    r = q.load()[0]
+    assert r.get("confirmed") is True         # vira aceita
+    assert "desistiu" not in r                # e para de avisar "nao chegou"
+
+
+def test_reconcile_mantem_desistida_que_nao_apareceu():
+    # O contrario, pra o resgate nao apagar falha de verdade: texto ausente do transcript continua
+    # marcado como perdido.
+    import json
+    import time as _t
+    q = PromptQueue("resgate2")
+    q.path.write_text(json.dumps({"id": "e1", "text": "sumiu mesmo", "ts": _t.time() - 100,
+                                  "delivered": True, "desistiu": True}) + "\n", encoding="utf-8")
+    q.reconcile_delivered({"outra coisa"}, 0.0, _t.time())
+    r = q.load()[0]
+    assert r.get("desistiu") is True
+    assert "confirmed" not in r
+
+
+def test_resgate_nao_confirma_duas_entradas_com_a_mesma_linha():
+    # `committed` e um SET: duas entradas com o MESMO texto (comum em resposta de picker —
+    # "Respondendo à pergunta: Sim" se repete) casariam as duas contra a MESMA linha do transcript.
+    # A que se perdeu de verdade viraria `confirmed`, que e o campo que ESCONDE o eco — o usuario
+    # ficaria sem nenhum sinal de que a resposta nao chegou.
+    import json
+    import time as _t
+    q = PromptQueue("dupla")
+    agora = _t.time()
+    q.path.write_text(
+        json.dumps({"id": "e1", "text": "Sim", "ts": agora - 100, "delivered": True, "desistiu": True}) + "\n" +
+        json.dumps({"id": "e2", "text": "Sim", "ts": agora - 90, "delivered": True, "desistiu": True}) + "\n",
+        encoding="utf-8")
+    q.reconcile_delivered({"Sim"}, 0.0, agora)      # UMA linha "Sim" no transcript
+    rows = q.load()
+    assert sum(1 for r in rows if r.get("confirmed")) == 1     # so uma foi resgatada
+    assert sum(1 for r in rows if r.get("desistiu")) == 1      # a outra segue marcada como perdida
+
+
+def test_resgate_ignora_entrada_de_sessao_anterior():
+    # Entrada de antes do /clear comparada contra o transcript de AGORA: texto curto e repetido
+    # ("Sim", "1") casaria por coincidencia e daria por entregue o que nunca chegou.
+    import json
+    import time as _t
+    q = PromptQueue("preclear")
+    agora = _t.time()
+    q.path.write_text(json.dumps({"id": "e1", "text": "Sim", "ts": agora - 5000,
+                                  "delivered": True, "desistiu": True}) + "\n", encoding="utf-8")
+    q.reconcile_delivered({"Sim"}, agora - 100, agora)   # min_ts = inicio da sessao atual
+    r = q.load()[0]
+    assert r.get("desistiu") is True and "confirmed" not in r

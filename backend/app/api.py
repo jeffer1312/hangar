@@ -2250,6 +2250,41 @@ async def unpair_session(name: str):
     return {"ok": True, "warning": ("aviso de saída falhou: " + "; ".join(errs)) if errs else None}
 
 
+# Quanto esperar o picker sumir da tela depois do Escape, antes de digitar a resposta por texto.
+_FECHA_PICKER_TIMEOUT = 3.0
+
+
+def _espera_picker_fechar(name: str, timeout: float = _FECHA_PICKER_TIMEOUT) -> bool:
+    """Espera o overlay (picker/menu) sair do pane depois de um Escape. True se saiu.
+
+    Sem isto, o Escape e a digitacao saiam juntos e o texto era ENGOLIDO pela TUI que ainda estava
+    fechando o picker — a resposta do usuario sumia e a bolha ficava presa no fim do chat pra sempre
+    (medido em 13/08/2026 numa sessao Kimi: `result=sent` no log e o texto nunca no wire.jsonl).
+    O gate normal (`_wait_input_ready`) nao pega este caso no Pi/Kimi: os marcadores de "TUI pronta"
+    la sao pedacos de moldura (`─ ╰ │`), e o proprio picker desenha moldura — a primeira leitura ja
+    devolve True com o picker ainda em tela.
+
+    Estourou o prazo: devolve False e quem chama envia mesmo assim (nao piora o caso de hoje) —
+    mesma politica do _wait_input_ready."""
+    from app import tmux                      # import local: mesmo padrao das rotas vizinhas
+    from app.state import _FOOTER_RE
+    limite = time.monotonic() + timeout
+    while time.monotonic() < limite:
+        # O PANE INTEIRO, nao o `is_overlay` (que so olha as 8 ultimas linhas): pergunta longa, com
+        # muitas opcoes ou tela de Review, empurra o rodape de navegacao pra fora dessa janela e o
+        # `is_overlay` responde False com o picker AINDA aberto — furo ja medido noutro consumidor
+        # (tests/test_askquestion.py: "is_overlay e falso p/ AskUserQuestion"). Aqui os dois erros
+        # custam coisas MUITO diferentes: falso-negativo devolve a corrida que esta funcao existe pra
+        # matar; falso-positivo (a frase citada na conversa) so gasta o timeout e envia do mesmo
+        # jeito. Entao erra-se pro lado de esperar.
+        if not _FOOTER_RE.search(tmux.capture_pane(name)):
+            return True
+        time.sleep(0.1)
+    _log.warning("picker de %s nao fechou em %.1fs apos o Escape; enviando o texto assim mesmo",
+                 name, timeout)
+    return False
+
+
 def _recusa_se_painel_aberto(name: str) -> None:
     # Com o painel anexado, a janela do tmux esta no tamanho DELE (~120x20). Quem conta linha no
     # pane — o seletor de opcao, o stepper do AskUserQuestion (terminal_input.answer_questions /
@@ -3280,7 +3315,12 @@ def _pi_answer_fallback_text(a: dict) -> str:
         resp = ""
     if not resp:
         return ""
-    return f"Respondendo a pergunta (o seletor de opções falhou, vai por texto): {resp}"
+    # Texto NEUTRO. Dizia "o seletor de opções falhou" — e no Kimi isso e mentira: la nao existe
+    # drive de teclas, o texto e o caminho NORMAL e unico. O usuario lia "falhou" na propria
+    # conversa e achava que a resposta tinha dado errado (relatado em 13/08/2026), e o agente lia a
+    # mesma frase e respondia ao fantasma. Quem quiser saber que houve fallback tem o log e o
+    # `fallback: true` da resposta da API.
+    return f"Respondendo à pergunta: {resp}"
 
 
 @app.post("/api/sessions/{name}/answer", dependencies=[Depends(require_auth)])
@@ -3320,6 +3360,7 @@ def answer(name: str, body: AnswerBody):
                 # no terminal. Fechar e devolver ok sem entregar nada seria a pior saida (silencio).
                 raise HTTPException(409, f"drive falhou ({e}) e nao ha texto de fallback — responda no terminal")
             terminal.interrupt(name)  # Escape unico: fecha o picker do Pi (sem clear — input vazio)
+            _espera_picker_fechar(name)   # sem isto o texto sai junto do Escape e a TUI o engole
             res = _send_one(name, text)
             if not res["ok"]:
                 raise HTTPException(409, f"drive falhou e fallback por texto tambem: {res['error']}")
@@ -3341,6 +3382,7 @@ def answer(name: str, body: AnswerBody):
         if not text:
             raise HTTPException(409, "sem texto de fallback — responda no terminal")
         terminal.interrupt(name)  # Escape unico: fecha o picker do Kimi (sem clear — input vazio)
+        _espera_picker_fechar(name)       # sem isto o texto sai junto do Escape e a TUI o engole
         res = _send_one(name, text)
         if not res["ok"]:
             raise HTTPException(409, f"fallback por texto falhou: {res['error']}")
@@ -3354,6 +3396,7 @@ def answer(name: str, body: AnswerBody):
         _log.warning("ASKQ fallback name=%s reason=%s text=%r", name, e, text[:120])
         terminal.interrupt(name)  # Escape unico: fecha o picker (sem clear — input vazio)
         if text:
+            _espera_picker_fechar(name)   # sem isto o texto sai junto do Escape e a TUI o engole
             res = _send_one(name, text)
             if not res["ok"]:
                 raise HTTPException(409, f"drive falhou e fallback por texto tambem: {res['error']}")

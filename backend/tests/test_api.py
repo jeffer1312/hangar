@@ -2206,3 +2206,37 @@ def test_recheca_desiste_depois_de_falhas_seguidas(monkeypatch, tmp_path):
     # o contador NAO zera ao desistir: zerando, o proximo evento recomeca a contagem e o laco volta
     # a girar — teto que reinicia nao e teto. Quem zera e a volta que completa.
     assert api_mod._falhas_seguidas["s-falha"] > api_mod._RETRY_FALHA
+
+
+def test_espera_picker_fechar(monkeypatch):
+    # O Escape e a digitacao saiam juntos e o texto era ENGOLIDO pela TUI que ainda fechava o
+    # picker: a resposta do usuario sumia e a bolha ficava presa no fim do chat pra sempre. O gate
+    # normal nao pega isso no Pi/Kimi — os marcadores de "TUI pronta" la sao pedacos de moldura
+    # (`─ ╰ │`) e o proprio picker desenha moldura, entao a primeira leitura ja diz "pronto".
+    from app import tmux as tmux_mod
+    # O rodape LONGE do fim do pane de proposito: pergunta longa empurra o "to navigate" pra fora
+    # das 8 ultimas linhas, e era ali que o `is_overlay` dizia "fechou" com o picker aberto.
+    alto = "  ↑↓ to navigate · Enter to select\n" + ("\n".join("  opcao %d" % i for i in range(12)))
+    quadros = iter([alto, alto, "╭───────────╮\n│ >         │\n╰───────────╯"])
+    monkeypatch.setattr(tmux_mod, "capture_pane", lambda n: next(quadros))
+    monkeypatch.setattr(api_mod.time, "sleep", lambda s: None)
+    assert api_mod._espera_picker_fechar("s", timeout=5.0) is True
+
+
+def test_espera_picker_fechar_estoura_e_envia_assim_mesmo(monkeypatch):
+    # Prazo estourado NAO bloqueia o envio: devolve False e quem chama manda mesmo assim (nao piora
+    # o caso de hoje) — mesma politica do _wait_input_ready.
+    from app import tmux as tmux_mod
+    monkeypatch.setattr(tmux_mod, "capture_pane",
+                        lambda n: "  ❯ 1. presa\n  ↑↓ to navigate · Enter to select")
+    monkeypatch.setattr(api_mod.time, "sleep", lambda s: None)
+    assert api_mod._espera_picker_fechar("s", timeout=0.3) is False
+
+
+def test_texto_do_fallback_nao_diz_que_falhou():
+    # No Kimi o texto e o caminho NORMAL (nao ha drive de teclas), entao "o seletor de opcoes
+    # falhou" era mentira na cara do usuario — e o agente lia a mesma frase e respondia ao fantasma.
+    t = api_mod._pi_answer_fallback_text({"kind": "option", "labels": ["Rota nova (Recomendado)"]})
+    assert "falhou" not in t.lower()
+    assert "Rota nova (Recomendado)" in t
+    assert api_mod._pi_answer_fallback_text({"kind": "option", "labels": []}) == ""

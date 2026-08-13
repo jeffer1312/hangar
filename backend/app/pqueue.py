@@ -337,10 +337,40 @@ class PromptQueue:
             rows = self.load()
             requeued: list[dict] = []
             changed = False
+            # Cada linha do transcript so pode confirmar UMA entrada. `committed` e um set, entao
+            # duas entradas com o MESMO texto (comum em resposta de picker: "Respondendo a pergunta:
+            # Sim" se repete) casariam as duas contra a mesma linha — e uma que se perdeu de verdade
+            # viraria `confirmed`, escondendo a falha em vez de mostra-la. Gasta-se a linha ao usar.
+            disponiveis = set(committed)
             for r in rows:
-                if r.get("delivered") is not True or r.get("confirmed") or r.get("desistiu"):
+                if r.get("delivered") is not True or r.get("confirmed"):
                     continue
                 ts = float(r.get("ts") or 0.0)
+                if r.get("desistiu"):
+                    # RESGATE: a msg apareceu no transcript DEPOIS de a gente desistir dela. Sem
+                    # isto, `desistiu` era irreversivel e a bolha ficava avisando "nao chegou"
+                    # eternamente sobre uma msg que CHEGOU — mentira que so o reload escondia (o
+                    # merged_history a absorve; o SSE ao vivo, nao). Medido em 13/08/2026 numa
+                    # sessao Kimi: 6 de 7 desistidas estavam no wire.jsonl no fim do dia.
+                    #
+                    # `ts < min_ts` NAO resgata: entrada de uma sessao ANTERIOR (pre-/clear) seria
+                    # comparada contra o transcript de AGORA, e um texto curto e repetido ("Sim",
+                    # "1") casaria por coincidencia — dando por entregue o que nunca chegou.
+                    if ts < min_ts:
+                        continue
+                    texto = str(r.get("text") or "").strip()
+                    podado = _strip_attach(texto).strip()
+                    linhas_r = {texto, podado,
+                                *(ln.strip() for ln in texto.split("\n")),
+                                *(ln.strip() for ln in podado.split("\n"))}
+                    linhas_r.discard("")
+                    casou = linhas_r & disponiveis
+                    if casou:
+                        disponiveis -= linhas_r      # a linha foi usada: nao confirma outra entrada
+                        r["confirmed"] = True
+                        r.pop("desistiu", None)
+                        changed = True
+                    continue
                 if ts < min_ts:
                     r["confirmed"] = True   # sessao anterior: fora do escopo (e silencia o check)
                     changed = True
@@ -355,7 +385,8 @@ class PromptQueue:
                          *(ln.strip() for ln in text_raw.split("\n")),
                          *(ln.strip() for ln in text.split("\n"))}
                 lines.discard("")
-                if not text_raw or lines & committed:
+                if not text_raw or lines & disponiveis:
+                    disponiveis -= lines         # uma linha do transcript confirma UMA entrada so
                     r["confirmed"] = True
                 elif int(r.get("attempts") or 0) >= max_attempts:
                     # DESISTIU != CONFIRMADA. `confirmed` quer dizer "o texto esta comprovadamente
