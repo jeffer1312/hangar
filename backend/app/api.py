@@ -709,11 +709,22 @@ def _maybe_chain(name: str) -> None:
 
 
 _working_started: dict[str, float] = {}  # session_id -> ts de quando entrou em "working" (mede duracao do turno pro push de "terminou")
+# Lock PROPRIO do `_working_started`, separado do da cadeia de recheck: quem escreve ali roda no laco
+# do hook_state.watch e quem le/consome roda numa thread de `_work`. Um compare-and-delete protegido
+# so de um lado nao protege nada — o produtor concorrente passaria por cima entre o get e o del, e o
+# turno seguinte terminaria com `started is None`, sem aviso e sem rastro. Nunca aninhar com
+# `_recheca_lock`: sao independentes de proposito.
+_turno_lock = threading.Lock()
 # Sessoes com uma reavaliacao de "idle mentiroso" ja agendada. UMA cadeia por sessao: sem isto, cada
 # transicao espuria abria a sua propria corrente de Timers, e duas correntes em paralelo dobram o
 # `registry.list()` (que toca tmux) a cada 5s, sem limite e sem ninguem notar.
 _recheca_armada: set[str] = set()
 _recheca_lock = threading.Lock()
+
+
+# Tentativas seguidas com FALHA antes de abandonar a cadeia de reavaliacao de uma sessao.
+_RETRY_FALHA = 5
+_falhas_seguidas: dict[str, int] = {}
 
 
 def _armar_recheca(session_id: str) -> bool:
@@ -748,7 +759,7 @@ def _push_terminou(session_id: str, started: Optional[float]) -> None:
     `started is None` e nunca avisaria."""
     if started is None:
         return
-    with _recheca_lock:
+    with _turno_lock:
         if _working_started.get(session_id) != started:
             return                       # outro turno ja tomou o lugar: nao e nosso pra consumir
         del _working_started[session_id]
@@ -773,7 +784,8 @@ def _on_hook_transition(session_id: str, state: str) -> None:
     if state == "working":
         m = hook_state.get_state(session_id)
         if m:
-            _working_started[session_id] = m[1]
+            with _turno_lock:
+                _working_started[session_id] = m[1]
     elif state == "idle":
         # O push de "terminou" NAO sai daqui: ele espera o `_work` decidir se este idle e de verdade
         # (no Kimi ele pode ser o marcador congelado do turno anterior — ver corrige_ocioso_kimi).
@@ -782,7 +794,8 @@ def _on_hook_transition(session_id: str, state: str) -> None:
         # ha quanto tempo a sessao trabalhava, e o debounce de turno longo nunca mais dispararia.
         pass
     elif state == "dead":
-        _working_started.pop(session_id, None)
+        with _turno_lock:
+            _working_started.pop(session_id, None)
         if runtime_config.get("notify_dead"):
             _notify_async(session_id, push.notify_dead)
 
@@ -806,7 +819,8 @@ def _on_hook_transition(session_id: str, state: str) -> None:
     # Inicio do turno lido AQUI, antes de qualquer subprocess: o `drain` la embaixo pode largar um
     # prompt novo e a sessao voltar pra "working", e ai o valor no dict ja seria de OUTRO turno.
     # Quem consome (`_push_terminou`) confere que ainda e este antes de tirar.
-    inicio_do_turno = _working_started.get(session_id) if state == "idle" else None
+    with _turno_lock:
+        inicio_do_turno = _working_started.get(session_id) if state == "idle" else None
 
     def _work() -> None:
         try:
@@ -856,6 +870,7 @@ def _on_hook_transition(session_id: str, state: str) -> None:
                 # acaba, o wire.jsonl para de crescer e a proxima passada ve idle de verdade.
                 # UMA cadeia por sessao (_recheca_armada): cada transicao espuria abria a sua, e
                 # duas cadeias em paralelo dobram `registry.list()` (tmux) a cada 5s pra sempre.
+                _falhas_seguidas.pop(session_id, None)   # esta volta foi ate o fim: zera o teto
                 if real != state and _armar_recheca(session_id):
                     threading.Timer(_RECHECA_KIMI, _recheca_kimi,
                                     args=(session_id, state)).start()
@@ -869,9 +884,29 @@ def _on_hook_transition(session_id: str, state: str) -> None:
             _log.warning("transicao de estado falhou sid=%s state=%s — sem reavaliacao automatica "
                          "ate a proxima transicao", session_id, state, exc_info=True)
             # Reagenda MESMO ASSIM quando o idle era suspeito: a falha pode ter sido pontual
-            # (registry/tmux piscando), e desistir aqui e o que deixa a sessao presa.
-            if state == "idle" and _armar_recheca(session_id):
-                threading.Timer(_RECHECA_KIMI, _recheca_kimi, args=(session_id, state)).start()
+            # (registry/tmux piscando), e desistir aqui e o que deixa a sessao presa. Mas com TETO:
+            # falha PERMANENTE (jsonl corrompido, erro reproduzivel no registry) reergueria a mesma
+            # excecao a cada 5s pra sempre, pagando `registry.list()` (tmux) toda volta. Depois de
+            # _RETRY_FALHA tentativas a cadeia para e diz isso no log — sessao presa e ruim, laco
+            # eterno tocando tmux e pior.
+            if state == "idle":
+                n = _falhas_seguidas.get(session_id, 0) + 1
+                if n <= _RETRY_FALHA:
+                    _falhas_seguidas[session_id] = n
+                    if _armar_recheca(session_id):
+                        threading.Timer(_RECHECA_KIMI, _recheca_kimi,
+                                        args=(session_id, state)).start()
+                elif n == _RETRY_FALHA + 1:
+                    # NAO zera o contador aqui: zerando, o proximo evento recomecava a contagem e o
+                    # laco voltava a girar de 5 em 5s — teto que reinicia nao e teto. Quem zera e a
+                    # volta que COMPLETA (no fim do `_work`), que e a prova de que voltou a
+                    # funcionar. Loga uma vez so, na virada.
+                    _falhas_seguidas[session_id] = n
+                    _log.error("reavaliacao de %s abandonada apos %d falhas seguidas — a sessao so "
+                               "volta a drenar sozinha na proxima transicao de estado",
+                               session_id, _RETRY_FALHA)
+                else:
+                    _falhas_seguidas[session_id] = n
     threading.Thread(target=_work, daemon=True).start()
 
 

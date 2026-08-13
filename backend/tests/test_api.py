@@ -2037,7 +2037,7 @@ def test_engine_model_set_valida_contra_catalogo_FRESCO(api_client_limpo):
 # chat) ja corrigem isso; aqui esta o caminho que MEXE: sem a checagem, o loop re-prompta uma sessao
 # ocupada e o vinculo `then` e CONSUMIDO — e como o Stop real grava idle SOBRE idle, o
 # hook_state._apply nao avisa ninguem e o fim de turno de verdade nunca dispararia o `then` de novo.
-_AGORA = time.time()   # ts reais: a correcao so vale com transcript FRESCO (KIMI_PROVA_MAX_S)
+_AGORA = time.time()   # ts reais: o mtime do wire e comparado com o ts do marcador do hook
 
 
 def _sessao_kimi(tmp_path, nome="k1", mtime=None):
@@ -2144,3 +2144,65 @@ def test_push_terminou_nao_consome_o_inicio_de_outro_turno(monkeypatch):
     api_mod._push_terminou("s9", _AGORA - 300)             # agora sim, o dono certo
     assert avisos == ["s9"]
     assert "s9" not in api_mod._working_started
+
+
+def test_working_started_e_protegido_dos_dois_lados(monkeypatch):
+    # O compare-and-delete de `_push_terminou` so vale se os ESCRITORES pegarem o mesmo lock: quem
+    # grava o inicio do turno roda no laco do hook_state.watch e quem consome roda numa thread de
+    # `_work`. Protegido de um lado so, o produtor passa entre o get e o del — e o turno seguinte
+    # termina com `started is None`, sem aviso nenhum e sem rastro.
+    import threading as _th
+    monkeypatch.setattr(api_mod.runtime_config, "get",
+                        lambda k: True if k == "notify_finished" else 1)
+    monkeypatch.setattr(api_mod, "_notify_async", lambda sid, fn: None)
+    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", _AGORA))
+
+    api_mod._working_started.clear()
+    erros = []
+
+    def escrever():           # o produtor: hook "working" chegando em rajada
+        try:
+            for i in range(300):
+                api_mod._on_hook_transition("s-lock", "working")
+        except Exception as e:      # noqa: BLE001 — o teste quer QUALQUER falha da corrida
+            erros.append(e)
+
+    def consumir():           # o consumidor: fim de turno tentando fechar a conta
+        try:
+            for i in range(300):
+                api_mod._push_terminou("s-lock", api_mod._working_started.get("s-lock"))
+        except Exception as e:      # noqa: BLE001
+            erros.append(e)
+
+    ts = [_th.Thread(target=escrever), _th.Thread(target=consumir)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert erros == []        # sem KeyError/RuntimeError de mutacao concorrente
+
+
+def test_recheca_desiste_depois_de_falhas_seguidas(monkeypatch, tmp_path):
+    # Falha PERMANENTE (jsonl corrompido, erro reproduzivel no registry) reerguia a mesma excecao a
+    # cada 5s pra sempre, pagando registry.list() (tmux) toda volta. Com teto, a cadeia para e diz
+    # isso no log — sessao presa e ruim, laco eterno tocando tmux e pior.
+    from types import SimpleNamespace
+    timers = []
+    def _explode():
+        raise RuntimeError("tmux fora")
+    monkeypatch.setattr(api_mod.registry, "list", _explode)
+    monkeypatch.setattr(api_mod.threading, "Timer",
+                        lambda *a, **k: (timers.append(a), SimpleNamespace(start=lambda: None))[1])
+    monkeypatch.setattr(api_mod.threading, "Thread",
+                        lambda target, daemon=None: SimpleNamespace(start=target))
+    api_mod._recheca_armada.clear()
+    api_mod._falhas_seguidas.pop("s-falha", None)
+
+    for _ in range(api_mod._RETRY_FALHA + 3):
+        api_mod._recheca_armada.clear()
+        api_mod._on_hook_transition("s-falha", "idle")
+    agendados = [a for a in timers if a[1] is api_mod._recheca_kimi]
+    assert len(agendados) == api_mod._RETRY_FALHA        # para no teto, nao gira pra sempre
+    # o contador NAO zera ao desistir: zerando, o proximo evento recomeca a contagem e o laco volta
+    # a girar — teto que reinicia nao e teto. Quem zera e a volta que completa.
+    assert api_mod._falhas_seguidas["s-falha"] > api_mod._RETRY_FALHA
