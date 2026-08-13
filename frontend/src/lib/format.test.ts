@@ -340,6 +340,17 @@ describe('fmtWhen', () => {
     expect(fmtWhen(ts)).toBe(expected);
     expect(fmtWhen(ts)).not.toBe('');
   });
+
+  it('fmtWhen segue o idioma: em ingles sai no formato en-US, nao no do SO', () => {
+    // Regressao real pega por este caso: a fonte ficou em toLocaleString([], ...) (locale do SO)
+    // enquanto o teste comparava com intlLocale() — em maquina pt-BR os dois coincidiam e o teste
+    // passava verde por acidente; com LC_ALL=C (ou qualquer SO en) ele fechava em vermelho.
+    const ts = 1_700_000_000;
+    overwriteGetLocale(() => 'en');
+    expect(fmtWhen(ts)).toBe(new Date(ts * 1000).toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' }));
+    overwriteGetLocale(() => 'pt');
+    expect(fmtWhen(ts)).toBe(new Date(ts * 1000).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }));
+  });
 });
 
 describe('clusterByPair', () => {

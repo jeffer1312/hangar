@@ -125,7 +125,7 @@ export function sortSessions<T extends { name: string; state: State }>(list: T[]
 // (última atividade de cada transcript) nos dois views. Falsy -> string vazia. Pura/testável.
 export function fmtWhen(mtime?: number | null): string {
   if (!mtime) return '';
-  return new Date(mtime * 1000).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+  return new Date(mtime * 1000).toLocaleString(intlLocale(), { dateStyle: 'short', timeStyle: 'short' });
 }
 
 // Iniciais pra avatar/rail (identifica sem o nome inteiro). "claude-pocket" -> CP, "jeffer1312" -> JE.
