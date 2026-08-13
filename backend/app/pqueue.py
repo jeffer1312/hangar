@@ -408,20 +408,28 @@ class PromptQueue:
         # Usa um set de ids ja vistos (o append reescreve o arquivo inteiro -> rastrear posicao
         # quebraria; reload + dedup por id e simples e correto). min_ts: descarta entradas anteriores
         # ao inicio da sessao atual (ex: pre-/clear) — espelha a poda do merged_history no live SSE.
-        seen: set[str] = set()
+        # id -> `desistiu` JA EMITIDO, nao um set de ids. `desistiu` e decidido DEPOIS que a entrada
+        # nasce (o reconcile roda num Timer, segundos mais tarde), entao com um set a entrada era
+        # emitida uma unica vez, ainda sem o campo, e a virada pra "perdida" nunca chegava a quem
+        # esta com o chat ABERTO — justo o caso mais comum. Reemitir e seguro: o front indexa por id
+        # e SUBSTITUI no lugar (Chat.svelte, idIndex), nao duplica a bolha.
+        seen: dict[str, bool] = {}
 
         def emit_new() -> list[ChatEvent]:
             evs = []
             for entry in self.load():
                 eid = str(entry.get("id"))
-                if not eid or eid in seen:
-                    continue
-                seen.add(eid)
-                if min_ts and float(entry.get("ts") or 0.0) < min_ts:
+                if not eid:
                     continue
                 # CONFIRMADA = texto comprovadamente no transcript (reconcile): a bolha real existe
                 # -> re-emitir o eco so duplicava (bolha antiga "solta" no fim a cada reconexao).
                 if entry.get("confirmed"):
+                    continue
+                desistiu = bool(entry.get("desistiu"))
+                if eid in seen and seen[eid] == desistiu:
+                    continue
+                seen[eid] = desistiu
+                if min_ts and float(entry.get("ts") or 0.0) < min_ts:
                     continue
                 evs.append(_entry_event(entry))
             return evs

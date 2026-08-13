@@ -2122,3 +2122,25 @@ def test_push_terminou_nao_sai_no_idle_falso_do_kimi(monkeypatch, tmp_path):
     _rodar_transicao_idle(monkeypatch, tmp_path, _AGORA, _AGORA)
     assert avisos == ["sid-k"]
     assert "sid-k" not in api_mod._working_started
+
+
+def test_push_terminou_nao_consome_o_inicio_de_outro_turno(monkeypatch):
+    # Corrida real: entre o inicio do `_work` e o push rodam registry.list() e drain(), e o proprio
+    # drain pode largar um prompt novo — a sessao volta a "working" e o caminho sincrono grava o
+    # inicio do turno NOVO. Um `pop` cego levaria embora esse valor: o push deste turno sairia com
+    # duracao errada e o turno seguinte, ao acabar de verdade, acharia `started is None` e nunca
+    # avisaria.
+    monkeypatch.setattr(api_mod.runtime_config, "get",
+                        lambda k: True if k == "notify_finished" else 1)
+    avisos = []
+    monkeypatch.setattr(api_mod, "_notify_async", lambda sid, fn: avisos.append(sid))
+    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", _AGORA))
+
+    api_mod._working_started["s9"] = _AGORA - 300          # turno NOVO ja registrado
+    api_mod._push_terminou("s9", _AGORA - 999)             # push do turno VELHO chega atrasado
+    assert avisos == []                                    # nao e dele pra consumir
+    assert api_mod._working_started["s9"] == _AGORA - 300   # o do turno novo continua intacto
+
+    api_mod._push_terminou("s9", _AGORA - 300)             # agora sim, o dono certo
+    assert avisos == ["s9"]
+    assert "s9" not in api_mod._working_started

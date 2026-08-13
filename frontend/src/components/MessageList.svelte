@@ -578,10 +578,13 @@
     transform: scale(0.97);   /* na fila: atenua E encolhe um tico; assenta com spring ao ser aceita. */
   }
   /* Entrega perdida: o texto explica o que fazer ("reenvie"), porque a bolha sozinha nao distingue
-     "esperando a vez" de "nao chegou". Alinhado com a bolha do usuario (a direita). */
+     "esperando a vez" de "nao chegou". Comeca na MESMA margem esquerda da bolha que ele anota —
+     neste app a bolha do usuario nao vai pro lado direito da tela (UserBubble .bubble-wrap:
+     align-items: flex-start), entao um `align-self: flex-end` jogaria o aviso pra borda oposta,
+     longe da mensagem. Sem `align-self` de proposito: o stretch do .queued-row e o que mantem o
+     bubble-wrap na largura toda (ver .pending-bubble). */
   .queued-perdida {
-    align-self: flex-end;
-    margin: 2px var(--space-1) 0 0;
+    margin: 2px 0 0 var(--space-1);
     font-size: var(--text-xs);
     color: var(--error);
   }

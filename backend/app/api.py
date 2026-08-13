@@ -671,6 +671,14 @@ def _confirm_and_drain(name: str) -> None:
         if requeued:
             _log.info("REQUEUE name=%s n=%d (TUI engoliu o send; re-drenando)", name, len(requeued))
             drain(name, info.jsonl, info.provider)
+        # Sobrou entrada AINDA DENTRO do prazo (o reconcile a pulou por "recente demais")? Volta a
+        # olhar. Os agendamentos usam _CONFIRM_GRACE (8,5s) e o prazo do Kimi e 30s, entao num turno
+        # curto a unica checagem caia cedo demais e a entrada ficava sem confirmar E sem desistir —
+        # presa ate a proxima mensagem do usuario, ou pra sempre se nao houvesse proxima. O laco
+        # termina sozinho: passado o prazo, toda linha vira `confirmed` ou `desistiu`.
+        if any(r.get("delivered") is True and not r.get("confirmed") and not r.get("desistiu")
+               for r in q.load()):
+            threading.Timer(grace + 0.5, _confirm_and_drain, args=(name,)).start()
     except Exception:
         # LOGA, nao `pass` mudo: isto roda num Timer, entao ninguem ve a excecao — e o que mora
         # aqui e a confirmacao de entrega. Falhando calado, a msg do usuario fica sem confirmar pra
@@ -725,15 +733,26 @@ def _recheca_kimi(session_id: str, state: str) -> None:
     _on_hook_transition(session_id, state)
 
 
-def _push_terminou(session_id: str) -> None:
-    """Push de 'terminou': consome o inicio do turno e avisa se ele passou do minimo configurado.
+def _push_terminou(session_id: str, started: Optional[float]) -> None:
+    """Push de 'terminou': avisa se o turno que comecou em `started` passou do minimo configurado.
 
     Mora numa funcao propria porque o disparo saiu do caminho sincrono — no Kimi so o `_work` sabe
     se o 'idle' que chegou e de verdade, e avisar 'terminou' no meio do trabalho e tao errado quanto
-    re-promptar a sessao. O `pop` e o mesmo de antes: uma vez consumido, o proximo turno recomeca a
-    contagem em 'working'."""
-    started = _working_started.pop(session_id, None)
-    if started is None or not runtime_config.get("notify_finished"):
+    re-promptar a sessao.
+
+    `started` vem de FORA, lido no inicio do `_work`, e o consumo aqui e CONDICIONAL. Popar direto
+    seria uma corrida real: entre o inicio do `_work` e este ponto rodam `registry.list()` e
+    `drain()`, e o proprio drain pode largar um prompt novo — a sessao volta a "working" e o
+    caminho sincrono grava o inicio do turno NOVO. Um `pop` cego levaria embora esse valor: o push
+    deste turno sairia com duracao errada e o turno seguinte, ao acabar de verdade, acharia
+    `started is None` e nunca avisaria."""
+    if started is None:
+        return
+    with _recheca_lock:
+        if _working_started.get(session_id) != started:
+            return                       # outro turno ja tomou o lugar: nao e nosso pra consumir
+        del _working_started[session_id]
+    if not runtime_config.get("notify_finished"):
         return
     m = hook_state.get_state(session_id)
     elapsed = (m[1] if m else time.time()) - started
@@ -784,6 +803,11 @@ def _on_hook_transition(session_id: str, state: str) -> None:
                 pass
         threading.Thread(target=_pause_loop, daemon=True).start()
         return
+    # Inicio do turno lido AQUI, antes de qualquer subprocess: o `drain` la embaixo pode largar um
+    # prompt novo e a sessao voltar pra "working", e ai o valor no dict ja seria de OUTRO turno.
+    # Quem consome (`_push_terminou`) confere que ainda e este antes de tirar.
+    inicio_do_turno = _working_started.get(session_id) if state == "idle" else None
+
     def _work() -> None:
         try:
             info = next((s for s in registry.list()
@@ -791,7 +815,7 @@ def _on_hook_transition(session_id: str, state: str) -> None:
             # Sessao nao encontrada (morreu, ou nao esta no tmux): o push de "terminou" continua
             # saindo pelo caminho de sempre. Nao ha como desconfiar do idle sem o transcript.
             if state == "idle" and not (info and info.jsonl):
-                _push_terminou(session_id)
+                _push_terminou(session_id, inicio_do_turno)
             if info and info.jsonl:
                 # Kimi: este "idle" pode ser MENTIRA. Um turno que comeca a partir de um prompt
                 # enfileirado na TUI nao dispara evento nenhum, entao o marcador fica congelado no
@@ -823,24 +847,31 @@ def _on_hook_transition(session_id: str, state: str) -> None:
                 if real == "idle" and not loop_active:
                     _maybe_chain(info.name)
                 if real == "idle":
-                    _push_terminou(session_id)   # so no fim de turno PROVADO (ver o elif la em cima)
+                    # so no fim de turno PROVADO (ver o elif la em cima)
+                    _push_terminou(session_id, inicio_do_turno)
                 # Idle desmentido pelo transcript: o fim de turno REAL nao vai gerar transicao
                 # nenhuma (o Stop grava idle sobre idle, e hook_state._apply so avisa quando o
                 # estado MUDA). Sem reagendar, o turno terminaria sem drenar a fila, sem ticar o
                 # loop e sem disparar o `then`. O reagendamento converge sozinho: quando o turno
-                # acaba, o wire.jsonl para de crescer e a proxima passada ve idle de verdade — e o
-                # teto de KIMI_PROVA_MAX_S garante convergencia ate se o processo morrer no meio.
+                # acaba, o wire.jsonl para de crescer e a proxima passada ve idle de verdade.
                 # UMA cadeia por sessao (_recheca_armada): cada transicao espuria abria a sua, e
                 # duas cadeias em paralelo dobram `registry.list()` (tmux) a cada 5s pra sempre.
                 if real != state and _armar_recheca(session_id):
                     threading.Timer(_RECHECA_KIMI, _recheca_kimi,
                                     args=(session_id, state)).start()
         except Exception:
-            # LOGA, nao `pass` mudo: e daqui que saem o drain da fila, o tick do loop e o vinculo
-            # `then`. Falha calada aqui devolve exatamente o sintoma que este bloco existe pra
-            # matar — sessao que nunca drena — sem uma linha pra investigar.
-            _log.warning("transicao de estado falhou sid=%s state=%s", session_id, state,
-                         exc_info=True)
+            # LOGA, nao `pass` mudo: e daqui que saem o drain da fila, o tick do loop, o vinculo
+            # `then` e o push de "terminou". Falha calada aqui devolve exatamente o sintoma que este
+            # bloco existe pra matar — sessao que nunca drena — sem uma linha pra investigar. E o
+            # texto diz a CONSEQUENCIA, nao so "falhou": no Kimi o fim de turno real nao gera
+            # transicao nova (idle sobre idle), entao sem reavaliacao a sessao pode ficar parada
+            # sem drenar ate a proxima msg do usuario.
+            _log.warning("transicao de estado falhou sid=%s state=%s — sem reavaliacao automatica "
+                         "ate a proxima transicao", session_id, state, exc_info=True)
+            # Reagenda MESMO ASSIM quando o idle era suspeito: a falha pode ter sido pontual
+            # (registry/tmux piscando), e desistir aqui e o que deixa a sessao presa.
+            if state == "idle" and _armar_recheca(session_id):
+                threading.Timer(_RECHECA_KIMI, _recheca_kimi, args=(session_id, state)).start()
     threading.Thread(target=_work, daemon=True).start()
 
 

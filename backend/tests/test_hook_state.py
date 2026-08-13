@@ -54,16 +54,11 @@ def test_corrige_ocioso_kimi(tmp_path):
     wire = tmp_path / "wire.jsonl"
     wire.write_text("{}\n", encoding="utf-8")
 
-    # `agora` explicito: a correcao so vale enquanto o transcript e prova FRESCA (KIMI_PROVA_MAX_S).
-    # Sem fixar o relogio, estes ts de 1970 cairiam sempre na prova vencida.
-    AGORA = 1100.0
-
     def com_mtime(mt):
         os.utime(wire, (mt, mt))
         return str(wire)
 
-    def corrige(marker, caminho):
-        return corrige_ocioso_kimi(marker, caminho, agora=AGORA)
+    corrige = corrige_ocioso_kimi
 
     # Turno andando: wire escrito DEPOIS do marcador ocioso.
     assert corrige(("idle", 1000.0), com_mtime(1090.0)) == ("working", 1090.0)
@@ -84,9 +79,8 @@ def test_corrige_ocioso_kimi(tmp_path):
     assert corrige(("idle", 1000.0), None) == ("idle", 1000.0)
     assert corrige(("idle", 1000.0), str(tmp_path / "sumiu.jsonl")) == ("idle", 1000.0)
 
-    # Prova VENCIDA: o transcript esta a frente do marcador, mas parado ha muito tempo. Sem este
-    # teto, um Kimi que morre no meio do turno deixa os dois numeros congelados na ordem errada e a
-    # sessao fica "trabalhando" para sempre — sem drenar fila, sem push, com o recheck girando.
-    from app.state import KIMI_PROVA_MAX_S
-    assert corrige_ocioso_kimi(("idle", 1000.0), com_mtime(1090.0),
-                               agora=1090.0 + KIMI_PROVA_MAX_S + 1) == ("idle", 1000.0)
+    # SEM teto de idade, de proposito: transcript velho continua valendo como "trabalhando". O teto
+    # consertaria o Kimi que morre no meio do turno, mas ao preco de um turno legitimamente calado
+    # (build longo) voltar a "idle" e disparar as automacoes em cima da sessao viva — ver a
+    # docstring de corrige_ocioso_kimi. Erra-se pro lado visivel.
+    assert corrige(("idle", 1000.0), com_mtime(1090.0)) == ("working", 1090.0)

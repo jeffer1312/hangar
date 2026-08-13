@@ -235,17 +235,9 @@ def classify(pane_text: str) -> tuple[str, Optional[str], Optional[str], Optiona
 # reais (13/08/2026): numa sessao que terminou o turno a diferenca e 0.0s — o Stop chega no mesmo
 # segundo da ultima linha. A sessao travada media +1089s. 2s separa os dois casos com folga.
 KIMI_FOLGA_S = 2.0
-# Teto de idade da PROVA. A correcao vive de comparar dois numeros que param juntos quando o
-# processo morre: se o Kimi cai no meio do turno, `mtime > marker.ts + folga` continua verdadeiro
-# PARA SEMPRE e a sessao ficaria "trabalhando" eternamente — sem drenar fila, sem push de "terminou",
-# e com o reagendamento do api.py girando de 5 em 5s. Transcript que nao cresce ha 10min nao e prova
-# de vida nenhuma: volta a valer o marcador. 10min e o mesmo teto que o preview.py ja usa pelo mesmo
-# motivo (publicador morto no meio do turno), e cobre com folga um turno parado num comando longo.
-KIMI_PROVA_MAX_S = 600.0
 
 
-def corrige_ocioso_kimi(marker, jsonl: Optional[str], folga: float = KIMI_FOLGA_S,
-                        agora: Optional[float] = None):
+def corrige_ocioso_kimi(marker, jsonl: Optional[str], folga: float = KIMI_FOLGA_S):
     """Kimi: marcador 'idle' velho + transcript crescendo = turno ANDANDO, nao sessao parada.
 
     No Kimi, um turno que comeca a partir de um prompt ENFILEIRADO na TUI nao dispara
@@ -261,9 +253,18 @@ def corrige_ocioso_kimi(marker, jsonl: Optional[str], folga: float = KIMI_FOLGA_
     So corrige idle -> working. 'awaiting_input' segue seu caminho (a pergunta so existe no pane) e
     'working' ja esta certo.
 
-    A prova tem VALIDADE (KIMI_PROVA_MAX_S): transcript velho nao prova turno em andamento — prova
-    que alguem escreveu ali um dia. Sem esse teto, um Kimi que morre no meio do turno deixa os dois
-    numeros congelados na ordem errada e a sessao fica "trabalhando" para sempre.
+    SEM teto de idade, por decisao. A tentacao e dizer "transcript parado ha 10min nao prova nada" e
+    voltar pro marcador — resolveria o caso do Kimi que MORRE no meio do turno (os dois numeros
+    congelam na ordem errada e a sessao fica "trabalhando" pra sempre). Mas o preco e pior que a
+    doenca: um turno legitimamente calado por mais que esse teto — um build, uma suite longa, um
+    comando que nao escreve nada no wire — voltaria a "idle" e dispararia, de uma vez, o loop
+    re-promptando texto por cima do comando em execucao, o `then` sendo CONSUMIDO e o push de
+    "terminou". Estado errado numa sessao morta o dono VE (o pane esta ali, parado); automacao
+    escrevendo numa sessao viva ele nao ve. Entre os dois, erra-se pro lado visivel.
+
+    Limitacao conhecida que isso deixa: Kimi que morre dentro de um pane que continua vivo aparece
+    "em execucao" ate o pane ser fechado. O custo e um `stat()` por poll — o reagendamento do api.py
+    e uma cadeia SO (ver _armar_recheca), entao nao multiplica.
 
     Recebe o CAMINHO (e nao o mtime ja lido) porque sao tres chamadores — a lista, o monitor do chat
     aberto e o gatilho de automacoes — e a leitura com try/except tem que ser a mesma nos tres."""
@@ -275,8 +276,6 @@ def corrige_ocioso_kimi(marker, jsonl: Optional[str], folga: float = KIMI_FOLGA_
         mtime = None
     if mtime is None or mtime <= marker[1] + folga:
         return marker
-    if (agora if agora is not None else time.time()) - mtime > KIMI_PROVA_MAX_S:
-        return marker                        # prova vencida: transcript parado ha tempo demais
     return ("working", mtime)
 
 

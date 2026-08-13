@@ -673,3 +673,43 @@ def test_confirm_nunca_redigita_no_kimi_mesmo_ocioso(tmp_path, monkeypatch):
     assert not row.get("attempts")
     assert row["desistiu"] is True             # visivel como bolha da fila, nao escondida
     assert "confirmed" not in row
+
+
+# `desistiu` e decidido DEPOIS que a entrada nasce (o reconcile roda num Timer, segundos mais tarde).
+# Com um set de ids ja vistos, o follow emitia a entrada UMA vez — ainda sem o campo — e a virada pra
+# "perdida" nunca chegava a quem esta com o chat ABERTO. So quem recarregava (novo /history) via o
+# aviso, ou seja: o caminho mais comum era justamente o que nao mostrava nada.
+def test_follow_reemite_quando_a_entrada_vira_perdida(tmp_path):
+    # `desistiu` e decidido DEPOIS que a entrada nasce (o reconcile roda num Timer, segundos mais
+    # tarde). Com um SET de ids ja vistos, o follow emitia a bolha UMA vez — ainda sem o campo — e a
+    # virada pra "perdida" nunca chegava a quem esta com o chat ABERTO: so quem recarregava via o
+    # aviso, ou seja, o caminho mais comum era justamente o que nao mostrava nada. Reemitir e seguro
+    # porque o front indexa por id e SUBSTITUI no lugar (Chat.svelte, idIndex).
+    import asyncio
+    import json
+
+    q = PromptQueue("reemite")
+    linha = q.append("oi", delivered=True)
+
+    async def duas_passadas():
+        gen = q.follow()
+        primeiro = await anext(gen)
+        # o reconcile carimba `desistiu` — MESMA entrada, estado novo
+        q.path.write_text(json.dumps({**linha, "delivered": True, "desistiu": True}) + "\n",
+                          encoding="utf-8")
+        segundo = await asyncio.wait_for(anext(gen), timeout=10)
+        await gen.aclose()
+        return primeiro, segundo
+
+    primeiro, segundo = asyncio.run(duas_passadas())
+    assert primeiro.id == segundo.id           # a MESMA bolha, atualizada — nao uma segunda
+    assert primeiro.desistiu is None           # ao nascer, ainda nao se sabe
+    assert segundo.desistiu is True            # e a virada chega a quem esta com o chat aberto
+
+
+def test_entry_event_carrega_desistiu():
+    # O campo tem que ATRAVESSAR o backend: sem ele no ChatEvent, a bolha perdida renderiza igual a
+    # uma aceita e "sumiu sem aviso" vira "parece que foi" — pior que o proprio sumico.
+    from app.pqueue import _entry_event
+    assert _entry_event({"id": "e1", "text": "oi"}).desistiu is None
+    assert _entry_event({"id": "e1", "text": "oi", "desistiu": True}).desistiu is True
