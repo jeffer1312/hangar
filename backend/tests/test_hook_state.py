@@ -54,25 +54,39 @@ def test_corrige_ocioso_kimi(tmp_path):
     wire = tmp_path / "wire.jsonl"
     wire.write_text("{}\n", encoding="utf-8")
 
+    # `agora` explicito: a correcao so vale enquanto o transcript e prova FRESCA (KIMI_PROVA_MAX_S).
+    # Sem fixar o relogio, estes ts de 1970 cairiam sempre na prova vencida.
+    AGORA = 1100.0
+
     def com_mtime(mt):
         os.utime(wire, (mt, mt))
         return str(wire)
 
+    def corrige(marker, caminho):
+        return corrige_ocioso_kimi(marker, caminho, agora=AGORA)
+
     # Turno andando: wire escrito DEPOIS do marcador ocioso.
-    assert corrige_ocioso_kimi(("idle", 1000.0), com_mtime(1090.0)) == ("working", 1090.0)
+    assert corrige(("idle", 1000.0), com_mtime(1090.0)) == ("working", 1090.0)
 
     # Ociosa de verdade: medido em 18 sessoes reais, o Stop chega no MESMO segundo da ultima linha.
-    assert corrige_ocioso_kimi(("idle", 1000.0), com_mtime(1000.0)) == ("idle", 1000.0)
-    assert corrige_ocioso_kimi(("idle", 1000.0), com_mtime(1001.5)) == ("idle", 1000.0)  # na folga
-    assert corrige_ocioso_kimi(("idle", 1000.0), com_mtime(999.0)) == ("idle", 1000.0)   # mais velho
+    assert corrige(("idle", 1000.0), com_mtime(1000.0)) == ("idle", 1000.0)
+    assert corrige(("idle", 1000.0), com_mtime(1001.5)) == ("idle", 1000.0)  # na folga
+    assert corrige(("idle", 1000.0), com_mtime(999.0)) == ("idle", 1000.0)   # mais velho
 
     # So mexe em idle: awaiting_input pertence ao pane (a pergunta so existe la) e working ja esta
     # certo — promover qualquer um dos dois aqui seria inventar estado.
-    alto = com_mtime(9000.0)
-    assert corrige_ocioso_kimi(("awaiting_input", 1000.0), alto) == ("awaiting_input", 1000.0)
-    assert corrige_ocioso_kimi(("working", 1000.0), alto) == ("working", 1000.0)
+    alto = com_mtime(1090.0)
+    assert corrige(("awaiting_input", 1000.0), alto) == ("awaiting_input", 1000.0)
+    assert corrige(("working", 1000.0), alto) == ("working", 1000.0)
 
     # Sem marcador, sem caminho, ou caminho que nao existe: nunca inventa um estado.
-    assert corrige_ocioso_kimi(None, alto) is None
-    assert corrige_ocioso_kimi(("idle", 1000.0), None) == ("idle", 1000.0)
-    assert corrige_ocioso_kimi(("idle", 1000.0), str(tmp_path / "sumiu.jsonl")) == ("idle", 1000.0)
+    assert corrige(None, alto) is None
+    assert corrige(("idle", 1000.0), None) == ("idle", 1000.0)
+    assert corrige(("idle", 1000.0), str(tmp_path / "sumiu.jsonl")) == ("idle", 1000.0)
+
+    # Prova VENCIDA: o transcript esta a frente do marcador, mas parado ha muito tempo. Sem este
+    # teto, um Kimi que morre no meio do turno deixa os dois numeros congelados na ordem errada e a
+    # sessao fica "trabalhando" para sempre — sem drenar fila, sem push, com o recheck girando.
+    from app.state import KIMI_PROVA_MAX_S
+    assert corrige_ocioso_kimi(("idle", 1000.0), com_mtime(1090.0),
+                               agora=1090.0 + KIMI_PROVA_MAX_S + 1) == ("idle", 1000.0)

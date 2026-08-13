@@ -125,6 +125,7 @@ export interface ChatEvent {
   cache_read?: number | null;
   cache_ttl_s?: number | null;
   image_count?: number | null;   // imagens coladas no terminal -> busca lazy em /transcript-image
+  desistiu?: boolean | null;     // só em bolha "queued-": entrega dada como perdida (a TUI engoliu)
 }
 
 export interface StateEvent {

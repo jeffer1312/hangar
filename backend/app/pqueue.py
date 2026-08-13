@@ -38,7 +38,10 @@ def _entry_event(entry: dict) -> ChatEvent:
     # user_msg sintetico com id prefixado ("queued-") pro front distinguir de evento real do
     # transcript. ts fica None de proposito: o ts so serve pra ORDENAR no historico, nao pra
     # exibir (senao bubble enfileirada mostraria hora e as do transcript nao -> inconsistente).
-    return ChatEvent(kind="user_msg", id="queued-" + str(entry.get("id")), text=entry.get("text"))
+    # `desistiu` vai junto: e a UNICA forma de o front distinguir "esperando a vez" de "perdida".
+    # Sem ele a bolha desistida acendia solida igual a uma aceita (ver models.ChatEvent.desistiu).
+    return ChatEvent(kind="user_msg", id="queued-" + str(entry.get("id")), text=entry.get("text"),
+                     desistiu=True if entry.get("desistiu") else None)
 
 
 def _ts_of_obj(obj: dict) -> float:

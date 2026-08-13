@@ -1,3 +1,4 @@
+import time
 import pytest
 from types import SimpleNamespace
 from fastapi import FastAPI, Depends
@@ -637,10 +638,17 @@ def test_claude_configs_endpoint(api_client, monkeypatch):
 def _transition_fixture(monkeypatch):
     """Isola _on_hook_transition: sem tmux real (registry.list vazio) e captura os pushes
     disparados via _notify_async em vez de rodar a thread/rede de verdade."""
+    from types import SimpleNamespace
     calls = []
     monkeypatch.setattr(api_mod, "_notify_async", lambda sid, fn: calls.append((sid, fn)))
     monkeypatch.setattr(api_mod.registry, "list", lambda: [])
+    # O push de "terminou" saiu do caminho sincrono: no Kimi so o `_work` sabe se o "idle" que
+    # chegou e de verdade (marcador congelado, ver corrige_ocioso_kimi). `_work` roda em thread —
+    # aqui executa em linha pra o teste continuar deterministico.
+    monkeypatch.setattr(api_mod.threading, "Thread",
+                        lambda target, daemon=None: SimpleNamespace(start=target))
     api_mod._working_started.clear()
+    api_mod._recheca_armada.clear()
     return calls
 
 
@@ -2029,6 +2037,9 @@ def test_engine_model_set_valida_contra_catalogo_FRESCO(api_client_limpo):
 # chat) ja corrigem isso; aqui esta o caminho que MEXE: sem a checagem, o loop re-prompta uma sessao
 # ocupada e o vinculo `then` e CONSUMIDO — e como o Stop real grava idle SOBRE idle, o
 # hook_state._apply nao avisa ninguem e o fim de turno de verdade nunca dispararia o `then` de novo.
+_AGORA = time.time()   # ts reais: a correcao so vale com transcript FRESCO (KIMI_PROVA_MAX_S)
+
+
 def _sessao_kimi(tmp_path, nome="k1", mtime=None):
     import os
     from types import SimpleNamespace
@@ -2039,7 +2050,7 @@ def _sessao_kimi(tmp_path, nome="k1", mtime=None):
     return SimpleNamespace(name=nome, jsonl=str(j), provider="kimi")
 
 
-def _rodar_transicao_idle(monkeypatch, tmp_path, mtime_do_wire, marcador_ts):
+def _rodar_transicao_idle(monkeypatch, tmp_path, mtime_do_wire, marcador_ts, limpar=True):
     """Dispara _on_hook_transition(sid, 'idle') com o wire escrito em `mtime_do_wire` e o marcador
     gravado em `marcador_ts`. Devolve (chamou_chain, chamou_tick, reagendou)."""
     from types import SimpleNamespace
@@ -2059,23 +2070,55 @@ def _rodar_transicao_idle(monkeypatch, tmp_path, mtime_do_wire, marcador_ts):
     # _work roda numa thread; aqui executa o alvo direto pra o teste ser deterministico.
     monkeypatch.setattr(api_mod.threading, "Thread",
                         lambda target, daemon=None: SimpleNamespace(start=target))
+    if limpar:
+        api_mod._recheca_armada.clear()
     api_mod._on_hook_transition("sid-k", "idle")
     return chain, tick, timers
 
 
 def test_idle_falso_do_kimi_nao_dispara_automacao(monkeypatch, tmp_path):
     # wire escrito 90s DEPOIS do marcador ocioso = turno andando.
-    chain, tick, timers = _rodar_transicao_idle(monkeypatch, tmp_path, 1090.0, 1000.0)
+    chain, tick, timers = _rodar_transicao_idle(monkeypatch, tmp_path, _AGORA + 90, _AGORA)
     assert chain == []                        # `then` NAO e consumido no meio do turno
     assert tick == []                         # loop NAO re-prompta sessao ocupada
     # reagenda a reavaliacao: sem isto o fim de turno real (idle sobre idle) nao gera transicao
     # nenhuma e a fila nunca seria drenada.
-    assert any(a[1] is api_mod._on_hook_transition for a in timers)
+    assert any(a[1] is api_mod._recheca_kimi for a in timers)
 
 
 def test_idle_de_verdade_do_kimi_segue_disparando(monkeypatch, tmp_path):
     # O contrario, pra a correcao nao matar a feature: wire e marcador no mesmo instante = parada.
-    chain, tick, timers = _rodar_transicao_idle(monkeypatch, tmp_path, 1000.0, 1000.0)
+    chain, tick, timers = _rodar_transicao_idle(monkeypatch, tmp_path, _AGORA, _AGORA)
     assert tick == ["k1"]                     # loop ativo + sent == 0 -> tica
     assert chain == []                        # com loop ativo o chain fica suprimido (regra antiga)
-    assert not any(a[1] is api_mod._on_hook_transition for a in timers)   # nada a reavaliar
+    assert not any(a[1] is api_mod._recheca_kimi for a in timers)   # nada a reavaliar
+
+
+def test_recheca_do_kimi_e_uma_cadeia_por_sessao(monkeypatch, tmp_path):
+    # Cada transicao espuria abria a SUA corrente de Timers, e duas correntes em paralelo dobram o
+    # `registry.list()` (que toca tmux) a cada 5s, pra sempre e sem ninguem notar.
+    _, _, t1 = _rodar_transicao_idle(monkeypatch, tmp_path, _AGORA + 90, _AGORA)
+    assert sum(1 for a in t1 if a[1] is api_mod._recheca_kimi) == 1
+    # 2a transicao com a cadeia JA armada (o _rodar_ limpa o set, entao arma na mao aqui)
+    api_mod._armar_recheca("sid-k")
+    _, _, t2 = _rodar_transicao_idle(monkeypatch, tmp_path, _AGORA + 90, _AGORA, limpar=False)
+    assert not any(a[1] is api_mod._recheca_kimi for a in t2)   # nao abre a segunda corrente
+
+
+def test_push_terminou_nao_sai_no_idle_falso_do_kimi(monkeypatch, tmp_path):
+    # O push de "terminou" era o unico dos quatro que ficava fora do `_work` — avisava "terminou"
+    # com a sessao escrevendo codigo, e ainda consumia o inicio do turno, entao o fim REAL vinha sem
+    # saber ha quanto tempo ela trabalhava e o debounce de turno longo nunca mais disparava.
+    monkeypatch.setattr(api_mod.runtime_config, "get",
+                        lambda k: True if k == "notify_finished" else 1)
+    avisos = []
+    monkeypatch.setattr(api_mod, "_notify_async", lambda sid, fn: avisos.append(sid))
+    api_mod._working_started["sid-k"] = _AGORA - 300      # turno longo em andamento
+    _rodar_transicao_idle(monkeypatch, tmp_path, _AGORA + 90, _AGORA)
+    assert avisos == []                                   # nada de "terminou" no meio do turno
+    assert "sid-k" in api_mod._working_started            # o inicio do turno NAO foi consumido
+
+    # E o fim de verdade (transcript parado) avisa, com a duracao inteira preservada.
+    _rodar_transicao_idle(monkeypatch, tmp_path, _AGORA, _AGORA)
+    assert avisos == ["sid-k"]
+    assert "sid-k" not in api_mod._working_started

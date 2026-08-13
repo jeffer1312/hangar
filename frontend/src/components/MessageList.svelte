@@ -318,14 +318,20 @@
         {:else if ev.id.startsWith('queued-')}
           <!-- Msg da fila durável: atenuada enquanto o Claude trabalha (= na fila, ainda nao
                processada); acende solida quando ele fica idle (= aceita). Da o sinal de "quando
-               foi aceita" que o usuario pediu. -->
-          <div class="queued-row" class:dim={working}>
+               foi aceita" que o usuario pediu.
+               `desistiu` = o backend conferiu contra o transcript e o texto NUNCA chegou (a TUI
+               engoliu as teclas). Sem esta linha a bolha perdida acendia solida igual a uma aceita
+               e o usuario ficava achando que mandou — falha tem que aparecer, nao sumir. -->
+          <div class="queued-row" class:dim={working && !ev.desistiu}>
             {#if imgFotos}
               <ImageBubble caption={imgFotos.caption} srcs={imgFotos.filenames.map((f) => uploadUrl(sessionName, f))} />
             {:else}
               <UserBubble text={shownText} ts={ev.ts} from={peer?.from} scope={peer?.scope}
                           onForward={onForward ? () => onForward(shownText) : null}
                           onOpenPeer={peer && onOpenSession ? () => onOpenSession(peer.from) : null} />
+            {/if}
+            {#if ev.desistiu}
+              <p class="queued-perdida" role="status">não chegou na sessão — reenvie</p>
             {/if}
           </div>
         {:else if imgFotos}
@@ -570,6 +576,14 @@
   .queued-row.dim {
     opacity: 0.5;
     transform: scale(0.97);   /* na fila: atenua E encolhe um tico; assenta com spring ao ser aceita. */
+  }
+  /* Entrega perdida: o texto explica o que fazer ("reenvie"), porque a bolha sozinha nao distingue
+     "esperando a vez" de "nao chegou". Alinhado com a bolha do usuario (a direita). */
+  .queued-perdida {
+    align-self: flex-end;
+    margin: 2px var(--space-1) 0 0;
+    font-size: var(--text-xs);
+    color: var(--error);
   }
 
   /* Botao flutuante "ir pro fim": fixo no canto, acima do dock (bottom = altura do composer + respiro).

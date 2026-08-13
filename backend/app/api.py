@@ -594,6 +594,10 @@ def _on_awaiting(session_id: str) -> None:
 
 
 _CONFIRM_GRACE = 8.0  # s entre o send e a checagem "o transcript gravou o prompt?"
+# Kimi: o mesmo prazo, esticado. Ali nao existe segunda tentativa (redigitar duplicaria a msg), e
+# sem segunda chance o prazo tem que ser generoso — senao ruido de timing carimba `desistiu` numa
+# msg que so estava esperando a vez na fila da propria TUI.
+_CONFIRM_GRACE_KIMI = 30.0
 # Kimi: de quanto em quanto tempo reavaliar um "idle" que o transcript desmentiu. Nao ha evento pra
 # esperar (o fim de turno real grava idle sobre idle e nao gera transicao), entao a saida e reolhar.
 # 5s: a sessao demora isso pra aparecer parada, e enquanto o turno anda o custo e um getmtime.
@@ -652,17 +656,26 @@ def _confirm_and_drain(name: str) -> None:
         # logo acima pro estado desconhecido: envio de verdade engolido fica VISIVEL como bolha da
         # fila (`desistiu`), que e falha visivel — duplicar a msg do usuario nao e.
         max_attempts = 0 if (m is None or info.provider == "kimi") else 2
+        # Kimi espera MAIS antes de declarar perdida. Com max_attempts=0 nao ha segunda chance: a
+        # primeira checagem depois do prazo ja carimba `desistiu`. Subir pra 1 nao serve — no
+        # reconcile, attempts < max REDIGITA, que e exatamente a duplicacao que este provider nao
+        # pode ter. Entao o que se estica e o PRAZO: 30s cobrem o tempo entre a TUI aceitar o texto
+        # e ele aparecer no wire.jsonl, sem nunca digitar duas vezes.
+        grace = _CONFIRM_GRACE_KIMI if info.provider == "kimi" else _CONFIRM_GRACE
         requeued = q.reconcile_delivered(
             committed_user_lines(info.jsonl, info.provider), _transcript_start_ts(info.jsonl),
             time.time(),
-            grace=_CONFIRM_GRACE,
+            grace=grace,
             max_attempts=max_attempts,
         )
         if requeued:
             _log.info("REQUEUE name=%s n=%d (TUI engoliu o send; re-drenando)", name, len(requeued))
             drain(name, info.jsonl, info.provider)
     except Exception:
-        pass
+        # LOGA, nao `pass` mudo: isto roda num Timer, entao ninguem ve a excecao — e o que mora
+        # aqui e a confirmacao de entrega. Falhando calado, a msg do usuario fica sem confirmar pra
+        # sempre e nao ha onde olhar. Best-effort segue (o proximo idle tenta de novo).
+        _log.warning("confirmacao de entrega falhou name=%s", name, exc_info=True)
 
 
 def _maybe_chain(name: str) -> None:
@@ -688,6 +701,44 @@ def _maybe_chain(name: str) -> None:
 
 
 _working_started: dict[str, float] = {}  # session_id -> ts de quando entrou em "working" (mede duracao do turno pro push de "terminou")
+# Sessoes com uma reavaliacao de "idle mentiroso" ja agendada. UMA cadeia por sessao: sem isto, cada
+# transicao espuria abria a sua propria corrente de Timers, e duas correntes em paralelo dobram o
+# `registry.list()` (que toca tmux) a cada 5s, sem limite e sem ninguem notar.
+_recheca_armada: set[str] = set()
+_recheca_lock = threading.Lock()
+
+
+def _armar_recheca(session_id: str) -> bool:
+    """True se ESTA chamada ficou dona da cadeia de reavaliacao da sessao."""
+    with _recheca_lock:
+        if session_id in _recheca_armada:
+            return False
+        _recheca_armada.add(session_id)
+        return True
+
+
+def _recheca_kimi(session_id: str, state: str) -> None:
+    """Elo da cadeia: solta a posse ANTES de reavaliar, pra a proxima passada poder rearmar. Soltar
+    depois prenderia a cadeia numa unica corrente que morre junto com uma excecao."""
+    with _recheca_lock:
+        _recheca_armada.discard(session_id)
+    _on_hook_transition(session_id, state)
+
+
+def _push_terminou(session_id: str) -> None:
+    """Push de 'terminou': consome o inicio do turno e avisa se ele passou do minimo configurado.
+
+    Mora numa funcao propria porque o disparo saiu do caminho sincrono — no Kimi so o `_work` sabe
+    se o 'idle' que chegou e de verdade, e avisar 'terminou' no meio do trabalho e tao errado quanto
+    re-promptar a sessao. O `pop` e o mesmo de antes: uma vez consumido, o proximo turno recomeca a
+    contagem em 'working'."""
+    started = _working_started.pop(session_id, None)
+    if started is None or not runtime_config.get("notify_finished"):
+        return
+    m = hook_state.get_state(session_id)
+    elapsed = (m[1] if m else time.time()) - started
+    if elapsed >= runtime_config.get("finish_min_seconds"):
+        _notify_async(session_id, push.notify_finished)
 
 
 def _on_hook_transition(session_id: str, state: str) -> None:
@@ -705,12 +756,12 @@ def _on_hook_transition(session_id: str, state: str) -> None:
         if m:
             _working_started[session_id] = m[1]
     elif state == "idle":
-        started = _working_started.pop(session_id, None)
-        if started is not None and runtime_config.get("notify_finished"):
-            m = hook_state.get_state(session_id)
-            elapsed = (m[1] if m else time.time()) - started
-            if elapsed >= runtime_config.get("finish_min_seconds"):
-                _notify_async(session_id, push.notify_finished)
+        # O push de "terminou" NAO sai daqui: ele espera o `_work` decidir se este idle e de verdade
+        # (no Kimi ele pode ser o marcador congelado do turno anterior — ver corrige_ocioso_kimi).
+        # Antes disso, avisar "terminou" no meio do trabalho era o mesmo erro das outras automacoes,
+        # com o agravante de o `pop` abaixo consumir o inicio do turno: o fim REAL viria sem saber
+        # ha quanto tempo a sessao trabalhava, e o debounce de turno longo nunca mais dispararia.
+        pass
     elif state == "dead":
         _working_started.pop(session_id, None)
         if runtime_config.get("notify_dead"):
@@ -737,6 +788,10 @@ def _on_hook_transition(session_id: str, state: str) -> None:
         try:
             info = next((s for s in registry.list()
                          if s.jsonl and session_key(s.jsonl) == session_id), None)
+            # Sessao nao encontrada (morreu, ou nao esta no tmux): o push de "terminou" continua
+            # saindo pelo caminho de sempre. Nao ha como desconfiar do idle sem o transcript.
+            if state == "idle" and not (info and info.jsonl):
+                _push_terminou(session_id)
             if info and info.jsonl:
                 # Kimi: este "idle" pode ser MENTIRA. Um turno que comeca a partir de um prompt
                 # enfileirado na TUI nao dispara evento nenhum, entao o marcador fica congelado no
@@ -767,16 +822,25 @@ def _on_hook_transition(session_id: str, state: str) -> None:
                 # reusando o info.name ja resolvido nesta thread — ver _maybe_chain.
                 if real == "idle" and not loop_active:
                     _maybe_chain(info.name)
+                if real == "idle":
+                    _push_terminou(session_id)   # so no fim de turno PROVADO (ver o elif la em cima)
                 # Idle desmentido pelo transcript: o fim de turno REAL nao vai gerar transicao
                 # nenhuma (o Stop grava idle sobre idle, e hook_state._apply so avisa quando o
                 # estado MUDA). Sem reagendar, o turno terminaria sem drenar a fila, sem ticar o
                 # loop e sem disparar o `then`. O reagendamento converge sozinho: quando o turno
-                # acaba, o wire.jsonl para de crescer e a proxima passada ve idle de verdade.
-                if real != state:
-                    threading.Timer(_RECHECA_KIMI, _on_hook_transition,
+                # acaba, o wire.jsonl para de crescer e a proxima passada ve idle de verdade — e o
+                # teto de KIMI_PROVA_MAX_S garante convergencia ate se o processo morrer no meio.
+                # UMA cadeia por sessao (_recheca_armada): cada transicao espuria abria a sua, e
+                # duas cadeias em paralelo dobram `registry.list()` (tmux) a cada 5s pra sempre.
+                if real != state and _armar_recheca(session_id):
+                    threading.Timer(_RECHECA_KIMI, _recheca_kimi,
                                     args=(session_id, state)).start()
         except Exception:
-            pass
+            # LOGA, nao `pass` mudo: e daqui que saem o drain da fila, o tick do loop e o vinculo
+            # `then`. Falha calada aqui devolve exatamente o sintoma que este bloco existe pra
+            # matar — sessao que nunca drena — sem uma linha pra investigar.
+            _log.warning("transicao de estado falhou sid=%s state=%s", session_id, state,
+                         exc_info=True)
     threading.Thread(target=_work, daemon=True).start()
 
 

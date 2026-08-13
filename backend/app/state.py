@@ -1,6 +1,7 @@
 import asyncio
 import os
 import re
+import time
 from typing import AsyncIterator, Callable, Optional
 
 from app import tmux
@@ -234,9 +235,17 @@ def classify(pane_text: str) -> tuple[str, Optional[str], Optional[str], Optiona
 # reais (13/08/2026): numa sessao que terminou o turno a diferenca e 0.0s — o Stop chega no mesmo
 # segundo da ultima linha. A sessao travada media +1089s. 2s separa os dois casos com folga.
 KIMI_FOLGA_S = 2.0
+# Teto de idade da PROVA. A correcao vive de comparar dois numeros que param juntos quando o
+# processo morre: se o Kimi cai no meio do turno, `mtime > marker.ts + folga` continua verdadeiro
+# PARA SEMPRE e a sessao ficaria "trabalhando" eternamente — sem drenar fila, sem push de "terminou",
+# e com o reagendamento do api.py girando de 5 em 5s. Transcript que nao cresce ha 10min nao e prova
+# de vida nenhuma: volta a valer o marcador. 10min e o mesmo teto que o preview.py ja usa pelo mesmo
+# motivo (publicador morto no meio do turno), e cobre com folga um turno parado num comando longo.
+KIMI_PROVA_MAX_S = 600.0
 
 
-def corrige_ocioso_kimi(marker, jsonl: Optional[str], folga: float = KIMI_FOLGA_S):
+def corrige_ocioso_kimi(marker, jsonl: Optional[str], folga: float = KIMI_FOLGA_S,
+                        agora: Optional[float] = None):
     """Kimi: marcador 'idle' velho + transcript crescendo = turno ANDANDO, nao sessao parada.
 
     No Kimi, um turno que comeca a partir de um prompt ENFILEIRADO na TUI nao dispara
@@ -252,6 +261,10 @@ def corrige_ocioso_kimi(marker, jsonl: Optional[str], folga: float = KIMI_FOLGA_
     So corrige idle -> working. 'awaiting_input' segue seu caminho (a pergunta so existe no pane) e
     'working' ja esta certo.
 
+    A prova tem VALIDADE (KIMI_PROVA_MAX_S): transcript velho nao prova turno em andamento — prova
+    que alguem escreveu ali um dia. Sem esse teto, um Kimi que morre no meio do turno deixa os dois
+    numeros congelados na ordem errada e a sessao fica "trabalhando" para sempre.
+
     Recebe o CAMINHO (e nao o mtime ja lido) porque sao tres chamadores — a lista, o monitor do chat
     aberto e o gatilho de automacoes — e a leitura com try/except tem que ser a mesma nos tres."""
     if not marker or marker[0] != "idle":
@@ -260,9 +273,11 @@ def corrige_ocioso_kimi(marker, jsonl: Optional[str], folga: float = KIMI_FOLGA_
         mtime = os.path.getmtime(jsonl) if jsonl else None
     except OSError:
         mtime = None
-    if mtime is not None and mtime > marker[1] + folga:
-        return ("working", mtime)
-    return marker
+    if mtime is None or mtime <= marker[1] + folga:
+        return marker
+    if (agora if agora is not None else time.time()) - mtime > KIMI_PROVA_MAX_S:
+        return marker                        # prova vencida: transcript parado ha tempo demais
+    return ("working", mtime)
 
 
 class StateMonitor:

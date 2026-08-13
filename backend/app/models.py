@@ -145,6 +145,11 @@ class ChatEvent(BaseModel):
     # ainda vale em vez de supor. Usar a cache renova o prazo, então a conta corre do ÚLTIMO turno.
     cache_read: Optional[int] = None
     cache_ttl_s: Optional[int] = None
+    # Só em bolha da fila ("queued-"): a entrega foi dada como PERDIDA (a TUI engoliu as teclas e o
+    # texto nunca apareceu no transcript). Precisa chegar ao front: sem este campo a bolha desistida
+    # renderiza IGUAL a uma aceita, e "some sem aviso" vira "parece que foi" — que é pior, porque o
+    # usuário acha que mandou. `confirmed` é o oposto e não vem: ali a bolha real já cobre.
+    desistiu: Optional[bool] = None
     # Nº de imagens base64 anexadas a uma msg do user via TERMINAL (paste na TUI do Claude). O front
     # busca cada uma sob demanda em /transcript-image/{id}/{idx} (lazy; base64 não vai no payload).
     image_count: Optional[int] = None
