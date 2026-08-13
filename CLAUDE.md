@@ -164,6 +164,14 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     [`docs/polish-backlog.md`](docs/polish-backlog.md#structural-debt-in-the-session-list-2026-07-16) —
     unifying the two list views is the remaining "bigger fish", deliberately not done yet.
 
+- **i18n: todo texto de interface vem de `m.<chave>()`** (Paraglide, `frontend/src/paraglide/` gerado;
+  `pt.json` + `en.json` em `frontend/messages/`). A trava em `src/lib/i18nGuard.test.ts` falha o teste
+  quando um arquivo passa do seu número na linha de base `frontend/i18n-baseline.json` — e a linha de
+  base **só desce**: arquivo novo tem limite zero, e texto novo em arquivo existente quebra o CI.
+  Falso positivo do extrator (heurística ~89%) vai pro `i18n-allow.json`, nunca pra linha de base.
+  Chave nova primeiro procura no `pt.json` (reuso antes de duplicar), e `pt.json`/`en.json` andam
+  juntos no mesmo commit — chave que falta num deles aparece como ID cru na tela sem erro nenhum.
+  Dado do servidor (nome de sessão, caminho, mensagem do agente, saída de comando) **não** vira chave.
 - **iOS black-rectangle repaint.** Glass on NavBar/Composer lives in a `::before` leaf with a near-opaque
   solid bg and **no** `backdrop-filter` / `transform` / `translateZ` on WebKit — those promote a layer that
   renders pure black during momentum scroll. Don't reintroduce them. Liquid-glass blur is Chromium-only

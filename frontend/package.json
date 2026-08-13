@@ -8,6 +8,7 @@
     "build": "npm run i18n:compile && vite build",
     "preview": "vite preview",
     "i18n:compile": "paraglide-js compile --project ./project.inlang --outdir ./src/paraglide --strategy localStorage preferredLanguage baseLocale",
+    "i18n:baseline": "node scripts/i18nBaseline.mjs",
     "check": "npm run i18n:compile && svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
     "test": "npm run i18n:compile && vitest run"
   },

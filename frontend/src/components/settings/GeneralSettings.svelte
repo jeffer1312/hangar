@@ -13,8 +13,8 @@
 
   // Rotulos bilingues e fixos nos dois idiomas (config_idioma_*): quem caiu no idioma errado
   // precisa achar a saida sem saber ler o idioma em que esta. Portugues e English ficam com o
-  // proprio nome; "Seguir o sistema" e a unica opcao que traduz de verdade.
-  // `lang` em cada botao (WCAG 3.1.2): com a pagina em ingles, o leitor de tela leria "Português"
+  // proprio nome; Seguir o sistema e a unica opcao que traduz de verdade.
+  // `lang` em cada botao (WCAG 3.1.2): com a pagina em ingles, o leitor de tela leria Português
   // com fonetica inglesa — justo no botao-saida de quem caiu no idioma errado. O atributo marca o
   // idioma do trecho.
   const opcoes: { v: Preferencia; label: string; aria: string; lang?: string }[] = [

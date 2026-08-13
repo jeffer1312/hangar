@@ -1,0 +1,13 @@
+[
+  "Content-Type",
+  "application/json",
+  "text/plain",
+  "NotReadableError",
+  "NotAllowedError",
+  "Hangar",
+  "Claude",
+  "Codex",
+  "Kimi",
+  "OpenAI",
+  "Anthropic"
+]
