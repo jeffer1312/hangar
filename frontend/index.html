@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
@@ -11,11 +11,13 @@
     <link rel="apple-touch-icon" href="/icons/icon-180.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <title>Hangar</title>
-    <!-- Idioma antes do primeiro paint: o lang do <html> e o que o navegador le pra leitor de tela
-         e hifenizacao, e um lang errado no HTML servido faz o Chrome oferecer "Traduzir esta
-         pagina" a cada boot. NAO escrever lang fixo no HTML acima: o valor depende do locale. A
-         cadeia aqui espelha a do Paraglide (localStorage -> navigator.languages -> en), e o main.ts
-         reescreve por seguranca (rede) depois de montar. -->
+    <!-- lang="en" no HTML servido e o FALLBACK HONESTO, nao uma mentira: com baseLocale = en,
+         e o idioma que o app usa quando nada resolve (sem JS, sem escolha, idioma desconhecido).
+         O body e so <div id="app"> — sem JS nao ha texto pra leitor de tela pronunciar com o
+         idioma errado, e o caminho de falha e inofensivo. O script abaixo corrige o lang para o
+         idioma REAL (localStorage -> navigator.languages, first-match como o runtime do Paraglide)
+         ANTES do primeiro paint, entao o Chrome decide a oferta de traducao sobre o valor ja
+         corrigido. O main.ts reescreve por seguranca (rede) depois de montar. -->
     <script>
       (function () {
         try {
@@ -24,8 +26,16 @@
             document.documentElement.lang = l === 'pt' ? 'pt-BR' : 'en';
             return;
           }
-          var n = (navigator.languages || [navigator.language]).map(function (x) { return x.split('-')[0]; });
-          document.documentElement.lang = n.indexOf('pt') >= 0 ? 'pt-BR' : 'en';
+          // Mesma ordem do runtime: percorre navigator.languages e para no PRIMEIRO que casa por
+          // idioma-base. 'pt' ganha de 'en' SÓ se vier antes na lista — a preferencia do usuario
+          // manda, nao a presenca de pt em qualquer posicao.
+          var lista = navigator.languages || [navigator.language];
+          for (var i = 0; i < lista.length; i++) {
+            var base = (lista[i] || '').split('-')[0].toLowerCase();
+            if (base === 'pt') { document.documentElement.lang = 'pt-BR'; return; }
+            if (base === 'en') { document.documentElement.lang = 'en'; return; }
+          }
+          document.documentElement.lang = 'en';
         } catch (e) { /* storage off/modo privado: fica sem lang, o main.ts reescreve */ }
       })();
     </script>

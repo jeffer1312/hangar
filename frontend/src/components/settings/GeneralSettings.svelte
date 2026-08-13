@@ -14,10 +14,13 @@
   // Rotulos bilingues e fixos nos dois idiomas (config_idioma_*): quem caiu no idioma errado
   // precisa achar a saida sem saber ler o idioma em que esta. Portugues e English ficam com o
   // proprio nome; "Seguir o sistema" e a unica opcao que traduz de verdade.
-  const opcoes: { v: Preferencia; label: string; aria: string }[] = [
+  // `lang` em cada botao (WCAG 3.1.2): com a pagina em ingles, o leitor de tela leria "Português"
+  // com fonetica inglesa — justo no botao-saida de quem caiu no idioma errado. O atributo marca o
+  // idioma do trecho.
+  const opcoes: { v: Preferencia; label: string; aria: string; lang?: string }[] = [
     { v: 'sistema', label: m.config_idioma_sistema(), aria: m.config_idioma_sistema() },
-    { v: 'pt', label: m.config_idioma_pt(), aria: m.config_idioma_pt() },
-    { v: 'en', label: m.config_idioma_en(), aria: m.config_idioma_en() },
+    { v: 'pt', label: m.config_idioma_pt(), aria: m.config_idioma_pt(), lang: 'pt-BR' },
+    { v: 'en', label: m.config_idioma_en(), aria: m.config_idioma_en(), lang: 'en' },
   ];
 </script>
 
@@ -25,9 +28,12 @@
   <div class="gs-row">
     <div class="gs-label">
       <strong>{m.config_idioma_rotulo()}</strong>
-      <span>{m.config_idioma_nota_reload()}</span>
+      <!-- id referenciado pelo aria-describedby do segmentado: o leitor de tela anuncia a nota
+           junto do grupo, senao o pick recarrega a pagina sem nenhum aviso ao SR (WCAG 3.2.2). -->
+      <span id="idioma-nota-reload">{m.config_idioma_nota_reload()}</span>
     </div>
     <SegmentedPicker value={preferencia} options={opcoes} ariaLabel={m.config_idioma_rotulo()}
+                     describedBy="idioma-nota-reload"
                      onPick={(v) => aplicarPreferencia(v)} />
   </div>
 </div>

@@ -3,14 +3,16 @@
   // BackgroundToggle, extraído porque a Aparência passou a ter três fileiras iguais.
   interface Props {
     value: T;
-    options: { v: T; label: string; aria: string }[];
+    options: { v: T; label: string; aria: string; /** Idioma do rotulo, quando difere do da pagina (WCAG 3.1.2). */ lang?: string }[];
     ariaLabel: string;
     onPick: (v: T) => void;
+    /** id do texto que descreve o grupo (ex: nota de consequencia do pick) — anunciado junto pelo leitor de tela. */
+    describedBy?: string;
   }
-  let { value, options, ariaLabel, onPick }: Props = $props();
+  let { value, options, ariaLabel, onPick, describedBy }: Props = $props();
 </script>
 
-<div class="seg" role="group" aria-label={ariaLabel}>
+<div class="seg" role="group" aria-label={ariaLabel} aria-describedby={describedBy}>
   {#each options as o (o.v)}
     <button
       class="seg-opt"
@@ -18,6 +20,7 @@
       onclick={() => onPick(o.v)}
       aria-pressed={value === o.v}
       aria-label={o.aria}
+      lang={o.lang}
       title={o.aria}
     >{o.label}</button>
   {/each}
