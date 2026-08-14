@@ -659,6 +659,65 @@ def test_confirm_adia_enquanto_trabalha(tmp_path, monkeypatch):
     assert "confirmed" not in row and not row.get("attempts")
 
 
+def _cenario_turno_longo(tmp_path, monkeypatch, com_texto, provider="claude"):
+    """Entrega antiga nao-confirmada + marcador working + transcript COM (ou SEM) o texto.
+    Devolve (chamou_drain, timers_agendados, linha_da_fila_depois)."""
+    import json
+    import time as _t
+    from types import SimpleNamespace
+    import app.api as api
+
+    j = tmp_path / "t.jsonl"
+    conteudo = "MENSAGEM-UNICA" if com_texto else "outra-coisa"
+    j.write_text(json.dumps({"type": "user", "timestamp": "2026-01-01T00:00:00Z",
+                             "message": {"role": "user", "content": conteudo}}) + "\n",
+                 encoding="utf-8")
+    q = PromptQueue("turno-longo")
+    q.path.write_text(json.dumps({"id": "e1", "text": "MENSAGEM-UNICA", "ts": _t.time() - 30,
+                                  "delivered": True}) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(api.registry, "list", lambda: [_sessao_fake("turno-longo", j, provider)])
+    monkeypatch.setattr(api.hook_state, "get_state", lambda _sid: ("working", _t.time()))
+    timers = []
+    class _TimerRec:
+        def __init__(self, delay, target, args=()):
+            timers.append((delay, target.__name__, args))
+        def start(self):
+            pass
+    monkeypatch.setattr(api.threading, "Timer", _TimerRec)
+    chamou = []
+    monkeypatch.setattr(api, "drain", lambda *a, **k: chamou.append(a))
+
+    api._confirm_and_drain("turno-longo")
+    return chamou, timers, q.load()[0]
+
+
+def test_turno_longo_confirma_prova_no_transcript(tmp_path, monkeypatch):
+    # Sessao que trabalha HORAS sem ficar ociosa nunca chega no reconcile do idle: o guard de
+    # mid-turn adiava pra sempre e o follow reemitia a fila inteira como bolha fantasma a cada
+    # reconexao do SSE (bug medido: i18n-writer-t12 com 9 entradas delivered e confirmed:null).
+    # Com o texto PROVADO no transcript, carimbar confirmed e seguro ate no meio do turno — nao
+    # redigita, nao desiste: so esconde o eco que a bolha real ja cobre.
+    chamou, timers, row = _cenario_turno_longo(tmp_path, monkeypatch, com_texto=True)
+    assert row["confirmed"] is True            # carimbou sem esperar o ocioso
+    assert "desistiu" not in row
+    assert row["delivered"] is True
+    assert chamou == []                        # nada de redigitar no meio do turno
+    assert timers == []                        # nada pendente -> corrente de re-checagem parou
+
+
+def test_turno_longo_nao_decide_engolida_sem_prova(tmp_path, monkeypatch):
+    # O reverso, pro guard nao perder o motivo de existir: SEM o texto no transcript, no meio do
+    # turno nao se decide NADA (nem desistiu — pode ainda estar na fila interna da TUI) — so
+    # reagenda pra olhar de novo.
+    chamou, timers, row = _cenario_turno_longo(tmp_path, monkeypatch, com_texto=False)
+    assert "confirmed" not in row
+    assert "desistiu" not in row
+    assert row["delivered"] is True
+    assert chamou == []
+    assert timers and timers[0][1] == "_confirm_and_drain"
+
+
 # 13/08/2026: a mesma mensagem entrou 3x na fila da TUI de uma sessao Kimi (REQUEUE n=3 no log das
 # 08:29, tres bolhas identicas visiveis no pane). No Kimi um prompt digitado durante um turno fica
 # na fila da TUI e so entra no wire.jsonl quando o turno chega nele — nao ha o `queue-operation` do
