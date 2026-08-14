@@ -2,6 +2,7 @@
   import { untrack } from 'svelte';
   import { getPane, sendKey, sendTermInput, type NavKey } from '../lib/api';
   import ModalDialog from './ModalDialog.svelte';
+  import * as m from '../paraglide/messages';
 
   interface Props {
     open: boolean;
@@ -82,7 +83,7 @@
         // Colado no fim = acompanha a saída nova, como um terminal de verdade.
         requestAnimationFrame(() => { if (atBottom) toBottom(); });
       } catch (e) {
-        if (alive) err = e instanceof Error ? e.message : 'erro';
+        if (alive) err = e instanceof Error ? e.message : m.term_erro();
       } finally {
         // `finally` e nao o fim do try: os tres `return` antecipados acima (desmontado, diff-gate,
         // congelado) tambem passam por aqui — sem isso qualquer um deles mataria o poll pra sempre.
@@ -110,7 +111,7 @@
         if (paneEl) paneEl.scrollTop += paneEl.scrollHeight - before;
       });
     } catch (e) {
-      err = e instanceof Error ? e.message : 'erro';
+      err = e instanceof Error ? e.message : m.term_erro();
     } finally {
       loadingMore = false;
     }
@@ -126,7 +127,7 @@
       text = (await getPane(sessionName, paneLines)).text;
       requestAnimationFrame(toBottom);
     } catch (e) {
-      err = e instanceof Error ? e.message : 'erro';
+      err = e instanceof Error ? e.message : m.term_erro();
     } finally {
       busy = false;
     }
@@ -161,7 +162,7 @@
       await sendInput(payload);
       err = null;
     } catch (e) {
-      err = e instanceof Error ? e.message : 'erro';
+      err = e instanceof Error ? e.message : m.term_erro();
     }
   }
 
@@ -220,7 +221,7 @@
       draft = '';               // SÓ no sucesso: falhou, o texto continua no campo pra reenviar
       err = null;
     } catch (e) {
-      err = e instanceof Error ? e.message : 'erro ao enviar';
+      err = e instanceof Error ? e.message : m.term_erro_enviar();
     } finally {
       sending = false;
     }
@@ -239,21 +240,21 @@
   const paneUrl = $derived(text.match(/https?:\/\/\S+/)?.[0] ?? null);
 </script>
 
-<ModalDialog {open} ariaLabel="Terminal (overlay TUI)" onClose={onClose} className="tm-dialog">
+<ModalDialog {open} ariaLabel={m.term_overlay_aria()} onClose={onClose} className="tm-dialog">
   <div class="tm-backdrop">
     <header class="tm-head">
-      <button class="tm-back" onclick={onClose} aria-label="Voltar ao chat">
-        <span class="tm-back-arrow">←</span> Voltar ao chat
+      <button class="tm-back" onclick={onClose} aria-label={m.term_voltar_chat()}>
+        <span class="tm-back-arrow">←</span> {m.term_voltar_chat()}
       </button>
       <div class="tm-head-right">
-        <div class="tm-font" role="group" aria-label="Tamanho da fonte">
+        <div class="tm-font" role="group" aria-label={m.term_fonte_tamanho()}>
           <button class="tm-fontbtn" onclick={() => bumpFont(-1)} disabled={fontPx <= FONT_MIN}
-                  aria-label="Diminuir fonte">A−</button>
+                  aria-label={m.term_fonte_diminuir()}>A−</button>
           <span class="tm-fontval">{fontPx}</span>
           <button class="tm-fontbtn" onclick={() => bumpFont(1)} disabled={fontPx >= FONT_MAX}
-                  aria-label="Aumentar fonte">A+</button>
+                  aria-label={m.term_fonte_aumentar()}>A+</button>
         </div>
-        <span class="tm-title">{sessionName}{#if interactive} · <span class="tm-live">interativo</span>{/if}</span>
+        <span class="tm-title">{sessionName}{#if interactive} · <span class="tm-live">{m.term_interativo()}</span>{/if}</span>
       </div>
     </header>
 
@@ -265,12 +266,12 @@
       tabindex={interactive ? 0 : undefined}
       role="textbox"
       aria-readonly={!interactive}
-      aria-label={interactive ? 'Terminal interativo — digite' : undefined}
+      aria-label={interactive ? m.term_interativo_aria() : undefined}
       onkeydown={interactive ? onTermKey : undefined}
     >
       {#if canLoadMore}
         <button class="tm-more" onclick={loadMore} disabled={loadingMore}>
-          {loadingMore ? 'carregando…' : `↑ carregar mais histórico (${paneLines} linhas)`}
+          {loadingMore ? m.term_carregando() : m.term_carregar_mais({ n: paneLines })}
         </button>
       {/if}
       <pre class="tm-pane" style:font-size={`${fontPx}px`}>{lines.join('\n')}</pre>
@@ -283,12 +284,12 @@
       <p class="tm-frozen tm-frozen-err">⚠ {err}</p>
     {:else if !atBottom}
       <button class="tm-frozen" onclick={toBottom}>
-        {pending ? '⏸ pausado — há saída nova' : '⏸ pausado'} · ↓ voltar ao fim
+        {pending ? m.term_pausado_saida() : m.term_pausado()} {m.term_voltar_fim()}
       </button>
     {/if}
 
     {#if paneUrl}
-      <a class="tm-link" href={paneUrl} target="_blank" rel="noopener noreferrer">↗ Abrir link no navegador</a>
+      <a class="tm-link" href={paneUrl} target="_blank" rel="noopener noreferrer">{m.term_abrir_link()}</a>
     {/if}
 
     {#if !interactive}
@@ -296,36 +297,36 @@
         <input
           class="tm-input"
           bind:value={draft}
-          placeholder="digitar no terminal…"
-          aria-label="Texto para o terminal"
+          placeholder={m.term_digitar()}
+          aria-label={m.term_texto_para()}
           autocapitalize="off"
           autocorrect="off"
           spellcheck="false"
           enterkeyhint="send"
         />
         <!-- Enviar SEM Enter: num picker/filtro o Enter submeteria antes da hora. -->
-        <button class="tm-key" type="button" aria-label="Enviar sem pressionar Enter"
+        <button class="tm-key" type="button" aria-label={m.term_enviar_sem_enter()}
                 disabled={!draft || sending}
-                onclick={() => submitDraft(false)} title="enviar sem Enter">↵̸</button>
+                onclick={() => submitDraft(false)} title={m.term_enviar_sem_enter_curto()}>↵̸</button>
         <button class="tm-key tm-enter" type="submit" disabled={!draft || sending}
-                title="enviar e pressionar Enter">envia ⏎</button>
+                title={m.term_enviar_com_enter()}>{m.term_envia()}</button>
       </form>
     {/if}
 
-    <nav class="tm-keys" aria-label="Teclas de resgate">
-      <span class="tm-keys-hint">resgate</span>
+    <nav class="tm-keys" aria-label={m.term_teclas_resgate()}>
+      <span class="tm-keys-hint">{m.term_resgate()}</span>
       <button class="tm-key" onclick={() => press('Escape')}>Esc</button>
       <button aria-label="Tab" class="tm-key" onclick={() => press('Tab')}>⇥</button>
       <!-- Rolar o PRÓPRIO TUI. Num app de tela alternada (Claude Code) o tmux não guarda scrollback,
            então rolar o espelho só percorre as ~45 linhas da tela; quem sobe no histórico é o TUI.
            Medido: PageUp muda o conteúdo do pane. Já estavam na allowlist do backend, faltava botão. -->
-      <button aria-label="Rolar o terminal para cima" class="tm-key" onclick={() => press('PageUp')} title="rolar o terminal para cima">⇞</button>
-      <button aria-label="Rolar o terminal para baixo" class="tm-key" onclick={() => press('PageDown')} title="rolar o terminal para baixo">⇟</button>
+      <button aria-label={m.term_rolar_cima_aria()} class="tm-key" onclick={() => press('PageUp')} title={m.term_rolar_cima()}>⇞</button>
+      <button aria-label={m.term_rolar_baixo_aria()} class="tm-key" onclick={() => press('PageDown')} title={m.term_rolar_baixo()}>⇟</button>
       <div class="tm-arrows">
-        <button aria-label="Seta para a esquerda" class="tm-key" onclick={() => press('Left')}>←</button>
-        <button aria-label="Seta para cima" class="tm-key" onclick={() => press('Up')}>↑</button>
-        <button aria-label="Seta para baixo" class="tm-key" onclick={() => press('Down')}>↓</button>
-        <button aria-label="Seta para a direita" class="tm-key" onclick={() => press('Right')}>→</button>
+        <button aria-label={m.term_seta_esquerda()} class="tm-key" onclick={() => press('Left')}>←</button>
+        <button aria-label={m.term_seta_cima()} class="tm-key" onclick={() => press('Up')}>↑</button>
+        <button aria-label={m.term_seta_baixo()} class="tm-key" onclick={() => press('Down')}>↓</button>
+        <button aria-label={m.term_seta_direita()} class="tm-key" onclick={() => press('Right')}>→</button>
       </div>
       <button aria-label="Enter" class="tm-key tm-enter" onclick={() => press('Enter')}>⏎</button>
     </nav>

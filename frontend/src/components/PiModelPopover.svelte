@@ -4,6 +4,7 @@
   // sobre a pill, busca no topo, lista agrupada por provedor, tique no atual, e CLIQUE APLICA —
   // sem botao Aplicar. O nivel de raciocinio saiu daqui: virou pill propria (PiEffortPopover).
   import { untrack } from 'svelte';
+  import * as m from '../paraglide/messages';
   import Popover from './Popover.svelte';
   import { getPiModels, setPiModel, modelOptions } from '../lib/api';
   import type { PiModel } from '../lib/types';
@@ -54,7 +55,7 @@
         : null;
     } catch (e) {
       if (minha !== carga) return;
-      err = e instanceof Error ? e.message : 'Falha ao carregar modelos';
+      err = e instanceof Error ? e.message : m.comum_falha_carregar_modelos();
     } finally {
       if (minha === carga) loading = false;
     }
@@ -97,22 +98,22 @@
   // Clique aplica. O read-back manda: o Pi clampa o nivel pro que o modelo aceita, e 200 sem
   // `current` significa que NAO da pra afirmar que a troca pegou — nesse caso a caixa fica aberta
   // com o aviso, em vez de fechar pintando uma escolha nao confirmada.
-  async function escolher(m: PiModel) {
+  async function escolher(md: PiModel) {
     if (aplicando) return;
-    const chave = `${m.provider}/${m.id}`;
+    const chave = `${md.provider}/${md.id}`;
     aplicando = chave;
     err = null;
     try {
-      const res = await setPiModel(sessionName, { provider: m.provider, model: m.id });
+      const res = await setPiModel(sessionName, { provider: md.provider, model: md.id });
       if (!res.current) {
-        err = 'Não deu pra confirmar a troca — confira o modelo no terminal da sessão.';
+        err = m.modelo_confirmar_erro();
         aplicando = null;
         return;
       }
-      selected = m;
+      selected = md;
       onApplied(res.current.name || res.current.id, res.thinking);
     } catch (e) {
-      err = e instanceof Error ? e.message : 'Falha ao aplicar';
+      err = e instanceof Error ? e.message : m.comum_falha_aplicar();
       aplicando = null;
       return;
     }
@@ -121,7 +122,7 @@
   }
 </script>
 
-<Popover {open} {anchor} {onClose} width={320} ariaLabel="Modelo do Pi">
+<Popover {open} {anchor} {onClose} width={320} ariaLabel={m.composer_modelo_pi()}>
   <div class="busca-wrap">
     <svg class="lupa" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
       stroke-width="2" stroke-linecap="round" aria-hidden="true">
@@ -132,8 +133,8 @@
       type="search"
       data-foco
       bind:value={query}
-      placeholder="Buscar modelos"
-      aria-label="Buscar modelo"
+      placeholder={m.comum_buscar_modelos()}
+      aria-label={m.comum_buscar_modelo()}
     />
   </div>
 
@@ -142,31 +143,31 @@
   {/if}
 
   {#if loading && !models.length}
-    <p class="vazio">Carregando…</p>
+    <p class="vazio">{m.comum_carregando()}</p>
   {:else if !models.length}
-    {#if !err}<p class="vazio">Nenhum modelo disponível.</p>{/if}
+    {#if !err}<p class="vazio">{m.comum_nenhum_modelo()}</p>{/if}
   {:else if !filtered.length}
-    <p class="vazio">Nada encontrado.</p>
+    <p class="vazio">{m.comum_nada_encontrado()}</p>
   {:else}
     <div class="lista-scroll">
       {#each agrupado as [prov, itens] (prov)}
         <p class="grupo">{prov}</p>
         <ul class="lista">
-          {#each itens as m (m.provider + '/' + m.id)}
+          {#each itens as md (md.provider + '/' + md.id)}
             <li>
               <button
                 class="linha"
-                class:ativa={same(selected, m)}
-                aria-pressed={same(selected, m)}
+                class:ativa={same(selected, md)}
+                aria-pressed={same(selected, md)}
                 disabled={!!aplicando}
-                onclick={() => escolher(m)}
+                onclick={() => escolher(md)}
               >
-                <span class="nome">{m.name ?? m.id}</span>
-                {#if m.context}<span class="tag">{m.context}</span>{/if}
-                {#if m.images}<span class="tag tag--olho" title="Suporta imagens">👁</span>{/if}
-                {#if aplicando === `${m.provider}/${m.id}`}
+                <span class="nome">{md.name ?? md.id}</span>
+                {#if md.context}<span class="tag">{md.context}</span>{/if}
+                {#if md.images}<span class="tag tag--olho" title={m.modelo_suporta_imagens()}>👁</span>{/if}
+                {#if aplicando === `${md.provider}/${md.id}`}
                   <span class="tick" aria-hidden="true">…</span>
-                {:else if same(selected, m)}
+                {:else if same(selected, md)}
                   <svg class="tick" width="16" height="16" viewBox="0 0 24 24" fill="none"
                     stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
                     stroke-linejoin="round" aria-hidden="true">
@@ -180,7 +181,7 @@
       {/each}
     </div>
     {#if hiddenCount}
-      <p class="mais">+{hiddenCount} — refine a busca</p>
+      <p class="mais">{m.modelo_refine_busca({ n: hiddenCount })}</p>
     {/if}
   {/if}
 </Popover>

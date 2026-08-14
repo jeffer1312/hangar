@@ -9,6 +9,7 @@
   import { selectServer, getActiveId, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
   import type { SessionInfo, ConfigDirInfo, Provider } from '../lib/types';
+  import * as m from '../paraglide/messages';
 
   interface Props {
     open: boolean;
@@ -115,11 +116,11 @@
       const lembrado = localStorage.getItem(chaveMemoria());
       // Casar contra a lista: modelo tirado do provedor ou motor removido não pode virar flag às
       // cegas — a sessão subiria e falharia no primeiro turno.
-      if (lembrado && modelos.some((m) => valorModelo(m) === lembrado)) modelo = lembrado;
+      if (lembrado && modelos.some((mod) => valorModelo(mod) === lembrado)) modelo = lembrado;
       esforco = localStorage.getItem(chaveMemoria() + ':effort') ?? '';
     } catch (e) {
       if (seq !== modSeq) return;
-      erroModelos = e instanceof Error ? e.message : 'não consegui listar os modelos';
+      erroModelos = e instanceof Error ? e.message : m.criar_modelos_erro();
     }
   }
   // Criar conta pela tela: botão "+ conta" no seletor. Ocupada = POST em voo (desabilita o botão);
@@ -233,7 +234,7 @@
         // lista local e volta pra ativa — sem depender do GET que acabou de falhar.
         configs = configs.filter((c) => c.path !== apagadaPath);
         selectedConfig = configs.find((c) => c.active)?.path ?? configs[0]?.path ?? null;
-        avisoConta = `Conta ${nome} apagada, mas não consegui atualizar a lista — recarregue a tela.`;
+        avisoConta = m.criar_conta_apagada_lista({ nome });
         // B4 da revisão final: a seleção mudou de conta sem o onchange do combo passar — sem
         // recarregar aqui, o modelo/esforço da conta apagada sobreviveria e iria pro create.
         carregarModelos();
@@ -243,14 +244,14 @@
       configs = cs;
       // A seleção apontava pra pasta que sumiu: mandar esse caminho no create daria 400.
       selectedConfig = cs.find((c) => c.active)?.path ?? cs[0]?.path ?? null;
-      avisoConta = `Conta ${nome} apagada.`;
+      avisoConta = m.criar_conta_apagada({ nome });
       // B4 da revisão final: mesma regra do catch acima — seleção mudou por caminho
       // programático, o catálogo da conta que ficou tem que recarregar.
       carregarModelos();
     } catch (e) {
       if (seq !== cfgSeq || targetServer !== serverId) return;
       contaErro = true;
-      avisoConta = e instanceof Error ? e.message : 'não consegui apagar a conta';
+      avisoConta = e instanceof Error ? e.message : m.criar_apagar_conta_erro();
     } finally {
       if (seq === cfgSeq) contaOcupada = false;
     }
@@ -284,7 +285,7 @@
         cs = await listClaudeConfigs();
       } catch {
         if (seq !== cfgSeq || targetServer !== serverId) return;
-        avisoConta = 'Conta criada, mas não consegui atualizar a lista — recarregue a tela.';
+        avisoConta = m.criar_conta_lista_erro();
         return;
       }
       if (seq !== cfgSeq || targetServer !== serverId) return;
@@ -297,18 +298,18 @@
         nomeConta = '';
         selectedConfig = criada.path;
         contaCriadaPath = criada.path;
-        avisoConta = 'Conta criada. A sessão vai subir DESLOGADA — rode /login nela uma vez.';
+        avisoConta = m.criar_conta_deslogada();
         // B4 da revisão final: seleção mudou por caminho programático (sem onchange) — sem o
         // recarregar, o modelo da conta anterior iria pro create junto com a conta nova.
         carregarModelos();
       } else {
         contaCriadaPath = null;
-        avisoConta = 'Conta criada, mas ainda não apareceu na lista — recarregue a tela.';
+        avisoConta = m.criar_conta_nao_apareceu();
       }
     } catch (e) {
       if (seq !== cfgSeq || targetServer !== serverId) return;
       contaErro = true;
-      avisoConta = e instanceof Error ? e.message : 'não consegui criar a conta';
+      avisoConta = e instanceof Error ? e.message : m.criar_conta_erro();
     } finally {
       // Só a operação VIGENTE libera o botão: o finally de uma operação antiga (sheet fechado e
       // reaberto no meio do POST) não pode derrubar o estado da nova.
@@ -412,7 +413,7 @@
                      provider === 'claude' ? (engine || null) : null, modelo || null, esforco || null);
       onClose();
     } catch (err) {
-      error = err instanceof Error ? err.message : 'Erro ao criar sessão';
+      error = err instanceof Error ? err.message : m.criar_sessao_erro();
     } finally {
       loading = false;
     }
@@ -420,12 +421,12 @@
 
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel="Nova sessão">
-  <h2 class="sheet-title">Nova sessão</h2>
+<BottomSheet {open} {onClose} ariaLabel={m.sessao_nova()}>
+  <h2 class="sheet-title">{m.sessao_nova()}</h2>
 
   {#if servers.length > 1}
     <div class="server-select">
-      <span class="server-select-label">Servidor</span>
+      <span class="server-select-label">{m.comum_servidor()}</span>
       <div class="server-chips">
         {#each servers as s (s.id)}
           <button
@@ -454,7 +455,7 @@
 
     <div class="advanced">
       <button class="advanced-toggle" onclick={() => (manualOpen = !manualOpen)}>
-        <span>Avançado: digitar caminho</span>
+        <span>{m.criar_avancado()}</span>
         <span class="chevron" class:chevron--open={manualOpen} aria-hidden="true">›</span>
       </button>
       {#if manualOpen}
@@ -463,14 +464,14 @@
             type="text"
             class="field-input"
             bind:value={manualPath}
-            placeholder="/home/voce/projetos/foo"
+            placeholder={m.criar_caminho_placeholder()}
             autocomplete="off"
             autocorrect="off"
             autocapitalize="off"
             spellcheck={false}
-            aria-label="Caminho do diretório"
+            aria-label={m.criar_caminho_aria()}
           />
-          <button type="submit" class="manual-go" disabled={!manualPath.trim()}>Usar</button>
+          <button type="submit" class="manual-go" disabled={!manualPath.trim()}>{m.criar_usar()}</button>
         </form>
       {/if}
     </div>
@@ -484,19 +485,19 @@
     </div>
 
     {#if checking}
-      <p class="hint">Verificando sessões…</p>
+      <p class="hint">{m.criar_verificando()}</p>
     {:else}
       {#if hasSameFolder}
-        <p class="hint">Já há uma sessão nesta pasta — criando outra com nome único.</p>
+        <p class="hint">{m.criar_ja_existe()}</p>
       {/if}
       <div class="field">
-        <label class="field-label" for="session-name">Nome</label>
+        <label class="field-label" for="session-name">{m.comum_nome()}</label>
         <input
           id="session-name"
           type="text"
           class="field-input"
           bind:value={name}
-          placeholder="meu-projeto"
+          placeholder={m.criar_nome_placeholder()}
           autocomplete="off"
           autocorrect="off"
           autocapitalize="off"
@@ -506,8 +507,8 @@
       </div>
 
       <div class="field">
-        <span class="field-label">Provider</span>
-        <div class="provider-toggle" role="group" aria-label="Provider da sessão">
+        <span class="field-label">{m.comum_provider()}</span>
+        <div class="provider-toggle" role="group" aria-label={m.criar_provider_aria()}>
           {#each PROVIDERS as p (p)}
             <button
               type="button"
@@ -522,50 +523,50 @@
 
       {#if provider === 'claude'}
         <div class="field">
-          <label class="field-label" for="cfg-pick">Conta Claude</label>
+          <label class="field-label" for="cfg-pick">{m.comum_conta_claude()}</label>
           <div class="conta-row">
             <!-- disabled enquanto ocupada: trocar a conta com um apagar em voo fazia o texto da
                  confirmação mostrar um nome e a requisição apagar OUTRO (o nome foi capturado antes
                  do await), e a troca ainda era descartada calada no fim da operação. -->
-            <Select id="cfg-pick" class="field-input" ariaLabel="Conta" disabled={contaOcupada}
+            <Select id="cfg-pick" class="field-input" ariaLabel={m.criar_conta_aria()} disabled={contaOcupada}
               value={selectedConfig ?? ''}
               opcoes={configs.map((c) => ({
-                value: c.path, label: c.label, hint: c.active ? 'atual' : undefined, title: c.path }))}
+                value: c.path, label: c.label, hint: c.active ? m.criar_conta_atual() : undefined, title: c.path }))}
               onchange={(v) => { selectedConfig = v; carregarModelos(); }} />
             <button type="button" class="ghost-btn conta-add" onclick={abrirCampoConta}
               disabled={contaOcupada} aria-busy={contaOcupada}
-              aria-label={contaOcupada ? 'Criando conta Claude' : 'Adicionar conta Claude'}>
-              {contaOcupada ? '…' : '+ conta'}
+              aria-label={contaOcupada ? m.criar_criando_conta_aria() : m.criar_adicionar_conta_aria()}>
+              {contaOcupada ? '…' : m.criar_mais_conta()}
             </button>
             {#if nomeDaSelecionada && !pedindoNome && !confirmandoApagar}
               <button type="button" class="ghost-btn conta-add" onclick={() => (confirmandoApagar = true)}
                 disabled={contaOcupada}
-                aria-label={`Apagar a conta ${nomeDaSelecionada}`}>apagar</button>
+                aria-label={m.criar_apagar_conta_aria({ nome: nomeDaSelecionada })}>{m.criar_apagar()}</button>
             {/if}
           </div>
           {#if confirmandoApagar && nomeDaSelecionada}
             <div class="conta-row conta-nova">
               <p class="conta-hint conta-confirma">
-                Apagar <strong>{nomeDaSelecionada}</strong> e as conversas dela?
+                {m.comum_apagar()} <strong>{nomeDaSelecionada}</strong> {m.criar_apagar_fim()}
               </p>
               <button type="button" class="ghost-btn conta-add conta-perigo" onclick={apagar}
-                disabled={contaOcupada}>{contaOcupada ? '…' : 'apagar'}</button>
+                disabled={contaOcupada}>{contaOcupada ? '…' : m.criar_apagar()}</button>
               <button type="button" class="ghost-btn conta-add"
-                onclick={() => (confirmandoApagar = false)} disabled={contaOcupada}>cancelar</button>
+                onclick={() => (confirmandoApagar = false)} disabled={contaOcupada}>{m.criar_cancelar()}</button>
             </div>
           {/if}
           {#if pedindoNome}
             <div class="conta-row conta-nova">
               <!-- svelte-ignore a11y_autofocus -->
               <input class="field-input" type="text" autofocus bind:value={nomeConta}
-                placeholder="nome da conta (minúsculas, números, - ou _)"
-                aria-label="Nome da conta nova" disabled={contaOcupada}
+                placeholder={m.criar_conta_placeholder()}
+                aria-label={m.criar_conta_nova_aria()} disabled={contaOcupada}
                 onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); novaConta(); }
                                     else if (e.key === 'Escape') pedindoNome = false; }} />
               <button type="button" class="ghost-btn conta-add" onclick={novaConta}
-                disabled={contaOcupada || !nomeConta.trim()}>criar</button>
+                disabled={contaOcupada || !nomeConta.trim()}>{m.criar_criar()}</button>
               <button type="button" class="ghost-btn conta-add" onclick={() => (pedindoNome = false)}
-                disabled={contaOcupada}>cancelar</button>
+                disabled={contaOcupada}>{m.criar_cancelar()}</button>
             </div>
           {/if}
           {#if avisoConta && (!contaCriadaPath || selectedConfig === contaCriadaPath)}
@@ -580,43 +581,43 @@
 
       {#if provider === 'claude' && Object.keys(motores).length}
         <div class="field">
-          <label class="field-label" for="engine-pick">Motor</label>
-          <Select id="engine-pick" ariaLabel="Motor" value={engine}
-            opcoes={[{ value: '', label: 'Claude (sua conta)' },
-                     ...Object.entries(motores).map(([nome, m]) => ({
-                       value: nome, label: m.label ?? nome, hint: m.model }))]}
+          <label class="field-label" for="engine-pick">{m.comum_motor()}</label>
+          <Select id="engine-pick" ariaLabel={m.comum_motor()} value={engine}
+            opcoes={[{ value: '', label: m.criar_claude_sua_conta() },
+                     ...Object.entries(motores).map(([nome, motor]) => ({
+                       value: nome, label: motor.label ?? nome, hint: motor.model }))]}
             onchange={(v) => { engine = v; carregarModelos(); }} />
         </div>
       {/if}
 
       {#if provider === 'claude' || provider === 'pi'}
         <div class="field">
-          <label class="field-label" for="model-pick">Modelo</label>
-          <Select id="model-pick" class="field-input" ariaLabel="Modelo" value={modelo}
-            opcoes={[{ value: '', label: 'Padrão' },
-                     ...modelos.map((m) => ({
-                       value: valorModelo(m),
-                       label: m.name ?? m.id,
+          <label class="field-label" for="model-pick">{m.composer_modelo()}</label>
+          <Select id="model-pick" class="field-input" ariaLabel={m.composer_modelo()} value={modelo}
+            opcoes={[{ value: '', label: m.criar_padrao() },
+                     ...modelos.map((mod) => ({
+                       value: valorModelo(mod),
+                       label: mod.name ?? mod.id,
                        // Quatro formatos do campo `models` (Task 4): pi traz provider/context/
                        // images, motor traz context_length/vision, cache do Claude traz name, e os
                        // aliases reduzidos não trazem nada. Campos ausentes simplesmente somem do
                        // hint (.filter(Boolean)) — nenhum formato pode quebrar a linha.
-                       hint: [m.provider,
-                              m.context ?? (m.context_length ? `${Math.round(m.context_length / 1000)}K` : null),
-                              (m.vision ?? m.images) ? '👁' : null].filter(Boolean).join(' · ') }))]}
+                       hint: [mod.provider,
+                              mod.context ?? (mod.context_length ? `${Math.round(mod.context_length / 1000)}K` : null),
+                              (mod.vision ?? mod.images) ? '👁' : null].filter(Boolean).join(' · ') }))]}
             onchange={(v) => (modelo = v)} />
           {#if listaReduzida}
-            <p class="model-hint" role="status" aria-live="polite" aria-atomic="true">Lista reduzida — abra uma sessão nesta conta uma vez para o app aprender os modelos dela.</p>
+            <p class="model-hint" role="status" aria-live="polite" aria-atomic="true">{m.criar_lista_reduzida()}</p>
           {/if}
           {#if erroModelos}
-            <p class="model-hint" role="alert">{erroModelos} — a sessão abre no padrão.</p>
+            <p class="model-hint" role="alert">{m.criar_abre_padrao({ erro: erroModelos })}</p>
           {/if}
         </div>
 
         <div class="field">
-          <label class="field-label" for="effort-pick">{provider === 'pi' ? 'Raciocínio' : 'Esforço'}</label>
-          <Select id="effort-pick" class="field-input" ariaLabel={provider === 'pi' ? 'Raciocínio' : 'Esforço'} value={esforco}
-            opcoes={[{ value: '', label: 'Padrão' },
+          <label class="field-label" for="effort-pick">{provider === 'pi' ? m.criar_raciocinio() : m.criar_esforco()}</label>
+          <Select id="effort-pick" class="field-input" ariaLabel={provider === 'pi' ? m.criar_raciocinio() : m.criar_esforco()} value={esforco}
+            opcoes={[{ value: '', label: m.criar_padrao() },
                      ...NIVEIS[provider].map((n) => ({ value: n, label: n }))]}
             onchange={(v) => (esforco = v)} />
         </div>
@@ -627,9 +628,9 @@
       {/if}
 
       <button class="primary-btn" onclick={create} disabled={loading || !name.trim()}>
-        {loading ? 'Criando…' : 'Nova sessão'}
+        {loading ? m.criar_criando() : m.sessao_nova()}
       </button>
-      <button class="ghost-btn" onclick={reset}>Escolher outra pasta</button>
+      <button class="ghost-btn" onclick={reset}>{m.criar_outra_pasta()}</button>
     {/if}
   {/if}
 </BottomSheet>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from '../../paraglide/messages';
   import type { GitCommit } from '../../lib/api';
 import { intlLocale } from '../../lib/locale';
   import { getCommitFiles, getCommitBranches } from '../../lib/api';
@@ -51,7 +52,7 @@ import { intlLocale } from '../../lib/locale';
   async function copy(text: string) {
     // navigator.clipboard exige contexto seguro: PWA em http://IP-LAN pode nao ter -> falha aparece.
     try { await navigator.clipboard.writeText(text); onClose(); }
-    catch { git.error = 'clipboard indisponível neste navegador/contexto'; }
+    catch { git.error = m.git_clipboard_erro(); }
   }
 
   // "Copy to clipboard" do Tortoise: hash + autor + data + mensagem + arquivos. A lista de arquivos
@@ -62,14 +63,14 @@ import { intlLocale } from '../../lib/locale';
     try { files = (await getCommitFiles(git.sessionName, commit.hash)).files.map((f) => f.path); }
     catch { files = null; }   // falha nao impede copiar o resto — mas o texto DIZ que faltou
     await copy([
-      `commit ${commit.hash}`,
-      `Autor:  ${commit.author}`,
-      `Data:   ${new Date(commit.ts * 1000).toLocaleString(intlLocale())}`,
+      m.git_clip_commit({ hash: commit.hash }),
+      m.git_clip_autor({ autor: commit.author }),
+      m.git_clip_data({ data: new Date(commit.ts * 1000).toLocaleString(intlLocale()) }),
       '',
       commit.subject,
       '',
-      'Arquivos:',
-      ...(files === null ? ['  (lista indisponível — falha ao ler o commit)']
+      m.git_clip_arquivos(),
+      ...(files === null ? [m.git_clip_lista_indisponivel()]
                          : files.map((p) => `  ${p}`)),
     ].join('\n'));
   }
@@ -91,77 +92,77 @@ import { intlLocale } from '../../lib/locale';
   if (e.key === 'Escape') { e.stopImmediatePropagation(); e.preventDefault(); onClose(); }
 }} />
 <div use:portal class="cm-back" onclick={onClose} role="presentation"></div>
-<div use:portal bind:this={menuEl} onkeydown={onMenuKeydown} tabindex="-1" class="cm" role="menu" aria-label="ações do commit {commit.short}">
+<div use:portal bind:this={menuEl} onkeydown={onMenuKeydown} tabindex="-1" class="cm" role="menu" aria-label={m.git_acoes_commit_de({ short: commit.short })}>
   {#if mode === 'menu'}
-    <p class="cm-title">commit {commit.short} — {commit.subject}</p>
-    <button class="cm-item" disabled={!!git.busy} onclick={() => { onShowDiff(commit); onClose(); }}>Ver diff completo</button>
-    <button class="cm-item" disabled={!!git.busy} onclick={() => { onShowWorktreeDiff(commit); onClose(); }}>Comparar com a working tree</button>
-    <button class="cm-item" onclick={() => copy(commit.hash)}>Copiar hash</button>
-    <button class="cm-item" onclick={() => copy(commit.subject)}>Copiar mensagem</button>
-    <button class="cm-item" onclick={copyDetails}>Copiar detalhes completos</button>
-    <button class="cm-item" onclick={loadBranches}>Branches que contêm este commit ▸</button>
-    <button class="cm-item" onclick={() => (mode = 'branch')}>Criar branch aqui…</button>
-    <button class="cm-item" onclick={() => (mode = 'tag')}>Criar tag aqui…</button>
+    <p class="cm-title">{m.git_titulo_commit({ short: commit.short, subject: commit.subject })}</p>
+    <button class="cm-item" disabled={!!git.busy} onclick={() => { onShowDiff(commit); onClose(); }}>{m.git_ver_diff_completo()}</button>
+    <button class="cm-item" disabled={!!git.busy} onclick={() => { onShowWorktreeDiff(commit); onClose(); }}>{m.git_comparar_working_tree()}</button>
+    <button class="cm-item" onclick={() => copy(commit.hash)}>{m.git_copiar_hash()}</button>
+    <button class="cm-item" onclick={() => copy(commit.subject)}>{m.bubble_copiar()}</button>
+    <button class="cm-item" onclick={copyDetails}>{m.git_copiar_detalhes()}</button>
+    <button class="cm-item" onclick={loadBranches}>{m.git_branches_contem()}</button>
+    <button class="cm-item" onclick={() => (mode = 'branch')}>{m.git_criar_branch_aqui()}</button>
+    <button class="cm-item" onclick={() => (mode = 'tag')}>{m.git_criar_tag_aqui()}</button>
     {#if confirmAct === 'cherry-pick'}
-      <button class="cm-item danger" disabled={!!git.busy} onclick={() => run(() => git.cherryPick(commit.hash))}>confirmar cherry-pick</button>
-      <button class="cm-item" onclick={() => (confirmAct = '')}>não</button>
+      <button class="cm-item danger" disabled={!!git.busy} onclick={() => run(() => git.cherryPick(commit.hash))}>{m.git_confirmar_cherry_pick()}</button>
+      <button class="cm-item" onclick={() => (confirmAct = '')}>{m.config_server_nao()}</button>
     {:else}
       <button class="cm-item" onclick={() => (confirmAct = 'cherry-pick')}>Cherry-pick</button>
     {/if}
     {#if confirmAct === 'revert'}
-      <button class="cm-item danger" disabled={!!git.busy} onclick={() => run(() => git.revert(commit.hash))}>confirmar revert</button>
-      <button class="cm-item" onclick={() => (confirmAct = '')}>não</button>
+      <button class="cm-item danger" disabled={!!git.busy} onclick={() => run(() => git.revert(commit.hash))}>{m.git_confirmar_revert()}</button>
+      <button class="cm-item" onclick={() => (confirmAct = '')}>{m.config_server_nao()}</button>
     {:else}
-      <button class="cm-item" onclick={() => (confirmAct = 'revert')}>Revert este commit</button>
+      <button class="cm-item" onclick={() => (confirmAct = 'revert')}>{m.git_revert_commit()}</button>
     {/if}
-    <button class="cm-item" onclick={() => (mode = 'reset')}>Reset até aqui ▸</button>
+    <button class="cm-item" onclick={() => (mode = 'reset')}>{m.git_reset_aqui()}</button>
   {:else if mode === 'branch'}
-    <p class="cm-title">branch nova em {commit.short}</p>
-    <input class="cm-input" bind:value={name} placeholder="nome da branch"
+    <p class="cm-title">{m.git_branch_nova_em({ short: commit.short })}</p>
+    <input class="cm-input" bind:value={name} placeholder={m.git_branch_nome_placeholder()}
       autocapitalize="off" autocorrect="off" spellcheck="false" />
     <div class="cm-row">
       <button class="cm-item primary" disabled={!name.trim() || !!git.busy}
-        onclick={() => run(() => git.createBranch(name.trim(), commit.hash))}>criar</button>
-      <button class="cm-item" onclick={() => { mode = 'menu'; name = ''; }}>voltar</button>
+        onclick={() => run(() => git.createBranch(name.trim(), commit.hash))}>{m.git_criar()}</button>
+      <button class="cm-item" onclick={() => { mode = 'menu'; name = ''; }}>{m.git_voltar()}</button>
     </div>
   {:else if mode === 'tag'}
-    <p class="cm-title">tag nova em {commit.short}</p>
-    <input class="cm-input" bind:value={name} placeholder="nome da tag"
+    <p class="cm-title">{m.git_tag_nova_em({ short: commit.short })}</p>
+    <input class="cm-input" bind:value={name} placeholder={m.git_tag_nome_placeholder()}
       autocapitalize="off" autocorrect="off" spellcheck="false" />
-    <input class="cm-input" bind:value={tagMsg} placeholder="mensagem (opcional — vira tag anotada)"
+    <input class="cm-input" bind:value={tagMsg} placeholder={m.git_tag_msg_placeholder()}
       autocapitalize="off" autocorrect="off" spellcheck="false" />
     <div class="cm-row">
       <button class="cm-item primary" disabled={!name.trim() || !!git.busy}
-        onclick={() => run(() => git.createTag(name.trim(), commit.hash, tagMsg.trim() || undefined))}>criar</button>
-      <button class="cm-item" onclick={() => { mode = 'menu'; name = ''; tagMsg = ''; }}>voltar</button>
+        onclick={() => run(() => git.createTag(name.trim(), commit.hash, tagMsg.trim() || undefined))}>{m.git_criar()}</button>
+      <button class="cm-item" onclick={() => { mode = 'menu'; name = ''; tagMsg = ''; }}>{m.git_voltar()}</button>
     </div>
   {:else if mode === 'branches'}
-    <p class="cm-title">branches com {commit.short}</p>
+    <p class="cm-title">{m.git_branches_com({ short: commit.short })}</p>
     {#if containsFailed}
-      <p class="cm-muted">não deu pra ler as branches</p>
+      <p class="cm-muted">{m.git_branches_ler_erro()}</p>
     {:else if contains === null}
-      <p class="cm-muted">carregando…</p>
+      <p class="cm-muted">{m.board_carregando()}</p>
     {:else if !contains.local.length && !contains.remote.length}
-      <p class="cm-muted">nenhuma branch contém este commit</p>
+      <p class="cm-muted">{m.git_nenhuma_branch_contem()}</p>
     {:else}
       <ul class="cm-list">
         {#each contains.local as b (b)}<li>{b}</li>{/each}
         {#each contains.remote as b (b)}<li class="cm-remote">{b}</li>{/each}
       </ul>
     {/if}
-    <button class="cm-item" onclick={() => { mode = 'menu'; contains = null; }}>voltar</button>
+    <button class="cm-item" onclick={() => { mode = 'menu'; contains = null; }}>{m.git_voltar()}</button>
   {:else}
-    <p class="cm-title">reset até {commit.short}</p>
-    <button class="cm-item" disabled={!!git.busy} onclick={() => run(() => git.resetTo(commit.hash, 'soft'))}>soft — mantém tudo staged</button>
-    <button class="cm-item" disabled={!!git.busy} onclick={() => run(() => git.resetTo(commit.hash, 'mixed'))}>mixed — mantém na tree, fora do stage</button>
+    <p class="cm-title">{m.git_reset_ate({ short: commit.short })}</p>
+    <button class="cm-item" disabled={!!git.busy} onclick={() => run(() => git.resetTo(commit.hash, 'soft'))}>{m.git_soft_mantem()}</button>
+    <button class="cm-item" disabled={!!git.busy} onclick={() => run(() => git.resetTo(commit.hash, 'mixed'))}>{m.git_mixed_mantem()}</button>
     {#if confirmAct === 'hard'}
-      <p class="cm-warn">HARD apaga mudanças não commitadas. Tem certeza?</p>
-      <button class="cm-item danger" disabled={!!git.busy} onclick={() => run(() => git.resetTo(commit.hash, 'hard'))}>sim, reset --hard</button>
-      <button class="cm-item" onclick={() => (confirmAct = '')}>não</button>
+      <p class="cm-warn">{m.git_hard_aviso()}</p>
+      <button class="cm-item danger" disabled={!!git.busy} onclick={() => run(() => git.resetTo(commit.hash, 'hard'))}>{m.git_sim_reset_hard()}</button>
+      <button class="cm-item" onclick={() => (confirmAct = '')}>{m.config_server_nao()}</button>
     {:else}
-      <button class="cm-item danger" onclick={() => (confirmAct = 'hard')}>hard — descarta mudanças…</button>
+      <button class="cm-item danger" onclick={() => (confirmAct = 'hard')}>{m.git_hard_descarta()}</button>
     {/if}
-    <button class="cm-item" onclick={() => { mode = 'menu'; confirmAct = ''; }}>voltar</button>
+    <button class="cm-item" onclick={() => { mode = 'menu'; confirmAct = ''; }}>{m.git_voltar()}</button>
   {/if}
   {#if git.error}<p class="git-error">{git.error}</p>{/if}
 </div>

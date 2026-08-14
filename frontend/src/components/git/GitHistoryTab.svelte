@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from '../../paraglide/messages';
   // Aba Historico: o empilhado do Tortoise — busca, lista, mensagem, arquivos. O diff nao e painel
   // aqui (ao contrario da aba Mudancas): ele ocupa a janela por cima do empilhado, que e a regra do
   // spec pro unico conteudo que merece a tela toda.
@@ -73,7 +74,7 @@
 
 {#if diffAberto}
   <div class="ht-diff">
-    <button class="git-back" onclick={voltar}>‹ {desktop ? 'histórico' : 'commit'}</button>
+    <button class="git-back" onclick={voltar}>‹ {desktop ? m.lista_historico() : 'commit'}</button>
     <DiffView path={git.diffPath} rows={git.diffRows} loading={git.diffLoading} truncated={git.diffTruncated} />
   </div>
 {:else if desktop}
@@ -87,7 +88,7 @@
         <CommitList commits={git.commits} wtCount={0} noGraph={!!git.logQuery}
           selectedHash={selecionado?.hash} onSelect={escolher} onMenu={(c) => (menuCommit = c)} />
       {:else}
-        <p class="git-muted">{git.logQuery ? 'nenhum commit casa com a busca' : 'sem commits ainda'}</p>
+        <p class="git-muted">{git.logQuery ? m.git_nenhum_commit_busca() : m.git_sem_commits_ainda()}</p>
       {/if}
     </div>
     {#if selecionado}
@@ -98,7 +99,7 @@
       </div>
     {:else}
       <!-- Uma vez so, nao um "selecione um commit" em cada painel vazio. -->
-      <p class="git-muted ht-empty">selecione um commit</p>
+      <p class="git-muted ht-empty">{m.git_selecione_commit()}</p>
     {/if}
   </div>
 {:else if level >= 1 && selecionado}
@@ -115,7 +116,7 @@
       <CommitList commits={git.commits} wtCount={0} noGraph={!!git.logQuery}
         selectedHash={selecionado?.hash} onSelect={escolher} onMenu={(c) => (menuCommit = c)} />
     {:else}
-      <p class="git-muted">{git.logQuery ? 'nenhum commit casa com a busca' : 'sem commits ainda'}</p>
+      <p class="git-muted">{git.logQuery ? m.git_nenhum_commit_busca() : m.git_sem_commits_ainda()}</p>
     {/if}
   </div>
 {/if}

@@ -9,6 +9,7 @@
 //     fica com o combo só com "Padrão", mesmo com o backend vivo por trás.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick, createRawSnippet } from 'svelte';
+import * as m from '../paraglide/messages';
 // Harness, não o sheet: segura `open` e alterna por clique (o $set do mount é bloqueado em DEV no
 // Svelte 5 — component_api_changed), reproduzindo o ciclo fechar/reabrir do app real.
 import Harness from './CreateSessionSheet.harness.svelte';
@@ -116,12 +117,12 @@ function mockModelosPorConta() {
 
 async function confirmarApagar() {
   [...(document.querySelectorAll('.conta-add') as unknown as HTMLElement[])]
-    .find((b) => b.textContent === 'apagar')!.click();
+    .find((b) => b.textContent === m.criar_apagar())!.click();
   await tick();
   // Com confirmandoApagar=true o botão da linha some — o único 'apagar' restante é o da
   // confirmação (o mesmo find volta a pegar o certo).
   [...(document.querySelectorAll('.conta-add') as unknown as HTMLElement[])]
-    .find((b) => b.textContent === 'apagar')!.click();
+    .find((b) => b.textContent === m.criar_apagar())!.click();
   await flush();
 }
 
@@ -147,8 +148,8 @@ describe('CreateSessionSheet — reabertura com a lista de contas fora do ar', (
     await reabrir();
 
     // O $effect de abertura zerou os cinco campos (nenhum fetch resolveu pra re-pedir a lista).
-    expect(document.querySelector('#model-pick')!.textContent).toContain('Padrão');
-    expect(document.querySelector('#effort-pick')!.textContent).toContain('Padrão');
+    expect(document.querySelector('#model-pick')!.textContent).toContain(m.criar_padrao());
+    expect(document.querySelector('#effort-pick')!.textContent).toContain(m.criar_padrao());
 
     // A LISTA também não pode ser a do Pi: sem o `modelos = []` do reset, a lista antiga com
     // gpt-5.6-luna continuaria clicável dentro de uma sessão Claude (o combo abriria e o id do Pi
@@ -184,7 +185,7 @@ describe('CreateSessionSheet — reabertura com a lista de contas fora do ar', (
     (document.body.querySelector('.sel-fora') as HTMLElement)?.click();
     await tick();
     const aviso = [...document.querySelectorAll('.model-hint')]
-      .find((p) => p.textContent?.includes('Lista reduzida'));
+      .find((p) => p.textContent?.includes(m.criar_lista_reduzida()));
     expect(aviso?.getAttribute('role')).toBe('status');
     unmount(comp);
   });
@@ -226,13 +227,13 @@ describe('CreateSessionSheet — reabertura com a lista de contas fora do ar', (
     await escolherPasta();
 
     // Claude: nome acessível "Esforço" (igual ao rótulo visível).
-    expect(document.querySelector('#effort-pick')!.getAttribute('aria-label')).toBe('Esforço');
+    expect(document.querySelector('#effort-pick')!.getAttribute('aria-label')).toBe(m.criar_esforco());
 
     // Pi: o rótulo visível vira "Raciocínio" e o nome acessível tem que acompanhar (Label in Name).
     [...(document.querySelectorAll('.provider-btn') as unknown as HTMLElement[])]
       .find((b) => b.textContent === 'Pi')!.click();
     await flush();
-    expect(document.querySelector('#effort-pick')!.getAttribute('aria-label')).toBe('Raciocínio');
+    expect(document.querySelector('#effort-pick')!.getAttribute('aria-label')).toBe(m.criar_raciocinio());
 
     // Erro de listagem: modelOptions rejeita -> aviso com role=alert (o mesmo padrão do aviso de
     // conta deste arquivo), anunciado em vez de mudo.
@@ -241,7 +242,7 @@ describe('CreateSessionSheet — reabertura com a lista de contas fora do ar', (
       .find((b) => b.textContent === 'Claude')!.click();
     await flush();
     const erro = [...document.querySelectorAll('.model-hint')]
-      .find((p) => p.textContent?.includes('sessão abre no padrão'));
+      .find((p) => p.textContent?.includes(m.criar_abre_padrao({ erro: 'x' }).slice(m.criar_abre_padrao({ erro: 'x' }).indexOf('—'))));
     expect(erro?.getAttribute('role')).toBe('alert');
 
     // A mensagem de FALHA AO CRIAR também é anunciada (role=alert) — é o erro do fluxo principal
@@ -281,7 +282,7 @@ describe('CreateSessionSheet — B4/B6 da revisão final da branch', () => {
 
     // A conta nova virou a seleção e a escolha da conta A foi zerada: combo em Padrão, e a
     // lista agora é a da conta B (disjunta) — 'sonnet' nem está clicável.
-    expect((document.querySelector('#model-pick') as HTMLElement).textContent).toContain('Padrão');
+    expect((document.querySelector('#model-pick') as HTMLElement).textContent).toContain(m.criar_padrao());
     (document.querySelector('#model-pick') as HTMLElement).click();
     await tick();
     const rotulos = [...document.querySelectorAll('.sel-item')].map((b) => b.textContent ?? '');
@@ -318,7 +319,7 @@ describe('CreateSessionSheet — B4/B6 da revisão final da branch', () => {
     await confirmarApagar();
 
     // A seleção voltou pra conta ativa, a escolha da apagada foi zerada e a lista é a da ativa.
-    expect((document.querySelector('#model-pick') as HTMLElement).textContent).toContain('Padrão');
+    expect((document.querySelector('#model-pick') as HTMLElement).textContent).toContain(m.criar_padrao());
     (document.querySelector('#model-pick') as HTMLElement).click();
     await tick();
     const rotulos = [...document.querySelectorAll('.sel-item')].map((b) => b.textContent ?? '');
@@ -353,8 +354,8 @@ describe('CreateSessionSheet — B4/B6 da revisão final da branch', () => {
     await confirmarApagar();
 
     // O aviso de refresh falho aparece, a seleção volta pra ativa e a escolha da apagada some.
-    expect(document.body.textContent).toContain('não consegui atualizar a lista');
-    expect((document.querySelector('#model-pick') as HTMLElement).textContent).toContain('Padrão');
+    expect(document.body.textContent).toContain(m.criar_conta_apagada_lista({ nome: 'nova' }));
+    expect((document.querySelector('#model-pick') as HTMLElement).textContent).toContain(m.criar_padrao());
     (document.querySelector('.primary-btn') as HTMLElement).click();
     await flush();
     expect(onCreate).toHaveBeenCalledWith(
@@ -382,8 +383,8 @@ describe('CreateSessionSheet — B4/B6 da revisão final da branch', () => {
     // 2ª abertura: a memória restaura sonnet/high; o usuário escolhe Padrão nos dois e cria.
     await reabrirFechado();
     expect((document.querySelector('#model-pick') as HTMLElement).textContent).toContain('sonnet');
-    await escolherNoCombo('#model-pick', 'Padrão');
-    await escolherNoCombo('#effort-pick', 'Padrão');
+    await escolherNoCombo('#model-pick', m.criar_padrao());
+    await escolherNoCombo('#effort-pick', m.criar_padrao());
     (document.querySelector('.primary-btn') as HTMLElement).click();
     await flush();
 
@@ -393,8 +394,8 @@ describe('CreateSessionSheet — B4/B6 da revisão final da branch', () => {
 
     // 3ª abertura: abre em Padrão, não na escolha da 1ª.
     await reabrirFechado();
-    expect((document.querySelector('#model-pick') as HTMLElement).textContent).toContain('Padrão');
-    expect((document.querySelector('#effort-pick') as HTMLElement).textContent).toContain('Padrão');
+    expect((document.querySelector('#model-pick') as HTMLElement).textContent).toContain(m.criar_padrao());
+    expect((document.querySelector('#effort-pick') as HTMLElement).textContent).toContain(m.criar_padrao());
     unmount(comp);
   });
 });

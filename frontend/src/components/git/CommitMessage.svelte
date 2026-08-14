@@ -2,6 +2,7 @@
   // Metade de cima do que era o CommitDetail: a mensagem e os metadados do commit. SEM max-height
   // proprio — quem limita altura agora e o empilhado da aba, senao dois paineis brigariam pelo
   // mesmo 52vh e a soma estouraria a tela.
+  import * as m from '../../paraglide/messages';
   import type { GitCommit } from '../../lib/api';
 import { intlLocale } from '../../lib/locale';
 
@@ -20,10 +21,10 @@ import { intlLocale } from '../../lib/locale';
     <p class="cm-body">{commit.body.trim()}</p>
   {/if}
   <dl class="cm-meta">
-    <dt>hash</dt><dd class="mono">{commit.hash}</dd>
-    <dt>autor</dt><dd>{commit.author}</dd>
-    <dt>data</dt><dd>{new Date(commit.ts * 1000).toLocaleString(intlLocale())} · {commit.rel}</dd>
-    <dt>parents</dt><dd class="mono">{commit.parents.length ? commit.parents.map((p) => p.slice(0, 7)).join(', ') : '(root)'}</dd>
+    <dt>{m.git_meta_hash()}</dt><dd class="mono">{commit.hash}</dd>
+    <dt>{m.git_meta_autor()}</dt><dd>{commit.author}</dd>
+    <dt>{m.git_meta_data()}</dt><dd>{new Date(commit.ts * 1000).toLocaleString(intlLocale())} · {commit.rel}</dd>
+    <dt>{m.git_meta_parents()}</dt><dd class="mono">{commit.parents.length ? commit.parents.map((p) => p.slice(0, 7)).join(', ') : '(root)'}</dd>
   </dl>
 </div>
 

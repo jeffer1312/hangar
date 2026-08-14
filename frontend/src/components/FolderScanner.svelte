@@ -3,6 +3,7 @@
   import { getRoots, scanDir } from '../lib/api';
   import { relativeTime } from '../lib/format';
   import type { FsRoot, FsEntry, FsScanError } from '../lib/types';
+  import * as m from '../paraglide/messages';
 
   // Scanner mobile de pastas de projeto: chips de raiz + busca + coluna tappavel de
   // drill-in. Toque no corpo da linha SELECIONA o caminho como cwd; o chevron desce um
@@ -101,12 +102,12 @@
   });
 
   const SCAN_MSG: Record<FsScanError, string> = {
-    permission_denied: 'Sem permissão para ler esta pasta.',
-    unreadable: 'Não foi possível ler esta pasta.',
-    root_not_allowed: 'Esta raiz não está liberada.',
-    invalid_path: 'Caminho inválido.',
-    not_found: 'Pasta não encontrada.',
-    unknown: 'Não foi possível ler a pasta.',
+    permission_denied: m.arquivo_sem_permissao(),
+    unreadable: m.arquivo_ilegivel(),
+    root_not_allowed: m.arquivo_raiz_nao_liberada(),
+    invalid_path: m.arquivo_caminho_invalido(),
+    not_found: m.arquivo_pasta_nao_encontrada(),
+    unknown: m.arquivo_ler_falhou(),
   };
 </script>
 
@@ -118,11 +119,11 @@
       <span class="chip chip--skel"></span>
     </div>
   {:else if rootsError}
-    <p class="state-msg">Não foi possível carregar as raízes.</p>
+    <p class="state-msg">{m.arquivo_carregar_raizes_erro()}</p>
   {:else if roots.length === 0}
-    <p class="state-msg">Nenhuma raiz configurada. Defina CP_SCAN_ROOTS no backend.</p>
+    <p class="state-msg">{m.arquivo_sem_raizes()}</p>
   {:else}
-    <div class="chips" role="tablist" aria-label="Raízes">
+    <div class="chips" role="tablist" aria-label={m.arquivo_raizes_aria()}>
       {#each roots as r (r.path)}
         <button
           class="chip"
@@ -143,24 +144,24 @@
       type="text"
       class="search"
       bind:value={query}
-      placeholder="Buscar pasta"
+      placeholder={m.arquivo_buscar_pasta()}
       autocomplete="off"
       autocorrect="off"
       autocapitalize="off"
       spellcheck={false}
-      aria-label="Buscar pasta"
+      aria-label={m.arquivo_buscar_pasta()}
     />
 
     <!-- Breadcrumb (so quando aprofundou): toque numa migalha sobe -->
     {#if drilled}
-      <div class="crumbs" aria-label="Caminho">
+      <div class="crumbs" aria-label={m.arquivo_caminho_aria()}>
         {#each crumbs as c, i (c.path)}
           {#if i > 0}<span class="crumb-sep" aria-hidden="true">/</span>{/if}
           <button class="crumb" onclick={() => scan(c.path)}>{c.label}</button>
         {/each}
       </div>
       <button class="use-here" onclick={() => onPick(path)}>
-        Usar esta pasta
+        {m.arquivo_usar_pasta()}
       </button>
     {/if}
 
@@ -177,7 +178,7 @@
         <p class="state-msg">{SCAN_MSG[scanError]}</p>
       {:else if filtered.length === 0}
         <p class="state-msg">
-          {query.trim() ? 'Nenhuma pasta corresponde à busca.' : 'Esta pasta não tem subpastas.'}
+          {query.trim() ? m.arquivo_sem_resultados() : m.arquivo_sem_subpastas()}
         </p>
       {:else}
         {#each filtered as e (e.path)}
@@ -191,7 +192,7 @@
                 {#if e.mtime}<span class="row-time">{relativeTime(e.mtime)}</span>{/if}
               </span>
             </button>
-            <button class="drill" onclick={() => drill(e)} aria-label="Abrir {e.name}">
+            <button class="drill" onclick={() => drill(e)} aria-label={m.arquivo_abrir({ nome: e.name })}>
               <svg width="9" height="15" viewBox="0 0 9 15" fill="none" aria-hidden="true">
                 <path d="M1 1l6.5 6.5L1 14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>

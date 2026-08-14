@@ -5,6 +5,7 @@
   import { rotuloEstado, stateColors, parsePeerMessage, relativeTime, encodeCompareIds } from '../lib/format';
   import { getActiveId } from '../lib/auth';
   import type { SessionInfo, State } from '../lib/types';
+  import * as m from '../paraglide/messages';
 
   interface Props {
     open: boolean;
@@ -57,7 +58,7 @@
         getHistory(n).then((h) => ({ ok: true as const, h })).catch(() => ({ ok: false as const, h: [] }))));
       if (my !== epoch) return;
       const failed = all.filter((_, i) => !results[i].ok);
-      feedError = failed.length ? `sem histórico de: ${failed.join(', ')}` : null;
+      feedError = failed.length ? m.par_sem_historico({ nomes: failed.join(', ') }) : null;
       const names = new Set(all);
       const msgs: PeerMsg[] = [];
       results.forEach(({ h: evs }, i) => {
@@ -99,7 +100,7 @@
     }
     getSessions()
       .then((all) => { if (my === epoch) sessions = all.filter((s) => s.name !== sessionName && s.state !== 'dead'); })
-      .catch(() => { if (my === epoch) error = 'Não deu pra listar as sessões.'; });
+      .catch(() => { if (my === epoch) error = m.par_listar_erro(); });
   });
 
   // Candidatas a ENTRAR no grupo: vivas, fora do grupo atual (sessions completa fica pra stateOf).
@@ -120,7 +121,7 @@
         onClose();
       }
     } catch {
-      error = `Falhou o pareamento com ${picked.join(', ')}.`;
+      error = m.par_falhou_pareamento({ nomes: picked.join(', ') });
     } finally {
       busy = false;
     }
@@ -139,7 +140,7 @@
         onClose();
       }
     } catch {
-      error = 'Falhou a saída do grupo.';
+      error = m.par_falhou_saida();
     } finally {
       busy = false;
     }
@@ -172,15 +173,14 @@
 <!-- `resizable`: o painel do par carrega o contrato do grupo (um documento), a lista de membros e a
      conversa — nos 420px padrao o markdown saia com ~40 caracteres por linha. Fica arrastavel pela
      borda esquerda e a largura persiste. -->
-<BottomSheet {open} {onClose} resizable widthKey="cp_pairsheet_w" defaultWidth={760} ariaLabel="Parear sessões">
+<BottomSheet {open} {onClose} resizable widthKey="cp_pairsheet_w" defaultWidth={760} ariaLabel={m.par_aria_sheet()}>
   <div class="pair">
     {#if peers.length}
       <!-- Tudo que ROLA fica aqui; o rodape com "Sair do grupo" fica preso embaixo. -->
       <div class="pair-scroll">
-      <h2 class="title">🤝 Grupo de trabalho ({peers.length + 1})</h2>
+      <h2 class="title">{m.par_grupo_titulo({ n: peers.length + 1 })}</h2>
       <p class="hint">
-        Os membros trabalham juntos: trocam contrato, avisos e dúvidas via cp-send por conta
-        própria, cada um no seu repo. Sair avisa o grupo (os demais continuam entre si).
+        {m.par_membros_hint()}
       </p>
 
       <!-- Membros: estado vivo + abrir lado a lado (desktop) por membro. -->
@@ -195,7 +195,7 @@
               <!-- Ícones em vez de glifos: `⤢` (expandir) e `⫽` (paralelas) não diziam o que fazem.
                    Aqui: um balão de conversa = abrir a conversa dele; duas colunas = lado a lado. -->
               <button class="split-btn" onclick={() => onOpenPeerChat?.(p)}
-                      title={`Abrir a conversa de ${p}`} aria-label={`Abrir a sessão ${p} num modal`}>
+                      title={m.par_abrir_conversa_de({ nome: p })} aria-label={m.ctx_abrir_sessao_modal({ n: p })}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                      stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M20 15a2 2 0 0 1-2 2H8l-4 3V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z"/>
@@ -204,7 +204,7 @@
             {/if}
             {#if onOpenSplit}
               <button class="split-btn" onclick={() => onOpenSplit?.(p)}
-                      title={`Abrir ${p} lado a lado`} aria-label={`Abrir ${p} lado a lado`}>
+                      title={m.par_abrir_lado({ nome: p })} aria-label={m.par_abrir_lado({ nome: p })}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                      stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <rect x="3" y="4.5" width="8" height="15" rx="1.5"/>
@@ -218,44 +218,44 @@
 
       <!-- Visualizar o grupo inteiro: grade (cards ao vivo, 1 clique abre) ou split (N chats fixos). -->
       <div class="view-row">
-        <button class="view-btn" onclick={openGrid} title="Grade com todos os membros ao vivo">▦ Ver em grade</button>
+        <button class="view-btn" onclick={openGrid} title={m.par_grade_title()}>{m.par_ver_grade()}</button>
         {#if onOpenSplit && peers.length > 0}
-          <button class="view-btn" onclick={openAllSplit} title="Fixa cada membro num painel lado a lado">⫽ Todas lado a lado</button>
+          <button class="view-btn" onclick={openAllSplit} title={m.par_fixa_title()}>{m.par_todas_lado()}</button>
         {/if}
       </div>
 
       {#if !adding}
-        <button class="ghost-add" onclick={() => (adding = true)}>+ Adicionar sessão ao grupo</button>
+        <button class="ghost-add" onclick={() => (adding = true)}>{m.par_adicionar_sessao()}</button>
       {:else}
         <div class="list">
           {#if candidates.length === 0}
-            <p class="empty">Nenhuma outra sessão viva fora do grupo.</p>
+            <p class="empty">{m.par_vazio_fora_grupo()}</p>
           {:else}
             {#each candidates as s (s.name)}
               <button class="row" class:row--picked={picked.includes(s.name)}
                       onclick={() => togglePick(s.name)}
-                      aria-label={`Adicionar ${s.name} ao grupo — ${rotuloEstado(s.state)}`}>
+                      aria-label={m.par_adicionar_aria({ nome: s.name, estado: rotuloEstado(s.state) })}>
                 <span class="dot" style="background: {stateColors[s.state]};" aria-hidden="true"></span>
                 <span class="row-main">
                   <span class="row-name">{s.name}</span>
                   {#if s.cwd}<span class="row-cwd">{s.cwd}</span>{/if}
                 </span>
                 {#if s.pair_peers?.length}
-                  <span class="row-paired" title={`Já agrupada com ${s.pair_peers.join(', ')}`}>🤝 {s.pair_peers.length}</span>
+                  <span class="row-paired" title={m.par_ja_agrupada({ nomes: s.pair_peers.join(', ') })}>🤝 {s.pair_peers.length}</span>
                 {/if}
               </button>
             {/each}
           {/if}
         </div>
         <button class="primary-btn" onclick={doPair} disabled={!picked.length || busy}>
-          {busy ? 'Adicionando…' : picked.length ? `Adicionar ${picked.join(', ')}` : 'Escolha sessões'}
+          {busy ? m.par_adicionando() : picked.length ? m.par_adicionar_nomes({ nomes: picked.join(', ') }) : m.par_escolha_sessoes()}
         </button>
       {/if}
 
       {#if contract?.content}
         <!-- Contrato compartilhado: as sessões escrevem no arquivo; aqui só leitura. -->
         <div class="contract">
-          <h3 class="feed-title">Contrato compartilhado</h3>
+          <h3 class="feed-title">{m.par_contrato_titulo()}</h3>
           <!-- Markdown RENDERIZADO, nao texto cru: o contrato e .md e ler "**Tarefa:**" com os
                asteriscos e pior em tudo. Regra do projeto (CLAUDE.md): todo .md exibido no app passa
                pelo renderMarkdown. -->
@@ -266,19 +266,19 @@
 
       <!-- Conversa do grupo: o que os membros já combinaram, num lugar só. -->
       <div class="feed">
-        <h3 class="feed-title">Conversa do grupo</h3>
+        <h3 class="feed-title">{m.par_conversa_titulo()}</h3>
         {#if feedError}
           <p class="empty">⚠ {feedError}</p>
         {/if}
         {#if feedLoading}
-          <p class="empty">Carregando…</p>
+          <p class="empty">{m.comum_carregando()}</p>
         {:else if feed.length === 0}
-          <p class="empty">Nenhuma troca entre os membros ainda.</p>
+          <p class="empty">{m.par_vazio_trocas()}</p>
         {:else}
-          {#each feed as m, i (i)}
-            <div class="feed-item" class:feed-item--out={m.from === sessionName}>
-              <span class="feed-meta">{m.from} → {m.to}{#if m.ts}&nbsp;· {relativeTime(m.ts)}{/if}</span>
-              <span class="feed-text">{m.text}</span>
+          {#each feed as msg, i (i)}
+            <div class="feed-item" class:feed-item--out={msg.from === sessionName}>
+              <span class="feed-meta">{msg.from} → {msg.to}{#if msg.ts}&nbsp;· {relativeTime(msg.ts)}{/if}</span>
+              <span class="feed-text">{msg.text}</span>
             </div>
           {/each}
         {/if}
@@ -289,34 +289,32 @@
       <div class="pair-foot">
         {#if error}<p class="error">{error}</p>{/if}
         <button class="danger-btn" onclick={doLeave} disabled={busy}>
-          {busy ? 'Saindo…' : 'Sair do grupo'}
+          {busy ? m.par_saindo() : m.par_sair_grupo()}
         </button>
       </div>
     {:else}
-      <h2 class="title">Parear com sessão</h2>
+      <h2 class="title">{m.par_parear_titulo()}</h2>
       <p class="hint">
-        Passam a trabalhar juntas: cada uma no seu repo, mandando o que a outra precisar
-        (contrato, endpoint, aviso de conclusão) sem você intermediar. Escolher uma sessão já
-        agrupada te coloca no grupo dela.
+        {m.par_passam_hint()}
       </p>
 
       {#if error}<p class="error">{error}</p>{/if}
 
       <div class="list">
         {#if candidates.length === 0 && !error}
-          <p class="empty">Nenhuma outra sessão viva.</p>
+          <p class="empty">{m.par_vazio_nenhuma()}</p>
         {:else}
           {#each candidates as s (s.name)}
             <button class="row" class:row--picked={picked.includes(s.name)}
                     onclick={() => togglePick(s.name)}
-                    aria-label={`Parear com ${s.name} — ${rotuloEstado(s.state)}`}>
+                    aria-label={m.par_parear_aria({ nome: s.name, estado: rotuloEstado(s.state) })}>
               <span class="dot" style="background: {stateColors[s.state]};" aria-hidden="true"></span>
               <span class="row-main">
                 <span class="row-name">{s.name}</span>
                 {#if s.cwd}<span class="row-cwd">{s.cwd}</span>{/if}
               </span>
               {#if s.pair_peers?.length}
-                <span class="row-paired" title={`Já agrupada com ${s.pair_peers.join(', ')}`}>🤝 {s.pair_peers.length}</span>
+                <span class="row-paired" title={m.par_ja_agrupada({ nomes: s.pair_peers.join(', ') })}>🤝 {s.pair_peers.length}</span>
               {/if}
             </button>
           {/each}
@@ -327,11 +325,11 @@
         type="text"
         class="task-input"
         bind:value={task}
-        placeholder="Tarefa (opcional): ex. ABC-1234 — tela X + endpoint"
+        placeholder={m.par_tarefa_placeholder()}
       />
 
       <button class="primary-btn" onclick={doPair} disabled={!picked.length || busy}>
-        {busy ? 'Pareando…' : picked.length ? `Parear com ${picked.join(', ')}` : 'Escolha sessões (uma ou várias)'}
+        {busy ? m.par_pareando() : picked.length ? m.par_parear_nomes({ nomes: picked.join(', ') }) : m.par_escolha_varias()}
       </button>
     {/if}
   </div>

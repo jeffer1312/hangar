@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from '../../paraglide/messages';
   import type { GitCommit } from '../../lib/api';
 
   interface Props {
@@ -28,8 +29,8 @@
   {#if wtCount > 0}
     <button class="git-commit git-wt" class:sel={selectedHash === ''} onclick={() => onSelect(null)}>
       <span class="git-wt-dot" aria-hidden="true">●</span>
-      <span class="git-c-sub">Working tree changes</span>
-      <span class="git-c-when">{wtCount} arquivo{wtCount > 1 ? 's' : ''}</span>
+      <span class="git-c-sub">{m.git_working_tree_changes()}</span>
+      <span class="git-c-when">{wtCount === 1 ? m.git_arquivo_1() : m.git_arquivos({ n: wtCount })}</span>
     </button>
   {/if}
   {#each commits as c (c.hash)}
@@ -63,12 +64,12 @@
         <span class="git-c-when">{c.rel}</span>
       </button>
       {#if onMenu}
-        <button class="git-mini" aria-label="ações do commit" title="ações do commit"
+        <button class="git-mini" aria-label={m.git_acoes_commit()} title={m.git_acoes_commit()}
           onclick={() => onMenu(c)}>⋯</button>
       {/if}
     </div>
   {/each}
-  {#if !commits.length}<p class="git-muted">sem commits</p>{/if}
+  {#if !commits.length}<p class="git-muted">{m.git_sem_commits()}</p>{/if}
 </div>
 
 <style>

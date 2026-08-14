@@ -7,6 +7,7 @@
   import type { LoopState } from '../lib/types';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import { LOOP_GUIDE } from '../lib/loopGuide';
+  import * as m from '../paraglide/messages';
 
   interface Props {
     open: boolean;
@@ -23,13 +24,13 @@
 
   const FINAL = new Set(['done', 'stopped', 'exhausted', 'failed']);
   const STATUS_LABEL: Record<LoopState['status'], string> = {
-    running: 'rodando',
-    paused_awaiting: 'aguardando input',
-    done_claimed: 'pronto (aguardando confirmação)',
-    done: 'concluído',
-    stopped: 'parado',
-    exhausted: 'esgotou iterações',
-    failed: 'falhou',
+    running: m.loop_estado_rodando(),
+    paused_awaiting: m.loop_estado_aguardando(),
+    done_claimed: m.loop_estado_pronto_confirmacao(),
+    done: m.loop_estado_concluido(),
+    stopped: m.loop_estado_parado(),
+    exhausted: m.loop_estado_esgotou(),
+    failed: m.loop_estado_falhou(),
   };
   let loop = $state<LoopState | null>(null);
   let suggestions = $state<string[]>([]);
@@ -48,15 +49,15 @@
   const isPolling = $derived(!!loop && !isFinal);   // running / paused_awaiting / done_claimed
 
   function cleanErr(e: unknown): string {
-    const m = e instanceof Error ? e.message : 'falhou';
+    const msg = e instanceof Error ? e.message : m.loop_falhou();
     // Erro de rede cru ("Failed to fetch" = backend reiniciando/offline) vira pt-BR acionável.
-    if (/failed to fetch|networkerror|load failed|timed? ?out/i.test(m)) return 'servidor não respondeu';
-    return m.replace(/^\d+:\s*/, '');   // tira o prefixo "409: " do status HTTP
+    if (/failed to fetch|networkerror|load failed|timed? ?out/i.test(msg)) return m.loop_servidor_nao_respondeu();
+    return msg.replace(/^\d+:\s*/, '');   // tira o prefixo "409: " do status HTTP
   }
 
   async function load() {
     const s = activeServer();
-    if (!s) { loadErr = 'servidor não encontrado'; return; }
+    if (!s) { loadErr = m.loop_servidor_nao_encontrado(); return; }
     const g = gen;
     try {
       const r = await getLoopForServer(s, sessionName);
@@ -178,47 +179,47 @@
   });
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel="Loop">
+<BottomSheet {open} {onClose} ariaLabel={m.loop_titulo()}>
   <div class="loop">
-    <h2 class="loop-title">Loop</h2>
+    <h2 class="loop-title">{m.loop_titulo()}</h2>
 
     {#if loadErr}
       <p class="error-msg" role="alert">
         {loadErr}
-        <button type="button" class="retry-btn" onclick={() => { loadErr = ''; load(); }}>tentar de novo</button>
+        <button type="button" class="retry-btn" onclick={() => { loadErr = ''; load(); }}>{m.loop_tentar_de_novo()}</button>
       </p>
     {/if}
 
     {#if isForm}
       <div class="field">
         <div class="field-head">
-          <label class="field-label" for="loop-goal">Objetivo</label>
+          <label class="field-label" for="loop-goal">{m.loop_objetivo()}</label>
           <div class="field-head-actions">
             {#if prevGoal !== null}
-              <button type="button" class="undo-btn" onclick={undoRefine}>desfazer</button>
+              <button type="button" class="undo-btn" onclick={undoRefine}>{m.loop_desfazer()}</button>
             {/if}
             <button
               type="button" class="refine-btn" onclick={refineGoal}
               disabled={refining || !goal.trim()}
-              title="Reescreve o objetivo seguindo as boas práticas de loop"
+              title={m.loop_reescreve_objetivo()}
             >
-              {refining ? 'Melhorando…' : '✨ Melhorar'}
+              {refining ? m.loop_melhorando() : m.loop_melhorar()}
             </button>
           </div>
         </div>
         <textarea
           id="loop-goal" class="field-input loop-textarea" bind:value={goal} rows="4"
           disabled={refining}
-          placeholder="ex: migre utils/date.ts pra date-fns e mantenha npm run check verde"
+          placeholder={m.loop_objetivo_placeholder()}
         ></textarea>
         {#if refineErr}<p class="error-msg" role="alert">{refineErr}</p>{/if}
       </div>
 
       <div class="field">
-        <label class="field-label" for="loop-check">Check (comando que decide se acabou)</label>
+        <label class="field-label" for="loop-check">{m.loop_check_label()}</label>
         <input
           id="loop-check" type="text" class="field-input" bind:value={checkCmd}
-          placeholder="vazio = parada só com tua confirmação" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
+          placeholder={m.loop_check_placeholder()} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
         />
         {#if suggestions.length}
           <div class="loop-chips">
@@ -231,15 +232,15 @@
 
       <div class="loop-row">
         <div class="field">
-          <label class="field-label" for="loop-max">Máx. iterações</label>
+          <label class="field-label" for="loop-max">{m.loop_max_iteracoes()}</label>
           <input id="loop-max" type="number" class="field-input loop-max-input" bind:value={maxIters} min="1" max="100" />
         </div>
 
         <div class="field">
-          <span class="field-label">Exigir branch</span>
-          <div class="provider-toggle" role="group" aria-label="Exigir branch">
-            <button type="button" class="provider-btn" class:on={requireBranch} onclick={() => (requireBranch = true)}>Sim</button>
-            <button type="button" class="provider-btn" class:on={!requireBranch} onclick={() => (requireBranch = false)}>Não</button>
+          <span class="field-label">{m.loop_exigir_branch()}</span>
+          <div class="provider-toggle" role="group" aria-label={m.loop_exigir_branch()}>
+            <button type="button" class="provider-btn" class:on={requireBranch} onclick={() => (requireBranch = true)}>{m.loop_sim()}</button>
+            <button type="button" class="provider-btn" class:on={!requireBranch} onclick={() => (requireBranch = false)}>{m.loop_nao()}</button>
           </div>
         </div>
       </div>
@@ -247,11 +248,11 @@
       {#if createErr}<p class="error-msg" role="alert">{createErr}</p>{/if}
 
       <button class="primary-btn" onclick={startLoop} disabled={creating || !goal.trim()}>
-        {creating ? 'Iniciando…' : 'Iniciar loop'}
+        {creating ? m.loop_iniciando() : m.loop_iniciar()}
       </button>
 
       <button type="button" class="guide-toggle" onclick={() => (guideOpen = !guideOpen)}>
-        <span>? Como escrever um bom loop</span>
+        <span>{m.loop_como_escrever()}</span>
         <span class="chevron" class:chevron--open={guideOpen} aria-hidden="true">›</span>
       </button>
       {#if guideOpen}
@@ -279,15 +280,15 @@
 
       {#if loop.status === 'done_claimed'}
         <div class="loop-claim">
-          <p class="loop-claim-msg">O loop terminou e marcou pronto. Confirma?</p>
+          <p class="loop-claim-msg">{m.loop_terminou_confirma()}</p>
           <div class="loop-claim-actions">
-            <button class="primary-btn" onclick={() => resolveClaim(true)} disabled={resolving}>Confirmar pronto</button>
-            <button class="ghost-btn" onclick={() => resolveClaim(false)} disabled={resolving}>Rejeitar (continuar)</button>
+            <button class="primary-btn" onclick={() => resolveClaim(true)} disabled={resolving}>{m.loop_confirmar_pronto()}</button>
+            <button class="ghost-btn" onclick={() => resolveClaim(false)} disabled={resolving}>{m.loop_rejeitar()}</button>
           </div>
         </div>
       {:else if isFinal}
         {#if loop.ended_reason}<p class="loop-reason">{loop.ended_reason}</p>{/if}
-        <button class="primary-btn" onclick={() => (forceForm = true)}>Novo loop</button>
+        <button class="primary-btn" onclick={() => (forceForm = true)}>{m.loop_novo()}</button>
       {/if}
 
       {#if loop.history.length}
@@ -308,7 +309,7 @@
       {#if stopErr}<p class="error-msg" role="alert">{stopErr}</p>{/if}
 
       {#if isPolling && loop.status !== 'done_claimed'}
-        <button class="ghost-btn loop-stop-btn" onclick={() => (confirmStop = true)}>Parar loop</button>
+        <button class="ghost-btn loop-stop-btn" onclick={() => (confirmStop = true)}>{m.loop_parar()}</button>
       {/if}
     {/if}
   </div>
@@ -316,11 +317,11 @@
 
 {#if confirmStop}
   <ConfirmDialog
-    title="Parar este loop?"
-    aria="Parar loop"
+    title={m.loop_parar_pergunta()}
+    aria={m.loop_parar()}
     actions={[
-      { label: 'Cancelar', onClick: () => (confirmStop = false) },
-      { label: 'Parar', kind: 'danger', onClick: doStop },
+      { label: m.comum_cancelar(), onClick: () => (confirmStop = false) },
+      { label: m.loop_parar(), kind: 'danger', onClick: doStop },
     ]}
     onClose={() => (confirmStop = false)}
   />

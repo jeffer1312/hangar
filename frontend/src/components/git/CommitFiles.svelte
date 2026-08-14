@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from '../../paraglide/messages';
   // Metade de baixo do que era o CommitDetail: os arquivos do commit. SEM max-height proprio —
   // quem limita altura e o empilhado da aba.
   import { getCommitFiles, type GitCommit, type ChangedFile } from '../../lib/api';
@@ -32,21 +33,21 @@
 <div class="cf">
   {#if onMenu}
     <div class="cf-head">
-      <button class="git-mini" onclick={() => onMenu(commit)} aria-label="ações do commit">⋯ ações</button>
+      <button class="git-mini" onclick={() => onMenu(commit)} aria-label={m.git_acoes_commit()}>⋯ {m.git_acoes_curto()}</button>
     </div>
   {/if}
   <div class="cf-list">
     {#each files as f (f.path)}
-      <button class="git-file" onclick={() => onOpenFile(f.path)} title="ver diff">
+      <button class="git-file" onclick={() => onOpenFile(f.path)} title={m.git_ver_diff()}>
         <span class="git-file-tag">{f.code}</span><span class="git-path-base">{f.path}</span>
       </button>
     {:else}
       <!-- Falha de leitura NAO pode virar "nenhum arquivo alterado": sao coisas diferentes, e o
            CommitDetail antigo mostrava a mesma frase nos dois casos (catch zerava a lista). -->
       {#if falhou}
-        <p class="git-muted">não deu pra ler os arquivos deste commit</p>
+        <p class="git-muted">{m.git_arquivos_ler_erro()}</p>
       {:else}
-        <p class="git-muted">nenhum arquivo alterado</p>
+        <p class="git-muted">{m.git_arquivos_nenhum()}</p>
       {/if}
     {/each}
   </div>

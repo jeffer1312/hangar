@@ -5,6 +5,7 @@
   // -- o xterm continua fora do bundle de quem nunca abre o terminal.
   import type { Terminal } from '@xterm/xterm';
   import type { FitAddon } from '@xterm/addon-fit';
+  import * as m from '../paraglide/messages';
 
   interface Props {
     sessionName: string; connKey: string; open: boolean; onClose: () => void;
@@ -96,7 +97,7 @@
       clearTimeout(nativeErroTimer);
       // Mensagem do backend (503 = sem emulador no PATH, ou o emulador morreu logo apos abrir) --
       // mostrada como veio, nao engolida.
-      nativeErro = e instanceof Error ? e.message : 'falha ao abrir o terminal nativo';
+      nativeErro = e instanceof Error ? e.message : m.term_falha_abrir_nativo();
       nativeErroTimer = setTimeout(() => { nativeErro = null; }, 8000);
     });
   }
@@ -270,7 +271,7 @@
         // sessao, o cleanup fecha o socket velho -> o efeito novo zera `caiu` -> DEPOIS chega o
         // onclose do socket velho -> sem a guarda, `caiu = true` aterrissava na sessao ERRADA (ou
         // num componente ja destruido, se foi o painel que fechou).
-        close: (m) => { if (vivo) { caiu = true; motivo = m ?? null; } },
+        close: (motivoFechamento) => { if (vivo) { caiu = true; motivo = motivoFechamento ?? null; } },
       });
       t.onData((d: string) => sock?.send(enc.encode(d)));
 
@@ -290,8 +291,8 @@
       // engole.
       if (!vivo) return;
       caiu = true;
-      motivo = e instanceof Error ? `falha ao carregar o terminal: ${e.message}`
-                                  : 'falha ao carregar o terminal';
+      motivo = e instanceof Error ? m.term_falha_carregar_msg({ msg: e.message })
+                                  : m.term_falha_carregar();
     });
 
     return () => {
@@ -323,7 +324,7 @@
       if (alvo !== sessionName) return;
       // Mensagem do backend (409 = colisao de nome, 404/500 = tmux recusou) -- mostrada como veio,
       // nao engolida.
-      shellErro = e instanceof Error ? e.message : 'falha ao abrir o shell';
+      shellErro = e instanceof Error ? e.message : m.term_falha_abrir_shell();
       // Destrava o clique seguinte: um erro TRANSITORIO (409 na janela de corrida com um `tmux
       // new-session` do proprio usuario, 500 do tmux, rede) nao pode deixar a aba morta ate fechar
       // e reabrir o painel inteiro -- sem isto o gesto natural (clicar em "Shell" de novo) caia no
@@ -363,7 +364,7 @@
       const enc = new TextEncoder();
       sockShell = new TermSocket(termUrl(alvo, t.cols, t.rows), {
         data: (b) => t.write(b),
-        close: (m) => { if (vivo) { caiuShell = true; motivoShell = m ?? null; } },
+        close: (motivoFechamento) => { if (vivo) { caiuShell = true; motivoShell = motivoFechamento ?? null; } },
       });
       t.onData((d: string) => sockShell?.send(enc.encode(d)));
 
@@ -379,8 +380,8 @@
       // botao de reconectar, nao o `{:else if shellErro}` do template.
       if (!vivo) return;
       caiuShell = true;
-      motivoShell = e instanceof Error ? `falha ao carregar o terminal: ${e.message}`
-                                       : 'falha ao carregar o terminal';
+      motivoShell = e instanceof Error ? m.term_falha_carregar_msg({ msg: e.message })
+                                       : m.term_falha_carregar();
     });
 
     return () => {
@@ -416,7 +417,7 @@
          cima nao faz sentido ali -- sem alca, sem pointerdown, sem estado de arrasto pra sujar. -->
     <div class="tp-resize-handle" onpointerdown={resizeStart} onpointermove={resizeMove}
          onpointerup={resizeEnd} onpointercancel={resizeEnd}
-         role="separator" aria-label="Redimensionar painel de terminal" aria-orientation="horizontal"></div>
+         role="separator" aria-label={m.term_redimensionar()} aria-orientation="horizontal"></div>
     <header class="tp-bar">
       <div class="tp-abas" role="tablist">
         <button class="tp-aba" class:sel={abaAtiva === 'attach'} role="tab" aria-selected={abaAtiva === 'attach'}
@@ -428,16 +429,16 @@
         <!-- Motivo quando o backend (ou a falha de carregamento) deu um; "desconectado" cru quando
              nao ha — o caso da queda de rede e o do handshake recusado, que o navegador entrega sem
              reason nenhum. `title` com o texto inteiro porque o rotulo trunca. -->
-        {@const m = abaAtiva === 'attach' ? motivo : motivoShell}
-        <button class="tp-recon" title={m ?? undefined}
+        {@const motivoDaAba = abaAtiva === 'attach' ? motivo : motivoShell}
+        <button class="tp-recon" title={motivoDaAba ?? undefined}
                 onclick={() => (abaAtiva === 'attach' ? geracao++ : geracaoShell++)}>
-          {m ?? 'desconectado'} · reconectar
+          {motivoDaAba ?? m.term_desconectado()} {m.term_reconectar()}
         </button>
       {/if}
-      <button onclick={abrirTerminalNativo} aria-label="Abrir terminal nativo"
-              title="Abrir janela do terminal do sistema, já anexada (fecha este painel)">↗</button>
-      <button onclick={toggleMax} aria-label="Maximizar">⤢</button>
-      <button onclick={onClose} aria-label="Fechar">✕</button>
+      <button onclick={abrirTerminalNativo} aria-label={m.term_abrir_nativo()}
+              title={m.term_abrir_nativo_titulo()}>↗</button>
+      <button onclick={toggleMax} aria-label={m.term_maximizar()}>⤢</button>
+      <button onclick={onClose} aria-label={m.sessao_fechar()}>✕</button>
     </header>
     <div class="tp-screens">
       <div class="tp-screen" class:hidden={abaAtiva !== 'attach'} bind:this={host}></div>
@@ -445,11 +446,11 @@
         <div class="tp-screen" class:hidden={abaAtiva !== 'shell'} bind:this={hostShell}></div>
       {:else if shellErro}
         <div class="tp-screen tp-status" class:hidden={abaAtiva !== 'shell'}>
-          <p class="tp-erro">Shell: {shellErro}</p>
+          <p class="tp-erro">{m.term_shell_erro_rotulo({ erro: shellErro })}</p>
         </div>
       {:else if shellCarregando}
         <div class="tp-screen tp-status" class:hidden={abaAtiva !== 'shell'}>
-          <p class="tp-msg">abrindo shell…</p>
+          <p class="tp-msg">{m.term_abrindo_shell()}</p>
         </div>
       {/if}
     </div>
@@ -461,7 +462,7 @@
        um erro so chega depois que a `<section>` acima ja sumiu do DOM. -->
   <div class="tp-native-erro" role="alert">
     <p>{nativeErro}</p>
-    <button onclick={() => { clearTimeout(nativeErroTimer); nativeErro = null; }} aria-label="Fechar aviso">✕</button>
+    <button onclick={() => { clearTimeout(nativeErroTimer); nativeErro = null; }} aria-label={m.term_fechar_aviso()}>✕</button>
   </div>
 {/if}
 

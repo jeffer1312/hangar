@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from '../../paraglide/messages';
   import type { GitStore } from '../../lib/gitStore.svelte';
 
   // O input de busca (que escreve em `filter`) fica na GitBranchesTab, fora da area que rola —
@@ -26,14 +27,14 @@
       {#if git.busy === b}<span class="git-spin" aria-hidden="true">…</span>{/if}
     </button>
   {/each}
-  {#if !localList.length}<p class="git-muted">{q ? 'nenhuma branch local com esse filtro' : 'nenhuma branch local'}</p>{/if}
+  {#if !localList.length}<p class="git-muted">{q ? m.git_branch_vazio_filtro() : m.git_branch_vazio()}</p>{/if}
 </div>
 
 {#if remoteList.length}
-  <p class="git-section">remotas</p>
+  <p class="git-section">{m.git_remotas()}</p>
   <div class="git-branches">
     {#each remoteList as b (b)}
-      <button class="git-branch git-remote" disabled={!!git.busy} onclick={() => git.pick(b)} title="cria uma branch local rastreando a remota">
+      <button class="git-branch git-remote" disabled={!!git.busy} onclick={() => git.pick(b)} title={m.git_branch_rastrear_remota()}>
         <span class="git-dot" aria-hidden="true">○</span>
         <span class="git-name">{b}</span>
         <span class="git-badge">remote</span>

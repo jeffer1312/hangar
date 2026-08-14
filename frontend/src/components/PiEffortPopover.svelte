@@ -6,6 +6,7 @@
   // Os niveis NAO sao fixos: cada modelo aceita um conjunto (`levels`, do sidecar), e depois de
   // trocar de modelo eles mudam. Por isso a lista e buscada ao abrir, e nao chumbada.
   import { untrack } from 'svelte';
+  import * as m from '../paraglide/messages';
   import Popover from './Popover.svelte';
   import { getPiModels, setPiModel } from '../lib/api';
 
@@ -39,7 +40,7 @@
       atual = res.thinking;
     } catch (e) {
       if (minha !== carga) return;
-      err = e instanceof Error ? e.message : 'Falha ao carregar níveis';
+      err = e instanceof Error ? e.message : m.modelo_niveis_erro();
     } finally {
       if (minha === carga) loading = false;
     }
@@ -63,7 +64,7 @@
       atual = res.thinking;
       onApplied(res.thinking);
     } catch (e) {
-      err = e instanceof Error ? e.message : 'Falha ao aplicar';
+      err = e instanceof Error ? e.message : m.comum_falha_aplicar();
       aplicando = null;
       return;
     }
@@ -72,15 +73,15 @@
   }
 </script>
 
-<Popover {open} {anchor} {onClose} width={180} ariaLabel="Nível de raciocínio do Pi">
+<Popover {open} {anchor} {onClose} width={180} ariaLabel={m.modelo_nivel_pi()}>
   {#if err}
     <p class="err" role="alert">{err}</p>
   {/if}
 
   {#if loading && !levels.length}
-    <p class="vazio">Carregando…</p>
+    <p class="vazio">{m.comum_carregando()}</p>
   {:else if !levels.length}
-    {#if !err}<p class="vazio">Sem níveis para este modelo.</p>{/if}
+    {#if !err}<p class="vazio">{m.modelo_sem_niveis()}</p>{/if}
   {:else}
     <ul class="lista">
       {#each levels as lv (lv)}
@@ -107,7 +108,7 @@
         </li>
       {/each}
     </ul>
-    <p class="dica">Vale para o modelo atual; trocar de modelo pode ajustar o nível.</p>
+    <p class="dica">{m.modelo_vale_atual()}</p>
   {/if}
 </Popover>
 

@@ -3,6 +3,7 @@
 import { intlLocale } from '../lib/locale';
   import MessageList from '../components/MessageList.svelte';
   import Select from '../components/Select.svelte';
+  import * as m from '../paraglide/messages';
   import {
     getArchive, getArchiveFolder, getArchiveHistory, archiveImageUrl, resumeArchivedConversation,
     getEngines, type ArchiveFolder, type ArchiveEntry, type Motor,
@@ -60,7 +61,7 @@ import { intlLocale } from '../lib/locale';
     try {
       folders = await getArchive();
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Erro ao carregar o arquivo';
+      error = e instanceof Error ? e.message : m.arquivo_carregar_erro();
     } finally {
       loading = false;
     }
@@ -88,7 +89,7 @@ import { intlLocale } from '../lib/locale';
     try {
       entries = await getArchiveFolder(f.project);
     } catch {
-      error = 'Erro ao abrir a pasta';
+      error = m.arquivo_pasta_erro();
       folder = null;
     } finally {
       loadingEntries = false;
@@ -110,7 +111,7 @@ import { intlLocale } from '../lib/locale';
     try {
       events = await getArchiveHistory(e.project, e.session_id);
     } catch {
-      error = 'Erro ao abrir a conversa';
+      error = m.arquivo_conversa_erro();
       selected = null;
     } finally {
       loadingChat = false;
@@ -131,7 +132,7 @@ import { intlLocale } from '../lib/locale';
       const sid = getActiveId();
       window.location.hash = '#/chat/' + (sid ? encodeURIComponent(sid) + '/' : '') + encodeURIComponent(info.name);
     } catch (e) {
-      resumeError = e instanceof Error ? e.message : 'Erro ao retomar a conversa';
+      resumeError = e instanceof Error ? e.message : m.arquivo_retomar_erro();
     } finally {
       resuming = false;
     }
@@ -158,24 +159,24 @@ import { intlLocale } from '../lib/locale';
     <div class="resume-bar">
       {#if Object.keys(motores).length}
         <label class="engine-pick">
-          <span class="engine-pick-label">Motor</span>
-          <Select ariaLabel="Motor" value={engine}
-            opcoes={[{ value: '', label: 'Claude (sua conta)' },
-                     ...Object.entries(motores).map(([nome, m]) => ({
-                       value: nome, label: m.label ?? nome, hint: m.model }))]}
+          <span class="engine-pick-label">{m.comum_motor()}</span>
+          <Select ariaLabel={m.comum_motor()} value={engine}
+            opcoes={[{ value: '', label: m.arquivo_claude_conta() },
+                     ...Object.entries(motores).map(([nome, motor]) => ({
+                       value: nome, label: motor.label ?? nome, hint: motor.model }))]}
             onchange={(v) => (engine = v)} />
         </label>
         <!-- O app nao sabe qual motor rodava esta conversa (o pane original morreu, sem /proc pra
              ler) -- so o nome do modelo fica gravado no transcript. Escolha e sua, nao memoria. -->
-        <p class="engine-pick-hint">A escolha é sua — o app não sabe qual motor rodava esta conversa.</p>
+        <p class="engine-pick-hint">{m.arquivo_motor_escolha()}</p>
       {/if}
       <button class="resume-btn" onclick={resumeConversation} disabled={resuming}>
-        {resuming ? 'Retomando…' : 'Retomar conversa'}
+        {resuming ? m.arquivo_retomando() : m.arquivo_retomar()}
       </button>
       {#if resumeError}<p class="resume-err">{resumeError}</p>{/if}
     </div>
     {#if loadingChat}
-      <p class="muted">Carregando conversa…</p>
+      <p class="muted">{m.arquivo_carregando()}</p>
     {:else}
       <MessageList
         {events}
@@ -196,16 +197,16 @@ import { intlLocale } from '../lib/locale';
     <div class="archive-list">
       {#if f.cwd}<div class="group-label">{f.cwd}</div>{/if}
       {#if loadingEntries}
-        <p class="muted">Carregando…</p>
+        <p class="muted">{m.comum_carregando()}</p>
       {:else if entries.length === 0}
-        <p class="muted">Nenhuma conversa nesta pasta.</p>
+        <p class="muted">{m.arquivo_vazio_pasta()}</p>
       {:else}
         {#each entries as e (e.session_id)}
           <button class="row" onclick={() => openConversation(e)}>
             <span class="row-main">
-              <span class="row-preview">{e.preview || '(sem mensagens)'}</span>
+              <span class="row-preview">{e.preview || m.arquivo_sem_mensagens()}</span>
               <span class="row-meta">
-                {fmtDate(e.mtime)}{#if e.live}<b class="live"> · ativa</b>{/if}
+                {fmtDate(e.mtime)}{#if e.live}<b class="live">{m.arquivo_ativa()}</b>{/if}
               </span>
             </span>
             <span class="chev" aria-hidden="true">›</span>
@@ -216,10 +217,10 @@ import { intlLocale } from '../lib/locale';
   </div>
 {:else}
   <div class="archive-screen">
-    <NavBar title="Arquivo" showBack={true} onBack={onBack} />
+    <NavBar title={m.nav_arquivo()} showBack={true} onBack={onBack} />
     {#if servers.length >= 2}
       <!-- Seletor: de qual servidor navegar o arquivo. So aparece com 2+ servidores. -->
-      <div class="srv-picker" role="tablist" aria-label="Servidor do arquivo">
+      <div class="srv-picker" role="tablist" aria-label={m.arquivo_servidor_aria()}>
         {#each servers as s (s.id)}
           <button
             class="srv-pill" class:on={s.id === activeServerId}
@@ -234,18 +235,18 @@ import { intlLocale } from '../lib/locale';
     {/if}
     <div class="archive-list">
       {#if loading}
-        <p class="muted">Carregando…</p>
+        <p class="muted">{m.comum_carregando()}</p>
       {:else if error}
         <p class="err">{error}</p>
       {:else if folders.length === 0}
-        <p class="muted">Nenhuma conversa arquivada ainda.</p>
+        <p class="muted">{m.arquivo_vazio_geral()}</p>
       {:else}
         {#each folders as f (f.project)}
           <button class="row" onclick={() => openFolder(f)}>
             <span class="row-icon" aria-hidden="true">📁</span>
             <span class="row-main">
               <span class="row-preview">{folderName(f)}</span>
-              <span class="row-meta">{f.count} conversa{f.count === 1 ? '' : 's'} · {fmtDate(f.mtime)}</span>
+              <span class="row-meta">{f.count === 1 ? m.arquivo_conversa_1() : m.arquivo_conversas({ n: f.count })} · {fmtDate(f.mtime)}</span>
             </span>
             <span class="chev" aria-hidden="true">›</span>
           </button>

@@ -4,6 +4,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import ServerManager from './ServerManager.svelte';
+import * as m from '../paraglide/messages';
 import * as auth from '../lib/auth';
 import type { Server } from '../lib/auth';
 
@@ -84,8 +85,8 @@ describe('ServerManager — escolha de alvo das configs', () => {
     // marcaria a máquina errada como destino das configs.
     const t = montar({ servers: [UNICO, B], onPickTarget: vi.fn(), targetId: 'srv-b', activeId: 'srv-a' });
     const tags = [...t.el.querySelectorAll('.sm-tag')].map((n) => n.textContent);
-    expect(tags).toEqual(['escolhido']);
-    expect(t.el.textContent).not.toContain('ativo');
+    expect(tags).toEqual([m.servidor_escolhido()]);
+    expect(t.el.textContent).not.toContain(m.servidor_ativo());
     const marcadas = [...t.el.querySelectorAll('.sm-srv.on .sm-srv-label')].map((n) => n.textContent);
     expect(marcadas).toEqual(['B']);
     unmount(t.comp);
@@ -94,7 +95,7 @@ describe('ServerManager — escolha de alvo das configs', () => {
   it('sem onPickTarget (menu de conta): segue trocando o ativo', () => {
     const onSwitchActive = vi.fn();
     const t = montar({ servers: [UNICO, B], onSwitchActive, activeId: 'srv-a' });
-    expect([...t.el.querySelectorAll('.sm-tag')].map((n) => n.textContent)).toEqual(['ativo']);
+    expect([...t.el.querySelectorAll('.sm-tag')].map((n) => n.textContent)).toEqual([m.servidor_ativo()]);
     t.el.querySelectorAll<HTMLButtonElement>('.sm-srv-pick')[1].click();
     expect(onSwitchActive).toHaveBeenCalledWith('srv-b');
     unmount(t.comp);
@@ -121,7 +122,7 @@ describe('ServerManager — semântica ARIA do botão Adicionar (round 7)', () =
 
 describe('ServerManager — saveToken validado (round 4)', () => {
   async function editarToken(t: { el: HTMLElement }, texto: string) {
-    t.el.querySelector<HTMLButtonElement>('.sm-srv-rename[aria-label="Trocar token de A"]')!.click();
+    t.el.querySelector<HTMLButtonElement>(`.sm-srv-rename[aria-label="${m.servidor_trocar_token_aria({ nome: 'A' })}"]`)!.click();
     await tick();   // editor inline só monta depois do re-render
     const input = t.el.querySelector<HTMLInputElement>('.sm-srv-edit')!;
     input.value = texto;
@@ -138,7 +139,7 @@ describe('ServerManager — saveToken validado (round 4)', () => {
     expect(authMock.validarPareamento).toHaveBeenCalledWith('https:// pc.ts.net/?token=abc', { aceitarTokenCru: true });
     expect(onUpdateToken).not.toHaveBeenCalled();
     const err = t.el.querySelector<HTMLElement>('#sm-token-err');
-    expect(err?.innerText).toContain('URL de pareamento inválida');
+    expect(err?.innerText).toContain(m.servidor_url_invalida());
     expect(err?.getAttribute('role')).toBe('alert');
     const input = t.el.querySelector<HTMLInputElement>('.sm-srv-edit')!;
     expect(input.getAttribute('aria-invalid')).toBe('true');

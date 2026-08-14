@@ -2,6 +2,7 @@
   // Aba Mudancas: UMA lista de arquivos alterados. Antes eram duas — o ChangedFiles (com o ⟲
   // descartar) e a lista do CommitBox (com checkbox). Numa aba so, viravam a mesma lista duas vezes.
   // Cada linha carrega as tres acoes: marcar pro commit, abrir o diff, descartar.
+  import * as m from '../../paraglide/messages';
   import DiffView from './DiffView.svelte';
   import CommitBox from './CommitBox.svelte';
   import type { GitStore } from '../../lib/gitStore.svelte';
@@ -37,6 +38,12 @@
     const c = code.trim()[0] ?? '';
     return { M: 'mod', A: 'novo', D: 'del', R: 'ren', C: 'copia', U: 'conflito', '?': 'novo' }[c] ?? c;
   }
+  // Mesmo mapa, mas o TEXTO exibido segue o idioma; `fileTag` fica só como gancho de CSS
+  // (data-t) — traduzir o data-t quebraria as cores .git-file-tag[data-t="novo"].
+  function rotuloTag(code: string): string {
+    const c = code.trim()[0] ?? '';
+    return { M: m.git_tag_mod(), A: m.git_tag_novo(), D: m.git_tag_del(), R: m.git_tag_ren(), C: m.git_tag_copia(), U: m.git_tag_conflito(), '?': m.git_tag_novo() }[c] ?? c;
+  }
 
   async function doDiscard(path: string) {
     if (await git.discard(path)) confirmDiscard = '';
@@ -55,18 +62,18 @@
   <!-- O aviso de tree suja vinha do ChangedFiles (apagado): ele fala da working tree, entao e
        aqui que ele mora. -->
   {#if git.dirty && git.files.length}
-    <div class="git-warn">working tree suja — troque de branch só depois de commit ou stash</div>
+    <div class="git-warn">{m.git_working_tree_suja()}</div>
   {/if}
   {#if !git.files.length}
     <!-- Obrigatorio: o ChangedFiles nao renderizava NADA com o repo limpo, e a aba nasceria em
          branco, sem dizer que esta tudo certo. -->
-    <p class="git-muted">nada alterado — a working tree está limpa</p>
+    <p class="git-muted">{m.git_arvore_limpa()}</p>
   {:else}
     <div class="git-section-row">
-      <p class="git-section">{git.files.length} arquivo{git.files.length > 1 ? 's' : ''} alterado{git.files.length > 1 ? 's' : ''}</p>
+      <p class="git-section">{git.files.length === 1 ? m.git_alterado_1() : m.git_alterados({ n: git.files.length })}</p>
       <div class="ct-sel-row">
-        <button class="git-mini" onclick={() => (sel = new Set(git.files.map((f) => f.path)))}>todos</button>
-        <button class="git-mini" onclick={() => (sel = new Set())}>nenhum</button>
+        <button class="git-mini" onclick={() => (sel = new Set(git.files.map((f) => f.path)))}>{m.custos_todos()}</button>
+        <button class="git-mini" onclick={() => (sel = new Set())}>{m.git_nenhum()}</button>
       </div>
     </div>
     <div class="git-files">
@@ -74,19 +81,19 @@
         {@const slash = f.path.lastIndexOf('/')}
         <div class="git-file-row" class:danger={confirmDiscard === f.path}>
           <input class="ct-check" type="checkbox" checked={sel.has(f.path)}
-            onchange={() => toggle(f.path)} aria-label={`incluir ${f.path} no commit`} />
-          <button class="git-file" disabled={!!git.busy} onclick={() => abrirDiff(f.path)} title="ver diff">
-            <span class="git-file-tag" data-t={fileTag(f.code)}>{fileTag(f.code)}</span>
+            onchange={() => toggle(f.path)} aria-label={m.git_incluir_no_commit({ path: f.path })} />
+          <button class="git-file" disabled={!!git.busy} onclick={() => abrirDiff(f.path)} title={m.git_ver_diff()}>
+            <span class="git-file-tag" data-t={fileTag(f.code)}>{rotuloTag(f.code)}</span>
             <!-- basename em destaque: o dir trunca no COMECO (direction:rtl), o basename nunca encolhe.
                  Um LRM (\u200e) no fim ancora a "/" final em contexto LTR — sem ele o rtl joga a
                  barra de borda pro comeco (bug do bidi com pontuacao neutra). -->
             <span class="git-path">{#if slash >= 0}<span class="git-path-dir">{'\u200e' + f.path.slice(0, slash + 1) + '\u200e'}</span>{/if}<span class="git-path-base">{slash >= 0 ? f.path.slice(slash + 1) : f.path}</span></span>
           </button>
           {#if confirmDiscard === f.path}
-            <button class="git-mini danger" disabled={!!git.busy} onclick={() => doDiscard(f.path)}>descartar</button>
-            <button class="git-mini" disabled={!!git.busy} onclick={() => (confirmDiscard = '')}>não</button>
+            <button class="git-mini danger" disabled={!!git.busy} onclick={() => doDiscard(f.path)}>{m.git_descartar()}</button>
+            <button class="git-mini" disabled={!!git.busy} onclick={() => (confirmDiscard = '')}>{m.config_server_nao()}</button>
           {:else}
-            <button class="git-mini" disabled={!!git.busy} onclick={() => (confirmDiscard = f.path)} aria-label="descartar mudanças" title="descartar mudanças">⟲</button>
+            <button class="git-mini" disabled={!!git.busy} onclick={() => (confirmDiscard = f.path)} aria-label={m.git_descartar_mudancas()} title={m.git_descartar_mudancas()}>⟲</button>
           {/if}
         </div>
       {/each}
@@ -108,13 +115,13 @@
       {#if git.diffPath}
         <DiffView path={git.diffPath} rows={git.diffRows} loading={git.diffLoading} truncated={git.diffTruncated} />
       {:else}
-        <p class="git-muted">selecione um arquivo</p>
+        <p class="git-muted">{m.git_selecione_arquivo()}</p>
       {/if}
     </section>
     <section class="ct-col ct-col-commit">{@render caixaDeCommit()}</section>
   </div>
 {:else if level >= 1}
-  <button class="git-back" onclick={voltar}>‹ arquivos</button>
+  <button class="git-back" onclick={voltar}>{m.git_voltar_arquivos()}</button>
   <DiffView path={git.diffPath} rows={git.diffRows} loading={git.diffLoading} truncated={git.diffTruncated} />
 {:else}
   <div class="ct-stack">

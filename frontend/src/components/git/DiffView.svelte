@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from '../../paraglide/messages';
   import type { DiffRow } from '../../lib/highlight';
 
   interface Props {
@@ -26,14 +27,14 @@
   {/if}
 </div>
 {#if loading}
-  <p class="git-muted">carregando diff…</p>
+  <p class="git-muted">{m.git_diff_carregando()}</p>
 {:else if !rows.length}
   <!-- "git diff HEAD" legitimamente vazio (ex: comparar o topo com a working tree limpa) e nao pode
        parecer carga falhada — a caixa em branco era indistinguivel de um erro engolido. -->
-  <p class="git-muted">sem diferenças</p>
+  <p class="git-muted">{m.git_sem_diferencas()}</p>
 {:else}
   {#if truncated}
-    <p class="git-warn">diff cortado em 200 KB — abra o commit no terminal pra ver o resto</p>
+    <p class="git-warn">{m.git_diff_cortado()}</p>
   {/if}
   <pre class="git-diff">{#each rows as row, i (i)}<span
       class:add={row.kind === 'add'}

@@ -2,6 +2,7 @@
   import { serverColor, validarPareamento } from '../lib/auth';
   import { vaultPush } from '../lib/vaultPush.svelte';
   import type { Server } from '../lib/auth';
+  import * as m from '../paraglide/messages';
 
   // Linhas de servidor + edição inline (renomear / trocar token) + Adicionar. Extraído do AccountMenu
   // (Task 4a) pra ser reusado na tela Servidores das Configurações (Task 4b): mesmo markup, mesmo
@@ -88,8 +89,8 @@
     // com o texto, pra corrigir.
     if (!parsed) {
       tokenError = text.includes('://')
-        ? 'URL de pareamento inválida — cole a URL completa (com ?token=) ou só o token.'
-        : 'token inválido — não pode conter espaços.';
+        ? m.servidor_url_invalida()
+        : m.servidor_token_invalido();
       tokenInputEl?.focus();   // erro associado ao campo (aria-describedby): foco onde corrigir
       return;
     }
@@ -104,18 +105,18 @@
     if (!ok) {
       // false = o id sumiu (removido noutra aba/aparelho pelo sync entre abrir e salvar). Raro,
       // mas indistinguivel de sucesso se ficasse calado — o campo ja teria fechado.
-      tokenError = 'esse servidor não existe mais nesta lista.';
+      tokenError = m.servidor_nao_existe();
       return;
     }
     editingTokenId = null;
     editToken = '';
     tokenError = outroHost
-      ? `token trocado. O endereço NÃO mudou (segue ${alvo!.baseUrl}) — pra trocar o host, remova e adicione de novo.`
+      ? m.servidor_token_trocado({ url: alvo!.baseUrl })
       : '';
   }
 </script>
 
-<div class="sm-section">Servidores</div>
+<div class="sm-section">{m.config_modal_servidores()}</div>
 {#each servers as s (s.id)}
   <div class="sm-srv" class:on={marcado(s.id)}>
     {#if editingTokenId === s.id}
@@ -127,12 +128,12 @@
         autocomplete="off"
         bind:value={editToken}
         bind:this={tokenInputEl}
-        placeholder="token novo ou URL de pareamento"
+        placeholder={m.servidor_token_placeholder()}
         onclick={(e) => e.stopPropagation()}
         onkeydown={(e) => { if (e.key === 'Enter') saveToken(); if (e.key === 'Escape') { editingTokenId = null; editToken = ''; } }}
         onblur={saveToken}
         autofocus
-        aria-label={`Novo token de ${s.label}`}
+        aria-label={m.servidor_novo_token_aria({ nome: s.label })}
         aria-invalid={tokenError ? true : undefined}
         aria-describedby={tokenError ? 'sm-token-err' : undefined}
       />
@@ -146,29 +147,29 @@
         onkeydown={(e) => { if (e.key === 'Enter') saveRename(); if (e.key === 'Escape') editingId = null; }}
         onblur={saveRename}
         autofocus
-        aria-label="Novo nome do servidor"
+        aria-label={m.servidor_novo_nome_aria()}
       />
     {:else if onPickTarget || onSwitchActive}
       <button class="sm-srv-pick"
         onclick={() => (onPickTarget ? onPickTarget(s.id) : onSwitchActive!(s.id))}
         aria-pressed={onPickTarget ? s.id === targetId : undefined}
-        aria-label={onPickTarget ? `Gravar as configurações de servidor em ${s.label}` : undefined}>
+        aria-label={onPickTarget ? m.servidor_gravar_aria({ nome: s.label }) : undefined}>
         <span class="sm-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
         <span class="sm-srv-label">{s.label}</span>
-        {#if marcado(s.id)}<span class="sm-tag">{onPickTarget ? 'escolhido' : 'ativo'}</span>{/if}
+        {#if marcado(s.id)}<span class="sm-tag">{onPickTarget ? m.servidor_escolhido() : m.servidor_ativo()}</span>{/if}
       </button>
-      <button class="sm-srv-rename" onclick={() => startRename(s.id, s.label)} aria-label={`Renomear ${s.label}`} title="Renomear">✎</button>
-      <button class="sm-srv-rename" onclick={() => startEditToken(s.id)} aria-label={`Trocar token de ${s.label}`} title="Trocar token">🔑</button>
+      <button class="sm-srv-rename" onclick={() => startRename(s.id, s.label)} aria-label={m.servidor_renomear_aria({ nome: s.label })} title={m.ctx_renomear()}>✎</button>
+      <button class="sm-srv-rename" onclick={() => startEditToken(s.id)} aria-label={m.servidor_trocar_token_aria({ nome: s.label })} title={m.servidor_trocar_token()}>🔑</button>
       {#if servers.length > 1 || podeRemoverUltimo}
-        <button class="sm-srv-del" onclick={() => onRemove(s.id)} aria-label={`Remover ${s.label}`}>×</button>
+        <button class="sm-srv-del" onclick={() => onRemove(s.id)} aria-label={m.servidor_remover_aria({ nome: s.label })}>×</button>
       {/if}
     {:else}
       <span class="sm-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
       <span class="sm-srv-label">{s.label}</span>
-      <button class="sm-srv-rename" onclick={() => startRename(s.id, s.label)} aria-label={`Renomear ${s.label}`} title="Renomear">✎</button>
-      <button class="sm-srv-rename" onclick={() => startEditToken(s.id)} aria-label={`Trocar token de ${s.label}`} title="Trocar token">🔑</button>
+      <button class="sm-srv-rename" onclick={() => startRename(s.id, s.label)} aria-label={m.servidor_renomear_aria({ nome: s.label })} title={m.ctx_renomear()}>✎</button>
+      <button class="sm-srv-rename" onclick={() => startEditToken(s.id)} aria-label={m.servidor_trocar_token_aria({ nome: s.label })} title={m.servidor_trocar_token()}>🔑</button>
       {#if servers.length > 1 || podeRemoverUltimo}
-        <button class="sm-srv-del" onclick={() => onRemove(s.id)} aria-label={`Remover ${s.label}`}>×</button>
+        <button class="sm-srv-del" onclick={() => onRemove(s.id)} aria-label={m.servidor_remover_aria({ nome: s.label })}>×</button>
       {/if}
     {/if}
   </div>
@@ -188,7 +189,7 @@
 
 <button class="sm-item" type="button" role={menuitem ? 'menuitem' : undefined} onclick={onAdd}>
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-  Adicionar servidor
+  {m.servidor_adicionar()}
 </button>
 
 <style>

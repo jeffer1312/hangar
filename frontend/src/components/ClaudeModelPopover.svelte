@@ -13,6 +13,7 @@
   // outro lado. Quem responde de onde vem e o backend: kind 'claude' = linhas do picker lidas ao
   // vivo; kind 'engine' = /v1/models do provedor (um deles tem 269 modelos).
   import { untrack } from 'svelte';
+  import * as m from '../paraglide/messages';
   import Popover from './Popover.svelte';
   import { getModelOptions, setEngineModel } from '../lib/api';
   import type { ModelEffortBody, ModelOption } from '../lib/api';
@@ -94,7 +95,7 @@
       models = [];
       atual = null;
       escolhido = null;
-      err = e instanceof Error ? e.message : 'Falha ao carregar modelos';
+      err = e instanceof Error ? e.message : m.comum_falha_carregar_modelos();
     } finally {
       if (minha === carga) loading = false;
     }
@@ -124,13 +125,13 @@
 
   // Linha secundaria: no picker e a descricao do Claude Code; no motor, a janela real que o
   // provedor reporta. O id NAO se repete no motor — la ele ja E o titulo.
-  function detalhe(m: ModelOption): string {
-    if (kind === 'claude') return m.desc ?? '';
-    const n = m.context_length;
+  function detalhe(md: ModelOption): string {
+    if (kind === 'claude') return md.desc ?? '';
+    const n = md.context_length;
     if (!n) return '';
     return n >= 1_000_000
-      ? `${(n / 1_000_000).toFixed(n % 1_000_000 ? 1 : 0)}M de contexto`
-      : `${Math.round(n / 1000)}k de contexto`;
+      ? m.modelo_ctx_m({ n: (n / 1_000_000).toFixed(n % 1_000_000 ? 1 : 0) })
+      : m.modelo_ctx_k({ n: Math.round(n / 1000) });
   }
 
   // Aplica NESTA SESSAO o que esta selecionado. "Salvar como padrão" e outro destino (escreve a
@@ -141,18 +142,18 @@
   // Ficar aberto com "Aplicando…" tapava justamente a pergunta que ele precisa responder. Entao a
   // caixa sai da frente assim que o pedido parte; o pill e a statusline contam o desfecho.
   async function aplicar(scope: 'session' | 'default') {
-    const m = models.find((x) => x.id === escolhido);
-    if (!m || aplicando) return;
+    const alvo = models.find((x) => x.id === escolhido);
+    if (!alvo || aplicando) return;
     aplicando = true;
     err = null;
     try {
       if (kind === 'engine') {
-        const res = await setEngineModel(sessionName, { model: m.id, effort: currentEffort ?? undefined });
+        const res = await setEngineModel(sessionName, { model: alvo.id, effort: currentEffort ?? undefined });
         if (res.effort_error) {
           // O modelo pegou e o esforco nao: dizer "tudo certo" seria reportar sucesso sobre algo
           // que ficou pela metade.
           onApplied?.(res.model, null);
-          err = `Modelo trocado, mas o esforço não: ${res.effort_error}`;
+          err = m.modelo_trocado_esforco_nao({ erro: res.effort_error });
           aplicando = false;
           return;
         }
@@ -162,17 +163,17 @@
         // a falha vai pra fora (`onFail`), nao pro console: o backend recusa a troca de verdade
         // (PickerError 409/422 quando o Claude nega ou o picker nao fecha), e engolir isso deixa
         // o pill mostrando um modelo que nunca entrou.
-        Promise.resolve(onApply({ model: m.id, scope })).catch((e) =>
-          onFail?.(e instanceof Error ? e.message : 'Falha ao trocar o modelo'),
+        Promise.resolve(onApply({ model: alvo.id, scope })).catch((e) =>
+          onFail?.(e instanceof Error ? e.message : m.modelo_trocar_erro()),
         );
-        atual = m.id;
+        atual = alvo.id;
         aplicando = false;
         onClose();
         return;
       }
-      atual = m.id;
+      atual = alvo.id;
     } catch (e) {
-      err = e instanceof Error ? e.message : 'Falha ao aplicar';
+      err = e instanceof Error ? e.message : m.comum_falha_aplicar();
       aplicando = false;
       return;
     }
@@ -182,7 +183,7 @@
 
 </script>
 
-<Popover {open} {anchor} {onClose} width={340} ariaLabel="Modelo do Claude">
+<Popover {open} {anchor} {onClose} width={340} ariaLabel={m.modelo_titulo_claude()}>
   {#if buscavel}
     <div class="busca-wrap">
       <svg class="lupa" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -190,7 +191,7 @@
         <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" />
       </svg>
       <input class="busca" type="search" data-foco bind:value={query}
-        placeholder="Buscar modelos" aria-label="Buscar modelo" />
+        placeholder={m.comum_buscar_modelos()} aria-label={m.comum_buscar_modelo()} />
     </div>
   {/if}
 
@@ -199,11 +200,11 @@
   {/if}
 
   {#if loading && !models.length}
-    <p class="vazio">Carregando…</p>
+    <p class="vazio">{m.comum_carregando()}</p>
   {:else if !models.length}
-    {#if !err}<p class="vazio">Nenhum modelo disponível.</p>{/if}
+    {#if !err}<p class="vazio">{m.comum_nenhum_modelo()}</p>{/if}
   {:else if !visiveis.length}
-    <p class="vazio">Nada encontrado.</p>
+    <p class="vazio">{m.comum_nada_encontrado()}</p>
   {:else}
     <ul class="lista">
       <!-- Chave = id + nome, NAO so o id: o picker do Claude tem DUAS linhas com a keyword `opus`
@@ -235,16 +236,16 @@
       {/each}
     </ul>
     {#if escondidos}
-      <p class="mais">+{escondidos} — refine a busca</p>
+      <p class="mais">{m.modelo_refine_busca({ n: escondidos })}</p>
     {/if}
     <div class="acoes">
       <button class="btn-aplicar" disabled={aplicando || !escolhido || escolhido === atual}
         onclick={() => aplicar('session')}>
-        {aplicando ? 'Aplicando…' : 'Aplicar nesta sessão'}
+        {aplicando ? m.modelo_aplicando() : m.modelo_aplicar_sessao()}
       </button>
       {#if kind === 'claude'}
         <button class="rodape" disabled={aplicando || !escolhido} onclick={() => aplicar('default')}>
-          Salvar como padrão
+          {m.modelo_salvar_padrao()}
         </button>
       {/if}
     </div>

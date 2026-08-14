@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from '../../paraglide/messages';
   import type { GitStore } from '../../lib/gitStore.svelte';
   interface Props { git: GitStore }
   let { git }: Props = $props();
@@ -10,19 +11,19 @@
 </script>
 
 <form class="git-search" onsubmit={(e) => { e.preventDefault(); git.searchLog(q.trim()); }}>
-  <input class="git-search-input" bind:value={q} placeholder="buscar na mensagem dos commits…"
+  <input class="git-search-input" bind:value={q} placeholder={m.git_buscar_msg()}
     autocapitalize="off" autocorrect="off" spellcheck="false" />
-  <button type="submit" class="git-mini" disabled={!!git.busy}>buscar</button>
+  <button type="submit" class="git-mini" disabled={!!git.busy}>{m.git_buscar()}</button>
   {#if git.logQuery}
     <!-- disabled junto com o "buscar": searchLog ignora chamada com o git ocupado (guarda contra
          resposta de busca velha chegar por ultimo), entao um "limpar" clicado durante uma busca em
          voo seria descartado calado — o botao some do alcance em vez de mentir. -->
     <button type="button" class="git-mini" disabled={!!git.busy}
-      onclick={() => git.searchLog('')}>limpar</button>
+      onclick={() => git.searchLog('')}>{m.git_limpar()}</button>
   {/if}
 </form>
 {#if git.logQuery}
-  <p class="git-muted">resultados de "{git.logQuery}" — o grafo fica oculto enquanto a busca está ativa</p>
+  <p class="git-muted">{m.git_resultados_busca({ query: git.logQuery })}</p>
 {/if}
 
 <style>

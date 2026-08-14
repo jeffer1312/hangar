@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from '../../paraglide/messages';
   // Faixa do rodape do modal: conflito de sequenciador, erro e saida do ultimo comando.
   import type { GitStore } from '../../lib/gitStore.svelte';
   interface Props { git: GitStore; menuAberto: boolean }
@@ -15,12 +16,12 @@
 
 {#if git.pendingAbort}
   <div class="gsb-conflito" role="status">
-    <span>⚠ {git.pendingAbort === 'revert-abort' ? 'revert' : 'cherry-pick'} em conflito</span>
+    <span>⚠ {git.pendingAbort === 'revert-abort' ? 'revert' : 'cherry-pick'} {m.git_em_conflito()}</span>
     {#if confirmar}
-      <button class="git-mini danger" disabled={!!git.busy} onclick={doAbort}>confirmar abort</button>
-      <button class="git-mini" onclick={() => (confirmar = false)}>não</button>
+      <button class="git-mini danger" disabled={!!git.busy} onclick={doAbort}>{m.git_confirmar_abort()}</button>
+      <button class="git-mini" onclick={() => (confirmar = false)}>{m.config_server_nao()}</button>
     {:else}
-      <button class="git-mini danger" onclick={() => (confirmar = true)}>abortar…</button>
+      <button class="git-mini danger" onclick={() => (confirmar = true)}>{m.git_abortar()}</button>
     {/if}
   </div>
 {/if}

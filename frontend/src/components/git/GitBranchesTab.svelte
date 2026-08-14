@@ -2,6 +2,7 @@
   // Aba Branches: a lista mais o campo de filtro. O filtro so existia no celular e ainda
   // condicionado a "mais de 6 locais ou alguma remota" — o desktop passava
   // filter="" e ficava sem. Numa aba dedicada ele e incondicional: e a unica coisa que se faz aqui.
+  import * as m from '../../paraglide/messages';
   import BranchList from './BranchList.svelte';
   import type { GitStore } from '../../lib/gitStore.svelte';
 
@@ -17,7 +18,7 @@
   <input
     class="bt-search"
     type="search"
-    placeholder="filtrar branch…"
+    placeholder={m.git_filtrar_branch()}
     bind:value={filter}
     autocapitalize="off"
     autocorrect="off"

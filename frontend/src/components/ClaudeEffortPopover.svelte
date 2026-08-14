@@ -6,6 +6,7 @@
   // Os seis niveis sao os do /effort do Claude Code, ordenados do mais rapido ao mais inteligente.
   // O picker do Opus expoe os seis; modelos menores expoem um subconjunto (o backend acomoda) e o
   // Haiku nao usa esforco — por isso a pill some quando o modelo atual e Haiku (ver Composer).
+  import * as m from '../paraglide/messages';
   import Popover from './Popover.svelte';
   import type { ModelEffortBody } from '../lib/api';
 
@@ -43,7 +44,7 @@
     try {
       await onApply({ effort: lv, scope: 'session' });
     } catch (e) {
-      err = e instanceof Error ? e.message : 'Falha ao aplicar';
+      err = e instanceof Error ? e.message : m.comum_falha_aplicar();
       aplicando = null;
       return;
     }
@@ -52,7 +53,7 @@
   }
 </script>
 
-<Popover {open} {anchor} {onClose} width={200} ariaLabel="Esforço de raciocínio">
+<Popover {open} {anchor} {onClose} width={200} ariaLabel={m.composer_esforco_raciocinio()}>
   {#if err}
     <p class="err" role="alert">{err}</p>
   {/if}
@@ -82,7 +83,7 @@
       </li>
     {/each}
   </ul>
-  <p class="dica">Do mais rápido ao mais inteligente.</p>
+  <p class="dica">{m.modelo_rapido_inteligente()}</p>
 </Popover>
 
 <style>

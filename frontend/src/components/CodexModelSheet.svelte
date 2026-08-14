@@ -5,6 +5,7 @@
   // abrir (GET /models) e aplica na hora (POST /model) -- sem estado intermediario no Composer,
   // que so recebe o resultado via onApplied pra atualizar o pill otimista.
   import BottomSheet from './BottomSheet.svelte';
+  import * as m from '../paraglide/messages';
   import { getCodexModels, setCodexModel } from '../lib/api';
   import type { CodexModel } from '../lib/types';
 
@@ -30,10 +31,10 @@
       const res = await getCodexModels(sessionName);
       models = res.models;
       selectedModel = res.current.model ?? models[0]?.model ?? null;
-      const m = models.find((x) => x.model === selectedModel);
-      selectedEffort = res.current.effort ?? m?.defaultEffort ?? m?.efforts[0]?.value ?? null;
+      const alvo = models.find((x) => x.model === selectedModel);
+      selectedEffort = res.current.effort ?? alvo?.defaultEffort ?? alvo?.efforts[0]?.value ?? null;
     } catch (e) {
-      err = e instanceof Error ? e.message : 'Falha ao carregar modelos';
+      err = e instanceof Error ? e.message : m.comum_falha_carregar_modelos();
     } finally {
       loading = false;
     }
@@ -60,7 +61,7 @@
       await setCodexModel(sessionName, selectedModel, selectedEffort);
       onApplied(selectedModel, selectedEffort);
     } catch (e) {
-      err = e instanceof Error ? e.message : 'Falha ao aplicar';
+      err = e instanceof Error ? e.message : m.comum_falha_aplicar();
       applying = false;
       return; // mantem a folha aberta pra tentar de novo
     }
@@ -69,17 +70,17 @@
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel="Modelo do Codex">
-  <h2 class="sheet-title">Modelo</h2>
+<BottomSheet {open} {onClose} ariaLabel={m.composer_modelo_codex()}>
+  <h2 class="sheet-title">{m.composer_modelo()}</h2>
 
   {#if err}
     <p class="err">{err}</p>
   {/if}
 
   {#if loading && !models.length}
-    <p class="empty">Carregando…</p>
+    <p class="empty">{m.comum_carregando()}</p>
   {:else if !models.length}
-    {#if !err}<p class="empty">Nenhum modelo disponível.</p>{/if}
+    {#if !err}<p class="empty">{m.comum_nenhum_modelo()}</p>{/if}
   {:else}
     <ul class="model-list">
       {#each models as m (m.model)}
@@ -107,7 +108,7 @@
     </ul>
 
     {#if selected && selected.efforts.length}
-      <h3 class="section-label">Esforço de raciocínio</h3>
+      <h3 class="section-label">{m.composer_esforco_raciocinio()}</h3>
       <ul class="effort-list">
         {#each selected.efforts as e (e.value)}
           <li>
@@ -127,10 +128,10 @@
 
     <div class="actions">
       <button class="btn btn--primary" onclick={apply} disabled={applying || !selectedModel}>
-        {applying ? 'Aplicando…' : 'Aplicar'}
+        {applying ? m.modelo_aplicando() : m.modelo_aplicar()}
       </button>
     </div>
-    <p class="hint">Vale a partir da próxima mensagem enviada.</p>
+    <p class="hint">{m.modelo_vale_proxima()}</p>
   {/if}
 </BottomSheet>
 

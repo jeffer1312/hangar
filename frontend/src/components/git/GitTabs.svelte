@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from '../../paraglide/messages';
   // Corpo do modal de git: cabecalho, fileira de abas, a aba ativa e a faixa de estado no rodape.
   // Nem o BottomSheet nem o ModalDialog desenham chrome (o × da folha so existe no modo persistent),
   // entao sem este cabecalho o modal sairia so por Esc/backdrop e nunca diria de que repositorio e —
@@ -43,7 +44,7 @@
 </script>
 
 {#if naoEhRepo}
-  <p class="gt-muted gt-vazio">esta pasta não é um repositório git</p>
+  <p class="gt-muted gt-vazio">{m.git_nao_repo()}</p>
 {:else}
   <div class="gt" class:gt-desktop={desktop}>
     <header class="gt-head">
@@ -52,9 +53,9 @@
         {#if git.current}<span class="gt-branch">{git.current}</span>{/if}
       </div>
       <div class="gt-actions">
-        <button class="gt-icon" onclick={() => (repoMenu = !repoMenu)} aria-label="ações do repositório"
-          aria-expanded={repoMenu} title="ações do repositório">⋯</button>
-        <button class="gt-icon" onclick={onClose} aria-label="fechar" title="fechar">✕</button>
+        <button class="gt-icon" onclick={() => (repoMenu = !repoMenu)} aria-label={m.git_acoes_repo()}
+          aria-expanded={repoMenu} title={m.git_acoes_repo()}>⋯</button>
+        <button class="gt-icon" onclick={onClose} aria-label={m.git_fechar()} title={m.git_fechar()}>✕</button>
         {#if repoMenu}
           <RepoMenu {git} onClose={() => (repoMenu = false)} />
         {/if}
@@ -73,7 +74,7 @@
 
     <div class="gt-body">
       {#if git.loading}
-        <p class="gt-muted">carregando…</p>
+        <p class="gt-muted">{m.board_carregando()}</p>
       {:else if nav.tab === 'changes'}
         <GitChangesTab {git} {desktop} level={currentLevel(nav)}
           onPush={() => (nav = pushLevel(nav))} onPop={() => (nav = popLevel(nav))} />
