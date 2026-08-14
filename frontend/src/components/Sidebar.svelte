@@ -267,7 +267,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
       }
     } catch (err) {
       resumeError = err instanceof Error ? err.message : m.sessao_falha_retomar();
-      if (!resumeModal) flash(`retomar: ${resumeError}`);   // erro do botao da linha -> toast
+      if (!resumeModal) flash(m.sessao_flash_retomar({ n: resumeError }));   // erro do botao da linha -> toast
     } finally {
       resumeBusy = '';
     }
@@ -297,7 +297,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     // Exclusão otimista via store: some na hora; falhou -> desmarca (reaparece) + toast.
     sessionsStore.markDeleting(serverId, name);
     try { await deleteSession(name); }
-    catch (e) { sessionsStore.unmarkDeleting(serverId, name); flash(`excluir: ${errMsg(e)}`); }
+    catch (e) { sessionsStore.unmarkDeleting(serverId, name); flash(m.sessao_flash_excluir({ n: errMsg(e) })); }
     if (prev && prev !== serverId) selectServer(prev); // C1: restore so open chat stays on its server
     // No sucesso o SSE re-emite a lista sem a sessão e a faxina do store limpa a marca.
   }
@@ -416,7 +416,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     if (!nv || nv === old) return;
     // Inline preserva o comportamento (fecha o input no blur); falha aparece no toast, não some.
     void doRename(nv, old, serverId).then((r) => {
-      if (!r.ok) flash(`renomear: ${r.erro}`);
+      if (!r.ok) flash(m.sessao_flash_renomear({ n: r.erro }));
     });
   }
   function onEditKey(e: KeyboardEvent, old: string) {
@@ -503,9 +503,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         if (!r.ok) throw new Error(r.output || 'stash falhou');
         await checkoutBranch(name, branch);
       });
-      flash(`branch: ${branch} — mudanças guardadas (use "pop" na aba Git pra recuperar)`);
+      flash(m.sessao_flash_branch({ n: branch }));
     } catch (e) {
-      flash(`checkout: ${errMsg(e)}`);
+      flash(m.sessao_flash_checkout({ n: errMsg(e) }));
     }
   }
   function flash(msg: string) {
@@ -886,7 +886,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         {@const provTag = showProviderTags ? providerTag(s.provider) : null}
         {@const sub = sidebarStatus(s)}
         {@const srvLabel = servers.find((sv) => sv.id === s.serverId)?.label ?? s.serverId}
-        {@const estadoTxt = s.stalled ? 'pode estar travada' : rotuloEstado(s.state)}
+        {@const estadoTxt = s.stalled ? m.sessao_pode_travada() : rotuloEstado(s.state)}
         <!-- role=presentation: a row e so o wrapper flex — a semantica toda vive no .sess-main
              (button) e nos botoes irmaos. O hover aqui e decoracao redundante (a resposta ja esta no
              chat), entao nao pede equivalente de teclado. -->
@@ -913,7 +913,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
               aria-label={!expanded ? `${s.name} · ${srvLabel} · ${estadoTxt}` : undefined}
               title={!expanded
                 ? `${s.name} · ${srvLabel} · ${estadoTxt}${provTag ? ` · ${m.sessao_singular()} ${provTag}` : ''}`
-                : (s.tracked === false ? untrackedReason(s.provider) : 'Toque longo pra renomear')}
+                : (s.tracked === false ? untrackedReason(s.provider) : m.sessao_toque_renomear())}
               onpointerdown={() => { if (!selectMode && !sidebarPin.collapsed) pressStart(rowKey); }}
               onpointerup={pressEnd}
               onpointerleave={pressEnd}
@@ -1002,14 +1002,14 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                       {#if s.limited}
                         <span
                           class="limited-chip"
-                          title={s.limit_reset ? `Limite de uso atingido — volta ${s.limit_reset}` : 'Limite de uso atingido'}
+                          title={s.limit_reset ? m.sessao_limite_volta({ n: s.limit_reset }) : m.sessao_limite()}
                         >⏳{#if s.limit_reset}&nbsp;{s.limit_reset}{/if}</span>
                       {/if}
                       {#if s.then_target}
-                        <span class="chain-chip" title={`Quando terminar, envia pra "${s.then_target}"`}>🔗&nbsp;{s.then_target}</span>
+                        <span class="chain-chip" title={m.sessao_chain_envia({ n: s.then_target })}>🔗&nbsp;{s.then_target}</span>
                       {/if}
                       {#if s.pair_peers?.length}
-                        <span class="chain-chip" title={`Grupo com ${s.pair_peers.join(', ')} — trabalham juntas via cp-send`}>🤝&nbsp;{s.pair_peers.length === 1 ? s.pair_peers[0] : s.pair_peers.length + 1}</span>
+                        <span class="chain-chip" title={m.sessao_grupo_chip({ n: s.pair_peers.join(', ') })}>🤝&nbsp;{s.pair_peers.length === 1 ? s.pair_peers[0] : s.pair_peers.length + 1}</span>
                       {/if}
                       {#if s.loop_status}
                         {@const lb = loopBadge(s.loop_status, s.loop_iter, s.loop_max)}
@@ -1027,7 +1027,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                         <!-- Sem isto nada na lista distingue uma sessão de motor de uma da conta Anthropic.
                              NÃO mostramos custo aqui: o preço que o Claude Code calcula é tabela Anthropic
                              e mentiria pra um motor de outro provedor. -->
-                        <span class="engine-chip" title={`Motor: ${s.engine}`}>⚙&nbsp;{s.engine}</span>
+                        <span class="engine-chip" title={m.sessao_motor({ n: s.engine })}>⚙&nbsp;{s.engine}</span>
                       {/if}
                     </span>
                   {/if}
@@ -1037,7 +1037,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   class="state-chip"
                   class:stalled={s.stalled === true}
                   style="color: {stateColors[s.state]}; background: {stateChipBg[s.state]};"
-                  title={s.stalled ? 'Pode estar travada — sem atividade há um tempo' : undefined}
+                  title={s.stalled ? m.sessao_travada() : undefined}
                 >{rotuloEstado(s.state)}</span>
               {/if}
             </button>
@@ -1064,7 +1064,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
               <!-- Git da linha (paridade com o mobile): abre a GitSheet no repo do cwd, sem abrir o
                    chat. So quando ha cwd. stopPropagation pra nao disparar rename/navegacao da linha. -->
               {#if s.cwd}
-                <button class="sess-git" onclick={(e) => rowGit(s.name, s.serverId, e)} aria-label={`Git de ${s.name}`} title={m.sessao_gerenciador_git()}>
+                <button class="sess-git" onclick={(e) => rowGit(s.name, s.serverId, e)} aria-label={m.sessao_aria_git({ n: s.name })} title={m.sessao_gerenciador_git()}>
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <line x1="6" y1="3" x2="6" y2="15"/>
                     <circle cx="18" cy="6" r="3"/>
@@ -1073,7 +1073,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   </svg>
                 </button>
                 <!-- Loop runner da linha: mesma mecânica hover-revealed do botao git. -->
-                <button class="sess-git" onclick={(e) => rowLoop(s.name, s.serverId, e)} aria-label={`Loop de ${s.name}`} title={m.sessao_loop_runner()}>
+                <button class="sess-git" onclick={(e) => rowLoop(s.name, s.serverId, e)} aria-label={m.sessao_aria_loop({ n: s.name })} title={m.sessao_loop_runner()}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <path d="m17 2 4 4-4 4"/>
                     <path d="M3 11v-1a4 4 0 0 1 4-4h14"/>
@@ -1082,10 +1082,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   </svg>
                 </button>
               {/if}
-              <button class="sess-del" onclick={(e) => handleDelete(s.name, s.serverId, e)} aria-label={`Excluir ${s.name}`}>×</button>
+              <button class="sess-del" onclick={(e) => handleDelete(s.name, s.serverId, e)} aria-label={m.sessao_aria_excluir({ n: s.name })}>×</button>
               <!-- TOUCH (tablet): os 3 botoes inline esmagavam o nome (iPad, visto ao vivo) — viram
                    um kebab que abre o MESMO menu de contexto do botao direito (Git/Loop/renomear/excluir). -->
-              <button class="sess-kebab" onclick={(e) => { e.stopPropagation(); openMenu(e, s, s.serverId); }} aria-label={`Opções de ${s.name}`} title={m.sessao_opcoes()}>⋯</button>
+              <button class="sess-kebab" onclick={(e) => { e.stopPropagation(); openMenu(e, s, s.serverId); }} aria-label={m.sessao_aria_opcoes({ n: s.name })} title={m.sessao_opcoes()}>⋯</button>
             {/if}
           {/if}
         </div>
@@ -1097,7 +1097,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
       <!-- Resumo dos offline (uma linha em vez de N headers): expande pra ver/gerenciar. -->
       <button class="grp-offline-sum" onclick={() => (showOffline = !showOffline)} aria-expanded={showOffline}>
         <span class="grp-chevron" class:collapsed={!showOffline} aria-hidden="true">▾</span>
-        ⚠ {offlineGroups.length} servidor{offlineGroups.length === 1 ? '' : 'es'} offline
+        ⚠ {offlineGroups.length === 1 ? m.sessao_offline_1() : m.sessao_offline({ n: offlineGroups.length })}
         {#if !showOffline}<span class="grp-offline-names">({offlineGroups.map((g) => g.label).join(', ')})</span>{/if}
       </button>
     {/if}
@@ -1108,7 +1108,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
          fica no Composer normal, por sessão). Slash-command desabilita o envio (rota por sessão). -->
     <div class="broadcast-bar">
       <div class="broadcast-row">
-        <span class="broadcast-count">{selected.size} selecionada{selected.size === 1 ? '' : 's'}</span>
+        <span class="broadcast-count">{selected.size === 1 ? m.lista_selecionada_1() : m.lista_selecionadas({ n: selected.size })}</span>
         <button class="broadcast-compare" onclick={openCompare} disabled={compareDisabled} aria-label={m.lista_comparar_selecionadas()} title={m.lista_comparar()}>{m.lista_comparar()}</button>
         <button class="broadcast-cancel" onclick={toggleSelectMode} aria-label={m.lista_cancelar_selecao()}>×</button>
       </div>
@@ -1174,10 +1174,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     {#if sidebarPin.collapsed}
       <button class="fold-btn rail-ctx" disabled={!ctxDisponivel}
         onclick={alternarCtxPanel}
-        aria-label={!ctxDisponivel ? 'Sem painel de contexto aberto'
-          : (ctxPanel.recolhido ? 'Expandir painel de contexto' : 'Recolher painel de contexto')}
-        title={!ctxDisponivel ? 'Sem painel de contexto aberto'
-          : (ctxPanel.recolhido ? 'Expandir painel de contexto' : 'Recolher painel de contexto')}>
+        aria-label={!ctxDisponivel ? m.ctx_sem_painel()
+          : (ctxPanel.recolhido ? m.ctx_expandir_painel() : m.ctx_recolher_painel())}
+        title={!ctxDisponivel ? m.ctx_sem_painel()
+          : (ctxPanel.recolhido ? m.ctx_expandir_painel() : m.ctx_recolher_painel())}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <rect x="3" y="4" width="18" height="16" rx="2"/>
           <line x1="15" y1="4" x2="15" y2="20"/>
@@ -1239,11 +1239,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     <!-- Sempre visivel: agrupar era imposto ("projeto" fixo com 1 servidor) e nao havia como pedir a
          lista lisa. "Servidor" so entra com 2+ servidores, onde separa alguma coisa. -->
     <div class="group-toggle" role="radiogroup" aria-label={m.lista_agrupar()}>
-      <button type="button" class:active={groupBy === 'none'} role="radio" aria-checked={groupBy === 'none'} onclick={() => setGroupBy('none')}>Nenhum</button>
+      <button type="button" class:active={groupBy === 'none'} role="radio" aria-checked={groupBy === 'none'} onclick={() => setGroupBy('none')}>{m.lista_agrupar_nenhum()}</button>
       {#if servers.length >= 2}
-        <button type="button" class:active={groupBy === 'server'} role="radio" aria-checked={groupBy === 'server'} onclick={() => setGroupBy('server')}>Servidor</button>
+        <button type="button" class:active={groupBy === 'server'} role="radio" aria-checked={groupBy === 'server'} onclick={() => setGroupBy('server')}>{m.lista_agrupar_servidor()}</button>
       {/if}
-      <button type="button" class:active={groupBy === 'project'} role="radio" aria-checked={groupBy === 'project'} onclick={() => setGroupBy('project')}>Projeto</button>
+      <button type="button" class:active={groupBy === 'project'} role="radio" aria-checked={groupBy === 'project'} onclick={() => setGroupBy('project')}>{m.lista_agrupar_projeto()}</button>
     </div>
   </div>
 {/if}
@@ -1276,8 +1276,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     initialFocus={renameInputEl}
     onClose={() => (renameDialog = null)}
     actions={[
-      { label: 'Cancelar', onClick: () => (renameDialog = null) },
-      { label: 'Renomear', kind: 'primary', disabled: renameBusy || !renameValue.trim() || renameValue.trim() === rd.old, onClick: submitRenameDialog },
+      { label: m.comum_cancelar(), onClick: () => (renameDialog = null) },
+      { label: m.sessao_renomear_curto(), kind: 'primary', disabled: renameBusy || !renameValue.trim() || renameValue.trim() === rd.old, onClick: submitRenameDialog },
     ]}>
     <input
       class="rename-dialog-input"
@@ -1317,8 +1317,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     fallbackFocus={acctBtnEl}
     onClose={() => (confirmDel = null)}
     actions={[
-      { label: 'Cancelar', onClick: () => (confirmDel = null) },
-      { label: 'Excluir', kind: 'danger', onClick: doDelete },
+      { label: m.comum_cancelar(), onClick: () => (confirmDel = null) },
+      { label: m.sessao_excluir_curto(), kind: 'danger', onClick: doDelete },
     ]}>
     <p class="confirm-name">{confirmDel.name}</p>
     <!-- Um mesmo nome pode existir em varios servidores: mostra o dono pra a exclusao nao ser ambigua. -->
@@ -1337,12 +1337,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     fallbackFocus={acctBtnEl}
     onClose={() => (confirmBranch = null)}
     actions={[
-      { label: 'Cancelar', onClick: () => (confirmBranch = null) },
+      { label: m.comum_cancelar(), onClick: () => (confirmBranch = null) },
       { label: m.sessao_trocar_assim(), onClick: () => { const c = confirmBranch; confirmBranch = null; if (c) doCheckout(c.name, c.serverId, c.branch); } },
       { label: m.sessao_guardar_trocar(), kind: 'primary', onClick: () => { const c = confirmBranch; confirmBranch = null; if (c) stashAndCheckout(c.name, c.serverId, c.branch); } },
     ]}>
     <p class="confirm-name">→ {confirmBranch.branch}</p>
-    <p class="confirm-hint">{m.sessao_mudancas_nao_commitadas()} <strong>{m.sessao_guardar_trocar()}</strong> põe elas no stash (recupera com “pop” na aba Git). <strong>{m.sessao_trocar_assim()}</strong> {m.sessao_git_pode_recusar()}</p>
+    <p class="confirm-hint">{m.sessao_mudancas_nao_commitadas()} <strong>{m.sessao_guardar_trocar()}</strong> {m.sessao_poe_stash()} <strong>{m.sessao_trocar_assim()}</strong> {m.sessao_git_pode_recusar()}</p>
   </ConfirmDialog>
 {/if}
 
@@ -1353,7 +1353,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   <ConfirmDialog title={m.sessao_retomar_qual()} aria={m.sessao_retomar()} role="dialog" wide
     fallbackFocus={acctBtnEl}
     onClose={() => (resumeModal = null)}
-    actions={[{ label: 'Fechar', onClick: () => (resumeModal = null) }]}>
+    actions={[{ label: m.sessao_fechar(), onClick: () => (resumeModal = null) }]}>
     <p class="confirm-hint">{m.sessao_multiplas_pasta()} <strong>{rm.name}</strong>.</p>
     {#if resumeError}<p class="resume-err">{resumeError}</p>{/if}
     <ul class="resume-list">
@@ -1365,7 +1365,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
             disabled={c.in_use || resumeBusy === rm.name}
             onclick={() => handleResume(rm.name, rm.serverId, c.session_id)}
           >
-            <span class="resume-item-preview">{c.preview || '(sem prévia)'}</span>
+            <span class="resume-item-preview">{c.preview || m.sessao_sem_previa()}</span>
             <span class="resume-item-meta">
               {fmtWhen(c.mtime)}{#if c.in_use} · {m.sessao_em_uso()}{/if}
             </span>

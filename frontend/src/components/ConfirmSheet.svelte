@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+  import * as m from '../paraglide/messages';
 
   interface Props {
     open: boolean;
@@ -13,7 +14,7 @@
     onConfirm: () => void;
     onClose: () => void;
   }
-  let { open, title, message = null, confirmLabel = 'Confirmar', cancelLabel = 'Cancelar', danger = false, fallbackFocus = null, onConfirm, onClose }: Props = $props();
+  let { open, title, message = null, confirmLabel = m.comum_confirmar(), cancelLabel = m.comum_cancelar(), danger = false, fallbackFocus = null, onConfirm, onClose }: Props = $props();
 
   function confirm() {
     onConfirm();

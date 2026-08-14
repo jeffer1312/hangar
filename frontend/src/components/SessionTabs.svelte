@@ -123,9 +123,9 @@ import * as m from '../paraglide/messages';
 
 <div class="tabs-bar">
   <button class="tab-expand" onclick={alternarModo} disabled={expandBlocked}
-    aria-label={expandBlocked ? 'Barra recolhida no Quadro/Canvas' : rotuloModo}
+    aria-label={expandBlocked ? m.sessao_barra_recolhida_quadro() : rotuloModo}
     aria-pressed={navMode.mode === 'tabs'}
-    title={expandBlocked ? 'Quadro/Canvas recolhe a barra — expanda ao sair' : rotuloModo}>
+    title={expandBlocked ? m.sessao_quadro_recolhe() : rotuloModo}>
     <HangarMark size={18} />
   </button>
 
@@ -141,7 +141,7 @@ import * as m from '../paraglide/messages';
       {@const active = key === currentKey}
       {@const badge = planBadge(tab.session)}
       {@const stateName = rotuloEstado(tab.session.state)}
-      {@const plano = badge ? ` · plano ${Math.round(badge.pct)}%${badge.complete ? ', concluído' : ''}` : ''}
+      {@const plano = badge ? `${m.sessao_plano_pct({ n: Math.round(badge.pct) })}${badge.complete ? m.sessao_concluido() : ''}` : ''}
       <button class="tab" class:boundary={tab.boundary} class:active
         role="tab" aria-selected={active}
         aria-label={`${tab.session.name} · ${stateName}${plano}`}
@@ -168,7 +168,7 @@ import * as m from '../paraglide/messages';
 
   {#if model.offlineLabels.length > 0}
     <span class="tab-offline" title={model.offlineLabels.join(', ')}
-      aria-label={`${model.offlineLabels.length} servidor(es) offline: ${model.offlineLabels.join(', ')}`}>
+      aria-label={m.tabs_servidores_offline({ n: model.offlineLabels.length, lista: model.offlineLabels.join(', ') })}>
       ⚠ {model.offlineLabels.length} offline
     </span>
   {/if}
@@ -180,8 +180,8 @@ import * as m from '../paraglide/messages';
        as sessões por servidor. Tirar a engrenagem de lá sem trazer o ponto perderia essa metade da
        informação sem ninguém notar. -->
   <button class="tab-action tab-config" onclick={onOpenConfig}
-    aria-label={`Configurações · ${servidorAtivo?.label ?? 'servidor'}`}
-    title={`Configurações · ${servidorAtivo?.label ?? 'servidor'}`}>
+    aria-label={m.tabs_config_servidor({ n: servidorAtivo?.label ?? m.tabs_servidor() })}
+    title={m.tabs_config_servidor({ n: servidorAtivo?.label ?? m.tabs_servidor() })}>
     ⚙
     <span class="tab-srv-dot" style:background={corDoServidor} aria-hidden="true"></span>
   </button>
@@ -190,10 +190,10 @@ import * as m from '../paraglide/messages';
        Sem painel montado: desabilitado com tooltip (decisão do usuário). -->
   <button class="tab-action tab-ctx" class:aberto={!ctxPanel.recolhido}
     onclick={alternarCtxPanel} disabled={!ctxDisponivel}
-    aria-label={!ctxDisponivel ? 'Sem painel de contexto aberto'
-      : (ctxPanel.recolhido ? 'Expandir painel de contexto' : 'Recolher painel de contexto')}
-    title={!ctxDisponivel ? 'Sem painel de contexto aberto'
-      : (ctxPanel.recolhido ? 'Expandir painel de contexto' : 'Recolher painel de contexto')}>
+    aria-label={!ctxDisponivel ? m.ctx_sem_painel()
+      : (ctxPanel.recolhido ? m.ctx_expandir_painel() : m.ctx_recolher_painel())}
+    title={!ctxDisponivel ? m.ctx_sem_painel()
+      : (ctxPanel.recolhido ? m.ctx_expandir_painel() : m.ctx_recolher_painel())}>
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
       <rect x="3" y="4" width="18" height="16" rx="2"/>
       <line x1="9" y1="4" x2="9" y2="20"/>

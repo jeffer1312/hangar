@@ -10,6 +10,7 @@ import { sidebarPin } from '../lib/sidebarPin.svelte';
 import { sidebarBridge } from '../lib/sidebarBridge';
 import { ctxPanel } from '../lib/ctxPanel.svelte';
 import { navMode } from '../lib/navMode.svelte';
+import { overwriteGetLocale } from '../paraglide/runtime';
 
 // Store REATIVO (fixture .svelte.ts): o $derived do SessionTabs re-computa quando o modelo muda —
 // necessário pro teste do foco pós-rename esperar o reflexo do SSE. Mutar via fixtureByServer.
@@ -46,6 +47,7 @@ function comSessao(nome: string) {
 }
 
 beforeEach(() => {
+  overwriteGetLocale(() => 'pt');   // rótulos/aria-labels da barra são mensagens agora
   sidebarPin.setForced(null);
   sidebarPin.setUser(false);
   vi.mocked(planBadge).mockReturnValue(null);   // sem plano por padrão (filete ausente)

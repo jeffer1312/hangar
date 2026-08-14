@@ -13,7 +13,7 @@
   // Rotulos CURTOS de proposito: a coluna tem 248px por padrao, e "Conversa" + "Quadro" + "Canvas"
   // + o botao de busca nao cabem sem cortar palavra no meio. O nome longo vive no title.
   const items: { id: WorkspaceView; label: string; title: string }[] = [
-    { id: 'chat', label: m.shell_conversa(), title: m.shell_conversa() },
+    { id: 'chat', label: m.shell_chat_curto(), title: m.shell_conversa() },
     { id: 'board', label: m.shell_quadro(), title: m.shell_quadro() },
     { id: 'canvas', label: m.shell_canvas(), title: m.shell_canvas() },
   ];
@@ -38,7 +38,7 @@
     class="command-button"
     onclick={onOpenCommand}
     aria-label={m.shell_abrir_busca()}
-    title="Busca e comandos (Ctrl ou ⌘ + K)"
+    title={m.shell_busca_comandos()}
   >
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="2" stroke-linecap="round" aria-hidden="true">

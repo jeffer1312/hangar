@@ -26,7 +26,7 @@ export interface SearchableWorkspaceItem {
   title: string;
   detail: string;
   keywords: string[];
-  group: WorkspaceActionGroup | 'Sessões';
+  group: WorkspaceActionGroup;
   disabled?: boolean;
 }
 
@@ -38,7 +38,7 @@ export interface WorkspaceActionItem extends SearchableWorkspaceItem {
 export interface WorkspaceSessionItem extends SearchableWorkspaceItem {
   kind: 'session';
   session: AggSession;
-  group: 'Sessões';
+  group: WorkspaceActionGroup;
 }
 
 export type PaletteItem = WorkspaceActionItem | WorkspaceSessionItem;
@@ -92,8 +92,8 @@ export function workspaceSessionItems(rows: AggSession[]): WorkspaceSessionItem[
     kind: 'session',
     session,
     title: session.name,
-    detail: `${session.serverLabel} · ${session.cwd ?? 'sem diretório'}`,
+    detail: `${session.serverLabel} · ${session.cwd ?? m.paleta_sem_diretorio()}`,
     keywords: [session.serverId, session.serverLabel, session.cwd ?? ''],
-    group: 'Sessões',
+    group: m.paleta_grupo_sessoes(),
   }));
 }

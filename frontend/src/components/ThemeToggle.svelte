@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getThemePref, setThemePref, getTextoDoDesktop, type ThemePref } from '../lib/theme';
   import { buscarPaleta, aplicarPaleta, limparPaleta, paletaEmCache } from '../lib/desktopTheme';
+  import * as m from '../paraglide/messages';
 
   let { onEscolha }: { onEscolha?: (p: ThemePref) => void } = $props();
 
@@ -29,16 +30,16 @@
   });
 
   const opts = $derived<{ v: ThemePref; label: string; aria: string }[]>([
-    { v: 'system', label: 'Auto', aria: 'Seguir o sistema' },
-    { v: 'light', label: '☀', aria: 'Claro' },
-    { v: 'dark', label: '☾', aria: 'Escuro' },
+    { v: 'system', label: 'Auto', aria: m.config_idioma_sistema() },
+    { v: 'light', label: '☀', aria: m.config_tema_claro() },
+    { v: 'dark', label: '☾', aria: m.config_tema_escuro() },
     ...(temPaleta
-      ? [{ v: 'desktop' as ThemePref, label: 'Desktop', aria: 'Usar as cores do papel de parede' }]
+      ? [{ v: 'desktop' as ThemePref, label: 'Desktop', aria: m.config_tema_desktop() }]
       : []),
   ]);
 </script>
 
-<div class="tt" role="group" aria-label="Tema">
+<div class="tt" role="group" aria-label={m.config_tema_curto()}>
   {#each opts as o (o.v)}
     <button
       class="tt-opt"

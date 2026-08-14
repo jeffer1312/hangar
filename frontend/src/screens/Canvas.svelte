@@ -416,7 +416,7 @@ import * as m from '../paraglide/messages';
                 title={m.board_reunir_membros()}>⇱</button>
         <button onclick={() => toggleCollapse(f.gid)} title={m.board_colapsar_grupo()}>▾</button>
         <button onclick={() => (focusGid = focusGid === f.gid ? null : f.gid)}
-                title="Ver só este grupo (esconde o resto)">◎</button>
+                title={m.board_ver_so_grupo()}>◎</button>
       </div>
     {/each}
     <!-- Grupo colapsado: um card compacto no lugar dos membros. -->
@@ -426,12 +426,12 @@ import * as m from '../paraglide/messages';
                 title={m.board_expandir_grupo()}>
           ▸ 🤝 {g.label ?? g.members.map((m) => m.name).join(' · ')}
         </button>
-        {#each g.members as m (rowKey(m))}
-          <button class="cv-gcard-row" onclick={() => onOpenSession(m.name, m.serverId)}
-                  title="Abrir chat de {m.name}">
-            <span class="cv-chip-dot" style="background: {serverColor(m.serverId)}" aria-hidden="true"></span>
-            <span class="cv-gcard-name">{m.name}</span>
-            <span class="cv-gcard-state" data-state={m.state}>{m.state === 'awaiting_input' ? 'você' : m.state === 'working' ? 'exec' : 'pronto'}</span>
+        {#each g.members as membro (rowKey(membro))}
+          <button class="cv-gcard-row" onclick={() => onOpenSession(membro.name, membro.serverId)}
+                  title={m.board_abrir_chat_de({ n: membro.name })}>
+            <span class="cv-chip-dot" style="background: {serverColor(membro.serverId)}" aria-hidden="true"></span>
+            <span class="cv-gcard-name">{membro.name}</span>
+            <span class="cv-gcard-state" data-state={membro.state}>{membro.state === 'awaiting_input' ? m.estado_voce() : membro.state === 'working' ? m.estado_exec() : m.estado_pronto()}</span>
           </button>
         {/each}
       </div>

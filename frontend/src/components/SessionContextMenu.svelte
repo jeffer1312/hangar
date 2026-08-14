@@ -41,7 +41,7 @@ import * as m from '../paraglide/messages';
     try {
       await withServer(serverId, () => setSessionMute(name, next));
       onFlash(next ? m.ctx_notif_silenciadas() : m.ctx_notif_religadas());
-    } catch (e) { onFlash(`silenciar: ${errMsg(e)}`); }
+    } catch (e) { onFlash(m.ctx_flash_silenciar({ n: errMsg(e) })); }
   }
 
   // Submenu "Trocar branch" (2a pagina do menu, evita flyout). branchView != null = mostrando a lista.
@@ -55,7 +55,7 @@ import * as m from '../paraglide/messages';
       branchView = { list: info.branches, current: info.current, dirty: info.dirty ?? false };
     } catch (e) {
       branchView = null;
-      onFlash(`branches: ${errMsg(e)}`);
+      onFlash(m.ctx_flash_branches({ n: errMsg(e) }));
     } finally {
       branchLoading = false;
     }
@@ -82,9 +82,9 @@ import * as m from '../paraglide/messages';
     chainBusy = true;
     try {
       await withServer(serverId, () => setThenLink(name, target, text));
-      onFlash(`encadeado → ${target}`);
+      onFlash(m.ctx_flash_encadeado({ n: target }));
     } catch (e) {
-      onFlash(`encadear: ${errMsg(e)}`);
+      onFlash(m.ctx_flash_encadear({ n: errMsg(e) }));
     } finally {
       chainBusy = false;
       onClose();
@@ -96,7 +96,7 @@ import * as m from '../paraglide/messages';
       await withServer(serverId, () => clearThenLink(name));
       onFlash(m.ctx_vinculo_removido());
     } catch (e) {
-      onFlash(`remover vínculo: ${errMsg(e)}`);
+      onFlash(m.ctx_flash_remover_vinculo({ n: errMsg(e) }));
     }
   }
 
@@ -104,15 +104,15 @@ import * as m from '../paraglide/messages';
   async function doOpenEditor() {
     onClose();
     try { await withServer(serverId, () => openEditor(name)); }
-    catch (e) { onFlash(`abrir editor: ${errMsg(e)}`); }   // 404 = backend desatualizado; 500 = CP_EDITOR/DISPLAY
+    catch (e) { onFlash(m.ctx_flash_abrir_editor({ n: errMsg(e) })); }   // 404 = backend desatualizado; 500 = CP_EDITOR/DISPLAY
   }
   async function doGitPull() {
     onClose();
-    onFlash('git pull…');
+    onFlash(m.ctx_flash_git_pull());
     try {
       const r = await withServer(serverId, () => gitAction(name, 'pull'));
-      onFlash(r.output.trim().split('\n')[0] || 'pull ok');
-    } catch (e) { onFlash(`git pull: ${errMsg(e)}`); }
+      onFlash(r.output.trim().split('\n')[0] || m.ctx_flash_pull_ok());
+    } catch (e) { onFlash(m.ctx_flash_git_pull_erro({ n: errMsg(e) })); }
   }
 </script>
 
@@ -123,7 +123,7 @@ import * as m from '../paraglide/messages';
     <button type="button" class="ctx-back" onclick={() => (branchView = null)}>‹ {m.ctx_trocar_branch()}</button>
     <div class="ctx-sep"></div>
     {#if branchLoading}
-      <div class="ctx-info">carregando…</div>
+      <div class="ctx-info">{m.board_carregando()}</div>
     {:else if branchView.list.length}
       <div class="ctx-scroll">
         {#each branchView.list as b (b)}
@@ -136,7 +136,7 @@ import * as m from '../paraglide/messages';
       <div class="ctx-info">{m.ctx_sem_branches()}</div>
     {/if}
   {:else if chainView}
-    <button type="button" class="ctx-back" onclick={() => (chainView = null)}>‹ Quando terminar, enviar p/</button>
+    <button type="button" class="ctx-back" onclick={() => (chainView = null)}>{m.sessao_chain_voltar()}</button>
     <div class="ctx-sep"></div>
     {#if chainCandidates.length}
       <div class="ctx-scroll">
@@ -173,7 +173,7 @@ import * as m from '../paraglide/messages';
   {:else}
     <button type="button" role="menuitem" onclick={onRename}>{m.ctx_renomear()}</button>
     <button type="button" role="menuitem" onclick={toggleMute}>
-      {menuMuted ? 'Reativar notificações' : 'Silenciar notificações'}
+      {menuMuted ? m.ctx_reativar_notif() : m.ctx_silenciar_notif()}
     </button>
     {#if cwd}
       <button type="button" role="menuitem" onclick={copyCwd}>{m.ctx_copiar_cwd()}</button>
@@ -186,7 +186,7 @@ import * as m from '../paraglide/messages';
     {/if}
     <div class="ctx-sep"></div>
     <button type="button" role="menuitem" onclick={openChain}>
-      {thenTarget ? `Encadeado → ${thenTarget}` : 'Quando terminar, enviar p/…'}<span class="ctx-more">›</span>
+      {thenTarget ? m.sessao_chain_encadeado({ n: thenTarget }) : m.sessao_chain_enviar()}<span class="ctx-more">›</span>
     </button>
     <div class="ctx-sep"></div>
     <button type="button" role="menuitem" class="danger" onclick={onDelete}>{m.sessao_excluir_curto()}</button>

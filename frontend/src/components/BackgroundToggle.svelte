@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getBgPref, setBgPref, setBgImage, clearBgImage, getBgImage, getBgScrim, setBgScrim, getSurfaceSolid, setSurfaceSolid, isShell, type BgPref } from '../lib/background';
+  import * as m from '../paraglide/messages';
 
   interface Props {
     /** A escolha vive aqui dentro ($state proprio); quem precisa saber QUAL pref esta ativa agora
@@ -40,8 +41,8 @@
       const cota = (e instanceof DOMException && /quota/i.test(e.name))
         || (e instanceof Error && /grande demais/.test(e.message));
       erro = cota
-        ? 'não coube no armazenamento do navegador; tente uma imagem menor'
-        : 'não consegui ler essa imagem (formato não suportado neste navegador?)';
+        ? m.config_fundo_erro_cota()
+        : m.config_fundo_erro_leitura();
     }
   }
 
@@ -56,18 +57,18 @@
   // janela, e oferecer a opção deixaria a tela sem fundo nenhum. getBgPref() também derruba
   // 'desktop' pra 'flat' se a preferência sobreviver num perfil que não é do shell.
   const opts: { v: BgPref; label: string; aria: string }[] = [
-    { v: 'flat', label: 'Liso', aria: 'Fundo chapado' },
-    { v: 'texture', label: 'Textura', aria: 'Fundo com grão e gradiente' },
-    { v: 'aurora', label: 'Luz', aria: 'Fundo com grão, gradiente e uma luz no canto' },
-    { v: 'image', label: 'Imagem', aria: 'Usar uma imagem de fundo' },
+    { v: 'flat', label: m.config_fundo_liso(), aria: m.config_fundo_chapado() },
+    { v: 'texture', label: m.config_fundo_textura(), aria: m.config_fundo_grao() },
+    { v: 'aurora', label: m.config_fundo_luz(), aria: m.config_fundo_aurora() },
+    { v: 'image', label: m.config_fundo_imagem(), aria: m.config_fundo_usar_imagem() },
     ...(isShell()
-      ? [{ v: 'desktop' as BgPref, label: 'Desktop', aria: 'Deixar a área de trabalho aparecer atrás' }]
+      ? [{ v: 'desktop' as BgPref, label: 'Desktop', aria: m.config_fundo_desktop() }]
       : []),
   ];
 </script>
 
 <div class="bg-wrap">
-  <div class="bg-toggle" role="group" aria-label="Fundo">
+  <div class="bg-toggle" role="group" aria-label={m.config_fundo_curto()}>
     {#each opts as o (o.v)}
       <button
         class="bg-opt"
@@ -82,34 +83,34 @@
 
   <!-- O navegador nao enxerga o wallpaper do sistema (o terminal so consegue por ser translucido),
        entao a imagem e escolhida aqui e fica guardada neste dispositivo. -->
-  <input bind:this={arquivoEl} type="file" accept="image/*" class="bg-file" onchange={escolher} aria-label="Escolher imagem de fundo" />
+  <input bind:this={arquivoEl} type="file" accept="image/*" class="bg-file" onchange={escolher} aria-label={m.config_fundo_escolher()} />
   {#if (pref === 'image' && temImagem) || pref === 'desktop'}
     <!-- Transparência: o equivalente ao que o compositor faz no terminal. Aplica ao arrastar (sem
          confirmar), porque a escolha só se faz olhando. -->
     <label class="bg-scrim">
-      <span>Transparência</span>
+      <span>{m.config_fundo_transparencia()}</span>
       <input type="range" min="0" max="100" step="1"
              value={scrim}
              oninput={(e) => { scrim = +(e.currentTarget as HTMLInputElement).value; setBgScrim(scrim); }}
-             aria-label="Transparência do fundo" />
+             aria-label={m.config_fundo_transparencia_detalhe()} />
       <em>{scrim}</em>
     </label>
     <!-- Solidez: a Transparência acima governa o painel; esta governa as CAIXAS de dentro dele
          (chip, campo, card, bloco de saída). Duas camadas, dois controles — no 0 as caixas somem no
          vidro e a tela vira uma superfície só; no 100 voltam a ser recorte chapado sobre a foto. -->
     <label class="bg-scrim">
-      <span>Solidez das caixas</span>
+      <span>{m.config_fundo_solidez()}</span>
       <input type="range" min="0" max="100" step="1"
              value={solidez}
              oninput={(e) => { solidez = +(e.currentTarget as HTMLInputElement).value; setSurfaceSolid(solidez); }}
-             aria-label="Solidez das caixas sobre o fundo" />
+             aria-label={m.config_fundo_solidez_detalhe()} />
       <em>{solidez}</em>
     </label>
   {/if}
   {#if pref === 'image' || temImagem}
     <div class="bg-img-row">
-      <button class="bg-link" onclick={() => arquivoEl?.click()}>trocar imagem</button>
-      {#if temImagem}<button class="bg-link danger" onclick={remover}>remover</button>{/if}
+      <button class="bg-link" onclick={() => arquivoEl?.click()}>{m.config_fundo_trocar()}</button>
+      {#if temImagem}<button class="bg-link danger" onclick={remover}>{m.config_fundo_remover()}</button>{/if}
     </div>
   {/if}
   {#if erro}<p class="bg-erro">⚠ {erro}</p>{/if}

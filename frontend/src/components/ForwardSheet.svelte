@@ -41,12 +41,12 @@ import * as m from '../paraglide/messages';
       setTimeout(onClose, 700); // deixa o ✓ visivel um instante
     } catch {
       sentTo = null;
-      error = `Falhou o envio pra ${target}.`;
+      error = m.forward_falhou_envio({ n: target });
     }
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel="Encaminhar pra outra sessão">
+<BottomSheet {open} {onClose} ariaLabel={m.forward_para_outra()}>
   <div class="fwd">
     <h2 class="title">{m.forward_titulo()}</h2>
     <p class="excerpt">{text.length > 160 ? text.slice(0, 160) + '…' : text}</p>
@@ -61,7 +61,7 @@ import * as m from '../paraglide/messages';
       {:else}
         {#each sessions as s (s.name)}
           <button class="row" onclick={() => forward(s.name)} disabled={sentTo != null}
-                  aria-label={`Encaminhar pra ${s.name} — ${rotuloEstado(s.state)}`}>
+                  aria-label={m.forward_encaminhar_pra({ nome: s.name, estado: rotuloEstado(s.state) })}>
             <span class="dot" style="background: {stateColors[s.state]};" aria-hidden="true"></span>
             <span class="row-main">
               <span class="row-name">{s.name}</span>

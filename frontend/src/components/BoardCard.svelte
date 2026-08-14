@@ -384,13 +384,13 @@ import * as m from '../paraglide/messages';
       {#if provTag}
         <!-- Identidade da sessão, não estado: primeiro chip, tinta neutra — o card já usa cor pro
              servidor, pro estado e pro grupo pareado. -->
-        <span class="prov-chip" title={`Sessão ${provTag}`}><span class="sr-only">Sessão&nbsp;</span>{provTag}</span>
+        <span class="prov-chip" title={`${m.sessao_grupo()} ${provTag}`}><span class="sr-only">{m.sessao_grupo()}&nbsp;</span>{provTag}</span>
       {/if}
       {#if session.branch}<span class="bc-branch">⎇ {session.branch}</span>{/if}
       {#if session.engine}
         <!-- Sem isto nada no card distingue uma sessão de motor de uma da conta Anthropic. NÃO
              mostramos custo aqui: o preço que o Claude Code calcula é tabela Anthropic e mentiria. -->
-        <span class="engine-chip" title={`Motor: ${session.engine}`}>⚙ {session.engine}</span>
+        <span class="engine-chip" title={m.sessao_motor({ n: session.engine })}>⚙ {session.engine}</span>
       {/if}
       {#if loopChip}
         <!-- Loop runner (Task 11): mesmo formato do bc-chip, cor por tone (LOOP_TONE_COLOR). -->
@@ -413,13 +413,13 @@ import * as m from '../paraglide/messages';
           <button class="bc-chip bc-chip-btn"
                   style="background: color-mix(in srgb, {pc} 16%, transparent); color: {pc};"
                   onclick={(e) => { e.stopPropagation(); onGatherPair?.(); }}
-                  title={'pareada com ' + session.pair_peers.join(', ') + ' — clicar reúne o grupo aqui'}>
+                  title={m.board_pareada_com_clicar({ n: session.pair_peers.join(', ') })}>
             🤝 {session.pair_peers.join(', ')}
           </button>
         {:else}
           <span class="bc-chip"
                 style="background: color-mix(in srgb, {pc} 16%, transparent); color: {pc};"
-                title={'pareada com ' + session.pair_peers.join(', ')}>🤝 {session.pair_peers.join(', ')}</span>
+                title={m.board_pareada_com({ n: session.pair_peers.join(', ') })}>🤝 {session.pair_peers.join(', ')}</span>
         {/if}
       {/if}
       {#if meta?.costUsd != null}<span title={m.board_custo_sessao()}>💵 ${meta.costUsd.toFixed(2)}</span>{/if}
@@ -432,7 +432,7 @@ import * as m from '../paraglide/messages';
     <!-- "carregando…" só quando NÃO há o que mostrar: o card remonta a cada troca de coluna e os ecos
          içados sobrevivem — cair no loading por cima deles reintroduziria o sumiço da msg. -->
     {#if loading && visible.length === 0 && pending.length === 0}
-      <p class="bc-empty">carregando…</p>
+      <p class="bc-empty">{m.board_carregando()}</p>
     {:else}
       {#if loadingMore}<p class="bc-empty">{m.board_carregando_mais()}</p>{/if}
       <!-- Descoberta explícita da paginação quando há mais história e o corpo não rola sozinho. -->
@@ -454,7 +454,7 @@ import * as m from '../paraglide/messages';
                  (chip 📟/📣 + tinta accent), versão compacta — sem isto o card mostrava o
                  prefixo cru como se fosse msg tua. -->
             <div class="bc-user bc-peer" class:bc-peer-group={peer.scope === 'group'}>
-              <span class="bc-peer-chip">{peer.scope === 'group' ? `📣 grupo · ${peer.from}` : `📟 de: ${peer.from}`}</span>
+              <span class="bc-peer-chip">{peer.scope === 'group' ? m.board_peer_grupo({ n: peer.from }) : m.board_peer_de({ n: peer.from })}</span>
               <!-- Em <p> próprio (padrão do UserBubble): {peer.text} solto como irmão do span
                    herdava o whitespace do template como espaço inicial (pre-wrap o exibe). -->
               <p class="bc-peer-text">{peer.text}</p>

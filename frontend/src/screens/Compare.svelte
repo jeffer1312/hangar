@@ -132,7 +132,7 @@ import * as m from '../paraglide/messages';
 
 <NavBar
   title={m.lista_comparar()}
-  subtitle={`${ids.length} ${ids.length === 1 ? 'sessão' : 'sessões'}`}
+  subtitle={`${ids.length} ${ids.length === 1 ? m.sessao_singular() : m.lista_sessoes_plural()}`}
   showBack={true}
   onBack={onBack}
 />
@@ -147,7 +147,7 @@ import * as m from '../paraglide/messages';
         class="compare-card"
         disabled={c.invalidServer}
         onclick={() => onOpenSession(c.name, c.serverId)}
-        aria-label={`Abrir ${c.name}`}
+        aria-label={m.compare_abrir({ n: c.name })}
       >
         <div class="cc-head">
           <span class="cc-dot" style="background: {c.color};" aria-hidden="true"></span>

@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import DesktopSessionContext from './DesktopSessionContext.svelte';
 import { ctxPanel } from '../lib/ctxPanel.svelte';
+import { overwriteGetLocale } from '../paraglide/runtime';
 
 // Stubs dos componentes internos pesados (PlanRing/PlanPanel renderizam SVG/estado de plano).
 vi.mock('./PlanRing.svelte', () => ({ default: class { $destroy() {} } }));
@@ -26,6 +27,7 @@ function montar(toggleExterno: boolean) {
 }
 
 beforeEach(() => {
+  overwriteGetLocale(() => 'pt');   // textos dos painéis são mensagens agora
   ctxPanel.recolhido = false;
   document.body.innerHTML = '';
 });

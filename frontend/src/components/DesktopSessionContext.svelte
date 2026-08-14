@@ -117,8 +117,8 @@ import * as m from '../paraglide/messages';
        sem botão duplicado. Sem a barra, o botão do topo é a porta acessível dos dois sentidos. -->
   {#if !toggleExterno}
   <button class="ctx-fold" onclick={alternarCtxPanel}
-          aria-label={ctxPanel.recolhido ? 'Expandir contexto' : 'Recolher contexto'}
-          title={ctxPanel.recolhido ? 'Expandir' : 'Recolher'}>
+          aria-label={ctxPanel.recolhido ? m.ctx_expandir_contexto() : m.ctx_recolher_contexto()}
+          title={ctxPanel.recolhido ? m.sessao_expandir() : m.sessao_recolher()}>
     <!-- MESMO ícone do recolher da barra esquerda: os dois fazem a mesma coisa em lados opostos,
          então usar desenhos diferentes obrigava a reaprender o controle de cada lado. -->
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -144,7 +144,7 @@ import * as m from '../paraglide/messages';
     <div class="header-right">
       <span class="state-chip header-state" style="color: {stateColors[state]}">{rotuloEstado(state)}</span>
       {#if loopLabel}
-        <button type="button" class="loop-chip" style="color: {loopColor};" onclick={onLoopTap} aria-label="Loop da sessão: {loopLabel}">{loopLabel}</button>
+        <button type="button" class="loop-chip" style="color: {loopColor};" onclick={onLoopTap} aria-label={m.ctx_aria_loop({ n: loopLabel })}>{loopLabel}</button>
       {/if}
     </div>
   </header>
@@ -163,7 +163,7 @@ import * as m from '../paraglide/messages';
       {/if}
       {#if onOpenRun}
         <button class="ctx-action run-btn" class:running={runRunning} onclick={onOpenRun}
-                aria-label={runRunning ? 'Rodando (abrir)' : 'Rodar projeto'}>
+                aria-label={runRunning ? m.ctx_rodando_abrir() : m.ctx_rodar_projeto()}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             {#if runRunning}
               <rect x="6" y="6" width="12" height="12" rx="2" />
@@ -171,7 +171,7 @@ import * as m from '../paraglide/messages';
               <path d="M8 5v14l11-7z" />
             {/if}
           </svg>
-          <span>{runRunning ? 'Rodando' : 'Rodar'}</span>
+          <span>{runRunning ? m.ctx_rodando() : m.ctx_rodar()}</span>
         </button>
       {/if}
       {#if onOpenAttachments}
@@ -226,11 +226,11 @@ import * as m from '../paraglide/messages';
            coluna de leitura em lados opostos. -->
       <div class="metric-row">
         <span>
-          {#if status.ctxUsed != null && status.ctxTotal}{ctxWindow(status.ctxUsed)} de {ctxWindow(status.ctxTotal)}{:else}{status.ctxTotal ? ctxWindow(status.ctxTotal) + ' tokens' : 'janela'}{/if}
+          {#if status.ctxUsed != null && status.ctxTotal}{ctxWindow(status.ctxUsed)} de {ctxWindow(status.ctxTotal)}{:else}{status.ctxTotal ? `${ctxWindow(status.ctxTotal)} ${m.ctx_tokens()}` : m.ctx_janela()}{/if}
         </span>
         <strong>{Math.round(status.ctxPct)}%</strong>
       </div>
-      <div class="progress tone-{ctxTone}" aria-label={`${Math.round(status.ctxPct)}% do contexto usado`}>
+      <div class="progress tone-{ctxTone}" aria-label={m.ctx_pct_usado({ n: Math.round(status.ctxPct) })}>
         <span style:width={`${status.ctxPct}%`}></span>
       </div>
       {#if status.turnIn != null || status.turnOut != null}
@@ -257,7 +257,7 @@ import * as m from '../paraglide/messages';
     {#if pairPeers?.length}
       {#if openGroup}
         <button type="button" class="sec-open" onclick={openGroup}
-                aria-label={soloPeer && onOpenPeerChat ? `Abrir a sessão ${soloPeer} num modal` : `Abrir o par: ${pairPeers.join(', ')}`}>
+                aria-label={soloPeer && onOpenPeerChat ? m.ctx_abrir_sessao_modal({ n: soloPeer }) : m.ctx_abrir_par({ n: pairPeers.join(', ') })}>
           <span class="sec-open-body">
             <strong>🤝 {pairPeers.join(' · ')}</strong>
             <p>{soloPeer && onOpenPeerChat ? m.ctx_abrir_conversa_dele() : `${pairPeers.length + 1} ${m.ctx_sessoes_pareadas()}`}</p>
@@ -295,7 +295,7 @@ import * as m from '../paraglide/messages';
   <section class="sec-break">
     <span class="section-label">{m.ctx_repositorio()}</span>
     {#if onOpenGit}
-      <button type="button" class="sec-open" onclick={onOpenGit} aria-label="Abrir o git de {status.repo}">
+      <button type="button" class="sec-open" onclick={onOpenGit} aria-label={m.ctx_abrir_git({ n: status.repo })}>
         <span class="sec-open-body">
           <strong class="mono">{status.repo}</strong>
           <p class="mono">{status.branch ?? m.ctx_sem_branch()}{status.dirty ? ` · ${m.ctx_alteracoes_locais()}` : ''}</p>
@@ -304,7 +304,7 @@ import * as m from '../paraglide/messages';
       </button>
     {:else}
       <strong class="mono">{status.repo}</strong>
-      <p class="mono">{status.branch ?? 'sem branch'}{status.dirty ? ' · alterações locais' : ''}</p>
+      <p class="mono">{status.branch ?? m.ctx_sem_branch()}{status.dirty ? ` · ${m.ctx_alteracoes_locais()}` : ''}</p>
     {/if}
   </section>
   {/if}

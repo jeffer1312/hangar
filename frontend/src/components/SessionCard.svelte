@@ -194,7 +194,7 @@ import * as m from '../paraglide/messages';
        faixa vermelha do Excluir. Sai junto do `inert`, que ja escondia do teclado/leitor. -->
   <div class="swipe-actions" class:oculta={offset === 0} inert={offset !== OPEN}>
     {#if session.cwd}
-      <button class="act git" onclick={() => { offset = 0; onGit?.(); }} aria-label="Git de {session.name}">
+      <button class="act git" onclick={() => { offset = 0; onGit?.(); }} aria-label={m.sessao_aria_git({ n: session.name })}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <line x1="6" y1="3" x2="6" y2="15"/>
           <circle cx="18" cy="6" r="3"/>
@@ -203,7 +203,7 @@ import * as m from '../paraglide/messages';
         </svg>
         <span>{m.sessao_git()}</span>
       </button>
-      <button class="act loop" onclick={() => { offset = 0; onLoop?.(); }} aria-label="Loop de {session.name}">
+      <button class="act loop" onclick={() => { offset = 0; onLoop?.(); }} aria-label={m.sessao_aria_loop({ n: session.name })}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="m17 2 4 4-4 4"/>
           <path d="M3 11v-1a4 4 0 0 1 4-4h14"/>
@@ -213,7 +213,7 @@ import * as m from '../paraglide/messages';
         <span>{m.sessao_loop_runner()}</span>
       </button>
     {/if}
-    <button class="act del" onclick={onDelete} aria-label="Excluir sessão {session.name}">
+    <button class="act del" onclick={onDelete} aria-label={m.sessao_aria_excluir_sessao({ n: session.name })}>
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <polyline points="3 6 5 6 21 6"/>
         <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
@@ -313,15 +313,15 @@ import * as m from '../paraglide/messages';
             <!-- Identidade, não estado: vem primeiro e em tinta neutra (nada de accent/warning, que
                  já falam "motor" e "erro" nesta mesma linha). "Sessão Pi" pro leitor de tela, senão
                  sairia um "Pi" solto entre os outros chips. -->
-            <span class="prov-chip" title={`Sessão ${provTag}`}><span class="sr-only">Sessão&nbsp;</span>{provTag}</span>
+            <span class="prov-chip" title={`${m.sessao_grupo()} ${provTag}`}><span class="sr-only">{m.sessao_grupo()}&nbsp;</span>{provTag}</span>
           {/if}
           {#if session.pair_peers?.length}
-            <span class="paired-chip" title={`Grupo com ${session.pair_peers.join(', ')}`}>🤝&nbsp;{session.pair_peers.length === 1 ? session.pair_peers[0] : session.pair_peers.length + 1}</span>
+            <span class="paired-chip" title={m.sessao_grupo_com({ n: session.pair_peers.join(', ') })}>🤝&nbsp;{session.pair_peers.length === 1 ? session.pair_peers[0] : session.pair_peers.length + 1}</span>
           {/if}
           {#if limited}
             <span
               class="limited-chip"
-              title={session.limit_reset ? `Limite de uso atingido — volta ${session.limit_reset}` : 'Limite de uso atingido'}
+              title={session.limit_reset ? m.sessao_limite_volta({ n: session.limit_reset }) : m.sessao_limite()}
             >⏳{#if session.limit_reset}&nbsp;{session.limit_reset}{/if}</span>
           {/if}
           {#if loopChip}
@@ -337,7 +337,7 @@ import * as m from '../paraglide/messages';
           {#if session.engine}
             <!-- Sem isto nada na lista distingue uma sessão de motor de uma da conta Anthropic. NÃO
                  mostramos custo aqui: o preço que o Claude Code calcula é tabela Anthropic e mentiria. -->
-            <span class="engine-chip" title={`Motor: ${session.engine}`}>⚙&nbsp;{session.engine}</span>
+            <span class="engine-chip" title={m.sessao_motor({ n: session.engine })}>⚙&nbsp;{session.engine}</span>
           {/if}
         </span>
       {/if}
@@ -352,7 +352,7 @@ import * as m from '../paraglide/messages';
           class="resume-btn"
           onpointerdown={(e) => e.stopPropagation()}
           onclick={(e) => { e.stopPropagation(); onResume?.(); }}
-        >↻ Retomar conversa</button>
+        >↻ {m.sessao_retomar()}</button>
       {/if}
     </div>
 
@@ -364,7 +364,7 @@ import * as m from '../paraglide/messages';
           class="state-chip"
           class:stalled
           style="color: {stateColors[session.state]}; background: {stateChipBg[session.state]};"
-          title={stalled ? 'Pode estar travada — sem atividade há um tempo' : undefined}
+          title={stalled ? m.sessao_travada() : undefined}
         >
           {rotuloEstado(session.state)}
         </span>
@@ -382,7 +382,7 @@ import * as m from '../paraglide/messages';
           inert={offset === OPEN}
           onpointerdown={(e) => e.stopPropagation()}
           onclick={(e) => { e.stopPropagation(); onGit?.(); }}
-          aria-label="Git de {session.name}"
+          aria-label={m.sessao_aria_git({ n: session.name })}
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <line x1="6" y1="3" x2="6" y2="15"/>
@@ -396,7 +396,7 @@ import * as m from '../paraglide/messages';
           inert={offset === OPEN}
           onpointerdown={(e) => e.stopPropagation()}
           onclick={(e) => { e.stopPropagation(); onLoop?.(); }}
-          aria-label="Loop de {session.name}"
+          aria-label={m.sessao_aria_loop({ n: session.name })}
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="m17 2 4 4-4 4"/>
@@ -411,7 +411,7 @@ import * as m from '../paraglide/messages';
         inert={offset === OPEN}
         onpointerdown={(e) => e.stopPropagation()}
         onclick={(e) => { e.stopPropagation(); onDelete(); }}
-        aria-label="Excluir sessão {session.name}"
+        aria-label={m.sessao_aria_excluir_sessao({ n: session.name })}
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <polyline points="3 6 5 6 21 6"/>
@@ -425,7 +425,7 @@ import * as m from '../paraglide/messages';
         class="chev"
         onpointerdown={(e) => e.stopPropagation()}
         onclick={(e) => { e.stopPropagation(); offset = offset === OPEN ? 0 : OPEN; }}
-        aria-label="Ações de {session.name}"
+        aria-label={m.sessao_aria_acoes({ n: session.name })}
         aria-expanded={offset === OPEN}
       >›</button>
     </div>

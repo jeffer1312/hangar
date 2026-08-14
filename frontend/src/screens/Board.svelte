@@ -124,7 +124,7 @@ import * as m from '../paraglide/messages';
             />
           {/each}
           {#if col.rows.length === 0}
-            <p class="col-empty">vazio</p>
+            <p class="col-empty">{m.board_vazio()}</p>
           {/if}
         </div>
       </section>

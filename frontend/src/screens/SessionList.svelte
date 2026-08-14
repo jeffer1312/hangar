@@ -379,7 +379,7 @@ import { intlLocale } from '../lib/locale';
       await deleteSession(s.name);
     } catch (e) {
       sessionsStore.unmarkDeleting(s.serverId, s.name);
-      showActionMsg(`excluir ${s.name}: ${errMsg(e)}`);
+      showActionMsg(m.lista_flash_excluir({ nome: s.name, erro: errMsg(e) }));
     }
     // No sucesso o SSE re-emite a lista sem a sessão e a faxina do store limpa a marca.
   }
@@ -559,7 +559,7 @@ import { intlLocale } from '../lib/locale';
       scanning = false;
       showAddServer = true;
       addValidacao = true;
-      addError = 'QR inválido — use a URL de pareamento (http/https com ?token=).';
+      addError = m.lista_qr_invalido();
       return;
     }
     addValidacao = false;
@@ -676,14 +676,14 @@ import { intlLocale } from '../lib/locale';
                   class="group-head"
                   onclick={() => toggleGroup(g.id)}
                   aria-expanded={!collapsed.has(g.id)}
-                  aria-label={`${g.label}: ${g.sessions.length} ${g.sessions.length === 1 ? 'sessão' : 'sessões'}`}
+                  aria-label={`${g.label}: ${g.sessions.length} ${g.sessions.length === 1 ? m.sessao_singular() : m.lista_sessoes_plural()}`}
                 >
                   <span class="group-chevron" class:collapsed={collapsed.has(g.id)} aria-hidden="true">▾</span>
                   {#if g.color}<span class="group-dot" style="background: {g.color};" aria-hidden="true"></span>{/if}
                   <span class="group-label">{g.label}</span>
                   <span class="group-count">{g.sessions.length}</span>
                   {#if awaiting > 0}
-                    <span class="group-await">{awaiting} aguardando</span>
+                    <span class="group-await">{awaiting} {m.estado_aguardando()}</span>
                   {/if}
                 </button>
                 <!-- "enviar p/ todas" (feature #9): entra em modo seleção com o grupo inteiro marcado. -->
@@ -770,7 +770,7 @@ import { intlLocale } from '../lib/locale';
     <div class="broadcast-bar">
       <div class="broadcast-row">
         <button class="broadcast-cancel" onclick={toggleSelectMode} aria-label={m.lista_cancelar_selecao()}>×</button>
-        <span class="broadcast-count">{selected.size} selecionada{selected.size === 1 ? '' : 's'}</span>
+        <span class="broadcast-count">{selected.size === 1 ? m.lista_selecionada_1() : m.lista_selecionadas({ n: selected.size })}</span>
         <button class="broadcast-compare" onclick={openCompare} disabled={compareDisabled} aria-label={m.lista_comparar_selecionadas()} title={m.lista_comparar()}>{m.lista_comparar()}</button>
       </div>
       {#if broadcastMsg}<p class="broadcast-msg">{broadcastMsg}</p>{/if}
@@ -884,7 +884,7 @@ import { intlLocale } from '../lib/locale';
   />
 
   <!-- Caso ambíguo do resume: várias sessões no mesmo cwd -> o usuário confirma QUAL conversa retomar. -->
-  <BottomSheet open={resumeSheet !== null} onClose={() => (resumeSheet = null)} ariaLabel="Retomar conversa">
+  <BottomSheet open={resumeSheet !== null} onClose={() => (resumeSheet = null)} ariaLabel={m.sessao_retomar()}>
     {#if resumeSheet}
       {@const sheet = resumeSheet}
       <div class="resume-sheet">
@@ -901,7 +901,7 @@ import { intlLocale } from '../lib/locale';
                 disabled={c.in_use || resumeBusy === sheet.session.name}
                 onclick={() => handleResume(sheet.session, c.session_id)}
               >
-                <span class="resume-item-preview">{c.preview || '(sem prévia)'}</span>
+                <span class="resume-item-preview">{c.preview || m.sessao_sem_previa()}</span>
                 <span class="resume-item-meta">
                   {fmtWhen(c.mtime)}{#if c.in_use} {m.sessao_em_uso()}{/if}
                 </span>
@@ -971,10 +971,10 @@ import { intlLocale } from '../lib/locale';
     title={m.sessao_excluir()}
     message={confirmDel
       ? confirmDel.state === 'working'
-        ? `${confirmDel.name} está em execução — excluir encerra o processo do tmux e perde o que estiver rodando.`
+        ? m.lista_excluir_executando({ n: confirmDel.name })
         : confirmDel.name
       : null}
-    confirmLabel="Excluir"
+    confirmLabel={m.sessao_excluir_curto()}
     danger
     fallbackFocus={hamEl}
     onConfirm={doDelete}
@@ -984,8 +984,8 @@ import { intlLocale } from '../lib/locale';
   <ConfirmSheet
     open={confirmLogout}
     title={m.sessao_sair_app()}
-    message="Você vai precisar do token (QR ou digitado) pra entrar de novo — e ele pode estar no PC."
-    confirmLabel="Sair"
+    message={m.lista_token_necessario()}
+    confirmLabel={m.sessao_sair_curto()}
     danger
     fallbackFocus={hamEl}
     onConfirm={() => { confirmLogout = false; handleLogout(); }}
@@ -997,10 +997,10 @@ import { intlLocale } from '../lib/locale';
     title={m.sessao_remover_servidor()}
     message={confirmSrv
       ? servers.length === 1
-        ? `${confirmSrv.label} é o único servidor — remover desconecta o app e o pareamento precisa ser refeito (QR ou token no PC).`
+        ? m.lista_remover_unico({ n: confirmSrv.label })
         : confirmSrv.label
       : null}
-    confirmLabel="Remover"
+    confirmLabel={m.lista_remover()}
     danger
     fallbackFocus={hamEl}
     onConfirm={doDropServer}

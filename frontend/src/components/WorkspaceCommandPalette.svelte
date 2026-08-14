@@ -1,6 +1,7 @@
 <script lang="ts">
   import ModalDialog from './ModalDialog.svelte';
   import type { AggSession } from '../lib/types';
+  import * as m from '../paraglide/messages';
   import {
     filterWorkspaceItems,
     workspaceSessionItems,
@@ -101,8 +102,8 @@
           bind:this={searchInput}
           bind:value={query}
           oninput={() => (selected = 0)}
-          placeholder="Ir para uma sessão ou visualização…"
-          aria-label="Buscar sessão ou comando"
+          placeholder={m.paleta_placeholder()}
+          aria-label={m.paleta_buscar_aria()}
           aria-controls="workspace-command-results"
           aria-activedescendant={items[selected]?.key}
           autocomplete="off"
@@ -141,7 +142,7 @@
                 <span class="result-detail">{item.detail}</span>
               </span>
               {#if item.kind === 'action' && item.action.id === `view:${view}`}
-                <span class="current">atual</span>
+                <span class="current">{m.switcher_atual()}</span>
               {:else if item.kind === 'session' && item.session.state === 'awaiting_input'}
                 <span class="attention">aguardando</span>
               {:else if item.kind === 'action' && item.action.shortcut}
@@ -155,8 +156,8 @@
       </div>
 
       <footer>
-        <span><kbd>↑</kbd><kbd>↓</kbd> navegar</span>
-        <span><kbd>↵</kbd> abrir</span>
+        <span><kbd>↑</kbd><kbd>↓</kbd> {m.paleta_navegar()}</span>
+        <span><kbd>↵</kbd> {m.paleta_abrir()}</span>
       </footer>
   </ModalDialog>
 {/if}

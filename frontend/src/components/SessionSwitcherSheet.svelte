@@ -223,19 +223,19 @@ import * as m from '../paraglide/messages';
     bind:value={query}
     bind:this={searchEl}
     onkeydown={onKeydown}
-    placeholder={mode === 'search' ? 'Buscar nas conversas' : 'Buscar sessão'}
+    placeholder={mode === 'search' ? m.switcher_buscar_conversas() : m.switcher_buscar_sessao()}
     autocomplete="off"
     autocorrect="off"
     autocapitalize="off"
     spellcheck={false}
-    aria-label={mode === 'search' ? 'Buscar nas conversas' : 'Buscar sessão'}
+    aria-label={mode === 'search' ? m.switcher_buscar_conversas() : m.switcher_buscar_sessao()}
   />
 
   {#if mode === 'search'}
     {#if query.trim()}
       <!-- RAG lexical: pergunta em linguagem natural -> claude responde onde o assunto apareceu. -->
       <button class="ask-btn" onclick={askAI} disabled={asking}>
-        {asking ? 'Perguntando…' : '✦ Perguntar: onde falei sobre isso?'}
+        {asking ? m.switcher_perguntando() : m.switcher_perguntar()}
       </button>
     {/if}
     {#if askErr}<p class="ask-err" role="alert">{askErr}</p>{/if}
@@ -249,7 +249,7 @@ import * as m from '../paraglide/messages';
               <span class="hit-meta">
                 <span class="hit-folder">{folderShort(h)}</span>
                 <span class="sep">·</span>
-                <span class:live={h.live}>{h.live ? 'ativa' : 'arquivo'}</span>
+                <span class:live={h.live}>{h.live ? m.switcher_ativa() : m.switcher_arquivo()}</span>
               </span>
             </span>
             <span class="chev" aria-hidden="true">›</span>
@@ -261,7 +261,7 @@ import * as m from '../paraglide/messages';
       {#if !query.trim()}
         <p class="empty">{m.busca_digite_todas()}</p>
       {:else if searching}
-        <p class="empty">Buscando…</p>
+        <p class="empty">{m.switcher_buscando()}</p>
       {:else if results.length === 0}
         <p class="empty">{m.busca_nenhum_resultado()}</p>
       {:else}
@@ -277,7 +277,7 @@ import * as m from '../paraglide/messages';
                 {/if}
                 <span class="hit-folder">{folderShort(h)}</span>
                 <span class="sep">·</span>
-                <span class:live={h.live}>{h.live ? 'ativa' : 'arquivo'}</span>
+                <span class:live={h.live}>{h.live ? m.switcher_ativa() : m.switcher_arquivo()}</span>
                 {#if h.mtime}<span class="sep">·</span><span>{relativeTime(h.mtime)}</span>{/if}
               </span>
             </span>
@@ -307,7 +307,7 @@ import * as m from '../paraglide/messages';
             {#if s.cwd}<span class="row-cwd">{s.cwd}</span>{/if}
           </span>
           {#if s.name === currentName}
-            <span class="badge-current">atual</span>
+            <span class="badge-current">{m.switcher_atual()}</span>
           {:else if s.last_activity}
             <span class="row-time">{relativeTime(s.last_activity)}</span>
           {/if}
