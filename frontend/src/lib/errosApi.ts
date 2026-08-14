@@ -11,6 +11,46 @@ import * as m from '../paraglide/messages';
 
 type Parametros = Record<string, unknown>;
 
+/** Forma do erro que o backend manda: {code, params, msg} (backend/app/mensagens.py). */
+export interface EnvelopeErro {
+  code: string;
+  params?: Parametros;
+  msg: string;
+}
+
+/**
+ * Resolve params aninhados: envelope {code, params, msg} ou {sessao, erro}; tambem arrays
+ * (avisos compostos); sem isto o Paraglide renderizaria [object Object] no template.
+ */
+function fmtParam(v: unknown): string {
+  if (Array.isArray(v)) return v.map(fmtParam).join('; ');
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    if (typeof o.code === 'string') {
+      return mensagemDeErro(o.code, (o.params ?? {}) as Parametros) ?? String(o.msg ?? o.code);
+    }
+    if (o.sessao !== undefined && o.erro !== undefined) {
+      return `${o.sessao}: ${fmtParam(o.erro)}`;
+    }
+    return JSON.stringify(v);
+  }
+  return v == null ? '' : String(v);
+}
+
+/**
+ * Formata um erro que pode ser string crua (endpoint antigo) OU envelope {code, params, msg}.
+ * Usado onde o backend manda erro no CORPO (não no `detail`): BroadcastResult.error e
+ * PairResult.warning. Retorna undefined quando não é nenhum dos dois (o chamador decide o fallback).
+ */
+export function formataErro(e: unknown): string | undefined {
+  if (typeof e === 'string') return e;
+  if (e && typeof e === 'object' && typeof (e as EnvelopeErro).code === 'string') {
+    const env = e as EnvelopeErro;
+    return mensagemDeErro(env.code, env.params ?? {}) ?? env.msg ?? env.code;
+  }
+  return undefined;
+}
+
 const ERROS: Record<string, (params: Parametros) => string> = {
   // /api/claude-configs — apagar conta recusado por alguma condicao da maquina
   erro_config_dirs_fixo: () => m.erro_config_dirs_fixo(),
@@ -39,6 +79,9 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   // /api/model-options e POST /api/sessions — catalogo do Pi falhou ou provider fora de escopo
   erro_pi_list_models: (p) => m.erro_pi_list_models({ erro: String(p.erro) }),
   erro_provider_invalido: () => m.erro_provider_invalido(),
+  // POST /api/sessions aceita claude/codex/pi/kimi — o texto generico nao pode orientar so
+  // claude/pi (contrato do erro_provider_invalido, que so vale pro /api/model-options)
+  erro_provider_sessao_invalido: () => m.erro_provider_sessao_invalido(),
 
   // /api/archive — arquivo inexistente, path invalido, motor errado no resume
   // (erro_imagem_nao_encontrada tambem e usado por /api/sessions/{name}/transcript-image)
@@ -90,7 +133,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   // Conflito: nome em uso, sessao viva, pane ocupado
   erro_nome_em_uso: () => m.erro_nome_em_uso(),
   erro_nome_invalido: () => m.erro_nome_invalido(),
-  erro_rename_falhou: () => m.erro_rename_falhou(),
+  sessao_falha_renomear: () => m.sessao_falha_renomear(),
   erro_encadeamento_proprio: () => m.erro_encadeamento_proprio(),
   erro_sessao_tmux_em_uso: (p) => m.erro_sessao_tmux_em_uso({ nome: String(p.nome) }),
   erro_shell_criacao_falhou: () => m.erro_shell_criacao_falhou(),
@@ -99,10 +142,22 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_initiator_invalido: () => m.erro_initiator_invalido(),
   erro_pareamento_cross_1_1: () => m.erro_pareamento_cross_1_1(),
   erro_pareamento_server_id_ausente: () => m.erro_pareamento_server_id_ausente(),
-  erro_pareamento_desfeito: (p) => m.erro_pareamento_desfeito({ nomes: String(p.nomes) }),
+  erro_pareamento_desfeito: (p) => m.erro_pareamento_desfeito({ avisos: fmtParam(p.avisos) }),
   erro_pareamento_nao_confirmado: (p) => m.erro_pareamento_nao_confirmado({ srv: String(p.srv), erro: String(p.erro) }),
-  erro_pareamento_rejeitado: (p) => m.erro_pareamento_rejeitado({ erro: String(p.erro) }),
-  erro_pareamento_aviso_falhou: (p) => m.erro_pareamento_aviso_falhou({ nome: String(p.nome), erro: String(p.erro) }),
+  erro_pareamento_rejeitado: (p) => m.erro_pareamento_rejeitado({ erro: fmtParam(p.erro) }),
+  erro_pareamento_aviso_falhou: (p) => m.erro_pareamento_aviso_falhou({ nome: String(p.nome), erro: fmtParam(p.erro) }),
+  erro_pareamento_aviso_parcial: (p) => m.erro_pareamento_aviso_parcial({ avisos: fmtParam(p.avisos) }),
+  erro_pareamento_aviso_local: (p) => m.erro_pareamento_aviso_local({ sessao: fmtParam(p.sessao), erro: fmtParam(p.erro) }),
+  erro_pareamento_aviso_unpair: (p) => m.erro_pareamento_aviso_unpair({ sessao: fmtParam(p.sessao), erro: fmtParam(p.erro) }),
+  erro_pareamento_grupo_falha: (p) => m.erro_pareamento_grupo_falha({ avisos: fmtParam(p.avisos) }),
+  erro_pareamento_saida_falhou: (p) => m.erro_pareamento_saida_falhou({ avisos: fmtParam(p.avisos) }),
+
+  // Envio: falhas fixas dos helpers _send_one/_send_one_codex, agora envelopadas
+  erro_envio_incompleto_limpo: () => m.erro_envio_incompleto_limpo(),
+  erro_envio_incompleto_composer: () => m.erro_envio_incompleto_composer(),
+  erro_fila_nao_digitada: () => m.erro_fila_nao_digitada(),
+  erro_fila_nao_entregue: () => m.erro_fila_nao_entregue(),
+  erro_envio_falhou_desconhecida: () => m.erro_envio_falhou_desconhecida(),
   erro_group_message_slash: () => m.erro_group_message_slash(),
   erro_sessao_sem_grupo: () => m.erro_sessao_sem_grupo(),
   erro_sessao_nao_pareada: () => m.erro_sessao_nao_pareada(),
@@ -152,7 +207,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_sem_pergunta_kimi: () => m.erro_sem_pergunta_kimi(),
   erro_sem_resposta: () => m.erro_sem_resposta(),
   erro_drive_sem_fallback: (p) => m.erro_drive_sem_fallback({ erro: String(p.erro) }),
-  erro_drive_fallback_falhou: (p) => m.erro_drive_fallback_falhou({ erro: String(p.erro) }),
+  erro_drive_fallback_falhou: (p) => m.erro_drive_fallback_falhou({ erro: fmtParam(p.erro) }),
   erro_catalogo_pi_indisponivel: () => m.erro_catalogo_pi_indisponivel(),
   erro_pi_recusou_troca: (p) => m.erro_pi_recusou_troca({ provider: String(p.provider), id: String(p.id), thinking: String(p.thinking) }),
 };

@@ -104,7 +104,9 @@ def test_input_deferred_com_fila_indisponivel_falha(api_client):
          patch("app.pqueue.PromptQueue.append", side_effect=OSError("No space left on device")):
         r = api_client.post("/api/sessions/cc/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 400
-    assert "nao foi digitado" in r.json()["detail"]
+    d = r.json()["detail"]
+    assert d["code"] == "erro_fila_nao_digitada"
+    assert "No space left" in d["params"]["erro"]   # a causa tecnica viaja no params, nao no texto
 
 
 def test_input_sent_com_fila_indisponivel_ainda_ok(api_client):
@@ -212,7 +214,7 @@ def test_input_partial_com_composer_limpo_diz_que_pode_reenviar(api_client, tmp_
     with patch("app.api.terminal.send_prompt", side_effect=fake_send_prompt):
         r = api_client.post("/api/sessions/cc/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 400
-    assert "limpo" in r.json()["detail"] and "reenviar" in r.json()["detail"]
+    assert r.json()["detail"]["code"] == "erro_envio_incompleto_limpo"
     assert not hasattr(terminal_input._ULTIMA_LIMPEZA, "limpou"), "a flag tem que ser apagada apos a leitura"
 
 
@@ -229,7 +231,7 @@ def test_input_partial_sem_composer_limpo_manda_conferir_terminal(api_client, tm
     with patch("app.api.terminal.send_prompt", side_effect=fake_send_prompt):
         r = api_client.post("/api/sessions/cc/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 400
-    assert "Confira o terminal" in r.json()["detail"]
+    assert r.json()["detail"]["code"] == "erro_envio_incompleto_composer"
     assert not hasattr(terminal_input._ULTIMA_LIMPEZA, "limpou")
 
 
@@ -391,7 +393,9 @@ def test_input_codex_pending_com_fila_indisponivel_falha(api_client):
          patch("app.pqueue.PromptQueue.append", side_effect=OSError("No space left on device")):
         r = api_client.post("/api/sessions/cx/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 400
-    assert "nao foi entregue" in r.json()["detail"]
+    d = r.json()["detail"]
+    assert d["code"] == "erro_fila_nao_entregue"
+    assert "No space left" in d["params"]["erro"]
     fake.send_prompt.assert_not_awaited()
 
 
@@ -421,7 +425,7 @@ def test_input_codex_deferred_sem_entry_falha(api_client):
          patch("app.pqueue.PromptQueue.append", side_effect=OSError("No space left on device")):
         r = api_client.post("/api/sessions/cx/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 400
-    assert "nao foi entregue" in r.json()["detail"]
+    assert r.json()["detail"]["code"] == "erro_fila_nao_entregue"
 
 
 def test_input_codex_deferred_com_entry_fica_pendente(api_client):
@@ -874,8 +878,21 @@ def test_create_rejects_unknown_provider(api_client):
         r = api_client.post("/api/sessions", headers=_h(),
                             json={"name": "x", "cwd": "/tmp", "provider": "gemini"})
     assert r.status_code == 400
+    # B3 do parecer task 11: provider fora da lista nao pode reusar o codigo do /api/model-options
+    # (que orienta so claude/pi) — a criacao aceita codex/kimi e o texto tem que ser generico.
+    assert r.json()["detail"]["code"] == "erro_provider_sessao_invalido"
     cr.assert_not_called()
     cc.assert_not_called()
+
+
+def test_rename_falha_usa_a_mesma_chave_da_sidebar(api_client):
+    # B2 do parecer task 11: a rota de rename nao pode ter chave propria duplicando a traducao
+    # que a Sidebar ja usa no fallback dela — o code e o contrato, os dois apontam pra mesma frase.
+    with patch("app.tmux.has_session", side_effect=lambda n: n == "cc"), \
+         patch("app.tmux.rename_session", return_value=False):
+        r = api_client.post("/api/sessions/cc/rename", headers=_h(), json={"new": "cx"})
+    assert r.status_code == 500
+    assert r.json()["detail"]["code"] == "sessao_falha_renomear"
 
 
 def test_create_codex_conflict_maps_to_409(api_client):

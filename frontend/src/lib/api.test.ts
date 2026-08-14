@@ -11,7 +11,7 @@ const store = new Map<string, string>();
 (globalThis as any).window = { location: { origin: 'https://app.test' } };
 
 const { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, isAbortError, transcribeFile } = await import('./api');
-const { mensagemDeErro } = await import('./errosApi');
+const { mensagemDeErro, formataErro } = await import('./errosApi');
 const { listServers, getActiveId } = await import('./auth');
 const server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
 
@@ -285,5 +285,45 @@ describe('transcribeFile', () => {
 
     await transcribeFile('sessao', file, {});
     expect(fetchMock.mock.calls[2][0]).toBe('https://a.test/api/sessions/sessao/transcribe');
+  });
+});
+
+describe('formataErro (Task 11 round 2: envelopes nos helpers de envio e avisos do pareamento)', () => {
+  it('string crua passa direto (endpoint antigo)', () => {
+    expect(formataErro('sessao nao encontrada')).toBe('sessao nao encontrada');
+  });
+
+  it('envelope traduz pelo code no idioma do app', () => {
+    overwriteGetLocale(() => 'en');
+    const e = { code: 'erro_terminal_aberto', params: {}, msg: 'Terminal aberto nesta sessao' };
+    expect(formataErro(e)).toBe('Terminal open in this session. Close the panel to reply here.');
+  });
+
+  it('envelope com code desconhecido cai no msg (rede)', () => {
+    overwriteGetLocale(() => 'en');
+    const e = { code: 'erro_desconhecido_futuro', params: {}, msg: 'texto legado cru' };
+    expect(formataErro(e)).toBe('texto legado cru');
+  });
+
+  it('erro aninhado em params.erro traduz pelo contrato (fallback do /answer)', () => {
+    overwriteGetLocale(() => 'en');
+    const interno = { code: 'erro_fila_nao_entregue', params: {}, msg: 'fila indisponivel' };
+    const t = mensagemDeErro('erro_drive_fallback_falhou', { erro: interno });
+    expect(t).toBe('drive failed and text fallback too: queue unavailable and the prompt was not delivered');
+  });
+
+  it('lista de avisos {sessao, erro} formata cada erro traduzido (pareamento)', () => {
+    overwriteGetLocale(() => 'pt');
+    const avisos = [
+      { sessao: 'me', erro: { code: 'erro_fila_nao_digitada', params: {}, msg: 'fila indisponivel' } },
+      { sessao: 'voce', erro: 'falha de rede' },
+    ];
+    const t = mensagemDeErro('erro_pareamento_grupo_falha', { avisos });
+    expect(t).toBe('falha em: me: fila indisponível e o prompt não foi digitado; voce: falha de rede');
+  });
+
+  it('não-envelope devolve undefined', () => {
+    expect(formataErro(undefined)).toBeUndefined();
+    expect(formataErro(42)).toBeUndefined();
   });
 });

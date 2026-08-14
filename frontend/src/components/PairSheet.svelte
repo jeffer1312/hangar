@@ -2,6 +2,7 @@
   import BottomSheet from './BottomSheet.svelte';
   import { renderMarkdown } from '../lib/markdown';
   import { getSessions, pairSession, unpairSession, getHistory, getPairContract } from '../lib/api';
+  import { formataErro } from '../lib/errosApi';
   import { rotuloEstado, stateColors, parsePeerMessage, relativeTime, encodeCompareIds } from '../lib/format';
   import { getActiveId } from '../lib/auth';
   import type { SessionInfo, State } from '../lib/types';
@@ -115,8 +116,9 @@
       const res = await pairSession(sessionName, picked, task.trim());
       onChanged();
       if (res.warning) {
-        // Falha PARCIAL de aviso (membro sem o prompt): mostra em vez de fechar mudo.
-        error = res.warning;
+        // Falha PARCIAL de aviso (membro sem o prompt): mostra em vez de fechar mudo. O warning
+        // pode ser envelope {code, params, msg} — o formataErro traduz; string crua passa direto.
+        error = formataErro(res.warning) ?? String(res.warning);
       } else {
         onClose();
       }
@@ -135,7 +137,7 @@
       const res = await unpairSession(sessionName);
       onChanged();
       if (res.warning) {
-        error = res.warning;
+        error = formataErro(res.warning) ?? String(res.warning);
       } else {
         onClose();
       }

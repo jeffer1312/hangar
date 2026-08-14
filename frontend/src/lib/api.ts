@@ -1,7 +1,7 @@
 import { getBaseUrl, getToken, dropActiveServer } from './auth';
 import * as m from '../paraglide/messages';
 import { localeAtual } from './locale';
-import { mensagemDeErro } from './errosApi';
+import { mensagemDeErro, formataErro, type EnvelopeErro } from './errosApi';
 import type { Server } from './auth';
 import type {
   SessionInfo,
@@ -633,7 +633,7 @@ export async function sendInput(name: string, text: string): Promise<void> {
 // pareamento nas DUAS sessões — daí em diante elas se falam via cp-send por iniciativa própria.
 // warning: falha PARCIAL de aviso (algum membro sem o prompt do grupo) — o backend reporta de
 // propósito; descartar isso virava "sucesso" mudo com membro que não sabe que está no grupo.
-export interface PairResult { ok: boolean; warning: string | null }
+export interface PairResult { ok: boolean; warning: string | EnvelopeErro | null }
 export async function pairSession(name: string, peers: string[], task = ''): Promise<PairResult> {
   return apiFetch<PairResult>(`/api/sessions/${encodeURIComponent(name)}/pair`, {
     method: 'POST',
@@ -656,7 +656,7 @@ export function getPairContract(name: string): Promise<PairContract> {
 // Fan-out de um prompt pra N sessoes DO SERVIDOR ATIVO (feature #9). Mira sempre 1 servidor por
 // chamada — selecao cross-server manda 1 chamada por servidor (selectServer antes, igual ao resto
 // do app). O backend roda a MESMA sequencia do /input por nome (fila duravel + confirmacao).
-export interface BroadcastResult { ok: boolean; error: string | null }
+export interface BroadcastResult { ok: boolean; error: string | EnvelopeErro | null }
 export async function broadcast(names: string[], text: string): Promise<Record<string, BroadcastResult>> {
   const res = await apiFetch<{ results: Record<string, BroadcastResult> }>('/api/broadcast', {
     method: 'POST',

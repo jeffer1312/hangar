@@ -235,17 +235,25 @@ def test_falha_na_reconciliacao_devolve_erro_e_nao_cria_sessao(casa, monkeypatch
     monkeypatch.setattr(api_mod.registry, "create",
                         lambda *a, **k: criados.append(a) or object())
     cli = TestClient(app)
-    for boom, status, trecho in ((boom_conta, 500, "não consegui criar o atalho"),
-                                 (boom_os, 500, "permissão negada")):
-        monkeypatch.setattr(contas._Ciclo, "reconciliar", boom)
-        r = cli.post("/api/sessions", json={
-            "name": "s1", "cwd": str(casa), "config_dir": str(casa / ".claude-conta2"),
-            "provider": "claude"}, headers=AUTH)
-        assert r.status_code == status
-        # ContaError passa o detail como string; OSError vira o dict {code, params, msg} do
-        # erro_conta_reconciliacao_falhou — as duas formas tem que chegar no usuario.
-        d = r.json()["detail"]
-        assert trecho in (d["msg"] if isinstance(d, dict) else d)
+    # ContaError: o detail passa como STRING (e.detail) — o texto do motivo chega direto.
+    monkeypatch.setattr(contas._Ciclo, "reconciliar", boom_conta)
+    r = cli.post("/api/sessions", json={
+        "name": "s1", "cwd": str(casa), "config_dir": str(casa / ".claude-conta2"),
+        "provider": "claude"}, headers=AUTH)
+    assert r.status_code == 500
+    assert "não consegui criar o atalho" in r.json()["detail"]
+    # OSError: vira o envelope erro_conta_reconciliacao_falhou — o contrato code/params tem que
+    # ser afirmado (B4 do parecer task 11): um envelope com o MESMO msg mas code errado reprova.
+    monkeypatch.setattr(contas._Ciclo, "reconciliar", boom_os)
+    r = cli.post("/api/sessions", json={
+        "name": "s1", "cwd": str(casa), "config_dir": str(casa / ".claude-conta2"),
+        "provider": "claude"}, headers=AUTH)
+    assert r.status_code == 500
+    d = r.json()["detail"]
+    assert d["code"] == "erro_conta_reconciliacao_falhou"
+    assert d["params"]["nome_conta"] == "conta2"
+    assert d["params"]["erro"] == "permissão negada"
+    assert "permissão negada" in d["msg"]
     assert criados == []
 
 

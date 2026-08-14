@@ -1198,7 +1198,7 @@ async def create_session(body: CreateBody):
     # Validar provider, config_dir e engine ANTES de qualquer efeito no disco: um pedido que vai
     # ser rejeitado aqui não pode ter reconciliado a conta (deriva movida, memória criada) à toa.
     if body.provider not in ("claude", "codex", "pi", "kimi"):
-        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider invalido"))
+        raise HTTPException(400, detail=erro("erro_provider_sessao_invalido", "provider invalido"))
     if body.config_dir is not None and body.config_dir not in {c.path for c in list_config_dirs()}:
         raise HTTPException(400, detail=erro("erro_config_dir_invalido", "config_dir invalido"))
     # Mesma guarda do config_dir. Codex nao usa spawn_command/tmux desse jeito, entao motor + codex e
@@ -1320,7 +1320,7 @@ def rename_session(name: str, body: RenameBody):
     if tmux.has_session(new):
         raise HTTPException(409, detail=erro("erro_nome_em_uso", "ja existe uma sessao com esse nome"))
     if not tmux.rename_session(name, new):
-        raise HTTPException(500, detail=erro("erro_rename_falhou", "falha ao renomear"))
+        raise HTTPException(500, detail=erro("sessao_falha_renomear", "falha ao renomear"))
     registry.rename(name, new)  # migra o cache name->jsonl (senao serve transcript errado pos-rename)
     from app.pqueue import PromptQueue
     try:
@@ -1663,6 +1663,16 @@ def _send_thread(fn, *args):
     return asyncio.get_running_loop().run_in_executor(_send_executor, fn, *args)
 
 
+def _erro_texto(e) -> str:
+    """Texto de um erro de envio: string crua (endpoint antigo) ou o `msg` do envelope {code, params, msg}.
+
+    Os avisos compostos (pareamento, group-message) interpolam o TEXTO, nunca o dict — o dict seria
+    "[object Object]" no front antigo. O front novo recebe a estrutura via params e traduz por ela;
+    o msg montado aqui e a rede para quem nao tem o codigo no mapa.
+    """
+    return e if isinstance(e, str) else (e.get("msg") if isinstance(e, dict) else str(e))
+
+
 def _send_one(name: str, text: str) -> dict:
     """Sequencia UNICA de envio de prompt: send_prompt + registro na fila duravel + confirmacao/drain.
     Usada pelo /input (uma sessao) e pelo /broadcast (loop por N sessoes) — o broadcast NAO reimplementa
@@ -1776,12 +1786,12 @@ def _send_one(name: str, text: str) -> dict:
                 # acima descreve (residuo redigitado por cima) voltando sem deixar rastro nenhum.
                 _log.exception("fechar entrada apos 'partial' falhou name=%s", name)
         if limpou:
-            erro = ("envio incompleto: o composer foi limpo e a mensagem NAO foi enviada — pode "
-                     "reenviar sem risco de duplicar.")
-        else:
-            erro = ("envio incompleto: parte do texto ficou no composer da sessao e nada foi "
-                     "submetido. Confira o terminal antes de reenviar.")
-        return {"ok": False, "error": erro}
+            return {"ok": False, "error": erro("erro_envio_incompleto_limpo",
+                                               "envio incompleto: o composer foi limpo e a mensagem NAO foi enviada — pode "
+                                               "reenviar sem risco de duplicar.")}
+        return {"ok": False, "error": erro("erro_envio_incompleto_composer",
+                                           "envio incompleto: parte do texto ficou no composer da sessao e nada foi "
+                                           "submetido. Confira o terminal antes de reenviar.")}
     if stripped.startswith("/"):
         # Slash-commands NAO entram na fila — sao meta, nao viram bubble. Excecao /clear: ele reinicia
         # a sessao do Claude Code (novo session-id/transcript), mas a fila e keyed pelo NOME da sessao
@@ -1819,7 +1829,9 @@ def _send_one(name: str, text: str) -> dict:
                 # lugar NENHUM. Era aqui que o "ok, na fila" mentia: 200 + delivered=False pra uma msg
                 # que sumiu. Vira erro (o front mostra), nunca sucesso.
                 _log.exception("fila indisponivel e prompt NAO digitado name=%s", name)
-                return {"ok": False, "error": f"fila indisponivel e prompt nao foi digitado: {e}"}
+                return {"ok": False, "error": erro("erro_fila_nao_digitada",
+                                                           f"fila indisponivel e prompt nao foi digitado: {e}",
+                                                           erro=str(e))}
             # Digitado na TUI: a msg CHEGOU, o envio nao falhou. Perder o registro so desliga a rede de
             # seguranca (o _confirm_and_drain abaixo nao vai achar o que reconferir) — nao e motivo pra
             # falhar o envio, mas nao pode passar calado.
@@ -1897,7 +1909,9 @@ async def _send_one_codex(name: str, text: str) -> dict:
         # Vira erro (o front mostra), nunca sucesso.
         if not deliverable:
             _log.exception("fila indisponivel e prompt NAO entregue name=%s", name)
-            return {"ok": False, "error": f"fila indisponivel e prompt nao foi entregue: {e}"}
+            return {"ok": False, "error": erro("erro_fila_nao_entregue",
+                                                       f"fila indisponivel e prompt nao foi entregue: {e}",
+                                                       erro=str(e))}
         # Entregavel: a TUI abaixo ainda leva o texto, entao a msg CHEGA. Perder o registro so
         # desliga a rede de seguranca (o drain-on-complete nao acha o que reconferir) — nao e motivo
         # pra falhar o envio, mas nao pode passar calado.
@@ -1925,7 +1939,8 @@ async def _send_one_codex(name: str, text: str) -> dict:
         # o deferred e exatamente o caso em que nao levou. Ultimo ponto onde o 200 "na fila"
         # ainda seria a mentira do eeba30a.
         _log.error("prompt deferido sem entrada na fila — NAO foi entregue name=%s", name)
-        return {"ok": False, "error": "fila indisponivel e o turno nao aceitou o prompt: nao foi entregue"}
+        return {"ok": False, "error": erro("erro_fila_nao_entregue",
+                                                   "fila indisponivel e o turno nao aceitou o prompt: nao foi entregue")}
     # "deferred" COM entrada na fila: fica pendente (delivered ja e False) -> drain-on-complete entrega.
     return {"ok": True, "error": None, "delivered": result == "sent"}
 
@@ -1972,7 +1987,7 @@ async def broadcast(body: BroadcastBody):
     for name in body.names:
         # Mesma guarda do /input: nome sem sessão viva -> erro POR SESSÃO (não enfileira no void).
         if not await _send_thread(_session_exists, name):
-            results[name] = {"ok": False, "error": "sessão não encontrada", "delivered": False}
+            results[name] = {"ok": False, "error": erro("erro_sessao_inexistente", "sessão não encontrada"), "delivered": False}
             continue
         if _provider_of(name) == "codex":
             results[name] = await _send_one_codex(name, body.text)
@@ -2028,7 +2043,8 @@ async def _deliver(name: str, text: str) -> str | None:
         res = await _send_one_codex(name, text)
     else:
         res = await _send_thread(_send_one, name, text)
-    return None if res.get("ok") else (res.get("error") or "falha desconhecida no envio")
+    return None if res.get("ok") else (res.get("error")
+                                           or erro("erro_envio_falhou_desconhecida", "falha desconhecida no envio"))
 
 
 @app.post("/api/sessions/{name}/pair", dependencies=[Depends(require_auth)])
@@ -2071,15 +2087,21 @@ async def pair_session(name: str, body: PairBody):
     for m in members:
         e = await _deliver(m, _group_text(m, [x for x in members if x != m], task))
         if e:
-            errs.append(f"{m}: {e}")
+            errs.append({"sessao": m, "erro": e})
     if len(errs) == len(members):
         # NINGUÉM foi avisado -> grupo fantasma; restaura o estado anterior e reporta.
         await asyncio.to_thread(pair.restore, snap)
-        raise HTTPException(502, detail=erro("erro_pareamento_desfeito", f"pareamento desfeito: falha ao avisar as sessões ({'; '.join(errs)})", nomes="; ".join(errs)))
+        raise HTTPException(502, detail=erro("erro_pareamento_desfeito",
+                            f"pareamento desfeito: falha ao avisar as sessões "
+                            f"({'; '.join(f"{x['sessao']}: {_erro_texto(x['erro'])}" for x in errs)})",
+                            avisos=errs))
     # Falha parcial: grupo vale (AO MENOS 1 membro sabe), e o warning nomeia quem ficou sem aviso
     # — o front mostra em vez de fingir sucesso total.
     return {"ok": True, "members": members,
-            "warning": ("aviso falhou em: " + "; ".join(errs)) if errs else None}
+            "warning": erro("erro_pareamento_aviso_parcial",
+                            "aviso falhou em: " + "; ".join(
+                                f"{x['sessao']}: {_erro_texto(x['erro'])}" for x in errs))
+            if errs else None}
 
 
 async def _pair_cross_server(name: str, peer: str, task: str) -> dict:
@@ -2124,7 +2146,9 @@ async def _pair_cross_server(name: str, peer: str, task: str) -> dict:
     warn = None
     e = await _deliver(name, _group_text(name, [peer], task))
     if e:
-        warn = f"vínculo criado, mas o aviso local falhou ({name}: {e}) — refaça o pair se precisar"
+        warn = erro("erro_pareamento_aviso_local",
+                    f"vínculo criado, mas o aviso local falhou ({name}: {_erro_texto(e)}) — refaça o pair se precisar",
+                    sessao=name, erro=e)
     return {"ok": True, "members": members, "warning": warn}
 
 
@@ -2152,7 +2176,9 @@ async def pair_remote(name: str, body: PairRemoteBody):
     e = await _deliver(name, _group_text(name, [body.initiator], body.task))
     if e:
         await asyncio.to_thread(pair.restore, snap)
-        raise HTTPException(502, detail=erro("erro_pareamento_aviso_falhou", f"pareamento desfeito: falha ao avisar '{name}': {e}", nome=name, erro=str(e)))
+        raise HTTPException(502, detail=erro("erro_pareamento_aviso_falhou",
+                                    f"pareamento desfeito: falha ao avisar '{name}': {_erro_texto(e)}",
+                                    nome=name, erro=e))
     return {"ok": True, "members": members}
 
 
@@ -2176,7 +2202,8 @@ async def unpair_remote(name: str, body: UnpairRemoteBody):
         e = await _deliver(name, f"[de: claude-pocket] '{body.peer}' saiu do pareamento. "
                                  "Volte a operar independente; use cp-send só quando o usuário pedir.")
         if e:
-            warn = f"{name}: {e}"
+            warn = erro("erro_pareamento_aviso_unpair", f"{name}: {_erro_texto(e)}",
+                        sessao=name, erro=e)
     return {"ok": True, "warning": warn}
 
 
@@ -2200,15 +2227,18 @@ async def group_message(name: str, body: GroupMsgBody):
     results: dict[str, dict] = {}
     for p in peers:
         if not await _send_thread(_session_exists, p):
-            results[p] = {"ok": False, "error": "sessão não encontrada", "delivered": False}
+            results[p] = {"ok": False, "error": erro("erro_sessao_inexistente", "sessão não encontrada"), "delivered": False}
             continue
         if _provider_of(p) == "codex":
             results[p] = await _send_one_codex(p, text)
         else:
             results[p] = await _send_thread(_send_one, p, text)
-    failed = [f"{n}: {r.get('error')}" for n, r in results.items() if not r.get("ok")]
+    failed = [{"sessao": n, "erro": r.get("error")} for n, r in results.items() if not r.get("ok")]
     return {"ok": True, "peers": peers,
-            "warning": ("falha em: " + "; ".join(failed)) if failed else None}
+            "warning": erro("erro_pareamento_grupo_falha",
+                            "falha em: " + "; ".join(
+                                f"{x['sessao']}: {_erro_texto(x['erro'])}" for x in failed))
+            if failed else None}
 
 
 @app.get("/api/sessions/{name}/pair/contract", dependencies=[Depends(require_auth)])
@@ -2254,12 +2284,12 @@ async def unpair_session(name: str):
             # do warning no result. ponytail: sem fila de retry durável — single-user, recuperável na
             # mão; se virar comum, enfileirar via pqueue como o /input faz.
             _log.warning("unpair: peer remoto '%s' não avisado (sidecar de lá fica órfão): %s", p, ex)
-            errs.append(f"{p}: {ex}")
+            errs.append({"sessao": p, "erro": ex})
     e = await _deliver(name, "[de: claude-pocket] Você saiu do grupo de trabalho "
                              f"({', '.join(expeers)}). Volte a operar independente; use cp-send só "
                              "quando o usuário pedir.")
     if e:
-        errs.append(f"{name}: {e}")
+        errs.append({"sessao": name, "erro": e})
     resto = [p for p in expeers if not peers.is_remote(p)]
     for p in resto:
         ainda = [x for x in resto if x != p]
@@ -2268,8 +2298,11 @@ async def unpair_session(name: str):
                   if ainda else "O grupo foi dissolvido (só restava você); volte a operar independente."))
         e = await _deliver(p, msg)
         if e:
-            errs.append(f"{p}: {e}")
-    return {"ok": True, "warning": ("aviso de saída falhou: " + "; ".join(errs)) if errs else None}
+            errs.append({"sessao": p, "erro": e})
+    return {"ok": True, "warning": erro("erro_pareamento_saida_falhou",
+            "aviso de saída falhou: " + "; ".join(
+                f"{x['sessao']}: {_erro_texto(x['erro'])}" for x in errs))
+            if errs else None}
 
 
 # Quanto esperar o picker sumir da tela depois do Escape, antes de digitar a resposta por texto.
@@ -3410,7 +3443,7 @@ def answer(name: str, body: AnswerBody):
             _espera_picker_fechar(name)   # sem isto o texto sai junto do Escape e a TUI o engole
             res = _send_one(name, text)
             if not res["ok"]:
-                raise HTTPException(409, detail=erro("erro_drive_fallback_falhou", f"drive falhou e fallback por texto tambem: {res['error']}", erro=str(res['error'])))
+                raise HTTPException(409, detail=erro("erro_drive_fallback_falhou", f"drive falhou e fallback por texto tambem: {_erro_texto(res['error'])}", erro=res['error']))
             fallback = True
         return {"ok": True, "fallback": fallback}
 
@@ -3460,7 +3493,7 @@ def answer(name: str, body: AnswerBody):
             _espera_picker_fechar(name)   # sem isto o texto sai junto do Escape e a TUI o engole
             res = _send_one(name, text)
             if not res["ok"]:
-                raise HTTPException(409, detail=erro("erro_drive_fallback_falhou", f"drive falhou e fallback por texto tambem: {res['error']}", erro=str(res['error'])))
+                raise HTTPException(409, detail=erro("erro_drive_fallback_falhou", f"drive falhou e fallback por texto tambem: {_erro_texto(res['error'])}", erro=res['error']))
             return {"ok": True, "fallback": True}
         return {"ok": True, "fallback": False}
     try:
@@ -3475,7 +3508,7 @@ def answer(name: str, body: AnswerBody):
             _espera_picker_fechar(name)   # sem isto o texto sai junto do Escape e a TUI o engole
             res = _send_one(name, text)
             if not res["ok"]:
-                raise HTTPException(409, detail=erro("erro_drive_fallback_falhou", f"drive falhou e fallback por texto tambem: {res['error']}", erro=str(res['error'])))
+                raise HTTPException(409, detail=erro("erro_drive_fallback_falhou", f"drive falhou e fallback por texto tambem: {_erro_texto(res['error'])}", erro=res['error']))
         fallback = True
     # Respondido: limpa o sidecar do hook pra um stale nao reabrir o stepper depois. Resolve o jsonl
     # igual aos outros endpoints; se nao resolver, pula a limpeza sem falhar a request.

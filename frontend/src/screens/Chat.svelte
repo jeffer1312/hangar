@@ -40,6 +40,7 @@
     isAbortError,
     getPlan,
   } from '../lib/api';
+  import { formataErro } from '../lib/errosApi';
   import { appendTail, hasSeam, prependOlder } from '../lib/history';
   import { parseStatusLine } from '../lib/statusline';
   import { listServers, getActiveId } from '../lib/auth';
@@ -1172,7 +1173,7 @@
           const ok = Object.keys(results).filter((n) => results[n].ok);
           throw new Error(
             `${ok.length ? m.chat_chegou_mas({ n: ok.join(', ') }) : ''}${m.chat_nao_chegou_em()}` +
-            `${failed.map(([n]) => n).join(', ')} (${failed[0][1].error ?? m.board_falha_envio()})`
+            `${failed.map(([n]) => n).join(', ')} (${formataErro(failed[0][1].error) ?? m.board_falha_envio()})`
           );
         }
       } else {
