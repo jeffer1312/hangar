@@ -37,7 +37,7 @@
   import SlashSuggest from './SlashSuggest.svelte';
   import CommandSheet from './CommandSheet.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
-  import DitadoEstiloSheet from './DitadoEstiloSheet.svelte';
+  import DitadoEstiloPopover from './DitadoEstiloPopover.svelte';
   import { ditadoEstilo, ESTILOS } from '../lib/ditadoEstilo.svelte';
   import { getCommands, setModelEffort, uploadFile, transcribeFile, getCodexModels, getPiModels, type ModelEffortBody } from '../lib/api';
   import type { State } from '../lib/types';
@@ -125,6 +125,7 @@
   // pro Ctrl+Espaço e pro celular. Carrega uma vez por store compartilhado — o Composer monta em
   // mais de uma tela (chat e peek do quadro) e cada uma pediria a config por conta própria.
   let estiloAberto = $state(false);
+  let estiloPillEl = $state<HTMLElement | null>(null);
   const rotuloEstilo = $derived(
     ESTILOS.find((e) => e.valor === ditadoEstilo.valor)?.rotulo ?? 'Ditado',
   );
@@ -1297,16 +1298,23 @@
         >
           {#if recording}<IconInterrupt size={18} />{:else}<IconMic size={20} />{/if}
         </button>
-        <!-- Estilo do ditado, colado no microfone: é decisão que se toma ANTES de falar. Some
-             durante a gravação — trocar no meio não muda nada (quem lê o estilo é o backend, no
-             fim) e o botão só roubaria o alvo do dedo que vai parar de gravar. -->
+        <!-- Estilo do ditado, colado no microfone e na MESMA pill do modelo/esforço: é decisão que
+             se toma ANTES de falar, do mesmo tamanho que escolher o esforço. Some durante a
+             gravação — trocar no meio não muda nada (quem lê o estilo é o backend, no fim) e a
+             pill só roubaria o alvo do dedo que vai parar de gravar. -->
         {#if !recording && !starting}
           <button
-            class="estilo-btn"
+            class="model-pill"
+            bind:this={estiloPillEl}
             onclick={() => (estiloAberto = true)}
-            title="Estilo do ditado: {rotuloEstilo}"
+            aria-haspopup="dialog"
+            aria-expanded={estiloAberto}
             aria-label="Estilo do ditado: {rotuloEstilo}"
-          >{rotuloEstilo}</button>
+          >
+            <span class="pill-label">
+              <span class="pill-model">{rotuloEstilo}</span>
+            </span>
+          </button>
         {/if}
       </div>
 
@@ -1384,9 +1392,9 @@
     onClose={() => (commandSheetOpen = false)}
   />
 
-  <DitadoEstiloSheet
+  <DitadoEstiloPopover
     open={estiloAberto}
-    isDesktop={typeof window !== 'undefined' && window.matchMedia('(min-width: 820px)').matches}
+    anchor={estiloPillEl}
     onClose={() => (estiloAberto = false)}
   />
 
@@ -1781,22 +1789,6 @@
   .attach-btn:active { background: var(--bg-hover); }
   .attach-btn :global(svg) { display: block; }
 
-  /* Chip do estilo do ditado. --surface-raised, e nao --bg-elevated cru: com papel de parede
-     ligado, superfície própria dentro de um painel de vidro tem que entrar no mesmo véu, senão
-     vira retângulo chapado boiando sobre a foto (regra de transparência do CLAUDE.md). */
-  .estilo-btn {
-    flex-shrink: 0;
-    height: 26px;
-    padding: 0 var(--space-2);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: var(--surface-raised);
-    color: var(--text-secondary);
-    font-size: 11px;
-    white-space: nowrap;
-    cursor: pointer;
-  }
-  .estilo-btn:active { background: var(--bg-hover); }
 
   /* Botao de gravar audio: ícone de mic (IconMic) / quadrado stop (IconInterrupt) enquanto grava.
      Gravando -> vermelho e pulsa. */

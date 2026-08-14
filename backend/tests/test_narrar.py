@@ -532,15 +532,37 @@ _DITADO_BOM_LIMPO = (
 )
 
 
-def test_ditado_ruim_troca_sujeito_e_rejeitado(monkeypatch):
+def test_ditado_ruim_troca_sujeito_e_rejeitado_no_limpar(monkeypatch):
     # A inversao de sentido (usuario critica -> "limpeza" devolve o assistente se defendendo)
     # nao muda o tamanho o bastante pra disparar as travas de razao (0.73x, entre 0.5 e 1.5), mas
     # introduz palavra que ninguem falou — e isso a guarda tem que pegar.
+    #
+    # SO no estilo "limpar", desde 14/08/2026. Nos que reestruturam, cobrar palavra nova e recusar
+    # o servico pedido — decisao do usuario, com o caso real na frente: um briefing bom, cobertura
+    # 98%, rejeitado por 4 "invencoes" que eram conjugacao ("clicava" -> "clico").
     monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: _DITADO_RUIM_LIMPO)
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "limpar")
     texto, erro = narrar.limpar_ditado(_DITADO_RUIM_CRU)
     assert texto == _DITADO_RUIM_CRU
     assert erro is not None
-    assert "sentido" in erro
+    assert "não falou" in erro
+
+
+def test_so_o_briefing_nao_cobra_palavra_nova(monkeypatch):
+    """O contrato, escrito como teste pra ninguem "consertar" isto de volta sem querer.
+
+    A linha e a do usuario: o briefing REESCREVE (vira topico, vira titulo), entao cobrar palavra
+    nova dele e recusar o servico pedido. Ja "prosa" so reordena e corta repeticao — ali trocar
+    palavra e trocar o que ele quis dizer, e a trava fica."""
+    monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: _DITADO_RUIM_LIMPO)
+
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "briefing")
+    _, erro = narrar.limpar_ditado(_DITADO_RUIM_CRU)
+    assert erro is None or "não falou" not in erro, "briefing nao pode cobrar invencao"
+
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "prosa")
+    _, erro = narrar.limpar_ditado(_DITADO_RUIM_CRU)
+    assert erro is not None and "não falou" in erro, "prosa TEM que cobrar invencao"
 
 
 def test_ditado_bom_honesto_nao_e_rejeitado(monkeypatch):
@@ -615,18 +637,23 @@ def test_texto_curto_com_conteudo_pode_encolher_muito(monkeypatch):
     assert len(texto) < 0.5 * len(cru), "a amostra precisa encolher forte pra exercitar o piso"
 
 
-def test_andaime_so_e_perdoado_no_briefing(monkeypatch):
-    """Furo achado na review: `_ANDAIME` era descontado em TODOS os estilos, entao uma saida que
-    inventava frase usando essas palavras passava ate no "limpar", cujo prompt diz "NÃO acrescente
-    nada". Quem nao pode por titulo nenhum tem que ser cobrado por qualquer palavra inventada."""
+def test_limpar_cobra_qualquer_palavra_inventada(monkeypatch):
+    """O "limpar" promete "NÃO acrescente nada", entao nao ha palavra que ele possa acrescentar de
+    graca — nem as que um dia foram titulos de seção permitidos ao briefing. Aquele perdao existia
+    e valia pra todos os estilos, o que deixava frase inventada passar no proprio "limpar"."""
     cru = ("roda o teste do modulo de pagamento e depois me avisa se passou direitinho porque a "
            "fila de deploy hoje esta cheia e eu preciso saber logo do resultado")
-    inventado = cru.capitalize() + " Objetivo: criterio de pronto."
-
-    monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: inventado)
+    monkeypatch.setattr(narrar, "chamar_chat",
+                        lambda *a, **k: cru.capitalize() + " Objetivo: criterio de pronto.")
     monkeypatch.setattr(narrar, "estilo_ditado", lambda: "limpar")
     _, erro = narrar.limpar_ditado(cru)
-    assert erro is not None and "sentido" in erro, "limpar nao pode ganhar perdao de andaime"
+    assert erro is not None and "não falou" in erro
 
-    # No briefing as MESMAS palavras sao titulo legitimo — a trava nao pode matar o que o prompt manda fazer.
-    assert not narrar._conteudo_novo(cru, inventado, "briefing")
+
+def test_conjugacao_nao_conta_como_palavra_inventada():
+    """A causa raiz do dia 14/08: a trava contava "clicava" -> "clico" como invencao, e recusou um
+    briefing bom do usuario por 4 "palavras novas" que eram o mesmo verbo. Comparar radical mata a
+    classe inteira — e a mesma cura de _CONTRACOES pra "tô"/"estou", que voltou por outra porta."""
+    cru = "eu clicava ali e trocava o modelo seguindo o padrao"
+    limpo = "Eu clico ali e troco o modelo, seguir o padrao."
+    assert not narrar._conteudo_novo(cru, limpo)

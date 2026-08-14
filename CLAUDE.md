@@ -340,9 +340,11 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   - Cuidado de cota: o prompt novo tem ~940 tokens por chamada (era ~400). No plano gratuito da Groq
     (8000 tokens/minuto) isso não incomoda um ditado por vez, mas **estoura em teste automatizado** —
     um 429 lá é cota, não qualidade; separe os dois antes de culpar o modelo.
-  - **Três estilos, escolhidos no chip ao lado do microfone** (`ESTILOS_DITADO`, `ditado_estilo`,
-    `components/DitadoEstiloSheet.svelte`): `limpar` (só tira hesitação e pontua), `prosa`
-    (reorganiza e corta repetição — o padrão) e `briefing` (vira documento com seções). Existem
+  - **Três estilos, escolhidos na pill ao lado do microfone** (`ESTILOS_DITADO`, `ditado_estilo`,
+    `components/DitadoEstiloPopover.svelte`): `limpar` (só tira hesitação e pontua), `prosa`
+    (reorganiza e corta repetição — o padrão) e `briefing` (vira documento com seções). A pill fica na
+    barra do composer, ao lado do microfone, e abre o MESMO popover do esforço — não um modal: é
+    decisão do tamanho de escolher o esforço, e cobrir a tela pra isso é desproporcional. Existem
     porque a mesma limpeza não serve pros dois usos: ditar "abre o narrar.py" e ditar um pedido de
     dois minutos. Quem lê o estilo é o backend, então o atalho Ctrl+Espaço já grava no estilo
     escolhido sem saber que ele existe. **`briefing` é rebaixado pra `prosa` abaixo de
@@ -352,10 +354,18 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     escrever "tô" como "estou" contavam como conteúdo inventado — 8 "palavras novas" num ditado
     real, com 100% do conteúdo preservado. Agora são duas medidas, e as duas foram calibradas
     contra os mesmos casos: **cobertura** (quanto do conteúdo da pessoa sobreviveu; pega o modelo
-    que resumiu ou respondeu) e **`_conteudo_novo`** (palavra de conteúdo que ela não falou, fora
-    dos títulos de seção em `_ANDAIME`). Medido: defeito 4 palavras novas, limpeza honesta 0,
-    prosa real 1, briefing real 0 → teto 2. **Cobertura sozinha não separa** (defeito 79%, prosa
-    legítima 75%), e é por isso que as duas coexistem — quem for mexer, mexa nas duas.
+    que resumiu ou respondeu) e **`_conteudo_novo`** (palavra de conteúdo que ela não falou). Medido: defeito 4 palavras novas, limpeza honesta 0, prosa real 1 → teto 2. **Cobertura
+    sozinha não separa** (defeito 79%, prosa legítima 75%), e é por isso que as duas coexistem.
+  - **O `briefing` NÃO paga a trava de invenção** (`_Travas.cobra_invencao`), e isso é decisão do
+    usuário, não descuido: "no briefing minhas palavras vão mudar; se eu estiver em prosa, aí
+    beleza, não mudar minhas palavras". `limpar` e `prosa` não reescrevem — um pontua, o outro
+    reordena —, então ali palavra nova é palavra que a pessoa não disse. O briefing reescreve por
+    definição, e cobrar dele é recusar o serviço pedido: medido, um briefing bom com 98% de
+    cobertura foi rejeitado por 4 "invenções" que eram conjugação. Ele segue protegido pelo teto de
+    tamanho, pelo piso de cobertura e pela recusa de saída vazia.
+  - **Comparação é por RADICAL** (`_radical`), não pela palavra inteira. `clicava`/`clico`/`clicar`
+    caem no mesmo balde. Sem isso a trava punia conjugação — a mesma classe de erro que
+    `_CONTRACOES` resolveu pra `tô`/`estou` e que voltou por outra porta.
   - `_CONTRACOES` iguala fala reduzida à forma escrita (`tô`→`estou`, `pra`→`para`) **antes** de
     qualquer comparação. Sem isso a limpeza melhora o texto e é punida por isso.
   - **Raciocínio piora e não é questão de calibragem.** Testado com os dois ditados reais: com

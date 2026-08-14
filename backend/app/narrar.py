@@ -348,16 +348,7 @@ def _palavras_normalizadas(texto: str) -> list[str]:
     return [_CONTRACOES.get(p, p) for p in re.findall(r"[a-z0-9]+", sem_acento)]
 
 
-# Palavras que o briefing tem PERMISSAO de acrescentar. Sao EXATAMENTE os titulos que
-# _FECHO_BRIEFING autoriza ("Objetivo, Situação hoje, Restrições, Referência, Critério de pronto,
-# O que eu preciso saber") — nada alem. Cada palavra a mais aqui e um buraco: e uma palavra que o
-# modelo pode usar pra inventar frase sem a trava enxergar.
-_ANDAIME = frozenset("""
-objetivo situacao hoje restricoes referencia criterio pronto preciso saber
-""".split())
-
-
-def _conteudo_novo(cru: str, limpo: str, estilo: str) -> set[str]:
+def _conteudo_novo(cru: str, limpo: str) -> set[str]:
     """Palavras de conteudo que a pessoa NAO falou e que nao sao andaime de seção.
 
     Substitui a contagem crua de palavras novas. O defeito continua o mesmo — o modelo respondendo
@@ -372,12 +363,11 @@ def _conteudo_novo(cru: str, limpo: str, estilo: str) -> set[str]:
       briefing estruturando o mesmo ditado ............................ 0
     Por isso o teto e 2: acima do maior legitimo, abaixo do menor defeito.
 
-    O andaime so e perdoado no ESTILO que pode criá-lo. Perdoar sempre era um furo real: com
-    "limpar" — o estilo cujo prompt diz "NÃO acrescente nada" — uma saida que grudava
-    "Contexto: pronto." no fim passava com zero palavras novas, porque as duas estavam na lista.
-    Quem nao pode pôr título nenhum tem que ser cobrado por qualquer palavra que inventar."""
-    novas = _conteudo(limpo) - _conteudo(cru)
-    return novas - _ANDAIME if estilo == "briefing" else novas
+    So o estilo "limpar" usa isto (ver _Travas.cobra_invencao), e ele e justamente o que promete
+    "NÃO acrescente nada" — entao nao ha nada a perdoar. A lista de titulos de seção que existia
+    aqui saiu junto com a trava do briefing: era perdao pra um caminho que nao passa mais por
+    aqui, e codigo inalcancavel envelhece dizendo o contrario do que o sistema faz."""
+    return _conteudo(limpo) - _conteudo(cru)
 
 
 # As duas travas de tamanho (piso/teto acima) medem TAMANHO; nao pegam TROCA DE SUJEITO — a
@@ -415,9 +405,35 @@ estava vai vou vamos ir sabe olha entendeu certo enfim bom talvez acho sei nao s
 _MIN_LETRAS_CONTEUDO = 3
 
 
+# Cortador de sufixo, NAO um stemmer de verdade: so precisa fazer "clicava", "clico" e "clicar"
+# caírem no mesmo balde. Existe porque a trava de conteudo novo estava punindo CONJUGACAO —
+# exatamente a mesma classe de erro que _CONTRACOES resolveu pra "tô"/"estou", e que voltou por
+# outra porta. Caso real de 14/08/2026: o usuario escolheu "briefing", o briefing saiu bom
+# (cobertura 98%), e foi REJEITADO por 4 "palavras inventadas" que eram `clicava`->`clico`,
+# `trocava`->`troco` e `seguindo`->`seguir`. Do ponto de vista dele, a trava recusou exatamente o
+# que ele tinha pedido. Com o radical, as mesmas 4 viram 1.
+# Ordem: sufixo mais longo primeiro, senao "avam" nunca casaria (o "am" pegaria antes).
+_SUFIXOS = tuple(sorted("""
+avamos avam ava avas ando endo indo ada ado adas ados ar er ir amos emos imos aram eram iram
+ou eu iu am em im as es is os us a e i o s mente cao coes dade dades ista istas vel veis
+""".split(), key=len, reverse=True))
+# Piso do radical. Abaixo disto o corte junta palavra que nao tem nada a ver ("posto"/"posta").
+_MIN_RADICAL = 4
+
+
+def _radical(palavra: str) -> str:
+    for s in _SUFIXOS:
+        if len(palavra) - len(s) >= _MIN_RADICAL and palavra.endswith(s):
+            return palavra[:-len(s)]
+    return palavra
+
+
 def _conteudo(texto: str) -> set[str]:
-    """As palavras que CARREGAM o que a pessoa disse, sem muleta e sem palavra curta."""
-    return {p for p in _palavras_normalizadas(texto)
+    """Os RADICAIS das palavras que carregam o que a pessoa disse, sem muleta e sem palavra curta.
+
+    Radical, e nao a palavra inteira, porque as duas travas que usam isto perguntam "isto e a mesma
+    coisa que ela falou?" — e conjugar um verbo nao muda a resposta."""
+    return {_radical(p) for p in _palavras_normalizadas(texto)
             if len(p) >= _MIN_LETRAS_CONTEUDO and p not in _MULETAS}
 
 
@@ -441,6 +457,19 @@ class _Travas(NamedTuple):
     inflacao_max: float       # teto de len(limpo)/len(cru)
     encolhe_min: float        # piso de len(limpo)/len(cru), so em texto longo
     cobertura_min: float      # piso de quanto do conteudo da pessoa tem que sobreviver
+    # Cobra invencao de conteudo? SO o briefing fica livre — decisao do usuario em 14/08/2026, e a
+    # razao dele fecha: "no briefing minhas palavras vao mudar; se eu estiver em prosa, aí beleza,
+    # não mudar minhas palavras, porque senão vai mudar o que eu quis dizer".
+    #
+    # A linha e essa: "limpar" e "prosa" NAO reescrevem — um so pontua, o outro reordena e corta
+    # repeticao —, entao ali palavra nova e palavra que a pessoa nao disse. O briefing REESCREVE
+    # por definicao: vira topico, vira titulo, muda a forma da frase. Cobrar dele e recusar o
+    # servico pedido, e ele "sempre vai quebrar se deixar uma trava bloqueada". Medido no ditado
+    # real: briefing bom, cobertura 98%, REJEITADO por 4 "invencoes" que eram conjugacao.
+    #
+    # O briefing nao fica sem rede: sobram a saida vazia, o teto de tamanho e o piso de cobertura,
+    # que pegam o modelo que respondeu ou que jogou fora o assunto.
+    cobra_invencao: bool
     # Timeout POR ESTILO: reorganizar dois minutos de fala e uma tarefa maior que pontuar uma
     # frase, e o teto unico de 8s (dimensionado pra "so limpar") derrubava a estruturacao pelo
     # relogio antes de dar pra julgar se ela era boa.
@@ -453,12 +482,15 @@ _TRAVAS_POR_ESTILO = {
     # Inalterado: e o comportamento que ja estava medido e em producao.
     # "limpar" nao reordena nem corta ideia, entao pode exigir cobertura ALTA: perder 15% do que a
     # pessoa falou, aqui, e defeito, nao servico.
-    "limpar": _Travas(inflacao_max=1.5, encolhe_min=0.5, cobertura_min=0.80, timeout=8),
+    "limpar": _Travas(inflacao_max=1.5, encolhe_min=0.5, cobertura_min=0.80,
+                      cobra_invencao=True, timeout=8),
     # Prosa CORTA repeticao, entao o piso de encolhimento cai: o ditado de 79s do usuario repetia
     # "nao sei se e possivel" 3x e "PWA" 4x — encolher pra 0,45x ali e o servico funcionando.
-    "prosa": _Travas(inflacao_max=1.3, encolhe_min=0.3, cobertura_min=0.60, timeout=25),
+    "prosa": _Travas(inflacao_max=1.3, encolhe_min=0.3, cobertura_min=0.60,
+                     cobra_invencao=True, timeout=25),
     # Briefing acrescenta titulos e hifens, entao infla um pouco mesmo cortando repeticao.
-    "briefing": _Travas(inflacao_max=1.4, encolhe_min=0.3, cobertura_min=0.60, timeout=25),
+    "briefing": _Travas(inflacao_max=1.4, encolhe_min=0.3, cobertura_min=0.45,
+                        cobra_invencao=False, timeout=25),
 }
 
 
@@ -511,7 +543,7 @@ def limpar_ditado(texto: str) -> tuple[str, str | None]:
     if not limpo:
         return texto, "a limpeza devolveu texto vazio — ficou o original"
     if len(limpo) > travas.inflacao_max * len(cru):
-        return texto, "a limpeza inflou o texto (resposta em vez de limpeza) — ficou o original"
+        return texto, "a limpeza respondeu em vez de organizar — ficou o original"
     # O piso de encolhimento normalmente so vale em texto longo (em frase curta, encolher muito e o
     # servico funcionando). MAS quando a fala nao tem palavra de conteudo — "e aí cara, tipo assim,
     # então, bom" —, `_cobertura` nao tem o que comparar e devolve 1.0 por definicao, e
@@ -520,10 +552,11 @@ def limpar_ditado(texto: str) -> tuple[str, str | None]:
     # que escapava.
     sem_conteudo = not _conteudo(cru)
     if (len(cru) > _LIMIAR_TEXTO_LONGO or sem_conteudo) and len(limpo) < travas.encolhe_min * len(cru):
-        return texto, "a limpeza resumiu em vez de limpar — ficou o original"
+        return texto, "a limpeza resumiu em vez de organizar — ficou o original"
     if _cobertura(cru, limpo) < travas.cobertura_min:
-        return texto, "a limpeza perdeu parte do que você falou — ficou o original"
-    limite = max(_CONTEUDO_NOVO_MAX, _CONTEUDO_NOVO_PROP * len(_conteudo(limpo)))
-    if len(_conteudo_novo(cru, limpo, estilo)) > limite:
-        return texto, "a limpeza mudou o sentido em vez de so limpar — ficou o original"
+        return texto, "a limpeza jogou fora parte do que você falou — ficou o original"
+    if travas.cobra_invencao:
+        limite = max(_CONTEUDO_NOVO_MAX, _CONTEUDO_NOVO_PROP * len(_conteudo(limpo)))
+        if len(_conteudo_novo(cru, limpo)) > limite:
+            return texto, "a limpeza escreveu frases que você não falou — ficou o original"
     return limpo, None
