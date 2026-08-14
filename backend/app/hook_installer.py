@@ -35,13 +35,19 @@ def _refers_to(command: object, script: str, por_nome: bool = False) -> bool:
 
     Comparar a string INTEIRA foi o que duplicou os hooks quando o formato do command
     mudou — a entrada antiga deixou de ser reconhecida e uma nova foi acrescentada.
-    Casa pelo caminho: outro checkout do repo aponta pra outro arquivo, logo e outro hook.
 
-    `por_nome=True` afrouxa pro NOME do arquivo. E o que a trava do tmux (guard_tmux.py) usa:
-    ela mudou de caminho uma vez (repo -> symlink em <config>/hooks/, pra passar na allowlist do
-    pi) e dois config dirs desta maquina compartilham o mesmo settings.json — nos dois casos o
-    casamento por caminho nao reconhecia a entrada anterior e ia empilhando copias da mesma
-    trava. Pra um guard global isso e o certo: uma so, valendo pra qualquer checkout."""
+    `por_nome=True` afrouxa pro NOME do arquivo, e e o que TODO hook nosso usa hoje. O casamento
+    por CAMINHO tratava outro checkout do repo como outro hook, e o settings.json e um so pra
+    maquina: subir o backend de uma worktree (`.worktrees/<x>/backend/hooks/state_hook.py`)
+    acrescentava uma segunda copia de cada hook ao lado da do checkout principal, e nenhum dos
+    dois installers removia a do outro — todo evento passava a rodar o mesmo script 2x, e apagar
+    a mao voltava na proxima subida. A trava do tmux (guard_tmux.py) ja tinha caido nisso por
+    outro caminho (repo -> symlink em <config>/hooks/, pra passar na allowlist do pi, mais dois
+    config dirs compartilhando o mesmo settings.json) e por isso foi a primeira a vir pra ca.
+
+    O preco e explicito: com por_nome so existe UMA entrada de cada hook por settings.json, entao
+    dois backends de checkouts diferentes nao recebem estado ao mesmo tempo — quem subiu por
+    ultimo fica com o hook. Pra hook de maquina isso e o certo."""
     if not isinstance(command, str):
         return False
     alvo = os.path.basename(script) if por_nome else script
@@ -134,7 +140,7 @@ def _ensure_settings_file(settings_path: Path) -> bool:
     data = _load_settings(settings_path)
     if data is None:
         return False
-    if not _sync_hook(data, "PreToolUse", _COMMAND, matcher=_MATCHER):
+    if not _sync_hook(data, "PreToolUse", _COMMAND, matcher=_MATCHER, por_nome=True):
         return False
     _write(settings_path, data)
     return True
@@ -179,7 +185,7 @@ def ensure_state_hooks_installed() -> list[str]:
                 continue
             changed = False
             for ev in _STATE_EVENTS:
-                if _ensure_event_hook(d / "settings.json", ev, _STATE_COMMAND):
+                if _ensure_event_hook(d / "settings.json", ev, _STATE_COMMAND, por_nome=True):
                     changed = True
             if changed:
                 touched.append(str(d))

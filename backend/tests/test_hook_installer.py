@@ -120,8 +120,10 @@ def test_collapse_keeps_third_party_hooks_in_same_event(tmp_path):
     ]  # ordem e conteudo dos terceiros intactos
 
 
-def test_same_script_name_in_another_checkout_is_a_different_hook(tmp_path):
-    # Outro checkout do repo = outro arquivo = outro hook. Nao pode ser adotado nem sumir.
+def test_same_script_name_in_another_checkout_is_adopted(tmp_path):
+    # Outro checkout do repo (worktree, clone antigo) casa PELO NOME do arquivo e e ADOTADO no
+    # lugar: uma entrada so por settings.json. Antes isso virava um 2o hook, e todo evento
+    # rodava o mesmo script 2x — apagar a mao voltava na proxima subida do outro backend.
     sp = _settings(tmp_path)
     alheio = "python3 /outro/checkout/backend/hooks/askq_capture.py"
     sp.write_text(json.dumps({"hooks": {"PreToolUse": [
@@ -130,7 +132,7 @@ def test_same_script_name_in_another_checkout_is_a_different_hook(tmp_path):
     assert hook_installer._ensure_settings_file(sp) is True
     cmds = [h["command"] for b in json.loads(sp.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
             for h in b["hooks"]]
-    assert cmds == [alheio, hook_installer._COMMAND]
+    assert cmds == [hook_installer._COMMAND]
 
 
 def test_invalid_json_left_untouched(tmp_path):
