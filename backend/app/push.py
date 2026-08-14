@@ -15,6 +15,29 @@ from app.config import settings
 _log = logging.getLogger("claude_pocket.push")
 _lock = Lock()  # ponytail: lock global — single-user, baixa frequencia; por-endpoint so se virar gargalo
 
+# Textos que o push monta sozinho, no idioma da inscricao (backend nao tem Paraglide e sao poucas
+# frases). A redacao espelha frontend/messages/pt.json + en.json — se mudar la, muda aqui.
+_MSG = {
+    "pt": {
+        "aguardando": "Aguardando sua resposta",
+        "terminou": "Terminou",
+        "caiu": "Caiu",
+        "travada": "Pode estar travada",
+        "limite": "Limite de uso atingido",
+        "volta": "volta {reset}",
+        "sessoes": "{n} sessões aguardando",
+    },
+    "en": {
+        "aguardando": "Awaiting your reply",
+        "terminou": "Finished",
+        "caiu": "Died",
+        "travada": "May be stuck",
+        "limite": "Usage limit reached",
+        "volta": "resets {reset}",
+        "sessoes": "{n} sessions waiting",
+    },
+}
+
 # Coalescing do awaiting (feature #5): varias sessoes indo pra awaiting quase juntas colapsam numa
 # unica notificacao agregada em vez de empilhar N. Buffer + timer sao globais (single-user, 1 backend).
 _COALESCE_WINDOW = 2.0  # s de debounce
@@ -122,31 +145,45 @@ def _suppressed(session_name: str) -> bool:
     return is_muted(session_name) or _in_quiet_hours()
 
 
-def add_subscription(subscription: dict, label: str, server_id: str) -> None:
+def add_subscription(subscription: dict, label: str, server_id: str, locale: str = "pt") -> None:
     """Upsert por endpoint (idempotente: re-assinar nao duplica). label/server_id sao do CELULAR
-    (nome amigavel + id local do servidor) -> a notificacao mostra 'Casa · sessao' e linka certo."""
+    (nome amigavel + id local do servidor) -> a notificacao mostra 'Casa · sessao' e linka certo.
+    locale e o idioma da inscricao (o front manda o escolhido; inscricao antiga sem o campo
+    gravado cai em pt, o idioma de antes da internacionalizacao)."""
     endpoint = subscription.get("endpoint")
     if not endpoint:
         raise ValueError("subscription sem endpoint")
     with _lock:
         subs = [s for s in _load() if s.get("subscription", {}).get("endpoint") != endpoint]
-        subs.append({"subscription": subscription, "label": label, "serverId": server_id})
+        subs.append({"subscription": subscription, "label": label, "serverId": server_id,
+                     "locale": locale})
         _save(subs)
 
 
-def _send_one(entry: dict, session_name: str, body: str, *, tag: str | None = None,
-              title_suffix: str | None = None, url: str | None = None) -> bool:
+def _msg(locale: str, chave: str, **params) -> str:
+    """Texto do push no idioma da inscricao; locale desconhecido cai no pt (registro antigo)."""
+    tabela = _MSG.get(locale, _MSG["pt"])
+    return tabela[chave].format(**params) if params else tabela[chave]
+
+
+def _send_one(entry: dict, session_name: str, body_fn, *, tag: str | None = None,
+              title_suffix_fn=None, url: str | None = None) -> bool:
     """Envia 1 push. Retorna False se a inscricao morreu (404/410) -> caller poda.
 
-    title_suffix substitui session_name SO no titulo (usado pelo push coalescido: "Casa · 3 sessões
-    aguardando" em vez de "Casa · a, b, c"); tag explicito sobrepoe o default (session_name) pro SW
-    substituir um card AGREGADO em vez de empilhar por sessao; url explicito pula o deep-link (o
-    coalescido nao aponta pra 1 sessao so -> abre a lista)."""
+    body_fn/title_suffix_fn recebem o locale da inscricao e devolvem o texto — o idioma do push e o
+    da inscricao (cada celular tem o seu). title_suffix_fn substitui session_name SO no titulo
+    (usado pelo push coalescido: "Casa · 3 sessões aguardando" em vez de "Casa · a, b, c"); tag
+    explicito sobrepoe o default (session_name) pro SW substituir um card AGREGADO em vez de
+    empilhar por sessao; url explicito pula o deep-link (o coalescido nao aponta pra 1 sessao so
+    -> abre a lista)."""
     from pywebpush import webpush, WebPushException
 
     label = entry.get("label") or "claude"
+    locale = entry.get("locale") or "pt"  # inscricao antiga (sem o campo) cai no pt
+    body = body_fn(locale)
+    suffix = title_suffix_fn(locale) if title_suffix_fn is not None else session_name
     payload = {
-        "title": f"{label} · {title_suffix if title_suffix is not None else session_name}",
+        "title": f"{label} · {suffix}",
         "body": body,
         "session": session_name,
         # deep-link best-effort (App pode honrar ?server/?session; senao so abre o app)
@@ -173,26 +210,26 @@ def _send_one(entry: dict, session_name: str, body: str, *, tag: str | None = No
         return True
 
 
-def _broadcast(session_name: str, body: str, *, tag: str | None = None,
-              title_suffix: str | None = None, url: str | None = None) -> None:
-    """Manda push com o corpo dado pra todas as inscricoes; poda as mortas. No-op se nao ha chaves
-    VAPID configuradas (push desligado). Compartilhado pelos 3 gatilhos (awaiting/finished/dead) —
-    so o texto (e, no coalescido, tag/title/url) muda."""
+def _broadcast(session_name: str, body_fn, *, tag: str | None = None,
+              title_suffix_fn=None, url: str | None = None) -> None:
+    """Manda push com o corpo dado (funcao do locale da inscricao) pra todas as inscricoes; poda as
+    mortas. No-op se nao ha chaves VAPID configuradas (push desligado). Compartilhado pelos 3
+    gatilhos (awaiting/finished/dead) — so o texto (e, no coalescido, tag/title/url) muda."""
     if not (settings.vapid_private and settings.vapid_public):
         return
     with _lock:
         subs = _load()
         if not subs:
             return
-        alive = [s for s in subs if _send_one(s, session_name, body, tag=tag,
-                                              title_suffix=title_suffix, url=url)]
+        alive = [s for s in subs if _send_one(s, session_name, body_fn, tag=tag,
+                                              title_suffix_fn=title_suffix_fn, url=url)]
         if len(alive) != len(subs):
             _save(alive)
 
 
-def notify_awaiting(session_name: str, body: str = "Aguardando sua resposta") -> None:
+def notify_awaiting(session_name: str, body: str | None = None) -> None:
     """Push: sessao ficou awaiting_input (Claude esperando voce). body = a pergunta REAL (resolvida
-    pelo caller via askquestion/classify) ou o fallback estatico se nao deu pra ler nenhuma.
+    pelo caller via askquestion/classify) ou o fallback estatico (None) se nao deu pra ler nenhuma.
 
     Silenciada (mute por sessao) ou dentro da janela de quiet hours -> no-op (nem entra no buffer).
     Senao entra no buffer de coalescing: varios awaiting quase-simultaneos (~_COALESCE_WINDOW s)
@@ -202,7 +239,7 @@ def notify_awaiting(session_name: str, body: str = "Aguardando sua resposta") ->
     _queue_awaiting(session_name, body)
 
 
-def _queue_awaiting(session_name: str, body: str) -> None:
+def _queue_awaiting(session_name: str, body: str | None) -> None:
     global _coalesce_timer
     with _coalesce_lock:
         _coalesce_buf[session_name] = body
@@ -225,25 +262,28 @@ def _flush_coalesce() -> None:
         return
     if len(buf) == 1:
         (name, body), = buf.items()
-        _broadcast(name, body)
+        # body None = fallback estatico no idioma da inscricao; body real vem pronto do caller
+        corpo = (lambda _l: _msg(_l, "aguardando")) if body is None else (lambda _l: body)
+        _broadcast(name, corpo)
     else:
         names = ", ".join(sorted(buf))
-        _broadcast(names, f"{len(buf)} sessões aguardando: {names}",
-                  tag=_COALESCE_TAG, title_suffix=f"{len(buf)} sessões aguardando", url="/")
+        n = len(buf)
+        _broadcast(names, lambda l: f"{_msg(l, 'sessoes', n=n)}: {names}",
+                   tag=_COALESCE_TAG, title_suffix_fn=lambda l: _msg(l, "sessoes", n=n), url="/")
 
 
 def notify_finished(session_name: str) -> None:
     """Push: sessao terminou um turno longo (working -> idle apos > CP_FINISH_MIN_SECONDS)."""
     if _suppressed(session_name):
         return
-    _broadcast(session_name, "Terminou")
+    _broadcast(session_name, lambda l: _msg(l, "terminou"))
 
 
 def notify_dead(session_name: str) -> None:
     """Push: sessao morreu (tmux/pane caiu)."""
     if _suppressed(session_name):
         return
-    _broadcast(session_name, "Caiu")
+    _broadcast(session_name, lambda l: _msg(l, "caiu"))
 
 
 def notify_stalled(session_name: str) -> None:
@@ -252,7 +292,7 @@ def notify_stalled(session_name: str) -> None:
     UMA vez pelo watchdog (app.stall_watch); o dedupe/re-arme mora la, aqui e so o envio."""
     if _suppressed(session_name):
         return
-    _broadcast(session_name, "Pode estar travada")
+    _broadcast(session_name, lambda l: _msg(l, "travada"))
 
 
 def notify_limited(session_name: str, reset: str | None = None) -> None:
@@ -261,13 +301,16 @@ def notify_limited(session_name: str, reset: str | None = None) -> None:
     que reusa o MESMO ciclo do stall pra isto); dedupe/re-arme mora la, aqui e so o envio."""
     if _suppressed(session_name):
         return
-    body = f"Limite de uso atingido · volta {reset}" if reset else "Limite de uso atingido"
-    _broadcast(session_name, body)
+    def corpo(locale: str) -> str:
+        base = _msg(locale, "limite")
+        return f"{base} · {_msg(locale, 'volta', reset=reset)}" if reset else base
+    _broadcast(session_name, corpo)
 
 
 def notify_loop(session_name: str, body: str) -> None:
     """Push do loop runner (harness bloco A). Envio burro (padrao notify_stalled); o dedupe mora
-    no app.loop, por transicao de status do sidecar — aqui e so o envio."""
+    no app.loop, por transicao de status do sidecar — aqui e so o envio. O body vem pronto do
+    caller (texto do proprio loop, fora da tabela deste modulo)."""
     if _suppressed(session_name):
         return
-    _broadcast(session_name, body)
+    _broadcast(session_name, lambda _l: body)

@@ -108,7 +108,7 @@ def test_com_lista_fixa_de_config_dirs_o_post_recusa(casa, monkeypatch):
     monkeypatch.setenv("CP_CLAUDE_CONFIG_DIRS", f"padrao:{casa / '.claude'}")
     r = TestClient(app).post("/api/claude-configs", json={"nome": "conta2"}, headers=AUTH)
     assert r.status_code == 409
-    assert "CP_CLAUDE_CONFIG_DIRS" in r.json()["detail"]
+    assert "CP_CLAUDE_CONFIG_DIRS" in r.json()["detail"]["msg"]
 
 
 def test_apagar_conta(casa):
@@ -146,7 +146,7 @@ def test_apagar_conta_da_lista_fixa_de_config_dirs_devolve_409(casa, monkeypatch
                        f"padrao:{casa / '.claude'},conta2:{casa / '.claude-conta2'}")
     r = TestClient(app).delete("/api/claude-configs/conta2", headers=AUTH)
     assert r.status_code == 409
-    assert "CP_CLAUDE_CONFIG_DIRS" in r.json()["detail"]
+    assert "CP_CLAUDE_CONFIG_DIRS" in r.json()["detail"]["msg"]
     assert (casa / ".claude-conta2").is_dir()
 
 
@@ -161,7 +161,7 @@ def test_apagar_com_sessao_viva_usando_a_conta_devolve_409(casa, monkeypatch):
                         lambda name: (casa / ".claude-conta2", True))
     r = TestClient(app).delete("/api/claude-configs/conta2", headers=AUTH)
     assert r.status_code == 409
-    assert "sessao-x" in r.json()["detail"]
+    assert "sessao-x" in r.json()["detail"]["msg"]
     assert (casa / ".claude-conta2").is_dir()
 
 
@@ -292,5 +292,5 @@ def test_apagar_recusa_quando_a_varredura_de_processos_falha(casa, monkeypatch):
     monkeypatch.setattr(api_mod.procinfo, "_pids_com_config_dir", lambda alvo: ([], False))
     r = TestClient(app).delete("/api/claude-configs/conta2", headers=AUTH)
     assert r.status_code == 409
-    assert "varrer os processos" in r.json()["detail"]
+    assert "varrer os processos" in r.json()["detail"]["msg"]
     assert (casa / ".claude-conta2").is_dir(), "apagou mesmo sem conseguir varrer os processos"

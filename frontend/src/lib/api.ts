@@ -1,5 +1,7 @@
 import { getBaseUrl, getToken, dropActiveServer } from './auth';
 import * as m from '../paraglide/messages';
+import { localeAtual } from './locale';
+import { mensagemDeErro } from './errosApi';
 import type { Server } from './auth';
 import type {
   SessionInfo,
@@ -66,11 +68,21 @@ function authHeaders(): HeadersInit {
 // nao-JSON vira o texto cru; corpo vazio/ilegivel cai no res.statusText. Compartilhado pelo ensureOk
 // (caminho do servidor ativo) e pelas funcoes *ForServer, pra que o MESMO 404 do backend produza a
 // MESMA string nos dois caminhos.
+//
+// Task 10: o backend passou a poder mandar o detail como dict {code, params, msg}
+// (backend/app/mensagens.py). O `code` e o contrato: mensagemDeErro traduz no idioma do app;
+// codigo desconhecido (backend mais novo que o front) cai no `msg` em portugues — mostrar o codigo
+// cru na tela seria pior que mostrar a lingua errada. Endpoint ainda nao migrado manda string,
+// e o caminho antigo continua inteiro.
 async function errorDetail(res: Response): Promise<string> {
   const text = await res.text().catch(() => '');
   try {
     const j = JSON.parse(text);
     if (j && typeof j.detail === 'string') return j.detail;
+    if (j?.detail && typeof j.detail.code === 'string') {
+      const traduzida = mensagemDeErro(j.detail.code, j.detail.params ?? {});
+      return traduzida ?? j.detail.msg ?? j.detail.code;
+    }
   } catch { /* corpo nao-JSON: cai no texto cru abaixo */ }
   // text e statusText podem os DOIS vir vazios (502 de infra sem corpo JSON, servidor HTTP/2 que
   // nao popula statusText) — sem este ultimo fallback, quem le `.message` (TtsBar, ServerSettings)
@@ -352,12 +364,14 @@ export async function getVapidKey(s: Server): Promise<string> {
   return ((await res.json()).key ?? '') as string;
 }
 
-// Registra a inscricao push do celular NESTE servidor, com label + id locais (pra notif e deep-link).
+// Registra a inscricao push do celular NESTE servidor, com label + id locais (pra notif e deep-link)
+// e o idioma escolhido na tela Geral — o backend renderiza a notificacao no idioma da inscricao
+// (app/push.py); inscricao antiga sem o campo cai em pt.
 export async function subscribePush(s: Server, subscription: PushSubscriptionJSON): Promise<void> {
   const res = await fetch(`${s.baseUrl}/api/push/subscribe`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
-    body: JSON.stringify({ subscription, label: s.label, serverId: s.id }),
+    body: JSON.stringify({ subscription, label: s.label, serverId: s.id, locale: localeAtual() }),
   });
   if (!res.ok) throw new Error(`subscribe ${res.status}`);
 }

@@ -1060,7 +1060,8 @@ def test_awaiting_body_fallback_static(monkeypatch):
     monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)
     monkeypatch.setattr(tmux_mod, "capture_pane", lambda name: "pane cru")
     monkeypatch.setattr(state_mod, "classify", lambda pane: ("idle", None, None, None))
-    assert api_mod._awaiting_body(info) == "Aguardando sua resposta"
+    # None = fallback: quem resolve o texto e o push, no idioma da inscricao (nao texto fixo em pt)
+    assert api_mod._awaiting_body(info) is None
 
 
 def test_do_notify_awaiting_resolves_name_and_body(monkeypatch):

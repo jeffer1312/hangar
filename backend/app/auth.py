@@ -4,6 +4,7 @@ import time
 
 from fastapi import Request, HTTPException
 from app.config import settings
+from app.mensagens import erro
 
 _log = logging.getLogger(__name__)
 
@@ -99,14 +100,14 @@ def require_auth(request: Request) -> None:
         # 429, nunca 401: o front trata 401 como "token expirou", apaga a credencial salva e
         # recarrega pro login (`ensureOk`). Se o bloqueio respondesse 401, a tentativa de OUTRO
         # aparelho na mesma origem deslogaria o dono. 429 sobe como erro comum, sem mexer no token.
-        raise HTTPException(status_code=429, detail="muitas tentativas — aguarde",
+        raise HTTPException(status_code=429, detail=erro("erro_muitas_tentativas", "muitas tentativas — aguarde"),
                             headers={"Retry-After": str(int(_WINDOW))})
     # compare_digest em bytes: `!=` de string sai fora na primeira letra diferente (canal lateral de
     # tempo) e o encode ainda evita o TypeError do compare_digest com string nao-ASCII.
     if not secrets.compare_digest((token or "").encode(), settings.auth_token.encode()):
         if not local:
             _record_fail(ip, now)
-        raise HTTPException(status_code=401, detail="unauthorized")
+        raise HTTPException(status_code=401, detail=erro("erro_nao_autorizado", "unauthorized"))
     _fails.pop(ip, None)  # acerto limpa a origem na hora
 
 
@@ -123,4 +124,4 @@ def require_loopback(request: Request) -> None:
     """
     ip = request.client.host if request.client else None
     if ip not in _LOOPBACK:
-        raise HTTPException(status_code=403, detail="so na maquina do backend")
+        raise HTTPException(status_code=403, detail=erro("erro_so_loopback", "so na maquina do backend"))

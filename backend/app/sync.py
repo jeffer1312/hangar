@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from app.config import settings, _LOOPBACK
+from app.mensagens import erro
 
 log = logging.getLogger(__name__)
 
@@ -124,7 +125,7 @@ def _set_session_cookie(response: Response, user: str, request: Request) -> None
 def require_session(request: Request, response: Response) -> str:
     user = verify_session(request.cookies.get(COOKIE_NAME))
     if not user:
-        raise HTTPException(status_code=401, detail="unauthorized")
+        raise HTTPException(status_code=401, detail=erro("erro_nao_autorizado", "unauthorized"))
     _set_session_cookie(response, user, request)  # sliding: renova o prazo a cada request autenticado
     return user
 
@@ -167,10 +168,10 @@ def status() -> dict:
 @sync_router.post("/register")
 def register(body: RegisterBody) -> dict:
     if not settings.sync_bootstrap or not hmac.compare_digest(body.bootstrap, settings.sync_bootstrap):
-        raise HTTPException(status_code=403, detail="bad bootstrap")
+        raise HTTPException(status_code=403, detail=erro("erro_bootstrap_invalido", "bad bootstrap"))
     with _vault_lock:
         if is_registered():
-            raise HTTPException(status_code=403, detail="already registered")
+            raise HTTPException(status_code=403, detail=erro("erro_ja_registrado", "already registered"))
         vsalt = secrets.token_bytes(16)
         save_vault({
             "user": body.user,
@@ -206,10 +207,10 @@ def prelogin(user: str) -> dict:
 def login(body: LoginBody, request: Request, response: Response) -> dict:
     ip = request.client.host if request.client else "?"
     if rate_limited(ip):
-        raise HTTPException(status_code=429, detail="too many attempts")
+        raise HTTPException(status_code=429, detail=erro("erro_muitas_tentativas", "too many attempts"))
     if not verify_credentials(body.user, body.auth_hash):
         record_fail(ip)
-        raise HTTPException(status_code=401, detail="unauthorized")
+        raise HTTPException(status_code=401, detail=erro("erro_nao_autorizado", "unauthorized"))
     _set_session_cookie(response, body.user, request)
     return {"ok": True}
 

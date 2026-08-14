@@ -25,6 +25,7 @@ from app.auth import require_auth, require_loopback
 from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
 from app.model_picker import PickerError
+from app.mensagens import erro
 from app import model_args
 from app import pi_catalog
 from app import pi_models
@@ -527,7 +528,8 @@ def _notify_async(session_id: str, send_fn) -> None:
 def _awaiting_body(info) -> str:
     """Corpo rico da notif de awaiting (feature #5): 1) a pergunta do AskUserQuestion nativo (sidecar
     gravado pelo hook PreToolUse); 2) senao a pergunta lida do PANE (classify — cobre pickers/permissao
-    da TUI, que nao passam pelo AskUserQuestion); 3) fallback estatico se nenhuma deu certo."""
+    da TUI, que nao passam pelo AskUserQuestion); 3) None se nenhuma deu certo — o push (app.push)
+    resolve o fallback no idioma da inscricao, em vez de mandar texto fixo em pt."""
     askq = read_pending_askq(info.jsonl) if info.jsonl else None
     if askq and askq.questions:
         return askq.questions[0].question
@@ -540,7 +542,7 @@ def _awaiting_body(info) -> str:
             question = None
         if question:
             return question
-    return "Aguardando sua resposta"
+    return None  # fallback resolvido pelo push, no idioma da inscricao
 
 
 _AWAITING_PUSH_RETRY_S = 1.5  # Notification chega junto do pedido; o menu pode atrasar um frame
@@ -959,6 +961,9 @@ class PushSubscribeBody(_StrictBody):
     subscription: dict  # PushSubscription do browser: {endpoint, keys:{p256dh, auth}}
     label: str = Field(min_length=1)    # nome do servidor escolhido no celular (Casa/my-org)
     serverId: str = Field(min_length=1)  # id local do servidor no celular (pro deep-link da notif)
+    # Idioma da inscricao: o front manda o escolhido na tela Geral; ausente (front velho) cai em
+    # "en", o baseLocale do app — a leitura do registro antigo e que trata o campo ausente como pt.
+    locale: str = "en"
 
 
 @app.get("/api/push/vapid", dependencies=[Depends(require_auth)])
@@ -970,7 +975,7 @@ def push_vapid():
 @app.post("/api/push/subscribe", dependencies=[Depends(require_auth)])
 def push_subscribe(body: PushSubscribeBody):
     try:
-        push.add_subscription(body.subscription, body.label, body.serverId)
+        push.add_subscription(body.subscription, body.label, body.serverId, body.locale)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True}
@@ -1068,8 +1073,9 @@ async def post_claude_config(body: ContaBody):
     if os.environ.get("CP_CLAUDE_CONFIG_DIRS", "").strip():
         # Com a lista fixa por env, list_config_dirs ignora o auto-scan: a conta seria criada e
         # nunca apareceria no seletor. Recusar com o motivo é melhor que um 200 inútil.
-        raise HTTPException(409, "CP_CLAUDE_CONFIG_DIRS está setado: a lista de contas é fixa por "
-                                 "ambiente. Remova a variável ou acrescente a conta nela.")
+        raise HTTPException(409, detail=erro("erro_config_dirs_fixo",
+                                 "CP_CLAUDE_CONFIG_DIRS está setado: a lista de contas é fixa por "
+                                 "ambiente. Remova a variável ou acrescente a conta nela."))
     try:
         p = await asyncio.to_thread(contas.criar, body.nome)
     except contas.ContaError as e:
@@ -1090,15 +1096,17 @@ async def delete_claude_config(nome: str):
     if alvo.resolve() == _backend_config_base().resolve():
         # A config ativa do backend é o ~/.claude (ou o CLAUDE_CONFIG_DIR dele): settings,
         # custos e transcripts do próprio app moram lá — apagar derrubaria o app em si.
-        raise HTTPException(409, "esta conta é a configuração ativa do backend — não dá pra "
-                                 "apagar por aqui")
+        raise HTTPException(409, detail=erro("erro_conta_ativa_backend",
+                                 "esta conta é a configuração ativa do backend — não dá pra "
+                                 "apagar por aqui"))
     if os.environ.get("CP_CLAUDE_CONFIG_DIRS", "").strip():
         # Com a lista fixa por env, o GET continua devolvendo esta conta MESMO apagada: sobraria
         # um fantasma no seletor, e a próxima sessão recriaria a pasta sem marcador nem atalhos.
         if alvo.resolve() in {Path(c.path).resolve() for c in list_config_dirs()}:
-            raise HTTPException(409, "CP_CLAUDE_CONFIG_DIRS está setado: esta conta está na "
+            raise HTTPException(409, detail=erro("erro_conta_lista_fixa",
+                                     "CP_CLAUDE_CONFIG_DIRS está setado: esta conta está na "
                                      "lista fixa por ambiente. Remova-a da variável antes de "
-                                     "apagar.")
+                                     "apagar."))
     # O ciclo segura a trava da conta (a mesma do create_session) ao redor da checagem e do
     # rmtree: sem ele, o DELETE passaria na janela entre a reconciliação e o registry.create de
     # uma sessão que está subindo, e apagaria a pasta embaixo dela.
@@ -1111,20 +1119,24 @@ async def delete_claude_config(nome: str):
             for s in registry.list():
                 cfg, confiavel = _session_config_dir_strict(s.name)
                 if not confiavel:
-                    raise HTTPException(409, f"não consegui confirmar o config dir da sessão "
-                                             f"'{s.name}' — apagar recusado")
+                    raise HTTPException(409, detail=erro("erro_config_dir_sessao",
+                                             f"não consegui confirmar o config dir da sessão "
+                                             f"'{s.name}' — apagar recusado", nome=s.name))
                 if cfg is not None and cfg.resolve() == alvo.resolve():
-                    raise HTTPException(409, f"a sessão '{s.name}' está usando esta conta")
+                    raise HTTPException(409, detail=erro("erro_sessao_usa_conta",
+                                             f"a sessão '{s.name}' está usando esta conta", nome=s.name))
             # CLI aberto FORA do tmux não aparece no registry: a varredura por CLAUDE_CONFIG_DIR
             # no /proc é quem segura o apagar debaixo dele.
             pids, varredura_ok = procinfo._pids_com_config_dir(alvo)
             if not varredura_ok:
                 # "Não consegui olhar" não é "olhei e não achei": seguir aqui apagaria a pasta
                 # debaixo de um `claude` vivo que a varredura não chegou a enxergar.
-                raise HTTPException(409, "não consegui varrer os processos da máquina — apagar "
-                                         "recusado (pode haver um claude aberto nesta conta)")
+                raise HTTPException(409, detail=erro("erro_varredura_processos",
+                                         "não consegui varrer os processos da máquina — apagar "
+                                         "recusado (pode haver um claude aberto nesta conta)"))
             if pids:
-                raise HTTPException(409, f"processo(s) {pids} estão usando esta conta")
+                raise HTTPException(409, detail=erro("erro_processos_usam_conta",
+                                         f"processo(s) {pids} estão usando esta conta", pids=pids))
             ciclo.apagar()
 
     try:
@@ -1141,7 +1153,7 @@ def desktop_palette_get():
     # esconde a opcao.
     p = desktop_palette.ler()
     if p is None:
-        raise HTTPException(status_code=404, detail="sem paleta")
+        raise HTTPException(status_code=404, detail=erro("erro_sem_paleta", "sem paleta"))
     return p
 
 
@@ -1152,7 +1164,7 @@ def desktop_wallpaper_get():
     # nao ha pixel nenhum pra virar vidro). 404 = sem rice/sem foto, e o front esconde a opcao.
     p = desktop_palette.wallpaper()
     if p is None:
-        raise HTTPException(status_code=404, detail="sem papel de parede")
+        raise HTTPException(status_code=404, detail=erro("erro_sem_papel_de_parede", "sem papel de parede"))
     # Sem cache do navegador: trocar o papel de parede mantem a URL e so muda o conteudo, entao um
     # 304 deixaria a foto velha na tela ate alguem limpar o cache.
     return FileResponse(p, headers={"Cache-Control": "no-store"})
@@ -1949,7 +1961,7 @@ async def broadcast(body: BroadcastBody):
     "/clear" pra N sessoes de uma vez e ambiguo/perigoso (o front ja desabilita o envio; isto e defesa
     em profundidade)."""
     if body.text.lstrip().startswith("/"):
-        raise HTTPException(400, "broadcast nao suporta slash-commands: envie por sessao")
+        raise HTTPException(400, detail=erro("erro_broadcast_slash", "broadcast nao suporta slash-commands: envie por sessao"))
     results: dict[str, dict] = {}
     for name in body.names:
         # Mesma guarda do /input: nome sem sessão viva -> erro POR SESSÃO (não enfileira no void).
@@ -2472,7 +2484,7 @@ async def patch_config(request: Request):
     volta 400 com a mensagem, em vez de gravar lixo que so quebraria depois."""
     body = await request.json()
     if not isinstance(body, dict):
-        raise HTTPException(400, "corpo deve ser um objeto")
+        raise HTTPException(400, detail=erro("erro_corpo_deve_ser_objeto", "corpo deve ser um objeto"))
     try:
         await asyncio.to_thread(runtime_config.aplicar, body)
     except ValueError as e:
@@ -2525,7 +2537,7 @@ async def put_engine(nome: str, request: Request):
     manda `""` — a tela de Motores faz isso nos campos opcionais."""
     body = await request.json()
     if not isinstance(body, dict):
-        raise HTTPException(400, "corpo deve ser um objeto")
+        raise HTTPException(400, detail=erro("erro_corpo_deve_ser_objeto", "corpo deve ser um objeto"))
     # I/O de disco no threadpool, igual ao resto deste handler (ver comentário acima de create_session).
     atual = (await asyncio.to_thread(engines.listar)).get(nome, {})
     chave_atual = atual.get("api_key", "")
@@ -2557,7 +2569,7 @@ async def put_engine(nome: str, request: Request):
 async def delete_engine(nome: str):
     try:
         if not await asyncio.to_thread(engines.remover, nome):
-            raise HTTPException(404, "motor nao encontrado")
+            raise HTTPException(404, detail=erro("erro_motor_nao_encontrado", "motor nao encontrado"))
     except ValueError as e:
         # engines.json corrompido: remover() recusa escrever por cima (item 1 do review) em vez de
         # apagar os outros motores. Vira 400 com a mensagem em vez de 500 cru.
@@ -2589,16 +2601,16 @@ async def engine_modelos(body: EngineProbeBody):
     o host que mandou."""
     if body.nome:
         if body.base_url or body.api_key:
-            raise HTTPException(400, "nome já usa o motor salvo; não envie base_url/api_key junto")
+            raise HTTPException(400, detail=erro("erro_motor_nome_com_dados", "nome já usa o motor salvo; não envie base_url/api_key junto"))
         # I/O de disco no threadpool, igual ao resto deste handler (ver comentário acima de create_session).
         salvo = (await asyncio.to_thread(engines.listar)).get(body.nome)
         if not salvo:
-            raise HTTPException(404, "motor nao encontrado")
+            raise HTTPException(404, detail=erro("erro_motor_nao_encontrado", "motor nao encontrado"))
         base_url, api_key = salvo["base_url"], salvo["api_key"]
     else:
         base_url, api_key = body.base_url, body.api_key
         if not base_url or not api_key:
-            raise HTTPException(400, "informe nome de um motor salvo, ou base_url + api_key")
+            raise HTTPException(400, detail=erro("erro_motor_nome_ou_dados", "informe nome de um motor salvo, ou base_url + api_key"))
     try:
         # Mesma guarda do salvar: a key vai no header, http para host público a expõe na rede.
         base_url = engines.validar_base_url(base_url)
@@ -3150,9 +3162,9 @@ def archive_folder(project: str):
     try:
         return list_conversations(project, live)
     except ValueError:
-        raise HTTPException(400, "invalid path")
+        raise HTTPException(400, detail=erro("erro_path_invalido", "invalid path"))
     except FileNotFoundError:
-        raise HTTPException(404, "project not found")
+        raise HTTPException(404, detail=erro("erro_projeto_nao_encontrado", "project not found"))
 
 
 @app.get("/api/archive/{project}/{session_id}/history",
@@ -3161,9 +3173,9 @@ def archive_history(project: str, session_id: str):
     try:
         p = archive_jsonl(project, session_id)
     except ValueError:
-        raise HTTPException(400, "invalid path")
+        raise HTTPException(400, detail=erro("erro_path_invalido", "invalid path"))
     except FileNotFoundError:
-        raise HTTPException(404, "transcript not found")
+        raise HTTPException(404, detail=erro("erro_transcript_nao_encontrado", "transcript not found"))
     from app.pqueue import merged_history
     # Nome de fila inexistente -> sem entradas de fila: so os eventos do transcript, ordenados por ts.
     return merged_history("__archive__", str(p))
@@ -3175,11 +3187,11 @@ def archive_image(project: str, session_id: str, uuid: str, idx: int):
     try:
         p = archive_jsonl(project, session_id)
     except (ValueError, FileNotFoundError):
-        raise HTTPException(404, "not found")
+        raise HTTPException(404, detail=erro("erro_nao_encontrado", "not found"))
     from app.transcript import get_transcript_image
     got = get_transcript_image(str(p), uuid, idx)
     if got is None:
-        raise HTTPException(404, "image not found")
+        raise HTTPException(404, detail=erro("erro_imagem_nao_encontrada", "image not found"))
     raw, media = got
     return Response(content=raw, media_type=media, headers={"Cache-Control": "max-age=31536000, immutable"})
 
@@ -3203,13 +3215,13 @@ def resume_archived(project: str, session_id: str, body: ResumeArchivedBody = Re
     try:
         cwd = archive_cwd(project, session_id)
     except ValueError:
-        raise HTTPException(400, "invalid path")
+        raise HTTPException(400, detail=erro("erro_path_invalido", "invalid path"))
     except FileNotFoundError:
-        raise HTTPException(404, "transcript not found")
+        raise HTTPException(404, detail=erro("erro_transcript_nao_encontrado", "transcript not found"))
     if not cwd:
-        raise HTTPException(422, "cwd not found in transcript")
+        raise HTTPException(422, detail=erro("erro_cwd_ausente", "cwd not found in transcript"))
     if body.engine is not None and body.engine not in engines.listar():
-        raise HTTPException(400, "motor invalido")
+        raise HTTPException(400, detail=erro("erro_motor_invalido", "motor invalido"))
     base = sanitize_session_name(Path(cwd).name) or "sessao"
     name, i = base, 2
     while tmux.has_session(name):
@@ -3240,7 +3252,7 @@ def ask_history(body: AskHistoryBody):
     claude -p resume EM QUAL sessao o assunto apareceu. Sob o kill-switch (dispara claude -p). Sem
     trecho -> resposta vazia sem chamar o CLI. v1: so o servidor que recebe a chamada (cross-server v2)."""
     if not automations_enabled():
-        raise HTTPException(409, "automações desligadas (kill-switch)")
+        raise HTTPException(409, detail=erro("erro_automacoes_desligadas", "automações desligadas (kill-switch)"))
     live = {os.path.realpath(s.jsonl): s.name for s in registry.list() if s.jsonl}
     hits = search_terms(extract_terms(body.question), live)
     if not hits:
@@ -3584,9 +3596,9 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "", c
             return {"kind": "pi", "reduced": False,
                     "models": await asyncio.to_thread(pi_catalog.listar)}
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
-            raise HTTPException(502, f"pi --list-models falhou: {e}")
+            raise HTTPException(502, detail=erro("erro_pi_list_models", f"pi --list-models falhou: {e}", erro=str(e)))
     if provider != "claude":
-        raise HTTPException(400, "provider deve ser 'claude' ou 'pi'")
+        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider deve ser 'claude' ou 'pi'"))
     if engine:
         modelos = await _engine_models(engine)
         return {"kind": "engine", "reduced": False,
@@ -3855,15 +3867,15 @@ def _tts_limite() -> int:
 async def tts_sintetizar(body: TtsBody):
     texto = tts_preparar(body.text)
     if not texto:
-        raise HTTPException(400, "nao sobrou nada pra falar depois de limpar o texto")
+        raise HTTPException(400, detail=erro("erro_tts_sem_texto", "nao sobrou nada pra falar depois de limpar o texto"))
     if len(texto) > _TTS_TETO:
-        raise HTTPException(413, f"texto com {len(texto)} caracteres passa do teto de {_TTS_TETO} — selecione um trecho menor")
+        raise HTTPException(413, detail=erro("erro_tts_teto", f"texto com {len(texto)} caracteres passa do teto de {_TTS_TETO} — selecione um trecho menor", n=len(texto), teto=_TTS_TETO))
     limite = _tts_limite()
     if len(texto) > limite and not body.confirm:
         # 409, nao 413: nao e "grande demais", e "confirme que voce quer gastar isso". O front pede
         # a confirmacao e repete o POST com confirm=true. Checado AQUI e nao so na tela porque a
         # tela evita o susto e o servidor e quem guarda a conta.
-        raise HTTPException(409, f"são {len(texto)} caracteres, acima do limite de {limite} — confirme para gerar")
+        raise HTTPException(409, detail=erro("erro_tts_limite", f"são {len(texto)} caracteres, acima do limite de {limite} — confirme para gerar", n=len(texto), limite=limite))
     try:
         h, veio_do_cache, provedor_final = await asyncio.to_thread(
             tts.sintetizar, texto, body.voice, body.provider, body.instruction)
@@ -3909,10 +3921,10 @@ async def tts_audio(h: str):
     # Hash validado ANTES de tocar no disco: o parametro vem da URL e sem isto viraria path
     # traversal. Mesmo espirito do guard de resolve_upload.
     if not re.fullmatch(r"[0-9a-f]{64}", h):
-        raise HTTPException(400, "identificador de audio invalido")
+        raise HTTPException(400, detail=erro("erro_tts_audio_invalido", "identificador de audio invalido"))
     caminho = tts.caminho_do_cache(h)
     if not caminho.exists():
-        raise HTTPException(404, "audio nao esta mais em cache")
+        raise HTTPException(404, detail=erro("erro_tts_sem_cache", "audio nao esta mais em cache"))
     # Extensao real do arquivo em cache, nao suposicao: o motor local pode ter devolvido WAV
     # (ver tts.extensao_de) — servir isso como audio/mpeg quebra o <audio> no WebKit.
     media_type = "audio/wav" if caminho.suffix == ".wav" else "audio/mpeg"

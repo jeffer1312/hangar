@@ -19,6 +19,7 @@ import subprocess
 from fastapi import APIRouter, Request, HTTPException
 
 from app.config import settings
+from app.mensagens import erro
 
 _log = logging.getLogger("claude_pocket")
 
@@ -39,13 +40,13 @@ def _verify_signature(body: bytes, header: str) -> bool:
 async def github_webhook(request: Request):
     # Desligado por padrao: sem secret configurado o endpoint some (404), nao fica um trigger aberto.
     if not settings.deploy_secret:
-        raise HTTPException(status_code=404, detail="not found")
+        raise HTTPException(status_code=404, detail=erro("erro_nao_encontrado", "not found"))
 
     body = await request.body()
     sig = request.headers.get("X-Hub-Signature-256", "")
     if not _verify_signature(body, sig):
         _log.warning("[deploy] webhook com assinatura invalida (ip=%s)", request.client.host if request.client else "?")
-        raise HTTPException(status_code=401, detail="bad signature")
+        raise HTTPException(status_code=401, detail=erro("erro_assinatura_invalida", "bad signature"))
 
     event = request.headers.get("X-GitHub-Event", "")
     if event == "ping":
@@ -56,7 +57,7 @@ async def github_webhook(request: Request):
     try:
         ref = json.loads(body).get("ref", "")
     except (ValueError, AttributeError):
-        raise HTTPException(status_code=400, detail="invalid payload")
+        raise HTTPException(status_code=400, detail=erro("erro_payload_invalido", "invalid payload"))
     if ref != "refs/heads/main":
         return {"status": "ignored", "reason": f"ref={ref}"}
 
@@ -71,7 +72,7 @@ async def github_webhook(request: Request):
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         stderr = getattr(e, "stderr", "") or str(e)
         _log.error("[deploy] falha ao disparar %s: %s", DEPLOY_UNIT, stderr)
-        raise HTTPException(status_code=500, detail="failed to trigger deploy")
+        raise HTTPException(status_code=500, detail=erro("erro_deploy_falhou", "failed to trigger deploy"))
 
     _log.info("[deploy] push na main aceito -> %s disparado", DEPLOY_UNIT)
     return {"status": "accepted"}

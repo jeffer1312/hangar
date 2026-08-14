@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { overwriteGetLocale } from '../paraglide/runtime';
 
 const store = new Map<string, string>();
 (globalThis as any).localStorage = {
@@ -186,6 +187,42 @@ describe('createSession', () => {
 
     const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
     expect(body).toMatchObject({ name: 'x', cwd: '/home/eu/proj', provider: 'kimi', config_dir: null, engine: null });
+  });
+});
+
+// Task 10 — errorDetail entende as DUAS formas do detail: string (endpoint nao migrado) e dict
+// {code, params, msg} (backend/app/mensagens.py). O segundo caminho e o mais importante: backend
+// novo com front velho (build em cache do service worker) cai no msg em portugues, nunca num codigo
+// cru na tela.
+describe('errorDetail (Task 10)', () => {
+  beforeEach(() => {
+    store.set('cp_servers', JSON.stringify([server]));
+    store.set('cp_active', server.id);
+    overwriteGetLocale(() => 'pt'); // mensagens m.* traduzidas no idioma fixado
+  });
+
+  it('detail em dict com code conhecido vira a mensagem traduzida', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ detail: { code: 'erro_sem_paleta', params: {}, msg: 'sem paleta' } }), { status: 404 }),
+    );
+    // O caminho ForServer prefixa o status ('404: '); o sufixo ancorado garante que a mensagem
+    // e a traduzida, nao o JSON cru (que terminaria em } e nao casaria).
+    await expect(getConfigForServer(server)).rejects.toThrow(/sem paleta$/);
+  });
+
+  it('detail em dict com code DESCONHECIDO cai no msg em portugues', async () => {
+    // Backend mais novo que o front: o code nao esta no mapa, mas o msg sempre chega junto.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ detail: { code: 'code_futuro', params: { x: 1 }, msg: 'algo deu errado' } }), { status: 400 }),
+    );
+    await expect(getConfigForServer(server)).rejects.toThrow(/algo deu errado$/);
+  });
+
+  it('detail em string (endpoint nao migrado) continua funcionando como hoje', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'sessao nao existe' }), { status: 404 }),
+    );
+    await expect(getConfigForServer(server)).rejects.toThrow('sessao nao existe');
   });
 });
 

@@ -117,7 +117,7 @@ def test_provider_fora_de_escopo_vira_400(cli):
     for provider in ("codex", "kimi", ""):
         r = cli.get("/api/model-options", headers=AUTH, params={"provider": provider})
         assert r.status_code == 400, provider
-        assert "claude" in r.json()["detail"]
+        assert "claude" in r.json()["detail"]["msg"]
 
 
 def test_sem_token_vira_401(cli):

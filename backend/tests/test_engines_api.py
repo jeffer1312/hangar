@@ -169,7 +169,7 @@ def test_modelos_recusa_nome_junto_com_base_url_de_terceiro(cli, monkeypatch):
     r = cli.post("/api/engines/modelos",
                  json={"nome": "kimi", "base_url": "https://attacker.example"}, headers=AUTH)
     assert r.status_code == 400
-    assert "nome" in r.json()["detail"]
+    assert "nome" in r.json()["detail"]["msg"]
     assert vistos == {}  # o provedor nunca foi chamado — nem com o host certo, nem com o errado
 
 
@@ -178,7 +178,7 @@ def test_modelos_recusa_nome_junto_com_api_key_de_terceiro(cli):
     r = cli.post("/api/engines/modelos",
                  json={"nome": "kimi", "api_key": "sk-outra-coisa"}, headers=AUTH)
     assert r.status_code == 400
-    assert "nome" in r.json()["detail"]
+    assert "nome" in r.json()["detail"]["msg"]
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +241,7 @@ def test_resume_arquivo_com_motor_desconhecido_e_400(cli):
     with patch("app.api.archive_cwd", return_value="/home/u/proj"):
         r = cli.post(f"/api/archive/proj/{_SID}/resume", json={"engine": "fantasma"}, headers=AUTH)
     assert r.status_code == 400
-    assert "motor" in r.json()["detail"]
+    assert "motor" in r.json()["detail"]["msg"]
 
 
 def test_resume_arquivo_com_motor_valido_repassa(cli):
