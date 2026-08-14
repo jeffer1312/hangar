@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+  import * as m from '../paraglide/messages';
 import { intlLocale } from '../lib/locale';
   import type { StatusFields } from '../lib/statusline';
 
@@ -15,26 +16,26 @@ import { intlLocale } from '../lib/locale';
     if (!s) return [] as { label: string; value: string }[];
     const out: { label: string; value: string }[] = [];
     if (typeof s.fiveHourPct === 'number')
-      out.push({ label: 'Janela 5h', value: `${s.fiveHourPct}%` + (s.fiveHourReset ? ` · reset ${s.fiveHourReset}` : '') });
+      out.push({ label: m.uso_janela_5h(), value: `${s.fiveHourPct}%` + (s.fiveHourReset ? ` · ${m.uso_reset({ quando: s.fiveHourReset })}` : '') });
     if (typeof s.weeklyPct === 'number')
-      out.push({ label: 'Janela 7d', value: `${s.weeklyPct}%` + (s.weeklyReset ? ` · reset ${s.weeklyReset}` : '') });
+      out.push({ label: m.uso_janela_7d(), value: `${s.weeklyPct}%` + (s.weeklyReset ? ` · ${m.uso_reset({ quando: s.weeklyReset })}` : '') });
     if (typeof s.monthlyPct === 'number')
-      out.push({ label: 'Janela 30d', value: `${s.monthlyPct}%` + (s.monthlyReset ? ` · reset ${s.monthlyReset}` : '') });
+      out.push({ label: m.uso_janela_30d(), value: `${s.monthlyPct}%` + (s.monthlyReset ? ` · ${m.uso_reset({ quando: s.monthlyReset })}` : '') });
     if (typeof s.ctxUsed === 'number')
-      out.push({ label: 'Contexto', value: `${s.ctxUsed.toLocaleString(intlLocale())}${s.ctxTotal ? ' / ' + s.ctxTotal.toLocaleString(intlLocale()) : ''}${typeof s.ctxPct === 'number' ? ` (${Math.round(s.ctxPct)}%)` : ''}` });
+      out.push({ label: m.ctx_contexto(), value: `${s.ctxUsed.toLocaleString(intlLocale())}${s.ctxTotal ? ' / ' + s.ctxTotal.toLocaleString(intlLocale()) : ''}${typeof s.ctxPct === 'number' ? ` (${Math.round(s.ctxPct)}%)` : ''}` });
     if (typeof s.costUsd === 'number')
-      out.push({ label: 'Custo', value: `$${s.costUsd.toFixed(2)}` });
+      out.push({ label: m.uso_custo(), value: `$${s.costUsd.toFixed(2)}` });
     if (s.sessionTime)
-      out.push({ label: 'Tempo de sessão', value: s.sessionTime });
+      out.push({ label: m.uso_tempo_sessao(), value: s.sessionTime });
     if (s.model)
-      out.push({ label: 'Modelo', value: s.model + (s.effort ? ` · ${s.effort}` : '') });
+      out.push({ label: m.composer_modelo(), value: s.model + (s.effort ? ` · ${s.effort}` : '') });
     return out;
   });
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel="Uso e limites">
+<BottomSheet {open} {onClose} ariaLabel={m.uso_aria()}>
   <div class="usage">
-    <h2 class="usage-title">Uso & limites</h2>
+    <h2 class="usage-title">{m.uso_titulo()}</h2>
     {#each rows as r}
       <div class="usage-row">
         <span class="usage-label">{r.label}</span>
@@ -43,7 +44,7 @@ import { intlLocale } from '../lib/locale';
     {/each}
     {#if status?.raw}
       <div class="usage-raw">
-        <span class="usage-label">Statusline crua</span>
+        <span class="usage-label">{m.uso_statusline()}</span>
         <code class="usage-raw-line">{status.raw}</code>
       </div>
     {/if}

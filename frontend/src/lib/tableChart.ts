@@ -10,6 +10,7 @@
 // invisível e o gráfico mente. Então o gráfico mostra uma coluna, e quem lê escolhe qual.
 
 import { intlLocale } from './locale';
+import * as m from '../paraglide/messages';
 
 export interface ColunaNumerica {
   indice: number;
@@ -76,14 +77,14 @@ export function lerTabela(tabela: HTMLTableElement): TabelaLida | null {
     const celulas = corpo.map((l) => l[c] ?? '');
     const nums = celulas.map(parseNumero);
     if (nums.every((n) => n !== null)) {
-      colunas.push({ indice: c, titulo: titulos[c] || `coluna ${c + 1}`, valores: nums as number[] });
+      colunas.push({ indice: c, titulo: titulos[c] || m.tabela_coluna({ n: c + 1 }), valores: nums as number[] });
     } else if (colRotulo < 0) {
       colRotulo = c;   // a 1a não-numérica nomeia as linhas
     }
   }
   if (!colunas.length) return null;
 
-  const rotulos = corpo.map((l, i) => (colRotulo >= 0 ? l[colRotulo] : '') || `linha ${i + 1}`);
+  const rotulos = corpo.map((l, i) => (colRotulo >= 0 ? l[colRotulo] : '') || m.tabela_linha({ n: i + 1 }));
   return { rotulos, colunas };
 }
 

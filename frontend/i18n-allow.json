@@ -13,5 +13,8 @@
   "Space",
   "application/json",
   "text/plain",
-  "github.com/jeffer1312/hangar"
+  "github.com/jeffer1312/hangar",
+  "não somei este",
+  "/** Lê uma",
+  "do DOM. Devolve null quando ela não tem dado plotável. */"
 ]

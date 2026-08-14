@@ -37,7 +37,6 @@
   "components/TerminalPanel.svelte": 15,
   "components/TtsBar.svelte": 9,
   "components/TtsSelectionPill.svelte": 5,
-  "components/UsageSheet.svelte": 9,
   "components/UserBubble.svelte": 1,
   "components/WorkspaceAttentionStrip.svelte": 3,
   "components/git/BranchList.svelte": 1,
@@ -59,7 +58,6 @@
   "lib/background.ts": 3,
   "lib/canvasLayout.ts": 1,
   "lib/codeFromBash.ts": 2,
-  "lib/costs.ts": 1,
   "lib/desktopTheme.ts": 2,
   "lib/detectarLinguagem.ts": 4,
   "lib/editdiff.ts": 1,
@@ -83,7 +81,6 @@
   "lib/sessionsStore.svelte.ts": 1,
   "lib/speakable.ts": 9,
   "lib/sync.ts": 1,
-  "lib/tableChart.ts": 2,
   "lib/tableChartMount.ts": 7,
   "lib/term.ts": 1,
   "lib/ttsFormat.ts": 1,
@@ -96,7 +93,6 @@
   "lib/window.ts": 7,
   "lib/zoomable.ts": 5,
   "screens/Archive.svelte": 12,
-  "screens/Costs.svelte": 105,
   "screens/Login.svelte": 10,
   "sw.ts": 2
 }
